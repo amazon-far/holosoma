@@ -204,7 +204,7 @@ class FastSACConfig:
     """the learning rate for the alpha"""
 
     buffer_size: int = 1024
-    """the replay memory buffer size"""
+    """the replay memory buffer size per environment"""
 
     num_steps: int = 1
     """the number of steps to use for the multi-step return"""
