@@ -1263,6 +1263,16 @@
       <mass value="0.001"/>
       <inertia ixx="0.000001" ixy="0" ixz="0" iyy="0.000001" iyz="0" izz="0.000001"/>
     </inertial>
+    <!-- Invisible visual required for USD conversion: IsaacLab expects visual prims for all links to avoid "Unresolved reference prim path" errors -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="invisible">
+        <color rgba="0 0 0 0"/>
+      </material>
+    </visual>
   </link>
   <joint name="left_foot_contact_point" type="fixed" dont_collapse="true">
     <parent link="left_foot_link"/>
@@ -1600,6 +1610,16 @@
       <mass value="0.001"/>
       <inertia ixx="0.000001" ixy="0" ixz="0" iyy="0.000001" iyz="0" izz="0.000001"/>
     </inertial>
+    <!-- Invisible visual required for USD conversion: IsaacLab expects visual prims for all links to avoid "Unresolved reference prim path" errors -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="invisible">
+        <color rgba="0 0 0 0"/>
+      </material>
+    </visual>
   </link>
   <joint name="right_foot_contact_point" type="fixed" dont_collapse="true">
     <parent link="right_foot_link"/>

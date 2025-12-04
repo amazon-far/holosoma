@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 import numpy as np
 import torch
@@ -15,6 +15,11 @@ from holosoma.managers.randomization.exceptions import RandomizerNotSupportedErr
 from holosoma.simulator import mujoco_required_field
 from holosoma.simulator.shared.field_decorators import MUJOCO_FIELD_ATTR
 from holosoma.utils.torch_utils import torch_rand_float
+
+if TYPE_CHECKING:
+    from isaaclab.managers import SceneEntityCfg
+
+    from holosoma.simulator.isaacsim.isaacsim import IsaacSim
 
 
 def _ensure_env_ids_tensor(env: Any, env_ids: torch.Tensor | Sequence[int] | None) -> torch.Tensor:
@@ -45,6 +50,80 @@ def _get_joint_action_term(env: Any) -> JointPositionActionTerm | None:
                 return term
 
     return None
+
+
+def _isaacsim_randomize_rigid_body_mass(
+    simulator: IsaacSim,
+    env_ids_cpu: torch.Tensor,
+    asset_cfg: SceneEntityCfg,
+    mass_distribution_params: tuple[float, float],
+    operation: str,
+):
+    try:
+        from isaaclab.envs import mdp
+        from isaaclab.managers import EventTermCfg
+    except ImportError as exc:  # pragma: no cover - defensive
+        raise RuntimeError("IsaacSim mass randomization requires isaaclab.") from exc
+    func = mdp.randomize_rigid_body_mass(
+        EventTermCfg(
+            func=mdp.randomize_rigid_body_mass,
+            mode="startup",
+            params={
+                "env_ids": env_ids_cpu,
+                "asset_cfg": asset_cfg,
+                "mass_distribution_params": mass_distribution_params,
+                "operation": operation,
+            },
+        ),
+        env=simulator,
+    )
+    func(
+        simulator,
+        env_ids_cpu,
+        asset_cfg=asset_cfg,
+        mass_distribution_params=mass_distribution_params,
+        operation=operation,
+    )
+
+
+def _isaacsim_randomize_rigid_body_material(
+    simulator: IsaacSim,
+    env_ids_cpu: torch.Tensor,
+    asset_cfg: SceneEntityCfg,
+    static_friction_range: tuple[float, float],
+    dynamic_friction_range: tuple[float, float],
+    restitution_range: tuple[float, float],
+    num_buckets: int,
+):
+    try:
+        from isaaclab.envs import mdp
+        from isaaclab.managers import EventTermCfg
+    except ImportError as exc:  # pragma: no cover - defensive
+        raise RuntimeError("IsaacSim material randomization requires isaaclab.") from exc
+    func = mdp.randomize_rigid_body_material(
+        EventTermCfg(
+            func=mdp.randomize_rigid_body_material,
+            mode="startup",
+            params={
+                "env_ids": env_ids_cpu,
+                "asset_cfg": asset_cfg,
+                "static_friction_range": static_friction_range,
+                "dynamic_friction_range": dynamic_friction_range,
+                "restitution_range": restitution_range,
+                "num_buckets": num_buckets,
+            },
+        ),
+        simulator,
+    )
+    func(
+        simulator,
+        env_ids_cpu,
+        asset_cfg=asset_cfg,
+        static_friction_range=static_friction_range,
+        dynamic_friction_range=dynamic_friction_range,
+        restitution_range=restitution_range,
+        num_buckets=num_buckets,
+    )
 
 
 class PushRandomizerState(RandomizationTermBase):
@@ -698,7 +777,6 @@ def randomize_mass_startup(
             gym.set_actor_rigid_body_properties(env_ptr, actor, body_props, recomputeInertia=True)
     elif simulator.__class__.__name__ == "IsaacSim":
         try:
-            from isaaclab.envs import mdp
             from isaaclab.managers import SceneEntityCfg
         except ImportError as exc:  # pragma: no cover - defensive
             raise RuntimeError("IsaacSim mass randomization requires isaaclab.") from exc
@@ -710,22 +788,22 @@ def randomize_mass_startup(
         if enable_link_mass:
             asset_cfg = SceneEntityCfg("robot", body_names=env.robot_config.randomize_link_body_names)
             asset_cfg.resolve(simulator.scene)  # Required to avoid applying randomization to all bodies
-            mdp.randomize_rigid_body_mass(
+            _isaacsim_randomize_rigid_body_mass(
                 simulator,
                 env_ids_cpu,
                 asset_cfg,
-                tuple(link_mass_range),
+                (link_mass_range[0], link_mass_range[1]),
                 operation="scale",
             )
 
         if enable_base_mass:
             asset_cfg = SceneEntityCfg("robot", body_names=[env.robot_config.torso_name])
             asset_cfg.resolve(simulator.scene)  # Required to avoid applying randomization to all bodies
-            mdp.randomize_rigid_body_mass(
+            _isaacsim_randomize_rigid_body_mass(
                 simulator,
                 env_ids_cpu,
                 asset_cfg,
-                tuple(added_mass_range),
+                (added_mass_range[0], added_mass_range[1]),
                 operation="add",
             )
     elif simulator.simulator_config.mujoco_backend == MujocoBackend.WARP:
@@ -819,9 +897,7 @@ def randomize_friction_startup(
             gym.set_actor_rigid_shape_properties(env_ptr, actor, shape_props)
     elif simulator.__class__.__name__ == "IsaacSim":
         try:
-            from isaaclab.envs import mdp
-            from isaaclab.managers import EventTermCfg, SceneEntityCfg
-
+            from isaaclab.managers import SceneEntityCfg
         except ImportError as exc:  # pragma: no cover - defensive
             raise RuntimeError("IsaacSim friction randomization requires isaaclab.") from exc
         env_ids_cpu = idx.to(device="cpu", dtype=torch.long)
@@ -830,42 +906,16 @@ def randomize_friction_startup(
 
         asset_cfg = SceneEntityCfg("robot", body_names=".*")
         asset_cfg.resolve(simulator.scene)  # Not stricly required, but a good practice
-        try:
-            # This 'might' work for newer version of isaaclab
-            mdp.randomize_rigid_body_material(
-                simulator,
-                env_ids_cpu,
-                asset_cfg,
-                static_friction_range=tuple(friction_range),
-                dynamic_friction_range=tuple(friction_range),
-                restitution_range=(0.0, 0.0),
-                num_buckets=num_buckets,
-            )
-        except TypeError:
-            # Works for old versions of isaaclab
-            func = mdp.randomize_rigid_body_material(
-                EventTermCfg(
-                    func=mdp.randomize_rigid_body_material,
-                    mode="startup",
-                    params={
-                        "asset_cfg": asset_cfg,
-                        "static_friction_range": tuple(friction_range),
-                        "dynamic_friction_range": tuple(friction_range),
-                        "restitution_range": (0.0, 0.0),
-                        "num_buckets": num_buckets,
-                    },
-                ),
-                simulator,
-            )
-            func(
-                simulator,
-                env_ids_cpu,
-                asset_cfg=asset_cfg,
-                static_friction_range=tuple(friction_range),
-                dynamic_friction_range=tuple(friction_range),
-                restitution_range=(0.0, 0.0),
-                num_buckets=num_buckets,
-            )
+
+        _isaacsim_randomize_rigid_body_material(
+            simulator,
+            env_ids_cpu,
+            asset_cfg,
+            static_friction_range=(friction_range[0], friction_range[1]),
+            dynamic_friction_range=(friction_range[0], friction_range[1]),
+            restitution_range=(0.0, 0.0),
+            num_buckets=num_buckets,
+        )
 
     elif simulator.simulator_config.mujoco_backend == MujocoBackend.WARP:
         from holosoma.simulator.mujoco.backends.warp_randomization import randomize_field
@@ -910,9 +960,7 @@ def randomize_robot_rigid_body_material_startup(
         )
 
     try:
-        from isaaclab.envs import mdp
-        from isaaclab.managers import EventTermCfg, SceneEntityCfg
-
+        from isaaclab.managers import SceneEntityCfg
     except ImportError as exc:  # pragma: no cover - defensive
         raise RuntimeError("IsaacSim material randomization requires isaaclab.") from exc
 
@@ -924,42 +972,15 @@ def randomize_robot_rigid_body_material_startup(
     asset_cfg.resolve(simulator.scene)
 
     num_buckets = 64
-    try:
-        # Try newer version of isaaclab
-        mdp.randomize_rigid_body_material(
-            simulator,
-            env_ids_cpu,
-            asset_cfg,
-            static_friction_range=tuple(static_friction_range),
-            dynamic_friction_range=tuple(dynamic_friction_range),
-            restitution_range=tuple(restitution_range),
-            num_buckets=num_buckets,
-        )
-    except TypeError:
-        # Fallback for older versions of isaaclab
-        func = mdp.randomize_rigid_body_material(
-            EventTermCfg(
-                func=mdp.randomize_rigid_body_material,
-                mode="startup",
-                params={
-                    "asset_cfg": asset_cfg,
-                    "static_friction_range": tuple(static_friction_range),
-                    "dynamic_friction_range": tuple(dynamic_friction_range),
-                    "restitution_range": tuple(restitution_range),
-                    "num_buckets": num_buckets,
-                },
-            ),
-            simulator,
-        )
-        func(
-            simulator,
-            env_ids_cpu,
-            asset_cfg=asset_cfg,
-            static_friction_range=tuple(static_friction_range),
-            dynamic_friction_range=tuple(dynamic_friction_range),
-            restitution_range=tuple(restitution_range),
-            num_buckets=num_buckets,
-        )
+    _isaacsim_randomize_rigid_body_material(
+        simulator,
+        env_ids_cpu,
+        asset_cfg,
+        static_friction_range=(static_friction_range[0], static_friction_range[1]),
+        dynamic_friction_range=(dynamic_friction_range[0], dynamic_friction_range[1]),
+        restitution_range=(restitution_range[0], restitution_range[1]),
+        num_buckets=num_buckets,
+    )
 
 
 def randomize_object_rigid_body_material_startup(
@@ -987,9 +1008,7 @@ def randomize_object_rigid_body_material_startup(
         )
 
     try:
-        from isaaclab.envs import mdp
-        from isaaclab.managers import EventTermCfg, SceneEntityCfg
-
+        from isaaclab.managers import SceneEntityCfg
     except ImportError as exc:  # pragma: no cover - defensive
         raise RuntimeError("IsaacSim material randomization requires isaaclab.") from exc
 
@@ -1001,42 +1020,15 @@ def randomize_object_rigid_body_material_startup(
     asset_cfg.resolve(simulator.scene)
 
     num_buckets = 64
-    try:
-        # Try newer version of isaaclab
-        mdp.randomize_rigid_body_material(
-            simulator,
-            env_ids_cpu,
-            asset_cfg,
-            static_friction_range=tuple(static_friction_range),
-            dynamic_friction_range=tuple(dynamic_friction_range),
-            restitution_range=tuple(restitution_range),
-            num_buckets=num_buckets,
-        )
-    except TypeError:
-        # Fallback for older versions of isaaclab
-        func = mdp.randomize_rigid_body_material(
-            EventTermCfg(
-                func=mdp.randomize_rigid_body_material,
-                mode="startup",
-                params={
-                    "asset_cfg": asset_cfg,
-                    "static_friction_range": tuple(static_friction_range),
-                    "dynamic_friction_range": tuple(dynamic_friction_range),
-                    "restitution_range": tuple(restitution_range),
-                    "num_buckets": num_buckets,
-                },
-            ),
-            simulator,
-        )
-        func(
-            simulator,
-            env_ids_cpu,
-            asset_cfg=asset_cfg,
-            static_friction_range=tuple(static_friction_range),
-            dynamic_friction_range=tuple(dynamic_friction_range),
-            restitution_range=tuple(restitution_range),
-            num_buckets=num_buckets,
-        )
+    _isaacsim_randomize_rigid_body_material(
+        simulator,
+        env_ids_cpu,
+        asset_cfg,
+        static_friction_range=(static_friction_range[0], static_friction_range[1]),
+        dynamic_friction_range=(dynamic_friction_range[0], dynamic_friction_range[1]),
+        restitution_range=(restitution_range[0], restitution_range[1]),
+        num_buckets=num_buckets,
+    )
 
 
 def randomize_object_rigid_body_mass_startup(
@@ -1062,7 +1054,6 @@ def randomize_object_rigid_body_mass_startup(
         )
 
     try:
-        from isaaclab.envs import mdp
         from isaaclab.managers import SceneEntityCfg
 
     except ImportError as exc:  # pragma: no cover - defensive
@@ -1075,11 +1066,11 @@ def randomize_object_rigid_body_mass_startup(
     asset_cfg = SceneEntityCfg("object", body_names=".*")
     asset_cfg.resolve(simulator.scene)
 
-    mdp.randomize_rigid_body_mass(
+    _isaacsim_randomize_rigid_body_mass(
         simulator,
         env_ids_cpu,
         asset_cfg,
-        tuple(mass_distribution_params),
+        (mass_distribution_params[0], mass_distribution_params[1]),
         operation="add",
     )
 

@@ -188,40 +188,6 @@ class IsaacSim(BaseSimulator):
 
         logger.info("Completed setting up the environment...")
 
-    def _analyze_urdf_for_dont_collapse(self, urdf_path: str) -> bool:
-        """
-        Analyze URDF file to check if it contains any joints with dont_collapse="true" attribute.
-
-        Args:
-            urdf_path (str): Path to the URDF file
-
-        Returns:
-            bool: True if any joint has dont_collapse="true", False otherwise
-        """
-        try:
-            tree = ET.parse(urdf_path)
-            root = tree.getroot()
-
-            # Find all joint elements
-            for joint in root.findall(".//joint"):
-                # Check if the joint has dont_collapse attribute set to "true"
-                dont_collapse = joint.get("dont_collapse")
-                if dont_collapse and dont_collapse.lower() == "true":
-                    logger.info(f"Found joint with dont_collapse='true': {joint.get('name', 'unnamed')}")
-                    return True
-
-            return False
-
-        except ET.ParseError as e:
-            logger.warning(f"Failed to parse URDF file {urdf_path}: {e}")
-            return False
-        except FileNotFoundError:
-            logger.warning(f"URDF file not found: {urdf_path}")
-            return False
-        except Exception as e:
-            logger.warning(f"Error analyzing URDF file {urdf_path}: {e}")
-            return False
-
     def _setup_scene(self) -> None:
         self._load_scene_config()
 
@@ -253,22 +219,6 @@ class IsaacSim(BaseSimulator):
             asset_path = robot_asset_cfg.urdf_file
             full_urdf_path = os.path.abspath(os.path.join(asset_root, asset_path))
 
-            # [jchen] Analyze URDF for dont_collapse attributes
-            # If URDF has dont_collapse attributes, disable merge_fixed_joints
-            # to preserve the joint structure as intended
-            # Because: [rocky] merge_fixed_joints has to be disabled right now due to the issue described in the following
-            # link: https://github.com/isaac-sim/IsaacLab/issues/1800#issuecomment-3046798639
-            # When we switch to newer IsaacLab, we can re-enable it
-            # and always use robot_asset_cfg.collapse_fixed_joints.
-            has_dont_collapse = self._analyze_urdf_for_dont_collapse(full_urdf_path)
-            if has_dont_collapse:
-                merge_fixed_joints_setting = False
-                logger.info("URDF contains dont_collapse attributes - disabling merge_fixed_joints")
-            else:
-                merge_fixed_joints_setting = robot_asset_cfg.collapse_fixed_joints
-
-                logger.info(f"No dont_collapse attributes found - using config setting: {merge_fixed_joints_setting}")
-
             # Get local rank to avoid race conditions in multi-GPU setups
             local_rank = int(os.environ.get("LOCAL_RANK", "0"))
             usd_conversion_dir = os.path.abspath(os.path.join(asset_root, f"converted_rank{local_rank}"))
@@ -277,7 +227,7 @@ class IsaacSim(BaseSimulator):
                 usd_dir=usd_conversion_dir,
                 asset_path=full_urdf_path,
                 fix_base=robot_asset_cfg.fix_base_link,
-                merge_fixed_joints=merge_fixed_joints_setting,
+                merge_fixed_joints=robot_asset_cfg.collapse_fixed_joints,
                 replace_cylinders_with_capsules=robot_asset_cfg.replace_cylinder_with_capsule,
                 force_usd_conversion=True,
                 joint_drive=sim_utils.UrdfConverterCfg.JointDriveCfg(

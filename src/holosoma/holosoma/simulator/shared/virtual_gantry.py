@@ -277,7 +277,7 @@ class VirtualGantry:
         if not self.enabled:
             return
 
-        from holosoma.utils.draw import draw_line, draw_sphere  # noqa: PLC0415
+        from holosoma.utils.draw import draw_line, draw_sphere
 
         # Red sphere at gantry anchor point
         anchor_pos = torch.from_numpy(self.point).float().to(self.sim.device)
@@ -371,7 +371,7 @@ class VirtualGantry:
         force : npt.NDArray[np.float64]
             3D force vector [fx, fy, fz] to apply.
         """
-        from isaacgym import gymapi, gymtorch  # noqa: PLC0415
+        from isaacgym import gymapi, gymtorch
 
         force_tensor = torch.zeros(self.sim.num_envs, self.sim.num_bodies, 3, device=self.sim.device)
         force_tensor[:, link_id, :] = torch.tensor(force, device=self.sim.device, dtype=torch.float32)
@@ -413,10 +413,10 @@ class VirtualGantry:
         body_quat_w = self.sim._robot.data.body_quat_w[0, isaac_body_id]  # [w,x,y,z] format
 
         # Transform force from world frame to body frame
-        from isaaclab.utils.math import quat_rotate_inverse  # noqa: PLC0415
+        from isaaclab.utils.math import quat_apply_inverse
 
         force_world = torch.from_numpy(force).float().to(self.sim.sim_device)
-        force_body = quat_rotate_inverse(body_quat_w, force_world)
+        force_body = quat_apply_inverse(body_quat_w, force_world)
 
         # Create force tensor for this body only
         forces = force_body.unsqueeze(0).unsqueeze(0)  # [1, 1, 3]

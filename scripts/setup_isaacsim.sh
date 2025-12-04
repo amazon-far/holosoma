@@ -24,8 +24,10 @@ if [[ ! -f $SENTINEL_FILE ]]; then
   if [[ ! -d $ENV_ROOT ]]; then
     $CONDA_ROOT/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
     $CONDA_ROOT/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
-    $CONDA_ROOT/bin/conda install -y mamba -c conda-forge -n base
-    MAMBA_ROOT_PREFIX=$CONDA_ROOT $CONDA_ROOT/bin/mamba create -y -n hssim python=3.10 -c conda-forge --override-channels
+    if [[ ! -f $CONDA_ROOT/bin/mamba ]]; then
+      $CONDA_ROOT/bin/conda install -y mamba -c conda-forge -n base
+    fi
+    MAMBA_ROOT_PREFIX=$CONDA_ROOT $CONDA_ROOT/bin/mamba create -y -n hssim python=3.11 -c conda-forge --override-channels
   fi
 
   source $CONDA_ROOT/bin/activate hssim
@@ -38,15 +40,15 @@ if [[ ! -f $SENTINEL_FILE ]]; then
   # Below follows https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/pip_installation.html
   # Install IsaacSim
   pip install --upgrade pip
-  # Pinning triton version. It's a dep of a dep, but seeing issues with 3.4.0+
-  pip install torch==2.5.1 torchvision==0.20.1 triton==3.1.0 --index-url https://download.pytorch.org/whl/cu118
+  pip install -U torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128
+
   # Install dependencies from PyPI first
   pip install pyperclip
   # Then install isaacsim from NVIDIA index only
-  pip install 'isaacsim[all,extscache]==4.5.0' --index-url https://pypi.org/simple
+  pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com
 
   if [[ ! -d $WORKSPACE_DIR/IsaacLab ]]; then
-    git clone https://github.com/isaac-sim/IsaacLab.git --branch v2.1.0 $WORKSPACE_DIR/IsaacLab
+    git clone https://github.com/isaac-sim/IsaacLab.git --branch v2.3.0 $WORKSPACE_DIR/IsaacLab
   fi
 
   sudo apt install -y cmake build-essential
