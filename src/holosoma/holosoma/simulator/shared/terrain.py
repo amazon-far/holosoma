@@ -12,6 +12,7 @@ import trimesh
 from holosoma.config_types.terrain import TerrainTermCfg
 from holosoma.simulator.shared.terrain_types import TerrainInterface
 from holosoma.utils import terrain_utils
+from holosoma.utils.path import resolve_data_file_path
 
 
 class Terrain(TerrainInterface):
@@ -59,7 +60,7 @@ class Terrain(TerrainInterface):
         self._mesh: trimesh.Trimesh = mesh
 
     def _initialize_obj_config(self) -> trimesh.Trimesh:
-        terrain_path = pathlib.Path(self._cfg.obj_file_path)
+        terrain_path = pathlib.Path(resolve_data_file_path(self._cfg.obj_file_path))
         if not terrain_path.exists():
             raise FileNotFoundError(f"Terrain file not found: {terrain_path}")
         print(f"[INFO] Loading custom terrain from: {terrain_path}")
