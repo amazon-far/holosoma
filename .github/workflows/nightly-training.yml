@@ -1,11 +1,23 @@
 name: Nightly Training
 on: [push]
+
+permissions:
+  contents: read
+
 jobs:
   child-job-1:
     runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          path: /workspace/holosoma
+      - name: Show working directory
+        run: |
+          pwd
+          ls -la /workspace/holosoma
+      - name: Check GPU
+        run: nvidia-smi
       - name: Child job 1 task
         run: echo "Child job 1 completed"
 
@@ -14,6 +26,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          path: /workspace/holosoma
+      - name: Show working directory
+        run: |
+          pwd
+          ls -la /workspace/holosoma
+      - name: Check GPU
+        run: nvidia-smi
       - name: Child job 2 task
         run: echo "Child job 2 completed"
 
