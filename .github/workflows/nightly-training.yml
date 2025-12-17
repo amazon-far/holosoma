@@ -1,5 +1,5 @@
 name: Nightly Training
-on: workflow_dispatch
+on: [push]
 jobs:
   child-job-1:
     runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
