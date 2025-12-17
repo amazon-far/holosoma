@@ -1,0 +1,33 @@
+name: Nightly Training
+on: workflow_dispatch
+jobs:
+  child-job-1:
+    runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Child job 1 task
+        run: echo "Child job 1 completed"
+
+  child-job-2:
+    runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Child job 2 task
+        run: echo "Child job 2 completed"
+
+  parent-job:
+    needs: [child-job-1, child-job-2]
+    runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    if: always()
+    steps:
+      - name: Check results
+        run: |
+          if [[ "${{ needs.child-job-1.result }}" == "success" && "${{ needs.child-job-2.result }}" == "success" ]]; then
+            echo "All child jobs successful"
+            exit 0
+          else
+            echo "One or more child jobs failed"
+            exit 1
+          fi
