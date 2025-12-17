@@ -10,8 +10,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          path: /workspace/holosoma
+      - name: Move to workspace
+        run: |
+          mkdir -p /workspace
+          cp -r . /workspace/holosoma
       - name: Show working directory
         run: |
           pwd
@@ -26,8 +28,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          path: /workspace/holosoma
+      - name: Move to workspace
+        run: |
+          mkdir -p /workspace
+          cp -r . /workspace/holosoma
       - name: Show working directory
         run: |
           pwd
