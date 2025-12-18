@@ -1361,6 +1361,10 @@ class MuJoCo(BaseSimulator):
         # (no-op for ClassicBackend which returns same data)
         self.root_data = self.backend.get_render_data(world_id=self.current_world_id)
 
+        if self.simulator_config.enable_viewer_to_track_robot:
+            robot_body_id = 1
+            self.viewer.cam.lookat[:] = self.root_data.xpos[robot_body_id]
+
         self.viewer.sync()
         if self.debug_viz_enabled:
             self.clear_lines()

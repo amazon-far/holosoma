@@ -123,7 +123,11 @@ class IsaacSim(BaseSimulator):
             self._setup_scene()
         print("[INFO]: Scene manager: ", self.scene)
 
-        viewer_config: ViewerCfg = ViewerCfg()
+        if self.simulator_config.enable_viewer_to_track_robot:
+            viewer_config: ViewerCfg = ViewerCfg(origin_type="asset_root", asset_name="robot")
+        else:
+            viewer_config: ViewerCfg = ViewerCfg()
+
         if self.sim.render_mode >= self.sim.RenderMode.PARTIAL_RENDERING:
             self.viewport_camera_controller: ViewportCameraController | None = ViewportCameraController(
                 self, viewer_config

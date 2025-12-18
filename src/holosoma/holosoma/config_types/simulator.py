@@ -479,6 +479,9 @@ class SimulatorInitConfig:
     debug_viz: bool = True
     """Enable debug visualization (gantry lines, etc.)."""
 
+    enable_viewer_to_track_robot: bool = False
+    """Whether viewer should track the robot in the viewer."""
+
     scene: SceneConfig = field(default_factory=SceneConfig)
     """Scene composition and asset configuration."""
 
