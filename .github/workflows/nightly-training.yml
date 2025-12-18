@@ -1,5 +1,6 @@
 name: Nightly Training
 on: 
+  push:
   workflow_dispatch:
     inputs:
       branch:
