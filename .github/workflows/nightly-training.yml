@@ -357,27 +357,19 @@ jobs:
   #         python tests/nightly/nightly.py exp:g1-29dof-wbt-fast-sac logger:wandb --command.setup_terms.motion_command.params.motion_config.motion_file=s3://far-research-internal/holosoma/data/motions/g1_29dof/whole_body_tracking/motion_dance_v3.npz --logger.video.enabled=False --algo.config.buffer_size=384
 
   evaluate-results:
-    needs: [
-      g1-29dof,
-      # t1-29dof,
-      # t1-29dof-isaacsim,
-      # g1-29dof-isaacsim,
-      # g1-29dof-multigpu,
-      # t1-29dof-multigpu,
-      # g1-29dof-fast-sac,
-      # g1-29dof-fast-sac-isaacsim,
-      # g1-29dof-fast-sac-multigpu,
-      # t1-29dof-fast-sac,
-      # t1-29dof-fast-sac-isaacsim,
-      # t1-29dof-fast-sac-multigpu,
-      # whole-body-tracking-isaacsim,
-      # whole-body-tracking-fast-sac-isaacsim
-    ]
+    needs: [g1-29dof]
     runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-    # if: always()
-    # steps:
-    #   - name: Check all results
-    #     run: |
+    if: always()
+    steps:
+      - name: Check results
+        run: |
+          if [[ "${{ needs.g1-29dof.result }}" == "success" ]]; then
+            echo "g1-29dof test passed successfully!"
+            exit 0
+          else
+            echo "g1-29dof test failed: ${{ needs.g1-29dof.result }}"
+            exit 1
+          fi
     #       results=(
     #         "${{ needs.g1-29dof.result }}"
     #         "${{ needs.t1-29dof.result }}"
