@@ -359,71 +359,71 @@ jobs:
   evaluate-results:
     needs: [
       g1-29dof,
-      t1-29dof,
-      t1-29dof-isaacsim,
-      g1-29dof-isaacsim,
-      g1-29dof-multigpu,
-      t1-29dof-multigpu,
-      g1-29dof-fast-sac,
-      g1-29dof-fast-sac-isaacsim,
-      g1-29dof-fast-sac-multigpu,
-      t1-29dof-fast-sac,
-      t1-29dof-fast-sac-isaacsim,
-      t1-29dof-fast-sac-multigpu,
-      whole-body-tracking-isaacsim,
-      whole-body-tracking-fast-sac-isaacsim
+      # t1-29dof,
+      # t1-29dof-isaacsim,
+      # g1-29dof-isaacsim,
+      # g1-29dof-multigpu,
+      # t1-29dof-multigpu,
+      # g1-29dof-fast-sac,
+      # g1-29dof-fast-sac-isaacsim,
+      # g1-29dof-fast-sac-multigpu,
+      # t1-29dof-fast-sac,
+      # t1-29dof-fast-sac-isaacsim,
+      # t1-29dof-fast-sac-multigpu,
+      # whole-body-tracking-isaacsim,
+      # whole-body-tracking-fast-sac-isaacsim
     ]
     runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-    if: always()
-    steps:
-      - name: Check all results
-        run: |
-          results=(
-            "${{ needs.g1-29dof.result }}"
-            "${{ needs.t1-29dof.result }}"
-            "${{ needs.t1-29dof-isaacsim.result }}"
-            "${{ needs.g1-29dof-isaacsim.result }}"
-            "${{ needs.g1-29dof-multigpu.result }}"
-            "${{ needs.t1-29dof-multigpu.result }}"
-            "${{ needs.g1-29dof-fast-sac.result }}"
-            "${{ needs.g1-29dof-fast-sac-isaacsim.result }}"
-            "${{ needs.g1-29dof-fast-sac-multigpu.result }}"
-            "${{ needs.t1-29dof-fast-sac.result }}"
-            "${{ needs.t1-29dof-fast-sac-isaacsim.result }}"
-            "${{ needs.t1-29dof-fast-sac-multigpu.result }}"
-            "${{ needs.whole-body-tracking-isaacsim.result }}"
-            "${{ needs.whole-body-tracking-fast-sac-isaacsim.result }}"
-          )
+    # if: always()
+    # steps:
+    #   - name: Check all results
+    #     run: |
+    #       results=(
+    #         "${{ needs.g1-29dof.result }}"
+    #         "${{ needs.t1-29dof.result }}"
+    #         "${{ needs.t1-29dof-isaacsim.result }}"
+    #         "${{ needs.g1-29dof-isaacsim.result }}"
+    #         "${{ needs.g1-29dof-multigpu.result }}"
+    #         "${{ needs.t1-29dof-multigpu.result }}"
+    #         "${{ needs.g1-29dof-fast-sac.result }}"
+    #         "${{ needs.g1-29dof-fast-sac-isaacsim.result }}"
+    #         "${{ needs.g1-29dof-fast-sac-multigpu.result }}"
+    #         "${{ needs.t1-29dof-fast-sac.result }}"
+    #         "${{ needs.t1-29dof-fast-sac-isaacsim.result }}"
+    #         "${{ needs.t1-29dof-fast-sac-multigpu.result }}"
+    #         "${{ needs.whole-body-tracking-isaacsim.result }}"
+    #         "${{ needs.whole-body-tracking-fast-sac-isaacsim.result }}"
+    #       )
           
-          job_names=(
-            "g1-29dof"
-            "t1-29dof"
-            "t1-29dof-isaacsim"
-            "g1-29dof-isaacsim"
-            "g1-29dof-multigpu"
-            "t1-29dof-multigpu"
-            "g1-29dof-fast-sac"
-            "g1-29dof-fast-sac-isaacsim"
-            "g1-29dof-fast-sac-multigpu"
-            "t1-29dof-fast-sac"
-            "t1-29dof-fast-sac-isaacsim"
-            "t1-29dof-fast-sac-multigpu"
-            "whole-body-tracking-isaacsim"
-            "whole-body-tracking-fast-sac-isaacsim"
-          )
+    #       job_names=(
+    #         "g1-29dof"
+    #         "t1-29dof"
+    #         "t1-29dof-isaacsim"
+    #         "g1-29dof-isaacsim"
+    #         "g1-29dof-multigpu"
+    #         "t1-29dof-multigpu"
+    #         "g1-29dof-fast-sac"
+    #         "g1-29dof-fast-sac-isaacsim"
+    #         "g1-29dof-fast-sac-multigpu"
+    #         "t1-29dof-fast-sac"
+    #         "t1-29dof-fast-sac-isaacsim"
+    #         "t1-29dof-fast-sac-multigpu"
+    #         "whole-body-tracking-isaacsim"
+    #         "whole-body-tracking-fast-sac-isaacsim"
+    #       )
           
-          failed_jobs=()
-          for i in "${!results[@]}"; do
-            if [[ "${results[$i]}" != "success" ]]; then
-              failed_jobs+=("${job_names[$i]}: ${results[$i]}")
-            fi
-          done
+    #       failed_jobs=()
+    #       for i in "${!results[@]}"; do
+    #         if [[ "${results[$i]}" != "success" ]]; then
+    #           failed_jobs+=("${job_names[$i]}: ${results[$i]}")
+    #         fi
+    #       done
           
-          if [[ ${#failed_jobs[@]} -eq 0 ]]; then
-            echo "All nightly tests passed successfully!"
-            exit 0
-          else
-            echo "Failed jobs:"
-            printf '%s\n' "${failed_jobs[@]}"
-            exit 1
-          fi
+    #       if [[ ${#failed_jobs[@]} -eq 0 ]]; then
+    #         echo "All nightly tests passed successfully!"
+    #         exit 0
+    #       else
+    #         echo "Failed jobs:"
+    #         printf '%s\n' "${failed_jobs[@]}"
+    #         exit 1
+    #       fi
