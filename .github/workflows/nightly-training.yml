@@ -21,25 +21,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.branch || 'main' }}
-      - name: docker ls
-        run: |
-          docker image ls
-      - name: Check user and access root
-        run: |
-          whoami
-          id
-          ls -la /root || echo "Cannot access /root"
-          sudo ls -la /root || echo "Cannot sudo to access /root"
-      - name: Pull Docker image and run container
+      - name: Login to ECR and run container
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_PUB_API_KEY }}
         run: |
-          docker pull 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest
-          docker run --network host -v $(pwd):/workspace/holosoma -e WANDB_API_KEY="${WANDB_API_KEY}" 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest bash -c "
+          aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 982423663241.dkr.ecr.us-west-2.amazonaws.com
+          docker run --rm --gpus all --network host -v $(pwd):/workspace/holosoma -e WANDB_API_KEY="${WANDB_API_KEY}" 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest bash -c "
             cd /workspace/holosoma &&
             nvidia-smi &&
             source /workspace/holosoma/scripts/source_isaacgym_setup.sh &&
-            echo '::add-mask::${WANDB_API_KEY}' &&
             python -m wandb login &&
             python -m pip install -e /workspace/holosoma/src/holosoma &&
             python -m pip install -e /workspace/holosoma/src/holosoma_inference &&
