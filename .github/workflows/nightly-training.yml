@@ -30,22 +30,21 @@ jobs:
           id
           ls -la /root || echo "Cannot access /root"
           sudo ls -la /root || echo "Cannot sudo to access /root"
-      - name: Move to workspace
-        run: |
-          mkdir -p /workspace
-          cp -r . /workspace/holosoma
-      - name: Run test
+      - name: Pull Docker image and run container
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_PUB_API_KEY }}
         run: |
-          cd /workspace/holosoma
-          nvidia-smi
-          source /workspace/holosoma/scripts/source_isaacgym_setup.sh
-          echo "::add-mask::${WANDB_API_KEY}"
-          python -m wandb login
-          python -m pip install -e /workspace/holosoma/src/holosoma
-          python -m pip install -e /workspace/holosoma/src/holosoma_inference
-          python tests/nightly/nightly.py exp:g1-29dof logger:wandb --logger.video.enabled=False
+          docker pull 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest
+          docker run --network host -v $(pwd):/workspace/holosoma -e WANDB_API_KEY="${WANDB_API_KEY}" 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest bash -c "
+            cd /workspace/holosoma &&
+            nvidia-smi &&
+            source /workspace/holosoma/scripts/source_isaacgym_setup.sh &&
+            echo '::add-mask::${WANDB_API_KEY}' &&
+            python -m wandb login &&
+            python -m pip install -e /workspace/holosoma/src/holosoma &&
+            python -m pip install -e /workspace/holosoma/src/holosoma_inference &&
+            python tests/nightly/nightly.py exp:g1-29dof logger:wandb --logger.video.enabled=False
+          "
 
   # t1-29dof:
   #   runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
