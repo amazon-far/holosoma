@@ -45,7 +45,7 @@ if [[ ! -f $SENTINEL_FILE ]]; then
   # Install dependencies from PyPI first
   pip install pyperclip
   # Then install isaacsim from NVIDIA index only
-  pip install "isaacsim[all,extscache]==5.1.0" --index-url https://pypi.nvidia.com --trusted-host pypi.nvidia.com
+  pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com --trusted-host pypi.nvidia.com
 
   if [[ ! -d $WORKSPACE_DIR/IsaacLab ]]; then
     git clone https://github.com/isaac-sim/IsaacLab.git --branch v2.3.0 $WORKSPACE_DIR/IsaacLab
