@@ -29,7 +29,7 @@ def replay(tyro_config: ExperimentConfig):
 
     done = False
     while not done:
-        env.simulator.sim.step()
+        # We don't need to step the simulator here because we are just visualizing the motion
         done = env.step_visualize_motion(None)  # type: ignore[attr-defined]
 
     close_simulation_app(simulation_app)
