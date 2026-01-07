@@ -118,10 +118,6 @@ class CameraController:
         self.smoothed_cam_pos: tuple[float, float, float] | None = None
         self.smoothed_cam_target: tuple[float, float, float] | None = None
 
-        # Resolve tracking body if needed (only for tracking cameras)
-        if isinstance(config, (SphericalCameraConfig, CartesianCameraConfig)):
-            self._resolve_tracking_body()
-
     def update(self, robot_pos: tuple[float, float, float] | None = None) -> CameraParameters:
         """Calculate current camera parameters.
 
@@ -165,6 +161,9 @@ class CameraController:
                 azimuth=azimuth,
                 elevation=elevation,
             )
+
+        if self.robot_body_id is None and isinstance(config, (SphericalCameraConfig, CartesianCameraConfig)):
+            self._resolve_tracking_body()
 
         if isinstance(config, SphericalCameraConfig):
             # Spherical camera positioning relative to robot

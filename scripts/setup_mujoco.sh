@@ -48,10 +48,15 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Create overall workspace
+
+# Use CONDA_ENV_NAME if provided, otherwise default to "hsmujoco"
+CONDA_ENV_NAME=${CONDA_ENV_NAME:-hsmujoco}
+echo "conda environment name is set to: $CONDA_ENV_NAME"
+
 source ${SCRIPT_DIR}/source_common.sh
-ENV_ROOT=$CONDA_ROOT/envs/hsmujoco
-SENTINEL_FILE=${WORKSPACE_DIR}/.env_setup_finished_mujoco
-WARP_SENTINEL_FILE=${WORKSPACE_DIR}/.env_setup_finished_mujoco_warp
+ENV_ROOT=$CONDA_ROOT/envs/$CONDA_ENV_NAME
+SENTINEL_FILE=${WORKSPACE_DIR}/.env_setup_finished_$CONDA_ENV_NAME
+WARP_SENTINEL_FILE=${WORKSPACE_DIR}/.env_setup_finished_$CONDA_ENV_NAME_warp
 
 mkdir -p $WORKSPACE_DIR
 
@@ -69,10 +74,10 @@ if [[ ! -f $SENTINEL_FILE ]]; then
     $CONDA_ROOT/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
     $CONDA_ROOT/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
     $CONDA_ROOT/bin/conda install -y mamba -c conda-forge -n base
-    MAMBA_ROOT_PREFIX=$CONDA_ROOT $CONDA_ROOT/bin/mamba create -y -n hsmujoco python=3.10 -c conda-forge --override-channels
+    MAMBA_ROOT_PREFIX=$CONDA_ROOT $CONDA_ROOT/bin/mamba create -y -n $CONDA_ENV_NAME python=3.10 -c conda-forge --override-channels
   fi
 
-  source $CONDA_ROOT/bin/activate hsmujoco
+  source $CONDA_ROOT/bin/activate $CONDA_ENV_NAME
 
   # Install system dependencies for MuJoCo
   # Note: These may require sudo access - document this requirement
@@ -175,7 +180,7 @@ if [[ "$INSTALL_WARP" == "true" ]] && [[ ! -f $WARP_SENTINEL_FILE ]]; then
   echo "Installing MuJoCo Warp (GPU acceleration)..."
 
   # Ensure conda environment is activated
-  source $CONDA_ROOT/bin/activate hsmujoco
+  source $CONDA_ROOT/bin/activate $CONDA_ENV_NAME
 
   # Check NVIDIA driver version (required for CUDA 12.4+)
   MIN_DRIVER_VERSION="550.54.14"

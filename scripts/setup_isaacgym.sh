@@ -4,10 +4,13 @@ set -ex
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 ROOT_DIR=$(dirname "$SCRIPT_DIR")
 
+# Use CONDA_ENV_NAME if provided, otherwise default to "hsgym"
+CONDA_ENV_NAME=${CONDA_ENV_NAME:-hsgym}
+echo "conda environment name is set to: $CONDA_ENV_NAME"
 # Create overall workspace
 source ${SCRIPT_DIR}/source_common.sh
-ENV_ROOT=$CONDA_ROOT/envs/hsgym
-SENTINEL_FILE=${WORKSPACE_DIR}/.env_setup_finished_isaacgym
+ENV_ROOT=$CONDA_ROOT/envs/$CONDA_ENV_NAME
+SENTINEL_FILE=${WORKSPACE_DIR}/.env_setup_finished_$CONDA_ENV_NAME
 
 mkdir -p $WORKSPACE_DIR
 
@@ -25,10 +28,10 @@ if [[ ! -f $SENTINEL_FILE ]]; then
     $CONDA_ROOT/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
     $CONDA_ROOT/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
     $CONDA_ROOT/bin/conda install -y mamba -c conda-forge -n base
-    MAMBA_ROOT_PREFIX=$CONDA_ROOT $CONDA_ROOT/bin/mamba create -y -n hsgym python=3.8 -c conda-forge --override-channels
+    MAMBA_ROOT_PREFIX=$CONDA_ROOT $CONDA_ROOT/bin/mamba create -y -n $CONDA_ENV_NAME python=3.8 -c conda-forge --override-channels
   fi
 
-  source $CONDA_ROOT/bin/activate hsgym
+  source $CONDA_ROOT/bin/activate $CONDA_ENV_NAME
 
   # Install libstdcxx-ng to fix the error: `version `GLIBCXX_3.4.32' not found` on Ubuntu 24.04
   conda install -c conda-forge -y libstdcxx-ng

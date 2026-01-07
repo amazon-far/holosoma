@@ -126,6 +126,7 @@ class TestSphericalCameraMode:
         controller = CameraController(config, mock_simulator)
 
         # Robot body should be resolved
+        controller._resolve_tracking_body()
         assert controller.robot_body_id == 1
         mock_simulator.find_rigid_body_indice.assert_called()
 
@@ -140,6 +141,7 @@ class TestSphericalCameraMode:
         controller = CameraController(config, mock_simulator)
 
         # Should try default body names
+        controller._resolve_tracking_body()
         assert controller.robot_body_id == 1
 
     def test_spherical_camera_tracking_failure(self, mock_simulator):
@@ -155,7 +157,7 @@ class TestSphericalCameraMode:
         )
 
         with pytest.raises(ValueError, match="No suitable tracking body found"):
-            CameraController(config, mock_simulator)
+            CameraController(config, mock_simulator)._resolve_tracking_body()
 
     def test_spherical_camera_smoothing(self, mock_simulator):
         """Test spherical camera applies smoothing."""
@@ -216,6 +218,7 @@ class TestCartesianCameraMode:
         controller = CameraController(config, mock_simulator)
 
         # Robot body should be resolved
+        controller._resolve_tracking_body()
         assert controller.robot_body_id == 1
 
     def test_cartesian_camera_smoothing(self, mock_simulator):
@@ -391,22 +394,6 @@ class TestEdgeCases:
         controller = CameraController(invalid_config, mock_simulator)
 
         with pytest.raises(ValueError, match="Unsupported camera config type"):
-            controller.update()
-
-    def test_tracking_camera_without_resolved_body_raises_error(self, mock_simulator):
-        """Test that tracking camera without resolved body raises error on update."""
-        config = SphericalCameraConfig(
-            distance=3.0,
-            azimuth=45.0,
-            elevation=20.0,
-            tracking_body_name="Trunk",
-        )
-        controller = CameraController(config, mock_simulator)
-
-        # Manually clear robot_body_id to simulate resolution failure
-        controller.robot_body_id = None
-
-        with pytest.raises(RuntimeError, match="Robot body not resolved"):
             controller.update()
 
     def test_zero_distance_spherical_coordinate(self):
