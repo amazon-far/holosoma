@@ -18,7 +18,7 @@ repos:
     files: \.(c|cc|cxx|cpp|frag|glsl|h|hpp|hxx|ih|ispc|ipp|java|m|mm|proto|textproto|vert|cu)$
     exclude: ^generated/.*$
 - repo: https://github.com/pre-commit/pre-commit-hooks
-  rev: v4.5.0
+  rev: v5.0.0
   hooks:
   - id: end-of-file-fixer
     # exclude .dae, .obj, .mtl, .stl files
