@@ -1,0 +1,24 @@
+# Holosoma Contributors
+
+- **Pieter Abbeel**: project advisor
+- **Juyue Chen**: lead of whole-body tracking development
+- **Rocky Duan**: team lead, developer, and project advisor
+- **Alejandro Escontrela**: contributor to terrain locomotion
+- **Manan Gandhi**: contributor to system development
+- **Samuel Gundry**: team lead and simulation architecture
+- **Xiaoyu Huang**: contributor to retargeting and whole-body tracking
+- **Angjoo Kanazawa**: project advisor
+- **Tomasz Lewicki**: lead inference pipeline developer
+- **Jiaman Li**: lead of retargeting development
+- **Karen Liu**: project advisor
+- **Clay Rosenthal**: contributor to system development
+- **Younggyo Seo**: lead project architect and developer
+- **Carlo Sferrazza**: lead project architect and developer
+- **Guanya Shi**: project advisor
+- **Linda Shih**: lead system developer
+- **Jonathan Tseng**: contributor to MjWarp simulation backend
+- **Zhen Wu**: contributor to retargeting and whole-body tracking
+- **Lujie Wang**: contributor to retargeting and whole-body tracking
+- **Brent Yi**: contributor to tyro integration
+- **Yuanhang Zhang**: contributor to training and inference pipeline
+
