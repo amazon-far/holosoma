@@ -21,4 +21,3 @@
 - **Lujie Wang**: contributor to retargeting and whole-body tracking
 - **Brent Yi**: contributor to tyro integration
 - **Yuanhang Zhang**: contributor to training and inference pipeline
-
