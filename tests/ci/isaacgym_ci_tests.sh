@@ -2,10 +2,10 @@
 # CI runs this inside holosoma docker
 set -ex
 
-source /workspace/holosoma/scripts/source_isaacgym_setup.sh
-pip install -e /workspace/holosoma/src/holosoma[unitree]
-pip install -e /workspace/holosoma/src/holosoma[booster]
-pip install -e /workspace/holosoma/src/holosoma_inference
-
 cd /workspace/holosoma
+
+source scripts/source_isaacgym_setup.sh
+pip install -e 'src/holosoma[unitree,booster]'
+pip install -e src/holosoma_inference
+
 pytest -s --ignore=thirdparty -m "not isaacsim"

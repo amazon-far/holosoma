@@ -1,0 +1,38 @@
+name: Pytests
+
+permissions:
+  contents: read
+  pull-requests: write
+
+on:
+  pull_request:
+    types:
+    - opened
+    - reopened
+    - synchronize
+
+jobs:
+  tests:
+    strategy:
+      matrix:
+        simulator: [isaacgym, isaacsim]
+    name: Run ${{ matrix.simulator }} Tests
+    runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    container:
+      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest
+      options: "--gpus all --runtime=nvidia --shm-size=12g"
+      volumes:
+        - "precommit-cache:/github/home/.cache/pre-commit"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+      - name: Pytest
+        id: pytest
+        shell: bash
+        run: |
+          ln -s /root/.holosoma_deps "$HOME/.holosoma_deps"
+          if [[ ! -L /workspace/holosoma ]]; then
+            rm -rf /workspace/holosoma
+            ln -sfF "$GITHUB_WORKSPACE" /workspace/holosoma
+          fi
+          bash tests/ci/${{ matrix.simulator }}_ci_tests.sh

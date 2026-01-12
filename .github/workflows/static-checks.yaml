@@ -12,50 +12,29 @@ on:
     - synchronize
 
 jobs:
-  login-to-amazon-ecr:
-    name: Setup for ECR
-    runs-on:
-      # - codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-      - codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-region: us-west-2
-          role-session-name: gha-${{ github.run_id }}-${{ github.run_attempt }}
-      - name: Setup ecr-cred helper
-        run: |
-          sudo apt update
-          sudo apt install -y amazon-ecr-credential-helper
-          mkdir -p ~/.docker
-          echo '{"credsStore": "ecr-login"}' > ~/.docker/config.json
-
   run-checks:
     name: Run Checks
-    runs-on:
-      # - codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-      - codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-    needs: login-to-amazon-ecr
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     container:
       image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest
       volumes:
         - "precommit-cache:/github/home/.cache/pre-commit"
-        - "uv-cache:/github/home/.cache/uv"
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
-          # ref: ${{ github.event.inputs.branch || 'main' }}
           fetch-depth: 5
       - name: Static Checks
         shell: bash
         run: |
-          ln -s /root/.holosoma_deps "$HOME/.holosoma_deps" || true
+          ln -s /root/.holosoma_deps "$HOME/.holosoma_deps"
+          if [[ ! -L /workspace/holosoma ]]; then
+            rm -rf /workspace/holosoma
+            ln -sfF "$GITHUB_WORKSPACE" /workspace/holosoma
+          fi
           source scripts/source_isaacgym_setup.sh
           pip install pre-commit mypy
-          pip install -e src/holosoma
-          pip install -e src/holosoma_inference
           git fetch origin "${GITHUB_BASE_REF:-main}"
           git fetch origin "${GITHUB_SHA}"
           pre-commit install-hooks
