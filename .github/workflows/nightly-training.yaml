@@ -1,6 +1,6 @@
 name: Nightly Training
 on:
-  push:
+  # push:
   workflow_dispatch:
     inputs:
       branch:
@@ -14,34 +14,36 @@ permissions:
   contents: read
 
 jobs:
-  login-to-amazon-ecr:
-    name: Setup for ECR
-    runs-on:
-      - codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-region: us-west-2
-          role-session-name: gha-${{ github.run_id }}-${{ github.run_attempt }}
-      - name: Setup ecr-cred helper
-        run: |
-          sudo apt update
-          sudo apt install -y amazon-ecr-credential-helper
-          mkdir -p ~/.docker
-          echo '{"credsStore": "ecr-login"}' > ~/.docker/config.json
-
-  g1-29dof:
-    name: G1 29-DOF
+  training:
     runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-    needs: login-to-amazon-ecr
-    timeout-minutes: 550
+    strategy:
+      matrix:
+        experiment:
+        - g1-29dof
+        - t1-29dof
+        - g1-29dof-fast-sac
+        - t1-29dof-fast-sac
+        multigpu: ['False', 'True']
+        simulator: [isaacgym, isaacsim]
+        extra_args: [""]
+        #TODO: fix AWS perms for pulling s3 assets
+        # include:
+        # - experiment: g1-29dof-wbt
+        #   simulator: isaacsim
+        #   multigpu: 'False'
+        #   extra_args: --command.setup_terms.motion_command.params.motion_config.motion_file=s3://far-holosoma-assets/data/motions/g1_29dof/whole_body_tracking/motion_dance_v3.npz
+        # - experiment: g1-29dof-wbt-fast-sac
+        #   simulator: isaacsim
+        #   multigpu: 'False'
+        #   extra_args: --command.setup_terms.motion_command.params.motion_config.motion_file=s3://far-holosoma-assets/data/motions/g1_29dof/whole_body_tracking/motion_dance_v3.npz --algo.config.buffer_size=384
+
+    name: Train ${{ matrix.experiment }} on ${{ matrix.multigpu == 'True' && 'multi-gpu' || 'single-gpu' }} using ${{ matrix.simulator }}
+    timeout-minutes: 720 # 12 hours
     container:
       image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest
       options: "--gpus all --runtime=nvidia --shm-size=12g"
       volumes:
         - "precommit-cache:/github/home/.cache/pre-commit"
-        - "uv-cache:/github/home/.cache/uv"
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -51,390 +53,32 @@ jobs:
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_PUB_API_KEY }}
         shell: bash
-        timeout-minutes: 550
+        timeout-minutes: 720 # 12 hours
         run: |
           ln -s /root/.holosoma_deps "$HOME/.holosoma_deps"
           if [[ ! -L /workspace/holosoma ]]; then
             rm -rf /workspace/holosoma
             ln -sfF "$GITHUB_WORKSPACE" /workspace/holosoma
           fi
-          source scripts/source_isaacgym_setup.sh
+          source scripts/source_${{ matrix.simulator }}_setup.sh
           nvidia-smi
           python -m wandb login
-          python tests/nightly/nightly.py exp:g1-29dof logger:wandb --logger.video.enabled=False
-
-  # t1-29dof:
-  #   runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #       with:
-  #         ref: ${{ github.event.inputs.branch || 'main' }}
-  #     - name: Move to workspace
-  #       run: |
-  #         mkdir -p /workspace
-  #         cp -r . /workspace/holosoma
-  #     - name: Run test
-  #       env:
-  #         WANDB_API_KEY: ${{ secrets.WANDB_PUB_API_KEY }}
-  #       run: |
-  #         cd /workspace/holosoma
-  #         nvidia-smi
-  #         source /workspace/holosoma/scripts/source_isaacgym_setup.sh
-  #         echo "::add-mask::${WANDB_API_KEY}"
-  #         python -m wandb login
-  #         python -m pip install -e /workspace/holosoma/src/holosoma
-  #         python -m pip install -e /workspace/holosoma/src/holosoma_inference
-  #         python tests/nightly/nightly.py exp:t1-29dof logger:wandb --logger.video.enabled=False
-
-  # t1-29dof-isaacsim:
-  #   runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #       with:
-  #         ref: ${{ github.event.inputs.branch || 'main' }}
-  #     - name: Move to workspace
-  #       run: |
-  #         mkdir -p /workspace
-  #         cp -r . /workspace/holosoma
-  #     - name: Run test
-  #       env:
-  #         WANDB_API_KEY: ${{ secrets.WANDB_PUB_API_KEY }}
-  #       run: |
-  #         cd /workspace/holosoma
-  #         nvidia-smi
-  #         source /workspace/holosoma/scripts/source_isaacsim_setup.sh
-  #         echo "::add-mask::${WANDB_API_KEY}"
-  #         python -m wandb login
-  #         python -m pip install -e /workspace/holosoma/src/holosoma
-  #         python -m pip install -e /workspace/holosoma/src/holosoma_inference
-  #         python tests/nightly/nightly.py exp:t1-29dof logger:wandb simulator:isaacsim --logger.video.enabled=False
-
-  # g1-29dof-isaacsim:
-  #   runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #       with:
-  #         ref: ${{ github.event.inputs.branch || 'main' }}
-  #     - name: Move to workspace
-  #       run: |
-  #         mkdir -p /workspace
-  #         cp -r . /workspace/holosoma
-  #     - name: Run test
-  #       env:
-  #         WANDB_API_KEY: ${{ secrets.WANDB_PUB_API_KEY }}
-  #       run: |
-  #         cd /workspace/holosoma
-  #         nvidia-smi
-  #         source /workspace/holosoma/scripts/source_isaacsim_setup.sh
-  #         echo "::add-mask::${WANDB_API_KEY}"
-  #         python -m wandb login
-  #         python -m pip install -e /workspace/holosoma/src/holosoma
-  #         python -m pip install -e /workspace/holosoma/src/holosoma_inference
-  #         python tests/nightly/nightly.py exp:g1-29dof logger:wandb simulator:isaacsim --logger.video.enabled=False
-
-  # g1-29dof-multigpu:
-  #   runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #       with:
-  #         ref: ${{ github.event.inputs.branch || 'main' }}
-  #     - name: Move to workspace
-  #       run: |
-  #         mkdir -p /workspace
-  #         cp -r . /workspace/holosoma
-  #     - name: Run test
-  #       env:
-  #         WANDB_API_KEY: ${{ secrets.WANDB_PUB_API_KEY }}
-  #       run: |
-  #         cd /workspace/holosoma
-  #         nvidia-smi
-  #         source /workspace/holosoma/scripts/source_isaacgym_setup.sh
-  #         echo "::add-mask::${WANDB_API_KEY}"
-  #         python -m wandb login
-  #         python -m pip install -e /workspace/holosoma/src/holosoma
-  #         python -m pip install -e /workspace/holosoma/src/holosoma_inference
-  #         python tests/nightly/nightly.py exp:g1-29dof logger:wandb --training.multigpu=True --logger.video.enabled=False
-
-  # t1-29dof-multigpu:
-  #   runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #       with:
-  #         ref: ${{ github.event.inputs.branch || 'main' }}
-  #     - name: Move to workspace
-  #       run: |
-  #         mkdir -p /workspace
-  #         cp -r . /workspace/holosoma
-  #     - name: Run test
-  #       env:
-  #         WANDB_API_KEY: ${{ secrets.WANDB_PUB_API_KEY }}
-  #       run: |
-  #         cd /workspace/holosoma
-  #         nvidia-smi
-  #         source /workspace/holosoma/scripts/source_isaacgym_setup.sh
-  #         echo "::add-mask::${WANDB_API_KEY}"
-  #         python -m wandb login
-  #         python -m pip install -e /workspace/holosoma/src/holosoma
-  #         python -m pip install -e /workspace/holosoma/src/holosoma_inference
-  #         python tests/nightly/nightly.py exp:t1-29dof logger:wandb --training.multigpu=True --logger.video.enabled=False
-
-  # g1-29dof-fast-sac:
-  #   runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #       with:
-  #         ref: ${{ github.event.inputs.branch || 'main' }}
-  #     - name: Move to workspace
-  #       run: |
-  #         mkdir -p /workspace
-  #         cp -r . /workspace/holosoma
-  #     - name: Run test
-  #       env:
-  #         WANDB_API_KEY: ${{ secrets.WANDB_PUB_API_KEY }}
-  #       run: |
-  #         cd /workspace/holosoma
-  #         nvidia-smi
-  #         source /workspace/holosoma/scripts/source_isaacgym_setup.sh
-  #         echo "::add-mask::${WANDB_API_KEY}"
-  #         python -m wandb login
-  #         python -m pip install -e /workspace/holosoma/src/holosoma
-  #         python -m pip install -e /workspace/holosoma/src/holosoma_inference
-  #         python tests/nightly/nightly.py exp:g1-29dof-fast-sac logger:wandb --logger.video.enabled=False
-
-  # g1-29dof-fast-sac-isaacsim:
-  #   runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #       with:
-  #         ref: ${{ github.event.inputs.branch || 'main' }}
-  #     - name: Move to workspace
-  #       run: |
-  #         mkdir -p /workspace
-  #         cp -r . /workspace/holosoma
-  #     - name: Run test
-  #       env:
-  #         WANDB_API_KEY: ${{ secrets.WANDB_PUB_API_KEY }}
-  #       run: |
-  #         cd /workspace/holosoma
-  #         nvidia-smi
-  #         source /workspace/holosoma/scripts/source_isaacsim_setup.sh
-  #         echo "::add-mask::${WANDB_API_KEY}"
-  #         python -m wandb login
-  #         python -m pip install -e /workspace/holosoma/src/holosoma
-  #         python -m pip install -e /workspace/holosoma/src/holosoma_inference
-  #         python tests/nightly/nightly.py exp:g1-29dof-fast-sac logger:wandb simulator:isaacsim --logger.video.enabled=False
-
-  # g1-29dof-fast-sac-multigpu:
-  #   runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #       with:
-  #         ref: ${{ github.event.inputs.branch || 'main' }}
-  #     - name: Move to workspace
-  #       run: |
-  #         mkdir -p /workspace
-  #         cp -r . /workspace/holosoma
-  #     - name: Run test
-  #       env:
-  #         WANDB_API_KEY: ${{ secrets.WANDB_PUB_API_KEY }}
-  #       run: |
-  #         cd /workspace/holosoma
-  #         nvidia-smi
-  #         source /workspace/holosoma/scripts/source_isaacgym_setup.sh
-  #         echo "::add-mask::${WANDB_API_KEY}"
-  #         python -m wandb login
-  #         python -m pip install -e /workspace/holosoma/src/holosoma
-  #         python -m pip install -e /workspace/holosoma/src/holosoma_inference
-  #         python tests/nightly/nightly.py exp:g1-29dof-fast-sac logger:wandb --training.multigpu=True --logger.video.enabled=False
-
-  # t1-29dof-fast-sac:
-  #   runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #       with:
-  #         ref: ${{ github.event.inputs.branch || 'main' }}
-  #     - name: Move to workspace
-  #       run: |
-  #         mkdir -p /workspace
-  #         cp -r . /workspace/holosoma
-  #     - name: Run test
-  #       env:
-  #         WANDB_API_KEY: ${{ secrets.WANDB_PUB_API_KEY }}
-  #       run: |
-  #         cd /workspace/holosoma
-  #         nvidia-smi
-  #         source /workspace/holosoma/scripts/source_isaacgym_setup.sh
-  #         echo "::add-mask::${WANDB_API_KEY}"
-  #         python -m wandb login
-  #         python -m pip install -e /workspace/holosoma/src/holosoma
-  #         python -m pip install -e /workspace/holosoma/src/holosoma_inference
-  #         python tests/nightly/nightly.py exp:t1-29dof-fast-sac logger:wandb --logger.video.enabled=False
-
-  # t1-29dof-fast-sac-isaacsim:
-  #   runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #       with:
-  #         ref: ${{ github.event.inputs.branch || 'main' }}
-  #     - name: Move to workspace
-  #       run: |
-  #         mkdir -p /workspace
-  #         cp -r . /workspace/holosoma
-  #     - name: Run test
-  #       env:
-  #         WANDB_API_KEY: ${{ secrets.WANDB_PUB_API_KEY }}
-  #       run: |
-  #         cd /workspace/holosoma
-  #         nvidia-smi
-  #         source /workspace/holosoma/scripts/source_isaacsim_setup.sh
-  #         echo "::add-mask::${WANDB_API_KEY}"
-  #         python -m wandb login
-  #         python -m pip install -e /workspace/holosoma/src/holosoma
-  #         python -m pip install -e /workspace/holosoma/src/holosoma_inference
-  #         python tests/nightly/nightly.py exp:t1-29dof-fast-sac logger:wandb simulator:isaacsim --logger.video.enabled=False
-
-  # t1-29dof-fast-sac-multigpu:
-  #   runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #       with:
-  #         ref: ${{ github.event.inputs.branch || 'main' }}
-  #     - name: Move to workspace
-  #       run: |
-  #         mkdir -p /workspace
-  #         cp -r . /workspace/holosoma
-  #     - name: Run test
-  #       env:
-  #         WANDB_API_KEY: ${{ secrets.WANDB_PUB_API_KEY }}
-  #       run: |
-  #         cd /workspace/holosoma
-  #         nvidia-smi
-  #         source /workspace/holosoma/scripts/source_isaacgym_setup.sh
-  #         echo "::add-mask::${WANDB_API_KEY}"
-  #         python -m wandb login
-  #         python -m pip install -e /workspace/holosoma/src/holosoma
-  #         python -m pip install -e /workspace/holosoma/src/holosoma_inference
-  #         python tests/nightly/nightly.py exp:t1-29dof-fast-sac logger:wandb --training.multigpu=True --logger.video.enabled=False
-
-  # whole-body-tracking-isaacsim:
-  #   runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #       with:
-  #         ref: ${{ github.event.inputs.branch || 'main' }}
-  #     - name: Move to workspace
-  #       run: |
-  #         mkdir -p /workspace
-  #         cp -r . /workspace/holosoma
-  #     - name: Run test
-  #       env:
-  #         WANDB_API_KEY: ${{ secrets.WANDB_PUB_API_KEY }}
-  #       run: |
-  #         cd /workspace/holosoma
-  #         nvidia-smi
-  #         source /workspace/holosoma/scripts/source_isaacgym_setup.sh
-  #         echo "::add-mask::${WANDB_API_KEY}"
-  #         python -m wandb login
-  #         python -m pip install -e /workspace/holosoma/src/holosoma
-  #         python -m pip install -e /workspace/holosoma/src/holosoma_inference
-  #         python tests/nightly/nightly.py exp:g1-29dof-wbt logger:wandb --command.setup_terms.motion_command.params.motion_config.motion_file=s3://far-research-internal/holosoma/data/motions/g1_29dof/whole_body_tracking/motion_dance_v3.npz --logger.video.enabled=False
-
-  # whole-body-tracking-fast-sac-isaacsim:
-  #   runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #       with:
-  #         ref: ${{ github.event.inputs.branch || 'main' }}
-  #     - name: Move to workspace
-  #       run: |
-  #         mkdir -p /workspace
-  #         cp -r . /workspace/holosoma
-  #     - name: Run test
-  #       env:
-  #         WANDB_API_KEY: ${{ secrets.WANDB_PUB_API_KEY }}
-  #       run: |
-  #         cd /workspace/holosoma
-  #         nvidia-smi
-  #         source /workspace/holosoma/scripts/source_isaacgym_setup.sh
-  #         echo "::add-mask::${WANDB_API_KEY}"
-  #         python -m wandb login
-  #         python -m pip install -e /workspace/holosoma/src/holosoma
-  #         python -m pip install -e /workspace/holosoma/src/holosoma_inference
-  #         python tests/nightly/nightly.py exp:g1-29dof-wbt-fast-sac logger:wandb --command.setup_terms.motion_command.params.motion_config.motion_file=s3://far-research-internal/holosoma/data/motions/g1_29dof/whole_body_tracking/motion_dance_v3.npz --logger.video.enabled=False --algo.config.buffer_size=384
+          python tests/nightly/nightly.py exp:${{ matrix.experiment }} \
+            logger:wandb --logger.video.enabled=False \
+            simulator:${{ matrix.simulator }} \
+            --training.multigpu=${{ matrix.multigpu }} ${{ matrix.extra_args }}
 
   evaluate-results:
-    needs: [g1-29dof]
-    runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    needs: [training]
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     if: always()
     steps:
       - name: Check results
         run: |
-          if [[ "${{ needs.g1-29dof.result }}" == "success" ]]; then
-            echo "g1-29dof test passed successfully!"
+          if [[ "${{ needs.training.result }}" == "success" ]]; then
+            echo "All nightly training tests passed!"
             exit 0
           else
-            echo "g1-29dof test failed: ${{ needs.g1-29dof.result }}"
+            echo "Some training tests failed."
             exit 1
           fi
-    #       results=(
-    #         "${{ needs.g1-29dof.result }}"
-    #         "${{ needs.t1-29dof.result }}"
-    #         "${{ needs.t1-29dof-isaacsim.result }}"
-    #         "${{ needs.g1-29dof-isaacsim.result }}"
-    #         "${{ needs.g1-29dof-multigpu.result }}"
-    #         "${{ needs.t1-29dof-multigpu.result }}"
-    #         "${{ needs.g1-29dof-fast-sac.result }}"
-    #         "${{ needs.g1-29dof-fast-sac-isaacsim.result }}"
-    #         "${{ needs.g1-29dof-fast-sac-multigpu.result }}"
-    #         "${{ needs.t1-29dof-fast-sac.result }}"
-    #         "${{ needs.t1-29dof-fast-sac-isaacsim.result }}"
-    #         "${{ needs.t1-29dof-fast-sac-multigpu.result }}"
-    #         "${{ needs.whole-body-tracking-isaacsim.result }}"
-    #         "${{ needs.whole-body-tracking-fast-sac-isaacsim.result }}"
-    #       )
-
-    #       job_names=(
-    #         "g1-29dof"
-    #         "t1-29dof"
-    #         "t1-29dof-isaacsim"
-    #         "g1-29dof-isaacsim"
-    #         "g1-29dof-multigpu"
-    #         "t1-29dof-multigpu"
-    #         "g1-29dof-fast-sac"
-    #         "g1-29dof-fast-sac-isaacsim"
-    #         "g1-29dof-fast-sac-multigpu"
-    #         "t1-29dof-fast-sac"
-    #         "t1-29dof-fast-sac-isaacsim"
-    #         "t1-29dof-fast-sac-multigpu"
-    #         "whole-body-tracking-isaacsim"
-    #         "whole-body-tracking-fast-sac-isaacsim"
-    #       )
-
-    #       failed_jobs=()
-    #       for i in "${!results[@]}"; do
-    #         if [[ "${results[$i]}" != "success" ]]; then
-    #           failed_jobs+=("${job_names[$i]}: ${results[$i]}")
-    #         fi
-    #       done
-
-    #       if [[ ${#failed_jobs[@]} -eq 0 ]]; then
-    #         echo "All nightly tests passed successfully!"
-    #         exit 0
-    #       else
-    #         echo "Failed jobs:"
-    #         printf '%s\n' "${failed_jobs[@]}"
-    #         exit 1
-    #       fi
