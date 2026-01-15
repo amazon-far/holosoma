@@ -1,0 +1,73 @@
+name: AWS Checks
+
+permissions:
+  contents: read
+  pull-requests: write
+
+on:
+  push:
+
+jobs:
+#   host-checks:
+#     name: check in host
+#     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+#     steps:
+#     #   - name: Configure AWS credentials
+#     #     uses: aws-actions/configure-aws-credentials@v4
+#     #     with:
+#     #       aws-region: us-west-2
+#     #       role-session-name: gha-${{ github.run_id }}-${{ github.run_attempt }}
+#       - name: aws checks
+#         shell: bash
+#         # env:
+#         #     AWS_EC2_METADATA_SERVICE_ENDPOINT: "http://169.254.169.254/"
+#         run: |
+#           env | grep AWS
+#           env | grep ip-
+#           sudo apt install python3-boto3
+#           python3 -c "import boto3; print(boto3.client('sts').get_caller_identity())"
+
+  container-checks:
+    name: check in container
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    container:
+      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest
+      options: "--add-host=169.254.170.2:host-gateway"
+      volumes:
+        - "/etc/mce/default-certs/cacert.pem"
+      env:
+        AWS_CONTAINER_CREDENTIALS_FULL_URI: ${{ env.AWS_CONTAINER_CREDENTIALS_FULL_URI }}
+        AWS_SSM_INSTANCE_ID: ${{ env.AWS_SSM_INSTANCE_ID }}
+        AWS_SSM_REGION_NAME: ${{ env.AWS_SSM_REGION_NAME }}
+        AWS_DEFAULT_REGION: ${{ env. AWS_DEFAULT_REGION}}
+        AWS_CA_BUNDLE: "/etc/mce/default-certs/cacert.pem"
+
+    steps:
+    #   - name: Checkout code
+    #     uses: actions/checkout@v6
+    #     with:
+    #       # ref: ${{ github.event.inputs.branch || 'main' }}
+    #       fetch-depth: 5
+    #   - name: Configure AWS credentials
+    #     uses: aws-actions/configure-aws-credentials@v4
+    #     with:
+    #       aws-region: us-west-2
+    #       role-session-name: gha-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: aws checks
+        shell: bash
+        
+        run: |
+          sudo mkdir -p /etc/amazon/ssm/
+          wget -q https://raw.githubusercontent.com/aws/aws-codebuild-docker-images/refs/heads/master/ubuntu/standard/7.0/amazon-ssm-agent.json -O /etc/amazon/ssm/amazon-ssm-agent.json
+          wget -q https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/debian_amd64/amazon-ssm-agent.deb
+          sudo dpkg -i amazon-ssm-agent.deb
+          ln -s /root/.holosoma_deps "$HOME/.holosoma_deps"
+          cd /workspace/holosoma
+          source scripts/source_isaacgym_setup.sh
+          env | grep AWS
+          curl http://169.254.169.254/2014-11-05/meta-data/iam/security-credentials/
+          TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"` \
+            && curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/iam/security-credentials/codebuild-role-holosoma-gpu-build
+
+          python3 -c "import boto3; print(boto3.client('sts').get_caller_identity())"
