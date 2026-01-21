@@ -99,6 +99,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
         self._stiff_hold_active = True
         self.robot_yaw_offset = 0.0
+        self.motion_yaw_offset = 0.0
 
         super().__init__(config)
 

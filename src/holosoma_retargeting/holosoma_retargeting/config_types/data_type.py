@@ -254,6 +254,23 @@ JOINTS_MAPPINGS = {
         "L_Wrist": "left_rubber_hand_link",
         "R_Wrist": "right_rubber_hand_link",
     },
+    ("smplx", "t1_29dof"): {
+        "Pelvis": "Trunk",
+        "L_Hip": "Hip_Pitch_Left",
+        "R_Hip": "Hip_Pitch_Right",
+        "L_Knee": "Shank_Left",
+        "R_Knee": "Shank_Right",
+        "L_Shoulder": "AL1",
+        "R_Shoulder": "AR1",
+        "L_Elbow": "AL4",
+        "R_Elbow": "AR4",
+        "L_Ankle": "Ankle_Cross_Left",
+        "R_Ankle": "Ankle_Cross_Right",
+        "L_Foot": "left_foot_link",
+        "R_Foot": "right_foot_link",
+        "L_Wrist": "left_hand_link",
+        "R_Wrist": "right_hand_link",
+    },
     ("mocap", "g1"): {
         "Spine1": "pelvis_contour_link",
         "LeftUpLeg": "left_hip_pitch_link",
@@ -287,6 +304,27 @@ JOINTS_MAPPINGS = {
         "RightHandMiddle3": "right_hand_sphere_link",
         "LeftFoot": "Ankle_Cross_Left",
         "RightFoot": "Ankle_Cross_Right",
+    },
+    # ------------------------------------------------
+    # [NEW] Added SMPLX support for T1 Robot
+    # ------------------------------------------------
+    ("smplx", "t1"): {
+        "Pelvis": "Trunk",
+        "L_Hip": "Hip_Pitch_Left",
+        "R_Hip": "Hip_Pitch_Right",
+        "L_Knee": "Shank_Left",
+        "R_Knee": "Shank_Right",
+        "L_Shoulder": "AL1",
+        "R_Shoulder": "AR1",
+        "L_Elbow": "left_hand_link",
+        "R_Elbow": "right_hand_link",
+        "L_Ankle": "Ankle_Cross_Left",
+        "R_Ankle": "Ankle_Cross_Right",
+        # SMPLX uses 'Foot' instead of 'Toe'
+        "L_Foot": "left_foot_sphere_5_link",
+        "R_Foot": "right_foot_sphere_5_link",
+        "L_Wrist": "left_hand_sphere_link",
+        "R_Wrist": "right_hand_sphere_link",
     },
 }
 

@@ -105,11 +105,16 @@ cd holosoma_retargeting/data_utils/
 git clone https://github.com/nghorbani/human_body_prior.git
 pip install tqdm dotmap PyYAML omegaconf loguru
 cd human_body_prior/
-python setup.py develop
+pip install -e .
+cd ../
+mv human_body_prior human_body_prior_outer
+mv human_body_prior_outer/* ./
+rm -rf human_body_prior_outer
 cd ../
 
+
 # Run data processing
-python prep_amass_smplx_for_rt.py \
+python data_utils/prep_amass_smplx_for_rt.py \
   --amass-root-folder /path/to/amass \
   --output-folder /path/to/output \
   --model-root-folder /path/to/models
