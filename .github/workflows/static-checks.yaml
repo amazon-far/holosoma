@@ -34,7 +34,7 @@ jobs:
             ln -sfF "$GITHUB_WORKSPACE" /workspace/holosoma
           fi
           source scripts/source_isaacgym_setup.sh
-          pip install pre-commit mypy
+          pip install pre-commit mypy slack-sdk
           git fetch origin "${GITHUB_BASE_REF:-main}"
           git fetch origin "${GITHUB_SHA}"
           pre-commit install-hooks
