@@ -38,7 +38,32 @@ _ROBOT_JOINT_NAMES_DEFAULT = {
         "right_wrist_roll_joint",
         "right_wrist_pitch_joint",
         "right_wrist_yaw_joint",
-    ]
+    ],
+    "t1": [
+        "AAHead_yaw",
+        "Head_pitch",
+        "Left_Shoulder_Pitch",
+        "Left_Shoulder_Roll",
+        "Left_Elbow_Pitch",
+        "Left_Elbow_Yaw",
+        "Right_Shoulder_Pitch",
+        "Right_Shoulder_Roll",
+        "Right_Elbow_Pitch",
+        "Right_Elbow_Yaw",
+        "Waist",
+        "Left_Hip_Pitch",
+        "Left_Hip_Roll",
+        "Left_Hip_Yaw",
+        "Left_Knee_Pitch",
+        "Left_Ankle_Pitch",
+        "Left_Ankle_Roll",
+        "Right_Hip_Pitch",
+        "Right_Hip_Roll",
+        "Right_Hip_Yaw",
+        "Right_Knee_Pitch",
+        "Right_Ankle_Pitch",
+        "Right_Ankle_Roll",
+    ],
 }
 
 
