@@ -82,3 +82,16 @@ jobs:
             echo "Some training tests failed."
             exit 1
           fi
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.branch || 'main' }}
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Post to Slack
+        env:
+          WANDB_ENTITY: "amazon-far"
+          WANDB_API_KEY: ${{ secrets.WANDB_PUB_API_KEY }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL: '#far-holosoma-nightly-tests'
+        run: uv run --script ./tests/nightly/run_summary.py --slack

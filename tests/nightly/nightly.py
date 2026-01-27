@@ -21,6 +21,40 @@ def now_timestamp() -> str:
     return datetime.datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
 
 
+def validate_wandb_metrics(config: AnnotatedExperimentConfig):
+    # lazy import to avoid conflicts with Isaac
+    import wandb
+
+    assert wandb.run is not None, "wandb run failed! wandb.run is `None`"
+    api = wandb.Api()
+    run = api.run(f"{wandb.run.entity}/{wandb.run.project}/{wandb.run.id}")
+    df_hist = run.history()
+
+    failures: list[str] = []
+    assert config.nightly is not None  # for type checking
+    assert config.nightly.metrics is not None
+
+    for k, v in config.nightly.metrics.items():
+        v_min = float(v[0])
+        v_max = float(v[1])
+        v_last_100 = df_hist[k][-100:].mean()
+
+        is_in_range = v_min <= v_last_100 <= v_max
+        if not is_in_range:
+            msg = f"Metric {k}={v_last_100:0.2f} is not in range ({v_min}, {v_max})"
+            print(msg)
+            failures.append(msg)
+
+    # 3. Any other post-training work can go here
+    if len(failures) > 0:
+        print(f"Some tests failed! Metrics outside of expected ranges: {failures}")
+        run.tags += ("nightly_test_failed",)
+        run.update()
+    else:
+        run.tags += ("nightly_test_passed",)
+        run.update()
+
+
 def main():
     config = tyro.cli(AnnotatedExperimentConfig, config=TYRO_CONIFG)
 
@@ -70,34 +104,7 @@ def main():
 
         # 2. Validate metrics (explicit, linear flow) - only on rank 0
         if os.environ.get("RANK", "0") == "0":
-            # lazy import to avoid conflicts with Isaac
-            import wandb
-
-            assert wandb.run is not None, "wandb run failed! wandb.run is `None`"
-            api = wandb.Api()
-            run = api.run(f"{wandb.run.entity}/{wandb.run.project}/{wandb.run.id}")
-            df_hist = run.history()
-
-            failures: list[str] = []
-            for k, v in config.nightly.metrics.items():
-                v_min = float(v[0])
-                v_max = float(v[1])
-                v_last_100 = df_hist[k][-100:].mean()
-
-                is_in_range = v_min <= v_last_100 <= v_max
-                if not is_in_range:
-                    msg = f"Metric {k}={v_last_100:0.2f} is not in range ({v_min}, {v_max})"
-                    print(msg)
-                    failures.append(msg)
-
-            # 3. Any other post-training work can go here
-            if len(failures) > 0:
-                print(f"Some tests failed! Metrics outside of expected ranges: {failures}")
-                run.tags += ("nightly_test_failed",)
-                run.update()
-            else:
-                run.tags += ("nightly_test_passed",)
-                run.update()
+            validate_wandb_metrics(config)
 
     # 4. simulation_app automatically closed when exiting context
 
