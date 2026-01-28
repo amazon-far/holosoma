@@ -26,24 +26,19 @@ jobs:
         multigpu: ['False', 'True']
         simulator: [isaacgym, isaacsim]
         extra_args: [""]
-        #TODO: fix AWS perms for pulling s3 assets
-        # include:
-        # - experiment: g1-29dof-wbt
-        #   simulator: isaacsim
-        #   multigpu: 'False'
-        #   extra_args: --command.setup_terms.motion_command.params.motion_config.motion_file=s3://far-holosoma-assets/data/motions/g1_29dof/whole_body_tracking/motion_dance_v3.npz
-        # - experiment: g1-29dof-wbt-fast-sac
-        #   simulator: isaacsim
-        #   multigpu: 'False'
-        #   extra_args: --command.setup_terms.motion_command.params.motion_config.motion_file=s3://far-holosoma-assets/data/motions/g1_29dof/whole_body_tracking/motion_dance_v3.npz --algo.config.buffer_size=384
+        include:
+        - experiment: g1-29dof-wbt
+          simulator: isaacsim
+          multigpu: 'False'
+          extra_args: --command.setup_terms.motion_command.params.motion_config.motion_file=s3://far-holosoma-assets/data/motions/g1_29dof/whole_body_tracking/motion_dance_v3.npz
+        - experiment: g1-29dof-wbt-fast-sac
+          simulator: isaacsim
+          multigpu: 'False'
+          extra_args: --command.setup_terms.motion_command.params.motion_config.motion_file=s3://far-holosoma-assets/data/motions/g1_29dof/whole_body_tracking/motion_dance_v3.npz --algo.config.buffer_size=384
 
     name: Train ${{ matrix.experiment }} on ${{ matrix.multigpu == 'True' && 'multi-gpu' || 'single-gpu' }} using ${{ matrix.simulator }}
     timeout-minutes: 720 # 12 hours
-    container:
-      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest
-      options: "--gpus all --runtime=nvidia --shm-size=12g"
-      volumes:
-        - "precommit-cache:/github/home/.cache/pre-commit"
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -53,35 +48,29 @@ jobs:
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_PUB_API_KEY }}
         shell: bash
-        timeout-minutes: 720 # 12 hours
+        timeout-minutes: 750 # 12.5 hours
         run: |
-          ln -s /root/.holosoma_deps "$HOME/.holosoma_deps"
-          if [[ ! -L /workspace/holosoma ]]; then
-            rm -rf /workspace/holosoma
-            ln -sfF "$GITHUB_WORKSPACE" /workspace/holosoma
-          fi
-          source scripts/source_${{ matrix.simulator }}_setup.sh
-          nvidia-smi
-          python -m wandb login
-          python tests/nightly/nightly.py exp:${{ matrix.experiment }} \
-            logger:wandb --logger.video.enabled=False \
-            simulator:${{ matrix.simulator }} \
-            --training.multigpu=${{ matrix.multigpu }} ${{ matrix.extra_args }}
+          eval "$(aws configure export-credentials --format env)"
+          docker run --gpus all --runtime=nvidia --shm-size=12g \
+            -v "$GITHUB_WORKSPACE:/workspace/holosoma" \
+            --env AWS_ACCESS_KEY_ID --env AWS_SECRET_ACCESS_KEY \
+            --env AWS_SESSION_TOKEN --env WANDB_API_KEY \
+            982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest \
+            bash -c """
+              source scripts/source_${{ matrix.simulator }}_setup.sh
+              python -m wandb login
+              python tests/nightly/nightly.py exp:${{ matrix.experiment }} \
+                logger:wandb --logger.video.enabled=False \
+                simulator:${{ matrix.simulator }} \
+                --training.multigpu=${{ matrix.multigpu }} ${{ matrix.extra_args }}
+            """
+
 
   evaluate-results:
     needs: [training]
     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     if: always()
     steps:
-      - name: Check results
-        run: |
-          if [[ "${{ needs.training.result }}" == "success" ]]; then
-            echo "All nightly training tests passed!"
-            exit 0
-          else
-            echo "Some training tests failed."
-            exit 1
-          fi
       - name: Checkout code
         uses: actions/checkout@v6
         with:
@@ -95,3 +84,12 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL: '#far-holosoma-nightly-tests'
         run: uv run --script ./tests/nightly/run_summary.py --slack
+      - name: Check results
+        run: |
+          if [[ "${{ needs.training.result }}" == "success" ]]; then
+            echo "All nightly training tests passed!"
+            exit 0
+          else
+            echo "Some training tests failed."
+            exit 1
+          fi

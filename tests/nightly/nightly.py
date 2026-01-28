@@ -89,12 +89,18 @@ def main():
 
     config = config.get_nightly_config()
 
+    run_tags = []
+
+    if os.getenv("GITHUB_RUN_ID"):
+        run_tags.append(f"gha-run-id-{os.getenv('GITHUB_RUN_ID')}")
+
     config = dataclasses.replace(
         config,
         logger=dataclasses.replace(
             config.logger,
             project=f"nightly-{sanitized_exp}{multigpu_suffix}",
             name=f"nightly-{sanitized_exp}{multigpu_suffix}-{now_timestamp()}",
+            tags=run_tags,
         ),
     )
 

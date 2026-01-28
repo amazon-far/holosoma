@@ -101,6 +101,7 @@ def get_last_nightly_urls() -> list[str]:
     api = wandb.Api(timeout=60)
 
     nightly_urls = []
+    filter_tags = []
 
     # Fetch all projects for the FAR entity
     all_projects = list(api.projects(WANDB_ENTITY))
@@ -110,6 +111,10 @@ def get_last_nightly_urls() -> list[str]:
     since_time = datetime.now(timezone.utc) - timedelta(hours=16)
     since_iso = since_time.isoformat()
 
+    # GHA run ids filter
+    if os.getenv("GITHUB_RUN_ID"):
+        filter_tags.append(f"gha-run-id-{os.getenv('GITHUB_RUN_ID')}")
+
     # Use parallel processing to speed up API calls
     # Default to a reasonable number of workers based on CPU count
     max_workers = min(32, (os.cpu_count() or 1) + 4)
@@ -117,7 +122,7 @@ def get_last_nightly_urls() -> list[str]:
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all tasks
         future2project_name = {
-            executor.submit(_fetch_project_runs, api, p.name, since_iso): p.name for p in nightly_projects
+            executor.submit(_fetch_project_runs, api, p.name, since_iso, filter_tags): p.name for p in nightly_projects
         }
 
         # Process completed tasks as they finish
