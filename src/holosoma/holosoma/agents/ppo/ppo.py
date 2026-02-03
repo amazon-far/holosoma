@@ -642,12 +642,216 @@ class PPO(BaseAlgo):
         if was_training:
             self._train_mode()
 
+    def _compute_and_log_eval_metrics(self, iteration):
+        """Compute and log evaluation metrics during training
+        
+        Note: These are INSTANTANEOUS metrics (current env state snapshot)
+        - Computed at the END of each rollout (after num_steps_per_env steps)
+        - Averaged across all environments
+        - NOT averaged over the rollout trajectory (except action smoothness/rate)
+        
+        Returns:
+            dict: Dictionary of computed metrics for logging
+        """
+        env = self.env
+        
+        # Initialize feet_indices if not done yet
+        if not hasattr(self, '_feet_indices_for_metrics'):
+            if hasattr(env, 'feet_indices'):
+                self._feet_indices_for_metrics = env.feet_indices
+            else:
+                # Find feet indices by body names
+                body_names = env.simulator._body_list if hasattr(env.simulator, '_body_list') else []
+                left_foot_idx = None
+                right_foot_idx = None
+                
+                for idx, name in enumerate(body_names):
+                    if 'left_ankle_roll_link' in name:
+                        left_foot_idx = idx
+                    elif 'right_ankle_roll_link' in name:
+                        right_foot_idx = idx
+                
+                if left_foot_idx is not None and right_foot_idx is not None:
+                    self._feet_indices_for_metrics = [left_foot_idx, right_foot_idx]
+                    logger.info(f"[EvalMetrics] Found feet indices: left={left_foot_idx}, right={right_foot_idx}")
+                else:
+                    self._feet_indices_for_metrics = None
+                    logger.warning("[EvalMetrics] Could not find feet indices, foot-related metrics will be disabled")
+        
+        # First time logging
+        if not hasattr(self, '_eval_metrics_initialized'):
+            self._eval_metrics_initialized = True
+            logger.info(f"[EvalMetrics] Initializing evaluation metrics logging")
+        
+        # Log every 10 iterations to avoid spam
+        verbose_logging = (iteration % 1 == 0)
+        if verbose_logging:
+            logger.info(f"[EvalMetrics] Computing metrics at iteration {iteration}")
+        
+        metrics_computed = {}
+        
+        # Get data from storage (last rollout trajectory)
+        actions = self.storage["actions"]  # [num_steps_per_env, num_envs, num_actions]
+        
+        # 1. Action smoothness (jerk) - averaged over rollout trajectory
+        if actions.shape[0] >= 3:
+            action_jerk = actions[2:] - 2 * actions[1:-1] + actions[:-2]  # [num_steps-2, num_envs, num_actions]
+            action_smoothness = (action_jerk ** 2).mean().item()  # Mean over steps, envs, actions
+            self.writer.add_scalar('EvalMetrics/action_smoothness', action_smoothness, iteration)
+            metrics_computed['action_smoothness'] = action_smoothness
+        
+        # 2. Action rate - averaged over rollout trajectory
+        if actions.shape[0] >= 2:
+            action_rate = torch.abs(actions[1:] - actions[:-1]).mean().item()  # Mean over steps, envs, actions
+            self.writer.add_scalar('EvalMetrics/action_rate', action_rate, iteration)
+            metrics_computed['action_rate'] = action_rate
+        
+        # 3. Foot slippage - instantaneous (current step only)
+        if self._feet_indices_for_metrics is not None and hasattr(env.simulator, 'contact_forces'):
+            is_contact = torch.norm(env.simulator.contact_forces[:, self._feet_indices_for_metrics, :], dim=-1) > 1.0
+            foot_vel = env.simulator._rigid_body_vel[:, self._feet_indices_for_metrics, :2]
+            foot_planar_velocity = torch.linalg.norm(foot_vel, dim=-1)
+            slippage = (is_contact * foot_planar_velocity).mean().item()  # Mean over envs
+            self.writer.add_scalar('EvalMetrics/foot_slippage_instantaneous', slippage, iteration)
+            metrics_computed['foot_slippage_instantaneous'] = slippage
+        
+        # 4. Contact force - instantaneous (current step only)
+        if self._feet_indices_for_metrics is not None and hasattr(env.simulator, 'contact_forces'):
+            contact_forces = torch.norm(env.simulator.contact_forces[:, self._feet_indices_for_metrics, :], dim=-1)
+            contact_force_mean = contact_forces.mean().item()
+            contact_force_std = contact_forces.std().item()
+            self.writer.add_scalar('EvalMetrics/contact_force_mean', contact_force_mean, iteration)
+            self.writer.add_scalar('EvalMetrics/contact_force_std', contact_force_std, iteration)
+            metrics_computed['contact_force_mean'] = contact_force_mean
+            metrics_computed['contact_force_std'] = contact_force_std
+        
+        # 5. Joint acceleration - instantaneous (current step only)
+        if not hasattr(self, '_prev_dof_vel_for_metrics'):
+            self._prev_dof_vel_for_metrics = env.simulator.dof_vel.clone()
+        else:
+            joint_acc = torch.abs(env.simulator.dof_vel - self._prev_dof_vel_for_metrics) / env.dt
+            joint_acc_mean = joint_acc.mean().item()
+            self.writer.add_scalar('EvalMetrics/joint_acceleration', joint_acc_mean, iteration)
+            metrics_computed['joint_acceleration'] = joint_acc_mean
+            self._prev_dof_vel_for_metrics = env.simulator.dof_vel.clone()
+        
+        # 6. Base angular velocity error - instantaneous
+        if hasattr(env, 'command_manager'):
+            motion_cmd = env.command_manager.get_state("motion_command")
+            if motion_cmd is not None and hasattr(motion_cmd, 'body_ang_vel_w'):
+                ref_base_ang_vel = motion_cmd.body_ang_vel_w[:, 0, :]  # pelvis angular velocity
+                actual_base_ang_vel = env.simulator.robot_root_states[:, 10:13]
+                base_ang_vel_error = torch.norm(ref_base_ang_vel - actual_base_ang_vel, dim=-1).mean().item()
+                self.writer.add_scalar('EvalMetrics/base_ang_vel_error', base_ang_vel_error, iteration)
+                metrics_computed['base_ang_vel_error'] = base_ang_vel_error
+        # 7. Motion tracking error - instantaneous (WBT only)
+        # Compute from motion_command (same as reward terms)
+        if hasattr(env, 'command_manager'):
+            try:
+                motion_cmd = env.command_manager.get_state("motion_command")
+                if motion_cmd is not None and hasattr(motion_cmd, 'motion'):
+                    # Find indices to exclude (contact point bodies) - only once
+                    if not hasattr(self, '_body_indices_for_tracking'):
+                        body_list = env.simulator._body_list
+                        exclude_names = ['left_foot_contact_point', 'right_foot_contact_point']
+                        self._body_indices_for_tracking = [
+                            i for i, name in enumerate(body_list) 
+                            if name not in exclude_names
+                        ]
+                        logger.info(f"[EvalMetrics] Using {len(self._body_indices_for_tracking)}/{len(body_list)} bodies for tracking (excluding contact points)")
+                    
+                    # Get ALL body positions from motion and simulator (30 bodies, excluding contact points)
+                    # motion.body_pos_w[time_steps] gives [num_envs, num_bodies, 3] but needs env_origins added
+                    ref_body_pos_all = (
+                        motion_cmd.motion.body_pos_w[motion_cmd.time_steps] 
+                        + env.simulator.scene.env_origins[:, None, :]
+                    )  # [num_envs, 32, 3]
+                    robot_body_pos_all = env.simulator._rigid_body_pos  # [num_envs, 32, 3]
+                    
+                    # Filter to exclude contact points
+                    ref_body_pos = ref_body_pos_all[:, self._body_indices_for_tracking, :]  # [num_envs, 30, 3]
+                    robot_body_pos = robot_body_pos_all[:, self._body_indices_for_tracking, :]  # [num_envs, 30, 3]
+                    
+                    # Global frame: distance in world coordinates (all 30 bodies)
+                    global_diff = ref_body_pos - robot_body_pos  # [num_envs, 30, 3]
+                    motion_tracking_error_global = torch.norm(global_diff, dim=-1).mean().item()
+                    self.writer.add_scalar('EvalMetrics/motion_tracking_global', motion_tracking_error_global, iteration)
+                    metrics_computed['motion_tracking_global'] = motion_tracking_error_global
+
+                    # Local frame (beyondmimic style): compute for ALL 30 bodies
+                    # Same logic as wbt.py lines 491-538, but for all bodies
+                    from holosoma.utils.rotations import quat_apply, quat_inverse, quat_mul, yaw_quat
+                    
+                    # Get reference body poses (use root at episode start, else configured ref body)
+                    use_root = (env.episode_length_buf == 0).unsqueeze(1).float()
+                    ref_pos_w = motion_cmd.root_pos_w * use_root + motion_cmd.ref_pos_w * (1 - use_root)
+                    ref_quat_w = motion_cmd.root_quat_w * use_root + motion_cmd.ref_quat_w * (1 - use_root)
+                    robot_ref_pos_w = motion_cmd.robot_root_pos_w * use_root + motion_cmd.robot_ref_pos_w * (1 - use_root)
+                    robot_ref_quat_w = motion_cmd.robot_root_quat_w * use_root + motion_cmd.robot_ref_quat_w * (1 - use_root)
+                    
+                    # Repeat for all 30 bodies
+                    num_bodies = len(self._body_indices_for_tracking)
+                    ref_pos_w_repeat = ref_pos_w[:, None, :].repeat(1, num_bodies, 1)
+                    ref_quat_w_repeat = ref_quat_w[:, None, :].repeat(1, num_bodies, 1)
+                    robot_ref_pos_w_repeat = robot_ref_pos_w[:, None, :].repeat(1, num_bodies, 1)
+                    robot_ref_quat_w_repeat = robot_ref_quat_w[:, None, :].repeat(1, num_bodies, 1)
+                    
+                    # Compute yaw-only rotation difference
+                    delta_quat_w = yaw_quat(
+                        quat_mul(robot_ref_quat_w_repeat, quat_inverse(ref_quat_w_repeat, w_last=True), w_last=True), w_last=True
+                    )
+                    
+                    # Compute relative body positions (beyondmimic style)
+                    delta_pos_w_height = ref_pos_w_repeat - robot_ref_pos_w_repeat
+                    delta_pos_w_height[..., :2] = 0.0  # adjusting for height differences only
+                    body_pos_relative_w_all = (
+                        robot_ref_pos_w_repeat
+                        + delta_pos_w_height
+                        + quat_apply(delta_quat_w, ref_body_pos - ref_pos_w_repeat, w_last=True)
+                    )
+                    
+                    # Local tracking error (all 30 bodies)
+                    local_diff = body_pos_relative_w_all - robot_body_pos  # [num_envs, 30, 3]
+                    motion_tracking_error_local = torch.norm(local_diff, dim=-1).mean().item()
+                    self.writer.add_scalar('EvalMetrics/motion_tracking_local', motion_tracking_error_local, iteration)
+                    metrics_computed['motion_tracking_local'] = motion_tracking_error_local
+                    
+                    if verbose_logging:
+                        logger.info(f"[EvalMetrics] Motion tracking - Global: {motion_tracking_error_global:.4f}m, Local: {motion_tracking_error_local:.4f}m")
+            except Exception as e:
+                if not hasattr(self, '_motion_tracking_error_logged'):
+                    import traceback
+                    logger.warning(f"[EvalMetrics] Failed to compute motion tracking: {e}")
+                    logger.debug(f"[EvalMetrics] Traceback:\n{traceback.format_exc()}")
+                    self._motion_tracking_error_logged = True
+        
+        # Log summary every 100 iterations
+        if verbose_logging and metrics_computed:
+            metrics_str = ", ".join([f"{k}={v:.4f}" for k, v in metrics_computed.items()])
+            logger.info(f"[EvalMetrics] Iteration {iteration}: {metrics_str}")
+        
+        return metrics_computed
+
     def _post_epoch_logging(self, it, loss_dict):
+        # Compute and log evaluation metrics (same as eval_metrics.py)
+        eval_metrics = {}
+        try:
+            eval_metrics = self._compute_and_log_eval_metrics(it)
+        except Exception as e:
+            import traceback
+            logger.warning(f"[EvalMetrics] Failed to compute metrics at iteration {it}: {e}")
+            logger.debug(f"[EvalMetrics] Traceback:\n{traceback.format_exc()}")
+        
         extra_log_dicts = {
             "Policy": {
                 "mean_noise_std": self.actor.std.mean().item(),
             },
         }
+        
+        # Add EvalMetrics to extra_log_dicts for WandB logging
+        if eval_metrics:
+            extra_log_dicts["EvalMetrics"] = eval_metrics
+        
         loss_dict["actor_learning_rate"] = self.actor_learning_rate
         loss_dict["critic_learning_rate"] = self.critic_learning_rate
         # Use logging helper

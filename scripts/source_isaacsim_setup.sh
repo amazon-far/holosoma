@@ -10,5 +10,8 @@ CONDA_ENV_NAME=${CONDA_ENV_NAME:-hssim}
 echo "conda environment name is set to: $CONDA_ENV_NAME"
 
 source ${SCRIPT_DIR}/source_common.sh
-source ${CONDA_ROOT}/bin/activate $CONDA_ENV_NAME
+# Initialize conda and activate environment
+export CONDA_BASE=$CONDA_ROOT
+source ${CONDA_ROOT}/etc/profile.d/conda.sh
+conda activate $CONDA_ENV_NAME
 export OMNI_KIT_ACCEPT_EULA=1

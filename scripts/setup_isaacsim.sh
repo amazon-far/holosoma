@@ -35,7 +35,12 @@ if [[ ! -f $SENTINEL_FILE ]]; then
     MAMBA_ROOT_PREFIX=$CONDA_ROOT $CONDA_ROOT/bin/mamba create -y -n $CONDA_ENV_NAME python=3.11 -c conda-forge --override-channels
   fi
 
-  source $CONDA_ROOT/bin/activate $CONDA_ENV_NAME
+  # Initialize conda and activate environment
+  # Set CONDA_BASE to ensure conda recognizes this installation
+  export CONDA_BASE=$CONDA_ROOT
+  source $CONDA_ROOT/etc/profile.d/conda.sh
+  conda config --set auto_activate_base false
+  conda activate $CONDA_ENV_NAME
 
   # Install ffmpeg for video encoding
   conda install -c conda-forge -y ffmpeg

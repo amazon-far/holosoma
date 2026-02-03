@@ -57,7 +57,7 @@ class MotionLoader:
         return torch.tensor(indexes, dtype=torch.long, device=device)
 
     def _load_data_from_motion_npz(self, motion_file: str, device: str) -> tuple[list[str], list[str]]:
-        with cached_open(motion_file, "rb") as f, np.load(f) as data:
+        with cached_open(motion_file, "rb") as f, np.load(f, allow_pickle=True) as data:
             self.fps = data["fps"]
 
             body_names = data["body_names"].tolist()
