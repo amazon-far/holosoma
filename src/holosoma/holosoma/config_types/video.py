@@ -28,12 +28,6 @@ class SphericalCameraConfig:
     elevation: float = 20.0
     """Vertical angle in degrees, where 0 = horizontal."""
 
-    smoothing: float = 0.95
-    """Camera smoothing factor for reducing shake (0.0 = no smoothing, 0.99 = very smooth)."""
-
-    tracking_body_name: str = "auto"
-    """Name of the robot body to track. If 'auto', will try default body names in order."""
-
 
 @dataclass(frozen=True)
 class CartesianCameraConfig:
@@ -50,12 +44,6 @@ class CartesianCameraConfig:
 
     target_offset: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.3])
     """Camera target offset from tracked object [x, y, z] in meters."""
-
-    smoothing: float = 0.95
-    """Camera smoothing factor for reducing shake (0.0 = no smoothing, 0.99 = very smooth)."""
-
-    tracking_body_name: str = "auto"
-    """Name of the robot body to track. If 'auto', will try default body names in order."""
 
 
 @dataclass(frozen=True)
@@ -106,6 +94,9 @@ class VideoConfig:
         1.0 = real-time, 2.0 = 2x faster, 0.5 = slow motion.
     """
 
+    camera_smoothing: float = 0.95
+    """Camera smoothing factor for reducing shake (0.0 = no smoothing, 0.99 = very smooth)."""
+
     output_format: str = "h264"
     """Video output format ('mp4' or 'h264'). 'h264' provides better browser compatibility."""
 
@@ -122,12 +113,10 @@ class VideoConfig:
     """Which environment to record (for multi-environment simulations)."""
 
     camera: CameraConfig = field(default_factory=CartesianCameraConfig)
-    """Camera configuration with automatic type discrimination based on 'type' field.
+    """Camera configuration with automatic type discrimination based on 'type' field."""
 
-    Note: Camera-specific settings like smoothing and tracking_body_name are now part of the
-    camera config itself (SphericalCameraConfig, CartesianCameraConfig) rather than at the
-    VideoConfig level.
-    """
+    tracking_body_name: str | None = None
+    """Name of the robot body to track. If None or 'auto', will try default body names in order."""
 
     use_recording_thread: bool = False
     """Whether to use background thread for video recording (MuJoCo-only)"""

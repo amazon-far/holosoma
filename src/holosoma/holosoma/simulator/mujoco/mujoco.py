@@ -6,8 +6,6 @@ implementations for terrain rendering, contact detection, and physics simulation
 
 from __future__ import annotations
 
-import dataclasses
-
 import mujoco
 import mujoco.viewer
 import numpy as np
@@ -1363,10 +1361,6 @@ class MuJoCo(BaseSimulator):
         # (no-op for ClassicBackend which returns same data)
         self.root_data = self.backend.get_render_data(world_id=self.current_world_id)
 
-        if self.simulator_config.viewer.enable_tracking:
-            robot_body_id = 1
-            self.viewer.cam.lookat[:] = self.root_data.xpos[robot_body_id]
-
         self.viewer.sync()
         if self.debug_viz_enabled:
             self.clear_lines()
@@ -1435,17 +1429,12 @@ class MuJoCo(BaseSimulator):
         else:
             gantry_status = "inactive"
 
-        # Determine camera tracking status
-        camera_status = "ON" if self.simulator_config.viewer.enable_tracking else "OFF"
-
         # Build text overlay content
         text = (
             f"Virtual gantry is {gantry_status} \n"
             "Press '7' to raise it \n"
             "Press '8' to lower it \n"
             "Press '9' to toggle it \n"
-            f"Camera tracking: {camera_status} \n"
-            "Press 'y' to toggle camera tracking \n"
             "Press backspace to reset the environment \n"
             "Press 'g' to hide this menu"
         )
@@ -1472,19 +1461,6 @@ class MuJoCo(BaseSimulator):
             logger.info(f"Text overlay: {status}")
             # Update overlay immediately when toggled
             self._update_text_overlay()
-            return
-
-        # Y key (89): Toggle camera tracking
-        if keycode == 89:  # 'Y' key
-            self.simulator_config = dataclasses.replace(
-                self.simulator_config,
-                viewer=dataclasses.replace(
-                    self.simulator_config.viewer, enable_tracking=not self.simulator_config.viewer.enable_tracking
-                ),
-            )
-            status = "ON" if self.simulator_config.viewer.enable_tracking else "OFF"
-            logger.info(f"Camera tracking: {status} (press 'Y' to toggle)")
-            self._update_text_overlay()  # Update UI
             return
 
         # Handle world_id toggling for multi-environment visualization (WarpBackend only)

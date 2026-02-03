@@ -178,8 +178,6 @@ class InteractionMeshRetargeter:
         # Create parent frames for robot and object
         self.robot_base = self.server.scene.add_frame("/world/robot", show_axes=False)
 
-        print("robot_model_path: ", self.robot_model_path)
-
         # Load robot URDF
         self.robot_urdf = yourdfpy.URDF.load(
             self.robot_model_path,
@@ -1044,7 +1042,8 @@ class InteractionMeshRetargeter:
         # 3) J_v: translational Jacobian wrt generalized velocities (3 x nv)
         Jp = np.zeros((3, self.robot_model.nv), dtype=np.float64, order="C")
         Jr = np.zeros((3, self.robot_model.nv), dtype=np.float64, order="C")
-        mujoco.mj_jac(self.robot_model, self.robot_data, Jp, Jr, p_W, int(body_idx))  # Jp = J_v
+        # mujoco.mj_jac(self.robot_model, self.robot_data, Jp, Jr, p_W, int(body_idx))  # Jp = J_v
+        mujoco.mj_jac(self.robot_model, self.robot_data, Jp, Jr, p_W, int(np.asarray(body_idx).squeeze()))
 
         T = self._build_transform_qdot_to_qvel_fast()
 

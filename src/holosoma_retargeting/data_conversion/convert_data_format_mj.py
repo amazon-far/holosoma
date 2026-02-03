@@ -37,6 +37,7 @@ DynamicState = Tuple[
 StaticState = Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, bool]
 
 # Parse the arguments using the config structure
+args_cli = tyro.cli(DataConversionConfig)
 
 
 """Rest everything follows."""
@@ -341,9 +342,8 @@ def world_body_velocities(model, data):
     return lin_w, ang_w
 
 
-def run_simulator(args_cli: DataConversionConfig):
+def run_simulator(joint_names: list[str]):
     """Runs the simulation loop."""
-    joint_names = args_cli.JOINT_NAMES
     # Load motion
     device = torch.device("cpu")
     has_dynamic_object = args_cli.has_dynamic_object
@@ -363,22 +363,11 @@ def run_simulator(args_cli: DataConversionConfig):
     if object_name is None:
         object_name = "largebox" if has_dynamic_object else None
 
-    if args_cli.robot_config.robot_type != args_cli.robot:
-        robot_config = RobotConfig(robot_type=args_cli.robot)
-    else:
-        robot_config = args_cli.robot_config
-
-    if (
-        args_cli.motion_data_config.robot_type != args_cli.robot
-        or args_cli.motion_data_config.data_format != args_cli.data_format
-    ):
-        motion_config = MotionDataConfig(
-            data_format=args_cli.data_format,
-            robot_type=args_cli.robot,
-        )
-    else:
-        motion_config = args_cli.motion_data_config
-
+    robot_config = RobotConfig(robot_type=args_cli.robot)
+    motion_config = MotionDataConfig(
+        data_format=args_cli.data_format,
+        robot_type=args_cli.robot,
+    )
     constants = create_task_constants(
         robot_config,
         motion_config,
@@ -589,13 +578,44 @@ def run_simulator(args_cli: DataConversionConfig):
             break
 
 
-def main(args_cli: DataConversionConfig):
+def main():
     """Main function."""
     # Run the simulator
-    run_simulator(args_cli)
+    run_simulator(
+        joint_names=[
+            "left_hip_pitch_joint",
+            "left_hip_roll_joint",
+            "left_hip_yaw_joint",
+            "left_knee_joint",
+            "left_ankle_pitch_joint",
+            "left_ankle_roll_joint",
+            "right_hip_pitch_joint",
+            "right_hip_roll_joint",
+            "right_hip_yaw_joint",
+            "right_knee_joint",
+            "right_ankle_pitch_joint",
+            "right_ankle_roll_joint",
+            "waist_yaw_joint",
+            "waist_roll_joint",
+            "waist_pitch_joint",
+            "left_shoulder_pitch_joint",
+            "left_shoulder_roll_joint",
+            "left_shoulder_yaw_joint",
+            "left_elbow_joint",
+            "left_wrist_roll_joint",
+            "left_wrist_pitch_joint",
+            "left_wrist_yaw_joint",
+            "right_shoulder_pitch_joint",
+            "right_shoulder_roll_joint",
+            "right_shoulder_yaw_joint",
+            "right_elbow_joint",
+            "right_wrist_roll_joint",
+            "right_wrist_pitch_joint",
+            "right_wrist_yaw_joint",
+        ],
+    )
 
 
 if __name__ == "__main__":
     # run the main function
-    tyro_config = tyro.cli(DataConversionConfig)
-    main(tyro_config)
+    main()

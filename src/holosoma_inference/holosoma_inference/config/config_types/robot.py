@@ -56,6 +56,22 @@ class RobotConfig:
     """
 
     # =========================================================================
+    # Limits (REQUIRED - no defaults)
+    # =========================================================================
+
+    joint_pos_min: tuple[float, ...]
+    """Lower position limits for joints in radians (length: num_joints)."""
+
+    joint_pos_max: tuple[float, ...]
+    """Upper position limits for joints in radians (length: num_joints)."""
+
+    joint_vel_limit: tuple[float, ...]
+    """Velocity limits for joints in rad/s (length: num_joints)."""
+
+    motor_effort_limit: tuple[float, ...]
+    """Torque/effort limits for motors in Nm (length: num_motors)."""
+
+    # =========================================================================
     # Mappings (REQUIRED - no defaults)
     # =========================================================================
 

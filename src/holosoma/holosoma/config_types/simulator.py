@@ -8,8 +8,6 @@ from typing import Any
 from pydantic import model_validator
 from pydantic.dataclasses import dataclass
 
-from holosoma.config_types.viewer import ViewerConfig
-
 
 class MujocoBackend(str, Enum):
     """MuJoCo physics backend selection.
@@ -480,25 +478,6 @@ class SimulatorInitConfig:
 
     debug_viz: bool = True
     """Enable debug visualization (gantry lines, etc.)."""
-
-    viewer: ViewerConfig = field(default_factory=ViewerConfig)
-    """Interactive viewer camera configuration.
-
-    Configures camera tracking for the interactive viewer with advanced features:
-    - Multiple camera modes (Fixed, Spherical, Cartesian)
-    - Camera smoothing for stable viewing
-    - Robot tracking with configurable body attachment
-
-    Example:
-        viewer=ViewerConfig(
-            enabled=True,
-            camera=SphericalCameraConfig(
-                distance=3.0,
-                azimuth=45.0,
-                elevation=30.0,
-            ),
-        )
-    """
 
     scene: SceneConfig = field(default_factory=SceneConfig)
     """Scene composition and asset configuration."""

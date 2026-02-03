@@ -183,6 +183,9 @@ class PPOConfig:
     eval_callbacks: Any = None
     """Evaluation callbacks configuration."""
 
+    num_future_steps: int = 3
+    """Number of future steps to consider in observation."""
+
     max_actor_learning_rate: float | None = None
     min_actor_learning_rate: float | None = None
     max_critic_learning_rate: float | None = None
@@ -304,6 +307,9 @@ class FastSACConfig:
 
     actor_obs_keys: List[str] = field(default_factory=lambda: ["actor_obs"])
     critic_obs_keys: List[str] = field(default_factory=lambda: ["critic_obs"])
+
+    num_future_steps: int = 3
+    """Number of future motion steps to include in observations for multi-motion training."""
 
 
 @dataclass(frozen=True)

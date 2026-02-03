@@ -14,13 +14,13 @@ import traceback
 from abc import ABC, abstractmethod
 from pathlib import Path
 from threading import Thread
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
 from loguru import logger
 
-from holosoma.simulator.shared.camera_controller import CameraController, CameraParameters
+from holosoma.config_types.video import CameraConfig, CartesianCameraConfig, FixedCameraConfig, SphericalCameraConfig
 from holosoma.utils.video_utils import create_video, format_command_labels, overlay_text_on_image
 
 if TYPE_CHECKING:
@@ -81,8 +81,12 @@ class VideoRecorderInterface(ABC):
         # Shared frame buffer for all simulators
         self.video_frames: list[npt.NDArray[np.uint8]] = []
 
-        # Camera controller for unified camera positioning
-        self.camera_controller = CameraController(config.camera, simulator)
+        # Camera smoothing state for robot tracking
+        self.smoothed_cam_pos: tuple[float, float, float] | None = None
+        self.smoothed_cam_target: tuple[float, float, float] | None = None
+
+        # Shared tracking body resolution
+        self.robot_body_id: int | None = None
 
         # Frame decimation counter for capturing at control frequency
         self._frame_counter: int = 0
@@ -97,6 +101,37 @@ class VideoRecorderInterface(ABC):
 
         if config.use_recording_thread:
             self._setup_threaded_recording()
+
+    def _resolve_tracking_body(self) -> None:
+        """Resolve tracking body using automatic resolution with exception handling.
+
+        This shared method tries body names in order using the simulator's
+        find_rigid_body_indice() method and handles exceptions gracefully.
+
+        Raises
+        ------
+        ValueError
+            If no suitable tracking body is found.
+        """
+        # Build list of names to try: explicit name first (if set), then defaults
+        if self.config.tracking_body_name and self.config.tracking_body_name != "auto":
+            names_to_try = [self.config.tracking_body_name] + self.DEFAULT_TRACKING_BODY_NAMES
+        else:
+            names_to_try = self.DEFAULT_TRACKING_BODY_NAMES
+
+        # Try each name in order until one works
+        for name in names_to_try:
+            try:
+                self.robot_body_id = self.simulator.find_rigid_body_indice(name)
+                return
+            except Exception:  # noqa: S112, PERF203
+                continue
+
+        # If no names worked, fail with helpful error
+        raise ValueError(
+            f"No suitable tracking body found. Tried: {names_to_try}. "
+            f"Please set tracking_body_name explicitly to a valid body name in your robot model."
+        )
 
     def _setup_threaded_recording(self) -> None:
         """Shared threading setup logic."""
@@ -124,7 +159,9 @@ class VideoRecorderInterface(ABC):
                     f"({self.simulator.num_envs})"
                 )
 
-            # Camera controller already resolved tracking body in __init__
+            # Resolve tracking body for tracking modes
+            if isinstance(self.config.camera, (SphericalCameraConfig, CartesianCameraConfig)):
+                self._resolve_tracking_body()
 
             # Start persistent thread for threaded mode
             if self.config.use_recording_thread:
@@ -454,31 +491,240 @@ class VideoRecorderInterface(ABC):
             # Clear frame buffer
             self._clear_frame_buffer()
 
-    # ===== Camera Helper Methods =====
+    # ===== Shared Robot Tracking Logic =====
 
-    def _get_camera_parameters(self, robot_pos: tuple[float, float, float] | None = None) -> CameraParameters:
-        """Get camera parameters from camera controller.
+    def _get_robot_position(self) -> tuple[float, float, float]:
+        """Get robot position from the recording environment.
 
-        This is a convenience method for simulator-specific implementations.
-        Subclasses can override this to pass environment-specific robot positions.
+        Uses the unified BaseSimulator interface to get robot position
+        consistently across all simulators.
+
+        Returns
+        -------
+        tuple[float, float, float]
+            Robot position (x, y, z) in the recording environment.
+        """
+        record_env_id = self.config.record_env_id
+        robot_pos = self.simulator.robot_root_states[record_env_id, :3]  # [x, y, z]
+        return float(robot_pos[0]), float(robot_pos[1]), float(robot_pos[2])
+
+    # ===== Shared Camera Calculation Logic =====
+
+    @staticmethod
+    def _cartesian_to_spherical(
+        position: tuple[float, float, float], target: tuple[float, float, float]
+    ) -> tuple[float, float, float]:
+        """Convert cartesian position to spherical coordinates relative to target.
+
+        Parameters
+        ----------
+        position : tuple[float, float, float]
+            Camera position (x, y, z).
+        target : tuple[float, float, float]
+            Camera target position (x, y, z).
+
+        Returns
+        -------
+        tuple[float, float, float]
+            Spherical coordinates (distance, azimuth_degrees, elevation_degrees).
+        """
+        offset = np.array(position) - np.array(target)
+        distance = np.linalg.norm(offset)
+        azimuth = np.degrees(np.arctan2(offset[1], offset[0]))
+        elevation = np.degrees(np.arcsin(offset[2] / distance)) if distance > 0 else 0
+        return float(distance), float(azimuth), float(elevation)
+
+    @staticmethod
+    def _spherical_to_cartesian(
+        distance: float, azimuth_degrees: float, elevation_degrees: float, target: tuple[float, float, float]
+    ) -> tuple[float, float, float]:
+        """Convert spherical coordinates to cartesian position relative to target.
+
+        Parameters
+        ----------
+        distance : float
+            Distance from target.
+        azimuth_degrees : float
+            Horizontal angle in degrees.
+        elevation_degrees : float
+            Vertical angle in degrees.
+        target : tuple[float, float, float]
+            Camera target position (x, y, z).
+
+        Returns
+        -------
+        tuple[float, float, float]
+            Camera position (x, y, z).
+        """
+        azimuth_rad = np.radians(azimuth_degrees)
+        elevation_rad = np.radians(elevation_degrees)
+
+        offset_x = distance * np.cos(elevation_rad) * np.cos(azimuth_rad)
+        offset_y = distance * np.cos(elevation_rad) * np.sin(azimuth_rad)
+        offset_z = distance * np.sin(elevation_rad)
+
+        return (target[0] + offset_x, target[1] + offset_y, target[2] + offset_z)
+
+    def _calculate_camera_parameters(self, robot_pos: tuple[float, float, float] | None = None) -> dict[str, Any]:
+        """Calculate camera parameters for all camera modes.
+
+        This unified method handles Fixed, Spherical, and Cartesian camera configurations
+        and returns standardized parameters that simulators can use with their specific APIs.
 
         Parameters
         ----------
         robot_pos : tuple[float, float, float] | None, default=None
-            Optional pre-fetched robot position. If None, camera controller fetches it.
+            Robot position (x, y, z). If None, will call _get_robot_position() for tracking modes.
 
         Returns
         -------
-        CameraParameters
-            Camera parameters for simulator API.
+        dict[str, Any]
+            Dictionary containing:
+            - 'position': tuple[float, float, float] - Camera position in world coordinates
+            - 'target': tuple[float, float, float] - Camera target in world coordinates
+            - 'distance': float - Distance from camera to target
+            - 'azimuth': float - Horizontal angle in degrees
+            - 'elevation': float - Vertical angle in degrees
         """
-        # For video recording, we want to use the record_env_id
-        if robot_pos is None:
-            record_env_id = self.config.record_env_id
-            robot_pos_array = self.simulator.robot_root_states[record_env_id, :3]
-            robot_pos = (float(robot_pos_array[0]), float(robot_pos_array[1]), float(robot_pos_array[2]))
+        config: CameraConfig = self.config.camera  # Use union type, not FixedCameraConfig
 
-        return self.camera_controller.update(robot_pos=robot_pos)
+        if isinstance(config, FixedCameraConfig):
+            # Fixed camera position - no robot tracking
+            position: tuple[float, float, float] = (
+                float(config.position[0]),
+                float(config.position[1]),
+                float(config.position[2]),
+            )
+            target: tuple[float, float, float] = (
+                float(config.target[0]),
+                float(config.target[1]),
+                float(config.target[2]),
+            )
+            distance, azimuth, elevation = self._cartesian_to_spherical(position, target)
+
+            return {
+                "position": position,
+                "target": target,
+                "distance": distance,
+                "azimuth": azimuth,
+                "elevation": elevation,
+            }
+
+        if isinstance(config, SphericalCameraConfig):
+            # Spherical camera positioning relative to robot
+            if self.robot_body_id is None:
+                raise RuntimeError("Robot body not resolved for spherical camera mode")
+
+            # Get robot position
+            if robot_pos is None:
+                robot_pos = self._get_robot_position()
+
+            # Apply smoothing to target
+            if self.smoothed_cam_target is None:
+                self.smoothed_cam_target = robot_pos
+            else:
+                smooth_factor = self.config.camera_smoothing
+                self.smoothed_cam_target = (
+                    smooth_factor * self.smoothed_cam_target[0] + (1 - smooth_factor) * robot_pos[0],
+                    smooth_factor * self.smoothed_cam_target[1] + (1 - smooth_factor) * robot_pos[1],
+                    smooth_factor * self.smoothed_cam_target[2] + (1 - smooth_factor) * robot_pos[2],
+                )
+
+            # Calculate position from spherical coordinates
+            position = self._spherical_to_cartesian(
+                config.distance, config.azimuth, config.elevation, self.smoothed_cam_target
+            )
+
+            return {
+                "position": position,
+                "target": self.smoothed_cam_target,
+                "distance": config.distance,
+                "azimuth": config.azimuth,
+                "elevation": config.elevation,
+            }
+
+        if isinstance(config, CartesianCameraConfig):
+            # Cartesian offset positioning relative to robot
+            if self.robot_body_id is None:
+                raise RuntimeError("Robot body not resolved for cartesian camera mode")
+
+            # Get robot position
+            if robot_pos is None:
+                robot_pos = self._get_robot_position()
+
+            # Calculate desired camera positions
+            target_cam_pos: tuple[float, float, float] = (
+                robot_pos[0] + config.offset[0],
+                robot_pos[1] + config.offset[1],
+                robot_pos[2] + config.offset[2],
+            )
+            target_cam_target: tuple[float, float, float] = (
+                robot_pos[0] + config.target_offset[0],
+                robot_pos[1] + config.target_offset[1],
+                robot_pos[2] + config.target_offset[2],
+            )
+
+            # Apply smoothing using shared method
+            smoothed_cam_pos, smoothed_cam_target = self._apply_camera_smoothing(target_cam_pos, target_cam_target)
+
+            # Convert to spherical for simulators that need it
+            distance, azimuth, elevation = self._cartesian_to_spherical(smoothed_cam_pos, smoothed_cam_target)
+
+            return {
+                "position": smoothed_cam_pos,
+                "target": smoothed_cam_target,
+                "distance": distance,
+                "azimuth": azimuth,
+                "elevation": elevation,
+            }
+
+        raise ValueError(f"Unsupported camera config type: {type(self.config.camera)}")
+
+    def _apply_camera_smoothing(
+        self, target_cam_pos: tuple[float, float, float], target_cam_target: tuple[float, float, float]
+    ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+        """Apply exponential moving average smoothing to camera positions.
+
+        Parameters
+        ----------
+        target_cam_pos : tuple[float, float, float]
+            Target camera position (x, y, z).
+        target_cam_target : tuple[float, float, float]
+            Target camera target (x, y, z).
+
+        Returns
+        -------
+        tuple[tuple[float, float, float], tuple[float, float, float]]
+            Tuple of (smoothed_camera_position, smoothed_camera_target).
+        """
+        # Apply smoothing to reduce camera shaking
+        if self.smoothed_cam_pos is None or self.smoothed_cam_target is None:
+            # Initialize smoothed positions on first update
+            self.smoothed_cam_pos = target_cam_pos
+            self.smoothed_cam_target = target_cam_target
+        else:
+            # Smooth camera position using exponential moving average
+            smooth_factor = self.config.camera_smoothing
+
+            self.smoothed_cam_pos = (
+                smooth_factor * self.smoothed_cam_pos[0] + (1 - smooth_factor) * target_cam_pos[0],
+                smooth_factor * self.smoothed_cam_pos[1] + (1 - smooth_factor) * target_cam_pos[1],
+                smooth_factor * self.smoothed_cam_pos[2] + (1 - smooth_factor) * target_cam_pos[2],
+            )
+
+            # Smooth camera target
+            self.smoothed_cam_target = (
+                smooth_factor * self.smoothed_cam_target[0] + (1 - smooth_factor) * target_cam_target[0],
+                smooth_factor * self.smoothed_cam_target[1] + (1 - smooth_factor) * target_cam_target[1],
+                smooth_factor * self.smoothed_cam_target[2] + (1 - smooth_factor) * target_cam_target[2],
+            )
+
+        return self.smoothed_cam_pos, self.smoothed_cam_target
+
+    def _reset_camera_smoothing(self) -> None:
+        """Reset camera smoothing state for a new episode."""
+        self.smoothed_cam_pos = None
+        self.smoothed_cam_target = None
 
     # ===== Shared Command Overlay Logic =====
 
@@ -521,8 +767,8 @@ class VideoRecorderInterface(ABC):
         # Reset frame counter for decimation tracking
         self._frame_counter = 0
 
-        # Reset camera controller to start from current robot position
-        self.camera_controller.reset()
+        # Reset camera tracking to start from current robot position
+        self._reset_camera_smoothing()
 
         # Reset frame timing statistics
         self._frame_times.clear()

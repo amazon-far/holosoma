@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import builtins
 import copy
-import dataclasses
 import os
 import xml.etree.ElementTree as ET
 from typing import Any
@@ -124,11 +123,7 @@ class IsaacSim(BaseSimulator):
             self._setup_scene()
         print("[INFO]: Scene manager: ", self.scene)
 
-        if self.simulator_config.viewer.enable_tracking:
-            viewer_config: ViewerCfg = ViewerCfg(origin_type="asset_root", asset_name="robot")
-        else:
-            viewer_config: ViewerCfg = ViewerCfg()
-
+        viewer_config: ViewerCfg = ViewerCfg()
         if self.sim.render_mode >= self.sim.RenderMode.PARTIAL_RENDERING:
             self.viewport_camera_controller: ViewportCameraController | None = ViewportCameraController(
                 self, viewer_config
@@ -893,7 +888,6 @@ class IsaacSim(BaseSimulator):
                 "I": "waist_yaw_up",
                 "K": "waist_yaw_down",
                 "P": "push_robots",
-                "Y": "toggle_camera_tracking",
                 # Virtual gantry controls (using enum)
                 "KEY_7": GantryCommand.LENGTH_ADJUST,  # decrease
                 "KEY_8": GantryCommand.LENGTH_ADJUST,  # increase
@@ -950,28 +944,6 @@ class IsaacSim(BaseSimulator):
                         elif command == "push_robots":
                             logger.info("Push Robots Requested")
                             self.push_requested = True
-                        elif command == "toggle_camera_tracking":
-                            was_enabled = self.simulator_config.viewer.enable_tracking
-                            self.simulator_config = dataclasses.replace(
-                                self.simulator_config,
-                                viewer=dataclasses.replace(
-                                    self.simulator_config.viewer, enable_tracking=not was_enabled
-                                ),
-                            )
-
-                            if self.viewport_camera_controller is not None:
-                                if self.simulator_config.viewer.enable_tracking and not was_enabled:
-                                    # ENABLING tracking: capture current camera offset first
-                                    self.viewport_camera_controller.capture_current_camera_offset()
-                                    self.viewport_camera_controller.update_view_to_asset_root("robot")
-                                elif not self.simulator_config.viewer.enable_tracking:
-                                    # DISABLING tracking: freeze camera at current position
-                                    # The callback only runs when origin_type == "asset_root", so setting it to
-                                    # anything else will stop tracking while keeping the camera at its current position
-                                    self.viewport_camera_controller.cfg.origin_type = "static"
-
-                            status = "ON" if self.simulator_config.viewer.enable_tracking else "OFF"
-                            logger.info(f"Camera tracking: {status}")
                         # Virtual gantry commands (using enum)
                         elif command == GantryCommand.LENGTH_ADJUST:
                             if self.virtual_gantry:

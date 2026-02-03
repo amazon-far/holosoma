@@ -67,6 +67,13 @@ class BasePolicy:
         self.num_dofs = self.robot_config.num_joints
         self.default_dof_angles = np.array(self.robot_config.default_dof_angles)
         self.num_upper_dofs = robot_config.num_upper_body_joints
+
+        # Initialize motor limits (only position limits are used)
+        q_max = self.robot_config.joint_pos_max
+        q_min = self.robot_config.joint_pos_min
+        self.q_max_arr: np.array | None = np.array(q_max) if q_max is not None else None
+        self.q_min_arr: np.array | None = np.array(q_min) if q_min is not None else None
+
         # Setup dof names and indices
         self._setup_dof_mappings()
 
@@ -594,6 +601,10 @@ class BasePolicy:
                     else:
                         raise NotImplementedError("Upper body controller not implemented")
                 q_target = scaled_policy_action + self.default_dof_angles
+
+            # Clip target positions to motor limits (in-place for speed)
+            if self.q_min_arr is not None and self.q_max_arr is not None:
+                np.clip(q_target[0], self.q_min_arr, self.q_max_arr, out=q_target[0])
 
             # Prepare command (reuse pre-allocated arrays)
             self.cmd_q[:] = q_target[0]

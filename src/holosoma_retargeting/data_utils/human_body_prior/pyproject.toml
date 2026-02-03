@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "human_body_prior"
+version = "2.3.0"
+description = "Variational human pose prior for synthesis and estimation"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { file = "LICENSE" }
+authors = [{ name = "Nima Ghorbani", email = "nghorbani@tue.mpg.de" }]
+urls = { Homepage = "https://github.com/nghorbani/human_body_prior" }
+classifiers = [
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "License :: Other/Proprietary License",
+  "Operating System :: OS Independent",
+]
+dependencies = [
+  "numpy",
+  "torch>=2.5,<2.6",
+  "omegaconf",
+  "loguru",
+  "tqdm",
+  "PyYAML",
+  "transforms3d>=0.4.1,<0.5",
+]
+
+[project.optional-dependencies]
+pl = ["lightning>=2.4,<2.5"]
+vis = ["trimesh>=4,<5"]
+# Use the canonical package name from metadata to avoid uv parse errors
+psbody = ["psbody-mesh @ git+https://github.com/MPI-IS/mesh.git"]
+dev = ["pytest>=7.4,<9"]
+
+[tool.hatch.build]
+include = [
+  "+human_body_prior/**",
+  "+support_data/**",
+  "+README.md",
+  "+LICENSE",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["human_body_prior"]
+
+[tool.hatch.metadata]
+allow-direct-references = true

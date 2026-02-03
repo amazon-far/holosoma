@@ -54,3 +54,6 @@ class TaskConfig:
 
     use_ros: bool = False
     """Use ROS2 for rate limiting."""
+
+    target_pose_path: str | None = None
+    """Path to target pose file for WBT policies, or None if not used."""

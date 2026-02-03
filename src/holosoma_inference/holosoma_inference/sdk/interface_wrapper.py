@@ -31,6 +31,7 @@ class InterfaceWrapper:
         self.interface_str = interface_str
         self.sdk_type = robot_config.sdk_type
         self.backend = None
+        self._unitree_motor_order = None  # Optional hardware motor order override
 
         # Initialize gain levels for binding backend
         self._kp_level = 1.0
@@ -71,6 +72,11 @@ class InterfaceWrapper:
             self.unitree_interface.set_control_mode(unitree_interface.ControlMode.PR)
             control_mode = self.unitree_interface.get_control_mode()
             print(f"Control mode set to: {'PR' if control_mode == unitree_interface.ControlMode.PR else 'AB'}")
+
+            # GO2 SDK motor order differs from our joint order; override when using the binding.
+            if self.robot_config.robot.lower() == "go2":
+                # SDK motor order: FR, FL, RR, RL (each hip, thigh, calf)
+                self._unitree_motor_order = (3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8)
         else:
             raise ValueError(f"Unsupported SDK_TYPE: {self.sdk_type}")
 
@@ -103,7 +109,7 @@ class InterfaceWrapper:
         motor_vel = np.array(state.motor.dq)
         joint_pos = np.zeros(self.robot_config.num_joints)
         joint_vel = np.zeros(self.robot_config.num_joints)
-        motor_order = self.robot_config.joint2motor
+        motor_order = self._unitree_motor_order or self.robot_config.joint2motor
         for j_id in range(self.robot_config.num_joints):
             m_id = motor_order[j_id]
             joint_pos[j_id] = float(motor_pos[m_id])
@@ -145,7 +151,7 @@ class InterfaceWrapper:
             cmd_tau_target = np.zeros(self.robot_config.num_motors)
             cmd_kp_override = np.zeros(self.robot_config.num_motors) if kp_override is not None else None
             cmd_kd_override = np.zeros(self.robot_config.num_motors) if kd_override is not None else None
-            motor_order = self.robot_config.joint2motor
+            motor_order = self._unitree_motor_order or self.robot_config.joint2motor
             for j_id in range(self.robot_config.num_joints):
                 m_id = motor_order[j_id]
                 cmd_q_target[m_id] = float(cmd_q[j_id])

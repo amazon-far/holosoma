@@ -8,11 +8,7 @@ setup(
     packages=find_packages(),
     python_requires=">=3.10",
     install_requires=[
-        # Needs to ping numpy to 2.3.5;
-        # reason: later numpy version such as 2.4 will trigger
-        # "TypeError: only 0-dimensional arrays can be converted to Python scalars"
-        # in yourdf/urdf.py::1078 when converting float(q)
-        "numpy==2.3.5",
+        "numpy",
         "torch",
         "tqdm",
         "scipy",

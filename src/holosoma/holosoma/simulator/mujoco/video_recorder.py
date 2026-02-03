@@ -11,9 +11,9 @@ from __future__ import annotations
 import threading
 from typing import TYPE_CHECKING
 
-import mujoco
 from loguru import logger
 
+import mujoco
 from holosoma.simulator.shared.video_recorder import VideoRecorderInterface
 
 if TYPE_CHECKING:
@@ -104,6 +104,22 @@ class MuJoCoVideoRecorder(VideoRecorderInterface):
                 f"extent: {extent:.2f}m)"
             )
 
+    def _resolve_tracking_body(self) -> None:
+        """MuJoCo-specific tracking body resolution.
+
+        Calls the shared resolution logic and then sets robot_model for renderer.
+
+        Raises
+        ------
+        ValueError
+            If no suitable tracking body is found.
+        """
+        # Call shared resolution logic
+        super()._resolve_tracking_body()
+
+        # Set robot_model for MuJoCo renderer compatibility
+        self.robot_model = self.simulator.root_model
+
     def _capture_frame_impl(self) -> None:
         """Unified frame capture implementation - works on any thread.
 
@@ -146,14 +162,20 @@ class MuJoCoVideoRecorder(VideoRecorderInterface):
     ) -> None:
         """Update camera position based on camera mode and configuration."""
 
-        # Use camera controller via shared helper method
-        camera_params = self._get_camera_parameters(robot_pos)
+        # Use shared camera calculation method
+        camera_params = self._calculate_camera_parameters(robot_pos)
+
+        # Extract parameters from shared calculation
+        target = camera_params["target"]
+        distance = camera_params["distance"]
+        azimuth = camera_params["azimuth"]
+        elevation = camera_params["elevation"]
 
         # Apply to MuJoCo camera using spherical coordinates
-        camera.lookat[:] = camera_params.target
-        camera.distance = camera_params.distance
-        camera.azimuth = camera_params.azimuth
-        camera.elevation = -camera_params.elevation
+        camera.lookat[:] = target
+        camera.distance = distance
+        camera.azimuth = azimuth
+        camera.elevation = -elevation
 
     def cleanup(self) -> None:
         """Clean up video recording resources.
@@ -166,3 +188,4 @@ class MuJoCoVideoRecorder(VideoRecorderInterface):
         # Clean up MuJoCo resources
         self._renderer = None
         self._camera = None
+        self.robot_body_id = None

@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import TypedDict, cast
 
@@ -17,7 +18,6 @@ from tqdm import tqdm
 # This file contains all settings for training and evaluation of models
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.utils.config_utils import CONFIG_NAME
-from holosoma.utils.file_cache import get_cached_file_path
 from holosoma.utils.logging import LoguruLoggingBridge
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.simulator_config import SimulatorType, get_simulator_type
@@ -72,6 +72,9 @@ def load_saved_experiment_config(checkpoint_cfg: CheckpointConfig) -> tuple[Expe
         Loaded experiment config and the originating wandb run path, if available.
     """
 
+    # lazy import wandb to avoid conflicts with site-packages python and Isaac
+    import wandb
+
     checkpoint = checkpoint_cfg.checkpoint
 
     if checkpoint is None:
@@ -88,12 +91,11 @@ def load_saved_experiment_config(checkpoint_cfg: CheckpointConfig) -> tuple[Expe
 
     wandb_run_path, _ = _parse_wandb_reference(checkpoint_str)
 
-    # Construct wandb:// URI for the config file and use caching
-    config_uri = f"{_WANDB_PREFIX}{wandb_run_path}/{CONFIG_NAME}"
-    cached_config_path = get_cached_file_path(config_uri)
-
-    with open(cached_config_path) as f:
-        return ExperimentConfig(**yaml.safe_load(f)), wandb_run_path
+    api = wandb.Api()
+    run = api.run(wandb_run_path)
+    config_file = run.file(CONFIG_NAME)
+    with tempfile.TemporaryDirectory() as temp_dir, config_file.download(root=temp_dir) as file:
+        return ExperimentConfig(**yaml.safe_load(file)), wandb_run_path
 
 
 def _load_config_from_checkpoint(checkpoint_path: Path) -> tuple[ExperimentConfig, str | None]:
@@ -219,54 +221,46 @@ def get_all_checkpoint_metadata(override_config: DictConfig) -> list[CheckpointM
 def load_checkpoint(checkpoint: str, log_dir: str) -> Path:
     """Download checkpoint from W&B or use local checkpoint.
 
-    For W&B checkpoints, files are cached globally in ~/.cache/holosoma/file_cache/
-    for performance, but also copied to log_dir for backward compatibility with
-    downstream tools and users who expect checkpoints in log_dir.
-
     Parameters
     ----------
     checkpoint : str
         W&B checkpoint URI or path to local checkpoint file.
     log_dir : str
-        Directory to save downloaded checkpoint. W&B checkpoints are copied here
-        from the global cache.
+        Directory to save downloaded checkpoint.
 
     Returns
     -------
     Path
-        Path to the checkpoint file in log_dir (for W&B) or original path (for local).
+        Path to the downloaded or local checkpoint file.
     """
-    import shutil
 
+    import wandb
+
+    wandb_run_path: str | None = None
     if checkpoint.startswith(_WANDB_PREFIX):
-        # 1. Cache globally (fast on repeated access)
-        cached_path = get_cached_file_path(checkpoint)
-        logger.info(f"Checkpoint cached at: {cached_path}")
+        wandb_run_path_from_uri, wandb_checkpoint_name = _parse_wandb_reference(checkpoint)
+        if wandb_checkpoint_name is None:
+            raise ValueError(
+                f"Invalid wandb checkpoint path: {checkpoint}. "
+                f"Expected format: {_WANDB_PREFIX}<entity>/<project>/<run_id>/<checkpoint_name>"
+            )
+        wandb_run_path = wandb_run_path_from_uri
+        checkpoint = wandb_checkpoint_name
 
-        # 2. Extract original filename from W&B URI to preserve it in log_dir
-        _, artifact_path = _parse_wandb_reference(checkpoint)
-        if artifact_path:
-            checkpoint_filename = Path(artifact_path).name
-        else:
-            # Fallback to cache name if no artifact path in URI
-            checkpoint_filename = Path(cached_path).name
-
-        # 3. Copy to log_dir for backward compatibility
+    if wandb_run_path is not None:
+        api = wandb.Api()
+        run = api.run(wandb_run_path)
+        # Create log dir
         log_dir_path = Path(log_dir)
         log_dir_path.mkdir(parents=True, exist_ok=True)
-        log_dir_checkpoint = log_dir_path / checkpoint_filename
-
-        # Copy if not already there or outdated
-        if not log_dir_checkpoint.exists() or log_dir_checkpoint.stat().st_mtime < Path(cached_path).stat().st_mtime:
-            shutil.copy2(cached_path, log_dir_checkpoint)
-            logger.info(f"Copied checkpoint to log_dir: {log_dir_checkpoint}")
-        else:
-            logger.info(f"Checkpoint already in log_dir: {log_dir_checkpoint}")
-
-        return log_dir_checkpoint
-
-    # Local file path
-    return Path(checkpoint)
+        # Download checkpoint to log_dir
+        checkpoint_file = run.file(checkpoint)  # Get the specific checkpoint file
+        checkpoint_file.download(root=log_dir)
+        logger.info(f"Finished downloading checkpoint {checkpoint} to {log_dir} from W&B run {wandb_run_path}")
+        checkpoint_path = log_dir_path / checkpoint
+    else:
+        checkpoint_path = Path(checkpoint)
+    return checkpoint_path
 
 
 def init_sim_imports(tyro_config: ExperimentConfig):

@@ -19,7 +19,6 @@ from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.simulator_config import SimulatorType, get_simulator_type
 
 if TYPE_CHECKING:
-    from holosoma.simulator.shared.camera_controller import CameraController
     from holosoma.simulator.shared.simulator_bridge import SimulatorBridge
     from holosoma.simulator.shared.video_recorder import VideoRecorderInterface
     from holosoma.simulator.shared.virtual_gantry import VirtualGantry
@@ -154,9 +153,6 @@ class BaseSimulator:
 
         # Virtual gantry system
         self.virtual_gantry: VirtualGantry | None = None
-
-        # Camera controller for viewer tracking
-        self.camera_controller: CameraController | None = None
 
         # Video recording system
         self.video_recorder: VideoRecorderInterface | None = None
@@ -414,47 +410,6 @@ class BaseSimulator:
 
     def draw_debug_viz(self):
         pass
-
-    # ----- Camera Controller Helper Methods -----
-
-    def _init_camera_controller(self) -> None:
-        """Initialize shared camera controller for viewer tracking.
-
-        Should be called by subclasses after robot assets are loaded and before
-        viewer setup. Creates a CameraController instance configured for the
-        interactive viewer.
-
-        The camera controller provides unified camera positioning logic that:
-        - Supports multiple camera modes (Fixed, Spherical, Cartesian)
-        - Handles robot tracking with configurable body attachment
-        - Applies camera smoothing for stable viewing
-
-        Raises
-        ------
-        ValueError
-            If viewer.enabled=True but viewer.camera is None
-        Exception
-            If camera controller initialization fails
-        """
-        if self.headless or not self.simulator_config.viewer.enable_tracking:
-            logger.debug("Skipping camera controller (headless or tracking disabled)")
-            return
-
-        if self.simulator_config.viewer.camera is None:
-            raise ValueError("viewer.camera must be provided when viewer.enable_tracking=True")
-
-        try:
-            # Conditional import to avoid circular dependencies
-            from holosoma.simulator.shared.camera_controller import CameraController
-
-            self.camera_controller = CameraController(
-                config=self.simulator_config.viewer.camera,
-                simulator=self,
-            )
-            logger.info("Viewer camera controller initialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to initialize viewer camera controller: {e}")
-            raise
 
     # ----- Bridge System Helper Methods -----
 

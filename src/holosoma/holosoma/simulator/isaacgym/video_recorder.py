@@ -164,12 +164,16 @@ class IsaacGymVideoRecorder(VideoRecorderInterface):
         if camera_handle < 0:
             return
 
-        # Use camera controller via shared helper method
-        camera_params = self._get_camera_parameters()
+        # Use shared camera calculation method
+        camera_params = self._calculate_camera_parameters()
+
+        # Extract position and target from shared calculation
+        position = camera_params["position"]
+        target = camera_params["target"]
 
         # Convert to IsaacGym Vec3 format and update camera location
-        gym_cam_pos = gymapi.Vec3(camera_params.position[0], camera_params.position[1], camera_params.position[2])
-        gym_cam_target = gymapi.Vec3(camera_params.target[0], camera_params.target[1], camera_params.target[2])
+        gym_cam_pos = gymapi.Vec3(position[0], position[1], position[2])
+        gym_cam_target = gymapi.Vec3(target[0], target[1], target[2])
 
         record_env_id = self.config.record_env_id
         env_ptr = self.simulator.envs[record_env_id]

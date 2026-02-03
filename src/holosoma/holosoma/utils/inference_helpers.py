@@ -12,7 +12,6 @@ from holosoma.config_types.robot import RobotConfig
 from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.utils.module_utils import get_holosoma_root
 
-
 def _find_input_dim_from_module(module: torch.nn.Module) -> int:
     """Finds the input dimension by examining a torch module's structure.
 
@@ -216,6 +215,112 @@ class _OnnxMotionPolicyExporter(torch.nn.Module):
         )
         self.to(self.device)
 
+class _OnnxMultiMotionPolicyExporter(torch.nn.Module):
+    def __init__(self, motion_command, actor, device, config):
+        super().__init__()
+        self.device = device
+        self.config = config
+        self.num_future_steps = config.num_future_steps
+        # Extract the underlying actor model and input dimension generically
+        actor_model, self.input_dim = _extract_actor_model_and_input_dim(actor)
+        # Wrap the actor to handle different return signatures
+        self._wrapped_actor = self._create_actor_wrapper(actor_model)
+
+        motion = motion_command.motion
+
+        joint_pos = motion.joint_pos
+        joint_vel = motion.joint_vel
+
+        body_pos_w = motion.body_pos_w
+        body_quat_w = motion.body_quat_w
+        ref_body_index = motion_command.ref_body_index
+        ref_body_pos_w = body_pos_w[:, ref_body_index, :]
+        ref_body_quat_w = body_quat_w[:, ref_body_index, :]  # in xyzw
+
+        self.joint_pos = joint_pos.to("cpu")
+        self.joint_vel = joint_vel.to("cpu")
+        self.ref_body_pos_w = ref_body_pos_w.to("cpu")
+        self.ref_body_quat_w = ref_body_quat_w.to("cpu")
+
+        self.time_step_total = self.joint_pos.shape[0]
+
+    def _create_actor_wrapper(self, actor_model):
+        """Creates a wrapper that normalizes actor output to just return actions."""
+
+        class ActorWrapper(torch.nn.Module):
+            def __init__(self, actor):
+                super().__init__()
+                self.actor = actor
+
+            def forward(self, x):
+                output = self.actor(x)
+                # Handle different return signatures:
+                # - PPO Sequential: returns tensor directly
+                # - PPO ActorWrapper: returns tensor directly
+                # - FastSAC/FastTD3: returns tuple (action, mean, log_std) or (action, ...)
+                # - FastSAC/FastTD3 ActorWrapper: already returns action tensor
+                if isinstance(output, tuple):
+                    return output[0]  # Return first element (action)
+                return output  # Return as-is for tensors
+
+        return ActorWrapper(actor_model)
+
+    def forward(self, x, time_step):
+        time_step_clamped = torch.clamp(time_step.long().squeeze(-1), max=self.time_step_total - 1)
+
+        def _get_future_motion_obs(self, time_step_clamped) -> torch.Tensor:
+
+            future_obs_list = []
+            
+            for step_offset in range(1, self.num_future_steps + 1):
+                # Calculate future time steps (clamp to max motion length)
+                future_time_steps = torch.clamp(
+                    time_step_clamped + step_offset, 
+                    max=self.time_step_total - 1
+                )
+                
+                # Get future joint_pos and joint_vel
+                future_joint_pos = self.joint_pos[future_time_steps]  # [num_envs, num_dofs]
+                future_joint_vel = self.joint_vel[future_time_steps]  # [num_envs, num_dofs]
+                
+                # Concatenate pos and vel for this step
+                future_step_obs = torch.cat([future_joint_pos, future_joint_vel], dim=1)  # [num_envs, num_dofs*2]
+                future_obs_list.append(future_step_obs)
+            
+            # Concatenate all future steps
+            future_motion_obs = torch.cat(future_obs_list, dim=1)  # [num_envs, num_future_steps * num_dofs * 2]
+
+            return future_motion_obs.to(self.device)
+        
+        future_motion_obs = _get_future_motion_obs(self, time_step_clamped)
+
+        return (
+            self._wrapped_actor(x),
+            self.joint_pos[time_step_clamped],
+            self.joint_vel[time_step_clamped],
+            self.ref_body_pos_w[time_step_clamped],
+            self.ref_body_quat_w[time_step_clamped],
+            future_motion_obs,
+        )
+
+    def export(self, onnx_file_path: str):
+        onnx_file_dir = os.path.dirname(onnx_file_path)
+        os.makedirs(onnx_file_dir, exist_ok=True)
+        self.to("cpu")
+        obs = torch.zeros(1, self.input_dim)
+        time_step = torch.zeros(1, 1)
+        torch.onnx.export(
+            self,
+            (obs, time_step),
+            onnx_file_path,
+            export_params=True,
+            opset_version=13,
+            verbose=False,
+            input_names=["obs", "time_step"],
+            output_names=["actions", "joint_pos", "joint_vel", "ref_pos_xyz", "ref_quat_xyzw", "future_motion_obs"],
+            dynamo=False,
+        )
+        self.to(self.device)
 
 def export_motion_and_policy_as_onnx(
     actor: object,
@@ -224,6 +329,19 @@ def export_motion_and_policy_as_onnx(
     device: str,
 ):
     policy_exporter = _OnnxMotionPolicyExporter(motion_command, actor, device)
+    policy_exporter.export(onnx_file_path)
+
+def export_multi_motion_and_policy_as_onnx(
+    actor: object,
+    motion_command: object,
+    onnx_file_path: str,
+    device: str,
+    config: object | None = None,
+):
+    if config is None:
+        # Fallback: create minimal config if not provided
+        raise ValueError("config is required for multi-motion ONNX export")
+    policy_exporter = _OnnxMultiMotionPolicyExporter(motion_command, actor, device, config)
     policy_exporter.export(onnx_file_path)
 
 

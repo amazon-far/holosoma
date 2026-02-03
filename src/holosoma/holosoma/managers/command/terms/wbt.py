@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import glob
 import math
+import os
 import re
 from typing import Any, List
 
 import numpy as np
+import smart_open
 import torch
 from loguru import logger
 
 from holosoma.config_types.command import MotionConfig, NoiseToInitialPoseConfig
 from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
 from holosoma.managers.command.base import CommandTermBase
-from holosoma.utils.file_cache import cached_open
 from holosoma.utils.path import resolve_data_file_path
 from holosoma.utils.rotations import (
     get_euler_xyz,
@@ -57,7 +59,7 @@ class MotionLoader:
         return torch.tensor(indexes, dtype=torch.long, device=device)
 
     def _load_data_from_motion_npz(self, motion_file: str, device: str) -> tuple[list[str], list[str]]:
-        with cached_open(motion_file, "rb") as f, np.load(f) as data:
+        with smart_open.open(motion_file, "rb") as f, np.load(f) as data:
             self.fps = data["fps"]
 
             body_names = data["body_names"].tolist()
@@ -287,18 +289,50 @@ class MotionCommand(CommandTermBase):
         robot_joint_names = self._env.simulator.dof_names  # type: ignore[attr-defined]
 
         # 1. load motion data
-        self.motion: MotionLoader = MotionLoader(
-            self.motion_cfg.motion_file,
-            robot_body_names_alias,
-            robot_joint_names,
-            device=self.device,
-        )
+        motion_path = getattr(self.motion_cfg, 'motion_file', None) or getattr(self.motion_cfg, 'motion_folder', None)
+        if motion_path is None:
+            raise ValueError("motion_config must have either 'motion_file' or 'motion_folder'")
+        
+        if isinstance(motion_path, str) and motion_path.endswith('.npz'):
+            # Single motion file
+            self.motion: MotionLoader = MotionLoader(
+                motion_path,
+                robot_body_names_alias,
+                robot_joint_names,
+                device=self.device,
+            )
+            self.motions_dict = None
+            self.is_multi_motion = False
+        else:
+            # Multiple motion files in a folder
+            motion_folder = resolve_data_file_path(motion_path)
+            npz_files = sorted(glob.glob(os.path.join(motion_folder, "*.npz")))
+            
+            if not npz_files:
+                raise ValueError(f"No .npz files found in {motion_folder}")
+            
+            logger.info(f"Loading {len(npz_files)} motion files from {motion_folder}")
+            
+            # Load each motion directly
+            self.motions_dict: dict[int, MotionLoader] = {}
+            for motion_id, npz_file in enumerate(npz_files):
+                logger.info(f"  [{motion_id}] Loading: {os.path.basename(npz_file)}")
+                motion = MotionLoader(
+                    npz_file,
+                    robot_body_names_alias,
+                    robot_joint_names,
+                    device=self.device,
+                )
+                self.motions_dict[motion_id] = motion
+            
+            self.num_motions = len(self.motions_dict)
+            self.motion = self.motions_dict[0]  # Default to first motion
+            self.is_multi_motion = True
+            logger.info(f"Loaded {self.num_motions} motions")
 
         # Store body and joint indexes for interpolation
         self._body_indexes_in_motion = self.motion._body_indexes
-        self._joint_indexes_in_motion = self.motion._joint_indexes
-
-        # Maybe prepend interpolated transition from default pose
+        self._joint_indexes_in_motion = self.motion._joint_indexes        # Maybe prepend interpolated transition from default pose
         self._maybe_add_default_pose_transition(prepend=True)
 
         # Maybe append interpolated transition back to default pose
@@ -322,9 +356,18 @@ class MotionCommand(CommandTermBase):
 
         # 4. get the adaptive timesteps sampler
         if self.motion_cfg.use_adaptive_timesteps_sampler:
-            self.adaptive_timesteps_sampler = AdaptiveTimestepsSampler(
-                self.motion.time_step_total, self.device, int(1 / (self._env.dt))
-            )
+            if self.is_multi_motion:
+                # Create separate sampler for each motion
+                self.adaptive_timesteps_samplers: dict[int, AdaptiveTimestepsSampler] = {}
+                for motion_id, motion_obj in self.motions_dict.items():
+                    self.adaptive_timesteps_samplers[motion_id] = AdaptiveTimestepsSampler(
+                        motion_obj.time_step_total, self.device, int(1 / (self._env.dt))
+                    )
+            else:
+                # Single motion sampler
+                self.adaptive_timesteps_sampler = AdaptiveTimestepsSampler(
+                    self.motion.time_step_total, self.device, int(1 / (self._env.dt))
+                )
 
         # 5. metrics
         self.metrics: dict[str, torch.Tensor] = {}
@@ -341,16 +384,42 @@ class MotionCommand(CommandTermBase):
         if env_ids.numel() == 0:
             return
 
-        # 0. Sample the time steps
+        # 0. Select motion for multi-motion mode (balanced distribution)
+        if self.is_multi_motion:
+            # Use cyclic/round-robin assignment for balanced distribution across motions
+            num_to_reset = len(env_ids)
+            cyclic_indices = torch.arange(num_to_reset, device=self.device) % self.num_motions
+            # Shuffle for randomness while maintaining balance
+            shuffled_indices = torch.randperm(num_to_reset, device=self.device)
+            self.motion_ids[env_ids] = cyclic_indices[shuffled_indices]
+
+        # 1. Sample the time steps (per-motion for multi-motion)
         if self.motion_cfg.use_adaptive_timesteps_sampler:
-            phase = self.adaptive_timesteps_sampler.sample(env_ids.numel())
+            if self.is_multi_motion:
+                # Sample phase per motion for each env
+                phase = torch.zeros(env_ids.numel(), device=self.device)
+                for motion_id in range(self.num_motions):
+                    mask = self.motion_ids[env_ids] == motion_id
+                    if mask.any():
+                        sampled_count = mask.sum().item()
+                        phase[mask] = self.adaptive_timesteps_samplers[motion_id].sample(sampled_count)
+            else:
+                phase = self.adaptive_timesteps_sampler.sample(env_ids.numel())
         else:
             phase = torch.rand(env_ids.numel(), device=self.device)
 
         if self._env.is_evaluating:
             phase = torch.zeros_like(phase)
 
-        self.time_steps[env_ids] = (phase * (self.motion.time_step_total - 1)).long()
+        # For multi-motion: ensure timestep respects each motion's length
+        if self.is_multi_motion:
+            for i, env_id in enumerate(env_ids):
+                motion_id = self.motion_ids[env_id]
+                motion_obj = self.motions_dict[int(motion_id)]
+                max_t = motion_obj.time_step_total - 1
+                self.time_steps[env_id] = (phase[i] * max_t).long()
+        else:
+            self.time_steps[env_ids] = (phase * (self.motion.time_step_total - 1)).long()
 
         # Handle start_at_timestep_zero_prob
         prob = self.motion_cfg.start_at_timestep_zero_prob
@@ -364,10 +433,20 @@ class MotionCommand(CommandTermBase):
 
         # If the motion is at the last timestep, set it to the second last timestep;
         # Otherwise, update_tasks_callback will advance the timestep to the next timestep -> out of bounds error.
-        already_last_timestep_mask = self.time_steps[env_ids] == self.motion.time_step_total - 1
-        self.time_steps[env_ids] = torch.where(
-            already_last_timestep_mask, self.motion.time_step_total - 2, self.time_steps[env_ids]
-        )
+        if self.is_multi_motion:
+            # For multi-motion: check against each motion's individual length
+            for i, env_id in enumerate(env_ids):
+                motion_id = self.motion_ids[env_id]
+                motion_obj = self.motions_dict[int(motion_id)]
+                max_t = motion_obj.time_step_total - 1
+                if self.time_steps[env_id] == max_t:
+                    self.time_steps[env_id] = max_t - 1
+        else:
+            # Single motion: use global motion length
+            already_last_timestep_mask = self.time_steps[env_ids] == self.motion.time_step_total - 1
+            self.time_steps[env_ids] = torch.where(
+                already_last_timestep_mask, self.motion.time_step_total - 2, self.time_steps[env_ids]
+            )
 
         # 1. Get the reference root/body poses
         root_pos = self.body_pos_w[env_ids, 0].clone()
@@ -537,9 +616,14 @@ class MotionCommand(CommandTermBase):
             + quat_apply(delta_quat_w, self.body_pos_w - ref_pos_w_repeat, w_last=True)
         )
 
-        ### 1.3 update the adaptive timesteps sampler
+        ### 1.3 update the adaptive timesteps sampler (per-motion)
         if self.motion_cfg.use_adaptive_timesteps_sampler:
-            self.adaptive_timesteps_sampler.update_bin_failed_count()
+            if self.is_multi_motion:
+                # Update samplers for each motion separately
+                for motion_id in range(self.num_motions):
+                    self.adaptive_timesteps_samplers[motion_id].update_bin_failed_count()
+            else:
+                self.adaptive_timesteps_sampler.update_bin_failed_count()
 
     @property
     def command(self) -> torch.Tensor:
@@ -550,54 +634,216 @@ class MotionCommand(CommandTermBase):
     #########################################################################################
     @property
     def joint_pos(self) -> torch.Tensor:
-        return self.motion.joint_pos[self.time_steps]
+        if self.is_multi_motion:
+            result = torch.zeros(
+                self.num_envs, self.motions_dict[0].joint_pos.shape[1],
+                device=self.device, dtype=torch.float32
+            )
+            for motion_id in range(self.num_motions):
+                mask = self.motion_ids == motion_id
+                if mask.any():
+                    motion = self.motions_dict[motion_id]
+                    motion_length = motion.joint_pos.shape[0]
+                    # Use modulo to loop the motion
+                    modulo_time_steps = self.time_steps[mask] % motion_length
+                    result[mask] = motion.joint_pos[modulo_time_steps]
+            return result
+        else:
+            return self.motion.joint_pos[self.time_steps]
 
     @property
     def joint_vel(self) -> torch.Tensor:
-        return self.motion.joint_vel[self.time_steps]
+        if self.is_multi_motion:
+            result = torch.zeros(
+                self.num_envs, self.motions_dict[0].joint_vel.shape[1],
+                device=self.device, dtype=torch.float32
+            )
+            for motion_id in range(self.num_motions):
+                mask = self.motion_ids == motion_id
+                if mask.any():
+                    motion = self.motions_dict[motion_id]
+                    motion_length = motion.joint_vel.shape[0]
+                    # Use modulo to loop the motion
+                    modulo_time_steps = self.time_steps[mask] % motion_length
+                    result[mask] = motion.joint_vel[modulo_time_steps]
+            return result
+        else:
+            return self.motion.joint_vel[self.time_steps]
 
     @property
     def body_pos_w(self) -> torch.Tensor:
-        return (
-            self.motion.body_pos_w[self.time_steps][:, self.tracked_body_indexes]
-            + self._env.simulator.scene.env_origins[:, None, :]
-        )
+        if self.is_multi_motion:
+            result = torch.zeros(
+                self.num_envs, len(self.tracked_body_indexes), 3,
+                device=self.device, dtype=torch.float32
+            )
+            for motion_id in range(self.num_motions):
+                mask = self.motion_ids == motion_id
+                if mask.any():
+                    motion = self.motions_dict[motion_id]
+                    motion_length = motion.body_pos_w.shape[0]
+                    # Use modulo to loop the motion
+                    modulo_time_steps = self.time_steps[mask] % motion_length
+                    result[mask] = motion.body_pos_w[modulo_time_steps][:, self.tracked_body_indexes]
+            return result + self._env.simulator.scene.env_origins[:, None, :]
+        else:
+            return (
+                self.motion.body_pos_w[self.time_steps][:, self.tracked_body_indexes]
+                + self._env.simulator.scene.env_origins[:, None, :]
+            )
 
     @property
     def body_quat_w(self) -> torch.Tensor:
-        return self.motion.body_quat_w[self.time_steps][:, self.tracked_body_indexes]
+        if self.is_multi_motion:
+            result = torch.zeros(
+                self.num_envs, len(self.tracked_body_indexes), 4,
+                device=self.device, dtype=torch.float32
+            )
+            for motion_id in range(self.num_motions):
+                mask = self.motion_ids == motion_id
+                if mask.any():
+                    motion = self.motions_dict[motion_id]
+                    motion_length = motion.body_quat_w.shape[0]
+                    # Use modulo to loop the motion
+                    modulo_time_steps = self.time_steps[mask] % motion_length
+                    result[mask] = motion.body_quat_w[modulo_time_steps][:, self.tracked_body_indexes]
+            return result
+        else:
+            return self.motion.body_quat_w[self.time_steps][:, self.tracked_body_indexes]
 
     @property
     def body_lin_vel_w(self) -> torch.Tensor:
-        return self.motion.body_lin_vel_w[self.time_steps][:, self.tracked_body_indexes]
+        if self.is_multi_motion:
+            result = torch.zeros(
+                self.num_envs, len(self.tracked_body_indexes), 3,
+                device=self.device, dtype=torch.float32
+            )
+            for motion_id in range(self.num_motions):
+                mask = self.motion_ids == motion_id
+                if mask.any():
+                    motion = self.motions_dict[motion_id]
+                    motion_length = motion.body_lin_vel_w.shape[0]
+                    # Use modulo to loop the motion
+                    modulo_time_steps = self.time_steps[mask] % motion_length
+                    result[mask] = motion.body_lin_vel_w[modulo_time_steps][:, self.tracked_body_indexes]
+            return result
+        else:
+            return self.motion.body_lin_vel_w[self.time_steps][:, self.tracked_body_indexes]
 
     @property
     def body_ang_vel_w(self) -> torch.Tensor:
-        return self.motion.body_ang_vel_w[self.time_steps][:, self.tracked_body_indexes]
+        if self.is_multi_motion:
+            result = torch.zeros(
+                self.num_envs, len(self.tracked_body_indexes), 3,
+                device=self.device, dtype=torch.float32
+            )
+            for motion_id in range(self.num_motions):
+                mask = self.motion_ids == motion_id
+                if mask.any():
+                    motion = self.motions_dict[motion_id]
+                    motion_length = motion.body_ang_vel_w.shape[0]
+                    # Use modulo to loop the motion
+                    modulo_time_steps = self.time_steps[mask] % motion_length
+                    result[mask] = motion.body_ang_vel_w[modulo_time_steps][:, self.tracked_body_indexes]
+            return result
+        else:
+            return self.motion.body_ang_vel_w[self.time_steps][:, self.tracked_body_indexes]
 
     @property
     def ref_pos_w(self) -> torch.Tensor:
-        return self.motion.body_pos_w[self.time_steps, self.ref_body_index] + self._env.simulator.scene.env_origins
+        if self.is_multi_motion:
+            result = torch.zeros(self.num_envs, 3, device=self.device, dtype=torch.float32)
+            for motion_id in range(self.num_motions):
+                mask = self.motion_ids == motion_id
+                if mask.any():
+                    motion = self.motions_dict[motion_id]
+                    motion_length = motion.body_pos_w.shape[0]
+                    # Use modulo to loop the motion
+                    modulo_time_steps = self.time_steps[mask] % motion_length
+                    result[mask] = motion.body_pos_w[modulo_time_steps, self.ref_body_index]
+            return result + self._env.simulator.scene.env_origins
+        else:
+            return self.motion.body_pos_w[self.time_steps, self.ref_body_index] + self._env.simulator.scene.env_origins
 
     @property
     def ref_quat_w(self) -> torch.Tensor:
-        return self.motion.body_quat_w[self.time_steps, self.ref_body_index]
+        if self.is_multi_motion:
+            result = torch.zeros(self.num_envs, 4, device=self.device, dtype=torch.float32)
+            for motion_id in range(self.num_motions):
+                mask = self.motion_ids == motion_id
+                if mask.any():
+                    motion = self.motions_dict[motion_id]
+                    motion_length = motion.body_quat_w.shape[0]
+                    # Use modulo to loop the motion
+                    modulo_time_steps = self.time_steps[mask] % motion_length
+                    result[mask] = motion.body_quat_w[modulo_time_steps, self.ref_body_index]
+            return result
+        else:
+            return self.motion.body_quat_w[self.time_steps, self.ref_body_index]
 
     @property
     def root_pos_w(self) -> torch.Tensor:
-        return self.motion.body_pos_w[self.time_steps, 0] + self._env.simulator.scene.env_origins
+        if self.is_multi_motion:
+            result = torch.zeros(self.num_envs, 3, device=self.device, dtype=torch.float32)
+            for motion_id in range(self.num_motions):
+                mask = self.motion_ids == motion_id
+                if mask.any():
+                    motion = self.motions_dict[motion_id]
+                    motion_length = motion.body_pos_w.shape[0]
+                    # Use modulo to loop the motion
+                    modulo_time_steps = self.time_steps[mask] % motion_length
+                    result[mask] = motion.body_pos_w[modulo_time_steps, 0]
+            return result + self._env.simulator.scene.env_origins
+        else:
+            return self.motion.body_pos_w[self.time_steps, 0] + self._env.simulator.scene.env_origins
 
     @property
     def root_quat_w(self) -> torch.Tensor:
-        return self.motion.body_quat_w[self.time_steps, 0]
+        if self.is_multi_motion:
+            result = torch.zeros(self.num_envs, 4, device=self.device, dtype=torch.float32)
+            for motion_id in range(self.num_motions):
+                mask = self.motion_ids == motion_id
+                if mask.any():
+                    motion = self.motions_dict[motion_id]
+                    motion_length = motion.body_quat_w.shape[0]
+                    # Use modulo to loop the motion
+                    modulo_time_steps = self.time_steps[mask] % motion_length
+                    result[mask] = motion.body_quat_w[modulo_time_steps, 0]
+            return result
+        else:
+            return self.motion.body_quat_w[self.time_steps, 0]
 
     @property
     def ref_lin_vel_w(self) -> torch.Tensor:
-        return self.motion.body_lin_vel_w[self.time_steps, self.ref_body_index]
+        if self.is_multi_motion:
+            result = torch.zeros(self.num_envs, 3, device=self.device, dtype=torch.float32)
+            for motion_id in range(self.num_motions):
+                mask = self.motion_ids == motion_id
+                if mask.any():
+                    motion = self.motions_dict[motion_id]
+                    motion_length = motion.body_lin_vel_w.shape[0]
+                    # Use modulo to loop the motion
+                    modulo_time_steps = self.time_steps[mask] % motion_length
+                    result[mask] = motion.body_lin_vel_w[modulo_time_steps, self.ref_body_index]
+            return result
+        else:
+            return self.motion.body_lin_vel_w[self.time_steps, self.ref_body_index]
 
     @property
     def ref_ang_vel_w(self) -> torch.Tensor:
-        return self.motion.body_ang_vel_w[self.time_steps, self.ref_body_index]
+        if self.is_multi_motion:
+            result = torch.zeros(self.num_envs, 3, device=self.device, dtype=torch.float32)
+            for motion_id in range(self.num_motions):
+                mask = self.motion_ids == motion_id
+                if mask.any():
+                    motion = self.motions_dict[motion_id]
+                    motion_length = motion.body_ang_vel_w.shape[0]
+                    # Use modulo to loop the motion
+                    modulo_time_steps = self.time_steps[mask] % motion_length
+                    result[mask] = motion.body_ang_vel_w[modulo_time_steps, self.ref_body_index]
+            return result
+        else:
+            return self.motion.body_ang_vel_w[self.time_steps, self.ref_body_index]
 
     #########################################################################################
     ## Robot from simulator
@@ -664,15 +910,39 @@ class MotionCommand(CommandTermBase):
     @property
     def object_pos_w(self) -> torch.Tensor:
         # Applies env origins, but ideally we should rely on the simulator
-        return self.motion.object_pos_w[self.time_steps] + self._env.simulator.scene.env_origins
+        if self.is_multi_motion:
+            result = torch.zeros(self.num_envs, 3, device=self.device, dtype=torch.float32)
+            for motion_id in range(self.num_motions):
+                mask = self.motion_ids == motion_id
+                if mask.any():
+                    result[mask] = self.motions_dict[motion_id].object_pos_w[self.time_steps[mask]]
+            return result + self._env.simulator.scene.env_origins
+        else:
+            return self.motion.object_pos_w[self.time_steps] + self._env.simulator.scene.env_origins
 
     @property
     def object_quat_w(self) -> torch.Tensor:
-        return self.motion.object_quat_w[self.time_steps]
+        if self.is_multi_motion:
+            result = torch.zeros(self.num_envs, 4, device=self.device, dtype=torch.float32)
+            for motion_id in range(self.num_motions):
+                mask = self.motion_ids == motion_id
+                if mask.any():
+                    result[mask] = self.motions_dict[motion_id].object_quat_w[self.time_steps[mask]]
+            return result
+        else:
+            return self.motion.object_quat_w[self.time_steps]
 
     @property
     def object_lin_vel_w(self) -> torch.Tensor:
-        return self.motion.object_lin_vel_w[self.time_steps]
+        if self.is_multi_motion:
+            result = torch.zeros(self.num_envs, 3, device=self.device, dtype=torch.float32)
+            for motion_id in range(self.num_motions):
+                mask = self.motion_ids == motion_id
+                if mask.any():
+                    result[mask] = self.motions_dict[motion_id].object_lin_vel_w[self.time_steps[mask]]
+            return result
+        else:
+            return self.motion.object_lin_vel_w[self.time_steps]
 
     #########################################################################################
     ## Object from simulator
@@ -695,6 +965,11 @@ class MotionCommand(CommandTermBase):
 
     def init_buffers(self):
         self.time_steps = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        
+        # For multi-motion support: track which motion each env is using
+        if self.is_multi_motion:
+            self.motion_ids = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        
         self.body_pos_relative_w = torch.zeros(
             self.num_envs, len(self.motion_cfg.body_names_to_track), 3, device=self.device
         )  # type: ignore[arg-type]
@@ -704,7 +979,11 @@ class MotionCommand(CommandTermBase):
         self.body_quat_relative_w[:, :, 0] = 1.0
 
         if self.motion_cfg.use_adaptive_timesteps_sampler:
-            self.adaptive_timesteps_sampler.init_buffers()
+            if self.is_multi_motion:
+                for motion_id in range(self.num_motions):
+                    self.adaptive_timesteps_samplers[motion_id].init_buffers()
+            else:
+                self.adaptive_timesteps_sampler.init_buffers()
 
     def update_metrics(self):
         """Update the metrics. After action, before step() is called."""
@@ -732,16 +1011,30 @@ class MotionCommand(CommandTermBase):
         self.metrics["motion/error_joint_vel"] = torch.norm(self.joint_vel - self.robot_joint_vel, dim=-1)
 
         if self.motion_cfg.use_adaptive_timesteps_sampler:
-            self.adaptive_timesteps_sampler.get_stats()
-            self.metrics["motion/adaptive_timesteps_sampler_entropy"] = self.adaptive_timesteps_sampler.metrics[
-                "sampling_entropy"
-            ]
-            self.metrics["motion/adaptive_timesteps_sampler_top1_prob"] = self.adaptive_timesteps_sampler.metrics[
-                "sampling_top1_prob"
-            ]
-            self.metrics["motion/adaptive_timesteps_sampler_top1_bin"] = self.adaptive_timesteps_sampler.metrics[
-                "sampling_top1_bin"
-            ]
+            if self.is_multi_motion:
+                # Aggregate stats from all motion samplers
+                for motion_id in range(self.num_motions):
+                    self.adaptive_timesteps_samplers[motion_id].get_stats()
+                    self.metrics[f"motion/adaptive_timesteps_sampler_entropy_m{motion_id}"] = (
+                        self.adaptive_timesteps_samplers[motion_id].metrics["sampling_entropy"]
+                    )
+                    self.metrics[f"motion/adaptive_timesteps_sampler_top1_prob_m{motion_id}"] = (
+                        self.adaptive_timesteps_samplers[motion_id].metrics["sampling_top1_prob"]
+                    )
+                    self.metrics[f"motion/adaptive_timesteps_sampler_top1_bin_m{motion_id}"] = (
+                        self.adaptive_timesteps_samplers[motion_id].metrics["sampling_top1_bin"]
+                    )
+            else:
+                self.adaptive_timesteps_sampler.get_stats()
+                self.metrics["motion/adaptive_timesteps_sampler_entropy"] = self.adaptive_timesteps_sampler.metrics[
+                    "sampling_entropy"
+                ]
+                self.metrics["motion/adaptive_timesteps_sampler_top1_prob"] = self.adaptive_timesteps_sampler.metrics[
+                    "sampling_top1_prob"
+                ]
+                self.metrics["motion/adaptive_timesteps_sampler_top1_bin"] = self.adaptive_timesteps_sampler.metrics[
+                    "sampling_top1_bin"
+                ]
 
     #########################################################################################
     ## Internal helpers

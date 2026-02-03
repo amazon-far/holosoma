@@ -730,11 +730,6 @@ class IsaacGym(BaseSimulator):
         self.enable_viewer_sync = True
         self.visualize_viewer = True
         self.viewer = self.gym.create_viewer(self.sim, gymapi.CameraProperties())
-
-        # Camera tracking offsets (preserved when toggling tracking on)
-        self.camera_tracking_offset = np.array([2.0, 0.0, 2.5])  # Default: behind and above robot
-        self.camera_tracking_lookat_offset = np.array([0.0, 0.0, 0.0])  # Default: look at robot center
-
         # subscribe to keyboard shortcuts
         self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_ESCAPE, "QUIT")
         self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_V, "toggle_viewer_sync")
@@ -745,7 +740,6 @@ class IsaacGym(BaseSimulator):
         self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_Q, "heading_left_command")
         self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_E, "heading_right_command")
         self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_Z, "zero_command")
-        self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_Y, "toggle_camera_tracking")
 
         self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_P, "push_robots")
 
@@ -822,19 +816,6 @@ class IsaacGym(BaseSimulator):
             elif evt.action == "zero_command" and evt.value > 0:
                 self.commands[:, :4] = 0
                 logger.info(f"Current Command: {self.commands[:,]}")
-            elif evt.action == "toggle_camera_tracking" and evt.value > 0:
-                was_enabled = self.simulator_config.viewer.enable_tracking
-                self.simulator_config = dataclasses.replace(
-                    self.simulator_config,
-                    viewer=dataclasses.replace(self.simulator_config.viewer, enable_tracking=not was_enabled),
-                )
-
-                # If ENABLING tracking, capture current camera offset
-                if self.simulator_config.viewer.enable_tracking and not was_enabled:
-                    self._capture_camera_offset()
-
-                status = "ON" if self.simulator_config.viewer.enable_tracking else "OFF"
-                logger.info(f"Camera tracking: {status}")
             elif evt.action == "push_robots" and evt.value > 0:
                 logger.info("Push Robots")
                 self._push_robots(torch.arange(self.num_envs, device=self.device))
@@ -884,16 +865,6 @@ class IsaacGym(BaseSimulator):
         if self.device != "cpu":
             self.gym.fetch_results(self.sim, True)
 
-        # Update camera tracking if enabled
-        if self.simulator_config.viewer.enable_tracking:
-            # Get first robot's position
-            robot_pos = self.robot_root_states[0, :3].cpu().numpy()
-
-            # Use stored camera offset instead of hardcoded values
-            cam_pos = gymapi.Vec3(*(robot_pos + self.camera_tracking_offset))
-            cam_target = gymapi.Vec3(*(robot_pos + self.camera_tracking_lookat_offset))
-            self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target)
-
         # step graphics
         if self.enable_viewer_sync:
             self.gym.step_graphics(self.sim)
@@ -937,29 +908,6 @@ class IsaacGym(BaseSimulator):
             )
 
         return self.dof_forces[env_id]
-
-    def _capture_camera_offset(self):
-        """Capture current camera position relative to robot.
-
-        This method is called when toggling camera tracking ON to preserve
-        the current camera angle/distance as the new tracking offset.
-        """
-        # Get current camera transform (4x4 homogeneous matrix)
-        cam_transform = self.gym.get_viewer_camera_transform(self.viewer, None)
-
-        # Extract camera position from transform
-        cam_pos = np.array([cam_transform.p.x, cam_transform.p.y, cam_transform.p.z])
-
-        # Get robot position
-        robot_pos = self.robot_root_states[0, :3].cpu().numpy()
-
-        # Calculate relative offset
-        self.camera_tracking_offset = cam_pos - robot_pos
-
-        # Keep lookat at robot center (simple approach)
-        self.camera_tracking_lookat_offset = np.array([0.0, 0.0, 0.0])
-
-        logger.info(f"Captured camera offset: {self.camera_tracking_offset}")
 
     def next_task(self):
         pass

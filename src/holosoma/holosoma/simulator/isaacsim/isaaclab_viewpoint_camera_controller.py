@@ -180,64 +180,6 @@ class ViewportCameraController:
         # set the camera view
         self._env.sim.set_camera_view(eye=cam_eye, target=cam_target)
 
-    def capture_current_camera_offset(self):
-        """Capture current camera position relative to asset origin.
-
-        This method is called when toggling camera tracking ON to preserve
-        the current camera angle/distance as the new tracking offset.
-        """
-        from loguru import logger
-        import omni.kit.viewport.utility as vp_utils
-        from pxr import Gf
-
-        # Get the active viewport camera transform
-        viewport_api = vp_utils.get_active_viewport()
-        if viewport_api is None:
-            logger.warning("No active viewport found, using default camera offset")
-            return
-
-        # Get camera position and target from viewport
-        camera_path = viewport_api.camera_path
-        if not camera_path:
-            logger.warning("No camera path found, using default camera offset")
-            return
-
-        # Get the camera's transform
-        from holosoma.simulator.isaacsim.prim_utils import get_current_stage
-
-        stage = get_current_stage()
-        camera_prim = stage.GetPrimAtPath(camera_path)
-
-        if not camera_prim.IsValid():
-            logger.warning("Camera prim not valid, using default camera offset")
-            return
-
-        # Get the camera's world transform
-        from pxr import UsdGeom
-
-        xformable = UsdGeom.Xformable(camera_prim)
-        world_transform = xformable.ComputeLocalToWorldTransform(0)
-
-        # Extract position (translation) from transform matrix
-        cam_pos_gf = world_transform.ExtractTranslation()
-        cam_eye = np.array([cam_pos_gf[0], cam_pos_gf[1], cam_pos_gf[2]])
-
-        # Calculate camera forward direction to get target
-        # Camera looks down -Z in its local frame
-        forward_local = Gf.Vec3d(0, 0, -1)
-        forward_world = world_transform.TransformDir(forward_local)
-
-        # Set target at a reasonable distance along viewing direction
-        view_distance = 5.0  # Default viewing distance
-        cam_target = cam_eye + np.array([forward_world[0], forward_world[1], forward_world[2]]) * view_distance
-
-        # Calculate offset relative to current viewer_origin
-        viewer_origin_np = self.viewer_origin.detach().cpu().numpy()
-        self.default_cam_eye = cam_eye - viewer_origin_np
-        self.default_cam_lookat = cam_target - viewer_origin_np
-
-        logger.info(f"Captured camera offset: eye={self.default_cam_eye}, lookat={self.default_cam_lookat}")
-
     """
     Private Functions
     """

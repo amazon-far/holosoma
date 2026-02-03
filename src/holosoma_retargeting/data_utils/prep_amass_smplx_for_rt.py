@@ -7,6 +7,9 @@ from pathlib import Path
 import numpy as np
 import torch
 import tyro
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "human_body_prior")))
 from human_body_prior.body_model.body_model import BodyModel  # type: ignore[import-not-found]
 
 
@@ -78,8 +81,8 @@ def run_smplx_model(
         smpl_pose_hand,
     ]
     # batch may be a mix of genders, so need to carefully use the corresponding SMPL body model
-    # gender_names = ["male", "female", "neutral"]
-    gender_names = ["neutral"]  # We use neutral gender for all the data in G1 setting
+    gender_names = ["male", "female", "neutral"]
+    # gender_names = ["neutral"]  # We use neutral gender for all the data in G1 setting
     pred_joints = []
     pred_verts = []
     prev_nbidx = 0

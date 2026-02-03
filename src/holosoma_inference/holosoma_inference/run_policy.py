@@ -21,12 +21,17 @@ from holosoma_inference.config.config_values.inference import AnnotatedInference
 from holosoma_inference.config.utils import TYRO_CONFIG
 from holosoma_inference.policies.locomotion import LocomotionPolicy
 from holosoma_inference.policies.wbt import WholeBodyTrackingPolicy
+from holosoma_inference.policies.wbttp import WholeBodyTrackingTargetPosePolicy
+from holosoma_inference.policies.wbt_multi import WholeBodyTrackingMultiMotionPolicy
+from holosoma_inference.policies.wbt_multi_tp import WholeBodyTrackingMultiMotionTargetPosePolicy
 from holosoma_inference.utils.misc import restore_terminal_settings
 
 
 def _print_control_guide(policy_class, use_joystick: bool):
     """Print control guide for users."""
     is_wbt = policy_class.__name__ == "WholeBodyTrackingPolicy"
+    is_wbttp = policy_class.__name__ == "WholeBodyTrackingTargetPosePolicy"
+    is_wbt_multi = policy_class.__name__ == "WholeBodyTrackingMultiMotionPolicy"
 
     logger.info("=" * 80)
     logger.info("🎮 POLICY CONTROLS")
@@ -45,6 +50,10 @@ def _print_control_guide(policy_class, use_joystick: bool):
         if is_wbt:
             logger.info("")
             logger.info("Whole-Body Tracking Controls:")
+            logger.info("  Start button   - Start motion clip")
+        elif is_wbttp:
+            logger.info("")
+            logger.info("Whole-Body Tracking Target Pose Controls:")
             logger.info("  Start button   - Start motion clip")
         else:
             logger.info("")
@@ -66,6 +75,14 @@ def _print_control_guide(policy_class, use_joystick: bool):
         if is_wbt:
             logger.info("")
             logger.info("Whole-Body Tracking Controls:")
+            logger.info("  s  - Start motion clip")
+        elif is_wbttp:
+            logger.info("")
+            logger.info("Whole-Body Tracking Target Pose Controls:")
+            logger.info("  s  - Start motion clip")
+        elif is_wbt_multi:
+            logger.info("")
+            logger.info("Whole-Body Tracking Multi-Motion Controls:")
             logger.info("  s  - Start motion clip")
         else:
             logger.info("")
@@ -100,9 +117,21 @@ def run_policy(config: InferenceConfig):
     try:
         # Determine policy class based on observation type
         actor_obs = config.observation.obs_dict.get("actor_obs", [])
-        policy_class = WholeBodyTrackingPolicy if "motion_command" in actor_obs else LocomotionPolicy
-        logger.info(f"Using {policy_class.__name__}")
-        policy: LocomotionPolicy | WholeBodyTrackingPolicy = policy_class(config=config)
+        
+        if config.task.target_pose_path is None:
+            # policy_class = WholeBodyTrackingPolicy if "motion_command" in actor_obs else LocomotionPolicy
+            # logger.info(f"Using {policy_class.__name__}")
+            # policy: LocomotionPolicy | WholeBodyTrackingPolicy = policy_class(config=config)
+            policy_class = WholeBodyTrackingMultiMotionPolicy if "motion_command" in actor_obs else LocomotionPolicy
+            logger.info(f"Using {policy_class.__name__}")
+            policy: LocomotionPolicy | WholeBodyTrackingMultiMotionPolicy = policy_class(config=config)
+        else:
+            if "motion_command" not in actor_obs:
+                logger.error("Target pose provided but 'motion_command' not in observation groups.")
+                sys.exit(1)
+            policy_class = WholeBodyTrackingMultiMotionTargetPosePolicy
+            logger.info(f"Using {policy_class.__name__}")
+            policy: WholeBodyTrackingMultiMotionTargetPosePolicy = policy_class(config=config)
 
         logger.info("✅ Policy initialized successfully!")
         _print_control_guide(policy_class, config.task.use_joystick)

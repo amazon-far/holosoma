@@ -200,12 +200,12 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         try:
             import omni.usd
 
-            # Use camera controller via shared helper method
-            camera_params = self._get_camera_parameters()
+            # Use shared camera calculation method
+            camera_params = self._calculate_camera_parameters()
 
-            # Extract position and target from camera parameters
-            position = torch.tensor([camera_params.position], device=self.simulator.device, dtype=torch.float32)
-            target = torch.tensor([camera_params.target], device=self.simulator.device, dtype=torch.float32)
+            # Extract position and target from shared calculation
+            position = torch.tensor([camera_params["position"]], device=self.simulator.device, dtype=torch.float32)
+            target = torch.tensor([camera_params["target"]], device=self.simulator.device, dtype=torch.float32)
 
             up_axis = "Z"
             orientations = quat_from_matrix(
@@ -290,3 +290,23 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
 
         vertical_fov_rad = math.radians(vertical_fov_degrees)
         return aperture_mm / (2 * math.tan(vertical_fov_rad / 2))
+
+    def _get_robot_position(self) -> tuple[float, float, float]:
+        """Get robot position from the recording environment.
+
+        Uses IsaacSim's robot root states to get position consistently.
+
+        Returns
+        -------
+        tuple[float, float, float]
+            Robot position (x, y, z) in the recording environment.
+        """
+        record_env_id = self.config.record_env_id
+
+        # Get robot position from IsaacSim simulator
+        if hasattr(self.simulator, "robot_root_states"):
+            robot_pos = self.simulator.robot_root_states[record_env_id, :3]  # [x, y, z]
+            return float(robot_pos[0]), float(robot_pos[1]), float(robot_pos[2])
+        else:
+            # Fallback to base simulator interface
+            return super()._get_robot_position()
