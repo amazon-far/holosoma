@@ -47,6 +47,10 @@ g1_29dof_wbt_reward = RewardManagerCfg(
             params={"soft_dof_pos_limit": 0.9},
             weight=-100.0,
         ),
+        "penalty_dof_acc": RewardTermCfg(
+            func="holosoma.managers.reward.terms.wbt:penalty_dof_acc",
+            weight=0.0,  # Default disabled, enable via command line override
+        ),
         "undesired_contacts": RewardTermCfg(
             func="holosoma.managers.reward.terms.wbt:UndesiredContacts",
             params={

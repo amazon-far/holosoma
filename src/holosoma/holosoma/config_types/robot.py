@@ -38,6 +38,7 @@ class RobotControlConfig:
     clip_actions: bool
     clip_torques: bool
     action_scales_by_effort_limit_over_p_gain: bool = False
+    action_scales: dict[str, float] | None = None  # Per-joint action scales (optional)
 
 
 @dataclass(frozen=True)

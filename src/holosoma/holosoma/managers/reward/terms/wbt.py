@@ -63,6 +63,56 @@ def limits_dof_pos(env: WholeBodyTrackingManager, soft_dof_pos_limit: float = 0.
     return torch.sum(out_of_limits, dim=1)
 
 
+def penalty_dof_acc(env: WholeBodyTrackingManager) -> torch.Tensor:
+    """Penalize joint accelerations.
+    
+    Computes the sum of squared joint accelerations:
+        sum((dof_vel - last_dof_vel) / dt)^2
+    
+    For environments that just reset, returns 0 to avoid spurious penalties.
+
+    Args:
+        env: The environment instance
+
+    Returns:
+        Reward tensor [num_envs]
+    """
+    # Initialize last_dof_vel buffer if it doesn't exist
+    if not hasattr(env, '_last_dof_vel'):
+        env._last_dof_vel = torch.zeros_like(env.simulator.dof_vel)
+        env._last_dof_vel[:] = env.simulator.dof_vel
+        # Also track if this is the first call per environment
+        env._dof_acc_initialized = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    
+    # Verify buffer shapes match
+    assert env._last_dof_vel.shape == env.simulator.dof_vel.shape, \
+        f"Shape mismatch: _last_dof_vel {env._last_dof_vel.shape} vs dof_vel {env.simulator.dof_vel.shape}"
+    
+    # Check which environments need initialization (first call or after reset)
+    # reset_buf is 1 when environment just reset
+    needs_init = env.reset_buf.bool() | ~env._dof_acc_initialized
+    
+    # For environments that just reset, update last_dof_vel to current velocity
+    # This prevents computing acceleration from pre-reset state
+    if needs_init.any():
+        env._last_dof_vel[needs_init] = env.simulator.dof_vel[needs_init]
+    
+    # Compute acceleration: (dof_vel - last_dof_vel) / dt
+    dof_acc = (env.simulator.dof_vel - env._last_dof_vel) / env.dt
+    
+    # Compute squared acceleration penalty
+    result = torch.sum(torch.square(dof_acc), dim=1)
+    
+    # Zero out penalty for environments that just reset (should already be ~0, but ensure it)
+    result[needs_init] = 0.0
+    
+    # Update last_dof_vel for next step (after computing acceleration)
+    env._last_dof_vel[:] = env.simulator.dof_vel
+    env._dof_acc_initialized[:] = True
+    
+    return result
+
+
 #########################################################################################################
 ## terms specific to Whole Body Tracking
 #########################################################################################################

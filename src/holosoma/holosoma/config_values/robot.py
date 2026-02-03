@@ -1104,8 +1104,18 @@ g1_29dof_w_object = replace(
     ),
 )
 
+g1_29dof_diverse_action_scale = replace(
+    g1_29dof,
+    control=replace(
+        g1_29dof.control,
+        action_scales_by_effort_limit_over_p_gain=True,  # Use effort_limit / kp formula
+        action_scale=0.25,
+    ),
+)
+
 DEFAULTS = {
     "g1_29dof": g1_29dof,
     "t1_29dof_waist_wrist": t1_29dof_waist_wrist,
     "g1_29dof_w_object": g1_29dof_w_object,
+    "g1_29dof_diverse_action_scale": g1_29dof_diverse_action_scale,
 }
