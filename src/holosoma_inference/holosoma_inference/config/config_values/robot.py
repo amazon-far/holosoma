@@ -9,10 +9,100 @@ from __future__ import annotations
 from holosoma_inference.config.config_types.robot import RobotConfig
 
 # =============================================================================
-# G1 Robot Config
+# G1 Robot Configs
 # =============================================================================
 
 # fmt: off
+
+g1_23dof = RobotConfig(
+    # Identity
+    robot_type="g1_23dof",
+    robot="g1",
+
+    # SDK Configuration
+    sdk_type="unitree",
+    motor_type="serial",
+    message_type="HG",
+    use_sensor=False,
+
+    # Dimensions
+    num_motors=23,
+    num_joints=23,
+    num_upper_body_joints=10,  # 5 left arm + 5 right arm (no wrist pitch/yaw)
+
+    # Default Positions
+    default_dof_angles=(
+        -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,  # left leg (6)
+        -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,  # right leg (6)
+        0.0,  # waist yaw (1)
+        0.2, 0.2, 0.0, 0.6, 0.0,  # left arm (5)
+        0.2, -0.2, 0.0, 0.6, 0.0,  # right arm (5)
+    ),
+    default_motor_angles=(
+        -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,  # left leg (6)
+        -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,  # right leg (6)
+        0.0,  # waist yaw (1)
+        0.2, 0.2, 0.0, 0.6, 0.0,  # left arm (5)
+        0.2, -0.2, 0.0, 0.6, 0.0,  # right arm (5)
+    ),
+
+    # Mappings
+    motor2joint=tuple(range(23)),  # Identity mapping
+    joint2motor=tuple(range(23)),  # Identity mapping
+    dof_names=(
+        "left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint",
+        "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
+        "right_hip_pitch_joint", "right_hip_roll_joint", "right_hip_yaw_joint",
+        "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
+        "waist_yaw_joint",
+        "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint", "left_elbow_joint",
+        "left_wrist_roll_joint",
+        "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint", "right_elbow_joint",
+        "right_wrist_roll_joint",
+    ),
+    dof_names_upper_body=(
+        "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint", "left_elbow_joint",
+        "left_wrist_roll_joint",
+        "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint", "right_elbow_joint",
+        "right_wrist_roll_joint",
+    ),
+    dof_names_lower_body=(
+        "left_hip_yaw_joint", "left_hip_roll_joint", "left_hip_pitch_joint",
+        "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
+        "right_hip_yaw_joint", "right_hip_roll_joint", "right_hip_pitch_joint",
+        "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
+        "waist_yaw_joint",
+    ),
+
+    # Link Names
+    torso_link_name="torso_link",
+    left_hand_link_name="left_wrist_roll_rubber_hand",
+    right_hand_link_name="right_wrist_roll_rubber_hand",
+
+    # Unitree-Specific Constants
+    unitree_legged_const={
+        "HIGHLEVEL": 238,
+        "LOWLEVEL": 255,
+        "TRIGERLEVEL": 240,
+        "PosStopF": 2146000000.0,
+        "VelStopF": 16000.0,
+        "MODE_MACHINE": 5,
+        "MODE_PR": 0,
+    },
+    weak_motor_joint_index={
+        "left_hip_pitch_joint": 0, "left_hip_roll_joint": 1, "left_hip_yaw_joint": 2,
+        "left_knee_joint": 3, "left_ankle_pitch_joint": 4, "left_ankle_roll_joint": 5,
+        "right_hip_pitch_joint": 6, "right_hip_roll_joint": 7, "right_hip_yaw_joint": 8,
+        "right_knee_joint": 9, "right_ankle_pitch_joint": 10, "right_ankle_roll_joint": 11,
+        "waist_yaw_joint": 12,
+        "left_shoulder_pitch_joint": 13, "left_shoulder_roll_joint": 14,
+        "left_shoulder_yaw_joint": 15, "left_elbow_joint": 16, "left_wrist_roll_joint": 17,
+        "right_shoulder_pitch_joint": 18, "right_shoulder_roll_joint": 19,
+        "right_shoulder_yaw_joint": 20, "right_elbow_joint": 21, "right_wrist_roll_joint": 22,
+    },
+    motion={"body_name_ref": ["torso_link"]},
+)
+
 
 g1_29dof = RobotConfig(
     # Identity
@@ -191,6 +281,7 @@ t1_29dof = RobotConfig(
 # =============================================================================
 
 DEFAULTS = {
+    "g1-23dof": g1_23dof,
     "g1-29dof": g1_29dof,
     "t1-29dof": t1_29dof,
 }
