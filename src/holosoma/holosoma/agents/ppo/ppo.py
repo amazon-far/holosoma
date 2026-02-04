@@ -173,6 +173,25 @@ class PPO(BaseAlgo):
                 logger.info(f"Multi-GPU curriculum synchronization enabled across {self.gpu_world_size} GPUs")
 
     def _setup_models_and_optimizer(self):
+        # Get motion encoder config if available
+        motion_encoder_config = None
+        if hasattr(self.config.module_dict, 'motion_encoder') and self.config.module_dict.motion_encoder is not None:
+            me_cfg = self.config.module_dict.motion_encoder
+            # Calculate input_dim from future_motion_targets observation if not set
+            input_dim = me_cfg.input_dim
+            if input_dim == 0 and "future_motion_targets" in self.algo_obs_dim_dict:
+                # future_motion_targets is [num_timesteps * feature_dim]
+                total_dim = self.algo_obs_dim_dict["future_motion_targets"]
+                input_dim = total_dim // me_cfg.num_timesteps
+            motion_encoder_config = {
+                "input_dim": input_dim,
+                "hidden_dim": me_cfg.hidden_dim,
+                "output_dim": me_cfg.output_dim,
+                "num_timesteps": me_cfg.num_timesteps,
+                "activation": me_cfg.activation,
+            }
+            logger.info(f"Motion encoder config: {motion_encoder_config}")
+        
         self.actor = setup_ppo_actor_module(
             obs_dim_dict=self.algo_obs_dim_dict,
             module_config=self.config.module_dict.actor,
@@ -180,12 +199,14 @@ class PPO(BaseAlgo):
             init_noise_std=self.config.init_noise_std,
             device=self.device,
             history_length=self.algo_history_length_dict,
+            motion_encoder_config=motion_encoder_config,
         )
         self.critic = setup_ppo_critic_module(
             obs_dim_dict=self.algo_obs_dim_dict,
             module_config=self.config.module_dict.critic,
             device=self.device,
             history_length=self.algo_history_length_dict,
+            motion_encoder_config=motion_encoder_config,
         )
 
         if self.use_symmetry:
@@ -230,6 +251,16 @@ class PPO(BaseAlgo):
         critic_obs_dim = self._get_obs_dim(self.critic_obs_keys)
         print(f"Registering key: critic_obs with shape: {critic_obs_dim}")
         self.storage.register("critic_obs", shape=(critic_obs_dim,), dtype=torch.float)
+
+        # Register future_motion_targets if using motion encoder
+        self.use_motion_encoder = (
+            self.config.module_dict.actor.type == "MLPWithMotionEncoder"
+            and "future_motion_targets" in self.algo_obs_dim_dict
+        )
+        if self.use_motion_encoder:
+            future_motion_dim = self.algo_obs_dim_dict["future_motion_targets"]
+            print(f"Registering key: future_motion_targets with shape: {future_motion_dim}")
+            self.storage.register("future_motion_targets", shape=(future_motion_dim,), dtype=torch.float)
 
         # Register others based on Minibatch structure
         minibatch_keys = [
@@ -301,9 +332,17 @@ class PPO(BaseAlgo):
                 # Environment step
                 actor_obs = torch.cat([obs_dict[k] for k in self.actor_obs_keys], dim=1)
                 critic_obs = torch.cat([obs_dict[k] for k in self.critic_obs_keys], dim=1)
+                
+                # Prepare policy state dict
+                policy_state = {"actor_obs": actor_obs, "critic_obs": critic_obs}
+                
+                # Add future_motion_targets if using motion encoder
+                if self.use_motion_encoder:
+                    future_motion = obs_dict["future_motion_targets"]
+                    policy_state["future_motion_targets"] = future_motion
 
-                actions = self.actor.act({"actor_obs": actor_obs})
-                values = self.critic.evaluate({"critic_obs": critic_obs}).detach()
+                actions = self.actor.act(policy_state)
+                values = self.critic.evaluate(policy_state).detach()
 
                 obs_dict, rewards, dones, infos = self.env.step({"actions": actions})
 
@@ -315,23 +354,31 @@ class PPO(BaseAlgo):
                 final_rewards = torch.zeros_like(rewards)
                 if infos["time_outs"].any():
                     final_critic_obs = torch.cat([infos["final_observations"][k] for k in self.critic_obs_keys], dim=1)
-                    final_values = self.critic.evaluate({"critic_obs": final_critic_obs}).detach()
+                    final_policy_state = {"critic_obs": final_critic_obs}
+                    if self.use_motion_encoder:
+                        final_policy_state["future_motion_targets"] = infos["final_observations"].get(
+                            "future_motion_targets", future_motion
+                        )
+                    final_values = self.critic.evaluate(final_policy_state).detach()
                     final_rewards += self.config.gamma * torch.squeeze(
                         final_values * infos["time_outs"].unsqueeze(1).to(self.device), 1
                     )
 
                 # Add transition to storage
-                self.storage.add(
-                    actor_obs=actor_obs,
-                    critic_obs=critic_obs,
-                    actions=actions,
-                    values=values,
-                    actions_log_prob=self.actor.get_actions_log_prob(actions).detach().unsqueeze(1),
-                    action_mean=self.actor.action_mean.detach(),
-                    action_sigma=self.actor.action_std.detach(),
-                    rewards=(rewards + final_rewards).view(-1, 1),
-                    dones=dones.view(-1, 1),
-                )
+                storage_data = {
+                    "actor_obs": actor_obs,
+                    "critic_obs": critic_obs,
+                    "actions": actions,
+                    "values": values,
+                    "actions_log_prob": self.actor.get_actions_log_prob(actions).detach().unsqueeze(1),
+                    "action_mean": self.actor.action_mean.detach(),
+                    "action_sigma": self.actor.action_std.detach(),
+                    "rewards": (rewards + final_rewards).view(-1, 1),
+                    "dones": dones.view(-1, 1),
+                }
+                if self.use_motion_encoder:
+                    storage_data["future_motion_targets"] = future_motion
+                self.storage.add(**storage_data)
 
                 # Reset actor and critic for completed envs
                 self.actor.reset(dones)
@@ -343,7 +390,10 @@ class PPO(BaseAlgo):
 
             # Return / Advantage computation
             last_critic_obs = torch.cat([obs_dict[k] for k in self.critic_obs_keys], dim=1)
-            last_values = self.critic.evaluate({"critic_obs": last_critic_obs}).detach().to(self.device)
+            last_policy_state = {"critic_obs": last_critic_obs}
+            if self.use_motion_encoder:
+                last_policy_state["future_motion_targets"] = obs_dict["future_motion_targets"]
+            last_values = self.critic.evaluate(last_policy_state).detach().to(self.device)
             returns, advantages = self._compute_returns_and_advantages(
                 last_values,
                 self.storage["values"].to(self.device),
@@ -456,8 +506,13 @@ class PPO(BaseAlgo):
             actor_obs = minibatch["actor_obs"]
             critic_obs = minibatch["critic_obs"]
 
-        self.actor.act({"actor_obs": actor_obs})
-        value_batch = self.critic.evaluate({"critic_obs": critic_obs})
+        # Prepare policy state dict for training
+        policy_state = {"actor_obs": actor_obs, "critic_obs": critic_obs}
+        if self.use_motion_encoder and "future_motion_targets" in minibatch:
+            policy_state["future_motion_targets"] = minibatch["future_motion_targets"]
+
+        self.actor.act(policy_state)
+        value_batch = self.critic.evaluate(policy_state)
         actions_log_prob_batch = self.actor.get_actions_log_prob(actions_batch)
         mu_batch = self.actor.action_mean[:original_batch_size]
         sigma_batch = self.actor.action_std[:original_batch_size]
@@ -485,7 +540,10 @@ class PPO(BaseAlgo):
         value_loss = torch.max(value_losses, value_losses_clipped).mean()
 
         if self.use_symmetry and (self.config.symmetry_actor_coef > 0.0 or self.config.symmetry_critic_coef > 0.0):
-            mean_actions_batch = self.actor.act_inference({"actor_obs": actor_obs.detach().clone()})
+            inference_state = {"actor_obs": actor_obs.detach().clone()}
+            if self.use_motion_encoder and "future_motion_targets" in minibatch:
+                inference_state["future_motion_targets"] = minibatch["future_motion_targets"]
+            mean_actions_batch = self.actor.act_inference(inference_state)
             mean_actions_for_original_batch, mean_actions_for_symmetry_batch = (
                 mean_actions_batch[:original_batch_size],
                 mean_actions_batch[original_batch_size:],
@@ -597,6 +655,13 @@ class PPO(BaseAlgo):
 
         # Set model to evaluation mode for export so we don't affect gradients mid-rollout
         self._eval_mode()
+
+        # Skip ONNX export if using motion encoder (not yet supported)
+        if getattr(self, 'use_motion_encoder', False):
+            logger.warning("[ONNX Export] Skipping ONNX export for motion encoder models (not yet supported)")
+            if was_training:
+                self._train_mode()
+            return
 
         # Save the .onnx file to filesystem
         motion_command = self.env.command_manager.get_state("motion_command")
@@ -913,15 +978,35 @@ class PPO(BaseAlgo):
 
     @property
     def actor_onnx_wrapper(self):
-        class ActorWrapper(nn.Module):
-            def __init__(self, actor):
-                super().__init__()
-                self.actor = actor
+        use_motion_encoder = getattr(self, 'use_motion_encoder', False)
+        
+        if use_motion_encoder:
+            # Motion encoder wrapper: takes actor_obs and future_motion_targets
+            class ActorWithMotionEncoderWrapper(nn.Module):
+                def __init__(self, actor):
+                    super().__init__()
+                    self.actor = actor
+                    self.motion_encoder = actor.motion_encoder
+                    self.actor_module = actor.actor_module
 
-            def forward(self, actor_obs):
-                return self.actor.act_inference({"actor_obs": actor_obs})
+                def forward(self, actor_obs, future_motion_targets):
+                    # Same logic as PPOActorWithMotionEncoder.act_inference
+                    motion_latent = self.motion_encoder(future_motion_targets)
+                    combined_input = torch.cat([actor_obs, motion_latent], dim=-1)
+                    return self.actor_module(combined_input)
 
-        return ActorWrapper(self.actor)
+            return ActorWithMotionEncoderWrapper(self.actor)
+        else:
+            # Standard wrapper: takes only actor_obs
+            class ActorWrapper(nn.Module):
+                def __init__(self, actor):
+                    super().__init__()
+                    self.actor = actor
+
+                def forward(self, actor_obs):
+                    return self.actor.act_inference({"actor_obs": actor_obs})
+
+            return ActorWrapper(self.actor)
 
     def env_step(self, actor_state):
         obs_dict, rewards, dones, extras = self.env.step(actor_state)

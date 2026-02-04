@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from holosoma.agents.modules.ppo_modules import PPOActor, PPOActorEncoder, PPOCritic, PPOCriticEncoder
+from holosoma.agents.modules.ppo_modules import (
+    PPOActor,
+    PPOActorEncoder,
+    PPOActorWithMotionEncoder,
+    PPOCritic,
+    PPOCriticEncoder,
+    PPOCriticWithMotionEncoder,
+)
 
 
 def setup_ppo_actor_module(
@@ -10,6 +17,7 @@ def setup_ppo_actor_module(
     init_noise_std,
     device,
     history_length: dict[str, int],
+    motion_encoder_config: dict | None = None,
 ):
     module_type = module_config.type
     if module_type in ["MLPEncoder", "CNNEncoder"]:
@@ -27,6 +35,17 @@ def setup_ppo_actor_module(
             init_noise_std=init_noise_std,
             history_length=history_length,
         ).to(device)
+    if module_type == "MLPWithMotionEncoder":
+        if motion_encoder_config is None:
+            raise ValueError("motion_encoder_config is required for MLPWithMotionEncoder")
+        return PPOActorWithMotionEncoder(
+            obs_dim_dict=obs_dim_dict,
+            module_config_dict=module_config,
+            num_actions=num_actions,
+            init_noise_std=init_noise_std,
+            history_length=history_length,
+            motion_encoder_config=motion_encoder_config,
+        ).to(device)
 
     raise ValueError(f"Invalid actor type: {module_type}")
 
@@ -36,6 +55,7 @@ def setup_ppo_critic_module(
     module_config,
     device,
     history_length: dict[str, int],
+    motion_encoder_config: dict | None = None,
 ):
     module_type = module_config.type
     if module_type in ["MLPEncoder", "CNNEncoder"]:
@@ -48,5 +68,14 @@ def setup_ppo_critic_module(
             obs_dim_dict=obs_dim_dict,
             module_config_dict=module_config,
             history_length=history_length,
+        ).to(device)
+    if module_type == "MLPWithMotionEncoder":
+        if motion_encoder_config is None:
+            raise ValueError("motion_encoder_config is required for MLPWithMotionEncoder")
+        return PPOCriticWithMotionEncoder(
+            obs_dim_dict=obs_dim_dict,
+            module_config_dict=module_config,
+            history_length=history_length,
+            motion_encoder_config=motion_encoder_config,
         ).to(device)
     raise ValueError(f"Invalid critic type: {module_type}")

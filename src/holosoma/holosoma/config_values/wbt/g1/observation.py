@@ -138,4 +138,70 @@ g1_29dof_wbt_observation_w_object = ObservationManagerCfg(
     },
 )
 
-__all__ = ["g1_29dof_wbt_observation", "g1_29dof_wbt_observation_w_object"]
+# Future motion observation config
+# Includes future_motion_targets for motion encoder
+future_motion_obs_group = ObsGroupCfg(
+    concatenate=True,
+    enable_noise=False,
+    history_length=1,
+    terms={
+        "future_motion_targets": ObsTermCfg(
+            func="holosoma.managers.observation.terms.wbt:future_motion_targets",
+            scale=1.0,
+            noise=0.0,
+            params={"future_num_steps": 20, "future_max_steps": 95},
+        ),
+    },
+)
+
+g1_29dof_wbt_observation_future_motion = ObservationManagerCfg(
+    groups={
+        "actor_obs": actor_obs_shared,
+        "critic_obs": ObsGroupCfg(
+            concatenate=True,
+            enable_noise=False,
+            history_length=1,
+            terms=critic_obs_shared_terms,
+        ),
+        "future_motion_targets": future_motion_obs_group,
+    },
+)
+
+# Future motion without local key body positions (ablation)
+future_motion_obs_group_no_key_body = ObsGroupCfg(
+    concatenate=True,
+    enable_noise=False,
+    history_length=1,
+    terms={
+        "future_motion_targets": ObsTermCfg(
+            func="holosoma.managers.observation.terms.wbt:future_motion_targets",
+            scale=1.0,
+            noise=0.0,
+            params={
+                "future_num_steps": 20,
+                "future_max_steps": 95,
+                "include_key_body_pos": False,
+            },
+        ),
+    },
+)
+
+g1_29dof_wbt_observation_future_motion_no_key_body = ObservationManagerCfg(
+    groups={
+        "actor_obs": actor_obs_shared,
+        "critic_obs": ObsGroupCfg(
+            concatenate=True,
+            enable_noise=False,
+            history_length=1,
+            terms=critic_obs_shared_terms,
+        ),
+        "future_motion_targets": future_motion_obs_group_no_key_body,
+    },
+)
+
+__all__ = [
+    "g1_29dof_wbt_observation",
+    "g1_29dof_wbt_observation_w_object",
+    "g1_29dof_wbt_observation_future_motion",
+    "g1_29dof_wbt_observation_future_motion_no_key_body",
+]

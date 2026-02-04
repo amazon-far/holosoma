@@ -94,6 +94,26 @@ class ModuleConfig:
 
 
 @dataclass(frozen=True)
+class MotionEncoderConfig:
+    """Configuration for motion encoder (Conv1D-based)."""
+    
+    input_dim: int = 0
+    """Input dimension per timestep (will be auto-calculated from observation)."""
+    
+    hidden_dim: int = 60
+    """Hidden dimension after initial linear layer."""
+    
+    output_dim: int = 128
+    """Output dimension of the encoder."""
+    
+    num_timesteps: int = 20
+    """Number of future timesteps."""
+    
+    activation: str = "SiLU"
+    """Activation function name."""
+
+
+@dataclass(frozen=True)
 class PPOModuleDictConfig:
     """Configuration for PPO module dictionary."""
 
@@ -102,6 +122,9 @@ class PPOModuleDictConfig:
 
     critic: ModuleConfig
     """Critic module configuration."""
+    
+    motion_encoder: MotionEncoderConfig | None = None
+    """Motion encoder configuration (optional, for future motion targets)."""
 
 
 @dataclass(frozen=True)

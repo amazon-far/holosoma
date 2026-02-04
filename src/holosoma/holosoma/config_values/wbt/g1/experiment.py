@@ -179,11 +179,81 @@ g1_29dof_wbt_fast_sac_w_object = replace(
     ),
 )
 
+# Future motion experiment config (with motion encoder)
+from holosoma.config_types.algo import MotionEncoderConfig
+
+g1_29dof_wbt_future_motion = replace(
+    g1_29dof_wbt,
+    training=TrainingConfig(
+        project="WholeBodyTracking",
+        name="g1_29dof_wbt_future_motion",
+        num_envs=8192,
+    ),
+    observation=observation.g1_29dof_wbt_observation_future_motion,
+    algo=replace(
+        algo.ppo,
+        config=replace(
+            algo.ppo.config,
+            num_learning_iterations=40000,
+            save_interval=4000,
+            entropy_coef=0.005,
+            init_noise_std=1.0,
+            init_at_random_ep_len=False,
+            use_symmetry=False,
+            actor_optimizer=replace(algo.ppo.config.actor_optimizer, weight_decay=0.000),
+            critic_optimizer=replace(algo.ppo.config.critic_optimizer, weight_decay=0.000),
+            module_dict=replace(
+                algo.ppo.config.module_dict,
+                actor=replace(
+                    algo.ppo.config.module_dict.actor,
+                    type="MLPWithMotionEncoder",
+                    input_dim=["actor_obs"],  # future_motion_targets handled by motion encoder
+                    layer_config=replace(
+                        algo.ppo.config.module_dict.actor.layer_config,
+                        hidden_dims=[768, 512, 256],
+                        activation="SiLU",
+                    ),
+                ),
+                critic=replace(
+                    algo.ppo.config.module_dict.critic,
+                    type="MLPWithMotionEncoder",
+                    input_dim=["critic_obs"],  # future_motion_targets handled by motion encoder
+                    layer_config=replace(
+                        algo.ppo.config.module_dict.critic.layer_config,
+                        hidden_dims=[768, 512, 256],
+                        activation="SiLU",
+                    ),
+                ),
+                motion_encoder=MotionEncoderConfig(
+                    input_dim=0,  # Will be auto-calculated
+                    hidden_dim=60,
+                    output_dim=128,
+                    num_timesteps=20,
+                    activation="SiLU",
+                ),
+            ),
+        ),
+    ),
+)
+
+# Future motion without key body pos (ablation: no local_key_body_pos in future targets)
+g1_29dof_wbt_future_motion_no_key_body = replace(
+    g1_29dof_wbt_future_motion,
+    training=TrainingConfig(
+        project="WholeBodyTracking",
+        name="g1_29dof_wbt_future_motion_no_key_body",
+        num_envs=8192,
+    ),
+    observation=observation.g1_29dof_wbt_observation_future_motion_no_key_body,
+)
+
 __all__ = [
     "g1_29dof_wbt",
     "g1_29dof_wbt_fast_sac",
     "g1_29dof_wbt_fast_sac_w_object",
     "g1_29dof_wbt_w_object",
+    "g1_29dof_wbt_future_motion",
+    "g1_29dof_wbt_future_motion_no_key_body",
 ]
 
 """
