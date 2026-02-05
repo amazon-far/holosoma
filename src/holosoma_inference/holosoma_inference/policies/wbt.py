@@ -1,5 +1,6 @@
 import json
 import sys
+from pathlib import Path
 
 import numpy as np
 import onnx
@@ -99,6 +100,10 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
         self._stiff_hold_active = True
         self.robot_yaw_offset = 0.0
+        
+        # Motion data for future_motion_targets (if needed)
+        self.motion_data = None
+        self.motion_fps = None
 
         super().__init__(config)
 
@@ -171,6 +176,19 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self.onnx_input_names = [inp.name for inp in self.onnx_policy_session.get_inputs()]
         self.onnx_output_names = [out.name for out in self.onnx_policy_session.get_outputs()]
 
+        # Detect ONNX format: old style (obs, time_step) vs new style (actor_obs, future_motion_targets)
+        self.use_new_onnx_format = "actor_obs" in self.onnx_input_names
+        self.has_future_motion = "future_motion_targets" in self.onnx_input_names
+        
+        if self.use_new_onnx_format:
+            logger.info("Using new ONNX format with actor_obs input")
+            if self.has_future_motion:
+                logger.info("ONNX model expects future_motion_targets input")
+                # Load motion file for future_motion_targets computation
+                self._load_motion_file()
+        else:
+            logger.info("Using legacy ONNX format with obs/time_step inputs")
+
         # Extract KP/KD from ONNX metadata (same as base class)
         onnx_model = onnx.load(model_path)
         metadata = {}
@@ -189,32 +207,129 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
             logger.info(f"Loaded KP/KD from ONNX metadata: {Path(model_path).name}")
 
-        # get initial command and ref quat xyzw
-        time_step = np.zeros((1, 1), dtype=np.float32)
-
         # Use configured observation dimensions (including history) instead of a hard-coded value.
         actor_obs_template = self.obs_buf_dict.get("actor_obs")
         if actor_obs_template is None:
             raise ValueError("Observation group 'actor_obs' must be configured for WBT policy.")
         obs = actor_obs_template.copy()
-        input_feed = {"obs": obs, "time_step": time_step}
-        outputs = self.onnx_policy_session.run(["joint_pos", "joint_vel", "ref_quat_xyzw"], input_feed)
-
-        # motion_command_t/ref_quat_xyzw_t will be used in get_current_obs_buffer_dict
-        self.motion_command_t = np.concatenate(outputs[0:2], axis=1)  # (1, 58)
-        self.ref_quat_xyzw_t = outputs[2]
+        
+        # Get initial command and ref quat xyzw based on ONNX format
+        if self.use_new_onnx_format:
+            # New format: direct policy inference without motion extraction
+            # For initialization, we can't get motion command from new ONNX (it only outputs actions)
+            if self.has_future_motion and self.motion_data is not None:
+                # Initialize motion_command from first timestep of motion data
+                joint_pos_0 = self.motion_data["joint_pos"][0]  # [num_dofs]
+                joint_vel_0 = self.motion_data["joint_vel"][0]  # [num_dofs]
+                self.motion_command_t = np.concatenate([
+                    joint_pos_0[np.newaxis, :],
+                    joint_vel_0[np.newaxis, :]
+                ], axis=1).astype(np.float32)  # [1, 58]
+                # Get ref_quat from motion data (use ref_body_index, typically torso_link)
+                ref_body_idx = self.motion_data["ref_body_index"]
+                self.ref_quat_xyzw_t = self.motion_data["body_quat_w"][0, ref_body_idx:ref_body_idx+1, :].astype(np.float32)  # [1, 4] xyzw
+                logger.info(f"Initialized motion_command from motion data (ref_body_index={ref_body_idx})")
+            else:
+                # Fallback to dummy values if no motion data
+                logger.warning("New ONNX format doesn't support motion extraction - using default initialization")
+                self.motion_command_t = np.zeros((1, 58), dtype=np.float32)  # dummy
+                self.ref_quat_xyzw_t = np.array([[0, 0, 0, 1]], dtype=np.float32)  # identity quat (xyzw)
+        else:
+            # Legacy format: can extract motion command from ONNX
+            time_step = np.zeros((1, 1), dtype=np.float32)
+            input_feed = {"obs": obs, "time_step": time_step}
+            outputs = self.onnx_policy_session.run(["joint_pos", "joint_vel", "ref_quat_xyzw"], input_feed)
+            self.motion_command_t = np.concatenate(outputs[0:2], axis=1)  # (1, 58)
+            self.ref_quat_xyzw_t = outputs[2]
+        
         # duplicate, will be used in _get_init_target and _handle_stop_policy
         self.motion_command_0 = self.motion_command_t.copy()
         self.ref_quat_xyzw_0 = self.ref_quat_xyzw_t.copy()
 
         def policy_act(input_feed):
-            output = self.onnx_policy_session.run(["actions", "joint_pos", "joint_vel", "ref_quat_xyzw"], input_feed)
-            action = output[0]
-            motion_command = np.concatenate(output[1:3], axis=1)
-            ref_quat_xyzw = output[3]
+            if self.use_new_onnx_format:
+                # New format: only outputs actions
+                output = self.onnx_policy_session.run(["action"], input_feed)
+                action = output[0]
+                # Motion command stays the same (can't extract from new ONNX)
+                motion_command = self.motion_command_t
+                ref_quat_xyzw = self.ref_quat_xyzw_t
+            else:
+                # Legacy format: outputs actions + motion data
+                output = self.onnx_policy_session.run(["actions", "joint_pos", "joint_vel", "ref_quat_xyzw"], input_feed)
+                action = output[0]
+                motion_command = np.concatenate(output[1:3], axis=1)
+                ref_quat_xyzw = output[3]
             return action, motion_command, ref_quat_xyzw
 
         self.policy = policy_act
+    
+    def _load_motion_file(self):
+        """Load motion file for future_motion_targets computation."""
+        motion_file_path = self.config.task.motion_file_path
+        if motion_file_path is None:
+            logger.error(
+                "ONNX model requires future_motion_targets input but task.motion_file_path is not configured. "
+                "Please specify motion_file_path in the task configuration."
+            )
+            raise ValueError("Missing required config: task.motion_file_path")
+        
+        # Check if file exists
+        motion_file = Path(motion_file_path)
+        if not motion_file.exists():
+            logger.error(f"Motion file not found: {motion_file_path}")
+            raise FileNotFoundError(f"Motion file not found: {motion_file_path}")
+        
+        logger.info(f"Loading motion file for future_motion_targets: {motion_file_path}")
+        
+        # Load npz file
+        with open(motion_file, "rb") as f:
+            data = np.load(f, allow_pickle=True)
+            self.motion_fps = float(data["fps"])
+            
+            # Get body and joint names
+            body_names = data["body_names"].tolist()
+            joint_names = data["joint_names"].tolist()
+            
+            # Load motion data (same format as MotionLoader in holosoma)
+            # Joint data: first 7 are pelvis [xyz, wxyz] for pos, first 6 for vel, omit them
+            joint_pos = data["joint_pos"][:, 7:]  # [time_steps, num_joints]
+            joint_vel = data["joint_vel"][:, 6:]  # [time_steps, num_joints]
+            
+            # Body data
+            body_pos_w = data["body_pos_w"]  # [time_steps, num_bodies, 3]
+            body_quat_w_wxyz = data["body_quat_w"]  # [time_steps, num_bodies, 4] wxyz
+            body_quat_w = body_quat_w_wxyz[:, :, [1, 2, 3, 0]]  # Convert to xyzw
+            body_lin_vel_w = data["body_lin_vel_w"]  # [time_steps, num_bodies, 3]
+            body_ang_vel_w = data["body_ang_vel_w"]  # [time_steps, num_bodies, 3]
+            
+            # Get indices for robot joints and bodies
+            robot_joint_names = self.config.robot.dof_names
+            robot_body_names_to_track = self.config.robot.motion.get("body_names_to_track")
+            robot_body_name_ref = self.config.robot.motion.get("body_name_ref", ["torso_link"])
+            
+            if robot_body_names_to_track is None:
+                logger.warning("body_names_to_track not found in robot.motion config - using all bodies")
+                robot_body_names_to_track = body_names  # Use all bodies from motion file
+            
+            joint_indices = [joint_names.index(name) for name in robot_joint_names]
+            body_indices = [body_names.index(name) for name in robot_body_names_to_track]
+            ref_body_index = body_names.index(robot_body_name_ref[0])
+
+            # Store motion data
+            self.motion_data = {
+                "joint_pos": joint_pos[:, joint_indices],  # [time_steps, num_dofs]
+                "joint_vel": joint_vel[:, joint_indices],  # [time_steps, num_dofs]
+                "body_pos_w": body_pos_w,  # [time_steps, all_bodies, 3]
+                "body_quat_w": body_quat_w,  # [time_steps, all_bodies, 4] xyzw
+                "body_lin_vel_w": body_lin_vel_w,  # [time_steps, all_bodies, 3]
+                "body_ang_vel_w": body_ang_vel_w,  # [time_steps, all_bodies, 3]
+                "body_indices": body_indices,  # Indices of 14 tracked bodies
+                "ref_body_index": ref_body_index,  # Index of reference body (torso_link)
+                "time_step_total": len(joint_pos),
+            }
+            
+            logger.info(f"Motion file loaded: {self.motion_data['time_step_total']} timesteps at {self.motion_fps} fps")
 
     def _capture_policy_state(self):
         state = super()._capture_policy_state()
@@ -262,7 +377,21 @@ class WholeBodyTrackingPolicy(BasePolicy):
     def get_current_obs_buffer_dict(self, robot_state_data):
         current_obs_buffer_dict = {}
 
-        # motion_command
+        # motion_command and ref_quat - compute from motion data if available (for new ONNX format)
+        if self.has_future_motion and self.motion_data is not None:
+            # Compute motion_command from current timestep in motion data
+            timestep = min(self.motion_timestep, self.motion_data["time_step_total"] - 1)
+            joint_pos_target = self.motion_data["joint_pos"][timestep]  # [num_dofs]
+            joint_vel_target = self.motion_data["joint_vel"][timestep]  # [num_dofs]
+            self.motion_command_t = np.concatenate([
+                joint_pos_target[np.newaxis, :],
+                joint_vel_target[np.newaxis, :]
+            ], axis=1).astype(np.float32)  # [1, 58]
+            
+            # Also update ref_quat from motion data (use ref_body_index, typically torso_link)
+            ref_body_idx = self.motion_data["ref_body_index"]
+            self.ref_quat_xyzw_t = self.motion_data["body_quat_w"][timestep, ref_body_idx:ref_body_idx+1, :].astype(np.float32)  # [1, 4] xyzw
+        
         current_obs_buffer_dict["motion_command"] = self.motion_command_t
 
         # motion_ref_ori_b
@@ -290,7 +419,203 @@ class WholeBodyTrackingPolicy(BasePolicy):
         # actions
         current_obs_buffer_dict["actions"] = self.last_policy_action
 
+        # future_motion_targets (if needed)
+        if self.has_future_motion and self.motion_data is not None:
+            current_obs_buffer_dict["future_motion_targets"] = self._compute_future_motion_targets()
+
         return current_obs_buffer_dict
+    
+    def prepare_obs_for_rl(self, robot_state_data):
+        """Prepare observations for RL inference (override to include future_motion_targets)."""
+        group_outputs = self._prepare_group_observations(robot_state_data)
+        if "actor_obs" not in group_outputs:
+            raise KeyError("Observation group 'actor_obs' is not configured for this policy.")
+        
+        result = {"actor_obs": group_outputs["actor_obs"].astype(np.float32, copy=False)}
+        
+        # Add future_motion_targets if available
+        if "future_motion_targets" in group_outputs:
+            result["future_motion_targets"] = group_outputs["future_motion_targets"].astype(np.float32, copy=False)
+        
+        return result
+    
+    def _compute_future_motion_targets(
+        self,
+        future_num_steps: int = 20,
+        future_max_steps: int = 95,
+        include_key_body_pos: bool = True,  # Set to True to match training config (1560 dim)
+    ) -> np.ndarray:
+        """Compute future motion targets for motion encoder.
+        
+        Returns concatenated future motion features (numpy array):
+        - root_height: [future_num_steps, 1]
+        - roll_pitch: [future_num_steps, 2]
+        - base_lin_vel: [future_num_steps, 3]
+        - base_yaw_vel: [future_num_steps, 1]
+        - dof_pos: [future_num_steps, num_dofs]
+        - local_key_body_pos: [future_num_steps, num_tracked_bodies * 3]  (optional)
+        
+        Returns:
+            Array of shape [1, future_num_steps * feature_dim]
+        """
+        motion = self.motion_data
+        current_timestep = self.motion_timestep
+        
+        # Generate future timestep indices (linearly spaced)
+        tar_obs_steps = np.linspace(
+            1,  # start
+            future_max_steps,  # stop
+            future_num_steps,  # num
+        ).astype(np.int64)
+        
+        # Current timestep + future offsets, clamped to valid range
+        future_timesteps = current_timestep + tar_obs_steps
+        future_timesteps = np.clip(future_timesteps, 0, motion["time_step_total"] - 1).astype(np.int64)
+        
+        # Get future motion data
+        # Root position and quaternion (pelvis = body index 0)
+        root_pos = motion["body_pos_w"][future_timesteps, 0]  # [num_steps, 3]
+        root_quat = motion["body_quat_w"][future_timesteps, 0]  # [num_steps, 4] xyzw
+        
+        # Root height
+        root_height = root_pos[:, 2:3]  # [num_steps, 1]
+        
+        # Roll and pitch from quaternion (xyzw format)
+        def get_euler_xyz_np(quat_xyzw):
+            """Get euler angles (roll, pitch, yaw) from quaternion in xyzw format.
+            
+            Matches holosoma.utils.rotations.get_euler_xyz with w_last=True.
+            Returns values in [0, 2*pi] range (same as Isaac Sim).
+            """
+            x, y, z, w = quat_xyzw[:, 0], quat_xyzw[:, 1], quat_xyzw[:, 2], quat_xyzw[:, 3]
+            
+            # Roll (x-axis rotation)
+            sinr_cosp = 2 * (w * x + y * z)
+            cosr_cosp = 1 - 2 * (x * x + y * y)
+            roll = np.arctan2(sinr_cosp, cosr_cosp)
+            
+            # Pitch (y-axis rotation)
+            sinp = 2 * (w * y - z * x)
+            pitch = np.where(
+                np.abs(sinp) >= 1,
+                np.copysign(np.pi / 2, sinp),  # Use 90 degrees if out of range
+                np.arcsin(sinp)
+            )
+            
+            # Yaw (z-axis rotation)
+            siny_cosp = 2 * (w * z + x * y)
+            cosy_cosp = 1 - 2 * (y * y + z * z)
+            yaw = np.arctan2(siny_cosp, cosy_cosp)
+            
+            # Apply modulo to match Isaac Sim behavior (convert to [0, 2*pi] range)
+            two_pi = 2 * np.pi
+            return roll % two_pi, pitch % two_pi, yaw % two_pi
+        
+        roll, pitch, yaw = get_euler_xyz_np(root_quat)
+        roll_pitch = np.stack([roll, pitch], axis=-1)  # [num_steps, 2]
+        
+        # Base linear velocity
+        base_lin_vel = motion["body_lin_vel_w"][future_timesteps, 0]  # [num_steps, 3]
+        
+        # Base angular velocity (yaw component only)
+        base_ang_vel = motion["body_ang_vel_w"][future_timesteps, 0]  # [num_steps, 3]
+        base_yaw_vel = base_ang_vel[:, 2:3]  # [num_steps, 1]
+        
+        # Joint positions (relative to default)
+        dof_pos = motion["joint_pos"][future_timesteps]  # [num_steps, num_dofs]
+        default_dof_pos = self.default_dof_angles  # [num_dofs]
+        dof_pos_rel = dof_pos - default_dof_pos[np.newaxis, :]  # [num_steps, num_dofs]
+        
+        # Local key body positions (tracked bodies relative to root) — optional
+        if include_key_body_pos:
+            tracked_body_indexes = motion["body_indices"]  # [14]
+            tracked_body_pos = motion["body_pos_w"][future_timesteps][:, tracked_body_indexes]  # [num_steps, 14, 3]
+            local_body_pos = tracked_body_pos - root_pos[:, np.newaxis, :]  # [num_steps, 14, 3]
+            
+            # Rotate to body frame using inverse of root quaternion
+            # Use the same formula as holosoma.utils.rotations.quat_rotate_inverse
+            def quat_rotate_inverse_np(q_xyzw, v):
+                """Rotate vector v by inverse of quaternion q (xyzw format).
+                
+                This matches the formula from holosoma.utils.rotations.quat_rotate_inverse:
+                a = v * (2.0 * q_w**2 - 1.0)
+                b = cross(q_vec, v) * q_w * 2.0
+                c = q_vec * dot(q_vec, v) * 2.0
+                return a - b + c
+                """
+                q_vec = q_xyzw[:, :3]  # [N, 3]
+                q_w = q_xyzw[:, 3]     # [N]
+                
+                # a = v * (2.0 * q_w**2 - 1.0)
+                a = v * (2.0 * q_w**2 - 1.0)[:, np.newaxis]
+                
+                # b = cross(q_vec, v) * q_w * 2.0
+                b = np.cross(q_vec, v) * (q_w * 2.0)[:, np.newaxis]
+                
+                # c = q_vec * dot(q_vec, v) * 2.0
+                # dot(q_vec, v) for each row
+                dot_product = np.sum(q_vec * v, axis=-1)  # [N]
+                c = q_vec * (dot_product * 2.0)[:, np.newaxis]
+                
+                return a - b + c
+            
+            # Apply rotation for each timestep and body
+            local_body_pos_flat = local_body_pos.reshape(-1, 3)  # [num_steps * 14, 3]
+            root_quat_repeated = np.repeat(root_quat, len(tracked_body_indexes), axis=0)  # [num_steps * 14, 4]
+            local_body_pos_b_flat = quat_rotate_inverse_np(root_quat_repeated, local_body_pos_flat)
+            local_key_body_pos = local_body_pos_b_flat.reshape(future_num_steps, -1)  # [num_steps, 14 * 3]
+            
+            # Concatenate all features
+            future_obs = np.concatenate([
+                root_height, roll_pitch, base_lin_vel, base_yaw_vel, dof_pos_rel, local_key_body_pos,
+            ], axis=-1)
+        else:
+            # Without key body positions
+            future_obs = np.concatenate([
+                root_height, roll_pitch, base_lin_vel, base_yaw_vel, dof_pos_rel,
+            ], axis=-1)
+        
+        # Flatten and add batch dimension: [1, num_steps * feature_dim]
+        result = future_obs.reshape(1, -1).astype(np.float32)
+
+        # Debug logging (only when save_debug=True, motion is progressing, first 200 timesteps, and not already logged)
+        save_debug = getattr(self.config.task, 'save_debug', False)
+        if save_debug:
+            if not hasattr(self, '_debug_future_motion_log'):
+                self._debug_future_motion_log = []
+            if not hasattr(self, '_debug_logged_timesteps'):
+                self._debug_logged_timesteps = set()
+        
+        # Only log when motion is actually progressing and we haven't logged this timestep yet
+        should_log = (
+            save_debug 
+            and self.motion_clip_progressing 
+            and current_timestep < 200 
+            and current_timestep not in getattr(self, '_debug_logged_timesteps', set())
+        )
+        if should_log:
+            log_data = {
+                'timestep': int(current_timestep),
+                'future_timesteps': future_timesteps.tolist(),
+                'root_height': root_height.tolist(),
+                'roll_pitch': roll_pitch.tolist(),
+                'base_lin_vel': base_lin_vel.tolist(),
+                'base_yaw_vel': base_yaw_vel.tolist(),
+                'dof_pos_rel_first': dof_pos_rel[0].tolist(),
+                'result_shape': result.shape,
+                'result_mean': float(result.mean()),
+                'result_std': float(result.std()),
+                # Add motion_command and ref_quat logging
+                'motion_command_first_10': self.motion_command_t[0, :10].tolist() if hasattr(self, 'motion_command_t') else None,
+                'motion_command_vel_first_10': self.motion_command_t[0, 29:39].tolist() if hasattr(self, 'motion_command_t') and self.motion_command_t.shape[1] >= 39 else None,
+                'ref_quat_xyzw': self.ref_quat_xyzw_t[0].tolist() if hasattr(self, 'ref_quat_xyzw_t') else None,
+            }
+            if include_key_body_pos:
+                log_data['local_key_body_pos_first_body'] = local_key_body_pos[0, :3].tolist()
+            self._debug_future_motion_log.append(log_data)
+            self._debug_logged_timesteps.add(current_timestep)
+        
+        return result
 
     def rl_inference(self, robot_state_data):
         # prepare obs, run policy inference
@@ -301,8 +626,32 @@ class WholeBodyTrackingPolicy(BasePolicy):
             self._last_clock_reading = None
 
         obs = self.prepare_obs_for_rl(robot_state_data)
-        input_feed = {"time_step": np.array([[self.motion_timestep]], dtype=np.float32), "obs": obs["actor_obs"]}
+        
+        # Prepare input_feed based on ONNX format
+        if self.use_new_onnx_format:
+            # New format: actor_obs (and optionally future_motion_targets)
+            input_feed = {"actor_obs": obs["actor_obs"]}
+            if self.has_future_motion:
+                if "future_motion_targets" in obs:
+                    input_feed["future_motion_targets"] = obs["future_motion_targets"]
+                else:
+                    logger.error(
+                        "ONNX model expects 'future_motion_targets' input but it's not available in observations. "
+                        "Please configure observation to include future_motion_targets or use a different ONNX model."
+                    )
+                    raise ValueError("Missing required input: future_motion_targets")
+        else:
+            # Legacy format: obs and time_step
+            input_feed = {"time_step": np.array([[self.motion_timestep]], dtype=np.float32), "obs": obs["actor_obs"]}
+        
         policy_action, self.motion_command_t, self.ref_quat_xyzw_t = self.policy(input_feed)
+
+        # Debug logging for first few timesteps
+        if getattr(self.config.task, 'save_debug', False) and self.motion_timestep < 5:
+            logger.info(f"[Sim2Sim Timestep {self.motion_timestep}] actor_obs shape: {obs['actor_obs'].shape}, mean: {obs['actor_obs'].mean():.6f}, std: {obs['actor_obs'].std():.6f}")
+            logger.info(f"[Sim2Sim Timestep {self.motion_timestep}] motion_command (first 10): {self.motion_command_t[0, :10]}")
+            logger.info(f"[Sim2Sim Timestep {self.motion_timestep}] ref_quat_xyzw: {self.ref_quat_xyzw_t[0]}")
+            logger.info(f"[Sim2Sim Timestep {self.motion_timestep}] policy_action mean: {policy_action.mean():.6f}, std: {policy_action.std():.6f}, first 10: {policy_action[0, :10]}")
 
         # clip policy action
         policy_action = np.clip(policy_action, -100, 100)
@@ -382,6 +731,15 @@ class WholeBodyTrackingPolicy(BasePolicy):
         if hasattr(self.interface, "no_action"):
             self.interface.no_action = 0
 
+        # Save debug log before stopping (only when save_debug=True)
+        if getattr(self.config.task, 'save_debug', False) and hasattr(self, '_debug_future_motion_log') and len(self._debug_future_motion_log) > 0:
+            import json
+            from pathlib import Path
+            debug_log_path = Path("debug_future_motion_sim2sim.json")
+            with open(debug_log_path, 'w') as f:
+                json.dump(self._debug_future_motion_log, f, indent=2)
+            self.logger.info(f"Debug log saved to: {debug_log_path}")
+
         self.motion_clip_progressing = False
         self.motion_timestep = 0
         self.motion_start_timestep = None  # Reset motion start time
@@ -398,6 +756,9 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self.motion_start_timestep = None  # will be set in rl_inference
         self.motion_timestep = 0  # Reset to start from beginning of motion
         self._last_clock_reading = None
+        # Reset debug logging for new motion run
+        if hasattr(self, '_debug_logged_timesteps'):
+            self._debug_logged_timesteps.clear()
         self.logger.info(colored("Starting motion clip", "blue"))
 
     def handle_keyboard_button(self, keycode):

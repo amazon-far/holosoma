@@ -85,6 +85,9 @@ class TrainingConfig:
     export_onnx: bool = True
     """Export policy as ONNX model."""
 
+    save_debug: bool = False
+    """Save debug log for future_motion_targets (Isaac eval) to compare with sim-to-sim."""
+
 
 @dataclass(frozen=True)
 class EvalOverridesConfig:

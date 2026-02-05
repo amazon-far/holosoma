@@ -42,6 +42,12 @@ class TaskConfig:
     use_sim_time: bool = False
     """Use synchronized simulation time for WBT policies."""
 
+    motion_file_path: str | None = None
+    """Path to motion file (npz) for WBT policies with future motion encoder."""
+
+    save_debug: bool = False
+    """Save debug log for future_motion_targets (sim-to-sim) to compare with Isaac eval."""
+
     wandb_download_dir: str = "/tmp"
     """Directory for downloading W&B checkpoints."""
 

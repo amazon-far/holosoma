@@ -102,7 +102,25 @@ g1_29dof = RobotConfig(
         "right_shoulder_yaw_joint": 24, "right_elbow_joint": 25,
         "right_wrist_roll_joint": 26, "right_wrist_pitch_joint": 27, "right_wrist_yaw_joint": 28,
     },
-    motion={"body_name_ref": ["torso_link"]},
+    motion={
+        "body_name_ref": ["torso_link"],
+        "body_names_to_track": [
+            "pelvis",
+            "left_hip_roll_link",
+            "left_knee_link",
+            "left_ankle_roll_link",
+            "right_hip_roll_link",
+            "right_knee_link",
+            "right_ankle_roll_link",
+            "torso_link",
+            "left_shoulder_roll_link",
+            "left_elbow_link",
+            "left_wrist_yaw_link",
+            "right_shoulder_roll_link",
+            "right_elbow_link",
+            "right_wrist_yaw_link",
+        ],
+    },
 )
 
 

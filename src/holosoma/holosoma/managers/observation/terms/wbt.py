@@ -301,8 +301,10 @@ def future_motion_targets(
     base_yaw_vel = base_ang_vel[..., 2:3]  # [num_envs, num_steps, 1]
     
     # Joint positions (relative to default)
+    # NOTE: Use default_dof_pos_base (without randomization bias) for motion reference data
+    # This ensures consistent normalization across environments and matches inference behavior
     dof_pos = motion._joint_pos[future_time_steps][:, :, motion._joint_indexes]  # [num_envs, num_steps, num_dofs]
-    default_dof_pos = env.default_dof_pos[:, None, :]  # [num_envs, 1, num_dofs]
+    default_dof_pos = env.default_dof_pos_base[:, None, :]  # [1, 1, num_dofs] - base values without bias
     dof_pos_rel = dof_pos - default_dof_pos  # [num_envs, num_steps, num_dofs]
     
     # Local key body positions (tracked bodies relative to root) — optional
@@ -329,4 +331,46 @@ def future_motion_targets(
         ], dim=-1)
     
     # Flatten: [num_envs, num_steps * feature_dim]
-    return future_obs.reshape(num_envs, -1)
+    result = future_obs.reshape(num_envs, -1)
+    
+    # Debug logging (only when save_debug=True, env 0, first 200 timesteps, and not already logged)
+    if hasattr(env, '_debug_future_motion_log') and env._debug_future_motion_log is not None:
+        current_timestep = motion_command.time_steps[0].item()
+        # Initialize logged timesteps set if not exists
+        if not hasattr(env, '_debug_logged_timesteps'):
+            env._debug_logged_timesteps = set()
+        # Only log if we haven't logged this timestep yet
+        if current_timestep < 200 and current_timestep not in env._debug_logged_timesteps:
+            log_data = {
+                'timestep': current_timestep,
+                'future_timesteps': future_time_steps[0].cpu().numpy().tolist(),
+                'root_height': root_height[0].cpu().numpy().tolist(),
+                'roll_pitch': roll_pitch[0].cpu().numpy().tolist(),
+                'base_lin_vel': base_lin_vel[0].cpu().numpy().tolist(),
+                'base_yaw_vel': base_yaw_vel[0].cpu().numpy().tolist(),
+                'dof_pos_rel_first': dof_pos_rel[0, 0].cpu().numpy().tolist(),
+                'result_shape': result.shape,
+                'result_mean': result[0].mean().item(),
+                'result_std': result[0].std().item(),
+                # Add motion_command and ref_quat logging
+                'motion_command_first_10': motion_command.joint_pos[0, :10].cpu().numpy().tolist() if hasattr(motion_command, 'joint_pos') else None,
+                'motion_command_vel_first_10': motion_command.joint_vel[0, :10].cpu().numpy().tolist() if hasattr(motion_command, 'joint_vel') else None,
+                'ref_quat_xyzw': motion_command.ref_quat_w[0].cpu().numpy().tolist() if hasattr(motion_command, 'ref_quat_w') else None,
+            }
+            if include_key_body_pos:
+                log_data['local_key_body_pos_first_body'] = local_key_body_pos[0, 0, :3].cpu().numpy().tolist()
+            env._debug_future_motion_log.append(log_data)
+            env._debug_logged_timesteps.add(current_timestep)
+        elif current_timestep == 200 and not getattr(env, '_debug_log_saved', False):
+            # Motion reached timestep 200 - save immediately
+            import json
+            from pathlib import Path
+            if hasattr(env, '_debug_log_path') and env._debug_log_path:
+                debug_log_path = Path(env._debug_log_path)
+                with open(debug_log_path, 'w') as f:
+                    json.dump(env._debug_future_motion_log, f, indent=2)
+                env._debug_log_saved = True
+                from loguru import logger
+                logger.info(f"Debug log auto-saved at timestep 200 to: {debug_log_path} ({len(env._debug_future_motion_log)} entries)")
+    
+    return result

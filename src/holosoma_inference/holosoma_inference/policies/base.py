@@ -776,6 +776,17 @@ class BasePolicy:
     # Main Run Method
     # ============================================================================
 
+    def _save_debug_log_on_exit(self):
+        """Save debug log when exiting (only when task.save_debug=True)."""
+        save_debug = getattr(self.config.task, 'save_debug', False)
+        if save_debug and hasattr(self, '_debug_future_motion_log') and len(self._debug_future_motion_log) > 0:
+            import json
+            from pathlib import Path
+            debug_log_path = Path("debug_future_motion_sim2sim.json")
+            with open(debug_log_path, 'w') as f:
+                json.dump(self._debug_future_motion_log, f, indent=2)
+            self.logger.info(f"Debug log saved to: {debug_log_path}")
+    
     def run(self):
         """Main run loop for the policy."""
         try:
@@ -799,3 +810,5 @@ class BasePolicy:
 
         except KeyboardInterrupt:
             pass
+        finally:
+            self._save_debug_log_on_exit()

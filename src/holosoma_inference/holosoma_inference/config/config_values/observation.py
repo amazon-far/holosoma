@@ -141,6 +141,51 @@ wbt = ObservationConfig(
     },
 )
 
+# WBT with future motion targets (for motion encoder models)
+wbt_future_motion = ObservationConfig(
+    obs_dict={
+        "actor_obs": [
+            "motion_command",
+            "motion_ref_ori_b",
+            "base_ang_vel",
+            "dof_pos",
+            "dof_vel",
+            "actions",
+        ],
+        "future_motion_targets": [
+            "future_motion_targets",
+        ],
+    },
+    obs_dims={
+        "motion_command": 58,
+        "motion_ref_pos_b": 3,
+        "motion_ref_ori_b": 6,
+        "base_lin_vel": 3,
+        "base_ang_vel": 3,
+        "dof_pos": 29,
+        "dof_vel": 29,
+        "actions": 29,
+        "future_motion_targets": 1560,  # 20 timesteps * 78 features
+    },
+    obs_scales={
+        "actions": 1.0,
+        "motion_command": 1.0,
+        "motion_ref_pos_b": 1.0,
+        "motion_ref_ori_b": 1.0,
+        "base_lin_vel": 1.0,
+        "base_ang_vel": 1.0,
+        "dof_pos": 1.0,
+        "dof_vel": 1.0,
+        "robot_body_pos_b": 1.0,
+        "robot_body_ori_b": 1.0,
+        "future_motion_targets": 1.0,
+    },
+    history_length_dict={
+        "actor_obs": 1,
+        "future_motion_targets": 1,
+    },
+)
+
 # =============================================================================
 # Default Configurations Dictionary
 # =============================================================================
@@ -149,6 +194,7 @@ DEFAULTS = {
     "loco-g1-29dof": loco_g1_29dof,
     "loco-t1-29dof": loco_t1_29dof,
     "wbt": wbt,
+    "wbt-future-motion": wbt_future_motion,
 }
 """Dictionary of all available observation configurations.
 
