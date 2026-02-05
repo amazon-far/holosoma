@@ -40,4 +40,5 @@ jobs:
           pre-commit install-hooks
           git diff --name-only "origin/${GITHUB_BASE_REF:-main}" "${GITHUB_SHA}" --
           git diff --name-only "origin/${GITHUB_BASE_REF:-main}" "${GITHUB_SHA}" -- | xargs pre-commit run --files
+          git diff
           mypy .

@@ -23,7 +23,7 @@ jobs:
         - t1-29dof
         - g1-29dof-fast-sac
         - t1-29dof-fast-sac
-        multigpu: ['False', 'True']
+        multigpu: ['True', 'False']
         simulator: [isaacgym, isaacsim]
         extra_args: [""]
         include:
@@ -62,7 +62,7 @@ jobs:
             -v "$GITHUB_WORKSPACE:/workspace/holosoma" \
             --env AWS_ACCESS_KEY_ID --env AWS_SECRET_ACCESS_KEY \
             --env AWS_SESSION_TOKEN --env WANDB_API_KEY \
-            --env GITHUB_RUN_ID \
+            --env GITHUB_RUN_ID --env HOLOSOMA_SIM=${{ matrix.simulator }} \
             982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest \
             bash -c """
               source scripts/source_${{ matrix.simulator }}_setup.sh
@@ -85,6 +85,11 @@ jobs:
           ref: ${{ github.event.inputs.branch || 'main' }}
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+      - name: Generate wandb report
+        env:
+          WANDB_ENTITY: "amazon-far"
+          WANDB_API_KEY: ${{ secrets.WANDB_PUB_API_KEY }}
+        run: uv run --script ./tests/nightly/generate_report.py --publish --github-run-id=${{ github.run_id }}
       - name: Post to Slack
         env:
           WANDB_ENTITY: "amazon-far"
