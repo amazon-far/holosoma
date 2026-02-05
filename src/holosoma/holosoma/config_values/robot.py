@@ -168,19 +168,19 @@ g1_23dof = RobotConfig(
     ],
     dof_vel_limit_list=[
         # Left leg (6): hip_pitch, hip_roll, hip_yaw, knee, ankle_pitch, ankle_roll
-        32.0,
+        20.0,
         20.0,
         32.0,
         20.0,
-        37.0,
-        37.0,
+        30.0,
+        30.0,
         # Right leg (6)
-        32.0,
+        20.0,
         20.0,
         32.0,
         20.0,
-        37.0,
-        37.0,
+        30.0,
+        30.0,
         # Waist yaw (1)
         32.0,
         # Left arm (4) + wrist_roll (1)
@@ -198,19 +198,19 @@ g1_23dof = RobotConfig(
     ],
     dof_effort_limit_list=[
         # Left leg (6): hip_pitch, hip_roll, hip_yaw, knee, ankle_pitch, ankle_roll
-        88.0,
+        139.0,
         139.0,
         88.0,
         139.0,
-        50.0,
-        50.0,
+        35.0,
+        35.0,
         # Right leg (6)
-        88.0,
+        139.0,
         139.0,
         88.0,
         139.0,
-        50.0,
-        50.0,
+        35.0,
+        35.0,
         # Waist yaw (1)
         88.0,
         # Left arm (4) + wrist_roll (1)
