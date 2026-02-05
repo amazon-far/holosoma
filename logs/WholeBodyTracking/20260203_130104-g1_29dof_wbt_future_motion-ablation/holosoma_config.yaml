@@ -1,0 +1,1238 @@
+action:
+  terms:
+    joint_control:
+      clip: null
+      func: holosoma.managers.action.terms.joint_control:JointPositionActionTerm
+      params: {}
+      scale: 1.0
+algo:
+  _recursive_: false
+  _target_: holosoma.agents.ppo.ppo.PPO
+  config:
+    actor_learning_rate: 1.0e-05
+    actor_optimizer:
+      _target_: torch.optim.AdamW
+      weight_decay: 0.0
+    clip_param: 0.2
+    critic_learning_rate: 1.0e-05
+    critic_optimizer:
+      _target_: torch.optim.AdamW
+      weight_decay: 0.0
+    desired_kl: 0.01
+    entropy_coef: 0.005
+    eval_callbacks: null
+    gamma: 0.99
+    init_at_random_ep_len: false
+    init_noise_std: 1.0
+    lam: 0.95
+    load_optimizer: true
+    max_actor_learning_rate: null
+    max_critic_learning_rate: null
+    max_grad_norm: 1.0
+    min_actor_learning_rate: null
+    min_critic_learning_rate: null
+    module_dict:
+      actor:
+        input_dim:
+        - actor_obs
+        layer_config:
+          activation: SiLU
+          dropout_prob: 0.0
+          encoder_activation: ELU
+          encoder_hidden_dims: null
+          encoder_input_name: ''
+          encoder_output_dim: null
+          hidden_channels: null
+          hidden_dims:
+          - 768
+          - 512
+          - 256
+          input_channels: 1
+          input_height: 1
+          input_width: 1
+          kernel_size: 3
+          module_input_name: []
+          padding: same
+          stride: 1
+          use_layer_norm: false
+        min_mean_noise_std: null
+        min_noise_std: null
+        output_dim:
+        - robot_action_dim
+        type: MLPWithMotionEncoder
+      critic:
+        input_dim:
+        - critic_obs
+        layer_config:
+          activation: SiLU
+          dropout_prob: 0.0
+          encoder_activation: ELU
+          encoder_hidden_dims: null
+          encoder_input_name: ''
+          encoder_output_dim: null
+          hidden_channels: null
+          hidden_dims:
+          - 768
+          - 512
+          - 256
+          input_channels: 1
+          input_height: 1
+          input_width: 1
+          kernel_size: 3
+          module_input_name: []
+          padding: same
+          stride: 1
+          use_layer_norm: false
+        min_mean_noise_std: null
+        min_noise_std: null
+        output_dim:
+        - 1
+        type: MLPWithMotionEncoder
+      motion_encoder:
+        activation: SiLU
+        hidden_dim: 60
+        input_dim: 0
+        num_timesteps: 20
+        output_dim: 128
+    num_learning_epochs: 8
+    num_learning_iterations: 40000
+    num_mini_batches: 4
+    num_steps_per_env: 24
+    save_interval: 4000
+    schedule: adaptive
+    symmetry_actor_coef: 1.0
+    symmetry_critic_coef: 0.0
+    use_symmetry: false
+    value_loss_coef: 1.0
+command:
+  params: {}
+  reset_terms:
+    motion_command:
+      func: holosoma.managers.command.terms.wbt:MotionCommand
+      params: {}
+  setup_terms:
+    motion_command:
+      func: holosoma.managers.command.terms.wbt:MotionCommand
+      params:
+        motion_config:
+          body_name_ref:
+          - torso_link
+          body_names_to_track:
+          - pelvis
+          - left_hip_roll_link
+          - left_knee_link
+          - left_ankle_roll_link
+          - right_hip_roll_link
+          - right_knee_link
+          - right_ankle_roll_link
+          - torso_link
+          - left_shoulder_roll_link
+          - left_elbow_link
+          - left_wrist_yaw_link
+          - right_shoulder_roll_link
+          - right_elbow_link
+          - right_wrist_yaw_link
+          default_pose_append_duration_s: 2.0
+          default_pose_prepend_duration_s: 2.0
+          enable_default_pose_append: false
+          enable_default_pose_prepend: false
+          freeze_at_timestep_zero_prob: 0.95
+          motion_file: holosoma/data/motions/g1_29dof/whole_body_tracking/g1_walk_45_50fps.npz
+          noise_to_initial_pose:
+            dof_pos: 0.1
+            object_pos:
+            - 0.05
+            - 0.05
+            - 0.0
+            overall_noise_scale: 1.0
+            root_ang_vel:
+            - 0.1
+            - 0.1
+            - 0.1
+            root_lin_vel:
+            - 0.1
+            - 0.1
+            - 0.05
+            root_pos:
+            - 0.05
+            - 0.05
+            - 0.01
+            root_rot:
+            - 0.1
+            - 0.1
+            - 0.2
+          start_at_timestep_zero_prob: 0.2
+          use_adaptive_timesteps_sampler: false
+  step_terms:
+    motion_command:
+      func: holosoma.managers.command.terms.wbt:MotionCommand
+      params: {}
+curriculum:
+  params:
+    num_compute_average_epl: 1000
+  reset_terms: {}
+  setup_terms:
+    average_episode_tracker:
+      func: holosoma.managers.curriculum.terms.locomotion:AverageEpisodeLengthTracker
+      params: {}
+  step_terms: {}
+env_class: holosoma.envs.wbt.wbt_manager.WholeBodyTrackingManager
+eval_overrides:
+  disable_logger: true
+  headless: false
+  max_episode_length_s: 100000.0
+  num_envs: 1
+  randomize_tiles: false
+  xy_offset_range: 0.0
+logger:
+  base_dir: logs
+  dir: null
+  entity: draftrec
+  group: ablation
+  headless_recording: false
+  id: null
+  mode: online
+  name: holosoma_wbt_future_motion
+  project: MotionTracking
+  resume: null
+  tags: []
+  type: wandb
+  video:
+    camera:
+      offset:
+      - 2.0
+      - 2.0
+      - 1.0
+      smoothing: 0.95
+      target_offset:
+      - 0.0
+      - 0.0
+      - 0.3
+      tracking_body_name: auto
+      type: cartesian
+    enabled: false
+    height: 360
+    interval: 10
+    output_format: h264
+    playback_rate: 1.0
+    record_env_id: 0
+    recording_queue_size: 100
+    recording_thread_fps: 30.0
+    save_dir: null
+    show_command_overlay: true
+    upload_to_wandb: true
+    use_recording_thread: false
+    vertical_fov: 45.0
+    width: 640
+nightly:
+  iterations: 8000
+  metrics:
+    Episode/rew_motion_global_body_ang_vel:
+    - 0.02
+    - inf
+    Episode/rew_motion_global_body_lin_vel:
+    - 0.3
+    - inf
+    Episode/rew_motion_global_ref_orientation_error_exp:
+    - 0.2
+    - inf
+    Episode/rew_motion_global_ref_position_error_exp:
+    - 0.16
+    - inf
+    Episode/rew_motion_relative_body_orientation_error_exp:
+    - 0.3
+    - inf
+    Episode/rew_motion_relative_body_position_error_exp:
+    - 0.45
+    - inf
+observation:
+  clip_observations: 100.0
+  groups:
+    actor_obs:
+      concatenate: true
+      enable_noise: true
+      history_length: 1
+      terms:
+        actions:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:actions
+          noise: 0.0
+          params: {}
+          scale: 1.0
+        base_ang_vel:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:base_ang_vel
+          noise: 0.2
+          params: {}
+          scale: 1.0
+        dof_pos:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:dof_pos
+          noise: 0.01
+          params: {}
+          scale: 1.0
+        dof_vel:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:dof_vel
+          noise: 0.5
+          params: {}
+          scale: 1.0
+        motion_command:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:motion_command
+          noise: 0.0
+          params: {}
+          scale: 1.0
+        motion_ref_ori_b:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:motion_ref_ori_b
+          noise: 0.05
+          params: {}
+          scale: 1.0
+    critic_obs:
+      concatenate: true
+      enable_noise: false
+      history_length: 1
+      terms:
+        actions:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:actions
+          noise: 0.0
+          params: {}
+          scale: 1.0
+        base_ang_vel:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:base_ang_vel
+          noise: 0.2
+          params: {}
+          scale: 1.0
+        base_lin_vel:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:base_lin_vel
+          noise: 0.0
+          params: {}
+          scale: 1.0
+        dof_pos:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:dof_pos
+          noise: 0.01
+          params: {}
+          scale: 1.0
+        dof_vel:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:dof_vel
+          noise: 0.5
+          params: {}
+          scale: 1.0
+        motion_command:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:motion_command
+          noise: 0.0
+          params: {}
+          scale: 1.0
+        motion_ref_ori_b:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:motion_ref_ori_b
+          noise: 0.05
+          params: {}
+          scale: 1.0
+        motion_ref_pos_b:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:motion_ref_pos_b
+          noise: 0.25
+          params: {}
+          scale: 1.0
+        robot_body_ori_b:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:robot_body_ori_b
+          noise: 0.0
+          params: {}
+          scale: 1.0
+        robot_body_pos_b:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:robot_body_pos_b
+          noise: 0.0
+          params: {}
+          scale: 1.0
+    future_motion_targets:
+      concatenate: true
+      enable_noise: false
+      history_length: 1
+      terms:
+        future_motion_targets:
+          clip: null
+          func: holosoma.managers.observation.terms.wbt:future_motion_targets
+          noise: 0.0
+          params:
+            future_max_steps: 95
+            future_num_steps: 20
+          scale: 1.0
+randomization:
+  ignore_unsupported: false
+  reset_terms:
+    actuator_randomizer_state:
+      func: holosoma.managers.randomization.terms.locomotion:ActuatorRandomizerState
+      params: {}
+    push_randomizer_state:
+      func: holosoma.managers.randomization.terms.locomotion:PushRandomizerState
+      params: {}
+    randomize_action_delay:
+      func: holosoma.managers.randomization.terms.locomotion:randomize_action_delay
+      params: {}
+    randomize_dof_state:
+      func: holosoma.managers.randomization.terms.locomotion:randomize_dof_state
+      params:
+        joint_pos_bias_range:
+        - -0.025
+        - 0.025
+        joint_pos_scale_range:
+        - 1.0
+        - 1.0
+        joint_vel_range:
+        - 0.0
+        - 0.0
+        randomize_dof_pos_bias: true
+    randomize_push_schedule:
+      func: holosoma.managers.randomization.terms.locomotion:randomize_push_schedule
+      params: {}
+  setup_terms:
+    actuator_randomizer_state:
+      func: holosoma.managers.randomization.terms.locomotion:ActuatorRandomizerState
+      params:
+        enable_pd_gain: true
+        enable_rfi_lim: false
+        kd_range:
+        - 0.9
+        - 1.1
+        kp_range:
+        - 0.9
+        - 1.1
+        rfi_lim_range:
+        - 1.0
+        - 1.0
+    push_randomizer_state:
+      func: holosoma.managers.randomization.terms.locomotion:PushRandomizerState
+      params:
+        enabled: true
+        max_push_vel:
+        - 0.5
+        - 0.5
+        - 0.2
+        - 0.52
+        - 0.52
+        - 0.78
+        push_interval_s:
+        - 1.0
+        - 3.0
+    randomize_base_com_startup:
+      func: holosoma.managers.randomization.terms.locomotion:randomize_base_com_startup
+      params:
+        base_com_range:
+          x:
+          - -0.025
+          - 0.025
+          y:
+          - -0.05
+          - 0.05
+          z:
+          - -0.05
+          - 0.05
+        enabled: true
+    randomize_robot_rigid_body_material_startup:
+      func: holosoma.managers.randomization.terms.locomotion:randomize_robot_rigid_body_material_startup
+      params:
+        dynamic_friction_range:
+        - 0.3
+        - 1.2
+        restitution_range:
+        - 0.0
+        - 0.5
+        static_friction_range:
+        - 0.3
+        - 1.6
+    setup_action_delay_buffers:
+      func: holosoma.managers.randomization.terms.locomotion:setup_action_delay_buffers
+      params:
+        ctrl_delay_step_range:
+        - 0
+        - 1
+        enabled: false
+    setup_dof_pos_bias:
+      func: holosoma.managers.randomization.terms.locomotion:setup_dof_pos_bias
+      params:
+        dof_pos_bias_range:
+        - -0.025
+        - 0.025
+        enabled: true
+  step_terms:
+    apply_pushes:
+      func: holosoma.managers.randomization.terms.locomotion:apply_pushes
+      params: {}
+    push_randomizer_state:
+      func: holosoma.managers.randomization.terms.locomotion:PushRandomizerState
+      params: {}
+reward:
+  only_positive_rewards: false
+  terms:
+    action_rate_l2:
+      func: holosoma.managers.reward.terms.wbt:penalty_action_rate
+      params: {}
+      tags: []
+      weight: -0.1
+    limits_dof_pos:
+      func: holosoma.managers.reward.terms.wbt:limits_dof_pos
+      params:
+        soft_dof_pos_limit: 0.9
+      tags: []
+      weight: -100.0
+    motion_global_body_ang_vel:
+      func: holosoma.managers.reward.terms.wbt:motion_global_body_ang_vel
+      params:
+        sigma: 3.14
+      tags: []
+      weight: 1.0
+    motion_global_body_lin_vel:
+      func: holosoma.managers.reward.terms.wbt:motion_global_body_lin_vel
+      params:
+        sigma: 1.0
+      tags: []
+      weight: 1.0
+    motion_global_ref_orientation_error_exp:
+      func: holosoma.managers.reward.terms.wbt:motion_global_ref_orientation_error_exp
+      params:
+        sigma: 0.4
+      tags: []
+      weight: 0.5
+    motion_global_ref_position_error_exp:
+      func: holosoma.managers.reward.terms.wbt:motion_global_ref_position_error_exp
+      params:
+        sigma: 0.3
+      tags: []
+      weight: 0.5
+    motion_relative_body_orientation_error_exp:
+      func: holosoma.managers.reward.terms.wbt:motion_relative_body_orientation_error_exp
+      params:
+        sigma: 0.4
+      tags: []
+      weight: 1.0
+    motion_relative_body_position_error_exp:
+      func: holosoma.managers.reward.terms.wbt:motion_relative_body_position_error_exp
+      params:
+        sigma: 0.3
+      tags: []
+      weight: 1.0
+    penalty_dof_acc:
+      func: holosoma.managers.reward.terms.wbt:penalty_dof_acc
+      params: {}
+      tags: []
+      weight: 0.0
+    undesired_contacts:
+      func: holosoma.managers.reward.terms.wbt:UndesiredContacts
+      params:
+        threshold: 1.0
+        undesired_contacts_body_names: ^(?!left_foot_contact_point$)(?!right_foot_contact_point$)(?!left_wrist_yaw_link$)(?!right_wrist_yaw_link$)(?!left_ankle_roll_link$)(?!right_ankle_roll_link$).+$
+      tags: []
+      weight: -0.5
+robot:
+  actions_dim: 29
+  algo_obs_dim_dict: {}
+  apply_dof_armature_in_isaacgym: true
+  arm_dof_names:
+  - left_shoulder_pitch_joint
+  - left_shoulder_roll_joint
+  - left_shoulder_yaw_joint
+  - left_elbow_joint
+  - left_wrist_roll_joint
+  - left_wrist_pitch_joint
+  - left_wrist_yaw_joint
+  - right_shoulder_pitch_joint
+  - right_shoulder_roll_joint
+  - right_shoulder_yaw_joint
+  - right_elbow_joint
+  - right_wrist_roll_joint
+  - right_wrist_pitch_joint
+  - right_wrist_yaw_joint
+  asset:
+    angular_damping: 0.0
+    armature: 0.001
+    asset_root: '@holosoma/data/robots'
+    collapse_fixed_joints: true
+    default_dof_drive_mode: 3
+    density: null
+    disable_gravity: null
+    enable_self_collisions: true
+    fix_base_link: false
+    flip_visual_attachments: false
+    linear_damping: 0.0
+    max_angular_velocity: 1000.0
+    max_linear_velocity: 1000.0
+    mesh_root: null
+    replace_cylinder_with_capsule: true
+    robot_type: g1_29dof
+    thickness: 0.01
+    urdf_file: g1/g1_29dof.urdf
+    usd_file: null
+    xml_file: g1/g1_29dof.xml
+  body_names:
+  - pelvis
+  - left_hip_pitch_link
+  - left_hip_roll_link
+  - left_hip_yaw_link
+  - left_knee_link
+  - left_ankle_pitch_link
+  - left_ankle_roll_link
+  - left_foot_contact_point
+  - right_hip_pitch_link
+  - right_hip_roll_link
+  - right_hip_yaw_link
+  - right_knee_link
+  - right_ankle_pitch_link
+  - right_ankle_roll_link
+  - right_foot_contact_point
+  - waist_yaw_link
+  - waist_roll_link
+  - torso_link
+  - left_shoulder_pitch_link
+  - left_shoulder_roll_link
+  - left_shoulder_yaw_link
+  - left_elbow_link
+  - left_wrist_roll_link
+  - left_wrist_pitch_link
+  - left_wrist_yaw_link
+  - right_shoulder_pitch_link
+  - right_shoulder_roll_link
+  - right_shoulder_yaw_link
+  - right_elbow_link
+  - right_wrist_roll_link
+  - right_wrist_pitch_link
+  - right_wrist_yaw_link
+  bridge:
+    motor_type: serial
+    sdk_type: unitree
+  contact_pairs_multiplier: 16
+  control:
+    action_clip_value: 100.0
+    action_scale: 1.0
+    action_scales: null
+    action_scales_by_effort_limit_over_p_gain: false
+    clip_actions: true
+    clip_torques: true
+    control_type: P
+    damping:
+      ankle_pitch: 1.814445687
+      ankle_roll: 1.814445687
+      elbow: 0.907222843
+      hip_pitch: 2.557889765
+      hip_roll: 6.308801854
+      hip_yaw: 2.557889765
+      knee: 6.308801854
+      shoulder_pitch: 0.907222843
+      shoulder_roll: 0.907222843
+      shoulder_yaw: 0.907222843
+      waist_pitch: 1.814445687
+      waist_roll: 1.814445687
+      waist_yaw: 2.557889765
+      wrist_pitch: 1.068141502
+      wrist_roll: 0.907222843
+      wrist_yaw: 1.068141502
+    stiffness:
+      ankle_pitch: 28.501246196
+      ankle_roll: 28.501246196
+      elbow: 14.250623098
+      hip_pitch: 40.179238471
+      hip_roll: 99.098427777
+      hip_yaw: 40.179238471
+      knee: 99.098427777
+      shoulder_pitch: 14.250623098
+      shoulder_roll: 14.250623098
+      shoulder_yaw: 14.250623098
+      waist_pitch: 28.501246196
+      waist_roll: 28.501246196
+      waist_yaw: 40.179238471
+      wrist_pitch: 16.778327481
+      wrist_roll: 14.250623098
+      wrist_yaw: 16.778327481
+  critic_obs_dim: -1
+  dof_armature_list:
+  - 0.01017752
+  - 0.025101925
+  - 0.01017752
+  - 0.025101925
+  - 0.00721945
+  - 0.00721945
+  - 0.01017752
+  - 0.025101925
+  - 0.01017752
+  - 0.025101925
+  - 0.00721945
+  - 0.00721945
+  - 0.01017752
+  - 0.00721945
+  - 0.00721945
+  - 0.003609725
+  - 0.003609725
+  - 0.003609725
+  - 0.003609725
+  - 0.003609725
+  - 0.00425
+  - 0.00425
+  - 0.003609725
+  - 0.003609725
+  - 0.003609725
+  - 0.003609725
+  - 0.003609725
+  - 0.00425
+  - 0.00425
+  dof_effort_limit_list:
+  - 88.0
+  - 139.0
+  - 88.0
+  - 139.0
+  - 50.0
+  - 50.0
+  - 88.0
+  - 139.0
+  - 88.0
+  - 139.0
+  - 50.0
+  - 50.0
+  - 88.0
+  - 50.0
+  - 50.0
+  - 25.0
+  - 25.0
+  - 25.0
+  - 25.0
+  - 25.0
+  - 5.0
+  - 5.0
+  - 25.0
+  - 25.0
+  - 25.0
+  - 25.0
+  - 25.0
+  - 5.0
+  - 5.0
+  dof_joint_friction_list:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  dof_names:
+  - left_hip_pitch_joint
+  - left_hip_roll_joint
+  - left_hip_yaw_joint
+  - left_knee_joint
+  - left_ankle_pitch_joint
+  - left_ankle_roll_joint
+  - right_hip_pitch_joint
+  - right_hip_roll_joint
+  - right_hip_yaw_joint
+  - right_knee_joint
+  - right_ankle_pitch_joint
+  - right_ankle_roll_joint
+  - waist_yaw_joint
+  - waist_roll_joint
+  - waist_pitch_joint
+  - left_shoulder_pitch_joint
+  - left_shoulder_roll_joint
+  - left_shoulder_yaw_joint
+  - left_elbow_joint
+  - left_wrist_roll_joint
+  - left_wrist_pitch_joint
+  - left_wrist_yaw_joint
+  - right_shoulder_pitch_joint
+  - right_shoulder_roll_joint
+  - right_shoulder_yaw_joint
+  - right_elbow_joint
+  - right_wrist_roll_joint
+  - right_wrist_pitch_joint
+  - right_wrist_yaw_joint
+  dof_obs_size: 29
+  dof_pos_lower_limit_list:
+  - -2.5307
+  - -0.5236
+  - -2.7576
+  - -0.087267
+  - -0.87267
+  - -0.2618
+  - -2.5307
+  - -2.9671
+  - -2.7576
+  - -0.087267
+  - -0.87267
+  - -0.2618
+  - -2.618
+  - -0.52
+  - -0.52
+  - -3.0892
+  - -1.5882
+  - -2.618
+  - -1.0472
+  - -1.972222054
+  - -1.61443
+  - -1.61443
+  - -3.0892
+  - -2.2515
+  - -2.618
+  - -1.0472
+  - -1.972222054
+  - -1.61443
+  - -1.61443
+  dof_pos_upper_limit_list:
+  - 2.8798
+  - 2.9671
+  - 2.7576
+  - 2.8798
+  - 0.5236
+  - 0.2618
+  - 2.8798
+  - 0.5236
+  - 2.7576
+  - 2.8798
+  - 0.5236
+  - 0.2618
+  - 2.618
+  - 0.52
+  - 0.52
+  - 2.6704
+  - 2.2515
+  - 2.618
+  - 2.0944
+  - 1.972222054
+  - 1.61443
+  - 1.61443
+  - 2.6704
+  - 1.5882
+  - 2.618
+  - 2.0944
+  - 1.972222054
+  - 1.61443
+  - 1.61443
+  dof_vel_limit_list:
+  - 32.0
+  - 20.0
+  - 32.0
+  - 20.0
+  - 37.0
+  - 37.0
+  - 32.0
+  - 20.0
+  - 32.0
+  - 20.0
+  - 37.0
+  - 37.0
+  - 32.0
+  - 37.0
+  - 37.0
+  - 37.0
+  - 37.0
+  - 37.0
+  - 37.0
+  - 37.0
+  - 22.0
+  - 22.0
+  - 37.0
+  - 37.0
+  - 37.0
+  - 37.0
+  - 37.0
+  - 22.0
+  - 22.0
+  flip_sign_joint_names:
+  - left_hip_roll_joint
+  - left_hip_yaw_joint
+  - right_hip_roll_joint
+  - right_hip_yaw_joint
+  - left_ankle_roll_joint
+  - right_ankle_roll_joint
+  - waist_roll_joint
+  - waist_yaw_joint
+  - left_shoulder_roll_joint
+  - left_shoulder_yaw_joint
+  - right_shoulder_roll_joint
+  - right_shoulder_yaw_joint
+  - left_wrist_roll_joint
+  - left_wrist_yaw_joint
+  - right_wrist_roll_joint
+  - right_wrist_yaw_joint
+  foot_body_name: ankle_roll_link
+  foot_height_name: foot_contact_point
+  has_torso: true
+  has_upper_body_dof: true
+  hips_dof_names:
+  - left_hip_pitch_joint
+  - left_hip_roll_joint
+  - left_hip_yaw_joint
+  - right_hip_pitch_joint
+  - right_hip_roll_joint
+  - right_hip_yaw_joint
+  init_state:
+    ang_vel:
+    - 0.0
+    - 0.0
+    - 0.0
+    default_joint_angles:
+      left_ankle_pitch_joint: -0.363
+      left_ankle_roll_joint: 0.0
+      left_elbow_joint: 0.6
+      left_hip_pitch_joint: -0.312
+      left_hip_roll_joint: 0.0
+      left_hip_yaw_joint: 0.0
+      left_knee_joint: 0.669
+      left_shoulder_pitch_joint: 0.2
+      left_shoulder_roll_joint: 0.2
+      left_shoulder_yaw_joint: 0.0
+      left_wrist_pitch_joint: 0.0
+      left_wrist_roll_joint: 0.0
+      left_wrist_yaw_joint: 0.0
+      right_ankle_pitch_joint: -0.363
+      right_ankle_roll_joint: 0.0
+      right_elbow_joint: 0.6
+      right_hip_pitch_joint: -0.312
+      right_hip_roll_joint: 0.0
+      right_hip_yaw_joint: 0.0
+      right_knee_joint: 0.669
+      right_shoulder_pitch_joint: 0.2
+      right_shoulder_roll_joint: -0.2
+      right_shoulder_yaw_joint: 0.0
+      right_wrist_pitch_joint: 0.0
+      right_wrist_roll_joint: 0.0
+      right_wrist_yaw_joint: 0.0
+      waist_pitch_joint: 0.0
+      waist_roll_joint: 0.0
+      waist_yaw_joint: 0.0
+    lin_vel:
+    - 0.0
+    - 0.0
+    - 0.0
+    pos:
+    - 0.0
+    - 0.0
+    - 0.76
+    rot:
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+  key_bodies:
+  - left_foot_contact_point
+  - right_foot_contact_point
+  knee_dof_names:
+  - left_knee_joint
+  - right_knee_joint
+  knee_joint_min_threshold: 0.2
+  knee_name: knee_link
+  left_ankle_dof_names:
+  - left_ankle_pitch_joint
+  - left_ankle_roll_joint
+  left_arm_dof_names:
+  - left_shoulder_pitch_joint
+  - left_shoulder_roll_joint
+  - left_shoulder_yaw_joint
+  - left_elbow_joint
+  - left_wrist_roll_joint
+  - left_wrist_pitch_joint
+  - left_wrist_yaw_joint
+  lidar_height_offset: 0.5
+  lower_dof_names:
+  - left_hip_pitch_joint
+  - left_hip_roll_joint
+  - left_hip_yaw_joint
+  - left_knee_joint
+  - left_ankle_pitch_joint
+  - left_ankle_roll_joint
+  - right_hip_pitch_joint
+  - right_hip_roll_joint
+  - right_hip_yaw_joint
+  - right_knee_joint
+  - right_ankle_pitch_joint
+  - right_ankle_roll_joint
+  num_bodies: 32
+  num_feet: 2
+  object:
+    object_urdf_path: null
+  penalize_contacts_on:
+  - pelvis
+  - shoulder
+  - hip
+  policy_obs_dim: -1
+  randomize_link_body_names:
+  - pelvis
+  - left_hip_yaw_link
+  - left_hip_roll_link
+  - left_hip_pitch_link
+  - left_knee_link
+  - right_hip_yaw_link
+  - right_hip_roll_link
+  - right_hip_pitch_link
+  - right_knee_link
+  right_ankle_dof_names:
+  - right_ankle_pitch_joint
+  - right_ankle_roll_joint
+  right_arm_dof_names:
+  - right_shoulder_pitch_joint
+  - right_shoulder_roll_joint
+  - right_shoulder_yaw_joint
+  - right_elbow_joint
+  - right_wrist_roll_joint
+  - right_wrist_pitch_joint
+  - right_wrist_yaw_joint
+  soft_dof_pos_limit: 0.95
+  symmetry_joint_names:
+    left_ankle_pitch_joint: right_ankle_pitch_joint
+    left_ankle_roll_joint: right_ankle_roll_joint
+    left_elbow_joint: right_elbow_joint
+    left_hip_pitch_joint: right_hip_pitch_joint
+    left_hip_roll_joint: right_hip_roll_joint
+    left_hip_yaw_joint: right_hip_yaw_joint
+    left_knee_joint: right_knee_joint
+    left_shoulder_pitch_joint: right_shoulder_pitch_joint
+    left_shoulder_roll_joint: right_shoulder_roll_joint
+    left_shoulder_yaw_joint: right_shoulder_yaw_joint
+    left_wrist_pitch_joint: right_wrist_pitch_joint
+    left_wrist_roll_joint: right_wrist_roll_joint
+    left_wrist_yaw_joint: right_wrist_yaw_joint
+    right_ankle_pitch_joint: left_ankle_pitch_joint
+    right_ankle_roll_joint: left_ankle_roll_joint
+    right_elbow_joint: left_elbow_joint
+    right_hip_pitch_joint: left_hip_pitch_joint
+    right_hip_roll_joint: left_hip_roll_joint
+    right_hip_yaw_joint: left_hip_yaw_joint
+    right_knee_joint: left_knee_joint
+    right_shoulder_pitch_joint: left_shoulder_pitch_joint
+    right_shoulder_roll_joint: left_shoulder_roll_joint
+    right_shoulder_yaw_joint: left_shoulder_yaw_joint
+    right_wrist_pitch_joint: left_wrist_pitch_joint
+    right_wrist_roll_joint: left_wrist_roll_joint
+    right_wrist_yaw_joint: left_wrist_yaw_joint
+    waist_pitch_joint: waist_pitch_joint
+    waist_roll_joint: waist_roll_joint
+    waist_yaw_joint: waist_yaw_joint
+  terminate_after_contacts_on:
+  - pelvis
+  - shoulder
+  - hip
+  termination_close_to_dof_pos_limit: 0.98
+  torso_name: torso_link
+  upper_dof_names:
+  - waist_yaw_joint
+  - waist_roll_joint
+  - waist_pitch_joint
+  - left_shoulder_pitch_joint
+  - left_shoulder_roll_joint
+  - left_shoulder_yaw_joint
+  - left_elbow_joint
+  - left_wrist_roll_joint
+  - left_wrist_pitch_joint
+  - left_wrist_yaw_joint
+  - right_shoulder_pitch_joint
+  - right_shoulder_roll_joint
+  - right_shoulder_yaw_joint
+  - right_elbow_joint
+  - right_wrist_roll_joint
+  - right_wrist_pitch_joint
+  - right_wrist_yaw_joint
+  upper_left_arm_dof_names:
+  - left_shoulder_pitch_joint
+  - left_shoulder_roll_joint
+  - left_shoulder_yaw_joint
+  - left_elbow_joint
+  - left_wrist_roll_joint
+  - left_wrist_pitch_joint
+  - left_wrist_yaw_joint
+  upper_right_arm_dof_names:
+  - right_shoulder_pitch_joint
+  - right_shoulder_roll_joint
+  - right_shoulder_yaw_joint
+  - right_elbow_joint
+  - right_wrist_roll_joint
+  - right_wrist_pitch_joint
+  - right_wrist_yaw_joint
+  waist_dof_names:
+  - waist_yaw_joint
+  - waist_roll_joint
+  - waist_pitch_joint
+  waist_pitch_dof_name: waist_pitch_joint
+  waist_roll_dof_name: waist_roll_joint
+  waist_yaw_dof_name: waist_yaw_joint
+simulator:
+  _recursive_: false
+  _target_: holosoma.simulator.isaacsim.isaacsim.IsaacSim
+  config:
+    bridge:
+      domain_id: 0
+      enabled: false
+      interface: null
+      joystick_device: 0
+      joystick_type: xbox
+      rate_limit_dt: null
+      use_joystick: false
+      use_ros: false
+    contact_sensor_history_length: 3
+    debug_viz: true
+    mujoco_backend: classic
+    mujoco_warp:
+      nconmax_per_env: 96
+      njmax_per_env: null
+    name: isaacsim
+    reset_manager:
+      events: []
+    robot_mjcf_filter:
+      enable: false
+      ground_names:
+      - floor
+      - ground
+      - plane
+      remove_ground: true
+      remove_lights: true
+    scene:
+      asset_root: null
+      env_spacing: 20.0
+      replicate_physics: true
+      rigid_objects: null
+      scene_files: null
+    sim:
+      control_decimation: 4
+      fps: 200
+      max_episode_length_s: 10.0
+      physx:
+        bounce_threshold_velocity: 0.5
+        enable_dof_force_sensors: false
+        num_position_iterations: 8
+        num_threads: 4
+        num_velocity_iterations: 4
+        solver_type: 1
+      render_interval: 4
+      render_mode: human
+      substeps: 1
+    viewer:
+      camera: null
+      enable_tracking: false
+    virtual_gantry:
+      apply_force: 0.0
+      apply_force_sign: -1
+      attachment_body_names:
+      - Trunk
+      - torso_link
+      - torso
+      - base_link
+      - pelvis
+      - base
+      damping: 100.0
+      enabled: false
+      height: 3.0
+      length: 0.0
+      point: null
+      stiffness: 200.0
+termination:
+  terms:
+    bad_tracking:
+      func: holosoma.managers.termination.terms.wbt:BadTracking
+      is_timeout: false
+      params:
+        bad_motion_body_pos_body_names:
+        - left_ankle_roll_link
+        - right_ankle_roll_link
+        - left_wrist_yaw_link
+        - right_wrist_yaw_link
+        bad_motion_body_pos_threshold: 0.25
+        bad_object_ori_threshold: 0.8
+        bad_object_pos_threshold: 0.25
+        bad_ref_ori_threshold: 0.8
+        bad_ref_pos_threshold: 0.5
+        body_names_to_track:
+        - pelvis
+        - left_hip_roll_link
+        - left_knee_link
+        - left_ankle_roll_link
+        - right_hip_roll_link
+        - right_knee_link
+        - right_ankle_roll_link
+        - torso_link
+        - left_shoulder_roll_link
+        - left_elbow_link
+        - left_wrist_yaw_link
+        - right_shoulder_roll_link
+        - right_elbow_link
+        - right_wrist_yaw_link
+    motion_ends:
+      func: holosoma.managers.termination.terms.wbt:motion_ends
+      is_timeout: false
+      params: {}
+    timeout:
+      func: holosoma.managers.termination.terms.common:timeout_exceeded
+      is_timeout: true
+      params: {}
+terrain:
+  terrain_term:
+    amplitude_range:
+    - 0.01
+    - 0.05
+    border_size: 40
+    dynamic_friction: 1.0
+    func: holosoma.managers.terrain.terms.locomotion:TerrainLocomotion
+    horizontal_scale: 1.0
+    max_slope: 0.3
+    mesh_type: plane
+    name: floor
+    num_cols: 20
+    num_rows: 10
+    obj_file_path: ''
+    platform_size: 2.0
+    restitution: 0.0
+    scale_factor: 1.0
+    slope_treshold: 0.75
+    spawn:
+      grid_size: 3
+      grid_spacing: 0.2
+      query_terrain_height: false
+      randomize_tiles: true
+      use_grid_sampling: false
+      xy_offset_range: 1.0
+    static_friction: 1.0
+    step_width_range:
+    - 0.3
+    - 0.4
+    terrain_config: {}
+    terrain_length: 8.0
+    terrain_move_down_ratio: 0.0
+    terrain_move_up_ratio: 0.0
+    terrain_width: 8.0
+    vertical_scale: 0.005
+training:
+  checkpoint: null
+  export_onnx: true
+  headless: true
+  max_eval_steps: null
+  multigpu: false
+  name: g1_29dof_wbt_future_motion
+  num_envs: 8192
+  project: WholeBodyTracking
+  seed: 42
+  torch_deterministic: false
