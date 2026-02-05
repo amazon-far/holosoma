@@ -14,7 +14,7 @@ from holosoma.bridge.base.basic_sdk2py_bridge import BasicSdk2Bridge
 class UnitreeSdk2Bridge(BasicSdk2Bridge):
     """Unitree SDK bridge implementation using unitree_interface C++ bindings."""
 
-    SUPPORTED_ROBOT_TYPES = {"g1_29dof", "h1", "h1-2", "go2_12dof"}
+    SUPPORTED_ROBOT_TYPES = {"g1_23dof", "g1_29dof", "h1", "h1-2", "go2_12dof"}
 
     def _init_sdk_components(self):
         """Initialize Unitree SDK-specific components."""
@@ -27,6 +27,7 @@ class UnitreeSdk2Bridge(BasicSdk2Bridge):
 
         # Map robot type to SDK enum
         robot_type_map = {
+            "g1_23dof": RobotType.G1,
             "g1_29dof": RobotType.G1,
             "h1": RobotType.H1,
             "h1-2": RobotType.H1_2,
@@ -35,6 +36,7 @@ class UnitreeSdk2Bridge(BasicSdk2Bridge):
 
         # Map to message type (HG for humanoid robots with 35 motors, GO2 for others)
         message_type_map = {
+            "g1_23dof": MessageType.HG,
             "g1_29dof": MessageType.HG,
             "h1": MessageType.GO2,
             "h1-2": MessageType.HG,
