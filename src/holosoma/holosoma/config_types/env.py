@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pydantic.dataclasses import dataclass
-
 from holosoma.config_types.action import ActionManagerCfg
 from holosoma.config_types.command import CommandManagerCfg
 from holosoma.config_types.curriculum import CurriculumManagerCfg
@@ -14,6 +12,7 @@ from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.simulator import SimulatorConfig
 from holosoma.config_types.termination import TerminationManagerCfg
 from holosoma.config_types.terrain import TerrainManagerCfg
+from pydantic.dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -34,6 +33,7 @@ class EnvConfig:
     robot: RobotConfig
     training: TrainingConfig
     logger: LoggerConfig
+    experiment_dir: str | None = None
 
 
 def get_tyro_env_config(tyro_config: ExperimentConfig) -> EnvConfig:

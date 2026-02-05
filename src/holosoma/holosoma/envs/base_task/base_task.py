@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import numpy as np
+from pathlib import Path
 
+import numpy as np
 from holosoma.config_types.env import EnvConfig
 from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.managers.action import ActionManager
@@ -76,13 +77,17 @@ class BaseTask:
         torch._C._jit_set_profiling_mode(False)
         torch._C._jit_set_profiling_executor(False)
 
-        # Compute experiment directory from logger config
-        from holosoma.utils.experiment_paths import get_experiment_dir, get_timestamp
+        # Use pre-computed experiment directory if provided (from train_agent.py),
+        # otherwise compute one (for replay, eval, etc.)
+        if tyro_config.experiment_dir is not None:
+            experiment_dir = Path(tyro_config.experiment_dir)
+        else:
+            from holosoma.utils.experiment_paths import get_experiment_dir, get_timestamp  # noqa: PLC0415
 
-        timestamp = get_timestamp()
-        experiment_dir = get_experiment_dir(
-            tyro_config.logger, tyro_config.training, timestamp, task_name=self._get_task_name()
-        )
+            timestamp = get_timestamp()
+            experiment_dir = get_experiment_dir(
+                tyro_config.logger, tyro_config.training, timestamp, task_name=self._get_task_name()
+            )
 
         SimulatorClass = get_class(simulator_config._target_)
         full_sim_config = FullSimConfig(

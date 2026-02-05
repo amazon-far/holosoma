@@ -249,6 +249,7 @@ def train(tyro_config: ExperimentConfig, training_context: TrainingContext | Non
         env_target = tyro_config.env_class
 
         tyro_env_config = get_tyro_env_config(tyro_config)
+        tyro_env_config = dataclasses.replace(tyro_env_config, experiment_dir=str(experiment_dir))
         env = get_class(env_target)(tyro_env_config, device=device)
 
         # For manager system, pre-process config AFTER env creation
