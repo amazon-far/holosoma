@@ -656,16 +656,12 @@ class PPO(BaseAlgo):
         # Set model to evaluation mode for export so we don't affect gradients mid-rollout
         self._eval_mode()
 
-        # Skip ONNX export if using motion encoder (not yet supported)
-        if getattr(self, 'use_motion_encoder', False):
-            logger.warning("[ONNX Export] Skipping ONNX export for motion encoder models (not yet supported)")
-            if was_training:
-                self._train_mode()
-            return
-
         # Save the .onnx file to filesystem
         motion_command = self.env.command_manager.get_state("motion_command")
-        if motion_command is not None:
+        use_motion_encoder = getattr(self, 'use_motion_encoder', False)
+        
+        if motion_command is not None and not use_motion_encoder:
+            # Export with motion command (traditional approach without motion encoder)
             export_motion_and_policy_as_onnx(
                 self.actor_onnx_wrapper,
                 motion_command,
@@ -673,10 +669,12 @@ class PPO(BaseAlgo):
                 self.device,
             )
         else:
+            # Export policy only (with or without motion encoder)
+            example_obs_dict = self.get_example_obs()
             export_policy_as_onnx(
                 wrapper=self.actor_onnx_wrapper,
                 onnx_file_path=onnx_file_path,
-                example_obs_dict={"actor_obs": self._get_zero_input()},
+                example_obs_dict=example_obs_dict,
             )
 
         # Extract control gains and velocity limits & attach to onnx as metadata
@@ -1017,10 +1015,14 @@ class PPO(BaseAlgo):
     def get_example_obs(self):
         """Used for exporting policy as onnx."""
         obs_dict = self.env.reset_all()
-        return {
+        example_obs = {
             "actor_obs": torch.cat([obs_dict[k] for k in self.actor_obs_keys], dim=1),
             "critic_obs": torch.cat([obs_dict[k] for k in self.critic_obs_keys], dim=1),
         }
+        # Add future_motion_targets if using motion encoder
+        if self.use_motion_encoder and "future_motion_targets" in obs_dict:
+            example_obs["future_motion_targets"] = obs_dict["future_motion_targets"]
+        return example_obs
 
     @torch.no_grad()
     def evaluate_policy(self, max_eval_steps: int | None = None):
@@ -1069,7 +1071,10 @@ class PPO(BaseAlgo):
 
     def _pre_eval_env_step(self, actor_state: dict):
         actor_obs = torch.cat([actor_state["obs"][k] for k in self.actor_obs_keys], dim=1)
-        actions = self.eval_policy({"actor_obs": actor_obs})
+        policy_input = {"actor_obs": actor_obs}
+        if self.use_motion_encoder and "future_motion_targets" in actor_state["obs"]:
+            policy_input["future_motion_targets"] = actor_state["obs"]["future_motion_targets"]
+        actions = self.eval_policy(policy_input)
         actor_state.update({"actions": actions})
         for c in self.eval_callbacks:
             actor_state = c.on_pre_eval_env_step(actor_state)

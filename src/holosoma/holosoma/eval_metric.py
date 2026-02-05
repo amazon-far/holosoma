@@ -136,7 +136,7 @@ class MetricsCollector:
         # Track step count
         self.step_count = 0
         
-    def collect_step_metrics(self, skip_padding=True, padding_frames=100):
+    def collect_step_metrics(self, skip_padding=False, padding_frames=100):
         """Collect metrics for the current step.
         
         Args:
@@ -796,7 +796,13 @@ def run_eval_with_metrics(
     checkpoint_dir = Path(checkpoint_path).parent
     
     # Get number of evaluation steps
+    # If max_eval_steps is None, 0, or negative, run until motion ends
     num_eval_steps = tyro_config.training.max_eval_steps
+    if num_eval_steps is None or num_eval_steps <= 0:
+        num_eval_steps = None
+        logger.info("Running evaluation until motion ends (no step limit)")
+    else:
+        logger.info(f"Running evaluation for {num_eval_steps} steps")
 
     # Initialize metrics collector
     metrics_collector = MetricsCollector(env, device)
