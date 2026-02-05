@@ -37,7 +37,7 @@ jobs:
           extra_args: --command.setup_terms.motion_command.params.motion_config.motion_file=s3://far-holosoma-assets/data/motions/g1_29dof/whole_body_tracking/motion_dance_v3.npz --algo.config.buffer_size=384
 
     name: Train ${{ matrix.experiment }} on ${{ matrix.multigpu == 'True' && 'multi-gpu' || 'single-gpu' }} using ${{ matrix.simulator }}
-    timeout-minutes: 720 # 12 hours
+    timeout-minutes: 1000 # ~16 hours
 
     steps:
       - name: Checkout code
@@ -48,13 +48,21 @@ jobs:
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_PUB_API_KEY }}
         shell: bash
-        timeout-minutes: 750 # 12.5 hours
+        timeout-minutes: 1000 # ~16 hours
+
         run: |
+          # kill all old docker containers
+          OLD_CONTAINERS=$(docker ps -a -q)
+          if [[ -n "$OLD_CONTAINERS" ]]; then
+            docker stop "$OLD_CONTAINERS" || true
+            docker rm --force "$OLD_CONTAINERS" || true
+          fi
           eval "$(aws configure export-credentials --format env)"
-          docker run --gpus all --runtime=nvidia --shm-size=12g \
+          docker run --rm --gpus all --runtime=nvidia --shm-size=12g \
             -v "$GITHUB_WORKSPACE:/workspace/holosoma" \
             --env AWS_ACCESS_KEY_ID --env AWS_SECRET_ACCESS_KEY \
             --env AWS_SESSION_TOKEN --env WANDB_API_KEY \
+            --env GITHUB_RUN_ID \
             982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest \
             bash -c """
               source scripts/source_${{ matrix.simulator }}_setup.sh

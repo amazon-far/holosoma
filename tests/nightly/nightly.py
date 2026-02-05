@@ -100,7 +100,7 @@ def main():
             config.logger,
             project=f"nightly-{sanitized_exp}{multigpu_suffix}",
             name=f"nightly-{sanitized_exp}{multigpu_suffix}-{now_timestamp()}",
-            tags=run_tags,
+            tags=tuple(run_tags),
         ),
     )
 

@@ -64,7 +64,28 @@ if [[ ! -f $SENTINEL_FILE ]]; then
   # Install miniconda (reuse existing logic)
   if [[ ! -d $CONDA_ROOT ]]; then
     mkdir -p $CONDA_ROOT
-    curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -o $CONDA_ROOT/miniconda.sh
+
+    # Detect OS and architecture
+    OS_NAME="$(uname -s)"
+    ARCH_NAME="$(uname -m)"
+
+    # Decide installer name based on OS/arch
+    if [[ "$OS_NAME" == "Linux" ]]; then
+      MINICONDA_INSTALLER="Miniconda3-latest-Linux-x86_64.sh"
+    elif [[ "$OS_NAME" == "Darwin" ]]; then
+      if [[ "$ARCH_NAME" == "arm64" ]]; then
+        # Apple Silicon
+        MINICONDA_INSTALLER="Miniconda3-latest-MacOSX-arm64.sh"
+      else
+        # Intel Mac
+        MINICONDA_INSTALLER="Miniconda3-latest-MacOSX-x86_64.sh"
+      fi
+    else
+      echo "Unsupported OS: $OS_NAME"
+      exit 1
+    fi
+
+    curl "https://repo.anaconda.com/miniconda/${MINICONDA_INSTALLER}" -o "$CONDA_ROOT/miniconda.sh"
     bash $CONDA_ROOT/miniconda.sh -b -u -p $CONDA_ROOT
     rm $CONDA_ROOT/miniconda.sh
   fi
@@ -85,8 +106,10 @@ if [[ ! -f $SENTINEL_FILE ]]; then
   # sudo apt-get update
   # sudo apt-get install -y libgl1-mesa-dev libxinerama-dev libxcursor-dev libxrandr-dev libxi-dev
 
-  # Install libstdcxx-ng to fix potential GLIBCXX issues
-  conda install -c conda-forge -y libstdcxx-ng
+  # Install libstdcxx-ng to fix potential GLIBCXX issues (Linux only)
+  if [[ "$OS_NAME" == "Linux" ]]; then
+    conda install -c conda-forge -y libstdcxx-ng
+  fi
 
   # Install ffmpeg for video encoding (consistent with other envs)
   conda install -c conda-forge -y ffmpeg
@@ -106,8 +129,17 @@ if [[ ! -f $SENTINEL_FILE ]]; then
   #pip install numpy scipy matplotlib
 
   # Install Holosoma packages
+  echo "Installing Holosoma packages"
   pip install -U pip
-  pip install -e $ROOT_DIR/src/holosoma[unitree,booster]
+  if [[ "$OS_NAME" == "Linux" ]]; then
+    pip install -e $ROOT_DIR/src/holosoma[unitree, booster]
+  elif [[ "$OS_NAME" == "Darwin" ]]; then
+    echo "Warning: only unitree support for osx"
+    pip install -e $ROOT_DIR/src/holosoma[unitree]
+  else
+    echo "Unsupported OS: $OS_NAME"
+    exit 1
+  fi
 
   # Validate MuJoCo installation
   echo "Validating MuJoCo installation..."

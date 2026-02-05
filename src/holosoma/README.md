@@ -79,6 +79,20 @@ python src/holosoma/holosoma/train_agent.py \
 > - These examples use `--training.num-envs=4096`, but you may need to adjust this value based on your hardware.
 > - When training T1 with PPO on mixed terrain, use `--terrain.terrain-term.scale-factor=0.5` to avoid training instabilities.
 
+## MUJOCO and OSX Training for Locomotion
+```bash
+source scripts/source_mujoco_setup.sh
+mjpython src/holosom/holosoma/train_agent.py \
+   exp:g1-29dof \
+   simulator:mujoco \
+   --training.num-envs 1 \
+   --randomization.ignore_unsupported=True \
+   logger:wandb
+
+```
+> **Note:**
+> - Training is only supported with MuJoCo simulation using the mjpython interpreter
+> - Training is limited to a single environment
 
 ### Whole-Body Tracking
 
@@ -134,6 +148,18 @@ python src/holosoma/holosoma/eval_agent.py \
 python src/holosoma/holosoma/eval_agent.py \
     --checkpoint=<CHECKPOINT_PATH>
 # e.g., --checkpoint=/home/username/checkpoints/fastsac-t1-locomotion/model_0010000.pt
+```
+
+> **OSX Note:**
+> - When evaluating with MuJoCo on macOS, you must use `mjpython` instead of `python` for interactive viewer support:
+> - If the simulator continually disappears you may need to set the following env variable
+>  - ```export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES ```
+```bash
+# macOS evaluation with interactive viewer
+mjpython src/holosoma/holosoma/eval_agent.py \
+        simulator:mujoco \
+        --randomization.ignore_unsupported=True \
+        --checkpoint=wandb://<ENTITY>/<PROJECT>/<RUN_ID>/<CHECKPOINT_NAME>
 ```
 
 This evaluation mode:

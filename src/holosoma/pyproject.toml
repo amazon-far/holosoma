@@ -45,7 +45,7 @@ dependencies = [
     "types-requests",
     "types-tqdm",
     "tyro>=1.0.0",
-    "wandb==0.22.0", # pin version until https://github.com/wandb/wandb/issues/10647 is fixed
+    "wandb>=0.23.0", # Updated to support 86-character API keys
     "warp-lang==1.10.0",
     "yourdfpy>=0.0.58",
     "zmq",

@@ -71,11 +71,19 @@ if [[ ! -f $SENTINEL_FILE ]]; then
   source $CONDA_ROOT/bin/activate hsinference
 
   # Install libstdcxx-ng to fix the error: `version `GLIBCXX_3.4.32' not found` on Ubuntu 24.04
-  conda install -c conda-forge -y libstdcxx-ng
+  # Only needed on Linux (not macOS)
+  if [[ $OS == "Linux" ]]; then
+    conda install -c conda-forge -y libstdcxx-ng
+  fi
 
   # Install holosoma_inference
-  pip install -e $ROOT_DIR/src/holosoma_inference[unitree,booster]
-
+  # Note: On macOS, only Unitree SDK is supported (Booster SDK is Linux-only)
+  if [[ $OS == "Darwin" ]]; then
+    echo "Note: Installing Unitree SDK only (Booster SDK is not supported on macOS)"
+    pip install -e $ROOT_DIR/src/holosoma_inference[unitree]
+  else
+    pip install -e $ROOT_DIR/src/holosoma_inference[unitree,booster]
+  fi
   # Setup a few things for ARM64 Linux (G1 Jetson)
   # Otherwise we get this error:
   # /opt/rh/gcc-toolset-14/root/usr/include/c++/14/bits/stl_vector.h:1130: ...

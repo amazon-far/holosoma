@@ -78,6 +78,9 @@ class TrainingConfig:
     name: str = "run"
     """Run name for logging. `logger.name` takes precedence if set."""
 
+    tags: tuple[str, ...] = ()
+    """Optional tags to attach to the run for logging."""
+
     # Evaluation settings
     max_eval_steps: int | None = None
     """Maximum number of evaluation steps (None for unlimited)."""
