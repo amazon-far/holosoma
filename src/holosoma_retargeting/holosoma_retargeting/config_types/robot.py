@@ -18,6 +18,8 @@ class RobotDefaults(TypedDict):
 _ROBOT_DEFAULTS: dict[str, RobotDefaults] = {
     "g1": {"robot_dof": 29, "robot_height": 1.32, "object_name": "ground"},
     "t1": {"robot_dof": 23, "robot_height": 1.2, "object_name": "ground"},
+    "h1_2": {"robot_dof": 27, "robot_height": 1.75, "object_name": "ground"},
+    "statue_v0_1": {"robot_dof": 29, "robot_height": 1.8, "object_name": "ground"},
 }
 
 
@@ -111,6 +113,16 @@ class RobotConfig:
         """Get robot URDF file path."""
         if self.robot_urdf_file is not None:
             return self.robot_urdf_file
+
+        # Special handling for h1_2 and statue_v0_1
+        if self.robot_type == "h1_2":
+            if self.ROBOT_DOF == 27:
+                return "../../holosoma/holosoma/data/robots/h1_2/h1_2_handless.urdf"
+            else:
+                return "../../holosoma/holosoma/data/robots/h1_2/h1_2.urdf"
+        elif self.robot_type == "statue_v0_1":
+            return "../../holosoma/holosoma/data/robots/statue_v0_1/statue_v0_1.urdf"
+
         return f"models/{self.robot_type}/{self.robot_type}_{self.ROBOT_DOF}dof.urdf"
 
     ROBOT_URDF_FILE = property(_robot_urdf_file, doc="Get robot URDF file path.")
@@ -143,6 +155,30 @@ class RobotConfig:
                 "right_foot_sphere_4_link",
                 "left_foot_sphere_5_link",
                 "right_foot_sphere_5_link",
+            ]
+        if self.robot_type == "h1_2":
+            # H1_2 uses similar foot structure to G1
+            return [
+                "left_ankle_roll_sphere_1_link",
+                "right_ankle_roll_sphere_1_link",
+                "left_ankle_roll_sphere_2_link",
+                "right_ankle_roll_sphere_2_link",
+                "left_ankle_roll_sphere_3_link",
+                "right_ankle_roll_sphere_3_link",
+                "left_ankle_roll_sphere_4_link",
+                "right_ankle_roll_sphere_4_link",
+            ]
+        if self.robot_type == "statue_v0_1":
+            # Statue V0.1 uses G1-like foot structure
+            return [
+                "left_ankle_roll_sphere_1_link",
+                "right_ankle_roll_sphere_1_link",
+                "left_ankle_roll_sphere_2_link",
+                "right_ankle_roll_sphere_2_link",
+                "left_ankle_roll_sphere_3_link",
+                "right_ankle_roll_sphere_3_link",
+                "left_ankle_roll_sphere_4_link",
+                "right_ankle_roll_sphere_4_link",
             ]
         raise ValueError(f"Invalid robot type: {self.robot_type}")
 

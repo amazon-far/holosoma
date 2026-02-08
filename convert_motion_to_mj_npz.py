@@ -16,6 +16,7 @@ import argparse
 import pickle
 import sys
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import torch
@@ -57,7 +58,14 @@ def _load_torch(filepath):
 
 
 def _load_npz(filepath):
-    data = dict(np.load(filepath, allow_pickle=True))
+    loaded = np.load(filepath, allow_pickle=True)
+    # Handle .npy files that contain a dict (0-d array with dict)
+    if isinstance(loaded, np.ndarray) and loaded.shape == () and isinstance(loaded.item(), dict):
+        data = loaded.item()
+    elif isinstance(loaded, np.lib.npyio.NpzFile):
+        data = dict(loaded)
+    else:
+        data = dict(loaded) if hasattr(loaded, "keys") else {"data": loaded}
     # Convert 0-dim arrays to scalars for fps etc.
     for k in list(data.keys()):
         if hasattr(data[k], "shape") and data[k].shape == ():
@@ -126,16 +134,21 @@ def load_motion_file(filepath: str):
     except Exception as e:
         errors.append(f"torch: {e}")
 
-    # 4. Try np.load (file named .pkl but actually npz)
+    # 4. Try np.load (file named .pkl but actually npz or .npy)
     try:
         data = _load_npz(filepath)
+        # Check for .npy format with root_trans/root_ori (check this first, before _is_motion_dict)
+        if "root_trans" in data or "root_ori" in data:
+            normalized = _normalize_npy_motion_dict(data)
+            if normalized is not None:
+                return normalized
         if _is_motion_dict(data):
             return _normalize_motion_dict(data)
         # Check for common npz motion keys
         if "joint_pos" in data or "qpos" in data:
-            data = _normalize_npz_motion_dict(data)
-            if data is not None:
-                return data
+            normalized = _normalize_npz_motion_dict(data)
+            if normalized is not None:
+                return normalized
         errors.append("npz: loaded but not a motion dict")
     except Exception as e:
         errors.append(f"npz: {e}")
@@ -149,13 +162,13 @@ def _is_motion_dict(data):
     """True only if dict has exact keys expected by _normalize_motion_dict."""
     if not isinstance(data, dict):
         return False
-    has_pos = "root_pos" in data or "position" in data
-    has_rot = "root_rot" in data or "rotation" in data or "quat" in data
+    has_pos = "root_pos" in data or "position" in data or "root_trans" in data
+    has_rot = "root_rot" in data or "rotation" in data or "quat" in data or "root_ori" in data
     has_dof = "dof_pos" in data or "joint_pos" in data or "qpos" in data
     return has_pos and (has_rot or has_dof)
 
 
-def _normalize_joblib_motion(data) -> dict | None:
+def _normalize_joblib_motion(data) -> Optional[dict]:
     """
     Extract motion from joblib-loaded object (dict with various key names,
     or object with attributes). Returns normalized dict or None.
@@ -245,7 +258,7 @@ def _normalize_joblib_motion(data) -> dict | None:
     }
 
 
-def _normalize_frame_list_motion(frames: list) -> dict | None:
+def _normalize_frame_list_motion(frames: list) -> Optional[dict]:
     """Convert list of per-frame dicts to single arrays."""
     if not frames:
         return None
@@ -324,7 +337,7 @@ def _normalize_motion_dict(data: dict) -> dict:
     }
 
 
-def _normalize_torch_motion_dict(data: dict) -> dict | None:
+def _normalize_torch_motion_dict(data: dict) -> Optional[dict]:
     """Handle torch-style or alternate key names."""
     # position / rotation (sometimes root only)
     pos = data.get("root_pos") or data.get("position") or data.get("root_position")
@@ -361,7 +374,7 @@ def _normalize_torch_motion_dict(data: dict) -> dict | None:
     }
 
 
-def _normalize_npz_motion_dict(data: dict) -> dict | None:
+def _normalize_npz_motion_dict(data: dict) -> Optional[dict]:
     """From existing npz (e.g. joint_pos 7+29, body_pos_w, etc.)."""
     if "joint_pos" in data:
         jp = _to_numpy(data["joint_pos"])
@@ -411,6 +424,69 @@ def _normalize_npz_motion_dict(data: dict) -> dict | None:
     return None
 
 
+def _normalize_npy_motion_dict(data: dict) -> Optional[dict]:
+    """From .npy format with root_trans/root_ori keys."""
+    root_pos = data.get("root_trans")
+    if root_pos is None:
+        root_pos = data.get("root_pos")
+    if root_pos is None:
+        root_pos = data.get("position")
+    
+    root_ori = data.get("root_ori")
+    if root_ori is None:
+        root_ori = data.get("root_rot")
+    if root_ori is None:
+        root_ori = data.get("rotation")
+    if root_ori is None:
+        root_ori = data.get("quat")
+    
+    dof_pos = data.get("dof_pos")
+    if dof_pos is None:
+        dof_pos = data.get("joint_pos")
+    if dof_pos is None:
+        dof_pos = data.get("qpos")
+    
+    if root_pos is None or dof_pos is None:
+        return None
+    
+    root_pos = _to_numpy(root_pos)
+    dof_pos = _to_numpy(dof_pos)
+    
+    if root_pos.ndim == 1:
+        root_pos = root_pos.reshape(-1, 3)
+    if dof_pos.ndim == 1:
+        dof_pos = dof_pos.reshape(-1, -1)
+    
+    T = root_pos.shape[0]
+    
+    if root_ori is None:
+        root_rot = np.tile([0, 0, 0, 1], (T, 1)).astype(np.float64)
+    else:
+        root_rot = _to_numpy(root_ori)
+        if root_rot.ndim == 1:
+            root_rot = root_rot.reshape(-1, 4)
+        # Check if wxyz (first elem ~1 for identity), convert to xyzw
+        if root_rot.shape[1] == 4 and np.abs(root_rot[:, 0]).mean() > 0.9:
+            wxyz = root_rot
+            root_rot = np.column_stack([wxyz[:, 1], wxyz[:, 2], wxyz[:, 3], wxyz[:, 0]])
+    
+    dof_names = data.get("dof_names") or data.get("joint_names")
+    if dof_names is not None:
+        dof_names = list(dof_names) if not isinstance(dof_names, list) else dof_names
+    
+    fps = data.get("fps")
+    if fps is not None:
+        fps = int(np.asarray(fps).item()) if hasattr(fps, "item") else int(fps)
+    
+    return {
+        "root_pos": root_pos,
+        "root_rot": root_rot,
+        "dof_pos": dof_pos,
+        "dof_names": dof_names,
+        "fps": fps,
+    }
+
+
 # Default G1 29dof joint order (actuated joints only, from MuJoCo XML)
 G1_29DOF_JOINT_NAMES = [
     "left_hip_pitch_joint",
@@ -429,6 +505,37 @@ G1_29DOF_JOINT_NAMES = [
     "waist_roll_joint",
     "torso_joint",
     "head_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint",
+]
+
+# H1_2 27dof joint order (handless version, from MuJoCo XML)
+H1_2_27DOF_JOINT_NAMES = [
+    "left_hip_yaw_joint",
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_yaw_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "torso_joint",
     "left_shoulder_pitch_joint",
     "left_shoulder_roll_joint",
     "left_shoulder_yaw_joint",
@@ -490,6 +597,20 @@ def interpolate_motion(root_pos, root_rot, dof_pos, input_fps, output_fps):
     return root_pos_interp, root_rot_interp, dof_pos_interp
 
 
+def extract_joint_names_from_xml(robot_xml_path: str):
+    """Extract joint names from MuJoCo XML file, excluding free joints."""
+    if mujoco is None:
+        raise ImportError("mujoco is required. pip install mujoco")
+    model = mujoco.MjModel.from_xml_path(robot_xml_path)
+    dof_name_list = []
+    for i in range(model.njnt):
+        if model.jnt_type[i] == mujoco.mjtJoint.mjJNT_FREE:
+            continue
+        dof_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i)
+        dof_name_list.append(dof_name)
+    return dof_name_list
+
+
 def convert_motion_to_mj_npz(
     input_path: str,
     output_path: str,
@@ -507,7 +628,6 @@ def convert_motion_to_mj_npz(
     root_pos = data["root_pos"]
     root_rot_xyzw = data["root_rot"]
     dof_pos = data["dof_pos"]
-    dof_names = data.get("dof_names") or G1_29DOF_JOINT_NAMES
     actual_input_fps = data.get("fps") or input_fps
 
     T = root_pos.shape[0]
@@ -518,10 +638,28 @@ def convert_motion_to_mj_npz(
     print(f"Duration: {T / actual_input_fps:.2f} seconds")
     print(f"Number of DOFs: {num_dof}")
 
+    # Extract joint names from XML if not provided in data
+    dof_names = data.get("dof_names")
+    if dof_names is None:
+        # Use robot-specific default joint order if available
+        if "h1_2" in robot_xml_path.lower() and num_dof == 27:
+            print(f"\nUsing H1_2 27DOF default joint order")
+            dof_names = H1_2_27DOF_JOINT_NAMES.copy()
+            print(f"Using {len(dof_names)} joints from H1_2_27DOF_JOINT_NAMES")
+        else:
+            print(f"\nExtracting joint names from XML: {robot_xml_path}")
+            dof_names = extract_joint_names_from_xml(robot_xml_path)
+            print(f"Found {len(dof_names)} joints in XML")
+
     # Ensure dof_names list length matches
     if len(dof_names) != num_dof:
-        print(f"Warning: dof_names length {len(dof_names)} != num_dof {num_dof}, using default names")
-        dof_names = G1_29DOF_JOINT_NAMES[:num_dof]
+        print(f"Warning: dof_names length {len(dof_names)} != num_dof {num_dof}")
+        if len(dof_names) > num_dof:
+            print(f"  Truncating dof_names to match num_dof")
+            dof_names = dof_names[:num_dof]
+        else:
+            print(f"  Padding dof_names with generic names")
+            dof_names = list(dof_names) + [f"joint_{i}" for i in range(len(dof_names), num_dof)]
 
     # xyzw -> wxyz for MuJoCo
     root_rot_wxyz = np.zeros_like(root_rot_xyzw)
@@ -547,18 +685,39 @@ def convert_motion_to_mj_npz(
     model = mujoco.MjModel.from_xml_path(robot_xml_path)
     data_mj = mujoco.MjData(model)
 
+    # Extract joint names from XML, using actuator order if available (for h1_2, this excludes finger joints)
     dof_name_list = []
-    for i in range(model.njnt):
-        if model.jnt_type[i] == mujoco.mjtJoint.mjJNT_FREE:
-            continue
-        dof_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i)
-        dof_name_list.append(dof_name)
+    # Try to get joint names from actuators first (this gives us the order and excludes finger joints for h1_2)
+    actuator_joint_names = []
+    for i in range(model.nu):
+        actuator_id = model.actuator_trnid[i, 0]
+        if model.jnt_type[actuator_id] != mujoco.mjtJoint.mjJNT_FREE:
+            joint_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, actuator_id)
+            if joint_name:
+                actuator_joint_names.append(joint_name)
+    
+    # Use actuator order if we have at least num_dof actuators (for h1_2, first 27 are main joints)
+    if len(actuator_joint_names) >= num_dof:
+        dof_name_list = actuator_joint_names[:num_dof]
+        print(f"Using actuator order (first {num_dof} of {len(actuator_joint_names)} actuators)")
+    else:
+        # Otherwise, get all joints (excluding free joints)
+        for i in range(model.njnt):
+            if model.jnt_type[i] == mujoco.mjtJoint.mjJNT_FREE:
+                continue
+            dof_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i)
+            dof_name_list.append(dof_name)
+        print(f"Using all joints ({len(dof_name_list)} joints)")
 
     # Map MuJoCo joint order -> index in our dof_pos
     try:
-        dof_index_list = [dof_names.index(n) for n in dof_name_list]
-    except ValueError:
-        dof_index_list = list(range(min(num_dof, len(dof_name_list))))
+        dof_index_list = [dof_names.index(n) for n in dof_name_list[:num_dof]]
+    except (ValueError, IndexError):
+        # If mapping fails, try to match by position or use sequential mapping
+        if len(dof_name_list) >= num_dof:
+            dof_index_list = list(range(num_dof))
+        else:
+            dof_index_list = list(range(len(dof_name_list))) + [None] * (num_dof - len(dof_name_list))
     joint_names_out = [
         mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i)
         for i in range(model.njnt)
@@ -584,7 +743,11 @@ def convert_motion_to_mj_npz(
             print(f"  Frame {t}/{T}")
         data_mj.qpos[:3] = root_pos[t]
         data_mj.qpos[3:7] = root_rot_wxyz[t]
-        data_mj.qpos[7:] = dof_pos[t, dof_index_list]
+        # Map dof_pos to model joints (handle case where we have fewer/more joints)
+        qpos_dof = data_mj.qpos[7:]
+        for idx, dof_idx in enumerate(dof_index_list[:len(qpos_dof)]):
+            if dof_idx is not None and dof_idx < num_dof:
+                qpos_dof[idx] = dof_pos[t, dof_idx]
         data_mj.qvel[:] = 0
         mujoco.mj_forward(model, data_mj)
         joint_pos[t, :3] = root_pos[t]
@@ -629,12 +792,30 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.robot_xml is None:
-        args.robot_xml = "src/holosoma_retargeting/holosoma_retargeting/models/g1/g1_29dof.xml"
-        print(f"Using default robot XML: {args.robot_xml}")
+        # Try to infer from input path or use default
+        if "h1_2" in args.input_path.lower():
+            # Default to handless version (27 DOF) for h1_2
+            args.robot_xml = "src/holosoma/holosoma/data/robots/h1_2/h1_2_handless.xml"
+            print(f"Detected h1_2 robot from input path (using handless version, 27 DOF)")
+        elif "statue" in args.input_path.lower() or "statue_v0_1" in args.input_path.lower():
+            args.robot_xml = "src/holosoma/holosoma/data/robots/statue_v0_1/statue_v0_1.xml"
+            print(f"Detected statue_v0_1 robot from input path")
+        else:
+            args.robot_xml = "src/holosoma_retargeting/holosoma_retargeting/models/g1/g1_29dof.xml"
+            print(f"Using default G1 robot")
+        print(f"Robot XML: {args.robot_xml}")
 
+    # Ensure output path is relative to current directory
+    output_path = Path(args.output_path)
+    if not output_path.is_absolute():
+        output_path = Path.cwd() / output_path
+    else:
+        # If absolute, use as is
+        output_path = Path(args.output_path)
+    
     convert_motion_to_mj_npz(
         args.input_path,
-        args.output_path,
+        str(output_path),
         args.robot_xml,
         args.input_fps,
         args.output_fps,
