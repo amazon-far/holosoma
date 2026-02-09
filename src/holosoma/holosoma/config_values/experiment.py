@@ -14,6 +14,7 @@ from holosoma.config_values.wbt.g1.experiment import (
 )
 from holosoma.config_values.wbt.statue.experiment import (
     statue_v0_1_wbt_compliant,
+    statue_v0_1_wbt_future_motion,
     statue_v0_1_wbt_stiff,
 )
 
@@ -30,6 +31,7 @@ DEFAULTS = {
     "g1_29dof_wbt_future_motion_no_key_body": g1_29dof_wbt_future_motion_no_key_body,
     "statue_v0_1_wbt_stiff": statue_v0_1_wbt_stiff,
     "statue_v0_1_wbt_compliant": statue_v0_1_wbt_compliant,
+    "statue_v0_1_wbt_future_motion": statue_v0_1_wbt_future_motion,
 }
 
 AnnotatedExperimentConfig = Annotated[

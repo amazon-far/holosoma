@@ -444,13 +444,13 @@ class MotionCommand(CommandTermBase):
         ) * 2 * root_ang_vel_noise_rpy.unsqueeze(0)  # (num_envs, 3)
 
         # 3. Set the robot states in simulator
-        self._env.simulator.dof_pos[env_ids] = target_dof_pos
-        self._env.simulator.dof_vel[env_ids] = target_dof_vel
+        self._env.simulator.dof_pos[env_ids].copy_(target_dof_pos)
+        self._env.simulator.dof_vel[env_ids].copy_(target_dof_vel)
 
-        self._env.simulator.robot_root_states[env_ids, :3] = target_root_pos
-        self._env.simulator.robot_root_states[env_ids, 3:7] = target_root_rot
-        self._env.simulator.robot_root_states[env_ids, 7:10] = target_root_lin_vel
-        self._env.simulator.robot_root_states[env_ids, 10:13] = target_root_ang_vel
+        self._env.simulator.robot_root_states[env_ids, :3].copy_(target_root_pos)
+        self._env.simulator.robot_root_states[env_ids, 3:7].copy_(target_root_rot)
+        self._env.simulator.robot_root_states[env_ids, 7:10].copy_(target_root_lin_vel)
+        self._env.simulator.robot_root_states[env_ids, 10:13].copy_(target_root_ang_vel)
 
         # 4. Set the object states in simulator
         if self.motion.has_object:
@@ -925,12 +925,12 @@ class MotionCommand(CommandTermBase):
         dof_vel_backup = simulator.dof_vel[env_id].clone()
 
         try:
-            simulator.robot_root_states[env_id, :3] = root_pos + env_origin
-            simulator.robot_root_states[env_id, 3:7] = root_quat
-            simulator.robot_root_states[env_id, 7:10] = root_lin_vel
-            simulator.robot_root_states[env_id, 10:13] = root_ang_vel
-            simulator.dof_pos[env_id] = joint_pos
-            simulator.dof_vel[env_id] = joint_vel
+            simulator.robot_root_states[env_id, :3].copy_(root_pos + env_origin)
+            simulator.robot_root_states[env_id, 3:7].copy_(root_quat)
+            simulator.robot_root_states[env_id, 7:10].copy_(root_lin_vel)
+            simulator.robot_root_states[env_id, 10:13].copy_(root_ang_vel)
+            simulator.dof_pos[env_id].copy_(joint_pos)
+            simulator.dof_vel[env_id].copy_(joint_vel)
 
             simulator.set_actor_root_state_tensor_robots()
             simulator.set_dof_state_tensor_robots()
@@ -942,9 +942,9 @@ class MotionCommand(CommandTermBase):
             body_lin_vel = simulator._rigid_body_vel[env_id].clone()
             body_ang_vel = simulator._rigid_body_ang_vel[env_id].clone()
         finally:
-            simulator.robot_root_states[env_id] = root_backup
-            simulator.dof_pos[env_id] = dof_pos_backup
-            simulator.dof_vel[env_id] = dof_vel_backup
+            simulator.robot_root_states[env_id].copy_(root_backup)
+            simulator.dof_pos[env_id].copy_(dof_pos_backup)
+            simulator.dof_vel[env_id].copy_(dof_vel_backup)
             simulator.set_actor_root_state_tensor_robots()
             simulator.set_dof_state_tensor_robots()
             simulator.write_state_updates()

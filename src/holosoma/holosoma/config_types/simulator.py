@@ -405,7 +405,7 @@ class VirtualGantryCfg:
     """Whether to enable the virtual gantry system."""
 
     attachment_body_names: list[str] = field(
-        default_factory=lambda: ["Trunk", "torso_link", "torso", "base_link", "pelvis", "base"]
+        default_factory=lambda: ["Trunk", "torso_link", "torso", "base_link", "pelvis", "pelvis_link", "base"]
     )
     """List of body names to try for attachment (in preference order)."""
 

@@ -39,7 +39,7 @@ class WholeBodyTrackingManager(BaseTask):
         self.default_dof_pos = self.default_dof_pos_base.repeat(self.num_envs, 1).clone()  # (num_envs, num_dof)
 
     def _pre_compute_observations_callback(self):
-        self.base_quat[:] = self.simulator.base_quat[:]
+        self.base_quat.copy_(self.simulator.base_quat)
 
     def _reset_buffers_callback(self, env_ids, target_buf=None):
         self.need_to_refresh_envs[env_ids] = True
@@ -119,9 +119,9 @@ class WholeBodyTrackingManager(BaseTask):
             raise ValueError("WholeBodyTracking push velocity vector must have exactly 6 components.")
 
         rand = torch.rand(len(env_ids), 6, device=self.device) * 2 - 1
-        self.push_robot_vel_buf[env_ids] = rand * max_vel_tensor.unsqueeze(0)
-        self.record_push_robot_vel_buf[env_ids] = self.push_robot_vel_buf[env_ids].clone()
-        self.simulator.robot_root_states[env_ids, 7:13] = self.push_robot_vel_buf[env_ids]
+        self.push_robot_vel_buf[env_ids].copy_(rand * max_vel_tensor.unsqueeze(0))
+        self.record_push_robot_vel_buf[env_ids].copy_(self.push_robot_vel_buf[env_ids])
+        self.simulator.robot_root_states[env_ids, 7:13].copy_(self.push_robot_vel_buf[env_ids])
         # Push impulses only take effect in the simulator once we write the mutated root state tensor back.
         self.simulator.set_actor_root_state_tensor_robots(env_ids, self.simulator.robot_root_states)
         self._max_push_vel = max_vel_tensor.clone()
@@ -208,13 +208,13 @@ class WholeBodyTrackingManager(BaseTask):
         joint_vel = motion_command.joint_vel.clone()
 
         env_ids = torch.arange(self.num_envs, device=self.device)
-        self.simulator.dof_pos[env_ids] = joint_pos
-        self.simulator.dof_vel[env_ids] = joint_vel
+        self.simulator.dof_pos[env_ids].copy_(joint_pos)
+        self.simulator.dof_vel[env_ids].copy_(joint_vel)
 
-        self.simulator.robot_root_states[env_ids, :3] = root_pos
-        self.simulator.robot_root_states[env_ids, 3:7] = root_ori
-        self.simulator.robot_root_states[env_ids, 7:10] = root_lin_vel
-        self.simulator.robot_root_states[env_ids, 10:13] = root_ang_vel
+        self.simulator.robot_root_states[env_ids, :3].copy_(root_pos)
+        self.simulator.robot_root_states[env_ids, 3:7].copy_(root_ori)
+        self.simulator.robot_root_states[env_ids, 7:10].copy_(root_lin_vel)
+        self.simulator.robot_root_states[env_ids, 10:13].copy_(root_ang_vel)
 
         self.simulator.set_actor_root_state_tensor(env_ids, self.simulator.all_root_states)
         self.simulator.set_dof_state_tensor(env_ids, self.simulator.dof_state)

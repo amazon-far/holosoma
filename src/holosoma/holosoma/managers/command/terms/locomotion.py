@@ -190,9 +190,9 @@ class LocomotionGait(CommandTermBase):
         else:
             low = self.mean_gait_freq - self.gait_period_randomization_width
             high = self.mean_gait_freq + self.gait_period_randomization_width
-            self.gait_freq[idx] = torch_rand_float(low, high, (idx.shape[0], 1), device=self.env.device)
+            self.gait_freq[idx].copy_(torch_rand_float(low, high, (idx.shape[0], 1), device=self.env.device))
 
-        self.phase_dt[idx] = 2 * torch.pi * self.env.dt * self.gait_freq[idx]
+        self.phase_dt[idx].copy_(2 * torch.pi * self.env.dt * self.gait_freq[idx])
 
     # ------------------------------------------------------------------ #
     # Internal utilities

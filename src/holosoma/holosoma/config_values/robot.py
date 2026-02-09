@@ -1114,7 +1114,7 @@ g1_29dof_diverse_action_scale = replace(
 )
 
 statue_v0_1 = RobotConfig(
-    num_bodies=32,
+    num_bodies=30,
     dof_obs_size=29,
     actions_dim=29,
     policy_obs_dim=-1,
@@ -1306,7 +1306,7 @@ statue_v0_1 = RobotConfig(
             "left_hip_pitch_joint": -0.25,
             "left_hip_roll_joint": 0.0,
             "left_hip_yaw_joint": 0.0,
-            "left_knee_pitch_joint": 0.5,
+            "left_knee_pitch_joint": -0.5,
             "left_ankle_pitch_joint": -0.25,
             "left_ankle_roll_joint": 0.0,
             "right_hip_pitch_joint": -0.25,

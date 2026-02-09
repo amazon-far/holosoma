@@ -57,6 +57,9 @@ class BadTracking(TerminationTermBase):
         self.bad_object_ori_threshold = cfg.params["bad_object_ori_threshold"]
 
     def __call__(self, env: Any, **kwargs) -> torch.Tensor:
+        if self.env.is_evaluating:
+            return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
         motion_command = self.env.command_manager.get_state("motion_command")
         assert motion_command.motion_cfg.body_names_to_track == self.body_names_to_track, (
             "body_names_to_track in motion_command and termination.params are not the same"

@@ -692,6 +692,8 @@ def evaluate_with_metrics(algo: BaseAlgo, env, num_steps: int | None, metrics_co
     step = 0
     prev_timestep = 0  # Track previous timestep to detect reset
     motion_completed_once = False  # Track if motion completed at least once
+    stuck_timestep_count = 0  # Track how long timestep has been stuck
+    max_stuck_steps = 1000  # Maximum steps to wait if motion is stuck
     
     while True:
         with torch.inference_mode():
@@ -734,6 +736,15 @@ def evaluate_with_metrics(algo: BaseAlgo, env, num_steps: int | None, metrics_co
                 current_timestep = motion_cmd.time_steps[0].item()
                 total_timesteps = motion_cmd.motion.time_step_total
                 
+                # Check if motion is stuck (timestep not progressing)
+                if current_timestep == prev_timestep:
+                    stuck_timestep_count += 1
+                    if stuck_timestep_count >= max_stuck_steps:
+                        motion_ended = True
+                        logger.warning(f"Motion appears stuck at timestep {current_timestep} for {stuck_timestep_count} steps. Terminating evaluation.")
+                else:
+                    stuck_timestep_count = 0  # Reset counter if motion is progressing
+                
                 # Check if motion reached near the end
                 if current_timestep >= total_timesteps - 5:
                     motion_completed_once = True
@@ -757,6 +768,13 @@ def evaluate_with_metrics(algo: BaseAlgo, env, num_steps: int | None, metrics_co
         # If num_steps is specified, check if we've reached it
         if num_steps is not None and step >= num_steps:
             logger.info(f"Reached maximum steps: {num_steps}")
+            break
+        
+        # Safety: prevent infinite loops by setting a maximum step limit
+        # Default to 5000 steps if num_steps is not specified (about 100 seconds at 50fps)
+        max_safety_steps = num_steps if num_steps is not None else 5000
+        if step >= max_safety_steps:
+            logger.warning(f"Reached safety limit of {max_safety_steps} steps. Terminating evaluation.")
             break
     
     logger.info(f"Evaluation completed. Total steps: {metrics_collector.step_count}")

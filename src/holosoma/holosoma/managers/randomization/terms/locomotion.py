@@ -525,13 +525,13 @@ def randomize_action_delay(
         raise ValueError("ctrl_delay_step_range upper bound must be >= lower bound.")
 
     # Randomize delay indices
-    env.action_delay_idx[idx] = torch.randint(
+    env.action_delay_idx[idx].copy_(torch.randint(
         delay_low,
         delay_high + 1,
         (idx.shape[0],),
         device=env.device,
         requires_grad=False,
-    )
+    ))
 
 
 def randomize_dof_state(
@@ -570,13 +570,13 @@ def randomize_dof_state(
     else:
         bias_offset = torch.zeros((idx.shape[0], env.num_dof), device=env.device)
 
-    env.simulator.dof_pos[idx] = env.default_dof_pos[idx] * scale_factor + bias_offset
-    env.simulator.dof_vel[idx] = torch_rand_float(
+    env.simulator.dof_pos[idx].copy_(env.default_dof_pos[idx] * scale_factor + bias_offset)
+    env.simulator.dof_vel[idx].copy_(torch_rand_float(
         joint_vel_range[0],
         joint_vel_range[1],
         (idx.shape[0], env.num_dof),
         device=env.device,
-    )
+    ))
 
 
 @mujoco_required_field("body_ipos")
@@ -639,7 +639,7 @@ def randomize_base_com_startup(
                 dtype=torch.float,
                 device=env.device,
             )
-            simulator._base_com_bias[env_id] = bias
+            simulator._base_com_bias[env_id].copy_(bias)
             body_props[body_index].com.x += bias[0].item()
             body_props[body_index].com.y += bias[1].item()
             body_props[body_index].com.z += bias[2].item()
