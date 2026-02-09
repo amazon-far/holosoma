@@ -1011,17 +1011,18 @@ class PPO(BaseAlgo):
         actor_state.update({"obs": obs_dict, "rewards": rewards, "dones": dones, "extras": extras})
         return actor_state
 
-    @torch.no_grad()
     def get_example_obs(self):
         """Used for exporting policy as onnx."""
-        obs_dict = self.env.reset_all()
+        with torch.inference_mode():
+            obs_dict = self.env.reset_all()
+        # Clone tensors to convert inference tensors to normal tensors for ONNX tracing
         example_obs = {
-            "actor_obs": torch.cat([obs_dict[k] for k in self.actor_obs_keys], dim=1),
-            "critic_obs": torch.cat([obs_dict[k] for k in self.critic_obs_keys], dim=1),
+            "actor_obs": torch.cat([obs_dict[k] for k in self.actor_obs_keys], dim=1).clone(),
+            "critic_obs": torch.cat([obs_dict[k] for k in self.critic_obs_keys], dim=1).clone(),
         }
         # Add future_motion_targets if using motion encoder
         if self.use_motion_encoder and "future_motion_targets" in obs_dict:
-            example_obs["future_motion_targets"] = obs_dict["future_motion_targets"]
+            example_obs["future_motion_targets"] = obs_dict["future_motion_targets"].clone()
         return example_obs
 
     @torch.no_grad()
