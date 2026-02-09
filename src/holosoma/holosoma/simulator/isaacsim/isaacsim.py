@@ -319,6 +319,7 @@ class IsaacSim(BaseSimulator):
         terrain_prim_path = "/World/ground"
         height_scanner_config = None
         terrain_state = self.terrain_manager.get_state("locomotion_terrain")
+        print(f"[DEBUG] terrain_state.mesh_type: {terrain_state.mesh_type}, type: {type(terrain_state.mesh_type)}")
         if terrain_state.mesh_type not in ["fake", None]:
             # Add a height scanner to the torso to detect the height of the terrain mesh
             # TODO: Scene USD files need ground mapping
@@ -351,6 +352,7 @@ class IsaacSim(BaseSimulator):
             terrain_config.env_spacing = self.scene.cfg.env_spacing
             terrain_config.class_type(terrain_config)
             global_collision_prims.append(terrain_config.prim_path)
+            print("[INFO] Successfully created plane terrain")
         elif terrain_state.mesh_type in ["trimesh", "load_obj"]:
             self.terrain = self.terrain_manager.get_state("locomotion_terrain").terrain
             visual_material = sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 0.0))

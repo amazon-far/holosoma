@@ -26,7 +26,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/pelvis_link.STL" />
+          filename="package://statue_v0_1/meshes/pelvis_link.STL" />
       </geometry>
       <material
         name="">
@@ -40,7 +40,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/pelvis_link.STL" />
+          filename="package://statue_v0_1/meshes/pelvis_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -66,7 +66,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_hip_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/left_hip_pitch_link.STL" />
       </geometry>
       <material
         name="">
@@ -80,7 +80,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_hip_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/left_hip_pitch_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -124,7 +124,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_hip_roll_link.STL" />
+          filename="package://statue_v0_1/meshes/left_hip_roll_link.STL" />
       </geometry>
       <material
         name="">
@@ -138,7 +138,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_hip_roll_link.STL" />
+          filename="package://statue_v0_1/meshes/left_hip_roll_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -182,7 +182,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_hip_yaw_link.STL" />
+          filename="package://statue_v0_1/meshes/left_hip_yaw_link.STL" />
       </geometry>
       <material
         name="">
@@ -196,7 +196,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_hip_yaw_link.STL" />
+          filename="package://statue_v0_1/meshes/left_hip_yaw_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -240,7 +240,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_knee_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/left_knee_pitch_link.STL" />
       </geometry>
       <material
         name="">
@@ -254,7 +254,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_knee_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/left_knee_pitch_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -298,7 +298,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_ankle_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/left_ankle_pitch_link.STL" />
       </geometry>
       <material
         name="">
@@ -312,7 +312,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_ankle_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/left_ankle_pitch_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -356,7 +356,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_ankle_roll_link.STL" />
+          filename="package://statue_v0_1/meshes/left_ankle_roll_link.STL" />
       </geometry>
       <material
         name="">
@@ -370,7 +370,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_ankle_roll_link.STL" />
+          filename="package://statue_v0_1/meshes/left_ankle_roll_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -414,7 +414,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_hip_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/right_hip_pitch_link.STL" />
       </geometry>
       <material
         name="">
@@ -428,7 +428,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_hip_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/right_hip_pitch_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -472,7 +472,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_hip_roll_link.STL" />
+          filename="package://statue_v0_1/meshes/right_hip_roll_link.STL" />
       </geometry>
       <material
         name="">
@@ -486,7 +486,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_hip_roll_link.STL" />
+          filename="package://statue_v0_1/meshes/right_hip_roll_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -530,7 +530,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_hip_yaw_link.STL" />
+          filename="package://statue_v0_1/meshes/right_hip_yaw_link.STL" />
       </geometry>
       <material
         name="">
@@ -544,7 +544,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_hip_yaw_link.STL" />
+          filename="package://statue_v0_1/meshes/right_hip_yaw_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -588,7 +588,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_knee_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/right_knee_pitch_link.STL" />
       </geometry>
       <material
         name="">
@@ -602,7 +602,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_knee_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/right_knee_pitch_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -646,7 +646,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_ankle_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/right_ankle_pitch_link.STL" />
       </geometry>
       <material
         name="">
@@ -660,7 +660,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_ankle_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/right_ankle_pitch_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -704,7 +704,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_ankle_roll_link.STL" />
+          filename="package://statue_v0_1/meshes/right_ankle_roll_link.STL" />
       </geometry>
       <material
         name="">
@@ -718,7 +718,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_ankle_roll_link.STL" />
+          filename="package://statue_v0_1/meshes/right_ankle_roll_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -762,7 +762,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/waist_yaw_link.STL" />
+          filename="package://statue_v0_1/meshes/waist_yaw_link.STL" />
       </geometry>
       <material
         name="">
@@ -776,7 +776,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/waist_yaw_link.STL" />
+          filename="package://statue_v0_1/meshes/waist_yaw_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -820,7 +820,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/waist_roll_link.STL" />
+          filename="package://statue_v0_1/meshes/waist_roll_link.STL" />
       </geometry>
       <material
         name="">
@@ -834,7 +834,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/waist_roll_link.STL" />
+          filename="package://statue_v0_1/meshes/waist_roll_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -878,7 +878,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/waist_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/waist_pitch_link.STL" />
       </geometry>
       <material
         name="">
@@ -892,7 +892,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/waist_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/waist_pitch_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -936,7 +936,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_shoulder_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/left_shoulder_pitch_link.STL" />
       </geometry>
       <material
         name="">
@@ -950,7 +950,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_shoulder_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/left_shoulder_pitch_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -994,7 +994,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_shoulder_roll_link.STL" />
+          filename="package://statue_v0_1/meshes/left_shoulder_roll_link.STL" />
       </geometry>
       <material
         name="">
@@ -1008,7 +1008,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_shoulder_roll_link.STL" />
+          filename="package://statue_v0_1/meshes/left_shoulder_roll_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -1052,7 +1052,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_shoulder_yaw_link.STL" />
+          filename="package://statue_v0_1/meshes/left_shoulder_yaw_link.STL" />
       </geometry>
       <material
         name="">
@@ -1066,7 +1066,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_shoulder_yaw_link.STL" />
+          filename="package://statue_v0_1/meshes/left_shoulder_yaw_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -1110,7 +1110,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_elbow_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/left_elbow_pitch_link.STL" />
       </geometry>
       <material
         name="">
@@ -1124,7 +1124,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_elbow_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/left_elbow_pitch_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -1168,7 +1168,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_wrist_roll_link.STL" />
+          filename="package://statue_v0_1/meshes/left_wrist_roll_link.STL" />
       </geometry>
       <material
         name="">
@@ -1182,7 +1182,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_wrist_roll_link.STL" />
+          filename="package://statue_v0_1/meshes/left_wrist_roll_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -1226,7 +1226,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_wrist_yaw_link.STL" />
+          filename="package://statue_v0_1/meshes/left_wrist_yaw_link.STL" />
       </geometry>
       <material
         name="">
@@ -1240,7 +1240,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_wrist_yaw_link.STL" />
+          filename="package://statue_v0_1/meshes/left_wrist_yaw_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -1284,7 +1284,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_welder.STL" />
+          filename="package://statue_v0_1/meshes/left_welder.STL" />
       </geometry>
       <material
         name="">
@@ -1298,7 +1298,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/left_welder.STL" />
+          filename="package://statue_v0_1/meshes/left_welder.STL" />
       </geometry>
     </collision>
   </link>
@@ -1342,7 +1342,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_shoulder_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/right_shoulder_pitch_link.STL" />
       </geometry>
       <material
         name="">
@@ -1356,7 +1356,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_shoulder_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/right_shoulder_pitch_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -1400,7 +1400,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_shoulder_roll_link.STL" />
+          filename="package://statue_v0_1/meshes/right_shoulder_roll_link.STL" />
       </geometry>
       <material
         name="">
@@ -1414,7 +1414,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_shoulder_roll_link.STL" />
+          filename="package://statue_v0_1/meshes/right_shoulder_roll_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -1458,7 +1458,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_shoulder_yaw_link.STL" />
+          filename="package://statue_v0_1/meshes/right_shoulder_yaw_link.STL" />
       </geometry>
       <material
         name="">
@@ -1472,7 +1472,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_shoulder_yaw_link.STL" />
+          filename="package://statue_v0_1/meshes/right_shoulder_yaw_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -1516,7 +1516,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_elbow_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/right_elbow_pitch_link.STL" />
       </geometry>
       <material
         name="">
@@ -1530,7 +1530,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_elbow_pitch_link.STL" />
+          filename="package://statue_v0_1/meshes/right_elbow_pitch_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -1574,7 +1574,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_wrist_roll_link.STL" />
+          filename="package://statue_v0_1/meshes/right_wrist_roll_link.STL" />
       </geometry>
       <material
         name="">
@@ -1588,7 +1588,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_wrist_roll_link.STL" />
+          filename="package://statue_v0_1/meshes/right_wrist_roll_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -1632,7 +1632,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_wrist_yaw_link.STL" />
+          filename="package://statue_v0_1/meshes/right_wrist_yaw_link.STL" />
       </geometry>
       <material
         name="">
@@ -1646,7 +1646,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_wrist_yaw_link.STL" />
+          filename="package://statue_v0_1/meshes/right_wrist_yaw_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -1690,7 +1690,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_welder.STL" />
+          filename="package://statue_v0_1/meshes/right_welder.STL" />
       </geometry>
       <material
         name="">
@@ -1704,7 +1704,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="package://statue_v0/meshes/right_welder.STL" />
+          filename="package://statue_v0_1/meshes/right_welder.STL" />
       </geometry>
     </collision>
   </link>
