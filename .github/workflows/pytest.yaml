@@ -38,11 +38,12 @@ jobs:
           bash tests/ci/${{ matrix.simulator }}_ci_tests.sh
 
   inference-tests:
-    name: Run Inference Tests
+    name: Run Inference Unit Tests
     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     container:
       # TODO: Switch to holosoma-inference:latest once it's available in ECR
       # image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma-inference:latest
+      # Until then, the inference tests will run in isaacsim env.
       image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest
     steps:
       - name: Checkout code
