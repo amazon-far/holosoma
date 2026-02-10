@@ -57,3 +57,9 @@ class TaskConfig:
 
     print_observations: bool = False
     """Print observation vectors for debugging."""
+
+    motion_start_timestep: int = 0
+    """Starting timestep for motion clip playback."""
+
+    motion_end_timestep: int | None = None
+    """Ending timestep for motion clip playback. If None, plays until the end."""
