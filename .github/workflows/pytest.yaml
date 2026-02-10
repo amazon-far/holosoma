@@ -48,6 +48,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
       - name: Run Tests
+        shell: bash
         run: |
-          pip3 install -e src/holosoma_inference
+          ln -s /root/.holosoma_deps "$HOME/.holosoma_deps"
+          if [[ ! -L /workspace/holosoma ]]; then
+            rm -rf /workspace/holosoma
+            ln -sfF "$GITHUB_WORKSPACE" /workspace/holosoma
+          fi
+          source scripts/source_isaacsim_setup.sh
+          pip install -e src/holosoma_inference
           pytest -s src/holosoma_inference/
