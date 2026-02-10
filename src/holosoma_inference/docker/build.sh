@@ -1,14 +1,13 @@
 #!/bin/bash
 
 # Build the Docker image using the holosoma directory as context
-
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )" # holosoma/src/holosoma_inference/docker
 SRC_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")" # holosoma/src
+IMAGE_NAME="holosoma-inference"
+ECR_IMAGE="982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma-inference:latest"
 
-IMAGE_NAME="holosoma-onboard"
+docker build "$SRC_DIR" -f "$SCRIPT_DIR/Dockerfile" -t "$IMAGE_NAME" -t "$ECR_IMAGE"
 
-cmd="docker build $SRC_DIR -f "$SCRIPT_DIR/Dockerfile" -t $IMAGE_NAME"
-echo $cmd
-eval $cmd
+[[ "$1" == "--push" ]] && docker push "$ECR_IMAGE"
 
-rm "$SCRIPT_DIR"/*.whl
+rm -f "$SCRIPT_DIR"/*.whl

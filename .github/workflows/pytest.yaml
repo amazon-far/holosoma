@@ -36,3 +36,18 @@ jobs:
             ln -sfF "$GITHUB_WORKSPACE" /workspace/holosoma
           fi
           bash tests/ci/${{ matrix.simulator }}_ci_tests.sh
+
+  inference-tests:
+    name: Run Inference Tests
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    container:
+      # TODO: Switch to holosoma-inference:latest once it's available in ECR
+      # image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma-inference:latest
+      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+      - name: Run Tests
+        run: |
+          pip3 install -e src/holosoma_inference
+          pytest -s src/holosoma_inference/

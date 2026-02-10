@@ -14,8 +14,8 @@ done
 # Get the project root directory dynamically
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$( cd "$SCRIPT_DIR/../../.." && pwd )"
-CONTAINER_NAME="far-jetson-container"
-IMAGE_NAME="holosoma-onboard"
+CONTAINER_NAME="holosoma-inference-container"
+IMAGE_NAME="holosoma-inference"
 
 # Function to create a new container
 create_container() {
