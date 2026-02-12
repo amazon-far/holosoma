@@ -50,7 +50,16 @@ class InterfaceWrapper:
             try:
                 import unitree_interface
             except ImportError as e:
-                raise ImportError("unitree_interface python binding not found.") from e
+                # raise ImportError("unitree_interface python binding not found.") from e
+                self.logger.warning("unitree_interface python binding not found; falling back to unitree_sdk2py")
+                from unitree_sdk2py.core.channel import ChannelFactory
+
+                if not ChannelFactory().Init(self.domain_id, self.interface_str):
+                    raise RuntimeError("unitree_sdk2py ChannelFatory.Init failed")
+                self.backend = "sdk2py"
+                self.command_sender = create_command_sender(self.robot_config)
+                self.state_processor = create_state_processor(self.robot_config)
+                return
             # Use C++/pybind11 binding (unitree only)
             self.backend = "binding"
             # Parse robot type

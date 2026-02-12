@@ -98,7 +98,8 @@ if [[ ! -f $SENTINEL_FILE ]]; then
     MAMBA_ROOT_PREFIX=$CONDA_ROOT $CONDA_ROOT/bin/mamba create -y -n $CONDA_ENV_NAME python=3.10 -c conda-forge --override-channels
   fi
 
-  source $CONDA_ROOT/bin/activate $CONDA_ENV_NAME
+  source $CONDA_ROOT/bin/activate hsmujoco
+  export PATH="$ENV_ROOT/bin:$PATH"
 
   # Install system dependencies for MuJoCo
   # Note: These may require sudo access - document this requirement
@@ -119,7 +120,7 @@ if [[ ! -f $SENTINEL_FILE ]]; then
   pip install --upgrade pip
 
   # Core MuJoCo packages
-  pip install 'mujoco>=3.0.0'
+  $ENV_ROOT/bin/pip install 'mujoco>=3.0.0'
   pip install mujoco-python-viewer
   # Optional: Gymnasium MuJoCo environments (if needed for compatibility)
  # pip install "gymnasium[mujoco]"
@@ -135,7 +136,7 @@ if [[ ! -f $SENTINEL_FILE ]]; then
     pip install -e $ROOT_DIR/src/holosoma[unitree, booster]
   elif [[ "$OS_NAME" == "Darwin" ]]; then
     echo "Warning: only unitree support for osx"
-    pip install -e $ROOT_DIR/src/holosoma[unitree]
+    pip install -e $ROOT_DIR/src/holosoma
   else
     echo "Unsupported OS: $OS_NAME"
     exit 1
