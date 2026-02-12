@@ -4,6 +4,7 @@ set -e
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 ROOT_DIR=$(dirname "$SCRIPT_DIR")
+OS_NAME="Darwin" 
 
 # MuJoCo Warp version to install -- the repo is missing version tags and branches
 # Arbitrarily chosen from mainline at the time we've ~tested against
@@ -137,6 +138,14 @@ if [[ ! -f $SENTINEL_FILE ]]; then
   elif [[ "$OS_NAME" == "Darwin" ]]; then
     echo "Warning: only unitree support for osx"
     pip install -e $ROOT_DIR/src/holosoma
+
+    # Install unitree_sdk2_python
+    git clone https://github.com/unitreerobotics/unitree_sdk2_python.git
+    # Install into your conda environment
+    cd unitree_sdk2_python
+    $ENV_ROOT/bin/pip install -e .
+    cd ..
+
   else
     echo "Unsupported OS: $OS_NAME"
     exit 1
