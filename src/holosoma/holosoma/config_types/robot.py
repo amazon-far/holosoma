@@ -18,6 +18,12 @@ class RobotBridgeConfig:
     motor_type: str = "serial"
     """Motor communication type ('serial', etc.)."""
 
+    num_sdk_motors: int | None = None
+    """Number of SDK motor slots. None = same as simulator DOFs."""
+
+    joint2motor: tuple[int, ...] | None = None
+    """Maps simulator joint index to SDK motor index (length: num_dofs). None = identity."""
+
 
 @dataclass(frozen=True)
 class RobotInitState:

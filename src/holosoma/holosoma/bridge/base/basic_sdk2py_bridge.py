@@ -27,6 +27,11 @@ class BasicSdk2Bridge(ABC):
         self.torques = np.zeros(self.num_motor)  # Avoids config/model mismatches
         self.torque_limit = np.array(self.robot.dof_effort_limit_list)
 
+        # Motor-joint mapping for robots where SDK motor count != simulator DOF count
+        bridge_cfg = robot_config.bridge
+        self.num_sdk_motors = bridge_cfg.num_sdk_motors or self.num_motor
+        self.joint2motor = bridge_cfg.joint2motor
+
         # joystick
         self.key_map = {
             "R1": 0,
@@ -99,6 +104,15 @@ class BasicSdk2Bridge(ABC):
         kd_t = torch.as_tensor(kd, device=device, dtype=q_actual.dtype)
         q_des = torch.as_tensor(q_target, device=device, dtype=q_actual.dtype)
         dq_des = torch.as_tensor(dq_target, device=device, dtype=q_actual.dtype)
+
+        # When SDK has more motors than simulator DOFs, extract the valid subset
+        if self.joint2motor is not None:
+            indices = list(self.joint2motor)
+            tau = tau[indices]
+            kp_t = kp_t[indices]
+            kd_t = kd_t[indices]
+            q_des = q_des[indices]
+            dq_des = dq_des[indices]
 
         # PD control computation
         torques = tau + kp_t * (q_des - q_actual) + kd_t * (dq_des - dq_actual)

@@ -1,3 +1,4 @@
+import numpy as np
 from loguru import logger
 from unitree_interface import (
     LowState,
@@ -14,7 +15,7 @@ from holosoma.bridge.base.basic_sdk2py_bridge import BasicSdk2Bridge
 class UnitreeSdk2Bridge(BasicSdk2Bridge):
     """Unitree SDK bridge implementation using unitree_interface C++ bindings."""
 
-    SUPPORTED_ROBOT_TYPES = {"g1_29dof", "h1", "h1-2", "go2_12dof"}
+    SUPPORTED_ROBOT_TYPES = {"g1_29dof", "g1_23dof", "h1", "h1-2", "go2_12dof"}
 
     def _init_sdk_components(self):
         """Initialize Unitree SDK-specific components."""
@@ -28,6 +29,7 @@ class UnitreeSdk2Bridge(BasicSdk2Bridge):
         # Map robot type to SDK enum
         robot_type_map = {
             "g1_29dof": RobotType.G1,
+            "g1_23dof": RobotType.G1,
             "h1": RobotType.H1,
             "h1-2": RobotType.H1_2,
             "go2_12dof": RobotType.GO2,
@@ -36,6 +38,7 @@ class UnitreeSdk2Bridge(BasicSdk2Bridge):
         # Map to message type (HG for humanoid robots with 35 motors, GO2 for others)
         message_type_map = {
             "g1_29dof": MessageType.HG,
+            "g1_23dof": MessageType.HG,
             "h1": MessageType.GO2,
             "h1-2": MessageType.HG,
             "go2_12dof": MessageType.GO2,
@@ -50,9 +53,9 @@ class UnitreeSdk2Bridge(BasicSdk2Bridge):
         # Create interface (handles DDS initialization internally)
         self.interface = UnitreeInterface(interface_name, sdk_robot_type, sdk_message_type)
 
-        # Initialize data structures
-        self.low_state = LowState(self.num_motor)
-        self.low_cmd = MotorCommand(self.num_motor)
+        # SDK data structures use the full motor count (e.g. 29 for G1)
+        self.low_state = LowState(self.num_sdk_motors)
+        self.low_cmd = MotorCommand(self.num_sdk_motors)
         self.wireless_controller = WirelessController()
 
     def low_cmd_handler(self, msg=None):
@@ -67,6 +70,23 @@ class UnitreeSdk2Bridge(BasicSdk2Bridge):
         positions, velocities, accelerations = self._get_dof_states()
         actuator_forces = self._get_actuator_forces()
         quaternion, gyro, acceleration = self._get_base_imu_data()
+
+        # Expand sim DOFs into full SDK motor arrays when mapping is present
+        if self.joint2motor is not None:
+            n = self.num_sdk_motors
+            pos_full = np.zeros(n)
+            vel_full = np.zeros(n)
+            acc_full = np.zeros(n)
+            tau_full = np.zeros(n)
+            for j, m in enumerate(self.joint2motor):
+                pos_full[m] = positions[j]
+                vel_full[m] = velocities[j]
+                acc_full[m] = accelerations[j]
+                tau_full[m] = actuator_forces[j]
+            positions = pos_full
+            velocities = vel_full
+            accelerations = acc_full
+            actuator_forces = tau_full
 
         # Populate motor state
         self.low_state.motor.q = positions.tolist()
