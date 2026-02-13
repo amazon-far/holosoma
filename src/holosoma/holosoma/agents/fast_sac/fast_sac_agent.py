@@ -1000,6 +1000,7 @@ class FastSACAgent(BaseAlgo):
 
     @torch.no_grad()
     def evaluate_policy(self, max_eval_steps: int | None = None):
+        self.env.set_is_evaluating()
         obs = self.env.reset()
 
         for _ in itertools.islice(itertools.count(), max_eval_steps):
