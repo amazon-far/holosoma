@@ -95,4 +95,4 @@ g1_29dof_fast_sac = ExperimentConfig(
     ),
 )
 
-__all__ = ["g1_29dof", "g1_29dof_fast_sac", "g1_23dof", "g1_23dof_fast_sac"]
+__all__ = ["g1_23dof", "g1_23dof_fast_sac", "g1_29dof", "g1_29dof_fast_sac"]
