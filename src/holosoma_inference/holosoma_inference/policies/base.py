@@ -411,6 +411,21 @@ class BasePolicy:
             logger.info(colored("Using KP/KD from ONNX metadata", "green"))
             kp_values = self.onnx_kp
             kd_values = self.onnx_kd
+
+            # ONNX KP/KD are in joint space; expand to motor space if needed
+            # (command sender indexes by motor_id 0..num_motors-1)
+            num_joints = self.robot_config.num_joints
+            num_motors = self.robot_config.num_motors
+            if len(kp_values) == num_joints and num_joints != num_motors:
+                j2m = self.robot_config.joint2motor
+                kp_motor = np.zeros(num_motors)
+                kd_motor = np.zeros(num_motors)
+                for j, m in enumerate(j2m):
+                    kp_motor[m] = kp_values[j]
+                    kd_motor[m] = kd_values[j]
+                kp_values = kp_motor
+                kd_values = kd_motor
+
             # Create new config instance with ONNX values
             self.robot_config = replace(
                 self.robot_config, motor_kp=tuple(kp_values.tolist()), motor_kd=tuple(kd_values.tolist())
