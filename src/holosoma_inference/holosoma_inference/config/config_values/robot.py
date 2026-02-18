@@ -22,7 +22,7 @@ g1_29dof = RobotConfig(
     robot="g1",
 
     # SDK Configuration
-    sdk_type="unitree_sdk2py",
+    sdk_type="unitree",
     motor_type="serial",
     message_type="HG",
     use_sensor=False,

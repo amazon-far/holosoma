@@ -4,7 +4,6 @@ set -e
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 ROOT_DIR=$(dirname "$SCRIPT_DIR")
-OS_NAME="Darwin" 
 
 # MuJoCo Warp version to install -- the repo is missing version tags and branches
 # Arbitrarily chosen from mainline at the time we've ~tested against
@@ -99,8 +98,7 @@ if [[ ! -f $SENTINEL_FILE ]]; then
     MAMBA_ROOT_PREFIX=$CONDA_ROOT $CONDA_ROOT/bin/mamba create -y -n $CONDA_ENV_NAME python=3.10 -c conda-forge --override-channels
   fi
 
-  source $CONDA_ROOT/bin/activate hsmujoco
-  export PATH="$ENV_ROOT/bin:$PATH"
+  source $CONDA_ROOT/bin/activate $CONDA_ENV_NAME
 
   # Install system dependencies for MuJoCo
   # Note: These may require sudo access - document this requirement
@@ -121,7 +119,7 @@ if [[ ! -f $SENTINEL_FILE ]]; then
   pip install --upgrade pip
 
   # Core MuJoCo packages
-  $ENV_ROOT/bin/pip install 'mujoco>=3.0.0'
+  pip install 'mujoco>=3.0.0'
   pip install mujoco-python-viewer
   # Optional: Gymnasium MuJoCo environments (if needed for compatibility)
  # pip install "gymnasium[mujoco]"
@@ -145,7 +143,7 @@ if [[ ! -f $SENTINEL_FILE ]]; then
     fi
     # Install into your conda environment
     cd $WORKSPACE_DIR/unitree_sdk2_python
-    $ENV_ROOT/bin/pip install -e .
+    pip install -e .
     cd ..
 
   else
