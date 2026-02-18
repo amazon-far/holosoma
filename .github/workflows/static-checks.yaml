@@ -39,6 +39,6 @@ jobs:
           git fetch origin "${GITHUB_SHA}"
           pre-commit install-hooks
           git diff --name-only "origin/${GITHUB_BASE_REF:-main}" "${GITHUB_SHA}" --
-          git diff --name-only "origin/${GITHUB_BASE_REF:-main}" "${GITHUB_SHA}" -- | xargs pre-commit run --files
-          git diff
+          git diff --name-only "origin/${GITHUB_BASE_REF:-main}" "${GITHUB_SHA}" -- | xargs pre-commit run --files \
+            || ( git diff --exit-code && echo "pre-commit checks failed" )
           mypy .
