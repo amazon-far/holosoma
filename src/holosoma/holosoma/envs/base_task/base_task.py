@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+
 from holosoma.config_types.env import EnvConfig
 from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.managers.action import ActionManager
@@ -15,6 +16,7 @@ from holosoma.managers.reward import RewardManager
 from holosoma.managers.termination import TerminationManager
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+from holosoma.utils.experiment_paths import get_experiment_dir, get_timestamp
 from holosoma.utils.helpers import get_class
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.torch_utils import to_torch
@@ -82,8 +84,6 @@ class BaseTask:
         if tyro_config.experiment_dir is not None:
             experiment_dir = Path(tyro_config.experiment_dir)
         else:
-            from holosoma.utils.experiment_paths import get_experiment_dir, get_timestamp  # noqa: PLC0415
-
             timestamp = get_timestamp()
             experiment_dir = get_experiment_dir(
                 tyro_config.logger, tyro_config.training, timestamp, task_name=self._get_task_name()
