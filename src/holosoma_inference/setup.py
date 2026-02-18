@@ -61,6 +61,7 @@ setup(
     entry_points={
         "holosoma.sdk": [
             "unitree = holosoma_inference.sdk.unitree.unitree_interface:UnitreeInterface",
+            "unitree_sdk2py = holosoma_inference.sdk.unitree.unitree_sdk2py_interface:UnitreeSdk2pyInterface",
             "booster = holosoma_inference.sdk.booster.booster_interface:BoosterInterface",
         ],
     },

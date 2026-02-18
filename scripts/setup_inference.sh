@@ -80,7 +80,7 @@ if [[ ! -f $SENTINEL_FILE ]]; then
   # Note: On macOS, only Unitree SDK is supported (Booster SDK is Linux-only)
   if [[ $OS == "Darwin" ]]; then
     echo "Note: Installing Unitree SDK only (Booster SDK is not supported on macOS)"
-    pip install -e $ROOT_DIR/src/holosoma_inference[unitree]
+    pip install -e $ROOT_DIR/src/holosoma_inference
   else
     pip install -e $ROOT_DIR/src/holosoma_inference[unitree,booster]
   fi

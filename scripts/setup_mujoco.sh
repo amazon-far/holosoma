@@ -135,7 +135,17 @@ if [[ ! -f $SENTINEL_FILE ]]; then
     pip install -e $ROOT_DIR/src/holosoma[unitree, booster]
   elif [[ "$OS_NAME" == "Darwin" ]]; then
     echo "Warning: only unitree support for osx"
-    pip install -e $ROOT_DIR/src/holosoma[unitree]
+    pip install -e $ROOT_DIR/src/holosoma
+
+    # Install unitree_sdk2_python
+    if [[ ! -d $WORKSPACE_DIR/unitree_sdk2_python ]]; then
+      git clone https://github.com/unitreerobotics/unitree_sdk2_python.git $WORKSPACE_DIR/unitree_sdk2_python
+    fi
+    # Install into your conda environment
+    cd $WORKSPACE_DIR/unitree_sdk2_python
+    pip install -e .
+    cd ..
+
   else
     echo "Unsupported OS: $OS_NAME"
     exit 1
