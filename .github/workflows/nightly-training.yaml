@@ -16,7 +16,9 @@ permissions:
 jobs:
   training:
     runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    continue-on-error: true
     strategy:
+      fail-fast: false # continue on one experiment failing
       matrix:
         experiment:
         - g1-29dof
