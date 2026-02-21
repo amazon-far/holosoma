@@ -33,7 +33,7 @@ motion_config = MotionConfig(
         "right_wrist_yaw_link",
     ],
     body_name_ref=["torso_link"],
-    use_adaptive_timesteps_sampler=False,
+    use_adaptive_timesteps_sampler=True,
     noise_to_initial_pose=init_pose_config,
 )
 

@@ -5,13 +5,8 @@ import os
 from typing import TypedDict
 
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
-from loguru import logger
-from rich.console import Console
-from torch import nn
-from torch.distributions import Normal, kl_divergence
-from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
-
 from holosoma.agents.base_algo.base_algo import BaseAlgo
 from holosoma.agents.callbacks.base_callback import RLEvalCallback
 from holosoma.agents.modules.augmentation_utils import SymmetryUtils
@@ -32,8 +27,77 @@ from holosoma.utils.inference_helpers import (
     get_control_gains_from_config,
     get_urdf_text_from_robot_config,
 )
+from loguru import logger
+from rich.console import Console
+from torch import nn
+from torch.distributions import Normal, kl_divergence
+from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 
 console = Console()
+
+
+class EmpiricalNormalization(nn.Module):
+    """Normalize mean and variance of values based on empirical values."""
+
+    def __init__(self, shape, device, eps=1e-2, until=None):
+        super().__init__()
+        self.eps = eps
+        self.until = until
+        self.device = device
+        self.register_buffer("_mean", torch.zeros(shape).unsqueeze(0).to(device))
+        self.register_buffer("_var", torch.ones(shape).unsqueeze(0).to(device))
+        self.register_buffer("_std", torch.ones(shape).unsqueeze(0).to(device))
+        self.register_buffer("count", torch.tensor(0, dtype=torch.long).to(device))
+
+    @torch.no_grad()
+    def forward(self, x: torch.Tensor, center: bool = True, update: bool = True) -> torch.Tensor:
+        if x.shape[1:] != self._mean.shape[1:]:
+            raise ValueError(f"Expected input of shape (*,{self._mean.shape[1:]}), got {x.shape}")
+
+        if self.training and update:
+            self.update(x)
+        if center:
+            return (x - self._mean) / (self._std + self.eps)
+        return x / (self._std + self.eps)
+
+    @torch.jit.unused
+    def update(self, x):
+        if self.until is not None and self.count >= self.until:
+            return
+
+        if dist.is_available() and dist.is_initialized():
+            local_batch_size = x.shape[0]
+            world_size = dist.get_world_size()
+            global_batch_size = world_size * local_batch_size
+
+            x_shifted = x - self._mean
+            local_sum_shifted = torch.sum(x_shifted, dim=0, keepdim=True)
+            local_sum_sq_shifted = torch.sum(x_shifted.pow(2), dim=0, keepdim=True)
+
+            stats_to_sync = torch.cat([local_sum_shifted, local_sum_sq_shifted], dim=0)
+            dist.all_reduce(stats_to_sync, op=dist.ReduceOp.SUM)
+            global_sum_shifted, global_sum_sq_shifted = stats_to_sync
+
+            batch_mean_shifted = global_sum_shifted / global_batch_size
+            batch_var = global_sum_sq_shifted / global_batch_size - batch_mean_shifted.pow(2)
+            batch_mean = batch_mean_shifted + self._mean
+        else:
+            global_batch_size = x.shape[0]
+            batch_mean = torch.mean(x, dim=0, keepdim=True)
+            batch_var = torch.var(x, dim=0, keepdim=True, unbiased=False)
+
+        new_count = self.count + global_batch_size
+
+        delta = batch_mean - self._mean
+        self._mean.copy_(self._mean + delta * (global_batch_size / new_count))
+
+        delta2 = batch_mean - self._mean
+        m_a = self._var * self.count
+        m_b = batch_var * global_batch_size
+        M2 = m_a + m_b + delta2.pow(2) * (self.count * global_batch_size / new_count)
+        self._var.copy_(M2 / new_count)
+        self._std.copy_(self._var.sqrt())
+        self.count.copy_(new_count)
 
 
 class Minibatch(TypedDict):
@@ -155,6 +219,7 @@ class PPO(BaseAlgo):
 
         # Observation related Config
         self.use_symmetry = self.config.use_symmetry
+        self.empirical_normalization = self.config.empirical_normalization
         self._init_obs_keys()
 
     def _init_obs_keys(self):
@@ -187,6 +252,15 @@ class PPO(BaseAlgo):
             device=self.device,
             history_length=self.algo_history_length_dict,
         )
+
+        actor_obs_dim = self._get_obs_dim(self.actor_obs_keys)
+        critic_obs_dim = self._get_obs_dim(self.critic_obs_keys)
+        if self.empirical_normalization:
+            self.actor_obs_normalizer: nn.Module = EmpiricalNormalization(shape=actor_obs_dim, device=self.device)
+            self.critic_obs_normalizer: nn.Module = EmpiricalNormalization(shape=critic_obs_dim, device=self.device)
+        else:
+            self.actor_obs_normalizer = nn.Identity()
+            self.critic_obs_normalizer = nn.Identity()
 
         if self.use_symmetry:
             self.symmetry_utils = SymmetryUtils(self.env)
@@ -221,6 +295,16 @@ class PPO(BaseAlgo):
         actor_obs_dim = self._get_obs_dim(self.actor_obs_keys)
         return torch.zeros(1, actor_obs_dim, device=self.device)
 
+    def _normalize_actor_obs(self, actor_obs: torch.Tensor, update: bool = True) -> torch.Tensor:
+        if self.empirical_normalization:
+            return self.actor_obs_normalizer(actor_obs, update=update)
+        return actor_obs
+
+    def _normalize_critic_obs(self, critic_obs: torch.Tensor, update: bool = True) -> torch.Tensor:
+        if self.empirical_normalization:
+            return self.critic_obs_normalizer(critic_obs, update=update)
+        return critic_obs
+
     def _setup_storage(self):
         self.storage = RolloutStorage(self.env.num_envs, self.config.num_steps_per_env, device=self.device)
         actor_obs_dim = self._get_obs_dim(self.actor_obs_keys)
@@ -249,10 +333,14 @@ class PPO(BaseAlgo):
     def _eval_mode(self):
         self.actor.eval()
         self.critic.eval()
+        self.actor_obs_normalizer.eval()
+        self.critic_obs_normalizer.eval()
 
     def _train_mode(self):
         self.actor.train()
         self.critic.train()
+        self.actor_obs_normalizer.train()
+        self.critic_obs_normalizer.train()
 
     def learn(self):
         self._train_mode()
@@ -299,8 +387,10 @@ class PPO(BaseAlgo):
         with torch.inference_mode():
             for _ in range(self.config.num_steps_per_env):
                 # Environment step
-                actor_obs = torch.cat([obs_dict[k] for k in self.actor_obs_keys], dim=1)
-                critic_obs = torch.cat([obs_dict[k] for k in self.critic_obs_keys], dim=1)
+                actor_obs_raw = torch.cat([obs_dict[k] for k in self.actor_obs_keys], dim=1)
+                critic_obs_raw = torch.cat([obs_dict[k] for k in self.critic_obs_keys], dim=1)
+                actor_obs = self._normalize_actor_obs(actor_obs_raw)
+                critic_obs = self._normalize_critic_obs(critic_obs_raw)
 
                 actions = self.actor.act({"actor_obs": actor_obs})
                 values = self.critic.evaluate({"critic_obs": critic_obs}).detach()
@@ -315,6 +405,7 @@ class PPO(BaseAlgo):
                 final_rewards = torch.zeros_like(rewards)
                 if infos["time_outs"].any():
                     final_critic_obs = torch.cat([infos["final_observations"][k] for k in self.critic_obs_keys], dim=1)
+                    final_critic_obs = self._normalize_critic_obs(final_critic_obs, update=False)
                     final_values = self.critic.evaluate({"critic_obs": final_critic_obs}).detach()
                     final_rewards += self.config.gamma * torch.squeeze(
                         final_values * infos["time_outs"].unsqueeze(1).to(self.device), 1
@@ -343,6 +434,7 @@ class PPO(BaseAlgo):
 
             # Return / Advantage computation
             last_critic_obs = torch.cat([obs_dict[k] for k in self.critic_obs_keys], dim=1)
+            last_critic_obs = self._normalize_critic_obs(last_critic_obs, update=False)
             last_values = self.critic.evaluate({"critic_obs": last_critic_obs}).detach().to(self.device)
             returns, advantages = self._compute_returns_and_advantages(
                 last_values,
@@ -560,6 +652,10 @@ class PPO(BaseAlgo):
             loaded_dict = torch.load(ckpt_path, map_location=self.device)
             self.actor.load_state_dict(loaded_dict["actor_model_state_dict"])
             self.critic.load_state_dict(loaded_dict["critic_model_state_dict"])
+            if self.empirical_normalization and loaded_dict.get("actor_obs_normalizer_state_dict") is not None:
+                self.actor_obs_normalizer.load_state_dict(loaded_dict["actor_obs_normalizer_state_dict"])
+            if self.empirical_normalization and loaded_dict.get("critic_obs_normalizer_state_dict") is not None:
+                self.critic_obs_normalizer.load_state_dict(loaded_dict["critic_obs_normalizer_state_dict"])
             if self.config.load_optimizer:
                 self.actor_optimizer.load_state_dict(loaded_dict["actor_optimizer_state_dict"])
                 self.critic_optimizer.load_state_dict(loaded_dict["critic_optimizer_state_dict"])
@@ -577,6 +673,12 @@ class PPO(BaseAlgo):
             "critic_model_state_dict": self.critic.state_dict(),
             "actor_optimizer_state_dict": self.actor_optimizer.state_dict(),
             "critic_optimizer_state_dict": self.critic_optimizer.state_dict(),
+            "actor_obs_normalizer_state_dict": (
+                self.actor_obs_normalizer.state_dict() if self.empirical_normalization else None
+            ),
+            "critic_obs_normalizer_state_dict": (
+                self.critic_obs_normalizer.state_dict() if self.empirical_normalization else None
+            ),
             "iter": self.current_learning_iteration,
             "infos": infos,
         }
@@ -617,6 +719,11 @@ class PPO(BaseAlgo):
         # Extract control gains and velocity limits & attach to onnx as metadata
         kp_list, kd_list = get_control_gains_from_config(self.env.robot_config)
         cmd_ranges = get_command_ranges_from_env(self.env)
+        action_scales = getattr(self.env, "action_scales", None)
+        if action_scales is None:
+            action_scale_metadata: float | list[float] = float(self.env.robot_config.control.action_scale)
+        else:
+            action_scale_metadata = action_scales.detach().cpu().tolist()
         # Extract URDF text from the robot config
         urdf_file_path, urdf_str = get_urdf_text_from_robot_config(self.env.robot_config)
 
@@ -624,6 +731,7 @@ class PPO(BaseAlgo):
             "dof_names": self.env.robot_config.dof_names,
             "kp": kp_list,
             "kd": kd_list,
+            "action_scale": action_scale_metadata,
             "command_ranges": cmd_ranges,
             "robot_urdf": urdf_str,
             "robot_urdf_path": urdf_file_path,
@@ -710,14 +818,18 @@ class PPO(BaseAlgo):
     @property
     def actor_onnx_wrapper(self):
         class ActorWrapper(nn.Module):
-            def __init__(self, actor):
+            def __init__(self, actor, actor_obs_normalizer, empirical_normalization):
                 super().__init__()
                 self.actor = actor
+                self.actor_obs_normalizer = actor_obs_normalizer
+                self.empirical_normalization = empirical_normalization
 
             def forward(self, actor_obs):
+                if self.empirical_normalization:
+                    actor_obs = self.actor_obs_normalizer(actor_obs, update=False)
                 return self.actor.act_inference({"actor_obs": actor_obs})
 
-        return ActorWrapper(self.actor)
+        return ActorWrapper(self.actor, self.actor_obs_normalizer, self.empirical_normalization)
 
     def env_step(self, actor_state):
         obs_dict, rewards, dones, extras = self.env.step(actor_state)
@@ -793,6 +905,13 @@ class PPO(BaseAlgo):
 
     def get_inference_policy(self, device=None):
         self.actor.eval()  # switch to evaluation mode (dropout for example)
+        self.actor_obs_normalizer.eval()
         if device is not None:
             self.actor.to(device)
-        return self.actor.act_inference
+            self.actor_obs_normalizer.to(device)
+
+        def policy_fn(obs: dict[str, torch.Tensor]) -> torch.Tensor:
+            actor_obs = self._normalize_actor_obs(obs["actor_obs"], update=False)
+            return self.actor.act_inference({"actor_obs": actor_obs})
+
+        return policy_fn

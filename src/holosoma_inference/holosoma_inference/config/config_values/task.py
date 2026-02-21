@@ -31,6 +31,7 @@ wbt = TaskConfig(
     model_path="",  # Must be provided by user
     rl_rate=50,
     policy_action_scale=1.0,
+    action_scales_by_effort_limit_over_p_gain=True,
     use_phase=False,
     gait_period=1.0,
     desired_base_height=0.75,

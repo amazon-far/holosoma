@@ -19,18 +19,22 @@ g1_29dof_wbt = ExperimentConfig(
     training=TrainingConfig(
         project="WholeBodyTracking",
         name="g1_29dof_wbt_manager",
-        num_envs=8192,
+        num_envs=4096,
     ),
     env_class="holosoma.envs.wbt.wbt_manager.WholeBodyTrackingManager",
     algo=replace(
         algo.ppo,
         config=replace(
             algo.ppo.config,
-            num_learning_iterations=40000,
+            num_learning_iterations=30000,
+            num_learning_epochs=5,
             save_interval=4000,
             entropy_coef=0.005,
             init_noise_std=1.0,
-            init_at_random_ep_len=False,
+            actor_learning_rate=1e-3,
+            critic_learning_rate=1e-3,
+            init_at_random_ep_len=True,
+            empirical_normalization=True,
             use_symmetry=False,
             actor_optimizer=replace(algo.ppo.config.actor_optimizer, weight_decay=0.000),
             critic_optimizer=replace(algo.ppo.config.critic_optimizer, weight_decay=0.000),
@@ -48,7 +52,11 @@ g1_29dof_wbt = ExperimentConfig(
     ),
     robot=replace(
         robot.g1_29dof,
-        control=replace(robot.g1_29dof.control, action_scale=1.0),
+        control=replace(
+            robot.g1_29dof.control,
+            action_scale=0.25,
+            action_scales_by_effort_limit_over_p_gain=True,
+        ),
         asset=replace(robot.g1_29dof.asset, enable_self_collisions=True),
         init_state=replace(robot.g1_29dof.init_state, pos=[0.0, 0.0, 0.76]),
     ),
@@ -77,7 +85,7 @@ g1_29dof_wbt_fast_sac = ExperimentConfig(
     training=TrainingConfig(
         project="WholeBodyTracking",
         name="g1_29dof_wbt_fast_sac_manager",
-        num_envs=8192,
+        num_envs=4096,
     ),
     env_class="holosoma.envs.wbt.wbt_manager.WholeBodyTrackingManager",
     algo=replace(
@@ -109,7 +117,11 @@ g1_29dof_wbt_fast_sac = ExperimentConfig(
     ),
     robot=replace(
         robot.g1_29dof,
-        control=replace(robot.g1_29dof.control, action_scale=1.0),
+        control=replace(
+            robot.g1_29dof.control,
+            action_scale=0.25,
+            action_scales_by_effort_limit_over_p_gain=True,
+        ),
         asset=replace(robot.g1_29dof.asset, enable_self_collisions=True),
         init_state=replace(robot.g1_29dof.init_state, pos=[0.0, 0.0, 0.76]),
     ),

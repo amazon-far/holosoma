@@ -45,7 +45,7 @@ g1_29dof_wbt_reward = RewardManagerCfg(
         "limits_dof_pos": RewardTermCfg(
             func="holosoma.managers.reward.terms.wbt:limits_dof_pos",
             params={"soft_dof_pos_limit": 0.9},
-            weight=-100.0,
+            weight=-10.0,
         ),
         "undesired_contacts": RewardTermCfg(
             func="holosoma.managers.reward.terms.wbt:UndesiredContacts",
@@ -57,7 +57,7 @@ g1_29dof_wbt_reward = RewardManagerCfg(
                     "(?!left_ankle_roll_link$)(?!right_ankle_roll_link$).+$"
                 ),
             },
-            weight=-0.5,
+            weight=-0.1,
         ),
     }
 )

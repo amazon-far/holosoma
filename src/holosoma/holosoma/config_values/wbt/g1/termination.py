@@ -8,11 +8,8 @@ g1_29dof_wbt_termination = TerminationManagerCfg(
             func="holosoma.managers.termination.terms.common:timeout_exceeded",
             is_timeout=True,
         ),
-        "motion_ends": TerminationTermCfg(
-            func="holosoma.managers.termination.terms.wbt:motion_ends",
-        ),
         "bad_tracking": TerminationTermCfg(
-            func="holosoma.managers.termination.terms.wbt:BadTracking",
+            func="holosoma.managers.termination.terms.wbt:BadTrackingZOnly",
             params={
                 # robot tracking
                 "bad_ref_pos_threshold": 0.5,

@@ -36,6 +36,7 @@ ppo = PPOAlgoConfig(
         init_noise_std=0.8,
         num_learning_iterations=1000000,
         init_at_random_ep_len=True,
+        empirical_normalization=False,
         eval_callbacks=None,
         module_dict=PPOModuleDictConfig(
             actor=ModuleConfig(

@@ -64,15 +64,22 @@ if [[ ! -f $SENTINEL_FILE ]]; then
     git clone https://github.com/isaac-sim/IsaacLab.git --branch v2.3.0 $WORKSPACE_DIR/IsaacLab
   fi
 
-  sudo apt install -y cmake build-essential
+  if [[ "$(id -u)" -eq 0 ]]; then
+    apt install -y cmake build-essential
+  else
+    sudo apt install -y cmake build-essential
+  fi
   cd $WORKSPACE_DIR/IsaacLab
   # setuptools 81 removes pkg_resoures, a dep needs that
   # see https://github.com/isaac-sim/IsaacLab/pull/4585
   pip install 'setuptools<81'
   echo 'setuptools<81' > build-constraints.txt
   export PIP_BUILD_CONSTRAINT="$(realpath build-constraints.txt)"
+  # Fix upstream bug: should use flatdict 4.1.0 (https://github.com/isaac-sim/IsaacLab/issues/4576)
+  sed -i 's/flatdict==4.0.1/flatdict==4.1.0/' source/isaaclab/setup.py
   # work-around for egl_probe cmake max version issue
   export CMAKE_POLICY_VERSION_MINIMUM=3.5
+  export OMNI_KIT_ACCEPT_EULA=${OMNI_KIT_ACCEPT_EULA:-1}
   ./isaaclab.sh --install
   unset PIP_BUILD_CONSTRAINT
 

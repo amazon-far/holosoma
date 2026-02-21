@@ -32,6 +32,9 @@ class TaskConfig:
     policy_action_scale: float = 0.25
     """Scaling factor applied to policy actions."""
 
+    action_scales_by_effort_limit_over_p_gain: bool = False
+    """Use per-joint scaling: ``policy_action_scale * effort_limit / p_gain``."""
+
     use_phase: bool = True
     """Whether to use gait phase observations."""
 

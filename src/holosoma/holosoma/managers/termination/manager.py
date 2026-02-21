@@ -41,6 +41,10 @@ class TerminationManager:
         self._term_names: list[str] = []
         self._term_cfgs: list[TerminationTermCfg] = []
 
+        # Keep latest termination masks for consumers (e.g., adaptive motion sampling).
+        self.terminated = torch.zeros(self.env.num_envs, dtype=torch.bool, device=self.device)
+        self.time_outs = torch.zeros_like(self.terminated)
+
         self._initialize_terms()
 
     def _initialize_terms(self) -> None:
@@ -96,6 +100,8 @@ class TerminationManager:
             else:
                 reset_flags |= result
 
+        self.terminated = reset_flags.clone()
+        self.time_outs = timeout_flags.clone()
         return reset_flags, timeout_flags
 
     def reset(self, env_ids: torch.Tensor | None = None) -> None:
@@ -108,3 +114,10 @@ class TerminationManager:
         """
         for instance in self._term_instances.values():
             instance.reset(env_ids=env_ids)
+
+        if env_ids is None:
+            self.terminated.zero_()
+            self.time_outs.zero_()
+        else:
+            self.terminated[env_ids] = False
+            self.time_outs[env_ids] = False

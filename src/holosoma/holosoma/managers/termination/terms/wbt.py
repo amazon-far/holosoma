@@ -75,10 +75,6 @@ class BadTracking(TerminationTermBase):
             bad_object_ori = self.bad_object_ori(motion_command)
             bad_tracking |= bad_object_pos | bad_object_ori
 
-        if motion_command.motion_cfg.use_adaptive_timesteps_sampler and torch.any(bad_tracking):
-            failed_at_time_step = motion_command.time_steps[bad_tracking]
-            motion_command.adaptive_timesteps_sampler.update_current_bin_failed_count(failed_at_time_step)
-
         return bad_tracking
 
     def bad_ref_pos(self, motion_command: MotionCommand) -> torch.Tensor:
@@ -131,3 +127,20 @@ class BadTracking(TerminationTermBase):
             assert name in b_names, f"The specified name ({name}) doesn't exist: {b_names}"
             indexes.append(b_names.index(name))
         return torch.tensor(indexes, dtype=torch.long, device=device)
+
+
+class BadTrackingZOnly(BadTracking):
+    """BadTracking variant using z-axis-only position checks for parity with BM Wo-State-Estimation."""
+
+    def bad_ref_pos(self, motion_command: MotionCommand) -> torch.Tensor:
+        """Terminate if the reference z position is too far from the robot's z position."""
+        z_err = torch.abs(motion_command.ref_pos_w[:, -1] - motion_command.robot_ref_pos_w[:, -1])
+        return z_err > self.bad_ref_pos_threshold
+
+    def bad_motion_body_pos(self, motion_command: MotionCommand) -> torch.Tensor:
+        """Terminate if tracked bodies have too much z-axis position error."""
+        body_idx = self.bad_motion_body_pos_body_indexes
+        error = torch.abs(
+            motion_command.body_pos_relative_w[:, body_idx, -1] - motion_command.robot_body_pos_w[:, body_idx, -1]
+        )
+        return torch.any(error > self.bad_motion_body_pos_threshold, dim=-1)

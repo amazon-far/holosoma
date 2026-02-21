@@ -21,7 +21,7 @@ robot_state_dr_at_setup = {
     "setup_dof_pos_bias": RandomizationTermCfg(
         func="holosoma.managers.randomization.terms.locomotion:setup_dof_pos_bias",
         params={
-            "dof_pos_bias_range": [-0.025, 0.025],
+            "dof_pos_bias_range": [-0.01, 0.01],
             "enabled": True,
         },
     ),
@@ -74,7 +74,7 @@ base_setup_terms = {
             "kp_range": [0.9, 1.1],
             "kd_range": [0.9, 1.1],
             "rfi_lim_range": [1.0, 1.0],
-            "enable_pd_gain": True,
+            "enable_pd_gain": False,
             "enable_rfi_lim": False,
         },
     ),
@@ -101,14 +101,13 @@ base_reset_terms = {
     "actuator_randomizer_state": RandomizationTermCfg(
         func="holosoma.managers.randomization.terms.locomotion:ActuatorRandomizerState"
     ),
-    # TODO: what is the difference between reset and setup? for joint_pos_bias_range?
     "randomize_dof_state": RandomizationTermCfg(
         func="holosoma.managers.randomization.terms.locomotion:randomize_dof_state",
         params={
             "joint_pos_scale_range": [1.0, 1.0],
             "joint_vel_range": [0.0, 0.0],
-            "joint_pos_bias_range": [-0.025, 0.025],
-            "randomize_dof_pos_bias": True,
+            "joint_pos_bias_range": [-0.01, 0.01],
+            "randomize_dof_pos_bias": False,
         },
     ),
 }

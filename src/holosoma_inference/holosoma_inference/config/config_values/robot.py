@@ -16,6 +16,40 @@ from holosoma_inference.config.config_types.robot import RobotConfig
 
 # fmt: off
 
+# G1 29-DOF per-joint action scales for BeyondMimic-style scaling (0.25 * effort / p_gain).
+# TODO: this is legacy for onnx that do not have action scale vector in metadata
+G1_29DOF_PER_JOINT_ACTION_SCALE = (
+    0.547546465219,
+    0.350661466378,
+    0.547546465219,
+    0.350661466378,
+    0.438577313919,
+    0.438577313919,
+    0.547546465219,
+    0.350661466378,
+    0.547546465219,
+    0.350661466378,
+    0.438577313919,
+    0.438577313919,
+    0.547546465219,
+    0.438577313919,
+    0.438577313919,
+    0.438577313919,
+    0.438577313919,
+    0.438577313919,
+    0.438577313919,
+    0.438577313919,
+    0.074500870329,
+    0.074500870329,
+    0.438577313919,
+    0.438577313919,
+    0.438577313919,
+    0.438577313919,
+    0.438577313919,
+    0.074500870329,
+    0.074500870329,
+)
+
 g1_29dof = RobotConfig(
     # Identity
     robot_type="g1_29dof",
@@ -105,6 +139,7 @@ g1_29dof = RobotConfig(
         "right_wrist_roll_joint": 26, "right_wrist_pitch_joint": 27, "right_wrist_yaw_joint": 28,
     },
     motion={"body_name_ref": ["torso_link"]},
+    default_per_joint_action_scale=G1_29DOF_PER_JOINT_ACTION_SCALE,
 )
 
 

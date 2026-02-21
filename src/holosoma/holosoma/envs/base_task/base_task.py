@@ -428,7 +428,6 @@ class BaseTask:
         self._update_counters_each_step()
 
         self._pre_compute_observations_callback()
-        self._update_tasks_callback()  # needs to be called before reset_envs_idx
         self._check_termination()
         self._compute_reward()
         self._update_log_dict()
@@ -443,6 +442,11 @@ class BaseTask:
         refresh_env_ids = self._ensure_long_tensor(self._get_envs_to_refresh())
         if refresh_env_ids.numel() > 0:
             self._refresh_envs_after_reset(refresh_env_ids)
+
+        # Update commands, curriculum, and interval randomization AFTER reset,
+        # so that termination is checked on actual physics state before
+        # clip-end resets erase it.
+        self._update_tasks_callback()
 
         self._compute_observations()
 

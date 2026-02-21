@@ -117,6 +117,9 @@ class RobotConfig:
     If provided, these values override the ONNX metadata.
     """
 
+    default_per_joint_action_scale: tuple[float, ...] | None = None
+    """Fallback per-joint action scales used when ONNX metadata is missing."""
+
     # =========================================================================
     # WBT Stiff Startup Configuration (OPTIONAL - for WBT policies)
     # =========================================================================
