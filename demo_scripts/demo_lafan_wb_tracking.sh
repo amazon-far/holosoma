@@ -85,7 +85,7 @@ else
         echo "Cloning ubisoft-laforge-animation-dataset for processing code..."
         cd "$DATA_UTILS_DIR"
         if [ ! -d "ubisoft-laforge-animation-dataset" ]; then
-            git clone -q https://github.com/ubisoft/ubisoft-laforge-animation-dataset.git
+            GIT_LFS_SKIP_SMUDGE=1 git clone -q https://github.com/ubisoft/ubisoft-laforge-animation-dataset.git
         fi
         if [ -d "ubisoft-laforge-animation-dataset/lafan1" ] && [ ! -d "lafan1" ]; then
             mv ubisoft-laforge-animation-dataset/lafan1 .
