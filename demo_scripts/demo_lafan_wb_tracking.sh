@@ -35,7 +35,7 @@ echo "Sourcing retargeting setup..."
 source "$PROJECT_ROOT/scripts/source_retargeting_setup.sh"
 
 # Change to retargeting directory
-cd "$PROJECT_ROOT/src/holosoma_retargeting/"
+cd "$PROJECT_ROOT/src/holosoma_retargeting/holosoma_retargeting/"
 
 # Step 0: Download and process LAFAN data if needed
 echo "Checking LAFAN data availability..."
