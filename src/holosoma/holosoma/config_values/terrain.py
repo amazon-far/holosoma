@@ -55,7 +55,7 @@ terrain_load_obj = TerrainManagerCfg(
         restitution=0.0,
         mesh_type=MeshType.LOAD_OBJ,
         func="holosoma.managers.terrain.terms.locomotion:TerrainLocomotion",
-        obj_file_path="holosoma/data/motions/g1_29dof/whole_body_tracking/terrain_parkour.obj",
+        obj_file_path="",
     )
 )
 

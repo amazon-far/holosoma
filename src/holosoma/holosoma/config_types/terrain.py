@@ -199,6 +199,18 @@ class TerrainTermCfg:
     obj_file_path: str = ""
     """Path to OBJ file for custom terrain mesh."""
 
+    env_origin_in_tile: list[float] | None = None
+    """For load_obj terrain: override env_origin position within each tile.
+    When None (default), env_origins are placed at tile bounding-box center (current behavior).
+    When set to [x, y, z], env_origins are placed at this offset from each tile's mesh origin.
+    Use [0, 0, 0] to place env_origin at the mesh coordinate origin of each tile."""
+
+    tile_mesh: bool = True
+    """For load_obj terrain: whether to tile the mesh in a grid.
+    When True (default), mesh is tiled num_rows x num_cols times (current behavior).
+    When False, mesh is loaded once and shared by all envs -- all env_origins
+    point to the same location defined by env_origin_in_tile."""
+
     scale_factor: float = 1.0
     """Use for performance to scale border_size, terrain_length, terrain_width, num_ros and num_cols."""
 

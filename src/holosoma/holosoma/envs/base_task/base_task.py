@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 
 from holosoma.config_types.env import EnvConfig
@@ -98,6 +100,24 @@ class BaseTask:
         self.dim_critic_obs = robot_config.critic_obs_dim
         self.dim_actions = robot_config.actions_dim
         self.device = device
+
+        # Auto-populate terrain obj_file_path from motion file if not specified
+        if (
+            terrain_config.terrain_term.mesh_type == "load_obj"
+            and not terrain_config.terrain_term.obj_file_path
+            and "motion_command" in command_config.setup_terms
+        ):
+            motion_cfg = command_config.setup_terms["motion_command"].params.get("motion_config")
+            if motion_cfg is not None:
+                motion_file = (
+                    motion_cfg.motion_file
+                    if hasattr(motion_cfg, "motion_file")
+                    else motion_cfg.get("motion_file", "")
+                )
+                if motion_file:
+                    print(f"[INFO] Auto-populating terrain obj_file_path from motion file: {motion_file}")
+                    new_term = replace(terrain_config.terrain_term, obj_file_path=motion_file)
+                    terrain_config = replace(terrain_config, terrain_term=new_term)
 
         self.terrain_manager = TerrainManager(terrain_config, self, device)
         self.simulator: BaseSimulator = SimulatorClass(

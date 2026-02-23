@@ -50,14 +50,14 @@ def get_experiment_dir(
 
     base_dir = Path(logger_config.base_dir)
 
-    # Fallback chain: training config → logger config → default
-    project = training_config.project or getattr(logger_config, "project", None) or "default_project"
-    name = training_config.name or getattr(logger_config, "name", None) or "run"
+    # Fallback chain: logger config → training config → default
+    project = getattr(logger_config, "project", None) or training_config.project or "default_project"
+    name = getattr(logger_config, "name", None) or training_config.name or "run"
 
     # Build structured path if we have any project/name info
     if project or name:
-        group = getattr(logger_config, "group", None)
-        exp_name = f"{timestamp}-{name}-{group or task_name}"
+        date_str = timestamp.split("_")[0] if "_" in timestamp else timestamp
+        exp_name = f"{date_str}_{name}"
         return base_dir / project / exp_name
 
     # Fallback to simple structure

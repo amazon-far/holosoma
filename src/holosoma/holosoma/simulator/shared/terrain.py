@@ -65,22 +65,22 @@ class Terrain(TerrainInterface):
             raise FileNotFoundError(f"Terrain file not found: {terrain_path}")
         print(f"[INFO] Loading custom terrain from: {terrain_path}")
 
-        # Load the mesh
-        base = trimesh.load(str(terrain_path), process=False)
-
-        # Handle Scene objects from multi-mesh files
-        if isinstance(base, trimesh.Scene):
-            base = base.dump(concatenate=True)  # type: ignore[assignment]
-
-        if not isinstance(base, trimesh.Trimesh):
-            raise ValueError(f"Loaded object is not a valid Trimesh: {type(base)}")
+        if terrain_path.suffix == ".npz":
+            base = self._load_mesh_from_npz(terrain_path)
+        else:
+            base = self._load_mesh_from_obj(terrain_path)
 
         print(
-            f"[INFO] Loaded terrain mesh from obj file with {len(base.vertices)} vertices and {len(base.faces)} faces"
+            f"[INFO] Loaded terrain mesh with {len(base.vertices)} vertices and {len(base.faces)} faces"
         )
 
-        gap = 1e-4  # keeps tiles “kissing” without intersecting
+        if not self._cfg.tile_mesh:
+            self._obj_tile_stride = np.zeros(3)
+            return base
+
+        gap = 1e-4  # keeps tiles "kissing" without intersecting
         stride = (base.bounds[1] - base.bounds[0]) + gap
+        self._obj_tile_stride = stride
 
         tiles = []
         for r in range(self._num_rows):
@@ -90,6 +90,26 @@ class Terrain(TerrainInterface):
                 tiles.append(tile)
 
         return trimesh.util.concatenate(tiles)
+
+    @staticmethod
+    def _load_mesh_from_npz(path: pathlib.Path) -> trimesh.Trimesh:
+        """Load mesh vertices/faces embedded in an NPZ motion file."""
+        with np.load(str(path)) as data:
+            if "mesh_vertices" not in data or "mesh_faces" not in data:
+                raise ValueError(f"NPZ file {path} does not contain mesh_vertices/mesh_faces keys")
+            vertices = data["mesh_vertices"]
+            faces = data["mesh_faces"]
+        return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+
+    @staticmethod
+    def _load_mesh_from_obj(path: pathlib.Path) -> trimesh.Trimesh:
+        """Load a mesh from an OBJ (or other trimesh-supported) file."""
+        base = trimesh.load(str(path), process=False)
+        if isinstance(base, trimesh.Scene):
+            base = base.dump(concatenate=True)  # type: ignore[assignment]
+        if not isinstance(base, trimesh.Trimesh):
+            raise ValueError(f"Loaded object is not a valid Trimesh: {type(base)}")
+        return base
 
     def _initialize_terrain_config(self) -> trimesh.Trimesh:
         terrain_config = self._cfg.terrain_config
@@ -142,15 +162,19 @@ class Terrain(TerrainInterface):
     def sample_env_origins(self) -> np.ndarray:
         if self._type == "load_obj":
             origin_grid = self._get_load_obj_env_origin_grid()
+            # Deterministic round-robin: evenly distribute envs across tiles
+            flat_origins = origin_grid.reshape(-1, 3)  # [num_tiles, 3]
+            num_tiles = flat_origins.shape[0]
+            tile_indices = np.arange(self._num_robots) % num_tiles
+            return flat_origins[tile_indices]
         else:
             origin_grid = self._env_origins
-
-        terrain_levels = np.random.randint(0, self._num_rows, (self._num_robots,))
-        terrain_types = np.floor_divide(
-            np.arange(self._num_robots),
-            (self._num_robots / self._num_cols),
-        ).astype(np.int32)
-        return origin_grid[terrain_levels, terrain_types]
+            terrain_levels = np.random.randint(0, self._num_rows, (self._num_robots,))
+            terrain_types = np.floor_divide(
+                np.arange(self._num_robots),
+                (self._num_robots / self._num_cols),
+            ).astype(np.int32)
+            return origin_grid[terrain_levels, terrain_types]
 
     @property
     def mesh(self) -> trimesh.Trimesh:
@@ -167,6 +191,19 @@ class Terrain(TerrainInterface):
         """Compute per-tile origins for OBJ terrains."""
         if not hasattr(self, "_mesh"):
             raise RuntimeError("Mesh must be initialized before computing load_obj env origins.")
+
+        if not self._cfg.tile_mesh:
+            offset = np.array(self._cfg.env_origin_in_tile or [0.0, 0.0, 0.0], dtype=np.float32)
+            return offset.reshape(1, 1, 3)
+
+        if self._cfg.env_origin_in_tile is not None:
+            offset = np.array(self._cfg.env_origin_in_tile, dtype=np.float32)
+            stride = self._obj_tile_stride
+            origins = np.zeros((self._num_rows, self._num_cols, 3), dtype=np.float32)
+            for r in range(self._num_rows):
+                for c in range(self._num_cols):
+                    origins[r, c] = np.array([c * stride[0], r * stride[1], 0.0], dtype=np.float32) + offset
+            return origins
 
         bounds = self._mesh.bounds.astype(np.float64)
         min_corner, max_corner = bounds
