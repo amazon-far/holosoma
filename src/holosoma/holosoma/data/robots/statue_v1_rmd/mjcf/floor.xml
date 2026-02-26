@@ -1,0 +1,18 @@
+<mujoco model="floor and sky">
+
+    <visual>
+        <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0" />
+        <rgba haze="0.15 0.25 0.35 1" />
+    </visual>
+
+    <asset>
+        <texture name="grid" type="2d" builtin="checker" rgb1=".1 .2 .3" rgb2=".2 .3 .4" width="300" height="300"/>
+        <material name="grid" texture="grid" texrepeat="8 8" reflectance=".2"/>
+    </asset>
+
+    <worldbody>
+        <light pos="1 -1 1.5" dir="-1 1 -1" diffuse="0.5 0.5 0.5" directional="true" />
+        <geom name="floor" group="1" size="0 0 0.05" type="plane" material="grid" />
+    </worldbody>
+
+</mujoco>
