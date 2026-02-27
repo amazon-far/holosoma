@@ -13,8 +13,8 @@ from holosoma.config_values import (
     simulator,
     terrain,
 )
-from holosoma.config_values.wbt.statue import command as statue_command
-from holosoma.config_values.wbt.statue import termination as statue_termination
+from holosoma.config_values.wbt.statue_v1 import command as statue_v1_command
+from holosoma.config_values.wbt.statue_v1 import termination as statue_v1_termination
 
 # Statue v1 RMD WBT with future motion (motion encoder, stiff control from MJCF kp/kd)
 statue_v1_rmd_wbt_future_motion = ExperimentConfig(
@@ -86,9 +86,9 @@ statue_v1_rmd_wbt_future_motion = ExperimentConfig(
     terrain=terrain.terrain_locomotion_plane,
     observation=observation.g1_29dof_wbt_observation_future_motion,
     action=action.g1_29dof_joint_pos,
-    termination=statue_termination.statue_v0_1_wbt_termination,
+    termination=statue_v1_termination.statue_v1_rmd_wbt_termination,
     randomization=randomization.g1_29dof_wbt_randomization,
-    command=statue_command.statue_v0_1_wbt_command,
+    command=statue_v1_command.statue_v1_rmd_wbt_command,
     curriculum=curriculum.g1_29dof_wbt_curriculum,
     reward=reward.g1_29dof_wbt_reward,
     nightly=NightlyConfig(
