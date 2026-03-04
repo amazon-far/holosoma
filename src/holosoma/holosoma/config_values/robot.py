@@ -1920,11 +1920,11 @@ statue_v1_rmd = RobotConfig(
         30.0, 30.0, 30.0, 30.0, 30.0, 30.0, 30.0,  # right arm
     ],
     dof_effort_limit_list=[
-        300.0, 300.0, 300.0, 300.0, 380.0, 380.0,  # left leg
-        300.0, 300.0, 300.0, 300.0, 380.0, 380.0,  # right leg
-        300.0, 600.0,  # waist (yaw, pitch)
-        300.0, 300.0, 150.0, 300.0, 80.0, 80.0, 80.0,  # left arm
-        300.0, 300.0, 150.0, 300.0, 80.0, 80.0, 80.0,  # right arm
+        320.0, 320.0, 320.0, 320.0, 320.0, 60.0,  # left leg (X12_320 legs + X6_60 ankle_roll)
+        320.0, 320.0, 320.0, 320.0, 320.0, 60.0,  # right leg
+        320.0, 640.0,  # waist (yaw: X12_320, pitch: X12_320 * 2)
+        120.0, 120.0, 120.0, 120.0, 60.0, 60.0, 60.0,  # left arm (X8_120 shoulder + X6_60 wrist)
+        120.0, 120.0, 120.0, 120.0, 60.0, 60.0, 60.0,  # right arm
     ],
     dof_armature_list=[
         0.01, 0.01, 0.01, 0.01, 0.01, 0.01,  # left leg
@@ -2120,27 +2120,27 @@ statue_v1_rmd = RobotConfig(
         stiffness={
             "hip_pitch": 150.0,
             "hip_roll": 150.0,
-            "hip_yaw": 200.0,
-            "knee": 200.0,
-            "ankle_pitch": 50.0,
-            "ankle_roll": 50.0,
+            "hip_yaw": 150.0,
+            "knee": 150.0,
+            "ankle_pitch": 150.0,
+            "ankle_roll": 100.0,
             "waist_yaw": 150.0,
             "waist_pitch": 150.0,
             "shoulder_pitch": 100.0,
             "shoulder_roll": 100.0,
             "shoulder_yaw": 100.0,
             "elbow": 100.0,
-            "wrist_roll": 25.0,
-            "wrist_pitch": 25.0,
-            "wrist_yaw": 25.0,
+            "wrist_roll": 50.0,
+            "wrist_pitch": 50.0,
+            "wrist_yaw": 50.0,
         },
         damping={
             "hip_pitch": 5.0,
             "hip_roll": 5.0,
             "hip_yaw": 5.0,
             "knee": 5.0,
-            "ankle_pitch": 4.0,
-            "ankle_roll": 4.0,
+            "ankle_pitch": 5.0,
+            "ankle_roll": 5.0,
             "waist_yaw": 5.0,
             "waist_pitch": 5.0,
             "shoulder_pitch": 5.0,
@@ -2151,10 +2151,11 @@ statue_v1_rmd = RobotConfig(
             "wrist_pitch": 4.0,
             "wrist_yaw": 4.0,
         },
-        action_scale=1.0,
+        action_scale=0.25,
         action_clip_value=100.0,
         clip_actions=True,
         clip_torques=True,
+        action_scales_by_effort_limit_over_p_gain=True,
     ),
     asset=RobotAssetConfig(
         asset_root="@holosoma/data/robots",

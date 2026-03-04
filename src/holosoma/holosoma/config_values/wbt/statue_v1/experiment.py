@@ -34,6 +34,8 @@ statue_v1_rmd_wbt_future_motion = ExperimentConfig(
             init_noise_std=1.0,
             init_at_random_ep_len=False,
             use_symmetry=False,
+            actor_learning_rate=1e-3,
+            critic_learning_rate=1e-3,
             actor_optimizer=replace(algo.ppo.config.actor_optimizer, weight_decay=0.000),
             critic_optimizer=replace(algo.ppo.config.critic_optimizer, weight_decay=0.000),
             module_dict=replace(

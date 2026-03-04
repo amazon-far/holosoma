@@ -276,28 +276,31 @@ def future_motion_targets(
     num_steps = future_num_steps
     
     # Get future motion data
-    # root pos/quat from body_pos_w[:, 0] and body_quat_w[:, 0]
+    # root pos/quat from the pelvis body (first body in robot config, mapped to raw NPZ index)
     # Shape after indexing: [num_envs, future_num_steps, ...]
-    
+
     # Use advanced indexing to get data for each env at each future timestep
     env_indices = torch.arange(num_envs, device=env.device)[:, None].expand(-1, num_steps)
-    
-    # Root position and quaternion (pelvis = body index 0)
-    root_pos = motion._body_pos_w[future_time_steps, 0]  # [num_envs, num_steps, 3]
-    root_quat = motion._body_quat_w[future_time_steps, 0]  # [num_envs, num_steps, 4]
-    
+
+    # Root body index in raw NPZ data (not necessarily 0 if 'world' body is present)
+    root_body_raw_idx = motion._body_indexes[0].item()
+
+    # Root position and quaternion (pelvis)
+    root_pos = motion._body_pos_w[future_time_steps, root_body_raw_idx]  # [num_envs, num_steps, 3]
+    root_quat = motion._body_quat_w[future_time_steps, root_body_raw_idx]  # [num_envs, num_steps, 4]
+
     # Root height
     root_height = root_pos[..., 2:3]  # [num_envs, num_steps, 1]
-    
+
     # Roll and pitch from quaternion
     roll, pitch, yaw = get_euler_xyz(root_quat.reshape(-1, 4), w_last=True)
     roll_pitch = torch.stack([roll, pitch], dim=-1).reshape(num_envs, num_steps, 2)
-    
+
     # Base linear velocity (from body_lin_vel_w)
-    base_lin_vel = motion._body_lin_vel_w[future_time_steps, 0]  # [num_envs, num_steps, 3]
-    
+    base_lin_vel = motion._body_lin_vel_w[future_time_steps, root_body_raw_idx]  # [num_envs, num_steps, 3]
+
     # Base angular velocity (yaw component only)
-    base_ang_vel = motion._body_ang_vel_w[future_time_steps, 0]  # [num_envs, num_steps, 3]
+    base_ang_vel = motion._body_ang_vel_w[future_time_steps, root_body_raw_idx]  # [num_envs, num_steps, 3]
     base_yaw_vel = base_ang_vel[..., 2:3]  # [num_envs, num_steps, 1]
     
     # Joint positions (relative to default)

@@ -67,7 +67,6 @@ class BadTracking(TerminationTermBase):
             f"termination.params['body_names_to_track']: {self.body_names_to_track}"
         )
 
-        # return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
         bad_ref_pos = self.bad_ref_pos(motion_command)
         bad_ref_ori = self.bad_ref_ori(motion_command)
         bad_motion_body_pos = self.bad_motion_body_pos(motion_command)
@@ -85,8 +84,8 @@ class BadTracking(TerminationTermBase):
         return bad_tracking
 
     def bad_ref_pos(self, motion_command: MotionCommand) -> torch.Tensor:
-        """Terminate if the reference position is too far from the robot's position."""
-        return torch.norm(motion_command.ref_pos_w - motion_command.robot_ref_pos_w, dim=1) > self.bad_ref_pos_threshold
+        """Terminate if the reference position Z is too far from the robot's position Z."""
+        return torch.abs(motion_command.ref_pos_w[:, -1] - motion_command.robot_ref_pos_w[:, -1]) > self.bad_ref_pos_threshold
 
     def bad_ref_ori(self, motion_command: MotionCommand) -> torch.Tensor:
         """Terminate if the reference orientation is too far from the robot's orientation."""
@@ -101,10 +100,10 @@ class BadTracking(TerminationTermBase):
         )
 
     def bad_motion_body_pos(self, motion_command: MotionCommand) -> torch.Tensor:
-        """Terminate if the motion body position is too far from the robot's body position."""
+        """Terminate if the motion body position Z is too far from the robot's body position Z."""
         body_idx = self.bad_motion_body_pos_body_indexes
-        error = torch.norm(
-            motion_command.body_pos_relative_w[:, body_idx] - motion_command.robot_body_pos_w[:, body_idx], dim=-1
+        error = torch.abs(
+            motion_command.body_pos_relative_w[:, body_idx, -1] - motion_command.robot_body_pos_w[:, body_idx, -1]
         )
         return torch.any(error > self.bad_motion_body_pos_threshold, dim=-1)
 
