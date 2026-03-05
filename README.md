@@ -41,8 +41,11 @@ bash scripts/setup_isaacgym.sh
 # Requires Ubuntu 22.04 or later due to IsaacSim dependencies
 bash scripts/setup_isaacsim.sh
 
-# For MJWarp training and MuJoCo simulation (inference)
+# For MJWarp training and MuJoCo simulation (inference) — conda-based
 bash scripts/setup_mujoco.sh
+
+# For MJWarp training and MuJoCo simulation (inference) — uv-based (lightweight alternative)
+bash scripts/setup_mujoco_via_uv.sh
 
 # For inference/deployment
 bash scripts/setup_inference.sh
