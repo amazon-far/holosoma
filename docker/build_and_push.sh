@@ -5,7 +5,7 @@
 # Usage:
 #   bash docker/build_and_push.sh                  # build & push all images
 #   bash docker/build_and_push.sh mujoco retarget  # only matching images
-#   bash docker/build_and_push.sh --no-push        # build only, skip push
+#   bash docker/build_and_push.sh --latest         # also tag and push as :latest
 #   bash docker/build_and_push.sh --dry-run        # print commands, do nothing
 #
 # Environment variables:
@@ -34,13 +34,13 @@ IMAGES=(
 )
 
 # ── Parse flags ──────────────────────────────────────────────────────
-NO_PUSH=false
+TAG_LATEST=false
 DRY_RUN=false
 FILTERS=()
 
 for arg in "$@"; do
   case "$arg" in
-    --no-push)  NO_PUSH=true ;;
+    --latest)   TAG_LATEST=true ;;
     --dry-run)  DRY_RUN=true ;;
     --help|-h)
       sed -n '2,/^$/{ s/^# \?//; p }' "$0"
@@ -81,32 +81,30 @@ for cmd in docker; do
   fi
 done
 
-if ! $NO_PUSH && ! $DRY_RUN; then
+if ! $DRY_RUN; then
   if ! command -v aws &>/dev/null; then
     echo "Error: aws CLI is not installed (required for push)" >&2; exit 1
   fi
 fi
 
 # ── ECR authentication ──────────────────────────────────────────────
-if ! $NO_PUSH; then
-  echo "==> Configuring ECR credential helper for ${ECR_REPO}"
-  if ! $DRY_RUN; then
-    # Ensure docker config dir exists
-    mkdir -p ~/.docker
+echo "==> Configuring ECR credential helper for ${ECR_REPO}"
+if ! $DRY_RUN; then
+  # Ensure docker config dir exists
+  mkdir -p ~/.docker
 
-    # Add ecr-login credential helper for our registry if not already present
-    if [ ! -f ~/.docker/config.json ]; then
-      echo '{}' > ~/.docker/config.json
-    fi
+  # Add ecr-login credential helper for our registry if not already present
+  if [ ! -f ~/.docker/config.json ]; then
+    echo '{}' > ~/.docker/config.json
+  fi
 
-    if ! jq -e ".credHelpers[\"${ECR_REPO}\"]" ~/.docker/config.json &>/dev/null; then
-      tmp=$(mktemp)
-      jq --arg repo "$ECR_REPO" '.credHelpers[$repo] = "ecr-login"' ~/.docker/config.json > "$tmp" \
-        && mv "$tmp" ~/.docker/config.json
-      echo "    Added ecr-login credential helper for ${ECR_REPO}"
-    else
-      echo "    ECR credential helper already configured"
-    fi
+  if ! jq -e ".credHelpers[\"${ECR_REPO}\"]" ~/.docker/config.json &>/dev/null; then
+    tmp=$(mktemp)
+    jq --arg repo "$ECR_REPO" '.credHelpers[$repo] = "ecr-login"' ~/.docker/config.json > "$tmp" \
+      && mv "$tmp" ~/.docker/config.json
+    echo "    Added ecr-login credential helper for ${ECR_REPO}"
+  else
+    echo "    ECR credential helper already configured"
   fi
 fi
 
@@ -125,30 +123,31 @@ for entry in "${IMAGES[@]}"; do
   echo ""
   echo "==> Building ${image_name} from ${dockerfile}"
 
-  # tags: date tag + latest
-  tags=(-t "${full_image}:latest" -t "${full_image}:${TAG}")
+  # tags: always date tag, optionally latest
+  tags=(-t "${full_image}:${TAG}")
+  if $TAG_LATEST; then
+    tags+=(-t "${full_image}:latest")
+  fi
 
   if run env DOCKER_BUILDKIT=1 docker build "${tags[@]}" -f "${dockerfile}" "${ROOT_REPO}"; then
     echo "    Built: ${image_name}"
 
-    if ! $NO_PUSH; then
-      echo "    Pushing ${image_name}..."
-      push_ok=true
+    echo "    Pushing ${image_name}..."
+    push_ok=true
+    if ! run docker push "${full_image}:${TAG}"; then
+      push_ok=false
+    fi
+    if $TAG_LATEST; then
       if ! run docker push "${full_image}:latest"; then
         push_ok=false
       fi
-      if ! run docker push "${full_image}:${TAG}"; then
-        push_ok=false
-      fi
+    fi
 
-      if $push_ok; then
-        SUCCEEDED+=("$image_name")
-      else
-        echo "    FAILED to push: ${image_name}" >&2
-        FAILED+=("$image_name")
-      fi
-    else
+    if $push_ok; then
       SUCCEEDED+=("$image_name")
+    else
+      echo "    FAILED to push: ${image_name}" >&2
+      FAILED+=("$image_name")
     fi
   else
     echo "    FAILED to build: ${image_name}" >&2
@@ -196,6 +195,6 @@ if [[ ${#SUCCEEDED[@]} -eq 0 ]] && [[ ${#FAILED[@]} -eq 0 ]]; then
   exit 1
 fi
 echo "  Tag: ${TAG}"
-$NO_PUSH && echo "  (push skipped — --no-push)"
+$TAG_LATEST && echo "  (also tagged as :latest)"
 $DRY_RUN && echo "  (dry run — nothing was executed)"
 echo "  Done."
