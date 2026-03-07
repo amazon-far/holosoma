@@ -6,6 +6,17 @@ from pydantic.dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class DebugConfig:
+    """Debug overrides for quick testing."""
+
+    force_upright_imu: bool = False
+    """Override projected_gravity with [0, 0, -1] (perfectly upright)."""
+
+    force_zero_angular_velocity: bool = False
+    """Override base_ang_vel with [0, 0, 0]."""
+
+
+@dataclass(frozen=True)
 class TaskConfig:
     """Task execution configuration for policy inference."""
 
@@ -63,3 +74,6 @@ class TaskConfig:
 
     motion_end_timestep: int | None = None
     """Ending timestep for motion clip playback. If None, plays until the end."""
+
+    debug: DebugConfig = DebugConfig()
+    """Debug overrides for quick testing."""
