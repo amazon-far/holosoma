@@ -6,6 +6,10 @@ permissions:
 
 on:
   pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'scripts/source_*'
     types:
     - opened
     - reopened

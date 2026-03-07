@@ -1,9 +1,16 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Exit on error, and print commands
 set -e
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 ROOT_DIR=$(dirname "$SCRIPT_DIR")
+
+if ! command -v sudo &> /dev/null; then
+  # in docker build sudo isn't avaiable, but its ok
+  echo "Warning: sudo could not be found, you may need to run this script with sudo"
+  function sudo { "$@"; }
+  export -f sudo
+fi
 
 # MuJoCo Warp version to install -- the repo is missing version tags and branches
 # Arbitrarily chosen from mainline at the time we've ~tested against

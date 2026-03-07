@@ -1,8 +1,16 @@
+#!/usr/bin/env bash
 # Exit on error, and print commands
 set -ex
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 ROOT_DIR=$(dirname "$SCRIPT_DIR")
+
+if ! command -v sudo &> /dev/null; then
+  # in docker build sudo isn't avaiable, but its ok
+  echo "Warning: sudo could not be found, you may need to run this script with sudo"
+  function sudo { "$@"; }
+  export -f sudo
+fi
 
 # Use CONDA_ENV_NAME if provided, otherwise default to "hssim"
 CONDA_ENV_NAME=${CONDA_ENV_NAME:-hsretargeting}

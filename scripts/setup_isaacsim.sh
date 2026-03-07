@@ -1,8 +1,16 @@
+#!/usr/bin/env bash
 # Exit on error, and print commands
 set -ex
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 ROOT_DIR=$(dirname "$SCRIPT_DIR")
+
+if ! command -v sudo &> /dev/null; then
+  # in docker build sudo isn't avaiable, but its ok
+  echo "Warning: sudo could not be found, you may need to run this script with sudo"
+  function sudo { "$@"; }
+  export -f sudo
+fi
 
 # Use CONDA_ENV_NAME if provided, otherwise default to "hssim"
 CONDA_ENV_NAME=${CONDA_ENV_NAME:-hssim}
@@ -58,9 +66,15 @@ if [[ ! -f $SENTINEL_FILE ]]; then
 
   sudo apt install -y cmake build-essential
   cd $WORKSPACE_DIR/IsaacLab
+  # setuptools 81 removes pkg_resoures, a dep needs that
+  # see https://github.com/isaac-sim/IsaacLab/pull/4585
+  pip install 'setuptools<81'
+  echo 'setuptools<81' > build-constraints.txt
+  export PIP_BUILD_CONSTRAINT="$(realpath build-constraints.txt)"
   # work-around for egl_probe cmake max version issue
   export CMAKE_POLICY_VERSION_MINIMUM=3.5
   ./isaaclab.sh --install
+  unset PIP_BUILD_CONSTRAINT
 
  # Install Holosoma
   pip install -U pip

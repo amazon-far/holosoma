@@ -13,6 +13,8 @@ __pycache__
 *.so
 .pytest_cache
 .coverage
+.mypy_cache
+.ruff_cache
 
 # Virtual environments
 venv/
@@ -47,3 +49,9 @@ temp/
 *.pth
 *.pt
 wandb/
+
+# etc
+.claude/
+.jj/
+.omc/
+mise.local.toml
