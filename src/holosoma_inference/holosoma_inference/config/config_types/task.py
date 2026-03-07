@@ -15,6 +15,9 @@ class DebugConfig:
     force_zero_angular_velocity: bool = False
     """Override base_ang_vel with [0, 0, 0]."""
 
+    force_zero_action: bool = False
+    """Zero out the scaled policy action (robot holds default pose)."""
+
 
 @dataclass(frozen=True)
 class TaskConfig:

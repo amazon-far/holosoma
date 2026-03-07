@@ -451,7 +451,34 @@ class BasePolicy:
                     term_values = group_obs[0, start_idx : start_idx + total_dim]
                     print(f"  {term_name:20s} (dim={term_dim:2d}, hist={history_len}): {term_values}")
                     start_idx += total_dim
+
+        # Joint table: dof_name | q (deg) | dq | action
+        self._print_joint_table(obs)
         print("========================================\n")
+
+    def _print_joint_table(self, obs: dict[str, np.ndarray]) -> None:
+        """Print a compact per-joint table: name | q(°) | dq | action."""
+        # Find dof_pos / dof_vel in the first group that has them
+        q = dq = None
+        for group_name in obs:
+            offsets = {t: (s, e) for t, s, e in self._obs_term_offsets.get(group_name, [])}
+            buf = obs[group_name][0]
+            if q is None and "dof_pos" in offsets:
+                s, e = offsets["dof_pos"]
+                q = buf[s:e] / self.obs_scales.get("dof_pos", 1.0)
+            if dq is None and "dof_vel" in offsets:
+                s, e = offsets["dof_vel"]
+                dq = buf[s:e] / self.obs_scales.get("dof_vel", 1.0)
+        act = self.last_policy_action[0] if self.last_policy_action is not None else None
+        deg = np.degrees
+        w = max(len(name) for name in self.dof_names)
+        hdr = f"  {'joint':<{w}}  {'q(°)':>7}  {'dq(°/s)':>8}  {'act(°)':>7}"
+        print(f"\n{hdr}\n  {'─' * len(hdr.strip())}")
+        for i, name in enumerate(self.dof_names):
+            qi = f"{deg(q[i]):7.1f}" if q is not None and i < len(q) else "    n/a"
+            di = f"{deg(dq[i]):8.1f}" if dq is not None and i < len(dq) else "     n/a"
+            ai = f"{deg(act[i]):7.1f}" if act is not None and i < len(act) else "    n/a"
+            print(f"  {name:<{w}}  {qi}  {di}  {ai}")
 
     def rl_inference(self, robot_state_data):
         """Perform RL inference to get policy action."""
