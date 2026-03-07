@@ -643,13 +643,6 @@ class BasePolicy:
         # Stage 4: Post-processing
         with self.latency_tracker.measure("postprocessing"):
             if self.use_policy_action and not self.get_ready_state:
-                if scaled_policy_action.shape[1] != self.num_dofs:
-                    if not self.upper_body_controller:
-                        scaled_policy_action = np.concatenate(
-                            [np.zeros((1, self.num_dofs - scaled_policy_action.shape[1])), scaled_policy_action], axis=1
-                        )
-                    else:
-                        raise NotImplementedError("Upper body controller not implemented")
                 q_target = scaled_policy_action + self.default_dof_angles
 
             # Prepare command (reuse pre-allocated arrays)
