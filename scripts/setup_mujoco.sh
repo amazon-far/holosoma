@@ -237,7 +237,7 @@ if [[ "$INSTALL_WARP" == "true" ]] && [[ ! -f $WARP_SENTINEL_FILE ]]; then
     echo "Install/Upgrade NVIDIA driver:"
     echo "  1. Check available drivers: ubuntu-drivers devices"
     echo "  2. Install recommended:    sudo ubuntu-drivers install"
-    echo "  3. Or install specific:    sudo ubuntu-drivers install nvidia:550"
+    echo "  3. Or install specific:    sudo ubuntu-drivers install nvidia:590"
     echo "  4. Reboot:                 sudo reboot"
     echo ""
     echo "Reference: https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/"
