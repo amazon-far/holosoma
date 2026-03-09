@@ -24,6 +24,14 @@ logs_eval
 src/holosoma/holosoma/data/robots/converted/
 src/holosoma/holosoma/data/robots/converted_rank*/
 
+# Virtual environments
+.venv/
+
 # other
 *.egg-info
 __pycache__
+
+# Gas Town (added by gt)
+.runtime/
+.claude/commands/
+.logs/
