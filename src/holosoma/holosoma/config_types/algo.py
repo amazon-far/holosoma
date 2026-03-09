@@ -206,6 +206,9 @@ class PPOConfig:
     eval_callbacks: Any = None
     """Evaluation callbacks configuration."""
 
+    eval_interval: int = 0
+    """Run evaluation every N training iterations (0 = no eval during training)."""
+
     max_actor_learning_rate: float | None = None
     min_actor_learning_rate: float | None = None
     max_critic_learning_rate: float | None = None

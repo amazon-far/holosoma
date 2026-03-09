@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from loguru import logger
 
-from holosoma.config_types.command import MotionConfig, NoiseToInitialPoseConfig
+from holosoma.config_types.command import MotionConfig, MultiMotionConfig, NoiseToInitialPoseConfig
 from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
 from holosoma.managers.command.base import CommandTermBase
 from holosoma.utils.file_cache import cached_open
@@ -479,7 +479,7 @@ class MotionCommand(CommandTermBase):
 
         # Handle freeze_at_timestep_zero_prob: for envs at timestep 0, randomly decide whether to advance
         freeze_prob = self.motion_cfg.freeze_at_timestep_zero_prob
-        if freeze_prob > 0.0:
+        if freeze_prob > 0.0 and not self._env.is_evaluating:
             zero_mask = self.time_steps == 0
             if zero_mask.any():
                 rand_vals = torch.rand(self.num_envs, device=self.device)
@@ -1126,6 +1126,590 @@ class MotionCommand(CommandTermBase):
             self.visualization_markers["real_object"] = real_object_visualizer
             self.visualization_markers["motion_object"] = motion_object_visualizer
 
+    def _ensure_index_tensor(self, env_ids: torch.Tensor | None) -> torch.Tensor:
+        if env_ids is None:
+            return torch.arange(self.num_envs, device=self.device, dtype=torch.long)
+        if isinstance(env_ids, torch.Tensor):
+            return env_ids.to(device=self.device, dtype=torch.long)
+        return torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
+
+    def _get_index_of_a_in_b(self, a_names: List[str], b_names: List[str], device: str = "cpu") -> torch.Tensor:
+        indexes = []
+        for name in a_names:
+            assert name in b_names, f"The specified name ({name}) doesn't exist: {b_names}"
+            indexes.append(b_names.index(name))
+        return torch.tensor(indexes, dtype=torch.long, device=device)
+
+
+#########################################################################################################
+## MotionLibrary and MultiMotionCommand (for multi-motion / PhUMA training)
+#########################################################################################################
+
+import os
+
+
+class MotionLibrary:
+    """Holds a pool of motions on GPU, padded to a common max length.
+
+    All motion tensors are stored as (pool_size, max_T, ...) so that
+    per-env indexing is a simple 2D gather: ``tensor[motion_idx, time_step]``.
+    """
+
+    def __init__(
+        self,
+        motion_dir: str,
+        pool_size: int,
+        robot_body_names: list[str],
+        robot_joint_names: list[str],
+        device: str,
+        min_motion_length: int = 30,
+        split_file: str = "",
+    ):
+        self.motion_dir = motion_dir
+        self.pool_size = pool_size
+        self.device = device
+        self.min_motion_length = min_motion_length
+
+        # Discover all npz files
+        import glob as glob_module
+
+        all_npz = sorted(glob_module.glob(os.path.join(motion_dir, "**", "*.npz"), recursive=True))
+        assert len(all_npz) > 0, f"No .npz files found in {motion_dir}"
+
+        # Filter by split file if provided
+        if split_file:
+            with open(split_file, "r") as f:
+                split_keys = set(line.strip() for line in f if line.strip())
+            # Match split keys (e.g. "humanml/000002_chunk_0000") to npz paths
+            filtered = []
+            for npz_path in all_npz:
+                rel = os.path.relpath(npz_path, motion_dir)
+                key = os.path.splitext(rel)[0]  # strip .npz
+                if key in split_keys:
+                    filtered.append(npz_path)
+            logger.info(
+                f"MotionLibrary: split file {split_file} has {len(split_keys)} entries, "
+                f"matched {len(filtered)}/{len(all_npz)} .npz files"
+            )
+            assert len(filtered) > 0, (
+                f"No .npz files matched split file {split_file}. "
+                f"Check that motion_dir ({motion_dir}) and split file paths are compatible."
+            )
+            self._all_npz_files = filtered
+        else:
+            self._all_npz_files = all_npz
+        logger.info(f"MotionLibrary: using {len(self._all_npz_files)} .npz files from {motion_dir}")
+
+        self._robot_body_names = robot_body_names
+        self._robot_joint_names = robot_joint_names
+
+        # Load initial pool
+        self._load_pool(list(range(pool_size)))
+
+    def _load_pool(self, slot_indices: list[int]) -> None:
+        """Load motions into the specified pool slots."""
+        import random
+
+        n_files = len(self._all_npz_files)
+        file_indices = random.sample(range(n_files), min(len(slot_indices), n_files))
+        if len(file_indices) < len(slot_indices):
+            extra = random.choices(range(n_files), k=len(slot_indices) - len(file_indices))
+            file_indices.extend(extra)
+
+        loaders = []
+        for fi in file_indices:
+            loader = MotionLoader(
+                self._all_npz_files[fi],
+                self._robot_body_names,
+                self._robot_joint_names,
+                device="cpu",
+            )
+            if loader.time_step_total < self.min_motion_length:
+                for _ in range(10):
+                    alt_fi = random.randint(0, n_files - 1)
+                    loader = MotionLoader(
+                        self._all_npz_files[alt_fi],
+                        self._robot_body_names,
+                        self._robot_joint_names,
+                        device="cpu",
+                    )
+                    if loader.time_step_total >= self.min_motion_length:
+                        break
+            loaders.append(loader)
+
+        if not hasattr(self, "_max_T"):
+            self._max_T = max(l.time_step_total for l in loaders)
+            self._init_pool_tensors(loaders)
+        else:
+            new_max_T = max(l.time_step_total for l in loaders)
+            if new_max_T > self._max_T:
+                self._grow_tensors(new_max_T)
+            self._fill_slots(slot_indices, loaders)
+
+    def _init_pool_tensors(self, loaders: list[MotionLoader]) -> None:
+        """Initialize all pool tensors from scratch."""
+        P = self.pool_size
+        T = self._max_T
+
+        L0 = loaders[0]
+        nJ_raw = L0._joint_pos.shape[1]
+        nB_raw = L0._body_pos_w.shape[1]
+
+        self._joint_indexes = L0._joint_indexes.to(self.device)
+        self._body_indexes = L0._body_indexes.to(self.device)
+
+        self._joint_pos = torch.zeros(P, T, nJ_raw, device=self.device)
+        self._joint_vel = torch.zeros(P, T, nJ_raw, device=self.device)
+        self._body_pos_w = torch.zeros(P, T, nB_raw, 3, device=self.device)
+        self._body_quat_w = torch.zeros(P, T, nB_raw, 4, device=self.device)
+        self._body_lin_vel_w = torch.zeros(P, T, nB_raw, 3, device=self.device)
+        self._body_ang_vel_w = torch.zeros(P, T, nB_raw, 3, device=self.device)
+        self._body_quat_w[..., -1] = 1.0  # xyzw identity
+
+        self.time_step_totals = torch.zeros(P, dtype=torch.long, device=self.device)
+
+        self._fill_slots(list(range(P)), loaders)
+
+    def _fill_slots(self, slot_indices: list[int], loaders: list[MotionLoader]) -> None:
+        """Fill specific pool slots with motion data."""
+        for slot_idx, loader in zip(slot_indices, loaders):
+            t = loader.time_step_total
+            self.time_step_totals[slot_idx] = t
+            self._joint_pos[slot_idx, :t] = loader._joint_pos.to(self.device)
+            self._joint_vel[slot_idx, :t] = loader._joint_vel.to(self.device)
+            self._body_pos_w[slot_idx, :t] = loader._body_pos_w.to(self.device)
+            self._body_quat_w[slot_idx, :t] = loader._body_quat_w.to(self.device)
+            self._body_lin_vel_w[slot_idx, :t] = loader._body_lin_vel_w.to(self.device)
+            self._body_ang_vel_w[slot_idx, :t] = loader._body_ang_vel_w.to(self.device)
+            # Pad remaining timesteps by repeating last frame
+            if t < self._max_T:
+                self._joint_pos[slot_idx, t:] = loader._joint_pos[-1].to(self.device)
+                self._joint_vel[slot_idx, t:] = 0.0
+                self._body_pos_w[slot_idx, t:] = loader._body_pos_w[-1].to(self.device)
+                self._body_quat_w[slot_idx, t:] = loader._body_quat_w[-1].to(self.device)
+                self._body_lin_vel_w[slot_idx, t:] = 0.0
+                self._body_ang_vel_w[slot_idx, t:] = 0.0
+
+    def _resize_pool(self, new_pool_size: int) -> None:
+        """Resize pool tensors to a new pool size (first dimension)."""
+        old_P = self.pool_size
+        if new_pool_size <= old_P:
+            return
+        T = self._max_T
+        extra = new_pool_size - old_P
+
+        def _pad_pool(t: torch.Tensor) -> torch.Tensor:
+            pad_shape = (extra,) + t.shape[1:]
+            return torch.cat([t, torch.zeros(pad_shape, dtype=t.dtype, device=t.device)], dim=0)
+
+        self._joint_pos = _pad_pool(self._joint_pos)
+        self._joint_vel = _pad_pool(self._joint_vel)
+        self._body_pos_w = _pad_pool(self._body_pos_w)
+        self._body_quat_w = _pad_pool(self._body_quat_w)
+        self._body_lin_vel_w = _pad_pool(self._body_lin_vel_w)
+        self._body_ang_vel_w = _pad_pool(self._body_ang_vel_w)
+        self.time_step_totals = torch.cat([
+            self.time_step_totals,
+            torch.zeros(extra, dtype=torch.long, device=self.device),
+        ])
+        self.pool_size = new_pool_size
+
+    def _grow_tensors(self, new_max_T: int) -> None:
+        """Grow all pool tensors to accommodate a longer motion."""
+        old_T = self._max_T
+        if new_max_T <= old_T:
+            return
+        self._max_T = new_max_T
+        pad = new_max_T - old_T
+
+        def _pad_tensor(t: torch.Tensor) -> torch.Tensor:
+            last_frame = t[:, -1:].expand(-1, pad, *[-1] * (t.dim() - 2))
+            return torch.cat([t, last_frame], dim=1)
+
+        self._joint_pos = _pad_tensor(self._joint_pos)
+        self._joint_vel = _pad_tensor(self._joint_vel)
+        self._body_pos_w = _pad_tensor(self._body_pos_w)
+        self._body_quat_w = _pad_tensor(self._body_quat_w)
+        self._body_lin_vel_w = _pad_tensor(self._body_lin_vel_w)
+        self._body_ang_vel_w = _pad_tensor(self._body_ang_vel_w)
+
+    def refresh(self, count: int) -> None:
+        """Replace `count` random pool slots with new motions from disk."""
+        import random
+
+        slots = random.sample(range(self.pool_size), min(count, self.pool_size))
+        self._load_pool(slots)
+
+    def joint_pos(self, motion_indices: torch.Tensor, time_steps: torch.Tensor) -> torch.Tensor:
+        """(num_envs, J) joint positions for given motion/time indices."""
+        return self._joint_pos[motion_indices, time_steps][:, self._joint_indexes]
+
+    def joint_vel(self, motion_indices: torch.Tensor, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._joint_vel[motion_indices, time_steps][:, self._joint_indexes]
+
+    def body_pos_w(self, motion_indices: torch.Tensor, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._body_pos_w[motion_indices, time_steps][:, self._body_indexes]
+
+    def body_quat_w(self, motion_indices: torch.Tensor, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._body_quat_w[motion_indices, time_steps][:, self._body_indexes]
+
+    def body_lin_vel_w(self, motion_indices: torch.Tensor, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._body_lin_vel_w[motion_indices, time_steps][:, self._body_indexes]
+
+    def body_ang_vel_w(self, motion_indices: torch.Tensor, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._body_ang_vel_w[motion_indices, time_steps][:, self._body_indexes]
+
+
+class MultiMotionCommand(CommandTermBase):
+    """Like MotionCommand, but each env tracks a different motion from a MotionLibrary pool."""
+
+    def __init__(self, cfg: Any, env: WholeBodyTrackingManager):
+        super().__init__(cfg, env)
+
+        self._env = env
+        if isinstance(cfg.params["motion_config"], MultiMotionConfig):
+            self.motion_cfg = cfg.params["motion_config"]
+        else:
+            self.motion_cfg = MultiMotionConfig(**cfg.params["motion_config"])
+        self.init_pose_cfg: NoiseToInitialPoseConfig = self.motion_cfg.noise_to_initial_pose
+
+    def setup(self) -> None:
+        self.num_envs = self._env.num_envs
+        self.device = self._env.device
+
+        robot_body_names = self._env.simulator._body_list
+        robot_body_names_alias = [FAKE_BODY_NAME_ALIASES.get(bn, bn) for bn in robot_body_names]
+        robot_joint_names = self._env.simulator.dof_names
+
+        self.motion_library = MotionLibrary(
+            motion_dir=self.motion_cfg.motion_dir,
+            pool_size=self.motion_cfg.pool_size,
+            robot_body_names=robot_body_names_alias,
+            robot_joint_names=robot_joint_names,
+            device=self.device,
+            min_motion_length=self.motion_cfg.min_motion_length,
+            split_file=self.motion_cfg.split_file,
+        )
+
+        self.ref_body_index = robot_body_names.index(self.motion_cfg.body_name_ref[0])
+        self.tracked_body_indexes = self._get_index_of_a_in_b(
+            self.motion_cfg.body_names_to_track, robot_body_names, self.device
+        )
+
+        self.metrics: dict[str, torch.Tensor] = {}
+        self._step_count = 0
+
+        self.init_buffers()
+
+    def init_buffers(self) -> None:
+        self.time_steps = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.motion_indices = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+
+        self.body_pos_relative_w = torch.zeros(
+            self.num_envs, len(self.motion_cfg.body_names_to_track), 3, device=self.device
+        )
+        self.body_quat_relative_w = torch.zeros(
+            self.num_envs, len(self.motion_cfg.body_names_to_track), 4, device=self.device
+        )
+        self.body_quat_relative_w[:, :, -1] = 1.0  # xyzw identity
+
+    def reset(self, env_ids: torch.Tensor | None) -> None:
+        env_ids = self._ensure_index_tensor(env_ids)
+        if env_ids.numel() == 0:
+            return
+
+        n = env_ids.numel()
+
+        # Sample new motion indices from the pool via multinomial (uniform weights)
+        weights = torch.ones(self.motion_library.pool_size, device=self.device)
+        self.motion_indices[env_ids] = torch.multinomial(
+            weights, n, replacement=True
+        )
+
+        # Sample time steps based on per-env motion length
+        per_env_totals = self.motion_library.time_step_totals[self.motion_indices[env_ids]]
+
+        phase = torch.rand(n, device=self.device)
+        if self._env.is_evaluating:
+            phase = torch.zeros_like(phase)
+
+        self.time_steps[env_ids] = (phase * (per_env_totals - 1).float()).long()
+
+        # Handle start_at_timestep_zero_prob
+        prob = self.motion_cfg.start_at_timestep_zero_prob
+        if prob >= 1.0:
+            self.time_steps[env_ids] = 0
+        elif prob > 0.0:
+            subset = self.time_steps[env_ids]
+            rand_vals = torch.rand_like(subset, dtype=torch.float32)
+            subset = torch.where(rand_vals < prob, torch.zeros_like(subset), subset)
+            self.time_steps[env_ids] = subset
+
+        # Clamp to avoid last timestep
+        already_last = self.time_steps[env_ids] >= per_env_totals - 1
+        self.time_steps[env_ids] = torch.where(
+            already_last, per_env_totals - 2, self.time_steps[env_ids]
+        )
+        self.time_steps[env_ids] = torch.clamp(self.time_steps[env_ids], min=0)
+
+        # Set robot states from motion data
+        mi = self.motion_indices[env_ids]
+        ts = self.time_steps[env_ids]
+
+        root_pos = self.motion_library.body_pos_w(mi, ts)[:, 0].clone()
+        root_rot = self.motion_library.body_quat_w(mi, ts)[:, 0].clone()
+        root_lin_vel = self.motion_library.body_lin_vel_w(mi, ts)[:, 0].clone()
+        root_ang_vel = self.motion_library.body_ang_vel_w(mi, ts)[:, 0].clone()
+        dof_pos = self.motion_library.joint_pos(mi, ts).clone()
+        dof_vel = self.motion_library.joint_vel(mi, ts).clone()
+
+        # Add noise (same logic as MotionCommand)
+        dof_pos_noise = self.init_pose_cfg.dof_pos * self.init_pose_cfg.overall_noise_scale
+        root_pos_noise = (
+            torch.tensor(self.init_pose_cfg.root_pos, device=self.device)
+            * self.init_pose_cfg.overall_noise_scale
+        )
+        root_rot_noise_rpy = (
+            torch.tensor(self.init_pose_cfg.root_rot, device=self.device)
+            * self.init_pose_cfg.overall_noise_scale
+        )
+        root_vel_noise = (
+            torch.tensor(self.init_pose_cfg.root_lin_vel, device=self.device)
+            * self.init_pose_cfg.overall_noise_scale
+        )
+        root_ang_vel_noise_rpy = (
+            torch.tensor(self.init_pose_cfg.root_ang_vel, device=self.device)
+            * self.init_pose_cfg.overall_noise_scale
+        )
+
+        target_dof_pos = dof_pos + (torch.rand(dof_pos.shape, device=self.device) - 0.5) * 2 * dof_pos_noise
+        soft_joint_pos_limits = self._env.simulator.dof_pos_limits
+        target_dof_pos = torch.clip(target_dof_pos, soft_joint_pos_limits[:, 0], soft_joint_pos_limits[:, 1])
+
+        target_dof_vel = dof_vel
+
+        target_root_pos = root_pos + (
+            torch.rand(root_pos.shape, device=self.device) - 0.5
+        ) * 2 * root_pos_noise.unsqueeze(0)
+
+        rand_sample_rpy = (torch.rand((n, 3), device=self.device) - 0.5) * 2 * root_rot_noise_rpy
+        orientations_delta = quat_from_euler_xyz(
+            rand_sample_rpy[:, 0], rand_sample_rpy[:, 1], rand_sample_rpy[:, 2]
+        )
+        target_root_rot = quat_mul(orientations_delta, root_rot, w_last=True)
+
+        target_root_lin_vel = root_lin_vel + (
+            torch.rand(root_lin_vel.shape, device=self.device) - 0.5
+        ) * 2 * root_vel_noise.unsqueeze(0)
+
+        target_root_ang_vel = root_ang_vel + (
+            torch.rand(root_ang_vel.shape, device=self.device) - 0.5
+        ) * 2 * root_ang_vel_noise_rpy.unsqueeze(0)
+
+        self._env.simulator.dof_pos[env_ids] = target_dof_pos
+        self._env.simulator.dof_vel[env_ids] = target_dof_vel
+        self._env.simulator.robot_root_states[env_ids, :3] = target_root_pos
+        self._env.simulator.robot_root_states[env_ids, 3:7] = target_root_rot
+        self._env.simulator.robot_root_states[env_ids, 7:10] = target_root_lin_vel
+        self._env.simulator.robot_root_states[env_ids, 10:13] = target_root_ang_vel
+
+    def step(self) -> None:
+        # Advance time steps
+        advance_mask = torch.ones_like(self.time_steps, dtype=torch.bool)
+
+        freeze_prob = self.motion_cfg.freeze_at_timestep_zero_prob
+        if freeze_prob > 0.0 and not self._env.is_evaluating:
+            zero_mask = self.time_steps == 0
+            if zero_mask.any():
+                rand_vals = torch.rand(self.num_envs, device=self.device)
+                freeze_mask = (rand_vals < freeze_prob) & zero_mask
+                advance_mask = advance_mask & ~freeze_mask
+
+        self.time_steps += advance_mask.long()
+
+        # Compute relative body poses (same as MotionCommand.step)
+        use_root = (self._env.episode_length_buf == 0).unsqueeze(1).float()
+
+        ref_pos_w = self.root_pos_w * use_root + self.ref_pos_w * (1 - use_root)
+        ref_quat_w = self.root_quat_w * use_root + self.ref_quat_w * (1 - use_root)
+        robot_ref_pos_w = self.robot_root_pos_w * use_root + self.robot_ref_pos_w * (1 - use_root)
+        robot_ref_quat_w = self.robot_root_quat_w * use_root + self.robot_ref_quat_w * (1 - use_root)
+
+        n_bodies = len(self.motion_cfg.body_names_to_track)
+        ref_pos_w_repeat = ref_pos_w[:, None, :].repeat(1, n_bodies, 1)
+        ref_quat_w_repeat = ref_quat_w[:, None, :].repeat(1, n_bodies, 1)
+        robot_ref_pos_w_repeat = robot_ref_pos_w[:, None, :].repeat(1, n_bodies, 1)
+        robot_ref_quat_w_repeat = robot_ref_quat_w[:, None, :].repeat(1, n_bodies, 1)
+
+        delta_quat_w = yaw_quat(
+            quat_mul(robot_ref_quat_w_repeat, quat_inverse(ref_quat_w_repeat, w_last=True), w_last=True),
+            w_last=True,
+        )
+        self.body_quat_relative_w = quat_mul(delta_quat_w, self.body_quat_w, w_last=True)
+        delta_pos_w_height = ref_pos_w_repeat - robot_ref_pos_w_repeat
+        delta_pos_w_height[..., :2] = 0.0
+        self.body_pos_relative_w = (
+            robot_ref_pos_w_repeat
+            + delta_pos_w_height
+            + quat_apply(delta_quat_w, self.body_pos_w - ref_pos_w_repeat, w_last=True)
+        )
+
+        # Maybe resample pool
+        self._step_count += 1
+        if self.motion_cfg.resample_interval > 0 and self._step_count % self.motion_cfg.resample_interval == 0:
+            self.motion_library.refresh(self.motion_library.pool_size)
+            logger.info(f"MultiMotionCommand: resampled entire pool at step {self._step_count}")
+
+    @property
+    def command(self) -> torch.Tensor:
+        return torch.cat([self.joint_pos, self.joint_vel], dim=1)
+
+    #########################################################################################
+    ## Robot from motion data (2D indexed via motion_indices + time_steps)
+    #########################################################################################
+    @property
+    def joint_pos(self) -> torch.Tensor:
+        return self.motion_library.joint_pos(self.motion_indices, self.time_steps)
+
+    @property
+    def joint_vel(self) -> torch.Tensor:
+        return self.motion_library.joint_vel(self.motion_indices, self.time_steps)
+
+    @property
+    def body_pos_w(self) -> torch.Tensor:
+        return (
+            self.motion_library.body_pos_w(self.motion_indices, self.time_steps)[:, self.tracked_body_indexes]
+            + self._env.simulator.scene.env_origins[:, None, :]
+        )
+
+    @property
+    def body_quat_w(self) -> torch.Tensor:
+        return self.motion_library.body_quat_w(self.motion_indices, self.time_steps)[:, self.tracked_body_indexes]
+
+    @property
+    def body_lin_vel_w(self) -> torch.Tensor:
+        return self.motion_library.body_lin_vel_w(self.motion_indices, self.time_steps)[:, self.tracked_body_indexes]
+
+    @property
+    def body_ang_vel_w(self) -> torch.Tensor:
+        return self.motion_library.body_ang_vel_w(self.motion_indices, self.time_steps)[:, self.tracked_body_indexes]
+
+    @property
+    def ref_pos_w(self) -> torch.Tensor:
+        all_body_pos = self.motion_library.body_pos_w(self.motion_indices, self.time_steps)
+        return all_body_pos[:, self.ref_body_index] + self._env.simulator.scene.env_origins
+
+    @property
+    def ref_quat_w(self) -> torch.Tensor:
+        all_body_quat = self.motion_library.body_quat_w(self.motion_indices, self.time_steps)
+        return all_body_quat[:, self.ref_body_index]
+
+    @property
+    def root_pos_w(self) -> torch.Tensor:
+        all_body_pos = self.motion_library.body_pos_w(self.motion_indices, self.time_steps)
+        return all_body_pos[:, 0] + self._env.simulator.scene.env_origins
+
+    @property
+    def root_quat_w(self) -> torch.Tensor:
+        all_body_quat = self.motion_library.body_quat_w(self.motion_indices, self.time_steps)
+        return all_body_quat[:, 0]
+
+    @property
+    def ref_lin_vel_w(self) -> torch.Tensor:
+        all_body_vel = self.motion_library.body_lin_vel_w(self.motion_indices, self.time_steps)
+        return all_body_vel[:, self.ref_body_index]
+
+    @property
+    def ref_ang_vel_w(self) -> torch.Tensor:
+        all_body_vel = self.motion_library.body_ang_vel_w(self.motion_indices, self.time_steps)
+        return all_body_vel[:, self.ref_body_index]
+
+    #########################################################################################
+    ## Robot from simulator
+    #########################################################################################
+    @property
+    def robot_joint_pos(self) -> torch.Tensor:
+        return self._env.simulator.dof_pos
+
+    @property
+    def robot_joint_vel(self) -> torch.Tensor:
+        return self._env.simulator.dof_vel
+
+    @property
+    def robot_body_pos_w(self) -> torch.Tensor:
+        return self._env.simulator._rigid_body_pos[:, self.tracked_body_indexes, :]
+
+    @property
+    def robot_body_quat_w(self) -> torch.Tensor:
+        return self._env.simulator._rigid_body_rot[:, self.tracked_body_indexes, :]
+
+    @property
+    def robot_body_lin_vel_w(self) -> torch.Tensor:
+        return self._env.simulator._rigid_body_vel[:, self.tracked_body_indexes, :]
+
+    @property
+    def robot_body_ang_vel_w(self) -> torch.Tensor:
+        return self._env.simulator._rigid_body_ang_vel[:, self.tracked_body_indexes, :]
+
+    @property
+    def robot_root_pos_w(self) -> torch.Tensor:
+        return self._env.simulator.robot_root_states[:, :3]
+
+    @property
+    def robot_root_quat_w(self) -> torch.Tensor:
+        return self._env.simulator.robot_root_states[:, 3:7]
+
+    @property
+    def robot_root_lin_vel_w(self) -> torch.Tensor:
+        return self._env.simulator.robot_root_states[:, 7:10]
+
+    @property
+    def robot_root_ang_vel_w(self) -> torch.Tensor:
+        return self._env.simulator.robot_root_states[:, 10:13]
+
+    @property
+    def robot_ref_pos_w(self) -> torch.Tensor:
+        return self._env.simulator._rigid_body_pos[:, self.ref_body_index, :]
+
+    @property
+    def robot_ref_quat_w(self) -> torch.Tensor:
+        return self._env.simulator._rigid_body_rot[:, self.ref_body_index, :]
+
+    @property
+    def robot_ref_lin_vel_w(self) -> torch.Tensor:
+        return self._env.simulator._rigid_body_vel[:, self.ref_body_index, :]
+
+    @property
+    def robot_ref_ang_vel_w(self) -> torch.Tensor:
+        return self._env.simulator._rigid_body_ang_vel[:, self.ref_body_index, :]
+
+    #########################################################################################
+    ## Metrics
+    #########################################################################################
+    def update_metrics(self) -> None:
+        self.metrics["motion/error_ref_pos"] = torch.norm(self.ref_pos_w - self.robot_ref_pos_w, dim=-1)
+        self.metrics["motion/error_ref_rot"] = quat_error_magnitude(self.ref_quat_w, self.robot_ref_quat_w)
+        self.metrics["motion/error_ref_lin_vel"] = torch.norm(self.ref_lin_vel_w - self.robot_ref_lin_vel_w, dim=-1)
+        self.metrics["motion/error_ref_ang_vel"] = torch.norm(self.ref_ang_vel_w - self.robot_ref_ang_vel_w, dim=-1)
+
+        self.metrics["motion/error_body_pos"] = torch.norm(
+            self.body_pos_relative_w - self.robot_body_pos_w, dim=-1
+        ).mean(dim=-1)
+        self.metrics["motion/error_body_rot"] = quat_error_magnitude(
+            self.body_quat_relative_w, self.robot_body_quat_w
+        ).mean(dim=-1)
+        self.metrics["motion/error_body_lin_vel"] = torch.norm(
+            self.body_lin_vel_w - self.robot_body_lin_vel_w, dim=-1
+        ).mean(dim=-1)
+        self.metrics["motion/error_body_ang_vel"] = torch.norm(
+            self.body_ang_vel_w - self.robot_body_ang_vel_w, dim=-1
+        ).mean(dim=-1)
+        self.metrics["motion/error_joint_pos"] = torch.norm(self.joint_pos - self.robot_joint_pos, dim=-1)
+        self.metrics["motion/error_joint_vel"] = torch.norm(self.joint_vel - self.robot_joint_vel, dim=-1)
+
+    #########################################################################################
+    ## Internal helpers
+    #########################################################################################
     def _ensure_index_tensor(self, env_ids: torch.Tensor | None) -> torch.Tensor:
         if env_ids is None:
             return torch.arange(self.num_envs, device=self.device, dtype=torch.long)

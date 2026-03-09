@@ -315,8 +315,13 @@ class LoggingHelper:
 
         # Log extra metrics
         for section_name, section_dict in extra_log_dicts.items():
-            for key, value in section_dict.items():
-                scalars_to_log[f"{section_name}/{key}"] = value
+            if section_name == "_flat_eval_metrics":
+                # Keys are already fully qualified (e.g. "eval/success_rate")
+                for key, value in section_dict.items():
+                    scalars_to_log[key] = value
+            else:
+                for key, value in section_dict.items():
+                    scalars_to_log[f"{section_name}/{key}"] = value
 
         # Log performance metrics
         scalars_to_log["Perf/total_fps"] = fps

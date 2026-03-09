@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from holosoma.managers.command.terms.wbt import MotionCommand
+from holosoma.managers.command.terms.wbt import MotionCommand, MultiMotionCommand
 from holosoma.utils.rotations import quat_rotate_inverse, quaternion_to_matrix, subtract_frame_transforms
 from holosoma.utils.torch_utils import get_axis_params, to_torch
 
@@ -123,10 +123,12 @@ def actions(env: WholeBodyTrackingManager) -> torch.Tensor:
 #########################################################################################################
 
 
-def _get_motion_command_and_assert_type(env: WholeBodyTrackingManager) -> MotionCommand:
+def _get_motion_command_and_assert_type(env: WholeBodyTrackingManager) -> MotionCommand | MultiMotionCommand:
     motion_command = env.command_manager.get_state("motion_command")
     assert motion_command is not None, "motion_command not found in command manager"
-    assert isinstance(motion_command, MotionCommand), f"Expected MotionCommand, got {type(motion_command)}"
+    assert isinstance(motion_command, (MotionCommand, MultiMotionCommand)), (
+        f"Expected MotionCommand or MultiMotionCommand, got {type(motion_command)}"
+    )
     return motion_command
 
 
@@ -256,8 +258,8 @@ def future_motion_targets(
     from holosoma.utils.rotations import get_euler_xyz, quat_rotate_inverse
     
     motion_command = _get_motion_command_and_assert_type(env)
-    motion = motion_command.motion
-    
+    is_multi = hasattr(motion_command, 'motion_library')
+
     # Generate future time step indices (linearly spaced)
     tar_obs_steps = torch.linspace(
         start=1,
@@ -266,69 +268,87 @@ def future_motion_targets(
         device=env.device,
         dtype=torch.long,
     )
-    
+
     # Current time steps + future offsets, clamped to valid range
     current_time_steps = motion_command.time_steps  # [num_envs]
     future_time_steps = current_time_steps[:, None] + tar_obs_steps[None, :]  # [num_envs, future_num_steps]
-    future_time_steps = torch.clamp(future_time_steps, 0, motion.time_step_total - 1)
-    
+
+    if is_multi:
+        lib = motion_command.motion_library
+        per_env_totals = lib.time_step_totals[motion_command.motion_indices]
+        future_time_steps = torch.min(future_time_steps, (per_env_totals - 1)[:, None])
+        future_time_steps = torch.clamp(future_time_steps, min=0)
+    else:
+        motion = motion_command.motion
+        future_time_steps = torch.clamp(future_time_steps, 0, motion.time_step_total - 1)
+
     num_envs = env.num_envs
     num_steps = future_num_steps
-    
-    # Get future motion data
-    # root pos/quat from the pelvis body (first body in robot config, mapped to raw NPZ index)
-    # Shape after indexing: [num_envs, future_num_steps, ...]
 
-    # Use advanced indexing to get data for each env at each future timestep
-    env_indices = torch.arange(num_envs, device=env.device)[:, None].expand(-1, num_steps)
+    if is_multi:
+        mi = motion_command.motion_indices  # [num_envs]
+        mi_exp = mi[:, None].expand(-1, num_steps)  # [num_envs, num_steps]
+        root_body_raw_idx = lib._body_indexes[0].item()
 
-    # Root body index in raw NPZ data (not necessarily 0 if 'world' body is present)
-    root_body_raw_idx = motion._body_indexes[0].item()
+        # 3D indexing: lib._body_pos_w[mi, t, body]
+        root_pos = lib._body_pos_w[mi_exp, future_time_steps, root_body_raw_idx]
+        root_quat = lib._body_quat_w[mi_exp, future_time_steps, root_body_raw_idx]
+        root_height = root_pos[..., 2:3]
+        roll, pitch, yaw = get_euler_xyz(root_quat.reshape(-1, 4), w_last=True)
+        roll_pitch = torch.stack([roll, pitch], dim=-1).reshape(num_envs, num_steps, 2)
+        base_lin_vel = lib._body_lin_vel_w[mi_exp, future_time_steps, root_body_raw_idx]
+        base_ang_vel = lib._body_ang_vel_w[mi_exp, future_time_steps, root_body_raw_idx]
+        base_yaw_vel = base_ang_vel[..., 2:3]
+        dof_pos = lib._joint_pos[mi_exp, future_time_steps][:, :, lib._joint_indexes]
+        default_dof_pos = env.default_dof_pos_base[:, None, :]
+        dof_pos_rel = dof_pos - default_dof_pos
 
-    # Root position and quaternion (pelvis)
-    root_pos = motion._body_pos_w[future_time_steps, root_body_raw_idx]  # [num_envs, num_steps, 3]
-    root_quat = motion._body_quat_w[future_time_steps, root_body_raw_idx]  # [num_envs, num_steps, 4]
+        if include_key_body_pos:
+            body_pos_robot_order = lib._body_pos_w[mi_exp, future_time_steps][:, :, lib._body_indexes]
+            tracked_body_indexes = motion_command.tracked_body_indexes
+            tracked_body_pos = body_pos_robot_order[:, :, tracked_body_indexes]
+            root_pos_expanded = root_pos[:, :, None, :]
+            root_quat_expanded = root_quat[:, :, None, :]
+            local_body_pos = tracked_body_pos - root_pos_expanded
+            local_body_pos_flat = local_body_pos.reshape(-1, 3)
+            root_quat_flat = root_quat_expanded.expand(-1, -1, local_body_pos.shape[2], -1).reshape(-1, 4)
+            local_body_pos_b = quat_rotate_inverse(root_quat_flat, local_body_pos_flat, w_last=True)
+            local_key_body_pos = local_body_pos_b.reshape(num_envs, num_steps, -1)
+    else:
+        # Original single-motion path
+        env_indices = torch.arange(num_envs, device=env.device)[:, None].expand(-1, num_steps)
+        root_body_raw_idx = motion._body_indexes[0].item()
 
-    # Root height
-    root_height = root_pos[..., 2:3]  # [num_envs, num_steps, 1]
+        root_pos = motion._body_pos_w[future_time_steps, root_body_raw_idx]
+        root_quat = motion._body_quat_w[future_time_steps, root_body_raw_idx]
+        root_height = root_pos[..., 2:3]
+        roll, pitch, yaw = get_euler_xyz(root_quat.reshape(-1, 4), w_last=True)
+        roll_pitch = torch.stack([roll, pitch], dim=-1).reshape(num_envs, num_steps, 2)
+        base_lin_vel = motion._body_lin_vel_w[future_time_steps, root_body_raw_idx]
+        base_ang_vel = motion._body_ang_vel_w[future_time_steps, root_body_raw_idx]
+        base_yaw_vel = base_ang_vel[..., 2:3]
+        dof_pos = motion._joint_pos[future_time_steps][:, :, motion._joint_indexes]
+        default_dof_pos = env.default_dof_pos_base[:, None, :]
+        dof_pos_rel = dof_pos - default_dof_pos
 
-    # Roll and pitch from quaternion
-    roll, pitch, yaw = get_euler_xyz(root_quat.reshape(-1, 4), w_last=True)
-    roll_pitch = torch.stack([roll, pitch], dim=-1).reshape(num_envs, num_steps, 2)
+        if include_key_body_pos:
+            body_pos_robot_order = motion._body_pos_w[future_time_steps][:, :, motion._body_indexes]
+            tracked_body_indexes = motion_command.tracked_body_indexes
+            tracked_body_pos = body_pos_robot_order[:, :, tracked_body_indexes]
+            root_pos_expanded = root_pos[:, :, None, :]
+            root_quat_expanded = root_quat[:, :, None, :]
+            local_body_pos = tracked_body_pos - root_pos_expanded
+            local_body_pos_flat = local_body_pos.reshape(-1, 3)
+            root_quat_flat = root_quat_expanded.expand(-1, -1, local_body_pos.shape[2], -1).reshape(-1, 4)
+            local_body_pos_b = quat_rotate_inverse(root_quat_flat, local_body_pos_flat, w_last=True)
+            local_key_body_pos = local_body_pos_b.reshape(num_envs, num_steps, -1)
 
-    # Base linear velocity (from body_lin_vel_w)
-    base_lin_vel = motion._body_lin_vel_w[future_time_steps, root_body_raw_idx]  # [num_envs, num_steps, 3]
-
-    # Base angular velocity (yaw component only)
-    base_ang_vel = motion._body_ang_vel_w[future_time_steps, root_body_raw_idx]  # [num_envs, num_steps, 3]
-    base_yaw_vel = base_ang_vel[..., 2:3]  # [num_envs, num_steps, 1]
-    
-    # Joint positions (relative to default)
-    # NOTE: Use default_dof_pos_base (without randomization bias) for motion reference data
-    # This ensures consistent normalization across environments and matches inference behavior
-    dof_pos = motion._joint_pos[future_time_steps][:, :, motion._joint_indexes]  # [num_envs, num_steps, num_dofs]
-    default_dof_pos = env.default_dof_pos_base[:, None, :]  # [1, 1, num_dofs] - base values without bias
-    dof_pos_rel = dof_pos - default_dof_pos  # [num_envs, num_steps, num_dofs]
-    
-    # Local key body positions (tracked bodies relative to root) — optional
+    # Build future_obs (common to both paths)
     if include_key_body_pos:
-        # motion.body_pos_w is motion._body_pos_w[:, motion._body_indexes][:, tracked_body_indexes]; use 14 tracked bodies only
-        body_pos_robot_order = motion._body_pos_w[future_time_steps][:, :, motion._body_indexes]  # [num_envs, num_steps, num_robot_bodies, 3]
-        tracked_body_indexes = motion_command.tracked_body_indexes  # [14]
-        tracked_body_pos = body_pos_robot_order[:, :, tracked_body_indexes]  # [num_envs, num_steps, 14, 3]
-        root_pos_expanded = root_pos[:, :, None, :]  # [num_envs, num_steps, 1, 3]
-        root_quat_expanded = root_quat[:, :, None, :]  # [num_envs, num_steps, 1, 4]
-        local_body_pos = tracked_body_pos - root_pos_expanded  # [num_envs, num_steps, 14, 3]
-        local_body_pos_flat = local_body_pos.reshape(-1, 3)
-        root_quat_flat = root_quat_expanded.expand(-1, -1, local_body_pos.shape[2], -1).reshape(-1, 4)
-        local_body_pos_b = quat_rotate_inverse(root_quat_flat, local_body_pos_flat, w_last=True)
-        local_key_body_pos = local_body_pos_b.reshape(num_envs, num_steps, -1)  # [num_envs, num_steps, 14 * 3]
-        # Per step: 1 + 2 + 3 + 1 + num_dofs + num_tracked * 3
         future_obs = torch.cat([
             root_height, roll_pitch, base_lin_vel, base_yaw_vel, dof_pos_rel, local_key_body_pos,
         ], dim=-1)
     else:
-        # Per step: 1 + 2 + 3 + 1 + num_dofs (no key body pos)
         future_obs = torch.cat([
             root_height, roll_pitch, base_lin_vel, base_yaw_vel, dof_pos_rel,
         ], dim=-1)

@@ -315,8 +315,18 @@ class PPO(BaseAlgo):
             with self.logging_helper.record_learn_time():
                 loss_dict = self._training_step()
 
+            # Run eval BEFORE logging so metrics are included in the same wandb step
+            eval_metrics = {}
+            if (
+                self.config.eval_interval > 0
+                and it % self.config.eval_interval == 0
+                and it > 0
+                and self.is_main_process
+            ):
+                eval_metrics, obs_dict = self._evaluate_during_training()
+
             if self.is_main_process:
-                self._post_epoch_logging(it, loss_dict)
+                self._post_epoch_logging(it, loss_dict, eval_metrics=eval_metrics)
 
             if it % self.config.save_interval == 0 and self.is_main_process:
                 self.save(os.path.join(self.log_dir, f"model_{it:05d}.pt"))
@@ -660,7 +670,7 @@ class PPO(BaseAlgo):
         motion_command = self.env.command_manager.get_state("motion_command")
         use_motion_encoder = getattr(self, 'use_motion_encoder', False)
         
-        if motion_command is not None and not use_motion_encoder:
+        if motion_command is not None and not use_motion_encoder and hasattr(motion_command, 'motion'):
             # Export with motion command (traditional approach without motion encoder)
             export_motion_and_policy_as_onnx(
                 self.actor_onnx_wrapper,
@@ -895,26 +905,30 @@ class PPO(BaseAlgo):
         
         return metrics_computed
 
-    def _post_epoch_logging(self, it, loss_dict):
+    def _post_epoch_logging(self, it, loss_dict, eval_metrics=None):
         # Compute and log evaluation metrics (same as eval_metrics.py)
-        eval_metrics = {}
+        rollout_eval_metrics = {}
         try:
-            eval_metrics = self._compute_and_log_eval_metrics(it)
+            rollout_eval_metrics = self._compute_and_log_eval_metrics(it)
         except Exception as e:
             import traceback
             logger.warning(f"[EvalMetrics] Failed to compute metrics at iteration {it}: {e}")
             logger.debug(f"[EvalMetrics] Traceback:\n{traceback.format_exc()}")
-        
+
         extra_log_dicts = {
             "Policy": {
                 "mean_noise_std": self.actor.std.mean().item(),
             },
         }
-        
+
         # Add EvalMetrics to extra_log_dicts for WandB logging
+        if rollout_eval_metrics:
+            extra_log_dicts["EvalMetrics"] = rollout_eval_metrics
+
+        # Add callback eval metrics (e.g. eval/success_rate) to the same wandb step
         if eval_metrics:
-            extra_log_dicts["EvalMetrics"] = eval_metrics
-        
+            extra_log_dicts["_flat_eval_metrics"] = eval_metrics
+
         loss_dict["actor_learning_rate"] = self.actor_learning_rate
         loss_dict["critic_learning_rate"] = self.critic_learning_rate
         # Use logging helper
@@ -1025,6 +1039,78 @@ class PPO(BaseAlgo):
             example_obs["future_motion_targets"] = obs_dict["future_motion_targets"].clone()
         return example_obs
 
+    def _evaluate_during_training(self) -> tuple[dict[str, float], dict]:
+        """Run evaluation during training and return (metrics, obs_dict).
+
+        Saves/restores training state so training can continue seamlessly.
+        Returns obs_dict from reset so the training loop can continue.
+        NOTE: Uses torch.no_grad() instead of @torch.no_grad() decorator to
+        avoid inference mode which blocks inplace tensor ops in env reset/step.
+        """
+        from loguru import logger as _logger
+
+        _logger.info("Starting periodic evaluation...")
+
+        # Save training state
+        was_training = self.actor.training
+
+        # Run evaluation setup
+        self._create_eval_callbacks()
+        self._eval_mode()
+        self.env.set_is_evaluating()
+
+        # Use inference_mode to allow inplace ops on inference tensors
+        # created during _rollout_step (IsaacLab internal tensors).
+        with torch.inference_mode():
+            # Do a baseline reset so env is in a known state
+            obs_dict = self.env.reset_all()
+
+            # Let callbacks override the state (e.g., load specific motions, set robot poses)
+            for c in self.eval_callbacks:
+                c.on_pre_evaluate_policy()
+
+            # Do a zero-action step to get observations matching the callback-set state
+            actor_state = self._create_actor_state()
+            self.eval_policy = self.get_inference_policy()
+            init_actions = torch.zeros(self.env.num_envs, self.num_act, device=self.device)
+            actor_state.update({"obs": obs_dict, "actions": init_actions})
+
+            critic_obs = torch.cat([actor_state["obs"][k] for k in self.critic_obs_keys], dim=1)
+            actor_state["obs"]["critic_obs"] = critic_obs
+
+            # Run eval loop (max steps as safety limit)
+            max_steps = 100000
+            for step in range(max_steps):
+                actor_state["step"] = step
+                actor_state = self._pre_eval_env_step(actor_state)
+                if actor_state.get("stop", False):
+                    break
+                actor_state = self.env_step(actor_state)
+                actor_state = self._post_eval_env_step(actor_state)
+                if actor_state.get("stop", False):
+                    break
+
+            self._post_evaluate_policy()
+
+            # Collect metrics from callbacks
+            all_metrics: dict[str, float] = {}
+            for cb in self.eval_callbacks:
+                if hasattr(cb, "metrics"):
+                    all_metrics.update(cb.metrics)
+
+            # Restore training state
+            self.env.is_evaluating = False
+            if was_training:
+                self._train_mode()
+
+            # Reset env for continued training
+            obs_dict = self.env.reset_all()
+            for obs_key in obs_dict:
+                obs_dict[obs_key] = obs_dict[obs_key].to(self.device)
+
+            _logger.info(f"Evaluation complete: {all_metrics}")
+            return all_metrics, obs_dict
+
     @torch.no_grad()
     def evaluate_policy(self, max_eval_steps: int | None = None):
         self._create_eval_callbacks()
@@ -1044,8 +1130,12 @@ class PPO(BaseAlgo):
         for step in itertools.islice(itertools.count(), max_eval_steps):
             actor_state["step"] = step
             actor_state = self._pre_eval_env_step(actor_state)
+            if actor_state.get("stop", False):
+                break
             actor_state = self.env_step(actor_state)
             actor_state = self._post_eval_env_step(actor_state)
+            if actor_state.get("stop", False):
+                break
 
         self._post_evaluate_policy()
 
@@ -1053,6 +1143,8 @@ class PPO(BaseAlgo):
         return {"done_indices": [], "stop": False}
 
     def _create_eval_callbacks(self):
+        if self.eval_callbacks:
+            return  # Already created
         if self.config.eval_callbacks is not None:
             for cb in self.config.eval_callbacks:
                 self.eval_callbacks.append(instantiate(self.config.eval_callbacks[cb], training_loop=self))

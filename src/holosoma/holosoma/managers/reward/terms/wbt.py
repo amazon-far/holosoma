@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, List
 import torch
 
 from holosoma.config_types.reward import RewardTermCfg
-from holosoma.managers.command.terms.wbt import MotionCommand
+from holosoma.managers.command.terms.wbt import MotionCommand, MultiMotionCommand
 from holosoma.managers.reward.base import RewardTermBase
 from holosoma.utils.rotations import quat_error_magnitude
 
@@ -16,10 +16,10 @@ if TYPE_CHECKING:
     from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
 
 
-def _get_motion_command_and_assert_type(env: WholeBodyTrackingManager) -> MotionCommand:
+def _get_motion_command_and_assert_type(env: WholeBodyTrackingManager) -> MotionCommand | MultiMotionCommand:
     motion_command = env.command_manager.get_state("motion_command")
     assert motion_command is not None, "motion_command not found in command manager"
-    assert isinstance(motion_command, MotionCommand), f"Expected MotionCommand, got {type(motion_command)}"
+    assert isinstance(motion_command, (MotionCommand, MultiMotionCommand)), f"Expected MotionCommand or MultiMotionCommand, got {type(motion_command)}"
     return motion_command
 
 

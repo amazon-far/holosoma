@@ -125,3 +125,57 @@ class MotionConfig:
 
     # noise related
     noise_to_initial_pose: NoiseToInitialPoseConfig = field(default_factory=NoiseToInitialPoseConfig)
+
+
+@dataclass(frozen=True)
+class MultiMotionConfig:
+    """Configuration for multi-motion training (PhUMA).
+
+    Instead of a single motion file, loads a directory of .npz motion files
+    and maintains a pool of motions on GPU. Each env tracks a randomly
+    assigned motion from the pool.
+    """
+
+    motion_dir: str
+    """Directory containing .npz motion files (searched recursively)."""
+
+    split_file: str = ""
+    """Optional path to a split file (one relative path per line, no extension).
+    Only motions listed in this file will be used. If empty, all .npz files are used."""
+
+    pool_size: int = 256
+    """Number of motions to hold on GPU simultaneously."""
+
+    resample_interval: int = 0
+    """Resample the motion pool from disk every N env steps (0 = never).
+    When triggered, the entire pool is replaced with new random motions.
+    Envs continue with their current motion until their next reset."""
+
+    min_motion_length: int = 30
+    """Minimum motion length in frames. Shorter motions are skipped."""
+
+    body_name_ref: list[str] = field(default_factory=list)
+    """Body name of the reference frame (e.g., torso_link)."""
+
+    body_names_to_track: list[str] = field(default_factory=list)
+    """Key body names to track, used for reward/termination computation."""
+
+    start_at_timestep_zero_prob: float = 0.2
+    """Probability of starting at timestep zero."""
+
+    freeze_at_timestep_zero_prob: float = 0.95
+    """When starting at timestep 0, probability of freezing motion counter at 0."""
+
+    enable_default_pose_prepend: bool = False
+    """Multi-motion: default pose prepend is disabled by default."""
+
+    enable_default_pose_append: bool = False
+    """Multi-motion: default pose append is disabled by default."""
+
+    default_pose_prepend_duration_s: float = 2.0
+    """Duration of pre-appended interpolation phase."""
+
+    default_pose_append_duration_s: float = 2.0
+    """Duration of post-appended interpolation phase."""
+
+    noise_to_initial_pose: NoiseToInitialPoseConfig = field(default_factory=NoiseToInitialPoseConfig)
