@@ -17,6 +17,7 @@ import traceback
 
 import tyro
 from loguru import logger
+
 from holosoma_inference.config.config_types.inference import InferenceConfig
 from holosoma_inference.config.config_values.inference import get_annotated_inference_config
 from holosoma_inference.config.utils import TYRO_CONFIG
@@ -142,7 +143,7 @@ def _split_secondary_args(argv: list[str]) -> tuple[list[str], list[str]]:
     expect_secondary_value = False
     for arg in argv:
         if arg.startswith("--secondary."):
-            renamed = "--" + arg[len("--secondary."):]
+            renamed = "--" + arg[len("--secondary.") :]
             secondary.append(renamed)
             # If not --key=value form, the next token might be the value
             expect_secondary_value = "=" not in renamed
@@ -165,10 +166,13 @@ def main(annotated_config=None):
     # Tyro can't build a CLI parser for InferenceConfig | None when it
     # contains dict[str, Any] fields, so we handle secondary selection ourselves.
     pre = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
-    pre.add_argument("--secondary-preset", default=None, metavar="NAME",
-                     help=f"Select a preset for the secondary policy. Choices: {list(DEFAULTS.keys())}")
-    pre.add_argument("--secondary", default=None,
-                     help="Set to 'none' to disable dual-mode.")
+    pre.add_argument(
+        "--secondary-preset",
+        default=None,
+        metavar="NAME",
+        help=f"Select a preset for the secondary policy. Choices: {list(DEFAULTS.keys())}",
+    )
+    pre.add_argument("--secondary", default=None, help="Set to 'none' to disable dual-mode.")
     known, remaining = pre.parse_known_args()
 
     disable_secondary = known.secondary is not None and known.secondary.lower() == "none"

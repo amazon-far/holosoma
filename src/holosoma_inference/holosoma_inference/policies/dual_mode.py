@@ -52,7 +52,9 @@ class DualModePolicy:
         primary_cls = _select_policy_class(primary_config)
         secondary_cls = _select_policy_class(secondary_config)
 
-        logger.info(colored(f"Dual-mode: primary={primary_cls.__name__}, secondary={secondary_cls.__name__}", "magenta"))
+        logger.info(
+            colored(f"Dual-mode: primary={primary_cls.__name__}, secondary={secondary_cls.__name__}", "magenta")
+        )
 
         # Fully init primary (owns hardware)
         self.primary = primary_cls(config=primary_config)
