@@ -18,4 +18,5 @@ def detect_robot_interface(robot_type: str | None = None) -> str:
             continue
         print(f"[network] auto-detected interface: {ifname}")
         return ifname
-    raise RuntimeError("No wired NIC found. Specify --interface explicitly.")
+    print("[network] no wired NIC found, falling back to loopback (lo)")
+    return "lo"
