@@ -4,7 +4,14 @@
 # (because holosoma pins numpy==1.23.5 which has no cp312 wheel).
 set -e
 
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+# Resolve SCRIPT_DIR through symlinks
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null && pwd )"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null && pwd )"
 ROOT_DIR=$(dirname "$SCRIPT_DIR")
 PROJECTS_DIR=$(dirname "$ROOT_DIR")
 
