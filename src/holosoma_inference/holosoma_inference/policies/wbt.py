@@ -311,10 +311,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
         if scales.size == 1:
             scales = np.full(self.num_dofs, scales.item(), dtype=np.float32)
         elif scales.size != self.num_dofs:
-            raise ValueError(
-                "Action scale must contain 1 or "
-                f"{self.num_dofs} values, got {scales.size}."
-            )
+            raise ValueError(f"Action scale must contain 1 or {self.num_dofs} values, got {scales.size}.")
 
         self.per_joint_policy_action_scale = scales.reshape(1, -1)
 

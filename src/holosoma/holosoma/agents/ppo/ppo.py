@@ -7,6 +7,12 @@ from typing import TypedDict
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
+from loguru import logger
+from rich.console import Console
+from torch import nn
+from torch.distributions import Normal, kl_divergence
+from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
+
 from holosoma.agents.base_algo.base_algo import BaseAlgo
 from holosoma.agents.callbacks.base_callback import RLEvalCallback
 from holosoma.agents.modules.augmentation_utils import SymmetryUtils
@@ -27,11 +33,6 @@ from holosoma.utils.inference_helpers import (
     get_control_gains_from_config,
     get_urdf_text_from_robot_config,
 )
-from loguru import logger
-from rich.console import Console
-from torch import nn
-from torch.distributions import Normal, kl_divergence
-from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 
 console = Console()
 
