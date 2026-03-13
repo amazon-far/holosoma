@@ -2,12 +2,18 @@
 # Source this file to activate the hsmujoco_py312 conda env (Python 3.12 + ROS2 Jazzy).
 # Usage:  source holosoma/scripts/source_mujoco_py312_setup.sh
 
-# Detect script directory (works in both bash and zsh)
-if [ -n "${BASH_SOURCE[0]}" ]; then
-    SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-elif [ -n "${ZSH_VERSION}" ]; then
-    SCRIPT_DIR=$( cd -- "$( dirname -- "${(%):-%x}" )" &> /dev/null && pwd )
-fi
+# Resolve the directory of this script, following symlinks (works in bash and zsh).
+_resolve_script_dir() {
+  local source="${BASH_SOURCE[0]:-${(%):-%x}}"
+  while [ -h "$source" ]; do
+    local dir="$( cd -P "$( dirname "$source" )" >/dev/null && pwd )"
+    source="$(readlink "$source")"
+    [[ $source != /* ]] && source="$dir/$source"
+  done
+  cd -P "$( dirname "$source" )" >/dev/null && pwd
+}
+SCRIPT_DIR="$(_resolve_script_dir)"
+unset -f _resolve_script_dir
 
 CONDA_ENV_NAME=hsmujoco_py312
 
