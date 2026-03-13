@@ -84,9 +84,10 @@ jobs:
     name: Run Inference Unit Tests
     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     container:
+      # Uses holosoma:latest which has all conda envs (hsgym, hssim, hsinference, etc.)
+      # built via setup_all.sh. We activate hsinference (Python 3.10) for inference tests.
       # TODO: Switch to `holosoma-inference` once it's been confirmed functional
-      # image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma-inference:latest
-      # Until then, the inference tests will run in isaacsim env.
+-     # image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma-inference:latest
       image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest
     steps:
       - name: Checkout code
@@ -99,6 +100,6 @@ jobs:
             rm -rf /workspace/holosoma
             ln -sfF "$GITHUB_WORKSPACE" /workspace/holosoma
           fi
-          source scripts/source_isaacsim_setup.sh
+          source scripts/source_inference_setup.sh
           pip install -e src/holosoma_inference
           pytest -s src/holosoma_inference/

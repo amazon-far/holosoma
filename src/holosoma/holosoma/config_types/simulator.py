@@ -3,11 +3,12 @@ from __future__ import annotations
 from dataclasses import field
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Any
 
 import tyro
 from pydantic import model_validator
 from pydantic.dataclasses import dataclass
+from typing_extensions import Annotated
 
 from holosoma.config_types.viewer import ViewerConfig
 
