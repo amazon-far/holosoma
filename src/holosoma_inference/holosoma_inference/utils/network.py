@@ -5,7 +5,7 @@ import os
 _SKIP_PREFIXES = ("lo", "wl", "docker", "br-", "veth", "virbr", "vnet", "tun", "tap")
 
 
-def detect_robot_interface(robot_type: str | None = None) -> str:
+def detect_robot_interface() -> str:
     """Return the name of the single wired NIC that is operationally UP."""
     for ifname in sorted(os.listdir("/sys/class/net/")):
         if any(ifname.startswith(p) for p in _SKIP_PREFIXES):

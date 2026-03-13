@@ -20,8 +20,7 @@ def create_interface(robot_config, domain_id=0, interface_str=None, use_joystick
     if interface_str == "auto":
         from holosoma_inference.utils.network import detect_robot_interface
 
-        robot_type = getattr(robot_config, "robot", None)
-        interface_str = detect_robot_interface(robot_type)
+        interface_str = detect_robot_interface()
 
     sdk_type = robot_config.sdk_type
     if sdk_type not in _entry_points:
