@@ -398,11 +398,20 @@ class MotionCommand(CommandTermBase):
             )
             * self.init_pose_cfg.overall_noise_scale
         )  # (3,)
-        # Reuse push randomizer velocity limits for reset-state velocity noise.
-        push_state = self._env.randomization_manager.get_state("push_randomizer_state")
-        max_push_vel = torch.abs(push_state.max_push_vel.to(self.device))
-        root_vel_noise = max_push_vel[:3]  # (vx, vy, vz)
-        root_ang_vel_noise_rpy = max_push_vel[3:6]  # (wx, wy, wz)
+        root_vel_noise = (
+            torch.tensor(
+                self.init_pose_cfg.root_lin_vel,
+                device=self.device,
+            )
+            * self.init_pose_cfg.overall_noise_scale
+        )  # (3,)
+        root_ang_vel_noise_rpy = (
+            torch.tensor(
+                self.init_pose_cfg.root_ang_vel,
+                device=self.device,
+            )
+            * self.init_pose_cfg.overall_noise_scale
+        )  # (3,)
 
         # 2.2 Adding noise to dof_pos, root_pos, root_vel, root_ang_vel, root_rot
         # 1.2.1 dof_pos
@@ -492,7 +501,7 @@ class MotionCommand(CommandTermBase):
             # (termination checks, observations, rewards).
             sim = self._env.simulator
             sim.set_actor_root_state_tensor_robots(ended_env_ids, sim.robot_root_states)
-            sim.set_dof_state_tensor_robots(ended_env_ids, sim.dof_state)
+            sim.set_dof_state_tensor_robots(ended_env_ids, sim.dof_state)  # type: ignore[attr-defined]
             sim.refresh_sim_tensors()
 
         # 1. update body_pos_relative_w and body_quat_relative_w

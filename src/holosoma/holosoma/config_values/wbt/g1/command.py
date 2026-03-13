@@ -9,8 +9,8 @@ init_pose_config = NoiseToInitialPoseConfig(
     dof_pos=0.1,
     root_pos=[0.05, 0.05, 0.01],
     root_rot=[0.1, 0.1, 0.2],
-    root_lin_vel=[0.1, 0.1, 0.05],
-    root_ang_vel=[0.1, 0.1, 0.1],
+    root_lin_vel=[0.5, 0.5, 0.2],
+    root_ang_vel=[0.52, 0.52, 0.78],
     object_pos=[0.05, 0.05, 0.0],
 )
 
