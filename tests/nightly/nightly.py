@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 from datetime import timezone
+from os import getenv
 from pathlib import Path
 
 import tyro
@@ -15,6 +16,11 @@ from holosoma.train_agent import training_context
 from holosoma.utils.tyro_utils import TYRO_CONIFG
 
 REPO_ROOT = Path(__file__).parent.parent.parent.absolute()
+
+# Github assigned variables
+GITHUB_SERVER_URL = getenv("GITHUB_SERVER_URL")
+GITHUB_REPOSITORY = getenv("GITHUB_REPOSITORY")
+GITHUB_RUN_ID = getenv("GITHUB_RUN_ID")
 
 
 def now_timestamp() -> str:
@@ -89,17 +95,28 @@ def main():
 
     config = config.get_nightly_config()
 
-    run_tags = []
+    run_tags = [
+        sanitized_exp,
+        config.simulator.config.name,
+    ]
 
-    if os.getenv("GITHUB_RUN_ID"):
-        run_tags.append(f"gha-run-id-{os.getenv('GITHUB_RUN_ID')}")
+    if GITHUB_RUN_ID:
+        run_tags.append(f"gha-run-id-{GITHUB_RUN_ID}")
+
+    if config.training.multigpu:
+        run_tags.append("multigpu")
+    else:
+        run_tags.append("singlegpu")
+
+    nightly_name = f"nightly-{sanitized_exp}{multigpu_suffix}-{now_timestamp()}"
 
     config = dataclasses.replace(
         config,
         logger=dataclasses.replace(
             config.logger,
-            project=f"nightly-{sanitized_exp}{multigpu_suffix}",
-            name=f"nightly-{sanitized_exp}{multigpu_suffix}-{now_timestamp()}",
+            project="nightly-holosoma-runs",
+            name=nightly_name,
+            id=nightly_name,  # set id to name so url is readable
             tags=tuple(run_tags),
         ),
     )

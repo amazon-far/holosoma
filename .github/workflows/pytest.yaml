@@ -6,6 +6,10 @@ permissions:
 
 on:
   pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'scripts/source_*'
     types:
     - opened
     - reopened
@@ -14,15 +18,23 @@ on:
 jobs:
   tests:
     strategy:
+      fail-fast: false # continue on one test failing
       matrix:
         simulator: [isaacgym, isaacsim]
-    name: Run ${{ matrix.simulator }} Tests
-    runs-on: codebuild-holosoma-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+        multigpu: ["False"]
+        # no multigpu isaacsim tests for now
+        include:
+        - simulator: isaacgym
+          multigpu: "True"
+    name: Run ${{ matrix.simulator }} Tests with ${{ matrix.multigpu == 'True' && 'multi-gpu' || 'single-gpu' }}
+    runs-on:
+    - codebuild-holosoma-a10g-${{ matrix.multigpu == 'True' && 'x4' || 'x1' }}-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    continue-on-error: true
     container:
-      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest
+      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma-${{ matrix.simulator }}:latest
       options: "--gpus all --runtime=nvidia --shm-size=12g"
-      volumes:
-        - "precommit-cache:/github/home/.cache/pre-commit"
+      env:
+        HOLOSOMA_MULTIGPU: ${{ matrix.multigpu }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -37,11 +49,42 @@ jobs:
           fi
           bash tests/ci/${{ matrix.simulator }}_ci_tests.sh
 
+  e2e-tests:
+    strategy:
+      fail-fast: false # continue on one test failing
+      # e2e only on isaacgym single gpu for now
+      matrix:
+        simulator: [isaacgym]
+        multigpu: ["False"]
+    name: Run ${{ matrix.simulator }} Tests end-to-end with ${{ matrix.multigpu == 'True' && 'multi-gpu' || 'single-gpu' }}
+    runs-on:
+    - codebuild-holosoma-a10g-${{ matrix.multigpu == 'True' && 'x4' || 'x1' }}-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    continue-on-error: true
+    container:
+      # needs both hsgym and hsinference envs
+      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest
+      options: "--gpus all --runtime=nvidia --shm-size=12g"
+      env:
+        HOLOSOMA_MULTIGPU: ${{ matrix.multigpu }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+      - name: Pytest
+        id: pytest
+        shell: bash
+        run: |
+          ln -s /root/.holosoma_deps "$HOME/.holosoma_deps"
+          if [[ ! -L /workspace/holosoma ]]; then
+            rm -rf /workspace/holosoma
+            ln -sfF "$GITHUB_WORKSPACE" /workspace/holosoma
+          fi
+          bash tests/ci/${{ matrix.simulator }}_e2e_ci_tests.sh
+
   inference-tests:
     name: Run Inference Unit Tests
     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     container:
-      # TODO: Switch to holosoma-inference:latest once it's available in ECR
+      # TODO: Switch to `holosoma-inference` once it's been confirmed functional
       # image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma-inference:latest
       # Until then, the inference tests will run in isaacsim env.
       image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest

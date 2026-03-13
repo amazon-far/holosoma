@@ -125,7 +125,7 @@ class IsaacSim(BaseSimulator):
         print("[INFO]: Scene manager: ", self.scene)
 
         if self.simulator_config.viewer.enable_tracking:
-            viewer_config: ViewerCfg = ViewerCfg(origin_type="asset_root", asset_name="robot")
+            viewer_config: ViewerCfg = ViewerCfg(origin_type="asset_root", asset_name="robot", eye=(0.0, -1.5, 1.5))
         else:
             viewer_config: ViewerCfg = ViewerCfg()
 

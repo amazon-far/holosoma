@@ -71,7 +71,8 @@ def assert_run_policy_with_hsinference(config_name: str, model_path: str, timeou
             f"pip install -e {REPO_ROOT}/src/holosoma_inference[unitree,booster] && "
             f"python {REPO_ROOT}/src/holosoma_inference/holosoma_inference/run_policy.py "
             f"inference:{config_name} "
-            f"--task.model-path={model_path}",
+            f"--task.model-path={model_path} "
+            f"--secondary none",
         ],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
@@ -99,6 +100,7 @@ def assert_run_policy_with_hsinference(config_name: str, model_path: str, timeou
             pass
 
 
+@pytest.mark.requires_inference
 @pytest.mark.parametrize(
     ("workflow_name", "config_name"),
     [

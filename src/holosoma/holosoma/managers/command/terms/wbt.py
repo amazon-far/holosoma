@@ -369,11 +369,11 @@ class MotionCommand(CommandTermBase):
             already_last_timestep_mask, self.motion.time_step_total - 2, self.time_steps[env_ids]
         )
 
-        # 1. Get the reference root/body poses
-        root_pos = self.body_pos_w[env_ids, 0].clone()
-        root_rot = self.body_quat_w[env_ids, 0].clone()  # xyzw
-        root_lin_vel = self.body_lin_vel_w[env_ids, 0].clone()
-        root_ang_vel = self.body_ang_vel_w[env_ids, 0].clone()
+        # 1. Get the root/body poses from the motion data
+        root_pos = self.root_pos_w[env_ids].clone()
+        root_rot = self.root_quat_w[env_ids].clone()
+        root_lin_vel = self.root_lin_vel_w[env_ids].clone()
+        root_ang_vel = self.root_ang_vel_w[env_ids].clone()
 
         dof_pos = self.joint_pos[env_ids].clone()
         dof_vel = self.joint_vel[env_ids].clone()
@@ -584,6 +584,14 @@ class MotionCommand(CommandTermBase):
         return self.motion.body_quat_w[self.time_steps, self.ref_body_index]
 
     @property
+    def ref_lin_vel_w(self) -> torch.Tensor:
+        return self.motion.body_lin_vel_w[self.time_steps, self.ref_body_index]
+
+    @property
+    def ref_ang_vel_w(self) -> torch.Tensor:
+        return self.motion.body_ang_vel_w[self.time_steps, self.ref_body_index]
+
+    @property
     def root_pos_w(self) -> torch.Tensor:
         return self.motion.body_pos_w[self.time_steps, 0] + self._env.simulator.scene.env_origins
 
@@ -592,12 +600,12 @@ class MotionCommand(CommandTermBase):
         return self.motion.body_quat_w[self.time_steps, 0]
 
     @property
-    def ref_lin_vel_w(self) -> torch.Tensor:
-        return self.motion.body_lin_vel_w[self.time_steps, self.ref_body_index]
+    def root_lin_vel_w(self) -> torch.Tensor:
+        return self.motion.body_lin_vel_w[self.time_steps, 0]
 
     @property
-    def ref_ang_vel_w(self) -> torch.Tensor:
-        return self.motion.body_ang_vel_w[self.time_steps, self.ref_body_index]
+    def root_ang_vel_w(self) -> torch.Tensor:
+        return self.motion.body_ang_vel_w[self.time_steps, 0]
 
     #########################################################################################
     ## Robot from simulator

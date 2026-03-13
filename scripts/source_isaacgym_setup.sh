@@ -8,6 +8,6 @@ fi
 CONDA_ENV_NAME=${CONDA_ENV_NAME:-hsgym}
 echo "conda environment name is set to: $CONDA_ENV_NAME"
 
-source ${SCRIPT_DIR}/source_common.sh
-source ${CONDA_ROOT}/bin/activate $CONDA_ENV_NAME
+source "${SCRIPT_DIR}/source_common.sh"
+source "${CONDA_ROOT}/bin/activate" "$CONDA_ENV_NAME"
 export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:${CONDA_ROOT}/envs/$CONDA_ENV_NAME/lib

@@ -19,9 +19,14 @@ from os import getenv
 import wandb
 from slack_sdk import WebClient
 
-WANDB_ENTITY = getenv("WANDB_ENTITY", "far-wandb")
+WANDB_ENTITY = getenv("WANDB_ENTITY", "amazon-far")
 SLACK_CHANNEL = getenv("SLACK_CHANNEL", "")
 SLACK_TOKEN = getenv("SLACK_BOT_TOKEN", "")
+
+# Github assigned variables
+GITHUB_SERVER_URL = getenv("GITHUB_SERVER_URL")
+GITHUB_REPOSITORY = getenv("GITHUB_REPOSITORY")
+GITHUB_RUN_ID = getenv("GITHUB_RUN_ID")
 
 
 class RunStatus(Enum):
@@ -93,6 +98,48 @@ def _fetch_project_runs(
     return run_data
 
 
+def get_latest_report_url() -> str | None:
+    """
+    Fetches the URL of the most recent nightly report.
+
+    If GITHUB_RUN_ID is set, looks for a report with that run ID in the title.
+    Otherwise, returns the most recent report from the nightly-holosoma-runs project.
+
+    Returns:
+        Report URL if found, None otherwise
+    """
+    try:
+        api = wandb.Api(timeout=60)
+        project_path = f"{WANDB_ENTITY}/nightly-holosoma-runs"
+
+        # Try to get reports from the project
+        reports = api.reports(project_path)
+
+        if not reports:
+            print(f"Found no reports in {project_path}")
+            return None
+
+        print(f"Found {len(reports)} reports in {project_path}")
+        print(f"Report names: {[r.display_name for r in reports]}")
+
+        # Search for a report matching the current GitHub run ID
+        if GITHUB_RUN_ID:
+            for report in reports:
+                if GITHUB_RUN_ID in report.display_name:
+                    return report.url
+
+        # Fall back to the most recent report
+        # Reports are ordered by creation time (newest first)
+        for report in reports:
+            if "Nightly Training Report" in report.display_name:
+                return report.url
+
+    except Exception as e:
+        print(f"Error fetching report URL: {e}")
+
+    return None
+
+
 def get_last_nightly_urls() -> list[str]:
     """Fetches the url of all runs in wandb with the tag that have completed runs
     within the last 12 hours.
@@ -112,8 +159,8 @@ def get_last_nightly_urls() -> list[str]:
     since_iso = since_time.isoformat()
 
     # GHA run ids filter
-    if os.getenv("GITHUB_RUN_ID"):
-        filter_tags.append(f"gha-run-id-{os.getenv('GITHUB_RUN_ID')}")
+    if GITHUB_RUN_ID:
+        filter_tags.append(f"gha-run-id-{GITHUB_RUN_ID}")
 
     # Use parallel processing to speed up API calls
     # Default to a reasonable number of workers based on CPU count
@@ -144,21 +191,31 @@ def post_summary_to_slack():
         raise ValueError("SLACK_BOT_TOKEN or SLACK_CHANNEL env var not set, can't post message to slack")
     slack_client = WebClient(token=SLACK_TOKEN)
 
-    run_url = f"{getenv('GITHUB_SERVER_URL')}/{getenv('GITHUB_REPOSITORY')}/actions/runs/{getenv('GITHUB_RUN_ID')}"
-    summary_message = f"*Nightly Build Completed!*\nBuild URL: {run_url}"
+    summary_message = "*Nightly Build Completed!*\n"
+
+    # Get the report URL
+    report_url = get_latest_report_url()
+
+    # Add report link at the top if available
+    if report_url:
+        summary_message += f"📊 [Wandb Report]({report_url})\n"
+
+    run_url = f"{GITHUB_SERVER_URL}/{GITHUB_REPOSITORY}/actions/runs/{GITHUB_RUN_ID}"
+    summary_message += f"Build Link: [Githun Run {GITHUB_RUN_ID}]({run_url})"
+
     wandb_summaries = get_last_nightly_urls()
     problem_runs = []
     for wandb_result in wandb_summaries:
         if wandb_result[0] != "🟩":
-            exp_name = wandb_result.split("/")[4]
+            exp_name = wandb_result.split("/")[6].split("-")[1]
             problem_runs.append(exp_name)
 
     if problem_runs:
         summary_message += "\nFailed runs: " + ", ".join(problem_runs)
 
-    summary_message += "\nWandB URLs:\n```\n" + "\n".join(wandb_summaries) + "\n```"
+    summary_message += "\nWandB Links:\n```\n" + "\n".join(wandb_summaries) + "\n```"
 
-    slack_client.chat_postMessage(channel=SLACK_CHANNEL, text=summary_message)
+    slack_client.chat_postMessage(channel=SLACK_CHANNEL, markdown_text=summary_message, unfurl_links=False)
 
 
 if __name__ == "__main__":

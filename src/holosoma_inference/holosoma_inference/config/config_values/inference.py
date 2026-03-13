@@ -9,10 +9,20 @@ from typing_extensions import Annotated
 from holosoma_inference.config.config_types.inference import InferenceConfig
 from holosoma_inference.config.config_values import observation, robot, task
 
+# Shared safety secondary for all G1 configs — FastSAC locomotion.
+# Each config references the same object; users can override any field
+# with --secondary.task.model-path etc., or disable with --secondary none.
+_g1_safety_secondary = InferenceConfig(
+    robot=robot.g1_29dof,
+    observation=observation.loco_g1_29dof,
+    task=task.safety_locomotion_g1,
+)
+
 g1_29dof_loco = InferenceConfig(
     robot=robot.g1_29dof,
     observation=observation.loco_g1_29dof,
     task=task.locomotion,
+    secondary=_g1_safety_secondary,
 )
 
 t1_29dof_loco = InferenceConfig(
@@ -22,34 +32,37 @@ t1_29dof_loco = InferenceConfig(
 )
 
 # fmt: off
-g1_29dof_wbt = InferenceConfig(
-    robot=replace(
-        robot.g1_29dof,
-        stiff_startup_pos=(
-            -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,   # left leg
-            -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,   # right leg
-            0.0, 0.0, 0.0,                          # waist
-            0.2, 0.2, 0.0, 0.6, 0.0, 0.0, 0.0,      # left arm
-            0.2, -0.2, 0.0, 0.6, 0.0, 0.0, 0.0,     # right arm
-        ),
-        stiff_startup_kp=(
-            350.0, 200.0, 200.0, 300.0, 300.0, 150.0,
-            350.0, 200.0, 200.0, 300.0, 300.0, 150.0,
-            200.0, 200.0, 200.0,
-            40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0,
-            40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0,
-        ),
-        stiff_startup_kd=(
-            5.0, 5.0, 5.0, 10.0, 5.0, 5.0,
-            5.0, 5.0, 5.0, 10.0, 5.0, 5.0,
-            5.0, 5.0, 5.0,
-            3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0,
-            3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0,
-        ),
+_g1_29dof_wbt_robot = replace(
+    robot.g1_29dof,
+    stiff_startup_pos=(
+        -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,   # left leg
+        -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,   # right leg
+        0.0, 0.0, 0.0,                          # waist
+        0.2, 0.2, 0.0, 0.6, 0.0, 0.0, 0.0,      # left arm
+        0.2, -0.2, 0.0, 0.6, 0.0, 0.0, 0.0,     # right arm
     ),
+    stiff_startup_kp=(
+        350.0, 200.0, 200.0, 300.0, 300.0, 150.0,
+        350.0, 200.0, 200.0, 300.0, 300.0, 150.0,
+        200.0, 200.0, 200.0,
+        40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0,
+        40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0,
+    ),
+    stiff_startup_kd=(
+        5.0, 5.0, 5.0, 10.0, 5.0, 5.0,
+        5.0, 5.0, 5.0, 10.0, 5.0, 5.0,
+        5.0, 5.0, 5.0,
+        3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0,
+        3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0,
+    ),
+)
+
+g1_29dof_wbt = InferenceConfig(
+    robot=_g1_29dof_wbt_robot,
 # fmt: on
     observation=observation.wbt,
     task=task.wbt,
+    secondary=_g1_safety_secondary,
 )
 
 # Core defaults - no extension imports at module load time

@@ -125,7 +125,7 @@ class PinocchioRobot:
 
         def _is_visual_or_collision(tag: str) -> bool:
             # Handle optional XML namespaces by only checking the suffix after '}'.
-            return tag.split("}")[-1] in {"visual", "collision"}
+            return tag.rsplit("}", maxsplit=1)[-1] in {"visual", "collision"}
 
         for parent in root.iter():
             for child in list(parent):

@@ -4,11 +4,21 @@
 from holosoma.utils.safe_torch_import import torch  # noqa: F401
 
 
+def mark_str(marker, msg):
+    return f"{marker}: marks tests as requiring {msg} (deselect with '-m \"not {marker}\"')"
+
+
 def pytest_configure(config):
     """Register custom markers for pytest."""
     config.addinivalue_line(
-        "markers", "isaacsim: marks tests as requiring Isaac Sim (deselect with '-m \"not isaacsim\"')"
+        "markers",
+        mark_str("isaacsim", "Isaac Sim"),
     )
     config.addinivalue_line(
-        "markers", "multi_gpu: marks tests as requiring multiple GPUs (deselect with '-m \"not multi_gpu\"')"
+        "markers",
+        mark_str("multi_gpu", "multiple GPUs"),
+    )
+    config.addinivalue_line(
+        "markers",
+        mark_str("requires_inference", "inference environment"),
     )

@@ -1,9 +1,16 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Exit on error, and print commands
 set -e
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 ROOT_DIR=$(dirname "$SCRIPT_DIR")
+
+if ! command -v sudo &> /dev/null; then
+  # in docker build sudo isn't avaiable, but its ok
+  echo "Warning: sudo could not be found, you may need to run this script with sudo"
+  function sudo { "$@"; }
+  export -f sudo
+fi
 
 # MuJoCo Warp version to install -- the repo is missing version tags and branches
 # Arbitrarily chosen from mainline at the time we've ~tested against
@@ -61,13 +68,13 @@ WARP_SENTINEL_FILE=${WORKSPACE_DIR}/.env_setup_finished_$CONDA_ENV_NAME_warp
 mkdir -p $WORKSPACE_DIR
 
 if [[ ! -f $SENTINEL_FILE ]]; then
+  # Detect OS and architecture
+  OS_NAME="$(uname -s)"
+  ARCH_NAME="$(uname -m)"
+
   # Install miniconda (reuse existing logic)
   if [[ ! -d $CONDA_ROOT ]]; then
     mkdir -p $CONDA_ROOT
-
-    # Detect OS and architecture
-    OS_NAME="$(uname -s)"
-    ARCH_NAME="$(uname -m)"
 
     # Decide installer name based on OS/arch
     if [[ "$OS_NAME" == "Linux" ]]; then
@@ -132,10 +139,10 @@ if [[ ! -f $SENTINEL_FILE ]]; then
   echo "Installing Holosoma packages"
   pip install -U pip
   if [[ "$OS_NAME" == "Linux" ]]; then
-    pip install -e $ROOT_DIR/src/holosoma[unitree, booster]
+    pip install -e "$ROOT_DIR/src/holosoma[unitree, booster]"
   elif [[ "$OS_NAME" == "Darwin" ]]; then
     echo "Warning: only unitree support for osx"
-    pip install -e $ROOT_DIR/src/holosoma[unitree]
+    pip install -e "$ROOT_DIR/src/holosoma[unitree]"
   else
     echo "Unsupported OS: $OS_NAME"
     exit 1

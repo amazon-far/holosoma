@@ -142,6 +142,18 @@ class MotionLoader:
         else:
             raise ValueError("Unsupported motion file format. Use .csv or .npz.")
 
+        if self.line_range is not None:
+            start, end = self.line_range
+            total_frames = motion.shape[0] - 1
+            assert 0 <= start <= end <= total_frames, (
+                f"line_range out of bounds: start={start}, end={end}, total_frames={total_frames}"
+            )
+            motion = motion[start : end + 1]
+            assert motion.shape[0] > 1, (
+                "line_range must select at least 2 frames to compute interpolation/velocities: "
+                f"selected_frames={motion.shape[0]}, start={start}, end={end}"
+            )
+
         motion = motion.to(torch.float32).to(self.device)
         if self.use_omniretarget_data:
             self.motion_base_poss_input = motion[:, 4:7]

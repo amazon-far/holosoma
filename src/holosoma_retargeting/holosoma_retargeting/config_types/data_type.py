@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, TypedDict
+
+from holosoma_retargeting.config_types.robot import (
+    RobotDefaults,
+    _default_robot_defaults,
+    _validate_robot_type,
+)
 
 # Pre-defined constants for each data format
 LAFAN_DEMO_JOINTS = [
@@ -346,13 +352,13 @@ class MotionDataConfig:
     data_format: str = "smplh"
     # Use str instead of Literal to allow dynamic robot types
     robot_type: str = "g1"
+    robot_defaults: dict[str, RobotDefaults] = field(default_factory=_default_robot_defaults)
 
     def __post_init__(self) -> None:
         """Validate data_format and robot_type."""
         _validate_data_format(self.data_format)
-        from holosoma_retargeting.config_types.robot import _validate_robot_type
 
-        _validate_robot_type(self.robot_type)
+        _validate_robot_type(self.robot_type, self.robot_defaults)
 
     # Optional overrides - if None, will use defaults from data_format
     demo_joints: list[str] | None = None

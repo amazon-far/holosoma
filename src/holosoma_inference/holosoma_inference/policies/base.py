@@ -90,6 +90,9 @@ class BasePolicy:
 
     def _init_sdk_components(self):
         """Additional SDK components initialization based on robot type."""
+        if hasattr(self, "_shared_hardware_source"):
+            self.sdk_type = self._shared_hardware_source.sdk_type
+            return
         self.sdk_type = self.robot_config.sdk_type
         if self.sdk_type == "booster":
             from booster_robotics_sdk import ChannelFactory
@@ -132,7 +135,9 @@ class BasePolicy:
 
     def _init_communication_components(self):
         """Initialize appropriate robot interface."""
-
+        if hasattr(self, "_shared_hardware_source"):
+            self.interface = self._shared_hardware_source.interface
+            return
         self.interface = create_interface(
             self.robot_config,
             self.config.task.domain_id,
@@ -290,6 +295,12 @@ class BasePolicy:
 
     def _init_input_handlers(self):
         """Initialize input handlers (ROS, joystick, keyboard)."""
+        if hasattr(self, "_shared_hardware_source"):
+            self.logger = self._shared_hardware_source.logger
+            self.rate = self._shared_hardware_source.rate
+            self.rl_rate = self._shared_hardware_source.rl_rate
+            self.use_joystick = self._shared_hardware_source.use_joystick
+            return
         self._init_rate_handler()
         self._init_input_device()
 
@@ -550,6 +561,7 @@ class BasePolicy:
         """Return flattened observations per group with history applied per term."""
         current_obs_buffer_dict = self.get_current_obs_buffer_dict(robot_state_data)
         current_obs_dict = self.parse_current_obs_dict(current_obs_buffer_dict)
+
         return self._update_obs_history(current_obs_dict)
 
     def _update_obs_history(self, current_obs_dict: dict[str, dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
@@ -610,6 +622,10 @@ class BasePolicy:
     def policy_action(self):
         """Execute policy action and send commands to robot."""
 
+        # Snapshot flags to prevent race with mode-switch handler thread
+        use_policy = self.use_policy_action
+        get_ready = self.get_ready_state
+
         kp_override = None
         kd_override = None
 
@@ -620,10 +636,10 @@ class BasePolicy:
         # Stage 2: Pre-processing
         with self.latency_tracker.measure("preprocessing"):
             # Determine target joint positions
-            if self.get_ready_state:
+            if get_ready:
                 q_target = self.get_init_target(robot_state_data)
                 self.init_count = min(self.init_count, 500)
-            elif not self.use_policy_action:
+            elif not use_policy:
                 manual_cmd = self._get_manual_command(robot_state_data)
                 if manual_cmd is not None:
                     q_target = manual_cmd["q"]
@@ -636,13 +652,20 @@ class BasePolicy:
                 pass
 
         # Stage 3: Inference
-        if self.use_policy_action and not self.get_ready_state:
+        if use_policy and not get_ready:
             with self.latency_tracker.measure("inference"):
                 scaled_policy_action = self.rl_inference(robot_state_data)
 
         # Stage 4: Post-processing
         with self.latency_tracker.measure("postprocessing"):
-            if self.use_policy_action and not self.get_ready_state:
+            if use_policy and not get_ready:
+                if scaled_policy_action.shape[1] != self.num_dofs:
+                    if not self.upper_body_controller:
+                        scaled_policy_action = np.concatenate(
+                            [np.zeros((1, self.num_dofs - scaled_policy_action.shape[1])), scaled_policy_action], axis=1
+                        )
+                    else:
+                        raise NotImplementedError("Upper body controller not implemented")
                 q_target = scaled_policy_action + self.default_dof_angles
 
             # Prepare command (reuse pre-allocated arrays)

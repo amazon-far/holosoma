@@ -42,10 +42,6 @@ class LocomotionCommand(CommandTermBase):
         if idx.numel() == 0:
             return
 
-        if self.env.is_evaluating:
-            commands[idx] = 0.0
-            return
-
         self._resample(idx)
 
     def step(self) -> None:

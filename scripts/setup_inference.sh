@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Exit on error, and print commands
 set -ex
 
@@ -5,6 +6,13 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 ROOT_DIR=$(dirname "$SCRIPT_DIR")
 
 echo "Setting up inference environment"
+
+if ! command -v sudo &> /dev/null; then
+  # in docker build sudo isn't avaiable, but its ok
+  echo "Warning: sudo could not be found, you may need to run this script with sudo"
+  function sudo { "$@"; }
+  export -f sudo
+fi
 
 OS=$(uname -s)
 ARCH=$(uname -m)
@@ -39,9 +47,7 @@ mkdir -p $WORKSPACE_DIR
 
 if [[ ! -f $SENTINEL_FILE ]]; then
   # Install swig based on OS
-  if [[ $OS == "Linux" ]]; then
-    $INSTALL_CMD swig
-  elif [[ $OS == "Darwin" ]]; then
+  if [[ $OS == "Darwin" ]]; then
     # Install brew if needed
     if ! command -v brew &> /dev/null; then
       /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
@@ -49,8 +55,8 @@ if [[ ! -f $SENTINEL_FILE ]]; then
       echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> $HOME/.zprofile
       eval "$(/opt/homebrew/bin/brew shellenv)"
     fi
-    $INSTALL_CMD swig
   fi
+  $INSTALL_CMD swig
 
   # Install miniconda
   if [[ ! -d $CONDA_ROOT ]]; then

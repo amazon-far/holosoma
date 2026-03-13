@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TypedDict
+from dataclasses import dataclass, field
+from typing import Mapping, TypedDict
 
 import numpy as np
 
@@ -21,14 +21,23 @@ _ROBOT_DEFAULTS: dict[str, RobotDefaults] = {
 }
 
 
-def _validate_robot_type(robot_type: str) -> None:
-    """Validate that robot_type exists in _ROBOT_DEFAULTS."""
-    if robot_type not in _ROBOT_DEFAULTS:
-        available = ", ".join(sorted(_ROBOT_DEFAULTS.keys()))
+def _default_robot_defaults() -> dict[str, RobotDefaults]:
+    """Copy robot defaults so each config instance can be customized safely."""
+    return {name: defaults.copy() for name, defaults in _ROBOT_DEFAULTS.items()}
+
+
+def _validate_robot_type(robot_type: str, robot_defaults: Mapping[str, RobotDefaults] | None = None) -> None:
+    """Validate that robot_type exists in robot defaults."""
+    if robot_defaults is None:
+        robot_defaults = _ROBOT_DEFAULTS
+
+    if robot_type not in robot_defaults:
+        available = ", ".join(sorted(robot_defaults.keys()))
         raise ValueError(
             f"Invalid robot_type: '{robot_type}'. "
             f"Available robot types: {available}. "
-            f"Add your robot to _ROBOT_DEFAULTS in config_types/robot.py"
+            f"Add your robot to RobotConfig.robot_defaults "
+            f"(default defined by _ROBOT_DEFAULTS in config_types/robot.py)"
         )
 
 
@@ -51,10 +60,11 @@ class RobotConfig:
     # Robot type selector - determines which defaults to use
     # Use str instead of Literal to allow dynamic robot types via _ROBOT_DEFAULTS
     robot_type: str = "g1"
+    robot_defaults: dict[str, RobotDefaults] = field(default_factory=_default_robot_defaults)
 
     def __post_init__(self) -> None:
         """Validate robot_type after initialization."""
-        _validate_robot_type(self.robot_type)
+        _validate_robot_type(self.robot_type, self.robot_defaults)
 
     # Robot configuration (optional overrides)
     robot_dof: int | None = None
@@ -78,7 +88,7 @@ class RobotConfig:
         """Get robot DOF - use override if provided, else use robot_type default."""
         if self.robot_dof is not None:
             return self.robot_dof
-        return _ROBOT_DEFAULTS[self.robot_type]["robot_dof"]
+        return self.robot_defaults[self.robot_type]["robot_dof"]
 
     ROBOT_DOF = property(
         _robot_dof,
@@ -89,7 +99,7 @@ class RobotConfig:
         """Get robot height - use override if provided, else use robot_type default."""
         if self.robot_height is not None:
             return self.robot_height
-        return _ROBOT_DEFAULTS[self.robot_type]["robot_height"]
+        return self.robot_defaults[self.robot_type]["robot_height"]
 
     ROBOT_HEIGHT = property(
         _robot_height,

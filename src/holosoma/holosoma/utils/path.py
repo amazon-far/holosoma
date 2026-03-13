@@ -8,7 +8,7 @@ from pathlib import Path
 if sys.version_info >= (3, 9):
     from importlib.resources import files
 else:
-    from importlib_resources import files
+    from importlib_resources import files  # type: ignore[import-not-found]
 
 
 def resolve_data_file_path(file_path: str) -> str:

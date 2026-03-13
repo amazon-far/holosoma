@@ -85,7 +85,9 @@ class WholeBodyTrackingPolicy(BasePolicy):
                 )
             )
 
-        if sys.stdin.isatty():
+        if hasattr(self, "_shared_hardware_source"):
+            logger.info(colored("Skipping stiff hold prompt (secondary policy)", "yellow"))
+        elif sys.stdin.isatty():
             logger.info(colored("\n⚠️  Ready to enter stiff hold mode", "yellow", attrs=["bold"]))
             logger.info(colored("Press Enter to continue...", "yellow"))
             try:

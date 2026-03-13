@@ -25,3 +25,9 @@ class InferenceConfig:
 
     task: TaskConfig
     """Task execution configuration."""
+
+    secondary: InferenceConfig | None = None
+    """Secondary policy config for dual-mode (X-button switch).
+    When set, enables runtime switching between this (primary) policy and the secondary.
+    Override any field: --secondary.task.model-path, --secondary.task.rl-rate, etc.
+    Set to None to disable dual-mode."""

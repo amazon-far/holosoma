@@ -2,7 +2,25 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True)
+class FootLockConfig:
+    """Configuration for explicit frame-range based foot locking constraints."""
+
+    enable: bool = False
+    """Whether to enforce explicit frame-range based foot locking constraints."""
+
+    windows: dict[str, list[tuple[int, int]]] | None = None
+    """Per-foot inclusive frame windows for locking.
+    Example: {"L_Toe": [(30, 60)], "R_Toe": [(10, 20), (80, 95)]}"""
+
+    z_floor: float = 0.0
+    """Floor height used by Z pinning constraints."""
+
+    tolerance: float = 5e-3
+    """Tolerance for Z floor pinning constraints."""
 
 
 @dataclass(frozen=True)
@@ -31,6 +49,9 @@ class RetargeterConfig:
 
     foot_sticking_tolerance: float = 1e-3
     """Tolerance for foot sticking constraints in x, y."""
+
+    foot_lock: FootLockConfig = field(default_factory=FootLockConfig)
+    """Configuration for explicit frame-range based foot locking."""
 
     step_size: float = 0.2
     """Trust region for each SQP iteration."""
