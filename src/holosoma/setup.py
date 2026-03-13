@@ -24,10 +24,5 @@ setup(
         "unitree": [f"unitree_sdk2 @ {unitree_url}"],
         "booster": [f"booster_robotics_sdk @ {booster_url}"],
     },
-    entry_points={
-        "holosoma.bridge": [
-            "unitree = holosoma.bridge.unitree:UnitreeSdk2Bridge",
-            "booster = holosoma.bridge.booster:BoosterSdk2Bridge",
-        ],
-    },
+    # Entry points are declared in pyproject.toml [project.entry-points.*]
 )
