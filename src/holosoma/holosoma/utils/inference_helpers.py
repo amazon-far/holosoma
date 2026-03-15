@@ -91,18 +91,30 @@ def export_policy_as_onnx(wrapper, onnx_file_path: str, example_obs_dict):
     # Ensure parent directory exists
     os.makedirs(Path(onnx_file_path).parent, exist_ok=True)
     
-    # Check if motion encoder is used (future_motion_targets present)
+    # Build input list based on available keys
+    has_height_map = "height_map_obs" in example_obs_dict
     has_future_motion = "future_motion_targets" in example_obs_dict
-    
-    if has_future_motion:
-        # Export with both actor_obs and future_motion_targets
+
+    if has_height_map and has_future_motion:
         example_input_list = (
             example_obs_dict["actor_obs"],
-            example_obs_dict["future_motion_targets"]
+            example_obs_dict["height_map_obs"],
+            example_obs_dict["future_motion_targets"],
+        )
+        input_names = ["actor_obs", "height_map_obs", "future_motion_targets"]
+    elif has_height_map:
+        example_input_list = (
+            example_obs_dict["actor_obs"],
+            example_obs_dict["height_map_obs"],
+        )
+        input_names = ["actor_obs", "height_map_obs"]
+    elif has_future_motion:
+        example_input_list = (
+            example_obs_dict["actor_obs"],
+            example_obs_dict["future_motion_targets"],
         )
         input_names = ["actor_obs", "future_motion_targets"]
     else:
-        # Export with only actor_obs
         example_input_list = example_obs_dict["actor_obs"]
         input_names = ["actor_obs"]
 

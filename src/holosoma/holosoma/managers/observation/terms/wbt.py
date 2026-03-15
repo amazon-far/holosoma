@@ -374,3 +374,103 @@ def future_motion_targets(
                 logger.info(f"Debug log auto-saved at timestep 200 to: {debug_log_path} ({len(env._debug_future_motion_log)} entries)")
     
     return result
+
+
+#########################################################################################################
+## Height Map Observation (for height map encoder)
+#########################################################################################################
+
+def height_map_obs(
+    env: WholeBodyTrackingManager,
+    map_height: int = 11,
+    map_width: int = 17,
+    spacing: float = 0.1,
+) -> torch.Tensor:
+    """Height map observation for terrain perception via CNN + cross-attention.
+
+    Uses the IsaacSim ``height_map_scanner`` RayCaster sensor (with debug_vis
+    for red-sphere visualization matching KraftonLab). Falls back to manual
+    warp-based raycasting if the sensor is unavailable.
+
+    Returns (x_local, y_local, height_relative) per grid point.
+
+    Args:
+        env: WholeBodyTrackingManager environment.
+        map_height: Number of grid rows (along robot's x-axis / forward).
+        map_width: Number of grid columns (along robot's y-axis / lateral).
+        spacing: Distance between grid points in meters.
+
+    Returns:
+        Tensor of shape [num_envs, map_height * map_width * 3].
+        Channels per point: (x_local, y_local, height_relative_to_base).
+    """
+    num_envs = env.num_envs
+    device = env.device
+    num_points = map_height * map_width
+
+    # Build local grid coordinates (computed once, then cached)
+    if not hasattr(env, "_height_map_grid_local"):
+        half_h = (map_height - 1) * spacing / 2.0
+        half_w = (map_width - 1) * spacing / 2.0
+        xs = torch.linspace(-half_h, half_h, map_height, device=device)
+        ys = torch.linspace(-half_w, half_w, map_width, device=device)
+        grid_x, grid_y = torch.meshgrid(xs, ys, indexing="ij")
+        grid_local = torch.zeros(num_points, 3, device=device)
+        grid_local[:, 0] = grid_x.flatten()
+        grid_local[:, 1] = grid_y.flatten()
+        env._height_map_grid_local = grid_local
+
+    grid_local = env._height_map_grid_local
+
+    # Try using IsaacSim RayCaster sensor (provides debug_vis red spheres)
+    use_sensor = (
+        hasattr(env, "simulator")
+        and hasattr(env.simulator, "scene")
+        and "height_map_scanner" in env.simulator.scene.sensors
+    )
+
+    base_pos = env.simulator.robot_root_states[:, :3]
+    base_z = base_pos[:, 2:3]
+
+    if use_sensor:
+        scanner = env.simulator.scene.sensors["height_map_scanner"]
+        ray_hits_w = scanner.data.ray_hits_w  # (num_envs, num_rays, 3)
+        terrain_z = ray_hits_w[..., 2]  # (num_envs, num_rays)
+    else:
+        # Fallback: manual warp raycasting
+        from holosoma.utils.rotations import quat_apply_yaw
+        from holosoma.utils import warp_utils
+
+        terrain_state = env.terrain_manager.get_state("locomotion_terrain")
+        warp_mesh = terrain_state.warp_mesh
+
+        if not hasattr(env, "_height_map_ray_dirs"):
+            env._height_map_ray_dirs = torch.zeros(num_envs, num_points, 3, device=device)
+            env._height_map_ray_dirs[..., 2] = -1.0
+
+        base_quat = env.base_quat
+        grid_expanded = grid_local.unsqueeze(0).expand(num_envs, -1, -1)
+        grid_world = quat_apply_yaw(
+            base_quat.repeat(1, num_points), grid_expanded, w_last=True,
+        ) + base_pos.unsqueeze(1)
+
+        ray_starts = grid_world.clone()
+        ray_starts[..., 2] = base_z + 1.0
+
+        ray_hits = warp_utils.ray_cast(ray_starts, env._height_map_ray_dirs, warp_mesh)
+        terrain_z = ray_hits[..., 2]
+
+    # Compute relative height
+    height_relative = terrain_z - base_z
+
+    # Handle missed rays (inf) → -1.0
+    height_relative = torch.where(
+        torch.isinf(height_relative), torch.full_like(height_relative, -1.0), height_relative
+    )
+
+    # Build output: (num_envs, H*W, 3) with (x_local, y_local, height_relative)
+    x_local = grid_local[:, 0].unsqueeze(0).expand(num_envs, -1)
+    y_local = grid_local[:, 1].unsqueeze(0).expand(num_envs, -1)
+
+    result = torch.stack([x_local, y_local, height_relative], dim=-1)
+    return result.reshape(num_envs, -1)

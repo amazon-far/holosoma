@@ -191,7 +191,21 @@ class PPO(BaseAlgo):
                 "activation": me_cfg.activation,
             }
             logger.info(f"Motion encoder config: {motion_encoder_config}")
-        
+
+        # Get height map encoder config if available
+        height_map_encoder_config = None
+        if hasattr(self.config.module_dict, 'height_map_encoder') and self.config.module_dict.height_map_encoder is not None:
+            hm_cfg = self.config.module_dict.height_map_encoder
+            height_map_encoder_config = {
+                "latent_dim": hm_cfg.latent_dim,
+                "num_heads": hm_cfg.num_heads,
+                "map_height": hm_cfg.map_height,
+                "map_width": hm_cfg.map_width,
+                "num_channels": hm_cfg.num_channels,
+                "conv_hidden_channels": hm_cfg.conv_hidden_channels,
+            }
+            logger.info(f"Height map encoder config: {height_map_encoder_config}")
+
         self.actor = setup_ppo_actor_module(
             obs_dim_dict=self.algo_obs_dim_dict,
             module_config=self.config.module_dict.actor,
@@ -200,6 +214,7 @@ class PPO(BaseAlgo):
             device=self.device,
             history_length=self.algo_history_length_dict,
             motion_encoder_config=motion_encoder_config,
+            height_map_encoder_config=height_map_encoder_config,
         )
         self.critic = setup_ppo_critic_module(
             obs_dim_dict=self.algo_obs_dim_dict,
@@ -207,6 +222,7 @@ class PPO(BaseAlgo):
             device=self.device,
             history_length=self.algo_history_length_dict,
             motion_encoder_config=motion_encoder_config,
+            height_map_encoder_config=height_map_encoder_config,
         )
 
         if self.use_symmetry:
@@ -253,14 +269,26 @@ class PPO(BaseAlgo):
         self.storage.register("critic_obs", shape=(critic_obs_dim,), dtype=torch.float)
 
         # Register future_motion_targets if using motion encoder
+        actor_type = self.config.module_dict.actor.type
         self.use_motion_encoder = (
-            self.config.module_dict.actor.type == "MLPWithMotionEncoder"
+            actor_type in ("MLPWithMotionEncoder", "MLPWithHeightMap")
             and "future_motion_targets" in self.algo_obs_dim_dict
+            and self.config.module_dict.motion_encoder is not None
         )
         if self.use_motion_encoder:
             future_motion_dim = self.algo_obs_dim_dict["future_motion_targets"]
             print(f"Registering key: future_motion_targets with shape: {future_motion_dim}")
             self.storage.register("future_motion_targets", shape=(future_motion_dim,), dtype=torch.float)
+
+        # Register height_map_obs if using height map encoder
+        self.use_height_map = (
+            actor_type == "MLPWithHeightMap"
+            and "height_map_obs" in self.algo_obs_dim_dict
+        )
+        if self.use_height_map:
+            height_map_dim = self.algo_obs_dim_dict["height_map_obs"]
+            print(f"Registering key: height_map_obs with shape: {height_map_dim}")
+            self.storage.register("height_map_obs", shape=(height_map_dim,), dtype=torch.float)
 
         # Register others based on Minibatch structure
         minibatch_keys = [
@@ -335,7 +363,12 @@ class PPO(BaseAlgo):
                 
                 # Prepare policy state dict
                 policy_state = {"actor_obs": actor_obs, "critic_obs": critic_obs}
-                
+
+                # Add height_map_obs if using height map encoder
+                if self.use_height_map:
+                    height_map = obs_dict["height_map_obs"]
+                    policy_state["height_map_obs"] = height_map
+
                 # Add future_motion_targets if using motion encoder
                 if self.use_motion_encoder:
                     future_motion = obs_dict["future_motion_targets"]
@@ -355,6 +388,10 @@ class PPO(BaseAlgo):
                 if infos["time_outs"].any():
                     final_critic_obs = torch.cat([infos["final_observations"][k] for k in self.critic_obs_keys], dim=1)
                     final_policy_state = {"critic_obs": final_critic_obs}
+                    if self.use_height_map:
+                        final_policy_state["height_map_obs"] = infos["final_observations"].get(
+                            "height_map_obs", height_map
+                        )
                     if self.use_motion_encoder:
                         final_policy_state["future_motion_targets"] = infos["final_observations"].get(
                             "future_motion_targets", future_motion
@@ -376,6 +413,8 @@ class PPO(BaseAlgo):
                     "rewards": (rewards + final_rewards).view(-1, 1),
                     "dones": dones.view(-1, 1),
                 }
+                if self.use_height_map:
+                    storage_data["height_map_obs"] = height_map
                 if self.use_motion_encoder:
                     storage_data["future_motion_targets"] = future_motion
                 self.storage.add(**storage_data)
@@ -391,6 +430,8 @@ class PPO(BaseAlgo):
             # Return / Advantage computation
             last_critic_obs = torch.cat([obs_dict[k] for k in self.critic_obs_keys], dim=1)
             last_policy_state = {"critic_obs": last_critic_obs}
+            if self.use_height_map:
+                last_policy_state["height_map_obs"] = obs_dict["height_map_obs"]
             if self.use_motion_encoder:
                 last_policy_state["future_motion_targets"] = obs_dict["future_motion_targets"]
             last_values = self.critic.evaluate(last_policy_state).detach().to(self.device)
@@ -508,6 +549,8 @@ class PPO(BaseAlgo):
 
         # Prepare policy state dict for training
         policy_state = {"actor_obs": actor_obs, "critic_obs": critic_obs}
+        if self.use_height_map and "height_map_obs" in minibatch:
+            policy_state["height_map_obs"] = minibatch["height_map_obs"]
         if self.use_motion_encoder and "future_motion_targets" in minibatch:
             policy_state["future_motion_targets"] = minibatch["future_motion_targets"]
 
@@ -541,6 +584,8 @@ class PPO(BaseAlgo):
 
         if self.use_symmetry and (self.config.symmetry_actor_coef > 0.0 or self.config.symmetry_critic_coef > 0.0):
             inference_state = {"actor_obs": actor_obs.detach().clone()}
+            if self.use_height_map and "height_map_obs" in minibatch:
+                inference_state["height_map_obs"] = minibatch["height_map_obs"]
             if self.use_motion_encoder and "future_motion_targets" in minibatch:
                 inference_state["future_motion_targets"] = minibatch["future_motion_targets"]
             mean_actions_batch = self.actor.act_inference(inference_state)
@@ -977,8 +1022,41 @@ class PPO(BaseAlgo):
     @property
     def actor_onnx_wrapper(self):
         use_motion_encoder = getattr(self, 'use_motion_encoder', False)
-        
-        if use_motion_encoder:
+        use_height_map = getattr(self, 'use_height_map', False)
+
+        if use_height_map and use_motion_encoder:
+            # Height map + motion encoder wrapper
+            class ActorWithHeightMapAndMotionWrapper(nn.Module):
+                def __init__(self, actor):
+                    super().__init__()
+                    self.actor = actor
+                    self.height_map_encoder = actor.height_map_encoder
+                    self.motion_encoder = actor.motion_encoder
+                    self.actor_module = actor.actor_module
+
+                def forward(self, actor_obs, height_map_obs, future_motion_targets):
+                    map_latent = self.height_map_encoder(height_map_obs, actor_obs)
+                    motion_latent = self.motion_encoder(future_motion_targets)
+                    combined_input = torch.cat([actor_obs, map_latent, motion_latent], dim=-1)
+                    return self.actor_module(combined_input)
+
+            return ActorWithHeightMapAndMotionWrapper(self.actor)
+        elif use_height_map:
+            # Height map only wrapper
+            class ActorWithHeightMapWrapper(nn.Module):
+                def __init__(self, actor):
+                    super().__init__()
+                    self.actor = actor
+                    self.height_map_encoder = actor.height_map_encoder
+                    self.actor_module = actor.actor_module
+
+                def forward(self, actor_obs, height_map_obs):
+                    map_latent = self.height_map_encoder(height_map_obs, actor_obs)
+                    combined_input = torch.cat([actor_obs, map_latent], dim=-1)
+                    return self.actor_module(combined_input)
+
+            return ActorWithHeightMapWrapper(self.actor)
+        elif use_motion_encoder:
             # Motion encoder wrapper: takes actor_obs and future_motion_targets
             class ActorWithMotionEncoderWrapper(nn.Module):
                 def __init__(self, actor):
@@ -1020,6 +1098,9 @@ class PPO(BaseAlgo):
             "actor_obs": torch.cat([obs_dict[k] for k in self.actor_obs_keys], dim=1).clone(),
             "critic_obs": torch.cat([obs_dict[k] for k in self.critic_obs_keys], dim=1).clone(),
         }
+        # Add height_map_obs if using height map encoder
+        if self.use_height_map and "height_map_obs" in obs_dict:
+            example_obs["height_map_obs"] = obs_dict["height_map_obs"].clone()
         # Add future_motion_targets if using motion encoder
         if self.use_motion_encoder and "future_motion_targets" in obs_dict:
             example_obs["future_motion_targets"] = obs_dict["future_motion_targets"].clone()

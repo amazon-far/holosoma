@@ -3,9 +3,11 @@ from __future__ import annotations
 from holosoma.agents.modules.ppo_modules import (
     PPOActor,
     PPOActorEncoder,
+    PPOActorWithHeightMap,
     PPOActorWithMotionEncoder,
     PPOCritic,
     PPOCriticEncoder,
+    PPOCriticWithHeightMap,
     PPOCriticWithMotionEncoder,
 )
 
@@ -18,6 +20,7 @@ def setup_ppo_actor_module(
     device,
     history_length: dict[str, int],
     motion_encoder_config: dict | None = None,
+    height_map_encoder_config: dict | None = None,
 ):
     module_type = module_config.type
     if module_type in ["MLPEncoder", "CNNEncoder"]:
@@ -46,6 +49,18 @@ def setup_ppo_actor_module(
             history_length=history_length,
             motion_encoder_config=motion_encoder_config,
         ).to(device)
+    if module_type == "MLPWithHeightMap":
+        if height_map_encoder_config is None:
+            raise ValueError("height_map_encoder_config is required for MLPWithHeightMap")
+        return PPOActorWithHeightMap(
+            obs_dim_dict=obs_dim_dict,
+            module_config_dict=module_config,
+            num_actions=num_actions,
+            init_noise_std=init_noise_std,
+            history_length=history_length,
+            height_map_encoder_config=height_map_encoder_config,
+            motion_encoder_config=motion_encoder_config,
+        ).to(device)
 
     raise ValueError(f"Invalid actor type: {module_type}")
 
@@ -56,6 +71,7 @@ def setup_ppo_critic_module(
     device,
     history_length: dict[str, int],
     motion_encoder_config: dict | None = None,
+    height_map_encoder_config: dict | None = None,
 ):
     module_type = module_config.type
     if module_type in ["MLPEncoder", "CNNEncoder"]:
@@ -76,6 +92,16 @@ def setup_ppo_critic_module(
             obs_dim_dict=obs_dim_dict,
             module_config_dict=module_config,
             history_length=history_length,
+            motion_encoder_config=motion_encoder_config,
+        ).to(device)
+    if module_type == "MLPWithHeightMap":
+        if height_map_encoder_config is None:
+            raise ValueError("height_map_encoder_config is required for MLPWithHeightMap")
+        return PPOCriticWithHeightMap(
+            obs_dim_dict=obs_dim_dict,
+            module_config_dict=module_config,
+            history_length=history_length,
+            height_map_encoder_config=height_map_encoder_config,
             motion_encoder_config=motion_encoder_config,
         ).to(device)
     raise ValueError(f"Invalid critic type: {module_type}")

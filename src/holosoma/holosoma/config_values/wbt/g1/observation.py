@@ -199,9 +199,40 @@ g1_29dof_wbt_observation_future_motion_no_key_body = ObservationManagerCfg(
     },
 )
 
+# Future motion + height map observation config
+# Includes future_motion_targets for motion encoder AND height_map_obs for terrain perception
+height_map_obs_group = ObsGroupCfg(
+    concatenate=True,
+    enable_noise=False,
+    history_length=1,
+    terms={
+        "height_map_obs": ObsTermCfg(
+            func="holosoma.managers.observation.terms.wbt:height_map_obs",
+            scale=1.0,
+            noise=0.0,
+            params={"map_height": 11, "map_width": 17, "spacing": 0.1},
+        ),
+    },
+)
+
+g1_29dof_wbt_observation_future_motion_heightmap = ObservationManagerCfg(
+    groups={
+        "actor_obs": actor_obs_shared,
+        "critic_obs": ObsGroupCfg(
+            concatenate=True,
+            enable_noise=False,
+            history_length=1,
+            terms=critic_obs_shared_terms,
+        ),
+        "future_motion_targets": future_motion_obs_group,
+        "height_map_obs": height_map_obs_group,
+    },
+)
+
 __all__ = [
     "g1_29dof_wbt_observation",
     "g1_29dof_wbt_observation_w_object",
     "g1_29dof_wbt_observation_future_motion",
     "g1_29dof_wbt_observation_future_motion_no_key_body",
+    "g1_29dof_wbt_observation_future_motion_heightmap",
 ]
