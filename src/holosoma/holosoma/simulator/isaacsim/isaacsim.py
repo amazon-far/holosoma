@@ -388,18 +388,23 @@ class IsaacSim(BaseSimulator):
             self._height_scanner = RayCaster(height_scanner_config)
             self.scene.sensors["height_scanner"] = self._height_scanner
 
-            # Height map scanner for terrain perception observation (CNN + CrossAttention)
-            # Uses a larger grid matching HeightMapEncoderConfig defaults: 17x11 grid
+            # Height map scanner for terrain perception (CNN + CrossAttention)
+            # Matches KraftonLab: 17x11 grid, update every 5 policy steps, debug_vis=False
+            physics_dt = 1.0 / self.simulator_config.sim.fps
+            policy_dt = physics_dt * self.simulator_config.sim.control_decimation
+            height_map_update_decimation = 5  # relative to policy steps
             height_map_scanner_config = RayCasterCfg(
                 prim_path=f"/World/envs/env_.*/Robot/{self.robot_config.body_names[0]}",
                 offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
                 attach_yaw_only=True,
                 pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
-                debug_vis=True,
+                debug_vis=False,
                 mesh_prim_paths=[terrain_prim_path],
+                update_period=policy_dt * height_map_update_decimation,
             )
             self._height_map_scanner = RayCaster(height_map_scanner_config)
             self.scene.sensors["height_map_scanner"] = self._height_map_scanner
+
 
         # clone, filter, and replicate
         self.scene.clone_environments(copy_from_source=False)
@@ -499,6 +504,7 @@ class IsaacSim(BaseSimulator):
             from isaacsim.util.debug_draw import _debug_draw
 
             self.draw = _debug_draw.acquire_debug_draw_interface()
+
         else:
             self.draw = None
 

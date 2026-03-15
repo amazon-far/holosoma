@@ -382,95 +382,61 @@ def future_motion_targets(
 
 def height_map_obs(
     env: WholeBodyTrackingManager,
-    map_height: int = 11,
-    map_width: int = 17,
-    spacing: float = 0.1,
+    height_scan_offset: float = 0.5,
+    min_height: float = -5.0,
 ) -> torch.Tensor:
     """Height map observation for terrain perception via CNN + cross-attention.
 
-    Uses the IsaacSim ``height_map_scanner`` RayCaster sensor (with debug_vis
-    for red-sphere visualization matching KraftonLab). Falls back to manual
-    warp-based raycasting if the sensor is unavailable.
+    Reads from the IsaacSim ``height_map_scanner`` RayCaster sensor, matching
+    KraftonLab's MapScanWrapper implementation. The sensor updates every 5
+    policy steps (configured via ``update_period`` in the simulator).
 
-    Returns (x_local, y_local, height_relative) per grid point.
+    Returns (x_local, y_local, height) per grid point, where
+    height = sensor_z - ray_hit_z - offset (positive = above ground).
 
     Args:
         env: WholeBodyTrackingManager environment.
-        map_height: Number of grid rows (along robot's x-axis / forward).
-        map_width: Number of grid columns (along robot's y-axis / lateral).
-        spacing: Distance between grid points in meters.
+        height_scan_offset: Height offset subtracted from scan (default 0.5m).
+        min_height: Value to use for missed rays (default -5.0).
 
     Returns:
-        Tensor of shape [num_envs, map_height * map_width * 3].
-        Channels per point: (x_local, y_local, height_relative_to_base).
+        Tensor of shape [num_envs, num_rays * 3].
     """
+    scanner = env.simulator.scene.sensors["height_map_scanner"]
+
+    # Build grid coordinates once (matching sensor's GridPatternCfg ordering)
+    if not hasattr(env, "_height_map_grid_xy"):
+        cfg = scanner.cfg.pattern_cfg
+        x = torch.arange(
+            start=-cfg.size[0] / 2, end=cfg.size[0] / 2 + 1.0e-9,
+            step=cfg.resolution, device=env.device,
+        )
+        y = torch.arange(
+            start=-cfg.size[1] / 2, end=cfg.size[1] / 2 + 1.0e-9,
+            step=cfg.resolution, device=env.device,
+        )
+        grid_x, grid_y = torch.meshgrid(x, y, indexing="xy")
+        env._height_map_grid_x = grid_x.flatten()  # (num_rays,)
+        env._height_map_grid_y = grid_y.flatten()  # (num_rays,)
+
     num_envs = env.num_envs
-    device = env.device
-    num_points = map_height * map_width
+    num_rays = env._height_map_grid_x.shape[0]
 
-    # Build local grid coordinates (computed once, then cached)
-    if not hasattr(env, "_height_map_grid_local"):
-        half_h = (map_height - 1) * spacing / 2.0
-        half_w = (map_width - 1) * spacing / 2.0
-        xs = torch.linspace(-half_h, half_h, map_height, device=device)
-        ys = torch.linspace(-half_w, half_w, map_width, device=device)
-        grid_x, grid_y = torch.meshgrid(xs, ys, indexing="ij")
-        grid_local = torch.zeros(num_points, 3, device=device)
-        grid_local[:, 0] = grid_x.flatten()
-        grid_local[:, 1] = grid_y.flatten()
-        env._height_map_grid_local = grid_local
-
-    grid_local = env._height_map_grid_local
-
-    # Try using IsaacSim RayCaster sensor (provides debug_vis red spheres)
-    use_sensor = (
-        hasattr(env, "simulator")
-        and hasattr(env.simulator, "scene")
-        and "height_map_scanner" in env.simulator.scene.sensors
+    # Height = sensor_pos_z - ray_hit_z - offset  (KraftonLab convention)
+    height_map = (
+        scanner.data.pos_w[:, 2].unsqueeze(1)
+        - scanner.data.ray_hits_w[..., 2]
+        - height_scan_offset
     )
 
-    base_pos = env.simulator.robot_root_states[:, :3]
-    base_z = base_pos[:, 2:3]
+    # Handle invalid hits
+    height_map = torch.where(torch.isnan(height_map), torch.full_like(height_map, min_height), height_map)
+    height_map = torch.where(torch.isinf(height_map), torch.full_like(height_map, min_height), height_map)
 
-    if use_sensor:
-        scanner = env.simulator.scene.sensors["height_map_scanner"]
-        ray_hits_w = scanner.data.ray_hits_w  # (num_envs, num_rays, 3)
-        terrain_z = ray_hits_w[..., 2]  # (num_envs, num_rays)
-    else:
-        # Fallback: manual warp raycasting
-        from holosoma.utils.rotations import quat_apply_yaw
-        from holosoma.utils import warp_utils
+    # Build output: (num_envs, num_rays, 3) with (x_local, y_local, height)
+    map_scan = torch.zeros(num_envs, num_rays, 3, device=env.device)
+    map_scan[:, :, 0] = env._height_map_grid_x
+    map_scan[:, :, 1] = env._height_map_grid_y
+    map_scan[:, :, 2] = height_map
 
-        terrain_state = env.terrain_manager.get_state("locomotion_terrain")
-        warp_mesh = terrain_state.warp_mesh
-
-        if not hasattr(env, "_height_map_ray_dirs"):
-            env._height_map_ray_dirs = torch.zeros(num_envs, num_points, 3, device=device)
-            env._height_map_ray_dirs[..., 2] = -1.0
-
-        base_quat = env.base_quat
-        grid_expanded = grid_local.unsqueeze(0).expand(num_envs, -1, -1)
-        grid_world = quat_apply_yaw(
-            base_quat.repeat(1, num_points), grid_expanded, w_last=True,
-        ) + base_pos.unsqueeze(1)
-
-        ray_starts = grid_world.clone()
-        ray_starts[..., 2] = base_z + 1.0
-
-        ray_hits = warp_utils.ray_cast(ray_starts, env._height_map_ray_dirs, warp_mesh)
-        terrain_z = ray_hits[..., 2]
-
-    # Compute relative height
-    height_relative = terrain_z - base_z
-
-    # Handle missed rays (inf) → -1.0
-    height_relative = torch.where(
-        torch.isinf(height_relative), torch.full_like(height_relative, -1.0), height_relative
-    )
-
-    # Build output: (num_envs, H*W, 3) with (x_local, y_local, height_relative)
-    x_local = grid_local[:, 0].unsqueeze(0).expand(num_envs, -1)
-    y_local = grid_local[:, 1].unsqueeze(0).expand(num_envs, -1)
-
-    result = torch.stack([x_local, y_local, height_relative], dim=-1)
-    return result.reshape(num_envs, -1)
+    return map_scan.reshape(num_envs, -1)

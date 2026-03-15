@@ -210,7 +210,7 @@ height_map_obs_group = ObsGroupCfg(
             func="holosoma.managers.observation.terms.wbt:height_map_obs",
             scale=1.0,
             noise=0.0,
-            params={"map_height": 11, "map_width": 17, "spacing": 0.1},
+            params={"height_scan_offset": 0.5, "min_height": -5.0},
         ),
     },
 )
