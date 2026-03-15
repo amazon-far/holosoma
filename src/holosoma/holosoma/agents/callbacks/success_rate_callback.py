@@ -25,8 +25,8 @@ from loguru import logger
 from holosoma.agents.callbacks.base_callback import RLEvalCallback
 from holosoma.managers.command.terms.wbt import MotionLoader
 
-# ASAP-style threshold: any tracked body 3D position error exceeds this = fail
-MOTION_FAR_THRESHOLD = 0.5
+# ASAP-style thresholds: any tracked body 3D position error exceeds this = fail
+MOTION_FAR_THRESHOLDS = [0.5, 0.25]
 
 
 class SuccessRateCallback(RLEvalCallback):
@@ -99,8 +99,11 @@ class SuccessRateCallback(RLEvalCallback):
         self._num_motions = len(mc.motion_library._all_npz_files)
         self._num_batches = (self._num_motions + self._num_envs - 1) // self._num_envs
 
-        # Track per-motion results
-        self._terminate_states = torch.zeros(self._num_motions, dtype=torch.bool, device=self.device)
+        # Track per-motion results for each threshold
+        self._terminate_states = {
+            thresh: torch.zeros(self._num_motions, dtype=torch.bool, device=self.device)
+            for thresh in MOTION_FAR_THRESHOLDS
+        }
         self._current_batch = 0
         self._env_done = torch.zeros(self._num_envs, dtype=torch.bool, device=self.device)
 
@@ -120,7 +123,7 @@ class SuccessRateCallback(RLEvalCallback):
         logger.info(
             f"SuccessRateCallback: evaluating {self._num_motions} motions "
             f"in {self._num_batches} batches of {self._num_envs} "
-            f"(motion_far_threshold={MOTION_FAR_THRESHOLD}m)"
+            f"(thresholds={MOTION_FAR_THRESHOLDS}m)"
         )
 
     def _setup_batch(self, batch_idx: int):
@@ -201,16 +204,16 @@ class SuccessRateCallback(RLEvalCallback):
         env.reset_buf[:] = 0
         env.time_out_buf[:] = 0
 
-    def _check_motion_far(self) -> torch.Tensor:
+    def _check_motion_far(self) -> dict[float, torch.Tensor]:
         """ASAP-style check: any tracked body 3D position error > threshold.
 
-        Returns (num_envs,) bool tensor.
+        Returns dict of threshold -> (num_envs,) bool tensor.
         """
         mc = self._motion_command
-        error = torch.norm(
+        max_error = torch.norm(
             mc.body_pos_relative_w - mc.robot_body_pos_w, dim=-1
-        )  # (num_envs, num_bodies)
-        return torch.any(error > MOTION_FAR_THRESHOLD, dim=-1)  # (num_envs,)
+        ).max(dim=-1).values  # (num_envs,)
+        return {thresh: max_error > thresh for thresh in MOTION_FAR_THRESHOLDS}
 
     def on_pre_eval_env_step(self, actor_state):
         if self._skip:
@@ -239,20 +242,22 @@ class SuccessRateCallback(RLEvalCallback):
         # So: env_was_reset & ~_env_done => completed successfully, just mark as done.
         self._env_done |= env_was_reset
 
-        # For non-reset, non-done envs: check motion_far as usual
+        # For non-reset, non-done envs: check motion_far at all thresholds
         active = ~self._env_done
         if active[:self._batch_size].any():
-            motion_far = self._check_motion_far()
-            newly_failed = motion_far & active
-
+            motion_far_dict = self._check_motion_far()
             batch_start = self._current_batch * self._num_envs
-            for i in range(self._batch_size):
-                if newly_failed[i]:
-                    motion_idx = batch_start + i
-                    if motion_idx < self._num_motions:
-                        self._terminate_states[motion_idx] = True
 
-            self._env_done |= motion_far
+            for thresh, motion_far in motion_far_dict.items():
+                newly_failed = motion_far & active
+                for i in range(self._batch_size):
+                    if newly_failed[i]:
+                        motion_idx = batch_start + i
+                        if motion_idx < self._num_motions:
+                            self._terminate_states[thresh][motion_idx] = True
+
+            # Use the largest (most lenient) threshold for env_done
+            self._env_done |= motion_far_dict[max(MOTION_FAR_THRESHOLDS)]
 
         # Check if all envs in this batch are done
         if self._env_done[:self._batch_size].all():
@@ -268,58 +273,56 @@ class SuccessRateCallback(RLEvalCallback):
         if self._skip:
             return
 
-        terminate_np = self._terminate_states.cpu().numpy()
         num_total = self._num_motions
-        success_rate = 1.0 - terminate_np[:num_total].mean()
-        num_success = int((~self._terminate_states[:num_total]).sum().item())
+        self.metrics = {"eval/num_motions": float(num_total)}
 
-        logger.info(
-            f"SuccessRateCallback: success_rate={success_rate:.4f} "
-            f"({num_success}/{num_total})"
-        )
+        for thresh in MOTION_FAR_THRESHOLDS:
+            terminate_np = self._terminate_states[thresh].cpu().numpy()
+            success_rate = 1.0 - terminate_np[:num_total].mean()
+            num_success = int((~self._terminate_states[thresh][:num_total]).sum().item())
+            thresh_key = f"{thresh}m"
 
-        # Store metrics for logging
-        self.metrics = {
-            "eval/success_rate": success_rate,
-            "eval/num_motions": float(num_total),
-            "eval/num_success": float(num_success),
-        }
+            logger.info(
+                f"SuccessRateCallback [{thresh}m]: success_rate={success_rate:.4f} "
+                f"({num_success}/{num_total})"
+            )
 
-        # Per-skill and per-category success rates
-        if self._motion_skill:
-            skill_results = defaultdict(list)
-            category_results = defaultdict(list)
+            self.metrics[f"eval/success_rate_{thresh_key}"] = success_rate
+            self.metrics[f"eval/num_success_{thresh_key}"] = float(num_success)
 
-            lib = self._motion_library
-            for i in range(num_total):
-                basename = self._get_motion_basename(lib._all_npz_files[i])
-                failed = bool(terminate_np[i])
+            # Per-skill and per-category success rates
+            if self._motion_skill:
+                skill_results = defaultdict(list)
+                category_results = defaultdict(list)
 
-                skill = self._motion_skill.get(basename)
-                if skill:
-                    skill_results[skill].append(failed)
+                lib = self._motion_library
+                for i in range(num_total):
+                    basename = self._get_motion_basename(lib._all_npz_files[i])
+                    failed = bool(terminate_np[i])
 
-                category = self._motion_category.get(basename)
-                if category:
-                    category_results[category].append(failed)
+                    skill = self._motion_skill.get(basename)
+                    if skill:
+                        skill_results[skill].append(failed)
 
-            # Log per-skill
-            logger.info("  Per-skill success rates:")
-            for skill in sorted(skill_results.keys()):
-                fails = skill_results[skill]
-                sr = 1.0 - (sum(fails) / len(fails))
-                n = len(fails)
-                self.metrics[f"eval/skill/{skill}"] = sr
-                logger.info(f"    {skill}: {sr:.4f} ({n - sum(fails)}/{n})")
+                    category = self._motion_category.get(basename)
+                    if category:
+                        category_results[category].append(failed)
 
-            # Log per-category
-            logger.info("  Per-category success rates:")
-            for cat in sorted(category_results.keys()):
-                fails = category_results[cat]
-                sr = 1.0 - (sum(fails) / len(fails))
-                n = len(fails)
-                self.metrics[f"eval/category/{cat}"] = sr
-                logger.info(f"    {cat}: {sr:.4f} ({n - sum(fails)}/{n})")
+                logger.info(f"  Per-skill success rates [{thresh}m]:")
+                for skill in sorted(skill_results.keys()):
+                    fails = skill_results[skill]
+                    sr = 1.0 - (sum(fails) / len(fails))
+                    n = len(fails)
+                    self.metrics[f"eval/skill_{thresh_key}/{skill}"] = sr
+                    logger.info(f"    {skill}: {sr:.4f} ({n - sum(fails)}/{n})")
+
+                logger.info(f"  Per-category success rates [{thresh}m]:")
+                for cat in sorted(category_results.keys()):
+                    fails = category_results[cat]
+                    sr = 1.0 - (sum(fails) / len(fails))
+                    n = len(fails)
+                    self.metrics[f"eval/category_{thresh_key}/{cat}"] = sr
+                    logger.info(f"    {cat}: {sr:.4f} ({n - sum(fails)}/{n})")
 
         # Save results to text file in the log directory
         log_dir = getattr(self.training_loop, "log_dir", None)
@@ -329,32 +332,20 @@ class SuccessRateCallback(RLEvalCallback):
             try:
                 lines = []
                 lines.append(f"=== Success Rate Report (iteration {iteration}) ===")
-                lines.append(f"Overall: {success_rate:.4f} ({num_success}/{num_total})")
-                lines.append(f"Threshold: {MOTION_FAR_THRESHOLD}m")
+                for thresh in MOTION_FAR_THRESHOLDS:
+                    terminate_np = self._terminate_states[thresh].cpu().numpy()
+                    sr = 1.0 - terminate_np[:num_total].mean()
+                    ns = int((~self._terminate_states[thresh][:num_total]).sum().item())
+                    lines.append(f"Overall [{thresh}m]: {sr:.4f} ({ns}/{num_total})")
                 lines.append("")
 
-                if self._motion_skill:
-                    lines.append("--- Per-Category ---")
-                    for cat in sorted(category_results.keys()):
-                        fails = category_results[cat]
-                        sr = 1.0 - (sum(fails) / len(fails))
-                        n = len(fails)
-                        lines.append(f"  {cat}: {sr:.4f} ({n - sum(fails)}/{n})")
-                    lines.append("")
-
-                    lines.append("--- Per-Skill ---")
-                    for skill in sorted(skill_results.keys()):
-                        fails = skill_results[skill]
-                        sr = 1.0 - (sum(fails) / len(fails))
-                        n = len(fails)
-                        lines.append(f"  {skill}: {sr:.4f} ({n - sum(fails)}/{n})")
-                    lines.append("")
-
-                # Per-motion results
-                lines.append("--- Per-Motion (failed only) ---")
+                # Per-motion results (list failures at strictest threshold)
+                min_thresh = min(MOTION_FAR_THRESHOLDS)
+                terminate_strict = self._terminate_states[min_thresh].cpu().numpy()
+                lines.append(f"--- Per-Motion (failed at {min_thresh}m) ---")
                 lib = self._motion_library
                 for i in range(num_total):
-                    if terminate_np[i]:
+                    if terminate_strict[i]:
                         basename = self._get_motion_basename(lib._all_npz_files[i])
                         lines.append(f"  FAIL: {basename}")
 
