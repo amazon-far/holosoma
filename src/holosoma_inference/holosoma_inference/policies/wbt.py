@@ -52,7 +52,6 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self._stiff_hold_active = True
         self.robot_yaw_offset = 0.0
         self.motion_yaw_offset = 0.0
-        self.onnx_action_scale: np.ndarray | None = None
         self.per_joint_policy_action_scale: np.ndarray | None = None
 
         super().__init__(config)
@@ -128,7 +127,6 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self.onnx_policy_session = onnxruntime.InferenceSession(model_path)
         self.onnx_input_names = [inp.name for inp in self.onnx_policy_session.get_inputs()]
         self.onnx_output_names = [out.name for out in self.onnx_policy_session.get_outputs()]
-        raw_metadata = dict(self.onnx_policy_session.get_modelmeta().custom_metadata_map)
 
         # Extract KP/KD from ONNX metadata (same as base class)
         onnx_model = onnx.load(model_path)
@@ -142,7 +140,6 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
         self.onnx_kp = np.array(metadata["kp"]) if "kp" in metadata else None
         self.onnx_kd = np.array(metadata["kd"]) if "kd" in metadata else None
-        self.onnx_action_scale = self._parse_action_scale_metadata(raw_metadata.get("action_scale"))
 
         if self.onnx_kp is not None:
             from pathlib import Path
@@ -182,7 +179,9 @@ class WholeBodyTrackingPolicy(BasePolicy):
             {
                 "motion_command_0": self.motion_command_0.copy(),
                 "ref_quat_xyzw_0": self.ref_quat_xyzw_0.copy(),
-                "onnx_action_scale": self.onnx_action_scale.copy() if self.onnx_action_scale is not None else None,
+                "per_joint_policy_action_scale": self.per_joint_policy_action_scale.copy()
+                if self.per_joint_policy_action_scale is not None
+                else None,
             }
         )
         return state
@@ -191,7 +190,9 @@ class WholeBodyTrackingPolicy(BasePolicy):
         super()._restore_policy_state(state)
         self.motion_command_0 = state["motion_command_0"].copy()
         self.ref_quat_xyzw_0 = state["ref_quat_xyzw_0"].copy()
-        self.onnx_action_scale = state["onnx_action_scale"].copy() if state["onnx_action_scale"] is not None else None
+        self.per_joint_policy_action_scale = (
+            state["per_joint_policy_action_scale"].copy() if state["per_joint_policy_action_scale"] is not None else None
+        )
         self.motion_clip_progressing = False
         self.timestep_util.reset(start_timestep=0)
         self.curr_motion_timestep = self.timestep_util.timestep
@@ -292,8 +293,11 @@ class WholeBodyTrackingPolicy(BasePolicy):
            ``task.action_scales_by_effort_limit_over_p_gain`` is True
         3. Fall back to the scalar ``task.policy_action_scale``
         """
-        if self.onnx_action_scale is not None:
-            scales = self.onnx_action_scale.astype(np.float32, copy=False).reshape(-1)
+        raw_metadata = dict(self.onnx_policy_session.get_modelmeta().custom_metadata_map)
+        onnx_action_scale = self._parse_action_scale_metadata(raw_metadata.get("action_scale"))
+
+        if onnx_action_scale is not None:
+            scales = onnx_action_scale.astype(np.float32, copy=False).reshape(-1)
         elif self.config.task.action_scales_by_effort_limit_over_p_gain:
             fallback = self.config.robot.default_per_joint_action_scale
             if fallback is None:

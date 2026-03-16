@@ -41,7 +41,13 @@ class TerminationManager:
         self._term_names: list[str] = []
         self._term_cfgs: list[TerminationTermCfg] = []
 
-        # Keep latest termination masks for consumers (e.g., adaptive motion sampling).
+        # Expose non-timeout / timeout termination masks so that downstream
+        # consumers (e.g. adaptive motion sampling in MotionCommand) can
+        # distinguish failure-triggered resets from timeouts.  This mirrors
+        # IsaacLab's TerminationManager API which provides the same fields.
+        # Keeping this here avoids duplicating termination logic in individual
+        # command or reward terms and prevents synchronisation issues that
+        # would arise from maintaining a parallel copy.
         self.terminated = torch.zeros(self.env.num_envs, dtype=torch.bool, device=self.device)
         self.time_outs = torch.zeros_like(self.terminated)
 

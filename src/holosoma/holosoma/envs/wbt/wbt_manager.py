@@ -121,7 +121,8 @@ class WholeBodyTrackingManager(BaseTask):
         rand = torch.rand(len(env_ids), 6, device=self.device) * 2 - 1
         self.push_robot_vel_buf[env_ids] = rand * max_vel_tensor.unsqueeze(0)
         self.record_push_robot_vel_buf[env_ids] = self.push_robot_vel_buf[env_ids].clone()
-        self.simulator.robot_root_states[env_ids, 7:13] = self.push_robot_vel_buf[env_ids]
+        # Additive push to match BeyondMimic/IsaacLab's push_by_setting_velocity.
+        self.simulator.robot_root_states[env_ids, 7:13] += self.push_robot_vel_buf[env_ids]
         # Push impulses only take effect in the simulator once we write the mutated root state tensor back.
         self.simulator.set_actor_root_state_tensor_robots(env_ids, self.simulator.robot_root_states)
         self._max_push_vel = max_vel_tensor.clone()

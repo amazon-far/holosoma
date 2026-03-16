@@ -64,11 +64,7 @@ if [[ ! -f $SENTINEL_FILE ]]; then
     git clone https://github.com/isaac-sim/IsaacLab.git --branch v2.3.0 $WORKSPACE_DIR/IsaacLab
   fi
 
-  if [[ "$(id -u)" -eq 0 ]]; then
-    apt install -y cmake build-essential
-  else
-    sudo apt install -y cmake build-essential
-  fi
+  sudo apt install -y cmake build-essential
   cd $WORKSPACE_DIR/IsaacLab
   # setuptools 81 removes pkg_resoures, a dep needs that
   # see https://github.com/isaac-sim/IsaacLab/pull/4585
