@@ -18,4 +18,6 @@ python src/holosoma/holosoma/train_agent.py \
     --termination.terms.bad_tracking.params.bad_motion_body_pos_threshold 0.5 \
     --simulator.config.scene.env_spacing=0.0 \
     --training.num_envs 2048 \
+    --logger.video.enabled False \
+    --algo.config.save_interval 1000 \
     robot:g1-29dof-diverse-action-scale

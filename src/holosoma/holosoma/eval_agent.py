@@ -165,6 +165,9 @@ def run_eval_with_tyro(
                 # Add future_motion_targets if using motion encoder
                 if hasattr(algo, 'use_motion_encoder') and algo.use_motion_encoder and "future_motion_targets" in obs_dict:
                     policy_state_dict["future_motion_targets"] = obs_dict["future_motion_targets"]
+                # Add height_map_obs if using height map encoder
+                if hasattr(algo, 'use_height_map') and algo.use_height_map and "height_map_obs" in obs_dict:
+                    policy_state_dict["height_map_obs"] = obs_dict["height_map_obs"]
                 actions = eval_policy(policy_state_dict)
             else:
                 actions = eval_policy(obs_dict)

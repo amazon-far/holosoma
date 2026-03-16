@@ -1091,7 +1091,7 @@ class PPO(BaseAlgo):
 
     def get_example_obs(self):
         """Used for exporting policy as onnx."""
-        with torch.inference_mode():
+        with torch.no_grad():
             obs_dict = self.env.reset_all()
         # Clone tensors to convert inference tensors to normal tensors for ONNX tracing
         example_obs = {

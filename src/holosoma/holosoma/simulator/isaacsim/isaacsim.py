@@ -829,6 +829,20 @@ class IsaacSim(BaseSimulator):
     def draw_debug_viz(self):
         if self.virtual_gantry:
             self.virtual_gantry.draw_debug()
+        # Draw height map scanner ray hits
+        if hasattr(self, '_height_map_scanner') and self._height_map_scanner is not None:
+            ray_hits = self._height_map_scanner.data.ray_hits_w  # (num_envs, num_rays, 3)
+            env_id = 0
+            hits = ray_hits[env_id]  # (num_rays, 3)
+            # Filter out invalid hits (NaN/Inf)
+            valid = torch.isfinite(hits).all(dim=-1)
+            valid_hits = hits[valid]
+            if valid_hits.shape[0] > 0:
+                points = [tuple(p.detach().cpu().tolist()) for p in valid_hits]
+                colors = [[0.0, 1.0, 1.0, 1.0]] * len(points)  # cyan
+                sizes = [8.0] * len(points)
+                if hasattr(self, 'draw') and self.draw:
+                    self.draw.draw_points(points, colors, sizes)
 
     def simulate_at_each_physics_step(self):
         self._sim_step_counter += 1
