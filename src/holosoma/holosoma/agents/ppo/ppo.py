@@ -1090,20 +1090,24 @@ class PPO(BaseAlgo):
         return actor_state
 
     def get_example_obs(self):
-        """Used for exporting policy as onnx."""
-        with torch.no_grad():
-            obs_dict = self.env.reset_all()
-        # Clone tensors to convert inference tensors to normal tensors for ONNX tracing
+        """Create example observations for ONNX export using zero tensors.
+
+        Avoids calling reset_all() which can fail when simulator tensors are
+        inference tensors from a prior rollout step.
+        """
+        num_envs = self.env.num_envs
         example_obs = {
-            "actor_obs": torch.cat([obs_dict[k] for k in self.actor_obs_keys], dim=1).clone(),
-            "critic_obs": torch.cat([obs_dict[k] for k in self.critic_obs_keys], dim=1).clone(),
+            "actor_obs": torch.zeros(num_envs, self._get_obs_dim(self.actor_obs_keys), device=self.device),
+            "critic_obs": torch.zeros(num_envs, self._get_obs_dim(self.critic_obs_keys), device=self.device),
         }
-        # Add height_map_obs if using height map encoder
-        if self.use_height_map and "height_map_obs" in obs_dict:
-            example_obs["height_map_obs"] = obs_dict["height_map_obs"].clone()
-        # Add future_motion_targets if using motion encoder
-        if self.use_motion_encoder and "future_motion_targets" in obs_dict:
-            example_obs["future_motion_targets"] = obs_dict["future_motion_targets"].clone()
+        if self.use_height_map:
+            example_obs["height_map_obs"] = torch.zeros(
+                num_envs, self.algo_obs_dim_dict["height_map_obs"], device=self.device
+            )
+        if self.use_motion_encoder:
+            example_obs["future_motion_targets"] = torch.zeros(
+                num_envs, self.algo_obs_dim_dict["future_motion_targets"], device=self.device
+            )
         return example_obs
 
     @torch.no_grad()
