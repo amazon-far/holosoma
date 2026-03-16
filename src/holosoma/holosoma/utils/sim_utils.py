@@ -309,6 +309,20 @@ def close_simulation_app(simulation_app):
         except Exception as e:
             logger.warning(f"Could not patch close_stage method: {e}")
 
+        try:
+            # Work-around for IsaacLab SimulationContext._app_control_on_stop_handle_fn
+            # hanging in an infinite render() loop on shutdown. When simulation_app.close()
+            # triggers a timeline STOP event, the callback spins waiting for the timeline to
+            # start playing again — which never happens. Disabling the callback prevents this.
+            from isaaclab.sim import SimulationContext  # noqa: PLC0415
+
+            sim_context = SimulationContext.instance()
+            if sim_context is not None:
+                sim_context._disable_app_control_on_stop_handle = True
+                logger.info("Disabled SimulationContext app_control_on_stop_handle to prevent shutdown hang")
+        except Exception as e:
+            logger.warning(f"Could not disable app_control_on_stop_handle: {e}")
+
         # Now close the app
         simulation_app.close(wait_for_replicator=False)
         logger.info("Simulation app closed.")
