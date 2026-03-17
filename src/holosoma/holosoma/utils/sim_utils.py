@@ -43,11 +43,11 @@ def setup_simulator_imports(config: ExperimentConfig | RunSimConfig) -> None:
     simulator_type = get_simulator_type()
 
     if simulator_type == SimulatorType.MUJOCO:
-        import mujoco  # noqa: PLC0415
+        import mujoco
 
         assert mujoco is not None
     elif simulator_type == SimulatorType.ISAACGYM:
-        import isaacgym  # noqa: PLC0415
+        import isaacgym
 
         assert isaacgym is not None
 
@@ -69,7 +69,7 @@ def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str
     Any | None
         IsaacSim simulation app instance, or None for other simulators.
     """
-    from isaaclab.app import AppLauncher  # noqa: PLC0415
+    from isaaclab.app import AppLauncher
 
     parser = argparse.ArgumentParser(description="Run simulation with IsaacSim.")
     parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
@@ -152,7 +152,7 @@ def setup_keyboard_listener(env) -> threading.Thread:
             # Trying to import pynput in headless mode gives the following error:
             # ImportError: this platform is not supported:
             # ('failed to acquire X connection: Bad display name ""', DisplayNameError(''))
-            from pynput import keyboard as pynput_keyboard  # noqa: PLC0415
+            from pynput import keyboard as pynput_keyboard
 
             logger.info("Keyboard controls:")
             logger.info("  n - Next task (if supported)")
@@ -293,7 +293,7 @@ def close_simulation_app(simulation_app):
         try:
             # Work-around for IsaacLab hanging headless.
             # Patch the close_stage method to avoid hanging
-            import omni.usd  # noqa: PLC0415
+            import omni.usd
 
             context = omni.usd.get_context()
             context_class = context.__class__
@@ -314,7 +314,7 @@ def close_simulation_app(simulation_app):
             # hanging in an infinite render() loop on shutdown. When simulation_app.close()
             # triggers a timeline STOP event, the callback spins waiting for the timeline to
             # start playing again — which never happens. Disabling the callback prevents this.
-            from isaaclab.sim import SimulationContext  # noqa: PLC0415
+            from isaaclab.sim import SimulationContext
 
             sim_context = SimulationContext.instance()
             if sim_context is not None:
