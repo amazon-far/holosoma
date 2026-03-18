@@ -6,8 +6,8 @@ This script uses Tyro configuration system to run different policy types.
 
 Usage:
     python run_policy.py inference:g1-29dof-loco --task.model-path path/to/model.onnx
-    python run_policy.py inference:g1-29dof-loco --task.model-path wandb://project/run/model.onnx
-    python run_policy.py inference:g1-29dof-loco --task.model-path https://wandb-url/files/model.onnx
+    python run_policy.py inference:g1-29dof-loco secondary:none
+    python run_policy.py inference:g1-29dof-loco secondary:g1-29dof-safety-loco
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ import traceback
 import tyro
 from loguru import logger
 
-from holosoma_inference.config.config_types.inference import InferenceConfig
-from holosoma_inference.config.config_values.inference import get_annotated_inference_config
+from holosoma_inference.config.config_types.inference import DualModePolicyConfig
+from holosoma_inference.config.config_values.inference import AnnotatedDualModePolicyConfig
 from holosoma_inference.config.utils import TYRO_CONFIG
 from holosoma_inference.policies.dual_mode import DualModePolicy, _select_policy_class
 from holosoma_inference.utils.misc import restore_terminal_settings
@@ -98,28 +98,28 @@ def _print_control_guide(policy_class, use_joystick: bool, dual_mode: bool = Fal
     logger.info("")
 
 
-def run_policy(config: InferenceConfig):
+def run_policy(config: DualModePolicyConfig):
     """Run policy with Tyro configuration."""
     logger.info("🚀 Starting Policy with Tyro configuration...")
-    logger.info(f"🤖 Robot: {config.robot.robot_type}")
-    logger.info(f"📋 Observation groups: {list(config.observation.obs_dict.keys())}")
-    logger.info(f"⚙️ RL Rate: {config.task.rl_rate} Hz")
-    logger.info(f"📁 Model path: {config.task.model_path}")
+    logger.info(f"🤖 Robot: {config.primary.robot.robot_type}")
+    logger.info(f"📋 Observation groups: {list(config.primary.observation.obs_dict.keys())}")
+    logger.info(f"⚙️ RL Rate: {config.primary.task.rl_rate} Hz")
+    logger.info(f"📁 Model path: {config.primary.task.model_path}")
 
     try:
         # Determine policy class based on observation type
-        policy_class = _select_policy_class(config)
+        policy_class = _select_policy_class(config.primary)
         dual_mode = config.secondary is not None
 
         if dual_mode:
             logger.info(f"Using {policy_class.__name__} (dual-mode enabled)")
-            policy = DualModePolicy(primary_config=config, secondary_config=config.secondary)
+            policy = DualModePolicy(config=config)
         else:
             logger.info(f"Using {policy_class.__name__}")
-            policy = policy_class(config=config)
+            policy = policy_class(config=config.primary)
 
         logger.info("✅ Policy initialized successfully!")
-        _print_control_guide(policy_class, config.task.use_joystick, dual_mode=dual_mode)
+        _print_control_guide(policy_class, config.primary.task.use_joystick, dual_mode=dual_mode)
         policy.run()
         logger.info("✅ Policy execution completed!")
 
@@ -131,90 +131,9 @@ def run_policy(config: InferenceConfig):
         restore_terminal_settings()
 
 
-def _split_secondary_args(argv: list[str]) -> tuple[list[str], list[str]]:
-    """Split --secondary.* args out of argv, renaming them for standalone parsing.
-
-    Returns (primary_argv, secondary_argv) where secondary args have the
-    ``--secondary.`` prefix stripped, e.g. ``--secondary.task.model-path X``
-    becomes ``--task.model-path X``.
-    """
-    primary = []
-    secondary = []
-    expect_secondary_value = False
-    for arg in argv:
-        if arg.startswith("--secondary."):
-            renamed = "--" + arg[len("--secondary.") :]
-            secondary.append(renamed)
-            # If not --key=value form, the next token might be the value
-            expect_secondary_value = "=" not in renamed
-        elif expect_secondary_value and not arg.startswith("--"):
-            secondary.append(arg)
-            expect_secondary_value = False
-        else:
-            primary.append(arg)
-            expect_secondary_value = False
-    return primary, secondary
-
-
-def main(annotated_config=None):
-    """Main entry point. Extensions can pass their own AnnotatedInferenceConfig."""
-    import argparse
-
-    from holosoma_inference.config.config_values.inference import DEFAULTS
-
-    # Pre-parse --secondary-preset and --secondary none before tyro.
-    # Tyro can't build a CLI parser for InferenceConfig | None when it
-    # contains dict[str, Any] fields, so we handle secondary selection ourselves.
-    pre = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
-    pre.add_argument(
-        "--secondary-preset",
-        default=None,
-        metavar="NAME",
-        help=f"Select a preset for the secondary policy. Choices: {list(DEFAULTS.keys())}",
-    )
-    pre.add_argument("--secondary", default=None, help="Set to 'none' to disable dual-mode.")
-    known, remaining = pre.parse_known_args()
-
-    disable_secondary = known.secondary is not None and known.secondary.lower() == "none"
-    secondary_preset = known.secondary_preset
-
-    # Strip --secondary.* args from remaining so tyro doesn't see them
-    primary_argv, secondary_argv = _split_secondary_args(remaining)
-    sys.argv = [sys.argv[0]] + primary_argv
-
-    if annotated_config is None:
-        # Use factory function to lazily load extension configs
-        annotated_config = get_annotated_inference_config()
-    config = tyro.cli(annotated_config, config=TYRO_CONFIG)
-
-    from dataclasses import replace as _replace
-
-    if disable_secondary:
-        config = _replace(config, secondary=None)
-    elif secondary_preset:
-        preset = DEFAULTS.get(secondary_preset)
-        if preset is None:
-            logger.error(f"Unknown secondary preset: {secondary_preset}")
-            logger.info(f"Available presets: {list(DEFAULTS.keys())}")
-            sys.exit(1)
-        preset = _replace(preset, secondary=None)
-
-        # Parse secondary overrides against the preset defaults
-        if secondary_argv:
-            sys.argv = [sys.argv[0]] + secondary_argv
-            secondary = tyro.cli(InferenceConfig, default=preset, config=TYRO_CONFIG)
-        else:
-            secondary = preset
-        config = _replace(config, secondary=secondary)
-    elif secondary_argv:
-        # --secondary.* overrides on the config's default secondary
-        if config.secondary is not None:
-            sys.argv = [sys.argv[0]] + secondary_argv
-            secondary = tyro.cli(InferenceConfig, default=config.secondary, config=TYRO_CONFIG)
-            config = _replace(config, secondary=secondary)
-        else:
-            logger.warning("--secondary.* args ignored: no default secondary in this config")
-
+def main():
+    """Main entry point."""
+    config = tyro.cli(AnnotatedDualModePolicyConfig, config=TYRO_CONFIG)
     run_policy(config)
 
 

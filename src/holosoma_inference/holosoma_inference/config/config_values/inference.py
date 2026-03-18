@@ -1,18 +1,19 @@
 """Default inference configurations for holosoma_inference."""
 
+from __future__ import annotations
+
 from dataclasses import replace
 from importlib.metadata import entry_points
 
 import tyro
+from holosoma_inference.config.config_types.inference import DualModePolicyConfig, InferenceConfig
+from holosoma_inference.config.config_values import observation, robot, task
 from typing_extensions import Annotated
 
-from holosoma_inference.config.config_types.inference import InferenceConfig
-from holosoma_inference.config.config_values import observation, robot, task
-
-# Shared safety secondary for all G1 configs — FastSAC locomotion.
-# Each config references the same object; users can override any field
-# with --secondary.task.model-path etc., or disable with --secondary none.
-_g1_safety_secondary = InferenceConfig(
+# Safety secondary for G1 configs - FastSAC locomotion.
+# Users can select this explicitly via `secondary:g1-29dof-safety-loco`,
+# or disable the secondary with `secondary:none`.
+g1_safety_loco = InferenceConfig(
     robot=robot.g1_29dof,
     observation=observation.loco_g1_29dof,
     task=task.safety_locomotion_g1,
@@ -22,7 +23,6 @@ g1_29dof_loco = InferenceConfig(
     robot=robot.g1_29dof,
     observation=observation.loco_g1_29dof,
     task=task.locomotion,
-    secondary=_g1_safety_secondary,
 )
 
 t1_29dof_loco = InferenceConfig(
@@ -62,14 +62,14 @@ g1_29dof_wbt = InferenceConfig(
 # fmt: on
     observation=observation.wbt,
     task=task.wbt,
-    secondary=_g1_safety_secondary,
 )
 
 # Core defaults - no extension imports at module load time
-DEFAULTS = {
-    "g1-29dof-loco": g1_29dof_loco,
-    "t1-29dof-loco": t1_29dof_loco,
-    "g1-29dof-wbt": g1_29dof_wbt,
+DEFAULTS: dict[str, DualModePolicyConfig] = {
+    "g1-29dof-loco": DualModePolicyConfig(primary=g1_29dof_loco, secondary=g1_safety_loco),
+    "t1-29dof-loco": DualModePolicyConfig(primary=t1_29dof_loco, secondary=None),
+    "g1-29dof-wbt": DualModePolicyConfig(primary=g1_29dof_wbt, secondary=g1_safety_loco),
+    "g1-29dof-safety-loco": DualModePolicyConfig(primary=g1_safety_loco, secondary=None),
 }
 
 # Track whether extensions have been loaded
@@ -90,31 +90,31 @@ def _load_extensions() -> None:
         DEFAULTS[ep.name] = ep.load()
 
 
-def get_annotated_inference_config() -> type:
-    """Build the annotated InferenceConfig type with all discovered configs.
+def _make_dual_mode_constructor():
+    """Build subcommand constructor for the top-level config selector."""
+    defaults = get_defaults()
 
-    This function loads extension configs lazily and returns a tyro-compatible
-    annotated type for CLI subcommand generation.
-
-    Returns:
-        Annotated type suitable for use with tyro.cli()
-    """
-    _load_extensions()
-    return Annotated[
-        InferenceConfig,
-        tyro.conf.arg(
-            constructor=tyro.extras.subcommand_type_from_defaults(
-                {f"inference:{k}": v for k, v in DEFAULTS.items()}
+    # Validate: each default secondary must be registered as a primary in DEFAULTS,
+    # because we ask tyro to build the secondary subcommand choices from the same set.
+    primaries = {id(v.primary) for v in defaults.values()}
+    for name, cfg in defaults.items():
+        if cfg.secondary is not None and id(cfg.secondary) not in primaries:
+            raise ValueError(
+                f"Default secondary for '{name}' is not a registered primary in DEFAULTS."
             )
-        ),
-    ]
+
+    return tyro.extras.subcommand_type_from_defaults(
+        {f"inference:{k}": v for k, v in defaults.items()}
+    )
 
 
-def get_defaults() -> dict:
-    """Get all inference config defaults, including extensions.
+AnnotatedDualModePolicyConfig = Annotated[
+    DualModePolicyConfig,
+    tyro.conf.arg(constructor_factory=_make_dual_mode_constructor),
+]
 
-    Returns:
-        Dictionary mapping config names to InferenceConfig instances.
-    """
+
+def get_defaults() -> dict[str, DualModePolicyConfig]:
+    """Get all config defaults, including extensions."""
     _load_extensions()
     return DEFAULTS
