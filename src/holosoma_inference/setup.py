@@ -44,7 +44,7 @@ setup(
         "sshkeyboard",
         "termcolor",
         "pyyaml",
-        "tyro>=0.10.0a4",
+        "tyro>=1.0.10",
         "wandb",
         "zmq",
         "defusedxml",

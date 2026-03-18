@@ -6,9 +6,10 @@ from dataclasses import replace
 from importlib.metadata import entry_points
 
 import tyro
+from typing_extensions import Annotated
+
 from holosoma_inference.config.config_types.inference import DualModePolicyConfig, InferenceConfig
 from holosoma_inference.config.config_values import observation, robot, task
-from typing_extensions import Annotated
 
 # Safety secondary for G1 configs - FastSAC locomotion.
 # Users can select this explicitly via `secondary:g1-29dof-safety-loco`,

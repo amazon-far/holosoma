@@ -38,9 +38,7 @@ def _make_secondary_constructor():
     """
     from holosoma_inference.config.config_values.inference import get_defaults
 
-    return tyro.extras.subcommand_type_from_defaults(
-        {k: v.primary for k, v in get_defaults().items()}
-    )
+    return tyro.extras.subcommand_type_from_defaults({k: v.primary for k, v in get_defaults().items()})
 
 
 @dataclass
@@ -50,8 +48,11 @@ class DualModePolicyConfig:
     primary: Annotated[InferenceConfig, tyro.conf.arg(name="")]
     """Primary inference config."""
 
-    secondary: Annotated[
-        InferenceConfig,
-        tyro.conf.arg(constructor_factory=_make_secondary_constructor),
-    ] | None = None
+    secondary: (
+        Annotated[
+            InferenceConfig,
+            tyro.conf.arg(constructor_factory=_make_secondary_constructor),
+        ]
+        | None
+    ) = None
     """Secondary inference config for dual-mode (X-button switch)."""
