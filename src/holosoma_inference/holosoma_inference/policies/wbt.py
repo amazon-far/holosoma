@@ -190,9 +190,8 @@ class WholeBodyTrackingPolicy(BasePolicy):
         super()._restore_policy_state(state)
         self.motion_command_0 = state["motion_command_0"].copy()
         self.ref_quat_xyzw_0 = state["ref_quat_xyzw_0"].copy()
-        self.per_joint_policy_action_scale = (
-            state["per_joint_policy_action_scale"].copy() if state["per_joint_policy_action_scale"] is not None else None
-        )
+        saved = state["per_joint_policy_action_scale"]
+        self.per_joint_policy_action_scale = saved.copy() if saved is not None else None
         self.motion_clip_progressing = False
         self.timestep_util.reset(start_timestep=0)
         self.curr_motion_timestep = self.timestep_util.timestep
