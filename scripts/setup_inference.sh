@@ -38,10 +38,14 @@ case $OS in
 esac
 
 # Create overall workspace
-source ${SCRIPT_DIR}/source_common.sh
-ENV_ROOT=$CONDA_ROOT/envs/hsinference
+# Use CONDA_ENV_NAME if provided, otherwise default to "hsinference"
+CONDA_ENV_NAME=${CONDA_ENV_NAME:-hsinference}
+echo "conda environment name is set to: $CONDA_ENV_NAME"
 
-SENTINEL_FILE=${WORKSPACE_DIR}/.env_setup_finished_inference
+source ${SCRIPT_DIR}/source_common.sh
+ENV_ROOT=$CONDA_ROOT/envs/$CONDA_ENV_NAME
+
+SENTINEL_FILE=${WORKSPACE_DIR}/.env_setup_finished_$CONDA_ENV_NAME
 
 mkdir -p $WORKSPACE_DIR
 
@@ -71,10 +75,10 @@ if [[ ! -f $SENTINEL_FILE ]]; then
     $CONDA_ROOT/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
     $CONDA_ROOT/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
     $CONDA_ROOT/bin/conda install -y mamba -c conda-forge -n base
-    MAMBA_ROOT_PREFIX=$CONDA_ROOT $CONDA_ROOT/bin/mamba create -y -n hsinference python=3.10 -c conda-forge --override-channels
+    MAMBA_ROOT_PREFIX=$CONDA_ROOT $CONDA_ROOT/bin/mamba create -y -n $CONDA_ENV_NAME python=3.10 -c conda-forge --override-channels
   fi
 
-  source $CONDA_ROOT/bin/activate hsinference
+  source $CONDA_ROOT/bin/activate $CONDA_ENV_NAME
 
   # Install libstdcxx-ng to fix the error: `version `GLIBCXX_3.4.32' not found` on Ubuntu 24.04
   # Only needed on Linux (not macOS)
