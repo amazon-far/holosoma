@@ -20,7 +20,7 @@ dependencies = [
     "mypy==1.14.1",
     "notebook",
     "numpy-stl",
-    "numpy>=1.23.5",
+    "numpy>=1.23.5,<2",
     "omegaconf",  # Used for config resolvers and DictConfig type hints
     "onnx",
     "onnxruntime",
