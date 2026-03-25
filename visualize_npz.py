@@ -41,9 +41,27 @@ def visualize_npz(npz_path: str, robot_xml_path: str, loop: bool = True):
     print(f"Duration: {duration:.2f} seconds")
     print(f"joint_pos shape: {joint_pos.shape}")
     
-    # Load MuJoCo model
+    # Load MuJoCo model, patching floor texture to match main branch sim
     print(f"\nLoading MuJoCo model: {robot_xml_path}")
-    model = mujoco.MjModel.from_xml_path(robot_xml_path)
+    import os, tempfile, shutil
+    with open(robot_xml_path) as f:
+        xml_text = f.read()
+    # Replace the floor checker texture colors to match the main branch simulator
+    xml_text = xml_text.replace(
+        'rgb1=".2 .3 .4" rgb2=".1 .15 .2"',
+        'rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" mark="edge" markrgb="0.8 0.8 0.8"',
+    )
+    # Also update texrepeat for the floor material to match main branch (5 5)
+    xml_text = xml_text.replace('texrepeat="1 1"', 'texrepeat="5 5"')
+    # Write patched XML next to original so mesh paths resolve correctly
+    xml_dir = os.path.dirname(os.path.abspath(robot_xml_path))
+    patched_path = os.path.join(xml_dir, "_visualize_patched.xml")
+    with open(patched_path, "w") as f:
+        f.write(xml_text)
+    try:
+        model = mujoco.MjModel.from_xml_path(patched_path)
+    finally:
+        os.remove(patched_path)
     data_mj = mujoco.MjData(model)
     
     # Get DOF names from model
@@ -68,42 +86,59 @@ def visualize_npz(npz_path: str, robot_xml_path: str, loop: bool = True):
         print("Warning: No joint_names in npz, assuming 1:1 mapping")
         dof_index_list = list(range(len(dof_name_list)))
     
+    # Mutable state for key callback
+    playback_state = {"frame_idx": 0, "reset_requested": False}
+
+    def key_callback(keycode):
+        # Backspace = 259 in GLFW
+        if keycode == 259:
+            playback_state["reset_requested"] = True
+            print("\n=== Reset requested (BACKSPACE) ===\n")
+
     # Launch viewer
     print("\nLaunching MuJoCo viewer...")
-    print("Press ESC to close viewer")
-    viewer = mjv.launch_passive(model, data_mj, show_left_ui=False, show_right_ui=False)
+    print("Press BACKSPACE to reset, ESC to close")
+    viewer = mjv.launch_passive(
+        model, data_mj, show_left_ui=False, show_right_ui=False, key_callback=key_callback
+    )
     viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_PERTFORCE] = 0
     viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = 0
     viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_TRANSPARENT] = 0
     viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_COM] = 0
-    
+
     viewer.cam.distance = 3.0
     viewer.cam.elevation = -20.0
     viewer.cam.azimuth = 45.0
-    
+
     # Playback loop
     frame_idx = 0
     print(f"\nPlaying motion... (Frame 0/{num_frames})")
     
     while viewer.is_running():
         start_time = time.perf_counter()
-        
+
+        # Handle reset (BACKSPACE)
+        if playback_state["reset_requested"]:
+            playback_state["reset_requested"] = False
+            frame_idx = 0
+            print(f"Playing motion... (Frame 0/{num_frames})")
+
         # Set robot state from motion data
         data_mj.qpos[:3] = joint_pos[frame_idx, :3]  # root position
         data_mj.qpos[3:7] = joint_pos[frame_idx, 3:7]  # root quaternion (wxyz)
         data_mj.qpos[7:] = joint_pos[frame_idx, 7:][dof_index_list]  # dof positions
-        
+
         # Zero velocity (we're just playing back positions)
         data_mj.qvel[:] = 0
-        
+
         # Forward kinematics
         mujoco.mj_forward(model, data_mj)
         viewer.sync()
-        
+
         # Print progress every 30 frames
         if frame_idx % 30 == 0:
             print(f"Frame {frame_idx}/{num_frames} ({frame_idx/num_frames*100:.1f}%)")
-        
+
         # Advance frame
         frame_idx += 1
         if frame_idx >= num_frames:
@@ -113,7 +148,7 @@ def visualize_npz(npz_path: str, robot_xml_path: str, loop: bool = True):
             else:
                 print("\n=== Motion playback complete ===")
                 break
-        
+
         # Sleep to maintain correct FPS
         end_time = time.perf_counter()
         sleep_time = max(0, dt - (end_time - start_time))

@@ -114,6 +114,12 @@ def export_policy_as_onnx(wrapper, onnx_file_path: str, example_obs_dict):
         logging.getLogger(logger_name).setLevel(logging.WARNING)
     # --- SUPPRESS LOGS END ---
 
+    # Build dynamic_axes so the batch dimension is not baked into the ONNX
+    # model (the example inputs come from training with num_envs=8192, but
+    # inference uses batch=1).
+    dynamic_axes = {name: {0: "batch"} for name in input_names}
+    dynamic_axes["action"] = {0: "batch"}
+
     torch.onnx.export(
         wrapper,
         example_input_list,  # Pass actor_obs (and future_motion_targets if present)
@@ -123,6 +129,7 @@ def export_policy_as_onnx(wrapper, onnx_file_path: str, example_obs_dict):
         output_names=["action"],  # Name the output
         opset_version=13,
         dynamo=False,
+        dynamic_axes=dynamic_axes,
     )
 
 

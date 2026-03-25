@@ -100,7 +100,7 @@ class MujocoXMLFilterCfg:
     that may conflict with the simulation environment or cause issues.
     """
 
-    enable: bool = False
+    enable: bool = True
     """Whether to enable XML filtering."""
 
     remove_lights: bool = True

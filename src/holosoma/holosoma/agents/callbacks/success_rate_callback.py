@@ -117,8 +117,10 @@ class SuccessRateCallback(RLEvalCallback):
         # Load CSV metadata for per-skill/category reporting
         self._load_metadata()
 
-        # Load first batch and set robot states
-        self._setup_batch(0)
+        # Defer batch setup to on_pre_eval_env_step so it happens AFTER
+        # evaluate_policy()'s reset_all() which would otherwise destroy
+        # our deterministic motion assignment and robot state initialization.
+        self._needs_initial_setup = True
 
         logger.info(
             f"SuccessRateCallback: evaluating {self._num_motions} motions "
@@ -218,6 +220,14 @@ class SuccessRateCallback(RLEvalCallback):
     def on_pre_eval_env_step(self, actor_state):
         if self._skip:
             actor_state["stop"] = True
+            return actor_state
+
+        # Deferred setup: runs after evaluate_policy()'s reset_all() so our
+        # deterministic motion assignment and robot states are not overwritten.
+        if getattr(self, "_needs_initial_setup", False):
+            self._needs_initial_setup = False
+            self._setup_batch(0)
+
         return actor_state
 
     def on_post_eval_env_step(self, actor_state):
@@ -339,15 +349,14 @@ class SuccessRateCallback(RLEvalCallback):
                     lines.append(f"Overall [{thresh}m]: {sr:.4f} ({ns}/{num_total})")
                 lines.append("")
 
-                # Per-motion results (list failures at strictest threshold)
-                min_thresh = min(MOTION_FAR_THRESHOLDS)
-                terminate_strict = self._terminate_states[min_thresh].cpu().numpy()
-                lines.append(f"--- Per-Motion (failed at {min_thresh}m) ---")
+                # Per-motion results at each threshold (full paths for unambiguous matching)
                 lib = self._motion_library
-                for i in range(num_total):
-                    if terminate_strict[i]:
-                        basename = self._get_motion_basename(lib._all_npz_files[i])
-                        lines.append(f"  FAIL: {basename}")
+                for thresh in MOTION_FAR_THRESHOLDS:
+                    terminate_np = self._terminate_states[thresh].cpu().numpy()
+                    lines.append(f"--- Per-Motion [{thresh}m] ---")
+                    for i in range(num_total):
+                        status = "FAIL" if terminate_np[i] else "OK"
+                        lines.append(f"  {status}: {lib._all_npz_files[i]}")
 
                 with open(txt_path, "w") as f:
                     f.write("\n".join(lines) + "\n")

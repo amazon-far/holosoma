@@ -207,6 +207,31 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
             logger.info(f"Loaded KP/KD from ONNX metadata: {Path(model_path).name}")
 
+        # Compute per-joint action scale from training config embedded in ONNX metadata.
+        # Training uses: action_scale * effort_limit / kp  (per joint).
+        # The inference TaskConfig has a flat policy_action_scale=1.0 which is wrong
+        # for models trained with action_scales_by_effort_limit_over_p_gain=True.
+        exp_cfg = metadata.get("experiment_config")
+        if exp_cfg is not None:
+            robot_ctrl = exp_cfg.get("robot", {}).get("control", {})
+            if robot_ctrl.get("action_scales_by_effort_limit_over_p_gain", False):
+                effort_limits = np.array(exp_cfg["robot"]["dof_effort_limit_list"], dtype=np.float32)
+                kp = np.array(metadata["kp"], dtype=np.float32)
+                base_scale = float(robot_ctrl.get("action_scale", 0.25))
+                self.policy_action_scale = (effort_limits / kp * base_scale).reshape(1, -1)
+                logger.info(
+                    f"Using per-joint action scale from ONNX metadata "
+                    f"(effort/kp*{base_scale}): min={self.policy_action_scale.min():.4f}, "
+                    f"max={self.policy_action_scale.max():.4f})"
+                )
+            elif robot_ctrl.get("action_scales") is not None:
+                self.policy_action_scale = np.array(robot_ctrl["action_scales"], dtype=np.float32).reshape(1, -1)
+                logger.info(f"Using explicit per-joint action scales from ONNX metadata")
+            else:
+                base_scale = float(robot_ctrl.get("action_scale", self.policy_action_scale))
+                self.policy_action_scale = base_scale
+                logger.info(f"Using flat action scale from ONNX metadata: {base_scale}")
+
         # Use configured observation dimensions (including history) instead of a hard-coded value.
         actor_obs_template = self.obs_buf_dict.get("actor_obs")
         if actor_obs_template is None:
@@ -251,6 +276,9 @@ class WholeBodyTrackingPolicy(BasePolicy):
                 # New format: only outputs actions
                 output = self.onnx_policy_session.run(["action"], input_feed)
                 action = output[0]
+                # Slice back to actual batch size if we padded for fixed-batch ONNX
+                if hasattr(self, '_onnx_batch_size') and action.shape[0] == self._onnx_batch_size:
+                    action = action[:1]
                 # Motion command stays the same (can't extract from new ONNX)
                 motion_command = self.motion_command_t
                 ref_quat_xyzw = self.ref_quat_xyzw_t
@@ -316,6 +344,15 @@ class WholeBodyTrackingPolicy(BasePolicy):
             body_indices = [body_names.index(name) for name in robot_body_names_to_track]
             ref_body_index = body_names.index(robot_body_name_ref[0])
 
+            # Root body index: the pelvis (first body listed in the robot config).
+            # In the motion NPZ, body index 0 is often "world" (all zeros) — the
+            # actual pelvis sits at a different index.  Match the training code which
+            # uses ``_body_indexes[0]`` (= first robot body mapped into the motion
+            # file's body list).
+            robot_body_name_root = self.config.robot.motion.get("body_name_root", ["pelvis"])
+            root_body_index = body_names.index(robot_body_name_root[0])
+            logger.info(f"Root body '{robot_body_name_root[0]}' at motion-file index {root_body_index}")
+
             # Store motion data
             self.motion_data = {
                 "joint_pos": joint_pos[:, joint_indices],  # [time_steps, num_dofs]
@@ -326,6 +363,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
                 "body_ang_vel_w": body_ang_vel_w,  # [time_steps, all_bodies, 3]
                 "body_indices": body_indices,  # Indices of 14 tracked bodies
                 "ref_body_index": ref_body_index,  # Index of reference body (torso_link)
+                "root_body_index": root_body_index,  # Index of root body (pelvis)
                 "time_step_total": len(joint_pos),
             }
             
@@ -423,6 +461,26 @@ class WholeBodyTrackingPolicy(BasePolicy):
         if self.has_future_motion and self.motion_data is not None:
             current_obs_buffer_dict["future_motion_targets"] = self._compute_future_motion_targets()
 
+        # Diagnostic logging for first few timesteps when motion is active
+        if self.motion_clip_progressing and self.motion_timestep < 5:
+            base_pos = robot_state_data[0, :3]
+            base_quat_wxyz = robot_state_data[0, 3:7]
+            base_lin_vel = robot_state_data[0, 7 + self.num_dofs : 7 + self.num_dofs + 3]
+            base_ang_vel = current_obs_buffer_dict["base_ang_vel"][0]
+            dof_pos_first5 = current_obs_buffer_dict["dof_pos"][0, :5]
+            motion_cmd_first5 = current_obs_buffer_dict["motion_command"][0, :5]
+            ref_ori = current_obs_buffer_dict["motion_ref_ori_b"][0, :6]
+            logger.info(
+                f"[OBS t={self.motion_timestep}] "
+                f"pos={base_pos} "
+                f"quat_wxyz={base_quat_wxyz} "
+                f"lin_vel={base_lin_vel} "
+                f"ang_vel={base_ang_vel} "
+                f"dof_pos[:5]={dof_pos_first5} "
+                f"motion_cmd[:5]={motion_cmd_first5} "
+                f"ref_ori={ref_ori}"
+            )
+
         return current_obs_buffer_dict
     
     def prepare_obs_for_rl(self, robot_state_data):
@@ -473,9 +531,11 @@ class WholeBodyTrackingPolicy(BasePolicy):
         future_timesteps = np.clip(future_timesteps, 0, motion["time_step_total"] - 1).astype(np.int64)
         
         # Get future motion data
-        # Root position and quaternion (pelvis = body index 0)
-        root_pos = motion["body_pos_w"][future_timesteps, 0]  # [num_steps, 3]
-        root_quat = motion["body_quat_w"][future_timesteps, 0]  # [num_steps, 4] xyzw
+        # Root position and quaternion (pelvis — use stored root_body_index, NOT hardcoded 0
+        # because body index 0 in the NPZ is often "world" with all-zero data)
+        root_idx = motion["root_body_index"]
+        root_pos = motion["body_pos_w"][future_timesteps, root_idx]  # [num_steps, 3]
+        root_quat = motion["body_quat_w"][future_timesteps, root_idx]  # [num_steps, 4] xyzw
         
         # Root height
         root_height = root_pos[:, 2:3]  # [num_steps, 1]
@@ -515,10 +575,10 @@ class WholeBodyTrackingPolicy(BasePolicy):
         roll_pitch = np.stack([roll, pitch], axis=-1)  # [num_steps, 2]
         
         # Base linear velocity
-        base_lin_vel = motion["body_lin_vel_w"][future_timesteps, 0]  # [num_steps, 3]
-        
+        base_lin_vel = motion["body_lin_vel_w"][future_timesteps, root_idx]  # [num_steps, 3]
+
         # Base angular velocity (yaw component only)
-        base_ang_vel = motion["body_ang_vel_w"][future_timesteps, 0]  # [num_steps, 3]
+        base_ang_vel = motion["body_ang_vel_w"][future_timesteps, root_idx]  # [num_steps, 3]
         base_yaw_vel = base_ang_vel[:, 2:3]  # [num_steps, 1]
         
         # Joint positions (relative to default)
@@ -617,6 +677,22 @@ class WholeBodyTrackingPolicy(BasePolicy):
         
         return result
 
+    def policy_action(self):
+        # Check if motion finished on the previous cycle (set by rl_inference).
+        # Must be handled HERE before super().policy_action() checks use_policy_action,
+        # because _handle_stop_policy sets use_policy_action=False.
+        if getattr(self, '_motion_finished', False):
+            self._motion_finished = False
+            self.logger.info(
+                colored(
+                    f"Motion clip finished ({self.motion_data['time_step_total']} frames). "
+                    "Switching to stiff hold.",
+                    "green",
+                )
+            )
+            self._handle_stop_policy()
+        super().policy_action()
+
     def rl_inference(self, robot_state_data):
         # prepare obs, run policy inference
         if not self.motion_clip_progressing:
@@ -626,7 +702,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
             self._last_clock_reading = None
 
         obs = self.prepare_obs_for_rl(robot_state_data)
-        
+
         # Prepare input_feed based on ONNX format
         if self.use_new_onnx_format:
             # New format: actor_obs (and optionally future_motion_targets)
@@ -640,11 +716,38 @@ class WholeBodyTrackingPolicy(BasePolicy):
                         "Please configure observation to include future_motion_targets or use a different ONNX model."
                     )
                     raise ValueError("Missing required input: future_motion_targets")
+
+            # Handle batch size mismatch: ONNX model may have fixed batch dim
+            # (e.g. 8192 from training) but inference uses batch=1.
+            # Pad inputs to match expected batch size, run, then slice result.
+            expected_batch = self.onnx_policy_session.get_inputs()[0].shape[0]
+            if isinstance(expected_batch, int) and expected_batch > 1:
+                self._onnx_batch_size = expected_batch
+                for key in input_feed:
+                    actual = input_feed[key].shape[0]
+                    if actual < expected_batch:
+                        pad = np.zeros(
+                            (expected_batch - actual,) + input_feed[key].shape[1:],
+                            dtype=input_feed[key].dtype,
+                        )
+                        input_feed[key] = np.concatenate([input_feed[key], pad], axis=0)
         else:
             # Legacy format: obs and time_step
             input_feed = {"time_step": np.array([[self.motion_timestep]], dtype=np.float32), "obs": obs["actor_obs"]}
-        
+
         policy_action, self.motion_command_t, self.ref_quat_xyzw_t = self.policy(input_feed)
+
+        # Debug logging for first few policy steps (including standing phase)
+        if getattr(self.config.task, 'save_debug', False) and not hasattr(self, '_debug_standing_count'):
+            self._debug_standing_count = 0
+        if getattr(self.config.task, 'save_debug', False) and not self.motion_clip_progressing and self._debug_standing_count < 10:
+            self._debug_standing_count += 1
+            logger.info(f"[STANDING step {self._debug_standing_count}] actor_obs shape: {obs['actor_obs'].shape}, mean: {obs['actor_obs'].mean():.6f}, std: {obs['actor_obs'].std():.6f}")
+            logger.info(f"[STANDING step {self._debug_standing_count}] actions[:5]: {self.last_policy_action[0, :5]}")
+            logger.info(f"[STANDING step {self._debug_standing_count}] policy_action mean: {policy_action.mean():.6f}, std: {policy_action.std():.6f}, first 5: {policy_action[0, :5]}")
+            logger.info(f"[STANDING step {self._debug_standing_count}] dof_pos[:5]: {robot_state_data[0, 7:12]}")
+            logger.info(f"[STANDING step {self._debug_standing_count}] dof_vel[:5]: {robot_state_data[0, 7+self.num_dofs+6:7+self.num_dofs+11]}")
+            logger.info(f"[STANDING step {self._debug_standing_count}] base_ang_vel: {robot_state_data[0, 7+self.num_dofs+3:7+self.num_dofs+6]}")
 
         # Debug logging for first few timesteps
         if getattr(self.config.task, 'save_debug', False) and self.motion_timestep < 5:
@@ -652,6 +755,37 @@ class WholeBodyTrackingPolicy(BasePolicy):
             logger.info(f"[Sim2Sim Timestep {self.motion_timestep}] motion_command (first 10): {self.motion_command_t[0, :10]}")
             logger.info(f"[Sim2Sim Timestep {self.motion_timestep}] ref_quat_xyzw: {self.ref_quat_xyzw_t[0]}")
             logger.info(f"[Sim2Sim Timestep {self.motion_timestep}] policy_action mean: {policy_action.mean():.6f}, std: {policy_action.std():.6f}, first 10: {policy_action[0, :10]}")
+
+        # Save full policy input/output log for every timestep (when save_debug and motion is active)
+        if getattr(self.config.task, 'save_debug', False) and self.motion_clip_progressing:
+            if not hasattr(self, '_debug_policy_io_log'):
+                self._debug_policy_io_log = []
+            entry = {
+                'timestep': int(self.motion_timestep),
+                # Robot raw state
+                'robot_base_pos': robot_state_data[0, :3].tolist(),
+                'robot_base_quat_wxyz': robot_state_data[0, 3:7].tolist(),
+                'robot_dof_pos': robot_state_data[0, 7:7 + self.num_dofs].tolist(),
+                'robot_base_lin_vel': robot_state_data[0, 7 + self.num_dofs:7 + self.num_dofs + 3].tolist(),
+                'robot_base_ang_vel': robot_state_data[0, 7 + self.num_dofs + 3:7 + self.num_dofs + 6].tolist(),
+                'robot_dof_vel': robot_state_data[0, 7 + self.num_dofs + 6:7 + self.num_dofs + 6 + self.num_dofs].tolist(),
+                # Policy inputs
+                'actor_obs': obs['actor_obs'][0].tolist(),
+                'actor_obs_shape': list(obs['actor_obs'].shape),
+                # Motion tracking state
+                'motion_command': self.motion_command_t[0].tolist(),
+                'ref_quat_xyzw': self.ref_quat_xyzw_t[0].tolist(),
+                'robot_yaw_offset_deg': float(np.degrees(self.robot_yaw_offset)),
+                'motion_yaw_offset_deg': float(np.degrees(self.motion_yaw_offset)) if hasattr(self, 'motion_yaw_offset') else None,
+                # Policy output
+                'policy_action': policy_action[0].tolist(),
+                'policy_action_mean': float(policy_action.mean()),
+                'policy_action_std': float(policy_action.std()),
+            }
+            if self.has_future_motion and 'future_motion_targets' in obs:
+                entry['future_motion_targets'] = obs['future_motion_targets'][0].tolist()
+                entry['future_motion_targets_shape'] = list(obs['future_motion_targets'].shape)
+            self._debug_policy_io_log.append(entry)
 
         # clip policy action
         policy_action = np.clip(policy_action, -100, 100)
@@ -666,6 +800,14 @@ class WholeBodyTrackingPolicy(BasePolicy):
                 self._update_clock()
             else:
                 self.motion_timestep += 1
+
+            # Auto-stop when motion clip is finished.
+            # Set a flag so the stop happens at the START of the next cycle
+            # (calling _handle_stop_policy here would set use_policy_action=False
+            # mid-cycle, causing q_target to be unassigned in policy_action).
+            if self.motion_data is not None and self.motion_timestep >= self.motion_data["time_step_total"]:
+                self._motion_finished = True
+
         return self.scaled_policy_action
 
     def _get_manual_command(self, robot_state_data):
@@ -686,33 +828,23 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self._capture_motion_yaw_offset(self.ref_quat_xyzw_0)
 
     def _update_clock(self):
-        # Use synchronized clock with motion-relative timing
+        # Use synchronized clock with motion-relative timing.
+        # motion_start_timestep is set here (main thread) on the first call
+        # after the motion clip starts, to avoid cross-thread clock skew.
         current_clock = self.clock_sub.get_clock()
         if self.motion_start_timestep is None:
-            # Motion just started; anchor to the first received clock tick.
+            # First call after motion start — anchor now on the main thread.
             self.motion_start_timestep = current_clock
-        elif self._last_clock_reading is not None and current_clock < self._last_clock_reading:
+            self._last_clock_reading = current_clock
+            self.motion_timestep = 0
+            return
+        if self._last_clock_reading is not None and current_clock < self._last_clock_reading:
             # Simulator clock jumped backwards (e.g., reset). Re-anchor start time while preserving progress.
             offset_ms = round(self.motion_timestep * self.timestep_interval_ms)
             self.logger.warning("Clock sync returned earlier timestamp; adjusting motion timing anchor.")
             self.motion_start_timestep = current_clock - offset_ms
         self._last_clock_reading = current_clock
         elapsed_ms = current_clock - self.motion_start_timestep
-        if self.motion_timestep == 0 and int(elapsed_ms // self.timestep_interval_ms) > 1:
-            self.logger.warning(
-                "Still at the beginning but the clock jumped ahead: elapsed_ms={elapsed_ms}, self.timestep_interval_ms="
-                "{timestep_interval_ms}, self.motion_timestep={motion_timestep}. "
-                "Re-anchoring to the current timestamp so the motion always starts from frame 0.",
-                elapsed_ms=elapsed_ms,
-                timestep_interval_ms=self.timestep_interval_ms,
-                motion_timestep=self.motion_timestep,
-            )
-            # Still at the beginning but the clock jumped ahead (e.g., due to waiting before start).
-            # Re-anchor to the current timestamp so the motion always starts from frame 0.
-            self.motion_start_timestep = current_clock
-            self._last_clock_reading = current_clock
-            self.motion_timestep = 0
-            return
         previous_motion_timestep = self.motion_timestep
         self.motion_timestep = int(elapsed_ms // self.timestep_interval_ms)
         if self.motion_timestep != previous_motion_timestep:
@@ -731,14 +863,20 @@ class WholeBodyTrackingPolicy(BasePolicy):
         if hasattr(self.interface, "no_action"):
             self.interface.no_action = 0
 
-        # Save debug log before stopping (only when save_debug=True)
-        if getattr(self.config.task, 'save_debug', False) and hasattr(self, '_debug_future_motion_log') and len(self._debug_future_motion_log) > 0:
+        # Save debug logs before stopping (only when save_debug=True)
+        if getattr(self.config.task, 'save_debug', False):
             import json
             from pathlib import Path
-            debug_log_path = Path("debug_future_motion_sim2sim.json")
-            with open(debug_log_path, 'w') as f:
-                json.dump(self._debug_future_motion_log, f, indent=2)
-            self.logger.info(f"Debug log saved to: {debug_log_path}")
+            if hasattr(self, '_debug_future_motion_log') and len(self._debug_future_motion_log) > 0:
+                debug_log_path = Path("debug_future_motion_sim2sim.json")
+                with open(debug_log_path, 'w') as f:
+                    json.dump(self._debug_future_motion_log, f, indent=2)
+                self.logger.info(f"Debug log saved to: {debug_log_path}")
+            if hasattr(self, '_debug_policy_io_log') and len(self._debug_policy_io_log) > 0:
+                io_log_path = Path("debug_policy_io_sim2sim.json")
+                with open(io_log_path, 'w') as f:
+                    json.dump(self._debug_policy_io_log, f, indent=2)
+                self.logger.info(f"Policy I/O log saved to: {io_log_path} ({len(self._debug_policy_io_log)} timesteps)")
 
         self.motion_clip_progressing = False
         self.motion_timestep = 0
@@ -752,13 +890,19 @@ class WholeBodyTrackingPolicy(BasePolicy):
         """Handle start motion clip action."""
         self.clock_sub.reset_origin()
         self.motion_clip_progressing = True
-        # Capture motion-specific start timestep for policy-level timing control
-        self.motion_start_timestep = None  # will be set in rl_inference
-        self.motion_timestep = 0  # Reset to start from beginning of motion
+        # Do NOT read the clock here — this runs on the keyboard listener thread,
+        # while _update_clock runs on the main policy thread.  Reading the clock
+        # here creates a multi-second gap because the main thread won't call
+        # _update_clock until its next loop iteration.  Instead, let the main
+        # thread anchor the clock on its first _update_clock call.
+        self.motion_start_timestep = None
+        self.motion_timestep = 0
         self._last_clock_reading = None
         # Reset debug logging for new motion run
         if hasattr(self, '_debug_logged_timesteps'):
             self._debug_logged_timesteps.clear()
+        if hasattr(self, '_debug_policy_io_log'):
+            self._debug_policy_io_log = []
         self.logger.info(colored("Starting motion clip", "blue"))
 
     def handle_keyboard_button(self, keycode):

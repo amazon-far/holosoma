@@ -24,6 +24,11 @@ class CommandRegistry:
         self.simulator = simulator
         self.on_command_executed: Callable | None = None  # Callback for UI updates
 
+        # System commands
+        self.system_commands = {
+            glfw.KEY_BACKSPACE: ("reset_simulation", lambda: self._reset_simulation()),
+        }
+
         # Robot commands
         self.robot_commands = {
             glfw.KEY_W: ("forward_command", lambda: self._adjust_command(0, 0.1)),
@@ -64,6 +69,14 @@ class CommandRegistry:
             True if command was handled, False otherwise
         """
 
+        # Try system commands first
+        if keycode in self.system_commands:
+            name, action = self.system_commands[keycode]
+            action()
+            if self.on_command_executed:
+                self.on_command_executed()
+            return True
+
         # Try gantry commands first (new enum-based system)
         if keycode in self.gantry_commands and self.simulator.virtual_gantry:
             command_data = self.gantry_commands[keycode]
@@ -96,3 +109,26 @@ class CommandRegistry:
     def _zero_commands(self):
         """Zero out movement commands."""
         self.simulator.commands[:, :4] = 0
+
+    def _reset_simulation(self):
+        """Reset the simulation to initial state (works with both Classic and Warp backends)."""
+        sim = self.simulator
+        import mujoco as mj
+
+        # Reset CPU-side data
+        mj.mj_resetData(sim.root_model, sim.root_data)
+        sim._set_robot_initial_state()
+        mj.mj_forward(sim.root_model, sim.root_data)
+
+        # Sync to GPU if using Warp backend
+        if hasattr(sim.backend, 'initialize_state'):
+            sim.backend.initialize_state()
+
+        # Re-initialize gantry
+        if sim.virtual_gantry is not None:
+            sim.on_episode_start(env_id=0)
+
+        # Note: the bridge keeps running so motor torques stay active (robot
+        # doesn't go limp).  Press 'o' in the policy terminal to stop the
+        # policy, then follow the normal startup flow (8 → 9 → ] → s).
+        logger.info("Simulation reset to initial state (press 'o' in policy terminal to stop policy)")
