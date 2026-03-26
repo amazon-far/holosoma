@@ -56,6 +56,8 @@ class BasePolicy:
         self._init_phase_components()
         # Initialize latency tracking
         self._init_latency_tracking()
+        # Initialize telemetry publisher
+        self._init_telemetry()
 
     # ============================================================================
     # Initialization Methods
@@ -293,6 +295,32 @@ class BasePolicy:
         """Initialize latency tracking components."""
         self.latency_tracker = LatencyTracker(window_size=int(self.rl_rate))
 
+    def _init_telemetry(self):
+        """Initialize DDS publisher for policy observation telemetry."""
+        self._obs_writer = None
+        self._telemetry_seq = 0
+        if not self.config.task.publish_telemetry:
+            return
+        try:
+            import time  # noqa: F811
+
+            from cyclonedds.domain import DomainParticipant
+            from cyclonedds.pub import DataWriter
+            from cyclonedds.topic import Topic
+
+            from holosoma_inference.dds_telemetry import PolicyTelemetry
+
+            self._PolicyTelemetry = PolicyTelemetry
+            self._time = time
+            participant = DomainParticipant(domain_id=self.config.task.domain_id)
+            topic = Topic(participant, "rt/policy_obs", PolicyTelemetry)
+            self._obs_writer = DataWriter(participant, topic)
+            # Keep references alive
+            self._dds_participant = participant
+            logger.info("Policy telemetry publisher initialized (rt/policy_obs)")
+        except ImportError:
+            logger.warning("cyclonedds not installed — telemetry disabled")
+
     def _init_input_handlers(self):
         """Initialize input handlers (ROS, joystick, keyboard)."""
         if hasattr(self, "_shared_hardware_source"):
@@ -511,6 +539,16 @@ class BasePolicy:
         obs = self.prepare_obs_for_rl(robot_state_data)
         if self.config.task.print_observations:
             self._print_observations(obs)
+
+        if self._obs_writer is not None:
+            self._obs_writer.write(
+                self._PolicyTelemetry(
+                    seq=self._telemetry_seq,
+                    timestamp=self._time.time(),
+                    data=obs["actor_obs"].flatten().tolist(),
+                )
+            )
+            self._telemetry_seq += 1
 
         policy_action = self.policy(obs)
         policy_action = np.clip(policy_action, -100, 100)

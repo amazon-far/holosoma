@@ -78,5 +78,8 @@ class TaskConfig:
     motion_end_timestep: int | None = None
     """Ending timestep for motion clip playback. If None, plays until the end."""
 
+    publish_telemetry: bool = True
+    """Publish the policy observation vector on ``rt/policy_obs`` via CycloneDDS."""
+
     debug: DebugConfig = DebugConfig()
     """Debug overrides for quick testing."""
