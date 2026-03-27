@@ -9,7 +9,7 @@
 
 source scripts/source_isaacsim_setup.sh
 
-CHECKPOINT="/home/kyungminlee/work/holosoma/logs/holosoma/20260311_g1_29dof_phuma_future_diverse_action_scale/model_106000.pt"
+CHECKPOINT="./pretrained/phuma_g1_29dof/model_106000.pt"
 MOTION_DIR="./g1_npz"
 SPLIT_FILE="./split/phuma_val.txt"
 NUM_ENVS=4096
