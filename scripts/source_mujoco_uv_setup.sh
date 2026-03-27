@@ -18,7 +18,22 @@ if [[ ! -d "$VENV_DIR" ]]; then
     return 1 2>/dev/null || exit 1
 fi
 
+# Source ROS2 if available (before venv activation so venv packages take priority)
+if [[ -f /opt/ros/jazzy/setup.bash ]]; then
+    source /opt/ros/jazzy/setup.bash
+    _ROS_DISTRO="jazzy"
+elif [[ -f /opt/ros/humble/setup.bash ]]; then
+    source /opt/ros/humble/setup.bash
+    _ROS_DISTRO="humble"
+fi
+
 source "$VENV_DIR/bin/activate"
+
+# Ensure venv bin dir is first in PATH (version managers like mise can override it)
+case ":$PATH:" in
+    *":$VENV_DIR/bin:"*) ;;
+    *) export PATH="$VENV_DIR/bin:$PATH" ;;
+esac
 
 # Validate environment
 if python -c "import mujoco" 2>/dev/null; then
@@ -32,7 +47,15 @@ if python -c "import mujoco" 2>/dev/null; then
     if python -c "import mujoco_warp" 2>/dev/null; then
         echo "MuJoCo Warp version: $(python -c 'import mujoco_warp; print(mujoco_warp.__version__)')"
     fi
+    if [[ -n "${_ROS_DISTRO:-}" ]]; then
+        if python -c "import rclpy" 2>/dev/null; then
+            echo "ROS2 ${_ROS_DISTRO}: rclpy available"
+        else
+            echo "ROS2 ${_ROS_DISTRO}: sourced but rclpy not compatible (Python version mismatch?)"
+        fi
+    fi
 else
     echo "Warning: MuJoCo environment activation may have issues"
     echo "Try running 'bash scripts/setup_mujoco_via_uv.sh' to reinstall"
 fi
+unset _ROS_DISTRO

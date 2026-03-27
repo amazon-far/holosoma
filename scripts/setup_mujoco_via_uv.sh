@@ -35,10 +35,19 @@ while [[ $# -gt 0 ]]; do
       echo "Options:"
       echo "  --no-warp          Skip MuJoCo Warp installation (CPU-only)"
       echo "  --no-robot-sdks    Skip robot SDK installation (unitree, booster)"
-      echo "  --python VERSION   Python version to use (e.g., 3.10, 3.11)"
+      echo "  --python VERSION   Python version to use (e.g., 3.10, 3.11, 3.12)"
       echo "  --help, -h         Show this help message"
       echo ""
       echo "Default: GPU-accelerated installation with robot SDKs"
+      echo ""
+      echo "Python auto-detection (when --python is not specified):"
+      echo "  Ubuntu 22.04 → Python 3.10 (ROS2 Humble compatible)"
+      echo "  Ubuntu 24.04 → Python 3.12 (ROS2 Jazzy compatible)"
+      echo "  Other         → system default Python"
+      echo ""
+      echo "Note: ROS2 is optional. The environment works standalone."
+      echo "      Use 'source scripts/source_mujoco_uv_setup.sh' to activate"
+      echo "      (it will source ROS2 automatically if installed)."
       echo ""
       echo "Examples:"
       echo "  # Full setup (default: with GPU acceleration + robot SDKs)"
@@ -76,6 +85,30 @@ fi
 
 echo "uv version: $(uv --version)"
 
+# Auto-detect Python version from Ubuntu release if not explicitly set.
+# This ensures the venv matches the system Python used by ROS2:
+#   Ubuntu 22.04 (Jammy)  → Python 3.10 → ROS2 Humble
+#   Ubuntu 24.04 (Noble)  → Python 3.12 → ROS2 Jazzy
+if [[ -z "$PYTHON_VERSION" ]]; then
+  OS_NAME_DETECT="$(uname -s)"
+  if [[ "$OS_NAME_DETECT" == "Linux" && -f /etc/os-release ]]; then
+    UBUNTU_VERSION=$(grep '^VERSION_ID=' /etc/os-release | cut -d'"' -f2)
+    case "$UBUNTU_VERSION" in
+      22.04)
+        PYTHON_VERSION="3.10"
+        echo "Detected Ubuntu 22.04 → using Python 3.10 (ROS2 Humble compatible)"
+        ;;
+      24.04)
+        PYTHON_VERSION="3.12"
+        echo "Detected Ubuntu 24.04 → using Python 3.12 (ROS2 Jazzy compatible)"
+        ;;
+      *)
+        echo "Ubuntu $UBUNTU_VERSION detected — no default Python version mapped, using system default"
+        ;;
+    esac
+  fi
+fi
+
 # Base installation
 if [[ ! -f $SENTINEL_FILE ]]; then
   OS_NAME="$(uname -s)"
@@ -107,6 +140,11 @@ if [[ ! -f $SENTINEL_FILE ]]; then
     fi
     uv pip install -e "$ROOT_DIR/src/holosoma"
   fi
+
+  # Pin numpy <2: mujoco-warp transitive deps can pull numpy 2.x, which breaks
+  # binary compatibility with system packages (pinocchio, ROS2 Humble, etc.)
+  # Must come after holosoma install since deps may override it.
+  uv pip install 'numpy>=1.23.5,<2'
 
   # Validate MuJoCo installation
   echo "Validating MuJoCo installation..."
