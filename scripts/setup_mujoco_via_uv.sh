@@ -12,6 +12,7 @@ VENV_DIR=$ROOT_DIR/.venv/hsmujoco
 INSTALL_WARP=true
 INSTALL_ROBOT_SDKS=true
 PYTHON_VERSION=""
+REINSTALL=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -29,13 +30,19 @@ while [[ $# -gt 0 ]]; do
       PYTHON_VERSION="$2"
       shift 2
       ;;
+    --reinstall)
+      REINSTALL=true
+      echo "Reinstall requested — existing environment will be removed"
+      shift
+      ;;
     --help|-h)
-      echo "Usage: $0 [--no-warp] [--no-robot-sdks] [--python VERSION]"
+      echo "Usage: $0 [--no-warp] [--no-robot-sdks] [--python VERSION] [--reinstall]"
       echo ""
       echo "Options:"
       echo "  --no-warp          Skip MuJoCo Warp installation (CPU-only)"
       echo "  --no-robot-sdks    Skip robot SDK installation (unitree, booster)"
       echo "  --python VERSION   Python version to use (e.g., 3.10, 3.11, 3.12)"
+      echo "  --reinstall        Remove existing environment and reinstall from scratch"
       echo "  --help, -h         Show this help message"
       echo ""
       echo "Default: GPU-accelerated installation with robot SDKs"
@@ -59,12 +66,15 @@ while [[ $# -gt 0 ]]; do
       echo "  # Setup with specific Python version, no robot SDKs"
       echo "  $0 --python 3.10 --no-robot-sdks"
       echo ""
+      echo "  # Force clean reinstall with a different Python version"
+      echo "  $0 --reinstall --python 3.12 --no-warp"
+      echo ""
       echo "Note: GPU acceleration requires NVIDIA driver >= 555.58.02"
       exit 0
       ;;
     *)
       echo "Unknown option: $1"
-      echo "Usage: $0 [--no-warp] [--no-robot-sdks] [--python VERSION]"
+      echo "Usage: $0 [--no-warp] [--no-robot-sdks] [--python VERSION] [--reinstall]"
       echo "Use --help for more information"
       exit 1
       ;;
@@ -74,6 +84,12 @@ done
 # Sentinel files
 SENTINEL_FILE=${VENV_DIR}/.env_uv_setup_finished_hsmujoco
 WARP_SENTINEL_FILE=${VENV_DIR}/.env_uv_setup_finished_hsmujoco_warp
+
+# Reinstall: remove existing venv and sentinels so all install blocks run fresh
+if [[ "$REINSTALL" == "true" ]] && [[ -d "$VENV_DIR" ]]; then
+  echo "Removing existing environment at $VENV_DIR..."
+  rm -rf "$VENV_DIR"
+fi
 
 # Install uv if not present
 if ! command -v uv &> /dev/null; then
