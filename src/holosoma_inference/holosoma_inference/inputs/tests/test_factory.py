@@ -127,7 +127,9 @@ class TestCreateInputProvidersIntegration:
             task=SimpleNamespace(
                 velocity_input="keyboard",
                 state_input="ros2",
+                ros_cmd_vel_topic="cmd_vel",
                 ros_state_input_topic="holosoma/state_input",
+                ros_vel_timeout=1.0,
             )
         )
         bp.use_joystick = False
