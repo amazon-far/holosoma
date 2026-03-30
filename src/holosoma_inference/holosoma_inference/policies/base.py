@@ -801,8 +801,10 @@ class BasePolicy:
                 vc = self._velocity_input.poll_velocity()
                 if vc is not None:
                     self._apply_velocity(vc)
-                for cmd in self._command_provider.poll_commands():
+                commands = self._command_provider.poll_commands()
+                for cmd in commands:
                     self._dispatch_command(cmd)
+                if commands:
                     self._print_control_status()
                 if self.use_phase:
                     self.update_phase_time()

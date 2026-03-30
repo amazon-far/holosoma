@@ -51,11 +51,11 @@ class StateCommand(Enum):
     # --- Locomotion ---
     STAND_TOGGLE = auto()
     ZERO_VELOCITY = auto()
-    WALK = auto()
-    STAND = auto()
+    WALK = auto()  # ROS2 only
+    STAND = auto()  # ROS2 only
 
     # --- Whole-body tracking ---
     START_MOTION_CLIP = auto()
 
     # --- Dual mode ---
-    SWITCH_MODE = auto()
+    SWITCH_MODE = auto()  # Injected by DualModePolicy at runtime

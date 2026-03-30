@@ -21,7 +21,7 @@ _g1_safety_secondary = InferenceConfig(
 g1_29dof_loco = InferenceConfig(
     robot=robot.g1_29dof,
     observation=observation.loco_g1_29dof,
-    task=task.locomotion,
+    task=replace(task.locomotion, model_path=task.safety_locomotion_g1.model_path),
     secondary=_g1_safety_secondary,
 )
 

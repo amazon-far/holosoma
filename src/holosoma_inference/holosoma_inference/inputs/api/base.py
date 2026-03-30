@@ -45,3 +45,7 @@ class StateCommandProvider(Protocol):
     def poll_commands(self) -> list[StateCommand]:
         """Return commands accumulated since last poll."""
         ...
+
+
+class InputProvider(VelCmdProvider, StateCommandProvider, Protocol):
+    """Combined protocol for devices that provide both velocity and commands."""

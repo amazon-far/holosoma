@@ -119,7 +119,7 @@ def run_policy(config: InferenceConfig):
             policy = policy_class(config=config)
 
         logger.info("✅ Policy initialized successfully!")
-        use_joystick = "joystick" in (config.task.velocity_input, config.task.state_input)
+        use_joystick = bool({"joystick", "interface"} & {config.task.velocity_input, config.task.state_input})
         _print_control_guide(policy_class, use_joystick, dual_mode=dual_mode)
         policy.run()
         logger.info("✅ Policy execution completed!")

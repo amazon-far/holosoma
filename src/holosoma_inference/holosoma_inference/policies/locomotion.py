@@ -2,23 +2,33 @@ import numpy as np
 from termcolor import colored
 
 from holosoma_inference.inputs.api.commands import StateCommand, VelCmd
-from holosoma_inference.inputs.impl.keyboard import KEYBOARD_VELOCITY_LOCOMOTION
 
 from .base import BasePolicy
 
 
 class LocomotionPolicy(BasePolicy):
-    _keyboard_velocity_mapping = KEYBOARD_VELOCITY_LOCOMOTION
-
     def __init__(self, config):
         super().__init__(config)
         self.is_standing = False
 
     def _apply_velocity(self, vc: VelCmd) -> None:
         """Gate velocity by stand_command — zero when standing."""
+        self._maybe_switch_to_walk_mode(vc)
         s = self.stand_command[0, 0]
         self.lin_vel_command[0] = (vc.lin_vel[0] * s, vc.lin_vel[1] * s)
         self.ang_vel_command[0, 0] = vc.ang_vel * s
+
+    def _maybe_switch_to_walk_mode(self, vc: VelCmd) -> None:
+        """Auto-enter walking mode when a non-zero velocity is received."""
+        if not self.config.task.auto_walk_on_vel_cmd:
+            return
+        if self.stand_command[0, 0] == 1:
+            return
+        if abs(vc.lin_vel[0]) < 1e-3 and abs(vc.lin_vel[1]) < 1e-3 and abs(vc.ang_vel) < 1e-3:
+            return
+        self.stand_command[0, 0] = 1
+        self.base_height_command[0, 0] = self.desired_base_height
+        self.logger.info(colored("Auto-walk: non-zero velocity received", "blue"))
 
     def get_current_obs_buffer_dict(self, robot_state_data):
         current_obs_buffer_dict = super().get_current_obs_buffer_dict(robot_state_data)

@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from holosoma_inference.inputs.api.base import InputProvider
 from holosoma_inference.inputs.api.commands import StateCommand, VelCmd
+from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
 
 if TYPE_CHECKING:
     from holosoma_inference.sdk.base.base_interface import BaseInterface
@@ -19,7 +21,7 @@ if TYPE_CHECKING:
 STICK_DEADZONE = 0.1
 
 
-class InterfaceInput:
+class InterfaceInput(InputProvider):
     """Reads both velocity and commands from the robot SDK interface.
 
     Satisfies both ``VelCmdProvider`` and ``StateCommandProvider`` protocols.
@@ -27,9 +29,9 @@ class InterfaceInput:
     command slots, eliminating the need for shared-state wiring.
     """
 
-    def __init__(self, interface: BaseInterface, mapping: dict[str, StateCommand]):
+    def __init__(self, interface: BaseInterface):
         self.interface = interface
-        self._mapping = mapping
+        self._mapping = dict(JOYSTICK_COMMANDS)
         self.key_states: dict[str, bool] = {}
         self.last_key_states: dict[str, bool] = {}
 

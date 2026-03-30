@@ -78,6 +78,12 @@ class TaskConfig:
     ros_state_input_topic: str = "holosoma/state_input"
     """ROS2 topic name for discrete commands (used when state_input is "ros2")."""
 
+    ros_vel_timeout: float = 1.0
+    """Seconds without a velocity message before zeroing commands. Set to 0 to disable."""
+
+    auto_walk_on_vel_cmd: bool = False
+    """Automatically enter walking mode when a non-zero velocity command is received."""
+
     use_sim_time: bool = False
     """Use synchronized simulation time for WBT policies."""
 
@@ -112,16 +118,19 @@ class TaskConfig:
             )
 
         shortcut: InputSource | None = None
+        flag_name: str | None = None
         if self.use_joystick:
             shortcut = "interface"
+            flag_name = "joystick"
         elif self.use_keyboard:
             shortcut = "keyboard"
+            flag_name = "keyboard"
 
         if shortcut is not None:
             has_custom_input = self.velocity_input != DEFAULT_VELOCITY_INPUT or self.state_input != DEFAULT_STATE_INPUT
             if has_custom_input:
                 raise ValueError(
-                    f"Cannot combine --task.use-{shortcut} with --task.velocity-input or "
+                    f"Cannot combine --task.use-{flag_name} with --task.velocity-input or "
                     "--task.state-input. Use either the shortcut flag or the individual "
                     "input settings, not both."
                 )
