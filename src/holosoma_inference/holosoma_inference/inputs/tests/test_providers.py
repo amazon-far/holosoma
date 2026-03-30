@@ -194,28 +194,18 @@ class TestKeyboardListener:
         listener = _KeyboardListenerThread()
         assert listener.start() is False
 
-    def test_ensure_skips_shared_hardware(self, policy):
-        from holosoma_inference.inputs.impl.keyboard import _ensure_keyboard_listener
+    def test_get_keyboard_listener_returns_singleton(self):
+        from holosoma_inference.inputs.impl import keyboard as kb_mod
+        from holosoma_inference.inputs.impl.keyboard import _KeyboardListenerThread, get_keyboard_listener
 
-        policy._shared_hardware_source = MagicMock()
-        del policy._keyboard_listener
-        _ensure_keyboard_listener(policy)
-        assert not hasattr(policy, "_keyboard_listener")
-
-    def test_ensure_creates_and_shares_listener(self, monkeypatch):
-        from holosoma_inference.inputs.impl.keyboard import _ensure_keyboard_listener, _KeyboardListenerThread
-
-        p = _make_policy()
-        del p._shared_hardware_source
-        del p._keyboard_listener
-        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
-
-        _ensure_keyboard_listener(p)
-        assert isinstance(p._keyboard_listener, _KeyboardListenerThread)
-
-        first = p._keyboard_listener
-        _ensure_keyboard_listener(p)
-        assert p._keyboard_listener is first
+        old = kb_mod._listener
+        try:
+            kb_mod._listener = None
+            first = get_keyboard_listener()
+            assert isinstance(first, _KeyboardListenerThread)
+            assert get_keyboard_listener() is first
+        finally:
+            kb_mod._listener = old
 
     def test_broadcast_to_multiple_subscribers(self):
         from holosoma_inference.inputs.impl.keyboard import _KeyboardListenerThread
@@ -760,10 +750,8 @@ class TestCreateInputFactory:
         p = _make_policy()
         p.use_joystick = overrides.pop("use_joystick", True)
         del p._shared_hardware_source
-        del p._keyboard_listener
         if monkeypatch is not None:
             p.logger = MagicMock()
-            monkeypatch.setattr("sys.stdin.isatty", lambda: False)
         for k, v in overrides.items():
             setattr(p, k, v)
         return p
@@ -1006,7 +994,6 @@ class TestDualModeKeyboardQueueWiring:
         listener = _KeyboardListenerThread()
         q1 = listener.subscribe()
         q2 = listener.subscribe()
-        dual.primary._keyboard_listener = listener
 
         dev1 = KeyboardInput(q1)
         dev2 = KeyboardInput(q2)
@@ -1035,7 +1022,6 @@ class TestDualModeKeyboardQueueWiring:
         listener = _KeyboardListenerThread()
         q1 = listener.subscribe()
         q2 = listener.subscribe()
-        dual.primary._keyboard_listener = listener
 
         dev1 = KeyboardInput(q1)
         dev2 = KeyboardInput(q2)

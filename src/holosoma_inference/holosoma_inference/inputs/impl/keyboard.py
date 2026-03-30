@@ -5,16 +5,11 @@ from __future__ import annotations
 import sys
 import threading
 from collections import deque
-from typing import TYPE_CHECKING
-
 import numpy as np
 from sshkeyboard import listen_keyboard
 
 from holosoma_inference.inputs.api.base import InputProvider
 from holosoma_inference.inputs.api.commands import StateCommand, VelCmd
-
-if TYPE_CHECKING:
-    from holosoma_inference.policies.base import BasePolicy
 
 # ---------------------------------------------------------------------------
 # Keyboard command mappings (discrete commands)
@@ -92,17 +87,16 @@ class _KeyboardListenerThread(threading.Thread):
             pass
 
 
-def _ensure_keyboard_listener(policy: BasePolicy) -> None:
-    """Ensure the shared listener thread exists and is started on *policy*."""
-    if hasattr(policy, "_shared_hardware_source"):
-        return
-    if not hasattr(policy, "_keyboard_listener"):
-        policy._keyboard_listener = _KeyboardListenerThread()
-    active = policy._keyboard_listener.start()
-    policy.use_keyboard = active
-    if not active:
-        policy.logger.warning("No TTY — keyboard input disabled")
-        policy.use_policy_action = True
+# Module-level singleton — one listener thread shared across all KeyboardInput instances.
+_listener: _KeyboardListenerThread | None = None
+
+
+def get_keyboard_listener() -> _KeyboardListenerThread:
+    """Return the module-level keyboard listener, creating it on first call."""
+    global _listener  # noqa: PLW0603
+    if _listener is None:
+        _listener = _KeyboardListenerThread()
+    return _listener
 
 
 class KeyboardInput(InputProvider):
@@ -131,15 +125,11 @@ class KeyboardInput(InputProvider):
     @classmethod
     def create(
         cls,
-        policy: BasePolicy,
         velocity_keys: dict[str, tuple[int, int, float]] | None = None,
     ) -> KeyboardInput:
-        """Create a KeyboardInput, ensuring the shared listener exists."""
-        _ensure_keyboard_listener(policy)
-        listener = getattr(policy, "_keyboard_listener", None)
-        if listener is None and hasattr(policy, "_shared_hardware_source"):
-            listener = getattr(policy._shared_hardware_source, "_keyboard_listener", None)
-        queue = listener.subscribe() if listener else deque()
+        """Create a KeyboardInput subscribed to the module-level keyboard listener."""
+        listener = get_keyboard_listener()
+        queue = listener.subscribe()
         return cls(queue, velocity_keys)
 
     def start(self) -> None:

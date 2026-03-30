@@ -18,6 +18,7 @@ from termcolor import colored
 from holosoma_inference.config.config_types.inference import InferenceConfig
 from holosoma_inference.config.config_types.robot import RobotConfig
 from holosoma_inference.inputs import create_input
+from holosoma_inference.inputs.api.base import StateCommandProvider, VelCmdProvider
 from holosoma_inference.inputs.api.commands import StateCommand, VelCmd
 from holosoma_inference.sdk import create_interface
 from holosoma_inference.utils.latency import LatencyTracker
@@ -342,16 +343,34 @@ class BasePolicy:
         When both channels use the same source, a single provider is shared
         (important for KeyboardInput which pops from a shared queue).
         """
-        self._velocity_input = create_input(self, self.config.task.velocity_input, "velocity")
+        self._setup_keyboard_listener()
+
+        self._velocity_input: VelCmdProvider = create_input(self, self.config.task.velocity_input, "velocity")
 
         if self.config.task.velocity_input == self.config.task.state_input:
-            self._command_provider = self._velocity_input
+            self._command_provider: StateCommandProvider = self._velocity_input
         else:
-            self._command_provider = create_input(self, self.config.task.state_input, "command")
+            self._command_provider: StateCommandProvider = create_input(self, self.config.task.state_input, "command")
 
         self._velocity_input.start()
         if self._command_provider is not self._velocity_input:
             self._command_provider.start()
+
+    def _setup_keyboard_listener(self):
+        """Start the shared keyboard listener if any channel uses keyboard input."""
+        if hasattr(self, "_shared_hardware_source"):
+            return
+        sources = {self.config.task.velocity_input, self.config.task.state_input}
+        if "keyboard" not in sources:
+            return
+        from holosoma_inference.inputs.impl.keyboard import get_keyboard_listener
+
+        listener = get_keyboard_listener()
+        active = listener.start()
+        self.use_keyboard = active
+        if not active:
+            self.logger.warning("No TTY — keyboard input disabled")
+            self.use_policy_action = True
 
     # ============================================================================
     # Policy Methods

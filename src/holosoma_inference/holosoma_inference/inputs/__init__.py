@@ -22,7 +22,7 @@ def create_input(policy: BasePolicy, source: InputSource, role: str) -> VelCmdPr
 
     if source == "keyboard":
         vel_keys = KEYBOARD_VELOCITY_LOCOMOTION if role == "velocity" else None
-        return KeyboardInput.create(policy, velocity_keys=vel_keys)
+        return KeyboardInput.create(velocity_keys=vel_keys)
 
     if source == "ros2":
         return Ros2Input(
