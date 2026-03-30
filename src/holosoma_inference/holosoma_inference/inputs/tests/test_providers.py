@@ -671,8 +671,9 @@ class TestRos2Input:
         assert prov.poll_commands() == [StateCommand.WALK, StateCommand.STAND]
 
     def test_unknown_command_warns(self, capfd):
-        from loguru import logger
         from io import StringIO
+
+        from loguru import logger
 
         sink = StringIO()
         handler_id = logger.add(sink, format="{message}", level="WARNING")
@@ -697,8 +698,9 @@ class TestRos2Input:
         assert prov.poll_commands() == []
 
     def test_empty_string_warns(self):
-        from loguru import logger
         from io import StringIO
+
+        from loguru import logger
 
         sink = StringIO()
         handler_id = logger.add(sink, format="{message}", level="WARNING")

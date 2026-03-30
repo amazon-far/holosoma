@@ -33,7 +33,7 @@ class TestExplicitInputSelection:
     """Verify explicit velocity_input/state_input combinations."""
 
     @pytest.mark.parametrize(
-        "vel, other",
+        ("vel", "other"),
         [
             ("keyboard", "keyboard"),
             ("joystick", "joystick"),

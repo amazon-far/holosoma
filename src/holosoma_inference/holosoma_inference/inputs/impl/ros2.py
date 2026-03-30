@@ -96,7 +96,11 @@ class Ros2Input(InputProvider):
 
     def poll_velocity(self) -> VelCmd:
         with self._lock:
-            if self._vel_timeout > 0 and self._last_vel_time > 0 and (time.monotonic() - self._last_vel_time) > self._vel_timeout:
+            if (
+                self._vel_timeout > 0
+                and self._last_vel_time > 0
+                and (time.monotonic() - self._last_vel_time) > self._vel_timeout
+            ):
                 self._lin_vel[:] = 0.0
                 self._ang_vel[:] = 0.0
                 self._last_vel_time = 0.0
