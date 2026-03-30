@@ -28,6 +28,7 @@ class VelocityPublisher(Node):
         "forward": "Walk forward at constant speed",
         "circle": "Circle: forward + yaw rotation",
         "figure8": "Figure-8: alternating yaw direction",
+        "square": "Square: forward segments with 90-degree turns",
         "stop": "Send zero velocity (stop the robot)",
     }
 
@@ -66,6 +67,15 @@ class VelocityPublisher(Node):
             period = 4.0
             yaw = 0.5 if (self._t % (2 * period)) < period else -0.5
             msg = self._make_twist(0.4, 0.0, yaw)
+
+        elif self.pattern == "square":
+            # 3s forward, 1s turn left (90 deg at 1.57 rad/s), repeat
+            period = 4.0
+            phase = self._t % period
+            if phase < 3.0:
+                msg = self._make_twist(0.4, 0.0, 0.0)
+            else:
+                msg = self._make_twist(0.0, 0.0, 1.57)
 
         elif self.pattern == "stop":
             msg = self._make_twist(0.0, 0.0, 0.0)
