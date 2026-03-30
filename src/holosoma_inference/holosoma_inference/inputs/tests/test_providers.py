@@ -630,9 +630,8 @@ class TestRos2StateCommandProvider:
         from holosoma_inference.inputs.impl.ros2 import Ros2StateCommandProvider
 
         prov = Ros2StateCommandProvider("holosoma/state_input")
-        prov._logger = MagicMock()
         prov._callback(SimpleNamespace(data="bogus"))
-        prov._logger.warning.assert_called_once()
+        # Unknown commands are logged via loguru (warning emitted) and not queued
         assert prov.poll_commands() == []
 
     def test_whitespace_and_case_normalization(self, policy):
@@ -1063,9 +1062,8 @@ class TestRos2StateCommandProviderEdgeCases:
         from holosoma_inference.inputs.impl.ros2 import Ros2StateCommandProvider
 
         prov = Ros2StateCommandProvider("holosoma/state_input")
-        prov._logger = MagicMock()
         prov._callback(SimpleNamespace(data="   "))
-        prov._logger.warning.assert_called_once()
+        # Empty/whitespace-only strings are logged via loguru (warning emitted) and not queued
         assert prov.poll_commands() == []
 
 

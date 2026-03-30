@@ -6,6 +6,7 @@ import threading
 from collections import deque
 
 import numpy as np
+from loguru import logger
 
 from holosoma_inference.inputs.api.commands import StateCommand, VelCmd
 
@@ -47,7 +48,7 @@ class Ros2VelCmdProvider:
         _ensure_ros2_init()
         node = rclpy.create_node("vel_cmd_input")
         node.create_subscription(TwistStamped, self._topic, self._callback, 10)
-        node.get_logger().info(f"Subscribed to ROS2 velocity topic: {self._topic}")
+        logger.info(f"Subscribed to ROS2 velocity topic: {self._topic}")
         threading.Thread(target=rclpy.spin, args=(node,), daemon=True).start()
 
     def _callback(self, msg):
@@ -77,7 +78,6 @@ class Ros2StateCommandProvider:
     def __init__(self, topic: str):
         self._topic = topic
         self._queue: deque[StateCommand] = deque()
-        self._logger = None
 
     def start(self) -> None:
         import rclpy
@@ -85,9 +85,8 @@ class Ros2StateCommandProvider:
 
         _ensure_ros2_init()
         node = rclpy.create_node("state_cmd_input")
-        self._logger = node.get_logger()
         node.create_subscription(String, self._topic, self._callback, 10)
-        self._logger.info(f"Subscribed to ROS2 state_input topic: {self._topic}")
+        logger.info(f"Subscribed to ROS2 state_input topic: {self._topic}")
         threading.Thread(target=rclpy.spin, args=(node,), daemon=True).start()
 
     def _callback(self, msg):
@@ -96,8 +95,8 @@ class Ros2StateCommandProvider:
         cmd = ROS2_COMMAND_MAP.get(cmd_str)
         if cmd is not None:
             self._queue.append(cmd)
-        elif self._logger is not None:
-            self._logger.warning(f"ROS2 command: unknown command '{cmd_str}'")
+        else:
+            logger.warning(f"ROS2 command: unknown command '{cmd_str}'")
 
     def poll_commands(self) -> list[StateCommand]:
         """Drain all queued commands."""
