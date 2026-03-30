@@ -1047,6 +1047,52 @@ class TestDualModeKeyboardQueueWiring:
         commands2 = dual.secondary._command_provider.poll_commands()
         assert commands2 == [StateCommand.START]
 
+    def test_switch_drains_stale_keypresses(self):
+        """Switching modes must drain the target's queue so stale commands aren't replayed."""
+        from holosoma_inference.inputs.impl.keyboard import KeyboardInput, _KeyboardListenerThread
+        from holosoma_inference.policies.dual_mode import DualModePolicy
+
+        dual = object.__new__(DualModePolicy)
+        dual.primary = _make_policy()
+        dual.secondary = _make_policy()
+        dual.active = dual.primary
+        dual.active_label = "primary"
+
+        listener = _KeyboardListenerThread()
+        q1 = listener.subscribe()
+        q2 = listener.subscribe()
+
+        dev1 = KeyboardInput(q1, KEYBOARD_VELOCITY_LOCOMOTION)
+        dev2 = KeyboardInput(q2, KEYBOARD_VELOCITY_LOCOMOTION)
+        dual.primary._velocity_input = dev1
+        dual.primary._command_provider = dev1
+        dual.secondary._velocity_input = dev2
+        dual.secondary._command_provider = dev2
+
+        dual.primary._dispatch_command = MagicMock()
+        dual.secondary._dispatch_command = MagicMock()
+
+        dual._setup_command_intercept()
+
+        # Simulate keypresses while primary is active
+        for q in listener._subscribers:
+            q.extend(["]", "w", "w", "o"])
+
+        # Primary processes its queue normally
+        dual.active._command_provider.poll_velocity()
+        cmds = dual.active._command_provider.poll_commands()
+        assert cmds == [StateCommand.START, StateCommand.STOP]
+
+        # Secondary's queue has accumulated the same keypresses
+        assert len(q2) == 4
+
+        # Switch — _handle_mode_switch drains stale queue
+        dual._handle_mode_switch()
+
+        # After switch, secondary's queue should be empty
+        cmds_after = dual.active._command_provider.poll_commands()
+        assert cmds_after == []
+
 
 # ============================================================================
 # Separation guarantee: wrong-channel keys are not handled

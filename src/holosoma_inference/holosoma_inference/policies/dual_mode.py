@@ -117,6 +117,13 @@ class DualModePolicy:
             target_dev.key_states = active_dev.key_states.copy()
             target_dev.last_key_states = active_dev.key_states.copy()
 
+        # Drain stale keypresses from the target's input providers.
+        # While inactive, the target's keyboard queue accumulates every
+        # broadcast keypress.  Processing them now would replay commands
+        # that were already handled by the outgoing policy.
+        target._velocity_input.poll_velocity()
+        target._command_provider.poll_commands()
+
         self.active = target
         self.active_label = target_label
 
