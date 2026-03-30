@@ -202,7 +202,7 @@ Run the policy inside a Docker container (works both onboard and offboard).
 
 - **No joystick response**: Ensure `--task.use-joystick` flag is set
 - **Keyboard control**: Remove `--task.use-joystick` flag and use `s` key to start motion clip
-- **Mixed input**: Use `--task.velocity-input` and `--task.other-input` individually for mixed setups (e.g., ROS2 velocity + keyboard commands). See the [Input Sources](../../README.md#input-sources) section.
+- **Mixed input**: Use `--task.velocity-input` and `--task.state-input` individually for mixed setups (e.g., ROS2 velocity + keyboard commands). See the [Input Sources](../../README.md#input-sources) section.
 - **Low responsiveness**: Check network latency if running offboard
 - **RL rate**: Always use `--task.rl-rate 50` for WBT policies (50 Hz control rate)
 

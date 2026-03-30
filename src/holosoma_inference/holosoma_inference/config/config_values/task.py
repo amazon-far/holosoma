@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from holosoma_inference.config.config_types.task import InputSource, TaskConfig
+from holosoma_inference.config.config_types.task import TaskConfig
 
 _MODELS_DIR = Path(__file__).parent.parent.parent / "models"
 
@@ -19,11 +19,10 @@ locomotion = TaskConfig(
     residual_upper_body_action=False,
     domain_id=0,
     interface="lo",
-    velocity_input=InputSource.keyboard,
-    other_input=InputSource.keyboard,
+    velocity_input="keyboard",
+    state_input="keyboard",
     joystick_type="xbox",
     joystick_device=0,
-    use_ros=False,
     wandb_download_dir="/tmp",
 )
 
@@ -39,11 +38,10 @@ wbt = TaskConfig(
     residual_upper_body_action=False,
     domain_id=0,
     interface="lo",
-    velocity_input=InputSource.keyboard,
-    other_input=InputSource.keyboard,
+    velocity_input="keyboard",
+    state_input="keyboard",
     joystick_type="xbox",
     joystick_device=0,
-    use_ros=False,
     wandb_download_dir="/tmp",
 )
 
@@ -58,11 +56,10 @@ safety_locomotion_g1 = TaskConfig(
     residual_upper_body_action=False,
     domain_id=0,
     interface="lo",
-    velocity_input=InputSource.keyboard,
-    other_input=InputSource.keyboard,
+    velocity_input="keyboard",
+    state_input="keyboard",
     joystick_type="xbox",
     joystick_device=0,
-    use_ros=False,
     wandb_download_dir="/tmp",
 )
 

@@ -6,8 +6,6 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from holosoma_inference.config.config_types.task import InputSource  # noqa: F401
-
 
 def _make_policy(**overrides):
     """Build a minimal mock policy with all attributes providers touch."""
@@ -19,12 +17,12 @@ def _make_policy(**overrides):
     p.desired_base_height = 0.5
     p.active_policy_index = 0
     p.model_paths = ["a.onnx", "b.onnx"]
-    # _try_switch_policy_key returns False by default (MagicMock is truthy)
-    p._try_switch_policy_key.return_value = False
     p.config = SimpleNamespace(
         task=SimpleNamespace(
             ros_cmd_vel_topic="cmd_vel",
-            ros_other_input_topic="holosoma/other_input",
+            ros_state_input_topic="holosoma/state_input",
+            velocity_input="keyboard",
+            state_input="keyboard",
         )
     )
     for k, v in overrides.items():
@@ -76,10 +74,13 @@ def _make_dual():
     dual.active = dual.primary
     dual.active_label = "primary"
 
+    # Set up _command_provider mocks with a _mapping dict (new API)
     dual.primary._velocity_input = MagicMock()
     dual.secondary._velocity_input = MagicMock()
-    dual.primary._other_input = MagicMock()
-    dual.secondary._other_input = MagicMock()
+    dual.primary._command_provider = MagicMock()
+    dual.primary._command_provider._mapping = {}
+    dual.secondary._command_provider = MagicMock()
+    dual.secondary._command_provider._mapping = {}
 
-    dual._patch_button_handlers()
+    dual._setup_command_intercept()
     return dual

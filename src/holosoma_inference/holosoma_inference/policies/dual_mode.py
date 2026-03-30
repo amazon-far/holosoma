@@ -69,42 +69,38 @@ class DualModePolicy:
         self.active = self.primary
         self.active_label = "primary"
 
-        self._patch_button_handlers()
+        self._setup_command_intercept()
         logger.info(colored("Dual-mode ready. Press X (joystick) or x (keyboard) to switch policies.", "magenta"))
 
-    def _patch_button_handlers(self):
-        """Intercept X (joystick) and x (keyboard) for mode switching.
+    def _setup_command_intercept(self):
+        """Inject SWITCH_MODE into mappings and patch dispatch for routing.
 
-        The keyboard/joystick listener thread belongs to the primary policy,
-        so we only need to patch the primary. For non-switch keys, delegate
-        to whichever policy is currently active.
+        Keyboard queue wiring is handled by the factory — the secondary's
+        ``KeyboardInput`` gets its own subscriber queue from the shared
+        ``_KeyboardListenerThread``.  Only ``_dispatch_command`` needs
+        patching to intercept SWITCH_MODE.
         """
-        # Store original (unpatched) handlers per policy for delegation
-        self._orig_joy = {
-            id(self.primary): self.primary.handle_joystick_button,
-            id(self.secondary): self.secondary.handle_joystick_button,
-        }
-        self._orig_kb = {
-            id(self.primary): self.primary.handle_keyboard_button,
-            id(self.secondary): self.secondary.handle_keyboard_button,
+        from holosoma_inference.inputs.api.commands import StateCommand
+
+        # Inject the switch-mode key into both policies' state_input mappings
+        for p in (self.primary, self.secondary):
+            p._command_provider._mapping["X"] = StateCommand.SWITCH_MODE
+            p._command_provider._mapping["x"] = StateCommand.SWITCH_MODE
+
+        # Patch _dispatch_command to intercept SWITCH_MODE
+        self._orig_dispatch = {
+            id(self.primary): self.primary._dispatch_command,
+            id(self.secondary): self.secondary._dispatch_command,
         }
 
-        def patched_joy(cur_key):
-            if cur_key == "X":
+        def patched_dispatch(cmd):
+            if cmd == StateCommand.SWITCH_MODE:
                 self._handle_mode_switch()
             else:
-                self._orig_joy[id(self.active)](cur_key)
+                self._orig_dispatch[id(self.active)](cmd)
 
-        def patched_kb(keycode):
-            if keycode == "x":
-                self._handle_mode_switch()
-            else:
-                self._orig_kb[id(self.active)](keycode)
-
-        self.primary.handle_joystick_button = patched_joy
-        self.primary.handle_keyboard_button = patched_kb
-        self.secondary.handle_joystick_button = patched_joy
-        self.secondary.handle_keyboard_button = patched_kb
+        self.primary._dispatch_command = patched_dispatch
+        self.secondary._dispatch_command = patched_dispatch
 
     def _handle_mode_switch(self):
         """Switch from active to inactive policy."""
@@ -118,13 +114,13 @@ class DualModePolicy:
 
         # Carry over joystick key_states so edge detection doesn't see a false
         # rising edge on the X button (which is still physically held down).
-        from holosoma_inference.inputs.joystick import JoystickVelocityInput
+        from holosoma_inference.inputs.impl.interface import InterfaceInput
 
-        active_vel = self.active._velocity_input
-        target_vel = target._velocity_input
-        if isinstance(active_vel, JoystickVelocityInput) and isinstance(target_vel, JoystickVelocityInput):
-            target_vel.key_states = active_vel.key_states.copy()
-            target_vel.last_key_states = active_vel.key_states.copy()
+        active_dev = self.active._velocity_input
+        target_dev = target._velocity_input
+        if isinstance(active_dev, InterfaceInput) and isinstance(target_dev, InterfaceInput):
+            target_dev.key_states = active_dev.key_states.copy()
+            target_dev.last_key_states = active_dev.key_states.copy()
 
         self.active = target
         self.active_label = target_label
@@ -147,8 +143,12 @@ class DualModePolicy:
             for it in itertools.count():
                 self.active.latency_tracker.start_cycle()
 
-                self.active._velocity_input.poll()
-                self.active._other_input.poll()
+                vc = self.active._velocity_input.poll_velocity()
+                if vc is not None:
+                    self.active._apply_velocity(vc)
+                for cmd in self.active._command_provider.poll_commands():
+                    self.active._dispatch_command(cmd)
+                    self.active._print_control_status()
                 if self.active.use_phase:
                     self.active.update_phase_time()
 

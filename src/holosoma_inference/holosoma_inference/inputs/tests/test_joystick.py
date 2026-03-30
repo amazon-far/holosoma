@@ -1,194 +1,130 @@
-"""Tests for joystick input providers."""
+"""Tests for joystick/interface input providers (new impl API).
 
-import numpy as np
+Note: Comprehensive interface input tests are in test_providers.py.
+This module contains additional per-concern tests for interface-specific behaviour.
+"""
+
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 import pytest
 
 
-class TestJoystickVelocityInput:
-    def test_poll_skips_when_no_msg(self, policy):
-        from holosoma_inference.inputs.joystick import JoystickVelocityInput
-
-        policy.interface.get_joystick_msg.return_value = None
-        prov = JoystickVelocityInput(policy)
-        prov.poll()
-        policy.interface.process_joystick_input.assert_not_called()
-
-    def test_poll_reads_and_caches(self, policy):
-        from holosoma_inference.inputs.joystick import JoystickVelocityInput
-
-        new_lin = np.array([[0.5, 0.0]])
-        new_ang = np.array([[0.1]])
-        new_keys = {"A": True}
-        policy.interface.get_joystick_msg.return_value = "msg"
-        policy.interface.process_joystick_input.return_value = (new_lin, new_ang, new_keys)
-
-        prov = JoystickVelocityInput(policy)
-        prov.poll()
-
-        np.testing.assert_array_equal(policy.lin_vel_command, new_lin)
-        np.testing.assert_array_equal(policy.ang_vel_command, new_ang)
-        assert prov.key_states == {"A": True}
-
-    def test_poll_preserves_last_key_states(self, policy):
-        from holosoma_inference.inputs.joystick import JoystickVelocityInput
-
-        policy.interface.get_joystick_msg.return_value = "msg"
-        policy.interface.process_joystick_input.return_value = (
-            policy.lin_vel_command,
-            policy.ang_vel_command,
-            {"A": True},
-        )
-
-        prov = JoystickVelocityInput(policy)
-        prov.key_states = {"B": True}
-        prov.poll()
-
-        assert prov.last_key_states == {"B": True}
-        assert prov.key_states == {"A": True}
+def _make_interface(**overrides):
+    iface = MagicMock()
+    iface.get_joystick_msg.return_value = None
+    iface.get_joystick_key.return_value = ""
+    for k, v in overrides.items():
+        setattr(iface, k, v)
+    return iface
 
 
-class TestJoystickOtherInput:
-    def test_button_dispatch_a(self, policy):
-        from holosoma_inference.inputs.joystick import JoystickOtherInput
-
-        prov = JoystickOtherInput(policy)
-        assert prov.handle_joystick_button("A") is True
-        policy._handle_start_policy.assert_called_once()
-
-    def test_button_dispatch_b(self, policy):
-        from holosoma_inference.inputs.joystick import JoystickOtherInput
-
-        prov = JoystickOtherInput(policy)
-        assert prov.handle_joystick_button("B") is True
-        policy._handle_stop_policy.assert_called_once()
-
-    def test_button_dispatch_y(self, policy):
-        from holosoma_inference.inputs.joystick import JoystickOtherInput
-
-        prov = JoystickOtherInput(policy)
-        assert prov.handle_joystick_button("Y") is True
-        policy._handle_init_state.assert_called_once()
-
-    @pytest.mark.parametrize("key", ["up", "down", "left", "right", "F1"])
-    def test_kp_control(self, policy, key):
-        from holosoma_inference.inputs.joystick import JoystickOtherInput
-
-        prov = JoystickOtherInput(policy)
-        assert prov.handle_joystick_button(key) is True
-        policy._handle_joystick_kp_control.assert_called_once_with(key)
-
-    def test_select_cycles_policy(self, policy):
-        from holosoma_inference.inputs.joystick import JoystickOtherInput
-
-        prov = JoystickOtherInput(policy)
-        assert prov.handle_joystick_button("select") is True
-        policy._activate_policy.assert_called_once_with(1)
-
-    def test_l1_r1_kills_program(self, policy):
-        from holosoma_inference.inputs.joystick import JoystickOtherInput
-
-        prov = JoystickOtherInput(policy)
-        with pytest.raises(SystemExit):
-            prov.handle_joystick_button("L1+R1")
-
-    def test_unknown_button_returns_false(self, policy):
-        from holosoma_inference.inputs.joystick import JoystickOtherInput
-
-        prov = JoystickOtherInput(policy)
-        assert prov.handle_joystick_button("unknown") is False
-
-    def test_poll_shared_edge_detection(self, policy):
-        """When shared with velocity provider, detects rising edges from cached state."""
-        from holosoma_inference.inputs.joystick import JoystickOtherInput, JoystickVelocityInput
-
-        vel = JoystickVelocityInput(policy)
-        vel.key_states = {"A": True}
-        vel.last_key_states = {"A": False}
-
-        prov = JoystickOtherInput(policy)
-        prov._shared_velocity = vel
-        prov.poll()
-
-        # A was pressed (rising edge) -> should dispatch
-        policy.handle_joystick_button.assert_called_once_with("A")
-
-    def test_poll_shared_no_dispatch_on_hold(self, policy):
-        """No dispatch when button was already held."""
-        from holosoma_inference.inputs.joystick import JoystickOtherInput, JoystickVelocityInput
-
-        vel = JoystickVelocityInput(policy)
-        vel.key_states = {"A": True}
-        vel.last_key_states = {"A": True}
-
-        prov = JoystickOtherInput(policy)
-        prov._shared_velocity = vel
-        prov.poll()
-
-        policy.handle_joystick_button.assert_not_called()
-
-    def test_poll_standalone_reads_buttons(self, policy):
-        """When not shared, reads buttons directly from SDK."""
-        from holosoma_inference.inputs.joystick import JoystickOtherInput
-
-        policy.interface.get_joystick_msg.return_value = "msg"
-        policy.interface.get_joystick_key.return_value = "B"
-
-        prov = JoystickOtherInput(policy)
-        prov.poll()  # First poll: B goes True (rising edge)
-
-        policy.handle_joystick_button.assert_called_once_with("B")
-
-    def test_poll_standalone_skips_when_no_msg(self, policy):
-        from holosoma_inference.inputs.joystick import JoystickOtherInput
-
-        policy.interface.get_joystick_msg.return_value = None
-        prov = JoystickOtherInput(policy)
-        prov.poll()
-        policy.handle_joystick_button.assert_not_called()
+def _joystick_msg(lx=0.0, ly=0.0, rx=0.0, keys=0):
+    return SimpleNamespace(lx=lx, ly=ly, rx=rx, keys=keys)
 
 
-class TestLocomotionJoystickOtherInput:
-    def test_stand_command(self, policy):
-        from holosoma_inference.inputs.joystick import LocomotionJoystickOtherInput
+class TestInterfaceInputEdgeCases:
+    """Additional edge-case tests for InterfaceInput."""
 
-        prov = LocomotionJoystickOtherInput(policy)
-        assert prov.handle_joystick_button("start") is True
-        policy._handle_stand_command.assert_called_once()
+    def test_start_is_noop(self):
+        from holosoma_inference.inputs.impl.interface import InterfaceInput
+        from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
 
-    def test_zero_velocity(self, policy):
-        from holosoma_inference.inputs.joystick import LocomotionJoystickOtherInput
+        iface = _make_interface()
+        device = InterfaceInput(iface, JOYSTICK_COMMANDS)
+        device.start()  # should not raise
 
-        prov = LocomotionJoystickOtherInput(policy)
-        assert prov.handle_joystick_button("L2") is True
-        policy._handle_zero_velocity.assert_called_once()
+    def test_empty_key_states_produces_no_commands(self):
+        from holosoma_inference.inputs.impl.interface import InterfaceInput
+        from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
 
-    def test_falls_through_to_base(self, policy):
-        from holosoma_inference.inputs.joystick import LocomotionJoystickOtherInput
+        iface = _make_interface()
+        device = InterfaceInput(iface, JOYSTICK_COMMANDS)
+        assert device.key_states == {}
+        assert device.poll_commands() == []
 
-        prov = LocomotionJoystickOtherInput(policy)
-        assert prov.handle_joystick_button("A") is True
-        policy._handle_start_policy.assert_called_once()
+    def test_multiple_rising_edges(self):
+        from holosoma_inference.inputs.api.commands import StateCommand
+        from holosoma_inference.inputs.impl.interface import InterfaceInput
+        from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
+
+        iface = _make_interface()
+        device = InterfaceInput(iface, JOYSTICK_COMMANDS)
+        device.key_states = {"A": True, "B": True, "Y": True}
+        device.last_key_states = {}
+
+        commands = device.poll_commands()
+        assert StateCommand.START in commands
+        assert StateCommand.STOP in commands
+        assert StateCommand.INIT in commands
+
+    def test_falling_edge_not_dispatched(self):
+        from holosoma_inference.inputs.impl.interface import InterfaceInput
+        from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
+
+        iface = _make_interface()
+        device = InterfaceInput(iface, JOYSTICK_COMMANDS)
+        device.key_states = {"A": False}
+        device.last_key_states = {"A": True}
+
+        assert device.poll_commands() == []
+
+    def test_velocity_suppressed_when_button_pressed(self):
+        from holosoma_inference.inputs.impl.interface import InterfaceInput
+        from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
+
+        iface = _make_interface()
+        iface.get_joystick_msg.return_value = _joystick_msg(ly=0.5, keys=256)
+        iface.get_joystick_key.return_value = "A"
+
+        device = InterfaceInput(iface, JOYSTICK_COMMANDS)
+        vc = device.poll_velocity()
+
+        assert vc is None
+
+    def test_deadzone_applied_to_sticks(self):
+        from holosoma_inference.inputs.impl.interface import InterfaceInput
+        from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
+
+        iface = _make_interface()
+        iface.get_joystick_msg.return_value = _joystick_msg(lx=0.05, ly=0.09, rx=0.03)
+        iface.get_joystick_key.return_value = ""
+
+        device = InterfaceInput(iface, JOYSTICK_COMMANDS)
+        vc = device.poll_velocity()
+
+        assert vc is not None
+        assert vc.lin_vel == (0.0, 0.0)
+        assert vc.ang_vel == 0.0
 
 
-class TestWbtJoystickOtherInput:
-    def test_start_motion_clip(self, policy):
-        from holosoma_inference.inputs.joystick import WbtJoystickOtherInput
+class TestJoystickCommandMapping:
+    """Verify the JOYSTICK_COMMANDS mapping covers all expected buttons."""
 
-        prov = WbtJoystickOtherInput(policy)
-        assert prov.handle_joystick_button("start") is True
-        policy._handle_start_motion_clip.assert_called_once()
+    def test_core_buttons_mapped(self):
+        from holosoma_inference.inputs.api.commands import StateCommand
+        from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
 
-    def test_falls_through_to_base(self, policy):
-        from holosoma_inference.inputs.joystick import WbtJoystickOtherInput
+        assert JOYSTICK_COMMANDS["A"] == StateCommand.START
+        assert JOYSTICK_COMMANDS["B"] == StateCommand.STOP
+        assert JOYSTICK_COMMANDS["Y"] == StateCommand.INIT
+        assert JOYSTICK_COMMANDS["L1+R1"] == StateCommand.KILL
 
-        prov = WbtJoystickOtherInput(policy)
-        assert prov.handle_joystick_button("B") is True
-        policy._handle_stop_policy.assert_called_once()
+    def test_locomotion_buttons_mapped(self):
+        from holosoma_inference.inputs.api.commands import StateCommand
+        from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
 
+        assert JOYSTICK_COMMANDS["back"] == StateCommand.STAND_TOGGLE
+        assert JOYSTICK_COMMANDS["L2"] == StateCommand.ZERO_VELOCITY
 
-class TestSharedJoystickWiring:
-    def test_shared_velocity_none_by_default(self, policy):
-        from holosoma_inference.inputs.joystick import JoystickOtherInput
+    def test_wbt_buttons_mapped(self):
+        from holosoma_inference.inputs.api.commands import StateCommand
+        from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
 
-        other = JoystickOtherInput(policy)
-        assert other._shared_velocity is None
+        assert JOYSTICK_COMMANDS["start"] == StateCommand.START_MOTION_CLIP
+
+    def test_policy_select_mapped(self):
+        from holosoma_inference.inputs.api.commands import StateCommand
+        from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
+
+        assert JOYSTICK_COMMANDS["select"] == StateCommand.NEXT_POLICY

@@ -1,15 +1,24 @@
 import numpy as np
 from termcolor import colored
 
-from holosoma_inference.config.config_types.task import InputSource
+from holosoma_inference.inputs.api.commands import StateCommand, VelCmd
+from holosoma_inference.inputs.impl.keyboard import KEYBOARD_VELOCITY_LOCOMOTION
 
 from .base import BasePolicy
 
 
 class LocomotionPolicy(BasePolicy):
+    _keyboard_velocity_mapping = KEYBOARD_VELOCITY_LOCOMOTION
+
     def __init__(self, config):
         super().__init__(config)
         self.is_standing = False
+
+    def _apply_velocity(self, vc: VelCmd) -> None:
+        """Gate velocity by stand_command — zero when standing."""
+        s = self.stand_command[0, 0]
+        self.lin_vel_command[0] = (vc.lin_vel[0] * s, vc.lin_vel[1] * s)
+        self.ang_vel_command[0, 0] = vc.ang_vel * s
 
     def get_current_obs_buffer_dict(self, robot_state_data):
         current_obs_buffer_dict = super().get_current_obs_buffer_dict(robot_state_data)
@@ -47,49 +56,26 @@ class LocomotionPolicy(BasePolicy):
             self.phase = np.array([[0.0, np.pi]])
             self.is_standing = False
 
-    def _create_velocity_input(self, source):
-        if source == InputSource.keyboard:
-            from holosoma_inference.inputs.keyboard import LocomotionKeyboardVelocityInput
-
-            return LocomotionKeyboardVelocityInput(self)
-        return super()._create_velocity_input(source)
-
-    def _create_other_input(self, source):
-        if source == InputSource.keyboard:
-            from holosoma_inference.inputs.keyboard import LocomotionKeyboardOtherInput
-
-            return LocomotionKeyboardOtherInput(self)
-        if source == InputSource.joystick:
-            from holosoma_inference.inputs.joystick import LocomotionJoystickOtherInput
-
-            return LocomotionJoystickOtherInput(self)
-        return super()._create_other_input(source)
-
-    def _handle_velocity_control(self, keycode):
-        """Handle linear velocity control."""
-        if not self.stand_command[0, 0]:
-            return
-
-        if keycode == "w":
-            self.lin_vel_command[0, 0] += 0.1
-        elif keycode == "s":
-            self.lin_vel_command[0, 0] -= 0.1
-        elif keycode == "a":
-            self.lin_vel_command[0, 1] += 0.1
-        elif keycode == "d":
-            self.lin_vel_command[0, 1] -= 0.1
-
-    def _handle_angular_velocity_control(self, keycode):
-        """Handle angular velocity control."""
-        if keycode == "q":
-            self.ang_vel_command[0, 0] -= 0.1
-        elif keycode == "e":
-            self.ang_vel_command[0, 0] += 0.1
+    def _dispatch_command(self, cmd):
+        if cmd == StateCommand.STAND_TOGGLE:
+            self._handle_stand_command()
+        elif cmd == StateCommand.ZERO_VELOCITY:
+            self._handle_zero_velocity()
+        elif cmd == StateCommand.WALK:
+            self.stand_command[0, 0] = 1
+            self.base_height_command[0, 0] = self.desired_base_height
+            self.logger.info("ROS2 command: walk")
+        elif cmd == StateCommand.STAND:
+            self.stand_command[0, 0] = 0
+            self.logger.info("ROS2 command: stand")
+        else:
+            super()._dispatch_command(cmd)
 
     def _handle_stand_command(self):
         """Handle stand command toggle."""
         self.stand_command[0, 0] = 1 - self.stand_command[0, 0]
         if self.stand_command[0, 0] == 0:
+            self._velocity_input.zero()
             self.ang_vel_command[0, 0] = 0.0
             self.lin_vel_command[0, 0] = 0.0
             self.lin_vel_command[0, 1] = 0.0
@@ -100,6 +86,7 @@ class LocomotionPolicy(BasePolicy):
 
     def _handle_zero_velocity(self):
         """Handle zero velocity command."""
+        self._velocity_input.zero()
         self.ang_vel_command[0, 0] = 0.0
         self.lin_vel_command[0, 0] = 0.0
         self.lin_vel_command[0, 1] = 0.0
