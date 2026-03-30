@@ -48,7 +48,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip install astor easydict ipdb joblib loguru lxml matplotlib meshcat omegaconf \
     opencv-python plotly pygame pynput rich scipy tensorboard tensordict \
     termcolor tqdm trimesh "yourdfpy>=0.0.58" zmq shapely click \
-    "warp-lang>=1.10" pydantic "tyro>=1.0.0" "numpy<2"
+    "warp-lang>=1.10" pydantic "tyro>=1.0.10" "numpy<2"
 
 # --- Install holosoma + extensions (--no-deps to skip numpy==1.23.5 pin) ---
 pip install --no-deps -e $ROOT_DIR/src/holosoma

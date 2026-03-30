@@ -7,7 +7,7 @@ import itertools
 from loguru import logger
 from termcolor import colored
 
-from holosoma_inference.config.config_types.inference import InferenceConfig
+from holosoma_inference.config.config_types.inference import DualModePolicyConfig, InferenceConfig
 
 
 def _select_policy_class(config: InferenceConfig):
@@ -48,22 +48,22 @@ class DualModePolicy:
     The existing Select/1-9 multi-model switching still works within each policy.
     """
 
-    def __init__(self, primary_config: InferenceConfig, secondary_config: InferenceConfig):
-        primary_cls = _select_policy_class(primary_config)
-        secondary_cls = _select_policy_class(secondary_config)
+    def __init__(self, config: DualModePolicyConfig):
+        primary_cls = _select_policy_class(config.primary)
+        secondary_cls = _select_policy_class(config.secondary)
 
         logger.info(
             colored(f"Dual-mode: primary={primary_cls.__name__}, secondary={secondary_cls.__name__}", "magenta")
         )
 
         # Fully init primary (owns hardware)
-        self.primary = primary_cls(config=primary_config)
+        self.primary = primary_cls(config=config.primary)
 
         # Init secondary with shared hardware
         logger.info(colored("Initializing secondary policy (shared hardware)...", "magenta"))
         secondary = object.__new__(secondary_cls)
         secondary._shared_hardware_source = self.primary
-        secondary.__init__(config=secondary_config)
+        secondary.__init__(config=config.secondary)
         self.secondary = secondary
 
         self.active = self.primary

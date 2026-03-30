@@ -44,7 +44,7 @@ dependencies = [
     "types-python-dateutil",
     "types-requests",
     "types-tqdm",
-    "tyro>=1.0.0",
+    "tyro>=1.0.10",
     "wandb==0.22.0", # pin version until https://github.com/wandb/wandb/issues/10647 is fixed
     "warp-lang==1.10.0",
     "yourdfpy>=0.0.58",
