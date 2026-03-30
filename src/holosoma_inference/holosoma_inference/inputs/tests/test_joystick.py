@@ -26,28 +26,25 @@ class TestInterfaceInputEdgeCases:
 
     def test_start_is_noop(self):
         from holosoma_inference.inputs.impl.interface import InterfaceInput
-        from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
 
         iface = _make_interface()
-        device = InterfaceInput(iface, JOYSTICK_COMMANDS)
+        device = InterfaceInput(iface)
         device.start()  # should not raise
 
     def test_empty_key_states_produces_no_commands(self):
         from holosoma_inference.inputs.impl.interface import InterfaceInput
-        from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
 
         iface = _make_interface()
-        device = InterfaceInput(iface, JOYSTICK_COMMANDS)
+        device = InterfaceInput(iface)
         assert device.key_states == {}
         assert device.poll_commands() == []
 
     def test_multiple_rising_edges(self):
         from holosoma_inference.inputs.api.commands import StateCommand
         from holosoma_inference.inputs.impl.interface import InterfaceInput
-        from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
 
         iface = _make_interface()
-        device = InterfaceInput(iface, JOYSTICK_COMMANDS)
+        device = InterfaceInput(iface)
         device.key_states = {"A": True, "B": True, "Y": True}
         device.last_key_states = {}
 
@@ -58,10 +55,9 @@ class TestInterfaceInputEdgeCases:
 
     def test_falling_edge_not_dispatched(self):
         from holosoma_inference.inputs.impl.interface import InterfaceInput
-        from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
 
         iface = _make_interface()
-        device = InterfaceInput(iface, JOYSTICK_COMMANDS)
+        device = InterfaceInput(iface)
         device.key_states = {"A": False}
         device.last_key_states = {"A": True}
 
@@ -69,26 +65,24 @@ class TestInterfaceInputEdgeCases:
 
     def test_velocity_suppressed_when_button_pressed(self):
         from holosoma_inference.inputs.impl.interface import InterfaceInput
-        from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
 
         iface = _make_interface()
         iface.get_joystick_msg.return_value = _joystick_msg(ly=0.5, keys=256)
         iface.get_joystick_key.return_value = "A"
 
-        device = InterfaceInput(iface, JOYSTICK_COMMANDS)
+        device = InterfaceInput(iface)
         vc = device.poll_velocity()
 
         assert vc is None
 
     def test_deadzone_applied_to_sticks(self):
         from holosoma_inference.inputs.impl.interface import InterfaceInput
-        from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
 
         iface = _make_interface()
         iface.get_joystick_msg.return_value = _joystick_msg(lx=0.05, ly=0.09, rx=0.03)
         iface.get_joystick_key.return_value = ""
 
-        device = InterfaceInput(iface, JOYSTICK_COMMANDS)
+        device = InterfaceInput(iface)
         vc = device.poll_velocity()
 
         assert vc is not None

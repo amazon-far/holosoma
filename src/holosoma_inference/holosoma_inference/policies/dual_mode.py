@@ -82,6 +82,11 @@ class DualModePolicy:
         """
         from holosoma_inference.inputs.api.commands import StateCommand
 
+        # Inject SWITCH_MODE into both command providers' mappings (joystick X, keyboard x)
+        for policy in (self.primary, self.secondary):
+            policy._command_provider._mapping["X"] = StateCommand.SWITCH_MODE
+            policy._command_provider._mapping["x"] = StateCommand.SWITCH_MODE
+
         # Patch _dispatch_command to intercept SWITCH_MODE
         self._orig_dispatch = {
             id(self.primary): self.primary._dispatch_command,
@@ -116,13 +121,6 @@ class DualModePolicy:
         if isinstance(active_dev, InterfaceInput) and isinstance(target_dev, InterfaceInput):
             target_dev.key_states = active_dev.key_states.copy()
             target_dev.last_key_states = active_dev.key_states.copy()
-
-        # Drain stale keypresses from the target's input providers.
-        # While inactive, the target's keyboard queue accumulates every
-        # broadcast keypress.  Processing them now would replay commands
-        # that were already handled by the outgoing policy.
-        target._velocity_input.poll_velocity()
-        target._command_provider.poll_commands()
 
         self.active = target
         self.active_label = target_label

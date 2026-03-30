@@ -61,10 +61,16 @@ class TaskConfig:
     """Source for non-velocity inputs (start/stop, walk/stand, tuning)."""
 
     use_keyboard: bool = False
-    """Shortcut: set both velocity_input and state_input to "keyboard". Cannot be combined with explicit input settings."""
+    """Shortcut: set both velocity_input and state_input to "keyboard".
+
+    Cannot be combined with explicit input settings.
+    """
 
     use_joystick: bool = False
-    """Shortcut: set both velocity_input and state_input to "joystick". Cannot be combined with explicit input settings."""
+    """Shortcut: set both velocity_input and state_input to "joystick".
+
+    Cannot be combined with explicit input settings.
+    """
 
     joystick_type: str = "xbox"
     """Joystick type."""

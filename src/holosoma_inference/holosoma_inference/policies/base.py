@@ -294,7 +294,9 @@ class BasePolicy:
             self.rl_rate = self._shared_hardware_source.rl_rate
             self.use_joystick = self._shared_hardware_source.use_joystick
             self.use_keyboard = self._shared_hardware_source.use_keyboard
-            self._create_input_providers()
+            # Share input providers — one queue, active policy drains it each cycle.
+            self._velocity_input: VelCmdProvider = self._shared_hardware_source._velocity_input
+            self._command_provider: StateCommandProvider = self._shared_hardware_source._command_provider
             return
         self._init_rate_handler()
         self._init_input_device()

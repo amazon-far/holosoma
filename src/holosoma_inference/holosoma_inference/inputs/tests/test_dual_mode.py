@@ -68,9 +68,9 @@ class TestDualModeSwitching:
         dual = _make_dual()
         # Replace mock velocity inputs with real InterfaceInput instances
         mock_interface = MagicMock()
-        pri_vel = InterfaceInput(mock_interface, {})
+        pri_vel = InterfaceInput(mock_interface)
         pri_vel.key_states = {"X": True, "A": False}
-        sec_vel = InterfaceInput(mock_interface, {})
+        sec_vel = InterfaceInput(mock_interface)
 
         dual.primary._velocity_input = pri_vel
         dual.secondary._velocity_input = sec_vel

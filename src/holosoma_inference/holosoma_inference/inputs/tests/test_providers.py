@@ -864,9 +864,12 @@ class TestApplyVelocity:
         assert bp.ang_vel_command[0, 0] == pytest.approx(0.8)
 
     def test_locomotion_gates_by_stand_command(self):
+        from types import SimpleNamespace
+
         from holosoma_inference.policies.locomotion import LocomotionPolicy
 
         lp = LocomotionPolicy.__new__(LocomotionPolicy)
+        lp.config = SimpleNamespace(task=SimpleNamespace(auto_walk_on_vel_cmd=False))
         lp.lin_vel_command = np.array([[0.0, 0.0]])
         lp.ang_vel_command = np.array([[0.0]])
 
@@ -911,12 +914,12 @@ def _make_dual():
     dual.active = dual.primary
     dual.active_label = "primary"
 
-    # Both policies get InterfaceInput devices (shared velocity+commands)
-    dual.primary._velocity_input = InterfaceInput(dual.primary.interface)
-    dual.primary._command_provider = dual.primary._velocity_input
-
-    dual.secondary._velocity_input = InterfaceInput(dual.secondary.interface)
-    dual.secondary._command_provider = dual.secondary._velocity_input
+    # Shared InterfaceInput — one device, both policies use it
+    shared_dev = InterfaceInput(dual.primary.interface)
+    dual.primary._velocity_input = shared_dev
+    dual.primary._command_provider = shared_dev
+    dual.secondary._velocity_input = shared_dev
+    dual.secondary._command_provider = shared_dev
 
     dual.primary._dispatch_command = MagicMock()
     dual.secondary._dispatch_command = MagicMock()
@@ -981,7 +984,7 @@ class TestDualModeSwitching:
 
 @_skip_dual_mode
 class TestDualModeKeyboardQueueWiring:
-    def test_broadcast_queues_are_independent(self):
+    def test_shared_queue_between_policies(self):
         from holosoma_inference.inputs.impl.keyboard import KeyboardInput, _KeyboardListenerThread
         from holosoma_inference.policies.dual_mode import DualModePolicy
 
@@ -992,22 +995,20 @@ class TestDualModeKeyboardQueueWiring:
         dual.active_label = "primary"
 
         listener = _KeyboardListenerThread()
-        q1 = listener.subscribe()
-        q2 = listener.subscribe()
+        q = listener.subscribe()
 
-        dev1 = KeyboardInput(q1)
-        dev2 = KeyboardInput(q2)
-        dual.primary._velocity_input = dev1
-        dual.primary._command_provider = dev1
-        dual.secondary._velocity_input = dev2
-        dual.secondary._command_provider = dev2
+        dev = KeyboardInput(q)
+        dual.primary._velocity_input = dev
+        dual.primary._command_provider = dev
+        dual.secondary._velocity_input = dev
+        dual.secondary._command_provider = dev
 
         dual.primary._dispatch_command = MagicMock()
         dual.secondary._dispatch_command = MagicMock()
 
         dual._setup_command_intercept()
 
-        assert dual.primary._command_provider._queue is not dual.secondary._command_provider._queue
+        assert dual.primary._command_provider is dual.secondary._command_provider
 
     def test_keyboard_commands_reach_active_via_poll(self):
         from holosoma_inference.inputs.impl.keyboard import KeyboardInput, _KeyboardListenerThread
@@ -1020,35 +1021,34 @@ class TestDualModeKeyboardQueueWiring:
         dual.active_label = "primary"
 
         listener = _KeyboardListenerThread()
-        q1 = listener.subscribe()
-        q2 = listener.subscribe()
+        q = listener.subscribe()
 
-        dev1 = KeyboardInput(q1)
-        dev2 = KeyboardInput(q2)
-        dual.primary._velocity_input = dev1
-        dual.primary._command_provider = dev1
-        dual.secondary._velocity_input = dev2
-        dual.secondary._command_provider = dev2
+        dev = KeyboardInput(q)
+        dual.primary._velocity_input = dev
+        dual.primary._command_provider = dev
+        dual.secondary._velocity_input = dev
+        dual.secondary._command_provider = dev
 
         dual.primary._dispatch_command = MagicMock()
         dual.secondary._dispatch_command = MagicMock()
 
         dual._setup_command_intercept()
 
-        for q in listener._subscribers:
-            q.append("]")
+        for sub_q in listener._subscribers:
+            sub_q.append("]")
 
-        # poll_velocity drains queue and buffers commands
+        # Active policy drains the shared queue
         dual.active._command_provider.poll_velocity()
         commands = dual.active._command_provider.poll_commands()
         assert commands == [StateCommand.START]
 
+        # Queue is drained — secondary sees nothing stale
         dual.secondary._command_provider.poll_velocity()
         commands2 = dual.secondary._command_provider.poll_commands()
-        assert commands2 == [StateCommand.START]
+        assert commands2 == []
 
-    def test_switch_drains_stale_keypresses(self):
-        """Switching modes must drain the target's queue so stale commands aren't replayed."""
+    def test_shared_queue_no_stale_accumulation(self):
+        """Both policies share one input queue — no stale commands after switch."""
         from holosoma_inference.inputs.impl.keyboard import KeyboardInput, _KeyboardListenerThread
         from holosoma_inference.policies.dual_mode import DualModePolicy
 
@@ -1059,15 +1059,14 @@ class TestDualModeKeyboardQueueWiring:
         dual.active_label = "primary"
 
         listener = _KeyboardListenerThread()
-        q1 = listener.subscribe()
-        q2 = listener.subscribe()
+        q = listener.subscribe()
 
-        dev1 = KeyboardInput(q1, KEYBOARD_VELOCITY_LOCOMOTION)
-        dev2 = KeyboardInput(q2, KEYBOARD_VELOCITY_LOCOMOTION)
-        dual.primary._velocity_input = dev1
-        dual.primary._command_provider = dev1
-        dual.secondary._velocity_input = dev2
-        dual.secondary._command_provider = dev2
+        dev = KeyboardInput(q, KEYBOARD_VELOCITY_LOCOMOTION)
+        # Both policies share the same input provider
+        dual.primary._velocity_input = dev
+        dual.primary._command_provider = dev
+        dual.secondary._velocity_input = dev
+        dual.secondary._command_provider = dev
 
         dual.primary._dispatch_command = MagicMock()
         dual.secondary._dispatch_command = MagicMock()
@@ -1075,21 +1074,18 @@ class TestDualModeKeyboardQueueWiring:
         dual._setup_command_intercept()
 
         # Simulate keypresses while primary is active
-        for q in listener._subscribers:
-            q.extend(["]", "w", "w", "o"])
+        for sub_q in listener._subscribers:
+            sub_q.extend(["]", "w", "o"])
 
-        # Primary processes its queue normally
+        # Primary drains the shared queue
         dual.active._command_provider.poll_velocity()
         cmds = dual.active._command_provider.poll_commands()
         assert cmds == [StateCommand.START, StateCommand.STOP]
 
-        # Secondary's queue has accumulated the same keypresses
-        assert len(q2) == 4
-
-        # Switch — _handle_mode_switch drains stale queue
+        # Switch to secondary
         dual._handle_mode_switch()
 
-        # After switch, secondary's queue should be empty
+        # Queue is already empty — no stale commands
         cmds_after = dual.active._command_provider.poll_commands()
         assert cmds_after == []
 

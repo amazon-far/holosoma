@@ -6,8 +6,6 @@ This module contains additional per-concern tests for keyboard-specific behaviou
 
 from collections import deque
 
-from .conftest import _make_policy
-
 
 class TestKeyboardListenerThread:
     """Tests for _KeyboardListenerThread (new impl)."""
@@ -58,51 +56,44 @@ class TestKeyboardListenerThread:
         assert len(q2) == 1
 
 
-class TestEnsureKeyboardListener:
-    """Tests for _ensure_keyboard_listener helper."""
+class TestGetKeyboardListener:
+    """Tests for get_keyboard_listener module-level singleton."""
 
-    def test_skips_shared_hardware_source(self):
-        import types
+    def test_returns_keyboard_listener_thread(self, monkeypatch):
+        import holosoma_inference.inputs.impl.keyboard as kb_module
+        from holosoma_inference.inputs.impl.keyboard import _KeyboardListenerThread, get_keyboard_listener
 
-        from holosoma_inference.inputs.impl.keyboard import _ensure_keyboard_listener
+        monkeypatch.setattr(kb_module, "_listener", None)
+        listener = get_keyboard_listener()
+        assert isinstance(listener, _KeyboardListenerThread)
 
-        p = types.SimpleNamespace(_shared_hardware_source=True)
-        _ensure_keyboard_listener(p)
-        assert not hasattr(p, "_keyboard_listener")
+    def test_returns_same_instance_on_repeated_calls(self, monkeypatch):
+        import holosoma_inference.inputs.impl.keyboard as kb_module
+        from holosoma_inference.inputs.impl.keyboard import get_keyboard_listener
 
-    def test_creates_listener_if_absent(self, monkeypatch):
-        from holosoma_inference.inputs.impl.keyboard import _ensure_keyboard_listener, _KeyboardListenerThread
-
-        p = _make_policy()
-        del p._shared_hardware_source
-        del p._keyboard_listener
-        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
-
-        _ensure_keyboard_listener(p)
-        assert isinstance(p._keyboard_listener, _KeyboardListenerThread)
+        monkeypatch.setattr(kb_module, "_listener", None)
+        first = get_keyboard_listener()
+        second = get_keyboard_listener()
+        assert first is second
 
     def test_reuses_existing_listener(self, monkeypatch):
-        from holosoma_inference.inputs.impl.keyboard import _ensure_keyboard_listener
+        import holosoma_inference.inputs.impl.keyboard as kb_module
+        from holosoma_inference.inputs.impl.keyboard import _KeyboardListenerThread, get_keyboard_listener
 
-        p = _make_policy()
-        del p._shared_hardware_source
-        del p._keyboard_listener
-        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
-
-        _ensure_keyboard_listener(p)
-        first = p._keyboard_listener
-        _ensure_keyboard_listener(p)
-        assert p._keyboard_listener is first
+        existing = _KeyboardListenerThread()
+        monkeypatch.setattr(kb_module, "_listener", existing)
+        result = get_keyboard_listener()
+        assert result is existing
 
 
 class TestKeyboardInputPollBehaviour:
     """Additional tests for KeyboardInput queue behaviour."""
 
     def _make(self, velocity_keys=None):
-        from holosoma_inference.inputs.impl.keyboard import KEYBOARD_COMMANDS, KeyboardInput
+        from holosoma_inference.inputs.impl.keyboard import KeyboardInput
 
         queue = deque()
-        return KeyboardInput(KEYBOARD_COMMANDS, queue, velocity_keys)
+        return KeyboardInput(queue, velocity_keys)
 
     def test_no_velocity_mapping_returns_none(self):
         dev = self._make()

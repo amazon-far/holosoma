@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import threading
 from collections import deque
+
 import numpy as np
 from sshkeyboard import listen_keyboard
 
@@ -117,7 +118,7 @@ class KeyboardInput(InputProvider):
     ) -> None:
         self._mapping = dict(KEYBOARD_COMMANDS)
         self._queue = queue
-        self._velocity_keys = velocity_keys or {}
+        self._velocity_keys = velocity_keys
         self._lin_vel = np.zeros((1, 2))
         self._ang_vel = np.zeros((1, 1))
         self._pending_commands: list[StateCommand] = []
@@ -142,7 +143,7 @@ class KeyboardInput(InputProvider):
                 keycode = self._queue.popleft()
             except IndexError:
                 break
-            action = self._velocity_keys.get(keycode)
+            action = self._velocity_keys.get(keycode) if self._velocity_keys else None
             if action is not None:
                 array_idx, col, delta = action
                 if array_idx == 0:

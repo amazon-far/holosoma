@@ -19,6 +19,7 @@ def _make_policy_stub(velocity_input="keyboard", state_input="keyboard", use_joy
             state_input=state_input,
             ros_cmd_vel_topic="cmd_vel",
             ros_state_input_topic="holosoma/state_input",
+            ros_vel_timeout=1.0,
         )
     )
     # Default: no custom velocity mapping (base policy behaviour)
@@ -47,19 +48,19 @@ class TestCreateInputFactory:
 
     def test_ros2_velocity_returns_vel_provider(self):
         from holosoma_inference.inputs import create_input
-        from holosoma_inference.inputs.impl.ros2 import Ros2VelCmdProvider
+        from holosoma_inference.inputs.impl.ros2 import Ros2Input
 
         p = _make_policy_stub(velocity_input="ros2")
         result = create_input(p, "ros2", "velocity")
-        assert isinstance(result, Ros2VelCmdProvider)
+        assert isinstance(result, Ros2Input)
 
     def test_ros2_command_returns_state_provider(self):
         from holosoma_inference.inputs import create_input
-        from holosoma_inference.inputs.impl.ros2 import Ros2StateCommandProvider
+        from holosoma_inference.inputs.impl.ros2 import Ros2Input
 
         p = _make_policy_stub(state_input="ros2")
         result = create_input(p, "ros2", "command")
-        assert isinstance(result, Ros2StateCommandProvider)
+        assert isinstance(result, Ros2Input)
 
     def test_interface_source_returns_interface_input(self):
         from holosoma_inference.inputs import create_input
@@ -115,11 +116,11 @@ class TestCreateInputProvidersIntegration:
     def test_different_sources_create_separate_providers(self, monkeypatch):
         """When velocity_input != state_input, separate providers are created."""
         from holosoma_inference.inputs.impl.keyboard import KeyboardInput
-        from holosoma_inference.inputs.impl.ros2 import Ros2StateCommandProvider
+        from holosoma_inference.inputs.impl.ros2 import Ros2Input
         from holosoma_inference.policies.base import BasePolicy
 
         # Prevent rclpy import in start()
-        monkeypatch.setattr(Ros2StateCommandProvider, "start", lambda *_: None)
+        monkeypatch.setattr(Ros2Input, "start", lambda *_: None)
 
         bp = BasePolicy.__new__(BasePolicy)
         bp.config = SimpleNamespace(
@@ -137,7 +138,7 @@ class TestCreateInputProvidersIntegration:
         bp._create_input_providers()
 
         assert isinstance(bp._velocity_input, KeyboardInput)
-        assert isinstance(bp._command_provider, Ros2StateCommandProvider)
+        assert isinstance(bp._command_provider, Ros2Input)
         assert bp._velocity_input is not bp._command_provider
 
 
@@ -145,9 +146,8 @@ class TestChannelSeparation:
     """Verify that ros2 velocity input doesn't affect keyboard commands."""
 
     def test_ros2_velocity_does_not_provide_commands(self):
-        """Ros2VelCmdProvider only implements poll_velocity, not poll_commands."""
-        from holosoma_inference.inputs.impl.ros2 import Ros2VelCmdProvider
+        """Ros2Input implements poll_velocity."""
+        from holosoma_inference.inputs.impl.ros2 import Ros2Input
 
-        p = Ros2VelCmdProvider("cmd_vel")
-        # poll_velocity should exist, poll_commands should not (or return empty)
+        p = Ros2Input("cmd_vel", "holosoma/state_input")
         assert hasattr(p, "poll_velocity")
