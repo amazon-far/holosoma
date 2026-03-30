@@ -101,9 +101,6 @@ class Ros2StateCommandProvider:
     def poll_commands(self) -> list[StateCommand]:
         """Drain all queued commands."""
         commands: list[StateCommand] = []
-        while True:
-            try:
-                commands.append(self._queue.popleft())
-            except IndexError:
-                break
+        while self._queue:
+            commands.append(self._queue.popleft())
         return commands

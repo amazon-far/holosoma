@@ -6,8 +6,6 @@ This module contains additional per-concern tests for keyboard-specific behaviou
 
 from collections import deque
 
-import pytest
-
 from .conftest import _make_policy
 
 
@@ -64,15 +62,16 @@ class TestEnsureKeyboardListener:
     """Tests for _ensure_keyboard_listener helper."""
 
     def test_skips_shared_hardware_source(self):
-        from holosoma_inference.inputs.impl.keyboard import _ensure_keyboard_listener
         import types
+
+        from holosoma_inference.inputs.impl.keyboard import _ensure_keyboard_listener
 
         p = types.SimpleNamespace(_shared_hardware_source=True)
         _ensure_keyboard_listener(p)
         assert not hasattr(p, "_keyboard_listener")
 
     def test_creates_listener_if_absent(self, monkeypatch):
-        from holosoma_inference.inputs.impl.keyboard import _KeyboardListenerThread, _ensure_keyboard_listener
+        from holosoma_inference.inputs.impl.keyboard import _ensure_keyboard_listener, _KeyboardListenerThread
 
         p = _make_policy()
         del p._shared_hardware_source

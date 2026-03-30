@@ -7,8 +7,6 @@ This module contains additional per-concern tests for interface-specific behavio
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
-
 
 def _make_interface(**overrides):
     iface = MagicMock()

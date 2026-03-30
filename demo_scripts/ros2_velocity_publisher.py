@@ -12,7 +12,6 @@ Usage:
 """
 
 import argparse
-import math
 import time
 
 import rclpy
@@ -92,12 +91,8 @@ class VelocityPublisher(Node):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Publish ROS2 velocity commands for holosoma input provider testing"
-    )
-    parser.add_argument(
-        "--topic", default="cmd_vel", help="TwistStamped velocity topic (default: cmd_vel)"
-    )
+    parser = argparse.ArgumentParser(description="Publish ROS2 velocity commands for holosoma input provider testing")
+    parser.add_argument("--topic", default="cmd_vel", help="TwistStamped velocity topic (default: cmd_vel)")
     parser.add_argument(
         "--other-topic",
         default="holosoma/other_input",
@@ -109,9 +104,7 @@ def main():
         choices=VelocityPublisher.PATTERNS.keys(),
         help="Velocity pattern to publish (default: forward)",
     )
-    parser.add_argument(
-        "--hz", type=float, default=20.0, help="Publish rate in Hz (default: 20)"
-    )
+    parser.add_argument("--hz", type=float, default=20.0, help="Publish rate in Hz (default: 20)")
     parser.add_argument(
         "--start-cmd",
         default="start",
