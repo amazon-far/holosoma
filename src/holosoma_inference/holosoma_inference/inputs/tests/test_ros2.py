@@ -1,15 +1,15 @@
-"""Tests for ROS2 input providers."""
+"""Tests for ROS2 input providers (impl API)."""
 
 from types import SimpleNamespace
 
 import numpy as np
 
 
-class TestRos2VelocityInput:
-    def test_callback_writes_velocity(self, policy):
-        from holosoma_inference.inputs.ros2 import Ros2VelocityInput
+class TestRos2VelCmdProvider:
+    def test_callback_stores_velocity(self):
+        from holosoma_inference.inputs.impl.ros2 import Ros2VelCmdProvider
 
-        prov = Ros2VelocityInput(policy)
+        prov = Ros2VelCmdProvider("cmd_vel")
         msg = SimpleNamespace(
             twist=SimpleNamespace(
                 linear=SimpleNamespace(x=0.5, y=-0.3),
@@ -17,15 +17,16 @@ class TestRos2VelocityInput:
             )
         )
         prov._callback(msg)
+        vc = prov.poll_velocity()
 
-        np.testing.assert_almost_equal(policy.lin_vel_command[0, 0], 0.5)
-        np.testing.assert_almost_equal(policy.lin_vel_command[0, 1], -0.3)
-        np.testing.assert_almost_equal(policy.ang_vel_command[0, 0], 0.8)
+        np.testing.assert_almost_equal(vc.lin_vel[0], 0.5)
+        np.testing.assert_almost_equal(vc.lin_vel[1], -0.3)
+        np.testing.assert_almost_equal(vc.ang_vel, 0.8)
 
-    def test_callback_clamps_to_range(self, policy):
-        from holosoma_inference.inputs.ros2 import Ros2VelocityInput
+    def test_callback_clamps_to_range(self):
+        from holosoma_inference.inputs.impl.ros2 import Ros2VelCmdProvider
 
-        prov = Ros2VelocityInput(policy)
+        prov = Ros2VelCmdProvider("cmd_vel")
         msg = SimpleNamespace(
             twist=SimpleNamespace(
                 linear=SimpleNamespace(x=5.0, y=-5.0),
@@ -33,15 +34,16 @@ class TestRos2VelocityInput:
             )
         )
         prov._callback(msg)
+        vc = prov.poll_velocity()
 
-        assert policy.lin_vel_command[0, 0] == 1.0
-        assert policy.lin_vel_command[0, 1] == -1.0
-        assert policy.ang_vel_command[0, 0] == 1.0
+        assert vc.lin_vel[0] == 1.0
+        assert vc.lin_vel[1] == -1.0
+        assert vc.ang_vel == 1.0
 
-    def test_callback_clamps_negative_angular(self, policy):
-        from holosoma_inference.inputs.ros2 import Ros2VelocityInput
+    def test_callback_clamps_negative_angular(self):
+        from holosoma_inference.inputs.impl.ros2 import Ros2VelCmdProvider
 
-        prov = Ros2VelocityInput(policy)
+        prov = Ros2VelCmdProvider("cmd_vel")
         msg = SimpleNamespace(
             twist=SimpleNamespace(
                 linear=SimpleNamespace(x=0.0, y=0.0),
@@ -49,58 +51,76 @@ class TestRos2VelocityInput:
             )
         )
         prov._callback(msg)
+        vc = prov.poll_velocity()
 
-        assert policy.ang_vel_command[0, 0] == -1.0
+        assert vc.ang_vel == -1.0
+
+    def test_zero_resets_velocity(self):
+        from holosoma_inference.inputs.impl.ros2 import Ros2VelCmdProvider
+
+        prov = Ros2VelCmdProvider("cmd_vel")
+        prov._lin_vel[0, 0] = 0.5
+        prov._ang_vel[0, 0] = 0.3
+        prov.zero()
+        vc = prov.poll_velocity()
+
+        assert vc.lin_vel == (0.0, 0.0)
+        assert vc.ang_vel == 0.0
+
+    def test_poll_velocity_returns_velcmd(self):
+        from holosoma_inference.inputs.api.commands import VelCmd
+        from holosoma_inference.inputs.impl.ros2 import Ros2VelCmdProvider
+
+        prov = Ros2VelCmdProvider("cmd_vel")
+        vc = prov.poll_velocity()
+        assert isinstance(vc, VelCmd)
 
 
-class TestRos2OtherInput:
-    def test_walk_command(self, policy):
-        from holosoma_inference.inputs.ros2 import Ros2OtherInput
+class TestRos2StateCommandProvider:
+    def test_known_commands_queued(self):
+        from holosoma_inference.inputs.api.commands import StateCommand
+        from holosoma_inference.inputs.impl.ros2 import Ros2StateCommandProvider
 
-        prov = Ros2OtherInput(policy)
-        prov._callback(SimpleNamespace(data="walk"))
-        assert policy.stand_command[0, 0] == 1
-        np.testing.assert_almost_equal(policy.base_height_command[0, 0], 0.5)
+        prov = Ros2StateCommandProvider("holosoma/state_input")
+        for cmd_str in ("start", "stop", "init", "walk", "stand"):
+            prov._callback(SimpleNamespace(data=cmd_str))
+        commands = prov.poll_commands()
+        assert StateCommand.START in commands
+        assert StateCommand.STOP in commands
+        assert StateCommand.INIT in commands
+        assert StateCommand.WALK in commands
+        assert StateCommand.STAND in commands
 
-    def test_stand_command(self, policy):
-        from holosoma_inference.inputs.ros2 import Ros2OtherInput
+    def test_case_insensitive(self):
+        from holosoma_inference.inputs.api.commands import StateCommand
+        from holosoma_inference.inputs.impl.ros2 import Ros2StateCommandProvider
 
-        policy.stand_command[0, 0] = 1
-        prov = Ros2OtherInput(policy)
-        prov._callback(SimpleNamespace(data="stand"))
-        assert policy.stand_command[0, 0] == 0
-
-    def test_start_command(self, policy):
-        from holosoma_inference.inputs.ros2 import Ros2OtherInput
-
-        prov = Ros2OtherInput(policy)
-        prov._callback(SimpleNamespace(data="start"))
-        policy._handle_start_policy.assert_called_once()
-
-    def test_stop_command(self, policy):
-        from holosoma_inference.inputs.ros2 import Ros2OtherInput
-
-        prov = Ros2OtherInput(policy)
-        prov._callback(SimpleNamespace(data="stop"))
-        policy._handle_stop_policy.assert_called_once()
-
-    def test_init_command(self, policy):
-        from holosoma_inference.inputs.ros2 import Ros2OtherInput
-
-        prov = Ros2OtherInput(policy)
-        prov._callback(SimpleNamespace(data="init"))
-        policy._handle_init_state.assert_called_once()
-
-    def test_unknown_command_warns(self, policy):
-        from holosoma_inference.inputs.ros2 import Ros2OtherInput
-
-        prov = Ros2OtherInput(policy)
-        prov._callback(SimpleNamespace(data="bogus"))
-        policy.logger.warning.assert_called_once()
-
-    def test_whitespace_and_case_normalization(self, policy):
-        from holosoma_inference.inputs.ros2 import Ros2OtherInput
-
-        prov = Ros2OtherInput(policy)
+        prov = Ros2StateCommandProvider("holosoma/state_input")
         prov._callback(SimpleNamespace(data="  WALK  "))
-        assert policy.stand_command[0, 0] == 1
+        assert prov.poll_commands() == [StateCommand.WALK]
+
+    def test_unknown_command_warns(self):
+        from holosoma_inference.inputs.impl.ros2 import Ros2StateCommandProvider
+
+        prov = Ros2StateCommandProvider("holosoma/state_input")
+        prov._callback(SimpleNamespace(data="bogus"))
+        # Unknown commands are logged via loguru (warning emitted) and not queued
+        assert prov.poll_commands() == []
+
+    def test_empty_string_warns(self):
+        from holosoma_inference.inputs.impl.ros2 import Ros2StateCommandProvider
+
+        prov = Ros2StateCommandProvider("holosoma/state_input")
+        prov._callback(SimpleNamespace(data="   "))
+        # Empty/whitespace-only strings are logged via loguru and not queued
+        assert prov.poll_commands() == []
+
+    def test_poll_commands_drains_queue(self):
+        from holosoma_inference.inputs.api.commands import StateCommand
+        from holosoma_inference.inputs.impl.ros2 import Ros2StateCommandProvider
+
+        prov = Ros2StateCommandProvider("holosoma/state_input")
+        prov._callback(SimpleNamespace(data="start"))
+        prov._callback(SimpleNamespace(data="stop"))
+        assert prov.poll_commands() == [StateCommand.START, StateCommand.STOP]
+        assert prov.poll_commands() == []
