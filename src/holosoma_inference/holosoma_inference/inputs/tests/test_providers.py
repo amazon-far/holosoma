@@ -431,7 +431,6 @@ class TestInterfaceInput:
         vc = device.poll_velocity()
 
         assert vc is None
-        assert device.key_states == {"A": True}
 
     def test_poll_velocity_no_stand_command_gating(self, interface):
         from holosoma_inference.inputs.impl.interface import InterfaceInput
@@ -458,36 +457,39 @@ class TestInterfaceInput:
         assert vc.lin_vel[1] == pytest.approx(-0.5)  # -lx
         assert vc.ang_vel == pytest.approx(-0.7)  # -rx
 
-    def test_poll_commands_rising_edges(self, interface):
+    def test_poll_commands_rising_edge(self, interface):
         from holosoma_inference.inputs.impl.interface import InterfaceInput
 
-        device = InterfaceInput(interface)
-        device.key_states = {"A": True, "B": True}
-        device.last_key_states = {"A": False, "B": False}
+        interface.get_joystick_msg.return_value = _joystick_msg(keys=256)
+        interface.get_joystick_key.return_value = "A"
 
+        device = InterfaceInput(interface)
         commands = device.poll_commands()
-        assert set(commands) == {StateCommand.START, StateCommand.STOP}
+        assert commands == [StateCommand.START]
 
     def test_poll_commands_no_dispatch_on_hold(self, interface):
         from holosoma_inference.inputs.impl.interface import InterfaceInput
 
-        device = InterfaceInput(interface)
-        device.key_states = {"A": True}
-        device.last_key_states = {"A": True}
+        interface.get_joystick_msg.return_value = _joystick_msg(keys=256)
+        interface.get_joystick_key.return_value = "A"
 
+        device = InterfaceInput(interface)
+        device.poll_commands()  # first press
+
+        # Second poll with same button held — no new rising edge
         assert device.poll_commands() == []
 
     def test_poll_commands_unmapped_ignored(self, interface):
         from holosoma_inference.inputs.impl.interface import InterfaceInput
 
-        device = InterfaceInput(interface)
-        device.key_states = {"UNKNOWN": True}
-        device.last_key_states = {"UNKNOWN": False}
+        interface.get_joystick_msg.return_value = _joystick_msg(keys=999)
+        interface.get_joystick_key.return_value = "UNKNOWN"
 
+        device = InterfaceInput(interface)
         assert device.poll_commands() == []
 
-    def test_poll_velocity_then_commands_single_read(self, interface):
-        """poll_velocity reads joystick and caches key_states. poll_commands uses the cache."""
+    def test_poll_velocity_then_commands(self, interface):
+        """poll_velocity reads sticks, poll_commands reads buttons independently."""
         from holosoma_inference.inputs.impl.interface import InterfaceInput
 
         interface.get_joystick_msg.return_value = _joystick_msg(ly=0.5, keys=256)
@@ -495,29 +497,13 @@ class TestInterfaceInput:
 
         device = InterfaceInput(interface)
 
-        # poll_velocity reads joystick, caches "A" button, returns None (buttons pressed)
+        # poll_velocity returns None (buttons pressed suppress sticks)
         vc = device.poll_velocity()
         assert vc is None
 
-        # poll_commands uses cached key_states — "A" is a rising edge
+        # poll_commands reads joystick independently — "A" is a rising edge
         commands = device.poll_commands()
         assert commands == [StateCommand.START]
-
-    def test_preserves_last_key_states(self, interface):
-        from holosoma_inference.inputs.impl.interface import InterfaceInput
-
-        interface.get_joystick_msg.return_value = _joystick_msg()
-        interface.get_joystick_key.return_value = ""
-
-        device = InterfaceInput(interface)
-        device.key_states = {"B": True}
-
-        interface.get_joystick_msg.return_value = _joystick_msg(keys=256)
-        interface.get_joystick_key.return_value = "A"
-        device.poll_velocity()
-
-        assert device.last_key_states == {"B": True}
-        assert device.key_states["A"] is True
 
     def test_same_object_for_both_slots(self, interface):
         """A single InterfaceInput assigned to both slots works correctly."""

@@ -39,28 +39,47 @@ class TestInterfaceInputEdgeCases:
         assert device.key_states == {}
         assert device.poll_commands() == []
 
-    def test_multiple_rising_edges(self):
+    def test_rising_edge_produces_command(self):
         from holosoma_inference.inputs.api.commands import StateCommand
         from holosoma_inference.inputs.impl.interface import InterfaceInput
 
         iface = _make_interface()
-        device = InterfaceInput(iface)
-        device.key_states = {"A": True, "B": True, "Y": True}
-        device.last_key_states = {}
+        iface.get_joystick_msg.return_value = _joystick_msg(keys=256)
+        iface.get_joystick_key.return_value = "A"
 
+        device = InterfaceInput(iface)
         commands = device.poll_commands()
         assert StateCommand.START in commands
-        assert StateCommand.STOP in commands
-        assert StateCommand.INIT in commands
+
+    def test_held_button_not_repeated(self):
+        from holosoma_inference.inputs.api.commands import StateCommand
+        from holosoma_inference.inputs.impl.interface import InterfaceInput
+
+        iface = _make_interface()
+        iface.get_joystick_msg.return_value = _joystick_msg(keys=256)
+        iface.get_joystick_key.return_value = "A"
+
+        device = InterfaceInput(iface)
+        commands1 = device.poll_commands()
+        assert StateCommand.START in commands1
+
+        # Second poll with same button still held — no new rising edge
+        commands2 = device.poll_commands()
+        assert commands2 == []
 
     def test_falling_edge_not_dispatched(self):
         from holosoma_inference.inputs.impl.interface import InterfaceInput
 
         iface = _make_interface()
+        # First: press A
+        iface.get_joystick_msg.return_value = _joystick_msg(keys=256)
+        iface.get_joystick_key.return_value = "A"
         device = InterfaceInput(iface)
-        device.key_states = {"A": False}
-        device.last_key_states = {"A": True}
+        device.poll_commands()
 
+        # Then: release (no keys)
+        iface.get_joystick_msg.return_value = _joystick_msg(keys=0)
+        iface.get_joystick_key.return_value = ""
         assert device.poll_commands() == []
 
     def test_velocity_suppressed_when_button_pressed(self):
