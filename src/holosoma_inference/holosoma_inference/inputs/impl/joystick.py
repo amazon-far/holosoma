@@ -19,9 +19,9 @@ JOYSTICK_COMMANDS: dict[str, StateCommand] = {
     "F1": StateCommand.KP_RESET,
     "select": StateCommand.NEXT_POLICY,
     "L1+R1": StateCommand.KILL,
-    "back": StateCommand.STAND_TOGGLE,
+    "start": StateCommand.STAND_TOGGLE,
     "L2": StateCommand.ZERO_VELOCITY,
-    "start": StateCommand.START_MOTION_CLIP,
+    "back": StateCommand.START_MOTION_CLIP,
     "X": StateCommand.SWITCH_MODE,
     "x": StateCommand.SWITCH_MODE,
 }
