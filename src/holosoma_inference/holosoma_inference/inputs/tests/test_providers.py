@@ -89,11 +89,11 @@ class TestCommandMappings:
         assert JOYSTICK_COMMANDS["select"] == StateCommand.NEXT_POLICY
 
     def test_joystick_has_locomotion_commands(self):
-        assert JOYSTICK_COMMANDS["back"] == StateCommand.STAND_TOGGLE
+        assert JOYSTICK_COMMANDS["start"] == StateCommand.STAND_TOGGLE
         assert JOYSTICK_COMMANDS["L2"] == StateCommand.ZERO_VELOCITY
 
     def test_joystick_has_wbt_commands(self):
-        assert JOYSTICK_COMMANDS["start"] == StateCommand.START_MOTION_CLIP
+        assert JOYSTICK_COMMANDS["back"] == StateCommand.START_MOTION_CLIP
 
     def test_keyboard_has_core_commands(self):
         assert KEYBOARD_COMMANDS["]"] == StateCommand.START

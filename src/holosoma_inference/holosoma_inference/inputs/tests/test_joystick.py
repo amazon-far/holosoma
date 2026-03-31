@@ -106,14 +106,14 @@ class TestJoystickCommandMapping:
         from holosoma_inference.inputs.api.commands import StateCommand
         from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
 
-        assert JOYSTICK_COMMANDS["back"] == StateCommand.STAND_TOGGLE
+        assert JOYSTICK_COMMANDS["start"] == StateCommand.STAND_TOGGLE
         assert JOYSTICK_COMMANDS["L2"] == StateCommand.ZERO_VELOCITY
 
     def test_wbt_buttons_mapped(self):
         from holosoma_inference.inputs.api.commands import StateCommand
         from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
 
-        assert JOYSTICK_COMMANDS["start"] == StateCommand.START_MOTION_CLIP
+        assert JOYSTICK_COMMANDS["back"] == StateCommand.START_MOTION_CLIP
 
     def test_policy_select_mapped(self):
         from holosoma_inference.inputs.api.commands import StateCommand
