@@ -114,11 +114,11 @@ class TestCommandMappings:
         assert KEYBOARD_COMMANDS["z"] == StateCommand.ZERO_VELOCITY
 
     def test_keyboard_has_wbt_commands(self):
-        assert KEYBOARD_COMMANDS["s"] == StateCommand.START_MOTION_CLIP
+        assert KEYBOARD_COMMANDS["m"] == StateCommand.START_MOTION_CLIP
 
     def test_keyboard_no_velocity_keys_in_command_mapping(self):
         """Velocity keys are in KEYBOARD_VELOCITY_LOCOMOTION, not the command mapping."""
-        for key in ("w", "a", "d", "q", "e"):
+        for key in ("w", "s", "a", "d", "q", "e"):
             assert key not in KEYBOARD_COMMANDS
 
     def test_keyboard_velocity_locomotion_mapping(self):
@@ -289,7 +289,7 @@ class TestKeyboardInput:
 
     def test_wbt_mapping(self):
         dev = self._make()
-        dev._queue.extend(["s", "o"])
+        dev._queue.extend(["m", "o"])
         dev.poll_velocity()
         assert dev.poll_commands() == [StateCommand.START_MOTION_CLIP, StateCommand.STOP]
 

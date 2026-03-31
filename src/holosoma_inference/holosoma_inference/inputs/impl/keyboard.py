@@ -27,7 +27,7 @@ KEYBOARD_COMMANDS: dict[str, StateCommand] = {
     "r": StateCommand.KP_RESET,
     "=": StateCommand.STAND_TOGGLE,
     "z": StateCommand.ZERO_VELOCITY,
-    "s": StateCommand.START_MOTION_CLIP,
+    "m": StateCommand.START_MOTION_CLIP,
     "x": StateCommand.SWITCH_MODE,
     **{str(n): StateCommand[f"SWITCH_POLICY_{n}"] for n in range(1, 10)},
 }
