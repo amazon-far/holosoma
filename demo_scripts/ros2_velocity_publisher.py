@@ -26,6 +26,7 @@ class VelocityPublisher(Node):
 
     PATTERNS = {
         "forward": "Walk forward at constant speed",
+        "shuttle": "Shuttle: forward 0.5 m/s then backward 0.5 m/s, repeating",
         "circle": "Circle: forward + yaw rotation",
         "figure8": "Figure-8: alternating yaw direction",
         "square": "Square: forward segments with 90-degree turns",
@@ -58,6 +59,15 @@ class VelocityPublisher(Node):
 
         if self.pattern == "forward":
             msg = self._make_twist(0.5, 0.0, 0.0)
+
+        elif self.pattern == "shuttle":
+            # 3s forward at 0.5 m/s, 3s backward at 0.5 m/s, repeat
+            period = 6.0
+            phase = self._t % period
+            if phase < 3.0:
+                msg = self._make_twist(0.5, 0.0, 0.0)
+            else:
+                msg = self._make_twist(-0.5, 0.0, 0.0)
 
         elif self.pattern == "circle":
             msg = self._make_twist(0.4, 0.0, 0.5)

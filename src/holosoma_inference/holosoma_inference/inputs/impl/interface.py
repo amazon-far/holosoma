@@ -34,25 +34,45 @@ class InterfaceInput(InputProvider):
         self._mapping = dict(JOYSTICK_COMMANDS)
         self.key_states: dict[str, bool] = {}
         self.last_key_states: dict[str, bool] = {}
+        self._read_this_cycle = False
 
     def start(self) -> None:
         pass  # Joystick hardware initialized by SDK
 
-    # -- VelCmdProvider protocol -----------------------------------------------
+    # -- Internal --------------------------------------------------------------
 
-    def poll_velocity(self) -> VelCmd | None:
+    def _read_joystick(self):
+        """Read joystick and update cached key states.
+
+        Called from both poll_velocity() and poll_commands() so that button
+        state is always fresh regardless of which role this instance fills.
+        Guards against double-reads when both slots share the same instance
+        (joystick+joystick mode).  Returns the raw message (or None).
+        """
+        if self._read_this_cycle:
+            return self._last_msg
+        self._read_this_cycle = True
+
         wc_msg = self.interface.get_joystick_msg()
+        self._last_msg = wc_msg
         if wc_msg is None:
             return None
 
-        # Cache button states for poll_commands() (always, even when
-        # sticks are suppressed during button presses).
         self.last_key_states = self.key_states.copy()
         cur_key = self.interface.get_joystick_key(wc_msg)
         if cur_key:
             self.key_states[cur_key] = True
         else:
             self.key_states = dict.fromkeys(self.key_states.keys(), False)
+
+        return wc_msg
+
+    # -- VelCmdProvider protocol -----------------------------------------------
+
+    def poll_velocity(self) -> VelCmd | None:
+        wc_msg = self._read_joystick()
+        if wc_msg is None:
+            return None
 
         # Sticks are only read when no buttons are pressed, matching the
         # behaviour of BaseInterface.process_joystick_input.
@@ -75,7 +95,13 @@ class InterfaceInput(InputProvider):
     # -- StateCommandProvider protocol -----------------------------------------
 
     def poll_commands(self) -> list[StateCommand]:
-        """Edge-detect rising edges from cached key_states."""
+        """Edge-detect rising edges from cached key_states.
+
+        Calls _read_joystick() to ensure key_states are fresh even when this
+        instance is only used as a command provider (velocity from another source).
+        """
+        self._read_joystick()
+        self._read_this_cycle = False  # reset for next cycle
         commands: list[StateCommand] = []
         for key, is_pressed in self.key_states.items():
             if is_pressed and not self.last_key_states.get(key, False):
