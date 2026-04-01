@@ -62,7 +62,7 @@ In policy terminal, press `]` to activate the policy.
 
 ### 6. Start Motion Clip
 
-In policy terminal, press `s` to start the motion clip. The robot will begin tracking the whole body motion.
+In policy terminal, press `m` to start the motion clip. The robot will begin tracking the whole body motion.
 
 ---
 
@@ -98,7 +98,7 @@ In policy terminal, press `s` to start the motion clip. The robot will begin tra
 
 | Action | Keyboard | Joystick |
 |--------|----------|----------|
-| Start motion clip | `s` | Start button |
+| Start motion clip | `m` | Select+A |
 
 **Default pose**: Standing with raised arms
 

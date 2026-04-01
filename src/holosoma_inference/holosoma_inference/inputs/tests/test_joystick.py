@@ -132,7 +132,7 @@ class TestJoystickCommandMapping:
         from holosoma_inference.inputs.api.commands import StateCommand
         from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
 
-        assert JOYSTICK_COMMANDS["back"] == StateCommand.START_MOTION_CLIP
+        assert JOYSTICK_COMMANDS["select+A"] == StateCommand.START_MOTION_CLIP
 
     def test_policy_select_mapped(self):
         from holosoma_inference.inputs.api.commands import StateCommand

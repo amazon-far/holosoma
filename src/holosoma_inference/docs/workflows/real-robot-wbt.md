@@ -72,7 +72,7 @@ Press `A` button on joystick to activate the policy.
 
 ### 4. Start Motion Clip
 
-Press `Start` button on joystick to start the motion clip. The robot will begin tracking the whole body motion.
+Press `Select+A` on joystick to start the motion clip. The robot will begin tracking the whole body motion.
 
 ---
 
@@ -93,7 +93,7 @@ Press `Start` button on joystick to start the motion clip. The robot will begin 
 
 | Action | Keyboard | Joystick |
 |--------|----------|----------|
-| Start motion clip | `s` | Start button |
+| Start motion clip | `m` | Select+A |
 
 **Default pose**: Standing with raised arms
 
@@ -196,7 +196,7 @@ Run the policy inside a Docker container (works both onboard and offboard).
 - **Stiff mode**: The `Enter` prompt initializes stiff control mode - this is required for WBT policies to maintain balance before the policy starts
 - **Emergency stop**: Press `L1 + R1` (LB + RB) on joystick to kill the controller
 - **Default pose**: Press `Y` button to return the robot to standing pose with raised arms
-- **Motion not starting**: Ensure you pressed `Start` button after activating the policy with `A`
+- **Motion not starting**: Ensure you pressed `Select+A` after activating the policy with `A`
 
 ### Control Issues
 
@@ -215,5 +215,5 @@ Run the policy inside a Docker container (works both onboard and offboard).
 
 ### Motion Clip Issues
 
-- **Clip not playing**: Ensure you pressed `Start` button after starting the policy
+- **Clip not playing**: Ensure you pressed `Select+A` after starting the policy
 - **Unstable tracking**: Verify that stiff mode initialization completed successfully

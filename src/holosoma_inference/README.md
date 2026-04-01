@@ -80,7 +80,7 @@ Commands for controlling policies during execution.
 | Action | Keyboard | Joystick |
 |--------|----------|----------|
 | Start the policy | `]` | A button |
-| Start motion clip | `m` | Start button |
+| Start motion clip | `m` | Select+A |
 
 **Default pose**: Standing with raised arms
 

@@ -46,7 +46,7 @@ def _print_control_guide(policy_class, use_joystick: bool, dual_mode: bool = Fal
         if is_wbt:
             logger.info("")
             logger.info("Whole-Body Tracking Controls:")
-            logger.info("  Start button   - Start motion clip")
+            logger.info("  Select+A       - Start motion clip")
         else:
             logger.info("")
             logger.info("Locomotion Controls:")
@@ -67,7 +67,7 @@ def _print_control_guide(policy_class, use_joystick: bool, dual_mode: bool = Fal
         if is_wbt:
             logger.info("")
             logger.info("Whole-Body Tracking Controls:")
-            logger.info("  s  - Start motion clip")
+            logger.info("  m  - Start motion clip")
         else:
             logger.info("")
             logger.info("Locomotion Controls:")
