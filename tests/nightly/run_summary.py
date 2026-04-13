@@ -214,6 +214,9 @@ def post_summary_to_slack():
         summary_message += "\nFailed runs: " + ", ".join(problem_runs)
 
     summary_message += "\nWandB Links:\n```\n" + "\n".join(wandb_summaries) + "\n```"
+    summary_message += "\n" + " ".join(
+        f"{emoji} = {status.name.replace('_', ' ').title()}" for status, emoji in RunStatus2Emoji.items()
+    )
 
     slack_client.chat_postMessage(channel=SLACK_CHANNEL, markdown_text=summary_message, unfurl_links=False)
 
