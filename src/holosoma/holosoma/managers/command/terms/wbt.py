@@ -92,6 +92,18 @@ class MotionLoader:
                 self._object_pos_w = torch.zeros(0, 3, device=device)
                 self._object_quat_w = torch.zeros(0, 4, device=device)
                 self._object_lin_vel_w = torch.zeros(0, 3, device=device)
+
+            # foot_contact: per-frame binary contact target for [left, right] foot.
+            # Shape (T, 2) float32 in {0.0, 1.0}. Optional — old npz files fall
+            # back to all-zero (no contact supervision).
+            self.has_foot_contact = "foot_contact" in data
+            if self.has_foot_contact:
+                self._foot_contact = torch.tensor(data["foot_contact"], dtype=torch.float32, device=device)
+                assert self._foot_contact.ndim == 2 and self._foot_contact.shape[1] == 2, (
+                    f"foot_contact shape must be (T, 2), got {self._foot_contact.shape}"
+                )
+            else:
+                self._foot_contact = torch.zeros(self._joint_pos.shape[0], 2, device=device)
         return body_names, joint_names
 
     @property
@@ -130,6 +142,11 @@ class MotionLoader:
     def object_lin_vel_w(self) -> torch.Tensor:
         return self._object_lin_vel_w[:]
 
+    @property
+    def foot_contact(self) -> torch.Tensor:
+        """Per-frame binary foot contact target, shape (T, 2), cols [left, right]."""
+        return self._foot_contact[:]
+
     def extend_with_segments(self, segments: dict[str, torch.Tensor], prepend: bool) -> MotionLoader:
         """Merge interpolated segments with motion data, mutating this MotionLoader."""
         concat_targets = [
@@ -153,6 +170,12 @@ class MotionLoader:
             existing = getattr(self, attr_name)
             tensors = (segments[seg_key], existing) if prepend else (existing, segments[seg_key])
             setattr(self, attr_name, torch.cat(tensors, dim=0))
+
+        # foot_contact: default pose segments are static standing → both feet in contact (1.0).
+        seg_len = segments["joint_pos"].shape[0]
+        seg_foot_contact = torch.ones(seg_len, 2, device=self._foot_contact.device, dtype=self._foot_contact.dtype)
+        tensors_fc = (seg_foot_contact, self._foot_contact) if prepend else (self._foot_contact, seg_foot_contact)
+        self._foot_contact = torch.cat(tensors_fc, dim=0)
 
         self.time_step_total = self._joint_pos.shape[0]
         return self
@@ -598,6 +621,14 @@ class MotionCommand(CommandTermBase):
     @property
     def ref_ang_vel_w(self) -> torch.Tensor:
         return self.motion.body_ang_vel_w[self.time_steps, self.ref_body_index]
+
+    @property
+    def motion_foot_contact(self) -> torch.Tensor:
+        """Per-env target foot contact at the current time step, shape (num_envs, 2).
+
+        Columns are [left, right] with values in {0.0, 1.0}.
+        """
+        return self.motion.foot_contact[self.time_steps]
 
     #########################################################################################
     ## Robot from simulator

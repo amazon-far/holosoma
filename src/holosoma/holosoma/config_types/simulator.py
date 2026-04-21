@@ -469,6 +469,35 @@ class BridgeConfig:
 
 
 @dataclass(frozen=True)
+class VideoMimicHeightMapConfig:
+    """Configuration for the VideoMimic-style height-map RayCaster sensor.
+
+    Controls the grid shape, spacing, and channel count of the
+    ``videomimic_height_map_scanner`` and the matching observation term.
+
+    - ``num_channels == 1``: obs returns height only (shape ``(N, H*W)``).
+    - ``num_channels == 3``: obs returns ``(x_local, y_local, height)`` per
+      grid point (shape ``(N, H*W*3)``).
+
+    The raycaster size is derived as ``size = ((W - 1) * resolution,
+    (H - 1) * resolution)``, so ``map_height`` / ``map_width`` are the
+    number of rays along Y / X respectively.
+    """
+
+    map_height: int = 11
+    """Number of rays along the local Y axis."""
+
+    map_width: int = 11
+    """Number of rays along the local X axis."""
+
+    resolution: float = 0.1
+    """Spacing (in meters) between neighbouring rays."""
+
+    num_channels: int = 1
+    """1 = height only; 3 = (x_local, y_local, height)."""
+
+
+@dataclass(frozen=True)
 class SimulatorInitConfig:
     """Top-level simulator initialisation configuration."""
 
@@ -477,6 +506,9 @@ class SimulatorInitConfig:
 
     sim: SimEngineConfig
     """Simulation engine configuration settings."""
+
+    videomimic_height_map: VideoMimicHeightMapConfig = field(default_factory=VideoMimicHeightMapConfig)
+    """Grid / channel configuration for the VideoMimic height-map scanner."""
 
     debug_viz: bool = True
     """Enable debug visualization (gantry lines, etc.)."""

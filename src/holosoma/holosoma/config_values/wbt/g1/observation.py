@@ -229,10 +229,90 @@ g1_29dof_wbt_observation_future_motion_heightmap = ObservationManagerCfg(
     },
 )
 
+# Critic-only privileged foot-contact observations. Actor does not see these
+# (keeps the asymmetric actor-critic setup); critic gets both the actual robot
+# contact and the motion-target contact so it can learn a tight value baseline
+# around the foot_contact_match reward.
+critic_obs_with_foot_contact_terms = dict(critic_obs_shared_terms)
+critic_obs_with_foot_contact_terms["actual_foot_contact"] = ObsTermCfg(
+    func="holosoma.managers.observation.terms.wbt:actual_foot_contact",
+    scale=1.0,
+    noise=0.0,
+    params={"threshold": 1.0},
+)
+critic_obs_with_foot_contact_terms["target_foot_contact"] = ObsTermCfg(
+    func="holosoma.managers.observation.terms.wbt:target_foot_contact",
+    scale=1.0,
+    noise=0.0,
+)
+
+g1_29dof_wbt_observation_future_motion_heightmap_foot_contact = ObservationManagerCfg(
+    groups={
+        "actor_obs": actor_obs_shared,
+        "critic_obs": ObsGroupCfg(
+            concatenate=True,
+            enable_noise=False,
+            history_length=1,
+            terms=critic_obs_with_foot_contact_terms,
+        ),
+        "future_motion_targets": future_motion_obs_group,
+        "height_map_obs": height_map_obs_group,
+    },
+)
+
+# VideoMimic-style heightmap obs group.
+# Uses the 11x11 `videomimic_height_map_scanner` sensor and returns only the
+# height channel (no x_local/y_local) — matching VideoMimic HeightfieldSensor
+# `depth_map` exactly. Output dim = 121 (vs 561 for the 3-channel version).
+videomimic_height_map_obs_group = ObsGroupCfg(
+    concatenate=True,
+    enable_noise=False,
+    history_length=1,
+    terms={
+        "videomimic_height_map_obs": ObsTermCfg(
+            func="holosoma.managers.observation.terms.wbt:videomimic_height_map_obs",
+            scale=1.0,
+            noise=0.0,
+            params={"height_scan_offset": 0.5, "min_height": -5.0},
+        ),
+    },
+)
+
+g1_29dof_wbt_observation_future_motion_heightmap_videomimic = ObservationManagerCfg(
+    groups={
+        "actor_obs": actor_obs_shared,
+        "critic_obs": ObsGroupCfg(
+            concatenate=True,
+            enable_noise=False,
+            history_length=1,
+            terms=critic_obs_shared_terms,
+        ),
+        "future_motion_targets": future_motion_obs_group,
+        "height_map_obs": videomimic_height_map_obs_group,
+    },
+)
+
+g1_29dof_wbt_observation_future_motion_heightmap_videomimic_foot_contact = ObservationManagerCfg(
+    groups={
+        "actor_obs": actor_obs_shared,
+        "critic_obs": ObsGroupCfg(
+            concatenate=True,
+            enable_noise=False,
+            history_length=1,
+            terms=critic_obs_with_foot_contact_terms,
+        ),
+        "future_motion_targets": future_motion_obs_group,
+        "height_map_obs": videomimic_height_map_obs_group,
+    },
+)
+
 __all__ = [
     "g1_29dof_wbt_observation",
     "g1_29dof_wbt_observation_w_object",
     "g1_29dof_wbt_observation_future_motion",
     "g1_29dof_wbt_observation_future_motion_no_key_body",
     "g1_29dof_wbt_observation_future_motion_heightmap",
+    "g1_29dof_wbt_observation_future_motion_heightmap_foot_contact",
+    "g1_29dof_wbt_observation_future_motion_heightmap_videomimic",
+    "g1_29dof_wbt_observation_future_motion_heightmap_videomimic_foot_contact",
 ]

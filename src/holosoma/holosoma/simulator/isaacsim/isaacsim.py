@@ -405,6 +405,25 @@ class IsaacSim(BaseSimulator):
             self._height_map_scanner = RayCaster(height_map_scanner_config)
             self.scene.sensors["height_map_scanner"] = self._height_map_scanner
 
+            # VideoMimic-style heightmap scanner. Grid shape / resolution /
+            # channel count come from ``SimulatorInitConfig.videomimic_height_map``
+            # so a single config entry drives both the raycaster size and the
+            # observation term's output channels.
+            vm_cfg = self.simulator_config.videomimic_height_map
+            vm_size_x = (vm_cfg.map_width - 1) * vm_cfg.resolution
+            vm_size_y = (vm_cfg.map_height - 1) * vm_cfg.resolution
+            videomimic_height_map_scanner_config = RayCasterCfg(
+                prim_path=f"/World/envs/env_.*/Robot/{self.robot_config.body_names[0]}",
+                offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
+                attach_yaw_only=True,
+                pattern_cfg=patterns.GridPatternCfg(resolution=vm_cfg.resolution, size=[vm_size_x, vm_size_y]),
+                debug_vis=False,
+                mesh_prim_paths=[terrain_prim_path],
+                update_period=policy_dt * height_map_update_decimation,
+            )
+            self._videomimic_height_map_scanner = RayCaster(videomimic_height_map_scanner_config)
+            self.scene.sensors["videomimic_height_map_scanner"] = self._videomimic_height_map_scanner
+
 
         # clone, filter, and replicate
         self.scene.clone_environments(copy_from_source=False)

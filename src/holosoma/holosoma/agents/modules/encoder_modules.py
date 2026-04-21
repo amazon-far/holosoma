@@ -250,3 +250,53 @@ class HeightMapEncoder(nn.Module):
         )  # (B, 1, latent_dim)
 
         return encoding.squeeze(1)  # (B, latent_dim)
+
+
+class HeightMapEncoderVideoMimic(nn.Module):
+    """VideoMimic-style height map encoder.
+
+    Flattens the heightmap observation, projects with a single Linear to
+    ``latent_dim``, then applies a learnable per-feature attention gate
+    (element-wise multiply with a learnable parameter initialised to zero).
+    The resulting latent is meant to be concatenated with proprio (and
+    other) observations by the downstream MLP.
+
+    Reference: VideoMimic ``rsl_rl/modules/actor_critic.py``
+    (``FlattenThenEmbedMLPWithAttention``). The VideoMimic default for the
+    actor's ``terrain_height`` head is ``output_dim=415`` (see
+    ``videomimic_gym/legged_gym/envs/g1/g1_deepmimic_config.py``); VideoMimic
+    does not model "channels" separately, it just flattens the raw obs.
+
+    Architecture:
+        (B, input_dim)  -- Linear(input_dim, latent_dim)
+                        -- * attention (learnable parameter, init=0)
+                        -> (B, latent_dim)
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        latent_dim: int = 415,
+    ):
+        super().__init__()
+
+        self.input_dim = input_dim
+        self.latent_dim = latent_dim
+
+        self.flatten = nn.Flatten()
+        self.embed = nn.Linear(input_dim, latent_dim)
+        # Learnable per-feature attention gate (initialised to zero, matches VideoMimic).
+        self.attention = nn.Parameter(torch.zeros(latent_dim))
+
+    def forward(self, height_map: torch.Tensor) -> torch.Tensor:
+        """Forward pass.
+
+        Args:
+            height_map: Height map obs, either already flat ``(B, input_dim)``
+                or any shape that flattens to ``input_dim``.
+
+        Returns:
+            Latent encoding ``(B, latent_dim)``.
+        """
+        x = self.flatten(height_map)
+        return self.embed(x) * self.attention

@@ -4,10 +4,12 @@ from holosoma.agents.modules.ppo_modules import (
     PPOActor,
     PPOActorEncoder,
     PPOActorWithHeightMap,
+    PPOActorWithHeightMapVideoMimic,
     PPOActorWithMotionEncoder,
     PPOCritic,
     PPOCriticEncoder,
     PPOCriticWithHeightMap,
+    PPOCriticWithHeightMapVideoMimic,
     PPOCriticWithMotionEncoder,
 )
 
@@ -61,6 +63,18 @@ def setup_ppo_actor_module(
             height_map_encoder_config=height_map_encoder_config,
             motion_encoder_config=motion_encoder_config,
         ).to(device)
+    if module_type == "MLPWithHeightMapVideoMimic":
+        if height_map_encoder_config is None:
+            raise ValueError("height_map_encoder_config is required for MLPWithHeightMapVideoMimic")
+        return PPOActorWithHeightMapVideoMimic(
+            obs_dim_dict=obs_dim_dict,
+            module_config_dict=module_config,
+            num_actions=num_actions,
+            init_noise_std=init_noise_std,
+            history_length=history_length,
+            height_map_encoder_config=height_map_encoder_config,
+            motion_encoder_config=motion_encoder_config,
+        ).to(device)
 
     raise ValueError(f"Invalid actor type: {module_type}")
 
@@ -98,6 +112,16 @@ def setup_ppo_critic_module(
         if height_map_encoder_config is None:
             raise ValueError("height_map_encoder_config is required for MLPWithHeightMap")
         return PPOCriticWithHeightMap(
+            obs_dim_dict=obs_dim_dict,
+            module_config_dict=module_config,
+            history_length=history_length,
+            height_map_encoder_config=height_map_encoder_config,
+            motion_encoder_config=motion_encoder_config,
+        ).to(device)
+    if module_type == "MLPWithHeightMapVideoMimic":
+        if height_map_encoder_config is None:
+            raise ValueError("height_map_encoder_config is required for MLPWithHeightMapVideoMimic")
+        return PPOCriticWithHeightMapVideoMimic(
             obs_dim_dict=obs_dim_dict,
             module_config_dict=module_config,
             history_length=history_length,

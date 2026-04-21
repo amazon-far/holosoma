@@ -10,6 +10,8 @@ from holosoma.config_values.wbt.g1.experiment import (
     g1_29dof_wbt_fast_sac_w_object,
     g1_29dof_wbt_future_motion,
     g1_29dof_wbt_future_motion_heightmap,
+    g1_29dof_wbt_future_motion_heightmap_videomimic,
+    g1_29dof_wbt_future_motion_heightmap_videomimic_foot_contact,
     g1_29dof_wbt_future_motion_no_key_body,
     g1_29dof_wbt_w_object,
 )
@@ -33,6 +35,8 @@ DEFAULTS = {
     "g1_29dof_wbt_fast_sac_w_object": g1_29dof_wbt_fast_sac_w_object,
     "g1_29dof_wbt_future_motion": g1_29dof_wbt_future_motion,
     "g1_29dof_wbt_future_motion_heightmap": g1_29dof_wbt_future_motion_heightmap,
+    "g1_29dof_wbt_future_motion_heightmap_videomimic": g1_29dof_wbt_future_motion_heightmap_videomimic,
+    "g1_29dof_wbt_future_motion_heightmap_videomimic_foot_contact": g1_29dof_wbt_future_motion_heightmap_videomimic_foot_contact,
     "g1_29dof_wbt_future_motion_no_key_body": g1_29dof_wbt_future_motion_no_key_body,
     "statue_v0_1_wbt_stiff": statue_v0_1_wbt_stiff,
     "statue_v0_1_wbt_compliant": statue_v0_1_wbt_compliant,

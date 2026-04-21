@@ -57,7 +57,25 @@ class WholeBodyTrackingManager(BaseTask):
         self.simulator.clear_contact_forces_history(env_ids)
         self.need_to_refresh_envs[env_ids] = False
         self.simulator.refresh_sim_tensors()
+        self._force_refresh_height_map_sensors(env_ids)
         self._pre_compute_observations_callback()
+
+    def _force_refresh_height_map_sensors(self, env_ids):
+        # Height-map RayCaster sensors use update_period > 0 (5 policy steps).
+        # After reset the robot is teleported to a new pose, but the cached
+        # ray_hits_w still reflects the previous location until the timer
+        # elapses — producing garbage heightmap observations for the first
+        # ~5 inference steps and causing visible jitter. Force an immediate
+        # raycast at the new pose so the very first observation is valid.
+        sensors = getattr(self.simulator.scene, "sensors", None)
+        if not sensors:
+            return
+        for name in ("height_map_scanner", "videomimic_height_map_scanner"):
+            scanner = sensors.get(name)
+            if scanner is None:
+                continue
+            scanner.reset(env_ids)
+            _ = scanner.data
 
     def _get_average_episode_tracker(self):
         tracker = self.curriculum_manager.get_term("average_episode_tracker")

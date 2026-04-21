@@ -271,7 +271,7 @@ class PPO(BaseAlgo):
         # Register future_motion_targets if using motion encoder
         actor_type = self.config.module_dict.actor.type
         self.use_motion_encoder = (
-            actor_type in ("MLPWithMotionEncoder", "MLPWithHeightMap")
+            actor_type in ("MLPWithMotionEncoder", "MLPWithHeightMap", "MLPWithHeightMapVideoMimic")
             and "future_motion_targets" in self.algo_obs_dim_dict
             and self.config.module_dict.motion_encoder is not None
         )
@@ -282,7 +282,7 @@ class PPO(BaseAlgo):
 
         # Register height_map_obs if using height map encoder
         self.use_height_map = (
-            actor_type == "MLPWithHeightMap"
+            actor_type in ("MLPWithHeightMap", "MLPWithHeightMapVideoMimic")
             and "height_map_obs" in self.algo_obs_dim_dict
         )
         if self.use_height_map:
@@ -1024,38 +1024,54 @@ class PPO(BaseAlgo):
         use_motion_encoder = getattr(self, 'use_motion_encoder', False)
         use_height_map = getattr(self, 'use_height_map', False)
 
+        # VideoMimic-style heightmap encoder takes only the heightmap (no
+        # proprio query), unlike the CNN+CrossAttention version which takes
+        # (height_map, proprio). Dispatch accordingly.
+        from holosoma.agents.modules.ppo_modules import (
+            PPOActorWithHeightMapVideoMimic,
+        )
+        is_videomimic_hm = isinstance(self.actor, PPOActorWithHeightMapVideoMimic)
+
         if use_height_map and use_motion_encoder:
             # Height map + motion encoder wrapper
             class ActorWithHeightMapAndMotionWrapper(nn.Module):
-                def __init__(self, actor):
+                def __init__(self, actor, is_videomimic_hm):
                     super().__init__()
                     self.actor = actor
                     self.height_map_encoder = actor.height_map_encoder
                     self.motion_encoder = actor.motion_encoder
                     self.actor_module = actor.actor_module
+                    self.is_videomimic_hm = is_videomimic_hm
 
                 def forward(self, actor_obs, height_map_obs, future_motion_targets):
-                    map_latent = self.height_map_encoder(height_map_obs, actor_obs)
+                    if self.is_videomimic_hm:
+                        map_latent = self.height_map_encoder(height_map_obs)
+                    else:
+                        map_latent = self.height_map_encoder(height_map_obs, actor_obs)
                     motion_latent = self.motion_encoder(future_motion_targets)
                     combined_input = torch.cat([actor_obs, map_latent, motion_latent], dim=-1)
                     return self.actor_module(combined_input)
 
-            return ActorWithHeightMapAndMotionWrapper(self.actor)
+            return ActorWithHeightMapAndMotionWrapper(self.actor, is_videomimic_hm)
         elif use_height_map:
             # Height map only wrapper
             class ActorWithHeightMapWrapper(nn.Module):
-                def __init__(self, actor):
+                def __init__(self, actor, is_videomimic_hm):
                     super().__init__()
                     self.actor = actor
                     self.height_map_encoder = actor.height_map_encoder
                     self.actor_module = actor.actor_module
+                    self.is_videomimic_hm = is_videomimic_hm
 
                 def forward(self, actor_obs, height_map_obs):
-                    map_latent = self.height_map_encoder(height_map_obs, actor_obs)
+                    if self.is_videomimic_hm:
+                        map_latent = self.height_map_encoder(height_map_obs)
+                    else:
+                        map_latent = self.height_map_encoder(height_map_obs, actor_obs)
                     combined_input = torch.cat([actor_obs, map_latent], dim=-1)
                     return self.actor_module(combined_input)
 
-            return ActorWithHeightMapWrapper(self.actor)
+            return ActorWithHeightMapWrapper(self.actor, is_videomimic_hm)
         elif use_motion_encoder:
             # Motion encoder wrapper: takes actor_obs and future_motion_targets
             class ActorWithMotionEncoderWrapper(nn.Module):
