@@ -180,7 +180,7 @@ g1_29dof_wbt_fast_sac_w_object = replace(
 )
 
 # Future motion experiment config (with motion encoder)
-from holosoma.config_types.algo import MotionEncoderConfig
+from holosoma.config_types.algo import HeightMapEncoderConfig, MotionEncoderConfig
 
 g1_29dof_wbt_future_motion = replace(
     g1_29dof_wbt,
@@ -247,6 +247,141 @@ g1_29dof_wbt_future_motion_no_key_body = replace(
     observation=observation.g1_29dof_wbt_observation_future_motion_no_key_body,
 )
 
+# Future motion + height map experiment config (with motion encoder + height map encoder)
+g1_29dof_wbt_future_motion_heightmap = replace(
+    g1_29dof_wbt_future_motion,
+    training=TrainingConfig(
+        project="WholeBodyTracking",
+        name="g1_29dof_wbt_future_motion_heightmap",
+        num_envs=8192,
+    ),
+    observation=observation.g1_29dof_wbt_observation_future_motion_heightmap,
+    algo=replace(
+        algo.ppo,
+        config=replace(
+            algo.ppo.config,
+            num_learning_iterations=40000,
+            save_interval=4000,
+            entropy_coef=0.005,
+            init_noise_std=1.0,
+            init_at_random_ep_len=False,
+            use_symmetry=False,
+            actor_optimizer=replace(algo.ppo.config.actor_optimizer, weight_decay=0.000),
+            critic_optimizer=replace(algo.ppo.config.critic_optimizer, weight_decay=0.000),
+            module_dict=replace(
+                algo.ppo.config.module_dict,
+                actor=replace(
+                    algo.ppo.config.module_dict.actor,
+                    type="MLPWithHeightMap",
+                    input_dim=["actor_obs"],
+                    layer_config=replace(
+                        algo.ppo.config.module_dict.actor.layer_config,
+                        hidden_dims=[768, 512, 256],
+                        activation="SiLU",
+                    ),
+                ),
+                critic=replace(
+                    algo.ppo.config.module_dict.critic,
+                    type="MLPWithHeightMap",
+                    input_dim=["critic_obs"],
+                    layer_config=replace(
+                        algo.ppo.config.module_dict.critic.layer_config,
+                        hidden_dims=[768, 512, 256],
+                        activation="SiLU",
+                    ),
+                ),
+                motion_encoder=MotionEncoderConfig(
+                    input_dim=0,  # Will be auto-calculated
+                    hidden_dim=60,
+                    output_dim=128,
+                    num_timesteps=20,
+                    activation="SiLU",
+                ),
+                height_map_encoder=HeightMapEncoderConfig(
+                    latent_dim=64,
+                    num_heads=16,
+                    map_height=11,
+                    map_width=17,
+                    num_channels=3,
+                    conv_hidden_channels=16,
+                ),
+            ),
+        ),
+    ),
+)
+
+# VideoMimic-style height map variant.
+# Same observation layout as g1_29dof_wbt_future_motion_heightmap, but replaces
+# the CNN + CrossAttention encoder with a much simpler flatten -> linear ->
+# learnable attention gate -> concat encoder (inspired by
+# VideoMimic rsl_rl/modules/actor_critic.py::FlattenThenEmbedMLPWithAttention).
+g1_29dof_wbt_future_motion_heightmap_videomimic = replace(
+    g1_29dof_wbt_future_motion_heightmap,
+    training=TrainingConfig(
+        project="WholeBodyTracking",
+        name="g1_29dof_wbt_future_motion_heightmap_videomimic",
+        num_envs=8192,
+    ),
+    # Uses the 11x11 height-only heightmap obs (videomimic_height_map_scanner
+    # + videomimic_height_map_obs). Actor/critic observation layout otherwise
+    # identical to the base heightmap exp.
+    observation=observation.g1_29dof_wbt_observation_future_motion_heightmap_videomimic,
+    algo=replace(
+        g1_29dof_wbt_future_motion_heightmap.algo,
+        config=replace(
+            g1_29dof_wbt_future_motion_heightmap.algo.config,
+            module_dict=replace(
+                g1_29dof_wbt_future_motion_heightmap.algo.config.module_dict,
+                actor=replace(
+                    g1_29dof_wbt_future_motion_heightmap.algo.config.module_dict.actor,
+                    type="MLPWithHeightMapVideoMimic",
+                ),
+                critic=replace(
+                    g1_29dof_wbt_future_motion_heightmap.algo.config.module_dict.critic,
+                    type="MLPWithHeightMapVideoMimic",
+                ),
+                # VideoMimic's FlattenThenEmbedMLPWithAttention has no channel
+                # concept — it just flattens the raw heightmap obs and projects
+                # with a single Linear. input_dim is derived at runtime from
+                # obs_dim_dict["height_map_obs"], so map_height/map_width/
+                # num_channels/num_heads/conv_hidden_channels are ignored by the
+                # VideoMimic encoder (kept here only because the shared
+                # HeightMapEncoderConfig dataclass requires them).
+                # latent_dim=415 matches VideoMimic's actor default
+                # (g1_deepmimic_config.py: terrain_height output_dim=415).
+                # map_height=map_width=11, num_channels=1 now match the actual
+                # videomimic_height_map_obs output (11*11*1 = 121 dims).
+                height_map_encoder=HeightMapEncoderConfig(
+                    latent_dim=415,
+                    num_heads=16,
+                    map_height=11,
+                    map_width=11,
+                    num_channels=1,
+                    conv_hidden_channels=16,
+                ),
+            ),
+        ),
+    ),
+)
+
+# VideoMimic-style heightmap + foot-contact reward + critic-only foot-contact obs.
+# Builds on g1_29dof_wbt_future_motion_heightmap_videomimic and changes:
+#   - observation: use critic_obs_with_foot_contact_terms (adds actual+target
+#     foot contact to the critic only; actor obs is untouched).
+#   - reward: use g1_29dof_wbt_reward_foot_contact (base rewards + FootContactMatch).
+# Policy architecture / height-map encoder / motion encoder unchanged.
+g1_29dof_wbt_future_motion_heightmap_videomimic_foot_contact = replace(
+    g1_29dof_wbt_future_motion_heightmap_videomimic,
+    training=TrainingConfig(
+        project="WholeBodyTracking",
+        name="g1_29dof_wbt_future_motion_heightmap_videomimic_foot_contact",
+        num_envs=8192,
+    ),
+    # videomimic 11x11 height-only heightmap + actual/target foot_contact in critic only
+    observation=observation.g1_29dof_wbt_observation_future_motion_heightmap_videomimic_foot_contact,
+    reward=reward.g1_29dof_wbt_reward_foot_contact,
+)
+
 __all__ = [
     "g1_29dof_wbt",
     "g1_29dof_wbt_fast_sac",
@@ -254,6 +389,9 @@ __all__ = [
     "g1_29dof_wbt_w_object",
     "g1_29dof_wbt_future_motion",
     "g1_29dof_wbt_future_motion_no_key_body",
+    "g1_29dof_wbt_future_motion_heightmap",
+    "g1_29dof_wbt_future_motion_heightmap_videomimic",
+    "g1_29dof_wbt_future_motion_heightmap_videomimic_foot_contact",
 ]
 
 """

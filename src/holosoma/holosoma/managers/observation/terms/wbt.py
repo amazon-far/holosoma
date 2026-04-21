@@ -397,3 +397,169 @@ def future_motion_targets(
                 logger.info(f"Debug log auto-saved at timestep 200 to: {debug_log_path} ({len(env._debug_future_motion_log)} entries)")
     
     return result
+
+
+#########################################################################################################
+## Height Map Observation (for height map encoder)
+#########################################################################################################
+
+def height_map_obs(
+    env: WholeBodyTrackingManager,
+    height_scan_offset: float = 0.5,
+    min_height: float = -5.0,
+) -> torch.Tensor:
+    """Height map observation for terrain perception via CNN + cross-attention.
+
+    Reads from the IsaacSim ``height_map_scanner`` RayCaster sensor, matching
+    KraftonLab's MapScanWrapper implementation. The sensor updates every 5
+    policy steps (configured via ``update_period`` in the simulator).
+
+    Returns (x_local, y_local, height) per grid point, where
+    height = sensor_z - ray_hit_z - offset (positive = above ground).
+
+    Args:
+        env: WholeBodyTrackingManager environment.
+        height_scan_offset: Height offset subtracted from scan (default 0.5m).
+        min_height: Value to use for missed rays (default -5.0).
+
+    Returns:
+        Tensor of shape [num_envs, num_rays * 3].
+    """
+    scanner = env.simulator.scene.sensors["height_map_scanner"]
+
+    # Build grid coordinates once (matching sensor's GridPatternCfg ordering)
+    if not hasattr(env, "_height_map_grid_xy"):
+        cfg = scanner.cfg.pattern_cfg
+        x = torch.arange(
+            start=-cfg.size[0] / 2, end=cfg.size[0] / 2 + 1.0e-9,
+            step=cfg.resolution, device=env.device,
+        )
+        y = torch.arange(
+            start=-cfg.size[1] / 2, end=cfg.size[1] / 2 + 1.0e-9,
+            step=cfg.resolution, device=env.device,
+        )
+        grid_x, grid_y = torch.meshgrid(x, y, indexing="xy")
+        env._height_map_grid_x = grid_x.flatten()  # (num_rays,)
+        env._height_map_grid_y = grid_y.flatten()  # (num_rays,)
+
+    num_envs = env.num_envs
+    num_rays = env._height_map_grid_x.shape[0]
+
+    # Height = sensor_pos_z - ray_hit_z - offset  (KraftonLab convention)
+    height_map = (
+        scanner.data.pos_w[:, 2].unsqueeze(1)
+        - scanner.data.ray_hits_w[..., 2]
+        - height_scan_offset
+    )
+
+    # Handle invalid hits
+    height_map = torch.where(torch.isnan(height_map), torch.full_like(height_map, min_height), height_map)
+    height_map = torch.where(torch.isinf(height_map), torch.full_like(height_map, min_height), height_map)
+
+    # Build output: (num_envs, num_rays, 3) with (x_local, y_local, height)
+    map_scan = torch.zeros(num_envs, num_rays, 3, device=env.device)
+    map_scan[:, :, 0] = env._height_map_grid_x
+    map_scan[:, :, 1] = env._height_map_grid_y
+    map_scan[:, :, 2] = height_map
+
+    return map_scan.reshape(num_envs, -1)
+
+
+def videomimic_height_map_obs(
+    env: WholeBodyTrackingManager,
+    height_scan_offset: float = 0.5,
+    min_height: float = -5.0,
+) -> torch.Tensor:
+    """VideoMimic-style heightmap obs.
+
+    Reads from the ``videomimic_height_map_scanner`` RayCaster sensor. Grid
+    shape / resolution / channel count come from
+    ``SimulatorInitConfig.videomimic_height_map``:
+
+    - ``num_channels == 1``: returns height only, shape ``(num_envs, H*W)``.
+    - ``num_channels == 3``: returns ``(x_local, y_local, height)`` per grid
+      point, shape ``(num_envs, H*W*3)``.
+
+    height = sensor_z - ray_hit_z - offset (positive = above ground).
+    """
+    scanner = env.simulator.scene.sensors["videomimic_height_map_scanner"]
+
+    height_map = (
+        scanner.data.pos_w[:, 2].unsqueeze(1)
+        - scanner.data.ray_hits_w[..., 2]
+        - height_scan_offset
+    )
+
+    height_map = torch.where(torch.isnan(height_map), torch.full_like(height_map, min_height), height_map)
+    height_map = torch.where(torch.isinf(height_map), torch.full_like(height_map, min_height), height_map)
+
+    vm_cfg = env.simulator.simulator_config.videomimic_height_map
+    if vm_cfg.num_channels == 1:
+        return height_map
+
+    if vm_cfg.num_channels != 3:
+        raise ValueError(
+            f"videomimic_height_map.num_channels must be 1 or 3, got {vm_cfg.num_channels}"
+        )
+
+    # xyz variant — build local (x, y) grid once, same convention as height_map_obs.
+    if not hasattr(env, "_videomimic_height_map_grid_xy"):
+        cfg = scanner.cfg.pattern_cfg
+        x = torch.arange(
+            start=-cfg.size[0] / 2, end=cfg.size[0] / 2 + 1.0e-9,
+            step=cfg.resolution, device=env.device,
+        )
+        y = torch.arange(
+            start=-cfg.size[1] / 2, end=cfg.size[1] / 2 + 1.0e-9,
+            step=cfg.resolution, device=env.device,
+        )
+        grid_x, grid_y = torch.meshgrid(x, y, indexing="xy")
+        env._videomimic_height_map_grid_x = grid_x.flatten()
+        env._videomimic_height_map_grid_y = grid_y.flatten()
+        env._videomimic_height_map_grid_xy = True
+
+    num_envs = env.num_envs
+    num_rays = env._videomimic_height_map_grid_x.shape[0]
+    map_scan = torch.zeros(num_envs, num_rays, 3, device=env.device)
+    map_scan[:, :, 0] = env._videomimic_height_map_grid_x
+    map_scan[:, :, 1] = env._videomimic_height_map_grid_y
+    map_scan[:, :, 2] = height_map
+    return map_scan.reshape(num_envs, -1)
+
+
+#########################################################################################################
+## Foot contact observations (intended for critic-only / privileged input)
+#########################################################################################################
+
+
+def _foot_contact_body_indexes(env: WholeBodyTrackingManager) -> torch.Tensor:
+    """Cache and return body indexes for the two foot contact points."""
+    if not hasattr(env, "_foot_contact_body_indexes"):
+        body_names = env.simulator.body_names
+        env._foot_contact_body_indexes = torch.tensor(
+            [body_names.index("left_foot_contact_point"), body_names.index("right_foot_contact_point")],
+            dtype=torch.long,
+            device=env.device,
+        )
+    return env._foot_contact_body_indexes
+
+
+def actual_foot_contact(env: WholeBodyTrackingManager, threshold: float = 1.0) -> torch.Tensor:
+    """Actual robot foot contact as binary (left, right), shape (num_envs, 2).
+
+    Uses ``contact_forces_history`` max-over-history (same pattern as
+    :class:`UndesiredContacts`) so brief contact losses between physics substeps
+    are still captured.
+    """
+    indexes = _foot_contact_body_indexes(env)
+    # (num_envs, history_length, num_bodies, 3) → (num_envs, 2) float in {0, 1}
+    net_forces = env.simulator.contact_forces_history[:, :, indexes, :]
+    force_norm = torch.norm(net_forces, dim=-1)
+    contact = torch.max(force_norm, dim=1)[0] > threshold
+    return contact.float()
+
+
+def target_foot_contact(env: WholeBodyTrackingManager) -> torch.Tensor:
+    """Target foot contact from motion data, shape (num_envs, 2) in {0.0, 1.0}."""
+    motion_command = _get_motion_command_and_assert_type(env)
+    return motion_command.motion_foot_contact

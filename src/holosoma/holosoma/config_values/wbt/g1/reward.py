@@ -114,4 +114,23 @@ g1_29dof_wbt_reward_w_object = RewardManagerCfg(
     }
 )
 
-__all__ = ["g1_29dof_wbt_fast_sac_reward", "g1_29dof_wbt_reward", "g1_29dof_wbt_reward_w_object"]
+# Adds VideoMimic-style foot_contact_match reward on top of the base config.
+# Uses FootContactMatch which returns Σ(actual == target) in {0, 1, 2} per env;
+# weight 0.5 keeps magnitude comparable to the existing motion tracking terms.
+g1_29dof_wbt_reward_foot_contact = RewardManagerCfg(
+    terms={
+        **g1_29dof_wbt_reward.terms,
+        "foot_contact_match": RewardTermCfg(
+            func="holosoma.managers.reward.terms.wbt:FootContactMatch",
+            params={"threshold": 1.0},
+            weight=0.5,
+        ),
+    }
+)
+
+__all__ = [
+    "g1_29dof_wbt_fast_sac_reward",
+    "g1_29dof_wbt_reward",
+    "g1_29dof_wbt_reward_foot_contact",
+    "g1_29dof_wbt_reward_w_object",
+]

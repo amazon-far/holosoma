@@ -180,6 +180,45 @@ def object_global_ref_orientation_error_exp(env: WholeBodyTrackingManager, sigma
 # ================================================================================================
 
 
+class FootContactMatch(RewardTermBase):
+    """VideoMimic-style foot contact matching reward.
+
+    Returns the number of feet (left, right) whose actual contact state matches
+    the target contact state from the motion data: ``Σ (actual == target)``.
+    Range per env: ``{0, 1, 2}`` before scaling by ``weight``.
+
+    - Actual contact = ``contact_forces_history[ankle_roll_link].norm() > threshold``
+      (max over history dim, matching :class:`UndesiredContacts`).
+    - Target contact = ``motion_command.motion_foot_contact`` (from the npz
+      ``foot_contact`` field, binary 0.0/1.0).
+    """
+
+    def __init__(self, cfg: RewardTermCfg, env: WholeBodyTrackingManager):
+        super().__init__(cfg, env)
+        self.env = env
+        body_names = env.simulator.body_names  # type: ignore[attr-defined]
+        self.foot_body_indexes = torch.tensor(
+            [body_names.index("left_foot_contact_point"), body_names.index("right_foot_contact_point")],
+            dtype=torch.long,
+            device=env.device,
+        )
+        self.threshold = cfg.params.get("threshold", 1.0)
+
+    def __call__(self, env: WholeBodyTrackingManager, **kwargs) -> torch.Tensor:
+        # Actual foot contact: (num_envs, 2) bool
+        net_forces = env.simulator.contact_forces_history[:, :, self.foot_body_indexes, :]  # type: ignore[attr-defined]
+        actual_contact = torch.max(torch.norm(net_forces, dim=-1), dim=1)[0] > self.threshold
+
+        # Target foot contact: (num_envs, 2) float in {0.0, 1.0}
+        motion_command = _get_motion_command_and_assert_type(env)
+        target_contact = motion_command.motion_foot_contact > 0.5  # to bool for equality
+
+        return torch.sum((actual_contact == target_contact).float(), dim=-1)
+
+    def reset(self, env_ids: torch.Tensor | None = None) -> None:
+        pass
+
+
 class UndesiredContacts(RewardTermBase):
     def __init__(self, cfg: RewardTermCfg, env: WholeBodyTrackingManager):
         super().__init__(cfg, env)

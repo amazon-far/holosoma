@@ -114,6 +114,29 @@ class MotionEncoderConfig:
 
 
 @dataclass(frozen=True)
+class HeightMapEncoderConfig:
+    """Configuration for height map encoder (CNN + CrossAttention)."""
+
+    latent_dim: int = 64
+    """Latent dimension for the encoder output and attention."""
+
+    num_heads: int = 16
+    """Number of heads for multi-head attention."""
+
+    map_height: int = 11
+    """Height of the height map grid."""
+
+    map_width: int = 17
+    """Width of the height map grid."""
+
+    num_channels: int = 3
+    """Number of channels per grid point (default: x, y, height)."""
+
+    conv_hidden_channels: int = 16
+    """Hidden channels in Conv2D feature extractor."""
+
+
+@dataclass(frozen=True)
 class PPOModuleDictConfig:
     """Configuration for PPO module dictionary."""
 
@@ -122,9 +145,12 @@ class PPOModuleDictConfig:
 
     critic: ModuleConfig
     """Critic module configuration."""
-    
+
     motion_encoder: MotionEncoderConfig | None = None
     """Motion encoder configuration (optional, for future motion targets)."""
+
+    height_map_encoder: HeightMapEncoderConfig | None = None
+    """Height map encoder configuration (optional, for terrain perception)."""
 
 
 @dataclass(frozen=True)

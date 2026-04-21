@@ -88,6 +88,21 @@ def run_eval_with_tyro(
         algo.export(onnx_file_path=exported_onnx_path)  # type: ignore[attr-defined]
         logger.info(f"Exported policy as onnx to: {exported_onnx_path}")
 
+    # Add debug logging wrapper if save_debug is enabled
+    if save_debug:
+        original_rollout_step = algo._rollout_step
+        step_count = [0]
+        
+        def logged_rollout_step(obs_dict):
+            if step_count[0] < 5:
+                actor_obs = obs_dict.get("actor_obs")
+                if actor_obs is not None:
+                    logger.info(f"[Isaac Timestep {step_count[0]}] actor_obs shape: {actor_obs.shape}, mean: {actor_obs.mean().item():.6f}, std: {actor_obs.std().item():.6f}")
+                step_count[0] += 1
+            return original_rollout_step(obs_dict)
+        
+        algo._rollout_step = logged_rollout_step
+
     # Custom evaluation loop to collect motion data and run for 1 loop only
     logger.info("Starting evaluation with motion data collection (1 loop only)...")
     
@@ -146,7 +161,14 @@ def run_eval_with_tyro(
             # Get actions from policy
             if hasattr(algo, 'actor_obs_keys'):
                 actor_obs = torch.cat([obs_dict[k] for k in algo.actor_obs_keys], dim=1)
-                actions = eval_policy({"actor_obs": actor_obs})
+                policy_state_dict = {"actor_obs": actor_obs}
+                # Add future_motion_targets if using motion encoder
+                if hasattr(algo, 'use_motion_encoder') and algo.use_motion_encoder and "future_motion_targets" in obs_dict:
+                    policy_state_dict["future_motion_targets"] = obs_dict["future_motion_targets"]
+                # Add height_map_obs if using height map encoder
+                if hasattr(algo, 'use_height_map') and algo.use_height_map and "height_map_obs" in obs_dict:
+                    policy_state_dict["height_map_obs"] = obs_dict["height_map_obs"]
+                actions = eval_policy(policy_state_dict)
             else:
                 actions = eval_policy(obs_dict)
         
@@ -208,7 +230,6 @@ def run_eval_with_tyro(
             motion_ended = True
             logger.info(f"time_out_buf triggered at step {step}")
 
-
         if motion_ended:
             logger.info(f"Motion ended at step {step}")
             break
@@ -245,6 +266,21 @@ def run_eval_with_tyro(
         logger.info(f"  - Root trans shape: {root_trans_array.shape}")
         logger.info(f"  - Root ori shape: {root_ori_array.shape}")
         logger.info(f"  - DOF pos shape: {dof_pos_array.shape}")
+
+    # Save debug log (only when save_debug=True and not already saved); use same debug_env as set above
+    if save_debug and hasattr(debug_env, '_debug_future_motion_log') and debug_env._debug_future_motion_log is not None:
+        if not getattr(debug_env, '_debug_log_saved', False):
+            import json
+            debug_log_path = eval_log_dir / "debug_future_motion_isaac.json"
+            log_list = debug_env._debug_future_motion_log
+            with open(debug_log_path, 'w') as f:
+                json.dump(log_list, f, indent=2)
+            if len(log_list) > 0:
+                logger.info(f"Debug log saved to: {debug_log_path} ({len(log_list)} entries)")
+            else:
+                logger.warning(f"Debug log saved to: {debug_log_path} (empty - future_motion_targets may not have been computed during eval)")
+        else:
+            logger.info(f"Debug log was already auto-saved at timestep 200")
 
     # Cleanup simulation app
     if simulation_app:

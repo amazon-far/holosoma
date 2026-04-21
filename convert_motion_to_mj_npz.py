@@ -771,8 +771,8 @@ def convert_motion_to_mj_npz(
         body_quat_w=body_quat_w,
         body_lin_vel_w=body_lin_vel_w,
         body_ang_vel_w=body_ang_vel_w,
-        joint_names=np.array(joint_names_out, dtype=object),
-        body_names=np.array(body_names, dtype=object),
+        joint_names=np.array(joint_names_out, dtype=str),
+        body_names=np.array(body_names, dtype=str),
     )
     print("\nConversion complete.")
     print(f"  joint_pos: {joint_pos.shape}")

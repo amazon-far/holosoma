@@ -388,6 +388,43 @@ class IsaacSim(BaseSimulator):
             self._height_scanner = RayCaster(height_scanner_config)
             self.scene.sensors["height_scanner"] = self._height_scanner
 
+            # Height map scanner for terrain perception (CNN + CrossAttention)
+            # Matches KraftonLab: 17x11 grid, update every 5 policy steps, debug_vis=False
+            physics_dt = 1.0 / self.simulator_config.sim.fps
+            policy_dt = physics_dt * self.simulator_config.sim.control_decimation
+            height_map_update_decimation = 5  # relative to policy steps
+            height_map_scanner_config = RayCasterCfg(
+                prim_path=f"/World/envs/env_.*/Robot/{self.robot_config.body_names[0]}",
+                offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
+                attach_yaw_only=True,
+                pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
+                debug_vis=False,
+                mesh_prim_paths=[terrain_prim_path],
+                update_period=policy_dt * height_map_update_decimation,
+            )
+            self._height_map_scanner = RayCaster(height_map_scanner_config)
+            self.scene.sensors["height_map_scanner"] = self._height_map_scanner
+
+            # VideoMimic-style heightmap scanner. Grid shape / resolution /
+            # channel count come from ``SimulatorInitConfig.videomimic_height_map``
+            # so a single config entry drives both the raycaster size and the
+            # observation term's output channels.
+            vm_cfg = self.simulator_config.videomimic_height_map
+            vm_size_x = (vm_cfg.map_width - 1) * vm_cfg.resolution
+            vm_size_y = (vm_cfg.map_height - 1) * vm_cfg.resolution
+            videomimic_height_map_scanner_config = RayCasterCfg(
+                prim_path=f"/World/envs/env_.*/Robot/{self.robot_config.body_names[0]}",
+                offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
+                attach_yaw_only=True,
+                pattern_cfg=patterns.GridPatternCfg(resolution=vm_cfg.resolution, size=[vm_size_x, vm_size_y]),
+                debug_vis=False,
+                mesh_prim_paths=[terrain_prim_path],
+                update_period=policy_dt * height_map_update_decimation,
+            )
+            self._videomimic_height_map_scanner = RayCaster(videomimic_height_map_scanner_config)
+            self.scene.sensors["videomimic_height_map_scanner"] = self._videomimic_height_map_scanner
+
+
         # clone, filter, and replicate
         self.scene.clone_environments(copy_from_source=False)
 
@@ -486,6 +523,7 @@ class IsaacSim(BaseSimulator):
             from isaacsim.util.debug_draw import _debug_draw
 
             self.draw = _debug_draw.acquire_debug_draw_interface()
+
         else:
             self.draw = None
 
@@ -810,6 +848,20 @@ class IsaacSim(BaseSimulator):
     def draw_debug_viz(self):
         if self.virtual_gantry:
             self.virtual_gantry.draw_debug()
+        # Draw height map scanner ray hits
+        if hasattr(self, '_height_map_scanner') and self._height_map_scanner is not None:
+            ray_hits = self._height_map_scanner.data.ray_hits_w  # (num_envs, num_rays, 3)
+            env_id = 0
+            hits = ray_hits[env_id]  # (num_rays, 3)
+            # Filter out invalid hits (NaN/Inf)
+            valid = torch.isfinite(hits).all(dim=-1)
+            valid_hits = hits[valid]
+            if valid_hits.shape[0] > 0:
+                points = [tuple(p.detach().cpu().tolist()) for p in valid_hits]
+                colors = [[0.0, 1.0, 1.0, 1.0]] * len(points)  # cyan
+                sizes = [8.0] * len(points)
+                if hasattr(self, 'draw') and self.draw:
+                    self.draw.draw_points(points, colors, sizes)
 
     def simulate_at_each_physics_step(self):
         self._sim_step_counter += 1

@@ -1,4 +1,4 @@
-"""Encoder modules for processing sequential data like motion targets and history."""
+"""Encoder modules for processing sequential data like motion targets and height maps."""
 
 from __future__ import annotations
 
@@ -150,3 +150,153 @@ class Conv1DEncoder(nn.Module):
         
         # Final output layer
         return self.output_layer(x)  # [batch_size, output_dim]
+
+
+class HeightMapEncoder(nn.Module):
+    """Height map encoder using CNN + Cross-Attention.
+
+    Extracts local spatial features from a height map via Conv2D, then uses
+    multi-head cross-attention where proprioception is the query and height map
+    features are key/value.
+
+    Based on KraftonLab's RayEncoder architecture.
+
+    Architecture:
+        1. Conv2D extracts spatial features from height channel → (B, latent_dim-C, H, W)
+        2. Concatenate with original channels → (B, latent_dim, H, W)
+        3. Flatten to sequence → (B, H*W, latent_dim) = Key, Value
+        4. Project proprioception → (B, 1, latent_dim) = Query
+        5. MultiheadAttention(Q, K, V) → (B, latent_dim)
+    """
+
+    def __init__(
+        self,
+        proprio_dim: int,
+        latent_dim: int = 64,
+        num_heads: int = 16,
+        map_height: int = 11,
+        map_width: int = 17,
+        num_channels: int = 3,
+        conv_hidden_channels: int = 16,
+    ):
+        super().__init__()
+
+        if latent_dim % num_heads != 0:
+            raise ValueError(f"latent_dim {latent_dim} must be divisible by num_heads {num_heads}")
+        if latent_dim <= num_channels:
+            raise ValueError(f"latent_dim {latent_dim} must be > num_channels {num_channels}")
+
+        self.latent_dim = latent_dim
+        self.map_height = map_height
+        self.map_width = map_width
+        self.num_channels = num_channels
+
+        # Conv2D feature extractor on height channel
+        self.conv = nn.Sequential(
+            nn.Conv2d(1, conv_hidden_channels, kernel_size=5, stride=1, padding=2),
+            nn.ELU(),
+            nn.Conv2d(conv_hidden_channels, latent_dim - num_channels, kernel_size=5, stride=1, padding=2),
+            nn.ELU(),
+        )
+
+        # Proprioception → query projection
+        self.linear = nn.Linear(proprio_dim, latent_dim)
+
+        # Multi-head cross-attention
+        self.mha = nn.MultiheadAttention(
+            embed_dim=latent_dim,
+            num_heads=num_heads,
+            batch_first=True,
+        )
+        self.ln_q = nn.LayerNorm(latent_dim)
+        self.ln_kv = nn.LayerNorm(latent_dim)
+
+    def forward(self, height_map: torch.Tensor, proprioception: torch.Tensor) -> torch.Tensor:
+        """Forward pass.
+
+        Args:
+            height_map: Flattened height map (B, H*W*C) or (B, H, W, C).
+            proprioception: Proprioceptive observation (B, proprio_dim).
+                This should NOT include future_motion_targets.
+
+        Returns:
+            Latent encoding (B, latent_dim).
+        """
+        B = height_map.shape[0]
+
+        # Reshape to (B, H, W, C) if flattened
+        if height_map.dim() == 2:
+            height_map = height_map.view(B, self.map_height, self.map_width, self.num_channels)
+
+        # (B, H, W, C) → (B, C, H, W)
+        height_map = height_map.permute(0, 3, 1, 2)
+
+        # Extract height channel and compute CNN features
+        height = height_map[:, -1:, :, :]  # (B, 1, H, W) - last channel is height
+        height_feature = self.conv(height)  # (B, latent_dim - C, H, W)
+
+        # Concatenate original channels with CNN features
+        local_features = torch.cat([height_map, height_feature], dim=1)  # (B, latent_dim, H, W)
+
+        # Flatten spatial dims to sequence
+        local_features_seq = local_features.flatten(start_dim=2).permute(0, 2, 1)  # (B, H*W, latent_dim)
+
+        # Cross-attention: proprio (query) attends to height map features (key/value)
+        query = self.linear(proprioception).unsqueeze(1)  # (B, 1, latent_dim)
+        encoding, _ = self.mha(
+            self.ln_q(query),
+            self.ln_kv(local_features_seq),
+            self.ln_kv(local_features_seq),
+        )  # (B, 1, latent_dim)
+
+        return encoding.squeeze(1)  # (B, latent_dim)
+
+
+class HeightMapEncoderVideoMimic(nn.Module):
+    """VideoMimic-style height map encoder.
+
+    Flattens the heightmap observation, projects with a single Linear to
+    ``latent_dim``, then applies a learnable per-feature attention gate
+    (element-wise multiply with a learnable parameter initialised to zero).
+    The resulting latent is meant to be concatenated with proprio (and
+    other) observations by the downstream MLP.
+
+    Reference: VideoMimic ``rsl_rl/modules/actor_critic.py``
+    (``FlattenThenEmbedMLPWithAttention``). The VideoMimic default for the
+    actor's ``terrain_height`` head is ``output_dim=415`` (see
+    ``videomimic_gym/legged_gym/envs/g1/g1_deepmimic_config.py``); VideoMimic
+    does not model "channels" separately, it just flattens the raw obs.
+
+    Architecture:
+        (B, input_dim)  -- Linear(input_dim, latent_dim)
+                        -- * attention (learnable parameter, init=0)
+                        -> (B, latent_dim)
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        latent_dim: int = 415,
+    ):
+        super().__init__()
+
+        self.input_dim = input_dim
+        self.latent_dim = latent_dim
+
+        self.flatten = nn.Flatten()
+        self.embed = nn.Linear(input_dim, latent_dim)
+        # Learnable per-feature attention gate (initialised to zero, matches VideoMimic).
+        self.attention = nn.Parameter(torch.zeros(latent_dim))
+
+    def forward(self, height_map: torch.Tensor) -> torch.Tensor:
+        """Forward pass.
+
+        Args:
+            height_map: Height map obs, either already flat ``(B, input_dim)``
+                or any shape that flattens to ``input_dim``.
+
+        Returns:
+            Latent encoding ``(B, latent_dim)``.
+        """
+        x = self.flatten(height_map)
+        return self.embed(x) * self.attention

@@ -5,6 +5,7 @@ from holosoma.config_values.loco.t1.reward import t1_29dof_loco, t1_29dof_loco_f
 from holosoma.config_values.wbt.g1.reward import (
     g1_29dof_wbt_fast_sac_reward,
     g1_29dof_wbt_reward,
+    g1_29dof_wbt_reward_foot_contact,
     g1_29dof_wbt_reward_w_object,
 )
 
