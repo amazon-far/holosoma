@@ -122,6 +122,38 @@ class BaseTask:
                     new_term = replace(terrain_config.terrain_term, obj_file_path=motion_file)
                     terrain_config = replace(terrain_config, terrain_term=new_term)
 
+        # Auto-sync max_motions → {obj_max_tiles, pool_size} when bind_terrain_tiles
+        # is active, so the user only has to set max_motions from the CLI.
+        if (
+            terrain_config.terrain_term.mesh_type == "load_obj"
+            and terrain_config.terrain_term.obj_dir
+            and "motion_command" in command_config.setup_terms
+        ):
+            motion_term = command_config.setup_terms["motion_command"]
+            motion_cfg = motion_term.params.get("motion_config")
+            if motion_cfg is not None and getattr(motion_cfg, "bind_terrain_tiles", False):
+                max_motions = int(getattr(motion_cfg, "max_motions", 0) or 0)
+                if max_motions > 0:
+                    if terrain_config.terrain_term.obj_max_tiles != max_motions:
+                        print(
+                            f"[INFO] Syncing terrain.obj_max_tiles <- max_motions={max_motions}"
+                        )
+                        new_term = replace(
+                            terrain_config.terrain_term, obj_max_tiles=max_motions
+                        )
+                        terrain_config = replace(terrain_config, terrain_term=new_term)
+                    if motion_cfg.pool_size != max_motions:
+                        print(
+                            f"[INFO] Syncing motion.pool_size <- max_motions={max_motions}"
+                        )
+                        new_motion_cfg = replace(motion_cfg, pool_size=max_motions)
+                        new_params = dict(motion_term.params)
+                        new_params["motion_config"] = new_motion_cfg
+                        new_motion_term = replace(motion_term, params=new_params)
+                        new_setup = dict(command_config.setup_terms)
+                        new_setup["motion_command"] = new_motion_term
+                        command_config = replace(command_config, setup_terms=new_setup)
+
         self.terrain_manager = TerrainManager(terrain_config, self, device)
         self.simulator: BaseSimulator = SimulatorClass(
             tyro_config=full_sim_config, terrain_manager=self.terrain_manager, device=device

@@ -6,7 +6,7 @@ python src/holosoma/holosoma/train_agent.py \
     logger:wandb \
     --logger.entity draftrec \
     --logger.project MotionTracking \
-    --logger.group=statue_wbt \
+    --logger.group=VideoMimic \
     --logger.name=g1_videomimic_stair \
     --terrain.terrain-term.obj-file-path="holosoma/data/motions/g1_29dof/whole_body_tracking/videomimic_captures_29dof/holosoma_stairs_cam01_frame_0_140_subsample_1/motion_for_holosoma_with_mesh.npz" \
     --terrain.terrain-term.tile-mesh False \
