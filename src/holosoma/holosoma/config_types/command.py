@@ -63,6 +63,11 @@ class NoiseToInitialPoseConfig:
     object_pos: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     """noise scale for object position x, y, z."""
 
+    init_root_offset: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
+    """Deterministic root position offset (x, y, z in meters) added to the motion-derived
+    init pose on every reset. Unlike ``root_pos`` which is symmetric random noise, this is
+    a constant shift — e.g. ``[0.0, 0.0, 0.2]`` spawns the robot 20 cm above the motion root."""
+
 
 @dataclass(frozen=True)
 class MotionConfig:

@@ -448,6 +448,10 @@ class MotionCommand(CommandTermBase):
         target_root_pos = root_pos + (
             torch.rand(root_pos.shape, device=self.device) - 0.5
         ) * 2 * root_pos_noise.unsqueeze(0)  # (num_envs, 3)
+        init_root_offset = torch.tensor(
+            self.init_pose_cfg.init_root_offset, device=self.device, dtype=target_root_pos.dtype
+        )
+        target_root_pos = target_root_pos + init_root_offset
 
         # 1.2.4 root_rot
         rand_sample_rpy = (torch.rand((len(env_ids), 3), device=self.device) - 0.5) * 2 * root_rot_noise_rpy
@@ -1590,6 +1594,10 @@ class MultiMotionCommand(CommandTermBase):
         target_root_pos = root_pos + (
             torch.rand(root_pos.shape, device=self.device) - 0.5
         ) * 2 * root_pos_noise.unsqueeze(0)
+        init_root_offset = torch.tensor(
+            self.init_pose_cfg.init_root_offset, device=self.device, dtype=target_root_pos.dtype
+        )
+        target_root_pos = target_root_pos + init_root_offset
 
         # When binding motions to terrain tiles, place the robot on the correct
         # tile by adding the env_origin of that tile. Without this, the robot
