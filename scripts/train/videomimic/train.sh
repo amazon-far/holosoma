@@ -15,7 +15,7 @@ python src/holosoma/holosoma/train_agent.py \
     --terrain.terrain-term.env-origin-in-tile="[0.0, 0.0, 0.0]" \
     --command.setup_terms.motion_command.params.motion_config.motion_dir="$MOTION_DIR" \
     --command.setup_terms.motion_command.params.motion_config.max_motions 130 \
-    --training.num_envs 8192 \
+    --training.num_envs 4096 \
     --simulator.config.scene.env_spacing=0.0 \
     --algo.config.save_interval 1000 \
     --algo.config.eval_interval 0

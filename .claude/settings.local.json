@@ -6,7 +6,11 @@
       "Bash(wc:*)",
       "Bash(chmod:*)",
       "Bash(bash scripts/convert_all_motions.sh:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(git rebase *)",
+      "Bash(git pull *)",
+      "Bash(git push *)",
+      "Bash(git reflog *)"
     ]
   }
 }

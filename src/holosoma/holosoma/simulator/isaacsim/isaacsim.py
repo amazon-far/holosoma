@@ -80,10 +80,10 @@ class IsaacSim(BaseSimulator):
                 # scans) at high num_envs. PhysX defaults are easily exceeded when every
                 # env simultaneously contacts a non-planar mesh.
                 gpu_max_rigid_patch_count=2**21,  # 2M patches (default ~5*2**15 = 160K, bumped from 327K)
-                gpu_collision_stack_size=2**30,  # 1 GB (default 2**26 = 64 MB)
-                gpu_max_rigid_contact_count=2**24,  # 16M (default 2**23 = 8M)
-                gpu_found_lost_pairs_capacity=2**22,  # default 2**21
-                gpu_heap_capacity=2**27,  # 128 MB (default 2**26)
+                gpu_collision_stack_size=2**31,  # 2 GB (default 2**26 = 64 MB); videomimic multi-mesh hits ~1.4 GB
+                gpu_max_rigid_contact_count=2**25,  # 32M (default 2**23 = 8M)
+                gpu_found_lost_pairs_capacity=2**23,  # default 2**21
+                gpu_heap_capacity=2**28,  # 256 MB (default 2**26)
             ),
             # Global physics material, can be overridden by the individual articulation
             # Can be inspected by:
