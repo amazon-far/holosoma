@@ -47,6 +47,13 @@ def _write_scene_stl(vertices, faces, stl_path):
 def _build_model_with_scene(robot_xml_path, scene_verts, scene_faces, tmpdir):
     """Build a MuJoCo model that includes both the robot and scene mesh."""
     stl_path = str(Path(tmpdir) / "scene_mesh.stl")
+    # MuJoCo STL face limit is 200000; decimate if needed
+    MAX_FACES = 190000
+    if len(scene_faces) > MAX_FACES:
+        print(f"  Decimating scene mesh: {len(scene_faces)} -> {MAX_FACES} faces")
+        idx = np.random.default_rng(42).choice(len(scene_faces), MAX_FACES, replace=False)
+        scene_faces = scene_faces[idx]
+
     _write_scene_stl(scene_verts, scene_faces, stl_path)
 
     # Load robot XML content and get its directory for asset resolution

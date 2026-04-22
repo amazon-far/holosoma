@@ -16,14 +16,6 @@ from holosoma.config_values.wbt.g1.experiment import (
     g1_29dof_wbt_w_object,
 )
 from holosoma.config_values.wbt.g1.phuma_experiment import g1_29dof_phuma, g1_29dof_phuma_future_motion
-from holosoma.config_values.wbt.statue.experiment import (
-    statue_v0_1_wbt_compliant,
-    statue_v0_1_wbt_future_motion,
-    statue_v0_1_wbt_stiff,
-)
-from holosoma.config_values.wbt.statue_v1.experiment import (
-    statue_v1_rmd_wbt_future_motion,
-)
 
 DEFAULTS = {
     "g1_29dof": g1_29dof,
@@ -39,10 +31,6 @@ DEFAULTS = {
     "g1_29dof_wbt_future_motion_heightmap_videomimic": g1_29dof_wbt_future_motion_heightmap_videomimic,
     "g1_29dof_wbt_future_motion_heightmap_videomimic_foot_contact": g1_29dof_wbt_future_motion_heightmap_videomimic_foot_contact,
     "g1_29dof_wbt_future_motion_no_key_body": g1_29dof_wbt_future_motion_no_key_body,
-    "statue_v0_1_wbt_stiff": statue_v0_1_wbt_stiff,
-    "statue_v0_1_wbt_compliant": statue_v0_1_wbt_compliant,
-    "statue_v0_1_wbt_future_motion": statue_v0_1_wbt_future_motion,
-    "statue_v1_rmd_wbt_future_motion": statue_v1_rmd_wbt_future_motion,
     "g1_29dof_phuma": g1_29dof_phuma,
     "g1_29dof_phuma_future_motion": g1_29dof_phuma_future_motion,
 }

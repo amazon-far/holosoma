@@ -60,15 +60,17 @@ class Terrain(TerrainInterface):
         self._mesh: trimesh.Trimesh = mesh
 
     def _initialize_obj_config(self) -> trimesh.Trimesh:
+        if self._cfg.obj_dir:
+            return self._initialize_obj_config_multi()
+        return self._initialize_obj_config_single()
+
+    def _initialize_obj_config_single(self) -> trimesh.Trimesh:
         terrain_path = pathlib.Path(resolve_data_file_path(self._cfg.obj_file_path))
         if not terrain_path.exists():
             raise FileNotFoundError(f"Terrain file not found: {terrain_path}")
         print(f"[INFO] Loading custom terrain from: {terrain_path}")
 
-        if terrain_path.suffix == ".npz":
-            base = self._load_mesh_from_npz(terrain_path)
-        else:
-            base = self._load_mesh_from_obj(terrain_path)
+        base = self._load_mesh_auto(terrain_path)
 
         print(
             f"[INFO] Loaded terrain mesh with {len(base.vertices)} vertices and {len(base.faces)} faces"
@@ -90,6 +92,99 @@ class Terrain(TerrainInterface):
                 tiles.append(tile)
 
         return trimesh.util.concatenate(tiles)
+
+    def _initialize_obj_config_multi(self) -> trimesh.Trimesh:
+        """Load one mesh per file in `obj_dir` as a separate tile column."""
+        obj_dir = pathlib.Path(resolve_data_file_path(self._cfg.obj_dir))
+        if not obj_dir.is_dir():
+            raise FileNotFoundError(f"Terrain obj_dir not found or not a directory: {obj_dir}")
+
+        mesh_paths = sorted(
+            p for p in obj_dir.rglob("*.npz") if p.is_file()
+        ) + sorted(
+            p for p in obj_dir.rglob("*.obj") if p.is_file()
+        )
+        if not mesh_paths:
+            raise FileNotFoundError(f"No .npz or .obj mesh files found under {obj_dir}")
+
+        cap = int(self._cfg.obj_max_tiles)
+        if cap > 0 and len(mesh_paths) > cap:
+            print(f"[INFO] Capping per-tile meshes: {len(mesh_paths)} -> {cap}")
+            mesh_paths = mesh_paths[:cap]
+
+        print(f"[INFO] Loading {len(mesh_paths)} per-tile meshes from: {obj_dir}")
+        bases: list[trimesh.Trimesh] = [self._load_mesh_auto(p) for p in mesh_paths]
+        self._obj_mesh_paths = [str(p) for p in mesh_paths]
+
+        max_faces = int(self._cfg.obj_max_faces_per_tile)
+        if max_faces > 0:
+            # Use quadric decimation from open3d so we keep a continuous surface
+            # (random face sampling leaves holes that USD renders as point clouds).
+            import open3d as o3d
+
+            total_in, total_out = 0, 0
+            for i, m in enumerate(bases):
+                total_in += len(m.faces)
+                if len(m.faces) > max_faces:
+                    o3d_mesh = o3d.geometry.TriangleMesh(
+                        o3d.utility.Vector3dVector(np.asarray(m.vertices, dtype=np.float64)),
+                        o3d.utility.Vector3iVector(np.asarray(m.faces, dtype=np.int32)),
+                    )
+                    o3d_mesh = o3d_mesh.simplify_quadric_decimation(
+                        target_number_of_triangles=max_faces
+                    )
+                    bases[i] = trimesh.Trimesh(
+                        vertices=np.asarray(o3d_mesh.vertices),
+                        faces=np.asarray(o3d_mesh.triangles),
+                        process=False,
+                    )
+                total_out += len(bases[i].faces)
+            print(
+                f"[INFO] Decimated per-tile meshes: {total_in} -> {total_out} faces "
+                f"(cap={max_faces} per tile, quadric)"
+            )
+
+        # Common grid stride = max bbox span across all meshes (with gap)
+        gap = 1e-4
+        max_span = np.zeros(3)
+        for m in bases:
+            span = m.bounds[1] - m.bounds[0]
+            max_span = np.maximum(max_span, span)
+        stride = max_span + gap
+        self._obj_tile_stride = stride
+
+        n_cols = len(bases)
+        n_rows = self._num_rows
+        # Override _num_cols so env_origin grid computations line up.
+        self._num_cols = n_cols
+
+        print(f"[INFO] Multi-mesh grid: {n_rows} rows x {n_cols} cols (one column per mesh)")
+
+        tiles = []
+        total = n_rows * n_cols
+        for r in range(n_rows):
+            for c, base in enumerate(bases):
+                tile = base.copy()
+                tile.apply_translation([c * stride[0], r * stride[1], 0.0])
+                tiles.append(tile)
+            print(f"[INFO] Tiling progress: {(r + 1) * n_cols}/{total}", flush=True)
+
+        print(f"[INFO] Concatenating {len(tiles)} tiles into one mesh...", flush=True)
+        merged = trimesh.util.concatenate(tiles)
+        # Ensure normals are populated so USD shades the surface properly.
+        _ = merged.face_normals
+        _ = merged.vertex_normals
+        print(
+            f"[INFO] Merged terrain mesh: {len(merged.vertices)} verts, "
+            f"{len(merged.faces)} faces",
+            flush=True,
+        )
+        return merged
+
+    def _load_mesh_auto(self, path: pathlib.Path) -> trimesh.Trimesh:
+        if path.suffix == ".npz":
+            return self._load_mesh_from_npz(path)
+        return self._load_mesh_from_obj(path)
 
     @staticmethod
     def _load_mesh_from_npz(path: pathlib.Path) -> trimesh.Trimesh:
@@ -192,12 +287,17 @@ class Terrain(TerrainInterface):
         if not hasattr(self, "_mesh"):
             raise RuntimeError("Mesh must be initialized before computing load_obj env origins.")
 
-        if not self._cfg.tile_mesh:
+        # Multi-mesh mode always tiles in num_rows x num_cols grid.
+        is_multi = bool(self._cfg.obj_dir)
+
+        if not is_multi and not self._cfg.tile_mesh:
             offset = np.array(self._cfg.env_origin_in_tile or [0.0, 0.0, 0.0], dtype=np.float32)
             return offset.reshape(1, 1, 3)
 
-        if self._cfg.env_origin_in_tile is not None:
-            offset = np.array(self._cfg.env_origin_in_tile, dtype=np.float32)
+        if is_multi or self._cfg.env_origin_in_tile is not None:
+            offset = np.array(
+                self._cfg.env_origin_in_tile or [0.0, 0.0, 0.0], dtype=np.float32
+            )
             stride = self._obj_tile_stride
             origins = np.zeros((self._num_rows, self._num_cols, 3), dtype=np.float32)
             for r in range(self._num_rows):

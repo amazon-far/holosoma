@@ -101,19 +101,22 @@ class BaseTask:
         self.dim_actions = robot_config.actions_dim
         self.device = device
 
-        # Auto-populate terrain obj_file_path from motion file if not specified
+        # Auto-populate terrain obj_file_path from motion file if not specified.
+        # Skip when obj_dir is set (multi-mesh mode has its own loader path).
         if (
             terrain_config.terrain_term.mesh_type == "load_obj"
             and not terrain_config.terrain_term.obj_file_path
+            and not terrain_config.terrain_term.obj_dir
             and "motion_command" in command_config.setup_terms
         ):
             motion_cfg = command_config.setup_terms["motion_command"].params.get("motion_config")
             if motion_cfg is not None:
-                motion_file = (
-                    motion_cfg.motion_file
-                    if hasattr(motion_cfg, "motion_file")
-                    else motion_cfg.get("motion_file", "")
-                )
+                if hasattr(motion_cfg, "motion_file"):
+                    motion_file = motion_cfg.motion_file
+                elif isinstance(motion_cfg, dict):
+                    motion_file = motion_cfg.get("motion_file", "")
+                else:
+                    motion_file = ""
                 if motion_file:
                     print(f"[INFO] Auto-populating terrain obj_file_path from motion file: {motion_file}")
                     new_term = replace(terrain_config.terrain_term, obj_file_path=motion_file)

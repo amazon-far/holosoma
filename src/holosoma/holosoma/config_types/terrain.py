@@ -199,6 +199,26 @@ class TerrainTermCfg:
     obj_file_path: str = ""
     """Path to OBJ file for custom terrain mesh."""
 
+    obj_dir: str = ""
+    """Directory containing per-tile mesh sources (.npz or .obj files).
+    When set, each file in the directory becomes one COLUMN of the tile grid, and
+    `num_rows` controls how many ROW copies of the full column strip are produced.
+    Files are used in sorted order; column index equals the same sort order so that
+    it matches `MotionLibrary` deterministic ordering. Mutually exclusive with
+    `obj_file_path`."""
+
+    obj_max_faces_per_tile: int = 0
+    """For multi-mesh mode: decimate each per-tile mesh to at most this many faces
+    by uniform random sampling before tiling. 0 (default) disables decimation.
+    Necessary for MuJoCo (STL 200K-face limit) and to keep the merged mesh tractable
+    when `obj_dir` points at ~100+ video-captured meshes."""
+
+    obj_max_tiles: int = 0
+    """For multi-mesh mode: cap the number of per-tile mesh files loaded from
+    `obj_dir` to the first N (sorted). 0 (default) loads all. Must agree with
+    `MultiMotionConfig.max_motions` so terrain tile columns line up with the
+    motion pool."""
+
     env_origin_in_tile: list[float] | None = None
     """For load_obj terrain: override env_origin position within each tile.
     When None (default), env_origins are placed at tile bounding-box center (current behavior).
@@ -209,7 +229,8 @@ class TerrainTermCfg:
     """For load_obj terrain: whether to tile the mesh in a grid.
     When True (default), mesh is tiled num_rows x num_cols times (current behavior).
     When False, mesh is loaded once and shared by all envs -- all env_origins
-    point to the same location defined by env_origin_in_tile."""
+    point to the same location defined by env_origin_in_tile.
+    Ignored when `obj_dir` is set (multi-mesh mode always tiles)."""
 
     scale_factor: float = 1.0
     """Use for performance to scale border_size, terrain_length, terrain_width, num_ros and num_cols."""

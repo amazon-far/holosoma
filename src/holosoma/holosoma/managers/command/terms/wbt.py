@@ -1195,11 +1195,15 @@ class MotionLibrary:
         device: str,
         min_motion_length: int = 30,
         split_file: str = "",
+        pool_ordered: bool = False,
+        max_motions: int = 0,
     ):
         self.motion_dir = motion_dir
         self.pool_size = pool_size
         self.device = device
         self.min_motion_length = min_motion_length
+        self.pool_ordered = pool_ordered
+        self._max_motions_cap = max_motions
 
         # Discover all npz files
         import glob as glob_module
@@ -1229,7 +1233,23 @@ class MotionLibrary:
             self._all_npz_files = filtered
         else:
             self._all_npz_files = all_npz
+
+        if getattr(self, "_max_motions_cap", 0):
+            cap = self._max_motions_cap
+            if len(self._all_npz_files) > cap:
+                logger.info(
+                    f"MotionLibrary: capping motions {len(self._all_npz_files)} -> {cap}"
+                )
+                self._all_npz_files = self._all_npz_files[:cap]
+
         logger.info(f"MotionLibrary: using {len(self._all_npz_files)} .npz files from {motion_dir}")
+
+        if self.pool_ordered:
+            if self.pool_size != len(self._all_npz_files):
+                raise ValueError(
+                    f"pool_ordered=True requires pool_size ({self.pool_size}) "
+                    f"== number of discovered motion files ({len(self._all_npz_files)})"
+                )
 
         self._robot_body_names = robot_body_names
         self._robot_joint_names = robot_joint_names
@@ -1242,10 +1262,14 @@ class MotionLibrary:
         import random
 
         n_files = len(self._all_npz_files)
-        file_indices = random.sample(range(n_files), min(len(slot_indices), n_files))
-        if len(file_indices) < len(slot_indices):
-            extra = random.choices(range(n_files), k=len(slot_indices) - len(file_indices))
-            file_indices.extend(extra)
+        if self.pool_ordered:
+            # slot i receives sorted_files[i]; guaranteed equal-size by __init__.
+            file_indices = list(slot_indices)
+        else:
+            file_indices = random.sample(range(n_files), min(len(slot_indices), n_files))
+            if len(file_indices) < len(slot_indices):
+                extra = random.choices(range(n_files), k=len(slot_indices) - len(file_indices))
+                file_indices.extend(extra)
 
         loaders = []
         for fi in file_indices:
@@ -1255,7 +1279,7 @@ class MotionLibrary:
                 self._robot_joint_names,
                 device="cpu",
             )
-            if loader.time_step_total < self.min_motion_length:
+            if loader.time_step_total < self.min_motion_length and not self.pool_ordered:
                 for _ in range(10):
                     alt_fi = random.randint(0, n_files - 1)
                     loader = MotionLoader(
@@ -1420,6 +1444,8 @@ class MultiMotionCommand(CommandTermBase):
             device=self.device,
             min_motion_length=self.motion_cfg.min_motion_length,
             split_file=self.motion_cfg.split_file,
+            pool_ordered=self.motion_cfg.pool_ordered,
+            max_motions=self.motion_cfg.max_motions,
         )
 
         self.ref_body_index = robot_body_names.index(self.motion_cfg.body_name_ref[0])
@@ -1429,6 +1455,32 @@ class MultiMotionCommand(CommandTermBase):
 
         self.metrics: dict[str, torch.Tensor] = {}
         self._step_count = 0
+
+        # Optionally bind each env to a terrain tile column indexed by motion_index.
+        self._tile_grid: torch.Tensor | None = None
+        if self.motion_cfg.bind_terrain_tiles:
+            if not self.motion_cfg.pool_ordered:
+                raise ValueError(
+                    "bind_terrain_tiles=True requires pool_ordered=True so that "
+                    "motion_index aligns with terrain tile columns."
+                )
+            terrain_state = self._env.terrain_manager.get_state("locomotion_terrain")
+            terrain = getattr(terrain_state, "terrain", None)
+            get_grid = getattr(terrain, "_get_load_obj_env_origin_grid", None) if terrain else None
+            if get_grid is None:
+                raise RuntimeError(
+                    "bind_terrain_tiles=True requires a load_obj terrain with "
+                    "`obj_dir` configured (multi-mesh grid)."
+                )
+            grid_np = get_grid()  # (num_rows, num_cols, 3) float32
+            self._tile_grid = torch.as_tensor(grid_np, device=self.device, dtype=torch.float32)
+            n_rows, n_cols, _ = self._tile_grid.shape
+            if n_cols != self.motion_library.pool_size:
+                raise ValueError(
+                    f"Terrain tile columns ({n_cols}) must equal MotionLibrary "
+                    f"pool_size ({self.motion_library.pool_size}) when binding "
+                    "motions to tiles."
+                )
 
         self.init_buffers()
 
@@ -1451,11 +1503,27 @@ class MultiMotionCommand(CommandTermBase):
 
         n = env_ids.numel()
 
+        # When binding to tiles, sample only from pool slots that have a matching
+        # terrain column. SuccessRateCallback temporarily resizes pool_size up to
+        # num_envs during eval, but the tile grid is fixed at setup time; without
+        # this clamp, out-of-range motion_index values crash CUDA indexing.
+        effective_pool = self.motion_library.pool_size
+        if self._tile_grid is not None:
+            effective_pool = self._tile_grid.shape[1]
+
         # Sample new motion indices from the pool via multinomial (uniform weights)
-        weights = torch.ones(self.motion_library.pool_size, device=self.device)
+        weights = torch.ones(effective_pool, device=self.device)
         self.motion_indices[env_ids] = torch.multinomial(
             weights, n, replacement=True
         )
+
+        # Rebind env_origins to the tile matching the sampled motion (row picked at random).
+        if self._tile_grid is not None:
+            n_rows, n_cols, _ = self._tile_grid.shape
+            row_idx = torch.randint(0, n_rows, (n,), device=self.device)
+            col_idx = self.motion_indices[env_ids]
+            new_origins = self._tile_grid[row_idx, col_idx]  # (n, 3)
+            self._env.simulator.scene.env_origins[env_ids] = new_origins
 
         # Sample time steps based on per-env motion length
         per_env_totals = self.motion_library.time_step_totals[self.motion_indices[env_ids]]
@@ -1522,6 +1590,14 @@ class MultiMotionCommand(CommandTermBase):
         target_root_pos = root_pos + (
             torch.rand(root_pos.shape, device=self.device) - 0.5
         ) * 2 * root_pos_noise.unsqueeze(0)
+
+        # When binding motions to terrain tiles, place the robot on the correct
+        # tile by adding the env_origin of that tile. Without this, the robot
+        # lands at motion-frame coordinates but ref_pos_w lives in tile coords.
+        if self._tile_grid is not None:
+            target_root_pos = (
+                target_root_pos + self._env.simulator.scene.env_origins[env_ids]
+            )
 
         rand_sample_rpy = (torch.rand((n, 3), device=self.device) - 0.5) * 2 * root_rot_noise_rpy
         orientations_delta = quat_from_euler_xyz(

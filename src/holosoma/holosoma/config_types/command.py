@@ -146,6 +146,25 @@ class MultiMotionConfig:
     pool_size: int = 256
     """Number of motions to hold on GPU simultaneously."""
 
+    pool_ordered: bool = False
+    """If True, load motion files into pool slots in sorted-path order, so that
+    `motion_index == sorted_file_index`. Requires `pool_size == len(files)`.
+    Used when motion_index must line up with an external ordering (e.g. terrain
+    tiles in multi-mesh training)."""
+
+    max_motions: int = 0
+    """Cap the number of discovered motion files to the first N (sorted). 0
+    (default) keeps all. Useful for quick tests. Must agree with
+    `TerrainTermCfg.obj_max_tiles` when `bind_terrain_tiles=True`."""
+
+    bind_terrain_tiles: bool = False
+    """If True, at reset time bind each env to the grid cell whose column matches
+    the sampled motion_index. Requires the active terrain to be a multi-mesh
+    load_obj terrain (i.e. `terrain.terrain_term.obj_dir` is set). A random row
+    within the grid is chosen per-env each reset, and `scene.env_origins` is
+    updated accordingly so the motion plays on the matching scene mesh tile.
+    Must be used with `pool_ordered=True`."""
+
     resample_interval: int = 0
     """Resample the motion pool from disk every N env steps (0 = never).
     When triggered, the entire pool is replaced with new random motions.
