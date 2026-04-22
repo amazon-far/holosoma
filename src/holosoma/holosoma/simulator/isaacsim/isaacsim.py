@@ -76,7 +76,14 @@ class IsaacSim(BaseSimulator):
                 solver_type=self.simulator_config.sim.physx.solver_type,
                 max_position_iteration_count=self.simulator_config.sim.physx.num_position_iterations,
                 max_velocity_iteration_count=self.simulator_config.sim.physx.num_velocity_iterations,
-                gpu_max_rigid_patch_count=10 * 2**15,
+                # Larger buffers for scenes with dense custom terrain meshes (e.g. videomimic
+                # scans) at high num_envs. PhysX defaults are easily exceeded when every
+                # env simultaneously contacts a non-planar mesh.
+                gpu_max_rigid_patch_count=2**21,  # 2M patches (default ~5*2**15 = 160K, bumped from 327K)
+                gpu_collision_stack_size=2**30,  # 1 GB (default 2**26 = 64 MB)
+                gpu_max_rigid_contact_count=2**24,  # 16M (default 2**23 = 8M)
+                gpu_found_lost_pairs_capacity=2**22,  # default 2**21
+                gpu_heap_capacity=2**27,  # 128 MB (default 2**26)
             ),
             # Global physics material, can be overridden by the individual articulation
             # Can be inspected by:
@@ -326,7 +333,7 @@ class IsaacSim(BaseSimulator):
             height_scanner_config = RayCasterCfg(
                 prim_path=f"/World/envs/env_.*/Robot/{self.robot_config.body_names[0]}",
                 offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
-                attach_yaw_only=True,
+                ray_alignment="yaw",
                 # Apply a grid pattern that is smaller than the resolution to only return one height value.
                 pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[0.05, 0.05]),
                 debug_vis=False,
@@ -396,7 +403,7 @@ class IsaacSim(BaseSimulator):
             height_map_scanner_config = RayCasterCfg(
                 prim_path=f"/World/envs/env_.*/Robot/{self.robot_config.body_names[0]}",
                 offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
-                attach_yaw_only=True,
+                ray_alignment="yaw",
                 pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
                 debug_vis=False,
                 mesh_prim_paths=[terrain_prim_path],
@@ -415,7 +422,7 @@ class IsaacSim(BaseSimulator):
             videomimic_height_map_scanner_config = RayCasterCfg(
                 prim_path=f"/World/envs/env_.*/Robot/{self.robot_config.body_names[0]}",
                 offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
-                attach_yaw_only=True,
+                ray_alignment="yaw",
                 pattern_cfg=patterns.GridPatternCfg(resolution=vm_cfg.resolution, size=[vm_size_x, vm_size_y]),
                 debug_vis=False,
                 mesh_prim_paths=[terrain_prim_path],
