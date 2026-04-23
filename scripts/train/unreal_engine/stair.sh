@@ -1,12 +1,12 @@
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
-    exp:g1-29dof-wbt-future-motion-heightmap \
+    exp:g1-29dof-wbt-future-motion \
     terrain:terrain-load-obj \
     logger:wandb \
     --logger.entity draftrec \
     --logger.project MotionTracking \
     --logger.group=statue_wbt \
-    --logger.name=g1_stair_30depth_attention_heightmap \
+    --logger.name=g1_stair_30depth_with_blendspace_motion \
     --terrain.terrain-term.obj-file-path="holosoma/data/motions/g1_29dof/whole_body_tracking/unreal_engine/g1_stair_30depth_20260419.npz" \
     --terrain.terrain-term.env-origin-in-tile="[0.0, 0.0, 0.05]" \
     --terrain.terrain-term.tile-mesh False \
@@ -17,7 +17,6 @@ python src/holosoma/holosoma/train_agent.py \
     --termination.terms.bad_tracking.params.bad_ref_ori_threshold 0.8 \
     --termination.terms.bad_tracking.params.bad_motion_body_pos_threshold 0.5 \
     --simulator.config.scene.env_spacing=0.0 \
-    --training.num_envs 2048 \
     --logger.video.enabled False \
     --algo.config.save_interval 1000 \
     robot:g1-29dof-diverse-action-scale

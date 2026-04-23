@@ -14,6 +14,4 @@ python src/holosoma/holosoma/train_agent.py \
     --command.setup_terms.motion_command.params.motion_config.enable_default_pose_prepend False \
     --command.setup_terms.motion_command.params.motion_config.enable_default_pose_append False \
     --simulator.config.scene.env_spacing=0.0 \
-    --training.num_envs 10 \
-    --training.headless False \
     robot:g1-29dof-diverse-action-scale
