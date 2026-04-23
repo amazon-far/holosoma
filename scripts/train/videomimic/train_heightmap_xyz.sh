@@ -3,12 +3,16 @@ source scripts/source_isaacsim_setup.sh
 MOTION_DIR="src/holosoma/holosoma/data/motions/g1_29dof/whole_body_tracking/videomimic_captures_29dof"
 
 python src/holosoma/holosoma/train_agent.py \
-    exp:g1-29dof-multi-terrain-future-motion \
+    exp:g1-29dof-multi-terrain-future-motion-heightmap-videomimic \
     logger:wandb \
     --logger.entity draftrec \
     --logger.project MotionTracking \
     --logger.group=statue_wbt \
-    --logger.name=g1_videomimic_multi_terrain_future_motion \
+    --logger.name=g1_videomimic_multi_terrain_future_motion_heightmap_xyz \
+    --simulator.config.videomimic-height-map.map-height 11 \
+    --simulator.config.videomimic-height-map.map-width 17 \
+    --simulator.config.videomimic-height-map.resolution 0.1 \
+    --simulator.config.videomimic-height-map.num-channels 3 \
     --terrain.terrain-term.obj-dir="$MOTION_DIR" \
     --terrain.terrain-term.num-rows 1 \
     --terrain.terrain-term.obj-max-faces-per-tile 3000 \

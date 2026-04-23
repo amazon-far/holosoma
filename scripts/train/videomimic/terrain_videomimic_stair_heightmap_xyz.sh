@@ -1,13 +1,17 @@
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
-    exp:g1-29dof-wbt-future-motion \
+    exp:g1-29dof-wbt-future-motion-heightmap-videomimic \
     simulator:isaacsim \
     terrain:terrain-load-obj \
     logger:wandb \
     --logger.entity draftrec \
     --logger.project MotionTracking \
     --logger.group=VideoMimic \
-    --logger.name=g1_videomimic_stair \
+    --logger.name=g1_videomimic_stair_heightmap_xyz \
+    --simulator.config.videomimic-height-map.map-height 11 \
+    --simulator.config.videomimic-height-map.map-width 17 \
+    --simulator.config.videomimic-height-map.resolution 0.1 \
+    --simulator.config.videomimic-height-map.num-channels 3 \
     --terrain.terrain-term.obj-file-path="holosoma/data/motions/g1_29dof/whole_body_tracking/videomimic_captures_29dof/holosoma_stairs_cam01_frame_0_140_subsample_1/motion_for_holosoma_with_mesh.npz" \
     --terrain.terrain-term.tile-mesh False \
     --command.setup_terms.motion_command.params.motion_config.motion_file="holosoma/data/motions/g1_29dof/whole_body_tracking/videomimic_captures_29dof/holosoma_stairs_cam01_frame_0_140_subsample_1/motion_for_holosoma_with_mesh.npz" \
