@@ -71,6 +71,9 @@ class TrainingConfig:
     checkpoint: str | None = None
     """Path to checkpoint for resuming training."""
 
+    finetune: bool = False
+    """Treat `checkpoint` as an initialization only: load weights but reset the iteration counter to 0 so logging/checkpoints start fresh."""
+
     # Logging settings
     project: str = "default_project"
     """Project name for logging. `logger.project` takes precedence if set."""

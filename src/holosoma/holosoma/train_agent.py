@@ -286,6 +286,12 @@ def train(tyro_config: ExperimentConfig, training_context: TrainingContext | Non
                 tyro_config, training=dataclasses.replace(tyro_config.training, checkpoint=str(loaded_checkpoint))
             )
             algo.load(loaded_checkpoint)
+            if tyro_config.training.finetune:
+                if hasattr(algo, "current_learning_iteration"):
+                    algo.current_learning_iteration = 0
+                if hasattr(algo, "global_step"):
+                    algo.global_step = 0
+                logger.info("Finetune mode: reset iteration counter to 0 after loading checkpoint")
 
         # handle saving config
         algo.learn()
