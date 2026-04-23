@@ -11,7 +11,7 @@ actor/critic architecture.
 
 from dataclasses import replace
 
-from holosoma.config_types.algo import MotionEncoderConfig
+from holosoma.config_types.algo import HeightMapEncoderConfig, MotionEncoderConfig
 from holosoma.config_types.command import CommandManagerCfg, CommandTermCfg, MultiMotionConfig, NoiseToInitialPoseConfig
 from holosoma.config_types.experiment import ExperimentConfig, TrainingConfig
 from holosoma.config_values import (
@@ -173,6 +173,32 @@ def _future_motion_algo():
     return replace(cfg, config=replace(cfg.config, module_dict=_future_motion_module_dict(cfg.config)))
 
 
+def _future_motion_heightmap_videomimic_module_dict(ppo_cfg):
+    """Future-motion module_dict + VideoMimic-style heightmap encoder."""
+    base = _future_motion_module_dict(ppo_cfg)
+    return replace(
+        base,
+        actor=replace(base.actor, type="MLPWithHeightMapVideoMimic"),
+        critic=replace(base.critic, type="MLPWithHeightMapVideoMimic"),
+        height_map_encoder=HeightMapEncoderConfig(
+            latent_dim=415,
+            num_heads=16,
+            map_height=11,
+            map_width=11,
+            num_channels=1,
+            conv_hidden_channels=16,
+        ),
+    )
+
+
+def _future_motion_heightmap_videomimic_algo():
+    cfg = _base_algo()
+    return replace(
+        cfg,
+        config=replace(cfg.config, module_dict=_future_motion_heightmap_videomimic_module_dict(cfg.config)),
+    )
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # g1_29dof_multi_motion — many motions on a plane (ex-PhUMA)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -245,6 +271,16 @@ g1_29dof_multi_terrain_future_motion = replace(
     observation=observation.g1_29dof_wbt_observation_future_motion,
 )
 
+g1_29dof_multi_terrain_future_motion_heightmap_videomimic = replace(
+    g1_29dof_multi_terrain_future_motion,
+    training=replace(
+        g1_29dof_multi_terrain_future_motion.training,
+        name="g1_29dof_multi_terrain_future_motion_heightmap_videomimic",
+    ),
+    algo=_future_motion_heightmap_videomimic_algo(),
+    observation=observation.g1_29dof_wbt_observation_future_motion_heightmap_videomimic,
+)
+
 
 # Backward-compat aliases for older train scripts that still refer to the
 # legacy PhUMA names.
@@ -257,6 +293,7 @@ __all__ = [
     "g1_29dof_multi_motion_future_motion",
     "g1_29dof_multi_terrain",
     "g1_29dof_multi_terrain_future_motion",
+    "g1_29dof_multi_terrain_future_motion_heightmap_videomimic",
     "g1_29dof_phuma",
     "g1_29dof_phuma_future_motion",
 ]
