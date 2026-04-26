@@ -87,7 +87,9 @@ def main():
     eval_cfg = saved_cfg.get_eval_config()
 
     # Override motion_dir and split_file by mutating the params dict in-place.
-    # The params dict inside the frozen dataclass is itself mutable.
+    # Keep motion_config as its original dataclass type so downstream attribute
+    # access (e.g. base_task's bind_terrain_tiles auto-sync that rewrites
+    # pool_size to match max_motions) continues to work.
     motion_config = eval_cfg.command.setup_terms["motion_command"].params["motion_config"]
     if isinstance(motion_config, dict):
         if args.motion_dir is not None:
@@ -97,16 +99,16 @@ def main():
             motion_config["split_file"] = args.split_file
             logger.info(f"Overriding split_file -> {args.split_file}")
     else:
-        # It's a dataclass object - need to replace it
-        from dataclasses import asdict, fields
-        mc_dict = asdict(motion_config)
+        updates = {}
         if args.motion_dir is not None:
-            mc_dict["motion_dir"] = args.motion_dir
+            updates["motion_dir"] = args.motion_dir
             logger.info(f"Overriding motion_dir -> {args.motion_dir}")
         if args.split_file is not None:
-            mc_dict["split_file"] = args.split_file
+            updates["split_file"] = args.split_file
             logger.info(f"Overriding split_file -> {args.split_file}")
-        eval_cfg.command.setup_terms["motion_command"].params["motion_config"] = mc_dict
+        if updates:
+            new_motion_config = dataclasses.replace(motion_config, **updates)
+            eval_cfg.command.setup_terms["motion_command"].params["motion_config"] = new_motion_config
 
     # Setup simulation environment
     env, device, simulation_app = setup_simulation_environment(eval_cfg)
