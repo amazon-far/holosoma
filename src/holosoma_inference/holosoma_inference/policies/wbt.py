@@ -11,6 +11,7 @@ from termcolor import colored
 
 from holosoma_inference.config.config_types.inference import InferenceConfig
 from holosoma_inference.policies import BasePolicy
+from holosoma_inference.policies.tracking_source import NullTrackingSource, TrackingSource
 from holosoma_inference.policies.wbt_utils import MotionClockUtil, PinocchioRobot, TimestepUtil
 from holosoma_inference.utils.clock import ClockSub
 from holosoma_inference.utils.math.quat import (
@@ -25,8 +26,13 @@ from holosoma_inference.utils.math.quat import (
 
 
 class WholeBodyTrackingPolicy(BasePolicy):
-    def __init__(self, config: InferenceConfig):
+    def __init__(self, config: InferenceConfig, tracking_source: TrackingSource | None = None):
         self.config = config
+        # Transport-agnostic external tracking input. Default ``NullTrackingSource``
+        # makes this an exact no-op — behavior is byte-identical to pre-fp-e59.A
+        # unless a concrete source is injected at construction.
+        # See ``holosoma_inference.policies.tracking_source`` for the contract.
+        self._tracking_source: TrackingSource = tracking_source or NullTrackingSource()
 
         # initialize motion state
         self.motion_clip_progressing = False
@@ -257,6 +263,24 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
     def rl_inference(self, robot_state_data):
         # prepare obs, run policy inference
+
+        # fp-e59.A: non-blocking poll of the external tracking source.
+        # On NullTrackingSource (default) this returns None and the
+        # policy falls through to the ONNX-clip motion_command_t path
+        # unchanged. On a concrete source, the payload is logged for now;
+        # translating SMPLH into motion_command_t (retargeting inside the
+        # service) is fp-e59.A.2 follow-up. This split keeps .A landable
+        # without blocking on retargeter design and gives fp-e59.B a
+        # concrete round-trip to integration-test against.
+        external = self._tracking_source.get_latest()
+        if external is not None:
+            logger.debug(
+                f"WBT tracking_source: received payload (device={external.device_type!r}, "
+                f"mode={external.mode}, body_joints={len(external.joint_names)}, "
+                f"hand_joints={len(external.hand_joint_names)}, quality={external.tracking_quality}) "
+                "— substitution into motion_command_t pending fp-e59.A.2 (SMPLH retargeting bridge)."
+            )
+
         if not self.motion_clip_progressing:
             # Keep motion index pinned at the configured start while waiting to trigger the clip.
             self.timestep_util.reset(start_timestep=self.config.task.motion_start_timestep)
