@@ -110,9 +110,13 @@ class SuccessRateCallback(RLEvalCallback):
         # Save the original pool size and max_T for restoration
         self._orig_pool_size = self._motion_library.pool_size
 
-        # Ensure pool can hold num_envs motions (may need to grow from training pool_size)
-        if self._motion_library.pool_size < self._num_envs:
-            self._motion_library._resize_pool(self._num_envs)
+        # Pool only needs to hold the number of motions actually evaluated per batch,
+        # which is min(num_envs, num_motions). Growing to full num_envs wastes GPU memory
+        # (e.g. with 4096 envs, 200 motions, padding pool to 4096 allocated ~3 GB extra and
+        # OOM'd during eval right after training filled most of GPU memory).
+        target_pool = min(self._num_envs, self._num_motions)
+        if self._motion_library.pool_size < target_pool:
+            self._motion_library._resize_pool(target_pool)
 
         # Load CSV metadata for per-skill/category reporting
         self._load_metadata()
@@ -182,6 +186,23 @@ class SuccessRateCallback(RLEvalCallback):
         root_ang_vel = lib.body_ang_vel_w(mi, ts)[:, 0].clone()
         dof_pos = lib.joint_pos(mi, ts).clone()
         dof_vel = lib.joint_vel(mi, ts).clone()
+
+        # When motions are bound to terrain tiles, env_origins must be re-bound
+        # to match the new motion_indices (otherwise leftover env_origins from
+        # the prior random reset point at the wrong tile, and adding them below
+        # would put the robot on the wrong staircase).
+        # Body pose data is stored in MOTION-LOCAL frame; the simulator expects
+        # WORLD-frame poses, so we add env_origins after rebinding.
+        # (Mirrors MultiMotionCommand.reset bind_terrain_tiles handling.)
+        tile_grid = getattr(mc, "_tile_grid", None)
+        if tile_grid is not None:
+            n_rows, _, _ = tile_grid.shape
+            # Use row 0 deterministically (eval should be reproducible).
+            row_idx = torch.zeros(self._num_envs, dtype=torch.long, device=self.device)
+            col_idx = mc.motion_indices  # (num_envs,) in [0, n_cols)
+            new_origins = tile_grid[row_idx, col_idx]  # (num_envs, 3)
+            env.simulator.scene.env_origins[:] = new_origins
+            root_pos = root_pos + new_origins
 
         env.simulator.dof_pos[:] = dof_pos
         env.simulator.dof_vel[:] = dof_vel
@@ -284,7 +305,7 @@ class SuccessRateCallback(RLEvalCallback):
             return
 
         num_total = self._num_motions
-        self.metrics = {"eval/num_motions": float(num_total)}
+        self.metrics = {"Eval/num_motions": float(num_total)}
 
         for thresh in MOTION_FAR_THRESHOLDS:
             terminate_np = self._terminate_states[thresh].cpu().numpy()
@@ -297,8 +318,8 @@ class SuccessRateCallback(RLEvalCallback):
                 f"({num_success}/{num_total})"
             )
 
-            self.metrics[f"eval/success_rate_{thresh_key}"] = success_rate
-            self.metrics[f"eval/num_success_{thresh_key}"] = float(num_success)
+            self.metrics[f"Eval/success_rate_{thresh_key}"] = success_rate
+            self.metrics[f"Eval/num_success_{thresh_key}"] = float(num_success)
 
             # Per-skill and per-category success rates
             if self._motion_skill:
@@ -323,7 +344,7 @@ class SuccessRateCallback(RLEvalCallback):
                     fails = skill_results[skill]
                     sr = 1.0 - (sum(fails) / len(fails))
                     n = len(fails)
-                    self.metrics[f"eval/skill_{thresh_key}/{skill}"] = sr
+                    self.metrics[f"Eval/skill_{thresh_key}/{skill}"] = sr
                     logger.info(f"    {skill}: {sr:.4f} ({n - sum(fails)}/{n})")
 
                 logger.info(f"  Per-category success rates [{thresh}m]:")
@@ -331,7 +352,7 @@ class SuccessRateCallback(RLEvalCallback):
                     fails = category_results[cat]
                     sr = 1.0 - (sum(fails) / len(fails))
                     n = len(fails)
-                    self.metrics[f"eval/category_{thresh_key}/{cat}"] = sr
+                    self.metrics[f"Eval/category_{thresh_key}/{cat}"] = sr
                     logger.info(f"    {cat}: {sr:.4f} ({n - sum(fails)}/{n})")
 
         # Save results to text file in the log directory
