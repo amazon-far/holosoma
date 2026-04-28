@@ -10,6 +10,7 @@ from holosoma.config_values.wbt.g1.observation import (
     g1_29dof_wbt_observation_future_motion_heightmap_videomimic,
     g1_29dof_wbt_observation_future_motion_heightmap_videomimic_foot_contact,
     g1_29dof_wbt_observation_future_motion_no_key_body,
+    g1_29dof_wbt_observation_videomimic_student,
     g1_29dof_wbt_observation_w_object,
 )
 
@@ -24,4 +25,5 @@ DEFAULTS = {
     "g1_29dof_wbt_future_motion": g1_29dof_wbt_observation_future_motion,
     "g1_29dof_wbt_future_motion_heightmap": g1_29dof_wbt_observation_future_motion_heightmap,
     "g1_29dof_wbt_future_motion_no_key_body": g1_29dof_wbt_observation_future_motion_no_key_body,
+    "g1_29dof_wbt_videomimic_student": g1_29dof_wbt_observation_videomimic_student,
 }

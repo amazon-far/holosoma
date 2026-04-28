@@ -306,6 +306,82 @@ g1_29dof_wbt_observation_future_motion_heightmap_videomimic_foot_contact = Obser
     },
 )
 
+# ──────────────────────────────────────────────────────────────────────────────
+# DAgger student obs (VideoMimic-style)
+#
+# Mirrors VideoMimic's `G1DeepMimicCfgRootHeightfieldNoHistoryDagger` actor
+# obs: proprio (current step) + root pos/yaw error in body frame + heightmap.
+# The student does NOT see future motion targets (no `motion_command`,
+# no `future_motion_targets` group on the actor side).
+#
+# - `motion_ref_pos_b` ↔ VideoMimic's `torso_xy_rel` (3D pos in body frame)
+# - `motion_ref_ori_b` ↔ VideoMimic's `torso_yaw_rel` (6D ori → includes yaw)
+# - heightmap is the same VideoMimic-style 11×17 xyz scanner the teacher uses
+# - `teacher_actor_obs` re-publishes the teacher's full actor obs slice so the
+#   DAgger algo can query the frozen teacher each step; it is NOT seen by the
+#   student.
+# ──────────────────────────────────────────────────────────────────────────────
+actor_obs_videomimic_student_terms = {
+    # current-step root pos error in body frame (~ torso_xy_rel + z)
+    "motion_ref_pos_b": ObsTermCfg(
+        func="holosoma.managers.observation.terms.wbt:motion_ref_pos_b",
+        scale=1.0,
+        noise=0.05,
+    ),
+    # current-step root orientation error (6D rep — yaw/roll/pitch via 2 cols)
+    "motion_ref_ori_b": ObsTermCfg(
+        func="holosoma.managers.observation.terms.wbt:motion_ref_ori_b",
+        scale=1.0,
+        noise=0.05,
+    ),
+    "base_ang_vel": ObsTermCfg(
+        func="holosoma.managers.observation.terms.wbt:base_ang_vel",
+        scale=1.0,
+        noise=0.2,
+    ),
+    "dof_pos": ObsTermCfg(
+        func="holosoma.managers.observation.terms.wbt:dof_pos",
+        scale=1.0,
+        noise=0.01,
+    ),
+    "dof_vel": ObsTermCfg(
+        func="holosoma.managers.observation.terms.wbt:dof_vel",
+        scale=1.0,
+        noise=0.5,
+    ),
+    "actions": ObsTermCfg(
+        func="holosoma.managers.observation.terms.wbt:actions",
+        scale=1.0,
+        noise=0.0,
+    ),
+}
+
+actor_obs_videomimic_student = ObsGroupCfg(
+    concatenate=True,
+    enable_noise=True,
+    history_length=1,
+    terms=actor_obs_videomimic_student_terms,
+)
+
+g1_29dof_wbt_observation_videomimic_student = ObservationManagerCfg(
+    groups={
+        "actor_obs": actor_obs_videomimic_student,
+        # teacher's actor obs (= the original `actor_obs_shared` content).
+        # Re-published under a separate key so the DAgger algo can route it to
+        # the frozen teacher without colliding with the student's actor_obs.
+        "teacher_actor_obs": actor_obs_shared,
+        "critic_obs": ObsGroupCfg(
+            concatenate=True,
+            enable_noise=False,
+            history_length=1,
+            terms=critic_obs_shared_terms,
+        ),
+        "future_motion_targets": future_motion_obs_group,
+        "height_map_obs": videomimic_height_map_obs_group,
+    },
+)
+
+
 __all__ = [
     "g1_29dof_wbt_observation",
     "g1_29dof_wbt_observation_w_object",
@@ -315,4 +391,5 @@ __all__ = [
     "g1_29dof_wbt_observation_future_motion_heightmap_foot_contact",
     "g1_29dof_wbt_observation_future_motion_heightmap_videomimic",
     "g1_29dof_wbt_observation_future_motion_heightmap_videomimic_foot_contact",
+    "g1_29dof_wbt_observation_videomimic_student",
 ]

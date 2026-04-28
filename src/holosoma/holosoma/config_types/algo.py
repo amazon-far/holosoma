@@ -370,6 +370,104 @@ class FastSACConfig:
 
 
 @dataclass(frozen=True)
+class DAggerModuleDictConfig:
+    """Configuration for DAgger student module dictionary.
+
+    Pure DAgger has no critic — only an actor + optional perception encoders that
+    mirror the teacher (heightmap, etc.). The motion encoder is intentionally
+    omitted by default: the student's whole point is to *not* see future motion
+    targets.
+    """
+
+    actor: ModuleConfig
+    """Actor module configuration."""
+
+    motion_encoder: MotionEncoderConfig | None = None
+    """Optional motion encoder for the student. Default None — student does not
+    see future motion targets in the VideoMimic-style setup."""
+
+    height_map_encoder: HeightMapEncoderConfig | None = None
+    """Optional height map encoder configuration."""
+
+
+@dataclass(frozen=True)
+class DAggerConfig:
+    """Configuration for the DAgger distillation algorithm (pure DAgger, no critic)."""
+
+    module_dict: DAggerModuleDictConfig
+    """Student module configurations (actor + optional perception encoders)."""
+
+    policy_to_clone: str = ""
+    """Path to the teacher checkpoint (.pt file). The teacher's experiment config
+    is recovered from the checkpoint metadata, so the only field needed here is
+    the file path."""
+
+    teacher_actor_obs_key: str = "teacher_actor_obs"
+    """Observation group key the env publishes for the teacher's actor. The
+    student algo remaps this onto the teacher's expected ``actor_obs`` slot at
+    rollout time."""
+
+    teacher_actor_obs_history_key: str | None = None
+    """Optional history key for the teacher's actor obs (defaults to
+    ``teacher_actor_obs_key``)."""
+
+    take_teacher_actions: bool = False
+    """If True, env steps with teacher actions instead of student actions
+    (β-DAgger). Default False — student rollout, on-policy."""
+
+    clip_teacher_actions: bool = False
+    """Clip teacher action targets to ``[-clip_actions_threshold, +clip_actions_threshold]``
+    before computing the BC loss. Useful when the teacher occasionally produces
+    out-of-range actions and we don't want the student chasing them."""
+
+    clip_actions_threshold: float = 100.0
+    """Threshold used for ``clip_teacher_actions``."""
+
+    bc_sigma_loss_coef: float = 1.0
+    """Coefficient on the (sigma_student − sigma_teacher) term of the BC loss.
+    Set to 0.0 to skip matching action noise std."""
+
+    actor_learning_rate: float = 1e-3
+    """Learning rate for the student actor."""
+
+    actor_optimizer: OptimizerConfig = field(default_factory=lambda: OptimizerConfig(_target_="torch.optim.AdamW"))
+    """Student actor optimizer configuration."""
+
+    max_grad_norm: float = 1.0
+    """Maximum gradient norm for clipping."""
+
+    num_steps_per_env: int = 24
+    """Number of rollout steps per env per iteration."""
+
+    num_learning_epochs: int = 5
+    """Number of passes over the rollout buffer per update."""
+
+    num_mini_batches: int = 4
+    """Number of mini-batches per epoch."""
+
+    init_noise_std: float = 0.8
+    """Initial noise std for the student actor."""
+
+    save_interval: int = 1000
+    """Iteration interval for saving checkpoints."""
+
+    eval_interval: int = 0
+    """Run evaluation every N iterations (0 = disabled)."""
+
+    eval_callbacks: Any = None
+    """Evaluation callbacks configuration (mirrors PPOConfig.eval_callbacks)."""
+
+    num_learning_iterations: int = 1000000
+    """Total number of learning iterations."""
+
+    init_at_random_ep_len: bool = False
+    """Whether to initialize episode length buffers randomly at start."""
+
+    load_optimizer: bool = True
+    """Whether to load student optimizer state when resuming."""
+
+
+@dataclass(frozen=True)
 class PPOAlgoConfig:
     """Configuration for algorithm wrapper."""
 
@@ -397,6 +495,20 @@ class FastSACAlgoConfig:
     """Algorithm-specific configuration."""
 
 
-AlgoInitConfig = Union[PPOConfig, FastSACConfig]
+@dataclass(frozen=True)
+class DAggerAlgoConfig:
+    """Configuration for algorithm wrapper (DAgger)."""
 
-AlgoConfig = Union[PPOAlgoConfig, FastSACAlgoConfig]
+    _target_: str
+    """Target algorithm class."""
+
+    _recursive_: bool
+    """Whether to recursively instantiate."""
+
+    config: DAggerConfig
+    """Algorithm-specific configuration."""
+
+
+AlgoInitConfig = Union[PPOConfig, FastSACConfig, DAggerConfig]
+
+AlgoConfig = Union[PPOAlgoConfig, FastSACAlgoConfig, DAggerAlgoConfig]

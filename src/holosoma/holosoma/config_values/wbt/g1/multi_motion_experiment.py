@@ -11,7 +11,16 @@ actor/critic architecture.
 
 from dataclasses import replace
 
-from holosoma.config_types.algo import HeightMapEncoderConfig, MotionEncoderConfig
+from holosoma.config_types.algo import (
+    DAggerAlgoConfig,
+    DAggerConfig,
+    DAggerModuleDictConfig,
+    HeightMapEncoderConfig,
+    LayerConfig,
+    ModuleConfig,
+    MotionEncoderConfig,
+    OptimizerConfig,
+)
 from holosoma.config_types.command import CommandManagerCfg, CommandTermCfg, MultiMotionConfig, NoiseToInitialPoseConfig
 from holosoma.config_types.experiment import ExperimentConfig, TrainingConfig
 from holosoma.config_values import (
@@ -329,6 +338,70 @@ g1_29dof_multi_terrain_future_motion_heightmap_videomimic_add = replace(
 )
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# DAgger student experiment — distill the videomimic teacher to a smaller-obs
+# student that does not see future motion targets.
+# ──────────────────────────────────────────────────────────────────────────────
+def _dagger_student_algo() -> DAggerAlgoConfig:
+    """Pure DAgger student. Heightmap + small actor MLP, no future motion."""
+
+    actor = ModuleConfig(
+        type="MLPWithHeightMapVideoMimic",
+        input_dim=["actor_obs"],
+        output_dim=["robot_action_dim"],
+        # Match VideoMimic's `G1DeepMimicCfgRootHeightfieldNoHistoryDagger`
+        # actor: [1024, 512, 256, 128] with ELU.
+        layer_config=LayerConfig(hidden_dims=[1024, 512, 256, 128], activation="ELU"),
+    )
+
+    height_map_encoder = HeightMapEncoderConfig(
+        # latent_dim must match actor's first hidden dim under add_to_hidden.
+        latent_dim=1024,
+        num_heads=16,
+        map_height=11,
+        map_width=17,
+        num_channels=3,
+        conv_hidden_channels=16,
+        combine_mode="add_to_hidden",
+    )
+
+    return DAggerAlgoConfig(
+        _target_="holosoma.agents.dagger.dagger.DAgger",
+        _recursive_=False,
+        config=DAggerConfig(
+            module_dict=DAggerModuleDictConfig(
+                actor=actor,
+                height_map_encoder=height_map_encoder,
+            ),
+            policy_to_clone="",  # supplied via CLI
+            actor_learning_rate=1e-3,
+            actor_optimizer=OptimizerConfig(_target_="torch.optim.AdamW", weight_decay=0.0),
+            max_grad_norm=1.0,
+            num_steps_per_env=24,
+            num_learning_epochs=5,
+            num_mini_batches=4,
+            init_noise_std=0.8,
+            save_interval=SAVE_INTERVAL,
+            num_learning_iterations=NUM_LEARNING_ITERATIONS,
+            bc_sigma_loss_coef=1.0,
+            clip_teacher_actions=True,
+            clip_actions_threshold=8.0,
+            take_teacher_actions=False,
+        ),
+    )
+
+
+g1_29dof_multi_terrain_videomimic_student_dagger = replace(
+    g1_29dof_multi_terrain_future_motion,
+    training=replace(
+        g1_29dof_multi_terrain_future_motion.training,
+        name="g1_29dof_multi_terrain_videomimic_student_dagger",
+    ),
+    algo=_dagger_student_algo(),
+    observation=observation.g1_29dof_wbt_observation_videomimic_student,
+)
+
+
 # Backward-compat aliases for older train scripts that still refer to the
 # legacy PhUMA names.
 g1_29dof_phuma = g1_29dof_multi_motion
@@ -342,6 +415,7 @@ __all__ = [
     "g1_29dof_multi_terrain_future_motion",
     "g1_29dof_multi_terrain_future_motion_heightmap_videomimic",
     "g1_29dof_multi_terrain_future_motion_heightmap_videomimic_add",
+    "g1_29dof_multi_terrain_videomimic_student_dagger",
     "g1_29dof_phuma",
     "g1_29dof_phuma_future_motion",
 ]
