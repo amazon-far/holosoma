@@ -1,0 +1,67 @@
+# Docker Compose for Thor (Jetson Thor, JetPack 7.1) holosoma_inference.
+#
+# Two services, both built from the same Dockerfile with different targets:
+#   inference       — no-ROS policy; joystick/keyboard/interface input only
+#   inference-ros   — adds ROS 2 Jazzy for Ros2Input (/cmd_vel subscriber)
+#
+# Only one service should run at a time per robot (both bind to the same
+# unitree_sdk2 UDP multicast on the host network).
+#
+# Usage:
+#   # Build one or both
+#   docker compose -f docker/thor/compose.yaml build inference
+#   docker compose -f docker/thor/compose.yaml build inference-ros
+#
+#   # Run the blind-loco policy with joystick input (no ROS needed)
+#   docker compose -f docker/thor/compose.yaml run --rm inference \
+#     inference:g1-29dof-loco --task.interface eth0
+#
+#   # Run with /cmd_vel input from a ROS publisher
+#   docker compose -f docker/thor/compose.yaml run --rm inference-ros \
+#     inference:g1-29dof-loco \
+#       --task.velocity-input ros2 \
+#       --task.state-input interface \
+#       --task.interface eth0
+#
+# Override the default model directory mount via .env:
+#   MODEL_PATH=~/models   # contains g1_29dof/model_*.onnx
+
+services:
+  inference:
+    image: holosoma-thor-inference
+    build:
+      context: ../..
+      dockerfile: docker/thor/Dockerfile
+      target: inference
+    runtime: nvidia
+    network_mode: host      # unitree_sdk2 uses UDP multicast on the host net
+    ipc: host               # share POSIX shm with other locomotion containers
+    privileged: true        # raw socket access for unitree_sdk2
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    volumes:
+      # Optional: mount ONNX model directory from host.
+      # Policy configs reference --task.model-path; set MODEL_PATH in .env
+      # to override the default of $HOME/models.
+      - ${MODEL_PATH:-${HOME}/models}:/models:ro
+
+  inference-ros:
+    image: holosoma-thor-inference-ros
+    build:
+      context: ../..
+      dockerfile: docker/thor/Dockerfile
+      target: inference-ros
+    runtime: nvidia
+    network_mode: host
+    ipc: host
+    privileged: true
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      # FastDDS for rclpy — coexists with unitree_sdk2's bundled CycloneDDS
+      # in the same process. FastDDS ↔ CycloneDDS cross-vendor interop
+      # works on Jazzy for standard message types (see docker/thor/README.md).
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+    volumes:
+      - ${MODEL_PATH:-${HOME}/models}:/models:ro
