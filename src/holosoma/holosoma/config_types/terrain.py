@@ -219,6 +219,12 @@ class TerrainTermCfg:
     `MultiMotionConfig.max_motions` so terrain tile columns line up with the
     motion pool."""
 
+    obj_tile_gap: float = 0.0
+    """For multi-mesh / single-mesh tiling mode: extra gap (meters) added to the
+    per-tile stride on top of `max_bbox_span`. Default 0.0 means tiles tight-kiss
+    at their bbox edges. Set to e.g. 2.0 to space tiles 2m apart in both X and Y
+    so neighbouring staircase footprints don't visually overlap."""
+
     env_origin_in_tile: list[float] | None = None
     """For load_obj terrain: override env_origin position within each tile.
     When None (default), env_origins are placed at tile bounding-box center (current behavior).

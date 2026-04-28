@@ -80,7 +80,7 @@ class Terrain(TerrainInterface):
             self._obj_tile_stride = np.zeros(3)
             return base
 
-        gap = 1e-4  # keeps tiles "kissing" without intersecting
+        gap = 1e-4 + float(self._cfg.obj_tile_gap)  # 1e-4 keeps tiles from intersecting; obj_tile_gap adds visible separation
         stride = (base.bounds[1] - base.bounds[0]) + gap
         self._obj_tile_stride = stride
 
@@ -144,28 +144,53 @@ class Terrain(TerrainInterface):
                 f"(cap={max_faces} per tile, quadric)"
             )
 
-        # Common grid stride = max bbox span across all meshes (with gap)
-        gap = 1e-4
-        max_span = np.zeros(3)
-        for m in bases:
-            span = m.bounds[1] - m.bounds[0]
-            max_span = np.maximum(max_span, span)
-        stride = max_span + gap
-        self._obj_tile_stride = stride
+        # Per-tile bbox-aware placement: each tile's "cube" = its own collision footprint.
+        # X: cumulative — tile c starts where tile c-1 ended (+ gap).
+        # Y (rows): uniform stride = max Y span across meshes (so all rows align).
+        # 1e-4 keeps adjacent tiles from intersecting; obj_tile_gap adds visible separation.
+        gap = 1e-4 + float(self._cfg.obj_tile_gap)
+        tile_spans = np.stack([(m.bounds[1] - m.bounds[0]) for m in bases], axis=0)  # (n_cols, 3)
+        tile_mins = np.stack([m.bounds[0] for m in bases], axis=0)                   # (n_cols, 3)
+
+        # X start (left bbox edge in world) for each column, cumulative.
+        x_starts = np.zeros(len(bases), dtype=np.float64)
+        for c in range(1, len(bases)):
+            x_starts[c] = x_starts[c - 1] + tile_spans[c - 1, 0] + gap
+
+        # Per-tile translation so mesh's bbox.min lands at (x_start, 0, 0). Y/Z untouched
+        # at this stage (row offset added below).
+        per_tile_translation = np.zeros((len(bases), 3), dtype=np.float64)
+        per_tile_translation[:, 0] = x_starts - tile_mins[:, 0]
+
+        # Uniform Y stride across rows (rare in current usage; num_rows is usually 1).
+        y_stride = float(tile_spans[:, 1].max()) + gap
+
+        self._obj_tile_translations = per_tile_translation  # (n_cols, 3) base translations
+        self._obj_tile_y_stride = y_stride
+        # Keep _obj_tile_stride populated for legacy callers (uses max X span).
+        self._obj_tile_stride = np.array(
+            [float(tile_spans[:, 0].max()) + gap, y_stride, 0.0], dtype=np.float64
+        )
 
         n_cols = len(bases)
         n_rows = self._num_rows
         # Override _num_cols so env_origin grid computations line up.
         self._num_cols = n_cols
 
-        print(f"[INFO] Multi-mesh grid: {n_rows} rows x {n_cols} cols (one column per mesh)")
+        print(
+            f"[INFO] Multi-mesh grid: {n_rows} rows x {n_cols} cols (per-tile bbox placement, "
+            f"total X span = {x_starts[-1] + tile_spans[-1, 0]:.2f}m, y_stride = {y_stride:.2f}m, "
+            f"obj_tile_gap = {self._cfg.obj_tile_gap:.3f}m)"
+        )
 
         tiles = []
         total = n_rows * n_cols
         for r in range(n_rows):
             for c, base in enumerate(bases):
                 tile = base.copy()
-                tile.apply_translation([c * stride[0], r * stride[1], 0.0])
+                t = per_tile_translation[c].copy()
+                t[1] += r * y_stride
+                tile.apply_translation(t)
                 tiles.append(tile)
             print(f"[INFO] Tiling progress: {(r + 1) * n_cols}/{total}", flush=True)
 
@@ -298,11 +323,22 @@ class Terrain(TerrainInterface):
             offset = np.array(
                 self._cfg.env_origin_in_tile or [0.0, 0.0, 0.0], dtype=np.float32
             )
-            stride = self._obj_tile_stride
             origins = np.zeros((self._num_rows, self._num_cols, 3), dtype=np.float32)
-            for r in range(self._num_rows):
-                for c in range(self._num_cols):
-                    origins[r, c] = np.array([c * stride[0], r * stride[1], 0.0], dtype=np.float32) + offset
+            # Multi-mesh mode uses per-tile translations (different X offset per col);
+            # legacy single-mesh tiling falls back to a uniform stride.
+            if is_multi and hasattr(self, "_obj_tile_translations"):
+                per_tile = self._obj_tile_translations.astype(np.float32)
+                y_stride = float(self._obj_tile_y_stride)
+                for r in range(self._num_rows):
+                    for c in range(self._num_cols):
+                        t = per_tile[c].copy()
+                        t[1] += r * y_stride
+                        origins[r, c] = t + offset
+            else:
+                stride = self._obj_tile_stride
+                for r in range(self._num_rows):
+                    for c in range(self._num_cols):
+                        origins[r, c] = np.array([c * stride[0], r * stride[1], 0.0], dtype=np.float32) + offset
             return origins
 
         bounds = self._mesh.bounds.astype(np.float64)
