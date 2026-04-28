@@ -135,6 +135,17 @@ class HeightMapEncoderConfig:
     conv_hidden_channels: int = 16
     """Hidden channels in Conv2D feature extractor."""
 
+    combine_mode: str = "concat"
+    """How to combine heightmap latent with the policy MLP. Either ``"concat"``
+    (concatenate the latent with actor/critic obs before the MLP, the original
+    VideoMimic ``flatten_then_embed_with_attention`` behaviour) or
+    ``"add_to_hidden"`` (add the latent to the activation right after the MLP's
+    first Linear layer — VideoMimic's ``flatten_then_embed_with_attention_to_hidden``
+    behaviour). When ``"add_to_hidden"`` is used, ``latent_dim`` must equal the
+    actor/critic's first hidden dim, and the pretrained MLP weights remain shape-compatible
+    with the finetuned model (the heightmap branch is gated to zero at init via
+    the learnable attention parameter)."""
+
 
 @dataclass(frozen=True)
 class PPOModuleDictConfig:

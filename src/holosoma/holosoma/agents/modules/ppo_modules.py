@@ -626,9 +626,15 @@ class PPOCriticWithHeightMap(nn.Module):
 class PPOActorWithHeightMapVideoMimic(nn.Module):
     """PPO Actor with VideoMimic-style height map encoder.
 
-    Height map flow: (B, H*W*C) -> Linear -> learnable attention gate -> concat
-    with actor_obs and (optionally) motion latent -> MLP.
-    Optionally also supports a motion encoder for future motion targets.
+    Two combine modes (selected via ``height_map_encoder_config['combine_mode']``):
+      * ``"concat"`` (default): heightmap latent is concatenated with actor_obs
+        (and optional motion latent) before the MLP — VideoMimic's
+        ``flatten_then_embed_with_attention``.
+      * ``"add_to_hidden"``: heightmap latent is added to the activation right
+        after the MLP's first Linear layer — VideoMimic's
+        ``flatten_then_embed_with_attention_to_hidden``. Requires
+        ``latent_dim == hidden_dims[0]``. Pretrained MLP weights remain
+        shape-compatible since the MLP input dim does not change.
     """
 
     def __init__(
@@ -653,6 +659,9 @@ class PPOActorWithHeightMapVideoMimic(nn.Module):
             latent_dim=height_map_encoder_config["latent_dim"],
         )
         self.height_map_latent_dim = height_map_encoder_config["latent_dim"]
+        self.combine_mode = height_map_encoder_config.get("combine_mode", "concat")
+        if self.combine_mode not in ("concat", "add_to_hidden"):
+            raise ValueError(f"Unknown combine_mode {self.combine_mode!r} for VideoMimic heightmap")
 
         self.use_motion_encoder = motion_encoder_config is not None
         self.motion_encoder_output_dim = 0
@@ -671,7 +680,16 @@ class PPOActorWithHeightMapVideoMimic(nn.Module):
         module_config_dict = self._process_module_config(module_config_dict, num_actions)
 
         actor_obs_dim = obs_dim_dict.get("actor_obs", 0)
-        combined_input_dim = actor_obs_dim + self.height_map_latent_dim + self.motion_encoder_output_dim
+        if self.combine_mode == "concat":
+            combined_input_dim = actor_obs_dim + self.height_map_latent_dim + self.motion_encoder_output_dim
+        else:
+            first_hidden_dim = module_config_dict.layer_config.hidden_dims[0]
+            if self.height_map_latent_dim != first_hidden_dim:
+                raise ValueError(
+                    f"combine_mode='add_to_hidden' requires heightmap latent_dim={self.height_map_latent_dim} "
+                    f"to equal actor's first hidden_dim={first_hidden_dim}"
+                )
+            combined_input_dim = actor_obs_dim + self.motion_encoder_output_dim
 
         from .modules import build_mlp_layer
         self.actor_module = build_mlp_layer(
@@ -724,14 +742,33 @@ class PPOActorWithHeightMapVideoMimic(nn.Module):
         actor_obs = policy_state_dict["actor_obs"]
         height_map = policy_state_dict["height_map_obs"]
         map_latent = self.height_map_encoder(height_map)
-        parts = [actor_obs, map_latent]
+        if self.combine_mode == "concat":
+            parts = [actor_obs, map_latent]
+            if self.use_motion_encoder:
+                future_motion = policy_state_dict["future_motion_targets"]
+                parts.append(self.motion_encoder(future_motion))
+            return torch.cat(parts, dim=-1)
+        # add_to_hidden: keep map_latent separate, do not concat into MLP input
+        parts = [actor_obs]
         if self.use_motion_encoder:
             future_motion = policy_state_dict["future_motion_targets"]
             parts.append(self.motion_encoder(future_motion))
-        return torch.cat(parts, dim=-1)
+        mlp_input = torch.cat(parts, dim=-1) if len(parts) > 1 else parts[0]
+        return (mlp_input, map_latent)
+
+    def _run_actor_module(self, mlp_input):
+        if self.combine_mode == "concat":
+            return self.actor_module(mlp_input)
+        # add_to_hidden: mlp_input is a (mlp_input, map_latent) tuple
+        x, map_latent = mlp_input
+        x = self.actor_module[0](x)
+        x = x + map_latent
+        for layer in self.actor_module[1:]:
+            x = layer(x)
+        return x
 
     def update_distribution(self, combined_input):
-        mean = self.actor_module(combined_input)
+        mean = self._run_actor_module(combined_input)
         if self.min_noise_std:
             clamped_std = torch.clamp(self.std, min=self.min_noise_std)
             self.distribution = Normal(mean, mean * 0.0 + clamped_std)
@@ -756,7 +793,7 @@ class PPOActorWithHeightMapVideoMimic(nn.Module):
 
     def act_inference(self, policy_state_dict):
         combined = self._build_combined_input(policy_state_dict)
-        return self.actor_module(combined)
+        return self._run_actor_module(combined)
 
 
 class PPOCriticWithHeightMapVideoMimic(nn.Module):
@@ -782,6 +819,9 @@ class PPOCriticWithHeightMapVideoMimic(nn.Module):
             latent_dim=height_map_encoder_config["latent_dim"],
         )
         self.height_map_latent_dim = height_map_encoder_config["latent_dim"]
+        self.combine_mode = height_map_encoder_config.get("combine_mode", "concat")
+        if self.combine_mode not in ("concat", "add_to_hidden"):
+            raise ValueError(f"Unknown combine_mode {self.combine_mode!r} for VideoMimic heightmap")
 
         self.use_motion_encoder = motion_encoder_config is not None
         self.motion_encoder_output_dim = 0
@@ -798,7 +838,16 @@ class PPOCriticWithHeightMapVideoMimic(nn.Module):
             self.motion_encoder_output_dim = motion_enc_cfg.output_dim
 
         critic_obs_dim = obs_dim_dict.get("critic_obs", 0)
-        combined_input_dim = critic_obs_dim + self.height_map_latent_dim + self.motion_encoder_output_dim
+        if self.combine_mode == "concat":
+            combined_input_dim = critic_obs_dim + self.height_map_latent_dim + self.motion_encoder_output_dim
+        else:
+            first_hidden_dim = module_config_dict.layer_config.hidden_dims[0]
+            if self.height_map_latent_dim != first_hidden_dim:
+                raise ValueError(
+                    f"combine_mode='add_to_hidden' requires heightmap latent_dim={self.height_map_latent_dim} "
+                    f"to equal critic's first hidden_dim={first_hidden_dim}"
+                )
+            combined_input_dim = critic_obs_dim + self.motion_encoder_output_dim
 
         from .modules import build_mlp_layer
         self.critic_module = build_mlp_layer(
@@ -822,11 +871,23 @@ class PPOCriticWithHeightMapVideoMimic(nn.Module):
         critic_obs = policy_state_dict["critic_obs"]
         height_map = policy_state_dict["height_map_obs"]
         map_latent = self.height_map_encoder(height_map)
-        parts = [critic_obs, map_latent]
+        if self.combine_mode == "concat":
+            parts = [critic_obs, map_latent]
+            if self.use_motion_encoder:
+                future_motion = policy_state_dict["future_motion_targets"]
+                parts.append(self.motion_encoder(future_motion))
+            return self.critic_module(torch.cat(parts, dim=-1))
+        # add_to_hidden
+        parts = [critic_obs]
         if self.use_motion_encoder:
             future_motion = policy_state_dict["future_motion_targets"]
             parts.append(self.motion_encoder(future_motion))
-        return self.critic_module(torch.cat(parts, dim=-1))
+        mlp_input = torch.cat(parts, dim=-1) if len(parts) > 1 else parts[0]
+        x = self.critic_module[0](mlp_input)
+        x = x + map_latent
+        for layer in self.critic_module[1:]:
+            x = layer(x)
+        return x
 
     def get_hidden_states(self):
         return None

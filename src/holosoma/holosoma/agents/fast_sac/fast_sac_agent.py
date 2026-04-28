@@ -620,7 +620,7 @@ class FastSACAgent(BaseAlgo):
 
         return prepared_batches
 
-    def load(self, ckpt_path: str | None) -> None:
+    def load(self, ckpt_path: str | None, strict: bool = True) -> None:
         if not ckpt_path:
             return
         # Load checkpoint if specified

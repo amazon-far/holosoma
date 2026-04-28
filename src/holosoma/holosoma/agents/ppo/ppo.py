@@ -203,6 +203,7 @@ class PPO(BaseAlgo):
                 "map_width": hm_cfg.map_width,
                 "num_channels": hm_cfg.num_channels,
                 "conv_hidden_channels": hm_cfg.conv_hidden_channels,
+                "combine_mode": getattr(hm_cfg, "combine_mode", "concat"),
             }
             logger.info(f"Height map encoder config: {height_map_encoder_config}")
 
@@ -667,18 +668,34 @@ class PPO(BaseAlgo):
         for param_group in self.critic_optimizer.param_groups:
             param_group["lr"] = self.critic_learning_rate
 
-    def load(self, ckpt_path: str | None) -> dict | None:
+    def load(self, ckpt_path: str | None, strict: bool = True) -> dict | None:
         if ckpt_path is not None:
-            logger.info(f"Loading checkpoint from {ckpt_path}")
+            logger.info(f"Loading checkpoint from {ckpt_path} (strict={strict})")
             loaded_dict = torch.load(ckpt_path, map_location=self.device)
-            self.actor.load_state_dict(loaded_dict["actor_model_state_dict"])
-            self.critic.load_state_dict(loaded_dict["critic_model_state_dict"])
+            actor_missing, actor_unexpected = self.actor.load_state_dict(
+                loaded_dict["actor_model_state_dict"], strict=strict
+            )
+            critic_missing, critic_unexpected = self.critic.load_state_dict(
+                loaded_dict["critic_model_state_dict"], strict=strict
+            )
+            if not strict:
+                if actor_missing or actor_unexpected:
+                    logger.info(
+                        f"Actor non-strict load: missing={list(actor_missing)} unexpected={list(actor_unexpected)}"
+                    )
+                if critic_missing or critic_unexpected:
+                    logger.info(
+                        f"Critic non-strict load: missing={list(critic_missing)} unexpected={list(critic_unexpected)}"
+                    )
             if self.config.load_optimizer:
-                self.actor_optimizer.load_state_dict(loaded_dict["actor_optimizer_state_dict"])
-                self.critic_optimizer.load_state_dict(loaded_dict["critic_optimizer_state_dict"])
-                self.actor_learning_rate = loaded_dict["actor_optimizer_state_dict"]["param_groups"][0]["lr"]
-                self.critic_learning_rate = loaded_dict["critic_optimizer_state_dict"]["param_groups"][0]["lr"]
-                logger.info("Optimizer loaded from checkpoint")
+                if not strict:
+                    logger.info("Skipping optimizer state load because strict=False (param groups likely differ)")
+                else:
+                    self.actor_optimizer.load_state_dict(loaded_dict["actor_optimizer_state_dict"])
+                    self.critic_optimizer.load_state_dict(loaded_dict["critic_optimizer_state_dict"])
+                    self.actor_learning_rate = loaded_dict["actor_optimizer_state_dict"]["param_groups"][0]["lr"]
+                    self.critic_learning_rate = loaded_dict["critic_optimizer_state_dict"]["param_groups"][0]["lr"]
+                    logger.info("Optimizer loaded from checkpoint")
             self.current_learning_iteration = loaded_dict["iter"]
             self._restore_env_state(loaded_dict.get("env_state"))
             return loaded_dict.get("infos")
@@ -1046,16 +1063,22 @@ class PPO(BaseAlgo):
         )
         is_videomimic_hm = isinstance(self.actor, PPOActorWithHeightMapVideoMimic)
 
+        # For VideoMimic-style heightmap with combine_mode='add_to_hidden',
+        # the heightmap latent is added to the activation after the actor's
+        # first Linear layer instead of being concatenated with actor_obs.
+        videomimic_combine_mode = getattr(self.actor, "combine_mode", "concat") if is_videomimic_hm else "concat"
+
         if use_height_map and use_motion_encoder:
             # Height map + motion encoder wrapper
             class ActorWithHeightMapAndMotionWrapper(nn.Module):
-                def __init__(self, actor, is_videomimic_hm):
+                def __init__(self, actor, is_videomimic_hm, combine_mode):
                     super().__init__()
                     self.actor = actor
                     self.height_map_encoder = actor.height_map_encoder
                     self.motion_encoder = actor.motion_encoder
                     self.actor_module = actor.actor_module
                     self.is_videomimic_hm = is_videomimic_hm
+                    self.combine_mode = combine_mode
 
                 def forward(self, actor_obs, height_map_obs, future_motion_targets):
                     if self.is_videomimic_hm:
@@ -1063,29 +1086,43 @@ class PPO(BaseAlgo):
                     else:
                         map_latent = self.height_map_encoder(height_map_obs, actor_obs)
                     motion_latent = self.motion_encoder(future_motion_targets)
+                    if self.combine_mode == "add_to_hidden":
+                        combined_input = torch.cat([actor_obs, motion_latent], dim=-1)
+                        x = self.actor_module[0](combined_input)
+                        x = x + map_latent
+                        for layer in self.actor_module[1:]:
+                            x = layer(x)
+                        return x
                     combined_input = torch.cat([actor_obs, map_latent, motion_latent], dim=-1)
                     return self.actor_module(combined_input)
 
-            return ActorWithHeightMapAndMotionWrapper(self.actor, is_videomimic_hm)
+            return ActorWithHeightMapAndMotionWrapper(self.actor, is_videomimic_hm, videomimic_combine_mode)
         elif use_height_map:
             # Height map only wrapper
             class ActorWithHeightMapWrapper(nn.Module):
-                def __init__(self, actor, is_videomimic_hm):
+                def __init__(self, actor, is_videomimic_hm, combine_mode):
                     super().__init__()
                     self.actor = actor
                     self.height_map_encoder = actor.height_map_encoder
                     self.actor_module = actor.actor_module
                     self.is_videomimic_hm = is_videomimic_hm
+                    self.combine_mode = combine_mode
 
                 def forward(self, actor_obs, height_map_obs):
                     if self.is_videomimic_hm:
                         map_latent = self.height_map_encoder(height_map_obs)
                     else:
                         map_latent = self.height_map_encoder(height_map_obs, actor_obs)
+                    if self.combine_mode == "add_to_hidden":
+                        x = self.actor_module[0](actor_obs)
+                        x = x + map_latent
+                        for layer in self.actor_module[1:]:
+                            x = layer(x)
+                        return x
                     combined_input = torch.cat([actor_obs, map_latent], dim=-1)
                     return self.actor_module(combined_input)
 
-            return ActorWithHeightMapWrapper(self.actor, is_videomimic_hm)
+            return ActorWithHeightMapWrapper(self.actor, is_videomimic_hm, videomimic_combine_mode)
         elif use_motion_encoder:
             # Motion encoder wrapper: takes actor_obs and future_motion_targets
             class ActorWithMotionEncoderWrapper(nn.Module):
@@ -1268,6 +1305,8 @@ class PPO(BaseAlgo):
         policy_input = {"actor_obs": actor_obs}
         if self.use_motion_encoder and "future_motion_targets" in actor_state["obs"]:
             policy_input["future_motion_targets"] = actor_state["obs"]["future_motion_targets"]
+        if self.use_height_map and "height_map_obs" in actor_state["obs"]:
+            policy_input["height_map_obs"] = actor_state["obs"]["height_map_obs"]
         actions = self.eval_policy(policy_input)
         actor_state.update({"actions": actions})
         for c in self.eval_callbacks:

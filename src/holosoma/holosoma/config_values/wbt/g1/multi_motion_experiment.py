@@ -199,6 +199,43 @@ def _future_motion_heightmap_videomimic_algo():
     )
 
 
+def _future_motion_heightmap_videomimic_add_module_dict(ppo_cfg):
+    """Future-motion module_dict + VideoMimic-style heightmap encoder
+    that *adds* the heightmap latent to the activation right after the actor's
+    first Linear layer (mirrors VideoMimic's
+    ``flatten_then_embed_with_attention_to_hidden``).
+
+    Designed for finetuning a non-heightmap pretrained checkpoint: the MLP
+    input dim is unchanged, so all pretrained MLP weights load shape-compatibly,
+    and the new heightmap branch is gated to zero at init via the encoder's
+    learnable attention parameter.
+    """
+    base = _future_motion_module_dict(ppo_cfg)
+    first_hidden_dim = base.actor.layer_config.hidden_dims[0]
+    return replace(
+        base,
+        actor=replace(base.actor, type="MLPWithHeightMapVideoMimic"),
+        critic=replace(base.critic, type="MLPWithHeightMapVideoMimic"),
+        height_map_encoder=HeightMapEncoderConfig(
+            latent_dim=first_hidden_dim,
+            num_heads=16,
+            map_height=11,
+            map_width=17,
+            num_channels=3,
+            conv_hidden_channels=16,
+            combine_mode="add_to_hidden",
+        ),
+    )
+
+
+def _future_motion_heightmap_videomimic_add_algo():
+    cfg = _base_algo()
+    return replace(
+        cfg,
+        config=replace(cfg.config, module_dict=_future_motion_heightmap_videomimic_add_module_dict(cfg.config)),
+    )
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # g1_29dof_multi_motion — many motions on a plane (ex-PhUMA)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -281,6 +318,16 @@ g1_29dof_multi_terrain_future_motion_heightmap_videomimic = replace(
     observation=observation.g1_29dof_wbt_observation_future_motion_heightmap_videomimic,
 )
 
+g1_29dof_multi_terrain_future_motion_heightmap_videomimic_add = replace(
+    g1_29dof_multi_terrain_future_motion,
+    training=replace(
+        g1_29dof_multi_terrain_future_motion.training,
+        name="g1_29dof_multi_terrain_future_motion_heightmap_videomimic_add",
+    ),
+    algo=_future_motion_heightmap_videomimic_add_algo(),
+    observation=observation.g1_29dof_wbt_observation_future_motion_heightmap_videomimic,
+)
+
 
 # Backward-compat aliases for older train scripts that still refer to the
 # legacy PhUMA names.
@@ -294,6 +341,7 @@ __all__ = [
     "g1_29dof_multi_terrain",
     "g1_29dof_multi_terrain_future_motion",
     "g1_29dof_multi_terrain_future_motion_heightmap_videomimic",
+    "g1_29dof_multi_terrain_future_motion_heightmap_videomimic_add",
     "g1_29dof_phuma",
     "g1_29dof_phuma_future_motion",
 ]

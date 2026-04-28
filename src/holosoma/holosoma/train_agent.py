@@ -285,7 +285,7 @@ def train(tyro_config: ExperimentConfig, training_context: TrainingContext | Non
             tyro_config = dataclasses.replace(
                 tyro_config, training=dataclasses.replace(tyro_config.training, checkpoint=str(loaded_checkpoint))
             )
-            algo.load(loaded_checkpoint)
+            algo.load(loaded_checkpoint, strict=not tyro_config.training.finetune)
             if tyro_config.training.finetune:
                 if hasattr(algo, "current_learning_iteration"):
                     algo.current_learning_iteration = 0

@@ -35,7 +35,7 @@ class BaseAlgo:
     def learn(self):
         return NotImplementedError
 
-    def load(self, path):
+    def load(self, path, strict: bool = True):
         return NotImplementedError
 
     @property
