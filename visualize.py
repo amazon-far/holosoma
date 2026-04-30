@@ -37,6 +37,12 @@ def parse_args():
                         help='Reference motion fps (Hz). If not specified, will try to detect from data or use default')
     parser.add_argument('--terrain_npz', type=str, default=None,
                         help='Terrain npz file path containing mesh_vertices and mesh_faces for scene rendering')
+    parser.add_argument('--camera_azimuth', type=float, default=None,
+                        help='Override camera azimuth (degrees). Default depends on whether terrain_npz is set.')
+    parser.add_argument('--camera_elevation', type=float, default=-20.0,
+                        help='Camera elevation angle in degrees. Default -20.')
+    parser.add_argument('--camera_distance', type=float, default=None,
+                        help='Override camera distance (m). Default 4.0 with terrain, 2.2 without.')
     return parser.parse_args()
 
 
@@ -371,10 +377,35 @@ def main():
     
     camera = mujoco.MjvCamera()
     camera.type = mujoco.mjtCamera.mjCAMERA_TRACKING
-    camera.trackbodyid = 0
-    camera.distance = 2.2  # Distance between camera and tracking target
-    camera.elevation = -20.0  # Camera elevation angle
-    camera.azimuth = -140.0  # Camera azimuth angle
+    # Default to body 0 (worldbody) for backwards compatibility with the
+    # legacy "root zeroed at origin" workflow. When a terrain mesh is supplied
+    # the motion lives in absolute terrain coordinates, so we follow the
+    # robot's pelvis (body 1) instead — otherwise the camera sits over
+    # (0,0,0) and the robot walks out of frame.
+    # When a terrain mesh is supplied we render BOTH the main robot and the
+    # ghost in absolute world coordinates. Using mjCAMERA_TRACKING(body=pelvis)
+    # would silently desync the two: each renderer looks up "pelvis" in its
+    # own model context, so the ghost render is taken from the teacher's POV
+    # rather than the student's, and the composited frame ends up showing the
+    # ghost glued to the student's screen position. Using mjCAMERA_FREE with
+    # a lookat we drive ourselves each frame keeps the two renders in the same
+    # world frame; the ghost then appears at its true offset from the main
+    # robot.
+    if args.terrain_npz is not None:
+        camera.type = mujoco.mjtCamera.mjCAMERA_FREE
+        default_distance = 4.0
+        default_azimuth = 90.0  # Side view.
+        track_main_pelvis = True
+    else:
+        camera.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+        camera.trackbodyid = 0
+        default_distance = 2.2
+        default_azimuth = -140.0
+        track_main_pelvis = False
+
+    camera.distance = args.camera_distance if args.camera_distance is not None else default_distance
+    camera.azimuth = args.camera_azimuth if args.camera_azimuth is not None else default_azimuth
+    camera.elevation = args.camera_elevation
     
     frames = []
     
@@ -390,6 +421,11 @@ def main():
                     # Update main model
                     data.qpos = set_qpos(root_pos=root_pos[i], root_ori=root_ori[i], dof_pos=dof_pos[i])
                     mujoco.mj_forward(model, data)
+                    if track_main_pelvis:
+                        # Drive the FREE camera's lookat from the MAIN robot's
+                        # current pelvis position so both the main and ghost
+                        # renders share the exact same world-frame viewpoint.
+                        camera.lookat[:] = root_pos[i]
                     renderer.update_scene(data, camera=camera, scene_option=scene_option)
                     pixels = renderer.render()
 

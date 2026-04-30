@@ -131,16 +131,42 @@ def run_eval_with_tyro(
     # Get simulator reference
     simulator = env.simulator
     
+    def _get_motion_progress(motion_cmd, env_id_local):
+        """Return (current_timestep, total_timesteps) for env ``env_id_local``.
+
+        Supports both single-motion ``MotionCommand`` (``.motion``) and
+        ``MultiMotionCommand`` (``.motion_library`` + ``.motion_indices``).
+        Returns ``None`` when the API is unavailable.
+        """
+        if motion_cmd is None or not hasattr(motion_cmd, "time_steps"):
+            return None
+        cur = motion_cmd.time_steps[env_id_local].item()
+        if hasattr(motion_cmd, "motion") and hasattr(motion_cmd.motion, "time_step_total"):
+            return cur, motion_cmd.motion.time_step_total
+        if hasattr(motion_cmd, "motion_library") and hasattr(motion_cmd, "motion_indices"):
+            mi = motion_cmd.motion_indices[env_id_local].item()
+            totals = motion_cmd.motion_library.time_step_totals
+            return cur, int(totals[mi].item())
+        return None
+
     # Get fps from motion command if available
     fps = 50  # Default fps
     if hasattr(env, 'command_manager'):
         motion_cmd = env.command_manager.get_state("motion_command")
-        if motion_cmd is not None and hasattr(motion_cmd, 'motion'):
-            # Try to get fps from motion data
-            if hasattr(motion_cmd.motion, 'fps'):
-                fps = motion_cmd.motion.fps
-            elif hasattr(motion_cmd.motion, 'dt'):
-                fps = 1.0 / motion_cmd.motion.dt
+        if motion_cmd is not None:
+            # Single-motion command path
+            if hasattr(motion_cmd, 'motion'):
+                if hasattr(motion_cmd.motion, 'fps'):
+                    fps = motion_cmd.motion.fps
+                elif hasattr(motion_cmd.motion, 'dt'):
+                    fps = 1.0 / motion_cmd.motion.dt
+            # MultiMotionCommand path
+            elif hasattr(motion_cmd, 'motion_library'):
+                lib = motion_cmd.motion_library
+                if hasattr(lib, 'fps'):
+                    fps = lib.fps
+                elif hasattr(lib, 'dt'):
+                    fps = 1.0 / lib.dt
     
     logger.info(f"Collecting motion data at {fps} fps...")
     
@@ -195,25 +221,24 @@ def run_eval_with_tyro(
         
         if step % 100 == 0:
             # Log motion progress
+            progress = None
             if hasattr(env, 'command_manager'):
                 motion_cmd = env.command_manager.get_state("motion_command")
-                if motion_cmd is not None and hasattr(motion_cmd, 'time_steps') and hasattr(motion_cmd.motion, 'time_step_total'):
-                    current_timestep = motion_cmd.time_steps[0].item()
-                    total_timesteps = motion_cmd.motion.time_step_total
-                    logger.info(f"Step {step} - Motion progress: {current_timestep}/{total_timesteps}")
-                else:
-                    logger.info(f"Step {step}")
+                progress = _get_motion_progress(motion_cmd, env_id)
+            if progress is not None:
+                current_timestep, total_timesteps = progress
+                logger.info(f"Step {step} - Motion progress: {current_timestep}/{total_timesteps}")
             else:
                 logger.info(f"Step {step}")
-        
+
         # Check if motion ended by detecting timestep reset (decrease)
         motion_ended = False
         if hasattr(env, 'command_manager'):
             motion_cmd = env.command_manager.get_state("motion_command")
-            if motion_cmd is not None and hasattr(motion_cmd, 'time_steps') and hasattr(motion_cmd.motion, 'time_step_total'):
-                current_timestep = motion_cmd.time_steps[0].item()
-                total_timesteps = motion_cmd.motion.time_step_total
-                
+            progress = _get_motion_progress(motion_cmd, env_id)
+            if progress is not None:
+                current_timestep, total_timesteps = progress
+
                 # Check if motion reached near the end
                 if current_timestep >= total_timesteps - 5:
                     motion_completed_once = True

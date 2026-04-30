@@ -36,9 +36,6 @@ from holosoma.utils.inference_helpers import (
 )
 
 
-_PERCEPTION_KEYS = ("future_motion_targets", "height_map_obs")
-
-
 class DAgger(BaseAlgo):
     """Pure DAgger trainer (student actor only, frozen teacher).
 
@@ -96,14 +93,25 @@ class DAgger(BaseAlgo):
     def setup(self):
         logger.info("Setting up DAgger student")
         self._setup_student()
-        logger.info("Loading teacher")
-        self._setup_teacher()
+        # Skip teacher loading when no checkpoint is supplied (e.g. running
+        # eval_agent on a trained student — the teacher is irrelevant there).
+        ckpt = self.config.policy_to_clone
+        if ckpt and Path(ckpt).expanduser().exists():
+            logger.info("Loading teacher")
+            self._setup_teacher()
+        else:
+            logger.info(
+                "Skipping teacher load (policy_to_clone is empty or missing) — "
+                "student-only mode (eval / inference)."
+            )
+            self.teacher_actor = None
+            self.teacher_use_motion_encoder = False
+            self.teacher_use_height_map = False
         logger.info("Setting up rollout storage")
         self._setup_storage()
 
     def _setup_student(self):
         student_cfg = self.config.module_dict
-        motion_enc_cfg = self._student_motion_encoder_config()
         height_map_enc_cfg = self._height_map_encoder_config(student_cfg.height_map_encoder)
 
         history_length = {
@@ -122,24 +130,25 @@ class DAgger(BaseAlgo):
             init_noise_std=self.config.init_noise_std,
             device=self.device,
             history_length=history_length,
-            motion_encoder_config=motion_enc_cfg,
+            motion_encoder_config=None,
             height_map_encoder_config=height_map_enc_cfg,
         )
         self.actor_optimizer = instantiate(
             self.config.actor_optimizer, params=self.actor.parameters(), lr=self.actor_learning_rate
         )
 
+        # Student never sees future motion — distillation point is precisely
+        # that the student must do without it. Only the heightmap branch is
+        # gated by config.
         actor_type = student_cfg.actor.type
-        self.student_use_motion_encoder = (
-            actor_type in ("MLPWithMotionEncoder", "MLPWithHeightMap", "MLPWithHeightMapVideoMimic")
-            and student_cfg.motion_encoder is not None
-            and "future_motion_targets" in self.algo_obs_dim_dict
-        )
         self.student_use_height_map = (
             actor_type in ("MLPWithHeightMap", "MLPWithHeightMapVideoMimic")
             and student_cfg.height_map_encoder is not None
             and "height_map_obs" in self.algo_obs_dim_dict
         )
+        # Alias mirroring PPO's API so eval_agent.py / inference helpers that
+        # introspect `use_height_map` work transparently.
+        self.use_height_map = self.student_use_height_map
 
         if self.is_multi_gpu:
             for param in self.actor.parameters():
@@ -208,22 +217,6 @@ class DAgger(BaseAlgo):
             f"height_map={self.teacher_use_height_map})"
         )
 
-    def _student_motion_encoder_config(self):
-        me_cfg = self.config.module_dict.motion_encoder
-        if me_cfg is None:
-            return None
-        input_dim = me_cfg.input_dim
-        if input_dim == 0 and "future_motion_targets" in self.algo_obs_dim_dict:
-            total_dim = self.algo_obs_dim_dict["future_motion_targets"]
-            input_dim = total_dim // me_cfg.num_timesteps
-        return {
-            "input_dim": input_dim,
-            "hidden_dim": me_cfg.hidden_dim,
-            "output_dim": me_cfg.output_dim,
-            "num_timesteps": me_cfg.num_timesteps,
-            "activation": me_cfg.activation,
-        }
-
     def _teacher_motion_encoder_config(self, teacher_module_dict):
         me_cfg = teacher_module_dict.motion_encoder
         if me_cfg is None:
@@ -264,12 +257,6 @@ class DAgger(BaseAlgo):
             self.storage.register(
                 "height_map_obs",
                 shape=(self.algo_obs_dim_dict["height_map_obs"],),
-                dtype=torch.float,
-            )
-        if self.student_use_motion_encoder:
-            self.storage.register(
-                "future_motion_targets",
-                shape=(self.algo_obs_dim_dict["future_motion_targets"],),
                 dtype=torch.float,
             )
 
@@ -339,8 +326,6 @@ class DAgger(BaseAlgo):
         state = {"actor_obs": actor_obs}
         if self.student_use_height_map:
             state["height_map_obs"] = obs_dict["height_map_obs"]
-        if self.student_use_motion_encoder:
-            state["future_motion_targets"] = obs_dict["future_motion_targets"]
         return state, actor_obs
 
     def _build_teacher_state(self, obs_dict):
@@ -377,8 +362,6 @@ class DAgger(BaseAlgo):
                 }
                 if self.student_use_height_map:
                     storage_data["height_map_obs"] = student_state["height_map_obs"]
-                if self.student_use_motion_encoder:
-                    storage_data["future_motion_targets"] = student_state["future_motion_targets"]
                 self.storage.add(**storage_data)
 
                 self.actor.reset(dones)
@@ -423,8 +406,6 @@ class DAgger(BaseAlgo):
         state = {"actor_obs": minibatch["actor_obs"]}
         if self.student_use_height_map and "height_map_obs" in minibatch:
             state["height_map_obs"] = minibatch["height_map_obs"]
-        if self.student_use_motion_encoder and "future_motion_targets" in minibatch:
-            state["future_motion_targets"] = minibatch["future_motion_targets"]
 
         # Run actor to populate distribution; sampled action itself is unused.
         self.actor.act(state)
@@ -508,32 +489,6 @@ class DAgger(BaseAlgo):
         is_videomimic_hm = isinstance(self.actor, PPOActorWithHeightMapVideoMimic)
         videomimic_combine_mode = getattr(self.actor, "combine_mode", "concat") if is_videomimic_hm else "concat"
 
-        if self.student_use_height_map and self.student_use_motion_encoder:
-            class W(nn.Module):
-                def __init__(self, actor, is_vm, mode):
-                    super().__init__()
-                    self.actor = actor
-                    self.height_map_encoder = actor.height_map_encoder
-                    self.motion_encoder = actor.motion_encoder
-                    self.actor_module = actor.actor_module
-                    self.is_vm = is_vm
-                    self.mode = mode
-
-                def forward(self, actor_obs, height_map_obs, future_motion_targets):
-                    map_latent = self.height_map_encoder(height_map_obs) if self.is_vm else self.height_map_encoder(
-                        height_map_obs, actor_obs
-                    )
-                    motion_latent = self.motion_encoder(future_motion_targets)
-                    if self.mode == "add_to_hidden":
-                        x = self.actor_module[0](torch.cat([actor_obs, motion_latent], dim=-1))
-                        x = x + map_latent
-                        for layer in self.actor_module[1:]:
-                            x = layer(x)
-                        return x
-                    return self.actor_module(torch.cat([actor_obs, map_latent, motion_latent], dim=-1))
-
-            return W(self.actor, is_videomimic_hm, videomimic_combine_mode)
-
         if self.student_use_height_map:
             class W(nn.Module):
                 def __init__(self, actor, is_vm, mode):
@@ -558,20 +513,6 @@ class DAgger(BaseAlgo):
 
             return W(self.actor, is_videomimic_hm, videomimic_combine_mode)
 
-        if self.student_use_motion_encoder:
-            class W(nn.Module):
-                def __init__(self, actor):
-                    super().__init__()
-                    self.actor = actor
-                    self.motion_encoder = actor.motion_encoder
-                    self.actor_module = actor.actor_module
-
-                def forward(self, actor_obs, future_motion_targets):
-                    motion_latent = self.motion_encoder(future_motion_targets)
-                    return self.actor_module(torch.cat([actor_obs, motion_latent], dim=-1))
-
-            return W(self.actor)
-
         class W(nn.Module):
             def __init__(self, actor):
                 super().__init__()
@@ -589,10 +530,6 @@ class DAgger(BaseAlgo):
         }
         if self.student_use_height_map:
             ex["height_map_obs"] = torch.zeros(n, self.algo_obs_dim_dict["height_map_obs"], device=self.device)
-        if self.student_use_motion_encoder:
-            ex["future_motion_targets"] = torch.zeros(
-                n, self.algo_obs_dim_dict["future_motion_targets"], device=self.device
-            )
         return ex
 
     def export(self, onnx_file_path: str):
@@ -602,7 +539,6 @@ class DAgger(BaseAlgo):
         motion_command = self.env.command_manager.get_state("motion_command")
         if (
             motion_command is not None
-            and not self.student_use_motion_encoder
             and not self.student_use_height_map
             and hasattr(motion_command, "motion")
         ):
@@ -638,12 +574,63 @@ class DAgger(BaseAlgo):
             self.actor.train()
 
     # ------------------------------------------------------------------ #
-    # Eval (lightweight — no eval callbacks support yet)
+    # Eval — port of PPO's callback-driven loop, dropped critic/motion-encoder
+    # branches since pure-DAgger student has neither.
     # ------------------------------------------------------------------ #
 
     def _evaluate_during_training(self):
-        # No callback infrastructure for DAgger yet — skip and return current obs.
-        return {}, {k: v.to(self.device) for k, v in self.env.reset_all().items()}
+        """Run eval_callbacks (e.g. SuccessRateCallback) and return (metrics, obs_dict).
+
+        Mirrors PPO's behaviour: switches the actor to eval mode, runs the
+        callback-driven loop on the env, then restores training state and
+        returns a fresh obs_dict for the training loop to resume.
+        """
+        logger.info("Starting periodic evaluation...")
+
+        was_training = self.actor.training
+
+        self._create_eval_callbacks()
+        self.actor.eval()
+        self.env.set_is_evaluating()
+
+        with torch.inference_mode():
+            obs_dict = self.env.reset_all()
+            for c in self.eval_callbacks:
+                c.on_pre_evaluate_policy()
+
+            actor_state = self._create_actor_state()
+            self.eval_policy = self.get_inference_policy()
+            init_actions = torch.zeros(self.env.num_envs, self.num_act, device=self.device)
+            actor_state.update({"obs": obs_dict, "actions": init_actions})
+
+            max_steps = 100000
+            for step in range(max_steps):
+                actor_state["step"] = step
+                actor_state = self._pre_eval_env_step(actor_state)
+                if actor_state.get("stop", False):
+                    break
+                actor_state = self.env_step(actor_state)
+                actor_state = self._post_eval_env_step(actor_state)
+                if actor_state.get("stop", False):
+                    break
+
+            self._post_evaluate_policy()
+
+            all_metrics: dict[str, float] = {}
+            for cb in self.eval_callbacks:
+                if hasattr(cb, "metrics") and cb.metrics:
+                    all_metrics.update(cb.metrics)
+
+            self.env.is_evaluating = False
+            if was_training:
+                self.actor.train()
+
+            obs_dict = self.env.reset_all()
+            for k in obs_dict:
+                obs_dict[k] = obs_dict[k].to(self.device)
+
+            logger.info(f"Evaluation complete: {all_metrics}")
+            return all_metrics, obs_dict
 
     def get_inference_policy(self, device=None):
         self.actor.eval()
@@ -651,14 +638,73 @@ class DAgger(BaseAlgo):
             self.actor.to(device)
         return self.actor.act_inference
 
+    def _create_actor_state(self):
+        return {"done_indices": [], "stop": False}
+
+    def _create_eval_callbacks(self):
+        if self.eval_callbacks:
+            return
+        if self.config.eval_callbacks is not None:
+            for cb in self.config.eval_callbacks:
+                self.eval_callbacks.append(instantiate(self.config.eval_callbacks[cb], training_loop=self))
+
+    def _pre_evaluate_policy(self, reset_env: bool = True):
+        self.actor.eval()
+        self.env.set_is_evaluating()
+        if reset_env:
+            _ = self.env.reset_all()
+        for c in self.eval_callbacks:
+            c.on_pre_evaluate_policy()
+
+    def _post_evaluate_policy(self):
+        for c in self.eval_callbacks:
+            c.on_post_evaluate_policy()
+
+    def _pre_eval_env_step(self, actor_state):
+        actor_obs = torch.cat([actor_state["obs"][k] for k in self.actor_obs_keys], dim=1)
+        policy_input = {"actor_obs": actor_obs}
+        if self.student_use_height_map and "height_map_obs" in actor_state["obs"]:
+            policy_input["height_map_obs"] = actor_state["obs"]["height_map_obs"]
+        actions = self.eval_policy(policy_input)
+        actor_state.update({"actions": actions})
+        for c in self.eval_callbacks:
+            actor_state = c.on_pre_eval_env_step(actor_state)
+        return actor_state
+
+    def _post_eval_env_step(self, actor_state):
+        for c in self.eval_callbacks:
+            actor_state = c.on_post_eval_env_step(actor_state)
+        return actor_state
+
+    def env_step(self, actor_state):
+        obs_dict, rewards, dones, extras = self.env.step(actor_state)
+        actor_state.update({"obs": obs_dict, "rewards": rewards, "dones": dones, "extras": extras})
+        return actor_state
+
     @torch.no_grad()
     def evaluate_policy(self, max_eval_steps: int | None = None):
-        # Minimal eval loop — env steps with student deterministic actions.
-        self.actor.eval()
+        import itertools
+
+        self._create_eval_callbacks()
+        self._pre_evaluate_policy()
+        actor_state = self._create_actor_state()
+        self.eval_policy = self.get_inference_policy()
+
         obs_dict = self.env.reset_all()
-        policy = self.get_inference_policy()
-        steps = max_eval_steps or 10000
-        for _ in range(steps):
-            state, _ = self._build_student_state({k: v.to(self.device) for k, v in obs_dict.items()})
-            actions = policy(state)
-            obs_dict, _, _, _ = self.env.step({"actions": actions})
+        for k in obs_dict:
+            obs_dict[k] = obs_dict[k].to(self.device)
+        init_actions = torch.zeros(self.env.num_envs, self.num_act, device=self.device)
+        actor_state.update({"obs": obs_dict, "actions": init_actions})
+
+        actor_state = self._pre_eval_env_step(actor_state)
+        for step in itertools.islice(itertools.count(), max_eval_steps):
+            actor_state["step"] = step
+            actor_state = self._pre_eval_env_step(actor_state)
+            if actor_state.get("stop", False):
+                break
+            actor_state = self.env_step(actor_state)
+            actor_state = self._post_eval_env_step(actor_state)
+            if actor_state.get("stop", False):
+                break
+
+        self._post_evaluate_policy()

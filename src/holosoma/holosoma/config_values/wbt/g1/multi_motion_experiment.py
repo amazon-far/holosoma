@@ -382,6 +382,8 @@ def _dagger_student_algo() -> DAggerAlgoConfig:
             num_mini_batches=4,
             init_noise_std=0.8,
             save_interval=SAVE_INTERVAL,
+            eval_interval=EVAL_INTERVAL,
+            eval_callbacks=_eval_callbacks,
             num_learning_iterations=NUM_LEARNING_ITERATIONS,
             bc_sigma_loss_coef=1.0,
             clip_teacher_actions=True,
