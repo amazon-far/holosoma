@@ -572,10 +572,14 @@ class PPO(BaseAlgo):
         sigma_batch = self.actor.action_std[:original_batch_size]
         entropy_batch = self.actor.entropy[:original_batch_size]
 
-        if self.config.desired_kl is not None and self.config.schedule == "adaptive":
-            # Compute the KL divergence between the old and new action distributions
+        # KL is cheap to compute and useful for logging regardless of schedule.
+        # Only feed it back into the LR when running the adaptive schedule.
+        if self.config.desired_kl is not None:
             kl_mean = self._compute_kl_div(old_mu_batch, old_sigma_batch, mu_batch, sigma_batch)
-            self._update_learning_rate(kl_mean)
+            if self.config.schedule == "adaptive":
+                self._update_learning_rate(kl_mean)
+        else:
+            kl_mean = torch.tensor(0.0, device=self.device)
 
         # Surrogate loss
         ratio = torch.exp(actions_log_prob_batch - torch.squeeze(old_actions_log_prob_batch))
@@ -675,9 +679,24 @@ class PPO(BaseAlgo):
             actor_missing, actor_unexpected = self.actor.load_state_dict(
                 loaded_dict["actor_model_state_dict"], strict=strict
             )
-            critic_missing, critic_unexpected = self.critic.load_state_dict(
-                loaded_dict["critic_model_state_dict"], strict=strict
-            )
+            # Stage-4-style RL finetune: when warming up from a DAgger checkpoint
+            # there is no critic to load — keep the freshly random-initialised
+            # critic weights and just log it. Hard-fail in strict mode.
+            if "critic_model_state_dict" in loaded_dict:
+                critic_missing, critic_unexpected = self.critic.load_state_dict(
+                    loaded_dict["critic_model_state_dict"], strict=strict
+                )
+            elif strict:
+                raise KeyError(
+                    "Checkpoint has no 'critic_model_state_dict'; cannot strict-load. "
+                    "Pass --training.finetune True to skip the critic load."
+                )
+            else:
+                logger.info(
+                    "Checkpoint has no critic_model_state_dict — keeping randomly "
+                    "initialised critic (RL finetune from a critic-less checkpoint)."
+                )
+                critic_missing, critic_unexpected = [], []
             if not strict:
                 if actor_missing or actor_unexpected:
                     logger.info(

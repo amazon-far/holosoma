@@ -123,12 +123,22 @@ def set_qpos(root_pos, root_ori, dof_pos):
 
 def load_motion_data(file_path, default_fps=30):
     """
-    Load motion data from .npy or .pkl file.
-    
+    Load motion data from .npy / .pkl / .npz file.
+
+    .npz path: training-time motion files (e.g. from holosoma's
+    Unreal_Engine_stair / videomimic_captures datasets). They store
+    ``body_pos_w`` (T, B, 3), ``body_quat_w`` (T, B, 4) in **wxyz**
+    convention with body 1 = pelvis, plus a 36-column ``joint_pos`` whose
+    first 7 entries are the root pose and the remaining 29 are joint
+    angles. This loader extracts those into the canonical
+    ``{root_trans, root_ori (xyzw), dof_pos, fps}`` shape, so the same
+    ``--input`` / ``--ref_motion`` plumbing works for both rolled-out
+    policy npys and raw motion-data npzs.
+
     Args:
-        file_path: Path to motion file (.npy or .pkl)
+        file_path: Path to motion file (.npy / .pkl / .npz)
         default_fps: Default fps to use if not found in data
-    
+
     Returns:
         dict with keys: 'root_trans', 'root_ori', 'dof_pos', 'fps'
     """
@@ -137,12 +147,27 @@ def load_motion_data(file_path, default_fps=30):
         data = joblib.load(file_path)
         # Get first value from dictionary (pkl format: {filename: {data}})
         motion_data = list(data.values())[0]
-        
+
         return {
             'root_trans': motion_data['root_trans_offset'],
             'root_ori': motion_data['root_rot'],
             'dof_pos': motion_data['dof'],
             'fps': motion_data.get('fps', default_fps)
+        }
+    elif file_path.endswith('.npz'):
+        d = np.load(file_path, allow_pickle=True)
+        pel_pos = d['body_pos_w'][:, 1, :].astype(np.float32)
+        # Motion data stores quat as wxyz; reorder to xyzw for set_qpos.
+        pel_quat_wxyz = d['body_quat_w'][:, 1, :].astype(np.float32)
+        pel_quat = pel_quat_wxyz[:, [1, 2, 3, 0]]
+        joint_pos = d['joint_pos'][:, 7:].astype(np.float32)
+        fps_arr = d['fps'] if 'fps' in d.files else None
+        fps = int(fps_arr[0]) if fps_arr is not None and fps_arr.size else default_fps
+        return {
+            'root_trans': pel_pos,
+            'root_ori': pel_quat,
+            'dof_pos': joint_pos,
+            'fps': fps,
         }
     else:
         # Load npy file (from play_g1.py, typically 50fps for IsaacGym)
@@ -263,9 +288,12 @@ def main():
     
     # Determine default fps based on file type
     # play_g1.py output (npy) is typically 50fps (IsaacGym default)
+    # holosoma motion .npz files are also typically 50fps
     # pkl files are typically 30fps
-    input_default_fps = 50 if args.input.endswith('.npy') else 30
-    ref_default_fps = 50 if args.ref_motion and args.ref_motion.endswith('.npy') else 30
+    input_default_fps = 50 if args.input.endswith(('.npy', '.npz')) else 30
+    ref_default_fps = (
+        50 if args.ref_motion and args.ref_motion.endswith(('.npy', '.npz')) else 30
+    )
     
     # Load motion data
     print(f"Loading motion data from {args.input}...")

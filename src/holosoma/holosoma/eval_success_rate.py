@@ -46,6 +46,10 @@ def main():
     parser.add_argument("--split_file", default=None, help="Override split_file")
     parser.add_argument("--num_envs", type=int, default=4096,
                         help="Number of parallel envs for evaluation (default: 4096)")
+    parser.add_argument("--max_motions", type=int, default=None,
+                        help="Override max_motions / pool_size in the saved config so a "
+                        "checkpoint trained with pool_size=8192 can be evaluated on a smaller "
+                        "motion dir.")
     parser.add_argument("--simulator", default=None, choices=["mujoco", "mjwarp"],
                         help="Override simulator for sim-to-sim eval (default: use saved simulator)")
     args = parser.parse_args()
@@ -98,6 +102,10 @@ def main():
         if args.split_file is not None:
             motion_config["split_file"] = args.split_file
             logger.info(f"Overriding split_file -> {args.split_file}")
+        if args.max_motions is not None:
+            motion_config["max_motions"] = args.max_motions
+            motion_config["pool_size"] = args.max_motions
+            logger.info(f"Overriding max_motions/pool_size -> {args.max_motions}")
     else:
         updates = {}
         if args.motion_dir is not None:
@@ -106,6 +114,10 @@ def main():
         if args.split_file is not None:
             updates["split_file"] = args.split_file
             logger.info(f"Overriding split_file -> {args.split_file}")
+        if args.max_motions is not None:
+            updates["max_motions"] = args.max_motions
+            updates["pool_size"] = args.max_motions
+            logger.info(f"Overriding max_motions/pool_size -> {args.max_motions}")
         if updates:
             new_motion_config = dataclasses.replace(motion_config, **updates)
             eval_cfg.command.setup_terms["motion_command"].params["motion_config"] = new_motion_config

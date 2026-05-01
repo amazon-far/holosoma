@@ -20,9 +20,11 @@ from holosoma.config_types.algo import (
     ModuleConfig,
     MotionEncoderConfig,
     OptimizerConfig,
+    PPOModuleDictConfig,
 )
 from holosoma.config_types.command import CommandManagerCfg, CommandTermCfg, MultiMotionConfig, NoiseToInitialPoseConfig
 from holosoma.config_types.experiment import ExperimentConfig, TrainingConfig
+from holosoma.config_types.reward import RewardManagerCfg, RewardTermCfg
 from holosoma.config_values import (
     action,
     algo,
@@ -404,6 +406,80 @@ g1_29dof_multi_terrain_videomimic_student_dagger = replace(
 )
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Stage-4-style RL finetune of the DAgger student.
+#
+# Mirrors VideoMimic's `train_stage_4_rl_finetune.sh`:
+#   * Same task / env / observation as the DAgger student (so the trained
+#     student weights drop in unchanged).
+#   * Algo: PPO (drop the BC term entirely; ``bc_loss_coef`` is gone).
+#   * Critic is randomly initialised — the DAgger checkpoint has no critic.
+#     Use ``--training.finetune True --training.checkpoint=<dagger_ckpt>`` to
+#     load the actor weights and skip the missing critic.
+#   * Lower learning rate (3e-5, fixed schedule) so the student doesn't
+#     drift from its BC initialisation while the critic catches up.
+# ──────────────────────────────────────────────────────────────────────────────
+def _student_rl_finetune_algo():
+    """PPO algo whose actor matches the DAgger student exactly so the
+    weights load cleanly. Critic shares the same architecture for
+    consistency."""
+
+    actor = ModuleConfig(
+        type="MLPWithHeightMapVideoMimic",
+        input_dim=["actor_obs"],
+        output_dim=["robot_action_dim"],
+        layer_config=LayerConfig(hidden_dims=[1024, 512, 256, 128], activation="ELU"),
+    )
+    critic = ModuleConfig(
+        type="MLPWithHeightMapVideoMimic",
+        input_dim=["critic_obs"],
+        output_dim=[1],
+        layer_config=LayerConfig(hidden_dims=[1024, 512, 256, 128], activation="ELU"),
+    )
+    height_map_encoder = HeightMapEncoderConfig(
+        latent_dim=1024,
+        num_heads=16,
+        map_height=11,
+        map_width=17,
+        num_channels=3,
+        conv_hidden_channels=16,
+        combine_mode="add_to_hidden",
+    )
+
+    base = _base_algo()
+    return replace(
+        base,
+        config=replace(
+            base.config,
+            actor_learning_rate=3e-5,
+            critic_learning_rate=3e-5,
+            schedule="fixed",
+            entropy_coef=0.005,
+            actor_optimizer=replace(base.config.actor_optimizer, weight_decay=0.000),
+            critic_optimizer=replace(base.config.critic_optimizer, weight_decay=0.000),
+            module_dict=PPOModuleDictConfig(
+                actor=actor,
+                critic=critic,
+                height_map_encoder=height_map_encoder,
+            ),
+        ),
+    )
+
+
+g1_29dof_multi_terrain_videomimic_student_rl_finetune = replace(
+    g1_29dof_multi_terrain_future_motion,
+    training=replace(
+        g1_29dof_multi_terrain_future_motion.training,
+        name="g1_29dof_multi_terrain_videomimic_student_rl_finetune",
+    ),
+    algo=_student_rl_finetune_algo(),
+    observation=observation.g1_29dof_wbt_observation_videomimic_student,
+    # reward은 teacher가 학습한 g1_29dof_wbt_reward 그대로 (g1_29dof_multi_motion에서 상속).
+    # 필요하면 termination/alive 같은 survival shaping을 나중에 sh에서 override:
+    #   --reward.terms.termination.weight=-200 ...
+)
+
+
 # Backward-compat aliases for older train scripts that still refer to the
 # legacy PhUMA names.
 g1_29dof_phuma = g1_29dof_multi_motion
@@ -418,6 +494,7 @@ __all__ = [
     "g1_29dof_multi_terrain_future_motion_heightmap_videomimic",
     "g1_29dof_multi_terrain_future_motion_heightmap_videomimic_add",
     "g1_29dof_multi_terrain_videomimic_student_dagger",
+    "g1_29dof_multi_terrain_videomimic_student_rl_finetune",
     "g1_29dof_phuma",
     "g1_29dof_phuma_future_motion",
 ]
