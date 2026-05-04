@@ -152,6 +152,7 @@ for TASK_FILE in "${TASK_FILES[@]}"; do
         --output_name "$CONVERTED_FILE" \
         --data_format lafan \
         --object_name "ground" \
+        --no-visualize \
         --once
 done
 
