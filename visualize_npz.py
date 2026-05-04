@@ -161,6 +161,7 @@ def _run_viewer(model, joint_pos, fps, dt, num_frames, duration, loop):
     viewer.cam.distance = 3.0
     viewer.cam.elevation = -20.0
     viewer.cam.azimuth = 45.0
+    viewer.cam.lookat[:] = joint_pos[0, :3]
 
     # Playback loop
     frame_idx = 0
@@ -183,6 +184,7 @@ def _run_viewer(model, joint_pos, fps, dt, num_frames, duration, loop):
 
         # Forward kinematics
         mujoco.mj_forward(model, data_mj)
+        viewer.cam.lookat[:] = joint_pos[frame_idx, :3]
         viewer.sync()
 
         # Print progress every 50 frames

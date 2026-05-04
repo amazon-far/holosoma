@@ -480,6 +480,47 @@ g1_29dof_multi_terrain_videomimic_student_rl_finetune = replace(
 )
 
 
+# Same as `g1_29dof_multi_terrain_videomimic_student_rl_finetune` but the
+# actor sees a VideoMimic-narrowed command (xy + yaw only), so the trained
+# policy can be deployed with a 3-DoF user input (gamepad / joystick) the
+# same way VideoMimic deploys their stage-3/4 student. See
+# `g1_29dof_wbt_observation_videomimic_student_xy_yaw` for the obs change.
+#
+# The algo also enables the BC→PPO scheduler in PPOConfig: 10k iters of
+# pure BC against the videomimic teacher (= "stage 3 inside this run"),
+# 5k iters of linear ramp from BC to PPO, then plain PPO. Set
+# `--algo.config.teacher_checkpoint=<path>` from the train script to
+# point at the teacher .pt; with an empty teacher_checkpoint the
+# scheduler is a no-op and the run reduces to plain PPO.
+def _student_rl_finetune_xy_yaw_algo():
+    base = _student_rl_finetune_algo()
+    return replace(
+        base,
+        config=replace(
+            base.config,
+            bc_warmup_iters=10000,
+            bc_to_ppo_iters=5000,
+            bc_loss_coef_max=1.0,
+            bc_sigma_loss_coef=1.0,
+            clip_teacher_actions=True,
+            clip_actions_threshold=8.0,
+            # teacher_checkpoint is intentionally empty here — supply via
+            # `--algo.config.teacher_checkpoint=<path>` in the run script.
+        ),
+    )
+
+
+g1_29dof_multi_terrain_videomimic_student_rl_finetune_xy_yaw = replace(
+    g1_29dof_multi_terrain_future_motion,
+    training=replace(
+        g1_29dof_multi_terrain_future_motion.training,
+        name="g1_29dof_multi_terrain_videomimic_student_rl_finetune_xy_yaw",
+    ),
+    algo=_student_rl_finetune_xy_yaw_algo(),
+    observation=observation.g1_29dof_wbt_observation_videomimic_student_xy_yaw,
+)
+
+
 # Backward-compat aliases for older train scripts that still refer to the
 # legacy PhUMA names.
 g1_29dof_phuma = g1_29dof_multi_motion
@@ -495,6 +536,7 @@ __all__ = [
     "g1_29dof_multi_terrain_future_motion_heightmap_videomimic_add",
     "g1_29dof_multi_terrain_videomimic_student_dagger",
     "g1_29dof_multi_terrain_videomimic_student_rl_finetune",
+    "g1_29dof_multi_terrain_videomimic_student_rl_finetune_xy_yaw",
     "g1_29dof_phuma",
     "g1_29dof_phuma_future_motion",
 ]

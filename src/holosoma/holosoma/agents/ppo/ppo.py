@@ -12,6 +12,8 @@ from torch import nn
 from torch.distributions import Normal, kl_divergence
 from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 
+from pathlib import Path
+
 from holosoma.agents.base_algo.base_algo import BaseAlgo
 from holosoma.agents.callbacks.base_callback import RLEvalCallback
 from holosoma.agents.modules.augmentation_utils import SymmetryUtils
@@ -23,6 +25,7 @@ from holosoma.agents.modules.module_utils import (
 )
 from holosoma.config_types.algo import PPOConfig
 from holosoma.envs.base_task.base_task import BaseTask
+from holosoma.utils.eval_utils import CheckpointConfig, load_saved_experiment_config
 from holosoma.utils.helpers import instantiate
 from holosoma.utils.inference_helpers import (
     attach_onnx_metadata,
@@ -164,6 +167,10 @@ class PPO(BaseAlgo):
     def setup(self):
         logger.info("Setting up PPO")
         self._setup_models_and_optimizer()
+        # Optional teacher for the BC→PPO scheduler. Loaded BEFORE
+        # `_setup_storage` so the rollout buffer can register the extra
+        # teacher action mean/sigma fields.
+        self._setup_teacher_for_bc()
         logger.info("Setting up Storage")
         self._setup_storage()
 
@@ -171,6 +178,140 @@ class PPO(BaseAlgo):
         if self.is_multi_gpu:
             if self.has_curricula_enabled():
                 logger.info(f"Multi-GPU curriculum synchronization enabled across {self.gpu_world_size} GPUs")
+
+    # ------------------------------------------------------------------ #
+    # Optional teacher-BC loader (no-op when teacher_checkpoint is empty)
+    # ------------------------------------------------------------------ #
+
+    def _setup_teacher_for_bc(self) -> None:
+        ckpt_path = self.config.teacher_checkpoint
+        self.teacher_actor = None
+        self.teacher_use_height_map = False
+        self.teacher_use_motion_encoder = False
+
+        if not ckpt_path:
+            return
+        if not Path(ckpt_path).expanduser().exists():
+            logger.warning(
+                f"PPO teacher_checkpoint='{ckpt_path}' does not exist on disk — "
+                "BC scheduler disabled, plain PPO behaviour."
+            )
+            return
+
+        teacher_obs_key = self.config.teacher_actor_obs_key
+        groups = self.env.observation_manager.cfg.groups
+        if teacher_obs_key not in groups:
+            raise RuntimeError(
+                f"PPO teacher BC requires obs group '{teacher_obs_key}' to be "
+                "present in the observation config (the env must publish the "
+                "teacher's actor obs separately from the student's actor_obs)."
+            )
+
+        teacher_exp_cfg, _ = load_saved_experiment_config(CheckpointConfig(checkpoint=ckpt_path))
+        teacher_algo_cfg = teacher_exp_cfg.algo.config
+        teacher_module_dict = teacher_algo_cfg.module_dict
+
+        # Remap the env's teacher obs into the canonical `actor_obs` slot
+        # the teacher checkpoint expects.
+        teacher_obs_dim_dict = dict(self.algo_obs_dim_dict)
+        teacher_obs_dim_dict["actor_obs"] = self.algo_obs_dim_dict[teacher_obs_key]
+
+        history_key = self.config.teacher_actor_obs_history_key or teacher_obs_key
+        teacher_history_length = {
+            "actor_obs": groups[history_key].history_length,
+            "critic_obs": groups.get("critic_obs", groups[history_key]).history_length,
+        }
+
+        # Reuse the same encoder configs the teacher was trained with. We
+        # don't call _setup_models_and_optimizer's helpers because they read
+        # from self.config (the *student*'s config) — instead we rebuild the
+        # tiny encoder dicts inline from the teacher's module_dict.
+        teacher_motion_enc = None
+        if (
+            getattr(teacher_module_dict, "motion_encoder", None) is not None
+            and "future_motion_targets" in self.algo_obs_dim_dict
+        ):
+            me_cfg = teacher_module_dict.motion_encoder
+            input_dim = me_cfg.input_dim
+            if input_dim == 0:
+                input_dim = self.algo_obs_dim_dict["future_motion_targets"] // me_cfg.num_timesteps
+            teacher_motion_enc = {
+                "input_dim": input_dim,
+                "hidden_dim": me_cfg.hidden_dim,
+                "output_dim": me_cfg.output_dim,
+                "num_timesteps": me_cfg.num_timesteps,
+                "activation": me_cfg.activation,
+            }
+
+        teacher_height_enc = None
+        if (
+            getattr(teacher_module_dict, "height_map_encoder", None) is not None
+            and "height_map_obs" in self.algo_obs_dim_dict
+        ):
+            hm = teacher_module_dict.height_map_encoder
+            teacher_height_enc = {
+                "latent_dim": hm.latent_dim,
+                "num_heads": hm.num_heads,
+                "map_height": hm.map_height,
+                "map_width": hm.map_width,
+                "num_channels": hm.num_channels,
+                "conv_hidden_channels": hm.conv_hidden_channels,
+                "combine_mode": getattr(hm, "combine_mode", "concat"),
+            }
+
+        teacher_actor = setup_ppo_actor_module(
+            obs_dim_dict=teacher_obs_dim_dict,
+            module_config=teacher_module_dict.actor,
+            num_actions=self.num_act,
+            init_noise_std=teacher_algo_cfg.init_noise_std,
+            device=self.device,
+            history_length=teacher_history_length,
+            motion_encoder_config=teacher_motion_enc,
+            height_map_encoder_config=teacher_height_enc,
+        )
+
+        loaded = torch.load(ckpt_path, map_location=self.device)
+        teacher_actor.load_state_dict(loaded["actor_model_state_dict"])
+        teacher_actor.eval()
+        for p in teacher_actor.parameters():
+            p.requires_grad = False
+
+        self.teacher_actor = teacher_actor
+        teacher_actor_type = teacher_module_dict.actor.type
+        self.teacher_use_motion_encoder = teacher_motion_enc is not None and teacher_actor_type in (
+            "MLPWithMotionEncoder",
+            "MLPWithHeightMap",
+            "MLPWithHeightMapVideoMimic",
+        )
+        self.teacher_use_height_map = teacher_height_enc is not None and teacher_actor_type in (
+            "MLPWithHeightMap",
+            "MLPWithHeightMapVideoMimic",
+        )
+        logger.info(
+            f"PPO BC teacher loaded from {ckpt_path} "
+            f"(type={teacher_actor_type}, motion_encoder={self.teacher_use_motion_encoder}, "
+            f"height_map={self.teacher_use_height_map}, "
+            f"warmup={self.config.bc_warmup_iters}, ramp={self.config.bc_to_ppo_iters})"
+        )
+
+    def _get_bc_schedule(self, it: int) -> tuple[float, float]:
+        """Return ``(ppo_coef, bc_coef)`` for the given training iteration.
+
+        Iterations 0..bc_warmup-1                       → (0, max)
+        bc_warmup..bc_warmup+bc_to_ppo-1 (linear ramp)  → (alpha, max*(1-alpha))
+        otherwise                                       → (1, 0)
+        """
+        if self.teacher_actor is None:
+            return 1.0, 0.0
+        warmup = max(0, int(self.config.bc_warmup_iters))
+        ramp = max(0, int(self.config.bc_to_ppo_iters))
+        bc_max = float(self.config.bc_loss_coef_max)
+        if it < warmup:
+            return 0.0, bc_max
+        if ramp <= 0 or it >= warmup + ramp:
+            return 1.0, 0.0
+        alpha = (it - warmup) / float(ramp)
+        return alpha, bc_max * (1.0 - alpha)
 
     def _setup_models_and_optimizer(self):
         # Get motion encoder config if available
@@ -306,6 +447,16 @@ class PPO(BaseAlgo):
         for key, shape, dtype in minibatch_keys:
             self.storage.register(key, shape=shape, dtype=dtype)
 
+        # Extra rollout fields for the teacher BC scheduler.
+        if self.teacher_actor is not None:
+            self.storage.register(
+                "teacher_actor_obs",
+                shape=(self.algo_obs_dim_dict[self.config.teacher_actor_obs_key],),
+                dtype=torch.float,
+            )
+            self.storage.register("teacher_action_mean", shape=(self.num_act,), dtype=torch.float)
+            self.storage.register("teacher_action_sigma", shape=(self.num_act,), dtype=torch.float)
+
     def _eval_mode(self):
         self.actor.eval()
         self.critic.eval()
@@ -388,6 +539,23 @@ class PPO(BaseAlgo):
                 actions = self.actor.act(policy_state)
                 values = self.critic.evaluate(policy_state).detach()
 
+                # Query the BC teacher (if loaded) on its own obs slice so we
+                # can match the student's action distribution against it
+                # during the BC warmup / ramp phase.
+                teacher_obs = None
+                teacher_action_mean = None
+                teacher_action_sigma = None
+                if self.teacher_actor is not None:
+                    teacher_obs = obs_dict[self.config.teacher_actor_obs_key]
+                    teacher_state = {"actor_obs": teacher_obs}
+                    if self.teacher_use_height_map and "height_map_obs" in obs_dict:
+                        teacher_state["height_map_obs"] = obs_dict["height_map_obs"]
+                    if self.teacher_use_motion_encoder and "future_motion_targets" in obs_dict:
+                        teacher_state["future_motion_targets"] = obs_dict["future_motion_targets"]
+                    self.teacher_actor.act(teacher_state)
+                    teacher_action_mean = self.teacher_actor.action_mean.detach()
+                    teacher_action_sigma = self.teacher_actor.action_std.detach()
+
                 obs_dict, rewards, dones, infos = self.env.step({"actions": actions})
 
                 for obs_key in obs_dict:
@@ -428,6 +596,10 @@ class PPO(BaseAlgo):
                     storage_data["height_map_obs"] = height_map
                 if self.use_motion_encoder:
                     storage_data["future_motion_targets"] = future_motion
+                if self.teacher_actor is not None:
+                    storage_data["teacher_actor_obs"] = teacher_obs
+                    storage_data["teacher_action_mean"] = teacher_action_mean
+                    storage_data["teacher_action_sigma"] = teacher_action_sigma
                 self.storage.add(**storage_data)
 
                 # Reset actor and critic for completed envs
@@ -497,10 +669,26 @@ class PPO(BaseAlgo):
     def _update_algo_step(self, minibatch: Minibatch, loss_dict: dict[str, float]):
         ppo_loss_dict = self._compute_ppo_loss(minibatch)
 
+        # BC scheduler — value loss is unaffected, only the actor side gets
+        # blended between PPO and a behaviour-cloning term against the
+        # frozen teacher.
+        ppo_coef, bc_coef = self._get_bc_schedule(self.current_learning_iteration)
+        bc_loss_value = torch.tensor(0.0, device=self.device)
+        bc_mu_loss_value = torch.tensor(0.0, device=self.device)
+        bc_sigma_loss_value = torch.tensor(0.0, device=self.device)
+        if self.teacher_actor is not None and bc_coef > 0.0:
+            bc_losses = self._compute_bc_loss(minibatch)
+            bc_loss_value = bc_losses["bc_loss"]
+            bc_mu_loss_value = bc_losses["mu_loss"]
+            bc_sigma_loss_value = bc_losses["sigma_loss"]
+
+        actor_loss = ppo_coef * ppo_loss_dict["actor_loss"] + bc_coef * bc_loss_value
+        critic_loss = ppo_loss_dict["critic_loss"]
+
         self.actor_optimizer.zero_grad()
         self.critic_optimizer.zero_grad()
 
-        ppo_loss = ppo_loss_dict["actor_loss"] + ppo_loss_dict["critic_loss"]
+        ppo_loss = actor_loss + critic_loss
         ppo_loss.backward()
 
         if self.is_multi_gpu:
@@ -522,7 +710,45 @@ class PPO(BaseAlgo):
                 loss_dict[key] = 0.0
             loss_value = loss.item() if torch.is_tensor(loss) else loss
             loss_dict[key] += loss_value
+        if self.teacher_actor is not None:
+            for k in ("BC", "BC_mu", "BC_sigma", "bc_coef", "ppo_coef"):
+                loss_dict.setdefault(k, 0.0)
+            loss_dict["BC"] += float(bc_loss_value.item()) if torch.is_tensor(bc_loss_value) else float(bc_loss_value)
+            loss_dict["BC_mu"] += float(bc_mu_loss_value.item()) if torch.is_tensor(bc_mu_loss_value) else float(bc_mu_loss_value)
+            loss_dict["BC_sigma"] += float(bc_sigma_loss_value.item()) if torch.is_tensor(bc_sigma_loss_value) else float(bc_sigma_loss_value)
+            loss_dict["bc_coef"] += float(bc_coef)
+            loss_dict["ppo_coef"] += float(ppo_coef)
         return loss_dict
+
+    def _compute_bc_loss(self, minibatch: Minibatch) -> dict[str, torch.Tensor]:
+        """Behaviour-cloning loss between the student actor and the frozen
+        teacher's action distribution. Mirrors the formulation in the
+        DAgger algo (mu MSE + sigma MSE) but reads the teacher mean/sigma
+        from the rollout buffer rather than re-querying the teacher."""
+        teacher_mu = minibatch["teacher_action_mean"]
+        teacher_sigma = minibatch["teacher_action_sigma"]
+
+        if self.config.clip_teacher_actions:
+            t = self.config.clip_actions_threshold
+            teacher_mu = torch.clamp(teacher_mu, -t, t)
+
+        # Run the student actor on the same minibatch obs to populate its
+        # action distribution. The PPO surrogate path also runs `actor.act`
+        # on the same minibatch above, but the BC loss needs gradients
+        # through `mu_student` / `sigma_student`, so we re-run it here.
+        student_state = {"actor_obs": minibatch["actor_obs"]}
+        if self.use_height_map and "height_map_obs" in minibatch:
+            student_state["height_map_obs"] = minibatch["height_map_obs"]
+        if self.use_motion_encoder and "future_motion_targets" in minibatch:
+            student_state["future_motion_targets"] = minibatch["future_motion_targets"]
+        self.actor.act(student_state)
+        mu_student = self.actor.action_mean
+        sigma_student = self.actor.action_std
+
+        mu_loss = (teacher_mu - mu_student).pow(2).sum(dim=-1).mean()
+        sigma_loss = (sigma_student - teacher_sigma).pow(2).sum(dim=-1).mean()
+        bc_loss = mu_loss + self.config.bc_sigma_loss_coef * sigma_loss
+        return {"bc_loss": bc_loss, "mu_loss": mu_loss, "sigma_loss": sigma_loss}
 
     def _compute_ppo_loss(self, minibatch: Minibatch):
         actions_batch = minibatch["actions"]

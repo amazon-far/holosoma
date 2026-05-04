@@ -79,6 +79,19 @@ def _setup_deterministic_batch(env, motion_cmd):
         env.simulator.scene.env_origins[:] = new_origins
         root_pos = root_pos + new_origins
 
+    # Mirror render_per_motion.py: lift the spawn pose by
+    # ``noise_to_initial_pose.init_root_offset`` (configured at training time
+    # to push the robot e.g. 10 cm above contact). Without this, motion
+    # frame 0 puts the ankle_roll_link body exactly on the contact plane,
+    # and the foot collision mesh — which extends a few cm below ankle
+    # body — penetrates the terrain visually for the first few rollout
+    # frames before PD control settles.
+    init_pose_cfg = getattr(motion_cmd, "init_pose_cfg", None)
+    init_root_offset = getattr(init_pose_cfg, "init_root_offset", None) if init_pose_cfg else None
+    if init_root_offset is not None:
+        offset = torch.tensor(list(init_root_offset), device=device, dtype=root_pos.dtype)
+        root_pos = root_pos + offset
+
     env.simulator.dof_pos[:] = dof_pos
     env.simulator.dof_vel[:] = dof_vel
     env.simulator.robot_root_states[:, :3] = root_pos
@@ -95,7 +108,7 @@ def _setup_deterministic_batch(env, motion_cmd):
     env.time_out_buf[:] = 0
 
 
-def _record(env, num_envs, max_steps, action_fn, motion_lengths):
+def _record(env, num_envs, max_steps, action_fn, motion_lengths, log_obs: bool = False):
     simulator = env.simulator
     obs_dict = env.reset_all()
     motion_cmd = env.command_manager.get_state("motion_command")
@@ -111,6 +124,19 @@ def _record(env, num_envs, max_steps, action_fn, motion_lengths):
     per_env_done_step = np.full(num_envs, max_steps, dtype=np.int64)
     env_done_mask = torch.zeros(num_envs, dtype=torch.bool, device=device)
 
+    obs_log_lists: dict[str, list[np.ndarray]] | None = None
+    if log_obs:
+        obs_log_lists = {
+            "actor_obs": [],
+            "height_map_obs": [],
+            "sim_dof_vel": [],
+            "sim_pelvis_lin_vel_w": [],
+            "sim_pelvis_ang_vel_w": [],
+            "ref_pos_w": [],
+            "robot_ref_pos_w": [],
+            "time_step": [],
+        }
+
     motion_lengths_t = torch.as_tensor(motion_lengths, device=device, dtype=torch.long)
     horizon = min(max_steps, int(motion_lengths_t.max().item()) + 60)
 
@@ -120,6 +146,33 @@ def _record(env, num_envs, max_steps, action_fn, motion_lengths):
         root_pos_buf[step] = root_state[:, 0:3] - env_origins
         root_quat_buf[step] = root_state[:, 3:7]
         dof_pos_buf[step] = simulator.dof_pos.detach().cpu().numpy()
+
+        if obs_log_lists is not None:
+            obs_log_lists["actor_obs"].append(
+                obs_dict["actor_obs"].detach().cpu().numpy().copy()
+            )
+            if "height_map_obs" in obs_dict:
+                obs_log_lists["height_map_obs"].append(
+                    obs_dict["height_map_obs"].detach().cpu().numpy().copy()
+                )
+            obs_log_lists["sim_dof_vel"].append(
+                simulator.dof_vel.detach().cpu().numpy().copy()
+            )
+            obs_log_lists["sim_pelvis_lin_vel_w"].append(
+                simulator.robot_root_states[:, 7:10].detach().cpu().numpy().copy()
+            )
+            obs_log_lists["sim_pelvis_ang_vel_w"].append(
+                simulator.robot_root_states[:, 10:13].detach().cpu().numpy().copy()
+            )
+            obs_log_lists["ref_pos_w"].append(
+                motion_cmd.ref_pos_w.detach().cpu().numpy().copy()
+            )
+            obs_log_lists["robot_ref_pos_w"].append(
+                motion_cmd.robot_ref_pos_w.detach().cpu().numpy().copy()
+            )
+            obs_log_lists["time_step"].append(
+                motion_cmd.time_steps.detach().cpu().numpy().copy()
+            )
 
         with torch.inference_mode():
             actions = action_fn(obs_dict)
@@ -140,12 +193,15 @@ def _record(env, num_envs, max_steps, action_fn, motion_lengths):
             break
 
     actual_steps = step + 1
-    return {
+    out = {
         "root_pos": root_pos_buf[:actual_steps],
         "root_quat": root_quat_buf[:actual_steps],
         "dof_pos": dof_pos_buf[:actual_steps],
         "per_env_done_step": per_env_done_step,
     }
+    if obs_log_lists is not None:
+        out["obs_log"] = {k: np.stack(v, axis=0) for k, v in obs_log_lists.items() if v}
+    return out
 
 
 def main():
@@ -157,6 +213,14 @@ def main():
     parser.add_argument("--num_envs", type=int, default=None,
                         help="Override num_envs (default: number of motions discovered).")
     parser.add_argument("--max_steps", type=int, default=2000)
+    parser.add_argument("--log_obs", action="store_true",
+                        help="Save per-step actor_obs, sim velocities, and motion ref pos to "
+                        "<out_dir>/obs_log_<motion>.npz for diagnostic comparison.")
+    parser.add_argument("--device", default=None,
+                        help='Sim+model device, e.g. "cuda:0" or "cpu". Default = auto '
+                        '("cuda:0" if available else "cpu"). Use "cpu" to coexist with a '
+                        'training run that is hogging the GPU — PhysX runs on CPU, slower '
+                        'but doesn\'t need GPU memory.')
     args = parser.parse_args()
 
     motion_dir = str(Path(args.motion_dir).expanduser().resolve())
@@ -188,7 +252,7 @@ def main():
     eval_cfg = saved_cfg.get_eval_config()
     eval_cfg = _override_motion_cfg(eval_cfg, motion_dir, n_motions)
 
-    env, device, simulation_app = setup_simulation_environment(eval_cfg)
+    env, device, simulation_app = setup_simulation_environment(eval_cfg, device=args.device)
     log_dir = get_experiment_dir(eval_cfg.logger, eval_cfg.training, get_timestamp(),
                                  task_name="rollout_single_policy").resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -223,7 +287,8 @@ def main():
     try:
         env.set_is_evaluating()
         try:
-            traj = _record(env, n_motions, args.max_steps, policy_action, motion_lengths)
+            traj = _record(env, n_motions, args.max_steps, policy_action, motion_lengths,
+                           log_obs=args.log_obs)
         except Exception:
             import traceback
             logger.error("Rollout crashed:\n" + traceback.format_exc())
@@ -245,6 +310,14 @@ def main():
                 "fps": 50,
             })
             logger.info(f"Saved policy_{base}.npy ({end} frames; motion_len={motion_n})")
+
+            if "obs_log" in traj:
+                obs_log = traj["obs_log"]
+                np.savez(
+                    out_dir / f"obs_log_{base}.npz",
+                    **{k: v[:end, env_id] for k, v in obs_log.items()},
+                )
+                logger.info(f"Saved obs_log_{base}.npz")
     finally:
         if simulation_app:
             close_simulation_app(simulation_app)

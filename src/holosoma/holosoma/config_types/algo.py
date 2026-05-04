@@ -251,6 +251,61 @@ class PPOConfig:
     max_critic_learning_rate: float | None = None
     min_critic_learning_rate: float | None = None
 
+    # ────────────────────────────────────────────────────────────────────
+    # Optional teacher-BC scheduler (off by default)
+    #
+    # When ``teacher_checkpoint`` is set, a frozen teacher actor is loaded
+    # at setup time, queried each rollout step on its own obs slice, and
+    # contributes a behaviour-cloning loss that is linearly faded into the
+    # PPO loss according to the schedule below. This lets a single PPO run
+    # do "stage-3 + stage-4" in one shot, matching the BC→PPO transition
+    # the user asks for.
+    #
+    # Schedule (in iterations of `current_learning_iteration`):
+    #   it < bc_warmup_iters                                  → bc=1.0,  ppo=0.0
+    #   bc_warmup_iters <= it < bc_warmup_iters + bc_to_ppo_iters
+    #         alpha = (it - bc_warmup_iters) / bc_to_ppo_iters
+    #         bc=1-alpha, ppo=alpha
+    #   it >= bc_warmup_iters + bc_to_ppo_iters                → bc=0.0,  ppo=1.0
+    #
+    # The critic value loss is always on (it warms up from rewards
+    # regardless of phase). bc_loss_coef_max scales the BC actor loss
+    # during the warmup phase; ppo coefficients scale (surrogate, entropy,
+    # symmetry-actor) terms.
+    # ────────────────────────────────────────────────────────────────────
+    teacher_checkpoint: str = ""
+    """Path to teacher .pt for the BC term. Empty disables BC entirely
+    (plain PPO behaviour, no extra cost)."""
+
+    teacher_actor_obs_key: str = "teacher_actor_obs"
+    """Obs group the env publishes for the teacher's actor input."""
+
+    teacher_actor_obs_history_key: str | None = None
+    """Optional history key for teacher obs (defaults to
+    ``teacher_actor_obs_key``)."""
+
+    bc_warmup_iters: int = 0
+    """Iterations of pure BC (PPO actor loss off, critic value loss still on)
+    at the start of training. 0 disables the warmup phase."""
+
+    bc_to_ppo_iters: int = 0
+    """Iterations of the linear BC→PPO transition that follows the warmup.
+    0 means an instant switch the moment the warmup ends."""
+
+    bc_loss_coef_max: float = 1.0
+    """Max BC actor-loss coefficient (active during warmup)."""
+
+    bc_sigma_loss_coef: float = 1.0
+    """Coefficient on the (sigma_student − sigma_teacher) term of the BC loss.
+    Mirrors ``DAggerConfig.bc_sigma_loss_coef``."""
+
+    clip_teacher_actions: bool = True
+    """Clip teacher action targets before the BC loss."""
+
+    clip_actions_threshold: float = 8.0
+    """Symmetric clip range for the teacher actions when
+    ``clip_teacher_actions`` is True."""
+
 
 @dataclass(frozen=True)
 class FastSACConfig:

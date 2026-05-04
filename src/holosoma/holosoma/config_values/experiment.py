@@ -24,6 +24,7 @@ from holosoma.config_values.wbt.g1.multi_motion_experiment import (
     g1_29dof_multi_terrain_future_motion_heightmap_videomimic_add,
     g1_29dof_multi_terrain_videomimic_student_dagger,
     g1_29dof_multi_terrain_videomimic_student_rl_finetune,
+    g1_29dof_multi_terrain_videomimic_student_rl_finetune_xy_yaw,
     g1_29dof_phuma,
     g1_29dof_phuma_future_motion,
 )
@@ -50,6 +51,7 @@ DEFAULTS = {
     "g1_29dof_multi_terrain_future_motion_heightmap_videomimic_add": g1_29dof_multi_terrain_future_motion_heightmap_videomimic_add,
     "g1_29dof_multi_terrain_videomimic_student_dagger": g1_29dof_multi_terrain_videomimic_student_dagger,
     "g1_29dof_multi_terrain_videomimic_student_rl_finetune": g1_29dof_multi_terrain_videomimic_student_rl_finetune,
+    "g1_29dof_multi_terrain_videomimic_student_rl_finetune_xy_yaw": g1_29dof_multi_terrain_videomimic_student_rl_finetune_xy_yaw,
     # Legacy aliases (kept for backward compatibility with existing train scripts)
     "g1_29dof_phuma": g1_29dof_phuma,
     "g1_29dof_phuma_future_motion": g1_29dof_phuma_future_motion,

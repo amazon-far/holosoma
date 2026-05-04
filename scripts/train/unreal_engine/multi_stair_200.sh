@@ -7,8 +7,8 @@ python src/holosoma/holosoma/train_agent.py \
     logger:wandb \
     --logger.entity draftrec \
     --logger.project MotionTracking \
-    --logger.group=statue_wbt \
-    --logger.name=gg1_ue_multi_terrain_stair_200_future_motion_heightmap_xyz \
+    --logger.group=Unreal_Engine \
+    --logger.name=g1_ue_multi_terrain_stair_200_future_motion_heightmap_xyz \
     --logger.video.enabled False \
     --simulator.config.videomimic-height-map.map-height 11 \
     --simulator.config.videomimic-height-map.map-width 17 \
@@ -16,14 +16,13 @@ python src/holosoma/holosoma/train_agent.py \
     --simulator.config.videomimic-height-map.num-channels 3 \
     --terrain.terrain-term.obj-dir="$MOTION_DIR" \
     --terrain.terrain-term.num-rows 1 \
-    --terrain.terrain-term.obj-max-faces-per-tile 0 \
+    --terrain.terrain-term.obj-max-faces-per-tile 3000 \
+     --terrain.terrain-term.obj-tile-gap 1.0 \
     --terrain.terrain-term.env-origin-in-tile="[0.0, 0.0, 0.0]" \
     --command.setup_terms.motion_command.params.motion_config.motion_dir="$MOTION_DIR" \
     --command.setup_terms.motion_command.params.motion_config.max_motions 200 \
     --command.setup_terms.motion_command.params.motion_config.noise_to_initial_pose.init_root_offset="[0.0, 0.0, 0.1]" \
-    --termination.terms.bad_tracking.params.bad_ref_pos_threshold 0.5 \
-    --training.num_envs 2048 \
+    --training.num_envs 4096 \
     --simulator.config.scene.env_spacing=0.0 \
     --algo.config.save_interval 1000 \
-    --algo.config.eval_interval 1000 \
-    robot:g1-29dof-diverse-action-scale
+    --algo.config.eval_interval 1000

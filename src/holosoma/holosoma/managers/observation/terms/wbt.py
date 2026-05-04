@@ -160,6 +160,49 @@ def motion_ref_ori_b(env: WholeBodyTrackingManager) -> torch.Tensor:
     return mat[..., :2].reshape(mat.shape[0], -1)
 
 
+def motion_ref_pos_xy_b(env: WholeBodyTrackingManager) -> torch.Tensor:
+    """VideoMimic-style narrowed command: only the xy part of motion_ref_pos_b.
+
+    Drops the z component so that step-function discontinuities in the target
+    pelvis height (e.g. synthetic stair clips, or any clip with abrupt vertical
+    teleports) do not enter the actor obs. Mirrors VideoMimic's
+    `_obs_torso_xy_rel` (`robot_deepmimic.py:669`: `rel_xy = obs[:, :2]`).
+    """
+    motion_command = _get_motion_command_and_assert_type(env)
+    pos, _ = subtract_frame_transforms(
+        motion_command.robot_ref_pos_w,
+        motion_command.robot_ref_quat_w,
+        motion_command.ref_pos_w,
+        motion_command.ref_quat_w,
+    )
+    return pos[:, :2].reshape(env.num_envs, -1)
+
+
+def motion_ref_yaw_b(env: WholeBodyTrackingManager) -> torch.Tensor:
+    """VideoMimic-style narrowed command: yaw error only as (cos, sin).
+
+    `motion_ref_ori_b` exposes the full body-frame relative orientation as a
+    6D rotation rep (first two columns of the matrix), so roll/pitch leak
+    into the actor. This term collapses that to a single yaw angle and
+    returns ``(cos, sin)`` so the policy never sees the angle wrap-around at
+    ±π. Conceptually matches VideoMimic's scalar `_obs_torso_yaw_rel`
+    (`robot_deepmimic.py:718-735`).
+    """
+    motion_command = _get_motion_command_and_assert_type(env)
+    _, ori = subtract_frame_transforms(
+        motion_command.robot_ref_pos_w,
+        motion_command.robot_ref_quat_w,
+        motion_command.ref_pos_w,
+        motion_command.ref_quat_w,
+    )
+    # ori is (num_envs, 4) xyzw quaternion of the target frame in the robot's
+    # reference frame. Yaw = atan2(2(wz + xy), 1 - 2(yy + zz)). Same formula
+    # the codebase uses in `yaw_quat` (`utils/rotations.py:34`).
+    qx, qy, qz, qw = ori[:, 0], ori[:, 1], ori[:, 2], ori[:, 3]
+    yaw = torch.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
+    return torch.stack([torch.cos(yaw), torch.sin(yaw)], dim=-1)
+
+
 def robot_body_pos_b(env: WholeBodyTrackingManager) -> torch.Tensor:
     motion_command = _get_motion_command_and_assert_type(env)
 

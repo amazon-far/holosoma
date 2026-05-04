@@ -382,6 +382,78 @@ g1_29dof_wbt_observation_videomimic_student = ObservationManagerCfg(
 )
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# VideoMimic-narrowed actor obs (xy + yaw command only)
+#
+# Same as `actor_obs_videomimic_student_terms` but the motion-derived
+# command is collapsed to (xy, yaw) in body frame, matching VideoMimic's
+# `torso_xy_rel` (2D) + `torso_yaw_rel` (1D) interface. Lets us deploy the
+# actor with a 3-DoF command (gamepad / joystick) by feeding the same
+# slots from a user input source instead of a motion clip — and keeps the
+# step-function pelvis-z signal out of the actor entirely.
+# ──────────────────────────────────────────────────────────────────────────────
+actor_obs_videomimic_student_xy_yaw_terms = {
+    # 2D body-frame xy of the next ref pose (drops z; was 3D in
+    # `motion_ref_pos_b`).
+    "motion_ref_pos_xy_b": ObsTermCfg(
+        func="holosoma.managers.observation.terms.wbt:motion_ref_pos_xy_b",
+        scale=1.0,
+        noise=0.05,
+    ),
+    # 2D (cos, sin) yaw error (collapses the 6D `motion_ref_ori_b` to yaw
+    # only and avoids the ±π wrap discontinuity).
+    "motion_ref_yaw_b": ObsTermCfg(
+        func="holosoma.managers.observation.terms.wbt:motion_ref_yaw_b",
+        scale=1.0,
+        noise=0.05,
+    ),
+    "base_ang_vel": ObsTermCfg(
+        func="holosoma.managers.observation.terms.wbt:base_ang_vel",
+        scale=1.0,
+        noise=0.2,
+    ),
+    "dof_pos": ObsTermCfg(
+        func="holosoma.managers.observation.terms.wbt:dof_pos",
+        scale=1.0,
+        noise=0.01,
+    ),
+    "dof_vel": ObsTermCfg(
+        func="holosoma.managers.observation.terms.wbt:dof_vel",
+        scale=1.0,
+        noise=0.5,
+    ),
+    "actions": ObsTermCfg(
+        func="holosoma.managers.observation.terms.wbt:actions",
+        scale=1.0,
+        noise=0.0,
+    ),
+}
+
+actor_obs_videomimic_student_xy_yaw = ObsGroupCfg(
+    concatenate=True,
+    enable_noise=True,
+    history_length=1,
+    terms=actor_obs_videomimic_student_xy_yaw_terms,
+)
+
+g1_29dof_wbt_observation_videomimic_student_xy_yaw = ObservationManagerCfg(
+    groups={
+        "actor_obs": actor_obs_videomimic_student_xy_yaw,
+        # Teacher still receives the full motion-mimic obs so DAgger
+        # distillation from the existing teacher works unchanged.
+        "teacher_actor_obs": actor_obs_shared,
+        "critic_obs": ObsGroupCfg(
+            concatenate=True,
+            enable_noise=False,
+            history_length=1,
+            terms=critic_obs_shared_terms,
+        ),
+        "future_motion_targets": future_motion_obs_group,
+        "height_map_obs": videomimic_height_map_obs_group,
+    },
+)
+
+
 __all__ = [
     "g1_29dof_wbt_observation",
     "g1_29dof_wbt_observation_w_object",
@@ -392,4 +464,5 @@ __all__ = [
     "g1_29dof_wbt_observation_future_motion_heightmap_videomimic",
     "g1_29dof_wbt_observation_future_motion_heightmap_videomimic_foot_contact",
     "g1_29dof_wbt_observation_videomimic_student",
+    "g1_29dof_wbt_observation_videomimic_student_xy_yaw",
 ]

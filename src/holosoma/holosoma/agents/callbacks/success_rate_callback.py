@@ -1,11 +1,12 @@
 """Success rate evaluation callback for multi-motion (PhUMA) training.
 
 Evaluates policy by running all motions from initial frame and measuring
-how many the robot can track without any body deviating more than a threshold.
+how many the robot can track without the reference body (root / pelvis)
+deviating more than a threshold from the commanded root trajectory.
 
-Following the ASAP definition:
+Definition:
   - Each motion starts at timestep 0
-  - At each step, check if ANY tracked body's 3D position error > threshold
+  - At each step, check if root (pelvis) 3D position error > threshold
   - If so, mark that motion as failed
   - success_rate = 1 - mean(terminate_states)
 
@@ -25,7 +26,7 @@ from loguru import logger
 from holosoma.agents.callbacks.base_callback import RLEvalCallback
 from holosoma.managers.command.terms.wbt import MotionLoader
 
-# ASAP-style thresholds: any tracked body 3D position error exceeds this = fail
+# Root-only thresholds: pelvis 3D position error exceeds this = fail.
 MOTION_FAR_THRESHOLDS = [0.5, 0.25]
 
 
@@ -204,6 +205,23 @@ class SuccessRateCallback(RLEvalCallback):
             env.simulator.scene.env_origins[:] = new_origins
             root_pos = root_pos + new_origins
 
+        # Apply the training-time init_root_offset (e.g. +10 cm Z lift) so
+        # the foot collision mesh doesn't penetrate the contact plane at
+        # spawn — otherwise PhysX bounces the robot, deviating ankles /
+        # wrists past the BadTracking termination threshold within the
+        # first physics step, the env resets to a random motion, and the
+        # SR check sees a mismatched state and marks every env as failed.
+        # Mirrors render_per_motion.py / rollout_single_policy.py.
+        init_pose_cfg = getattr(mc, "init_pose_cfg", None)
+        init_root_offset = (
+            getattr(init_pose_cfg, "init_root_offset", None) if init_pose_cfg else None
+        )
+        if init_root_offset is not None:
+            offset = torch.tensor(
+                list(init_root_offset), device=self.device, dtype=root_pos.dtype
+            )
+            root_pos = root_pos + offset
+
         env.simulator.dof_pos[:] = dof_pos
         env.simulator.dof_vel[:] = dof_vel
         env.simulator.robot_root_states[:, :3] = root_pos
@@ -228,15 +246,20 @@ class SuccessRateCallback(RLEvalCallback):
         env.time_out_buf[:] = 0
 
     def _check_motion_far(self) -> dict[float, torch.Tensor]:
-        """ASAP-style check: any tracked body 3D position error > threshold.
+        """Root-only check: 3D position error of the reference body (pelvis)
+        between motion target and the robot exceeds threshold.
+
+        This replaces the ASAP-style ``max over all tracked bodies`` rule.
+        Tracking failures on hands / arms / head — common when the policy is
+        only meant to follow the locomotion goal — no longer count as full
+        motion failures; the success criterion is purely "did the root stay
+        within ``threshold`` of the commanded root trajectory?".
 
         Returns dict of threshold -> (num_envs,) bool tensor.
         """
         mc = self._motion_command
-        max_error = torch.norm(
-            mc.body_pos_relative_w - mc.robot_body_pos_w, dim=-1
-        ).max(dim=-1).values  # (num_envs,)
-        return {thresh: max_error > thresh for thresh in MOTION_FAR_THRESHOLDS}
+        error = torch.norm(mc.ref_pos_w - mc.robot_ref_pos_w, dim=-1)  # (num_envs,)
+        return {thresh: error > thresh for thresh in MOTION_FAR_THRESHOLDS}
 
     def on_pre_eval_env_step(self, actor_state):
         if self._skip:
