@@ -80,6 +80,9 @@ class DataConversionConfig:
     once: bool = False
     """Run the motion once and exit."""
 
+    visualize: bool = True
+    """Whether to visualize the converted motion in a MuJoCo viewer."""
+
     use_omniretarget_data: bool = False
     """Use OmniRetarget data format."""
 

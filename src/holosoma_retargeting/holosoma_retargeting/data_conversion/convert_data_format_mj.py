@@ -426,15 +426,17 @@ def run_simulator(args_cli: DataConversionConfig):
     print(dof_index_list)
 
     # Prepare mujoco viewer
-    viewer = mjv.launch_passive(robot, robot_data, show_left_ui=False, show_right_ui=False)
-    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_PERTFORCE] = 0
-    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = 0
-    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_TRANSPARENT] = 0
-    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_COM] = 0
+    viewer: Any | None = None
+    if args_cli.visualize:
+        viewer = mjv.launch_passive(robot, robot_data, show_left_ui=False, show_right_ui=False)
+        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_PERTFORCE] = 0
+        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = 0
+        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_TRANSPARENT] = 0
+        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_COM] = 0
 
-    viewer.cam.distance = 2.0
-    viewer.cam.elevation = -20.0
-    viewer.cam.azimuth = 45.0
+        viewer.cam.distance = 2.0
+        viewer.cam.elevation = -20.0
+        viewer.cam.azimuth = 45.0
 
     log: dict[str, Any]
     if has_dynamic_object:
@@ -531,10 +533,12 @@ def run_simulator(args_cli: DataConversionConfig):
             )
 
         mujoco.mj_forward(robot, robot_data)
-        viewer.sync()
+        if viewer is not None:
+            viewer.sync()
 
         end_time = time.perf_counter()
-        time.sleep(max(0, motion.output_dt - (end_time - start_time)))
+        if viewer is not None:
+            time.sleep(max(0, motion.output_dt - (end_time - start_time)))
 
         if not file_saved:
             lin_vel_w, ang_vel_w = world_body_velocities(robot, robot_data)
@@ -595,9 +599,10 @@ def run_simulator(args_cli: DataConversionConfig):
             os.makedirs(output_res_folder, exist_ok=True)
             np.savez(args_cli.output_name, **log)
 
-        if args_cli.once and file_saved:
+        if file_saved and (args_cli.once or viewer is None):
             print("[INFO]: Motion replay completed, exiting...")
-            viewer.close()
+            if viewer is not None:
+                viewer.close()
             break
 
 
