@@ -23,7 +23,6 @@ locomotion = TaskConfig(
     state_input="keyboard",
     joystick_type="xbox",
     joystick_device=0,
-    wandb_download_dir="/tmp",
 )
 
 # Whole-body tracking task
@@ -42,7 +41,6 @@ wbt = TaskConfig(
     state_input="keyboard",
     joystick_type="xbox",
     joystick_device=0,
-    wandb_download_dir="/tmp",
 )
 
 # Safety locomotion (FastSAC) — used as default secondary for dual-mode
@@ -60,7 +58,6 @@ safety_locomotion_g1 = TaskConfig(
     state_input="keyboard",
     joystick_type="xbox",
     joystick_device=0,
-    wandb_download_dir="/tmp",
 )
 
 DEFAULTS = {

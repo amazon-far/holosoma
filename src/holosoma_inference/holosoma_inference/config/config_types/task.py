@@ -93,9 +93,6 @@ class TaskConfig:
     use_sim_time: bool = False
     """Use synchronized simulation time for WBT policies."""
 
-    wandb_download_dir: str = "/tmp"
-    """Directory for downloading W&B checkpoints."""
-
     # Deprecation candidates:
     desired_base_height: float = 0.75
     """Target base height in meters."""
