@@ -7,6 +7,7 @@ import warnings
 from pathlib import Path
 
 import wandb
+from loguru import logger
 
 _WANDB_PREFIX = "wandb://"
 _WANDB_HTTPS_PATTERN = re.compile(r"https://[^/]+/([^/]+)/([^/]+)/runs/([^/]+)/files/(.+)")
@@ -110,10 +111,10 @@ def load_checkpoint(
     cache_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_path = cache_dir / filename
     if checkpoint_path.exists():
-        print(f"Using cached checkpoint {checkpoint_path} (run {run_path})")
+        logger.info(f"Using cached checkpoint {checkpoint_path} (run {run_path})")
         return checkpoint_path
 
     run = wandb.Api().run(run_path)
     _download_atomic(run.file(filename), filename, cache_dir, checkpoint_path)
-    print(f"Finished downloading checkpoint {filename} to {cache_dir} from W&B run {run_path}")
+    logger.info(f"Finished downloading checkpoint {filename} to {cache_dir} from W&B run {run_path}")
     return checkpoint_path
