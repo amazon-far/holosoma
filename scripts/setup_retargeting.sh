@@ -64,6 +64,9 @@ if [[ ! -f $SENTINEL_FILE ]]; then
 
   source $CONDA_ROOT/bin/activate $CONDA_ENV_NAME
 
+  # Install ffmpeg for video encoding.
+  conda install -c conda-forge -y ffmpeg
+
   # Install holosoma_retargeting
   pip install -U pip
   pip install -e $ROOT_DIR/src/holosoma_retargeting

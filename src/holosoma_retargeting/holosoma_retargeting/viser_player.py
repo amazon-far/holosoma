@@ -16,7 +16,8 @@ src_root = Path(__file__).resolve().parent.parent
 if str(src_root) not in sys.path:
     sys.path.insert(0, str(src_root))
 from holosoma_retargeting.config_types.viser import ViserConfig  # noqa: E402
-from holosoma_retargeting.src.viser_utils import create_motion_control_sliders  # noqa: E402
+from holosoma_retargeting.src.recording_utils import build_record_frame_indices, record_viser_sequence  # noqa: E402
+from holosoma_retargeting.src.viser_utils import QposViserApplier, create_motion_control_sliders  # noqa: E402
 
 
 def load_npz(npz_path: str):
@@ -82,6 +83,50 @@ def make_player(
         if vo is not None:
             vo.show_visual = bool(show_meshes_cb.value)
 
+    n_frames = int(qpos.shape[0])
+    print(
+        f"[viser_player] Loaded {n_frames} frames | robot_dof={robot_dof} | "
+        f"object={'yes' if (config.object_urdf and config.assume_object_in_qpos) else 'no'}"
+    )
+    print("Open the viewer URL printed above. Close the process (Ctrl+C) to exit.")
+
+    if config.record_video:
+        recorder_applier = QposViserApplier(
+            viser_robot=vr,
+            robot_base_frame=robot_root,
+            robot_dof=robot_dof,
+            viser_object=vo if config.assume_object_in_qpos else None,
+            object_base_frame=object_root if config.assume_object_in_qpos else None,
+            contains_object_in_qpos=config.assume_object_in_qpos,
+        )
+        frame_indices = build_record_frame_indices(
+            n_frames=int(qpos.shape[0]),
+            start_frame=config.record_start_frame,
+            end_frame=config.record_end_frame,
+            stride=config.record_stride,
+        )
+
+        def _record_frame(frame_idx: int) -> None:
+            recorder_applier.apply_frame(qpos, frame_idx)
+
+        record_viser_sequence(
+            server=server,
+            apply_frame=_record_frame,
+            frame_indices=frame_indices,
+            output_path=config.record_path,
+            width=config.record_width,
+            height=config.record_height,
+            fps=float(config.record_fps if config.record_fps is not None else actual_fps),
+            connect_timeout=config.record_connect_timeout,
+            start_delay=config.record_start_delay,
+            settle_time=config.record_settle_time,
+            warmup_renders=config.record_warmup_renders,
+            transport_format=config.record_transport_format,
+        )
+        if config.record_exit_after:
+            print("[viser_player] Exiting because --record-exit-after was set.")
+            raise SystemExit(0)
+
     # ---------- Use reusable motion control sliders from viser_utils ----------
     create_motion_control_sliders(
         server=server,
@@ -96,12 +141,7 @@ def make_player(
         initial_interp_mult=config.visual_fps_multiplier,
         loop=config.loop,
     )
-    n_frames = int(qpos.shape[0])
-    print(
-        f"[viser_player] Loaded {n_frames} frames | robot_dof={robot_dof} | "
-        f"object={'yes' if (config.object_urdf and config.assume_object_in_qpos) else 'no'}"
-    )
-    print("Open the viewer URL printed above. Close the process (Ctrl+C) to exit.")
+
     return server
 
 

@@ -43,6 +43,48 @@ class ViserConfig:
     visual_fps_multiplier: int = 2
     """Visual FPS multiplier for interpolation."""
 
+    record_video: bool = False
+    """Whether to record the Viser playback to a video file."""
+
+    record_path: str = "viser_player_recording.mp4"
+    """Output path for recorded video. Extension may be .mp4 or .gif."""
+
+    record_width: int = 1280
+    """Rendered recording width in pixels."""
+
+    record_height: int = 720
+    """Rendered recording height in pixels."""
+
+    record_fps: int | None = None
+    """FPS for the recorded video. Defaults to the motion FPS."""
+
+    record_start_frame: int = 0
+    """First source frame to record."""
+
+    record_end_frame: int | None = None
+    """Last source frame to record, inclusive. Defaults to the final frame."""
+
+    record_stride: int = 1
+    """Source-frame stride for recording."""
+
+    record_connect_timeout: float = 120.0
+    """Seconds to wait for a browser client before recording."""
+
+    record_start_delay: float = 3.0
+    """Seconds to wait after a client connects before recording starts."""
+
+    record_settle_time: float = 0.02
+    """Seconds to wait after each scene update before capturing a rendered frame."""
+
+    record_warmup_renders: int = 1
+    """Number of throwaway renders after each scene update before saving the frame."""
+
+    record_transport_format: str = "jpeg"
+    """Browser render transport format: jpeg or png."""
+
+    record_exit_after: bool = False
+    """Exit the process after recording completes."""
+
     min_fps: int = 1
     """Minimum FPS setting."""
 

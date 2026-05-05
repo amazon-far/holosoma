@@ -156,6 +156,13 @@ python viser_player.py --robot_urdf models/g1/g1_29dof.urdf \
 python viser_player.py --robot_urdf models/g1/g1_29dof.urdf \
     --qpos_npz demo_results/g1/robot_only/lafan/dance2_subject1.npz
 
+# Record a LAFAN robot-only result from the connected Viser browser viewport
+python viser_player.py --robot_urdf models/g1/g1_29dof.urdf \
+    --qpos_npz demo_results/g1/robot_only/lafan/dance2_subject1.npz \
+    --record-video \
+    --record-path videos/dance2_subject1.mp4 \
+    --record-exit-after
+
 # Visualize AMASS results
 python viser_player.py --robot_urdf models/g1/g1_29dof.urdf \
     --qpos_npz demo_results/g1/robot_only/amass_smplx/HumanEva_S3_Jog_1_stageii.npz
@@ -202,6 +209,17 @@ mjpython data_conversion/convert_data_format_mj.py --input_file ./demo_results/g
 python data_conversion/convert_data_format_mj.py --input_file ./demo_results/g1/robot_only/omomo/sub3_largebox_003.npz --output_fps 50 --output_name converted_res/robot_only/sub3_largebox_003_mj_fps50.npz --data_format smplh --object_name "ground" --once
 
 python data_conversion/convert_data_format_mj.py --input_file ./demo_results/g1/robot_only/lafan/dance2_subject1.npz --output_fps 50 --output_name converted_res/robot_only/dance2_subject1_mj_fps50.npz --data_format lafan --object_name "ground" --once
+```
+
+Converted files can also be inspected and recorded with the body-velocity Viser player:
+
+```bash
+python data_conversion/viser_body_vel_player.py \
+    --npz_path converted_res/robot_only/dance2_subject1_mj_fps50.npz \
+    --robot_urdf models/g1/g1_29dof.urdf \
+    --record-video \
+    --record-path videos/dance2_subject1_body_vel.mp4 \
+    --record-exit-after
 ```
 
 ### Robot-Object Setting

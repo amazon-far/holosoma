@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import tyro
 import viser  # type: ignore[import-not-found]  # pip install viser
 import yourdfpy  # type: ignore[import-untyped]  # pip install yourdfpy
 from viser.extras import ViserUrdf  # type: ignore[import-not-found]
+
+src_root = Path(__file__).resolve().parents[2]
+if str(src_root) not in sys.path:
+    sys.path.insert(0, str(src_root))
+from holosoma_retargeting.src.recording_utils import build_record_frame_indices, record_viser_sequence  # noqa: E402
 
 
 # ---------------------------------------------------------------------
@@ -32,6 +39,22 @@ class Config:
     fps_override: float | None = None  # if None, use fps from npz
     vel_scale: float = 0.1  # length scale for velocity arrows
     vel_min_norm: float = 1e-2  # threshold below which we hide arrows
+
+    # Recording
+    record_video: bool = False
+    record_path: str = "viser_body_vel_recording.mp4"
+    record_width: int = 1280
+    record_height: int = 720
+    record_fps: float | None = None  # if None, use playback fps
+    record_start_frame: int = 0
+    record_end_frame: int | None = None  # inclusive; if None, use final frame
+    record_stride: int = 1
+    record_connect_timeout: float = 120.0
+    record_start_delay: float = 3.0
+    record_settle_time: float = 0.02
+    record_warmup_renders: int = 1
+    record_transport_format: str = "jpeg"
+    record_exit_after: bool = False
 
 
 # ---------------------------------------------------------------------
@@ -278,6 +301,31 @@ def main(cfg: Config) -> None:
         f"[viser_body_vel_player] Ready. Open the URL above to view. "
         f"{'Looping' if cfg.loop else 'One-shot'} playback at {fps:.2f} FPS."
     )
+
+    if cfg.record_video:
+        frame_indices = build_record_frame_indices(
+            n_frames=T,
+            start_frame=cfg.record_start_frame,
+            end_frame=cfg.record_end_frame,
+            stride=cfg.record_stride,
+        )
+        record_viser_sequence(
+            server=server,
+            apply_frame=update_frame,
+            frame_indices=frame_indices,
+            output_path=cfg.record_path,
+            width=cfg.record_width,
+            height=cfg.record_height,
+            fps=float(cfg.record_fps if cfg.record_fps is not None else fps),
+            connect_timeout=cfg.record_connect_timeout,
+            start_delay=cfg.record_start_delay,
+            settle_time=cfg.record_settle_time,
+            warmup_renders=cfg.record_warmup_renders,
+            transport_format=cfg.record_transport_format,
+        )
+        if cfg.record_exit_after:
+            print("[viser_body_vel_player] Exiting because --record-exit-after was set.")
+            return
 
     while True:
         now = time.time()

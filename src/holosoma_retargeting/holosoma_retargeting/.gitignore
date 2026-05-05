@@ -20,6 +20,7 @@ demo_results_parallel/
 *.pyc
 demo_data/lafan/
 converted_res/
+videos/
 data_utils/lafan1
 *.sh
 *.bvh

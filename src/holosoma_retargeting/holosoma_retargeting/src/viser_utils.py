@@ -3,11 +3,79 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import dataclass, field
 from typing import List, Tuple
 
 import numpy as np
 import viser  # type: ignore[import-not-found]
 from viser.extras import ViserUrdf  # type: ignore[import-not-found]
+
+
+def quat_normalize(q: np.ndarray) -> np.ndarray:
+    q = np.asarray(q, float)
+    n = float(np.linalg.norm(q))
+    return q if n == 0.0 else q / n
+
+
+def quat_continuous(prev_q: np.ndarray | None, curr_q: np.ndarray) -> np.ndarray:
+    q = quat_normalize(curr_q)
+    if prev_q is None:
+        return q
+    return -q if float(np.dot(prev_q, q)) < 0.0 else q
+
+
+@dataclass
+class QposViserApplier:
+    """Apply qpos frames to a Viser robot and optional object."""
+
+    viser_robot: ViserUrdf
+    robot_base_frame: viser.FrameHandle
+    robot_dof: int
+    viser_object: ViserUrdf | None = None
+    object_base_frame: viser.FrameHandle | None = None
+    contains_object_in_qpos: bool = True
+    _prev_robot_q: np.ndarray | None = field(default=None, init=False)
+    _prev_obj_q: np.ndarray | None = field(default=None, init=False)
+
+    def has_object_input(self, qpos: np.ndarray) -> bool:
+        return (
+            self.viser_object is not None
+            and self.object_base_frame is not None
+            and self.contains_object_in_qpos
+            and qpos.shape[1] >= (7 + self.robot_dof + 7)
+        )
+
+    def reset_quat_continuity(self) -> None:
+        self._prev_robot_q = None
+        self._prev_obj_q = None
+
+    def apply_qpos(self, q: np.ndarray, *, has_object_input: bool) -> None:
+        joints = q[7 : 7 + self.robot_dof]
+        if joints.shape[0] != self.robot_dof:
+            joints = (
+                joints[: self.robot_dof]
+                if joints.shape[0] > self.robot_dof
+                else np.pad(joints, (0, self.robot_dof - joints.shape[0]))
+            )
+        self.viser_robot.update_cfg(joints)
+
+        self.robot_base_frame.position = q[0:3]
+        robot_q = quat_continuous(self._prev_robot_q, q[3:7])
+        self._prev_robot_q = robot_q
+        self.robot_base_frame.wxyz = robot_q
+
+        if has_object_input and self.object_base_frame is not None:
+            self.object_base_frame.position = q[-7:-4]
+            obj_q = quat_continuous(self._prev_obj_q, q[-4:])
+            self._prev_obj_q = obj_q
+            self.object_base_frame.wxyz = obj_q
+        elif self.object_base_frame is not None and self.viser_object is not None:
+            self.object_base_frame.position = np.zeros(3)
+            self.object_base_frame.wxyz = np.array([1.0, 0.0, 0.0, 0.0])
+
+    def apply_frame(self, qpos: np.ndarray, frame_idx: int) -> None:
+        i = int(np.clip(frame_idx, 0, int(qpos.shape[0]) - 1))
+        self.apply_qpos(qpos[i], has_object_input=self.has_object_input(qpos))
 
 
 def create_motion_control_sliders(

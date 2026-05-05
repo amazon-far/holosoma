@@ -22,6 +22,7 @@ setup(
         "jinja2",
         "mujoco",
         "viser",
+        "imageio[ffmpeg]",
         "robot_descriptions",
         "yourdfpy",
         "cvxpy",
