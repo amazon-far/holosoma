@@ -62,7 +62,8 @@ def _download_atomic(checkpoint_file, filename: str, cache_dir: Path, final_path
     try:
         checkpoint_file.download(root=str(staging_dir), replace=True)
         final_path.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(staging_dir / filename, final_path)
+        staged_file = staging_dir / filename
+        staged_file.replace(final_path)
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
 
