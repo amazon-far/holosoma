@@ -73,10 +73,10 @@ class ViserConfig:
     record_start_delay: float = 3.0
     """Seconds to wait after a client connects before recording starts."""
 
-    record_settle_time: float = 0.02
+    record_settle_time: float = 0.0
     """Seconds to wait after each scene update before capturing a rendered frame."""
 
-    record_warmup_renders: int = 1
+    record_warmup_renders: int = 0
     """Number of throwaway renders after each scene update before saving the frame."""
 
     record_transport_format: str = "jpeg"

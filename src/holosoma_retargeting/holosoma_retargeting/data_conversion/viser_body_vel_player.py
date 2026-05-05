@@ -51,8 +51,8 @@ class Config:
     record_stride: int = 1
     record_connect_timeout: float = 120.0
     record_start_delay: float = 3.0
-    record_settle_time: float = 0.02
-    record_warmup_renders: int = 1
+    record_settle_time: float = 0.0
+    record_warmup_renders: int = 0
     record_transport_format: str = "jpeg"
     record_exit_after: bool = False
 
