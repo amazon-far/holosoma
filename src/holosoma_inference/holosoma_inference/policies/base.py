@@ -204,9 +204,8 @@ class BasePolicy:
     def _resolve_model_path(self, model_path: str) -> str:
         """Resolve model path, downloading from W&B if required."""
         if model_path.startswith(("wandb://", "https://")):
-            download_dir = self.config.task.wandb_download_dir
             logger.info(f"Downloading checkpoint from W&B: {model_path}")
-            checkpoint_path = load_checkpoint(None, model_path, download_dir)
+            checkpoint_path = load_checkpoint(None, model_path)
             resolved_path = str(checkpoint_path)
             logger.info("Checkpoint downloaded to: %s", resolved_path)
             return resolved_path

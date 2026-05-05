@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import warnings
 from pathlib import Path
 
 import wandb
@@ -13,13 +14,12 @@ _CACHE_DIR = Path.home() / ".hs_weights"
 def load_checkpoint(
     wandb_run_path: str | None,
     checkpoint: str,
-    log_dir: str,
+    log_dir: str | None = None,
 ) -> Path:
     """Download checkpoint from W&B or use local checkpoint.
 
     W&B downloads are cached under ``~/.hs_weights/<run_id>/<filename>``; if the
-    file is already present the download is skipped. ``log_dir`` is ignored for
-    W&B paths but retained for backwards compatibility.
+    file is already present the download is skipped.
 
     Parameters
     ----------
@@ -27,15 +27,20 @@ def load_checkpoint(
         Path to the W&B run (e.g., 'username/project/run_id'). If None, checkpoint must be provided.
     checkpoint : str
         Name of checkpoint file in W&B run or path to local checkpoint file.
-    log_dir : str
-        Unused for W&B downloads (kept for backwards compatibility).
+    log_dir : str, optional
+        Deprecated. Ignored; W&B downloads always go to ``~/.hs_weights``.
 
     Returns
     -------
     Path
         Path to the downloaded or local checkpoint file.
     """
-    del log_dir  # superseded by the on-disk cache under ~/.hs_weights
+    if log_dir is not None:
+        warnings.warn(
+            "load_checkpoint(log_dir=...) is deprecated and ignored; W&B checkpoints are cached under ~/.hs_weights.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     wandb_run_id: str | None = None
     if checkpoint.startswith(_WANDB_PREFIX):
