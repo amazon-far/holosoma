@@ -10,6 +10,7 @@ Holosoma (Greek: "whole-body") is a comprehensive humanoid robotics framework fo
 - **Task types**: Locomotion (velocity tracking) and whole-body tracking
 - **Sim-to-sim and sim-to-real deployment**: Shared inference pipeline across simulation and real robot control
 - **Motion retargeting**: Convert human motion capture data to robot motions while preserving interactions with objects and terrain
+- **Service-mode deployment**: Run an inference policy as a standalone process with a pluggable live tracking input, a MuJoCo virtual-robot backend, and a per-command dampening shim for safe real-robot rollouts (see [Service mode](#service-mode) below)
 - **Wandb integration**: Video logging, automatic ONNX checkpoint uploads, and direct checkpoint loading from Wandb
 
 ## Repository Structure
@@ -91,6 +92,20 @@ After training, deploy your policies:
 - **MuJoCo Simulation**: See [Sim-to-Sim Locomotion](src/holosoma_inference/docs/workflows/sim-to-sim-locomotion.md) or [Sim-to-Sim WBT](src/holosoma_inference/docs/workflows/sim-to-sim-wbt.md)
 
 Or browse all deployment options in the [Inference & Deployment Guide](src/holosoma_inference/README.md).
+
+## Service mode
+
+Holosoma can run as a standalone inference service and be fed live observations from any upstream process.
+
+Three pieces make service mode work:
+
+1. **Pluggable live-tracking input.** `WholeBodyTrackingPolicy` accepts a `TrackingSource` Protocol on construction. Default behavior is `NullTrackingSource` (byte-identical to the prior clip-driven path). Any implementation can feed a `TrackingPayload` (joint transforms + optional grippers + tracking-quality metadata) on every tick; the policy substitutes the payload's retargeted `motion_command_t` and `ref_quat_xyzw_t` into the observation instead of stepping the default clip. See `holosoma_inference/policies/tracking_source.py`.
+
+2. **Real-time SMPLH → G1 retargeter.** `SMPLRetargeter` in `holosoma_retargeting/src/realtime_smpl_retargeter.py` is a single-frame, mink-based differential IK retargeter (sibling of the offline `InteractionMeshRetargeter`). ~4 ms per frame in isolation on CPU. Per-joint finite-difference velocity, ground-anchor logic, and a cached asset manifest so repeated construction doesn't re-read meshes.
+
+3. **MuJoCo virtual-robot backend + dampening shim.** `MujocoInterface` (`holosoma_inference/sdk/mujoco/mujoco_interface.py`) is a drop-in alternative to `UnitreeInterface` that runs MuJoCo's sim for the `state.motor.*` feedback loop; use it to validate the full observation path without a physical robot on the subnet. The `Dampener` shim (`holosoma_inference/sdk/dampening.py`) sits between the policy and the interface and applies per-tick `q_slew_per_tick`, `q_limit_scale`, and `blend_alpha` guards so a sharp first-tick command cannot immediately saturate motors. Knobs read from environment variables (`HOLOSOMA_Q_SLEW_PER_TICK`, `HOLOSOMA_Q_LIMIT_SCALE`, `HOLOSOMA_BLEND_ALPHA`, `HOLOSOMA_KP_LEVEL`, `HOLOSOMA_KD_LEVEL`) so operators can retune at launch without rebuilding.
+
+See the [Inference & Deployment Guide](src/holosoma_inference/README.md) for how to wire these together.
 
 ### Demo Videos
 

@@ -142,6 +142,55 @@ wbt = ObservationConfig(
     },
 )
 
+# Dense-tracker WBT preset — matches the actor-obs composition produced by
+# the g1-wbt dense training config (157-dim base x history 4 = 628 into the
+# ONNX `obs` input).
+#
+# Differences vs stock ``wbt``: adds ``projected_gravity`` term (position 3,
+# between ``motion_ref_ori_b`` and ``base_ang_vel``) and bumps history from
+# 1 → 4. projected_gravity is computed in BasePolicy from IMU quaternion
+# (see base.py:561-566) — no runtime changes required.
+wbt_dense = ObservationConfig(
+    obs_dict={
+        "actor_obs": [
+            "motion_command",
+            "motion_ref_ori_b",
+            "projected_gravity",
+            "base_ang_vel",
+            "dof_pos",
+            "dof_vel",
+            "actions",
+        ]
+    },
+    obs_dims={
+        "motion_command": 58,
+        "motion_ref_pos_b": 3,
+        "motion_ref_ori_b": 6,
+        "projected_gravity": 3,
+        "base_lin_vel": 3,
+        "base_ang_vel": 3,
+        "dof_pos": 29,
+        "dof_vel": 29,
+        "actions": 29,
+    },
+    obs_scales={
+        "actions": 1.0,
+        "motion_command": 1.0,
+        "motion_ref_pos_b": 1.0,
+        "motion_ref_ori_b": 1.0,
+        "projected_gravity": 1.0,
+        "base_lin_vel": 1.0,
+        "base_ang_vel": 1.0,
+        "dof_pos": 1.0,
+        "dof_vel": 1.0,
+        "robot_body_pos_b": 1.0,
+        "robot_body_ori_b": 1.0,
+    },
+    history_length_dict={
+        "actor_obs": 4,
+    },
+)
+
 # =============================================================================
 # Default Configurations Dictionary
 # =============================================================================
@@ -150,6 +199,7 @@ DEFAULTS = {
     "loco-g1-29dof": loco_g1_29dof,
     "loco-t1-29dof": loco_t1_29dof,
     "wbt": wbt,
+    "wbt-dense": wbt_dense,
 }
 """Dictionary of all available observation configurations.
 

@@ -32,6 +32,29 @@ STATE_COMMAND_TO_POLICY_INDEX: dict[StateCommand, int] = {
 }
 
 
+def _build_ort_session_options():
+    """ONNX Runtime session options tuned for the WBT policy.
+
+    The default InferenceSession() takes ~4ms p99 on our hardware. With
+    intra_op_num_threads=4, graph_optimization_level=ALL, execution_mode
+    parallel, p99 drops to 0.38ms (see bench_onnx_inference.py). The
+    environment variable HOLOSOMA_ORT_INTRA_OP_THREADS overrides the
+    thread count for further tuning; HOLOSOMA_ORT_USE_DEFAULTS=1 restores
+    stock onnxruntime defaults for comparison runs.
+    """
+    import os as _os
+
+    if _os.environ.get("HOLOSOMA_ORT_USE_DEFAULTS", "0") in ("1", "true", "True"):
+        return None
+
+    opts = onnxruntime.SessionOptions()
+    opts.intra_op_num_threads = int(_os.environ.get("HOLOSOMA_ORT_INTRA_OP_THREADS", "4") or 4)
+    opts.inter_op_num_threads = int(_os.environ.get("HOLOSOMA_ORT_INTER_OP_THREADS", "2") or 2)
+    opts.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
+    opts.execution_mode = onnxruntime.ExecutionMode.ORT_PARALLEL
+    return opts
+
+
 class BasePolicy:
     """
     Base policy class for Holosoma deployment on humanoid robots.
@@ -308,7 +331,16 @@ class BasePolicy:
 
     def _init_rate_handler(self):
         """Initialize rate limiter and logger."""
+        import os as _os
+
+        env_rate = _os.environ.get("HOLOSOMA_RL_RATE_HZ")
         self.rl_rate = self.config.task.rl_rate
+        if env_rate:
+            try:
+                self.rl_rate = float(env_rate)
+                logger.info(f"rl_rate overridden by HOLOSOMA_RL_RATE_HZ={self.rl_rate}")
+            except ValueError:
+                pass
         self.logger = logger
         self.rate = RateLimiter(self.rl_rate)
 
@@ -385,7 +417,7 @@ class BasePolicy:
 
     def setup_policy(self, model_path):
         """Setup ONNX policy model and extract metadata."""
-        self.onnx_policy_session = onnxruntime.InferenceSession(model_path)
+        self.onnx_policy_session = onnxruntime.InferenceSession(model_path, sess_options=_build_ort_session_options())
         input_names = [inp.name for inp in self.onnx_policy_session.get_inputs()]
         output_names = [out.name for out in self.onnx_policy_session.get_outputs()]
 
@@ -778,8 +810,28 @@ class BasePolicy:
     # Control Action Methods
     # ============================================================================
 
+    def _reset_interface_dampener(self):
+        """Forget the Dampener's prior q_target across state transitions.
+
+        Slew-per-tick (q_slew_per_tick) is clamped against the last
+        post-shim output. On stiff-hold → policy-start transitions (and
+        the reverse when a fallback resumes stiff-hold) the previous
+        output reflects a different control regime; keeping it would
+        throttle the first frames of the new regime in ways the operator
+        didn't ask for. See 2026-05-05 code review #8.
+        """
+        d = getattr(self.interface, "_dampener", None)
+        if d is not None:
+            try:
+                d.reset()
+            except Exception as exc:
+                # Best-effort. Dampener is optional; interface may be a
+                # test double that doesn't implement it.
+                self.logger.debug("Dampener.reset() failed: %r", exc)
+
     def _handle_start_policy(self):
         """Handle start policy action."""
+        self._reset_interface_dampener()
         self.use_policy_action = True
         self.get_ready_state = False
         self.logger.info(colored("Using policy actions", "blue"))
@@ -789,6 +841,7 @@ class BasePolicy:
 
     def _handle_stop_policy(self):
         """Handle stop policy action."""
+        self._reset_interface_dampener()
         self.use_policy_action = False
         self.get_ready_state = False
         self.logger.info("Actions set to zero")
@@ -797,6 +850,7 @@ class BasePolicy:
 
     def _handle_init_state(self):
         """Handle initialization state."""
+        self._reset_interface_dampener()
         self.get_ready_state = True
         self.init_count = 0
         self.logger.info("Setting to init state")

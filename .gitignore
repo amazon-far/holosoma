@@ -37,3 +37,6 @@ __pycache__
 .logs/
 holosoma_config.yaml
 wandb-metadata.json
+
+# Non-core build artifacts
+BUILD.bazel

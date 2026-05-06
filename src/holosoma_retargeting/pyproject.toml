@@ -24,6 +24,7 @@ dependencies = [
     "trimesh",
     "smplx",
     "jinja2",
+    "mink",
     "mujoco",
     "viser",
     "robot_descriptions",

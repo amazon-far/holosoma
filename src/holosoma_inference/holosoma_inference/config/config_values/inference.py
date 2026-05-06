@@ -65,11 +65,17 @@ g1_29dof_wbt = InferenceConfig(
     secondary=_g1_safety_secondary,
 )
 
+# Dense-tracker variant: same robot + task as ``g1-29dof-wbt``, but uses the
+# ``wbt_dense`` observation preset (7 terms incl. projected_gravity,
+# history_length=4 → 628-dim obs).
+g1_29dof_wbt_dense = replace(g1_29dof_wbt, observation=observation.wbt_dense)
+
 # Core defaults - no extension imports at module load time
 DEFAULTS = {
     "g1-29dof-loco": g1_29dof_loco,
     "t1-29dof-loco": t1_29dof_loco,
     "g1-29dof-wbt": g1_29dof_wbt,
+    "g1-29dof-wbt-dense": g1_29dof_wbt_dense,
 }
 
 # Track whether extensions have been loaded

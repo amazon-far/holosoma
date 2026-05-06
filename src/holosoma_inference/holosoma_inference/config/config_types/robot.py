@@ -234,3 +234,17 @@ class RobotConfig:
     affecting the observation/state space. Converted to radians at init time.
     Length must equal num_joints when provided.
     """
+
+    # =========================================================================
+    # Retargeting (OPTIONAL - for service-mode real-time retargeting)
+    # =========================================================================
+
+    urdf_path: str | None = None
+    """Filesystem path to the robot URDF/MJCF used by the real-time retargeter.
+
+    Consumed by ``holosoma_retargeting.src.realtime_smpl_retargeter.SMPLRetargeter``
+    to build the MuJoCo model for mink-based differential IK. Only required
+    when ``WholeBodyTrackingPolicy`` is constructed with a non-null
+    ``TrackingSource`` (service-mode teleop via SMPLH). Default ``None``
+    preserves today's ONNX-clip-only behavior.
+    """

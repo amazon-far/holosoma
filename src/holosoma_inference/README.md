@@ -48,6 +48,24 @@ Each workflow guide includes:
 - Deployment options (offboard/onboard/Docker)
 - Troubleshooting tips
 
+## Service mode
+
+`WholeBodyTrackingPolicy` supports running as a long-lived service with a live tracking input instead of a pre-recorded motion clip. The key building blocks:
+
+- **`TrackingSource` Protocol** (`policies/tracking_source.py`): any producer that can deliver a `TrackingPayload` (joint transforms, per-
+  hand gripper values, quality metadata) per tick. `NullTrackingSource` is the default and preserves the prior clip-driven behavior byte-for-byte.
+- **`SMPLRetargeter`** (`holosoma_retargeting/src/realtime_smpl_retargeter.py`): single-frame SMPLH → robot retarget via mink differential IK. Bundled asset cache keyed on the source XML so repeated construction is cheap.
+- **`MujocoInterface`** (`sdk/mujoco/mujoco_interface.py`): a `BaseInterface` backend that runs the G1 MJCF under MuJoCo for closed-loop testing without a physical robot. Actuator-force clipping is resolved from the MJCF's `jnt_actfrcrange` and cached at construction so the hot PD loop is `mj_name2id`-free.
+- **`Dampener`** (`sdk/dampening.py`): shared command-dampening shim with per-tick `q_slew_per_tick`, `q_limit_scale`, and `blend_alpha`. Skips joints with `±inf` bounds. `reset()` is called on policy start/stop/init transitions so slew memory never leaks across control regimes.
+
+### Safety behavior (operator-visible)
+
+Service-mode deployments surface three safety invariants:
+
+1. Policies default to stiff-hold until an explicit `StateCommand.START`. An environment variable (`HOLOSOMA_AUTOSTART_POLICY=1`) opts into auto-dispatch after a short warm-up.
+2. The retargeter's one-shot WARN on fallthrough is paired with a periodic re-WARN (every ~500 frames) and is cleared on policy transitions, so a transient glitch does not silence every future failure in the process.
+3. The dampening shim's joint-limit clip skips unlimited joints instead of producing NaN via `0.5 * (-inf + +inf)`.
+
 ---
 
 # Policy Controls
