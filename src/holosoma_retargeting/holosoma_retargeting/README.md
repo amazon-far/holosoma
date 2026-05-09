@@ -222,6 +222,27 @@ python data_conversion/viser_body_vel_player.py \
     --record-exit-after
 ```
 
+For qpos `.npz` samples, an entire directory can be recorded through one Viser browser session. The script starts one Viser server, waits for a browser client once, then records one MP4 per sample using the original sample stem as the video filename:
+
+```bash
+python data_conversion/batch_record_viser_player.py \
+    --npz-dir /home/maxi/src/motion-diffusion-model/save/my_latent_tennis_g1_uncond_DiP/samples_600000/viser_npz
+```
+
+By default, videos are written next to the `.npz` files, for example `sample00_rep00_unconstrained.npz` becomes `sample00_rep00_unconstrained.mp4`. Existing MP4 files are skipped unless `--overwrite` is passed. Useful options include:
+
+```bash
+python data_conversion/batch_record_viser_player.py \
+    --npz-dir /path/to/viser_npz \
+    --output-dir videos \
+    --record-width 1920 \
+    --record-height 1080 \
+    --record-start-delay 10 \
+    --overwrite
+```
+
+Use `--dry-run` to preview the selected samples and output filenames without starting Viser.
+
 ### Robot-Object Setting
 
 ```bash
