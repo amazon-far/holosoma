@@ -17,12 +17,13 @@ PLATFORM_MAP = {
 # Keep this list in sync with the wheel asset matrix on the amazon-far release.
 _SUPPORTED_PY_TAGS = {(3, 8), (3, 10), (3, 11), (3, 12)}
 _py = (sys.version_info.major, sys.version_info.minor)
-if _py in _SUPPORTED_PY_TAGS:
-    cp_tag = f"cp{_py[0]}{_py[1]}"
-else:
-    # Fall back to cp310 for unsupported interpreters; install will likely
-    # fail, but the URL stays deterministic for error reporting.
-    cp_tag = "cp310"
+if _py not in _SUPPORTED_PY_TAGS:
+    _supported = ", ".join(f"{maj}.{min}" for maj, min in sorted(_SUPPORTED_PY_TAGS))
+    raise RuntimeError(
+        f"holosoma_inference[unitree,booster] has no prebuilt SDK wheel for "
+        f"Python {_py[0]}.{_py[1]}. Supported versions: {_supported}."
+    )
+cp_tag = f"cp{_py[0]}{_py[1]}"
 
 platform_tag = PLATFORM_MAP.get(platform.machine(), "linux_x86_64")
 
