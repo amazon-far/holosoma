@@ -35,6 +35,11 @@ motion_config = MotionConfig(
     noise_to_initial_pose=init_pose_config,
 )
 
+motion_config_w_object = replace(
+    motion_config,
+    motion_file="holosoma/data/motions/t1_23dof/whole_body_tracking/lifting_w_obj.npz",
+)
+
 t1_23dof_wbt_command = CommandManagerCfg(
     params={},
     setup_terms={
@@ -51,4 +56,14 @@ t1_23dof_wbt_command = CommandManagerCfg(
     },
 )
 
-__all__ = ["t1_23dof_wbt_command"]
+t1_23dof_wbt_command_w_object = replace(
+    t1_23dof_wbt_command,
+    setup_terms={
+        "motion_command": CommandTermCfg(
+            func="holosoma.managers.command.terms.wbt:MotionCommand",
+            params={"motion_config": motion_config_w_object},
+        ),
+    },
+)
+
+__all__ = ["t1_23dof_wbt_command", "t1_23dof_wbt_command_w_object"]

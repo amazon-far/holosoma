@@ -1,0 +1,58 @@
+body_model:
+  bm_path: /ps/project/common/moshpp/smplx/locked_head/model_6_merged_exp_hands_fixed_eyes/neutral/model.npz
+  gender: neutral
+data_parms:
+  amass_dir: /ps/scratch/amass/20200508/mosh_smplx_neutral
+  amass_splits:
+    test:
+    - BMLrub_test
+    train:
+    - CMU
+    - BMLrub_train
+    vald:
+    - BMLrub_vald
+  num_timeseq_frames: {}
+  num_workers: 5
+general:
+  dataset_basedir: /ps/scratch/human_body_prior/VPoser/data/smpl
+  dataset_id: V02_03
+  expr_id: V02_05
+  rnd_seed: 100
+  verbosity: 0
+  work_basedir: /ps/scratch/human_body_prior/VPoser/training_experiments
+logging:
+  best_model_fname: null
+  dataset_dir: /ps/scratch/human_body_prior/VPoser/data/smpl/V02_03
+  expr_msg: '[V02_05] batch_size = 128.'
+  num_bodies_to_display: 25
+  render_during_training: true
+  work_dir: /ps/scratch/human_body_prior/VPoser/training_experiments/V02_05
+model_params:
+  latentD: 32
+  num_neurons: 512
+train_parms:
+  batch_size: 128
+  early_stopping:
+    min_delta: 0.0
+    mode: min
+    monitor: val_loss
+    patience: 10
+    verbose: true
+  gen_optimizer:
+    args:
+      lr: 0.001
+      weight_decay: 1.0e-05
+    type: Adam
+  keep_extra_loss_terms_until_epoch: 15
+  loss_weights:
+    loss_jtr_wt: 2
+    loss_kl_wt: 0.005
+    loss_matrot_wt: 2
+    loss_rec_wt: 4
+  lr_scheduler:
+    args:
+      patience: 5
+      verbose: true
+    type: ReduceLROnPlateau
+  num_epochs: 100
+  restore_optimizer: false

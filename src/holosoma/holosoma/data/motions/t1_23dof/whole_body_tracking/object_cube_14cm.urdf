@@ -1,0 +1,31 @@
+<?xml version="1.0" ?>
+<robot name="object_cube_14cm">
+  <link name="baseLink">
+    <inertial>
+      <mass value="0.5"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="0.000817" ixy="0" ixz="0" iyy="0.000817" iyz="0" izz="0.000817"/>
+    </inertial>
+    <contact>
+      <lateral_friction value="0.8"/>
+      <rolling_friction value="0.01"/>
+      <stiffness value="30000"/>
+      <damping value="1000"/>
+    </contact>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <box size="0.14 0.14 0.14"/>
+      </geometry>
+      <material name="mat">
+        <color rgba="0.85 0.65 0.35 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <box size="0.14 0.14 0.14"/>
+      </geometry>
+    </collision>
+  </link>
+</robot>

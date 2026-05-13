@@ -1498,9 +1498,18 @@ t1_23dof = RobotConfig(
     knee_joint_min_threshold=0.35,
 )
 
+t1_23dof_w_object = replace(
+    t1_23dof,
+    object=replace(
+        t1_23dof.object,
+        object_urdf_path="holosoma/data/motions/t1_23dof/whole_body_tracking/object_cube_14cm.urdf",
+    ),
+)
+
 DEFAULTS = {
     "g1_29dof": g1_29dof,
     "t1_29dof_waist_wrist": t1_29dof_waist_wrist,
     "g1_29dof_w_object": g1_29dof_w_object,
     "t1_23dof": t1_23dof,
+    "t1_23dof_w_object": t1_23dof_w_object,
 }

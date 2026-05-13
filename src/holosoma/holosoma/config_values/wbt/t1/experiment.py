@@ -12,10 +12,11 @@ from holosoma.config_values import (
     terrain,
 )
 
-from holosoma.config_values.wbt.g1.observation import g1_29dof_wbt_observation
+from holosoma.config_values.wbt.g1.observation import g1_29dof_wbt_observation, g1_29dof_wbt_observation_w_object
 from holosoma.config_values.wbt.g1.randomization import g1_29dof_wbt_randomization
+from holosoma.config_values.wbt.g1.reward import g1_29dof_wbt_reward_w_object
 
-from holosoma.config_values.wbt.t1.command import t1_23dof_wbt_command
+from holosoma.config_values.wbt.t1.command import t1_23dof_wbt_command, t1_23dof_wbt_command_w_object
 from holosoma.config_values.wbt.t1.termination import t1_23dof_wbt_termination
 from holosoma.config_values.wbt.t1.reward import t1_23dof_wbt_reward, t1_23dof_wbt_fast_sac_reward
 
@@ -61,7 +62,7 @@ t1_23dof_wbt = ExperimentConfig(
     training=TrainingConfig(
         project="WholeBodyTracking",
         name="t1_23dof_wbt_manager",
-        num_envs=4096,
+        num_envs=1024,
     ),
     env_class="holosoma.envs.wbt.wbt_manager.WholeBodyTrackingManager",
     algo=replace(
@@ -124,6 +125,35 @@ t1_23dof_wbt = ExperimentConfig(
             "Episode/rew_motion_global_body_lin_vel": [0.30, "inf"],
             "Episode/rew_motion_global_body_ang_vel": [0.02, "inf"],
         },
+    ),
+)
+
+t1_23dof_wbt_w_object = replace(
+    t1_23dof_wbt,
+    training=replace(t1_23dof_wbt.training, project="WholeBodyTrackingLifting", name="t1_23dof_wbt_lifting_manager"),
+    command=t1_23dof_wbt_command_w_object,
+    robot=replace(
+        robot.t1_23dof_w_object,
+        asset=replace(robot.t1_23dof_w_object.asset, enable_self_collisions=True),
+        init_state=replace(robot.t1_23dof_w_object.init_state, pos=[0.0, 0.0, 0.68]),
+        body_names=VALID_T1_23DOF_BODY_NAMES,
+    ),
+    terrain=replace(
+        terrain.terrain_load_obj,
+        terrain_term=replace(
+            terrain.terrain_load_obj.terrain_term,
+            obj_file_path="holosoma/data/motions/t1_23dof/whole_body_tracking/table_platform.obj",
+        ),
+    ),
+    observation=g1_29dof_wbt_observation_w_object,
+    randomization=g1_29dof_wbt_randomization,
+    reward=g1_29dof_wbt_reward_w_object,
+    simulator=replace(
+        simulator.isaacsim,
+        config=replace(
+            simulator.isaacsim.config,
+            scene=replace(simulator.isaacsim.config.scene, env_spacing=0.0),
+        ),
     ),
 )
 
@@ -201,6 +231,39 @@ t1_23dof_wbt_fast_sac = ExperimentConfig(
     ),
 )
 
+t1_23dof_wbt_fast_sac_w_object = replace(
+    t1_23dof_wbt_fast_sac,
+    training=replace(
+        t1_23dof_wbt_fast_sac.training,
+        project="WholeBodyTrackingLifting",
+        name="t1_23dof_wbt_fast_sac_lifting_manager",
+    ),
+    command=t1_23dof_wbt_command_w_object,
+    robot=replace(
+        robot.t1_23dof_w_object,
+        asset=replace(robot.t1_23dof_w_object.asset, enable_self_collisions=True),
+        init_state=replace(robot.t1_23dof_w_object.init_state, pos=[0.0, 0.0, 0.68]),
+        body_names=VALID_T1_23DOF_BODY_NAMES,
+    ),
+    terrain=replace(
+        terrain.terrain_load_obj,
+        terrain_term=replace(
+            terrain.terrain_load_obj.terrain_term,
+            obj_file_path="holosoma/data/motions/t1_23dof/whole_body_tracking/table_platform.obj",
+        ),
+    ),
+    observation=g1_29dof_wbt_observation_w_object,
+    randomization=g1_29dof_wbt_randomization,
+    reward=g1_29dof_wbt_reward_w_object,
+    simulator=replace(
+        simulator.isaacsim,
+        config=replace(
+            simulator.isaacsim.config,
+            scene=replace(simulator.isaacsim.config.scene, env_spacing=0.0),
+        ),
+    ),
+)
+
 # Default configurations available for CLI selection
 DEFAULTS = {
     # G1 robot configurations
@@ -216,6 +279,8 @@ DEFAULTS = {
     "t1_29dof_fast_sac": t1_29dof_fast_sac,
     "t1_23dof_wbt": t1_23dof_wbt,
     "t1_23dof_wbt_fast_sac": t1_23dof_wbt_fast_sac,
+    "t1_23dof_wbt_w_object": t1_23dof_wbt_w_object,
+    "t1_23dof_wbt_fast_sac_w_object": t1_23dof_wbt_fast_sac_w_object,
 }
 
 # Tyro configuration for CLI argument parsing
@@ -228,7 +293,12 @@ AnnotatedExperimentConfig = Annotated[
     ),
 ]
 
-__all__ = ["t1_23dof_wbt", "t1_23dof_wbt_fast_sac"]
+__all__ = [
+    "t1_23dof_wbt",
+    "t1_23dof_wbt_fast_sac",
+    "t1_23dof_wbt_w_object",
+    "t1_23dof_wbt_fast_sac_w_object",
+]
 
 """
 Example usage:

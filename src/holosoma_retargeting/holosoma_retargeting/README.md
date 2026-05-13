@@ -1,230 +1,133 @@
-# Holosoma Motion Retargeting
+# VPoser: Variational Human Pose Prior for Body Inverse Kinematics
 
-This repository provides tools for retargeting human motion data to humanoid robots. It supports multiple data formats (smplh, mocap, lafan) and task types including robot-only motion, object interaction, and climbing.
+![alt text](support_data/vposer_samples.png "Novel Human Poses Sampled From the VPoser.")
+## Description
+The articulated 3D pose of the human body is high-dimensional and complex. 
+Many applications make use of a prior distribution over valid human poses, but modeling this distribution is difficult.
+Here we present VPoser, a learning based variational human pose prior trained from a large dataset of human poses represented as SMPL bodies.
+This body prior can be used as an Inverse Kinematics (IK) solver for many tasks such as fitting a body model to images 
+as the main contribution of this repository for [SMPLify-X](https://smpl-x.is.tue.mpg.de/). 
+VPoser has the following features: 
+ - defines a prior of SMPL pose parameters
+ - is end-to-end differentiable
+ - provides a way to penalize impossible poses while admitting valid ones
+ - effectively models correlations among the joints of the body
+ - introduces an efficient, low-dimensional, representation for human pose
+ - can be used to generate valid 3D human poses for data-dependent tasks
 
-**Data Requirements**: The retargeting pipeline requires motion data in world joint positions. For custom data, you need to prepare world joint positions in shape `(T, J, 3)` where T is the number of frames and J is the number of joints, and modify `demo_joints` and `joints_mapping` defined in `config_types/data_type.py`.
+## Table of Contents
+  * [Description](#description)
+  * [Installation](#installation)
+  * [Tutorials](#tutorials)
+  * [Advanced IK Capabilities](#advanced-ik-capabilities)
+  * [Train VPoser](#train-vposer)
+  * [Citation](#citation)
+  * [License](#license)
+  * [Acknowledgments](#acknowledgments)
+  * [Contact](#contact)
+  * [FAQ](https://github.com/nghorbani/human_body_prior/wiki/FAQ)
 
-## Single Sequence Motion Retargeting
+## Installation (uv)
+Requirements
+- Python 3.11–3.12 (recommended). Avoid 3.13/3.14 for now due to limited third‑party wheels.
+- uv (https://docs.astral.sh/uv/) installed
 
+Core (recommended)
 ```bash
-# Robot-only (OMOMO)
-python examples/robot_retarget.py --data_path demo_data/OMOMO_new --task-type robot_only --task-name sub3_largebox_003 --data_format smplh --retargeter.debug --retargeter.visualize
-
-# Object interaction (OMOMO)
-python examples/robot_retarget.py --data_path demo_data/OMOMO_new --task-type object_interaction --task-name sub3_largebox_003 --data_format smplh --retargeter.debug --retargeter.visualize
-
-# Climbing
-python examples/robot_retarget.py --data_path demo_data/climb --task-type climbing --task-name mocap_climb_seq_0 --data_format mocap --robot-config.robot-urdf-file models/g1/g1_29dof_spherehand.urdf --retargeter.debug --retargeter.visualize
+uv sync
 ```
 
-**Note**: Add `--augmentation` to run sequences with augmentation. You must first run the original sequence before adding augmentation.
-
-## Batch Processing for Motion Retargeting
-
+Development tools (tests, linters)
 ```bash
-# Robot-only (OMOMO)
-python examples/parallel_robot_retarget.py --data-dir demo_data/OMOMO_new --task-type robot_only --data_format smplh --save_dir demo_results_parallel/g1/robot_only/omomo --task-config.object-name ground
-
-# Object interaction (OMOMO)
-python examples/parallel_robot_retarget.py --data-dir demo_data/OMOMO_new --task-type object_interaction --data_format smplh --save_dir demo_results_parallel/g1/object_interaction/omomo --task-config.object-name largebox
-
-# Climbing
-python examples/parallel_robot_retarget.py --data-dir demo_data/climb --task-type climbing --data_format mocap --robot-config.robot-urdf-file models/g1/g1_29dof_spherehand.urdf --task-config.object-name multi_boxes --save_dir demo_results_parallel/g1/climbing/mocap_climb
+uv sync --extra dev
 ```
 
-**Note**: Add `--augmentation` to run original sequences and sequences with augmentation (for object interaction and climbing tasks).
+Optional features
+- Lightning: `uv sync --extra pl`
+- Visualization: `uv sync --extra vis`
 
-## Data Preparation
-
-We provide `demo_data/` for fast testing. To test on more motion sequences, please follow the instructions below to download and prepare the data.
-
-### OMOMO
-
-Our pipeline uses the processed dataset by InterMimic. The data format differs from the original OMOMO dataset.
-
-1. Download the processed OMOMO data from [this link](https://drive.google.com/file/d/141YoPOd2DlJ4jhU2cpZO5VU5GzV_lm5j/view)
-2. Extract the downloaded folder to `demo_data/OMOMO_new`
-
-The data should contain `.pt` files.
-
-### LAFAN
-
-#### Download the Original LAFAN Data
-
-1. Download [lafan1.zip](https://github.com/ubisoft/ubisoft-laforge-animation-dataset/blob/master/lafan1/lafan1.zip) by clicking "View Raw"
-2. Put `lafan1.zip` in your designated data folder and uncompress it to `DATA_FOLDER_PATH/lafan`
-3. The file structure should be `demo_data/lafan/*.bvh`
-
-#### Convert the Original LAFAN Data Format for Motion Retargeting
-
-We need some data processing files from the [LAFAN GitHub repo](https://github.com/ubisoft/ubisoft-laforge-animation-dataset).
-
+Quick check
 ```bash
-cd holosoma_retargeting/data_utils/
-git clone https://github.com/ubisoft/ubisoft-laforge-animation-dataset.git
-mv ubisoft-laforge-animation-dataset/lafan1 .
-python extract_global_positions.py --input_dir DATA_FOLDER_PATH/lafan --output_dir ../demo_data/lafan
+uv run python -c "import human_body_prior; print('ok')"
 ```
 
-This will convert the BVH files to `.npy` format with global joint positions.
-
-**Note**: For LAFAN data, you need to relax the foot sticking constraint by setting `--retargeter.foot-sticking-tolerance` (default is stricter). You can adjust this tolerance number based on your data quality and retargeting results.
-
-#### Single Sequence Retargeting on LAFAN
-
+Run tests (pytest)
 ```bash
-python examples/robot_retarget.py --data_path demo_data/lafan --task-type robot_only --task-name dance2_subject1 --data_format lafan --task-config.ground-range -10 10 --save_dir demo_results/g1/robot_only/lafan --retargeter.debug --retargeter.visualize --retargeter.foot-sticking-tolerance 0.02
+uv sync --extra dev
+uv run pytest -q
 ```
 
-#### Batch Processing for Motion Retargeting on LAFAN
+Notes
+- PyTorch CUDA builds: install the appropriate wheel per your CUDA setup (default dependency is CPU). See https://pytorch.org/get-started for selection guidance.
+- If your global Python is 3.13/3.14, create the env with a supported version, e.g.:
+  - `uv venv --python 3.12 && uv sync`
+  - or `uv python pin 3.12` before `uv sync`
 
-```bash
-python examples/parallel_robot_retarget.py --data-dir demo_data/lafan --task-type robot_only --data_format lafan --save_dir demo_results_parallel/g1/robot_only/lafan --task-config.object-name ground --task-config.ground-range -10 10 --retargeter.foot-sticking-tolerance 0.02
+## Model Weights
+- VPoser weights: Download the pretrained VPoser checkpoint(s) from the SMPL-X project page. The tutorials include guidance on expected folder layout and how to point the code to the checkpoint.
+- SMPL-X body models: Download SMPL-X model files (e.g., `model.npz`) from the SMPL-X website (registration required). You will need to provide the path via `bm_fname` when constructing `BodyModel`.
+
+Where to find details
+- See tutorials/vposer.ipynb for concrete instructions, example paths, and usage. It shows how to load VPoser weights and SMPL-X models for sampling and IK examples.
+
+
+## Tutorials
+![alt text](support_data/latent_interpolation_1.gif "Interpolation of novel poses on the smoother VPoser latent space.")
+![alt text](support_data/latent_interpolation_2.gif "Interpolation of novel poses on the smoother VPoser latent space.")
+
+* [VPoser Body poZ Space for SMPL Body Model Family](tutorials/vposer.ipynb)
+* [Sampling Novel Body Poses with VPoser](tutorials/vposer_sampling.ipynb)
+
+## Advanced IK Capabilities
+![alt text](support_data/SMPL_inverse_kinematics.gif "Batched SMPL Inverse Kinematics With Learned Body Prior")
+
+Given position of some key points one can find the necessary body joints' rotation configurations via inverse kinematics (IK). 
+The keypoints could either be 3D (joint locations, 3D mocap markers on body surface) or 2D (as in [SMPLify-X](https://smpl-x.is.tue.mpg.de/)).
+We provide a comprehensive IK engine with flexible key point definition interface demonstrated in tutorials: 
+- [IK for 3D joints](tutorials/ik_example_joints.py) 
+- [IK for mocap markers](tutorials/ik_example_mocap.py) 
+
+One can define keypoints on the SMPL body, e.g. joints, or any locations relative to the body surface 
+and fit body model parameters to them while utilizing the efficient learned pose parameterization of 
+[VPoser](https://github.com/nghorbani/human_body_prior). The supported features are:
+- Batch enabled
+- Flexible key point definition
+- LBFGS with wolfe line-search and ADAM optimizer already enabled
+- No need for initializing the body (always starts from zero)
+- Optimizes body pose, translation and body global orientation jointly and iteratively
+
+
+## Train VPoser
+We train VPoser, as a [variational autoencoder](https://arxiv.org/abs/1312.6114)
+that learns a latent representation of human pose and regularizes the distribution of the latent code 
+to be a normal distribution.
+We train our prior on data from the [AMASS](https://amass.is.tue.mpg.de/) dataset, 
+that holds the SMPL pose parameters of various publicly available human motion capture datasets.
+
+
+## Citation
+Please cite the following paper if you use this code directly or indirectly in your research/projects:
 ```
-
-### AMASS SMPL-X
-
-#### Download the Original AMASS Data
-
-1. Follow the [AMASS](https://amass.is.tue.mpg.de/) instructions to download the original AMASS data
-2. The AMASS data structure should be `/path/to/amass/dataset_name/subject_name/*.npz`
-
-#### Download SMPL-X Models
-
-1. Follow the [SMPL-X](https://smpl-x.is.tue.mpg.de/index.html) instructions to download SMPL-X models
-2. For AMASS data, we tested on SMPL-X N (neutral) format
-3. The SMPL-X models structure should be `/path/to/models/smplx/SMPLX_NEUTRAL.npz`
-
-#### Convert the Original AMASS SMPL-X Data Format for Motion Retargeting
-
-We provide `data_utils/prep_amass_smplx_for_rt.py` for converting AMASS SMPLX data to the format required for motion retargeting.
-
-```bash
-# Install dependencies
-cd holosoma_retargeting/data_utils/
-git clone https://github.com/nghorbani/human_body_prior.git
-pip install tqdm dotmap PyYAML omegaconf loguru
-cd human_body_prior/
-pip install -e .
-cd ../
-mv human_body_prior human_body_prior_outer
-mv human_body_prior_outer/* ./
-rm -rf human_body_prior_outer
-cd ../
-
-
-# Run data processing
-python data_utils/prep_amass_smplx_for_rt.py \
-  --amass-root-folder /path/to/amass \
-  --output-folder /path/to/output \
-  --model-root-folder /path/to/models
+@inproceedings{SMPL-X:2019,
+  title = {Expressive Body Capture: 3D Hands, Face, and Body from a Single Image},
+  author = {Pavlakos, Georgios and Choutas, Vasileios and Ghorbani, Nima and Bolkart, Timo and Osman, Ahmed A. A. and Tzionas, Dimitrios and Black, Michael J.},
+  booktitle = {Proceedings IEEE Conf. on Computer Vision and Pattern Recognition (CVPR)},
+  year = {2019}
+}
 ```
+Also note that if you consider training your own VPoser for your research using the AMASS dataset, 
+then please follow its respective citation guideline.
+ 
 
-This will convert the AMASS `.npz` files to `.npz` format with global joint positions and height information.
+## Contact
+The code in this repository is developed by [Nima Ghorbani](https://nghorbani.github.io/) 
+while at [Perceiving Systems](https://ps.is.mpg.de/), Max-Planck Institute for Intelligent Systems, Tübingen, Germany.
 
-**Note**: You can optionally specify `--subdataset-folder` to process only a specific subdataset (e.g., `HumanEva`). If not specified, it will process all datasets recursively.
+If you have any questions you can contact us at [smplx@tuebingen.mpg.de](mailto:smplx@tuebingen.mpg.de).
 
-#### Single Sequence Retargeting on AMASS SMPL-X
+For commercial licensing, contact [ps-licensing@tue.mpg.de](mailto:ps-licensing@tue.mpg.de)
 
-```bash
-python examples/robot_retarget.py --data_path demo_data/amass_smplx_processed --task-type robot_only --task-name HumanEva_S3_Jog_1_stageii --data_format smplx --task-config.ground-range -10 10 --save_dir demo_results/g1/robot_only/amass_smplx --retargeter.debug --retargeter.visualize
-```
+## License
 
-#### Batch Processing for Motion Retargeting on AMASS SMPL-X
-
-```bash
-python examples/parallel_robot_retarget.py --data-dir demo_data/amass_smplx_processed --task-type robot_only --data_format smplx --save_dir demo_results_parallel/g1/robot_only/amass_smplx --task-config.object-name ground --task-config.ground-range -10 10
-```
-
-## Check Visualizations of Saved Retargeting Results
-
-```bash
-# Visualize object-interaction results
-python viser_player.py --robot_urdf models/g1/g1_29dof.urdf \
-    --object_urdf models/largebox/largebox.urdf \
-    --qpos_npz demo_results_parallel/g1/object_interaction/omomo/sub3_largebox_003_original.npz
-
-# Visualize climbing results
-python viser_player.py --robot_urdf models/g1/g1_29dof_spherehand.urdf \
-    --object_urdf demo_data/climb/mocap_climb_seq_0/multi_boxes.urdf \
-    --qpos_npz demo_results_parallel/g1/climbing/mocap_climb/mocap_climb_seq_0_original.npz
-
-python viser_player.py --robot_urdf models/g1/g1_29dof_spherehand.urdf \
-    --object_urdf demo_data/climb/mocap_climb_seq_0/multi_boxes_scaled_0.74_0.74_0.89.urdf \
-    --qpos_npz demo_results_parallel/g1/climbing/mocap_climb/mocap_climb_seq_0_z_scale_1.2.npz
-
-# Visualize robot only results
-python viser_player.py --robot_urdf models/g1/g1_29dof.urdf \
-    --qpos_npz demo_results_parallel/g1/robot_only/omomo/sub3_largebox_003_original.npz
-
-# Visualize LAFAN robot only results
-python viser_player.py --robot_urdf models/g1/g1_29dof.urdf \
-    --qpos_npz demo_results/g1/robot_only/lafan/dance2_subject1.npz
-
-# Visualize AMASS results
-python viser_player.py --robot_urdf models/g1/g1_29dof.urdf \
-    --qpos_npz demo_results/g1/robot_only/amass_smplx/HumanEva_S3_Jog_1_stageii.npz
-
-# Visualize AMASS results
-python viser_player.py --robot_urdf models/g1/g1_29dof.urdf \
-    --qpos_npz demo_results_parallel/g1/robot_only/amass_smplx/HumanEva_S1_Box_1_stageii_original.npz
-```
-
-## Quantitative Evaluation
-
-```bash
-# Evaluate robot-object interaction
-python evaluation/eval_retargeting.py --res_dir demo_results_parallel/g1/object_interaction/omomo --data_dir demo_data/OMOMO_new --data_type "robot_object"
-
-# Evaluate climbing sequence
-python evaluation/eval_retargeting.py --res_dir demo_results_parallel/g1/climbing/mocap_climb --data_dir demo_data/climb --data_type "robot_terrain" --robot-config.robot-urdf-file models/g1/g1_29dof_spherehand.urdf
-
-# Evaluate robot only (OMOMO)
-python evaluation/eval_retargeting.py --res_dir demo_results_parallel/g1/robot_only/omomo --data_dir demo_data/OMOMO_new --data_type "robot_only"
-```
-
-## Prepare Data for Training RL Whole-Body Tracking Policy
-
-To prepare data for training RL whole-body tracking policies, you need to follow a two-step process:
-
-1. **First, run retargeting** to obtain `.npz` files containing the retargeted robot motion. Use the retargeting commands shown in the sections above (Single Sequence Motion Retargeting or Batch Processing for Motion Retargeting).
-
-2. **Then, run the data conversion code** below to convert the retargeted `.npz` files into the format required for RL training. The conversion script takes the retargeted `.npz` files as input and outputs converted files with the specified frame rate and format.
-
-**Note**: If you run this code on Mac, please use `mjpython` instead of `python`.
-
-### Mac (using mjpython)
-
-```bash
-mjpython data_conversion/convert_data_format_mj.py --input_file ./demo_results/g1/robot_only/omomo/sub3_largebox_003.npz --output_fps 50 --output_name converted_res/robot_only/sub3_largebox_003_mj_fps50.npz --data_format smplh --object_name "ground" --once
-
-mjpython data_conversion/convert_data_format_mj.py --input_file ./demo_results/g1/object_interaction/omomo/sub3_largebox_003_original.npz --output_fps 50 --output_name converted_res/object_interaction/sub3_largebox_003_mj_w_obj.npz --data_format smplh --object_name "largebox" --has_dynamic_object --once
-```
-
-### Robot-Only Setting
-
-```bash
-python data_conversion/convert_data_format_mj.py --input_file ./demo_results/g1/robot_only/omomo/sub3_largebox_003.npz --output_fps 50 --output_name converted_res/robot_only/sub3_largebox_003_mj_fps50.npz --data_format smplh --object_name "ground" --once
-
-python data_conversion/convert_data_format_mj.py --input_file ./demo_results/g1/robot_only/lafan/dance2_subject1.npz --output_fps 50 --output_name converted_res/robot_only/dance2_subject1_mj_fps50.npz --data_format lafan --object_name "ground" --once
-```
-
-### Robot-Object Setting
-
-```bash
-python data_conversion/convert_data_format_mj.py --input_file ./demo_results/g1/object_interaction/omomo/sub3_largebox_003_original.npz --output_fps 50 --output_name converted_res/object_interaction/sub3_largebox_003_mj_w_obj.npz --data_format smplh --object_name "largebox" --has_dynamic_object --once
-```
-
-### OmniRetarget Data
-
-For OmniRetarget data downloaded from HuggingFace, please add `--use_omniretarget_data` for data conversion.
-
-```bash
-python data_conversion/convert_data_format_mj.py --input_file OmniRetarget/robot-object/sub3_largebox_003_original.npz --output_fps 50 --output_name converted_res/object_interaction/sub3_largebox_003_mj_w_obj_omnirt.npz --data_format smplh --object_name "largebox" --has_dynamic_object --use_omniretarget_data --once
-```
-
-## Custom Human Motion Data Format
-Please see the instructions for custom human motion data formats: [ADD_MOTION_FORMAT_README.md](ADD_MOTION_FORMAT_README.md)
-
-## Custom Robot Type
-Please see the instructions for retargeting custom robot types: [ADD_ROBOT_TYPE_README.md](ADD_ROBOT_TYPE_README.md)
+Software Copyright License for **non-commercial scientific research purposes**.
+Please read carefully the [terms and conditions](./LICENSE) and any accompanying documentation before you download and/or use the SMPL-X/SMPLify-X model, data and software, (the "Model & Software"), including 3D meshes, blend weights, blend shapes, textures, software, scripts, and animations. By downloading and/or using the Model & Software (including downloading, cloning, installing, and any other use of this github repository), you acknowledge that you have read these terms and conditions, understand them, and agree to be bound by them. If you do not agree with these terms and conditions, you must not download and/or use the Model & Software. Any infringement of the terms of this agreement will automatically terminate your rights under this [License](./LICENSE).

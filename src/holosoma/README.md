@@ -116,6 +116,23 @@ python src/holosoma/holosoma/replay.py \
 
 Once checkpoints are saved, you can evaluate policies using [In-Training Evaluation](#in-training-evaluation) (same simulator as training) or cross-simulator evaluation in MuJoCo (see [holosoma_inference](../holosoma_inference/README.md)).
 
+### State Transition Prediction
+
+Train a first-pass transition model that predicts the post-action state from the current state and action by rolling out an existing policy checkpoint.
+
+```bash
+source scripts/source_isaacsim_setup.sh
+python src/holosoma/holosoma/train_state_predictor.py \
+    --checkpoint logs/WholeBodyTracking/20260329_023617-t1_23dof_wbt_fast_sac_manager-locomotion/model_0400000.pt \
+    exp:t1-23dof-wbt-fast-sac \
+    simulator:isaacsim \
+    --training.headless True \
+    --training.num-envs 1 \
+    --data.rollout-steps 4096
+```
+
+See [STATE_PREDICTOR_TUTORIAL.md](holosoma/STATE_PREDICTOR_TUTORIAL.md) for the full workflow and data format.
+
 ---
 
 ## Evaluation

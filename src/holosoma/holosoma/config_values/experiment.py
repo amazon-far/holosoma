@@ -13,6 +13,8 @@ from holosoma.config_values.wbt.g1.experiment import (
 from holosoma.config_values.wbt.t1.experiment import (
     t1_23dof_wbt,
     t1_23dof_wbt_fast_sac,
+    t1_23dof_wbt_fast_sac_w_object,
+    t1_23dof_wbt_w_object,
 )
 
 DEFAULTS = {
@@ -26,6 +28,8 @@ DEFAULTS = {
     "t1_29dof_fast_sac": t1_29dof_fast_sac,
     "t1_23dof_wbt": t1_23dof_wbt,
     "t1_23dof_wbt_fast_sac": t1_23dof_wbt_fast_sac,
+    "t1_23dof_wbt_w_object": t1_23dof_wbt_w_object,
+    "t1_23dof_wbt_fast_sac_w_object": t1_23dof_wbt_fast_sac_w_object,
 }
 
 AnnotatedExperimentConfig = Annotated[

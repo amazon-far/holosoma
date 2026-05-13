@@ -1,0 +1,84 @@
+---
+body_model:
+  gender: neutral
+  bm_fname: ../../../../support_data/dowloads/models/smplx/neutral/model.npz
+
+general:
+  verbosity: 0
+  expr_id:
+  dataset_id: V02_03 #SMPLx neutral
+  rnd_seed: 100
+  work_basedir: ../../../../support_data/training/training_experiments
+  dataset_basedir: ../../../../support_data/training/data
+
+logging:
+  expr_msg:
+  num_bodies_to_display: 25
+  work_dir:
+  dataset_dir:
+  render_during_training: False
+  best_model_fname:
+
+train_parms:
+  batch_size:
+  num_epochs: 100
+  restore_optimizer: False
+  gen_optimizer:
+    type: Adam
+    args:
+      lr: 0.001
+      weight_decay: 0.00001
+  lr_scheduler:
+    type: ReduceLROnPlateau
+    args:
+      #      metrics: val_loss
+      verbose: true
+      patience: 5
+  early_stopping:
+    monitor: val_loss
+    min_delta: 0.0
+    patience: 10
+    verbose: True
+    mode: min
+  keep_extra_loss_terms_until_epoch: 15
+  loss_weights:
+    loss_kl_wt: 0.005
+    loss_rec_wt: 4
+    loss_matrot_wt: 2
+    loss_jtr_wt: 2
+
+
+data_parms:
+  num_workers: 5 # Used for dataloaders
+  amass_dir: support_data/dowloads/amass/smplx_neutral
+  num_timeseq_frames: 1
+  amass_splits:
+    vald:
+#      - HumanEva
+#      - MPI_HDM05
+#      - SFU
+#      - MPI_mosh
+      - BMLrub_vald
+    train:
+      - CMU
+      - BMLrub_train
+#      - MPI_Limits
+#      - TotalCapture
+#      - Eyes_Japan_Dataset
+#      - KIT
+#      - BMLrub
+#      - EKUT
+#      - TCD_handMocap
+#      - ACCAD
+#      - BMLmovi
+    test:
+      - BMLrub_test
+#      - Transitions_mocap
+#      - SSM_synced
+#      - DFaust_67
+
+
+model_params:
+  num_neurons : 512
+  latentD : 32
+

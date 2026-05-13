@@ -14,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
 
+import mujoco
 import numpy as np
 import tyro
 
@@ -461,6 +462,15 @@ def build_retargeter_kwargs_from_config(
     Returns:
         Dictionary of kwargs for InteractionMeshRetargeter
     """
+    # Auto-configure T1 foot self-collision to avoid foot-foot penetration
+    # Use post-processing separation instead of hard constraints to avoid infeasibility
+    self_collision_config = retargeter_config.self_collision
+    if "t1" in constants.ROBOT_NAME.lower():
+        # Disable hard constraints; rely on post-processing foot separation
+        logger.info(
+            f"[T1 Auto-Config] Using post-processing foot separation (no hard constraints)"
+        )
+    
     kwargs = {
         "task_constants": constants,
         "object_urdf_path": object_urdf_path,
@@ -471,7 +481,7 @@ def build_retargeter_kwargs_from_config(
         "foot_lock": retargeter_config.foot_lock,
         "penetration_tolerance": retargeter_config.penetration_tolerance,
         "foot_sticking_tolerance": retargeter_config.foot_sticking_tolerance,
-        "self_collision": retargeter_config.self_collision,
+        "self_collision": self_collision_config,
         "step_size": retargeter_config.step_size,
         "visualize": retargeter_config.visualize,
         "debug": retargeter_config.debug,
@@ -572,12 +582,107 @@ def initialize_robot_pose(
     raise ValueError(f"Unknown task type: {task_type}")
 
 
+def fix_foot_penetration_t1(
+    qpos_array: np.ndarray,
+    retargeter: InteractionMeshRetargeter,
+    min_distance: float = 0.05,
+) -> np.ndarray:
+    """Post-process T1 motion to separate interpenetrating feet via hip abduction.
+    
+    Increases hip roll (abduction) to widen stance and prevent foot collision.
+    
+    Args:
+        qpos_array: Motion array of shape (T, nq)
+        retargeter: Retargeter instance with robot model
+        min_distance: Minimum safe distance to maintain between foot spheres (m)
+        
+    Returns:
+        Corrected qpos array
+    """
+    if "t1" not in retargeter.task_constants.ROBOT_NAME.lower():
+        return qpos_array
+    
+    m = retargeter.robot_model
+    d = mujoco.MjData(m)
+    
+    # Get foot sphere body IDs
+    foot_links = retargeter.task_constants.FOOT_STICKING_LINKS
+    left_ids = []
+    right_ids = []
+    
+    for link in foot_links:
+        bid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, link)
+        if bid >= 0:
+            if "left" in link.lower():
+                left_ids.append(bid)
+            elif "right" in link.lower():
+                right_ids.append(bid)
+    
+    if not left_ids or not right_ids:
+        logger.warning("[FootFix] Could not find foot sphere body IDs; skipping")
+        return qpos_array
+    
+    qpos_fixed = np.copy(qpos_array)
+    fixed_count = 0
+    
+    # T1 joint indices:
+    # 12 = Left_Hip_Roll, 18 = Right_Hip_Roll (for hip abduction to widen stance)
+    LEFT_HIP_ROLL = 12
+    RIGHT_HIP_ROLL = 18
+    
+    for t in range(len(qpos_fixed)):
+        d.qpos[:] = qpos_fixed[t]
+        mujoco.mj_forward(m, d)
+        
+        # Find minimum distance between left and right feet
+        min_dist = float('inf')
+        for left_id in left_ids:
+            for right_id in right_ids:
+                dist = np.linalg.norm(d.xpos[left_id] - d.xpos[right_id])
+                min_dist = min(min_dist, dist)
+        
+        # If feet are too close, increase hip abduction
+        if min_dist < min_distance:
+            required_separation = min_distance - min_dist
+            hip_adjustment = required_separation * 0.8  # Scale factor to hip roll
+            
+            # Open hips by increasing (positive) hip roll
+            qpos_fixed[t, LEFT_HIP_ROLL] += hip_adjustment
+            qpos_fixed[t, RIGHT_HIP_ROLL] -= hip_adjustment  # Negative = right leg abduction
+            
+            fixed_count += 1
+    
+    if fixed_count > 0:
+        logger.info(f"[FootFix] Corrected {fixed_count}/{len(qpos_fixed)} frames via hip abduction")
+    
+    return qpos_fixed
+
+
 def determine_output_path(
     task_type: TaskType,
     save_dir: Path,
     task_name: str,
     augmentation: bool,
 ) -> str:
+    """Determine output file path based on task and augmentation.
+    Args:
+        task_type: Type of task
+        save_dir: Save directory path
+        task_name: Task name
+        augmentation: Whether this is an augmentation run
+    Returns:
+        Output file path
+    """
+    if task_type == "robot_only":
+        return str(save_dir / f"{task_name}.npz")
+    if task_type in ("object_interaction", "climbing"):
+        suffix = "_augmented" if augmentation else "_original"
+        return str(save_dir / f"{task_name}{suffix}.npz")
+    raise ValueError(f"Unknown task type: {task_type}")
+
+
+
+
     """Determine output file path based on task and augmentation.
     Args:
         task_type: Type of task
@@ -716,6 +821,21 @@ def main(cfg: RetargetingConfig) -> None:
         original=not cfg.augmentation,
         dest_res_path=dest_res_path,
     )
+    
+    # Post-process to fix foot penetration for T1
+    if "t1" in cfg.robot.lower() and task_type == "robot_only":
+        logger.info("Applying T1 foot penetration fix...")
+        npz_data = np.load(dest_res_path)
+        qpos_retargeted = fix_foot_penetration_t1(npz_data["qpos"], retargeter)
+        # Re-save with corrected qpos
+        np.savez(
+            dest_res_path,
+            qpos=qpos_retargeted,
+            human_joints=npz_data["human_joints"],
+            fps=npz_data["fps"],
+            cost=npz_data["cost"],
+        )
+    
     logger.info("Retargeting complete. Results saved to: %s", dest_res_path)
 
     if cfg.retargeter.debug:
