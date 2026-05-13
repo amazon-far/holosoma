@@ -2,13 +2,22 @@
 
 `sim_to_real_phuma.sh` 를 실행해서 실제 G1 로봇에서 정책을 돌리기 위한 절차.
 
+## 0. 환경 설치 (최초 1 회만)
+
+`hsinference` conda env 가 없으면 먼저 설치:
+
+```bash
+bash scripts/setup_inference.sh
+```
+
+
 ## 1. 사전 준비
 
 ### 네트워크 (이더넷)
 
 - 로봇과 PC 를 이더넷으로 연결.
-- PC 의 이더넷 인터페이스 이름이 `eth0` 인지 확인 (`ip addr` 로 체크).
-  - 다르면 스크립트 안의 `--task.interface eth0` 를 실제 인터페이스 이름으로 수정.
+- `ip addr` 로 로봇이 물려있는 인터페이스 이름 확인 (예: `eth0`, `enp3s0` 등), 
+- `sim_to_real_phuma.sh` 의 `--task.interface` 값에 그대로 적기.
 
 ### 모델 / 모션 파일
 
