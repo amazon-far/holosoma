@@ -66,6 +66,7 @@ setup(
         "zmq",
         "defusedxml",
         "evdev",
+        "pin>=3.8.0",
         "importlib_metadata>=4.6; python_version<'3.12'",
         "eval_type_backport; python_version<'3.10'",
     ],
