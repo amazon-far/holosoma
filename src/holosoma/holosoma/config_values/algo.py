@@ -54,7 +54,7 @@ ppo = PPOAlgoConfig(
         ),
     ),
 )
-
+#fastsac 的配置包括学习率、缓冲区大小、折扣因子、目标网络更新率、批量大小、学习开始步数、策略更新频率、目标熵比率、分布式训练配置等参数，以及一些特定于 FastSAC 算法的参数，如 num_atoms、v_min、v_max 等。这些参数共同定义了 FastSAC 算法的行为和性能。
 fast_sac = FastSACAlgoConfig(
     _target_="holosoma.agents.fast_sac.fast_sac_agent.FastSACAgent",
     _recursive_=False,

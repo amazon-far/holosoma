@@ -70,7 +70,9 @@ class ObservationManager:
                 # Initialize history buffer if needed (using group-level history_length)
                 if group_cfg.history_length > 1:
                     self._history_buffers[group_name][term_name] = deque(maxlen=group_cfg.history_length)
-
+                    
+    #计算所有观察组的函数，遍历配置中的每个观察组，调用compute_group()方法计算该组的观察值，并将结果存储在一个字典中返回。
+    # 这个函数是整个观察计算流程的入口点，负责协调各个观察组的计算。
     def compute(self, *, modify_history: bool = True) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
         """Compute all observation groups.
 
@@ -85,11 +87,15 @@ class ObservationManager:
         dict[str, torch.Tensor | dict[str, torch.Tensor]]
             Mapping from group names to observation tensors or dictionaries of tensors.
         """
+        
         obs_dict = {}
+        #遍历配置中的每个观察组，调用compute_group()方法计算该组的观察值，并将结果存储在一个字典中返回。
         for group_name in self.cfg.groups:
             obs_dict[group_name] = self.compute_group(group_name, modify_history=modify_history)
         return obs_dict
-
+    #计算特定观察组的函数，接受一个观察组名称作为输入，并按照配置中的定义计算该组的观察值。
+    # 它处理每个观察项的计算、噪声添加、缩放、剪辑和历史缓冲，最终返回一个包含该组所有观察项的张量或字典。
+    # 这个函数确保了与直接观察系统的行为完全一致，同时提供了更清晰的结构和可维护性。
     def compute_group(self, group_name: str, *, modify_history: bool = True) -> torch.Tensor | dict[str, torch.Tensor]:
         """Compute observations for a specific group.
 

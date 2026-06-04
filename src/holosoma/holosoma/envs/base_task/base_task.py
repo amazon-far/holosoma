@@ -402,34 +402,34 @@ class BaseTask:
     ###########################################################################
     # Simulation loop helpers
 
-    def step(self, actor_state):
+    def step(self, actor_state):#actor_state是一个字典，包含了动作等信息
         """Apply actions, advance the simulation, and return rollout buffers."""
-        actions = actor_state["actions"]
-        self._pre_physics_step(actions)
-        self._physics_step()
-        self._post_physics_step()
+        actions = actor_state["actions"]#从actor_state字典中提取动作信息
+        self._pre_physics_step(actions)#物理仿真之前的预处理步骤，默认实现是调用action_manager处理动作
+        self._physics_step()#真正的物理仿真步骤，默认实现是调用simulator的render方法和simulate_at_each_physics_step方法来推进仿真
+        self._post_physics_step()#物理仿真之后的后处理步骤，默认实现是刷新模拟器张量、更新计数器、计算奖励和观察值等
         return self.obs_buf_dict, self.rew_buf, self.reset_buf, self.extras
 
-    def _pre_physics_step(self, actions):
+    def _pre_physics_step(self, actions):#动作预处理步骤，默认实现是调用action_manager处理动作
         if self.action_manager is not None:
             self.action_manager.process_actions(actions)
 
-    def _physics_step(self):
-        self.render()
-        for _ in range(self.simulator.simulator_config.sim.control_decimation):
-            self._apply_force_in_physics_step()
-            self.simulator.simulate_at_each_physics_step()
+    def _physics_step(self):#物理仿真步骤，默认实现是调用simulator的render方法和simulate_at_each_physics_step方法来推进仿真
+        self.render()#渲染仿真环境
+        for _ in range(self.simulator.simulator_config.sim.control_decimation):#根据控制解耦配置，可能需要在每个物理步骤中推进多个仿真步骤
+            self._apply_force_in_physics_step()#在物理步骤中应用动作产生的力，默认实现是调用action_manager的apply_actions方法
+            self.simulator.simulate_at_each_physics_step()#推进仿真器的物理步骤，默认实现是调用simulator的simulate_at_each_physics_step方法
 
     def _apply_force_in_physics_step(self):
         if self.action_manager is not None:
-            self.action_manager.apply_actions()
+            self.action_manager.apply_actions()#真正把动作转换成对仿真器的力/位置等控制命令，默认实现是调用action_manager的apply_actions方法
 
-    def _post_physics_step(self):
-        self._refresh_sim_tensors()
-        self.episode_length_buf += 1
-        self._update_counters_each_step()
+    def _post_physics_step(self):#在物理状态更新之后的后处理步骤，默认实现是刷新模拟器张量、更新计数器、计算奖励和观察值等
+        self._refresh_sim_tensors()#刷新模拟器张量，以确保从仿真器读取的状态是最新的
+        self.episode_length_buf += 1#更新每个环境的当前episode长度计数器
+        self._update_counters_each_step()#更新其他计数器（如果有的话，默认实现是一个no-op）
 
-        self._pre_compute_observations_callback()
+        self._pre_compute_observations_callback()#计算观察值之前的回调，默认实现是一个no-op，子类可以覆盖它来添加自定义逻辑（例如基于当前状态更新内部计数器）
 
         # IsaacGym requires the original callback ordering (before termination
         # and reward) to avoid numerical instabilities in its GPU physics
@@ -440,13 +440,13 @@ class BaseTask:
             self._update_tasks_callback()
 
         self._check_termination()
-        self._compute_reward()
-        self._update_log_dict()
+        self._compute_reward()#计算奖励，默认实现是调用reward_manager的compute方法，并将结果存储在rew_buf中
+        self._update_log_dict()#更新日志字典，默认实现是一个no-op，子类可以覆盖它来添加自定义日志信息（例如当前奖励值的统计信息）
 
         env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
         final_obs_dict = {}
         if env_ids.numel() > 0:
-            final_obs_dict = self._compute_final_observations()
+            final_obs_dict = self._compute_final_observations()#计算最终观察值，默认实现是调用observation_manager的compute方法，并将modify_history=False以避免更新历史观察值（因为这些环境即将被重置）
 
         self.reset_envs_idx(env_ids)
 

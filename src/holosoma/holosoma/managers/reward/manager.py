@@ -123,7 +123,7 @@ class RewardManager:
         """Episodic sums for each reward term (raw, unscaled)."""
         return self._episode_sums_raw
 
-    def compute(self, dt: float) -> torch.Tensor:
+    def compute(self, dt: float) -> torch.Tensor:#计算总奖励作为各个项的加权和
         """Compute the total reward as a weighted sum of individual terms.
 
         Each reward term is evaluated, scaled by its configured weight and the
@@ -146,11 +146,13 @@ class RewardManager:
             Net reward tensor with shape ``[num_envs]``.
         """
         # Reset computation
-        self._reward_buf[:] = 0.0
+        self._reward_buf[:] = 0.0  #每次计算奖励时先将奖励缓冲区重置为0，以便累加当前时间步的奖励项
 
         # Iterate over all reward terms
+        #开始计算奖励项的加权和，遍历所有激活的奖励项（即权重不为0的项），计算每个项的原始奖励值，乘以权重和时间步长进行缩放，并累加到总奖励缓冲区中。同时更新每个项的episodic sums（scaled和raw）以供日志记录使用。
         for term_name, term_cfg in zip(self._term_names, self._term_cfgs):
-            # Compute raw reward value
+            # 判断当前项是一个stateful的reward term（即一个类实例）还是一个stateless的函数，并调用相应的接口来计算原始奖励值。
+            # 对于stateful term，直接调用实例并传入环境和参数；对于stateless函数，直接调用函数并传入环境和参数。无论哪种情况，都要求返回的奖励值是一个形状为[num_envs]的一维张量。
             if term_name in self._term_instances:
                 # Stateful term
                 instance = self._term_instances[term_name]
@@ -160,24 +162,24 @@ class RewardManager:
                 func = self._term_funcs[term_name]
                 rew_raw = func(self.env, **term_cfg.params)
 
-            # Validate shape
+            # 得到原始奖励值后，首先检查它的形状是否正确（必须是[num_envs]），如果不正确则抛出错误。然后将原始奖励值乘以项的权重和时间步长进行缩放，得到最终的奖励贡献值，并累加到总奖励缓冲区中。同时更新该项的episodic sums（scaled和raw）以供日志记录使用。
             if rew_raw.shape[0] != self.env.num_envs:
                 raise ValueError(
                     f"Reward term '{term_name}' returned wrong shape. "
                     f"Expected [{self.env.num_envs}], got {rew_raw.shape}"
                 )
 
-            # Scale by weight and dt
+            #计算奖励项的加权值，dt是环境的时间步长，reward term函数或实例返回的rew_raw是当前项的原始奖励值，乘以项的权重和时间步长得到该项对总奖励的贡献值rew_scaled。
             rew_scaled = rew_raw * term_cfg.weight * dt
 
-            # Accumulate
+            # 得到总奖励贡献值后，将其累加到总奖励缓冲区中。同时更新该项的episodic sums（scaled和raw）以供日志记录使用。
             self._reward_buf += rew_scaled
 
-            # Track episodic sums
+            # 记录每个项的episodic sums（scaled和raw），以供日志记录使用。这些值在每个环境重置时会被清零，并且在日志中可以看到每个项在整个episode中的累计贡献。
             self._episode_sums[term_name] += rew_scaled
-            self._episode_sums_raw[term_name] += rew_raw
+            self._episode_sums_raw[term_name] += rew_raw#记录每个项的原始奖励值的episodic sum，以供日志记录使用。这些值在每个环境重置时会被清零，并且在日志中可以看到每个项在整个episode中的累计原始奖励贡献。
 
-        # Optionally clip to positive
+        # 裁剪奖励值以确保它们是非负的（如果cfg.only_positive_rewards为True）。这可以防止某些算法（例如基于优势的方法）在处理负奖励时出现数值不稳定。
         if self.cfg.only_positive_rewards:
             self._reward_buf[:] = torch.clip(self._reward_buf, min=0.0)
 

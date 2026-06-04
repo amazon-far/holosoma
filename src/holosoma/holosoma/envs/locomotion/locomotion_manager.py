@@ -6,7 +6,12 @@ from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.torch_utils import torch_rand_float
 
-
+#这个文件定义了一个名为LeggedRobotLocomotionManager的类，
+# 它是一个用于管理腿式机器人行走任务的“”环境“”管理器。
+# 这个类继承自BaseTask，并实现了与机器人行走相关的各种功能，
+# 包括环境重置、状态更新、奖励计算等。它还包含了一些与领域随机化相关的功能
+# 如随机推机器人以模拟外部干扰，以及根据步态阶段跟踪期望的脚高度的奖励函数。
+# 这些功能共同作用，帮助训练一个能够在不同环境条件下稳定行走的腿式机器人。
 class LeggedRobotLocomotionManager(BaseTask):
     BASE_NUM_ENVS = 4096
 

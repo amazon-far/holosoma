@@ -61,7 +61,7 @@ def termination(env: LeggedRobotLocomotionManager) -> torch.Tensor:
 # Penalty Rewards
 # ================================================================================================
 
-
+#这个奖励项惩罚连续两步之间动作的变化，鼓励平滑的动作输出，减少不必要的振荡和能量消耗
 def penalty_action_rate(env: LeggedRobotLocomotionManager) -> torch.Tensor:
     """Penalize changes in actions between steps.
 
@@ -75,7 +75,7 @@ def penalty_action_rate(env: LeggedRobotLocomotionManager) -> torch.Tensor:
     prev_actions = env.action_manager.prev_action
     return torch.sum(torch.square(prev_actions - actions), dim=1)
 
-
+#这个奖励项惩罚机器人基座的非水平姿态，鼓励机器人保持稳定的姿态，减少倾斜和翻滚的风险，从而提高行走的稳定性和安全性
 def penalty_orientation(env: LeggedRobotLocomotionManager) -> torch.Tensor:
     """Penalize non-flat base orientation.
 
@@ -113,7 +113,7 @@ def penalty_feet_ori(env: LeggedRobotLocomotionManager) -> torch.Tensor:
 # Limit Rewards
 # ================================================================================================
 
-
+#这个奖励项惩罚关节位置过于接近其物理限制的情况，鼓励机器人在安全范围内运动，减少损坏风险，并提高行走的可靠性和耐久性
 def limits_dof_pos(env: LeggedRobotLocomotionManager, soft_dof_pos_limit: float = 0.95) -> torch.Tensor:
     """Penalize joint positions too close to limits.
 
@@ -139,7 +139,7 @@ def limits_dof_pos(env: LeggedRobotLocomotionManager, soft_dof_pos_limit: float 
 # Tracking and Task Rewards
 # ================================================================================================
 
-
+#跟踪线速度和角速度命令的奖励，基于指数函数，误差越大奖励越小
 def tracking_lin_vel(env, tracking_sigma: float = 0.25) -> torch.Tensor:
     """Reward tracking of linear velocity commands (xy axes).
 
@@ -156,7 +156,7 @@ def tracking_lin_vel(env, tracking_sigma: float = 0.25) -> torch.Tensor:
     lin_vel_error = torch.sum(torch.square(commands[:, :2] - get_base_lin_vel(env)[:, :2]), dim=1)
     return torch.exp(-lin_vel_error / tracking_sigma)
 
-
+#跟踪角速度命令的奖励，基于指数函数，误差越大奖励越小
 def tracking_ang_vel(env, tracking_sigma: float = 0.25) -> torch.Tensor:
     """Reward tracking of angular velocity commands (yaw).
 
@@ -174,7 +174,7 @@ def tracking_ang_vel(env, tracking_sigma: float = 0.25) -> torch.Tensor:
     ang_vel_error = torch.square(commands[:, 2] - ang_vel[:, 2])
     return torch.exp(-ang_vel_error / tracking_sigma)
 
-
+# 惩罚xy轴的基座角速度，鼓励机器人保持稳定的姿态，减少不必要的旋转和能量消耗，从而提高行走的效率和稳定性
 def penalty_ang_vel_xy(env) -> torch.Tensor:
     """Penalize xy axes base angular velocity.
 
@@ -249,7 +249,8 @@ def base_height(
 
     return base_height_penalty
 
-
+#根据步态阶段跟踪期望的脚高度的奖励，基于MuJoCo Playground的实现，
+# 鼓励机器人在摆动阶段抬起脚，在支撑阶段放下脚，从而提高行走的自然性和效率，同时减少与地面碰撞的风险。
 def feet_phase(env, swing_height: float = 0.08, tracking_sigma: float = 0.25) -> torch.Tensor:
     """Reward for tracking desired foot height based on gait phase.
 
@@ -264,19 +265,21 @@ def feet_phase(env, swing_height: float = 0.08, tracking_sigma: float = 0.25) ->
         Reward tensor [num_envs]
     """
     # Get foot heights (relative to terrain)
+    #拿到每只脚的当前高度，这些高度是相对于地形的，表示脚与地面之间的距离。这个信息对于计算脚的期望高度和跟踪奖励非常重要，因为它反映了机器人当前的步态状态和与地面的接触情况。
     foot_z_left = env.terrain_manager.get_state("locomotion_terrain").feet_heights[:, 0]
     foot_z_right = env.terrain_manager.get_state("locomotion_terrain").feet_heights[:, 1]
 
-    # Calculate expected foot heights based on phase
+    # 得到步态阶段
     gait_state = env.command_manager.get_state("locomotion_gait")
+    #由相位信息计算每只脚的期望高度，使用一个基于三次贝塞尔曲线的函数来计算期望高度，这个函数根据步态阶段（摆动或支撑）调整脚的高度。在摆动阶段，脚会抬起到指定的swing_height，在支撑阶段，脚会放下到地面高度。这个计算对于奖励函数非常重要，因为它提供了一个目标高度，机器人应该努力跟踪这个目标以获得奖励。
     rz_left = _expected_foot_height(gait_state.phase[:, 0], swing_height)
     rz_right = _expected_foot_height(gait_state.phase[:, 1], swing_height)
 
-    # Calculate height tracking errors
+    # 计算高度跟踪误差
     error_left = torch.square(foot_z_left - rz_left)
     error_right = torch.square(foot_z_right - rz_right)
 
-    # Combine errors and apply exponential reward
+    #合并左右脚的误差并计算奖励，最后，将左右脚的高度跟踪误差合并，并通过一个指数函数将误差转换为奖励。误差越小，奖励越大，这鼓励机器人准确地跟踪期望的脚高度，从而实现更自然和高效的步态。
     total_error = error_left + error_right
 
     return torch.exp(-total_error / tracking_sigma)

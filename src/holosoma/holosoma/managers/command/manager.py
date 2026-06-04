@@ -28,7 +28,8 @@ def _resolve_command_cfg(command_params: dict[str, Any] | DictConfig | None) -> 
         return command_params
     return OmegaConf.create(command_params or {})
 
-
+#负责协调与命令相关的钩子在环境生命周期中的设置、重置和步骤阶段。
+# 命令管理器在环境生命周期中评估配置的命令术语。术语可以是简单的函数或CommandTermBase的子类，后者公开setup/reset/step钩子。这保持了命令采样和步态状态管理的集中，并确保环境不拥有冗余的缓冲区。
 class CommandManager:
     """Coordinate command-related hooks across setup, reset, and step phases.
 

@@ -45,7 +45,8 @@ from holosoma.utils.safe_torch_import import (
 
 torch.set_float32_matmul_precision("high")
 
-
+#把holosoma.envs.base_task.base_task.BaseTask传入FastSACEnv中，进行包装，
+# 使其适配FastSAC算法的输入输出要求
 class FastSACEnv:
     def __init__(
         self,
@@ -73,12 +74,27 @@ class FastSACEnv:
         actor_obs = torch.cat([obs_dict[k] for k in self._actor_obs_keys], dim=1)
         critic_obs = torch.cat([obs_dict[k] for k in self._critic_obs_keys], dim=1)
         return actor_obs, critic_obs
+    
+  
+  
+
+    
+#在step函数中，智能体与环境进行交互，传入动作并获取下一个状态、奖励、done标志和其他信息。原始 env.step() 返回的是 observation 字典
+# 然后根据配置的actor_obs_keys和critic_obs_keys，从环境返回的观测字典中提取相应的观测，并将它们拼接成适合actor和critic输入的格式。
+# 最后，函数返回actor_obs、奖励、done标志和一个包含额外信息的字典。
+
+#FastSAC 想要的是拼好的 actor_obs / critic_obs tensor
+#所以这里负责转换格式，并额外保存 final_observations。
 
     def step(self, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
-        # Actions are now already scaled by the actor, so pass them directly to the environment
+        #得到环境返回的观测字典、奖励、done标志和其他信息，然后根据配置的actor_obs_keys和critic_obs_keys，从环境返回的观测字典中提取相应的观测，并将它们拼接成适合actor和critic输入的格式。最后，函数返回actor_obs、奖励、done标志和一个包含额外信息的字典。
         obs_dict, rew_buf, reset_buf, info_dict = self._env.step({"actions": actions})  # type: ignore[attr-defined]
         actor_obs = torch.cat([obs_dict[k] for k in self._actor_obs_keys], dim=1)
         critic_obs = torch.cat([obs_dict[k] for k in self._critic_obs_keys], dim=1)
+        #如果 info_dict 中包含 "final_observations" 键，表示环境提供了最终的观测信息，
+        # 那么就使用这些观测信息来构建 final_actor_obs 和 final_critic_obs。
+        # 否则，就使用当前的 actor_obs 和 critic_obs 作为最终的观测信息。
+        # 这些最终的观测信息将被包含在 extras 字典中返回，以供后续的学习更新使用。
         if "final_observations" in info_dict:
             # Use true final observations when available
             final_actor_obs = torch.cat([info_dict["final_observations"][k] for k in self._actor_obs_keys], dim=1)
@@ -87,7 +103,10 @@ class FastSACEnv:
             final_actor_obs = actor_obs
             final_critic_obs = critic_obs
         extras = {
-            "time_outs": info_dict["time_outs"],
+            "time_outs": info_dict["time_outs"],#表示环境是否因为达到时间限制而终止
+            # "observations" 包含了当前的观测信息，分为 "critic" 和 "final" 两部分。
+            # "critic" 部分包含了供 critic 网络使用的观测，而 "final" 部分包含了供 actor 和 critic 使用的最终观测。
+            # 这些观测是根据配置的 actor_obs_keys 和 critic_obs_keys 从环境返回的观测字典中提取并拼接而成的。
             "observations": {
                 "critic": critic_obs,
                 "final": {
@@ -102,8 +121,6 @@ class FastSACEnv:
             "to_log": info_dict["to_log"],
         }
         return actor_obs, rew_buf, reset_buf, extras
-
-    def _compute_action_boundaries(self) -> torch.Tensor:
         """
         Compute per-joint action scaling factors based on robot configuration.
         Returns tensor of shape (num_dof,) containing the scaling factor for each joint.
@@ -112,13 +129,21 @@ class FastSACEnv:
         ensuring that action=0 corresponds to default position and action=±1 reaches
         the furthest limit from default.
         """
+        #计算每个关节的动作缩放因子，基于机器人配置中的默认位置和关节限制。
+        # 这个函数确保了当动作为0时，机器人处于默认位置，而当动作为±1时，机器人能够达到距离默认位置最远的限制位置。
+        # 这种缩放方式有助于稳定训练过程，并确保动作空间的合理范围。
+    def _compute_action_boundaries(self) -> torch.Tensor:
+
         robot_config = self._env.robot_config
 
-        # Get joint limits and default positions
+        # 这里我们直接使用机器人配置中的关节位置限制来计算动作缩放因子。
+        # 对于每个关节，我们计算默认位置与上下限之间的最大距离，并将其作为缩放因子的一部分。
+        # 这样可以确保动作空间的中心（动作=0）对应于默认位置，而动作的范围（±1）能够覆盖从默认位置到最远限制的位置。这种方法有助于稳定训练过程，并确保智能体能够有效地探索动作空间。
         dof_pos_lower_limits = torch.tensor(robot_config.dof_pos_lower_limit_list, device=self._env.device)
         dof_pos_upper_limits = torch.tensor(robot_config.dof_pos_upper_limit_list, device=self._env.device)
 
-        # Get default joint angles
+        # 得到每个关节的默认位置，如果机器人配置中没有提供默认位置，则默认为0
+        # 。这些默认位置将用于计算动作缩放因子，确保动作空间的中心对应于默认位置，并且动作范围能够覆盖从默认位置到最远限制的位置。
         default_joint_angles = torch.zeros(len(robot_config.dof_names), device=self._env.device)
         for i, joint_name in enumerate(robot_config.dof_names):
             if joint_name in robot_config.init_state.default_joint_angles:
@@ -128,13 +153,14 @@ class FastSACEnv:
         action_scale = robot_config.control.action_scale
 
         # Compute maximum range from default to either limit for each joint
-        # This ensures symmetric scaling where action=0 -> default position
+        # 这里我们计算每个关节的动作缩放因子，基于机器人配置中的默认位置和关节限制。
         range_to_lower = torch.abs(dof_pos_lower_limits - default_joint_angles)
         range_to_upper = torch.abs(dof_pos_upper_limits - default_joint_angles)
         max_range = torch.maximum(range_to_lower, range_to_upper)
 
         # Account for action_scale: the environment applies actions_scaled = actions * action_scale
-        # So our scaling factor should be: max_range / action_scale
+        #所以我们需要将 max_range 除以 action_scale 来得到最终的动作缩放因子，
+        # 这样才能确保当智能体输出动作时，经过环境的缩放后能够正确地映射到关节的实际运动范围。
         action_scaling_factors = max_range / action_scale
 
         logger.info(f"Computed action scaling factors for {len(robot_config.dof_names)} DOFs")
@@ -143,7 +169,7 @@ class FastSACEnv:
 
         return action_scaling_factors
 
-
+#初始化FastSACAgent，传入环境、配置、设备、日志目录等参数，并进行必要的设置和初始化
 class FastSACAgent(BaseAlgo):
     """
     FastSAC is an efficient variant of Soft Actor-Critic (SAC) tuned for
@@ -156,7 +182,9 @@ class FastSACAgent(BaseAlgo):
     env: FastSACEnv  # type: ignore[assignment]
     actor: Actor
     qnet: Critic
-
+#初始化FastSACAgent，传入环境、配置、设备、日志目录等参数，并进行必要的设置和初始化。
+# 这包括创建actor和critic网络、目标网络、优化器、经验回放缓冲区，以及设置日志记录工具和其他辅助组件。
+# 同时，如果启用了多GPU训练，还会进行模型参数的同步，以确保所有GPU上的模型初始化一致。
     def __init__(
         self, env: BaseTask, config: FastSACConfig, device: str, log_dir: str, multi_gpu_cfg: dict | None = None
     ):
@@ -180,7 +208,7 @@ class FastSACAgent(BaseAlgo):
 
         self.training_metrics = TensorAverageMeterDict()
         self.eval_callbacks: list[RLEvalCallback] = []
-
+#根据配置文件中的参数，设置FastSAC算法的各种组件，包括actor、critic、优化器、学习率调度器、经验回放缓冲区等。同时，如果启用了多GPU训练，还会进行模型参数的同步。
     def setup(self) -> None:
         logger.info("Setting up FastSAC")
 
@@ -249,7 +277,7 @@ class FastSACAgent(BaseAlgo):
             self.obs_normalizer = nn.Identity()
             self.critic_obs_normalizer = nn.Identity()
 
-        # Get action scaling parameters from the environment
+        # 得到每个关节的动作缩放因子，基于机器人配置中的默认位置和关节限制。
         action_scale = env._action_boundaries if args.use_tanh else torch.ones(n_act, device=device)
         action_bias = torch.zeros(n_act, device=device)  # Assuming zero bias for now
 
@@ -646,10 +674,13 @@ class FastSACAgent(BaseAlgo):
         self.scaler.load_state_dict(torch_checkpoint["grad_scaler_state_dict"])
         self.global_step = torch_checkpoint["global_step"]
         self._restore_env_state(torch_checkpoint.get("env_state"))
-
+#真正的学习循环，在每个学习迭代中，智能体首先与环境进行交互，收集数据并存储在经验回放缓冲区中。然后，根据配置的更新频率和批量大小，从缓冲区中采样数据，并调用更新函数来优化actor和critic网络的参数。同时，还会进行目标网络的软更新，并记录各种训练指标以供分析和调试。
     def learn(self) -> None:
         args = self.config
         device = self.device
+        #决定是否使用torch.compile来加速更新函数和策略函数的执行。
+        # 根据配置中的compile参数，如果启用编译，则将_update_main、_update_pol、policy、obs_normalizer.forward和critic_obs_normalizer.forward函数进行编译，
+        # 以提高它们的执行效率。这可以显著减少每次更新的计算时间，特别是在大规模训练中，从而加快整体学习过程。
         if args.compile:
             update_main = torch.compile(self._update_main)
             update_pol = torch.compile(self._update_pol)
@@ -666,10 +697,12 @@ class FastSACAgent(BaseAlgo):
         qnet_target = self.qnet_target
         env = self.env
         rb = self.rb
-
+        #重置环境并获取初始观测，特别是对于critic_obs，因为critic网络需要特定格式的观测输入。
+        # 将这些观测转换为适当的张量格式，并准备好进行后续的交互和学习更新。
         obs, critic_obs = env.reset_with_critic_obs()
         critic_obs = torch.as_tensor(critic_obs, device=device, dtype=torch.float)
-
+        #初始化统计信息和进度条，准备进入主学习循环。在循环中，智能体将与环境进行交互，收集数据，并根据配置的更新频率进行学习更新。
+        # 同时，还会记录各种训练指标，并在指定的间隔保存模型检查点。
         dones = None
         # Initialize metrics that might not be updated every step
         policy_entropy = torch.tensor(0.0, device=device)
@@ -677,20 +710,31 @@ class FastSACAgent(BaseAlgo):
         actor_loss = torch.tensor(0.0, device=device)
         actor_grad_norm = torch.tensor(0.0, device=device)
         pbar = tqdm.tqdm(total=args.num_learning_iterations, initial=self.global_step)
-
+        #主循环，在每次迭代中，智能体首先与环境进行交互，收集数据并存储在经验回放缓冲区中。
+        # 然后，根据配置的更新频率和批量大小，从缓冲区中采样数据，并调用更新函数来优化actor和critic网络的参数。
+        # 同时，还会进行目标网络的软更新，并记录各种训练指标以供分析和调试。
+        
+        #这个循环每走一步，global_step就会增加一次，直到达到预设的num_learning_iterations为止。
+        # 在每次迭代中，智能体会与环境进行交互，收集数据，并根据配置的更新频率进行学习更新。
+        # 同时，还会记录各种训练指标，并在指定的间隔保存模型检查点。
         while self.global_step <= args.num_learning_iterations:
             # Synchronize curriculum metrics across GPUs before rollout
             if self.is_multi_gpu:
                 self._synchronize_curriculum_metrics()
-
+            # 使用 logging helper 来记录交互时间，这包括智能体与环境的交互、数据收集和存储等过程。
+            # 通过在这个上下文管理器中执行交互代码，我们可以准确地测量和记录这些操作的时间，从而更好地分析和优化训练过程中的性能瓶颈。
             with self.logging_helper.record_collection_time():
+                #用当前的策略选择动作，并与环境进行交互，获取下一个观测、奖励、done标志和其他信息。
+                # 然后，将这些数据存储在经验回放缓冲区中，以供后续的学习更新使用。
                 with torch.no_grad(), self._maybe_amp():
                     norm_obs = normalize_obs(obs, update=False)
                     actions = policy(obs=norm_obs, dones=dones)
 
+                #真正让机器人动起来的地方！智能体根据当前的策略选择动作，并与环境进行交互，获取下一个观测、奖励、done标志和其他信息。
                 next_obs, rewards, dones, infos = env.step(actions.float())
+                #处理环境返回的truncation信息，这些信息指示了哪些环境实例由于达到时间限制而被截断。
+                # 我们需要将这些信息存储在经验回放缓冲区中，以便在学习更新时正确处理这些情况。
                 truncations = infos["time_outs"]
-
                 # Update episode stats using logging helper
                 self.logging_helper.update_episode_stats(rewards, dones, infos)
 
@@ -705,6 +749,8 @@ class FastSACAgent(BaseAlgo):
                     infos["observations"]["final"]["critic_obs"],
                     next_critic_obs,
                 )
+                #构造一个包含当前观测、动作、下一个观测、奖励、done标志和truncation信息的transition字典，
+                # 并将其存储在经验回放缓冲区中。（也是强化学习里面最基础的数据）
                 transition = TensorDict(
                     {
                         "observations": obs,
@@ -719,19 +765,26 @@ class FastSACAgent(BaseAlgo):
                     batch_size=(env.num_envs,),
                     device=device,
                 )
+                #额外地，我们还将critic_obs和next_critic_obs添加到transition字典中，以便在学习更新时使用。
+                # 这些观测是专门为critic网络设计的，可能包含与actor观测不同的信息，因此需要单独存储和处理。
                 transition["critic_observations"] = critic_obs
                 transition["next"]["critic_observations"] = true_next_critic_obs
-
+                #更新当前的观测和critic观测，以便在下一次迭代中使用。
+                # 这些更新确保了智能体在与环境交互时能够正确地跟踪状态信息，并为后续的学习更新提供准确的数据。
+                
+                #值得注意的是，FsatSAC是一个off-policy算法，这意味着它在学习更新时使用的是经验回放缓冲区中存储的过去的交互数据，而不是当前的交互数据。
                 obs = next_obs
                 critic_obs = next_critic_obs
 
                 rb.extend(transition)
 
-            # NOTE: args.batch_size is the global batch size
+            # 根据不同的更新频率和批量大小配置，计算每次学习更新需要使用的数据量（base_batch_size），并从经验回放缓冲区中采样数据进行学习更新。
             batch_size = max(args.batch_size // env.num_envs // self.gpu_world_size, 1)
+            # 只有当global_step超过预设的learning_starts值时，才会进行学习更新。这是为了确保智能体在开始学习之前有足够的交互数据。
             if self.global_step > args.learning_starts:
                 with self.logging_helper.record_learn_time():
-                    # Use batched sampling: sample once, normalize once, split into updates
+                    #采样数据并准备批次进行学习更新。这里我们一次性采样一个大批次（batch_size * num_updates），然后将其分割成多个小批次，
+                    # 以供每次更新使用。
                     prepared_batches = self._sample_and_prepare_batches(
                         batch_size, args.num_updates, normalize_obs, normalize_critic_obs
                     )
@@ -744,14 +797,15 @@ class FastSACAgent(BaseAlgo):
                             qf_max,
                             qf_min,
                             alpha_loss,
-                        ) = update_main(data)
+                        ) = update_main(data)#更新critic网络的参数，并计算相关的训练指标，如critic梯度范数、critic损失、目标值的最大最小值等。
+                        #按照配置的更新频率，更新actor网络的参数，并计算相关的训练指标，如actor梯度范数、actor损失、策略熵和动作标准差等。
                         if args.num_updates > 1:
                             if i % args.policy_frequency == 1:
                                 actor_grad_norm, actor_loss, policy_entropy, action_std = update_pol(data)
                         elif self.global_step % args.policy_frequency == 0:
                             actor_grad_norm, actor_loss, policy_entropy, action_std = update_pol(data)
 
-                        # Accumulate training metrics for smoother logging
+                        # 记录当前的训练指标到training_metrics中，以便后续的日志记录和分析。
                         current_metrics = {
                             "actor_loss": actor_loss,
                             "qf_loss": qf_loss,
@@ -766,13 +820,14 @@ class FastSACAgent(BaseAlgo):
                             "action_std": action_std,
                         }
                         self.training_metrics.add(current_metrics)
-
+                        #软更新目标网络的参数，使用当前critic网络的参数和预设的tau值进行更新。
+                        # 这种软更新有助于稳定训练过程，避免目标网络参数变化过快导致训练不稳定。
                         with torch.no_grad():
                             src_ps = [p.data for p in qnet.parameters()]
                             tgt_ps = [p.data for p in qnet_target.parameters()]
                             torch._foreach_mul_(tgt_ps, 1.0 - args.tau)
                             torch._foreach_add_(tgt_ps, src_ps, alpha=args.tau)
-
+                #定期记录训练指标和保存模型检查点。根据预设的logging_interval和save_interval，智能体会定期记录当前的训练指标，并在指定的间隔保存模型检查点，以便后续的分析和恢复训练。
                 if self.global_step % args.logging_interval == 0:
                     with torch.no_grad():
                         # Use accumulated training metrics for smoother logging (reduces noise)
@@ -791,6 +846,7 @@ class FastSACAgent(BaseAlgo):
 
                     # Use logging helper
                     self.logging_helper.post_epoch_logging(it=self.global_step, loss_dict=loss_dict, extra_log_dicts={})
+                    #定期保存模型检查点。根据预设的save_interval，智能体会定期保存当前的模型检查点，以便后续的分析和恢复训练。
                 if args.save_interval > 0 and self.global_step > 0 and self.global_step % args.save_interval == 0:
                     if self.is_main_process:
                         logger.info(f"Saving model at global step {self.global_step}")
@@ -801,11 +857,12 @@ class FastSACAgent(BaseAlgo):
             # saved at exactly args.num_learning_iterations. In the `while` condition, we check for self.global_step <=
             # args.num_learning_iterations, so that we have complete logging data at the final step too (assuming
             # `args.num_learning_iterations` is a multiple of `args.logging_interval`).
+            #如果global_step已经达到预设的num_learning_iterations，我们就跳出循环，确保最终的检查点是在正确的迭代次数保存的，并且日志记录也是完整的。
             if self.global_step >= args.num_learning_iterations:
                 break
             self.global_step += 1
             pbar.update(1)
-
+        # 在完成所有学习迭代后，智能体会进行最终的模型保存和ONNX导出，以便后续的分析、部署或恢复训练。
         if self.is_main_process:
             self.save(os.path.join(self.log_dir, f"model_{self.global_step:07d}.pt"))
             self.export(onnx_file_path=os.path.join(self.log_dir, f"model_{self.global_step:07d}.onnx"))

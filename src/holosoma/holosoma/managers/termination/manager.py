@@ -10,7 +10,8 @@ from holosoma.utils.safe_torch_import import torch
 
 from .base import TerminationTermBase
 
-
+#专门负责评估环境中的终止条件，并将它们的结果聚合成重置和超时标志。
+# 这个类允许用户定义多个终止条件（称为“术语”），这些条件可以是函数或基于类的实现。每个术语根据其配置被评估，并且它们的结果被组合成一个整体的重置和超时标志，这些标志可以被环境用来决定何时重置或结束一个episode。这个设计使得环境能够灵活地定义各种复杂的终止条件，而不需要在每个环境中重复相同的逻辑。
 class TerminationManager:
     """Evaluate termination terms and aggregate reset/timeout flags.
 
