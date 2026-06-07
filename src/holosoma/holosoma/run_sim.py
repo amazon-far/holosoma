@@ -19,6 +19,33 @@ from holosoma.utils.sim_utils import DirectSimulation, setup_simulation_environm
 from holosoma.utils.tyro_utils import TYRO_CONIFG
 
 
+def _apply_robot_specific_run_sim_defaults(config: RunSimConfig) -> RunSimConfig:
+    """Apply direct-simulation defaults that are safer for specific robot assets."""
+    if config.robot.asset.robot_type != "h1":
+        return config
+
+    gantry_cfg = config.simulator.config.virtual_gantry
+    h1_gantry = dataclasses.replace(
+        gantry_cfg,
+        enabled=gantry_cfg.enabled,
+        attachment_body_names=["torso_link", "pelvis"],
+        stiffness=250.0,
+        damping=220.0,
+        height=3.2,
+    )
+    simulator_config = dataclasses.replace(config.simulator.config, virtual_gantry=h1_gantry)
+    simulator = dataclasses.replace(config.simulator, config=simulator_config)
+    robot_asset = dataclasses.replace(config.robot.asset, enable_self_collisions=True)
+    robot = dataclasses.replace(config.robot, asset=robot_asset)
+    logger.info(
+        "Applying H1 direct-simulation gantry defaults: "
+        f"attachment_body_names={h1_gantry.attachment_body_names}, "
+        f"stiffness={h1_gantry.stiffness}, damping={h1_gantry.damping}, "
+        f"height={h1_gantry.height}, enable_self_collisions={robot_asset.enable_self_collisions}"
+    )
+    return dataclasses.replace(config, simulator=simulator, robot=robot)
+
+
 def run_simulation(config: RunSimConfig):
     """Run simulation with direct simulator control.
 
@@ -30,6 +57,8 @@ def run_simulation(config: RunSimConfig):
     config : RunSimConfig
         Configuration containing all simulation settings.
     """
+    config = _apply_robot_specific_run_sim_defaults(config)
+
     # Auto-set device for GPU-accelerated backends if still on default CPU
     if config.device == "cpu":
         # Check if using Warp backend (requires CUDA)

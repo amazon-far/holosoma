@@ -223,6 +223,126 @@ t1_29dof = RobotConfig(
 
 
 # =============================================================================
+# H1 Robot Config
+# =============================================================================
+
+h1_19dof = RobotConfig(
+    # Identity
+    robot_type="h1",
+    robot="h1",
+
+    # SDK Configuration
+    sdk_type="unitree",
+    motor_type="serial",
+    message_type="GO2",
+    use_sensor=False,
+
+    # Dimensions
+    num_motors=19,
+    num_joints=19,
+    num_upper_body_joints=9,
+
+    # Default Positions
+    default_dof_angles=(
+        0.0, 0.0, -0.4, 0.8, -0.4,  # left leg
+        0.0, 0.0, -0.4, 0.8, -0.4,  # right leg
+        0.0,  # torso
+        0.0, 0.0, 0.0, 0.0,  # left arm
+        0.0, 0.0, 0.0, 0.0,  # right arm
+    ),
+    default_motor_angles=(
+        0.0, 0.0, -0.4, 0.8, -0.4,  # left leg
+        0.0, 0.0, -0.4, 0.8, -0.4,  # right leg
+        0.0,  # torso
+        0.0, 0.0, 0.0, 0.0,  # left arm
+        0.0, 0.0, 0.0, 0.0,  # right arm
+    ),
+
+    # Mappings
+    motor2joint=tuple(range(19)),
+    joint2motor=tuple(range(19)),
+    dof_names=(
+        "left_hip_yaw_joint", "left_hip_roll_joint", "left_hip_pitch_joint",
+        "left_knee_joint", "left_ankle_joint",
+        "right_hip_yaw_joint", "right_hip_roll_joint", "right_hip_pitch_joint",
+        "right_knee_joint", "right_ankle_joint",
+        "torso_joint",
+        "left_shoulder_pitch_joint", "left_shoulder_roll_joint",
+        "left_shoulder_yaw_joint", "left_elbow_joint",
+        "right_shoulder_pitch_joint", "right_shoulder_roll_joint",
+        "right_shoulder_yaw_joint", "right_elbow_joint",
+    ),
+    dof_names_upper_body=(
+        "torso_joint",
+        "left_shoulder_pitch_joint", "left_shoulder_roll_joint",
+        "left_shoulder_yaw_joint", "left_elbow_joint",
+        "right_shoulder_pitch_joint", "right_shoulder_roll_joint",
+        "right_shoulder_yaw_joint", "right_elbow_joint",
+    ),
+    dof_names_lower_body=(
+        "left_hip_yaw_joint", "left_hip_roll_joint", "left_hip_pitch_joint",
+        "left_knee_joint", "left_ankle_joint",
+        "right_hip_yaw_joint", "right_hip_roll_joint", "right_hip_pitch_joint",
+        "right_knee_joint", "right_ankle_joint",
+    ),
+
+    # Control Gains
+    motor_kp=(
+        200.0, 200.0, 200.0, 300.0, 40.0,
+        200.0, 200.0, 200.0, 300.0, 40.0,
+        300.0,
+        100.0, 100.0, 100.0, 100.0,
+        100.0, 100.0, 100.0, 100.0,
+    ),
+    motor_kd=(
+        5.0, 5.0, 5.0, 6.0, 2.0,
+        5.0, 5.0, 5.0, 6.0, 2.0,
+        6.0,
+        2.0, 2.0, 2.0, 2.0,
+        2.0, 2.0, 2.0, 2.0,
+    ),
+
+    # Link Names
+    torso_link_name="torso_link",
+    left_hand_link_name=None,
+    right_hand_link_name=None,
+
+    # Unitree-Specific Constants
+    unitree_legged_const={
+        "HIGHLEVEL": 238,
+        "LOWLEVEL": 255,
+        "TRIGERLEVEL": 240,
+        "PosStopF": 2146000000.0,
+        "VelStopF": 16000.0,
+        "MODE_MACHINE": 5,
+        "MODE_PR": 0,
+    },
+    weak_motor_joint_index={
+        "left_hip_yaw_joint": 0,
+        "left_hip_roll_joint": 1,
+        "left_hip_pitch_joint": 2,
+        "left_knee_joint": 3,
+        "left_ankle_joint": 4,
+        "right_hip_yaw_joint": 5,
+        "right_hip_roll_joint": 6,
+        "right_hip_pitch_joint": 7,
+        "right_knee_joint": 8,
+        "right_ankle_joint": 9,
+        "torso_joint": 10,
+        "left_shoulder_pitch_joint": 11,
+        "left_shoulder_roll_joint": 12,
+        "left_shoulder_yaw_joint": 13,
+        "left_elbow_joint": 14,
+        "right_shoulder_pitch_joint": 15,
+        "right_shoulder_roll_joint": 16,
+        "right_shoulder_yaw_joint": 17,
+        "right_elbow_joint": 18,
+    },
+    motion={"body_name_ref": ["torso_link"]},
+)
+
+
+# =============================================================================
 # Default Configurations Dictionary
 # =============================================================================
 
@@ -230,6 +350,7 @@ t1_29dof = RobotConfig(
 DEFAULTS = {
     "g1-29dof": g1_29dof,
     "t1-29dof": t1_29dof,
+    "h1-19dof": h1_19dof,
 }
 """Dictionary of all available robot configurations.
 

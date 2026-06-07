@@ -31,6 +31,12 @@ t1_29dof_loco = InferenceConfig(
     task=task.locomotion,
 )
 
+h1_19dof_loco = InferenceConfig(
+    robot=robot.h1_19dof,
+    observation=observation.loco_h1_19dof,
+    task=task.locomotion,
+)
+
 # fmt: off
 _g1_29dof_wbt_robot = replace(
     robot.g1_29dof,
@@ -69,6 +75,7 @@ g1_29dof_wbt = InferenceConfig(
 DEFAULTS = {
     "g1-29dof-loco": g1_29dof_loco,
     "t1-29dof-loco": t1_29dof_loco,
+    "h1-19dof-loco": h1_19dof_loco,
     "g1-29dof-wbt": g1_29dof_wbt,
 }
 

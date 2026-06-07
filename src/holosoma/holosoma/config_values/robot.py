@@ -1214,8 +1214,8 @@ h1_19dof = RobotConfig(
         40.0, 40.0, 18.0, 18.0,              # left arm
         40.0, 40.0, 18.0, 18.0,              # right arm
     ],
-    dof_armature_list=[0.0] * 19,
-    dof_joint_friction_list=[0.0] * 19,
+    dof_armature_list=[0.1] * 19,
+    dof_joint_friction_list=[0.1] * 19,
     body_names=[
         "pelvis",
         "left_hip_yaw_link",
@@ -1378,7 +1378,7 @@ h1_19dof = RobotConfig(
         urdf_file="h1/h1.urdf",
         usd_file=None,
         xml_file="h1/h1.xml",
-        robot_type="h1_19dof",
+        robot_type="h1",
         enable_self_collisions=False,
         default_dof_drive_mode=3,
         fix_base_link=False,
