@@ -29,7 +29,7 @@ h1_19dof_loco = RewardManagerCfg(
     terms={
         "tracking_lin_vel": RewardTermCfg(
             func="holosoma.managers.reward.terms.locomotion:tracking_lin_vel",
-            weight=2.0,
+            weight=2.5,
             params={"tracking_sigma": 0.25},
         ),
         "tracking_ang_vel": RewardTermCfg(
@@ -51,14 +51,14 @@ h1_19dof_loco = RewardManagerCfg(
         ),
         "penalty_action_rate": RewardTermCfg(
             func="holosoma.managers.reward.terms.locomotion:penalty_action_rate",
-            weight=-2.5,
+            weight=-2.0,
             params={},
             tags=["penalty_curriculum"],
         ),
         "feet_phase": RewardTermCfg(
             func="holosoma.managers.reward.terms.locomotion:feet_phase",
             weight=5.0,
-            params={"swing_height": 0.08, "tracking_sigma": 0.008},
+            params={"swing_height": 0.10, "tracking_sigma": 0.008},
         ),
         "pose": RewardTermCfg(
             func="holosoma.managers.reward.terms.locomotion:pose",
