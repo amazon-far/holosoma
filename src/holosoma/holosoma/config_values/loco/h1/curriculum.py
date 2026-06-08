@@ -43,7 +43,7 @@ h1_19dof_curriculum_fast_sac = CurriculumManagerCfg(
             params={
                 "enabled": True,
                 "tag": "penalty_curriculum",
-                "initial_scale": 0.8,
+                "initial_scale": 0.5,
                 "min_scale": 0.5,
                 "max_scale": 1.0,
                 "level_down_threshold": 150.0,
