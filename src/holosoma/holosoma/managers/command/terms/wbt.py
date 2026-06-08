@@ -49,25 +49,34 @@ class MotionLoader:
         self._joint_indexes = joint_indexes
         self._body_indexes = body_indexes
         self.time_step_total = self._joint_pos.shape[0]
-
+#实现了从 motion npz 文件加载数据，并提供接口访问关节位置、速度，身体位置、旋转、线速度、角速度等信息。
+# 支持多 motion 文件的 MultiMotionLoader 版本，以及一个 AdaptiveTimestepsSampler 用于根据失败情况优先采样训练时间步。
     def _get_index_of_a_in_b(self, a_names: List[str], b_names: List[str], device: str = "cpu") -> torch.Tensor:
         indexes = []
         for name in a_names:
             assert name in b_names, f"The specified name ({name}) doesn't exist: {b_names}"
             indexes.append(b_names.index(name))
         return torch.tensor(indexes, dtype=torch.long, device=device)
+#########################################################################################################
+## joint_pos 的一行长这样：
+## [base_x, base_y, base_z, base_qw, base_qx, base_qy, base_qz, j1, j2, ..., j19]
+## └────────── 7 个根节点自由度 ──────────┘  └──── 19 个关节角度 ────┘
 
+## 根节点 = 机器人在世界中的位置和朝向（floating base）
+## 这 7 个值在 MotionLoader.__init__ 里被剥离（第 124 行）：
+##   self._joint_pos = joint_pos_raw[:, 7:]  ← 只要关节，不要根节点
+##########################################################################################
     # Expected holosoma NPZ keys
     _REQUIRED_KEYS = {
-        "fps",
-        "joint_pos",
-        "joint_vel",
-        "body_pos_w",
-        "body_quat_w",
-        "body_lin_vel_w",
-        "body_ang_vel_w",
-        "body_names",
-        "joint_names",
+        "fps",#多少帧每秒
+        "joint_pos",#每帧的关节角度。前7个不是关节角度，是根节点（基座）的位置（xyz）和旋转（wxyz）。后面才是关节角度，顺序和joint_names一致。
+        "joint_vel",#每帧的关节速度。前6个不是关节速度，是根节点的线速度（vel_xyz）和角速度（vel_wxyz）。后面才是关节速度，顺序和joint_names一致。
+        "body_pos_w",#每个身体在每帧的世界坐标位置，顺序和body_names一致。
+        "body_quat_w",#每个身体在每帧的世界坐标旋转，格式是wxyz，顺序和body_names一致。
+        "body_lin_vel_w",#每个身体在每帧的世界坐标线速度，顺序和body_names一致。
+        "body_ang_vel_w",#每个身体在每帧的世界坐标角速度，顺序和body_names一致。
+        "body_names",#身体名称列表，对应body_pos_w等的顺序。
+        "joint_names",#关节名称列表，对应joint_pos等的顺序。注意joint_pos的前7列不是关节，是根节点的pos和rot。
     }
 
     def _load_data_from_motion_npz(self, motion_file: str, device: str) -> tuple[list[str], list[str]]:

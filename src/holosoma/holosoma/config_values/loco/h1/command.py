@@ -18,12 +18,12 @@ h1_19dof_command = CommandManagerCfg(
             func="holosoma.managers.command.terms.locomotion:LocomotionCommand",
             params={
                 "command_ranges": {
-                    "lin_vel_x": [-0.6, 0.6],
-                    "lin_vel_y": [-0.4, 0.4],
-                    "ang_vel_yaw": [-0.6, 0.6],
+                    "lin_vel_x": [-0.4, 0.6],
+                    "lin_vel_y": [-0.15, 0.15],
+                    "ang_vel_yaw": [-0.4, 0.4],
                     "heading": [-3.14, 3.14],
                 },
-                "stand_prob": 0.25,
+                "stand_prob": 0.3,
             },
         ),
     },
