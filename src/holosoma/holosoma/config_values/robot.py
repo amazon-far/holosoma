@@ -1105,16 +1105,16 @@ g1_29dof_w_object = replace(
 )
 
 h1_19dof = RobotConfig(
-    num_bodies=20,
+    num_bodies=22,
     dof_obs_size=19,
     actions_dim=19,
     policy_obs_dim=-1,
     critic_obs_dim=-1,
     algo_obs_dim_dict={},
-    key_bodies=["left_ankle_link", "right_ankle_link"],
+    key_bodies=["left_foot_contact_point", "right_foot_contact_point"],
     num_feet=2,
     foot_body_name="ankle_link",
-    foot_height_name="ankle_link",
+    foot_height_name="foot_contact_point",
     knee_name="knee_link",
     torso_name="torso_link",
     dof_names=[
@@ -1223,11 +1223,13 @@ h1_19dof = RobotConfig(
         "left_hip_pitch_link",
         "left_knee_link",
         "left_ankle_link",
+        "left_foot_contact_point",
         "right_hip_yaw_link",
         "right_hip_roll_link",
         "right_hip_pitch_link",
         "right_knee_link",
         "right_ankle_link",
+        "right_foot_contact_point",
         "torso_link",
         "left_shoulder_pitch_link",
         "left_shoulder_roll_link",
