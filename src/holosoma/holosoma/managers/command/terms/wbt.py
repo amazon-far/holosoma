@@ -529,8 +529,10 @@ class MotionCommand(CommandTermBase):
         else:
             self.motion_cfg = MotionConfig(**cfg.params["motion_config"])
         self.init_pose_cfg: NoiseToInitialPoseConfig = self.motion_cfg.noise_to_initial_pose
-
+#MotionCommand / WBT 指令模块的初始化函数。
+#把“动作文件motion,npz”和“仿真里的机器人”对齐起来，加载动作数据，准备好后续每个环境重置时根据动作数据设置机器人状态的功能。
     def setup(self) -> None:
+        #读取环境和设备信息，获取机器人身体和关节名称，并加载动作数据。
         self.num_envs = self._env.num_envs
         self.device = self._env.device
 
@@ -539,7 +541,7 @@ class MotionCommand(CommandTermBase):
 
         robot_joint_names = self._env.simulator.dof_names  # type: ignore[attr-defined]
 
-        # 1. load motion data
+        # 加载动作数据，支持单个 motion 文件（MotionLoader）或多个 motion 文件的目录（MultiMotionLoader）。动作数据必须包含机器人身体和关节的位置信息，以便后续在环境重置时设置机器人状态。
         assert self.motion_cfg.motion_file or self.motion_cfg.motion_dir, (
             "Either motion_file or motion_dir must be set in MotionConfig"
         )
@@ -559,7 +561,7 @@ class MotionCommand(CommandTermBase):
                 device=self.device,
             )
 
-        # Store body and joint indexes for interpolation
+        #建立索引映射关系，确保动作数据中的身体和关节顺序与仿真环境中的一致。动作数据可能包含多个身体和关节，但我们只跟踪其中一部分（如根节点和特定的身体）。我们通过索引映射将动作数据中的身体和关节与仿真环境中的对应起来，以便后续在环境重置时正确设置机器人状态。
         self._body_indexes_in_motion = self.motion._body_indexes
         self._joint_indexes_in_motion = self.motion._joint_indexes
 
@@ -575,7 +577,7 @@ class MotionCommand(CommandTermBase):
             self.motion_cfg.body_names_to_track, robot_body_names, self.device
         )
 
-        # 3. get the name of the object, or indices of the object
+        # 如果动作数据包含物体信息（如物体位置和旋转），则获取物体在仿真环境中的索引，并准备好后续在环境重置时设置物体状态的功能。我们假设动作数据中的物体名称是“object”，并且仿真环境中也有一个名为“object”的物体。我们将动作数据中的物体状态与仿真环境中的物体状态对应起来，以便在环境重置时正确设置物体状态。
         if self.motion.has_object:
             # cache the object_index_in_simulator
             self.object_name = "object"  # hardcoded object name
@@ -585,18 +587,18 @@ class MotionCommand(CommandTermBase):
                 "Object is only supported in IsaacSim"
             )
 
-        # 4. get the adaptive timesteps sampler
+        # 如果启用了自适应时间步采样器（AdaptiveTimestepsSampler），则初始化一个采样器实例，用于根据环境中机器人失败的时间步优先采样训练时间步。采样器会根据动作数据的总时间步数、仿真环境的帧率和一些超参数来设置采样策略，以便在训练过程中更有效地学习机器人在不同时间步的表现。
         if self.motion_cfg.use_adaptive_timesteps_sampler:
             self.adaptive_timesteps_sampler = AdaptiveTimestepsSampler(
                 self.motion.time_step_total, self.device, int(1 / (self._env.dt))
             )
 
-        # 5. metrics
+        # 初始化一些缓冲区和指标，用于在训练过程中跟踪和记录与动作数据相关的统计信息。这些指标可能包括采样概率分布、失败时间步的分布等，以便在训练过程中分析和调试机器人的表现。
         self.metrics: dict[str, torch.Tensor] = {}
 
         self.init_buffers()
 
-        # 6. visualization markers for isaacsim
+        # 如果是 IsaacSim 仿真环境，并且启用了可视化查看器，则设置一些可视化标记，用于在仿真环境中显示动作数据中的身体位置、旋转等信息。这些标记可以帮助我们在训练过程中直观地观察机器人的状态和动作数据的对应关系，以便更好地理解和调试训练过程。
         if self._env.viewer and self._env.simulator.get_simulator_type() == SimulatorType.ISAACSIM:
             self._setup_visualization_markers_for_isaacsim()
 
