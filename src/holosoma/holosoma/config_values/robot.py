@@ -1187,15 +1187,15 @@ h1_19dof = RobotConfig(
         "right_hip_pitch_joint",
     ],
     dof_pos_lower_limit_list=[
-        -0.43, -0.43, -1.57, -0.26, -0.87,   # left leg
-        -0.43, -0.43, -1.57, -0.26, -0.87,   # right leg
+        -0.43, -0.43, -3.14, -0.26, -0.87,   # left leg
+        -0.43, -0.43, -3.14, -0.26, -0.87,   # right leg
         -2.35,                                   # torso
         -2.87, -0.34, -1.3, -1.25,             # left arm
         -2.87, -3.11, -4.45, -1.25,            # right arm
     ],
     dof_pos_upper_limit_list=[
-        0.43, 0.43, 1.57, 2.05, 0.52,         # left leg
-        0.43, 0.43, 1.57, 2.05, 0.52,         # right leg
+        0.43, 0.43, 2.53, 2.05, 0.52,         # left leg
+        0.43, 0.43, 2.53, 2.05, 0.52,         # right leg
         2.35,                                    # torso
         2.87, 3.11, 4.45, 2.61,               # left arm
         2.87, 0.34, 1.3, 2.61,                # right arm

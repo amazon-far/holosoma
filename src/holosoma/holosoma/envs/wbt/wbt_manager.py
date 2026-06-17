@@ -15,6 +15,8 @@ class WholeBodyTrackingManager(BaseTask):
         super().__init__(tyro_config, device=device)
         assert not hasattr(self.simulator, "gym"), "WBT requires IsaacSim — IsaacGym is not supported."
 
+    #初始化世界状态的buffer，主要是机身的姿态，重置环境的buffer，平均episode长度的tracker buffer，
+    # 这些都是比较基础的buffer，和具体的whole body tracking没有关系
     def _init_buffers(self):
         """Initialize torch tensors which will contain simulation states and processed quantities"""
         super()._init_buffers()
@@ -25,6 +27,8 @@ class WholeBodyTrackingManager(BaseTask):
         self._configure_default_dof_pos()
         self._init_domain_rand_buffers()
 
+    #从机器人配置文件中获取默认的关节位置，并存储在default_dof_pos_base和default_dof_pos中，
+    # 这些默认的关节位置会在重置环境的时候被用到
     def _configure_default_dof_pos(self):
         self.default_dof_pos_base = torch.zeros(
             self.num_dof, dtype=torch.float, device=self.device, requires_grad=False
@@ -39,9 +43,11 @@ class WholeBodyTrackingManager(BaseTask):
         self.default_dof_pos_base = self.default_dof_pos_base.unsqueeze(0)  # (1, num_dof)
         self.default_dof_pos = self.default_dof_pos_base.repeat(self.num_envs, 1).clone()  # (num_envs, num_dof)
 
+    # 在计算observation之前调用的回调函数，更新机身的姿态信息
     def _pre_compute_observations_callback(self):
         self.base_quat[:] = self.simulator.base_quat[:]
 
+    # 在重置环境的时候调用的回调函数，重置机身的状态，清除接触力历史，刷新模拟器的tensor，以及预计算observation
     def _reset_buffers_callback(self, env_ids, target_buf=None):
         self.need_to_refresh_envs[env_ids] = True
         self.episode_length_buf[env_ids] = 0
@@ -49,9 +55,11 @@ class WholeBodyTrackingManager(BaseTask):
         # pending_episode_update_mask is only used in curriculum_term::AverageEpisodeLengthTracker.
         self._pending_episode_update_mask[env_ids] = True
 
+    #得到需要刷新的环境的id，这些环境的状态已经被修改了，但是还没有被写回模拟器，所以需要在下一步刷新模拟器的tensor
     def _get_envs_to_refresh(self):
         return self.need_to_refresh_envs.nonzero(as_tuple=False).flatten()
 
+    # 刷新模拟器的tensor，写回被修改了状态的环境的状态到模拟器中，并调用预计算observation的回调函数
     def _refresh_envs_after_reset(self, env_ids):
         self.simulator.set_actor_root_state_tensor(env_ids, self.simulator.all_root_states)
         self.simulator.set_dof_state_tensor(env_ids, self.simulator.dof_state)
@@ -193,6 +201,8 @@ class WholeBodyTrackingManager(BaseTask):
         elif self.simulator.get_simulator_type() == SimulatorType.ISAACGYM:
             self._draw_debug_vis_isaacgym()
 
+#推进机器人，给机器人一个随机的速度，模拟一个冲击力，这个功能主要是用来测试whole body tracking的鲁棒性，
+# 让机器人在运动过程中受到一些扰动，看看能不能继续跟踪参考动作
     def step_visualize_motion(self, actions):
         motion_command = self.command_manager.get_state("motion_command")
         dt = 1.0 / float(motion_command.motion.fps)

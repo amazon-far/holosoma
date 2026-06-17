@@ -50,7 +50,7 @@ h1_19dof_randomization = RandomizationManagerCfg(
                 "enable_link_mass": True,
                 "link_mass_range": [0.95, 1.05],
                 "enable_base_mass": True,
-                "added_mass_range": [-0.5, 1.0],
+                "added_mass_range": [0.0, 1.0],
             },
         ),
         "randomize_friction_startup": RandomizationTermCfg(

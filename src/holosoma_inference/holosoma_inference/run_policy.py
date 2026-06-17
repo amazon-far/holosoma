@@ -166,7 +166,10 @@ def main(annotated_config=None):
     # Pre-parse --secondary-preset and --secondary none before tyro.
     # Tyro can't build a CLI parser for InferenceConfig | None when it
     # contains dict[str, Any] fields, so we handle secondary selection ourselves.
+    #预解析--secondary-preset和--secondary none在tyro之前。
     pre = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    #支持“”--secondary-preset g1-29dof-loco“”来选择预设的次要策略配置，
+    # 或者“”--secondary none“”来禁用双模式。
     pre.add_argument(
         "--secondary-preset",
         default=None,
@@ -175,34 +178,42 @@ def main(annotated_config=None):
     )
     pre.add_argument("--secondary", default=None, help="Set to 'none' to disable dual-mode.")
     known, remaining = pre.parse_known_args()
-
+    #是否禁用次要策略
     disable_secondary = known.secondary is not None and known.secondary.lower() == "none"
     secondary_preset = known.secondary_preset
 
-    # Strip --secondary.* args from remaining so tyro doesn't see them
+    # 分离主次参数，次要参数以--secondary.开头，重命名后供tyro单独解析
     primary_argv, secondary_argv = _split_secondary_args(remaining)
     sys.argv = [sys.argv[0]] + primary_argv
 
     if annotated_config is None:
         # Use factory function to lazily load extension configs
         annotated_config = get_annotated_inference_config()
+    # 使用tyro解析主配置，次配置将在后面根据预设或覆盖进行解析
     config = tyro.cli(annotated_config, config=TYRO_CONFIG)
 
     from dataclasses import replace as _replace
-
+    #关闭双模式或根据预设/覆盖解析次要配置
     if disable_secondary:
         config = _replace(config, secondary=None)
+    #使用预设配置，并允许命令行覆盖预设值
     elif secondary_preset:
+        #获取预设配置，如果预设名称无效则打印错误并退出
         preset = DEFAULTS.get(secondary_preset)
+        #如果错误地指定了预设名称，打印错误消息和可用预设列表，然后退出程序
         if preset is None:
             logger.error(f"Unknown secondary preset: {secondary_preset}")
             logger.info(f"Available presets: {list(DEFAULTS.keys())}")
             sys.exit(1)
+        #清空预设中的次要配置，以确保预设值不会与主配置混淆，次要配置将完全由预设覆盖，除非命令行参数覆盖预设值
         preset = _replace(preset, secondary=None)
 
-        # Parse secondary overrides against the preset defaults
+        # 如果存在次要参数，则使用预设作为默认值解析次要配置，允许命令行参数覆盖预设值；
+        # 否则直接使用预设作为次要配置
         if secondary_argv:
+            # 将sys.argv替换为次要参数（带有预设默认值）并解析次要配置
             sys.argv = [sys.argv[0]] + secondary_argv
+            #重新解析次要配置，使用预设作为默认值，这样命令行参数可以覆盖预设值
             secondary = tyro.cli(InferenceConfig, default=preset, config=TYRO_CONFIG)
         else:
             secondary = preset

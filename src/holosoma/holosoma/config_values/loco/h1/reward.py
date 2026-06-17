@@ -29,7 +29,7 @@ h1_19dof_loco = RewardManagerCfg(
     terms={
         "tracking_lin_vel": RewardTermCfg(
             func="holosoma.managers.reward.terms.locomotion:tracking_lin_vel",
-            weight=2.0,
+            weight=2.2,
             params={"tracking_sigma": 0.25},
         ),
         "tracking_ang_vel": RewardTermCfg(
@@ -39,26 +39,26 @@ h1_19dof_loco = RewardManagerCfg(
         ),
         "penalty_ang_vel_xy": RewardTermCfg(
             func="holosoma.managers.reward.terms.locomotion:penalty_ang_vel_xy",
-            weight=-1.3,
+            weight=-2.0,
             params={},
             tags=["penalty_curriculum"],
         ),
         "penalty_orientation": RewardTermCfg(
             func="holosoma.managers.reward.terms.locomotion:penalty_orientation",
-            weight=-12.0,
+            weight=-6.0,
             params={},
             tags=["penalty_curriculum"],
         ),
         "penalty_action_rate": RewardTermCfg(
             func="holosoma.managers.reward.terms.locomotion:penalty_action_rate",
-            weight=-2.5,
+            weight=-2.2,
             params={},
             tags=["penalty_curriculum"],
         ),
         "feet_phase": RewardTermCfg(
             func="holosoma.managers.reward.terms.locomotion:feet_phase",
             weight=5.0,
-            params={"swing_height": 0.08, "tracking_sigma": 0.012},
+            params={"swing_height": 0.12, "tracking_sigma": 0.012},
         ),
         "pose": RewardTermCfg(
             func="holosoma.managers.reward.terms.locomotion:pose",
@@ -68,13 +68,13 @@ h1_19dof_loco = RewardManagerCfg(
         ),
         "penalty_close_feet_xy": RewardTermCfg(
             func="holosoma.managers.reward.terms.locomotion:penalty_close_feet_xy",
-            weight=-10.0,
-            params={"close_feet_threshold": 0.15},
+            weight=-5.0,
+            params={"close_feet_threshold": 0.08},
             tags=["penalty_curriculum"],
         ),
         "penalty_feet_ori": RewardTermCfg(
             func="holosoma.managers.reward.terms.locomotion:penalty_feet_ori",
-            weight=-5.0,
+            weight=-3.5,
             params={},
             tags=["penalty_curriculum"],
         ),

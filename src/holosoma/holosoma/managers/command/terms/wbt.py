@@ -601,14 +601,15 @@ class MotionCommand(CommandTermBase):
         # 如果是 IsaacSim 仿真环境，并且启用了可视化查看器，则设置一些可视化标记，用于在仿真环境中显示动作数据中的身体位置、旋转等信息。这些标记可以帮助我们在训练过程中直观地观察机器人的状态和动作数据的对应关系，以便更好地理解和调试训练过程。
         if self._env.viewer and self._env.simulator.get_simulator_type() == SimulatorType.ISAACSIM:
             self._setup_visualization_markers_for_isaacsim()
-
+#随机选择一个动作片段开始模仿
     def reset(self, env_ids: torch.Tensor | None) -> None:
         """called per reset_idx, reset timesteps and robot/object poses."""
         env_ids = self._ensure_index_tensor(env_ids)
         if env_ids.numel() == 0:
             return
 
-        # 0. Sample the time steps
+        #如果启用了自适应时间步采样器（AdaptiveTimestepsSampler），则根据环境中机器人失败的时间步优先采样训练时间步。
+        # 我们首先从环境中获取那些在上一个 episode 中失败的时间步，然后将这些失败的时间步更新到采样器中，以便在下一次采样时优先选择这些时间步进行训练。最后，我们根据采样器的概率分布随机采样新的时间步，作为当前 episode 的起始时间步。
         if self.motion_cfg.use_adaptive_timesteps_sampler:
             # Match BeyondMimic behavior: update failed bins from environments
             # that terminated before this reset, then sample new phases.
@@ -618,22 +619,26 @@ class MotionCommand(CommandTermBase):
                 self.adaptive_timesteps_sampler.update_current_bin_failed_count(failed_at_time_step)
             phase = self.adaptive_timesteps_sampler.sample(env_ids.numel())
         else:
+            #随机选择一个动作片段开始模仿：对于每个环境，我们随机生成一个 phase 值，表示在动作数据中的一个随机位置。这个 phase 值是一个介于 0 和 1 之间的浮点数，表示在动作数据中的相对位置。我们将这个 phase 值乘以动作数据的长度，得到一个具体的时间步索引，作为当前 episode 的起始时间步。这样，每次重置时，机器人都会从动作数据中的一个随机位置开始模仿。
             phase = torch.rand(env_ids.numel(), device=self.device)
 
         if self._env.is_evaluating:
             phase = torch.zeros_like(phase)
 
-        # For multi-motion: randomly assign each env to a motion, sample within that motion's range
+        #对于每个环境，我们根据随机生成的 phase 值计算出一个具体的时间步索引，作为当前 episode 的起始时间步。
+        # 我们首先根据环境 ID 从动作数据中随机选择一个动作片段，然后根据 phase 值计算出在该片段中的具体时间步索引。
+        # 最后，我们将这个时间步索引存储在 self.time_steps 中，以便在后续的训练过程中使用。
         n = env_ids.numel()
         num_motions = self.motion.num_motions
         self.motion_ids[env_ids] = torch.randint(0, num_motions, (n,), device=self.device)
         start_idx = self.motion.motion_start_idx[self.motion_ids[env_ids]]
         end_idx = self.motion.motion_end_idx[self.motion_ids[env_ids]]
         motion_len = end_idx - start_idx
-
+        #计算出在动作片段中的具体时间步索引：我们将 phase 值乘以动作片段的长度，得到一个相对于片段长度的时间步索引。然后，我们将这个索引加上片段的起始索引，得到在整个动作数据中的具体时间步索引。最后，我们将这个时间步索引存储在 self.time_steps 中，以便在后续的训练过程中使用。
         self.time_steps[env_ids] = start_idx + (phase * (motion_len - 1).float()).long()
 
-        # Handle start_at_timestep_zero_prob (reset to start of assigned motion)
+        #得到在动作片段中的具体时间步索引后，我们根据 motion_cfg 中的 start_at_timestep_zero_prob 参数，
+        # 随机将一部分环境的时间步索引设置为片段的起始索引。这样做的目的是为了增加训练的多样性，让机器人在一些 episode 中从动作片段的起始位置开始模仿，而不是总是从随机位置开始。我们首先生成一个随机值，如果这个值小于 start_at_timestep_zero_prob，我们就将对应环境的时间步索引设置为片段的起始索引。最后，我们还检查了一下，如果某些环境的时间步索引已经是片段的最后一个时间步，我们就将它们设置为倒数第二个时间步，以避免在后续训练过程中出现越界错误。
         prob = self.motion_cfg.start_at_timestep_zero_prob
         if prob >= 1.0:
             self.time_steps[env_ids] = start_idx
@@ -648,7 +653,10 @@ class MotionCommand(CommandTermBase):
         already_last_timestep_mask = self.time_steps[env_ids] >= end_idx - 1
         self.time_steps[env_ids] = torch.where(already_last_timestep_mask, end_idx - 2, self.time_steps[env_ids])
 
-        # 1. Get the root/body poses from the motion data
+        # 得到在动作片段中的具体时间步索引后，我们根据这个索引从动作数据中获取对应的机器人状态信息，
+        # 包括根节点位置、旋转、线速度、角速度，以及关节位置和速度。
+        # 我们将这些状态信息存储在一些临时变量中，以便后续在环境重置时使用。
+        # 这些状态信息将被用来设置仿真环境中机器人的初始状态，使其与动作数据中的状态相匹配，从而实现模仿学习的目标。
         root_pos = self.root_pos_w[env_ids].clone()
         root_rot = self.root_quat_w[env_ids].clone()
         root_lin_vel = self.root_lin_vel_w[env_ids].clone()
@@ -658,7 +666,7 @@ class MotionCommand(CommandTermBase):
         dof_vel = self.joint_vel[env_ids].clone()
 
         # 2. Adding noise
-        # 2.1 prepare the noise scale
+        # 增加噪声：为了增加训练的鲁棒性，我们可以在环境重置时向机器人的状态添加一些随机噪声。我们首先根据 init_pose_cfg 中的配置计算出每个状态变量的噪声范围，然后在这些范围内随机生成噪声，并将其添加到对应的状态变量中。这样做可以让机器人在训练过程中适应更多样化的初始状态，从而提高其泛化能力。
         dof_pos_noise = self.init_pose_cfg.dof_pos * self.init_pose_cfg.overall_noise_scale  # float
         root_pos_noise = (
             torch.tensor(
@@ -722,7 +730,9 @@ class MotionCommand(CommandTermBase):
             torch.rand(root_ang_vel.shape, device=self.device) - 0.5
         ) * 2 * root_ang_vel_noise_rpy.unsqueeze(0)  # (num_envs, 3)
 
-        # 3. Set the robot states in simulator
+        # 3. 设置仿真环境中机器人的状态：最后，我们将计算得到的目标状态信息设置到仿真环境中，使机器人在当前 episode 的初始状态与动作数据中的状态相匹配。
+        # 我们通过调用仿真环境的接口，将目标关节位置、速度，以及根节点的位置、旋转、线速度和角速度设置到对应的环境中。
+        # 这样，机器人就可以从动作数据中的一个随机位置开始模仿，从而实现模仿学习的目标。
         self._env.simulator.dof_pos[env_ids] = target_dof_pos
         self._env.simulator.dof_vel[env_ids] = target_dof_vel
 
@@ -731,7 +741,9 @@ class MotionCommand(CommandTermBase):
         self._env.simulator.robot_root_states[env_ids, 7:10] = target_root_lin_vel
         self._env.simulator.robot_root_states[env_ids, 10:13] = target_root_ang_vel
 
-        # 4. Set the object states in simulator
+        # 设置完机器人状态后，我们还需要刷新仿真环境中的状态，以确保这些变化生效。
+        # 我们调用仿真环境的 refresh_sim_tensors 方法，将之前设置的状态信息刷新到仿真环境中，
+        # 使其在后续的训练过程中被正确地使用。
         if self.motion.has_object:
             obj_pos = self.object_pos_w[env_ids]
             obj_ori = self.object_quat_w[env_ids]
@@ -748,15 +760,19 @@ class MotionCommand(CommandTermBase):
             object_states = torch.cat(
                 [target_obj_pos, obj_ori, obj_lin_vel, torch.zeros_like(obj_lin_vel)], dim=-1
             )  # (num_envs, 7)
-            # 4.3 set the object states in simulator
+            # 4.放置物体：如果动作数据中包含物体信息，我们还需要将物体的状态设置到仿真环境中。我们首先根据动作数据中的物体位置、旋转和线速度计算出目标物体状态，然后将这些状态信息设置到仿真环境中，使物体在当前 episode 的初始状态与动作数据中的状态相匹配。最后，我们刷新仿真环境中的状态，使这些变化生效。
             self._env.simulator.set_actor_states([self.object_name], env_ids, object_states)
 
     def step(self) -> None:
         """called in _update_tasks_callback of the environment. (after compute_reward, before compute_observations)"""
         # 0. update time steps, all motion joint/body poses are updated automatically with the time steps.
+        #更新时间步：在每个环境步骤中，我们首先更新当前的时间步索引，以便从动作数据中获取对应的机器人状态信息。
+        # 我们根据 motion_cfg 中的 freeze_at_timestep_zero_prob 参数，随机决定是否在动作片段的起始位置冻结一些环境的时间步索引。
+        # 对于没有被冻结的环境，我们将时间步索引加 1，进入下一个时间步。这样，机器人就可以按照动作数据中的顺序逐步模仿动作，从而实现模仿学习的目标。
         advance_mask = torch.ones_like(self.time_steps, dtype=torch.bool)
 
-        # Handle freeze_at_timestep_zero_prob: for envs at their motion's start, randomly decide whether to advance
+        # 根据 freeze_at_timestep_zero_prob 参数，随机冻结一些环境的时间步索引在动作片段的起始位置。
+        # 我们首先生成一个随机值，如果这个值小于 freeze_at_timestep_zero_prob，并且当前时间步索引是片段的起始索引，我们就将对应环境的 advance_mask 设置为 False，表示这些环境的时间步索引将被冻结在当前的位置，不会在本步骤中前进。最后，我们根据 advance_mask 更新时间步索引，使得没有被冻结的环境的时间步索引加 1，进入下一个时间步。
         freeze_prob = self.motion_cfg.freeze_at_timestep_zero_prob
         if freeze_prob > 0.0:
             zero_mask = self.time_steps == self.motion.motion_start_idx[self.motion_ids]
@@ -769,14 +785,22 @@ class MotionCommand(CommandTermBase):
 
         # BeyondMimic-style behavior: when the clip ends, resample motion and
         # reset robot/object state without terminating the whole episode.
+        #找到那些时间步索引已经达到了动作片段结束位置的环境，并对这些环境进行重置。
+        # 我们首先根据当前的时间步索引和动作片段的结束索引，找到那些已经达到了结束位置的环境 ID。
+        # 对于这些环境，我们调用 reset 方法，重新随机选择一个动作片段，并将时间步索引设置为新的起始位置。
+        # 这样，机器人就可以在同一个 episode 中连续模仿多个动作片段，从而实现更丰富的模仿学习效果。
         per_motion_end = self.motion.motion_end_idx[self.motion_ids]
         ended_env_ids = torch.where(self.time_steps >= per_motion_end)[0]
         if ended_env_ids.numel() > 0:
+            #在结束位置的环境 ID 后，我们调用 reset 方法，重新随机选择一个动作片段，
+            # 并将时间步索引设置为新的起始位置。
+            # 这样，机器人就可以在同一个 episode 中连续模仿多个动作片段，从而实现更丰富的模仿学习效果。
             self.reset(ended_env_ids)
             # Flush the mutated root/dof state into the simulator so that
             # rigid-body positions are up-to-date for downstream consumers
             # (termination checks, observations, rewards).
             sim = self._env.simulator
+            #刷新仿真环境中的状态：在重置了那些时间步索引已经达到了结束位置的环境后，我们还需要刷新仿真环境中的状态，以确保这些变化生效。我们调用仿真环境的接口，将之前设置的状态信息刷新到仿真环境中，使其在后续的训练过程中被正确地使用。
             sim.set_actor_root_state_tensor_robots(ended_env_ids, sim.robot_root_states)
             sim.set_dof_state_tensor_robots(ended_env_ids, sim.dof_state)  # type: ignore[attr-defined]
             sim.refresh_sim_tensors()
@@ -802,6 +826,15 @@ class MotionCommand(CommandTermBase):
         # ------------------------------------------------------------
         # if episode_length_buf == 0, use robot_root_pos_w and robot_root_quat_w as reference body.
         # else, use configured reference body as reference body.
+        #进行坐标变换：在每个环境步骤中，我们需要根据当前的时间步索引，从动作数据中获取对应的身体位置和旋转信息，
+        # 并将其转换到仿真环境中的坐标系下。我们首先根据 motion_cfg 中的 body_name_ref 参数，
+        # 获取参考身体的索引，然后根据这个索引从动作数据中获取参考身体的位置和旋转信息。
+        # 接下来，我们需要考虑一个问题：在 IsaacSim 仿真环境中，在环境重置后，
+        # 虽然我们设置了机器人的根节点位置和旋转，但由于运动学前向计算尚未应用，身体位置和旋转可能没有正确更新。
+        # 因此，我们需要根据 episode_length_buf 的值来决定使用哪个参考身体的位置和旋转信息。
+        # 如果 episode_length_buf 为 0，表示刚刚重置环境，我们使用机器人的根节点位置和旋转作为参考；
+        # 否则，我们使用配置的参考身体的位置和旋转作为参考。这样，我们就可以确保在环境重置后，
+        # 坐标变换能够正确地应用，从而使机器人能够正确地模仿动作数据中的动作。
         use_root = (self._env.episode_length_buf == 0).unsqueeze(1).float()
 
         ref_pos_w = self.root_pos_w * use_root + self.ref_pos_w * (1 - use_root)
@@ -824,6 +857,11 @@ class MotionCommand(CommandTermBase):
         ### 1.2.2 body_pos_relative_w
         delta_pos_w_height = ref_pos_w_repeat - robot_ref_pos_w_repeat
         delta_pos_w_height[..., :2] = 0.0  # adjusting for height differences
+        #把参考身体的位置和旋转信息转换到仿真环境中的坐标系下：
+        # 我们首先计算出参考身体之间的旋转差异 delta_quat_w，
+        # 然后将这个旋转差异应用到动作数据中的身体位置上，得到相对于参考身体的身体位置。
+        # 最后，我们将这个相对位置加上参考身体在仿真环境中的位置，得到最终的身体位置。
+        # 这样，我们就完成了从动作数据到仿真环境的坐标变换，使得机器人能够正确地模仿动作数据中的动作。
         self.body_pos_relative_w = (
             robot_ref_pos_w_repeat
             + delta_pos_w_height

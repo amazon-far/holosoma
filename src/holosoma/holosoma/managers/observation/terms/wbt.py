@@ -45,7 +45,7 @@ def get_base_ang_vel(env: WholeBodyTrackingManager) -> torch.Tensor:
 def get_projected_gravity(env: WholeBodyTrackingManager) -> torch.Tensor:
     return quat_rotate_inverse(_base_quat(env), gravity_vector(env), w_last=True)
 
-
+#机身的线速度和角速度，重力在机身坐标系下的投影，这些都是比较基础的observation term，和具体的whole body tracking没有关系
 def base_lin_vel(env: WholeBodyTrackingManager) -> torch.Tensor:
     """Base linear velocity in base frame.
 
@@ -129,12 +129,16 @@ def _get_motion_command_and_assert_type(env: WholeBodyTrackingManager) -> Motion
     assert isinstance(motion_command, MotionCommand), f"Expected MotionCommand, got {type(motion_command)}"
     return motion_command
 
-
+#当前的motion command，参考位置和姿态在机身坐标系下的表示，机器人身体各个部位的位置和姿态在机身坐标系下的表示，
+# 物体的位置和姿态在机身坐标系下的表示，以及物体的线速度在机身坐标系下的表示，
+# 这些都是和whole body tracking相关的observation term
 def motion_command(env: WholeBodyTrackingManager) -> torch.Tensor:
     motion_command = _get_motion_command_and_assert_type(env)
     return motion_command.command
 
-
+#把motion command中的参考位置和姿态，机器人身体各个部位的位置和姿态，物体的位置和姿态，以及物体的线速度，
+# 都转换到以机器人参考位置和姿态为坐标系的表示，这样就得到了相对于机器人参考位置和姿态的表示，
+# 更适合用来做whole body tracking的observation term
 def motion_ref_pos_b(env: WholeBodyTrackingManager) -> torch.Tensor:
     motion_command = _get_motion_command_and_assert_type(env)
     pos, _ = subtract_frame_transforms(

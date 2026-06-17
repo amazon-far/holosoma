@@ -10,17 +10,17 @@ h1_19dof_command = CommandManagerCfg(
         "locomotion_gait": CommandTermCfg(
             func="holosoma.managers.command.terms.locomotion:LocomotionGait",
             params={
-                "gait_period": 1.0,
-                "gait_period_randomization_width": 0.2,
+                "gait_period": 1.15,
+                "gait_period_randomization_width": 0.25,
             },
         ),
         "locomotion_command": CommandTermCfg(
             func="holosoma.managers.command.terms.locomotion:LocomotionCommand",
             params={
                 "command_ranges": {
-                    "lin_vel_x": [-0.2, 0.6],
-                    "lin_vel_y": [0.0, 0.0],
-                    "ang_vel_yaw": [-0.2, 0.2],
+                    "lin_vel_x": [-0.2, 0.8],
+                    "lin_vel_y": [-0.3, 0.3],
+                    "ang_vel_yaw": [-0.3, 0.3],
                     "heading": [-3.14, 3.14],
                 },
                 "stand_prob": 0.25,
