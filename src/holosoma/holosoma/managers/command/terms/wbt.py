@@ -640,7 +640,10 @@ class MotionCommand(CommandTermBase):
             phase = torch.rand(n, device=self.device)
 
         if self._env.is_evaluating:
-            phase = torch.zeros_like(phase) if phase is not None else None
+            # Eval forces every env through the uniform/else branch below, which
+            # indexes `phase`, so it must be a real zero tensor even when the
+            # adaptive sampler left it as None.
+            phase = torch.zeros(n, device=self.device)
             adaptive_global_idx = None  # eval starts every env at its motion's first frame
 
         if adaptive_global_idx is not None:
