@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic.dataclasses import dataclass
 
-InputSource = Literal["keyboard", "interface", "joystick", "ros2"]
+InputSource = Literal["keyboard", "interface", "joystick", "ros2", "injected"]
 
 DEFAULT_VELOCITY_INPUT: InputSource = "keyboard"
 DEFAULT_STATE_INPUT: InputSource = "keyboard"

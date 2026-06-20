@@ -81,10 +81,15 @@ class DualModePolicy:
         """
         from holosoma_inference.inputs.api.commands import StateCommand
 
-        # Inject SWITCH_MODE into both command providers' mappings (joystick X, keyboard x)
+        # Inject SWITCH_MODE into both command providers' key mappings (joystick X,
+        # keyboard x). Only keyboard/joystick providers expose ``_mapping``; others
+        # (e.g. injected ROS2 providers, which map the "switch_mode" string to
+        # SWITCH_MODE natively) are intercepted purely via the dispatch patch below.
         for policy in (self.primary, self.secondary):
-            policy._command_provider._mapping["X"] = StateCommand.SWITCH_MODE
-            policy._command_provider._mapping["x"] = StateCommand.SWITCH_MODE
+            mapping = getattr(policy._command_provider, "_mapping", None)
+            if mapping is not None:
+                mapping["X"] = StateCommand.SWITCH_MODE
+                mapping["x"] = StateCommand.SWITCH_MODE
 
         # Patch _dispatch_command to intercept SWITCH_MODE
         self._orig_dispatch = {
