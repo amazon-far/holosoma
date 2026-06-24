@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stream a reference-motion NPZ to the WBT policy as a live ``CmdDense`` feed.
 
-This drives ``holosoma_node`` exactly like a teleop source would: instead of
+This drives ``policy_service_node`` exactly like a teleop source would: instead of
 handing the NPZ to the policy via ``--task.ref-motion-path`` (which the injected
 live target source ignores), we replay the NPZ frame-by-frame onto the dense
 topic so the policy tracks the full trajectory. Useful for sim2sim "watch it
@@ -17,7 +17,7 @@ Joint order in the reference-motion NPZs already matches the Unitree SDK / MuJoC
 
 DDS note: the policy's ROS graph runs on a separate ROS_DOMAIN_ID from the
 Unitree SDK link to the sim (the SDK hardwires domain 0; rclpy must not collide
-with it). Run this publisher on the SAME ROS_DOMAIN_ID as holosoma_node — e.g.
+with it). Run this publisher on the SAME ROS_DOMAIN_ID as policy_service_node — e.g.
 ``ROS_DOMAIN_ID=1``.
 
 Usage:
@@ -61,7 +61,7 @@ class NpzDensePublisher(Node):
         self._dq = (jv[:, 6:] if jv.shape[1] > 29 else jv).astype(np.float32)
 
         ref_idx = _resolve_ref_body(data, ref_body)
-        # body_quat_w is wxyz; geometry_msgs/Quaternion + holosoma_node want xyzw.
+        # body_quat_w is wxyz; geometry_msgs/Quaternion + the policy want xyzw.
         bq = data["body_quat_w"][:, ref_idx, :].astype(np.float32)  # (T, 4) wxyz
         self._quat_xyzw = bq[:, [1, 2, 3, 0]]
 

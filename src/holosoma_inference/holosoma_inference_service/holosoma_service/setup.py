@@ -21,7 +21,6 @@ setup(
     license="Apache-2.0",
     entry_points={
         "console_scripts": [
-            "holosoma_node = holosoma_service.policy_control.holosoma_node:main",
             "policy_service_node = holosoma_service.policy_control.service_node:main",
             "retargeter_node = holosoma_service.retargetting.retargeter_node:main",
             "unitree_split_controller = holosoma_service.unitree_control.unitree_split_controller:_cli",

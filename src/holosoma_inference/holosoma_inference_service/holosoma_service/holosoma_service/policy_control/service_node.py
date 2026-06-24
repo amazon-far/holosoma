@@ -21,6 +21,13 @@ The policy is built like ``run_policy.py`` (``_select_policy_class`` /
 (the base policy creates its providers during construction). In dual-mode only
 the primary needs injection — the secondary reuses the primary's providers via
 ``_shared_hardware_source``.
+
+This is also the WBT entrypoint (it replaces the former ``holosoma_node``): a WBT
+preset resolves to its policy class via ``config.task.policy_type`` →
+``holosoma.policies.by_type`` (handled in ``_select_policy_class``), and the node
+attaches itself as that policy's dense ``TargetSource`` (it already subscribes
+``CmdDense`` and serves ``get_target()``). Drive it with ``--task.velocity-input
+injected --task.state-input injected`` and feed ``CmdDense`` on the dense topic.
 """
 
 from __future__ import annotations
@@ -32,15 +39,14 @@ from dataclasses import replace
 import numpy as np
 import rclpy
 import tyro
+from holosoma_inference.config.config_values.inference import get_annotated_inference_config
+from holosoma_inference.config.utils import TYRO_CONFIG
+from holosoma_inference.policies.dual_mode import DualModePolicy, _select_policy_class
 from holosoma_msgs.msg import CmdDense, Heartbeat
 from loguru import logger
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState
-
-from holosoma_inference.config.config_values.inference import get_annotated_inference_config
-from holosoma_inference.config.utils import TYRO_CONFIG
-from holosoma_inference.policies.dual_mode import DualModePolicy, _select_policy_class
 
 from holosoma_service.policy_control.injected_inputs import (
     CMD_VEL_TOPIC,

@@ -53,5 +53,6 @@ lint.ignore=[
 "src/holosoma_inference/holosoma_inference/inputs/impl/ros2.py" = ["PLC0415"]  # Deferred ROS2 message imports (rclpy/geometry_msgs optional)
 "src/holosoma_inference/holosoma_inference/run_policy.py" = ["PLC0415"]  # Deferred imports in main entry point
 "src/holosoma_inference/holosoma_inference_service/holosoma_service/holosoma_service/policy_node.py" = ["PLC0415"]  # Deferred wbt_wrappers import (extension optional at import time)
+"src/holosoma_inference/holosoma_inference_service/holosoma_service/holosoma_service/policy_control/service_node.py" = ["PLC0415"]  # Deferred remove_ros_args import in main entry point
 "src/holosoma_inference/holosoma_inference/config/tests/**" = ["PLC0415"]  # Test-scoped imports for isolation
 "src/holosoma_inference/holosoma_inference/inputs/tests/**" = ["PLC0415"]  # Test-scoped imports for isolation

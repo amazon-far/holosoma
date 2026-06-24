@@ -24,7 +24,7 @@ Note: for  `/holosoma/holosoma_executed_cmd`, the policy backend fills all 29 va
 ## Internal structure
 ```bash
 CmdSMPLH ─▶ retargeter ─┐
-                        ├─CmdDense─▶ holosoma_node (WBT) ─▶ G1   (holosoma policy)
+                        ├─CmdDense─▶ policy_service_node (WBT) ─▶ G1   (holosoma policy)
 external publisher ─────┘
 
 CmdExoskeleton ──────────────────▶ unitree_split_controller ─▶ G1   (arm_sdk + loco)
