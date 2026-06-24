@@ -98,3 +98,7 @@ class TerrainTermBase(ABC):
     @property
     def restitution(self) -> float:
         return self._cfg.restitution
+
+    @property
+    def hide_visual(self) -> bool:
+        return self._cfg.hide_visual

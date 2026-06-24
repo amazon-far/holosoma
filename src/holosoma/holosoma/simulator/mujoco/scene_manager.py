@@ -216,6 +216,12 @@ class MujocoSceneManager:
             # Only collide with robot (class 1)
             terrain_state.geom.conaffinity = 1  # type: ignore[attr-defined]
 
+            # Hide the terrain visual while keeping its collider: zero-alpha rgba stops the geom from
+            # drawing but leaves contype/conaffinity untouched. The geom's rgba overrides any
+            # material/default color.
+            if terrain_state.hide_visual:
+                terrain_state.geom.rgba = [0.0, 0.0, 0.0, 0.0]  # type: ignore[attr-defined]
+
     def _create_ground_plane(self, terrain_state: TerrainTermBase) -> mujoco.MjSpec.Geom:
         """Create a ground plane terrain geometry.
 

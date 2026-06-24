@@ -198,11 +198,20 @@ class IsaacGym(BaseSimulator):
         return ["urdf"]
 
     def setup_terrain(self):
-        mesh_type = self.terrain_manager.get_state("locomotion_terrain").mesh_type
+        terrain_state = self.terrain_manager.get_state("locomotion_terrain")
+        mesh_type = terrain_state.mesh_type
+        # IsaacGym's ground has no separable visual, so hide_visual is satisfied only where it is
+        # already met (headless draws nothing) and warned otherwise. set_headless runs before this,
+        # so self.headless is reliable.
+        if terrain_state.hide_visual and not self.headless:
+            logger.warning(
+                "terrain hide_visual=True is not supported on IsaacGym in headful mode (its ground "
+                "geometry has no separable visual); run headless or use MuJoCo/IsaacSim."
+            )
         if mesh_type == "plane":
             self._create_ground_plane()
         elif mesh_type in ["trimesh", "load_obj"]:
-            terrain = self.terrain_manager.get_state("locomotion_terrain").terrain
+            terrain = terrain_state.terrain
             self._create_trimesh(terrain)
         else:
             raise ValueError(f"Unsupported terrain mesh type: {mesh_type}")
