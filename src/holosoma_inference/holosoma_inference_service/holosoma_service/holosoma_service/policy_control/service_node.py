@@ -39,15 +39,15 @@ from dataclasses import replace
 import numpy as np
 import rclpy
 import tyro
-from holosoma_inference.config.config_values.inference import get_annotated_inference_config
-from holosoma_inference.config.utils import TYRO_CONFIG
-from holosoma_inference.policies.dual_mode import DualModePolicy, _select_policy_class
 from holosoma_msgs.msg import CmdDense, Heartbeat
 from loguru import logger
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState
 
+from holosoma_inference.config.config_values.inference import get_annotated_inference_config
+from holosoma_inference.config.utils import TYRO_CONFIG
+from holosoma_inference.policies.dual_mode import DualModePolicy, _select_policy_class
 from holosoma_service.policy_control.injected_inputs import (
     CMD_VEL_TOPIC,
     STATE_INPUT_TOPIC,

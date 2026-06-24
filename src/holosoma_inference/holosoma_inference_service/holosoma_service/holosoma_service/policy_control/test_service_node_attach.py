@@ -20,7 +20,6 @@ pytest.importorskip("rclpy")
 pytest.importorskip("holosoma_msgs")
 
 from holosoma_inference.policies.dual_mode import DualModePolicy
-
 from holosoma_service.policy_control import service_node
 
 
