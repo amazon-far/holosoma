@@ -53,6 +53,17 @@ class Ros2DepthConsumerConfig:
     far_clip: float = 2.0
     """Far clip (m); depth is normalized to [-0.5, 0.5] over [near, far]."""
 
+    frame_delay_ms: float = 0.0
+    """Modeled depth latency to re-introduce, in absolute milliseconds.
+
+    The ROS2 depth transport is effectively instantaneous (sub-1ms), but the
+    policy was trained with the on-robot image_server's inherent capture/serve
+    latency baked in. ``get_latest()`` holds back frames so it returns the
+    freshest frame at least this old, reproducing that delay independent of
+    publish rate (a fixed ms value is robust across fps, unlike a frame count).
+    ``0.0`` (default) keeps freshest-frame behavior. Pin this per-policy from a
+    preset to match the delay the model was trained with (e.g. ``200.0``)."""
+
 
 @dataclass(frozen=True)
 class TaskConfig:

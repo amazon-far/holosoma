@@ -96,6 +96,7 @@ class ServiceIONode(Node):
                 resized_width=depth_cfg.resized_width,
                 near_clip=depth_cfg.near_clip,
                 far_clip=depth_cfg.far_clip,
+                frame_delay_ms=depth_cfg.frame_delay_ms,
             )
 
         # --- Input: dense tracking target (WBT only); attached on demand ---
