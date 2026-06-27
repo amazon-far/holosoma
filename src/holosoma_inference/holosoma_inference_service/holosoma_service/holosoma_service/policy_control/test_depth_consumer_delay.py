@@ -96,14 +96,12 @@ def test_empty_buffer_returns_none(monkeypatch):
 def test_timeout_zeros_on_dead_stream(monkeypatch):
     clock = [0.0]
     monkeypatch.setattr(sensors.time, "monotonic", lambda: clock[0])
-    c = Ros2DepthConsumer(
-        _FakeNode(), topics=["/depth"], resized_height=4, resized_width=4, timeout=0.5
-    )
+    c = Ros2DepthConsumer(_FakeNode(), topics=["/depth"], resized_height=4, resized_width=4, timeout=0.5)
     _push(c, 1)
     clock[0] = 1.0  # newest set is now 1s old, past the 0.5s timeout
     assert c.get_latest() is None
 
 
 def test_negative_delay_rejected():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="frame_delay_ms must be >= 0"):
         Ros2DepthConsumer(_FakeNode(), topics=["/depth"], frame_delay_ms=-1.0)
