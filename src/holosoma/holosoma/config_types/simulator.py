@@ -4,8 +4,10 @@ from dataclasses import field
 from enum import Enum
 from typing import Any
 
+from pydantic import model_validator
 from pydantic.dataclasses import dataclass
 
+from holosoma.config_types.frequency import DecimationLike, resolve_decimation
 from holosoma.config_types.viewer import ViewerConfig
 
 
@@ -115,13 +117,22 @@ class SimEngineConfig:
     """Top-level simulation engine settings."""
 
     fps: int
-    """Target simulation frames per second."""
+    """Physics rate in Hz: the sim integrates one physics step every ``1/fps`` seconds (the engine
+    timestep ``dt``). The base frequency every other rate here is derived from."""
 
-    control_decimation: int
-    """Number of physics steps between agent control updates."""
+    control_decimation: DecimationLike
+    """Physics steps per control step: sets the CONTROL (policy) rate to ``fps / control_decimation``
+    Hz. Each control step the policy emits one action that is HELD while the sim runs this many
+    physics steps, then the next observation/action is taken. Higher = cheaper, lower-frequency
+    control. Int (every Nth physics step), or a frequency string expressed against ``fps``: a bare
+    "50Hz" requires an exact decimation (e.g. fps=200 -> 4) and errors if not exactly achievable,
+    while ">50Hz"/"<50Hz" round to the nearest rate at or above/below the target. Holds the value AS
+    WRITTEN; read the resolved integer step count via :attr:`control_decimation_steps`."""
 
     substeps: int
-    """Number of substeps per physics frame."""
+    """Solver substeps WITHIN each physics step — subdivides the ``1/fps`` step for finer/stabler
+    integration (contacts, stiff dynamics). Does NOT change ``fps`` or any rate; purely solver
+    accuracy vs. cost per step."""
 
     physx: PhysxConfig
     """PhysX solver configuration."""
@@ -129,11 +140,36 @@ class SimEngineConfig:
     render_mode: str = "human"
     """Rendering mode requested from the simulator."""
 
-    render_interval: int = 1
-    """Number of physics frames between rendered frames."""
+    render_interval: DecimationLike = 1
+    """Physics steps per rendered frame: render rate = ``fps / render_interval`` Hz.
+    Decouples rendering from physics so the sim can step faster than it draws; 1 = render every
+    step. Int, or a frequency string vs ``fps``. Holds the value AS WRITTEN; read the resolved
+    integer step count via :attr:`render_interval_steps`."""
 
     max_episode_length_s: float = 20.0
     """Maximum episode length in seconds."""
+
+    @model_validator(mode="after")
+    def _validate_rates(self) -> SimEngineConfig:
+        """Validate (do NOT mutate) the rate fields: both must resolve to a valid step count against
+        ``fps``. The fields keep what the user wrote; the resolved ints are exposed as the
+        ``*_steps`` properties below, computed against ``fps`` on access (always consistent if ``fps``
+        changes, and the input config is never rewritten)."""
+        resolve_decimation(self.control_decimation, self.fps, field="control_decimation", log=True)
+        resolve_decimation(self.render_interval, self.fps, field="render_interval", log=True)
+        return self
+
+    @property
+    def control_decimation_steps(self) -> int:
+        """Resolved physics-steps-per-control-step (int >= 1) — ``control_decimation`` evaluated
+        against ``fps`` (a frequency string becomes ``fps/target``; an int passes through)."""
+        return resolve_decimation(self.control_decimation, self.fps, field="control_decimation")
+
+    @property
+    def render_interval_steps(self) -> int:
+        """Resolved physics-steps-per-rendered-frame (int >= 1) — ``render_interval`` evaluated
+        against ``fps`` (frequency string -> ``fps/target``; int passes through)."""
+        return resolve_decimation(self.render_interval, self.fps, field="render_interval")
 
 
 @dataclass(frozen=True)

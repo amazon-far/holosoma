@@ -194,7 +194,7 @@ class VideoRecorderInterface(ABC):
         self._frame_counter += 1
 
         # Only capture frame at control frequency (every control_decimation physics steps)
-        control_decimation = self.simulator.simulator_config.sim.control_decimation
+        control_decimation = self.simulator.simulator_config.sim.control_decimation_steps
         if self._frame_counter % control_decimation != 0:
             return
 
@@ -431,7 +431,7 @@ class VideoRecorderInterface(ABC):
             # Frames are captured at control_frequency = sim_fps / control_decimation
             # To achieve desired playback rate: actual_fps = control_frequency * playback_rate
             sim_config = self.simulator.simulator_config.sim
-            control_frequency = sim_config.fps / sim_config.control_decimation
+            control_frequency = sim_config.fps / sim_config.control_decimation_steps
             display_fps = control_frequency * self.config.playback_rate
 
             # Get save directory

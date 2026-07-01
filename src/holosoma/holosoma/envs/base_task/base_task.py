@@ -118,7 +118,7 @@ class BaseTask:
         self.simulator.setup()
         self.sim_dt = self.simulator.sim_dt
 
-        self.dt = simulator_config.config.sim.control_decimation * self.sim_dt
+        self.dt = simulator_config.config.sim.control_decimation_steps * self.sim_dt
         self.max_episode_length_s = simulator_config.config.sim.max_episode_length_s
         self.max_episode_length = np.ceil(self.max_episode_length_s / self.dt)
 
@@ -451,7 +451,7 @@ class BaseTask:
 
     def _physics_step(self):
         self.render()
-        for _ in range(self.simulator.simulator_config.sim.control_decimation):
+        for _ in range(self.simulator.simulator_config.sim.control_decimation_steps):
             self._apply_force_in_physics_step()
             self.simulator.simulate_at_each_physics_step()
 

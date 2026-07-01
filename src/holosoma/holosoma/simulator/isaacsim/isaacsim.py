@@ -101,7 +101,7 @@ class IsaacSim(BaseSimulator):
 
         sim_config: SimulationCfg = SimulationCfg(
             dt=1.0 / self.simulator_config.sim.fps,
-            render_interval=self.simulator_config.sim.render_interval,
+            render_interval=self.simulator_config.sim.render_interval_steps,
             device=self.sim_device,
             physx=PhysxCfg(
                 bounce_threshold_velocity=self.simulator_config.sim.physx.bounce_threshold_velocity,
@@ -137,10 +137,10 @@ class IsaacSim(BaseSimulator):
             f"\tRendering step-size   : {1.0 / self.simulator_config.sim.fps * self.simulator_config.sim.substeps}"
         )
 
-        if self.simulator_config.sim.render_interval < self.simulator_config.sim.control_decimation:
+        if self.simulator_config.sim.render_interval_steps < self.simulator_config.sim.control_decimation_steps:
             msg = (
-                f"The render interval ({self.simulator_config.sim.render_interval}) is smaller than the decimation "
-                f"({self.simulator_config.sim.control_decimation}). Multiple render calls will happen for each "
+                f"The render interval ({self.simulator_config.sim.render_interval_steps}) is smaller than the decimation "
+                f"({self.simulator_config.sim.control_decimation_steps}). Multiple render calls will happen for each "
                 "environment step. If this is not intended, set the render interval to be equal to the decimation."
             )
             logger.warning(msg)
@@ -890,7 +890,7 @@ class IsaacSim(BaseSimulator):
 
         # Issue: data.net_forces_w_history is not cleared after a reset.
         # Solution: We only read the most recent decimation_factor steps.
-        control_decimation = self.simulator_config.sim.control_decimation
+        control_decimation = self.simulator_config.sim.control_decimation_steps
         effective_history_length = min(control_decimation, self.simulator_config.contact_sensor_history_length)
         self.contact_forces_history[:, :effective_history_length, :, :] = self.contact_sensor.data.net_forces_w_history[
             :, :effective_history_length, self._contact_to_robot_body_ids
@@ -935,7 +935,7 @@ class IsaacSim(BaseSimulator):
         # Render between steps only IF the GUI or sensor need it
         # note: we assume the render interval to be the shortest accepted rendering interval.
         #    If a camera needs rendering at a faster frequency, this will lead to unexpected behavior.
-        if self._sim_step_counter % self.simulator_config.sim.render_interval == 0 and is_rendering:
+        if self._sim_step_counter % self.simulator_config.sim.render_interval_steps == 0 and is_rendering:
             self.render()
 
         # update buffers at sim
