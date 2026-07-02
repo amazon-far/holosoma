@@ -119,18 +119,14 @@ RUN uv pip install \
 
 
 # ─── Stage: app-deps ──────────────────────────────────────────────────────────
-# Install amazon-far unitree_sdk2 wheel + copy holosoma_inference source.
+# Install far-unitree-sdk (PyPI) + copy holosoma_inference source.
 # This is the only layer that changes on every commit.
 FROM common-deps AS app-deps
 
-# unitree_sdk2 Python 3.12 aarch64 wheel from amazon-far's GitHub release.
-# Bump UNITREE_SDK2_VERSION in one place when a new release is published.
-ARG UNITREE_SDK2_VERSION=0.1.3
-ARG UNITREE_SDK2_WHL=unitree_sdk2-${UNITREE_SDK2_VERSION}-cp312-cp312-linux_aarch64.whl
-RUN wget -q -O "/tmp/${UNITREE_SDK2_WHL}" \
-    "https://github.com/amazon-far/unitree_sdk2/releases/download/${UNITREE_SDK2_VERSION}/${UNITREE_SDK2_WHL}" \
-    && uv pip install "/tmp/${UNITREE_SDK2_WHL}" \
-    && rm "/tmp/${UNITREE_SDK2_WHL}"
+# far-unitree-sdk from PyPI. pip resolves the correct wheel for the
+# interpreter/platform. Bump UNITREE_SDK2_VERSION in one place on a new release.
+ARG UNITREE_SDK2_VERSION=0.1.4
+RUN uv pip install "far-unitree-sdk==${UNITREE_SDK2_VERSION}"
 
 # holosoma_inference source (editable install, --no-deps since common-deps
 # handled the runtime deps above).
@@ -239,12 +235,8 @@ RUN uv pip install \
 # ─── Stage: app-deps-ros ──────────────────────────────────────────────────────
 FROM common-deps-ros AS app-deps-ros
 
-ARG UNITREE_SDK2_VERSION=0.1.3
-ARG UNITREE_SDK2_WHL=unitree_sdk2-${UNITREE_SDK2_VERSION}-cp312-cp312-linux_aarch64.whl
-RUN wget -q -O "/tmp/${UNITREE_SDK2_WHL}" \
-    "https://github.com/amazon-far/unitree_sdk2/releases/download/${UNITREE_SDK2_VERSION}/${UNITREE_SDK2_WHL}" \
-    && uv pip install "/tmp/${UNITREE_SDK2_WHL}" \
-    && rm "/tmp/${UNITREE_SDK2_WHL}"
+ARG UNITREE_SDK2_VERSION=0.1.4
+RUN uv pip install "far-unitree-sdk==${UNITREE_SDK2_VERSION}"
 
 COPY src/holosoma_inference /opt/holosoma-src/src/holosoma_inference
 # demo_scripts/ros2_velocity_publisher.py is used by the run_shuttle_publisher.sh

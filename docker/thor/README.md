@@ -134,17 +134,18 @@ installed on top of ROS's system packages to avoid ABI surprises.
 - **CUDA**: `nvcr.io/nvidia/cuda:13.0.2-devel-ubuntu24.04` (matches JetPack 7.1
   + CUDA 13 on Thor).
 - **ROS 2**: Jazzy (Noble native; compatible with common ROS nav stacks).
-- **`unitree_sdk2`**: `0.1.3` (set via `--build-arg UNITREE_SDK2_VERSION=...`).
-  Bump when a new amazon-far release is published with a cp312 aarch64 wheel.
+- **`far-unitree-sdk`**: `0.1.4` (set via `--build-arg UNITREE_SDK2_VERSION=...`).
+  Installed from PyPI; bump when a new release is published.
 - **Python deps**: unpinned by design — let `uv` resolve. Source of truth
   for the dep list is `src/holosoma_inference/setup.py`.
 
 ## Troubleshooting
 
-**Build fails at `wget ... unitree_sdk2-0.1.3-cp312-cp312-linux_aarch64.whl`**
+**Build fails at `uv pip install far-unitree-sdk==...` (no matching distribution)**
 
-The wheel asset may not yet be uploaded to the release. Check
-https://github.com/amazon-far/unitree_sdk2/releases and ping the maintainer.
+The version may not yet be published to PyPI, or no wheel exists for this
+image's Python/platform. Check https://pypi.org/project/far-unitree-sdk/#files
+and ping the maintainer.
 
 **`libcudss.so.0: cannot open shared object file`**
 

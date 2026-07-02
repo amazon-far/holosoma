@@ -43,8 +43,9 @@ if python -c "import holosoma_inference" 2>/dev/null; then
         echo "pinocchio version: $(python -c 'import pinocchio; print(pinocchio.__version__)')"
     fi
 
-    if python -c "import unitree_sdk2" 2>/dev/null; then
-        echo "unitree_sdk2: available"
+    # far-unitree-sdk (PyPI dist) imports as `unitree_interface`.
+    if python -c "import unitree_interface" 2>/dev/null; then
+        echo "far-unitree-sdk (unitree_interface): available"
     fi
 
     if [[ -n "${_ROS_DISTRO:-}" ]]; then
