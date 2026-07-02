@@ -909,8 +909,11 @@ def randomize_friction_startup(
     ``None`` for a continuous marginal where the material count is safely under the cap. ``uniform`` is
     exact when continuous; ``gaussian``/``log_uniform`` match up to the bucket quantization.
 
-    GRANULARITY still differs per backend here (IsaacGym one value per env, IsaacSim per shape, MuJoCo
-    per geom); ``num_buckets`` unifies the value set, not the granularity.
+    GRANULARITY is unified too: this term draws ONE friction per env (per robot) on every backend —
+    IsaacGym sets it on each shape, IsaacSim via the material writer's ``per_env=True``, MuJoCo via
+    ``randomize_field``'s ``shared_across_entities=True``. So a single robot contacting the floor has a
+    single contact-friction coefficient (the legged_gym / IsaacGym convention), not a different value
+    per link/geom.
     """
     env._randomize_friction = bool(enabled)
     env._friction_range = friction_range
@@ -961,13 +964,14 @@ def randomize_friction_startup(
             restitution=None,  # leave restitution at each shape's spawned value (friction-only term);
             # matches the IsaacGym/MuJoCo branches, which never touch restitution here.
             num_buckets=num_buckets,  # same quantization policy as the IsaacGym branch
+            per_env=True,  # one friction per robot (all shapes share), matching IsaacGym/MuJoCo
             sampler=sampler,
         )
 
     elif simulator.get_simulator_type() == SimulatorType.MUJOCO:
-        # MuJoCo writes geom_friction directly (no material cap), so continuous per-geom is the true
-        # marginal (num_buckets=None). When num_buckets is set, quantize onto the same staircase the
-        # PhysX backends use so a bucketed friction config reads consistently across all three.
+        # MuJoCo writes geom_friction directly (no material cap). num_buckets matches the PhysX
+        # backends' quantization; shared_across_entities gives the whole robot ONE friction (per-env
+        # granularity) instead of an independent per-geom draw, matching IsaacGym/IsaacSim.
         from holosoma.simulator.mujoco.backends.randomization import randomize_field
 
         randomize_field(
@@ -978,6 +982,7 @@ def randomize_friction_startup(
             env_ids=idx,
             operation="abs",
             num_buckets=num_buckets,
+            shared_across_entities=True,  # one friction per robot (all geoms share), matching IsaacGym
         )
 
     else:  # pragma: no cover - defensive

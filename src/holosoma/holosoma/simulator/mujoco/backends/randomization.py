@@ -196,6 +196,7 @@ def randomize_field(
     entity_names: list[str] | None = None,
     entity_type: str | None = None,
     operation: Literal["add", "scale", "abs"] = "abs",
+    shared_across_entities: bool = False,
     axis_base: int = 0,
     num_buckets: int | None = None,
 ) -> None:
@@ -236,6 +237,11 @@ def randomize_field(
         Required if entity_names is provided, otherwise inferred from field
     operation : Literal["add", "scale", "abs"]
         Operation to apply: add to current, scale current, or set absolute value
+    shared_across_entities : bool
+        If True, every entity gets the SAME per-env sample (the first entity's), instead of an
+        independent draw each. Use to randomize a group of entities as one logical unit — e.g.
+        a freejoint's 3 linear ``dof_damping`` DOFs sharing one value (PhysX exposes a single
+        linear damping scalar, so this keeps the concept aligned across backends).
     num_buckets : Optional[int]
         Quantization knob mirroring the PhysX backends' material bucketing, for a config that wants
         the SAME staircase discretization on MuJoCo. ``None`` (default): draw continuously — MuJoCo
@@ -369,6 +375,10 @@ def randomize_field(
     # -----------------------------------------------------------
     # 4. Generate Random Values
     # -----------------------------------------------------------
+    n_e = len(env_ids)
+    n_n = len(entity_ids)
+    n_a = len(target_axes) if target_axes is not None else 1
+
     # Sample each axis through the bound TermSampler so a MuJoCo config means exactly what it does on
     # every other backend AND is reproducible per (term, env, episode). Entity ids are the stable MuJoCo
     # indices (body/geom/dof), passed as a ``[1, n_n]`` coord so a per-entity draw lands on the trailing
@@ -399,6 +409,11 @@ def randomize_field(
             )  # (n_e, n_n)
             per_axis.append(column[bucket_ids])
     random_values = torch.stack(per_axis, dim=-1)  # (n_e, n_n, n_a)
+
+    # Share one per-env sample across the whole entity group (the first entity's draw), so a
+    # multi-DOF/entity unit is randomized as one value rather than independently per entity.
+    if shared_across_entities and n_n > 1:
+        random_values = random_values[:, :1, :].expand(n_e, n_n, n_a).clone()
 
     if target_axes is None:
         random_values = random_values.squeeze(-1)

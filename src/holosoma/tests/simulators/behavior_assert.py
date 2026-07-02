@@ -1244,22 +1244,6 @@ def main() -> int:
         print(f"SKIP: scenario '{args.scenario}' needs --num-envs>={min_envs} (got {args.num_envs})")
         return SKIP_EXIT_CODE
 
-    # The dr-*-governs scenarios drive the object physics-DR terms (mass/material/damping). Those
-    # terms live in the cross-backend object-DR feature, which is a follow-up branch to scene
-    # objects; on the scene-objects branch they are absent, so these scenarios skip cleanly here
-    # and run once the object-DR branch lands. (No-op when object-DR is present.)
-    if args.scenario in ("dr-friction-governs", "dr-damping-governs"):
-        from importlib.util import find_spec
-
-        mod = find_spec("holosoma.managers.randomization.terms.objects")
-        has_object_dr = mod is not None and hasattr(
-            __import__("holosoma.managers.randomization.terms.objects", fromlist=["_"]),
-            "randomize_object_rigid_body_material_startup",
-        )
-        if not has_object_dr:
-            print(f"SKIP: scenario '{args.scenario}' needs the cross-backend object-DR feature (follow-up branch)")
-            return SKIP_EXIT_CODE
-
     # Twin scenarios spawn the one-link `onelink-box` robot (not g1) carrying a per-scenario
     # link_physics that mirrors the twin object's PhysicsConfig. A non-twin scenario keeps --robot.
     twin_link_physics = _twin_robot_link_physics()

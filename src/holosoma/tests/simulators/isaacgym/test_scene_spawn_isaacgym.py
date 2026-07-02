@@ -89,3 +89,24 @@ def test_scene_spawn_multi_env(scene):
         label=f"isaacgym/{scene} (num_envs=4)",
         timeout=600,
     )
+
+
+# Live object physics-DR on IsaacGym: `--object-dr` runs the mass + material DR terms after
+# prepare_sim and asserts, against the real gym actor API, that mass increased by the configured
+# additive band on every (object, env) and that an object_names subset narrows targeting.
+# `free-and-static` gives two free bodies (per-env addressing + subset isolation) plus a fixed
+# pillar (must be excluded).
+@pytest.mark.parametrize("num_envs", ["1", "4"])
+def test_object_dr_dispatch(num_envs):
+    run_harness(
+        _HARNESS,
+        "--simulator",
+        "isaacgym",
+        "--scene",
+        "free-and-static",
+        "--num-envs",
+        num_envs,
+        "--object-dr",
+        label=f"isaacgym object-DR (num_envs={num_envs})",
+        timeout=600,
+    )

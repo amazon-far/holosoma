@@ -2,6 +2,11 @@
 
 from holosoma.config_types.randomization import (
     BaseComRange,
+    InertiaScale,
+    IsaacGymMaterialDR,
+    IsaacSimMaterialDR,
+    MaterialRandomizationConfig,
+    MujocoMaterialDR,
     RandomizationManagerCfg,
     RandomizationTermCfg,
 )
@@ -27,6 +32,37 @@ robot_state_dr_at_setup = {
         params={
             "dof_pos_bias_range": [-0.01, 0.01],
             "enabled": True,
+        },
+    ),
+}
+
+object_state_dr_at_setup = {
+    "randomize_object_rigid_body_material_startup": RandomizationTermCfg(
+        func="holosoma.managers.randomization.terms.objects:randomize_object_rigid_body_material_startup",
+        params={
+            # Per-backend channels via the typed config — each backend names ONLY what it honors
+            # (no silent cross-backend drop). MuJoCo has no restitution channel (it's solref).
+            "material": MaterialRandomizationConfig(
+                isaacgym=IsaacGymMaterialDR(friction=[0.1, 0.6], restitution=[0.0, 1.0]),
+                isaacsim=IsaacSimMaterialDR(
+                    static_friction=[0.1, 0.6], dynamic_friction=[0.1, 0.6], restitution=[0.0, 1.0]
+                ),
+                mujoco=MujocoMaterialDR(sliding_friction=[0.1, 0.6]),
+            ),
+        },
+    ),
+    "randomize_object_rigid_body_mass_startup": RandomizationTermCfg(
+        func="holosoma.managers.randomization.terms.objects:randomize_object_rigid_body_mass_startup",
+        params={
+            "mass_distribution_params": [1.0, 4.0],
+        },
+    ),
+    "randomize_object_rigid_body_inertia_startup": RandomizationTermCfg(
+        func="holosoma.managers.randomization.terms.objects:randomize_object_rigid_body_inertia_startup",
+        params={
+            # Only Ixx is randomized, reproducing beyondmimic. Unnamed components default to
+            # identity [1.0, 1.0]; name more to randomize them.
+            "inertia_distribution_params_dict": InertiaScale(Ixx=[0.5, 1.5]),
         },
     ),
 }
@@ -99,11 +135,10 @@ g1_29dof_wbt_randomization = RandomizationManagerCfg(
     step_terms={**base_step_terms},
 )
 
-# Same as the base preset on this branch — the object-DR follow-up branch adds the
-# object_state_dr_at_setup terms (material/mass/inertia) into this preset's setup_terms.
 g1_29dof_wbt_randomization_w_object = RandomizationManagerCfg(
     setup_terms={
         **base_setup_terms,
+        **object_state_dr_at_setup,
     },
     reset_terms={
         **base_reset_terms,

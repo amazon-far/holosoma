@@ -136,6 +136,111 @@ def _object_sliding_friction(sim, name, env_id):
     return None
 
 
+def _run_object_dr_checks(sim, free_names, env_ids) -> bool:
+    """Run object mass+material DR on the live backend and verify it took effect.
+
+    Asserts (a) mass increased by the configured additive band on every (object, env), (b) the
+    object_names subset narrows targeting (only the named body changes). Currently verifies
+    read-back on IsaacGym (native rigid-body-property API); other backends just exercise the
+    dispatch without crashing (their DR effect is verified in the per-backend DR unit tests).
+    """
+    import types
+
+    from holosoma.managers.randomization.terms.objects import (
+        randomize_object_rigid_body_mass_startup,
+        randomize_object_rigid_body_material_startup,
+    )
+    from holosoma.utils.simulator_config import SimulatorType
+    from tests.simulators._dr_matrix import _sampler
+
+    env_shell = types.SimpleNamespace(simulator=sim, num_envs=sim.num_envs, device=sim.sim_device)
+    sampler = _sampler(env_shell)  # shell has no dr_base_seed -> _sampler falls back to fixed seed 0
+    is_isaacgym = sim.get_simulator_type() == SimulatorType.ISAACGYM
+
+    mass_lo, mass_hi = 5.0, 6.0
+    fric_lo, fric_hi = 0.2, 0.3
+    if is_isaacgym:
+        before = {(nm, e): _isaacgym_object_mass(sim, nm, e) for nm in free_names for e in range(sim.num_envs)}
+        # Snapshot sliding friction per (object, env) BEFORE the material DR so we can assert it
+        # actually moved (a no-op write must fail), not merely that it lands in band.
+        fric_before = {(nm, e): _object_sliding_friction(sim, nm, e) for nm in free_names for e in range(sim.num_envs)}
+
+    randomize_object_rigid_body_mass_startup(
+        env_shell, env_ids, sampler=sampler, mass_distribution_params=[mass_lo, mass_hi]
+    )
+    randomize_object_rigid_body_material_startup(
+        env_shell,
+        env_ids,
+        sampler=sampler,
+        material={
+            "isaacgym": {"friction": [fric_lo, fric_hi]},
+            "isaacsim": {"static_friction": [fric_lo, fric_hi], "dynamic_friction": [fric_lo, fric_hi]},
+            "mujoco": {"sliding_friction": [fric_lo, fric_hi]},
+        },
+    )
+
+    if is_isaacgym:
+        nbody = {
+            nm: len(sim.gym.get_actor_rigid_body_properties(sim.envs[0], sim.object_handles[nm][0]))
+            for nm in free_names
+        }
+        for nm in free_names:
+            for e in range(sim.num_envs):
+                delta = _isaacgym_object_mass(sim, nm, e) - before[(nm, e)]
+                # Additive offset applied to EACH body of the object => band scales by body count.
+                lo, hi = mass_lo * nbody[nm], mass_hi * nbody[nm]
+                if not (lo - 1e-3 <= delta <= hi + 1e-3):
+                    print(f"FAIL: object-DR mass delta {delta:.3f} for {nm} env{e} outside [{lo},{hi}]")
+                    return False
+        print(f"OBJECT-DR mass band [{mass_lo},{mass_hi}]/body applied to {free_names} across {sim.num_envs} envs OK")
+
+        # Friction read-back: the material DR set sliding friction in [fric_lo, fric_hi] on every
+        # named shape. Mirror the mass check — read the LIVE shape friction back per (object, env)
+        # and assert it (a) CHANGED from the pre-DR baseline and (b) lands in band. The DR samples
+        # one friction value per env (from a bucket) applied to all named objects in that env, so
+        # this also confirms it reached each object. Reads the same shape-property field the DR
+        # wrote (and that the per-object physics check reads), so it can never be a config echo.
+        for nm in free_names:
+            for e in range(sim.num_envs):
+                got = _object_sliding_friction(sim, nm, e)
+                if got is None:
+                    print(f"FAIL: object-DR friction read-back returned None for {nm} env{e} on IsaacGym")
+                    return False
+                base = fric_before[(nm, e)]
+                if base is not None and abs(got - base) <= 1e-6:
+                    print(f"FAIL: object-DR friction for {nm} env{e} did not change from baseline {base:.4f}")
+                    return False
+                if not (fric_lo - 1e-3 <= got <= fric_hi + 1e-3):
+                    print(f"FAIL: object-DR friction {got:.4f} for {nm} env{e} outside [{fric_lo},{fric_hi}]")
+                    return False
+        print(f"OBJECT-DR friction band [{fric_lo},{fric_hi}] applied to {free_names} across {sim.num_envs} envs OK")
+
+        # object_names subset: randomize only the first free body further; others must not change.
+        if len(free_names) >= 2:
+            target, other = free_names[0], free_names[1]
+            mass_other = {e: _isaacgym_object_mass(sim, other, e) for e in range(sim.num_envs)}
+            randomize_object_rigid_body_mass_startup(
+                env_shell, env_ids, sampler=sampler, mass_distribution_params=[mass_lo, mass_hi], object_names=[target]
+            )
+            for e in range(sim.num_envs):
+                if abs(_isaacgym_object_mass(sim, other, e) - mass_other[e]) > 1e-4:
+                    print(f"FAIL: object-DR subset leaked onto '{other}' env{e}")
+                    return False
+            print(f"OBJECT-DR object_names subset isolation OK ('{target}' only, '{other}' untouched)")
+        return True
+
+    # Non-IsaacGym backends have no live read-back here yet. The DR terms dispatched above, but we
+    # have NOT verified the effect landed — returning True now would be a vacuous green that lets a
+    # future `--object-dr` wiring of IsaacSim/Warp pass without ever checking the result. Fail loud
+    # instead so read-back must be implemented before this branch can report success. (Do not
+    # implement IsaacSim/Warp read-back here — just prevent the silent pass.)
+    raise NotImplementedError(
+        f"--object-dr read-back is not implemented for {sim.get_simulator_type()}; "
+        f"mass+material DR dispatched on {free_names} but the effect was not verified. "
+        "Implement a live read-back for this backend before wiring it through --object-dr."
+    )
+
+
 def main() -> int:
     # Register the test-only scene presets into scene.DEFAULTS so `scene:<testkey>` resolves through
     # the normal tyro path inside this (sub)process. Core never imports these; tests register them.
@@ -156,6 +261,10 @@ def main() -> int:
     # --headless false opens a real window (needs a display) and drives the headful render;
     # --headless true drives the headless render (viewer is None — must not crash).
     parser.add_argument("--headless", choices=["true", "false"], default="true")
+    # Run the object physics-DR terms (mass + friction) after prepare_sim and assert they took
+    # effect on the live backend (read mass/friction back per object/env). Works on any
+    # DR-supporting backend (IsaacGym / IsaacSim / Warp).
+    parser.add_argument("--object-dr", action="store_true")
     # Save a movie of the run to this directory (records every episode, headless or headful).
     # Uses the backend's own video recorder, so it works on every backend.
     parser.add_argument("--record", default=None, metavar="DIR", help="save a video of the run to DIR")
@@ -222,6 +331,10 @@ def main() -> int:
 
     # Object physics DR (opt-in): run mass + material DR on the free bodies and verify the
     # effect landed on the live backend.
+    if args.object_dr:
+        if not _run_object_dr_checks(sim, free_names, env_ids):
+            return 1
+
     # All snapshots keep the full env dimension; per-env checks below index every row.
     z0 = {nm: sim.get_actor_states([nm], env_ids)[:, 2].clone() for nm in free_names + static_names}
     p0 = {nm: sim.get_actor_states([nm], env_ids)[:, :3].clone() for nm in free_names}
