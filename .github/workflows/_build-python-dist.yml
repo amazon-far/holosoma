@@ -1,0 +1,48 @@
+name: Build Python distribution (reusable)
+
+# Reusable build for the pure-Python packages in this monorepo. Builds an sdist
+# + a py3-none-any wheel for the package at `package-dir` and uploads them as
+# the `dist` artifact for a downstream publish job.
+#
+# This is called by the per-package publish-*.yml workflows. The actual PyPI
+# upload (OIDC Trusted Publishing) lives in those callers, not here, so each
+# PyPI project's Trusted Publisher can match its own caller workflow filename.
+#
+# NOTE: we build with `uv build` (uv is preinstalled on these runners, as the
+# docker workflows already rely on) rather than actions/setup-python + `python -m
+# build`. setup-python bootstraps a toolcache Python that isn't present on these
+# self-hosted AWS CodeBuild runners (same reason the SDK release.yml avoids it),
+# and uv provisions its own interpreter. Any host interpreter builds these
+# pure-Python purelib wheels fine. The downstream publish job uploads with
+# `uv publish` (OIDC trusted publishing) — no twine anywhere in the pipeline.
+
+on:
+  workflow_call:
+    inputs:
+      package-dir:
+        description: Path to the package directory (holds pyproject.toml/setup.py).
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build sdist + wheel
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Build sdist + wheel
+        working-directory: ${{ inputs.package-dir }}
+        run: |
+          set -euo pipefail
+          echo "Building ${{ inputs.package-dir }} with uv $(uv --version)"
+          uv build --out-dir dist
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dist
+          path: ${{ inputs.package-dir }}/dist/*
+          if-no-files-found: error
