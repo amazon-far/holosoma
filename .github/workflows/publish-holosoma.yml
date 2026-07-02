@@ -1,0 +1,47 @@
+name: Publish holosoma to PyPI
+
+# Publishes the top-level `holosoma` package (src/holosoma) to PyPI using
+# Trusted Publishing (OIDC) — no API tokens stored in the repo.
+#
+# Triggers:
+#   * push a tag like holosoma-v0.0.1 -> builds + publishes to PyPI
+#   * manual "Run workflow"           -> builds only (no publish)
+#
+# The per-package tag prefix disambiguates releases in this monorepo, where
+# three packages (holosoma, holosoma-inference, holosoma-retargeting) share one
+# tag namespace. Note the retargeting/inference prefixes are longer, so a
+# `holosoma-v*` tag never collides with `holosoma-inference-v*`.
+on:
+  push:
+    tags:
+      - "holosoma-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/_build-python-dist.yml
+    with:
+      package-dir: src/holosoma
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    # Only publish on a version tag, never on manual dispatch (build-only smoke).
+    if: startsWith(github.ref, 'refs/tags/holosoma-v')
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    environment: pypi
+    permissions:
+      id-token: write # required for Trusted Publishing (OIDC)
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: dist
+          path: dist
+      - name: Publish to PyPI
+        # uv performs the OIDC token exchange itself (id-token: write above);
+        # --trusted-publishing always fails loudly if OIDC isn't available
+        # rather than silently falling back to an (absent) token.
+        run: uv publish --trusted-publishing always dist/*
