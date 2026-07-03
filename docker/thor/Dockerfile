@@ -125,7 +125,7 @@ FROM common-deps AS app-deps
 
 # far-unitree-sdk from PyPI. pip resolves the correct wheel for the
 # interpreter/platform. Bump UNITREE_SDK2_VERSION in one place on a new release.
-ARG UNITREE_SDK2_VERSION=0.1.4
+ARG UNITREE_SDK2_VERSION=0.1.5
 RUN uv pip install "far-unitree-sdk==${UNITREE_SDK2_VERSION}"
 
 # holosoma_inference source (editable install, --no-deps since common-deps
@@ -235,7 +235,7 @@ RUN uv pip install \
 # ─── Stage: app-deps-ros ──────────────────────────────────────────────────────
 FROM common-deps-ros AS app-deps-ros
 
-ARG UNITREE_SDK2_VERSION=0.1.4
+ARG UNITREE_SDK2_VERSION=0.1.5
 RUN uv pip install "far-unitree-sdk==${UNITREE_SDK2_VERSION}"
 
 COPY src/holosoma_inference /opt/holosoma-src/src/holosoma_inference

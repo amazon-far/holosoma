@@ -134,7 +134,7 @@ installed on top of ROS's system packages to avoid ABI surprises.
 - **CUDA**: `nvcr.io/nvidia/cuda:13.0.2-devel-ubuntu24.04` (matches JetPack 7.1
   + CUDA 13 on Thor).
 - **ROS 2**: Jazzy (Noble native; compatible with common ROS nav stacks).
-- **`far-unitree-sdk`**: `0.1.4` (set via `--build-arg UNITREE_SDK2_VERSION=...`).
+- **`far-unitree-sdk`**: `0.1.5` (set via `--build-arg UNITREE_SDK2_VERSION=...`).
   Installed from PyPI; bump when a new release is published.
 - **Python deps**: unpinned by design — let `uv` resolve. Source of truth
   for the dep list is `src/holosoma_inference/setup.py`.
