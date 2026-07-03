@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["uv_build>=0.9.9,<0.10"]
+build-backend = "uv_build"
 
 [project]
 name = "holosoma-retargeting"
@@ -8,8 +8,16 @@ version = "0.1.0"
 description = "Retargeting utilities for converting human motions to robot motions."
 readme = "README.md"
 requires-python = ">=3.10"
-authors = [
-    { name = "Amazon FAR Team" },
+authors = [{ name = "Amazon FAR Team" }]
+license = { text = "Apache-2.0" }
+keywords = ["humanoid", "robotics", "retargeting", "motion", "smpl", "mocap"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
 ]
 dependencies = [
     # Needs to ping numpy to 2.3.5;
@@ -36,6 +44,28 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["mypy", "ruff", "pytest"]
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["holosoma_retargeting*"]
+# uv_build packaging. FLAT layout (the holosoma_retargeting/ module lives at the
+# project root, not under src/), so module-root = "". README.md now sits at the
+# project root (moved up from holosoma_retargeting/README.md) so the readme
+# reference resolves and the long description is packaged.
+[tool.uv.build-backend]
+module-name = "holosoma_retargeting"
+module-root = ""
+# Ship the bundled robot descriptions, meshes, motion data, and templates that
+# live inside the module (the old setuptools build shipped none of these — it
+# had no MANIFEST.in or package_data). Covers robot descriptions + meshes
+# (urdf/xml/STL/obj/dae/mtl), motion/weight data (npy/pt/pkl), the urdf jinja
+# template, and the in-module how-to docs.
+source-include = [
+    "holosoma_retargeting/**/*.STL",
+    "holosoma_retargeting/**/*.obj",
+    "holosoma_retargeting/**/*.dae",
+    "holosoma_retargeting/**/*.mtl",
+    "holosoma_retargeting/**/*.xml",
+    "holosoma_retargeting/**/*.urdf",
+    "holosoma_retargeting/**/*.jinja",
+    "holosoma_retargeting/**/*.npy",
+    "holosoma_retargeting/**/*.pt",
+    "holosoma_retargeting/**/*.pkl",
+    "holosoma_retargeting/**/*.md",
+]
