@@ -23,6 +23,10 @@ GITHUB_SERVER_URL = getenv("GITHUB_SERVER_URL")
 GITHUB_REPOSITORY = getenv("GITHUB_REPOSITORY")
 GITHUB_RUN_ID = getenv("GITHUB_RUN_ID")
 
+# Number of GPUs used for a multi-GPU nightly run (matches torchrun --nproc_per_node
+# below and the x4 GPU runner in .github/workflows/nightly-training.yaml).
+MULTIGPU_NUM_GPUS = 4
+
 
 def now_timestamp() -> str:
     return datetime.datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -73,7 +77,7 @@ def main():
         result = subprocess.run(
             [
                 "torchrun",
-                "--nproc_per_node=4",
+                f"--nproc_per_node={MULTIGPU_NUM_GPUS}",
                 __file__,
                 *sys.argv[1:],  # Pass all original arguments
             ],
@@ -106,8 +110,10 @@ def main():
 
     if config.training.multigpu:
         run_tags.append("multigpu")
+        run_tags.append(f"gpus-{MULTIGPU_NUM_GPUS}")
     else:
         run_tags.append("singlegpu")
+        run_tags.append("gpus-1")
 
     nightly_name = f"nightly-{sanitized_exp}{multigpu_suffix}-{now_timestamp()}"
 
