@@ -1,5 +1,0 @@
-recursive-include holosoma *.STL
-recursive-include holosoma *.urdf
-recursive-include holosoma *.yaml
-recursive-include holosoma *.npz
-recursive-include holosoma *.obj

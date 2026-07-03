@@ -1,11 +1,24 @@
 [build-system]
-requires = ["setuptools>=45", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["uv_build>=0.9.9,<0.10"]
+build-backend = "uv_build"
 
 [project]
 name = "holosoma"
 version = "0.0.1"
+description = "Holosoma: core training framework for humanoid robot reinforcement learning (locomotion + whole-body tracking)."
+readme = "README.md"
 requires-python = ">=3.8"
+authors = [{ name = "Amazon FAR Team" }]
+license = { text = "Apache-2.0" }
+keywords = ["humanoid", "robotics", "reinforcement-learning", "locomotion", "whole-body-tracking", "sim2real"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+]
 dependencies = [
     "astor",
     "easydict",
@@ -55,17 +68,43 @@ dependencies = [
     "zmq",
 ]
 
-
-# Mark optional-dependencies as dynamic since it needs runtime computation
-dynamic = ["optional-dependencies"]
+[project.optional-dependencies]
+# Robot SDKs are published to PyPI (FAR forks). The import names are unchanged
+# (`unitree_interface`, `booster_robotics_sdk`) — only the distribution names
+# differ from the historical GitHub-release wheels. Previously computed
+# dynamically in setup.py; now static since the versions are fixed pins.
+unitree = ["far-unitree-sdk==0.1.6"]
+booster = ["far-booster-sdk==0.1.1"]
+# ROS2 example plugins (clock_publish, gantry_control). rclpy and the ROS message
+# packages ship with a ROS2 distro / RoboStack, not PyPI, so this extra is a
+# marker/opt-in rather than a pip-installable set — install rclpy from your ROS
+# environment. The plugins import rclpy lazily, so core stays ROS-free without it.
+ros2 = []
 
 [project.entry-points."holosoma.bridge"]
 unitree = "holosoma.bridge.unitree.unitree_sdk2py_bridge:UnitreeSdk2Bridge"
 unitree_mp = "holosoma.bridge.unitree.unitree_sdk2py_bridge_mp:UnitreeMpSdk2Bridge"
 booster = "holosoma.bridge.booster.booster_sdk2py_bridge:BoosterSdk2Bridge"
 
-[tool.setuptools.packages.find]
-where = ["."]
+# uv_build packaging. FLAT layout (the holosoma/ module lives at the project
+# root, not under src/), so module-root = "". Only the holosoma module ships —
+# the tests/ tree is intentionally excluded from the distribution (the old
+# setuptools find_packages(where=".") shipped it as a top-level `tests` package,
+# which name-squats the global import; excluding it is the correct behavior).
+[tool.uv.build-backend]
+module-name = "holosoma"
+module-root = ""
+# Ship non-.py package data bundled inside holosoma/ (asset meshes, robot
+# descriptions, configs, motion clips) plus the py.typed marker. Mirrors the
+# old MANIFEST.in recursive-includes + package_data py.typed.
+source-include = [
+    "holosoma/py.typed",
+    "holosoma/**/*.STL",
+    "holosoma/**/*.urdf",
+    "holosoma/**/*.yaml",
+    "holosoma/**/*.npz",
+    "holosoma/**/*.obj",
+]
 
 [tool.pytest.ini_options]
 markers = [

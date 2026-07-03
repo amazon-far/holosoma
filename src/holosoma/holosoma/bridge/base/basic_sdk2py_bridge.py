@@ -347,6 +347,7 @@ class BasicSdk2Bridge(ABC):
         yaw_speed = float(ang_vel_body[2].item())
         return position, quat_wxyz, lin, yaw_speed
 
+    @abstractmethod
     def publish_odom(self):
         """Publish base odometry over the SDK. Default no-op.
 
