@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag_latest:
-        description: 'Tag as latest'
+        description: 'Promote to :latest after tests pass'
         required: true
         type: choice
         options:
@@ -27,7 +27,37 @@ env:
   ECR_REPO: 982423663241.dkr.ecr.us-west-2.amazonaws.com
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Decide whether this run should end in a :latest promotion. We promote on a
+  # push to main (the merge that should refresh the runner AMI) or on a manual
+  # dispatch with tag_latest=true. When promoting, the build's sha- images are
+  # gated behind the test jobs below before :latest moves. When NOT promoting
+  # (e.g. a dispatch with tag_latest=false), we still build + push the immutable
+  # sha-/date tags but skip the gate and leave :latest untouched.
+  # ---------------------------------------------------------------------------
+  decide:
+    name: Decide promotion
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    outputs:
+      promote: ${{ steps.decide.outputs.promote }}
+      short_sha: ${{ steps.decide.outputs.short_sha }}
+    steps:
+      - name: Decide
+        id: decide
+        run: |
+          if [[ "${{ github.event_name }}" == "push" || "${{ inputs.tag_latest }}" == "true" ]]; then
+            promote=true
+          else
+            promote=false
+          fi
+          echo "promote=$promote" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$(echo "${{ github.sha }}" | cut -c1-7)" >> "$GITHUB_OUTPUT"
+          echo "## Docker Build" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Promote to :latest after tests:** \`$promote\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Immutable tag:** \`sha-$(echo "${{ github.sha }}" | cut -c1-7)\`" >> "$GITHUB_STEP_SUMMARY"
+
   build:
+    needs: decide
     strategy:
       fail-fast: false # continue on one build failing
       matrix:
@@ -84,13 +114,14 @@ jobs:
 
       - name: Generate image tags
         id: tags
+        # Only ever push immutable tags here (date + sha-<short>). :latest is
+        # NOT pushed at build time — it is promoted by the promote-latest job
+        # below, and only after the test gate passes. This prevents a broken
+        # image from ever landing on :latest (which every runner + the AMI
+        # builder consume).
         run: |
-          short_sha="$(echo "${{ github.sha }}" | cut -c1-7)"
           tags="${{ steps.name.outputs.image_path }}:$(date -u +%Y_%m%d_%H%M)"
-          tags="$tags,${{ steps.name.outputs.image_path }}:sha-${short_sha}"
-          if [[ "${{ inputs.tag_latest || 'false' }}" == "true" ]]; then
-            tags="$tags,${{ steps.name.outputs.image_path }}:latest"
-          fi
+          tags="$tags,${{ steps.name.outputs.image_path }}:sha-${{ needs.decide.outputs.short_sha }}"
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
 
       - name: Build and push Docker image
@@ -106,5 +137,160 @@ jobs:
 
       - name: Summary
         run: |
-          echo "## Docker Build Summary" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Tags:** \`${{ steps.tags.outputs.tags }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Built \`${{ matrix.environment }}\`: \`${{ steps.tags.outputs.tags }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # Test gate — runs the SAME checks as CI, but against the freshly-built
+  # sha-<short> images, not :latest. Only runs when we intend to promote. If any
+  # of these fail, promote-latest is skipped and :latest stays on the
+  # last-known-good image.
+  #
+  # These mirror static-checks.yaml (mypy) and pytest.yaml (isaacgym/isaacsim/
+  # e2e/inference suites). The container image is pinned to the sha- tag so we
+  # exercise exactly the image we are about to promote.
+  # ---------------------------------------------------------------------------
+  gate-mypy:
+    name: "Gate: mypy (sha image)"
+    needs: [decide, build]
+    if: needs.decide.outputs.promote == 'true'
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    container:
+      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:sha-${{ needs.decide.outputs.short_sha }}
+      volumes:
+        - "precommit-cache:/github/home/.cache/pre-commit"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 5
+      - name: mypy
+        shell: bash
+        run: |
+          ln -s /root/.holosoma_deps "$HOME/.holosoma_deps"
+          if [[ ! -L /workspace/holosoma ]]; then
+            rm -rf /workspace/holosoma
+            ln -sfF "$GITHUB_WORKSPACE" /workspace/holosoma
+          fi
+          source scripts/source_isaacgym_setup.sh
+          pip install mypy
+          mypy .
+
+  gate-sim-tests:
+    name: "Gate: ${{ matrix.simulator }} tests (sha image)"
+    needs: [decide, build]
+    if: needs.decide.outputs.promote == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        simulator: [isaacgym, isaacsim]
+    runs-on: codebuild-holosoma-a10g-x1-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    container:
+      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma-${{ matrix.simulator }}:sha-${{ needs.decide.outputs.short_sha }}
+      options: "--gpus all --runtime=nvidia --shm-size=12g"
+      env:
+        HOLOSOMA_MULTIGPU: "False"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+      - name: Pytest
+        shell: bash
+        run: |
+          ln -s /root/.holosoma_deps "$HOME/.holosoma_deps"
+          if [[ ! -L /workspace/holosoma ]]; then
+            rm -rf /workspace/holosoma
+            ln -sfF "$GITHUB_WORKSPACE" /workspace/holosoma
+          fi
+          bash tests/ci/${{ matrix.simulator }}_ci_tests.sh
+
+  gate-e2e-tests:
+    name: "Gate: isaacgym e2e (sha image)"
+    needs: [decide, build]
+    if: needs.decide.outputs.promote == 'true'
+    runs-on: codebuild-holosoma-a10g-x1-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    container:
+      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:sha-${{ needs.decide.outputs.short_sha }}
+      options: "--gpus all --runtime=nvidia --shm-size=12g"
+      env:
+        HOLOSOMA_MULTIGPU: "False"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+      - name: Pytest
+        shell: bash
+        run: |
+          ln -s /root/.holosoma_deps "$HOME/.holosoma_deps"
+          if [[ ! -L /workspace/holosoma ]]; then
+            rm -rf /workspace/holosoma
+            ln -sfF "$GITHUB_WORKSPACE" /workspace/holosoma
+          fi
+          bash tests/ci/isaacgym_e2e_ci_tests.sh
+
+  gate-inference-tests:
+    name: "Gate: inference unit tests (sha image)"
+    needs: [decide, build]
+    if: needs.decide.outputs.promote == 'true'
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    container:
+      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:sha-${{ needs.decide.outputs.short_sha }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+      - name: Run Tests
+        shell: bash
+        run: |
+          ln -s /root/.holosoma_deps "$HOME/.holosoma_deps"
+          if [[ ! -L /workspace/holosoma ]]; then
+            rm -rf /workspace/holosoma
+            ln -sfF "$GITHUB_WORKSPACE" /workspace/holosoma
+          fi
+          source scripts/source_isaacsim_setup.sh
+          pip install -e src/holosoma_inference
+          pytest -s src/holosoma_inference/
+
+  # ---------------------------------------------------------------------------
+  # Promote — retag every built sha-<short> image to :latest in ECR. Runs only
+  # after the ENTIRE gate passes (needs all gate jobs; the `if` requires each to
+  # have result==success, so a skipped/failed gate blocks promotion). Uses
+  # `buildx imagetools create` to copy the existing manifest to the :latest tag
+  # (no rebuild, preserves multi-arch), so the promoted image is byte-identical
+  # to the one the gate validated. This is the :latest push the ami-builder
+  # EventBridge rule watches for — so a merge to main now refreshes the runner
+  # AMI, but only with an image that passed mypy + the pytest suites.
+  # ---------------------------------------------------------------------------
+  promote-latest:
+    name: Promote sha images to :latest
+    needs: [decide, build, gate-mypy, gate-sim-tests, gate-e2e-tests, gate-inference-tests]
+    if: >-
+      needs.decide.outputs.promote == 'true' &&
+      needs.gate-mypy.result == 'success' &&
+      needs.gate-sim-tests.result == 'success' &&
+      needs.gate-e2e-tests.result == 'success' &&
+      needs.gate-inference-tests.result == 'success'
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+      - name: Retag sha- -> :latest for every built image
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA_TAG="sha-${{ needs.decide.outputs.short_sha }}"
+          # image names built by the matrix above (holosoma core + variants)
+          IMAGES=(
+            holosoma
+            holosoma-inference
+            holosoma-retargeting
+            holosoma-isaacgym
+            holosoma-isaacsim
+            holosoma-mujoco
+            holosoma-thor-inference
+            holosoma-thor-inference-ros
+          )
+          for img in "${IMAGES[@]}"; do
+            src="${{ env.ECR_REPO }}/${img}:${SHA_TAG}"
+            dst="${{ env.ECR_REPO }}/${img}:latest"
+            echo "Promoting ${src} -> :latest"
+            docker buildx imagetools create --tag "${dst}" "${src}"
+          done
+          echo "## Promoted to :latest" >> "$GITHUB_STEP_SUMMARY"
+          echo "All gate checks passed; retagged \`${SHA_TAG}\` -> \`:latest\` for: ${IMAGES[*]}" >> "$GITHUB_STEP_SUMMARY"
