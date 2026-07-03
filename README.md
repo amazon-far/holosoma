@@ -50,7 +50,10 @@ bash scripts/setup_mujoco_via_uv.sh
 # For inference/deployment
 bash scripts/setup_inference.sh
 
-# For motion retargeting
+# For motion retargeting — uv (alternative to conda)
+bash scripts/setup_retargeting_via_uv.sh
+
+# For motion retargeting — conda
 bash scripts/setup_retargeting.sh
 ```
 

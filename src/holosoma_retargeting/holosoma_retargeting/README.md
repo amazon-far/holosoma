@@ -4,6 +4,29 @@ This repository provides tools for retargeting human motion data to humanoid rob
 
 **Data Requirements**: The retargeting pipeline requires motion data in world joint positions. For custom data, you need to prepare world joint positions in shape `(T, J, 3)` where T is the number of frames and J is the number of joints, and modify `demo_joints` and `joints_mapping` defined in `config_types/data_type.py`.
 
+## Installation
+
+From the repository root, the uv setup creates a local virtual environment at `.venv/hsretargeting` and installs `src/holosoma_retargeting` in editable mode with its runtime dependencies, including the retargeting package's `numpy==2.3.5` compatibility pin.
+
+```bash
+# uv-based setup
+bash scripts/setup_retargeting_via_uv.sh
+source scripts/source_retargeting_uv_setup.sh
+
+# optional: choose a Python version or force a clean reinstall
+bash scripts/setup_retargeting_via_uv.sh --python 3.10
+bash scripts/setup_retargeting_via_uv.sh --reinstall --dev
+```
+
+If you need the older conda-based setup, it is still available:
+
+```bash
+bash scripts/setup_retargeting.sh
+source scripts/source_retargeting_setup.sh
+```
+
+After activation, run the commands below from `src/holosoma_retargeting/holosoma_retargeting`.
+
 ## Single Sequence Motion Retargeting
 
 ```bash
