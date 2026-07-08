@@ -34,6 +34,7 @@ class EnvConfig:
     robot: RobotConfig
     training: TrainingConfig
     logger: LoggerConfig
+    experiment_dir: str | None = None
 
 
 def get_tyro_env_config(tyro_config: ExperimentConfig) -> EnvConfig:
