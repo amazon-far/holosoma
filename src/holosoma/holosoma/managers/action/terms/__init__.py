@@ -4,6 +4,6 @@ This module contains concrete implementations of action terms,
 such as joint position control, velocity control, etc.
 """
 
-from .joint_control import JointPositionActionTerm
+from .joint_control import FixedJointPositionActionTerm, JointPositionActionTerm
 
-__all__ = ["JointPositionActionTerm"]
+__all__ = ["FixedJointPositionActionTerm", "JointPositionActionTerm"]

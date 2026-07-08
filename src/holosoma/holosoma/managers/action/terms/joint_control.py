@@ -335,3 +335,53 @@ class JointPositionActionTerm(ActionTermBase):
                     self.action_scales[i] = control_cfg.action_scale * effort / stiffness
         else:
             self.action_scales[:] = control_cfg.action_scale
+
+
+class FixedJointPositionActionTerm(JointPositionActionTerm):
+    """Joint position action term with selected DOFs held at fixed targets.
+
+    This keeps the policy/action dimension unchanged while ignoring policy
+    actions for configured joints. It is useful for locomotion variants where
+    arms should hold a known pose while the policy learns balance and gait.
+    """
+
+    def __init__(self, cfg: ActionTermCfg, env: Any):
+        super().__init__(cfg, env)
+
+        fixed_joint_angles = cfg.params.get("fixed_joint_angles", {})
+        if not fixed_joint_angles:
+            raise ValueError("FixedJointPositionActionTerm requires params.fixed_joint_angles.")
+
+        name_to_idx = {name: i for i, name in enumerate(env.dof_names)}
+        missing = [name for name in fixed_joint_angles if name not in name_to_idx]
+        if missing:
+            raise ValueError(f"Fixed joint target(s) not found in robot DOFs: {missing}")
+
+        self._fixed_joint_indices = torch.tensor(
+            [name_to_idx[name] for name in fixed_joint_angles],
+            dtype=torch.long,
+            device=env.device,
+        )
+        self._fixed_joint_targets = torch.tensor(
+            [fixed_joint_angles[name] for name in fixed_joint_angles],
+            dtype=torch.float32,
+            device=env.device,
+        )
+
+    def process_actions(self, actions: torch.Tensor) -> None:
+        super().process_actions(actions)
+        self._apply_fixed_joint_targets()
+
+    def _apply_action_delay(self) -> None:
+        super()._apply_action_delay()
+        self._apply_fixed_joint_targets()
+
+    def _apply_fixed_joint_targets(self) -> None:
+        """Convert absolute fixed joint targets into action offsets."""
+        fixed_default = self.env.default_dof_pos[:, self._fixed_joint_indices]
+        fixed_action_scales = self.action_scales[self._fixed_joint_indices].unsqueeze(0)
+        fixed_offsets = self._fixed_joint_targets.unsqueeze(0) - fixed_default
+        fixed_actions = fixed_offsets / torch.clamp(fixed_action_scales, min=1.0e-6)
+
+        self._processed_actions[:, self._fixed_joint_indices] = fixed_actions
+        self._actions_after_delay[:, self._fixed_joint_indices] = fixed_actions

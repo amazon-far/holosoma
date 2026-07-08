@@ -551,6 +551,34 @@ g1_29dof = RobotConfig(
     ),
 )
 
+G1_ARM_HOLD_JOINT_ANGLES = {
+    "left_shoulder_pitch_joint": -0.75,
+    "left_shoulder_roll_joint": 0.35,
+    "left_shoulder_yaw_joint": 0.08,
+    "left_elbow_joint": 0.60,
+    "left_wrist_roll_joint": 0.00,
+    "left_wrist_pitch_joint": 0.20,
+    "left_wrist_yaw_joint": 0.0,
+    "right_shoulder_pitch_joint": -0.75,
+    "right_shoulder_roll_joint": -0.40,
+    "right_shoulder_yaw_joint": 0.35,
+    "right_elbow_joint": 0.65,
+    "right_wrist_roll_joint": 0.00,
+    "right_wrist_pitch_joint": -0.10,
+    "right_wrist_yaw_joint": 0.0,
+}
+
+g1_29dof_arm_hold = replace(
+    g1_29dof,
+    init_state=replace(
+        g1_29dof.init_state,
+        default_joint_angles={
+            **g1_29dof.init_state.default_joint_angles,
+            **G1_ARM_HOLD_JOINT_ANGLES,
+        },
+    ),
+)
+
 t1_29dof_waist_wrist = RobotConfig(
     num_bodies=32,
     dof_obs_size=29,
@@ -1106,6 +1134,7 @@ g1_29dof_w_object = replace(
 
 DEFAULTS = {
     "g1_29dof": g1_29dof,
+    "g1_29dof_arm_hold": g1_29dof_arm_hold,
     "t1_29dof_waist_wrist": t1_29dof_waist_wrist,
     "g1_29dof_w_object": g1_29dof_w_object,
 }

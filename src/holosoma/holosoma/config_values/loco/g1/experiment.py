@@ -55,4 +55,12 @@ g1_29dof_fast_sac = ExperimentConfig(
     ),
 )
 
-__all__ = ["g1_29dof", "g1_29dof_fast_sac"]
+g1_29dof_arm_hold = replace(
+    g1_29dof,
+    training=TrainingConfig(project="hv-g1-manager", name="g1_29dof_arm_hold_ppo"),
+    algo=replace(algo.ppo, config=replace(algo.ppo.config, num_learning_iterations=25000, use_symmetry=False)),
+    robot=robot.g1_29dof_arm_hold,
+    action=action.g1_29dof_arm_hold_joint_pos,
+)
+
+__all__ = ["g1_29dof", "g1_29dof_arm_hold", "g1_29dof_fast_sac"]

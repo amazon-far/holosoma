@@ -2,7 +2,7 @@ import tyro
 from typing_extensions import Annotated
 
 from holosoma.config_types.experiment import ExperimentConfig
-from holosoma.config_values.loco.g1.experiment import g1_29dof, g1_29dof_fast_sac
+from holosoma.config_values.loco.g1.experiment import g1_29dof, g1_29dof_arm_hold, g1_29dof_fast_sac
 from holosoma.config_values.loco.t1.experiment import t1_29dof, t1_29dof_fast_sac
 from holosoma.config_values.wbt.g1.experiment import (
     g1_29dof_wbt,
@@ -13,6 +13,7 @@ from holosoma.config_values.wbt.g1.experiment import (
 
 DEFAULTS = {
     "g1_29dof": g1_29dof,
+    "g1_29dof_arm_hold": g1_29dof_arm_hold,
     "g1_29dof_fast_sac": g1_29dof_fast_sac,
     "t1_29dof": t1_29dof,
     "t1_29dof_fast_sac": t1_29dof_fast_sac,
