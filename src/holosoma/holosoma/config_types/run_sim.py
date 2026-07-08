@@ -85,6 +85,8 @@ class RunSimConfig:
     Only used by run_sim.py for real-time display synchronization.
     """
 
-    device: str | None = "cpu"
-    """Device to use for simulation. None auto-detects based on the simulator type.
+    device: str | None = None
+    """Device to use for simulation. None (the default) auto-detects based on the simulator
+    backend: cuda:0 for MuJoCo Warp, cuda:0 for IsaacSim/IsaacGym when CUDA is available (else
+    cpu), and cpu for classic MuJoCo. Pass an explicit value (e.g. "cpu" or "cuda:1") to override.
     """
