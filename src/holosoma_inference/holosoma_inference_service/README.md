@@ -10,8 +10,8 @@ Inputs:
 |---|---|---|---|
 | `/holosoma/smplh_command` | `CmdSMPLH.msg` | SMPL-H 24-joint pose targets, retargeted to dense before the policy | 50Hz |
 | `/holosoma/dense_tracking_command` | `CmdDense.msg` | Dense per-joint 29-DoF target (q/dq + root quat) consumed directly by the policy | 50Hz |
-| `/cmd_vel` | `geometry_msgs/Twist` | Velocity command for the locomotion policy | any (timeout-guarded) |
-| `/holosoma/state_input` | `std_msgs/String` | Discrete state commands: `start` / `stop` / `walk` / `start_motion_clip` / `kill` (in-band emergency kill) | on demand |
+| `/cmd_vel` | `geometry_msgs/TwistStamped` | Velocity command for the locomotion policy | any (timeout-guarded) |
+| `/holosoma/state_input` | `std_msgs/String` | Discrete state commands: `start` / `stop` / `init` / `walk` / `stand` / `switch_mode` / `kill` (in-band emergency kill) | on demand |
 | `/holosoma/exoskeleton_command` | `CmdExoskeleton.msg` | Left/right arm joint targets (7+7) plus base twist for the split-body controller | 50Hz |
 | `/holosoma/3pt_command` | `Cmd3pt.msg` | Head + wrist poses with grippers (not supported yet) | 50Hz |
 | depth topics (configurable) | `sensor_msgs/Image` | Raw metric depth (`32FC1`, meters) for depth-conditioned policies; topics + preprocessing (resize, clip, `frame_delay_ms`) come from the preset's `task.depth` config | camera rate |
@@ -33,7 +33,7 @@ One node — `policy_service_node` (`ServiceIONode`) — owns **all** ROS2 I/O a
 CmdSMPLH ─▶ retargeter_node ─┐
                              ├─ CmdDense ──────────▶ ┐
 external publisher ──────────┘                       │
-/cmd_vel (Twist) ──────────────────────────────────▶ ├─ policy_service_node ─▶ G1
+/cmd_vel (TwistStamped) ────────────────────────────▶ ├─ policy_service_node ─▶ G1
 /holosoma/state_input (String: start/stop/kill) ───▶ │  (one node owns all I/O;
 depth topics (sensor_msgs/Image, optional) ────────▶ ┘   executed_cmd + heartbeat out)
 
