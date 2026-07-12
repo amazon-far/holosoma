@@ -278,6 +278,21 @@ class BasePolicy:
         self.cmd_q = np.zeros(self.num_dofs)
         self.cmd_dq = np.zeros(self.num_dofs)
         self.cmd_tau = np.zeros(self.num_dofs)
+        self._last_sent_q: np.ndarray | None = None
+        self._target_transition: dict[str, np.ndarray | int | str | None] | None = None
+
+        # Smooth policy-switch interpolation (loco ↔ wbt)
+        self._interp_state: str = "idle"  # "idle" | "delaying" | "interping"
+        self._interp_start_q: np.ndarray | None = None
+        self._interp_target_q: np.ndarray | None = None
+        self._interp_step: int = 0
+        self._interp_delay_steps: int = 0
+        self._interp_total_steps: int = 0
+        self._interp_on_delay_done: callable | None = None
+        self._interp_on_done: callable | None = None
+        self._interp_kp: np.ndarray | None = None
+        self._interp_kd: np.ndarray | None = None
+        self._interp_override_indices: list[int] | None = None
 
     def _init_phase_components(self):
         """Initialize phase components."""
@@ -656,36 +671,46 @@ class BasePolicy:
         kp_override = None
         kd_override = None
 
-        # Stage 1: Read State
+        # 读取机器人的当前状态数据
         with self.latency_tracker.measure("read_state"):
             robot_state_data = self.interface.get_low_state()
 
-        # Stage 2: Pre-processing
+        #进行预处理，计算目标关节位置等
         with self.latency_tracker.measure("preprocessing"):
-            # Determine target joint positions
+            # 决定当前阶段的目标关节位置：准备阶段使用插值，非准备阶段使用当前关节位置或手动命令
+            #初始化模式下，关节位置从当前状态逐渐过渡到默认站立位置，过渡时间由init_count控制（最多500步）。
+            # 非初始化模式下，如果没有使用策略控制，则尝试获取手动命令（如果提供了_get_manual_command方法），否则直接使用当前关节位置作为目标。
             if get_ready:
                 q_target = self.get_init_target(robot_state_data)
                 self.init_count = min(self.init_count, 500)
+            #手动控制模式下，如果提供了_get_manual_command方法，则调用它来获取目标关节位置和可选的KP/KD覆盖值；
+            
             elif not use_policy:
                 manual_cmd = self._get_manual_command(robot_state_data)
                 if manual_cmd is not None:
                     q_target = manual_cmd["q"]
                     kp_override = manual_cmd.get("kp")
                     kd_override = manual_cmd.get("kd")
+                # 如果没有提供，则直接使用当前关节位置作为目标。保持不动
                 else:
                     q_target = robot_state_data[:, 7 : 7 + self.num_dofs]
             else:
-                # Prepare for inference - any preprocessing before RL inference
+                # 准备阶段不使用策略，保持不动
                 pass
 
-        # Stage 3: Inference
+        # 推理阶段：如果使用策略控制且不在准备阶段，则调用rl_inference方法获取策略输出的目标关节位置，并进行缩放。
         if use_policy and not get_ready:
             with self.latency_tracker.measure("inference"):
+                #从机器人状态数据中准备好输入给RL模型的观察数据，并调用policy方法进行推理，得到原始的策略动作输出。
                 scaled_policy_action = self.rl_inference(robot_state_data)
 
-        # Stage 4: Post-processing
+        # 后处理阶段：如果使用策略控制且不在准备阶段，则将策略输出的目标关节位置与默认关节角度相加，
+        # 得到最终的目标关节位置。然后将目标关节位置加上预先定义的关节偏移，得到最终的命令关节位置。
         with self.latency_tracker.measure("postprocessing"):
             if use_policy and not get_ready:
+                # 如果策略输出的动作维度不等于关节数量，则根据是否使用上半身控制进行处理：
+                # 如果不使用上半身控制，则在动作前面添加适当数量的零；
+                # 如果使用上半身控制，则抛出未实现错误。
                 if scaled_policy_action.shape[1] != self.num_dofs:
                     if not self.upper_body_controller:
                         scaled_policy_action = np.concatenate(
@@ -693,13 +718,33 @@ class BasePolicy:
                         )
                     else:
                         raise NotImplementedError("Upper body controller not implemented")
+                # 将策略输出的目标关节位置与默认关节角度相加，得到最终的目标关节位置。
                 q_target = scaled_policy_action + self.default_dof_angles
 
-            # Prepare command (reuse pre-allocated arrays)
-            self.cmd_q[:] = q_target[0] + self.joint_offsets
+            q_target = self._apply_target_transition(q_target, robot_state_data)
 
-        # Stage 5: Action Pub
+            # Smooth policy-switch interpolation (loco ↔ wbt).
+            # Only overrides the DOF indices specified by override_indices;
+            # the active policy keeps controlling everything else (e.g. legs).
+            interp_result = self._step_policy_interp(robot_state_data)
+            if interp_result is not None:
+                q_interp, ikp, ikd, interp_idxs = interp_result
+                if interp_idxs is not None:
+                    q_target[0, interp_idxs] = q_interp[0, interp_idxs]
+                else:
+                    q_target = q_interp  # backward-compat: override all
+                if ikp is not None:
+                    kp_override = ikp
+                if ikd is not None:
+                    kd_override = ikd
+
+            # 将目标关节位置加上预先定义的关节偏移，得到最终的命令关节位置。
+            self.cmd_q[:] = q_target[0] + self.joint_offsets
+            self._last_sent_q = self.cmd_q.copy()
+
+       
         with self.latency_tracker.measure("action_pub"):
+            #  调用接口的send_low_command方法，将最终的命令关节位置、速度和力矩发送给机器人。同时，如果提供了KP/KD覆盖值，则将它们传递给接口以覆盖默认的控制增益。
             self.interface.send_low_command(
                 self.cmd_q,
                 self.cmd_dq,
@@ -709,9 +754,158 @@ class BasePolicy:
                 kd_override=kd_override,
             )
 
+    # ------------------------------------------------------------------
+    #  Smooth policy-switch interpolation (loco ↔ wbt)
+    # ------------------------------------------------------------------
+
+    def _start_policy_interp(
+        self,
+        target_q: np.ndarray,
+        duration_s: float,
+        delay_s: float = 0.0,
+        on_delay_done: callable = None,
+        on_done: callable = None,
+        kp_override: np.ndarray = None,
+        kd_override: np.ndarray = None,
+        override_indices: list[int] | None = None,
+    ):
+        """Begin smooth interpolation from current pose to *target_q*.
+
+        Parameters
+        ----------
+        target_q:
+            Desired joint positions at the end of interpolation (1, N) or (N,).
+        duration_s:
+            Interpolation duration in seconds.
+        delay_s:
+            Hold-current-pose delay before interpolation begins.
+        on_delay_done:
+            Called when the delay phase ends (before interpolation starts).
+        on_done:
+            Called when interpolation completes.
+        override_indices:
+            DOF indices to override.  When ``None``, all DOFs are overridden
+            (backward-compatible).  Pass e.g. ``[10, 11, …, 18]`` to only
+            lerp the upper body while the active policy continues controlling
+            the legs.
+        """
+        dl_steps = self._seconds_to_steps(delay_s)
+        interp_steps = self._seconds_to_steps(duration_s)
+
+        self._interp_state = "delaying" if dl_steps > 0 else "interping"
+        self._interp_target_q = np.asarray(target_q, dtype=np.float64).reshape(1, -1)
+        self._interp_start_q = None  # captured when interpolation actually begins
+        self._interp_step = 0
+        self._interp_delay_steps = dl_steps
+        self._interp_total_steps = max(interp_steps, 1)
+        self._interp_on_delay_done = on_delay_done
+        self._interp_on_done = on_done
+        self._interp_kp = kp_override
+        self._interp_kd = kd_override
+        self._interp_override_indices = override_indices
+
+    def _step_policy_interp(self, robot_state_data: np.ndarray):
+        """Advance interpolation state machine.
+
+        Called from ``policy_action()``.  Returns ``(q_target, kp, kd)``
+        when interpolation is active, or ``None`` when idle.
+        """
+        if self._interp_state == "idle":
+            return None
+
+        if self._interp_state == "delaying":
+            # Hold current pose while we wait
+            q = robot_state_data[:, 7 : 7 + self.num_dofs].copy()
+            self._interp_step += 1
+            if self._interp_step >= self._interp_delay_steps:
+                self._interp_state = "interping"
+                self._interp_step = 0
+                if self._interp_on_delay_done is not None:
+                    self._interp_on_delay_done()
+                    # Callback may have switched policy – respect a cancel
+                    if self._interp_state == "idle":
+                        return None
+            return (q, self._interp_kp, self._interp_kd, self._interp_override_indices)
+
+        if self._interp_state == "interping":
+            if self._interp_start_q is None:
+                self._interp_start_q = robot_state_data[:, 7 : 7 + self.num_dofs].copy()
+
+            alpha = min(self._interp_step / max(self._interp_total_steps, 1), 1.0)
+            # ease-in-out: alpha' = alpha² * (3 - 2*alpha)
+            alpha_smooth = alpha * alpha * (3.0 - 2.0 * alpha)
+            q = (1.0 - alpha_smooth) * self._interp_start_q + alpha_smooth * self._interp_target_q
+            self._interp_step += 1
+
+            if self._interp_step >= self._interp_total_steps:
+                self._interp_state = "idle"
+                self._interp_start_q = None
+                self._interp_target_q = None
+                if self._interp_on_done is not None:
+                    self._interp_on_done()
+
+            return (q, self._interp_kp, self._interp_kd, self._interp_override_indices)
+
+        return None
+
+    def _cancel_policy_interp(self):
+        """Abort any in-progress policy-level interpolation."""
+        self._interp_state = "idle"
+        self._interp_start_q = None
+        self._interp_target_q = None
+
     def _get_manual_command(self, robot_state_data):
         """Optional manual command when policy control is disabled."""
         return
+
+    def _seconds_to_steps(self, seconds: float) -> int:
+        """Convert a transition duration in seconds to policy control steps."""
+        return max(0, int(round(max(0.0, seconds) * self.rl_rate)))
+
+    def _begin_target_transition(
+        self,
+        name: str,
+        steps: int,
+        start_q: np.ndarray | None = None,
+    ) -> None:
+        """Start blending outgoing joint targets into the next target stream."""
+        if steps <= 0:
+            self._target_transition = None
+            return
+
+        start = None if start_q is None else np.asarray(start_q, dtype=np.float64).reshape(1, self.num_dofs).copy()
+        self._target_transition = {
+            "name": name,
+            "step": 0,
+            "steps": steps,
+            "start_q": start,
+        }
+
+    def _apply_target_transition(self, q_target: np.ndarray, robot_state_data: np.ndarray) -> np.ndarray:
+        """Blend the current target from the last command/current pose into ``q_target``."""
+        transition = self._target_transition
+        if transition is None:
+            return q_target
+
+        start_q = transition["start_q"]
+        if start_q is None:
+            if self._last_sent_q is not None:
+                start_q = self._last_sent_q.reshape(1, self.num_dofs).copy()
+            else:
+                start_q = robot_state_data[:, 7 : 7 + self.num_dofs].copy()
+            transition["start_q"] = start_q
+
+        step = int(transition["step"])
+        steps = int(transition["steps"])
+        alpha = min(1.0, (step + 1) / steps)
+        alpha = alpha * alpha * (3.0 - 2.0 * alpha)
+        blended = start_q + (q_target - start_q) * alpha
+
+        transition["step"] = step + 1
+        if step + 1 >= steps:
+            self._target_transition = None
+
+        return blended
 
     def _get_obs_phase_time(self):
         """Calculate phase time for gait."""
@@ -785,6 +979,10 @@ class BasePolicy:
         self.get_ready_state = False
         self.logger.info(colored("Using policy actions", "blue"))
         self.phase = np.array([[0.0, np.pi]])
+        self._begin_target_transition(
+            "policy_start",
+            self._seconds_to_steps(self.config.task.policy_start_transition_s),
+        )
         if hasattr(self.interface, "no_action"):
             self.interface.no_action = 0
 
@@ -793,6 +991,10 @@ class BasePolicy:
         self.use_policy_action = False
         self.get_ready_state = False
         self.logger.info("Actions set to zero")
+        self._begin_target_transition(
+            "policy_stop",
+            self._seconds_to_steps(self.config.task.policy_stop_transition_s),
+        )
         if hasattr(self.interface, "no_action"):
             self.interface.no_action = 1
 
@@ -822,20 +1024,25 @@ class BasePolicy:
     def run(self):
         """Main run loop for the policy."""
         try:
+            #一直循环执行以下步骤：
             for it in itertools.count():
                 self.latency_tracker.start_cycle()
-
+                #读取输入，比如手柄或者键盘输入
                 vc = self._velocity_input.poll_velocity()
                 if vc is not None:
+                    #更新当前的速度命令状态，这可能会影响后续的观察处理或者直接影响控制命令
                     self._apply_velocity(vc)
+                #读取控制命令输入，这些命令可能包括切换策略、调整控制增益或者其他预定义的命令
                 commands = self._command_provider.poll_commands()
                 for cmd in commands:
+                    #执行命令分发，调用相应的处理函数来响应每个命令
                     self._dispatch_command(cmd)
                 if commands:
                     self._print_control_status()
                 if self.use_phase:
+                    #更新步态周期时间，这通常涉及根据当前时间和预定义的步态周期计算相位变量，以便在观察处理或者策略推理中使用
                     self.update_phase_time()
-
+                #如果启用了策略控制，并且当前不处于准备状态，则执行策略推理，计算新的动作命令
                 self.policy_action()
 
                 self.latency_tracker.end_cycle()

@@ -90,7 +90,7 @@ def main(cfg: Config) -> None:
     data = load_npz_motion(cfg.npz_path)
 
     joint_pos = data["joint_pos"]  # (T, 7 + ndof)
-    joint_names = list(data["joint_names"])  # names for ndof robot joints
+    joint_names = [str(name) for name in data["joint_names"]]  # names for robot joints
     body_pos_w = data["body_pos_w"]  # (T, nbody, 3)
     body_lin_vel_w = data["body_lin_vel_w"]  # (T, nbody, 3)
     fps_npz = data["fps"]
@@ -104,6 +104,16 @@ def main(cfg: Config) -> None:
     root_quat_seq = joint_pos[:, 3:7]  # (T, 4)
     joint_angles_seq = joint_pos[:, 7:]  # (T, ndof)
     ndof = joint_angles_seq.shape[1]
+    if len(joint_names) < ndof:
+        raise ValueError(
+            f"npz joint_names has {len(joint_names)} entries, but joint_pos contains {ndof} robot joints."
+        )
+    if len(joint_names) != ndof:
+        print(
+            f"[WARN] npz joint_names has {len(joint_names)} entries, but joint_pos contains {ndof} robot joints. "
+            f"Using the first {ndof} names for joint mapping."
+        )
+        joint_names = joint_names[:ndof]
 
     print(f"[viser_body_vel_player] Loaded npz: {cfg.npz_path}")
     print(f"  frames: {T}, total joint_pos dim: {nq_total} (root 7 + ndof {ndof})")
@@ -301,6 +311,6 @@ if __name__ == "__main__":
 
 """
 python viser_body_vel_player.py \
---npz_path ../converted_res/robot_only/sub3_largebox_003_mj.npz \
---robot_urdf ../models/g1/g1_29dof.urdf
+--npz_path /home/pjm/Desktop/holosoma/src/holosoma/holosoma/data/motions/walk1_subject1_mj_fps50_standing_end.npz \
+--robot_urdf ../models/h1/h1_19dof.urdf
 """

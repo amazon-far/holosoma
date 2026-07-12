@@ -95,22 +95,7 @@ def _worker(
                             )
                         )
                 elif method == "get_raw_motor_state":
-                    state = robot.unitree_interface.read_low_state()
-                    res_q.put(
-                        (
-                            "ok",
-                            {
-                                "q": list(state.motor.q),
-                                "dq": list(state.motor.dq),
-                                "tau_est": list(state.motor.tau_est),
-                                "voltage": list(state.motor.voltage),
-                                "temperature": list(state.motor.temperature),
-                                "imu_quat": list(state.imu.quat),
-                                "imu_omega": list(state.imu.omega),
-                                "imu_accel": list(state.imu.accel),
-                            },
-                        )
-                    )
+                    res_q.put(("ok", robot.get_raw_motor_state()))
                 elif method == "update_config":
                     robot.update_config(*args, **kwargs)
                     res_q.put(("ok", None))

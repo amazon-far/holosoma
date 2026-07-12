@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import sys
 
 import numpy as np
 import onnx
@@ -25,11 +24,13 @@ from holosoma_inference.utils.math.quat import (
 
 
 class WholeBodyTrackingPolicy(BasePolicy):
+    #初始化时间步
     def __init__(self, config: InferenceConfig):
         self.config = config
 
         # initialize motion state
         self.motion_clip_progressing = False
+        self._dual_mode_active = False  # set True by DualModePolicy when wrapping
         self.curr_motion_timestep = config.task.motion_start_timestep
         self.motion_command_t = None
         self.ref_quat_xyzw_t = None
@@ -50,6 +51,8 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self.use_sim_time = config.task.use_sim_time
 
         self._stiff_hold_active = True
+        self._stiff_hold_confirmed = not self._requires_stiff_hold_start_confirmation(config)
+        self._stiff_hold_transition_pending = self._stiff_hold_confirmed
         self.robot_yaw_offset = 0.0
         self.motion_yaw_offset = 0.0
         self.per_joint_policy_action_scale: np.ndarray | None = None
@@ -63,6 +66,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
         else:
             # Fallback to default_dof_angles if not specified
             self._stiff_hold_q = np.array(config.robot.default_dof_angles, dtype=np.float32).reshape(1, -1)
+        self._stiff_hold_override_q = None
 
         if config.robot.stiff_startup_kp is not None:
             self._stiff_hold_kp = np.array(config.robot.stiff_startup_kp, dtype=np.float32)
@@ -77,29 +81,27 @@ class WholeBodyTrackingPolicy(BasePolicy):
         if self._stiff_hold_q.shape[1] != self.num_dofs:
             raise ValueError("Stiff startup pose dimension mismatch with robot DOFs")
 
-        # Prompt user before entering stiff mode (only if stdin is available)
-        def _show_warning():
+        if not self._stiff_hold_confirmed:
             logger.warning(
                 colored(
-                    "⚠️  Non-interactive mode detected - cannot prompt for stiff mode confirmation!",
-                    "red",
+                    "Waiting for joystick Start to enter stiff hold. Robot will stay torque-free until confirmed.",
+                    "yellow",
                     attrs=["bold"],
                 )
             )
-
-        if hasattr(self, "_shared_hardware_source"):
+        elif hasattr(self, "_shared_hardware_source"):
             logger.info(colored("Skipping stiff hold prompt (secondary policy)", "yellow"))
-        elif sys.stdin.isatty():
-            logger.info(colored("\n⚠️  Ready to enter stiff hold mode", "yellow", attrs=["bold"]))
-            logger.info(colored("Press Enter to continue...", "yellow"))
-            try:
-                input()
-                logger.info(colored("✓ Entering stiff hold mode", "green"))
-            except EOFError:
-                # [drockyd] seems like in some cases, input() will raise EOFError even in interactive mode.
-                _show_warning()
         else:
-            _show_warning()
+            logger.info(colored("Entering stiff hold mode", "green"))
+
+    @staticmethod
+    def _requires_stiff_hold_start_confirmation(config: InferenceConfig) -> bool:
+        mode = config.task.stiff_hold_confirmation
+        if mode == "none":
+            return False
+        if mode == "start":
+            return True
+        return config.task.state_input in {"interface", "joystick"}
 
     def _get_ref_body_orientation_in_world(self, robot_state_data):
         # Create configuration for pinocchio robot
@@ -122,7 +124,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
         ref_ori_xyzw = self.pinocchio_robot.fk_and_get_ref_body_orientation_in_world(configuration)
         return xyzw_to_wxyz(ref_ori_xyzw)
-
+    #加载onnx模型并提取相关信息
     def setup_policy(self, model_path):
         self.onnx_policy_session = onnxruntime.InferenceSession(model_path)
         self.onnx_input_names = [inp.name for inp in self.onnx_policy_session.get_inputs()]
@@ -221,7 +223,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
             self.init_count += 1
             return q_target
         return dof_pos
-
+    #每一帧获取当前的obs buffer dict，构造policy输入
     def get_current_obs_buffer_dict(self, robot_state_data):
         current_obs_buffer_dict = {}
 
@@ -254,7 +256,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
         current_obs_buffer_dict["actions"] = self.last_policy_action
 
         return current_obs_buffer_dict
-
+    #调用policy进行推理，获取动作，并更新motion timestep
     def rl_inference(self, robot_state_data):
         # prepare obs, run policy inference
         if not self.motion_clip_progressing:
@@ -347,15 +349,47 @@ class WholeBodyTrackingPolicy(BasePolicy):
         # just use the motor_kp/motor_kd when calling it in _fill_motor_commands
         if not self._stiff_hold_active:
             return None
+        if not self._stiff_hold_confirmed:
+            return {
+                "q": robot_state_data[:, 7 : 7 + self.num_dofs].copy(),
+                "kp": np.zeros(self.num_dofs, dtype=np.float32),
+                "kd": np.zeros(self.num_dofs, dtype=np.float32),
+            }
+        if self._stiff_hold_transition_pending:
+            self._begin_target_transition(
+                "stiff_hold",
+                self._seconds_to_steps(self.config.task.stiff_hold_transition_s),
+                start_q=robot_state_data[:, 7 : 7 + self.num_dofs],
+            )
+            self._stiff_hold_transition_pending = False
         return {
-            "q": self._stiff_hold_q.copy(),
+            "q": (self._stiff_hold_override_q if self._stiff_hold_override_q is not None else self._stiff_hold_q).copy(),
             "kp": self._stiff_hold_kp,
             "kd": self._stiff_hold_kd,
         }
 
+    def hold_current_pose(self, robot_state_data):
+        """Arm WBT in a non-moving hold target for safe mode switches."""
+        self.use_policy_action = False
+        self.get_ready_state = False
+        self._stiff_hold_active = True
+        self._stiff_hold_confirmed = True
+        self._stiff_hold_transition_pending = False
+        self._stiff_hold_override_q = robot_state_data[:, 7 : 7 + self.num_dofs].astype(np.float32, copy=True)
+        self.motion_clip_progressing = False
+        self.timestep_util.reset(start_timestep=0)
+        self.curr_motion_timestep = self.timestep_util.timestep
+        self.ref_quat_xyzw_t = self.ref_quat_xyzw_0.copy()
+        self.motion_command_t = self.motion_command_0.copy()
+        self.robot_yaw_offset = 0.0
+        self.motion_yaw_offset = 0.0
+    #当策略开始时]，捕获机器人和运动的偏航角，并将stiff hold状态设置为False
     def _handle_start_policy(self):
         super()._handle_start_policy()
         self._stiff_hold_active = False
+        self._stiff_hold_override_q = None
+        self._stiff_hold_transition_pending = False
+        self._stiff_hold_confirmed = True
         self._capture_robot_yaw_offset()
         self._capture_motion_yaw_offset(self.ref_quat_xyzw_0)
 
@@ -373,19 +407,23 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
             # Stop motion clip at configured end timestep (keep policy running at final pose)
             if (end := self.config.task.motion_end_timestep) and self.curr_motion_timestep >= end:
-                self.logger.info(colored(f"Reached end timestep {end}, stopping motion clip", "yellow"))
+                self.logger.info(colored(f"Reached end timestep {end}", "yellow"))
                 self.motion_clip_progressing = False
                 self.curr_motion_timestep = end
-
+                if self.config.task.stop_on_motion_end and not self._dual_mode_active:
+                    self._handle_stop_policy()
+                elif self.config.task.stop_on_motion_end and self._dual_mode_active:
+                    # Signal dual_mode to auto-return to loco
+                    self.use_policy_action = False
+    #当接收到停止策略的命令时o，重置相关状态并设置stiff hold为True
     def _handle_stop_policy(self):
-        """Handle stop policy action."""
+        """Handle stop policy action.
+
+        When running under DualModePolicy the transition back to locomotion
+        is managed externally — we only disarm WBT here.
+        """
         self.use_policy_action = False
         self.get_ready_state = False
-        self._stiff_hold_active = True
-        self.logger.info("Actions set to stiff startup command")
-        if hasattr(self.interface, "no_action"):
-            self.interface.no_action = 0
-
         self.motion_clip_progressing = False
         self.timestep_util.reset(start_timestep=0)
         self.curr_motion_timestep = self.timestep_util.timestep
@@ -394,8 +432,28 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self.robot_yaw_offset = 0.0
         self.motion_yaw_offset = 0.0
 
+        if self._dual_mode_active:
+            # DualModePolicy._return_to_primary() handles the transition.
+            # Just disarm WBT without entering stiff-hold.
+            return
+
+        self._stiff_hold_active = True
+        self._stiff_hold_confirmed = True
+        self._stiff_hold_override_q = None
+        self._stiff_hold_transition_pending = False
+        self._begin_target_transition(
+            "stiff_hold",
+            self._seconds_to_steps(self.config.task.policy_stop_transition_s),
+        )
+        self.logger.info("Actions set to stiff startup command")
+        if hasattr(self.interface, "no_action"):
+            self.interface.no_action = 0
+    #当接收到开始运动剪辑的命令时m，重置时间步并设置相关状态
     def _handle_start_motion_clip(self):
         """Handle start motion clip action."""
+        if not self.use_policy_action:
+            self._handle_start_policy()
+
         self.timestep_util.reset(start_timestep=self.config.task.motion_start_timestep)
         self.curr_motion_timestep = self.timestep_util.timestep
         self.motion_clip_progressing = True
@@ -409,6 +467,17 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
     def _dispatch_command(self, cmd):
         from holosoma_inference.inputs.api.commands import StateCommand
+
+        if not self._stiff_hold_confirmed:
+            if cmd == StateCommand.STAND_TOGGLE:
+                self._stiff_hold_confirmed = True
+                self._stiff_hold_transition_pending = True
+                self.logger.info(colored("Joystick Start confirmed: entering stiff hold", "green"))
+            elif cmd == StateCommand.KILL:
+                super()._dispatch_command(cmd)
+            else:
+                self.logger.warning("Ignoring command until joystick Start confirms stiff hold.")
+            return
 
         if cmd == StateCommand.START_MOTION_CLIP:
             self._handle_start_motion_clip()

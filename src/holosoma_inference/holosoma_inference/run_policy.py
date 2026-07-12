@@ -46,6 +46,7 @@ def _print_control_guide(policy_class, use_joystick: bool, dual_mode: bool = Fal
         if is_wbt:
             logger.info("")
             logger.info("Whole-Body Tracking Controls:")
+            logger.info("  Start button   - Confirm stiff hold")
             logger.info("  Select+A       - Start motion clip")
         else:
             logger.info("")
@@ -88,8 +89,10 @@ def _print_control_guide(policy_class, use_joystick: bool, dual_mode: bool = Fal
         logger.info("🔀 Dual-Mode Controls:")
         if use_joystick:
             logger.info("  X button       - Switch between primary and secondary policy")
+            logger.info("  Select+A       - Start secondary WBT motion, when configured")
         else:
             logger.info("  x              - Switch between primary and secondary policy")
+            logger.info("  m              - Start secondary WBT motion, when configured")
 
     logger.info("")
     logger.info("=" * 80)
@@ -217,7 +220,9 @@ def main(annotated_config=None):
             secondary = tyro.cli(InferenceConfig, default=preset, config=TYRO_CONFIG)
         else:
             secondary = preset
+        #合并主配置和次要配置，次要配置覆盖主配置中的相应字段
         config = _replace(config, secondary=secondary)
+    #如果没有预设但存在次要参数，则使用主配置中的次要配置作为默认值解析次要配置，允许命令行参数覆盖默认值；
     elif secondary_argv:
         # --secondary.* overrides on the config's default secondary
         if config.secondary is not None:
@@ -226,7 +231,7 @@ def main(annotated_config=None):
             config = _replace(config, secondary=secondary)
         else:
             logger.warning("--secondary.* args ignored: no default secondary in this config")
-
+    #真正开始控制机器人了，运行策略
     run_policy(config)
 
 

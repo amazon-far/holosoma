@@ -34,7 +34,27 @@ t1_29dof_loco = InferenceConfig(
 h1_19dof_loco = InferenceConfig(
     robot=robot.h1_19dof,
     observation=observation.loco_h1_19dof,
-    task=task.locomotion,
+    task=replace(
+        task.locomotion,
+        model_path="/home/pjm/Desktop/holosoma/logs/walk_h1.onnx",
+        interface="auto",
+        velocity_input="interface",
+        state_input="interface",
+        auto_walk_on_vel_cmd=True,
+    ),
+)
+
+_h1_safety_secondary = InferenceConfig(
+    robot=robot.h1_19dof,
+    observation=observation.loco_h1_19dof,
+    task=replace(
+        task.locomotion,
+        model_path="/home/pjm/Desktop/holosoma/logs/walk_h1.onnx",
+        interface="auto",
+        velocity_input="interface",
+        state_input="interface",
+        auto_walk_on_vel_cmd=True,
+    ),
 )
 
 # fmt: off
@@ -71,12 +91,147 @@ g1_29dof_wbt = InferenceConfig(
     secondary=_g1_safety_secondary,
 )
 
+_h1_19dof_wbt_robot = replace(
+    robot.h1_19dof,
+    # H1 stable PD-hold stance from dance_h1's final static frame.
+    # Joint order: left leg, right leg, torso, left arm, right arm.
+    stiff_startup_pos=(
+        0.0, 0.0, -0.4, 0.8, -0.4,
+        0.0, 0.0, -0.4, 0.8, -0.4,
+        0.0,
+        0.2, 0.0, 0.0, 0.6,
+        0.2, 0.0, 0.0, 0.6,
+    ),
+    stiff_startup_kp=(
+        200.0, 200.0, 200.0, 300.0, 40.0,
+        200.0, 200.0, 200.0, 300.0, 40.0,
+        300.0,
+        100.0, 100.0, 100.0, 100.0,
+        100.0, 100.0, 100.0, 100.0,
+    ),
+    stiff_startup_kd=(
+        5.0, 5.0, 5.0, 6.0, 2.0,
+        5.0, 5.0, 5.0, 6.0, 2.0,
+        6.0,
+        2.0, 2.0, 2.0, 2.0,
+        2.0, 2.0, 2.0, 2.0,
+    ),
+)
+
+h1_19dof_wbt = InferenceConfig(
+    robot=_h1_19dof_wbt_robot,
+    observation=observation.wbt_h1_19dof,
+    task=replace(
+        task.wbt,
+        model_path="/home/pjm/Desktop/holosoma/logs/dance_h1.onnx",
+        interface="auto",
+        velocity_input="interface",
+        state_input="interface",
+    ),
+    secondary=_h1_safety_secondary,
+)
+
+h1_19dof_loco_wbt = InferenceConfig(
+    robot=robot.h1_19dof,
+    observation=observation.loco_h1_19dof,
+    task=replace(
+        task.locomotion,
+        model_path="/home/pjm/Desktop/holosoma/logs/walk_h1.onnx",
+        interface="auto",
+        velocity_input="interface",
+        state_input="interface",
+        auto_walk_on_vel_cmd=True,
+    ),
+    secondary=InferenceConfig(
+        robot=_h1_19dof_wbt_robot,
+        observation=observation.wbt_h1_19dof,
+        task=replace(
+            task.wbt,
+            model_path="/home/pjm/Desktop/holosoma/logs/dance_h1.onnx",
+            interface="auto",
+            velocity_input="interface",
+            state_input="interface",
+            motion_start_timestep=150,
+        ),
+    ),
+)
+
+_h1_19dof_real_wbt_robot = replace(
+    _h1_19dof_wbt_robot,
+    message_type=robot.h1_19dof_real_go.message_type,
+    num_motors=robot.h1_19dof_real_go.num_motors,
+    default_dof_angles=robot.h1_19dof_real_go.default_dof_angles,
+    default_motor_angles=robot.h1_19dof_real_go.default_motor_angles,
+    motor2joint=robot.h1_19dof_real_go.motor2joint,
+    joint2motor=robot.h1_19dof_real_go.joint2motor,
+    motor_kp=robot.h1_19dof_real_go.motor_kp,
+    motor_kd=robot.h1_19dof_real_go.motor_kd,
+    stiff_startup_pos=robot.h1_19dof_real_go.default_dof_angles,
+    stiff_startup_kp=(
+        200.0, 200.0, 200.0, 300.0, 40.0,
+        200.0, 200.0, 200.0, 300.0, 40.0,
+        200.0,
+        100.0, 50.0, 50.0, 50.0,
+        100.0, 50.0, 50.0, 50.0,
+    ),
+    stiff_startup_kd=(
+        5.0, 5.0, 5.0, 6.0, 2.0,
+        5.0, 5.0, 5.0, 6.0, 2.0,
+        5.0,
+        2.0, 2.0, 2.0, 2.0,
+        2.0, 2.0, 2.0, 2.0,
+    ),
+    weak_motor_joint_index=robot.h1_19dof_real_go.weak_motor_joint_index,
+)
+
+h1_19dof_loco_real = InferenceConfig(
+    robot=robot.h1_19dof_real_go,
+    observation=observation.loco_h1_19dof,
+    task=replace(
+        task.locomotion,
+        model_path="/home/pjm/Desktop/holosoma/logs/walk_h1.onnx",
+        interface="auto",
+        velocity_input="interface",
+        state_input="interface",
+        auto_walk_on_vel_cmd=True,
+    ),
+)
+
+h1_19dof_loco_wbt_real = InferenceConfig(
+    robot=robot.h1_19dof_real_go,
+    observation=observation.loco_h1_19dof,
+    task=replace(
+        task.locomotion,
+        model_path="/home/pjm/Desktop/holosoma/logs/walk_h1.onnx",
+        interface="auto",
+        velocity_input="interface",
+        state_input="interface",
+        auto_walk_on_vel_cmd=True,
+    ),
+    secondary=InferenceConfig(
+        robot=_h1_19dof_real_wbt_robot,
+        observation=observation.wbt_h1_19dof,
+        task=replace(
+            task.wbt,
+            model_path="/home/pjm/Desktop/holosoma/logs/dance_h1.onnx",
+            interface="auto",
+            velocity_input="interface",
+            state_input="interface",
+            motion_start_timestep=150,
+        ),
+    ),
+)
+
 # Core defaults - no extension imports at module load time
 DEFAULTS = {
     "g1-29dof-loco": g1_29dof_loco,
     "t1-29dof-loco": t1_29dof_loco,
     "h1-19dof-loco": h1_19dof_loco,
+    "h1-19dof-loco-wbt": h1_19dof_loco_wbt,
+    "h1-19dof-loco-real": h1_19dof_loco_real,
+    "h1-19dof-loco-wbt-real": h1_19dof_loco_wbt_real,
     "g1-29dof-wbt": g1_29dof_wbt,
+    "h1-19dof-wbt": h1_19dof_wbt,
 }
 
 # Track whether extensions have been loaded

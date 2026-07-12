@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic.dataclasses import dataclass
 
 InputSource = Literal["keyboard", "interface", "joystick", "ros2"]
+StiffHoldConfirmation = Literal["auto", "none", "start"]
 
 DEFAULT_VELOCITY_INPUT: InputSource = "keyboard"
 DEFAULT_STATE_INPUT: InputSource = "keyboard"
@@ -119,6 +120,25 @@ class TaskConfig:
 
     motion_end_timestep: int | None = None
     """Ending timestep for motion clip playback. If None, plays until the end."""
+
+    policy_start_transition_s: float = 1.0
+    """Seconds used to blend from the current command/pose into policy actions."""
+
+    policy_stop_transition_s: float = 1.0
+    """Seconds used to blend out of policy actions into the post-stop target."""
+
+    stiff_hold_transition_s: float = 2.0
+    """Seconds used by WBT to blend into the stiff hold target."""
+
+    stiff_hold_confirmation: StiffHoldConfirmation = "auto"
+    """How WBT confirms entry into stiff hold: auto, none, or start.
+
+    ``auto`` requires the Start button when state_input is interface/joystick
+    and skips confirmation for keyboard/ROS workflows.
+    """
+
+    stop_on_motion_end: bool = True
+    """For WBT, smoothly return to stiff hold when motion_end_timestep is reached."""
 
     debug: DebugConfig = DebugConfig()
     """Debug overrides for quick testing."""

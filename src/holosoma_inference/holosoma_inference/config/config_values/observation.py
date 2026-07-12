@@ -186,6 +186,44 @@ wbt = ObservationConfig(
     },
 )
 
+wbt_h1_19dof = ObservationConfig(
+    obs_dict={
+        "actor_obs": [
+            "motion_command",
+            "motion_ref_ori_b",
+            "base_ang_vel",
+            "dof_pos",
+            "dof_vel",
+            "actions",
+        ]
+    },
+    obs_dims={
+        "motion_command": 38,
+        "motion_ref_pos_b": 3,
+        "motion_ref_ori_b": 6,
+        "base_lin_vel": 3,
+        "base_ang_vel": 3,
+        "dof_pos": 19,
+        "dof_vel": 19,
+        "actions": 19,
+    },
+    obs_scales={
+        "actions": 1.0,
+        "motion_command": 1.0,
+        "motion_ref_pos_b": 1.0,
+        "motion_ref_ori_b": 1.0,
+        "base_lin_vel": 1.0,
+        "base_ang_vel": 1.0,
+        "dof_pos": 1.0,
+        "dof_vel": 1.0,
+        "robot_body_pos_b": 1.0,
+        "robot_body_ori_b": 1.0,
+    },
+    history_length_dict={
+        "actor_obs": 1,
+    },
+)
+
 # =============================================================================
 # Default Configurations Dictionary
 # =============================================================================
@@ -195,6 +233,7 @@ DEFAULTS = {
     "loco-t1-29dof": loco_t1_29dof,
     "loco-h1-19dof": loco_h1_19dof,
     "wbt": wbt,
+    "wbt-h1-19dof": wbt_h1_19dof,
 }
 """Dictionary of all available observation configurations.
 

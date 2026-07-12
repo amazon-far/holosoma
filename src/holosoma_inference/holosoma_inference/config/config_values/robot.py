@@ -232,17 +232,22 @@ h1_19dof = RobotConfig(
     robot="h1",
 
     # SDK Configuration
+    # H1 uses GO2 protocol. The C++ binding exposes 19 compact motor slots;
+    # unitree_interface.py converts between 19-compact and 20-physical arrays
+    # so that the rest of the codebase works with physical motor IDs (matching
+    # Beyondmimic's dof_idx and the real DDS message layout).
     sdk_type="unitree",
     motor_type="serial",
     message_type="GO2",
     use_sensor=False,
 
     # Dimensions
-    num_motors=19,
+    # 20 physical motor slots (ID 0..19), ID 9 unused on real H1 hardware.
+    num_motors=20,
     num_joints=19,
     num_upper_body_joints=9,
 
-    # Default Positions
+    # Default Positions (joint order, matching dof_names)
     default_dof_angles=(
         0.0, 0.0, -0.4, 0.8, -0.4,  # left leg
         0.0, 0.0, -0.4, 0.8, -0.4,  # right leg
@@ -250,17 +255,21 @@ h1_19dof = RobotConfig(
         0.0, 0.0, 0.0, 0.0,  # left arm
         0.0, 0.0, 0.0, 0.0,  # right arm
     ),
+    # Default positions in physical motor order (20 slots, ID 9 = 0.0 dummy)
     default_motor_angles=(
-        0.0, 0.0, -0.4, 0.8, -0.4,  # left leg
-        0.0, 0.0, -0.4, 0.8, -0.4,  # right leg
-        0.0,  # torso
-        0.0, 0.0, 0.0, 0.0,  # left arm
-        0.0, 0.0, 0.0, 0.0,  # right arm
+        0.0, -0.4, 0.8, 0.0, -0.4, 0.8,  # physical motors 0..5
+        0.0, 0.0, 0.0,                    # physical motors 6..8
+        0.0,                               # physical motor 9 (unused)
+        -0.4, -0.4,                       # physical motors 10..11
+        0.0, 0.0, 0.0, 0.0,               # physical motors 12..15
+        0.0, 0.0, 0.0, 0.0,               # physical motors 16..19
     ),
 
-    # Mappings
-    motor2joint=tuple(range(19)),
-    joint2motor=tuple(range(19)),
+    # Mappings (joint order ↔ physical motor ID, matching Beyondmimic dof_idx)
+    # motor2joint: physical motor ID → joint index (-1 = unused ID 9)
+    motor2joint=(6, 7, 8, 1, 2, 3, 10, 0, 5, -1, 4, 9, 15, 16, 17, 18, 11, 12, 13, 14),
+    # joint2motor: joint index → physical motor ID
+    joint2motor=(7, 3, 4, 5, 10, 8, 0, 1, 2, 11, 6, 16, 17, 18, 19, 12, 13, 14, 15),
     dof_names=(
         "left_hip_yaw_joint", "left_hip_roll_joint", "left_hip_pitch_joint",
         "left_knee_joint", "left_ankle_joint",
@@ -286,18 +295,20 @@ h1_19dof = RobotConfig(
         "right_knee_joint", "right_ankle_joint",
     ),
 
-    # Control Gains
+    # Control Gains (physical motor order, 20 slots, ID 9 = 0.0 dummy)
     motor_kp=(
-        200.0, 200.0, 200.0, 300.0, 40.0,
-        200.0, 200.0, 200.0, 300.0, 40.0,
-        300.0,
+        200.0, 200.0, 300.0, 200.0, 200.0, 300.0,
+        300.0, 200.0, 200.0,
+        0.0,                                # motor 9 (unused)
+        40.0, 40.0,
         100.0, 100.0, 100.0, 100.0,
         100.0, 100.0, 100.0, 100.0,
     ),
     motor_kd=(
-        5.0, 5.0, 5.0, 6.0, 2.0,
-        5.0, 5.0, 5.0, 6.0, 2.0,
-        6.0,
+        5.0, 5.0, 6.0, 5.0, 5.0, 6.0,
+        6.0, 5.0, 5.0,
+        0.0,                                # motor 9 (unused)
+        2.0, 2.0,
         2.0, 2.0, 2.0, 2.0,
         2.0, 2.0, 2.0, 2.0,
     ),
@@ -317,28 +328,109 @@ h1_19dof = RobotConfig(
         "MODE_MACHINE": 5,
         "MODE_PR": 0,
     },
+    # weak_motor_joint_index: joint name → physical motor ID
     weak_motor_joint_index={
-        "left_hip_yaw_joint": 0,
-        "left_hip_roll_joint": 1,
-        "left_hip_pitch_joint": 2,
-        "left_knee_joint": 3,
-        "left_ankle_joint": 4,
-        "right_hip_yaw_joint": 5,
-        "right_hip_roll_joint": 6,
-        "right_hip_pitch_joint": 7,
-        "right_knee_joint": 8,
-        "right_ankle_joint": 9,
-        "torso_joint": 10,
-        "left_shoulder_pitch_joint": 11,
-        "left_shoulder_roll_joint": 12,
-        "left_shoulder_yaw_joint": 13,
-        "left_elbow_joint": 14,
-        "right_shoulder_pitch_joint": 15,
-        "right_shoulder_roll_joint": 16,
-        "right_shoulder_yaw_joint": 17,
-        "right_elbow_joint": 18,
+        "left_hip_yaw_joint": 7,
+        "left_hip_roll_joint": 3,
+        "left_hip_pitch_joint": 4,
+        "left_knee_joint": 5,
+        "left_ankle_joint": 10,
+        "right_hip_yaw_joint": 8,
+        "right_hip_roll_joint": 0,
+        "right_hip_pitch_joint": 1,
+        "right_knee_joint": 2,
+        "right_ankle_joint": 11,
+        "torso_joint": 6,
+        "left_shoulder_pitch_joint": 16,
+        "left_shoulder_roll_joint": 17,
+        "left_shoulder_yaw_joint": 18,
+        "left_elbow_joint": 19,
+        "right_shoulder_pitch_joint": 12,
+        "right_shoulder_roll_joint": 13,
+        "right_shoulder_yaw_joint": 14,
+        "right_elbow_joint": 15,
     },
     motion={"body_name_ref": ["torso_link"]},
+)
+
+h1_19dof_real_go = RobotConfig(
+    # H1 real-robot defaults (matching Beyondmimic h1.yaml FixStand posture).
+    # Uses GO2 protocol with 20-element physical motor arrays.
+    robot_type="h1",
+    robot="h1",
+    sdk_type="unitree",
+    motor_type="serial",
+    message_type="GO2",
+    use_sensor=False,
+    num_motors=20,
+    num_joints=19,
+    num_upper_body_joints=9,
+    # DOF-order defaults (joint order)
+    default_dof_angles=(
+        0.0, 0.0, -0.28, 0.79, -0.52,  # left leg
+        0.0, 0.0, -0.28, 0.79, -0.52,  # right leg
+        0.0,  # torso
+        0.2, 0.0, 0.0, 0.32,  # left arm
+        0.2, 0.0, 0.0, 0.32,  # right arm
+    ),
+    # Physical-motor-order defaults (20 slots, ID 9 = 0.0)
+    default_motor_angles=(
+        0.0, -0.28, 0.79, 0.0, -0.28, 0.79,  # physical motors 0..5
+        0.0, 0.0, 0.0,                       # physical motors 6..8
+        0.0,                                  # physical motor 9 (unused)
+        -0.52, -0.52,                        # physical motors 10..11
+        0.2, 0.0, 0.0, 0.32,                 # physical motors 12..15
+        0.2, 0.0, 0.0, 0.32,                 # physical motors 16..19
+    ),
+    joint2motor=h1_19dof.joint2motor,
+    motor2joint=h1_19dof.motor2joint,
+    dof_names=h1_19dof.dof_names,
+    dof_names_upper_body=h1_19dof.dof_names_upper_body,
+    dof_names_lower_body=h1_19dof.dof_names_lower_body,
+    # Physical-motor-order gains (20 slots, ID 9 = 0.0)
+    motor_kp=(
+        200.0, 200.0, 300.0, 200.0, 200.0, 300.0,
+        200.0, 200.0, 200.0,
+        0.0,                                # motor 9 (unused)
+        40.0, 40.0,
+        100.0, 50.0, 50.0, 50.0,
+        100.0, 50.0, 50.0, 50.0,
+    ),
+    motor_kd=(
+        5.0, 5.0, 6.0, 5.0, 5.0, 6.0,
+        5.0, 5.0, 5.0,
+        0.0,                                # motor 9 (unused)
+        2.0, 2.0,
+        2.0, 2.0, 2.0, 2.0,
+        2.0, 2.0, 2.0, 2.0,
+    ),
+    torso_link_name=h1_19dof.torso_link_name,
+    left_hand_link_name=h1_19dof.left_hand_link_name,
+    right_hand_link_name=h1_19dof.right_hand_link_name,
+    unitree_legged_const=h1_19dof.unitree_legged_const,
+    # weak_motor_joint_index: joint name → physical motor ID
+    weak_motor_joint_index={
+        "left_hip_yaw_joint": 7,
+        "left_hip_roll_joint": 3,
+        "left_hip_pitch_joint": 4,
+        "left_knee_joint": 5,
+        "left_ankle_joint": 10,
+        "right_hip_yaw_joint": 8,
+        "right_hip_roll_joint": 0,
+        "right_hip_pitch_joint": 1,
+        "right_knee_joint": 2,
+        "right_ankle_joint": 11,
+        "torso_joint": 6,
+        "left_shoulder_pitch_joint": 16,
+        "left_shoulder_roll_joint": 17,
+        "left_shoulder_yaw_joint": 18,
+        "left_elbow_joint": 19,
+        "right_shoulder_pitch_joint": 12,
+        "right_shoulder_roll_joint": 13,
+        "right_shoulder_yaw_joint": 14,
+        "right_elbow_joint": 15,
+    },
+    motion=h1_19dof.motion,
 )
 
 
@@ -351,6 +443,7 @@ DEFAULTS = {
     "g1-29dof": g1_29dof,
     "t1-29dof": t1_29dof,
     "h1-19dof": h1_19dof,
+    "h1-19dof-real-go": h1_19dof_real_go,
 }
 """Dictionary of all available robot configurations.
 

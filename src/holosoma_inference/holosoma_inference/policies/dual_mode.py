@@ -1,9 +1,10 @@
-"""Dual-mode policy with runtime switching between two policy instances."""
+"""Dual-mode policy with smooth interpolation switching between two policies."""
 
 from __future__ import annotations
 
 import itertools
 
+import numpy as np
 from loguru import logger
 from termcolor import colored
 
@@ -11,12 +12,7 @@ from holosoma_inference.config.config_types.inference import InferenceConfig
 
 
 def _select_policy_class(config: InferenceConfig):
-    """Determine policy class based on observation config and robot type.
-
-    Checks entry point groups ``holosoma.policies.locomotion`` and
-    ``holosoma.policies.wbt`` (keyed by ``robot_type``) so extensions can
-    register custom policy classes without monkey-patching.
-    """
+    """Determine policy class based on observation config and robot type."""
     from holosoma_inference.compat import entry_points
     from holosoma_inference.policies.locomotion import LocomotionPolicy
     from holosoma_inference.policies.wbt import WholeBodyTrackingPolicy
@@ -37,15 +33,25 @@ def _select_policy_class(config: InferenceConfig):
 
 
 class DualModePolicy:
-    """Wraps two policy instances (potentially different classes) with X-button switching.
+    """Wraps two policy instances with smooth-interpolation switching.
 
-    The primary policy is fully initialized and owns the hardware (SDK, interface,
-    input handlers). The secondary policy reuses the primary's hardware via the
-    _shared_hardware_source guard pattern in BasePolicy.
+    Loco → WBT
+        1.5 s lerp from current pose to the first frame of the reference
+        motion. Only upper-body DOFs (torso + arms) are overridden; the
+        loco policy continues controlling the legs for balance.
 
-    Press X (joystick) or x (keyboard) to switch between policies at runtime.
-    The existing Select/1-9 multi-model switching still works within each policy.
+    WBT → Loco
+        0.5 s hold-current-pose, then switch to loco, then 1.5 s lerp to
+        the default standing pose (upper body only).
     """
+
+    # H1 upper body DOF indices (torso + arms).  Legs 0..9 stay under
+    # loco control during transitions.
+    _UPPER_BODY_INDICES = list(range(10, 19))
+
+    # ------------------------------------------------------------------
+    #  Initialisation
+    # ------------------------------------------------------------------
 
     def __init__(self, primary_config: InferenceConfig, secondary_config: InferenceConfig):
         primary_cls = _select_policy_class(primary_config)
@@ -55,10 +61,9 @@ class DualModePolicy:
             colored(f"Dual-mode: primary={primary_cls.__name__}, secondary={secondary_cls.__name__}", "magenta")
         )
 
-        # Fully init primary (owns hardware)
         self.primary = primary_cls(config=primary_config)
+        self._num_dofs = self.primary.num_dofs
 
-        # Init secondary with shared hardware
         logger.info(colored("Initializing secondary policy (shared hardware)...", "magenta"))
         secondary = object.__new__(secondary_cls)
         secondary._shared_hardware_source = self.primary
@@ -67,33 +72,58 @@ class DualModePolicy:
 
         self.active = self.primary
         self.active_label = "primary"
+        self.secondary._dual_mode_active = True
 
         self._setup_command_intercept()
-        logger.info(colored("Dual-mode ready. Press X (joystick) or x (keyboard) to switch policies.", "magenta"))
+        logger.info(
+            colored(
+                "Dual-mode ready.  x = switch policy  |  m = start WBT motion  |  o = stop",
+                "magenta",
+            )
+        )
+
+    # ------------------------------------------------------------------
+    #  Interpolation durations (seconds)
+    # ------------------------------------------------------------------
+
+    @property
+    def _switch_durations(self):
+        return {
+            "loco_to_wbt": (0.0, 1.5),
+            "wbt_to_loco": (0.5, 1.5),
+        }
+
+    # ------------------------------------------------------------------
+    #  Command-intercept wiring
+    # ------------------------------------------------------------------
 
     def _setup_command_intercept(self):
-        """Inject SWITCH_MODE into mappings and patch dispatch for routing.
-
-        Keyboard queue wiring is handled by the factory — the secondary's
-        ``KeyboardInput`` gets its own subscriber queue from the shared
-        ``_KeyboardListenerThread``.  Only ``_dispatch_command`` needs
-        patching to intercept SWITCH_MODE.
-        """
         from holosoma_inference.inputs.api.commands import StateCommand
 
-        # Inject SWITCH_MODE into both command providers' mappings (joystick X, keyboard x)
         for policy in (self.primary, self.secondary):
             policy._command_provider._mapping["X"] = StateCommand.SWITCH_MODE
             policy._command_provider._mapping["x"] = StateCommand.SWITCH_MODE
+            policy._command_provider._mapping["m"] = StateCommand.START_MOTION_CLIP
+            policy._command_provider._mapping["o"] = StateCommand.STOP
 
-        # Patch _dispatch_command to intercept SWITCH_MODE
         self._orig_dispatch = {
             id(self.primary): self.primary._dispatch_command,
             id(self.secondary): self.secondary._dispatch_command,
         }
 
         def patched_dispatch(cmd):
-            if cmd == StateCommand.SWITCH_MODE:
+            # m / START_MOTION_CLIP
+            if cmd == StateCommand.START_MOTION_CLIP:
+                if self.active is self.primary and self._is_wbt(self.secondary):
+                    # Switch to WBT AND start motion
+                    self._switch_to_wbt(auto_start_motion=True)
+                elif self.active is self.secondary and self._is_wbt(self.secondary):
+                    self.secondary._handle_start_motion_clip()
+            # o / STOP on WBT → return to loco
+            elif cmd == StateCommand.STOP and self.active is self.secondary and self._is_wbt(self.secondary):
+                self._return_to_primary()
+            # x / SWITCH_MODE
+            elif cmd == StateCommand.SWITCH_MODE:
                 self._handle_mode_switch()
             else:
                 self._orig_dispatch[id(self.active)](cmd)
@@ -101,18 +131,15 @@ class DualModePolicy:
         self.primary._dispatch_command = patched_dispatch
         self.secondary._dispatch_command = patched_dispatch
 
-    def _handle_mode_switch(self):
-        """Switch from active to inactive policy."""
-        self.active._handle_stop_policy()
+    @staticmethod
+    def _is_wbt(policy) -> bool:
+        return hasattr(policy, "_handle_start_motion_clip")
 
-        target = self.secondary if self.active is self.primary else self.primary
-        target_label = "secondary" if target is self.secondary else "primary"
+    # ------------------------------------------------------------------
+    #  Policy activation helpers
+    # ------------------------------------------------------------------
 
-        # Update KP/KD on the shared interface for the target policy
-        target._resolve_control_gains()
-
-        # Carry over joystick key_states so edge detection doesn't see a false
-        # rising edge on the X button (which is still physically held down).
+    def _copy_interface_key_state(self, target) -> None:
         from holosoma_inference.inputs.impl.interface import InterfaceInput
 
         active_dev = self.active._velocity_input
@@ -121,26 +148,134 @@ class DualModePolicy:
             target_dev.key_states = active_dev.key_states.copy()
             target_dev.last_key_states = active_dev.key_states.copy()
 
+    def _activate_target(self, target, target_label: str) -> None:
+        target._resolve_control_gains()
+        self._copy_interface_key_state(target)
         self.active = target
         self.active_label = target_label
-
-        # Re-initialize phase and activate
         self.active._init_phase_components()
-        self.active._handle_start_policy()
 
+    # ------------------------------------------------------------------
+    #  Loco → WBT  (switch with optional auto-start of motion)
+    # ------------------------------------------------------------------
+
+    def _switch_to_wbt(self, auto_start_motion: bool = False) -> None:
+        """Activate WBT, optionally with smooth upper-body interpolation.
+
+        *auto_start_motion=True* (``m`` key) switches immediately and starts
+        the motion clip — WBT's own PD control pulls the robot to the
+        reference pose.
+
+        *auto_start_motion=False* (``x`` key) lerps the upper body over
+        1.5 s before handing control to WBT in stiff-hold.
+        """
+        if auto_start_motion:
+            logger.info(
+                colored("Loco → WBT (motion): immediate switch…", "magenta", attrs=["bold"])
+            )
+            self.active._cancel_policy_interp()
+            self._activate_target(self.secondary, "secondary")
+            self.secondary._handle_start_motion_clip()
+            logger.info(colored("WBT policy now active – motion started.", "magenta"))
+            return
+
+        # --- manual switch (x key) with smooth interpolation ---
+        logger.info(
+            colored("Loco → WBT (switch): smooth interpolation (upper body only)…",
+                    "magenta", attrs=["bold"])
+        )
+        delay_s, interp_s = self._switch_durations["loco_to_wbt"]
+        target_q = self.secondary.motion_command_0[:, : self._num_dofs].copy()
+
+        def _on_done():
+            self.active._cancel_policy_interp()
+            self._activate_target(self.secondary, "secondary")
+            self.secondary._stiff_hold_confirmed = True
+            self.secondary._stiff_hold_transition_pending = True
+            logger.info(colored("WBT policy now active.", "magenta"))
+
+        self.active._start_policy_interp(
+            target_q=target_q,
+            duration_s=interp_s,
+            delay_s=delay_s,
+            on_done=_on_done,
+            override_indices=self._upper_body_indices,
+        )
+
+    # ------------------------------------------------------------------
+    #  WBT → Loco  (stop / motion end)
+    # ------------------------------------------------------------------
+
+    def _return_to_primary(self) -> None:
+        """WBT → Loco: switch immediately, lerp upper body to default stand.
+
+        Legs stay under loco control — the locomotion policy naturally
+        converges to a stable stance without being overridden.
+        """
         logger.info(
             colored(
-                f"Switched to {self.active_label} policy ({type(self.active).__name__})",
+                "WBT → Loco: immediate switch + upper-body lerp to default stand…",
                 "magenta",
                 attrs=["bold"],
             )
         )
 
+        target_q = self.primary.default_dof_angles.copy().reshape(1, -1)
+        interp_s = 1.5  # seconds
+
+        if self.active is self.secondary and self._is_wbt(self.secondary):
+            self.secondary.use_policy_action = False
+            self.secondary.motion_clip_progressing = False
+
+        self.active._cancel_policy_interp()
+        self._activate_target(self.primary, "primary")
+        self.primary._handle_start_policy()
+        self.primary._start_policy_interp(
+            target_q=target_q,
+            duration_s=interp_s,
+            delay_s=0.0,
+            on_done=lambda: logger.info(colored("WBT → Loco complete.", "magenta")),
+            override_indices=self._upper_body_indices,
+        )
+
+    # ------------------------------------------------------------------
+    #  Manual mode switch (x key) — just switch, don't start motion
+    # ------------------------------------------------------------------
+
+    def _handle_mode_switch(self):
+        """x-key: switch between loco and WBT without auto-starting motion."""
+        if self.active is self.primary and self._is_wbt(self.secondary):
+            self._switch_to_wbt(auto_start_motion=False)
+        else:
+            self._return_to_primary()
+
+    # ------------------------------------------------------------------
+    #  Upper body indices (configurable per robot)
+    # ------------------------------------------------------------------
+
+    @property
+    def _upper_body_indices(self) -> list[int]:
+        """DOF indices to override during interpolation.
+
+        H1: indices 10-18 = torso + left arm 4 + right arm 4.
+        Legs 0-9 stay under the active policy's control for balance.
+        """
+        if hasattr(self.primary.robot_config, "dof_names_upper_body"):
+            upper_names = self.primary.robot_config.dof_names_upper_body
+            dof_names = self.primary.robot_config.dof_names
+            return [dof_names.index(n) for n in upper_names if n in dof_names]
+        return self._UPPER_BODY_INDICES
+
+    # ------------------------------------------------------------------
+    #  Main run loop
+    # ------------------------------------------------------------------
+
     def run(self):
         """Main run loop — delegates to the active policy."""
         try:
             for it in itertools.count():
-                self.active.latency_tracker.start_cycle()
+                cycle_policy = self.active
+                cycle_policy.latency_tracker.start_cycle()
 
                 vc = self.active._velocity_input.poll_velocity()
                 if vc is not None:
@@ -153,9 +288,25 @@ class DualModePolicy:
                 if self.active.use_phase:
                     self.active.update_phase_time()
 
+                # Warm up inactive policy's observation history
+                inactive = self.secondary if self.active is self.primary else self.primary
+                robot_state = self.active.interface.get_low_state()
+                inactive.prepare_obs_for_rl(robot_state)
+
                 self.active.policy_action()
 
-                self.active.latency_tracker.end_cycle()
+                # Auto-return: WBT stopped or motion ended → back to loco.
+                # Only fire once — skip while a transition is already in flight.
+                if (
+                    self.active is self.secondary
+                    and self._is_wbt(self.secondary)
+                    and not self.secondary.use_policy_action
+                    and not self.secondary.motion_clip_progressing
+                    and self.active._interp_state == "idle"
+                ):
+                    self._return_to_primary()
+
+                cycle_policy.latency_tracker.end_cycle()
 
                 if it % 50 == 0 and self.active.use_policy_action:
                     debug_str = (
