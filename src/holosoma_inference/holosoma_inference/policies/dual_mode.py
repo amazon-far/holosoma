@@ -229,6 +229,13 @@ class DualModePolicy:
 
         self.active._cancel_policy_interp()
         self._activate_target(self.primary, "primary")
+
+        # Reset _last_sent_q to the robot's *actual* joint positions so the
+        # _begin_target_transition inside _handle_start_policy blends from
+        # where the robot physically is, not from WBT's last dance command.
+        robot_state = self.active.interface.get_low_state()
+        self.primary._last_sent_q = robot_state[:, 7 : 7 + self._num_dofs].copy()
+
         self.primary._handle_start_policy()
         self.primary._start_policy_interp(
             target_q=target_q,
