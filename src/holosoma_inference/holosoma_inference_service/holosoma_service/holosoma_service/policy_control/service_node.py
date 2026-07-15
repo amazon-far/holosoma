@@ -45,7 +45,6 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState
 
 from holosoma_inference.config.config_values.inference import get_annotated_inference_config
-from holosoma_inference.config.utils import TYRO_CONFIG
 from holosoma_inference.policies.dual_mode import DualModePolicy, _select_policy_class
 from holosoma_inference.sensors.base import Sensor
 from holosoma_inference.utils.config_registry import parse_config
@@ -277,7 +276,7 @@ def main() -> None:
     disable_secondary = known.secondary is not None and known.secondary.lower() == "none"
     sys.argv = [sys.argv[0]] + remaining
 
-    config = parse_config(get_annotated_inference_config, config=TYRO_CONFIG)
+    config = parse_config(get_annotated_inference_config)
 
     if disable_secondary:
         config = replace(config, secondary=None)
