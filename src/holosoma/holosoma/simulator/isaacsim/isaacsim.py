@@ -33,7 +33,7 @@ from isaaclab.sensors import (
     TiledCameraCfg,
     patterns,
 )
-from isaaclab.sim import PhysxCfg, SimulationCfg, SimulationContext
+from isaaclab.sim import PhysxCfg, RenderCfg, SimulationCfg, SimulationContext
 from isaaclab.sim.utils import bind_physics_material
 from isaaclab.terrains import TerrainGeneratorCfg, TerrainImporterCfg
 from isaaclab.terrains.utils import create_prim_from_mesh
@@ -112,6 +112,14 @@ class IsaacSim(BaseSimulator):
             dt=1.0 / self.simulator_config.sim.fps,
             render_interval=self.simulator_config.sim.render_interval_steps,
             device=self.sim_device,
+            # Disable the DLSS anti-aliasing pass (RenderCfg defaults to DLSS). DLSS is an AI
+            # upscaler meant for large viewports; on our small perception cameras it warns
+            # "Render resolution below minimal input resolution of 300" and, on some headless
+            # GPUs/runners (e.g. the A10G CI runner, vs. an Ada L40S dev box), its init blocks
+            # indefinitely in a native call — hanging every TiledCamera render. FXAA-off/no-AA
+            # is correct for these cameras regardless (nothing to upscale) and keeps camera
+            # rendering deterministic across GPUs.
+            render=RenderCfg(antialiasing_mode="Off"),
             physx=PhysxCfg(
                 bounce_threshold_velocity=self.simulator_config.sim.physx.bounce_threshold_velocity,
                 solver_type=self.simulator_config.sim.physx.solver_type,
