@@ -389,20 +389,20 @@ h1_19dof_real_go = RobotConfig(
     dof_names_lower_body=h1_19dof.dof_names_lower_body,
     # Physical-motor-order gains (20 slots, ID 9 = 0.0)
     motor_kp=(
-        200.0, 200.0, 300.0, 200.0, 200.0, 300.0,
-        200.0, 200.0, 200.0,
-        0.0,                                # motor 9 (unused)
-        40.0, 40.0,
-        100.0, 50.0, 50.0, 50.0,
-        100.0, 50.0, 50.0, 50.0,
+        300.0, 300.0, 300.0, 300.0, 300.0, 300.0,  # motors 0-5
+        300.0, 300.0, 300.0,                         # motors 6-8
+        0.0,                                          # motor 9 (unused)
+        60.0, 60.0,                                   # motors 10-11 (ankles)
+        60.0, 60.0, 60.0, 60.0,                       # motors 12-15
+        60.0, 60.0, 60.0, 60.0,                       # motors 16-19
     ),
     motor_kd=(
         5.0, 5.0, 6.0, 5.0, 5.0, 6.0,
-        5.0, 5.0, 5.0,
+        6.0, 5.0, 5.0,
         0.0,                                # motor 9 (unused)
-        2.0, 2.0,
-        2.0, 2.0, 2.0, 2.0,
-        2.0, 2.0, 2.0, 2.0,
+        1.5, 1.5,
+        1.5, 1.5, 1.5, 1.5,
+        1.5, 1.5, 1.5, 1.5,
     ),
     torso_link_name=h1_19dof.torso_link_name,
     left_hand_link_name=h1_19dof.left_hand_link_name,

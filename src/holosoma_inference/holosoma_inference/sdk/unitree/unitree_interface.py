@@ -308,6 +308,12 @@ class UnitreeInterface(BaseInterface):
             if kd_override is not None:
                 cmd_kd[m_id] = float(kd_override[j_id])
 
+        # Diagnostic: log actual KP values sent (once)
+        if not hasattr(self, "_kp_logged"):
+            self._kp_logged = True
+            msg = ", ".join(f"m{m}:kp={cmd_kp[m]*self._kp_level:.0f}" for m in [0,2,5,7,10,12,16])
+            logger.info(f"Real robot KP sent: {msg}  (level={self._kp_level})")
+
         for motor_id, motor_cmd in enumerate(self._low_cmd.motor_cmd):
             motor_cmd.q = float(cmd_q_target[motor_id])
             motor_cmd.dq = float(cmd_dq_target[motor_id])

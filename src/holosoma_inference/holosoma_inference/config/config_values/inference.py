@@ -160,32 +160,47 @@ _h1_19dof_real_wbt_robot = replace(
     _h1_19dof_wbt_robot,
     message_type=robot.h1_19dof_real_go.message_type,
     num_motors=robot.h1_19dof_real_go.num_motors,
-    default_dof_angles=robot.h1_19dof_real_go.default_dof_angles,
-    default_motor_angles=robot.h1_19dof_real_go.default_motor_angles,
+    # WBT policy-space zero point and residual-action base must match
+    # dance_h1.onnx training.  FixStand remains separate below as the startup
+    # hold pose only.
+    default_dof_angles=robot.h1_19dof.default_dof_angles,
+    default_motor_angles=robot.h1_19dof.default_motor_angles,
     motor2joint=robot.h1_19dof_real_go.motor2joint,
     joint2motor=robot.h1_19dof_real_go.joint2motor,
-    motor_kp=robot.h1_19dof_real_go.motor_kp,
-    motor_kd=robot.h1_19dof_real_go.motor_kd,
+    # Runtime PD gains match the values embedded in dance_h1.onnx.
+    motor_kp=robot.h1_19dof.motor_kp,
+    motor_kd=robot.h1_19dof.motor_kd,
     stiff_startup_pos=robot.h1_19dof_real_go.default_dof_angles,
     stiff_startup_kp=(
-        200.0, 200.0, 200.0, 300.0, 40.0,
-        200.0, 200.0, 200.0, 300.0, 40.0,
-        200.0,
-        100.0, 50.0, 50.0, 50.0,
-        100.0, 50.0, 50.0, 50.0,
+        300.0, 300.0, 300.0, 300.0, 60.0,  # left leg
+        300.0, 300.0, 300.0, 300.0, 60.0,  # right leg
+        300.0,                               # torso
+        60.0, 60.0, 60.0, 60.0,             # left arm
+        60.0, 60.0, 60.0, 60.0,             # right arm
     ),
     stiff_startup_kd=(
-        5.0, 5.0, 5.0, 6.0, 2.0,
-        5.0, 5.0, 5.0, 6.0, 2.0,
-        5.0,
-        2.0, 2.0, 2.0, 2.0,
-        2.0, 2.0, 2.0, 2.0,
+        5.0, 5.0, 5.0, 6.0, 1.5,   # left leg
+        5.0, 5.0, 5.0, 6.0, 1.5,   # right leg
+        6.0,                         # torso
+        1.5, 1.5, 1.5, 1.5,          # left arm
+        1.5, 1.5, 1.5, 1.5,          # right arm
     ),
     weak_motor_joint_index=robot.h1_19dof_real_go.weak_motor_joint_index,
 )
 
+# Keep the real GO2 transport and motor mapping, but use the exact policy-space
+# pose and PD gains from locomotion training.  The angles define both the
+# dof_pos observation zero point and the residual-action base.
+_h1_19dof_real_loco_robot = replace(
+    robot.h1_19dof_real_go,
+    default_dof_angles=robot.h1_19dof.default_dof_angles,
+    default_motor_angles=robot.h1_19dof.default_motor_angles,
+    motor_kp=robot.h1_19dof.motor_kp,
+    motor_kd=robot.h1_19dof.motor_kd,
+)
+
 h1_19dof_loco_real = InferenceConfig(
-    robot=robot.h1_19dof_real_go,
+    robot=_h1_19dof_real_loco_robot,
     observation=observation.loco_h1_19dof,
     task=replace(
         task.locomotion,
@@ -198,7 +213,7 @@ h1_19dof_loco_real = InferenceConfig(
 )
 
 h1_19dof_loco_wbt_real = InferenceConfig(
-    robot=robot.h1_19dof_real_go,
+    robot=_h1_19dof_real_loco_robot,
     observation=observation.loco_h1_19dof,
     task=replace(
         task.locomotion,
