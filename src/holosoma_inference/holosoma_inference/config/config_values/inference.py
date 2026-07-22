@@ -161,8 +161,8 @@ _h1_19dof_real_wbt_robot = replace(
     message_type=robot.h1_19dof_real_go.message_type,
     num_motors=robot.h1_19dof_real_go.num_motors,
     # WBT policy-space zero point and residual-action base must match
-    # dance_h1.onnx training.  FixStand remains separate below as the startup
-    # hold pose only.
+    # dance_h1.onnx training.  Use the same physical hold pose as locomotion
+    # so an x-key switch does not introduce a joint-position jump.
     default_dof_angles=robot.h1_19dof.default_dof_angles,
     default_motor_angles=robot.h1_19dof.default_motor_angles,
     motor2joint=robot.h1_19dof_real_go.motor2joint,
@@ -170,7 +170,7 @@ _h1_19dof_real_wbt_robot = replace(
     # Runtime PD gains match the values embedded in dance_h1.onnx.
     motor_kp=robot.h1_19dof.motor_kp,
     motor_kd=robot.h1_19dof.motor_kd,
-    stiff_startup_pos=robot.h1_19dof_real_go.default_dof_angles,
+    stiff_startup_pos=robot.h1_19dof.default_dof_angles,
     stiff_startup_kp=(
         300.0, 300.0, 300.0, 300.0, 60.0,  # left leg
         300.0, 300.0, 300.0, 300.0, 60.0,  # right leg

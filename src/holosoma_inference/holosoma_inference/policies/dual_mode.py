@@ -166,8 +166,8 @@ class DualModePolicy:
         the motion clip — WBT's own PD control pulls the robot to the
         reference pose.
 
-        *auto_start_motion=False* (``x`` key) lerps the upper body over
-        1.5 s before handing control to WBT in stiff-hold.
+        *auto_start_motion=False* (``x`` key) lerps the upper body to WBT's
+        static hold target over 1.5 s before handing over control.
         """
         if auto_start_motion:
             logger.info(
@@ -181,11 +181,14 @@ class DualModePolicy:
 
         # --- manual switch (x key) with smooth interpolation ---
         logger.info(
-            colored("Loco → WBT (switch): smooth interpolation (upper body only)…",
+            colored("Loco → WBT (switch): interpolate to WBT static hold (upper body only)…",
                     "magenta", attrs=["bold"])
         )
         delay_s, interp_s = self._switch_durations["loco_to_wbt"]
-        target_q = self.secondary.motion_command_0[:, : self._num_dofs].copy()
+        # x is a non-moving switch: its interpolation target must be the
+        # same stiff-hold pose WBT will command after activation, not a frame
+        # from the dance clip.
+        target_q = self.secondary._stiff_hold_q[:, : self._num_dofs].copy()
 
         def _on_done():
             self.active._cancel_policy_interp()
