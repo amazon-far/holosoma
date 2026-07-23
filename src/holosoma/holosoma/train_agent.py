@@ -226,8 +226,9 @@ def train(tyro_config: ExperimentConfig, training_context: TrainingContext | Non
                 "dir": str(wandb_dir),
                 "mode": wandb_cfg.mode,
             }
-            if wandb_cfg.entity:
-                wandb_kwargs["entity"] = wandb_cfg.entity
+            wandb_entity = os.getenv("WANDB_ENTITY") or wandb_cfg.entity
+            if wandb_entity:
+                wandb_kwargs["entity"] = wandb_entity
             if wandb_cfg.group:
                 wandb_kwargs["group"] = wandb_cfg.group
             if wandb_cfg.id:

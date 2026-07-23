@@ -239,7 +239,8 @@ Run the policy inside a Docker container (works both onboard and offboard).
 
 2. Build the Docker image:
    ```bash
-   bash holosoma/src/holosoma_inference/docker/build.sh
+   ECR_REGISTRY="account-id.dkr.ecr.region.amazonaws.com" \
+     bash holosoma/src/holosoma_inference/docker/build.sh
    ```
 
 3. Create and enter the Docker container:

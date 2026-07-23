@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 env:
-  ECR_REPO: 982423663241.dkr.ecr.us-west-2.amazonaws.com
+  ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -52,9 +52,11 @@ jobs:
           fi
           echo "promote=$promote" >> "$GITHUB_OUTPUT"
           echo "short_sha=$(echo "${{ github.sha }}" | cut -c1-7)" >> "$GITHUB_OUTPUT"
-          echo "## Docker Build" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Promote to :latest after tests:** \`$promote\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Immutable tag:** \`sha-$(echo "${{ github.sha }}" | cut -c1-7)\`" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## Docker Build"
+            echo "- **Promote to :latest after tests:** \`$promote\`"
+            echo "- **Immutable tag:** \`sha-$(echo "${{ github.sha }}" | cut -c1-7)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   build:
     needs: decide
@@ -99,19 +101,19 @@ jobs:
     runs-on: ${{ matrix.runner_prefix }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Generate Image name and path
         id: name
         # image name should be `holosoma` or `holsoma-${environment}`
         run: |
           IMAGE_NAME="${{ case(matrix.environment == 'holosoma', '', 'holosoma-') }}${{ matrix.environment }}"
-          IMAGE_PATH="${{ env.ECR_REPO }}/${IMAGE_NAME}"
+          IMAGE_PATH="${{ env.ECR_REGISTRY }}/${IMAGE_NAME}"
           echo "image_path=${IMAGE_PATH}" >> "$GITHUB_OUTPUT"
 
       # might be unnecessary
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Generate image tags
         id: tags
@@ -126,7 +128,7 @@ jobs:
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: "${{ matrix.dockerfile }}"
@@ -157,12 +159,12 @@ jobs:
     if: needs.decide.outputs.promote == 'true'
     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     container:
-      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:sha-${{ needs.decide.outputs.short_sha }}
+      image: ${{ vars.ECR_REGISTRY }}/holosoma:sha-${{ needs.decide.outputs.short_sha }}
       volumes:
         - "precommit-cache:/github/home/.cache/pre-commit"
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 5
       - name: mypy
@@ -187,13 +189,13 @@ jobs:
         simulator: [isaacgym, isaacsim]
     runs-on: codebuild-holosoma-a10g-x1-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     container:
-      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma-${{ matrix.simulator }}:sha-${{ needs.decide.outputs.short_sha }}
+      image: ${{ vars.ECR_REGISTRY }}/holosoma-${{ matrix.simulator }}:sha-${{ needs.decide.outputs.short_sha }}
       options: "--gpus all --runtime=nvidia --shm-size=12g"
       env:
         HOLOSOMA_MULTIGPU: "False"
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Pytest
         shell: bash
         run: |
@@ -210,13 +212,13 @@ jobs:
     if: needs.decide.outputs.promote == 'true'
     runs-on: codebuild-holosoma-a10g-x1-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     container:
-      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:sha-${{ needs.decide.outputs.short_sha }}
+      image: ${{ vars.ECR_REGISTRY }}/holosoma:sha-${{ needs.decide.outputs.short_sha }}
       options: "--gpus all --runtime=nvidia --shm-size=12g"
       env:
         HOLOSOMA_MULTIGPU: "False"
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Pytest
         shell: bash
         run: |
@@ -233,10 +235,10 @@ jobs:
     if: needs.decide.outputs.promote == 'true'
     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     container:
-      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:sha-${{ needs.decide.outputs.short_sha }}
+      image: ${{ vars.ECR_REGISTRY }}/holosoma:sha-${{ needs.decide.outputs.short_sha }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Run Tests
         shell: bash
         run: |
@@ -271,7 +273,7 @@ jobs:
     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Retag sha- -> :latest for every built image
         shell: bash
         run: |
@@ -289,8 +291,8 @@ jobs:
             holosoma-thor-inference-ros
           )
           for img in "${IMAGES[@]}"; do
-            src="${{ env.ECR_REPO }}/${img}:${SHA_TAG}"
-            dst="${{ env.ECR_REPO }}/${img}:latest"
+            src="${{ env.ECR_REGISTRY }}/${img}:${SHA_TAG}"
+            dst="${{ env.ECR_REGISTRY }}/${img}:latest"
             echo "Promoting ${src} -> :latest"
             docker buildx imagetools create --tag "${dst}" "${src}"
           done

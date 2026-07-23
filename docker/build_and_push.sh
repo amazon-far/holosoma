@@ -3,19 +3,20 @@
 # build_and_push.sh — Build and push all Holosoma Docker images to ECR.
 #
 # Usage:
+#   export ECR_REGISTRY="account-id.dkr.ecr.region.amazonaws.com"
 #   bash docker/build_and_push.sh                  # build & push all images
 #   bash docker/build_and_push.sh mujoco retarget  # only matching images
 #   bash docker/build_and_push.sh --latest         # also tag and push as :latest
 #   bash docker/build_and_push.sh --dry-run        # print commands, do nothing
 #
 # Environment variables:
-#   ECR_REPO   — ECR registry URI (default: 982423663241.dkr.ecr.us-west-2.amazonaws.com)
+#   ECR_REGISTRY — ECR registry URI (required)
 #   IMAGE_TAG  — override the date-based tag (default: YYYY_MMDD_HHMM)
 
 set -euo pipefail
 
 ROOT_REPO="$(realpath "$(dirname "$0")/..")"
-ECR_REPO="${ECR_REPO:-982423663241.dkr.ecr.us-west-2.amazonaws.com}"
+: "${ECR_REGISTRY:?ECR_REGISTRY environment variable must be set}"
 TAG="${IMAGE_TAG:-$(date +%Y_%m%d_%H%M)}"
 
 # ── Image definitions ────────────────────────────────────────────────
@@ -89,7 +90,7 @@ if ! $DRY_RUN; then
 fi
 
 # ── ECR authentication ──────────────────────────────────────────────
-echo "==> Configuring ECR credential helper for ${ECR_REPO}"
+echo "==> Configuring ECR credential helper for ${ECR_REGISTRY}"
 if ! $DRY_RUN; then
   # Ensure docker config dir exists
   mkdir -p ~/.docker
@@ -99,11 +100,11 @@ if ! $DRY_RUN; then
     echo '{}' > ~/.docker/config.json
   fi
 
-  if ! jq -e ".credHelpers[\"${ECR_REPO}\"]" ~/.docker/config.json &>/dev/null; then
+  if ! jq -e ".credHelpers[\"${ECR_REGISTRY}\"]" ~/.docker/config.json &>/dev/null; then
     tmp=$(mktemp)
-    jq --arg repo "$ECR_REPO" '.credHelpers[$repo] = "ecr-login"' ~/.docker/config.json > "$tmp" \
+    jq --arg repo "$ECR_REGISTRY" '.credHelpers[$repo] = "ecr-login"' ~/.docker/config.json > "$tmp" \
       && mv "$tmp" ~/.docker/config.json
-    echo "    Added ecr-login credential helper for ${ECR_REPO}"
+    echo "    Added ecr-login credential helper for ${ECR_REGISTRY}"
   else
     echo "    ECR credential helper already configured"
   fi
@@ -120,7 +121,7 @@ for entry in "${IMAGES[@]}"; do
     continue
   fi
 
-  full_image="${ECR_REPO}/${image_name}"
+  full_image="${ECR_REGISTRY}/${image_name}"
   echo ""
   echo "==> Building ${image_name} from ${dockerfile}"
 

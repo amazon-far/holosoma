@@ -32,7 +32,7 @@ jobs:
     name: Build sdist + wheel
     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build sdist + wheel
         working-directory: ${{ inputs.package-dir }}
@@ -41,7 +41,7 @@ jobs:
           echo "Building ${{ inputs.package-dir }} with uv $(uv --version)"
           uv build --out-dir dist
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist
           path: ${{ inputs.package-dir }}/dist/*

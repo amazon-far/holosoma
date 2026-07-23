@@ -7,7 +7,8 @@ For G1 Jetson connection and network setup, see the [Real Robot Locomotion](../s
 Build the image and create the container:
 ```bash
 # Build (from the repo root)
-bash src/holosoma_inference/docker/build.sh
+ECR_REGISTRY="account-id.dkr.ecr.region.amazonaws.com" \
+  bash src/holosoma_inference/docker/build.sh
 
 # Create container (bind-mounts repo at /workspace/holosoma)
 bash src/holosoma_inference/docker/run.sh

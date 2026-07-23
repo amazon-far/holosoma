@@ -31,13 +31,13 @@ jobs:
     - codebuild-holosoma-a10g-${{ matrix.multigpu == 'True' && 'x4' || 'x1' }}-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     continue-on-error: true
     container:
-      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma-${{ matrix.simulator }}:latest
+      image: ${{ vars.ECR_REGISTRY }}/holosoma-${{ matrix.simulator }}:latest
       options: "--gpus all --runtime=nvidia --shm-size=12g"
       env:
         HOLOSOMA_MULTIGPU: ${{ matrix.multigpu }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Pytest
         id: pytest
         shell: bash
@@ -62,13 +62,13 @@ jobs:
     continue-on-error: true
     container:
       # needs both hsgym and hsinference envs
-      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest
+      image: ${{ vars.ECR_REGISTRY }}/holosoma:latest
       options: "--gpus all --runtime=nvidia --shm-size=12g"
       env:
         HOLOSOMA_MULTIGPU: ${{ matrix.multigpu }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Pytest
         id: pytest
         shell: bash
@@ -85,12 +85,12 @@ jobs:
     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     container:
       # TODO: Switch to `holosoma-inference` once it's been confirmed functional
-      # image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma-inference:latest
+      # image: ${{ vars.ECR_REGISTRY }}/holosoma-inference:latest
       # Until then, the inference tests will run in isaacsim env.
-      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest
+      image: ${{ vars.ECR_REGISTRY }}/holosoma:latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Run Tests
         shell: bash
         run: |
@@ -111,7 +111,7 @@ jobs:
     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build service test image
         run: |
           docker build \
@@ -125,10 +125,10 @@ jobs:
     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     container:
       # Pure tests, no GPU/sim libs needed; runs in the isaacsim env on a CPU runner.
-      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest
+      image: ${{ vars.ECR_REGISTRY }}/holosoma:latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Pytest
         id: pytest
         shell: bash
