@@ -1,5 +1,7 @@
 """Unitree robot interface using C++/pybind11 binding."""
 
+from __future__ import annotations
+
 import numpy as np
 
 from holosoma_inference.config.config_types import RobotConfig
@@ -9,7 +11,7 @@ from holosoma_inference.sdk.base.base_interface import BaseInterface
 class UnitreeInterface(BaseInterface):
     """Interface for Unitree robots using C++/pybind11 binding."""
 
-    def __init__(self, robot_config: RobotConfig, domain_id=0, interface_str=None, use_joystick=True):
+    def __init__(self, robot_config: RobotConfig, domain_id=0, interface_str: str | None = None, use_joystick=True):
         super().__init__(robot_config, domain_id, interface_str, use_joystick)
         self._unitree_motor_order = None
         self._kp_level = 1.0

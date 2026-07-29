@@ -3,10 +3,12 @@
 # Parse command line arguments
 NEW_CONTAINER=false
 EXT_DIR=""
+EXTRA_MOUNTS=()
 while [[ $# -gt 0 ]]; do
     case $1 in
         --new) NEW_CONTAINER=true; shift ;;
         --ext-repo-path) EXT_DIR="$2"; shift 2 ;;
+        --extra-mount) EXTRA_MOUNTS+=("$2"); shift 2 ;;
         *) shift ;;
     esac
 done
@@ -34,6 +36,9 @@ create_container() {
         -v "$HOLOSOMA_DEPS_DIR/bash_history":/root/.bash_history
     )
     [[ -d "$EXT_DIR" ]] && mounts+=(-v "$EXT_DIR":/workspace/holosoma-extension) # optionally mount extension repo
+    for m in "${EXTRA_MOUNTS[@]}"; do
+        mounts+=(-v "$m")
+    done
 
     docker run -it \
         --privileged \
