@@ -44,7 +44,7 @@ ENV PYTHONUNBUFFERED=1
 # survives across layer boundaries and can be PATH-prepended.
 FROM l4t-cuda AS python-base
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ca-certificates \
     build-essential \
     cmake \
@@ -69,7 +69,7 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 # NVIDIA math + inference libs that rarely change.
 FROM python-base AS long-deps
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     # NVPL math libs (required by CUDA torch wheel on aarch64 SBSA)
     libnvpl-blas0 \
     libnvpl-lapack0 \
@@ -156,7 +156,7 @@ CMD ["--help"]
 # the distribution mainline). Adds ~1.5 GB but is stable across code changes.
 FROM python-base AS ros-jazzy
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     gnupg \
     lsb-release \
     && rm -rf /var/lib/apt/lists/*
@@ -179,7 +179,7 @@ RUN curl -fsSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
 # Cross-container /cmd_vel interop: FastDDS ↔ CycloneDDS is validated on
 # Jazzy for standard message types (TwistStamped tested on aarch64). Pick
 # whichever RMW your publisher container uses; no alignment required.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ros-jazzy-ros-base \
     ros-jazzy-rmw-fastrtps-cpp \
     ros-jazzy-rmw-cyclonedds-cpp \
@@ -195,7 +195,7 @@ RUN echo "source /opt/ros/jazzy/setup.bash" >> /etc/bash.bashrc
 # NVIDIA math/inference libs on top of the ROS base.
 FROM ros-jazzy AS long-deps-ros
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     libnvpl-blas0 \
     libnvpl-lapack0 \
     libcudss0-cuda-13 \

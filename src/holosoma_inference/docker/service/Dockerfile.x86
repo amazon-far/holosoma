@@ -55,7 +55,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ca-certificates \
     build-essential \
     cmake \
@@ -144,7 +144,7 @@ CMD ["--help"]
 # across code changes. Jazzy is the Noble-native distro (matches Ubuntu 24.04).
 FROM base AS ros-jazzy
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     gnupg \
     lsb-release \
     && rm -rf /var/lib/apt/lists/*
@@ -163,7 +163,7 @@ RUN curl -fsSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
 # — FastDDS and CycloneDDS have disjoint binary symbol spaces, so the two
 # middlewares coexist cleanly in one process. unitree_sdk2 keeps its bundled
 # CycloneDDS; rclpy uses FastDDS.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ros-jazzy-ros-base \
     ros-jazzy-rmw-fastrtps-cpp \
     ros-jazzy-rmw-cyclonedds-cpp \

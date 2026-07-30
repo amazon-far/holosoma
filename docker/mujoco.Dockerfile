@@ -17,7 +17,7 @@ ENV CONDA_ROOT=/root/.holosoma_deps/miniconda3
 ENV PATH=$CONDA_ROOT/bin:$PATH
 
 RUN mkdir -p /var/lib/apt/lists/partial && \
-    apt-get update && apt-get install -y --no-install-recommends \
+    apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     cmake \
     build-essential \
     swig \

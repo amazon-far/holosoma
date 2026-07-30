@@ -28,7 +28,7 @@ ENV PYTHONUNBUFFERED=1
 ENV RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 
 # colcon + venv support for the ament_python service package.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     python3-colcon-common-extensions \
     python3-pip \
     python3-venv \
