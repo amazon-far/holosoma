@@ -163,7 +163,11 @@ class MotionLoader:
             self.motion_base_poss_input = motion[:, :3]
             self.motion_base_rots_input = motion[:, 3:7]
 
-        self.motion_dof_poss_input = motion[:, 7:36]
+        # DoF width is robot-dependent, not fixed.
+        # Layout: [base(7)] [dof(N)] [object(7) iff has_dynamic_object]. Derive N from
+        # the array width so any-DoF robots convert correctly (was: motion[:, 7:36]).
+        _dof_end = motion.shape[1] - (7 if self.has_dynamic_object else 0)
+        self.motion_dof_poss_input = motion[:, 7:_dof_end]
 
         if self.has_dynamic_object:
             if self.use_omniretarget_data:
