@@ -6,6 +6,7 @@ from holosoma.utils.eval_utils import (
     init_sim_imports,
 )
 from holosoma.utils.helpers import get_class
+from holosoma.utils.exceptions import ConfigurationError
 from holosoma.utils.sim_utils import close_simulation_app
 
 
@@ -19,6 +20,16 @@ def replay(tyro_config: ExperimentConfig):
     seeding(42, torch_deterministic=False)
 
     env_target = tyro_config.env_class
+    allowed_env_classes = {
+        "holosoma.envs.base_env.BaseEnv",
+        "holosoma.envs.locomotion_env.LocomotionEnv",
+        "holosoma.envs.manipulation_env.ManipulationEnv",
+    }
+    if env_target not in allowed_env_classes:
+        raise ConfigurationError(
+            f"Environment class '{env_target}' is not allowed. "
+            f"Allowed classes: {sorted(allowed_env_classes)}"
+        )
     tyro_env_config = get_tyro_env_config(tyro_config)
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     env = get_class(env_target)(tyro_env_config, device=device)
