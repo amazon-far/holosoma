@@ -57,6 +57,238 @@ python examples/parallel_robot_retarget.py --data-dir demo_data/climb --task-typ
 
 **Note**: Add `--augmentation` to run original sequences and sequences with augmentation (for object interaction and climbing tasks).
 
+## Xsens Tennis Retargeting
+
+ActionNet-style Xsens HDF5 files can be retargeted as robot-only G1 motions with `--data_format xsens`.
+The loader reads `xsens-segments/body_position_xyz_m` when available, otherwise `xsens-segments/position_cm`,
+uses the Xsens stream timestamps to sample at 30 Hz, keeps `body_position_xyz_m` in its z-up convention, and converts
+legacy `position_cm` streams from y-up to the retargeting z-up frame.
+
+By default, the raw segment orientations and pelvis trajectory are first reconstructed on the in-memory
+G1-proportioned Xsens avatar. The adapter uses G1-derived limb dimensions and dynamically aligns the lowest subject
+and target outsole surfaces before the resulting 23 segment positions are passed to the existing G1 optimizer.
+Because these targets are already G1-sized, the normal preprocessing height alignment is retained but no additional
+uniform human-height scale is applied. This path does not require exporting or loading a USD model.
+
+```bash
+# Single Xsens tennis sequence
+python examples/robot_retarget.py \
+    --data_path demo_data/xsens_tennis \
+    --task-type robot_only \
+    --task-name 2026-06-14_tennis_S02_xsens_myo_data_01 \
+    --data_format xsens \
+    --task-config.ground-range -3 3 \
+    --save_dir demo_results/g1/robot_only/xsens_tennis \
+    --retargeter.foot-sticking-tolerance 0.02
+
+# Batch all Xsens tennis HDF5 files in the directory
+python examples/parallel_robot_retarget.py \
+    --data-dir demo_data/xsens_tennis \
+    --task-type robot_only \
+    --data_format xsens \
+    --task-config.ground-range -3 3 \
+    --save_dir demo_results_parallel/g1/robot_only/xsens_tennis \
+    --retargeter.foot-sticking-tolerance 0.02
+```
+
+Use the legacy direct-human position targets for comparison or regression runs with:
+
+```bash
+python examples/robot_retarget.py \
+    --data_path demo_data/xsens_tennis \
+    --task-type robot_only \
+    --task-name 2026-06-14_tennis_S02_xsens_myo_data_01 \
+    --data_format xsens \
+    --xsens-morphology.mode direct \
+    --xsens-morphology.root-motion.mode preserve_world
+```
+
+The G1-proportioned mode defaults to collapsed compound-joint offsets and dynamic lowest-sole grounding. Override
+these with `--xsens-morphology.preserve-joint-offsets` or `--xsens-morphology.grounding none`; use
+`--xsens-morphology.g1-model-path <model.xml>` to measure proportions from a non-default G1 MuJoCo model.
+
+### Configure floating-base translation
+
+G1-proportioned Xsens transfer supports three root-motion modes through
+`--xsens-morphology.root-motion.mode`:
+
+- `preserve_world` retains the existing world-space trajectory.
+- `scale_by_leg_length` (default) scales root XY displacement using the G1/human leg-length ratio.
+- `scale_by_leg_length_contact_aware` applies the same scaling and removes horizontal drift while an outsole is
+  detected near the ground and moving slowly.
+
+The modes compose with the existing vertical `grounding` policy:
+
+| Root-motion mode | `match_lowest_soles` | `none` |
+|---|---|---|
+| `preserve_world` | Match the source lowest-outsole world height. | Copy source root XYZ. |
+| `scale_by_leg_length` | Scale root XY displacement and outsole height above ground. | Scale root XY displacement and root Z above ground. |
+| `scale_by_leg_length_contact_aware` | Use the preceding scaled baseline plus horizontal contact correction. | Scale root XYZ plus horizontal contact correction. |
+
+Horizontal displacement is anchored at the first source root position. Leg length is the mean neutral-pose
+hip-to-lowest-outsole vertical distance across both sides. When no ground override is supplied, ground Z is estimated
+robustly from the lowest source outsole samples. Root and segment orientations, timestamps, and frame count are never
+changed.
+
+```bash
+# Geometric root scaling with outsole-relative vertical motion
+python examples/robot_retarget.py \
+    --data_path demo_data/xsens_tennis \
+    --task-type robot_only \
+    --task-name 2026-06-14_tennis_S02_xsens_myo_data_01 \
+    --data_format xsens \
+    --xsens-morphology.root-motion.mode scale_by_leg_length
+
+# Contact-aware scaling with direct root-Z scaling about an explicit ground
+python examples/robot_retarget.py \
+    --data_path demo_data/xsens_tennis \
+    --task-type robot_only \
+    --task-name 2026-06-14_tennis_S02_xsens_myo_data_01 \
+    --data_format xsens \
+    --xsens-morphology.root-motion.mode scale_by_leg_length_contact_aware \
+    --xsens-morphology.root-motion.ground-height-m 0.0 \
+    --xsens-morphology.grounding none
+```
+
+Contact-aware thresholds can be tuned with `contact-height-tolerance-m`, `contact-speed-threshold-m-s`,
+`contact-min-duration-s`, and `contact-max-gap-s` under the same `root-motion` prefix. Non-default root-motion modes
+are intentionally rejected with `--xsens-morphology.mode direct` because direct mode does not build the two calibrated
+morphologies needed to measure the leg-length ratio.
+
+This default path also reconstructs the recording's T-pose with G1 proportions and uses those positions at scale
+`1.0` to solve the physical G1 orientation-calibration pose. The recorded global Xsens segment orientations are
+copied unchanged, then calibrated against the corresponding G1 link frames so torso, foot, and hand orientations
+can be tracked during optimization. The fixed G1 head does not track independent Xsens head/neck rotation; head
+position remains part of the interaction mesh. Direct mode retains the previous human-height-scaled calibration.
+Supply an existing artifact with `--retargeter.orientation.calibration-path <calibration.npz>` to skip the in-memory
+calibration, or use `--xsens-morphology.no-track-orientations` for the position-only optimizer.
+
+For sparse debugging, `--motion-data-config.frame-indices 100 250 400` selects post-resampling frames and treats
+them as a uniformly timed storyboard. Use the same indices in `viser_player.py` with `--xsens-target-fps 30` and
+`--xsens-frame-indices 100 250 400`; increasing `--retargeter.iterations-per-frame` helps each widely separated
+keyframe converge from the previous one.
+
+The Xsens tennis files are local demo inputs; this code path works when `.hdf5`/`.h5` files are present in
+`demo_data/xsens_tennis`, but the retargeting code itself does not require those large files to be tracked by Git.
+
+### Export a calibrated OpenUSD kinematic model
+
+Install the optional OpenUSD bindings, then export one independent subject model for one recording or every HDF5 in
+a directory:
+
+```bash
+pip install -e '.[usd]'
+
+python examples/xsens_tennis/export_xsens_usd.py \
+    --hdf5-path demo_data/xsens_tennis/recording.hdf5
+
+python examples/xsens_tennis/export_xsens_usd.py \
+    --input-dir demo_data/xsens_tennis \
+    --output-dir demo_data/xsens_tennis/usd_models
+```
+
+The output is `<recording>_xsens_model.usda`. It contains a floating pelvis, calibrated rigid segment transforms,
+unrestricted spherical joints, local anatomical landmarks, and render-only avatar geometry. The tracked prop is
+exposed canonically as `TennisRacket`; historical Xsens source identifiers are retained only as `xsens:*` metadata.
+Motion remains in the HDF5 file.
+
+The implementation is reusable by layer: `data_utils.xsens_hdf5` reads calibration data,
+`xsens.kinematic_model` constructs a backend-independent tree, `kinematics` provides generic model/FK operations,
+and `usd` reads, writes, validates, or replaces a kinematic subtree in an existing stage.
+
+### Generate a source-independent Xsens model with G1 proportions
+
+The G1 reduction reads fixed joint origins and link-local meshes from the packaged 29-DoF model. It does not load
+an Xsens recording, accept a robot `qpos`, or solve against a particular G1 pose. Upper arm, forearm, hand, thigh,
+shank, foot, and toe dimensions are measured independently before the canonical Xsens T-pose is assembled:
+
+```bash
+python examples/xsens_tennis/generate_g1_xsens_usd.py \
+    --output-path demo_results/g1/models/g1_proportioned_xsens.usda
+```
+
+Its visuals reuse the calibrated Xsens avatar language (tapered spine shells, rear panels, palms, fingers, and
++X-facing thumbs) and scale those elements to G1-derived local envelopes. Pelvis, waist, and hip adapter visuals
+cover static spans that would otherwise appear as gaps without changing any joint anchor or rigid limb length.
+
+By default, translations between the axes of G1 compound joints are collapsed to produce idealized Xsens
+spherical joints. The scalar shoulder and hip cluster extents are retained in straight adapter spans, so collapsing
+the axes does not shrink the avatar. Generate the comparison variant with the full spatial offsets retained using:
+
+```bash
+python examples/xsens_tennis/generate_g1_xsens_usd.py \
+    --output-path demo_results/g1/models/g1_proportioned_xsens_with_offsets.usda \
+    --preserve-joint-offsets
+```
+
+The collapsed G1 wrist span is carried on the forearm side of the virtual Xsens wrist, which is co-located with
+the hand-segment origin. Consequently, wrist rotation changes the hand orientation without making the fixed
+inter-axis span orbit with the hand or detach it from the forearm visual.
+
+Each command also writes a same-stem JSON report containing the raw G1 offsets, collapsed adapter offsets, applied
+spatial offsets, root anchors, independently measured target lengths, generated lengths, and validation residuals.
+The `g1_xsens` Viser mode preserves the recording's pelvis trajectory and global segment orientations, then
+reconstructs connected body origins from the G1-Xsens model's authored joint anchors. This carries the recorded
+joint motion onto the G1 proportions without runtime mesh scaling. The calibrated `xsens` mode continues to apply
+the recording's global segment positions and orientations directly.
+
+The G1-Xsens root receives a pose-dependent vertical correction derived from the calibrated subject and G1-Xsens
+outsole meshes. At every sampled pose, the player aligns the lowest rendered G1 sole with the lowest rendered
+subject sole after reconstructing the G1 body origins. This handles changing leg-length projections as the knees
+bend while preserving the subject's measured airborne foot clearance without jump-height scaling or ground
+clamping.
+
+Use `viser_player.py --actor-modes robot` for the backward-compatible G1-only player. Actor modes compose freely;
+for example, `--actor-modes xsens g1_xsens` renders both avatar proportions from the same HDF5 motion, while
+`--actor-modes robot xsens` adds the physical G1. The `--actor-modes all` alias expands to `robot xsens g1_xsens`.
+Any selection containing `xsens` or `g1_xsens` requires `--xsens-hdf5`; a selection containing `robot` also reads
+`--qpos-npz`. When data sources are combined, the Xsens timestamps are the master clock.
+
+The G1-proportioned actor uses `scale_by_leg_length` root motion by default. Select the legacy trajectory with
+`--g1-xsens-root-motion.mode preserve_world`, or use
+`--g1-xsens-root-motion.mode scale_by_leg_length_contact_aware` for the contact-corrected variant. All viewer
+variants use lowest-sole grounding.
+
+The active actors are placed on a centered lateral line by default, matching the T-pose comparison layout. Their
+order is human-subject Xsens, G1-proportioned Xsens, then physical G1, with `2.0` metres of center-to-center spacing.
+Thus, `--actor-modes all` uses Y offsets `-2`, `0`, and `+2` metres respectively. Change the distance with
+`--actor-spacing-m 1.5`, or use `--actor-spacing-m 0` to overlay the selected actors around the recorded trajectory.
+
+To inspect the proportions directly, render the human-subject Xsens avatar, the generated G1-proportioned Xsens
+avatar, and the physical G1 side-by-side in canonical T- and N-poses:
+
+```bash
+python examples/xsens_tennis/compare_xsens_g1_poses.py \
+    --hdf5-path demo_data/xsens_tennis/2026-06-14_tennis_S02_xsens_myo_data_02.hdf5
+```
+
+The script generates the human-subject avatar USD when `--calibrated-xsens-usd-path` is omitted, solves the physical
+G1 T-pose from the same recording, constructs a hanging-arm N-pose from the same calibrated configuration,
+ground-aligns all three models independently, and opens a frontal Viser view. Use the **Reference pose** selector in
+the sidebar to switch all three actors together. Pass `--preserve-joint-offsets` to compare the offset-preserving G1
+Xsens variant instead. The previous `compare_xsens_g1_tpose.py` command remains as a compatibility wrapper.
+
+### Calibrate and visualize the retargeted G1 T-pose
+
+The calibration follows the Xsens T-pose convention: arms and hands are horizontal, with both thumbs pointing
+character-forward. Generate the one-frame G1 calibration result, then open it in Viser. The standard 29-DoF G1
+model is used deliberately: its rubber-hand fingers are fixed and remain curled, but this is more faithful than
+substituting a different end-effector model.
+
+```bash
+python examples/xsens_tennis/calibrate_tpose.py \
+    --data-path demo_data/xsens_tennis \
+    --task-name 2026-06-14_tennis_S02_xsens_myo_data_02 \
+    --robot g1 \
+    --variant Tpose \
+    --save-path demo_results/g1/calibration/xsens_tennis/2026-06-14_tennis_S02_xsens_myo_data_02_tpose_calibration.npz
+
+python viser_player.py \
+    --robot-urdf models/g1/g1_29dof.urdf \
+    --qpos-npz demo_results/g1/calibration/xsens_tennis/2026-06-14_tennis_S02_xsens_myo_data_02_tpose_calibration.npz \
+    --no-assume-object-in-qpos
+```
+
 ## Data Preparation
 
 We provide `demo_data/` for fast testing. To test on more motion sequences, please follow the instructions below to download and prepare the data.

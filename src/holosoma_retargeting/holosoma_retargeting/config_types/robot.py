@@ -173,12 +173,18 @@ class RobotConfig:
                 {
                     "20": -0.3,  # waist roll
                     "21": -0.1,  # waist pitch
-                    "26": -0.1,  # right wrist
-                    "27": -0.1,
-                    "28": -0.05,
-                    "33": -0.1,  # left wrist
-                    "34": -0.1,
-                    "35": -0.05,
+                    # Historical wrist clamps kept the hands close to neutral:
+                    # left wrist roll/pitch/yaw = -0.1, -0.1, -0.05 and
+                    # right wrist roll/pitch/yaw = -0.1, -0.1, -0.05.
+                    # They are intentionally disabled so Xsens hand-orientation
+                    # tracking can use the full MuJoCo model wrist ranges; with
+                    # the clamps active, wrist joints saturated for most frames.
+                    # "26": -0.1,
+                    # "27": -0.1,
+                    # "28": -0.05,
+                    # "33": -0.1,
+                    # "34": -0.1,
+                    # "35": -0.05,
                 }
             )
 
@@ -197,14 +203,16 @@ class RobotConfig:
             base.update(
                 {
                     "20": 0.3,  # waist roll
-                    "25": 1.4,  # right elbow
-                    "26": 0.2,  # right wrist
-                    "27": 0.3,
-                    "28": 0.05,
-                    "32": 1.4,  # elbow
-                    "33": 0.2,  # left wrist
-                    "34": 0.3,
-                    "35": 0.05,
+                    "25": 1.4,  # left elbow
+                    "32": 1.4,  # right elbow
+                    # See MANUAL_LB for why these historical wrist clamps are
+                    # documented but disabled.
+                    # "26": 0.2,
+                    # "27": 0.3,
+                    # "28": 0.05,
+                    # "33": 0.2,
+                    # "34": 0.3,
+                    # "35": 0.05,
                 }
             )
 

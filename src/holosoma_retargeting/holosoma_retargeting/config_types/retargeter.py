@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,26 @@ class SelfCollisionConfig:
 
 
 @dataclass(frozen=True)
+class OrientationTrackingConfig:
+    """Configuration for additive Xsens orientation and segment-axis tracking."""
+
+    enable: bool = False
+    """Whether to enable orientation-aware retargeting costs."""
+
+    calibration_path: Path | None = None
+    """Path to the Xsens T-pose calibration artifact used for orientation/axis correspondences."""
+
+    orientation_weight: float = 2.0
+    """Weight for full segment orientation tracking residuals."""
+
+    axis_weight: float = 5.0
+    """Global weight for segment-axis direction tracking residuals."""
+
+    orientation_error_clip_rad: float = 0.7
+    """Maximum rotation-vector magnitude used by orientation residuals."""
+
+
+@dataclass(frozen=True)
 class RetargeterConfig:
     """Configuration for retargeter parameters.
 
@@ -59,7 +80,7 @@ class RetargeterConfig:
     """Whether to enforce joint limits during retargeting."""
 
     activate_obj_non_penetration: bool = True
-    """Whether to enforce object non-penetration constraints."""
+    """Whether to enforce ground/object non-penetration constraints."""
 
     activate_foot_sticking: bool = True
     """Whether to enforce foot sticking constraints."""
@@ -76,6 +97,12 @@ class RetargeterConfig:
     step_size: float = 0.2
     """Trust region for each SQP iteration."""
 
+    initial_iterations: int = 50
+    """SQP iterations used to solve the first motion frame."""
+
+    iterations_per_frame: int = 10
+    """SQP iterations used for each subsequent frame; raise for sparse keyframes."""
+
     visualize: bool = False
     """Whether to visualize the retargeting process."""
 
@@ -84,6 +111,9 @@ class RetargeterConfig:
 
     self_collision: SelfCollisionConfig = field(default_factory=SelfCollisionConfig)
     """Configuration for self-collision avoidance."""
+
+    orientation: OrientationTrackingConfig = field(default_factory=OrientationTrackingConfig)
+    """Configuration for optional Xsens orientation and segment-axis tracking."""
 
     w_nominal_tracking_init: float = 5.0
     """Initial weight for nominal tracking cost."""

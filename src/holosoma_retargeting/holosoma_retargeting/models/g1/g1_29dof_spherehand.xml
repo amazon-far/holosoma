@@ -119,6 +119,8 @@
                         pos="0 0 0" axis="1 0 0"
                         range="-0.2618 0.2618"/>
 
+                    <site name="left_ankle_roll_metatarsal_site" pos="0.12 0 -0.03" size="0.005"/>
+
                     <!-- ===== ankle small spheres (fixed children) ===== -->
                     <body name="left_ankle_roll_sphere_3_link" pos="0.12 0.03 -0.03" quat="1 0 0 0">
                         <inertial pos="0 0 0" mass="0.001" diaginertia="1e-7 1e-7 1e-7"/>
@@ -227,6 +229,8 @@
                     <joint name="right_ankle_roll_joint" type="hinge"
                             pos="0 0 0" axis="1 0 0"
                             range="-0.2618 0.2618"/>
+
+                    <site name="right_ankle_roll_metatarsal_site" pos="0.12 0 -0.03" size="0.005"/>
 
                      <!-- ===== ankle small spheres (fixed children) ===== -->
                     <body name="right_ankle_roll_sphere_3_link" pos="0.12 0.03 -0.03" quat="1 0 0 0">

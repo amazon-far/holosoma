@@ -6,10 +6,11 @@ from holosoma_retargeting.config_types.retargeter import RetargeterConfig
 from holosoma_retargeting.config_types.retargeting import (
     ParallelRetargetingConfig,
     RetargetingConfig,
+    XsensMorphologyConfig,
 )
 from holosoma_retargeting.config_types.robot import RobotConfig
 from holosoma_retargeting.config_types.task import TaskConfig
-from holosoma_retargeting.config_types.viser import ViserConfig
+from holosoma_retargeting.config_types.viser import ViserConfig, XsensViserConfig
 
 __all__ = [
     "DataConversionConfig",
@@ -18,7 +19,9 @@ __all__ = [
     "ParallelRetargetingConfig",
     "RetargeterConfig",
     "RetargetingConfig",
+    "XsensMorphologyConfig",
     "RobotConfig",
     "TaskConfig",
     "ViserConfig",
+    "XsensViserConfig",
 ]

@@ -13,7 +13,9 @@ import sys
 
 # Add src to path for direct execution
 import time
+import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -23,7 +25,6 @@ src_root = Path(__file__).resolve().parents[2]
 if str(src_root) not in sys.path:
     sys.path.insert(0, str(src_root))
 
-from holosoma_retargeting.config_types.data_type import MotionDataConfig  # noqa: E402
 from holosoma_retargeting.config_types.retargeting import ParallelRetargetingConfig  # noqa: E402
 from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
 
@@ -34,7 +35,12 @@ from holosoma_retargeting.examples.robot_retarget import (  # type: ignore[impor
     create_task_constants,
     initialize_robot_pose,
     load_motion_data,
+    load_orientation_targets_for_retargeting,
+    log_retargeting_setup,
+    prepare_xsens_motion_for_retargeting,
+    resolve_orientation_tracking_config,
     setup_object_data,
+    validate_xsens_morphology_selection,
 )
 
 # Import after path modification
@@ -87,6 +93,11 @@ def find_files(data_dir: Path, data_format: str, object_name: str | None = None)
     if data_format == "smplx":
         # SMPL-X: .npz files in root directory
         files = [str(p) for p in data_dir.glob("*.npz")]
+        return sorted(files)
+    if data_format == "xsens":
+        # ActionNet/Xsens HDF5 files in root directory
+        files = [str(p) for p in data_dir.glob("*.hdf5")]
+        files.extend(str(p) for p in data_dir.glob("*.h5"))
         return sorted(files)
     # For other data format, default to be consistent with SMPL-X
     files = [str(p) for p in data_dir.glob("*.npz")]
@@ -159,6 +170,7 @@ def process_single_task(args):
         motion_data_config,
         task_config,
         retargeter,
+        xsens_morphology,
         augmentation,
     ) = args
 
@@ -172,16 +184,47 @@ def process_single_task(args):
 
     # Task-specific object setup: set default object_dir for climbing if not provided
     if task_type == "climbing" and task_config.object_dir is None:
-        from dataclasses import replace
-
         task_config = replace(task_config, object_dir=Path(file_path))
 
     constants = create_task_constants(robot_config, motion_data_config, task_config, task_type)
 
     # Load motion data
-    human_joints, object_poses, smpl_scale = load_motion_data(
+    human_joints, object_poses, smpl_scale, xsens_motion = load_motion_data(
         task_type, data_format, Path(file_path).parent, task_name, constants, motion_data_config
     )
+    if xsens_motion is not None:
+        human_joints, smpl_scale = prepare_xsens_motion_for_retargeting(
+            xsens_motion,
+            hdf5_path=Path(file_path),
+            direct_scale=smpl_scale,
+            robot_config=robot_config,
+            morphology_config=xsens_morphology,
+        )
+    retargeter = resolve_orientation_tracking_config(
+        retargeter_config=retargeter,
+        morphology_config=xsens_morphology,
+        data_format=data_format,
+        task_type=task_type,
+        robot=robot_config.robot_type,
+    )
+    orientation_targets = load_orientation_targets_for_retargeting(
+        orientation_config=retargeter.orientation,
+        robot_config=robot_config,
+        robot=robot_config.robot_type,
+        data_format=data_format,
+        task_type=task_type,
+        xsens_motion=xsens_motion,
+        hdf5_path=Path(file_path) if xsens_motion is not None else None,
+        morphology_config=xsens_morphology,
+    )
+    if (
+        orientation_targets is not None
+        and orientation_targets.orientation_target_rotations.shape[0] != human_joints.shape[0]
+    ):
+        raise ValueError(
+            "Orientation target frame count does not match loaded motion data: "
+            f"{orientation_targets.orientation_target_rotations.shape[0]} vs {human_joints.shape[0]}"
+        )
 
     # Preserve original data (preprocess_motion_data modifies them in place)
     human_joints_original = human_joints.copy()
@@ -233,13 +276,16 @@ def process_single_task(args):
         if task_type == "robot_only":
             human_joints = preprocess_motion_data(human_joints, retargeter, toe_names, smpl_scale)
         elif task_type in {"object_interaction", "climbing"}:
-            human_joints, object_poses, object_moving_frame_idx = preprocess_motion_data(
+            human_joints, object_poses, _object_moving_frame_idx = preprocess_motion_data(
                 human_joints, retargeter, toe_names, scale=smpl_scale, object_poses=object_poses
             )
 
         # Extract foot sticking sequences
         foot_sticking_sequences = extract_foot_sticking_sequence_velocity(
-            human_joints, retargeter.demo_joints, toe_names
+            human_joints,
+            retargeter.demo_joints,
+            toe_names,
+            frame_times_s=xsens_motion.times_s if xsens_motion is not None else None,
         )
 
         # Task-specific foot sticking adjustments
@@ -287,7 +333,12 @@ def process_single_task(args):
             continue
 
         # Retarget motion
-        retargeted_motions, _, _, _ = retargeter.retarget_motion(
+        log_retargeting_setup(
+            retargeter=retargeter,
+            orientation_targets=orientation_targets,
+            q_nominal_list=q_nominal,
+        )
+        retargeter.retarget_motion(
             human_joint_motions=human_joints,
             object_poses=object_poses,
             object_poses_augmented=object_poses_augmented,
@@ -296,6 +347,7 @@ def process_single_task(args):
             foot_sticking_sequences=foot_sticking_sequences,
             q_a_init=q_init,
             q_nominal_list=q_nominal,
+            orientation_targets=orientation_targets,
             original=(k == 0),
             dest_res_path=file_name,
         )
@@ -314,6 +366,12 @@ def main(cfg: ParallelRetargetingConfig) -> None:
     data_format: str = cfg.data_format or DEFAULT_DATA_FORMATS[task_type]
     save_dir = cfg.save_dir if cfg.save_dir is not None else Path(PARALLEL_SAVE_DIRS[task_type].format(robot=robot))
     data_dir = cfg.data_dir
+    validate_xsens_morphology_selection(
+        task_type=task_type,
+        data_format=data_format,
+        robot=robot,
+        config=cfg.xsens_morphology,
+    )
 
     os.makedirs(save_dir, exist_ok=True)
     print(f"Task type: {task_type}, Format: {data_format}")
@@ -324,7 +382,7 @@ def main(cfg: ParallelRetargetingConfig) -> None:
         cfg.robot_config = RobotConfig(robot_type=robot)
 
     if cfg.motion_data_config.robot_type != robot or cfg.motion_data_config.data_format != data_format:
-        cfg.motion_data_config = MotionDataConfig(data_format=data_format, robot_type=robot)
+        cfg.motion_data_config = replace(cfg.motion_data_config, data_format=data_format, robot_type=robot)
 
     if task_type == "robot_only":
         files = find_files(data_dir, data_format)
@@ -343,6 +401,7 @@ def main(cfg: ParallelRetargetingConfig) -> None:
             cfg.motion_data_config,
             cfg.task_config,
             cfg.retargeter,
+            cfg.xsens_morphology,
             cfg.augmentation,
         )
         for file_path in files
@@ -370,8 +429,6 @@ def main(cfg: ParallelRetargetingConfig) -> None:
                 successful += 1
             except Exception as e:
                 print(f"Failed {file_path}: {e}")
-                import traceback
-
                 traceback.print_exc()
                 failed += 1
 

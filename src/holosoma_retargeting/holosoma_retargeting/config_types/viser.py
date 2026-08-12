@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Literal
+
+from holosoma_retargeting.xsens.morphology_adaptation import XsensRootMotionConfig
 
 
 @dataclass(frozen=True)
@@ -34,20 +37,29 @@ class ViserConfig:
     show_meshes: bool = True
     """Whether to show mesh visualizations."""
 
-    grid_width: float = 8.0
-    """Grid width for visualization."""
+    camera_follow: bool = False
+    """Whether the interactive camera initially follows the displayed actors."""
 
-    grid_height: float = 8.0
-    """Grid height for visualization."""
+    grid_width: float | None = None
+    """Optional minimum grid width. None derives it entirely from motion bounds."""
+
+    grid_height: float | None = None
+    """Optional minimum grid height. None derives it entirely from motion bounds."""
+
+    grid_padding: float = 1.0
+    """Horizontal padding around the complete motion bounds, in metres."""
 
     visual_fps_multiplier: int = 2
     """Visual FPS multiplier for interpolation."""
 
+    playback_speed: float = 1.0
+    """Initial playback speed relative to real time."""
+
     record_video: bool = False
     """Whether to record the Viser playback to a video file."""
 
-    record_path: str = "viser_player_recording.mp4"
-    """Output path for recorded video. Extension may be .mp4 or .gif."""
+    record_path: str | None = None
+    """Optional recording output path. Defaults beside the source motion with a .mp4 suffix."""
 
     record_width: int = 1280
     """Rendered recording width in pixels."""
@@ -96,3 +108,41 @@ class ViserConfig:
 
     max_interp_mult: int = 8
     """Maximum interpolation multiplier."""
+
+
+@dataclass(frozen=True)
+class XsensViserConfig(ViserConfig):
+    """Viser configuration for Xsens and combined robot/Xsens playback."""
+
+    actor_modes: tuple[Literal["robot", "xsens", "g1_xsens", "all"], ...] = ("robot",)
+    """Actors to compose in one scene. ``all`` expands to all three actor types."""
+
+    xsens_hdf5: str | None = None
+    """Xsens HDF5 motion shared by the xsens and g1_xsens actors."""
+
+    xsens_usd: str | None = None
+    """Recording-specific Xsens USDA override; defaults to the HDF5 sibling model."""
+
+    g1_xsens_usd: str | None = None
+    """G1-proportioned Xsens USDA override; defaults to the packaged demo result."""
+
+    g1_xsens_root_motion: XsensRootMotionConfig = field(default_factory=XsensRootMotionConfig)
+    """Floating-base translation policy for the G1-proportioned Xsens actor."""
+
+    actor_spacing_m: float = 2.0
+    """Lateral center-to-center spacing for the centered side-by-side actor layout."""
+
+    xsens_target_fps: float | None = None
+    """Optional HDF5 pre-sampling rate. None preserves the native timestamps."""
+
+    xsens_frame_indices: tuple[int, ...] | None = None
+    """Sparse post-resampling frames to play as a uniformly timed storyboard."""
+
+    show_xsens_meshes: bool = True
+    """Whether Xsens avatar meshes are initially visible."""
+
+    show_xsens_landmarks: bool = False
+    """Whether calibrated Xsens landmarks are initially visible."""
+
+    show_tennis_racket: bool = True
+    """Whether the tracked tennis racket is initially visible."""

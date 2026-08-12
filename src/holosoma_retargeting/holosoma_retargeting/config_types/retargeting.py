@@ -10,6 +10,30 @@ from holosoma_retargeting.config_types.data_type import MotionDataConfig
 from holosoma_retargeting.config_types.retargeter import RetargeterConfig
 from holosoma_retargeting.config_types.robot import RobotConfig
 from holosoma_retargeting.config_types.task import TaskConfig
+from holosoma_retargeting.xsens.morphology_adaptation import XsensGroundingMode, XsensRootMotionConfig
+
+
+@dataclass(frozen=True)
+class XsensMorphologyConfig:
+    """Configure optional source-morphology adaptation before optimization."""
+
+    mode: Literal["g1_proportioned", "direct"] = "g1_proportioned"
+    """Use G1-proportioned Xsens targets by default, or retain raw human positions."""
+
+    grounding: XsensGroundingMode = "match_lowest_soles"
+    """How to align the G1-proportioned avatar vertically with the subject."""
+
+    root_motion: XsensRootMotionConfig = field(default_factory=XsensRootMotionConfig)
+    """How to transfer the source floating-base translation to G1 proportions."""
+
+    preserve_joint_offsets: bool = False
+    """Retain translations between the axes of G1 compound joints."""
+
+    g1_model_path: Path | None = None
+    """Optional G1 MuJoCo XML override used to measure target proportions."""
+
+    track_orientations: bool = True
+    """Apply T-pose-calibrated Xsens segment orientations to the G1 optimizer."""
 
 
 @dataclass
@@ -63,6 +87,9 @@ class RetargetingConfig:
     retargeter: RetargeterConfig = field(default_factory=RetargeterConfig)
     """Retargeter configuration (nested - can override q_a_init_idx, activate_joint_limits, etc.
     via --retargeter.q-a-init-idx)."""
+
+    xsens_morphology: XsensMorphologyConfig = field(default_factory=XsensMorphologyConfig)
+    """Morphology adaptation used for robot-only Xsens retargeting."""
 
 
 @dataclass

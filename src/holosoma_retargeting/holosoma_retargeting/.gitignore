@@ -19,6 +19,7 @@ demo_results/
 demo_results_parallel/
 *.pyc
 demo_data/lafan/
+demo_data/xsens_tennis/
 converted_res/
 videos/
 data_utils/lafan1

@@ -29,7 +29,13 @@ from holosoma_retargeting.config_types.data_type import (  # noqa: E402
     MotionDataConfig,
 )
 from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
-from holosoma_retargeting.src.mujoco_utils import _world_mesh_from_geom  # type: ignore[import-not-found]  # noqa: E402
+from holosoma_retargeting.src.mujoco_utils import (  # type: ignore[import-not-found]  # noqa: E402
+    MujocoFrameRef,
+    _world_mesh_from_geom,
+    mujoco_frame_pose,
+    resolve_mujoco_frame,
+    resolve_mujoco_frames,
+)
 from holosoma_retargeting.src.utils import (  # type: ignore[import-not-found]  # noqa: E402
     calculate_scale_factor,
     create_new_scene_xml_file,
@@ -130,6 +136,7 @@ class RetargetingEvaluator:
         print("Loading robot model from: ", robot_xml_path)
 
         self.robot_data = mujoco.MjData(self.robot_model)
+        self._frame_refs = resolve_mujoco_frames(self.robot_model, tuple(self.joints_mapping.values()))
 
         if self.robot_data.qpos.shape[0] > 7 + constants.ROBOT_DOF:
             self.has_dynamic_object = True
@@ -183,6 +190,11 @@ class RetargetingEvaluator:
         self._obj_VW = np.vstack(obj_Vs) if obj_Vs else np.zeros((0, 3), np.float64)
         self._obj_FW = np.vstack(obj_Fs) if obj_Fs else np.zeros((0, 3), np.int32)
 
+    def _frame_ref(self, frame_name: str) -> MujocoFrameRef:
+        if frame_name not in self._frame_refs:
+            self._frame_refs[frame_name] = resolve_mujoco_frame(self.robot_model, frame_name)
+        return self._frame_refs[frame_name]
+
     def _get_robot_link_positions(self, q, link_names):
         """Get robot link positions for given configuration using Mujoco.
 
@@ -199,14 +211,11 @@ class RetargetingEvaluator:
 
         robot_link_positions = []
         for link_name in link_names:
-            # Get body ID from name
-            body_id = mujoco.mj_name2id(self.robot_model, mujoco.mjtObj.mjOBJ_BODY, link_name)
-            if body_id == -1:
-                raise ValueError(f"Body {link_name} not found in Mujoco model")
-
-            # Get position in world frame
-            # xpos gives us the position of the body's center of mass in world coordinates
-            pos = self.robot_data.xpos[body_id].copy()
+            pos, _rotation = mujoco_frame_pose(
+                self.robot_model,
+                self.robot_data,
+                self._frame_ref(link_name),
+            )
             robot_link_positions.append(pos)
 
         return np.array(robot_link_positions)
@@ -503,8 +512,9 @@ class RetargetingEvaluator:
                 rb = self.joints_mapping.get(jn, "")
                 if not rb:
                     continue
-                bid = mujoco.mj_name2id(self.robot_model, mujoco.mjtObj.mjOBJ_BODY, rb)
-                if bid == -1:
+                try:
+                    bid = self._frame_ref(rb).body_id
+                except KeyError:
                     continue
                 dist_min = np.inf
                 fromto = np.zeros(6)

@@ -32,11 +32,16 @@ dependencies = [
     "cvxpy",
     "libigl",
     "tyro",
+    "h5py",
 ]
 
 [project.optional-dependencies]
 dev = ["mypy", "ruff", "pytest"]
+usd = ["usd-core"]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["holosoma_retargeting*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

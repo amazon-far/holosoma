@@ -683,7 +683,13 @@ def create_new_scene_xml_file(
     return output_path
 
 
-def extract_foot_sticking_sequence_velocity(smpl_joints, demo_joints, foot_names, velocity_threshold=0.01):
+def extract_foot_sticking_sequence_velocity(
+    smpl_joints,
+    demo_joints,
+    foot_names,
+    velocity_threshold=0.3,
+    frame_times_s=None,
+):
     """
     Extract contact sequence from SMPL joint data based on x,y velocity of toe joints.
 
@@ -691,7 +697,9 @@ def extract_foot_sticking_sequence_velocity(smpl_joints, demo_joints, foot_names
         smpl_joints (np.ndarray): SMPL joint positions of shape (T, N, 3).
         demo_joints (list): List of joint names.
         foot_names (list): List of foot joint names [left_foot, right_foot].
-        velocity_threshold (float): Threshold for xy velocity to determine contact.
+        velocity_threshold (float): Threshold for xy speed in meters per second.
+        frame_times_s (np.ndarray | None): Timestamp for each frame in seconds. If omitted,
+            use the 30 FPS rate assumed by the original retargeting pipeline.
 
     Returns:
         list: List of contact dictionaries for each frame.
@@ -700,18 +708,32 @@ def extract_foot_sticking_sequence_velocity(smpl_joints, demo_joints, foot_names
     left_toe_idx = demo_joints.index(foot_names[0])
     right_toe_idx = demo_joints.index(foot_names[1])
 
-    # Check xy velocities
+    frame_count = len(smpl_joints)
+    if frame_times_s is None:
+        frame_times_s = np.arange(frame_count, dtype=float) / 30.0
+    else:
+        frame_times_s = np.asarray(frame_times_s, dtype=float).reshape(-1)
+    if frame_times_s.size != frame_count:
+        raise ValueError(f"frame_times_s must contain {frame_count} timestamps, got {frame_times_s.size}")
+    frame_durations_s = np.diff(frame_times_s)
+    if np.any(~np.isfinite(frame_times_s)) or np.any(frame_durations_s <= 0.0):
+        raise ValueError("frame_times_s must be finite and strictly increasing")
+
+    # Check xy speeds
     left_toe_positions = smpl_joints[:, left_toe_idx, :2]
     right_toe_positions = smpl_joints[:, right_toe_idx, :2]
 
-    left_toe_velocity = np.linalg.norm(np.diff(left_toe_positions, axis=0), axis=1)
-    right_toe_velocity = np.linalg.norm(np.diff(right_toe_positions, axis=0), axis=1)
+    left_toe_velocity = np.linalg.norm(np.diff(left_toe_positions, axis=0), axis=1) / frame_durations_s
+    right_toe_velocity = np.linalg.norm(np.diff(right_toe_positions, axis=0), axis=1) / frame_durations_s
 
-    left_toe_velocity = np.concatenate([[velocity_threshold + 1], left_toe_velocity])
-    right_toe_velocity = np.concatenate([[velocity_threshold + 1], right_toe_velocity])
+    left_toe_velocity = np.concatenate([[np.inf], left_toe_velocity])
+    right_toe_velocity = np.concatenate([[np.inf], right_toe_velocity])
 
     return [
-        {"L_Toe": left_toe_velocity[i] <= velocity_threshold, "R_Toe": right_toe_velocity[i] <= velocity_threshold}
+        {
+            foot_names[0]: left_toe_velocity[i] <= velocity_threshold,
+            foot_names[1]: right_toe_velocity[i] <= velocity_threshold,
+        }
         for i in range(len(smpl_joints))
     ]
 
@@ -769,6 +791,12 @@ def estimate_human_orientation(human_joints, joint_names, frame_idx=0):
         spine_idx = joint_names.index("Spine")
         left_hip_idx = joint_names.index("LeftUpLeg")
         right_hip_idx = joint_names.index("RightUpLeg")
+    elif "Left Upper Leg" in joint_names and "Right Upper Leg" in joint_names:
+        # For ActionNet/Xsens segment positions.
+        hips_idx = joint_names.index("Pelvis")
+        spine_idx = joint_names.index("L5")
+        left_hip_idx = joint_names.index("Left Upper Leg")
+        right_hip_idx = joint_names.index("Right Upper Leg")
     else:
         # For SMPLH (OMOMO_new)
         hips_idx = joint_names.index("Pelvis")

@@ -87,6 +87,7 @@
                   <joint name="left_ankle_roll_joint" pos="0 0 0" axis="1 0 0" range="-0.2618 0.2618" actuatorfrcrange="-50 50"/>
                   <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.2 0.2 0.2 1" mesh="left_ankle_roll_link"/>
                   <geom name="left_ankle_roll_link" type="mesh" rgba="0.2 0.2 0.2 1" mesh="left_ankle_roll_link"/>
+                  <site name="left_ankle_roll_metatarsal_site" pos="0.12 0 -0.03" size="0.005"/>
                   <!-- sphere_3 -->
                   <body name="left_ankle_roll_sphere_3_link" pos="0.12 0.03 -0.03">
                     <inertial pos="0 0 0" mass="0.001" diaginertia="1e-7 1e-7 1e-7"/>
@@ -163,6 +164,7 @@
                   <joint name="right_ankle_roll_joint" pos="0 0 0" axis="1 0 0" range="-0.2618 0.2618" actuatorfrcrange="-50 50"/>
                   <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.2 0.2 0.2 1" mesh="right_ankle_roll_link"/>
                   <geom name="right_ankle_roll_link" type="mesh" rgba="0.2 0.2 0.2 1" mesh="right_ankle_roll_link"/>
+                  <site name="right_ankle_roll_metatarsal_site" pos="0.12 0 -0.03" size="0.005"/>
                   <body name="right_ankle_roll_sphere_3_link" pos="0.12 0.03 -0.03">
                     <inertial pos="0 0 0" mass="0.001" diaginertia="1e-7 1e-7 1e-7"/>
                     <geom type="sphere" size="0.005" rgba="0.2 0.2 0.2 1" contype="0" conaffinity="0" density="0" group="1"/>
