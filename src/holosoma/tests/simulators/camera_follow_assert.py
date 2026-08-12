@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import os
 import sys
 
 if sys.path and sys.path[0].endswith("simulators"):
@@ -89,10 +90,36 @@ def main() -> int:
     )
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
+    # Use the origins the simulator ACTUALLY placed the envs at: IsaacSim ignores the requested
+    # env_origins and clones onto its own env_spacing grid, so pinning the robot relative to the
+    # requested spread would land it away from its (grid-placed) panel. sim.env_origins is reconciled
+    # to the real placement on every backend.
+    env_origins = sim.env_origins
 
     if not sim.get_sensor_names():
         print(f"[{args.simulator}] FAIL: no sensors created")
         return 1
+
+    _all_ids = torch.arange(n, device=device)
+    # Capture the spawn joint pose so each _place can hold the articulation rigid: the robot is
+    # un-actuated, so over the settle steps the joints sag and the pelvis (hence its mounted camera)
+    # tilts a few degrees — enough to flake a random env's frame out of tolerance in multi-env. The
+    # test wants the body to move RIGIDLY (root translate/yaw) while the camera follows it, so holding
+    # the joints at spawn is exactly the intended behavior, not a cheat.
+    _spawn_dof_pos = sim.dof_pos.clone()
+
+    def _hold_dof() -> None:
+        # Restore joints to the spawn pose with zero velocity; per-backend DOF-state tensor shapes
+        # (IsaacGym flat [n*ndof, 2], IsaacSim 3D [n, ndof, 2]). MuJoCo is unaffected by this flake.
+        ndof = sim.num_dof
+        if args.simulator == "isaacgym":
+            ds = torch.zeros(n * ndof, 2, device=device)
+            ds[:, 0] = _spawn_dof_pos.reshape(-1)
+            sim.set_dof_state_tensor_robots(_all_ids, ds)
+        elif args.simulator == "isaacsim":
+            ds = torch.zeros(n, ndof, 2, device=device)
+            ds[:, :, 0] = _spawn_dof_pos
+            sim.set_dof_state_tensor_robots(_all_ids, ds)
 
     import math
 
@@ -114,17 +141,29 @@ def main() -> int:
             w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
         ]
 
-    def _place(x_offset: float, rot_xyzw) -> None:
-        states = sim.get_actor_states(["robot"], torch.arange(n, device=device)).clone()
+    def _set_root(x_offset: float, rot_xyzw) -> None:
+        states = sim.get_actor_states(["robot"], _all_ids).clone()
         states[:, :3] = env_origins + torch.tensor(list(init.pos), device=device)
         states[:, 0] += x_offset
         states[:, 3:7] = torch.tensor(rot_xyzw, device=device)
         states[:, 7:] = 0.0
-        sim.set_actor_states(["robot"], torch.arange(n, device=device), states)
+        sim.set_actor_states(["robot"], _all_ids, states)
+
+    def _place(x_offset: float, rot_xyzw) -> None:
+        # Set the root pose + hold joints rigid, settle, then re-assert both right before the render:
+        # holding the DOF pose stops the un-actuated joints from sagging the pelsvis/camera over the
+        # settle, and re-setting immediately before render_sensors lands the exact pose in the frame
+        # (on IsaacSim a pose write needs a few steps to propagate to the render, which the settle
+        # provides). Robust against the multi-env drift flake.
+        _set_root(x_offset, rot_xyzw)
+        _hold_dof()
         step(sim, max(2, steps_for_seconds(sim, 0.05)))
+        _set_root(x_offset, rot_xyzw)
+        _hold_dof()
+        step(sim, 2)
         sim.render_sensors()
 
-    cam_name, cam = next(iter(config.sensor.items()))
+    cam_name, _cam = next(iter(config.sensor.items()))
     _place(0.0, base_rot)
     before = [
         _panel_median_depth(sim.get_camera_data(cam_name, "rgb")[e], sim.get_camera_data(cam_name, "depth")[e])
@@ -206,4 +245,13 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # IsaacSim teardown deadlocks in carbOnPluginShutdown tearing down the
+    # omni.syntheticdata/OmniGraph render-product graph a TiledCamera creates (native
+    # py-spy stack), so a normal interpreter exit hangs until the parent's subprocess
+    # timeout SIGKILLs it -- turning a PASS (verdict already written to --result-file) into
+    # a spurious timeout failure. Hard-exit past the atexit teardown, mirroring
+    # behavior_assert / scene_spawn_assert. Rendering itself is fine; only exit hangs.
+    _rc = main()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(_rc)

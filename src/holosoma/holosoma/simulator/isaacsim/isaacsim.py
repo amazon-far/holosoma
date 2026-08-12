@@ -837,7 +837,14 @@ class IsaacSim(BaseSimulator):
 
     def create_envs(self, num_envs, env_origins, base_init_state):
         self.num_envs = num_envs
-        self.env_origins = env_origins
+        # IsaacSim does NOT honor the passed env_origins: InteractiveScene clones the envs on its own
+        # env_spacing grid (built in __init__), and every internal placement (robot/object poses,
+        # terrain) uses self.scene.env_origins, not the argument. Storing the passed value here left
+        # self.env_origins disagreeing with where envs actually are (unlike mujoco/isaacgym, where the
+        # passed origins ARE the placement) — so callers reading sim.env_origins (e.g. a multi-env
+        # camera harness pinning a robot relative to its env) landed off from the grid-placed scene.
+        # Reconcile to the real grid so sim.env_origins means the same thing on every backend.
+        self.env_origins = self.scene.env_origins
         self.base_init_state = base_init_state
 
         return self.scene, self._robot
@@ -1054,14 +1061,27 @@ class IsaacSim(BaseSimulator):
 
         self.scene.write_data_to_sim()
 
-        # simulate
-        self.sim.step(render=False)
+        # Render on the render-interval when the GUI or a sensor needs it, INLINE via
+        # sim.step(render=render_now). IsaacLab's self.render() only flushes fabric / drives the RTX
+        # render products when sim.render_mode >= PARTIAL_RENDERING; at NO_GUI_OR_RENDERING (-1) it is
+        # a hard no-op. render_mode is fixed at SimulationContext.__init__ from the launch flags:
+        # headless + enable_cameras => offscreen => PARTIAL (the normal camera path, incl. headless
+        # training), a GUI => FULL, but headless WITHOUT cameras — or any caller that reaches the sim
+        # before enable_cameras/headless are both set at launch — lands at -1, which is terminal
+        # (set_render_mode refuses to leave it). sim.step(render=render_now) drives the low-level
+        # render regardless of render_mode, so RTX sensors (TiledCameras) track the current poses even
+        # in that -1 state, instead of returning the stale first frame. (Equivalent to IsaacLab's
+        # canonical split step(render=False)+render() whenever render_mode is already >= PARTIAL.)
+        render_now = is_rendering and self._sim_step_counter % self.simulator_config.sim.render_interval_steps == 0
 
-        # Render between steps only IF the GUI or sensor need it
-        # note: we assume the render interval to be the shortest accepted rendering interval.
-        #    If a camera needs rendering at a faster frequency, this will lead to unexpected behavior.
-        if self._sim_step_counter % self.simulator_config.sim.render_interval_steps == 0 and is_rendering:
-            self.render()
+        # simulate
+        self.sim.step(render=render_now)
+
+        # Debug-viz overlay (GUI only): the inline render above replaces the old self.render() call,
+        # so redraw the debug lines here when a render happened and debug viz is on.
+        if render_now and self.debug_viz_enabled:
+            self.clear_lines()
+            self.draw_debug_viz()
 
         # update buffers at sim
         self.scene.update(dt=1.0 / self.simulator_config.sim.fps)

@@ -48,6 +48,7 @@ lint.ignore=[
 "src/holosoma/holosoma/utils/warp_utils.py" = ["UP018", "RUF046"]
 "src/holosoma/holosoma/simulator/isaacsim/**/*.py" = ["ALL"]  # Disable until Jenkins has access to IsaacLab
 "src/holosoma/holosoma/train_agent.py" = ["PLC0415"]  # Disable since imports after SimApp are inherent to IsaacSim
+"src/holosoma/tests/simulators/*_assert.py" = ["PLC0415"]  # Standalone sim harnesses defer torch/isaaclab imports until after the SimApp is launched (inherent to IsaacSim)
 "src/holosoma/holosoma/utils/draw.py" = ["F401"]  # Disable since unused imports are required for the adapters
 "src/holosoma/holosoma/utils/eval_utils.py" = ["PLC0415"]  # Disable since imports after SimApp are inherent to IsaacSim
 "src/holosoma_inference/holosoma_inference/policies/base.py" = ["PLC0415"]  # Deferred imports for optional heavy deps (ROS2, joystick, keyboard providers)

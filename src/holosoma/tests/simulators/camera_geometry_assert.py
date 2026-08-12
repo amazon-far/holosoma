@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import math
+import os
 import sys
 
 if sys.path and sys.path[0].endswith("simulators"):
@@ -148,14 +149,51 @@ def main() -> int:
 
     # Pin the robot to a known upright pose at each env origin so the (pelvis-mounted) camera aligns
     # with the panel placed ahead (IsaacGym jitters the spawn xy; other backends are already at origin).
+    # Use the origins the simulator ACTUALLY placed the envs at (IsaacSim clones onto its own grid and
+    # ignores the requested env_origins; sim.env_origins is reconciled to the real placement).
+    env_origins = sim.env_origins
     import torch as _torch
 
+    _all_ids = _torch.arange(n, device=device)
+    # Capture the spawn joint pose once so the pin can restore it: the robot is un-actuated, so
+    # holding only the ROOT still lets the JOINTS sag over the settle steps, tilting the pelvis a
+    # few degrees and shifting the pelvis-mounted camera a few px off-axis (a rare multi-env L/R
+    # asymmetry flake). Holding the joints rigid too removes the settle at its source.
+    _spawn_dof_pos = sim.dof_pos.clone()
+
+    def _hold_dof() -> None:
+        # Restore joints to the spawn pose with zero velocity. The cross-backend DOF setter takes
+        # different tensor shapes (IsaacGym flattened [n*ndof, 2], IsaacSim 3D [n, ndof, 2]); build
+        # whichever this backend expects. MuJoCo isn't affected by this flake, so only the two
+        # articulation backends are handled.
+        ndof = sim.num_dof
+        if args.simulator == "isaacgym":
+            ds = _torch.zeros(n * ndof, 2, device=device)
+            ds[:, 0] = _spawn_dof_pos.reshape(-1)
+            sim.set_dof_state_tensor_robots(_all_ids, ds)
+        elif args.simulator == "isaacsim":
+            ds = _torch.zeros(n, ndof, 2, device=device)
+            ds[:, :, 0] = _spawn_dof_pos
+            sim.set_dof_state_tensor_robots(_all_ids, ds)
+
     def _pin_robot() -> None:
-        robot_states = sim.get_actor_states(["robot"], _torch.arange(n, device=device)).clone()
-        robot_states[:, :3] = env_origins + _torch.tensor(list(init.pos), device=device)
-        robot_states[:, 3:7] = _torch.tensor(list(init.rot), device=device)
-        robot_states[:, 7:] = 0.0
-        sim.set_actor_states(["robot"], _torch.arange(n, device=device), robot_states)
+        # Set the target root pose AND zero all velocities, hold the joints rigid, then read back to
+        # verify the write landed before we rely on it: any residual root velocity, joint sag, or a
+        # dropped write lets the pelvis drift and drags its mounted camera off the panel (the
+        # multi-env flake where a random env's panel leaves frame / lands off-center). Retry until it
+        # sticks.
+        target_pos = env_origins + _torch.tensor(list(init.pos), device=device)
+        target_rot = _torch.tensor(list(init.rot), device=device)
+        for _ in range(3):
+            robot_states = sim.get_actor_states(["robot"], _all_ids).clone()
+            robot_states[:, :3] = target_pos
+            robot_states[:, 3:7] = target_rot
+            robot_states[:, 7:] = 0.0
+            sim.set_actor_states(["robot"], _all_ids, robot_states)
+            _hold_dof()
+            back = sim.get_actor_states(["robot"], _all_ids)
+            if _torch.allclose(back[:, :3], target_pos, atol=1e-3) and back[:, 7:].abs().max() < 1e-3:
+                break
 
     _pin_robot()
     step(sim, 2)
@@ -166,12 +204,15 @@ def main() -> int:
         return 1
 
     step(sim, max(2, steps_for_seconds(sim, 0.05)))
-    # Re-pin immediately before capture: the robot is un-actuated, so the settle steps above let the
-    # pelvis drift/tilt and drag its mounted camera off the panel (an env3-only flake — the projection
-    # math is env-independent, so a real FOV bug fails all envs). Root writes are immediate on every
-    # backend and render_sensors() does its own fetch/step_graphics, so pinning here fixes the pose the
-    # camera renders from without an extra settle.
+    # Re-pin before capture, then step a few frames: the robot is un-actuated, so the settle steps
+    # above let the pelvis drift and drag its mounted camera off the panel. Re-pinning restores the
+    # exact pose, but on IsaacSim a root/joint write does NOT reach the render until physics has
+    # stepped a few times to propagate it (an immediate render_sensors() after the write still shows
+    # the pre-pin drifted pose — measured ~4px off, tripping the margin-symmetry check). Stepping ~4
+    # frames with the joints held rigid (see _pin_robot) lands the corrected, centered pose in the
+    # render on every backend without letting the robot drift again.
     _pin_robot()
+    step(sim, 4)
     sim.render_sensors()
 
     cam_name, cam = next(iter(config.sensor.items()))
@@ -205,4 +246,13 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # IsaacSim teardown deadlocks in carbOnPluginShutdown tearing down the
+    # omni.syntheticdata/OmniGraph render-product graph a TiledCamera creates (native
+    # py-spy stack), so a normal interpreter exit hangs until the parent's subprocess
+    # timeout SIGKILLs it -- turning a PASS (verdict already written to --result-file) into
+    # a spurious timeout failure. Hard-exit past the atexit teardown, mirroring
+    # behavior_assert / scene_spawn_assert. Rendering itself is fine; only exit hangs.
+    _rc = main()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(_rc)

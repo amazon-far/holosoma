@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import os
 import sys
 
 # Pop this dir off sys.path[0] so tests/simulators/isaacsim/ can't shadow the real isaacsim pkg.
@@ -184,4 +185,13 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # IsaacSim teardown deadlocks in carbOnPluginShutdown tearing down the
+    # omni.syntheticdata/OmniGraph render-product graph a TiledCamera creates (native
+    # py-spy stack), so a normal interpreter exit hangs until the parent's subprocess
+    # timeout SIGKILLs it -- turning a PASS (verdict already written to --result-file) into
+    # a spurious timeout failure. Hard-exit past the atexit teardown, mirroring
+    # behavior_assert / scene_spawn_assert. Rendering itself is fine; only exit hangs.
+    _rc = main()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(_rc)
