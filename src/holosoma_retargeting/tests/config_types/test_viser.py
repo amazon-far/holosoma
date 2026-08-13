@@ -10,8 +10,13 @@ import numpy as np
 import pytest
 from holosoma_retargeting.config_types.viser import ViserConfig, XsensViserConfig
 from holosoma_retargeting.config_values.viser import get_default_xsens_viser_config
+from holosoma_retargeting.kinematics.model import quaternion_multiply
 from holosoma_retargeting.src.viser_utils import CameraFollowController, resolve_frame_times
 from holosoma_retargeting.viser_player import (
+    G1_HAND_TO_XSENS_FRAME_WXYZ,
+    G1_RACKET_FRAME_WXYZ,
+    XSENS_RACKET_LONGITUDINAL_ROLL_WXYZ,
+    add_g1_tennis_racket,
     add_tennis_racket_control,
     compute_camera_follow_target,
     compute_ground_plane_bounds,
@@ -21,6 +26,7 @@ from holosoma_retargeting.viser_player import (
     resolve_actor_modes,
     resolve_actor_offsets,
     resolve_record_output_path,
+    update_g1_tennis_racket_pose,
 )
 
 
@@ -165,6 +171,7 @@ def test_tennis_control_updates_all_rackets_without_affecting_other_bodies() -> 
     pelvis_b = SimpleNamespace(visible=True)
     racket_a = SimpleNamespace(visible=True)
     racket_b = SimpleNamespace(visible=True)
+    g1_racket = SimpleNamespace(visible=True)
     actors = (
         SimpleNamespace(body_frames={"Pelvis": pelvis_a, "TennisRacket": racket_a}),
         SimpleNamespace(body_frames={"Pelvis": pelvis_b, "TennisRacket": racket_b}),
@@ -174,6 +181,7 @@ def test_tennis_control_updates_all_rackets_without_affecting_other_bodies() -> 
     checkbox = add_tennis_racket_control(
         SimpleNamespace(gui=gui),
         actors,
+        g1_racket_frame=g1_racket,
         initial_visible=False,
     )
 
@@ -181,6 +189,7 @@ def test_tennis_control_updates_all_rackets_without_affecting_other_bodies() -> 
     assert gui.folders == [("Tennis", 50.0)]
     assert racket_a.visible is False
     assert racket_b.visible is False
+    assert g1_racket.visible is False
     assert pelvis_a.visible is True
     assert pelvis_b.visible is True
 
@@ -188,8 +197,90 @@ def test_tennis_control_updates_all_rackets_without_affecting_other_bodies() -> 
     checkbox.callback(None)
     assert racket_a.visible is True
     assert racket_b.visible is True
+    assert g1_racket.visible is True
     assert pelvis_a.visible is True
     assert pelvis_b.visible is True
+
+
+def test_g1_tennis_racket_pose_uses_robot_local_hand_transform() -> None:
+    class FakeUrdf:
+        base_link = "pelvis"
+
+        def __init__(self) -> None:
+            self.transforms = {
+                "right_wrist_yaw_link": np.eye(4),
+                "right_rubber_hand_link": np.array(
+                    [
+                        [0.0, -1.0, 0.0, 0.0],
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ]
+                ),
+            }
+            self.transforms["right_wrist_yaw_link"][:3, 3] = [1.0, 0.0, 0.0]
+
+        def get_transform(self, frame_to, frame_from):
+            assert frame_from == self.base_link
+            return self.transforms[frame_to]
+
+    racket = SimpleNamespace(position=np.zeros(3), wxyz=np.array([1.0, 0.0, 0.0, 0.0]))
+
+    update_g1_tennis_racket_pose(racket, FakeUrdf())
+
+    np.testing.assert_allclose(racket.position, [1.0, 0.0, 0.0])
+    np.testing.assert_allclose(
+        racket.wxyz,
+        quaternion_multiply(
+            np.array([np.sqrt(0.5), 0.0, 0.0, np.sqrt(0.5)]),
+            G1_RACKET_FRAME_WXYZ,
+        ),
+    )
+
+
+def test_g1_racket_frame_maps_xsens_roll_through_g1_hand_axes() -> None:
+    np.testing.assert_allclose(
+        G1_RACKET_FRAME_WXYZ,
+        quaternion_multiply(
+            G1_HAND_TO_XSENS_FRAME_WXYZ,
+            XSENS_RACKET_LONGITUDINAL_ROLL_WXYZ,
+        ),
+    )
+    np.testing.assert_allclose(G1_RACKET_FRAME_WXYZ, [np.sqrt(0.5), 0.0, -np.sqrt(0.5), 0.0])
+
+
+def test_g1_tennis_racket_geometry_uses_shared_xsens_mesh_parts() -> None:
+    class FakeScene:
+        def __init__(self) -> None:
+            self.frames = []
+            self.meshes = []
+
+        def add_frame(self, name, **kwargs):
+            frame = SimpleNamespace(name=name, visible=kwargs.get("visible", True))
+            self.frames.append(frame)
+            return frame
+
+        def add_mesh_simple(self, name, vertices, faces, **kwargs):
+            handle = SimpleNamespace(
+                name=name,
+                vertices=vertices,
+                faces=faces,
+                color=kwargs["color"],
+                visible=kwargs["visible"],
+            )
+            self.meshes.append(handle)
+            return handle
+
+    scene = FakeScene()
+    frame, mesh_handles = add_g1_tennis_racket(SimpleNamespace(scene=scene))
+
+    assert frame.name == "/robot/tennis_racket"
+    assert len(mesh_handles) == 3
+    assert [handle.name.rsplit("/", 1)[-1] for handle in mesh_handles] == [
+        "racket_grip",
+        "racket_frame",
+        "racket_strings",
+    ]
 
 
 def test_tennis_control_is_absent_when_no_actor_has_a_racket() -> None:

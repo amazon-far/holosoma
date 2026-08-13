@@ -14,6 +14,7 @@ import numpy as np
 import tyro
 import viser  # type: ignore[import-not-found]
 import yourdfpy  # type: ignore[import-untyped]
+from scipy.spatial.transform import Rotation  # type: ignore[import-untyped]
 from viser.extras import ViserUrdf  # type: ignore[import-not-found]
 
 src_root = Path(__file__).resolve().parent.parent
@@ -25,6 +26,7 @@ from holosoma_retargeting.data_utils.xsens_hdf5 import (  # noqa: E402
     load_xsens_hdf5_motion,
 )
 from holosoma_retargeting.kinematics import KinematicMorphologyAdapter, KinematicMotion  # noqa: E402
+from holosoma_retargeting.kinematics.model import quaternion_multiply  # noqa: E402
 from holosoma_retargeting.src.recording_utils import (  # noqa: E402
     build_record_frame_indices,
     record_viser_sequence,
@@ -47,6 +49,7 @@ from holosoma_retargeting.src.xsens_viser import (  # noqa: E402
     validate_g1_xsens_usd,
     validate_subject_xsens_usd,
 )
+from holosoma_retargeting.xsens.avatar_mesh import build_tennis_racket_meshes  # noqa: E402
 from holosoma_retargeting.xsens.kinematic_model import TENNIS_RACKET_BODY  # noqa: E402
 from holosoma_retargeting.xsens.morphology_adaptation import (  # noqa: E402
     apply_xsens_root_motion,
@@ -93,6 +96,18 @@ def _nominal_fps(times_s: np.ndarray, fallback: float) -> float:
 ActorMode = Literal["robot", "xsens", "g1_xsens"]
 ACTOR_MODE_ORDER: tuple[ActorMode, ...] = ("robot", "xsens", "g1_xsens")
 ACTOR_LAYOUT_ORDER: tuple[ActorMode, ...] = ("xsens", "g1_xsens", "robot")
+
+G1_RACKET_POSITION_LINK = "right_wrist_yaw_link"
+G1_RACKET_ORIENTATION_LINK = "right_rubber_hand_link"
+XSENS_RACKET_LONGITUDINAL_ROLL_WXYZ = np.array([np.sqrt(0.5), -np.sqrt(0.5), 0.0, 0.0])
+# The physical G1 hand link uses a different fixed axis convention from the
+# calibrated Xsens RightHand frame. This maps G1-hand coordinates into the
+# Xsens hand frame before applying the tracked-racket longitudinal roll.
+G1_HAND_TO_XSENS_FRAME_WXYZ = np.array([0.5, 0.5, -0.5, 0.5])
+G1_RACKET_FRAME_WXYZ = quaternion_multiply(
+    G1_HAND_TO_XSENS_FRAME_WXYZ,
+    XSENS_RACKET_LONGITUDINAL_ROLL_WXYZ,
+)
 
 
 def resolve_actor_modes(actor_modes: Sequence[str]) -> tuple[ActorMode, ...]:
@@ -191,15 +206,17 @@ def add_tennis_racket_control(
     server: viser.ViserServer,
     actors: Sequence[XsensUsdActor],
     *,
+    g1_racket_frame: Any | None = None,
     initial_visible: bool,
 ) -> Any | None:
-    """Add one tennis-only control for every Xsens actor that has a racket body."""
+    """Add one tennis-only control for every displayed actor that has a racket."""
 
-    racket_frames = tuple(
+    xsens_racket_frames = tuple(
         actor.body_frames[TENNIS_RACKET_BODY]
         for actor in actors
         if TENNIS_RACKET_BODY in actor.body_frames
     )
+    racket_frames = xsens_racket_frames + ((g1_racket_frame,) if g1_racket_frame is not None else ())
     if not racket_frames:
         return None
 
@@ -218,6 +235,60 @@ def add_tennis_racket_control(
             frame.visible = bool(checkbox.value)
 
     return checkbox
+
+
+def add_g1_tennis_racket(
+    server: viser.ViserServer,
+) -> tuple[Any, tuple[Any, ...]]:
+    """Add a shared-geometry racket frame for the physical G1 actor."""
+
+    racket_frame = server.scene.add_frame("/robot/tennis_racket", show_axes=False)
+    mesh_handles = tuple(
+        server.scene.add_mesh_simple(
+            f"/robot/tennis_racket/{part.name}",
+            vertices=np.asarray(part.mesh.vertices, dtype=float),
+            faces=np.asarray(part.mesh.faces, dtype=np.int32),
+            color=part.color,
+            side="double",
+            visible=True,
+        )
+        for part in build_tennis_racket_meshes()
+    )
+    return racket_frame, mesh_handles
+
+
+def update_g1_tennis_racket_pose(
+    racket_frame: Any,
+    robot_urdf: yourdfpy.URDF,
+) -> None:
+    """Update the G1 racket's local pose under the physical robot root."""
+
+    position_transform = robot_urdf.get_transform(
+        G1_RACKET_POSITION_LINK,
+        robot_urdf.base_link,
+    )
+    orientation_transform = robot_urdf.get_transform(
+        G1_RACKET_ORIENTATION_LINK,
+        robot_urdf.base_link,
+    )
+    local_position = np.asarray(position_transform[:3, 3], dtype=float)
+    local_hand_wxyz = _matrix_to_quaternion(orientation_transform[:3, :3])
+
+    # The racket frame is parented at ``/robot``. The robot root already
+    # carries the floating-base world transform, so assigning it again here
+    # would double-transform the racket.
+    racket_frame.position = local_position
+    racket_frame.wxyz = quaternion_multiply(local_hand_wxyz, G1_RACKET_FRAME_WXYZ)
+
+
+def _matrix_to_quaternion(rotation: np.ndarray) -> np.ndarray:
+    """Convert a proper rotation matrix to a normalized scalar-first quaternion."""
+
+    matrix = np.asarray(rotation, dtype=float)
+    if matrix.shape != (3, 3):
+        raise ValueError("rotation must have shape (3, 3)")
+    quaternion_xyzw = Rotation.from_matrix(matrix).as_quat()
+    return quaternion_xyzw[[3, 0, 1, 2]]
 
 
 @dataclass(frozen=True)
@@ -385,8 +456,10 @@ def make_player(
 
     vr: ViserUrdf | None = None
     vo: ViserUrdf | None = None
+    robot_urdf: yourdfpy.URDF | None = None
     robot_root = None
     object_root = None
+    g1_racket_frame: Any | None = None
     robot_dof = 0
     robot_applier: QposViserApplier | None = None
     actual_robot_fps = float(fps if fps is not None else config.fps)
@@ -403,6 +476,11 @@ def make_player(
         vr = ViserUrdf(server, urdf_or_path=robot_urdf, root_node_name="/robot")
         vr.show_visual = config.show_meshes
         robot_dof = len(vr.get_actuated_joint_limits())
+        if xsens_config is not None and {
+            G1_RACKET_POSITION_LINK,
+            G1_RACKET_ORIENTATION_LINK,
+        }.issubset(robot_urdf.link_map):
+            g1_racket_frame, _ = add_g1_tennis_racket(server)
 
         if config.object_urdf:
             object_root = server.scene.add_frame("/object", show_axes=False)
@@ -590,9 +668,11 @@ def make_player(
                 )
                 xsens_display_controls[mode] = (actor, meshes_cb, landmarks_cb)
 
+    if xsens_config is not None and (xsens_actors or g1_racket_frame is not None):
         add_tennis_racket_control(
             server,
             tuple(xsens_actors.values()),
+            g1_racket_frame=g1_racket_frame,
             initial_visible=xsens_config.show_tennis_racket,
         )
 
@@ -621,6 +701,9 @@ def make_player(
 
         def _apply_robot_frame(frame_idx: int) -> None:
             robot_applier.apply_frame(qpos, frame_idx)
+            if g1_racket_frame is not None:
+                assert robot_urdf is not None
+                update_g1_tennis_racket_pose(g1_racket_frame, robot_urdf)
             camera_follow.update_target(qpos[int(np.clip(frame_idx, 0, qpos.shape[0] - 1)), 0:3])
 
         if config.record_video:
@@ -708,6 +791,9 @@ def make_player(
                 has_object_input=has_object,
             )
             robot_applier.apply_qpos(sampled_qpos, has_object_input=has_object)
+            if g1_racket_frame is not None:
+                assert robot_urdf is not None
+                update_g1_tennis_racket_pose(g1_racket_frame, robot_urdf)
             robot_position = sampled_qpos[0:3]
         camera_follow.update_target(
             compute_camera_follow_target(
