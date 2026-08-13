@@ -85,10 +85,12 @@ DEFAULT_DATA_FORMATS = {
     "climbing": "mocap",
 }
 
-DEFAULT_SAVE_DIRS = {
-    "robot_only": "demo_results/{robot}/robot_only/omomo",
-    "object_interaction": "demo_results/{robot}/object_interaction/omomo",
-    "climbing": "demo_results/{robot}/climbing/mocap_climb",
+DATASET_OUTPUT_ALIASES = {
+    # Keep the established output names for the bundled datasets while deriving
+    # new dataset names from their input directories.
+    "omomo_new": "omomo",
+    "climb": "mocap_climb",
+    "amass_smplx_processed": "amass_smplx",
 }
 
 RETARGETING_OUTPUT_FPS = 30.0
@@ -106,6 +108,29 @@ TaskType = Literal["robot_only", "object_interaction", "climbing"]
 
 
 # ----------------------------- Helper Functions -----------------------------
+
+
+def determine_save_dir(
+    configured_save_dir: Path | None,
+    *,
+    results_root: Path,
+    robot: str,
+    task_type: str,
+    data_path: Path,
+    data_format: str,
+) -> Path:
+    """Resolve an explicit save directory or derive one from the input dataset.
+
+    The inferred layout is ``<results_root>/<robot>/<task_type>/<dataset>``.
+    ``dataset`` normally comes from the final component of ``data_path``; the
+    data format is a fallback for paths without a usable final component.
+    """
+    if configured_save_dir is not None:
+        return Path(configured_save_dir)
+
+    dataset_dir = Path(data_path).name or data_format
+    dataset_name = DATASET_OUTPUT_ALIASES.get(dataset_dir.casefold(), dataset_dir)
+    return Path(results_root) / robot / task_type / dataset_name
 
 
 def create_task_constants(
@@ -928,8 +953,15 @@ def main(cfg: RetargetingConfig) -> None:
 
     # Set defaults based on task type
     data_format: str = cfg.data_format or DEFAULT_DATA_FORMATS[task_type]
-    save_dir = cfg.save_dir if cfg.save_dir is not None else Path(DEFAULT_SAVE_DIRS[task_type].format(robot=robot))
     data_path = cfg.data_path
+    save_dir = determine_save_dir(
+        cfg.save_dir,
+        results_root=Path("demo_results"),
+        robot=robot,
+        task_type=task_type,
+        data_path=data_path,
+        data_format=data_format,
+    )
     validate_xsens_morphology_selection(
         task_type=task_type,
         data_format=data_format,

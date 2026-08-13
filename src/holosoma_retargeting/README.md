@@ -78,7 +78,6 @@ python examples/robot_retarget.py \
     --task-name 2026-06-14_tennis_S02_xsens_myo_data_01 \
     --data_format xsens \
     --task-config.ground-range -3 3 \
-    --save_dir demo_results/g1/robot_only/xsens_tennis \
     --retargeter.foot-sticking-tolerance 0.02
 
 # Batch all Xsens tennis HDF5 files in the directory
@@ -87,9 +86,11 @@ python examples/parallel_robot_retarget.py \
     --task-type robot_only \
     --data_format xsens \
     --task-config.ground-range -3 3 \
-    --save_dir demo_results_parallel/g1/robot_only/xsens_tennis \
     --retargeter.foot-sticking-tolerance 0.02
 ```
+
+When `--save-dir` is omitted, the output directory is inferred from the input dataset. The examples above save to
+`demo_results/g1/robot_only/xsens_tennis` and `demo_results_parallel/g1/robot_only/xsens_tennis`, respectively.
 
 Use the legacy direct-human position targets for comparison or regression runs with:
 

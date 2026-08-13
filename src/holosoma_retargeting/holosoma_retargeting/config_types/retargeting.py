@@ -63,7 +63,7 @@ class RetargetingConfig:
     """Path to data directory."""
 
     save_dir: Path | None = None
-    """Directory to save results. Auto-determined if None."""
+    """Directory to save results. If None, derived from robot, task type, and input dataset."""
 
     augmentation: bool = False
     """Whether to use augmentation."""

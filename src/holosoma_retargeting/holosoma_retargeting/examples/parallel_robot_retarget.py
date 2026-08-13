@@ -33,6 +33,7 @@ from holosoma_retargeting.examples.robot_retarget import (  # type: ignore[impor
     DEFAULT_DATA_FORMATS,
     build_retargeter_kwargs_from_config,
     create_task_constants,
+    determine_save_dir,
     initialize_robot_pose,
     load_motion_data,
     load_orientation_targets_for_retargeting,
@@ -51,15 +52,6 @@ from holosoma_retargeting.src.utils import (  # type: ignore[import-not-found]  
     extract_foot_sticking_sequence_velocity,
     preprocess_motion_data,
 )
-
-# ----------------------------- Constants -----------------------------
-
-# Override save directories for parallel processing (use demo_results_parallel instead of demo_results)
-PARALLEL_SAVE_DIRS = {
-    "robot_only": "demo_results_parallel/{robot}/robot_only/omomo",
-    "object_interaction": "demo_results_parallel/{robot}/object_interaction/omomo",
-    "climbing": "demo_results_parallel/{robot}/climbing/mocap_climb",
-}
 
 
 def find_files(data_dir: Path, data_format: str, object_name: str | None = None):
@@ -364,8 +356,15 @@ def main(cfg: ParallelRetargetingConfig) -> None:
 
     # Set defaults based on task type
     data_format: str = cfg.data_format or DEFAULT_DATA_FORMATS[task_type]
-    save_dir = cfg.save_dir if cfg.save_dir is not None else Path(PARALLEL_SAVE_DIRS[task_type].format(robot=robot))
     data_dir = cfg.data_dir
+    save_dir = determine_save_dir(
+        cfg.save_dir,
+        results_root=Path("demo_results_parallel"),
+        robot=robot,
+        task_type=task_type,
+        data_path=data_dir,
+        data_format=data_format,
+    )
     validate_xsens_morphology_selection(
         task_type=task_type,
         data_format=data_format,
