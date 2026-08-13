@@ -16,11 +16,25 @@ from holosoma_retargeting.viser_player import (
     compute_camera_follow_target,
     compute_ground_plane_bounds,
     compute_initial_camera_view,
+    load_npz,
     offset_qpos_positions,
     resolve_actor_modes,
     resolve_actor_offsets,
     resolve_record_output_path,
 )
+
+
+def test_load_npz_missing_root_file_explains_shell_expansion() -> None:
+    missing_path = "/missing-qpos-file-for-viser-player.npz"
+
+    with pytest.raises(FileNotFoundError) as error:
+        load_npz(missing_path)
+
+    message = str(error.value)
+    assert "QPOS NPZ file not found" in message
+    assert missing_path in message
+    assert "SAVE_DIR" in message
+    assert "TASK" in message
 
 
 def test_camera_follow_is_opt_in_by_default() -> None:

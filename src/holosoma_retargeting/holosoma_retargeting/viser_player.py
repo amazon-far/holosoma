@@ -56,9 +56,28 @@ from holosoma_retargeting.xsens.morphology_adaptation import (  # noqa: E402
 
 
 def load_npz(npz_path: str) -> tuple[np.ndarray, int]:
-    data = np.load(resolve_package_path(npz_path), allow_pickle=True)
-    qpos = np.asarray(data["qpos"])
-    fps = int(data["fps"]) if "fps" in data else 30
+    requested_path = Path(npz_path).expanduser()
+    resolved_path = resolve_package_path(requested_path)
+    if not resolved_path.is_file():
+        message = (
+            "QPOS NPZ file not found.\n"
+            f"  requested argument: {requested_path}\n"
+            f"  resolved path: {resolved_path}\n"
+            f"  working directory: {Path.cwd()}"
+        )
+        if requested_path.is_absolute() and requested_path.parent == Path("/"):
+            message += (
+                "\n\nThe path is directly under the filesystem root (`/`). This often means "
+                "a shell variable expanded to an empty value. If you built this argument "
+                'with "$SAVE_DIR/$TASK.npz", check the variables before running:\n'
+                '  printf \'SAVE_DIR=%s\\nTASK=%s\\n\' "$SAVE_DIR" "$TASK"\n'
+                "Then pass the existing file path with `--qpos-npz`."
+            )
+        raise FileNotFoundError(message)
+
+    with np.load(resolved_path, allow_pickle=True) as data:
+        qpos = np.asarray(data["qpos"])
+        fps = int(data["fps"]) if "fps" in data else 30
     return qpos, fps
 
 
