@@ -41,6 +41,7 @@ from holosoma_retargeting.src.mujoco_utils import (  # noqa: E402
     evaluate_mujoco_frame_poses,
     replace_named_joint_qpos,
 )
+from holosoma_retargeting.src.paths import DEMO_RESULTS_DIR  # noqa: E402
 from holosoma_retargeting.usd import open_usd_stage, read_kinematic_tree_from_stage  # noqa: E402
 from holosoma_retargeting.xsens.kinematic_model import normalize_xsens_name  # noqa: E402
 from holosoma_retargeting.xsens.morphology_adaptation import (  # noqa: E402
@@ -75,7 +76,7 @@ class XsensG1PoseComparisonConfig:
     calibrated_xsens_usd_path: Path | None = None
     """Existing human-subject Xsens avatar USD; generated from hdf5_path when omitted."""
 
-    generated_usd_dir: Path = Path("demo_results/g1/models/xsens")
+    generated_usd_dir: Path = DEMO_RESULTS_DIR / "g1/models/xsens"
     """Destination for the generated human-subject Xsens avatar USD."""
 
     g1_urdf_path: Path = Path("models/g1/g1_29dof.urdf")

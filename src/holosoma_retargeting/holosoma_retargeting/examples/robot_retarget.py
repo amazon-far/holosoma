@@ -41,6 +41,7 @@ from holosoma_retargeting.data_utils.xsens_hdf5 import (  # noqa: E402
 from holosoma_retargeting.src.interaction_mesh_retargeter import (  # noqa: E402
     InteractionMeshRetargeter,  # type: ignore[import-not-found]
 )
+from holosoma_retargeting.src.paths import DEMO_RESULTS_DIR  # noqa: E402
 from holosoma_retargeting.src.utils import (  # noqa: E402
     augment_object_poses,
     calculate_scale_factor,
@@ -956,7 +957,7 @@ def main(cfg: RetargetingConfig) -> None:
     data_path = cfg.data_path
     save_dir = determine_save_dir(
         cfg.save_dir,
-        results_root=Path("demo_results"),
+        results_root=DEMO_RESULTS_DIR,
         robot=robot,
         task_type=task_type,
         data_path=data_path,

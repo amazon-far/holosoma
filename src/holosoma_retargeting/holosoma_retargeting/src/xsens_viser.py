@@ -18,6 +18,7 @@ from holosoma_retargeting.data_utils.xsens_hdf5 import (
 )
 from holosoma_retargeting.kinematics import KinematicTree
 from holosoma_retargeting.src.viser_utils import interpolation_window, quat_slerp
+from holosoma_retargeting.src.paths import DEMO_RESULTS_DIR, PACKAGE_ROOT
 from holosoma_retargeting.usd import open_usd_stage, read_kinematic_tree_from_stage
 from holosoma_retargeting.xsens.g1_kinematic_reduction import G1_XSENS_REDUCTION_VERSION
 from holosoma_retargeting.xsens.kinematic_model import (
@@ -26,11 +27,11 @@ from holosoma_retargeting.xsens.kinematic_model import (
     normalize_xsens_name,
 )
 
-DEFAULT_G1_XSENS_USD = Path("demo_results/g1/models/g1_proportioned_xsens.usda")
+DEFAULT_G1_XSENS_USD = DEMO_RESULTS_DIR / "g1/models/g1_proportioned_xsens.usda"
 
 
 def _package_dir() -> Path:
-    return Path(__file__).resolve().parents[1]
+    return PACKAGE_ROOT
 
 
 def resolve_package_path(path: str | Path) -> Path:

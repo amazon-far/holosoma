@@ -21,11 +21,12 @@ from holosoma_retargeting.xsens.g1_kinematic_reduction import (
     G1XsensReductionConfig,
     export_g1_proportioned_xsens_usd,
 )
+from holosoma_retargeting.src.paths import DEMO_RESULTS_DIR
 
 
 @dataclass(frozen=True)
 class G1XsensUsdCli:
-    output_path: Path = Path("demo_results/g1/models/g1_proportioned_xsens.usda")
+    output_path: Path = DEMO_RESULTS_DIR / "g1/models/g1_proportioned_xsens.usda"
     """Generated OpenUSD ASCII stage."""
 
     robot_model_path: Path | None = None

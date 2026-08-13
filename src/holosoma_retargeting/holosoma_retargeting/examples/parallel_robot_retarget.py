@@ -27,6 +27,7 @@ if str(src_root) not in sys.path:
 
 from holosoma_retargeting.config_types.retargeting import ParallelRetargetingConfig  # noqa: E402
 from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
+from holosoma_retargeting.src.paths import DEMO_RESULTS_PARALLEL_DIR  # noqa: E402
 
 # Import reusable functions from robot_retarget.py
 from holosoma_retargeting.examples.robot_retarget import (  # type: ignore[import-not-found]  # noqa: E402
@@ -359,7 +360,7 @@ def main(cfg: ParallelRetargetingConfig) -> None:
     data_dir = cfg.data_dir
     save_dir = determine_save_dir(
         cfg.save_dir,
-        results_root=Path("demo_results_parallel"),
+        results_root=DEMO_RESULTS_PARALLEL_DIR,
         robot=robot,
         task_type=task_type,
         data_path=data_dir,

@@ -28,6 +28,7 @@ from holosoma_retargeting.xsens.tpose_calibration import (  # noqa: E402
     save_xsens_tpose_calibration,
     solve_xsens_tpose_calibration,
 )
+from holosoma_retargeting.src.paths import DEMO_RESULTS_DIR  # noqa: E402
 
 
 @dataclass
@@ -64,7 +65,7 @@ class XsensTennisTposeCalibrationCli:
 
 def _default_save_path(robot: str, task_name: str) -> Path:
     task_stem = Path(task_name).stem
-    return Path("demo_results") / robot / "calibration" / "xsens_tennis" / f"{task_stem}_tpose_calibration.npz"
+    return DEMO_RESULTS_DIR / robot / "calibration" / "xsens_tennis" / f"{task_stem}_tpose_calibration.npz"
 
 
 def main(cfg: XsensTennisTposeCalibrationCli) -> None:
