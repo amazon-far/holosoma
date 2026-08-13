@@ -3,6 +3,7 @@ from __future__ import annotations
 import builtins
 import copy
 import dataclasses
+import math
 import os
 import xml.etree.ElementTree as ET
 from typing import Any
@@ -12,18 +13,28 @@ import trimesh
 
 from holosoma.config_types.full_sim import FullSimConfig
 import isaaclab.sim as sim_utils
-from isaaclab.assets import RigidObject, RigidObjectCfg
 import isaaclab.terrains as terrain_gen
+import isaacsim.core.utils.stage as stage_utils
 import omni.log
 import torch
+from pxr import Usd, UsdGeom
 from isaaclab.actuators import IdealPDActuatorCfg
 from isaaclab.assets import Articulation, ArticulationCfg
 from isaaclab.envs import ViewerCfg, mdp
 from isaaclab.managers import EventManager, SceneEntityCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
-from isaaclab.sensors import ContactSensor, ContactSensorCfg, RayCaster, RayCasterCfg, patterns
+from isaaclab.sensors import (
+    ContactSensor,
+    ContactSensorCfg,
+    RayCaster,
+    RayCasterCfg,
+    TiledCamera,
+    TiledCameraCfg,
+    patterns,
+)
 from isaaclab.sim import PhysxCfg, SimulationCfg, SimulationContext
+from isaaclab.sim.utils import bind_physics_material
 from isaaclab.terrains import TerrainGeneratorCfg, TerrainImporterCfg
 from isaaclab.terrains.utils import create_prim_from_mesh
 from isaaclab.utils.timer import Timer
@@ -31,23 +42,31 @@ from loguru import logger
 from omegaconf import DictConfig
 
 from holosoma.utils.module_utils import get_holosoma_root
-from holosoma.utils.path import resolve_data_file_path
-from holosoma.config_types.simulator import SimulatorInitConfig, SceneConfig
+from holosoma.config_types.scene import SceneConfig
+from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+from holosoma.simulator.isaacsim.converters import (
+    physics_to_collision_props,
+    physics_to_mass_props,
+    physics_to_rigid_body_props,
+)
 from holosoma.simulator.isaacsim.event_cfg import EventCfg
 from holosoma.simulator.isaacsim.events import randomize_body_com, randomize_rigid_body_inertia
 from holosoma.simulator.isaacsim.isaaclab_viewpoint_camera_controller import ViewportCameraController
 from holosoma.simulator.isaacsim.isaacsim_articulation_cfg import ARTICULATION_CFG
-from holosoma.simulator.isaacsim.usd_file_loader import USDFileLoader
-from holosoma.simulator.isaacsim.registry_utils import register_objects
-from holosoma.simulator.isaacsim.proxy_utils import AllRootStatesProxy, RootStatesProxy
+from holosoma.simulator.isaacsim.object_spawner import (
+    build_standalone_rigid_object,
+    expand_scene_file,
+    physics_material_cfg,
+)
+from holosoma.simulator.isaacsim.proxy_utils import RootStatesProxy
+from holosoma.simulator.shared.root_states_view import UnifiedRootStatesView
+from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.simulator.isaacsim.state_adapter import IsaacSimStateAdapter
 from holosoma.simulator.isaacsim.prim_utils import (
     log_robot_properties,
     print_prim_tree,
-    UsdSceneLoaderCfg,
-    create_usd_scene_loader,
 )
 from holosoma.simulator.isaacsim.video_recorder import IsaacSimVideoRecorder
 from holosoma.simulator.shared.virtual_gantry import (
@@ -60,16 +79,38 @@ from holosoma.simulator.shared.virtual_gantry import (
 from holosoma.simulator.types import ActorNames, ActorIndices, EnvIds, ActorStates, ActorPoses
 
 
+def _hide_prim_subtree(stage: "Usd.Stage", prim_path: str) -> None:
+    """Make the geometry under ``prim_path`` invisible (rendering only; physics untouched).
+
+    Authors ``visibility = invisible`` on every Imageable prim in the subtree. The terrain root
+    (e.g. ``/World/ground``) is typeless, so setting visibility only there is a no-op; the visible
+    meshes are on Imageable descendants. Colliders are unaffected, so the body stays collidable.
+    """
+    root = stage.GetPrimAtPath(prim_path)
+    if not root.IsValid():
+        return
+    for prim in Usd.PrimRange(root):
+        imageable = UsdGeom.Imageable(prim)
+        if imageable:
+            imageable.MakeInvisible()
+
+
 class IsaacSim(BaseSimulator):
     def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str):
         super().__init__(tyro_config, terrain_manager, device)
 
-        # Add device attribute for base simulator compatibility
+        # Public interface attribute read across backends (video_recorder, virtual_gantry,
+        # simulator_bridge). For IsaacSim it always equals self.sim_device; internal tensor
+        # allocations below use self.sim_device directly.
         self.device = device
+
+        # Names (prefixed {file}_{body}) of scene-file bodies spawned static (kinematic),
+        # populated by _load_scene_files; read in _collect_spawned_actors to classify.
+        self.scene_file_static_names: set[str] = set()
 
         sim_config: SimulationCfg = SimulationCfg(
             dt=1.0 / self.simulator_config.sim.fps,
-            render_interval=self.simulator_config.sim.render_interval,
+            render_interval=self.simulator_config.sim.render_interval_steps,
             device=self.sim_device,
             physx=PhysxCfg(
                 bounce_threshold_velocity=self.simulator_config.sim.physx.bounce_threshold_velocity,
@@ -105,29 +146,35 @@ class IsaacSim(BaseSimulator):
             f"\tRendering step-size   : {1.0 / self.simulator_config.sim.fps * self.simulator_config.sim.substeps}"
         )
 
-        if self.simulator_config.sim.render_interval < self.simulator_config.sim.control_decimation:
+        if self.simulator_config.sim.render_interval_steps < self.simulator_config.sim.control_decimation_steps:
             msg = (
-                f"The render interval ({self.simulator_config.sim.render_interval}) is smaller than the decimation "
-                f"({self.simulator_config.sim.control_decimation}). Multiple render calls will happen for each "
+                f"The render interval ({self.simulator_config.sim.render_interval_steps}) is smaller than the decimation "
+                f"({self.simulator_config.sim.control_decimation_steps}). Multiple render calls will happen for each "
                 "environment step. If this is not intended, set the render interval to be equal to the decimation."
             )
             logger.warning(msg)
 
         scene_config: InteractiveSceneCfg = InteractiveSceneCfg(
             num_envs=self.training_config.num_envs,
-            env_spacing=self.simulator_config.scene.env_spacing,
-            replicate_physics=self.simulator_config.scene.replicate_physics,
+            env_spacing=self.scene_config.env_spacing,
+            replicate_physics=self.scene_config.replicate_physics,
         )
         # generate scene
         with Timer("[INFO]: Time taken for scene creation", "scene_creation"):
-            self.scene = InteractiveScene(scene_config)
+            # Narrow the type from the base class's SceneInterface (which declares only
+            # env_origins) to IsaacLab's InteractiveScene, what self.scene actually is on this
+            # backend, so the rich .rigid_objects/.articulations/.sensors/... accesses below
+            # type-check. The base protocol stays correct for MuJoCo/IsaacGym, whose scenes
+            # implement only env_origins.
+            self.scene: InteractiveScene = InteractiveScene(scene_config)
             self._setup_scene()
         print("[INFO]: Scene manager: ", self.scene)
 
+        viewer_config: ViewerCfg
         if self.simulator_config.viewer.enable_tracking:
-            viewer_config: ViewerCfg = ViewerCfg(origin_type="asset_root", asset_name="robot", eye=(0.0, -1.5, 1.5))
+            viewer_config = ViewerCfg(origin_type="asset_root", asset_name="robot", eye=(0.0, -1.5, 1.5))
         else:
-            viewer_config: ViewerCfg = ViewerCfg()
+            viewer_config = ViewerCfg()
 
         if self.sim.render_mode >= self.sim.RenderMode.PARTIAL_RENDERING:
             self.viewport_camera_controller: ViewportCameraController | None = ViewportCameraController(
@@ -193,6 +240,50 @@ class IsaacSim(BaseSimulator):
 
         logger.info("Completed setting up the environment...")
 
+    def _bind_robot_link_material(self) -> None:
+        """Bind the robot's ``link_physics.isaacsim`` as a ``RigidBodyMaterialCfg`` on every link.
+
+        Same mechanism as a scene object's material bind (``object_spawner.physics_material_cfg``
+        with ``bind_physics_material``), applied to the robot articulation: spawn one material prim
+        under the env_0 robot and bind it to the robot prim. ``bind_physics_material`` is
+        ``@apply_nested``, so the single bind reaches every link's collider. Run before
+        ``clone_environments`` (the clone copies the authored env_0 prim, material binding included),
+        so all envs inherit it.
+
+        A material prim is used rather than the per-shape ``root_physx_view.set_material_properties``
+        tensor because the friction/restitution combine modes live on the PhysX material prim
+        (``physxMaterial:frictionCombineMode``), which the per-shape float table cannot carry. Binding
+        the material authors the combine modes too, so the robot honors ``friction_combine_mode`` and
+        ``restitution_combine_mode`` as an object does. No-op when ``link_physics.isaacsim`` is unset
+        (the links keep the asset's authored or global-default material).
+        """
+        link_physics = self.robot_config.asset.link_physics
+        mat_cfg = physics_material_cfg(link_physics) if link_physics is not None else None
+        if mat_cfg is None:
+            return
+        robot_prim_path = "/World/envs/env_0/Robot"
+        material_path = f"{robot_prim_path}/linkPhysicsMaterial"
+
+        # The URDF-converted robot authors its colliders as instanceable prims; bind_physics_material
+        # (and its @apply_nested walk) no-ops on instance proxies, so the material never reaches the
+        # real collider and PhysX keeps the default per-shape material (the failure objects avoid via
+        # CustomUsdFileCfg.disable_instanceable). Clear instanceable across the robot subtree first so
+        # the bind reaches the actual collider prims.
+        stage = stage_utils.get_current_stage()
+        for prim in Usd.PrimRange(stage.GetPrimAtPath(robot_prim_path)):
+            if prim.IsInstanceable():
+                prim.SetInstanceable(False)
+
+        mat_cfg.func(
+            material_path, mat_cfg
+        )  # spawn_rigid_body_material: authors friction/restitution and combine modes
+        bind_physics_material(robot_prim_path, material_path)  # @apply_nested over every link collider
+        logger.info(
+            f"Bound robot link material: static_friction={mat_cfg.static_friction} "
+            f"dynamic_friction={mat_cfg.dynamic_friction} restitution={mat_cfg.restitution} "
+            f"friction_combine={mat_cfg.friction_combine_mode} restitution_combine={mat_cfg.restitution_combine_mode}"
+        )
+
     def _setup_scene(self) -> None:
         self._load_scene_config()
 
@@ -202,15 +293,33 @@ class IsaacSim(BaseSimulator):
         if asset_root.startswith("@holosoma/"):
             asset_root = asset_root.replace("@holosoma", get_holosoma_root())
 
-        robot_rigid_props = sim_utils.RigidBodyPropertiesCfg(
-            disable_gravity=False,
-            retain_accelerations=False,
-            linear_damping=robot_asset_cfg.linear_damping,
-            angular_damping=robot_asset_cfg.angular_damping,
-            max_linear_velocity=robot_asset_cfg.max_linear_velocity,
-            max_angular_velocity=robot_asset_cfg.max_angular_velocity,
-            max_depenetration_velocity=1.0,
+        # PhysX solver knobs (damping, velocity caps) come from the shared link_physics.physx via the
+        # converter objects use (physics_to_rigid_body_props), so a robot link and a scene object map
+        # the physx sub-config identically. fixed=False (the robot is a free-base articulation, never
+        # a kinematic body); None link_physics gives the converter's PhysXPhysicsConfig defaults.
+        # @apply_nested on the articulation, so it reaches every link (body_names='.*' semantics).
+        robot_link_physics = robot_asset_cfg.link_physics
+        robot_rigid_props = physics_to_rigid_body_props(robot_link_physics, fixed=False)
+
+        # Collision offsets (contact/rest offset, torsional patch) from link_physics.isaacsim, if set,
+        # via the converter objects use. @apply_nested over every link collider. Gated on the isaacsim
+        # sub-config being present (not just link_physics): physics_to_collision_props always returns a
+        # non-None cfg, and passing it would run modify_collision_properties (stamping an empty
+        # PhysxCollisionAPI on every robot collider) even when no offset is configured. Gating keeps it
+        # None, and thus byte-for-byte the prior spawn, unless an offset is set.
+        robot_collision_props = (
+            physics_to_collision_props(robot_link_physics)
+            if robot_link_physics is not None and robot_link_physics.isaacsim is not None
+            else None
         )
+
+        # density (a shared core field) reaches the robot links the way it reaches objects:
+        # physics_to_mass_props gives a MassPropertiesCfg, @apply_nested over every link.
+        # link_physics.mass is validator-rejected (_validate_link_physics), so only density flows,
+        # matching how IsaacGym (AssetOptions.density) and MuJoCo (geom.density) honor it on a robot
+        # link. physics_to_mass_props returns None when neither mass nor density is set, so this is
+        # byte-for-byte the prior spawn for a robot with no link_physics density (e.g. g1).
+        robot_mass_props = physics_to_mass_props(robot_link_physics)
 
         robot_articulation_props = sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=robot_asset_cfg.enable_self_collisions,
@@ -244,6 +353,8 @@ class IsaacSim(BaseSimulator):
                 ),
                 activate_contact_sensors=True,
                 rigid_props=robot_rigid_props,
+                collision_props=robot_collision_props,
+                mass_props=robot_mass_props,
                 articulation_props=robot_articulation_props,
             )
         else:
@@ -252,6 +363,8 @@ class IsaacSim(BaseSimulator):
                 usd_path=os.path.abspath(os.path.join(asset_root, asset_path)),
                 activate_contact_sensors=True,
                 rigid_props=robot_rigid_props,
+                collision_props=robot_collision_props,
+                mass_props=robot_mass_props,
                 articulation_props=robot_articulation_props,
             )
 
@@ -351,6 +464,10 @@ class IsaacSim(BaseSimulator):
             terrain_config.env_spacing = self.scene.cfg.env_spacing
             terrain_config.class_type(terrain_config)
             global_collision_prims.append(terrain_config.prim_path)
+            # Hide the ground plane's visual while keeping its collider; avoids z-fighting a scene
+            # USD's own floor. Applied to the whole /World/ground subtree.
+            if terrain_state.hide_visual:
+                _hide_prim_subtree(stage_utils.get_current_stage(), terrain_prim_path)
         elif terrain_state.mesh_type in ["trimesh", "load_obj"]:
             self.terrain = self.terrain_manager.get_state("locomotion_terrain").terrain
             visual_material = sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 0.0))
@@ -374,6 +491,11 @@ class IsaacSim(BaseSimulator):
 
         self._robot = Articulation(robot_articulation_config)
 
+        # Bind the robot's link_physics friction/restitution material to every link, before clone so
+        # all envs inherit it (the clone copies env_0's authored prim). Authors the combine modes too
+        # (see _bind_robot_link_material). No-op unless link_physics.isaacsim is set.
+        self._bind_robot_link_material()
+
         print_prim_tree("/World/envs/env_0/Robot")
         log_robot_properties("/World/envs/env_0/Robot", "*")
 
@@ -386,51 +508,14 @@ class IsaacSim(BaseSimulator):
             self._height_scanner = RayCaster(height_scanner_config)
             self.scene.sensors["height_scanner"] = self._height_scanner
 
+        # Perception cameras: one TiledCamera per configured camera, as a child prim of its
+        # mount body so it follows that body, created before clone so it replicates per env.
+        self._create_sensors_pre_clone()
+
         # clone, filter, and replicate
         self.scene.clone_environments(copy_from_source=False)
 
-        if hasattr(self.simulator_config.scene, "usd_file"):
-            # Activate collisions with the entire scene
-            global_collision_prims.append("/World/scene")
-
         self.scene.filter_collisions(global_prim_paths=global_collision_prims)
-
-        # add objects if object is provided
-        if self.robot_config.object.object_urdf_path:
-            # Resolve the object asset urdf path using importlib.resources
-            object_asset_urdf_path = resolve_data_file_path(self.robot_config.object.object_urdf_path)
-            object_name = "object"  # hardcoded object name
-            object_cfg = RigidObjectCfg(
-                prim_path=f"/World/envs/env_.*/Object",
-                spawn=sim_utils.UrdfFileCfg(
-                    fix_base=False,
-                    replace_cylinders_with_capsules=True,
-                    asset_path=object_asset_urdf_path,
-                    activate_contact_sensors=True,
-                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                        disable_gravity=False,
-                        retain_accelerations=False,
-                        linear_damping=0.01,
-                        angular_damping=0.01,
-                        max_linear_velocity=1000.0,
-                        max_angular_velocity=1000.0,
-                        max_depenetration_velocity=1.0,
-                    ),
-                    articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-                        enabled_self_collisions=True,
-                        solver_position_iteration_count=8,
-                        solver_velocity_iteration_count=4,
-                    ),
-                    joint_drive=sim_utils.UrdfConverterCfg.JointDriveCfg(
-                        gains=sim_utils.UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=0, damping=0)
-                    ),
-                ),
-                init_state=RigidObjectCfg.InitialStateCfg(
-                    pos=(0.0, 0.0, 0.5),
-                ),
-            )
-            self._object = RigidObject(object_cfg)
-            self.scene.rigid_objects[object_name] = self._object
 
         # add lights
         # light_config = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.98, 0.95, 0.88))
@@ -441,6 +526,122 @@ class IsaacSim(BaseSimulator):
             color=(0.98, 0.95, 0.88),
         )
         light_config1.func("/World/DomeLight", light_config1, translation=(1, 0, 10))
+
+        # Register the TiledCameras (built pre-clone above) into the shared SensorManager. Done
+        # here at the end of scene build (IsaacSim builds its scene in __init__, not load_assets).
+        self._create_sensors()
+
+    # ----- Camera sensors (TiledCamera; child prim of the mount body, auto-follow) -----
+
+    def _camera_mount_prim_path(self, mount) -> str:
+        """Resolve a sensor mount to a per-env camera prim path (parent = the mount body prim).
+
+        ``robot_link`` -> a robot link prim (name the root link to mount on the base);
+        ``actor`` -> a spawned scene-object prim. The camera prim is created as a child of this
+        path so the USD transform hierarchy makes it follow the body natively.
+        """
+        ns = "/World/envs/env_.*"
+        if mount.target_kind == "robot_link":
+            valid = self.robot_config.body_names
+            if mount.target not in valid:
+                raise ValueError(f"Camera robot_link '{mount.target}' not a robot body. Known: {valid}.")
+            return f"{ns}/Robot/{mount.target}"
+        if mount.target_kind == "actor":
+            return f"{ns}/{mount.target}"
+        if mount.target_kind == "world":
+            # Free-floating: child of the env prim itself, so the mount offset is the pose in the
+            # per-env frame (each cloned env carries its own copy at the same relative pose).
+            return ns
+        raise ValueError(f"Unknown camera mount target_kind '{mount.target_kind}'.")
+
+    def _create_sensors_pre_clone(self) -> None:
+        """Build a TiledCamera per configured camera (before clone, so each replicates per env).
+
+        The camera optical convention is OpenGL (-Z forward, +Y up), the same frame holosoma uses,
+        so the mount offset passes through with ``convention="opengl"`` and no extra rotation.
+        Mount quat is the config-layer ``[w,x,y,z]`` (IsaacLab OffsetCfg.rot is also w-first).
+        """
+        self._tiled_cameras = {}
+        for cam_name, cam in self.sensor_config.items():
+            parent = self._camera_mount_prim_path(cam.mount)
+            # Map holosoma data_types -> IsaacLab annotators.
+            annotators = [{"rgb": "rgb", "depth": "distance_to_image_plane"}[d] for d in cam.data_types]
+            cam_cfg = TiledCameraCfg(
+                prim_path=f"{parent}/{cam_name}",
+                offset=TiledCameraCfg.OffsetCfg(
+                    pos=tuple(cam.mount.position),
+                    rot=tuple(cam.mount.orientation),  # (w, x, y, z)
+                    convention="opengl",  # -Z forward / +Y up, the frame holosoma uses
+                ),
+                data_types=annotators,
+                spawn=self._pinhole_cfg_for(cam),
+                width=cam.width,
+                height=cam.height,
+                # No-hit / beyond-far depth handling, done natively by the TiledCamera.
+                depth_clipping_behavior=(cam.isaacsim.depth_clipping_behavior if cam.isaacsim is not None else "none"),
+            )
+            self._tiled_cameras[cam_name] = TiledCamera(cam_cfg)
+            self.scene.sensors[cam_name] = self._tiled_cameras[cam_name]
+
+    def _pinhole_cfg_for(self, cam):
+        """Build a PinholeCameraCfg honoring the configured vertical FOV.
+
+        IsaacLab derives the rendered FOV from the aperture/focal-length pair; for a fixed
+        focal length, vertical_aperture = 2*f*tan(vfov/2) sets the vertical FOV, and
+        horizontal_aperture = vertical_aperture * (width/height) keeps square pixels (so a
+        square sensor has equal horizontal and vertical FOV).
+        """
+        isaacsim_cfg = cam.isaacsim
+        focal_length = isaacsim_cfg.focal_length if (isaacsim_cfg and isaacsim_cfg.focal_length) else 24.0
+        v_aperture = 2.0 * focal_length * math.tan(math.radians(cam.vertical_fov) / 2)
+        h_aperture = v_aperture * (cam.width / cam.height)
+        kwargs = dict(
+            focal_length=focal_length,
+            clipping_range=(cam.near, cam.far),
+            vertical_aperture=v_aperture,
+            horizontal_aperture=h_aperture,
+        )
+        # Physically-based depth-of-field (IsaacSim-only): f_stop>0 enables defocus blur.
+        if isaacsim_cfg and isaacsim_cfg.f_stop is not None:
+            kwargs["f_stop"] = isaacsim_cfg.f_stop
+        if isaacsim_cfg and isaacsim_cfg.focus_distance is not None:
+            kwargs["focus_distance"] = isaacsim_cfg.focus_distance
+        return sim_utils.PinholeCameraCfg(**kwargs)
+
+    def _create_sensors(self) -> None:
+        """Register the TiledCameras (built pre-clone) into the shared SensorManager."""
+        cameras = self.sensor_config
+        if not cameras:
+            return
+        from holosoma.simulator.shared.camera_sensor import SensorManager
+
+        sim = self.simulator_config.sim
+        self.sensor_manager = SensorManager(self.sim_device, control_hz=sim.fps / sim.control_decimation_steps)
+        for cam_name, cam in cameras.items():
+            self.sensor_manager.register_camera(cam_name, cam)
+
+    def render_sensors(self) -> None:
+        """Cache each due TiledCamera's RGB as a ``[N,H,W,3]`` uint8 frame into its buffer.
+
+        TiledCameras are RTX sensors the sim already updates in its own render pass
+        (``scene.update`` in ``simulate_at_each_physics_step``); this reads that output, drops
+        alpha, and writes a ``[N,H,W,3]`` uint8 frame once per control step (honoring
+        ``update_decimation``), mirroring the other backends' render -> buffer -> read flow."""
+        if self.sensor_manager is None:
+            return
+        for runtime in self.sensor_manager.collect_due():
+            out = self._tiled_cameras[runtime.name].data.output
+            if "rgb" in runtime.config.data_types:
+                rgb = out["rgb"][..., :3]  # [N,H,W,3], drop alpha
+                if rgb.dtype != torch.uint8:
+                    rgb = rgb.clamp(0, 255).to(torch.uint8)
+                runtime.set_buffer("rgb", rgb)
+            if "depth" in runtime.config.data_types:
+                # distance_to_image_plane is float32 meters, image-plane. No-hit handling (raw +inf,
+                # clamp to far, or zero) is done by the TiledCamera itself via depth_clipping_behavior
+                # (see _tiled_camera_cfg). Ensure a trailing channel dim -> [N,H,W,1].
+                depth = out["distance_to_image_plane"].to(torch.float32)
+                runtime.set_buffer("depth", depth if depth.ndim == 4 else depth.unsqueeze(-1))
 
     def _get_base_body_name(self, preference_order: list[str]) -> str:
         """Get the base body name with fallback logic.
@@ -468,14 +669,15 @@ class IsaacSim(BaseSimulator):
         """See base class.
 
         IsaacSim-specific notes:
-        - Supports USD only currently
+        - Supports USD as the preferred format.
+        - Also supports URDF, which isaacsim will internally translate to USD.
 
         Returns
         -------
         List[str]
-            ["usd" ]
+            ["usd", "urdf"]
         """
-        return ["usd"]
+        return ["usd", "urdf"]
 
     def set_headless(self, headless):
         # call super
@@ -494,70 +696,41 @@ class IsaacSim(BaseSimulator):
         Replaces the previous _load_scene_usd method with a more flexible approach
         that supports multiple scene file formats and individual object loading.
         """
-        if self.simulator_config.scene is None:
+        if self.scene_config is None:
             return
 
-        scene_config = self.simulator_config.scene
-
-        # Load scene files (USD/URDF scene files as collections) - NEW APPROACH
-        if scene_config.scene_files is not None:
-            self._load_scene_files(scene_config)
+        # Load scene files (USD/URDF scene files as collections)
+        self._load_scene_files(self.scene_config)
 
         # Load individual rigid objects
-        if scene_config.rigid_objects is not None:
-            self._load_rigid_objects(scene_config)
+        self._load_rigid_objects(self.scene_config)
 
     def _load_scene_files(self, scene_config: SceneConfig) -> None:
-        """Load scene files (USD/URDF scene files as collections).
-
-        Loads scene files as collections using the USDFileLoader. This is the new
-        approach that replaces direct USD file loading with a more flexible system
-        that supports multiple scene file formats.
+        """Load multi-body scene files (1->N) by expanding each into per-body RigidObjects.
 
         Parameters
         ----------
         scene_config : SceneConfig
             Scene configuration containing scene files and asset root path
-
-        Raises
-        ------
-        ValueError
-            If scene_files is an empty list
         """
-        if not scene_config.scene_files:  # Empty list
-            raise ValueError("scene.scene_files is empty list - remove field or provide scene files")
-
-        usd_loader = USDFileLoader(self.sim, self.scene, self.sim_device)
-        scene_collection = usd_loader.load_scene_files(scene_config.scene_files, scene_config.asset_root)
-
-        if scene_collection is not None:
-            self.scene.rigid_objects["usd_scene_objects"] = scene_collection
+        for scene_file_name, scene_file in scene_config.scene_files.items():
+            objects, static_names = expand_scene_file(
+                scene_file_name, scene_file, self.get_supported_scene_formats(), scene_config.asset_root
+            )
+            self.scene.rigid_objects.update(objects)
+            self.scene_file_static_names |= static_names
 
     def _load_rigid_objects(self, scene_config: SceneConfig) -> None:
-        """Load individual rigid objects from configuration.
+        """Load standalone rigid objects (1->1), USD or URDF, through the unified spawner.
 
-        Loads individual rigid objects using the USDFileLoader and adds them
-        to the scene using their configuration names as keys.
-
-        Parameters
-        ----------
-        scene_config : SceneConfig
-            Scene configuration containing rigid objects and asset root path
-
-        Raises
-        ------
-        ValueError
-            If rigid_objects is an empty list
+        Format is chosen per object by ``select_asset_format`` (USD preferred, URDF fallback;
+        an object providing neither fails loud); both formats build the identical RigidObject
+        via object_spawner; the only difference is the spawn cfg.
         """
-        if not scene_config.rigid_objects:  # Empty list
-            raise ValueError("scene.rigid_objects is empty list - remove field or provide objects")
-
-        usd_loader = USDFileLoader(self.sim, self.scene, self.sim_device)
-        individual_objects = usd_loader.load_rigid_objects(scene_config.rigid_objects, scene_config.asset_root)
-
-        # Add individual objects to scene using direct config names
-        for obj_name, rigid_object in individual_objects.items():
-            self.scene.rigid_objects[obj_name] = rigid_object
+        for obj_name, obj in scene_config.rigid_objects.items():
+            self.scene.rigid_objects[obj_name] = build_standalone_rigid_object(
+                obj_name, obj, self.get_supported_scene_formats(), scene_config.asset_root
+            )
 
     def setup(self):
         self.sim_dt = 1.0 / self.simulator_config.sim.fps
@@ -664,7 +837,14 @@ class IsaacSim(BaseSimulator):
 
     def create_envs(self, num_envs, env_origins, base_init_state):
         self.num_envs = num_envs
-        self.env_origins = env_origins
+        # IsaacSim does NOT honor the passed env_origins: InteractiveScene clones the envs on its own
+        # env_spacing grid (built in __init__), and every internal placement (robot/object poses,
+        # terrain) uses self.scene.env_origins, not the argument. Storing the passed value here left
+        # self.env_origins disagreeing with where envs actually are (unlike mujoco/isaacgym, where the
+        # passed origins ARE the placement) — so callers reading sim.env_origins (e.g. a multi-env
+        # camera harness pinning a robot relative to its env) landed off from the grid-placed scene.
+        # Reconcile to the real grid so sim.env_origins means the same thing on every backend.
+        self.env_origins = self.scene.env_origins
         self.base_init_state = base_init_state
 
         return self.scene, self._robot
@@ -712,27 +892,79 @@ class IsaacSim(BaseSimulator):
         logger.warning(f"Multiple bodies found for {body_name}.")
         return indices
 
+    def _collect_spawned_actors(self):
+        """IsaacSim describes WORLD poses (env_origins added). Every spawned body lives under its
+        own name in ``scene.rigid_objects``: both standalone objects AND multi-body scene-file
+        bodies (1->N, named ``{file}_{body}``). A body is static if its standalone ``fixed`` flag
+        is set or it is in ``scene_file_static_names`` (the file marked it kinematic); otherwise
+        free.
+        """
+        # Robot: config base pose with env_origins added (world coordinates).
+        base = torch.cat(
+            [
+                torch.tensor(self.robot_config.init_state.pos, device=self.sim_device, dtype=torch.float32),
+                torch.tensor(self.robot_config.init_state.rot, device=self.sim_device, dtype=torch.float32),
+            ]
+        )
+        robot_pose = base.unsqueeze(0).repeat(self.num_envs, 1)
+        robot_pose[:, :3] += self.scene.env_origins
+
+        static_names = {
+            name for name, obj in self.scene_config.rigid_objects.items() if obj.fixed
+        } | self.scene_file_static_names
+        # scene.rigid_objects is a superset of scene_config.rigid_objects: it also holds
+        # scene-file (1->N) bodies, which have no standalone config. Map name -> config so each
+        # spawned body can look up its configured velocity (None for scene-file bodies; zero for
+        # fixed bodies, enforced by RigidObjectConfig).
+        cfg_by_name = dict(self.scene_config.rigid_objects)
+        names = list(self.scene.rigid_objects.keys())  # InteractiveScene always exposes this dict (empty if none)
+        items = []
+        if names:
+            # Per-env world poses for every object, reshaped to [n, num_envs, 7] (rows are
+            # obj-major then env, matching get_actor_initial_poses' ordering). Registering the full
+            # per-env block (not env 0 repeated) keeps a static body's registry pose at its true
+            # per-env world position, so its read-back matches where the clone actually sits.
+            per_env = self.get_actor_initial_poses(names).view(len(names), self.num_envs, 7)
+            for name, poses in zip(names, per_env):
+                obj = cfg_by_name.get(name)
+                velocity = (
+                    torch.tensor(
+                        [*obj.linear_velocity, *obj.angular_velocity], device=self.sim_device, dtype=torch.float32
+                    )
+                    .unsqueeze(0)
+                    .repeat(self.num_envs, 1)
+                    if obj is not None
+                    else None
+                )
+                items.append((name, name in static_names, poses, velocity))
+        return robot_pose, items
+
     def prepare_sim(self):
         # Wait until play so rigid object collections are initialized
-        register_objects(self)
+        self._register_scene_assets()
 
         # Create before state adapter, needs a reference
         self.robot_root_states = RootStatesProxy(self._robot.data.root_state_w)  # (num_envs, 13)
 
         # Create state adapter after object registry and robot root states are set
         self._state_adapter = IsaacSimStateAdapter(
-            device=self.device,
+            device=self.sim_device,
             object_registry=self.object_registry,
             scene=self.scene,
             robot=self._robot,
             robot_states=self.robot_root_states,
         )
 
-        # Create unified access proxy using the state adapter
-        self.all_root_states = AllRootStatesProxy(self._state_adapter)
+        # Unified all-actors view: routes [indices] reads/writes through
+        # get/set_actor_states_by_index, which delegate to the state adapter.
+        self.all_root_states = UnifiedRootStatesView(self)  # type: ignore[assignment]
 
         self.contact_forces_history = torch.zeros(
-            self.num_envs, self.simulator_config.contact_sensor_history_length, self.num_bodies, 3, device=self.device
+            self.num_envs,
+            self.simulator_config.contact_sensor_history_length,
+            self.num_bodies,
+            3,
+            device=self.sim_device,
         )
 
         # Initialize virtual gantry system after object registry setup
@@ -744,6 +976,7 @@ class IsaacSim(BaseSimulator):
             attachment_body_names=gantry_cfg.attachment_body_names,
             cfg=gantry_cfg,
         )
+        self.virtual_gantry.register_hooks(self.hooks)
 
         # Initialize bridge system using base class helper
         self._init_bridge()
@@ -751,6 +984,7 @@ class IsaacSim(BaseSimulator):
         # Setup video recording after scene is ready
         if self.video_recorder:
             self.video_recorder.setup_recording()
+            self.video_recorder.register_hooks(self.hooks)
 
         # Initialize robot tensors
         self.refresh_sim_tensors()
@@ -758,12 +992,22 @@ class IsaacSim(BaseSimulator):
         # Initialize acceleration tensors ONLY if bridge is enabled
         if self.simulator_config.bridge.enabled:
             logger.info("Bridge enabled: initializing acceleration computation tensors")
-            self.dof_acc = torch.zeros(self.num_envs, self.num_dof, device=self.device)
-            self.prev_dof_vel = torch.zeros(self.num_envs, self.num_dof, device=self.device)
-            self.base_linear_acc = torch.zeros(self.num_envs, 3, device=self.device)
-            self.prev_base_lin_vel = torch.zeros(self.num_envs, 3, device=self.device)
+            self.dof_acc = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
+            self.prev_dof_vel = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
+            self.base_linear_acc = torch.zeros(self.num_envs, 3, device=self.sim_device)
+            self.prev_base_lin_vel = torch.zeros(self.num_envs, 3, device=self.sim_device)
         else:
             logger.debug("Bridge disabled: skipping acceleration computation tensors")
+
+        # Apply each free object's configured initial velocity now that the scene is played and
+        # the state adapter is live. Pose is already set at spawn (InitialStateCfg), so re-writing
+        # it (merged with the velocity) is a cheap round-trip; set_actor_states wants the full 13-vector.
+        free_names = self.object_registry.get_names_by_type(ObjectType.INDIVIDUAL)
+        if free_names and self.num_envs > 0:
+            env_ids = torch.arange(self.num_envs, device=self.sim_device)
+            poses = self.get_actor_initial_poses(free_names, env_ids)  # [n*num_envs, 7]
+            vels = self.get_actor_initial_velocities(free_names, env_ids)  # [n*num_envs, 6]
+            self.set_actor_states(free_names, env_ids, torch.cat([poses, vels], dim=1))
 
     @property
     def dof_state(self):
@@ -785,7 +1029,7 @@ class IsaacSim(BaseSimulator):
 
         # Issue: data.net_forces_w_history is not cleared after a reset.
         # Solution: We only read the most recent decimation_factor steps.
-        control_decimation = self.simulator_config.sim.control_decimation
+        control_decimation = self.simulator_config.sim.control_decimation_steps
         effective_history_length = min(control_decimation, self.simulator_config.contact_sensor_history_length)
         self.contact_forces_history[:, :effective_history_length, :, :] = self.contact_sensor.data.net_forces_w_history[
             :, :effective_history_length, self._contact_to_robot_body_ids
@@ -798,9 +1042,9 @@ class IsaacSim(BaseSimulator):
         self._rigid_body_vel = self._robot.data.body_lin_vel_w[:, self.body_ids, :]
         self._rigid_body_ang_vel = self._robot.data.body_ang_vel_w[:, self.body_ids, :]
 
-    def clear_contact_forces_history(self, env_id):
-        if len(env_id) > 0:
-            self.contact_forces_history[env_id, :, :, :] = 0.0
+    def clear_contact_forces_history(self, env_ids: torch.Tensor) -> None:
+        if len(env_ids) > 0:
+            self.contact_forces_history[env_ids, :, :, :] = 0.0
 
     def apply_torques_at_dof(self, torques):
         self._robot.set_joint_effort_target(torques, joint_ids=self.dof_ids)
@@ -815,23 +1059,29 @@ class IsaacSim(BaseSimulator):
         has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording
         is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors() or has_video_recording
 
-        # Apply virtual gantry forces before physics step
-        if self.virtual_gantry:
-            self.virtual_gantry.step()
-
-        # Step bridge for updated torques before physics step using base class helper
-        self._step_bridge()
-
         self.scene.write_data_to_sim()
 
-        # simulate
-        self.sim.step(render=False)
+        # Render on the render-interval when the GUI or a sensor needs it, INLINE via
+        # sim.step(render=render_now). IsaacLab's self.render() only flushes fabric / drives the RTX
+        # render products when sim.render_mode >= PARTIAL_RENDERING; at NO_GUI_OR_RENDERING (-1) it is
+        # a hard no-op. render_mode is fixed at SimulationContext.__init__ from the launch flags:
+        # headless + enable_cameras => offscreen => PARTIAL (the normal camera path, incl. headless
+        # training), a GUI => FULL, but headless WITHOUT cameras — or any caller that reaches the sim
+        # before enable_cameras/headless are both set at launch — lands at -1, which is terminal
+        # (set_render_mode refuses to leave it). sim.step(render=render_now) drives the low-level
+        # render regardless of render_mode, so RTX sensors (TiledCameras) track the current poses even
+        # in that -1 state, instead of returning the stale first frame. (Equivalent to IsaacLab's
+        # canonical split step(render=False)+render() whenever render_mode is already >= PARTIAL.)
+        render_now = is_rendering and self._sim_step_counter % self.simulator_config.sim.render_interval_steps == 0
 
-        # Render between steps only IF the GUI or sensor need it
-        # note: we assume the render interval to be the shortest accepted rendering interval.
-        #    If a camera needs rendering at a faster frequency, this will lead to unexpected behavior.
-        if self._sim_step_counter % self.simulator_config.sim.render_interval == 0 and is_rendering:
-            self.render()
+        # simulate
+        self.sim.step(render=render_now)
+
+        # Debug-viz overlay (GUI only): the inline render above replaces the old self.render() call,
+        # so redraw the debug lines here when a render happened and debug viz is on.
+        if render_now and self.debug_viz_enabled:
+            self.clear_lines()
+            self.draw_debug_viz()
 
         # update buffers at sim
         self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
@@ -850,10 +1100,6 @@ class IsaacSim(BaseSimulator):
             current_base_vel = self.robot_root_states[:, 7:10]
             self.base_linear_acc = (current_base_vel - self.prev_base_lin_vel) / self.sim_dt
             self.prev_base_lin_vel = current_base_vel.clone()
-
-        # Call video recorder capture frame if recording is active
-        if self.video_recorder:
-            self.capture_video_frame()
 
     def setup_viewer(self):
         self.viewer = self.viewport_camera_controller
@@ -1039,7 +1285,8 @@ class IsaacSim(BaseSimulator):
 
         if root_states is None:
             robot_root_states = self.robot_root_states
-        elif isinstance(root_states, AllRootStatesProxy):
+        elif root_states is self.all_root_states:
+            # Wholesale-pass of the unified view: write the robot only.
             robot_root_states = self.robot_root_states
         elif isinstance(root_states, RootStatesProxy):
             # assumes the user passed in robot_root_states directly
@@ -1078,16 +1325,40 @@ class IsaacSim(BaseSimulator):
         """See base class."""
         return self.object_registry.get_object_indices(names, env_ids)
 
-    def set_actor_states(self, names: ActorNames, env_ids: EnvIds, states: ActorStates):
+    def get_actor_states_by_index(self, indices: ActorIndices) -> ActorStates:
         """See base class.
 
-        IsaacSim-specific notes:
-        - Uses AllRootStatesProxy for unified tensor access
-        - Automatically calls write_state_updates() for immediate sync
+        Delegates to the state adapter (resolve indices -> per-object read -> wxyz->xyzw ->
+        concatenated [N, 13]). Does not index ``all_root_states``, which would recurse.
         """
-        actor_indices = self.get_actor_indices(names, env_ids)
-        self.all_root_states[actor_indices, :13] = states
-        self.write_state_updates()
+        return self._state_adapter.get_states_by_index(indices)
+
+    def set_actor_states_by_index(self, indices: ActorIndices, states: ActorStates, write_updates: bool = True) -> None:
+        """See base class.
+
+        Delegates to the state adapter (xyzw->wxyz, per-object pose/velocity write, sets the dirty
+        flag). ``write_updates=True`` (default) flushes via :meth:`write_state_updates`
+        (``scene.write_data_to_sim``); ``False`` defers for batching.
+        """
+        self._state_adapter.write_states_by_index(indices, states)
+        if write_updates:
+            self.write_state_updates()
+
+    def get_actor_states(self, names: ActorNames, env_ids: EnvIds) -> ActorStates:
+        """See base class."""
+        if not names or (env_ids is not None and len(env_ids) == 0):
+            return torch.empty(0, 13, device=self.sim_device)
+        return self.get_actor_states_by_index(self.get_actor_indices(names, env_ids))
+
+    def set_actor_states(self, names: ActorNames, env_ids: EnvIds, states: ActorStates, write_updates: bool = True):
+        """See base class.
+
+        ``write_updates=True`` (default) syncs immediately; pass ``False`` to batch several writes
+        and flush once with :meth:`write_state_updates`.
+        """
+        if not names or (env_ids is not None and len(env_ids) == 0):
+            return  # uniform no-op on empty input, matching get_actor_states / IsaacGym / MuJoCo
+        self.set_actor_states_by_index(self.get_actor_indices(names, env_ids), states, write_updates)
 
     def get_actor_initial_poses(self, names: ActorNames, env_ids: EnvIds | None = None) -> ActorPoses:
         """See base class."""
@@ -1109,15 +1380,8 @@ class IsaacSim(BaseSimulator):
                 pose = torch.cat([pos, rot])  # [7] - [x,y,z,qx,qy,qz,qw]
                 base_poses.append(pose)
 
-            elif self._is_scene_object(obj_name):
-                # Get scene object pose from scene collection
-                scene_collection = self.scene.rigid_objects["usd_scene_objects"]
-                default_state = self._get_scene_default_object_state(scene_collection, obj_name)
-                pose = default_state[[0, 1, 2, 4, 5, 6, 3]]  # [x,y,z,qx,qy,qz,qw] reorder from wxyz to xyzw
-                base_poses.append(pose)
-
             elif obj_name in self.scene.rigid_objects:
-                # Get individual object pose from rigid object
+                # Get object pose from its rigid object (scene-file bodies included).
                 rigid_object = self.scene.rigid_objects[obj_name]
                 default_state = rigid_object.data.default_root_state[0]  # [13]
                 pose = default_state[[0, 1, 2, 4, 5, 6, 3]]  # [x,y,z,qx,qy,qz,qw] reorder from wxyz to xyzw
@@ -1127,105 +1391,32 @@ class IsaacSim(BaseSimulator):
                 available_objects = ["robot"] + list(self.scene.rigid_objects.keys())
                 raise KeyError(f"Object '{obj_name}' not found. Available: {available_objects}")
 
-        base_poses_tensor = torch.stack(base_poses)
+        base_poses_tensor = torch.stack(base_poses)  # [n, 7], env-independent config pose
 
-        # Repeat to match ObjectRegistry index ordering: [obj0_env0, obj0_env1, obj1_env0, obj1_env1, ...]
-        return base_poses_tensor.repeat_interleave(len(env_ids), dim=0)
+        # Expand to per-env world poses, adding each env's origin to the position so the rows are
+        # true world coordinates the registry stores. IsaacLab's default_root_state carries
+        # the config pose without env origins; the spread comes from scene.env_origins (the
+        # terrain/cloner grid every other placement path uses). Row order matches the registry:
+        # [obj0_env0, obj0_env1, ..., obj1_env0, ...].
+        env_origins = self.scene.env_origins[env_ids]  # [len(env_ids), 3]
+        poses = base_poses_tensor.repeat_interleave(len(env_ids), dim=0)  # [n*len(env_ids), 7]
+        poses[:, :3] += env_origins.repeat(len(names), 1)
+        return poses
 
-    def _is_scene_object(self, object_name: str) -> bool:
-        """Check if an object is part of the USD scene collection - IsaacSim implementation.
+    def get_actor_initial_velocities(self, names: ActorNames, env_ids: EnvIds | None = None) -> torch.Tensor:
+        """Get initial velocities for actors (the sibling of get_actor_initial_poses).
 
-        Uses IsaacLab's native RigidObjectCollection methods to determine if an object
-        belongs to a scene collection rather than being an individual rigid object.
-
-        Parameters
-        ----------
-        object_name : str
-            Name of the object to check, e.g., "obj0_0"
-
-        Returns
-        -------
-        bool
-            True if object is in a scene collection, False otherwise
-
-        Notes
-        -----
-        - Currently assumes single scene collection named 'usd_scene_objects'
-        - Uses full path name with "/world/" prefix for IsaacLab compatibility
-        - Scene collections are loaded from USD/URDF scene files
+        Returns [len(names) * len(env_ids), 6] world-frame [vx,vy,vz,wx,wy,wz], same row order as
+        get_actor_initial_poses (so the two concatenate into the 13-vector set_actor_states wants).
         """
-        collection_name = "usd_scene_objects"  # TODO fix assumption for one scene collection
-        scene_collection = self.scene.rigid_objects.get(collection_name, None)
-        full_path_name = f"/world/{object_name}"
-        return scene_collection and full_path_name in scene_collection.object_names
+        if not names:
+            return torch.empty(0, 6, device=self.sim_device, dtype=torch.float32)
 
-    def _get_object_index_in_collection(self, object_name: str, scene_collection) -> int:
-        """Get object index within scene collection - IsaacSim implementation.
+        if env_ids is None:
+            num_envs = getattr(self, "num_envs", self.scene.num_envs)
+            env_ids = torch.arange(num_envs, device=self.sim_device)
 
-        Uses IsaacLab's native RigidObjectCollection.find_objects() method to locate
-        an object within a scene collection and return its internal index.
-
-        Parameters
-        ----------
-        object_name : str
-            Name of the object, e.g., "obj0_0"
-        scene_collection : RigidObjectCollection
-            The USD scene collection to search within
-
-        Returns
-        -------
-        int
-            Index of the object within the collection
-
-        Raises
-        ------
-        KeyError
-            If object not found in collection
-
-        Notes
-        -----
-        - Uses full path name with "/world/" prefix for IsaacLab compatibility
-        - Returns the first match if multiple objects found
-        - Index is used for tensor access within the collection
-        """
-        # TODO: Fix remove /world prefix due to USD loader coupling
-        full_path_name = f"/world/{object_name}"
-        obj_indices, obj_names = scene_collection.find_objects(full_path_name)
-
-        if len(obj_indices) == 0:
-            available_names = scene_collection.object_names
-            raise KeyError(f"Object '{object_name}' not found in collection. Available: {available_names}")
-
-        return obj_indices[0].item()
-
-    def _get_scene_default_object_state(self, scene_collection, object_name: str) -> torch.Tensor:
-        """Get initial object state from scene collection - IsaacSim implementation.
-
-        Retrieves the default/initial state for an object within a scene collection
-        using IsaacLab's tensor data after simulation initialization.
-
-        NOTE: Returns quat in IsaacSim wxyz format, not holosoma xyzw format (internal function)
-
-        Parameters
-        ----------
-        scene_collection : RigidObjectCollection
-            The scene collection containing the object
-        object_name : str
-            Name of the object to get state for
-
-        Returns
-        -------
-        torch.Tensor
-            Default object state [13] containing position, quaternion, and velocities
-
-        Notes
-        -----
-        - Must be called after sim.play() when tensor data is available
-        - Returns full 13-element state vector from IsaacLab's default_object_state
-        - Used internally for initial pose extraction and reset operations
-        """
-        object_index = self._get_object_index_in_collection(object_name, scene_collection)
-        return scene_collection.data.default_object_state[0, object_index]  # [13]
+        return self.object_registry.get_initial_velocities_batch(names, env_ids)
 
     def _get_object_states(self, object_name: str, env_ids: torch.Tensor) -> torch.Tensor:
         """Get object states for any object type - delegates to state adapter.
@@ -1283,7 +1474,7 @@ class IsaacSim(BaseSimulator):
                 "DOF forces not directly available in IsaacSim. "
                 "Returning zeros. For force feedback, the bridge will use commanded torques."
             )
-            return torch.zeros(self.num_dof, device=self.device)
+            return torch.zeros(self.num_dof, device=self.sim_device)
 
         # Get applied torques which represent the forces being applied to joints
         applied_torques = self._robot.data.applied_torque[env_id, self.dof_ids]

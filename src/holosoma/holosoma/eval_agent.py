@@ -8,6 +8,7 @@ from loguru import logger
 from holosoma.agents.base_algo.base_algo import BaseAlgo
 from holosoma.config_types.eval_callback import EvalCallbacksConfig
 from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.utils.config_registry import parse_config
 from holosoma.utils.config_utils import CONFIG_NAME
 from holosoma.utils.eval_utils import (
     CheckpointConfig,
@@ -21,7 +22,6 @@ from holosoma.utils.sim_utils import (
     close_simulation_app,
     setup_simulation_environment,
 )
-from holosoma.utils.tyro_utils import TYRO_CONIFG
 
 
 def run_eval_with_tyro(
@@ -96,12 +96,11 @@ def main() -> None:
     )
     saved_cfg, saved_wandb_path = load_saved_experiment_config(checkpoint_cfg)
     eval_cfg = saved_cfg.get_eval_config()
-    overwritten_tyro_config = tyro.cli(
+    overwritten_tyro_config = parse_config(
         ExperimentConfig,
         default=eval_cfg,
         args=remaining_args,
         description="Overriding config on top of what's loaded.",
-        config=TYRO_CONIFG,
     )
 
     run_eval_with_tyro(overwritten_tyro_config, checkpoint_cfg, saved_cfg, saved_wandb_path, eval_cbs_cfg=eval_cbs_cfg)

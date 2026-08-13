@@ -5,11 +5,11 @@ import torch
 import torch.nn.functional as torch_nn_func
 from torch import Tensor
 
+from holosoma.utils.torch_jit import torch_jit_script
 from holosoma.utils.torch_utils import (
     copysign,
     normalize,
 )
-from holosoma.utils.torch_jit import torch_jit_script
 
 
 @torch_jit_script

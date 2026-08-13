@@ -136,6 +136,10 @@ class TerrainTermCfg:
     - "fake": Mock terrain for testing
     """
 
+    hide_visual: bool = False
+    """Render the terrain invisible while keeping its collider (default ``False``). Set ``True`` when
+    a scene supplies its own visible floor; the robot still collides with the terrain."""
+
     horizontal_scale: float = 0.1
     """Horizontal resolution of terrain grid in meters."""
 

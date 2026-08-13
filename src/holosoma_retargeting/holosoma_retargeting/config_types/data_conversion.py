@@ -38,7 +38,7 @@ _ROBOT_JOINT_NAMES_DEFAULT = {
         "right_wrist_roll_joint",
         "right_wrist_pitch_joint",
         "right_wrist_yaw_joint",
-    ]
+    ],
 }
 
 
@@ -80,8 +80,14 @@ class DataConversionConfig:
     once: bool = False
     """Run the motion once and exit."""
 
+    headless: bool = False
+    """Run without a viewer. This takes precedence over ``visualize``."""
+
     visualize: bool = True
-    """Whether to visualize the converted motion in a MuJoCo viewer."""
+    """Whether to visualize the converted motion in a MuJoCo viewer.
+
+    Kept for compatibility with the existing ``--no-visualize`` CLI option.
+    """
 
     use_omniretarget_data: bool = False
     """Use OmniRetarget data format."""
@@ -108,6 +114,16 @@ class DataConversionConfig:
         if self.robot not in _ROBOT_JOINT_NAMES_DEFAULT:
             raise ValueError(f"No joint names found for robot: {self.robot}")
         return _ROBOT_JOINT_NAMES_DEFAULT[self.robot]
+
+    @property
+    def show_viewer(self) -> bool:
+        """Return whether conversion should open and pace a MuJoCo viewer."""
+        return self.visualize and not self.headless
+
+    @property
+    def exit_after_one_pass(self) -> bool:
+        """Return whether conversion should stop after writing one pass."""
+        return self.once or not self.show_viewer
 
     JOINT_NAMES = property(
         _joint_names,

@@ -1,10 +1,15 @@
 import dataclasses
 
+import pytest
+
 from holosoma.config_values import experiment
-from holosoma.utils.helpers import get_class
 from holosoma.train_agent import get_tyro_env_config, training_context
 from holosoma.utils.common import seeding
+from holosoma.utils.helpers import get_class
 from holosoma.utils.safe_torch_import import torch
+
+# Builds the default (isaacgym) sim on CUDA; outside tests/simulators/ so set umbrella explicitly.
+pytestmark = pytest.mark.isaacgym
 
 
 def test_e2e_step():

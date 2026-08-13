@@ -21,7 +21,9 @@ from holosoma.config_types.env import get_tyro_env_config
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.run_sim import RunSimConfig
+from holosoma.config_types.sensor import validate_camera_dict
 from holosoma.managers.terrain.manager import TerrainManager
+from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.utils.common import seeding
 from holosoma.utils.helpers import get_class
 from holosoma.utils.rate import RateLimiter
@@ -87,10 +89,10 @@ def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     args_cli.num_envs = config.training.num_envs // world_size if world_size > 1 else config.training.num_envs
     args_cli.seed = config.training.seed
-    args_cli.env_spacing = config.simulator.config.scene.env_spacing
+    args_cli.env_spacing = config.scene.env_spacing
     args_cli.output_dir = config.logger.base_dir
     args_cli.headless = config.training.headless
-    if int(os.environ.get("WORLD_SIZE", "1")) > 1:
+    if world_size > 1:
         # Distribute simulator across GPUs when using multi-gpu training
         args_cli.device = f"cuda:{int(os.environ.get('LOCAL_RANK', '0'))}"
         args_cli.distributed = True
@@ -100,9 +102,12 @@ def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str
     else:  # AppLauncher auto-detects
         pass
 
-    # Check if video recording is enabled and add --enable_cameras flag
+    # Enable the IsaacSim renderer when cameras are needed: video recording OR any configured
+    # perception sensor (a TiledCamera fails to spawn without --enable_cameras). ``sensor`` is the
+    # per-key camera dict on RunSimConfig/ExperimentConfig.
     video_enabled = config.logger.video.enabled or config.logger.headless_recording
-    if video_enabled:
+    cameras_enabled = bool(getattr(config, "sensor", None))
+    if video_enabled or cameras_enabled:
         args_cli.enable_cameras = True
 
     app_launcher = AppLauncher(args_cli)
@@ -224,20 +229,27 @@ def setup_simulation_environment(
         # For run_sim.py, we'll create the simulator directly instead of using environment wrapper
         logger.info("Direct simulation mode - creating simulator directly, without experiment config")
 
-        # Create FullSimConfig from RunSimConfig
-        # Extract SimulatorInitConfig from SimulatorConfig
+        # Cross-camera validation (Warp render-flag agreement) across the assembled camera dict.
+        validate_camera_dict(config.sensor)
+
+        # Create FullSimConfig from RunSimConfig.
         full_config = FullSimConfig(
-            simulator=config.simulator.config,  # Extract .config from SimulatorConfig
+            simulator=config.simulator.config,
             robot=config.robot,
+            scene=config.scene,
+            # The CLI declares cameras per-key in the dynamic ``sensor`` dict (key = sensor name).
+            sensors=dict(config.sensor),
             training=config.training,
             logger=config.logger,
+            plugin=config.plugin,
             experiment_dir=None,
         )
 
-        # For compatibility, minimal proxy for TerrainManager since it depends on env
+        # For compatibility, minimal proxy for TerrainManager since it depends on env.
+        # Carries the requested num_envs through to the terrain manager.
         class EnvProxy:
-            def __init__(self, device):
-                self.num_envs = 1
+            def __init__(self, device, num_envs):
+                self.num_envs = num_envs
                 self.device = device
 
         # For compatibility, wrap in a minimal object that has .sim attribute
@@ -255,7 +267,7 @@ def setup_simulation_environment(
                     self.sim.close()
 
         # Use terrain configuration from RunSimConfig
-        terrain_manager = TerrainManager(config.terrain, env=EnvProxy(device), device=device)
+        terrain_manager = TerrainManager(config.terrain, env=EnvProxy(device, config.training.num_envs), device=device)
 
         # Create simulator using get_class() to avoid circular imports
         simulator_class = get_class(config.simulator._target_)
@@ -403,8 +415,9 @@ class DirectSimulation:
         """
         logger.debug("Initializing simulator...")
 
-        # Need to manually set headless since it's in training config currently
-        self.simulator.set_headless(False)
+        # Headless lives in training config; honor it (was hardcoded False, which forced the viewer
+        # on and pulled in isaacsim.util.debug_draw even under --training.headless True).
+        self.simulator.set_headless(self.config.training.headless)
 
         # Step 1: Basic setup
         self.simulator.setup()
@@ -432,9 +445,12 @@ class DirectSimulation:
         self.simulator.prepare_sim()
         logger.debug("simulator.prepare_sim() completed")
 
-        # Step 5.5: Initialize episode (positions virtual gantry, etc.)
-        self.simulator.on_episode_start(env_id=0)
-        logger.debug("simulator.on_episode_start() completed")
+        # Plugins were constructed in BaseSimulator.__init__ (from FullSimConfig.plugin) and
+        # have already registered their hooks, so EPISODE_START below reaches them.
+
+        # Step 5.5: Initialize episode (positions virtual gantry, starts lifecycle participants, etc.)
+        self.simulator.hooks.emit(Phase.EPISODE_START, 0)
+        logger.debug("simulator episode-start hooks completed")
 
         # Step 6: Setup viewer if not headless
         if not self.config.training.headless:
@@ -457,6 +473,7 @@ class DirectSimulation:
         """
         # Setup rate limiting
         sim_frequency = self.config.simulator.config.sim.fps
+        control_decimation = self.config.simulator.config.sim.control_decimation_steps
         rate_limiter = RateLimiter(sim_frequency)
 
         # Calculate viewer sync frequency
@@ -487,8 +504,18 @@ class DirectSimulation:
                 # Refresh tensors if needed (no-op for MuJoCo)
                 pre_step_refresh()
 
-                # Direct simulator step - this triggers bridge.step() inside simulate_at_each_physics_step()
+                # Direct simulator step with the same physics hooks used by BaseTask.
+                if step_count % control_decimation == 0:
+                    self.simulator.hooks.emit(Phase.FRAME_BEGIN)
+                self.simulator.hooks.emit(Phase.PRE_STEP)
                 self.simulator.simulate_at_each_physics_step()
+                self.simulator.hooks.emit(Phase.POST_STEP)
+
+                # Mounted cameras render and egress consumers publish here, as FRAME_END plugins
+                # (once per control step). render_sensors registered before any consumer, so
+                # buffers are fresh; both no-op when no cameras/consumers are configured.
+                if step_count % control_decimation == 0:
+                    self.simulator.hooks.emit(Phase.FRAME_END)
 
                 # Update viewer at display rate
                 if step_count % viewer_steps == 0:
@@ -517,12 +544,15 @@ class DirectSimulation:
 
     def cleanup(self) -> None:
         """Handle simulation cleanup."""
-        # Cleanup environment
+        # Fire the simulator CLOSE phase (via env.close() if defined, else direct): runs every hook's
+        # close in reverse registration order — bridge/video teardown and camera-consumer stop()
+        # (encode video, close ROS nodes/windows).
         if hasattr(self.env, "close"):
             self.env.close()
+        else:
+            self.simulator.close()
 
-        if self.simulator.video_recorder:
-            self.simulator.video_recorder.cleanup()
+        self.simulator._stop_bridge()
 
         # Cleanup simulation app
         if self.simulation_app:

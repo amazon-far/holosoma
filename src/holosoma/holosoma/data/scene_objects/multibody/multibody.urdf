@@ -1,0 +1,47 @@
+<?xml version="1.0" ?>
+<!-- Multi-body scene file (URDF) for 1->N loading tests. A 'world' root link with two
+     children: 'free_box' on a floating joint (registered free / INDIVIDUAL) and
+     'static_post' on a fixed joint at +0.5 m x (registered static / SCENE). The free vs
+     static classification is read from joint type (floating vs fixed). static_post sits
+     +0.5 m x from free_box, giving a known, cross-backend body-to-body offset. -->
+<robot name="multibody">
+  <link name="world"/>
+
+  <link name="free_box">
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.0002" ixy="0" ixz="0" iyy="0.0002" iyz="0" izz="0.0002"/>
+    </inertial>
+    <visual>
+      <geometry><box size="0.1 0.1 0.1"/></geometry>
+    </visual>
+    <collision>
+      <geometry><box size="0.1 0.1 0.1"/></geometry>
+    </collision>
+  </link>
+
+  <link name="static_post">
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.0002" ixy="0" ixz="0" iyy="0.0002" iyz="0" izz="0.0002"/>
+    </inertial>
+    <visual>
+      <geometry><box size="0.1 0.1 0.4"/></geometry>
+    </visual>
+    <collision>
+      <geometry><box size="0.1 0.1 0.4"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="free_box_joint" type="floating">
+    <parent link="world"/>
+    <child link="free_box"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="static_post_joint" type="fixed">
+    <parent link="world"/>
+    <child link="static_post"/>
+    <origin xyz="0.5 0 0" rpy="0 0 0"/>
+  </joint>
+</robot>

@@ -121,8 +121,11 @@ class ObservationManager:
             if group_cfg.enable_noise and term_cfg.noise > 0:
                 obs = self._apply_noise(obs, term_cfg.noise)
 
-            # 3. Apply scaling (matches direct: scale after noise)
-            obs = self._apply_scale(obs, term_cfg.scale)
+            # 3. Apply scaling (matches direct: scale after noise). Skip the multiply when the
+            # scale is the default 1.0 (numerically a no-op) so a non-float term (e.g. a uint8
+            # RGB image) keeps its native dtype instead of being promoted to float.
+            if term_cfg.scale != 1.0:
+                obs = self._apply_scale(obs, term_cfg.scale)
 
             # 4. Apply clipping (if specified)
             if term_cfg.clip is not None:
@@ -139,6 +142,13 @@ class ObservationManager:
             # Concatenate in alphabetically sorted order (to match direct system behavior)
             # Direct system does: sorted(obs_config) before concatenation
             sorted_keys = sorted(obs_tensors.keys())
+            for key in sorted_keys:
+                if obs_tensors[key].ndim != 2:
+                    raise ValueError(
+                        f"Observation term '{key}' in concatenate=True group '{group_name}' must be "
+                        f"2-D [num_envs, feature], got shape {tuple(obs_tensors[key].shape)}. Image terms "
+                        f"(e.g. camera_rgb/camera_depth) belong only in a concatenate=False (dict) group."
+                    )
             return torch.cat([obs_tensors[key] for key in sorted_keys], dim=-1)
         return obs_tensors
 
@@ -296,17 +306,21 @@ class ObservationManager:
             for instance in group_instances.values():
                 instance.reset(env_ids_tensor)
 
-    def get_obs_dims(self) -> dict[str, int | dict[str, int]]:
+    def get_obs_dims(self) -> dict[str, int | dict[str, int | tuple[int, ...]]]:
         """Get observation dimensions for each group.
+
+        Concatenate groups require 2-D terms and report a single summed int. Dict groups
+        return per-term feature size: an int for 2-D terms, or the trailing-dim shape tuple
+        (``obs.shape[1:]``) for image terms.
 
         Returns
         -------
-        dict[str, int or dict[str, int]]
+        dict[str, int or dict[str, int or tuple]]
             Mapping from group names to observation dimensions. Values are integers
             when the group concatenates terms, otherwise dictionaries of per-term
             dimensions.
         """
-        dims: dict[str, int | dict[str, int]] = {}
+        dims: dict[str, int | dict[str, int | tuple[int, ...]]] = {}
         for group_name, group_cfg in self.cfg.groups.items():
             if group_cfg.concatenate:
                 # Sum up all term dimensions
@@ -314,6 +328,12 @@ class ObservationManager:
                 for term_name, term_cfg in group_cfg.terms.items():
                     # Compute term once to get its dimension
                     obs = self._compute_term(group_name, term_name, term_cfg)
+                    if obs.ndim != 2:
+                        raise ValueError(
+                            f"Observation term '{term_name}' in concatenate=True group '{group_name}' must be "
+                            f"2-D [num_envs, feature], got shape {tuple(obs.shape)}. Image terms "
+                            f"(e.g. camera_rgb/camera_depth) belong only in a concatenate=False (dict) group."
+                        )
                     term_dim = obs.shape[1]
 
                     # Account for history at group level
@@ -323,10 +343,11 @@ class ObservationManager:
                     total_dim += term_dim
                 dims[group_name] = total_dim
             else:
-                # Return dict of individual dimensions
-                term_dims: dict[str, int] = {
-                    term_name: self._compute_term(group_name, term_name, term_cfg).shape[1]
-                    for term_name, term_cfg in group_cfg.terms.items()
-                }
+                # Return dict of per-term feature sizes: an int for 2-D terms, or the
+                # trailing-dim shape tuple for image terms ([N, H, W, C] -> (H, W, C)).
+                term_dims: dict[str, int | tuple[int, ...]] = {}
+                for term_name, term_cfg in group_cfg.terms.items():
+                    obs = self._compute_term(group_name, term_name, term_cfg)
+                    term_dims[term_name] = obs.shape[1] if obs.ndim == 2 else tuple(obs.shape[1:])
                 dims[group_name] = term_dims
         return dims

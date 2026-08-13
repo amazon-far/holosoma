@@ -1,0 +1,68 @@
+[build-system]
+requires = ["uv_build>=0.9.9,<0.10"]
+build-backend = "uv_build"
+
+[project]
+name = "holosoma-inference"
+version = "0.1.1"
+description = "holosoma-inference: inference components for humanoid robot policies"
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [{ name = "Amazon FAR Team" }]
+keywords = ["humanoid", "robotics", "inference", "policy", "onnx"]
+dependencies = [
+    "pydantic",
+    "loguru",
+    "netifaces",
+    "onnx",
+    "onnxruntime",
+    "scipy",
+    "sshkeyboard",
+    "termcolor",
+    "pyyaml",
+    "tyro>=0.10.0a4",
+    "wandb",
+    "zmq",
+    "defusedxml",
+    "evdev",
+    "importlib_metadata>=4.6; python_version<'3.12'",
+    "eval_type_backport; python_version<'3.10'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "black>=22.0",
+    "flake8>=4.0",
+]
+# Robot SDKs are published to PyPI (FAR forks). The import names are unchanged
+# (`unitree_interface`, `booster_robotics_sdk`) — only the distribution names
+# differ from the historical GitHub-release wheels. pip resolves the correct
+# wheel for the running interpreter/platform from the PyPI index.
+unitree = ["far-unitree-sdk==0.1.6"]
+booster = ["far-booster-sdk==0.1.1"]
+
+[project.entry-points."holosoma.sdk"]
+unitree = "holosoma_inference.sdk.unitree.unitree_interface:UnitreeInterface"
+unitree_mp = "holosoma_inference.sdk.unitree.unitree_interface_mp:UnitreeInterfaceMP"
+booster = "holosoma_inference.sdk.booster.booster_interface:BoosterInterface"
+
+[project.entry-points."holosoma.config.robot"]
+g1-29dof = "holosoma_inference.config.config_values.robot:g1_29dof"
+t1-29dof = "holosoma_inference.config.config_values.robot:t1_29dof"
+
+[project.entry-points."holosoma.config.inference"]
+g1-29dof-loco = "holosoma_inference.config.config_values.inference:g1_29dof_loco"
+t1-29dof-loco = "holosoma_inference.config.config_values.inference:t1_29dof_loco"
+g1-29dof-wbt = "holosoma_inference.config.config_values.inference:g1_29dof_wbt"
+
+# uv_build packaging. This is a FLAT layout (the holosoma_inference/ module
+# lives at the project root, not under src/), so module-root = "". Only the
+# holosoma_inference module ships — the sibling directories
+# (holosoma_inference_service, jetson_clocks_service, docker, docs) are not part
+# of this distribution, same as the old bare find_packages() behavior.
+[tool.uv.build-backend]
+module-name = "holosoma_inference"
+module-root = ""
+# Ship non-.py package data (py.typed marker + any config yamls) inside the wheel.
+source-include = ["holosoma_inference/py.typed", "holosoma_inference/**/*.yaml"]

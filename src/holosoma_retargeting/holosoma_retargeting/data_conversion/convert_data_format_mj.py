@@ -138,6 +138,7 @@ class MotionLoader:
         if self.motion_file.endswith(".npz"):
             data = np.load(self.motion_file)
             self.input_fps = round(1 / data.get("fps", 1 / self.input_fps))
+            self.input_dt = 1.0 / self.input_fps
             motion = torch.from_numpy(data["qpos"]).to(torch.float32)
         else:
             raise ValueError("Unsupported motion file format. Use .csv or .npz.")
@@ -425,9 +426,13 @@ def run_simulator(args_cli: DataConversionConfig):
     dof_index_list = [joint_names.index(dof_name) for dof_name in dof_name_list]
     print(dof_index_list)
 
+    # Both the upstream --headless option and the existing --no-visualize
+    # option select the same no-viewer, single-pass execution path.
+    run_once = args_cli.exit_after_one_pass
+
     # Prepare mujoco viewer
     viewer: Any | None = None
-    if args_cli.visualize:
+    if args_cli.show_viewer:
         viewer = mjv.launch_passive(robot, robot_data, show_left_ui=False, show_right_ui=False)
         viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_PERTFORCE] = 0
         viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = 0
@@ -535,9 +540,7 @@ def run_simulator(args_cli: DataConversionConfig):
         mujoco.mj_forward(robot, robot_data)
         if viewer is not None:
             viewer.sync()
-
-        end_time = time.perf_counter()
-        if viewer is not None:
+            end_time = time.perf_counter()
             time.sleep(max(0, motion.output_dt - (end_time - start_time)))
 
         if not file_saved:
@@ -599,7 +602,7 @@ def run_simulator(args_cli: DataConversionConfig):
             os.makedirs(output_res_folder, exist_ok=True)
             np.savez(args_cli.output_name, **log)
 
-        if file_saved and (args_cli.once or viewer is None):
+        if run_once and file_saved:
             print("[INFO]: Motion replay completed, exiting...")
             if viewer is not None:
                 viewer.close()

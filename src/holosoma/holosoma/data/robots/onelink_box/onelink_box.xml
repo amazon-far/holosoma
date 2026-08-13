@@ -1,0 +1,10 @@
+<!-- Single-link floating-base "robot" for behavioral parity tests (MJCF form). One top-level body,
+     no joint; the scene manager adds a free joint when the robot's base is floating. Structurally
+     identical to scene_objects/boxes/small_box.xml, loaded through the robot path. -->
+<mujoco model="onelink_box">
+  <worldbody>
+    <body name="baseLink">
+      <geom type="box" size="0.05 0.05 0.05" mass="0.1"/>
+    </body>
+  </worldbody>
+</mujoco>

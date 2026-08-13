@@ -1,13 +1,13 @@
 """Network interface auto-detection for robot communication."""
 
-import os
+from pathlib import Path
 
 _SKIP_PREFIXES = ("lo", "wl", "docker", "br-", "veth", "virbr", "vnet", "tun", "tap")
 
 
 def detect_robot_interface() -> str:
     """Return the name of the single wired NIC that is operationally UP."""
-    for ifname in sorted(os.listdir("/sys/class/net/")):
+    for ifname in sorted(Path("/sys/class/net/").iterdir()):
         if any(ifname.startswith(p) for p in _SKIP_PREFIXES):
             continue
         try:

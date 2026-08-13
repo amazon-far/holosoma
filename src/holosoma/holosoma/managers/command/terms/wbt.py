@@ -12,6 +12,7 @@ from loguru import logger
 from holosoma.config_types.command import MotionConfig, NoiseToInitialPoseConfig
 from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
 from holosoma.managers.command.base import CommandTermBase
+from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.file_cache import cached_open
 from holosoma.utils.path import resolve_data_file_path
 from holosoma.utils.rotations import (
@@ -293,6 +294,16 @@ class MultiMotionLoader:
 
         # Object support: only if ALL motions have objects
         self.has_object = all(ld.has_object for ld in loaders)
+        n_with_object = sum(ld.has_object for ld in loaders)
+        if 0 < n_with_object < len(loaders):
+            # A subset of files carry object data but not all — we disable object tracking for the
+            # whole run and discard the object data those files DID contain. Warn rather than drop
+            # silently, since the user authored that object motion and it looks like it "worked".
+            logger.warning(
+                f"MultiMotionLoader: {n_with_object}/{len(loaders)} motion files contain object "
+                f"tracking data, but not all do; object tracking is DISABLED for the whole run and "
+                f"the object data from those files is discarded. Provide object data in all files or none."
+            )
         if self.has_object:
             self._object_pos_w = torch.cat([ld._object_pos_w for ld in loaders], dim=0)
             self._object_quat_w = torch.cat([ld._object_quat_w for ld in loaders], dim=0)
@@ -456,7 +467,11 @@ class AdaptiveTimestepsSampler:
             self.num_bins - 1,
         ).long()
         assert failed_bin.min() >= 0 and failed_bin.max() < self.num_bins, "Failed bin is out of range"
-        self.current_bin_failed_count[:] = torch.bincount(failed_bin, minlength=self.num_bins)
+        # Accumulate (not overwrite): reset() may be called more than once per env
+        # step — once for termination-driven resets and again for clip-ended resets
+        # in MotionCommand.step() — before update_bin_failed_count() folds + zeroes
+        # this buffer. Overwriting clobbered the earlier wave's failures.
+        self.current_bin_failed_count += torch.bincount(failed_bin, minlength=self.num_bins).float()
 
     def update_bin_failed_count(self):
         """At every rl environment step, update the failed count with the current bin failed count."""
@@ -481,11 +496,24 @@ class AdaptiveTimestepsSampler:
         # inside of each bin, randomly sample a time step, ignoring the borders
         return (sampled_bins + torch.rand(num_samples, device=self.device)) / self.num_bins
 
+    def sample_global_time_steps(self, num_samples: int) -> torch.Tensor:
+        """Sample absolute (global) frame indices in [0, motion_time_step_total).
+
+        The bins live in the GLOBAL concatenated-motion frame space, so a sampled
+        phase must be mapped back to a global frame index — NOT reinterpreted as a
+        per-motion fraction of an unrelated clip. The caller derives the motion id
+        from which clip's [start, end) interval the returned index falls into, so
+        the failure-prioritized location stays attached to the motion it came from.
+        """
+        phase = self.sample(num_samples)
+        global_idx = (phase * self.motion_time_step_total).long()
+        return global_idx.clamp_(0, self.motion_time_step_total - 1)
+
     def get_stats(self):
         # Metrics
         prob = self.sampling_probabilities
         H = -(prob * (prob + 1e-12).log()).sum()
-        H_norm = H / np.log(self.num_bins)
+        H_norm = H / np.log(max(self.num_bins, 2))  # guard num_bins==1 (log(1)=0 -> nan)
         pmax, imax = prob.max(dim=0)
         self.metrics["sampling_entropy"] = H_norm
         self.metrics["sampling_top1_prob"] = pmax
@@ -528,7 +556,7 @@ class MotionCommand(CommandTermBase):
         robot_body_names = self._env.simulator._body_list  # type: ignore[attr-defined]
         robot_body_names_alias = [FAKE_BODY_NAME_ALIASES.get(bn, bn) for bn in robot_body_names]
 
-        robot_joint_names = self._env.simulator.dof_names  # type: ignore[attr-defined]
+        robot_joint_names = self._env.simulator.dof_names
 
         # 1. load motion data
         assert self.motion_cfg.motion_file or self.motion_cfg.motion_dir, (
@@ -568,13 +596,12 @@ class MotionCommand(CommandTermBase):
 
         # 3. get the name of the object, or indices of the object
         if self.motion.has_object:
-            # cache the object_index_in_simulator
-            self.object_name = "object"  # hardcoded object name
-            self.object_indices_in_simulator = self._env.simulator.get_actor_indices(self.object_name, env_ids=None)
-
-            assert self._env.simulator.get_simulator_type() == SimulatorType.ISAACSIM, (
-                "Object is only supported in IsaacSim"
-            )
+            # Derive the object name from the registered rigid object (object names vary
+            # per scene, e.g. "box").
+            rigid_object_names = self._env.simulator.object_registry.get_names_by_type(ObjectType.INDIVIDUAL)
+            if not rigid_object_names:
+                raise RuntimeError("Set 'has_object' to true, but loaded no rigid bodies in the scene.")
+            self.object_name = rigid_object_names[0]
 
         # 4. get the adaptive timesteps sampler
         if self.motion_cfg.use_adaptive_timesteps_sampler:
@@ -597,30 +624,55 @@ class MotionCommand(CommandTermBase):
         if env_ids.numel() == 0:
             return
 
-        # 0. Sample the time steps
+        n = env_ids.numel()
+        num_motions = self.motion.num_motions
+
+        # 0. Sample the time steps (and, for the adaptive sampler, the motion id).
+        adaptive_global_idx = None
         if self.motion_cfg.use_adaptive_timesteps_sampler:
             # Match BeyondMimic behavior: update failed bins from environments
             # that terminated before this reset, then sample new phases.
-            episode_failed = self._env.termination_manager.terminated[env_ids]
-            if torch.any(episode_failed):
-                failed_at_time_step = self.time_steps[env_ids][episode_failed]
-                self.adaptive_timesteps_sampler.update_current_bin_failed_count(failed_at_time_step)
-            phase = self.adaptive_timesteps_sampler.sample(env_ids.numel())
+            # Gate the failure-stat update on training mode so evaluation episodes
+            # don't contaminate the training sampler's failure distribution
+            # (the is_evaluating phase-zeroing below only affects sampling, not stats).
+            if not self._env.is_evaluating:
+                episode_failed = self._env.termination_manager.terminated[env_ids]
+                if torch.any(episode_failed):
+                    failed_at_time_step = self.time_steps[env_ids][episode_failed]
+                    self.adaptive_timesteps_sampler.update_current_bin_failed_count(failed_at_time_step)
+            # The sampler bins failures over the GLOBAL concatenated-motion frame
+            # axis, so it must return a global frame index here. The motion id is
+            # then derived from that index (NOT chosen independently), keeping the
+            # failure-prioritized phase attached to the motion it was recorded on.
+            adaptive_global_idx = self.adaptive_timesteps_sampler.sample_global_time_steps(n)
+            phase = None
         else:
-            phase = torch.rand(env_ids.numel(), device=self.device)
+            phase = torch.rand(n, device=self.device)
 
         if self._env.is_evaluating:
-            phase = torch.zeros_like(phase)
+            # Eval forces every env through the uniform/else branch below, which
+            # indexes `phase`, so it must be a real zero tensor even when the
+            # adaptive sampler left it as None.
+            phase = torch.zeros(n, device=self.device)
+            adaptive_global_idx = None  # eval starts every env at its motion's first frame
 
-        # For multi-motion: randomly assign each env to a motion, sample within that motion's range
-        n = env_ids.numel()
-        num_motions = self.motion.num_motions
-        self.motion_ids[env_ids] = torch.randint(0, num_motions, (n,), device=self.device)
-        start_idx = self.motion.motion_start_idx[self.motion_ids[env_ids]]
-        end_idx = self.motion.motion_end_idx[self.motion_ids[env_ids]]
-        motion_len = end_idx - start_idx
-
-        self.time_steps[env_ids] = start_idx + (phase * (motion_len - 1).float()).long()
+        if adaptive_global_idx is not None:
+            # Map global frame index -> (motion_id, time_step). searchsorted on the
+            # per-motion end indices yields the clip whose [start, end) contains it.
+            motion_ids = torch.searchsorted(self.motion.motion_end_idx, adaptive_global_idx, right=True)
+            motion_ids = motion_ids.clamp_(0, num_motions - 1)
+            self.motion_ids[env_ids] = motion_ids
+            start_idx = self.motion.motion_start_idx[motion_ids]
+            end_idx = self.motion.motion_end_idx[motion_ids]
+            self.time_steps[env_ids] = adaptive_global_idx.clamp(start_idx, end_idx - 1)
+        else:
+            # Uniform path (or eval): randomly assign each env to a motion, sample
+            # a phase within that motion's range.
+            self.motion_ids[env_ids] = torch.randint(0, num_motions, (n,), device=self.device)
+            start_idx = self.motion.motion_start_idx[self.motion_ids[env_ids]]
+            end_idx = self.motion.motion_end_idx[self.motion_ids[env_ids]]
+            motion_len = end_idx - start_idx
+            self.time_steps[env_ids] = start_idx + (phase * (motion_len - 1).float()).long()
 
         # Handle start_at_timestep_zero_prob (reset to start of assigned motion)
         prob = self.motion_cfg.start_at_timestep_zero_prob
@@ -736,7 +788,7 @@ class MotionCommand(CommandTermBase):
 
             object_states = torch.cat(
                 [target_obj_pos, obj_ori, obj_lin_vel, torch.zeros_like(obj_lin_vel)], dim=-1
-            )  # (num_envs, 7)
+            )  # (num_envs, 13): pos(3) + quat(4) + lin_vel(3) + ang_vel(3)
             # 4.3 set the object states in simulator
             self._env.simulator.set_actor_states([self.object_name], env_ids, object_states)
 
@@ -819,8 +871,9 @@ class MotionCommand(CommandTermBase):
             + quat_apply(delta_quat_w, self.body_pos_w - ref_pos_w_repeat, w_last=True)
         )
 
-        ### 1.3 update the adaptive timesteps sampler
-        if self.motion_cfg.use_adaptive_timesteps_sampler:
+        ### 1.3 update the adaptive timesteps sampler (training only — eval episodes
+        ### must not decay/fold failure stats into the training sampler).
+        if self.motion_cfg.use_adaptive_timesteps_sampler and not self._env.is_evaluating:
             self.adaptive_timesteps_sampler.update_bin_failed_count()
 
     @property
@@ -967,17 +1020,27 @@ class MotionCommand(CommandTermBase):
     #########################################################################################
     ## Object from simulator
     #########################################################################################
+    def _simulator_object_states(self) -> torch.Tensor:
+        """Current object states [num_envs, 13] via the unified actor API.
+
+        Reads through ``get_actor_states`` rather than indexing ``all_root_states``
+        directly: on MuJoCo ``all_root_states`` is robot-only, so indexing it with an
+        object index would be out of bounds. The unified API resolves the object's own
+        per-env state on every backend.
+        """
+        return self._env.simulator.get_actor_states([self.object_name], env_ids=None)
+
     @property
     def simulator_object_pos_w(self) -> torch.Tensor:
-        return self._env.simulator.all_root_states[self.object_indices_in_simulator][:, :3]
+        return self._simulator_object_states()[:, :3]
 
     @property
     def simulator_object_quat_w(self) -> torch.Tensor:
-        return self._env.simulator.all_root_states[self.object_indices_in_simulator][:, 3:7]
+        return self._simulator_object_states()[:, 3:7]
 
     @property
     def simulator_object_lin_vel_w(self) -> torch.Tensor:
-        return self._env.simulator.all_root_states[self.object_indices_in_simulator][:, 7:10]
+        return self._simulator_object_states()[:, 7:10]
 
     #########################################################################################
     ## Methods that does not fit into setup/step/reset pattern

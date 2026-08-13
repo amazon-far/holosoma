@@ -41,8 +41,14 @@ lint.ignore=[
 ]
 
 [tool.ruff.lint.per-file-ignores]
+"src/holosoma_inference/**/*.py" = ["G004"]  # f-strings in logging are fine here
+# Warp kernels: float()/int() literal wrappers are load-bearing (a bare literal is inferred
+# as const and cannot bind to mesh_query_ray's mutable float&/int& out-params), so the rules
+# that strip them must be disabled: UP018 (both), RUF046 (int(0)).
+"src/holosoma/holosoma/utils/warp_utils.py" = ["UP018", "RUF046"]
 "src/holosoma/holosoma/simulator/isaacsim/**/*.py" = ["ALL"]  # Disable until Jenkins has access to IsaacLab
 "src/holosoma/holosoma/train_agent.py" = ["PLC0415"]  # Disable since imports after SimApp are inherent to IsaacSim
+"src/holosoma/tests/simulators/*_assert.py" = ["PLC0415"]  # Standalone sim harnesses defer torch/isaaclab imports until after the SimApp is launched (inherent to IsaacSim)
 "src/holosoma/holosoma/utils/draw.py" = ["F401"]  # Disable since unused imports are required for the adapters
 "src/holosoma/holosoma/utils/eval_utils.py" = ["PLC0415"]  # Disable since imports after SimApp are inherent to IsaacSim
 "src/holosoma_inference/holosoma_inference/policies/base.py" = ["PLC0415"]  # Deferred imports for optional heavy deps (ROS2, joystick, keyboard providers)
@@ -51,5 +57,7 @@ lint.ignore=[
 "src/holosoma_inference/holosoma_inference/policies/dual_mode.py" = ["PLC0415"]  # Deferred imports to avoid circular deps
 "src/holosoma_inference/holosoma_inference/inputs/impl/ros2.py" = ["PLC0415"]  # Deferred ROS2 message imports (rclpy/geometry_msgs optional)
 "src/holosoma_inference/holosoma_inference/run_policy.py" = ["PLC0415"]  # Deferred imports in main entry point
+"src/holosoma_inference/holosoma_inference_service/holosoma_service/holosoma_service/policy_node.py" = ["PLC0415"]  # Deferred wbt_wrappers import (extension optional at import time)
+"src/holosoma_inference/holosoma_inference_service/holosoma_service/holosoma_service/policy_control/service_node.py" = ["PLC0415"]  # Deferred remove_ros_args import in main entry point
 "src/holosoma_inference/holosoma_inference/config/tests/**" = ["PLC0415"]  # Test-scoped imports for isolation
 "src/holosoma_inference/holosoma_inference/inputs/tests/**" = ["PLC0415"]  # Test-scoped imports for isolation

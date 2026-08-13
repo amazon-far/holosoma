@@ -155,7 +155,6 @@ class InteractionMeshRetargeter:
             self.has_dynamic_object = True
         else:
             self.has_dynamic_object = False
-
         self.nq = self.robot_model.nq
 
         self.q_a_init_idx = q_a_init_idx
@@ -200,6 +199,7 @@ class InteractionMeshRetargeter:
         """Initialize foot lock configuration and normalize window mappings."""
         self.foot_lock = foot_lock or FootLockConfig()
         self._foot_lock_windows: dict[str, tuple[tuple[int, int], ...]] = {"left": (), "right": ()}
+        self._foot_lock_z_floors: dict[str, tuple[float, ...]] = {"left": (), "right": ()}
         if self.foot_lock.windows is None:
             return
         for key, windows in self.foot_lock.windows.items():
@@ -213,14 +213,21 @@ class InteractionMeshRetargeter:
                 continue
 
             normalized_windows: list[tuple[int, int]] = []
+            z_floors: list[float] = []
             for window in windows:
-                if len(window) != 2:
+                if len(window) == 3:
+                    start, end, z = int(window[0]), int(window[1]), float(window[2])
+                elif len(window) == 2:
+                    start, end = int(window[0]), int(window[1])
+                    z = self.foot_lock.z_floor
+                else:
                     raise ValueError(f"Invalid foot lock window for {key}: {window}")
-                start, end = int(window[0]), int(window[1])
                 if end < start:
                     raise ValueError(f"Invalid foot lock window with end < start for {key}: {window}")
                 normalized_windows.append((start, end))
+                z_floors.append(z)
             self._foot_lock_windows[side] = tuple(normalized_windows)
+            self._foot_lock_z_floors[side] = tuple(z_floors)
 
     def _init_self_collision(self, self_collision: SelfCollisionConfig | None) -> None:
         """Initialize self-collision configuration and precompute geom pairs."""
@@ -408,8 +415,10 @@ class InteractionMeshRetargeter:
             human_joint_motions (np.ndarray): (num_frames, num_joints, 3) array.
             object_poses (np.ndarray): (num_frames, 7) array of demo object poses (quat, trans).
             object_poses_augmented (np.ndarray): (num_frames, 7) array of augmented object poses (quat, trans).
-            object_points_local_demo (np.ndarray): Demo object points in local frame (rest pose).
-            object_points_local (np.ndarray): Current object points in local frame (rest pose).
+            object_points_local_demo (np.ndarray | list[np.ndarray]): Demo object points in local frame.
+                Single array for static points, or list of num_frames arrays for per-frame points.
+            object_points_local (np.ndarray | list[np.ndarray]): Current object points in local frame.
+                Single array for static points, or list of num_frames arrays for per-frame points.
             foot_sticking_sequences (list): List of foot sticking sequences for each frame.
             q_a_init (np.ndarray, optional): Initial robot configuration.
             q_a_nominal (np.ndarray, optional): Nominal robot configuration.
@@ -434,6 +443,14 @@ class InteractionMeshRetargeter:
                     "Axis target frame count does not match motion frame count: "
                     f"{orientation_targets.axis_target_vectors.shape[0]} vs {num_frames}"
                 )
+        if isinstance(object_points_local_demo, list):
+            assert len(object_points_local_demo) == num_frames, (
+                f"object_points_local_demo length {len(object_points_local_demo)} != num_frames {num_frames}"
+            )
+        if isinstance(object_points_local, list):
+            assert len(object_points_local) == num_frames, (
+                f"object_points_local length {len(object_points_local)} != num_frames {num_frames}"
+            )
         if q_nominal_list is not None:
             q_locked_list = q_nominal_list
         else:
@@ -468,8 +485,16 @@ class InteractionMeshRetargeter:
                         object_quat_demo, object_trans_demo, human_mapped_joints
                     )
 
+                # Per-frame or static object points
+                obj_pts_demo_i = (
+                    object_points_local_demo[i]
+                    if isinstance(object_points_local_demo, list)
+                    else object_points_local_demo
+                )
+                obj_pts_i = object_points_local[i] if isinstance(object_points_local, list) else object_points_local
+
                 source_vertices, source_tetrahedra = create_interaction_mesh(
-                    np.vstack([human_mapped_joints_in_object, object_points_local_demo])
+                    np.vstack([human_mapped_joints_in_object, obj_pts_demo_i])
                 )
                 tetrahedra.append(source_tetrahedra)
 
@@ -477,10 +502,8 @@ class InteractionMeshRetargeter:
                     # Only for visualization
                     object_quat = object_poses_augmented[i, 3:]
                     object_trans = object_poses_augmented[i, :3]
-                    obj_pts_demo = transform_points_local_to_world(
-                        object_quat_demo, object_trans_demo, object_points_local_demo
-                    )
-                    obj_pts = transform_points_local_to_world(object_quat, object_trans, object_points_local)
+                    obj_pts_demo = transform_points_local_to_world(object_quat_demo, object_trans_demo, obj_pts_demo_i)
+                    obj_pts = transform_points_local_to_world(object_quat, object_trans, obj_pts_i)
 
                     obj_pts_demo_list.append(obj_pts_demo)
                     obj_pts_list.append(obj_pts)
@@ -508,7 +531,7 @@ class InteractionMeshRetargeter:
                     q_t_last=retargeted_motions[-1],
                     target_laplacian=target_laplacian,
                     adj_list=adj_list,
-                    obj_pts_local=object_points_local,
+                    obj_pts_local=obj_pts_i,
                     foot_sticking=foot_sticking_sequences[i],
                     w_nominal_tracking=w_nominal_tracking,
                     q_a_nominal=(q_nominal_list[i, self.q_a_indices] if q_nominal_list is not None else None),
@@ -737,10 +760,10 @@ class InteractionMeshRetargeter:
             # Foot lock windows: pin Z to floor within configured frame ranges
             if apply_foot_lock:
                 for key, J_WF in J_WF_dict.items():
-                    if not self._is_foot_locked_in_window(key, frame_idx):
+                    z_anchor = self._is_foot_locked_in_window(key, frame_idx)
+                    if z_anchor is None:
                         continue
 
-                    z_anchor = self.foot_lock.z_floor
                     z_delta = z_anchor - p_WF_dict[key][2]
                     Jz = J_WF[2, self.q_a_indices]
                     constraints += [
@@ -842,8 +865,8 @@ class InteractionMeshRetargeter:
             constraints.append(Ja_n @ dqa >= rhs)
         return constraints
 
-    def _is_foot_locked_in_window(self, foot_link_key: str, frame_idx: int) -> bool:
-        """Check whether a foot link is locked by configured frame windows."""
+    def _is_foot_locked_in_window(self, foot_link_key: str, frame_idx: int) -> float | None:
+        """Return z_floor if foot is locked at this frame, else None."""
         key_lower = foot_link_key.lower()
         side = None
         if "left" in key_lower:
@@ -851,9 +874,12 @@ class InteractionMeshRetargeter:
         elif "right" in key_lower:
             side = "right"
         if side is None:
-            return False
+            return None
 
-        return any(start <= frame_idx <= end for start, end in self._foot_lock_windows.get(side, ()))
+        for i, (start, end) in enumerate(self._foot_lock_windows.get(side, ())):
+            if start <= frame_idx <= end:
+                return self._foot_lock_z_floors[side][i]
+        return None
 
     def _clip_rotvec(self, rotvec: np.ndarray) -> np.ndarray:
         clip = float(self.orientation_config.orientation_error_clip_rad)
@@ -974,10 +1000,7 @@ class InteractionMeshRetargeter:
             target_axis = orientation_targets.axis_target_vectors[frame_idx, axis_idx]
             J_active = J_axis[:, self.q_a_indices]
             weight = self.orientation_config.axis_weight * float(orientation_targets.axis_weights[axis_idx])
-            terms.append(
-                weight
-                * cp.sum_squares(cp.Constant(J_active) @ dqa + cp.Constant(current_axis - target_axis))
-            )
+            terms.append(weight * cp.sum_squares(cp.Constant(J_active) @ dqa + cp.Constant(current_axis - target_axis)))
 
         return terms
 

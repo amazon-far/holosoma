@@ -2,24 +2,27 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from holosoma.config_types.experiment import TrainingConfig
 from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.robot import RobotConfig
+from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
-from holosoma.simulator.shared.object_registry import ObjectRegistry
+from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.simulator.shared.object_registry import ObjectRegistry, ObjectType
 from holosoma.simulator.shared.scene_types import SceneInterface
-from holosoma.simulator.types import ActorIndices, ActorNames, ActorStates, EnvIds
+from holosoma.simulator.types import ActorIndices, ActorNames, ActorPoses, ActorStates, EnvIds
 from holosoma.utils.experiment_paths import get_video_dir
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.simulator_config import SimulatorType, get_simulator_type
 
 if TYPE_CHECKING:
     from holosoma.simulator.shared.camera_controller import CameraController
+    from holosoma.simulator.shared.camera_sensor import SensorManager
     from holosoma.simulator.shared.simulator_bridge import SimulatorBridge
     from holosoma.simulator.shared.video_recorder import VideoRecorderInterface
     from holosoma.simulator.shared.virtual_gantry import VirtualGantry
@@ -81,13 +84,23 @@ class BaseSimulator:
     >>> states = sim.get_actor_states(["obj0", "table"], env_ids)
     >>> sim.set_actor_states(["obj0", "table"], env_ids, new_states)
 
-    **Direct Tensor Access (Advanced)**:
-    >>> # Always get indices dynamically on or after setup - don't hardcode values
-    >>> indices = sim.get_actor_indices(["obj0", "obj1"], env_ids)
+    **Direct Tensor-Like Access (Advanced)**:
+    >>> # Always get indices dynamically on or after setup - don't hardcode values.
+    >>> indices = sim.get_actor_indices(["robot", "obj0", "obj1"], env_ids)
     >>>
-    >>> # IsaacGym-style direct access (works in both via proxy)
-    >>> sim.all_root_states[indices] = new_states
-    >>> sim.write_state_updates()  # Sync changes (no-op in IsaacGym)
+    >>> states = sim.all_root_states[indices]          # gather [len(indices), 13]
+    >>> sim.all_root_states[indices] = new_states      # scatter
+    >>> sim.write_state_updates()                      # Sync changes
+
+    ``all_root_states`` is a duck-typed proxy (NOT a ``torch.Tensor``) spanning all actors
+    (robot, scene, and individual objects), routing ``[indices]`` reads/writes through
+    ``get/set_actor_states_by_index``. Supported surface: ``[indices]`` and
+    ``[indices, column_slice]`` read/write, ``.shape``, ``.device``, ``.dtype``, ``.clone()``.
+    Tensor-only methods (``.view``/``.reshape``/``.to``) and ``isinstance(_, torch.Tensor)`` are
+    not supported.
+
+    Passing it wholesale to ``set_actor_root_state_tensor`` writes the robot only (that method
+    detects the proxy by identity). Use ``set_actor_states`` to write objects.
 
     **Anti-Pattern (Don't Do This)**:
     >>> # Never assume specific index values
@@ -104,6 +117,7 @@ class BaseSimulator:
 
     training_config: TrainingConfig
     simulator_config: SimulatorInitConfig
+    scene_config: SceneConfig
     robot_config: RobotConfig
 
     sim_dt: float
@@ -114,8 +128,17 @@ class BaseSimulator:
     dof_vel: torch.Tensor
     contact_forces: torch.Tensor
     contact_forces_history: torch.Tensor
+
+    # Robot properties, populated by each backend during setup (see _setup_robot_props_*).
+    num_dof: int
+    num_bodies: int
+    dof_names: list[str]
+    body_names: list[str]
     scene: SceneInterface
-    all_root_states: torch.Tensor
+    # Unified all-actors (robot + objects) root-state view: a duck-typed UnifiedRootStatesView,
+    # not a torch.Tensor. Index with get_actor_indices results for any actor; supports [indices]
+    # read/write, .shape/.device/.dtype/.clone(), not Tensor-only methods (.view/.reshape/.to).
+    all_root_states: torch.Tensor  # type: ignore[assignment]
 
     height_samples: None | torch.Tensor
 
@@ -145,12 +168,28 @@ class BaseSimulator:
         self.terrain_manager = terrain_manager
         self.training_config = tyro_config.training
         self.simulator_config = tyro_config.simulator
+        self.scene_config = tyro_config.scene
+        self.sensor_config = tyro_config.sensors
         self.robot_config = tyro_config.robot
         self.video_config = tyro_config.logger.video
         self.sim_device = device
         self.headless = False
         self.debug_viz_enabled = self.simulator_config.debug_viz
         self.object_registry = ObjectRegistry(device)
+        self.hooks = HookRegistry(base_rates=self._hook_base_rates())
+        # Register camera rendering FIRST (before the plugins below), so on FRAME_END cameras render
+        # before any camera-consumer plugin (egress/viz/video) reads. No-ops until a backend builds
+        # sensor_manager during setup; harmless when no cameras are configured.
+        self.hooks.add(Phase.FRAME_END, self.render_sensors, name="sensors.render")
+        # Build plugins from tyro_config.plugin and keep the instances alive (key -> plugin).
+        # Constructing each here registers its hooks on self.hooks, so they fire on later
+        # emit(). The `none` preset disables a slot.
+        self.installed_plugins: dict[str, Any] = {
+            key: cfg.get_cls()(cfg, self) for key, cfg in tyro_config.plugin.items()
+        }
+        if self.installed_plugins:
+            logger.info(f"Installed plugins: {sorted(self.installed_plugins)}")
+        self._closed = False
 
         # Virtual gantry system
         self.virtual_gantry: VirtualGantry | None = None
@@ -163,6 +202,10 @@ class BaseSimulator:
 
         # Bridge system
         self.bridge: SimulatorBridge | None = None
+
+        # Mounted-camera sensors, populated by each backend during its own sensor setup (None until
+        # then, and when no cameras are configured). The render_sensors hook above no-ops until it exists.
+        self.sensor_manager: SensorManager | None = None
 
         # To be overridden by subclasses
         self.height_samples = None
@@ -240,7 +283,7 @@ class BaseSimulator:
         """
         raise NotImplementedError("The 'load_assets' method must be implemented in subclasses.")
 
-    def get_supported_scene_formats(self):
+    def get_supported_scene_formats(self) -> list[str]:
         """Returns the scene formats supported by this simulator in order of preference.
 
         This method should be implemented by subclasses to specify which scene file
@@ -248,7 +291,7 @@ class BaseSimulator:
 
         Returns
         -------
-        List[str]
+        list[str]
             List of supported scene formats in preference order (e.g., ['urdf', 'usd'])
 
         Raises
@@ -273,6 +316,64 @@ class BaseSimulator:
             env_config (dict): Configuration for each environment.
         """
         raise NotImplementedError("The 'create_envs' method must be implemented in subclasses.")
+
+    # ----- Scene-asset registration (shared across backends) -----
+
+    def _register_scene_assets(self) -> None:
+        """Register the robot and every scene asset in the ObjectRegistry.
+
+        Shared across backends: each supplies its spawned data via ``_collect_spawned_actors``;
+        this sorts the actors by name, prepends the robot, splits the rest into SCENE (static) /
+        INDIVIDUAL (free) bands (each numbered from 0), sizes the registry ranges from the
+        per-type counts, and registers each entry.
+        """
+        robot_pose, items = self._collect_spawned_actors()
+
+        # Sort scene actors by name so the registry slot (position_in_type) each one lands
+        # at is backend-independent. Robot stays first (it's prepended after the sort and
+        # is not part of `items`).
+        items = sorted(items, key=lambda item: item[0])
+
+        # The robot's name/type/position are fixed and it carries no scene-configured velocity,
+        # so it's the same constant entry for every backend (only its pose differs). The rest
+        # split into the SCENE (static) / INDIVIDUAL (free) bands; pose/velocity pass through.
+        entries = [("robot", ObjectType.ROBOT, 0, robot_pose, None)]
+        free_pos = scene_pos = 0
+        for name, is_static, pose, velocity in items:
+            if is_static:
+                entries.append((name, ObjectType.SCENE, scene_pos, pose, velocity))
+                scene_pos += 1
+            else:
+                entries.append((name, ObjectType.INDIVIDUAL, free_pos, pose, velocity))
+                free_pos += 1
+
+        self.object_registry.setup_ranges(
+            self.num_envs,
+            robot_count=1,
+            scene_count=scene_pos,
+            individual_count=free_pos,
+        )
+
+        for name, object_type, position, pose, velocity in entries:
+            self.object_registry.register_object(name, object_type, position, pose, velocity)
+        self.object_registry.finalize_registration()
+
+    def _collect_spawned_actors(self):
+        """Return ``(robot_pose, items)`` describing what this backend spawned.
+
+        - ``robot_pose``: the robot's ``[num_envs, 7]`` initial pose, in the backend's own
+          world/local convention.
+        - ``items``: one ``(name, is_static, pose, velocity)`` per spawned scene actor, free
+          and static bodies alike, including the 1->N bodies a scene file expands into. ``pose``
+          is ``[num_envs, 7]``; ``velocity`` is ``[num_envs, 6]`` or ``None`` for zero. Order is
+          irrelevant (``_register_scene_assets`` sorts by name), so collect them however is
+          natural for the backend.
+
+        ``_register_scene_assets`` turns this into the registry: it sorts, prepends the robot, and
+        classifies ``items`` into type bands identically for every backend, so the subclass only
+        describes its actors, not how they map to the registry.
+        """
+        raise NotImplementedError("Backends with scene assets must implement _collect_spawned_actors().")
 
     # ----- Property Retrieval Methods -----
 
@@ -319,9 +420,13 @@ class BaseSimulator:
         """
         raise NotImplementedError("The 'refresh_sim_tensors' method must be implemented in subclasses.")
 
-    def clear_contact_forces_history(self, env_id):
-        """
-        Clears the contact forces history for the specified environment.
+    def clear_contact_forces_history(self, env_ids: torch.Tensor) -> None:
+        """Clear the contact-forces history for the specified environments.
+
+        Parameters
+        ----------
+        env_ids : torch.Tensor
+            1-D tensor of environment IDs whose contact-force history is zeroed (empty -> no-op).
         """
         raise NotImplementedError("The 'clear_contact_forces_history' method must be implemented in subclasses.")
 
@@ -479,70 +584,39 @@ class BaseSimulator:
             from holosoma.simulator.shared.simulator_bridge import SimulatorBridge
 
             self.bridge = SimulatorBridge(self, self.simulator_config.bridge)
+            self.bridge.register_hooks(self.hooks)
             logger.info("Bridge system initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize bridge system: {e}")
             raise
 
-    def _step_bridge(self) -> None:
-        """Step bridge system if enabled.
+    def _hook_base_rates(self) -> dict[Phase, float]:
+        """Base tick rate (Hz) of each periodic phase, so hooks can request a rate via ``every="30Hz"``.
 
-        Should be called by subclasses during each physics step,
-        typically before physics simulation. Handles bridge state
-        publishing and command processing.
+        Per-substep phases tick at ``fps``; per-frame phases at the control rate ``fps / control_decimation``.
         """
+        sim = self.simulator_config.sim
+        fps = float(sim.fps)
+        control_hz = fps / sim.control_decimation_steps
+        return {
+            Phase.PRE_STEP: fps,
+            Phase.POST_STEP: fps,
+            Phase.FRAME_BEGIN: control_hz,
+            Phase.FRAME_END: control_hz,
+        }
+
+    def close(self) -> None:
+        """Tear down simulator-owned runtime participants."""
+        if self._closed:
+            return
+        self._closed = True
+        self.hooks.emit(Phase.CLOSE)
+
+    def _stop_bridge(self) -> None:
+        """Tear down the bridge if enabled (joins the multiprocess Unitree DDS child). Safe if unset."""
         if self.bridge is not None:
-            self.bridge.step()
-
-    # ----- Video Recording Interface -----
-    def on_episode_start(self, env_id: int = 0) -> None:
-        """Called when an episode starts.
-
-        This method provides a hook for video recording and other episode-based
-        functionality. Subclasses can override this method to add additional
-        episode start logic while calling super() to maintain video recording.
-
-        Parameters
-        ----------
-        env_id : int, default=0
-            The environment ID where the episode is starting.
-        """
-        if self.virtual_gantry is not None and env_id == 0:
-            # Follow robot on start (may want this configurable later)
-            self.virtual_gantry.set_position_to_robot()
-
-        if self.video_recorder is not None:
-            self.video_recorder.on_episode_start(env_id)
-
-    def on_episode_end(self, env_id: int = 0) -> None:
-        """Called when an episode ends.
-
-        This method provides a hook for video recording and other episode-based
-        functionality. Subclasses can override this method to add additional
-        episode end logic while calling super() to maintain video recording.
-
-        Parameters
-        ----------
-        env_id : int, default=0
-            The environment ID where the episode is ending.
-        """
-        if self.video_recorder is not None:
-            self.video_recorder.on_episode_end(env_id)
-
-    def capture_video_frame(self, env_id: int = 0) -> None:
-        """Capture a video frame during simulation.
-
-        This method should be called during each simulation step when video
-        recording is active. It delegates to the video recorder if one is
-        configured and currently recording.
-
-        Parameters
-        ----------
-        env_id : int, default=0
-            The environment ID where the frame is being captured.
-        """
-        if self.video_recorder is not None:
-            self.video_recorder.capture_frame(env_id)
+            self.bridge.close()
+            self.bridge = None
 
     # ----- Actor/Object Access Interface -----
     # These methods provide unified access to objects registered with ObjectType enum
@@ -564,7 +638,7 @@ class BaseSimulator:
         >>> sim.set_actor_states(["obj1"], env_ids, states2, write_updates=False)
         >>> sim.write_state_updates()  # Batch sync
 
-        **Direct tensor access (IsaacGym-style):**
+        **Direct access via all_root_states (any actor, incl. "robot"):**
         >>> sim.all_root_states[indices] = new_states  # Direct modification
         >>> sim.write_state_updates()  # Sync changes
 
@@ -649,6 +723,121 @@ class BaseSimulator:
         """
         return self.set_actor_states_by_names(names, env_ids, states, write_updates)
 
+    def set_static_body_pose(self, names: ActorNames, env_ids: EnvIds | None, poses: ActorPoses) -> None:
+        """Kinematically relocate static (SCENE) scene bodies at runtime.
+
+        Convenience over :meth:`set_actor_states` for the common "move a static obstacle" case:
+        it zero-pads the 7-wide pose to a full 13-wide state (static/kinematic bodies ignore the
+        velocity columns, moving by pose target, not commanded velocity) and forwards. Works
+        the same on every backend (MuJoCo via body_pos/body_quat + forward-kinematics; IsaacGym
+        via the fixed-base root-state teleport; IsaacSim via the kinematic rigid-body write).
+
+        Parameters
+        ----------
+        names : ActorNames
+            SCENE (static) body names to relocate. (Free INDIVIDUAL bodies also accept this, but
+            for those :meth:`set_actor_states` with a velocity is usually what you want.)
+        env_ids : EnvIds or None
+            Environments to update (``None`` = all envs, as in :meth:`get_actor_indices`).
+        poses : ActorPoses
+            ``[len(names) * len(env_ids), 7]`` = ``[x, y, z, qx, qy, qz, qw]`` (xyzw). FULL pose:
+            position + orientation, in the **WORLD frame**, the single backend-independent
+            convention shared by :meth:`set_actor_states`, :meth:`get_actor_states`, and
+            :meth:`get_actor_initial_poses` on every backend.
+
+        Notes
+        -----
+        A single large teleport imparts no momentum and can let a fast dynamic body tunnel
+        through; increment the pose over several steps to sweep/push dynamics. Read the live
+        moved pose back via :meth:`get_actor_states` (NOT ``get_actor_initial_poses``, which
+        returns the spawn pose).
+        """
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.sim_device)
+        if not names or len(env_ids) == 0:
+            return
+        zeros = torch.zeros(poses.shape[0], 6, device=poses.device, dtype=poses.dtype)
+        self.set_actor_states(list(names), env_ids, torch.cat([poses, zeros], dim=1))
+
+    # ----- Sensor (camera) interface -----
+
+    def render_sensors(self) -> None:
+        """Render all due cameras once, at control frequency, into their cached buffers.
+
+        Called once per control step from the task loop (after sim tensors refresh, before
+        observations compute), honoring each camera's ``update_decimation``. Consumers then do
+        cheap cached reads via :meth:`get_camera_data`."""
+        raise NotImplementedError("The 'render_sensors' method must be implemented in subclasses.")
+
+    def get_camera_data(
+        self,
+        name: str,
+        data_type: str = "rgb",
+        env_ids: EnvIds | None = None,
+        device: torch.device | str | None = None,
+    ) -> torch.Tensor:
+        """Read a camera's most-recent output.
+
+        Output format:
+
+        - **Shape** ``[len(env_ids), H, W, C]``, environment axis FIRST.
+        - **Layout** HWC, row-major: row 0 = TOP of the image, column 0 = LEFT.
+        - **rgb**: ``torch.uint8`` in ``[0, 255]``, channel order **R, G, B** (C=3).
+        - **depth**: ``torch.float32`` meters, distance-to-image-plane, ``+inf`` for no-hit, C=1.
+        - **device**: ``device`` if given, else ``self.sim_device``.
+        - **Optical frame**: camera looks down its local ``-Z``, ``+Y`` up; the
+          mount offset is applied in the mount-body frame.
+
+        Parameters
+        ----------
+        name : str
+            Sensor name (the ``CameraSensorConfig.name`` key).
+        data_type : str, default="rgb"
+            Modality to read: ``"rgb"`` or ``"depth"``. Must be in the camera's ``data_types``.
+        env_ids : EnvIds | None, default=None
+            Absolute environment indices into ``[0, num_envs)`` to return (every camera renders
+            all envs, so these index the full buffer); ``None`` returns all environments.
+        device : torch.device | str | None, default=None
+            Where to return the tensor. ``None`` keeps the sim device (no copy). Any other device
+            (e.g. ``"cpu"``) returns a cached cross-device copy of the FULL buffer: the first caller
+            per ``(data_type, device)`` this render pays the transfer, later callers reuse it (so
+            several egress consumers reading the same camera on host cost one device->host sync, not
+            one each). The returned tensor is **read-only** — do not mutate it in place; it is shared.
+
+        Raises
+        ------
+        NotImplementedError
+            If the backend has no camera support (no ``sensor_manager``).
+        """
+        if self.sensor_manager is None or not self.sensor_manager.has_camera(name):
+            raise NotImplementedError(
+                f"{type(self).__name__} has no camera '{name}'. Created cameras: {self.get_sensor_names()}."
+            )
+        runtime = self.sensor_manager.get(name)
+        if data_type not in runtime.buffers:
+            raise RuntimeError(
+                f"Camera '{name}' has no '{data_type}' frame. Ensure '{data_type}' is in the camera's "
+                f"data_types and render_sensors() has run. Buffered: {sorted(runtime.buffers)}."
+            )
+        buf = runtime.buffer_on(data_type, device)
+        return buf if env_ids is None else buf[env_ids]
+
+    def get_sensor_names(self) -> list[str]:
+        """Names of all created sensors, or ``[]`` if none."""
+        if self.sensor_manager is None:
+            return []
+        return self.sensor_manager.names
+
+    def sensor_config_by_name(self, name: str):
+        """The ``CameraSensorConfig`` for ``name`` from the active mounted-camera dict.
+
+        Used by camera-consumer hooks (egress) to read a camera's intrinsics. Raises if unknown.
+        """
+        cam = self.sensor_config.get(name)
+        if cam is None:
+            raise KeyError(f"No camera named '{name}'. Defined cameras: {list(self.sensor_config)}.")
+        return cam
+
     # Explicit names-based methods
     def get_actor_states_by_names(self, names: ActorNames, env_ids: EnvIds) -> ActorStates:
         """Get actor states by actor names.
@@ -678,6 +867,11 @@ class BaseSimulator:
         - Returns current simulation states, not initial/default poses
         - State ordering matches ObjectRegistry index calculation
         - Environment origins are already applied in returned positions
+        - Unified 13-vector layout ``[pos(3), quat_xyzw(4), lin_vel(3), ang_vel(3)]``. Both
+          linear AND angular velocity are WORLD-frame and the quaternion is xyzw, for every
+          backend. Backends whose native storage differs (e.g. MuJoCo's freejoint qvel keeps
+          angular velocity body-local) convert at their own get/set boundary so callers see one
+          consistent frame. ``set_actor_states`` accepts the same layout (inverse conversion).
 
         See Also
         --------
@@ -722,7 +916,14 @@ class BaseSimulator:
 
         Notes
         -----
-        - Environment origins are automatically applied by the framework
+        - Input poses are **WORLD-frame on every backend**: pass world coordinates directly, do
+          NOT pre-add ``env_origins`` (and never branch on simulator type). A
+          ``get_actor_initial_poses`` result feeds straight back in unchanged. Velocities are
+          world-frame too (see :meth:`get_actor_states_by_names` for the 13-vector layout).
+        - Need env-LOCAL coordinates? Convert at the call site (position columns only; quat and
+          velocity are origin-invariant). For a name-major/env-minor tensor ``t`` over ``names`` x
+          ``env_ids``: ``t[:, 0:3] -= self.env_origins[env_ids].repeat(len(names), 1)`` to go
+          world->local, ``+=`` to go local->world. (No frame kwarg exists; poses are world-frame.)
         - IsaacGym: write_updates parameter has no effect (always immediate)
         - IsaacSim: write_updates=False allows batching for performance
         - State ordering matches ObjectRegistry index calculation
@@ -862,8 +1063,11 @@ class BaseSimulator:
 
         Important Notes
         ---------------
-        **Index Ordering**: Actor indices ordering may differ between simulator
-        implementations. This is intentional for now.
+        **Index Ordering**: All backends share one convention, **name-major, env-minor**:
+        for ``get_actor_indices(names, env_ids)`` the result groups all of ``names[0]``'s
+        envs first, then ``names[1]``'s, etc. (matches ``ObjectRegistry.get_initial_poses_batch``).
+        ``get_actor_states`` / ``set_actor_states`` rely on this, so a caller pairing
+        ``get_actor_initial_poses`` with ``set_actor_states`` must group both the same way.
 
         **Best Practices**:
         - **Always get indices dynamically** - never assume specific index values
@@ -945,12 +1149,17 @@ class BaseSimulator:
         - Robot initial state configuration
 
         These are NOT the current simulation poses - use get_actor_states() for current poses.
-        Environment origins are NOT applied to initial poses - they represent the base configuration.
+
+        Frame: the returned pose is **WORLD-frame (env_origins already applied) on every backend**,
+        the same single convention as ``get_actor_states`` and ``set_actor_states``. Feed a
+        ``get_actor_initial_poses`` result STRAIGHT into ``set_actor_states`` to reset (as the
+        reset/jitter terms do); to place at a hand-built target, pass world coordinates directly.
+        Never add ``env_origins`` yourself and never branch on simulator type.
 
         See Also
         --------
-        get_actor_states : Get current simulation poses
-        set_actor_states : Set object states using these poses
+        get_actor_states : Get current simulation poses (always WORLD frame on every backend)
+        set_actor_states : Set object states using these poses (same WORLD frame as here)
 
         Raises
         ------

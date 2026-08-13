@@ -6,8 +6,14 @@ for different robot types.
 
 from __future__ import annotations
 
-from holosoma_inference.compat import entry_points
 from holosoma_inference.config.config_types.robot import RobotConfig
+from holosoma_inference.utils.config_registry import (
+    ConfigRegistry,
+    deprecated_defaults_alias,
+    deprecated_get_defaults,
+)
+
+ROBOT_REGISTRY = ConfigRegistry(RobotConfig, group="holosoma.config.robot")
 
 # =============================================================================
 # G1 Robot Config
@@ -226,39 +232,9 @@ t1_29dof = RobotConfig(
 # Default Configurations Dictionary
 # =============================================================================
 
-# Core defaults - no extension imports at module load time
-DEFAULTS = {
-    "g1-29dof": g1_29dof,
-    "t1-29dof": t1_29dof,
-}
-"""Dictionary of all available robot configurations.
+# Register core presets. Keys use hyphen-case naming convention for CLI compatibility.
+ROBOT_REGISTRY.add("g1-29dof", g1_29dof)
+ROBOT_REGISTRY.add("t1-29dof", t1_29dof)
 
-Keys use hyphen-case naming convention for CLI compatibility.
-"""
-
-# Track whether extensions have been loaded
-_extensions_loaded = False
-
-
-def _load_extensions() -> None:
-    """Lazily load extension configs from entry points.
-
-    This is deferred to avoid circular imports when extensions import
-    from holosoma_inference.config at module load time.
-    """
-    global _extensions_loaded  # noqa: PLW0603
-    if _extensions_loaded:
-        return
-    _extensions_loaded = True
-    for ep in entry_points(group="holosoma.config.robot"):
-        DEFAULTS[ep.name] = ep.load()
-
-
-def get_defaults() -> dict:
-    """Get all robot config defaults, including extensions.
-
-    Returns:
-        Dictionary mapping config names to RobotConfig instances.
-    """
-    _load_extensions()
-    return DEFAULTS
+__getattr__ = deprecated_defaults_alias(__name__, ROBOT_REGISTRY)
+get_defaults = deprecated_get_defaults(__name__, ROBOT_REGISTRY)

@@ -3,18 +3,12 @@ Utility functions for working with USD prims in IsaacSim.
 """
 
 import fnmatch
-from typing import Dict, List, Optional, Tuple, Union
 
-import isaaclab.sim as sim_utils
 import numpy as np
 import omni
 import omni.log
 import omni.usd
-import torch
-from isaaclab.assets import RigidObject, RigidObjectCfg
-from isaaclab.assets.rigid_object_collection import RigidObjectCollection, RigidObjectCollectionCfg
-from isaaclab.utils.math import quat_from_angle_axis, quat_mul
-from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics
+from pxr import Gf, Usd, UsdGeom, UsdPhysics
 
 
 def get_current_stage() -> Usd.Stage:
@@ -91,8 +85,6 @@ def find_matching_prims(root_path, pattern="*", include_root=False, stage=None):
     Returns:
         List of matching Usd.Prim objects
     """
-    import fnmatch
-
     stage = stage or get_current_stage()
 
     matching_prims = []
@@ -318,31 +310,6 @@ def compute_world_transform(stage, prim_path):
     return Gf.Matrix4d(1.0)  # Fallback to identity
 
 
-def apply_offset_transform(world_transform, offset_pos=(0, 0, 0), offset_rot=(1, 0, 0, 0)):
-    """Apply offset position and rotation to a world transform.
-
-    Args:
-        world_transform: Base world transform matrix
-        offset_pos: Position offset (x, y, z)
-        offset_rot: Rotation offset as quaternion (w, x, y, z)
-
-    Returns:
-        Gf.Transform: Combined transform
-    """
-    world_tf = Gf.Transform()
-    world_tf.SetMatrix(world_transform)
-
-    offset_tf = Gf.Transform()
-    offset_tf.SetTranslation(Gf.Vec3d(*offset_pos))
-
-    if isinstance(offset_rot, tuple):
-        offset_tf.SetRotation(Gf.Rotation(Gf.Quatd(*offset_rot)))
-    else:
-        offset_tf.SetRotation(offset_rot)
-
-    return world_tf * offset_tf
-
-
 def get_pose(transform: Gf.Transform):
     """Extract position and rotation from a transform.
 
@@ -361,12 +328,17 @@ def get_pose(transform: Gf.Transform):
 
 
 def set_instanceable(stage, prim_path: str, instanceable: bool = True) -> bool:
-    """Set instanceable flag on a prim.
+    """Set the instanceable flag on a prim and (when clearing) its whole subtree.
+
+    Clearing must cover descendants too: a nested instanceable prim hides its children from
+    ``Usd.PrimRange``/``stage.Traverse`` (instance proxies), so physics edits and the composition
+    validator would silently miss geometry living inside it. Paths are collected before mutating
+    (flipping instanceable mid-traversal is undefined).
 
     Args:
         stage: The USD stage containing the prim
         prim_path: Path to the prim to modify
-        instanceable: True to make instanceable, False to make non-instanceable
+        instanceable: True to make instanceable (root only), False to clear root + subtree
 
     Returns:
         bool: True if flag was set, False if prim not found
@@ -376,142 +348,11 @@ def set_instanceable(stage, prim_path: str, instanceable: bool = True) -> bool:
         return False
 
     prim.SetInstanceable(instanceable)
+    if not instanceable:
+        # TraverseInstanceProxies so prims INSIDE still-instanced subtrees are found too.
+        paths = [p.GetPath() for p in Usd.PrimRange(prim, Usd.TraverseInstanceProxies()) if p.IsInstanceable()]
+        for path in paths:
+            sub = stage.GetPrimAtPath(path)
+            if sub:
+                sub.SetInstanceable(False)
     return True
-
-
-class UsdSceneLoaderCfg:
-    """Configuration for USD scene loader.
-
-    Args:
-        usd_path: Path to the USD file to load
-        prim_configs: Dictionary mapping prim patterns to RigidObjectCfg
-        strip_prefixes: Prefixes to strip from USD paths when creating spawned paths
-        scene_pos_offset: Position offset applied to all loaded objects (x, y, z)
-        scene_rot_offset: Rotation offset applied to all loaded objects as quaternion (w, x, y, z)
-        device: Device to use for tensors
-    """
-
-    def __init__(
-        self,
-        usd_path: str,
-        prim_configs: Dict[str, RigidObjectCfg],
-        strip_prefixes: List[str] = None,
-        scene_pos_offset: Tuple[float, float, float] = (0.0, 0.0, 0.0),
-        scene_rot_offset: Tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
-        device: str = "cuda",
-    ):
-        self.usd_path = usd_path
-        self.prim_configs = prim_configs
-        self.strip_prefixes = strip_prefixes if strip_prefixes is not None else ["/world/"]
-        self.scene_pos_offset = scene_pos_offset
-        self.scene_rot_offset = scene_rot_offset
-        self.device = device
-
-
-def apply_rigid_body_properties_to_prim(prim_path: str, rigid_props=None):
-    """Apply rigid body properties to a prim, ensuring RigidBodyAPI is applied.
-
-    This function ensures that rigid body properties are properly applied to spawned prims.
-    It uses the new schema utilities for consistent API handling.
-
-    Args:
-        prim_path: Path to the prim to modify
-        rigid_props: RigidBodyPropertiesCfg to apply, defaults to basic config
-    """
-    from isaaclab.sim import schemas
-    from holosoma.simulator.isaacsim.spawners.schema_utils import ensure_api_and_modify
-    from pxr import UsdPhysics
-
-    # Use default rigid props if none provided
-    if rigid_props is None:
-        rigid_props = sim_utils.RigidBodyPropertiesCfg(
-            kinematic_enabled=False,
-        )
-
-    # Use the new utility function for consistent handling
-    ensure_api_and_modify(prim_path, rigid_props, UsdPhysics.RigidBodyAPI, schemas.modify_rigid_body_properties)
-
-
-def _compute_object_pose(temp_stage, prim_path, cfg):
-    """Simplified pose computation for scene loading.
-
-    Args:
-        temp_stage: USD stage containing the prim
-        prim_path: Path to the prim
-        cfg: UsdSceneLoaderCfg with scene offset settings
-
-    Returns:
-        Tuple of (position, rotation) where position is (x,y,z) and rotation is (w,x,y,z)
-    """
-    world_transform = compute_world_transform(temp_stage, prim_path)
-    offset_transform = apply_offset_transform(world_transform, cfg.scene_pos_offset, cfg.scene_rot_offset)
-
-    pos, rot = get_pose(offset_transform)
-    return (float(pos[0]), float(pos[1]), float(pos[2])), rot
-
-
-def create_usd_scene_loader(cfg: UsdSceneLoaderCfg) -> RigidObjectCollection:
-    """Create a USD scene loader that loads specific prims as RigidObjects.
-
-    This function loads a USD scene and creates RigidObjects for prims that match
-    the specified patterns. It uses USD prim paths directly as collection keys
-    for deterministic semantic mapping.
-
-    Args:
-        cfg: Configuration for the USD scene loader
-
-    Returns:
-        RigidObjectCollection: Collection containing the loaded rigid objects
-    """
-    from holosoma.simulator.isaacsim.spawners.from_files_cfg import CustomUsdFileCfg
-    from holosoma.simulator.isaacsim.path_utils import transform_usd_path_to_spawned_path
-
-    omni.log.info(f"Loading USD scene from: {cfg.usd_path}")
-
-    # Open USD stage to analyze prims
-    temp_layer = Sdf.Layer.FindOrOpen(cfg.usd_path)
-    temp_stage = Usd.Stage.Open(temp_layer)
-
-    # Create collection config
-    collection_cfg = RigidObjectCollectionCfg(rigid_objects={})
-
-    # Process each prim pattern and its configuration
-    for pattern, base_rigid_cfg in cfg.prim_configs.items():
-        # Find all prims matching the pattern
-        matching_prims = find_matching_prims("/", pattern, stage=temp_stage)
-        for i, prim in enumerate(matching_prims):
-            prim_path = str(prim.GetPath())
-
-            # Compute object pose with simplified transform pipeline
-            pos, rot = _compute_object_pose(temp_stage, prim_path, cfg)
-
-            # Transform USD path to spawned path using configurable prefix stripping
-            spawned_path_pattern = transform_usd_path_to_spawned_path(prim_path, cfg.strip_prefixes)
-
-            # Create RigidObjectCfg for this specific prim using custom spawner
-            rigid_cfg = RigidObjectCfg(
-                prim_path=spawned_path_pattern,
-                spawn=CustomUsdFileCfg(
-                    usd_path=cfg.usd_path,
-                    source_path=prim_path,  # Load only this specific prim
-                    rigid_props=base_rigid_cfg.spawn.rigid_props,  # Use rigid_props from pattern config
-                ),
-                init_state=RigidObjectCfg.InitialStateCfg(
-                    pos=pos,
-                    rot=rot,
-                ),
-            )
-
-            # Use USD prim path directly as collection key (deterministic)
-            collection_cfg.rigid_objects[prim_path] = rigid_cfg
-
-    # Clean up temporary stage
-    del temp_stage
-    del temp_layer
-
-    # Create and return the collection
-    if collection_cfg.rigid_objects:
-        return RigidObjectCollection(collection_cfg), collection_cfg
-    else:
-        omni.log.warn("No objects were loaded from the USD scene")
-        return None, None

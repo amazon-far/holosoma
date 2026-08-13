@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
+
 import trimesh
 
 from holosoma.utils.safe_torch_import import torch
@@ -97,3 +98,7 @@ class TerrainTermBase(ABC):
     @property
     def restitution(self) -> float:
         return self._cfg.restitution
+
+    @property
+    def hide_visual(self) -> bool:
+        return self._cfg.hide_visual

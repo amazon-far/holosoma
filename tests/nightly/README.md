@@ -86,6 +86,7 @@ The nightly workflow automatically:
 All scripts support the following environment variables:
 - `WANDB_ENTITY`: wandb entity/org name (default: "amazon-far")
 - `WANDB_API_KEY`: wandb API key for authentication
+- `WANDB_BASE_URL`: wandb server URL
 - `GITHUB_RUN_ID`: GitHub Actions run ID (automatically set in CI)
 - `SLACK_BOT_TOKEN`: Slack bot token for posting messages
 - `SLACK_CHANNEL`: Slack channel to post to

@@ -73,7 +73,7 @@ class EvalRecordingCallback(RLEvalCallback):
         self._metadata["fps"] = round(1.0 / float(env.dt))
         self._metadata["sim_dt"] = float(env.sim_dt)
         self._metadata["sim_fps"] = round(1.0 / float(env.sim_dt))
-        self._metadata["control_decimation"] = env.simulator.simulator_config.sim.control_decimation
+        self._metadata["control_decimation"] = env.simulator.simulator_config.sim.control_decimation_steps
         self._metadata["env_id"] = self.env_id
         if hasattr(sim, "dof_names"):
             self._metadata["dof_names"] = list(sim.dof_names)

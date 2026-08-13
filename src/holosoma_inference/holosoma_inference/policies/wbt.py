@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from typing import Protocol, runtime_checkable
 
 import numpy as np
 import onnx
@@ -24,9 +25,23 @@ from holosoma_inference.utils.math.quat import (
 )
 
 
+@runtime_checkable
+class TargetSource(Protocol):
+    """Supplies the tracking target, replacing the ONNX clip. Always returns a
+    valid ``(motion_command (1, 2*num_dofs), ref_quat_xyzw (4,))``."""
+
+    def get_target(self, num_dofs: int, rl_rate_hz: float, urdf_path: str | None): ...
+
+
 class WholeBodyTrackingPolicy(BasePolicy):
     def __init__(self, config: InferenceConfig):
         self.config = config
+
+        # Injected target source (NPZ / teleop). Unset -> ONNX clip.
+        # Subclasses (e.g. HolosomaWBTPolicy) set this *before* calling
+        # super().__init__(), so don't clobber an already-injected source.
+        if not hasattr(self, "_target_source"):
+            self._target_source: TargetSource | None = None
 
         # initialize motion state
         self.motion_clip_progressing = False
@@ -89,6 +104,10 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
         if hasattr(self, "_shared_hardware_source"):
             logger.info(colored("Skipping stiff hold prompt (secondary policy)", "yellow"))
+        elif self.config.task.skip_stiff_prompt:
+            # Non-interactive launches (service node, eval) skip the blocking
+            # stdin gate and enter stiff hold immediately (config default True).
+            logger.info(colored("✓ Entering stiff hold mode (skip_stiff_prompt)", "green"))
         elif sys.stdin.isatty():
             logger.info(colored("\n⚠️  Ready to enter stiff hold mode", "yellow", attrs=["bold"]))
             logger.info(colored("Press Enter to continue...", "yellow"))
@@ -269,6 +288,12 @@ class WholeBodyTrackingPolicy(BasePolicy):
         input_feed = {"time_step": np.array([[self.curr_motion_timestep]], dtype=np.float32), "obs": obs["actor_obs"]}
         policy_action, self.motion_command_t, self.ref_quat_xyzw_t = self.policy(input_feed)
 
+        # Override the ONNX's self-generated clip target with the injected source.
+        if self._target_source is not None:
+            self.motion_command_t, self.ref_quat_xyzw_t = self._target_source.get_target(
+                self.num_dofs, self.config.task.rl_rate, getattr(self.config.robot, "urdf_path", None)
+            )
+
         # clip policy action
         policy_action = np.clip(policy_action, -100, 100)
         # store last policy action
@@ -369,7 +394,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
                 self.curr_motion_timestep += 1
 
             if self.curr_motion_timestep != prev:
-                self.logger.info(f"Motion timestep: {prev} → {self.curr_motion_timestep}")  # noqa: G004
+                self.logger.debug(f"Motion timestep: {prev} → {self.curr_motion_timestep}")
 
             # Stop motion clip at configured end timestep (keep policy running at final pose)
             if (end := self.config.task.motion_end_timestep) and self.curr_motion_timestep >= end:

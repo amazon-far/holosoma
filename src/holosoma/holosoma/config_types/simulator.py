@@ -2,14 +2,12 @@ from __future__ import annotations
 
 from dataclasses import field
 from enum import Enum
-from pathlib import Path
 from typing import Any
 
-import tyro
 from pydantic import model_validator
 from pydantic.dataclasses import dataclass
-from typing_extensions import Annotated
 
+from holosoma.config_types.frequency import DecimationLike, resolve_decimation
 from holosoma.config_types.viewer import ViewerConfig
 
 
@@ -119,13 +117,22 @@ class SimEngineConfig:
     """Top-level simulation engine settings."""
 
     fps: int
-    """Target simulation frames per second."""
+    """Physics rate in Hz: the sim integrates one physics step every ``1/fps`` seconds (the engine
+    timestep ``dt``). The base frequency every other rate here is derived from."""
 
-    control_decimation: int
-    """Number of physics steps between agent control updates."""
+    control_decimation: DecimationLike
+    """Physics steps per control step: sets the CONTROL (policy) rate to ``fps / control_decimation``
+    Hz. Each control step the policy emits one action that is HELD while the sim runs this many
+    physics steps, then the next observation/action is taken. Higher = cheaper, lower-frequency
+    control. Int (every Nth physics step), or a frequency string expressed against ``fps``: a bare
+    "50Hz" requires an exact decimation (e.g. fps=200 -> 4) and errors if not exactly achievable,
+    while ">50Hz"/"<50Hz" round to the nearest rate at or above/below the target. Holds the value AS
+    WRITTEN; read the resolved integer step count via :attr:`control_decimation_steps`."""
 
     substeps: int
-    """Number of substeps per physics frame."""
+    """Solver substeps WITHIN each physics step — subdivides the ``1/fps`` step for finer/stabler
+    integration (contacts, stiff dynamics). Does NOT change ``fps`` or any rate; purely solver
+    accuracy vs. cost per step."""
 
     physx: PhysxConfig
     """PhysX solver configuration."""
@@ -133,270 +140,36 @@ class SimEngineConfig:
     render_mode: str = "human"
     """Rendering mode requested from the simulator."""
 
-    render_interval: int = 1
-    """Number of physics frames between rendered frames."""
+    render_interval: DecimationLike = 1
+    """Physics steps per rendered frame: render rate = ``fps / render_interval`` Hz.
+    Decouples rendering from physics so the sim can step faster than it draws; 1 = render every
+    step. Int, or a frequency string vs ``fps``. Holds the value AS WRITTEN; read the resolved
+    integer step count via :attr:`render_interval_steps`."""
 
     max_episode_length_s: float = 20.0
     """Maximum episode length in seconds."""
 
-
-@dataclass(frozen=True)
-class IsaacGymPhysicsConfig:
-    """Rigid-shape material properties for the IsaacGym simulator.
-
-    Provides 1:1 mapping to IsaacGym RigidShapeProperties for physics simulation.
-    See PhysicsConfig for common physics parameter descriptions.
-    """
-
-    friction: float = 1.0
-    """Static friction coefficient. Defaults to 1.0."""
-
-    rolling_friction: float = 0.0
-    """Rolling resistance coefficient. Defaults to 0.0."""
-
-    torsion_friction: float = 0.0
-    """Torsion resistance coefficient. Defaults to 0.0."""
-
-    restitution: float = 0.0
-    """Bounce coefficient. Defaults to 0.0."""
-
-    compliance: float = 0.0
-    """Shape compliance. Defaults to 0.0."""
-
-
-@dataclass(frozen=True)
-class IsaacSimPhysicsConfig:
-    """Rigid-body material properties for the IsaacSim simulator.
-
-    Provides 1:1 mapping to IsaacLab RigidBodyMaterialCfg for physics simulation.
-    See PhysicsConfig for common physics parameter descriptions.
-    """
-
-    static_friction: float = 1.0
-    """Static friction coefficient. Defaults to 1.0."""
-
-    dynamic_friction: float = 1.0
-    """Dynamic friction coefficient. Defaults to 1.0."""
-
-    restitution: float = 0.0
-    """Bounce coefficient. Defaults to 0.0."""
-
-    friction_combine_mode: str = "multiply"
-    """Friction combination mode. Options: "multiply", "max", "min", "average". Defaults to "multiply"."""
-
-    restitution_combine_mode: str = "multiply"
-    """Restitution combination mode. Options: "multiply", "max", "min", "average". Defaults to "multiply"."""
-
-
-@dataclass(frozen=True)
-class PhysicsConfig:
-    """Unified physics configuration shared across simulators.
-
-    Provides a unified interface for physics properties that can be used across
-    different simulators, with simulator-specific sections for detailed control.
-    """
-
-    # Essential properties (supported by both simulators)
-    kinematic_enabled: bool = False
-    """Whether to enable kinematic behavior (static vs dynamic). Defaults to False."""
-
-    mass: float | None = None
-    """Direct mass override (highest priority). Defaults to None."""
-
-    density: float | None = None
-    """Density for mass calculation (medium priority). Defaults to None."""
-
-    # Damping (both simulators support this!)
-    linear_damping: float = 0.1
-    """Linear velocity damping coefficient. Defaults to 0.1."""
-
-    angular_damping: float = 0.1
-    """Angular velocity damping coefficient. Defaults to 0.1."""
-
-    max_linear_velocity: float = 1000.0
-    """Maximum linear velocity limit. Defaults to 1000.0."""
-
-    max_angular_velocity: float = 1000.0
-    """Maximum angular velocity limit. Defaults to 1000.0."""
-
-    isaacgym: IsaacGymPhysicsConfig | None = None
-    """IsaacGym-specific physics configuration. Defaults to None."""
-
-    isaacsim: IsaacSimPhysicsConfig | None = None
-    """IsaacSim-specific physics configuration. Defaults to None."""
-
-
-@dataclass(frozen=True)
-class URDFSettings:
-    """URDF-specific loader settings."""
-
-    transform_root_link: str | None = None
-    """Root link name for applying transforms. Defaults to None."""
-
-
-@dataclass(frozen=True)
-class ObjectPatternConfig:
-    """Configuration for object patterns in scene files."""
-
-    physics: PhysicsConfig | None = None
-    """Physics configuration to apply to matching objects. Defaults to None."""
-
-
-@dataclass(frozen=True)
-class SceneFileConfig:
-    """Individual scene file configuration.
-
-    Configuration for loading scene files (USD/URDF) with transforms, filtering,
-    and object-specific settings.
-    """
-
-    usd_path: str | None = None
-    """Path to USD scene file. Defaults to None."""
-
-    urdf_path: str | None = None
-    """Path to URDF scene file. Defaults to None."""
-
-    position: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
-    """Position offset [x, y, z]. Defaults to [0.0, 0.0, 0.0]."""
-
-    orientation: list[float] = field(default_factory=lambda: [1.0, 0.0, 0.0, 0.0])  # [w,x,y,z]
-    """Orientation quaternion [w, x, y, z]. Defaults to [1.0, 0.0, 0.0, 0.0]."""
-
-    scale: list[float] = field(default_factory=lambda: [1.0, 1.0, 1.0])
-    """Scale factors [x, y, z]. Defaults to [1.0, 1.0, 1.0]."""
-
-    include_patterns: list[str] = field(default_factory=lambda: ["*"])
-    """Patterns for including objects. Defaults to ["*"]."""
-
-    exclude_patterns: list[str] = field(default_factory=list)
-    """Patterns for excluding objects. Defaults to empty list."""
-
-    object_configs: dict[str, ObjectPatternConfig] | None = None  # FIX: was Any
-    """Object-specific configurations by pattern. Defaults to None."""
-
-    asset_root: str | None = None
-    """Root directory for resolving relative paths. Defaults to None."""
-
-    urdf_settings: URDFSettings | None = None
-    """URDF-specific settings. Defaults to None."""
-
     @model_validator(mode="after")
-    def validate_urdf_transform_requirements(self) -> SceneFileConfig:
-        """Require transform_root_link when URDF transform is applied"""
-        if self.urdf_path:  # Only validate for URDF files
-            has_transform = self.position != [0.0, 0.0, 0.0] or self.orientation != [1.0, 0.0, 0.0, 0.0]
-
-            if has_transform:
-                if not self.urdf_settings or not self.urdf_settings.transform_root_link:
-                    raise ValueError(
-                        f"URDF scene file '{self.urdf_path}' has position/orientation transform "
-                        f"but missing required 'urdf_settings.transform_root_link'. "
-                        f"Please specify which link to apply the transform to."
-                    )
+    def _validate_rates(self) -> SimEngineConfig:
+        """Validate (do NOT mutate) the rate fields: both must resolve to a valid step count against
+        ``fps``. The fields keep what the user wrote; the resolved ints are exposed as the
+        ``*_steps`` properties below, computed against ``fps`` on access (always consistent if ``fps``
+        changes, and the input config is never rewritten)."""
+        resolve_decimation(self.control_decimation, self.fps, field="control_decimation", log=True)
+        resolve_decimation(self.render_interval, self.fps, field="render_interval", log=True)
         return self
 
-    def get_asset_path(self, format_type: str, fallback_root: str | None = None) -> str:
-        """Get full path to asset file for specified format.
+    @property
+    def control_decimation_steps(self) -> int:
+        """Resolved physics-steps-per-control-step (int >= 1) — ``control_decimation`` evaluated
+        against ``fps`` (a frequency string becomes ``fps/target``; an int passes through)."""
+        return resolve_decimation(self.control_decimation, self.fps, field="control_decimation")
 
-        Parameters
-        ----------
-        format_type : str
-            Asset format type ('usd' or 'urdf').
-        fallback_root : str, optional
-            Fallback root directory if asset_root is not set.
-
-        Returns
-        -------
-        str
-            Full path to the asset file.
-
-        Raises
-        ------
-        ValueError
-            If the specified format is not configured for this source.
-        """
-        format_map = {
-            "usd": self.usd_path,
-            "urdf": self.urdf_path,
-        }
-
-        if format_type not in format_map or format_map[format_type] is None:
-            raise ValueError(f"Asset format '{format_type}' not configured for this source")
-
-        asset_path = format_map[format_type]
-        assert asset_path is not None
-        root_path = self.asset_root if self.asset_root is not None else fallback_root
-
-        if not Path(asset_path).is_absolute():
-            if not root_path:
-                raise ValueError(f"Root path is required for relative path: {asset_path}")
-            return str(Path(root_path) / asset_path)
-
-        return asset_path
-
-    def has_format(self, format_type: str, fallback_root: str | None = None) -> bool:
-        """Check if format is configured and file exists.
-
-        Parameters
-        ----------
-        format_type : str
-            Asset format type ('usd' or 'urdf').
-        fallback_root : str, optional
-            Fallback root directory if asset_root is not set.
-
-        Returns
-        -------
-        bool
-            True if format is configured and file exists, False otherwise.
-        """
-        try:
-            full_path = self.get_asset_path(format_type, fallback_root)
-            return Path(full_path).exists()
-        except ValueError:
-            return False
-
-
-@dataclass(frozen=True)
-class RigidObjectConfig:
-    """Configuration for individual rigid objects."""
-
-    name: str
-    """Name identifier for the rigid object."""
-
-    urdf_path: str | None = None
-    """Path to URDF file for the object. Defaults to None."""
-
-    usd_path: str | None = None
-    """Path to USD file for the object. Defaults to None."""
-
-    position: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
-    """Position [x, y, z] of the object. Defaults to [0.0, 0.0, 0.0]."""
-
-    orientation: list[float] = field(default_factory=lambda: [1.0, 0.0, 0.0, 0.0])  # [w,x,y,z]
-    """Orientation quaternion [w, x, y, z] of the object. Defaults to [1.0, 0.0, 0.0, 0.0]."""
-
-    physics: PhysicsConfig | None = None  # FIX: was Any
-    """Physics configuration for the object. Defaults to None."""
-
-
-@dataclass(frozen=True)
-class SceneConfig:
-    """Composition of scene assets for the simulator."""
-
-    replicate_physics: bool = True
-    """Whether to reuse physics properties across duplicated assets."""
-
-    asset_root: str | None = None
-    """Optional root directory for relative asset paths."""
-
-    scene_files: Annotated[list[SceneFileConfig] | None, tyro.conf.Suppress] = None
-    """List of scene files (USD/URDF) to load. Set programmatically, not via CLI."""
-
-    rigid_objects: Annotated[list[RigidObjectConfig] | None, tyro.conf.Suppress] = None
-    """Standalone rigid objects to instantiate. Set programmatically, not via CLI."""
-
-    env_spacing: float = 20.0
-    """Distance between parallel environments in the grid layout."""
+    @property
+    def render_interval_steps(self) -> int:
+        """Resolved physics-steps-per-rendered-frame (int >= 1) — ``render_interval`` evaluated
+        against ``fps`` (frequency string -> ``fps/target``; int passes through)."""
+        return resolve_decimation(self.render_interval, self.fps, field="render_interval")
 
 
 @dataclass(frozen=True)
@@ -469,6 +242,13 @@ class BridgeConfig:
     use_ros: bool = False
     """Whether to use ROS for communication."""
 
+    publish_odom: bool = False
+    """Publish base odometry over the SDK (SportModeState on rt/odommodestate) each step.
+
+    Off by default. Turn on when the sim should feed base odometry through the Unitree SDK bridge
+    (so a downstream telemetry read_odom_state -> /telemetry/odom is identical to hardware). Only
+    SDKs with a base-state channel act on it; others (booster) treat publish_odom as a no-op."""
+
 
 @dataclass(frozen=True)
 class SimulatorInitConfig:
@@ -501,9 +281,6 @@ class SimulatorInitConfig:
             ),
         )
     """
-
-    scene: SceneConfig = field(default_factory=SceneConfig)
-    """Scene composition and asset configuration."""
 
     reset_manager: ResetManagerConfig = field(default_factory=ResetManagerConfig)
     """Reset event manager configuration."""

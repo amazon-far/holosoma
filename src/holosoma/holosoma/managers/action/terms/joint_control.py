@@ -89,7 +89,7 @@ class JointPositionActionTerm(ActionTermBase):
             self.action_queue = torch.zeros(self.env.num_envs, max_delay + 1, self._action_dim, device=self.env.device)
 
         # Allocate sub-step torque history buffer
-        decimation = self.env.simulator.simulator_config.sim.control_decimation
+        decimation = self.env.simulator.simulator_config.sim.control_decimation_steps
         self.torques_substep = torch.zeros(self.env.num_envs, decimation, self._action_dim, device=self.env.device)
         self.dof_pos_substep = torch.zeros(self.env.num_envs, decimation, self._action_dim, device=self.env.device)
         self.dof_vel_substep = torch.zeros(self.env.num_envs, decimation, self._action_dim, device=self.env.device)

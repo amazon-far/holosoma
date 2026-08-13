@@ -26,6 +26,8 @@ class IsaacSimStateAdapter:
         Registry for object index resolution
     scene : InteractiveScene
         IsaacLab scene containing rigid objects
+    robot : Articulation
+        Robot articulation handle used by write_object_states
     robot_states : RootStatesProxy
         Robot states proxy (already handles wxyz->xyzw conversion)
     """
@@ -53,6 +55,42 @@ class IsaacSimStateAdapter:
         """
         return self._object_registry.resolve_indices(indices)
 
+    def get_states_by_index(self, indices: torch.Tensor) -> torch.Tensor:
+        """Gather unified [N, 13] xyzw world states for flat actor indices.
+
+        Resolves ``indices`` (robot + object actors) to (object, env_ids) groups and reads each
+        via :meth:`get_object_states` (which applies wxyz->xyzw), concatenating in resolution
+        order. Empty ``indices`` -> empty ``[0, 13]``.
+        """
+        if not isinstance(indices, torch.Tensor):
+            indices = torch.tensor(indices, device=self.device)
+        if len(indices) == 0:
+            return torch.empty(0, 13, device=self.device, dtype=torch.float32)
+        resolved_objects = self.resolve_indices(indices)
+        if not resolved_objects:
+            return torch.empty(0, 13, device=self.device, dtype=torch.float32)
+        results = [self.get_object_states(obj_name, env_ids) for obj_name, env_ids in resolved_objects]
+        return torch.cat(results, dim=0) if len(results) > 1 else results[0]
+
+    def write_states_by_index(self, indices: torch.Tensor, states: torch.Tensor) -> None:
+        """Scatter unified [N, 13] xyzw world states into per-object sim buffers (sets dirty).
+
+        Resolves ``indices`` to (object, env_ids) groups and writes each via
+        :meth:`write_object_states` (xyzw->wxyz, per-object pose/velocity), consuming ``states``
+        row-for-row in resolution order. Expects full 13-vec states. Empty ``indices`` -> no-op.
+        Does not flush; the caller syncs via ``write_state_updates``.
+        """
+        if not isinstance(indices, torch.Tensor):
+            indices = torch.tensor(indices, device=self.device)
+        if len(indices) == 0:
+            return
+        resolved_objects = self.resolve_indices(indices)
+        offset = 0
+        for obj_name, env_ids in resolved_objects:
+            num_envs_for_obj = len(env_ids)
+            self.write_object_states(obj_name, states[offset : offset + num_envs_for_obj], env_ids)
+            offset += num_envs_for_obj
+
     def get_object_states(self, obj_name: str, env_ids: torch.Tensor) -> torch.Tensor:
         """Get object states with automatic wxyz->xyzw conversion.
 
@@ -79,21 +117,16 @@ class IsaacSimStateAdapter:
             # Robot states already converted to xyzw via RootStatesProxy
             return self._robot_states[env_ids]
 
-        elif obj_type == "individual":
-            # Individual rigid objects - convert from wxyz to xyzw
+        elif obj_type in ("individual", "scene") and obj_name in self._scene.rigid_objects:
+            # A scene rigid object — free (INDIVIDUAL) or kinematic/static (SCENE). Every
+            # object, including multi-body scene-file bodies, lives under its own name in
+            # scene.rigid_objects; read directly (wxyz->xyzw).
             rigid_object = self._scene.rigid_objects[obj_name]
             raw_states = rigid_object.data.root_state_w[env_ids]
             return fullstate_wxyz_to_xyzw(raw_states)
 
-        elif obj_type == "scene":
-            # Scene collection objects - convert from wxyz to xyzw
-            scene_collection = self._scene.rigid_objects["usd_scene_objects"]
-            object_index = self._object_registry.get_scene_position(obj_name)
-            raw_states = scene_collection.data.object_state_w[env_ids, object_index]
-            return fullstate_wxyz_to_xyzw(raw_states)
-
         else:
-            raise ValueError(f"Unknown object type '{obj_type}' for object '{obj_name}'")
+            raise ValueError(f"Cannot resolve object '{obj_name}' (type '{obj_type}')")
 
     def write_object_states(self, obj_name: str, states: torch.Tensor, env_ids: torch.Tensor) -> None:
         """Write object states with automatic xyzw->wxyz conversion.
@@ -110,16 +143,16 @@ class IsaacSimStateAdapter:
         obj_type = self._object_registry.get_object_type(obj_name)
 
         if obj_type == "robot":
-            # Write robot states
-            # Converts manually and skips RootStatesProxy due to unified interface via AllRootStatesProxy
+            # Write the robot directly via write_root_pose/velocity_to_sim (xyzw->wxyz).
             # NOTE: Intentionally does NOT apply env origins offsets for backwards compatibilty
             #       with existing robot root state setters
             converted_states = fullstate_xyzw_to_wxyz(states)
             self._robot.write_root_pose_to_sim(converted_states[:, :7], env_ids)
             self._robot.write_root_velocity_to_sim(converted_states[:, 7:], env_ids)
 
-        elif obj_type == "individual":
-            # Individual rigid objects - convert to wxyz and apply env origins
+        elif obj_type in ("individual", "scene") and obj_name in self._scene.rigid_objects:
+            # A scene rigid object — free (INDIVIDUAL) or static (SCENE). Every object,
+            # including multi-body scene-file bodies, lives under its own name.
             rigid_object = self._scene.rigid_objects[obj_name]
             converted_states = fullstate_xyzw_to_wxyz(states)
             # For now, do NOT apply env origins as WBT does this itself. We need to update WBT first
@@ -128,21 +161,8 @@ class IsaacSimStateAdapter:
             rigid_object.write_root_pose_to_sim(converted_states[:, :7], env_ids)
             rigid_object.write_root_velocity_to_sim(converted_states[:, 7:], env_ids)
 
-        elif obj_type == "scene":
-            # Scene collection objects - convert to wxyz and write to collection
-            scene_collection = self._scene.rigid_objects["usd_scene_objects"]
-            object_index = self._object_registry.get_scene_position(obj_name)
-
-            converted_states = fullstate_xyzw_to_wxyz(states)
-            converted_states[:, 0:3] += self._scene.env_origins[env_ids]  # Apply environment origins
-
-            # Update the collection's state tensor
-            current_states = scene_collection.data.object_state_w[env_ids].clone()
-            current_states[:, object_index] = converted_states
-            scene_collection.write_object_state_to_sim(current_states, env_ids)
-
         else:
-            raise ValueError(f"Unknown object type '{obj_type}' for object '{obj_name}'")
+            raise ValueError(f"Cannot resolve object '{obj_name}' (type '{obj_type}')")
 
         # Mark states as dirty for batch synchronization
         self.mark_dirty()

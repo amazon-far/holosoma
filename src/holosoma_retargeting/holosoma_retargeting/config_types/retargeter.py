@@ -13,12 +13,14 @@ class FootLockConfig:
     enable: bool = False
     """Whether to enforce explicit frame-range based foot locking constraints."""
 
-    windows: dict[str, list[tuple[int, int]]] | None = None
+    windows: dict[str, list[tuple[int, int] | tuple[int, int, float]]] | None = None
     """Per-foot inclusive frame windows for locking.
-    Example: {"L_Toe": [(30, 60)], "R_Toe": [(10, 20), (80, 95)]}"""
+    Each window is (start, end) or (start, end, z_floor).
+    If z_floor is given per-window, it overrides the global z_floor for that window.
+    Example: {"L_Toe": [(30, 60, 0.15)], "R_Toe": [(10, 20), (80, 95, 0.30)]}"""
 
     z_floor: float = 0.0
-    """Floor height used by Z pinning constraints."""
+    """Default floor height used by Z pinning constraints (overridden by per-window z)."""
 
     tolerance: float = 5e-3
     """Tolerance for Z floor pinning constraints."""

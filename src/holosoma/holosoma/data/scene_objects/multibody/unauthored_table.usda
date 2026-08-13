@@ -1,0 +1,45 @@
+#usda 1.0
+(
+    # UNAUTHORED multi-geom scene file (USD) for the no-RigidBodyAPI discovery path. The
+    # defaultPrim 'table' groups two leg Xforms, each wrapping a Cube with a collision API but
+    # NO PhysicsRigidBodyAPI anywhere in the file. This exercises object_spawner's unauthored
+    # branches:
+    #   - default include ['*']      -> collapse to ONE rigid body 'table' (the defaultPrim);
+    #                                    RigidBodyAPI is stamped on the spawned prim at spawn.
+    #   - include ['*/leg_*']        -> promote each geometry-owning leg Xform to its own body
+    #                                    (leg_a, leg_b), authored 0.5 m apart in x.
+    # 'table' has only Xform children (not a direct Gprim), so it is never a geometry-owner
+    # candidate under explicit patterns — only the legs are.
+    defaultPrim = "table"
+    metersPerUnit = 1.0
+    upAxis = "Z"
+)
+
+def Xform "table"
+{
+    def Xform "leg_a"
+    {
+        double3 xformOp:translate = (0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        def Cube "geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 0.1
+        }
+    }
+
+    def Xform "leg_b"
+    {
+        double3 xformOp:translate = (0.5, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        def Cube "geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 0.1
+        }
+    }
+}

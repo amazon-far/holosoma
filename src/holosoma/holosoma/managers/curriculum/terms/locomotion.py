@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 import torch
+from loguru import logger
 
 from holosoma.managers.curriculum.base import CurriculumTermBase
 
@@ -140,6 +141,15 @@ class PenaltyCurriculum(CurriculumTermBase):
             if self.tag in term_cfg.tags:
                 self.penalty_reward_names.append(term_name)
 
+        # The user explicitly enabled the curriculum and named a tag; if no active reward term carries
+        # it (typo or tag/term mismatch), the curriculum scales nothing yet reports itself enabled
+        # below. Warn rather than run a silently inert curriculum.
+        if not self.penalty_reward_names:
+            logger.warning(
+                f"PenaltyCurriculum enabled but no active reward term carries tag '{self.tag}'; "
+                f"the penalty curriculum will have no effect."
+            )
+
         # Store original weights and apply initial scaling
         for name in self.penalty_reward_names:
             if name not in self.env.reward_manager.active_terms:
@@ -252,6 +262,14 @@ def configure_reward_penalty(
         term_cfg = env.reward_manager.get_term_cfg(term_name)
         if tag in term_cfg.tags:
             penalty_names.append(term_name)
+
+    # Enabled but nothing matched the explicitly-given tag -> a permanently inert curriculum that
+    # still reports itself enabled. Warn instead of silently doing nothing (mirrors PenaltyCurriculum).
+    if enabled and not penalty_names:
+        logger.warning(
+            f"configure_reward_penalty: no active reward term carries tag '{tag}'; "
+            f"the penalty curriculum is enabled but will have no effect."
+        )
 
     env._curriculum_penalty_reward_names = penalty_names
 

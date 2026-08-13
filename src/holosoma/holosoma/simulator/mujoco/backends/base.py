@@ -10,14 +10,44 @@ from __future__ import annotations
 import abc
 from typing import TYPE_CHECKING
 
+import mujoco
 import numpy as np
 import torch
-
-import mujoco
 
 if TYPE_CHECKING:
     from holosoma.config_types.full_sim import FullSimConfig
     from holosoma.simulator.mujoco.tensor_views import BaseMujocoView
+    from holosoma.simulator.shared.camera_sensor import CameraRuntime
+
+
+def mj_to_holosoma_quat(quat_wxyz: np.ndarray | torch.Tensor) -> np.ndarray | torch.Tensor:
+    """Convert MuJoCo ``[w,x,y,z]`` to holosoma ``[x,y,z,w]`` (last-axis permute; numpy or torch)."""
+    return quat_wxyz[..., [1, 2, 3, 0]]
+
+
+def holosoma_to_mj_quat(quat_xyzw: np.ndarray | torch.Tensor) -> np.ndarray | torch.Tensor:
+    """Convert holosoma ``[x,y,z,w]`` to MuJoCo ``[w,x,y,z]`` (last-axis permute; numpy or torch)."""
+    return quat_xyzw[..., [3, 0, 1, 2]]
+
+
+def apply_sensor_scene_flags(show_camera_frusta: bool, opt: mujoco.MjvOption | None = None) -> mujoco.MjvOption:
+    """Set MuJoCo mounted-camera scene-visualization flags and return the option.
+
+    Draws each configured camera's view frustum in the spectator viewer / recorded video. Gated by
+    the simulator's ``debug_viz`` flag (this is debug visualization, not a sink config).
+
+    Parameters
+    ----------
+    show_camera_frusta : bool
+        Whether to draw the camera frusta (typically ``simulator.debug_viz_enabled``).
+    opt : mujoco.MjvOption | None
+        Option to mutate in place; ``None`` builds a fresh defaulted one. Returned either way.
+    """
+    if opt is None:
+        opt = mujoco.MjvOption()
+        mujoco.mjv_defaultOption(opt)
+    opt.flags[mujoco.mjtVisFlag.mjVIS_CAMERA] = show_camera_frusta
+    return opt
 
 
 class IMujocoBackend(abc.ABC):
@@ -58,13 +88,19 @@ class IMujocoBackend(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def refresh_sim_tensors(self, contact_history_tensor: torch.Tensor) -> None:
-        """Update simulation tensors (contacts, rigid bodies, etc).
+    def compute_contact_forces(self) -> torch.Tensor:
+        """Return current-frame net contact forces for ALL model bodies.
 
-        Parameters
-        ----------
-        contact_history_tensor : torch.Tensor
-            Contact force history buffer to update [num_envs, history_len, num_bodies, 3]
+        The returned tensor is full-model-width ([num_envs, model.nbody, 3]),
+        including the world body (id 0) and any non-robot actor bodies. The
+        simulator layer gathers the robot-only rows (via ``body_ids``) and
+        owns the rolling-history rotation, keeping physics-tensor width independent
+        of the robot-only ``num_bodies``.
+
+        Returns
+        -------
+        torch.Tensor
+            Contact forces [num_envs, model.nbody, 3] (force only, torque dropped).
         """
         ...
 
@@ -191,22 +227,6 @@ class IMujocoBackend(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def create_force_view(self, num_bodies: int) -> torch.Tensor:
-        """Create tensor for contact forces [num_envs, num_bodies, 3].
-
-        Parameters
-        ----------
-        num_bodies : int
-            Number of bodies in the model
-
-        Returns
-        -------
-        torch.Tensor
-            Contact force tensor
-        """
-        ...
-
-    @abc.abstractmethod
     def get_applied_forces_view(self) -> np.ndarray | torch.Tensor:
         """Get writable view for external applied forces.
 
@@ -253,6 +273,61 @@ class IMujocoBackend(abc.ABC):
         """
         ...
 
+    @abc.abstractmethod
+    def get_actor_state(self, env_ids: torch.Tensor, qpos_addr: int, qvel_addr: int) -> torch.Tensor:
+        """Read an actor's per-environment freejoint state from live backend storage.
+
+        Reads each env's own value from the live qpos/qvel (GPU for WarpBackend). Velocity
+        is the freejoint qvel (body-local angular), matching the set path and robot proxy.
+
+        ``qpos_addr`` / ``qvel_addr`` are the start of the actor's freejoint 7-dof pose and
+        6-dof velocity slices. Returns ``[len(env_ids), 13]`` in holosoma format
+        ``[x,y,z, qx,qy,qz,qw, vx,vy,vz, wx,wy,wz]``.
+        """
+        ...
+
+    @abc.abstractmethod
+    def set_actor_state(self, env_ids: torch.Tensor, states: torch.Tensor, qpos_addr: int, qvel_addr: int) -> None:
+        """Write an actor's per-environment freejoint state into live backend storage.
+
+        Symmetric counterpart of :meth:`get_actor_state`: writes each env's state into the
+        live qpos/qvel (GPU for WarpBackend), the state the simulator actually steps.
+        ``states`` is ``[len(env_ids), 13]`` in holosoma format; ``qpos_addr`` / ``qvel_addr``
+        are the start of the actor's freejoint pose / velocity slices.
+        """
+        ...
+
+    @abc.abstractmethod
+    def set_static_body_world_pose(
+        self,
+        body_ids: list[int],
+        positions: torch.Tensor,
+        quats: torch.Tensor | None = None,
+        env_ids: torch.Tensor | None = None,
+    ) -> None:
+        """Place welded (jointless) bodies at a per-environment world pose.
+
+        Static bodies have no freejoint qpos, so :meth:`set_actor_state` cannot reach them;
+        their world pose lives in the model's ``body_pos`` (and ``body_quat``). Writing those
+        model fields + a forward-kinematics recompute relocates the body — a pure KINEMATIC
+        teleport (a welded body has no mass/velocity in the dynamics) that the collision
+        pipeline honors at the new pose, both at setup and mid-rollout. Used to spread scene
+        objects across env origins and to move static obstacles at runtime.
+
+        Parameters
+        ----------
+        body_ids : list[int]
+            MuJoCo body ids of the static bodies to move.
+        positions : torch.Tensor
+            ``[len(env_ids), len(body_ids), 3]`` world positions.
+        quats : torch.Tensor | None
+            ``[len(env_ids), len(body_ids), 4]`` world orientations (xyzw). ``None`` leaves
+            each body's orientation as compiled.
+        env_ids : torch.Tensor | None
+            Environments to write (default: all). Single-env ClassicBackend ignores it.
+        """
+        ...
+
     def get_rigid_body_state_views(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | None:
         """Get zero-copy views of rigid body states (optional optimization).
 
@@ -263,15 +338,34 @@ class IMujocoBackend(abc.ABC):
         Returns
         -------
         tuple[torch.Tensor, ...] | None
-            If supported, returns (positions, orientations, linear_vel, angular_vel):
-            - positions: [num_envs, num_bodies, 3]
-            - orientations: [num_envs, num_bodies, 4] (xyzw quaternion)
-            - linear_vel: [num_envs, num_bodies, 3]
-            - angular_vel: [num_envs, num_bodies, 3]
+            If supported, returns (positions, orientations, linear_vel, angular_vel),
+            each full-model-width [num_envs, model.nbody, ...]:
+            - positions: [num_envs, model.nbody, 3]
+            - orientations: [num_envs, model.nbody, 4] (xyzw quaternion)
+            - linear_vel: [num_envs, model.nbody, 3]
+            - angular_vel: [num_envs, model.nbody, 3]
+            The simulator gathers robot-only rows via ``body_ids``.
 
             If not supported (e.g., ClassicBackend), returns None.
         """
         return None  # Default implementation - backends can override
+
+    def initialize_state(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
+        """Sync CPU initial state to backend storage after construction.
+
+        Copies the initial qpos/qvel from CPU ``data`` into the backend's own storage
+        (e.g. WarpBackend's GPU tensors), overriding the MJCF qpos0 defaults. Backends
+        whose storage already aliases CPU ``data`` (ClassicBackend) need no sync; this
+        default is a no-op.
+
+        Parameters
+        ----------
+        model : mujoco.MjModel
+            MuJoCo model (for context)
+        data : mujoco.MjData
+            CPU MjData with initial state to copy to backend storage
+        """
+        return  # Default implementation - backends can override
 
     @abc.abstractmethod
     def create_quaternion_view(self, quat_slice: slice):
@@ -304,5 +398,31 @@ class IMujocoBackend(abc.ABC):
         -------
         BaseMujocoView
             View for angular velocity [num_envs, 3]
+        """
+        ...
+
+    # Camera rendering
+    @abc.abstractmethod
+    def create_renderers(self, cameras: list[CameraRuntime]) -> None:
+        """Allocate per-backend rendering resources for the mounted cameras (called once at setup).
+
+        Parameters
+        ----------
+        cameras : list[CameraRuntime]
+            All registered cameras; the backend resolves each native resource from ``runtime.name``.
+        """
+        ...
+
+    @abc.abstractmethod
+    def render_cameras(self, cameras: list[CameraRuntime]) -> None:
+        """Render the given cameras and store each one's canonical output buffer.
+
+        Writes each modality via ``runtime.set_buffer(data_type, tensor)``:
+        ``rgb`` [N,H,W,3] uint8, ``depth`` [N,H,W,1] float32 meters (+inf no-hit), on ``self.device``.
+
+        Parameters
+        ----------
+        cameras : list[CameraRuntime]
+            The cameras due to render this step (a subset of those passed to ``create_renderers``).
         """
         ...

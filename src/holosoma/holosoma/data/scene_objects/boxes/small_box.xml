@@ -1,0 +1,9 @@
+<!-- Minimal 0.1m primitive-box test asset (MJCF). One top-level body, no joint;
+     the scene manager adds a free joint for free bodies and leaves it jointless for static. -->
+<mujoco model="small_box">
+  <worldbody>
+    <body name="baseLink">
+      <geom type="box" size="0.05 0.05 0.05" mass="0.1"/>
+    </body>
+  </worldbody>
+</mujoco>

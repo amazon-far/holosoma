@@ -7,8 +7,8 @@ reset events in a simulation environment.
 from __future__ import annotations
 
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-from holosoma.utils.helpers import instantiate
 from holosoma.simulator.types import EnvIds
+from holosoma.utils.helpers import instantiate
 
 from . import ResetManagerConfig
 from .base import ResetEvent

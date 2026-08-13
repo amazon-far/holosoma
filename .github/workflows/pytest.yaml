@@ -20,9 +20,9 @@ jobs:
     strategy:
       fail-fast: false # continue on one test failing
       matrix:
-        simulator: [isaacgym, isaacsim]
+        simulator: [isaacgym, isaacsim, mujoco]
         multigpu: ["False"]
-        # no multigpu isaacsim tests for now
+        # no multigpu isaacsim/mujoco tests for now
         include:
         - simulator: isaacgym
           multigpu: "True"
@@ -31,13 +31,13 @@ jobs:
     - codebuild-holosoma-a10g-${{ matrix.multigpu == 'True' && 'x4' || 'x1' }}-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     continue-on-error: true
     container:
-      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma-${{ matrix.simulator }}:latest
+      image: ${{ vars.ECR_REGISTRY }}/holosoma-${{ matrix.simulator }}:latest
       options: "--gpus all --runtime=nvidia --shm-size=12g"
       env:
         HOLOSOMA_MULTIGPU: ${{ matrix.multigpu }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Pytest
         id: pytest
         shell: bash
@@ -62,13 +62,13 @@ jobs:
     continue-on-error: true
     container:
       # needs both hsgym and hsinference envs
-      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest
+      image: ${{ vars.ECR_REGISTRY }}/holosoma:latest
       options: "--gpus all --runtime=nvidia --shm-size=12g"
       env:
         HOLOSOMA_MULTIGPU: ${{ matrix.multigpu }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Pytest
         id: pytest
         shell: bash
@@ -85,12 +85,12 @@ jobs:
     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     container:
       # TODO: Switch to `holosoma-inference` once it's been confirmed functional
-      # image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma-inference:latest
+      # image: ${{ vars.ECR_REGISTRY }}/holosoma-inference:latest
       # Until then, the inference tests will run in isaacsim env.
-      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest
+      image: ${{ vars.ECR_REGISTRY }}/holosoma:latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Run Tests
         shell: bash
         run: |
@@ -102,3 +102,40 @@ jobs:
           source scripts/source_isaacsim_setup.sh
           pip install -e src/holosoma_inference
           pytest -s src/holosoma_inference/
+
+  service-integration-tests:
+    # The service's contract is its ROS2 topic API, so these run in a real ROS2
+    # Jazzy workspace (the inference-tests env above has no rclpy/colcon and
+    # would only skip them). Builds the minimal test image and runs it.
+    name: Run Service Integration Tests (ROS2)
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build service test image
+        run: |
+          docker build \
+            -f src/holosoma_inference/holosoma_inference_service/docker/Dockerfile.test \
+            -t holosoma-service-test .
+      - name: Run service integration tests
+        run: docker run --rm holosoma-service-test
+
+  no-sim-tests:
+    name: Run No-Simulator Tests
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    container:
+      # Pure tests, no GPU/sim libs needed; runs in the isaacsim env on a CPU runner.
+      image: ${{ vars.ECR_REGISTRY }}/holosoma:latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Pytest
+        id: pytest
+        shell: bash
+        run: |
+          ln -s /root/.holosoma_deps "$HOME/.holosoma_deps"
+          if [[ ! -L /workspace/holosoma ]]; then
+            rm -rf /workspace/holosoma
+            ln -sfF "$GITHUB_WORKSPACE" /workspace/holosoma
+          fi
+          bash tests/ci/no_sim_ci_tests.sh

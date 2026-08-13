@@ -16,13 +16,13 @@ jobs:
     name: Run Checks
     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     container:
-      image: 982423663241.dkr.ecr.us-west-2.amazonaws.com/holosoma:latest
+      image: ${{ vars.ECR_REGISTRY }}/holosoma:latest
       volumes:
         - "precommit-cache:/github/home/.cache/pre-commit"
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 5
       - name: Static Checks

@@ -13,7 +13,8 @@ class ObsTermCfg:
     """Configuration for a single observation term."""
 
     func: str
-    """Import path to the observation function (e.g. ``holosoma.managers.observation.terms.locomotion:base_lin_vel``)."""
+    """Import path to the observation function, e.g.
+    ``holosoma.managers.observation.terms.locomotion:base_lin_vel``."""
 
     params: dict[str, Any] = field(default_factory=dict)
     """Additional keyword arguments forwarded to ``func``."""
@@ -53,4 +54,4 @@ class ObservationManagerCfg:
     """Mapping of group name to its configuration."""
 
     clip_observations: float = 100.0
-    """Global observation clipping threshold (applied to all observations)."""
+    """Global observation clipping threshold (applied to all non-image observations)."""

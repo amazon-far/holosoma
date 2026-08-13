@@ -51,6 +51,8 @@ from typing import Tuple
 
 import torch
 
+from holosoma.utils.rotations import quat_rotate, quat_rotate_inverse
+
 
 class MjwDofStateView:
     """Zero-copy view for DOF states in IsaacGym flattened format.
@@ -557,6 +559,12 @@ class MjwRootStateView:
         # Convert quaternion: [w, x, y, z] -> [x, y, z, w]
         quat_holo = quat_mj[:, [1, 2, 3, 0]]
 
+        # MuJoCo's freejoint qvel stores angular velocity in the BODY-LOCAL frame, but the
+        # unified robot_root_states contract is WORLD-frame for both velocities (matching
+        # IsaacGym/IsaacSim, and what every consumer of robot_root_states[:, 10:13] expects).
+        # Rotate the body-local angular velocity into world using the root's world orientation.
+        ang_vel = quat_rotate(quat_holo, ang_vel, w_last=True)
+
         # Assemble full state
         root_state = torch.cat([pos, quat_holo, lin_vel, ang_vel], dim=1)
 
@@ -586,7 +594,10 @@ class MjwRootStateView:
             pos = val[:, 0:3]
             quat_holo = val[:, 3:7]  # [x, y, z, w]
             lin_vel = val[:, 7:10]
-            ang_vel = val[:, 10:13]
+            # Incoming angular velocity is WORLD-frame (unified contract, symmetric with
+            # __getitem__); MuJoCo's freejoint qvel wants it BODY-LOCAL, so rotate it back
+            # using the root's world orientation before scattering into qvel.
+            ang_vel = quat_rotate_inverse(quat_holo, val[:, 10:13], w_last=True)
 
             # Convert quaternion: [x, y, z, w] -> [w, x, y, z]
             quat_mj = quat_holo[:, [3, 0, 1, 2]]

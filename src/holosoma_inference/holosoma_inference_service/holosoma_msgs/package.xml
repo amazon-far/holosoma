@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>holosoma_msgs</name>
+  <version>0.0.1</version>
+  <description>Messages for the holosoma teleop service: command inputs and state.</description>
+  <maintainer email="jtomasle@amazon.com">Tomasz Lewicki</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
+
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+
+  <exec_depend>rosidl_default_runtime</exec_depend>
+
+  <member_of_group>rosidl_interface_packages</member_of_group>
+</package>

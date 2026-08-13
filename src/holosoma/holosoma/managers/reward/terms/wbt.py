@@ -6,6 +6,7 @@ import re
 from typing import TYPE_CHECKING, List
 
 import torch
+from loguru import logger
 
 from holosoma.config_types.reward import RewardTermCfg
 from holosoma.managers.command.terms.wbt import MotionCommand
@@ -134,14 +135,19 @@ class UndesiredContacts(RewardTermBase):
     def __init__(self, cfg: RewardTermCfg, env: WholeBodyTrackingManager):
         super().__init__(cfg, env)
         self.env = env
-        undesired_contacts_body_names = [
-            body_name
-            for body_name in self.env.simulator.body_names  # type: ignore[attr-defined]
-            if re.match(cfg.params.get("undesired_contacts_body_names", ""), body_name)
-        ]
+        pattern = cfg.params.get("undesired_contacts_body_names", "")
+        body_names = self.env.simulator.body_names
+        undesired_contacts_body_names = [body_name for body_name in body_names if re.match(pattern, body_name)]
+        # The default empty pattern "" matches every body, so an empty result can only come from an
+        # explicit, non-empty pattern that matched nothing: warn
+        if pattern and not undesired_contacts_body_names:
+            logger.warning(
+                f"UndesiredContacts: pattern '{pattern}' matched no body names in "
+                f"{body_names}; contact penalty will be a permanent no-op (always zero)."
+            )
         self.undesired_contacts_body_indexes = self._get_index_of_a_in_b(
             undesired_contacts_body_names,
-            self.env.simulator.body_names,  # type: ignore[attr-defined]
+            body_names,
             self.env.device,
         )
         self.threshold = cfg.params.get("threshold", 1.0)

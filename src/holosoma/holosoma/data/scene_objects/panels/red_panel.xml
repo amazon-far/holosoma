@@ -1,0 +1,12 @@
+<!-- Flat bright-red panel for camera-geometry behavioral tests (MJCF).
+     Thin in X (depth), 0.4 m wide in Y, 0.4 m tall in Z. MJCF geom size is HALF-extent,
+     so size="0.01 0.2 0.2" => 0.02 x 0.4 x 0.4 m. One top-level body, no joint (the scene
+     manager adds a free joint for free bodies, leaves it jointless for static). Pure red
+     (rgba 1 0 0 1) so the panel silhouette is trivially segmentable from the background. -->
+<mujoco model="red_panel">
+  <worldbody>
+    <body name="baseLink">
+      <geom type="box" size="0.01 0.2 0.2" rgba="1 0 0 1" mass="0.1"/>
+    </body>
+  </worldbody>
+</mujoco>

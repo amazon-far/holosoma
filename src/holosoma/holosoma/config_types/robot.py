@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import field
 
+from pydantic import model_validator
 from pydantic.dataclasses import dataclass
+
+from holosoma.config_types.scene import PhysicsConfig
 
 
 @dataclass(frozen=True)
@@ -13,7 +16,12 @@ class RobotBridgeConfig:
     """
 
     sdk_type: str = "unitree"
-    """SDK type for robot communication ('unitree', 'booster', 'ros2')."""
+    """SDK type for robot communication ('unitree', 'unitree_mp', 'booster', 'ros2').
+
+    'unitree_mp' runs the Unitree SDK's C++/CycloneDDS binding in a spawned child process so it never
+    shares the simulator's address space. Select it when this process also loads rclpy (a ROS2 sensor
+    egress): the Unitree SDK's bundled CycloneDDS heap-corrupts if it coexists with rclpy's CycloneDDS
+    in one process. Otherwise 'unitree' (in-process) is fine."""
 
     motor_type: str = "serial"
     """Motor communication type ('serial', etc.)."""
@@ -48,10 +56,6 @@ class RobotAssetConfig:
     flip_visual_attachments: bool
     armature: float
     thickness: float
-    max_angular_velocity: float
-    max_linear_velocity: float
-    angular_damping: float
-    linear_damping: float
     urdf_file: str
     usd_file: str | None
     xml_file: str
@@ -60,8 +64,36 @@ class RobotAssetConfig:
     default_dof_drive_mode: int
     fix_base_link: bool
     mesh_root: str | None = None
-    density: float | None = None
     disable_gravity: bool | None = None
+
+    link_physics: PhysicsConfig | None = None
+    """Shared physics applied to all robot links (``body_names='.*'``) via the same ``PhysicsConfig``
+    scene objects use. Holds the robot's surface/material/per-rigid-body physics: ``density`` and the
+    PhysX solver knobs (``physx.linear_damping``/``angular_damping``/``max_linear_velocity``/
+    ``max_angular_velocity``), plus the friction/restitution/collision-offset channels objects get
+    (``isaacgym``/``isaacsim``/``mujoco``). Each backend reads its own sub-config and ignores the rest.
+    ``None`` (default) keeps the asset's authored physics.
+
+    ``mass`` is rejected here (see :meth:`_validate_link_physics`): one mass applied to every link is
+    not meaningful for an articulation. Per-link physics (the only place per-link ``mass`` would
+    apply) is not exposed here yet: it cannot be made cross-backend cleanly (a per-link
+    collision-offset/damping override is whole-subtree, not per-link, on IsaacSim), and a one-backend
+    knob would violate the shared-config invariant."""
+
+    @model_validator(mode="after")
+    def _validate_link_physics(self) -> RobotAssetConfig:
+        """``link_physics`` applies to all links (``body_names='.*'``), so it must not carry ``mass``.
+
+        A single ``mass`` applied to every link would set each link to the same mass (and on
+        IsaacGym/IsaacSim the apply path writes it to all bodies), which is not what an articulation
+        wants. This is a structural check, not a backend-applicability one."""
+        if self.link_physics is not None and self.link_physics.mass is not None:
+            raise ValueError(
+                "RobotAssetConfig.link_physics carries mass, but it applies to all links "
+                "(body_names='.*'), which would give every link the same mass. Per-link mass is not "
+                "supported (no cross-backend apply); leave mass unset."
+            )
+        return self
 
 
 @dataclass(frozen=True)
@@ -69,11 +101,6 @@ class RobotForceControlConfig:
     apply_force_link: list[str] | None = None
     left_hand_link: str | None = None
     right_hand_link: str | None = None
-
-
-@dataclass(frozen=True)
-class ObjectConfig:
-    object_urdf_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -118,9 +145,6 @@ class RobotConfig:
 
     control: RobotControlConfig
     asset: RobotAssetConfig
-
-    # TODO(jchen): talk to SAM, merge this into scene config
-    object: ObjectConfig = field(default_factory=ObjectConfig)
 
     bridge: RobotBridgeConfig = field(default_factory=RobotBridgeConfig)
     """Bridge SDK configuration for this robot."""

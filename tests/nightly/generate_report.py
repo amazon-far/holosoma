@@ -88,7 +88,7 @@ def get_nightly_run_ids(gh_run_id: str | None = None) -> dict[str, list[str]]:
                 continue
             if tag in ["isaacgym", "isaacsim", "singlegpu", "multigpu", "nightly_test_passed", "nightly_test_failed"]:
                 continue
-            if tag.startswith("gha-run-id-"):
+            if tag.startswith(("gha-run-id-", "gpus-")):
                 continue
             exp_name = tag
             break

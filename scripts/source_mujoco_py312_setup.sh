@@ -31,6 +31,17 @@ source ${CONDA_ROOT}/bin/activate $CONDA_ENV_NAME
 
 export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:${CONDA_ROOT}/envs/$CONDA_ENV_NAME/lib
 
+# Prepend unitree_interface's bundled CycloneDDS so it's resolved before the
+# ROS2 Jazzy version (which mismatches and aborts with `free(): invalid
+# pointer` when the C++ binding initializes DDS). Required for both the
+# simulator bridge (run_sim.py) and inference (run_policy.py) when ROS2 is
+# sourced. No-op if unitree_interface isn't installed.
+_unitree_dir=$(python -c 'import unitree_interface,pathlib;print(pathlib.Path(unitree_interface.__file__).parent)' 2>/dev/null || true)
+if [ -n "$_unitree_dir" ]; then
+    export LD_LIBRARY_PATH=${_unitree_dir}:${LD_LIBRARY_PATH}
+fi
+unset _unitree_dir
+
 # Validate
 if python -c "import mujoco" 2>/dev/null; then
     echo "✅ $CONDA_ENV_NAME activated (Python $(python --version 2>&1 | cut -d' ' -f2))"

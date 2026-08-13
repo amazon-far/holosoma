@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -136,3 +137,25 @@ class PinocchioRobot:
         if not xml_text.lstrip().startswith("<?xml"):
             xml_text = '<?xml version="1.0"?>\n' + xml_text
         return xml_text
+
+
+_TORSO_BODY_IDX = 16  # body_names index matching robot.motion.body_name_ref (g1_29dof)
+
+
+class NpzTargetSource:
+    """Replays a ``mcap_to_holosoma_npz`` NPZ as a WBT ``TargetSource``,
+    frame-by-frame, freezing on the last frame."""
+
+    def __init__(self, npz_path: str | Path, body_ref_idx: int = _TORSO_BODY_IDX):
+        with np.load(str(npz_path)) as d:
+            pos, vel = d["joint_pos"], d["joint_vel"]
+            self._pos = (pos[:, 7:] if pos.shape[1] > 29 else pos).astype(np.float32)  # strip base: (T, 29)
+            self._vel = (vel[:, 6:] if vel.shape[1] > 29 else vel).astype(np.float32)  # (T, 29)
+            wxyz = d["body_quat_w"][:, body_ref_idx, :].astype(np.float32)  # (T, 4)
+            self._ref_xyzw = wxyz[:, [1, 2, 3, 0]]
+        self._frame = 0
+
+    def get_target(self, num_dofs: int, rl_rate_hz: float, urdf_path: str | None):
+        i = min(self._frame, len(self._pos) - 1)
+        self._frame += 1
+        return np.concatenate([self._pos[i], self._vel[i]]).reshape(1, -1), self._ref_xyzw[i]

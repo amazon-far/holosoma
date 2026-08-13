@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from holosoma_inference.compat import entry_points
+from holosoma_inference.pycompat import entry_points
 
 # Auto-discover SDK interfaces from installed packages using lazy loading.
 # Lazy loading is to avoid errors from SDK dependencies from extensions (e.g. ROS2) when working with other SDKs.

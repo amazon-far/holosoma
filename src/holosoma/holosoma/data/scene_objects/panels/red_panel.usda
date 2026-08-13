@@ -1,0 +1,27 @@
+#usda 1.0
+(
+    # Flat bright-red panel for camera-geometry behavioral tests (USD; IsaacSim).
+    # A unit Cube scaled to 0.02 x 0.4 x 0.4 m (thin in X, 0.4 m in Y and Z), matching
+    # red_panel.urdf / red_panel.xml. displayColor red so the silhouette segments by hue
+    # (lighting-robust), the USD counterpart of the URDF/MJCF rgba="1 0 0 1".
+    defaultPrim = "red_panel"
+    metersPerUnit = 1.0
+    upAxis = "Z"
+)
+
+def Xform "red_panel" (
+    prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+)
+{
+    float physics:mass = 0.1
+
+    def Cube "geom" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1.0
+        float3 xformOp:scale = (0.02, 0.4, 0.4)
+        uniform token[] xformOpOrder = ["xformOp:scale"]
+        color3f[] primvars:displayColor = [(1.0, 0.0, 0.0)]
+    }
+}

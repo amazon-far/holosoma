@@ -1,0 +1,48 @@
+#usda 1.0
+(
+    # Multi-body scene file (USD) for 1->N loading tests. Two rigid-body Xforms under a
+    # root: 'free_box' has an enabled dynamic RigidBodyAPI (registered free / INDIVIDUAL);
+    # 'static_post' is kinematic (registered static / SCENE) at +0.5 m x. The free vs
+    # static classification is read from the rigid body's kinematicEnabled flag.
+    # static_post sits +0.5 m x from free_box: a known, cross-backend body-to-body offset.
+    defaultPrim = "multibody"
+    metersPerUnit = 1.0
+    upAxis = "Z"
+)
+
+def Xform "multibody"
+{
+    def Xform "free_box" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        float physics:mass = 0.1
+        bool physics:kinematicEnabled = 0
+        double3 xformOp:translate = (0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        def Cube "geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 0.1
+        }
+    }
+
+    def Xform "static_post" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        float physics:mass = 0.1
+        bool physics:kinematicEnabled = 1
+        double3 xformOp:translate = (0.5, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        def Cube "geom" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 0.1
+        }
+    }
+}

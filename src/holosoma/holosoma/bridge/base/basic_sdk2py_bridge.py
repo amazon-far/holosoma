@@ -6,6 +6,7 @@ import pygame
 from loguru import logger
 
 from holosoma.config_types.robot import RobotConfig
+from holosoma.utils.rotations import quat_rotate_inverse
 from holosoma.utils.safe_torch_import import torch
 
 
@@ -292,7 +293,12 @@ class BasicSdk2Bridge(ABC):
                 - acceleration: linear acceleration [ax, ay, az] (3 elements)
         """
         quat_holosoma = self.simulator.robot_root_states[0, 3:7]  # [x, y, z, w]
-        gyro = self.simulator.robot_root_states[0, 10:13]  # Angular velocity
+        # robot_root_states[:, 10:13] is WORLD-frame angular velocity on every backend (the
+        # unified contract). A physical IMU gyro reports angular velocity in the BODY frame,
+        # so rotate world -> body using the base orientation. This is backend-agnostic and
+        # keeps the gyro body-frame on MuJoCo, IsaacGym, and IsaacSim alike.
+        ang_vel_world = self.simulator.robot_root_states[0, 10:13]
+        gyro = quat_rotate_inverse(quat_holosoma.unsqueeze(0), ang_vel_world.unsqueeze(0), w_last=True).squeeze(0)
 
         if not hasattr(self.simulator, "base_linear_acc"):
             logger.warning(
@@ -307,6 +313,48 @@ class BasicSdk2Bridge(ABC):
         quaternion = torch.stack([quat_holosoma[3], quat_holosoma[0], quat_holosoma[1], quat_holosoma[2]])
 
         return quaternion, gyro, acceleration
+
+    def _get_base_odometry(self):
+        """Get base odometry: position, orientation, body-frame linear velocity, yaw rate.
+
+        Simulator-agnostic — reads the unified ``robot_root_states`` 13-vector
+        ``[pos(3), quat_xyzw(4), lin_vel_world(3), ang_vel_world(3)]``, the sim analog of the
+        robot's onboard sport/odom estimate. World-frame velocities are rotated into the base
+        (body) frame via the same ``quat_rotate_inverse`` helper the IMU gyro uses, matching the
+        real robot's ``SportModeState`` (``rt/odommodestate``) whose ``velocity`` twist is
+        body-frame.
+
+        Returns:
+            tuple: (position, quat_wxyz, lin_vel_body, yaw_speed)
+                - position: [x, y, z] world/odom frame (3 floats)
+                - quat_wxyz: [w, x, y, z] SDK order (4 floats)
+                - lin_vel_body: [vx, vy, vz] body frame (3 floats)
+                - yaw_speed: body-frame yaw rate [rad/s] (float)
+        """
+        env_id = getattr(self, "env_id", 0)
+        root = self.simulator.robot_root_states[env_id]  # [13]
+        quat_xyzw = root[3:7]  # [x, y, z, w]
+        lin_vel_world = root[7:10].unsqueeze(0)
+        ang_vel_world = root[10:13].unsqueeze(0)
+        lin_vel_body = quat_rotate_inverse(quat_xyzw.unsqueeze(0), lin_vel_world, w_last=True).squeeze(0)
+        ang_vel_body = quat_rotate_inverse(quat_xyzw.unsqueeze(0), ang_vel_world, w_last=True).squeeze(0)
+
+        position = root[0:3].detach().cpu().tolist()
+        # robot_root_states quaternion is [x, y, z, w]; the SDK OdomState wants [w, x, y, z].
+        q = quat_xyzw.detach().cpu().tolist()
+        quat_wxyz = [q[3], q[0], q[1], q[2]]
+        lin = lin_vel_body.detach().cpu().tolist()
+        yaw_speed = float(ang_vel_body[2].item())
+        return position, quat_wxyz, lin, yaw_speed
+
+    @abstractmethod
+    def publish_odom(self):
+        """Publish base odometry over the SDK. Default no-op.
+
+        SDKs with a base-state channel (Unitree's ``rt/odommodestate`` / ``SportModeState``)
+        override this. Only invoked by ``SimulatorBridge.step`` when ``BridgeConfig.publish_odom``
+        is set, so bridges without such a channel (e.g. booster) simply do nothing.
+        """
 
     def _get_sensor_data(self):
         """Get sensor data (Mujoco-only).

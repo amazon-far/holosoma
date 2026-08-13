@@ -1,0 +1,99 @@
+# syntax=docker/dockerfile:1.7
+#
+# Minimal image to run the holosoma_service ROS2-native integration tests.
+#
+# It builds the two service packages into a colcon workspace and runs pytest
+# against the topic-API contract (see retargetting/test_retargeter_service_api.py).
+# Kept deliberately small: ROS 2 Jazzy base + only the Python deps the retargeter
+# pulls in (mink/mujoco/scipy/numpy) + editable holosoma_inference. No unitree
+# SDK, no ONNX policy, no CUDA — the retargeter test needs none of them.
+#
+# Build (context = repo root):
+#   docker build -f src/holosoma_inference/holosoma_inference_service/docker/Dockerfile.test \
+#     -t holosoma-service-test .
+#
+# Run the tests:
+#   docker run --rm holosoma-service-test
+#
+# ros:jazzy is Ubuntu 24.04 (Noble) native, Python 3.12 — matches the
+# hsmujoco_py312 dev env the tests are validated against.
+FROM ros:jazzy-ros-base
+
+ENV LANG=C.UTF-8
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+# rclpy on FastDDS; keeps this image free of the CycloneDDS ABI dance the
+# unitree SDK needs (the retargeter test doesn't load the unitree SDK).
+ENV RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+
+# colcon + venv support for the ament_python service package.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+    python3-colcon-common-extensions \
+    python3-pip \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY src/holosoma_inference /ws/src/holosoma_inference
+# holosoma_retargeting ships the g1_29dof.xml MJCF the retargeter IK loads (the
+# test's fixture). Copied for the model assets only; not built as a package.
+COPY src/holosoma_retargeting /ws/src/holosoma_retargeting
+
+# Build the two packages the test needs with the SYSTEM python (before the venv
+# is on PATH): holosoma_msgs (the CmdSMPLH/CmdDense IDL) and holosoma_service
+# (the node + retargeter entry point). The rosidl C++ typesupport generator
+# segfaults if a newer venv numpy shadows the ROS image's numpy during msg
+# codegen, so message generation must run against the stock system interpreter.
+WORKDIR /ws/service
+RUN . /opt/ros/jazzy/setup.sh \
+    && colcon build --paths \
+        /ws/src/holosoma_inference/holosoma_inference_service/holosoma_msgs \
+        /ws/src/holosoma_inference/holosoma_inference_service/holosoma_service
+
+# Now a venv (with --system-site-packages so the ROS Python stack + the built
+# overlay stay visible) for the test runtime deps. pip manages its own numpy
+# here without disturbing the already-built messages.
+ENV VIRTUAL_ENV=/opt/venv
+RUN python3 -m venv --system-site-packages $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+# Python deps. holosoma_inference is installed --no-deps (we only need the
+# retargeter's transitive imports, not the full policy/onnx/unitree stack), so
+# list exactly what smpl_retargeter + the node import at runtime.
+#   mink+mujoco  -> IK solve; scipy -> rotations; numpy -> arrays;
+#   pyyaml/loguru/pydantic/tyro -> imported on the holosoma_inference path.
+# Pin numpy to the Jazzy system version: holosoma_msgs / rclpy C-extensions were
+# compiled against 1.26.4 at colcon-build time above, so an unpinned resolve to
+# numpy 2.x would swap the ABI out from under them at test runtime. Pinning also
+# keeps the image reproducible against future numpy releases.
+RUN pip install --no-cache-dir \
+    "mink" \
+    "mujoco>=3.8.1" \
+    "scipy" \
+    "numpy==1.26.4" \
+    "pyyaml" \
+    "loguru" \
+    "pydantic" \
+    "tyro>=0.10.0a4" \
+    "pytest"
+
+# holosoma_inference (editable, no deps) — provides holosoma_inference.compat
+# (entry_points shim) + the retargeter implementation package that setup.py
+# registers under the holosoma.retargeter group.
+RUN pip install --no-cache-dir --no-deps -e /ws/src/holosoma_inference
+
+# Entrypoint sources ROS + the freshly built overlay, then runs the service
+# integration tests. `ros2 launch`/rclpy and the built holosoma_msgs come from
+# the overlay; the g1-smpl retargeter entry point comes from the installed
+# holosoma_service package.
+RUN printf '%s\n' \
+    '#!/bin/bash' \
+    'set -e' \
+    'source /opt/ros/jazzy/setup.bash' \
+    'source /ws/service/install/setup.bash' \
+    'exec python3 -m pytest -v --import-mode=importlib \
+        /ws/src/holosoma_inference/holosoma_inference_service/holosoma_service/holosoma_service/retargetting/test_retargeter_service_api.py "$@"' \
+    > /usr/local/bin/run_service_tests \
+    && chmod +x /usr/local/bin/run_service_tests
+
+ENTRYPOINT ["/usr/local/bin/run_service_tests"]

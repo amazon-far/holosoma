@@ -1,114 +1,117 @@
 from holosoma.config_types.simulator import (
     MujocoBackend,
     PhysxConfig,
-    SceneConfig,
     SimEngineConfig,
     SimulatorConfig,
     SimulatorInitConfig,
 )
+from holosoma.utils.config_registry import ConfigRegistry
 
-isaacgym = SimulatorConfig(
-    _target_="holosoma.simulator.isaacgym.isaacgym.IsaacGym",
-    _recursive_=False,
-    config=SimulatorInitConfig(
-        name="isaacgym",
-        sim=SimEngineConfig(
-            fps=200,
-            control_decimation=4,
-            substeps=1,
-            physx=PhysxConfig(
-                solver_type=1,
-                num_position_iterations=8,
-                num_velocity_iterations=4,
-                bounce_threshold_velocity=0.5,
+SIMULATOR_REGISTRY = ConfigRegistry(SimulatorConfig, group="holosoma.config.simulator")
+
+isaacgym = SIMULATOR_REGISTRY.add(
+    "isaacgym",
+    SimulatorConfig(
+        _target_="holosoma.simulator.isaacgym.isaacgym.IsaacGym",
+        _recursive_=False,
+        config=SimulatorInitConfig(
+            name="isaacgym",
+            sim=SimEngineConfig(
+                fps=200,
+                control_decimation=4,
+                substeps=1,
+                physx=PhysxConfig(
+                    solver_type=1,
+                    num_position_iterations=8,
+                    num_velocity_iterations=4,
+                    bounce_threshold_velocity=0.5,
+                ),
             ),
+            contact_sensor_history_length=3,
         ),
-        contact_sensor_history_length=3,
     ),
 )
 
 
-isaacsim = SimulatorConfig(
-    _target_="holosoma.simulator.isaacsim.isaacsim.IsaacSim",
-    _recursive_=False,
-    config=SimulatorInitConfig(
-        name="isaacsim",
-        scene=SceneConfig(
-            replicate_physics=True,
-        ),
-        sim=SimEngineConfig(
-            fps=200,
-            control_decimation=4,
-            substeps=1,
-            physx=PhysxConfig(
-                solver_type=1,
-                num_position_iterations=8,
-                num_velocity_iterations=4,
-                bounce_threshold_velocity=0.5,
+isaacsim = SIMULATOR_REGISTRY.add(
+    "isaacsim",
+    SimulatorConfig(
+        _target_="holosoma.simulator.isaacsim.isaacsim.IsaacSim",
+        _recursive_=False,
+        config=SimulatorInitConfig(
+            name="isaacsim",
+            sim=SimEngineConfig(
+                fps=200,
+                control_decimation=4,
+                substeps=1,
+                physx=PhysxConfig(
+                    solver_type=1,
+                    num_position_iterations=8,
+                    num_velocity_iterations=4,
+                    bounce_threshold_velocity=0.5,
+                ),
+                render_mode="human",
+                render_interval=4,
             ),
-            render_mode="human",
-            render_interval=4,
+            contact_sensor_history_length=3,
         ),
-        contact_sensor_history_length=3,
     ),
 )
 
 
-mujoco = SimulatorConfig(
-    _target_="holosoma.simulator.mujoco.mujoco.MuJoCo",
-    _recursive_=False,
-    config=SimulatorInitConfig(
-        name="mujoco",
-        scene=SceneConfig(
-            replicate_physics=True,
-        ),
-        sim=SimEngineConfig(
-            fps=200,
-            control_decimation=4,
-            substeps=1,
-            physx=PhysxConfig(
-                solver_type=1,
-                num_position_iterations=4,
-                num_velocity_iterations=0,
-                bounce_threshold_velocity=0.5,
+mujoco = SIMULATOR_REGISTRY.add(
+    "mujoco",
+    SimulatorConfig(
+        _target_="holosoma.simulator.mujoco.mujoco.MuJoCo",
+        _recursive_=False,
+        config=SimulatorInitConfig(
+            name="mujoco",
+            sim=SimEngineConfig(
+                fps=200,
+                control_decimation=4,
+                substeps=1,
+                physx=PhysxConfig(
+                    solver_type=1,
+                    num_position_iterations=4,
+                    num_velocity_iterations=0,
+                    bounce_threshold_velocity=0.5,
+                ),
+                render_mode="fake",
+                render_interval=1,
             ),
-            render_mode="fake",
-            render_interval=1,
+            mujoco_backend=MujocoBackend.CLASSIC,  # Explicit for clarity
         ),
-        mujoco_backend=MujocoBackend.CLASSIC,  # Explicit for clarity
     ),
 )
 
 
-mjwarp = SimulatorConfig(
-    _target_="holosoma.simulator.mujoco.mujoco.MuJoCo",
-    _recursive_=False,
-    config=SimulatorInitConfig(
-        name="mujoco",
-        scene=SceneConfig(
-            replicate_physics=True,
-        ),
-        sim=SimEngineConfig(
-            fps=200,
-            control_decimation=4,
-            substeps=1,
-            physx=PhysxConfig(
-                solver_type=1,
-                num_position_iterations=4,
-                num_velocity_iterations=0,
-                bounce_threshold_velocity=0.5,
+mjwarp = SIMULATOR_REGISTRY.add(
+    "mjwarp",
+    SimulatorConfig(
+        _target_="holosoma.simulator.mujoco.mujoco.MuJoCo",
+        _recursive_=False,
+        config=SimulatorInitConfig(
+            name="mujoco",
+            sim=SimEngineConfig(
+                fps=200,
+                control_decimation=4,
+                substeps=1,
+                physx=PhysxConfig(
+                    solver_type=1,
+                    num_position_iterations=4,
+                    num_velocity_iterations=0,
+                    bounce_threshold_velocity=0.5,
+                ),
+                render_mode="fake",
+                render_interval=1,
             ),
-            render_mode="fake",
-            render_interval=1,
+            mujoco_backend=MujocoBackend.WARP,  # GPU-accelerated backend
         ),
-        mujoco_backend=MujocoBackend.WARP,  # GPU-accelerated backend
     ),
 )
 
+from holosoma.utils.config_registry import (  # noqa: E402
+    deprecated_defaults_alias as _deprecated_defaults_alias,
+)
 
-DEFAULTS = {
-    "isaacgym": isaacgym,
-    "isaacsim": isaacsim,
-    "mujoco": mujoco,
-    "mjwarp": mjwarp,
-}
+__getattr__ = _deprecated_defaults_alias(__name__, SIMULATOR_REGISTRY)

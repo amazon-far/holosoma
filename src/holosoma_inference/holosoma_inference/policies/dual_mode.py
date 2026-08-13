@@ -11,16 +11,35 @@ from holosoma_inference.config.config_types.inference import InferenceConfig
 
 
 def _select_policy_class(config: InferenceConfig):
-    """Determine policy class based on observation config and robot type.
+    """Determine policy class from an explicit ``policy_type`` or the obs/robot heuristic.
 
-    Checks entry point groups ``holosoma.policies.locomotion`` and
-    ``holosoma.policies.wbt`` (keyed by ``robot_type``) so extensions can
-    register custom policy classes without monkey-patching.
+    Resolution order:
+
+    1. ``config.task.policy_type`` (when set) against the ``holosoma.policies.by_type``
+       entry-point group. This lets extensions register custom policy classes keyed by an
+       explicit type string -- the same mechanism the standalone ``run_policy`` path uses --
+       so a service launched with an extension preset resolves to the same class. The field
+       is optional (only some ``TaskConfig`` subclasses define it), hence ``getattr``; an
+       unregistered ``policy_type`` falls through to the heuristic rather than hard-failing.
+    2. The ``holosoma.policies.wbt`` / ``holosoma.policies.locomotion`` groups (keyed by
+       ``robot_type``) plus a ``motion_command`` observation heuristic.
+
+    All lookups are by string against entry-point groups, so core never imports or names
+    extension-private policy classes.
     """
-    from holosoma_inference.compat import entry_points
     from holosoma_inference.policies.locomotion import LocomotionPolicy
     from holosoma_inference.policies.wbt import WholeBodyTrackingPolicy
+    from holosoma_inference.pycompat import entry_points
 
+    # 1. Explicit policy_type -> by_type entry-point group.
+    policy_type = getattr(config.task, "policy_type", None)
+    if policy_type:
+        for ep in entry_points(group="holosoma.policies.by_type"):
+            if ep.name == policy_type:
+                return ep.load()
+        # policy_type set but unregistered: fall through to the heuristic below.
+
+    # 2. robot_type-keyed groups + observation heuristic.
     robot_type = config.robot.robot_type
     actor_obs = config.observation.obs_dict.get("actor_obs", [])
 
@@ -81,10 +100,15 @@ class DualModePolicy:
         """
         from holosoma_inference.inputs.api.commands import StateCommand
 
-        # Inject SWITCH_MODE into both command providers' mappings (joystick X, keyboard x)
+        # Inject SWITCH_MODE into both command providers' key mappings (joystick X,
+        # keyboard x). Only keyboard/joystick providers expose ``_mapping``; others
+        # (e.g. injected ROS2 providers, which map the "switch_mode" string to
+        # SWITCH_MODE natively) are intercepted purely via the dispatch patch below.
         for policy in (self.primary, self.secondary):
-            policy._command_provider._mapping["X"] = StateCommand.SWITCH_MODE
-            policy._command_provider._mapping["x"] = StateCommand.SWITCH_MODE
+            mapping = getattr(policy._command_provider, "_mapping", None)
+            if mapping is not None:
+                mapping["X"] = StateCommand.SWITCH_MODE
+                mapping["x"] = StateCommand.SWITCH_MODE
 
         # Patch _dispatch_command to intercept SWITCH_MODE
         self._orig_dispatch = {

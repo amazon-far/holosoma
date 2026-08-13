@@ -7,15 +7,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
 from loguru import logger
 
 from holosoma.config_types.simulator import VirtualGantryCfg
+from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.simulator_config import SimulatorType, get_simulator_type
+
+if TYPE_CHECKING:
+    from holosoma.simulator.base_simulator.hooks import HookRegistry
 
 
 class GantryCommand(Enum):
@@ -108,6 +112,15 @@ class VirtualGantry:
         self._enabled: bool = enable
         self.set_enable(enable)
 
+    def register_hooks(self, hooks: HookRegistry) -> None:
+        """Register virtual gantry lifecycle hooks with the simulator loop.
+
+        step() is PRE_STEP: gantry forces must be applied before the substep so they act within it,
+        not reactively after.
+        """
+        hooks.add(Phase.PRE_STEP, self.step, name="virtual_gantry.step")
+        hooks.add(Phase.EPISODE_START, self.on_episode_start, name="virtual_gantry.on_episode_start")
+
     def _setup_force_application(self) -> None:
         """Set up simulator-specific force application and clearing methods.
 
@@ -188,6 +201,11 @@ class VirtualGantry:
         x, y = self.sim.robot_root_states[env_id, :3].detach().cpu().numpy()[:2]
         self.point = np.array([x, y, self.height])
         logger.debug(f"Virtual gantry position reset to '{self.point}'")
+
+    def on_episode_start(self, env_id: int) -> None:
+        """Reset the gantry anchor when the tracked environment starts."""
+        if env_id == 0:
+            self.set_position_to_robot()
 
     def handle_command(self, command_data: GantryCommandData | GantryCommand) -> bool:
         """Handle gantry commands with optional parameters.
@@ -331,13 +349,17 @@ class VirtualGantry:
         """
         env_id = 0  # Virtual gantry only supports single environment
 
+        # applied_forces (xfrc_applied) is full-model-width (raw MuJoCo body ids),
+        # but link_id is a 0-based body_names index. Map through body_ids.
+        mj_body_id = self.sim.body_ids[link_id]
+
         if isinstance(self.sim.applied_forces, torch.Tensor):
-            # WarpBackend: GPU tensor with env dimension [num_envs, num_bodies, 6]
+            # WarpBackend: GPU tensor with env dimension [num_envs, model.nbody, 6]
             force_tensor = torch.from_numpy(force).float().to(self.sim.device)
-            self.sim.applied_forces[env_id, link_id, :3] = force_tensor
+            self.sim.applied_forces[env_id, mj_body_id, :3] = force_tensor
         else:
-            # ClassicBackend: CPU numpy array without env dimension [num_bodies, 6]
-            self.sim.applied_forces[link_id, :3] = force
+            # ClassicBackend: CPU numpy array without env dimension [model.nbody, 6]
+            self.sim.applied_forces[mj_body_id, :3] = force
 
     def _clear_forces_mujoco(self) -> None:
         """Clear forces in MuJoCo (WarpBackend only - ClassicBackend doesn't need it).
@@ -354,7 +376,9 @@ class VirtualGantry:
         if isinstance(self.sim.applied_forces, torch.Tensor):
             # WarpBackend: Clear GPU tensor for this body only
             # Zero out both forces [0:3] and torques [3:6] for completeness
-            self.sim.applied_forces[env_id, self.body_link_id, :] = 0.0
+            # Map 0-based body_names index to full-model xfrc layout via body_ids.
+            mj_body_id = self.sim.body_ids[self.body_link_id]
+            self.sim.applied_forces[env_id, mj_body_id, :] = 0.0
         # ClassicBackend (numpy array): Do nothing
         # MuJoCo automatically zeros xfrc_applied each step, so no explicit clearing needed
 
@@ -373,7 +397,14 @@ class VirtualGantry:
         """
         from isaacgym import gymapi, gymtorch
 
-        force_tensor = torch.zeros(self.sim.num_envs, self.sim.num_bodies, 3, device=self.sim.device)
+        # The force tensor must span the FULL per-env rigid-body buffer (robot + any
+        # scene bodies) because apply_rigid_body_force_tensors writes every rigid body.
+        # link_id is a robot body index (< num_bodies); it addresses the correct row
+        # since the robot occupies the first rows.
+        # Unlike _apply_force_mujoco / _apply_force_isaacsim, which map link_id through
+        # self.sim.body_ids, the IsaacGym per-env buffer is already indexed by robot body
+        # index, so no body_ids mapping is applied here.
+        force_tensor = torch.zeros(self.sim.num_envs, self.sim.bodies_per_env, 3, device=self.sim.device)
         force_tensor[:, link_id, :] = torch.tensor(force, device=self.sim.device, dtype=torch.float32)
 
         # Apply force directly at center of mass (matches MuJoCo behavior)
@@ -512,25 +543,41 @@ def create_virtual_gantry(
     ...     enable=True
     ... )
     """
+    # A disabled gantry applies no force and reads no body, so it should not require a humanoid
+    # attachment body to exist; otherwise a non-humanoid robot (e.g. a single-link test body) cannot
+    # boot with the gantry off. Return a disabled instance attached to body 0, a valid index that is
+    # never read while disabled. Only the enabled path needs a real attachment body.
+    if not enable:
+        logger.info("Virtual gantry disabled; skipping attachment-body resolution.")
+        return VirtualGantry(sim=sim, enable=False, body_link_id=0, cfg=cfg, **kwargs)
+
     if attachment_body_names is None:
         # Default names from holosoma_inference, likely needs updating or removing to force users to specify
         attachment_body_names = ["torso_link", "torso", "base_link", "pelvis", "Trunk", "Waist", "base"]
 
     logger.info("=== Setting up virtual gantry system ===")
 
+    # Resolve the first candidate name that exists on the robot. The except covers only the
+    # body-lookup miss (find_rigid_body_indice raises RuntimeError/ValueError when a name is absent)
+    # so the next candidate can be tried. It does not wrap VirtualGantry construction, whose own
+    # errors (e.g. the num_envs=1 guard) would otherwise be swallowed and mis-reported below as a
+    # "could not find attachment body".
+    body_id = None
     for body_name in attachment_body_names:
         try:
-            # Attempt to find a body, need a cleaner API to avoid exception handling as happy path...
             body_id = sim.find_rigid_body_indice(body_name)
-            if body_id >= 0:
-                logger.info(f"Virtual gantry attached to body '{body_name}' (ID: {body_id})")
-                gantry = VirtualGantry(sim=sim, enable=enable, body_link_id=body_id, cfg=cfg, **kwargs)
-                logger.info("=== Virtual gantry system setup completed ===")
-                return gantry
-        except (RuntimeError, ValueError):  # noqa: PERF203
+        except (RuntimeError, ValueError):
             continue
+        if body_id >= 0:
+            break
+    else:
+        available_bodies = getattr(sim, "body_names", "unknown")
+        raise RuntimeError(
+            f"Could not find suitable attachment body from {attachment_body_names}. "
+            f"Available bodies: {available_bodies}"
+        )
 
-    available_bodies = getattr(sim, "body_names", "unknown")
-    raise RuntimeError(
-        f"Could not find suitable attachment body from {attachment_body_names}. Available bodies: {available_bodies}"
-    )
+    logger.info(f"Virtual gantry attached to body '{body_name}' (ID: {body_id})")
+    gantry = VirtualGantry(sim=sim, enable=enable, body_link_id=body_id, cfg=cfg, **kwargs)
+    logger.info("=== Virtual gantry system setup completed ===")
+    return gantry

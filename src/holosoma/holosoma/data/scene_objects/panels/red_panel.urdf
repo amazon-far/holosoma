@@ -1,0 +1,23 @@
+<?xml version="1.0" ?>
+<!-- Flat bright-red panel for camera-geometry behavioral tests (URDF; IsaacGym/IsaacSim).
+     URDF box size is the FULL extent: 0.02 x 0.4 x 0.4 m (thin in X, 0.4 m in Y and Z),
+     matching red_panel.xml's 0.01/0.2/0.2 MJCF half-extents. Pure red so the panel
+     silhouette is trivially segmentable from the background. -->
+<robot name="red_panel">
+  <link name="baseLink">
+    <inertial>
+      <mass value="0.1"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="0.0002" ixy="0" ixz="0" iyy="0.0002" iyz="0" izz="0.0002"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry><box size="0.02 0.4 0.4"/></geometry>
+      <material name="red"><color rgba="1 0 0 1"/></material>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry><box size="0.02 0.4 0.4"/></geometry>
+    </collision>
+  </link>
+</robot>

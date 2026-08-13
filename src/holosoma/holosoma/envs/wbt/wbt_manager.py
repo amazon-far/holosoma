@@ -232,7 +232,8 @@ class WholeBodyTrackingManager(BaseTask):
             object_states[:, 3:7] = object_ori[:]
             object_states[:, 7:10] = object_lin_vel[:]
             object_states[:, 10:13] = torch.zeros_like(object_lin_vel[:])
-            self.simulator.set_actor_states(["object"], env_ids, object_states)
+            object_name = motion_command.object_name
+            self.simulator.set_actor_states([object_name], env_ids, object_states)
 
         self.simulator.scene.write_data_to_sim()
         self.simulator.sim.forward()

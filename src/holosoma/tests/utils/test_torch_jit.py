@@ -180,8 +180,8 @@ class TestNestedJitFunctions:
         expected_helper = input_tensor * 2 + 1
         assert torch.allclose(helper_result, expected_helper), "Helper function should work"
 
-        # Now test nested calls to detect any issues with the unwrapping mechanism
-        # For now, let's test that we can at least call the helper function
+        # Test nested calls to detect issues with the unwrapping mechanism: at minimum the helper
+        # function must be callable from within a second jit-scripted function.
         try:
 
             @torch_jit_script

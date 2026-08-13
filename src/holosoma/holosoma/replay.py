@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-import tyro
-
 from holosoma.config_types.env import get_tyro_env_config
 from holosoma.config_types.experiment import ExperimentConfig
-from holosoma.config_values.experiment import AnnotatedExperimentConfig
 from holosoma.utils.eval_utils import (
     init_sim_imports,
 )
 from holosoma.utils.helpers import get_class
 from holosoma.utils.sim_utils import close_simulation_app
-from holosoma.utils.tyro_utils import TYRO_CONIFG
 
 
 def replay(tyro_config: ExperimentConfig):
@@ -36,7 +32,11 @@ def replay(tyro_config: ExperimentConfig):
 
 
 def main() -> None:
-    tyro_cfg = tyro.cli(AnnotatedExperimentConfig, config=TYRO_CONIFG)
+    from holosoma.config_values.experiment import get_annotated_experiment_config
+    from holosoma.utils.config_registry import parse_config
+
+    # Pass the factory uncalled so parse_config builds it after plugins load.
+    tyro_cfg = parse_config(get_annotated_experiment_config)
     replay(tyro_cfg)
 
 

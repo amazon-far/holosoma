@@ -5,9 +5,15 @@ from dataclasses import replace
 import tyro
 from typing_extensions import Annotated
 
-from holosoma_inference.compat import entry_points
 from holosoma_inference.config.config_types.inference import InferenceConfig
 from holosoma_inference.config.config_values import observation, robot, task
+from holosoma_inference.utils.config_registry import (
+    ConfigRegistry,
+    deprecated_defaults_alias,
+    deprecated_get_defaults,
+)
+
+INFERENCE_REGISTRY = ConfigRegistry(InferenceConfig, group="holosoma.config.inference")
 
 # Shared safety secondary for all G1 configs — FastSAC locomotion.
 # Each config references the same object; users can override any field
@@ -65,56 +71,23 @@ g1_29dof_wbt = InferenceConfig(
     secondary=_g1_safety_secondary,
 )
 
-# Core defaults - no extension imports at module load time
-DEFAULTS = {
-    "g1-29dof-loco": g1_29dof_loco,
-    "t1-29dof-loco": t1_29dof_loco,
-    "g1-29dof-wbt": g1_29dof_wbt,
-}
-
-# Track whether extensions have been loaded
-_extensions_loaded = False
-
-
-def _load_extensions() -> None:
-    """Lazily load extension configs from entry points.
-
-    This is deferred to avoid circular imports when extensions import
-    from holosoma_inference.config at module load time.
-    """
-    global _extensions_loaded  # noqa: PLW0603
-    if _extensions_loaded:
-        return
-    _extensions_loaded = True
-    for ep in entry_points(group="holosoma.config.inference"):
-        DEFAULTS[ep.name] = ep.load()
+# Register core presets. Keys use hyphen-case naming convention for CLI compatibility.
+INFERENCE_REGISTRY.add("g1-29dof-loco", g1_29dof_loco)
+INFERENCE_REGISTRY.add("t1-29dof-loco", t1_29dof_loco)
+INFERENCE_REGISTRY.add("g1-29dof-wbt", g1_29dof_wbt)
 
 
 def get_annotated_inference_config() -> type:
-    """Build the annotated InferenceConfig type with all discovered configs.
-
-    This function loads extension configs lazily and returns a tyro-compatible
-    annotated type for CLI subcommand generation.
-
-    Returns:
-        Annotated type suitable for use with tyro.cli()
-    """
-    _load_extensions()
+    """Return the ``inference:`` subcommand type."""
     return Annotated[
         InferenceConfig,
         tyro.conf.arg(
             constructor=tyro.extras.subcommand_type_from_defaults(
-                {f"inference:{k}": v for k, v in DEFAULTS.items()}
+                {f"inference:{k}": v for k, v in INFERENCE_REGISTRY.items()}
             )
         ),
     ]
 
 
-def get_defaults() -> dict:
-    """Get all inference config defaults, including extensions.
-
-    Returns:
-        Dictionary mapping config names to InferenceConfig instances.
-    """
-    _load_extensions()
-    return DEFAULTS
+__getattr__ = deprecated_defaults_alias(__name__, INFERENCE_REGISTRY)
+get_defaults = deprecated_get_defaults(__name__, INFERENCE_REGISTRY)

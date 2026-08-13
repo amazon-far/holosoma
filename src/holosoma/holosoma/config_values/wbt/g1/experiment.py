@@ -10,6 +10,7 @@ from holosoma.config_values import (
     randomization,
     reward,
     robot,
+    scene,
     simulator,
     termination,
     terrain,
@@ -155,19 +156,12 @@ g1_29dof_wbt_w_object = replace(
             robot.g1_29dof_w_object.asset,
             enable_self_collisions=True,
         ),
-        object=replace(
-            robot.g1_29dof_w_object.object,
-            object_urdf_path="holosoma/data/motions/g1_29dof/whole_body_tracking/objects_largebox.urdf",
-        ),
         init_state=replace(robot.g1_29dof_w_object.init_state, pos=[0.0, 0.0, 0.76]),
     ),
     randomization=randomization.g1_29dof_wbt_randomization_w_object,
     observation=observation.g1_29dof_wbt_observation_w_object,
     reward=reward.g1_29dof_wbt_reward_w_object,
-    simulator=replace(
-        simulator.isaacsim,
-        config=replace(simulator.isaacsim.config, scene=replace(simulator.isaacsim.config.scene, env_spacing=0.0)),
-    ),
+    scene=scene.g1_29dof_wbt_object_scene,
 )
 
 g1_29dof_wbt_fast_sac_w_object = replace(
@@ -176,19 +170,12 @@ g1_29dof_wbt_fast_sac_w_object = replace(
     robot=replace(
         robot.g1_29dof_w_object,
         asset=replace(robot.g1_29dof_w_object.asset, enable_self_collisions=True),
-        object=replace(
-            robot.g1_29dof_w_object.object,
-            object_urdf_path="holosoma/data/motions/g1_29dof/whole_body_tracking/objects_largebox.urdf",
-        ),
         init_state=replace(robot.g1_29dof_w_object.init_state, pos=[0.0, 0.0, 0.76]),
     ),
     randomization=randomization.g1_29dof_wbt_randomization_w_object,
     observation=observation.g1_29dof_wbt_observation_w_object,
     reward=reward.g1_29dof_wbt_reward_w_object,
-    simulator=replace(
-        simulator.isaacsim,
-        config=replace(simulator.isaacsim.config, scene=replace(simulator.isaacsim.config.scene, env_spacing=0.0)),
-    ),
+    scene=scene.g1_29dof_wbt_object_scene,
 )
 
 __all__ = [
@@ -214,5 +201,5 @@ python src/holosoma/holosoma/train_agent.py \
   --terrain.terrain-term.obj-file-path="holosoma/data/motions/g1_29dof/whole_body_tracking/terrain_slope.obj" \
   --command.setup_terms.motion_command.params.motion_config.motion_file\
 ="holosoma/data/motions/g1_29dof/whole_body_tracking/motion_crawl_slope.npz" \
-  --simulator.config.scene.env_spacing=0.0
+  --scene.env_spacing=0.0
 """

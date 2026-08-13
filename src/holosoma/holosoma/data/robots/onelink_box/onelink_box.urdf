@@ -1,0 +1,45 @@
+<?xml version="1.0" ?>
+<!-- Minimal floating-base "robot" for behavioral parity tests. The physical body is `baseLink` (a
+     0.1 m cube, mass 0.1, isotropic inertia): structurally the small_box object, loaded through the
+     robot path so robot link_physics can be exercised and compared against an object twin.
+
+     IsaacSim and IsaacGym model a robot as an articulation, which requires at least one joint (a
+     jointless single-link URDF gets no ArticulationRootAPI on IsaacSim and "no DOFs" on IsaacGym,
+     so neither initializes it). One tiny massless `dummy` link on a revolute joint satisfies this.
+     The joint is unactuated and the dummy is near-massless with negligible inertia, so it adds no
+     meaningful dynamics: `baseLink` still free-falls, bounces, and slides like the object twin,
+     while making the asset a valid 1-DOF articulation that boots on every backend. -->
+<robot name="onelink_box">
+  <link name="baseLink">
+    <inertial>
+      <mass value="0.1"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="0.0002" ixy="0" ixz="0" iyy="0.0002" iyz="0" izz="0.0002"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry><box size="0.1 0.1 0.1"/></geometry>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry><box size="0.1 0.1 0.1"/></geometry>
+    </collision>
+  </link>
+
+  <!-- Massless dummy link plus unactuated revolute joint: makes this a 1-DOF articulation (required
+       by IsaacSim/IsaacGym) without adding meaningful dynamics. No collision/visual geometry. -->
+  <link name="dummy">
+    <inertial>
+      <mass value="1e-6"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="1e-9" ixy="0" ixz="0" iyy="1e-9" iyz="0" izz="1e-9"/>
+    </inertial>
+  </link>
+  <joint name="dummy_joint" type="revolute">
+    <parent link="baseLink"/>
+    <child link="dummy"/>
+    <origin rpy="0 0 0" xyz="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="0" effort="0" velocity="0"/>
+  </joint>
+</robot>

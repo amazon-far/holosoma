@@ -5,9 +5,37 @@ Unified Object Registry for Cross-Simulator Object Management
 from __future__ import annotations
 
 from enum import Enum
-from typing import List, Tuple
+from typing import NamedTuple
 
 from holosoma.utils.safe_torch_import import torch
+
+
+class RegisteredObject(NamedTuple):
+    """One object's registry record.
+
+    Attributes
+    ----------
+    name : str
+        Actor name (e.g. ``"box"``, ``"scene_free_box"``).
+    type : str
+        ObjectType value (``"robot"``/``"scene"``/``"individual"``); stored as the str
+        value for backward compatibility.
+    position_in_type : int
+        Position within its type band, used for index calculation.
+    indices : torch.Tensor
+        Per-env flat indices into the interleaved address space.
+    initial_poses : torch.Tensor
+        Initial poses [num_envs, 7] in world coordinates, [x,y,z,qx,qy,qz,qw].
+    initial_velocities : torch.Tensor
+        Initial world-frame velocities [num_envs, 6], [vx,vy,vz,wx,wy,wz].
+    """
+
+    name: str
+    type: str
+    position_in_type: int
+    indices: torch.Tensor
+    initial_poses: torch.Tensor
+    initial_velocities: torch.Tensor
 
 
 class ObjectType(Enum):
@@ -85,8 +113,8 @@ class ObjectRegistry:
     ----------
     device : str
         Device for tensor operations.
-    objects : list[tuple[str, str, int, torch.Tensor, torch.Tensor]]
-        List of registered objects as (name, type, position_in_type, indices, initial_poses).
+    objects : list[RegisteredObject]
+        List of registered objects (see RegisteredObject).
     name_to_index : dict[str, int]
         Mapping from object names to indices in the objects list.
     num_envs : int
@@ -105,7 +133,7 @@ class ObjectRegistry:
         self.device = device
 
         # Object storage
-        self.objects: list[tuple[str, str, int, torch.Tensor, torch.Tensor]] = []
+        self.objects: list[RegisteredObject] = []
         self.name_to_index: dict[str, int] = {}
 
         # Interleaved layout parameters
@@ -121,12 +149,19 @@ class ObjectRegistry:
         # Lookup array: position_in_env -> object_name
         self._position_to_name: list[str] = []
 
-        self._resolved_objects_cache: list[Tuple[str, torch.Tensor]] | None = None
+        self._resolved_objects_cache: list[tuple[str, torch.Tensor]] | None = None
 
         self._finalized = False
 
-    def register_object(self, name: str, object_type: ObjectType, position_in_type: int, initial_poses: torch.Tensor):
-        """Register object with pre-calculated initial poses for all environments.
+    def register_object(
+        self,
+        name: str,
+        object_type: ObjectType,
+        position_in_type: int,
+        initial_poses: torch.Tensor,
+        initial_velocities: torch.Tensor | None = None,
+    ):
+        """Register object with pre-calculated initial poses (and velocities) for all environments.
 
         Registers a new object in the registry with its type, position within that type,
         and initial poses for all environments. The caller is responsible for providing
@@ -144,12 +179,19 @@ class ObjectRegistry:
             Initial poses for ALL environments [num_envs, 7] in world coordinates.
             Format: [x, y, z, qx, qy, qz, qw] per environment.
             Caller is responsible for applying env_origins if needed.
+        initial_velocities : torch.Tensor | None, default=None
+            Initial world-frame velocities for ALL environments [num_envs, 6], format
+            [vx, vy, vz, wx, wy, wz] per environment. ``None`` (the common case — static
+            bodies and most free bodies) stores zeros.
 
         Raises
         ------
         ValueError
             If object with the same name is already registered or tensor shape is incorrect.
         """
+        if self._finalized:
+            raise RuntimeError(f"ObjectRegistry already finalized, cannot register object '{name}'")
+
         if name in self.name_to_index:
             raise ValueError(f"Object '{name}' already registered")
 
@@ -157,14 +199,18 @@ class ObjectRegistry:
         if self.num_envs > 0 and initial_poses.shape != (self.num_envs, 7):
             raise ValueError(f"initial_poses must have shape [{self.num_envs}, 7], got {initial_poses.shape}")
 
-        if self._finalized:
-            raise RuntimeError(f"ObjectRegistry already finalized, cannot register object '{name}'")
+        if initial_velocities is None:
+            initial_velocities = torch.zeros(self.num_envs or 1, 6, device=self.device, dtype=torch.float32)
+        elif self.num_envs > 0 and initial_velocities.shape != (self.num_envs, 6):
+            raise ValueError(f"initial_velocities must have shape [{self.num_envs}, 6], got {initial_velocities.shape}")
 
         # Create placeholder indices (will be updated during finalization)
         indices = torch.arange(self.num_envs or 1, device=self.device)
 
-        # Store as string value for backward compatibility with existing tuple structure
-        self.objects.append((name, object_type.value, position_in_type, indices, initial_poses))
+        # Store type as its string value for backward compatibility with existing consumers.
+        self.objects.append(
+            RegisteredObject(name, object_type.value, position_in_type, indices, initial_poses, initial_velocities)
+        )
         self.name_to_index[name] = len(self.objects) - 1
 
     def setup_ranges(self, num_envs: int, robot_count: int, scene_count: int, individual_count: int):
@@ -201,9 +247,9 @@ class ObjectRegistry:
         position-to-name lookup array for O(1) reverse lookups.
         """
         # Update indices for all registered objects
-        for i, (name, obj_type, position_in_type, _, initial_pose) in enumerate(self.objects):
+        for i, obj in enumerate(self.objects):
             indices = torch.arange(self.num_envs, device=self.device)
-            self.objects[i] = (name, obj_type, position_in_type, indices, initial_pose)
+            self.objects[i] = obj._replace(indices=indices)
 
         self._build_position_lookup()
         self._finalized = True
@@ -213,23 +259,23 @@ class ObjectRegistry:
         # Initialize array with empty strings
         self._position_to_name = [""] * self.objects_per_env
 
-        for name, obj_type, position_in_type, _, _ in self.objects:
-            if obj_type == ObjectType.ROBOT.value:
-                array_pos = self.robot_offset_in_env + position_in_type
-            elif obj_type == ObjectType.SCENE.value:
-                array_pos = self.scene_offset_in_env + position_in_type
-            elif obj_type == ObjectType.INDIVIDUAL.value:
-                array_pos = self.individual_offset_in_env + position_in_type
+        for obj in self.objects:
+            if obj.type == ObjectType.ROBOT.value:
+                array_pos = self.robot_offset_in_env + obj.position_in_type
+            elif obj.type == ObjectType.SCENE.value:
+                array_pos = self.scene_offset_in_env + obj.position_in_type
+            elif obj.type == ObjectType.INDIVIDUAL.value:
+                array_pos = self.individual_offset_in_env + obj.position_in_type
             else:
-                raise ValueError(f"Unknown object type '{obj_type}'")
+                raise ValueError(f"Unknown object type '{obj.type}'")
 
             if array_pos >= self.objects_per_env:
                 raise ValueError(f"Position {array_pos} exceeds objects_per_env {self.objects_per_env}")
 
             if self._position_to_name[array_pos]:
                 existing_name = self._position_to_name[array_pos]
-                raise ValueError(f"Duplicate object at position {array_pos}: '{existing_name}' and '{name}'")
-            self._position_to_name[array_pos] = name
+                raise ValueError(f"Duplicate object at position {array_pos}: '{existing_name}' and '{obj.name}'")
+            self._position_to_name[array_pos] = obj.name
 
     def get_object_indices(self, names: str | list[str], env_ids: torch.Tensor | None = None) -> torch.Tensor:
         """Get object indices by object names
@@ -259,17 +305,17 @@ class ObjectRegistry:
                 available = list(self.name_to_index.keys())
                 raise KeyError(f"Object '{name}' not found. Available: {available}")
 
-            obj_name, obj_type, position_in_type, _, _ = self.objects[self.name_to_index[name]]
+            obj = self.objects[self.name_to_index[name]]
 
             # Direct calculation using interleaved layout
-            if obj_type == ObjectType.ROBOT.value:
-                indices = env_ids * self.objects_per_env + self.robot_offset_in_env + position_in_type
-            elif obj_type == ObjectType.SCENE.value:
-                indices = env_ids * self.objects_per_env + self.scene_offset_in_env + position_in_type
-            elif obj_type == ObjectType.INDIVIDUAL.value:
-                indices = env_ids * self.objects_per_env + self.individual_offset_in_env + position_in_type
+            if obj.type == ObjectType.ROBOT.value:
+                indices = env_ids * self.objects_per_env + self.robot_offset_in_env + obj.position_in_type
+            elif obj.type == ObjectType.SCENE.value:
+                indices = env_ids * self.objects_per_env + self.scene_offset_in_env + obj.position_in_type
+            elif obj.type == ObjectType.INDIVIDUAL.value:
+                indices = env_ids * self.objects_per_env + self.individual_offset_in_env + obj.position_in_type
             else:
-                raise ValueError(f"Unknown object type '{obj_type}' for object '{name}'")
+                raise ValueError(f"Unknown object type '{obj.type}' for object '{name}'")
 
             all_indices.append(indices)
 
@@ -289,10 +335,10 @@ class ObjectRegistry:
             available = list(self.name_to_index.keys())
             raise KeyError(f"Object '{name}' not found. Available: {available}")
 
-        initial_poses = self.objects[self.name_to_index[name]][4]  # [num_envs, 7] tensor
+        initial_poses = self.objects[self.name_to_index[name]].initial_poses  # [num_envs, 7]
         return initial_poses[env_id]  # [7]
 
-    def get_initial_poses_batch(self, names: List[str], env_ids: torch.Tensor | None = None) -> torch.Tensor:
+    def get_initial_poses_batch(self, names: list[str], env_ids: torch.Tensor | None = None) -> torch.Tensor:
         """Get initial poses for multiple objects across environments
 
         Args:
@@ -310,12 +356,58 @@ class ObjectRegistry:
 
         all_poses = []
         for name in names:
-            initial_poses = self.objects[self.name_to_index[name]][4]  # [num_envs, 7] tensor
+            initial_poses = self.objects[self.name_to_index[name]].initial_poses  # [num_envs, 7]
             selected_poses = initial_poses[env_ids]  # [len(env_ids), 7]
             all_poses.append(selected_poses)
 
         # Flatten to match expected format [num_objects * num_envs, 7]
         return torch.cat(all_poses, dim=0)
+
+    def get_initial_velocity(self, name: str, env_id: int = 0) -> torch.Tensor:
+        """Get initial velocity for object by name for a specific environment.
+
+        The velocity sibling of get_initial_pose.
+
+        Args:
+            name: Object name
+            env_id: Environment ID (default: 0)
+
+        Returns:
+            torch.Tensor: Initial velocity [6] in format [vx, vy, vz, wx, wy, wz]
+        """
+        if name not in self.name_to_index:
+            available = list(self.name_to_index.keys())
+            raise KeyError(f"Object '{name}' not found. Available: {available}")
+
+        initial_velocities = self.objects[self.name_to_index[name]].initial_velocities  # [num_envs, 6]
+        return initial_velocities[env_id]  # [6]
+
+    def get_initial_velocities_batch(self, names: list[str], env_ids: torch.Tensor | None = None) -> torch.Tensor:
+        """Get initial velocities for multiple objects across environments.
+
+        The velocity sibling of get_initial_poses_batch; same row order (object-major,
+        then env-minor) so the two can be concatenated column-wise into a 13-vector.
+
+        Args:
+            names: List of object names
+            env_ids: Environment IDs to get velocities for. If None, gets all environments.
+
+        Returns:
+            torch.Tensor: Initial velocities [num_objects * num_envs, 6] in format
+            [vx, vy, vz, wx, wy, wz]
+        """
+        if not names:
+            return torch.empty(0, 6, device=self.device, dtype=torch.float32)
+
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
+
+        all_velocities = []
+        for name in names:
+            initial_velocities = self.objects[self.name_to_index[name]].initial_velocities  # [num_envs, 6]
+            all_velocities.append(initial_velocities[env_ids])  # [len(env_ids), 6]
+
+        return torch.cat(all_velocities, dim=0)
 
     def resolve_indices(self, indices: torch.Tensor) -> list[tuple[str, torch.Tensor]]:
         """Reverse lookup object indices back to (object_name, env_ids) pairs
@@ -359,13 +451,18 @@ class ObjectRegistry:
         if env_ids.max() >= self.num_envs or env_ids.min() < 0:
             raise ValueError(f"Environment IDs {env_ids} out of range [0, {self.num_envs})")
 
-        # Group by position (which maps directly to object name)
-        unique_positions = torch.unique(pos_in_env)
+        # Group by position (which maps directly to object name), preserving the
+        # FIRST-OCCURRENCE order of positions in `indices` rather than sorted order.
+        # get_object_indices / get_initial_poses_batch emit indices in request
+        # (name-list) order; callers that pair a get_actor_initial_poses result with
+        # set_actor_states walk both sequentially, so this must group in the same
+        # order or poses get applied to the wrong actor. (torch.unique would return
+        # sorted positions, swapping poses when request order != position order.)
+        # dict.fromkeys keeps first-occurrence order while de-duplicating.
+        ordered_positions = list(dict.fromkeys(pos_in_env.tolist()))
+
         results = []
-
-        for pos in unique_positions:
-            pos_val = pos.item()
-
+        for pos_val in ordered_positions:
             if pos_val >= len(self._position_to_name):
                 raise ValueError(f"Position {pos_val} out of range [0, {len(self._position_to_name)})")
 
@@ -373,31 +470,27 @@ class ObjectRegistry:
             if not object_name:
                 raise ValueError(f"No object registered at position {pos_val}")
 
-            # Find all env_ids for this position
-            mask = pos_in_env == pos
+            # Find all env_ids for this position (env order preserved from `indices`)
+            mask = pos_in_env == pos_val
             matching_env_ids = env_ids[mask]
 
             results.append((object_name, matching_env_ids))
 
         return results
 
-    def resolved_objects(self) -> List[Tuple[str, torch.Tensor]]:
-        """Get cached resolution of ALL objects for clone() optimization.
+    def resolved_objects(self) -> list[tuple[str, torch.Tensor]]:
+        """Get cached resolution of ALL objects (full-range gather optimization).
 
         Returns the same result as resolve_indices(torch.arange(total_objects)) but
-        cached for performance. This is specifically optimized for the AllRootStatesProxy
-        clone() method which always needs all objects in all environments.
+        cached for performance, for callers that need every object in every environment
+        (e.g. a full-state clone/gather).
 
         Note:
         ------------------------------
         This method MUST return objects in the EXACT same order that resolve_indices()
-        produces when given torch.arange(total_objects). This ensures that:
-
-            proxy.clone()                    # Uses this cached method
-            proxy[torch.arange(total), :]    # Uses resolve_indices() directly
-
-        return IDENTICAL tensors with the same object ordering. Any deviation in ordering
-        will cause subtle bugs where cloned states don't match direct tensor access.
+        produces when given torch.arange(total_objects), so a cached full gather matches a
+        direct resolve_indices(arange(total)) gather. Any deviation in ordering causes the two
+        to disagree.
 
         The ordering is determined by the interleaved layout where objects are organized
         by environment: [env0_objects][env1_objects][env2_objects]... with consistent
@@ -434,26 +527,35 @@ class ObjectRegistry:
 
     def _find_object_by_type_and_position(self, obj_type: str, position: int) -> str:
         """Find object name by type and position"""
-        for name, object_type, position_in_type, _, _ in self.objects:
-            if object_type == obj_type and position_in_type == position:
-                return name
+        for obj in self.objects:
+            if obj.type == obj_type and obj.position_in_type == position:
+                return obj.name
         raise KeyError(f"No {obj_type} object found at position {position}")
 
     def get_object_type(self, name: str) -> str:
         """Get object type by name"""
         if name not in self.name_to_index:
             raise KeyError(f"Object '{name}' not found")
-        return self.objects[self.name_to_index[name]][1]
+        return self.objects[self.name_to_index[name]].type
 
     def get_scene_position(self, name: str) -> int:
         """Get scene object position by name"""
         if name not in self.name_to_index:
             raise KeyError(f"Object '{name}' not found")
-        obj_name, obj_type, position_in_type, _, _ = self.objects[self.name_to_index[name]]
-        if obj_type != ObjectType.SCENE.value:
+        obj = self.objects[self.name_to_index[name]]
+        if obj.type != ObjectType.SCENE.value:
             raise ValueError(f"Object '{name}' is not a scene object")
-        return position_in_type
+        return obj.position_in_type
 
-    def list_all_objects(self) -> List[str]:
+    def list_all_objects(self) -> list[str]:
         """List all registered object names"""
         return list(self.name_to_index.keys())
+
+    def get_names_by_type(self, object_type: ObjectType) -> list[str]:
+        """List registered actor names of a given ObjectType, in registration order.
+
+        The registry is the single source of truth for which actors exist and what
+        type each is, so callers needing e.g. the rigid (INDIVIDUAL) objects or the
+        scene elements query here rather than reaching into per-backend config.
+        """
+        return [obj.name for obj in self.objects if obj.type == object_type.value]

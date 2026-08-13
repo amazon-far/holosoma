@@ -35,15 +35,96 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import mujoco
+import mujoco_warp as mjw
+import numpy as np
 import torch
+import warp as wp
 from loguru import logger
 
-from .base import IMujocoBackend
+from .base import IMujocoBackend, holosoma_to_mj_quat, mj_to_holosoma_quat
 from .warp_bridge import WarpBridge
 
 if TYPE_CHECKING:
     from holosoma.config_types.full_sim import FullSimConfig
     from holosoma.simulator.mujoco.tensor_views import BaseMujocoView
+    from holosoma.simulator.shared.camera_sensor import CameraRuntime
+
+
+# Quaternion helpers on MuJoCo-convention (wxyz, scalar-first) quaternions, reimplemented locally so
+# the WarpBackend does not depend on mujoco_warp's private `_src.math` module (whose internal path
+# varies across mujoco_warp revisions and breaks the optional import — see backends/__init__.py).
+# These are byte-for-byte equivalent to mujoco_warp's rot_vec_quat / quat_to_mat / mul_quat.
+@wp.func
+def _mul_quat(u: wp.quat, v: wp.quat) -> wp.quat:
+    return wp.quat(
+        u[0] * v[0] - u[1] * v[1] - u[2] * v[2] - u[3] * v[3],
+        u[0] * v[1] + u[1] * v[0] + u[2] * v[3] - u[3] * v[2],
+        u[0] * v[2] - u[1] * v[3] + u[2] * v[0] + u[3] * v[1],
+        u[0] * v[3] + u[1] * v[2] - u[2] * v[1] + u[3] * v[0],
+    )
+
+
+@wp.func
+def _rot_vec_quat(vec: wp.vec3, quat: wp.quat) -> wp.vec3:
+    s = quat[0]
+    u = wp.vec3(quat[1], quat[2], quat[3])
+    return 2.0 * (wp.dot(u, vec) * u) + (s * s - wp.dot(u, u)) * vec + 2.0 * s * wp.cross(u, vec)
+
+
+@wp.func
+def _quat_to_mat(quat: wp.quat) -> wp.mat33:
+    q00 = quat[0] * quat[0]
+    q01 = quat[0] * quat[1]
+    q02 = quat[0] * quat[2]
+    q03 = quat[0] * quat[3]
+    q11 = quat[1] * quat[1]
+    q12 = quat[1] * quat[2]
+    q13 = quat[1] * quat[3]
+    q22 = quat[2] * quat[2]
+    q23 = quat[2] * quat[3]
+    q33 = quat[3] * quat[3]
+
+    return wp.mat33(
+        q00 + q11 - q22 - q33,
+        2.0 * (q12 - q03),
+        2.0 * (q13 + q02),
+        2.0 * (q12 + q03),
+        q00 - q11 + q22 - q33,
+        2.0 * (q23 - q01),
+        2.0 * (q13 - q02),
+        2.0 * (q23 + q01),
+        q00 - q11 - q22 + q33,
+    )
+
+
+@wp.kernel
+def _static_geom_local_to_global(
+    worlds: wp.array(dtype=wp.int32),  # type: ignore[valid-type]
+    geom_ids: wp.array(dtype=wp.int32),  # type: ignore[valid-type]
+    geom_bodyid: wp.array(dtype=wp.int32),  # type: ignore[valid-type]
+    geom_pos: wp.array2d(dtype=wp.vec3),  # type: ignore[valid-type]
+    geom_quat: wp.array2d(dtype=wp.quat),  # type: ignore[valid-type]
+    xpos: wp.array2d(dtype=wp.vec3),  # type: ignore[valid-type]
+    xquat: wp.array2d(dtype=wp.quat),  # type: ignore[valid-type]
+    geom_xpos: wp.array2d(dtype=wp.vec3),  # type: ignore[valid-type]
+    geom_xmat: wp.array2d(dtype=wp.mat33),  # type: ignore[valid-type]
+):
+    """Compose world geom poses for the given geoms and worlds.
+
+    The composition forward kinematics applies to a geom, restricted to the given geoms/worlds,
+    using the local wxyz quaternion helpers above.
+    """
+    # wp.tid() returns a 2-tuple for a 2D launch, but Warp's stub's first overload types a 0-arg
+    # call as scalar int, so mypy reports "int not iterable" on the unpack (misc) and cannot type
+    # wi/gi (has-type). Comment-only ignores keep this valid in the Warp DSL (which rejects cast()).
+    wi, gi = wp.tid()  # type: ignore[misc]
+    worldid = worlds[wi]  # type: ignore[has-type]
+    geomid = geom_ids[gi]  # type: ignore[has-type]
+    bodyid = geom_bodyid[geomid]
+    bpos = xpos[worldid, bodyid]
+    bquat = xquat[worldid, bodyid]
+    geom_xpos[worldid, geomid] = bpos + _rot_vec_quat(geom_pos[worldid % geom_pos.shape[0], geomid], bquat)
+    geom_xmat[worldid, geomid] = _quat_to_mat(_mul_quat(bquat, geom_quat[worldid % geom_quat.shape[0], geomid]))
 
 
 class WarpBackend(IMujocoBackend):
@@ -153,6 +234,43 @@ class WarpBackend(IMujocoBackend):
         # Keep reference to CPU data for rendering (synced on demand)
         self.render_data = data
 
+        # Expand the per-world model fields BEFORE capturing the step graph, so the graph (and the
+        # collision kernels that read m.geom_friction / m.body_mass etc. per world) reference the
+        # SAME per-world arrays the runtime writers update. expand_model_fields reallocates these
+        # arrays; doing it after capture would leave the captured kernels reading the single-world
+        # copy while domain-randomization / static-move writes hit the new (orphaned) array: the
+        # value would read back changed but never affect the stepped dynamics. Idempotent, so the
+        # later prepare_fields()/in-place writes never reallocate.
+        #
+        # The list = body_pos/body_quat (set_static_body_world_pose) PLUS every field a
+        # @mujoco_required_field randomization term writes (geom_friction / body_mass / body_inertia
+        # / body_ipos). prepare_manager_fields() runs AFTER prepare_sim()/capture in the managed
+        # flow, so a DR field expanded only there would be orphaned from the captured graph; pinning
+        # the full set here keeps runtime randomization affecting the live simulation on Warp.
+        if self.num_envs > 1:
+            from .randomization import expand_model_fields
+
+            _PER_WORLD_FIELDS = [
+                "body_pos",
+                "body_quat",  # set_static_body_world_pose (kinematic relocation)
+                "geom_friction",
+                "geom_solref",
+                "geom_solimp",  # material DR (friction + solver vectors)
+                "body_mass",
+                "body_inertia",
+                "body_ipos",
+                "dof_damping",  # mass/inertia/com/damping DR
+                # cam_pos so a world-mount camera (worldbody child, cam_bodyid==0) can be placed at
+                # each env's origin. The camlight kernel (inside the captured step graph) reads
+                # cam_pos per world to compute cam_xpos, so it MUST be expanded before capture;
+                # offset_world_cameras() then writes each env's origin post-capture (same pre-expand /
+                # post-write pattern as body_pos + set_static_body_world_pose).
+                "cam_pos",
+            ]
+            with wp.ScopedDevice(self.mjw_device):
+                expand_model_fields(self.mjw_model, nworld=self.num_envs, fields_to_expand=_PER_WORLD_FIELDS)
+            self.warp_model_bridge.clear_cache()
+
         # Capture simulation step as CUDA graph for optimal performance
         # This eliminates per-kernel launch overhead (~20-30 kernels per step)
         # and enables GPU pipelining, providing 5-10x speedup
@@ -258,6 +376,118 @@ class WarpBackend(IMujocoBackend):
 
         return self.render_data
 
+    def create_renderers(self, cameras: list[CameraRuntime]) -> None:
+        # Appearance flags are GLOBAL to the shared render context (not per-camera);
+        # validate_camera_dict already rejected any cross-camera conflict, so
+        # collecting each set (non-None) value is unambiguous regardless of order. None => default.
+        render_options: dict = {}
+        for cam in cameras:
+            if cam.config.mujoco is None:
+                continue
+            for attr in ("use_shadows", "use_textures", "use_precomputed_rays"):
+                value = getattr(cam.config.mujoco, attr)
+                if value is not None:
+                    render_options[attr] = value
+
+        # Per-camera modality flags in ACTIVE-camera space. cam_active is left unset, so
+        # create_render_context keeps every model camera active and the active index equals the
+        # MuJoCo camera id. Resolve each compiled <camera> id here into this backend's own name->id
+        # map (the shared CameraRuntime holds no handle). create_render_context allocates an output
+        # buffer + write address for a (camera, modality) ONLY if its flag is True at creation
+        # (io.py: rgb_adr/depth_adr stay -1 otherwise). render_cameras() can then only toggle these
+        # flags DOWN to the due subset, not up, so this enables the UNION of every modality each
+        # camera will ever produce. render_seg stays off: holosoma cameras only produce rgb/depth.
+        ncam = self.model.ncam
+        self._cam_ids: dict[str, int] = {}
+        rgb_flags = [False] * ncam
+        depth_flags = [False] * ncam
+        for cam in cameras:
+            name = cam.name
+            cam_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, name)
+            if not 0 <= cam_id < ncam:
+                raise RuntimeError(
+                    f"Camera '{name}' not found in compiled model (mj_name2id -> {cam_id}); "
+                    "expected a <camera> element with active id in [0, ncam)."
+                )
+            self._cam_ids[name] = cam_id
+            if "rgb" in cam.config.data_types:
+                rgb_flags[cam_id] = True
+            if "depth" in cam.config.data_types:
+                depth_flags[cam_id] = True
+
+        with wp.ScopedDevice(self.mjw_device):
+            self._render_context = mjw.create_render_context(
+                self.model,
+                nworld=self.num_envs,
+                render_rgb=rgb_flags,
+                render_depth=depth_flags,
+                render_seg=False,
+                **render_options,
+            )
+            # Preallocate per-camera output buffers (reused each render), keyed by active id
+            # (== MuJoCo cam id, from self._cam_ids). Keyed by id, not a positional list, because
+            # camera ids need not be a contiguous 0..n-1 range (the model may hold non-sensor
+            # cameras), and only the modalities a camera actually produces get a buffer.
+            self._render_rgb_out = {
+                self._cam_ids[cam.name]: wp.zeros(
+                    (self.num_envs, cam.config.height, cam.config.width), dtype=wp.vec3, device=self.mjw_device
+                )
+                for cam in cameras
+                if "rgb" in cam.config.data_types
+            }
+            self._render_depth_out = {
+                self._cam_ids[cam.name]: wp.zeros(
+                    (self.num_envs, cam.config.height, cam.config.width), dtype=wp.float32, device=self.mjw_device
+                )
+                for cam in cameras
+                if "depth" in cam.config.data_types
+            }
+            self._depth_far = max(c.config.far for c in cameras)
+
+    def render_cameras(self, cameras: list[CameraRuntime]) -> None:
+        with wp.ScopedDevice(self.mjw_device):
+            # Ensure the step graph's writes to mjw_data are complete before rendering reads them.
+            wp.synchronize()
+
+            # Toggle the per-camera modality flags DOWN to just the cameras due this step. These are
+            # device wp.array("ncam", bool) kernel inputs (NOT wp.static), so mutating their contents
+            # here (outside any graph capture) makes mjw.render render a different subset with no
+            # recompile. wp.array has no item/slice assignment, so build host masks and .assign().
+            # Only modalities the context was CREATED with may be enabled (create_renderers enabled
+            # the union); enabling one that was False at creation would write to an unallocated (-1)
+            # address. Cameras absent from `due` keep their last buffer below; render() clears the
+            # shared output every call (render.py), so a non-due camera's slice is wiped, not stale.
+            ncam = self.model.ncam
+            rgb_mask = np.zeros(ncam, dtype=bool)
+            depth_mask = np.zeros(ncam, dtype=bool)
+            for cam in cameras:
+                cam_id = self._cam_ids[cam.name]
+                if "rgb" in cam.config.data_types:
+                    rgb_mask[cam_id] = True
+                if "depth" in cam.config.data_types:
+                    depth_mask[cam_id] = True
+            self._render_context.render_rgb.assign(rgb_mask)
+            self._render_context.render_depth.assign(depth_mask)
+
+            mjw.refit_bvh(self.mjw_model, self.mjw_data, self._render_context)
+            mjw.render(self.mjw_model, self.mjw_data, self._render_context)
+
+            for cam in cameras:
+                cam_id = self._cam_ids[cam.name]
+                if "rgb" in cam.config.data_types:
+                    mjw.get_rgb(self._render_context, cam_id, self._render_rgb_out[cam_id])
+                    rgb_f = wp.to_torch(self._render_rgb_out[cam_id])  # [N,H,W,3] float32 in [0,1]
+                    cam.set_buffer("rgb", (rgb_f.clamp(0.0, 1.0) * 255.0).round().to(torch.uint8))
+                if "depth" in cam.config.data_types:
+                    # mjw.get_depth writes clamp(val/depth_scale, 0, 1): a normalized [0,1] image,
+                    # NOT meters. Pass depth_scale=depth_far so [0,far]->[0,1], then multiply back by
+                    # far to recover meters across the full range. No-hit comes back 0 ->
+                    # remap to +inf (the no-hit sentinel).
+                    mjw.get_depth(self._render_context, cam_id, self._depth_far, self._render_depth_out[cam_id])
+                    dep = wp.to_torch(self._render_depth_out[cam_id]) * self._depth_far  # [N,H,W] meters
+                    dep = torch.where(dep <= 0, torch.full_like(dep, float("inf")), dep)
+                    cam.set_buffer("depth", dep.unsqueeze(-1))  # [N,H,W,1]
+
     def get_ctrl_tensor(self) -> torch.Tensor:
         """Return control tensor for direct zero-copy writing.
 
@@ -268,24 +498,20 @@ class WarpBackend(IMujocoBackend):
         """
         return self.ctrl_t
 
-    def refresh_sim_tensors(self, contact_history_tensor: torch.Tensor) -> None:
-        """Update contact force history.
+    def compute_contact_forces(self) -> torch.Tensor:
+        """Return net per-body contact forces for ALL model bodies (GPU, zero-copy).
 
-        Unlike ClassicBackend, WarpBackend automatically computes contact
-        forces in the cfrc_ext tensor during simulation. We just need to
-        update the rolling history buffer.
+        Warp computes contact forces into cfrc_ext during simulation. Returns the
+        full-model-width force slice [num_envs, model.nbody, 3]; the simulator
+        gathers robot-only rows and rotates the history.
 
-        Parameters
-        ----------
-        contact_history_tensor : torch.Tensor
-            Contact force history buffer [num_envs, history_len, num_bodies, 3]
+        Returns
+        -------
+        torch.Tensor
+            Contact forces [num_envs, model.nbody, 3] (cfrc_ext force components).
         """
-        # cfrc_ext is already computed by Warp: [num_envs, num_bodies, 6]
-        # Take first 3 components (forces, ignore torques)
-        forces = self.cfrc_t[..., :3]  # [num_envs, num_bodies, 3]
-
-        # Update history: shift old values right, add current at position 0
-        contact_history_tensor[:] = torch.cat([forces.unsqueeze(1), contact_history_tensor[:, :-1]], dim=1)
+        # cfrc_ext is [num_envs, model.nbody, 6]; take first 3 (forces, drop torque).
+        return self.cfrc_t[..., :3]
 
     def create_root_view(self, addrs: dict) -> BaseMujocoView:
         """Create root state view using zero-copy tensors.
@@ -377,27 +603,6 @@ class WarpBackend(IMujocoBackend):
             DOF accelerations [num_envs, num_dof] - native PyTorch tensor
         """
         return self.qacc_t[:, indices]
-
-    def create_force_view(self, num_bodies: int) -> torch.Tensor:
-        """Return contact force tensor directly (no wrapper needed).
-
-        wp.to_torch() already returns a native PyTorch tensor that:
-        - Shares memory with Warp array (zero-copy)
-        - Supports all PyTorch operations natively
-        - Works seamlessly on GPU
-
-        Parameters
-        ----------
-        num_bodies : int
-            Number of bodies (unused, for interface compatibility)
-
-        Returns
-        -------
-        torch.Tensor
-            Contact forces [num_envs, num_bodies, 3] - native PyTorch tensor
-        """
-        # cfrc_ext is [num_envs, num_bodies, 6], take first 3 components (forces only)
-        return self.cfrc_t[..., :3]
 
     def create_dof_state_view(self, dof_addrs: dict, num_dof: int) -> BaseMujocoView:
         """Create DOF state view using zero-copy GPU tensors.
@@ -494,8 +699,7 @@ class WarpBackend(IMujocoBackend):
         positions = self.xpos_t  # [N, nbody, 3]
 
         # Orientation: convert MuJoCo [w,x,y,z] → holosoma [x,y,z,w]
-        quat_mj = self.xquat_t  # [N, nbody, 4] - [w,x,y,z]
-        orientations = quat_mj[..., [1, 2, 3, 0]]  # [x,y,z,w]
+        orientations = mj_to_holosoma_quat(self.xquat_t)  # [N, nbody, 4]
 
         # Velocities: split cvel [angular(3), linear(3)]
         angular_vel = self.cvel_t[..., 0:3]  # [N, nbody, 3]
@@ -504,62 +708,13 @@ class WarpBackend(IMujocoBackend):
         return positions, orientations, linear_vel, angular_vel
 
     def set_root_state(self, env_ids: torch.Tensor, root_states: torch.Tensor, root_addrs: dict) -> None:
-        """Set robot root states via direct GPU tensor writes.
+        """Set robot root states. The robot root is an actor freejoint, so this
+        delegates to set_actor_state at the robot's qpos/qvel addresses.
 
-        Writes root states directly to GPU tensors without CPU roundtrip.
-        Supports batched updates for multiple environments efficiently.
-
-        Parameters
-        ----------
-        env_ids : torch.Tensor
-            Environment IDs to update [num_selected_envs]
-        root_states : torch.Tensor
-            Root states [num_selected_envs, 13] in holosoma format:
-            [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz]
-        root_addrs : dict
-            Address dictionary with 'robot_qpos_addr' and 'robot_qvel_addr'
+        root_states is [num_selected_envs, 13] in holosoma format; root_addrs carries
+        'robot_qpos_addr' and 'robot_qvel_addr'.
         """
-        # Extract state components
-        pos = root_states[:, :3]  # [N, 3]
-        quat_holo = root_states[:, 3:7]  # [N, 4] [qx, qy, qz, qw]
-        lin_vel = root_states[:, 7:10]  # [N, 3]
-        ang_vel = root_states[:, 10:13]  # [N, 3]
-
-        # Convert quaternion: holosoma [qx,qy,qz,qw] -> MuJoCo [qw,qx,qy,qz]
-        quat_mj = quat_holo[:, [3, 0, 1, 2]]
-
-        # Get addresses
-        qpos_addr = root_addrs["robot_qpos_addr"]
-        qvel_addr = root_addrs["robot_qvel_addr"]
-
-        # Vectorized GPU tensor writes using explicit expand for shape matching
-        N = len(env_ids)
-
-        # Position (3 elements) - explicit expand to [N, 3]
-        col_idx_pos = torch.arange(3, device=env_ids.device) + qpos_addr
-        env_idx = env_ids.unsqueeze(1).expand(N, 3)  # [N, 3]
-        col_idx = col_idx_pos.unsqueeze(0).expand(N, 3)  # [N, 3]
-        self.qpos_t[env_idx, col_idx] = pos
-
-        # Quaternion (4 elements) - explicit expand to [N, 4]
-        col_idx_quat = torch.arange(4, device=env_ids.device) + qpos_addr + 3
-        env_idx = env_ids.unsqueeze(1).expand(N, 4)  # [N, 4]
-        col_idx = col_idx_quat.unsqueeze(0).expand(N, 4)  # [N, 4]
-        self.qpos_t[env_idx, col_idx] = quat_mj
-
-        # Linear velocity (3 elements) - explicit expand to [N, 3]
-        col_idx_lin = torch.arange(3, device=env_ids.device) + qvel_addr
-        env_idx = env_ids.unsqueeze(1).expand(N, 3)  # [N, 3]
-        col_idx = col_idx_lin.unsqueeze(0).expand(N, 3)  # [N, 3]
-        self.qvel_t[env_idx, col_idx] = lin_vel
-
-        # Angular velocity (3 elements) - explicit expand to [N, 3]
-        col_idx_ang = torch.arange(3, device=env_ids.device) + qvel_addr + 3
-        env_idx = env_ids.unsqueeze(1).expand(N, 3)  # [N, 3]
-        col_idx = col_idx_ang.unsqueeze(0).expand(N, 3)  # [N, 3]
-        self.qvel_t[env_idx, col_idx] = ang_vel
-
-        # No mj_forward call - next step() will handle forward kinematics
+        self.set_actor_state(env_ids, root_states, root_addrs["robot_qpos_addr"], root_addrs["robot_qvel_addr"])
 
     def set_dof_state(self, env_ids: torch.Tensor, dof_states: torch.Tensor, dof_addrs: dict) -> None:
         """Set DOF states via direct GPU tensor writes.
@@ -611,3 +766,146 @@ class WarpBackend(IMujocoBackend):
         self.qvel_t[env_idx, qvel_idx] = dof_vel
 
         # No mj_forward call - next step() will handle forward kinematics
+
+    def _batched_slice(self, env_ids: torch.Tensor, addr: int, size: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """(row, col) advanced-index tensors selecting [env_ids, addr:addr+size] as [N, size]."""
+        n = len(env_ids)
+        rows = env_ids.unsqueeze(1).expand(n, size)
+        cols = (torch.arange(size, device=env_ids.device) + addr).unsqueeze(0).expand(n, size)
+        return rows, cols
+
+    def get_actor_state(self, env_ids: torch.Tensor, qpos_addr: int, qvel_addr: int) -> torch.Tensor:
+        """Read a per-env actor freejoint state from GPU storage (zero stale snapshot)."""
+        pose = self.qpos_t[self._batched_slice(env_ids, qpos_addr, 7)]  # [N, 7] = [xyz, qw,qx,qy,qz]
+        vel = self.qvel_t[self._batched_slice(env_ids, qvel_addr, 6)]  # [N, 6] = [v(3), w(3)] body-local ang
+        quat_holo = mj_to_holosoma_quat(pose[:, 3:7])
+        return torch.cat([pose[:, :3], quat_holo, vel], dim=1)  # [N, 13]
+
+    def set_actor_state(self, env_ids: torch.Tensor, states: torch.Tensor, qpos_addr: int, qvel_addr: int) -> None:
+        """Write a per-env actor freejoint state to GPU storage (not a no-op on GPU)."""
+        # qpos freejoint slice is [pos(3), quat_mj(4)]; qvel is [lin(3), ang(3)], contiguous.
+        pose = torch.cat([states[:, :3], holosoma_to_mj_quat(states[:, 3:7])], dim=1)  # [N, 7]
+        self.qpos_t[self._batched_slice(env_ids, qpos_addr, 7)] = pose
+        self.qvel_t[self._batched_slice(env_ids, qvel_addr, 6)] = states[:, 7:13]
+        # No mj_forward call - next step() will handle forward kinematics
+
+    def set_static_body_world_pose(
+        self,
+        body_ids: list[int],
+        positions: torch.Tensor,
+        quats: torch.Tensor | None = None,
+        env_ids: torch.Tensor | None = None,
+    ) -> None:
+        """Place welded (jointless) bodies at a per-env world pose.
+
+        Welded bodies have no qpos slice; their world pose lives in the model's ``body_pos`` /
+        ``body_quat``, expanded per-world (the mechanism randomization uses). ``positions`` is
+        ``[len(env_ids), len(body_ids), 3]``; ``quats`` (xyzw) the matching ``[..., 4]`` or
+        ``None`` to leave orientation as compiled; ``env_ids`` selects the worlds (default: all).
+
+        ``body_pos``/``body_quat`` are expanded per-world in ``__init__`` before graph capture, so
+        the writes here are in-place into the arrays the captured graph references.
+        ``mjw.forward`` runs outside the graph, into the same data the graph uses, so the next
+        ``step()`` sees the new pose. Forward kinematics does not refresh a welded geom's collision
+        pose, so :meth:`_sync_static_geom_xpos` writes ``geom_xpos``/``geom_xmat`` for these bodies.
+        """
+        import warp as wp
+
+        from .randomization import expand_model_fields
+
+        fields = ["body_pos"] + (["body_quat"] if quats is not None else [])
+        expand_model_fields(self.mjw_model, nworld=self.num_envs, fields_to_expand=fields)
+        self.warp_model_bridge.clear_cache()
+
+        body_pos = wp.to_torch(self.mjw_model.body_pos)  # [num_envs, nbody, 3], shares GPU memory
+        if env_ids is None:
+            body_pos[:, body_ids, :] = positions.to(body_pos.dtype)
+        else:
+            # Advanced index the selected worlds: env_ids[:, None] broadcasts against body_ids.
+            body_pos[env_ids.to(body_pos.device)[:, None], body_ids, :] = positions.to(body_pos.dtype)
+        if quats is not None:
+            body_quat = wp.to_torch(self.mjw_model.body_quat)  # [num_envs, nbody, 4] wxyz
+            # quats is a torch.Tensor here, but holosoma_to_mj_quat's return widens to the np|torch
+            # union (only mypy sees the union; when torch is unstubbed it is Any and this is a no-op).
+            quat_mj = holosoma_to_mj_quat(quats).to(body_quat.dtype)  # type: ignore[union-attr]
+            if env_ids is None:
+                body_quat[:, body_ids, :] = quat_mj
+            else:
+                body_quat[env_ids.to(body_quat.device)[:, None], body_ids, :] = quat_mj
+        with wp.ScopedDevice(self.mjw_device):
+            import mujoco_warp as mjw
+
+            mjw.forward(self.mjw_model, self.mjw_data)  # refresh xpos/xquat from the new body_pos/quat
+
+        self._sync_static_geom_xpos(body_ids, env_ids)
+
+    def offset_world_cameras(self, cam_ids: list[int], env_origins: torch.Tensor) -> None:
+        """Shift world-mount cameras' per-world ``cam_pos`` by each env's origin.
+
+        A ``target_kind="world"`` camera is a worldbody child (``cam_bodyid==0``): unlike a
+        body-attached camera, its pose does not inherit the per-env body offset, so in a multi-env
+        run every world's camera would otherwise sit at the shared spec pose and see only env 0's
+        scene. ``cam_pos`` is expanded per world in ``__init__`` (in ``_PER_WORLD_FIELDS``, before the
+        step-graph capture), and the ``camlight`` kernel that computes ``cam_xpos`` reads it per world
+        each step, so adding ``env_origins`` here — after capture — reaches the live render exactly
+        like ``set_static_body_world_pose`` writes ``body_pos``. No-op at ``num_envs==1``.
+
+        ``cam_ids`` are compiled MuJoCo camera ids (world-mount only); ``env_origins`` is
+        ``[num_envs, 3]``.
+        """
+        if self.num_envs <= 1 or not cam_ids:
+            return
+        import warp as wp
+
+        cam_pos = wp.to_torch(self.mjw_model.cam_pos)  # [num_envs, ncam, 3], shares GPU memory
+        origins = env_origins.to(cam_pos.device, cam_pos.dtype)  # [num_envs, 3]
+        for cam_id in cam_ids:
+            cam_pos[:, cam_id, :] += origins
+        with wp.ScopedDevice(self.mjw_device):
+            import mujoco_warp as mjw
+
+            mjw.forward(self.mjw_model, self.mjw_data)  # recompute cam_xpos from the shifted cam_pos
+
+    def _sync_static_geom_xpos(self, body_ids: list[int], env_ids: torch.Tensor | None) -> None:
+        """Refresh ``geom_xpos``/``geom_xmat`` for the geoms of welded ``body_ids``, per world.
+
+        Forward kinematics skips world-static geoms, so it never recomposes their collision pose
+        from a moved body. This launches the same composition over just these geoms, reading the
+        per-env ``xpos``/``xquat`` forwarded above.
+        """
+        import warp as wp
+
+        geom_ids = self._geom_ids_for_bodies(body_ids)
+        if geom_ids.shape[0] == 0:  # type: ignore[attr-defined]
+            return
+        worlds = (
+            wp.from_torch(torch.arange(self.num_envs, dtype=torch.int32, device=self.device), dtype=wp.int32)
+            if env_ids is None
+            else wp.from_torch(env_ids.to(self.device, torch.int32).contiguous(), dtype=wp.int32)
+        )
+        m, d = self.mjw_model, self.mjw_data
+        with wp.ScopedDevice(self.mjw_device):
+            wp.launch(
+                _static_geom_local_to_global,
+                dim=(worlds.shape[0], geom_ids.shape[0]),  # type: ignore[attr-defined]
+                inputs=[worlds, geom_ids, m.geom_bodyid, m.geom_pos, m.geom_quat, d.xpos, d.xquat],
+                outputs=[d.geom_xpos, d.geom_xmat],
+            )
+
+    def _geom_ids_for_bodies(self, body_ids: list[int]) -> object:
+        """Warp ``int32`` array of every geom id owned by ``body_ids`` (cached; model is static)."""
+        import warp as wp
+
+        cache: dict[tuple[int, ...], object] | None = getattr(self, "_static_geom_id_cache", None)
+        if cache is None:
+            cache = {}
+            self._static_geom_id_cache = cache
+        key = tuple(body_ids)
+        if key not in cache:
+            ids: list[int] = []
+            for body_id in body_ids:
+                adr = int(self.model.body_geomadr[body_id])
+                ids.extend(range(adr, adr + int(self.model.body_geomnum[body_id])))
+            with wp.ScopedDevice(self.mjw_device):
+                cache[key] = wp.array(ids, dtype=wp.int32)
+        return cache[key]

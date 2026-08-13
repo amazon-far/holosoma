@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 import mujoco
 from loguru import logger
 
+from holosoma.simulator.mujoco.backends.base import apply_sensor_scene_flags
 from holosoma.simulator.shared.video_recorder import VideoRecorderInterface
 
 if TYPE_CHECKING:
@@ -41,9 +42,12 @@ class MuJoCoVideoRecorder(VideoRecorderInterface):
         # Override typing for mypy
         self.simulator: MuJoCo = simulator
 
-        # Thread-local renderer storage (created lazily via properties)
+        # Renderer/camera are created lazily via properties (the Renderer holds a GL context that is
+        # thread-affine, so it must be built on the recording thread).
         self._renderer: mujoco.Renderer | None = None
         self._camera: mujoco.MjvCamera | None = None
+
+        self.scene_option = apply_sensor_scene_flags(simulator.debug_viz_enabled)
 
         logger.info(
             f"MuJoCo video recorder initialized - {'threaded' if config.use_recording_thread else 'synchronous'} mode"
@@ -123,7 +127,7 @@ class MuJoCoVideoRecorder(VideoRecorderInterface):
         self._update_camera_position(self.camera)
 
         # Render frame using thread-appropriate renderer
-        self.renderer.update_scene(render_data, camera=self.camera)
+        self.renderer.update_scene(render_data, camera=self.camera, scene_option=self.scene_option)
         frame = self.renderer.render()
 
         if frame is None:

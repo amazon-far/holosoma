@@ -20,12 +20,14 @@ import numpy as np
 import numpy.typing as npt
 from loguru import logger
 
+from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.shared.camera_controller import CameraController, CameraParameters
 from holosoma.utils.video_utils import create_video, format_command_labels, overlay_text_on_image
 
 if TYPE_CHECKING:
     from holosoma.config_types.video import VideoConfig
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+    from holosoma.simulator.base_simulator.hooks import HookRegistry
 
 
 class VideoRecorderInterface(ABC):
@@ -84,9 +86,6 @@ class VideoRecorderInterface(ABC):
         # Camera controller for unified camera positioning
         self.camera_controller = CameraController(config.camera, simulator)
 
-        # Frame decimation counter for capturing at control frequency
-        self._frame_counter: int = 0
-
         # Performance timing statistics
         self._frame_times: list[float] = []
 
@@ -97,6 +96,13 @@ class VideoRecorderInterface(ABC):
 
         if config.use_recording_thread:
             self._setup_threaded_recording()
+
+    def register_hooks(self, hooks: HookRegistry) -> None:
+        """Register video lifecycle hooks with the simulator loop."""
+        hooks.add(Phase.EPISODE_START, self.on_episode_start, name="video.on_episode_start")
+        hooks.add(Phase.EPISODE_END, self.on_episode_end, name="video.on_episode_end")
+        hooks.add(Phase.FRAME_END, self.capture_frame, name="video.capture_frame")
+        hooks.add(Phase.CLOSE, self.cleanup, name="video.cleanup")
 
     def _setup_threaded_recording(self) -> None:
         """Shared threading setup logic."""
@@ -174,12 +180,8 @@ class VideoRecorderInterface(ABC):
     def capture_frame(self, env_id: int = 0) -> None:
         """Shared frame capture dispatch logic.
 
-        This method is called during each simulation step and handles the logic
-        for determining whether to actually capture a frame based on recording
-        state, environment filtering, and control decimation.
-
-        Frames are captured at control frequency (not physics frequency) by
-        only capturing on every Nth physics step, where N = control_decimation.
+        Registered on FRAME_END, which fires once per frame, so this captures at control frequency
+        without tracking physics steps. Filters on recording state and record_env_id.
 
         Parameters
         ----------
@@ -188,14 +190,6 @@ class VideoRecorderInterface(ABC):
         """
         # Only capture frames when recording is active and from the correct environment
         if not self._is_recording or env_id != self.config.record_env_id:
-            return
-
-        # Increment frame counter for decimation tracking
-        self._frame_counter += 1
-
-        # Only capture frame at control frequency (every control_decimation physics steps)
-        control_decimation = self.simulator.simulator_config.sim.control_decimation
-        if self._frame_counter % control_decimation != 0:
             return
 
         if self.config.use_recording_thread:
@@ -431,7 +425,7 @@ class VideoRecorderInterface(ABC):
             # Frames are captured at control_frequency = sim_fps / control_decimation
             # To achieve desired playback rate: actual_fps = control_frequency * playback_rate
             sim_config = self.simulator.simulator_config.sim
-            control_frequency = sim_config.fps / sim_config.control_decimation
+            control_frequency = sim_config.fps / sim_config.control_decimation_steps
             display_fps = control_frequency * self.config.playback_rate
 
             # Get save directory
@@ -517,9 +511,6 @@ class VideoRecorderInterface(ABC):
         """
         # Initialize frame buffer for new episode
         self._clear_frame_buffer()
-
-        # Reset frame counter for decimation tracking
-        self._frame_counter = 0
 
         # Reset camera controller to start from current robot position
         self.camera_controller.reset()

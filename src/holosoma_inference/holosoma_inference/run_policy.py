@@ -15,13 +15,12 @@ from __future__ import annotations
 import sys
 import traceback
 
-import tyro
 from loguru import logger
 
 from holosoma_inference.config.config_types.inference import InferenceConfig
 from holosoma_inference.config.config_values.inference import get_annotated_inference_config
-from holosoma_inference.config.utils import TYRO_CONFIG
 from holosoma_inference.policies.dual_mode import DualModePolicy, _select_policy_class
+from holosoma_inference.utils.config_registry import parse_config
 from holosoma_inference.utils.misc import restore_terminal_settings
 
 
@@ -160,18 +159,21 @@ def _split_secondary_args(argv: list[str]) -> tuple[list[str], list[str]]:
 def main(annotated_config=None):
     """Main entry point. Extensions can pass their own AnnotatedInferenceConfig."""
     import argparse
+    import os
 
-    from holosoma_inference.config.config_values.inference import DEFAULTS
+    # Interactive entrypoint: default to DEBUG so per-tick logs (e.g. Motion
+    # timestep) are visible. Service mode keeps the loguru default (INFO).
+    os.environ.setdefault("LOGURU_LEVEL", "DEBUG")
 
-    # Pre-parse --secondary-preset and --secondary none before tyro.
-    # Tyro can't build a CLI parser for InferenceConfig | None when it
-    # contains dict[str, Any] fields, so we handle secondary selection ourselves.
+    from holosoma_inference.config.config_values.inference import INFERENCE_REGISTRY
+
+    # Handle secondary policy selection before parsing the primary config.
     pre = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     pre.add_argument(
         "--secondary-preset",
         default=None,
         metavar="NAME",
-        help=f"Select a preset for the secondary policy. Choices: {list(DEFAULTS.keys())}",
+        help=f"Select a preset for the secondary policy. Choices: {list(INFERENCE_REGISTRY.keys())}",
     )
     pre.add_argument("--secondary", default=None, help="Set to 'none' to disable dual-mode.")
     known, remaining = pre.parse_known_args()
@@ -181,37 +183,34 @@ def main(annotated_config=None):
 
     # Strip --secondary.* args from remaining so tyro doesn't see them
     primary_argv, secondary_argv = _split_secondary_args(remaining)
-    sys.argv = [sys.argv[0]] + primary_argv
 
     if annotated_config is None:
-        # Use factory function to lazily load extension configs
-        annotated_config = get_annotated_inference_config()
-    config = tyro.cli(annotated_config, config=TYRO_CONFIG)
+        # parse_config loads presets before this factory builds the subcommand type.
+        annotated_config = get_annotated_inference_config
+    config = parse_config(annotated_config, args=primary_argv)
 
     from dataclasses import replace as _replace
 
     if disable_secondary:
         config = _replace(config, secondary=None)
     elif secondary_preset:
-        preset = DEFAULTS.get(secondary_preset)
+        preset = INFERENCE_REGISTRY.get(secondary_preset)
         if preset is None:
             logger.error(f"Unknown secondary preset: {secondary_preset}")
-            logger.info(f"Available presets: {list(DEFAULTS.keys())}")
+            logger.info(f"Available presets: {list(INFERENCE_REGISTRY.keys())}")
             sys.exit(1)
         preset = _replace(preset, secondary=None)
 
         # Parse secondary overrides against the preset defaults
         if secondary_argv:
-            sys.argv = [sys.argv[0]] + secondary_argv
-            secondary = tyro.cli(InferenceConfig, default=preset, config=TYRO_CONFIG)
+            secondary = parse_config(InferenceConfig, args=secondary_argv, default=preset)
         else:
             secondary = preset
         config = _replace(config, secondary=secondary)
     elif secondary_argv:
         # --secondary.* overrides on the config's default secondary
         if config.secondary is not None:
-            sys.argv = [sys.argv[0]] + secondary_argv
-            secondary = tyro.cli(InferenceConfig, default=config.secondary, config=TYRO_CONFIG)
+            secondary = parse_config(InferenceConfig, args=secondary_argv, default=config.secondary)
             config = _replace(config, secondary=secondary)
         else:
             logger.warning("--secondary.* args ignored: no default secondary in this config")

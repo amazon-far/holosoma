@@ -1,0 +1,32 @@
+<?xml version="1.0" ?>
+<!-- Rubber duck scene object. Mesh (RubberDuck.obj) is authored in centimeters and
+     Y-up, so scale 0.01 converts to meters and rpy rotates Y-up -> Z-up. Footprint
+     after scaling is ~0.040 x 0.072 m, ~0.058 m tall. -->
+<robot name="rubber_duck">
+  <dynamics damping="0.5" friction="0.9"/>
+  <link name="baseLink">
+    <inertial>
+      <mass value="0.05"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="3.6e-5" ixy="0" ixz="0" iyy="2.8e-5" iyz="0" izz="2.1e-5"/>
+    </inertial>
+    <contact>
+      <lateral_friction value="0.9"/>
+      <rolling_friction value="0.5"/>
+      <stiffness value="30000"/>
+      <damping value="1000"/>
+    </contact>
+    <visual>
+      <origin rpy="1.5708 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="RubberDuck.obj" scale="0.01 0.01 0.01"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin rpy="1.5708 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="RubberDuck.obj" scale="0.01 0.01 0.01"/>
+      </geometry>
+    </collision>
+  </link>
+</robot>

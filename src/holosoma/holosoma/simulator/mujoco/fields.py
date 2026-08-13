@@ -34,7 +34,7 @@ def collect_required_fields(*managers: Any) -> list[str]:
 
     Examples
     --------
-    >>> from holosoma.simulator.mujoco.field_preparation import collect_required_fields
+    >>> from holosoma.simulator.mujoco.fields import collect_required_fields
     >>> fields = collect_required_fields(randomization_manager, observation_manager)
     >>> # fields might be ["body_mass", "geom_friction", "body_ipos"]
     """
@@ -123,7 +123,7 @@ def prepare_fields(simulator, field_names: list[str]) -> None:
     logger.info(f"Preparing {len(field_names)} fields for per-environment operations")
 
     # Expand model fields (internal implementation detail)
-    from holosoma.simulator.mujoco.backends.warp_randomization import expand_model_fields
+    from holosoma.simulator.mujoco.backends.randomization import expand_model_fields
 
     expand_model_fields(simulator.backend.mjw_model, nworld=simulator.num_envs, fields_to_expand=field_names)
 

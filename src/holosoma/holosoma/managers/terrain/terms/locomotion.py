@@ -150,7 +150,7 @@ class TerrainLocomotion(TerrainTermBase):
         y = points_1d
         x = points_1d
 
-        grid_x, grid_y = torch.meshgrid(x, y)
+        grid_x, grid_y = torch.meshgrid(x, y, indexing="ij")
 
         num_base_height_points = grid_x.numel()
         points = torch.zeros(

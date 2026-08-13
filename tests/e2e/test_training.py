@@ -138,6 +138,8 @@ ISAACSIM_ONLY_WORKFLOWS = [
 ]
 
 
+# Default workflows run on simulator.isaacgym (the experiment-preset default).
+@pytest.mark.isaacgym
 @pytest.mark.parametrize(
     "workflow_name",
     WORKFLOWS,

@@ -149,10 +149,12 @@ class BasePolicy:
         if hasattr(self, "_shared_hardware_source"):
             self.interface = self._shared_hardware_source.interface
             return
-        # Derive use_joystick for SDK: True if interface/joystick is used for either channel
+        # The SDK's own wireless-controller path is only needed when an
+        # "interface" channel is selected.  The "joystick" channel is read
+        # via host-side evdev (UsbJoystickInput) and does not touch the SDK.
         vel = self.config.task.velocity_input
         other = self.config.task.state_input
-        need_joystick = bool({"interface", "joystick"} & {vel, other})
+        need_joystick = "interface" in {vel, other}
         self.interface = create_interface(
             self.robot_config,
             self.config.task.domain_id,
@@ -204,9 +206,8 @@ class BasePolicy:
     def _resolve_model_path(self, model_path: str) -> str:
         """Resolve model path, downloading from W&B if required."""
         if model_path.startswith(("wandb://", "https://")):
-            download_dir = self.config.task.wandb_download_dir
             logger.info(f"Downloading checkpoint from W&B: {model_path}")
-            checkpoint_path = load_checkpoint(None, model_path, download_dir)
+            checkpoint_path = load_checkpoint(None, model_path)
             resolved_path = str(checkpoint_path)
             logger.info("Checkpoint downloaded to: %s", resolved_path)
             return resolved_path
@@ -707,6 +708,19 @@ class BasePolicy:
                 kp_override=kp_override,
                 kd_override=kd_override,
             )
+
+        # Telemetry hook: fires every control tick in every state (policy,
+        # stiff-hold, init ramp) with the final executed command. Default
+        # no-op; override to publish feedback (e.g. ROS topics) without
+        # touching the control loop.
+        self._on_command_sent(self.cmd_q, robot_state_data)
+
+    def _on_command_sent(self, cmd_q, robot_state_data) -> None:
+        """Hook called after each executed command is sent. Override to observe.
+
+        cmd_q: (num_dofs,) full-body joint command actually sent this tick.
+        robot_state_data: (1, state_dim) latest robot state used this tick.
+        """
 
     def _get_manual_command(self, robot_state_data):
         """Optional manual command when policy control is disabled."""

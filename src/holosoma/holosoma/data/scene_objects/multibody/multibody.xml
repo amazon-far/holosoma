@@ -1,0 +1,15 @@
+<!-- Multi-body scene file (MJCF) for 1->N loading tests. Two top-level worldbody
+     bodies: 'free_box' has a <freejoint/> (registered free / INDIVIDUAL); 'static_post'
+     has no joint (registered static / SCENE). static_post sits at a +0.5 m x offset from
+     free_box, so the body-to-body offset is a known, cross-backend-checkable [0.5,0,0]. -->
+<mujoco model="multibody">
+  <worldbody>
+    <body name="free_box" pos="0 0 0">
+      <freejoint/>
+      <geom type="box" size="0.05 0.05 0.05" mass="0.1"/>
+    </body>
+    <body name="static_post" pos="0.5 0 0">
+      <geom type="box" size="0.05 0.05 0.2" mass="0.1"/>
+    </body>
+  </worldbody>
+</mujoco>

@@ -23,6 +23,10 @@ ROS2_COMMAND_MAP: dict[str, StateCommand] = {
     "walk": StateCommand.WALK,
     "stand": StateCommand.STAND,
     "switch_mode": StateCommand.SWITCH_MODE,
+    # Emergency exit over ROS2, parity with the joystick L1+R1 kill. Triggers
+    # the policy's KILL handler (sys.exit(0)) so the process stops sending
+    # commands — the in-band kill for ros2/injected state input.
+    "kill": StateCommand.KILL,
 }
 
 

@@ -1,0 +1,33 @@
+<?xml version="1.0" ?>
+<!-- Rubber duck scaled ~50x larger than rubber_duck.urdf (scale 0.5 instead of 0.01).
+     Mesh (RubberDuck.obj) is authored in centimeters and Y-up, so rpy rotates Y-up -> Z-up.
+     Footprint after scaling is ~2.0 x 3.6 m, ~2.9 m tall. Mass scaled 50x and inertia
+     ~1.25e5x (m*L^2) relative to the small duck. -->
+<robot name="huge_rubber_duck">
+  <dynamics damping="0.5" friction="0.9"/>
+  <link name="baseLink">
+    <inertial>
+      <mass value="2.5"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="4.5" ixy="0" ixz="0" iyy="3.5" iyz="0" izz="2.625"/>
+    </inertial>
+    <contact>
+      <lateral_friction value="0.9"/>
+      <rolling_friction value="0.5"/>
+      <stiffness value="30000"/>
+      <damping value="1000"/>
+    </contact>
+    <visual>
+      <origin rpy="1.5708 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="RubberDuck.obj" scale="0.5 0.5 0.5"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin rpy="1.5708 0 0" xyz="0 0 0"/>
+      <geometry>
+        <mesh filename="RubberDuck.obj" scale="0.5 0.5 0.5"/>
+      </geometry>
+    </collision>
+  </link>
+</robot>

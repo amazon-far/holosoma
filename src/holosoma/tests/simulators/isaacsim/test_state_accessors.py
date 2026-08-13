@@ -5,17 +5,21 @@ from unittest.mock import Mock
 import pytest
 import torch
 
-from holosoma.simulator.isaacsim.proxy_utils import AllRootStatesProxy, RootStatesProxy
+from holosoma.simulator.isaacsim.proxy_utils import RootStatesProxy
 from holosoma.simulator.isaacsim.state_adapter import IsaacSimStateAdapter
 from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw
 from holosoma.simulator.shared.object_registry import ObjectRegistry, ObjectType
+
+# Pure torch/mock accessor tests (no isaaclab); runs in the no_sim CPU job, not the isaacsim job.
+pytestmark = pytest.mark.no_sim
 
 
 class TestStateAccessors:
     """Test state access patterns for IsaacSim objects.
 
-    Covers AllRootStatesProxy, RootStateProxy ObjectRegistry, and IsaacSimStateAdapter
-    Relies on the IsaacSimStateAdapter for state access instead of mocking isaaclab and/or running IsaacSim.
+    Covers the IsaacSimStateAdapter index path (``get_states_by_index`` /
+    ``write_states_by_index``), RootStatesProxy, and ObjectRegistry. End-to-end behavior of the
+    unified view on a live sim is covered by ``all_root_states_unified_assert.py``.
     """
 
     # fmt: off
@@ -114,10 +118,38 @@ class TestStateAccessors:
         return mock_object
 
     def _create_mock_robot_states(self, xyzw_state: torch.Tensor):
-        """Test helper to create a mock robot states object with the given xyzw state."""
+        """Test helper to create a mock robot states object with the given xyzw state.
+
+        NOTE: this builds a *standalone* read-only mock (returns the given constant) for the
+        cases that only read once. For a genuine write->read round-trip use
+        ``_bind_robot_states_to_write_tensor`` so the read observes what the write actually did.
+        """
         mock_robot_states = Mock()
         mock_robot_states.__getitem__ = Mock(return_value=xyzw_state)
         return mock_robot_states
+
+    def _bind_robot_states_to_write_tensor(self, adapter):
+        """Back the robot-states *read* path with the SAME tensor the *write* path mutates.
+
+        The production robot read path (``IsaacSimStateAdapter.get_object_states``) returns
+        ``self._robot_states[env_ids]`` (already xyzw), while the write path mutates a separate
+        ``self._robot`` handle's wxyz tensor via ``write_root_pose_to_sim`` /
+        ``write_root_velocity_to_sim``. If the robot-states mock just returns a hand-injected
+        constant, the read can never observe the write — so a regression in pose/velocity
+        writing OR the xyzw<->wxyz conversion is invisible.
+
+        Here we point the robot-states mock's ``__getitem__`` at the robot handle's backing wxyz
+        tensor (the one ``write_object_states`` actually writes into), converting wxyz->xyzw on
+        the way out — exactly mirroring production (write does xyzw->wxyz in, this read does
+        wxyz->xyzw out). A round-trip ``write(state) -> read()`` therefore returns ``state``
+        ONLY if both the write landed and the conversion is correct; drop either and it fails.
+        """
+        write_tensor_wxyz = adapter._robot._internal_state  # mutated by write_root_*_to_sim
+
+        def read_xyzw(env_ids):
+            return fullstate_wxyz_to_xyzw(write_tensor_wxyz[env_ids])
+
+        adapter._robot_states.__getitem__ = Mock(side_effect=read_xyzw)
 
     def _create_state_adapter(self, object_configs: list[tuple], default_robot_wxyz_state=None, num_envs=1):
         """Test helper to create a IsaacSimStateAdapter with mocks
@@ -192,28 +224,6 @@ class TestStateAccessors:
                 else:
                     raise NotImplementedError("Unknown type")
 
-        # Create scene collection mock for scene objects
-        scene_collection_mock = None
-        scene_objects = [
-            obj_name for obj_type, objects_dict in object_configs if obj_type == "scene" for obj_name in objects_dict
-        ]
-        if scene_objects:
-            scene_collection_mock = Mock()
-            scene_collection_data = Mock()
-            # Create mock object_state_w tensor for scene objects
-            scene_state_tensor = torch.zeros(num_envs, len(scene_objects), 13, dtype=torch.float32)
-            scene_state_tensor[:, :, 6] = 1.0  # Set identity quaternions
-            scene_collection_data.object_state_w = scene_state_tensor
-            scene_collection_mock.data = scene_collection_data
-
-            def write_object_state_to_sim(states, env_ids):
-                scene_collection_data.object_state_w[env_ids] = states
-
-            scene_collection_mock.write_object_state_to_sim = write_object_state_to_sim
-
-            # Add to rigid objects
-            all_rigid_objects["usd_scene_objects"] = scene_collection_mock
-
         # Setup scene with all rigid objects
         mock_scene = Mock()
         mock_scene.env_origins = torch.zeros(num_envs, 3)
@@ -275,30 +285,30 @@ class TestStateAccessors:
         actual_state = proxy[self.env_ids, :]
         self._assert_full_state_equal(actual_state, self.robot_new_xyzw, "Write")
 
-    def test_robot_state_roundtrip_via_unified_proxy(self):
-        """Test robot state read/write using AllRootStatesProxy"""
+    def test_robot_state_roundtrip_via_index_path(self):
+        """Robot state read/write through the adapter index path (get/write_states_by_index)."""
 
         # Create StateAdapter with internal IsaacSim robot states
         mock_robot_states = self._create_mock_robot_states(self.robot_xyzw)
         object_configs = [("robot", {"robot": mock_robot_states})]
         adapter = self._create_state_adapter(object_configs, self.robot_wxyz)
+        # Back the READ path with the SAME wxyz tensor the WRITE path mutates, so the
+        # round-trip below genuinely observes the write + the xyzw<->wxyz conversion (not a
+        # separately-injected constant).
+        self._bind_robot_states_to_write_tensor(adapter)
 
-        # Proxy uses adapter
-        proxy = AllRootStatesProxy(adapter)
+        # robot is the only actor -> index 0 in env 0
+        indices = torch.tensor([0])
 
         # Test read
-        actual_result = proxy[self.env_ids, :]
+        actual_result = adapter.get_states_by_index(indices)
         self._assert_full_state_equal(actual_result, self.robot_xyzw, "Read")
 
-        # Test write (via AllRootStatesProxy __setitem__ and __getitem__)
-        proxy[self.env_ids, :] = self.robot_new_xyzw
-
-        # Verify the write by reading back through the proxy (full roundtrip test)
-        # Note: The adapter internally reads from robot_states so update that mock
-        mock_robot_states.__getitem__ = Mock(return_value=self.robot_new_xyzw)
-
-        # Read back and verify
-        actual_result_after_write = proxy[self.env_ids, :]
+        # Test write via the index path, then read back. The read is now backed by the write
+        # tensor, so this fails if the pose/velocity write is a no-op or the xyzw->wxyz->xyzw
+        # conversion is dropped.
+        adapter.write_states_by_index(indices, self.robot_new_xyzw)
+        actual_result_after_write = adapter.get_states_by_index(indices)
         self._assert_full_state_equal(actual_result_after_write, self.robot_new_xyzw, "Write roundtrip")
 
     def test_robot_states_roundtrip_via_state_adapter(self):
@@ -307,18 +317,19 @@ class TestStateAccessors:
         mock_robot_states = self._create_mock_robot_states(self.robot_xyzw)
         object_configs = [("robot", {"robot": mock_robot_states})]
         adapter = self._create_state_adapter(object_configs, self.robot_wxyz)
+        # Back the READ path with the wxyz tensor the WRITE path mutates (see helper docstring).
+        self._bind_robot_states_to_write_tensor(adapter)
 
         # Test read
         actual_state = adapter.get_object_states("robot", self.env_ids)
         self._assert_full_state_equal(actual_state, self.robot_xyzw, "Robot read")
 
-        # Test write
+        # Test write, then read back the SAME tensor it mutated. This exercises the real
+        # write_root_pose_to_sim / write_root_velocity_to_sim split AND the xyzw->wxyz
+        # conversion in write_object_states (state_adapter ~line 114): a dropped conversion or a
+        # no-op write would make the read-back disagree with robot_new_xyzw and fail.
         adapter.write_object_states("robot", self.robot_new_xyzw, self.env_ids)
 
-        # Note: The adapter internally reads from robot_states so update that mock
-        mock_robot_states.__getitem__ = Mock(return_value=self.robot_new_xyzw)
-
-        # Read back and verify
         actual_result_after_write = adapter.get_object_states("robot", self.env_ids)
         self._assert_full_state_equal(actual_result_after_write, self.robot_new_xyzw, "Write roundtrip")
 
@@ -337,57 +348,59 @@ class TestStateAccessors:
         actual_result_after_write = adapter.get_object_states("box", self.env_ids)
         self._assert_full_state_equal(actual_result_after_write, self.box_new_xyzw, "Write")
 
-    def test_object_states_roundtrip_via_unified_proxy(self):
-        """Test individual object state read/write roundtrip using AllRootStatesProxy"""
+    def test_object_states_roundtrip_via_index_path(self):
+        """Individual object read/write through the adapter index path."""
         # Create adapter with individual object
         object_configs = [("individual", {"box": self.box_wxyz})]
         adapter = self._create_state_adapter(object_configs)
-        proxy = AllRootStatesProxy(adapter)
+        indices = torch.tensor([0])  # box is the only actor
 
         # Test read (should convert wxyz → xyzw)
-        actual_state = proxy[self.env_ids, :]
+        actual_state = adapter.get_states_by_index(indices)
         self._assert_full_state_equal(actual_state, self.box_xyzw, "Read")
 
         # Test write (should convert xyzw → wxyz internally)
-        proxy[self.env_ids, :] = self.box_new_xyzw
+        adapter.write_states_by_index(indices, self.box_new_xyzw)
 
         # Test roundtrip - read back to verify write worked
-        actual_after_write = proxy[self.env_ids, :]
+        actual_after_write = adapter.get_states_by_index(indices)
         self._assert_full_state_equal(actual_after_write, self.box_new_xyzw, "Roundtrip")
 
-    def test_multiple_envs_and_objects_roundtrip_via_unified_proxy(self):
-        """Test object types via unified proxy with 2 environments"""
+    def test_multiple_envs_and_objects_roundtrip_via_index_path(self):
+        """Multi-object, multi-env read/write through the adapter index path."""
         # Create real adapter with multiple object types and 2 environments
         mock_robot_states = self._create_mock_robot_states(self.multi_robot_xyzw)
         object_configs = [("robot", {"robot": mock_robot_states}), ("individual", {"box": self.multi_box_wxyz})]
         adapter = self._create_state_adapter(object_configs, self.multi_robot_wxyz, num_envs=2)
-
-        proxy = AllRootStatesProxy(adapter)
+        # Back the robot READ path with the wxyz tensor the WRITE path mutates, so the robot
+        # rows of the round-trip below observe the real write (the box rows already round-trip
+        # through the box mock's own backing tensor).
+        self._bind_robot_states_to_write_tensor(adapter)
 
         # Test read - should concatenate robot + box states (2 objects x 2 envs = 4 states)
         nobjects = torch.arange(4)
-        actual_states = proxy[nobjects, :]  # 2 objects x 2 envs = 4 states
+        actual_states = adapter.get_states_by_index(nobjects)  # 2 objects x 2 envs = 4 states
 
-        # Expected states in xyzw format (what the proxy should return)
+        # Expected states in xyzw format (what the index path should return)
         expected_states = torch.cat([self.multi_robot_xyzw, self.multi_box_xyzw], dim=0)
         self._assert_full_state_equal(actual_states, expected_states, "Multi-object read")
 
         # Test write
         new_states = torch.zeros(4, 13, dtype=torch.float32)
         new_states[:, 6] = 1.0  # Set identity quaternions
-        proxy[nobjects, :] = new_states
+        adapter.write_states_by_index(nobjects, new_states)
 
-        # Update mock robot states to reflect the write operation for verification
-        mock_robot_states.__getitem__ = Mock(return_value=new_states[:2])  # Robot states for both envs
-
-        # Verify by reading back the states (i.e, through __setitem__ and __getitem___)
-        actual_states_after_write = proxy[nobjects, :]
+        # Read back. Both the robot rows (backed by the write tensor) and the box rows (own
+        # backing tensor) now reflect what the write actually wrote, so a dropped write or a bad
+        # conversion on either branch fails this assertion.
+        actual_states_after_write = adapter.get_states_by_index(nobjects)
         self._assert_full_state_equal(actual_states_after_write, new_states, "Write verification")
 
-    def test_reset_environments_via_unified_proxy(self):
-        """Test multi-environments and multi-objects covering slicing for partial and batch updates.
+    def test_reset_environments_via_index_path(self):
+        """Multi-env, multi-object partial/batch reset through the adapter index path.
 
-        Resets the robot and object states in one environment.
+        Covers strided per-env subset writes, read-modify-write of pose-only columns, and the
+        dirty-flag bookkeeping.
         """
 
         # Setup comprehensive multi-object scenario with scene objects (2 envs)
@@ -403,20 +416,17 @@ class TestStateAccessors:
             ("individual", box_configs),
         ]
         adapter = self._create_state_adapter(object_configs, self.multi_robot_wxyz, num_envs=2)
-        proxy = AllRootStatesProxy(adapter)
+        registry = adapter._object_registry
 
         expected_total_objects = 10  # 1 robot + 1 table + 3 boxes, each in 2 envs
-        assert proxy.shape[0] == expected_total_objects, (
-            f"Expected {expected_total_objects} total objects, got {proxy.shape[0]}"
+        assert len(registry.objects) * registry.num_envs == expected_total_objects, (
+            f"Expected {expected_total_objects} total objects, got {len(registry.objects) * registry.num_envs}"
         )
-        assert proxy.shape[1] == 13, f"Expected 13 state elements, got {proxy.shape[1]}"
-        assert proxy.device == adapter.device, "Proxy device should match adapter device"
-        assert proxy.dtype == torch.float32, f"Expected float32 dtype, got {proxy.dtype}"
 
         # Get initial poses from registry (covers get_initial_poses_batch)
         all_objects = ["table", "robot"] + box_names
         env_ids = torch.tensor([0, 1])
-        initial_poses = adapter._object_registry.get_initial_poses_batch(all_objects, env_ids)
+        initial_poses = registry.get_initial_poses_batch(all_objects, env_ids)
 
         # Verify initial poses shape: (5 objects * 2 envs, 7)
         assert initial_poses.shape == (len(all_objects) * 2, 7), (
@@ -424,43 +434,43 @@ class TestStateAccessors:
         )
 
         # Check get_object_indices
-        box_indices = adapter._object_registry.get_object_indices(box_names, env_ids=None)
+        box_indices = registry.get_object_indices(box_names, env_ids=None)
         assert box_indices.shape == (num_boxes * 2,), f"Expected ({num_boxes * 2},) indices, got {box_indices.shape}"
 
         # Capture original states for env_ids=0 before reset operations
         env_0_ids = torch.tensor([0])
-        env_0_indices = adapter._object_registry.get_object_indices(["robot", "table"] + box_names, env_0_ids)
-        original_env_0_states = proxy[env_0_indices, :].clone()
+        env_0_indices = registry.get_object_indices(["robot", "table"] + box_names, env_0_ids)
+        original_env_0_states = adapter.get_states_by_index(env_0_indices).clone()
 
         # Reset specific environments (covers partial updates)
         reset_env_ids = torch.tensor([1])
 
         # Reset robot
-        robot_reset_indices = adapter._object_registry.get_object_indices("robot", reset_env_ids)
+        robot_reset_indices = registry.get_object_indices("robot", reset_env_ids)
         reset_state = torch.zeros(1, 13, dtype=torch.float32)
         reset_state[:, 6] = 1.0  # Identity quaternion
-        proxy[robot_reset_indices, :] = reset_state
+        adapter.write_states_by_index(robot_reset_indices, reset_state)
 
-        # Reset scene and individual objects
-        object_reset_indices = adapter._object_registry.get_object_indices(["table"] + box_names, reset_env_ids)
-        current_object_states = proxy[object_reset_indices, :]
+        # Reset scene and individual objects (read-modify-write pose-only columns)
+        object_reset_indices = registry.get_object_indices(["table"] + box_names, reset_env_ids)
+        current_object_states = adapter.get_states_by_index(object_reset_indices)
         current_object_states[:, 0:7] = initial_poses[object_reset_indices, 0:7]  # Update poses only
-        proxy[object_reset_indices, :] = current_object_states
+        adapter.write_states_by_index(object_reset_indices, current_object_states)
 
         # Verify robot reset worked
-        reset_robot_state = proxy[robot_reset_indices, :]
+        reset_robot_state = adapter.get_states_by_index(robot_reset_indices)
         assert torch.allclose(reset_robot_state[:, 3:7], torch.tensor([[0.0, 0.0, 0.0, 1.0]])), (
             "Robot quaternion not reset to identity"
         )
 
         # Verify objects were reset to initial poses
-        reset_object_states = proxy[object_reset_indices, :]
+        reset_object_states = adapter.get_states_by_index(object_reset_indices)
         assert torch.allclose(reset_object_states[:, 0:7], initial_poses[object_reset_indices, 0:7]), (
             "Objects not reset to initial poses"
         )
 
         # Verify env_ids=0 states remain unchanged during env_ids=1 reset
-        current_env_0_states = proxy[env_0_indices, :]
+        current_env_0_states = adapter.get_states_by_index(env_0_indices)
         assert torch.allclose(current_env_0_states, original_env_0_states), (
             "Env 0 states should remain unchanged during env 1 reset"
         )
@@ -468,8 +478,8 @@ class TestStateAccessors:
         # Verify that env_ids=0 states are different from env_ids=1 reset states
         # (confirms reset actually changed something)
         # Compare only the corresponding objects (table + boxes, excluding robot)
-        env_0_object_indices = adapter._object_registry.get_object_indices(["table"] + box_names, env_0_ids)
-        current_env_0_object_states = proxy[env_0_object_indices, :]
+        env_0_object_indices = registry.get_object_indices(["table"] + box_names, env_0_ids)
+        current_env_0_object_states = adapter.get_states_by_index(env_0_object_indices)
         assert not torch.allclose(current_env_0_object_states, reset_object_states), (
             "Env 0 states should be different from reset env 1 states"
         )
@@ -543,8 +553,8 @@ class TestStateAccessors:
             "get_initial_pose should match get_initial_poses_batch for box"
         )
 
-    def test_clone_operation(self):
-        """Test clone operation with mixed object types."""
+    def test_full_range_gather(self):
+        """Full-range gather over mixed object types."""
 
         # Setup multi-object scenario
         mock_robot_states = self._create_mock_robot_states(self.multi_robot_xyzw)
@@ -554,43 +564,40 @@ class TestStateAccessors:
             ("scene", {"table": self.scene_wxyz.repeat(2, 1)}),
         ]
         adapter = self._create_state_adapter(object_configs, self.multi_robot_wxyz, num_envs=2)
-        proxy = AllRootStatesProxy(adapter)
+        registry = adapter._object_registry
+        total = len(registry.objects) * registry.num_envs
 
-        # Test clone operation
-        cloned_states = proxy.clone()
+        all_states = adapter.get_states_by_index(torch.arange(total))
 
-        # Verify cloned tensor properties
-        assert cloned_states.shape == proxy.shape, f"Cloned shape {cloned_states.shape} != proxy shape {proxy.shape}"
-        assert cloned_states.device == proxy.device, "Cloned device should match proxy device"
-        assert cloned_states.dtype == proxy.dtype, "Cloned dtype should match proxy dtype"
+        # Verify shape/device/dtype
+        assert all_states.shape == (total, 13), f"Gather shape {all_states.shape} != ({total}, 13)"
+        assert all_states.device == adapter.device, "Device should match adapter device"
+        assert all_states.dtype == torch.float32, f"Expected float32 dtype, got {all_states.dtype}"
 
-        # Verify cloned states match current states
-        current_states = proxy[torch.arange(proxy.shape[0]), :]
-        assert torch.allclose(cloned_states, current_states), "Cloned states should match current states"
+        # A fresh gather equals it (read is stable across calls)
+        again = adapter.get_states_by_index(torch.arange(total))
+        assert torch.allclose(all_states, again), "Repeated gather should match"
 
-        # Verify clone is independent (modifying clone doesn't affect original)
-        cloned_states[0, 0] = 999.0  # Modify clone
-        current_states_after = proxy[torch.arange(proxy.shape[0]), :]
-        assert torch.allclose(current_states, current_states_after), (
-            "Original states should be unchanged after clone modification"
-        )
+        # The gather is a fresh tensor (cat output), independent of subsequent reads
+        all_states[0, 0] = 999.0  # mutate the returned tensor
+        after = adapter.get_states_by_index(torch.arange(total))
+        assert not torch.allclose(all_states[0], after[0]), "Returned gather must be a copy, not a live view"
 
     def test_error_recovery_and_edge_cases(self):
         """Test error handling in realistic scenarios."""
 
         adapter = self._create_state_adapter([("individual", {"box": self.box_wxyz})])
-        proxy = AllRootStatesProxy(adapter)
 
         # 1. Test graceful handling of partial failures
-        # Mix valid and invalid indices
+        # Mix valid and invalid indices -> registry resolve_indices raises out-of-range.
         mixed_indices = torch.tensor([0, 999])  # 0 valid, 999 invalid
         with pytest.raises((ValueError, KeyError), match=r"out of range|No objects found"):
-            proxy[mixed_indices, :]
+            adapter.get_states_by_index(mixed_indices)
 
-        # 2. Test empty slice operations
+        # 2. Empty indices return an empty [0, 13] tensor.
         empty_indices = torch.tensor([], dtype=torch.long)
-        with pytest.raises(KeyError):
-            proxy[empty_indices, 0:3]
+        empty_states = adapter.get_states_by_index(empty_indices)
+        assert empty_states.shape == (0, 13), f"Expected (0, 13) empty states, got {empty_states.shape}"
 
         # 3. Test registry operations on empty registry
         empty_registry = ObjectRegistry(device="cpu")

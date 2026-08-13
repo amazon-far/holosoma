@@ -14,12 +14,15 @@ The URDFSceneLoader processes two types of URDF objects:
 - **URDF Specs**: Standardized internal representation of objects to be loaded
 - **Asset Configuration**: IsaacGym-specific loading parameters (physics, rendering options)
 - **Physics Configuration**: Post-loading physics properties (damping, mass, etc.)
-- **Pattern Matching**: Selective loading of objects based on include/exclude patterns
+- **Shared Resolvers**: resolve_asset_path (asset paths), resolve_physics (physics config),
+  and resolve_fixed (static vs free link classification) shared across backends
 
 ## Processing Flow
 
 1. **Validation**: Check scene config structure and log key information
-2. **Scene Processing**: Parse scene URDF files, apply transformations, extract individual objects
+2. **Scene Processing**: Parse scene URDF files, compute each body's world pose by composing
+   the file world transform with the body's authored relative pose, classify links
+   static/free, and extract individual objects
 3. **Rigid Processing**: Process individual rigid objects with their poses and physics
 4. **Asset Loading**: Load IsaacGym assets from URDF specs with proper configurations
 5. **Storage**: Store loaded assets and initial states for environment creation
@@ -29,12 +32,14 @@ The URDFSceneLoader processes two types of URDF objects:
 The loader uses a pipeline approach:
 - Scene Config → URDF Specs → Loaded Assets → Environment Creation
 - Each stage has focused responsibilities and clear data contracts
+- Physics, asset paths, and link fixity are resolved via the shared resolvers
+  (resolve_physics / resolve_asset_path / resolve_fixed) rather than in-place
+  scene-graph mutation or pattern matching
 - Physics configs are stored separately for post-creation application
 """
 
 from __future__ import annotations
 
-import fnmatch
 import re
 import tempfile
 from contextlib import contextmanager
@@ -49,11 +54,15 @@ from isaacgym import gymapi
 from loguru import logger
 from yourdfpy.urdf import Robot  # type:ignore[import-untyped]
 
-from holosoma.config_types.simulator import (
+from holosoma.config_types.scene import (
+    PhysicsConfig,
     RigidObjectConfig,
     SceneConfig,
     SceneFileConfig,
 )
+from holosoma.simulator.isaacgym.physics import apply_physx_asset_options
+from holosoma.simulator.shared.asset_format import select_asset_format
+from holosoma.utils.path import resolve_asset_path
 
 # Type aliases compatible with Python 3.8
 Pose = List[float]  # [x, y, z, qx, qy, qz, qw]
@@ -106,8 +115,9 @@ class URDFSpec:
         Path to URDF file for rigid objects, by default None.
     asset_config : AssetConfig | None
         IsaacGym asset configuration parameters, by default None.
-    physics_config : dict[str, Any] | None
-        Physics properties for post-creation application, by default None.
+    physics : PhysicsConfig | None
+        Per-object physics override, applied post-creation by
+        ``IsaacGym.apply_physics_properties_to_actor``. ``None`` keeps the asset's authored physics.
     """
 
     name: str
@@ -115,7 +125,7 @@ class URDFSpec:
     asset: gymapi.Asset | None = None  # Pre-loaded asset (for scene objects)
     urdf_path: str | None = None  # Path to URDF file (for rigid objects)
     asset_config: AssetConfig | None = None
-    physics_config: dict[str, Any] | None = None
+    physics: PhysicsConfig | None = None
 
     @property
     def is_preloaded(self) -> bool:
@@ -168,9 +178,13 @@ class URDFSceneLoader:
         self.gym: gymapi.Gym = gym_instance
         self.sim: gymapi.Sim = sim
         self.device: str = device
-        self._original_urdf_dir: str | None = None
-        # Store physics configurations separately for post-creation application
-        self.object_physics_configs: dict[str, dict[str, Any]] = {}
+        # Per-object physics overrides (PhysicsConfig), keyed by actor name, for post-creation
+        # application in IsaacGym.apply_physics_properties_to_actor.
+        self.object_physics_configs: dict[str, PhysicsConfig] = {}
+        # Names (prefixed) of scene-file bodies classified STATIC by the file's joint
+        # structure (fixed-to-world). Read by IsaacGym._collect_spawned_actors to
+        # register the right ObjectType.
+        self.scene_file_static_names: set[str] = set()
         # Store loaded data for access during environment creation
         self.loaded_assets: AssetDict = {}
         self.loaded_initial_states: PoseDict = {}
@@ -221,41 +235,28 @@ class URDFSceneLoader:
     # === SCENE PROCESSING ===
 
     def _process_scene_files(self, scene_config: SceneConfig) -> list[URDFSpec]:
-        """Process scene URDF files and return URDFSpec objects"""
+        """Expand every scene file (1->N) into URDFSpecs, accumulated across all files.
+
+        Each file's format is chosen by the shared ``select_asset_format`` (IsaacGym loads URDF
+        only), so a usd/xml-only scene file fails loud with the standard matrix error. Each file
+        resolves its own mesh paths locally, so multiple files do not interfere.
+        """
         if not (hasattr(scene_config, "scene_files") and scene_config.scene_files):
             return []
 
-        # Check for multiple URDF scene files and raise exception
-        urdf_scene_files = [
-            sf for sf in scene_config.scene_files if self._scene_file_has_urdf_format(sf, scene_config.asset_root)
-        ]
-
-        if len(urdf_scene_files) > 1:
-            urdf_paths = [sf.urdf_path for sf in urdf_scene_files]
-            raise ValueError(f"Multiple URDF scene files found: {urdf_paths}. Only one URDF scene file is supported.")
-
-        if urdf_scene_files:
-            scene_file = urdf_scene_files[0]
-            assert scene_config.asset_root is not None
-            assert scene_file.urdf_path is not None
-            urdf_path = str(Path(scene_config.asset_root) / scene_file.urdf_path)
-            logger.info(f"Loading scene URDF: {urdf_path}")
-            return self._generate_specs_from_scene_urdf(scene_file, scene_config)
-
-        return []
+        specs: list[URDFSpec] = []
+        for scene_file_name, scene_file in scene_config.scene_files.items():
+            # IsaacGym loads URDF only; fail loud on usd/xml-only scene files.
+            select_asset_format(scene_file, ["urdf"])
+            specs.extend(self._expand_scene_file(scene_file_name, scene_file, scene_config))
+        return specs
 
     def _process_rigid_objects(self, scene_config) -> list[URDFSpec]:
         """Process rigid objects and return URDFSpec objects"""
         if not (hasattr(scene_config, "rigid_objects") and scene_config.rigid_objects):
             return []
 
-        # Log the rigid object URDF files being loaded
-        for obj in scene_config.rigid_objects:
-            if obj.urdf_path:
-                urdf_path = str(Path(scene_config.asset_root) / obj.urdf_path)
-                logger.info(f"Loading rigid object URDF: {obj.name} -> {urdf_path}")
-
-        return self._generate_specs_from_rigid_objects(scene_config.rigid_objects, scene_config.asset_root)
+        return self._build_rigid_object_specs(scene_config.rigid_objects, scene_config.asset_root)
 
     def _load_assets_from_specs(self, specs: list[URDFSpec]) -> tuple[AssetDict, PoseDict]:
         """Load assets from standardized URDFSpec objects"""
@@ -282,6 +283,11 @@ class URDFSceneLoader:
                 logger.error(f"Invalid URDFSpec: {spec}")
                 raise ValueError(f"URDFSpec missing both asset and urdf_path: {spec.name}")
 
+            # Record the per-object physics override for post-creation application
+            # (None keeps the asset's authored physics).
+            if spec.physics is not None:
+                self.object_physics_configs[spec.name] = spec.physics
+
         # Store the loaded data for access during environment creation
         self.loaded_assets = object_assets
         self.loaded_initial_states = object_initial_state
@@ -290,7 +296,11 @@ class URDFSceneLoader:
         return object_assets, object_initial_state
 
     def _load_and_store_asset(self, name: str, urdf_path: str | None, asset_config: AssetConfig | None):
-        """Load asset and store physics config"""
+        """Load the IsaacGym asset from a URDF file.
+
+        Physics overrides are carried on the ``URDFSpec`` and stored by
+        ``_load_assets_from_specs`` — this method only loads the asset.
+        """
         try:
             assert urdf_path is not None
             assert asset_config is not None
@@ -300,29 +310,13 @@ class URDFSceneLoader:
                 logger.error(error_msg)
                 raise RuntimeError(error_msg)
 
-            # Store physics config for post-creation application
-            physics_config = self._extract_physics_config_from_asset_config(asset_config)
-            if physics_config:
-                self.object_physics_configs[name] = physics_config
-                logger.debug(f"Stored physics config for '{name}'")
-
             return asset
         except Exception as e:
             error_msg = f"Failed to load '{name}' from {urdf_path}: {e}"
             logger.error(error_msg)
             raise RuntimeError(error_msg) from e
 
-    def _scene_file_has_urdf_format(self, scene_file, asset_root):
-        """Check if scene file has URDF format available"""
-        if not hasattr(scene_file, "urdf_path") or not scene_file.urdf_path:
-            return False
-
-        urdf_path = str(Path(asset_root) / scene_file.urdf_path)
-        exists = Path(urdf_path).exists()
-        logger.debug(f"Checking scene file URDF: {urdf_path} -> {exists}")
-        return exists
-
-    def _generate_specs_from_scene_urdf(self, scene_file, scene_config):
+    def _expand_scene_file(self, scene_file_name, scene_file, scene_config):
         """
         Parse a URDF as a "scene" file and return standardized URDF specs.
 
@@ -332,27 +326,42 @@ class URDFSceneLoader:
 
         Scene URDF Processing Flow:
         1. Parse URDF with yourdfpy to build scene graph
-        2. Apply scene-level transformations to the scene graph
-        3. Extract individual links as separate objects
-        4. Create temporary URDF files for each link
-        5. Load IsaacGym assets immediately (while temp files exist)
+        2. Compute the file world transform (config position + orientation)
+        3. Classify each link static (welded) vs free from its joint structure
+        4. For each link, compose its world pose (file world transform @ relative pose)
+        5. Create a temporary URDF file per link and load the IsaacGym asset immediately
         6. Return specs with pre-loaded assets
         """
-        urdf_path = str(Path(scene_config.asset_root) / scene_file.urdf_path)
+        # Resolve via the shared resolver (handles "holosoma/..." package paths and
+        # asset_root joins; scene_config.asset_root may be None).
+        urdf_path = resolve_asset_path(scene_file.urdf_path, scene_file.asset_root or scene_config.asset_root)
         logger.debug(f"Loading scene URDF file: {urdf_path}")
 
-        # Store original URDF directory for mesh path resolution
-        self._original_urdf_dir = str(Path(urdf_path).parent)
+        # The per-link tempfiles resolve their meshes relative to THIS file's directory, threaded
+        # through _create_individual_link_urdf_tempfile (which derives it from urdf_path) — no
+        # shared loader state, so looping multiple scene files is safe.
 
         # Step 1: Parse URDF with scene graph for transform extraction
         urdf = self._parse_scene_urdf_with_yourdfpy(urdf_path, scene_file)
 
-        # Step 2: Apply scene-level transformations to the entire scene graph
-        self._apply_scene_transform_to_urdf_scene_graph(urdf, scene_file)
+        # Step 2: file world transform (config position + wxyz orientation). Each body's
+        # world pose is this composed with the body's authored relative pose (computed in
+        # _extract_world_transform_from_scene) — yourdfpy does NOT propagate a transform
+        # applied to the 'world' node down to its joint children, so we compose explicitly.
+        file_world_transform = tra.translation_matrix(scene_file.position) @ tra.quaternion_matrix(
+            scene_file.orientation
+        )
 
-        # Step 3: Process each link as an individual object
+        # Classify each link free vs static from the file's own joint structure: a link
+        # whose joint to its parent is "fixed" is welded => STATIC; "floating" => FREE.
+        static_by_link = self._classify_scene_links(urdf)
+
+        # Step 3: Process each link as an individual object, sorted by name for
+        # backend-independent registration order; names are file-prefixed for collision
+        # safety ({scene_file_name}_{link}).
+        prefix = f"{scene_file_name}_"
         urdf_specs = []
-        for link in urdf.robot.links:
+        for link in sorted(urdf.robot.links, key=lambda link_obj: link_obj.name):
             if link.name == "world":
                 continue
 
@@ -361,152 +370,156 @@ class URDFSceneLoader:
                 logger.debug(f"Skipping '{link.name}' due to scene file patterns")
                 continue
 
-            # Get IsaacGym asset configuration
-            asset_config = self._get_asset_config_for_scene_object(link.name, scene_file)
+            is_static = scene_file.resolve_fixed(link.name, structural_default=static_by_link.get(link.name, True))
+            actor_name = f"{prefix}{link.name}"
 
-            # Extract final world pose (after scene transformations)
+            # Get IsaacGym asset configuration (fixed base iff the file welds this link)
+            asset_config = self._get_asset_config_for_scene_object(link.name, scene_file, is_static=is_static)
+            if is_static:
+                self.scene_file_static_names.add(actor_name)
+
+            # World pose = file world transform composed with the body's relative pose.
             if urdf.scene is None:
                 logger.warning(f"No scene graph for '{link.name}', using default pose")
                 pose = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
             else:
-                pose = self._extract_world_transform_from_scene(urdf, link.name)
+                pose = self._extract_world_transform_from_scene(urdf, link.name, file_world_transform)
+
+            # Per-body world-frame position offset added on top of the composed world position.
+            # None => unchanged.
+            offset = scene_file.resolve_position_offset(link.name)
+            if offset is not None:
+                pose = [pose[0] + offset[0], pose[1] + offset[1], pose[2] + offset[2], *pose[3:]]
 
             # Step 4 & 5: Create temp URDF and load asset immediately
             with self._create_individual_link_urdf_tempfile(link, link.name, urdf_path) as temp_urdf_file:
                 asset = self._load_asset_from_urdf(temp_urdf_file.name, asset_config)
                 if asset is None:
-                    error_msg = f"Failed to load '{link.name}': IsaacGym returned None asset from {temp_urdf_file.name}"
+                    error_msg = (
+                        f"Failed to load '{actor_name}': IsaacGym returned None asset from {temp_urdf_file.name}"
+                    )
                     logger.error(error_msg)
                     raise RuntimeError(error_msg)
 
-                # Store physics config for post-creation application
-                physics_config = self._extract_physics_config_from_asset_config(asset_config)
-                if physics_config:
-                    self.object_physics_configs[link.name] = physics_config
-                    logger.debug(f"Stored physics config for scene object '{link.name}'")
-
-                # Step 6: Create URDFSpec with pre-loaded asset
+                # Step 6: Create URDFSpec with pre-loaded asset. The live per-body physics
+                # override (shared resolve_physics rule) rides on the spec to the apply site.
                 urdf_spec = URDFSpec(
-                    name=link.name,
+                    name=actor_name,
                     pose=pose,
                     asset=asset,  # Pre-loaded
                     urdf_path=None,  # Not needed for scene objects
                     asset_config=asset_config,
-                    physics_config=None,  # Physics config already stored separately
+                    physics=scene_file.resolve_physics(link.name),
                 )
                 urdf_specs.append(urdf_spec)
-                logger.debug(f"Generated URDFSpec for '{link.name}' at pose {pose[:3]}")
+                logger.debug(f"Generated URDFSpec for '{actor_name}' (static={is_static}) at pose {pose[:3]}")
 
         logger.debug(f"Generated {len(urdf_specs)} URDFSpec objects from scene URDF file")
         return urdf_specs
 
-    def _generate_specs_from_rigid_objects(self, rigid_objects_list, asset_root):
-        """Generate URDF specs from rigid_objects list"""
+    def _build_rigid_object_specs(self, rigid_objects, asset_root):
+        """Generate URDF specs from the rigid_objects dict (name -> config)."""
         logger.debug("Loading rigid objects")
 
-        if not rigid_objects_list:
+        if not rigid_objects:
             logger.warning("No rigid_objects configuration found")
             return []
 
         urdf_specs = []
 
-        for obj in rigid_objects_list:
-            try:
-                # Get object name
-                object_name = obj.name
+        # Any failure here (missing file, unsupported format, bad config) is fatal by design,
+        # matching select_asset_format and the scene-file path: never silently drop an object.
+        for object_name, obj in rigid_objects.items():
+            # IsaacGym loads URDF only; fail loud on usd/xml-only objects.
+            _fmt, urdf_rel = select_asset_format(obj, ["urdf"])
 
-                # Get URDF file path
-                if not obj.urdf_path:
-                    logger.warning(f"No urdf_path specified for object '{object_name}', skipping")
-                    continue
+            # Resolve under the per-object asset_root, falling back to the scene's
+            # (handles package "holosoma/..." paths, not just asset_root joins).
+            urdf_path = resolve_asset_path(urdf_rel, obj.asset_root or asset_root)
 
-                # Construct full path using asset root
-                urdf_path = str(Path(asset_root) / obj.urdf_path)
+            if not Path(urdf_path).exists():
+                raise ValueError(f"URDF file not found for object '{object_name}': {urdf_path}")
 
-                # Check if file exists
-                if not Path(urdf_path).exists():
-                    logger.warning(f"URDF file not found for object '{object_name}': {urdf_path}")
-                    continue
+            # Convert orientation from [w, x, y, z] to [x, y, z, w] for IsaacGym
+            pose = obj.position + [obj.orientation[1], obj.orientation[2], obj.orientation[3], obj.orientation[0]]
 
-                # Convert orientation from [w, x, y, z] to [x, y, z, w] for IsaacGym
-                pose = obj.position + [obj.orientation[1], obj.orientation[2], obj.orientation[3], obj.orientation[0]]
+            # Get asset configuration from physics config
+            asset_config = self._get_asset_config_for_rigid_object(object_name, obj)
 
-                # Get asset configuration from physics config
-                asset_config = self._get_asset_config_for_rigid_object(object_name, obj)
-
-                # Create URDFSpec for rigid object
-                urdf_spec = URDFSpec(
+            # Create URDFSpec for rigid object; its physics override rides on the spec to the
+            # post-creation apply site.
+            urdf_specs.append(
+                URDFSpec(
                     name=object_name,
                     pose=pose,
                     asset=None,  # Needs loading
                     urdf_path=urdf_path,
                     asset_config=asset_config,
-                    physics_config=None,  # Physics config will be extracted during loading
+                    physics=obj.physics,
                 )
-                urdf_specs.append(urdf_spec)
-                logger.debug(f"Generated URDFSpec for '{object_name}' at {urdf_path}")
-
-            except Exception as e:
-                logger.error(f"Failed to process rigid object '{object_name}': {e}")
-                continue
+            )
+            logger.debug(f"Generated URDFSpec for '{object_name}' at {urdf_path}")
 
         logger.debug(f"Generated {len(urdf_specs)} URDFSpec objects for rigid objects")
         return urdf_specs
 
     # === UTILITIES ===
 
-    def _should_load_object(self, object_name: str, scene_file) -> bool:
-        """Determine if object should be loaded based on scene file patterns"""
-        return self._should_load_object_by_patterns(
-            object_name, scene_file.include_patterns, scene_file.exclude_patterns
-        )
+    def _should_load_object(self, object_name: str, scene_file: SceneFileConfig) -> bool:
+        """Whether a scene-file body loads, per its include/exclude patterns.
 
-    def _should_load_object_by_patterns(
-        self, object_name: str, include_patterns: list[str], exclude_patterns: list[str]
-    ) -> bool:
-        """Simplified pattern matching logic"""
-        logger.debug(f"Checking patterns for '{object_name}': include={include_patterns}, exclude={exclude_patterns}")
-
-        # If no patterns specified, load everything
-        if not include_patterns and not exclude_patterns:
-            return True
-
-        # Check exclude patterns first
-        if self._matches_any_pattern(object_name, exclude_patterns):
-            logger.debug(f"Object '{object_name}' excluded by pattern")
-            return False
-
-        # Check include patterns (if any specified)
-        if include_patterns:
-            if self._matches_any_pattern(object_name, include_patterns):
-                logger.debug(f"Object '{object_name}' included by pattern")
-                return True
-            logger.debug(f"Object '{object_name}' matches no include patterns")
-            return False
-
-        # No include patterns but passed exclude check
-        logger.debug(f"Object '{object_name}' passed exclude check")
-        return True
-
-    def _matches_any_pattern(self, object_name: str, patterns: list[str]) -> bool:
-        """Check if object name matches any of the given patterns"""
-        for pattern in patterns:
-            clean_pattern = pattern.replace("*/", "")  # Remove URDF path prefixes
-            if fnmatch.fnmatch(object_name, clean_pattern):
-                return True
-        return False
+        Delegates to the shared ``SceneFileConfig.should_include`` so the include/exclude
+        SUBSET rule is identical across MuJoCo / IsaacGym / IsaacSim — a scene file's body set
+        is the same regardless of which backend loads it.
+        """
+        return scene_file.should_include(object_name)
 
     # === ASSET CONFIGURATION ===
 
-    def _get_asset_config_for_scene_object(self, object_name: str, scene_file: SceneFileConfig) -> AssetConfig:
-        """Get asset configuration for a scene object"""
-        defaults = self._get_default_asset_config(is_scene_object=True)
-        physics_config = self._find_physics_config_by_pattern(object_name, scene_file.object_configs)
+    def _classify_scene_links(self, urdf) -> dict[str, bool]:
+        """Map each scene-file link name -> is_static, from the URDF joint structure.
+
+        A link welded to its parent by a ``fixed`` joint is static; a link on a
+        ``floating`` joint is a free body. A link with no parent joint (e.g. a lone root)
+        defaults to static (welded to world). This is the file-driven free/static rule,
+        matching MuJoCo's freejoint test and IsaacSim's kinematic flag.
+        """
+        joint_type_by_child = {j.child: j.type for j in urdf.robot.joints}
+        # Only fixed/floating are meaningful in a scene file: any other joint type (revolute,
+        # prismatic, ...) would silently weld an articulated body, so reject it up front.
+        unsupported = {c: t for c, t in joint_type_by_child.items() if t not in ("fixed", "floating")}
+        if unsupported:
+            raise ValueError(
+                f"Scene URDF has unsupported joint types {unsupported}; scene files support only "
+                f"'fixed' (static) and 'floating' (free) joints (articulations are not scene files)."
+            )
+        return {
+            link.name: joint_type_by_child.get(link.name, "fixed") != "floating"
+            for link in urdf.robot.links
+            if link.name != "world"
+        }
+
+    def _get_asset_config_for_scene_object(
+        self, object_name: str, scene_file: SceneFileConfig, is_static: bool = True
+    ) -> AssetConfig:
+        """Get asset configuration for a scene-file body.
+
+        ``is_static`` (from the file's joint structure) maps to ``fix_base_link``: a
+        welded link is fixed-base, a floating link keeps the movable default.
+        """
+        defaults = self._get_default_asset_config(is_scene_object=is_static)
+        # Shared per-body physics resolution (same rule every backend uses — see
+        # SceneFileConfig.resolve_physics), so IsaacGym and IsaacSim apply identical overrides.
+        physics_config = scene_file.resolve_physics(object_name)
         return self._apply_physics_config(defaults, physics_config, object_name)
 
     def _get_asset_config_for_rigid_object(self, object_name: str, obj: RigidObjectConfig) -> AssetConfig:
-        """Get asset configuration for a rigid object"""
-        defaults = self._get_default_asset_config(is_scene_object=False)
+        """Get asset configuration for a rigid object.
+
+        A ``fixed`` object is static (welded to the world) — IsaacGym expresses that as
+        ``fix_base_link=True`` on the asset; a free object keeps the movable default.
+        """
+        defaults = self._get_default_asset_config(is_scene_object=obj.fixed)
         physics_config = obj.physics
         return self._apply_physics_config(defaults, physics_config, object_name)
 
@@ -519,59 +532,38 @@ class URDFSceneLoader:
         )
 
     def _apply_physics_config(self, asset_config, physics_config, object_name: str):
-        """Apply physics config to asset config with consistent logging"""
+        """Apply a ``PhysicsConfig`` override onto the IsaacGym ``AssetConfig`` (load-time options).
+
+        Static-vs-free is NOT taken from here — it comes from ``fixed`` via
+        ``_get_default_asset_config(is_scene_object=...)`` (the single source of truth), so this
+        only layers physics overrides: ``mass`` is post-creation (see
+        ``apply_physics_properties_to_actor``), ``density`` is a load-time AssetOption, and the
+        PhysX solver knobs (damping / velocity limits) come from the shared ``physics.physx``
+        sub-config. ``None`` on ``physx`` keeps the AssetConfig defaults.
+        """
         if not physics_config:
             return asset_config
 
         logger.debug(f"Applying physics config for '{object_name}'")
 
-        # Map kinematic_enabled to fix_base_link (IsaacGym's equivalent)
-        if hasattr(physics_config, "kinematic_enabled"):
-            asset_config.fix_base_link = physics_config.kinematic_enabled
-            logger.debug(f"Set fix_base_link={physics_config.kinematic_enabled} for '{object_name}'")
-
-        # Apply other physics properties
-        physics_properties = [
-            "density",
-            "angular_damping",
-            "linear_damping",
-            "max_angular_velocity",
-            "max_linear_velocity",
-        ]
-
-        for prop in physics_properties:
-            if hasattr(physics_config, prop):
-                value = getattr(physics_config, prop)
-                setattr(asset_config, prop, value)
-                logger.debug(f"Set {prop}={value} for '{object_name}'")
+        # density + the PhysX solver knobs (damping / velocity limits) go through the same helper the
+        # robot path uses (physics.apply_physx_asset_options), so an object and a robot link map these
+        # load-time options identically. AssetConfig shares gymapi.AssetOptions' field names, so the
+        # helper writes onto it directly. None on density/physx keeps AssetConfig defaults.
+        apply_physx_asset_options(asset_config, physics_config)
 
         return asset_config
-
-    def _find_physics_config_by_pattern(self, object_name: str, object_configs):
-        """Find matching physics config using pattern matching"""
-        if not object_configs:
-            return None
-
-        for pattern, obj_config in object_configs.items():
-            clean_pattern = pattern.replace("*/", "")
-            if fnmatch.fnmatch(object_name, clean_pattern):
-                logger.debug(f"Object '{object_name}' matches pattern '{pattern}'")
-                return obj_config.physics if obj_config.physics else None
-
-        return None
 
     # === ASSET LOADING ===
 
     def _load_asset_from_urdf(self, urdf_path: str | None, asset_config: AssetConfig):
         """Load asset from URDF file"""
         if not urdf_path:
-            raise ValueError("Missing path: {urdf_path}")
+            raise ValueError("Missing URDF path")
 
-        # Store original URDF directory for scene objects (mesh path resolution)
-        if self._original_urdf_dir is None:
-            self._original_urdf_dir = str(Path(urdf_path).parent)
-
-        # For individual objects, use the actual URDF path, not the scene URDF directory
+        # Each URDF (standalone object or per-link scene tempfile) resolves its meshes relative
+        # to its own directory — no shared loader-wide "original dir" state (which would
+        # cross-contaminate across multiple scene files).
         asset_root = str(Path(urdf_path).parent)
         asset_file = Path(urdf_path).name
 
@@ -669,12 +661,16 @@ class URDFSceneLoader:
 
         logger.debug(f"Generated URDF for '{link_name}' ({len(xml_string)} chars)")
 
+        # Resolve meshes relative to THIS scene file's own directory (threaded in, not shared
+        # loader state) so looping multiple scene files cannot cross-contaminate mesh paths.
+        urdf_dir = str(Path(scene_urdf_path).parent)
+
         # Fix mesh paths to absolute paths
-        xml_string = self._fix_mesh_paths_in_urdf(xml_string, link_name)
+        xml_string = self._fix_mesh_paths_in_urdf(xml_string, link_name, urdf_dir)
 
         # Create temporary file
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".urdf", prefix=f"{link_name}_", dir=self._original_urdf_dir, delete=False
+            mode="w", suffix=".urdf", prefix=f"{link_name}_", dir=urdf_dir, delete=False
         ) as temp_file:
             temp_file.write(xml_string)
             temp_file.close()
@@ -692,8 +688,12 @@ class URDFSceneLoader:
                 except OSError as e:
                     logger.warning(f"Failed to clean up temporary file {temp_file.name}: {e}")
 
-    def _fix_mesh_paths_in_urdf(self, xml_string, link_name):
-        """Fix relative mesh paths to absolute paths in URDF XML"""
+    def _fix_mesh_paths_in_urdf(self, xml_string, link_name, urdf_dir):
+        """Fix relative mesh paths to absolute paths in URDF XML, relative to ``urdf_dir``.
+
+        ``urdf_dir`` is the directory of the scene file the link came from, threaded in by the
+        caller so it never relies on shared loader state (which would break multi-file loads).
+        """
         # Find all mesh filename references in the XML
         mesh_matches = re.findall(r'filename="([^"]*)"', xml_string)
 
@@ -708,8 +708,8 @@ class URDFSceneLoader:
 
         for mesh_path in mesh_matches:
             if not Path(mesh_path).is_absolute():  # Only fix relative paths
-                # Convert relative path to absolute path based on original URDF directory
-                absolute_mesh_path = str(Path(self._original_urdf_dir) / mesh_path)
+                # Convert relative path to absolute path based on the scene file's directory
+                absolute_mesh_path = str(Path(urdf_dir) / mesh_path)
 
                 logger.debug(f"Fixing mesh path: '{mesh_path}' -> '{absolute_mesh_path}'")
 
@@ -724,15 +724,21 @@ class URDFSceneLoader:
 
         return fixed_xml
 
-    def _extract_world_transform_from_scene(self, urdf, link_name):
-        """Extract world transform for a link using yourdfpy"""
+    def _extract_world_transform_from_scene(self, urdf, link_name, file_world_transform):
+        """World pose of a link = file world transform ∘ the link's relative transform.
+
+        ``file_world_transform`` is the 4x4 placing the whole file in the world; the
+        link's relative transform (within the file) comes from the URDF scene graph.
+        Composing them preserves inter-body relative poses while placing the file at its
+        configured world pose. Returns ``[x,y,z, qx,qy,qz,qw]`` (xyzw) for IsaacGym.
+        """
         if urdf.scene is None:
             logger.error(f"No scene graph available for link '{link_name}'")
             raise RuntimeError(f"No scene graph available for link '{link_name}'")
 
-        # Use yourdfpy's get_transform method to get world transform
-        world_transform = urdf.get_transform(frame_to=link_name, frame_from="world")
-        logger.debug(f"Got world transform for '{link_name}' using get_transform")
+        # Relative transform of the link within the file, then compose with the file pose.
+        relative_transform = urdf.get_transform(frame_to=link_name, frame_from="world")
+        world_transform = file_world_transform @ relative_transform
 
         # Extract translation and rotation
         translation = tra.translation_from_matrix(world_transform)
@@ -745,107 +751,6 @@ class URDFSceneLoader:
         logger.debug(f"Extracted world pose for '{link_name}': {pose[:3]} (translation)")
 
         return pose
-
-    def _apply_scene_transform_to_urdf_scene_graph(self, urdf, source):
-        """Apply scene transformation to the URDF scene graph using configurable root link.
-
-        Args:
-            urdf: yourdfpy URDF object with scene graph
-            source: Source dataclass containing position and orientation
-        """
-        logger.debug("Applying scene transform to URDF scene graph")
-
-        # Extract offsets from source
-        pos_offset = source.position  # [x, y, z]
-        rot_offset = source.orientation  # [w, x, y, z] format
-
-        logger.debug(f"pos_offset={pos_offset}, rot_offset={rot_offset}")
-
-        # Check if rotation offset is identity
-        if rot_offset == [1.0, 0.0, 0.0, 0.0]:
-            logger.warning("rot_offset is identity quaternion - no rotation will be applied!")
-
-        # Create translation matrix
-        translation_matrix = tra.translation_matrix(pos_offset)
-
-        # Create rotation matrix from quaternion (wxyz format)
-        rotation_matrix = tra.quaternion_matrix(rot_offset)
-
-        # Combine translation and rotation
-        scene_transform_matrix = translation_matrix @ rotation_matrix
-
-        # Apply transform to the scene graph
-        if urdf.scene is not None:
-            logger.debug("Applying transform to scene graph")
-
-            # Use configurable transform root link (validation ensures it exists)
-            target_link = source.urdf_settings.transform_root_link
-            logger.debug(f"Using configured transform_root_link: '{target_link}'")
-
-            if target_link in urdf.scene.graph.nodes:
-                try:
-                    # Get current transform for the target link
-                    current_transform = urdf.scene.graph.get(
-                        frame_to=target_link, frame_from=urdf.scene.graph.base_frame
-                    )[0]
-
-                    # Apply scene transform: new_transform = scene_transform * current_transform
-                    new_transform = scene_transform_matrix @ current_transform
-
-                    # Update the scene graph with the new transform
-                    urdf.scene.graph.update(
-                        frame_from=urdf.scene.graph.base_frame, frame_to=target_link, matrix=new_transform
-                    )
-
-                    logger.debug(f"Applied scene transform to '{target_link}' in scene graph")
-
-                except Exception as e:
-                    logger.error(f"Failed to apply scene transform to '{target_link}': {e}")
-                    raise RuntimeError(f"Scene transform application failed: {e}")
-            else:
-                logger.error(
-                    f"Target link '{target_link}' not found in scene graph nodes: {list(urdf.scene.graph.nodes)}"
-                )
-                raise KeyError(f"Target link '{target_link}' not found in scene graph")
-
-            logger.debug("Scene graph transformation completed")
-        else:
-            logger.warning("No scene graph available - cannot apply transform")
-
-    def _extract_physics_config_from_asset_config(self, asset_config):
-        """Extract physics configuration from asset config for post-creation application"""
-        if not asset_config:
-            raise RuntimeError("Asset config is required but was None")
-
-        # Create physics config dictionary from asset config
-        physics_config = {}
-
-        # Map asset config properties to physics config - all properties are required
-        if not hasattr(asset_config, "fix_base_link"):
-            raise RuntimeError("Asset config missing required property 'fix_base_link'")
-        physics_config["kinematic_enabled"] = asset_config.fix_base_link
-
-        if not hasattr(asset_config, "linear_damping"):
-            raise RuntimeError("Asset config missing required property 'linear_damping'")
-        physics_config["linear_damping"] = asset_config.linear_damping
-
-        if not hasattr(asset_config, "angular_damping"):
-            raise RuntimeError("Asset config missing required property 'angular_damping'")
-        physics_config["angular_damping"] = asset_config.angular_damping
-
-        if not hasattr(asset_config, "density"):
-            raise RuntimeError("Asset config missing required property 'density'")
-        physics_config["density"] = asset_config.density
-
-        if not hasattr(asset_config, "max_linear_velocity"):
-            raise RuntimeError("Asset config missing required property 'max_linear_velocity'")
-        physics_config["max_linear_velocity"] = asset_config.max_linear_velocity
-
-        if not hasattr(asset_config, "max_angular_velocity"):
-            raise RuntimeError("Asset config missing required property 'max_angular_velocity'")
-        physics_config["max_angular_velocity"] = asset_config.max_angular_velocity
-
-        return physics_config
 
     def get_initial_pose(self, object_name: str) -> list[float]:
         """Get initial pose for an object by name

@@ -7,6 +7,10 @@ from holosoma.config_types.robot import (
     RobotControlConfig,
     RobotInitState,
 )
+from holosoma.config_types.scene import PhysicsConfig, PhysXPhysicsConfig
+from holosoma.utils.config_registry import ConfigRegistry, deprecated_defaults_alias
+
+ROBOT_REGISTRY = ConfigRegistry(RobotConfig, group="holosoma.config.robot")
 
 g1_29dof = RobotConfig(
     num_bodies=32,
@@ -533,10 +537,6 @@ g1_29dof = RobotConfig(
         flip_visual_attachments=False,
         armature=0.001,
         thickness=0.01,
-        max_angular_velocity=1000.0,
-        max_linear_velocity=1000.0,
-        angular_damping=0.0,
-        linear_damping=0.0,
         urdf_file="g1/g1_29dof.urdf",
         usd_file=None,
         xml_file="g1/g1_29dof.xml",
@@ -544,6 +544,16 @@ g1_29dof = RobotConfig(
         enable_self_collisions=False,
         default_dof_drive_mode=3,
         fix_base_link=False,
+        # PhysX solver knobs for all robot links. The explicit 0.0 damping is required:
+        # PhysXPhysicsConfig defaults damping to 0.1.
+        link_physics=PhysicsConfig(
+            physx=PhysXPhysicsConfig(
+                linear_damping=0.0,
+                angular_damping=0.0,
+                max_linear_velocity=1000.0,
+                max_angular_velocity=1000.0,
+            ),
+        ),
     ),
     bridge=RobotBridgeConfig(
         sdk_type="unitree",
@@ -1071,18 +1081,25 @@ t1_29dof_waist_wrist = RobotConfig(
         flip_visual_attachments=False,
         armature=0.001,
         thickness=0.01,
-        max_angular_velocity=1000.0,
-        max_linear_velocity=1000.0,
-        angular_damping=0.0,
-        linear_damping=0.0,
         urdf_file="t1/t1_29dof.urdf",
         usd_file=None,
         xml_file="t1/t1_29dof.xml",
         robot_type="t1_29dof",
         enable_self_collisions=False,
         default_dof_drive_mode=3,
-        density=0.001,
         fix_base_link=False,
+        # PhysX solver knobs + density for all robot links. The explicit 0.0 damping is required:
+        # PhysXPhysicsConfig defaults damping to 0.1. density is an IsaacGym AssetOptions fallback
+        # for inertia-less bodies (no-op where the asset authors mass, which t1 does).
+        link_physics=PhysicsConfig(
+            density=0.001,
+            physx=PhysXPhysicsConfig(
+                linear_damping=0.0,
+                angular_damping=0.0,
+                max_linear_velocity=1000.0,
+                max_angular_velocity=1000.0,
+            ),
+        ),
     ),
     bridge=RobotBridgeConfig(
         sdk_type="booster",
@@ -1104,8 +1121,8 @@ g1_29dof_w_object = replace(
     ),
 )
 
-DEFAULTS = {
-    "g1_29dof": g1_29dof,
-    "t1_29dof_waist_wrist": t1_29dof_waist_wrist,
-    "g1_29dof_w_object": g1_29dof_w_object,
-}
+ROBOT_REGISTRY.add("g1_29dof", g1_29dof)
+ROBOT_REGISTRY.add("t1_29dof_waist_wrist", t1_29dof_waist_wrist)
+ROBOT_REGISTRY.add("g1_29dof_w_object", g1_29dof_w_object)
+
+__getattr__ = deprecated_defaults_alias(__name__, ROBOT_REGISTRY)

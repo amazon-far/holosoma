@@ -10,13 +10,11 @@ import dataclasses
 import sys
 import traceback
 
-import tyro
 from loguru import logger
 
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.utils.eval_utils import init_eval_logging
 from holosoma.utils.sim_utils import DirectSimulation, setup_simulation_environment
-from holosoma.utils.tyro_utils import TYRO_CONIFG
 
 
 def run_simulation(config: RunSimConfig):
@@ -30,17 +28,36 @@ def run_simulation(config: RunSimConfig):
     config : RunSimConfig
         Configuration containing all simulation settings.
     """
-    # Auto-set device for GPU-accelerated backends if still on default CPU
-    if config.device == "cpu":
-        # Check if using Warp backend (requires CUDA)
-        if hasattr(config.simulator.config, "mujoco_backend"):
-            from holosoma.config_types.simulator import MujocoBackend  # noqa: PLC0415 -- deferred
+    # Resolve the simulation device from the backend when the user did not set one (device=None).
+    # An explicit --device (including "cpu") is always honored.
+    if config.device is None:
+        from holosoma.config_types.simulator import MujocoBackend
+        from holosoma.utils.safe_torch_import import torch
 
-            if config.simulator.config.mujoco_backend == MujocoBackend.WARP:
-                logger.info("Auto-detected MuJoCo Warp backend - setting device to cuda:0")
-                config = dataclasses.replace(config, device="cuda:0")
+        sim_name = config.simulator.config.name
+        is_warp = (
+            hasattr(config.simulator.config, "mujoco_backend")
+            and config.simulator.config.mujoco_backend == MujocoBackend.WARP
+        )
+        if is_warp:
+            # MuJoCo Warp only runs on CUDA, so cpu is never a valid choice for it.
+            resolved_device = "cuda:0"
+            logger.info("Auto-detected MuJoCo Warp backend - setting device to cuda:0")
+        elif sim_name in ("isaacsim", "isaacgym"):
+            # Isaac backends are GPU-first; prefer cuda:0 when it is actually available,
+            # otherwise fall back to cpu (IsaacSim can run PhysX on CPU).
+            if torch.cuda.is_available():
+                resolved_device = "cuda:0"
+                logger.info(f"Auto-detected {sim_name} backend with CUDA available - setting device to cuda:0")
+            else:
+                resolved_device = "cpu"
+                logger.warning(f"{sim_name} backend selected but CUDA is unavailable - defaulting to cpu")
+        else:
+            # Classic MuJoCo (CPU physics engine).
+            resolved_device = "cpu"
+            logger.info(f"Auto-detected {sim_name} backend - setting device to cpu")
 
-    config = dataclasses.replace(config, device=config.device)
+        config = dataclasses.replace(config, device=resolved_device)
 
     logger.info("Starting Holosoma Direct Simulation...")
     logger.info(f"Robot: {config.robot.asset.robot_type}")
@@ -69,8 +86,9 @@ def main() -> None:
     logger.info("Holosoma Direct Simulation Runner")
     logger.info("Compositional configuration via subcommands (like eval_agent.py)")
 
-    # Parse configuration with tyro - same pattern as ExperimentConfig
-    config = tyro.cli(
+    from holosoma.utils.config_registry import parse_config
+
+    config = parse_config(
         RunSimConfig,
         description="Run simulation with direct simulator control and bridge support.\n\n"
         "Usage: python -m holosoma.run_sim simulator:<sim> robot:<robot> terrain:<terrain>\n"
@@ -78,7 +96,6 @@ def main() -> None:
         "  python -m holosoma.run_sim # defaults \n"
         "  python -m holosoma.run_sim simulator:mujoco robot:t1_29dof_waist_wrist terrain:terrain_locomotion_plane\n"
         "  python -m holosoma.run_sim simulator:isaacgym robot:g1_29dof terrain:terrain_locomotion_mix",
-        config=TYRO_CONIFG,
     )
 
     # Run simulation directly with parsed config

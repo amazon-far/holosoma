@@ -6,8 +6,14 @@ robot types and tasks, converted from the original YAML configurations.
 
 from __future__ import annotations
 
-from holosoma_inference.compat import entry_points
 from holosoma_inference.config.config_types.observation import ObservationConfig
+from holosoma_inference.utils.config_registry import (
+    ConfigRegistry,
+    deprecated_defaults_alias,
+    deprecated_get_defaults,
+)
+
+OBSERVATION_REGISTRY = ConfigRegistry(ObservationConfig, group="holosoma.config.observation")
 
 # =============================================================================
 # Locomotion Observation Configurations
@@ -146,16 +152,10 @@ wbt = ObservationConfig(
 # Default Configurations Dictionary
 # =============================================================================
 
-DEFAULTS = {
-    "loco-g1-29dof": loco_g1_29dof,
-    "loco-t1-29dof": loco_t1_29dof,
-    "wbt": wbt,
-}
-"""Dictionary of all available observation configurations.
+# Register core presets. Keys use hyphen-case naming convention for CLI compatibility.
+OBSERVATION_REGISTRY.add("loco-g1-29dof", loco_g1_29dof)
+OBSERVATION_REGISTRY.add("loco-t1-29dof", loco_t1_29dof)
+OBSERVATION_REGISTRY.add("wbt", wbt)
 
-Keys use hyphen-case naming convention for CLI compatibility.
-"""
-
-# Auto-discover observation configs from installed extensions
-for ep in entry_points(group="holosoma.config.observation"):
-    DEFAULTS[ep.name] = ep.load()
+__getattr__ = deprecated_defaults_alias(__name__, OBSERVATION_REGISTRY)
+get_defaults = deprecated_get_defaults(__name__, OBSERVATION_REGISTRY)
