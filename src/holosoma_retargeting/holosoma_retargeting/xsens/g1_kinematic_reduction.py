@@ -37,7 +37,7 @@ from holosoma_retargeting.xsens.kinematic_model import (
     canonical_xsens_segment_name,
 )
 
-G1_XSENS_REDUCTION_VERSION = "10"
+G1_XSENS_REDUCTION_VERSION = "11"
 XSENS_JOINT_STREAM_NAMES = (
     "body_joint_angles_eulerZXY_xyz_rad",
     "body_joint_angles_eulerXZY_xyz_rad",
@@ -1017,7 +1017,12 @@ def build_g1_proportioned_xsens_tree(
     )
     body_names = ("Pelvis",) + tuple(canonical_xsens_segment_name(spec.child_segment) for spec in joint_specs)
     if config.include_tennis_racket:
-        positions[TENNIS_RACKET_BODY] = positions["RightHand"].copy()
+        proportions = _g1_xsens_avatar_proportions_from_layout(anthropometry, positions, joint_centers)
+        palm_offset = np.asarray(
+            proportions.landmarks_m["RightHand"]["pRightHandPalm"],
+            dtype=float,
+        )
+        positions[TENNIS_RACKET_BODY] = positions["RightHand"] + palm_offset
         joint_centers["RightHandSwordOrigin"] = positions[TENNIS_RACKET_BODY].copy()
     visual_attachments = (
         _shared_visual_attachments(anthropometry, positions, joint_centers) if config.include_visuals else {}

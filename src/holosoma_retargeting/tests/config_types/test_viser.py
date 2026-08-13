@@ -10,11 +10,13 @@ import numpy as np
 import pytest
 from holosoma_retargeting.config_types.viser import ViserConfig, XsensViserConfig
 from holosoma_retargeting.config_values.viser import get_default_xsens_viser_config
-from holosoma_retargeting.kinematics.model import quaternion_multiply
+from holosoma_retargeting.kinematics.model import quaternion_multiply, rotate_vector
 from holosoma_retargeting.src.viser_utils import CameraFollowController, resolve_frame_times
 from holosoma_retargeting.viser_player import (
     G1_HAND_TO_XSENS_FRAME_WXYZ,
     G1_RACKET_FRAME_WXYZ,
+    G1_RACKET_GRIP_OFFSET_M,
+    G1_XSENS_RACKET_GRIP_OFFSET_M,
     XSENS_RACKET_LONGITUDINAL_ROLL_WXYZ,
     add_g1_tennis_racket,
     add_tennis_racket_control,
@@ -202,7 +204,7 @@ def test_tennis_control_updates_all_rackets_without_affecting_other_bodies() -> 
     assert pelvis_b.visible is True
 
 
-def test_g1_tennis_racket_pose_uses_robot_local_hand_transform() -> None:
+def test_g1_tennis_racket_pose_uses_robot_local_palm_transform() -> None:
     class FakeUrdf:
         base_link = "pelvis"
 
@@ -228,7 +230,7 @@ def test_g1_tennis_racket_pose_uses_robot_local_hand_transform() -> None:
 
     update_g1_tennis_racket_pose(racket, FakeUrdf())
 
-    np.testing.assert_allclose(racket.position, [1.0, 0.0, 0.0])
+    np.testing.assert_allclose(racket.position, np.array([1.0, 0.0, 0.0]) + G1_RACKET_GRIP_OFFSET_M)
     np.testing.assert_allclose(
         racket.wxyz,
         quaternion_multiply(
@@ -238,7 +240,39 @@ def test_g1_tennis_racket_pose_uses_robot_local_hand_transform() -> None:
     )
 
 
+def test_g1_tennis_racket_palm_offset_rotates_with_wrist() -> None:
+    quarter_turn_about_z = np.array(
+        [
+            [0.0, -1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    )
+
+    class FakeUrdf:
+        base_link = "pelvis"
+
+        def get_transform(self, frame_to, frame_from):
+            assert frame_from == self.base_link
+            assert frame_to in {"right_wrist_yaw_link", "right_rubber_hand_link"}
+            return quarter_turn_about_z
+
+    racket = SimpleNamespace(position=np.zeros(3), wxyz=np.array([1.0, 0.0, 0.0, 0.0]))
+
+    update_g1_tennis_racket_pose(racket, FakeUrdf())
+
+    np.testing.assert_allclose(
+        racket.position,
+        [-G1_RACKET_GRIP_OFFSET_M[1], G1_RACKET_GRIP_OFFSET_M[0], G1_RACKET_GRIP_OFFSET_M[2]],
+    )
+
+
 def test_g1_racket_frame_maps_xsens_roll_through_g1_hand_axes() -> None:
+    np.testing.assert_allclose(
+        G1_RACKET_GRIP_OFFSET_M,
+        rotate_vector(G1_HAND_TO_XSENS_FRAME_WXYZ, G1_XSENS_RACKET_GRIP_OFFSET_M),
+    )
     np.testing.assert_allclose(
         G1_RACKET_FRAME_WXYZ,
         quaternion_multiply(

@@ -26,7 +26,7 @@ from holosoma_retargeting.data_utils.xsens_hdf5 import (  # noqa: E402
     load_xsens_hdf5_motion,
 )
 from holosoma_retargeting.kinematics import KinematicMorphologyAdapter, KinematicMotion  # noqa: E402
-from holosoma_retargeting.kinematics.model import quaternion_multiply  # noqa: E402
+from holosoma_retargeting.kinematics.model import quaternion_multiply, rotate_vector  # noqa: E402
 from holosoma_retargeting.src.recording_utils import (  # noqa: E402
     build_record_frame_indices,
     record_viser_sequence,
@@ -99,11 +99,18 @@ ACTOR_LAYOUT_ORDER: tuple[ActorMode, ...] = ("xsens", "g1_xsens", "robot")
 
 G1_RACKET_POSITION_LINK = "right_wrist_yaw_link"
 G1_RACKET_ORIENTATION_LINK = "right_rubber_hand_link"
-XSENS_RACKET_LONGITUDINAL_ROLL_WXYZ = np.array([np.sqrt(0.5), -np.sqrt(0.5), 0.0, 0.0])
 # The physical G1 hand link uses a different fixed axis convention from the
-# calibrated Xsens RightHand frame. This maps G1-hand coordinates into the
-# Xsens hand frame before applying the tracked-racket longitudinal roll.
+# calibrated Xsens RightHand frame. This maps Xsens-hand vectors into physical
+# G1-hand coordinates before applying the tracked-racket longitudinal roll.
 G1_HAND_TO_XSENS_FRAME_WXYZ = np.array([0.5, 0.5, -0.5, 0.5])
+# The G1-proportioned Xsens model's pRightHandPalm landmark, expressed first
+# in Xsens hand coordinates and then in the physical G1 hand coordinates.
+G1_XSENS_RACKET_GRIP_OFFSET_M = np.array([0.02995738, -0.09651599, 0.01196775])
+G1_RACKET_GRIP_OFFSET_M = rotate_vector(
+    G1_HAND_TO_XSENS_FRAME_WXYZ,
+    G1_XSENS_RACKET_GRIP_OFFSET_M,
+)
+XSENS_RACKET_LONGITUDINAL_ROLL_WXYZ = np.array([np.sqrt(0.5), -np.sqrt(0.5), 0.0, 0.0])
 G1_RACKET_FRAME_WXYZ = quaternion_multiply(
     G1_HAND_TO_XSENS_FRAME_WXYZ,
     XSENS_RACKET_LONGITUDINAL_ROLL_WXYZ,
@@ -271,7 +278,14 @@ def update_g1_tennis_racket_pose(
         G1_RACKET_ORIENTATION_LINK,
         robot_urdf.base_link,
     )
-    local_position = np.asarray(position_transform[:3, 3], dtype=float)
+    local_position = (
+        np.asarray(position_transform[:3, 3], dtype=float)
+        + np.asarray(
+            position_transform[:3, :3],
+            dtype=float,
+        )
+        @ G1_RACKET_GRIP_OFFSET_M
+    )
     local_hand_wxyz = _matrix_to_quaternion(orientation_transform[:3, :3])
 
     # The racket frame is parented at ``/robot``. The robot root already

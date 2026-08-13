@@ -16,6 +16,7 @@ from holosoma_retargeting.kinematics import (
     validate_kinematic_tree,
 )
 from holosoma_retargeting.kinematics.model import rotate_vector
+from holosoma_retargeting.viser_player import G1_XSENS_RACKET_GRIP_OFFSET_M
 from holosoma_retargeting.xsens import morphology_adaptation
 from holosoma_retargeting.xsens.avatar_mesh import build_xsens_avatar_meshes
 from holosoma_retargeting.xsens.g1_kinematic_reduction import (
@@ -144,6 +145,18 @@ def test_default_collapses_axes_into_adapters_and_preserves_rigid_lengths(
         "racket_frame",
         "racket_strings",
     }
+    proportions = g1_anthropometry_to_xsens_avatar_proportions(anthropometry)
+    expected_palm_offset = proportions.landmarks_m["RightHand"]["pRightHandPalm"]
+    np.testing.assert_allclose(expected_palm_offset, G1_XSENS_RACKET_GRIP_OFFSET_M, atol=1e-8)
+    np.testing.assert_allclose(
+        bodies["TennisRacket"].reference_pose.translation_m,
+        bodies["RightHand"].reference_pose.translation_m + expected_palm_offset,
+    )
+    np.testing.assert_allclose(
+        joints["RightHandTennisRacketOrigin"].parent_frame.translation_m,
+        expected_palm_offset,
+    )
+    assert np.linalg.norm(expected_palm_offset) > 0.05
     assert model.metadata["model:preserveJointOffsets"] is False
     assert validate_kinematic_tree(model).is_valid
     shoulder_offsets: dict[str, np.ndarray] = {}
