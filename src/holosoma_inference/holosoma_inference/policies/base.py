@@ -149,6 +149,18 @@ class BasePolicy:
         if hasattr(self, "_shared_hardware_source"):
             self.interface = self._shared_hardware_source.interface
             return
+        # Dryer run: fabricate state, never open a DDS connection. Bypasses the
+        # SDK backend entirely so the loop runs with no bridge/driver present.
+        if self.config.task.debug.dryer_run:
+            from holosoma_inference.sdk.synthetic_interface import SyntheticInterface
+
+            self.interface = SyntheticInterface(
+                self.robot_config,
+                self.config.task.domain_id,
+                self.config.task.interface,
+                False,
+            )
+            return
         # The SDK's own wireless-controller path is only needed when an
         # "interface" channel is selected.  The "joystick" channel is read
         # via host-side evdev (UsbJoystickInput) and does not touch the SDK.
@@ -384,9 +396,39 @@ class BasePolicy:
     # Policy Methods
     # ============================================================================
 
+    @staticmethod
+    def _make_ort_session_options():
+        """ONNX Runtime options tuned for the real-time control loop.
+
+        By default ORT sizes its intra-op thread pool to the CPU count AND pins
+        one worker to each core via sched_setaffinity. That per-thread pin
+        bypasses the kernel's ``isolcpus`` reservation, so the workers land on
+        the isolated RT cores (10-13 here) and contend with the 1 kHz EtherCAT
+        actuator threads. The policy is a small MLP run at 50 Hz (~1 ms
+        single-threaded), so a multi-core pool buys nothing and the pinning is
+        pure harm. Force single-threaded, sequential exec, and — belt and
+        suspenders — disable ORT's thread affinity so it can never pin to an
+        isolated core even if thread counts change.
+        """
+        opts = onnxruntime.SessionOptions()
+        opts.intra_op_num_threads = 1
+        opts.inter_op_num_threads = 1
+        opts.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
+        # Empty affinity string => let the OS scheduler place threads within the
+        # inherited (0-9) mask; ORT does not force per-core pins.
+        try:
+            opts.add_session_config_entry("session.intra_op_thread_affinities", "")
+        except Exception as exc:
+            # Older ORT without this config key: intra_op_num_threads=1 already
+            # avoids building the per-core pinned pool, so this is best-effort.
+            logger.debug(f"ORT intra_op_thread_affinities config unsupported: {exc}")
+        return opts
+
     def setup_policy(self, model_path):
         """Setup ONNX policy model and extract metadata."""
-        self.onnx_policy_session = onnxruntime.InferenceSession(model_path)
+        self.onnx_policy_session = onnxruntime.InferenceSession(
+            model_path, sess_options=self._make_ort_session_options()
+        )
         input_names = [inp.name for inp in self.onnx_policy_session.get_inputs()]
         output_names = [out.name for out in self.onnx_policy_session.get_outputs()]
 
@@ -700,14 +742,31 @@ class BasePolicy:
 
         # Stage 5: Action Pub
         with self.latency_tracker.measure("action_pub"):
-            self.interface.send_low_command(
-                self.cmd_q,
-                self.cmd_dq,
-                self.cmd_tau,
-                robot_state_data[0, 7 : 7 + self.num_dofs],
-                kp_override=kp_override,
-                kd_override=kd_override,
-            )
+            # dry_run: the interface is the REAL bridge/driver, so we must NOT
+            # call send_low_command at all. dryer_run: the interface is the
+            # SyntheticInterface, whose send_low_command only publishes to a
+            # synthetic measurement topic (nothing reaches the robot), so we DO
+            # call it — that's what produces the measurable command stream.
+            if self.config.task.debug.dry_run and not self.config.task.debug.dryer_run:
+                # Log once so it's unmistakable no torque is being applied.
+                if not getattr(self, "_dry_run_logged", False):
+                    logger.warning(
+                        colored(
+                            "DRY RUN: policy loop active but send_low_command is SKIPPED "
+                            "(no commands sent to the robot).",
+                            "yellow",
+                        )
+                    )
+                    self._dry_run_logged = True
+            else:
+                self.interface.send_low_command(
+                    self.cmd_q,
+                    self.cmd_dq,
+                    self.cmd_tau,
+                    robot_state_data[0, 7 : 7 + self.num_dofs],
+                    kp_override=kp_override,
+                    kd_override=kd_override,
+                )
 
         # Telemetry hook: fires every control tick in every state (policy,
         # stiff-hold, init ramp) with the final executed command. Default
