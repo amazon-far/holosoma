@@ -172,15 +172,20 @@ def offset_qpos_positions(
 
 
 def resolve_record_output_path(config: ViserConfig) -> str:
-    """Resolve an explicit recording path or derive one from the source motion."""
+    """Resolve an explicit recording path or place the video beside the qpos result."""
 
     if config.record_path is not None:
         return config.record_path
+    qpos_path = resolve_package_path(config.qpos_npz)
     if isinstance(config, XsensViserConfig) and config.xsens_hdf5 is not None:
         actor_modes = resolve_actor_modes(config.actor_modes)
         if "xsens" in actor_modes or "g1_xsens" in actor_modes:
-            return str(resolve_package_path(config.xsens_hdf5).with_suffix(".mp4"))
-    return str(resolve_package_path(config.qpos_npz).with_suffix(".mp4"))
+            source_path = resolve_package_path(config.xsens_hdf5)
+        else:
+            source_path = qpos_path
+    else:
+        source_path = qpos_path
+    return str(qpos_path.parent / f"{source_path.stem}.mp4")
 
 
 def compute_camera_follow_target(

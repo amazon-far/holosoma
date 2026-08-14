@@ -59,7 +59,7 @@ class ViserConfig:
     """Whether to record the Viser playback to a video file."""
 
     record_path: str | None = None
-    """Optional recording output path. Defaults beside the source motion with a .mp4 suffix."""
+    """Optional recording output path. Defaults beside the qpos result file."""
 
     record_width: int = 1280
     """Rendered recording width in pixels."""

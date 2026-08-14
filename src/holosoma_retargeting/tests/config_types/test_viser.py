@@ -333,13 +333,22 @@ def test_tennis_control_is_absent_when_no_actor_has_a_racket() -> None:
     assert checkbox is None
 
 
-def test_record_path_defaults_to_xsens_hdf5_sibling() -> None:
+def test_record_path_defaults_beside_qpos_result_for_xsens_hdf5() -> None:
     config = XsensViserConfig(
         actor_modes=("xsens", "g1_xsens"),
         xsens_hdf5="/tmp/session/stream_log.hdf5",
+        qpos_npz="demo_results/g1/robot_only/xsens_tennis/retargeted_motion.npz",
     )
 
-    assert Path(resolve_record_output_path(config)) == Path("/tmp/session/stream_log.mp4").resolve()
+    assert Path(resolve_record_output_path(config)).as_posix().endswith(
+        "/demo_results/g1/robot_only/xsens_tennis/stream_log.mp4"
+    )
+
+
+def test_record_path_defaults_beside_qpos_result() -> None:
+    config = ViserConfig(qpos_npz="demo_results/g1/robot_only/lafan/walk.npz")
+
+    assert Path(resolve_record_output_path(config)).as_posix().endswith("/demo_results/g1/robot_only/lafan/walk.mp4")
 
 
 def test_explicit_record_path_overrides_derived_path() -> None:
