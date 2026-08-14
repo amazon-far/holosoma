@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .model import KinematicTree, rotate_vector, validate_kinematic_tree
+from .model import KinematicTree, rotate_vector, rotate_vectors, validate_kinematic_tree
 
 
 @dataclass(frozen=True)
@@ -113,6 +113,42 @@ class SurfacePoseEvaluator:
             ]
         )
 
+    def minimum_heights_m(self, motion: KinematicMotion) -> np.ndarray:
+        """Return the lowest selected surface height for every motion frame."""
+
+        _validate_motion(motion, expected_body_names=self._body_names)
+        positions = np.asarray(motion.positions_m, dtype=float)
+        orientations = np.asarray(motion.orientations_wxyz, dtype=float)
+        minimum_z = np.full(positions.shape[0], np.inf, dtype=float)
+        for surface_mesh in self._meshes:
+            pose_index = surface_mesh.pose_index
+            world_vertices = positions[:, pose_index, None, :] + rotate_vectors(
+                orientations[:, pose_index, None, :],
+                surface_mesh.vertices_m[None, :, :],
+            )
+            minimum_z = np.minimum(minimum_z, np.min(world_vertices[..., 2], axis=1))
+        return minimum_z
+
+    def support_references_m(self, motion: KinematicMotion) -> np.ndarray:
+        """Return surface-center XY and lowest Z for every motion frame."""
+
+        _validate_motion(motion, expected_body_names=self._body_names)
+        positions = np.asarray(motion.positions_m, dtype=float)
+        orientations = np.asarray(motion.orientations_wxyz, dtype=float)
+        xy_sum = np.zeros((positions.shape[0], 2), dtype=float)
+        point_count = 0
+        minimum_z = np.full(positions.shape[0], np.inf, dtype=float)
+        for surface_mesh in self._meshes:
+            pose_index = surface_mesh.pose_index
+            world_vertices = positions[:, pose_index, None, :] + rotate_vectors(
+                orientations[:, pose_index, None, :],
+                surface_mesh.vertices_m[None, :, :],
+            )
+            xy_sum += np.sum(world_vertices[..., :2], axis=1)
+            point_count += world_vertices.shape[1]
+            minimum_z = np.minimum(minimum_z, np.min(world_vertices[..., 2], axis=1))
+        return np.column_stack((xy_sum / point_count, minimum_z))
+
 
 class LowestSurfaceGrounding:
     """Align selected target surfaces with selected source surfaces."""
@@ -155,6 +191,11 @@ class LowestSurfaceGrounding:
         positions = np.asarray(target.positions_m, dtype=float).copy()
         positions[:, 2] += offset_m
         return KinematicPose(target.body_names, positions, np.asarray(target.orientations_wxyz).copy())
+
+    def vertical_offsets_m(self, source: KinematicMotion, target: KinematicMotion) -> np.ndarray:
+        """Return per-frame Z translations aligning selected motion surfaces."""
+
+        return self._source.minimum_heights_m(source) - self._target.minimum_heights_m(target)
 
 
 @dataclass(frozen=True)
@@ -247,23 +288,38 @@ class KinematicMorphologyAdapter:
         return target if self.grounding is None else self.grounding.apply(source, target)
 
     def adapt_motion(self, source: KinematicMotion) -> KinematicMotion:
-        """Adapt every frame using the same pose kernel and preserve timestamps."""
+        """Adapt all frames in batches while preserving the scalar pose semantics."""
 
         _validate_motion(source, expected_body_names=self.source_body_names)
-        positions = np.empty_like(np.asarray(source.positions_m, dtype=float))
-        for frame_index in range(positions.shape[0]):
-            adapted = self.adapt_pose(
-                KinematicPose(
-                    source.body_names,
-                    source.positions_m[frame_index],
-                    source.orientations_wxyz[frame_index],
-                )
+        positions = np.asarray(source.positions_m, dtype=float).copy()
+        orientations = np.asarray(source.orientations_wxyz, dtype=float)
+        for step in self.steps:
+            parent_anchor_world = rotate_vectors(
+                orientations[:, step.parent_index],
+                step.parent_anchor_m,
             )
-            positions[frame_index] = adapted.positions_m
+            child_anchor_world = rotate_vectors(
+                orientations[:, step.child_index],
+                step.child_anchor_m,
+            )
+            positions[:, step.child_index] = (
+                positions[:, step.parent_index] + parent_anchor_world - child_anchor_world
+            )
+
+        if self.grounding is not None:
+            raw_target = KinematicMotion(
+                self.source_body_names,
+                positions,
+                orientations,
+                np.asarray(source.times_s),
+            )
+            offsets_m = self.grounding.vertical_offsets_m(source, raw_target)
+            positions[:, :, 2] += offsets_m[:, None]
+
         return KinematicMotion(
             self.source_body_names,
             positions,
-            np.asarray(source.orientations_wxyz).copy(),
+            orientations.copy(),
             np.asarray(source.times_s).copy(),
         )
 

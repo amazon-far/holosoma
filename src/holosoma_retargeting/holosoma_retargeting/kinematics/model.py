@@ -134,11 +134,33 @@ def quaternion_multiply(left: np.ndarray, right: np.ndarray) -> np.ndarray:
 
 
 def rotate_vector(quaternion: np.ndarray, vector: np.ndarray) -> np.ndarray:
-    q = _normalized_quaternion(quaternion)
-    vector = np.asarray(vector, dtype=float)
-    pure = np.array([0.0, vector[0], vector[1], vector[2]])
-    rotated = _quat_multiply_raw(_quat_multiply_raw(q, pure), quaternion_conjugate(q))
-    return rotated[1:]
+    """Rotate one vector while preserving the original scalar API."""
+
+    quaternion_array = np.asarray(quaternion, dtype=float)
+    vector_array = np.asarray(vector, dtype=float)
+    if quaternion_array.shape != (4,) or vector_array.shape != (3,):
+        raise ValueError("Quaternion and vector must have shapes (4,) and (3,)")
+    return rotate_vectors(quaternion_array, vector_array)
+
+
+def rotate_vectors(quaternions: np.ndarray, vectors: np.ndarray) -> np.ndarray:
+    """Rotate broadcast-compatible vectors by scalar-first quaternions."""
+
+    quaternion_array = np.asarray(quaternions, dtype=float)
+    vector_array = np.asarray(vectors, dtype=float)
+    if quaternion_array.shape[-1:] != (4,) or vector_array.shape[-1:] != (3,):
+        raise ValueError("Quaternion and vector arrays must end in dimensions 4 and 3")
+    norms = np.linalg.norm(quaternion_array, axis=-1, keepdims=True)
+    if np.any(norms <= 1e-12):
+        raise ValueError("Quaternion norm must be positive")
+    normalized = quaternion_array / norms
+    vector_part = normalized[..., 1:]
+    twice_cross = 2.0 * np.cross(vector_part, vector_array)
+    return (
+        vector_array
+        + normalized[..., :1] * twice_cross
+        + np.cross(vector_part, twice_cross)
+    )
 
 
 def _quat_multiply_raw(left: np.ndarray, right: np.ndarray) -> np.ndarray:

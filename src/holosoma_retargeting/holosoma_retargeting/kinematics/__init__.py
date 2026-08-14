@@ -10,6 +10,8 @@ from .model import (
     ValidationReport,
     compute_joint_positions,
     compute_reference_joint_positions,
+    rotate_vector,
+    rotate_vectors,
     validate_kinematic_tree,
     with_body_attachments,
 )
@@ -42,6 +44,8 @@ __all__ = [
     "compute_reference_joint_positions",
     "reference_grounding_offset_m",
     "reference_root_floor_clearance_m",
+    "rotate_vector",
+    "rotate_vectors",
     "validate_kinematic_tree",
     "with_body_attachments",
 ]

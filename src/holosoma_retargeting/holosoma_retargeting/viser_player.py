@@ -526,7 +526,8 @@ def make_player(
     xsens_actors: dict[ActorMode, XsensUsdActor] = {}
     xsens_sampler: XsensMotionSampler | None = None
     g1_xsens_adapter: KinematicMorphologyAdapter | None = None
-    g1_xsens_motion: KinematicMotion | None = None
+    g1_xsens_positions_m: np.ndarray | None = None
+    g1_xsens_times_s: np.ndarray | None = None
     subject_reference_model = None
     if show_xsens:
         assert xsens_config is not None and xsens_motion is not None and xsens_config.xsens_hdf5 is not None
@@ -579,6 +580,11 @@ def make_player(
                 grounding="match_lowest_soles",
                 config=xsens_config.g1_xsens_root_motion,
             )
+            # G1 uses the sampled source quaternions during playback, so retain
+            # only the adapted positions and timestamps from this result.
+            g1_xsens_positions_m = g1_xsens_motion.positions_m
+            g1_xsens_times_s = g1_xsens_motion.times_s
+            del g1_xsens_motion
         for mode, actor in xsens_actors.items():
             actor.root.position = xsens_actor_offsets[mode]
 
@@ -637,8 +643,8 @@ def make_player(
         initial_xsens_pose = xsens_sampler.sample(float(xsens_sampler.times_s[0]))
         initial_g1_positions = None
         if "g1_xsens" in xsens_actors:
-            assert g1_xsens_motion is not None
-            initial_g1_positions = g1_xsens_motion.positions_m[0]
+            assert g1_xsens_positions_m is not None
+            initial_g1_positions = g1_xsens_positions_m[0]
         for mode in xsens_actors:
             base_positions = (
                 initial_g1_positions
@@ -781,11 +787,11 @@ def make_player(
         xsens_pose = xsens_sampler.sample(time_s)
         g1_positions = None
         if "g1_xsens" in xsens_actors:
-            assert g1_xsens_motion is not None
-            lower, upper, weight = interpolation_window(g1_xsens_motion.times_s, time_s)
+            assert g1_xsens_positions_m is not None and g1_xsens_times_s is not None
+            lower, upper, weight = interpolation_window(g1_xsens_times_s, time_s)
             g1_positions = (
-                (1.0 - weight) * g1_xsens_motion.positions_m[lower]
-                + weight * g1_xsens_motion.positions_m[upper]
+                (1.0 - weight) * g1_xsens_positions_m[lower]
+                + weight * g1_xsens_positions_m[upper]
             )
 
         avatar_positions: list[np.ndarray] = []

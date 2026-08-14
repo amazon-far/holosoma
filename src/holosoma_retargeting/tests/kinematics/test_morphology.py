@@ -14,6 +14,7 @@ from holosoma_retargeting.kinematics import (
     MeshAttachment,
     RigidBodyDefinition,
     SphericalJointDefinition,
+    SurfacePoseEvaluator,
     Transform,
     compute_joint_positions,
     reference_grounding_offset_m,
@@ -121,6 +122,152 @@ def test_batch_adaptation_matches_pose_kernel_and_preserves_motion_data() -> Non
     np.testing.assert_array_equal(adapted.orientations_wxyz, orientations)
     np.testing.assert_array_equal(adapted.times_s, times)
     assert not np.shares_memory(adapted.times_s, times)
+
+
+@pytest.mark.parametrize("with_grounding", [False, True])
+def test_vectorized_batch_matches_scalar_pose_kernel_for_random_motion(
+    with_grounding: bool,
+) -> None:
+    rng = np.random.default_rng(8421)
+    frame_count = 127
+    positions = rng.normal(size=(frame_count, len(SOURCE_NAMES), 3))
+    orientations = rng.normal(size=(frame_count, len(SOURCE_NAMES), 4))
+    orientations *= rng.uniform(0.2, 3.0, size=orientations.shape[:-1] + (1,))
+    times = np.cumsum(rng.uniform(0.005, 0.08, size=frame_count))
+    source = KinematicMotion(SOURCE_NAMES, positions, orientations, times)
+    target_model = _model(child_origin_z=1.7, sole_z=-0.13)
+
+    grounding = None
+    if with_grounding:
+        source_model = _model(child_origin_z=0.8, sole_z=-0.21)
+        surfaces = (GroundingSurface("Child", ("sole",)),)
+        grounding = LowestSurfaceGrounding(
+            source_model,
+            target_model,
+            SOURCE_NAMES,
+            source_body_to_pose_body=MAPPING,
+            target_body_to_pose_body=MAPPING,
+            source_surfaces=surfaces,
+            target_surfaces=surfaces,
+        )
+    adapter = KinematicMorphologyAdapter(
+        target_model,
+        SOURCE_NAMES,
+        target_body_to_source_body=MAPPING,
+        grounding=grounding,
+    )
+
+    batch = adapter.adapt_motion(source)
+    scalar_positions = np.stack(
+        [
+            adapter.adapt_pose(
+                KinematicPose(SOURCE_NAMES, positions[frame], orientations[frame])
+            ).positions_m
+            for frame in range(frame_count)
+        ]
+    )
+
+    np.testing.assert_allclose(batch.positions_m, scalar_positions, rtol=2e-14, atol=2e-14)
+    np.testing.assert_array_equal(batch.orientations_wxyz, orientations)
+    np.testing.assert_array_equal(batch.times_s, times)
+
+
+def test_vectorized_batch_preserves_multilevel_kinematic_dependency_order() -> None:
+    body_names = ("TipStream", "RootStream", "MiddleStream")
+    mapping = {"Root": "RootStream", "Middle": "MiddleStream", "Tip": "TipStream"}
+    model = KinematicTree(
+        "three_body_chain",
+        "Root",
+        (
+            RigidBodyDefinition("Tip", Transform(np.array([0.0, 0.0, 2.0]))),
+            RigidBodyDefinition("Root", Transform.identity()),
+            RigidBodyDefinition("Middle", Transform(np.array([0.0, 0.0, 1.0]))),
+        ),
+        (
+            SphericalJointDefinition(
+                "RootToMiddle",
+                "Root",
+                "Middle",
+                Transform(np.array([0.1, 0.0, 0.4])),
+                Transform(np.array([0.1, 0.0, -0.6])),
+            ),
+            SphericalJointDefinition(
+                "MiddleToTip",
+                "Middle",
+                "Tip",
+                Transform(np.array([0.0, 0.2, 0.6])),
+                Transform(np.array([0.0, 0.2, -0.4])),
+            ),
+        ),
+    )
+    rng = np.random.default_rng(5540)
+    frame_count = 59
+    positions = rng.normal(size=(frame_count, len(body_names), 3))
+    orientations = rng.normal(size=(frame_count, len(body_names), 4))
+    motion = KinematicMotion(
+        body_names,
+        positions,
+        orientations,
+        np.arange(frame_count, dtype=float) * 0.02,
+    )
+    adapter = KinematicMorphologyAdapter(
+        model,
+        body_names,
+        target_body_to_source_body=mapping,
+    )
+
+    batch = adapter.adapt_motion(motion)
+    scalar = np.stack(
+        [
+            adapter.adapt_pose(
+                KinematicPose(body_names, positions[frame], orientations[frame])
+            ).positions_m
+            for frame in range(frame_count)
+        ]
+    )
+
+    np.testing.assert_allclose(batch.positions_m, scalar, rtol=2e-14, atol=2e-14)
+
+
+def test_vectorized_surface_evaluation_matches_scalar_pose_methods() -> None:
+    rng = np.random.default_rng(7229)
+    frame_count = 83
+    model = _model(child_origin_z=1.3, sole_z=-0.17)
+    evaluator = SurfacePoseEvaluator(
+        model,
+        SOURCE_NAMES,
+        MAPPING,
+        (GroundingSurface("Child", ("sole",)),),
+    )
+    positions = rng.normal(size=(frame_count, len(SOURCE_NAMES), 3))
+    orientations = rng.normal(size=(frame_count, len(SOURCE_NAMES), 4))
+    orientations *= rng.uniform(0.1, 5.0, size=orientations.shape[:-1] + (1,))
+    motion = KinematicMotion(
+        SOURCE_NAMES,
+        positions,
+        orientations,
+        np.arange(frame_count, dtype=float) * 0.03,
+    )
+    poses = [
+        KinematicPose(SOURCE_NAMES, positions[frame], orientations[frame])
+        for frame in range(frame_count)
+    ]
+
+    scalar_minimums = np.asarray([evaluator.minimum_height_m(pose) for pose in poses])
+    scalar_references = np.asarray([evaluator.support_reference_m(pose) for pose in poses])
+
+    np.testing.assert_allclose(
+        evaluator.minimum_heights_m(motion),
+        scalar_minimums,
+        rtol=2e-14,
+        atol=2e-14,
+    )
+    np.testing.assert_allclose(
+        evaluator.support_references_m(motion),
+        scalar_references,
+        rtol=2e-14,
+        atol=2e-14,
+    )
 
 
 def test_optional_grounding_aligns_lowest_surfaces_without_clamping_airborne_pose() -> None:

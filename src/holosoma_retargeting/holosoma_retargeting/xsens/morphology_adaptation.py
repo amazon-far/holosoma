@@ -188,14 +188,6 @@ def _validate_root_motion_config(config: XsensRootMotionConfig) -> None:
         raise ValueError("contact_min_duration_s must be finite and positive")
 
 
-def _pose_at(motion: KinematicMotion, frame: int) -> KinematicPose:
-    return KinematicPose(
-        motion.body_names,
-        np.asarray(motion.positions_m[frame], dtype=float),
-        np.asarray(motion.orientations_wxyz[frame], dtype=float),
-    )
-
-
 def _reference_pose(model: KinematicTree) -> KinematicPose:
     return KinematicPose(
         tuple(body.name for body in model.bodies),
@@ -255,10 +247,7 @@ def _surface_references(
     motion: KinematicMotion,
     evaluator: SurfacePoseEvaluator,
 ) -> np.ndarray:
-    return np.asarray(
-        [evaluator.support_reference_m(_pose_at(motion, frame)) for frame in range(len(motion.times_s))],
-        dtype=float,
-    )
+    return evaluator.support_references_m(motion)
 
 
 def _resolved_ground_height_m(
@@ -391,16 +380,20 @@ def apply_xsens_root_motion(
     source_sides = {
         side: _surface_evaluator(source_model, source.body_names, source_mapping, side=side) for side in _SIDES
     }
-    target_sides = {
-        side: _surface_evaluator(target_model, source.body_names, target_mapping, side=side) for side in _SIDES
-    }
-    source_references = {
-        side: _surface_references(source, source_sides[side]) for side in _SIDES
-    }
-    ground_height_m = _resolved_ground_height_m(
-        source_references["Left"],
-        source_references["Right"],
-        config.ground_height_m,
+    needs_contact_references = config.mode == "scale_by_leg_length_contact_aware"
+    source_references = (
+        {side: _surface_references(source, source_sides[side]) for side in _SIDES}
+        if config.ground_height_m is None or needs_contact_references
+        else {}
+    )
+    ground_height_m = (
+        _resolved_ground_height_m(
+            source_references["Left"],
+            source_references["Right"],
+            None,
+        )
+        if config.ground_height_m is None
+        else float(config.ground_height_m)
     )
     source_leg_length_m = _functional_leg_length_m(source_model)
     target_leg_length_m = _functional_leg_length_m(target_model)
@@ -414,22 +407,21 @@ def apply_xsens_root_motion(
     source_root = np.asarray(source.positions_m[:, root_index], dtype=float)
     positions = np.asarray(raw_target.positions_m, dtype=float).copy()
     initial_xy = source_root[0, :2].copy()
-    for frame in range(positions.shape[0]):
-        raw_pose = KinematicPose(raw_target.body_names, positions[frame], raw_target.orientations_wxyz[frame])
-        translation = np.zeros(3, dtype=float)
-        desired_xy = initial_xy + scale * (source_root[frame, :2] - initial_xy)
-        translation[:2] = desired_xy - positions[frame, root_index, :2]
-        if grounding == "match_lowest_soles":
-            source_height = source_all.minimum_height_m(_pose_at(source, frame))
-            desired_height = ground_height_m + scale * (source_height - ground_height_m)
-            translation[2] = desired_height - target_all.minimum_height_m(raw_pose)
-        else:
-            desired_root_z = ground_height_m + scale * (source_root[frame, 2] - ground_height_m)
-            translation[2] = desired_root_z - positions[frame, root_index, 2]
-        positions[frame] += translation
+    translation = np.zeros((positions.shape[0], 3), dtype=float)
+    desired_xy = initial_xy + scale * (source_root[:, :2] - initial_xy)
+    translation[:, :2] = desired_xy - positions[:, root_index, :2]
+    if grounding == "match_lowest_soles":
+        source_heights = source_all.minimum_heights_m(source)
+        desired_heights = ground_height_m + scale * (source_heights - ground_height_m)
+        target_heights = target_all.minimum_heights_m(raw_target)
+        translation[:, 2] = desired_heights - target_heights
+    else:
+        desired_root_z = ground_height_m + scale * (source_root[:, 2] - ground_height_m)
+        translation[:, 2] = desired_root_z - positions[:, root_index, 2]
+    positions += translation[:, None, :]
 
     contacts = {side: np.zeros(positions.shape[0], dtype=bool) for side in _SIDES}
-    if config.mode == "scale_by_leg_length_contact_aware":
+    if needs_contact_references:
         contacts = {
             side: _detect_contacts(
                 source_references[side],
@@ -445,6 +437,10 @@ def apply_xsens_root_motion(
             np.asarray(raw_target.orientations_wxyz, dtype=float),
             np.asarray(raw_target.times_s, dtype=float),
         )
+        target_sides = {
+            side: _surface_evaluator(target_model, source.body_names, target_mapping, side=side)
+            for side in _SIDES
+        }
         target_references = {
             side: _surface_references(baseline, target_sides[side]) for side in _SIDES
         }
