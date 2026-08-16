@@ -12,6 +12,9 @@
   <exec_depend>holosoma_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>message_filters</exec_depend>
+  <!-- Depth resize uses the training-time torchvision bicubic transform. -->
+  <exec_depend>python3-torch</exec_depend>
+  <exec_depend>python3-torchvision</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

@@ -13,7 +13,8 @@ them.
 import pytest
 
 pytest.importorskip("numpy")
-pytest.importorskip("cv2")
+pytest.importorskip("torch")
+pytest.importorskip("torchvision")
 pytest.importorskip("rclpy")
 pytest.importorskip("message_filters")
 
@@ -105,3 +106,75 @@ def test_timeout_zeros_on_dead_stream(monkeypatch):
 def test_negative_delay_rejected():
     with pytest.raises(ValueError, match="frame_delay_ms must be >= 0"):
         Ros2DepthConsumer(_FakeNode(), topics=["/depth"], frame_delay_ms=-1.0)
+
+
+# --- no-return pixel sanitization (REP-117 non-finite depth) --------------------
+
+
+def _consumer_for_preprocess(size=8, near=0.1, far=2.0):
+    """A same-size consumer (resized_h/w == frame size). The bicubic resize is not
+    an identity even at equal size, so per-pixel value assertions use UNIFORM
+    frames (bicubic of a constant region is that constant)."""
+    return Ros2DepthConsumer(
+        _FakeNode(), topics=["/depth"], resized_height=size, resized_width=size, near_clip=near, far_clip=far
+    )
+
+
+def _normalize(value, near=0.1, far=2.0):
+    """Mirror _preprocess's clip+normalize for an already-sanitized metric depth."""
+    clipped = min(max(value, near), far)
+    return (clipped - near) / (far - near) - 0.5
+
+
+@pytest.mark.parametrize(
+    "fill,expected_metric",
+    [
+        (np.inf, 2.0),  # +Inf -> far
+        (-np.inf, 0.1),  # -Inf -> near
+        (np.nan, 2.0),  # NaN  -> far
+        (0.0, 2.0),  # <=0  -> far
+        (-5.0, 2.0),  # negative -> far
+    ],
+)
+def test_preprocess_maps_no_return_fill(fill, expected_metric):
+    """Each no-return sentinel maps to the right clip; a uniform frame stays uniform
+    through the bicubic resize, so we can assert the exact normalized value."""
+    c = _consumer_for_preprocess()
+    out = c._preprocess(np.full((8, 8), fill, dtype=np.float32))
+    assert out.shape == (1, 8, 8)
+    assert np.all(np.isfinite(out))
+    assert out == pytest.approx(_normalize(expected_metric), abs=1e-5)
+
+
+def test_preprocess_finite_uniform_depth_value():
+    """A uniform in-range depth normalizes to its exact value (resize-invariant)."""
+    c = _consumer_for_preprocess()
+    out = c._preprocess(np.full((8, 8), 0.5, dtype=np.float32))
+    assert out == pytest.approx(_normalize(0.5), abs=1e-5)
+
+
+def test_preprocess_output_always_in_range():
+    """Any input (mixed finite + no-return) yields a finite stack within [-0.5, 0.5]."""
+    c = _consumer_for_preprocess()
+    frame = np.array([[np.inf, -np.inf, 0.5], [np.nan, 0.0, 5.0], [-1.0, 1.0, 0.05]], dtype=np.float32)
+    c2 = _consumer_for_preprocess(size=3)
+    out = c2._preprocess(frame)
+    assert np.all(np.isfinite(out))
+    assert np.all(out >= -0.5 - 1e-4) and np.all(out <= 0.5 + 1e-4)
+
+
+def test_preprocess_does_not_mutate_readonly_source():
+    """Decoded frames are read-only np.frombuffer views; _preprocess must copy."""
+    c = _consumer_for_preprocess(size=2)
+    frame = np.array([[np.inf, 1.0], [np.nan, 0.0]], dtype=np.float32)
+    frame.setflags(write=False)  # emulate the np.frombuffer view from _decode_depth
+    out = c._preprocess(frame)  # must not raise
+    assert np.all(np.isfinite(out))
+
+
+def test_preprocess_all_no_return_frame_is_finite():
+    """A frame with no valid returns still yields a finite, in-range stack."""
+    c = _consumer_for_preprocess()
+    out = c._preprocess(np.full((8, 8), np.nan, dtype=np.float32))
+    assert np.all(np.isfinite(out))
+    assert np.all(out >= -0.5) and np.all(out <= 0.5)
