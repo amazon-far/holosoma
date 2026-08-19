@@ -525,7 +525,9 @@ class RetargetingEvaluator:
                         dist = mujoco.mj_geomDistance(
                             self.robot_model, self.robot_data, g1, g2, self.collision_detection_threshold, fromto
                         )
-                        dist_min = min(dist_min, dist)
+                        # Equality is MuJoCo's out-of-range sentinel, not a measured distance.
+                        if dist < self.collision_detection_threshold:
+                            dist_min = min(dist_min, dist)
 
                 if dist_min > self.contact_threshold:
                     ok = False

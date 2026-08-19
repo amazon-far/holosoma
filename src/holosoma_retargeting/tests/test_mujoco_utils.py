@@ -37,6 +37,39 @@ def _frame_test_model() -> mujoco.MjModel:
     )
 
 
+def test_geom_distance_uses_cutoff_as_out_of_range_sentinel() -> None:
+    model = mujoco.MjModel.from_xml_string(
+        """
+        <mujoco>
+          <worldbody>
+            <geom name="ground" type="plane" size="1 1 0.1"/>
+            <body pos="0 0 1">
+              <geom name="ball" type="sphere" size="0.1"/>
+            </body>
+          </worldbody>
+        </mujoco>
+        """
+    )
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    ground_id = model.geom("ground").id
+    ball_id = model.geom("ball").id
+
+    fromto = np.full(6, np.nan)
+    cutoff = 0.1
+    distance = mujoco.mj_geomDistance(model, data, ground_id, ball_id, cutoff, fromto)
+
+    assert distance == pytest.approx(cutoff)
+    np.testing.assert_array_equal(fromto, np.zeros(6))
+
+    in_range_cutoff = 1.0
+    distance = mujoco.mj_geomDistance(model, data, ground_id, ball_id, in_range_cutoff, fromto)
+
+    assert distance == pytest.approx(0.9)
+    assert distance < in_range_cutoff
+    assert np.linalg.norm(fromto[3:] - fromto[:3]) == pytest.approx(distance)
+
+
 def test_resolve_mujoco_frame_supports_all_kinds_and_precedence() -> None:
     model = _frame_test_model()
     data = mujoco.MjData(model)

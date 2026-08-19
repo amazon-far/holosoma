@@ -1065,7 +1065,8 @@ class InteractionMeshRetargeter:
         for geom_a, geom_b in self._self_collision_geom_pairs:
             fromto[:] = 0.0
             dist = mujoco.mj_geomDistance(m, d, geom_a, geom_b, threshold, fromto)
-            if dist <= threshold:
+            # Equality is MuJoCo's out-of-range sentinel; ``fromto`` is not valid.
+            if dist < threshold:
                 J_rel = self._compute_jacobian_for_contact_relative(
                     m.geom(geom_a),
                     m.geom(geom_b),
@@ -1390,7 +1391,8 @@ class InteractionMeshRetargeter:
 
             fromto[:] = 0.0
             dist = mujoco.mj_geomDistance(m, d, g1, g2, threshold, fromto)
-            if dist <= threshold:
+            # Equality is MuJoCo's out-of-range sentinel; ``fromto`` is not valid.
+            if dist < threshold:
                 J_rel = self._compute_jacobian_for_contact_relative(
                     m.geom(g1), m.geom(g2), self._geom_names[g1], self._geom_names[g2], fromto, dist
                 )
