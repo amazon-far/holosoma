@@ -128,15 +128,29 @@ python examples/xsens_tennis/analyze_xsens_g1_retargeting.py \
     --sequence-names <sequence-name> \
     --viser-mode interactive
 
+# Record the complete selected analysis interval. Open the printed Viser URL
+# so its browser renderer can capture the video.
+python examples/xsens_tennis/analyze_xsens_g1_retargeting.py \
+    --sequence-names <sequence-name> \
+    --viser-mode record \
+    --record-path <output.mp4>
+
+# Record each automatically selected diagnostic clip.
 python examples/xsens_tennis/analyze_xsens_g1_retargeting.py \
     --sequence-names <sequence-name> \
     --viser-mode record-clips
 ```
 
-The player offers overlay and side-by-side layouts, playback controls, actor-specific support polygons, CoM
-projections, racket trails, and live G1-versus-human error values. Recorded clips use automatically selected,
-non-overlapping windows around worst racket position/orientation errors, the worst stability-margin discrepancy,
-and representative labeled activities.
+The player offers overlay and side-by-side layouts, playback controls, automatic camera following, per-actor
+visibility controls, actor-specific support polygons, CoM projections, racket trails, and live G1-versus-human error
+values. Overlay mode is enabled by default because `--actor-spacing-m` defaults to `0.0`. It aligns the human and
+G1-sized Xsens pelvis positions with the physical G1 pelvis in the XY plane at every displayed frame while preserving
+each actor's original Z coordinate; it changes only the display transforms and leaves all world- and root-relative
+metrics unchanged. Set a positive `--actor-spacing-m` to start in side-by-side mode. Enable camera following initially
+with `--camera-follow`, or toggle `Automatically follow subjects` in the Camera folder. Full recordings can be
+restricted with `--record-start-frame`, `--record-end-frame` (inclusive), and `--record-stride`; `--record-fps`
+overrides the motion FPS. Recorded diagnostic clips use automatically selected, non-overlapping windows around worst
+racket position/orientation errors, the worst stability-margin discrepancy, and representative labeled activities.
 
 Use the legacy direct-human position targets for comparison or regression runs with:
 

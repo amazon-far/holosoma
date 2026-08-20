@@ -92,13 +92,23 @@ class Config:
     max_clips: int = 6
     max_speed_lag_s: float = 0.5
     sole_contact_height_threshold_m: float = 0.03
-    viser_mode: Literal["none", "interactive", "record-clips"] = "none"
+    viser_mode: Literal["none", "interactive", "record", "record-clips"] = "none"
     viser_port: int = 8080
-    actor_spacing_m: float = 2.0
+    actor_spacing_m: float = 0.0
+    camera_follow: bool = False
     trail_duration_s: float = 1.0
+    record_path: Path | None = None
     record_width: int = 1280
     record_height: int = 720
+    record_fps: float | None = None
+    record_start_frame: int = 0
+    record_end_frame: int | None = None
+    record_stride: int = 1
     record_connect_timeout_s: float = 120.0
+    record_start_delay_s: float = 3.0
+    record_settle_time_s: float = 0.0
+    record_warmup_renders: int = 0
+    record_transport_format: Literal["jpeg", "png"] = "jpeg"
 
 
 @dataclass(frozen=True)
@@ -1661,6 +1671,55 @@ def _viser_polygon_points(polygon_xy: np.ndarray, z: float = 0.01) -> np.ndarray
     return np.stack([points[:-1], points[1:]], axis=1)
 
 
+def actor_layout_translations(
+    human_root_position_m: np.ndarray,
+    g1_xsens_root_position_m: np.ndarray,
+    g1_root_position_m: np.ndarray,
+    *,
+    overlay: bool,
+    spacing_m: float,
+) -> dict[str, np.ndarray]:
+    """Return display-only translations for overlay or world-space side-by-side layouts.
+
+    Overlay mode aligns actor roots horizontally while preserving each actor's
+    original vertical position.
+    """
+
+    human_root = np.asarray(human_root_position_m, dtype=float)
+    target_root = np.asarray(g1_xsens_root_position_m, dtype=float)
+    robot_root = np.asarray(g1_root_position_m, dtype=float)
+    if human_root.shape != target_root.shape or human_root.shape != robot_root.shape:
+        raise ValueError("Actor roots must have matching shapes")
+    if human_root.shape[-1:] != (3,) or not all(
+        np.isfinite(values).all() for values in (human_root, target_root, robot_root)
+    ):
+        raise ValueError("Actor roots must be finite xyz positions")
+    if not np.isfinite(spacing_m) or spacing_m < 0.0:
+        raise ValueError("actor_spacing_m must be finite and non-negative")
+    if overlay:
+        human_translation = robot_root - human_root
+        target_translation = robot_root - target_root
+        human_translation[..., 2] = 0.0
+        target_translation[..., 2] = 0.0
+        return {
+            "human": human_translation,
+            "g1_xsens": target_translation,
+            "g1": np.zeros_like(robot_root),
+        }
+    offsets = {
+        "human": np.array([0.0, -spacing_m, 0.0]),
+        "g1_xsens": np.zeros(3),
+        "g1": np.array([0.0, spacing_m, 0.0]),
+    }
+    return {actor: np.broadcast_to(offset, human_root.shape).copy() for actor, offset in offsets.items()}
+
+
+def resolve_viser_record_path(data: AnalysisData, config: Config) -> Path:
+    if config.record_path is not None:
+        return config.record_path.expanduser()
+    return data.paths.output_dir / f"{data.paths.sequence_name}_analysis.mp4"
+
+
 def launch_viser(
     data: AnalysisData,
     clips: Sequence[DiagnosticClip],
@@ -1672,13 +1731,19 @@ def launch_viser(
     import yourdfpy  # type: ignore[import-untyped]  # noqa: PLC0415
     from viser.extras import ViserUrdf  # type: ignore[import-not-found]  # noqa: PLC0415
 
-    from holosoma_retargeting.src.recording_utils import record_viser_sequence  # noqa: PLC0415
+    from holosoma_retargeting.src.recording_utils import (  # noqa: PLC0415
+        build_record_frame_indices,
+        record_viser_sequence,
+    )
     from holosoma_retargeting.src.viser_utils import (  # noqa: PLC0415
+        CameraFollowController,
         QposViserApplier,
         create_timed_motion_control_sliders,
     )
     from holosoma_retargeting.viser_player import (  # noqa: PLC0415
         add_g1_tennis_racket,
+        compute_camera_follow_target,
+        compute_initial_camera_view,
         update_g1_tennis_racket_pose,
     )
 
@@ -1729,7 +1794,7 @@ def launch_viser(
         robot_dof=29,
         contains_object_in_qpos=False,
     )
-    robot_racket, _ = add_g1_tennis_racket(server)
+    robot_racket, robot_racket_meshes = add_g1_tennis_racket(server)
     server.scene.add_grid("/grid", width=20.0, height=20.0)
     com_handles = {
         actor: server.scene.add_point_cloud(
@@ -1768,7 +1833,42 @@ def launch_viser(
         )
         for actor in ACTOR_RGB
     }
-    with server.gui.add_folder("Analysis"):
+    pelvis_index = next(
+        index for index, name in enumerate(data.segment_names) if _normalize_source_name(name) == "pelvis"
+    )
+    initial_translations = actor_layout_translations(
+        data.human_root_position_m[0],
+        data.g1_xsens_positions_m[0, pelvis_index],
+        data.g1_root_position_m[0],
+        overlay=config.actor_spacing_m == 0.0,
+        spacing_m=config.actor_spacing_m,
+    )
+    initial_camera = compute_initial_camera_view(
+        [
+            data.human_root_position_m[0] + initial_translations["human"],
+            data.g1_xsens_positions_m[0, pelvis_index] + initial_translations["g1_xsens"],
+            data.g1_root_position_m[0] + initial_translations["g1"],
+        ],
+        [
+            data.human_root_quaternion_wxyz[0],
+            data.g1_xsens_quaternions_wxyz[0, pelvis_index],
+            data.g1_root_quaternion_wxyz[0],
+        ],
+    )
+
+    @server.on_client_connect
+    def _set_initial_camera(client: Any) -> None:
+        client.camera.position = initial_camera.position
+        client.camera.look_at = initial_camera.look_at
+        client.camera.up_direction = np.array([0.0, 0.0, 1.0])
+
+    with server.gui.add_folder("Camera", order=10.0):
+        camera_follow = CameraFollowController(server, initial_enabled=config.camera_follow)
+    with server.gui.add_folder("Actors", order=15.0):
+        show_human = server.gui.add_checkbox("Show human Xsens", initial_value=True)
+        show_g1_xsens = server.gui.add_checkbox("Show G1-sized Xsens", initial_value=False)
+        show_g1 = server.gui.add_checkbox("Show physical G1", initial_value=True)
+    with server.gui.add_folder("Analysis", order=20.0):
         overlay_layout = server.gui.add_checkbox("Overlay actors", initial_value=config.actor_spacing_m == 0.0)
         show_com = server.gui.add_checkbox("Show CoM and support", initial_value=True)
         show_trails = server.gui.add_checkbox("Show racket trails", initial_value=True)
@@ -1776,19 +1876,39 @@ def launch_viser(
 
     trail_frames = max(2, round(config.trail_duration_s * data.fps))
 
-    def offsets() -> dict[str, np.ndarray]:
-        spacing = 0.0 if overlay_layout.value else config.actor_spacing_m
-        return {
-            "human": np.array([0.0, -spacing, 0.0]),
-            "g1_xsens": np.zeros(3),
-            "g1": np.array([0.0, spacing, 0.0]),
-        }
+    def layout_translations(frame_indices: int | np.ndarray) -> dict[str, np.ndarray]:
+        indices = np.asarray(frame_indices, dtype=int)
+        return actor_layout_translations(
+            data.human_root_position_m[indices],
+            data.g1_xsens_positions_m[indices, pelvis_index],
+            data.g1_root_position_m[indices],
+            overlay=bool(overlay_layout.value),
+            spacing_m=config.actor_spacing_m,
+        )
+
+    current_frame = [0]
+    actor_visibility = {
+        "human": show_human,
+        "g1_xsens": show_g1_xsens,
+        "g1": show_g1,
+    }
+
+    def actor_is_visible(actor: str) -> bool:
+        return bool(actor_visibility[actor].value)
+
+    def apply_actor_visibility() -> None:
+        human_actor.set_visible(actor_is_visible("human"))
+        target_actor.set_visible(actor_is_visible("g1_xsens"))
+        robot_actor.show_visual = actor_is_visible("g1")
+        for mesh in robot_racket_meshes:
+            mesh.visible = actor_is_visible("g1")
 
     def apply_frame(frame: int) -> None:
         index = int(np.clip(frame, 0, len(data.times_s) - 1))
-        actor_offsets = offsets()
-        human_actor.root.position = actor_offsets["human"]
-        target_actor.root.position = actor_offsets["g1_xsens"]
+        current_frame[0] = index
+        translations = layout_translations(index)
+        human_actor.root.position = translations["human"]
+        target_actor.root.position = translations["g1_xsens"]
         human_actor.apply(
             data.segment_names,
             data.human_positions_m[index],
@@ -1800,29 +1920,50 @@ def launch_viser(
             data.g1_xsens_quaternions_wxyz[index],
         )
         q = data.qpos[index].copy()
-        q[:3] += actor_offsets["g1"]
+        q[:3] += translations["g1"]
         robot_applier.apply_qpos(q, has_object_input=False)
         update_g1_tennis_racket_pose(robot_racket, robot_urdf)
+        apply_actor_visibility()
         actor_data = {
             "human": (data.human_com_m, data.human_footprints, data.human_racket_position_m),
             "g1_xsens": (data.g1_xsens_com_m, data.g1_xsens_footprints, data.g1_xsens_racket_position_m),
             "g1": (data.g1_com_m, data.g1_footprints, data.g1_racket_position_m),
         }
         for actor, (com, footprints, racket) in actor_data.items():
-            offset = actor_offsets[actor]
-            point = com[index] + offset
+            translation = translations[actor]
+            point = com[index] + translation
             com_handles[actor].points = point[None, :]
             projection_handles[actor].points = np.array([[point, [point[0], point[1], 0.01]]])
             polygon = _active_polygon(footprints, data, index)
-            polygon_handles[actor].points = _viser_polygon_points(polygon + offset[:2])
+            polygon_handles[actor].points = _viser_polygon_points(polygon + translation[:2])
             start = max(0, index - trail_frames)
-            trail = racket[start : index + 1] + offset
+            trail_indices = np.arange(start, index + 1, dtype=int)
+            trail = racket[start : index + 1] + layout_translations(trail_indices)[actor]
             if len(trail) >= 2:
                 trail_handles[actor].points = np.stack([trail[:-1], trail[1:]], axis=1)
-            com_handles[actor].visible = bool(show_com.value)
-            projection_handles[actor].visible = bool(show_com.value)
-            polygon_handles[actor].visible = bool(show_com.value)
-            trail_handles[actor].visible = bool(show_trails.value)
+            visible = actor_is_visible(actor)
+            com_handles[actor].visible = visible and bool(show_com.value)
+            projection_handles[actor].visible = visible and bool(show_com.value)
+            polygon_handles[actor].visible = visible and bool(show_com.value)
+            trail_handles[actor].visible = visible and bool(show_trails.value)
+        visible_avatar_positions = []
+        if actor_is_visible("human"):
+            visible_avatar_positions.append(data.human_positions_m[index] + translations["human"])
+        if actor_is_visible("g1_xsens"):
+            visible_avatar_positions.append(
+                data.g1_xsens_positions_m[index] + translations["g1_xsens"]
+            )
+        if actor_is_visible("g1") or visible_avatar_positions:
+            camera_follow.update_target(
+                compute_camera_follow_target(
+                    robot_position_m=(
+                        data.g1_root_position_m[index] + translations["g1"]
+                        if actor_is_visible("g1")
+                        else None
+                    ),
+                    avatar_positions_m=tuple(visible_avatar_positions),
+                )
+            )
         status.content = (
             f"**t={data.times_s[index]:.2f} s**  \n"
             f"Root-relative racket position error: "
@@ -1832,23 +1973,59 @@ def launch_viser(
             f"CoM stability-margin error: {data.metrics['support_margin_error_m'][index]:.3f} m"
         )
 
+    @overlay_layout.on_update
+    def _(_event: Any) -> None:
+        apply_frame(current_frame[0])
+
+    @show_human.on_update
+    def _(_event: Any) -> None:
+        apply_frame(current_frame[0])
+
+    @show_g1_xsens.on_update
+    def _(_event: Any) -> None:
+        apply_frame(current_frame[0])
+
+    @show_g1.on_update
+    def _(_event: Any) -> None:
+        apply_frame(current_frame[0])
+
     apply_frame(0)
-    if config.viser_mode == "record-clips":
-        for clip in clips:
-            indices = np.arange(clip.start_frame, clip.end_frame, dtype=int).tolist()
+    if config.viser_mode in {"record", "record-clips"}:
+        recordings: list[tuple[list[int], Path]]
+        if config.viser_mode == "record":
+            recordings = [
+                (
+                    build_record_frame_indices(
+                        n_frames=len(data.times_s),
+                        start_frame=config.record_start_frame,
+                        end_frame=config.record_end_frame,
+                        stride=config.record_stride,
+                    ),
+                    resolve_viser_record_path(data, config),
+                )
+            ]
+        else:
+            recordings = [
+                (
+                    np.arange(clip.start_frame, clip.end_frame, dtype=int).tolist(),
+                    data.paths.output_dir / f"viser_{clip.label}.mp4",
+                )
+                for clip in clips
+            ]
+        for indices, output_path in recordings:
             record_viser_sequence(
                 server=server,
                 apply_frame=apply_frame,
                 frame_indices=indices,
-                output_path=str(data.paths.output_dir / f"viser_{clip.label}.mp4"),
+                output_path=str(output_path),
                 width=config.record_width,
                 height=config.record_height,
-                fps=data.fps,
+                fps=float(config.record_fps if config.record_fps is not None else data.fps),
                 connect_timeout=config.record_connect_timeout_s,
-                start_delay=1.0,
-                settle_time=0.0,
-                warmup_renders=0,
-                transport_format="jpeg",
+                start_delay=config.record_start_delay_s,
+                settle_time=config.record_settle_time_s,
+                warmup_renders=config.record_warmup_renders,
+                transport_format=config.record_transport_format,
             )
         return
     create_timed_motion_control_sliders(

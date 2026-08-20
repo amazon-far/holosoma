@@ -402,6 +402,76 @@ def test_batch_summary_layout(tmp_path: Path) -> None:
     assert '"sequence_name": "one"' in payload
 
 
+def test_actor_overlay_is_enabled_by_default() -> None:
+    config = analysis.Config(sequence_names=("serve_01",))
+    assert config.actor_spacing_m == 0.0
+
+
+def test_overlay_layout_aligns_actor_roots_in_xy_and_preserves_z() -> None:
+    human = np.array([[4.0, 8.0, 1.0], [5.0, 9.0, 1.0]])
+    target = np.array([[2.0, 3.0, 0.8], [3.0, 4.0, 0.8]])
+    robot = np.array([[2.1, 3.1, 0.75], [3.1, 4.1, 0.75]])
+    translations = analysis.actor_layout_translations(
+        human,
+        target,
+        robot,
+        overlay=True,
+        spacing_m=2.0,
+    )
+    displayed_human = human + translations["human"]
+    displayed_target = target + translations["g1_xsens"]
+    np.testing.assert_allclose(displayed_human[:, :2], robot[:, :2])
+    np.testing.assert_allclose(displayed_target[:, :2], robot[:, :2])
+    np.testing.assert_allclose(displayed_human[:, 2], human[:, 2])
+    np.testing.assert_allclose(displayed_target[:, 2], target[:, 2])
+    np.testing.assert_allclose(robot + translations["g1"], robot)
+
+
+def test_side_by_side_layout_preserves_world_trajectories_and_adds_spacing() -> None:
+    human = np.array([4.0, 8.0, 1.0])
+    target = np.array([2.0, 3.0, 0.8])
+    robot = np.array([2.1, 3.1, 0.75])
+    translations = analysis.actor_layout_translations(
+        human,
+        target,
+        robot,
+        overlay=False,
+        spacing_m=2.0,
+    )
+    np.testing.assert_allclose(translations["human"], [0.0, -2.0, 0.0])
+    np.testing.assert_allclose(translations["g1_xsens"], [0.0, 0.0, 0.0])
+    np.testing.assert_allclose(translations["g1"], [0.0, 2.0, 0.0])
+
+
+def test_viser_record_path_defaults_to_sequence_analysis_directory(tmp_path: Path) -> None:
+    data = SimpleNamespace(
+        paths=analysis.SequencePaths(
+            "serve_01",
+            tmp_path / "serve_01.hdf5",
+            tmp_path / "serve_01.npz",
+            tmp_path / "analysis" / "serve_01",
+        )
+    )
+    config = analysis.Config(sequence_names=("serve_01",))
+    assert analysis.resolve_viser_record_path(data, config) == (
+        tmp_path / "analysis" / "serve_01" / "serve_01_analysis.mp4"
+    )
+
+
+def test_viser_record_path_override_is_authoritative(tmp_path: Path) -> None:
+    data = SimpleNamespace(
+        paths=analysis.SequencePaths(
+            "serve_01",
+            tmp_path / "serve_01.hdf5",
+            tmp_path / "serve_01.npz",
+            tmp_path / "analysis" / "serve_01",
+        )
+    )
+    explicit = tmp_path / "custom.mp4"
+    config = analysis.Config(sequence_names=("serve_01",), record_path=explicit)
+    assert analysis.resolve_viser_record_path(data, config) == explicit
+
+
 @pytest.mark.skipif(
     "HOLOSOMA_XSENS_ANALYSIS_SEQUENCE" not in os.environ,
     reason="Set HOLOSOMA_XSENS_ANALYSIS_SEQUENCE and local data paths for the opt-in smoke test",
