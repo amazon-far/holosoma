@@ -92,6 +92,52 @@ python examples/parallel_robot_retarget.py \
 When `--save-dir` is omitted, the output directory is inferred from the input dataset. The examples above save to
 `demo_results/g1/robot_only/xsens_tennis` and `demo_results_parallel/g1/robot_only/xsens_tennis`, respectively.
 
+### Analyze Xsens-to-G1 retargeting quality
+
+`examples/xsens_tennis/analyze_xsens_g1_retargeting.py` compares the human Xsens recording, its G1-sized Xsens
+targets, and the retargeted physical G1. One or more sequence names are required; there is intentionally no default
+sequence. Names may include `.hdf5` or `.h5`, but must be basenames rather than paths:
+
+```bash
+python examples/xsens_tennis/analyze_xsens_g1_retargeting.py \
+    --sequence-names <sequence-name>
+
+python examples/xsens_tennis/analyze_xsens_g1_retargeting.py \
+    --sequence-names <first-sequence> <second-sequence>
+```
+
+For each stem, the command resolves the recording from `demo_data/xsens_tennis/<stem>.hdf5` (or `.h5`), the exact
+standard retarget from `demo_results/g1/robot_only/xsens_tennis/<stem>.npz`, and writes analysis artifacts under
+`demo_results/g1/analysis/xsens_tennis/<stem>/`. A batch additionally writes `batch_summary.csv` and
+`batch_summary.json` at the analysis root. Use `--data-dir`, `--retargeted-results-dir`, or `--output-root` to change
+those locations. In particular, staged or experimental retargets must be selected explicitly with
+`--retargeted-results-dir`; similarly named NPZ files are never selected heuristically. `--hdf5-path` and
+`--qpos-npz` are single-sequence overrides.
+
+The analysis exports per-frame and per-window CSVs, a machine-readable JSON summary, a Markdown report, and PNG/PDF
+figures for stability margins, error distributions, support-polygon keyframes, and local racket trajectories. The
+human Xsens motion is the error reference. Both world and full six-DoF root-relative CoM/racket errors are reported;
+here the root is the Xsens pelvis or MuJoCo G1 pelvis. The G1-sized avatar CoM is an explicitly documented proxy that
+attaches the physical G1 masses and calibrated inertial centroids to reduced Xsens segments. T-pose calibration is
+cached in each sequence's output directory unless `--tpose-calibration-path` is supplied.
+
+Use Viser for a synchronized diagnostic player or automated recordings. Viser modes accept exactly one sequence:
+
+```bash
+python examples/xsens_tennis/analyze_xsens_g1_retargeting.py \
+    --sequence-names <sequence-name> \
+    --viser-mode interactive
+
+python examples/xsens_tennis/analyze_xsens_g1_retargeting.py \
+    --sequence-names <sequence-name> \
+    --viser-mode record-clips
+```
+
+The player offers overlay and side-by-side layouts, playback controls, actor-specific support polygons, CoM
+projections, racket trails, and live G1-versus-human error values. Recorded clips use automatically selected,
+non-overlapping windows around worst racket position/orientation errors, the worst stability-margin discrepancy,
+and representative labeled activities.
+
 Use the legacy direct-human position targets for comparison or regression runs with:
 
 ```bash
