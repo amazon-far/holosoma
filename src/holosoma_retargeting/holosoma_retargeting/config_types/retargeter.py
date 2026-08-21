@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,55 @@ class SelfCollisionConfig:
 
 
 @dataclass(frozen=True)
+class TennisRacketTrackingConfig:
+    """Configure how the G1 right-hand orientation follows an Xsens racket."""
+
+    mode: Literal["hand", "racket", "filtered"] = "hand"
+    """Track the Xsens hand, always track the racket, or use feasibility-filtered racket tracking."""
+
+    attachment_source: Literal["global", "embedded_tpose", "observed_window"] = "embedded_tpose"
+    """Source used to correct the model-specific global G1 hand-to-racket grasp."""
+
+    attachment_path: Path | None = None
+    """Optional JSON override for the model-specific global G1 grasp."""
+
+    observed_window_s: tuple[float, float] | None = None
+    """Recording-relative [start, end) seconds used by ``observed_window`` calibration."""
+
+    detach_exit_threshold_m: float = 0.10
+    """Hand-relative racket-origin deviation that immediately disables racket tracking."""
+
+    detach_reentry_threshold_m: float = 0.05
+    """Lower origin-deviation threshold required while considering re-entry."""
+
+    feasible_entry_error_rad: float = math.radians(45.0)
+    """Maximum achieved symmetry-aware error for entering racket tracking."""
+
+    feasible_exit_error_rad: float = math.radians(60.0)
+    """Maximum achieved symmetry-aware error while racket tracking is already active."""
+
+    min_wrist_limit_margin_rad: float = math.radians(5.0)
+    """Minimum distance required from every right-wrist joint limit."""
+
+    reentry_frames: int = 5
+    """Consecutive feasible frames required before filtered mode re-enters racket tracking."""
+
+    def __post_init__(self) -> None:
+        if self.detach_reentry_threshold_m < 0.0:
+            raise ValueError("detach_reentry_threshold_m must be non-negative")
+        if self.detach_exit_threshold_m <= self.detach_reentry_threshold_m:
+            raise ValueError("detach_exit_threshold_m must exceed detach_reentry_threshold_m")
+        if self.feasible_entry_error_rad < 0.0:
+            raise ValueError("feasible_entry_error_rad must be non-negative")
+        if self.feasible_exit_error_rad < self.feasible_entry_error_rad:
+            raise ValueError("feasible_exit_error_rad must be at least feasible_entry_error_rad")
+        if self.min_wrist_limit_margin_rad < 0.0:
+            raise ValueError("min_wrist_limit_margin_rad must be non-negative")
+        if self.reentry_frames < 1:
+            raise ValueError("reentry_frames must be positive")
+
+
+@dataclass(frozen=True)
 class OrientationTrackingConfig:
     """Configuration for additive Xsens orientation and segment-axis tracking."""
 
@@ -64,6 +115,9 @@ class OrientationTrackingConfig:
 
     orientation_error_clip_rad: float = 0.7
     """Maximum rotation-vector magnitude used by orientation residuals."""
+
+    tennis_racket: TennisRacketTrackingConfig = field(default_factory=TennisRacketTrackingConfig)
+    """Optional right-hand target selection driven by the tracked Xsens tennis racket."""
 
 
 @dataclass(frozen=True)

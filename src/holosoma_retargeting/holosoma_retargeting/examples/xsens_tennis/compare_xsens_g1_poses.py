@@ -42,6 +42,10 @@ from holosoma_retargeting.src.mujoco_utils import (  # noqa: E402
     replace_named_joint_qpos,
 )
 from holosoma_retargeting.src.paths import DEMO_RESULTS_DIR  # noqa: E402
+from holosoma_retargeting.transformation_utils import (  # noqa: E402
+    rotation_as_wxyz,
+    rotations_from_wxyz,
+)
 from holosoma_retargeting.usd import open_usd_stage, read_kinematic_tree_from_stage  # noqa: E402
 from holosoma_retargeting.xsens.kinematic_model import normalize_xsens_name  # noqa: E402
 from holosoma_retargeting.xsens.morphology_adaptation import (  # noqa: E402
@@ -161,23 +165,6 @@ def _resolve_g1_xml(urdf_path: Path) -> Path:
     return sibling_xml if sibling_xml.is_file() else urdf_path
 
 
-def _quat_matrix(quaternion_wxyz: np.ndarray) -> np.ndarray:
-    w, x, y, z = np.asarray(quaternion_wxyz, dtype=float)
-    return np.array(
-        [
-            [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)],
-            [2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)],
-            [2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)],
-        ],
-        dtype=float,
-    )
-
-
-def _matrix_quat_wxyz(rotation: np.ndarray) -> np.ndarray:
-    quaternion_xyzw = Rotation.from_matrix(np.asarray(rotation, dtype=float)).as_quat()
-    return quaternion_xyzw[[3, 0, 1, 2]]
-
-
 def _x_rotation(angle_rad: float) -> np.ndarray:
     cosine = float(np.cos(angle_rad))
     sine = float(np.sin(angle_rad))
@@ -197,13 +184,13 @@ def canonical_xsens_npose_orientations(tpose: KinematicPose) -> np.ndarray:
     orientations = np.asarray(tpose.orientations_wxyz, dtype=float).copy()
     for side, sign in (("Left", 1.0), ("Right", -1.0)):
         shoulder_index = indices[normalize_xsens_name(f"{side} Shoulder")]
-        shoulder_rotation = _quat_matrix(orientations[shoulder_index])
+        shoulder_rotation = rotations_from_wxyz(orientations[shoulder_index]).as_matrix()
         local_arm_rotation = _x_rotation(-sign * 0.5 * np.pi)
         world_arm_rotation = shoulder_rotation @ local_arm_rotation @ shoulder_rotation.T
         for segment in ("Upper Arm", "Forearm", "Hand"):
             segment_index = indices[normalize_xsens_name(f"{side} {segment}")]
-            orientations[segment_index] = _matrix_quat_wxyz(
-                world_arm_rotation @ _quat_matrix(orientations[segment_index])
+            orientations[segment_index] = rotation_as_wxyz(
+                Rotation.from_matrix(world_arm_rotation @ rotations_from_wxyz(orientations[segment_index]).as_matrix())
             )
     return orientations
 
@@ -249,7 +236,7 @@ def tree_vertical_bounds(
     z_values: list[float] = []
     for body in model.bodies:
         pose = body.reference_pose if body_poses is None else body_poses[body.name]
-        rotation = _quat_matrix(pose.rotation_wxyz)
+        rotation = rotations_from_wxyz(pose.rotation_wxyz).as_matrix()
         if body.meshes:
             for mesh in body.meshes:
                 world_vertices = np.asarray(mesh.vertices_m, dtype=float) @ rotation.T + pose.translation_m

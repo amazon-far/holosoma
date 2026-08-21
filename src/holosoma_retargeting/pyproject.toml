@@ -91,6 +91,7 @@ source-include = [
     "holosoma_retargeting/**/*.npy",
     "holosoma_retargeting/**/*.pt",
     "holosoma_retargeting/**/*.pkl",
+    "holosoma_retargeting/**/*.json",
     "holosoma_retargeting/**/*.md",
 ]
 

@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import numpy as np
-from scipy.spatial.transform import Rotation  # type: ignore[import-untyped]
+from holosoma_retargeting.transformation_utils import (
+    rotation_matrices_as_wxyz,
+    rotation_matrices_from_wxyz,
+)
 
 XSENS_DEVICE_NAME = "xsens-segments"
 XSENS_TPOSE_DEVICE_NAME = "xsens-segments-tpose"
@@ -68,6 +71,7 @@ class XsensHdf5Motion:
     source_indices: list[int]
     quaternions_wijk: np.ndarray
     orientation_stream_name: str
+    recording_times_s: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -274,18 +278,6 @@ def transform_xsens_stream_to_retargeting(positions: np.ndarray, stream_name: st
     return transform_xsens_y_up_to_retargeting_z_up(positions)
 
 
-def _quat_wijk_to_matrix(quaternions_wijk: np.ndarray) -> np.ndarray:
-    q = np.asarray(quaternions_wijk, dtype=float)
-    xyzw = np.stack([q[..., 1], q[..., 2], q[..., 3], q[..., 0]], axis=-1)
-    return Rotation.from_quat(xyzw.reshape(-1, 4)).as_matrix().reshape(q.shape[:-1] + (3, 3))
-
-
-def _matrix_to_quat_wijk(rotations: np.ndarray) -> np.ndarray:
-    rotations = np.asarray(rotations, dtype=float)
-    xyzw = Rotation.from_matrix(rotations.reshape(-1, 3, 3)).as_quat().reshape(rotations.shape[:-2] + (4,))
-    return np.stack([xyzw[..., 3], xyzw[..., 0], xyzw[..., 1], xyzw[..., 2]], axis=-1)
-
-
 def transform_xsens_orientation_stream_to_retargeting(
     quaternions_wijk: np.ndarray,
     stream_name: str,
@@ -293,9 +285,9 @@ def transform_xsens_orientation_stream_to_retargeting(
     """Convert Xsens world-frame orientations to the position stream's retargeting convention."""
     if stream_name == "body_position_xyz_m":
         return quaternions_wijk
-    rotations = _quat_wijk_to_matrix(quaternions_wijk)
+    rotations = rotation_matrices_from_wxyz(quaternions_wijk)
     basis = XSENS_Y_UP_TO_RETARGETING_Z_UP_MATRIX
-    return _matrix_to_quat_wijk(basis @ rotations @ basis.T)
+    return rotation_matrices_as_wxyz(basis @ rotations @ basis.T, canonical=False)
 
 
 def _get_position_stream(hdf5_file: Any) -> tuple[str, Any]:
@@ -400,9 +392,7 @@ def _body_segment_indices(
 ) -> tuple[list[str], list[int]]:
     if segment_names is None:
         if n_segments < len(XSENS_BODY_SEGMENT_NAMES):
-            raise ValueError(
-                f"Expected at least {len(XSENS_BODY_SEGMENT_NAMES)} Xsens body segments, got {n_segments}"
-            )
+            raise ValueError(f"Expected at least {len(XSENS_BODY_SEGMENT_NAMES)} Xsens body segments, got {n_segments}")
         selected_names = list(XSENS_BODY_SEGMENT_NAMES)
         source_indices = list(range(len(XSENS_BODY_SEGMENT_NAMES)))
         if include_tracked_props and n_segments >= len(XSENS_BODY_SEGMENT_NAMES) + 1:
@@ -469,9 +459,7 @@ def _slice_sample_indices(
         if sparse_indices.ndim != 1 or sparse_indices.size == 0:
             raise ValueError("frame_indices must contain at least one index")
         if np.any(sparse_indices < 0) or np.any(sparse_indices >= sample_indices.size):
-            raise ValueError(
-                f"frame_indices must be within the post-resampling range [0, {sample_indices.size - 1}]"
-            )
+            raise ValueError(f"frame_indices must be within the post-resampling range [0, {sample_indices.size - 1}]")
         if np.unique(sparse_indices).size != sparse_indices.size:
             raise ValueError("frame_indices must not contain duplicates")
         return sample_indices[sparse_indices]
@@ -535,6 +523,7 @@ def load_xsens_hdf5_motion(
     quaternions = transform_xsens_orientation_stream_to_retargeting(quaternions, stream_name)
 
     selected_times_s = times_s[sample_indices]
+    recording_times_s = selected_times_s - float(times_s[0])
     if frame_indices is not None:
         if target_fps is not None:
             storyboard_period_s = 1.0 / target_fps
@@ -552,6 +541,7 @@ def load_xsens_hdf5_motion(
         source_indices=source_indices,
         quaternions_wijk=quaternions[sample_indices],
         orientation_stream_name=XSENS_ORIENTATION_STREAM_NAME,
+        recording_times_s=recording_times_s,
     )
 
 
@@ -600,8 +590,7 @@ def load_xsens_hdf5_tpose(path: str | Path, variant: str = "Tpose") -> XsensHdf5
 
     if positions.shape[0] != quaternions.shape[0]:
         raise ValueError(
-            "Xsens T-pose position/quaternion segment counts differ: "
-            f"{positions.shape[0]} vs {quaternions.shape[0]}"
+            f"Xsens T-pose position/quaternion segment counts differ: {positions.shape[0]} vs {quaternions.shape[0]}"
         )
 
     selected_segment_names, source_indices = _body_segment_indices(segment_names, positions.shape[0])

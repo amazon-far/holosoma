@@ -8,9 +8,20 @@ from pathlib import Path
 from typing import Protocol
 
 import numpy as np
-from scipy.spatial.transform import Rotation  # type: ignore[import-untyped]
 
 from holosoma_retargeting.config_types.data_type import XSENS_DEMO_JOINTS
+from holosoma_retargeting.transformation_utils import (
+    rotation_matrices_as_wxyz,
+    rotation_matrices_from_wxyz,
+)
+
+quat_wijk_to_matrix = rotation_matrices_from_wxyz
+
+
+def matrix_to_quat_wijk(matrix: np.ndarray) -> np.ndarray:
+    """Convert rotation matrices to scalar-first quaternions without changing their sign branch."""
+
+    return rotation_matrices_as_wxyz(matrix, canonical=False)
 
 
 @dataclass(frozen=True)
@@ -211,20 +222,6 @@ def normalize_vector(vector: np.ndarray, fallback: np.ndarray | None = None) -> 
     if fallback is None:
         fallback = np.zeros_like(vector)
     return np.asarray(fallback, dtype=float)
-
-
-def quat_wijk_to_matrix(quaternions_wijk: np.ndarray) -> np.ndarray:
-    """Convert Xsens `w, i, j, k` quaternions to rotation matrices."""
-    q = np.asarray(quaternions_wijk, dtype=float)
-    xyzw = np.stack([q[..., 1], q[..., 2], q[..., 3], q[..., 0]], axis=-1)
-    return Rotation.from_quat(xyzw.reshape(-1, 4)).as_matrix().reshape(q.shape[:-1] + (3, 3))
-
-
-def matrix_to_quat_wijk(matrix: np.ndarray) -> np.ndarray:
-    """Convert rotation matrices to `w, i, j, k` quaternions."""
-    matrix = np.asarray(matrix, dtype=float)
-    xyzw = Rotation.from_matrix(matrix.reshape(-1, 3, 3)).as_quat().reshape(matrix.shape[:-2] + (4,))
-    return np.stack([xyzw[..., 3], xyzw[..., 0], xyzw[..., 1], xyzw[..., 2]], axis=-1)
 
 
 def segment_index(name: str) -> int:

@@ -34,6 +34,7 @@ from holosoma_retargeting.config_types.retargeting import (  # noqa: E402
 from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
 from holosoma_retargeting.config_types.task import TaskConfig  # noqa: E402
 from holosoma_retargeting.data_utils.xsens_hdf5 import (  # noqa: E402
+    XSENS_BODY_SEGMENT_NAMES,
     XsensHdf5Motion,
     load_xsens_hdf5_motion,
     resolve_xsens_hdf5_path,
@@ -66,6 +67,11 @@ from holosoma_retargeting.xsens.orientation_tracking import (  # noqa: E402
     build_xsens_orientation_targets_from_calibration,
     describe_xsens_orientation_correspondences,
     load_xsens_orientation_targets,
+)
+from holosoma_retargeting.xsens.tennis_racket import (  # noqa: E402
+    TennisRacketTargets,
+    build_tennis_racket_targets,
+    resolve_tennis_racket_attachment,
 )
 from holosoma_retargeting.xsens.tpose_calibration import (  # noqa: E402
     XsensTposeCalibrationConfig,
@@ -256,12 +262,23 @@ def prepare_xsens_motion_for_retargeting(
 ) -> tuple[np.ndarray, float]:
     """Return optimizer positions and the remaining uniform preprocessing scale."""
 
+    body_indices = [motion.segment_names.index(name) for name in XSENS_BODY_SEGMENT_NAMES]
+    body_motion = XsensHdf5Motion(
+        positions_m=np.asarray(motion.positions_m[:, body_indices], dtype=float),
+        times_s=np.asarray(motion.times_s, dtype=float),
+        stream_name=motion.stream_name,
+        segment_names=list(XSENS_BODY_SEGMENT_NAMES),
+        source_indices=[motion.source_indices[index] for index in body_indices],
+        quaternions_wijk=np.asarray(motion.quaternions_wijk[:, body_indices], dtype=float),
+        orientation_stream_name=motion.orientation_stream_name,
+    )
+
     if morphology_config.mode == "direct":
-        return np.asarray(motion.positions_m, dtype=float).copy(), direct_scale
+        return np.asarray(body_motion.positions_m, dtype=float).copy(), direct_scale
 
     g1_model_path = resolve_xsens_g1_model_path(robot_config, morphology_config)
     adapted = adapt_xsens_motion_to_g1(
-        motion,
+        body_motion,
         hdf5_path=hdf5_path,
         g1_model_path=g1_model_path,
         grounding=morphology_config.grounding,
@@ -372,8 +389,9 @@ def load_motion_data(
                 frame_start=motion_data_config.frame_start,
                 max_frames=motion_data_config.max_frames,
                 frame_indices=motion_data_config.frame_indices,
+                include_tracked_props=True,
             )
-            human_joints = xsens_motion.positions_m
+            human_joints = xsens_motion.positions_m[:, : len(XSENS_BODY_SEGMENT_NAMES)]
 
             default_human_height = motion_data_config.default_human_height or 1.78
             smpl_scale = constants.ROBOT_HEIGHT / default_human_height
@@ -699,13 +717,16 @@ def resolve_orientation_tracking_config(
     robot: str,
 ) -> RetargeterConfig:
     """Enable calibrated orientations for the default G1-proportioned Xsens path."""
+    racket_requested = retargeter_config.orientation.tennis_racket.mode != "hand"
+    if racket_requested and (task_type != "robot_only" or data_format != "xsens" or robot != "g1"):
+        raise ValueError("Tennis-racket orientation modes support only robot_only G1 Xsens retargeting")
     auto_enable = (
         task_type == "robot_only"
         and data_format == "xsens"
         and robot == "g1"
         and morphology_config.mode == "g1_proportioned"
         and morphology_config.track_orientations
-    )
+    ) or racket_requested
     if not auto_enable or retargeter_config.orientation.enable:
         return retargeter_config
     return replace(
@@ -1023,6 +1044,24 @@ def main(cfg: RetargetingConfig) -> None:
         hdf5_path=hdf5_path,
         morphology_config=cfg.xsens_morphology,
     )
+    tennis_racket_targets: TennisRacketTargets | None = None
+    if (
+        xsens_motion is not None
+        and orientation_targets is not None
+        and "RightHandSword" in xsens_motion.segment_names
+    ):
+        assert hdf5_path is not None
+        racket_attachment = resolve_tennis_racket_attachment(
+            retargeter_config.orientation.tennis_racket,
+            motion=xsens_motion,
+            hdf5_path=hdf5_path,
+        )
+        tennis_racket_targets = build_tennis_racket_targets(xsens_motion, racket_attachment)
+        logger.info(
+            "Tennis-racket tracking: mode=%s, attachment=%s",
+            retargeter_config.orientation.tennis_racket.mode,
+            racket_attachment.calibration_source,
+        )
     if (
         orientation_targets is not None
         and orientation_targets.orientation_target_rotations.shape[0] != human_joints.shape[0]
@@ -1117,6 +1156,7 @@ def main(cfg: RetargetingConfig) -> None:
         q_a_init=q_init,
         q_nominal_list=q_nominal,
         orientation_targets=orientation_targets,
+        tennis_racket_targets=tennis_racket_targets,
         original=not cfg.augmentation,
         dest_res_path=dest_res_path,
     )

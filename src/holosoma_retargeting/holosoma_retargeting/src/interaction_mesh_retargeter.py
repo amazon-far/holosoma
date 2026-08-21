@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import time
+from functools import partial
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -23,6 +24,10 @@ from holosoma_retargeting.config_types.retargeter import (
     SelfCollisionConfig,
 )
 from holosoma_retargeting.xsens.orientation_tracking import XsensOrientationTargets
+from holosoma_retargeting.xsens.tennis_racket import TennisRacketTargets
+from holosoma_retargeting.xsens.tennis_racket_retargeting import (
+    create_tennis_racket_frame_tracker,
+)
 
 # Add src to path for direct execution
 src_path = Path(__file__).parent.parent / "src"
@@ -405,6 +410,7 @@ class InteractionMeshRetargeter:
         q_a_init=None,
         q_nominal_list=None,
         orientation_targets: XsensOrientationTargets | None = None,
+        tennis_racket_targets: TennisRacketTargets | None = None,
         original=True,
         dest_res_path=None,
     ):
@@ -423,6 +429,7 @@ class InteractionMeshRetargeter:
             q_a_init (np.ndarray, optional): Initial robot configuration.
             q_a_nominal (np.ndarray, optional): Nominal robot configuration.
             orientation_targets: Optional orientation and segment-axis targets for each frame.
+            tennis_racket_targets: Optional symmetry-aware racket targets and attachment metadata.
 
         Returns:
             tuple: (retargeted_motions, obj_pts_demo_list, obj_pts_list, tetrahedra)
@@ -443,6 +450,21 @@ class InteractionMeshRetargeter:
                     "Axis target frame count does not match motion frame count: "
                     f"{orientation_targets.axis_target_vectors.shape[0]} vs {num_frames}"
                 )
+        tennis_config = self.orientation_config.tennis_racket
+        racket_tracker = None
+        if tennis_racket_targets is not None or tennis_config.mode != "hand":
+            racket_tracker = create_tennis_racket_frame_tracker(
+                tennis_config,
+                tennis_racket_targets,
+                frame_count=num_frames,
+                orientation_names=(None if orientation_targets is None else orientation_targets.orientation_names),
+                joint_limits_enforced=self.activate_joint_limits,
+                robot_model=self.robot_model,
+                robot_data=self.robot_data,
+                active_qpos_indices=self.q_a_indices,
+                active_lower_limits=self.q_a_lb,
+                active_upper_limits=self.q_a_ub,
+            )
         if isinstance(object_points_local_demo, list):
             assert len(object_points_local_demo) == num_frames, (
                 f"object_points_local_demo length {len(object_points_local_demo)} != num_frames {num_frames}"
@@ -525,9 +547,12 @@ class InteractionMeshRetargeter:
                 else:
                     w_nominal_tracking = self.w_nominal_tracking_init * np.exp(-i / self.nominal_tracking_tau)
 
-                q, cost = self.iterate(
+                # Bind the generic per-frame solve once. The racket tracker invokes it
+                # for symmetry candidates and, when needed, the hand-target fallback.
+                solve_frame = partial(
+                    self.iterate,
                     q_locked=q_locked_list[i],
-                    q_n=q,
+                    q_n=np.copy(q),
                     q_t_last=retargeted_motions[-1],
                     target_laplacian=target_laplacian,
                     adj_list=adj_list,
@@ -540,10 +565,26 @@ class InteractionMeshRetargeter:
                     n_iter=self.initial_iterations if i == 0 else self.iterations_per_frame,
                     frame_idx=i,
                 )
+
+                selected_override: tuple[int, np.ndarray] | None = None
+                if racket_tracker is None:
+                    q, cost = solve_frame(orientation_rotation_override=None)
+                else:
+                    racket_solution = racket_tracker.solve_frame(i, q, solve_frame)
+                    q, cost = racket_solution.q, racket_solution.cost
+                    selected_override = racket_solution.orientation_override
+
                 if orientation_targets is not None:
-                    orientation_errors, axis_errors = self._orientation_tracking_errors(q, orientation_targets, i)
+                    orientation_errors, axis_errors = self._orientation_tracking_errors(
+                        q,
+                        orientation_targets,
+                        i,
+                        orientation_rotation_override=selected_override,
+                    )
                     orientation_error_history.append(orientation_errors)
                     axis_error_history.append(axis_errors)
+                if racket_tracker is not None:
+                    racket_tracker.record_frame(i, racket_solution)
                 if self.debug:
                     robot_link_positions = self._get_robot_link_positions(
                         q, self.laplacian_match_links.values()
@@ -577,41 +618,43 @@ class InteractionMeshRetargeter:
             robot_kpts_handle_list.clear()
 
         # Save results
-        np.savez(
-            dest_res_path,
-            qpos=np.array(retargeted_motions)[1:],
-            human_joints=human_joint_motions,
-            fps=30,
-            cost=cost,
-            orientation_error_names=np.asarray(
+        result_payload = {
+            "qpos": np.array(retargeted_motions)[1:],
+            "human_joints": human_joint_motions,
+            "fps": 30,
+            "cost": cost,
+            "orientation_error_names": np.asarray(
                 [] if orientation_targets is None else orientation_targets.orientation_names, dtype=str
             ),
-            orientation_errors_rad=np.asarray(orientation_error_history, dtype=float),
-            axis_error_names=np.asarray(
+            "orientation_errors_rad": np.asarray(orientation_error_history, dtype=float),
+            "axis_error_names": np.asarray(
                 [] if orientation_targets is None else orientation_targets.axis_names,
                 dtype=str,
             ),
-            axis_errors_deg=np.asarray(axis_error_history, dtype=float),
-            active_orientation_mapping_names=np.asarray(
+            "axis_errors_deg": np.asarray(axis_error_history, dtype=float),
+            "active_orientation_mapping_names": np.asarray(
                 [] if orientation_targets is None else orientation_targets.orientation_names, dtype=str
             ),
-            orientation_robot_link_names=np.asarray(
+            "orientation_robot_link_names": np.asarray(
                 [] if orientation_targets is None else orientation_targets.orientation_robot_link_names, dtype=str
             ),
-            axis_xsens_segment_names=np.asarray(
+            "axis_xsens_segment_names": np.asarray(
                 [] if orientation_targets is None else orientation_targets.axis_xsens_segment_names, dtype=str
             ),
-            axis_robot_start_link_names=np.asarray(
+            "axis_robot_start_link_names": np.asarray(
                 [] if orientation_targets is None else orientation_targets.axis_robot_start_link_names, dtype=str
             ),
-            axis_robot_end_link_names=np.asarray(
+            "axis_robot_end_link_names": np.asarray(
                 [] if orientation_targets is None else orientation_targets.axis_robot_end_link_names, dtype=str
             ),
-            axis_robot_local_vectors=np.asarray(
+            "axis_robot_local_vectors": np.asarray(
                 [] if orientation_targets is None else orientation_targets.axis_robot_local_vectors,
                 dtype=float,
             ),
-        )
+        }
+        if racket_tracker is not None:
+            result_payload.update(racket_tracker.build_motion().as_npz_payload())
+        np.savez(dest_res_path, **result_payload)
         print("Saving results to path:", dest_res_path)
 
         if self.visualize:
@@ -660,6 +703,7 @@ class InteractionMeshRetargeter:
         w_nominal_tracking: float = 0.0,
         q_a_nominal: np.ndarray | None = None,
         orientation_targets: XsensOrientationTargets | None = None,
+        orientation_rotation_override: tuple[int, np.ndarray] | None = None,
         verbose=False,
         init_t=False,
         frame_idx: int = 0,
@@ -823,7 +867,15 @@ class InteractionMeshRetargeter:
                 obj_terms.append(cp.quad_form(dqa - dqa_smooth, Wsmooth))
 
         if orientation_targets is not None:
-            obj_terms.extend(self._orientation_tracking_objective_terms(q, dqa, orientation_targets, frame_idx))
+            obj_terms.extend(
+                self._orientation_tracking_objective_terms(
+                    q,
+                    dqa,
+                    orientation_targets,
+                    frame_idx,
+                    orientation_rotation_override=orientation_rotation_override,
+                )
+            )
 
         problem = cp.Problem(cp.Minimize(cp.sum(obj_terms)), constraints)
 
@@ -978,6 +1030,7 @@ class InteractionMeshRetargeter:
         dqa: cp.Variable,
         orientation_targets: XsensOrientationTargets,
         frame_idx: int,
+        orientation_rotation_override: tuple[int, np.ndarray] | None = None,
     ) -> list[Any]:
         self.robot_data.qpos[:] = q
         mujoco.mj_forward(self.robot_model, self.robot_data)
@@ -985,6 +1038,8 @@ class InteractionMeshRetargeter:
 
         for target_idx, link_name in enumerate(orientation_targets.orientation_robot_link_names):
             target_rotation = orientation_targets.orientation_target_rotations[frame_idx, target_idx]
+            if orientation_rotation_override is not None and target_idx == orientation_rotation_override[0]:
+                target_rotation = orientation_rotation_override[1]
             J_rot, current_rotation = self._frame_rotational_jacobian(link_name)
             rotvec = Rotation.from_matrix(target_rotation @ current_rotation.T).as_rotvec()
             rotvec = self._clip_rotvec(rotvec)
@@ -1009,6 +1064,7 @@ class InteractionMeshRetargeter:
         q: np.ndarray,
         orientation_targets: XsensOrientationTargets,
         frame_idx: int,
+        orientation_rotation_override: tuple[int, np.ndarray] | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         self.robot_data.qpos[:] = q
         mujoco.mj_forward(self.robot_model, self.robot_data)
@@ -1016,6 +1072,8 @@ class InteractionMeshRetargeter:
         orientation_errors = []
         for target_idx, link_name in enumerate(orientation_targets.orientation_robot_link_names):
             target_rotation = orientation_targets.orientation_target_rotations[frame_idx, target_idx]
+            if orientation_rotation_override is not None and target_idx == orientation_rotation_override[0]:
+                target_rotation = orientation_rotation_override[1]
             _, current_rotation, _ = self._frame_pose(link_name)
             rotvec = Rotation.from_matrix(target_rotation @ current_rotation.T).as_rotvec()
             orientation_errors.append(float(np.linalg.norm(rotvec)))
@@ -1096,6 +1154,7 @@ class InteractionMeshRetargeter:
         w_nominal_tracking: float = 0.0,
         q_a_nominal: np.ndarray | None = None,
         orientation_targets: XsensOrientationTargets | None = None,
+        orientation_rotation_override: tuple[int, np.ndarray] | None = None,
         init_t: bool = False,
         n_iter: int = 10,
         frame_idx: int = 0,
@@ -1115,6 +1174,7 @@ class InteractionMeshRetargeter:
                 q_a_nominal=q_a_nominal,
                 w_nominal_tracking=w_nominal_tracking,
                 orientation_targets=orientation_targets,
+                orientation_rotation_override=orientation_rotation_override,
                 init_t=init_t,
                 frame_idx=frame_idx,
             )

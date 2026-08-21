@@ -2,7 +2,11 @@
 
 from holosoma_retargeting.config_types.data_conversion import DataConversionConfig
 from holosoma_retargeting.config_types.data_type import MotionDataConfig
-from holosoma_retargeting.config_types.retargeter import RetargeterConfig
+from holosoma_retargeting.config_types.retargeter import (
+    OrientationTrackingConfig,
+    RetargeterConfig,
+    TennisRacketTrackingConfig,
+)
 from holosoma_retargeting.config_types.retargeting import (
     ParallelRetargetingConfig,
     RetargetingConfig,
@@ -16,12 +20,14 @@ __all__ = [
     "DataConversionConfig",
     "EvaluationConfig",
     "MotionDataConfig",
+    "OrientationTrackingConfig",
     "ParallelRetargetingConfig",
     "RetargeterConfig",
     "RetargetingConfig",
-    "XsensMorphologyConfig",
     "RobotConfig",
     "TaskConfig",
+    "TennisRacketTrackingConfig",
     "ViserConfig",
+    "XsensMorphologyConfig",
     "XsensViserConfig",
 ]

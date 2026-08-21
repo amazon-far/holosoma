@@ -39,11 +39,9 @@ from holosoma_retargeting.data_utils.xsens_hdf5 import (  # noqa: E402
 )
 from holosoma_retargeting.kinematics import KinematicTree, rotate_vectors  # noqa: E402
 from holosoma_retargeting.src.paths import DEMO_RESULTS_DIR, PACKAGE_ROOT  # noqa: E402
-from holosoma_retargeting.viser_player import (  # noqa: E402
-    G1_RACKET_FRAME_WXYZ,
-    G1_RACKET_GRIP_OFFSET_M,
-    G1_RACKET_ORIENTATION_LINK,
-    G1_RACKET_POSITION_LINK,
+from holosoma_retargeting.transformation_utils import (  # noqa: E402
+    rotation_as_wxyz,
+    rotations_from_wxyz,
 )
 from holosoma_retargeting.xsens.g1_kinematic_reduction import (  # noqa: E402
     G1XsensReductionConfig,
@@ -53,6 +51,12 @@ from holosoma_retargeting.xsens.g1_kinematic_reduction import (  # noqa: E402
 from holosoma_retargeting.xsens.morphology_adaptation import (  # noqa: E402
     adapt_xsens_tpose_to_g1,
     build_subject_xsens_reference_model,
+)
+from holosoma_retargeting.xsens.tennis_racket import (  # noqa: E402
+    TennisRacketAttachment,
+    achieved_tennis_racket_pose,
+    load_retargeting_result,
+    load_tennis_racket_attachment,
 )
 from holosoma_retargeting.xsens.tpose_calibration import (  # noqa: E402
     XsensTposeCalibrationConfig,
@@ -307,24 +311,6 @@ def resolve_sequence_paths(config: Config) -> tuple[SequencePaths, ...]:
     return tuple(resolved)
 
 
-def _rotations_from_wxyz(quaternions: np.ndarray) -> Rotation:
-    values = np.asarray(quaternions, dtype=float)
-    if values.shape[-1] != 4 or not np.isfinite(values).all():
-        raise ValueError(f"Invalid scalar-first quaternion array: {values.shape}")
-    norms = np.linalg.norm(values, axis=-1, keepdims=True)
-    if np.any(norms <= 1e-12):
-        raise ValueError("Quaternion array contains a zero-length quaternion")
-    normalized = values / norms
-    return Rotation.from_quat(normalized[..., [1, 2, 3, 0]])
-
-
-def _wxyz(rotations: Rotation) -> np.ndarray:
-    xyzw = np.asarray(rotations.as_quat(), dtype=float)
-    xyzw = xyzw.copy()
-    xyzw = np.where((xyzw[..., 3] < 0.0)[..., None], -xyzw, xyzw)
-    return xyzw[..., [3, 0, 1, 2]]
-
-
 def root_relative_positions(
     points_m: np.ndarray,
     root_positions_m: np.ndarray,
@@ -336,14 +322,14 @@ def root_relative_positions(
     roots = np.asarray(root_positions_m, dtype=float)
     if points.shape != roots.shape or points.ndim != 2 or points.shape[1] != 3:
         raise ValueError("Point and root positions must both have shape (frames, 3)")
-    return _rotations_from_wxyz(root_quaternions_wxyz).inv().apply(points - roots)
+    return rotations_from_wxyz(root_quaternions_wxyz).inv().apply(points - roots)
 
 
 def root_relative_rotations(
     rotations_wxyz: np.ndarray,
     root_quaternions_wxyz: np.ndarray,
 ) -> Rotation:
-    return _rotations_from_wxyz(root_quaternions_wxyz).inv() * _rotations_from_wxyz(rotations_wxyz)
+    return rotations_from_wxyz(root_quaternions_wxyz).inv() * rotations_from_wxyz(rotations_wxyz)
 
 
 def orientation_error_metrics(reference: Rotation, target: Rotation) -> dict[str, np.ndarray]:
@@ -367,6 +353,15 @@ def orientation_error_metrics(reference: Rotation, target: Rotation) -> dict[str
         "face_normal_deg": face_normal_deg,
         "twist_deg": twist_deg,
     }
+
+
+def symmetry_aware_racket_error_deg(reference: Rotation, target: Rotation) -> np.ndarray:
+    """Return SO(3) error modulo a 180-degree local racket-X rotation."""
+
+    half_turn = Rotation.from_rotvec(np.array([np.pi, 0.0, 0.0]))
+    direct = np.atleast_1d((reference.inv() * target).magnitude())
+    flipped = np.atleast_1d(((reference * half_turn).inv() * target).magnitude())
+    return np.rad2deg(np.minimum(direct, flipped))
 
 
 def angular_speed(rotations: Rotation, times_s: np.ndarray) -> np.ndarray:
@@ -637,7 +632,7 @@ def build_proxy_model(
             raise KeyError(f"Proxy segment '{proxy_segment}' is absent from target motion")
         segment_name = target_name_by_normalized[normalized_segment]
         segment_index = tpose_indices[_normalize_source_name(segment_name)]
-        segment_rotation = _rotations_from_wxyz(tpose.quaternions_wijk[segment_index])
+        segment_rotation = rotations_from_wxyz(tpose.quaternions_wijk[segment_index])
         local_offset = segment_rotation.inv().apply(data.xipos[body_id] - tpose.positions_m[segment_index])
         points.append(ProxyMassPoint(segment_name, mass, local_offset, body_name))
         weighted_reference += mass * (tpose.positions_m[segment_index] + segment_rotation.apply(local_offset))
@@ -674,6 +669,7 @@ def evaluate_proxy_com(
 def evaluate_g1_motion(
     model_path: Path,
     qpos: np.ndarray,
+    racket_attachment: TennisRacketAttachment | None = None,
 ) -> tuple[
     np.ndarray,
     np.ndarray,
@@ -691,8 +687,7 @@ def evaluate_g1_motion(
         raise ValueError(f"Retargeted qpos width is {qpos.shape[1]}; robot model expects {model.nq}")
     data = mujoco.MjData(model)
     pelvis_id = model.body("pelvis").id
-    position_body = model.body(G1_RACKET_POSITION_LINK).id
-    orientation_body = model.body(G1_RACKET_ORIENTATION_LINK).id
+    attachment = racket_attachment or load_tennis_racket_attachment()
     side_ids = {
         side: [model.body(f"{side}_ankle_roll_sphere_{index}_link").id for index in range(1, 6)]
         for side in ("left", "right")
@@ -710,11 +705,9 @@ def evaluate_g1_motion(
         com[frame] = data.subtree_com[pelvis_id]
         root_position[frame] = data.xpos[pelvis_id]
         root_quaternion[frame] = data.xquat[pelvis_id]
-        position_rotation = data.xmat[position_body].reshape(3, 3)
-        racket_position[frame] = data.xpos[position_body] + position_rotation @ G1_RACKET_GRIP_OFFSET_M
-        hand_rotation = Rotation.from_matrix(data.xmat[orientation_body].reshape(3, 3))
-        racket_rotation = hand_rotation * _rotations_from_wxyz(G1_RACKET_FRAME_WXYZ)
-        racket_quaternion[frame] = _wxyz(racket_rotation)
+        achieved_position, achieved_rotation, _ = achieved_tennis_racket_pose(model, data, attachment)
+        racket_position[frame] = achieved_position
+        racket_quaternion[frame] = rotation_as_wxyz(Rotation.from_matrix(achieved_rotation))
         for side, body_ids in side_ids.items():
             soles[side][frame] = data.xpos[body_ids]
     return (
@@ -873,6 +866,7 @@ def load_retargeted_npz(path: Path) -> tuple[np.ndarray, np.ndarray, float]:
 def load_and_analyze(config: Config, paths: SequencePaths) -> AnalysisData:
     robot_model_path = _resolve_robot_model_path(config.robot_model_path)
     qpos_full, target_positions_full, fps = load_retargeted_npz(paths.qpos_npz)
+    saved_result = load_retargeting_result(paths.qpos_npz)
 
     motion: XsensHdf5Motion = load_xsens_hdf5_motion(
         paths.hdf5_path,
@@ -955,7 +949,14 @@ def load_and_analyze(config: Config, paths: SequencePaths) -> AnalysisData:
         g1_left_height,
         g1_right_height,
         g1_racket_quaternion,
-    ) = evaluate_g1_motion(robot_model_path, qpos)
+    ) = evaluate_g1_motion(
+        robot_model_path,
+        qpos,
+        None if saved_result.tennis_racket is None else saved_result.tennis_racket.attachment,
+    )
+    if saved_result.tennis_racket is not None:
+        g1_racket_position = saved_result.tennis_racket.position_m[frames]
+        g1_racket_quaternion = saved_result.tennis_racket.quaternion_wxyz[frames]
 
     left_contact, right_contact, contact_phase = _contact_masks(contacts, contact_names)
     human_footprints = footprint_series(
@@ -992,8 +993,8 @@ def load_and_analyze(config: Config, paths: SequencePaths) -> AnalysisData:
     human_racket_root = root_relative_positions(human_racket_position, human_root_position, human_root_quaternion)
     g1_racket_root = root_relative_positions(g1_racket_position, g1_root_position, g1_root_quaternion)
     global_orientation = orientation_error_metrics(
-        _rotations_from_wxyz(human_racket_quaternion),
-        _rotations_from_wxyz(g1_racket_quaternion),
+        rotations_from_wxyz(human_racket_quaternion),
+        rotations_from_wxyz(g1_racket_quaternion),
     )
     root_orientation = orientation_error_metrics(
         root_relative_rotations(human_racket_quaternion, human_root_quaternion),
@@ -1001,8 +1002,8 @@ def load_and_analyze(config: Config, paths: SequencePaths) -> AnalysisData:
     )
     human_linear_speed = linear_speed(human_racket_position, times_s)
     g1_linear_speed = linear_speed(g1_racket_position, times_s)
-    human_angular_speed = angular_speed(_rotations_from_wxyz(human_racket_quaternion), times_s)
-    g1_angular_speed = angular_speed(_rotations_from_wxyz(g1_racket_quaternion), times_s)
+    human_angular_speed = angular_speed(rotations_from_wxyz(human_racket_quaternion), times_s)
+    g1_angular_speed = angular_speed(rotations_from_wxyz(g1_racket_quaternion), times_s)
     metrics: dict[str, np.ndarray] = {
         "com_world_error_m": np.linalg.norm(g1_com - human_com, axis=1),
         "com_root_error_m": np.linalg.norm(g1_com_root - human_com_root, axis=1),
@@ -1014,6 +1015,10 @@ def load_and_analyze(config: Config, paths: SequencePaths) -> AnalysisData:
         "racket_longitudinal_axis_error_deg": global_orientation["longitudinal_axis_deg"],
         "racket_face_normal_error_deg": global_orientation["face_normal_deg"],
         "racket_twist_error_deg": global_orientation["twist_deg"],
+        "racket_symmetry_aware_orientation_error_deg": symmetry_aware_racket_error_deg(
+            rotations_from_wxyz(human_racket_quaternion),
+            rotations_from_wxyz(g1_racket_quaternion),
+        ),
         "human_racket_linear_speed_m_s": human_linear_speed,
         "g1_racket_linear_speed_m_s": g1_linear_speed,
         "racket_linear_speed_error_m_s": np.abs(g1_linear_speed - human_linear_speed),
@@ -1259,6 +1264,10 @@ def build_summary(
             "linear_speed_correlation": linear_corr,
             "angular_speed_best_lag_s": angular_lag,
             "angular_speed_correlation": angular_corr,
+        },
+        "tennis_racket_threshold_coverage": {
+            f"{threshold}_deg": float(np.mean(data.metrics["racket_symmetry_aware_orientation_error_deg"] <= threshold))
+            for threshold in (30, 45, 60, 75)
         },
         "g1_contact_agreement": {
             "height_threshold_m": sole_contact_height_threshold_m,
@@ -1950,16 +1959,12 @@ def launch_viser(
         if actor_is_visible("human"):
             visible_avatar_positions.append(data.human_positions_m[index] + translations["human"])
         if actor_is_visible("g1_xsens"):
-            visible_avatar_positions.append(
-                data.g1_xsens_positions_m[index] + translations["g1_xsens"]
-            )
+            visible_avatar_positions.append(data.g1_xsens_positions_m[index] + translations["g1_xsens"])
         if actor_is_visible("g1") or visible_avatar_positions:
             camera_follow.update_target(
                 compute_camera_follow_target(
                     robot_position_m=(
-                        data.g1_root_position_m[index] + translations["g1"]
-                        if actor_is_visible("g1")
-                        else None
+                        data.g1_root_position_m[index] + translations["g1"] if actor_is_visible("g1") else None
                     ),
                     avatar_positions_m=tuple(visible_avatar_positions),
                 )

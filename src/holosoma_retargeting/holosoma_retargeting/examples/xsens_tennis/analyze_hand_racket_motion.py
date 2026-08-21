@@ -24,6 +24,8 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from scipy.spatial.transform import Rotation
 
+from holosoma_retargeting.transformation_utils import rotation_as_wxyz, rotations_from_wxyz
+
 HAND_SEGMENT = "RightHand"
 RACKET_SEGMENT = "RightHandSword"
 SEGMENT_GROUP = "xsens-segments"
@@ -172,35 +174,6 @@ def _parse_names(value: Any, *, attribute: str) -> list[str]:
     return [str(item) for item in parsed]
 
 
-def rotations_from_wxyz(quaternions_wxyz: np.ndarray) -> Rotation:
-    """Build SciPy rotations from scalar-first quaternions."""
-
-    quaternions_wxyz = np.asarray(quaternions_wxyz, dtype=float)
-    if quaternions_wxyz.shape[-1] != 4:
-        raise ValueError(f"Expected scalar-first quaternions ending in 4, got {quaternions_wxyz.shape}")
-    if not np.isfinite(quaternions_wxyz).all():
-        raise ValueError("Quaternion stream contains non-finite values")
-    norms = np.linalg.norm(quaternions_wxyz, axis=-1)
-    if np.any(norms < 1e-12):
-        raise ValueError("Quaternion stream contains a zero-length quaternion")
-    normalized = quaternions_wxyz / norms[..., None]
-    return Rotation.from_quat(normalized[..., [1, 2, 3, 0]])
-
-
-def rotation_as_wxyz(rotation: Rotation) -> np.ndarray:
-    """Return scalar-first quaternions with a canonical non-negative scalar."""
-
-    xyzw = np.asarray(rotation.as_quat(), dtype=float)
-    if xyzw.ndim == 1:
-        xyzw = xyzw.copy()
-        if xyzw[3] < 0:
-            xyzw *= -1
-        return xyzw[[3, 0, 1, 2]]
-    xyzw = xyzw.copy()
-    xyzw[xyzw[:, 3] < 0] *= -1
-    return xyzw[:, [3, 0, 1, 2]]
-
-
 def compute_relative_pose(
     hand_positions_m: np.ndarray,
     racket_positions_m: np.ndarray,
@@ -287,8 +260,7 @@ def infer_analysis_windows(
     good_tposes = [window for window in windows if window.label.lower() == "good t-pose"]
     if not good_tposes:
         raise ValueError(
-            "Could not infer an observed baseline: provide --observed-baseline-start-s and "
-            "--observed-baseline-end-s"
+            "Could not infer an observed baseline: provide --observed-baseline-start-s and --observed-baseline-end-s"
         )
     observed_baseline = good_tposes[0]
     next_calibration = next(
@@ -296,9 +268,7 @@ def infer_analysis_windows(
         None,
     )
     if next_calibration is None:
-        raise ValueError(
-            "Could not infer an activity end after the first good T-pose: provide --activity-end-s"
-        )
+        raise ValueError("Could not infer an activity end after the first good T-pose: provide --activity-end-s")
     activity = TimeWindow(observed_baseline.end_s, next_calibration.start_s, "Inferred tennis/activity")
     return tuple(windows), observed_baseline, activity
 
@@ -470,9 +440,7 @@ def analyze_sequence(sequence: SequenceData) -> AnalysisResult:
         sensor_relative_rotation = sensor_hand_rotation.inv() * sensor_racket_rotation
         sensor_baseline = sensor_relative_rotation[baseline_mask].mean()
         sensor_observed_error_deg = np.rad2deg((sensor_baseline.inv() * sensor_relative_rotation).magnitude())
-        sensor_segment_error_disagreement_deg = np.abs(
-            sensor_observed_error_deg - observed_residual.geodesic_deg
-        )
+        sensor_segment_error_disagreement_deg = np.abs(sensor_observed_error_deg - observed_residual.geodesic_deg)
 
     phase = np.full(sequence.times_s.shape, "other", dtype=object)
     phase[baseline_mask] = "observed_good_tpose"
@@ -627,9 +595,8 @@ def select_diagnostic_clips(result: AnalysisResult, duration_s: float) -> tuple[
     rolling_error = _rolling_mean(result.observed_residual.geodesic_deg, sample_count)
     rolling_racket_speed = _rolling_mean(result.racket_angular_speed_rad_s, sample_count)
     start_times_s = times_s[: rolling_error.size]
-    valid_activity = (
-        (start_times_s >= result.sequence.activity.start_s)
-        & (start_times_s + duration_s <= result.sequence.activity.end_s)
+    valid_activity = (start_times_s >= result.sequence.activity.start_s) & (
+        start_times_s + duration_s <= result.sequence.activity.end_s
     )
     activity_mask = _mask_for_window(times_s, result.sequence.activity)
     activity_median_error = float(np.median(result.observed_residual.geodesic_deg[activity_mask]))
@@ -756,21 +723,15 @@ def build_summary(
                 result.observed_residual.longitudinal_axis_misalignment_deg[activity_mask]
             ),
             "absolute_twist_deg": _distribution(np.abs(result.observed_residual.twist_deg[activity_mask])),
-            "translation_error_observed_baseline_m": _distribution(
-                result.translation_error_observed_m[activity_mask]
-            ),
+            "translation_error_observed_baseline_m": _distribution(result.translation_error_observed_m[activity_mask]),
             "hand_angular_speed_rad_s": _distribution(hand_activity_speed),
             "racket_angular_speed_rad_s": _distribution(racket_activity_speed),
-            "relative_angular_speed_rad_s": _distribution(
-                result.relative_angular_speed_rad_s[activity_mask]
-            ),
+            "relative_angular_speed_rad_s": _distribution(result.relative_angular_speed_rad_s[activity_mask]),
             "angular_speed_coupling": {
                 "zero_lag_correlation": zero_lag_correlation,
                 "best_lag_s_positive_means_racket_follows_hand": best_lag_s,
                 "best_lag_correlation": best_lag_correlation,
-                "absolute_speed_difference_rad_s": _distribution(
-                    np.abs(hand_activity_speed - racket_activity_speed)
-                ),
+                "absolute_speed_difference_rad_s": _distribution(np.abs(hand_activity_speed - racket_activity_speed)),
             },
             "time_above_thresholds": threshold_summary,
         },
@@ -778,9 +739,7 @@ def build_summary(
             "orientation_error_observed_baseline_deg": _distribution(
                 result.observed_residual.geodesic_deg[baseline_mask]
             ),
-            "translation_error_observed_baseline_m": _distribution(
-                result.translation_error_observed_m[baseline_mask]
-            ),
+            "translation_error_observed_baseline_m": _distribution(result.translation_error_observed_m[baseline_mask]),
         },
         "sensor_validation": sensor_validation,
         "event_detection": {
@@ -1142,17 +1101,13 @@ def plot_phase_distributions(
     thresholds = np.array([30.0, 60.0, 90.0])
     activity_mask = _mask_for_window(result.sequence.times_s, result.sequence.activity)
     fractions = [
-        100.0 * np.mean(result.observed_residual.geodesic_deg[activity_mask] >= threshold)
-        for threshold in thresholds
+        100.0 * np.mean(result.observed_residual.geodesic_deg[activity_mask] >= threshold) for threshold in thresholds
     ]
     axes[1].bar([f"≥{int(value)}°" for value in thresholds], fractions, color=[BLUE, ORANGE, RED], alpha=0.78)
     for index, fraction in enumerate(fractions):
         axes[1].text(index, fraction, f"{fraction:.1f}%", ha="center", va="bottom")
     axes[1].set(
-        title=(
-            f"Activity time above thresholds "
-            f"({len(events)} sustained ≥{event_threshold_deg:g}° events)"
-        ),
+        title=(f"Activity time above thresholds ({len(events)} sustained ≥{event_threshold_deg:g}° events)"),
         ylabel="Activity frames [%]",
         ylim=(0, max(fractions) * 1.18 if fractions else 1.0),
     )
@@ -1476,10 +1431,7 @@ def _format_clip_table(clips: Sequence[DiagnosticClip]) -> str:
         "| Chapter | Start [s] | End [s] | Selection |",
         "|---|---:|---:|---|",
     ]
-    rows.extend(
-        f"| {clip.label} | {clip.start_s:.3f} | {clip.end_s:.3f} | {clip.selection_reason} |"
-        for clip in clips
-    )
+    rows.extend(f"| {clip.label} | {clip.start_s:.3f} | {clip.end_s:.3f} | {clip.selection_reason} |" for clip in clips)
     return "\n".join(rows)
 
 
@@ -1515,8 +1467,8 @@ def write_report(
 ## Scope
 
 - Recording: `{result.sequence.source_path.name}`
-- Samples: {summary['sample_count']:,} at a median {summary['native_fps']:.3f} Hz
-- Duration: {summary['duration_s']:.3f} s ({summary['duration_s'] / 60.0:.2f} min)
+- Samples: {summary["sample_count"]:,} at a median {summary["native_fps"]:.3f} Hz
+- Duration: {summary["duration_s"]:.3f} s ({summary["duration_s"] / 60.0:.2f} min)
 - Observed baseline: first logged good T-pose,
   {result.sequence.observed_baseline.start_s:.3f}-{result.sequence.observed_baseline.end_s:.3f} s
 - Primary interval: inferred tennis/activity interval,
@@ -1530,26 +1482,26 @@ calibration boundaries because the activity annotation stream is empty.
 1. **The embedded and observed grip calibrations differ.** The embedded Xsens T-pose encodes the racket
    frame at {np.rad2deg(result.embedded_rotation.magnitude()):.2f}° relative to the hand (nominally the known
    -90° longitudinal roll). The mean first good T-pose is
-   {summary['observed_vs_embedded_orientation_deg']:.2f}° away from that embedded relationship.
+   {summary["observed_vs_embedded_orientation_deg"]:.2f}° away from that embedded relationship.
 2. **The racket orientation does not remain fixed to the observed hand-frame baseline.** During the primary
-   interval, the quaternion-geodesic error is {observed['median']:.2f}° at the median,
-   {observed['p95']:.2f}° at P95, {observed['p99']:.2f}° at P99, and {observed['max']:.2f}° at the maximum.
+   interval, the quaternion-geodesic error is {observed["median"]:.2f}° at the median,
+   {observed["p95"]:.2f}° at P95, {observed["p99"]:.2f}° at P99, and {observed["max"]:.2f}° at the maximum.
    Against the embedded T-pose the corresponding median/P95 are
-   {embedded['median']:.2f}°/{embedded['p95']:.2f}°.
+   {embedded["median"]:.2f}°/{embedded["p95"]:.2f}°.
 3. **Large differences are sustained, not only isolated spikes.** The observed-baseline error is at least 30°
-   for {100.0 * thresholds['ge_30_deg']['frame_fraction']:.1f}% of the primary interval, at least 60° for
-   {100.0 * thresholds['ge_60_deg']['frame_fraction']:.1f}%, and at least 90° for
-   {100.0 * thresholds['ge_90_deg']['frame_fraction']:.1f}%. There are {len(events)} events above the
+   for {100.0 * thresholds["ge_30_deg"]["frame_fraction"]:.1f}% of the primary interval, at least 60° for
+   {100.0 * thresholds["ge_60_deg"]["frame_fraction"]:.1f}%, and at least 90° for
+   {100.0 * thresholds["ge_90_deg"]["frame_fraction"]:.1f}%. There are {len(events)} events above the
    configured {event_threshold_deg:g}° threshold lasting at least {event_min_duration_s:g} s.
 4. **The racket origin is effectively rigid in the hand frame.** Translation deviation from the observed
-   good-T-pose mean is {1000.0 * translation['median']:.4f} mm at the median,
-   {1000.0 * translation['p95']:.4f} mm at P95, and {1000.0 * translation['max']:.3f} mm at the maximum.
+   good-T-pose mean is {1000.0 * translation["median"]:.4f} mm at the median,
+   {1000.0 * translation["p95"]:.4f} mm at P95, and {1000.0 * translation["max"]:.3f} mm at the maximum.
    This is consistent with the Xsens prop origin being kinematically attached to the hand; it should not be
    interpreted as an independent measurement of grip translation.
 5. **Overall motion remains strongly coupled.** Hand and racket angular-speed correlation is
-   {coupling['zero_lag_correlation']:.4f} at zero lag. The best correlation within ±250 ms is
-   {coupling['best_lag_correlation']:.4f} at
-   {1000.0 * coupling['best_lag_s_positive_means_racket_follows_hand']:.1f} ms (positive means the racket
+   {coupling["zero_lag_correlation"]:.4f} at zero lag. The best correlation within ±250 ms is
+   {coupling["best_lag_correlation"]:.4f} at
+   {1000.0 * coupling["best_lag_s_positive_means_racket_follows_hand"]:.1f} ms (positive means the racket
    follows the hand).
 6. **The raw sensors corroborate the relative-angle change.** {sensor_text}
 

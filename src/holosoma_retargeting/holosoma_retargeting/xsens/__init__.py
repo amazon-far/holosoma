@@ -20,11 +20,21 @@ from .morphology_adaptation import (
     build_xsens_morphology_adapter,
     xsens_body_to_source_mapping,
 )
+from .tennis_racket import (
+    RetargetingResult,
+    TennisRacketAttachment,
+    TennisRacketMotion,
+    load_retargeting_result,
+    load_tennis_racket_attachment,
+)
 
 __all__ = [
     "G1Anthropometry",
     "G1XsensProportionReport",
     "G1XsensReductionConfig",
+    "RetargetingResult",
+    "TennisRacketAttachment",
+    "TennisRacketMotion",
     "XsensGroundingMode",
     "XsensRootMotionConfig",
     "XsensRootMotionMode",
@@ -37,5 +47,7 @@ __all__ = [
     "export_g1_proportioned_xsens_usd",
     "extract_g1_anthropometry",
     "g1_anthropometry_to_xsens_avatar_proportions",
+    "load_retargeting_result",
+    "load_tennis_racket_attachment",
     "xsens_body_to_source_mapping",
 ]

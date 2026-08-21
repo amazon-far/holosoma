@@ -60,6 +60,8 @@ def create_task_constants(
 
     if object_name is not None:
         namespace.OBJECT_NAME = object_name
+    elif not hasattr(namespace, "OBJECT_NAME"):
+        namespace.OBJECT_NAME = "ground"
 
     if namespace.OBJECT_NAME != "ground":
         namespace.OBJECT_URDF_FILE = f"models/{namespace.OBJECT_NAME}/{namespace.OBJECT_NAME}.urdf"
@@ -136,13 +138,24 @@ class MotionLoader:
     def _load_motion(self):
         """Loads the motion from the csv file."""
         if self.motion_file.endswith(".npz"):
-            data = np.load(self.motion_file)
-            self.input_fps = round(1 / data.get("fps", 1 / self.input_fps))
-            self.input_dt = 1.0 / self.input_fps
-            motion = torch.from_numpy(data["qpos"]).to(torch.float32)
+            with np.load(self.motion_file, allow_pickle=False) as data:
+                fps_value = float(np.asarray(data["fps"]).reshape(())) if "fps" in data else float(self.input_fps)
+                self.input_fps = round(1.0 / fps_value) if 0.0 < fps_value <= 1.0 else round(fps_value)
+                self.input_dt = 1.0 / self.input_fps
+                motion = torch.from_numpy(np.asarray(data["qpos"])).to(torch.float32)
+                self.tennis_racket_input = (
+                    {
+                        key: np.asarray(data[key]).copy()
+                        for key in data.files
+                        if key.startswith("tennis_racket_")
+                    }
+                    if "tennis_racket_position_m" in data
+                    else None
+                )
         else:
             raise ValueError("Unsupported motion file format. Use .csv or .npz.")
 
+        source_frame_count = int(motion.shape[0])
         if self.line_range is not None:
             start, end = self.line_range
             total_frames = motion.shape[0] - 1
@@ -150,6 +163,21 @@ class MotionLoader:
                 f"line_range out of bounds: start={start}, end={end}, total_frames={total_frames}"
             )
             motion = motion[start : end + 1]
+            if self.tennis_racket_input is not None:
+                for key in (
+                    "tennis_racket_position_m",
+                    "tennis_racket_quaternion_wxyz",
+                    "tennis_racket_tracking_state",
+                    "tennis_racket_symmetry_branch",
+                    "tennis_racket_target_error_rad",
+                    "tennis_racket_source_origin_deviation_m",
+                    "tennis_racket_min_wrist_limit_margin_rad",
+                ):
+                    if key in self.tennis_racket_input:
+                        value = self.tennis_racket_input[key]
+                        if value.ndim == 0 or value.shape[0] != source_frame_count:
+                            raise ValueError(f"Raw racket result has a misaligned array '{key}'")
+                        self.tennis_racket_input[key] = value[start : end + 1]
             assert motion.shape[0] > 1, (
                 "line_range must select at least 2 frames to compute interpolation/velocities: "
                 f"selected_frames={motion.shape[0]}, start={start}, end={end}"
@@ -182,6 +210,9 @@ class MotionLoader:
         times = torch.arange(0, self.duration, self.output_dt, device=self.device, dtype=torch.float32)
         self.output_frames = times.shape[0]
         index_0, index_1, blend = self._compute_frame_blend(times)
+        self._interpolation_index_0 = index_0
+        self._interpolation_index_1 = index_1
+        self._interpolation_blend = blend
         self.motion_base_poss = self._lerp(
             self.motion_base_poss_input[index_0],
             self.motion_base_poss_input[index_1],
@@ -209,11 +240,73 @@ class MotionLoader:
                 self.motion_object_rots_input[index_1],
                 blend,
             )
+        self._interpolate_tennis_racket_motion(index_0, index_1, blend)
         print(
             "Motion interpolated, input frames: "
             f"{self.input_frames}, input fps: {self.input_fps}, "
             f"output frames: {self.output_frames}, output fps: {self.output_fps}"
         )
+
+    def _interpolate_tennis_racket_motion(
+        self,
+        index_0: torch.Tensor,
+        index_1: torch.Tensor,
+        blend: torch.Tensor,
+    ) -> None:
+        """Resample optional achieved racket data with type-appropriate interpolation."""
+
+        self.tennis_racket_output: dict[str, np.ndarray] | None = None
+        if self.tennis_racket_input is None:
+            return
+        source = self.tennis_racket_input
+        frame_count = self.input_frames
+        for key in (
+            "tennis_racket_position_m",
+            "tennis_racket_quaternion_wxyz",
+            "tennis_racket_tracking_state",
+            "tennis_racket_symmetry_branch",
+            "tennis_racket_target_error_rad",
+            "tennis_racket_source_origin_deviation_m",
+            "tennis_racket_min_wrist_limit_margin_rad",
+        ):
+            if key not in source or np.asarray(source[key]).shape[0] != frame_count:
+                raise ValueError(f"Raw racket result is missing aligned array '{key}'")
+
+        positions = torch.as_tensor(source["tennis_racket_position_m"], dtype=torch.float32, device=self.device)
+        quaternions = torch.as_tensor(
+            source["tennis_racket_quaternion_wxyz"], dtype=torch.float32, device=self.device
+        )
+        output: dict[str, np.ndarray] = {
+            "tennis_racket_position_m": self._lerp(
+                positions[index_0], positions[index_1], blend.unsqueeze(1)
+            ).cpu().numpy(),
+            "tennis_racket_quaternion_wxyz": self._slerp(
+                quaternions[index_0], quaternions[index_1], blend
+            ).cpu().numpy(),
+        }
+        for key in (
+            "tennis_racket_target_error_rad",
+            "tennis_racket_source_origin_deviation_m",
+            "tennis_racket_min_wrist_limit_margin_rad",
+        ):
+            values = torch.as_tensor(source[key], dtype=torch.float32, device=self.device)
+            output[key] = self._lerp(values[index_0], values[index_1], blend).cpu().numpy()
+        held_indices = index_0.cpu().numpy()
+        for key in ("tennis_racket_tracking_state", "tennis_racket_symmetry_branch"):
+            output[key] = np.asarray(source[key])[held_indices]
+        aligned_keys = {
+            "tennis_racket_position_m",
+            "tennis_racket_quaternion_wxyz",
+            "tennis_racket_tracking_state",
+            "tennis_racket_symmetry_branch",
+            "tennis_racket_target_error_rad",
+            "tennis_racket_source_origin_deviation_m",
+            "tennis_racket_min_wrist_limit_margin_rad",
+        }
+        for key, value in source.items():
+            if key not in output and key not in aligned_keys:
+                output[key] = value.copy()
+        self.tennis_racket_output = output
 
     def _lerp(self, a: torch.Tensor, b: torch.Tensor, blend: torch.Tensor) -> torch.Tensor:
         """Linear interpolation between two tensors."""
@@ -583,6 +676,9 @@ def run_simulator(args_cli: DataConversionConfig):
                     "object_ang_vel_w",
                 ):
                     log[k] = np.stack(log[k], axis=0)[:]
+
+            if motion.tennis_racket_output is not None:
+                log.update(motion.tennis_racket_output)
 
             # Add joint names and body names to the log
             # Names for qpos/qvel follow joint order

@@ -92,6 +92,55 @@ python examples/parallel_robot_retarget.py \
 When `--save-dir` is omitted, the output directory is inferred from the input dataset. The examples above save to
 `demo_results/g1/robot_only/xsens_tennis` and `demo_results_parallel/g1/robot_only/xsens_tennis`, respectively.
 
+### Tennis-racket orientation modes and attachment calibration
+
+The physical G1 can use three right-hand orientation targets. `hand` is the backward-compatible default,
+`racket` always follows `RightHandSword`, and `filtered` trials both equivalent racket targets before falling back
+to the Xsens hand when the prop is detached or the target is infeasible. A 180-degree rotation about the racket's
+local longitudinal `+X` axis is treated as equivalent. Filtered mode enforces joint limits, requires five feasible
+frames to enter, uses 45-degree entry and 60-degree exit residuals, and keeps 5 degrees of wrist-limit margin.
+The observed 45–60 degree hand/racket relative rotations are not pre-filtered.
+
+```bash
+# Always target the racket orientation.
+python examples/robot_retarget.py ... \
+    --retargeter.orientation.tennis-racket.mode racket
+
+# Feasibility-filtered target with the default 45°/60° hysteresis.
+python examples/robot_retarget.py ... \
+    --retargeter.orientation.tennis-racket.mode filtered
+
+# Inspect/edit the single right_rubber_hand_link → racket transform and save an override.
+python examples/xsens_tennis/calibrate_racket_attachment.py \
+    --save-path tennis_racket_attachment_override.json
+```
+
+Pass an override with `--retargeter.orientation.tennis-racket.attachment-path`. The default `embedded_tpose` source
+applies the recording's embedded hand-to-sword T-pose correction to the global, palm-centered G1 grasp. Use
+`attachment-source global` to disable the sequence-specific correction, or `attachment-source observed_window
+--observed-window-s START END` to apply a mean correction over an explicit good-pose time window. The calibration
+viewer reports whether the handle center lies inside the palm interior.
+
+Raw results now store achieved racket position/orientation, per-frame tracking state, selected symmetry branch,
+symmetry-aware residual, source-origin deviation, wrist-limit margin, and the effective versioned attachment.
+The conversion tool resamples these arrays with linear interpolation, quaternion SLERP, and previous-hold discrete
+states. The Viser player and analyzer use saved achieved poses when present and reconstruct legacy results through
+the same shared attachment. Analysis summaries report symmetry-aware coverage at 30°, 45°, 60°, and 75°.
+
+To inspect the achieved G1 racket directly against the nearest 0°/180°-equivalent Xsens target, generate a static
+timeline, per-frame CSV, JSON summary, and animated target-versus-achieved orientation plot with:
+
+```bash
+python examples/xsens_tennis/analyze_g1_racket_target_error.py \
+    --xsens-hdf5 <recording.hdf5> \
+    --retargeted-npz <retargeting-result.npz> \
+    --output-dir <analysis-directory>
+```
+
+For a retargeted excerpt, pass its first source frame with `--source-frame-start`. The animation traverses the whole
+selected interval in a configurable duration and shows the global/local error histories, current tracking state,
+wrist margin, symmetry branch, and target/achieved racket-frame axes.
+
 ### Analyze Xsens-to-G1 retargeting quality
 
 `examples/xsens_tennis/analyze_xsens_g1_retargeting.py` compares the human Xsens recording, its G1-sized Xsens

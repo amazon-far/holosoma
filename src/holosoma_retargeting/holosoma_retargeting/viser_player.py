@@ -26,7 +26,6 @@ from holosoma_retargeting.data_utils.xsens_hdf5 import (  # noqa: E402
     load_xsens_hdf5_motion,
 )
 from holosoma_retargeting.kinematics import KinematicMorphologyAdapter, KinematicMotion  # noqa: E402
-from holosoma_retargeting.kinematics.model import quaternion_multiply, rotate_vector  # noqa: E402
 from holosoma_retargeting.src.recording_utils import (  # noqa: E402
     build_record_frame_indices,
     record_viser_sequence,
@@ -49,12 +48,19 @@ from holosoma_retargeting.src.xsens_viser import (  # noqa: E402
     validate_g1_xsens_usd,
     validate_subject_xsens_usd,
 )
+from holosoma_retargeting.transformation_utils import rotation_as_wxyz  # noqa: E402
 from holosoma_retargeting.xsens.avatar_mesh import build_tennis_racket_meshes  # noqa: E402
 from holosoma_retargeting.xsens.kinematic_model import TENNIS_RACKET_BODY  # noqa: E402
 from holosoma_retargeting.xsens.morphology_adaptation import (  # noqa: E402
     apply_xsens_root_motion,
     build_subject_xsens_reference_model,
     build_xsens_morphology_adapter,
+)
+from holosoma_retargeting.xsens.tennis_racket import (  # noqa: E402
+    TennisRacketAttachment,
+    TennisRacketMotion,
+    load_retargeting_result,
+    load_tennis_racket_attachment,
 )
 
 
@@ -78,10 +84,8 @@ def load_npz(npz_path: str) -> tuple[np.ndarray, int]:
             )
         raise FileNotFoundError(message)
 
-    with np.load(resolved_path, allow_pickle=True) as data:
-        qpos = np.asarray(data["qpos"])
-        fps = int(data["fps"]) if "fps" in data else 30
-    return qpos, fps
+    result = load_retargeting_result(resolved_path)
+    return result.qpos, round(result.fps)
 
 
 def _nominal_fps(times_s: np.ndarray, fallback: float) -> float:
@@ -97,24 +101,16 @@ ActorMode = Literal["robot", "xsens", "g1_xsens"]
 ACTOR_MODE_ORDER: tuple[ActorMode, ...] = ("robot", "xsens", "g1_xsens")
 ACTOR_LAYOUT_ORDER: tuple[ActorMode, ...] = ("xsens", "g1_xsens", "robot")
 
-G1_RACKET_POSITION_LINK = "right_wrist_yaw_link"
-G1_RACKET_ORIENTATION_LINK = "right_rubber_hand_link"
-# The physical G1 hand link uses a different fixed axis convention from the
-# calibrated Xsens RightHand frame. This maps Xsens-hand vectors into physical
-# G1-hand coordinates before applying the tracked-racket longitudinal roll.
+G1_TENNIS_RACKET_ATTACHMENT = load_tennis_racket_attachment()
+# Deprecated read-only aliases retained for downstream imports. The JSON-backed
+# attachment above is the sole source used for reconstruction and visualization.
+G1_RACKET_POSITION_LINK = G1_TENNIS_RACKET_ATTACHMENT.hand_link
+G1_RACKET_ORIENTATION_LINK = G1_TENNIS_RACKET_ATTACHMENT.hand_link
+G1_RACKET_GRIP_OFFSET_M = G1_TENNIS_RACKET_ATTACHMENT.position_m
+G1_RACKET_FRAME_WXYZ = G1_TENNIS_RACKET_ATTACHMENT.quaternion_wxyz
 G1_HAND_TO_XSENS_FRAME_WXYZ = np.array([0.5, 0.5, -0.5, 0.5])
-# The G1-proportioned Xsens model's pRightHandPalm landmark, expressed first
-# in Xsens hand coordinates and then in the physical G1 hand coordinates.
 G1_XSENS_RACKET_GRIP_OFFSET_M = np.array([0.02995738, -0.09651599, 0.01196775])
-G1_RACKET_GRIP_OFFSET_M = rotate_vector(
-    G1_HAND_TO_XSENS_FRAME_WXYZ,
-    G1_XSENS_RACKET_GRIP_OFFSET_M,
-)
 XSENS_RACKET_LONGITUDINAL_ROLL_WXYZ = np.array([np.sqrt(0.5), -np.sqrt(0.5), 0.0, 0.0])
-G1_RACKET_FRAME_WXYZ = quaternion_multiply(
-    G1_HAND_TO_XSENS_FRAME_WXYZ,
-    XSENS_RACKET_LONGITUDINAL_ROLL_WXYZ,
-)
 
 
 def resolve_actor_modes(actor_modes: Sequence[str]) -> tuple[ActorMode, ...]:
@@ -144,10 +140,7 @@ def resolve_actor_offsets(
     active_modes = set(resolve_actor_modes(actor_modes))
     layout_modes = tuple(mode for mode in ACTOR_LAYOUT_ORDER if mode in active_modes)
     center_index = 0.5 * (len(layout_modes) - 1)
-    return {
-        mode: np.array([0.0, (index - center_index) * spacing, 0.0])
-        for index, mode in enumerate(layout_modes)
-    }
+    return {mode: np.array([0.0, (index - center_index) * spacing, 0.0]) for index, mode in enumerate(layout_modes)}
 
 
 def offset_qpos_positions(
@@ -224,9 +217,7 @@ def add_tennis_racket_control(
     """Add one tennis-only control for every displayed actor that has a racket."""
 
     xsens_racket_frames = tuple(
-        actor.body_frames[TENNIS_RACKET_BODY]
-        for actor in actors
-        if TENNIS_RACKET_BODY in actor.body_frames
+        actor.body_frames[TENNIS_RACKET_BODY] for actor in actors if TENNIS_RACKET_BODY in actor.body_frames
     )
     racket_frames = xsens_racket_frames + ((g1_racket_frame,) if g1_racket_frame is not None else ())
     if not racket_frames:
@@ -272,42 +263,42 @@ def add_g1_tennis_racket(
 def update_g1_tennis_racket_pose(
     racket_frame: Any,
     robot_urdf: yourdfpy.URDF,
+    attachment: TennisRacketAttachment = G1_TENNIS_RACKET_ATTACHMENT,
 ) -> None:
     """Update the G1 racket's local pose under the physical robot root."""
 
-    position_transform = robot_urdf.get_transform(
-        G1_RACKET_POSITION_LINK,
-        robot_urdf.base_link,
-    )
-    orientation_transform = robot_urdf.get_transform(
-        G1_RACKET_ORIENTATION_LINK,
+    hand_transform = robot_urdf.get_transform(
+        attachment.hand_link,
         robot_urdf.base_link,
     )
     local_position = (
-        np.asarray(position_transform[:3, 3], dtype=float)
-        + np.asarray(
-            position_transform[:3, :3],
-            dtype=float,
-        )
-        @ G1_RACKET_GRIP_OFFSET_M
+        np.asarray(hand_transform[:3, 3], dtype=float)
+        + np.asarray(hand_transform[:3, :3], dtype=float) @ attachment.position_m
     )
-    local_hand_wxyz = _matrix_to_quaternion(orientation_transform[:3, :3])
+    local_rotation = (
+        np.asarray(hand_transform[:3, :3], dtype=float)
+        @ Rotation.from_quat(attachment.quaternion_wxyz[[1, 2, 3, 0]]).as_matrix()
+    )
 
     # The racket frame is parented at ``/robot``. The robot root already
     # carries the floating-base world transform, so assigning it again here
     # would double-transform the racket.
     racket_frame.position = local_position
-    racket_frame.wxyz = quaternion_multiply(local_hand_wxyz, G1_RACKET_FRAME_WXYZ)
+    racket_frame.wxyz = rotation_as_wxyz(Rotation.from_matrix(local_rotation))
 
 
-def _matrix_to_quaternion(rotation: np.ndarray) -> np.ndarray:
-    """Convert a proper rotation matrix to a normalized scalar-first quaternion."""
+def update_saved_tennis_racket_pose(
+    racket_frame: Any,
+    motion: TennisRacketMotion,
+    frame_idx: int,
+    position_offset_m: np.ndarray | None = None,
+) -> None:
+    """Apply an achieved racket pose saved alongside retargeted qpos."""
 
-    matrix = np.asarray(rotation, dtype=float)
-    if matrix.shape != (3, 3):
-        raise ValueError("rotation must have shape (3, 3)")
-    quaternion_xyzw = Rotation.from_matrix(matrix).as_quat()
-    return quaternion_xyzw[[3, 0, 1, 2]]
+    index = int(np.clip(frame_idx, 0, motion.position_m.shape[0] - 1))
+    offset = np.zeros(3) if position_offset_m is None else np.asarray(position_offset_m, dtype=float)
+    racket_frame.position = motion.position_m[index] + offset
+    racket_frame.wxyz = motion.quaternion_wxyz[index]
 
 
 @dataclass(frozen=True)
@@ -449,6 +440,7 @@ def make_player(
     qpos: np.ndarray | None = None,
     fps: int | None = None,
     xsens_motion: XsensHdf5Motion | None = None,
+    tennis_racket_motion: TennisRacketMotion | None = None,
 ) -> viser.ViserServer:
     """Create a Viser player containing any configured combination of actors."""
 
@@ -460,15 +452,11 @@ def make_player(
         actor_modes,
         xsens_config.actor_spacing_m if xsens_config is not None else 0.0,
     )
-    xsens_actor_offsets = {
-        mode: offset for mode, offset in actor_offsets.items() if mode in {"xsens", "g1_xsens"}
-    }
+    xsens_actor_offsets = {mode: offset for mode, offset in actor_offsets.items() if mode in {"xsens", "g1_xsens"}}
     record_output_path = resolve_record_output_path(config)
     if show_robot and qpos is None:
         raise ValueError(f"actor_modes={actor_modes} requires qpos motion for the robot actor")
-    if show_xsens and (
-        xsens_config is None or xsens_motion is None or xsens_config.xsens_hdf5 is None
-    ):
+    if show_xsens and (xsens_config is None or xsens_motion is None or xsens_config.xsens_hdf5 is None):
         raise ValueError(f"actor_modes={actor_modes} requires an XsensViserConfig with --xsens-hdf5")
 
     server = viser.ViserServer()
@@ -495,10 +483,12 @@ def make_player(
         vr = ViserUrdf(server, urdf_or_path=robot_urdf, root_node_name="/robot")
         vr.show_visual = config.show_meshes
         robot_dof = len(vr.get_actuated_joint_limits())
-        if xsens_config is not None and {
-            G1_RACKET_POSITION_LINK,
-            G1_RACKET_ORIENTATION_LINK,
-        }.issubset(robot_urdf.link_map):
+        racket_hand_link = (
+            tennis_racket_motion.attachment.hand_link
+            if tennis_racket_motion is not None
+            else G1_TENNIS_RACKET_ATTACHMENT.hand_link
+        )
+        if xsens_config is not None and racket_hand_link in robot_urdf.link_map:
             g1_racket_frame, _ = add_g1_tennis_racket(server)
 
         if config.object_urdf:
@@ -598,10 +588,7 @@ def make_player(
     xsens_ground_positions = None
     if show_xsens and xsens_motion is not None:
         xsens_ground_positions = np.concatenate(
-            [
-                xsens_motion.positions_m + xsens_actor_offsets[mode][None, None, :]
-                for mode in xsens_actors
-            ],
+            [xsens_motion.positions_m + xsens_actor_offsets[mode][None, None, :] for mode in xsens_actors],
             axis=1,
         )
     ground = compute_ground_plane_bounds(
@@ -646,18 +633,10 @@ def make_player(
             assert g1_xsens_positions_m is not None
             initial_g1_positions = g1_xsens_positions_m[0]
         for mode in xsens_actors:
-            base_positions = (
-                initial_g1_positions
-                if mode == "g1_xsens"
-                else initial_xsens_pose.positions_m
-            )
+            base_positions = initial_g1_positions if mode == "g1_xsens" else initial_xsens_pose.positions_m
             assert base_positions is not None
-            initial_base_positions.append(
-                np.asarray(base_positions[0], dtype=float) + xsens_actor_offsets[mode]
-            )
-            initial_base_orientations.append(
-                np.asarray(initial_xsens_pose.quaternions_wxyz[0], dtype=float)
-            )
+            initial_base_positions.append(np.asarray(base_positions[0], dtype=float) + xsens_actor_offsets[mode])
+            initial_base_orientations.append(np.asarray(initial_xsens_pose.quaternions_wxyz[0], dtype=float))
     initial_camera = compute_initial_camera_view(initial_base_positions, initial_base_orientations)
 
     @server.on_client_connect
@@ -727,8 +706,11 @@ def make_player(
         def _apply_robot_frame(frame_idx: int) -> None:
             robot_applier.apply_frame(qpos, frame_idx)
             if g1_racket_frame is not None:
-                assert robot_urdf is not None
-                update_g1_tennis_racket_pose(g1_racket_frame, robot_urdf)
+                if tennis_racket_motion is not None:
+                    update_saved_tennis_racket_pose(g1_racket_frame, tennis_racket_motion, frame_idx)
+                else:
+                    assert robot_urdf is not None
+                    update_g1_tennis_racket_pose(g1_racket_frame, robot_urdf)
             camera_follow.update_target(qpos[int(np.clip(frame_idx, 0, qpos.shape[0] - 1)), 0:3])
 
         if config.record_video:
@@ -755,22 +737,52 @@ def make_player(
             if config.record_exit_after:
                 raise SystemExit(0)
 
-        create_motion_control_sliders(
-            server=server,
-            viser_robot=vr,
-            robot_base_frame=robot_root,
-            motion_sequence=qpos,
-            robot_dof=robot_dof,
-            viser_object=vo if config.assume_object_in_qpos else None,
-            object_base_frame=object_root if config.assume_object_in_qpos else None,
-            contains_object_in_qpos=config.assume_object_in_qpos,
-            initial_fps=round(actual_robot_fps),
-            initial_interp_mult=config.visual_fps_multiplier,
-            initial_playback_speed=config.playback_speed,
-            loop=config.loop,
-            frame_times_s=np.arange(qpos.shape[0], dtype=float) / actual_robot_fps,
-            on_pose_applied=lambda pose: camera_follow.update_target(pose[0:3]),
-        )
+        if tennis_racket_motion is not None:
+
+            def _apply_robot_time(time_s: float) -> None:
+                has_object = robot_applier.has_object_input(qpos)
+                sampled_qpos = sample_qpos_at_time(
+                    qpos,
+                    time_s,
+                    fps=actual_robot_fps,
+                    robot_dof=robot_dof,
+                    has_object_input=has_object,
+                )
+                robot_applier.apply_qpos(sampled_qpos, has_object_input=has_object)
+                if g1_racket_frame is not None:
+                    update_saved_tennis_racket_pose(
+                        g1_racket_frame,
+                        tennis_racket_motion,
+                        round(time_s * actual_robot_fps),
+                    )
+                camera_follow.update_target(sampled_qpos[0:3])
+
+            create_timed_motion_control_sliders(
+                server,
+                np.arange(qpos.shape[0], dtype=float) / actual_robot_fps,
+                _apply_robot_time,
+                initial_fps=actual_robot_fps,
+                initial_interp_mult=config.visual_fps_multiplier,
+                initial_playback_speed=config.playback_speed,
+                loop=config.loop,
+            )
+        else:
+            create_motion_control_sliders(
+                server=server,
+                viser_robot=vr,
+                robot_base_frame=robot_root,
+                motion_sequence=qpos,
+                robot_dof=robot_dof,
+                viser_object=vo if config.assume_object_in_qpos else None,
+                object_base_frame=object_root if config.assume_object_in_qpos else None,
+                contains_object_in_qpos=config.assume_object_in_qpos,
+                initial_fps=round(actual_robot_fps),
+                initial_interp_mult=config.visual_fps_multiplier,
+                initial_playback_speed=config.playback_speed,
+                loop=config.loop,
+                frame_times_s=np.arange(qpos.shape[0], dtype=float) / actual_robot_fps,
+                on_pose_applied=lambda pose: camera_follow.update_target(pose[0:3]),
+            )
         return server
 
     assert xsens_sampler is not None and xsens_actors
@@ -789,10 +801,7 @@ def make_player(
         if "g1_xsens" in xsens_actors:
             assert g1_xsens_positions_m is not None and g1_xsens_times_s is not None
             lower, upper, weight = interpolation_window(g1_xsens_times_s, time_s)
-            g1_positions = (
-                (1.0 - weight) * g1_xsens_positions_m[lower]
-                + weight * g1_xsens_positions_m[upper]
-            )
+            g1_positions = (1.0 - weight) * g1_xsens_positions_m[lower] + weight * g1_xsens_positions_m[upper]
 
         avatar_positions: list[np.ndarray] = []
         for mode, actor in xsens_actors.items():
@@ -817,8 +826,20 @@ def make_player(
             )
             robot_applier.apply_qpos(sampled_qpos, has_object_input=has_object)
             if g1_racket_frame is not None:
-                assert robot_urdf is not None
-                update_g1_tennis_racket_pose(g1_racket_frame, robot_urdf)
+                if tennis_racket_motion is not None:
+                    racket_frame_idx = min(
+                        round(time_s * actual_robot_fps),
+                        tennis_racket_motion.position_m.shape[0] - 1,
+                    )
+                    update_saved_tennis_racket_pose(
+                        g1_racket_frame,
+                        tennis_racket_motion,
+                        racket_frame_idx,
+                        actor_offsets.get("robot"),
+                    )
+                else:
+                    assert robot_urdf is not None
+                    update_g1_tennis_racket_pose(g1_racket_frame, robot_urdf)
             robot_position = sampled_qpos[0:3]
         camera_follow.update_target(
             compute_camera_follow_target(
@@ -873,8 +894,12 @@ def main(cfg: XsensViserConfig) -> None:
     qpos: np.ndarray | None = None
     fps: int | None = None
     xsens_motion: XsensHdf5Motion | None = None
+    tennis_racket_motion: TennisRacketMotion | None = None
     if "robot" in actor_modes:
-        qpos, fps = load_npz(cfg.qpos_npz)
+        requested_path = resolve_package_path(Path(cfg.qpos_npz).expanduser())
+        result = load_retargeting_result(requested_path)
+        qpos, fps = result.qpos, round(result.fps)
+        tennis_racket_motion = result.tennis_racket
     if "xsens" in actor_modes or "g1_xsens" in actor_modes:
         if cfg.xsens_hdf5 is None:
             raise ValueError(f"actor_modes={actor_modes} requires --xsens-hdf5")
@@ -884,7 +909,13 @@ def main(cfg: XsensViserConfig) -> None:
             frame_indices=cfg.xsens_frame_indices,
             include_tracked_props=True,
         )
-    make_player(cfg, qpos=qpos, fps=fps, xsens_motion=xsens_motion)
+    make_player(
+        cfg,
+        qpos=qpos,
+        fps=fps,
+        xsens_motion=xsens_motion,
+        tennis_racket_motion=tennis_racket_motion,
+    )
     print("Open the viewer URL printed above. Close the process (Ctrl+C) to exit.")
     while True:
         time.sleep(1.0)
