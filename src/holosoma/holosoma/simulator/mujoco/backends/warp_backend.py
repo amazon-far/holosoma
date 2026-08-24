@@ -233,6 +233,7 @@ class WarpBackend(IMujocoBackend):
 
         # Keep reference to CPU data for rendering (synced on demand)
         self.render_data = data
+        self._physics_time = float(data.time)
 
         # Expand the per-world model fields BEFORE capturing the step graph, so the graph (and the
         # collision kernels that read m.geom_friction / m.body_mass etc. per world) reference the
@@ -310,14 +311,17 @@ class WarpBackend(IMujocoBackend):
             # Tile the state across all environments
             qpos_cpu = np.tile(data.qpos, (self.num_envs, 1))
             qvel_cpu = np.tile(data.qvel, (self.num_envs, 1))
+            time_cpu = np.full(self.num_envs, data.time, dtype=np.float32)
 
             wp.copy(self.mjw_data.qpos, wp.array(qpos_cpu, dtype=float))
             wp.copy(self.mjw_data.qvel, wp.array(qvel_cpu, dtype=float))
+            wp.copy(self.mjw_data.time, wp.array(time_cpu, dtype=float))
 
             # Compute forward kinematics to update derived quantities
             # (body positions, orientations, etc.)
             mjw.forward(self.mjw_model, self.mjw_data)
 
+        self._physics_time = float(data.time)
         logger.info("Initial state synced to GPU successfully")
 
     def step(self) -> None:
@@ -336,6 +340,11 @@ class WarpBackend(IMujocoBackend):
         with wp.ScopedDevice(self.mjw_device):
             wp.capture_launch(self.step_graph)
             # No wp.synchronize() - let GPU work in parallel with CPU
+        self._physics_time += float(self.model.opt.timestep)
+
+    def physics_time(self) -> float:
+        """Return the logical time of the simulation steps enqueued on the GPU."""
+        return self._physics_time
 
     def get_render_data(self, world_id: int = 0) -> mujoco.MjData:
         """Sync GPU data to CPU for rendering.

@@ -305,7 +305,7 @@ class EmpiricalNormalization(nn.Module):
 
             # Calculate the mean and variance of the global batch
             batch_mean_shifted = global_sum_shifted / global_batch_size
-            batch_var = global_sum_sq_shifted / global_batch_size - batch_mean_shifted.pow(2)
+            batch_var = (global_sum_sq_shifted / global_batch_size - batch_mean_shifted.pow(2)).clamp_min(0.0)
             batch_mean = batch_mean_shifted + self._mean
 
         else:
@@ -324,7 +324,7 @@ class EmpiricalNormalization(nn.Module):
         m_a = self._var * self.count
         m_b = batch_var * global_batch_size
         M2 = m_a + m_b + delta2.pow(2) * (self.count * global_batch_size / new_count)
-        self._var.copy_(M2 / new_count)
+        self._var.copy_((M2 / new_count).clamp_min(0.0))
         self._std.copy_(self._var.sqrt())
         self.count.copy_(new_count)
 

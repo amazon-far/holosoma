@@ -19,10 +19,36 @@ from holosoma.utils.safe_torch_import import torch
 #########################################################################################################
 ## Termination terms
 #########################################################################################################
-def motion_ends(env, **_) -> torch.Tensor:
-    """Terminate if the motion ends."""
-    motion_command = env.command_manager.get_state("motion_command")
-    return motion_command.time_steps >= motion_command.motion.time_step_total - 2
+def _threshold_failure(error: torch.Tensor, threshold: float | torch.Tensor) -> torch.Tensor:
+    """Treat non-finite errors or adaptive thresholds as tracking failures."""
+    failure = ~torch.isfinite(error)
+    if isinstance(threshold, torch.Tensor):
+        failure |= ~torch.isfinite(threshold)
+    return failure | (error > threshold)
+
+
+def motion_ends(env, command_name: str = "motion_command", **_) -> torch.Tensor:
+    """Time out at the final frame of each selected source clip."""
+    motion_command = env.command_manager.get_state(command_name)
+    if motion_command is None:
+        raise RuntimeError(f"Command manager has no stateful term {command_name!r}")
+
+    time_steps = motion_command.time_steps
+    motion_ids = motion_command.motion_ids.to(
+        device=motion_command.motion.motion_end_idx.device,
+        dtype=torch.long,
+    )
+    end_steps = motion_command.motion.motion_end_idx[motion_ids].to(device=time_steps.device)
+    selected_motion_ends = time_steps >= end_steps - 1
+
+    source_clip_ends = motion_command.motion.motion_ends
+    if source_clip_ends.numel() != motion_command.motion.time_step_total:
+        raise RuntimeError(
+            "Motion boundary metadata length does not match the loaded motion: "
+            f"{source_clip_ends.numel()} != {motion_command.motion.time_step_total}"
+        )
+    source_clip_ends = source_clip_ends.to(device=time_steps.device)
+    return selected_motion_ends | source_clip_ends[time_steps]
 
 
 class BadTracking(TerminationTermBase):
@@ -79,7 +105,8 @@ class BadTracking(TerminationTermBase):
 
     def bad_ref_pos(self, motion_command: MotionCommand) -> torch.Tensor:
         """Terminate if the reference position is too far from the robot's position."""
-        return torch.norm(motion_command.ref_pos_w - motion_command.robot_ref_pos_w, dim=1) > self.bad_ref_pos_threshold
+        error = torch.norm(motion_command.ref_pos_w - motion_command.robot_ref_pos_w, dim=1)
+        return _threshold_failure(error, self.bad_ref_pos_threshold)
 
     def bad_ref_ori(self, motion_command: MotionCommand) -> torch.Tensor:
         """Terminate if the reference orientation is too far from the robot's orientation."""
@@ -89,9 +116,8 @@ class BadTracking(TerminationTermBase):
         robot_projected_gravity_b = quat_rotate_inverse(
             motion_command.robot_ref_quat_w, gravity_vector(self.env), w_last=True
         )
-        return (
-            torch.abs(motion_projected_gravity_b[:, 2] - robot_projected_gravity_b[:, 2]) > self.bad_ref_ori_threshold
-        )
+        error = torch.abs(motion_projected_gravity_b[:, 2] - robot_projected_gravity_b[:, 2])
+        return _threshold_failure(error, self.bad_ref_ori_threshold)
 
     def bad_motion_body_pos(self, motion_command: MotionCommand) -> torch.Tensor:
         """Terminate if the motion body position is too far from the robot's body position."""
@@ -99,21 +125,17 @@ class BadTracking(TerminationTermBase):
         error = torch.norm(
             motion_command.body_pos_relative_w[:, body_idx] - motion_command.robot_body_pos_w[:, body_idx], dim=-1
         )
-        return torch.any(error > self.bad_motion_body_pos_threshold, dim=-1)
+        return torch.any(_threshold_failure(error, self.bad_motion_body_pos_threshold), dim=-1)
 
     def bad_object_pos(self, motion_command: MotionCommand) -> torch.Tensor:
         """Terminate if the object position is too far from the simulator's object position."""
-        return (
-            torch.norm(motion_command.object_pos_w - motion_command.simulator_object_pos_w, dim=-1)
-            > self.bad_object_pos_threshold
-        )
+        error = torch.norm(motion_command.object_pos_w - motion_command.simulator_object_pos_w, dim=-1)
+        return _threshold_failure(error, self.bad_object_pos_threshold)
 
     def bad_object_ori(self, motion_command: MotionCommand) -> torch.Tensor:
         """Terminate if the object orientation is too far from the simulator's object orientation."""
-        return (
-            quat_error_magnitude(motion_command.object_quat_w, motion_command.simulator_object_quat_w)
-            > self.bad_object_ori_threshold
-        )
+        error = quat_error_magnitude(motion_command.object_quat_w, motion_command.simulator_object_quat_w)
+        return _threshold_failure(error, self.bad_object_ori_threshold)
 
     def reset(self, env_ids: torch.Tensor | None = None) -> None:
         """Reset internal state for specified environments."""
@@ -135,7 +157,7 @@ class BadTrackingZOnly(BadTracking):
     def bad_ref_pos(self, motion_command: MotionCommand) -> torch.Tensor:
         """Terminate if the reference z position is too far from the robot's z position."""
         z_err = torch.abs(motion_command.ref_pos_w[:, -1] - motion_command.robot_ref_pos_w[:, -1])
-        return z_err > self.bad_ref_pos_threshold
+        return _threshold_failure(z_err, self.bad_ref_pos_threshold)
 
     def bad_motion_body_pos(self, motion_command: MotionCommand) -> torch.Tensor:
         """Terminate if tracked bodies have too much z-axis position error."""
@@ -143,4 +165,4 @@ class BadTrackingZOnly(BadTracking):
         error = torch.abs(
             motion_command.body_pos_relative_w[:, body_idx, -1] - motion_command.robot_body_pos_w[:, body_idx, -1]
         )
-        return torch.any(error > self.bad_motion_body_pos_threshold, dim=-1)
+        return torch.any(_threshold_failure(error, self.bad_motion_body_pos_threshold), dim=-1)

@@ -88,6 +88,11 @@ class IMujocoBackend(abc.ABC):
         ...
 
     @abc.abstractmethod
+    def physics_time(self) -> float:
+        """Return the backend's current simulation time in seconds."""
+        ...
+
+    @abc.abstractmethod
     def compute_contact_forces(self) -> torch.Tensor:
         """Return current-frame net contact forces for ALL model bodies.
 

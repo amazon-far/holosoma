@@ -149,6 +149,8 @@ g1_29dof_wbt_randomization_w_object = RandomizationManagerCfg(
 )
 
 __all__ = [
+    "base_reset_terms",
+    "base_step_terms",
     "g1_29dof_wbt_randomization",
     "g1_29dof_wbt_randomization_w_object",
 ]

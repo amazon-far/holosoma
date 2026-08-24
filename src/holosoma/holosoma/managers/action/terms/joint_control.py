@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 
 from holosoma.managers.action.base import ActionTermBase
+from holosoma.simulator.base_simulator.hooks import Phase
 
 if TYPE_CHECKING:
     from holosoma.config_types.action import ActionTermCfg
@@ -24,6 +25,8 @@ class JointPositionActionTerm(ActionTermBase):
     - Torque clipping
     """
 
+    required_control_mode = "explicit_torque"
+
     def __init__(self, cfg: ActionTermCfg, env: Any):
         """Initialize joint position action term.
 
@@ -32,6 +35,11 @@ class JointPositionActionTerm(ActionTermBase):
             env: Environment instance (typically a ``BaseTask`` subclass)
         """
         super().__init__(cfg, env)
+        control_mode = env.robot_config.control.control_mode
+        if control_mode != self.required_control_mode:
+            raise ValueError(
+                f"{type(self).__name__} requires control_mode='{self.required_control_mode}', got '{control_mode}'"
+            )
 
         # Get action dimension from environment
         self._action_dim = env.num_dof
@@ -335,3 +343,33 @@ class JointPositionActionTerm(ActionTermBase):
                     self.action_scales[i] = control_cfg.action_scale * effort / stiffness
         else:
             self.action_scales[:] = control_cfg.action_scale
+
+
+class JointPositionTargetActionTerm(JointPositionActionTerm):
+    """Send position targets to a simulator-native implicit PD actuator."""
+
+    required_control_mode = "implicit_position_target"
+
+    def setup(self) -> None:
+        super().setup()
+        self.env.simulator.hooks.add(
+            Phase.POST_STEP,
+            self._capture_applied_torques,
+            name="joint_position_target.capture_applied_torques",
+        )
+
+    def apply_actions(self) -> None:
+        if self._randomize_torque_rfi:
+            raise RuntimeError("Torque RFI is not supported with simulator-native implicit actuators")
+
+        self.dof_pos_substep[:, self._substep_idx] = self.env.simulator.dof_pos
+        self.dof_vel_substep[:, self._substep_idx] = self.env.simulator.dof_vel
+
+        position_targets = self._actions_after_delay * self.action_scales + self.env.default_dof_pos
+        self.env.simulator.apply_position_targets_at_dof(position_targets)
+
+    def _capture_applied_torques(self) -> None:
+        """Record torques after the simulator has evaluated the implicit drive."""
+        self.torques[:] = self.env.simulator.get_applied_torques_at_dof()
+        self.torques_substep[:, self._substep_idx] = self.torques
+        self._substep_idx += 1
