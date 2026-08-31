@@ -1012,13 +1012,15 @@ class IsaacGym(BaseSimulator):
                 self.commands[:, 1] += 0.1
                 logger.info(f"Current Command: {self.commands[:,]}")
             elif evt.action == "heading_left_command" and evt.value > 0:
-                self.commands[:, 3] -= 0.1
+                idx = 3 if self.commands.shape[1] > 3 else 2
+                self.commands[:, idx] -= 0.1
                 logger.info(f"Current Command: {self.commands[:,]}")
             elif evt.action == "heading_right_command" and evt.value > 0:
-                self.commands[:, 3] += 0.1
+                idx = 3 if self.commands.shape[1] > 3 else 2
+                self.commands[:, idx] += 0.1
                 logger.info(f"Current Command: {self.commands[:,]}")
             elif evt.action == "zero_command" and evt.value > 0:
-                self.commands[:, :4] = 0
+                self.commands[:] = 0
                 logger.info(f"Current Command: {self.commands[:,]}")
             elif evt.action == "toggle_camera_tracking" and evt.value > 0:
                 was_enabled = self.simulator_config.viewer.enable_tracking
