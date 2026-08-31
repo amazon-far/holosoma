@@ -881,8 +881,11 @@ class IsaacSim(BaseSimulator):
 
         this function returns the indice of the body in BFS order
         """
+        if body_name in self.body_names:
+            return self.body_names.index(body_name)
+
         indices, names = self._robot.find_bodies(body_name)
-        indices = [self.body_ids.index(i) for i in indices]
+        indices = [self.body_ids.index(i) for i in indices if i in self.body_ids]
         if len(indices) == 0:
             logger.warning(f"Body {body_name} not found in the contact sensor.")
             return None
