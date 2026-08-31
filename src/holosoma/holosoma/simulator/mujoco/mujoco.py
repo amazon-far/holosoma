@@ -23,9 +23,7 @@ from holosoma.simulator.mujoco.backends.base import apply_sensor_scene_flags, mj
 from holosoma.simulator.mujoco.command_registry import CommandRegistry
 from holosoma.simulator.mujoco.fields import prepare_fields, prepare_manager_fields
 from holosoma.simulator.mujoco.scene_manager import MujocoSceneManager
-from holosoma.simulator.mujoco.tensor_views import (
-    create_base_linear_acceleration_view,
-)
+from holosoma.simulator.mujoco.tensor_views import FilteredDofStateView, create_base_linear_acceleration_view
 from holosoma.simulator.mujoco.video_recorder import MuJoCoVideoRecorder
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.simulator.shared.root_states_view import UnifiedRootStatesView
@@ -84,6 +82,28 @@ class MuJoCoScene:
             Environment origins with shape [num_envs, 3].
         """
         return self._env_origins
+
+
+def _configured_dof_names(model_dof_names: list[str], config_dof_names: list[str]) -> list[str]:
+    """Select model joints named by the robot config and verify their order."""
+    config_dof_set = set(config_dof_names)
+    dof_names = [name for name in model_dof_names if name in config_dof_set]
+    if dof_names != config_dof_names:
+        raise ValueError(f"MuJoCo DOF names/order {dof_names} do not match the robot config {config_dof_names}.")
+    return dof_names
+
+
+def _address_span(addresses: list[int]) -> tuple[slice, int, list[int], bool]:
+    """Return the covering slice, width, relative indices, and contiguity."""
+    if not addresses:
+        return slice(0, 0), 0, [], True
+    start, stop = min(addresses), max(addresses) + 1
+    return (
+        slice(start, stop),
+        stop - start,
+        [address - start for address in addresses],
+        addresses == list(range(start, stop)),
+    )
 
 
 class MuJoCo(BaseSimulator):
@@ -428,9 +448,10 @@ class MuJoCo(BaseSimulator):
     def _set_robot_properties(self) -> None:
         """Set robot properties including DOF names, body names, and index mappings.
 
-        Robot elements (DOF joints, bodies) are identified from the per-actor spec
+        Robot elements (joints and bodies) are identified from the per-actor spec
         metadata captured at spawn (``scene_manager.robot_spec_meta``), which holds
-        exactly the robot's own named elements.
+        exactly the robot's own named elements. Public DOFs are the model joints
+        selected by ``robot_config.dof_names`` in matching order.
 
         ``body_names`` is the holosoma-facing, 0-based robot-body list (world body and
         all non-robot bodies excluded). ``body_ids`` is the matching list of raw
@@ -445,8 +466,8 @@ class MuJoCo(BaseSimulator):
         # Build clean<->prefixed name maps from the recorded robot elements first.
         self._build_name_maps()
 
-        # Robot DOFs: the recorded named, non-free joints (clean names).
-        self.dof_names = list(meta.dof_joint_names)
+        # Exclude passive model joints and enforce the cross-simulator config ordering.
+        self.dof_names = _configured_dof_names(meta.dof_joint_names, self.robot_config.dof_names)
         self.num_dof = len(self.dof_names)
 
         # Robot bodies (clean names), in the recorded spec (DFS) order.
@@ -843,25 +864,29 @@ class MuJoCo(BaseSimulator):
         # that set_actor_root_state_tensor uses (it detects this proxy by identity).
         self.all_root_states = UnifiedRootStatesView(self)  # type: ignore[assignment]
 
-        # Calculate indices for DOF positions and velocities
-        dof_pos_indices = (
-            slice(min(self.dof_qpos_addrs), max(self.dof_qpos_addrs) + 1) if self.dof_qpos_addrs else slice(0, 0)
-        )
-        dof_vel_indices = (
-            slice(min(self.dof_qvel_addrs), max(self.dof_qvel_addrs) + 1) if self.dof_qvel_addrs else slice(0, 0)
-        )
-        dof_acc_indices = (
-            slice(min(self.dof_qvel_addrs), max(self.dof_qvel_addrs) + 1) if self.dof_qvel_addrs else slice(0, 0)
-        )
+        # Calculate the full backend spans and each actuator's offset within them.
+        full_pos_slice, full_pos_count, self._actuated_qpos_rel, qpos_contiguous = _address_span(self.dof_qpos_addrs)
+        full_vel_slice, full_vel_count, self._actuated_qvel_rel, qvel_contiguous = _address_span(self.dof_qvel_addrs)
+        self._dof_needs_gather = not (qpos_contiguous and qvel_contiguous)
+        if self._dof_needs_gather:
+            # Backend views cover the full span, including any interleaved passive joints.
+            self._full_dof_pos = self.backend.create_dof_pos_view(full_pos_slice, full_pos_count)
+            self._full_dof_vel = self.backend.create_dof_vel_view(full_vel_slice, full_vel_count)
+            self._full_dof_acc = self.backend.create_dof_acc_view(full_vel_slice, full_vel_count)
 
-        # Create DOF state proxy via backend factory
-        dof_addrs = {"dof_pos_indices": dof_pos_indices, "dof_vel_indices": dof_vel_indices}
-        self.dof_state = self.backend.create_dof_state_view(dof_addrs, self.num_dof)  # type: ignore[assignment]
-
-        # Create individual DOF views via backend factories
-        self.dof_pos = self.backend.create_dof_pos_view(dof_pos_indices, self.num_dof)  # type: ignore[assignment]
-        self.dof_vel = self.backend.create_dof_vel_view(dof_vel_indices, self.num_dof)  # type: ignore[assignment]
-        self.dof_acc = self.backend.create_dof_acc_view(dof_acc_indices, self.num_dof)  # type: ignore[assignment]
+            # Expose filtered tensors so the public state shape remains [num_envs, num_dof].
+            self.dof_pos = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
+            self.dof_vel = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
+            self.dof_acc = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
+            self.dof_state = FilteredDofStateView(self.dof_pos, self.dof_vel)  # type: ignore[assignment]
+            self._gather_actuated_dofs()
+        else:
+            # Preserve the existing zero-copy backend views for contiguous actuator layouts.
+            dof_addrs = {"dof_pos_indices": full_pos_slice, "dof_vel_indices": full_vel_slice}
+            self.dof_state = self.backend.create_dof_state_view(dof_addrs, self.num_dof)  # type: ignore[assignment]
+            self.dof_pos = self.backend.create_dof_pos_view(full_pos_slice, self.num_dof)  # type: ignore[assignment]
+            self.dof_vel = self.backend.create_dof_vel_view(full_vel_slice, self.num_dof)  # type: ignore[assignment]
+            self.dof_acc = self.backend.create_dof_acc_view(full_vel_slice, self.num_dof)  # type: ignore[assignment]
 
         # contact_forces stays the robot-only, num_bodies-wide tensor allocated in
         # create_envs; refresh_sim_tensors gathers robot rows into it each frame. It is
@@ -1026,6 +1051,18 @@ class MuJoCo(BaseSimulator):
             self.contact_forces_history[:] = torch.cat(
                 [self.contact_forces.unsqueeze(1), self.contact_forces_history[:, :-1]], dim=1
             )
+
+        if getattr(self, "_dof_needs_gather", False):
+            self._gather_actuated_dofs()
+
+    def _gather_actuated_dofs(self) -> None:
+        """Gather actuated joints from views that also contain passive joints."""
+        full_pos = self._full_dof_pos if isinstance(self._full_dof_pos, torch.Tensor) else self._full_dof_pos[:]
+        full_vel = self._full_dof_vel if isinstance(self._full_dof_vel, torch.Tensor) else self._full_dof_vel[:]
+        full_acc = self._full_dof_acc if isinstance(self._full_dof_acc, torch.Tensor) else self._full_dof_acc[:]
+        self.dof_pos[:] = full_pos[:, self._actuated_qpos_rel]
+        self.dof_vel[:] = full_vel[:, self._actuated_qvel_rel]
+        self.dof_acc[:] = full_acc[:, self._actuated_qvel_rel]
 
     def clear_contact_forces_history(self, env_ids: torch.Tensor) -> None:
         """Clear contact forces history for specified environments.
@@ -1495,6 +1532,8 @@ class MuJoCo(BaseSimulator):
         # Delegate to backend
         dof_addrs = {"dof_qpos_addrs": self.dof_qpos_addrs, "dof_qvel_addrs": self.dof_qvel_addrs}
         self.backend.set_dof_state(env_ids, dof_states, dof_addrs)
+        if getattr(self, "_dof_needs_gather", False):
+            self._gather_actuated_dofs()
 
     def get_dof_limits_properties(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Get DOF limits properties - simplified IsaacSim pattern.
