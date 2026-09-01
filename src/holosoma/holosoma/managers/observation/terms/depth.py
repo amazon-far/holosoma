@@ -5,10 +5,9 @@ adapted to holosoma's :class:`ObservationTermBase` interface.
 
 The term owns a :class:`CameraSensor` (Warp ray-caster), a rolling depth buffer
 for per-env latency sampling, and a Perlin-noise generator for hole masks.
-Every call reads the robot body poses from the simulator, updates the sensor's
-per-env camera pose + ray-cast body pose tensors, captures depth, post-processes
-(edge noise, Perlin holes, gaussian noise, depth offset), rolls the buffer, and
-returns the latency-sampled frame.
+Normal calls read the robot body poses from the simulator, capture and process
+depth, and advance the buffer. Non-mutating calls return the last committed
+output so final-observation and shape queries cannot advance sensor time.
 """
 
 from __future__ import annotations
@@ -83,6 +82,7 @@ class WarpDepthImageObsTerm(ObservationTermBase):
         self.depth_buffer = torch.zeros(
             self.num_envs, self.buffer_len, resized[0], resized[1], device=self.device
         )
+        self._cached_output = torch.zeros(self.num_envs, resized[0], resized[1], device=self.device)
         self.reset_episodes = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
         if self.latency_frame_range is not None:
@@ -190,7 +190,10 @@ class WarpDepthImageObsTerm(ObservationTermBase):
             )
         self._prev_time_step = self.command.time_steps.clone()
 
-    def __call__(self, env: Any, **kwargs) -> torch.Tensor:
+    def __call__(self, env: Any, *, modify_history: bool = True, **kwargs) -> torch.Tensor:
+        if not modify_history:
+            return self._cached_output.to(env.device)
+
         self._ensure_command_resolved(env)
         depth_images = self._get_depth_images(env)
         processed_images = self._process_depth_images(depth_images, env_ids=slice(None))
@@ -223,8 +226,11 @@ class WarpDepthImageObsTerm(ObservationTermBase):
             )
             env_indices = torch.arange(self.num_envs, device=self.device)
             buffer_indices = self.buffer_len - 1 - current_latency
-            return self.depth_buffer[env_indices, buffer_indices].to(env.device)
-        return self.depth_buffer[:, -1 - self.latency_frame].to(env.device)
+            output = self.depth_buffer[env_indices, buffer_indices]
+        else:
+            output = self.depth_buffer[:, -1 - self.latency_frame]
+        self._cached_output = output.clone()
+        return self._cached_output.to(env.device)
 
     def _get_depth_images(self, env: Any) -> torch.Tensor:
         robot = env.simulator._robot

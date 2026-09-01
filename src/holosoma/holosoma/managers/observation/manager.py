@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from collections import deque
 from typing import Any, Callable
 
@@ -40,6 +41,7 @@ class ObservationManager:
         # Storage for resolved functions and stateful terms
         self._term_funcs: dict[str, dict[str, Callable]] = {}
         self._term_instances: dict[str, dict[str, ObservationTermBase]] = {}
+        self._term_supports_modify_history: dict[str, dict[str, bool]] = {}
 
         # History buffers: group_name -> term_name -> deque
         self._history_buffers: dict[str, dict[str, deque]] = {}
@@ -52,6 +54,7 @@ class ObservationManager:
         for group_name, group_cfg in self.cfg.groups.items():
             self._term_funcs[group_name] = {}
             self._term_instances[group_name] = {}
+            self._term_supports_modify_history[group_name] = {}
             self._history_buffers[group_name] = {}
 
             for term_name, term_cfg in group_cfg.terms.items():
@@ -63,6 +66,7 @@ class ObservationManager:
                     # Stateful term - instantiate
                     instance = func(term_cfg, self.env)
                     self._term_instances[group_name][term_name] = instance
+                    self._term_supports_modify_history[group_name][term_name] = self._accepts_modify_history(instance)
                 else:
                     # Stateless function
                     self._term_funcs[group_name][term_name] = func
@@ -71,6 +75,15 @@ class ObservationManager:
                 if group_cfg.history_length > 1:
                     self._history_buffers[group_name][term_name] = deque(maxlen=group_cfg.history_length)
 
+    @staticmethod
+    def _accepts_modify_history(instance: ObservationTermBase) -> bool:
+        """Whether a stateful term opts into manager-controlled history reads."""
+        try:
+            params = inspect.signature(instance.__call__).parameters.values()
+        except (TypeError, ValueError):
+            return False
+        return any(param.name == "modify_history" or param.kind is inspect.Parameter.VAR_KEYWORD for param in params)
+
     def compute(self, *, modify_history: bool = True) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
         """Compute all observation groups.
 
@@ -78,7 +91,8 @@ class ObservationManager:
         ----------
         modify_history : bool, optional
             If ``True``, update history buffers; if ``False``, preserve them
-            for bootstrapping. Defaults to ``True``.
+            for bootstrapping. Stateful terms receive the same flag so they can
+            preserve any internal buffers. Defaults to ``True``.
 
         Returns
         -------
@@ -115,7 +129,12 @@ class ObservationManager:
 
         for term_name, term_cfg in group_cfg.terms.items():
             # 1. Compute base observation
-            obs = self._compute_term(group_name, term_name, term_cfg)
+            obs = self._compute_term(
+                group_name,
+                term_name,
+                term_cfg,
+                modify_history=modify_history,
+            )
 
             # 2. Apply noise (matches direct: noise before scaling)
             if group_cfg.enable_noise and term_cfg.noise > 0:
@@ -152,7 +171,14 @@ class ObservationManager:
             return torch.cat([obs_tensors[key] for key in sorted_keys], dim=-1)
         return obs_tensors
 
-    def _compute_term(self, group_name: str, term_name: str, term_cfg: ObsTermCfg) -> torch.Tensor:
+    def _compute_term(
+        self,
+        group_name: str,
+        term_name: str,
+        term_cfg: ObsTermCfg,
+        *,
+        modify_history: bool = True,
+    ) -> torch.Tensor:
         """Compute a single observation term.
 
         Parameters
@@ -163,6 +189,8 @@ class ObservationManager:
             Name of the observation term.
         term_cfg : ObsTermCfg
             Configuration for the observation term.
+        modify_history : bool
+            Whether a stateful term may advance its internal buffers.
 
         Returns
         -------
@@ -173,7 +201,10 @@ class ObservationManager:
         if term_name in self._term_instances[group_name]:
             # Stateful term
             instance = self._term_instances[group_name][term_name]
-            obs = instance(self.env, **term_cfg.params)
+            if self._term_supports_modify_history[group_name][term_name]:
+                obs = instance(self.env, modify_history=modify_history, **term_cfg.params)
+            else:
+                obs = instance(self.env, **term_cfg.params)
         else:
             # Stateless function
             func = self._term_funcs[group_name][term_name]
@@ -327,7 +358,7 @@ class ObservationManager:
                 total_dim = 0
                 for term_name, term_cfg in group_cfg.terms.items():
                     # Compute term once to get its dimension
-                    obs = self._compute_term(group_name, term_name, term_cfg)
+                    obs = self._compute_term(group_name, term_name, term_cfg, modify_history=False)
                     if obs.ndim != 2:
                         raise ValueError(
                             f"Observation term '{term_name}' in concatenate=True group '{group_name}' must be "
@@ -347,7 +378,7 @@ class ObservationManager:
                 # trailing-dim shape tuple for image terms ([N, H, W, C] -> (H, W, C)).
                 term_dims: dict[str, int | tuple[int, ...]] = {}
                 for term_name, term_cfg in group_cfg.terms.items():
-                    obs = self._compute_term(group_name, term_name, term_cfg)
+                    obs = self._compute_term(group_name, term_name, term_cfg, modify_history=False)
                     term_dims[term_name] = obs.shape[1] if obs.ndim == 2 else tuple(obs.shape[1:])
                 dims[group_name] = term_dims
         return dims
