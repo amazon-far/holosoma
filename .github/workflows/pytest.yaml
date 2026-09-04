@@ -29,7 +29,6 @@ jobs:
     name: Run ${{ matrix.simulator }} Tests with ${{ matrix.multigpu == 'True' && 'multi-gpu' || 'single-gpu' }}
     runs-on:
     - codebuild-holosoma-a10g-${{ matrix.multigpu == 'True' && 'x4' || 'x1' }}-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-    continue-on-error: true
     container:
       image: ${{ vars.ECR_REGISTRY }}/holosoma-${{ matrix.simulator }}:latest
       options: "--gpus all --runtime=nvidia --shm-size=12g"
@@ -59,7 +58,6 @@ jobs:
     name: Run ${{ matrix.simulator }} Tests end-to-end with ${{ matrix.multigpu == 'True' && 'multi-gpu' || 'single-gpu' }}
     runs-on:
     - codebuild-holosoma-a10g-${{ matrix.multigpu == 'True' && 'x4' || 'x1' }}-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
-    continue-on-error: true
     container:
       # needs both hsgym and hsinference envs
       image: ${{ vars.ECR_REGISTRY }}/holosoma:latest
