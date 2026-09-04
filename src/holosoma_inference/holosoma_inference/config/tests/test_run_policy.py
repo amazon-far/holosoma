@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from holosoma_inference import run_policy as run_policy_module
 from holosoma_inference.config.config_values.inference import get_annotated_inference_config
+from holosoma_inference.policies.locomotion import LocomotionPolicy
+from holosoma_inference.policies.wbt import WholeBodyTrackingPolicy
 
 
 def test_main_defers_default_inference_config_factory(monkeypatch):
@@ -99,3 +101,32 @@ def test_main_secondary_override_on_default_secondary(monkeypatch):
     for c in parse_calls:
         assert "config" not in c["tyro_kwargs"]
     assert parse_calls[1]["default"] is default_secondary
+
+
+def _captured_control_guide(monkeypatch, policy_class):
+    lines = []
+
+    class _Logger:
+        def info(self, message=""):
+            lines.append(str(message))
+
+    monkeypatch.setattr(run_policy_module, "logger", _Logger())
+    run_policy_module._print_control_guide(policy_class, use_joystick=False)
+    return lines
+
+
+def test_control_guide_covers_wbt_subclasses(monkeypatch):
+    class _ExtensionWBTPolicy(WholeBodyTrackingPolicy):
+        pass
+
+    lines = _captured_control_guide(monkeypatch, _ExtensionWBTPolicy)
+
+    assert any("Start motion clip" in line for line in lines)
+    assert not any("Switch walking/standing mode" in line for line in lines)
+
+
+def test_control_guide_keeps_locomotion_controls(monkeypatch):
+    lines = _captured_control_guide(monkeypatch, LocomotionPolicy)
+
+    assert any("Switch walking/standing mode" in line for line in lines)
+    assert not any("Start motion clip" in line for line in lines)

@@ -20,6 +20,7 @@ from loguru import logger
 from holosoma_inference.config.config_types.inference import InferenceConfig
 from holosoma_inference.config.config_values.inference import get_annotated_inference_config
 from holosoma_inference.policies.dual_mode import DualModePolicy, _select_policy_class
+from holosoma_inference.policies.wbt import WholeBodyTrackingPolicy
 from holosoma_inference.utils.config_registry import parse_config
 from holosoma_inference.utils.misc import restore_terminal_settings
 from holosoma_inference.utils.session_recorder import SessionRecorder
@@ -27,7 +28,7 @@ from holosoma_inference.utils.session_recorder import SessionRecorder
 
 def _print_control_guide(policy_class, use_joystick: bool, dual_mode: bool = False):
     """Print control guide for users."""
-    is_wbt = policy_class.__name__ == "WholeBodyTrackingPolicy"
+    is_wbt = issubclass(policy_class, WholeBodyTrackingPolicy)
 
     logger.info("=" * 80)
     logger.info("🎮 POLICY CONTROLS")
