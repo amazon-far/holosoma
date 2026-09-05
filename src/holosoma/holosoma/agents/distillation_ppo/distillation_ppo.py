@@ -71,6 +71,7 @@ class DistillationMinibatch(TypedDict):
     actions_log_prob: torch.Tensor
     action_mean: torch.Tensor
     action_sigma: torch.Tensor
+    ppo_gate: torch.Tensor
 
 
 class DistillationPPO(BaseAlgo):
@@ -385,6 +386,14 @@ class DistillationPPO(BaseAlgo):
                 actions_log_prob = self.policy.get_actions_log_prob(actions).detach().unsqueeze(1)
                 action_mean = self.policy.action_mean.detach()
                 action_sigma = self.policy.action_std.detach()
+                # Read the gate before ``env.step``: it describes the state the
+                # action was taken in, and stepping advances the motion phase.
+                ppo_gate = self._get_ppo_gate().detach()
+                # Let an application accumulate per-motion-frame statistics while
+                # the frame index is still live. Done here rather than in the
+                # update loop because the rollout storage carries no frame index,
+                # and a one-step lag is irrelevant against the EMA's time constant.
+                self._update_ppo_gate_stats(action_mean, teacher_actions)
 
                 # During the distillation warmup window the env follows the
                 # teacher's action (expert trajectories). We still record the
@@ -421,6 +430,7 @@ class DistillationPPO(BaseAlgo):
                     actions_log_prob=actions_log_prob,
                     action_mean=action_mean,
                     action_sigma=action_sigma,
+                    ppo_gate=ppo_gate.view(-1, 1),
                     rewards=(rewards + final_rewards).view(-1, 1),
                     dones=dones.view(-1, 1),
                 )
@@ -471,18 +481,51 @@ class DistillationPPO(BaseAlgo):
 
     # ------------------------------------------------------------ training step
 
+    def _get_ppo_gate(self) -> torch.Tensor:
+        """Per-env PPO gate in ``[0, 1]``, shape ``(num_envs, 1)``.
+
+        Scales how much of the PPO/DAgger split applies to *this* transition:
+        the effective coefficient becomes ``gate * ppo_coef``, so a gate of 1
+        reproduces the scalar behaviour exactly and a gate of 0 makes the
+        transition pure DAgger.
+
+        Defaults to all-ones, i.e. inert. Override to concentrate the reward
+        pressure on the part of a clip that needs it — reward and imitation do
+        not cost the same everywhere, so a skill that only imitation can't hold
+        (a climb, say) can keep its PPO term while phases that imitation handles
+        better (flat locomotion) run pure DAgger.
+        """
+        return torch.ones(self.env.num_envs, 1, device=self.device)
+
+    def _update_ppo_gate_stats(
+        self, student_mean: torch.Tensor, teacher_actions: torch.Tensor
+    ) -> None:
+        """Hook for accumulating per-motion-frame statistics during rollout.
+
+        No-op by default. Override alongside :meth:`_get_ppo_gate` to make the
+        gate adapt to where imitation is actually falling short, rather than to a
+        hand-specified window.
+        """
+        return
+
+    def _dagger_loss_per_sample(
+        self, student_mean: torch.Tensor, teacher_actions: torch.Tensor
+    ) -> torch.Tensor:
+        """Behaviour-cloning loss per sample, shape ``(batch,)``.
+
+        Override to drop samples — e.g. an application whose ``teacher_act``
+        marks "no teacher applies" with a zero action can mask those rows here.
+        This is the extension point the combined loss uses; :meth:`_dagger_loss`
+        is its batch mean and exists for logging and for callers that want a
+        scalar.
+        """
+        return self.distill_loss_fn(student_mean, teacher_actions, reduction="none").mean(dim=-1)
+
     def _dagger_loss(
         self, student_mean: torch.Tensor, teacher_actions: torch.Tensor
     ) -> torch.Tensor:
-        """Behaviour-cloning loss against the teacher's actions.
-
-        Plain reduction over the whole batch. Override to drop samples — e.g.
-        an application whose ``teacher_act`` marks "no teacher applies" with a
-        zero action can mask those rows out here. Keep the ``.mean()``
-        denominator at the full batch size if you want the reported loss to
-        stay comparable across masking schemes.
-        """
-        return self.distill_loss_fn(student_mean, teacher_actions)
+        """Batch-mean behaviour-cloning loss. See :meth:`_dagger_loss_per_sample`."""
+        return self._dagger_loss_per_sample(student_mean, teacher_actions).mean()
 
     def _training_step(self) -> dict[str, float]:
         generator = self.storage.mini_batch_generator(self.config.num_mini_batches, self.config.num_learning_epochs)
@@ -547,7 +590,13 @@ class DistillationPPO(BaseAlgo):
             and self.config.schedule == "adaptive"
             and self.ppo_coef > 0.1
         ):
-            kl_mean = self._compute_kl_div(old_mu, old_sigma, mu, sigma)
+            # Weight the KL by the gate: with per-sample gating the LR schedule
+            # must be driven by the samples PPO actually trains on, otherwise a
+            # mostly-ungated batch reports a KL for transitions the surrogate
+            # never touched and the schedule chases the wrong signal.
+            kl_mean = self._compute_kl_div(
+                old_mu, old_sigma, mu, sigma, weights=torch.squeeze(mini_batch["ppo_gate"], -1)
+            )
             self._update_learning_rate(kl_mean)
         else:
             kl_mean = torch.tensor(0.0, device=self.device)
@@ -558,7 +607,8 @@ class DistillationPPO(BaseAlgo):
         surrogate_clipped = -torch.squeeze(advantages) * torch.clamp(
             ratio, 1.0 - self.config.clip_param, 1.0 + self.config.clip_param
         )
-        surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
+        surrogate_per_sample = torch.max(surrogate, surrogate_clipped)
+        surrogate_loss = surrogate_per_sample.mean()
 
         # Clipped value loss.
         value_clipped = target_values + (value - target_values).clamp(
@@ -570,7 +620,8 @@ class DistillationPPO(BaseAlgo):
 
         entropy_mean = entropy.mean()
 
-        dagger_loss = self._dagger_loss(student_mean, teacher_actions)
+        dagger_per_sample = self._dagger_loss_per_sample(student_mean, teacher_actions)
+        dagger_loss = dagger_per_sample.mean()
 
         # Combined loss. Matches far-tracking's DepthDistillationPPO formula at
         # my_distillation.py:978-985, 1037: value loss is **always active**
@@ -578,11 +629,27 @@ class DistillationPPO(BaseAlgo):
         # keep training from iteration 0; only the PPO surrogate + entropy
         # term is gated by ppo_coef. The DAgger term is independently scaled
         # by (1 - ppo_coef).
-        ppo_loss = (
-            self.config.value_loss_coef * value_loss
-            + self.ppo_coef * (surrogate_loss - self.config.entropy_coef * entropy_mean)
-        )
-        total_loss = ppo_loss + (1.0 - self.ppo_coef) * self.config.dagger_loss_coef * dagger_loss
+        #
+        # The split is applied **per sample**: the effective coefficient is
+        # ``gate * ppo_coef``, so a transition with gate 0 is pure DAgger and one
+        # with gate 1 behaves exactly as the scalar formula did. With the default
+        # all-ones gate this reduces to the previous expression identically.
+        #
+        # Deliberately a plain batch mean rather than normalising each term by
+        # its own weight mass. A gated sample then keeps *exactly* the PPO/DAgger
+        # balance it had under the scalar formula, which is what makes a gated run
+        # comparable to an ungated one. The total PPO gradient does shrink with
+        # the gated fraction, but Adam is invariant to a uniform rescaling of the
+        # gradient, so this costs far less than it looks; normalising instead
+        # would silently redefine what ``ppo_coef`` means.
+        gate = torch.squeeze(mini_batch["ppo_gate"], -1)
+        coef = gate * self.ppo_coef
+        ppo_loss = self.config.value_loss_coef * value_loss + (
+            coef * (surrogate_per_sample - self.config.entropy_coef * entropy)
+        ).mean()
+        total_loss = ppo_loss + (
+            (1.0 - coef) * self.config.dagger_loss_coef * dagger_per_sample
+        ).mean()
 
         self.optimizer.zero_grad()
         total_loss.backward()
@@ -606,9 +673,17 @@ class DistillationPPO(BaseAlgo):
             # plot scales line up across the two codebases. The actual
             # BC gradient magnitude is unchanged — the (1 - ppo_coef)
             # factor is already applied to `total_loss` at line 553.
-            "behavior": ((1.0 - self.ppo_coef) * dagger_loss).detach(),
+            # far-tracking bakes the DAgger weight into the logged value; with
+            # per-sample gating the weight varies, so use its batch mean rather
+            # than the scalar ``1 - ppo_coef`` (which would misreport whenever
+            # the gate is not all-ones).
+            "behavior": ((1.0 - coef) * dagger_per_sample).mean().detach(),
             "entropy_mean": entropy_mean.detach(),
             "mean_kl": kl_mean.detach(),
+            # Fraction of the batch the PPO term is active on. Flat at 1.0 unless
+            # ``_get_ppo_gate`` is overridden -- worth logging because a gate
+            # that silently reads 0 turns the run into pure DAgger.
+            "ppo_gate_mean": gate.mean().detach(),
         }
 
     def _compute_kl_div(
@@ -617,6 +692,7 @@ class DistillationPPO(BaseAlgo):
         old_sigma: torch.Tensor,
         mu: torch.Tensor,
         sigma: torch.Tensor,
+        weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
         # Closed-form KL for diagonal Gaussians; matches the far-tracking
         # reference's adaptive-LR formula.
@@ -627,7 +703,13 @@ class DistillationPPO(BaseAlgo):
                 - 0.5,
                 dim=-1,
             )
-            kl_mean = torch.mean(kl)
+            if weights is None:
+                kl_mean = torch.mean(kl)
+            else:
+                # Weighted mean, not a weighted sum: the threshold comparison in
+                # ``_update_learning_rate`` is against an absolute KL, so the
+                # scale must stay independent of how much of the batch is gated.
+                kl_mean = (kl * weights).sum() / weights.sum().clamp(min=1e-6)
             # Average the KL estimate across ranks so every rank makes the
             # same adaptive-LR decision. Matches holosoma PPO at
             # ppo.py:640-642 and far-tracking my_distillation.py:529-530.

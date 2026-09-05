@@ -84,6 +84,13 @@ class RolloutStorageDistillation(RolloutStorage):
         self.register("action_mean", shape=(num_actions,), dtype=torch.float)
         self.register("action_sigma", shape=(num_actions,), dtype=torch.float)
 
+        # Per-sample PPO gate in [0, 1]: how much of the PPO/DAgger split this
+        # transition is subject to. 1.0 reproduces the scalar-``ppo_coef``
+        # behaviour exactly; 0.0 makes the transition pure DAgger. Filled by
+        # ``DistillationPPO._get_ppo_gate``, which defaults to all-ones, so this
+        # is inert unless an application overrides it.
+        self.register("ppo_gate", shape=(1,), dtype=torch.float)
+
     def add(self, **data):
         """Strict variant of :meth:`RolloutStorage.add`.
 
