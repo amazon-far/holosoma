@@ -1183,9 +1183,20 @@ class InteractionMeshRetargeter:
         nq, nv = self.robot_model.nq, self.robot_model.nv
         T = np.zeros((nv, nq), dtype=float)
 
+        # MuJoCo model arrays expose joint types as NumPy integer scalars. Cast
+        # both sides to plain integers because pybind11 enum equality is not
+        # symmetric with NumPy scalars as of the bindings bundled with MuJoCo
+        # 3.12 (``enum == np.int32`` is false while the reverse is true).
+        free_joint_type = int(mujoco.mjtJoint.mjJNT_FREE)
+        ball_joint_type = int(mujoco.mjtJoint.mjJNT_BALL)
+        scalar_joint_types = {
+            int(mujoco.mjtJoint.mjJNT_HINGE),
+            int(mujoco.mjtJoint.mjJNT_SLIDE),
+        }
+
         # ---- root free joint (assumed joint 0) ----
         j0 = 0
-        assert self.robot_model.jnt_type[j0] == mujoco.mjtJoint.mjJNT_FREE
+        assert int(self.robot_model.jnt_type[j0]) == free_joint_type
         qadr = self.robot_model.jnt_qposadr[j0]  # 0
         dadr = self.robot_model.jnt_dofadr[j0]  # 0
 
@@ -1217,7 +1228,7 @@ class InteractionMeshRetargeter:
 
         # ---- FREE joint #1 (human/root): use model addresses, but this should be the first joint ----
         j_free1 = 0
-        assert self.robot_model.jnt_type[j_free1] == mujoco.mjtJoint.mjJNT_FREE
+        assert int(self.robot_model.jnt_type[j_free1]) == free_joint_type
         qadr1 = int(self.robot_model.jnt_qposadr[j_free1])  # expect 0
         dadr1 = int(self.robot_model.jnt_dofadr[j_free1])  # start of its 6 qvel dofs
 
@@ -1231,7 +1242,7 @@ class InteractionMeshRetargeter:
             # ---- FREE joint #2 (object): assume it's the last FREE joint; fill its 6x7 block ----
             # Find it by type (safer than hardcoding tail indices)
             free_joints = [
-                j for j in range(self.robot_model.njnt) if self.robot_model.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE
+                j for j in range(self.robot_model.njnt) if int(self.robot_model.jnt_type[j]) == free_joint_type
             ]
             assert len(free_joints) >= 2, "Expected two FREE joints (human + object)."
             j_free2 = free_joints[1]  # second FREE joint
@@ -1245,12 +1256,12 @@ class InteractionMeshRetargeter:
 
         # ---- remaining hinge/slide joints: v = qdot ----
         for j in range(1, self.robot_model.njnt):
-            jt = self.robot_model.jnt_type[j]
-            if jt in (mujoco.mjtJoint.mjJNT_HINGE, mujoco.mjtJoint.mjJNT_SLIDE):
+            jt = int(self.robot_model.jnt_type[j])
+            if jt in scalar_joint_types:
                 qa = self.robot_model.jnt_qposadr[j]
                 da = self.robot_model.jnt_dofadr[j]
                 T[da, qa] = 1.0
-            elif jt == mujoco.mjtJoint.mjJNT_BALL:
+            elif jt == ball_joint_type:
                 raise NotImplementedError("BALL joint block not implemented.")
 
         return T
