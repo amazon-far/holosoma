@@ -38,7 +38,7 @@ class ActorSpecMeta:
     root_body: str
     # Robot/actor bodies in spec (DFS) order, excluding the implicit worldbody.
     body_names: list[str] = field(default_factory=list)
-    # Named, non-free joints only (the actor's actuated DOFs).
+    # Named, non-free joints; robot configs select the public actuated DOFs.
     dof_joint_names: list[str] = field(default_factory=list)
     # Named actuators.
     actuator_names: list[str] = field(default_factory=list)
