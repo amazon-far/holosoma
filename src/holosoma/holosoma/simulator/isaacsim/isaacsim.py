@@ -400,20 +400,19 @@ class IsaacSim(BaseSimulator):
                     kd_list.append(damping_dict[key])
                     print(f"key: {key}, kp: {stiffness_dict[key]}, kd: {damping_dict[key]}")
 
-        # ImplicitActuatorCfg IdealPDActuatorCfg
+        # One group for all DOFs. write_data_to_sim() re-indexes the joint buffers once per actuator
+        # group on every physics step, and Articulation indexes an all-joint group with slice(None) --
+        # a view -- where a group per DOF pays a gather per DOF instead.
         actuators = {
-            dof_names_list[i]: IdealPDActuatorCfg(
-                joint_names_expr=[dof_names_list[i]],
-                effort_limit=dof_effort_limit_list[i],
-                velocity_limit=dof_vel_limit_list[i],
-                # effort_limit_sim=dof_effort_limit_list[i],
-                # velocity_limit_sim=dof_vel_limit_list[i],
-                stiffness=0,
-                damping=0,
-                armature=dof_armature_list[i],
-                friction=dof_joint_friction_list[i],
+            "all_dofs": IdealPDActuatorCfg(
+                joint_names_expr=list(dof_names_list),
+                effort_limit=dict(zip(dof_names_list, dof_effort_limit_list)),
+                velocity_limit=dict(zip(dof_names_list, dof_vel_limit_list)),
+                stiffness=0.0,
+                damping=0.0,
+                armature=dict(zip(dof_names_list, dof_armature_list)),
+                friction=dict(zip(dof_names_list, dof_joint_friction_list)),
             )
-            for i in range(len(dof_names_list))
         }
 
         robot_articulation_config: ArticulationCfg = ARTICULATION_CFG.replace(
