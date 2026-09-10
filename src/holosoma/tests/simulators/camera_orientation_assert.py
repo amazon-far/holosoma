@@ -82,13 +82,59 @@ def main() -> int:
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
 
-    # Pin the robot upright at each origin so the camera aligns with the off-axis panel ahead.
-    robot_states = sim.get_actor_states(["robot"], torch.arange(n, device=device)).clone()
-    robot_states[:, :3] = env_origins + torch.tensor(list(init.pos), device=device)
-    robot_states[:, 3:7] = torch.tensor(list(init.rot), device=device)
-    robot_states[:, 7:] = 0.0
-    sim.set_actor_states(["robot"], torch.arange(n, device=device), robot_states)
+    # Pin the robot upright at each origin so the camera aligns with the off-axis panel ahead. Use
+    # the origins the simulator ACTUALLY placed the envs at (IsaacSim clones onto its own grid and
+    # ignores the requested env_origins; sim.env_origins is reconciled to the real placement).
+    env_origins = sim.env_origins
+
+    _all_ids = torch.arange(n, device=device)
+    # Capture the spawn joint pose once so the pin can restore it: the robot is un-actuated, so
+    # holding only the ROOT lets the JOINTS sag over the settle step, tilting/yawing the pelvis a
+    # few degrees and swinging the pelvis-mounted camera enough to shift the off-axis panel across
+    # the vertical centerline — a near-boundary env images TOP-LEFT instead of TOP-RIGHT (the
+    # isaacgym single-gpu flake). Holding the joints rigid too removes the settle at its source.
+    _spawn_dof_pos = sim.dof_pos.clone()
+
+    def _hold_dof() -> None:
+        # Restore joints to the spawn pose with zero velocity. The cross-backend DOF setter takes
+        # different tensor shapes (IsaacGym flattened [n*ndof, 2], IsaacSim 3D [n, ndof, 2]); build
+        # whichever this backend expects. MuJoCo isn't affected by this flake, so only the two
+        # articulation backends are handled.
+        ndof = sim.num_dof
+        if args.simulator == "isaacgym":
+            ds = torch.zeros(n * ndof, 2, device=device)
+            ds[:, 0] = _spawn_dof_pos.reshape(-1)
+            sim.set_dof_state_tensor_robots(_all_ids, ds)
+        elif args.simulator == "isaacsim":
+            ds = torch.zeros(n, ndof, 2, device=device)
+            ds[:, :, 0] = _spawn_dof_pos
+            sim.set_dof_state_tensor_robots(_all_ids, ds)
+
+    def _pin_robot() -> None:
+        # Set the target root pose AND zero all velocities, hold the joints rigid, then read back to
+        # verify the write landed before we rely on it: any residual root velocity, joint sag, or a
+        # dropped write lets the pelvis drift and drags its mounted camera off the panel. Retry until
+        # it sticks.
+        target_pos = env_origins + torch.tensor(list(init.pos), device=device)
+        target_rot = torch.tensor(list(init.rot), device=device)
+        for _ in range(3):
+            robot_states = sim.get_actor_states(["robot"], _all_ids).clone()
+            robot_states[:, :3] = target_pos
+            robot_states[:, 3:7] = target_rot
+            robot_states[:, 7:] = 0.0
+            sim.set_actor_states(["robot"], _all_ids, robot_states)
+            _hold_dof()
+            back = sim.get_actor_states(["robot"], _all_ids)
+            if torch.allclose(back[:, :3], target_pos, atol=1e-3) and back[:, 7:].abs().max() < 1e-3:
+                break
+
+    _pin_robot()
     step(sim, max(2, steps_for_seconds(sim, 0.05)))
+    # Re-pin immediately before capture, then step a few frames so the corrected pose reaches the
+    # render (on IsaacSim a root/joint write needs a few physics steps to propagate; other backends
+    # are immediate) while the joints are held rigid so the un-actuated robot can't drift again.
+    _pin_robot()
+    step(sim, 4)
     sim.render_sensors()
 
     cam_name, cam = next(iter(config.sensor.items()))

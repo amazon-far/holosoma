@@ -232,7 +232,21 @@ def assert_momentum_transfer(ctx):
 
 def assert_static_support(ctx):
     post0 = ctx.states("post")[:, :3].clone()
-    _step(ctx.sim, steps_for_seconds(ctx.sim, 1.5))
+    # Settle until the dropped box actually comes to rest, rather than a fixed 1.5s. In multi-env a
+    # random box can still be damping out its drop/bounce at 1.5s and read a few mm outside the tight
+    # 8mm z-band below — a settle-time flake (env0 lands at 0.402 while another env is marginally
+    # off), not a support failure. Step in 0.25s chunks until every box's z is stable between chunks
+    # AND its linear/angular velocity is ~0. Capped at ~4s so a genuinely unsupported box — which
+    # never comes to rest on the post — still falls through to the assertion and fails as it should.
+    chunk = max(1, steps_for_seconds(ctx.sim, 0.25))
+    prev_z = ctx.states("restbox")[:, 2].clone()
+    for _ in range(16):  # 16 * 0.25s = 4s cap
+        _step(ctx.sim, chunk)
+        cur = ctx.states("restbox")
+        z, vel = cur[:, 2], cur[:, 7:].abs().amax(dim=1)  # [:, 7:] = linear+angular velocity
+        if _all((z - prev_z).abs() < 5e-4) and _all(vel < 1e-2):
+            break
+        prev_z = z.clone()
     rest = ctx.states("restbox")
     post = ctx.states("post")
     rest_z = rest[:, 2]

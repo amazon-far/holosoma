@@ -139,11 +139,22 @@ class Terrain(TerrainInterface):
         mesh.vertices[..., :2] -= self._border_size
         return mesh
 
-    def sample_env_origins(self) -> np.ndarray:
+    @property
+    def env_origin_grid(self) -> np.ndarray:
+        """Per-tile env origins as a ``[num_rows, num_cols, 3]`` grid.
+
+        For OBJ terrains the origins are derived from the loaded mesh bounds
+        (``_get_load_obj_env_origin_grid``); for procedural terrains they are the grid
+        populated during generation (``_env_origins``). Callers that need origins should
+        go through this property rather than reading ``_env_origins`` directly, which does
+        not exist for OBJ terrains.
+        """
         if self._type == "load_obj":
-            origin_grid = self._get_load_obj_env_origin_grid()
-        else:
-            origin_grid = self._env_origins
+            return self._get_load_obj_env_origin_grid()
+        return self._env_origins
+
+    def sample_env_origins(self) -> np.ndarray:
+        origin_grid = self.env_origin_grid
 
         terrain_levels = np.random.randint(0, self._num_rows, (self._num_robots,))
         terrain_types = np.floor_divide(
