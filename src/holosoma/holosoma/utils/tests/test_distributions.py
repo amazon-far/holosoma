@@ -6,6 +6,8 @@ keyed :class:`TermSampler` (covered in test_keyed_distributions.py); there is no
 ``sample`` — these tests apply the same inverse-CDF transform to a block of uniforms directly.
 """
 
+import dataclasses
+import json
 import math
 
 import pytest
@@ -53,6 +55,29 @@ def test_log_uniform_non_positive_bounds_raise(bounds):
 def test_uniform_rejects_mean_std():
     with pytest.raises(ValueError, match="does not accept 'mean'/'std'"):
         DistributionSpec(kind="uniform", low=0.0, high=1.0, mean=0.5, std=0.1)
+
+
+def test_mean_matched_uniform_requires_mean():
+    with pytest.raises(ValueError, match="requires 'low', 'high', and 'mean'"):
+        DistributionSpec(kind="mean_matched_uniform", low=0.9, high=1.2)
+
+
+def test_mean_matched_uniform_rejects_std():
+    with pytest.raises(ValueError, match="does not accept 'std'"):
+        DistributionSpec(kind="mean_matched_uniform", low=0.9, high=1.2, mean=1.0, std=0.1)
+
+
+@pytest.mark.parametrize("mean", [0.9, 1.2, 0.5, 1.5])
+def test_mean_matched_uniform_mean_must_be_interior(mean):
+    # A mean at or outside a bound would put a piece probability at 0 or 1.
+    with pytest.raises(ValueError, match="requires low < mean < high"):
+        DistributionSpec(kind="mean_matched_uniform", low=0.9, high=1.2, mean=mean)
+
+
+def test_mean_matched_uniform_inverted_bounds_raise():
+    # Strict interiority subsumes the high >= low check, so this reports all three values at once.
+    with pytest.raises(ValueError, match="requires low < mean < high"):
+        DistributionSpec(kind="mean_matched_uniform", low=1.2, high=0.9, mean=1.0)
 
 
 def test_gaussian_requires_params_or_bounds():
@@ -108,6 +133,20 @@ def test_parse_passthrough_spec():
     assert DistributionSpec.parse(spec) is spec
 
 
+def test_parse_mean_matched_uniform_dict_and_range_shorthand():
+    spec = DistributionSpec.parse({"kind": "mean_matched_uniform", "low": 0.9, "high": 1.2, "mean": 1.0})
+    assert (spec.kind, spec.low, spec.high, spec.mean) == ("mean_matched_uniform", 0.9, 1.2, 1.0)
+    assert DistributionSpec.parse({"kind": "mean_matched_uniform", "range": [0.9, 1.2], "mean": 1.0}) == spec
+
+
+def test_mean_matched_uniform_survives_config_round_trip():
+    # A spec stashed in a term's `params` is flattened by dataclasses.asdict + json on every checkpoint
+    # save and re-parsed on load, arriving with an explicit "std": None. That must parse back cleanly
+    # (i.e. the std check tests `is not None`, not key presence).
+    spec = DistributionSpec(kind="mean_matched_uniform", low=-1.0, high=3.0, mean=0.0)
+    assert DistributionSpec.parse(json.loads(json.dumps(dataclasses.asdict(spec)))) == spec
+
+
 # --------------------------------------------------------------------------------------------------
 # Sampling statistics
 # --------------------------------------------------------------------------------------------------
@@ -118,6 +157,47 @@ def test_uniform_in_band_and_mean():
     x = _draw(spec)
     assert x.min() >= -2.0 and x.max() <= 6.0
     assert abs(x.mean().item() - 2.0) < 0.05
+
+
+@pytest.mark.parametrize(("lo", "hi", "mean"), [(0.9, 1.2, 1.0), (-1.0, 3.0, 0.0)])
+def test_mean_matched_uniform_in_band_and_unbiased(lo, hi, mean):
+    # Same band as the uniform, but the mean lands ON the nominal value rather than the midpoint (which
+    # would be 1.05 and +1.0 kg for these two).
+    spec = DistributionSpec(kind="mean_matched_uniform", low=lo, high=hi, mean=mean)
+    x = _draw(spec)
+    assert x.min() >= lo and x.max() <= hi
+    assert abs(x.mean().item() - mean) < 0.005 * (hi - lo)
+
+
+@pytest.mark.parametrize(("lo", "hi", "mean"), [(0.9, 1.2, 1.0), (-1.0, 3.0, 0.0)])
+def test_mean_matched_uniform_piece_probabilities(lo, hi, mean):
+    # The left piece must carry p = wr / (hi - lo) (2/3 and 3/4 here). A mean-only check cannot catch
+    # the two pieces being swapped, because swapping gives mean lo + hi - m, which still equals m on a
+    # symmetric band -- hence the asymmetric bands and this explicit check.
+    spec = DistributionSpec(kind="mean_matched_uniform", low=lo, high=hi, mean=mean)
+    x = _draw(spec)
+    assert abs((x < mean).float().mean().item() - (hi - mean) / (hi - lo)) < 0.01
+
+
+# (-3.0, 2.4) is the case an EXACT midpoint test would miss: 0.5 * (-3.0 + 2.4) rounds to
+# -0.30000000000000004, so the guard has to be band-relative to fire here.
+@pytest.mark.parametrize(("lo", "hi", "mean"), [(0.5, 1.5, 1.0), (-3.0, 2.4, -0.3), (-1.0, 1.0, 0.0)])
+def test_mean_matched_uniform_midpoint_mean_is_plain_uniform(lo, hi, mean):
+    # A midpoint mean IS a uniform, and BIT-identically so: rewriting a symmetric pair as an explicit
+    # spec must not shift an existing run's draws (the two-piece arithmetic alone agrees only to ~1 ulp).
+    matched = _draw(DistributionSpec(kind="mean_matched_uniform", low=lo, high=hi, mean=mean))
+    assert torch.equal(matched, _draw(DistributionSpec(kind="uniform", low=lo, high=hi)))
+
+
+def test_mean_matched_uniform_inverse_cdf_is_monotone_and_continuous():
+    # The property the inverse-CDF sampler relies on: the kink is in the DENSITY, not in the values.
+    lo, hi, mean = 0.9, 1.2, 1.0
+    spec = DistributionSpec(kind="mean_matched_uniform", low=lo, high=hi, mean=mean)
+    x = _inverse_cdf(torch.linspace(0.0, 1.0, 100_001, dtype=torch.float64), spec)
+    assert (x.diff() >= 0.0).all()
+    assert x[0].item() == pytest.approx(lo) and x[-1].item() == pytest.approx(hi)
+    # Widest step is the wide piece's: wr / ((1 - p) * n) = 6e-6. A jump at the kink would blow past it.
+    assert x.diff().max().item() < 1e-5
 
 
 def test_log_uniform_in_band_and_log_mean():
@@ -270,3 +350,70 @@ def test_quantiles_log_uniform_positive_and_log_mean():
     assert q.min() >= 1.0 and q.max() <= 100.0
     # Log-spaced -> mean of log(q) near the midpoint of [log lo, log hi].
     assert abs(torch.log(q).mean().item() - 0.5 * (math.log(1.0) + math.log(100.0))) < 0.05
+
+
+def test_quantiles_mean_matched_uniform_mean_near_nominal():
+    # Bucketing is only O(1/n**2)-accurate for this kind: the midpoint rule is exact on each linear
+    # piece, but the one bucket straddling the kink spans both. Mass DR draws continuously; the terms
+    # that DO bucket (friction/material) say so in their docstrings.
+    lo, hi, mean = 0.9, 1.2, 1.0
+    q = quantiles(DistributionSpec(kind="mean_matched_uniform", low=lo, high=hi, mean=mean), 64, _DEVICE)
+    assert q.min() >= lo and q.max() <= hi
+    assert abs(q.mean().item() - mean) < 1e-5  # measured 6.1e-6 at n=64; 1e-4 would also pass at n=16
+
+
+# --------------------------------------------------------------------------------------------------
+# expectation() — the exact analytic mean, so a range's bias is computable rather than eyeballed
+# --------------------------------------------------------------------------------------------------
+
+
+# Every kind and every degenerate path, each with the tolerance its sampling noise warrants.
+_EXPECTATION_CASES = [
+    (DistributionSpec(kind="uniform", low=0.9, high=1.2), 1e-3),
+    (DistributionSpec(kind="mean_matched_uniform", low=0.9, high=1.2, mean=1.0), 1e-3),
+    (DistributionSpec(kind="mean_matched_uniform", low=-1.0, high=3.0, mean=0.0), 1e-2),
+    (DistributionSpec(kind="log_uniform", low=1.0, high=100.0), 0.2),
+    (DistributionSpec(kind="gaussian", low=-1.0, high=1.0), 5e-3),  # mean/std derived from the bounds
+    (DistributionSpec(kind="gaussian", low=2.0, high=3.0, mean=2.5, std=0.1), 5e-3),  # explicit params
+    (DistributionSpec(kind="gaussian", mean=0.0, std=1.0, low=0.0), 2e-2),  # one-sided (half-normal)
+    (DistributionSpec(kind="gaussian", mean=0.0, std=1.0, high=0.0), 2e-2),  # one-sided above
+    (DistributionSpec(kind="gaussian", mean=5.0, std=2.0), 5e-2),  # un-truncated
+    (DistributionSpec(kind="gaussian", mean=3.0, std=0.0), 0.0),  # point mass
+    (DistributionSpec(kind="gaussian", low=0.0, high=1.0, mean=5.0, std=0.0), 0.0),  # clamped point mass
+    (DistributionSpec(kind="gaussian", low=2.0, high=2.0), 0.0),  # zero-width band (derived std == 0)
+    (DistributionSpec(kind="gaussian", low=2.0, high=2.0, mean=2.0, std=0.5), 0.0),  # ... with std > 0
+    # Deep-tail bands, where the sampler's _P_EPS clamp pins every draw to the near bound and the
+    # closed-form truncated mean stops describing it (0.17 sigma out at low=5.5). These are the cases a
+    # 1e-12 threshold silently got wrong: it never fired, so the closed form was returned regardless.
+    (DistributionSpec(kind="gaussian", mean=0.0, std=1.0, low=5.5), 0.0),  # mass 1.9e-8, 100% pinned
+    (DistributionSpec(kind="gaussian", mean=0.0, std=1.0, low=-10.0, high=-6.0), 0.0),  # pinned, high side
+    (DistributionSpec(kind="gaussian", mean=0.0, std=1.0, low=40.0, high=50.0), 0.0),  # mass underflows
+    # Transition zone: mass 2.9e-7 is just ABOVE _P_EPS, so only ~10% of draws are pinned and NEITHER
+    # the closed form nor the bound is right. The closed form is the closer of the two (0.08 vs 0.11),
+    # so that is what expectation() returns; this pins the size of the known gap.
+    (DistributionSpec(kind="gaussian", mean=0.0, std=1.0, low=5.0), 0.09),
+]
+
+
+@pytest.mark.parametrize(("spec", "tol"), _EXPECTATION_CASES)
+def test_expectation_matches_empirical_mean(spec, tol):
+    # Must agree with what _inverse_cdf DRAWS, degenerate short-circuits included -- not just with the
+    # textbook formula.
+    assert abs(spec.expectation() - _draw(spec).mean().item()) <= tol
+
+
+def test_expectation_exact_values():
+    # Pinned closed forms, and the evidence that motivates mean_matched_uniform: on the asymmetric band
+    # [0.9, 1.2] with a nominal of 1.0, NO other kind is unbiased -- not even a gaussian handed an
+    # explicit mean of 1.0, because the band is asymmetric about that mean.
+    assert DistributionSpec(low=0.9, high=1.2).expectation() == 1.05
+    assert DistributionSpec(kind="mean_matched_uniform", low=0.9, high=1.2, mean=1.0).expectation() == 1.0
+    log_uniform = DistributionSpec(kind="log_uniform", low=0.9, high=1.2)
+    assert log_uniform.expectation() == pytest.approx(1.0428178490346622, rel=1e-12)
+    biased_gaussian = DistributionSpec(kind="gaussian", low=0.9, high=1.2, mean=1.0, std=0.05)
+    assert biased_gaussian.expectation() == pytest.approx(1.002755635152069, rel=1e-12)
+
+
+def test_expectation_log_uniform_degenerate_band():
+    # (hi - lo) / ln(hi / lo) is 0/0 at hi == lo; the short-circuit keeps it off NaN.
+    assert DistributionSpec(kind="log_uniform", low=2.0, high=2.0).expectation() == 2.0

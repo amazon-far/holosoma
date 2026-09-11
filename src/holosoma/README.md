@@ -284,3 +284,19 @@ python src/holosoma/holosoma/train_agent.py \
     --randomization.setup-terms.randomize-base-com-startup.params.enabled=True \
     --randomization.setup-terms.mass-randomizer.params.added-mass-range=[-1.0,3.0]
 ```
+
+A bare `[lo, hi]` pair is a **uniform** distribution, so its mean is the band's midpoint. On an
+asymmetric band that biases every environment: `[-1.0,3.0]` adds +1.0 kg to the average torso, and a
+link mass scale of `[0.9,1.2]` makes the average link 5% heavier than its URDF. To cover the same band
+with no mean shift, set the range in a preset as a `mean_matched_uniform` spec, which pins the
+expectation to `mean`:
+
+```python
+"added_mass_range": {"kind": "mean_matched_uniform", "low": -1.0, "high": 3.0, "mean": 0.0},
+"link_mass_range":  {"kind": "mean_matched_uniform", "low": 0.9,  "high": 1.2, "mean": 1.0},
+```
+
+It spans the same `[low, high]` as the uniform, but weights the two sides of `mean` by the lever rule,
+so the wider side is sampled less often: with those two settings, 2/3 of link scales land in
+`[0.9, 1.0]` and 3/4 of torso offsets are negative. Check what any range actually averages to with
+`DistributionSpec.parse(value).expectation()`.

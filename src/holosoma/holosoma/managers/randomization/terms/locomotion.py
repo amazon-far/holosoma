@@ -663,8 +663,8 @@ def randomize_mass_startup(
 ) -> None:
     """Randomize link and base masses at startup.
 
-    Note: link_mass_range uses SCALING (e.g., 0.9-1.2 = 90-120% of original),
-          added_mass_range uses ADDITION (e.g., -1.0 to 3.0 kg offset).
+    Note: link_mass_range uses SCALING (e.g., 0.9-1.2 = 90-120% of original), so its NOMINAL value is
+          1.0; added_mass_range uses ADDITION (e.g., -1.0 to 3.0 kg offset on the torso), nominal 0.0.
 
     ``recompute_inertia`` (default True): each body's inertia is rescaled by the SAME factor its mass
     changed by (``m_after / m_before``), identically on all backends (explicit multiplicative ratio —
@@ -678,6 +678,16 @@ def randomize_mass_startup(
     on ``[lo, hi]``; log_uniform requires positive bounds (so it suits the scale operation,
     ``link_mass_range``, and by design RAISES on a signed ``added_mass_range`` rather than silently
     mis-sampling).
+
+    A bare ``[lo, hi]`` pair is UNIFORM, whose mean is the band's midpoint — so an asymmetric band
+    perturbs the average robot: ``[0.9, 1.2]`` makes every randomized link 5% heavier than its URDF and
+    ``[-1.0, 3.0]`` puts +1.0 kg on every torso. To span the same band with no mean shift, use a
+    ``mean_matched_uniform`` spec, which pins the expectation to its ``mean``::
+
+        "link_mass_range": {"kind": "mean_matched_uniform", "low": 0.9, "high": 1.2, "mean": 1.0},
+        "added_mass_range": {"kind": "mean_matched_uniform", "low": -1.0, "high": 3.0, "mean": 0.0},
+
+    Audit any range with :meth:`holosoma.config_types.distribution.DistributionSpec.expectation`.
     """
     if not enabled:
         return
@@ -907,7 +917,8 @@ def randomize_friction_startup(
     that guard on the PhysX backends (IsaacGym + IsaacSim) and, for cross-backend value consistency,
     applies the same staircase on MuJoCo (which has no cap and could otherwise be continuous). Set
     ``None`` for a continuous marginal where the material count is safely under the cap. ``uniform`` is
-    exact when continuous; ``gaussian``/``log_uniform`` match up to the bucket quantization.
+    exact when continuous; every other kind (including ``mean_matched_uniform``) matches only up to the
+    bucket quantization.
 
     GRANULARITY is unified too: this term draws ONE friction per env (per robot) on every backend —
     IsaacGym sets it on each shape, IsaacSim via the material writer's ``per_env=True``, MuJoCo via
@@ -1007,7 +1018,7 @@ def randomize_robot_rigid_body_material_startup(
     Each range is a config range value — a ``[lo, hi]`` pair (uniform) or a spec dict — honored via the
     quantile-bucket scheme: IsaacSim MUST bucket (PhysX caps unique materials per scene), so the
     per-shape marginal is a 64-atom staircase approximation of the requested distribution. ``uniform``
-    is exact; ``gaussian``/``log_uniform`` are approximate.
+    is exact; every other kind (including ``mean_matched_uniform``) is approximate.
     """
     if not enabled:
         return

@@ -6,7 +6,16 @@ The keyed sampler that DRAWS from a spec lives in :mod:`holosoma.utils.sampler`.
 
 Distribution conventions (bounds-first, with optional explicit parameters)
 --------------------------------------------------------------------------
-- ``uniform``     — ``U[low, high]``.
+- ``uniform``     — ``U[low, high]``. Its mean is the band's MIDPOINT, so an asymmetric band biases
+  every draw (``[0.9, 1.2]`` averages 1.05, not 1.0).
+- ``mean_matched_uniform`` — a TWO-PIECE uniform spanning the same ``[low, high]`` as ``uniform`` but
+  with ``E[X] == mean`` EXACTLY. Requires ``low < mean < high`` (no ``std``). With ``wl = mean - low``
+  and ``wr = high - mean``, the left piece ``[low, mean]`` is drawn with probability
+  ``p = wr / (high - low)`` and the right piece with ``1 - p`` — the lever rule, which is precisely
+  the weighting that puts the expectation on ``mean``. Use it when the NOMINAL value is not the
+  band's midpoint, so that covering an asymmetric-but-plausible band does not also shift the average.
+  The trade-offs are a DISCONTINUOUS density (a 4x jump at ``mean`` for ``[0.9, 1.2]``) and less
+  coverage of the wider side: 2/3 of those draws land in ``[0.9, 1.0]``.
 - ``log_uniform`` — ``exp(U[log low, log high])``; requires ``low > 0`` and ``high > 0``.
 - ``gaussian``    — a normal sampled from ``(mean, std)``. ``mean``/``std`` are taken explicitly when
   given, else derived from BOTH bounds as ``mean = (low + high) / 2`` and ``std = (high - low) / 6``
@@ -25,6 +34,8 @@ DistributionSpec(kind='uniform', low=0.5, high=1.5, mean=None, std=None)
 DistributionSpec(kind='log_uniform', low=0.8, high=1.2, mean=None, std=None)
 >>> DistributionSpec.parse({"kind": "gaussian", "low": -1.0, "high": 1.0})  # truncated normal
 DistributionSpec(kind='gaussian', low=-1.0, high=1.0, mean=None, std=None)
+>>> DistributionSpec.parse({"kind": "mean_matched_uniform", "low": 0.9, "high": 1.2, "mean": 1.0})
+DistributionSpec(kind='mean_matched_uniform', low=0.9, high=1.2, mean=1.0, std=None)
 """
 
 from __future__ import annotations
@@ -33,7 +44,7 @@ import math
 from dataclasses import dataclass
 from typing import Literal, Sequence, Union, get_args
 
-Distribution = Literal["uniform", "log_uniform", "gaussian"]
+Distribution = Literal["uniform", "mean_matched_uniform", "log_uniform", "gaussian"]
 """Sampling distributions a randomization term may request."""
 
 # Derived from the Literal above so the two can't drift (one source of truth for the allowed kinds).
@@ -49,6 +60,26 @@ _SUPPORTED_DISTRIBUTIONS: tuple[str, ...] = get_args(Distribution)
 # All three are accepted (rather than requiring DistributionSpec) because configs are written and
 # serialized as pairs/dicts, and a bare pair is the most common term input.
 DistributionLike = Union["DistributionSpec", Sequence[float], dict]
+
+# Standard-normal pieces for the truncated-gaussian mean in :meth:`DistributionSpec.expectation`.
+_INV_SQRT2 = 1.0 / math.sqrt(2.0)
+_INV_SQRT_2PI = 1.0 / math.sqrt(2.0 * math.pi)
+# The sampler keeps its inverse-CDF argument this far off the +/-1 singularities of erfinv; it lives
+# here (rather than in the sampler) because expectation() must agree with the clamped draw, and a
+# second copy of the number is exactly how the two would drift apart. A gaussian whose whole CDF
+# interval [Phi(a), Phi(b)] is narrower than this margin has EVERY draw clamped to the nearest bound,
+# so that bound — not the closed-form truncated mean — is the realized expectation.
+_P_EPS = 1e-7
+
+
+def _std_normal_cdf(x: float) -> float:
+    """Phi(x), the standard-normal CDF. Accepts +/-inf (-> 1.0 / 0.0) so a missing bound just works."""
+    return 0.5 * (1.0 + math.erf(x * _INV_SQRT2))
+
+
+def _std_normal_pdf(x: float) -> float:
+    """phi(x), the standard-normal density. Accepts +/-inf (-> 0.0) so a missing bound just works."""
+    return math.exp(-0.5 * x * x) * _INV_SQRT_2PI
 
 
 @dataclass(frozen=True)
@@ -66,16 +97,21 @@ class DistributionSpec:
 
     Fields
     ------
-    kind : "uniform" | "log_uniform" | "gaussian"
-    low, high : the configured bounds. Required for uniform/log_uniform; for gaussian they are the
-        truncation band (and, absent explicit params, the source of the derived mean/std).
-    mean, std : gaussian ONLY, and only when you want to set them explicitly (e.g. a tight std inside a
-        wide band). Supply both or neither.
+    kind : "uniform" | "mean_matched_uniform" | "log_uniform" | "gaussian"
+    low, high : the configured bounds. Required for uniform/mean_matched_uniform/log_uniform; for
+        gaussian they are the truncation band (and, absent explicit params, the source of the derived
+        mean/std).
+    mean : REQUIRED for mean_matched_uniform (the value its expectation is matched to). For gaussian it
+        is optional, and only when you want to set it explicitly — then supply ``std`` too.
+    std : gaussian ONLY, and only when you want to set it explicitly (e.g. a tight std inside a wide
+        band). Supply it with ``mean`` or not at all.
 
     Examples
     --------
     >>> DistributionSpec(low=0.5, high=1.5)                       # uniform is the default kind
     DistributionSpec(kind='uniform', low=0.5, high=1.5, mean=None, std=None)
+    >>> DistributionSpec(kind="mean_matched_uniform", low=0.9, high=1.2, mean=1.0).expectation()
+    1.0
     >>> DistributionSpec(kind="gaussian", low=-1.0, high=1.0)     # truncated normal, mean/std derived
     DistributionSpec(kind='gaussian', low=-1.0, high=1.0, mean=None, std=None)
     >>> DistributionSpec(kind="gaussian", mean=2.5, std=0.1)      # explicit params, un-truncated
@@ -113,6 +149,24 @@ class DistributionSpec:
             if self.mean is not None or self.std is not None:
                 raise ValueError(f"distribution '{self.kind}' does not accept 'mean'/'std' (bounds only).")
 
+        elif self.kind == "mean_matched_uniform":
+            # 'mean' is required rather than defaulted to the midpoint: a midpoint mean IS a plain
+            # uniform, so an implicit one would read as if it had removed a bias it did not.
+            if self.low is None or self.high is None or self.mean is None:
+                raise ValueError(
+                    "mean_matched_uniform requires 'low', 'high', and 'mean' (the value its expectation is "
+                    "matched to), e.g. {'kind': 'mean_matched_uniform', 'low': 0.9, 'high': 1.2, 'mean': 1.0}."
+                )
+            if self.std is not None:
+                raise ValueError("mean_matched_uniform does not accept 'std' (bounds + 'mean' only).")
+            # Strict interiority subsumes high >= low and keeps the piece probabilities off 0 and 1.
+            if not self.low < self.mean < self.high:
+                raise ValueError(
+                    f"mean_matched_uniform requires low < mean < high, got low={self.low}, mean={self.mean}, "
+                    f"high={self.high}. A mean at or outside a bound is a point mass at that bound; for a "
+                    "constant or a midpoint-mean band use a plain [lo, hi] pair."
+                )
+
         else:  # gaussian
             if (self.mean is None) != (self.std is None):
                 raise ValueError("gaussian: supply 'mean' and 'std' together, or neither.")
@@ -145,6 +199,76 @@ class DistributionSpec:
         lo, hi = float(self.low), float(self.high)  # type: ignore[arg-type]
         return 0.5 * (lo + hi), (hi - lo) / 6.0
 
+    def expectation(self) -> float:
+        """The analytic mean of this spec — closed form, no sampling.
+
+        A randomization range whose nominal value is 1.0 (a multiplicative scale) or 0.0 (an additive
+        offset) should have ``expectation() == nominal``; anything else perturbs every env on average.
+        On an asymmetric band, only ``mean_matched_uniform`` manages that — ``uniform`` on
+        ``[0.9, 1.2]`` gives 1.05, ``log_uniform`` 1.0428, and even a ``gaussian`` with an explicit
+        ``mean=1.0`` lands at 1.0028, because ``mean`` there is the PRE-truncation mean and the band is
+        asymmetric about it.
+
+        Written to match what :func:`~holosoma.utils.sampler._inverse_cdf` actually DRAWS rather than
+        just the idealized formula, so a test can compare it against an empirical mean: the degenerate
+        paths (zero-width band, ``std == 0`` point mass clamped into the band, a gaussian band narrower
+        than the sampler's :data:`_P_EPS` clamp margin) mirror the sampler's short-circuits. Two known
+        gaps, both far outside any plausible config:
+
+        - a gaussian band whose truncation mass is within roughly an order of magnitude of ``_P_EPS``
+          (~5 sigma out) sits in a transition zone where SOME draws are clamped, so the realized mean
+          is pulled toward the near bound — up to ~0.08 sigma below this closed form;
+        - this is the CONTINUOUS mean, so a term that quantizes through
+          :func:`~holosoma.utils.sampler.quantiles` matches only to O(1/n_buckets**2) for
+          ``mean_matched_uniform`` (~6e-6 at the usual 64 buckets), the one bucket straddling the kink
+          spanning both pieces. Mass DR draws continuously; materials bucket.
+
+        Examples
+        --------
+        >>> DistributionSpec(low=0.9, high=1.2).expectation()       # uniform -> the midpoint (BIASED)
+        1.05
+        >>> DistributionSpec(kind="mean_matched_uniform", low=-1.0, high=3.0, mean=0.0).expectation()
+        0.0
+        """
+        if self.kind == "uniform":
+            return 0.5 * (float(self.low) + float(self.high))  # type: ignore[arg-type]
+
+        if self.kind == "mean_matched_uniform":
+            return float(self.mean)  # type: ignore[arg-type]  # exact by construction
+
+        if self.kind == "log_uniform":
+            lo, hi = float(self.low), float(self.high)  # type: ignore[arg-type]
+            if hi == lo:
+                return lo  # degenerate band: (hi - lo) / ln(hi / lo) is 0/0 here
+            # (hi - lo) / ln(hi / lo), via log1p so a narrow band (hi/lo ~ 1) keeps full precision.
+            return (hi - lo) / math.log1p((hi - lo) / lo)
+
+        # gaussian — the mean of the normal TRUNCATED to whichever bounds are present.
+        mean, std = self.resolved_mean_std()
+        bound_lo: float | None = float(self.low) if self.low is not None else None
+        bound_hi: float | None = float(self.high) if self.high is not None else None
+        if std == 0.0:  # point mass at mean, clamped into whatever bounds exist (mirrors the sampler)
+            return min(
+                max(mean, -math.inf if bound_lo is None else bound_lo),
+                math.inf if bound_hi is None else bound_hi,
+            )
+        if bound_lo is not None and bound_hi is not None and bound_lo == bound_hi:
+            return bound_lo  # zero-width band (the sampler's short-circuit)
+        # A missing bound is +/-inf, so this one expression covers the un-truncated, one-sided and
+        # two-sided cases: E = mean + std * (phi(a) - phi(b)) / (Phi(b) - Phi(a)).
+        a = -math.inf if bound_lo is None else (bound_lo - mean) / std
+        b = math.inf if bound_hi is None else (bound_hi - mean) / std
+        mass = _std_normal_cdf(b) - _std_normal_cdf(a)
+        if mass <= _P_EPS:
+            # The whole CDF interval fits inside the sampler's clamp margin, so EVERY draw comes back
+            # pinned to the bound nearest the mean (measured: 100% pinned by ~4.7 sigma out, where mass
+            # is 1.9e-8). Report that bound, not the closed form — which is 0.17 sigma away there, and
+            # 0/0 once the mass underflows outright. The far bound is unreachable, hence `a > 0` alone.
+            nearest = bound_lo if a > 0.0 else bound_hi
+            assert nearest is not None, "a band narrower than _P_EPS must have a bound on the near side"
+            return nearest
+        return mean + std * (_std_normal_pdf(a) - _std_normal_pdf(b)) / mass
+
     @classmethod
     def parse(cls, value: DistributionLike) -> DistributionSpec:
         """Parse one config range value (:data:`DistributionLike`) into a validated spec.
@@ -166,6 +290,8 @@ class DistributionSpec:
         DistributionSpec(kind='gaussian', low=-1.0, high=1.0, mean=None, std=None)
         >>> DistributionSpec.parse({"range": [0.5, 1.5], "kind": "log_uniform"})  # 'range' shorthand
         DistributionSpec(kind='log_uniform', low=0.5, high=1.5, mean=None, std=None)
+        >>> DistributionSpec.parse({"kind": "mean_matched_uniform", "range": [0.9, 1.2], "mean": 1.0})
+        DistributionSpec(kind='mean_matched_uniform', low=0.9, high=1.2, mean=1.0, std=None)
         >>> spec = DistributionSpec.parse([0.5, 1.5])
         >>> DistributionSpec.parse(spec) is spec                        # spec passes through
         True
