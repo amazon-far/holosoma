@@ -57,6 +57,11 @@ class ActionManager:
         self._action = torch.zeros((self.env.num_envs, self._total_action_dim), device=self.device)
         self._prev_action = torch.zeros_like(self._action)
 
+        # Mean-action history, kept only for reward terms that need the policy's deterministic
+        # output instead of the sampled action.
+        self._mean_action = torch.zeros_like(self._action)
+        self._prev_mean_action = torch.zeros_like(self._action)
+
     def _initialize_terms(self) -> None:
         """Initialize action terms and resolve their classes."""
         for term_name, term_cfg in self.cfg.terms.items():
@@ -142,6 +147,30 @@ class ActionManager:
         return self._prev_action
 
     @property
+    def mean_action(self) -> torch.Tensor:
+        """The deterministic (mean) action the policy would have taken this step.
+
+        Supplied by the training algorithm; see :meth:`process_actions`.
+
+        Returns
+        -------
+        torch.Tensor
+            Mean action tensor [num_envs, total_action_dim]
+        """
+        return self._mean_action
+
+    @property
+    def prev_mean_action(self) -> torch.Tensor:
+        """The previous deterministic (mean) action.
+
+        Returns
+        -------
+        torch.Tensor
+            Previous mean action tensor [num_envs, total_action_dim]
+        """
+        return self._prev_mean_action
+
+    @property
     def active_terms(self) -> list[str]:
         """Names of active action terms."""
         return self._term_names
@@ -151,7 +180,7 @@ class ActionManager:
         """Dimensions of each action term."""
         return self._term_dims
 
-    def process_actions(self, actions: torch.Tensor) -> None:
+    def process_actions(self, actions: torch.Tensor, mean_actions: torch.Tensor | None = None) -> None:
         """Process raw actions by distributing them to action terms.
 
         This should be called once per environment step.
@@ -160,6 +189,10 @@ class ActionManager:
         ----------
         actions : torch.Tensor
             Raw action tensor [num_envs, total_action_dim]
+        mean_actions : torch.Tensor or None, optional
+            Deterministic (mean) action for the same step [num_envs, total_action_dim].
+            Recorded for reward terms only: it is not split across action terms and never
+            reaches the actuators. Defaults to mirroring ``actions``.
 
         Raises
         ------
@@ -171,10 +204,17 @@ class ActionManager:
             raise ValueError(
                 f"Invalid action shape. Expected: [*, {self._total_action_dim}], received: {actions.shape}"
             )
+        if mean_actions is not None and mean_actions.shape[1] != self._total_action_dim:
+            raise ValueError(
+                f"Invalid mean action shape. Expected: [*, {self._total_action_dim}], received: {mean_actions.shape}"
+            )
 
         # Store action history
         self._prev_action[:] = self._action
         self._action[:] = actions.to(self.device)
+
+        self._prev_mean_action[:] = self._mean_action
+        self._mean_action[:] = self._action if mean_actions is None else mean_actions.to(self.device)
 
         # Split actions and process each term
         idx = 0
@@ -204,9 +244,13 @@ class ActionManager:
         if env_ids is None:
             self._prev_action[:] = 0.0
             self._action[:] = 0.0
+            self._prev_mean_action[:] = 0.0
+            self._mean_action[:] = 0.0
         else:
             self._prev_action[env_ids] = 0.0
             self._action[env_ids] = 0.0
+            self._prev_mean_action[env_ids] = 0.0
+            self._mean_action[env_ids] = 0.0
 
         # Reset all action terms
         for term in self._term_instances.values():

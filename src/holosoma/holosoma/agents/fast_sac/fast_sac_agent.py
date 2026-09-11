@@ -74,9 +74,14 @@ class FastSACEnv:
         critic_obs = torch.cat([obs_dict[k] for k in self._critic_obs_keys], dim=1)
         return actor_obs, critic_obs
 
-    def step(self, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
+    def step(
+        self, actions: torch.Tensor, mean_actions: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
         # Actions are now already scaled by the actor, so pass them directly to the environment
-        obs_dict, rew_buf, reset_buf, info_dict = self._env.step({"actions": actions})  # type: ignore[attr-defined]
+        actor_state: dict[str, torch.Tensor] = {"actions": actions}
+        if mean_actions is not None:
+            actor_state["mean_actions"] = mean_actions
+        obs_dict, rew_buf, reset_buf, info_dict = self._env.step(actor_state)  # type: ignore[attr-defined]
         actor_obs = torch.cat([obs_dict[k] for k in self._actor_obs_keys], dim=1)
         critic_obs = torch.cat([obs_dict[k] for k in self._critic_obs_keys], dim=1)
         if "final_observations" in info_dict:
@@ -686,9 +691,12 @@ class FastSACAgent(BaseAlgo):
             with self.logging_helper.record_collection_time():
                 with torch.no_grad(), self._maybe_amp():
                     norm_obs = normalize_obs(obs, update=False)
-                    actions = policy(obs=norm_obs, dones=dones)
+                    # Fetch the mean alongside the sample so reward terms can penalize change in
+                    # policy output rather than exploration noise. Collection-time only; the
+                    # replay buffer still stores the sampled action.
+                    actions, mean_actions = policy(obs=norm_obs, dones=dones, return_mean=True)
 
-                next_obs, rewards, dones, infos = env.step(actions.float())
+                next_obs, rewards, dones, infos = env.step(actions.float(), mean_actions.float())
                 truncations = infos["time_outs"]
 
                 # Update episode stats using logging helper

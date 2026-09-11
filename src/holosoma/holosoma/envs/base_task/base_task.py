@@ -210,6 +210,7 @@ class BaseTask:
         self._pending_episode_lengths = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self._pending_episode_update_mask = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self._pending_torque_rfi: tuple[bool, float] = (False, 0.0)
+        self._pending_mean_actions: torch.Tensor | None = None
 
     def _refresh_sim_tensors(self):
         self.simulator.refresh_sim_tensors()
@@ -441,6 +442,8 @@ class BaseTask:
     def step(self, actor_state):
         """Apply actions, advance the simulation, and return rollout buffers."""
         actions = actor_state["actions"]
+        # Stashed rather than passed down, so subclasses overriding _pre_physics_step keep working.
+        self._pending_mean_actions = actor_state.get("mean_actions")
         self._pre_physics_step(actions)
         self._physics_step()
         self._post_physics_step()
@@ -448,7 +451,7 @@ class BaseTask:
 
     def _pre_physics_step(self, actions):
         if self.action_manager is not None:
-            self.action_manager.process_actions(actions)
+            self.action_manager.process_actions(actions, self._pending_mean_actions)
 
     def _physics_step(self):
         self.simulator.hooks.emit(Phase.FRAME_BEGIN)
