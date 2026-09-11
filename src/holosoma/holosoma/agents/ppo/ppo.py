@@ -396,7 +396,9 @@ class PPO(BaseAlgo):
                 actions = self.actor.act({"actor_obs": actor_obs})
                 values = self.critic.evaluate({"critic_obs": critic_obs}).detach()
 
-                obs_dict, rewards, dones, infos = self.env.step({"actions": actions})
+                obs_dict, rewards, dones, infos = self.env.step(
+                    {"actions": actions, "mean_actions": self.actor.action_mean.detach()}
+                )
 
                 for obs_key in obs_dict:
                     obs_dict[obs_key] = obs_dict[obs_key].to(self.device)

@@ -62,17 +62,36 @@ def termination(env: LeggedRobotLocomotionManager) -> torch.Tensor:
 # ================================================================================================
 
 
-def penalty_action_rate(env: LeggedRobotLocomotionManager) -> torch.Tensor:
+def penalty_action_rate(env: LeggedRobotLocomotionManager, use_mean_action: bool = False) -> torch.Tensor:
     """Penalize changes in actions between steps.
 
     Args:
         env: The environment instance
+        use_mean_action: Penalize change in the policy's mean action rather than the sampled
+            action, so the term stops charging for exploration noise the policy cannot control.
+            The mean is also what the deployed deterministic policy outputs. Defaults to the
+            sampled action, the historical behavior.
 
     Returns:
         Reward tensor [num_envs]
+
+    Note:
+        Sampling noise adds a roughly constant offset to the sampled variant, which shrinks only
+        as the policy's action std shrinks. Entropy-regularized algorithms deliberately keep that
+        std up, so for them the offset persists and this term works against the entropy objective.
+
+        Opting in costs Markov consistency. The previous step's mean is not recoverable from the
+        stored observation, which carries the previous *sampled* action, so the reward stops being
+        a function of the stored (observation, action) pair. On-policy algorithms recompute it
+        every iteration; off-policy replay keeps rewards that the current mean would not
+        reproduce.
     """
-    actions = env.action_manager.action
-    prev_actions = env.action_manager.prev_action
+    if use_mean_action:
+        actions = env.action_manager.mean_action
+        prev_actions = env.action_manager.prev_mean_action
+    else:
+        actions = env.action_manager.action
+        prev_actions = env.action_manager.prev_action
     return torch.sum(torch.square(prev_actions - actions), dim=1)
 
 

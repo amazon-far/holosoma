@@ -124,25 +124,41 @@ class Actor(nn.Module):
 
     @torch.no_grad()
     def explore(
-        self, obs: torch.Tensor, dones: torch.Tensor | None = None, deterministic: bool = False
-    ) -> torch.Tensor:
-        _, mean, log_std = self(obs)
+        self,
+        obs: torch.Tensor,
+        dones: torch.Tensor | None = None,
+        deterministic: bool = False,
+        return_mean: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """Sample an action from the policy, optionally returning the distribution mean too.
+
+        Args:
+            obs: Normalized actor observations [num_envs, n_obs]
+            dones: Unused; accepted for signature compatibility with other policy callables
+            deterministic: Return the mean action instead of a sample
+            return_mean: Also return the mean action alongside the sample
+
+        Returns:
+            Action tensor [num_envs, n_act], or ``(action, mean_action)`` when ``return_mean``
+            is set. ``mean_action`` is squashed and scaled identically to ``action``, so it is
+            the same quantity the inference policy and the ONNX export emit.
+        """
+        mean_action, loc, log_std = self(obs)
         if deterministic:
-            if self.use_tanh:
-                tanh_mean = torch.tanh(mean)
-                return tanh_mean * self.action_scale + self.action_bias
-            return mean
-
-        std = log_std.exp()
-        dist = torch.distributions.Normal(mean, std)
-        raw_action = dist.rsample()
-
-        if self.use_tanh:
-            tanh_action = torch.tanh(raw_action)
-            action = tanh_action * self.action_scale + self.action_bias
+            action = mean_action
         else:
-            action = raw_action
+            std = log_std.exp()
+            dist = torch.distributions.Normal(loc, std)
+            raw_action = dist.rsample()
 
+            if self.use_tanh:
+                tanh_action = torch.tanh(raw_action)
+                action = tanh_action * self.action_scale + self.action_bias
+            else:
+                action = raw_action
+
+        if return_mean:
+            return action, mean_action
         return action
 
     def process_obs(self, obs: torch.Tensor) -> torch.Tensor:
