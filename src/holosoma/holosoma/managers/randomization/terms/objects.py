@@ -338,8 +338,8 @@ def randomize_object_rigid_body_mass_startup(
     DR term, order-independent). When False, mass changes and inertia is left untouched.
 
     ``mass_distribution_params`` is a config range value — a ``[lo, hi]`` pair (uniform) or a
-    ``{kind, low, high, mean, std}`` spec dict (any kind :class:`DistributionSpec` accepts) — honored
-    identically on ALL backends (IsaacGym per-actor loop, MuJoCo ``randomize_field``, project-owned IsaacSim
+    ``{kind, low, high, mean, std}`` spec dict (gaussian / log_uniform) — honored identically on ALL
+    backends (IsaacGym per-actor loop, MuJoCo ``randomize_field``, project-owned IsaacSim
     ``randomize_rigid_body_mass``), all via the shared keyed
     :meth:`holosoma.utils.sampler.TermSampler.draw`. gaussian is a truncated normal on ``[lo, hi]``;
     log_uniform requires positive bounds.

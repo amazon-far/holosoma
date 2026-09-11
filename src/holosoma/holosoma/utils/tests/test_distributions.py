@@ -69,13 +69,11 @@ def test_mean_matched_uniform_rejects_std():
 
 @pytest.mark.parametrize("mean", [0.9, 1.2, 0.5, 1.5])
 def test_mean_matched_uniform_mean_must_be_interior(mean):
-    # A mean at or outside a bound would put a piece probability at 0 or 1.
     with pytest.raises(ValueError, match="requires low < mean < high"):
         DistributionSpec(kind="mean_matched_uniform", low=0.9, high=1.2, mean=mean)
 
 
 def test_mean_matched_uniform_inverted_bounds_raise():
-    # Strict interiority subsumes the high >= low check, so this reports all three values at once.
     with pytest.raises(ValueError, match="requires low < mean < high"):
         DistributionSpec(kind="mean_matched_uniform", low=1.2, high=0.9, mean=1.0)
 
@@ -161,8 +159,6 @@ def test_uniform_in_band_and_mean():
 
 @pytest.mark.parametrize(("lo", "hi", "mean"), [(0.9, 1.2, 1.0), (-1.0, 3.0, 0.0)])
 def test_mean_matched_uniform_in_band_and_unbiased(lo, hi, mean):
-    # Same band as the uniform, but the mean lands ON the nominal value rather than the midpoint (which
-    # would be 1.05 and +1.0 kg for these two).
     spec = DistributionSpec(kind="mean_matched_uniform", low=lo, high=hi, mean=mean)
     x = _draw(spec)
     assert x.min() >= lo and x.max() <= hi
@@ -171,32 +167,28 @@ def test_mean_matched_uniform_in_band_and_unbiased(lo, hi, mean):
 
 @pytest.mark.parametrize(("lo", "hi", "mean"), [(0.9, 1.2, 1.0), (-1.0, 3.0, 0.0)])
 def test_mean_matched_uniform_piece_probabilities(lo, hi, mean):
-    # The left piece must carry p = wr / (hi - lo) (2/3 and 3/4 here). A mean-only check cannot catch
-    # the two pieces being swapped, because swapping gives mean lo + hi - m, which still equals m on a
-    # symmetric band -- hence the asymmetric bands and this explicit check.
+    # A mean-only check cannot catch the two pieces being swapped: that gives mean lo + hi - m, which
+    # still equals m on a symmetric band. Hence asymmetric bands here.
     spec = DistributionSpec(kind="mean_matched_uniform", low=lo, high=hi, mean=mean)
     x = _draw(spec)
     assert abs((x < mean).float().mean().item() - (hi - mean) / (hi - lo)) < 0.01
 
 
-# (-3.0, 2.4) is the case an EXACT midpoint test would miss: 0.5 * (-3.0 + 2.4) rounds to
-# -0.30000000000000004, so the guard has to be band-relative to fire here.
+# (-3.0, 2.4) is the band an exact-equality guard would miss: 0.5 * (-3.0 + 2.4) is
+# -0.30000000000000004.
 @pytest.mark.parametrize(("lo", "hi", "mean"), [(0.5, 1.5, 1.0), (-3.0, 2.4, -0.3), (-1.0, 1.0, 0.0)])
 def test_mean_matched_uniform_midpoint_mean_is_plain_uniform(lo, hi, mean):
-    # A midpoint mean IS a uniform, and BIT-identically so: rewriting a symmetric pair as an explicit
-    # spec must not shift an existing run's draws (the two-piece arithmetic alone agrees only to ~1 ulp).
     matched = _draw(DistributionSpec(kind="mean_matched_uniform", low=lo, high=hi, mean=mean))
     assert torch.equal(matched, _draw(DistributionSpec(kind="uniform", low=lo, high=hi)))
 
 
 def test_mean_matched_uniform_inverse_cdf_is_monotone_and_continuous():
-    # The property the inverse-CDF sampler relies on: the kink is in the DENSITY, not in the values.
     lo, hi, mean = 0.9, 1.2, 1.0
     spec = DistributionSpec(kind="mean_matched_uniform", low=lo, high=hi, mean=mean)
     x = _inverse_cdf(torch.linspace(0.0, 1.0, 100_001, dtype=torch.float64), spec)
     assert (x.diff() >= 0.0).all()
     assert x[0].item() == pytest.approx(lo) and x[-1].item() == pytest.approx(hi)
-    # Widest step is the wide piece's: wr / ((1 - p) * n) = 6e-6. A jump at the kink would blow past it.
+    # Widest step is the wide piece's: wr / ((1 - p) * n) = 6e-6.
     assert x.diff().max().item() < 1e-5
 
 
@@ -353,9 +345,8 @@ def test_quantiles_log_uniform_positive_and_log_mean():
 
 
 def test_quantiles_mean_matched_uniform_mean_near_nominal():
-    # Bucketing is only O(1/n**2)-accurate for this kind: the midpoint rule is exact on each linear
-    # piece, but the one bucket straddling the kink spans both. Mass DR draws continuously; the terms
-    # that DO bucket (friction/material) say so in their docstrings.
+    # O(1/n**2): the midpoint rule is exact on each linear piece, but the bucket straddling the kink
+    # spans both.
     lo, hi, mean = 0.9, 1.2, 1.0
     q = quantiles(DistributionSpec(kind="mean_matched_uniform", low=lo, high=hi, mean=mean), 64, _DEVICE)
     assert q.min() >= lo and q.max() <= hi
@@ -363,11 +354,11 @@ def test_quantiles_mean_matched_uniform_mean_near_nominal():
 
 
 # --------------------------------------------------------------------------------------------------
-# expectation() — the exact analytic mean, so a range's bias is computable rather than eyeballed
+# expectation()
 # --------------------------------------------------------------------------------------------------
 
 
-# Every kind and every degenerate path, each with the tolerance its sampling noise warrants.
+# Every kind and degenerate path, with the tolerance each one's sampling noise warrants.
 _EXPECTATION_CASES = [
     (DistributionSpec(kind="uniform", low=0.9, high=1.2), 1e-3),
     (DistributionSpec(kind="mean_matched_uniform", low=0.9, high=1.2, mean=1.0), 1e-3),
@@ -382,30 +373,26 @@ _EXPECTATION_CASES = [
     (DistributionSpec(kind="gaussian", low=0.0, high=1.0, mean=5.0, std=0.0), 0.0),  # clamped point mass
     (DistributionSpec(kind="gaussian", low=2.0, high=2.0), 0.0),  # zero-width band (derived std == 0)
     (DistributionSpec(kind="gaussian", low=2.0, high=2.0, mean=2.0, std=0.5), 0.0),  # ... with std > 0
-    # Deep-tail bands, where the sampler's _P_EPS clamp pins every draw to the near bound and the
-    # closed-form truncated mean stops describing it (0.17 sigma out at low=5.5). These are the cases a
-    # 1e-12 threshold silently got wrong: it never fired, so the closed form was returned regardless.
+    # Deep tail: the _P_EPS clamp pins every draw to the near bound, so the closed form no longer
+    # describes the draw (0.17 sigma out at low=5.5).
     (DistributionSpec(kind="gaussian", mean=0.0, std=1.0, low=5.5), 0.0),  # mass 1.9e-8, 100% pinned
     (DistributionSpec(kind="gaussian", mean=0.0, std=1.0, low=-10.0, high=-6.0), 0.0),  # pinned, high side
     (DistributionSpec(kind="gaussian", mean=0.0, std=1.0, low=40.0, high=50.0), 0.0),  # mass underflows
-    # Transition zone: mass 2.9e-7 is just ABOVE _P_EPS, so only ~10% of draws are pinned and NEITHER
-    # the closed form nor the bound is right. The closed form is the closer of the two (0.08 vs 0.11),
-    # so that is what expectation() returns; this pins the size of the known gap.
+    # Mass 2.9e-7 is just above _P_EPS: ~10% of draws are pinned, so neither the closed form nor the
+    # bound is exact. expectation() returns the closed form, the closer of the two; this pins the gap.
     (DistributionSpec(kind="gaussian", mean=0.0, std=1.0, low=5.0), 0.09),
 ]
 
 
 @pytest.mark.parametrize(("spec", "tol"), _EXPECTATION_CASES)
 def test_expectation_matches_empirical_mean(spec, tol):
-    # Must agree with what _inverse_cdf DRAWS, degenerate short-circuits included -- not just with the
-    # textbook formula.
+    # Must agree with what _inverse_cdf draws, degenerate short-circuits included.
     assert abs(spec.expectation() - _draw(spec).mean().item()) <= tol
 
 
 def test_expectation_exact_values():
-    # Pinned closed forms, and the evidence that motivates mean_matched_uniform: on the asymmetric band
-    # [0.9, 1.2] with a nominal of 1.0, NO other kind is unbiased -- not even a gaussian handed an
-    # explicit mean of 1.0, because the band is asymmetric about that mean.
+    # On [0.9, 1.2], no other kind has a mean of 1.0 -- not even a gaussian given mean=1.0, since that
+    # is its pre-truncation mean.
     assert DistributionSpec(low=0.9, high=1.2).expectation() == 1.05
     assert DistributionSpec(kind="mean_matched_uniform", low=0.9, high=1.2, mean=1.0).expectation() == 1.0
     log_uniform = DistributionSpec(kind="log_uniform", low=0.9, high=1.2)
