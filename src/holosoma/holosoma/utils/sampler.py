@@ -70,7 +70,11 @@ import torch
 # DistributionSpec and the config range-value types live in an import-light module so a config schema
 # can name them without pulling torch; re-exported here so a term keeps a single import for the spec
 # it parses and the sampler it draws through.
+# _INV_SQRT2 / _P_EPS are used below, not re-exported: they live in the spec module so
+# DistributionSpec.expectation() can agree with the values this module's clamp actually produces.
 from holosoma.config_types.distribution import (  # noqa: F401  (re-export)
+    _INV_SQRT2,
+    _P_EPS,
     _SUPPORTED_DISTRIBUTIONS,
     Distribution,
     DistributionLike,
@@ -78,10 +82,7 @@ from holosoma.config_types.distribution import (  # noqa: F401  (re-export)
 )
 
 # Phi(x) = 0.5 * (1 + erf(x / sqrt(2))); Phi^{-1}(p) = sqrt(2) * erfinv(2p - 1).
-_INV_SQRT2 = 1.0 / math.sqrt(2.0)
 _SQRT2 = math.sqrt(2.0)
-# Keep the inverse-CDF argument off the ±1 singularities of erfinv (which map to ±inf).
-_P_EPS = 1e-7
 
 
 def _inverse_cdf(u: torch.Tensor, spec: DistributionSpec) -> torch.Tensor:
@@ -94,6 +95,21 @@ def _inverse_cdf(u: torch.Tensor, spec: DistributionSpec) -> torch.Tensor:
     if spec.kind == "uniform":
         lo, hi = float(spec.low), float(spec.high)  # type: ignore[arg-type]
         return lo + (hi - lo) * u
+
+    if spec.kind == "mean_matched_uniform":
+        # Two-piece uniform: [lo, m] w.p. p = wr / (hi - lo), else [m, hi]; the lever rule puts E[X] on
+        # m. Inverse CDF is piecewise linear with a kink at (p, m) — continuous and monotone.
+        lo, hi = float(spec.low), float(spec.high)  # type: ignore[arg-type]
+        m = float(spec.mean)  # type: ignore[arg-type]
+        # A midpoint mean is a plain uniform; take that path so the two agree bit-for-bit (the two-piece
+        # arithmetic below is off by ~1 ulp). Band-relative rather than exact because 0.5 * (lo + hi)
+        # rounds for many bands -- the midpoint of [-3.0, 2.4] is -0.30000000000000004.
+        if abs(m - 0.5 * (lo + hi)) <= 1e-12 * (hi - lo):
+            return lo + (hi - lo) * u
+        wl, wr = m - lo, hi - m
+        p = wr / (wl + wr)  # left-piece probability; strictly in (0, 1) since lo < m < hi (validated)
+        x = torch.where(u < p, lo + (u / p) * wl, m + ((u - p) / (1.0 - p)) * wr)
+        return torch.clamp(x, min=lo, max=hi)  # guard residual float drift at the ends
 
     if spec.kind == "log_uniform":
         lo, hi = float(spec.low), float(spec.high)  # type: ignore[arg-type]

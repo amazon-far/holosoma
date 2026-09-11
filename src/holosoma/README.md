@@ -284,3 +284,12 @@ python src/holosoma/holosoma/train_agent.py \
     --randomization.setup-terms.randomize-base-com-startup.params.enabled=True \
     --randomization.setup-terms.mass-randomizer.params.added-mass-range=[-1.0,3.0]
 ```
+
+A bare `[lo, hi]` pair is a uniform distribution, whose mean is the band's midpoint. To span the same
+band with the mean at a specific value instead, set the range as a `mean_matched_uniform` spec:
+
+```python
+"added_mass_range": {"kind": "mean_matched_uniform", "low": -1.0, "high": 3.0, "mean": 0.0},
+```
+
+`DistributionSpec.expectation()` returns the mean of any range.
