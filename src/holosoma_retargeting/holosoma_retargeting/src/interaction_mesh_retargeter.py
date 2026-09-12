@@ -135,9 +135,11 @@ class InteractionMeshRetargeter:
         self.nq = self.robot_model.nq
 
         self.q_a_init_idx = q_a_init_idx
-        self.q_a_indices = np.arange(7 + self.q_a_init_idx, 7 + self.task_constants.ROBOT_DOF)
+        self.robot_nq = 7 + self.task_constants.ROBOT_DOF
+        self.q_a_indices = self._build_active_qpos_indices(q_a_init_idx, self.task_constants.ROBOT_DOF)
 
         self.nq_a = len(self.q_a_indices)
+        self._qpos_to_active_index = {qpos_idx: i for i, qpos_idx in enumerate(self.q_a_indices)}
 
         # Create complete limits with floating base (-inf, inf) and actuated joint limits
         n_floating_base = 7
@@ -155,22 +157,52 @@ class InteractionMeshRetargeter:
         self.q_a_lb = complete_lower_limits[self.q_a_indices]
         self.q_a_ub = complete_upper_limits[self.q_a_indices]
 
-        self.q_a_lb[np.array(list(self.task_constants.MANUAL_LB.keys())).astype(int)] = list(
-            self.task_constants.MANUAL_LB.values()
-        )
-        self.q_a_ub[np.array(list(self.task_constants.MANUAL_UB.keys())).astype(int)] = list(
-            self.task_constants.MANUAL_UB.values()
-        )
+        self._apply_global_qpos_overrides(self.q_a_lb, self.task_constants.MANUAL_LB, "MANUAL_LB")
+        self._apply_global_qpos_overrides(self.q_a_ub, self.task_constants.MANUAL_UB, "MANUAL_UB")
 
         # Prevent too much waist twist
         self.Q_diag = np.zeros(self.nq_a) * 1e-3
-        self.Q_diag[np.array(list(self.task_constants.MANUAL_COST.keys())).astype(int)] = list(
-            self.task_constants.MANUAL_COST.values()
-        )
+        self._apply_global_qpos_overrides(self.Q_diag, self.task_constants.MANUAL_COST, "MANUAL_COST")
 
         self.w_nominal_tracking_init = w_nominal_tracking_init
         self.nominal_tracking_tau = nominal_tracking_tau
-        self.track_nominal_indices = task_constants.NOMINAL_TRACKING_INDICES
+        track_nominal_indices = []
+        for global_index in task_constants.NOMINAL_TRACKING_INDICES:
+            active_index = self._active_index_for_global_qpos(global_index, "NOMINAL_TRACKING_INDICES")
+            if active_index is not None:
+                track_nominal_indices.append(active_index)
+        self.track_nominal_indices = np.asarray(track_nominal_indices, dtype=int)
+
+    @staticmethod
+    def _build_active_qpos_indices(q_a_init_idx: int, robot_dof: int) -> np.ndarray:
+        """Return active robot-qpos indices, excluding the root quaternion in -3 mode."""
+        robot_nq = 7 + robot_dof
+        if q_a_init_idx == -7:
+            return np.arange(robot_nq, dtype=int)
+        if q_a_init_idx == -3:
+            return np.concatenate([np.arange(3, dtype=int), np.arange(7, robot_nq, dtype=int)])
+        if 0 <= q_a_init_idx < robot_dof:
+            return np.arange(7 + q_a_init_idx, robot_nq, dtype=int)
+        raise ValueError(
+            "q_a_init_idx must be -7 (floating base), -3 (base translation), "
+            f"or an actuated-joint offset in [0, {robot_dof - 1}]; got {q_a_init_idx}"
+        )
+
+    def _active_index_for_global_qpos(self, global_index, field_name: str) -> int | None:
+        """Map a global robot-qpos index to the active vector, returning None for locked coordinates."""
+        global_index = int(global_index)
+        if not 0 <= global_index < self.robot_nq:
+            raise ValueError(
+                f"{field_name} contains robot qpos index {global_index}, but valid indices are [0, {self.robot_nq - 1}]"
+            )
+        return self._qpos_to_active_index.get(global_index)
+
+    def _apply_global_qpos_overrides(self, target: np.ndarray, overrides, field_name: str) -> None:
+        """Apply globally indexed configuration values to an active-coordinate vector."""
+        for raw_index, value in overrides.items():
+            active_index = self._active_index_for_global_qpos(raw_index, field_name)
+            if active_index is not None:
+                target[active_index] = value
 
     def _init_foot_lock(self, foot_lock: FootLockConfig | None) -> None:
         """Initialize foot lock configuration and normalize window mappings."""
@@ -396,8 +428,8 @@ class InteractionMeshRetargeter:
             object_points_local (np.ndarray | list[np.ndarray]): Current object points in local frame.
                 Single array for static points, or list of num_frames arrays for per-frame points.
             foot_sticking_sequences (list): List of foot sticking sequences for each frame.
-            q_a_init (np.ndarray, optional): Initial robot configuration.
-            q_a_nominal (np.ndarray, optional): Nominal robot configuration.
+            q_a_init (np.ndarray, optional): Complete robot qpos, including locked coordinates in reduced modes.
+            q_nominal_list (np.ndarray, optional): Complete per-frame model qpos.
 
         Returns:
             tuple: (retargeted_motions, obj_pts_demo_list, obj_pts_list, tetrahedra)
@@ -411,11 +443,7 @@ class InteractionMeshRetargeter:
             assert len(object_points_local) == num_frames, (
                 f"object_points_local length {len(object_points_local)} != num_frames {num_frames}"
             )
-        if q_nominal_list is not None:
-            q_locked_list = q_nominal_list
-        else:
-            q_locked_list = np.zeros((num_frames, self.nq))
-            q_locked_list[0, self.q_a_indices] = q_a_init
+        q_locked_list = self._initialize_locked_configurations(num_frames, q_a_init, q_nominal_list)
 
         q_locked_list[:, -7:] = object_poses_augmented
         q = np.copy(q_locked_list[0])
@@ -573,6 +601,33 @@ class InteractionMeshRetargeter:
             tetrahedra,
         )
 
+    def _initialize_locked_configurations(
+        self,
+        num_frames: int,
+        q_a_init: np.ndarray | None,
+        q_nominal_list: np.ndarray | None,
+    ) -> np.ndarray:
+        """Initialize full configurations while preserving locked coordinates in every frame."""
+        if q_nominal_list is not None:
+            q_locked_list = np.array(q_nominal_list, dtype=float, copy=True)
+            expected_shape = (num_frames, self.nq)
+            if q_locked_list.shape != expected_shape:
+                raise ValueError(f"q_nominal_list must have shape {expected_shape}; got {q_locked_list.shape}")
+            return q_locked_list
+
+        if q_a_init is None:
+            raise ValueError("q_a_init is required when q_nominal_list is not provided")
+        q_init = np.asarray(q_a_init, dtype=float)
+        if q_init.shape != (self.robot_nq,):
+            raise ValueError(
+                "q_a_init must be a complete robot qpos so locked coordinates have defined values; "
+                f"expected shape ({self.robot_nq},), got {q_init.shape}"
+            )
+
+        q_locked_list = np.zeros((num_frames, self.nq))
+        q_locked_list[:, : self.robot_nq] = q_init
+        return q_locked_list
+
     def solve_single_iteration(
         self,
         q_locked: np.ndarray,
@@ -646,7 +701,7 @@ class InteractionMeshRetargeter:
         constraints = []
 
         # Linear equality
-        constraints += [cp.Constant(J_L[:, self.q_a_indices]) @ dqa - lap_var == -lap0_vec]
+        constraints += [cp.Constant(J_L) @ dqa - lap_var == -lap0_vec]
 
         # Foot constraints (sticking + foot lock window Z pinning)
         apply_foot_sticking = (self.q_a_init_idx < 12) and self.activate_foot_sticking
@@ -675,7 +730,7 @@ class InteractionMeshRetargeter:
                         p_lb = p_WF_t_last_dict[key] - p_WF_dict[key] - self.foot_sticking_tolerance
                         p_ub = p_lb + 2 * self.foot_sticking_tolerance  # symmetric window
 
-                        Jxy = J_WF[:2, self.q_a_indices]  # (2 x nq_act)
+                        Jxy = J_WF[:2, :]  # (2 x nq_act)
                         constraints += [
                             Jxy @ dqa >= p_lb[:2],
                             Jxy @ dqa <= p_ub[:2],
@@ -689,7 +744,7 @@ class InteractionMeshRetargeter:
                         continue
 
                     z_delta = z_anchor - p_WF_dict[key][2]
-                    Jz = J_WF[2, self.q_a_indices]
+                    Jz = J_WF[2, :]
                     constraints += [
                         Jz @ dqa >= z_delta - self.foot_lock.tolerance,
                         Jz @ dqa <= z_delta + self.foot_lock.tolerance,
