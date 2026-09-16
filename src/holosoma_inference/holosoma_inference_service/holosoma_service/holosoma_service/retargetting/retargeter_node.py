@@ -50,7 +50,9 @@ class RetargeterNode(Node):
             return
         q, dq, wxyz = self._rt.retarget(_to_transforms(msg))
         out = CmdDense()
-        out.header.stamp = self.get_clock().now().to_msg()
+        # Forward the source teleop stamp (not retargeter production time) so
+        # downstream obs/action can be matched back to the teleop input.
+        out.header.stamp = msg.header.stamp
         out.joint_names = self._joint_names
         out.q = np.asarray(q, dtype=np.float32).tolist()
         out.dq = np.asarray(dq, dtype=np.float32).tolist()

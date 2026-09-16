@@ -24,7 +24,7 @@ from holosoma_inference.sdk import create_interface
 from holosoma_inference.utils.latency import LatencyTracker
 from holosoma_inference.utils.math.quat import quat_rotate_inverse
 from holosoma_inference.utils.rate import RateLimiter
-from holosoma_inference.utils.wandb import load_checkpoint
+from holosoma_inference.utils.wandb import _resolve_wandb_source, load_checkpoint
 
 # Maps SWITCH_POLICY_N commands to 0-based policy indices.
 STATE_COMMAND_TO_POLICY_INDEX: dict[StateCommand, int] = {
@@ -168,6 +168,15 @@ class BasePolicy:
         self.rl_rate = rl_rate
         self.model_paths = self._collect_model_paths(model_path)
         self._policy_states: list[dict] = []
+        # Original CLI source paths (kept alongside resolved local paths) so a
+        # wandb:// / wandb-HTTPS launch keeps its run id even after download.
+        self._source_paths: list[str] = [str(p) for p in self.model_paths]
+        # W&B run id of the active policy; mirrored on _activate_policy so
+        # telemetry can tag each Observation/Action with its source run.
+        self.wandb_id: str | None = None
+        # Telemetry hook: (actor_obs, raw_action) every RL tick. Default no-op;
+        # the service node overrides it to publish obs/action ROS topics.
+        self._on_observation = lambda _actor_obs, _raw_action: None
         self.last_policy_action = np.zeros((1, self.num_dofs))
         self.scaled_policy_action = np.zeros((1, self.num_dofs))
         resolved_paths: list[str] = []
@@ -213,6 +222,16 @@ class BasePolicy:
             return resolved_path
         return model_path
 
+    def _resolve_wandb_id(self, index: int) -> str | None:
+        """W&B run id for policy ``index``: CLI wandb:// path first, else the
+        run path stamped into the ONNX metadata at export (survives local runs)."""
+        if index < len(self._source_paths):
+            run_id = _resolve_wandb_source(None, self._source_paths[index])[1]
+            if run_id is not None:
+                return run_id
+        run_path = getattr(self, "onnx_wandb_run_path", None)  # active policy's metadata
+        return run_path.rsplit("/", 1)[-1] if run_path else None
+
     def _capture_policy_state(self) -> dict:
         """Capture the current policy state for later reuse."""
         return {
@@ -222,6 +241,7 @@ class BasePolicy:
             "policy_callable": self.policy,
             "onnx_kp": self.onnx_kp,
             "onnx_kd": self.onnx_kd,
+            "onnx_wandb_run_path": getattr(self, "onnx_wandb_run_path", None),
         }
 
     def _restore_policy_state(self, state: dict):
@@ -232,6 +252,7 @@ class BasePolicy:
         self.policy = state["policy_callable"]
         self.onnx_kp = state["onnx_kp"]
         self.onnx_kd = state["onnx_kd"]
+        self.onnx_wandb_run_path = state.get("onnx_wandb_run_path")
 
     def _activate_policy(self, index: int, announce: bool = True):
         """Activate a preloaded policy."""
@@ -243,6 +264,7 @@ class BasePolicy:
         self.scaled_policy_action.fill(0.0)
         self.active_policy_index = index
         self.active_model_path = self.model_paths[index]
+        self.wandb_id = self._resolve_wandb_id(index)
         self._on_policy_switched(self.active_model_path)
 
         if announce and len(self.model_paths) > 1 and hasattr(self, "logger"):
@@ -403,6 +425,10 @@ class BasePolicy:
         self.onnx_kp = np.array(metadata["kp"]) if "kp" in metadata else None
         self.onnx_kd = np.array(metadata["kd"]) if "kd" in metadata else None
 
+        # Provenance stamped at export ("<entity>/<project>/<run_id>"); travels
+        # with the artifact, so a local .onnx still resolves its wandb_id.
+        self.onnx_wandb_run_path = metadata.get("wandb_run_path")
+
         if self.onnx_kp is not None:
             logger.info(f"Loaded KP/KD from ONNX metadata: {Path(model_path).name}")
 
@@ -470,6 +496,33 @@ class BasePolicy:
                 obs_dim_dict[key] += self.obs_dims[obs_name]
         return obs_dim_dict
 
+    def get_observation_terms(self) -> dict:
+        """Self-describing schema of the flattened observation vector.
+
+        Mirrors the per-group concat order in ``_update_obs_history`` (terms are
+        emitted in ``obs_terms_sorted`` order, each spanning ``dim * history_len``
+        floats) so a consumer can slice ``/holosoma/observation`` by name without
+        holosoma source at a matching commit.
+        """
+        groups: dict[str, dict] = {}
+        for group, terms in self.obs_terms_sorted.items():
+            history_len = self.history_length_dict.get(group, 1)
+            start, entries = 0, []
+            for term in terms:
+                total_dim = self.obs_dims[term] * history_len
+                entries.append(
+                    {
+                        "name": term,
+                        "start": start,
+                        "dim": self.obs_dims[term],
+                        "history_len": history_len,
+                        "total_dim": total_dim,
+                    }
+                )
+                start += total_dim
+            groups[group] = {"total_dim": start, "terms": entries}
+        return {"schema_version": 1, "dtype": "float32", "wandb_id": self.wandb_id, "groups": groups}
+
     def _print_observations(self, obs: dict[str, np.ndarray]) -> None:
         """Print observation vector with term naming for debugging.
 
@@ -531,6 +584,9 @@ class BasePolicy:
         self.scaled_policy_action = policy_action * self.policy_action_scale
         if self.config.task.debug.force_zero_action:
             self.scaled_policy_action = np.zeros_like(self.scaled_policy_action)
+
+        # Telemetry: exact tensors seen/produced by the net (raw, pre-scale).
+        self._on_observation(obs["actor_obs"], self.last_policy_action)
 
         return self.scaled_policy_action
 
