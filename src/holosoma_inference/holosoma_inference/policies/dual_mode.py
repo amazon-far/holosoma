@@ -1,4 +1,22 @@
-"""Dual-mode policy with runtime switching between two policy instances."""
+"""Multi-mode policy with runtime switching between N policy instances.
+
+``MultiModePolicy`` wraps N already-constructed policy instances (potentially
+different classes) that share one set of hardware — index 0 owns the hardware
+(SDK, interface, input providers) and the rest were built with
+``_shared_hardware_source = policies[0]`` (see ``BasePolicy``). Exactly one is
+``active`` at a time; its control loop runs while the others stay dormant.
+
+Switching:
+  * ``switch_mode`` (keyboard ``x`` / joystick ``X`` / the injected ROS2 string)
+    advances to the NEXT policy in the ring.
+  * ``select(name)`` / ``select(index)`` jumps to a specific registered policy —
+    this is what a client (e.g. far-pi) drives over ``holosoma/select_policy``.
+Per-policy CHECKPOINT switching (``SWITCH_POLICY_1..9`` over ``model_path``) is
+unchanged and still handled inside each policy.
+
+``DualModePolicy`` is kept as a thin 2-policy compatibility shim that builds its
+two policies and delegates to ``MultiModePolicy``.
+"""
 
 from __future__ import annotations
 
@@ -55,88 +73,150 @@ def _select_policy_class(config: InferenceConfig):
     return LocomotionPolicy
 
 
-class DualModePolicy:
-    """Wraps two policy instances (potentially different classes) with X-button switching.
+class MultiModePolicy:
+    """Runtime switching across N pre-built policy instances sharing one HW set.
 
-    The primary policy is fully initialized and owns the hardware (SDK, interface,
-    input handlers). The secondary policy reuses the primary's hardware via the
-    _shared_hardware_source guard pattern in BasePolicy.
+    Construct with the already-built policies (index 0 = hardware owner) and their
+    switch-key ``names`` (same order). The service node builds each policy with the
+    right injected inputs/sensors and hands them here; this class owns only the
+    switching + run loop, not construction — so per-policy sensor injection stays
+    in the node.
 
-    Press X (joystick) or x (keyboard) to switch between policies at runtime.
-    The existing Select/1-9 multi-model switching still works within each policy.
+    An optional ``on_switch`` callback (``fn(index, name) -> None``) fires after
+    every activation (initial + each switch) so the node can publish policy status.
+
+    Run-status safety today is coarse: a switch never auto-starts the target (D5)
+    and ``select`` refuses to switch while the active policy is running. This is a
+    safety interlock, not a formal FSM. TODO(fsm): a proper run-status FSM should
+    live PER POLICY TYPE — each policy variant declaring/validating its own legal
+    transitions (STIFF_HOLD → GET_READY → RUNNING, and what a switch/start/stop is
+    allowed to do from each) — with this wrapper deferring to that contract rather
+    than reading raw ``use_policy_action``. Owner: coordinate with the run-status
+    FSM author (jtomasle) since it touches the shared base command layer.
     """
 
-    def __init__(self, primary_config: InferenceConfig, secondary_config: InferenceConfig):
-        primary_cls = _select_policy_class(primary_config)
-        secondary_cls = _select_policy_class(secondary_config)
+    def __init__(self, policies, names, active_index: int = 0, on_switch=None):
+        if not policies:
+            raise ValueError("MultiModePolicy requires at least one policy")
+        if len(policies) != len(names):
+            raise ValueError(f"policies ({len(policies)}) and names ({len(names)}) length mismatch")
+        if len(set(names)) != len(names):
+            raise ValueError(f"policy names must be unique, got {names}")
+        if not (0 <= active_index < len(policies)):
+            raise ValueError(f"active_index {active_index} out of range for {len(policies)} policies")
 
-        logger.info(
-            colored(f"Dual-mode: primary={primary_cls.__name__}, secondary={secondary_cls.__name__}", "magenta")
-        )
+        self.policies = list(policies)
+        self.names = list(names)
+        self._name_to_index = {n: i for i, n in enumerate(self.names)}
+        self.active_index = active_index
+        self._on_switch = on_switch
 
-        # Fully init primary (owns hardware)
-        self.primary = primary_cls(config=primary_config)
-
-        # Init secondary with shared hardware
-        logger.info(colored("Initializing secondary policy (shared hardware)...", "magenta"))
-        secondary = object.__new__(secondary_cls)
-        secondary._shared_hardware_source = self.primary
-        secondary.__init__(config=secondary_config)
-        self.secondary = secondary
-
-        self.active = self.primary
-        self.active_label = "primary"
+        self.active = self.policies[self.active_index]
+        self.active_label = self.names[self.active_index]
 
         self._setup_command_intercept()
-        logger.info(colored("Dual-mode ready. Press X (joystick) or x (keyboard) to switch policies.", "magenta"))
+        if len(self.policies) > 1:
+            logger.info(
+                colored(
+                    f"Multi-mode ready with {len(self.policies)} policies {self.names}; "
+                    f"active={self.active_label}. Publish 'switch_mode' or select by name to swap.",
+                    "magenta",
+                )
+            )
+        if self._on_switch is not None:
+            self._on_switch(self.active_index, self.active_label)
 
     def _setup_command_intercept(self):
-        """Inject SWITCH_MODE into mappings and patch dispatch for routing.
+        """Route SWITCH_MODE to the ring-advance handler across all policies.
 
-        Keyboard queue wiring is handled by the factory — the secondary's
-        ``KeyboardInput`` gets its own subscriber queue from the shared
-        ``_KeyboardListenerThread``.  Only ``_dispatch_command`` needs
-        patching to intercept SWITCH_MODE.
+        Every policy's ``_dispatch_command`` is patched so that whichever one is
+        active, a SWITCH_MODE advances the ring; all other commands go to the
+        active policy's original dispatch. Keyboard/joystick providers also get
+        ``x``/``X`` mapped to SWITCH_MODE (injected ROS2 providers map the
+        ``"switch_mode"`` string natively, so they need no mapping edit).
         """
         from holosoma_inference.inputs.api.commands import StateCommand
 
-        # Inject SWITCH_MODE into both command providers' key mappings (joystick X,
-        # keyboard x). Only keyboard/joystick providers expose ``_mapping``; others
-        # (e.g. injected ROS2 providers, which map the "switch_mode" string to
-        # SWITCH_MODE natively) are intercepted purely via the dispatch patch below.
-        for policy in (self.primary, self.secondary):
+        for policy in self.policies:
             mapping = getattr(policy._command_provider, "_mapping", None)
             if mapping is not None:
                 mapping["X"] = StateCommand.SWITCH_MODE
                 mapping["x"] = StateCommand.SWITCH_MODE
 
-        # Patch _dispatch_command to intercept SWITCH_MODE
-        self._orig_dispatch = {
-            id(self.primary): self.primary._dispatch_command,
-            id(self.secondary): self.secondary._dispatch_command,
-        }
+        self._orig_dispatch = {id(p): p._dispatch_command for p in self.policies}
 
         def patched_dispatch(cmd):
             if cmd == StateCommand.SWITCH_MODE:
-                self._handle_mode_switch()
+                self.switch_to_next()
             else:
                 self._orig_dispatch[id(self.active)](cmd)
 
-        self.primary._dispatch_command = patched_dispatch
-        self.secondary._dispatch_command = patched_dispatch
+        for policy in self.policies:
+            policy._dispatch_command = patched_dispatch
 
-    def _handle_mode_switch(self):
-        """Switch from active to inactive policy."""
+    def switch_to_next(self):
+        """Advance to the next policy in the ring (the ``switch_mode`` toggle).
+
+        Routes through ``select`` so the running-policy guard applies here too:
+        the toggle is refused while the active policy is running (stop first).
+        """
+        self.select((self.active_index + 1) % len(self.policies))
+
+    def select(self, target, force: bool = False) -> bool:
+        """Switch to a policy by ``name`` (str) or ``index`` (int).
+
+        Returns True if a switch occurred, False otherwise (unknown/out-of-range
+        target, already active, or refused because the active policy is running).
+        Never raises on a bad target — a stray select message from a client must
+        not crash the running policy.
+
+        Guard: a switch is REFUSED while the active policy is running
+        (``use_policy_action``), unless ``force=True``. Yanking the active policy
+        out from under a moving robot is unsafe; the operator must stop first, then
+        switch, then explicitly start the target (D5). This is a coarse safety
+        interlock, not a full run-status FSM — see the class note.
+        """
+        if isinstance(target, str):
+            index = self._name_to_index.get(target)
+            if index is None:
+                logger.warning(f"select: unknown policy name {target!r}; known={self.names}")
+                return False
+        else:
+            index = int(target)
+            if not (0 <= index < len(self.policies)):
+                logger.warning(f"select: index {index} out of range for {len(self.policies)} policies")
+                return False
+        if index == self.active_index:
+            return False
+        if not force and getattr(self.active, "use_policy_action", False):
+            logger.warning(
+                f"select: refused switch to {self.names[index]!r} — active policy "
+                f"{self.active_label!r} is running; stop it first (or select(force=True))."
+            )
+            return False
+        self._activate(index)
+        return True
+
+    def _activate(self, index: int):
+        """Make ``policies[index]`` the active policy, STOPPED and awaiting an
+        explicit start.
+
+        A switch does NOT auto-start the target: over ROS2 the caller can't see the
+        robot's run status, so force-starting would be a surprise (potential sudden
+        motion). We stop the outgoing policy, hand the shared hardware to the target
+        in a stopped state (gains resolved, phase re-init), and leave it to the
+        operator to issue an explicit ``start`` — mirroring the boot-in-stiff-hold
+        contract. Run status therefore does not carry across a switch.
+        """
         self.active._handle_stop_policy()
 
-        target = self.secondary if self.active is self.primary else self.primary
-        target_label = "secondary" if target is self.secondary else "primary"
+        target = self.policies[index]
 
-        # Update KP/KD on the shared interface for the target policy
+        # Re-resolve control gains for the target on the shared interface.
         target._resolve_control_gains()
 
         # Carry over joystick key_states so edge detection doesn't see a false
-        # rising edge on the X button (which is still physically held down).
+        # rising edge on the button that is still physically held during the swap.
         from holosoma_inference.inputs.impl.interface import InterfaceInput
 
         active_dev = self.active._velocity_input
@@ -145,23 +225,28 @@ class DualModePolicy:
             target_dev.key_states = active_dev.key_states.copy()
             target_dev.last_key_states = active_dev.key_states.copy()
 
+        self.active_index = index
         self.active = target
-        self.active_label = target_label
+        self.active_label = self.names[index]
 
-        # Re-initialize phase and activate
+        # Re-init phase, then leave the target STOPPED (no auto-start; explicit
+        # ``start`` required). Stop is idempotent and puts it in a defined state.
         self.active._init_phase_components()
-        self.active._handle_start_policy()
+        self.active._handle_stop_policy()
 
         logger.info(
             colored(
-                f"Switched to {self.active_label} policy ({type(self.active).__name__})",
+                f"Activated policy [{index + 1}/{len(self.policies)}] "
+                f"'{self.active_label}' ({type(self.active).__name__}) — STOPPED, awaiting 'start'.",
                 "magenta",
                 attrs=["bold"],
             )
         )
+        if self._on_switch is not None:
+            self._on_switch(self.active_index, self.active_label)
 
     def run(self):
-        """Main run loop — delegates to the active policy."""
+        """Main run loop — delegates to the active policy each cycle."""
         try:
             for it in itertools.count():
                 self.active.latency_tracker.start_cycle()
@@ -193,3 +278,32 @@ class DualModePolicy:
 
         except KeyboardInterrupt:
             pass
+
+
+class DualModePolicy(MultiModePolicy):
+    """Back-compat 2-policy shim: builds primary + secondary, delegates to MultiModePolicy.
+
+    Retained for the original standalone dual-mode entry (primary owns hardware,
+    secondary shares it). New code should build N policies and use MultiModePolicy
+    directly (the service node does). ``self.primary`` / ``self.secondary`` are
+    exposed for callers that referenced them.
+    """
+
+    def __init__(self, primary_config: InferenceConfig, secondary_config: InferenceConfig):
+        primary_cls = _select_policy_class(primary_config)
+        secondary_cls = _select_policy_class(secondary_config)
+        logger.info(
+            colored(f"Dual-mode: primary={primary_cls.__name__}, secondary={secondary_cls.__name__}", "magenta")
+        )
+
+        # Fully init primary (owns hardware).
+        primary = primary_cls(config=primary_config)
+        # Init secondary with shared hardware.
+        logger.info(colored("Initializing secondary policy (shared hardware)...", "magenta"))
+        secondary = object.__new__(secondary_cls)
+        secondary._shared_hardware_source = primary
+        secondary.__init__(config=secondary_config)
+
+        self.primary = primary
+        self.secondary = secondary
+        super().__init__([primary, secondary], names=["primary", "secondary"], active_index=0)

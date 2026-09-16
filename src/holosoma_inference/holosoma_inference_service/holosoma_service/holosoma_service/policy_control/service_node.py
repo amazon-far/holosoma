@@ -16,11 +16,13 @@ state providers and injects them via the ``"injected"`` input source.
                                   every tick ─▶ executed_cmd + heartbeat
                               ── all on ONE node, ONE spin thread ──
 
-The policy is built like ``run_policy.py`` (``_select_policy_class`` /
-``DualModePolicy``); injected providers are attached *before* ``__init__`` runs
-(the base policy creates its providers during construction). In dual-mode only
-the primary needs injection — the secondary reuses the primary's providers via
-``_shared_hardware_source``.
+The policy is built via ``_select_policy_class``; injected providers are attached
+*before* ``__init__`` runs (the base policy creates its providers during
+construction). For N registered policies (``MultiModePolicy``) the index-0 owner
+takes the injected providers and the peers reuse them via
+``_shared_hardware_source``; each policy gets its OWN sensors. A client reads the
+registry on ``/holosoma/policy_status`` and switches via ``/holosoma/select_policy``
+(by name) or ``/holosoma/select_checkpoint`` (index within the active policy).
 
 This is also the WBT entrypoint (it replaces the former ``holosoma_node``): a WBT
 preset resolves to its policy class via ``config.task.policy_type`` →
@@ -41,11 +43,11 @@ import rclpy
 from holosoma_msgs.msg import CmdDense, Heartbeat
 from loguru import logger
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState
 
 from holosoma_inference.config.config_values.inference import get_annotated_inference_config
-from holosoma_inference.policies.dual_mode import DualModePolicy, _select_policy_class
+from holosoma_inference.policies.dual_mode import MultiModePolicy, _select_policy_class
 from holosoma_inference.sensors.base import Sensor
 from holosoma_inference.utils.config_registry import parse_config
 from holosoma_service.policy_control.injected_inputs import (
@@ -59,6 +61,64 @@ DENSE_TOPIC = "/holosoma/dense_tracking_command"
 EXECUTED_CMD_TOPIC = "/holosoma/holosoma_executed_cmd"
 HEARTBEAT_TOPIC = "/holosoma/heartbeat"
 HEARTBEAT_EVERY = 10  # control ticks -> 5 Hz at a 50 Hz control loop
+
+# Multi-policy interface: clients read the registry and switch by name / checkpoint.
+POLICY_STATUS_TOPIC = "/holosoma/policy_status"
+SELECT_POLICY_TOPIC = "/holosoma/select_policy"
+SELECT_CHECKPOINT_TOPIC = "/holosoma/select_checkpoint"
+
+
+def _basename(path: str) -> str:
+    """Filename for status display; tolerant of empty/None."""
+    return path.rsplit("/", 1)[-1] if path else ""
+
+
+def _control_type(policy) -> str:
+    """The command-contract category a consumer keys off: 'WBT' | 'LOCOMOTION'.
+
+    Explicit ``policy.CONTROL_TYPE`` wins (extensions may declare it); else infer
+    from the observation contract — a ``motion_command`` obs term means the policy
+    consumes a dense per-DOF tracking target (WBT), otherwise it is velocity-driven
+    locomotion.
+    """
+    declared = getattr(policy, "CONTROL_TYPE", None)
+    if declared:
+        return str(declared)
+    obs = getattr(getattr(policy, "config", None), "observation", None)
+    actor_obs = getattr(obs, "obs_dict", {}).get("actor_obs", []) if obs else []
+    return "WBT" if "motion_command" in actor_obs else "LOCOMOTION"
+
+
+def _interface_id(policy) -> str:
+    """Semantic id of the command interface the policy speaks (D3 / interface_id).
+
+    Prefer an explicit ``task.interface_id``; else fall back to ``task.policy_type``
+    (the by_type key), which identifies the command contract in practice.
+    """
+    task = getattr(getattr(policy, "config", None), "task", None)
+    return str(getattr(task, "interface_id", "") or getattr(task, "policy_type", "") or "")
+
+
+def build_sensors(node: Node, task_config) -> dict[str, Sensor]:
+    """Build the injected sensors for one policy from its own ``task`` config.
+
+    Called per registered policy so each gets sensors sized from its own
+    ``task.depth`` (policies may have different sensor configs). Empty
+    ``task.depth.topics`` -> no sensors.
+    """
+    sensors: dict[str, Sensor] = {}
+    depth_cfg = getattr(task_config, "depth", None) if task_config else None
+    if depth_cfg is not None and depth_cfg.topics:
+        sensors["depth"] = Ros2DepthConsumer(
+            node,
+            topics=list(depth_cfg.topics),
+            resized_height=depth_cfg.resized_height,
+            resized_width=depth_cfg.resized_width,
+            near_clip=depth_cfg.near_clip,
+            far_clip=depth_cfg.far_clip,
+            frame_delay_ms=depth_cfg.frame_delay_ms,
+        )
+    return sensors
 
 # This node loads rclpy in-process, which clashes with the Unitree SDK's bundled
 # CycloneDDS (heap corruption / "free(): invalid pointer" at SDK init). The
@@ -84,19 +144,9 @@ class ServiceIONode(Node):
         # state_input == "injected".
         self.input = InjectedRos2Input(self, CMD_VEL_TOPIC, STATE_INPUT_TOPIC, vel_timeout=vel_timeout)
 
-        # --- Sensors: keyed by name, injected into the policy before __init__ ---
-        self.sensors: dict[str, Sensor] = {}
-        depth_cfg = getattr(task_config, "depth", None) if task_config else None
-        if depth_cfg is not None and depth_cfg.topics:
-            self.sensors["depth"] = Ros2DepthConsumer(
-                self,
-                topics=list(depth_cfg.topics),
-                resized_height=depth_cfg.resized_height,
-                resized_width=depth_cfg.resized_width,
-                near_clip=depth_cfg.near_clip,
-                far_clip=depth_cfg.far_clip,
-                frame_delay_ms=depth_cfg.frame_delay_ms,
-            )
+        # Sensors for the owner (single-policy path). Multi-policy builds per-policy
+        # sensors in _build_policy; each gets its own from its own task.depth.
+        self.sensors: dict[str, Sensor] = build_sensors(self, task_config)
 
         # --- Input: dense tracking target (WBT only); attached on demand ---
         self._cmd = np.zeros((1, 2 * num_dofs), dtype=np.float32)  # held until first frame
@@ -109,6 +159,72 @@ class ServiceIONode(Node):
         self._cmd_pub = self.create_publisher(JointState, EXECUTED_CMD_TOPIC, 10)
         self._hb_pub = self.create_publisher(Heartbeat, HEARTBEAT_TOPIC, 10)
         self._tick = 0
+
+        # --- Multi-policy: status out + select-by-name / -checkpoint in ---
+        # ``_switcher`` (a MultiModePolicy) is attached after the policy is built.
+        # Select callbacks no-op until then, so an early client message can't crash.
+        self._switcher = None
+        from std_msgs.msg import String
+
+        # Latched (transient_local, depth 1): a client connecting after boot and
+        # before the next switch still gets the current registry on connect.
+        status_qos = QoSProfile(
+            depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL
+        )
+        self._policy_status_pub = self.create_publisher(String, POLICY_STATUS_TOPIC, status_qos)
+        self.create_subscription(String, SELECT_POLICY_TOPIC, self._on_select_policy, 10)
+        self.create_subscription(String, SELECT_CHECKPOINT_TOPIC, self._on_select_checkpoint, 10)
+
+    def attach_switcher(self, switcher) -> None:
+        """Wire the MultiModePolicy so select topics route to it + publish initial status."""
+        self._switcher = switcher
+        self.publish_policy_status()
+
+    def _on_select_policy(self, msg) -> None:
+        if self._switcher is not None:
+            self._switcher.select(msg.data.strip())
+
+    def _on_select_checkpoint(self, msg) -> None:
+        if self._switcher is None:
+            return
+        try:
+            index = int(msg.data.strip())
+        except (TypeError, ValueError):
+            logger.warning(f"select_checkpoint: expected an int index, got {msg.data!r}")
+            return
+        self._switcher.active._activate_policy(index)
+        self.publish_policy_status()
+
+    def publish_policy_status(self) -> None:
+        """Publish the registry JSON: per-policy name, control_type, interface_id,
+        checkpoints, active_checkpoint — plus the active policy name/index.
+
+        ``control_type`` (WBT | LOCOMOTION) and ``interface_id`` describe the
+        command CONTRACT a consumer (SlimNav/telemetry) keys off, independent of
+        the policy name (D3): WBT consumes a dense motion command; locomotion
+        consumes velocity. Derived per policy from its command contract.
+        """
+        import json
+
+        from std_msgs.msg import String
+
+        sw = self._switcher
+        if sw is None:
+            return
+        policies = []
+        for name, policy in zip(sw.names, sw.policies):
+            groups = getattr(policy, "checkpoint_groups", [[getattr(policy, "active_model_path", "")]])
+            policies.append(
+                {
+                    "name": name,
+                    "control_type": _control_type(policy),
+                    "interface_id": _interface_id(policy),
+                    "checkpoints": [[_basename(f) for f in group] for group in groups],
+                    "active_checkpoint": getattr(policy, "active_policy_index", 0),
+                }
+            )
+        payload = {"policies": policies, "active": sw.active_label, "active_index": sw.active_index}
+        self._policy_status_pub.publish(String(data=json.dumps(payload)))
 
     # --- dense TargetSource protocol (WBT) ---
     def _dense_cb(self, msg: CmdDense) -> None:
@@ -151,62 +267,56 @@ class ServiceIONode(Node):
 
 
 def _iter_policies(policy):
-    """Yield the underlying policy instance(s): primary+secondary for dual-mode."""
-    if isinstance(policy, DualModePolicy):
-        yield policy.primary
-        if policy.secondary is not None:
-            yield policy.secondary
+    """Yield the underlying policy instance(s) (all registered, for multi-mode)."""
+    if isinstance(policy, MultiModePolicy):
+        yield from policy.policies
     else:
         yield policy
 
 
-def _new_with_injected(cls, config, io: ServiceIONode):
-    """Construct ``cls`` with injected providers attached before ``__init__``.
+def _build_one_policy(cfg, io: ServiceIONode, owner):
+    """Build one registered policy with node-owned injected inputs + its own sensors.
 
-    The base policy builds its input providers during construction, so the
-    ``_injected_*`` attributes must exist beforehand (see
-    ``holosoma_inference.inputs.create_input`` 'injected' branch).
+    ``owner`` is None for the hardware owner (index 0) or the owner policy for the
+    shared-hardware peers. The owner takes the injected vel/state providers; peers
+    reuse them via ``_shared_hardware_source``. Every policy gets its OWN sensors
+    built from its own ``task`` (per-policy depth config).
     """
+    cls = _select_policy_class(cfg)
     p = object.__new__(cls)
-    p._injected_velocity_input = io.input
-    p._injected_command_provider = io.input
-    if io.sensors:
-        p._injected_sensors = io.sensors
-    # Attach the node as the dense target source *before* __init__ so that
-    # setup_policy() can detect live-source mode and skip the NPZ requirement.
-    # WholeBodyTrackingPolicy uses ``if not hasattr(self, "_target_source")``
-    # to avoid clobbering a pre-set source, so this is the intended pattern.
+    if owner is None:
+        p._injected_velocity_input = io.input
+        p._injected_command_provider = io.input
+    else:
+        p._shared_hardware_source = owner
+    sensors = build_sensors(io, cfg.task)
+    if sensors:
+        p._injected_sensors = sensors
+    # Attach the dense target source before __init__ (WBT detects live-source mode).
     p._target_source = io
-    p.__init__(config=config)
+    p.__init__(config=cfg)
     return p
 
 
 def _build_policy(config, io: ServiceIONode):
-    """Build the policy like run_policy.py, but with node-owned injected inputs.
+    """Build the policy (or MultiModePolicy for N registered policies) with injection.
 
-    For dual-mode, only the primary takes injected providers; the secondary
-    reuses them via ``_shared_hardware_source`` (matching DualModePolicy).
+    ``config.registered_policies()`` yields [owner, *extras] (normalizing the legacy
+    ``secondary``). One policy -> build it directly; N -> owner owns hardware, peers
+    share it, all wrapped in a MultiModePolicy that publishes status on switch.
     """
-    if config.secondary is not None:
-        # Replicate DualModePolicy's construction with injection into primary.
-        dm = object.__new__(DualModePolicy)
-        primary_cls = _select_policy_class(config)
-        secondary_cls = _select_policy_class(config.secondary)
-        logger.info(f"Dual-mode: primary={primary_cls.__name__}, secondary={secondary_cls.__name__}")
-        dm.primary = _new_with_injected(primary_cls, config, io)
-        secondary = object.__new__(secondary_cls)
-        secondary._shared_hardware_source = dm.primary
-        secondary.__init__(config=config.secondary)
-        dm.secondary = secondary
-        dm.active = dm.primary
-        dm.active_label = "primary"
-        dm._setup_command_intercept()
-        logger.info("Dual-mode ready. Publish 'switch_mode' to swap policies.")
-        return dm
+    registered = config.registered_policies()
+    if len(registered) == 1:
+        policy = _build_one_policy(registered[0], io, owner=None)
+        logger.info(f"Using {type(policy).__name__}")
+        return policy
 
-    policy_class = _select_policy_class(config)
-    logger.info(f"Using {policy_class.__name__}")
-    return _new_with_injected(policy_class, config, io)
+    names = config.resolved_names()
+    owner = _build_one_policy(registered[0], io, owner=None)
+    peers = [_build_one_policy(cfg, io, owner=owner) for cfg in registered[1:]]
+    switcher = MultiModePolicy([owner, *peers], names=names, on_switch=lambda i, n: io.publish_policy_status())
+    io.attach_switcher(switcher)
+    return switcher
 
 
 def _attach_target_source(policy, io: ServiceIONode) -> None:
@@ -228,35 +338,42 @@ def _dof_names(policy) -> list[str]:
     return list(getattr(p, "dof_names", []))
 
 
-def _use_mp_sdk(config):
-    """Force the rclpy-safe multiprocess SDK interface (DDS in a child process).
+def _map_registered(config, fn):
+    """Apply ``fn`` to ``config`` and every registered extra (secondary + policies).
 
-    Rewrites ``robot.sdk_type`` to its isolated variant (e.g. unitree ->
-    unitree_mp) on the config and its secondary. A no-op for SDK types without
-    a known isolated variant (e.g. already _mp, or booster), so an explicit
-    override survives.
+    ``fn`` transforms one config's own fields (not its extras); this threads it
+    through the legacy ``secondary`` and the N-policy ``policies`` so every
+    registered policy gets the same treatment.
     """
-    new_type = _MP_SDK_MAP.get(config.robot.sdk_type)
-    if new_type is None:
-        return config
-    logger.info(f"Service node: using multiprocess SDK '{new_type}' (rclpy/DDS isolation)")
-    config = replace(config, robot=replace(config.robot, sdk_type=new_type))
+    config = fn(config)
     if config.secondary is not None:
-        config = replace(config, secondary=_use_mp_sdk(config.secondary))
+        config = replace(config, secondary=fn(config.secondary))
+    if config.policies:
+        config = replace(config, policies=tuple(fn(p) for p in config.policies))
     return config
+
+
+def _use_mp_sdk(config):
+    """Rewrite ``robot.sdk_type`` to its rclpy-safe multiprocess variant on every
+    registered policy (e.g. unitree -> unitree_mp). No-op for types without a
+    known isolated variant, so an explicit override survives."""
+
+    def _one(cfg):
+        new_type = _MP_SDK_MAP.get(cfg.robot.sdk_type)
+        if new_type is None:
+            return cfg
+        return replace(cfg, robot=replace(cfg.robot, sdk_type=new_type))
+
+    out = _map_registered(config, _one)
+    if _MP_SDK_MAP.get(config.robot.sdk_type):
+        logger.info(f"Service node: using multiprocess SDK (rclpy/DDS isolation)")
+    return out
 
 
 def _apply_noninteractive_defaults(config):
-    """Flip WBT task knobs that only make sense for an interactive console.
-
-    The service node has no TTY, so the stiff-hold ``input()`` prompt would
-    hang it; skip it. Per-tick DEBUG logs are suppressed naturally because
-    the service node runs at the loguru default level (INFO).
-    """
-    config = replace(config, task=replace(config.task, skip_stiff_prompt=True))
-    if config.secondary is not None:
-        config = replace(config, secondary=_apply_noninteractive_defaults(config.secondary))
-    return config
+    """Set ``skip_stiff_prompt`` on every registered policy (no TTY for the input()
+    prompt in the service node)."""
+    return _map_registered(config, lambda cfg: replace(cfg, task=replace(cfg.task, skip_stiff_prompt=True)))
 
 
 def main() -> None:
