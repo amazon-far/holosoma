@@ -12,6 +12,20 @@ from holosoma.config_types.action import ActionManagerCfg
 from .base import ActionTermBase
 
 
+def _raise_if_non_finite(values: torch.Tensor, description: str) -> None:
+    invalid = ~torch.isfinite(values)
+    if values.device.type == "cuda":
+        torch._assert_async(~torch.any(invalid), f"{description} contain non-finite values")
+        return
+    if not torch.any(invalid):
+        return
+
+    env_ids = torch.where(invalid.reshape(invalid.shape[0], -1).any(dim=1))[0]
+    shown_ids = env_ids[:10].detach().cpu().tolist()
+    suffix = "" if env_ids.numel() <= len(shown_ids) else f" (showing {len(shown_ids)} of {env_ids.numel()})"
+    raise FloatingPointError(f"{description} contain non-finite values; env_ids={shown_ids}{suffix}")
+
+
 class ActionManager:
     """Manages action processing and application.
 
@@ -121,23 +135,23 @@ class ActionManager:
 
     @property
     def action(self) -> torch.Tensor:
-        """The raw actions sent to the environment.
+        """The processed actions sent to the environment.
 
         Returns
         -------
         torch.Tensor
-            Action tensor [num_envs, total_action_dim]
+            Clipped/processed action tensor [num_envs, total_action_dim]
         """
         return self._action
 
     @property
     def prev_action(self) -> torch.Tensor:
-        """The previous raw actions sent to the environment.
+        """The previous processed actions sent to the environment.
 
         Returns
         -------
         torch.Tensor
-            Previous action tensor [num_envs, total_action_dim]
+            Previous clipped/processed action tensor [num_envs, total_action_dim]
         """
         return self._prev_action
 
@@ -165,24 +179,37 @@ class ActionManager:
         ------
         ValueError
             If action dimension doesn't match expected
+        FloatingPointError
+            If raw or processed actions contain non-finite values
         """
-        # Validate action dimension
-        if actions.shape[1] != self._total_action_dim:
-            raise ValueError(
-                f"Invalid action shape. Expected: [*, {self._total_action_dim}], received: {actions.shape}"
-            )
+        expected_shape = (self.env.num_envs, self._total_action_dim)
+        if actions.shape != expected_shape:
+            raise ValueError(f"Invalid action shape. Expected: {expected_shape}, received: {tuple(actions.shape)}")
 
-        # Store action history
-        self._prev_action[:] = self._action
-        self._action[:] = actions.to(self.device)
+        actions = actions.to(self.device)
+        _raise_if_non_finite(actions, "Raw actions")
 
         # Split actions and process each term
         idx = 0
+        processed_actions = []
         for term_name in self._term_names:
             term = self._term_instances[term_name]
             term_actions = actions[:, idx : idx + term.action_dim]
             term.process_actions(term_actions)
+            processed = term.processed_actions
+            if processed.shape != term_actions.shape:
+                raise ValueError(
+                    f"Action term '{term_name}' returned wrong processed-action shape. "
+                    f"Expected {tuple(term_actions.shape)}, got {tuple(processed.shape)}"
+                )
+            _raise_if_non_finite(processed, f"Processed actions from term '{term_name}'")
+            processed_actions.append(processed)
             idx += term.action_dim
+
+        # Advance history only after every term has processed successfully. Rewards
+        # and observations therefore see the same clipped actions that control uses.
+        self._prev_action[:] = self._action
+        self._action[:] = torch.cat(processed_actions, dim=1) if processed_actions else actions
 
     def apply_actions(self) -> None:
         """Apply processed actions to the environment.

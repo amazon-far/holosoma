@@ -12,6 +12,7 @@ from holosoma.utils.rotations import (
     quat_mul,
     quat_rotate,
     quat_unit,
+    slerp,
     yaw_quat,
 )
 
@@ -171,3 +172,11 @@ def test_normalize_angle_range():
     normalized_cos = torch.cos(normalized)
     assert torch.allclose(original_sin, normalized_sin, atol=1e-6)
     assert torch.allclose(original_cos, normalized_cos, atol=1e-6)
+
+
+def test_slerp_clamps_cosine_roundoff() -> None:
+    slightly_over_unit = torch.tensor([[0.0, 0.0, 0.0, 1.0000001]])
+
+    interpolated = slerp(slightly_over_unit, slightly_over_unit, torch.tensor([[0.5]]))
+
+    assert torch.isfinite(interpolated).all()

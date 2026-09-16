@@ -74,6 +74,10 @@ class ClassicBackend(IMujocoBackend):
         """Advance simulation by one timestep using mj_step."""
         mujoco.mj_step(self.model, self.data)
 
+    def physics_time(self) -> float:
+        """Return MuJoCo's native simulation clock."""
+        return float(self.data.time)
+
     def get_render_data(self, world_id: int = 0) -> mujoco.MjData:
         """Return data for rendering (already on CPU).
 

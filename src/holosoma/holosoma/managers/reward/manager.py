@@ -12,6 +12,20 @@ from holosoma.config_types.reward import RewardManagerCfg, RewardTermCfg
 from .base import RewardTermBase
 
 
+def _raise_if_non_finite(values: torch.Tensor, description: str) -> None:
+    invalid = ~torch.isfinite(values)
+    if values.device.type == "cuda":
+        torch._assert_async(~torch.any(invalid), f"{description} contains non-finite values")
+        return
+    if not torch.any(invalid):
+        return
+
+    env_ids = torch.where(invalid.reshape(invalid.shape[0], -1).any(dim=1))[0]
+    shown_ids = env_ids[:10].detach().cpu().tolist()
+    suffix = "" if env_ids.numel() <= len(shown_ids) else f" (showing {len(shown_ids)} of {env_ids.numel()})"
+    raise FloatingPointError(f"{description} contains non-finite values; env_ids={shown_ids}{suffix}")
+
+
 class RewardManager:
     """Manages reward computation as a weighted sum of individual terms.
 
@@ -161,17 +175,21 @@ class RewardManager:
                 rew_raw = func(self.env, **term_cfg.params)
 
             # Validate shape
-            if rew_raw.shape[0] != self.env.num_envs:
+            if rew_raw.shape != self._reward_buf.shape:
                 raise ValueError(
                     f"Reward term '{term_name}' returned wrong shape. "
                     f"Expected [{self.env.num_envs}], got {rew_raw.shape}"
                 )
+            _raise_if_non_finite(rew_raw, f"Reward term '{term_name}' raw output")
 
             # Scale by weight and dt
             rew_scaled = rew_raw * term_cfg.weight * dt
+            _raise_if_non_finite(rew_scaled, f"Reward term '{term_name}' scaled output")
 
             # Accumulate
-            self._reward_buf += rew_scaled
+            accumulated = self._reward_buf + rew_scaled
+            _raise_if_non_finite(accumulated, f"Total reward after term '{term_name}'")
+            self._reward_buf[:] = accumulated
 
             # Track episodic sums
             self._episode_sums[term_name] += rew_scaled

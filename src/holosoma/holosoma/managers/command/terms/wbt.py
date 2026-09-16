@@ -18,10 +18,12 @@ from holosoma.utils.path import resolve_data_file_path
 from holosoma.utils.rotations import (
     get_euler_xyz,
     quat_apply,
+    quat_conjugate,
     quat_error_magnitude,
     quat_from_euler_xyz,
     quat_inverse,
     quat_mul,
+    quat_to_angle_axis,
     slerp,
     yaw_quat,
 )
@@ -38,11 +40,14 @@ class MotionLoader:
         robot_body_names: list[str],
         robot_joint_names: list[str],
         device: str = "cpu",
+        recompute_velocities_from_positions: bool = False,
     ):
         # Resolve the motion file path using importlib.resources
         motion_file = resolve_data_file_path(motion_file)
 
         logger.info(f"Loading motion file: {motion_file}")
+        self._recompute_velocities = recompute_velocities_from_positions
+        self._motion_filename = Path(motion_file).stem
         body_names_in_motion_data, joint_names_in_motion_data = self._load_data_from_motion_npz(motion_file, device)
         body_indexes = self._get_index_of_a_in_b(robot_body_names, body_names_in_motion_data, device)
         joint_indexes = self._get_index_of_a_in_b(robot_joint_names, joint_names_in_motion_data, device)
@@ -87,7 +92,12 @@ class MotionLoader:
                     f"Please convert to holosoma format."
                 )
 
-            self.fps = data["fps"]
+            fps_raw = np.asarray(data["fps"])
+            if fps_raw.size != 1:
+                raise ValueError(f"{motion_file}: fps must be a scalar, got shape {fps_raw.shape}")
+            self.fps = float(fps_raw.item())
+            if not np.isfinite(self.fps) or self.fps <= 0:
+                raise ValueError(f"{motion_file}: fps must be finite and positive, got {self.fps}")
 
             body_names = data["body_names"].tolist()
             joint_names = data["joint_names"].tolist()
@@ -98,6 +108,22 @@ class MotionLoader:
             body_quat_w_raw = data["body_quat_w"]
             body_lin_vel_w_raw = data["body_lin_vel_w"]
             body_ang_vel_w_raw = data["body_ang_vel_w"]
+            num_frames = joint_pos_raw.shape[0]
+            if num_frames == 0:
+                raise ValueError(f"{motion_file}: motion must contain at least one frame")
+            frame_arrays = {
+                "joint_vel": joint_vel_raw,
+                "body_pos_w": body_pos_w_raw,
+                "body_quat_w": body_quat_w_raw,
+                "body_lin_vel_w": body_lin_vel_w_raw,
+                "body_ang_vel_w": body_ang_vel_w_raw,
+            }
+            for name, values in frame_arrays.items():
+                if values.ndim == 0 or values.shape[0] != num_frames:
+                    raise ValueError(
+                        f"{motion_file}: {name} has {values.shape[0] if values.ndim else 0} frames, "
+                        f"expected {num_frames}"
+                    )
 
             # Holosoma format: joint_pos includes root DOFs [xyz, wxyz] as first 7 values
             # joint_vel includes root velocity [vel_xyz, vel_wxyz] as first 6 values
@@ -141,9 +167,33 @@ class MotionLoader:
             self._body_lin_vel_w = torch.tensor(body_lin_vel_w_raw, dtype=torch.float32, device=device)
             self._body_ang_vel_w = torch.tensor(body_ang_vel_w_raw, dtype=torch.float32, device=device)
 
+            self.motion_ends, self.motion_idxs = self._load_motion_metadata(
+                data,
+                motion_file=motion_file,
+                num_frames=num_frames,
+                device=device,
+            )
+
+            if self._recompute_velocities:
+                self._recompute_velocity_fields(motion_file)
+
             # add object pos and quat
             self.has_object = "object_pos_w" in data
             if self.has_object:
+                required_object_keys = {"object_quat_w", "object_lin_vel_w"}
+                missing_object_keys = required_object_keys - set(data.files)
+                if missing_object_keys:
+                    raise ValueError(
+                        f"{motion_file}: object_pos_w is present but object fields are missing: "
+                        f"{sorted(missing_object_keys)}"
+                    )
+                for name in ("object_pos_w", "object_quat_w", "object_lin_vel_w"):
+                    values = data[name]
+                    if values.ndim == 0 or values.shape[0] != num_frames:
+                        raise ValueError(
+                            f"{motion_file}: {name} has {values.shape[0] if values.ndim else 0} frames, "
+                            f"expected {num_frames}"
+                        )
                 self._object_pos_w = torch.tensor(data["object_pos_w"], dtype=torch.float32, device=device)
                 # NOTE: wxyz after loading from npz
                 object_quat_w = torch.tensor(data["object_quat_w"], dtype=torch.float32, device=device)
@@ -154,6 +204,48 @@ class MotionLoader:
                 self._object_quat_w = torch.zeros(0, 4, device=device)
                 self._object_lin_vel_w = torch.zeros(0, 3, device=device)
         return body_names, joint_names
+
+    @staticmethod
+    def _load_motion_metadata(
+        data: np.lib.npyio.NpzFile,
+        *,
+        motion_file: str,
+        num_frames: int,
+        device: str,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Validate per-frame source-clip metadata from a motion archive."""
+        if "motion_ends" in data.files:
+            raw_ends = np.asarray(data["motion_ends"])
+            if raw_ends.ndim != 1 or raw_ends.shape[0] != num_frames:
+                raise ValueError(f"{motion_file}: motion_ends must have shape ({num_frames},), got {raw_ends.shape}")
+            if not np.all(np.isin(raw_ends, (0, 1, False, True))):
+                raise ValueError(f"{motion_file}: motion_ends must contain only boolean values")
+            motion_ends = raw_ends.astype(bool, copy=False)
+            if not motion_ends[-1]:
+                raise ValueError(f"{motion_file}: motion_ends must mark the final frame")
+        else:
+            motion_ends = np.zeros(num_frames, dtype=bool)
+            motion_ends[-1] = True
+
+        if "motion_idxs" in data.files:
+            raw_idxs = np.asarray(data["motion_idxs"])
+            if raw_idxs.ndim != 1 or raw_idxs.shape[0] != num_frames:
+                raise ValueError(f"{motion_file}: motion_idxs must have shape ({num_frames},), got {raw_idxs.shape}")
+            if not np.issubdtype(raw_idxs.dtype, np.integer) or np.issubdtype(raw_idxs.dtype, np.bool_):
+                raise ValueError(f"{motion_file}: motion_idxs must contain integers, got {raw_idxs.dtype}")
+            if np.any(raw_idxs < 0):
+                raise ValueError(f"{motion_file}: motion_idxs must be non-negative")
+            motion_idxs = raw_idxs.astype(np.int64, copy=False)
+            changed_after = np.flatnonzero(motion_idxs[1:] != motion_idxs[:-1])
+            if changed_after.size and not np.all(motion_ends[changed_after]):
+                raise ValueError(f"{motion_file}: motion_idxs may change only after a frame marked in motion_ends")
+        else:
+            motion_idxs = np.zeros(num_frames, dtype=np.int64)
+
+        return (
+            torch.as_tensor(motion_ends.copy(), dtype=torch.bool, device=device),
+            torch.as_tensor(motion_idxs.copy(), dtype=torch.long, device=device),
+        )
 
     @property
     def joint_pos(self) -> torch.Tensor:
@@ -179,6 +271,35 @@ class MotionLoader:
     def body_ang_vel_w(self) -> torch.Tensor:
         return self._body_ang_vel_w[:, self._body_indexes]
 
+    # Time-step-first accessors: index time_steps on raw data BEFORE body_indexes
+    # to avoid creating full-dataset intermediates (600x memory reduction for 5K motions)
+    def get_joint_pos(self, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._joint_pos[time_steps][:, self._joint_indexes]
+
+    def get_joint_vel(self, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._joint_vel[time_steps][:, self._joint_indexes]
+
+    def get_body_pos_w(self, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._body_pos_w[time_steps][:, self._body_indexes]
+
+    def get_body_quat_w(self, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._body_quat_w[time_steps][:, self._body_indexes]
+
+    def get_body_lin_vel_w(self, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._body_lin_vel_w[time_steps][:, self._body_indexes]
+
+    def get_body_ang_vel_w(self, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._body_ang_vel_w[time_steps][:, self._body_indexes]
+
+    def get_object_pos_w(self, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._object_pos_w[time_steps]
+
+    def get_object_quat_w(self, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._object_quat_w[time_steps]
+
+    def get_object_lin_vel_w(self, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._object_lin_vel_w[time_steps]
+
     @property
     def object_pos_w(self) -> torch.Tensor:
         return self._object_pos_w[:]
@@ -194,6 +315,73 @@ class MotionLoader:
     @property
     def num_motions(self) -> int:
         return 1
+
+    @property
+    def motion_filenames(self) -> List[str]:
+        return [self._motion_filename]
+
+    def _recompute_velocity_fields(self, motion_file: str) -> None:
+        """Replace stored velocity arrays with finite-difference estimates from positions.
+
+        Each source clip is differentiated independently so a discontinuity
+        between concatenated clips cannot create a velocity spike.
+        """
+        fps = float(self.fps)
+        clip_ends = (self.motion_ends.nonzero(as_tuple=False).flatten() + 1).tolist()
+
+        def _finite_difference(values: torch.Tensor) -> torch.Tensor:
+            result = torch.zeros_like(values)
+            start = 0
+            for end in clip_ends:
+                clip_length = end - start
+                if clip_length >= 2:
+                    result[start] = (values[start + 1] - values[start]) * fps
+                    result[end - 1] = (values[end - 1] - values[end - 2]) * fps
+                if clip_length >= 3:
+                    result[start + 1 : end - 1] = (values[start + 2 : end] - values[start : end - 2]) * (fps / 2.0)
+                start = end
+            return result
+
+        jv_recomputed = _finite_difference(self._joint_pos)
+        blv_recomputed = _finite_difference(self._body_pos_w)
+
+        bq = self._body_quat_w
+        bav_recomputed = torch.zeros_like(self._body_ang_vel_w)
+        start = 0
+        for end in clip_ends:
+            clip_length = end - start
+            if clip_length >= 2:
+                q_rel_start = quat_mul(bq[start + 1], quat_conjugate(bq[start], w_last=True), w_last=True)
+                angle_start, axis_start = quat_to_angle_axis(q_rel_start)
+                bav_recomputed[start] = axis_start * (angle_start.unsqueeze(-1) * fps)
+
+                q_rel_end = quat_mul(bq[end - 1], quat_conjugate(bq[end - 2], w_last=True), w_last=True)
+                angle_end, axis_end = quat_to_angle_axis(q_rel_end)
+                bav_recomputed[end - 1] = axis_end * (angle_end.unsqueeze(-1) * fps)
+            if clip_length >= 3:
+                q_rel_middle = quat_mul(
+                    bq[start + 2 : end],
+                    quat_conjugate(bq[start : end - 2], w_last=True),
+                    w_last=True,
+                )
+                angle_middle, axis_middle = quat_to_angle_axis(q_rel_middle)
+                bav_recomputed[start + 1 : end - 1] = axis_middle * (angle_middle.unsqueeze(-1) * (fps / 2.0))
+            start = end
+
+        if self._joint_vel.numel() and jv_recomputed.numel():
+            old_jv_max = float(self._joint_vel.abs().max())
+            new_jv_max = float(jv_recomputed.abs().max())
+        else:
+            old_jv_max = new_jv_max = 0.0
+        if old_jv_max > new_jv_max * 2.0 + 5.0:
+            logger.info(
+                f"[recompute_velocities] {motion_file}: stored joint_vel disagreed with "
+                f"joint_pos delta; max|joint_vel| {old_jv_max:.2f} -> {new_jv_max:.2f} rad/s"
+            )
+
+        self._joint_vel = jv_recomputed
+        self._body_lin_vel_w = blv_recomputed
+        self._body_ang_vel_w = bav_recomputed
 
     @property
     def motion_start_idx(self) -> torch.Tensor:
@@ -222,10 +410,27 @@ class MotionLoader:
                 ]
             )
 
+        added_frames = segments["joint_pos"].shape[0]
         for seg_key, attr_name in concat_targets:
             existing = getattr(self, attr_name)
             tensors = (segments[seg_key], existing) if prepend else (existing, segments[seg_key])
             setattr(self, attr_name, torch.cat(tensors, dim=0))
+
+        added_ends = torch.zeros(added_frames, dtype=torch.bool, device=self.motion_ends.device)
+        if prepend:
+            self.motion_ends = torch.cat([added_ends, self.motion_ends])
+            source_id = int(self.motion_idxs[0].item())
+            added_ids = torch.full((added_frames,), source_id, dtype=torch.long, device=self.motion_idxs.device)
+            self.motion_idxs = torch.cat([added_ids, self.motion_idxs])
+        else:
+            # The appended interpolation is continuous with the original final
+            # frame, so move the terminal marker to the end of the augmentation.
+            self.motion_ends[-1] = False
+            added_ends[-1] = True
+            source_id = int(self.motion_idxs[-1].item())
+            added_ids = torch.full((added_frames,), source_id, dtype=torch.long, device=self.motion_idxs.device)
+            self.motion_ends = torch.cat([self.motion_ends, added_ends])
+            self.motion_idxs = torch.cat([self.motion_idxs, added_ids])
 
         self.time_step_total = self._joint_pos.shape[0]
         return self
@@ -244,32 +449,92 @@ class MultiMotionLoader:
         robot_body_names: list[str],
         robot_joint_names: list[str],
         device: str = "cpu",
+        shard_rank: int = 0,
+        shard_world_size: int = 1,
+        recompute_velocities_from_positions: bool = False,
+        exclude_filename_substrings: tuple[str, ...] = (),
     ):
+        if shard_world_size < 1:
+            raise ValueError(f"shard_world_size must be at least 1, got {shard_world_size}")
+        if shard_rank < 0 or shard_rank >= shard_world_size:
+            raise ValueError(f"shard_rank must be in [0, {shard_world_size}), got {shard_rank}")
+
         # Support comma-separated directories for combining multiple datasets
-        dirs = [d.strip() for d in motion_dir.split(",")]
+        dirs = [directory.strip() for directory in motion_dir.split(",") if directory.strip()]
+        if not dirs:
+            raise ValueError("motion_dir must contain at least one directory")
         motion_files = []
         for d in dirs:
             expanded = os.path.expanduser(d)
             files = sorted(str(p) for p in Path(expanded).glob("*.npz"))
             logger.info(f"MultiMotionLoader: found {len(files)} .npz files in {expanded}")
             motion_files.extend(files)
-        assert len(motion_files) > 0, f"No .npz files found in {motion_dir}"
-        logger.info(f"MultiMotionLoader: loading {len(motion_files)} total motion files")
+        if not motion_files:
+            raise ValueError(f"No .npz files found in {motion_dir}")
 
-        loaders = []
+        if exclude_filename_substrings:
+            patterns = tuple(s for s in exclude_filename_substrings if s)
+            n_before = len(motion_files)
+            motion_files = [f for f in motion_files if not any(pat in Path(f).stem for pat in patterns)]
+            n_excluded = n_before - len(motion_files)
+            logger.info(
+                f"MultiMotionLoader: motion_exclude_filename_substrings={patterns}, "
+                f"matched and excluded {n_excluded} of {n_before} files"
+            )
+            if patterns and n_excluded == 0:
+                logger.warning(f"MultiMotionLoader: exclusion patterns {patterns} matched no files")
+        if not motion_files:
+            raise ValueError("All motion files were removed by motion_exclude_filename_substrings")
+
+        if shard_world_size > 1:
+            total_files = len(motion_files)
+            motion_files = [f for i, f in enumerate(motion_files) if i % shard_world_size == shard_rank]
+            logger.info(
+                f"MultiMotionLoader: shard {shard_rank}/{shard_world_size}, "
+                f"loading {len(motion_files)}/{total_files} motion files"
+            )
+        else:
+            logger.info(f"MultiMotionLoader: loading {len(motion_files)} total motion files")
+        if not motion_files:
+            raise ValueError(
+                f"Motion shard {shard_rank}/{shard_world_size} is empty; "
+                f"reduce shard_world_size or provide more motion files"
+            )
+
+        loaders: list[MotionLoader] = []
+        loader_basenames: list[str] = []
         skipped = 0
         for mf in motion_files:
             try:
-                loader = MotionLoader(mf, robot_body_names, robot_joint_names, device=device)
-                loaders.append(loader)
-            except (KeyError, AssertionError, ValueError) as e:  # noqa: PERF203
+                loader = MotionLoader(
+                    mf,
+                    robot_body_names,
+                    robot_joint_names,
+                    device=device,
+                    recompute_velocities_from_positions=recompute_velocities_from_positions,
+                )
+            except (KeyError, AssertionError, ValueError) as e:
                 # Skip files with incompatible format (e.g., missing body_names, wrong body count)
                 skipped += 1
                 if skipped <= 3:
                     logger.warning(f"MultiMotionLoader: skipping {mf}: {e}")
+                continue
+            loaders.append(loader)
+            loader_basenames.append(Path(mf).stem)
         if skipped > 3:
             logger.warning(f"MultiMotionLoader: skipped {skipped} files total due to format issues")
-        assert len(loaders) > 0, f"No compatible motion files found (skipped {skipped})"
+        if not loaders:
+            raise ValueError(f"No compatible motion files found (skipped {skipped})")
+
+        expected_fps = loaders[0].fps
+        mismatched_fps = [
+            (name, loader.fps)
+            for name, loader in zip(loader_basenames, loaders)
+            if not np.isclose(loader.fps, expected_fps)
+        ]
+        if mismatched_fps:
+            sample = ", ".join(f"{name}={fps:g}" for name, fps in mismatched_fps[:3])
+            raise ValueError(f"All motion files must use the same fps ({expected_fps:g}); mismatches: {sample}")
 
         # Track per-motion boundaries
         lengths = [loader.time_step_total for loader in loaders]
@@ -277,6 +542,8 @@ class MultiMotionLoader:
         self._motion_start_idx = torch.cat([torch.tensor([0], dtype=torch.long, device=device), cumulative[:-1]])
         self._motion_end_idx = cumulative
         self._num_motions = len(loaders)
+
+        self._motion_filenames = loader_basenames
 
         # Concatenate all motion data
         self._joint_pos = torch.cat([ld._joint_pos for ld in loaders], dim=0)
@@ -286,10 +553,17 @@ class MultiMotionLoader:
         self._body_lin_vel_w = torch.cat([ld._body_lin_vel_w for ld in loaders], dim=0)
         self._body_ang_vel_w = torch.cat([ld._body_ang_vel_w for ld in loaders], dim=0)
 
+        # Per-frame clip-end markers and per-frame source-clip index.
+        self.motion_ends = torch.cat([ld.motion_ends for ld in loaders], dim=0)
+        self.motion_idxs = torch.cat(
+            [torch.full((ld.time_step_total,), i, dtype=torch.long, device=device) for i, ld in enumerate(loaders)],
+            dim=0,
+        )
+
         # Use indexes from first loader (all loaders share the same robot)
         self._joint_indexes = loaders[0]._joint_indexes
         self._body_indexes = loaders[0]._body_indexes
-        self.fps = loaders[0].fps
+        self.fps = expected_fps
         self.time_step_total = self._joint_pos.shape[0]
 
         # Object support: only if ALL motions have objects
@@ -318,6 +592,11 @@ class MultiMotionLoader:
     @property
     def num_motions(self) -> int:
         return self._num_motions
+
+    @property
+    def motion_filenames(self) -> List[str]:
+        """Return filename stems aligned with motion ids."""
+        return self._motion_filenames
 
     @property
     def motion_start_idx(self) -> torch.Tensor:
@@ -350,6 +629,35 @@ class MultiMotionLoader:
     @property
     def body_ang_vel_w(self) -> torch.Tensor:
         return self._body_ang_vel_w[:, self._body_indexes]
+
+    # Time-step-first accessors: index time_steps on raw data BEFORE body_indexes
+    # to avoid creating full-dataset intermediates (600x memory reduction for 5K motions)
+    def get_joint_pos(self, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._joint_pos[time_steps][:, self._joint_indexes]
+
+    def get_joint_vel(self, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._joint_vel[time_steps][:, self._joint_indexes]
+
+    def get_body_pos_w(self, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._body_pos_w[time_steps][:, self._body_indexes]
+
+    def get_body_quat_w(self, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._body_quat_w[time_steps][:, self._body_indexes]
+
+    def get_body_lin_vel_w(self, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._body_lin_vel_w[time_steps][:, self._body_indexes]
+
+    def get_body_ang_vel_w(self, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._body_ang_vel_w[time_steps][:, self._body_indexes]
+
+    def get_object_pos_w(self, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._object_pos_w[time_steps]
+
+    def get_object_quat_w(self, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._object_quat_w[time_steps]
+
+    def get_object_lin_vel_w(self, time_steps: torch.Tensor) -> torch.Tensor:
+        return self._object_lin_vel_w[time_steps]
 
     @property
     def object_pos_w(self) -> torch.Tensor:
@@ -390,8 +698,19 @@ class MultiMotionLoader:
             if added_frames == 0:
                 added_frames = segments[seg_key].shape[0]
 
+        segment_ends = torch.zeros(added_frames, dtype=torch.bool, device=self.motion_ends.device)
+        segment_ends[-1] = True
+
         # Update boundaries — shift all motion boundaries if prepending
         if prepend:
+            self.motion_ends = torch.cat([segment_ends, self.motion_ends])
+            self.motion_idxs = torch.cat(
+                [
+                    torch.zeros(added_frames, dtype=torch.long, device=self.motion_idxs.device),
+                    self.motion_idxs + 1,
+                ]
+            )
+            self._motion_filenames = ["<default_pose_prepend>", *self._motion_filenames]
             self._motion_start_idx = self._motion_start_idx + added_frames
             self._motion_end_idx = self._motion_end_idx + added_frames
             dev = self._motion_start_idx.device
@@ -403,6 +722,20 @@ class MultiMotionLoader:
             )
         else:
             old_total = self.time_step_total
+            new_motion_id = self._num_motions
+            self.motion_ends = torch.cat([self.motion_ends, segment_ends])
+            self.motion_idxs = torch.cat(
+                [
+                    self.motion_idxs,
+                    torch.full(
+                        (added_frames,),
+                        new_motion_id,
+                        dtype=torch.long,
+                        device=self.motion_idxs.device,
+                    ),
+                ]
+            )
+            self._motion_filenames.append("<default_pose_append>")
             dev = self._motion_start_idx.device
             self._motion_start_idx = torch.cat(
                 [self._motion_start_idx, torch.tensor([old_total], dtype=torch.long, device=dev)]
@@ -429,6 +762,19 @@ class AdaptiveTimestepsSampler:
         adaptive_uniform_ratio: float = 0.1,
         adaptive_alpha: float = 0.001,
     ):
+        if motion_time_step_total < 1:
+            raise ValueError("motion_time_step_total must be at least 1")
+        if env_fps < 1:
+            raise ValueError("env_fps must be at least 1")
+        if adaptive_kernel_size < 1:
+            raise ValueError("adaptive_kernel_size must be at least 1")
+        if adaptive_lambda < 0:
+            raise ValueError("adaptive_lambda must be non-negative")
+        if not 0.0 <= adaptive_uniform_ratio <= 1.0:
+            raise ValueError("adaptive_uniform_ratio must be in [0, 1]")
+        if not 0.0 <= adaptive_alpha <= 1.0:
+            raise ValueError("adaptive_alpha must be in [0, 1]")
+
         self.device = device
         # length of the motion in rl environment time steps
         self.motion_time_step_total = motion_time_step_total
@@ -441,7 +787,7 @@ class AdaptiveTimestepsSampler:
         self.adaptive_alpha = adaptive_alpha
 
         # Match BeyondMimic binning: ~1 second bins at env FPS, with +1 tail bin.
-        self.num_bins = int(self.motion_time_step_total // max(self.env_fps, 1)) + 1
+        self.num_bins = int(self.motion_time_step_total // self.env_fps) + 1
 
         # Match BeyondMimic non-causal kernel.
         self.kernel = torch.tensor(
@@ -461,16 +807,14 @@ class AdaptiveTimestepsSampler:
 
     def update_current_bin_failed_count(self, failed_at_time_step: torch.Tensor):
         """Update the current bin failed count with terminated time steps."""
+        if failed_at_time_step.numel() == 0:
+            return
         failed_bin = torch.clamp(
-            (failed_at_time_step * self.num_bins) // max(self.motion_time_step_total, 1),
+            (failed_at_time_step * self.num_bins) // self.motion_time_step_total,
             0,
             self.num_bins - 1,
         ).long()
         assert failed_bin.min() >= 0 and failed_bin.max() < self.num_bins, "Failed bin is out of range"
-        # Accumulate (not overwrite): reset() may be called more than once per env
-        # step — once for termination-driven resets and again for clip-ended resets
-        # in MotionCommand.step() — before update_bin_failed_count() folds + zeroes
-        # this buffer. Overwriting clobbered the earlier wave's failures.
         self.current_bin_failed_count += torch.bincount(failed_bin, minlength=self.num_bins).float()
 
     def update_bin_failed_count(self):
@@ -489,7 +833,10 @@ class AdaptiveTimestepsSampler:
             mode="replicate",
         )
         sampling_probabilities = torch.nn.functional.conv1d(sampling_probabilities, self.kernel.view(1, 1, -1)).view(-1)
-        return sampling_probabilities / sampling_probabilities.sum()
+        sampling_mass = sampling_probabilities.sum()
+        normalized = sampling_probabilities / sampling_mass.clamp(min=1e-12)
+        uniform = torch.full_like(normalized, 1.0 / self.num_bins)
+        return torch.where(sampling_mass > 0, normalized, uniform)
 
     def sample(self, num_samples: int) -> torch.Tensor:
         sampled_bins = torch.multinomial(self.sampling_probabilities, num_samples, replacement=True)
@@ -520,9 +867,353 @@ class AdaptiveTimestepsSampler:
         self.metrics["sampling_top1_bin"] = imax.float() / self.num_bins
 
 
+class TwoLayerAdaptiveSampler:
+    """Sample a motion id, then an adaptive phase bin within that motion."""
+
+    def __init__(
+        self,
+        motion_start_idx: torch.Tensor,
+        motion_end_idx: torch.Tensor,
+        device: str,
+        env_fps: int,
+        adaptive_lambda: float = 0.8,
+        adaptive_uniform_ratio: float = 0.1,
+        adaptive_alpha: float = 0.001,
+        motion_filenames: list[str] | None = None,
+        top1_prob_cap: float = 0.0,
+        failure_weighted: bool = False,
+        failure_rate_max_over_mean: float = 200.0,
+        failure_counts_monotonic: bool = False,
+        motion_weighting: str = "failure",
+    ):
+        if env_fps < 1:
+            raise ValueError("env_fps must be at least 1")
+        if adaptive_lambda < 0:
+            raise ValueError("adaptive_lambda must be non-negative")
+        if not 0.0 <= adaptive_uniform_ratio <= 1.0:
+            raise ValueError("adaptive_uniform_ratio must be in [0, 1]")
+        if not 0.0 <= adaptive_alpha <= 1.0:
+            raise ValueError("adaptive_alpha must be in [0, 1]")
+        if not 0.0 <= top1_prob_cap <= 1.0:
+            raise ValueError("top1_prob_cap must be in [0, 1]")
+        if not np.isfinite(failure_rate_max_over_mean) or failure_rate_max_over_mean <= 0:
+            raise ValueError("failure_rate_max_over_mean must be finite and positive")
+        if motion_weighting not in {"uniform", "failure"}:
+            raise ValueError(f"motion_weighting must be 'uniform' or 'failure', got {motion_weighting!r}")
+        if failure_weighted and motion_weighting != "failure":
+            raise ValueError("failure_weighted=True requires motion_weighting='failure'")
+
+        self.device = device
+        self.env_fps = env_fps
+        self.adaptive_alpha = adaptive_alpha
+        self.adaptive_uniform_ratio = adaptive_uniform_ratio
+        self.adaptive_lambda = adaptive_lambda
+        self.top1_prob_cap = float(top1_prob_cap)
+        self.motion_weighting = motion_weighting
+        self.failure_weighted = bool(failure_weighted)
+        self.failure_rate_max_over_mean = float(failure_rate_max_over_mean)
+        self.failure_counts_monotonic = bool(failure_counts_monotonic)
+        if self.failure_counts_monotonic and not self.failure_weighted:
+            raise ValueError(
+                "failure_counts_monotonic=True requires failure_weighted=True. "
+                "It only affects the per-bin failure-rate sampler."
+            )
+
+        self.motion_start_idx = motion_start_idx.to(device).long()
+        self.motion_end_idx = motion_end_idx.to(device).long()
+        if self.motion_start_idx.ndim != 1 or self.motion_end_idx.ndim != 1:
+            raise ValueError("motion_start_idx and motion_end_idx must be one-dimensional")
+        if self.motion_start_idx.numel() == 0 or self.motion_start_idx.shape != self.motion_end_idx.shape:
+            raise ValueError("motion_start_idx and motion_end_idx must be non-empty and have matching shapes")
+        if int(self.motion_start_idx[0]) != 0:
+            raise ValueError("The first motion must start at frame 0")
+        if bool(torch.any(self.motion_end_idx <= self.motion_start_idx)):
+            raise ValueError("Each motion must contain at least one frame")
+        if self.motion_start_idx.numel() > 1 and not torch.equal(
+            self.motion_start_idx[1:],
+            self.motion_end_idx[:-1],
+        ):
+            raise ValueError("Motion ranges must be contiguous and non-overlapping")
+
+        self.num_motions = int(self.motion_start_idx.numel())
+        if motion_filenames is not None and len(motion_filenames) != self.num_motions:
+            raise ValueError(f"motion_filenames has {len(motion_filenames)} entries, expected {self.num_motions}")
+        self.motion_filenames = list(motion_filenames) if motion_filenames is not None else None
+        self.motion_lengths = self.motion_end_idx - self.motion_start_idx
+        requested_bins = (self.motion_lengths // self.env_fps + 1).long()
+        self.K_per_motion = torch.minimum(requested_bins, self.motion_lengths)
+        self.K_max = int(self.K_per_motion.max().item())
+
+        self.motion_failed_ema = torch.ones(self.num_motions, dtype=torch.float, device=device)
+
+        valid_mask = torch.arange(self.K_max, device=device).unsqueeze(0) < self.K_per_motion.unsqueeze(
+            1
+        )  # (num_motions, K_max), bool
+        self.bin_valid_mask = valid_mask
+        self.bin_failed_ema = valid_mask.float().clone()
+
+        if self.failure_weighted:
+            self.bin_episode_ema = valid_mask.float().clone()
+
+        self.metrics: dict[str, torch.Tensor] = {}
+        self.metrics_str: dict[str, str] = {}
+
+    def reset(self) -> None:
+        """Reset adaptive statistics to uniform pseudo-counts."""
+        self.motion_failed_ema.fill_(1.0)
+        self.bin_failed_ema.copy_(self.bin_valid_mask)
+        if self.failure_weighted:
+            self.bin_episode_ema.copy_(self.bin_valid_mask)
+
+    def update_episodes_and_failures(
+        self,
+        reset_motion_ids: torch.Tensor,
+        reset_local_t: torch.Tensor,
+        failed_mask: torch.Tensor,
+    ) -> None:
+        """Inject reset-time episode + failure events into both layer EMAs.
+
+        Credit both the episode counter and the failure counter at the
+        end timestep bin. All
+        reset envs (failed or timed-out) bump the episode counter; only the
+        failed-mask subset bumps the failure counter. This keeps the per-bin
+        rate ``failed/episode`` properly aligned: numerator and denominator
+        index the same bin.
+
+        Decay is not applied here; it runs every environment step inside
+        ``MotionCommand.step()`` (parity with the legacy ``AdaptiveTimestepsSampler``).
+        This method only adds the alpha-weighted instantaneous count.
+
+        Args:
+            reset_motion_ids: (n_reset,) clip index for every reset env.
+            reset_local_t: (n_reset,) frame within that clip at reset time
+                (i.e., time_step - motion_start_idx).
+            failed_mask: (n_reset,) bool, True for reset envs that terminated
+                due to failure (vs timeout / episode-length limit).
+        """
+        if reset_motion_ids.numel() == 0:
+            return
+        if reset_motion_ids.shape != reset_local_t.shape or reset_motion_ids.shape != failed_mask.shape:
+            raise ValueError("reset_motion_ids, reset_local_t, and failed_mask must have matching shapes")
+        if bool(torch.any(reset_motion_ids < 0)) or bool(torch.any(reset_motion_ids >= self.num_motions)):
+            raise ValueError("reset_motion_ids contains an out-of-range motion id")
+
+        # Per-(motion, bin_within_motion) bin index for each reset env.
+        K_per_reset = self.K_per_motion[reset_motion_ids]
+        len_per_reset = self.motion_lengths[reset_motion_ids]
+        reset_bins = torch.minimum(
+            (reset_local_t.long() * K_per_reset) // len_per_reset.clamp(min=1),
+            K_per_reset - 1,
+        )
+        reset_flat_idx = reset_motion_ids * self.K_max + reset_bins
+        reset_inc = (
+            torch.bincount(reset_flat_idx, minlength=self.num_motions * self.K_max)
+            .float()
+            .view(self.num_motions, self.K_max)
+            * self.bin_valid_mask.float()
+        )
+
+        if self.failure_weighted:
+            if self.failure_counts_monotonic:
+                self.bin_episode_ema += reset_inc
+            else:
+                self.bin_episode_ema += self.adaptive_alpha * reset_inc
+
+        # Failure-only updates (subset of reset envs).
+        failed_motion_ids = reset_motion_ids[failed_mask]
+        if failed_motion_ids.numel() == 0:
+            return
+
+        layer1_inc = torch.bincount(failed_motion_ids, minlength=self.num_motions).float()
+        if self.failure_weighted and self.failure_counts_monotonic:
+            self.motion_failed_ema += layer1_inc
+        else:
+            self.motion_failed_ema += self.adaptive_alpha * layer1_inc
+
+        # Layer 2: per-(motion, bin) failure count, restricted to failed envs.
+        failed_flat_idx = reset_flat_idx[failed_mask]
+        layer2_inc = (
+            torch.bincount(failed_flat_idx, minlength=self.num_motions * self.K_max)
+            .float()
+            .view(self.num_motions, self.K_max)
+            * self.bin_valid_mask.float()
+        )
+        if self.failure_weighted and self.failure_counts_monotonic:
+            self.bin_failed_ema += layer2_inc
+        else:
+            self.bin_failed_ema += self.adaptive_alpha * layer2_inc
+
+    # Backward-compat shim: callers that only have failure data (no reset_mask)
+    # can still funnel through update_episodes_and_failures by treating every
+    # reset as a failure. Used by Layer-1-only callers and as a safety net for
+    # external code paths that haven't been updated. Failure-weighted mode requires
+    # the new entry point because the episode denominator is meaningful.
+    def update_failures(
+        self,
+        failed_motion_ids: torch.Tensor,
+        failed_local_t: torch.Tensor,
+    ) -> None:
+        if failed_motion_ids.numel() == 0:
+            return
+        failed_mask = torch.ones(failed_motion_ids.numel(), dtype=torch.bool, device=self.device)
+        self.update_episodes_and_failures(failed_motion_ids, failed_local_t, failed_mask)
+
+    @property
+    def motion_sampling_probabilities(self) -> torch.Tensor:
+        """Per-motion-id sampling distribution.
+
+        Uniform mode ignores failure history. Failure mode uses either per-motion
+        failure counts or the sum of capped per-bin failure rates.
+        """
+        n = self.num_motions
+        uniform_p = torch.full((n,), 1.0 / n, device=self.device)
+        r = float(self.adaptive_uniform_ratio)
+
+        if self.motion_weighting == "uniform":
+            return uniform_p
+        if self.failure_weighted:
+            valid = self.bin_valid_mask.float()
+            per_bin_rate = self.bin_failed_ema / self.bin_episode_ema.clamp(min=1e-6)
+            per_bin_rate *= valid
+
+            max_over_mean = self.failure_rate_max_over_mean
+            valid_total = valid.sum().clamp(min=1.0)
+            mean_rate = per_bin_rate.sum() / valid_total
+            rate_cap = mean_rate.clamp(min=1e-12) * max_over_mean
+            per_bin_rate_clipped = per_bin_rate.clamp(max=rate_cap) * valid
+
+            per_motion_rate = per_bin_rate_clipped.sum(dim=1)
+            failure_mass = per_motion_rate.sum()
+            failure_p = per_motion_rate / failure_mass.clamp(min=1e-12)
+            failure_p = torch.where(failure_mass > 0, failure_p, uniform_p)
+        else:
+            ema = self.motion_failed_ema
+            failure_mass = ema.sum()
+            failure_p = ema / failure_mass.clamp(min=1e-12)
+            failure_p = torch.where(failure_mass > 0, failure_p, uniform_p)
+
+        p = (1.0 - r) * failure_p + r * uniform_p
+        if self.top1_prob_cap > 0:
+            p = _apply_prob_cap(p, self.top1_prob_cap)
+        return p
+
+    def per_motion_phase_distribution(self, motion_ids: torch.Tensor) -> torch.Tensor:
+        """Return (n, K_max) phase-bin distribution conditioned on each env's chosen motion_id.
+
+        Mixture form: (1 - r) * (bin_ema-normalized over valid bins) + r * uniform_over_valid_bins.
+        Masked (invalid) bins receive zero probability via valid_mask multiply at the end.
+        """
+        if self.failure_weighted:
+            bin_scores = self.bin_failed_ema / self.bin_episode_ema.clamp(min=1e-6)
+        else:
+            bin_scores = self.bin_failed_ema
+        bin_ema = bin_scores[motion_ids]  # (n, K_max)
+        valid = self.bin_valid_mask[motion_ids].float()  # (n, K_max), 0/1
+        per_env_valid_count = valid.sum(dim=1, keepdim=True).clamp(min=1.0)  # (n, 1)
+        # Failure-driven part, normalized over valid bins.
+        masked_ema = bin_ema * valid
+        masked_sum = masked_ema.sum(dim=1, keepdim=True)
+        failure_p = masked_ema / masked_sum.clamp(min=1e-12)  # (n, K_max), zeros on invalid bins
+        # Uniform-over-valid-bins part.
+        uniform_p = valid / per_env_valid_count
+        failure_p = torch.where(masked_sum > 0, failure_p, uniform_p)
+        r = float(self.adaptive_uniform_ratio)
+        return (1.0 - r) * failure_p + r * uniform_p
+
+    def sample(self, n: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """Returns (motion_ids, phase) jointly sampled from the two-layer distribution.
+
+        phase is in [0, 1) and is relative to the selected motion.
+        """
+        # Layer 1: motion ids
+        motion_probs = self.motion_sampling_probabilities
+        motion_ids = torch.multinomial(motion_probs, n, replacement=True)
+
+        # Layer 2: phase, conditioned on motion_ids
+        phase_probs = self.per_motion_phase_distribution(motion_ids)  # (n, K_max)
+        sampled_bins = torch.multinomial(phase_probs, 1, replacement=True).squeeze(1)  # (n,)
+        # Each motion has its own K_i; clamp sampled_bins (already in [0, K_max-1] but
+        # could exceed K_per_motion - 1 if floor produced an invalid hit).
+        K_per_env = self.K_per_motion[motion_ids]
+        sampled_bins = torch.minimum(sampled_bins, K_per_env - 1)
+        phase = (sampled_bins.float() + torch.rand(n, device=self.device)) / K_per_env.float()
+        phase = phase.clamp(0.0, 1.0 - 1e-6)
+        return motion_ids, phase
+
+    def get_stats(self):
+        # Layer 1 entropy.
+        p = self.motion_sampling_probabilities
+        H = -(p * (p + 1e-12).log()).sum()
+        H_norm_motion = H / np.log(max(self.num_motions, 2))
+        # Layer 1 top-1.
+        p_max, idx_max = p.max(dim=0)
+        # Layer 2: average entropy across motions of their per-motion bin distribution.
+        all_motion_ids = torch.arange(self.num_motions, device=self.device)
+        bin_p = self.per_motion_phase_distribution(all_motion_ids)  # (num_motions, K_max)
+        bin_H = -(bin_p * (bin_p + 1e-12).log()).sum(dim=1)
+        bin_H_denominator = self.K_per_motion.clamp(min=2).float().log()
+        bin_H_norm = (bin_H / bin_H_denominator).mean()
+        self.metrics["motion_sampling_entropy"] = H_norm_motion
+        self.metrics["motion_sampling_top1_prob"] = p_max
+        self.metrics["motion_sampling_top1_id"] = idx_max.float() / max(self.num_motions, 1)
+        self.metrics["motion_phase_avg_entropy"] = bin_H_norm
+
+        # Top-K motion clip diagnostics: which clips is the failure-weighted sampler
+        # concentrating on? Logged as scalars (top1..top10 probs and integer ids) plus
+        # a single comma-joined name string in metrics_str (consumed by wbt_manager
+        # and pushed to wandb as a Table) for easy spotting of pathological clips.
+        K = min(10, int(self.num_motions))
+        topk_probs, topk_ids = torch.topk(p, K)
+        self.metrics["motion_sampling_top1_id_int"] = idx_max.float()  # raw integer for clarity
+        for k in range(K):
+            self.metrics[f"motion_sampling_top{k + 1}_prob"] = topk_probs[k]
+            self.metrics[f"motion_sampling_top{k + 1}_id_int"] = topk_ids[k].float()
+        if self.motion_filenames is not None and len(self.motion_filenames) >= self.num_motions:
+            top_names = [self.motion_filenames[int(i)] for i in topk_ids.cpu().tolist()]
+            top_pcts = [f"{float(topk_probs[k]):.3f}" for k in range(K)]
+            # String concat — consumers of metrics_str (e.g. wbt_manager) can
+            # log this as a wandb.Html / wandb.Table for richer display.
+            self.metrics_str["motion_sampling_top10_names"] = ", ".join(
+                f"{n}({p})" for n, p in zip(top_names, top_pcts)
+            )
+
+
 #########################################################################################################
 ## Helper functions
 #########################################################################################################
+def _apply_prob_cap(p: torch.Tensor, cap: float, max_passes: int = 50) -> torch.Tensor:
+    """Redistribute probability mass so no entry exceeds ``cap``.
+
+    Iteratively clip entries above ``cap`` and add the excess uniformly to the rest,
+    until convergence. Robust water-fill — terminates after at most max_passes iterations
+    or when no entry exceeds the cap. Cap must be > 1/N or the operation is impossible
+    (returns uniform in that degenerate case).
+
+    Used by adaptive samplers to enforce a hard ceiling on any single clip's sampling
+    probability, e.g. preventing one pathologically-hard clip from dominating training.
+    """
+    if cap <= 0 or cap >= 1.0:
+        return p
+    n = p.numel()
+    if cap * n <= 1.0:
+        # Cap is below the uniform floor → return uniform (best feasible)
+        return torch.full_like(p, 1.0 / max(n, 1))
+    p = p.clone()
+    for _ in range(max_passes):
+        over_mask = p > cap
+        n_over = int(over_mask.sum())
+        if n_over == 0:
+            break
+        excess = (p[over_mask] - cap).sum()
+        p[over_mask] = cap
+        below_mask = ~over_mask
+        n_below = int(below_mask.sum())
+        if n_below == 0:
+            break
+        p[below_mask] = p[below_mask] + excess / n_below
+    return p
+
+
 FAKE_BODY_NAME_ALIASES: dict[str, str] = {
     # Fake foot contact bodies are authored in the URDF purely for height computation.
     # They do not exist in the motion-capture dataset, so we alias them back to the
@@ -548,6 +1239,10 @@ class MotionCommand(CommandTermBase):
         else:
             self.motion_cfg = MotionConfig(**cfg.params["motion_config"])
         self.init_pose_cfg: NoiseToInitialPoseConfig = self.motion_cfg.noise_to_initial_pose
+        # Ref semantic: when False, reset root-velocity noise falls back to push
+        # randomizer max_push_vel. When True, use init_pose_cfg.root_lin/ang_vel.
+        self.use_configured_root_velocity_noise = bool(cfg.params.get("use_configured_root_velocity_noise", False))
+        self.running_ref_root_height: torch.Tensor
 
     def setup(self) -> None:
         self.num_envs = self._env.num_envs
@@ -559,16 +1254,25 @@ class MotionCommand(CommandTermBase):
         robot_joint_names = self._env.simulator.dof_names
 
         # 1. load motion data
-        assert self.motion_cfg.motion_file or self.motion_cfg.motion_dir, (
-            "Either motion_file or motion_dir must be set in MotionConfig"
-        )
+        if not (self.motion_cfg.motion_file or self.motion_cfg.motion_dir):
+            raise ValueError("Either motion_file or motion_dir must be set in MotionConfig")
         self.motion: MotionLoader | MultiMotionLoader
         if self.motion_cfg.motion_dir:
+            # Determine sharding params from torch distributed if enabled
+            shard_rank = 0
+            shard_world_size = 1
+            if self.motion_cfg.shard_motions and torch.distributed.is_initialized():
+                shard_rank = torch.distributed.get_rank()
+                shard_world_size = torch.distributed.get_world_size()
             self.motion = MultiMotionLoader(
                 self.motion_cfg.motion_dir,
                 robot_body_names_alias,
                 robot_joint_names,
                 device=self.device,
+                shard_rank=shard_rank,
+                shard_world_size=shard_world_size,
+                recompute_velocities_from_positions=self.motion_cfg.recompute_velocities_from_positions,
+                exclude_filename_substrings=self.motion_cfg.motion_exclude_filename_substrings,
             )
         else:
             self.motion = MotionLoader(
@@ -576,11 +1280,19 @@ class MotionCommand(CommandTermBase):
                 robot_body_names_alias,
                 robot_joint_names,
                 device=self.device,
+                recompute_velocities_from_positions=self.motion_cfg.recompute_velocities_from_positions,
             )
 
         # Store body and joint indexes for interpolation
         self._body_indexes_in_motion = self.motion._body_indexes
         self._joint_indexes_in_motion = self.motion._joint_indexes
+        self._root_body_index_in_motion = int(self._body_indexes_in_motion[0].item())
+
+        # Cache default pose roll/pitch from config (constant, avoids per-reset tensor creation)
+        if self.motion_cfg.default_pose_transition_strategy == "learned":
+            init_state = self._env.robot_config.init_state
+            init_quat = torch.tensor(init_state.rot, dtype=torch.float32, device=self.device).unsqueeze(0)
+            self._default_init_roll, self._default_init_pitch, _ = get_euler_xyz(init_quat, w_last=True)
 
         # Maybe prepend interpolated transition from default pose
         self._maybe_add_default_pose_transition(prepend=True)
@@ -590,9 +1302,12 @@ class MotionCommand(CommandTermBase):
 
         # 2. get the indexes of the root link and the tracked links
         self.ref_body_index = robot_body_names.index(self.motion_cfg.body_name_ref[0])  # int
+        self._ref_body_index_in_motion = int(self._body_indexes_in_motion[self.ref_body_index].item())
         self.tracked_body_indexes = self._get_index_of_a_in_b(
             self.motion_cfg.body_names_to_track, robot_body_names, self.device
         )
+        # Pre-compose: motion raw body dim -> tracked bodies (skips intermediate)
+        self._tracked_body_indexes_in_motion = self.motion._body_indexes[self.tracked_body_indexes]
 
         # 3. get the name of the object, or indices of the object
         if self.motion.has_object:
@@ -604,13 +1319,65 @@ class MotionCommand(CommandTermBase):
             self.object_name = rigid_object_names[0]
 
         # 4. get the adaptive timesteps sampler
+        adaptive_motion_weighting = self.motion_cfg.adaptive_motion_weighting
+        if adaptive_motion_weighting not in ("uniform", "failure"):
+            raise ValueError(
+                f"motion_cfg.adaptive_motion_weighting must be 'uniform' or 'failure', "
+                f"got {adaptive_motion_weighting!r}"
+            )
+        adaptive_phase_per_motion = self.motion_cfg.adaptive_phase_per_motion
+        if not self.motion_cfg.use_adaptive_timesteps_sampler and (
+            adaptive_motion_weighting != "uniform"
+            or adaptive_phase_per_motion
+            or self.motion_cfg.failure_weighted_sampler
+        ):
+            raise ValueError("Adaptive motion options require use_adaptive_timesteps_sampler=True")
+        if self.motion_cfg.failure_weighted_sampler and (
+            not adaptive_phase_per_motion or adaptive_motion_weighting != "failure"
+        ):
+            raise ValueError(
+                "failure_weighted_sampler=True requires adaptive_phase_per_motion=True "
+                "and adaptive_motion_weighting='failure'"
+            )
+        if self.motion_cfg.failure_counts_monotonic and not self.motion_cfg.failure_weighted_sampler:
+            raise ValueError("failure_counts_monotonic=True requires failure_weighted_sampler=True")
+
+        self.two_layer_sampler: TwoLayerAdaptiveSampler | None = None
+        self._motion_failed_ema_layer1_only: torch.Tensor | None = None
         if self.motion_cfg.use_adaptive_timesteps_sampler:
             self.adaptive_timesteps_sampler = AdaptiveTimestepsSampler(
-                self.motion.time_step_total, self.device, int(1 / (self._env.dt))
+                self.motion.time_step_total,
+                self.device,
+                int(1 / (self._env.dt)),
+                adaptive_kernel_size=self.motion_cfg.adaptive_kernel_size,
+                adaptive_lambda=self.motion_cfg.adaptive_lambda,
+                adaptive_uniform_ratio=self.motion_cfg.adaptive_uniform_ratio,
+                adaptive_alpha=self.motion_cfg.adaptive_alpha,
             )
+            if adaptive_phase_per_motion:
+                self.two_layer_sampler = TwoLayerAdaptiveSampler(
+                    motion_start_idx=self.motion.motion_start_idx,
+                    motion_end_idx=self.motion.motion_end_idx,
+                    device=self.device,
+                    env_fps=int(1 / (self._env.dt)),
+                    adaptive_lambda=self.motion_cfg.adaptive_lambda,
+                    adaptive_uniform_ratio=self.motion_cfg.adaptive_uniform_ratio,
+                    adaptive_alpha=self.motion_cfg.adaptive_alpha,
+                    motion_filenames=self.motion.motion_filenames,
+                    top1_prob_cap=self.motion_cfg.motion_sampling_top1_prob_cap,
+                    failure_weighted=self.motion_cfg.failure_weighted_sampler,
+                    failure_rate_max_over_mean=self.motion_cfg.failure_rate_max_over_mean,
+                    failure_counts_monotonic=self.motion_cfg.failure_counts_monotonic,
+                    motion_weighting=adaptive_motion_weighting,
+                )
+            if adaptive_motion_weighting == "failure" and not adaptive_phase_per_motion:
+                self._motion_failed_ema_layer1_only = torch.ones(
+                    int(self.motion.num_motions), dtype=torch.float, device=self.device
+                )
 
         # 5. metrics
         self.metrics: dict[str, torch.Tensor] = {}
+        self.metrics_str: dict[str, str] = {}
 
         self.init_buffers()
 
@@ -627,38 +1394,75 @@ class MotionCommand(CommandTermBase):
         n = env_ids.numel()
         num_motions = self.motion.num_motions
 
-        # 0. Sample the time steps (and, for the adaptive sampler, the motion id).
-        adaptive_global_idx = None
+        # 0. Sample the time steps (three modes: uniform, failure-weighted Layer-1 only,
+        #    or full two-layer per-motion phase).
+        two_layer_sampler = self.two_layer_sampler if self.motion_cfg.use_adaptive_timesteps_sampler else None
+        layer1_ema = self._motion_failed_ema_layer1_only if self.motion_cfg.use_adaptive_timesteps_sampler else None
+
         if self.motion_cfg.use_adaptive_timesteps_sampler:
-            # Match BeyondMimic behavior: update failed bins from environments
-            # that terminated before this reset, then sample new phases.
-            # Gate the failure-stat update on training mode so evaluation episodes
-            # don't contaminate the training sampler's failure distribution
-            # (the is_evaluating phase-zeroing below only affects sampling, not stats).
             if not self._env.is_evaluating:
-                episode_failed = self._env.termination_manager.terminated[env_ids]
-                if torch.any(episode_failed):
-                    failed_at_time_step = self.time_steps[env_ids][episode_failed]
-                    self.adaptive_timesteps_sampler.update_current_bin_failed_count(failed_at_time_step)
-            # The sampler bins failures over the GLOBAL concatenated-motion frame
-            # axis, so it must return a global frame index here. The motion id is
-            # then derived from that index (NOT chosen independently), keeping the
-            # failure-prioritized phase attached to the motion it was recorded on.
-            adaptive_global_idx = self.adaptive_timesteps_sampler.sample_global_time_steps(n)
-            phase = None
+                has_previous_episode = self._env._pending_episode_lengths[env_ids] > 0
+                episode_failed = self._env.termination_manager.terminated[env_ids] & has_previous_episode
+            else:
+                has_previous_episode = torch.zeros_like(env_ids, dtype=torch.bool)
+                episode_failed = torch.zeros_like(env_ids, dtype=torch.bool)
+
+            if two_layer_sampler is not None and torch.any(has_previous_episode):
+                credit_env_ids = env_ids[has_previous_episode]
+                reset_at_time_step = self.time_steps[credit_env_ids]
+                reset_motion_ids = self.motion_ids[credit_env_ids]
+                reset_local_t = (reset_at_time_step - self.motion.motion_start_idx[reset_motion_ids]).clamp(min=0)
+                two_layer_sampler.update_episodes_and_failures(
+                    reset_motion_ids,
+                    reset_local_t,
+                    episode_failed[has_previous_episode],
+                )
+
+            if torch.any(episode_failed):
+                failed_at_time_step = self.time_steps[env_ids][episode_failed]
+                self.adaptive_timesteps_sampler.update_current_bin_failed_count(failed_at_time_step)
+                if layer1_ema is not None:
+                    failed_motion_ids = self.motion_ids[env_ids][episode_failed]
+                    inc = torch.bincount(failed_motion_ids, minlength=int(num_motions)).float()
+                    layer1_ema += self.motion_cfg.adaptive_alpha * inc
+
+            # Draw a motion and phase using the configured adaptive mode.
+            adaptive_global_idx = None
+            if two_layer_sampler is not None:
+                sampled_motion_ids, phase = two_layer_sampler.sample(n)
+                self.motion_ids[env_ids] = sampled_motion_ids
+            elif layer1_ema is not None:
+                # Layer 1 chooses hard clips; without the per-motion phase layer,
+                # sample phase uniformly inside the chosen clip.
+                ema = layer1_ema
+                n_motions = ema.numel()
+                uniform_p = torch.full_like(ema, 1.0 / max(n_motions, 1))
+                failure_mass = ema.sum()
+                failure_p = ema / failure_mass.clamp(min=1e-12)
+                failure_p = torch.where(failure_mass > 0, failure_p, uniform_p)
+                r = float(self.motion_cfg.adaptive_uniform_ratio)
+                weights = (1.0 - r) * failure_p + r * uniform_p
+                cap = self.motion_cfg.motion_sampling_top1_prob_cap
+                if cap > 0:
+                    weights = _apply_prob_cap(weights, cap)
+                self.motion_ids[env_ids] = torch.multinomial(weights, n, replacement=True)
+                phase = torch.rand(n, device=self.device)
+            else:
+                # The legacy sampler bins the globally concatenated frame axis.
+                # Keep the sampled phase attached to the clip that owns it.
+                adaptive_global_idx = self.adaptive_timesteps_sampler.sample_global_time_steps(n)
+                phase = None
         else:
+            adaptive_global_idx = None
             phase = torch.rand(n, device=self.device)
+            self.motion_ids[env_ids] = torch.randint(0, num_motions, (n,), device=self.device)
 
         if self._env.is_evaluating:
-            # Eval forces every env through the uniform/else branch below, which
-            # indexes `phase`, so it must be a real zero tensor even when the
-            # adaptive sampler left it as None.
+            adaptive_global_idx = None
             phase = torch.zeros(n, device=self.device)
-            adaptive_global_idx = None  # eval starts every env at its motion's first frame
+            self.motion_ids[env_ids] = env_ids % num_motions
 
         if adaptive_global_idx is not None:
-            # Map global frame index -> (motion_id, time_step). searchsorted on the
-            # per-motion end indices yields the clip whose [start, end) contains it.
             motion_ids = torch.searchsorted(self.motion.motion_end_idx, adaptive_global_idx, right=True)
             motion_ids = motion_ids.clamp_(0, num_motions - 1)
             self.motion_ids[env_ids] = motion_ids
@@ -666,9 +1470,7 @@ class MotionCommand(CommandTermBase):
             end_idx = self.motion.motion_end_idx[motion_ids]
             self.time_steps[env_ids] = adaptive_global_idx.clamp(start_idx, end_idx - 1)
         else:
-            # Uniform path (or eval): randomly assign each env to a motion, sample
-            # a phase within that motion's range.
-            self.motion_ids[env_ids] = torch.randint(0, num_motions, (n,), device=self.device)
+            assert phase is not None
             start_idx = self.motion.motion_start_idx[self.motion_ids[env_ids]]
             end_idx = self.motion.motion_end_idx[self.motion_ids[env_ids]]
             motion_len = end_idx - start_idx
@@ -684,19 +1486,54 @@ class MotionCommand(CommandTermBase):
             subset = torch.where(rand_vals < prob, start_idx, subset)
             self.time_steps[env_ids] = subset
 
-        # If the motion is at the last timestep, set it to the second last timestep;
-        # Otherwise, update_tasks_callback will advance the timestep to the next timestep -> out of bounds error.
         already_last_timestep_mask = self.time_steps[env_ids] >= end_idx - 1
-        self.time_steps[env_ids] = torch.where(already_last_timestep_mask, end_idx - 2, self.time_steps[env_ids])
+        safe_second_last = torch.maximum(end_idx - 2, start_idx)
+        self.time_steps[env_ids] = torch.where(already_last_timestep_mask, safe_second_last, self.time_steps[env_ids])
 
         # 1. Get the root/body poses from the motion data
-        root_pos = self.root_pos_w[env_ids].clone()
-        root_rot = self.root_quat_w[env_ids].clone()
-        root_lin_vel = self.root_lin_vel_w[env_ids].clone()
-        root_ang_vel = self.root_ang_vel_w[env_ids].clone()
+        # Index only reset-env timesteps, respecting the motion file's body order.
+        reset_ts = self.time_steps[env_ids]
+        env_origins = self._env.simulator.scene.env_origins[env_ids]
+        root_motion_index = self._root_body_index_in_motion
+        root_pos = self.motion._body_pos_w[reset_ts, root_motion_index] + env_origins
+        root_rot = self.motion._body_quat_w[reset_ts, root_motion_index]
+        root_lin_vel = self.motion._body_lin_vel_w[reset_ts, root_motion_index]
+        root_ang_vel = self.motion._body_ang_vel_w[reset_ts, root_motion_index]
 
-        dof_pos = self.joint_pos[env_ids].clone()
-        dof_vel = self.joint_vel[env_ids].clone()
+        # Snap running_ref_root_height EMA to the freshly-sampled timestep's
+        # ref pelvis z so failure-weighted adaptive terminations don't carry stale
+        # cross-clip history at episode start.
+        if hasattr(self, "running_ref_root_height"):
+            self.running_ref_root_height[env_ids] = (  # type: ignore[has-type]
+                self.motion._body_pos_w[reset_ts, root_motion_index, 2]
+            )
+
+        dof_pos = self.motion.get_joint_pos(reset_ts)
+        dof_vel = self.motion.get_joint_vel(reset_ts)
+
+        # "learned" strategy: for envs starting at frame 0, init robot in default standing
+        # pose. Motion command stays at frame 0 — policy learns the transition autonomously.
+        if self.motion_cfg.default_pose_transition_strategy == "learned":
+            at_start_mask = self.time_steps[env_ids] == start_idx
+            if torch.any(at_start_mask):
+                n_start = int(at_start_mask.sum().item())
+                # Default joint angles
+                dof_pos[at_start_mask] = self._env.default_dof_pos_base.expand(n_start, -1)
+                dof_vel[at_start_mask] = 0.0
+                # Default root: keep motion x/y + env_origin, use config z/roll/pitch
+                init_state = self._env.robot_config.init_state
+                root_pos[at_start_mask, 2] = env_origins[at_start_mask, 2] + init_state.pos[2]
+                root_lin_vel[at_start_mask] = 0.0
+                root_ang_vel[at_start_mask] = 0.0
+                # Root rotation: keep motion yaw, replace roll/pitch with config defaults
+                init_roll, init_pitch = self._default_init_roll, self._default_init_pitch
+                _, _, motion_yaw = get_euler_xyz(root_rot[at_start_mask], w_last=True)
+                default_rot = quat_from_euler_xyz(
+                    init_roll.expand(n_start),
+                    init_pitch.expand(n_start),
+                    motion_yaw,
+                )
+                root_rot[at_start_mask] = default_rot
 
         # 2. Adding noise
         # 2.1 prepare the noise scale
@@ -715,20 +1552,32 @@ class MotionCommand(CommandTermBase):
             )
             * self.init_pose_cfg.overall_noise_scale
         )  # (3,)
-        root_vel_noise = (
-            torch.tensor(
-                self.init_pose_cfg.root_lin_vel,
-                device=self.device,
-            )
-            * self.init_pose_cfg.overall_noise_scale
-        )  # (3,)
-        root_ang_vel_noise_rpy = (
-            torch.tensor(
-                self.init_pose_cfg.root_ang_vel,
-                device=self.device,
-            )
-            * self.init_pose_cfg.overall_noise_scale
-        )  # (3,)
+        if self.use_configured_root_velocity_noise:
+            root_vel_noise = (
+                torch.tensor(
+                    self.init_pose_cfg.root_lin_vel,
+                    device=self.device,
+                )
+                * self.init_pose_cfg.overall_noise_scale
+            )  # (3,)
+            root_ang_vel_noise_rpy = (
+                torch.tensor(
+                    self.init_pose_cfg.root_ang_vel,
+                    device=self.device,
+                )
+                * self.init_pose_cfg.overall_noise_scale
+            )  # (3,)
+        else:
+            # Reuse push randomizer velocity limits for reset-state velocity noise
+            # and fall back to zero when the push randomizer is disabled.
+            push_state = self._env.randomization_manager.get_state("push_randomizer_state")
+            _push_vel = getattr(push_state, "max_push_vel", None) if push_state is not None else None
+            if _push_vel is None:
+                max_push_vel = torch.zeros(6, device=self.device)
+            else:
+                max_push_vel = torch.abs(_push_vel.to(self.device))
+            root_vel_noise = max_push_vel[:3]
+            root_ang_vel_noise_rpy = max_push_vel[3:6]
 
         # 2.2 Adding noise to dof_pos, root_pos, root_vel, root_ang_vel, root_rot
         # 1.2.1 dof_pos
@@ -774,9 +1623,9 @@ class MotionCommand(CommandTermBase):
 
         # 4. Set the object states in simulator
         if self.motion.has_object:
-            obj_pos = self.object_pos_w[env_ids]
-            obj_ori = self.object_quat_w[env_ids]
-            obj_lin_vel = self.object_lin_vel_w[env_ids]
+            obj_pos = self.motion.get_object_pos_w(reset_ts) + env_origins
+            obj_ori = self.motion.get_object_quat_w(reset_ts)
+            obj_lin_vel = self.motion.get_object_lin_vel_w(reset_ts)
 
             # 4.2 add noise to the object states
             obj_pos_noise = torch.tensor(
@@ -792,6 +1641,28 @@ class MotionCommand(CommandTermBase):
             # 4.3 set the object states in simulator
             self._env.simulator.set_actor_states([self.object_name], env_ids, object_states)
 
+    def _advance_or_resample_motions(self, advance_mask: torch.Tensor) -> None:
+        """Advance active clips and soft-reset clips whose terminal frame was consumed."""
+        at_end = self.motion.motion_ends[self.time_steps]
+        advance_mask &= ~at_end
+        self.time_steps += advance_mask.long()
+
+        ended_env_ids = torch.where(at_end)[0]
+        if ended_env_ids.numel() == 0:
+            return
+
+        self.reset(ended_env_ids)
+        sim = self._env.simulator
+        sim.set_actor_root_state_tensor_robots(ended_env_ids, sim.robot_root_states)
+        sim.set_dof_state_tensor_robots(ended_env_ids, sim.dof_state)  # type: ignore[attr-defined]
+        sim.clear_contact_forces_history(ended_env_ids)
+        sim.refresh_sim_tensors()
+        self._env.observation_manager.reset(ended_env_ids)
+
+    def _update_running_ref_root_height(self) -> None:
+        ref_root_z_now = self.motion._body_pos_w[self.time_steps, self._root_body_index_in_motion, 2]
+        self.running_ref_root_height.lerp_(ref_root_z_now, 0.1)
+
     def step(self) -> None:
         """called in _update_tasks_callback of the environment. (after compute_reward, before compute_observations)"""
         # 0. update time steps, all motion joint/body poses are updated automatically with the time steps.
@@ -806,22 +1677,11 @@ class MotionCommand(CommandTermBase):
                 freeze_mask = (rand_vals < freeze_prob) & zero_mask
                 advance_mask = advance_mask & ~freeze_mask
 
-        self.time_steps += advance_mask.long()
+        # The optional motion_end termination resets before this callback. Without
+        # it, preserve BeyondMimic's fixed-length episodes by resampling in place.
+        self._advance_or_resample_motions(advance_mask)
 
-        # BeyondMimic-style behavior: when the clip ends, resample motion and
-        # reset robot/object state without terminating the whole episode.
-        per_motion_end = self.motion.motion_end_idx[self.motion_ids]
-        ended_env_ids = torch.where(self.time_steps >= per_motion_end)[0]
-        if ended_env_ids.numel() > 0:
-            self.reset(ended_env_ids)
-            # Flush the mutated root/dof state into the simulator so that
-            # rigid-body positions are up-to-date for downstream consumers
-            # (termination checks, observations, rewards).
-            sim = self._env.simulator
-            sim.set_actor_root_state_tensor_robots(ended_env_ids, sim.robot_root_states)
-            sim.set_dof_state_tensor_robots(ended_env_ids, sim.dof_state)  # type: ignore[attr-defined]
-            sim.refresh_sim_tensors()
-
+        self._update_running_ref_root_height()
         # 1. update body_pos_relative_w and body_quat_relative_w
         # definition of body_pos/quat_relative_w:
         # If I take this motion data and adapt it to where my robot currently is
@@ -841,20 +1701,18 @@ class MotionCommand(CommandTermBase):
 
         # Solution:
         # ------------------------------------------------------------
-        # if episode_length_buf == 0, use robot_root_pos_w and robot_root_quat_w as reference body.
-        # else, use configured reference body as reference body.
+        # At episode start, use robot_root on the robot side. Motion side always
+        # uses the configured reference body.
         use_root = (self._env.episode_length_buf == 0).unsqueeze(1).float()
-
-        ref_pos_w = self.root_pos_w * use_root + self.ref_pos_w * (1 - use_root)
-        ref_quat_w = self.root_quat_w * use_root + self.ref_quat_w * (1 - use_root)
         robot_ref_pos_w = self.robot_root_pos_w * use_root + self.robot_ref_pos_w * (1 - use_root)
         robot_ref_quat_w = self.robot_root_quat_w * use_root + self.robot_ref_quat_w * (1 - use_root)
 
-        ## 1.1 repeat to match the number of body parts
-        ref_pos_w_repeat = ref_pos_w[:, None, :].repeat(1, len(self.motion_cfg.body_names_to_track), 1)  # type: ignore[arg-type]
-        ref_quat_w_repeat = ref_quat_w[:, None, :].repeat(1, len(self.motion_cfg.body_names_to_track), 1)  # type: ignore[arg-type]
-        robot_ref_pos_w_repeat = robot_ref_pos_w[:, None, :].repeat(1, len(self.motion_cfg.body_names_to_track), 1)  # type: ignore[arg-type]
-        robot_ref_quat_w_repeat = robot_ref_quat_w[:, None, :].repeat(1, len(self.motion_cfg.body_names_to_track), 1)  # type: ignore[arg-type]
+        ## 1.1 expand to match the number of body parts (no memory copy, unlike repeat)
+        _nb = len(self.motion_cfg.body_names_to_track)  # type: ignore[arg-type]
+        ref_pos_w_repeat = self.ref_pos_w[:, None, :].expand(-1, _nb, -1)
+        ref_quat_w_repeat = self.ref_quat_w[:, None, :].expand(-1, _nb, -1)
+        robot_ref_pos_w_repeat = robot_ref_pos_w[:, None, :].expand(-1, _nb, -1)
+        robot_ref_quat_w_repeat = robot_ref_quat_w[:, None, :].expand(-1, _nb, -1)
 
         ## 1.2 compute the relative body poses
         delta_quat_w = yaw_quat(
@@ -871,10 +1729,21 @@ class MotionCommand(CommandTermBase):
             + quat_apply(delta_quat_w, self.body_pos_w - ref_pos_w_repeat, w_last=True)
         )
 
-        ### 1.3 update the adaptive timesteps sampler (training only — eval episodes
+        ### 1.3 update the adaptive timesteps sampler (training only; eval episodes
         ### must not decay/fold failure stats into the training sampler).
         if self.motion_cfg.use_adaptive_timesteps_sampler and not self._env.is_evaluating:
             self.adaptive_timesteps_sampler.update_bin_failed_count()
+            tl = self.two_layer_sampler
+            if tl is not None:
+                if not tl.failure_counts_monotonic:
+                    decay = 1.0 - tl.adaptive_alpha
+                    tl.motion_failed_ema *= decay
+                    tl.bin_failed_ema *= decay
+                    if tl.failure_weighted:
+                        tl.bin_episode_ema *= decay
+            ema1 = self._motion_failed_ema_layer1_only
+            if ema1 is not None:
+                ema1 *= 1.0 - self.motion_cfg.adaptive_alpha
 
     @property
     def command(self) -> torch.Tensor:
@@ -885,62 +1754,68 @@ class MotionCommand(CommandTermBase):
     #########################################################################################
     @property
     def joint_pos(self) -> torch.Tensor:
-        return self.motion.joint_pos[self.time_steps]
+        return self.motion.get_joint_pos(self.time_steps)
 
     @property
     def joint_vel(self) -> torch.Tensor:
-        return self.motion.joint_vel[self.time_steps]
+        return self.motion.get_joint_vel(self.time_steps)
 
     @property
     def body_pos_w(self) -> torch.Tensor:
         return (
-            self.motion.body_pos_w[self.time_steps][:, self.tracked_body_indexes]
+            self.motion._body_pos_w[self.time_steps][:, self._tracked_body_indexes_in_motion]
             + self._env.simulator.scene.env_origins[:, None, :]
         )
 
     @property
     def body_quat_w(self) -> torch.Tensor:
-        return self.motion.body_quat_w[self.time_steps][:, self.tracked_body_indexes]
+        return self.motion._body_quat_w[self.time_steps][:, self._tracked_body_indexes_in_motion]
 
     @property
     def body_lin_vel_w(self) -> torch.Tensor:
-        return self.motion.body_lin_vel_w[self.time_steps][:, self.tracked_body_indexes]
+        return self.motion._body_lin_vel_w[self.time_steps][:, self._tracked_body_indexes_in_motion]
 
     @property
     def body_ang_vel_w(self) -> torch.Tensor:
-        return self.motion.body_ang_vel_w[self.time_steps][:, self.tracked_body_indexes]
+        return self.motion._body_ang_vel_w[self.time_steps][:, self._tracked_body_indexes_in_motion]
 
     @property
     def ref_pos_w(self) -> torch.Tensor:
-        return self.motion.body_pos_w[self.time_steps, self.ref_body_index] + self._env.simulator.scene.env_origins
+        return (
+            self.motion._body_pos_w[self.time_steps, self._ref_body_index_in_motion]
+            + self._env.simulator.scene.env_origins
+        )
 
     @property
     def ref_quat_w(self) -> torch.Tensor:
-        return self.motion.body_quat_w[self.time_steps, self.ref_body_index]
+        return self.motion._body_quat_w[self.time_steps, self._ref_body_index_in_motion]
 
     @property
     def ref_lin_vel_w(self) -> torch.Tensor:
-        return self.motion.body_lin_vel_w[self.time_steps, self.ref_body_index]
+        return self.motion._body_lin_vel_w[self.time_steps, self._ref_body_index_in_motion]
 
     @property
     def ref_ang_vel_w(self) -> torch.Tensor:
-        return self.motion.body_ang_vel_w[self.time_steps, self.ref_body_index]
+        return self.motion._body_ang_vel_w[self.time_steps, self._ref_body_index_in_motion]
 
     @property
     def root_pos_w(self) -> torch.Tensor:
-        return self.motion.body_pos_w[self.time_steps, 0] + self._env.simulator.scene.env_origins
+        return (
+            self.motion._body_pos_w[self.time_steps, self._root_body_index_in_motion]
+            + self._env.simulator.scene.env_origins
+        )
 
     @property
     def root_quat_w(self) -> torch.Tensor:
-        return self.motion.body_quat_w[self.time_steps, 0]
+        return self.motion._body_quat_w[self.time_steps, self._root_body_index_in_motion]
 
     @property
     def root_lin_vel_w(self) -> torch.Tensor:
-        return self.motion.body_lin_vel_w[self.time_steps, 0]
+        return self.motion._body_lin_vel_w[self.time_steps, self._root_body_index_in_motion]
 
     @property
     def root_ang_vel_w(self) -> torch.Tensor:
-        return self.motion.body_ang_vel_w[self.time_steps, 0]
+        return self.motion._body_ang_vel_w[self.time_steps, self._root_body_index_in_motion]
 
     #########################################################################################
     ## Robot from simulator
@@ -1006,16 +1881,15 @@ class MotionCommand(CommandTermBase):
     #########################################################################################
     @property
     def object_pos_w(self) -> torch.Tensor:
-        # Applies env origins, but ideally we should rely on the simulator
-        return self.motion.object_pos_w[self.time_steps] + self._env.simulator.scene.env_origins
+        return self.motion.get_object_pos_w(self.time_steps) + self._env.simulator.scene.env_origins
 
     @property
     def object_quat_w(self) -> torch.Tensor:
-        return self.motion.object_quat_w[self.time_steps]
+        return self.motion.get_object_quat_w(self.time_steps)
 
     @property
     def object_lin_vel_w(self) -> torch.Tensor:
-        return self.motion.object_lin_vel_w[self.time_steps]
+        return self.motion.get_object_lin_vel_w(self.time_steps)
 
     #########################################################################################
     ## Object from simulator
@@ -1051,14 +1925,22 @@ class MotionCommand(CommandTermBase):
         self.motion_ids = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.body_pos_relative_w = torch.zeros(
             self.num_envs, len(self.motion_cfg.body_names_to_track), 3, device=self.device
-        )  # type: ignore[arg-type]
+        )
         self.body_quat_relative_w = torch.zeros(
             self.num_envs, len(self.motion_cfg.body_names_to_track), 4, device=self.device
-        )  # type: ignore[arg-type]
+        )
         self.body_quat_relative_w[:, :, 0] = 1.0
+
+        self.running_ref_root_height = torch.full((self.num_envs,), 0.78, dtype=torch.float, device=self.device)
 
         if self.motion_cfg.use_adaptive_timesteps_sampler:
             self.adaptive_timesteps_sampler.init_buffers()
+            tl = self.two_layer_sampler
+            if tl is not None:
+                tl.reset()
+            ema1 = self._motion_failed_ema_layer1_only
+            if ema1 is not None:
+                ema1.fill_(1.0)
 
     def update_metrics(self):
         """Update the metrics. After action, before step() is called."""
@@ -1097,12 +1979,62 @@ class MotionCommand(CommandTermBase):
                 "sampling_top1_bin"
             ]
 
+            tl = self.two_layer_sampler
+            if tl is not None:
+                tl.get_stats()
+                self.metrics["motion/two_layer_motion_entropy"] = tl.metrics["motion_sampling_entropy"]
+                self.metrics["motion/two_layer_motion_top1_prob"] = tl.metrics["motion_sampling_top1_prob"]
+                self.metrics["motion/two_layer_motion_top1_id"] = tl.metrics["motion_sampling_top1_id"]
+                self.metrics["motion/two_layer_phase_avg_entropy"] = tl.metrics["motion_phase_avg_entropy"]
+                for k in range(1, 11):
+                    pk_key = f"motion_sampling_top{k}_prob"
+                    ik_key = f"motion_sampling_top{k}_id_int"
+                    if pk_key in tl.metrics:
+                        self.metrics[f"motion/two_layer_top{k}_prob"] = tl.metrics[pk_key]
+                    if ik_key in tl.metrics:
+                        self.metrics[f"motion/two_layer_top{k}_id"] = tl.metrics[ik_key]
+                if "motion_sampling_top10_names" in tl.metrics_str:
+                    self.metrics_str["motion/two_layer_top10_names"] = tl.metrics_str["motion_sampling_top10_names"]
+
+            ema1 = self._motion_failed_ema_layer1_only
+            if ema1 is not None:
+                r_floor = self.motion_cfg.adaptive_uniform_ratio
+                n_mot = int(self.motion.num_motions)
+                uniform_p_layer1 = torch.full_like(ema1, 1.0 / max(n_mot, 1))
+                layer1_mass = ema1.sum()
+                p_layer1 = ema1 / layer1_mass.clamp(min=1e-12)
+                p_layer1 = torch.where(layer1_mass > 0, p_layer1, uniform_p_layer1)
+                p_mix_layer1 = (1.0 - r_floor) * p_layer1 + r_floor * uniform_p_layer1
+                cap = self.motion_cfg.motion_sampling_top1_prob_cap
+                if cap > 0:
+                    p_mix_layer1 = _apply_prob_cap(p_mix_layer1, cap)
+                H = -(p_mix_layer1 * (p_mix_layer1 + 1e-12).log()).sum()
+                self.metrics["motion/layer1_motion_entropy"] = H / np.log(max(n_mot, 2))
+                self.metrics["motion/layer1_motion_top1_prob"] = p_mix_layer1.max()
+                K = min(10, n_mot)
+                tk_probs, tk_ids = torch.topk(p_mix_layer1, K)
+                self.metrics["motion/layer1_motion_top1_id"] = tk_ids[0].float() / max(n_mot, 1)
+                for k in range(K):
+                    self.metrics[f"motion/layer1_top{k + 1}_prob"] = tk_probs[k]
+                    self.metrics[f"motion/layer1_top{k + 1}_id"] = tk_ids[k].float()
+                top_names = [self.motion.motion_filenames[int(i)] for i in tk_ids.cpu().tolist()]
+                top_pcts = [f"{float(tk_probs[k]):.3f}" for k in range(K)]
+                self.metrics_str["motion/layer1_top10_names"] = ", ".join(
+                    f"{n}({p})" for n, p in zip(top_names, top_pcts)
+                )
+
     #########################################################################################
     ## Internal helpers
     #########################################################################################
     def _maybe_add_default_pose_transition(self, *, prepend: bool) -> None:
         """Shared path for optionally inserting default-pose interpolation before/after the clip."""
-        enabled = self.motion_cfg.enable_default_pose_prepend if prepend else self.motion_cfg.enable_default_pose_append
+        if prepend:
+            enabled = (
+                self.motion_cfg.enable_default_pose_prepend
+                or self.motion_cfg.default_pose_transition_strategy == "interpolation"
+            )
+        else:
+            enabled = self.motion_cfg.enable_default_pose_append
         if not enabled:
             return
 
@@ -1153,9 +2085,11 @@ class MotionCommand(CommandTermBase):
 
         motion_idx = -1 if use_motion_end else 0
 
-        # Assume the pelvis is the first in robot_body_names
-        motion_root_pos = self.motion.body_pos_w[motion_idx, 0].to(self.device)
-        motion_root_quat = self.motion.body_quat_w[motion_idx, 0].to(self.device).unsqueeze(0)
+        # The root is first in robot order but may appear elsewhere in motion order.
+        motion_root_pos = self.motion._body_pos_w[motion_idx, self._root_body_index_in_motion].to(self.device)
+        motion_root_quat = (
+            self.motion._body_quat_w[motion_idx, self._root_body_index_in_motion].to(self.device).unsqueeze(0)
+        )
         _, _, motion_yaw = get_euler_xyz(motion_root_quat, w_last=True)
 
         # Keep z from init config but adopt the clip's x,y at the chosen anchor frame.
