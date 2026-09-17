@@ -48,7 +48,8 @@ class OnnxRuntimeConfig:
     intra_op_num_threads: int = 0
     """Threads per operator. 0 keeps ORT's default of one thread per core, which
     on a core-restricted target oversubscribes badly: 32 threads on three
-    available cores measured 1.26 s of run-queue delay against 4.66 s of CPU."""
+    available cores measured 1.26 s of run-queue delay against 4.66 s of CPU in
+    ``/proc/<pid>/schedstat``. Setting 1 took that to 19 threads and 0.67 s."""
 
     inter_op_num_threads: int = 0
     """Threads across operators (parallel execution mode only). 0 keeps ORT's default."""

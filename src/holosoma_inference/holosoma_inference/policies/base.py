@@ -872,7 +872,8 @@ class BasePolicy:
                 self.latency_tracker.end_cycle()
 
                 # Emitting this in the loop owns the loop's worst cycle: suppressing
-                # it moved max from 4633 to 1814 us. Interval 0 turns it off.
+                # it moved max from 4633 to 1814 us. A tail effect only -- it is ~2 %
+                # of cycles, so it never shows up in p95. Interval 0 turns it off.
                 # (flush=True dropped: loguru takes it as a format kwarg, not a flush.)
                 if stats_interval and it % stats_interval == 0 and self.use_policy_action:
                     debug_str = f"RL FPS: {self.latency_tracker.get_fps():.2f} | {self.latency_tracker.get_stats_str()}"
