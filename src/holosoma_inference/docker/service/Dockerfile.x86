@@ -11,7 +11,7 @@
 # Why no CUDA / torch / NVPL / TensorRT (unlike docker/thor/Dockerfile):
 #   Policy inference runs the ONNX model through `onnxruntime` on the CPU
 #   (holosoma_inference installs the CPU `onnxruntime`, and
-#   policies/base.py + policies/wbt.py call onnxruntime.InferenceSession()
+#   utils/onnx.py calls onnxruntime.InferenceSession()
 #   with no execution-provider argument → CPUExecutionProvider). Nothing in
 #   holosoma_inference imports torch. The Thor image carries CUDA/NVPL/cuDSS/
 #   TensorRT only because they ship in its L4T base, not because inference

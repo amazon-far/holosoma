@@ -42,6 +42,29 @@ class DebugConfig:
 
 
 @dataclass(frozen=True)
+class OnnxRuntimeConfig:
+    """ONNX Runtime session options for the policy model. Defaults are ORT's own."""
+
+    intra_op_num_threads: int = 0
+    """Threads per operator. 0 keeps ORT's default of one thread per core, which
+    on a core-restricted target oversubscribes badly: 32 threads on three
+    available cores measured 1.26 s of run-queue delay against 4.66 s of CPU in
+    ``/proc/<pid>/schedstat``. Setting 1 took that to 19 threads and 0.67 s."""
+
+    inter_op_num_threads: int = 0
+    """Threads across operators (parallel execution mode only). 0 keeps ORT's default."""
+
+    enable_cpu_mem_arena: bool = True
+    """ORT default. False makes the CPU allocator go to the system allocator instead."""
+
+    enable_mem_pattern: bool = True
+    """ORT default. False disables pre-planned memory reuse across nodes."""
+
+    execution_mode: Literal["sequential", "parallel"] = "sequential"
+    """Graph execution mode. "sequential" is ORT's default."""
+
+
+@dataclass(frozen=True)
 class Ros2DepthConsumerConfig:
     """Config for the ROS2 depth-image consumer (``Ros2DepthConsumer``).
 
@@ -115,6 +138,26 @@ class TaskConfig:
 
     depth: Ros2DepthConsumerConfig = Ros2DepthConsumerConfig()
     """Depth-image consumer config (empty ``topics`` disables it)."""
+
+    onnxruntime: OnnxRuntimeConfig = OnnxRuntimeConfig()
+    """ONNX Runtime session options for the policy model."""
+
+    fresh_state_timeout_s: float = 0.0
+    """Block for a fresh state sample before reading state, up to this many seconds.
+
+    The control loop is paced by ``RateLimiter`` on its own absolute schedule and
+    then reads whatever the interface has cached, so the consumed sample can be
+    older than the sensor period. When this is non-zero and the interface
+    implements ``wait_fresh_state(timeout_s)``, the loop waits for the next
+    sample first; the wait is wall time inside the cycle, not sensor→wire
+    latency. 0 (default) reads the cache as before."""
+
+    stats_log_interval: int = 50
+    """Iterations between the one-line latency summary. 0 disables the summary."""
+
+    latency_csv_path: str | None = None
+    """Write a per-cycle latency CSV here. The logged stats are a rolling
+    ``rl_rate``-wide window, which cannot show a p99 or a max over a whole run."""
 
     velocity_input: InputSource = DEFAULT_VELOCITY_INPUT
     """Source for velocity commands."""
