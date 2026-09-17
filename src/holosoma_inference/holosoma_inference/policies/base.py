@@ -11,7 +11,6 @@ from pathlib import Path
 import netifaces as ni
 import numpy as np
 import onnx
-import onnxruntime
 from loguru import logger
 from termcolor import colored
 
@@ -23,6 +22,7 @@ from holosoma_inference.inputs.api.commands import StateCommand, VelCmd
 from holosoma_inference.sdk import create_interface
 from holosoma_inference.utils.latency import LatencyTracker
 from holosoma_inference.utils.math.quat import quat_rotate_inverse
+from holosoma_inference.utils.onnx import create_policy_session
 from holosoma_inference.utils.rate import RateLimiter
 from holosoma_inference.utils.wandb import load_checkpoint
 
@@ -290,7 +290,7 @@ class BasePolicy:
 
     def _init_latency_tracking(self):
         """Initialize latency tracking components."""
-        self.latency_tracker = LatencyTracker(window_size=int(self.rl_rate))
+        self.latency_tracker = LatencyTracker(window_size=int(self.rl_rate), csv_path=self.config.task.latency_csv_path)
 
     def _init_input_handlers(self):
         """Initialize input handlers (ROS, joystick, keyboard)."""
@@ -386,7 +386,7 @@ class BasePolicy:
 
     def setup_policy(self, model_path):
         """Setup ONNX policy model and extract metadata."""
-        self.onnx_policy_session = onnxruntime.InferenceSession(model_path)
+        self.onnx_policy_session = create_policy_session(model_path, self.config.task.onnxruntime)
         input_names = [inp.name for inp in self.onnx_policy_session.get_inputs()]
         output_names = [out.name for out in self.onnx_policy_session.get_outputs()]
 
@@ -656,6 +656,12 @@ class BasePolicy:
         kp_override = None
         kd_override = None
 
+        # Stage 0: optionally wait for a state sample newer than the cached one.
+        fresh_timeout_s = self.config.task.fresh_state_timeout_s
+        if fresh_timeout_s and hasattr(self.interface, "wait_fresh_state"):
+            with self.latency_tracker.measure("fresh_state_wait"):
+                self.interface.wait_fresh_state(fresh_timeout_s)
+
         # Stage 1: Read State
         with self.latency_tracker.measure("read_state"):
             robot_state_data = self.interface.get_low_state()
@@ -845,6 +851,7 @@ class BasePolicy:
 
     def run(self):
         """Main run loop for the policy."""
+        stats_interval = self.config.task.stats_log_interval
         try:
             for it in itertools.count():
                 self.latency_tracker.start_cycle()
@@ -864,9 +871,12 @@ class BasePolicy:
 
                 self.latency_tracker.end_cycle()
 
-                if it % 50 == 0 and self.use_policy_action:
+                # Emitting this in the loop owns the loop's worst cycle: suppressing
+                # it moved max from 4633 to 1814 us. Interval 0 turns it off.
+                # (flush=True dropped: loguru takes it as a format kwarg, not a flush.)
+                if stats_interval and it % stats_interval == 0 and self.use_policy_action:
                     debug_str = f"RL FPS: {self.latency_tracker.get_fps():.2f} | {self.latency_tracker.get_stats_str()}"
-                    self.logger.info(debug_str, flush=True)
+                    self.logger.info(debug_str)
 
                 self.rate.sleep()
 

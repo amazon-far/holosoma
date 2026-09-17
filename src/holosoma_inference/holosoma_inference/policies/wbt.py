@@ -6,7 +6,6 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 import onnx
-import onnxruntime
 from loguru import logger
 from termcolor import colored
 
@@ -23,6 +22,7 @@ from holosoma_inference.utils.math.quat import (
     wxyz_to_xyzw,
     xyzw_to_wxyz,
 )
+from holosoma_inference.utils.onnx import create_policy_session
 
 
 @runtime_checkable
@@ -143,7 +143,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
         return xyzw_to_wxyz(ref_ori_xyzw)
 
     def setup_policy(self, model_path):
-        self.onnx_policy_session = onnxruntime.InferenceSession(model_path)
+        self.onnx_policy_session = create_policy_session(model_path, self.config.task.onnxruntime)
         self.onnx_input_names = [inp.name for inp in self.onnx_policy_session.get_inputs()]
         self.onnx_output_names = [out.name for out in self.onnx_policy_session.get_outputs()]
 
