@@ -27,7 +27,6 @@ isaacgym = SIMULATOR_REGISTRY.add(
                     bounce_threshold_velocity=0.5,
                 ),
             ),
-            contact_sensor_history_length=3,
         ),
     ),
 )
@@ -53,7 +52,6 @@ isaacsim = SIMULATOR_REGISTRY.add(
                 render_mode="human",
                 render_interval=4,
             ),
-            contact_sensor_history_length=3,
         ),
     ),
 )
