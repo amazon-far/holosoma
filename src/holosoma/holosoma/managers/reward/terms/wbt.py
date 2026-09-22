@@ -153,8 +153,8 @@ class UndesiredContacts(RewardTermBase):
         self.threshold = cfg.params.get("threshold", 1.0)
 
     def __call__(self, env: WholeBodyTrackingManager, **kwargs) -> torch.Tensor:
-        # (num_envs, history_length, num_bodies, 3)
-        net_contact_forces = self.env.simulator.contact_forces_history
+        # Max over the substep axis: peak contact during this control step
+        net_contact_forces = self.env.simulator.contact_forces_substep
         is_contact = (
             torch.max(torch.norm(net_contact_forces[:, :, self.undesired_contacts_body_indexes], dim=-1), dim=1)[0]
             > self.threshold

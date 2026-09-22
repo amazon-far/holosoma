@@ -124,7 +124,6 @@ class LeggedRobotLocomotionManager(BaseTask):
     def _refresh_envs_after_reset(self, env_ids):
         self.simulator.set_actor_root_state_tensor(env_ids, self.simulator.all_root_states)
         self.simulator.set_dof_state_tensor(env_ids, self.simulator.dof_state)
-        self.simulator.clear_contact_forces_history(env_ids)
         self.need_to_refresh_envs[env_ids] = False
         self.simulator.refresh_sim_tensors()
         self._pre_compute_observations_callback()
