@@ -23,6 +23,7 @@ from holosoma.utils.simulator_config import SimulatorType, get_simulator_type
 if TYPE_CHECKING:
     from holosoma.simulator.shared.camera_controller import CameraController
     from holosoma.simulator.shared.camera_sensor import SensorManager
+    from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
     from holosoma.simulator.shared.simulator_bridge import SimulatorBridge
     from holosoma.simulator.shared.video_recorder import VideoRecorderInterface
     from holosoma.simulator.shared.virtual_gantry import VirtualGantry
@@ -127,7 +128,7 @@ class BaseSimulator:
     dof_pos: torch.Tensor
     dof_vel: torch.Tensor
     contact_forces: torch.Tensor
-    contact_forces_history: torch.Tensor
+    contact_recorder: ContactSubstepRecorder
 
     # Robot properties, populated by each backend during setup (see _setup_robot_props_*).
     num_dof: int
@@ -181,6 +182,7 @@ class BaseSimulator:
         # before any camera-consumer plugin (egress/viz/video) reads. No-ops until a backend builds
         # sensor_manager during setup; harmless when no cameras are configured.
         self.hooks.add(Phase.FRAME_END, self.render_sensors, name="sensors.render")
+        self.hooks.add(Phase.FRAME_BEGIN, self._begin_contact_substep, name="contact.begin_frame")
         # Build plugins from tyro_config.plugin and keep the instances alive (key -> plugin).
         # Constructing each here registers its hooks on self.hooks, so they fire on later
         # emit(). The `none` preset disables a slot.
@@ -420,15 +422,21 @@ class BaseSimulator:
         """
         raise NotImplementedError("The 'refresh_sim_tensors' method must be implemented in subclasses.")
 
-    def clear_contact_forces_history(self, env_ids: torch.Tensor) -> None:
-        """Clear the contact-forces history for the specified environments.
+    @property
+    def contact_forces_substep(self) -> torch.Tensor:
+        """Contact forces at each physics substep of the current control step,
+        [num_envs, control_decimation_steps, num_bodies, 3], oldest at index 0."""
+        return self.contact_recorder.buffer
 
-        Parameters
-        ----------
-        env_ids : torch.Tensor
-            1-D tensor of environment IDs whose contact-force history is zeroed (empty -> no-op).
-        """
-        raise NotImplementedError("The 'clear_contact_forces_history' method must be implemented in subclasses.")
+    def _begin_contact_substep(self) -> None:
+        self.contact_recorder.begin_frame()
+
+    def record_contact_substep(self, frame: torch.Tensor) -> None:
+        """Record one substep's contact forces [num_envs, num_bodies, 3]. Call from
+        ``simulate_at_each_physics_step``, after the step advances."""
+        # Unguarded: a backend that never built the recorder should crash here rather than
+        # silently leave the buffer at zeros, which reads as real zero-force samples.
+        self.contact_recorder.record(frame)
 
     # ----- Control Application Methods -----
 
