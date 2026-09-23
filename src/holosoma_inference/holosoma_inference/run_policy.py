@@ -47,7 +47,8 @@ def _print_control_guide(policy_class, use_joystick: bool, dual_mode: bool = Fal
         if is_wbt:
             logger.info("")
             logger.info("Whole-Body Tracking Controls:")
-            logger.info("  Select+A       - Start motion clip")
+            logger.info("  R2 (RT)        - Start motion clip")
+            logger.info("  Select+A       - Start motion clip (Unitree pads)")
         else:
             logger.info("")
             logger.info("Locomotion Controls:")
