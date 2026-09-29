@@ -3,7 +3,6 @@
 from holosoma.config_types.randomization import (
     BaseComRange,
     InertiaScale,
-    IsaacGymMaterialDR,
     IsaacSimMaterialDR,
     MaterialRandomizationConfig,
     MujocoMaterialDR,
@@ -43,7 +42,6 @@ object_state_dr_at_setup = {
             # Per-backend channels via the typed config — each backend names ONLY what it honors
             # (no silent cross-backend drop). MuJoCo has no restitution channel (it's solref).
             "material": MaterialRandomizationConfig(
-                isaacgym=IsaacGymMaterialDR(friction=[0.1, 0.6], restitution=[0.0, 1.0]),
                 isaacsim=IsaacSimMaterialDR(
                     static_friction=[0.1, 0.6], dynamic_friction=[0.1, 0.6], restitution=[0.0, 1.0]
                 ),

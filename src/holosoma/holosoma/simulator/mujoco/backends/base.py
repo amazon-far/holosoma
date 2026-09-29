@@ -226,7 +226,7 @@ class IMujocoBackend(abc.ABC):
 
     @abc.abstractmethod
     def create_dof_state_view(self, dof_addrs: dict[str, Any], num_dof: int) -> BaseMujocoView:
-        """Create view for DOF states in IsaacGym flattened format.
+        """Create view for DOF states in flattened format.
 
         Returns view with shape [num_envs * num_dof, 2] where:
         - [:, 0] = positions
@@ -287,7 +287,7 @@ class IMujocoBackend(abc.ABC):
         env_ids : torch.Tensor
             Environment IDs to update
         dof_states : torch.Tensor
-            DOF states [num_selected_envs * num_dofs, 2] in IsaacGym format
+            DOF states [num_selected_envs * num_dofs, 2] in the flattened format
         dof_addrs : dict
             Address dictionary with 'dof_qpos_addrs' and 'dof_qvel_addrs'
         """

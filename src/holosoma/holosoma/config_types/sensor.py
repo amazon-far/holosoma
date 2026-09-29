@@ -6,15 +6,15 @@ A sensor is a read-only producer mounted onto an existing body (a robot link or 
 spawned scene actor) that it follows.
 
 Every mounted sensor uses the OpenGL/USD/MuJoCo optical frame: ``-Z`` forward and ``+Y`` up.
-Isaac Gym converts this convention to its native sensor frame internally.
 """
 
 from __future__ import annotations
 
 import math
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import field
-from typing import TYPE_CHECKING, Callable, Literal, Union, cast, get_args
+from typing import TYPE_CHECKING, Literal, cast, get_args
 
 import tyro
 from pydantic import ConfigDict, model_validator
@@ -244,20 +244,6 @@ class IsaacSimCameraConfig:
 
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)
-class IsaacGymCameraConfig:
-    """IsaacGym-only camera knobs (``gymapi.CameraProperties``) beyond the agnostic core."""
-
-    supersampling_horizontal: int | None = None
-    """Horizontal supersampling factor (anti-aliasing); ``None`` keeps IsaacGym's default (1)."""
-
-    supersampling_vertical: int | None = None
-    """Vertical supersampling factor (anti-aliasing); ``None`` keeps IsaacGym's default (1)."""
-
-    use_collision_geometry: bool | None = None
-    """Render collision geometry instead of visual meshes; ``None`` keeps the default (False)."""
-
-
-@dataclass(frozen=True, config=_FORBID_EXTRA)
 class MujocoCameraConfig:
     """MuJoCo-only camera knobs (``<camera>`` + Warp render context) beyond the agnostic core.
 
@@ -286,7 +272,7 @@ class LidarBodyFilterConfig:
     query target. Backends resolve a selected link to the native rigid body that owns it after
     import or compilation; fixed or fused links therefore follow their owning body. An ``actor``
     selects that registered actor's root body. The filter only affects ray queries and does not
-    remove visual or collision geometry. Isaac Gym's terrain-only compatibility caster has no
+    remove visual or collision geometry. A terrain-only compatibility caster has no
     robot or body targets, so every filter kind is intentionally a no-op there.
     """
 
@@ -531,7 +517,7 @@ class CameraSensorConfig:
     """One mounted camera. The core fields mean the same thing on every backend.
 
     ``width``/``height``/``vertical_fov``/``near``/``far``/``data_types`` and the ``mount``
-    are backend-agnostic. The ``isaacsim``/``isaacgym``/``mujoco`` sub-configs expose additional
+    are backend-agnostic. The ``isaacsim``/``mujoco`` sub-configs expose additional
     engine-specific controls. All backends use a pinhole projection unless the Isaac Sim config
     selects one of its native fisheye models.
 
@@ -555,14 +541,14 @@ class CameraSensorConfig:
     near: float = 0.01
     """Near clipping plane in meters. Defaults to 0.01.
 
-    Per-camera on IsaacSim/IsaacGym. MuJoCo's clip is global (``model.vis.map.znear``), so across
+    Per-camera on IsaacSim. MuJoCo's clip is global (``model.vis.map.znear``), so across
     multiple cameras the shared range widens to ``min(near)``; a camera may then see nearer than
     its own value."""
 
     far: float = 1000.0
     """Far clipping plane in meters. Defaults to 1000.0.
 
-    Per-camera on IsaacSim/IsaacGym; global on MuJoCo, where the shared range widens to ``max(far)``
+    Per-camera on IsaacSim; global on MuJoCo, where the shared range widens to ``max(far)``
     across all cameras. MuJoCo's far-clip also doubles as the depth no-hit boundary."""
 
     depth_clipping_behavior: DepthClippingBehavior = "none"
@@ -585,9 +571,6 @@ class CameraSensorConfig:
 
     isaacsim: IsaacSimCameraConfig = field(default_factory=IsaacSimCameraConfig)
     """Isaac Sim projection and lens settings. Defaults to the pinhole model."""
-
-    isaacgym: IsaacGymCameraConfig = field(default_factory=IsaacGymCameraConfig)
-    """Isaac Gym camera settings. Unset fields retain native defaults."""
 
     mujoco: MujocoCameraConfig = field(default_factory=MujocoCameraConfig)
     """MuJoCo camera settings. Unset fields retain native defaults."""
@@ -678,7 +661,7 @@ class LidarSensorConfig:
         return self
 
 
-SensorConfig = Union[CameraSensorConfig, LidarSensorConfig]
+SensorConfig = CameraSensorConfig | LidarSensorConfig
 
 
 def validate_camera_dict(cameras: dict[str, CameraSensorConfig]) -> None:

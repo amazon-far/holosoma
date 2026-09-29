@@ -146,7 +146,7 @@ class Ros2DepthConsumer(Sensor):
             self._store([frame])
 
     def _synced_cb(self, *msgs: Image) -> None:
-        frames = [_decode_depth(m, t) for m, t in zip(msgs, self._topics)]
+        frames = [_decode_depth(m, t) for m, t in zip(msgs, self._topics, strict=False)]
         if any(f is None for f in frames):
             return  # a bad-encoding frame in the set; drop the whole set
         self._store(frames)

@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import cv2
 import numpy as np
@@ -150,7 +151,9 @@ def test_rgb_png_round_trips_exact(tmp_path: Path) -> None:
     sim = _FakeSimulator({"head": _cam()}, {("head", "rgb"): frames})
     _make(FrameWriterPluginConfig(output_dir=str(tmp_path)), sim)
     _step(sim, {"head"})
-    written = cv2.cvtColor(cv2.imread(str(tmp_path / "head_rgb_env0" / "000000.png")), cv2.COLOR_BGR2RGB)
+    bgr = cv2.imread(str(tmp_path / "head_rgb_env0" / "000000.png"))
+    assert bgr is not None, "imread returned None: the plugin did not write a readable PNG"
+    written = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
     np.testing.assert_array_equal(written, frames[0])
 
 

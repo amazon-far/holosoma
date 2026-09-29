@@ -300,11 +300,11 @@ def test_a_beating_render_cadence_misaligns_state_and_image(monkeypatch: pytest.
 # ----- the loop's other per-backend and viewer branches -----
 
 
-@pytest.mark.parametrize("backend", [SimulatorType.ISAACSIM, SimulatorType.ISAACGYM])
+@pytest.mark.parametrize("backend", [SimulatorType.ISAACSIM])
 def test_tensor_backends_refresh_every_substep_and_again_before_egress(
     monkeypatch: pytest.MonkeyPatch, backend: SimulatorType
 ) -> None:
-    """IsaacGym/IsaacSim resync before every substep, plus once more before each frame egresses.
+    """IsaacSim resyncs before every substep, plus once more before each frame egresses.
 
     The count is the observable here, not an implementation detail: it is what distinguishes a refresh
     per substep (PRE_STEP writers see current state) from one per control step, which the alignment

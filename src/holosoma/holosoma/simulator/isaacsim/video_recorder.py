@@ -2,7 +2,7 @@
 
 This module provides the IsaacSim implementation of the video recording interface,
 using omni.replicator.core for efficient rendering and supporting both synchronous
-and asynchronous recording modes with full feature parity to IsaacGym and MuJoCo.
+and asynchronous recording modes with full feature parity to MuJoCo.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
     """IsaacSim-specific video recording implementation with replicator integration.
 
     This class implements video recording for IsaacSim simulations using omni.replicator.core
-    for efficient rendering. It provides full feature parity with IsaacGym and MuJoCo
+    for efficient rendering. It provides full feature parity with MuJoCo
     implementations while leveraging IsaacSim's native rendering capabilities.
 
     The implementation supports:
@@ -283,7 +283,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
     def _start_persistent_thread(self) -> None:
         """Start persistent recording thread for IsaacSim.
 
-        Unlike IsaacGym which doesn't support threading, IsaacSim can handle
+        IsaacSim can handle
         threaded recording similar to MuJoCo.
         """
         if self.thread_active:

@@ -152,7 +152,7 @@ def test_resolved_objects_equals_resolve_indices_of_arange_multi_env():
     direct = reg.resolve_indices(torch.arange(total))
 
     assert [name for name, _ in cached] == [name for name, _ in direct]
-    for (cn, ce), (dn, de) in zip(cached, direct):
+    for (cn, ce), (dn, de) in zip(cached, direct, strict=False):
         assert cn == dn
         assert torch.equal(ce, de)
 

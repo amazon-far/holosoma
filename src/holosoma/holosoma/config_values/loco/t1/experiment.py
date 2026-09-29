@@ -19,7 +19,7 @@ t1_29dof = ExperimentConfig(
     env_class="holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager",
     training=TrainingConfig(project="hv-t1-manager", name="t1_29dof_manager"),
     algo=replace(algo.ppo, config=replace(algo.ppo.config, num_learning_iterations=25000, use_symmetry=True)),
-    simulator=simulator.isaacgym,
+    simulator=simulator.isaacsim,
     robot=robot.t1_29dof_waist_wrist,
     terrain=terrain.terrain_locomotion_mix,
     observation=observation.t1_29dof_loco_single_wolinvel,
@@ -41,7 +41,7 @@ t1_29dof_fast_sac = ExperimentConfig(
     algo=replace(
         algo.fast_sac, config=replace(algo.fast_sac.config, num_learning_iterations=100000, use_symmetry=True)
     ),
-    simulator=simulator.isaacgym,
+    simulator=simulator.isaacsim,
     robot=robot.t1_29dof_waist_wrist,
     terrain=terrain.terrain_locomotion_mix,
     observation=observation.t1_29dof_loco_single_wolinvel,

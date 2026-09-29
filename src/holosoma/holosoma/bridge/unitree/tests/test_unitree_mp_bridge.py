@@ -15,9 +15,10 @@ import os
 import pickle
 import shutil
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import TYPE_CHECKING, Any, Sequence, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import pytest

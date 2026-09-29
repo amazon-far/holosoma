@@ -6,7 +6,7 @@ This guide provides a complete workflow for running locomotion policies in MuJoC
 
 ## Overview
 
-The sim-to-sim workflow allows you to replay IsaacSim/IsaacGym-trained locomotion checkpoints inside MuJoCo for evaluation and testing.
+The sim-to-sim workflow allows you to replay IsaacSim-trained locomotion checkpoints inside MuJoCo for evaluation and testing.
 
 ## Prerequisites
 

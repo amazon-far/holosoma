@@ -5,7 +5,7 @@ These configurations extend the base simulator configs with sim2sim-specific set
 - Bridge enabled by default
 - Virtual gantry enabled
 - High FPS for real-time robot control
-- DOF force sensors enabled (for IsaacGym)
+- DOF force sensors enabled (for force control)
 """
 
 import dataclasses
@@ -15,27 +15,6 @@ from holosoma.config_types.simulator import BridgeConfig, SimulatorConfig, Virtu
 from holosoma.utils.config_registry import ConfigRegistry
 
 RUN_SIM_REGISTRY = ConfigRegistry(SimulatorConfig, group="holosoma.config.run_sim")
-
-# IsaacGym with sim2sim optimizations
-isaacgym = RUN_SIM_REGISTRY.add(
-    "isaacgym",
-    dataclasses.replace(
-        holosoma.config_values.simulator.isaacgym,
-        config=dataclasses.replace(
-            holosoma.config_values.simulator.isaacgym.config,
-            bridge=BridgeConfig(enabled=True),
-            virtual_gantry=VirtualGantryCfg(enabled=True),
-            sim=dataclasses.replace(
-                holosoma.config_values.simulator.isaacgym.config.sim,
-                fps=1000,  # Gym on CPU can reach ~900 on 4090 (for sim2sim i.e, num_envs=1)
-                physx=dataclasses.replace(
-                    holosoma.config_values.simulator.isaacgym.config.sim.physx,
-                    enable_dof_force_sensors=True,  # required for force controls
-                ),
-            ),
-        ),
-    ),
-)
 
 # IsaacSim with sim2sim optimizations
 isaacsim = RUN_SIM_REGISTRY.add(

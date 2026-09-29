@@ -72,7 +72,7 @@ def _make_robot_spec(link_masses: list[float] | None = None) -> mujoco.MjSpec:  
 
     # A moving body (freejoint or hinge) needs mass and inertia > mjMINVAL or compile() raises;
     # body.mass with explicitinertial also requires a nonzero inertia tensor.
-    for body, m in zip((pelvis, a, b), masses):
+    for body, m in zip((pelvis, a, b), masses, strict=False):
         body.mass = m
         body.inertia = [1e-2, 1e-2, 1e-2]
         body.explicitinertial = True
@@ -221,7 +221,7 @@ def test_apply_mass_true_writes_mass():
 
 
 def test_foreign_sub_configs_ignored():
-    # physx / isaacgym / isaacsim carry a 9.0 sentinel and mujoco=None; MuJoCo reads none of them,
+    # physx / isaacsim carry a 9.0 sentinel and mujoco=None; MuJoCo reads none of them,
     # so the compiled geoms match the un-applied baseline.
     baseline = _all_geom_friction(_compile(_make_robot_spec()))
     lp = PhysicsConfig(

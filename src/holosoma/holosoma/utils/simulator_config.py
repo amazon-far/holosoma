@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import cast
-
-from typing_extensions import Self
+from typing import Self, cast
 
 import holosoma.config_types.simulator
 
@@ -13,7 +11,6 @@ import holosoma.config_types.simulator
 class SimulatorType(Enum):
     """Enum for supported simulator types."""
 
-    ISAACGYM = "isaacgym"
     ISAACSIM = "isaacsim"
     MUJOCO = "mujoco"
 

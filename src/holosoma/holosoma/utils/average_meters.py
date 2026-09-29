@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Mapping, Sequence, cast
+from collections.abc import Mapping, Sequence
+from typing import cast
 
 import numpy as np
 import numpy.typing as npt

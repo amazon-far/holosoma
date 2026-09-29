@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import List, Tuple
 
 import numpy as np
 import viser  # type: ignore[import-not-found]
@@ -23,7 +22,7 @@ def create_motion_control_sliders(
     initial_fps: int = 30,
     initial_interp_mult: int = 2,
     loop: bool = True,
-) -> Tuple[List[viser.GuiInputHandle[int]], List[float]]:
+) -> tuple[list[viser.GuiInputHandle[int]], list[float]]:
     """
     Create a slider + play/pause controls and a background player thread with smooth, slerp-based interpolation.
 
@@ -218,7 +217,7 @@ def create_motion_control_sliders(
                     # Update slider to show current frame number in real-time
                     # Use flag to prevent callback from pausing playback
                     updating_programmatically["flag"] = True
-                    frame_slider.value = k0
+                    frame_slider.value = k0  # type: ignore[misc]  # viser stubs mark .value read-only
                     updating_programmatically["flag"] = False
 
                     tick["next"] = now + dt

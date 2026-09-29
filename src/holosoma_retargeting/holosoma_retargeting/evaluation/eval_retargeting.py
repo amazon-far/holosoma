@@ -9,11 +9,12 @@ Evaluates:
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List, Literal, Sequence
+from typing import Any, Literal
 
 import igl  # type: ignore[import-not-found]
 import mujoco  # type: ignore[import-not-found]
@@ -93,8 +94,8 @@ class RetargetingEvaluator:
         robot_model_path: str,
         object_model_path: str | None,
         object_name: str,
-        demo_joints: List[str],
-        joints_mapping: Dict[str, str],
+        demo_joints: list[str],
+        joints_mapping: dict[str, str],
         visualize: bool = True,
         constants: SimpleNamespace | None = None,
     ):
@@ -353,7 +354,7 @@ class RetargetingEvaluator:
 
         robot_joint_names = [self.joints_mapping[joint_name] for joint_name in joint_names]
 
-        for q, human_joints, object_pose in zip(q_trajectory, human_joints_motion, object_poses):
+        for q, human_joints, object_pose in zip(q_trajectory, human_joints_motion, object_poses, strict=False):
             demo_points = np.array([human_joints[self.demo_joints.index(joint_name)] for joint_name in joint_names])
             demo_local_points_list.append(
                 transform_points_world_to_local(object_pose[:4], object_pose[4:], demo_points)
@@ -492,7 +493,7 @@ class RetargetingEvaluator:
             if self.object_name in (mujoco.mj_id2name(self.robot_model, mujoco.mjtObj.mjOBJ_GEOM, g) or "")
         ]
 
-        for _q, demo_joints in zip(q_trajectory, human_joints_motion):
+        for _q, demo_joints in zip(q_trajectory, human_joints_motion, strict=False):
             # demo contacts (object only)
             dc = self.detect_demo_contact(demo_joints, joint_names)
             if not dc:
@@ -647,8 +648,8 @@ def _evaluate_single_task(
     task_name: str,
     data_path: str,
     input_data_dir: str,
-    robot_config_kwargs: Dict[str, Any],
-    motion_data_config_kwargs: Dict[str, Any],
+    robot_config_kwargs: dict[str, Any],
+    motion_data_config_kwargs: dict[str, Any],
     object_name: str | None,
     data_type: str,
 ):
@@ -778,7 +779,7 @@ def main(cfg: Args) -> None:
     robot_config_kwargs = asdict(cfg.robot_config)
     motion_data_config_kwargs = asdict(cfg.motion_data_config)
 
-    results: Dict[str, Dict[str, Any]] = {}
+    results: dict[str, dict[str, Any]] = {}
     max_workers = max(1, cfg.max_workers)
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = {
@@ -792,7 +793,7 @@ def main(cfg: Args) -> None:
                 object_name,
                 cfg.data_type,
             ): task_name
-            for task_name, file_path in zip(task_names, files)
+            for task_name, file_path in zip(task_names, files, strict=False)
         }
         for fut in as_completed(futures):
             task_name, res = fut.result()
@@ -805,7 +806,7 @@ def main(cfg: Args) -> None:
         return
 
     # Aggregate metrics
-    metrics: Dict[str, Any] = {}
+    metrics: dict[str, Any] = {}
     res_k_name = next(iter(results))
     for metric_k in results[res_k_name]:
         if "max" in metric_k:

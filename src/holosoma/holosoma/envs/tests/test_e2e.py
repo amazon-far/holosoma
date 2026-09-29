@@ -10,8 +10,8 @@ from holosoma.utils.common import seeding
 from holosoma.utils.helpers import get_class
 from holosoma.utils.safe_torch_import import torch
 
-# Builds the default (isaacgym) sim on CUDA; outside tests/simulators/ so set umbrella explicitly.
-pytestmark = pytest.mark.isaacgym
+# Builds the default (isaacsim) sim on CUDA; outside tests/simulators/ so set umbrella explicitly.
+pytestmark = pytest.mark.isaacsim
 
 
 def test_e2e_step() -> None:
@@ -24,9 +24,10 @@ def test_e2e_step() -> None:
     )
 
     tyro_env_config = get_tyro_env_config(tyro_config)
-    with training_context(tyro_config) as context, context.simulation_session(
-        get_class(tyro_config.env_class)(tyro_env_config, device=device)
-    ) as env:
+    with (
+        training_context(tyro_config) as context,
+        context.simulation_session(get_class(tyro_config.env_class)(tyro_env_config, device=device)) as env,
+    ):
         obs_dict = env.reset_all()
         assert len(obs_dict["actor_obs"]) == num_envs
         assert len(obs_dict["critic_obs"]) == num_envs

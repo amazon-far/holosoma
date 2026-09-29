@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import Enum, auto
 from os import getenv
 from typing import NamedTuple
@@ -29,7 +29,9 @@ GITHUB_SERVER_URL = getenv("GITHUB_SERVER_URL")
 GITHUB_REPOSITORY = getenv("GITHUB_REPOSITORY")
 GITHUB_RUN_ID = getenv("GITHUB_RUN_ID")
 
-# Simulator tag values set by nightly.py (config.simulator.config.name).
+# Simulator tag values set by nightly.py (config.simulator.config.name). "isaacgym" is retained
+# for ARCHIVED runs only -- the backend is retired; dropping it would make historical runs resolve
+# their exp_name to the literal tag instead of falling back to "unknown-sim".
 KNOWN_SIMULATORS = {"isaacgym", "isaacsim", "mujoco"}
 # GPU count for a multi-GPU nightly run; used only as a fallback for legacy runs
 # tagged with "multigpu" but no explicit "gpus-N" tag. Keep in sync with nightly.py.
@@ -62,7 +64,7 @@ class NightlyRun(NamedTuple):
     url: str
     status: RunStatus
     exp_name: str
-    simulator: str  # e.g. "isaacgym"/"isaacsim", or "unknown-sim" if untagged
+    simulator: str  # e.g. "isaacsim"/"mujoco", or "unknown-sim" if untagged
     gpus: str  # e.g. "1gpu"/"4gpu", or "unknown-gpu" if untagged
 
     def failed_run_label(self) -> str:
@@ -237,7 +239,7 @@ def get_last_nightly_runs() -> list[NightlyRun]:
     nightly_projects = [project for project in all_projects if project.name.startswith("nightly")]
 
     # Get runs from the last 24 hours
-    since_time = datetime.now(timezone.utc) - timedelta(hours=24)
+    since_time = datetime.now(UTC) - timedelta(hours=24)
     since_iso = since_time.isoformat()
 
     # GHA run ids filter

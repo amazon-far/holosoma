@@ -19,7 +19,7 @@ VIEW CLASSES
    - Assembles 13-element state from separate qpos/qvel arrays
    - Critical for correct robot orientation (prevents physics instability)
 
-2. **MjwDofStateView**: Handles IsaacGym-compatible DOF state flattening
+2. **MjwDofStateView**: Handles canonical DOF state flattening
    - Converts between MuJoCo's separate arrays and holosoma's flattened format
    - Enables compatibility with existing training code
    - Required for state resets and DOF manipulation
@@ -47,7 +47,8 @@ All views maintain zero-copy access to underlying Warp GPU arrays:
 
 from __future__ import annotations
 
-from typing import Any, Callable, Sequence, Tuple, Union
+from collections.abc import Callable, Sequence
+from typing import Any, Union
 
 import numpy as np
 import torch
@@ -55,25 +56,25 @@ import torch
 from holosoma.utils.rotations import quat_rotate, quat_rotate_inverse
 
 # Index passed to __getitem__/__setitem__ (forwarded to torch tensor indexing).
-IndexKey = Union[int, slice, "torch.Tensor", Tuple[Any, ...], Sequence[int]]
+IndexKey = Union[int, slice, "torch.Tensor", tuple[Any, ...], Sequence[int]]
 # Value accepted by __setitem__ / copy_ (converted to a tensor if not already one).
 IndexValue = Union["torch.Tensor", "np.ndarray[Any, Any]", Sequence[Any], "MjwDofStateView", "MjwRootStateView"]
 
 
 class MjwDofStateView:
-    """Zero-copy view for DOF states in IsaacGym flattened format.
+    """Zero-copy view for DOF states in flattened format.
 
     Why this view is necessary
     --------------------------
     Raw PyTorch tensors cannot handle the format transformation between MuJoCo's
-    native DOF storage and holosoma's expected IsaacGym-compatible format:
+    native DOF storage and holosoma's expected holosoma's canonical flattened format:
 
     - **MuJoCo format**: Separate qpos[num_envs, nq] and qvel[num_envs, nv] arrays
     - **holosoma expects**: Flattened [num_envs * num_dof, 2] where [:, 0] = pos, [:, 1] = vel
 
     Without this view:
     - Code would need manual reshaping at every DOF access point
-    - Training code would break (expects IsaacGym-compatible interface)
+    - Training code would break (expects holosoma's canonical flattened interface)
     - State resets would require complex scatter operations
 
     What it does:
@@ -82,7 +83,7 @@ class MjwDofStateView:
     - Zero-copy: Direct GPU memory access to underlying Warp arrays
 
     This view wraps GPU tensors from WarpBackend and provides zero-copy access
-    compatible with the IsaacGym interface used throughout holosoma.
+    compatible with the flattened interface used throughout holosoma.
     """
 
     # Flag for PyTorch compatibility
@@ -123,12 +124,12 @@ class MjwDofStateView:
         self.device = str(qpos.device)
 
     @property
-    def shape(self) -> Tuple[int, ...]:
+    def shape(self) -> tuple[int, ...]:
         """Return shape [num_envs * num_dof, 2]."""
         return (self.num_envs * self.num_dof, 2)
 
     def __getitem__(self, key: IndexKey) -> torch.Tensor:
-        """Read DOF states in IsaacGym flattened format.
+        """Read DOF states in flattened format.
 
         Returns states as [num_envs * num_dof, 2] where:
         - [:, 0] = positions
@@ -142,13 +143,13 @@ class MjwDofStateView:
         Returns
         -------
         torch.Tensor
-            DOF states in IsaacGym format
+            DOF states in the flattened format
         """
         # Extract DOF positions and velocities
         dof_pos = self.qpos[:, self.dof_pos_indices]  # [num_envs, num_dof]
         dof_vel = self.qvel[:, self.dof_vel_indices]  # [num_envs, num_dof]
 
-        # Stack into IsaacGym format: [num_envs, num_dof, 2]
+        # Stack into the flattened format: [num_envs, num_dof, 2]
         dof_state = torch.stack([dof_pos, dof_vel], dim=2)
 
         # Flatten to [num_envs * num_dof, 2]
@@ -157,7 +158,7 @@ class MjwDofStateView:
         return dof_state_flat[key]
 
     def __setitem__(self, key: IndexKey, value: IndexValue) -> None:
-        """Write DOF states from IsaacGym flattened format.
+        """Write DOF states from flattened format.
 
         Expects states as [num_envs * num_dof, 2] where:
         - [:, 0] = positions
@@ -231,8 +232,8 @@ class MjwDofStateView:
     def __torch_function__(
         cls,
         func: Callable[..., Any],
-        types: Tuple[type, ...],
-        args: Tuple[Any, ...] = (),
+        types: tuple[type, ...],
+        args: tuple[Any, ...] = (),
         kwargs: dict[str, Any] | None = None,
     ) -> Any:
         """Enable PyTorch operations to work with our views.
@@ -274,7 +275,7 @@ class MjwQuaternionView:
     Raw PyTorch tensor slices cannot handle the quaternion convention mismatch:
 
     - **MuJoCo format**: [w, x, y, z] (scalar-first)
-    - **holosoma expects**: [x, y, z, w] (scalar-last, matching IsaacGym/IsaacSim)
+    - **holosoma expects**: [x, y, z, w] (scalar-last, matching IsaacSim)
 
     Without this view:
     - Robot orientations would be incorrectly interpreted
@@ -308,7 +309,7 @@ class MjwQuaternionView:
         self.device = str(qpos.device)
 
     @property
-    def shape(self) -> Tuple[int, ...]:
+    def shape(self) -> tuple[int, ...]:
         """Return shape [num_envs, 4]."""
         return (self.num_envs, 4)
 
@@ -410,7 +411,7 @@ class MjwAngularVelocityView:
         self.device = str(qvel.device)
 
     @property
-    def shape(self) -> Tuple[int, ...]:
+    def shape(self) -> tuple[int, ...]:
         """Return shape [num_envs, 3]."""
         return (self.num_envs, 3)
 
@@ -479,7 +480,7 @@ class MjwRootStateView:
 
     1. **Quaternion Convention Mismatch**:
        - MuJoCo uses: [w, x, y, z] (scalar-first)
-       - holosoma expects: [x, y, z, w] (scalar-last, matching IsaacGym/IsaacSim)
+       - holosoma expects: [x, y, z, w] (scalar-last, matching IsaacSim)
 
     2. **Composite State Assembly**:
        - MuJoCo stores: pos/quat in qpos[nq], velocities in qvel[nv] (separate arrays)
@@ -542,7 +543,7 @@ class MjwRootStateView:
         self.device = str(qpos.device)
 
     @property
-    def shape(self) -> Tuple[int, ...]:
+    def shape(self) -> tuple[int, ...]:
         """Return shape [num_envs, 13]."""
         return (self.num_envs, 13)
 
@@ -573,7 +574,7 @@ class MjwRootStateView:
 
         # MuJoCo's freejoint qvel stores angular velocity in the BODY-LOCAL frame, but the
         # unified robot_root_states contract is WORLD-frame for both velocities (matching
-        # IsaacGym/IsaacSim, and what every consumer of robot_root_states[:, 10:13] expects).
+        # IsaacSim, and what every consumer of robot_root_states[:, 10:13] expects).
         # Rotate the body-local angular velocity into world using the root's world orientation.
         ang_vel = quat_rotate(quat_holo, ang_vel, w_last=True)
 

@@ -29,16 +29,7 @@ draw_foot_height_points = _not_initialized
 # Initialize based on current simulator type
 simulator_type = get_simulator_type()  # Will raise if not set
 
-if simulator_type == SimulatorType.ISAACGYM:
-    # Import IsaacGym drawing functions
-    from holosoma.utils.adapters.isaacgym_draw_adapter import (
-        clear_lines,
-        draw_foot_height_points,
-        draw_height_points,
-        draw_line,
-        draw_sphere,
-    )
-elif simulator_type == SimulatorType.MUJOCO:
+if simulator_type == SimulatorType.MUJOCO:
     # Import MuJoCo drawing functions (including logging stubs)
     from holosoma.utils.adapters.mujoco_draw_adapter import (
         clear_lines,
@@ -81,6 +72,6 @@ def draw_debug_feet(
     feet_heights: Any,
 ) -> None:
     """Draw foot positions and heights for debugging."""
-    for foot_pos, foot_height in zip(feet_positions, feet_heights):
+    for foot_pos, foot_height in zip(feet_positions, feet_heights, strict=False):
         terrain_height = foot_pos[2] - foot_height
         draw_foot_height_points(simulator, foot_pos, terrain_height, env_id)

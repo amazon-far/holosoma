@@ -90,7 +90,7 @@ class TerminationManager:
         reset_flags = torch.zeros(self.env.num_envs, dtype=torch.bool, device=self.device)
         timeout_flags = torch.zeros_like(reset_flags)
 
-        for term_name, term_cfg in zip(self._term_names, self._term_cfgs):
+        for term_name, term_cfg in zip(self._term_names, self._term_cfgs, strict=False):
             if term_name in self._term_instances:
                 result = self._term_instances[term_name](self.env, **term_cfg.params)
             else:

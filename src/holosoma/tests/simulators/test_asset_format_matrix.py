@@ -9,11 +9,10 @@ provided vs. what the backend supports — never silently dropped.
     backend    usd   urdf  xml
     -------    ---   ----  ---
     MuJoCo      x     ok   ok    (prefers xml over urdf)
-    IsaacGym    x     ok    x
     IsaacSim   ok     ok    x    (prefers usd over urdf)
 
 Live spawn of the supported cells is covered per backend by test_scene_spawn_mujoco.py
-(MuJoCo urdf+xml) and the scene_spawn_assert.py harness (IsaacGym urdf, IsaacSim usd+urdf).
+(MuJoCo urdf+xml) and the scene_spawn_assert.py harness (IsaacSim usd+urdf).
 """
 
 from __future__ import annotations
@@ -30,18 +29,16 @@ _PATH = {"usd": "a.usd", "urdf": "a.urdf", "xml": "a.xml"}
 # The expected support matrix. These values are hand-copied from each backend's
 # get_supported_scene_formats() return literal:
 #   MuJoCo.get_supported_scene_formats()    -> ["xml", "urdf"]   (mujoco.py)
-#   IsaacGym.get_supported_scene_formats()  -> ["urdf"]          (isaacgym.py)
 #   IsaacSim.get_supported_scene_formats()  -> ["usd", "urdf"]   (isaacsim.py)
 # They CANNOT be bound to source here: get_supported_scene_formats is a plain instance
 # method whose only access path is through the backend modules, and importing those drags
-# in cluster-only SDKs (isaacgym -> `from isaacgym import gymapi`, isaacsim -> `import
-# isaaclab.sim`) and torch (mujoco.py top-level), none of which are importorskip-guarded.
+# in cluster-only SDKs (isaacsim -> `import isaaclab.sim`) and torch (mujoco.py top-level),
+# neither of which is importorskip-guarded.
 # This file is deliberately pure (no simulator), so the matrix is mirrored by hand and the
 # selection contract is asserted against select_asset_format. If a backend's supported list
 # drifts in source, update the corresponding row here.
 BACKENDS = {
     "mujoco": ["xml", "urdf"],
-    "isaacgym": ["urdf"],
     "isaacsim": ["usd", "urdf"],
 }
 ALL_FORMATS = ["usd", "urdf", "xml"]

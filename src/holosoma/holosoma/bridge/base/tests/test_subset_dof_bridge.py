@@ -8,8 +8,9 @@ possibly-different ``robot_type`` to the SDK (``sdk_robot_type``), so a co-contr
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Sequence, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import numpy.typing as npt

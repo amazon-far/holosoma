@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import torch
 
@@ -25,15 +26,15 @@ class SymmetryUtils:
         self.robot_config = env.robot_config
 
         # Initialize attributes that will be set during initialization
-        self.observation_dims: Dict[str, int] = {}
-        self.observation_dims_single_frame: Dict[str, int] = {}  # Dimension without history
-        self.history_lengths: Dict[str, int] = {}
-        self.sub_observation_keys: Dict[str, List[str]] = {}
-        self.sub_observation_indices: Dict[str, Dict[str, torch.Tensor]] = {}
-        self.sub_observation_indices_single_frame: Dict[
-            str, Dict[str, torch.Tensor]
+        self.observation_dims: dict[str, int] = {}
+        self.observation_dims_single_frame: dict[str, int] = {}  # Dimension without history
+        self.history_lengths: dict[str, int] = {}
+        self.sub_observation_keys: dict[str, list[str]] = {}
+        self.sub_observation_indices: dict[str, dict[str, torch.Tensor]] = {}
+        self.sub_observation_indices_single_frame: dict[
+            str, dict[str, torch.Tensor]
         ] = {}  # Indices within single frame
-        self.sub_observation_dims: Dict[str, int] = {}
+        self.sub_observation_dims: dict[str, int] = {}
         self.joint_index_map: torch.Tensor = torch.empty(0)
         self.sign_flip_mask: torch.Tensor = torch.empty(0)
 

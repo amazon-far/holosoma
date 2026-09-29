@@ -11,7 +11,7 @@ Covered:
   (not zero) by both the baseline reset and the jitter term.
 - jitter_object_pose_on_reset writes within range, per-env distinct, on free bodies only.
 - multi-object set/get round-trips without scrambling objects across envs (the name-major
-  reshape contract; the analogue of the IsaacGym reshape fix on the Warp backend).
+  reshape contract, on the Warp backend).
 """
 
 from __future__ import annotations
@@ -203,7 +203,7 @@ def test_jitter_composes_onto_nonidentity_orientation():
 
 def test_multi_object_set_get_roundtrip_no_scramble(sim):
     """set_actor_states on TWO free bodies round-trips per (object, env) without crossing
-    objects — the name-major contract (analogue of the IsaacGym reshape fix)."""
+    objects — the name-major contract."""
     all_envs = torch.arange(NUM_ENVS, device=sim.sim_device)
     names = ["free0", "free1"]
 

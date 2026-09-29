@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from glob import has_magic
-from typing import Any, List
+from typing import Any
 
 import numpy as np
 import torch
@@ -50,7 +50,7 @@ class MotionLoader:
         self._body_indexes = body_indexes
         self.time_step_total = self._joint_pos.shape[0]
 
-    def _get_index_of_a_in_b(self, a_names: List[str], b_names: List[str], device: str = "cpu") -> torch.Tensor:
+    def _get_index_of_a_in_b(self, a_names: list[str], b_names: list[str], device: str = "cpu") -> torch.Tensor:
         indexes = []
         for name in a_names:
             assert name in b_names, f"The specified name ({name}) doesn't exist: {b_names}"
@@ -261,7 +261,7 @@ class MultiMotionLoader:
             try:
                 loader = MotionLoader(mf, robot_body_names, robot_joint_names, device=device)
                 loaders.append(loader)
-            except (KeyError, AssertionError, ValueError) as e:  # noqa: PERF203
+            except (KeyError, AssertionError, ValueError) as e:
                 # Skip files with incompatible format (e.g., missing body_names, wrong body count)
                 skipped += 1
                 if skipped <= 3:
@@ -531,7 +531,7 @@ FAKE_BODY_NAME_ALIASES: dict[str, str] = {
 }
 
 
-def get_filtered_body_names(body_list: List[str], pattern: str) -> List[str]:
+def get_filtered_body_names(body_list: list[str], pattern: str) -> list[str]:
     return [body_name for body_name in body_list if re.match(pattern, body_name)]
 
 
@@ -829,9 +829,9 @@ class MotionCommand(CommandTermBase):
 
         ## 1.0 get the reference body poses
 
-        # Issue (This is a isaacgym only issue.):
+        # Issue:
         # ------------------------------------------------------------
-        # In isaacgym, immediately after reset (self._env.episode_length_buf == 0), calling
+        # Immediately after reset (self._env.episode_length_buf == 0), calling
         # simulator.set_actor_root_state_tensor and simulator.set_dof_state_tensor will reset
         # the robot_root_pos_w and robot_root_quat_w successfully.
         # However, the robot_body_pos_w and robot_body_quat_w are not updated successfully,
@@ -1268,7 +1268,7 @@ class MotionCommand(CommandTermBase):
         """Capture body states by temporarily setting the robot state in the simulator."""
         simulator = self._env.simulator
         assert simulator.get_simulator_type() == SimulatorType.ISAACSIM, (
-            "Default-pose interpolation only supports IsaacSim; IsaacGym write_state_updates does not run FK."
+            "Default-pose interpolation only supports IsaacSim (it requires FK on state writes)."
         )
         env_id = 0
         env_origin = simulator.scene.env_origins[env_id].to(self.device)
@@ -1486,7 +1486,7 @@ class MotionCommand(CommandTermBase):
             return env_ids.to(device=self.device, dtype=torch.long)
         return torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
 
-    def _get_index_of_a_in_b(self, a_names: List[str], b_names: List[str], device: str = "cpu") -> torch.Tensor:
+    def _get_index_of_a_in_b(self, a_names: list[str], b_names: list[str], device: str = "cpu") -> torch.Tensor:
         indexes = []
         for name in a_names:
             assert name in b_names, f"The specified name ({name}) doesn't exist: {b_names}"

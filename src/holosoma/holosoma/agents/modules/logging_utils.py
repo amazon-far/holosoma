@@ -5,8 +5,9 @@ import pathlib
 import statistics
 import time
 from collections import deque
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any, Generator, TypedDict
+from typing import Any, TypedDict
 
 import torch
 import wandb

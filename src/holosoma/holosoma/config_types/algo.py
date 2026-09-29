@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import field
-from typing import Any, List, Union
+from typing import Any
 
 from pydantic import model_validator
 from pydantic.dataclasses import dataclass
@@ -22,7 +22,7 @@ class OptimizerConfig:
 class LayerConfig:
     """Configuration for neural network layer settings."""
 
-    hidden_dims: List[int] = field(default_factory=lambda: [512, 256, 128])
+    hidden_dims: list[int] = field(default_factory=lambda: [512, 256, 128])
     """List of hidden layer dimensions."""
 
     activation: str = "ELU"
@@ -40,7 +40,7 @@ class LayerConfig:
     encoder_output_dim: int | None = None
     """Output dimension for encoder. Only used for encoder modules."""
 
-    encoder_hidden_dims: List[int] | None = None
+    encoder_hidden_dims: list[int] | None = None
     """Hidden dimensions for encoder. Only used for encoder modules."""
 
     encoder_input_name: str = ""
@@ -87,10 +87,10 @@ class ModuleConfig:
     type: str
     """Module type (e.g., MLP)."""
 
-    input_dim: List[str] = field(default_factory=list)
+    input_dim: list[str] = field(default_factory=list)
     """Input dimension specification."""
 
-    output_dim: List[str | int] = field(default_factory=list)
+    output_dim: list[str | int] = field(default_factory=list)
     """Output dimension specification."""
 
     layer_config: LayerConfig = field(default_factory=LayerConfig)
@@ -315,8 +315,8 @@ class FastSACConfig:
     use_cnn_encoder: bool = False
     """whether to use CNN for the encoder"""
 
-    actor_obs_keys: List[str] = field(default_factory=lambda: ["actor_obs"])
-    critic_obs_keys: List[str] = field(default_factory=lambda: ["critic_obs"])
+    actor_obs_keys: list[str] = field(default_factory=lambda: ["actor_obs"])
+    critic_obs_keys: list[str] = field(default_factory=lambda: ["critic_obs"])
 
     eval_callbacks: Any = None
     """Evaluation callbacks configuration."""
@@ -350,6 +350,6 @@ class FastSACAlgoConfig:
     """Algorithm-specific configuration."""
 
 
-AlgoInitConfig = Union[PPOConfig, FastSACConfig]
+AlgoInitConfig = PPOConfig | FastSACConfig
 
-AlgoConfig = Union[PPOAlgoConfig, FastSACAlgoConfig]
+AlgoConfig = PPOAlgoConfig | FastSACAlgoConfig

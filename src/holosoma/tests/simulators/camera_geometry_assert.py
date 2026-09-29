@@ -111,7 +111,7 @@ def _check_geometry(img, cam, cam_to_panel_dist, panel_half_size, label):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacgym", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
@@ -152,7 +152,7 @@ def main() -> int:
     sim.install_plugins()
 
     # Pin the robot to a known upright pose at each env origin so the (pelvis-mounted) camera aligns
-    # with the panel placed ahead (IsaacGym jitters the spawn xy; other backends are already at origin).
+    # with the panel placed ahead (backends that jitter the spawn xy need it; others are at origin).
     # Use the origins the simulator ACTUALLY placed the envs at (IsaacSim clones onto its own grid and
     # ignores the requested env_origins; sim.env_origins is reconciled to the real placement).
     env_origins = sim.env_origins
@@ -167,15 +167,11 @@ def main() -> int:
 
     def _hold_dof() -> None:
         # Restore joints to the spawn pose with zero velocity. The cross-backend DOF setter takes
-        # different tensor shapes (IsaacGym flattened [n*ndof, 2], IsaacSim 3D [n, ndof, 2]); build
+        # different tensor shapes (IsaacSim 3D [n, ndof, 2]); build
         # whichever this backend expects. MuJoCo isn't affected by this flake, so only the two
         # articulation backends are handled.
         ndof = sim.num_dof
-        if args.simulator == "isaacgym":
-            ds = _torch.zeros(n * ndof, 2, device=device)
-            ds[:, 0] = _spawn_dof_pos.reshape(-1)
-            sim.set_dof_state_tensor_robots(_all_ids, ds)
-        elif args.simulator == "isaacsim":
+        if args.simulator == "isaacsim":
             ds = _torch.zeros(n, ndof, 2, device=device)
             ds[:, :, 0] = _spawn_dof_pos
             sim.set_dof_state_tensor_robots(_all_ids, ds)

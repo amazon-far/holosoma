@@ -49,12 +49,6 @@ jobs:
             dependency_target: dependencies
             target: runtime
             runner_prefix: codebuild-holosoma-a10g-x1-gpu-build
-          - environment: isaacgym
-            image: holosoma-isaacgym
-            dockerfile: docker/isaacgym.Dockerfile
-            dependency_target: dependencies
-            target: runtime
-            runner_prefix: codebuild-holosoma-a10g-x1-gpu-build
           - environment: isaacsim
             image: holosoma-isaacsim
             dockerfile: docker/isaacsim.Dockerfile

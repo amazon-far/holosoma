@@ -13,7 +13,8 @@ import dataclasses
 import math
 import os
 import sys
-from typing import Any, Callable, NoReturn
+from collections.abc import Callable
+from typing import Any, NoReturn
 
 import tyro
 

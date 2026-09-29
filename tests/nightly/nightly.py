@@ -7,7 +7,6 @@ import os
 import subprocess
 import sys
 import time
-from datetime import timezone
 from os import getenv
 from pathlib import Path
 from typing import Any
@@ -35,7 +34,7 @@ WANDB_STATUS_UPDATE_DELAY_S = 3.0
 
 
 def now_timestamp() -> str:
-    return datetime.datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return datetime.datetime.now(tz=datetime.UTC).strftime("%Y%m%d_%H%M%S")
 
 
 def wait_for_wandb_run(api: Any, run_path: str) -> Any:

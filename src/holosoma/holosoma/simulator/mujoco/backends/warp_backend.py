@@ -76,7 +76,7 @@ def _mul_quat(u: wp.quat, v: wp.quat) -> wp.quat:
 def _rot_vec_quat(vec: wp.vec3, quat: wp.quat) -> wp.vec3:
     s = quat[0]
     u = wp.vec3(quat[1], quat[2], quat[3])
-    return 2.0 * (wp.dot(u, vec) * u) + (s * s - wp.dot(u, u)) * vec + 2.0 * s * wp.cross(u, vec)  # type: ignore[no-any-return]
+    return 2.0 * (wp.dot(u, vec) * u) + (s * s - wp.dot(u, u)) * vec + 2.0 * s * wp.cross(u, vec)
 
 
 @wp.func
@@ -122,12 +122,12 @@ def _static_geom_local_to_global(
     The composition forward kinematics applies to a geom, restricted to the given geoms/worlds,
     using the local wxyz quaternion helpers above.
     """
-    # wp.tid() returns a 2-tuple for a 2D launch, but Warp's stub's first overload types a 0-arg
-    # call as scalar int, so mypy reports "int not iterable" on the unpack (misc) and cannot type
-    # wi/gi (has-type). Comment-only ignores keep this valid in the Warp DSL (which rejects cast()).
+    # wp.tid() returns a 2-tuple for a 2D launch, but Warp's stub types the 0-arg call as a union
+    # whose first member is a scalar int, so mypy reports "int not iterable" on the unpack. A
+    # comment-only ignore keeps this valid in the Warp DSL (which rejects cast()).
     wi, gi = wp.tid()  # type: ignore[misc]
-    worldid = worlds[wi]  # type: ignore[has-type]
-    geomid = geom_ids[gi]  # type: ignore[has-type]
+    worldid = worlds[wi]
+    geomid = geom_ids[gi]
     bodyid = geom_bodyid[geomid]
     bpos = xpos[worldid, bodyid]
     bquat = xquat[worldid, bodyid]
@@ -789,7 +789,7 @@ class WarpBackend(IMujocoBackend):
         Returns
         -------
         MjwDofStateView
-            DOF state view with IsaacGym flattened format [num_envs * num_dof, 2]
+            DOF state view with flattened format [num_envs * num_dof, 2]
         """
         from holosoma.simulator.mujoco.mjw_views import MjwDofStateView
 
@@ -902,7 +902,7 @@ class WarpBackend(IMujocoBackend):
         env_ids : torch.Tensor
             Environment IDs to update [num_selected_envs]
         dof_states : torch.Tensor
-            DOF states [num_all_envs * num_dofs, 2] in IsaacGym format
+            DOF states [num_all_envs * num_dofs, 2] in the flattened format
             where [:, 0] = positions, [:, 1] = velocities
             NOTE: Contains states for ALL environments, we select based on env_ids
         dof_addrs : dict
@@ -921,7 +921,7 @@ class WarpBackend(IMujocoBackend):
 
         selected_dof_states = dof_states[indices]  # [len(env_ids) * num_dof, 2]
 
-        # Reshape from flattened IsaacGym format
+        # Reshape from the flattened format
         dof_pos = selected_dof_states[:, 0].view(len(env_ids), num_dof)  # [num_selected_envs, num_dof]
         dof_vel = selected_dof_states[:, 1].view(len(env_ids), num_dof)  # [num_selected_envs, num_dof]
 

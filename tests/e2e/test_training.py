@@ -13,7 +13,6 @@ from pathlib import Path
 from threading import Thread
 
 import pytest
-import torch
 
 REPO_ROOT = Path(__file__).parent.parent.parent.absolute()
 
@@ -74,15 +73,9 @@ def teed_call(cmd_args, stdout=None, stderr=None, **kwargs):
     return p.wait()
 
 
-def assert_training_and_eval_workflow(
-    workflow_name: str, multi_gpu: bool = False, extra_config: list[str] | None = None
-) -> None:
+def assert_training_and_eval_workflow(workflow_name: str, extra_config: list[str] | None = None) -> None:
     """Run evaluation after training and assert whether return code is 0."""
-    executable = (
-        [sys.executable, "-m", "torch.distributed.run", f"--nproc_per_node={torch.cuda.device_count()}"]
-        if multi_gpu
-        else [sys.executable]
-    )
+    executable = [sys.executable]
 
     train_stdout = io.BytesIO()
     train_stderr = io.BytesIO()
@@ -142,28 +135,12 @@ ISAACSIM_ONLY_WORKFLOWS = [
 ]
 
 
-# Default workflows run on simulator.isaacgym (the experiment-preset default).
-@pytest.mark.isaacgym
-@pytest.mark.parametrize(
-    "workflow_name",
-    WORKFLOWS,
-)
-@pytest.mark.parametrize(
-    "multi_gpu",
-    [
-        pytest.param(False, id="single-gpu"),
-        pytest.param(True, marks=pytest.mark.multi_gpu, id="multi-gpu"),
-    ],
-)
-def test_training_and_eval_workflow(workflow_name: str, multi_gpu: bool):
-    assert_training_and_eval_workflow(workflow_name, multi_gpu=multi_gpu)
-
-
 @pytest.mark.isaacsim
 @pytest.mark.parametrize(
     "workflow_name",
     WORKFLOWS + ISAACSIM_ONLY_WORKFLOWS,
 )
-@pytest.mark.parametrize("multi_gpu", [False])
-def test_training_and_eval_workflow_isaacsim(workflow_name: str, multi_gpu: bool):
-    assert_training_and_eval_workflow(workflow_name, multi_gpu=multi_gpu, extra_config=["simulator:isaacsim"])
+def test_training_and_eval_workflow(workflow_name: str):
+    # `simulator:isaacsim` is passed explicitly rather than relying on the experiment-preset
+    # default, so repointing a preset cannot silently move this gate onto another backend.
+    assert_training_and_eval_workflow(workflow_name, extra_config=["simulator:isaacsim"])

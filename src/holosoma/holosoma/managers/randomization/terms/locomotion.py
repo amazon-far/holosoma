@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, Sequence
+from collections.abc import Sequence
+from typing import Any, Literal
 
 import torch
 from loguru import logger
@@ -17,7 +18,7 @@ from holosoma.managers.randomization.terms._shared import (
 )
 from holosoma.simulator import mujoco_required_field
 from holosoma.simulator.shared.field_decorators import MUJOCO_FIELD_ATTR
-from holosoma.utils.sampler import DistributionLike, DistributionSpec, TermSampler, quantiles
+from holosoma.utils.sampler import DistributionLike, DistributionSpec, TermSampler
 from holosoma.utils.simulator_config import SimulatorType
 
 
@@ -541,7 +542,7 @@ def randomize_base_com_startup(
 
     ``base_com_range`` is a :class:`BaseComRange` (or an equivalent ``{x, y, z}`` dict); each axis is a
     ``[lo, hi]`` pair (uniform) or a ``{kind, low, high, mean, std}`` spec dict —
-    honored identically on ALL backends (IsaacGym per-axis loop, MuJoCo ``randomize_field``, IsaacSim
+    honored identically on ALL backends (MuJoCo ``randomize_field``, IsaacSim
     project-owned ``randomize_body_com``), all via the shared keyed
     :meth:`holosoma.utils.sampler.TermSampler.draw`. A gaussian spec is a truncated normal on
     ``[lo, hi]``; log_uniform requires positive bounds.
@@ -566,43 +567,7 @@ def randomize_base_com_startup(
     if idx.numel() == 0:
         return
 
-    if simulator.get_simulator_type() == SimulatorType.ISAACGYM:
-        gym = simulator.gym
-        torso_name = env.robot_config.torso_name
-        if not hasattr(simulator, "_base_com_bias"):
-            simulator._base_com_bias = torch.zeros(
-                env.num_envs, 3, dtype=torch.float, device=env.device, requires_grad=False
-            )
-
-        # Per-axis (x/y/z) draw for all envs at once, keyed per env; index per actor in the loop. CoM
-        # offsets are commonly signed (e.g. x: [-0.025, 0.025]); gaussian truncates to the range,
-        # log_uniform (correctly) raises on a non-positive bound at spec construction.
-        # Draw on CPU: the values are consumed per-actor via .item() below (IsaacGym props are CPU),
-        # matching the sibling friction/mass draws and avoiding a pointless GPU round-trip.
-        axis_draws = [
-            sampler.draw(base_com_range[ax], env_ids=idx, coords=(k,), device="cpu")
-            for k, ax in enumerate(("x", "y", "z"))
-        ]  # each [n_env]; stack the three per-axis streams into (n_env, 3)
-        bias_all = torch.stack(axis_draws, dim=-1)  # (n_env, 3)
-        for offset, env_id in enumerate(idx.tolist()):
-            env_ptr = simulator.envs[env_id]
-            actor = simulator.robot_handles[env_id]
-            body_props = gym.get_actor_rigid_body_properties(env_ptr, actor)
-            body_index = gym.find_actor_rigid_body_handle(env_ptr, actor, torso_name)
-            if body_index < 0:
-                raise RuntimeError(f"Body '{torso_name}' not found when randomizing base COM.")
-
-            bias = bias_all[offset]
-            simulator._base_com_bias[env_id] = bias
-            body_props[body_index].com.x += bias[0].item()
-            body_props[body_index].com.y += bias[1].item()
-            body_props[body_index].com.z += bias[2].item()
-            # recomputeInertia=False: a CoM shift must NOT rewrite the inertia tensor from geometry —
-            # that would discard the authored inertia and diverge from IsaacSim (randomize_body_com
-            # writes coms only) and MuJoCo (writes body_ipos only), both of which leave body_inertia
-            # (the principal moments about the body CoM) unchanged.
-            gym.set_actor_rigid_body_properties(env_ptr, actor, body_props, recomputeInertia=False)
-    elif simulator.get_simulator_type() == SimulatorType.ISAACSIM:
+    if simulator.get_simulator_type() == SimulatorType.ISAACSIM:
         try:
             from isaaclab.managers import SceneEntityCfg
         except ImportError as exc:  # pragma: no cover - dependency optional
@@ -672,7 +637,7 @@ def randomize_mass_startup(
     object mass term's contract. When False, mass changes and inertia is left untouched.
 
     Each range is a config range value — a ``[lo, hi]`` pair (uniform) or a ``{kind, low, high, mean, std}``
-    spec dict — honored identically on ALL backends (IsaacGym per-actor loop, MuJoCo
+    spec dict — honored identically on ALL backends (MuJoCo
     ``randomize_field``, IsaacSim via the project-owned ``randomize_rigid_body_mass``), all via the
     shared keyed :meth:`holosoma.utils.sampler.TermSampler.draw`. A gaussian spec is a truncated normal
     on ``[lo, hi]``; log_uniform requires positive bounds (so it suits the scale operation,
@@ -696,86 +661,7 @@ def randomize_mass_startup(
     env._randomize_link_mass = bool(enable_link_mass)
     env._randomize_base_mass = bool(enable_base_mass)
 
-    if simulator.get_simulator_type() == SimulatorType.ISAACGYM:
-        gym = simulator.gym
-        body_names = list(env.robot_config.randomize_link_body_names or [])
-        torso_name = env.robot_config.torso_name
-        if idx.numel() > 0:
-            sample_env = idx[0].item()
-            sample_env_ptr = simulator.envs[sample_env]
-            sample_actor = simulator.robot_handles[sample_env]
-            sample_props = gym.get_actor_rigid_body_properties(sample_env_ptr, sample_actor)
-            if enable_link_mass and body_names:
-                link_masses = [
-                    float(sample_props[simulator._body_list.index(name)].mass)
-                    for name in body_names
-                    if name in simulator._body_list
-                ]
-                if link_masses:
-                    logger.debug(
-                        "[randomize_mass_startup][IsaacGym] default link mass range: "
-                        f"min={min(link_masses):.6f}, max={max(link_masses):.6f}"
-                    )
-            if enable_base_mass and torso_name in simulator._body_list:
-                base_mass = float(sample_props[simulator._body_list.index(torso_name)].mass)
-                logger.debug(f"[randomize_mass_startup][IsaacGym] default torso mass: {base_mass:.6f}")
-        # Pre-draw keyed tensors for all envs at once, then index per actor in the loop. Link scale is
-        # per (env, body) keyed by the stable body index (stream 0, body ids on the trailing dim ->
-        # [n_env, n_link]); base-mass add is per env (stream 1 -> [n_env]).
-        # Warn on configured link bodies absent from this robot rather than silently dropping them:
-        # MuJoCo (resolve_entity_ids) and IsaacSim (SceneEntityCfg.resolve) both RAISE on an unknown
-        # body name, so silence here would be an inconsistent, backend-specific drop of an explicit request.
-        if enable_link_mass:
-            missing = [n for n in body_names if n not in simulator._body_list]
-            if missing:
-                logger.warning(
-                    f"[randomize_mass_startup][IsaacGym] link body name(s) {missing} not found on the "
-                    f"robot (body list: {simulator._body_list}); link-mass randomization skipped for them."
-                )
-        link_body_ids = [simulator._body_list.index(n) for n in body_names if n in simulator._body_list]
-        link_scales = (
-            sampler.draw(link_mass_range, env_ids=idx, coords=(0, torch.tensor(link_body_ids)[None, :]), device="cpu")
-            if enable_link_mass and link_body_ids
-            else None
-        )
-        base_deltas = (
-            sampler.draw(added_mass_range, env_ids=idx, coords=(1,), device="cpu")
-            if enable_base_mass and torso_name in simulator._body_list
-            else None
-        )
-        for offset, env_id in enumerate(idx.tolist()):
-            env_ptr = simulator.envs[env_id]
-            actor = simulator.robot_handles[env_id]
-            body_props = gym.get_actor_rigid_body_properties(env_ptr, actor)
-            # Snapshot mass per touched body so inertia can be scaled by the exact ratio THIS write
-            # produced (explicit m_after/m_before — NOT recomputeInertia=True, which recomputes from
-            # geometry, a different result that would also clobber a prior inertia-DR scale).
-            touched: dict[int, float] = {}
-            if link_scales is not None:
-                for col, body_index in enumerate(link_body_ids):
-                    touched.setdefault(body_index, body_props[body_index].mass)
-                    body_props[body_index].mass *= float(link_scales[offset, col])  # scale by factor
-            if base_deltas is not None:
-                base_index = simulator._body_list.index(torso_name)
-                touched.setdefault(base_index, body_props[base_index].mass)
-                body_props[base_index].mass += float(base_deltas[offset])  # add operation: offset
-            if recompute_inertia:
-                for body_index, m_before in touched.items():
-                    if m_before > 0.0:
-                        r = body_props[body_index].mass / m_before
-                        inertia = body_props[body_index].inertia  # gymapi.Mat33, symmetric
-                        inertia.x.x *= r
-                        inertia.y.y *= r
-                        inertia.z.z *= r
-                        inertia.x.y *= r
-                        inertia.y.x *= r
-                        inertia.y.z *= r
-                        inertia.z.y *= r
-                        inertia.x.z *= r
-                        inertia.z.x *= r
-            # recomputeInertia=False: inertia is set explicitly above (or left untouched).
-            gym.set_actor_rigid_body_properties(env_ptr, actor, body_props, recomputeInertia=False)
-    elif simulator.get_simulator_type() == SimulatorType.ISAACSIM:
+    if simulator.get_simulator_type() == SimulatorType.ISAACSIM:
         try:
             from isaaclab.managers import SceneEntityCfg
         except ImportError as exc:  # pragma: no cover - defensive
@@ -826,7 +712,7 @@ def randomize_mass_startup(
         ) -> None:
             # Resolve to body ids ourselves so the inertia rescale (which has no name API) uses the
             # same bodies, and snapshot mass BEFORE so the ratio matches the exact write this produced
-            # (mirrors the object mass term + the IsaacGym/IsaacSim explicit m_after/m_before scale).
+            # (mirrors the object mass term + the IsaacSim explicit m_after/m_before scale).
             body_ids = torch.tensor(
                 resolve_entity_ids(simulator.backend.model, list(names), "body"),
                 device=simulator.sim_device,
@@ -862,27 +748,6 @@ def randomize_mass_startup(
         )
 
 
-def _draw_bucketed_per_env(
-    sampler: TermSampler,
-    spec: DistributionLike,
-    env_ids: torch.Tensor,
-    num_buckets: int | None,
-) -> torch.Tensor:
-    """Draw one friction value per env, bucketed or continuous, on the PhysX (IsaacGym) path.
-
-    ``num_buckets`` an int: fill that many buckets with the distribution's quantile values (keyed
-    permute so the staircase is reproducible-but-shuffled per seed) and pick one bucket per env via
-    the keyed selection — bounds the unique-material count at ``num_buckets`` regardless of env count.
-    ``None``: one continuous keyed draw per env (~``num_envs`` unique values). Mirrors the IsaacSim
-    material writer's bucket mechanism so both PhysX backends share one quantization policy.
-    """
-    if num_buckets is None:
-        return sampler.draw(spec, env_ids=env_ids)  # [n_env], continuous
-    column = quantiles(DistributionSpec.parse(spec), num_buckets, "cpu")[sampler.permute(num_buckets, (0,))]
-    bucket_ids = sampler.draw_int(0, num_buckets - 1, env_ids=env_ids, coords=(1,))
-    return column[bucket_ids]
-
-
 @mujoco_required_field("geom_friction")
 def randomize_friction_startup(
     env: Any,
@@ -904,15 +769,15 @@ def randomize_friction_startup(
     friction here draws through the shared keyed sampler, and an int quantizes each draw onto
     ``num_buckets`` stratified quantile values (an ``n``-atom staircase), while ``None`` draws
     continuously. Bucketing exists to respect PhysX's per-scene material cap (~64k); the default keeps
-    that guard on the PhysX backends (IsaacGym + IsaacSim) and, for cross-backend value consistency,
+    that guard on the PhysX backend (IsaacSim) and, for cross-backend value consistency,
     applies the same staircase on MuJoCo (which has no cap and could otherwise be continuous). Set
     ``None`` for a continuous marginal where the material count is safely under the cap. ``uniform`` is
     exact when continuous; ``gaussian``/``log_uniform`` match up to the bucket quantization.
 
     GRANULARITY is unified too: this term draws ONE friction per env (per robot) on every backend —
-    IsaacGym sets it on each shape, IsaacSim via the material writer's ``per_env=True``, MuJoCo via
+    IsaacSim sets it via the material writer's ``per_env=True``, MuJoCo via
     ``randomize_field``'s ``shared_across_entities=True``. So a single robot contacting the floor has a
-    single contact-friction coefficient (the legged_gym / IsaacGym convention), not a different value
+    single contact-friction coefficient (the legged_gym convention), not a different value
     per link/geom.
     """
     env._randomize_friction = bool(enabled)
@@ -928,22 +793,7 @@ def randomize_friction_startup(
 
     simulator = env.simulator
 
-    if simulator.get_simulator_type() == SimulatorType.ISAACGYM:
-        # IsaacGym sets prop.friction directly. One friction per env -> ~num_envs unique PhysX
-        # materials, so bucket (default) to bound that count under the cap, or draw continuous per env
-        # when num_buckets is None. Same quantization policy as the IsaacSim branch below.
-        gym = simulator.gym
-        idx_cpu = idx.to(device="cpu", dtype=torch.long)
-        friction_samples = _draw_bucketed_per_env(sampler, friction_range, idx_cpu, num_buckets)  # [n_env]
-        for offset, env_id in enumerate(idx_cpu.tolist()):
-            env_ptr = simulator.envs[env_id]
-            actor = simulator.robot_handles[env_id]
-            shape_props = gym.get_actor_rigid_shape_properties(env_ptr, actor)
-            friction_value = float(friction_samples[offset])
-            for prop in shape_props:
-                prop.friction = friction_value
-            gym.set_actor_rigid_shape_properties(env_ptr, actor, shape_props)
-    elif simulator.get_simulator_type() == SimulatorType.ISAACSIM:
+    if simulator.get_simulator_type() == SimulatorType.ISAACSIM:
         try:
             from isaaclab.managers import SceneEntityCfg
         except ImportError as exc:  # pragma: no cover - defensive
@@ -962,16 +812,16 @@ def randomize_friction_startup(
             static_friction=friction_range,
             dynamic_friction=friction_range,
             restitution=None,  # leave restitution at each shape's spawned value (friction-only term);
-            # matches the IsaacGym/MuJoCo branches, which never touch restitution here.
-            num_buckets=num_buckets,  # same quantization policy as the IsaacGym branch
-            per_env=True,  # one friction per robot (all shapes share), matching IsaacGym/MuJoCo
+            # matches the MuJoCo branch, which never touches restitution here.
+            num_buckets=num_buckets,  # quantize the draw like the MuJoCo branch
+            per_env=True,  # one friction per robot (all shapes share), matching MuJoCo
             sampler=sampler,
         )
 
     elif simulator.get_simulator_type() == SimulatorType.MUJOCO:
         # MuJoCo writes geom_friction directly (no material cap). num_buckets matches the PhysX
         # backends' quantization; shared_across_entities gives the whole robot ONE friction (per-env
-        # granularity) instead of an independent per-geom draw, matching IsaacGym/IsaacSim.
+        # granularity) instead of an independent per-geom draw, matching IsaacSim.
         from holosoma.simulator.mujoco.backends.randomization import randomize_field
 
         randomize_field(
@@ -982,7 +832,7 @@ def randomize_friction_startup(
             env_ids=idx,
             operation="abs",
             num_buckets=num_buckets,
-            shared_across_entities=True,  # one friction per robot (all geoms share), matching IsaacGym
+            shared_across_entities=True,  # one friction per robot (all geoms share)
         )
 
     else:  # pragma: no cover - defensive

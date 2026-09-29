@@ -6,11 +6,10 @@ import dataclasses
 import textwrap
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import NoReturn, Optional
+from typing import Annotated, NoReturn, Optional, TypeAlias
 
 import pytest
 from loguru import logger
-from typing_extensions import Annotated, TypeAlias
 
 from holosoma.config_types.logger import DisabledLoggerConfig, LoggerConfig, WandbLoggerConfig
 from holosoma.config_types.robot import RobotConfig
@@ -249,7 +248,7 @@ def test_file_missing_path_raises(tmp_path: Path) -> None:
 
 
 def test_registry_from_annotated_reads_marker() -> None:
-    from typing_extensions import Annotated
+    from typing import Annotated
 
     from holosoma.config_values.logger import LOGGER_REGISTRY
     from holosoma.utils.config_registry import UseRegistry, registry_from_annotated
@@ -259,7 +258,7 @@ def test_registry_from_annotated_reads_marker() -> None:
 
 
 def test_registry_from_annotated_unmarked_is_none() -> None:
-    from typing_extensions import Annotated
+    from typing import Annotated
 
     from holosoma.utils.config_registry import registry_from_annotated
 
@@ -271,7 +270,7 @@ def test_registry_from_annotated_unmarked_is_none() -> None:
 def test_registry_from_annotated_disambiguates_shared_type() -> None:
     # SimulatorConfig backs BOTH the simulator and run_sim registries; the marker picks one
     # explicitly, so there is no ambiguity to resolve by type.
-    from typing_extensions import Annotated
+    from typing import Annotated
 
     from holosoma.config_values.run_sim import RUN_SIM_REGISTRY
     from holosoma.config_values.simulator import SIMULATOR_REGISTRY

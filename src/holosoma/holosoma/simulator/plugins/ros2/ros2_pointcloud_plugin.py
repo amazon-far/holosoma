@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import threading
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -156,7 +157,7 @@ class ROS2PointCloudPlugin(LidarConsumerPlugin):
         for worker in self._workers.values():
             try:
                 worker.stop()
-            except Exception as exc:  # noqa: PERF203 - stop every worker before reporting failures.
+            except Exception as exc:
                 failures.append(str(exc))
         if failures:
             raise RuntimeError("; ".join(failures))

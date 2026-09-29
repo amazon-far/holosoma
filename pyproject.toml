@@ -1,5 +1,5 @@
 [tool.ruff]
-target-version = "py38"
+target-version = "py311"
 line-length = 120
 lint.select = ["ALL"]
 lint.fixable = ["ALL"]
@@ -37,7 +37,6 @@ lint.ignore=[
     "B026",  # Star-arg unpacking after a keyword argument
     "PLE1205", # Too many arguments for `logging` format string; skip this since it doesn't recognize the {...} syntax
     "N812", # comman pattern of import torch.nn.functional as F
-    "UP006",
 ]
 
 [tool.ruff.lint.per-file-ignores]

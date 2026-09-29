@@ -1,7 +1,7 @@
 """Simulator-agnostic bridge interface for robot control.
 
 This module provides a unified interface for integrating robot SDK bridges
-with different simulators (MuJoCo, IsaacGym, IsaacSim, etc.).
+with different simulators (MuJoCo, IsaacSim, etc.).
 """
 
 from __future__ import annotations

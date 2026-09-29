@@ -12,8 +12,9 @@ import pkgutil
 import sys
 import typing
 import warnings
+from collections.abc import Callable
 from types import ModuleType
-from typing import Any, Callable, Dict, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 import tyro
 from loguru import logger
@@ -44,7 +45,7 @@ def deprecated_defaults_alias(module_name: str, registry: ConfigRegistry) -> Cal
 ALL_REGISTRIES: list[ConfigRegistry] = []
 
 
-class ConfigRegistry(Dict[str, Any]):
+class ConfigRegistry(dict[str, Any]):
     """Mapping of preset names to config values for one config family.
 
     Args:

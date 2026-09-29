@@ -10,7 +10,8 @@ import re
 import sys
 import types
 import typing
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 import typing_extensions
 import tyro

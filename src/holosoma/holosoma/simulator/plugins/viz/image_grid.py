@@ -144,7 +144,7 @@ def tile_images(
     # only, never the caller's source images.
     cells = [_letterbox(img, cell_h, cell_w, pad_value) for img in images]
     if labels is not None:
-        for cell, label in zip(cells, labels):
+        for cell, label in zip(cells, labels, strict=False):
             _draw_label(cell, label)
     t = _BORDER
     cells = [

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
 
 import mujoco
 import mujoco.viewer
@@ -528,7 +527,7 @@ class MujocoSceneManager:
                 spec.delete(freejoint)  # override: forced static -> drop its freejoint
             elif not is_static and freejoint is None:
                 body.add_freejoint()  # override: forced free -> give it a freejoint
-            # Per-body physics override (shared resolve_physics rule, same as IsaacGym/IsaacSim),
+            # Per-body physics override (shared resolve_physics rule, same as IsaacSim),
             # applied to this body before the file is attached.
             self._apply_physics_to_body(body, scene_file.resolve_physics(body.name), f"{scene_file_name}_{body.name}")
             # Per-body world-frame position offset. body.pos is relative to the attach frame, so
@@ -686,7 +685,7 @@ class MujocoSceneManager:
 
         Applies the cross-backend core (``density`` kg/m³, and ``mass`` kg when ``apply_mass``) plus
         MuJoCo's own geom-level sub-config (``physics.mujoco``: friction/solref/solimp/condim). The
-        other engines' sub-configs (``physx``/``isaacgym``/``isaacsim``) do not apply to MuJoCo and
+        other engines' sub-configs (``physx``/``isaacsim``) do not apply to MuJoCo and
         are ignored.
 
         ``mass`` sets the body's explicit mass (``explicitinertial`` so MuJoCo keeps it rather than
@@ -797,7 +796,7 @@ class MujocoSceneManager:
     def _apply_collision_settings(self, robot_spec: mujoco.MjSpec, robot_config: RobotConfig) -> None:
         """Apply collision settings based on unified self_collisions configuration.
 
-        This matches IsaacGym/IsaacSim behavior programmatically by configuring
+        This matches IsaacSim behavior programmatically by configuring
         MuJoCo collision classes based on the robot's self_collisions setting.
 
         Parameters
@@ -890,7 +889,7 @@ class MujocoSceneManager:
 
         return spec
 
-    def _is_ground_geom(self, geom: mujoco.MjSpec.Geom, ground_names: List[str]) -> bool:
+    def _is_ground_geom(self, geom: mujoco.MjSpec.Geom, ground_names: list[str]) -> bool:
         """Determine if a geometry represents ground/floor.
 
         Parameters

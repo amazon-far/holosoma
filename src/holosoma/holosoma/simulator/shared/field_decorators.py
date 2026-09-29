@@ -2,12 +2,13 @@
 
 This module provides lightweight decorators for declaring field requirements
 across different simulator backends. It has ZERO dependencies and can be safely
-imported in any environment (IsaacGym, IsaacSim, MuJoCo).
+imported in any environment (IsaacSim, MuJoCo).
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 # Module-level constant for the attribute name
 MUJOCO_FIELD_ATTR = "mujoco_field"

@@ -47,7 +47,7 @@ def test_distinct_names_ok():
 
 def test_scene_file_format_selection_per_backend():
     sf = SceneFileConfig(xml_path="a.xml", urdf_path="a.urdf", usd_path="a.usda")
-    # MuJoCo prefers xml; IsaacGym only urdf; IsaacSim prefers usd.
+    # MuJoCo prefers xml; IsaacSim prefers usd.
     assert select_asset_format(sf, ["xml", "urdf"]) == ("xml", "a.xml")
     assert select_asset_format(sf, ["urdf"]) == ("urdf", "a.urdf")
     assert select_asset_format(sf, ["usd", "urdf"]) == ("usd", "a.usda")
@@ -88,7 +88,7 @@ def test_resolve_fixed_matches_glob_patterns():
 
 
 # ----- per-object physics override via object_configs (SceneFileConfig.resolve_physics) -----
-# This is the SHARED rule every backend uses (IsaacGym + IsaacSim both call resolve_physics),
+# This is the SHARED rule every backend uses (IsaacSim both call resolve_physics),
 # so a scene file's per-body physics override is applied identically across backends.
 
 
@@ -126,7 +126,7 @@ def test_scene_file_has_no_scale_field():
 
 
 # ----- include/exclude SUBSET filter (SceneFileConfig.should_include) -----
-# This is the SHARED rule every backend uses (MuJoCo / IsaacGym / IsaacSim), so a scene file's
+# This is the SHARED rule every backend uses (MuJoCo / IsaacSim), so a scene file's
 # body set is identical regardless of which backend loads it. Distinct from object_configs, which
 # only OVERRIDES per-body settings and never filters (see test_object_configs_does_not_filter).
 
@@ -153,7 +153,7 @@ def test_should_include_exclude_wins_over_include():
 
 def test_should_include_empty_include_means_no_filter():
     # An explicit empty include list is treated as "no include filter" (load everything not
-    # excluded), matching the pre-refactor loader / IsaacGym semantics.
+    # excluded), matching the pre-refactor loader semantics.
     sf = SceneFileConfig(xml_path="a.xml", include_patterns=[], exclude_patterns=["drop_*"])
     assert sf.should_include("keep") is True
     assert sf.should_include("drop_this") is False

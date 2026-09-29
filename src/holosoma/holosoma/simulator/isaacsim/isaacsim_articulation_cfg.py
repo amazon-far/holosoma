@@ -158,7 +158,7 @@ def build_robot_articulation_cfg(robot_config: RobotConfig) -> ArticulationCfg:
     # density (a shared core field) reaches the robot links the way it reaches objects:
     # physics_to_mass_props gives a MassPropertiesCfg, @apply_nested over every link.
     # link_physics.mass is validator-rejected (_validate_link_physics), so only density flows,
-    # matching how IsaacGym (AssetOptions.density) and MuJoCo (geom.density) honor it on a robot
+    # matching how MuJoCo (geom.density) honors it on a robot
     # link. physics_to_mass_props returns None when neither mass nor density is set, so this is
     # byte-for-byte the prior spawn for a robot with no link_physics density (e.g. g1).
     robot_mass_props = physics_to_mass_props(robot_link_physics)

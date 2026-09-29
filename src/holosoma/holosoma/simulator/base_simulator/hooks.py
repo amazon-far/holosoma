@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Mapping, overload
-
-from typing_extensions import Literal, Self
+from typing import Any, Literal, Self, overload
 
 from holosoma.config_types.frequency import DecimationLike, is_frequency_string, resolve_decimation
 
@@ -274,7 +273,7 @@ class HookRegistry:
                 for record in reversed(self._snapshots[phase]):
                     try:
                         record.callback()
-                    except Exception as exc:  # noqa: PERF203 - preserve the failing owner's name.
+                    except Exception as exc:
                         raise HookCloseError([(record.name, exc)]) from exc
             finally:
                 self._emitting.remove(phase)

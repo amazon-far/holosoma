@@ -1,9 +1,9 @@
 """Default inference configurations for holosoma_inference."""
 
 from dataclasses import replace
+from typing import Annotated
 
 import tyro
-from typing_extensions import Annotated
 
 from holosoma_inference.config.config_types.inference import InferenceConfig
 from holosoma_inference.config.config_values import observation, robot, task

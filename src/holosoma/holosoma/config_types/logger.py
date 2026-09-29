@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import field
-from typing import Literal, Union
+from typing import Annotated, Literal
 
 from pydantic import ConfigDict, Field
 from pydantic.dataclasses import dataclass
-from typing_extensions import Annotated
 
 from holosoma.config_types.video import VideoConfig
 
@@ -86,4 +85,4 @@ class WandbLoggerConfig:
 
 # Union type for logger configs
 # Note: TensorBoard is always enabled. This config only controls Weights & Biases.
-LoggerConfig = Annotated[Union[DisabledLoggerConfig, WandbLoggerConfig], Field(discriminator="type")]
+LoggerConfig = Annotated[DisabledLoggerConfig | WandbLoggerConfig, Field(discriminator="type")]

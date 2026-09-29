@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import dataclasses
+from typing import Annotated
 
 import pytest
 import tyro
-from typing_extensions import Annotated
 
 from holosoma.utils.tyro_utils import TYRO_CONIFG, find_dynamic_dict_fields, pop_dynamic_dict_args
 

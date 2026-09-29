@@ -111,7 +111,7 @@ class ClockSub:
             try:
                 message = self.socket.recv_string(zmq.NOBLOCK)
                 self.last_clock = int(message)
-            except zmq.Again:  # noqa: PERF203
+            except zmq.Again:
                 break
 
     def get_clock(self):

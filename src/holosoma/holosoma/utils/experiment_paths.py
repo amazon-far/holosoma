@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 def get_timestamp() -> str:
     """Get current timestamp in experiment format."""
-    return datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
 
 
 def get_experiment_dir(

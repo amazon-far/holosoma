@@ -96,7 +96,7 @@ class RobotAssetConfig:
     scene objects use. Holds the robot's surface/material/per-rigid-body physics: ``density`` and the
     PhysX solver knobs (``physx.linear_damping``/``angular_damping``/``max_linear_velocity``/
     ``max_angular_velocity``), plus the friction/restitution/collision-offset channels objects get
-    (``isaacgym``/``isaacsim``/``mujoco``). Each backend reads its own sub-config and ignores the rest.
+    (``isaacsim``/``mujoco``). Each backend reads its own sub-config and ignores the rest.
     ``None`` (default) keeps the asset's authored physics.
 
     ``mass`` is rejected here (see :meth:`_validate_link_physics`): one mass applied to every link is
@@ -110,7 +110,7 @@ class RobotAssetConfig:
         """``link_physics`` applies to all links (``body_names='.*'``), so it must not carry ``mass``.
 
         A single ``mass`` applied to every link would set each link to the same mass (and on
-        IsaacGym/IsaacSim the apply path writes it to all bodies), which is not what an articulation
+        IsaacSim the apply path writes it to all bodies), which is not what an articulation
         wants. This is a structural check, not a backend-applicability one."""
         if self.link_physics is not None and self.link_physics.mass is not None:
             raise ValueError(
@@ -186,7 +186,6 @@ class RobotConfig:
     symmetry_joint_names: dict[str, str] | None = None
     flip_sign_joint_names: list[str] | None = None
 
-    apply_dof_armature_in_isaacgym: bool = True
     knee_joint_min_threshold: float = 0.2
     lidar_height_offset: float = 0.5
 

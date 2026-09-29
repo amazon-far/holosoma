@@ -4,14 +4,14 @@ Builds a sim with ``sim.kinematic_playback`` + the ``motion-playback`` plugin, d
 run_sim phase cycle for a generated clip (root held in the air, joints ramping), and asserts:
 
 - exact clip tracking: root height and joint positions match the clip to tolerance — on a
-  true-FK backend, no gravity sag at all; on IsaacGym (bounded one-substep fallback) within
+  true-FK backend, no gravity sag at all; on a bounded one-substep fallback within
   a small tolerance
 - FK propagation: rigid-body positions reflect the written root pose
 - the kinematic clock advances while the engine clock does not (strict-FK backends)
 - the plugin requests shutdown once the clip ends
 
 Usage:
-    python tests/simulators/playback_assert.py --simulator mujoco|mjwarp|isaacgym|isaacsim \
+    python tests/simulators/playback_assert.py --simulator mujoco|mjwarp|isaacsim \
         [--num-envs N] [--result-file /tmp/r.txt]
 """
 
@@ -107,7 +107,7 @@ def _frame(sim) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacgym", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--result-file", default=None, help="write 'OK' here after PASS (teardown-robust)")
     args = parser.parse_args()
@@ -134,10 +134,9 @@ def main() -> int:
     _write_clip(tmp, sim.num_dof, control_hz)
     frames = int(CLIP_SECONDS * control_hz) + 1
 
-    # IsaacGym's forward_kinematics is one bounded physics substep (no FK-only API); everything
-    # else is strictly kinematic. Tolerances reflect that.
-    strict_fk = args.simulator != "isaacgym"
-    pos_tol = 1e-5 if strict_fk else 5e-3
+    # Playback is strictly kinematic on every backend: forward_kinematics never steps physics, so
+    # poses land exactly and the engine clock must stay frozen.
+    pos_tol = 1e-5
 
     failures: list[str] = []
 
@@ -175,12 +174,11 @@ def main() -> int:
         f"pelvis_z={body_z.tolist()}",
     )
 
-    # 4. Kinematic clock advanced one sim dt per step; engine clock did not (strict-FK only).
+    # 4. Kinematic clock advanced one sim dt per step; engine clock did not.
     expected_t = n * sim_cfg.control_decimation_steps / sim_cfg.fps
     check("kinematic-clock-advances", abs(sim.time() - expected_t) < 1e-6, f"time={sim.time()} vs {expected_t}")
-    if strict_fk:
-        drift = sim._physics_time() - engine_t0
-        check("engine-clock-frozen", abs(drift) < 1e-9, f"drift={drift} over {n} frames")
+    drift = sim._physics_time() - engine_t0
+    check("engine-clock-frozen", abs(drift) < 1e-9, f"drift={drift} over {n} frames")
 
     # 5. Play to the end: shutdown requested.
     for _ in range(frames - n + 2):

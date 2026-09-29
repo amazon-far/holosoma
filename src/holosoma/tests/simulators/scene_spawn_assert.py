@@ -4,11 +4,11 @@ Builds a sim for a chosen backend + scene preset WITHOUT the infinite run_sim lo
 steps it a few times, and asserts the configured objects spawned and behave correctly
 (free bodies fall under gravity; get_actor_states returns the right shape). Exits 0 on
 success, non-zero with a message on failure — so it works as a live integration test
-under each backend's launcher (MuJoCo venv, isaacgym setup, IsaacSim CUDA/EULA).
+under each backend's launcher (MuJoCo venv, IsaacSim CUDA/EULA).
 
 Usage:
   python scripts/scene_spawn_assert.py --simulator mujoco   --scene g1-largebox
-  python scripts/scene_spawn_assert.py --simulator isaacgym --scene g1-largebox --num-envs 4
+  python scripts/scene_spawn_assert.py --simulator isaacsim --scene g1-largebox --num-envs 4
   python scripts/scene_spawn_assert.py --simulator isaacsim --scene g1-largebox
 
 Asserts, in EVERY env (--num-envs spreads each env to a distinct origin), for the preset:
@@ -60,13 +60,6 @@ def _build_run_sim_config(simulator: str, scene: str, robot: str, terrain: str, 
     return build_run_sim_config(simulator, scene, robot, terrain, record_dir=record_dir)
 
 
-def _isaacgym_object_mass(sim, name, env_id):
-    """Total rigid-body mass of object ``name`` in env ``env_id`` (IsaacGym)."""
-    env_ptr = sim.envs[env_id]
-    actor = sim.object_handles[name][env_id]
-    return sum(p.mass for p in sim.gym.get_actor_rigid_body_properties(env_ptr, actor))
-
-
 def _object_total_mass(sim, name, env_id):
     """Total mass of object ``name`` in env ``env_id``, read from the live backend.
 
@@ -76,8 +69,6 @@ def _object_total_mass(sim, name, env_id):
     from holosoma.utils.simulator_config import SimulatorType
 
     sim_type = sim.get_simulator_type()
-    if sim_type == SimulatorType.ISAACGYM:
-        return _isaacgym_object_mass(sim, name, env_id)
     if sim_type == SimulatorType.ISAACSIM:
         # IsaacLab RigidObject: per-body masses from the PhysX view, shape [num_envs, num_bodies].
         masses = sim.scene.rigid_objects[name].root_physx_view.get_masses()
@@ -106,18 +97,13 @@ def _object_sliding_friction(sim, name, env_id):
     """Sliding/static friction of object ``name`` in env ``env_id``, read from the live backend.
 
     Each backend stores friction in its own form, all reduced to the single sliding/static
-    coefficient: IsaacGym shape ``friction``, IsaacSim material ``static_friction`` (column 0),
+    coefficient: IsaacSim material ``static_friction`` (column 0),
     MuJoCo geom ``friction[0]``. Returns ``None`` on a backend without a read here. Reads the
     first shape/geom of the object (the preset's box is a single uniform-friction geom).
     """
     from holosoma.utils.simulator_config import SimulatorType
 
     sim_type = sim.get_simulator_type()
-    if sim_type == SimulatorType.ISAACGYM:
-        env_ptr = sim.envs[env_id]
-        actor = sim.object_handles[name][env_id]
-        props = sim.gym.get_actor_rigid_shape_properties(env_ptr, actor)
-        return float(props[0].friction) if props else None
     if sim_type == SimulatorType.ISAACSIM:
         # Friction is a physics material bound to the object's collider prim at spawn. Read the
         # bound material's static friction from the live composed stage. The behavioral
@@ -151,125 +137,20 @@ def _object_sliding_friction(sim, name, env_id):
     return None
 
 
-def _run_object_dr_checks(sim, free_names, env_ids) -> bool:
-    """Run object mass+material DR on the live backend and verify it took effect.
-
-    Asserts (a) mass increased by the configured additive band on every (object, env), (b) the
-    object_names subset narrows targeting (only the named body changes). Currently verifies
-    read-back on IsaacGym (native rigid-body-property API); other backends just exercise the
-    dispatch without crashing (their DR effect is verified in the per-backend DR unit tests).
-    """
-    import types
-
-    from holosoma.managers.randomization.terms.objects import (
-        randomize_object_rigid_body_mass_startup,
-        randomize_object_rigid_body_material_startup,
-    )
-    from holosoma.utils.simulator_config import SimulatorType
-    from tests.simulators._dr_matrix import _sampler
-
-    env_shell = types.SimpleNamespace(simulator=sim, num_envs=sim.num_envs, device=sim.sim_device)
-    sampler = _sampler(env_shell)  # shell has no dr_base_seed -> _sampler falls back to fixed seed 0
-    is_isaacgym = sim.get_simulator_type() == SimulatorType.ISAACGYM
-
-    mass_lo, mass_hi = 5.0, 6.0
-    fric_lo, fric_hi = 0.2, 0.3
-    if is_isaacgym:
-        before = {(nm, e): _isaacgym_object_mass(sim, nm, e) for nm in free_names for e in range(sim.num_envs)}
-        # Snapshot sliding friction per (object, env) BEFORE the material DR so we can assert it
-        # actually moved (a no-op write must fail), not merely that it lands in band.
-        fric_before = {(nm, e): _object_sliding_friction(sim, nm, e) for nm in free_names for e in range(sim.num_envs)}
-
-    randomize_object_rigid_body_mass_startup(
-        env_shell, env_ids, sampler=sampler, mass_distribution_params=[mass_lo, mass_hi]
-    )
-    randomize_object_rigid_body_material_startup(
-        env_shell,
-        env_ids,
-        sampler=sampler,
-        material={
-            "isaacgym": {"friction": [fric_lo, fric_hi]},
-            "isaacsim": {"static_friction": [fric_lo, fric_hi], "dynamic_friction": [fric_lo, fric_hi]},
-            "mujoco": {"sliding_friction": [fric_lo, fric_hi]},
-        },
-    )
-
-    if is_isaacgym:
-        nbody = {
-            nm: len(sim.gym.get_actor_rigid_body_properties(sim.envs[0], sim.object_handles[nm][0]))
-            for nm in free_names
-        }
-        for nm in free_names:
-            for e in range(sim.num_envs):
-                delta = _isaacgym_object_mass(sim, nm, e) - before[(nm, e)]
-                # Additive offset applied to EACH body of the object => band scales by body count.
-                lo, hi = mass_lo * nbody[nm], mass_hi * nbody[nm]
-                if not (lo - 1e-3 <= delta <= hi + 1e-3):
-                    print(f"FAIL: object-DR mass delta {delta:.3f} for {nm} env{e} outside [{lo},{hi}]")
-                    return False
-        print(f"OBJECT-DR mass band [{mass_lo},{mass_hi}]/body applied to {free_names} across {sim.num_envs} envs OK")
-
-        # Friction read-back: the material DR set sliding friction in [fric_lo, fric_hi] on every
-        # named shape. Mirror the mass check — read the LIVE shape friction back per (object, env)
-        # and assert it (a) CHANGED from the pre-DR baseline and (b) lands in band. The DR samples
-        # one friction value per env (from a bucket) applied to all named objects in that env, so
-        # this also confirms it reached each object. Reads the same shape-property field the DR
-        # wrote (and that the per-object physics check reads), so it can never be a config echo.
-        for nm in free_names:
-            for e in range(sim.num_envs):
-                got = _object_sliding_friction(sim, nm, e)
-                if got is None:
-                    print(f"FAIL: object-DR friction read-back returned None for {nm} env{e} on IsaacGym")
-                    return False
-                base = fric_before[(nm, e)]
-                if base is not None and abs(got - base) <= 1e-6:
-                    print(f"FAIL: object-DR friction for {nm} env{e} did not change from baseline {base:.4f}")
-                    return False
-                if not (fric_lo - 1e-3 <= got <= fric_hi + 1e-3):
-                    print(f"FAIL: object-DR friction {got:.4f} for {nm} env{e} outside [{fric_lo},{fric_hi}]")
-                    return False
-        print(f"OBJECT-DR friction band [{fric_lo},{fric_hi}] applied to {free_names} across {sim.num_envs} envs OK")
-
-        # object_names subset: randomize only the first free body further; others must not change.
-        if len(free_names) >= 2:
-            target, other = free_names[0], free_names[1]
-            mass_other = {e: _isaacgym_object_mass(sim, other, e) for e in range(sim.num_envs)}
-            randomize_object_rigid_body_mass_startup(
-                env_shell, env_ids, sampler=sampler, mass_distribution_params=[mass_lo, mass_hi], object_names=[target]
-            )
-            for e in range(sim.num_envs):
-                if abs(_isaacgym_object_mass(sim, other, e) - mass_other[e]) > 1e-4:
-                    print(f"FAIL: object-DR subset leaked onto '{other}' env{e}")
-                    return False
-            print(f"OBJECT-DR object_names subset isolation OK ('{target}' only, '{other}' untouched)")
-        return True
-
-    # Non-IsaacGym backends have no live read-back here yet. The DR terms dispatched above, but we
-    # have NOT verified the effect landed — returning True now would be a vacuous green that lets a
-    # future `--object-dr` wiring of IsaacSim/Warp pass without ever checking the result. Fail loud
-    # instead so read-back must be implemented before this branch can report success. (Do not
-    # implement IsaacSim/Warp read-back here — just prevent the silent pass.)
-    raise NotImplementedError(
-        f"--object-dr read-back is not implemented for {sim.get_simulator_type()}; "
-        f"mass+material DR dispatched on {free_names} but the effect was not verified. "
-        "Implement a live read-back for this backend before wiring it through --object-dr."
-    )
-
-
 def main() -> int:
     # Register the test-only scene presets into scene.DEFAULTS so `scene:<testkey>` resolves through
     # the normal tyro path inside this (sub)process. Core never imports these; tests register them.
     _scene_presets.register()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacgym", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
     parser.add_argument("--scene", default="g1-largebox")
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--steps", type=int, default=40)
     # >1 spreads each env to a distinct origin and checks per-env placement (the offset/fall/
     # hold/velocity asserts iterate over every env, not just env 0). MuJoCo ClassicBackend
-    # rejects >1 (use mjwarp); IsaacGym/IsaacSim/Warp support it.
+    # rejects >1 (use mjwarp); IsaacSim/Warp support it.
     parser.add_argument("--num-envs", type=int, default=1)
     # The real run_sim loop calls sim.render() every step regardless of headless, so the
     # harness does too — this is the only path that exercises render() + setup_viewer().
@@ -286,10 +167,6 @@ def main() -> int:
     # IsaacSim-only lighting probe: inject a SceneConfig.lights rig (one of each supported type), launch,
     # then assert each environment got its own authored UsdLux lights, and exit.
     parser.add_argument("--probe-lights", action="store_true")
-    # Run the object physics-DR terms (mass + friction) after prepare_sim and assert they took
-    # effect on the live backend (read mass/friction back per object/env). Works on any
-    # DR-supporting backend (IsaacGym / IsaacSim / Warp).
-    parser.add_argument("--object-dr", action="store_true")
     # Save a movie of the run to this directory (records every episode, headless or headful).
     # Uses the backend's own video recorder, so it works on every backend.
     parser.add_argument("--record", default=None, metavar="DIR", help="save a video of the run to DIR")
@@ -338,7 +215,7 @@ def main() -> int:
         )
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
     # num_envs must be set on the training config too: backends size their per-env state
-    # tensors (Warp qpos/qvel, IsaacGym/IsaacSim buffers) from training_config.num_envs at
+    # tensors (Warp qpos/qvel, IsaacSim buffers) from training_config.num_envs at
     # setup()/load_assets(), before create_envs(n,...) runs. Passing n only to create_envs
     # leaves the tensors sized for 1 env and indexing env 1..n-1 is out of bounds.
     config = dataclasses.replace(
@@ -385,7 +262,7 @@ def main() -> int:
                 print(f"FAIL: {sun_path} intensity={intensity} != {_DEFAULT_SUN_INTENSITY}")
                 return 1
             color = tuple(float(channel) for channel in sun_light.GetColorAttr().Get())
-            if any(abs(actual - expected) > 1e-6 for actual, expected in zip(color, _DEFAULT_SUN_COLOR)):
+            if any(abs(actual - expected) > 1e-6 for actual, expected in zip(color, _DEFAULT_SUN_COLOR, strict=False)):
                 print(f"FAIL: {sun_path} color={color} != {_DEFAULT_SUN_COLOR}")
                 return 1
         print("PASS: IsaacSim launcher settings and scene lighting match configuration")
@@ -457,7 +334,7 @@ def main() -> int:
             print(f"FAIL: sun colorTemperature={sun.GetColorTemperatureAttr().Get()} != 6500")
             return 1
         sun_dir = _emit_dir(sun.GetPrim())
-        if max(abs(a - b) for a, b in zip(sun_dir, (0.0, 1.0, 0.0))) > 1e-6:
+        if max(abs(a - b) for a, b in zip(sun_dir, (0.0, 1.0, 0.0), strict=False)) > 1e-6:
             print(f"FAIL: sun emission dir={sun_dir} != (0, 1, 0)")
             return 1
 
@@ -469,11 +346,11 @@ def main() -> int:
             print(f"FAIL: lamp intensity={lamp.GetIntensityAttr().Get()} != 1500")
             return 1
         lamp_pos = _local_xf(lamp.GetPrim()).ExtractTranslation()
-        if max(abs(a - b) for a, b in zip(lamp_pos, (0.0, 0.0, 3.0))) > 1e-5:
+        if max(abs(a - b) for a, b in zip(lamp_pos, (0.0, 0.0, 3.0), strict=False)) > 1e-5:
             print(f"FAIL: lamp position={tuple(lamp_pos)} != (0, 0, 3)")
             return 1
         lamp_color = tuple(float(channel) for channel in lamp.GetColorAttr().Get())
-        if max(abs(a - b) for a, b in zip(lamp_color, (0.2, 0.4, 0.6))) > 1e-5:
+        if max(abs(a - b) for a, b in zip(lamp_color, (0.2, 0.4, 0.6), strict=False)) > 1e-5:
             print(f"FAIL: lamp color={lamp_color} != (0.2, 0.4, 0.6)")
             return 1
 
@@ -488,11 +365,11 @@ def main() -> int:
             print(f"FAIL: panel exposure={panel.GetExposureAttr().Get()} != 2.0")
             return 1
         panel_pos = _local_xf(panel.GetPrim()).ExtractTranslation()
-        if max(abs(a - b) for a, b in zip(panel_pos, (1.0, 0.0, 3.0))) > 1e-5:
+        if max(abs(a - b) for a, b in zip(panel_pos, (1.0, 0.0, 3.0), strict=False)) > 1e-5:
             print(f"FAIL: panel position={tuple(panel_pos)} != (1, 0, 3)")
             return 1
         panel_dir = _emit_dir(panel.GetPrim())
-        if max(abs(a - b) for a, b in zip(panel_dir, (0.0, 1.0, 0.0))) > 1e-6:
+        if max(abs(a - b) for a, b in zip(panel_dir, (0.0, 1.0, 0.0), strict=False)) > 1e-6:
             print(f"FAIL: panel emission dir={panel_dir} != (0, 1, 0)")
             return 1
         if panel.GetNormalizeAttr().Get():
@@ -505,7 +382,7 @@ def main() -> int:
             print(f"FAIL: dome texture={dome_tex!r} != /tmp/probe_env.exr")
             return 1
         dome_dir = _emit_dir(dome.GetPrim())
-        if max(abs(a - b) for a, b in zip(dome_dir, (0.0, 1.0, 0.0))) > 1e-6:
+        if max(abs(a - b) for a, b in zip(dome_dir, (0.0, 1.0, 0.0), strict=False)) > 1e-6:
             print(f"FAIL: dome emission dir={dome_dir} != (0, 1, 0)")
             return 1
 
@@ -545,7 +422,7 @@ def main() -> int:
     base_init[1] = _ROBOT_PARK_Y
     sim.create_envs(n, env_origins, base_init)
     # IsaacSim owns its environment grid and exposes those authoritative origins through
-    # sim.env_origins; MuJoCo and IsaacGym expose the origins requested above.
+    # sim.env_origins; MuJoCo exposes the origins requested above.
     actual_env_origins = sim.env_origins
     sim.prepare_sim()
 
@@ -571,12 +448,6 @@ def main() -> int:
     if not free_names and not static_names:
         print("FAIL: no scene assets registered")
         return 1
-
-    # Object physics DR (opt-in): run mass + material DR on the free bodies and verify the
-    # effect landed on the live backend.
-    if args.object_dr:
-        if not _run_object_dr_checks(sim, free_names, env_ids):
-            return 1
 
     # All snapshots keep the full env dimension; per-env checks below index every row.
     z0 = {nm: sim.get_actor_states([nm], env_ids)[:, 2].clone() for nm in free_names + static_names}
@@ -667,8 +538,6 @@ def main() -> int:
 
     def _configured_sliding_friction(physics):
         """The sliding/static friction this backend should apply, from its own sub-config."""
-        if sim_type == SimulatorType.ISAACGYM:
-            return physics.isaacgym.friction if physics.isaacgym is not None else None
         if sim_type == SimulatorType.ISAACSIM:
             return physics.isaacsim.static_friction if physics.isaacsim is not None else None
         if sim_type == SimulatorType.MUJOCO:

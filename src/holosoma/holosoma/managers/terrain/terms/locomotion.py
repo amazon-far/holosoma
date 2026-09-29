@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Tuple
+from typing import TYPE_CHECKING, Any
 
 from holosoma.managers.terrain.base import TerrainTermBase
 from holosoma.simulator.shared.terrain import Terrain
@@ -170,7 +170,7 @@ class TerrainLocomotion(TerrainTermBase):
         ray_directions[..., :] = torch.tensor([0.0, 0.0, -1.0], device=self.device)
         return points, ray_directions, num_base_height_points
 
-    def _get_base_heights(self, env_ids: torch.Tensor | None = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _get_base_heights(self, env_ids: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
         """Get base heights from the terrain."""
         idx = env_ids if env_ids is not None else slice(None)
         base_positions = quat_apply_yaw(
@@ -184,7 +184,7 @@ class TerrainLocomotion(TerrainTermBase):
         base_heights = (base_positions - ray_hits_world)[..., 2]
         return interquartile_mean(base_heights, dim=1), ray_hits_world
 
-    def _get_feet_heights(self, env_ids: torch.Tensor | None = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _get_feet_heights(self, env_ids: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
         """Get feet heights from the terrain."""
         idx = env_ids if env_ids is not None else slice(None)
         foot_positions = self.env.simulator._rigid_body_pos[idx, self.env.feet_height_indices, :].clone()

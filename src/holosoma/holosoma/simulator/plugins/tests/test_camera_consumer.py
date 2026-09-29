@@ -11,7 +11,8 @@ real transport.
 from __future__ import annotations
 
 import sys
-from typing import Any, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -190,7 +191,6 @@ def test_frame_intrinsics_include_active_backend_config() -> None:
     sim.sensor_manager.last_due = {"head"}
     expected = (
         (SimulatorType.MUJOCO, camera.mujoco),
-        (SimulatorType.ISAACGYM, camera.isaacgym),
         (SimulatorType.ISAACSIM, camera.isaacsim),
     )
     for simulator_type, backend_config in expected:

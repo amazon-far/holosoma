@@ -1,5 +1,5 @@
 <?xml version="1.0" ?>
-<!-- Flat bright-red panel for camera-geometry behavioral tests (URDF; IsaacGym/IsaacSim).
+<!-- Flat bright-red panel for camera-geometry behavioral tests (URDF; IsaacSim).
      URDF box size is the FULL extent: 0.02 x 0.4 x 0.4 m (thin in X, 0.4 m in Y and Z),
      matching red_panel.xml's 0.01/0.2/0.2 MJCF half-extents. Pure red so the panel
      silhouette is trivially segmentable from the background. -->

@@ -15,7 +15,7 @@ which ``run_harness`` translates into a real ``pytest.skip`` — never a silent 
 
 Usage:
   python tests/simulators/behavior_assert.py --scenario galileo-freefall --simulator mujoco
-  python tests/simulators/behavior_assert.py --scenario collide-into-fixed --simulator isaacgym --num-envs 4
+  python tests/simulators/behavior_assert.py --scenario collide-into-fixed --simulator isaacsim --num-envs 4
   python tests/simulators/behavior_assert.py --scenario restitution-bounce --simulator isaacsim --record /tmp/vids
 
 Constants: g = 9.81 m/s^2, sim dt = 1/200 = 0.005 s, small_box = 0.1 m cube (half-extent 0.05).
@@ -180,9 +180,9 @@ def assert_collide_into_fixed(ctx):
     # Assert the collision STORY, not a stopping position. The hammer must (a) advance from spawn
     # and REACH the wall — its closest approach (peak +x) lands within a hair of the near face
     # face_x = wall_x - 0.10 (the two 0.05 half-extents); and (b) end up AT-OR-BEHIND that face
-    # rather than tunneling through it. Backends differ on the post-contact settle: IsaacSim and
-    # IsaacGym typically come to rest flush (rebound ~0), MuJoCo (and IsaacGym in some runs) rebounds
-    # a few cm back off the face. Both are correct "hit a wall and stopped/bounced" outcomes, so the
+    # rather than tunneling through it. Backends differ on the post-contact settle: IsaacSim
+    # typically comes to rest flush (rebound ~0), MuJoCo rebounds a few cm back off the face. Both
+    # are correct "hit a wall and stopped/bounced" outcomes, so the
     # final-position band is loose (face_x - 0.10 .. face_x + 0.02): it still rejects a dead velocity
     # write (never advances, peak stays at spawn) and a tunnel-through (ends well past the face).
     reached_wall = _all(peak_x > hammer0_x + 0.15) and _all(peak_x > face_x - 3e-2)
@@ -273,8 +273,7 @@ def assert_friction_slide(ctx):
 def _pre_prepare_dr_friction(sim, env_ids, torch):
     """Apply friction DR to dr_lo (low) / dr_hi (high) BEFORE prepare_sim.
 
-    Every backend only honors a friction write in a specific window: IsaacGym applies
-    set_actor_rigid_shape_properties between create_envs and prepare_sim; Warp must have the
+    Every backend only honors a friction write in a specific window: Warp must have the
     per-world geom_friction expanded before its step graph is captured (done in __init__);
     MuJoCo Classic writes the model field directly. Running the DR here (pre-prepare) is the one
     point that takes effect on ALL backends, so the configured friction governs the slide.
@@ -292,7 +291,6 @@ def _pre_prepare_dr_friction(sim, env_ids, torch):
 
     def _friction_material(f):
         return {
-            "isaacgym": {"friction": [f, f]},
             "isaacsim": {"static_friction": [f, f], "dynamic_friction": [f, f]},
             "mujoco": {"sliding_friction": [f, f]},
         }
@@ -509,7 +507,7 @@ def assert_external_force(ctx):
     # tbox never received a force. A constant world-frame torque about +z must spin it up about +z,
     # leave the other angular axes ~0, and NOT translate its CoM in xy. We deliberately DO NOT pin
     # the spin RATE: backends disagree on inertia when only `mass` is set in the config — MuJoCo
-    # keeps the asset's authored inertia (explicitinertial) while IsaacGym/IsaacSim recompute it from
+    # keeps the asset's authored inertia (explicitinertial) while IsaacSim recompute it from
     # geometry, so alpha = tau/I differs ~10x. A tiny torque keeps every backend at a sane rate; the
     # asserted invariants (sign, axis purity, no translation, plateau) are inertia-independent.
     torque_nm = 0.01
@@ -636,9 +634,8 @@ def assert_restitution_bounce(ctx):
     # Threshold tied to the CONFIGURED restitution e=0.9: from a fall height h ≈ 0.448 m the apex
     # above the floor should be e^2*h + REST_Z = 0.81*0.448 + 0.052 ≈ 0.41 m. Require apex > 0.30
     # (effective e > ~0.77) so a box that bounces at only HALF the configured restitution FAILS.
-    # Holds on EVERY backend, IsaacGym included: with the ground restitution set to 0.9 (see the
-    # terrain_term override in the runner), IsaacGym honors e≈0.88 (apex ~0.40) via its geometric-mean
-    # PhysX combine, same as MuJoCo/IsaacSim.
+    # Holds on EVERY backend: with the ground restitution set to 0.9 (see the terrain_term
+    # override in the runner), the geometric-mean PhysX combine yields e≈0.88 (apex ~0.40).
     threshold = 0.30
     bounced = _all(rebound > threshold)
     print(
@@ -942,7 +939,7 @@ def assert_actor_set_states_robot_object(ctx):
 
     This is the actor-INTERSECTION counterpart to the object-only scenarios: it drives the single
     unified seam — ``set_actor_states(["robot", "obox", "obox2"], ...)`` — that treats the robot as
-    just another actor (the path IsaacGym's old "Cannot set 'robot' state" guard rejected). In ONE
+    just another actor. In ONE
     name-major call over the full env range it writes per-env-distinct WORLD poses + a known
     WORLD velocity for all three actors, then asserts (every env, every backend):
       (a) each actor lands at its OWN per-env-distinct world position (no robot<->object or
@@ -984,7 +981,7 @@ def assert_actor_set_states_robot_object(ctx):
     is_isaacsim = sim.get_simulator_type().value == "isaacsim"
 
     # (c) WORLD-frame velocity round-trip FIRST, read BEFORE stepping so the written value is exact
-    # (no dynamics drift). MuJoCo (classic+warp) and IsaacGym reflect the write immediately; IsaacSim
+    # (no dynamics drift). MuJoCo (classic+warp) reflects the write immediately; IsaacSim
     # refreshes its read cache (.data.root_state_w) only on a sim step, so a pre-step read is stale
     # there — skip the strict velocity read for IsaacSim (the all_root_states harness covers IsaacSim
     # velocity with its dedicated stepped, gravity-aware, frame-checked test).
@@ -1245,8 +1242,8 @@ def assert_robot_combine_mode(ctx):
 #                          RANDOMIZATION term — proves DR-applied friction takes effect on every
 #                          backend. Video: the DR-low box outruns the DR-high box.
 #   dr-damping-governs     A DR-damped box loses speed faster than an undamped control — proves
-#                          DR-applied linear DAMPING governs decay. (No IsaacGym: it has no runtime
-#                          free-body damping setter.) Video: damped box slows visibly more.
+#                          DR-applied linear DAMPING governs decay. Video: damped box slows
+#                          visibly more.
 #   galileo-freefall       A light and a heavy box free-fall identically along z = ½gt² — proves
 #                          gravity integration + mass-independence (and that stray default damping is
 #                          zeroed). Video: two boxes fall together at the same rate.
@@ -1286,61 +1283,57 @@ def assert_robot_combine_mode(ctx):
 #   actor-set-states-robot-object  ROBOT + two free objects written TOGETHER in one
 #                          set_actor_states call to per-env-distinct WORLD poses + a known WORLD
 #                          velocity — proves the unified actor seam treats the robot as just another
-#                          actor (the path IsaacGym's old "Cannot set 'robot' state" guard rejected):
-#                          each lands at its own per-env target (no transposition), the robot moved
+#                          actor: each lands at its own per-env target (no transposition), the robot moved
 #                          via set_actor_states (no origin double-count), and world velocity (incl.
 #                          the freejoint body-local<->world angular conversion) round-trips.
 #                          Video: robot + both boxes jump to distinct lifted poses.
 #
-# scenario key -> (scene preset key, assertion fn, min_envs, mujoco_supported, unsupported_backends)
-# unsupported_backends: backends that statically cannot run the scenario (skip with a reason).
+# scenario key -> (scene preset key, assertion fn, min_envs, mujoco_supported)
 # =================================================================================================
 SCENARIOS = {
-    "collide-into-fixed": ("collide-into-fixed", assert_collide_into_fixed, 1, True, ()),
-    "momentum-transfer": ("momentum-transfer", assert_momentum_transfer, 1, True, ()),
-    "static-support": ("static-support", assert_static_support, 1, True, ()),
-    "friction-slide": ("friction-slide", assert_friction_slide, 1, True, ()),
-    "dr-friction-governs": ("dr-friction-pair", assert_dr_friction_governs, 1, True, ()),
-    # IsaacGym has no runtime free-body damping setter (damping is import-time AssetOptions only);
-    # MuJoCo (dof_damping) and IsaacSim (live USD PhysxRigidBodyAPI damping) support it.
-    "dr-damping-governs": ("dr-damping-pair", assert_dr_damping_governs, 1, True, ("isaacgym",)),
-    "galileo-freefall": ("galileo-freefall", assert_galileo_freefall, 1, True, ()),
+    "collide-into-fixed": ("collide-into-fixed", assert_collide_into_fixed, 1, True),
+    "momentum-transfer": ("momentum-transfer", assert_momentum_transfer, 1, True),
+    "static-support": ("static-support", assert_static_support, 1, True),
+    "friction-slide": ("friction-slide", assert_friction_slide, 1, True),
+    "dr-friction-governs": ("dr-friction-pair", assert_dr_friction_governs, 1, True),
+    # MuJoCo (dof_damping) and IsaacSim (live USD PhysxRigidBodyAPI damping) both support
+    # runtime free-body damping.
+    "dr-damping-governs": ("dr-damping-pair", assert_dr_damping_governs, 1, True),
+    "galileo-freefall": ("galileo-freefall", assert_galileo_freefall, 1, True),
     # Cross-backend apply_external_force: exact Newtonian push on a free object + auto-zero +
     # additivity, plus a directional push on the robot base. All 4 backends.
-    "external-force": ("external-force", assert_external_force, 1, True, ()),
+    "external-force": ("external-force", assert_external_force, 1, True),
     # Isaac-only: physx config-time linear_damping drives the drag. There is no static MuJoCo
     # freejoint-damping config; runtime damping DR is covered by dr-damping-governs.
-    "damping-decay": ("damping-decay", assert_damping_decay, 1, False, ()),
-    "restitution-bounce": ("restitution-bounce", assert_restitution_bounce, 1, True, ()),
-    "angular-velocity-spin": ("angular-spin", assert_angular_spin, 1, True, ()),
-    "velocity-restore-reset": ("velocity-restore", assert_velocity_restore_on_reset, 1, True, ()),
-    "object-obs-robot-pose": ("obs-under-pose", assert_object_obs_under_pose, 2, True, ()),
-    "pose-jitter-settle": ("jitter-settle", assert_pose_jitter_settle, 2, True, ()),
-    "loader-invariance": ("loader-invariance-freefall", assert_loader_invariance, 1, True, ()),
-    "loader-invariance-file": ("loader-invariance-multibody", assert_loader_invariance, 1, True, ()),
-    "multibody-independence": ("multibody", assert_multibody_independence, 1, True, ()),
-    "per-env-relocation": ("per-env-relocation", assert_per_env_relocation, 2, True, ()),
-    "actor-set-states-robot-object": ("obs-under-pose", assert_actor_set_states_robot_object, 2, True, ()),
+    "damping-decay": ("damping-decay", assert_damping_decay, 1, False),
+    "restitution-bounce": ("restitution-bounce", assert_restitution_bounce, 1, True),
+    "angular-velocity-spin": ("angular-spin", assert_angular_spin, 1, True),
+    "velocity-restore-reset": ("velocity-restore", assert_velocity_restore_on_reset, 1, True),
+    "object-obs-robot-pose": ("obs-under-pose", assert_object_obs_under_pose, 2, True),
+    "pose-jitter-settle": ("jitter-settle", assert_pose_jitter_settle, 2, True),
+    "loader-invariance": ("loader-invariance-freefall", assert_loader_invariance, 1, True),
+    "loader-invariance-file": ("loader-invariance-multibody", assert_loader_invariance, 1, True),
+    "multibody-independence": ("multibody", assert_multibody_independence, 1, True),
+    "per-env-relocation": ("per-env-relocation", assert_per_env_relocation, 2, True),
+    "actor-set-states-robot-object": ("obs-under-pose", assert_actor_set_states_robot_object, 2, True),
     # link_physics robot/object parity twins (one-link robot vs free object with the same config).
-    # Drop-from-rest, so no robot init velocity is needed (which Isaac drops). Not on IsaacGym: the
-    # one-link robot is a 0-DOF floating-base actor, which IsaacGym cannot represent as an
-    # articulation ("Cannot get mass matrix for actors without DOFs", a null DOF tensor crash in
-    # prepare_sim). Runs on MuJoCo (classic + warp) and IsaacSim.
-    "galileo-twin": ("galileo-twin", assert_galileo_twin, 1, True, ("isaacgym",)),
-    "restitution-twin": ("restitution-twin", assert_restitution_twin, 1, True, ("isaacgym",)),
+    # Drop-from-rest, so no robot init velocity is needed (which Isaac drops). Runs on MuJoCo
+    # (classic + warp) and IsaacSim.
+    "galileo-twin": ("galileo-twin", assert_galileo_twin, 1, True),
+    "restitution-twin": ("restitution-twin", assert_restitution_twin, 1, True),
     # damped-fall-twin: strong physx damping visibly slows the fall (discriminates the physx path,
-    # which galileo-twin's zero-damping fall cannot). Isaac-only: MuJoCo ignores the physx sub-config;
-    # IsaacGym can't run the one-link robot.
-    "damped-fall-twin": ("damped-fall-twin", assert_damped_fall_twin, 1, False, ("isaacgym",)),
+    # which galileo-twin's zero-damping fall cannot). Isaac-only: MuJoCo ignores the physx
+    # sub-config.
+    "damped-fall-twin": ("damped-fall-twin", assert_damped_fall_twin, 1, False),
     # Friction-combine-mode semantics (IsaacSim): two objects, identical friction, different combine
     # modes give different slide distance. Guards the unit-green-but-physics-noop case. Pure objects
-    # (the entity that carries a combine mode at spawn). Isaac-only: MuJoCo has no physx combine mode,
-    # and IsaacGym's RigidShapeProperties has no per-pair friction combine-mode field either.
-    "combine-mode-collision": ("combine-mode", assert_combine_mode_collision, 1, False, ("isaacgym",)),
+    # (the entity that carries a combine mode at spawn). Isaac-only: MuJoCo has no physx
+    # combine mode.
+    "combine-mode-collision": ("combine-mode", assert_combine_mode_collision, 1, False),
     # robot-link combine mode: a robot link honors friction_combine_mode (its link_physics is bound
-    # as a material prim at spawn). Twin scenario (robot min vs object max). Isaac-only and
-    # IsaacGym-unsupported (same reasons as combine-mode-collision).
-    "robot-combine-mode": ("robot-combine-mode", assert_robot_combine_mode, 1, False, ("isaacgym",)),
+    # as a material prim at spawn). Twin scenario (robot min vs object max). Isaac-only (same
+    # reason as combine-mode-collision).
+    "robot-combine-mode": ("robot-combine-mode", assert_robot_combine_mode, 1, False),
 }
 
 
@@ -1350,7 +1343,6 @@ SCENARIOS = {
 # main() after the config import so PhysicsConfig is available without a module-level sim dependency.
 def _twin_robot_link_physics():
     from holosoma.config_types.scene import (
-        IsaacGymPhysicsConfig,
         IsaacSimPhysicsConfig,
         MujocoPhysicsConfig,
         PhysicsConfig,
@@ -1362,7 +1354,6 @@ def _twin_robot_link_physics():
     # Strong physx damping; matches damped_fall_twin's twin object (_DAMPED_FALL_DAMPING=3.0).
     damped_fall = PhysicsConfig(physx=PhysXPhysicsConfig(linear_damping=3.0, angular_damping=0.0))
     restitution = PhysicsConfig(
-        isaacgym=IsaacGymPhysicsConfig(friction=0.5, restitution=0.9),
         # Matches the restitution-twin scene object, including the "max" combine mode (which the
         # robot carries via the spawn material bind), so robot and twin rebound identically.
         isaacsim=IsaacSimPhysicsConfig(
@@ -1385,8 +1376,8 @@ def _twin_robot_link_physics():
     }
 
 
-# Scenario -> hook run AFTER create_envs but BEFORE prepare_sim (the window IsaacGym honors a
-# friction write and before Warp captures its step graph). Signature: (sim, env_ids, torch).
+# Scenario -> hook run AFTER create_envs but BEFORE prepare_sim (before Warp captures its step
+# graph). Signature: (sim, env_ids, torch).
 _PRE_PREPARE = {
     "dr-friction-governs": _pre_prepare_dr_friction,
     "dr-damping-governs": _pre_prepare_dr_damping,
@@ -1404,7 +1395,7 @@ def main() -> int:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenario", required=True, choices=sorted(SCENARIOS))
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacgym", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
@@ -1415,7 +1406,7 @@ def main() -> int:
     args = parser.parse_args()
     headless = args.headless == "true"
 
-    scene_key, assertion_fn, min_envs, mujoco_ok, unsupported_backends = SCENARIOS[args.scenario]
+    scene_key, assertion_fn, min_envs, mujoco_ok = SCENARIOS[args.scenario]
 
     # Statically-knowable unsupported combos. The pytest wrappers already mark these as skips (so
     # they never spawn a subprocess); these guards are the DEFENSIVE fallback for a direct harness
@@ -1424,9 +1415,6 @@ def main() -> int:
     is_mujoco = args.simulator in ("mujoco", "mjwarp")
     if not mujoco_ok and is_mujoco:
         print(f"SKIP: scenario '{args.scenario}' is Isaac-only (no equivalent on MuJoCo)")
-        return SKIP_EXIT_CODE
-    if args.simulator in unsupported_backends:
-        print(f"SKIP: scenario '{args.scenario}' is unsupported on {args.simulator} (no runtime API for this feature)")
         return SKIP_EXIT_CODE
     if args.simulator == "mujoco" and (min_envs > 1 or args.num_envs > 1):
         print(f"SKIP: scenario '{args.scenario}' needs multi-env; MuJoCo ClassicBackend is single-env (use mjwarp)")
@@ -1459,7 +1447,7 @@ def main() -> int:
 
     # The restitution bounce needs a BOUNCY GROUND too: PhysX combines contact-pair restitution
     # (geometric-mean-like), and the terrain restitution defaults to 0 -> combine(0.9, 0) = 0, no
-    # bounce on the Isaac backends (IsaacGym PlaneParams.restitution / IsaacSim ground material).
+    # bounce on IsaacSim (its ground material).
     # Give the ground high restitution for this scenario so the box's restitution registers. NOTE:
     # restitution lives at terrain.terrain_term.restitution — TerrainManagerCfg itself has no such
     # field, so a flat dataclasses.replace(config.terrain, restitution=0.9) is a SILENT no-op (the
@@ -1497,9 +1485,8 @@ def main() -> int:
     sim.create_envs(n, env_origins, base_init)
 
     # Pre-prepare hook: some scenarios must mutate physics AFTER actors exist (create_envs) but
-    # BEFORE finalization (prepare_sim) — IsaacGym only applies set_actor_rigid_shape_properties
-    # (friction) in that window, and Warp captures its step graph in put_model. Runtime DR after
-    # prepare_sim is a no-op on those backends. Hooks run on every backend (harmless where the
+    # BEFORE finalization (prepare_sim) — Warp captures its step graph in put_model, so runtime
+    # DR after prepare_sim is a no-op there. Hooks run on every backend (harmless where the
     # write also works post-prepare).
     pre_hook = _PRE_PREPARE.get(args.scenario)
     if pre_hook is not None:
