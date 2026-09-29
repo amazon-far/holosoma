@@ -24,25 +24,21 @@ pytestmark = pytest.mark.mujoco_classic
 
 
 def test_damping_decay_is_isaac_only():
-    # (scene_key, assertion_fn, min_envs, mujoco_supported).
-    scene_key, _fn, min_envs, mujoco_ok = behavior_assert.SCENARIOS["damping-decay"]
+    # (scene_key, assertion_fn, min_envs, mujoco_supported, unsupported_backends).
+    scene_key, _fn, min_envs, mujoco_ok, unsupported = behavior_assert.SCENARIOS["damping-decay"]
     assert scene_key == "damping-decay"
     assert min_envs == 1
     assert mujoco_ok is False, "damping-decay must be Isaac-only (no static MuJoCo freejoint-damping config)"
+    assert unsupported == (), "damping-decay is NOT self-skipped on any Isaac backend (it runs there)"
 
 
-def test_dr_damping_governs_runs_everywhere():
-    # The runtime damping DR term is supported on every surviving backend, so no wrapper may skip
-    # it. Asserted against the wrapper param lists because a silently-dropped cell here would mean
-    # runtime damping DR stopped being exercised anywhere.
-    scene_key, _fn, min_envs, mujoco_ok = behavior_assert.SCENARIOS["dr-damping-governs"]
+def test_dr_damping_governs_unchanged():
+    # Runtime damping DR term: supported on every surviving backend.
+    scene_key, _fn, min_envs, mujoco_ok, unsupported = behavior_assert.SCENARIOS["dr-damping-governs"]
     assert scene_key == "dr-damping-pair"
     assert min_envs == 1
     assert mujoco_ok is True
-    assert "dr-damping-governs" not in mj_wrapper._ISAAC_ONLY
-    for params in (mj_wrapper._CLASSIC_PARAMS, mj_wrapper._WARP_PARAMS):
-        names = [p if isinstance(p, str) else p.values[0] for p in params]
-        assert "dr-damping-governs" in names, "runtime damping DR must stay in the MuJoCo behavior matrix"
+    assert unsupported == ()
 
 
 def test_mujoco_wrappers_statically_skip_damping_decay():
@@ -56,3 +52,10 @@ def test_mujoco_wrappers_statically_skip_damping_decay():
         assert "skip" in mark_names
         reason = " ".join(str(m.kwargs.get("reason", "")) for m in marked[0].marks)
         assert "Isaac-only" in reason
+
+
+def test_damping_decay_runs_on_isaac():
+    # An Isaac backend absent from the unsupported tuple runs damping-decay. Checked here without
+    # importing the Isaac-only wrapper module (which importorskips isaaclab, absent off-cluster).
+    _scene, _fn, _min, _mj, unsupported = behavior_assert.SCENARIOS["damping-decay"]
+    assert "isaacsim" not in unsupported

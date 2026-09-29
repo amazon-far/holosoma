@@ -9,6 +9,7 @@ Run-target markers (exactly one per test; mutually exclusive):
 
 Sub-tags (not used to pick a job; for manual ``-m`` selection):
     mujoco_classic / mujoco_warp  — which MuJoCo backend a mujoco test uses
+    multi_gpu                     — needs multiple GPUs
 
 ``pytest_collection_modifyitems`` auto-applies the umbrella by directory and falls back to
 no_sim, so every item ends with exactly one run-target and positive ``-m`` selection cannot
@@ -28,6 +29,7 @@ _ALL_MARKERS = {
     "mujoco": "MuJoCo (either backend)",
     "mujoco_classic": "the MuJoCo ClassicBackend (CPU)",
     "mujoco_warp": "the MuJoCo WarpBackend (CUDA)",
+    "multi_gpu": "multiple GPUs",
     "no_sim": "no simulator (pure / CPU-only)",
     "requires_inference": "the inference environment",
 }

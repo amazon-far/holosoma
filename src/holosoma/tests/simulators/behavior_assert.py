@@ -1288,52 +1288,53 @@ def assert_robot_combine_mode(ctx):
 #                          the freejoint body-local<->world angular conversion) round-trips.
 #                          Video: robot + both boxes jump to distinct lifted poses.
 #
-# scenario key -> (scene preset key, assertion fn, min_envs, mujoco_supported)
+# scenario key -> (scene preset key, assertion fn, min_envs, mujoco_supported, unsupported_backends)
+# unsupported_backends: backends that statically cannot run the scenario (skip with a reason).
 # =================================================================================================
 SCENARIOS = {
-    "collide-into-fixed": ("collide-into-fixed", assert_collide_into_fixed, 1, True),
-    "momentum-transfer": ("momentum-transfer", assert_momentum_transfer, 1, True),
-    "static-support": ("static-support", assert_static_support, 1, True),
-    "friction-slide": ("friction-slide", assert_friction_slide, 1, True),
-    "dr-friction-governs": ("dr-friction-pair", assert_dr_friction_governs, 1, True),
+    "collide-into-fixed": ("collide-into-fixed", assert_collide_into_fixed, 1, True, ()),
+    "momentum-transfer": ("momentum-transfer", assert_momentum_transfer, 1, True, ()),
+    "static-support": ("static-support", assert_static_support, 1, True, ()),
+    "friction-slide": ("friction-slide", assert_friction_slide, 1, True, ()),
+    "dr-friction-governs": ("dr-friction-pair", assert_dr_friction_governs, 1, True, ()),
     # MuJoCo (dof_damping) and IsaacSim (live USD PhysxRigidBodyAPI damping) both support
     # runtime free-body damping.
-    "dr-damping-governs": ("dr-damping-pair", assert_dr_damping_governs, 1, True),
-    "galileo-freefall": ("galileo-freefall", assert_galileo_freefall, 1, True),
+    "dr-damping-governs": ("dr-damping-pair", assert_dr_damping_governs, 1, True, ()),
+    "galileo-freefall": ("galileo-freefall", assert_galileo_freefall, 1, True, ()),
     # Cross-backend apply_external_force: exact Newtonian push on a free object + auto-zero +
     # additivity, plus a directional push on the robot base. All 4 backends.
-    "external-force": ("external-force", assert_external_force, 1, True),
+    "external-force": ("external-force", assert_external_force, 1, True, ()),
     # Isaac-only: physx config-time linear_damping drives the drag. There is no static MuJoCo
     # freejoint-damping config; runtime damping DR is covered by dr-damping-governs.
-    "damping-decay": ("damping-decay", assert_damping_decay, 1, False),
-    "restitution-bounce": ("restitution-bounce", assert_restitution_bounce, 1, True),
-    "angular-velocity-spin": ("angular-spin", assert_angular_spin, 1, True),
-    "velocity-restore-reset": ("velocity-restore", assert_velocity_restore_on_reset, 1, True),
-    "object-obs-robot-pose": ("obs-under-pose", assert_object_obs_under_pose, 2, True),
-    "pose-jitter-settle": ("jitter-settle", assert_pose_jitter_settle, 2, True),
-    "loader-invariance": ("loader-invariance-freefall", assert_loader_invariance, 1, True),
-    "loader-invariance-file": ("loader-invariance-multibody", assert_loader_invariance, 1, True),
-    "multibody-independence": ("multibody", assert_multibody_independence, 1, True),
-    "per-env-relocation": ("per-env-relocation", assert_per_env_relocation, 2, True),
-    "actor-set-states-robot-object": ("obs-under-pose", assert_actor_set_states_robot_object, 2, True),
+    "damping-decay": ("damping-decay", assert_damping_decay, 1, False, ()),
+    "restitution-bounce": ("restitution-bounce", assert_restitution_bounce, 1, True, ()),
+    "angular-velocity-spin": ("angular-spin", assert_angular_spin, 1, True, ()),
+    "velocity-restore-reset": ("velocity-restore", assert_velocity_restore_on_reset, 1, True, ()),
+    "object-obs-robot-pose": ("obs-under-pose", assert_object_obs_under_pose, 2, True, ()),
+    "pose-jitter-settle": ("jitter-settle", assert_pose_jitter_settle, 2, True, ()),
+    "loader-invariance": ("loader-invariance-freefall", assert_loader_invariance, 1, True, ()),
+    "loader-invariance-file": ("loader-invariance-multibody", assert_loader_invariance, 1, True, ()),
+    "multibody-independence": ("multibody", assert_multibody_independence, 1, True, ()),
+    "per-env-relocation": ("per-env-relocation", assert_per_env_relocation, 2, True, ()),
+    "actor-set-states-robot-object": ("obs-under-pose", assert_actor_set_states_robot_object, 2, True, ()),
     # link_physics robot/object parity twins (one-link robot vs free object with the same config).
     # Drop-from-rest, so no robot init velocity is needed (which Isaac drops). Runs on MuJoCo
     # (classic + warp) and IsaacSim.
-    "galileo-twin": ("galileo-twin", assert_galileo_twin, 1, True),
-    "restitution-twin": ("restitution-twin", assert_restitution_twin, 1, True),
+    "galileo-twin": ("galileo-twin", assert_galileo_twin, 1, True, ()),
+    "restitution-twin": ("restitution-twin", assert_restitution_twin, 1, True, ()),
     # damped-fall-twin: strong physx damping visibly slows the fall (discriminates the physx path,
     # which galileo-twin's zero-damping fall cannot). Isaac-only: MuJoCo ignores the physx
     # sub-config.
-    "damped-fall-twin": ("damped-fall-twin", assert_damped_fall_twin, 1, False),
+    "damped-fall-twin": ("damped-fall-twin", assert_damped_fall_twin, 1, False, ()),
     # Friction-combine-mode semantics (IsaacSim): two objects, identical friction, different combine
     # modes give different slide distance. Guards the unit-green-but-physics-noop case. Pure objects
     # (the entity that carries a combine mode at spawn). Isaac-only: MuJoCo has no physx
     # combine mode.
-    "combine-mode-collision": ("combine-mode", assert_combine_mode_collision, 1, False),
+    "combine-mode-collision": ("combine-mode", assert_combine_mode_collision, 1, False, ()),
     # robot-link combine mode: a robot link honors friction_combine_mode (its link_physics is bound
     # as a material prim at spawn). Twin scenario (robot min vs object max). Isaac-only (same
     # reason as combine-mode-collision).
-    "robot-combine-mode": ("robot-combine-mode", assert_robot_combine_mode, 1, False),
+    "robot-combine-mode": ("robot-combine-mode", assert_robot_combine_mode, 1, False, ()),
 }
 
 
@@ -1406,7 +1407,7 @@ def main() -> int:
     args = parser.parse_args()
     headless = args.headless == "true"
 
-    scene_key, assertion_fn, min_envs, mujoco_ok = SCENARIOS[args.scenario]
+    scene_key, assertion_fn, min_envs, mujoco_ok, unsupported_backends = SCENARIOS[args.scenario]
 
     # Statically-knowable unsupported combos. The pytest wrappers already mark these as skips (so
     # they never spawn a subprocess); these guards are the DEFENSIVE fallback for a direct harness
@@ -1415,6 +1416,9 @@ def main() -> int:
     is_mujoco = args.simulator in ("mujoco", "mjwarp")
     if not mujoco_ok and is_mujoco:
         print(f"SKIP: scenario '{args.scenario}' is Isaac-only (no equivalent on MuJoCo)")
+        return SKIP_EXIT_CODE
+    if args.simulator in unsupported_backends:
+        print(f"SKIP: scenario '{args.scenario}' is unsupported on {args.simulator} (no runtime API for this feature)")
         return SKIP_EXIT_CODE
     if args.simulator == "mujoco" and (min_envs > 1 or args.num_envs > 1):
         print(f"SKIP: scenario '{args.scenario}' needs multi-env; MuJoCo ClassicBackend is single-env (use mjwarp)")
