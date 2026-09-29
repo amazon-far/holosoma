@@ -27,7 +27,12 @@ dependencies = [
     "evdev",
     "importlib_metadata>=4.6; python_version<'3.12'",
     "eval_type_backport; python_version<'3.10'",
-    "pin",  # pinocchio, imported by policies/wbt_utils.py
+    # pinocchio, imported by policies/wbt_utils.py. 3.7.0 is the last release with
+    # cp38 wheels, but newer ones still advertise Requires-Python >=3.8, so on the
+    # isaacgym env (py3.8) pip falls back to the sdist and its build deps want a
+    # cmeel-boost that was never published. Cap only the 3.8 leg.
+    "pin<=3.7.0; python_version<'3.9'",
+    "pin; python_version>='3.9'",
 ]
 
 [project.optional-dependencies]
