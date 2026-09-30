@@ -264,6 +264,11 @@ class BasePolicy:
         # Initialize command arrays
         self.lin_vel_command = np.array([[0.0, 0.0]])
         self.ang_vel_command = np.array([[0.0]])
+        # Latest raw velocity input from the provider (ungated by mode). Kept
+        # separate from lin_vel_command so status prints reflect the operator's
+        # actual input rather than the mode-gated command. Starts at zero — no
+        # input yet is the same commanded state as an explicit zero.
+        self._last_vel_input = VelCmd((0.0, 0.0), 0.0)
         self.stand_command = np.array([[0]])
         self.base_height_command = np.array([[self.desired_base_height]])
 
@@ -828,6 +833,13 @@ class BasePolicy:
         if hasattr(self.interface, "no_action"):
             self.interface.no_action = 0
 
+    def _print_velocity_input(self):
+        """Print the current raw velocity input (ungated by mode)."""
+        vc = self._last_vel_input
+        self.logger.info(
+            f"Velocity input: x={vc.lin_vel[0]:+.2f} m/s, y={vc.lin_vel[1]:+.2f} m/s, yaw={vc.ang_vel:+.2f} rad/s"
+        )
+
     def _print_control_status(self):
         """Print current control status."""
         self.logger.info("------------ Control Status ------------")
@@ -845,16 +857,25 @@ class BasePolicy:
 
     def run(self):
         """Main run loop for the policy."""
+        # Log the current velocity input roughly every 5 seconds, derived from
+        # the control rate so the cadence holds regardless of rl_rate.
+        vel_log_interval = max(1, int(self.rl_rate * 5))
         try:
             for it in itertools.count():
                 self.latency_tracker.start_cycle()
 
-                vc = self._velocity_input.poll_velocity()
-                if vc is not None:
-                    self._apply_velocity(vc)
+                # Dispatch discrete commands first so any mode change (e.g.
+                # WALK/STAND toggling stand_command, or zeroing the provider)
+                # is in effect before velocity is polled and gated this cycle.
                 commands = self._command_provider.poll_commands()
                 for cmd in commands:
                     self._dispatch_command(cmd)
+
+                vc = self._velocity_input.poll_velocity()
+                if vc is not None:
+                    self._last_vel_input = vc
+                    self._apply_velocity(vc)
+
                 if commands:
                     self._print_control_status()
                 if self.use_phase:
@@ -867,6 +888,11 @@ class BasePolicy:
                 if it % 50 == 0 and self.use_policy_action:
                     debug_str = f"RL FPS: {self.latency_tracker.get_fps():.2f} | {self.latency_tracker.get_stats_str()}"
                     self.logger.info(debug_str, flush=True)
+
+                # Periodically surface the current velocity input so it can be
+                # monitored without pressing a control key.
+                if it % vel_log_interval == 0 and self.use_policy_action:
+                    self._print_velocity_input()
 
                 self.rate.sleep()
 
