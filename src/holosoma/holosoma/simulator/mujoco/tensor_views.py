@@ -351,6 +351,33 @@ class MujocoRootStateView:
         return self[:].clone()
 
 
+class FilteredDofStateView(BaseMujocoViewMixin):
+    """IsaacGym-format state view backed by filtered position and velocity tensors."""
+
+    def __init__(self, dof_pos: torch.Tensor, dof_vel: torch.Tensor):
+        self._dof_pos = dof_pos
+        self._dof_vel = dof_vel
+        self.num_envs, self.num_dof = dof_pos.shape
+        self.device = str(dof_pos.device)
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return (self.num_envs * self.num_dof, 2)
+
+    def __getitem__(self, key) -> torch.Tensor:
+        return torch.stack([self._dof_pos, self._dof_vel], dim=-1).reshape(-1, 2)[key]
+
+    def __setitem__(self, key, value) -> None:
+        value = torch.as_tensor(value, device=self.device)
+        if key != slice(None):
+            current = self[:]
+            current[key] = value
+            value = current
+        state = value.reshape(self.num_envs, self.num_dof, 2)
+        self._dof_pos[:] = state[..., 0]
+        self._dof_vel[:] = state[..., 1]
+
+
 class MujocoDofStateView:
     """
     Specialized view for DOF states compatible with IsaacGym's flattened format.
