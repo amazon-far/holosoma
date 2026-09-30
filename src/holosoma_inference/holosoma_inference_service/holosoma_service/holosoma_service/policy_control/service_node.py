@@ -32,16 +32,18 @@ injected --task.state-input injected`` and feed ``CmdDense`` on the dense topic.
 
 from __future__ import annotations
 
+import json
 import sys
 import threading
 from dataclasses import replace
 
 import numpy as np
 import rclpy
-from holosoma_msgs.msg import CmdDense, Heartbeat
+from builtin_interfaces.msg import Time
+from holosoma_msgs.msg import Action, CmdDense, Heartbeat, Observation, PolicyMetadata
 from loguru import logger
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState
 
 from holosoma_inference.config.config_values.inference import get_annotated_inference_config
@@ -56,8 +58,11 @@ from holosoma_service.policy_control.injected_inputs import (
 from holosoma_service.policy_control.sensors import Ros2DepthConsumer
 
 DENSE_TOPIC = "/holosoma/dense_tracking_command"
-EXECUTED_CMD_TOPIC = "/holosoma/holosoma_executed_cmd"
+EXECUTED_CMD_TOPIC = "/holosoma/holosoma_executed_cmd"  # DEPRECATED: use /holosoma/action
 HEARTBEAT_TOPIC = "/holosoma/heartbeat"
+OBSERVATION_TOPIC = "/holosoma/observation"
+ACTION_TOPIC = "/holosoma/action"
+POLICY_METADATA_TOPIC = "/holosoma/policy_metadata"
 HEARTBEAT_EVERY = 10  # control ticks -> 5 Hz at a 50 Hz control loop
 
 # This node loads rclpy in-process, which clashes with the Unitree SDK's bundled
@@ -101,6 +106,7 @@ class ServiceIONode(Node):
         # --- Input: dense tracking target (WBT only); attached on demand ---
         self._cmd = np.zeros((1, 2 * num_dofs), dtype=np.float32)  # held until first frame
         self._ref = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)  # xyzw
+        self._cmd_stamp = Time()  # source teleop stamp of the held frame (zero until first)
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
         self.create_subscription(CmdDense, DENSE_TOPIC, self._dense_cb, qos)
 
@@ -110,11 +116,25 @@ class ServiceIONode(Node):
         self._hb_pub = self.create_publisher(Heartbeat, HEARTBEAT_TOPIC, 10)
         self._tick = 0
 
+        # --- Output: reproducibility stream (raw obs/action + latched schema) ---
+        self._obs_pub = self.create_publisher(Observation, OBSERVATION_TOPIC, 10)
+        self._act_pub = self.create_publisher(Action, ACTION_TOPIC, 10)
+        # Latched so a bag recorder that subscribes after startup still gets the
+        # schema. Re-published whenever the active wandb_id changes (multi-model
+        # or dual-mode swap), so every schema in a session lands in the bag.
+        self._meta_pub = self.create_publisher(
+            PolicyMetadata,
+            POLICY_METADATA_TOPIC,
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL),
+        )
+        self._meta_wandb_id: str | None = None  # last-published schema's id (sentinel)
+
     # --- dense TargetSource protocol (WBT) ---
     def _dense_cb(self, msg: CmdDense) -> None:
         self._cmd = np.concatenate([msg.q, msg.dq]).astype(np.float32).reshape(1, -1)
         r = msg.root_quat
         self._ref = np.array([r.x, r.y, r.z, r.w], dtype=np.float32)
+        self._cmd_stamp = msg.header.stamp  # source teleop stamp (dense client or retargeter-forwarded)
 
     def get_target(self, num_dofs: int, rl_rate_hz: float, urdf_path: str | None):
         return self._cmd, self._ref
@@ -148,6 +168,51 @@ class ServiceIONode(Node):
             self.on_command_sent(_p, cmd_q)
 
         return _hook
+
+    # --- reproducibility stream, driven by the policy's per-inference hook ---
+    def on_observation(self, policy, actor_obs, raw_action) -> None:
+        stamp = self.get_clock().now().to_msg()  # shared stamp zips obs<->action
+        wandb_id = getattr(policy, "wandb_id", None) or ""
+
+        # Re-latch the schema whenever the active policy/id changes so every
+        # schema used in a session is captured (dual-mode + multi-model swaps).
+        meta_key = (id(policy), wandb_id)
+        if meta_key != self._meta_wandb_id:
+            self.publish_policy_metadata(policy)
+            self._meta_wandb_id = meta_key
+
+        source_stamp = self._cmd_stamp  # teleop stamp of the frame this tick consumed
+
+        obs = Observation()
+        obs.header.stamp = stamp
+        obs.source_stamp = source_stamp
+        obs.wandb_id = wandb_id
+        obs.data = np.asarray(actor_obs, dtype=np.float32).reshape(-1).tolist()
+        self._obs_pub.publish(obs)
+
+        act = Action()
+        act.header.stamp = stamp
+        act.source_stamp = source_stamp
+        act.wandb_id = wandb_id
+        act.data = np.asarray(raw_action, dtype=np.float32).reshape(-1).tolist()
+        self._act_pub.publish(act)
+
+    def make_obs_hook(self, policy):
+        def _hook(actor_obs, raw_action, _p=policy):
+            self.on_observation(_p, actor_obs, raw_action)
+
+        return _hook
+
+    def publish_policy_metadata(self, policy) -> None:
+        """Publish the latched schema for the active policy (call on start + swap)."""
+        meta = PolicyMetadata()
+        meta.header.stamp = self.get_clock().now().to_msg()
+        meta.wandb_id = getattr(policy, "wandb_id", None) or ""
+        meta.observation_terms = json.dumps(policy.get_observation_terms())
+        meta.policy_action_scale = float(getattr(policy, "policy_action_scale", 1.0))
+        meta.default_dof_angles = np.asarray(policy.default_dof_angles, dtype=np.float32).reshape(-1).tolist()
+        meta.dof_names = list(getattr(policy, "dof_names", []))
+        self._meta_pub.publish(meta)
 
 
 def _iter_policies(policy):
@@ -221,6 +286,16 @@ def _wire_feedback(policy, io: ServiceIONode) -> None:
     """Wire the feedback publisher into each policy's per-tick hook."""
     for p in _iter_policies(policy):
         p._on_command_sent = io.make_hook(p)
+
+
+def _wire_observation(policy, io: ServiceIONode) -> None:
+    """Wire the obs/action publisher into each policy's per-inference hook.
+
+    Metadata latches lazily on the first observation (and re-latches on swap),
+    so the schema is emitted from the same code path that streams the data.
+    """
+    for p in _iter_policies(policy):
+        p._on_observation = io.make_obs_hook(p)
 
 
 def _dof_names(policy) -> list[str]:
@@ -300,6 +375,7 @@ def main() -> None:
     _attach_target_source(policy, io)
     io.dof_names = _dof_names(policy)
     _wire_feedback(policy, io)
+    _wire_observation(policy, io)
 
     # Single spin thread for the one node.
     threading.Thread(target=rclpy.spin, args=(io,), daemon=True).start()
