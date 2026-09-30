@@ -31,6 +31,52 @@ STATE_COMMAND_TO_POLICY_INDEX: dict[StateCommand, int] = {
     StateCommand[f"SWITCH_POLICY_{n}"]: n - 1 for n in range(1, 10)
 }
 
+MAX_CHECKPOINTS = 9  # SWITCH_POLICY_1..9
+
+
+def _normalize_checkpoint_groups(model_path) -> list[list[str]]:
+    """Normalize a ``model_path`` spec into a validated ``list[list[str]]`` of checkpoints.
+
+    A checkpoint is a group of one-or-more ONNX files. Explicit groupings are kept
+    as given (sizes may differ). Accepted, normalized inputs:
+      * ``str``            -> ``[[s]]``
+      * ``list[str]``      -> ``[[a], [b], ...]`` (one file per checkpoint)
+      * ``list[list[str]]``-> used as-is
+    Raises on: None/wrong type, empty spec, empty group, non-string/empty file, or
+    more than ``MAX_CHECKPOINTS`` checkpoints. Returns fresh lists.
+    """
+    if model_path is None:
+        raise ValueError("model_path is required, got None.")
+    if isinstance(model_path, str):
+        return [[model_path]]
+    if not isinstance(model_path, (list, tuple)):
+        raise TypeError(f"model_path must be str, list, or list[list], got {type(model_path).__name__}.")
+    if len(model_path) == 0:
+        raise ValueError("model_path is empty; need >= 1 checkpoint file.")
+
+    grouped = [isinstance(entry, (list, tuple)) for entry in model_path]
+    if any(grouped) and not all(grouped):
+        raise ValueError(f"model_path mixes grouped and flat entries: {model_path!r}")
+
+    groups = list(model_path) if all(grouped) else [[entry] for entry in model_path]
+
+    normalized: list[list[str]] = []
+    for i, group in enumerate(groups):
+        files = list(group)
+        if len(files) == 0:
+            raise ValueError(f"checkpoint {i} is an empty group.")
+        for f in files:
+            if not isinstance(f, str) or not f:
+                raise ValueError(f"checkpoint {i} has a non-string/empty file: {f!r}")
+        normalized.append(files)
+
+    if len(normalized) > MAX_CHECKPOINTS:
+        raise ValueError(
+            f"received {len(normalized)} checkpoints; only up to {MAX_CHECKPOINTS} are supported "
+            "(SWITCH_POLICY_1..9)."
+        )
+    return normalized
+
 
 class BasePolicy:
     """
@@ -163,45 +209,42 @@ class BasePolicy:
         )
 
     def _init_policy_components(self, model_path, policy_action_scale, rl_rate):
-        """Initialize policy-related components."""
+        """Load each checkpoint group, capture one policy state per group, activate 0.
+
+        A checkpoint is a group of one-or-more ONNX files (see
+        ``_normalize_checkpoint_groups``). Groups are validated up front, before any
+        file is opened. ``_activate_policy(i)`` (SWITCH_POLICY_i) swaps a whole group.
+        """
         self.policy_action_scale = policy_action_scale
         self.rl_rate = rl_rate
-        self.model_paths = self._collect_model_paths(model_path)
-        self._policy_states: list[dict] = []
         self.last_policy_action = np.zeros((1, self.num_dofs))
         self.scaled_policy_action = np.zeros((1, self.num_dofs))
-        resolved_paths: list[str] = []
 
-        for path in self.model_paths:
-            local_path = self._resolve_model_path(str(path))
-            resolved_paths.append(local_path)
-            self.setup_policy(local_path)
-            self._policy_states.append(self._capture_policy_state())
+        groups = _normalize_checkpoint_groups(model_path)
+        resolved_groups = [[self._resolve_model_path(p) for p in group] for group in groups]
+        self._policy_states = [self._load_checkpoint_state(group) for group in resolved_groups]
 
-        self.model_paths = resolved_paths
+        self.checkpoint_groups = resolved_groups
+        # One representative path per checkpoint (group's last file) for indexing/display.
+        self.model_paths = [group[-1] for group in resolved_groups]
         self.active_policy_index = 0
         self.active_model_path = None
         self._activate_policy(0, announce=False)
-
-        # Determine KP/KD values: config override > ONNX metadata > error
         self._resolve_control_gains()
 
     def _collect_model_paths(self, model_path):
-        """Normalize model_path into a list of up to nine entries."""
-        if isinstance(model_path, (list, tuple)):
-            paths = list(model_path)
-        elif model_path is not None:
-            paths = [model_path]
-        else:
-            paths = []
+        """Flat ``list[str]`` of all checkpoint files. Superseded by ``_normalize_checkpoint_groups``."""
+        return [file for group in _normalize_checkpoint_groups(model_path) for file in group]
 
-        paths = [str(path) for path in paths if path]
-        if not paths:
-            raise ValueError("At least one model_path must be provided for policy initialization.")
-        if len(paths) > 9:
-            # Error out instead of warning
-            raise ValueError("Received more than nine model paths. Only up to nine model paths are supported.")
-        return paths
+    def _load_checkpoint_state(self, group: list[str]) -> dict:
+        """Load one checkpoint group into the live slots, return its captured state."""
+        self._load_checkpoint(group)
+        return self._capture_policy_state()
+
+    def _load_checkpoint(self, group: list[str]) -> None:
+        """Load one checkpoint group's files. Base is single-file; subclasses override
+        for multi-file (teacher-student) checkpoints and validate their group size."""
+        self.setup_policy(group[0])
 
     def _resolve_model_path(self, model_path: str) -> str:
         """Resolve model path, downloading from W&B if required."""
@@ -393,11 +436,17 @@ class BasePolicy:
         self.onnx_input_names = input_names
         self.onnx_output_names = output_names
 
-        # Extract metadata from ONNX model (hard fault if fails)
+        # Extract metadata from ONNX model. Our exporter JSON-encodes values
+        # (kp/kd are arrays); tolerate non-JSON props (e.g. onnx's standard
+        # producer_name/version strings) by keeping the raw string instead of
+        # faulting the whole load.
         onnx_model = onnx.load(model_path)
         metadata = {}
         for prop in onnx_model.metadata_props:
-            metadata[prop.key] = json.loads(prop.value)
+            try:
+                metadata[prop.key] = json.loads(prop.value)
+            except (json.JSONDecodeError, TypeError):
+                metadata[prop.key] = prop.value
 
         # Extract KP/KD from metadata (will be None if not present)
         self.onnx_kp = np.array(metadata["kp"]) if "kp" in metadata else None
