@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import field
+from typing import Literal
 
 from pydantic import model_validator
 from pydantic.dataclasses import dataclass
@@ -46,6 +47,16 @@ class RobotControlConfig:
     clip_actions: bool
     clip_torques: bool
     action_scales_by_effort_limit_over_p_gain: bool = False
+    control_mode: Literal["explicit_torque", "implicit_position_target"] = "explicit_torque"
+    implicit_actuator_builder: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_control_mode(self) -> RobotControlConfig:
+        if self.control_mode == "implicit_position_target" and self.control_type != "P":
+            raise ValueError("implicit_position_target requires position control (control_type='P')")
+        if self.implicit_actuator_builder is not None and self.control_mode != "implicit_position_target":
+            raise ValueError("implicit_actuator_builder requires control_mode='implicit_position_target'")
+        return self
 
 
 @dataclass(frozen=True)

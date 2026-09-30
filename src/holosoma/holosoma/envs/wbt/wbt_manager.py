@@ -78,6 +78,8 @@ class WholeBodyTrackingManager(BaseTask):
         motion_command = self.command_manager.get_state("motion_command")
         motion_command.update_metrics()
         self.log_dict.update(motion_command.metrics)
+        # Keep strings separate from tensor metrics consumed by TensorAverageMeterDict.
+        self.log_dict_str = dict(motion_command.metrics_str)
 
     def reset_all(self):
         # If reset_all is called several times, clear buffer in motion_command

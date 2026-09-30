@@ -13,12 +13,10 @@ import trimesh
 
 from holosoma.config_types.full_sim import FullSimConfig
 import isaaclab.sim as sim_utils
-import isaaclab.terrains as terrain_gen
 import isaacsim.core.utils.stage as stage_utils
 import omni.log
 import torch
 from pxr import Usd, UsdGeom
-from isaaclab.actuators import IdealPDActuatorCfg
 from isaaclab.assets import Articulation, ArticulationCfg
 from isaaclab.envs import ViewerCfg, mdp
 from isaaclab.managers import EventManager, SceneEntityCfg
@@ -35,7 +33,7 @@ from isaaclab.sensors import (
 )
 from isaaclab.sim import PhysxCfg, SimulationCfg, SimulationContext
 from isaaclab.sim.utils import bind_physics_material
-from isaaclab.terrains import TerrainGeneratorCfg, TerrainImporterCfg
+from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.terrains.utils import create_prim_from_mesh
 from isaaclab.utils.timer import Timer
 from loguru import logger
@@ -51,6 +49,7 @@ from holosoma.simulator.isaacsim.converters import (
     physics_to_mass_props,
     physics_to_rigid_body_props,
 )
+from holosoma.simulator.isaacsim.actuator_cfg import build_actuator_configs, joint_drive_target_type
 from holosoma.simulator.isaacsim.event_cfg import EventCfg
 from holosoma.simulator.isaacsim.events import randomize_body_com, randomize_rigid_body_inertia
 from holosoma.simulator.isaacsim.isaaclab_viewpoint_camera_controller import ViewportCameraController
@@ -336,7 +335,6 @@ class IsaacSim(BaseSimulator):
             # Get local rank to avoid race conditions in multi-GPU setups
             local_rank = int(os.environ.get("LOCAL_RANK", "0"))
             usd_conversion_dir = os.path.abspath(os.path.join(asset_root, f"converted_rank{local_rank}"))
-
             spawn = sim_utils.UrdfFileCfg(
                 usd_dir=usd_conversion_dir,
                 asset_path=full_urdf_path,
@@ -349,7 +347,7 @@ class IsaacSim(BaseSimulator):
                         stiffness=0,
                         damping=0,
                     ),
-                    target_type="none",
+                    target_type=joint_drive_target_type(self.robot_config),
                 ),
                 activate_contact_sensors=True,
                 rigid_props=robot_rigid_props,
@@ -378,43 +376,7 @@ class IsaacSim(BaseSimulator):
             joint_vel={".*": 0.0},
         )
 
-        dof_names_list = copy.deepcopy(self.robot_config.dof_names)
-        # for i, name in enumerate(dof_names_list):
-        #     dof_names_list[i] = name.replace("_joint", "")
-        dof_effort_limit_list = self.robot_config.dof_effort_limit_list
-        dof_vel_limit_list = self.robot_config.dof_vel_limit_list
-        dof_armature_list = self.robot_config.dof_armature_list
-        dof_joint_friction_list = self.robot_config.dof_joint_friction_list
-
-        # get kp and kd from config
-        kp_list = []
-        kd_list = []
-        stiffness_dict = self.robot_config.control.stiffness
-        damping_dict = self.robot_config.control.damping
-
-        for i in range(len(dof_names_list)):
-            dof_names_i_without_joint = dof_names_list[i].replace("_joint", "")
-            for key in stiffness_dict:
-                if key in dof_names_i_without_joint:
-                    kp_list.append(stiffness_dict[key])
-                    kd_list.append(damping_dict[key])
-                    print(f"key: {key}, kp: {stiffness_dict[key]}, kd: {damping_dict[key]}")
-
-        # ImplicitActuatorCfg IdealPDActuatorCfg
-        actuators = {
-            dof_names_list[i]: IdealPDActuatorCfg(
-                joint_names_expr=[dof_names_list[i]],
-                effort_limit=dof_effort_limit_list[i],
-                velocity_limit=dof_vel_limit_list[i],
-                # effort_limit_sim=dof_effort_limit_list[i],
-                # velocity_limit_sim=dof_vel_limit_list[i],
-                stiffness=0,
-                damping=0,
-                armature=dof_armature_list[i],
-                friction=dof_joint_friction_list[i],
-            )
-            for i in range(len(dof_names_list))
-        }
+        actuators = build_actuator_configs(self.robot_config)
 
         robot_articulation_config: ArticulationCfg = ARTICULATION_CFG.replace(
             prim_path="/World/envs/env_.*/Robot", spawn=spawn, init_state=init_state, actuators=actuators
@@ -436,11 +398,11 @@ class IsaacSim(BaseSimulator):
             # Add a height scanner to the torso to detect the height of the terrain mesh
             # TODO: Scene USD files need ground mapping
             height_scanner_config = RayCasterCfg(
+                update_period=0.02,
                 prim_path=f"/World/envs/env_.*/Robot/{self.robot_config.body_names[0]}",
-                offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
+                offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
                 attach_yaw_only=True,
-                # Apply a grid pattern that is smaller than the resolution to only return one height value.
-                pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[0.05, 0.05]),
+                pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.6]),
                 debug_vis=False,
                 mesh_prim_paths=[terrain_prim_path],
             )
@@ -471,7 +433,12 @@ class IsaacSim(BaseSimulator):
         elif terrain_state.mesh_type in ["trimesh", "load_obj"]:
             self.terrain = self.terrain_manager.get_state("locomotion_terrain").terrain
             visual_material = sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 0.0))
+            # Friction/restitution combine modes use multiply (not average);
+            # needed so terrain_locomotion_mix / LOAD_OBJ friction is multiplicative
+            # with robot material (not averaged).
             physics_material = sim_utils.RigidBodyMaterialCfg(
+                friction_combine_mode="multiply",
+                restitution_combine_mode="multiply",
                 static_friction=terrain_state.static_friction,
                 dynamic_friction=terrain_state.dynamic_friction,
                 restitution=terrain_state.restitution,
@@ -989,15 +956,15 @@ class IsaacSim(BaseSimulator):
         # Initialize robot tensors
         self.refresh_sim_tensors()
 
-        # Initialize acceleration tensors ONLY if bridge is enabled
+        # Base acceleration is only needed by the bridge. Joint acceleration
+        # comes directly from IsaacLab's articulation data for both training
+        # rewards and bridge consumers.
         if self.simulator_config.bridge.enabled:
-            logger.info("Bridge enabled: initializing acceleration computation tensors")
-            self.dof_acc = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
-            self.prev_dof_vel = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
+            logger.info("Bridge enabled: initializing base acceleration computation tensors")
             self.base_linear_acc = torch.zeros(self.num_envs, 3, device=self.sim_device)
             self.prev_base_lin_vel = torch.zeros(self.num_envs, 3, device=self.sim_device)
         else:
-            logger.debug("Bridge disabled: skipping acceleration computation tensors")
+            logger.debug("Bridge disabled: skipping base acceleration computation tensors")
 
         # Apply each free object's configured initial velocity now that the scene is played and
         # the state adapter is live. Pose is already set at spawn (InitialStateCfg), so re-writing
@@ -1013,6 +980,11 @@ class IsaacSim(BaseSimulator):
     def dof_state(self):
         # This will always use the latest dof_pos and dof_vel
         return torch.cat([self.dof_pos[..., None], self.dof_vel[..., None]], dim=-1)
+
+    @property
+    def dof_acc(self) -> torch.Tensor:
+        """Return IsaacLab's native per-joint acceleration tensor."""
+        return self._robot.data.joint_acc[:, self.dof_ids]
 
     def refresh_sim_tensors(self):
         # Apply reset to recache new wyxz -> xyzw tensor
@@ -1048,6 +1020,18 @@ class IsaacSim(BaseSimulator):
 
     def apply_torques_at_dof(self, torques):
         self._robot.set_joint_effort_target(torques, joint_ids=self.dof_ids)
+
+    def apply_position_targets_at_dof(self, position_targets):
+        """Apply joint position targets to the articulation (implicit PD).
+
+        Used by
+        :class:`JointPositionTargetActionTerm` when
+        ``control_mode='implicit_position_target'``.
+        """
+        self._robot.set_joint_position_target(position_targets, joint_ids=self.dof_ids)
+
+    def get_applied_torques_at_dof(self):
+        return self._robot.data.applied_torque[:, self.dof_ids]
 
     def draw_debug_viz(self):
         if self.virtual_gantry:
@@ -1090,13 +1074,8 @@ class IsaacSim(BaseSimulator):
         self.dof_pos = self._robot.data.joint_pos[:, self.dof_ids]  # (num_envs, num_dof)
         self.dof_vel = self._robot.data.joint_vel[:, self.dof_ids]
 
-        # Update accelerations ONLY if bridge is enabled
+        # Base acceleration is only consumed by bridge telemetry.
         if self.simulator_config.bridge.enabled:
-            # Update DOF acceleration using numerical differentiation
-            self.dof_acc = (self.dof_vel - self.prev_dof_vel) / self.sim_dt
-            self.prev_dof_vel = self.dof_vel.clone()
-
-            # Update base linear acceleration using numerical differentiation
             current_base_vel = self.robot_root_states[:, 7:10]
             self.base_linear_acc = (current_base_vel - self.prev_base_lin_vel) / self.sim_dt
             self.prev_base_lin_vel = current_base_vel.clone()

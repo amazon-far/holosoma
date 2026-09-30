@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import os
 import sys
@@ -141,6 +142,29 @@ def configure_logging(distributed_conf: MultGPUConfig | None = None, log_dir: Pa
     logging.getLogger().addHandler(LoguruLoggingBridge())
 
 
+def _apply_preprocess_hook(config: ExperimentConfig) -> ExperimentConfig:
+    """Resolve and apply the optional application preprocessing hook."""
+    hook_path = config.training.preprocess_hook
+    if not hook_path:
+        return config
+
+    from holosoma.managers.utils import resolve_callable
+
+    try:
+        kwargs = json.loads(config.training.preprocess_hook_kwargs or "{}")
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in training.preprocess_hook_kwargs: {exc}") from exc
+    if not isinstance(kwargs, dict):
+        raise ValueError("training.preprocess_hook_kwargs must decode to a JSON object")
+
+    hook = resolve_callable(hook_path, context="preprocess_hook")
+    processed = hook(config, **kwargs)
+    if processed is None:
+        raise TypeError(f"Preprocess hook {hook_path!r} returned None")
+    logger.info(f"Applied preprocess_hook={hook_path!r}")
+    return processed
+
+
 def train(tyro_config: ExperimentConfig, training_context: TrainingContext | None = None) -> None:
     """Train an agent with optional context for sim app management.
 
@@ -253,6 +277,8 @@ def train(tyro_config: ExperimentConfig, training_context: TrainingContext | Non
                 f"Distributed training: GPU {distributed_conf['global_rank']} will run {tyro_config.training.num_envs} "
                 f"environments (total across all GPUs: {original_num_envs})"
             )
+
+        tyro_config = _apply_preprocess_hook(tyro_config)
 
         env_target = tyro_config.env_class
 

@@ -441,6 +441,14 @@ class BaseSimulator:
         """
         raise NotImplementedError("The 'apply_torques_at_dof' method must be implemented in subclasses.")
 
+    def apply_position_targets_at_dof(self, position_targets):
+        """Apply joint-position targets through a simulator-native actuator drive."""
+        raise NotImplementedError(f"{type(self).__name__} does not implement simulator-native joint-position targets")
+
+    def get_applied_torques_at_dof(self):
+        """Return the simulator's most recently applied actuator torques."""
+        raise NotImplementedError(f"{type(self).__name__} does not expose applied actuator torques")
+
     def simulate_at_each_physics_step(self):
         """
         Advances the simulation by a single physics step.

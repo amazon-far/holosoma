@@ -1708,8 +1708,7 @@ class MuJoCo(BaseSimulator):
         float
             Current MuJoCo simulation time in seconds.
         """
-        assert self.root_data is not None
-        return self.root_data.time
+        return self.backend.physics_time()
 
     def get_dof_forces(self, env_id: int = 0) -> torch.Tensor:
         """Get DOF forces for a specific environment.

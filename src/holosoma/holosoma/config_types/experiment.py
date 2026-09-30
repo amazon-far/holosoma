@@ -91,6 +91,26 @@ class TrainingConfig:
     export_onnx: bool = True
     """Export policy as ONNX model."""
 
+    # Generic data / preprocessing hooks.
+    registry_name: str | None = None
+    """Optional wandb registry name (`entity/project/name:tag`) or `file://...`
+    local directory. When set, the ``preprocess_hook`` (if any) can use it to
+    download/resolve motion and terrain artifacts before env construction."""
+
+    wandb_path: str | None = None
+    """Optional source run path used by application preprocessing."""
+
+    preprocess_hook: str | None = None
+    """Dotted ``module:callable`` path resolved during training startup, after
+    env config is finalized but before env creation. Signature:
+    ``(cfg: ExperimentConfig) -> ExperimentConfig``. Application-specific work
+    like registry downloads and obstacle injection belongs in the hook."""
+
+    preprocess_hook_kwargs: str = "{}"
+    """JSON-encoded kwargs forwarded to ``preprocess_hook`` as ``**kwargs``.
+    String-encoded (not a dict) so the pydantic-frozen dataclass stays
+    hashable and round-trips through experiment configs unchanged."""
+
 
 @dataclass(frozen=True)
 class EvalOverridesConfig:

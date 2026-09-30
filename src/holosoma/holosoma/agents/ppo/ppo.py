@@ -66,39 +66,46 @@ class EmpiricalNormalization(nn.Module):
         if self.until is not None and self.count >= self.until:
             return
 
-        if dist.is_available() and dist.is_initialized():
-            local_batch_size = x.shape[0]
-            world_size = dist.get_world_size()
-            global_batch_size = world_size * local_batch_size
+        # Update locally during collection, then merge rank moments once per rollout.
+        batch_mean = torch.mean(x, dim=0, keepdim=True)
+        batch_var = torch.var(x, dim=0, keepdim=True, unbiased=False)
+        self._apply_welford_update(batch_mean, batch_var, x.shape[0])
 
-            x_shifted = x - self._mean
-            local_sum_shifted = torch.sum(x_shifted, dim=0, keepdim=True)
-            local_sum_sq_shifted = torch.sum(x_shifted.pow(2), dim=0, keepdim=True)
+    @torch.no_grad()
+    def flush_deferred_sync(self):
+        """Merge rank-local population moments with one collective."""
+        if not (dist.is_available() and dist.is_initialized()):
+            return
 
-            stats_to_sync = torch.cat([local_sum_shifted, local_sum_sq_shifted], dim=0)
-            dist.all_reduce(stats_to_sync, op=dist.ReduceOp.SUM)
-            global_sum_shifted, global_sum_sq_shifted = stats_to_sync
+        world_size = dist.get_world_size()
+        second_moment = self._var + self._mean.square()
+        packed = torch.cat([self._mean.reshape(-1), second_moment.reshape(-1)])
+        dist.all_reduce(packed, op=dist.ReduceOp.SUM)
 
-            batch_mean_shifted = global_sum_shifted / global_batch_size
-            batch_var = global_sum_sq_shifted / global_batch_size - batch_mean_shifted.pow(2)
-            batch_mean = batch_mean_shifted + self._mean
-        else:
-            global_batch_size = x.shape[0]
-            batch_mean = torch.mean(x, dim=0, keepdim=True)
-            batch_var = torch.var(x, dim=0, keepdim=True, unbiased=False)
+        feature_count = self._mean.numel()
+        global_mean = (packed[:feature_count] / world_size).view_as(self._mean)
+        global_second_moment = (packed[feature_count:] / world_size).view_as(self._mean)
+        global_variance = (global_second_moment - global_mean.square()).clamp_min(0.0)
+        self._mean.copy_(global_mean)
+        self._var.copy_(global_variance)
+        self._std.copy_(global_variance.sqrt())
 
-        new_count = self.count + global_batch_size
-
+    def _apply_welford_update(self, batch_mean, batch_var, global_batch_size):
+        old_count = self.count.to(dtype=batch_mean.dtype)
+        incoming_count = batch_mean.new_tensor(global_batch_size)
+        new_count = old_count + incoming_count
         delta = batch_mean - self._mean
-        self._mean.copy_(self._mean + delta * (global_batch_size / new_count))
+        new_mean = self._mean + delta * (incoming_count / new_count)
 
-        delta2 = batch_mean - self._mean
-        m_a = self._var * self.count
-        m_b = batch_var * global_batch_size
-        M2 = m_a + m_b + delta2.pow(2) * (self.count * global_batch_size / new_count)
-        self._var.copy_(M2 / new_count)
+        old_m2 = self._var * old_count
+        incoming_m2 = batch_var * incoming_count
+        between_batch_m2 = delta.square() * old_count * incoming_count / new_count
+        new_variance = (old_m2 + incoming_m2 + between_batch_m2) / new_count
+
+        self._mean.copy_(new_mean)
+        self._var.copy_(new_variance.clamp_min(0.0))
         self._std.copy_(self._var.sqrt())
-        self.count.copy_(new_count)
+        self.count.add_(int(global_batch_size))
 
 
 class Minibatch(TypedDict):
@@ -432,6 +439,12 @@ class PPO(BaseAlgo):
                 if self.log_dir is not None:
                     # Update episode stats using logging helper
                     self.logging_helper.update_episode_stats(rewards, dones, infos)
+
+            # Merge rank-local moments once per rollout instead of synchronizing
+            # actor and critic statistics at every environment step.
+            if self.empirical_normalization and self.is_multi_gpu:
+                self.actor_obs_normalizer.flush_deferred_sync()
+                self.critic_obs_normalizer.flush_deferred_sync()
 
             # Return / Advantage computation
             last_critic_obs = torch.cat([obs_dict[k] for k in self.critic_obs_keys], dim=1)
@@ -807,7 +820,7 @@ class PPO(BaseAlgo):
 
         global_mean = local_stats[0] / self.gpu_world_size
         global_sq_mean = local_stats[1] / self.gpu_world_size
-        global_variance = global_sq_mean - global_mean**2
+        global_variance = (global_sq_mean - global_mean**2).clamp_min(0.0)
         global_std = torch.sqrt(global_variance + 1e-8)
 
         return (advantages - global_mean) / global_std

@@ -302,12 +302,14 @@ def setup_dof_pos_bias(
     *,
     dof_pos_bias_range: DistributionLike,
     enabled: bool = False,
+    dof_pos_bias_additive_overrides: dict[str, DistributionLike] | None = None,
     **_,
 ) -> None:
     """Apply startup DOF position bias randomization.
 
     ``dof_pos_bias_range`` is a config range value — a ``[lo, hi]`` pair (uniform) or a spec dict, drawn via
-    the bound sampler. A gaussian bias gives a smoother initial-pose jitter than uniform.
+    the bound sampler. ``dof_pos_bias_additive_overrides`` adds independently
+    sampled ranges to joints whose names contain each configured substring.
     """
     env._randomize_dof_pos_bias = bool(enabled)
     env._dof_pos_bias_range = dof_pos_bias_range
@@ -323,6 +325,22 @@ def setup_dof_pos_bias(
         coords=(dof_ids,),
         device=env.device,
     )
+
+    # Additive per-joint-group overrides (e.g. ankle-specific bias)
+    if dof_pos_bias_additive_overrides:
+        env_ids = torch.arange(env.num_envs, device="cpu")
+        for stream, (pattern, override_range) in enumerate(dof_pos_bias_additive_overrides.items(), start=1):
+            indices = [i for i, name in enumerate(env.dof_names) if pattern in name]
+            if indices:
+                override_dof_ids = torch.tensor(indices, dtype=torch.long)[None, :]
+                additive_bias = sampler.draw(
+                    override_range,
+                    env_ids=env_ids,
+                    coords=(stream, override_dof_ids),
+                    device=env.device,
+                )
+                default_dof_pos_bias[:, indices] += additive_bias
+
     env.default_dof_pos = env.default_dof_pos_base + default_dof_pos_bias
 
 

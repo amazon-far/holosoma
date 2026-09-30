@@ -218,6 +218,7 @@ def slerp(q0, q1, t):
     q1[neg_mask] = -q1[neg_mask]
     cos_half_theta = torch.abs(cos_half_theta)
     cos_half_theta = torch.unsqueeze(cos_half_theta, dim=-1)
+    cos_half_theta = cos_half_theta.clamp(max=1.0)
 
     half_theta = torch.acos(cos_half_theta)
     sin_half_theta = torch.sqrt(1.0 - cos_half_theta * cos_half_theta)
