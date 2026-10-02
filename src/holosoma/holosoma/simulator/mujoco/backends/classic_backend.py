@@ -148,8 +148,8 @@ class ClassicBackend(IMujocoBackend):
 
         Extracts contact forces from MuJoCo's contact system using mj_contactForce
         and accumulates them per body (Newton's 3rd law). Full-model-width
-        [1, model.nbody, 3]; the simulator gathers robot-only rows and rotates the
-        history. (Single environment for ClassicBackend.)
+        [1, model.nbody, 3]; the simulator gathers robot-only rows and records them per
+        substep. (Single environment for ClassicBackend.)
 
         Returns
         -------

@@ -502,8 +502,8 @@ class WarpBackend(IMujocoBackend):
         """Return net per-body contact forces for ALL model bodies (GPU, zero-copy).
 
         Warp computes contact forces into cfrc_ext during simulation. Returns the
-        full-model-width force slice [num_envs, model.nbody, 3]; the simulator
-        gathers robot-only rows and rotates the history.
+        full-model-width force slice [num_envs, model.nbody, 3]; the simulator gathers
+        robot-only rows and records them per substep.
 
         Returns
         -------
