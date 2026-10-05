@@ -1,4 +1,4 @@
-"""Live MuJoCo ``contact_forces_substep`` contract via the shared harness.
+"""Live MuJoCo ``contact_recorder`` contract via the shared harness.
 
 Routes both MuJoCo backends through the SAME contact_substep_assert.py harness the Isaac backends
 use, so the buffer's contract is proven identically on all four; that harness documents the

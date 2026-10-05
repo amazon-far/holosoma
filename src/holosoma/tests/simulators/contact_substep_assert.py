@@ -1,10 +1,11 @@
-"""Headless cross-backend assertion harness for ``simulator.contact_forces_substep``.
+"""Headless cross-backend assertion harness for ``simulator.contact_recorder``.
 
 Settles the robot onto flat ground, then asserts the buffer's contract over one control step.
 The properties are the ones a reward term reading the buffer depends on, and each one is a
 defect a backend actually shipped at some point:
 
-  1. SHAPE      — exactly ``control_decimation_steps`` frames wide.
+  1. SHAPE      — exactly ``control_decimation_steps`` frames wide, and ``recorded_forces``
+                  exposes all of them once the control step completes.
   2. FILLED     — every slot is written. A buffer sized independently of the decimation left its
                   tail untouched, and zeros there are indistinguishable from real zero-force
                   samples (a consumer differentiating the history sees a spurious rising edge
@@ -17,7 +18,8 @@ defect a backend actually shipped at some point:
   6. REWRITTEN  — the next control step writes every slot again. This is why the buffer needs no
                   clearing on reset: no pre-reset sample can survive into a reward.
   7. RESTARTS   — after a deliberately short step desyncs the slot index, FRAME_BEGIN re-anchors
-                  slot 0 to the first substep of the control step.
+                  slot 0 to the first substep of the control step, and ``recorded_forces`` narrows
+                  to just that sample rather than exposing the previous step's slots.
   8. STABLE     — ``refresh_sim_tensors`` does not touch the buffer. It runs a variable number of
                   times per control step (the reset path calls it a second time, and run_sim calls
                   it per physics step), which is why recording cannot live there.
@@ -96,41 +98,51 @@ def _check(sim, num_envs: int) -> tuple[list[str], list[str]]:
     from holosoma.simulator.base_simulator.hooks import Phase
 
     decimation = sim.simulator_config.sim.control_decimation_steps
+    recorder = sim.contact_recorder
+    buffer = recorder.buffer  # never reallocated, so one binding stays valid
     failures = []
+
+    # The recorder records on POST_STEP, which the real loops (base_task, run_sim) emit right after
+    # the physics step; this harness drives the simulator directly, so it emits the phase itself.
+    def physics_step():
+        sim.simulate_at_each_physics_step()
+        sim.hooks.emit(Phase.POST_STEP)
 
     def control_step():
         sim.hooks.emit(Phase.FRAME_BEGIN)
         for _ in range(decimation):
-            sim.simulate_at_each_physics_step()
+            physics_step()
         sim.refresh_sim_tensors()
 
     want = (num_envs, decimation, sim.num_bodies, 3)
-    if tuple(sim.contact_forces_substep.shape) != want:
-        failures.append(f"SHAPE: {tuple(sim.contact_forces_substep.shape)} != {want}")
+    if tuple(buffer.shape) != want:
+        failures.append(f"SHAPE: {tuple(buffer.shape)} != {want}")
 
     for _ in range(SETTLE_CONTROL_STEPS):
         control_step()
 
+    if tuple(recorder.recorded_forces.shape) != want:
+        failures.append(f"SHAPE: recorded_forces {tuple(recorder.recorded_forces.shape)} != {want} after a full step")
+
     # Poison every slot first, so "written this control step" is exact (not "happens to be
     # non-zero"): a slot CAN legitimately be zero when the body is airborne, which is precisely the
     # zero/no-data conflation this buffer exists to avoid.
-    sim.contact_recorder.buffer.fill_(float("nan"))
+    buffer.fill_(float("nan"))
 
     # One control step, snapshotting after every substep, so ORDERED can see when each slot moves.
     sim.hooks.emit(Phase.FRAME_BEGIN)
     snapshots = []
     for substep in range(decimation):
-        sim.simulate_at_each_physics_step()
+        physics_step()
         if substep == 0:
-            untouched = sim.contact_forces_substep.clone()
+            untouched = buffer.clone()
             sim.refresh_sim_tensors()
-            current = sim.contact_forces_substep
             # Compare the poison mask and the written values separately: nan_to_num would map a
             # refresh that ZEROED an unwritten slot onto the NaN it replaced, hiding the mutation.
             poisoned = untouched.isnan()
-            if not torch.equal(poisoned, current.isnan()) or not torch.equal(untouched[~poisoned], current[~poisoned]):
+            if not torch.equal(poisoned, buffer.isnan()) or not torch.equal(untouched[~poisoned], buffer[~poisoned]):
                 failures.append("STABLE: refresh_sim_tensors mutated the buffer")
-        snapshots.append(sim.contact_forces_substep.clone())
+        snapshots.append(buffer.clone())
     sim.refresh_sim_tensors()
 
     for i in range(decimation):
@@ -162,9 +174,9 @@ def _check(sim, num_envs: int) -> tuple[list[str], list[str]]:
         max_abs_diff = (final[:, decimation - 1] - sim.contact_forces).abs().max()
         failures.append(f"AGREES: last slot != contact_forces at refresh (max abs diff {float(max_abs_diff):.4g})")
 
-    sim.contact_recorder.buffer.fill_(float("nan"))
+    buffer.fill_(float("nan"))
     control_step()
-    if bool(sim.contact_forces_substep.isnan().any()):
+    if bool(buffer.isnan().any()):
         failures.append("REWRITTEN: a slot survived unwritten into the next control step")
 
     # RESTARTS — deliberately desync the slot index with a short step, then check FRAME_BEGIN
@@ -172,17 +184,20 @@ def _check(sim, num_envs: int) -> tuple[list[str], list[str]]:
     # because the decimation divides evenly, so a dead frame-begin hook would go unnoticed.
     if decimation > 1:
         for _ in range(decimation - 1):
-            sim.simulate_at_each_physics_step()
-        sim.contact_recorder.buffer.fill_(float("nan"))
+            physics_step()
+        buffer.fill_(float("nan"))
         sim.hooks.emit(Phase.FRAME_BEGIN)
-        sim.simulate_at_each_physics_step()
-        anchored = sim.contact_forces_substep
-        if bool(anchored[:, 0].isnan().any()):
+        physics_step()
+        if bool(buffer[:, 0].isnan().any()):
             failures.append("RESTARTS: FRAME_BEGIN did not re-anchor the next substep to slot 0")
         for i in range(1, decimation):
-            if not bool(anchored[:, i].isnan().all()):
+            if not bool(buffer[:, i].isnan().all()):
                 failures.append(f"RESTARTS: slot {i} was written instead of slot 0 after FRAME_BEGIN")
                 break
+        # The poisoned slots are still in the allocation; a consumer reading mid-step must not see
+        # them (nor, in a real run, the previous step's samples).
+        if tuple(recorder.recorded_forces.shape)[1] != 1:
+            failures.append(f"RESTARTS: recorded_forces is {recorder.recorded_forces.shape[1]} wide after 1 substep")
 
     report = [
         f"num_envs={num_envs} decimation={decimation} num_bodies={sim.num_bodies}",
@@ -203,7 +218,7 @@ def main() -> None:
     sim = _build(args.simulator, args.num_envs)
     failures, report = _check(sim, args.num_envs)
 
-    lines = [f"==== contact_forces_substep on {args.simulator} ====", *report]
+    lines = [f"==== contact_recorder on {args.simulator} ====", *report]
     lines += [f"FAIL {failure}" for failure in failures]
     if not failures:
         lines.append("OK: shape, filled, ordered, distinct, agrees, rewritten, restarts, stable")

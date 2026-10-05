@@ -761,7 +761,12 @@ class MuJoCo(BaseSimulator):
         self.contact_forces = torch.zeros(self.num_envs, self.num_bodies, 3, device=self.sim_device)
 
         self.contact_recorder = ContactSubstepRecorder(
-            self.num_envs, self.simulator_config.sim.control_decimation_steps, self.num_bodies, self.sim_device
+            self.hooks,
+            lambda: self.contact_forces,
+            self.num_envs,
+            self.simulator_config.sim.control_decimation_steps,
+            self.num_bodies,
+            self.sim_device,
         )
 
         # Initialize command system (Phase 1)
@@ -1069,11 +1074,11 @@ class MuJoCo(BaseSimulator):
         # Delegate simulation step to backend
         self.backend.step()
 
-        # empty world: no robot rows to gather
+        # The recorder's POST_STEP hook reads contact_forces, so it must be fresh by the end of the
+        # substep. Empty world: no robot rows to gather.
         if self.num_bodies > 0:
             full_forces = self.backend.compute_contact_forces()
             self.contact_forces[:] = full_forces[:, self._body_ids_t]
-            self.record_contact_substep(self.contact_forces)
 
     def _actor_freejoint_addrs(self, obj_name: str) -> tuple[int, int]:
         """Return (qpos_addr, qvel_addr) for an actor's freejoint, or raise if unknown."""

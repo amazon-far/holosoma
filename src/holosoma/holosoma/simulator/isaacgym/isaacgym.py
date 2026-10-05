@@ -827,7 +827,12 @@ class IsaacGym(BaseSimulator):
             :, : self.num_bodies, :
         ]  # shape: num_envs, num_bodies, xyz axis
         self.contact_recorder = ContactSubstepRecorder(
-            self.num_envs, self.simulator_config.sim.control_decimation_steps, self.num_bodies, self.device
+            self.hooks,
+            lambda: self.contact_forces,
+            self.num_envs,
+            self.simulator_config.sim.control_decimation_steps,
+            self.num_bodies,
+            self.device,
         )
 
         # Initialize acceleration tensors ONLY if bridge is enabled
@@ -905,7 +910,6 @@ class IsaacGym(BaseSimulator):
         self.gym.refresh_force_sensor_tensor(self.sim)
         # contact_forces wraps this tensor; without the refresh every substep records the same frame
         self.gym.refresh_net_contact_force_tensor(self.sim)
-        self.record_contact_substep(self.contact_forces)
 
         self.step_counter += 1
 

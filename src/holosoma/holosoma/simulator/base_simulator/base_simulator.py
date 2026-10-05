@@ -182,7 +182,6 @@ class BaseSimulator:
         # before any camera-consumer plugin (egress/viz/video) reads. No-ops until a backend builds
         # sensor_manager during setup; harmless when no cameras are configured.
         self.hooks.add(Phase.FRAME_END, self.render_sensors, name="sensors.render")
-        self.hooks.add(Phase.FRAME_BEGIN, self._begin_contact_substep, name="contact.begin_frame")
         # Build plugins from tyro_config.plugin and keep the instances alive (key -> plugin).
         # Constructing each here registers its hooks on self.hooks, so they fire on later
         # emit(). The `none` preset disables a slot.
@@ -421,20 +420,6 @@ class BaseSimulator:
         Refreshes the state tensors in the simulation to ensure they are up-to-date.
         """
         raise NotImplementedError("The 'refresh_sim_tensors' method must be implemented in subclasses.")
-
-    @property
-    def contact_forces_substep(self) -> torch.Tensor:
-        """Contact forces at each physics substep of the current control step,
-        [num_envs, control_decimation_steps, num_bodies, 3], oldest at index 0."""
-        return self.contact_recorder.buffer
-
-    def _begin_contact_substep(self) -> None:
-        self.contact_recorder.begin_frame()
-
-    def record_contact_substep(self, frame: torch.Tensor) -> None:
-        """Record one substep's contact forces [num_envs, num_bodies, 3]. Call from
-        ``simulate_at_each_physics_step``, after the step advances."""
-        self.contact_recorder.record(frame)
 
     # ----- Control Application Methods -----
 

@@ -961,6 +961,8 @@ class IsaacSim(BaseSimulator):
         self.all_root_states = UnifiedRootStatesView(self)  # type: ignore[assignment]
 
         self.contact_recorder = ContactSubstepRecorder(
+            self.hooks,
+            self._robot_contact_forces,
             self.num_envs,
             self.simulator_config.sim.control_decimation_steps,
             self.num_bodies,
@@ -1075,8 +1077,6 @@ class IsaacSim(BaseSimulator):
 
         # update buffers at sim
         self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
-
-        self.record_contact_substep(self._robot_contact_forces())
 
         # Need to update these tensors after each step, since they are used in `_apply_force_in_physics_step`
         self.dof_pos = self._robot.data.joint_pos[:, self.dof_ids]  # (num_envs, num_dof)

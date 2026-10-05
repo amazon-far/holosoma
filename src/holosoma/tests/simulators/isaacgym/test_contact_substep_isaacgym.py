@@ -1,4 +1,4 @@
-"""Live IsaacGym ``contact_forces_substep`` contract (GPU), one sim per subprocess.
+"""Live IsaacGym ``contact_recorder`` contract (GPU), one sim per subprocess.
 
 Runs the contact_substep_assert.py harness in its own process (IsaacGym segfaults on a second
 gymapi sim per process); that harness documents the properties it asserts.
