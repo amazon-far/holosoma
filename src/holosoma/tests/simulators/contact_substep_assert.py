@@ -20,9 +20,12 @@ defect a backend actually shipped at some point:
   7. RESTARTS   — after a deliberately short step desyncs the slot index, FRAME_BEGIN re-anchors
                   slot 0 to the first substep of the control step, and ``recorded_forces`` narrows
                   to just that sample rather than exposing the previous step's slots.
-  8. STABLE     — ``refresh_sim_tensors`` does not touch the buffer. It runs a variable number of
-                  times per control step (the reset path calls it a second time, and run_sim calls
-                  it per physics step), which is why recording cannot live there.
+  8. STABLE     — ``refresh_sim_tensors`` does not touch the buffer, mid-step or once the step is
+                  complete, however many times it is called. It runs a variable number of times per
+                  control step (the task reset path calls it a second time, and run_sim calls it per
+                  physics step), which is why recording cannot live there. Checked against the live
+                  buffer: the clone-to-clone comparison in AGREES cannot see an in-place mutation,
+                  and a refresh that ZEROED the completed buffer would satisfy REWRITTEN.
 
 "Written" is checked by poisoning the buffer with NaN first, rather than by looking for non-zero
 forces: a slot is legitimately zero whenever the body is airborne at that substep.
@@ -129,21 +132,29 @@ def _check(sim, num_envs: int) -> tuple[list[str], list[str]]:
     # zero/no-data conflation this buffer exists to avoid.
     buffer.fill_(float("nan"))
 
+    def refresh_is_stable(when: str) -> None:
+        """Clone the live buffer across one refresh. Must read `buffer`, not a snapshot: comparing
+        two clones (as AGREES does) cannot see a refresh that mutates the buffer in place."""
+        before = buffer.clone()
+        sim.refresh_sim_tensors()
+        # Compare the poison mask and the written values separately: nan_to_num would map a refresh
+        # that ZEROED an unwritten slot onto the NaN it replaced, hiding the mutation.
+        poisoned = before.isnan()
+        if not torch.equal(poisoned, buffer.isnan()) or not torch.equal(before[~poisoned], buffer[~poisoned]):
+            failures.append(f"STABLE: refresh_sim_tensors mutated the buffer ({when})")
+
     # One control step, snapshotting after every substep, so ORDERED can see when each slot moves.
     sim.hooks.emit(Phase.FRAME_BEGIN)
     snapshots = []
     for substep in range(decimation):
         physics_step()
         if substep == 0:
-            untouched = buffer.clone()
-            sim.refresh_sim_tensors()
-            # Compare the poison mask and the written values separately: nan_to_num would map a
-            # refresh that ZEROED an unwritten slot onto the NaN it replaced, hiding the mutation.
-            poisoned = untouched.isnan()
-            if not torch.equal(poisoned, buffer.isnan()) or not torch.equal(untouched[~poisoned], buffer[~poisoned]):
-                failures.append("STABLE: refresh_sim_tensors mutated the buffer")
+            refresh_is_stable("mid-step, most slots still unwritten")
         snapshots.append(buffer.clone())
-    sim.refresh_sim_tensors()
+    # The completed buffer is what a reward term reads, and the task reset path refreshes a second
+    # time in the same control step (locomotion_manager, wbt_manager) — so check both calls.
+    refresh_is_stable("step complete")
+    refresh_is_stable("step complete, second refresh")
 
     for i in range(decimation):
         written_at_i = not snapshots[i][:, i].isnan().any()
