@@ -3,11 +3,6 @@
 Runs the contact_substep_assert.py harness in its own process (IsaacSim's SimulationContext is a
 process singleton); that harness documents the properties it asserts.
 
-SHAPE and FILLED are this backend's regression guards: the buffer used to be sized from a config
-knob independent of the decimation, and only its first ``min(decimation, knob)`` slots were ever
-written — so raising the knob past the decimation left a tail that read as real zero-force samples
-forever.
-
 Marked ``isaacsim`` so only the IsaacSim CI job (``-m isaacsim``) collects it. The verdict is read
 from a result-file sentinel because IsaacSim teardown can corrupt the exit code.
 """

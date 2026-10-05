@@ -1,31 +1,25 @@
 """Headless cross-backend assertion harness for ``simulator.contact_recorder``.
 
 Settles the robot onto flat ground, then asserts the buffer's contract over one control step.
-The properties are the ones a reward term reading the buffer depends on, and each one is a
-defect a backend actually shipped at some point:
+The properties are the ones a reward term reading the buffer depends on:
 
   1. SHAPE      — exactly ``control_decimation_steps`` frames wide, and ``recorded_forces``
                   exposes all of them once the control step completes.
-  2. FILLED     — every slot is written. A buffer sized independently of the decimation left its
-                  tail untouched, and zeros there are indistinguishable from real zero-force
-                  samples (a consumer differentiating the history sees a spurious rising edge
-                  once per control step).
+  2. FILLED     — every slot is written; an unwritten slot's zero is indistinguishable from a
+                  real zero-force sample.
   3. ORDERED    — slot i is written at substep i, not before, and not touched again.
-  4. DISTINCT   — the slots are not all one frame. A contact tensor that is never re-fetched
-                  mid-step, or a sensor whose update period is coarser than the physics step,
-                  yields ``decimation`` copies of one sample.
+  4. DISTINCT   — the slots are not all one frame. A tensor not re-fetched mid-step, or a sensor
+                  whose update period is coarser than the physics step, yields one sample repeated.
   5. AGREES     — the last slot equals ``simulator.contact_forces`` at the following refresh.
-  6. REWRITTEN  — the next control step writes every slot again. This is why the buffer needs no
+  6. REWRITTEN  — the next control step writes every slot again, which is why the buffer needs no
                   clearing on reset: no pre-reset sample can survive into a reward.
   7. RESTARTS   — after a deliberately short step desyncs the slot index, FRAME_BEGIN re-anchors
                   slot 0 to the first substep of the control step, and ``recorded_forces`` narrows
                   to just that sample rather than exposing the previous step's slots.
   8. STABLE     — ``refresh_sim_tensors`` does not touch the buffer, mid-step or once the step is
                   complete, however many times it is called. It runs a variable number of times per
-                  control step (the task reset path calls it a second time, and run_sim calls it per
-                  physics step), which is why recording cannot live there. Checked against the live
-                  buffer: the clone-to-clone comparison in AGREES cannot see an in-place mutation,
-                  and a refresh that ZEROED the completed buffer would satisfy REWRITTEN.
+                  control step (the task reset path calls it a second time; run_sim calls it per
+                  physics step on the Isaac backends), which is why recording cannot live there.
 
 "Written" is checked by poisoning the buffer with NaN first, rather than by looking for non-zero
 forces: a slot is legitimately zero whenever the body is airborne at that substep.
@@ -205,8 +199,7 @@ def _check(sim, num_envs: int) -> tuple[list[str], list[str]]:
             if not bool(buffer[:, i].isnan().all()):
                 failures.append(f"RESTARTS: slot {i} was written instead of slot 0 after FRAME_BEGIN")
                 break
-        # The poisoned slots are still in the allocation; a consumer reading mid-step must not see
-        # them (nor, in a real run, the previous step's samples).
+        # The poisoned slots are still in the allocation, so a mid-step read must not reach them.
         if tuple(recorder.recorded_forces.shape)[1] != 1:
             failures.append(f"RESTARTS: recorded_forces is {recorder.recorded_forces.shape[1]} wide after 1 substep")
 

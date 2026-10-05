@@ -3,10 +3,6 @@
 Runs the contact_substep_assert.py harness in its own process (IsaacGym segfaults on a second
 gymapi sim per process); that harness documents the properties it asserts.
 
-DISTINCT is this backend's regression guard: ``contact_forces`` wraps the gym net-contact tensor,
-so without a per-substep ``refresh_net_contact_force_tensor`` every substep records the same stale
-frame.
-
 Unmarked + ``importorskip("isaacgym")``/CUDA-gated so the IsaacGym CI job (``-m "isaacgym"``, which
 conftest applies from the directory) collects it and it skips cleanly elsewhere. The IsaacSim analogue is in
 ../isaacsim/test_contact_substep_isaacsim.py; the MuJoCo ones are in ../mujoco/.

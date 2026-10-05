@@ -4,10 +4,6 @@ Routes both MuJoCo backends through the SAME contact_substep_assert.py harness t
 use, so the buffer's contract is proven identically on all four; that harness documents the
 properties it asserts. ClassicBackend runs on CPU — the only backend where this contract is
 checkable without a GPU; the Warp path is CUDA-gated and multi-env.
-
-STABLE and ORDERED are this backend's regression guards: the rotation used to live in
-``refresh_sim_tensors``, which runs a variable number of times per control step (the reset path
-calls it a second time, duplicating a frame for every env whenever any env reset).
 """
 
 from __future__ import annotations

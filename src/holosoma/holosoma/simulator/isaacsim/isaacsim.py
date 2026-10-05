@@ -962,6 +962,8 @@ class IsaacSim(BaseSimulator):
 
         self.contact_recorder = ContactSubstepRecorder(
             self.hooks,
+            # Gathers from the sensor, not contact_forces: that is only reassigned in
+            # refresh_sim_tensors, so it would record one stale frame per substep.
             self._robot_contact_forces,
             self.num_envs,
             self.simulator_config.sim.control_decimation_steps,
