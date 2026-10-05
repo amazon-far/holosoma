@@ -35,19 +35,22 @@ class ContactSubstepRecorder:
 
     @property
     def recorded_forces(self) -> torch.Tensor:
-        """Substeps recorded so far this control step, [num_envs, n, num_bodies, 3], oldest first.
+        """Substeps recorded so far this control step, [num_envs, n, num_bodies, 3], oldest first
+        as long as FRAME_BEGIN anchors the step (see :meth:`record`).
 
         ``n`` grows from 0 to the decimation across the step, so a mid-step reader never sees a slot
-        left over from the previous one. A consumer reading after the substep loop (every reward
-        term) always gets the full decimation.
+        left over from the previous one. A consumer that reduces over dim 1 must read after the
+        substep loop, where ``n`` is always the full decimation — it is 0 before the first sample.
         """
         return self.buffer[:, : min(self._substep_idx, self._decimation)]
 
     @property
     def latest_forces(self) -> torch.Tensor:
-        """Most recent substep, [num_envs, num_bodies, 3]; zeros before the first record."""
-        if self._substep_idx == 0:
-            return self.buffer[:, 0]
+        """Most recent substep, [num_envs, num_bodies, 3]; zeros before the first record.
+
+        Between FRAME_BEGIN and the first POST_STEP the index is 0 and this wraps to the last slot,
+        which is the previous step's final substep — still the most recent sample taken.
+        """
         return self.buffer[:, (self._substep_idx - 1) % self._decimation]
 
     def begin_frame(self) -> None:
@@ -55,8 +58,8 @@ class ContactSubstepRecorder:
 
     def record(self, frame: torch.Tensor) -> None:
         """Store one substep's contact forces [num_envs, num_bodies, 3]."""
-        # Slot order is only meaningful when FRAME_BEGIN anchors it; a caller that skips it (the
-        # test harnesses step raw physics) must still not index past the end.
+        # Slot order is only meaningful when FRAME_BEGIN anchors it; a caller that emits POST_STEP
+        # without it must still not index past the end.
         self.buffer[:, self._substep_idx % self._decimation] = frame
         self._substep_idx += 1
 

@@ -127,6 +127,18 @@ def test_latest_forces_is_the_most_recent_sample():
         assert torch.equal(driver.recorder.latest_forces, _frame(substep + 1))
 
 
+def test_latest_forces_across_a_frame_boundary():
+    """FRAME_BEGIN restarts the index without clearing, so slot 0 holds the PREVIOUS step's first
+    substep — reading it there would hand back a sample three substeps stale."""
+    driver = _Driver(4)
+    driver.begin_frame()
+    for substep in range(4):
+        driver.step(substep + 1)
+
+    driver.begin_frame()
+    assert torch.equal(driver.recorder.latest_forces, _frame(4))
+
+
 def test_buffer_is_not_reallocated():
     """The live harness binds the buffer once, so it has to keep its identity."""
     driver = _Driver(4)
