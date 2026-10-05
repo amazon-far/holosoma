@@ -53,7 +53,8 @@ def _term(env: _Env, pattern: str, threshold: float = 1.0) -> UndesiredContacts:
         func="holosoma.managers.reward.terms.wbt:UndesiredContacts",
         params={"undesired_contacts_body_names": pattern, "threshold": threshold},
     )
-    return UndesiredContacts(cfg, env)
+    # The term only reaches env.device and env.simulator, so the stub satisfies it structurally.
+    return UndesiredContacts(cfg, env)  # type: ignore[arg-type]
 
 
 def _frame(num_envs: int = 1, **body_force):
