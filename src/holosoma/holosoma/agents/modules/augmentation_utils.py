@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Sequence
 
 import torch
@@ -188,30 +189,19 @@ class SymmetryUtils:
             dtype=torch.float,
         )
 
-        # Build a NAME-BASED foot/leg channel mirror map for gait-phase observations.
-        # Gait phase obs (sin_phase/cos_phase) have one channel per foot, ordered to
-        # match env.feet_indices == [body for body in body_names if foot_body_name in body].
-        # Under a left-right mirror, each foot's phase channel must be SWAPPED with its
-        # mirror foot's channel. The previous implementation hard-coded "negate channel 0"
-        # which only happens to be (partially) correct when channel 0 is the LEFT foot
-        # (i.e. left-first body_names). This derives the permutation by name so it is
-        # correct for any foot ordering and any number of feet (bipeds and quadrupeds).
         self.phase_channel_map = self._build_phase_channel_map()
 
     def _mirror_body_name(self, name: str) -> str:
-        """Return the left<->right mirror of a body name. Side tokens are matched only
-        at WORD BOUNDARIES (name start, or surrounded by '_') so mid-word letters are
-        never mistaken for a side prefix -- e.g. the 'l' in 'ankle_roll' must NOT be
-        read as an 'l_' side marker. Returns the name unchanged if no side token found.
-        """
-        import re
+        """Return the left/right mirror of a body name, or the name unchanged if it has no side token.
 
-        # whole-word 'left'/'right'
+        Side tokens only count at a word boundary (name start, or between underscores), so the
+        ``l`` in ``ankle_roll`` is not read as an ``l_`` side marker.
+        """
+        # A name carrying both sides is ambiguous, so leave it to the l_/r_ forms below.
         if re.search(r"(?<![a-z])left(?![a-z])", name) and "right" not in name:
             return re.sub(r"(?<![a-z])left(?![a-z])", "right", name, count=1)
         if re.search(r"(?<![a-z])right(?![a-z])", name) and "left" not in name:
             return re.sub(r"(?<![a-z])right(?![a-z])", "left", name, count=1)
-        # prefix l_/r_ (start) or _l_/_r_ (after an underscore) ONLY
         if re.match(r"^l_", name):
             return "r_" + name[2:]
         if re.match(r"^r_", name):
@@ -223,11 +213,11 @@ class SymmetryUtils:
         return name
 
     def _build_phase_channel_map(self) -> torch.Tensor:
-        """Permutation tensor p such that mirrored_phase[..., i] = phase[..., p[i]].
+        """Permutation ``p`` over gait-phase channels with ``mirrored[..., i] = phase[..., p[i]]``.
 
-        p[i] = index of the foot channel that is the left-right mirror of channel i.
-        Falls back to identity for any channel whose mirror can't be resolved by name
-        (so behavior degrades to "unchanged" rather than wrong)."""
+        Channels are feet in ``env.feet_indices`` order, so ``p[i]`` is the channel of foot ``i``'s
+        left-right mirror. A foot whose mirror does not resolve by name maps to itself.
+        """
         body_names = list(getattr(self.env, "body_names", []) or [])
         foot_pattern = self.robot_config.foot_body_name
         foot_names = [b for b in body_names if foot_pattern in b] if foot_pattern else []
@@ -235,7 +225,7 @@ class SymmetryUtils:
         perm = []
         for i, n in enumerate(foot_names):
             mirror = self._mirror_body_name(n)
-            perm.append(name_to_chan.get(mirror, i))  # identity fallback
+            perm.append(name_to_chan.get(mirror, i))
         return torch.tensor(perm, device=self.env.device, dtype=torch.long)
 
     def augment_observations(self, obs: torch.Tensor, env: Any, obs_list: Sequence[str]) -> torch.Tensor:
@@ -491,24 +481,32 @@ class SymmetryUtils:
         return command_base_height
 
     def mirror_obs_sin_phase(self, sin_phase: torch.Tensor) -> torch.Tensor:
-        """Mirrors the sine of the gait phase under a left-right reflection.
+        """Mirrors the sine of the gait phase.
 
-        Layout: one channel per foot, ordered to match env.feet_indices.
-        A left-right mirror SWAPS each foot's phase channel with its mirror foot's
-        channel (mirrored[..., i] = phase[..., phase_channel_map[i]]). This is correct
-        for any foot ordering / count, unlike the previous hard "negate channel 0".
+        Parameters
+        ----------
+        sin_phase : torch.Tensor
+            Sine of the gait phase, one channel per foot in ``env.feet_indices`` order.
 
-        NOTE (changed 2026-06-30): this differs from the old behavior for left-first
-        bipeds too — the old code negated channel 0 and left channel 1 untouched, which
-        is not a consistent leg swap.
+        Returns
+        -------
+        torch.Tensor
+            Phase with each foot's channel taken from its left-right mirror foot.
         """
         return sin_phase[..., self.phase_channel_map]
 
     def mirror_obs_cos_phase(self, cos_phase: torch.Tensor) -> torch.Tensor:
-        """Mirrors the cosine of the gait phase under a left-right reflection.
+        """Mirrors the cosine of the gait phase.
 
-        See mirror_obs_sin_phase: channels are swapped by the name-derived
-        phase_channel_map so the transform is correct for any foot ordering.
+        Parameters
+        ----------
+        cos_phase : torch.Tensor
+            Cosine of the gait phase, one channel per foot in ``env.feet_indices`` order.
+
+        Returns
+        -------
+        torch.Tensor
+            Phase with each foot's channel taken from its left-right mirror foot.
         """
         return cos_phase[..., self.phase_channel_map]
 
