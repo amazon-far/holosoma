@@ -100,7 +100,7 @@ class IMujocoBackend(abc.ABC):
         Returns
         -------
         torch.Tensor
-            Contact forces [num_envs, model.nbody, 3] (force only, torque dropped).
+            World-frame contact forces [num_envs, model.nbody, 3] (force only, torque dropped).
         """
         ...
 

@@ -154,7 +154,7 @@ class ClassicBackend(IMujocoBackend):
         Returns
         -------
         torch.Tensor
-            Contact forces [1, model.nbody, 3].
+            World-frame contact forces [1, model.nbody, 3].
         """
         # Reset force accumulator
         self._force_tensor.fill_(0.0)
@@ -169,8 +169,9 @@ class ClassicBackend(IMujocoBackend):
             # Get 6D force/torque vector
             mujoco.mj_contactForce(self.model, self.data, i, forcetorque)
 
-            # Convert to torch tensor (forces only, ignore torques)
-            force = torch.from_numpy(forcetorque[:3]).float().to(self.device)
+            # mj_contactForce's output is in the contact frame; contact.frame's rows are its axes.
+            force_w = contact.frame.reshape(3, 3).T @ forcetorque[:3]
+            force = torch.from_numpy(force_w).float().to(self.device)
 
             # Map geoms to bodies
             b1 = self.model.geom_bodyid[contact.geom1]
