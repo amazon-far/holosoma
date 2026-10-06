@@ -13,15 +13,22 @@ import torch
 
 from holosoma.agents.modules.augmentation_utils import SymmetryUtils
 
+# Minimal g1-shaped feet: the phase channel map is built from these.
+FOOT_BODY_NAMES = ["left_ankle_roll_link", "right_ankle_roll_link"]
+FOOT_PATTERN = "ankle_roll_link"
+
 
 @pytest.fixture
 def mock_env_with_history():
     """Create a mock environment with history length > 1."""
     env = MagicMock()
     env.device = "cpu"
+    env.body_names = FOOT_BODY_NAMES
 
     # Mock robot config with symmetry mappings
     robot_config = MagicMock()
+    robot_config.foot_body_name = FOOT_PATTERN
+    robot_config.num_feet = 2
     robot_config.dof_names = [
         "left_hip_yaw",
         "left_hip_roll",
@@ -101,9 +108,12 @@ def mock_env_direct_config():
     """Create a mock environment using direct config (not observation manager)."""
     env = MagicMock()
     env.device = "cpu"
+    env.body_names = FOOT_BODY_NAMES
 
     # Mock robot config
     robot_config = MagicMock()
+    robot_config.foot_body_name = FOOT_PATTERN
+    robot_config.num_feet = 2
     robot_config.dof_names = [
         "left_hip_yaw",
         "left_hip_roll",
@@ -323,9 +333,12 @@ def test_different_history_lengths(history_length):
     # Create a simple mock environment
     env = MagicMock()
     env.device = "cpu"
+    env.body_names = FOOT_BODY_NAMES
 
     # Mock robot config
     robot_config = MagicMock()
+    robot_config.foot_body_name = FOOT_PATTERN
+    robot_config.num_feet = 2
     robot_config.dof_names = ["left_joint", "right_joint"]
     robot_config.symmetry_joint_names = {
         "left_joint": "right_joint",
@@ -360,6 +373,78 @@ def test_different_history_lengths(history_length):
     mirrored = symmetry_utils.mirror_xz_plane(observation=observation, env=env, obs_list=["actor_obs"])
 
     assert mirrored.shape == observation.shape
+
+
+def _phase_map(body_names, foot_pattern=FOOT_PATTERN, num_feet=2):
+    """The phase channel map SymmetryUtils derives for a robot with these foot bodies."""
+    env = MagicMock()
+    env.device = "cpu"
+    env.body_names = body_names
+    robot_config = MagicMock()
+    robot_config.foot_body_name = foot_pattern
+    robot_config.num_feet = num_feet
+    robot_config.dof_names = ["left_joint", "right_joint"]
+    robot_config.symmetry_joint_names = {"left_joint": "right_joint", "right_joint": "left_joint"}
+    robot_config.flip_sign_joint_names = ["left_joint"]
+    env.robot_config = robot_config
+    env.observation_manager = None
+    env.config = MagicMock(obs_dims={})
+    env.dim_obs = {}
+    env.history_length = {}
+    return SymmetryUtils(env).phase_channel_map.tolist()
+
+
+@pytest.mark.parametrize(
+    "body_names",
+    [
+        ["left_ankle_roll_link", "right_ankle_roll_link"],
+        ["right_ankle_roll_link", "left_ankle_roll_link"],
+        ["Left_ankle_roll_link", "Right_ankle_roll_link"],
+        ["left_upright_ankle_roll_link", "right_upright_ankle_roll_link"],
+    ],
+)
+def test_phase_map_swaps_the_two_feet(body_names):
+    """Right-first ordering is the case the old channel-0 negation got wrong."""
+    assert _phase_map(body_names) == [1, 0]
+
+
+def test_phase_map_ignores_non_foot_bodies():
+    body_names = ["pelvis", "left_ankle_pitch_link", "left_ankle_roll_link", "right_ankle_roll_link"]
+    assert _phase_map(body_names) == [1, 0]
+
+
+def test_phase_map_rejects_feet_with_no_resolvable_mirror():
+    with pytest.raises(ValueError, match="no left-right mirror"):
+        _phase_map(["fl_ankle_roll_link", "fr_ankle_roll_link"])
+
+
+def test_phase_map_rejects_a_foot_count_the_pattern_did_not_match():
+    with pytest.raises(ValueError, match="expected 2 foot bodies"):
+        _phase_map(["left_ankle_roll_link"])
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("ankle_roll_link", "ankle_roll_link"),
+        ("left_ankle_roll_link", "right_ankle_roll_link"),
+        ("right_ankle_roll_link", "left_ankle_roll_link"),
+        ("ankle_l_roll", "ankle_r_roll"),
+        ("l_foot", "r_foot"),
+        ("left_right_link", "left_right_link"),
+    ],
+)
+def test_mirror_body_name(name, expected):
+    """``ankle_roll_link`` is the trap: its mid-word ``l`` must not read as an ``l_`` side token."""
+    assert SymmetryUtils._mirror_body_name(name) == expected
+
+
+def test_mirror_obs_phase_swaps_channels(mock_env_direct_config):
+    symmetry_utils = SymmetryUtils(mock_env_direct_config)
+    phase = torch.tensor([[0.25, 0.75]])
+
+    assert symmetry_utils.mirror_obs_sin_phase(phase.clone()).tolist() == [[0.75, 0.25]]
+    assert symmetry_utils.mirror_obs_cos_phase(phase.clone()).tolist() == [[0.75, 0.25]]
 
 
 if __name__ == "__main__":

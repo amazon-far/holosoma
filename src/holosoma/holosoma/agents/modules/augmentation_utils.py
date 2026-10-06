@@ -191,17 +191,21 @@ class SymmetryUtils:
 
         self.phase_channel_map = self._build_phase_channel_map()
 
-    def _mirror_body_name(self, name: str) -> str:
-        """Return the left/right mirror of a body name, or the name unchanged if it has no side token.
+    @staticmethod
+    def _mirror_body_name(name: str) -> str:
+        """Return the left/right mirror of a lowercased body name, unchanged if it has no side token.
 
         Side tokens only count at a word boundary (name start, or between underscores), so the
         ``l`` in ``ankle_roll`` is not read as an ``l_`` side marker.
         """
-        # A name carrying both sides is ambiguous, so leave it to the l_/r_ forms below.
-        if re.search(r"(?<![a-z])left(?![a-z])", name) and "right" not in name:
-            return re.sub(r"(?<![a-z])left(?![a-z])", "right", name, count=1)
-        if re.search(r"(?<![a-z])right(?![a-z])", name) and "left" not in name:
-            return re.sub(r"(?<![a-z])right(?![a-z])", "left", name, count=1)
+        left = r"(?<![a-z])left(?![a-z])"
+        right = r"(?<![a-z])right(?![a-z])"
+        # Both sides present is ambiguous; the guards have to use the same word boundaries as the
+        # match, or a substring like "upright" suppresses the mirror of a genuine "left".
+        if re.search(left, name) and not re.search(right, name):
+            return re.sub(left, "right", name, count=1)
+        if re.search(right, name) and not re.search(left, name):
+            return re.sub(right, "left", name, count=1)
         if re.match(r"^l_", name):
             return "r_" + name[2:]
         if re.match(r"^r_", name):
@@ -216,16 +220,27 @@ class SymmetryUtils:
         """Permutation ``p`` over gait-phase channels with ``mirrored[..., i] = phase[..., p[i]]``.
 
         Channels are feet in ``env.feet_indices`` order, so ``p[i]`` is the channel of foot ``i``'s
-        left-right mirror. A foot whose mirror does not resolve by name maps to itself.
+        left-right mirror. Raises rather than falling back to identity: a phase left unmirrored
+        while the joints and base are mirrored is an inconsistent transition, which is the failure
+        this map exists to prevent.
         """
-        body_names = list(getattr(self.env, "body_names", []) or [])
-        foot_pattern = self.robot_config.foot_body_name
-        foot_names = [b for b in body_names if foot_pattern in b] if foot_pattern else []
-        name_to_chan = {n: i for i, n in enumerate(foot_names)}
+        foot_names = [name for name in self.env.body_names if self.robot_config.foot_body_name in name]
+        if len(foot_names) != self.robot_config.num_feet:
+            raise ValueError(
+                f"'{self.robot_config.foot_body_name}' matched {foot_names}, expected "
+                f"{self.robot_config.num_feet} foot bodies"
+            )
+        channel_of = {name.lower(): channel for channel, name in enumerate(foot_names)}
         perm = []
-        for i, n in enumerate(foot_names):
-            mirror = self._mirror_body_name(n)
-            perm.append(name_to_chan.get(mirror, i))
+        for i, name in enumerate(foot_names):
+            mirror = self._mirror_body_name(name.lower())
+            # No foot sits on the midline, so a foot mapping to itself means the name heuristic
+            # failed to find the side token rather than that the foot is its own mirror.
+            if channel_of.get(mirror, i) == i:
+                raise ValueError(f"Foot body '{name}' has no left-right mirror among {foot_names}")
+            perm.append(channel_of[mirror])
+        if any(perm[channel] != i for i, channel in enumerate(perm)):
+            raise ValueError(f"Gait-phase mirror {perm} over {foot_names} is not a left-right swap")
         return torch.tensor(perm, device=self.env.device, dtype=torch.long)
 
     def augment_observations(self, obs: torch.Tensor, env: Any, obs_list: Sequence[str]) -> torch.Tensor:
