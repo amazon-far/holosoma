@@ -32,7 +32,7 @@ SIM2SIM_WORKFLOW = (
     / "holosoma_inference"
     / "docs"
     / "workflows"
-    / "sim-to-sim-depth-distillation.md"
+    / "sim-to-sim-depth-locomotion.md"
 )
 
 
