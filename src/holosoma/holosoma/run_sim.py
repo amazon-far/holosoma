@@ -6,6 +6,8 @@ This script provides a direct simulation runner for holosoma with bridge support
 or evaluation environments.
 """
 
+from __future__ import annotations
+
 import dataclasses
 import sys
 import traceback
@@ -14,10 +16,11 @@ from loguru import logger
 
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.utils.eval_utils import init_eval_logging
-from holosoma.utils.sim_utils import DirectSimulation, setup_simulation_environment
+from holosoma.utils.sim_utils import DirectSimulation, graceful_simulation_signals, setup_simulation_environment
 
 
-def run_simulation(config: RunSimConfig):
+@graceful_simulation_signals
+def run_simulation(config: RunSimConfig) -> None:
     """Run simulation with direct simulator control.
 
     This function provides direct access to the simulator for continuous simulation

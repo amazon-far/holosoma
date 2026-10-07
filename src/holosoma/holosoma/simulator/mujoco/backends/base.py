@@ -8,24 +8,26 @@ data synchronization.
 from __future__ import annotations
 
 import abc
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import mujoco
-import numpy as np
+import numpy.typing as npt
 import torch
+
+from holosoma.simulator.mujoco.geom_groups import DEFAULT_RENDER_GEOM_GROUPS
 
 if TYPE_CHECKING:
     from holosoma.config_types.full_sim import FullSimConfig
     from holosoma.simulator.mujoco.tensor_views import BaseMujocoView
-    from holosoma.simulator.shared.camera_sensor import CameraRuntime
+    from holosoma.simulator.shared.sensor_manager import CameraRecord
 
 
-def mj_to_holosoma_quat(quat_wxyz: np.ndarray | torch.Tensor) -> np.ndarray | torch.Tensor:
+def mj_to_holosoma_quat(quat_wxyz: npt.NDArray[Any] | torch.Tensor) -> npt.NDArray[Any] | torch.Tensor:
     """Convert MuJoCo ``[w,x,y,z]`` to holosoma ``[x,y,z,w]`` (last-axis permute; numpy or torch)."""
     return quat_wxyz[..., [1, 2, 3, 0]]
 
 
-def holosoma_to_mj_quat(quat_xyzw: np.ndarray | torch.Tensor) -> np.ndarray | torch.Tensor:
+def holosoma_to_mj_quat(quat_xyzw: npt.NDArray[Any] | torch.Tensor) -> npt.NDArray[Any] | torch.Tensor:
     """Convert holosoma ``[x,y,z,w]`` to MuJoCo ``[w,x,y,z]`` (last-axis permute; numpy or torch)."""
     return quat_xyzw[..., [3, 0, 1, 2]]
 
@@ -46,6 +48,8 @@ def apply_sensor_scene_flags(show_camera_frusta: bool, opt: mujoco.MjvOption | N
     if opt is None:
         opt = mujoco.MjvOption()
         mujoco.mjv_defaultOption(opt)
+    for group in range(len(opt.geomgroup)):
+        opt.geomgroup[group] = group in DEFAULT_RENDER_GEOM_GROUPS
     opt.flags[mujoco.mjtVisFlag.mjVIS_CAMERA] = show_camera_frusta
     return opt
 
@@ -88,6 +92,21 @@ class IMujocoBackend(abc.ABC):
         ...
 
     @abc.abstractmethod
+    def physics_time(self) -> float:
+        """Return the backend's current simulation time in seconds."""
+        ...
+
+    @abc.abstractmethod
+    def forward_kinematics(self) -> None:
+        """Propagate written qpos/qvel to derived quantities (xpos/xquat/geom/cam poses), no dynamics.
+
+        The FK-only refresh for kinematic playback: after ``set_dof_state``/``set_actor_state``
+        writes, this makes everything the renderers read consistent with the written state
+        without integrating (no gravity, no contacts, no time advance).
+        """
+        ...
+
+    @abc.abstractmethod
     def compute_contact_forces(self) -> torch.Tensor:
         """Return current-frame net contact forces for ALL model bodies.
 
@@ -100,7 +119,8 @@ class IMujocoBackend(abc.ABC):
         Returns
         -------
         torch.Tensor
-            Contact forces [num_envs, model.nbody, 3] (force only, torque dropped).
+            World-frame contact forces [num_envs, model.nbody, 3] (force only,
+            torque dropped).
         """
         ...
 
@@ -135,7 +155,7 @@ class IMujocoBackend(abc.ABC):
 
     # View factory methods
     @abc.abstractmethod
-    def create_root_view(self, addrs: dict) -> BaseMujocoView:
+    def create_root_view(self, addrs: dict[str, Any]) -> BaseMujocoView:
         """Create view for robot root states.
 
         Parameters
@@ -205,7 +225,7 @@ class IMujocoBackend(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def create_dof_state_view(self, dof_addrs: dict, num_dof: int) -> BaseMujocoView:
+    def create_dof_state_view(self, dof_addrs: dict[str, Any], num_dof: int) -> BaseMujocoView:
         """Create view for DOF states in IsaacGym flattened format.
 
         Returns view with shape [num_envs * num_dof, 2] where:
@@ -227,7 +247,7 @@ class IMujocoBackend(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def get_applied_forces_view(self) -> np.ndarray | torch.Tensor:
+    def get_applied_forces_view(self) -> npt.NDArray[Any] | torch.Tensor:
         """Get writable view for external applied forces.
 
         Returns a writable view to xfrc_applied array where forces and torques
@@ -243,7 +263,7 @@ class IMujocoBackend(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def set_root_state(self, env_ids: torch.Tensor, root_states: torch.Tensor, root_addrs: dict) -> None:
+    def set_root_state(self, env_ids: torch.Tensor, root_states: torch.Tensor, root_addrs: dict[str, Any]) -> None:
         """Set robot root states for specified environments.
 
         Parameters
@@ -259,7 +279,7 @@ class IMujocoBackend(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def set_dof_state(self, env_ids: torch.Tensor, dof_states: torch.Tensor, dof_addrs: dict) -> None:
+    def set_dof_state(self, env_ids: torch.Tensor, dof_states: torch.Tensor, dof_addrs: dict[str, Any]) -> None:
         """Set DOF states for specified environments.
 
         Parameters
@@ -350,6 +370,28 @@ class IMujocoBackend(abc.ABC):
         """
         return None  # Default implementation - backends can override
 
+    def configure_rigid_body_refresh(self, body_ids: list[int]) -> None:
+        """Configure extraction for robot bodies in holosoma order."""
+        self._rigid_body_ids_t = torch.tensor(body_ids, dtype=torch.long, device=self.device)
+
+    def refresh_rigid_body_states(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return current robot-body state tensors in holosoma order.
+
+        The default gathers robot rows from full-model backend views. Backends
+        without full-model tensor views can override this with native extraction.
+        """
+        views = self.get_rigid_body_state_views()
+        if views is None:
+            raise NotImplementedError(f"{type(self).__name__} does not provide rigid-body state refresh")
+        positions, orientations, linear_vel, angular_vel = views
+        body_ids = self._rigid_body_ids_t
+        return (
+            positions[:, body_ids],
+            orientations[:, body_ids],
+            linear_vel[:, body_ids],
+            angular_vel[:, body_ids],
+        )
+
     def initialize_state(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
         """Sync CPU initial state to backend storage after construction.
 
@@ -368,7 +410,7 @@ class IMujocoBackend(abc.ABC):
         return  # Default implementation - backends can override
 
     @abc.abstractmethod
-    def create_quaternion_view(self, quat_slice: slice):
+    def create_quaternion_view(self, quat_slice: slice) -> BaseMujocoView:
         """Create quaternion view with format conversion.
 
         Converts between MuJoCo [w,x,y,z] and holosoma [x,y,z,w] quaternion formats.
@@ -386,7 +428,7 @@ class IMujocoBackend(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def create_angular_velocity_view(self, ang_vel_slice: slice):
+    def create_angular_velocity_view(self, ang_vel_slice: slice) -> BaseMujocoView:
         """Create angular velocity view with proper reshaping.
 
         Parameters
@@ -401,28 +443,31 @@ class IMujocoBackend(abc.ABC):
         """
         ...
 
+    def close(self) -> None:  # noqa: B027 - backends without native resources need no teardown.
+        """Release backend-owned rendering resources. Must be idempotent."""
+
     # Camera rendering
     @abc.abstractmethod
-    def create_renderers(self, cameras: list[CameraRuntime]) -> None:
+    def create_renderers(self, cameras: list[CameraRecord]) -> None:
         """Allocate per-backend rendering resources for the mounted cameras (called once at setup).
 
         Parameters
         ----------
-        cameras : list[CameraRuntime]
-            All registered cameras; the backend resolves each native resource from ``runtime.name``.
+        cameras : list[CameraRecord]
+            All registered cameras; the backend resolves each native resource from ``record.name``.
         """
         ...
 
     @abc.abstractmethod
-    def render_cameras(self, cameras: list[CameraRuntime]) -> None:
+    def render_cameras(self, cameras: list[CameraRecord]) -> None:
         """Render the given cameras and store each one's canonical output buffer.
 
-        Writes each modality via ``runtime.set_buffer(data_type, tensor)``:
+        Writes each modality via ``record.set_buffer(data_type, tensor)``:
         ``rgb`` [N,H,W,3] uint8, ``depth`` [N,H,W,1] float32 meters (+inf no-hit), on ``self.device``.
 
         Parameters
         ----------
-        cameras : list[CameraRuntime]
+        cameras : list[CameraRecord]
             The cameras due to render this step (a subset of those passed to ``create_renderers``).
         """
         ...

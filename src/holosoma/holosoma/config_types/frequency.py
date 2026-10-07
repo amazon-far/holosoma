@@ -42,7 +42,7 @@ def validate_decimation_like(value: DecimationLike, *, field: str) -> None:
         if value < 1:
             raise ValueError(f"{field}: decimation must be >= 1, got {value}.")
         return
-    if not isinstance(value, str) or _FREQ_RE.match(value) is None:
+    if not isinstance(value, str) or _FREQ_RE.match(value) is None:  # type: ignore[redundant-expr]
         raise ValueError(f"{field}: invalid {value!r}; expected an int >= 1 or e.g. '20Hz', '>20Hz', '<20Hz'.")
 
 

@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import math
 import re
+from typing import cast
 
 import cv2
 import numpy as np
+import numpy.typing as npt
 
 from holosoma.simulator.plugins.depth_color import colorize_depth
 
@@ -24,7 +26,7 @@ _BORDER = 2  # white gutter (px) added around every cell, so adjacent views are 
 _BORDER_COLOR = (255, 255, 255)  # white; symmetric in RGB/BGR so the display boundary needn't care
 
 
-def _letterbox(img: np.ndarray, cell_h: int, cell_w: int, pad_value: int) -> np.ndarray:
+def _letterbox(img: npt.NDArray[np.uint8], cell_h: int, cell_w: int, pad_value: int) -> npt.NDArray[np.uint8]:
     """Scale ``img`` to fit a ``cell_h x cell_w`` cell preserving aspect ratio, centered.
 
     The image is resized by the largest factor that keeps it inside the cell (so neither axis
@@ -35,7 +37,7 @@ def _letterbox(img: np.ndarray, cell_h: int, cell_w: int, pad_value: int) -> np.
     scale = min(cell_w / w, cell_h / h)
     new_w, new_h = max(1, round(w * scale)), max(1, round(h * scale))
     resized = cv2.resize(img, (new_w, new_h)).astype(np.uint8)  # cv2 takes (width, height)
-    canvas = np.full((cell_h, cell_w, 3), pad_value, dtype=np.uint8)
+    canvas: npt.NDArray[np.uint8] = np.full((cell_h, cell_w, 3), pad_value, dtype=np.uint8)
     y0, x0 = (cell_h - new_h) // 2, (cell_w - new_w) // 2
     canvas[y0 : y0 + new_h, x0 : x0 + new_w] = resized
     return canvas
@@ -63,7 +65,7 @@ def _wrap_label(text: str, font: int, scale: float, thickness: int, avail: int) 
     return lines or [text]
 
 
-def _draw_label(cell: np.ndarray, text: str) -> None:
+def _draw_label(cell: npt.NDArray[np.uint8], text: str) -> None:
     """Draw ``text`` in the top-left corner of ``cell`` in place (black outline + white fill).
 
     cv2.putText neither wraps nor honors newlines, so ``text`` is one continuous label that is
@@ -88,11 +90,11 @@ def _draw_label(cell: np.ndarray, text: str) -> None:
 
 
 def tile_images(
-    images: list[np.ndarray],
+    images: list[npt.NDArray[np.uint8]],
     layout: tuple[int, int] | None = None,
     pad_value: int = 0,
     labels: list[str] | None = None,
-) -> np.ndarray:
+) -> npt.NDArray[np.uint8]:
     """Tile ``images`` into one ``HxWx3`` uint8 grid.
 
     Every cell is a common size (the max H and max W across the list) so the grid lines up. Each
@@ -120,7 +122,7 @@ def tile_images(
     if not images:
         raise ValueError("tile_images requires at least one image.")
     for i, img in enumerate(images):
-        if img.ndim != 3 or img.shape[2] != 3:
+        if img.ndim != 3 or img.shape[-1] != 3:
             raise ValueError(f"image {i} must be HxWx3, got shape {img.shape}.")
 
     n = len(images)
@@ -145,9 +147,21 @@ def tile_images(
         for cell, label in zip(cells, labels):
             _draw_label(cell, label)
     t = _BORDER
-    cells = [cv2.copyMakeBorder(c, t, t, t, t, cv2.BORDER_CONSTANT, value=_BORDER_COLOR) for c in cells]
-    blank = cv2.copyMakeBorder(
-        np.full((cell_h, cell_w, 3), pad_value, dtype=np.uint8), t, t, t, t, cv2.BORDER_CONSTANT, value=_BORDER_COLOR
+    cells = [
+        cast("npt.NDArray[np.uint8]", cv2.copyMakeBorder(c, t, t, t, t, cv2.BORDER_CONSTANT, value=_BORDER_COLOR))
+        for c in cells
+    ]
+    blank = cast(
+        "npt.NDArray[np.uint8]",
+        cv2.copyMakeBorder(
+            np.full((cell_h, cell_w, 3), pad_value, dtype=np.uint8),
+            t,
+            t,
+            t,
+            t,
+            cv2.BORDER_CONSTANT,
+            value=_BORDER_COLOR,
+        ),
     )
     cells += [blank] * (rows * cols - n)  # pad trailing cells
 

@@ -1,286 +1,122 @@
-name: Docker Build
+name: Docker Image Release
 
 on:
   workflow_dispatch:
     inputs:
       tag_latest:
-        description: 'Promote to :latest after tests pass'
+        description: Test the candidate images and promote them to latest
         required: true
         type: choice
         options:
           - 'true'
           - 'false'
         default: 'false'
+      no_cache:
+        description: Rebuild every image layer without using BuildKit cache
+        required: true
+        type: boolean
+        default: false
+  schedule:
+    # Refresh upstream OS and language dependencies every Sunday at 09:00 UTC.
+    - cron: '0 9 * * 0'
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
+      - '.dockerignore'
+      - '.github/workflows/build-docker-images.yaml'
+      - '.github/workflows/docker-build.yaml'
+      - '.github/workflows/promote-docker-images.yaml'
+      - '.github/workflows/pytest.yaml'
+      - '.github/workflows/test-images.yaml'
+      - 'conftest.py'
+      - 'demo_scripts/**'
       - 'docker/**'
-      - 'scripts/setup_*.sh'
-      - 'src/holosoma_inference/docker/Dockerfile'
-      - 'src/holosoma_retargeting/docker/Dockerfile'
-      - 'docker/thor/Dockerfile'
+      - 'pyproject.toml'
+      - 'scripts/**'
+      - 'src/**'
+      - 'tests/**'
 
 permissions:
   contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: docker-image-release
+  cancel-in-progress: false
 
 env:
   ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Decide whether this run should end in a :latest promotion. We promote on a
-  # push to main (the merge that should refresh the runner AMI) or on a manual
-  # dispatch with tag_latest=true. When promoting, the build's sha- images are
-  # gated behind the test jobs below before :latest moves. When NOT promoting
-  # (e.g. a dispatch with tag_latest=false), we still build + push the immutable
-  # sha-/date tags but skip the gate and leave :latest untouched.
-  # ---------------------------------------------------------------------------
-  decide:
-    name: Decide promotion
+  find-tested-images:
+    name: Find Tested PR Images
     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     outputs:
-      promote: ${{ steps.decide.outputs.promote }}
-      short_sha: ${{ steps.decide.outputs.short_sha }}
-    steps:
-      - name: Decide
-        id: decide
-        run: |
-          if [[ "${{ github.event_name }}" == "push" || "${{ inputs.tag_latest }}" == "true" ]]; then
-            promote=true
-          else
-            promote=false
-          fi
-          echo "promote=$promote" >> "$GITHUB_OUTPUT"
-          echo "short_sha=$(echo "${{ github.sha }}" | cut -c1-7)" >> "$GITHUB_OUTPUT"
-          {
-            echo "## Docker Build"
-            echo "- **Promote to :latest after tests:** \`$promote\`"
-            echo "- **Immutable tag:** \`sha-$(echo "${{ github.sha }}" | cut -c1-7)\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  build:
-    needs: decide
-    strategy:
-      fail-fast: false # continue on one build failing
-      matrix:
-        include:
-        # CPU-buildable images
-        - environment: inference
-          dockerfile: 'src/holosoma_inference/docker/Dockerfile'
-          runner_prefix: 'codebuild-holosoma-cpu-build'
-        - environment: retargeting
-          dockerfile: 'src/holosoma_retargeting/docker/Dockerfile'
-          runner_prefix: 'codebuild-holosoma-cpu-build'
-        # GPU-required images (setup scripts build/link against CUDA/IsaacSim)
-        - environment: holosoma
-          dockerfile: 'docker/Dockerfile'
-          runner_prefix: 'codebuild-holosoma-a10g-x1-gpu-build'
-        - environment: isaacgym
-          dockerfile: 'docker/isaacgym.Dockerfile'
-          runner_prefix: 'codebuild-holosoma-a10g-x1-gpu-build'
-        - environment: isaacsim
-          dockerfile: 'docker/isaacsim.Dockerfile'
-          runner_prefix: 'codebuild-holosoma-a10g-x1-gpu-build'
-        - environment: mujoco
-          dockerfile: 'docker/mujoco.Dockerfile'
-          runner_prefix: 'codebuild-holosoma-a10g-x1-gpu-build'
-          # WARP=true builds the GPU MuJoCo-Warp backend
-          build_args: WARP=true
-        # Thor (Jetson) images — aarch64 SBSA, built natively on an ARM runner.
-        # Single Dockerfile, two targets; each pushes its own image.
-        - environment: thor-inference
-          dockerfile: 'docker/thor/Dockerfile'
-          target: 'inference'
-          runner_prefix: 'codebuild-holosoma-arm-build'
-        - environment: thor-inference-ros
-          dockerfile: 'docker/thor/Dockerfile'
-          target: 'inference-ros'
-          runner_prefix: 'codebuild-holosoma-arm-build'
-    name: Build ${{ matrix.environment }} Docker Image
-    continue-on-error: true
-    runs-on: ${{ matrix.runner_prefix }}-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
+      reuse: ${{ steps.find.outputs.reuse }}
+      commit_sha: ${{ steps.find.outputs.commit_sha }}
+      source_tree: ${{ steps.find.outputs.source_tree }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Generate Image name and path
-        id: name
-        # image name should be `holosoma` or `holsoma-${environment}`
-        run: |
-          IMAGE_NAME="${{ case(matrix.environment == 'holosoma', '', 'holosoma-') }}${{ matrix.environment }}"
-          IMAGE_PATH="${{ env.ECR_REGISTRY }}/${IMAGE_NAME}"
-          echo "image_path=${IMAGE_PATH}" >> "$GITHUB_OUTPUT"
-
-      # might be unnecessary
       - name: Set up Docker Buildx
+        if: github.event_name == 'push'
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-
-      - name: Generate image tags
-        id: tags
-        # Only ever push immutable tags here (date + sha-<short>). :latest is
-        # NOT pushed at build time — it is promoted by the promote-latest job
-        # below, and only after the test gate passes. This prevents a broken
-        # image from ever landing on :latest (which every runner + the AMI
-        # builder consume).
-        run: |
-          tags="${{ steps.name.outputs.image_path }}:$(date -u +%Y_%m%d_%H%M)"
-          tags="$tags,${{ steps.name.outputs.image_path }}:sha-${{ needs.decide.outputs.short_sha }}"
-          echo "tags=$tags" >> "$GITHUB_OUTPUT"
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+      - name: Find merged pull request head
+        id: merged-pr
+        if: github.event_name == 'push'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
-          context: .
-          file: "${{ matrix.dockerfile }}"
-          target: "${{ matrix.target }}"
-          push: true
-          build-args: "${{ matrix.build_args }}"
-          tags: "${{ steps.tags.outputs.tags }}"
-          cache-from: type=registry,ref=${{ steps.name.outputs.image_path  }}:buildcache
-          cache-to: type=registry,ref=${{ steps.name.outputs.image_path }}:buildcache,mode=max
-
-      - name: Summary
-        run: |
-          echo "- Built \`${{ matrix.environment }}\`: \`${{ steps.tags.outputs.tags }}\`" >> "$GITHUB_STEP_SUMMARY"
-
-  # ---------------------------------------------------------------------------
-  # Test gate — runs the SAME checks as CI, but against the freshly-built
-  # sha-<short> images, not :latest. Only runs when we intend to promote. If any
-  # of these fail, promote-latest is skipped and :latest stays on the
-  # last-known-good image.
-  #
-  # These mirror static-checks.yaml (mypy) and pytest.yaml (isaacgym/isaacsim/
-  # e2e/inference suites). The container image is pinned to the sha- tag so we
-  # exercise exactly the image we are about to promote.
-  # ---------------------------------------------------------------------------
-  gate-mypy:
-    name: "Gate: mypy (sha image)"
-    needs: [decide, build]
-    if: needs.decide.outputs.promote == 'true'
-    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
-    container:
-      image: ${{ vars.ECR_REGISTRY }}/holosoma:sha-${{ needs.decide.outputs.short_sha }}
-      volumes:
-        - "precommit-cache:/github/home/.cache/pre-commit"
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 5
-      - name: mypy
+          github-token: ${{ github.token }}
+          result-encoding: string
+          script: |
+            const pulls = await github.paginate(
+              github.rest.repos.listPullRequestsAssociatedWithCommit,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                commit_sha: context.sha,
+                per_page: 100,
+              },
+            );
+            const merged = pulls
+              .filter((pull) => pull.merged_at !== null)
+              .sort((left, right) => left.merged_at.localeCompare(right.merged_at));
+            return merged.at(-1)?.head.sha ?? '';
+      - name: Find source-tree-matching image set
+        id: find
         shell: bash
-        run: |
-          ln -s /root/.holosoma_deps "$HOME/.holosoma_deps"
-          if [[ ! -L /workspace/holosoma ]]; then
-            rm -rf /workspace/holosoma
-            ln -sfF "$GITHUB_WORKSPACE" /workspace/holosoma
-          fi
-          source scripts/source_isaacgym_setup.sh
-          pip install mypy
-          mypy .
-
-  gate-sim-tests:
-    name: "Gate: ${{ matrix.simulator }} tests (sha image)"
-    needs: [decide, build]
-    if: needs.decide.outputs.promote == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        simulator: [isaacgym, isaacsim]
-    runs-on: codebuild-holosoma-a10g-x1-gpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
-    container:
-      image: ${{ vars.ECR_REGISTRY }}/holosoma-${{ matrix.simulator }}:sha-${{ needs.decide.outputs.short_sha }}
-      options: "--gpus all --runtime=nvidia --shm-size=12g"
-      env:
-        HOLOSOMA_MULTIGPU: "False"
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Pytest
-        shell: bash
-        run: |
-          ln -s /root/.holosoma_deps "$HOME/.holosoma_deps"
-          if [[ ! -L /workspace/holosoma ]]; then
-            rm -rf /workspace/holosoma
-            ln -sfF "$GITHUB_WORKSPACE" /workspace/holosoma
-          fi
-          bash tests/ci/${{ matrix.simulator }}_ci_tests.sh
-
-  gate-e2e-tests:
-    name: "Gate: isaacgym e2e (sha image)"
-    needs: [decide, build]
-    if: needs.decide.outputs.promote == 'true'
-    runs-on: codebuild-holosoma-a10g-x1-gpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
-    container:
-      image: ${{ vars.ECR_REGISTRY }}/holosoma:sha-${{ needs.decide.outputs.short_sha }}
-      options: "--gpus all --runtime=nvidia --shm-size=12g"
-      env:
-        HOLOSOMA_MULTIGPU: "False"
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Pytest
-        shell: bash
-        run: |
-          ln -s /root/.holosoma_deps "$HOME/.holosoma_deps"
-          if [[ ! -L /workspace/holosoma ]]; then
-            rm -rf /workspace/holosoma
-            ln -sfF "$GITHUB_WORKSPACE" /workspace/holosoma
-          fi
-          bash tests/ci/isaacgym_e2e_ci_tests.sh
-
-  gate-inference-tests:
-    name: "Gate: inference unit tests (sha image)"
-    needs: [decide, build]
-    if: needs.decide.outputs.promote == 'true'
-    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
-    container:
-      image: ${{ vars.ECR_REGISTRY }}/holosoma:sha-${{ needs.decide.outputs.short_sha }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Run Tests
-        shell: bash
-        run: |
-          ln -s /root/.holosoma_deps "$HOME/.holosoma_deps"
-          if [[ ! -L /workspace/holosoma ]]; then
-            rm -rf /workspace/holosoma
-            ln -sfF "$GITHUB_WORKSPACE" /workspace/holosoma
-          fi
-          source scripts/source_isaacsim_setup.sh
-          pip install -e src/holosoma_inference
-          pytest -s src/holosoma_inference/
-
-  # ---------------------------------------------------------------------------
-  # Promote — retag every built sha-<short> image to :latest in ECR. Runs only
-  # after the ENTIRE gate passes (needs all gate jobs; the `if` requires each to
-  # have result==success, so a skipped/failed gate blocks promotion). Uses
-  # `buildx imagetools create` to copy the existing manifest to the :latest tag
-  # (no rebuild, preserves multi-arch), so the promoted image is byte-identical
-  # to the one the gate validated. This is the :latest push the ami-builder
-  # EventBridge rule watches for — so a merge to main now refreshes the runner
-  # AMI, but only with an image that passed mypy + the pytest suites.
-  # ---------------------------------------------------------------------------
-  promote-latest:
-    name: Promote sha images to :latest
-    needs: [decide, build, gate-mypy, gate-sim-tests, gate-e2e-tests, gate-inference-tests]
-    if: >-
-      needs.decide.outputs.promote == 'true' &&
-      needs.gate-mypy.result == 'success' &&
-      needs.gate-sim-tests.result == 'success' &&
-      needs.gate-e2e-tests.result == 'success' &&
-      needs.gate-inference-tests.result == 'success'
-    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
-    steps:
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-      - name: Retag sha- -> :latest for every built image
-        shell: bash
+        env:
+          MERGED_PR_HEAD: ${{ steps.merged-pr.outputs.result }}
         run: |
           set -euo pipefail
-          SHA_TAG="sha-${{ needs.decide.outputs.short_sha }}"
-          # image names built by the matrix above (holosoma core + variants)
-          IMAGES=(
+          reuse=false
+          commit_sha=
+          source_tree=
+          write_outputs() {
+            printf 'reuse=%s\ncommit_sha=%s\nsource_tree=%s\n' \
+              "$reuse" "$commit_sha" "$source_tree" >> "$GITHUB_OUTPUT"
+          }
+          trap write_outputs EXIT
+
+          if [[ "$GITHUB_EVENT_NAME" != "push" ]]; then
+            exit 0
+          fi
+
+          source_tree=$(git rev-parse 'HEAD^{tree}')
+          commit_sha=$MERGED_PR_HEAD
+          if [[ -z "$commit_sha" ]]; then
+            echo "No merged pull request is associated with ${GITHUB_SHA}; images will be rebuilt."
+            exit 0
+          fi
+
+          if [[ ! "$commit_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not determine the merged pull request head; images will be rebuilt."
+            exit 0
+          fi
+
+          images=(
             holosoma
             holosoma-inference
             holosoma-retargeting
@@ -290,11 +126,168 @@ jobs:
             holosoma-thor-inference
             holosoma-thor-inference-ros
           )
-          for img in "${IMAGES[@]}"; do
-            src="${{ env.ECR_REGISTRY }}/${img}:${SHA_TAG}"
-            dst="${{ env.ECR_REGISTRY }}/${img}:latest"
-            echo "Promoting ${src} -> :latest"
-            docker buildx imagetools create --tag "${dst}" "${src}"
+          for image in "${images[@]}"; do
+            ref="${ECR_REGISTRY}/${image}:tested-sha-${commit_sha}"
+            image_commit=$(docker buildx imagetools inspect \
+              --format '{{ index .Image.Config.Labels "org.holosoma.commit" }}' \
+              "$ref" 2>/dev/null) || image_commit=
+            image_tree=$(docker buildx imagetools inspect \
+              --format '{{ index .Image.Config.Labels "org.holosoma.source-tree" }}' \
+              "$ref" 2>/dev/null) || image_tree=
+            if [[ "$image_commit" != "$commit_sha" || "$image_tree" != "$source_tree" ]]; then
+              echo "${ref} does not match commit ${commit_sha} and source tree ${source_tree}; images will be rebuilt."
+              exit 0
+            fi
           done
-          echo "## Promoted to :latest" >> "$GITHUB_STEP_SUMMARY"
-          echo "All gate checks passed; retagged \`${SHA_TAG}\` -> \`:latest\` for: ${IMAGES[*]}" >> "$GITHUB_STEP_SUMMARY"
+
+          reuse=true
+          echo "Reusing tested PR images for \`${commit_sha}\` and source tree \`${source_tree}\`." >> "$GITHUB_STEP_SUMMARY"
+
+  build-images:
+    name: Build Candidate Images
+    needs: find-tested-images
+    if: github.event_name == 'workflow_dispatch' || needs.find-tested-images.outputs.reuse != 'true'
+    uses: ./.github/workflows/build-docker-images.yaml
+    with:
+      image_sha: ${{ github.sha }}
+      candidate_tag: candidate-${{ github.sha }}-${{ github.run_id }}
+      no_cache: ${{ github.event_name == 'schedule' || inputs.no_cache == true }}
+    secrets: inherit
+
+  promote-tested-images:
+    name: Promote Tested PR Images
+    needs: find-tested-images
+    if: github.event_name == 'push' && needs.find-tested-images.outputs.reuse == 'true'
+    uses: ./.github/workflows/promote-docker-images.yaml
+    with:
+      commit_sha: ${{ needs.find-tested-images.outputs.commit_sha }}
+      source_tag: tested-sha-${{ needs.find-tested-images.outputs.commit_sha }}
+      expected_source_tree: ${{ needs.find-tested-images.outputs.source_tree }}
+      tests_already_passed: true
+    secrets: inherit
+
+  test-and-promote-built-images:
+    name: Test and Promote Built Images
+    needs:
+      - find-tested-images
+      - build-images
+    if: >-
+      !cancelled() &&
+      needs.build-images.result == 'success' &&
+      needs.find-tested-images.outputs.reuse != 'true' &&
+      (
+        github.event_name == 'push' ||
+        github.event_name == 'schedule' ||
+        inputs.tag_latest == 'true'
+      )
+    uses: ./.github/workflows/promote-docker-images.yaml
+    with:
+      commit_sha: ${{ github.sha }}
+      source_tag: candidate-${{ github.sha }}-${{ github.run_id }}
+    secrets: inherit
+
+  report-main-failure:
+    name: Report Main Image Release Failure
+    needs:
+      - find-tested-images
+      - build-images
+      - promote-tested-images
+      - test-and-promote-built-images
+    if: >-
+      always() &&
+      (github.event_name == 'push' || github.event_name == 'schedule') &&
+      (
+        needs.find-tested-images.result != 'success' ||
+        (
+          needs.find-tested-images.outputs.reuse == 'true' &&
+          needs.promote-tested-images.result != 'success'
+        ) ||
+        (
+          needs.find-tested-images.outputs.reuse != 'true' &&
+          (
+            needs.build-images.result != 'success' ||
+            needs.test-and-promote-built-images.result != 'success'
+          )
+        )
+      )
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
+    steps:
+      - name: Create failure issue
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          BUILD_RESULT: ${{ needs.build-images.result }}
+          DISCOVERY_RESULT: ${{ needs.find-tested-images.result }}
+          PROMOTE_BUILT_RESULT: ${{ needs.test-and-promote-built-images.result }}
+          PROMOTE_TESTED_RESULT: ${{ needs.promote-tested-images.result }}
+          REUSED_TESTED_IMAGES: ${{ needs.find-tested-images.outputs.reuse }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const title = `Docker image release failed for ${context.sha}`;
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const existing = issues.find(
+              (issue) => issue.pull_request === undefined && issue.title === title,
+            );
+            if (existing !== undefined) {
+              await core.summary.addLink('Existing issue', existing.html_url).write();
+              return;
+            }
+
+            let assignee = context.actor;
+            try {
+              const pulls = await github.paginate(
+                github.rest.repos.listPullRequestsAssociatedWithCommit,
+                {
+                  owner,
+                  repo,
+                  commit_sha: context.sha,
+                  per_page: 100,
+                },
+              );
+              const merged = pulls
+                .filter((pull) => pull.merged_at !== null)
+                .sort((left, right) => left.merged_at.localeCompare(right.merged_at));
+              const mergedPull = merged.at(-1);
+              if (mergedPull !== undefined) {
+                const pull = await github.rest.pulls.get({
+                  owner,
+                  repo,
+                  pull_number: mergedPull.number,
+                });
+                assignee = pull.data.merged_by?.login ?? assignee;
+              }
+            } catch (error) {
+              core.warning(`Could not determine the merger; assigning ${assignee}: ${error.message}`);
+            }
+            const body = [
+              'The automatic Docker image release for main did not complete.',
+              '',
+              `- Commit: \`${context.sha}\``,
+              `- Merger: \`${assignee}\``,
+              `- Tested PR images reused: \`${process.env.REUSED_TESTED_IMAGES || 'false'}\``,
+              `- Discovery result: \`${process.env.DISCOVERY_RESULT}\``,
+              `- Build result: \`${process.env.BUILD_RESULT}\``,
+              `- Tested-image promotion result: \`${process.env.PROMOTE_TESTED_RESULT}\``,
+              `- Built-image test and promotion result: \`${process.env.PROMOTE_BUILT_RESULT}\``,
+              `- Workflow run: ${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`,
+              '',
+              'The candidate images were not promoted to `:latest`.',
+            ].join('\n');
+            const created = await github.rest.issues.create({ owner, repo, title, body });
+            try {
+              await github.rest.issues.addAssignees({
+                owner,
+                repo,
+                issue_number: created.data.number,
+                assignees: [assignee],
+              });
+            } catch (error) {
+              core.warning(`Created the issue, but could not assign ${assignee}: ${error.message}`);
+            }
+            await core.summary.addLink('Created issue', created.data.html_url).write();

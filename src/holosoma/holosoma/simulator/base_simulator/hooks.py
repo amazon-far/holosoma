@@ -59,7 +59,7 @@ class HookRegistryError(RuntimeError):
 
 
 class HookCloseError(RuntimeError):
-    """Raised after close hooks run if one or more hooks failed."""
+    """Raised when a close hook fails."""
 
     def __init__(self, failures: list[tuple[str, Exception]]) -> None:
         self.failures = failures
@@ -258,7 +258,7 @@ class HookRegistry:
         return resolve_decimation(every, base_hz=1.0, field=field)
 
     def emit(self, phase: Phase, *args: Any) -> None:
-        """Run each enabled hook due this emission, in registration order (CLOSE runs once, reversed)."""
+        """Run due hooks; CLOSE runs once in reverse order and stops on failure."""
         self._validate_payload(phase, args)
 
         if phase is Phase.CLOSE:
@@ -269,19 +269,15 @@ class HookRegistry:
                 raise HookRegistryError("Recursive close hook emission is not supported")
 
             self._closed = True
-            failures: list[tuple[str, Exception]] = []
             self._emitting.add(phase)
             try:
                 for record in reversed(self._snapshots[phase]):
                     try:
                         record.callback()
-                    except Exception as exc:  # noqa: PERF203
-                        failures.append((record.name, exc))
+                    except Exception as exc:  # noqa: PERF203 - preserve the failing owner's name.
+                        raise HookCloseError([(record.name, exc)]) from exc
             finally:
                 self._emitting.remove(phase)
-
-            if failures:
-                raise HookCloseError(failures)
             return
 
         if phase in self._emitting:

@@ -6,6 +6,8 @@ This test suite verifies that:
 3. The mirror_xz_plane function properly handles observations with history
 """
 
+from __future__ import annotations
+
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,7 +17,7 @@ from holosoma.agents.modules.augmentation_utils import SymmetryUtils
 
 
 @pytest.fixture
-def mock_env_with_history():
+def mock_env_with_history() -> MagicMock:
     """Create a mock environment with history length > 1."""
     env = MagicMock()
     env.device = "cpu"
@@ -73,7 +75,7 @@ def mock_env_with_history():
     }
 
     # Mock _compute_term to return tensors with expected dimensions
-    def mock_compute_term(group_name, term_name, term_cfg):
+    def mock_compute_term(group_name: str, term_name: str, term_cfg: MagicMock) -> torch.Tensor:
         num_envs = 2
         dims = {
             "base_ang_vel": 3,
@@ -97,7 +99,7 @@ def mock_env_with_history():
 
 
 @pytest.fixture
-def mock_env_direct_config():
+def mock_env_direct_config() -> MagicMock:
     """Create a mock environment using direct config (not observation manager)."""
     env = MagicMock()
     env.device = "cpu"
@@ -152,7 +154,7 @@ def mock_env_direct_config():
     return env
 
 
-def test_symmetry_utils_initialization_with_history(mock_env_with_history):
+def test_symmetry_utils_initialization_with_history(mock_env_with_history: MagicMock) -> None:
     """Test that SymmetryUtils correctly initializes with history length > 1."""
     symmetry_utils = SymmetryUtils(mock_env_with_history)
 
@@ -175,7 +177,7 @@ def test_symmetry_utils_initialization_with_history(mock_env_with_history):
     assert "base_ang_vel" in symmetry_utils.sub_observation_indices_single_frame["actor_obs"]
 
 
-def test_symmetry_utils_initialization_direct_config(mock_env_direct_config):
+def test_symmetry_utils_initialization_direct_config(mock_env_direct_config: MagicMock) -> None:
     """Test that SymmetryUtils works with direct config (no observation manager)."""
     symmetry_utils = SymmetryUtils(mock_env_direct_config)
 
@@ -185,7 +187,7 @@ def test_symmetry_utils_initialization_direct_config(mock_env_direct_config):
     assert symmetry_utils.history_lengths["actor_obs"] == 4
 
 
-def test_mirror_xz_plane_with_history(mock_env_with_history):
+def test_mirror_xz_plane_with_history(mock_env_with_history: MagicMock) -> None:
     """Test that mirror_xz_plane correctly handles observations with history."""
     symmetry_utils = SymmetryUtils(mock_env_with_history)
 
@@ -208,7 +210,7 @@ def test_mirror_xz_plane_with_history(mock_env_with_history):
     # (The actual bug we fixed would cause a RuntimeError here)
 
 
-def test_augment_observations_with_history(mock_env_with_history):
+def test_augment_observations_with_history(mock_env_with_history: MagicMock) -> None:
     """Test that augment_observations doubles the batch size correctly with history."""
     symmetry_utils = SymmetryUtils(mock_env_with_history)
 
@@ -230,7 +232,7 @@ def test_augment_observations_with_history(mock_env_with_history):
     assert torch.allclose(augmented_obs[:batch_size], observation)
 
 
-def test_augment_actions(mock_env_with_history):
+def test_augment_actions(mock_env_with_history: MagicMock) -> None:
     """Test that action augmentation works correctly."""
     symmetry_utils = SymmetryUtils(mock_env_with_history)
 
@@ -250,7 +252,7 @@ def test_augment_actions(mock_env_with_history):
     assert torch.allclose(augmented_actions[:batch_size], actions)
 
 
-def test_consistency_between_observation_dims_and_indices(mock_env_with_history):
+def test_consistency_between_observation_dims_and_indices(mock_env_with_history: MagicMock) -> None:
     """Test that observation dimensions and indices are consistent."""
     symmetry_utils = SymmetryUtils(mock_env_with_history)
 
@@ -273,7 +275,7 @@ def test_consistency_between_observation_dims_and_indices(mock_env_with_history)
         assert symmetry_utils.observation_dims[obs_key] == expected_full_dim
 
 
-def test_reshape_with_history_works(mock_env_with_history):
+def test_reshape_with_history_works(mock_env_with_history: MagicMock) -> None:
     """Test that reshaping to [batch, history, single_frame_dim] works correctly."""
     symmetry_utils = SymmetryUtils(mock_env_with_history)
 
@@ -296,7 +298,7 @@ def test_reshape_with_history_works(mock_env_with_history):
     assert torch.allclose(flattened, observation)
 
 
-def test_multiple_observation_keys(mock_env_with_history):
+def test_multiple_observation_keys(mock_env_with_history: MagicMock) -> None:
     """Test mirroring with multiple observation keys in the list."""
     symmetry_utils = SymmetryUtils(mock_env_with_history)
 
@@ -318,7 +320,7 @@ def test_multiple_observation_keys(mock_env_with_history):
 
 
 @pytest.mark.parametrize("history_length", [1, 2, 4, 8])
-def test_different_history_lengths(history_length):
+def test_different_history_lengths(history_length: int) -> None:
     """Test that the system works with various history lengths."""
     # Create a simple mock environment
     env = MagicMock()
@@ -340,7 +342,7 @@ def test_different_history_lengths(history_length):
         "actor_obs": MagicMock(history_length=history_length, terms={"dof_pos": MagicMock()}),
     }
 
-    def mock_compute_term(group_name, term_name, term_cfg):
+    def mock_compute_term(group_name: str, term_name: str, term_cfg: MagicMock) -> torch.Tensor:
         return torch.randn(2, 2)  # 2 dofs
 
     obs_manager._compute_term = mock_compute_term

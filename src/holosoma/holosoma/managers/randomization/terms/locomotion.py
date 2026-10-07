@@ -266,7 +266,7 @@ class ActuatorRandomizerState(RandomizationTermBase):
 
 
 def setup_action_delay_buffers(
-    env, sampler: TermSampler, *, ctrl_delay_step_range: Sequence[int], enabled: bool = True, **_
+    env: Any, sampler: TermSampler, *, ctrl_delay_step_range: Sequence[int], enabled: bool = True, **_: Any
 ) -> None:
     """Initialize action delay index buffer during setup.
 
@@ -287,7 +287,7 @@ def setup_action_delay_buffers(
     ).to(env.device)
 
 
-def setup_torque_rfi(env, sampler: TermSampler, *, enabled: bool = False, rfi_lim: float = 0.1, **_) -> None:
+def setup_torque_rfi(env: Any, sampler: TermSampler, *, enabled: bool = False, rfi_lim: float = 0.1, **_: Any) -> None:
     """Configure torque RFI at startup."""
     term = _get_joint_action_term(env)
     env._pending_torque_rfi = (bool(enabled), float(rfi_lim))
@@ -297,12 +297,12 @@ def setup_torque_rfi(env, sampler: TermSampler, *, enabled: bool = False, rfi_li
 
 
 def setup_dof_pos_bias(
-    env,
+    env: Any,
     sampler: TermSampler,
     *,
     dof_pos_bias_range: DistributionLike,
     enabled: bool = False,
-    **_,
+    **_: Any,
 ) -> None:
     """Apply startup DOF position bias randomization.
 
@@ -327,14 +327,14 @@ def setup_dof_pos_bias(
 
 
 def randomize_push_schedule(
-    env,
-    env_ids,
+    env: Any,
+    env_ids: Sequence[int] | torch.Tensor | None,
     *,
     sampler: TermSampler,
     push_interval_s: Sequence[float] | None = None,
     enabled: bool | None = None,
     max_push_vel: Sequence[float] | None = None,
-    **_,
+    **_: Any,
 ) -> None:
     """Resample push intervals for selected environments."""
     state = env.randomization_manager.get_state("push_randomizer_state")
@@ -357,15 +357,15 @@ def randomize_push_schedule(
 
 
 def randomize_pd_gains(
-    env,
-    env_ids,
+    env: Any,
+    env_ids: Sequence[int] | torch.Tensor | None,
     *,
     sampler: TermSampler,
     kp_range: DistributionLike,
     kd_range: DistributionLike,
     enabled: bool = True,
-    **_,
-):
+    **_: Any,
+) -> None:
     """Randomize proportional and derivative gain scales.
 
     ``kp_range``/``kd_range`` are config leaves ([lo, hi] pair, uniform; or a spec dict), drawn via
@@ -401,13 +401,13 @@ def randomize_pd_gains(
 
 
 def randomize_rfi_limits(
-    env,
-    env_ids,
+    env: Any,
+    env_ids: Sequence[int] | torch.Tensor | None,
     *,
     sampler: TermSampler,
     rfi_lim_range: DistributionLike,
     enabled: bool = True,
-    **_,
+    **_: Any,
 ) -> None:
     """Randomize residual force injection limits.
 
@@ -440,13 +440,13 @@ def randomize_rfi_limits(
 
 
 def randomize_action_delay(
-    env,
-    env_ids,
+    env: Any,
+    env_ids: Sequence[int] | torch.Tensor | None,
     *,
     sampler: TermSampler,
     ctrl_delay_step_range: Sequence[int] | None = None,
     enabled: bool | None = None,
-    **_,
+    **_: Any,
 ) -> None:
     """Randomize control delay indices.
 
@@ -488,15 +488,15 @@ def randomize_action_delay(
 
 
 def randomize_dof_state(
-    env,
-    env_ids,
+    env: Any,
+    env_ids: Sequence[int] | torch.Tensor | None,
     *,
     sampler: TermSampler,
     joint_pos_scale_range: DistributionLike,
     joint_pos_bias_range: DistributionLike,
     joint_vel_range: DistributionLike,
     randomize_dof_pos_bias: bool = False,
-    **_,
+    **_: Any,
 ) -> None:
     """Randomize DOF positions and velocities.
 
@@ -527,13 +527,13 @@ def randomize_dof_state(
 
 @mujoco_required_field("body_ipos")
 def randomize_base_com_startup(
-    env,
+    env: Any,
     env_ids: Sequence[int] | torch.Tensor | None = None,
     *,
     sampler: TermSampler,
     base_com_range: BaseComRange | dict[str, DistributionLike],
     enabled: bool = True,
-    **_,
+    **_: Any,
 ) -> None:
     """Randomize base (torso) center of mass.
 
@@ -649,7 +649,7 @@ def randomize_base_com_startup(
 
 @mujoco_required_field("body_mass")
 def randomize_mass_startup(
-    env,
+    env: Any,
     env_ids: Sequence[int] | torch.Tensor | None = None,
     *,
     sampler: TermSampler,
@@ -659,7 +659,7 @@ def randomize_mass_startup(
     added_mass_range: DistributionLike = (0.0, 0.0),
     enabled: bool = True,
     recompute_inertia: bool = True,
-    **_,
+    **_: Any,
 ) -> None:
     """Randomize link and base masses at startup.
 
@@ -822,7 +822,7 @@ def randomize_mass_startup(
         mass_field = getattr(randomize_mass_startup, MUJOCO_FIELD_ATTR)
 
         def _mass_write(
-            names: Sequence[str], ranges, *, operation: Literal["add", "scale", "abs"], axis_base: int
+            names: Sequence[str], ranges: DistributionLike, *, operation: Literal["add", "scale", "abs"], axis_base: int
         ) -> None:
             # Resolve to body ids ourselves so the inertia rescale (which has no name API) uses the
             # same bodies, and snapshot mass BEFORE so the ratio matches the exact write this produced
@@ -885,14 +885,14 @@ def _draw_bucketed_per_env(
 
 @mujoco_required_field("geom_friction")
 def randomize_friction_startup(
-    env,
+    env: Any,
     env_ids: Sequence[int] | torch.Tensor | None = None,
     *,
     sampler: TermSampler,
     friction_range: DistributionLike,
     num_buckets: int | None = _MATERIAL_NUM_BUCKETS,
     enabled: bool = True,
-    **_,
+    **_: Any,
 ) -> None:
     """Randomize contact friction coefficients for robot rigid shapes.
 
@@ -992,7 +992,7 @@ def randomize_friction_startup(
 
 
 def randomize_robot_rigid_body_material_startup(
-    env,
+    env: Any,
     env_ids: Sequence[int] | torch.Tensor | None = None,
     *,
     sampler: TermSampler,
@@ -1000,7 +1000,7 @@ def randomize_robot_rigid_body_material_startup(
     dynamic_friction_range: DistributionLike,
     restitution_range: DistributionLike,
     enabled: bool = True,
-    **_,
+    **_: Any,
 ) -> None:
     """Randomize robot rigid body material properties (friction, restitution). IsaacSim-only.
 
@@ -1046,13 +1046,13 @@ def randomize_robot_rigid_body_material_startup(
 
 
 def configure_torque_rfi(
-    env,
-    env_ids,
+    env: Any,
+    env_ids: Sequence[int] | torch.Tensor | None,
     *,
     sampler: TermSampler,
     enabled: bool | None = None,
     rfi_lim: float | None = None,
-    **_,
+    **_: Any,
 ) -> None:
     """Toggle torque RFI injection flag."""
     prev_enabled, prev_lim = env._pending_torque_rfi
@@ -1069,13 +1069,13 @@ def configure_torque_rfi(
 
 
 def apply_pushes(
-    env,
+    env: Any,
     *,
     sampler: TermSampler,
     enabled: bool | None = None,
     push_interval_s: Sequence[float] | None = None,
     max_push_vel: Sequence[float] | None = None,
-    **_,
+    **_: Any,
 ) -> None:
     """Apply random pushes based on the current schedule."""
     state = env.randomization_manager.get_state("push_randomizer_state")

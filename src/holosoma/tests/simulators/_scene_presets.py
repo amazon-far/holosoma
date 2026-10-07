@@ -409,6 +409,32 @@ galileo_freefall = SceneConfig(
 )
 
 
+# apply_external_force: two free boxes, both airborne with zero linear+angular damping so a CoM
+# force gives the exact Newtonian dx = 0.5*(F/m)*t^2 and a torque gives clean spin (no floor
+# friction). ``fbox`` takes the force checks; ``tbox`` (offset in y) takes the torque checks — kept
+# separate so torque decoupling reads on a body that never received a force. y clears the origin
+# robot's collapse footprint (see g1_largebox).
+external_force_box = SceneConfig(
+    rigid_objects={
+        "fbox": RigidObjectConfig(
+            urdf_file=_SMALL_BOX,
+            usd_file=_SMALL_BOX_USD,
+            position=[0.0, 1.5, 5.0],
+            physics=PhysicsConfig(mass=2.0, physx=PhysXPhysicsConfig(linear_damping=0.0, angular_damping=0.0)),
+        ),
+        "tbox": RigidObjectConfig(
+            urdf_file=_SMALL_BOX,
+            usd_file=_SMALL_BOX_USD,
+            # z=20 (well above fbox): the torque checks run late in the scenario, so tbox must stay
+            # airborne for ~1.1 s of free-fall — a low spawn would land it and ground contact would
+            # corrupt the spin/auto-zero reads.
+            position=[0.0, 3.0, 20.0],
+            physics=PhysicsConfig(mass=2.0, physx=PhysXPhysicsConfig(linear_damping=0.0, angular_damping=0.0)),
+        ),
+    }
+)
+
+
 # #7 damping-decay: a box launched +x with linear damping must lose horizontal speed to drag.
 # PhysX linear_damping on Isaac takes a strong value (5.0) that more than halves the speed. This
 # scenario is Isaac-only: there is no static MuJoCo freejoint-damping config (runtime damping DR is
@@ -734,6 +760,7 @@ TEST_PRESETS: dict[str, SceneConfig] = {
     "dr-friction-pair": dr_friction_pair,
     "dr-damping-pair": dr_damping_pair,
     "galileo-freefall": galileo_freefall,
+    "external-force": external_force_box,
     "damping-decay": damping_decay,
     "restitution-bounce": restitution_bounce,
     "angular-spin": angular_spin,

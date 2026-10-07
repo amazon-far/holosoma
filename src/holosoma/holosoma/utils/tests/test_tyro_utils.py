@@ -60,27 +60,27 @@ def _cli(argv: list[str]) -> _RunConfig:
     return tyro.cli(_RunConfig, args=remaining, default=default, config=TYRO_CONIFG)
 
 
-def test_no_declarations_gives_empty_dict():
+def test_no_declarations_gives_empty_dict() -> None:
     assert pop_dynamic_dict_args("sensors", _SENSOR_VARIANTS, argv=[]) == {}
     assert pop_dynamic_dict_args("sensors", _SENSOR_VARIANTS, argv=["--num-envs=4"]) == {}
 
 
-def test_builds_instances_keyed_by_declaration():
+def test_builds_instances_keyed_by_declaration() -> None:
     built = pop_dynamic_dict_args("sensors", _SENSOR_VARIANTS, argv=["sensors.front:rgb", "sensors.belly:depth"])
     assert built == {"front": _RgbCamera(), "belly": _DepthCamera()}
 
 
-def test_last_writer_wins_on_repeated_key():
+def test_last_writer_wins_on_repeated_key() -> None:
     built = pop_dynamic_dict_args("sensors", _SENSOR_VARIANTS, argv=["sensors.front:rgb", "sensors.front:depth"])
     assert built == {"front": _DepthCamera()}
 
 
-def test_unknown_variant_fails_loud():
+def test_unknown_variant_fails_loud() -> None:
     with pytest.raises(SystemExit, match="Unknown sensors variant 'lidar'"):
         pop_dynamic_dict_args("sensors", _SENSOR_VARIANTS, argv=["sensors.front:lidar"])
 
 
-def test_shared_variant_instances_are_isolated():
+def test_shared_variant_instances_are_isolated() -> None:
     # Two keys of the same variant must be distinct objects (deep-copied), so a per-key leaf
     # override never mutates the shared menu entry or the sibling key.
     built = pop_dynamic_dict_args("sensors", _SENSOR_VARIANTS, argv=["sensors.a:rgb", "sensors.b:rgb"])
@@ -89,7 +89,7 @@ def test_shared_variant_instances_are_isolated():
     assert built["a"] is not _SENSOR_VARIANTS["rgb"]  # menu entry untouched
 
 
-def test_config_file_added_variant_flows_through():
+def test_config_file_added_variant_flows_through() -> None:
     # A variant merged into the menu by the import-file / entry-point loader (load_file_presets
     # mutates the DEFAULTS dict in place) is selectable with no change to this helper.
     menu = dict(_SENSOR_VARIANTS)
@@ -98,13 +98,13 @@ def test_config_file_added_variant_flows_through():
     assert built == {"ir": _DepthCamera(width=160, near=0.02)}
 
 
-def test_field_prefix_scoping():
+def test_field_prefix_scoping() -> None:
     # A different field's declaration is left untouched (returned to the remainder, not consumed).
     built = pop_dynamic_dict_args("sensors", _SENSOR_VARIANTS, argv=["loggers.a:rgb", "sensors.b:rgb"])
     assert built == {"b": _RgbCamera()}
 
 
-def test_sys_argv_rewrite(monkeypatch):
+def test_sys_argv_rewrite(monkeypatch: pytest.MonkeyPatch) -> None:
     import sys
 
     monkeypatch.setattr(sys, "argv", ["prog", "sensors.front:rgb", "--num-envs=4"])
@@ -113,7 +113,7 @@ def test_sys_argv_rewrite(monkeypatch):
     assert sys.argv == ["prog", "--num-envs=4"]  # declaration stripped, rest preserved
 
 
-def test_end_to_end_with_subcommand_and_overrides():
+def test_end_to_end_with_subcommand_and_overrides() -> None:
     cfg = _cli(
         [
             "simulator:isaacsim",
@@ -133,7 +133,7 @@ def test_end_to_end_with_subcommand_and_overrides():
     assert cfg.num_envs == 4
 
 
-def test_end_to_end_no_sensors_defaults_clean():
+def test_end_to_end_no_sensors_defaults_clean() -> None:
     cfg = _cli(["simulator:mujoco", "--num-envs=8"])
     assert cfg.simulator == _MujocoSim()
     assert cfg.sensors == {}
@@ -143,11 +143,11 @@ def test_end_to_end_no_sensors_defaults_clean():
 # --- find_dynamic_dict_fields -------------------------------------------------------------------
 
 
-def test_scan_finds_plain_dict_field():
+def test_scan_finds_plain_dict_field() -> None:
     assert find_dynamic_dict_fields(_RunConfig) == {"sensors": object}
 
 
-def test_scan_finds_annotated_and_preserves_value_metadata():
+def test_scan_finds_annotated_and_preserves_value_metadata() -> None:
     import typing
 
     @dataclasses.dataclass(frozen=True)
@@ -168,7 +168,7 @@ def test_scan_finds_annotated_and_preserves_value_metadata():
     assert typing.get_args(found["wrapped"])[0] is _DepthCamera
 
 
-def test_scan_ignores_non_str_key_and_non_dict():
+def test_scan_ignores_non_str_key_and_non_dict() -> None:
     @dataclasses.dataclass(frozen=True)
     class Cfg:
         int_keyed: dict[int, _RgbCamera] = dataclasses.field(default_factory=dict)
@@ -178,7 +178,7 @@ def test_scan_ignores_non_str_key_and_non_dict():
     assert find_dynamic_dict_fields(Cfg) == {}
 
 
-def test_scan_no_op_on_non_dataclass():
+def test_scan_no_op_on_non_dataclass() -> None:
     # The Annotated[Union[...]] aliases from get_annotated_*_config() are not dataclasses.
     alias = Annotated[_RunConfig, "subcommand-ish"]
     assert find_dynamic_dict_fields(alias) == {"sensors": object}  # alias unwraps to the dataclass

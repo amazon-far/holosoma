@@ -62,9 +62,10 @@ from __future__ import annotations
 import hashlib
 import math
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Sequence, cast
 
 import numpy as np
+import numpy.typing as npt
 import torch
 
 # DistributionSpec and the config range-value types live in an import-light module so a config schema
@@ -187,7 +188,7 @@ def _term_id(name: str) -> int:
     return int.from_bytes(hashlib.blake2b(name.encode(), digest_size=8).digest(), "little") >> 1
 
 
-def keyed_uniform(*coords: int | np.ndarray | torch.Tensor) -> torch.Tensor:
+def keyed_uniform(*coords: int | npt.NDArray[np.int64] | torch.Tensor) -> torch.Tensor:
     """Hash integer ``coords`` to uniforms in ``[0, 1)`` — vectorized, stateless, value = f(coords).
 
     Each coord is a scalar or an int64 array; NumPy broadcasting sets the output shape, so a per-env
@@ -198,7 +199,7 @@ def keyed_uniform(*coords: int | np.ndarray | torch.Tensor) -> torch.Tensor:
     The hash stays CPU/numpy: uint64 wraparound is exact and platform-independent, whereas torch
     int64 ``>>`` is arithmetic (not logical), so the SplitMix shifts would need explicit masking.
     """
-    arrays = [np.asarray(c).astype(np.int64).astype(np.uint64) for c in coords]
+    arrays: list[npt.NDArray[np.uint64]] = [np.asarray(c).astype(np.int64).astype(np.uint64) for c in coords]
     shape = np.broadcast_shapes(*(a.shape for a in arrays)) if arrays else ()
     with np.errstate(over="ignore"):  # uint64 wraparound is the intended modular arithmetic
         h = np.broadcast_to(_SPLITMIX_IV, shape).copy()
@@ -313,21 +314,21 @@ class TermSampler:
         return cls(base_seed=base_seed, term_id=_term_id(term_name), stage=stage, episode=ep)
 
     @staticmethod
-    def _coord_array(c: int | Sequence[int] | np.ndarray | torch.Tensor) -> np.ndarray:
+    def _coord_array(c: int | Sequence[int] | npt.NDArray[np.int64] | torch.Tensor) -> npt.NDArray[np.int64]:
         """One caller coordinate as an int64 numpy array (a Python int -> 0-d; a tensor -> its shape).
 
         The VALUE is what keys the draw; the SHAPE only places it. So a coord may be a CUDA tensor of
         stable ids — it is pulled to CPU here — without affecting the drawn value.
         """
         if isinstance(c, torch.Tensor):
-            return c.detach().to(device="cpu", dtype=torch.long).numpy()
+            return cast("npt.NDArray[np.int64]", c.detach().to(device="cpu", dtype=torch.long).numpy())
         return np.asarray(c, dtype=np.int64)
 
     def _uniforms(
         self,
         env_ids: torch.Tensor,
-        coords: Sequence[int | Sequence[int] | np.ndarray | torch.Tensor] = (),
-    ):
+        coords: Sequence[int | Sequence[int] | npt.NDArray[np.int64] | torch.Tensor] = (),
+    ) -> torch.Tensor:
         """Keyed uniforms for (this term, these envs+episodes, these caller ``coords``).
 
         The env/episode coordinate is the LEADING output axis: ``env_ids`` and the per-env ``episode``
@@ -369,7 +370,7 @@ class TermSampler:
         spec: DistributionLike,
         *,
         env_ids: torch.Tensor,
-        coords: Sequence[int | Sequence[int] | np.ndarray | torch.Tensor] = (),
+        coords: Sequence[int | Sequence[int] | npt.NDArray[np.int64] | torch.Tensor] = (),
         device: str | torch.device = "cpu",
     ) -> torch.Tensor:
         """Draw continuous values for one config range value, keyed and reproducible per (term, env, episode).
@@ -410,7 +411,7 @@ class TermSampler:
         high: int,
         *,
         env_ids: torch.Tensor,
-        coords: Sequence[int | Sequence[int] | np.ndarray | torch.Tensor] = (),
+        coords: Sequence[int | Sequence[int] | npt.NDArray[np.int64] | torch.Tensor] = (),
     ) -> torch.Tensor:
         """Keyed discrete draw of integers in ``[low, high]`` INCLUSIVE; same coord shaping as :meth:`draw`.
 
@@ -429,7 +430,9 @@ class TermSampler:
         u = self._uniforms(env_ids, coords)
         return low + (u * span).floor().clamp(max=span - 1).to(torch.long)
 
-    def permute(self, n: int, coords: Sequence[int | Sequence[int] | np.ndarray | torch.Tensor] = ()) -> torch.Tensor:
+    def permute(
+        self, n: int, coords: Sequence[int | Sequence[int] | npt.NDArray[np.int64] | torch.Tensor] = ()
+    ) -> torch.Tensor:
         """A keyed permutation of ``range(n)``, reproducible per (term, stage, ``coords``), env-INDEPENDENT.
 
         Unlike :meth:`draw`/:meth:`draw_int`, it takes no ``env_ids`` and does not key on env/episode.

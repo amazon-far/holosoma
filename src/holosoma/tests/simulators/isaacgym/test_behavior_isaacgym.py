@@ -37,6 +37,7 @@ _SCENARIOS = [
         marks=pytest.mark.skip(reason="IsaacGym has no runtime body-damping setter (import-time AssetOptions only)"),
     ),
     "galileo-freefall",
+    "external-force",
     "damping-decay",
     "restitution-bounce",
     "angular-velocity-spin",

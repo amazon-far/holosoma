@@ -78,7 +78,11 @@ def assert_training_and_eval_workflow(
     workflow_name: str, multi_gpu: bool = False, extra_config: list[str] | None = None
 ) -> None:
     """Run evaluation after training and assert whether return code is 0."""
-    executable = ["torchrun", f"--nproc_per_node={torch.cuda.device_count()}"] if multi_gpu else ["python"]
+    executable = (
+        [sys.executable, "-m", "torch.distributed.run", f"--nproc_per_node={torch.cuda.device_count()}"]
+        if multi_gpu
+        else [sys.executable]
+    )
 
     train_stdout = io.BytesIO()
     train_stderr = io.BytesIO()
@@ -113,7 +117,7 @@ def assert_training_and_eval_workflow(
 
     # Extract wandb run info from training output if available (tests only use local checkpoints)
     eval_cmd = [
-        "python",
+        sys.executable,
         f"{REPO_ROOT}/src/holosoma/holosoma/eval_agent.py",
         f"--checkpoint={checkpoint_path}",
         "--training.headless=True",

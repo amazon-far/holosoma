@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from types import ModuleType
 
 from loguru import logger
 
 # Global wandb module reference for lazy loading
-_wandb = None
+_wandb: ModuleType | None = None
 
 
-def get_wandb():
+def get_wandb() -> ModuleType:
     """Lazy import wandb to avoid import overhead and conflicts."""
     global _wandb  # noqa: PLW0603
     if _wandb is None:

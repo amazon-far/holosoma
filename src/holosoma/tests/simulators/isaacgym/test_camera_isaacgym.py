@@ -30,6 +30,7 @@ _ACTOR_HARNESS = Path(__file__).resolve().parents[1] / "camera_actor_mount_asser
 _WORLD_HARNESS = Path(__file__).resolve().parents[1] / "world_camera_assert.py"
 _ORIENT_HARNESS = Path(__file__).resolve().parents[1] / "camera_orientation_assert.py"
 _OBS_HARNESS = Path(__file__).resolve().parents[1] / "camera_obs_assert.py"
+_PROJECTION_HARNESS = Path(__file__).resolve().parents[1] / "camera_projection_assert.py"
 
 
 def test_camera_geometry(tmp_path):
@@ -89,6 +90,22 @@ def test_camera_recorder(tmp_path):
         "--result-file",
         str(result_file),
         label="isaacgym/camera-recorder",
+        timeout=600,
+        result_file=result_file,
+    )
+
+
+def test_camera_isaacsim_projection_config_falls_back_to_pinhole(tmp_path):
+    result_file = tmp_path / "projection_fallback_isaacgym.txt"
+    run_harness(
+        _PROJECTION_HARNESS,
+        "--simulator",
+        "isaacgym",
+        "--num-envs",
+        "2",
+        "--result-file",
+        str(result_file),
+        label="isaacgym/camera-projection-fallback",
         timeout=600,
         result_file=result_file,
     )

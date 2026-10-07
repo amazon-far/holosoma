@@ -34,7 +34,7 @@ class JointPositionActionTerm(ActionTermBase):
         super().__init__(cfg, env)
 
         # Get action dimension from environment
-        self._action_dim = env.num_dof
+        self._action_dim: int = env.num_dof
 
         # Initialize action buffers
         self._raw_actions = torch.zeros(env.num_envs, self._action_dim, device=env.device)

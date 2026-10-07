@@ -9,7 +9,7 @@ preserving shared memory and CUDA graph compatibility.
 
 from __future__ import annotations
 
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, cast
 
 import torch
 import warp as wp
@@ -20,7 +20,7 @@ T = TypeVar("T")
 class TorchArray:
     """Warp array that behaves like a torch.Tensor with shared memory."""
 
-    def __init__(self, wp_array: wp.array, nworld: int | None = None) -> None:
+    def __init__(self, wp_array: wp.array[Any], nworld: int | None = None) -> None:
         """Initialize the tensor proxy with a Warp array."""
         self._wp_array = wp_array
         self._tensor = wp.to_torch(wp_array)
@@ -35,7 +35,7 @@ class TorchArray:
             new_shape = (nworld,) + self._tensor.shape[1:]
             self._tensor = self._tensor.expand(new_shape)
 
-        self._is_cuda = not self._wp_array.device.is_cpu if self._wp_array.device is not None else False  # type: ignore[union-attr]
+        self._is_cuda = not self._wp_array.device.is_cpu if self._wp_array.device is not None else False
         self._torch_stream = self._setup_stream()
 
     def _setup_stream(self) -> torch.cuda.Stream | None:
@@ -52,7 +52,7 @@ class TorchArray:
             return torch.cuda.current_stream(self._tensor.device)
 
     @property
-    def wp_array(self) -> wp.array:
+    def wp_array(self) -> wp.array[Any]:
         return self._wp_array
 
     def __repr__(self) -> str:
@@ -230,7 +230,7 @@ class WarpBridge(Generic[T]):
     @property
     def struct(self) -> T:
         """Access the underlying wrapped struct."""
-        return self._struct
+        return cast("T", self._struct)
 
     def clear_cache(self) -> None:
         """Clear the wrapped cache to force re-wrapping of arrays.

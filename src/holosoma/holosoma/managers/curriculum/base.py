@@ -46,7 +46,7 @@ class CurriculumTermBase(ABC):
         """
 
     @abstractmethod
-    def reset(self, env_ids) -> None:
+    def reset(self, env_ids: Any) -> None:
         """Reset hook called when environments are reset.
 
         Override this to perform per-episode reset operations.

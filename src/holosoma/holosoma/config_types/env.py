@@ -13,7 +13,7 @@ from holosoma.config_types.randomization import RandomizationManagerCfg
 from holosoma.config_types.reward import RewardManagerCfg
 from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
-from holosoma.config_types.sensor import CameraSensorConfig, validate_camera_dict
+from holosoma.config_types.sensor import CameraSensorConfig, SensorConfig, validate_camera_dict
 from holosoma.config_types.simulator import SimulatorConfig
 from holosoma.config_types.termination import TerminationManagerCfg
 from holosoma.config_types.terrain import TerrainManagerCfg
@@ -27,7 +27,7 @@ class EnvConfig:
 
     simulator: SimulatorConfig
     scene: SceneConfig
-    sensors: dict[str, CameraSensorConfig]
+    sensors: dict[str, SensorConfig]
     terrain: TerrainManagerCfg
     observation: ObservationManagerCfg | None
     action: ActionManagerCfg | None
@@ -41,7 +41,7 @@ class EnvConfig:
     logger: LoggerConfig
     plugin: dict[str, PluginConfig]
     """Plugins to install on the simulator (key -> resolved PluginConfig), including the
-    ROS2/viz/video egress sinks. Threaded into FullSimConfig; installed in ``BaseSimulator.__init__``."""
+    ROS2/viz/video egress sinks. Installed after the concrete simulator backend is ready."""
 
 
 def get_tyro_env_config(tyro_config: ExperimentConfig) -> EnvConfig:
@@ -57,14 +57,15 @@ def get_tyro_env_config(tyro_config: ExperimentConfig) -> EnvConfig:
     EnvConfig
         Environment configuration with extracted fields.
     """
-    # Cross-camera validation (Warp render-flag agreement) across the assembled camera dict.
-    validate_camera_dict(tyro_config.sensor)
+    validate_camera_dict(
+        {name: sensor for name, sensor in tyro_config.sensor.items() if isinstance(sensor, CameraSensorConfig)}
+    )
     return EnvConfig(
         env_class=tyro_config.env_class,
         training=tyro_config.training,
         simulator=tyro_config.simulator,
         scene=tyro_config.scene,
-        # The CLI declares cameras per-key in the dynamic ``sensor`` dict (key = sensor name).
+        # The CLI declares sensors per-key in the dynamic ``sensor`` dict (key = sensor name).
         sensors=dict(tyro_config.sensor),
         plugin=dict(tyro_config.plugin),
         terrain=tyro_config.terrain,

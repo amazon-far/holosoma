@@ -18,6 +18,7 @@ from holosoma.simulator.mujoco.backends.base import apply_sensor_scene_flags
 from holosoma.simulator.shared.video_recorder import VideoRecorderInterface
 
 if TYPE_CHECKING:
+    from holosoma.config_types.video import VideoConfig
     from holosoma.simulator.mujoco.mujoco import MuJoCo
 
 
@@ -36,7 +37,7 @@ class MuJoCoVideoRecorder(VideoRecorderInterface):
         Reference to the MuJoCo simulator instance.
     """
 
-    def __init__(self, config, simulator: MuJoCo) -> None:
+    def __init__(self, config: VideoConfig, simulator: MuJoCo) -> None:
         super().__init__(config, simulator)
 
         # Override typing for mypy
@@ -145,6 +146,19 @@ class MuJoCoVideoRecorder(VideoRecorderInterface):
         # Add frame to buffer using shared method
         self._add_frame(frame_with_overlay)
 
+    def _recording_thread_worker(self) -> None:
+        """Run the recorder and close its thread-affine renderer before the thread exits."""
+        try:
+            super()._recording_thread_worker()
+        finally:
+            self._close_renderer()
+
+    def _close_renderer(self) -> None:
+        renderer = self._renderer
+        self._renderer = None
+        if renderer is not None:
+            renderer.close()
+
     def _update_camera_position(
         self, camera: mujoco.MjvCamera, robot_pos: tuple[float, float, float] | None = None
     ) -> None:
@@ -165,8 +179,11 @@ class MuJoCoVideoRecorder(VideoRecorderInterface):
         Releases MuJoCo renderer, camera, clears frame buffers, and
         shuts down persistent recording thread if active.
         """
-        super().cleanup()
-
-        # Clean up MuJoCo resources
-        self._renderer = None
-        self._camera = None
+        try:
+            super().cleanup()
+        finally:
+            # In threaded mode the renderer is closed by _recording_thread_worker on the
+            # thread that created its GL context. This is the synchronous/no-render fallback.
+            if self.recording_thread is None or not self.recording_thread.is_alive():
+                self._close_renderer()
+            self._camera = None

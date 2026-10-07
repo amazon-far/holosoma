@@ -4,6 +4,9 @@ permissions:
   contents: read
   pull-requests: write
 
+env:
+  HOLOSOMA_DEPS_DIR: /root/.holosoma_deps
+
 on:
   pull_request:
     types:
@@ -12,11 +15,40 @@ on:
     - synchronize
 
 jobs:
+  select-check-image:
+    name: Select Check Image
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
+    outputs:
+      image: ${{ steps.select.outputs.image }}
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Select image
+        id: select
+        shell: bash
+        env:
+          ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
+          HOLOSOMA_COMMIT: ${{ github.event.pull_request.head.sha }}
+        run: |
+          exact="${ECR_REGISTRY}/holosoma:sha-${HOLOSOMA_COMMIT}"
+          image="${ECR_REGISTRY}/holosoma:latest"
+          commit=$(docker buildx imagetools inspect \
+            --format '{{ index .Image.Config.Labels "org.holosoma.commit" }}' \
+            "$exact" 2>/dev/null) || true
+          if [[ "$commit" == "$HOLOSOMA_COMMIT" ]]; then
+            image=$exact
+          else
+            echo "::warning title=Using latest holosoma image::No label-valid image exists for ${HOLOSOMA_COMMIT}; static checks will use ${image}."
+          fi
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "Using \`${image##*:}\` for static checks." >> "$GITHUB_STEP_SUMMARY"
+
   run-checks:
     name: Run Checks
+    needs: select-check-image
     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     container:
-      image: ${{ vars.ECR_REGISTRY }}/holosoma:latest
+      image: ${{ needs.select-check-image.outputs.image }}
       volumes:
         - "precommit-cache:/github/home/.cache/pre-commit"
 
@@ -24,21 +56,25 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 5
+          fetch-depth: 0
       - name: Static Checks
         shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          ln -s /root/.holosoma_deps "$HOME/.holosoma_deps"
           if [[ ! -L /workspace/holosoma ]]; then
             rm -rf /workspace/holosoma
             ln -sfF "$GITHUB_WORKSPACE" /workspace/holosoma
           fi
           source scripts/source_isaacgym_setup.sh
           pip install pre-commit mypy slack-sdk
-          git fetch origin "${GITHUB_BASE_REF:-main}"
-          git fetch origin "${GITHUB_SHA}"
           pre-commit install-hooks
-          git diff --name-only "origin/${GITHUB_BASE_REF:-main}" "${GITHUB_SHA}" --
-          git diff --name-only "origin/${GITHUB_BASE_REF:-main}" "${GITHUB_SHA}" -- | xargs pre-commit run --files \
-            || ( git diff --exit-code && echo "pre-commit checks failed" )
+          mapfile -t changed_files < <(
+            git diff --name-only "origin/${GITHUB_BASE_REF:-main}...${HEAD_SHA}" --
+          )
+          printf '%s\n' "${changed_files[@]}"
+          if (( ${#changed_files[@]} > 0 )); then
+            pre-commit run --files "${changed_files[@]}" \
+              || ( git diff --exit-code && echo "pre-commit checks failed" )
+          fi
           mypy .

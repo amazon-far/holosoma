@@ -51,6 +51,8 @@ class PublishWorker(Generic[T]):
     def submit(self, item: T) -> None:
         """Enqueue an item without blocking. Drops the oldest if the queue is full."""
         with self._lock:
+            if self._stop.is_set():
+                return
             # deque(maxlen) silently evicts the oldest on append; count it as a drop so overruns
             # are reported rather than hidden.
             if len(self._queue) == self._queue.maxlen:
@@ -80,8 +82,12 @@ class PublishWorker(Generic[T]):
     def stop(self, *, timeout: float = 2.0) -> None:
         """Signal stop and join the thread. Idempotent. Drains nothing further on the way out."""
         self._stop.set()
+        with self._lock:
+            self._queue.clear()
         self._wakeup.set()
         if self._thread.is_alive():
             self._thread.join(timeout=timeout)
+        if self._thread.is_alive():
+            raise RuntimeError(f"PublishWorker '{self._name}' did not stop within {timeout:.1f}s")
         if self._dropped:
             logger.warning(f"PublishWorker '{self._name}' dropped {self._dropped} frame(s) under backpressure.")

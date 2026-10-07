@@ -6,16 +6,18 @@ updated to work with the new threading system and explicit camera configuration.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import cv2
 import numpy as np
+import numpy.typing as npt
 from isaacgym import gymapi
 from loguru import logger
 
 from holosoma.simulator.shared.video_recorder import VideoRecorderInterface
 
 if TYPE_CHECKING:
+    from holosoma.config_types.video import VideoConfig
     from holosoma.simulator.isaacgym.isaacgym import IsaacGym
 
 
@@ -37,7 +39,7 @@ class IsaacGymVideoRecorder(VideoRecorderInterface):
         Reference to the IsaacGym simulator instance.
     """
 
-    def __init__(self, config, simulator: IsaacGym) -> None:
+    def __init__(self, config: VideoConfig, simulator: IsaacGym) -> None:
         """Initialize IsaacGym video recorder.
 
         Parameters
@@ -127,10 +129,12 @@ class IsaacGymVideoRecorder(VideoRecorderInterface):
                 raise RuntimeError("Video recording camera image is None")
 
             # Convert raw image data to numpy array
-            image_array = np.frombuffer(image, dtype=np.uint8).reshape(self.config.height, self.config.width, 4)
+            image_array: npt.NDArray[np.uint8] = np.frombuffer(image, dtype=np.uint8).reshape(
+                self.config.height, self.config.width, 4
+            )
 
             # Convert BGRA to RGB (remove alpha channel)
-            image_rgb = cv2.cvtColor(image_array, cv2.COLOR_BGRA2RGB)
+            image_rgb = cast("npt.NDArray[np.uint8]", cv2.cvtColor(image_array, cv2.COLOR_BGRA2RGB))
 
             # Apply command overlay using shared logic
             image_with_overlay = self._apply_command_overlay(image_rgb)

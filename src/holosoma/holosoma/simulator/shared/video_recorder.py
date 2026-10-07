@@ -79,6 +79,7 @@ class VideoRecorderInterface(ABC):
         self._is_recording = False
         self._current_episode = 0
         self._total_episodes = 0
+        self._closed = False
 
         # Shared frame buffer for all simulators
         self.video_frames: list[npt.NDArray[np.uint8]] = []
@@ -284,14 +285,32 @@ class VideoRecorderInterface(ABC):
 
         This method is called during simulator shutdown.
         """
-        self.stop_recording()
+        if self._closed:
+            return
+        self._closed = True
 
-        # Shutdown persistent thread if active
+        failures: list[Exception] = []
+        try:
+            self.stop_recording()
+        except Exception as exc:
+            failures.append(exc)
+
         if self.config.use_recording_thread:
-            self._cleanup_persistent_thread()
+            try:
+                self._cleanup_persistent_thread()
+            except Exception as exc:
+                failures.append(exc)
 
-        # Clear frame buffer using shared method
-        self._clear_frame_buffer()
+        if self.worker_stopped:
+            self._clear_frame_buffer()
+        if failures:
+            details = "; ".join(repr(exc) for exc in failures)
+            raise RuntimeError(f"Video recorder cleanup failed: {details}")
+
+    @property
+    def worker_stopped(self) -> bool:
+        """Whether the optional recording worker has exited."""
+        return self.recording_thread is None or not self.recording_thread.is_alive()
 
     def should_record_episode(self, total_episodes: int) -> bool:
         """Determine if the current total episode count should trigger recording.
@@ -419,7 +438,7 @@ class VideoRecorderInterface(ABC):
         try:
             # Convert frames to numpy array
             video_array = np.array(self.video_frames)
-            video_array_uint8 = video_array.astype(np.uint8)
+            video_array_uint8: npt.NDArray[np.uint8] = video_array.astype(np.uint8)
 
             # Calculate actual video FPS based on control frequency and playback rate
             # Frames are captured at control_frequency = sim_fps / control_decimation
@@ -435,7 +454,7 @@ class VideoRecorderInterface(ABC):
             # Create and save video
             create_video(
                 video_frames=video_array_uint8,
-                fps=display_fps,
+                fps=display_fps,  # type: ignore[arg-type]
                 save_dir=save_dir,
                 output_format=self.config.output_format,
                 wandb_logging=self.config.upload_to_wandb,
@@ -564,5 +583,6 @@ class VideoRecorderInterface(ABC):
             if self.recording_thread:
                 self.recording_thread.join(timeout=30.0)
                 if self.recording_thread.is_alive():
-                    logger.warning("Recording thread did not terminate cleanly, potentially incomplete final video!")
+                    raise RuntimeError("Recording thread did not terminate within 30 seconds")
             self.thread_active = False
+            self.recording_thread = None

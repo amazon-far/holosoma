@@ -10,7 +10,7 @@ unchanged.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from holosoma.config_types.sensor import ImageTransformConfig
 from holosoma.simulator.shared.image_transform import apply_image_transform
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from holosoma.envs.base_task.base_task import BaseTask
 
 
-def _camera_obs(env: BaseTask, sensor: str, modality: str, transform: dict | None) -> torch.Tensor:
+def _camera_obs(env: BaseTask, sensor: str, modality: str, transform: dict[str, Any] | None) -> torch.Tensor:
     """Cached read of one camera modality, optionally transformed for a visual policy."""
     image = env.simulator.get_camera_data(sensor, modality)
     if transform is None:
@@ -29,7 +29,7 @@ def _camera_obs(env: BaseTask, sensor: str, modality: str, transform: dict | Non
     return apply_image_transform(image, ImageTransformConfig(**transform), modality)
 
 
-def camera_rgb(env: BaseTask, sensor: str, transform: dict | None = None) -> torch.Tensor:
+def camera_rgb(env: BaseTask, sensor: str, transform: dict[str, Any] | None = None) -> torch.Tensor:
     """RGB frames for one mounted camera: ``[num_envs, H, W, 3]`` uint8 (R,G,B), all envs.
 
     Cached read of the frame rendered this step by ``render_sensors``.
@@ -47,7 +47,7 @@ def camera_rgb(env: BaseTask, sensor: str, transform: dict | None = None) -> tor
     return _camera_obs(env, sensor, "rgb", transform)
 
 
-def camera_depth(env: BaseTask, sensor: str, transform: dict | None = None) -> torch.Tensor:
+def camera_depth(env: BaseTask, sensor: str, transform: dict[str, Any] | None = None) -> torch.Tensor:
     """Depth frames for one mounted camera: ``[num_envs, H, W, 1]`` float32 meters
     (image-plane, ``+inf`` no-hit), all envs. Cached read like :func:`camera_rgb`; ``transform``
     reshapes or scales it (depth float scaling needs ``depth_range``)."""

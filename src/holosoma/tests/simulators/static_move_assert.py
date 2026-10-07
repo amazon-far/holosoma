@@ -108,6 +108,7 @@ def _build(simulator: str, num_envs: int):
     base_init = torch.tensor(list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device)
     s.create_envs(num_envs, origins, base_init)
     s.prepare_sim()
+    s.install_plugins()
     return s, origins
 
 

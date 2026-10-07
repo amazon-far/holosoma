@@ -18,7 +18,7 @@ in the WORLD frame, quaternion xyzw, both velocities world-frame.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch
 
@@ -45,7 +45,7 @@ class UnifiedRootStatesView:
     def __init__(self, simulator: BaseSimulator):
         self._sim = simulator
 
-    def _split_key(self, key):
+    def _split_key(self, key: Any) -> tuple[torch.Tensor, Any]:
         """Split a ``[]`` key into (row_indices, column_slice).
 
         Non-tensor row indices (list / tuple / ndarray of ints) are coerced to a tensor on the
@@ -56,7 +56,7 @@ class UnifiedRootStatesView:
             indices = torch.tensor(indices, device=self._sim.sim_device)
         return indices, column_slice
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: Any) -> torch.Tensor:
         """Read actor states for ``indices`` (optionally a column slice).
 
         ``proxy[indices]`` -> ``[len(indices), 13]``; ``proxy[indices, cols]``
@@ -68,7 +68,7 @@ class UnifiedRootStatesView:
             return states
         return states[:, column_slice]
 
-    def __setitem__(self, key, values):
+    def __setitem__(self, key: Any, values: torch.Tensor) -> None:
         """Write actor states for ``indices`` (optionally a column slice).
 
         ``proxy[indices] = states`` writes the full 13-vector per actor. A
@@ -92,11 +92,11 @@ class UnifiedRootStatesView:
         return torch.Size([len(registry.objects) * self._sim.num_envs, 13])
 
     @property
-    def device(self):
+    def device(self) -> str:
         return self._sim.sim_device
 
     @property
-    def dtype(self):
+    def dtype(self) -> torch.dtype:
         return torch.float32
 
     def clone(self) -> torch.Tensor:

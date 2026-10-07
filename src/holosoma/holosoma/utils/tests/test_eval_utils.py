@@ -103,6 +103,26 @@ def test_get_all_checkpoint_metadata_from_local(tmp_path: Path) -> None:
     assert checkpoint_metadata == expected_metadata
 
 
+def test_get_all_checkpoint_metadata_resolves_user_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    checkpoint_dir = tmp_path / "checkpoints"
+    checkpoint_dir.mkdir()
+    (checkpoint_dir / "model_7.pt").touch()
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    metadata = get_all_checkpoint_metadata(
+        OmegaConf.create({"wandb_run_path": None, "checkpoint_dir": "~/checkpoints"})
+    )
+
+    assert metadata == [
+        {
+            "file_name": "model_7.pt",
+            "global_step": 7,
+            "train_runtime": None,
+            "num_samples": None,
+        }
+    ]
+
+
 def test_get_all_checkpoint_metadata_no_inputs() -> None:
     """Test that get_all_checkpoint_metadata raises ValueError when no inputs are provided."""
     override_config = OmegaConf.create(
@@ -116,7 +136,7 @@ def test_get_all_checkpoint_metadata_no_inputs() -> None:
         get_all_checkpoint_metadata(override_config)
 
 
-def _create_yaml_config(tmp_path, content=None):
+def _create_yaml_config(tmp_path: Path, content: str | None = None) -> Path:
     config_path = tmp_path / CONFIG_NAME
     config_content = (
         content
@@ -136,8 +156,8 @@ def _create_yaml_config(tmp_path, content=None):
     return config_path
 
 
-def _mock_wandb_config_download(mock_wandb_api, config_path):
-    mock_file = mock_wandb_api.run.return_value.file.return_value
+def _mock_wandb_config_download(mock_wandb_api: mock.MagicMock, config_path: Path) -> mock.MagicMock:
+    mock_file: mock.MagicMock = mock_wandb_api.run.return_value.file.return_value
     mock_download = mock_file.download.return_value
 
     # Read the actual YAML content from the file
@@ -219,6 +239,30 @@ def test_load_saved_experiment_config_from_checkpoint(tmp_path: Path) -> None:
     assert run_path == "entity/project/run"
 
 
+def test_load_saved_experiment_config_uses_generic_remote_loader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkpoint_path = tmp_path / "model.pt"
+    cfg = ExperimentConfig()
+    torch.save(
+        {
+            "experiment_config": cfg.to_serializable_dict(),
+            "wandb_run_path": None,
+        },
+        checkpoint_path,
+    )
+    uri = "s3://bucket/model.pt"
+    monkeypatch.setattr(
+        "holosoma.utils.file_cache.get_cached_file_path",
+        lambda value: str(checkpoint_path) if value == uri else None,
+    )
+
+    loaded_cfg, run_path = load_saved_experiment_config(CheckpointConfig(checkpoint=uri))
+
+    assert loaded_cfg == cfg
+    assert run_path is None
+
+
 def test_load_saved_experiment_config_no_inputs() -> None:
     """Test that load_saved_experiment_config raises ValueError when no inputs are provided."""
     checkpoint_cfg = CheckpointConfig(
@@ -266,6 +310,18 @@ def test_load_checkpoint(tmp_path: Path) -> None:
         log_dir=str(log_dir),
     )
     assert str(checkpoint_path) == str(local_checkpoint)
+
+
+def test_load_checkpoint_uses_generic_remote_loader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    local_checkpoint = tmp_path / "cached.pt"
+    local_checkpoint.write_bytes(b"checkpoint")
+    uri = "s3://bucket/model.pt"
+    monkeypatch.setattr(
+        "holosoma.utils.file_cache.get_cached_file_path",
+        lambda value: str(local_checkpoint) if value == uri else None,
+    )
+
+    assert load_checkpoint(uri, str(tmp_path / "logs")) == local_checkpoint
 
 
 def test_load_checkpoint_with_wandb_prefix(tmp_path: Path) -> None:

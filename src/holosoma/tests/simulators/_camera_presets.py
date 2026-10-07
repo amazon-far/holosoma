@@ -14,12 +14,20 @@ optical axis (-Z). A -90 deg pitch about body Y rotates -Z to +X (look forward);
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 from holosoma.config_types.scene import PhysicsConfig, RigidObjectConfig, SceneConfig
-from holosoma.config_types.sensor import CameraSensorConfig, SensorMountConfig
+from holosoma.config_types.sensor import (
+    CameraSensorConfig,
+    IsaacSimCameraConfig,
+    IsaacSimFisheyeConfig,
+    SensorMountConfig,
+)
 
 _SMALL_BOX = "holosoma/data/scene_objects/boxes/small_box.urdf"
 _SMALL_BOX_USD = "holosoma/data/scene_objects/boxes/small_box.usda"
+_SMALL_BOX_XML = "holosoma/data/scene_objects/boxes/small_box.xml"
+_LIDAR_GROUP_ONE_BOX_XML = str(Path(__file__).with_name("data") / "lidar_group_one_box.xml")
 
 # -90 deg about body +Y: rotates the camera's optical -Z (down) to point along body +X (forward).
 _C = math.cos(-math.pi / 4)
@@ -34,10 +42,21 @@ camera_target = SceneConfig(
         "target": RigidObjectConfig(
             urdf_file=_SMALL_BOX,
             usd_file=_SMALL_BOX_USD,
+            xml_file=_LIDAR_GROUP_ONE_BOX_XML,
             position=[0.5, 0.0, _BASE_Z],
             fixed=True,
             physics=PhysicsConfig(),
-        )
+        ),
+        # LiDAR harnesses reposition this isolated cube onto known scanner rays. It starts far
+        # outside every camera fixture so camera assertions still observe only ``target``.
+        "scan_target": RigidObjectConfig(
+            urdf_file=_SMALL_BOX,
+            usd_file=_SMALL_BOX_USD,
+            xml_file=_SMALL_BOX_XML,
+            position=[10.0, 10.0, 10.0],
+            fixed=True,
+            physics=PhysicsConfig(),
+        ),
     }
 )
 
@@ -55,7 +74,7 @@ front_cam = {
     )
 }
 
-# Forward camera producing both rgb and depth, used by the depth test.
+# Forward camera producing both rgb and depth, used by the camera-follow test.
 front_cam_depth = {
     "front_cam": CameraSensorConfig(
         mount=SensorMountConfig(
@@ -66,6 +85,56 @@ front_cam_depth = {
         vertical_fov=60.0,
         data_types=["rgb", "depth"],
     )
+}
+
+# Four otherwise identical RGB/depth cameras that prove the shared depth clipping contract.
+# Their common panel is 0.89 m away. The short-range camera is deliberately too short so MuJoCo's
+# widened global renderer clip must be re-clipped at the per-camera output boundary.
+front_cam_depth_clipping = {
+    "none": CameraSensorConfig(
+        mount=SensorMountConfig(
+            target_kind="robot_link", target="pelvis", position=[0.1, 0.0, 0.0], orientation=_LOOK_FORWARD_WXYZ
+        ),
+        width=64,
+        height=64,
+        vertical_fov=60.0,
+        data_types=["rgb", "depth"],
+        far=3.0,
+        depth_clipping_behavior="none",
+    ),
+    "max": CameraSensorConfig(
+        mount=SensorMountConfig(
+            target_kind="robot_link", target="pelvis", position=[0.1, 0.0, 0.0], orientation=_LOOK_FORWARD_WXYZ
+        ),
+        width=64,
+        height=64,
+        vertical_fov=60.0,
+        data_types=["rgb", "depth"],
+        far=1.5,
+        depth_clipping_behavior="max",
+    ),
+    "zero": CameraSensorConfig(
+        mount=SensorMountConfig(
+            target_kind="robot_link", target="pelvis", position=[0.1, 0.0, 0.0], orientation=_LOOK_FORWARD_WXYZ
+        ),
+        width=64,
+        height=64,
+        vertical_fov=60.0,
+        data_types=["rgb", "depth"],
+        far=1.25,
+        depth_clipping_behavior="zero",
+    ),
+    "short_max": CameraSensorConfig(
+        mount=SensorMountConfig(
+            target_kind="robot_link", target="pelvis", position=[0.1, 0.0, 0.0], orientation=_LOOK_FORWARD_WXYZ
+        ),
+        width=64,
+        height=64,
+        vertical_fov=60.0,
+        data_types=["rgb", "depth"],
+        far=0.5,
+        depth_clipping_behavior="max",
+    ),
 }
 
 # Forward camera with a non-square resolution (width 96 != height 64) to catch a width/height
@@ -129,6 +198,47 @@ panel_target = SceneConfig(
         )
     }
 )
+
+# Co-located cameras for projection-model testing. Isaac Sim renders the second camera with a
+# calibrated 120-degree polynomial fisheye; the other backends ignore its ``isaacsim`` channel and
+# therefore render both cameras with the shared 60-degree pinhole projection.
+_PROJECTION_MOUNT = SensorMountConfig(
+    target_kind="world",
+    position=[0.1, 0.0, _BASE_Z],
+    orientation=_LOOK_FORWARD_WXYZ,
+)
+projection_pair = {
+    "pinhole": CameraSensorConfig(
+        mount=_PROJECTION_MOUNT,
+        width=64,
+        height=64,
+        vertical_fov=60.0,
+        data_types=["rgb"],
+    ),
+    "fisheye": CameraSensorConfig(
+        mount=_PROJECTION_MOUNT,
+        width=64,
+        height=64,
+        vertical_fov=60.0,
+        data_types=["rgb"],
+        isaacsim=IsaacSimCameraConfig(
+            projection_type="fisheyePolynomial",
+            fisheye=IsaacSimFisheyeConfig(
+                nominal_width=64.0,
+                nominal_height=64.0,
+                optical_centre_x=32.0,
+                optical_centre_y=32.0,
+                max_fov=120.0,
+                polynomial_a=0.0,
+                polynomial_b=0.032724923474893676,
+                polynomial_c=0.0,
+                polynomial_d=0.0,
+                polynomial_e=0.0,
+                polynomial_f=0.0,
+            ),
+        ),
+    ),
+}
 
 # Panel offset off the forward axis: to the robot's left (+Y) and up (+Z), so the red silhouette
 # lands in one image quadrant. The orientation test uses this to catch a mirror, flip, or H/W

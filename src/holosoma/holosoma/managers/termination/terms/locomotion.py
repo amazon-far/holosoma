@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from holosoma.managers.observation.terms.locomotion import get_projected_gravity
 from holosoma.utils.safe_torch_import import torch
 
@@ -17,7 +19,7 @@ def _apply_probability(mask: torch.Tensor, probability: float, device: torch.dev
 
 
 def contact_forces_exceeded(
-    env, force_threshold: float = 1.0, contact_indices_attr: str = "termination_contact_indices"
+    env: Any, force_threshold: float = 1.0, contact_indices_attr: str = "termination_contact_indices"
 ) -> torch.Tensor:
     """Terminate if contact forces exceed threshold.
 
@@ -29,7 +31,7 @@ def contact_forces_exceeded(
     return torch.any(torch.norm(contact_forces, dim=-1) > force_threshold, dim=1)
 
 
-def gravity_tilt_exceeded(env, threshold_x: float, threshold_y: float) -> torch.Tensor:
+def gravity_tilt_exceeded(env: Any, threshold_x: float, threshold_y: float) -> torch.Tensor:
     """Terminate if projected gravity exceeds roll/pitch thresholds."""
     if not getattr(env.config.termination, "terminate_by_gravity", False):
         return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
@@ -39,7 +41,7 @@ def gravity_tilt_exceeded(env, threshold_x: float, threshold_y: float) -> torch.
     return tilt_x | tilt_y
 
 
-def base_height_below_threshold(env, min_height: float) -> torch.Tensor:
+def base_height_below_threshold(env: Any, min_height: float) -> torch.Tensor:
     """Terminate if base height drops below threshold."""
     if not getattr(env.config.termination, "terminate_by_low_height", False):
         return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
@@ -47,7 +49,7 @@ def base_height_below_threshold(env, min_height: float) -> torch.Tensor:
     return base_height < min_height
 
 
-def dof_position_limit_exceeded(env, probability: float = 1.0) -> torch.Tensor:
+def dof_position_limit_exceeded(env: Any, probability: float = 1.0) -> torch.Tensor:
     """Terminate when DOF position limits are exceeded."""
     if not getattr(env.config.termination, "terminate_when_close_to_dof_pos_limit", False):
         return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
@@ -57,7 +59,7 @@ def dof_position_limit_exceeded(env, probability: float = 1.0) -> torch.Tensor:
     return _apply_probability(violation, probability, env.device)
 
 
-def dof_velocity_limit_exceeded(env, probability: float = 1.0) -> torch.Tensor:
+def dof_velocity_limit_exceeded(env: Any, probability: float = 1.0) -> torch.Tensor:
     """Terminate when DOF velocity limits are exceeded."""
     if not getattr(env.config.termination, "terminate_when_close_to_dof_vel_limit", False):
         return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
@@ -69,7 +71,7 @@ def dof_velocity_limit_exceeded(env, probability: float = 1.0) -> torch.Tensor:
     return _apply_probability(violation, probability, env.device)
 
 
-def torque_limit_exceeded(env, probability: float = 1.0) -> torch.Tensor:
+def torque_limit_exceeded(env: Any, probability: float = 1.0) -> torch.Tensor:
     """Terminate when actuator torques exceed limits."""
     if not getattr(env.config.termination, "terminate_when_close_to_torque_limit", False):
         return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)

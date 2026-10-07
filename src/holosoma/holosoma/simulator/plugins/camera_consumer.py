@@ -6,7 +6,7 @@ Defines :class:`CameraConsumerPlugin`, the base for a plugin that consumes rende
 A consumer is a plugin (``cls(cfg, simulator)``, no base class required): it registers its per-step
 :meth:`~CameraConsumerPlugin.publish` on ``FRAME_END`` and its :meth:`~CameraConsumerPlugin.stop`
 on ``CLOSE`` in ``__init__``. The cameras' ``render_sensors`` is registered on the SAME phase first
-(in ``BaseSimulator.__init__``, before the plugins), so by registration order the buffers are
+(before ``install_plugins``), so by registration order the buffers are
 fresh when a consumer's callback runs. Each consumer declares the streams it needs via
 :meth:`~CameraConsumerPlugin.wanted_streams`; the base validates them against the configured cameras
 at construction (fail-loud) and, each step, snapshots exactly those to host once — sharing the single
@@ -24,38 +24,50 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING, Tuple, Union
 
 import numpy as np
+import numpy.typing as npt
 from loguru import logger
 
+from holosoma.config_types.sensor import (
+    CameraSensorConfig,
+    IsaacGymCameraConfig,
+    IsaacSimCameraConfig,
+    MujocoCameraConfig,
+)
 from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.utils.simulator_config import SimulatorType
 
 if TYPE_CHECKING:
     from holosoma.config_types.plugin import PluginConfig
-    from holosoma.config_types.sensor import CameraSensorConfig
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 
 # (camera_name, modality, env_id). The unit of stream identity across the egress system.
 # ``typing.Tuple`` (not the builtin ``tuple[...]``) so this runtime alias is valid on the
 # mypy target (python_version = 3.8), where builtin generics aren't subscriptable at runtime.
 StreamKey = Tuple[str, str, int]
+CameraBackendConfig = Union[IsaacSimCameraConfig, IsaacGymCameraConfig, MujocoCameraConfig]
 
 
 @dataclass(frozen=True)
 class CameraIntrinsics:
     """Static intrinsics of one camera, carried on every :class:`FramePacket`.
 
-    Backend-agnostic core fields (the same set on every backend), sufficient to derive a
-    pinhole projection matrix ``K`` for a ``CameraInfo`` message.
+    The core fields are backend-agnostic, while ``backend_config`` preserves the active backend's
+    complete camera config.
     """
 
     width: int
     height: int
     vertical_fov: float
-    """Vertical field of view, degrees."""
+    """Pinhole vertical field of view in degrees; the cross-backend fallback for fisheye cameras."""
     near: float
     far: float
+    simulator_type: SimulatorType | None = None
+    """Backend that produced the frame. ``None`` is allowed for manually constructed packets."""
+    backend_config: CameraBackendConfig | None = None
+    """Complete camera config channel consumed by the active backend."""
 
 
 @dataclass
@@ -71,7 +83,7 @@ class FramePacket:
     modality: str
     """``"rgb"`` or ``"depth"``."""
     env_id: int
-    array: np.ndarray
+    array: npt.NDArray[np.uint8 | np.float32]
     """Host-side copy: ``uint8 [H, W, 3]`` R,G,B for rgb; ``float32 [H, W, 1]`` meters for depth."""
     sim_time: float
     """Simulation time of this frame (``simulator.time()``), for the message timestamp."""
@@ -94,7 +106,7 @@ class CameraConsumerPlugin:
     The base handles: fail-loud validation of the wanted streams against the configured cameras;
     the per-step snapshot (one shared ``get_camera_data(device="cpu")`` host copy per (camera,
     modality), sliced per wanted env) restricted to cameras that actually rendered this step; and
-    failure isolation (an exception in ``publish``/``stop`` is logged, never propagated to the sim).
+    frame-processing failure isolation. Teardown failures propagate through CLOSE so providers stay alive.
     """
 
     def __init__(self, config: PluginConfig, simulator: BaseSimulator) -> None:
@@ -106,6 +118,7 @@ class CameraConsumerPlugin:
         self._wanted = self.wanted_streams()
         self._validate_streams()
         self._started = False
+        self._closed = False
         simulator.hooks.add(Phase.FRAME_END, self._on_frame_end, name=f"{self._label()}.publish")
         simulator.hooks.add(Phase.CLOSE, self._on_close, name=f"{self._label()}.stop")
 
@@ -115,7 +128,11 @@ class CameraConsumerPlugin:
     @property
     def sensors_config(self) -> dict[str, CameraSensorConfig]:
         """The active mounted cameras, keyed by sensor name."""
-        return self.simulator.sensor_config
+        return {
+            name: config
+            for name, config in self.simulator.sensor_config.items()
+            if isinstance(config, CameraSensorConfig)
+        }
 
     @property
     def control_hz(self) -> float:
@@ -156,7 +173,7 @@ class CameraConsumerPlugin:
 
     def _validate_streams(self) -> None:
         """Fail loud if a wanted stream names a camera/modality/env the sim does not provide."""
-        cams = dict(self.simulator.sensor_config)
+        cams = dict(self.sensors_config)
         # training_config.num_envs is set at __init__ on every backend; self.num_envs is not yet
         # populated when IsaacSim builds hooks during scene setup (it lands in create_envs).
         num_envs = self.simulator.training_config.num_envs
@@ -178,8 +195,23 @@ class CameraConsumerPlugin:
                 )
 
     def _intrinsics_of(self, cam: str) -> CameraIntrinsics:
-        c = self.simulator.sensor_config_by_name(cam)
-        return CameraIntrinsics(width=c.width, height=c.height, vertical_fov=c.vertical_fov, near=c.near, far=c.far)
+        c = self.sensors_config[cam]
+        simulator_type = self.simulator.get_simulator_type()
+        if simulator_type == SimulatorType.ISAACSIM:
+            backend_config: CameraBackendConfig = c.isaacsim
+        elif simulator_type == SimulatorType.ISAACGYM:
+            backend_config = c.isaacgym
+        else:
+            backend_config = c.mujoco
+        return CameraIntrinsics(
+            width=c.width,
+            height=c.height,
+            vertical_fov=c.vertical_fov,
+            near=c.near,
+            far=c.far,
+            simulator_type=simulator_type,
+            backend_config=backend_config,
+        )
 
     def _on_frame_end(self) -> None:
         """FRAME_END callback: snapshot this consumer's fresh wanted streams, then publish.
@@ -223,8 +255,8 @@ class CameraConsumerPlugin:
         return packets
 
     def _on_close(self) -> None:
-        """CLOSE callback: tear down, isolating any failure so other close hooks still run."""
-        try:
-            self.stop()
-        except Exception as exc:
-            logger.error(f"Camera consumer {self._label()} stop failed: {exc}")
+        """CLOSE callback: tear down once."""
+        if self._closed:
+            return
+        self._closed = True
+        self.stop()

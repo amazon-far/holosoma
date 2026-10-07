@@ -11,12 +11,17 @@ Imported at CLI-build time; stays ROS-free (a preset's impl loads only when its 
 from holosoma.config_types.plugin import (
     CameraVizPluginConfig,
     ClockPublishPluginConfig,
+    FrameWriterPluginConfig,
     GantryControlPluginConfig,
+    LidarVizPluginConfig,
+    MotionPlaybackPluginConfig,
     NoOpPluginConfig,
     PluginConfig,
     ROS2ImagePluginConfig,
     ROS2ImageRoute,
     ROS2OdometryPluginConfig,
+    ROS2PointCloudPluginConfig,
+    ROS2PointCloudRoute,
 )
 from holosoma.utils.config_registry import ConfigRegistry, deprecated_defaults_alias
 
@@ -32,10 +37,17 @@ none = PLUGIN_REGISTRY.add("none", NoOpPluginConfig())
 clock_publish = PLUGIN_REGISTRY.add("clock_publish", ClockPublishPluginConfig())
 gantry_control = PLUGIN_REGISTRY.add("gantry_control", GantryControlPluginConfig())
 
-# Robot base pose/velocity as nav_msgs/Odometry — a self-sourced (non-camera) egress plugin that
-# reads robot_root_states each control step. Rides the same in-process rclpy transport as the image
-# egress (no CycloneDDS entanglement with the Unitree SDK bridge).
+# Robot-attached frame pose/velocity as nav_msgs/Odometry. Defaults to the robot root for backward
+# compatibility; body_name + position/orientation can select an offset frame on any robot body.
 odometry = PLUGIN_REGISTRY.add("odometry", ROS2OdometryPluginConfig())
+
+# Kinematic motion playback: drive the robot (and optionally one scene object) from a recorded
+# motion NPZ. Rendering-only replay of external trajectories; combine with
+# --simulator.config.sim.kinematic_playback True to replace dynamics with forward kinematics,
+# plus a mounted camera + a frame consumer, e.g.
+#   plugin.play:motion-playback '--plugin.play.motion_files=["clip.npz"]' \
+#   --sensor.head_cam:g1-head plugin.out:frame-writer
+motion_playback = PLUGIN_REGISTRY.add("motion-playback", MotionPlaybackPluginConfig())
 
 # ------------------------------------------------------------------------------------------------ #
 # Camera-frame egress presets. Compose several on the CLI by giving each its own key, e.g.
@@ -146,5 +158,29 @@ viz = PLUGIN_REGISTRY.add("viz", CameraVizPluginConfig(live_window=True))
 
 # Record all configured cameras to an mp4 at teardown (no live window; runs headless).
 viz_record = PLUGIN_REGISTRY.add("viz-record", CameraVizPluginConfig(record_video=True))
+
+# Inspect fresh LiDAR scans in local Matplotlib windows. In a headless run select
+# `lidar-viz-save` for a numbered PNG sequence or `lidar-viz-record` for MP4 output.
+lidar_viz = PLUGIN_REGISTRY.add("lidar-viz", LidarVizPluginConfig(live_window=True))
+lidar_viz_save = PLUGIN_REGISTRY.add("lidar-viz-save", LidarVizPluginConfig(save_scans=True))
+lidar_viz_record = PLUGIN_REGISTRY.add("lidar-viz-record", LidarVizPluginConfig(record_video=True))
+
+# Write every configured camera's frames to disk as numbered images + index.jsonl (dataset capture;
+# lossless, every frame, inline on the sim thread). --plugin.<key>.output_dir picks the destination.
+frame_writer = PLUGIN_REGISTRY.add("frame-writer", FrameWriterPluginConfig())
+
+# Sensor-local XYZ points as an organized PointCloud2. Pair with
+# `sensor.lidar:g1-pelvis-lidar`; the sensor key matches this route's `lidar`.
+ros2_pointcloud = PLUGIN_REGISTRY.add(
+    "ros2-pointcloud",
+    ROS2PointCloudPluginConfig(
+        routes={
+            "lidar": ROS2PointCloudRoute(
+                lidar="lidar",
+                topic="/lidar/points",
+            )
+        }
+    ),
+)
 
 __getattr__ = deprecated_defaults_alias(__name__, PLUGIN_REGISTRY)

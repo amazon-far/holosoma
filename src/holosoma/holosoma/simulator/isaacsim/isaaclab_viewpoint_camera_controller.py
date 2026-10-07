@@ -8,7 +8,7 @@ from __future__ import annotations
 import copy
 import weakref
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import omni.kit.app
@@ -17,6 +17,8 @@ import torch
 
 if TYPE_CHECKING:
     from omni.isaac.lab.envs import ViewerCfg
+
+    from holosoma.simulator.isaacsim.isaacsim import IsaacSim
 
 
 class ViewportCameraController:
@@ -34,7 +36,7 @@ class ViewportCameraController:
     root position. For this, it registers a callback to the post update event stream from the simulation app.
     """
 
-    def __init__(self, env, cfg: ViewerCfg):
+    def __init__(self, env: IsaacSim, cfg: ViewerCfg) -> None:
         """Initialize the ViewportCameraController.
 
         Args:
@@ -76,7 +78,7 @@ class ViewportCameraController:
             lambda event, obj=weakref.proxy(self): obj._update_tracking_callback(event)  # noqa: B008
         )
 
-    def __del__(self):
+    def __del__(self) -> None:
         """Unsubscribe from the callback."""
         # use hasattr to handle case where __init__ has not completed before __del__ is called
         if hasattr(self, "_viewport_camera_update_handle") and self._viewport_camera_update_handle is not None:
@@ -96,7 +98,7 @@ class ViewportCameraController:
     Public Functions
     """
 
-    def set_view_env_index(self, env_index: int):
+    def set_view_env_index(self, env_index: int) -> None:
         """Sets the environment index for the camera view.
 
         Args:
@@ -106,10 +108,10 @@ class ViewportCameraController:
             ValueError: If the environment index is out of bounds. It should be between 0 and num_envs - 1.
         """
         # check that the env_index is within bounds
-        if env_index < 0 or env_index >= self._env.config.num_envs:
+        if env_index < 0 or env_index >= self._env.scene.num_envs:
             raise ValueError(
                 f"Out of range value for attribute 'env_index': {env_index}."
-                f" Expected a value between 0 and {self._env.config.num_envs - 1} for the current environment."
+                f" Expected a value between 0 and {self._env.scene.num_envs - 1} for the current environment."
             )
         # update the environment index
         self.cfg.env_index = env_index
@@ -118,7 +120,7 @@ class ViewportCameraController:
         if self.cfg.origin_type == "env":
             self.update_view_to_env()
 
-    def update_view_to_world(self):
+    def update_view_to_world(self) -> None:
         """Updates the viewer's origin to the origin of the world which is (0, 0, 0)."""
         # set origin type to world
         self.cfg.origin_type = "world"
@@ -127,7 +129,7 @@ class ViewportCameraController:
         # update the camera view
         self.update_view_location()
 
-    def update_view_to_env(self):
+    def update_view_to_env(self) -> None:
         """Updates the viewer's origin to the origin of the selected environment."""
         # set origin type to world
         self.cfg.origin_type = "env"
@@ -136,7 +138,7 @@ class ViewportCameraController:
         # update the camera view
         self.update_view_location()
 
-    def update_view_to_asset_root(self, asset_name: str):
+    def update_view_to_asset_root(self, asset_name: str) -> None:
         """Updates the viewer's origin based upon the root of an asset in the scene.
 
         Args:
@@ -160,7 +162,7 @@ class ViewportCameraController:
         # update the camera view
         self.update_view_location()
 
-    def update_view_location(self, eye: Sequence[float] | None = None, lookat: Sequence[float] | None = None):
+    def update_view_location(self, eye: Sequence[float] | None = None, lookat: Sequence[float] | None = None) -> None:
         """Updates the camera view pose based on the current viewer origin and the eye and lookat positions.
 
         Args:
@@ -180,7 +182,7 @@ class ViewportCameraController:
         # set the camera view
         self._env.sim.set_camera_view(eye=cam_eye, target=cam_target)
 
-    def capture_current_camera_offset(self):
+    def capture_current_camera_offset(self) -> None:
         """Capture current camera position relative to asset origin.
 
         This method is called when toggling camera tracking ON to preserve
@@ -242,7 +244,7 @@ class ViewportCameraController:
     Private Functions
     """
 
-    def _update_tracking_callback(self, event):
+    def _update_tracking_callback(self, event: Any) -> None:
         """Updates the camera view at each rendering step."""
         # update the camera view if the origin is set to asset_root
         # in other cases, the camera view is static and does not need to be updated continuously

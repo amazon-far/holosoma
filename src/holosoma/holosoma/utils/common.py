@@ -26,11 +26,14 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+from __future__ import annotations
+
 import logging
 import os
 import random
 import sys
 from datetime import datetime
+from typing import NoReturn
 
 import numpy as np
 
@@ -38,7 +41,7 @@ from holosoma.utils.safe_torch_import import torch
 
 
 # if there's overlap between args_list and commandline input, use commandline input
-def solve_argv_conflict(args_list):
+def solve_argv_conflict(args_list: list[str]) -> None:
     arguments_to_be_removed = []
     arguments_size = []
 
@@ -62,24 +65,24 @@ def solve_argv_conflict(args_list):
             args_list.pop(args_index)
 
 
-def print_error(*message):
+def print_error(*message: object) -> NoReturn:
     print("\033[91m", "ERROR ", *message, "\033[0m")
     raise RuntimeError
 
 
-def print_ok(*message):
+def print_ok(*message: object) -> None:
     print("\033[92m", *message, "\033[0m")
 
 
-def print_warning(*message):
+def print_warning(*message: object) -> None:
     print("\033[93m", *message, "\033[0m")
 
 
-def print_info(*message):
+def print_info(*message: object) -> None:
     print("\033[96m", *message, "\033[0m")
 
 
-def get_time_stamp():
+def get_time_stamp() -> str:
     now = datetime.now()
     year = now.strftime("%Y")
     month = now.strftime("%m")
@@ -90,7 +93,7 @@ def get_time_stamp():
     return f"{month}-{day}-{year}-{hour}-{minute}-{second}"
 
 
-def seeding(seed=0, torch_deterministic=False):
+def seeding(seed: int = 0, torch_deterministic: bool = False) -> int:
     logger = logging.getLogger()
     logger.info("Setting seed: %d", seed)
 
@@ -114,11 +117,11 @@ def seeding(seed=0, torch_deterministic=False):
     return seed
 
 
-def distance_l2(root_pos, wp_pos):
+def distance_l2(root_pos: torch.Tensor, wp_pos: torch.Tensor) -> torch.Tensor:
     return torch.norm(wp_pos - root_pos, dim=0)
 
 
-def value_to_color(value, min_value, max_value):
+def value_to_color(value: float, min_value: float, max_value: float) -> tuple[float, int, float]:
     """
     Converts a numerical value to an RGB color.
     The color will range from blue (low values) to red (high values).
@@ -138,7 +141,13 @@ def value_to_color(value, min_value, max_value):
     return red, green, blue
 
 
-def normalize(x, min_value, max_value, target_min=0.0, target_max=1.0):
+def normalize(
+    x: float,
+    min_value: float,
+    max_value: float,
+    target_min: float = 0.0,
+    target_max: float = 1.0,
+) -> float:
     """
     Normalize a value from a given range to a target range.
     """
@@ -149,7 +158,13 @@ def normalize(x, min_value, max_value, target_min=0.0, target_max=1.0):
     return target_min + normalized * (target_max - target_min)
 
 
-def unnormalize(x, min_value, max_value, target_min=0.0, target_max=1.0):
+def unnormalize(
+    x: float,
+    min_value: float,
+    max_value: float,
+    target_min: float = 0.0,
+    target_max: float = 1.0,
+) -> float:
     """
     Unnormalize a value from a target range to a given range.
     """

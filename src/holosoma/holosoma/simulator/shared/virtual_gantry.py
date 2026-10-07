@@ -16,7 +16,6 @@ from loguru import logger
 from holosoma.config_types.simulator import VirtualGantryCfg
 from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.utils.safe_torch_import import torch
-from holosoma.utils.simulator_config import SimulatorType, get_simulator_type
 
 if TYPE_CHECKING:
     from holosoma.simulator.base_simulator.hooks import HookRegistry
@@ -106,9 +105,6 @@ class VirtualGantry:
         self.apply_force = cfg.apply_force
         self.apply_force_sign = cfg.apply_force_sign
 
-        # Set up simulator-specific force application method
-        self._setup_force_application()
-
         self._enabled: bool = enable
         self.set_enable(enable)
 
@@ -120,35 +116,6 @@ class VirtualGantry:
         """
         hooks.add(Phase.PRE_STEP, self.step, name="virtual_gantry.step")
         hooks.add(Phase.EPISODE_START, self.on_episode_start, name="virtual_gantry.on_episode_start")
-
-    def _setup_force_application(self) -> None:
-        """Set up simulator-specific force application and clearing methods.
-
-        Configures the internal force application and clearing implementations
-        based on the detected simulator type. This is a temporary solution until
-        a unified force application interface is implemented across all simulators.
-
-        Raises
-        ------
-        ValueError
-            If the simulator type is not supported.
-        """
-        # NOTE: we need to implement a unified and generalized apply_force() to
-        # the simulator interface. As a stop-gap, do so internally for the gantry
-        # for a single environment and for robot only.
-        simtype = get_simulator_type()
-        if simtype is SimulatorType.ISAACGYM:
-            self._apply_force_impl = self._apply_force_isaacgym
-            self._clear_forces_impl = None  # IsaacGym doesn't need explicit clearing
-        elif simtype is SimulatorType.ISAACSIM:
-            logger.warning("Virtual Gantry untested in IsaacSim")
-            self._apply_force_impl = self._apply_force_isaacsim
-            self._clear_forces_impl = self._clear_forces_isaacsim
-        elif simtype is SimulatorType.MUJOCO:
-            self._apply_force_impl = self._apply_force_mujoco
-            self._clear_forces_impl = self._clear_forces_mujoco
-        else:
-            raise ValueError(f"Unsupported simulator type: {simtype}")
 
     @property
     def enabled(self) -> bool:
@@ -174,9 +141,6 @@ class VirtualGantry:
         RuntimeError
             If trying to enable gantry with multiple environments (not supported).
         """
-        # Store previous state to detect transitions
-        was_enabled = self._enabled
-
         self._enabled = enable if enable is not None else not self._enabled
 
         # lazy check when toggled on...
@@ -184,11 +148,8 @@ class VirtualGantry:
             # ...supporting only the sim2sim use case for now
             raise RuntimeError("Virtual gantry supports num_envs=1 only")
 
-        # Clear forces only when DISABLING (transitioning from enabled to disabled)
-        # Don't clear during initialization when starting disabled
-        if was_enabled and not self._enabled:
-            if self._clear_forces_impl is not None:
-                self._clear_forces_impl()
+        # No explicit clearing on disable: apply_external_force auto-zeroes each step, so the
+        # `not self.enabled` early-return in step() drops the gantry force on the next substep.
 
     def set_position_to_robot(self) -> None:
         """Reset gantry anchor point to current robot position.
@@ -252,7 +213,7 @@ class VirtualGantry:
             logger.info(f"Gantry force sign toggled to {self.apply_force_sign}")
             return True
 
-        return False  # Command not handled
+        return False  # type: ignore[unreachable]  # Command not handled
 
     def step(self) -> None:
         """Execute one simulation step of the virtual gantry system.
@@ -274,11 +235,19 @@ class VirtualGantry:
         root_pos = robot_state[:3].detach().cpu().numpy()
         root_vel = robot_state[7:10].detach().cpu().numpy()
 
-        # Calculate new force from robot state
+        # Calculate new force from robot state (world frame)
         gantry_force = self._advance(root_pos, root_vel)
 
-        # Apply force using simulator-specific implementation
-        self._apply_force_impl(self.body_link_id, gantry_force)
+        # Re-applied every PRE_STEP (this method) since the accumulator auto-zeros each substep.
+        # apply_external_force addresses by name; body_link_id is a holosoma body index.
+        body_name = self.sim.body_names[self.body_link_id]
+        force_world = torch.as_tensor(gantry_force, dtype=torch.float32, device=self.sim.device)
+        self.sim.apply_external_force(
+            "robot",
+            forces=force_world,
+            body_names=[body_name],
+            env_ids=torch.tensor([env_id], device=self.sim.device),
+        )
 
     def draw_debug(self) -> None:
         """Draw gantry visualization for debugging purposes.
@@ -332,160 +301,8 @@ class VirtualGantry:
         distance = np.linalg.norm(dx)
         direction = dx / distance
         v = np.dot(vx, direction)
-        return (self.stiffness * (distance - self.length) - self.damping * v) * direction
-
-    def _apply_force_mujoco(self, link_id: int, force: npt.NDArray[np.float64]) -> None:
-        """Apply force to rigid body in MuJoCo simulator.
-
-        Uses the unified applied_forces interface for backend compatibility.
-        Handles both ClassicBackend (numpy array) and WarpBackend (torch tensor).
-
-        Parameters
-        ----------
-        link_id : int
-            Index of the rigid body to apply force to.
-        force : npt.NDArray[np.float64]
-            3D force vector [fx, fy, fz] to apply.
-        """
-        env_id = 0  # Virtual gantry only supports single environment
-
-        # applied_forces (xfrc_applied) is full-model-width (raw MuJoCo body ids),
-        # but link_id is a 0-based body_names index. Map through body_ids.
-        mj_body_id = self.sim.body_ids[link_id]
-
-        if isinstance(self.sim.applied_forces, torch.Tensor):
-            # WarpBackend: GPU tensor with env dimension [num_envs, model.nbody, 6]
-            force_tensor = torch.from_numpy(force).float().to(self.sim.device)
-            self.sim.applied_forces[env_id, mj_body_id, :3] = force_tensor
-        else:
-            # ClassicBackend: CPU numpy array without env dimension [model.nbody, 6]
-            self.sim.applied_forces[mj_body_id, :3] = force
-
-    def _clear_forces_mujoco(self) -> None:
-        """Clear forces in MuJoCo (WarpBackend only - ClassicBackend doesn't need it).
-
-        WarpBackend requires explicit clearing of GPU tensors when disabling the gantry,
-        while ClassicBackend's numpy array clearing happens naturally through the
-        simulation step (xfrc_applied is automatically zeroed each step by MuJoCo).
-
-        This method only clears forces for the specific body the gantry is attached to,
-        leaving other external forces unaffected.
-        """
-        env_id = 0  # Virtual gantry only supports single environment
-
-        if isinstance(self.sim.applied_forces, torch.Tensor):
-            # WarpBackend: Clear GPU tensor for this body only
-            # Zero out both forces [0:3] and torques [3:6] for completeness
-            # Map 0-based body_names index to full-model xfrc layout via body_ids.
-            mj_body_id = self.sim.body_ids[self.body_link_id]
-            self.sim.applied_forces[env_id, mj_body_id, :] = 0.0
-        # ClassicBackend (numpy array): Do nothing
-        # MuJoCo automatically zeros xfrc_applied each step, so no explicit clearing needed
-
-    def _apply_force_isaacgym(self, link_id: int, force: npt.NDArray[np.float64]) -> None:
-        """Apply force to rigid body in IsaacGym simulator.
-
-        Applies force directly to the body's center of mass (similar to MuJoCo's approach).
-        This provides simpler, more consistent behavior across simulators.
-
-        Parameters
-        ----------
-        link_id : int
-            Index of the rigid body to apply force to.
-        force : npt.NDArray[np.float64]
-            3D force vector [fx, fy, fz] to apply.
-        """
-        from isaacgym import gymapi, gymtorch
-
-        # The force tensor must span the FULL per-env rigid-body buffer (robot + any
-        # scene bodies) because apply_rigid_body_force_tensors writes every rigid body.
-        # link_id is a robot body index (< num_bodies); it addresses the correct row
-        # since the robot occupies the first rows.
-        # Unlike _apply_force_mujoco / _apply_force_isaacsim, which map link_id through
-        # self.sim.body_ids, the IsaacGym per-env buffer is already indexed by robot body
-        # index, so no body_ids mapping is applied here.
-        force_tensor = torch.zeros(self.sim.num_envs, self.sim.bodies_per_env, 3, device=self.sim.device)
-        force_tensor[:, link_id, :] = torch.tensor(force, device=self.sim.device, dtype=torch.float32)
-
-        # Apply force directly at center of mass (matches MuJoCo behavior)
-        # No torques applied (None), using ENV_SPACE coordinate frame
-        self.sim.gym.apply_rigid_body_force_tensors(
-            self.sim.sim, gymtorch.unwrap_tensor(force_tensor), None, gymapi.ENV_SPACE
-        )
-
-    def _apply_force_isaacsim(self, link_id: int, force: npt.NDArray[np.float64]) -> None:
-        """Apply force to rigid body in IsaacSim simulator using IsaacLab API.
-
-        Transforms forces from world frame to body-local frame since IsaacLab 2.1
-        applies forces in local frame (is_global=False is hardcoded). This ensures
-        the gantry forces are applied correctly regardless of body orientation.
-
-        Parameters
-        ----------
-        link_id : int
-            Index of the rigid body to apply force to.
-        force : npt.NDArray[np.float64]
-            3D force vector [fx, fy, fz] in world frame to apply.
-
-        Raises
-        ------
-        RuntimeError
-            If link_id is invalid or body mapping fails.
-        """
-        # Validate body index
-        if link_id >= len(self.sim.body_ids):
-            raise RuntimeError(f"Invalid link_id {link_id}, must be < {len(self.sim.body_ids)}")
-
-        # Map body index
-        isaac_body_id = self.sim.body_ids[link_id]
-
-        # Get body orientation to transform force from world to body frame
-        # IsaacLab applies forces in local frame (is_global=False hardcoded in 2.1)
-        body_quat_w = self.sim._robot.data.body_quat_w[0, isaac_body_id]  # [w,x,y,z] format
-
-        # Transform force from world frame to body frame
-        from isaaclab.utils.math import quat_apply_inverse
-
-        force_world = torch.from_numpy(force).float().to(self.sim.sim_device)
-        force_body = quat_apply_inverse(body_quat_w, force_world)
-
-        # Create force tensor for this body only
-        forces = force_body.unsqueeze(0).unsqueeze(0)  # [1, 1, 3]
-        torques = torch.zeros_like(forces)  # [1, 1, 3] - no torques
-
-        self.sim._robot.set_external_force_and_torque(
-            forces=forces,
-            torques=torques,
-            env_ids=torch.tensor([0], device=self.sim.sim_device),
-            body_ids=torch.tensor([isaac_body_id], device=self.sim.sim_device),
-            # FIXME: use is_global=True when upgrading IsaacSim/Lab
-        )
-
-    def _clear_forces_isaacsim(self) -> None:
-        """Clear external forces in IsaacSim by setting zero forces.
-
-        Sets zero force/torque values for the specific body that had forces applied.
-        This properly clears the forces without causing shape mismatch errors that
-        occur when using empty tensors.
-        """
-        # Validate body index
-        if self.body_link_id >= len(self.sim.body_ids):
-            return  # Body no longer exists, nothing to clear
-
-        # Map body index
-        isaac_body_id = self.sim.body_ids[self.body_link_id]
-
-        # Create zero force/torque tensors with proper shape [1, 1, 3]
-        zero_forces = torch.zeros(1, 1, 3, device=self.sim.sim_device)
-        zero_torques = torch.zeros(1, 1, 3, device=self.sim.sim_device)
-
-        # Clear forces by setting them to zero for this specific body
-        self.sim._robot.set_external_force_and_torque(
-            forces=zero_forces,
-            torques=zero_torques,
-            env_ids=torch.tensor([0], device=self.sim.sim_device),
-            body_ids=torch.tensor([isaac_body_id], device=self.sim.sim_device),
-        )
+        force: npt.NDArray[np.float64] = (self.stiffness * (distance - self.length) - self.damping * v) * direction
+        return force
 
 
 def create_virtual_gantry(

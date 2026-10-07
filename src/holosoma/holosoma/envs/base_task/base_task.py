@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
+from loguru import logger
 
 from holosoma.config_types.env import EnvConfig
 from holosoma.config_types.full_sim import FullSimConfig
@@ -28,7 +31,24 @@ class BaseTask:
         tyro_config: EnvConfig,
         *,
         device: str,
-    ):
+    ) -> None:
+        try:
+            self._initialize_base_task(tyro_config, device=device)
+        except BaseException:
+            simulator = getattr(self, "simulator", None)
+            if simulator is not None:
+                try:
+                    simulator.close()
+                except Exception:
+                    logger.exception("Simulator cleanup failed while preserving the task setup error")
+            raise
+
+    def _initialize_base_task(
+        self,
+        tyro_config: EnvConfig,
+        *,
+        device: str,
+    ) -> None:
         """Initialize task with manager-based observation, action, and reward systems.
 
         Parameters
@@ -92,7 +112,7 @@ class BaseTask:
             robot=robot_config,
             scene=tyro_config.scene,
             sensors=tyro_config.sensors,
-            plugin=tyro_config.plugin,  # egress/custom plugins; the simulator installs them in __init__
+            plugin=tyro_config.plugin,
             training=training_config,
             logger=tyro_config.logger,
             experiment_dir=str(experiment_dir),
@@ -152,6 +172,10 @@ class BaseTask:
             self.simulator.setup_viewer()
             self.viewer = self.simulator.viewer
 
+        # Plugins may depend on backend/provider resources created above. Their CLOSE hooks are
+        # registered last and therefore run first during reverse-order teardown.
+        self.simulator.install_plugins()
+
         # Initialize remaining managers
         self.observation_manager = ObservationManager(observation_config, self, self.device)
         self.action_manager = ActionManager(action_config, self, self.device)
@@ -174,7 +198,7 @@ class BaseTask:
         )
 
         # Call setup for managers that need it
-        if self.randomization_manager is not None and not is_isaacgym_manager:
+        if self.randomization_manager is not None and not is_isaacgym_manager:  # type: ignore[redundant-expr]
             self.randomization_manager.setup()
         if self.action_manager is not None:
             self.action_manager.setup()
@@ -193,25 +217,25 @@ class BaseTask:
         if not self.headless:
             self.viewer = self.simulator.viewer
 
-    def _init_buffers(self):
+    def _init_buffers(self) -> None:
         # Record history length from observation manager config
-        self.history_length = {}
+        self.history_length: dict[str, int] = {}
         for group_name, group_cfg in self.observation_manager.cfg.groups.items():
             self.history_length[group_name] = group_cfg.history_length
 
-        self.obs_buf_dict = {}
+        self.obs_buf_dict: dict[str, Any] = {}
 
         self.rew_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.float)
         self.reset_buf = torch.ones(self.num_envs, device=self.device, dtype=torch.long)
         self.episode_length_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self.time_out_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
-        self.extras = {}
-        self.log_dict = {}
+        self.extras: dict[str, Any] = {}
+        self.log_dict: dict[str, Any] = {}
         self._pending_episode_lengths = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self._pending_episode_update_mask = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self._pending_torque_rfi: tuple[bool, float] = (False, 0.0)
 
-    def _refresh_sim_tensors(self):
+    def _refresh_sim_tensors(self) -> None:
         self.simulator.refresh_sim_tensors()
 
     def get_checkpoint_state(self) -> dict[str, torch.Tensor | float]:
@@ -227,13 +251,13 @@ class BaseTask:
         """Synchronize curriculum-related state across distributed processes."""
         return
 
-    def reset_all(self):
+    def reset_all(self) -> dict[str, Any]:
         """Reset all robots"""
         env_ids = torch.arange(self.num_envs, device=self.device)
         self.reset_envs_idx(env_ids)
 
         self.simulator.set_actor_root_state_tensor_robots(env_ids, self.simulator.robot_root_states)
-        self.simulator.set_dof_state_tensor_robots(env_ids, self.simulator.dof_state)
+        self.simulator.set_dof_state_tensor_robots(env_ids, self.simulator.dof_state)  # type: ignore[attr-defined]
 
         actions = torch.zeros(self.num_envs, self.dim_actions, device=self.device, requires_grad=False)
         actor_state = {}
@@ -241,7 +265,12 @@ class BaseTask:
         obs_dict, _, _, _ = self.step(actor_state)
         return obs_dict
 
-    def reset_envs_idx(self, env_ids, target_states=None, target_buf=None):
+    def reset_envs_idx(
+        self,
+        env_ids: torch.Tensor,
+        target_states: dict[str, Any] | None = None,
+        target_buf: dict[str, Any] | None = None,
+    ) -> None:
         """Reset some environments and handle video recording callbacks."""
 
         # Call episode end for environments that are being reset
@@ -283,7 +312,12 @@ class BaseTask:
         for env_id in env_ids:
             self.simulator.hooks.emit(Phase.EPISODE_START, env_id.item())
 
-    def _reset_envs_idx_impl(self, env_ids, target_states=None, target_buf=None):
+    def _reset_envs_idx_impl(
+        self,
+        env_ids: torch.Tensor,
+        target_states: dict[str, Any] | None = None,
+        target_buf: dict[str, Any] | None = None,
+    ) -> None:
         """Template implementation of environment reset.
 
         Subclasses can override the helper hooks below to customize the reset behaviour.
@@ -303,7 +337,7 @@ class BaseTask:
         self._reset_objects_callback(env_ids)
         self._fill_extras(env_ids)
 
-    def render(self, sync_frame_time=True):
+    def render(self, sync_frame_time: bool = True) -> None:
         if self.viewer:
             self.simulator.render(sync_frame_time)
 
@@ -311,12 +345,12 @@ class BaseTask:
     #### Helper functions
 
     @property
-    def domain_rand_cfg(self):
+    def domain_rand_cfg(self) -> Any:
         """Return the active domain randomization configuration."""
         return self._manager_domain_rand_cfg
 
     ###########################################################################
-    def _load_assets(self):
+    def _load_assets(self) -> None:
         self.simulator.load_assets()
         self.num_dof, self.num_bodies, self.dof_names, self.body_names = (
             self.simulator.num_dof,
@@ -341,7 +375,7 @@ class BaseTask:
         )
         self.base_init_state = to_torch(base_init_state_list, device=self.device, requires_grad=False)
 
-    def _create_envs(self):
+    def _create_envs(self) -> None:
         """Creates environments:
         1. loads the robot URDF/MJCF asset,
         2. For each environment
@@ -350,9 +384,9 @@ class BaseTask:
            2.3 create actor with these properties and add them to the env
         3. Store indices of different bodies of the robot
         """
-        self.simulator.create_envs(self.num_envs, self._get_env_origins(), self.base_init_state)
+        self.simulator.create_envs(self.num_envs, self._get_env_origins(), self.base_init_state)  # type: ignore[call-arg]
 
-    def _setup_robot_body_indices(self):
+    def _setup_robot_body_indices(self) -> None:
         """Hook for subclasses to prepare body index caches (default no-op)."""
 
     def set_is_evaluating(self) -> None:
@@ -371,34 +405,34 @@ class BaseTask:
             return training_task_name
         return self.__class__.__name__.lower()
 
-    def _get_env_origins(self):
+    def _get_env_origins(self) -> torch.Tensor:
         """Return environment origins used when creating simulator environments."""
         terrain_state = self.terrain_manager.get_state("locomotion_terrain")
-        if terrain_state is None or not hasattr(terrain_state, "env_origins"):
+        if terrain_state is None or not hasattr(terrain_state, "env_origins"):  # type: ignore[redundant-expr]
             raise RuntimeError("Terrain manager state 'locomotion_terrain' must provide env_origins.")
         return terrain_state.env_origins
 
     # ------------------------------------------------------------------
     # Reset hooks
 
-    def _reset_buffers_callback(self, env_ids, target_buf=None):
+    def _reset_buffers_callback(self, env_ids: torch.Tensor, target_buf: dict[str, Any] | None = None) -> None:
         """Reset environment-specific buffers prior to manager resets.
 
         Default implementation is a no-op. Override in subclasses to zero custom tensors
         or restore from a buffered state.
         """
 
-    def _reset_tasks_callback(self, env_ids):
+    def _reset_tasks_callback(self, env_ids: torch.Tensor) -> None:
         """Hook for subclasses to extend reset-time logic."""
 
-    def _reset_robot_states_callback(self, env_ids, target_states=None):
+    def _reset_robot_states_callback(self, env_ids: torch.Tensor, target_states: dict[str, Any] | None = None) -> None:
         """Reset simulator DOF/root states for the specified environments.
 
         Subclasses must implement this to place robots back into their initial configuration.
         """
         raise NotImplementedError("Subclasses must implement `_reset_robot_states_callback` to reset simulator states.")
 
-    def _reset_objects_callback(self, env_ids):
+    def _reset_objects_callback(self, env_ids: torch.Tensor) -> None:
         """Reset registered rigid objects to their initial pose and velocity.
 
         Default implementation iterates the simulator's registered rigid objects and
@@ -414,16 +448,16 @@ class BaseTask:
             return
 
         init_poses = self.simulator.get_actor_initial_poses(object_names, env_ids)  # [n*len(env_ids), 7]
-        init_vels = self.simulator.get_actor_initial_velocities(object_names, env_ids)  # [n*len(env_ids), 6]
+        init_vels = self.simulator.get_actor_initial_velocities(object_names, env_ids)  # type: ignore[attr-defined]  # [n*len(env_ids), 6]
         states = torch.zeros(init_poses.shape[0], 13, device=self.device)
         states[:, :7] = init_poses  # pose
         states[:, 7:] = init_vels  # configured initial velocity
         self.simulator.set_actor_states(object_names, env_ids, states)
 
-    def _fill_extras(self, env_ids):
+    def _fill_extras(self, env_ids: torch.Tensor) -> None:
         """Populate per-episode extras after a reset."""
         if self.reward_manager is None:
-            return
+            return  # type: ignore[unreachable]
 
         reward_extras = self.reward_manager.reset(env_ids)
 
@@ -438,7 +472,7 @@ class BaseTask:
     ###########################################################################
     # Simulation loop helpers
 
-    def step(self, actor_state):
+    def step(self, actor_state: dict[str, Any]) -> tuple[dict[str, Any], torch.Tensor, torch.Tensor, dict[str, Any]]:
         """Apply actions, advance the simulation, and return rollout buffers."""
         actions = actor_state["actions"]
         self._pre_physics_step(actions)
@@ -446,11 +480,11 @@ class BaseTask:
         self._post_physics_step()
         return self.obs_buf_dict, self.rew_buf, self.reset_buf, self.extras
 
-    def _pre_physics_step(self, actions):
+    def _pre_physics_step(self, actions: torch.Tensor) -> None:
         if self.action_manager is not None:
             self.action_manager.process_actions(actions)
 
-    def _physics_step(self):
+    def _physics_step(self) -> None:
         self.simulator.hooks.emit(Phase.FRAME_BEGIN)
         self.render()
         for _ in range(self.simulator.simulator_config.sim.control_decimation_steps):
@@ -459,11 +493,11 @@ class BaseTask:
             self.simulator.simulate_at_each_physics_step()
             self.simulator.hooks.emit(Phase.POST_STEP)
 
-    def _apply_force_in_physics_step(self):
+    def _apply_force_in_physics_step(self) -> None:
         if self.action_manager is not None:
             self.action_manager.apply_actions()
 
-    def _post_physics_step(self):
+    def _post_physics_step(self) -> None:
         self._refresh_sim_tensors()
         # Cameras render and egress consumers publish here, as FRAME_END plugins (the cameras'
         # render_sensors is registered before any consumer, so buffers are fresh on read).
@@ -513,24 +547,24 @@ class BaseTask:
             self._setup_simulator_control()
             self._setup_simulator_next_task()
 
-    def _ensure_long_tensor(self, tensor_like):
+    def _ensure_long_tensor(self, tensor_like: Any) -> torch.Tensor:
         if isinstance(tensor_like, torch.Tensor):
             return tensor_like.to(device=self.device, dtype=torch.long)
         return torch.as_tensor(tensor_like, device=self.device, dtype=torch.long)
 
-    def _get_envs_to_refresh(self):
+    def _get_envs_to_refresh(self) -> torch.Tensor:
         return torch.empty(0, device=self.device, dtype=torch.long)
 
-    def _refresh_envs_after_reset(self, env_ids):
+    def _refresh_envs_after_reset(self, env_ids: torch.Tensor) -> None:
         """Hook for subclasses to synchronise simulator state after resets."""
         return
 
-    def _store_final_observations(self, env_ids, final_obs_dict):
+    def _store_final_observations(self, env_ids: torch.Tensor, final_obs_dict: dict[str, Any]) -> None:
         if not final_obs_dict:
             return
         final_store = self.extras.setdefault("final_observations", {})
 
-        def _store_value(store_parent, key, value, template):
+        def _store_value(store_parent: dict[str, Any], key: str, value: Any, template: Any) -> None:
             # A concatenate=False group is a dict of per-term tensors; recurse one level so the
             # per-env final-obs copy works for image groups too (env-axis is dim 0 either way).
             if isinstance(value, dict):
@@ -545,10 +579,10 @@ class BaseTask:
         for obs_key, values in final_obs_dict.items():
             _store_value(final_store, obs_key, values, self.obs_buf_dict[obs_key])
 
-    def _clip_observations(self):
+    def _clip_observations(self) -> None:
         clip_limit = self.observation_manager.cfg.clip_observations
 
-        def _clip_value(value):
+        def _clip_value(value: Any) -> Any:
             # A concatenate=False group is a dict of per-term tensors; recurse one level.
             if isinstance(value, dict):
                 return {k: _clip_value(v) for k, v in value.items()}
@@ -562,55 +596,55 @@ class BaseTask:
         for obs_key, obs_val in self.obs_buf_dict.items():
             self.obs_buf_dict[obs_key] = _clip_value(obs_val)
 
-    def _compute_reward(self):
+    def _compute_reward(self) -> None:
         self.rew_buf[:] = self.reward_manager.compute(self.dt)
         self.episode_sums = getattr(self.reward_manager, "episode_sums", {})
         self.episode_sums_raw = getattr(self.reward_manager, "episode_sums_raw", {})
 
-    def _compute_observations(self):
+    def _compute_observations(self) -> None:
         self.obs_buf_dict = self.observation_manager.compute()
 
-    def _compute_final_observations(self):
+    def _compute_final_observations(self) -> dict[str, Any]:
         return self.observation_manager.compute(modify_history=False)
 
-    def _update_tasks_callback(self):
+    def _update_tasks_callback(self) -> None:
         self.command_manager.step()
         self.curriculum_manager.step()
         self.randomization_manager.step()
 
-    def _init_counters(self):
+    def _init_counters(self) -> None:
         return
 
-    def _update_counters_each_step(self):
+    def _update_counters_each_step(self) -> None:
         return
 
-    def _check_termination(self):
+    def _check_termination(self) -> None:
         self.reset_buf[:] = 0
         self.time_out_buf[:] = 0
         if self.termination_manager is None:
-            return
+            return  # type: ignore[unreachable]
 
         reset_flags, timeout_flags = self.termination_manager.check()
         self.reset_buf |= reset_flags.to(dtype=self.reset_buf.dtype)
         self.time_out_buf |= timeout_flags
         self.reset_buf |= self.time_out_buf
 
-    def _pre_compute_observations_callback(self):
+    def _pre_compute_observations_callback(self) -> None:
         """Hook invoked after physics but before observation terms compute (no-op by default)."""
         return
 
-    def _post_compute_observations_callback(self):
+    def _post_compute_observations_callback(self) -> None:
         """Hook invoked after observation buffers are produced (no-op by default)."""
         return
 
-    def _setup_simulator_control(self):
+    def _setup_simulator_control(self) -> None:
         """Hook for pushing controller state back to the simulator/viewer (no-op by default)."""
         return
 
-    def _setup_simulator_next_task(self):
+    def _setup_simulator_next_task(self) -> None:
         """Hook for interactive viewer task selection (no-op by default)."""
         return
 
-    def _update_log_dict(self):
+    def _update_log_dict(self) -> None:
         """Hook for appending task-specific metrics to `self.log_dict` (no-op by default)."""
         return

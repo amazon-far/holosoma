@@ -11,6 +11,8 @@ without a backend. Pins:
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from holosoma.config_types.observation import ObservationManagerCfg, ObsGroupCfg, ObsTermCfg
@@ -25,29 +27,29 @@ _TERMS = "holosoma.managers.observation.terms.cameras"
 class _CameraSim:
     """Stub simulator: returns camera tensors for a fixed (name -> tensor) map."""
 
-    def __init__(self, frames: dict[tuple[str, str], torch.Tensor]):
+    def __init__(self, frames: dict[tuple[str, str], torch.Tensor]) -> None:
         self._frames = frames
 
-    def get_camera_data(self, name: str, data_type: str = "rgb", env_ids=None) -> torch.Tensor:
+    def get_camera_data(self, name: str, data_type: str = "rgb", env_ids: torch.Tensor | None = None) -> torch.Tensor:
         buf = self._frames[(name, data_type)]
         return buf if env_ids is None else buf[env_ids]
 
 
 class _Env:
-    def __init__(self, sim, num_envs):
+    def __init__(self, sim: _CameraSim, num_envs: int) -> None:
         self.simulator = sim
         self.device = "cpu"
         self.num_envs = num_envs
 
 
-def _make_env(num_envs=2, h=4, w=6):
+def _make_env(num_envs: int = 2, h: int = 4, w: int = 6) -> tuple[_Env, torch.Tensor, torch.Tensor]:
     rgb = torch.randint(0, 256, (num_envs, h, w, 3), dtype=torch.uint8)
     depth = torch.full((num_envs, h, w, 1), 2.5, dtype=torch.float32)
     sim = _CameraSim({("head", "rgb"): rgb, ("head", "depth"): depth})
     return _Env(sim, num_envs), rgb, depth
 
 
-def test_rgb_term_flows_through_dict_group_unaltered():
+def test_rgb_term_flows_through_dict_group_unaltered() -> None:
     env, rgb, _ = _make_env()
     cfg = ObservationManagerCfg(
         groups={
@@ -65,7 +67,7 @@ def test_rgb_term_flows_through_dict_group_unaltered():
     assert torch.equal(obs["head_rgb"], rgb)
 
 
-def test_depth_term_dict_group_shape_and_dtype():
+def test_depth_term_dict_group_shape_and_dtype() -> None:
     env, _, depth = _make_env()
     cfg = ObservationManagerCfg(
         groups={
@@ -81,7 +83,7 @@ def test_depth_term_dict_group_shape_and_dtype():
     assert tuple(obs["head_depth"].shape) == tuple(depth.shape)
 
 
-def test_get_obs_dims_reports_image_shape_for_dict_group():
+def test_get_obs_dims_reports_image_shape_for_dict_group() -> None:
     env, _, _ = _make_env(num_envs=2, h=4, w=6)
     cfg = ObservationManagerCfg(
         groups={
@@ -99,7 +101,7 @@ def test_get_obs_dims_reports_image_shape_for_dict_group():
     assert dims == {"head_rgb": (4, 6, 3), "head_depth": (4, 6, 1)}
 
 
-def test_image_term_in_concatenate_group_is_rejected():
+def test_image_term_in_concatenate_group_is_rejected() -> None:
     env, _, _ = _make_env()
     cfg = ObservationManagerCfg(
         groups={
@@ -116,7 +118,7 @@ def test_image_term_in_concatenate_group_is_rejected():
         mgr.compute()
 
 
-def test_rgb_term_transform_to_chw_float_for_policy():
+def test_rgb_term_transform_to_chw_float_for_policy() -> None:
     """A transform param reshapes the term to the CHW float [0,1] a visual policy expects, and
     get_obs_dims reports the transformed shape."""
     env, _, _ = _make_env(num_envs=2, h=8, w=6)
@@ -137,4 +139,5 @@ def test_rgb_term_transform_to_chw_float_for_policy():
     out = mgr.compute()["image"]["head_rgb"]
     assert tuple(out.shape) == (2, 3, 4, 4) and out.dtype == torch.float32
     assert float(out.min()) >= 0.0 and float(out.max()) <= 1.0
-    assert mgr.get_obs_dims()["image"]["head_rgb"] == (3, 4, 4)
+    image_dims = cast("dict[str, int | tuple[int, ...]]", mgr.get_obs_dims()["image"])
+    assert image_dims["head_rgb"] == (3, 4, 4)

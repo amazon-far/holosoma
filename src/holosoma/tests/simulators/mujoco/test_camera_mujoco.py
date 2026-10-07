@@ -28,6 +28,7 @@ _ACTOR_HARNESS = Path(__file__).resolve().parents[1] / "camera_actor_mount_asser
 _WORLD_HARNESS = Path(__file__).resolve().parents[1] / "world_camera_assert.py"
 _ORIENT_HARNESS = Path(__file__).resolve().parents[1] / "camera_orientation_assert.py"
 _OBS_HARNESS = Path(__file__).resolve().parents[1] / "camera_obs_assert.py"
+_PROJECTION_HARNESS = Path(__file__).resolve().parents[1] / "camera_projection_assert.py"
 
 
 @pytest.mark.mujoco_classic
@@ -111,6 +112,39 @@ def test_camera_recorder_classic(tmp_path):
         str(result_file),
         label="mujoco/camera-recorder",
         timeout=300,
+        result_file=result_file,
+    )
+
+
+@pytest.mark.mujoco_classic
+def test_camera_isaacsim_projection_config_falls_back_to_pinhole_classic(tmp_path):
+    result_file = tmp_path / "projection_fallback_mujoco.txt"
+    run_harness(
+        _PROJECTION_HARNESS,
+        "--simulator",
+        "mujoco",
+        "--result-file",
+        str(result_file),
+        label="mujoco/camera-projection-fallback",
+        timeout=300,
+        result_file=result_file,
+    )
+
+
+@pytest.mark.mujoco_warp
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="MuJoCo-Warp requires a CUDA device")
+def test_camera_isaacsim_projection_config_falls_back_to_pinhole_warp(tmp_path):
+    result_file = tmp_path / "projection_fallback_mjwarp.txt"
+    run_harness(
+        _PROJECTION_HARNESS,
+        "--simulator",
+        "mjwarp",
+        "--num-envs",
+        "2",
+        "--result-file",
+        str(result_file),
+        label="mjwarp/camera-projection-fallback",
+        timeout=400,
         result_file=result_file,
     )
 

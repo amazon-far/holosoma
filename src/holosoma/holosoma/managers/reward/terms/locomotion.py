@@ -6,7 +6,7 @@ compatible with the reward manager system.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from holosoma.managers.observation.terms.locomotion import (
     base_forward_vector,
@@ -17,13 +17,13 @@ from holosoma.managers.observation.terms.locomotion import (
 )
 from holosoma.utils.rotations import (
     quat_apply,
-    quat_rotate_batched,
     quat_rotate_inverse,
 )
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
     from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
+    from holosoma.managers.command.terms.locomotion import LocomotionGait
 
 
 def _expected_foot_height(phi: torch.Tensor, swing_height: float) -> torch.Tensor:
@@ -140,7 +140,7 @@ def limits_dof_pos(env: LeggedRobotLocomotionManager, soft_dof_pos_limit: float 
 # ================================================================================================
 
 
-def tracking_lin_vel(env, tracking_sigma: float = 0.25) -> torch.Tensor:
+def tracking_lin_vel(env: LeggedRobotLocomotionManager, tracking_sigma: float = 0.25) -> torch.Tensor:
     """Reward tracking of linear velocity commands (xy axes).
 
     Uses exponential reward: exp(-error / sigma)
@@ -157,7 +157,7 @@ def tracking_lin_vel(env, tracking_sigma: float = 0.25) -> torch.Tensor:
     return torch.exp(-lin_vel_error / tracking_sigma)
 
 
-def tracking_ang_vel(env, tracking_sigma: float = 0.25) -> torch.Tensor:
+def tracking_ang_vel(env: LeggedRobotLocomotionManager, tracking_sigma: float = 0.25) -> torch.Tensor:
     """Reward tracking of angular velocity commands (yaw).
 
     Uses exponential reward: exp(-error / sigma)
@@ -175,7 +175,7 @@ def tracking_ang_vel(env, tracking_sigma: float = 0.25) -> torch.Tensor:
     return torch.exp(-ang_vel_error / tracking_sigma)
 
 
-def penalty_ang_vel_xy(env) -> torch.Tensor:
+def penalty_ang_vel_xy(env: LeggedRobotLocomotionManager) -> torch.Tensor:
     """Penalize xy axes base angular velocity.
 
     Args:
@@ -188,7 +188,7 @@ def penalty_ang_vel_xy(env) -> torch.Tensor:
     return torch.sum(torch.square(ang_vel[:, :2]), dim=1)
 
 
-def penalty_close_feet_xy(env, close_feet_threshold: float = 0.05) -> torch.Tensor:
+def penalty_close_feet_xy(env: LeggedRobotLocomotionManager, close_feet_threshold: float = 0.05) -> torch.Tensor:
     """Penalize when feet are too close together in xy plane.
 
     Args:
@@ -216,7 +216,10 @@ def penalty_close_feet_xy(env, close_feet_threshold: float = 0.05) -> torch.Tens
 
 
 def base_height(
-    env, desired_base_height: float = 0.89, zero_vel_penalty_scale: float = 1.0, stance_penalty_scale: float = 1.0
+    env: LeggedRobotLocomotionManager,
+    desired_base_height: float = 0.89,
+    zero_vel_penalty_scale: float = 1.0,
+    stance_penalty_scale: float = 1.0,
 ) -> torch.Tensor:
     """Penalize base height away from target.
 
@@ -250,7 +253,9 @@ def base_height(
     return base_height_penalty
 
 
-def feet_phase(env, swing_height: float = 0.08, tracking_sigma: float = 0.25) -> torch.Tensor:
+def feet_phase(
+    env: LeggedRobotLocomotionManager, swing_height: float = 0.08, tracking_sigma: float = 0.25
+) -> torch.Tensor:
     """Reward for tracking desired foot height based on gait phase.
 
     Based on MuJoCo Playground's implementation.
@@ -268,9 +273,10 @@ def feet_phase(env, swing_height: float = 0.08, tracking_sigma: float = 0.25) ->
     foot_z_right = env.terrain_manager.get_state("locomotion_terrain").feet_heights[:, 1]
 
     # Calculate expected foot heights based on phase
-    gait_state = env.command_manager.get_state("locomotion_gait")
-    rz_left = _expected_foot_height(gait_state.phase[:, 0], swing_height)
-    rz_right = _expected_foot_height(gait_state.phase[:, 1], swing_height)
+    gait_state = cast("LocomotionGait", env.command_manager.get_state("locomotion_gait"))
+    phase = cast("torch.Tensor", gait_state.phase)
+    rz_left = _expected_foot_height(phase[:, 0], swing_height)
+    rz_right = _expected_foot_height(phase[:, 1], swing_height)
 
     # Calculate height tracking errors
     error_left = torch.square(foot_z_left - rz_left)
@@ -283,7 +289,7 @@ def feet_phase(env, swing_height: float = 0.08, tracking_sigma: float = 0.25) ->
 
 
 def pose(
-    env,
+    env: LeggedRobotLocomotionManager,
     pose_weights: list[float],
 ) -> torch.Tensor:
     """Reward for maintaining default pose.
@@ -313,7 +319,7 @@ def pose(
     return torch.sum(weighted_error, dim=1)
 
 
-def penalty_stumble(env) -> torch.Tensor:
+def penalty_stumble(env: LeggedRobotLocomotionManager) -> torch.Tensor:
     """Penalize feet hitting vertical surfaces.
 
     Args:
@@ -329,58 +335,7 @@ def penalty_stumble(env) -> torch.Tensor:
     )
 
 
-def penalty_foothold(env, foothold_epsilon: float = 0.01) -> torch.Tensor:
-    """Sampling-based foothold penalty.
-
-    For each foot in contact, sample a grid of points on the sole, transform to world,
-    read terrain height at those XY, compute depth d_ij = z_sample - terrain_z, and count
-    samples with d_ij < epsilon. Sum over both feet.
-
-    Args:
-        env: The environment instance
-        foothold_epsilon: Threshold for foothold depth penalty
-
-    Returns:
-        Reward tensor [num_envs]
-    """
-    # Contact mask per foot
-    contact = env.simulator.contact_forces[:, env.feet_indices, 2] > 1.0  # [E,2]
-    if not (contact.any()):
-        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
-
-    # Accumulator
-    penalty = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
-
-    for foot_idx_local in range(2):
-        # Skip if no env has contact on this foot to save work
-        if not contact[:, foot_idx_local].any():
-            continue
-        rb_idx = env.feet_indices[foot_idx_local]
-        foot_pos_w = env.simulator._rigid_body_pos[:, rb_idx, :]  # [E,3]
-        foot_quat_w = env.simulator._rigid_body_rot[:, rb_idx, :]  # [E,4]
-
-        # Use precomputed sample points in the foot frame
-        pts_local = env.foot_samples_local[foot_idx_local].unsqueeze(0).repeat(env.num_envs, 1, 1)
-
-        # Rotate to world and translate
-        pts_world = quat_rotate_batched(foot_quat_w, pts_local) + foot_pos_w.unsqueeze(1)
-
-        # Query terrain height at those XY positions
-        terrain_h = env._get_terrain_heights_at_points_world(pts_world)
-
-        # Depth: world z minus terrain height
-        depth = pts_world[:, :, 2] - terrain_h  # [E,S]
-
-        # Indicator for d_ij > epsilon, only for envs with this foot in contact
-        bad = (depth > foothold_epsilon).float()
-        bad *= contact[:, foot_idx_local].unsqueeze(1).float()
-
-        penalty += torch.sum(bad, dim=1)
-
-    return penalty / env.num_foot_samples
-
-
-def alive(env) -> torch.Tensor:
+def alive(env: LeggedRobotLocomotionManager) -> torch.Tensor:
     """Reward for staying alive.
 
     Args:

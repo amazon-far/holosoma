@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<mujoco model="lidar_group_one_box">
+  <worldbody>
+    <body name="baseLink">
+      <geom type="box" group="1" size="0.05 0.05 0.05" mass="0.1"/>
+    </body>
+  </worldbody>
+</mujoco>

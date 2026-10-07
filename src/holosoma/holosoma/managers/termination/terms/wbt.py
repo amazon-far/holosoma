@@ -19,7 +19,7 @@ from holosoma.utils.safe_torch_import import torch
 #########################################################################################################
 ## Termination terms
 #########################################################################################################
-def motion_ends(env, **_) -> torch.Tensor:
+def motion_ends(env: Any, **_: Any) -> torch.Tensor:
     """Terminate if the motion ends."""
     motion_command = env.command_manager.get_state("motion_command")
     return motion_command.time_steps >= motion_command.motion.time_step_total - 2
@@ -38,7 +38,7 @@ class BadTracking(TerminationTermBase):
     When bad tracking is detected, the motion_commmand.AdaptiveTimestepsSampler will be updated.
     """
 
-    def __init__(self, cfg: TerminationTermCfg, env: WholeBodyTrackingManager):
+    def __init__(self, cfg: TerminationTermCfg, env: WholeBodyTrackingManager) -> None:
         super().__init__(cfg, env)
 
         self.bad_ref_pos_threshold = cfg.params["bad_ref_pos_threshold"]
@@ -56,7 +56,7 @@ class BadTracking(TerminationTermBase):
         self.bad_object_pos_threshold = cfg.params["bad_object_pos_threshold"]
         self.bad_object_ori_threshold = cfg.params["bad_object_ori_threshold"]
 
-    def __call__(self, env: Any, **kwargs) -> torch.Tensor:
+    def __call__(self, env: Any, **kwargs: Any) -> torch.Tensor:
         motion_command = self.env.command_manager.get_state("motion_command")
         assert motion_command.motion_cfg.body_names_to_track == self.body_names_to_track, (
             "body_names_to_track in motion_command and termination.params are not the same"

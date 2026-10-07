@@ -399,6 +399,194 @@ def assert_galileo_freefall(ctx):
     return kin_l and kin_h and same
 
 
+def _step_with_force(ctx, n, apply_fn):
+    """Advance ``n`` steps, calling ``apply_fn()`` before each (re-applying, as a PRE_STEP hook would).
+
+    ``apply_fn=None`` coasts with no force, exercising the auto-zero contract.
+    """
+    for _ in range(n):
+        ctx.sim.refresh_sim_tensors()
+        if apply_fn is not None:
+            apply_fn()
+        ctx.sim.simulate_at_each_physics_step()
+        ctx.sim.render()
+
+
+def assert_external_force(ctx):
+    """Cross-backend checks for sim.apply_external_force (force AND torque) on free OBJECTs + the ROBOT.
+
+    Force (fbox, 2 kg, airborne, zero damping): a constant +x world force F=20 N over T s gives
+    dx = 0.5*(F/m)*T^2 (gravity acts only on z, so it also falls) and induces NO spin; dropping the
+    force makes +x speed plateau (auto-zero); two stacked calls sum (additivity).
+    Torque (tbox, never force-pushed): a +z torque spins it up about +z only, without translating its
+    CoM (torque/force decoupled); dropping the torque makes angular speed plateau (auto-zero).
+    Robot: a pelvis push translates the base +x (relative check — the un-actuated robot also falls).
+    """
+    torch = ctx.torch
+    dev = ctx.sim.sim_device
+    dt = ctx.sim.sim_dt
+
+    # ---------------- Robot: horizontal push translates the base +x -----------------------------
+    # Runs FIRST, from the fresh upright pose: the un-actuated robot collapses over time, and a
+    # push on a fallen/ground-resting base barely translates, so this must not run after the
+    # multi-second object phases. Absolute displacement is backend-dependent (the articulation
+    # redistributes the impulse), so assert direction + a meaningful magnitude, not a point value.
+    robot_body = ctx.sim.body_names[0]  # pelvis/base — the root body on every robot preset
+    robot_force = torch.tensor([40.0, 0.0, 0.0], device=dev)
+
+    def push_robot():
+        ctx.sim.apply_external_force("robot", forces=robot_force, body_names=[robot_body], env_ids=ctx.env_ids)
+
+    rx0 = ctx.states("robot")[:, 0].clone()
+    _step_with_force(ctx, steps_for_seconds(ctx.sim, 0.2), push_robot)
+    robot_dx = ctx.states("robot")[:, 0] - rx0
+    robot_ok = _all(robot_dx > 0.02)
+
+    # ---------------- Object: exact Newtonian displacement under a constant push ---------------
+    mass = 2.0  # matches the external-force scene preset (fbox mass)
+    force_n = 20.0
+    accel = force_n / mass
+    push_steps = steps_for_seconds(ctx.sim, 0.3)
+    force_vec = torch.tensor([force_n, 0.0, 0.0], device=dev)
+
+    def push_box():
+        ctx.sim.apply_external_force("fbox", forces=force_vec, env_ids=ctx.env_ids)
+
+    # Capture entry velocities: fbox has been free-falling since spawn (the robot phase above
+    # stepped time), so it is NOT at rest — the kinematic predictions include v0*t.
+    fb0 = ctx.states("fbox")
+    x0 = fb0[:, 0].clone()
+    z0 = fb0[:, 2].clone()
+    vx0 = fb0[:, 7].clone()  # ~0: nothing has pushed it in x
+    vz0 = fb0[:, 9].clone()  # negative: already falling
+    _step_with_force(ctx, push_steps, push_box)
+    t_push = push_steps * dt
+    dx = ctx.states("fbox")[:, 0] - x0
+    dz = z0 - ctx.states("fbox")[:, 2]
+    expected_dx = vx0 * t_push + 0.5 * accel * t_push * t_push
+    expected_dz = -vz0 * t_push + 0.5 * GRAVITY * t_push * t_push  # drop is +z-down
+    # 8% band: semi-implicit-Euler error over 0.3 s is a few %, leaving room for cross-backend
+    # integrator spread while still rejecting a wrong magnitude / frame / mass. abs+floor on the
+    # denominators so a near-zero (or sign-flipped) expectation can never auto-pass or divide by ~0.
+    push_ok = _all(((dx - expected_dx).abs() / expected_dx.abs().clamp(min=1e-3)) < 0.08)
+    fell_ok = _all(((dz - expected_dz).abs() / expected_dz.abs().clamp(min=1e-3)) < 0.08)
+
+    # ---------------- Auto-zero: stop pushing, +x speed must plateau (linear coast) -------------
+    vx_end = ctx.states("fbox")[:, 7].clone()  # +x velocity at end of push
+    coast_steps = steps_for_seconds(ctx.sim, 0.2)
+    xc0 = ctx.states("fbox")[:, 0].clone()
+    _step_with_force(ctx, coast_steps, None)  # no force applied => must auto-zero
+    t_coast = coast_steps * dt
+    dx_coast = ctx.states("fbox")[:, 0] - xc0
+    # If the force persisted (bug), dx_coast would be ~0.5*a*t^2 + vx_end*t (quadratic term ~0.2 m).
+    # With auto-zero it is a pure linear coast vx_end*t (no ground friction while airborne). Assert
+    # the coast matches the linear prediction, i.e. the extra quadratic push term is absent.
+    expected_coast = vx_end * t_coast
+    autozero_ok = _all((dx_coast - expected_coast).abs() < 0.03)
+
+    # ---------------- Additivity: two stacked calls in one substep sum -------------------------
+    # Over a few steps, apply F twice per step (=> 2F) and confirm the per-step +x speed gain is
+    # ~2x the single-F gain (a = 2F/m). Measured from the current (coasting) velocity.
+    add_steps = steps_for_seconds(ctx.sim, 0.1)
+
+    def push_box_twice():
+        ctx.sim.apply_external_force("fbox", forces=force_vec, env_ids=ctx.env_ids)
+        ctx.sim.apply_external_force("fbox", forces=force_vec, env_ids=ctx.env_ids)
+
+    vx_before = ctx.states("fbox")[:, 7].clone()
+    _step_with_force(ctx, add_steps, push_box_twice)
+    dvx = ctx.states("fbox")[:, 7] - vx_before
+    expected_dvx = (2.0 * force_n / mass) * (add_steps * dt)
+    additivity_ok = _all(((dvx - expected_dvx).abs() / expected_dvx) < 0.10)
+
+    # ---------------- Force channel is pure: the CoM force induced NO net spin on fbox -----------
+    # An isotropic box pushed only through its CoM must not start rotating. Small threshold absorbs
+    # solver noise; a torque leaking from the force path would blow well past it.
+    fbox_wmag = ctx.states("fbox")[:, 10:13].norm(dim=1)
+    force_no_spin = _all(fbox_wmag < 0.2)
+
+    # ---------------- Torque channel: pure spin, decoupled from CoM translation ------------------
+    # tbox never received a force. A constant world-frame torque about +z must spin it up about +z,
+    # leave the other angular axes ~0, and NOT translate its CoM in xy. We deliberately DO NOT pin
+    # the spin RATE: backends disagree on inertia when only `mass` is set in the config — MuJoCo
+    # keeps the asset's authored inertia (explicitinertial) while IsaacGym/IsaacSim recompute it from
+    # geometry, so alpha = tau/I differs ~10x. A tiny torque keeps every backend at a sane rate; the
+    # asserted invariants (sign, axis purity, no translation, plateau) are inertia-independent.
+    torque_nm = 0.01
+    torque_vec = torch.tensor([0.0, 0.0, torque_nm], device=dev)
+    torque_steps = steps_for_seconds(ctx.sim, 0.3)
+
+    def spin_tbox():
+        ctx.sim.apply_external_force("tbox", torques=torque_vec, env_ids=ctx.env_ids)
+
+    t_xy0 = ctx.states("tbox")[:, 0:2].clone()
+    _step_with_force(ctx, torque_steps, spin_tbox)
+    tbox = ctx.states("tbox")
+    wz = tbox[:, 12]
+    w_xy = tbox[:, 10:12].norm(dim=1)
+    xy_drift = (tbox[:, 0:2] - t_xy0).norm(dim=1)
+    spin_up_ok = _all(wz > 1e-3)  # spun up about +z (rate is inertia-dependent; only sign matters)
+    spin_axis_ok = _all(w_xy < 0.1 * wz.abs() + 1e-4)  # spin stays on the commanded axis
+    no_translation_ok = _all(xy_drift < 0.05)  # torque at the CoM produced no linear motion
+    torque_ok = spin_up_ok and spin_axis_ok and no_translation_ok
+
+    # ---------------- Torque auto-zero: stop applying, angular speed must plateau ----------------
+    wz_end = tbox[:, 12].clone()
+    _step_with_force(ctx, steps_for_seconds(ctx.sim, 0.2), None)  # coast, no torque
+    dwz = (ctx.states("tbox")[:, 12] - wz_end).abs()
+    # Undamped isotropic body: with the torque removed, wz holds constant (no floor contact). If the
+    # torque leaked past its substep, wz would keep climbing; assert it barely changes.
+    torque_autozero_ok = _all(dwz < 0.05 * wz_end.abs().clamp(min=1e-4))
+
+    # ---------------- Public rigid-body kinematics accessors: cross-backend contract -----------
+    # The properties report the world pose of each body's ORIGIN (xpos-style), distinct from
+    # robot_root_states (the floating-base joint anchor) by the freejoint->body offset — so we
+    # check the contract that actually holds on every backend, not an over-tight identity:
+    #   (1) the pushed root body sits CLOSE to the reported root (same floating base, few-cm offset);
+    #   (2) all four accessors have the expected [E, num_bodies, k] shape;
+    #   (3) values are finite and the reported quaternion is a unit xyzw.
+    ridx = ctx.sim.find_rigid_body_indice(robot_body)
+    body_pos = ctx.sim.rigid_body_pos_w[: ctx.n, ridx, :]  # [E, 3]
+    body_quat = ctx.sim.rigid_body_quat_w[: ctx.n, ridx, :]  # [E, 4] xyzw
+    root_state = ctx.sim.robot_root_states[: ctx.n]
+    near_root = _all((body_pos - root_state[:, 0:3]).abs().amax(dim=1) < 0.1)  # few-cm base offset
+    nb = ctx.sim.num_bodies
+    shapes_ok = (
+        tuple(ctx.sim.rigid_body_pos_w.shape) == (ctx.n, nb, 3)
+        and tuple(ctx.sim.rigid_body_quat_w.shape) == (ctx.n, nb, 4)
+        and tuple(ctx.sim.rigid_body_lin_vel_w.shape) == (ctx.n, nb, 3)
+        and tuple(ctx.sim.rigid_body_ang_vel_w.shape) == (ctx.n, nb, 3)
+    )
+    finite = bool(torch.isfinite(body_pos).all() and torch.isfinite(body_quat).all())
+    quat_unit = _all((body_quat.norm(dim=1) - 1.0).abs() < 1e-3)
+    body_read_ok = near_root and shapes_ok and finite and quat_unit
+
+    print(
+        f"  external-force: dx {float(dx[0]):.4f} (exp {float(expected_dx[0]):.4f}) push_ok={push_ok} "
+        f"dz {float(dz[0]):.4f} (exp {float(expected_dz[0]):.4f}) fell_ok={fell_ok} | "
+        f"coast dx {float(dx_coast[0]):.4f} (exp {float(expected_coast[0]):.4f}) autozero_ok={autozero_ok} | "
+        f"dvx {float(dvx[0]):.4f} (exp {expected_dvx:.4f}) additivity_ok={additivity_ok} | "
+        f"force_no_spin={force_no_spin} (|w|={float(fbox_wmag[0]):.3f}) | "
+        f"torque wz {float(wz[0]):.3f} xy_drift {float(xy_drift[0]):.4f} torque_ok={torque_ok} "
+        f"(spin={spin_up_ok} axis={spin_axis_ok} no_trans={no_translation_ok}) "
+        f"torque_autozero={torque_autozero_ok} (dwz={float(dwz[0]):.3f}) | "
+        f"robot_dx {float(robot_dx[0]):.4f} robot_ok={robot_ok} | "
+        f"body_read_ok={body_read_ok} (near_root={near_root} shapes={shapes_ok} "
+        f"finite={finite} quat_unit={quat_unit})"
+    )
+    return (
+        push_ok
+        and fell_ok
+        and autozero_ok
+        and additivity_ok
+        and force_no_spin
+        and torque_ok
+        and torque_autozero_ok
+        and robot_ok
+        and body_read_ok
+    )
+
+
 def assert_damping_decay(ctx):
     # Damped box vs undamped CONTROL, both launched +x at z=5.5 and kept AIRBORNE for the window
     # (z stays >> floor, so floor friction cannot contribute — only drag slows them). The damped
@@ -1117,6 +1305,9 @@ SCENARIOS = {
     # MuJoCo (dof_damping) and IsaacSim (live USD PhysxRigidBodyAPI damping) support it.
     "dr-damping-governs": ("dr-damping-pair", assert_dr_damping_governs, 1, True, ("isaacgym",)),
     "galileo-freefall": ("galileo-freefall", assert_galileo_freefall, 1, True, ()),
+    # Cross-backend apply_external_force: exact Newtonian push on a free object + auto-zero +
+    # additivity, plus a directional push on the robot base. All 4 backends.
+    "external-force": ("external-force", assert_external_force, 1, True, ()),
     # Isaac-only: physx config-time linear_damping drives the drag. There is no static MuJoCo
     # freejoint-damping config; runtime damping DR is covered by dr-damping-governs.
     "damping-decay": ("damping-decay", assert_damping_decay, 1, False, ()),
@@ -1319,6 +1510,7 @@ def main() -> int:
 
     if not headless:
         sim.setup_viewer()
+    sim.install_plugins()
     if sim.video_recorder is not None:
         sim.video_recorder.setup_recording()
         # These scenarios are object-centric; aim the camera at the scene objects, not the robot.

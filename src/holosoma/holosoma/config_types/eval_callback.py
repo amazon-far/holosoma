@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+from typing import Any
 
 from pydantic.dataclasses import dataclass
 
@@ -115,9 +116,9 @@ class EvalCallbacksConfig:
     payload: PayloadCallbackConfig = PayloadCallbackConfig()
     """Wrist payload simulation callback."""
 
-    def collect_active_callbacks(self) -> dict:
+    def collect_active_callbacks(self) -> dict[str, Any]:
         """Collect callback configs where config.enabled is True."""
-        cb_configs = {}
+        cb_configs: dict[str, Any] = {}
         for f in dataclasses.fields(self):
             cfg = getattr(self, f.name)
             if not hasattr(cfg, "_target_"):

@@ -13,7 +13,7 @@ and no-ops cleanly on a robot-only scene.
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from typing import Any, Sequence, cast
 
 import torch
 from loguru import logger
@@ -42,7 +42,7 @@ def _resolve_object_names(env: Any, object_names: Sequence[str] | None) -> list[
     """
     if object_names is not None:
         return list(object_names)
-    return env.simulator.object_registry.get_names_by_type(ObjectType.INDIVIDUAL)
+    return cast("list[str]", env.simulator.object_registry.get_names_by_type(ObjectType.INDIVIDUAL))
 
 
 def _mujoco_object_root_body(simulator: Any, name: str) -> str:
@@ -55,9 +55,9 @@ def _mujoco_object_root_body(simulator: Any, name: str) -> str:
     """
     sm = simulator.scene_manager
     if name in sm.rigid_object_root_bodies:
-        return sm.rigid_object_root_bodies[name]
+        return cast("str", sm.rigid_object_root_bodies[name])
     if name in getattr(sm, "scene_file_bodies", {}):
-        return sm.scene_file_bodies[name][0]  # (prefixed_root_body, is_static)
+        return cast("str", sm.scene_file_bodies[name][0])  # (prefixed_root_body, is_static)
     raise KeyError(f"Object '{name}' is not a registered standalone or scene-file body.")
 
 
@@ -118,7 +118,7 @@ def _mujoco_object_geom_ids(simulator: Any, name: str) -> list[int]:
     return [g for g in range(model.ngeom) if int(model.geom_bodyid[g]) in body_ids]
 
 
-def _coerce_material_cfg(material: MaterialRandomizationConfig | dict) -> MaterialRandomizationConfig:
+def _coerce_material_cfg(material: MaterialRandomizationConfig | dict[str, Any]) -> MaterialRandomizationConfig:
     """Accept either a :class:`MaterialRandomizationConfig` or an equivalent nested dict.
 
     Configs constructed in Python pass the dataclass; a config loaded from a plain dict (e.g. a
@@ -155,15 +155,15 @@ def _draw_material_channel(
 
 @mujoco_required_field("geom_friction")
 def randomize_object_rigid_body_material_startup(
-    env,
+    env: Any,
     env_ids: Sequence[int] | torch.Tensor | None = None,
     *,
     sampler: TermSampler,
-    material: MaterialRandomizationConfig | dict,
+    material: MaterialRandomizationConfig | dict[str, Any],
     object_names: Sequence[str] | None = None,
     num_buckets: int | None = _MATERIAL_NUM_BUCKETS,
     enabled: bool = True,
-    **_,
+    **_: Any,
 ) -> None:
     """Randomize free-body rigid-body material properties, with PER-BACKEND channel configs.
 
@@ -314,7 +314,7 @@ def randomize_object_rigid_body_material_startup(
 
 @mujoco_required_field("body_mass")
 def randomize_object_rigid_body_mass_startup(
-    env,
+    env: Any,
     env_ids: Sequence[int] | torch.Tensor | None = None,
     *,
     sampler: TermSampler,
@@ -322,7 +322,7 @@ def randomize_object_rigid_body_mass_startup(
     object_names: Sequence[str] | None = None,
     enabled: bool = True,
     recompute_inertia: bool = True,
-    **_,
+    **_: Any,
 ) -> None:
     """Randomize free-body rigid-body mass (additive offset), one offset per object.
 
@@ -500,14 +500,14 @@ def _warn_off_diagonal_inertia_ignored(backend: str, inertia_params: dict[str, D
 
 @mujoco_required_field("body_inertia")
 def randomize_object_rigid_body_inertia_startup(
-    env,
+    env: Any,
     env_ids: Sequence[int] | torch.Tensor | None = None,
     *,
     sampler: TermSampler,
     inertia_distribution_params_dict: InertiaScale | dict[str, DistributionLike],
     object_names: Sequence[str] | None = None,
     enabled: bool = True,
-    **_,
+    **_: Any,
 ) -> None:
     """Randomize free-body rigid-body inertia (scale the inertia tensor).
 
@@ -649,7 +649,13 @@ _DAMPING_ISAACGYM_MSG = (
 
 
 def _isaacsim_randomize_body_damping(
-    simulator, names, idx, *, axis: str, leaf: DistributionLike, sampler: TermSampler
+    simulator: Any,
+    names: Sequence[str],
+    idx: torch.Tensor,
+    *,
+    axis: str,
+    leaf: DistributionLike,
+    sampler: TermSampler,
 ) -> None:
     """Set free-body linear/angular damping per (object, env) on IsaacSim via the live USD schema.
 
@@ -691,8 +697,8 @@ def _isaacsim_randomize_body_damping(
 
 
 def _randomize_object_freejoint_damping(
-    env,
-    env_ids,
+    env: Any,
+    env_ids: Sequence[int] | torch.Tensor | None,
     sampler: TermSampler,
     *,
     dofs: tuple[int, ...],
@@ -755,14 +761,14 @@ def _randomize_object_freejoint_damping(
 
 @mujoco_required_field("dof_damping")
 def randomize_object_linear_damping_startup(
-    env,
+    env: Any,
     env_ids: Sequence[int] | torch.Tensor | None = None,
     *,
     sampler: TermSampler,
     damping_range: DistributionLike,
     object_names: Sequence[str] | None = None,
     enabled: bool = True,
-    **_,
+    **_: Any,
 ) -> None:
     """Randomize free-body LINEAR (translational) damping — drag on linear velocity.
 
@@ -794,14 +800,14 @@ def randomize_object_linear_damping_startup(
 
 @mujoco_required_field("dof_damping")
 def randomize_object_angular_damping_startup(
-    env,
+    env: Any,
     env_ids: Sequence[int] | torch.Tensor | None = None,
     *,
     sampler: TermSampler,
     damping_range: DistributionLike,
     object_names: Sequence[str] | None = None,
     enabled: bool = True,
-    **_,
+    **_: Any,
 ) -> None:
     """Randomize free-body ANGULAR (rotational) damping — drag on angular velocity.
 
@@ -850,7 +856,7 @@ def _jitter_spec(range_cfg: float | DistributionLike) -> DistributionSpec | None
 
 
 def jitter_object_pose_on_reset(
-    env,
+    env: Any,
     env_ids: Sequence[int] | torch.Tensor | None = None,
     *,
     sampler: TermSampler,
@@ -858,7 +864,7 @@ def jitter_object_pose_on_reset(
     yaw_range: float | DistributionLike = 0.0,
     object_names: Sequence[str] | None = None,
     enabled: bool = True,
-    **_,
+    **_: Any,
 ) -> None:
     """Jitter free-body XY position and yaw around the baseline reset pose, per env.
 

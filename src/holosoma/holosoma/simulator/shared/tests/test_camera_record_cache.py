@@ -1,4 +1,4 @@
-"""Unit tests for CameraRuntime's cross-device buffer cache (pure, no simulator, CPU-only).
+"""Unit tests for CameraRecord's cross-device buffer cache (pure, no simulator, CPU-only).
 
 ``set_buffer`` is the single write path for a rendered frame and co-locates cache invalidation with
 the mutation; ``buffer_on`` serves cross-device copies, caching the first transfer per
@@ -8,9 +8,11 @@ the caching + invalidation contract without a GPU by counting ``.to`` calls on a
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
-from holosoma.simulator.shared.camera_sensor import CameraRuntime
+from holosoma.simulator.shared.sensor_manager import CameraRecord
 from holosoma.utils.safe_torch_import import torch
 
 pytestmark = pytest.mark.no_sim
@@ -28,23 +30,23 @@ class _CountingTensor(torch.Tensor):
 
     @staticmethod
     def wrap(data: torch.Tensor) -> _CountingTensor:
-        t = data.as_subclass(_CountingTensor)
+        t = cast("_CountingTensor", data.as_subclass(_CountingTensor))
         t.to_calls = 0
         return t
 
-    def to(self, *args, **kwargs):  # type: ignore[override]
+    def to(self, *args: Any, **kwargs: Any) -> torch.Tensor:
         self.to_calls += 1
         # Return a distinct plain tensor so identity checks distinguish "the copy" from "the buffer".
         return torch.Tensor.clone(torch.Tensor.as_subclass(self, torch.Tensor))
 
 
-def _rt(buf: torch.Tensor) -> CameraRuntime:
-    rt = CameraRuntime(name="c", config=None)  # type: ignore[arg-type]  # test stub: buffer-only runtime, no real config
+def _rt(buf: torch.Tensor) -> CameraRecord:
+    rt = CameraRecord(name="c", config=None)  # type: ignore[arg-type]  # test stub: buffer-only record, no real config
     rt.set_buffer("rgb", buf)
     return rt
 
 
-def test_device_none_returns_buffer_without_copy():
+def test_device_none_returns_buffer_without_copy() -> None:
     buf = _CountingTensor.wrap(torch.zeros(1, 2, 2, 3, dtype=torch.uint8))
     rt = _rt(buf)
     assert rt.buffer_on("rgb", None) is buf
@@ -52,10 +54,10 @@ def test_device_none_returns_buffer_without_copy():
     assert rt._device_cache == {}
 
 
-def test_cross_device_copy_is_cached_across_reads():
+def test_cross_device_copy_is_cached_across_reads() -> None:
     # Force a "different device" path via a fake device str so .to() actually fires in a CPU env.
     buf = _CountingTensor.wrap(torch.zeros(1, 2, 2, 3, dtype=torch.uint8))
-    rt = CameraRuntime(name="c", config=None)  # type: ignore[arg-type]  # test stub: buffer-only runtime, no real config
+    rt = CameraRecord(name="c", config=None)  # type: ignore[arg-type]  # test stub: buffer-only record, no real config
     rt.set_buffer("rgb", buf)
     a = rt.buffer_on("rgb", "meta")  # a non-cpu device string -> triggers .to
     b = rt.buffer_on("rgb", "meta")  # second read reuses the cache
@@ -63,9 +65,9 @@ def test_cross_device_copy_is_cached_across_reads():
     assert a is b  # same cached object handed to both consumers
 
 
-def test_set_buffer_invalidates_stale_cross_device_copies():
+def test_set_buffer_invalidates_stale_cross_device_copies() -> None:
     buf1 = _CountingTensor.wrap(torch.zeros(1, 2, 2, 3, dtype=torch.uint8))
-    rt = CameraRuntime(name="c", config=None)  # type: ignore[arg-type]  # test stub: buffer-only runtime, no real config
+    rt = CameraRecord(name="c", config=None)  # type: ignore[arg-type]  # test stub: buffer-only record, no real config
     rt.set_buffer("rgb", buf1)
     first = rt.buffer_on("rgb", "meta")
     assert buf1.to_calls == 1
@@ -79,11 +81,11 @@ def test_set_buffer_invalidates_stale_cross_device_copies():
     assert second is not first
 
 
-def test_set_buffer_only_invalidates_its_own_modality():
+def test_set_buffer_only_invalidates_its_own_modality() -> None:
     # A depth render must not evict a cached rgb copy (different data_type keys).
     rgb = _CountingTensor.wrap(torch.zeros(1, 2, 2, 3, dtype=torch.uint8))
     depth = _CountingTensor.wrap(torch.zeros(1, 2, 2, 1, dtype=torch.float32))
-    rt = CameraRuntime(name="c", config=None)  # type: ignore[arg-type]  # test stub: buffer-only runtime, no real config
+    rt = CameraRecord(name="c", config=None)  # type: ignore[arg-type]  # test stub: buffer-only record, no real config
     rt.set_buffer("rgb", rgb)
     rt.set_buffer("depth", depth)
     rt.buffer_on("rgb", "meta")

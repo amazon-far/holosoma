@@ -30,8 +30,9 @@ Example Usage:
 from __future__ import annotations
 
 import functools
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, TypeVar, cast
 
 from holosoma.utils.safe_torch_import import torch
 
@@ -140,7 +141,7 @@ def proxy_compatible(func: F) -> F:
 
 
 @contextmanager
-def _unwrap_jit_dependencies(func: F):
+def _unwrap_jit_dependencies(func: F) -> Iterator[None]:
     """
     Context manager to solve the nested JIT compilation problem.
 
@@ -273,4 +274,4 @@ def torch_jit_script(func: F) -> Callable[..., Any]:
     # Store the complete chain: JIT compilation + proxy handling
     _COMPILED_FUNCTION_CACHE[func_key] = wrapped_func
 
-    return wrapped_func  # type: ignore[return-value]
+    return cast("Callable[..., Any]", wrapped_func)

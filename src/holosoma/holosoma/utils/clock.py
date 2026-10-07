@@ -28,23 +28,40 @@ class ClockPub:
             ZMQ port to publish on.
         """
         self.port: int = port
-        self.context: zmq.Context | None = None
-        self.socket: zmq.Socket | None = None
+        self.context: zmq.SyncContext | None = None
+        self.socket: zmq.SyncSocket | None = None
         self.start_time: float | None = None
         self.enabled: bool = False
 
     def start(self) -> None:
         """Start the clock publisher."""
+        if self.enabled:
+            return
+        context: zmq.SyncContext | None = None
+        socket: zmq.SyncSocket | None = None
         try:
-            self.context = zmq.Context()
-            self.socket = self.context.socket(zmq.PUB)
-            self.socket.bind(f"tcp://*:{self.port}")
-            self.start_time = time.time()
-            self.enabled = True
-            logger.info(f"Clock publisher started on port {self.port}")
+            context = zmq.Context()
+            socket = context.socket(zmq.PUB)
+            socket.bind(f"tcp://*:{self.port}")
         except Exception as e:
             logger.error(f"Failed to start clock publisher: {e}")
-            self.enabled = False
+            if socket is not None:
+                try:
+                    socket.close()
+                except Exception:
+                    logger.exception("Clock socket rollback failed")
+            if context is not None:
+                try:
+                    context.term()
+                except Exception:
+                    logger.exception("Clock context rollback failed")
+            return
+
+        self.context = context
+        self.socket = socket
+        self.start_time = time.time()
+        self.enabled = True
+        logger.info(f"Clock publisher started on port {self.port}")
 
     def restart(self) -> None:
         """Restart the clock publisher (reset start time)."""
@@ -74,11 +91,25 @@ class ClockPub:
 
     def close(self) -> None:
         """Close the clock publisher and cleanup resources."""
-        if self.socket:
-            self.socket.close()
-        if self.context:
-            self.context.term()
+        socket, context = self.socket, self.context
+        self.socket = None
+        self.context = None
+        self.start_time = None
         self.enabled = False
+        failures: list[Exception] = []
+        if socket is not None:
+            try:
+                socket.close()
+            except Exception as exc:
+                failures.append(exc)
+        if context is not None:
+            try:
+                context.term()
+            except Exception as exc:
+                failures.append(exc)
+        if failures:
+            details = "; ".join(repr(exc) for exc in failures)
+            raise RuntimeError(f"Failed to close clock publisher: {details}")
 
 
 class ClockSub:
@@ -97,8 +128,8 @@ class ClockSub:
             ZMQ port to subscribe to.
         """
         self.port: int = port
-        self.context: zmq.Context | None = None
-        self.socket: zmq.Socket | None = None
+        self.context: zmq.SyncContext | None = None
+        self.socket: zmq.SyncSocket | None = None
         self.last_clock: int = 0
         self._offset: int = 0
 

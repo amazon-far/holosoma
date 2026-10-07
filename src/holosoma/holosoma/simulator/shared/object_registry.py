@@ -160,7 +160,7 @@ class ObjectRegistry:
         position_in_type: int,
         initial_poses: torch.Tensor,
         initial_velocities: torch.Tensor | None = None,
-    ):
+    ) -> None:
         """Register object with pre-calculated initial poses (and velocities) for all environments.
 
         Registers a new object in the registry with its type, position within that type,
@@ -213,7 +213,7 @@ class ObjectRegistry:
         )
         self.name_to_index[name] = len(self.objects) - 1
 
-    def setup_ranges(self, num_envs: int, robot_count: int, scene_count: int, individual_count: int):
+    def setup_ranges(self, num_envs: int, robot_count: int, scene_count: int, individual_count: int) -> None:
         """Set up interleaved layout parameters.
 
         Configures the interleaved layout where objects are organized by environment
@@ -240,7 +240,7 @@ class ObjectRegistry:
         self.scene_offset_in_env = robot_count
         self.individual_offset_in_env = robot_count + scene_count
 
-    def finalize_registration(self):
+    def finalize_registration(self) -> None:
         """Finalize registration and build lookup structures.
 
         Updates the indices for all registered objects and builds the direct
@@ -254,7 +254,7 @@ class ObjectRegistry:
         self._build_position_lookup()
         self._finalized = True
 
-    def _build_position_lookup(self):
+    def _build_position_lookup(self) -> None:
         """Build direct position-to-name array for O(1) lookup."""
         # Initialize array with empty strings
         self._position_to_name = [""] * self.objects_per_env

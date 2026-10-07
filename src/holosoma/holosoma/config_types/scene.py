@@ -14,6 +14,11 @@ from pydantic import ConfigDict, model_validator
 from pydantic.dataclasses import dataclass
 from typing_extensions import Annotated
 
+import holosoma.config_values.light
+from holosoma.config_types.light import DEFAULT_LIGHT_KEY, DefaultLightConfig, LightConfig
+from holosoma.config_types.value_types import UnitQuaternionWXYZ
+from holosoma.utils.config_registry import UseRegistry
+
 # Reject unknown fields on the physics configs so a typo'd or misplaced field (e.g. a damping
 # field that belongs on ``physx``) fails loud at construction instead of being ignored.
 _FORBID_EXTRA = ConfigDict(extra="forbid")
@@ -235,8 +240,10 @@ class SceneFileConfig:
     position: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     """Position offset [x, y, z]. Defaults to [0.0, 0.0, 0.0]."""
 
-    orientation: list[float] = field(default_factory=lambda: [1.0, 0.0, 0.0, 0.0])  # [w,x,y,z]
-    """Orientation quaternion [w, x, y, z]. Defaults to [1.0, 0.0, 0.0, 0.0]."""
+    orientation: UnitQuaternionWXYZ = field(
+        default_factory=lambda: [1.0, 0.0, 0.0, 0.0], metadata={"validate_default": True}
+    )
+    """Unit quaternion [w, x, y, z]. Norm deviations up to 1e-4 are normalized."""
 
     include_patterns: list[str] = field(default_factory=lambda: ["*"])
     """Glob patterns (against bare body names) for WHICH bodies load. Default ``["*"]`` =
@@ -352,8 +359,10 @@ class RigidObjectConfig:
     position: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     """Position [x, y, z] of the object. Defaults to [0.0, 0.0, 0.0]."""
 
-    orientation: list[float] = field(default_factory=lambda: [1.0, 0.0, 0.0, 0.0])  # [w,x,y,z]
-    """Orientation quaternion [w, x, y, z] of the object. Defaults to [1.0, 0.0, 0.0, 0.0]."""
+    orientation: UnitQuaternionWXYZ = field(
+        default_factory=lambda: [1.0, 0.0, 0.0, 0.0], metadata={"validate_default": True}
+    )
+    """Object unit quaternion [w, x, y, z]. Norm deviations up to 1e-4 are normalized."""
 
     fixed: bool = False
     """If True the object is static — attached to the world with no joint, so it holds
@@ -406,6 +415,16 @@ class SceneConfig:
 
     env_spacing: float = 20.0
     """Distance between parallel environments in the grid layout."""
+
+    # Named lights for the scene, assembled by a scene preset. Three modes:
+    #   {"default_light": DefaultLightConfig()} (default): each backend authors its own default lighting
+    #       — Isaac Sim a directional sun, IsaacGym its viewer directional light, MuJoCo its headlight.
+    #   {} (empty): author no lights (MuJoCo headlight off too), leaving only the scene's baked lights.
+    #   {name: DomeLightConfig(), ...} (populated): author exactly those lights.
+    # Override a light's fields on the CLI with ``--scene.lights.<name>.<field>``; enabled=False omits it.
+    lights: dict[str, Annotated[LightConfig, UseRegistry(holosoma.config_values.light.LIGHT_REGISTRY)]] = field(
+        default_factory=lambda: {DEFAULT_LIGHT_KEY: DefaultLightConfig()}
+    )
 
     @model_validator(mode="after")
     def validate_unique_names(self) -> SceneConfig:

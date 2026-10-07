@@ -63,6 +63,14 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from holosoma.config_types.experiment import ExperimentConfig
+    from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
+    from holosoma.simulator.mujoco.backends import WarpBackend
+    from holosoma.simulator.mujoco.mujoco import MuJoCo
+    from holosoma.utils.safe_torch_import import torch
 
 # name -> config_values.simulator preset attribute. MuJoCo classic is CPU + single-env only;
 # mjwarp/isaacgym/isaacsim are GPU and support multiple envs.
@@ -81,7 +89,7 @@ _OBJ_OBS_TERMS = "holosoma.managers.observation.terms.objects"
 _OBJ_RAND = "holosoma.managers.randomization.terms.objects"
 
 
-def _experiment_config(backend: str, num_envs: int, headless: bool):
+def _experiment_config(backend: str, num_envs: int, headless: bool) -> ExperimentConfig:
     """Build the ExperimentConfig for the demo: the g1_29dof locomotion preset, retargeted to the
     chosen backend + the object-managers demo scene, with the object managers wired in PURELY via
     config — the env then runs them through its real manager stack, exactly as training does:
@@ -208,8 +216,9 @@ def run_demo(backend: str, num_envs: int, headless: bool = True) -> int:
     cfg = _experiment_config(backend, num_envs, headless)
     seeding(cfg.training.seed)
 
-    with training_context(cfg):
-        env = get_class(cfg.env_class)(get_tyro_env_config(cfg), device=device)
+    with training_context(cfg) as context, context.simulation_session(
+        get_class(cfg.env_class)(get_tyro_env_config(cfg), device=device)
+    ) as env:
         sim = env.simulator
         env_ids = torch.arange(env.num_envs, device=env.device)
 
@@ -302,7 +311,7 @@ def run_demo(backend: str, num_envs: int, headless: bool = True) -> int:
         return 0
 
 
-def _report_object_dr(env, free_names, *, is_mujoco: bool) -> bool:
+def _report_object_dr(env: LeggedRobotLocomotionManager, free_names: list[str], *, is_mujoco: bool) -> bool:
     """Read back the physics state the RandomizationManager's startup DR already produced.
 
     Reads (does NOT apply) each free body's mass + sliding friction. On MuJoCo, reads from the
@@ -320,21 +329,22 @@ def _report_object_dr(env, free_names, *, is_mujoco: bool) -> bool:
 
     from holosoma.managers.randomization.terms.objects import _mujoco_object_bodies, _mujoco_object_geom_ids
 
+    sim = cast("MuJoCo", sim)
     is_warp = hasattr(sim.backend, "warp_model_bridge")
 
-    def _mass(name):
+    def _mass(name: str) -> float:
         body_ids = [bid for bid, _ in _mujoco_object_bodies(sim, name)]
         if is_warp:
-            bm = sim.backend.warp_model_bridge.body_mass  # [num_envs, nbody]
+            bm = cast("WarpBackend", sim.backend).warp_model_bridge.body_mass  # [num_envs, nbody]
             return float(sum(bm[0, bid] for bid in body_ids))
         return float(sum(sim.backend.model.body_mass[bid] for bid in body_ids))
 
-    def _friction0(name):
+    def _friction0(name: str) -> float | None:
         geoms = _mujoco_object_geom_ids(sim, name)
         if not geoms:
             return None
         if is_warp:
-            return float(sim.backend.warp_model_bridge.geom_friction[0, geoms[0], 0])
+            return float(cast("WarpBackend", sim.backend).warp_model_bridge.geom_friction[0, geoms[0], 0])
         return float(sim.backend.model.geom_friction[geoms[0], 0])
 
     for nm in free_names:
@@ -353,11 +363,11 @@ def _report_object_dr(env, free_names, *, is_mujoco: bool) -> bool:
     return True
 
 
-def _fmt(t):
+def _fmt(t: torch.Tensor) -> str:
     return "[" + ", ".join(f"{float(v):+.3f}" for v in t) + "]"
 
 
-def _close(a, b, atol=1e-4):
+def _close(a: torch.Tensor, b: torch.Tensor, atol: float = 1e-4) -> bool:
     from holosoma.utils.safe_torch_import import torch
 
     return bool(torch.allclose(a, b, atol=atol))

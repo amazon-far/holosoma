@@ -230,7 +230,7 @@ class RandomizationManager:
             self.env.simulator.scene.write_data_to_sim()
             self.env.simulator.refresh_sim_tensors()
 
-    def reset(self, env_ids) -> None:
+    def reset(self, env_ids: Any) -> None:
         """Run episodic hooks during environment reset.
 
         Parameters

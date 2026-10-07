@@ -1,5 +1,6 @@
-"""Local-visualization camera-egress plugin (cv2 window / mp4).
+"""Optional local visualizers for camera frames and LiDAR point clouds.
 
-Imports cv2 + video utils at module top — loaded only when a ``CameraVizPluginConfig.get_cls``
-fires (i.e. when the viz plugin is selected), so the plugins package stays cv2-free otherwise.
+Camera visualization imports cv2 only when ``CameraVizPluginConfig.get_cls`` is selected; LiDAR
+visualization imports Matplotlib only when ``LidarVizPluginConfig.get_cls`` is selected. Importing
+the plugins package itself keeps both optional visualization dependencies unloaded.
 """

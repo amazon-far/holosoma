@@ -3,20 +3,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List
+from typing import List
 
 import mujoco
 import mujoco.viewer
 import numpy as np
+import numpy.typing as npt
 from loguru import logger
 
 from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import PhysicsConfig, RigidObjectConfig, SceneFileConfig
-from holosoma.config_types.sensor import CameraSensorConfig
+from holosoma.config_types.sensor import CameraSensorConfig, LidarSensorConfig
 from holosoma.config_types.simulator import MujocoXMLFilterCfg, SimulatorConfig
 from holosoma.managers.terrain.base import TerrainTermBase
+from holosoma.simulator.mujoco.geom_groups import tag_compiled_robot_geom_groups
 from holosoma.simulator.shared.asset_format import select_asset_format
 from holosoma.utils.path import resolve_asset_path
+
+LIDAR_MOUNT_SITE_PREFIX = "holosoma_lidar_mount_"
+LIDAR_FILTER_SITE_PREFIX = "holosoma_lidar_filter_"
 
 
 @dataclass
@@ -136,48 +141,16 @@ class MujocoSceneManager:
             emission=1.0,
         )
 
-    def add_lighting(self, lighting_config: Any | None = None) -> None:
-        """Add lighting configuration to the world specification.
-
-        Parameters
-        ----------
-        lighting_config : Any | None
-            Lighting configuration parameters (currently unused, uses defaults).
-        """
-        # Arbitrary headlight ambient lighting
-        self.world_spec.visual.headlight.diffuse = [0.6, 0.6, 0.6]
-        self.world_spec.visual.headlight.ambient = [0.4, 0.4, 0.4]
-        self.world_spec.visual.headlight.specular = [0.0, 0.0, 0.0]
-
-        # Add global lighting orientation
+    def apply_render(self) -> None:
+        """Set MuJoCo's global visual options — the camera headlight, global light orientation, and
+        horizon haze."""
+        headlight = self.world_spec.visual.headlight
+        headlight.diffuse = [0.6, 0.6, 0.6]
+        headlight.ambient = [0.4, 0.4, 0.4]
+        headlight.specular = [0.0, 0.0, 0.0]
         self.world_spec.visual.global_.azimuth = -130
         self.world_spec.visual.global_.elevation = -20
-
-        # Match our existing scene files
         self.world_spec.visual.rgba.haze = [0.15, 0.25, 0.35, 1.0]
-
-        # Uncomment to increase to reduce shadow pixelation for larger terrain.
-        # Slows down rendering dramatically...
-        # self.world_spec.visual.quality.shadowsize = 1024
-
-        # Arbitrary lights (offset XY to avoid gantry shadows)
-        self.world_spec.worldbody.add_light(
-            pos=[2, 0, 5.0],
-            dir=[0, 0, -1],
-            diffuse=[0.4, 0.4, 0.4],
-            specular=[0.1, 0.1, 0.1],
-            # castshadow=True,
-            type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL,
-        )
-
-        # Second light for extra shadows, commented out a little experience performance.
-        # self.world_spec.worldbody.add_light(
-        #    pos=[-2, 0, 4.0], dir=[0, 0, -1],
-        #    diffuse=[0.6, 0.6, 0.6],
-        #    specular=[0.2, 0.2, 0.2],
-        #    castshadow=True,
-        #    type=mujoco.mjtLightType.mjLIGHT_DIRECTIONAL,
-        # )
 
     def add_terrain(self, terrain_state: TerrainTermBase, num_envs: int) -> None:
         """Add terrain to the world specification with extensible dispatch.
@@ -203,7 +176,7 @@ class MujocoSceneManager:
         elif terrain_state.mesh_type in ["load_obj"]:
             geom = self._create_trimesh(terrain_state)
         elif terrain_state.mesh_type is None:
-            logger.info("Terrain is none")
+            logger.info("Terrain is none")  # type: ignore[unreachable]
         else:
             raise ValueError("Terrain mesh type not recognised. Allowed types are [None, plane, heightfield, trimesh]")
 
@@ -257,8 +230,8 @@ class MujocoSceneManager:
         if terrain_state.mesh is None:
             raise ValueError("Terrain mesh data is required when using trimesh terrain type.")
 
-        vertices = np.asarray(terrain_state.mesh.vertices, dtype=np.float32)
-        faces = np.asarray(terrain_state.mesh.faces, dtype=np.int32)
+        vertices: npt.NDArray[np.float32] = np.asarray(terrain_state.mesh.vertices, dtype=np.float32)
+        faces: npt.NDArray[np.int32] = np.asarray(terrain_state.mesh.faces, dtype=np.int32)
 
         if vertices.size == 0 or faces.size == 0:
             raise ValueError("Terrain mesh is empty and cannot be used to create a mesh geom.")
@@ -301,7 +274,7 @@ class MujocoSceneManager:
             raise ValueError("Terrain does not have heightfield data")
 
         # Get heightfield parameters from terrain
-        height_data = np.asarray(terrain._height_field_raw, dtype=np.float32)
+        height_data: npt.NDArray[np.float32] = np.asarray(terrain._height_field_raw, dtype=np.float32)
         vertical_scale = terrain._vertical_scale
         border_size = terrain._border_size
         total_length = terrain._total_length
@@ -564,7 +537,7 @@ class MujocoSceneManager:
             offset = scene_file.resolve_position_offset(body.name)
             if offset is not None:
                 local_offset = np.zeros(3)
-                conj_quat = np.array(scene_file.orientation, dtype=float)  # wxyz
+                conj_quat: npt.NDArray[np.float64] = np.array(scene_file.orientation, dtype=float)  # wxyz
                 mujoco.mju_negQuat(conj_quat, conj_quat)
                 mujoco.mju_rotVecQuat(local_offset, np.array(offset, dtype=float), conj_quat)
                 body.pos = [body.pos[0] + local_offset[0], body.pos[1] + local_offset[1], body.pos[2] + local_offset[2]]
@@ -581,7 +554,11 @@ class MujocoSceneManager:
             actor_name = f"{scene_file_name}_{body_name}"
             self.scene_file_bodies[actor_name] = (f"{prefix}{body_name}", is_static)
 
-    def add_cameras(self, cameras: dict[str, CameraSensorConfig], robot_prefix: str = "robot_") -> None:
+    def add_cameras(
+        self,
+        cameras: dict[str, CameraSensorConfig],
+        robot_prefix: str | None = None,
+    ) -> None:
         """Add mounted cameras to the world spec as ``<camera>`` children, before compile.
 
         A camera is a child of its mount body, so MuJoCo's kinematics follow that body
@@ -595,9 +572,9 @@ class MujocoSceneManager:
         ----------
         cameras : dict[str, CameraSensorConfig]
             Camera configs to create, keyed by sensor name (the --sensor dict keys).
-        robot_prefix : str
-            The attach prefix used for the robot (default ``"robot_"``), used to resolve a
-            ``robot_link`` mount target to its composed body name.
+        robot_prefix : str | None
+            Deprecated compatibility argument. When set, it must match the robot prefix captured
+            during composition; sensor resolution always uses the captured metadata.
         """
         for cam_name, cam in cameras.items():
             mount = cam.mount
@@ -605,7 +582,17 @@ class MujocoSceneManager:
                 # Free-floating: child of the worldbody, so pos/quat are the pose in the env frame.
                 body = self.world_spec.worldbody
             else:
-                body_name = self._resolve_mount_body_name(mount.target_kind, mount.target, robot_prefix)
+                if (
+                    mount.target_kind == "robot_link"
+                    and robot_prefix is not None
+                    and self.robot_spec_meta is not None
+                    and robot_prefix != self.robot_spec_meta.prefix
+                ):
+                    raise ValueError(
+                        f"Camera '{cam_name}' received robot_prefix='{robot_prefix}', but the composed "
+                        f"robot uses '{self.robot_spec_meta.prefix}'."
+                    )
+                body_name = self.resolve_sensor_body_name(mount.target_kind, mount.target)
                 body = self.world_spec.body(body_name)
                 if body is None:
                     raise ValueError(
@@ -623,8 +610,48 @@ class MujocoSceneManager:
                 mode=mujoco.mjtCamLight.mjCAMLIGHT_FIXED,
             )
 
-    def _resolve_mount_body_name(self, target_kind: str, target: str, robot_prefix: str) -> str:
-        """Resolve a sensor mount (kind, target) to a composed-spec body name.
+    def add_lidar_sites(self, lidars: dict[str, LidarSensorConfig]) -> None:
+        """Add mount frames and compile-time body-owner markers for native MuJoCo LiDARs."""
+        for lidar_name, lidar in lidars.items():
+            mount = lidar.mount
+            if mount.target_kind == "world":
+                body = self.world_spec.worldbody
+            else:
+                body_name = self.resolve_sensor_body_name(mount.target_kind, mount.target)
+                body = self.world_spec.body(body_name)
+                if body is None:
+                    raise ValueError(
+                        f"LiDAR '{lidar_name}' mounts on body '{body_name}' (kind={mount.target_kind}, "
+                        f"target='{mount.target}') which is not present in the compiled scene."
+                    )
+            body.add_site(
+                name=f"{LIDAR_MOUNT_SITE_PREFIX}{lidar_name}",
+                pos=list(mount.position),
+                quat=list(mount.orientation),
+                type=mujoco.mjtGeom.mjGEOM_SPHERE,
+                size=[0.001, 0.0, 0.0],
+                rgba=[0.0, 0.0, 0.0, 0.0],
+            )
+
+            body_filter = lidar.body_filter
+            if body_filter.target_kind in ("robot_link", "actor"):
+                filter_body_name = self.resolve_sensor_body_name(body_filter.target_kind, body_filter.target)
+                filter_body = self.world_spec.body(filter_body_name)
+                if filter_body is None:
+                    raise ValueError(
+                        f"LiDAR '{lidar_name}' filters body '{filter_body_name}' "
+                        f"(kind={body_filter.target_kind}, target='{body_filter.target}') "
+                        "which is not present in the composed scene."
+                    )
+                filter_body.add_site(
+                    name=f"{LIDAR_FILTER_SITE_PREFIX}{lidar_name}",
+                    type=mujoco.mjtGeom.mjGEOM_SPHERE,
+                    size=[0.001, 0.0, 0.0],
+                    rgba=[0.0, 0.0, 0.0, 0.0],
+                )
+
+    def resolve_sensor_body_name(self, target_kind: str, target: str) -> str:
+        """Resolve a sensor body reference to its composed-spec body name.
 
         ``robot_link`` -> a prefixed robot link (name the root link to mount on the base);
         ``actor`` -> a registered rigid-object / scene-file body. Robot-link membership is
@@ -633,23 +660,23 @@ class MujocoSceneManager:
         if target_kind == "robot_link":
             meta = self.robot_spec_meta
             if meta is None:
-                raise ValueError(f"Camera mount target_kind='robot_link' (link '{target}') but no robot was added.")
+                raise ValueError(f"Sensor mount target_kind='robot_link' (link '{target}') but no robot was added.")
             if target != meta.root_body and target not in meta.body_names:
                 raise ValueError(
-                    f"Camera mount robot_link '{target}' is not a robot body. "
+                    f"Sensor mount robot_link '{target}' is not a robot body. "
                     f"Known links: {[meta.root_body, *meta.body_names]}."
                 )
-            return f"{robot_prefix}{target}"
+            return f"{meta.prefix}{target}"
         if target_kind == "actor":
             if target in self.rigid_object_root_bodies:
                 return self.rigid_object_root_bodies[target]
             if target in self.scene_file_bodies:
                 return self.scene_file_bodies[target][0]
             raise ValueError(
-                f"Camera mount actor '{target}' is not a registered scene object. "
+                f"Sensor mount actor '{target}' is not a registered scene object. "
                 f"Known actors: {[*self.rigid_object_root_bodies, *self.scene_file_bodies]}."
             )
-        raise ValueError(f"Unknown camera mount target_kind '{target_kind}'.")
+        raise ValueError(f"Unknown sensor mount target_kind '{target_kind}'.")
 
     def _apply_physics_to_body(
         self, body: mujoco.MjSpec.Body, physics: PhysicsConfig | None, name: str, *, apply_mass: bool = True
@@ -746,7 +773,7 @@ class MujocoSceneManager:
         root_body = root_bodies[0]
         if add_freejoint and not any(j.type == mujoco.mjtJoint.mjJNT_FREE for j in root_body.joints):
             root_body.add_freejoint()
-        return root_body.name
+        return str(root_body.name)
 
     def _capture_spec_meta(self, spec: mujoco.MjSpec, prefix: str, root_body: str) -> ActorSpecMeta:
         """Record an actor's named element inventory from its isolated (pre-attach) spec.
@@ -882,7 +909,7 @@ class MujocoSceneManager:
         if geom.name and any(name in geom.name.lower() for name in ground_names):
             return True
 
-        return geom.type == mujoco.mjtGeom.mjGEOM_PLANE
+        return bool(geom.type == mujoco.mjtGeom.mjGEOM_PLANE)
 
     def compile(self) -> mujoco.MjModel:
         """Compile the final world model from the specification.
@@ -893,4 +920,18 @@ class MujocoSceneManager:
             Compiled MuJoCo model ready for simulation.
         """
         logger.info("Compiling world model using MjSpec")
-        return self.world_spec.compile()
+        model = self.world_spec.compile()
+
+        meta = self.robot_spec_meta
+        if meta is None:
+            # Groups 4/5 are global reservations even in a robot-free model.
+            tag_compiled_robot_geom_groups(model, None)
+            return model
+
+        root_body_name = f"{meta.prefix}{meta.root_body}"
+        root_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, root_body_name)
+        if root_body_id < 0:
+            raise RuntimeError(f"Compiled MuJoCo model is missing robot root body '{root_body_name}'.")
+
+        tag_compiled_robot_geom_groups(model, root_body_id)
+        return model

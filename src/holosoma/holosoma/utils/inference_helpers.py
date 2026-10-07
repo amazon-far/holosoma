@@ -3,14 +3,14 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Tuple
+from typing import Any, Mapping, Sequence, Tuple, cast
 
 import onnx
 import torch
 
 from holosoma.config_types.robot import RobotConfig
 from holosoma.envs.base_task.base_task import BaseTask
-from holosoma.utils.module_utils import get_holosoma_root
+from holosoma.utils.path import resolve_asset_path
 
 
 def _find_input_dim_from_module(module: torch.nn.Module) -> int:
@@ -22,22 +22,22 @@ def _find_input_dim_from_module(module: torch.nn.Module) -> int:
     if hasattr(module, "actor_module") and hasattr(module.actor_module, "module"):
         core_model = module.actor_module.module
         if hasattr(core_model[0], "in_features"):
-            return core_model[0].in_features
+            return cast("int", core_model[0].in_features)
 
     # Strategy 2: FastSAC/FastTD3-style - .net attribute
     if hasattr(module, "net") and len(module.net) > 0:
         if hasattr(module.net[0], "in_features"):
-            return module.net[0].in_features
+            return cast("int", module.net[0].in_features)
 
     # Strategy 3: Find first Linear layer in module tree
     for submodule in module.modules():
         if isinstance(submodule, torch.nn.Linear):
-            return submodule.in_features
+            return cast("int", submodule.in_features)
 
     raise ValueError(f"Cannot determine input dimension from module: {type(module)}")
 
 
-def _extract_actor_model_and_input_dim(actor_wrapper) -> Tuple[torch.nn.Module, int]:
+def _extract_actor_model_and_input_dim(actor_wrapper: Any) -> Tuple[torch.nn.Module, int]:
     """Extracts the underlying actor model and input dimension from various actor wrapper types.
 
     This function handles the complete actor pipeline including observation normalization.
@@ -87,7 +87,7 @@ def _extract_actor_model_and_input_dim(actor_wrapper) -> Tuple[torch.nn.Module, 
     return inner_actor, input_dim
 
 
-def export_policy_as_onnx(wrapper, onnx_file_path: str, example_obs_dict):
+def export_policy_as_onnx(wrapper: torch.nn.Module, onnx_file_path: str, example_obs_dict: Mapping[str, Any]) -> None:
     # Ensure parent directory exists
     os.makedirs(Path(onnx_file_path).parent, exist_ok=True)
     example_input_list = example_obs_dict["actor_obs"]
@@ -112,7 +112,13 @@ def export_policy_as_onnx(wrapper, onnx_file_path: str, example_obs_dict):
     )
 
 
-def export_multi_agent_decouple_policy_as_onnx(wrapper, path, exported_policy_name, example_obs_dict, config):
+def export_multi_agent_decouple_policy_as_onnx(
+    wrapper: torch.nn.Module,
+    path: str,
+    exported_policy_name: str,
+    example_obs_dict: Mapping[str, Any],
+    config: Any,
+) -> None:
     os.makedirs(path, exist_ok=True)
     path = os.path.join(path, exported_policy_name)
     body_keys = config.robot.get("body_keys", ["lower_body", "upper_body"])
@@ -140,7 +146,7 @@ def export_multi_agent_decouple_policy_as_onnx(wrapper, path, exported_policy_na
 
 
 class _OnnxMotionPolicyExporter(torch.nn.Module):
-    def __init__(self, motion_command, actor, device):
+    def __init__(self, motion_command: Any, actor: Any, device: str | torch.device) -> None:
         super().__init__()
         self.device = device
         # Extract the underlying actor model and input dimension generically
@@ -166,15 +172,15 @@ class _OnnxMotionPolicyExporter(torch.nn.Module):
 
         self.time_step_total = self.joint_pos.shape[0]
 
-    def _create_actor_wrapper(self, actor_model):
+    def _create_actor_wrapper(self, actor_model: torch.nn.Module) -> torch.nn.Module:
         """Creates a wrapper that normalizes actor output to just return actions."""
 
         class ActorWrapper(torch.nn.Module):
-            def __init__(self, actor):
+            def __init__(self, actor: torch.nn.Module) -> None:
                 super().__init__()
                 self.actor = actor
 
-            def forward(self, x):
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
                 output = self.actor(x)
                 # Handle different return signatures:
                 # - PPO Sequential: returns tensor directly
@@ -187,7 +193,9 @@ class _OnnxMotionPolicyExporter(torch.nn.Module):
 
         return ActorWrapper(actor_model)
 
-    def forward(self, x, time_step):
+    def forward(
+        self, x: torch.Tensor, time_step: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         time_step_clamped = torch.clamp(time_step.long().squeeze(-1), max=self.time_step_total - 1)
         return (
             self._wrapped_actor(x),
@@ -197,7 +205,7 @@ class _OnnxMotionPolicyExporter(torch.nn.Module):
             self.ref_body_quat_w[time_step_clamped],
         )
 
-    def export(self, onnx_file_path: str):
+    def export(self, onnx_file_path: str) -> None:
         onnx_file_dir = os.path.dirname(onnx_file_path)
         os.makedirs(onnx_file_dir, exist_ok=True)
         self.to("cpu")
@@ -222,7 +230,7 @@ def export_motion_and_policy_as_onnx(
     motion_command: object,
     onnx_file_path: str,
     device: str,
-):
+) -> None:
     policy_exporter = _OnnxMotionPolicyExporter(motion_command, actor, device)
     policy_exporter.export(onnx_file_path)
 
@@ -276,13 +284,13 @@ def get_control_gains_from_config(robot_config: RobotConfig) -> tuple[list[float
     return kp_list, kd_list
 
 
-def get_command_ranges_from_env(env: BaseTask) -> dict | None:
+def get_command_ranges_from_env(env: BaseTask) -> dict[str, Sequence[float]] | None:
     """Extract command limits from env command manager."""
 
     if env.command_manager is not None:
         locomotion_cmd = env.command_manager.get_state("locomotion_command")
         if locomotion_cmd is not None and hasattr(locomotion_cmd, "command_ranges"):
-            return locomotion_cmd.command_ranges
+            return cast("dict[str, Sequence[float]]", locomotion_cmd.command_ranges)
     return None
 
 
@@ -294,11 +302,6 @@ def get_urdf_text_from_robot_config(robot_config: RobotConfig) -> tuple[str, str
     tuple[str, str]
         (urdf_file_path, urdf_str) - Path to URDF file and its contents
     """
-    asset_root = robot_config.asset.asset_root
-    if asset_root.startswith("@holosoma/"):
-        asset_root = asset_root.replace("@holosoma", get_holosoma_root())
-
-    asset_file = robot_config.asset.urdf_file
-    urdf_file_path = os.path.join(asset_root, asset_file)
+    urdf_file_path = resolve_asset_path(robot_config.asset.urdf_file, robot_config.asset.asset_root)
     urdf_str = Path(urdf_file_path).read_text(encoding="utf-8")
     return urdf_file_path, urdf_str

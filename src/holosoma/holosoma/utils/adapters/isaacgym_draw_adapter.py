@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-import numpy as np
+import numpy.typing as npt
 from isaacgym import gymapi, gymutil
 
 if TYPE_CHECKING:
@@ -17,13 +17,13 @@ def clear_lines(simulator: IsaacGym) -> None:
 
 def draw_sphere(
     simulator: IsaacGym,
-    pos: list[float] | tuple[float, float, float] | np.ndarray,
+    pos: list[float] | tuple[float, float, float] | npt.NDArray[Any],
     radius: float,
     color: list[float] | tuple[float, float, float],
     env_id: int,
     pos_id: int | None = None,
-    num_lats=8,
-    num_lons=8,
+    num_lats: int = 8,
+    num_lons: int = 8,
 ) -> None:
     """Draw a wireframe sphere at the specified position."""
     sphere_geom = gymutil.WireframeSphereGeometry(radius, num_lats, num_lons, None, color=color)
@@ -33,8 +33,8 @@ def draw_sphere(
 
 def draw_line(
     simulator: IsaacGym,
-    start_point: list[float] | tuple[float, float, float] | np.ndarray,
-    end_point: list[float] | tuple[float, float, float] | np.ndarray,
+    start_point: list[float] | tuple[float, float, float] | npt.NDArray[Any],
+    end_point: list[float] | tuple[float, float, float] | npt.NDArray[Any],
     color: list[float] | tuple[float, float, float],
     env_id: int,
 ) -> None:
@@ -47,9 +47,9 @@ def draw_line(
 
 def draw_points(
     simulator: IsaacGym,
-    points: list[list[float]] | list[tuple[float, float, float]] | np.ndarray,
-    colors: list[list[float]] | list[tuple[float, float, float]] | np.ndarray,
-    sizes: list[float] | np.ndarray,
+    points: list[list[float]] | list[tuple[float, float, float]] | npt.NDArray[Any],
+    colors: list[list[float]] | list[tuple[float, float, float]] | npt.NDArray[Any],
+    sizes: list[float] | npt.NDArray[Any],
     env_id: int,
 ) -> None:
     """Draw points at the specified positions."""
@@ -62,9 +62,9 @@ def draw_points(
 
 def draw_height_points(
     simulator: IsaacGym,
-    base_pos: list[float] | tuple[float, float, float] | np.ndarray,
-    height_points: np.ndarray,
-    heights: np.ndarray,
+    base_pos: list[float] | tuple[float, float, float] | npt.NDArray[Any],
+    height_points: npt.NDArray[Any],
+    heights: npt.NDArray[Any],
     env_id: int,
     point_color: list[float] | tuple[float, float, float] = (1, 1, 0),
     point_size: float = 0.02,
@@ -88,7 +88,7 @@ def draw_height_points(
 
 def draw_foot_height_points(
     simulator: IsaacGym,
-    foot_pos: list[float] | tuple[float, float, float] | np.ndarray,
+    foot_pos: list[float] | tuple[float, float, float] | npt.NDArray[Any],
     terrain_height: float,
     env_id: int,
     foot_color: list[float] | tuple[float, float, float] = (1, 0, 0),

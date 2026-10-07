@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import importlib
-from typing import Any, Type
+from typing import Any, Type, cast
 
 from holosoma.utils.safe_torch_import import torch
 
@@ -28,7 +28,7 @@ def get_class(path: str) -> Type[Any]:
     """
     module_path, class_name = path.rsplit(".", 1)
     module = importlib.import_module(module_path)
-    return getattr(module, class_name)
+    return cast("Type[Any]", getattr(module, class_name))
 
 
 def instantiate(config: Any, **kwargs: Any) -> Any:
@@ -80,14 +80,14 @@ def instantiate(config: Any, **kwargs: Any) -> Any:
     return target_class(**merged_kwargs)
 
 
-def class_to_dict(obj) -> dict:
+def class_to_dict(obj: Any) -> Any:
     if not hasattr(obj, "__dict__"):
         return obj
     result = {}
     for key in dir(obj):
         if key.startswith("_"):
             continue
-        element: list | dict
+        element: list[Any] | dict[str, Any]
         val = getattr(obj, key)
         if isinstance(val, list):
             element = []

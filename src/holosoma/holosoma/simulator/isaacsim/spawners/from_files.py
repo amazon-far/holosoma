@@ -50,6 +50,8 @@ schema handling. This is a temporary work-around until IsaacLab has these capabi
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import isaacsim.core.utils.prims as prim_utils
 import isaacsim.core.utils.stage as stage_utils
 import omni.kit.commands
@@ -65,7 +67,14 @@ from holosoma.simulator.isaacsim.prim_utils import set_instanceable
 import carb
 
 
-def create_prim(target_path, usd_path, source_path=None, translation=None, orientation=None, scale=None):
+def create_prim(
+    target_path: str,
+    usd_path: str,
+    source_path: str | None = None,
+    translation: Sequence[float] | None = None,
+    orientation: Sequence[float] | None = None,
+    scale: Sequence[float] | None = None,
+) -> Usd.Prim | None:
     """Create a prim at the target path by referencing a USD file.
 
     Parameters
@@ -221,7 +230,7 @@ def _collapse_to_single_rigid_body(stage: "Usd.Stage", prim_path: str) -> None:
         )
 
 
-def _assert_asset_composed(stage: "Usd.Stage", prim_path: str, usd_path: str, source_path: str) -> None:
+def _assert_asset_composed(stage: "Usd.Stage", prim_path: str, usd_path: str, source_path: str | None) -> None:
     """Fail loud if the referenced asset composed no renderable geometry or has dangling material bindings.
 
     The load-bearing guard against silent-invisible assets: referencing the wrong prim (an interior

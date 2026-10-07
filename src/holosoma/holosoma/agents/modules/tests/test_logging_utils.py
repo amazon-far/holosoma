@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from collections.abc import Iterator
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,20 +12,20 @@ from holosoma.agents.modules.logging_utils import LoggingHelper
 
 
 @pytest.fixture
-def mock_writer():
+def mock_writer() -> MagicMock:
     """Fixture providing a mock SummaryWriter."""
     return MagicMock(spec=SummaryWriter)
 
 
 @pytest.fixture
-def mock_wandb():
+def mock_wandb() -> Iterator[MagicMock]:
     """Fixture providing mocked wandb module."""
     with patch("holosoma.agents.modules.logging_utils.wandb") as mock_wandb:
         yield mock_wandb
 
 
 @pytest.fixture
-def logging_helper(mock_writer):
+def logging_helper(mock_writer: MagicMock) -> LoggingHelper:
     """Fixture providing a LoggingHelper instance with default parameters."""
     return LoggingHelper(
         writer=mock_writer,
@@ -34,7 +38,7 @@ def logging_helper(mock_writer):
 
 
 @pytest.fixture
-def prefixed_logging_helper(mock_writer):
+def prefixed_logging_helper(mock_writer: MagicMock) -> LoggingHelper:
     """Fixture providing a LoggingHelper instance with a prefix."""
     return LoggingHelper(
         writer=mock_writer,
@@ -47,7 +51,9 @@ def prefixed_logging_helper(mock_writer):
     )
 
 
-def test_prefix_in_logging(prefixed_logging_helper, mock_writer, mock_wandb):
+def test_prefix_in_logging(
+    prefixed_logging_helper: LoggingHelper, mock_writer: MagicMock, mock_wandb: MagicMock
+) -> None:
     """Test that the prefix is properly added to all logged metrics."""
     # Add episode info
     prefixed_logging_helper.ep_infos = [{"test_metric": torch.tensor([1.0], device=prefixed_logging_helper.device)}]
@@ -76,7 +82,7 @@ def test_prefix_in_logging(prefixed_logging_helper, mock_writer, mock_wandb):
         assert expected in actual_calls
 
 
-def test_no_prefix_logging(logging_helper, mock_writer, mock_wandb):
+def test_no_prefix_logging(logging_helper: LoggingHelper, mock_writer: MagicMock, mock_wandb: MagicMock) -> None:
     """Test that logging works correctly without a prefix."""
     # Add episode info
     logging_helper.ep_infos = [{"test_metric": torch.tensor([1.0], device=logging_helper.device)}]
@@ -105,7 +111,7 @@ def test_no_prefix_logging(logging_helper, mock_writer, mock_wandb):
         assert expected in actual_calls
 
 
-def test_episode_stats_update(logging_helper):
+def test_episode_stats_update(logging_helper: LoggingHelper) -> None:
     """Test that episode statistics are properly updated."""
     # Create test data
     rewards = torch.tensor([1.0, 2.0], device=logging_helper.device)
@@ -142,7 +148,7 @@ def test_episode_stats_update(logging_helper):
     assert logging_helper.raw_ep_infos[0]["raw_test_metric"].item() == 2.0
 
 
-def test_wandb_logging(prefixed_logging_helper, mock_wandb):
+def test_wandb_logging(prefixed_logging_helper: LoggingHelper, mock_wandb: MagicMock) -> None:
     """Test that metrics are properly logged to wandb when available."""
     # Add some episode info to avoid empty list error
     prefixed_logging_helper.ep_infos = [{"test_metric": torch.tensor([1.0], device=prefixed_logging_helper.device)}]
@@ -167,7 +173,9 @@ def test_wandb_logging(prefixed_logging_helper, mock_wandb):
     assert logged_data["global_step"] == 0
 
 
-def test_save_checkpoint_artifact(prefixed_logging_helper, mock_wandb, tmp_path):
+def test_save_checkpoint_artifact(
+    prefixed_logging_helper: LoggingHelper, mock_wandb: MagicMock, tmp_path: Path
+) -> None:
     """Test that checkpoints are properly saved and logged to wandb."""
     # Create a temporary directory for the test
     log_dir = tmp_path / "test_logs"

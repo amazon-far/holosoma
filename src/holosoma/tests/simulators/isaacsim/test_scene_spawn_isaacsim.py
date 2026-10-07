@@ -11,6 +11,7 @@ shape IsaacSim supports — it loads USD and URDF:
   - 1->1 free object w/ initial velocity   (velocity-box)
   - 1->N scene file, file-default types    (multibody, USD path)
   - 1->N scene file, per-object override   (multibody-override, USD path)
+  - launcher settings + default sun enabled/disabled read-back
 
 Marked ``isaacsim`` so only the IsaacSim CI job (``-m isaacsim``) collects it.
 ``importorskip("isaaclab")``/CUDA-gated so direct/
@@ -79,6 +80,42 @@ def test_friction_slide_multi_env():
         "--steps",
         "150",
         label="isaacsim/friction-slide (num_envs=4)",
+        timeout=900,
+    )
+
+
+def test_launcher_settings_and_default_sun():
+    """Read launcher settings and the default scene light back from live IsaacSim."""
+    run_harness(
+        _HARNESS,
+        "--simulator",
+        "isaacsim",
+        "--scene",
+        "g1-largebox",
+        "--probe-isaacsim-render-config",
+        "--rendering-mode",
+        "quality",
+        "--kit-arg-sentinel",
+        "pr22-audit",
+        "--scene-lights",
+        "default",
+        label="isaacsim/render-config defaults",
+        timeout=900,
+    )
+
+
+def test_default_sun_can_be_disabled():
+    """An empty rig removes the default sun's prim from the composed stage."""
+    run_harness(
+        _HARNESS,
+        "--simulator",
+        "isaacsim",
+        "--scene",
+        "g1-largebox",
+        "--probe-isaacsim-render-config",
+        "--scene-lights",
+        "empty",
+        label="isaacsim/render-config default sun disabled",
         timeout=900,
     )
 

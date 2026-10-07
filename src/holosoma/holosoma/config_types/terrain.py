@@ -50,7 +50,7 @@ class MeshType(str, Enum):
         """Return hash of the enum value for use in sets and as dict keys."""
         return hash(self.value)
 
-    def __eq__(self, other) -> bool:
+    def __eq__(self, other: object) -> bool:
         """Enable comparison with strings for backward compatibility."""
         if isinstance(other, str):
             return self.value == other

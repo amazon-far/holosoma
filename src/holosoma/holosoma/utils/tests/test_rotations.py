@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import numpy as np
 import pytest
 import torch
@@ -17,7 +19,7 @@ from holosoma.utils.rotations import (
 
 
 @pytest.fixture
-def test_angles():
+def test_angles() -> list[list[float]]:
     return [
         [0.5, 0.3, 1.0],  # random angles
         [0.0, 0.0, 1.0],  # pure yaw
@@ -27,7 +29,7 @@ def test_angles():
 
 
 @pytest.fixture
-def test_vecs():
+def test_vecs() -> list[list[float]]:
     return [
         [1.0, 0.0, 0.0],
         [0.2, 0.3, 0.4],
@@ -36,7 +38,7 @@ def test_vecs():
     ]
 
 
-def test_quat_yaw(test_angles):
+def test_quat_yaw(test_angles: list[list[float]]) -> None:
     for euler in test_angles:
         rot = Rotation.from_euler("xyz", euler, degrees=False)
         quat_scipy = rot.as_quat()
@@ -55,7 +57,7 @@ def test_quat_yaw(test_angles):
         assert np.allclose(euler_yaw[1], 0.0, atol=1e-6), f"Test failed: {euler_yaw} != 0.0"
 
 
-def test_quat_apply_yaw(test_angles, test_vecs):
+def test_quat_apply_yaw(test_angles: list[list[float]], test_vecs: list[list[float]]) -> None:
     for euler, vec in zip(test_angles, test_vecs):
         quat = Rotation.from_euler("xyz", euler, degrees=False).as_quat()
         quat_torch = torch.tensor(quat).unsqueeze(0).float()
@@ -77,7 +79,7 @@ def test_quat_apply_yaw(test_angles, test_vecs):
 
 
 @pytest.fixture
-def quaternion_data():
+def quaternion_data() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     # Create some test quaternions
     q1 = torch.tensor([0.5, 0.5, 0.5, 0.5], dtype=torch.float32)  # Unit quaternion
     q2 = torch.tensor([0.3, 0.4, 0.5, 0.6], dtype=torch.float32)  # Non-unit quaternion
@@ -85,7 +87,7 @@ def quaternion_data():
     return q1, q2, v
 
 
-def test_quat_mul_properties(quaternion_data):
+def test_quat_mul_properties(quaternion_data: tuple[torch.Tensor, torch.Tensor, torch.Tensor]) -> None:
     q1, q2, _ = quaternion_data
 
     # Test associativity
@@ -100,7 +102,7 @@ def test_quat_mul_properties(quaternion_data):
     assert torch.allclose(quat_mul(identity, q1, w_last=True), q1)
 
 
-def test_quat_apply_vs_rotate(quaternion_data):
+def test_quat_apply_vs_rotate(quaternion_data: tuple[torch.Tensor, torch.Tensor, torch.Tensor]) -> None:
     q, _, v = quaternion_data
 
     # Reshape quaternion to match expected dimensions [1, 4]
@@ -117,7 +119,7 @@ def test_quat_apply_vs_rotate(quaternion_data):
     assert torch.allclose(torch.norm(rotated, dim=-1), torch.tensor(1.0), atol=1e-6)
 
 
-def test_quat_conjugate_properties(quaternion_data):
+def test_quat_conjugate_properties(quaternion_data: tuple[torch.Tensor, torch.Tensor, torch.Tensor]) -> None:
     q, _, _ = quaternion_data
 
     # Test conjugate properties
@@ -129,7 +131,7 @@ def test_quat_conjugate_properties(quaternion_data):
     assert torch.allclose(quat_conjugate(conj, w_last=True), q)
 
 
-def test_quat_unit_normalization(quaternion_data):
+def test_quat_unit_normalization(quaternion_data: tuple[torch.Tensor, torch.Tensor, torch.Tensor]) -> None:
     _, q2, _ = quaternion_data
 
     # Test that output is unit quaternion
@@ -141,7 +143,7 @@ def test_quat_unit_normalization(quaternion_data):
     assert torch.allclose(quat_unit(q1), q1)
 
 
-def test_quat_from_angle_axis_rotation():
+def test_quat_from_angle_axis_rotation() -> None:
     # Test rotation around x-axis
     angle = torch.tensor(np.pi / 2, dtype=torch.float32)
     axis = torch.tensor([1.0, 0.0, 0.0], dtype=torch.float32)
@@ -157,7 +159,7 @@ def test_quat_from_angle_axis_rotation():
     assert torch.allclose(rotated, expected, atol=1e-6)
 
 
-def test_normalize_angle_range():
+def test_normalize_angle_range() -> None:
     # Test normalization to [-pi, pi]
     angles = torch.tensor([3 * np.pi, -3 * np.pi, np.pi / 2, -np.pi / 2], dtype=torch.float32)
     normalized = normalize_angle(angles)

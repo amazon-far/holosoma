@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -15,7 +16,7 @@ from holosoma.managers.curriculum.base import CurriculumTermBase
 class AverageEpisodeLengthTracker(CurriculumTermBase):
     """Track moving average of episode length for locomotion tasks."""
 
-    def __init__(self, cfg: Any, env: Any):
+    def __init__(self, cfg: Any, env: Any) -> None:
         super().__init__(cfg, env)
         params = cfg.params or {}
         base_num_compute_average_epl = float(params.get("num_compute_average_epl", 1000))
@@ -29,7 +30,7 @@ class AverageEpisodeLengthTracker(CurriculumTermBase):
             float(self.average_episode_length), device=self.env.device, dtype=torch.float
         )
 
-    def reset(self, env_ids) -> None:
+    def reset(self, env_ids: Any) -> None:
         if env_ids is None:
             return
 
@@ -112,7 +113,7 @@ class PenaltyCurriculum(CurriculumTermBase):
     increase to refine behavior.
     """
 
-    def __init__(self, cfg: Any, env: Any):
+    def __init__(self, cfg: Any, env: Any) -> None:
         super().__init__(cfg, env)
 
         # Get parameters from config
@@ -166,7 +167,7 @@ class PenaltyCurriculum(CurriculumTermBase):
         self.env.use_reward_penalty_curriculum = True
         self.env.reward_penalty_scale = self.current_scale
 
-    def reset(self, env_ids) -> None:
+    def reset(self, env_ids: torch.Tensor | Sequence[int] | None) -> None:
         """Update penalty scale based on average episode length."""
         if not self.enabled or not hasattr(self.env, "reward_manager"):
             return
@@ -227,7 +228,7 @@ class PenaltyCurriculum(CurriculumTermBase):
 
 
 def configure_reward_penalty(
-    env,
+    env: Any,
     *,
     enabled: bool = True,
     tag: str = "penalty_curriculum",
@@ -299,7 +300,7 @@ def configure_reward_penalty(
     env.reward_penalty_scale = float(initial_scale)
 
 
-def update_reward_penalty(env, env_ids, **_) -> None:
+def update_reward_penalty(env: Any, env_ids: Any, **_: Any) -> None:
     """Update penalty scale based on average episode length.
 
     Modifies reward term weights directly in the reward manager.
@@ -346,7 +347,7 @@ def update_reward_penalty(env, env_ids, **_) -> None:
         env.log_dict["penalty_scale"] = torch.tensor(env.reward_penalty_scale, dtype=torch.float)
 
 
-def clamp_reward_penalty(env, **_) -> None:
+def clamp_reward_penalty(env: Any, **_: Any) -> None:
     """Ensure penalty scale stays within configured bounds each step.
 
     Re-applies clamping to reward weights in case of any drift.

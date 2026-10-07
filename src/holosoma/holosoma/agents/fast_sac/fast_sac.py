@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -156,7 +158,7 @@ class Actor(nn.Module):
 
 
 class CNNActor(Actor):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
 
     def setup_network(self) -> None:
@@ -394,7 +396,7 @@ class Critic(nn.Module):
 
 
 class CNNCritic(Critic):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
 
     def setup_qnetworks(self) -> None:

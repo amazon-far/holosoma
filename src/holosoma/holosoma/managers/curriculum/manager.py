@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ItemsView
 
 from holosoma.config_types.curriculum import CurriculumManagerCfg, CurriculumTermCfg
 from holosoma.managers.utils import resolve_callable
@@ -129,7 +129,7 @@ class CurriculumManager:
                 func = self._setup_funcs[term_name]
                 func(self.env, **term_cfg.params)
 
-    def reset(self, env_ids) -> None:
+    def reset(self, env_ids: Any) -> None:
         """Run reset hooks.
 
         Automatically calls ``reset()`` on all class-based curriculum terms, then executes reset functions.
@@ -168,6 +168,6 @@ class CurriculumManager:
         """Return the instantiated curriculum term by name, if available."""
         return self._class_terms.get(name)
 
-    def iter_terms(self):
+    def iter_terms(self) -> ItemsView[str, CurriculumTermBase]:
         """Iterate over registered class-based curriculum terms."""
         return self._class_terms.items()

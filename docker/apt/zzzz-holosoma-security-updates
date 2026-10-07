@@ -1,0 +1,16 @@
+// Do not inherit unattended-upgrade origins from upstream images.
+#clear Unattended-Upgrade::Allowed-Origins;
+#clear Unattended-Upgrade::Origins-Pattern;
+
+Unattended-Upgrade::Allowed-Origins {
+    // Security updates may require new dependencies from the release pocket.
+    "${distro_id}:${distro_codename}";
+    "${distro_id}:${distro_codename}-security";
+    "${distro_id}ESMApps:${distro_codename}-apps-security";
+    "${distro_id}ESM:${distro_codename}-infra-security";
+};
+
+// Images are refreshed during builds, never while a container is running.
+APT::Periodic::Enable "0";
+APT::Periodic::Update-Package-Lists "0";
+APT::Periodic::Unattended-Upgrade "0";

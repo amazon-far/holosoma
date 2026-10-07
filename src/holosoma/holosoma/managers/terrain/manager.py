@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from holosoma.config_types.terrain import TerrainManagerCfg
 from holosoma.managers.utils import resolve_callable
 
 from .base import TerrainTermBase
+
+if TYPE_CHECKING:
+    from holosoma.utils.safe_torch_import import torch
 
 
 class TerrainManager:
@@ -40,7 +43,7 @@ class TerrainManager:
         """
         self.terrain_term.setup()
 
-    def update_heights(self, env_ids=None) -> None:
+    def update_heights(self, env_ids: torch.Tensor | None = None) -> None:
         self.terrain_term.update_heights(env_ids)
 
     def get_state(self, term_name: str) -> TerrainTermBase:

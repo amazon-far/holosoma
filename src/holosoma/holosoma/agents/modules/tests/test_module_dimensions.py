@@ -6,6 +6,10 @@ This test suite verifies that:
 3. Network input dimensions match what is stored in replay buffers/storage
 """
 
+from __future__ import annotations
+
+from typing import cast
+
 import pytest
 import torch
 
@@ -14,7 +18,7 @@ from holosoma.config_types.algo import LayerConfig, ModuleConfig
 
 
 @pytest.fixture
-def simple_module_config():
+def simple_module_config() -> ModuleConfig:
     """Create a simple MLP module configuration."""
     layer_config = LayerConfig(
         hidden_dims=[256, 128],
@@ -29,7 +33,7 @@ def simple_module_config():
     )
 
 
-def test_base_module_input_dim_with_history(simple_module_config):
+def test_base_module_input_dim_with_history(simple_module_config: ModuleConfig) -> None:
     """Test that BaseModule doesn't multiply by history when obs_dim_dict already includes it."""
     # Simulate obs_dim_dict from observation_manager.get_obs_dims()
     # which already includes history (e.g., 100 single-frame * 4 history = 400)
@@ -54,7 +58,7 @@ def test_base_module_input_dim_with_history(simple_module_config):
     )
 
 
-def test_base_module_input_dim_multiple_keys():
+def test_base_module_input_dim_multiple_keys() -> None:
     """Test input dimension calculation with multiple observation keys."""
     # Create config with multiple input keys
     layer_config = LayerConfig(
@@ -93,7 +97,7 @@ def test_base_module_input_dim_multiple_keys():
 # and numeric inputs don't seem to be used in practice
 
 
-def test_base_module_input_slices():
+def test_base_module_input_slices() -> None:
     """Test that input slices are correctly computed."""
     layer_config = LayerConfig(
         hidden_dims=[256, 128],
@@ -128,7 +132,7 @@ def test_base_module_input_slices():
     assert module.input_indices_dict["obs_b"] == slice(100, 300)
 
 
-def test_base_module_network_creation(simple_module_config):
+def test_base_module_network_creation(simple_module_config: ModuleConfig) -> None:
     """Test that the network is created with correct input/output dimensions."""
     obs_dim_dict = {"actor_obs": 400}
     history_length = {"actor_obs": 4}
@@ -143,17 +147,17 @@ def test_base_module_network_creation(simple_module_config):
     assert hasattr(module, "module")
 
     # Verify the first layer has correct input dimension
-    first_layer = module.module[0]
+    first_layer = cast("torch.nn.Sequential", module.module)[0]
     assert isinstance(first_layer, torch.nn.Linear)
     assert first_layer.in_features == 400
 
     # Verify the last layer has correct output dimension
-    last_layer = module.module[-1]
+    last_layer = cast("torch.nn.Sequential", module.module)[-1]
     assert isinstance(last_layer, torch.nn.Linear)
     assert last_layer.out_features == 10
 
 
-def test_base_module_forward_pass(simple_module_config):
+def test_base_module_forward_pass(simple_module_config: ModuleConfig) -> None:
     """Test that forward pass works with correct dimensions."""
     obs_dim_dict = {"actor_obs": 400}
     history_length = {"actor_obs": 4}
@@ -169,7 +173,7 @@ def test_base_module_forward_pass(simple_module_config):
     input_tensor = torch.randn(batch_size, 400)
 
     # Forward pass
-    output = module.module(input_tensor)
+    output = cast("torch.nn.Sequential", module.module)(input_tensor)
 
     # Check output shape
     assert output.shape == (batch_size, 10)
@@ -186,7 +190,9 @@ def test_base_module_forward_pass(simple_module_config):
         (4, 200),
     ],
 )
-def test_various_history_configurations(simple_module_config, history_length, single_frame_dim):
+def test_various_history_configurations(
+    simple_module_config: ModuleConfig, history_length: int, single_frame_dim: int
+) -> None:
     """Test module creation with various history length and dimension combinations."""
     obs_dim_with_history = single_frame_dim * history_length
 
@@ -205,11 +211,11 @@ def test_various_history_configurations(simple_module_config, history_length, si
     # Test forward pass
     batch_size = 8
     input_tensor = torch.randn(batch_size, obs_dim_with_history)
-    output = module.module(input_tensor)
+    output = cast("torch.nn.Sequential", module.module)(input_tensor)
     assert output.shape == (batch_size, 10)
 
 
-def test_consistency_with_storage_dimensions():
+def test_consistency_with_storage_dimensions() -> None:
     """Test that module dimensions match what PPO storage would expect.
 
     This simulates the scenario where:
@@ -255,7 +261,7 @@ def test_consistency_with_storage_dimensions():
     # And forward pass should work with this dimension
     batch_size = 16
     observation = torch.randn(batch_size, storage_dim)
-    output = module.module(observation)
+    output = cast("torch.nn.Sequential", module.module)(observation)
     assert output.shape == (batch_size, 10)
 
 

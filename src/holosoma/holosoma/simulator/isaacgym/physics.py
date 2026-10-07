@@ -13,7 +13,44 @@ from isaacgym import gymapi
 from loguru import logger
 
 if TYPE_CHECKING:
+    from holosoma.config_types.robot import RobotAssetConfig
     from holosoma.config_types.scene import PhysicsConfig
+
+
+def build_robot_asset_options(asset_cfg: RobotAssetConfig) -> gymapi.AssetOptions:
+    """Build the ``gymapi.AssetOptions`` for loading the robot URDF from its config.
+
+    Copies the import knobs that live on ``RobotAssetConfig`` (no ``PhysicsConfig`` analogue)
+    onto a fresh ``AssetOptions``, leaving each at its gym default when the config value is
+    ``None``, then folds in ``density`` + the PhysX solver knobs from the shared
+    ``link_physics`` via :func:`apply_physx_asset_options` (the same mapping the object path
+    uses). Pure config -> options; the caller performs the actual ``load_asset``.
+    """
+    asset_options = gymapi.AssetOptions()
+
+    def set_value_if_not_none(prev_value: Any, new_value: Any) -> Any:
+        return new_value if new_value is not None else prev_value
+
+    # Asset-import knobs that stay on RobotAssetConfig (no PhysicsConfig analogue).
+    asset_config_options = [
+        "default_dof_drive_mode",
+        "collapse_fixed_joints",
+        "replace_cylinder_with_capsule",
+        "flip_visual_attachments",
+        "fix_base_link",
+        "armature",
+        "thickness",
+        "disable_gravity",
+    ]
+    for option in asset_config_options:
+        option_value = set_value_if_not_none(getattr(asset_options, option), getattr(asset_cfg, option))
+        setattr(asset_options, option, option_value)
+
+    # density + the PhysX solver knobs (damping / velocity caps) come from the shared link_physics
+    # via the same helper the object path uses, so a robot link and a scene object map the
+    # physx/density load-time options identically. None keeps defaults.
+    apply_physx_asset_options(asset_options, asset_cfg.link_physics)
+    return asset_options
 
 
 def apply_physx_asset_options(target: Any, physics: PhysicsConfig | None) -> None:

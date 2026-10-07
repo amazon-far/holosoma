@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Callable, cast
 
 import pytest
 
+from holosoma.config_types.experiment import TrainingConfig
+from holosoma.config_types.logger import DisabledLoggerConfig
 from holosoma.config_types.plugin import NoOpPluginConfig, PluginConfig
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
@@ -29,7 +32,7 @@ class _FakeSimulator:
 
 
 def _build_plugins(sim: _FakeSimulator, configs: dict[str, PluginConfig]) -> dict[str, Any]:
-    """Mirror BaseSimulator.__init__'s plugin construction (cls(cfg, sim)) for the fake sim."""
+    """Mirror BaseSimulator.install_plugins construction (cls(cfg, sim)) for the fake sim."""
     return {key: cfg.get_cls()(cfg, cast("BaseSimulator", sim)) for key, cfg in configs.items()}
 
 
@@ -56,6 +59,59 @@ class _ApplyForcePlugin:
 
     def log(self) -> None:
         self.sim.logged.append(self.cfg.ros_name)
+
+
+@dataclass(frozen=True)
+class _RenderedSensorConsumerConfig(PluginConfig):
+    def get_cls(self) -> Callable[..., Any]:
+        return _RenderedSensorConsumer
+
+
+class _RenderedSensorConsumer:
+    def __init__(self, cfg: _RenderedSensorConsumerConfig, simulator: BaseSimulator) -> None:
+        self.sim = cast("_InitializedFakeSim", simulator)
+        self.sim.hooks.add(Phase.FRAME_END, self.publish, name="consumer.publish")
+
+    def publish(self) -> None:
+        self.sim.events.append(f"publish:{self.sim.latest_sensor_value}")
+
+
+class _InitializedFakeSim(BaseSimulator):
+    """Minimal subclass that deliberately uses the real BaseSimulator initialization path."""
+
+    def __init__(self) -> None:
+        self.events: list[str] = []
+        self.latest_sensor_value = "stale"
+        sim_cfg = SimpleNamespace(
+            debug_viz=False,
+            sim=SimpleNamespace(
+                fps=100,
+                control_decimation_steps=2,
+                kinematic_playback=False,
+            ),
+        )
+        config = SimpleNamespace(
+            training=TrainingConfig(num_envs=1),
+            simulator=sim_cfg,
+            scene=SimpleNamespace(),
+            sensors={},
+            robot=SimpleNamespace(),
+            logger=DisabledLoggerConfig(),
+            plugin={"consumer": _RenderedSensorConsumerConfig()},
+            experiment_dir=None,
+        )
+        super().__init__(cast("Any", config), cast("Any", None), "cpu")
+
+    def render_sensors(self) -> None:
+        self.latest_sensor_value = "fresh"
+        self.events.append("render")
+
+
+def test_base_simulator_renders_sensors_before_constructed_consumer_plugin() -> None:
+    sim = _InitializedFakeSim()
+    sim.install_plugins()
+    sim.hooks.emit(Phase.FRAME_END)
+    assert sim.events == ["render", "publish:fresh"]
 
 
 def test_build_plugins_constructs_and_wires_hooks() -> None:

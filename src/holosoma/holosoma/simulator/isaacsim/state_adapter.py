@@ -7,8 +7,16 @@ format and holosoma's standard xyzw format.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 import torch
+
 from .state_utils import fullstate_wxyz_to_xyzw, fullstate_xyzw_to_wxyz
+
+if TYPE_CHECKING:
+    from holosoma.simulator.shared.object_registry import ObjectRegistry
+
+    from .proxy_utils import RootStatesProxy
 
 
 class IsaacSimStateAdapter:
@@ -32,7 +40,14 @@ class IsaacSimStateAdapter:
         Robot states proxy (already handles wxyz->xyzw conversion)
     """
 
-    def __init__(self, device: torch.device, object_registry, scene, robot, robot_states):
+    def __init__(
+        self,
+        device: torch.device,
+        object_registry: ObjectRegistry,
+        scene: Any,
+        robot: Any,
+        robot_states: RootStatesProxy,
+    ) -> None:
         self.device = device
         self._object_registry = object_registry
         self._scene = scene

@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import inspect
+from typing import TYPE_CHECKING, Sequence, cast
 
 import torch
 from torch import nn
 
 from holosoma.config_types.algo import LayerConfig, ModuleConfig
 
+if TYPE_CHECKING:
+    from types import FrameType
+
 
 class ImgChLayerNorm(nn.Module):
     """Image channel-wise layer normalization."""
 
-    def __init__(self, num_channels, eps: float = 1e-5):
+    def __init__(self, num_channels: int, eps: float = 1e-5) -> None:
         """Initialize ImgChLayerNorm module.
 
         Parameters
@@ -26,7 +30,7 @@ class ImgChLayerNorm(nn.Module):
         self.bias = nn.Parameter(torch.zeros(num_channels))
         self.eps = eps
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass for image channel-wise layer normalization.
 
         Normalizes each channel of the input tensor independently.
@@ -50,7 +54,14 @@ class ImgChLayerNorm(nn.Module):
 class CNNWrapper(nn.Module):
     """Wrapper module that handles reshaping for CNN layers when working with flattened inputs."""
 
-    def __init__(self, cnn_layers, input_channels, input_height, input_width, flatten_output=True):
+    def __init__(
+        self,
+        cnn_layers: nn.Module,
+        input_channels: int,
+        input_height: int,
+        input_width: int,
+        flatten_output: bool = True,
+    ) -> None:
         """Initialize CNNWrapper module.
 
         Wraps CNN layers to handle reshaping for CNN layers when working with flattened inputs.
@@ -78,14 +89,14 @@ class CNNWrapper(nn.Module):
         self.flatten_output = flatten_output
 
     @property
-    def output_size(self):
+    def output_size(self) -> int:
         """Computes the output size of the CNN layers by doing a forward pass with dummy data."""
         with torch.no_grad():
             dummy_input = torch.zeros(1, self.input_channels * self.input_height * self.input_width)
             dummy_output = self.forward(dummy_input)
-            return dummy_output.shape[-1]
+            return int(dummy_output.shape[-1])
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass for CNNWrapper module.
 
         Reshapes the input tensor to (batch_size, channels, height, width) and applies the CNN layers.
@@ -129,11 +140,11 @@ class CNNWrapper(nn.Module):
 
 
 def build_mlp_layer(
-    input_dim,
-    hidden_dims,
-    output_dim,
-    layer_config,
-):
+    input_dim: int,
+    hidden_dims: Sequence[int] | None,
+    output_dim: int,
+    layer_config: LayerConfig,
+) -> nn.Sequential | None:
     """Builds a multi-layer perceptron (MLP) layer.
 
     Parameters
@@ -194,7 +205,7 @@ def build_cnn_layer(
     padding: str | int | tuple[str | int, ...],
     layer_config: LayerConfig,
     flatten_output: bool = True,
-):
+) -> CNNWrapper | None:
     """Builds a convolutional neural network layer that works with flattened inputs.
 
     Parameters
@@ -259,7 +270,7 @@ def build_cnn_layer(
             raise ValueError(f"padding tuple length ({len(paddings)}) must match number of layers ({num_layers})")
 
     # Helper function to get padding value
-    def get_padding_value(padding_spec, kernel_size_val):
+    def get_padding_value(padding_spec: str | int, kernel_size_val: int) -> str | int:
         if padding_spec == "same":
             return kernel_size_val // 2
         if padding_spec == "valid":
@@ -302,7 +313,12 @@ def build_cnn_layer(
 
 
 class BaseModule(nn.Module):
-    def __init__(self, obs_dim_dict, module_config_dict, history_length: dict[str, int]):
+    def __init__(
+        self,
+        obs_dim_dict: dict[str, int],
+        module_config_dict: ModuleConfig,
+        history_length: dict[str, int],
+    ) -> None:
         super().__init__()
         self.obs_dim_dict = obs_dim_dict
         self.module_config_dict = module_config_dict
@@ -311,18 +327,18 @@ class BaseModule(nn.Module):
         self._calculate_output_dim()
         self._build_network_layer(self.module_config_dict)
 
-    def _calculate_input_dim(self):
+    def _calculate_input_dim(self) -> None:
         # calculate input dimension and input slices
         self.input_dim = 0
-        self.input_dim_dict = {}
-        self.input_indices_dict = {}
+        self.input_dim_dict: dict[str | int | float, int] = {}
+        self.input_indices_dict: dict[str | int | float, slice] = {}
 
         current_index = 0
-        for each_input in self.module_config_dict.input_dim:
+        for each_input in cast("list[str | int | float]", self.module_config_dict.input_dim):
             if each_input in self.obs_dim_dict:
                 # atomic observation type
                 # Note: obs_dim_dict already includes history, so we don't multiply by history_length
-                input_dim = self.obs_dim_dict[each_input]
+                input_dim = self.obs_dim_dict[cast("str", each_input)]
                 self.input_dim += input_dim
                 self.input_dim_dict[each_input] = input_dim
                 self.input_indices_dict[each_input] = slice(current_index, current_index + input_dim)
@@ -337,20 +353,20 @@ class BaseModule(nn.Module):
                 current_index += input_dim
 
             else:
-                current_function_name = inspect.currentframe().f_code.co_name
+                current_function_name = cast("FrameType", inspect.currentframe()).f_code.co_name
                 raise ValueError(f"{current_function_name} - Unknown input type: {each_input}")
 
-    def _calculate_output_dim(self):
+    def _calculate_output_dim(self) -> None:
         # calculate output dimension based on the output specifications
         self.output_dim = 0
         for each_output in self.module_config_dict.output_dim:
             if isinstance(each_output, (int, float)):
                 self.output_dim += each_output
             else:
-                current_function_name = inspect.currentframe().f_code.co_name
+                current_function_name = cast("FrameType", inspect.currentframe()).f_code.co_name
                 raise ValueError(f"{current_function_name} - Unknown output type: {each_output}")
 
-    def _build_network_layer(self, module_config: ModuleConfig):
+    def _build_network_layer(self, module_config: ModuleConfig) -> None:
         layer_type = module_config.type
         layer_config = module_config.layer_config
         if layer_type == "MLP":
@@ -372,6 +388,8 @@ class BaseModule(nn.Module):
                 layer_config,
                 flatten_output=True,
             )
+            if self.encoder is None:
+                raise ValueError("CNNEncoder requires layer_config.hidden_channels to be set")
             encoder_output_dim = self.encoder.output_size
             mlp_input_dim = sum(self.input_dim_dict[each_input] for each_input in layer_config.module_input_name)
             self.module = build_mlp_layer(
@@ -381,11 +399,12 @@ class BaseModule(nn.Module):
                 layer_config,
             )
         elif layer_type == "MLPEncoder":
-            encoder_output_dim = (
-                layer_config.encoder_output_dim
-                if layer_config.encoder_hidden_dims is not None
-                else self.input_dim_dict[layer_config.encoder_input_name]
-            )
+            if layer_config.encoder_hidden_dims is not None:
+                # Guaranteed non-None by LayerConfig._validate_encoder_output_dim.
+                assert layer_config.encoder_output_dim is not None
+                encoder_output_dim = layer_config.encoder_output_dim
+            else:
+                encoder_output_dim = self.input_dim_dict[layer_config.encoder_input_name]
             self.encoder = build_mlp_layer(
                 self.input_dim_dict[layer_config.encoder_input_name],
                 layer_config.encoder_hidden_dims,
@@ -402,6 +421,6 @@ class BaseModule(nn.Module):
         else:
             raise NotImplementedError(f"Unsupported layer type: {layer_type}")
 
-    def forward(self, policy_input):
+    def forward(self, policy_input: torch.Tensor) -> torch.Tensor:
         # Only forward the MLP layer
-        return self.module(policy_input)
+        return cast("nn.Sequential", self.module)(policy_input)

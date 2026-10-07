@@ -16,13 +16,15 @@ from __future__ import annotations
 import os
 from collections import Counter
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import cv2
 import numpy as np
+import numpy.typing as npt
 from loguru import logger
 
 from holosoma.config_types.frequency import is_frequency_string, resolve_decimation
+from holosoma.config_types.sensor import CameraSensorConfig
 from holosoma.simulator.plugins.camera_consumer import CameraConsumerPlugin
 from holosoma.simulator.plugins.viz.image_grid import colorize_depth, tile_images
 from holosoma.utils.video_utils import create_video
@@ -41,14 +43,16 @@ class CameraVizPlugin(CameraConsumerPlugin):
     config: CameraVizPluginConfig
 
     def __init__(self, config: CameraVizPluginConfig, simulator: BaseSimulator) -> None:
-        self._frames_video: list[np.ndarray] = []  # buffered grids for the mp4
+        self._frames_video: list[npt.NDArray[np.uint8]] = []  # buffered grids for the mp4
         self._step = -1  # batches seen (proxy for the fastest watched camera's render count)
         self._last_captured = -1
 
         # Cameras to watch: configured selection or all cameras in the active camera dict. Read the
         # sim's camera dict directly (the sensors_config property needs self.simulator, set by super
         # below — but wanted_streams runs inside super().__init__, so the panels must exist first).
-        cams_by_name = dict(simulator.sensor_config)
+        cams_by_name = {
+            name: sensor for name, sensor in simulator.sensor_config.items() if isinstance(sensor, CameraSensorConfig)
+        }
         all_cams = list(cams_by_name)
         self._cam_names = config.cameras if config.cameras is not None else all_cams
 
@@ -112,7 +116,7 @@ class CameraVizPlugin(CameraConsumerPlugin):
             return
         self._last_captured = self._step
 
-        views: list[np.ndarray] = []
+        views: list[npt.NDArray[np.uint8]] = []
         labels: list[str] = []
         for env in self._env_ids:
             for name, modality in self._panels:
@@ -121,20 +125,29 @@ class CameraVizPlugin(CameraConsumerPlugin):
                     w, h = self._cell_wh.get(name, (128, 128))
                     views.append(self._missing_tile(w, h))
                 else:
-                    img = packet.array
                     if modality == "depth":
-                        img = colorize_depth(img, self._depth_range, self.config.depth_colormap)
+                        img = colorize_depth(
+                            cast("npt.NDArray[np.float32]", packet.array),
+                            self._depth_range,
+                            self.config.depth_colormap,
+                        )
+                    else:
+                        img = cast("npt.NDArray[np.uint8]", packet.array)
                     views.append(img)
                 label = f"env{env}/{name}"
                 labels.append(f"{label}:{modality}" if name in self._multi_modality else label)
-        grid = tile_images(views, layout=(len(self._env_ids), len(self._panels)), labels=labels)  # RGB
+        # One row per env, one column per panel — except the single-env case, where a near-square
+        # layout (2x2 for 4 panels) reads better than a 1xN strip.
+        n_env, n_panel = len(self._env_ids), len(self._panels)
+        layout = None if n_env == 1 and n_panel > 2 else (n_env, n_panel)
+        grid = tile_images(views, layout=layout, labels=labels)  # RGB
 
         if self._show_live:
             self._show(grid)
         if self.config.record_video:
             self._frames_video.append(grid)
 
-    def _show(self, grid: np.ndarray) -> None:
+    def _show(self, grid: npt.NDArray[np.uint8]) -> None:
         cv2.imshow(_WINDOW, cv2.cvtColor(grid, cv2.COLOR_RGB2BGR))
         cv2.pollKey()  # non-blocking HighGUI pump (unlike waitKey(1))
         if self._window_open and cv2.getWindowProperty(_WINDOW, cv2.WND_PROP_VISIBLE) < 1:
@@ -144,11 +157,11 @@ class CameraVizPlugin(CameraConsumerPlugin):
             self._window_open = True
 
     @staticmethod
-    def _missing_tile(width: int, height: int, cell: int = 16) -> np.ndarray:
+    def _missing_tile(width: int, height: int, cell: int = 16) -> npt.NDArray[np.uint8]:
         """Source-style magenta/black 'missing texture' for a panel with no frame yet (RGB)."""
         ys = (np.arange(height) // cell)[:, None]
         xs = (np.arange(width) // cell)[None, :]
-        tile = np.zeros((height, width, 3), dtype=np.uint8)
+        tile: npt.NDArray[np.uint8] = np.zeros((height, width, 3), dtype=np.uint8)
         tile[(ys + xs) % 2 == 1] = (255, 0, 255)
         return tile
 
@@ -159,8 +172,8 @@ class CameraVizPlugin(CameraConsumerPlugin):
             fps = self.control_hz / self._frame_decimation * self.config.playback_rate
             create_video(
                 np.array(self._frames_video, dtype=np.uint8),
-                fps=fps,
-                save_dir=str(self._save_dir()),
+                fps=fps,  # type: ignore[arg-type]
+                save_dir=self._save_dir(),
                 output_format="h264",
                 wandb_logging=False,
             )

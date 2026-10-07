@@ -1,8 +1,14 @@
+from __future__ import annotations
+
 import subprocess
 import time
 import uuid
+from pathlib import Path
+from typing import Any
 
 import cv2
+import numpy as np
+import numpy.typing as npt
 import wandb
 from loguru import logger
 
@@ -21,7 +27,14 @@ def _is_wandb_available() -> bool:
         return False
 
 
-def overlay_text_on_image(image, text, position=(50, 50), font_scale=1.0, color=(255, 255, 255), thickness=2):
+def overlay_text_on_image(
+    image: npt.NDArray[np.uint8],
+    text: str,
+    position: tuple[int, int] = (50, 50),
+    font_scale: float = 1.0,
+    color: tuple[int, int, int] = (255, 255, 255),
+    thickness: int = 2,
+) -> npt.NDArray[np.uint8]:
     """Overlay text on an image using OpenCV.
 
     Args:
@@ -75,7 +88,7 @@ def overlay_text_on_image(image, text, position=(50, 50), font_scale=1.0, color=
     return image
 
 
-def format_command_labels(commands, env_id=0):
+def format_command_labels(commands: Any, env_id: int = 0) -> str:
     """Format command values as text labels for overlay on video frames.
 
     Args:
@@ -110,7 +123,14 @@ def format_command_labels(commands, env_id=0):
     return ", ".join(labels) if labels else "Commands: No data"
 
 
-def create_video(video_frames, fps, save_dir, output_format="mp4", wandb_logging=True, episode_id=None):
+def create_video(
+    video_frames: npt.NDArray[np.uint8],
+    fps: int,
+    save_dir: Path,
+    output_format: str = "mp4",
+    wandb_logging: bool = True,
+    episode_id: int | None = None,
+) -> Path | None:
     """Create video with configurable output format and destination.
 
     Handles both local saving and wandb upload based on configuration.
@@ -136,7 +156,8 @@ def create_video(video_frames, fps, save_dir, output_format="mp4", wandb_logging
     Path | None
         Path to the saved video file, or None if saving failed.
     """
-    h, w = video_frames.shape[1:3]
+    shape: tuple[int, ...] = video_frames.shape
+    h, w = shape[1], shape[2]
 
     # Ensure the directory exists
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -161,7 +182,7 @@ def create_video(video_frames, fps, save_dir, output_format="mp4", wandb_logging
 
     try:
         # Step 1: Create intermediate video with OpenCV
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # type: ignore[attr-defined]
         out = cv2.VideoWriter(str(temp_raw), fourcc, fps, (w, h))
         temp_files_to_cleanup.append(temp_raw)
 

@@ -4,6 +4,7 @@ set -e
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 ROOT_DIR=$(dirname "$SCRIPT_DIR")
+source "${SCRIPT_DIR}/versions.sh"
 
 # Venv configuration
 VENV_DIR=$ROOT_DIR/.venv/hsmujoco
@@ -82,8 +83,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Sentinel files
-SENTINEL_FILE=${VENV_DIR}/.env_uv_setup_finished_hsmujoco
-WARP_SENTINEL_FILE=${VENV_DIR}/.env_uv_setup_finished_hsmujoco_warp
+SENTINEL_FILE=${VENV_DIR}/.env_uv_setup_finished_hsmujoco_mujoco-${MUJOCO_VERSION}
+WARP_SENTINEL_FILE=${VENV_DIR}/.env_uv_setup_finished_hsmujoco_mujoco-warp-${MUJOCO_WARP_COMMIT}_warp-${WARP_LANG_VERSION}
 
 # Reinstall: remove existing venv and sentinels so all install blocks run fresh
 if [[ "$REINSTALL" == "true" ]] && [[ -d "$VENV_DIR" ]]; then
@@ -142,7 +143,7 @@ if [[ ! -f $SENTINEL_FILE ]]; then
 
   # Install MuJoCo and related packages
   echo "Installing MuJoCo Python bindings..."
-  uv pip install 'mujoco>=3.0.0'
+  uv pip install "mujoco==${MUJOCO_VERSION}"
   uv pip install mujoco-python-viewer
 
   # Install Holosoma packages
@@ -221,7 +222,11 @@ if [[ "$INSTALL_WARP" == "true" ]] && [[ ! -f $WARP_SENTINEL_FILE ]]; then
 
   echo "NVIDIA driver version: $DRIVER_VERSION (meets minimum $MIN_DRIVER_VERSION)"
 
-  uv pip install 'mujoco-warp[cuda]'
+  # Co-resolve with the numpy pin: on its own, mujoco-warp[cuda] pulls the newest jax, which
+  # requires numpy>=2 and silently upgrades past the pin the base install set.
+  uv pip install \
+    "mujoco-warp[cuda] @ git+https://github.com/google-deepmind/mujoco_warp.git@${MUJOCO_WARP_COMMIT}" \
+    "warp-lang==${WARP_LANG_VERSION}" 'numpy>=1.23.5,<2'
 
   touch $WARP_SENTINEL_FILE
 

@@ -13,6 +13,7 @@ no heavy dep; the colormap names are validated against the config layer at impor
 from __future__ import annotations
 
 import numpy as np
+import numpy.typing as npt
 
 from holosoma.config_types.plugin import _DEPTH_COLORMAPS
 
@@ -29,10 +30,10 @@ assert set(_CV2_COLORMAP_NAMES) | {"gray"} == set(_DEPTH_COLORMAPS), (
 
 
 def colorize_depth(
-    depth: np.ndarray,
+    depth: npt.NDArray[np.float32],
     depth_range: tuple[float, float] = DEFAULT_DEPTH_RANGE,
     colormap: str = "inferno",
-) -> np.ndarray:
+) -> npt.NDArray[np.uint8]:
     """Colorize a depth map (meters) to an ``HxWx3`` uint8 RGB image.
 
     Depth is float32 meters, ``+inf`` for no-hit. It is clamped to ``depth_range`` and normalized so
@@ -49,7 +50,7 @@ def colorize_depth(
     colormap : str
         ``"gray"`` for grayscale, else a name in :data:`_CV2_COLORMAP_NAMES` (default ``"inferno"``).
     """
-    dep = np.asarray(depth, dtype=np.float32)
+    dep: npt.NDArray[np.float32] = np.asarray(depth, dtype=np.float32)
     if dep.ndim == 3:
         dep = dep[..., 0]
     lo, hi = depth_range
@@ -57,7 +58,7 @@ def colorize_depth(
     dep = np.nan_to_num(dep, nan=hi, posinf=hi, neginf=hi)
     # Clamp to range, normalize to [0,1] with near->1, then to uint8 [0,255] (near bright).
     norm = 1.0 - (np.clip(dep, lo, hi) - lo) / (hi - lo)
-    gray = (norm * 255.0).round().astype(np.uint8)
+    gray: npt.NDArray[np.uint8] = (norm * 255.0).round().astype(np.uint8)
     if colormap == "gray":
         return np.repeat(gray[..., None], 3, axis=2)
 

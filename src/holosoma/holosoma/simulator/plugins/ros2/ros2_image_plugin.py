@@ -15,14 +15,21 @@ inline (lossless/every-frame). Timestamps come from the frame's sim_time, not wa
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+import threading
+from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
+from holosoma.config_types.sensor import IsaacSimCameraConfig
 from holosoma.simulator.plugins.camera_consumer import CameraConsumerPlugin, CameraIntrinsics
 from holosoma.simulator.plugins.ros2.camera_info import camera_info_from_intrinsics
 from holosoma.simulator.plugins.ros2.encode import EncodedImage, encode_frame
 from holosoma.simulator.plugins.ros2.worker import PublishWorker
+from holosoma.simulator.shared.ros2_lifecycle import (
+    close_ros2_executor,
+    get_ros2_runtime,
+    spin_executor_until_stopped,
+)
 
 if TYPE_CHECKING:
     from holosoma.config_types.plugin import ROS2ImagePluginConfig, ROS2ImageRoute
@@ -30,7 +37,7 @@ if TYPE_CHECKING:
     from holosoma.simulator.plugins.camera_consumer import FramePacket, StreamKey
 
 
-def _sim_time_to_stamp(sim_time: float):
+def _sim_time_to_stamp(sim_time: float) -> Any:
     """Build a builtin_interfaces/Time from sim seconds (deferred import; only after start())."""
     from builtin_interfaces.msg import Time
 
@@ -53,9 +60,11 @@ class ROS2ImagePlugin(CameraConsumerPlugin):
         self._node: Any = None
         self._executor: Any = None
         self._spin_thread: Any = None
+        self._spin_stop = threading.Event()
         self._publishers: dict[str, Any] = {}  # topic -> rclpy publisher
         self._info_publishers: dict[str, Any] = {}  # camera -> CameraInfo publisher (latched)
         self._workers: dict[str, PublishWorker[FramePacket]] = {}  # topic -> worker (async only)
+        self._ros2_runtime = get_ros2_runtime(simulator)
         # Validates routes against the configured cameras and registers the publish/close callbacks.
         super().__init__(config, simulator)
 
@@ -66,14 +75,24 @@ class ROS2ImagePlugin(CameraConsumerPlugin):
     # ----- lifecycle -----
 
     def start(self) -> None:
-        import rclpy
+        """Create ROS resources, rolling back partial startup on failure."""
+        self._spin_stop = threading.Event()
+        try:
+            self._start()
+        except BaseException:
+            try:
+                self.stop()
+            except Exception:
+                logger.exception("ROS2 image cleanup failed while preserving the startup error")
+            raise
+
+    def _start(self) -> None:
         from rclpy.node import Node
         from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
         from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 
-        if not rclpy.ok():
-            rclpy.init()
-        self._node = Node(self.config.node_name)
+        context = self._ros2_runtime.start()
+        self._node = Node(self.config.node_name, context=context)
         self._Image = Image
         self._CompressedImage = CompressedImage
         self._CameraInfo = CameraInfo
@@ -93,8 +112,8 @@ class ROS2ImagePlugin(CameraConsumerPlugin):
                     maxlen=self.config.queue_maxlen,
                     name=f"egress:{self.config.node_name}:{route.topic}",
                 )
-                worker.start()
                 self._workers[route.topic] = worker
+                worker.start()
 
         if self.config.publish_camera_info:
             self._start_camera_info(qos_history=HistoryPolicy.KEEP_LAST, durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -102,17 +121,20 @@ class ROS2ImagePlugin(CameraConsumerPlugin):
         # Spin in a daemon thread so subscriptions/QoS handshakes progress without a sim-side spin.
         from rclpy.executors import SingleThreadedExecutor
 
-        self._executor = SingleThreadedExecutor()
+        self._executor = SingleThreadedExecutor(context=context)
         self._executor.add_node(self._node)
-        import threading
-
         self._spin_thread = threading.Thread(
-            target=self._executor.spin, name=f"egress-spin:{self.config.node_name}", daemon=True
+            target=self._spin,
+            name=f"egress-spin:{self.config.node_name}",
+            daemon=True,
         )
         self._spin_thread.start()
         logger.info(f"ROS2 image egress '{self.config.node_name}' up: {len(self.config.routes)} route(s)")
 
-    def _start_camera_info(self, *, qos_history, durability) -> None:
+    def _spin(self) -> None:
+        spin_executor_until_stopped(self._executor, self._spin_stop)
+
+    def _start_camera_info(self, *, qos_history: Any, durability: Any) -> None:
         from rclpy.qos import QoSProfile, ReliabilityPolicy
 
         # CameraInfo is STATIC: derived from the camera's configured intrinsics and published ONCE
@@ -123,19 +145,23 @@ class ROS2ImagePlugin(CameraConsumerPlugin):
         latched = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE, history=qos_history, depth=1, durability=durability
         )
-        cams_by_name = dict(self.sensors_config)
         seen: set[str] = set()
         for route in self.config.routes.values():
             if route.camera in seen:
                 continue
             seen.add(route.camera)
+            intr = self._intrinsics_of(route.camera)
+            backend_config = intr.backend_config
+            if isinstance(backend_config, IsaacSimCameraConfig) and backend_config.projection_type != "pinhole":
+                logger.warning(
+                    "Publishing an approximate ROS equidistant CameraInfo for camera '{}' because "
+                    "native projection '{}' has no lossless ROS distortion mapping.",
+                    route.camera,
+                    backend_config.projection_type,
+                )
             info_topic = f"{route.topic.rsplit('/', 1)[0]}/camera_info"
             pub = self._node.create_publisher(self._CameraInfo, info_topic, latched)
             self._info_publishers[route.camera] = pub
-            cam = cams_by_name[route.camera]  # present: driver validated routes against sensors_config
-            intr = CameraIntrinsics(
-                width=cam.width, height=cam.height, vertical_fov=cam.vertical_fov, near=cam.near, far=cam.far
-            )
             pub.publish(self._build_camera_info_msg(route.camera, intr))
 
     # ----- per-frame publish -----
@@ -164,7 +190,7 @@ class ROS2ImagePlugin(CameraConsumerPlugin):
             depth_range=(route.depth_range[0], route.depth_range[1]) if route.depth_range is not None else None,
         )
 
-    def _make_route_sender(self, route: ROS2ImageRoute):
+    def _make_route_sender(self, route: ROS2ImageRoute) -> Callable[[FramePacket], None]:
         """Return a worker callback that encodes a FramePacket and publishes it for ``route``."""
 
         def _send(packet: FramePacket) -> None:
@@ -195,7 +221,7 @@ class ROS2ImagePlugin(CameraConsumerPlugin):
             msg.data = enc.data
         pub.publish(msg)
 
-    def _build_camera_info_msg(self, camera: str, intr: CameraIntrinsics):
+    def _build_camera_info_msg(self, camera: str, intr: CameraIntrinsics) -> Any:
         """Build a static CameraInfo message for ``camera`` (published once, latched, in start())."""
         info = camera_info_from_intrinsics(intr)
         msg = self._CameraInfo()
@@ -212,17 +238,30 @@ class ROS2ImagePlugin(CameraConsumerPlugin):
     # ----- teardown -----
 
     def stop(self) -> None:
+        failures: list[str] = []
         for worker in self._workers.values():
-            worker.stop()
+            try:
+                worker.stop()
+            except Exception as exc:  # noqa: PERF203 - stop every worker before reporting failures.
+                failures.append(str(exc))
+        if failures:
+            raise RuntimeError("; ".join(failures))
+
         self._workers.clear()
-        if self._executor is not None:
-            self._executor.shutdown()
-            self._executor = None
-        if self._spin_thread is not None and self._spin_thread.is_alive():
-            self._spin_thread.join(timeout=2.0)
+        try:
+            close_ros2_executor(
+                executor=self._executor,
+                node=self._node,
+                spin_thread=self._spin_thread,
+                stop_event=self._spin_stop,
+                label=f"ROS2 image egress {self.config.node_name!r}",
+            )
+        except Exception as exc:
+            failures.append(str(exc))
+        self._executor = None
         self._spin_thread = None
-        if self._node is not None:
-            self._node.destroy_node()
-            self._node = None
+        self._node = None
         self._publishers.clear()
         self._info_publishers.clear()
+        if failures:
+            raise RuntimeError("; ".join(failures))

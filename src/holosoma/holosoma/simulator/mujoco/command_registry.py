@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import TYPE_CHECKING, Callable, cast
 
 import glfw
 from loguru import logger
 
 from holosoma.simulator.shared.virtual_gantry import GantryCommand, GantryCommandData
 
+if TYPE_CHECKING:
+    import torch
+
+    from holosoma.simulator.mujoco.mujoco import MuJoCo
+
 
 class CommandRegistry:
     """Unified command registry for MuJoCo key mappings."""
 
-    def __init__(self, simulator):
+    def __init__(self, simulator: MuJoCo) -> None:
         """Initialize command registry with simulator reference.
 
         Parameters
@@ -22,10 +27,10 @@ class CommandRegistry:
             MuJoCo simulator instance
         """
         self.simulator = simulator
-        self.on_command_executed: Callable | None = None  # Callback for UI updates
+        self.on_command_executed: Callable[[], None] | None = None  # Callback for UI updates
 
         # Robot commands
-        self.robot_commands = {
+        self.robot_commands: dict[int, tuple[str, Callable[[], None]]] = {
             glfw.KEY_W: ("forward_command", lambda: self._adjust_command(0, 0.1)),
             glfw.KEY_S: ("backward_command", lambda: self._adjust_command(0, -0.1)),
             glfw.KEY_A: ("left_command", lambda: self._adjust_command(1, -0.1)),
@@ -42,7 +47,7 @@ class CommandRegistry:
         }
 
         # Gantry commands (using new enum-based system with parameters)
-        self.gantry_commands = {
+        self.gantry_commands: dict[int, GantryCommandData] = {
             glfw.KEY_7: GantryCommandData(GantryCommand.LENGTH_ADJUST, {"amount": -0.1}),
             glfw.KEY_8: GantryCommandData(GantryCommand.LENGTH_ADJUST, {"amount": 0.1}),
             glfw.KEY_9: GantryCommandData(GantryCommand.TOGGLE),
@@ -77,7 +82,7 @@ class CommandRegistry:
         if keycode in self.robot_commands:
             name, action = self.robot_commands[keycode]
             action()
-            logger.info(f"Current Command: {self.simulator.commands[0]}")
+            logger.info(f"Current Command: {cast('torch.Tensor', self.simulator.commands)[0]}")
             # Notify callback after robot command
             if self.on_command_executed:
                 self.on_command_executed()
@@ -85,14 +90,15 @@ class CommandRegistry:
 
         return False
 
-    def _adjust_command(self, index: int, delta: float):
+    def _adjust_command(self, index: int, delta: float) -> None:
         """Adjust command value by delta."""
-        self.simulator.commands[:, index] += delta
+        cast("torch.Tensor", self.simulator.commands)[:, index] += delta
 
-    def _toggle_command(self, index: int):
+    def _toggle_command(self, index: int) -> None:
         """Toggle command value between 0 and 1."""
-        self.simulator.commands[:, index] = 1 - self.simulator.commands[:, index]
+        commands = cast("torch.Tensor", self.simulator.commands)
+        commands[:, index] = 1 - commands[:, index]
 
-    def _zero_commands(self):
+    def _zero_commands(self) -> None:
         """Zero out movement commands."""
-        self.simulator.commands[:, :4] = 0
+        cast("torch.Tensor", self.simulator.commands)[:, :4] = 0

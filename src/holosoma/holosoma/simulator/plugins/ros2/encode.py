@@ -21,8 +21,10 @@ an rgb format. The colorized path is what gives a human-viewable depth stream ov
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 
 from holosoma.simulator.plugins.depth_color import DEFAULT_DEPTH_RANGE, colorize_depth
 
@@ -49,7 +51,7 @@ class EncodedImage:
 
 
 def encode_frame(
-    array: np.ndarray,
+    array: npt.NDArray[Any],
     fmt: str,
     *,
     modality: str = "rgb",
@@ -74,11 +76,12 @@ def encode_frame(
     raise ValueError(f"Unknown image egress format '{fmt}'. Known: {(*_RGB_FORMATS, *_DEPTH_FORMATS)}.")
 
 
-def _encode_rgb(array: np.ndarray, fmt: str, *, jpeg_quality: int) -> EncodedImage:
-    if array.ndim != 3 or array.shape[2] != 3:
-        raise ValueError(f"RGB format '{fmt}' needs an [H,W,3] array, got shape {array.shape}.")
-    rgb = np.ascontiguousarray(array, dtype=np.uint8)
-    h, w = rgb.shape[:2]
+def _encode_rgb(array: npt.NDArray[Any], fmt: str, *, jpeg_quality: int) -> EncodedImage:
+    shape: tuple[int, ...] = array.shape
+    if array.ndim != 3 or shape[2] != 3:
+        raise ValueError(f"RGB format '{fmt}' needs an [H,W,3] array, got shape {shape}.")
+    rgb: npt.NDArray[np.uint8] = np.ascontiguousarray(array, dtype=np.uint8)
+    h, w = shape[:2]
 
     if fmt == "rgb8":
         # Raw Image, R,G,B order preserved (NO BGR swap — that is only for cv2's JPEG/PNG encoders).
@@ -97,10 +100,11 @@ def _encode_rgb(array: np.ndarray, fmt: str, *, jpeg_quality: int) -> EncodedIma
     return EncodedImage(data=buf.tobytes(), compressed=True, compressed_format=fmt)
 
 
-def _encode_depth(array: np.ndarray, fmt: str) -> EncodedImage:
+def _encode_depth(array: npt.NDArray[Any], fmt: str) -> EncodedImage:
     # Accept [H,W] or [H,W,1] (get_camera_data gives [H,W,1] float32 meters); squeeze the channel.
     arr = array
-    if arr.ndim == 3 and arr.shape[2] == 1:
+    shape: tuple[int, ...] = arr.shape
+    if arr.ndim == 3 and shape[2] == 1:
         arr = arr[..., 0]
     if arr.ndim != 2:
         raise ValueError(f"Depth format '{fmt}' needs an [H,W] or [H,W,1] array, got shape {array.shape}.")
@@ -108,7 +112,7 @@ def _encode_depth(array: np.ndarray, fmt: str) -> EncodedImage:
 
     if fmt == "32FC1":
         # float32 meters, verbatim (+inf no-hit preserved — the standard depth-image no-hit value).
-        depth = np.ascontiguousarray(arr, dtype=np.float32)
+        depth: npt.NDArray[np.float32] = np.ascontiguousarray(arr, dtype=np.float32)
         return EncodedImage(data=depth.tobytes(), compressed=False, encoding="32FC1", height=h, width=w, step=4 * w)
 
     # 16UC1: millimeters, uint16. +inf/no-hit -> 0 (the OpenNI/REP-118 "no measurement" value),
@@ -116,5 +120,5 @@ def _encode_depth(array: np.ndarray, fmt: str) -> EncodedImage:
     mm = arr.astype(np.float32) * 1000.0
     mm[~np.isfinite(mm)] = 0.0
     mm = np.clip(mm, 0.0, 65535.0)
-    depth_mm = np.ascontiguousarray(mm, dtype=np.uint16)
+    depth_mm: npt.NDArray[np.uint16] = np.ascontiguousarray(mm, dtype=np.uint16)
     return EncodedImage(data=depth_mm.tobytes(), compressed=False, encoding="16UC1", height=h, width=w, step=2 * w)

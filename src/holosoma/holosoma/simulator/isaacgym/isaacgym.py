@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import dataclasses
-import math
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 import numpy as np
 from isaacgym import gymapi, gymtorch, gymutil
@@ -13,17 +12,23 @@ from rich.progress import Progress
 from torch import Tensor
 
 from holosoma.config_types.full_sim import FullSimConfig
+from holosoma.config_types.sensor import CameraSensorConfig
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.simulator.isaacgym import light_setup, sensor_setup
 from holosoma.simulator.isaacgym.physics import (
     apply_mass_from_config,
-    apply_physx_asset_options,
     apply_rigid_shape_properties,
+    build_robot_asset_options,
 )
 from holosoma.simulator.isaacgym.urdf_scene_loader import URDFSceneLoader
 from holosoma.simulator.isaacgym.video_recorder import IsaacGymVideoRecorder
+from holosoma.simulator.shared.dof_limits import soft_limit_range
+from holosoma.simulator.shared.external_wrench import WrenchTarget
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.simulator.shared.root_states_view import UnifiedRootStatesView
+from holosoma.simulator.shared.scene_types import EnvOriginsScene
 from holosoma.simulator.shared.terrain import Terrain
 from holosoma.simulator.shared.virtual_gantry import (
     GantryCommand,
@@ -32,68 +37,19 @@ from holosoma.simulator.shared.virtual_gantry import (
 )
 from holosoma.simulator.types import ActorIndices, ActorNames, ActorPoses, ActorStates, EnvIds
 from holosoma.utils.draw import draw_line, draw_sphere
-from holosoma.utils.module_utils import get_holosoma_root
-from holosoma.utils.rotations import quat_mul
+from holosoma.utils.path import resolve_asset_path
+from holosoma.utils.rotations import quat_rotate
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.torch_utils import to_torch, torch_rand_float
 
-# Change-of-basis quaternion (xyzw) from the holosoma camera frame (-Z fwd / +Y up) to
-# IsaacGym's native camera frame (+X fwd / +Z up): the rotation sending +X->-Z, +Z->+Y, +Y->-X.
-# MuJoCo/IsaacSim use the -Z fwd / +Y up frame directly.
-_CANONICAL_TO_ISAACGYM_XYZW = (0.5, -0.5, -0.5, -0.5)
+if TYPE_CHECKING:
+    import numpy.typing as npt
 
-
-class Scene:
-    """Scene wrapper for IsaacGym to provide unified interface.
-
-    This class provides a unified scene interface for IsaacGym, currently
-    focusing on environment origins. It ensures consistent tensor format
-    and device placement for environment origin data.
-
-    Parameters
-    ----------
-    env_origins : torch.Tensor
-        Environment origins as tensor with shape [num_envs, 3].
-    device : str
-        Device identifier for tensor operations (e.g., 'cuda:0', 'cpu').
-
-    Attributes
-    ----------
-    _env_origins : torch.Tensor
-        Internal storage for environment origins tensor.
-
-    Raises
-    ------
-    ValueError
-        If env_origins doesn't have the expected shape [num_envs, 3].
-    """
-
-    def __init__(self, env_origins: torch.Tensor, device: str):
-        # Ensure consistent tensor format
-        if not isinstance(env_origins, torch.Tensor):
-            env_origins = torch.tensor(env_origins, device=device, dtype=torch.float32)
-
-        # Ensure correct device and dtype
-        self._env_origins = env_origins.to(device=device, dtype=torch.float32)
-
-        # Validate shape
-        if self._env_origins.dim() != 2 or self._env_origins.shape[1] != 3:
-            raise ValueError(f"env_origins must have shape [num_envs, 3], got {self._env_origins.shape}")
-
-    @property
-    def env_origins(self) -> torch.Tensor:
-        """Get environment origins tensor.
-
-        Returns
-        -------
-        torch.Tensor
-            Environment origins as [num_envs, 3] float32 tensor.
-        """
-        return self._env_origins
+    from holosoma.config_types.robot import RobotAssetConfig
 
 
 class IsaacGym(BaseSimulator):
-    def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str):
+    def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str) -> None:
         super().__init__(tyro_config, terrain_manager, device)
 
         # Gym viewer handle; created by setup_viewer() (skipped when headless), so it stays
@@ -101,18 +57,49 @@ class IsaacGym(BaseSimulator):
         self.viewer = None
         self.visualize_viewer = False
 
-        # For force visualization
-        self.vis_force_range = False
+        # For force visualization. A viewer toggle flipped with `1 - x`, so it holds 0/1 ints
+        # after the first toggle (starts False == 0).
+        self.vis_force_range: int = False
 
         # Actor/Object management
         self.object_assets: dict[str, Any] = {}
         self.object_handles: dict[str, list[Any]] = {}
         self.gym_object_indices: dict[str, list[torch.Tensor]] = {}
+        # Cache of object actor name -> its rigid-body row within the [bodies_per_env] block
+        # (robot occupies rows [0:num_bodies]; objects follow). Filled lazily by _object_body_row.
+        self._object_body_rows: dict[str, int] = {}
 
-    def set_headless(self, headless):
+        # Per-camera native sensor handles, one list per camera parallel to self.envs (the
+        # structural twin of object_handles). Filled by sensor_setup.build_env_cameras during the
+        # env-build loop, read by sensor_setup.render_cameras. Sized in create_envs.
+        self.camera_handles: dict[str, list[Any]] = {}
+
+        # Persistent full-width actuation buffer for DOF-subset torque writes (lazily sized on
+        # first subset apply_torques_at_dof; None until then — the full path never needs it).
+        self._dof_actuation_forces: torch.Tensor | None = None
+
+        # Register concrete native owners before acquisition so startup cancellation is covered.
+        self.hooks.add(Phase.CLOSE, self._close_sim, name="isaacgym.sim.close")
+        self.hooks.add(Phase.CLOSE, self._close_viewer, name="isaacgym.viewer.close")
+
+    def set_headless(self, headless: bool) -> None:
         super().set_headless(headless)
 
-    def set_startup_randomization_callback(self, callback):
+    def _close_viewer(self) -> None:
+        """Destroy the viewer handle once."""
+        viewer = self.viewer
+        self.viewer = None
+        if viewer is not None:
+            self.gym.destroy_viewer(viewer)
+
+    def _close_sim(self) -> None:
+        """Destroy the simulator handle once."""
+        sim = getattr(self, "sim", None)
+        self.sim = None
+        if sim is not None:
+            self.gym.destroy_sim(sim)
+
+    def set_startup_randomization_callback(self, callback: Callable[[], None]) -> None:
         """Set a callback to be invoked during environment startup for domain randomization.
 
         This is an IsaacGym-specific method that allows the environment to inject
@@ -125,7 +112,7 @@ class IsaacGym(BaseSimulator):
         """
         self.startup_randomization_callback = callback
 
-    def setup(self):
+    def setup(self) -> None:
         self.sim_params = self._parse_sim_params()
         self.sim_dt = self.sim_params.dt
 
@@ -145,9 +132,11 @@ class IsaacGym(BaseSimulator):
         else:
             self.device = "cpu"
 
-        # Cameras (video recorder or perception sensors) need a graphics context even when
+        # Cameras (video recorder or mounted camera sensors) need a graphics context even when
         # headless; without it create_camera_sensor returns no image (black frame).
-        self._cameras_enabled = self.video_config.enabled or bool(self.sensor_config)
+        self._cameras_enabled = self.video_config.enabled or any(
+            isinstance(sensor, CameraSensorConfig) for sensor in self.sensor_config.values()
+        )
         self.graphics_device_id = self.sim_device_id
         if self.headless and not self._cameras_enabled:
             self.graphics_device_id = -1
@@ -157,22 +146,22 @@ class IsaacGym(BaseSimulator):
         if self.video_config.enabled:
             self.video_recorder = IsaacGymVideoRecorder(self.video_config, self)
 
-        sim = self.gym.create_sim(
+        self.sim = self.gym.create_sim(
             self.sim_device_id,
             self.graphics_device_id,
             self.physics_engine,
             self.sim_params,
         )
 
-        if sim is None:
+        if self.sim is None:
             logger.error("*** Failed to create sim")
             sys.exit(1)
 
         logger.info("Creating Sim...", "green")
 
-        self.sim = sim
+        light_setup.build_lights(self)
 
-    def _parse_sim_params(self):
+    def _parse_sim_params(self) -> Any:
         # TODO: this sim params are not loaded from the config file
         # initialize sim
         sim_params = gymapi.SimParams()
@@ -207,7 +196,7 @@ class IsaacGym(BaseSimulator):
         """
         return ["urdf"]
 
-    def setup_terrain(self):
+    def setup_terrain(self) -> None:
         terrain_state = self.terrain_manager.get_state("locomotion_terrain")
         mesh_type = terrain_state.mesh_type
         # IsaacGym's ground has no separable visual, so hide_visual is satisfied only where it is
@@ -226,14 +215,14 @@ class IsaacGym(BaseSimulator):
         else:
             raise ValueError(f"Unsupported terrain mesh type: {mesh_type}")
 
-    def _create_trimesh(self, terrain: Terrain):
+    def _create_trimesh(self, terrain: Terrain) -> None:
         """Adds a triangle mesh terrain to the simulation, sets parameters based on the cfg."""
         logger.info("Creating trimesh terrain")
         tm_params = gymapi.TriangleMeshParams()
         terrain_state = self.terrain_manager.get_state("locomotion_terrain")
         assert terrain_state.mesh is not None
-        vertices = terrain_state.mesh.vertices.astype(np.float32)
-        triangles = terrain_state.mesh.faces.astype(np.uint32)
+        vertices: npt.NDArray[np.float32] = terrain_state.mesh.vertices.astype(np.float32)
+        triangles: npt.NDArray[np.uint32] = terrain_state.mesh.faces.astype(np.uint32)
         tm_params.nb_vertices = vertices.shape[0]
         tm_params.nb_triangles = triangles.shape[0]
 
@@ -243,7 +232,7 @@ class IsaacGym(BaseSimulator):
         self.gym.add_triangle_mesh(self.sim, vertices.flatten(order="C"), triangles.flatten(order="C"), tm_params)
         logger.info("Created trimesh terrain")
 
-    def _create_ground_plane(self):
+    def _create_ground_plane(self) -> None:
         """Adds a ground plane to the simulation, sets friction and restitution based on the cfg."""
         logger.info("Creating plane terrain")
         plane_params = gymapi.PlaneParams()
@@ -255,14 +244,17 @@ class IsaacGym(BaseSimulator):
         self.gym.add_ground(self.sim, plane_params)
         logger.info("Created plane terrain")
 
-    def load_assets(self):
+    def load_assets(self) -> None:
         self._load_scene()
 
-        asset_root = self.robot_config.asset.asset_root
-        if asset_root.startswith("@holosoma/"):
-            asset_root = asset_root.replace("@holosoma", get_holosoma_root())
-
-        asset_file = self.robot_config.asset.urdf_file
+        asset_path = Path(
+            resolve_asset_path(
+                self.robot_config.asset.urdf_file,
+                self.robot_config.asset.asset_root,
+            )
+        )
+        asset_root = str(asset_path.parent)
+        asset_file = asset_path.name
         self.robot_asset = self._setup_robot_asset_when_env_created(asset_root, asset_file, self.robot_config.asset)
         self.num_dof, self.num_bodies, self.dof_names, self.body_names = self._setup_robot_props_when_env_created()
 
@@ -276,16 +268,16 @@ class IsaacGym(BaseSimulator):
         assert self.body_names == self.robot_config.body_names, "Body names must match the config"
 
     @property
-    def has_scene_objects(self):
+    def has_scene_objects(self) -> bool:
         # For now, use object_assets as a proxy, should be more direct/explicit though
         return len(self.object_assets) > 0
 
-    def _load_scene(self):
+    def _load_scene(self) -> None:
         """
         Load scene files using the new unified configuration structure
         """
         if self.scene_config is None:
-            return
+            return  # type: ignore[unreachable]
 
         if not self.scene_config.scene_files and not self.scene_config.rigid_objects:
             logger.info("No scene files or rigid objects configured for loading")
@@ -299,40 +291,16 @@ class IsaacGym(BaseSimulator):
         self.object_assets.update(assets)
         logger.info(f"IsaacGym: Loaded {len(assets)} scene objects from scene files")
 
-    def _setup_robot_asset_when_env_created(self, asset_root, asset_file, asset_cfg):
+    def _setup_robot_asset_when_env_created(self, asset_root: str, asset_file: str, asset_cfg: RobotAssetConfig) -> Any:
         asset_path = Path(asset_root) / asset_file
         gym_asset_root = str(asset_path.parent)
         gym_asset_file = asset_path.name
 
-        asset_options = gymapi.AssetOptions()
-
-        def set_value_if_not_none(prev_value, new_value):
-            return new_value if new_value is not None else prev_value
-
-        # Asset-import knobs that stay on RobotAssetConfig (no PhysicsConfig analogue).
-        asset_config_options = [
-            "default_dof_drive_mode",
-            "collapse_fixed_joints",
-            "replace_cylinder_with_capsule",
-            "flip_visual_attachments",
-            "fix_base_link",
-            "armature",
-            "thickness",
-            "disable_gravity",
-        ]
-        for option in asset_config_options:
-            option_value = set_value_if_not_none(getattr(asset_options, option), getattr(asset_cfg, option))
-            setattr(asset_options, option, option_value)
-
-        # density + the PhysX solver knobs (damping / velocity caps) come from the shared link_physics
-        # via the same helper the object path uses (physics.apply_physx_asset_options), so a robot link
-        # and a scene object map the physx/density load-time options identically. None keeps defaults.
-        apply_physx_asset_options(asset_options, asset_cfg.link_physics)
-
+        asset_options = build_robot_asset_options(asset_cfg)
         self.robot_asset = self.gym.load_asset(self.sim, gym_asset_root, gym_asset_file, asset_options)
         return self.robot_asset
 
-    def _setup_robot_props_when_env_created(self):
+    def _setup_robot_props_when_env_created(self) -> tuple[int, int, list[str], list[str]]:
         self.num_dof = self.gym.get_asset_dof_count(self.robot_asset)
         self.num_bodies = self.gym.get_asset_rigid_body_count(self.robot_asset)
 
@@ -342,7 +310,9 @@ class IsaacGym(BaseSimulator):
 
         return self.num_dof, self.num_bodies, self.dof_names, self.body_names
 
-    def create_envs(self, num_envs, env_origins, base_init_state):
+    def create_envs(  # type: ignore[override]
+        self, num_envs: int, env_origins: torch.Tensor, base_init_state: torch.Tensor
+    ) -> tuple[list[Any], list[Any], dict[str, list[Any]]]:
         """
         Main interface called by base_task to create environments.
         Automatically detects if scene objects are loaded and creates environments accordingly.
@@ -352,13 +322,20 @@ class IsaacGym(BaseSimulator):
         self.num_envs = num_envs
         self.env_origins = env_origins
         self.base_init_state = base_init_state
-        self.envs = []
-        self.robot_handles = []
-        self.robot_indices = []
+        self.envs: list[Any] = []
+        self.robot_handles: list[Any] = []
+        # Holds per-env actor indices (ints) during construction, then is replaced by a
+        # torch.Tensor (via to_torch) once every env is built.
+        self.robot_indices: Any = []
 
         if self.has_scene_objects:
             logger.info(f"Creating {self.num_envs} environments with {len(self.object_assets)} scene objects...")
             self.object_handles = {name: [] for name in self.object_assets}
+
+        # One empty per-env handle list per configured camera; build_env_cameras appends per env.
+        self.camera_handles = {
+            name: [] for name, config in self.sensor_config.items() if isinstance(config, CameraSensorConfig)
+        }
 
         logger.info(f"Creating {self.num_envs} environments...")
         with Progress() as progress:
@@ -371,7 +348,7 @@ class IsaacGym(BaseSimulator):
 
         self.robot_indices = to_torch(self.robot_indices, dtype=torch.long, device=self.device)
 
-        self.scene = Scene(self.env_origins, self.device)
+        self.scene = EnvOriginsScene(self.env_origins, self.device)
 
         # Initialize virtual gantry using config
         gantry_cfg = self.simulator_config.virtual_gantry
@@ -387,8 +364,8 @@ class IsaacGym(BaseSimulator):
         self._init_bridge()
 
         if self.video_recorder:
-            self.video_recorder.setup_recording()
             self.video_recorder.register_hooks(self.hooks)
+            self.video_recorder.setup_recording()
 
         # Initialize command system for keyboard controls
         # Command tensor format: [vx, vy, vz, yaw_rate, walk_stand, waist_yaw, ..., height, ...]
@@ -409,7 +386,7 @@ class IsaacGym(BaseSimulator):
 
         return self.envs, self.robot_handles, self.object_handles
 
-    def _invoke_startup_randomization(self):
+    def _invoke_startup_randomization(self) -> None:
         """Invoke startup randomization callback if one has been registered.
 
         This is IsaacGym-specific functionality to support domain randomization
@@ -419,7 +396,7 @@ class IsaacGym(BaseSimulator):
         if callback is not None:
             self.startup_randomization_callback()
 
-    def _build_each_env(self, env_id, env_ptr):
+    def _build_each_env(self, env_id: int, env_ptr: Any) -> None:
         start_pose = gymapi.Transform()
         start_pose.p = gymapi.Vec3(*self.base_init_state[:3])
         # keep the base height the same as the initial height
@@ -512,162 +489,32 @@ class IsaacGym(BaseSimulator):
             self.gym_object_indices[object_name].append(object_idx)
 
         # Mounted cameras for this env: created per-env and attached to the mount body so they
-        # follow it. IsaacGym has no batched camera: one sensor per env. The handle lists span all
-        # envs (parallel to self.envs), so initialize them once and append per env.
-        if env_id == 0:
-            self._camera_handles: dict[str, list[Any]] = {name: [] for name in self.sensor_config}
-        self._build_env_cameras(env_id, env_ptr, robot_handle)
+        # follow it. IsaacGym has no batched camera: one sensor per env. sensor_setup appends this
+        # env's handles onto self.camera_handles (parallel to self.envs).
+        sensor_setup.build_env_cameras(self, env_id, env_ptr, robot_handle)
 
     # ----- Camera sensors -----
 
-    def _resolve_mount_body_handle(self, env_ptr, robot_handle, mount):
-        """Return the rigid-body handle for a sensor mount within ``env_ptr``.
-
-        ``robot_link`` -> a named robot link (name the root link to mount on the base);
-        ``actor`` -> a scene actor's (single) body. Uses IsaacGym's per-actor body lookup.
-        """
-        if mount.target_kind == "robot_link":
-            body_name = mount.target
-            handle = self.gym.find_actor_rigid_body_handle(env_ptr, robot_handle, body_name)
-            if handle < 0:
-                raise ValueError(f"Camera robot mount body '{body_name}' not found in robot bodies {self._body_list}.")
-            return handle
-        if mount.target_kind == "actor":
-            actor_handles = self.object_handles.get(mount.target)
-            if not actor_handles:
-                raise ValueError(f"Camera actor mount '{mount.target}' is not a registered scene object.")
-            actor_handle = actor_handles[-1]  # the handle just built for this env
-            body_name = self.gym.get_actor_rigid_body_names(env_ptr, actor_handle)[0]
-            return self.gym.find_actor_rigid_body_handle(env_ptr, actor_handle, body_name)
-        raise ValueError(f"Unknown camera mount target_kind '{mount.target_kind}'.")
-
-    def _build_env_cameras(self, env_id, env_ptr, robot_handle):
-        """Create and body-attach one camera sensor per configured camera, for this env."""
-        for cam_name, cam in self.sensor_config.items():
-            props = gymapi.CameraProperties()
-            props.width = cam.width
-            props.height = cam.height
-            props.enable_tensors = True  # GPU image tensors (zero-copy read)
-            props.near_plane = cam.near  # agnostic-core clipping, honored on every backend
-            props.far_plane = cam.far
-            # IsaacGym takes a horizontal fov; derive it from the vertical fov and aspect.
-            aspect = cam.width / cam.height
-            props.horizontal_fov = math.degrees(2 * math.atan(math.tan(math.radians(cam.vertical_fov) / 2) * aspect))
-            ig = cam.isaacgym
-            if ig and ig.supersampling_horizontal is not None:
-                props.supersampling_horizontal = ig.supersampling_horizontal
-            if ig and ig.supersampling_vertical is not None:
-                props.supersampling_vertical = ig.supersampling_vertical
-            if ig and ig.use_collision_geometry is not None:
-                props.use_collision_geometry = ig.use_collision_geometry
-
-            cam_handle = self.gym.create_camera_sensor(env_ptr, props)
-            if cam_handle < 0:
-                raise RuntimeError(f"IsaacGym failed to create camera sensor '{cam_name}' (graphics disabled?).")
-
-            local_tf = self._mount_to_isaacgym_transform(cam.mount)
-            if cam.mount.target_kind == "world":
-                # Free-floating: place at the env-local pose and leave it fixed (no body to follow).
-                # Unlike attach_camera_to_body, set_camera_transform takes a WORLD transform (the
-                # env_ptr only selects which env's camera, it does not offset the pose), so add this
-                # env's origin — otherwise every env's world camera lands near the global origin and
-                # only env 0 (origin [0,0,0]) frames its scene; envs 1..N look at empty space.
-                origin = self.env_origins[env_id]
-                world_tf = gymapi.Transform(
-                    p=gymapi.Vec3(
-                        local_tf.p.x + float(origin[0]),
-                        local_tf.p.y + float(origin[1]),
-                        local_tf.p.z + float(origin[2]),
-                    ),
-                    r=local_tf.r,
-                )
-                self.gym.set_camera_transform(cam_handle, env_ptr, world_tf)
-            else:
-                body_handle = self._resolve_mount_body_handle(env_ptr, robot_handle, cam.mount)
-                self.gym.attach_camera_to_body(cam_handle, env_ptr, body_handle, local_tf, gymapi.FOLLOW_TRANSFORM)
-            self._camera_handles[cam_name].append(cam_handle)
-
-    def _mount_to_isaacgym_transform(self, mount) -> gymapi.Transform:
-        """Mount (pos + w-first quat, -Z fwd/+Y up) to an IsaacGym local Transform.
-
-        Composes the mount orientation with the change-of-basis so the camera looks where the
-        mount intends on IsaacGym's native (+X fwd / +Z up) optical axis.
-        """
-        wxyz = torch.tensor([mount.orientation], dtype=torch.float32)  # [1,4] w,x,y,z
-        xyzw = wxyz[:, [1, 2, 3, 0]]
-        basis = torch.tensor([_CANONICAL_TO_ISAACGYM_XYZW], dtype=torch.float32)
-        native_xyzw = quat_mul(xyzw, basis, w_last=True)[0]
-        tf = gymapi.Transform()
-        tf.p = gymapi.Vec3(*mount.position)
-        tf.r = gymapi.Quat(float(native_xyzw[0]), float(native_xyzw[1]), float(native_xyzw[2]), float(native_xyzw[3]))
-        return tf
-
     def _create_sensors(self) -> None:
-        """Register the per-env camera handles (built in the env loop) into the SensorManager."""
-        cameras = self.sensor_config
-        if not cameras:
-            return
-        from holosoma.simulator.shared.camera_sensor import SensorManager
-
-        # IsaacGym uses self.device (may be "cpu").
-        sim = self.simulator_config.sim
-        self.sensor_manager = SensorManager(self.device, control_hz=sim.fps / sim.control_decimation_steps)
-        for cam_name, cam in cameras.items():
-            self.sensor_manager.register_camera(cam_name, cam)
+        """Register mounted camera and terrain-only LiDAR records."""
+        sensor_setup.create_sensors(self)
 
     def render_sensors(self) -> None:
-        """Render all camera sensors once (per control step), honoring update_decimation."""
-        if self.sensor_manager is None:
-            return
-        due = self.sensor_manager.collect_due()
-        if not due:
-            return
-        # Update the graphics scene from the latest physics state, then render all camera sensors
-        # in one pass. fetch_results + step_graphics are required before render or the image is
-        # blank (same sequence the video recorder uses).
-        self.gym.fetch_results(self.sim, True)
-        self.gym.step_graphics(self.sim)
-        self.gym.render_all_camera_sensors(self.sim)
-        self.gym.start_access_image_tensors(self.sim)
-        try:
-            for runtime in due:
-                handles = self._camera_handles[runtime.name]  # per-env handles (parallel to self.envs)
-                if "rgb" in runtime.config.data_types:
-                    frames = []
-                    for e in range(self.num_envs):
-                        # IsaacGym IMAGE_COLOR is RGBA uint8 [H,W,4] on GPU (channel 0 = R); drop
-                        # alpha to get R,G,B.
-                        gpu_t = self.gym.get_camera_image_gpu_tensor(
-                            self.sim, self.envs[e], handles[e], gymapi.IMAGE_COLOR
-                        )
-                        frames.append(gymtorch.wrap_tensor(gpu_t)[..., :3].clone())  # [H,W,4] RGBA -> RGB
-                    runtime.set_buffer("rgb", torch.stack(frames, dim=0).to(self.device))  # [N,H,W,3]
-                if "depth" in runtime.config.data_types:
-                    frames = []
-                    for e in range(self.num_envs):
-                        # IsaacGym IMAGE_DEPTH is [H,W] float32, negative distance along the camera
-                        # axis (looks down -Z) with -inf for no-hit. Negate to get positive
-                        # meters; -inf becomes the +inf no-hit sentinel.
-                        gpu_t = self.gym.get_camera_image_gpu_tensor(
-                            self.sim, self.envs[e], handles[e], gymapi.IMAGE_DEPTH
-                        )
-                        frames.append((-gymtorch.wrap_tensor(gpu_t)).clone())  # [H,W] +meters, +inf no-hit
-                    runtime.set_buffer("depth", torch.stack(frames, dim=0).unsqueeze(-1).to(self.device))  # [N,H,W,1]
-        finally:
-            self.gym.end_access_image_tensors(self.sim)
+        """Capture all due mounted sensors."""
+        sensor_setup.render_sensors(self)
 
-    def _process_rigid_shape_props(self, props, env_id):
+    def _process_rigid_shape_props(self, props: Any, env_id: int) -> Any:
         """No-op. Randomization manager will handle friction domain randomization."""
         return props
 
-    def _apply_dof_armature_from_config_to_props(self, props):
+    def _apply_dof_armature_from_config_to_props(self, props: Any) -> Any:
         dof_armature_from_config = self.robot_config.dof_armature_list
 
         for i in range(len(props)):
             props["armature"][i] = dof_armature_from_config[i]
         return props
 
-    def _process_dof_props(self, props, env_id):
+    def _process_dof_props(self, props: Any, env_id: int) -> Any:
         """Callback allowing to store/change/randomize the DOF properties of each environment.
             Called During environment creation.
             Base behavior: stores position, velocity and torques limits defined in the URDF
@@ -693,31 +540,26 @@ class IsaacGym(BaseSimulator):
                 self.num_dof, 2, dtype=torch.float, device=self.device, requires_grad=False
             )
             for i in range(len(props)):
-                self.hard_dof_pos_limits[i, 0] = props["lower"][i].item()
-                self.hard_dof_pos_limits[i, 1] = props["upper"][i].item()
-                self.dof_pos_limits[i, 0] = props["lower"][i].item()
-                self.dof_pos_limits[i, 1] = props["upper"][i].item()
+                lower = props["lower"][i].item()
+                upper = props["upper"][i].item()
+                self.hard_dof_pos_limits[i, 0] = lower
+                self.hard_dof_pos_limits[i, 1] = upper
                 self.dof_vel_limits[i] = props["velocity"][i].item()
                 self.torque_limits[i] = props["effort"][i].item()
-                # soft limits
-                m = (self.dof_pos_limits[i, 0] + self.dof_pos_limits[i, 1]) / 2
-                r = self.dof_pos_limits[i, 1] - self.dof_pos_limits[i, 0]
-                self.dof_pos_limits[i, 0] = m - 0.5 * r * self.robot_config.soft_dof_pos_limit
-                self.dof_pos_limits[i, 1] = m + 0.5 * r * self.robot_config.soft_dof_pos_limit
-
-                self.dof_pos_limits_termination[i, 0] = (
-                    m - 0.5 * r * self.robot_config.termination_close_to_dof_pos_limit
+                # soft limits (same contraction formula as the config-sourced backends)
+                self.dof_pos_limits[i, 0], self.dof_pos_limits[i, 1] = soft_limit_range(
+                    lower, upper, self.robot_config.soft_dof_pos_limit
                 )
-                self.dof_pos_limits_termination[i, 1] = (
-                    m + 0.5 * r * self.robot_config.termination_close_to_dof_pos_limit
+                self.dof_pos_limits_termination[i, 0], self.dof_pos_limits_termination[i, 1] = soft_limit_range(
+                    lower, upper, self.robot_config.termination_close_to_dof_pos_limit
                 )
         return props
 
-    def _process_rigid_body_props(self, props, env_id):
+    def _process_rigid_body_props(self, props: Any, env_id: int) -> Any:
         """No-op. Randomization manager will handle body mass/com domain randomization."""
         return props
 
-    def get_dof_limits_properties(self):
+    def get_dof_limits_properties(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # assert the isaacgym dof limits are the same as the config
         for i in range(self.num_dof):
             # import pdb; pdb.set_trace()
@@ -740,8 +582,8 @@ class IsaacGym(BaseSimulator):
 
         return self.dof_pos_limits, self.dof_vel_limits, self.torque_limits
 
-    def find_rigid_body_indice(self, body_name):
-        return self.gym.find_actor_rigid_body_handle(self.envs[0], self.robot_handles[0], body_name)
+    def find_rigid_body_indice(self, body_name: str) -> int:
+        return cast("int", self.gym.find_actor_rigid_body_handle(self.envs[0], self.robot_handles[0], body_name))
 
     def _get_base_body_name(self, preference_order: list[str]) -> str:
         """Get the base body name with fallback logic.
@@ -758,7 +600,7 @@ class IsaacGym(BaseSimulator):
         # Use the robot configuration's base_link field if available as first priority
         if hasattr(self.robot_config, "base_link") and self.robot_config.base_link:
             if self.robot_config.base_link in self._body_list:
-                return self.robot_config.base_link
+                return cast("str", self.robot_config.base_link)
 
         # Fallback to preference order
         for preferred_name in preference_order:
@@ -795,8 +637,23 @@ class IsaacGym(BaseSimulator):
         self._rigid_body_state_reshaped = self._rigid_body_state.view(self.num_envs, self.bodies_per_env, 13)
         self._rigid_body_pos = self._rigid_body_state_reshaped[..., : self.num_bodies, 0:3]
         self._rigid_body_rot = self._rigid_body_state_reshaped[..., : self.num_bodies, 3:7]
-        self._rigid_body_vel = self._rigid_body_state_reshaped[..., : self.num_bodies, 7:10]
+        self._rigid_body_com_vel = self._rigid_body_state_reshaped[..., : self.num_bodies, 7:10]
         self._rigid_body_ang_vel = self._rigid_body_state_reshaped[..., : self.num_bodies, 10:13]
+        # IsaacGym's rigid-body tensor pairs link-frame poses with COM linear velocities. Snapshot
+        # the post-startup-randomization COM offsets and maintain a link-origin velocity buffer.
+        assert len(self.envs) == len(self.robot_handles) == self.num_envs
+        self._rigid_body_com_pos_b = torch.tensor(
+            [
+                [
+                    [prop.com.x, prop.com.y, prop.com.z]
+                    for prop in self.gym.get_actor_rigid_body_properties(env, handle)[: self.num_bodies]
+                ]
+                for env, handle in zip(self.envs, self.robot_handles)
+            ],
+            dtype=self._rigid_body_com_vel.dtype,
+            device=self.device,
+        )
+        self._rigid_body_vel = torch.empty_like(self._rigid_body_com_vel)
 
         # DOF forces
         _dof_forces = self.gym.acquire_dof_force_tensor(self.sim)
@@ -807,7 +664,7 @@ class IsaacGym(BaseSimulator):
         # _root_states_raw is the raw gym buffer passed to the C-API (gymtorch.unwrap_tensor)
         # and viewed by robot_root_states. all_root_states is the unified all-actors view.
         self._root_states_raw: Tensor = gymtorch.wrap_tensor(actor_root_state)
-        self.all_root_states = UnifiedRootStatesView(self)  # type: ignore[assignment]
+        self.all_root_states = UnifiedRootStatesView(self)
         num_actors = self._get_num_actors_per_env()
 
         # robot_root_states shares memory with the raw root-state buffer.
@@ -851,7 +708,7 @@ class IsaacGym(BaseSimulator):
             vels = self.get_actor_initial_velocities(free_names, env_ids)  # [n*num_envs, 6]
             self.set_actor_states(free_names, env_ids, torch.cat([poses, vels], dim=1))
 
-    def refresh_sim_tensors(self):
+    def refresh_sim_tensors(self) -> None:
         self.gym.refresh_dof_state_tensor(self.sim)
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_rigid_body_state_tensor(self.sim)
@@ -862,34 +719,109 @@ class IsaacGym(BaseSimulator):
 
         self.gym.refresh_jacobian_tensors(self.sim)
         self.gym.refresh_mass_matrix_tensors(self.sim)
+        if hasattr(self, "_rigid_body_com_vel"):
+            shape = self._rigid_body_com_pos_b.shape
+            com_offset_world = quat_rotate(
+                self._rigid_body_rot.reshape(-1, 4),
+                self._rigid_body_com_pos_b.reshape(-1, 3),
+                w_last=True,
+            ).reshape(shape)
+            self._rigid_body_vel.copy_(
+                self._rigid_body_com_vel - torch.cross(self._rigid_body_ang_vel, com_offset_world, dim=-1)
+            )
 
     def clear_contact_forces_history(self, env_ids: torch.Tensor) -> None:
         if len(env_ids) > 0:
             self.contact_forces_history[env_ids, :, :, :] = 0.0
 
-    def _get_num_actors_per_env(self):
-        return self._root_states_raw.shape[0] // self.num_envs
+    def _get_num_actors_per_env(self) -> int:
+        return int(self._root_states_raw.shape[0] // self.num_envs)
         # num_actors = (
         #     self.root_states.shape[0] - self.total_num_objects
         # ) // self.num_envs
         # return num_actors
 
-    def apply_torques_at_dof(self, torques):
-        """Apply torques with detailed logging to match MuJoCo implementation."""
-        self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(torques))
+    def apply_torques_at_dof(self, torques: torch.Tensor, dof_indices: list[int] | None = None) -> None:
+        """Apply torques with detailed logging to match MuJoCo implementation.
 
-    def apply_rigid_body_force_at_pos_tensor(self, force_tensor, pos_tensor):
+        ``set_dof_actuation_force_tensor`` is a full replacement of the actuation-force buffer, so a
+        subset write must scatter into a persistent full-width buffer (leaving the other DOFs as
+        their owner last wrote them) and then set the whole tensor. The full path (``dof_indices``
+        None) passes the caller's tensor straight through, unchanged from before.
+        """
+        if dof_indices is None:
+            self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(torques))
+            return
+
+        # Persistent [num_envs, num_dof] buffer: unowned slots keep their previous value across
+        # substeps (mirrors MuJoCo's persistent ctrl), so a co-controller on the other DOFs composes.
+        if self._dof_actuation_forces is None:
+            self._dof_actuation_forces = torch.zeros(
+                self.num_envs, self.num_dof, dtype=torch.float32, device=self.device
+            )
+        idx_t = torch.as_tensor(dof_indices, device=self.device, dtype=torch.long)
+        # torques is aligned with dof_indices (1-D for the single-robot SDK bridge); broadcast over envs.
+        self._dof_actuation_forces[:, idx_t] = torques.reshape(-1).to(self._dof_actuation_forces.dtype)
+        self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(self._dof_actuation_forces))
+
+    def apply_rigid_body_force_at_pos_tensor(self, force_tensor: torch.Tensor, pos_tensor: torch.Tensor) -> None:
         self.gym.apply_rigid_body_force_at_pos_tensors(
             self.sim, gymtorch.unwrap_tensor(force_tensor), gymtorch.unwrap_tensor(pos_tensor), gymapi.ENV_SPACE
         )
 
-    def draw_debug_viz(self):
+    def _object_body_row(self, actor_name: str) -> int:
+        """Rigid-body row of an object's (single) body within the per-env body block.
+
+        Envs are homogeneous, so resolve once on env 0 and cache. Uses IsaacGym's per-actor
+        body lookup in DOMAIN_ENV (0-based within bodies_per_env).
+        """
+        row = self._object_body_rows.get(actor_name)
+        if row is None:
+            handle = self.object_handles[actor_name][0]
+            row = self.gym.get_actor_rigid_body_index(self.envs[0], handle, 0, gymapi.DOMAIN_ENV)
+            self._object_body_rows[actor_name] = row
+        return row
+
+    def _write_external_wrench_native(self, targets: list[WrenchTarget]) -> None:
+        """Set world-frame wrenches via apply_rigid_body_force_tensors.
+
+        The C-API writes every rigid body at once, so fill the targeted rows (robot: rows
+        [0:num_bodies]; objects: their cached row) of one full-width
+        [num_envs, bodies_per_env, 3] force+torque tensor pair — preallocated once and zeroed
+        per flush, this runs every physics substep. ENV_SPACE == GLOBAL for a CoM force/torque
+        (env frames are translation-only).
+        """
+        if not hasattr(self, "_wrench_force_buf"):
+            self._wrench_force_buf = torch.zeros(self.num_envs, self.bodies_per_env, 3, device=self.device)
+            self._wrench_torque_buf = torch.zeros_like(self._wrench_force_buf)
+        forces = self._wrench_force_buf
+        torques = self._wrench_torque_buf
+        forces.zero_()
+        torques.zero_()
+        for target in targets:
+            wrench = target.wrench.to(device=self.device, dtype=forces.dtype)  # [num_envs, n_bodies, 6]
+            for col in target.write_cols:
+                row = col if target.is_robot else self._object_body_row(target.actor_name)
+                forces[:, row, :] = wrench[:, col, 0:3]
+                torques[:, row, :] = wrench[:, col, 3:6]
+        self.gym.apply_rigid_body_force_tensors(
+            self.sim,
+            gymtorch.unwrap_tensor(forces),
+            gymtorch.unwrap_tensor(torques),
+            gymapi.ENV_SPACE,
+        )
+
+    def draw_debug_viz(self) -> None:
         if self.virtual_gantry:
             self.virtual_gantry.draw_debug()
 
-    def simulate_at_each_physics_step(self):
+    def _step_dynamics(self) -> None:
         if not hasattr(self, "step_counter"):
             self.step_counter = 0
+
+        # Apply accumulated external forces (apply_external_force) before advancing physics;
+        # IsaacGym consumes and resets the force tensor on each gym.simulate.
+        self.flush_external_wrench()
 
         self.gym.simulate(self.sim)
 
@@ -918,7 +850,20 @@ class IsaacGym(BaseSimulator):
 
         self.step_counter += 1
 
-    def setup_viewer(self):
+    def forward_kinematics(self) -> None:
+        """Propagate written root/DOF state to rigid-body transforms.
+
+        IsaacGym has no FK-only API — PhysX recomputes body transforms only during
+        ``gym.simulate`` — so this runs one physics step. The caller re-pins full state
+        (positions and velocities) before each call, which bounds the dynamics influence to a
+        single un-accumulated ``sim_dt``.
+        """
+        self.gym.simulate(self.sim)
+        if self.sim_device == "cpu":
+            self.gym.fetch_results(self.sim, True)
+        self.gym.refresh_dof_state_tensor(self.sim)
+
+    def setup_viewer(self) -> None:
         self.enable_viewer_sync = True
         self.visualize_viewer = True
         self.viewer = self.gym.create_viewer(self.sim, gymapi.CameraProperties())
@@ -938,8 +883,6 @@ class IsaacGym(BaseSimulator):
         self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_E, "heading_right_command")
         self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_Z, "zero_command")
         self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_Y, "toggle_camera_tracking")
-
-        self.gym.subscribe_viewer_keyboard_event(self.viewer, gymapi.KEY_P, "push_robots")
 
         # self.gym.subscribe_viewer_keyboard_event(
         #     self.viewer, gymapi.KEY_N, "next_task"
@@ -983,7 +926,7 @@ class IsaacGym(BaseSimulator):
             cam_target = gymapi.Vec3(10.0, 0.0, 15.0)
         self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target)
 
-    def render(self, sync_frame_time=True):
+    def render(self, sync_frame_time: bool = True) -> None:
         # No viewer in headless mode (setup_viewer() is skipped), so every viewer call below
         # would dereference a None handle. Skipping render() drops only the interactive
         # window and its debug overlay; the gantry's forces are applied in
@@ -1033,9 +976,6 @@ class IsaacGym(BaseSimulator):
 
                 status = "ON" if self.simulator_config.viewer.enable_tracking else "OFF"
                 logger.info(f"Camera tracking: {status}")
-            elif evt.action == "push_robots" and evt.value > 0:
-                logger.info("Push Robots")
-                self._push_robots(torch.arange(self.num_envs, device=self.device))
             # elif evt.action == "next_task" and evt.value > 0:
             #     self.next_task()
             elif evt.action == "walk_stand_toggle" and evt.value > 0:
@@ -1105,15 +1045,11 @@ class IsaacGym(BaseSimulator):
             self.clear_lines()
             self.draw_debug_viz()
 
-    def time(self) -> float:
-        """Get current simulation time.
+    def _physics_time(self) -> float:
+        """The PhysX simulation clock in seconds (used by ``time()`` outside kinematic mode)."""
+        return cast("float", self.gym.get_sim_time(self.sim))
 
-        Returns:
-            float: Current simulation time in seconds
-        """
-        return self.gym.get_sim_time(self.sim)
-
-    def get_dof_forces(self, env_id: int = 0):
+    def get_dof_forces(self, env_id: int = 0) -> torch.Tensor:
         """Get DOF forces for a specific environment.
 
         This method provides access to measured joint forces from DOF force sensors.
@@ -1136,7 +1072,7 @@ class IsaacGym(BaseSimulator):
 
         return self.dof_forces[env_id]
 
-    def _capture_camera_offset(self):
+    def _capture_camera_offset(self) -> None:
         """Capture current camera position relative to robot.
 
         This method is called when toggling camera tracking ON to preserve
@@ -1159,22 +1095,29 @@ class IsaacGym(BaseSimulator):
 
         logger.info(f"Captured camera offset: {self.camera_tracking_offset}")
 
-    def next_task(self):
+    def next_task(self) -> None:
         pass
 
     # debug visualization
-    def clear_lines(self):
+    def clear_lines(self) -> None:
         self.gym.clear_lines(self.viewer)
 
-    def draw_sphere(self, pos, radius, color, env_id, pos_id=None):
+    def draw_sphere(
+        self,
+        pos: torch.Tensor,
+        radius: float,
+        color: Any,
+        env_id: int,
+        pos_id: int | None = None,
+    ) -> None:
         """Convenience wrapper"""
         draw_sphere(self, pos, radius, color=color, env_id=env_id, num_lats=20, num_longs=20)
 
-    def draw_line(self, start_point, end_point, color, env_id):
+    def draw_line(self, start_point: Any, end_point: Any, color: Any, env_id: int) -> None:
         """Convenience wrapper"""
         draw_line(self, start_point, end_point, color=color, env_id=env_id)
 
-    def write_state_updates(self):
+    def write_state_updates(self) -> None:
         """See base class.
 
         IsaacGym-specific notes:
@@ -1182,7 +1125,7 @@ class IsaacGym(BaseSimulator):
         """
         # IsaacGym applies state changes immediately, so no pending updates to write
 
-    def _register_objects(self):
+    def _register_objects(self) -> None:
         """Finalize per-actor gym indices, then register via the shared registry path."""
         # Convert gym_object_indices lists to tensors (IsaacGym-specific index map).
         for object_name in self.gym_object_indices:
@@ -1199,7 +1142,9 @@ class IsaacGym(BaseSimulator):
         loader = getattr(self, "urdf_scene_loader", None)
         return set(loader.scene_file_static_names) if loader else set()
 
-    def _collect_spawned_actors(self):
+    def _collect_spawned_actors(
+        self,
+    ) -> tuple[torch.Tensor, list[tuple[str, bool, torch.Tensor, torch.Tensor | None]]]:
         """Describe each spawned actor's WORLD initial pose for the registry. IsaacGym's live
         root-state tensor (and thus get_actor_states) is world-frame (env_origins are baked in
         at create_actor() time), so the registry stores WORLD poses too, matching
@@ -1249,7 +1194,7 @@ class IsaacGym(BaseSimulator):
             items.append((obj_name, obj_name in static_names, base_pose, velocity))
         return robot_pose, items
 
-    def set_actor_root_state_tensor(self, set_env_ids, root_states):
+    def set_actor_root_state_tensor(self, set_env_ids: torch.Tensor, root_states: Any) -> None:
         """Sets the **robot** state -- backwards compatible method
 
         Does NOT apply env origins
@@ -1263,7 +1208,9 @@ class IsaacGym(BaseSimulator):
             # Otherwise, assume it's already robot states
             self.set_actor_root_state_tensor_robots(set_env_ids, root_states)
 
-    def set_actor_root_state_tensor_robots(self, env_ids=None, robot_root_states=None):
+    def set_actor_root_state_tensor_robots(
+        self, env_ids: torch.Tensor | None = None, robot_root_states: torch.Tensor | None = None
+    ) -> None:
         """Set robot root states (position/orientation) following IsaacGym best practices
 
         Args:
@@ -1279,11 +1226,10 @@ class IsaacGym(BaseSimulator):
         robot_indices = self.robot_indices[env_ids]
         self._set_actor_root_state_tensor_by_index(robot_indices, robot_root_states)
 
-    def set_dof_state_tensor_robots(self, env_ids=None, dof_states=None):
-        """Set robot DOF states (joint positions/velocities) - IsaacGym format.
-
-        This method sets robot joint positions and velocities using IsaacGym's
-        flattened tensor format.
+    def set_dof_state_tensor_robots(
+        self, env_ids: torch.Tensor | None = None, dof_states: torch.Tensor | None = None
+    ) -> None:
+        """Set robot DOF states while preserving the simulator-global Isaac Gym buffer.
 
         Parameters
         ----------
@@ -1291,20 +1237,19 @@ class IsaacGym(BaseSimulator):
             Which environments to update, shape [num_envs], dtype torch.long.
             If None, updates all environments.
         dof_states : torch.Tensor | None, default=None
-            DOF states to set, shape [num_envs * num_dofs, 2], dtype torch.float32.
-            **IsaacGym flattened format**: environments and DOFs are combined in first dimension.
-            Format: [:, 0] = joint positions, [:, 1] = joint velocities.
-            If None, uses current dof_state.
+            Robot states in flattened ``[N * num_dof, 2]`` format. ``N`` may be
+            ``len(env_ids)`` for pre-sliced values or ``num_envs`` for the global
+            robot tensor. The simulator-global ``self.dof_state`` is also accepted.
+            If None, uses the current global buffer.
 
         Examples
         --------
         >>> # IsaacGym format: flattened [num_envs * num_dofs, 2]
         >>> env_ids = torch.tensor([0, 1], device=device)
-        >>> num_selected_envs = len(env_ids)
-        >>> dof_states = torch.zeros(num_selected_envs * sim.num_dof, 2, device=device)
+        >>> dof_states = torch.zeros(len(env_ids) * sim.num_dof, 2, device=device)
         >>>
         >>> # Set positions and velocities in flattened format
-        >>> positions_2d = torch.zeros(num_selected_envs, sim.num_dof, device=device)  # [envs, dofs]
+        >>> positions_2d = torch.zeros(len(env_ids), sim.num_dof, device=device)  # [envs, dofs]
         >>> dof_states[:, 0] = positions_2d.flatten()  # Flatten to [envs*dofs]
         >>> dof_states[:, 1] = 0.0  # Zero velocities
         >>> sim.set_dof_state_tensor_robots(env_ids, dof_states)
@@ -1313,18 +1258,35 @@ class IsaacGym(BaseSimulator):
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self.device)
 
-        if dof_states is None:
-            dof_states = self.dof_state
+        if len(env_ids) == 0 or self.num_dof == 0:
+            return
 
-        # Convert robot indices to int32 as required by IsaacGym
+        if dof_states is not None and dof_states is not self.dof_state:
+            if dof_states.ndim != 2 or dof_states.shape[1] != 2:
+                raise ValueError(f"Expected DOF states with shape [N * num_dof, 2], got {tuple(dof_states.shape)}")
+
+            if dof_states.shape[0] == self.num_envs * self.num_dof:
+                selected_states = dof_states.view(self.num_envs, self.num_dof, 2)[env_ids]
+            elif dof_states.shape[0] == len(env_ids) * self.num_dof:
+                selected_states = dof_states.view(len(env_ids), self.num_dof, 2)
+            else:
+                raise ValueError(
+                    f"Expected {len(env_ids) * self.num_dof} selected robot rows, "
+                    f"or {self.num_envs * self.num_dof} global robot rows; got {dof_states.shape[0]}"
+                )
+            self.dof_state.view(self.num_envs, self.num_dof, 2)[env_ids] = selected_states
+
         robot_indices = self.robot_indices[env_ids].to(torch.int32)
-
-        # Call IsaacGym API with full tensor (like the original set_dof_state_tensor method)
         self.gym.set_dof_state_tensor_indexed(
-            self.sim, gymtorch.unwrap_tensor(dof_states), gymtorch.unwrap_tensor(robot_indices), len(robot_indices)
+            self.sim,
+            gymtorch.unwrap_tensor(self.dof_state),
+            gymtorch.unwrap_tensor(robot_indices),
+            len(robot_indices),
         )
 
-    def set_actor_states(self, names: ActorNames, env_ids: EnvIds, states: ActorStates, write_updates: bool = True):
+    def set_actor_states(
+        self, names: ActorNames, env_ids: EnvIds, states: ActorStates, write_updates: bool = True
+    ) -> None:
         """Set actor states by name using IsaacGym's indexed API.
 
         Parameters
@@ -1519,7 +1481,7 @@ class IsaacGym(BaseSimulator):
         apply_mass_from_config(self.gym, env_ptr, actor_handle, physics_config, object_name)
         logger.debug(f"Applied physics properties to '{object_name}'")
 
-    def _set_actor_root_state_tensor_by_index(self, actor_indices, states):
+    def _set_actor_root_state_tensor_by_index(self, actor_indices: torch.Tensor, states: torch.Tensor) -> None:
         """Reset specific actors by their actual indices using IsaacGym's indexed API"""
 
         # Convert indices to int32 as required by IsaacGym

@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import os
 import sys
+from typing import TYPE_CHECKING, cast
 
 if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
@@ -25,7 +25,10 @@ if sys.path and sys.path[0].endswith("simulators"):
 from holosoma.config_types.observation import ObservationManagerCfg, ObsGroupCfg, ObsTermCfg
 from holosoma.managers.observation.manager import ObservationManager
 from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config, step, steps_for_seconds
+from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step, steps_for_seconds
+
+if TYPE_CHECKING:
+    from holosoma.config_types.sensor import CameraSensorConfig
 
 SKIP_EXIT_CODE = 77
 _TERMS = "holosoma.managers.observation.terms.cameras"
@@ -82,6 +85,7 @@ def main() -> int:
     )
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
+    sim.install_plugins()
 
     robot_states = sim.get_actor_states(["robot"], torch.arange(n, device=device)).clone()
     robot_states[:, :3] = env_origins + torch.tensor(list(init.pos), device=device)
@@ -94,7 +98,7 @@ def main() -> int:
         print(f"[{args.simulator}] FAIL: expected fast_cam+slow_cam, got {sim.get_sensor_names()}")
         return 1
 
-    _first_cam = next(iter(config.sensor.values()))
+    _first_cam = cast("CameraSensorConfig", next(iter(config.sensor.values())))
     h, w = _first_cam.height, _first_cam.width
     # A dict (concatenate=False) group: fast_cam as CHW float01 rgb, slow_cam as plain rgb.
     rgb_tf = {"layout": "CHW", "scale": "float01"}
@@ -176,13 +180,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    # IsaacSim teardown deadlocks in carbOnPluginShutdown tearing down the
-    # omni.syntheticdata/OmniGraph render-product graph a TiledCamera creates (native
-    # py-spy stack), so a normal interpreter exit hangs until the parent's subprocess
-    # timeout SIGKILLs it -- turning a PASS (verdict already written to --result-file) into
-    # a spurious timeout failure. Hard-exit past the atexit teardown, mirroring
-    # behavior_assert / scene_spawn_assert. Rendering itself is fine; only exit hangs.
-    _rc = main()
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(_rc)
+    run_and_hard_exit(main)

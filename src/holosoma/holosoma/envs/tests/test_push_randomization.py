@@ -8,7 +8,10 @@ Note: All tests share a single simulator instance via pytest fixture to avoid
 Isaac Gym re-initialization issues.
 """
 
+from __future__ import annotations
+
 import dataclasses
+from typing import Any, Iterator
 
 import pytest
 
@@ -23,7 +26,7 @@ pytestmark = pytest.mark.isaacgym
 
 
 @pytest.fixture(scope="module")
-def shared_env():
+def shared_env() -> Iterator[Any]:
     """Shared environment fixture to avoid Isaac Gym re-initialization.
 
     This fixture creates one environment that is reused across all tests
@@ -38,18 +41,16 @@ def shared_env():
         experiment.g1_29dof, training=dataclasses.replace(experiment.g1_29dof.training, num_envs=num_envs)
     )
 
-    with training_context(tyro_config):
-        tyro_env_config = get_tyro_env_config(tyro_config)
-        env = get_class(tyro_config.env_class)(tyro_env_config, device=device)
+    tyro_env_config = get_tyro_env_config(tyro_config)
+    with training_context(tyro_config) as context, context.simulation_session(
+        get_class(tyro_config.env_class)(tyro_env_config, device=device)
+    ) as env:
         env.reset_all()
-
         yield env
-
-        # Cleanup happens automatically when context exits
 
 
 @pytest.mark.skip(reason="Cannot run multiple Isaac Gym instances in a single process")
-def test_push_applies_state_tensor_to_simulator(shared_env):
+def test_push_applies_state_tensor_to_simulator(shared_env: Any) -> None:
     """Test that set_actor_root_state_tensor_robots is called when pushing.
 
     This verifies the critical fix where we must call set_actor_root_state_tensor_robots
@@ -70,7 +71,7 @@ def test_push_applies_state_tensor_to_simulator(shared_env):
     call_count = [0]
     call_args = []
 
-    def spy_set_state(env_ids, root_states):
+    def spy_set_state(env_ids: torch.Tensor, root_states: torch.Tensor) -> Any:
         call_count[0] += 1
         call_args.append(
             (
@@ -104,7 +105,7 @@ def test_push_applies_state_tensor_to_simulator(shared_env):
 
 
 @pytest.mark.skip(reason="Cannot run multiple Isaac Gym instances in a single process")
-def test_push_causes_robot_motion(shared_env):
+def test_push_causes_robot_motion(shared_env: Any) -> None:
     """Test #2: Verify pushes result in actual robot movement in simulation.
 
     This test validates the fix where set_actor_root_state_tensor_robots()

@@ -33,6 +33,7 @@ _ACTOR_HARNESS = Path(__file__).resolve().parents[1] / "camera_actor_mount_asser
 _WORLD_HARNESS = Path(__file__).resolve().parents[1] / "world_camera_assert.py"
 _ORIENT_HARNESS = Path(__file__).resolve().parents[1] / "camera_orientation_assert.py"
 _OBS_HARNESS = Path(__file__).resolve().parents[1] / "camera_obs_assert.py"
+_PROJECTION_HARNESS = Path(__file__).resolve().parents[1] / "camera_projection_assert.py"
 
 
 def test_camera_geometry(tmp_path):
@@ -76,6 +77,21 @@ def test_camera_recorder(tmp_path):
         str(result_file),
         label="isaacsim/camera-recorder",
         timeout=700,
+        result_file=result_file,
+    )
+
+
+def test_camera_fisheye_projection(tmp_path):
+    # The authored f-theta calibration produces observably wider projection geometry than pinhole.
+    result_file = tmp_path / "fisheye_isaacsim.txt"
+    run_harness(
+        _PROJECTION_HARNESS,
+        "--simulator",
+        "isaacsim",
+        "--result-file",
+        str(result_file),
+        label="isaacsim/camera-fisheye",
+        timeout=900,
         result_file=result_file,
     )
 

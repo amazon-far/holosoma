@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import numpy as np
+import numpy.typing as npt
 import pytest
 import torch
 
@@ -11,7 +14,7 @@ from holosoma.utils.torch_utils import (
 
 
 @pytest.fixture
-def tensors_and_dones():
+def tensors_and_dones() -> tuple[torch.Tensor, torch.Tensor]:
     # Shape: [time=6, envs=2, dim=1]
     tensors = torch.tensor(
         [
@@ -42,7 +45,7 @@ def tensors_and_dones():
     return tensors, dones
 
 
-def test_normalize():
+def test_normalize() -> None:
     # Test normalization of vector
     v = torch.tensor([3.0, 4.0, 0.0], dtype=torch.float32)
     norm_v = normalize(v)
@@ -55,11 +58,11 @@ def test_normalize():
     assert torch.allclose(norm_zero, expected, atol=1e-6)
 
 
-def test_to_torch():
+def test_to_torch() -> None:
     # Test numpy array conversion with explicit dtype. device="cpu" since this runs in the
     # no_sim CPU job; to_torch defaults to cuda:0.
-    np_array = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-    torch_tensor = to_torch(np_array, device="cpu")
+    np_array: npt.NDArray[np.float32] = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    torch_tensor = to_torch(np_array, device="cpu")  # type: ignore[arg-type]
     assert isinstance(torch_tensor, torch.Tensor)
     expected = torch.tensor(np_array, dtype=torch.float32, device=torch_tensor.device)
     assert torch.allclose(torch_tensor, expected)
@@ -72,11 +75,11 @@ def test_to_torch():
     assert torch.allclose(torch_tensor, expected)
 
     # Test device placement
-    torch_tensor = to_torch(np_array, device="cpu")
+    torch_tensor = to_torch(np_array, device="cpu")  # type: ignore[arg-type]
     assert torch_tensor.device.type == "cpu"
 
 
-def test_torch_rand_float():
+def test_torch_rand_float() -> None:
     # Test range
     lower, upper = -1.0, 1.0
     shape = (1000, 1)
@@ -88,7 +91,7 @@ def test_torch_rand_float():
     assert rand_tensor.device.type == device
 
 
-def test_get_axis_params():
+def test_get_axis_params() -> None:
     """Test get_axis_params function for different axis indices and values."""
     # Test default parameters (3D vector)
     params = get_axis_params(value=1.0, axis_idx=0)

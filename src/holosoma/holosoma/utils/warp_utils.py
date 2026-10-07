@@ -3,7 +3,12 @@
 From: https://github.com/escontra/gauss_gym/blob/main/gauss_gym/utils/warp_utils.py
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 import numpy as np
+import numpy.typing as npt
 import torch
 import warp as wp
 
@@ -16,7 +21,7 @@ def raycast_kernel(
     ray_starts_world: wp.array(dtype=wp.vec3),  # type: ignore[valid-type]
     ray_directions_world: wp.array(dtype=wp.vec3),  # type: ignore[valid-type]
     ray_hits_world: wp.array(dtype=wp.vec3),  # type: ignore[valid-type]
-):
+) -> None:
     tid = wp.tid()
 
     # NOTE: float()/int() wrappers are load-bearing in Warp kernels: a bare literal is
@@ -30,7 +35,7 @@ def raycast_kernel(
     f = int(0)  # hit face index
     max_dist = float(1e6)  # max raycast disance
     # ray cast against the mesh
-    if wp.mesh_query_ray(  # type: ignore[call-arg]
+    if wp.mesh_query_ray(  # type: ignore[call-arg, truthy-bool]
         mesh,
         ray_starts_world[tid],
         ray_directions_world[tid],
@@ -105,7 +110,7 @@ def nearest_point_kernel(
     mesh: wp.uint64,
     points: wp.array(dtype=wp.vec3),  # type: ignore[valid-type]
     mesh_points: wp.array(dtype=wp.vec3),  # type: ignore[valid-type]
-):
+) -> None:
     tid = wp.tid()
 
     max_dist = float(1e6)  # max raycast disance
@@ -162,7 +167,9 @@ def nearest_point(points: torch.Tensor, wp_mesh: wp.Mesh) -> torch.Tensor:
     return mesh_points.view(shape)
 
 
-def convert_to_wp_mesh(vertices: np.ndarray, triangles: np.ndarray, device: str) -> wp.Mesh:
+def convert_to_wp_mesh(
+    vertices: npt.NDArray[np.floating[Any]], triangles: npt.NDArray[np.integer[Any]], device: str
+) -> wp.Mesh:
     return wp.Mesh(
         points=wp.array(vertices.astype(np.float32), dtype=wp.vec3, device=device),
         indices=wp.array(triangles.astype(np.int32).flatten(), dtype=int, device=device),

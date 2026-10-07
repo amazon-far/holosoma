@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+import numpy.typing as npt
+
 from holosoma.simulator.isaacsim.isaacsim import IsaacSim
 from holosoma.utils.adapters.draw_utils import convert_to_list, convert_to_tuple
+from holosoma.utils.safe_torch_import import torch
 
 
 def clear_lines(simulator: IsaacSim) -> None:
@@ -15,9 +20,9 @@ def clear_lines(simulator: IsaacSim) -> None:
 
 def draw_sphere(
     simulator: IsaacSim,
-    pos,
+    pos: list[float] | tuple[float, float, float] | npt.NDArray[Any] | torch.Tensor,
     radius: float,
-    color,
+    color: list[float] | tuple[float, float, float] | npt.NDArray[Any] | torch.Tensor,
     env_id: int,
     pos_id: int | None = None,
 ) -> None:
@@ -33,9 +38,9 @@ def draw_sphere(
 
 def draw_line(
     simulator: IsaacSim,
-    start_point,
-    end_point,
-    color,
+    start_point: list[float] | tuple[float, float, float] | npt.NDArray[Any] | torch.Tensor,
+    end_point: list[float] | tuple[float, float, float] | npt.NDArray[Any] | torch.Tensor,
+    color: list[float] | tuple[float, float, float] | npt.NDArray[Any] | torch.Tensor,
     env_id: int,
 ) -> None:
     """Draw a line with unified type support."""
@@ -50,13 +55,13 @@ def draw_line(
 
 
 # Set the rest to no-op since we only need these 3
-def draw_points(*args, **kwargs):
+def draw_points(*args: Any, **kwargs: Any) -> None:
     """No-op implementation for draw_points."""
 
 
-def draw_height_points(*args, **kwargs):
+def draw_height_points(*args: Any, **kwargs: Any) -> None:
     """No-op implementation for draw_height_points."""
 
 
-def draw_foot_height_points(*args, **kwargs):
+def draw_foot_height_points(*args: Any, **kwargs: Any) -> None:
     """No-op implementation for draw_foot_height_points."""

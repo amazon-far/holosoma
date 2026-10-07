@@ -1,3 +1,9 @@
+from __future__ import annotations
+
+from typing import Any
+
+import numpy as np
+import numpy.typing as npt
 from loguru import logger
 
 from holosoma.bridge.base.basic_sdk2py_bridge import BasicSdk2Bridge
@@ -15,7 +21,7 @@ class UnitreeSdk2Bridge(BasicSdk2Bridge):
     # Message type (HG for humanoid robots with 35 motors, GO2 for others).
     _MESSAGE_TYPE_NAMES = {"g1_29dof": "HG", "h1": "GO2", "h1-2": "HG", "go2_12dof": "GO2"}
 
-    def _init_sdk_components(self):
+    def _init_sdk_components(self) -> None:
         """Initialize Unitree SDK-specific components."""
         # Imported here (not at module top level) so importing this module never loads the C++
         # binding's bundled CycloneDDS — the multiprocess subclass keeps the parent binding-free.
@@ -29,7 +35,7 @@ class UnitreeSdk2Bridge(BasicSdk2Bridge):
             WirelessController,
         )
 
-        robot_type = self.robot.asset.robot_type
+        robot_type = self.sdk_robot_type
 
         # Validate robot type first
         if robot_type not in self.SUPPORTED_ROBOT_TYPES:
@@ -43,6 +49,9 @@ class UnitreeSdk2Bridge(BasicSdk2Bridge):
 
         # Create interface (handles DDS initialization internally)
         self.interface = UnitreeInterface(interface_name, sdk_robot_type, sdk_message_type)
+        # SIM ONLY: this bridge is always the sim fake robot (never real hardware). Answer the
+        # Unitree MotionSwitcher RPC so the operator driver's startup motion-release succeeds.
+        self.interface.enable_motion_switcher_responder()
 
         # Initialize data structures
         self.low_state = LowState(self.num_motor)
@@ -50,12 +59,12 @@ class UnitreeSdk2Bridge(BasicSdk2Bridge):
         self.wireless_controller = WirelessController()
         self.odom_state = OdomState()
 
-    def low_cmd_handler(self, msg=None):
+    def low_cmd_handler(self, msg: Any = None) -> None:
         """Handle Unitree low-level command messages."""
         # Poll for incoming commands from DDS
         self.low_cmd = self.interface.read_incoming_command()
 
-    def publish_low_state(self):
+    def publish_low_state(self) -> None:
         """Publish Unitree low-level state using simulator-agnostic interface."""
 
         # Get simulator data
@@ -87,7 +96,7 @@ class UnitreeSdk2Bridge(BasicSdk2Bridge):
         # Publish (CRC calculated automatically in C++)
         self.interface.publish_low_state(self.low_state)
 
-    def publish_wireless_controller(self):
+    def publish_wireless_controller(self) -> None:
         """Publish wireless controller data using unitree_interface."""
         # Call base class to populate wireless_controller from joystick
         super().publish_wireless_controller()
@@ -96,7 +105,7 @@ class UnitreeSdk2Bridge(BasicSdk2Bridge):
         if self.joystick is not None:
             self.interface.publish_wireless_controller(self.wireless_controller)
 
-    def publish_odom(self):
+    def publish_odom(self) -> None:
         """Publish base odometry as SportModeState on rt/odommodestate.
 
         Makes the simulator publish the same base-state channel the real robot's onboard
@@ -110,19 +119,22 @@ class UnitreeSdk2Bridge(BasicSdk2Bridge):
         self.odom_state.quat = quat_wxyz
         self.interface.publish_odom_state(self.odom_state)
 
-    def compute_torques(self):
-        """Compute torques using Unitree's unified command structure."""
-        if not (hasattr(self, "low_cmd") and self.low_cmd):
+    def compute_torques(self) -> npt.NDArray[np.floating[Any]]:
+        """Compute torques from fresh simulator state and the latest cached Unitree command."""
+        low_cmd = self.low_cmd
+        if low_cmd is None:
             return self.torques
 
         try:
-            # Extract from Unitree's unified structure
+            # Snapshot the cached command reference so an SDK callback/poll cannot mix fields from
+            # two commands during one PD computation. Reusing this object between transport polls is
+            # intentional; _compute_pd_torques reads fresh q/dq from the simulator on every call.
             return self._compute_pd_torques(
-                tau_ff=self.low_cmd.tau_ff,
-                kp=self.low_cmd.kp,
-                kd=self.low_cmd.kd,
-                q_target=self.low_cmd.q_target,
-                dq_target=self.low_cmd.dq_target,
+                tau_ff=low_cmd.tau_ff,
+                kp=low_cmd.kp,
+                kd=low_cmd.kd,
+                q_target=low_cmd.q_target,
+                dq_target=low_cmd.dq_target,
             )
         except Exception as e:
             logger.error(f"Error computing torques: {e}")

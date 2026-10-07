@@ -1,16 +1,20 @@
 """Drawing utilities that adapt to the configured simulator."""
 
+from __future__ import annotations
+
+from typing import Any
+
 from holosoma.utils.simulator_config import SimulatorType, get_simulator_type
 
 
-def _not_initialized(*args, **kwargs):
+def _not_initialized(*args: Any, **kwargs: Any) -> Any:
     """Default function that raises when drawing functions aren't initialized."""
     raise NotImplementedError(
         "Drawing functions not initialized. Must set simulator type before importing draw module."
     )
 
 
-def _make_noop(*args, **kwargs):
+def _make_noop(*args: Any, **kwargs: Any) -> None:
     """No-op function that accepts any arguments."""
 
 
@@ -59,12 +63,23 @@ else:
 
 
 # Helper functions remain unchanged
-def draw_debug_heights(simulator, env_id, base_pos, height_points, heights):
+def draw_debug_heights(
+    simulator: Any,
+    env_id: int,
+    base_pos: Any,
+    height_points: Any,
+    heights: Any,
+) -> None:
     """Draw height measurement points for debugging."""
     draw_height_points(simulator, base_pos, height_points, heights, env_id)
 
 
-def draw_debug_feet(simulator, env_id, feet_positions, feet_heights):
+def draw_debug_feet(
+    simulator: Any,
+    env_id: int,
+    feet_positions: Any,
+    feet_heights: Any,
+) -> None:
     """Draw foot positions and heights for debugging."""
     for foot_pos, foot_height in zip(feet_positions, feet_heights):
         terrain_height = foot_pos[2] - foot_height
