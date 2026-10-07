@@ -26,22 +26,29 @@ pytestmark = pytest.mark.no_sim
 # (plugin preset, sensor preset) pairs that are meant to be declared together.
 DEPTH_RIGS = [("depth-shm", "g1-stair-front-depth"), ("depth-shm-d435i", "g1-d435i-front-depth")]
 
-# The sim2sim scripts set the physics rate on the command line; the mujoco preset keeps its default.
-SIM2SIM_SCRIPTS = [
-    Path(__file__).resolve().parents[5] / "demo_scripts" / "php" / name
-    for name in ("run_stair_sim.sh", "run_php_sim.sh")
-]
-
-
-def _sim2sim_physics_fps(script: Path) -> int:
-    match = re.search(r"--simulator\.config\.sim\.fps=(\d+)", script.read_text())
-    assert match, f"{script.name} must set --simulator.config.sim.fps"
-    return int(match.group(1))
+# The workflow supplies the physics rate explicitly; the global MuJoCo preset keeps its default.
+SIM2SIM_WORKFLOW = (
+    Path(__file__).resolve().parents[4]
+    / "holosoma_inference"
+    / "docs"
+    / "workflows"
+    / "sim-to-sim-depth-distillation.md"
+)
 
 
 def _mujoco_control_hz() -> float:
-    """The control rate a camera's ``update_decimation`` resolves against in sim2sim."""
-    (fps,) = {_sim2sim_physics_fps(script) for script in SIM2SIM_SCRIPTS}
+    """The control rate used by the documented simulator invocations."""
+    commands = SIM2SIM_WORKFLOW.read_text().replace("\\\n", " ")
+    simulator_commands = [
+        line for line in commands.splitlines() if line.startswith("python src/holosoma/holosoma/run_sim.py ")
+    ]
+    assert simulator_commands, "The workflow must document a simulator invocation"
+    rates = set()
+    for command in simulator_commands:
+        match = re.search(r"--simulator\.config\.sim\.fps=(\d+)", command)
+        assert match, "Every sim2sim invocation must set --simulator.config.sim.fps"
+        rates.add(int(match.group(1)))
+    (fps,) = rates
     return float(fps / RUN_SIM_REGISTRY["mujoco"].config.sim.control_decimation_steps)
 
 
@@ -61,7 +68,7 @@ def test_plugin_camera_matches_a_sensor_preset_key(plugin_name: str, sensor_name
 
 @pytest.mark.parametrize(("plugin_name", "sensor_name"), DEPTH_RIGS)
 def test_sensor_render_rate_is_achievable_at_the_sim2sim_control_rate(plugin_name: str, sensor_name: str) -> None:
-    """A camera's rate string must resolve against the sim2sim scripts' control rate.
+    """A camera's rate string must resolve against the documented sim2sim control rate.
 
     A bare ``"50Hz"`` demands an exact divisor and raises at 125 Hz (125/50 = 2.5), which would make
     the documented command die at startup. The presets use ``">50Hz"`` so they over-render instead;

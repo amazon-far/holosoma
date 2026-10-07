@@ -42,6 +42,7 @@ publisher:
 ```bash
 source scripts/source_mujoco_setup.sh
 python src/holosoma/holosoma/run_sim.py robot:g1-29dof \
+    --simulator.config.sim.fps=500 \
     sensor.stair_front_depth:g1-stair-front-depth \
     plugin.depth:depth-shm
 ```
@@ -100,29 +101,8 @@ Each key selects a heading outright — see below.
 
 ---
 
-## Convenience Scripts
-
-Both steps above are wrapped:
-
-```bash
-demo_scripts/php/run_stair_sim.sh          # terminal 1
-demo_scripts/php/run_stair_inference.sh    # terminal 2
-```
-
-Extra arguments pass through to the underlying command. Point at a different
-checkpoint pair with environment variables:
-
-```bash
-CKPT_DIR=/path/to/ckpts RUN=<run-name> demo_scripts/php/run_stair_inference.sh
-```
-
-To exercise the control loop without the simulator (zero-filled depth frames):
-
-```bash
-demo_scripts/php/run_stair_inference.sh --task.depth-shm.no-required
-```
-
----
+To exercise the policy control loop without a depth producer, append
+`--task.depth-shm.no-required` to the inference command above; it will use zero-filled depth.
 
 ## Policy Controls Reference
 
@@ -213,6 +193,7 @@ The values must match what the checkpoint was trained with:
 
 ```bash
 python src/holosoma/holosoma/run_sim.py robot:g1-29dof \
+    --simulator.config.sim.fps=500 \
     sensor.stair_front_depth:g1-stair-front-depth plugin.depth:depth-shm \
     --plugin.depth.near-clip 0.1 \
     --plugin.depth.far-clip 2.0 \
@@ -299,6 +280,7 @@ different mesh with an absolute path:
 
 ```bash
 python src/holosoma/holosoma/run_sim.py robot:g1-29dof \
+    --simulator.config.sim.fps=500 \
     sensor.stair_front_depth:g1-stair-front-depth plugin.depth:depth-shm \
     terrain:terrain-load-step \
     --terrain.terrain-term.obj-file-path <path>/chained_stairs_15.obj
@@ -313,17 +295,14 @@ Use `terrain:terrain-locomotion-plane` for flat ground.
 The presets above describe the ZED 2i rig. For checkpoints trained against the **D435i** rig
 (`G1FlatRsD435iConfig`: 27° down torso mount at `(0.01, 0.01, 0.44)`, 106x60, `[0.3, 3.0]` m), use
 the D435i triple instead — the depth tensor is 58x87 either way, so the ZED presets also *run*, just
-with the wrong extrinsics and far clip:
-
-```bash
-demo_scripts/php/run_php_sim.sh          # terminal 1
-demo_scripts/php/run_php_inference.sh    # terminal 2
-```
-
-which is:
+with the wrong extrinsics and far clip. The [PHP repository](https://github.com/amazon-far/php_parkour)
+owns the project-level `run_php_sim.sh` and `run_php_inference.sh` launchers; see its
+[sim2sim guide](https://github.com/amazon-far/php_parkour/blob/main/wbt_training/DEPLOY.md).
+Those launchers wrap the following Holosoma commands:
 
 ```bash
 python src/holosoma/holosoma/run_sim.py robot:g1-29dof \
+    --simulator.config.sim.fps=500 \
     sensor.d435i_front_depth:g1-d435i-front-depth \
     plugin.depth:depth-shm-d435i \
     terrain:terrain-load-step \
