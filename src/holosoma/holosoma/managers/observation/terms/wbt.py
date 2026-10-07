@@ -135,6 +135,21 @@ def motion_command(env: WholeBodyTrackingManager) -> torch.Tensor:
     return motion_command.command
 
 
+def robot_anchor_projected_gravity(env: WholeBodyTrackingManager) -> torch.Tensor:
+    """Gravity vector projected into the motion-command anchor (ref) frame.
+
+    Mirrors the reference ``robot_anchor_projected_gravity``. Gives the student a static
+    orientation cue relative to the reference pose — complements
+    :func:`base_ang_vel` (rates) and :func:`dof_pos` (joint angles) which
+    don't encode absolute torso attitude.
+
+    Returns:
+        Tensor of shape [num_envs, 3].
+    """
+    motion_command = _get_motion_command_and_assert_type(env)
+    return quat_rotate_inverse(motion_command.robot_ref_quat_w, gravity_vector(env), w_last=True).view(env.num_envs, -1)
+
+
 def motion_ref_pos_b(env: WholeBodyTrackingManager) -> torch.Tensor:
     motion_command = _get_motion_command_and_assert_type(env)
     pos, _ = subtract_frame_transforms(
@@ -219,3 +234,27 @@ def obj_lin_vel_b(env: WholeBodyTrackingManager) -> torch.Tensor:
         unit_quat,
     )
     return vel_b.view(env.num_envs, -1)
+
+
+def velocity_command(env: WholeBodyTrackingManager) -> torch.Tensor:
+    """Deprecated: forwards to the application that owns this observation.
+
+    The one-hot velocity command is not part of holosoma's motion format — it
+    was introduced by an application (``wbt_training``) along with the
+    command term that supplies it, and only that application consumes it. The
+    implementation now lives beside its command term.
+
+    This forwarder exists solely because the dotted path is serialized into
+    checkpoints trained before the move, so ``resolve_callable`` must keep
+    resolving it. It reads ``vel_cmd`` off whatever command term is registered,
+    which keeps core free of any import of the application package.
+    """
+    motion_command = _get_motion_command_and_assert_type(env)
+    vel_cmd = getattr(motion_command, "vel_cmd", None)
+    if vel_cmd is None:
+        raise TypeError(
+            f"velocity_command: command term {type(motion_command).__name__} has no "
+            f"'vel_cmd'. This observation requires a command term that supplies one "
+            f"(e.g. wbt_training.config_values.motion_command:PhpMotionCommand)."
+        )
+    return vel_cmd.view(env.num_envs, -1)

@@ -13,7 +13,6 @@ while [ -h "$SOURCE" ]; do
 done
 SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null && pwd )"
 ROOT_DIR=$(dirname "$SCRIPT_DIR")
-PROJECTS_DIR=$(dirname "$ROOT_DIR")
 
 source ${SCRIPT_DIR}/source_common.sh
 
@@ -47,21 +46,11 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 # --- Holosoma runtime deps (compatible with Python 3.12) ---
 pip install astor easydict ipdb joblib loguru lxml matplotlib meshcat omegaconf \
     opencv-python plotly pygame pynput rich scipy tensorboard tensordict \
-    termcolor tqdm trimesh "yourdfpy>=0.0.58" zmq shapely click \
+    termcolor tqdm trimesh "yourdfpy>=0.0.58" pyzmq shapely click \
     "warp-lang>=1.10" pydantic "tyro>=1.0.0" "numpy<2"
 
 # --- Install holosoma + extensions (--no-deps to skip numpy==1.23.5 pin) ---
 pip install --no-deps -e $ROOT_DIR/src/holosoma
-
-# Extensions (if present)
-EXT_DIR=$PROJECTS_DIR/FAR-HolosomaExtension/src/extensions
-for pkg in common x1_humanoid x1_humanoid_inference xdof_inference; do
-  PKG_DIR=$EXT_DIR/$pkg
-  if [[ -d $PKG_DIR && -f $PKG_DIR/pyproject.toml ]]; then
-    echo "Installing extension: $pkg"
-    pip install --no-deps -e $PKG_DIR
-  fi
-done
 
 # Also install holosoma_inference if present
 if [[ -f $ROOT_DIR/src/holosoma_inference/pyproject.toml ]]; then

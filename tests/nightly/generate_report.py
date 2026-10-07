@@ -16,7 +16,7 @@ from os import getenv
 import wandb
 import wandb_workspaces.reports.v2 as wr
 
-WANDB_ENTITY = getenv("WANDB_ENTITY", "amazon-far")
+WANDB_ENTITY = getenv("WANDB_ENTITY", "")
 WANDB_PROJECT = "nightly-holosoma-runs"
 
 # Github assigned variables

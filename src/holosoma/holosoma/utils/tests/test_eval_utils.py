@@ -251,12 +251,13 @@ def test_load_checkpoint(tmp_path: Path) -> None:
             log_dir=str(log_dir),
         )
 
-    # Should be copied to log_dir (not cache) with ORIGINAL filename preserved
-    assert checkpoint_path == log_dir / "model_100.pt"
+    # Should be copied to log_dir (not cache) with the ORIGINAL filename, under
+    # the run-id prefix that keeps multi-teacher checkpoints from colliding.
+    assert checkpoint_path == log_dir / "test_run_model_100.pt"
     assert Path(checkpoint_path).exists()
     assert Path(checkpoint_path).read_bytes() == b"fake checkpoint"
     # Verify original filename is used, not hash
-    assert checkpoint_path.name == "model_100.pt"
+    assert checkpoint_path.name == "test_run_model_100.pt"
 
     # Test local checkpoint
     local_checkpoint = tmp_path / "local_model.pt"
@@ -290,9 +291,9 @@ def test_load_checkpoint_with_wandb_prefix(tmp_path: Path) -> None:
         )
 
     # Should be copied to log_dir with ORIGINAL filename, not cache hash
-    assert checkpoint_path == log_dir / "model_100.pt"
+    assert checkpoint_path == log_dir / "test_run_id_model_100.pt"
     assert Path(checkpoint_path).exists()
-    assert checkpoint_path.name == "model_100.pt"  # Original name preserved
+    assert checkpoint_path.name == "test_run_id_model_100.pt"  # Original name preserved
 
 
 def test_load_checkpoint_with_wandb_runs_segment(tmp_path: Path) -> None:
@@ -309,10 +310,11 @@ def test_load_checkpoint_with_wandb_runs_segment(tmp_path: Path) -> None:
             log_dir=str(log_dir),
         )
 
-    # Should be copied to log_dir with ORIGINAL filename, not cache hash
-    assert checkpoint_path == log_dir / "model_100.pt"
+    # Should be copied to log_dir with ORIGINAL filename, not cache hash. The
+    # run-id prefix drops the "runs" segment along with the entity/project.
+    assert checkpoint_path == log_dir / "test_run_id_model_100.pt"
     assert Path(checkpoint_path).exists()
-    assert checkpoint_path.name == "model_100.pt"  # Original name preserved
+    assert checkpoint_path.name == "test_run_id_model_100.pt"  # Original name preserved
 
 
 def test_load_checkpoint_log_dir_copy_behavior(tmp_path: Path) -> None:
@@ -364,8 +366,10 @@ def test_load_checkpoint_updates_stale_copy(tmp_path: Path) -> None:
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
 
-    # Create old file in log_dir
-    old_log_file = log_dir / "model_5000.pt"
+    # Create old file in log_dir, under the run-id-prefixed name load_checkpoint
+    # actually writes -- seeding a bare "model_5000.pt" would leave the refresh
+    # path untested, since the copy would simply be missing.
+    old_log_file = log_dir / "run_id_model_5000.pt"
     old_log_file.write_bytes(b"old content")
     old_mtime = time.time() - 3600  # 1 hour ago
     os.utime(old_log_file, (old_mtime, old_mtime))

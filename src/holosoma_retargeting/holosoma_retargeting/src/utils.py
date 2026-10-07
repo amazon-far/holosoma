@@ -10,7 +10,6 @@ import re
 from pathlib import Path
 
 import numpy as np
-import smplx  # type: ignore[import-not-found]
 import torch
 import trimesh
 from jinja2 import Template
@@ -524,7 +523,14 @@ def load_smpl_motion(model_path, motion_file):
     Returns:
         numpy.ndarray: A (num_frames, num_joints, 3) array of 3D joint positions.
         smplx.SMPL: The loaded SMPL model object.
+
+    Requires the ``smplx`` package, which is deliberately NOT a declared
+    dependency: its license (Max Planck) permits neither commercial use nor
+    redistribution, so it cannot be pulled in by an Apache-2.0 wheel. Install it
+    yourself, under MPG's terms, if you need this function.
     """
+    import smplx  # type: ignore[import-not-found]
+
     print("Loading SMPL model and motion...")
     model = smplx.SMPL(model_path=model_path, gender="neutral", ext="pkl").to("cpu")
     motion_data = np.load(motion_file)

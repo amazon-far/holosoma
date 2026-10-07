@@ -51,3 +51,13 @@ class ObservationConfig:
     Example:
         {"actor_obs": 1, "critic_obs": 3}
     """
+
+    sort_obs_terms: bool = True
+    """Concatenate each group's terms in alphabetical order.
+
+    True (default) matches the export convention of the policies shipped here,
+    whose training pipeline sorted term names. Set False when a checkpoint was
+    exported with terms in declaration order instead — then the order written in
+    ``obs_dict`` is the wire order, so reordering that list silently changes the
+    observation vector.
+    """

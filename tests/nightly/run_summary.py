@@ -20,7 +20,7 @@ from typing import NamedTuple
 import wandb
 from slack_sdk import WebClient
 
-WANDB_ENTITY = getenv("WANDB_ENTITY", "amazon-far")
+WANDB_ENTITY = getenv("WANDB_ENTITY", "")
 SLACK_CHANNEL = getenv("SLACK_CHANNEL", "")
 SLACK_TOKEN = getenv("SLACK_BOT_TOKEN", "")
 

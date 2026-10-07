@@ -99,6 +99,14 @@ python examples/parallel_robot_retarget.py --data-dir demo_data/lafan --task-typ
 
 We provide `data_utils/prep_amass_smplx_for_rt.py` for converting AMASS SMPLX data to the format required for motion retargeting.
 
+> **License note.** This data-prep path depends on `human_body_prior`
+> (AGPL-3.0/GPLv3) and on the SMPL-X body models (Max Planck research license:
+> non-commercial, no redistribution). Neither is a dependency of
+> `holosoma-retargeting`, and neither is redistributed here — the imports are
+> lazy so the package installs and imports without them. Installing them below is
+> your decision, under those upstream licenses, and it is your responsibility to
+> confirm your intended use is permitted.
+
 ```bash
 # Install dependencies
 cd holosoma_retargeting/data_utils/

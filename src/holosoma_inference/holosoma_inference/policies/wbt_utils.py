@@ -109,15 +109,21 @@ class PinocchioRobot:
         # get ref body frame id in pinocchio robot
         self.ref_body_frame_id = self.robot_model.getFrameId(robot_cfg.motion["body_name_ref"][0])
 
-    def fk_and_get_ref_body_orientation_in_world(self, configuration: np.ndarray) -> np.ndarray:
-        # forward kinematics
+    def fk_and_get_ref_body_pose_in_world(self, configuration: np.ndarray) -> tuple:
+        """Forward-kinematics the ``body_name_ref`` body and return its pose.
+
+        Returns ``(pos_xyz (3,), quat_xyzw (4,))`` in world frame.
+        """
         pin.framesForwardKinematics(self.robot_model, self.robot_data, configuration)
-
-        # get ref body pose in world
         ref_body_pose_in_world = self.robot_data.oMf[self.ref_body_frame_id]
-        quaternion = pin.Quaternion(ref_body_pose_in_world.rotation)  # (4, )
+        pos_xyz = np.asarray(ref_body_pose_in_world.translation, dtype=np.float64)
+        quaternion = pin.Quaternion(ref_body_pose_in_world.rotation)
+        return pos_xyz, quaternion.coeffs()
 
-        return np.expand_dims(quaternion.coeffs(), axis=0)  # xyzw, (1, 4)
+    def fk_and_get_ref_body_orientation_in_world(self, configuration: np.ndarray) -> np.ndarray:
+        """Convenience wrapper — returns just the orientation as ``(1, 4)`` xyzw."""
+        _, quat_xyzw = self.fk_and_get_ref_body_pose_in_world(configuration)
+        return np.expand_dims(quat_xyzw, axis=0)
 
     @staticmethod
     def _create_xml_from_urdf(urdf_text: str) -> str:

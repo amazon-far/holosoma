@@ -79,4 +79,6 @@ g1_29dof_wbt_command_w_object = replace(
 __all__ = [
     "g1_29dof_wbt_command",
     "g1_29dof_wbt_command_w_object",
+    "init_pose_config",
+    "motion_config",
 ]

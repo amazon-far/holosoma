@@ -120,27 +120,23 @@ class WholeBodyTrackingPolicy(BasePolicy):
         else:
             _show_warning()
 
-    def _get_ref_body_orientation_in_world(self, robot_state_data):
-        # Create configuration for pinocchio robot
-        # Note:
-        # 1. pinocchio quaternion is in xyzw format, robot_state_data is in wxyz format
-        # 2. joint sequences in pinocchio robot and real robot are different
+    def _get_ref_body_pose_in_world(self, robot_state_data):
+        """Forward-kinematics the training ``body_name_ref`` (torso_link for
+        the terrain preset, pelvis for native presets) in world frame.
 
-        # free base pos, does not matter
+        Returns ``(pos_xyz_world (3,), quat_wxyz_world (4,))``.
+        """
         root_pos = robot_state_data[0, :3]
-
-        # free base ori, wxyz -> xyzw
         root_ori_xyzw = wxyz_to_xyzw(robot_state_data[:, 3:7])[0]
+        dof_pos = robot_state_data[0, 7 : 7 + self.num_dofs][self.pinocchio_robot.real2pinocchio_index]
+        configuration = np.concatenate([root_pos, root_ori_xyzw, dof_pos], axis=0)
+        pos_xyz, quat_xyzw = self.pinocchio_robot.fk_and_get_ref_body_pose_in_world(configuration)
+        return pos_xyz, xyzw_to_wxyz(np.expand_dims(quat_xyzw, 0)).flatten()
 
-        # dof pos in real robot -> pinocchio robot
-        num_dofs = self.num_dofs
-        dof_pos_in_real = robot_state_data[0, 7 : 7 + num_dofs]
-        dof_pos_in_pinocchio = dof_pos_in_real[self.pinocchio_robot.real2pinocchio_index]
-
-        configuration = np.concatenate([root_pos, root_ori_xyzw, dof_pos_in_pinocchio], axis=0)
-
-        ref_ori_xyzw = self.pinocchio_robot.fk_and_get_ref_body_orientation_in_world(configuration)
-        return xyzw_to_wxyz(ref_ori_xyzw)
+    def _get_ref_body_orientation_in_world(self, robot_state_data):
+        """Convenience wrapper that returns just the orientation (wxyz)."""
+        _, quat_wxyz = self._get_ref_body_pose_in_world(robot_state_data)
+        return quat_wxyz.reshape(1, 4)
 
     def setup_policy(self, model_path):
         self.onnx_policy_session = onnxruntime.InferenceSession(model_path)

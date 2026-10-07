@@ -12,6 +12,94 @@ if TYPE_CHECKING:
     from holosoma.config_types.action import ActionTermCfg
 
 
+class JointPositionTargetActionTerm(ActionTermBase):
+    """Action term that matches IsaacLab implicit joint-position targets.
+
+    Raw actions are interpreted as joint-position deltas around
+    ``default_dof_pos`` and applied directly as articulation position targets
+    (Isaac Sim's built-in implicit PD drive). The per-joint scale is computed
+    the same way as :class:`JointPositionActionTerm` so the preset's
+    ``control.action_scale`` and ``action_scales_by_effort_limit_over_p_gain``
+    contracts are honored and the exported ONNX metadata carries per-joint
+    scales (via ``env.action_scales``).
+
+    Requires ``control_mode="implicit_position_target"`` (with ``implicit_actuator_builder``) on
+    IsaacSim; no preset in this repo selects it.
+    """
+
+    def __init__(self, cfg: ActionTermCfg, env: Any):
+        super().__init__(cfg, env)
+        # Fail here rather than on the first env.step(): position targets only drive the joints when
+        # the simulator built implicit actuators for them, which only IsaacSim does (and only in
+        # this control mode).
+        control_mode = env.robot_config.control.control_mode
+        if control_mode != "implicit_position_target":
+            raise ValueError(
+                f"{type(self).__name__} requires robot.control.control_mode='implicit_position_target', "
+                f"got {control_mode!r}."
+            )
+        if not callable(getattr(env.simulator, "apply_position_targets_at_dof", None)):
+            raise NotImplementedError(
+                f"{type(self).__name__} needs simulator-native joint-position targets, which "
+                f"{type(env.simulator).__name__} does not implement (only IsaacSim does)."
+            )
+        self._action_dim: int = env.num_dof
+        self._raw_actions: torch.Tensor = torch.zeros(env.num_envs, self._action_dim, device=env.device)
+        self._processed_actions: torch.Tensor = torch.zeros(env.num_envs, self._action_dim, device=env.device)
+        self._applied_position_targets: torch.Tensor = torch.zeros(env.num_envs, self._action_dim, device=env.device)
+
+        # Per-joint scale for `actions_scaled = raw_actions * action_scales`.
+        # Matches JointPositionActionTerm._configure_action_scales so the
+        # exported ONNX metadata is the same whether the preset uses the
+        # explicit-PD or implicit-PD action term.
+        control_cfg = env.robot_config.control
+        self.action_scales: torch.Tensor = torch.full(
+            (self._action_dim,), float(control_cfg.action_scale), device=env.device
+        )
+        if control_cfg.action_scales_by_effort_limit_over_p_gain:
+            stiffness_dict = control_cfg.stiffness
+            dof_names = env.robot_config.dof_names
+            dof_effort_limit_list = env.robot_config.dof_effort_limit_list
+            for i, name in enumerate(dof_names):
+                stripped = name.replace("_joint", "")
+                stiffness = 0.0
+                for key, value in stiffness_dict.items():
+                    if key in stripped:
+                        stiffness = float(value)
+                        break
+                effort = float(dof_effort_limit_list[i])
+                if stiffness == 0.0:
+                    self.action_scales[i] = 0.0
+                else:
+                    self.action_scales[i] = control_cfg.action_scale * effort / stiffness
+        # Expose on env so exporter writes per-joint scales into ONNX metadata
+        # (PPO/FastSAC exporters read env.action_scales — same path as
+        # JointPositionActionTerm).
+        env.action_scales = self.action_scales
+
+    @property
+    def action_dim(self) -> int:
+        return self._action_dim
+
+    def process_actions(self, actions: torch.Tensor) -> None:
+        self._raw_actions[:] = actions
+        if self.env.robot_config.control.clip_actions:
+            clip_limit = self.env.robot_config.control.action_clip_value
+            clipped_actions = torch.clip(actions, -clip_limit, clip_limit)
+            self.env.log_dict["action_clip_frac"] = (
+                clipped_actions.abs() == clip_limit
+            ).sum() / clipped_actions.numel()
+        else:
+            clipped_actions = actions
+            self.env.log_dict["action_clip_frac"] = torch.tensor(0.0, device=self.env.device)
+
+        self._processed_actions[:] = self.env.default_dof_pos + clipped_actions * self.action_scales
+
+    def apply_actions(self) -> None:
+        self._applied_position_targets[:] = self._processed_actions
+        self.env.simulator.apply_position_targets_at_dof(self._applied_position_targets)
+
+
 class JointPositionActionTerm(ActionTermBase):
     """Action term for joint position control with PD controller.
 
@@ -32,6 +120,14 @@ class JointPositionActionTerm(ActionTermBase):
             env: Environment instance (typically a ``BaseTask`` subclass)
         """
         super().__init__(cfg, env)
+        # In implicit_position_target mode IsaacSim drives the joints with its own PD, so the torques
+        # computed here would be added on top of it.
+        control_mode = env.robot_config.control.control_mode
+        if control_mode != "explicit_pd_torque":
+            raise ValueError(
+                f"{type(self).__name__} requires robot.control.control_mode='explicit_pd_torque', got "
+                f"{control_mode!r}; use JointPositionTargetActionTerm for 'implicit_position_target'."
+            )
 
         # Get action dimension from environment
         self._action_dim = env.num_dof

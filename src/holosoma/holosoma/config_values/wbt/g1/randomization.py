@@ -148,7 +148,99 @@ g1_29dof_wbt_randomization_w_object = RandomizationManagerCfg(
     },
 )
 
+ee_mass_dr_at_setup = {
+    "randomize_mass_startup": RandomizationTermCfg(
+        func="holosoma.managers.randomization.terms.locomotion:randomize_mass_startup",
+        params={
+            "enable_link_mass": True,
+            "link_mass_range": [0.8, 1.5],
+            "enable_base_mass": True,
+            "added_mass_range": [-1.0, 3.0],
+            "enabled": True,
+        },
+    ),
+}
+
+g1_29dof_wbt_randomization_ee_mass = RandomizationManagerCfg(
+    setup_terms={**base_setup_terms, **ee_mass_dr_at_setup},
+    reset_terms={**base_reset_terms},
+    step_terms={**base_step_terms},
+)
+
+aggressive_dr_at_setup = {
+    "randomize_mass_startup": RandomizationTermCfg(
+        func="holosoma.managers.randomization.terms.locomotion:randomize_mass_startup",
+        params={
+            "enable_link_mass": True,
+            "link_mass_range": [0.7, 1.8],
+            "enable_base_mass": True,
+            "added_mass_range": [-2.0, 5.0],
+            "enabled": True,
+        },
+    ),
+}
+
+aggressive_setup_terms = {
+    "randomize_robot_rigid_body_material_startup": RandomizationTermCfg(
+        func="holosoma.managers.randomization.terms.locomotion:randomize_robot_rigid_body_material_startup",
+        params={
+            "static_friction_range": [0.2, 2.0],
+            "dynamic_friction_range": [0.2, 1.5],
+            "restitution_range": [0.0, 0.8],
+        },
+    ),
+    "randomize_base_com_startup": RandomizationTermCfg(
+        func="holosoma.managers.randomization.terms.locomotion:randomize_base_com_startup",
+        params={
+            "base_com_range": {"x": [-0.05, 0.05], "y": [-0.1, 0.1], "z": [-0.1, 0.1]},
+            "enabled": True,
+        },
+    ),
+    "setup_dof_pos_bias": RandomizationTermCfg(
+        func="holosoma.managers.randomization.terms.locomotion:setup_dof_pos_bias",
+        params={
+            "dof_pos_bias_range": [-0.03, 0.03],
+            "enabled": True,
+        },
+    ),
+    "push_randomizer_state": RandomizationTermCfg(
+        func="holosoma.managers.randomization.terms.locomotion:PushRandomizerState",
+        params={
+            "push_interval_s": [0.5, 2.0],
+            "max_push_vel": [1.0, 1.0, 0.4, 1.0, 1.0, 1.5],
+            "enabled": True,
+        },
+    ),
+    "actuator_randomizer_state": RandomizationTermCfg(
+        func="holosoma.managers.randomization.terms.locomotion:ActuatorRandomizerState",
+        params={
+            "kp_range": [0.8, 1.2],
+            "kd_range": [0.8, 1.2],
+            "rfi_lim_range": [1.0, 1.0],
+            "enable_pd_gain": True,
+            "enable_rfi_lim": False,
+        },
+    ),
+    "setup_action_delay_buffers": RandomizationTermCfg(
+        func="holosoma.managers.randomization.terms.locomotion:setup_action_delay_buffers",
+        params={
+            "ctrl_delay_step_range": [0, 2],
+            "enabled": True,
+        },
+    ),
+    **aggressive_dr_at_setup,
+}
+
+g1_29dof_wbt_randomization_aggressive = RandomizationManagerCfg(
+    setup_terms={**aggressive_setup_terms},
+    reset_terms={**base_reset_terms},
+    step_terms={**base_step_terms},
+)
+
 __all__ = [
+    "base_step_terms",
     "g1_29dof_wbt_randomization",
+    "g1_29dof_wbt_randomization_aggressive",
+    "g1_29dof_wbt_randomization_ee_mass",
     "g1_29dof_wbt_randomization_w_object",
 ]

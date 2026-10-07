@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import os
 import sys
@@ -54,6 +55,43 @@ class MultGPUConfig(TypedDict):
     global_rank: int
     local_rank: int
     world_size: int
+
+
+def infer_num_teachers_from_checkpoint(checkpoint: dict[str, Any]) -> int | None:
+    """Read the teacher-slot count from a full distillation checkpoint."""
+    explicit_count = checkpoint.get("num_teachers")
+    if explicit_count is not None:
+        if type(explicit_count) is not int or explicit_count < 1:
+            raise ValueError(f"Invalid num_teachers checkpoint metadata: {explicit_count!r}")
+
+    state_dict = checkpoint.get("model_state_dict")
+    if not isinstance(state_dict, dict):
+        return explicit_count
+
+    legacy_single_teacher = any(key.startswith("teacher.") for key in state_dict)
+    indices: set[int] = set()
+    for key in state_dict:
+        parts = key.split(".", 2)
+        if len(parts) >= 2 and parts[0] == "teachers" and parts[1].isdigit():
+            indices.add(int(parts[1]))
+
+    if legacy_single_teacher and indices:
+        raise ValueError("Checkpoint mixes legacy 'teacher.*' and current 'teachers.*' keys.")
+    if legacy_single_teacher:
+        inferred_count = 1
+    elif indices:
+        expected = set(range(max(indices) + 1))
+        if indices != expected:
+            raise ValueError(f"Checkpoint has non-contiguous teacher slots: {sorted(indices)}.")
+        inferred_count = len(indices)
+    else:
+        return explicit_count
+    if explicit_count is not None and explicit_count != inferred_count:
+        raise ValueError(
+            f"Checkpoint num_teachers metadata says {explicit_count}, but its state dict "
+            f"contains {inferred_count} teacher slots."
+        )
+    return inferred_count
 
 
 def configure_multi_gpu() -> MultGPUConfig | None:
@@ -163,7 +201,7 @@ def train(tyro_config: ExperimentConfig, training_context: TrainingContext | Non
     env = None
     try:
         # have to import torch after isaacgym
-        import torch  # noqa: F401
+        import torch
         import torch.distributed as dist
         import wandb
 
@@ -254,6 +292,18 @@ def train(tyro_config: ExperimentConfig, training_context: TrainingContext | Non
                 f"environments (total across all GPUs: {original_num_envs})"
             )
 
+        # If an experiment preset registers `training.preprocess_hook`,
+        # resolve it and invoke it to mutate the tyro_config before env
+        # construction. Application-specific work (registry downloads,
+        # obstacle injection, motion-file splicing) lives in the hook.
+        if tyro_config.training.preprocess_hook:
+            from holosoma.managers.utils import resolve_callable
+
+            _hook = resolve_callable(tyro_config.training.preprocess_hook, context="preprocess_hook")
+            _kwargs = json.loads(tyro_config.training.preprocess_hook_kwargs or "{}")
+            tyro_config = _hook(tyro_config, **_kwargs)
+            logger.info(f"Applied preprocess_hook={tyro_config.training.preprocess_hook!r}")
+
         env_target = tyro_config.env_class
 
         tyro_env_config = get_tyro_env_config(tyro_config)
@@ -286,14 +336,66 @@ def train(tyro_config: ExperimentConfig, training_context: TrainingContext | Non
             log_dir=experiment_save_dir,
             multi_gpu_cfg=distributed_conf,
         )
+
+        # Resolve teacher count before setup, when the policy allocates its slots.
+        # Full checkpoints are inspected so resume does not require teacher paths again.
+        teacher_checkpoints: list[str] = []
+        if tyro_config.training.teacher_checkpoint is not None:
+            teacher_checkpoints = [s.strip() for s in tyro_config.training.teacher_checkpoint.split(",") if s.strip()]
+            if not teacher_checkpoints:
+                raise ValueError("training.teacher_checkpoint must contain at least one checkpoint path.")
+
+        resume_checkpoint: Path | None = None
+        resume_teacher_count: int | None = None
+        if tyro_config.training.checkpoint is not None:
+            resume_checkpoint = load_checkpoint(tyro_config.training.checkpoint, str(experiment_save_dir))
+            checkpoint_data = torch.load(resume_checkpoint, map_location="cpu")
+            if not isinstance(checkpoint_data, dict):
+                raise TypeError("Training checkpoint must contain a dictionary.")
+            resume_teacher_count = infer_num_teachers_from_checkpoint(checkpoint_data)
+            tyro_config = dataclasses.replace(
+                tyro_config,
+                training=dataclasses.replace(
+                    tyro_config.training,
+                    checkpoint=str(resume_checkpoint),
+                ),
+            )
+
+        if teacher_checkpoints and resume_teacher_count is not None:
+            if len(teacher_checkpoints) != resume_teacher_count:
+                raise ValueError(
+                    f"Resume checkpoint contains {resume_teacher_count} teacher slots, but "
+                    f"{len(teacher_checkpoints)} teacher checkpoints were provided."
+                )
+
+        teacher_count = len(teacher_checkpoints) if teacher_checkpoints else resume_teacher_count
+        if teacher_count is not None:
+            if hasattr(algo, "num_teachers"):
+                algo.num_teachers = teacher_count
+            elif teacher_count > 1:
+                raise RuntimeError(
+                    f"Training requires {teacher_count} teacher slots, "
+                    f"but algorithm {type(algo).__name__} has no num_teachers attribute; "
+                    f"only 1 teacher is supported."
+                )
+
         algo.setup()
         algo.attach_checkpoint_metadata(tyro_config, wandb_run_path)
-        if tyro_config.training.checkpoint is not None:
-            loaded_checkpoint = load_checkpoint(tyro_config.training.checkpoint, str(experiment_save_dir))
-            tyro_config = dataclasses.replace(
-                tyro_config, training=dataclasses.replace(tyro_config.training, checkpoint=str(loaded_checkpoint))
-            )
-            algo.load(loaded_checkpoint)
+        if resume_checkpoint is not None:
+            algo.load(str(resume_checkpoint))
+
+        # Load teacher-only checkpoint(s) into the student-teacher policy, if the
+        # algo supports it. Runs after `algo.load()` so a full-resume checkpoint
+        # wins for student/critic/optimizer state, and we only overwrite the
+        # frozen teacher branch(es) here.
+        if teacher_checkpoints:
+            if not hasattr(algo, "load_teacher"):
+                raise RuntimeError(
+                    f"`training.teacher_checkpoint` was set but algorithm "
+                    f"{type(algo).__name__} does not implement load_teacher()."
+                )
+            teacher_ckpt_paths = [str(load_checkpoint(tc, str(experiment_save_dir))) for tc in teacher_checkpoints]
+            algo.load_teacher(teacher_ckpt_paths)
 
         # handle saving config
         algo.learn()

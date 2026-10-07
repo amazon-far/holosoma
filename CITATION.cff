@@ -4,10 +4,18 @@ message: >-
   If you use this software, please cite it using the
   metadata from this file.
 type: software
+license: Apache-2.0
+version: 0.0.1
 authors:
   - name: Amazon FAR
   - given-names: Pieter
     family-names: Abbeel
+  - given-names: Kevin
+    family-names: Best
+  - given-names: Matteo
+    family-names: Calabria
+  - given-names: Jinkun
+    family-names: Cao
   - given-names: Juyue
     family-names: Chen
   - given-names: Rocky
@@ -16,12 +24,16 @@ authors:
     family-names: Escontrela
   - given-names: Manan
     family-names: Gandhi
+  - given-names: Juan
+    family-names: Garcia Bonilla
   - given-names: Samuel
     family-names: Gundry
   - given-names: Xiaoyu
     family-names: Huang
   - given-names: Angjoo
     family-names: Kanazawa
+  - given-names: Brandon W.
+    family-names: King
   - given-names: Tomasz
     family-names: Lewicki
   - given-names: Jiaman
@@ -32,6 +44,8 @@ authors:
     family-names: Rosenthal
   - given-names: Younggyo
     family-names: Seo
+  - given-names: Adam
+    family-names: Setapen
   - given-names: Carlo
     family-names: Sferrazza
   - given-names: Guanya

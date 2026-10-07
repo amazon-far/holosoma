@@ -9,20 +9,34 @@ description = "holosoma-inference: inference components for humanoid robot polic
 readme = "README.md"
 requires-python = ">=3.8"
 authors = [{ name = "Amazon FAR Team" }]
+license = { text = "Apache-2.0" }
 keywords = ["humanoid", "robotics", "inference", "policy", "onnx"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+]
 dependencies = [
     "pydantic",
     "loguru",
+    "typing_extensions",
     "netifaces",
     "onnx",
     "onnxruntime",
     "scipy",
     "sshkeyboard",
+    # Key-UP events, which sshkeyboard cannot report (a terminal delivers auto-repeat, not releases).
+    # Needed for hold-to-move direction keys; import and listener start are both guarded, so a
+    # headless install simply falls back to latching directions.
+    "pynput",
     "termcolor",
     "pyyaml",
     "tyro>=0.10.0a4",
     "wandb",
-    "zmq",
+    "pyzmq",
     "defusedxml",
     "evdev",
     "importlib_metadata>=4.6; python_version<'3.12'",
@@ -43,6 +57,12 @@ dev = [
     "black>=22.0",
     "flake8>=4.0",
 ]
+# pinocchio, distributed on PyPI as `pin`, which policies/wbt_utils.py imports
+# unguarded, so the WBT policies need this extra. It is not a core dependency:
+# every pin>=3.8 pulls cmeel-boost, which requires numpy>=2, while holosoma pins
+# numpy<2, so a core dependency would upgrade numpy under holosoma wherever the
+# two packages share an environment. The >=3.8.0 floor matches the Thor images.
+wbt = ["pin>=3.8.0"]
 # Robot SDKs are published to PyPI (FAR forks). The import names are unchanged
 # (`unitree_interface`, `booster_robotics_sdk`) — only the distribution names
 # differ from the historical GitHub-release wheels. pip resolves the correct
@@ -58,11 +78,21 @@ booster = "holosoma_inference.sdk.booster.booster_interface:BoosterInterface"
 [project.entry-points."holosoma.config.robot"]
 g1-29dof = "holosoma_inference.config.config_values.robot:g1_29dof"
 t1-29dof = "holosoma_inference.config.config_values.robot:t1_29dof"
+g1-29dof-wbt-distillation = "holosoma_inference.config.config_values.robot:g1_29dof_wbt_distillation"
 
 [project.entry-points."holosoma.config.inference"]
 g1-29dof-loco = "holosoma_inference.config.config_values.inference:g1_29dof_loco"
 t1-29dof-loco = "holosoma_inference.config.config_values.inference:t1_29dof_loco"
 g1-29dof-wbt = "holosoma_inference.config.config_values.inference:g1_29dof_wbt"
+g1-wbt-distillation = "holosoma_inference.config.config_values.inference:g1_wbt_distillation"
+g1-wbt-distillation-d435i = "holosoma_inference.config.config_values.inference:g1_wbt_distillation_d435i"
+
+[project.entry-points."holosoma.config.camera"]
+single-zed2i-depth = "holosoma_inference.config.config_values.camera:single_zed2i_depth"
+single-d435i-depth = "holosoma_inference.config.config_values.camera:single_d435i_depth"
+
+[project.entry-points."holosoma.policies.by_type"]
+depth_distillation = "holosoma_inference.policies.depth_distillation:DepthDistillationPolicy"
 
 # uv_build packaging. This is a FLAT layout (the holosoma_inference/ module
 # lives at the project root, not under src/), so module-root = "". Only the

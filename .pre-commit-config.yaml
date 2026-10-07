@@ -22,10 +22,10 @@ repos:
   rev: v5.0.0
   hooks:
   - id: end-of-file-fixer
-    # exclude .dae, .obj, .mtl, .stl files
-    exclude: \.(dae|obj|mtl|stl)$
+    # exclude .dae, .obj, .mtl, .stl files (case-insensitive: the Unitree meshes are .STL)
+    exclude: (?i)\.(dae|obj|mtl|stl)$
   - id: trailing-whitespace
-    exclude: \.(dae|obj|mtl|stl)$
+    exclude: (?i)\.(dae|obj|mtl|stl)$
   - id: mixed-line-ending
     args: [--fix=lf] # Ensures consistent line endings (LF) and removes CR
-    exclude: \.(dae|obj|mtl|stl)$
+    exclude: (?i)\.(dae|obj|mtl|stl)$

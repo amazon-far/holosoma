@@ -117,13 +117,14 @@ class RolloutStorage:
         batch_size = self.num_envs * self.num_transitions_per_env
         mini_batch_size = batch_size // num_mini_batches
 
-        # Create random permutation for sampling
-        indices = torch.randperm(num_mini_batches * mini_batch_size, requires_grad=False, device=self.device)
-
         # Flatten all buffers: [num_transitions_per_env, num_envs, ...] -> [batch_size, ...]
         flattened = {key: buf.flatten(0, 1) for key, buf in self._buffers.items()}
 
         for _ in range(num_epochs):
+            # Reshuffle each epoch so the same minibatch isn't trained twice
+            # in a row — matches the reference mini_batch_generator_distillation,
+            # which is re-invoked per epoch.
+            indices = torch.randperm(num_mini_batches * mini_batch_size, requires_grad=False, device=self.device)
             for i in range(num_mini_batches):
                 start = i * mini_batch_size
                 end = (i + 1) * mini_batch_size

@@ -100,6 +100,9 @@ class SensorManager:
         self._last_due: set[str] = set()
         """Names of cameras that rendered on the most recent ``collect_due`` call. Empty until the
         first ``collect_due``."""
+        self._externally_rendered: set[str] = set()
+        """Cameras rendered by someone else (e.g. a plugin's own thread), excluded from
+        ``collect_due`` so the control-loop render does not duplicate their work."""
 
     # ----- registration (called by the backend during its sensor setup) -----
 
@@ -130,13 +133,27 @@ class SensorManager:
     def cameras(self) -> list[CameraRuntime]:
         return list(self._cameras.values())
 
+    def claim_external_rendering(self, name: str) -> None:
+        """Mark ``name`` as rendered by an external owner, excluding it from ``collect_due``.
+
+        A consumer that renders a camera on its own thread (see ``DepthShmPlugin``) claims it here so
+        the control-loop render neither duplicates the GL work nor builds a second renderer for it.
+        The camera stays fully readable through ``get_camera_data``; only the *scheduling* moves.
+        """
+        self.get(name)  # fail loud on an unknown camera
+        self._externally_rendered.add(name)
+
     def collect_due(self) -> list[CameraRuntime]:
         """Advance every camera's render counter and return those due to render this step.
 
         Called once per control step by a backend's ``render_sensors`` before the native render.
+        Cameras claimed via :meth:`claim_external_rendering` are skipped entirely — their counters do
+        not advance, since the rate they render at is their owner's, not the control rate.
         """
         due = []
         for runtime in self._cameras.values():
+            if runtime.name in self._externally_rendered:
+                continue
             runtime.step_counter += 1
             if runtime.step_counter % runtime.effective_decimation == 0:
                 due.append(runtime)

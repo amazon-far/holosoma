@@ -1,4 +1,8 @@
 from holosoma.config_types.algo import (
+    DistillationAlgoConfig,
+    DistillationConfig,
+    DistillationPPOAlgoConfig,
+    DistillationPPOConfig,
     FastSACAlgoConfig,
     FastSACConfig,
     LayerConfig,
@@ -7,10 +11,14 @@ from holosoma.config_types.algo import (
     PPOAlgoConfig,
     PPOConfig,
     PPOModuleDictConfig,
+    StudentTeacherModuleConfig,
 )
 from holosoma.utils.config_registry import ConfigRegistry
 
-ALGO_REGISTRY = ConfigRegistry((PPOAlgoConfig, FastSACAlgoConfig), group="holosoma.config.algo")
+ALGO_REGISTRY = ConfigRegistry(
+    (PPOAlgoConfig, FastSACAlgoConfig, DistillationPPOAlgoConfig, DistillationAlgoConfig),
+    group="holosoma.config.algo",
+)
 
 ppo = ALGO_REGISTRY.add(
     "ppo",
@@ -107,6 +115,24 @@ fast_sac = ALGO_REGISTRY.add(
             actor_obs_keys=["actor_obs"],
             critic_obs_keys=["critic_obs"],
         ),
+    ),
+)
+
+distillation_ppo = ALGO_REGISTRY.add(
+    "distillation_ppo",
+    DistillationPPOAlgoConfig(
+        _target_="holosoma.agents.distillation_ppo.distillation_ppo.DistillationPPO",
+        _recursive_=False,
+        config=DistillationPPOConfig(module=StudentTeacherModuleConfig()),
+    ),
+)
+
+distillation = ALGO_REGISTRY.add(
+    "distillation",
+    DistillationAlgoConfig(
+        _target_="holosoma.agents.distillation.distillation.Distillation",
+        _recursive_=False,
+        config=DistillationConfig(module=StudentTeacherModuleConfig()),
     ),
 )
 

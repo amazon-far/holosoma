@@ -10,6 +10,8 @@ from holosoma.config_types.algo import ModuleConfig
 
 from .modules import BaseModule
 
+MIN_ACTION_STD = 1.0e-6
+
 
 class PPOActor(nn.Module):
     def __init__(
@@ -32,6 +34,7 @@ class PPOActor(nn.Module):
         self.distribution = None
         # disable args validation for speedup
         Normal.set_default_validate_args(False)
+        self.project_action_std()
         print(f"Actor Module: {self.actor_module.module}")
 
     def _process_module_config(self, module_config_dict, num_actions):
@@ -71,6 +74,7 @@ class PPOActor(nn.Module):
         return self.distribution.entropy().sum(dim=-1)
 
     def update_distribution(self, actor_obs):
+        self.project_action_std()
         mean = self.actor(actor_obs)
         if self.min_noise_std:
             clamped_std = torch.clamp(self.std, min=self.min_noise_std)
@@ -85,6 +89,13 @@ class PPOActor(nn.Module):
             self.distribution = Normal(mean, mean * 0.0 + clamped_std)
         else:
             self.distribution = Normal(mean, mean * 0.0 + self.std)
+
+    @torch.no_grad()
+    def project_action_std(self) -> None:
+        """Keep the directly optimized Gaussian scale finite and positive."""
+        if not torch.isfinite(self.std).all():
+            raise FloatingPointError("PPO action standard deviation became non-finite.")
+        self.std.clamp_(min=MIN_ACTION_STD)
 
     def act(self, policy_state_dict):
         self.update_distribution(policy_state_dict["actor_obs"])

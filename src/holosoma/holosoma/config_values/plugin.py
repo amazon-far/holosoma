@@ -11,6 +11,7 @@ Imported at CLI-build time; stays ROS-free (a preset's impl loads only when its 
 from holosoma.config_types.plugin import (
     CameraVizPluginConfig,
     ClockPublishPluginConfig,
+    DepthShmPluginConfig,
     GantryControlPluginConfig,
     NoOpPluginConfig,
     PluginConfig,
@@ -146,5 +147,38 @@ viz = PLUGIN_REGISTRY.add("viz", CameraVizPluginConfig(live_window=True))
 
 # Record all configured cameras to an mp4 at teardown (no live window; runs headless).
 viz_record = PLUGIN_REGISTRY.add("viz-record", CameraVizPluginConfig(record_video=True))
+
+# Publish preprocessed depth to shared memory for a policy process (sim-to-sim vision
+# policies). Pairs with the `g1-stair-front-depth` camera and the inference-side
+# `inference:g1-wbt-distillation` preset; the resize/clip/normalize values here must match
+# what the checkpoint was trained with.
+depth_shm = PLUGIN_REGISTRY.add(
+    "depth-shm",
+    DepthShmPluginConfig(
+        camera="stair_front_depth",
+        resized_width=87,
+        resized_height=58,
+        near_clip=0.3,
+        far_clip=2.0,
+    ),
+)
+
+# Same shared-memory transport, but matching the RealSense D435i training rig instead of the ZED 2i:
+# clip range [0.3, 3.0] (the D435i config's min/max_range) and training's pre-resize crop
+# `depth[2:, 4:-4]`, which takes the 106x60 render to 58x98 before the bicubic resize to 58x87.
+# Pair with `sensor.d435i_front_depth:g1-d435i-front-depth`.
+depth_shm_d435i = PLUGIN_REGISTRY.add(
+    "depth-shm-d435i",
+    DepthShmPluginConfig(
+        camera="d435i_front_depth",
+        resized_width=87,
+        resized_height=58,
+        crop_top=2,
+        crop_left=4,
+        crop_right=4,
+        near_clip=0.3,
+        far_clip=3.0,
+    ),
+)
 
 __getattr__ = deprecated_defaults_alias(__name__, PLUGIN_REGISTRY)

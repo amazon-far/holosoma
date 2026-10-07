@@ -54,8 +54,21 @@ class StateCommand(Enum):
     WALK = auto()  # ROS2 only
     STAND = auto()  # ROS2 only
 
+    # --- Discrete direction ---
+    # For policies commanded by a direction *class* rather than a velocity
+    # vector. Each command is an absolute heading, not an increment.
+    MOVE_FORWARD = auto()
+    MOVE_BACKWARD = auto()
+    MOVE_LEFT_45 = auto()
+    MOVE_RIGHT_45 = auto()
+    MOVE_LEFT_90 = auto()
+    MOVE_RIGHT_90 = auto()
+
     # --- Whole-body tracking ---
     START_MOTION_CLIP = auto()
+
+    # --- Motion recording ---
+    TOGGLE_RECORDING = auto()
 
     # --- Dual mode ---
     SWITCH_MODE = auto()  # Injected by DualModePolicy at runtime

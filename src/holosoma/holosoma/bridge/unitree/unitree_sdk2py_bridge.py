@@ -1,6 +1,14 @@
+import os
+import socket
+import struct
+
 from loguru import logger
 
 from holosoma.bridge.base.basic_sdk2py_bridge import BasicSdk2Bridge
+
+# UDP port for broadcasting sim root state (pos + quat + lin_vel) to policy side.
+# Used by interactive sim2sim to provide pelvis position, matching sim2real mocap.
+SIM_MOCAP_UDP_PORT = int(os.environ.get("SIM_MOCAP_UDP_PORT", "9870"))
 
 
 class UnitreeSdk2Bridge(BasicSdk2Bridge):
@@ -50,6 +58,10 @@ class UnitreeSdk2Bridge(BasicSdk2Bridge):
         self.wireless_controller = WirelessController()
         self.odom_state = OdomState()
 
+        # UDP socket for broadcasting sim root state to policy (interactive sim2sim mocap)
+        self._sim_mocap_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        logger.info(f"Sim mocap UDP publisher initialized on port {SIM_MOCAP_UDP_PORT}")
+
     def low_cmd_handler(self, msg=None):
         """Handle Unitree low-level command messages."""
         # Poll for incoming commands from DDS
@@ -62,6 +74,9 @@ class UnitreeSdk2Bridge(BasicSdk2Bridge):
         positions, velocities, accelerations = self._get_dof_states()
         actuator_forces = self._get_actuator_forces()
         quaternion, gyro, acceleration = self._get_base_imu_data()
+
+        # Single GPU→CPU transfer for root state (reused by sim mocap below)
+        root_np = self.simulator.robot_root_states[0].detach().cpu().numpy()
 
         # Populate motor state
         self.low_state.motor.q = positions.tolist()
@@ -86,6 +101,34 @@ class UnitreeSdk2Bridge(BasicSdk2Bridge):
 
         # Publish (CRC calculated automatically in C++)
         self.interface.publish_low_state(self.low_state)
+
+        # Broadcast root state via UDP for interactive sim2sim global tracking
+        self._publish_sim_mocap(root_np)
+
+    def _publish_sim_mocap(self, root_np):
+        """Broadcast root position/orientation/velocity via UDP for sim2sim.
+
+        Sends 10 floats (40 bytes): pos[3] + quat_wxyz[4] + lin_vel[3].
+        Policy side reads this via SimMocapReceiver → MocapInterfaceWrapper,
+        matching the sim2real path where OptiTrack provides pelvis mocap.
+        """
+        pos = root_np[0:3]
+        quat_xyzw = root_np[3:7]
+        lin_vel = root_np[7:10]
+        data = struct.pack(
+            "10f",
+            pos[0],
+            pos[1],
+            pos[2],
+            quat_xyzw[3],
+            quat_xyzw[0],
+            quat_xyzw[1],
+            quat_xyzw[2],
+            lin_vel[0],
+            lin_vel[1],
+            lin_vel[2],
+        )
+        self._sim_mocap_sock.sendto(data, ("127.0.0.1", SIM_MOCAP_UDP_PORT))
 
     def publish_wireless_controller(self):
         """Publish wireless controller data using unitree_interface."""

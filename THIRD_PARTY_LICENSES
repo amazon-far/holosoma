@@ -237,6 +237,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 Isaac Gym Env
 Original Source: https://github.com/isaac-sim/IsaacGymEnvs
 ========================================================================
+NOTE: This entry covers the BSD-3-Clause IsaacGymEnvs wrapper repository only.
+The Isaac Gym *preview* simulator itself is separate, proprietary, EULA-gated
+NVIDIA software; it is not redistributed here. scripts/setup_isaacgym.sh
+downloads it directly from developer.nvidia.com at setup time, under NVIDIA's
+own terms, which the user accepts on download.
+
 BSD 3-Clause License
 
 Copyright (c) 2018-2023, NVIDIA Corporation
@@ -267,7 +273,10 @@ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-See assets/licenses for license information for assets included in this repository
+Assets bundled in this repository carry their license alongside the asset, in a
+LICENSE file in the asset's own directory (for example
+src/holosoma/holosoma/data/scene_objects/rubber_duck/LICENSE). Assets that owe
+attribution are also listed in the ASSETS section at the end of this file.
 ========================================================================
 HumanoidVerse
 Original source: https://github.com/LeCAR-Lab/HumanoidVerse
@@ -1120,4 +1129,205 @@ Original Source: https://github.com/google-deepmind/mujoco_playground
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+========================================================================
+Unitree Robotics - robot descriptions and SDK joint maps
+Original Source: https://github.com/unitreerobotics/unitree_ros
+========================================================================
+Applies to the Unitree G1 and H1 robot descriptions redistributed in this
+repository (URDF, MJCF, and the STL/DAE mesh trees under
+src/holosoma/holosoma/data/robots/g1/ and .../h1/, and derivatives of them such
+as g1_29dof_halfspherehand.xml and the combined_* collision meshes), and to the
+Unitree joint-index maps inlined in
+src/holosoma/holosoma/sdk/unitree_high_level/arm_client/const.py.
+
+License: BSD-3-Clause
+
+Copyright (c) 2016-2022 HangZhou YuShu TECHNOLOGY CO.,LTD. ("Unitree Robotics")
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+   may be used to endorse or promote products derived from this software without
+   specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+========================================================================
+Booster Robotics - T1 robot description
+Original Source: https://github.com/BoosterRobotics/booster_assets
+========================================================================
+Applies to the Booster T1 robot description redistributed in this repository
+under src/holosoma_retargeting/holosoma_retargeting/models/t1/.
+
+License: BSD-3-Clause
+
+Copyright (c) 2025, BoosterRobotics
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+   may be used to endorse or promote products derived from this software without
+   specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+========================================================================
+gauss_gym
+Original Source: https://github.com/escontra/gauss_gym
+========================================================================
+src/holosoma/holosoma/utils/warp_utils.py is adapted from
+gauss_gym/utils/warp_utils.py. gauss_gym carries the legged_gym BSD-3-Clause
+notice, reproduced here.
+
+License: BSD-3-Clause
+
+Copyright (c) 2021, ETH Zurich, Nikita Rudin
+Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+   may be used to endorse or promote products derived from this software without
+   specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+========================================================================
+GMR - General Motion Retargeting
+Original Source: https://github.com/YanjieZe/GMR
+========================================================================
+The per-body human scale factors in
+src/holosoma_inference/holosoma_inference_service/holosoma_service/holosoma_service/retargetting/smpl_retargeter.py
+are taken from GMR's human_scale_table, and the retargeting pipeline follows
+GMR's approach.
+
+License: MIT
+
+Copyright 2025 Yanjieze
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+========================================================================
+ASSETS
+========================================================================
+Assets redistributed in this repository that carry their own attribution
+requirements. Each also keeps a LICENSE file next to the asset.
+
+--------------------------------------------------------------------------------
+Rubber Duck
+src/holosoma/holosoma/data/scene_objects/rubber_duck/
+--------------------------------------------------------------------------------
+Rubber Duck by Poly by Google [CC-BY]
+(https://creativecommons.org/licenses/by/3.0/)
+via Poly Pizza (https://poly.pizza/m/9pffFcv7LSm)
+
+Licensed under the Creative Commons Attribution 3.0 Unported license. Commercial
+use and redistribution are permitted provided the attribution above is retained.
+
+--------------------------------------------------------------------------------
+Robot descriptions
+--------------------------------------------------------------------------------
+The Unitree G1/H1 and Booster T1 robot descriptions and meshes are covered by the
+Unitree Robotics and Booster Robotics BSD-3-Clause notices above.
+
+========================================================================
+RUNTIME DEPENDENCIES UNDER COPYLEFT OR WEAK-COPYLEFT LICENSES
+========================================================================
+These packages are declared dependencies. They are used as unmodified,
+separately-installed libraries via their public Python APIs; no source from any
+of them is vendored into or modified by this repository. They are listed here for
+disclosure, since their licenses differ from this project's Apache-2.0.
+
+  pygame    LGPL             declared by holosoma
+  pynput    LGPLv3           declared by holosoma, holosoma-inference
+  easydict  LGPL-3.0         declared by holosoma
+  libigl    MPL-2.0          declared by holosoma-retargeting
+  tqdm      MPL-2.0 AND MIT  declared by holosoma, holosoma-retargeting
+
+The corresponding source for each is available from its upstream project and
+from PyPI.
+
+========================================================================
+PROPRIETARY RUNTIME REQUIREMENTS (NOT REDISTRIBUTED)
+========================================================================
+Some simulator backends require proprietary software that this repository does
+not redistribute. The setup scripts fetch it from the vendor at install time,
+under the vendor's own terms:
+
+  Isaac Sim (pip package `isaacsim`)  NVIDIA Proprietary Software.
+      Installed from https://pypi.nvidia.com by scripts/setup_isaacsim.sh.
+  Isaac Gym (preview release)         NVIDIA proprietary, EULA-gated.
+      Downloaded from developer.nvidia.com by scripts/setup_isaacgym.sh.
+
+Neither is required to use this repository's MuJoCo backend.
+
 ========================================================================

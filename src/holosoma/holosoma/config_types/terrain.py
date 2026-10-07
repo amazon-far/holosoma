@@ -34,7 +34,7 @@ class MeshType(str, Enum):
     """
 
     LOAD_OBJ = "load_obj"
-    """Load an OBJ file as a terrain. This is temporary."""
+    """Load an OBJ file as a terrain mesh (used by the on-path-obstacle pipeline)."""
 
     FAKE = "fake"
     """Mock terrain for testing purposes.
@@ -193,6 +193,13 @@ class TerrainTermCfg:
 
     step_width_range: list[float] = field(default_factory=lambda: [0.30, 0.40])
     """Range of step widths for stair-like terrain."""
+
+    fixed_step_height: float = 0.0
+    """Fixed step height for stair-like terrain.
+
+    if fixed_step_height == 0.0, use the difficulty-dependent step height.
+    if fixed_step_height > 0.0, use the fixed step height.
+    """
 
     amplitude_range: list[float] = field(default_factory=lambda: [0.01, 0.05])
     """Range of height variations for rough terrain."""

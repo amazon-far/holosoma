@@ -14,9 +14,11 @@ entry point).
 
 from holosoma.config_types.sensor import CameraSensorConfig, SensorMountConfig
 from holosoma.config_values.wbt.g1.sensor import (
+    d435i_front_depth_camera,
     head_camera,
     left_wrist_camera,
     right_wrist_camera,
+    stair_front_depth_camera,
     stereo_head_camera_left,
     stereo_head_camera_right,
     waist_back_camera,
@@ -53,5 +55,9 @@ CAMERA_REGISTRY.add("g1-right-wrist", right_wrist_camera)
 # G1 waist-height forward/back depth cameras.
 CAMERA_REGISTRY.add("g1-waist-front", waist_front_camera)
 CAMERA_REGISTRY.add("g1-waist-back", waist_back_camera)
+# Torso depth camera pitched down for stair/rough-terrain vision policies.
+CAMERA_REGISTRY.add("g1-stair-front-depth", stair_front_depth_camera)
+# Torso RealSense D435i depth camera (the D435i depth-distillation training rig).
+CAMERA_REGISTRY.add("g1-d435i-front-depth", d435i_front_depth_camera)
 # Free-floating angled isometric overview camera looking at the scene center (640x480).
 CAMERA_REGISTRY.add("overview", overview_camera)

@@ -129,13 +129,8 @@ class BadTracking(TerminationTermBase):
         return torch.tensor(indexes, dtype=torch.long, device=device)
 
 
-class BadTrackingZOnly(BadTracking):
-    """BadTracking variant using z-axis-only position checks for parity with BM Wo-State-Estimation."""
-
-    def bad_ref_pos(self, motion_command: MotionCommand) -> torch.Tensor:
-        """Terminate if the reference z position is too far from the robot's z position."""
-        z_err = torch.abs(motion_command.ref_pos_w[:, -1] - motion_command.robot_ref_pos_w[:, -1])
-        return z_err > self.bad_ref_pos_threshold
+class BadTrackingBodyPositionZOnly(BadTracking):
+    """Use z-axis-only tracked-body checks while preserving root checks."""
 
     def bad_motion_body_pos(self, motion_command: MotionCommand) -> torch.Tensor:
         """Terminate if tracked bodies have too much z-axis position error."""
@@ -144,3 +139,12 @@ class BadTrackingZOnly(BadTracking):
             motion_command.body_pos_relative_w[:, body_idx, -1] - motion_command.robot_body_pos_w[:, body_idx, -1]
         )
         return torch.any(error > self.bad_motion_body_pos_threshold, dim=-1)
+
+
+class BadTrackingZOnly(BadTrackingBodyPositionZOnly):
+    """Use z-axis-only root and tracked-body position checks."""
+
+    def bad_ref_pos(self, motion_command: MotionCommand) -> torch.Tensor:
+        """Terminate if the reference z position is too far from the robot's z position."""
+        z_err = torch.abs(motion_command.ref_pos_w[:, -1] - motion_command.robot_ref_pos_w[:, -1])
+        return z_err > self.bad_ref_pos_threshold

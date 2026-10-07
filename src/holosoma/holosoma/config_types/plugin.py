@@ -383,3 +383,133 @@ class CameraVizPluginConfig(PluginConfig):
                 f"allowed: {sorted(_DEPTH_COLORMAPS)}."
             )
         return self
+
+
+@pydantic_dataclass(frozen=True, config=_FORBID_EXTRA)
+class DepthShmPluginConfig(PluginConfig):
+    """Publish preprocessed depth to shared memory for a policy process to consume.
+
+    Produces exactly what a vision policy's depth backbone expects: depth resized to
+    ``(resized_height, resized_width)``, clipped to ``[near_clip, far_clip]`` and
+    normalized to ``[-0.5, 0.5]``. Doing the preprocessing here (rather than in the
+    policy) keeps the two sides from disagreeing about it, and means the policy reads
+    its input tensor with a single memory copy.
+
+    Shared memory rather than a ROS2 topic because the consumer runs on the same host
+    at the control rate: no serialization, no broker, no per-frame allocation.
+    """
+
+    shm_name: str = "depth_img_shm"
+    """Shared-memory block name. Must match the policy's ``--task.depth-shm.name``."""
+
+    heartbeat: bool = True
+    """Publish a liveness heartbeat after every frame write, so the policy can tell a
+    stalled producer from a live one (the block alone cannot)."""
+
+    heartbeat_endpoint: str = ""
+    """zmq endpoint of the heartbeat. Empty uses ``ipc:///tmp/<shm_name>.heartbeat``,
+    which is also the policy's default."""
+
+    camera: str = ""
+    """Name of the configured camera to publish. Required."""
+
+    env_id: int = 0
+    """Which environment's view to publish."""
+
+    resized_width: int = 87
+    """Output width — must equal the depth backbone's input width."""
+
+    resized_height: int = 58
+    """Output height — must equal the depth backbone's input height."""
+
+    crop_top: int = 0
+    """Rows to drop from the TOP of the rendered frame before resizing.
+
+    Training crops the raw camera frame before the resize, so the resize sees the same field of
+    view it saw during distillation. The D435i preset uses 2 (training's ``depth[:, 2:, 4:-4]``);
+    0 disables cropping."""
+
+    crop_bottom: int = 0
+    """Rows to drop from the BOTTOM before resizing. Training's crop is top-only, so 0."""
+
+    crop_left: int = 0
+    """Columns to drop from the LEFT before resizing. D435i preset uses 4."""
+
+    crop_right: int = 0
+    """Columns to drop from the RIGHT before resizing. D435i preset uses 4."""
+
+    near_clip: float = 0.3
+    """Depth at or below this maps to -0.5. Match the value used in training."""
+
+    far_clip: float = 2.0
+    """Depth at or above this maps to +0.5. Match the value used in training.
+
+    This is the training camera's ``max_range`` — 2.0 for the ZED 2i rig, 3.0 for the D435i rig.
+    Getting it wrong rescales every pixel silently rather than raising."""
+
+    empty_threshold: float = 0.15
+    """Post-resize, depth below this is treated as EMPTY and set to ``far_clip``.
+
+    Mirrors training's ``depth_images[depth_images < 0.15] = max_depth``: a reading too close to be
+    real is what an invalid/dropped pixel looks like on the physical camera, and "unknown" is encoded
+    as far rather than near. Because training clamps to ``[near_clip, far_clip]`` before this runs,
+    the branch only fires on bicubic undershoot; it is kept for exact parity. Values >= ``near_clip``
+    disable it in practice (everything is already at or above the threshold)."""
+
+    render_hz: float = 10.0
+    """Rate of this plugin's own render thread, in Hz. Default 10 — the D435i's real publish rate.
+
+    Rendering runs off the physics thread, so this is independent of ``fps`` /
+    ``control_decimation`` and of the camera's ``update_decimation`` (which only governs inline
+    ``FRAME_END`` rendering, unused by this plugin). A GL depth render costs far more than a 500 Hz
+    physics step's 2 ms budget, so doing it inline makes the sim miss its target; here it cannot.
+
+    The consuming policy polls shared memory at its own rate and simply re-reads the latest frame,
+    so a rate below the control rate means repeated frames rather than stalls."""
+
+    latency_frames: int = 0
+    """Publish the frame this many steps old, modeling real camera/transport delay.
+
+    The policies were trained against a camera pipeline with inherent latency; replaying
+    that here keeps sim-to-sim honest. 0 publishes the freshest frame.
+
+    Counted in RENDERED frames, i.e. steps of ``render_hz`` — at the default 10 Hz one frame is
+    100 ms, not the 20 ms a 50 Hz control step would be."""
+
+    def get_cls(self) -> Callable[..., Any]:
+        # Deferred import: keeps cv2/torch out of CLI-build import.
+        from holosoma.simulator.plugins.depth_shm_plugin import DepthShmPlugin
+
+        return DepthShmPlugin
+
+    @model_validator(mode="after")
+    def validate_depth_shm(self) -> DepthShmPluginConfig:
+        if not self.camera:
+            raise ValueError("DepthShmPluginConfig.camera must name a configured camera.")
+        if self.resized_width <= 0 or self.resized_height <= 0:
+            raise ValueError(
+                f"DepthShmPluginConfig resized dims must be positive, got "
+                f"({self.resized_height}, {self.resized_width})."
+            )
+        if self.near_clip >= self.far_clip:
+            raise ValueError(
+                f"DepthShmPluginConfig needs near_clip < far_clip, got {self.near_clip} >= {self.far_clip}."
+            )
+        if self.latency_frames < 0:
+            raise ValueError(f"DepthShmPluginConfig.latency_frames must be >= 0, got {self.latency_frames}.")
+        if self.env_id < 0:
+            raise ValueError(f"DepthShmPluginConfig.env_id must be >= 0, got {self.env_id}.")
+        crops = {
+            "crop_top": self.crop_top,
+            "crop_bottom": self.crop_bottom,
+            "crop_left": self.crop_left,
+            "crop_right": self.crop_right,
+        }
+        for name, value in crops.items():
+            if value < 0:
+                raise ValueError(f"DepthShmPluginConfig.{name} must be >= 0, got {value}.")
+        if self.empty_threshold < 0:
+            raise ValueError(f"DepthShmPluginConfig.empty_threshold must be >= 0, got {self.empty_threshold}.")
+        if self.render_hz <= 0:
+            raise ValueError(f"DepthShmPluginConfig.render_hz must be > 0, got {self.render_hz}.")
+        return self

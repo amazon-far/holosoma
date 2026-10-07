@@ -95,6 +95,14 @@ def _hide_prim_subtree(stage: "Usd.Stage", prim_path: str) -> None:
             imageable.MakeInvisible()
 
 
+# Bodies that some URDFs absorb into their parent link (e.g. foot_contact_point is
+# merged into ankle_roll), so a config body list naming them still resolves.
+BODY_NAME_ALIASES = {
+    "left_foot_contact_point": "left_ankle_roll_link",
+    "right_foot_contact_point": "right_ankle_roll_link",
+}
+
+
 class IsaacSim(BaseSimulator):
     def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str):
         super().__init__(tyro_config, terrain_manager, device)
@@ -328,6 +336,11 @@ class IsaacSim(BaseSimulator):
             solver_velocity_iteration_count=4,
         )
 
+        # control_mode="implicit_position_target" routes position targets through Isaac Sim's built-in
+        # PD drive; the URDF joint drive must then target "position" (with "none" the articulation
+        # ignores targets entirely), and the actuators come from control.implicit_actuator_builder.
+        implicit_position_target = self.robot_config.control.control_mode == "implicit_position_target"
+
         if robot_asset_cfg.usd_file is None:
             # convert from urdf dynamically
             asset_path = robot_asset_cfg.urdf_file
@@ -349,7 +362,7 @@ class IsaacSim(BaseSimulator):
                         stiffness=0,
                         damping=0,
                     ),
-                    target_type="none",
+                    target_type="position" if implicit_position_target else "none",
                 ),
                 activate_contact_sensors=True,
                 rigid_props=robot_rigid_props,
@@ -400,21 +413,31 @@ class IsaacSim(BaseSimulator):
                     kd_list.append(damping_dict[key])
                     print(f"key: {key}, kp: {stiffness_dict[key]}, kd: {damping_dict[key]}")
 
-        # ImplicitActuatorCfg IdealPDActuatorCfg
-        actuators = {
-            dof_names_list[i]: IdealPDActuatorCfg(
-                joint_names_expr=[dof_names_list[i]],
-                effort_limit=dof_effort_limit_list[i],
-                velocity_limit=dof_vel_limit_list[i],
-                # effort_limit_sim=dof_effort_limit_list[i],
-                # velocity_limit_sim=dof_vel_limit_list[i],
-                stiffness=0,
-                damping=0,
-                armature=dof_armature_list[i],
-                friction=dof_joint_friction_list[i],
-            )
-            for i in range(len(dof_names_list))
-        }
+        if implicit_position_target:
+            builder_path = self.robot_config.control.implicit_actuator_builder
+            if not builder_path:
+                raise ValueError(
+                    "control_mode='implicit_position_target' requires control.implicit_actuator_builder to be set."
+                )
+            from holosoma.managers.utils import resolve_callable
+
+            actuators = resolve_callable(builder_path, context="implicit_actuator_builder")()
+        else:
+            # ImplicitActuatorCfg IdealPDActuatorCfg
+            actuators = {
+                dof_names_list[i]: IdealPDActuatorCfg(
+                    joint_names_expr=[dof_names_list[i]],
+                    effort_limit=dof_effort_limit_list[i],
+                    velocity_limit=dof_vel_limit_list[i],
+                    # effort_limit_sim=dof_effort_limit_list[i],
+                    # velocity_limit_sim=dof_vel_limit_list[i],
+                    stiffness=0,
+                    damping=0,
+                    armature=dof_armature_list[i],
+                    friction=dof_joint_friction_list[i],
+                )
+                for i in range(len(dof_names_list))
+            }
 
         robot_articulation_config: ArticulationCfg = ARTICULATION_CFG.replace(
             prim_path="/World/envs/env_.*/Robot", spawn=spawn, init_state=init_state, actuators=actuators
@@ -655,7 +678,9 @@ class IsaacSim(BaseSimulator):
         Raises:
             ValueError: If none of the preferred body names are found
         """
-        _, body_names = self._robot.find_bodies(self.robot_config.body_names, preserve_order=True)
+        # Use alias-aware resolver so config body lists containing
+        # foot_contact_point (absorbed in our URDFs) still resolve via aliases.
+        _, body_names = self._resolve_robot_body_names_with_aliases(self.robot_config.body_names)
 
         for preferred_name in preference_order:
             if preferred_name in body_names:
@@ -783,7 +808,10 @@ class IsaacSim(BaseSimulator):
         # ),
 
         self.dof_ids, self.dof_names = self._robot.find_joints(dof_names_list, preserve_order=True)
-        self.body_ids, self.body_names = self._robot.find_bodies(self.robot_config.body_names, preserve_order=True)
+        # Ported alias-aware resolver: for each requested body_name, try that name
+        # first, then fall back to BODY_NAME_ALIASES mapping. Fixes URDFs where
+        # foot_contact_point isn't an articulation body (absorbed into ankle_roll).
+        self.body_ids, self.body_names = self._resolve_robot_body_names_with_aliases(self.robot_config.body_names)
 
         self._body_list = self.body_names.copy()
         # dof_ids and body_ids is convert dfs order (isaacsim) to dfs order (isaacgym, holosoma config)
@@ -828,8 +856,13 @@ class IsaacSim(BaseSimulator):
         assert self.dof_names == self.robot_config.dof_names, "DOF names must match the config"
         assert self.body_names == self.robot_config.body_names, "Body names must match the config"
 
+        # Use articulation-resolved body names (post-alias) to index into
+        # the contact sensor's body list, which lives in articulation order.
+        # self.body_names is the public (config) list and may contain names
+        # like foot_contact_point that are aliased away in the articulation.
+        _contact_lookup_names = getattr(self, "_resolved_body_names", None) or self.body_names
         self._contact_to_robot_body_ids = torch.tensor(
-            [self.contact_sensor.body_names.index(body_name) for body_name in self.body_names],
+            [self.contact_sensor.body_names.index(body_name) for body_name in _contact_lookup_names],
             device=self.sim_device,
         )
 
@@ -1046,8 +1079,64 @@ class IsaacSim(BaseSimulator):
         if len(env_ids) > 0:
             self.contact_forces_history[env_ids, :, :, :] = 0.0
 
+    def _resolve_robot_body_names_with_aliases(self, requested_body_names: list[str]) -> tuple[list[int], list[str]]:
+        """Resolve requested body names with BODY_NAME_ALIASES fallback.
+
+        For each requested name, try
+        ``find_bodies(name)`` first; if that fails, try the aliased name from
+        BODY_NAME_ALIASES. Preserves the public (config-specified) names in
+        ``self.body_names`` while using the articulation's indices.
+
+        Returns:
+            (body_ids, public_body_names)
+
+        Also stores the actual articulation-resolved names in
+        ``self._resolved_body_names`` so downstream code (contact sensor,
+        rigid-body views) can look them up in the articulation body list.
+        """
+        body_ids: list[int] = []
+        resolved_body_names: list[str] = []
+        public_body_names: list[str] = []
+
+        for requested_name in requested_body_names:
+            candidates = [requested_name]
+            alias_name = BODY_NAME_ALIASES.get(requested_name)
+            if alias_name is not None and alias_name not in candidates:
+                candidates.append(alias_name)
+
+            matched = False
+            for candidate in candidates:
+                try:
+                    indices, names = self._robot.find_bodies(candidate, preserve_order=True)
+                except ValueError:
+                    continue
+                if len(indices) == 1:
+                    body_ids.append(indices[0])
+                    resolved_body_names.append(names[0])
+                    public_body_names.append(requested_name)
+                    matched = True
+                    break
+
+            if not matched:
+                raise ValueError(
+                    f"Failed to resolve body '{requested_name}' with aliases {candidates}. "
+                    f"Available articulation bodies: {self._robot.body_names}"
+                )
+
+        self._resolved_body_names = resolved_body_names
+        return body_ids, public_body_names
+
     def apply_torques_at_dof(self, torques):
         self._robot.set_joint_effort_target(torques, joint_ids=self.dof_ids)
+
+    def apply_position_targets_at_dof(self, targets: torch.Tensor) -> None:
+        """Apply joint position targets to the articulation (implicit PD).
+
+        Used by
+        :class:`JointPositionTargetActionTerm` when
+        ``control_mode='implicit_position_target'``.
+        """
+        self._robot.set_joint_position_target(targets, joint_ids=self.dof_ids)
 
     def draw_debug_viz(self):
         if self.virtual_gantry:

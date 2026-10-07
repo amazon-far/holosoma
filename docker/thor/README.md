@@ -114,14 +114,14 @@ layer:
 l4t-cuda (CUDA 13 devel, Ubuntu 24.04)           ← never
  └─ python-base (python3.12, build tools, uv)    ← ~never
      ├─ long-deps (NVPL, cuDSS, TensorRT libs)   ← ~never
-     │   └─ common-deps (numpy, scipy, pin, …)   ← weekly-ish
-     │       └─ app-deps (unitree_sdk2 + src)    ← every commit
+     │   └─ common-deps (reserved; empty)        ← weekly-ish
+     │       └─ app-deps (pyproject deps + SDK)  ← every commit
      │           └─ inference                    ← terminal target
      │
      └─ ros-jazzy (ros-jazzy-ros-base + FastDDS + CycloneDDS)   ← ~never
          └─ long-deps-ros (same as long-deps)         ← ~never
              └─ common-deps-ros (same as common-deps) ← weekly-ish
-                 └─ app-deps-ros (unitree_sdk2 + src) ← every commit
+                 └─ app-deps-ros (same as app-deps)   ← every commit
                      └─ inference-ros                 ← terminal target
 ```
 
@@ -137,7 +137,8 @@ installed on top of ROS's system packages to avoid ABI surprises.
 - **`far-unitree-sdk`**: `0.1.5` (set via `--build-arg UNITREE_SDK2_VERSION=...`).
   Installed from PyPI; bump when a new release is published.
 - **Python deps**: unpinned by design — let `uv` resolve. Source of truth
-  for the dep list is `src/holosoma_inference/setup.py`.
+  for the dep list is `src/holosoma_inference/pyproject.toml`; the image
+  installs it as-is, so there is no second list to keep in sync.
 
 ## Troubleshooting
 

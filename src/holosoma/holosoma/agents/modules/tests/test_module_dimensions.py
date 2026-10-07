@@ -6,9 +6,13 @@ This test suite verifies that:
 3. Network input dimensions match what is stored in replay buffers/storage
 """
 
+from types import SimpleNamespace
+from typing import Any, cast
+
 import pytest
 import torch
 
+from holosoma.agents.modules.module_utils import setup_ppo_actor_module
 from holosoma.agents.modules.modules import BaseModule
 from holosoma.config_types.algo import LayerConfig, ModuleConfig
 
@@ -257,6 +261,79 @@ def test_consistency_with_storage_dimensions():
     observation = torch.randn(batch_size, storage_dim)
     output = module.module(observation)
     assert output.shape == (batch_size, 10)
+
+
+def test_ppo_actor_projects_nonpositive_std(simple_module_config: ModuleConfig) -> None:
+    actor = setup_ppo_actor_module(
+        obs_dim_dict={"actor_obs": 4},
+        module_config=simple_module_config,
+        num_actions=10,
+        init_noise_std=0.05,
+        device="cpu",
+        history_length={"actor_obs": 1},
+    )
+    torch.testing.assert_close(actor.std, torch.full_like(actor.std, 0.05))
+
+    with torch.no_grad():
+        actor.std.fill_(-1.0)
+    actor.update_distribution(torch.zeros(2, 4))
+
+    assert torch.all(actor.std > 0.0)
+    assert torch.all(actor.action_std > 0.0)
+
+
+def test_ppo_actor_rejects_nonfinite_std(simple_module_config: ModuleConfig) -> None:
+    actor = setup_ppo_actor_module(
+        obs_dim_dict={"actor_obs": 4},
+        module_config=simple_module_config,
+        num_actions=10,
+        init_noise_std=0.05,
+        device="cpu",
+        history_length={"actor_obs": 1},
+    )
+    with torch.no_grad():
+        actor.std[0] = torch.nan
+
+    with pytest.raises(FloatingPointError, match="standard deviation became non-finite"):
+        actor.update_distribution(torch.zeros(2, 4))
+
+
+def test_ppo_projects_std_immediately_after_optimizer_step(simple_module_config: ModuleConfig) -> None:
+    from holosoma.agents.ppo.ppo import PPO, Minibatch
+
+    actor = setup_ppo_actor_module(
+        obs_dim_dict={"actor_obs": 4},
+        module_config=simple_module_config,
+        num_actions=10,
+        init_noise_std=0.05,
+        device="cpu",
+        history_length={"actor_obs": 1},
+    )
+    critic = torch.nn.Linear(1, 1)
+    algo = cast("Any", object.__new__(PPO))
+    algo.actor = actor
+    algo.critic = critic
+    algo.actor_optimizer = torch.optim.SGD(actor.parameters(), lr=1.0)
+    algo.critic_optimizer = torch.optim.SGD(critic.parameters(), lr=1.0)
+    algo.config = SimpleNamespace(max_grad_norm=100.0)
+    algo.is_multi_gpu = False
+    zero = critic.weight.sum() * 0.0
+    algo._compute_ppo_loss = lambda _minibatch: {
+        "actor_loss": actor.std.sum() * 2.0,
+        "critic_loss": zero,
+        "value_loss": zero,
+        "surrogate_loss": zero,
+        "entropy_loss": zero,
+        "kl_mean": zero,
+    }
+
+    PPO._update_algo_step(
+        algo,
+        cast("Minibatch", {}),
+        {"Value": 0.0, "Surrogate": 0.0, "Entropy": 0.0, "KL": 0.0},
+    )
+
+    assert torch.all(actor.std > 0.0)
 
 
 if __name__ == "__main__":

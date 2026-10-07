@@ -503,6 +503,7 @@ class PPO(BaseAlgo):
 
         self.actor_optimizer.step()
         self.critic_optimizer.step()
+        self.actor.project_action_std()
 
         loss_dict["Value"] += ppo_loss_dict.pop("value_loss").item()
         loss_dict["Surrogate"] += ppo_loss_dict.pop("surrogate_loss").item()
@@ -652,6 +653,7 @@ class PPO(BaseAlgo):
             logger.info(f"Loading checkpoint from {ckpt_path}")
             loaded_dict = torch.load(ckpt_path, map_location=self.device)
             self.actor.load_state_dict(loaded_dict["actor_model_state_dict"])
+            self.actor.project_action_std()
             self.critic.load_state_dict(loaded_dict["critic_model_state_dict"])
             if self.empirical_normalization and loaded_dict.get("actor_obs_normalizer_state_dict") is not None:
                 self.actor_obs_normalizer.load_state_dict(loaded_dict["actor_obs_normalizer_state_dict"])

@@ -88,7 +88,7 @@ bash demo_scripts/demo_lafan_wb_tracking.sh
 After training, deploy your policies:
 
 - **Real Robot**: See [Real Robot Locomotion](src/holosoma_inference/docs/workflows/real-robot-locomotion.md) or [Real Robot WBT](src/holosoma_inference/docs/workflows/real-robot-wbt.md)
-- **MuJoCo Simulation**: See [Sim-to-Sim Locomotion](src/holosoma_inference/docs/workflows/sim-to-sim-locomotion.md) or [Sim-to-Sim WBT](src/holosoma_inference/docs/workflows/sim-to-sim-wbt.md)
+- **MuJoCo Simulation**: See [Sim-to-Sim Locomotion](src/holosoma_inference/docs/workflows/sim-to-sim-locomotion.md), [Sim-to-Sim WBT](src/holosoma_inference/docs/workflows/sim-to-sim-wbt.md), or [Sim-to-Sim Depth Distillation](src/holosoma_inference/docs/workflows/sim-to-sim-depth-distillation.md)
 
 Or browse all deployment options in the [Inference & Deployment Guide](src/holosoma_inference/README.md).
 

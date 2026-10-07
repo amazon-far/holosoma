@@ -7,6 +7,7 @@ environment simulation code.
 
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING
 
 import mujoco
@@ -96,7 +97,9 @@ class ClassicBackend(IMujocoBackend):
         # Resolve each compiled <camera> id here (this backend's own name->id map); the shared
         # CameraRuntime holds no handle.
         self._cam_ids: dict[str, int] = {}
-        self._mj_renderers: dict[str, dict[CameraDataType, mujoco.Renderer]] = {}
+        self._cam_sizes: dict[str, tuple[int, int]] = {}
+        self._cam_data_types: dict[str, tuple[CameraDataType, ...]] = {}
+        self._mj_renderers: dict[tuple[int, str, CameraDataType], mujoco.Renderer] = {}
 
         for cam in cameras:
             name = cam.name
@@ -104,12 +107,27 @@ class ClassicBackend(IMujocoBackend):
             if cam_id < 0:
                 raise RuntimeError(f"Camera '{name}' not found in compiled model (expected a <camera> element).")
             self._cam_ids[name] = cam_id
-            cam_renderers = self._mj_renderers[name] = {}
-            for data_type in cam.config.data_types:
-                renderer = mujoco.Renderer(self.model, height=cam.config.height, width=cam.config.width)
-                cam_renderers[data_type] = renderer
-                if data_type == "depth":
-                    renderer.enable_depth_rendering()
+            self._cam_sizes[name] = (cam.config.height, cam.config.width)
+            self._cam_data_types[name] = tuple(cam.config.data_types)
+
+    def _renderer_for(self, name: str, data_type: CameraDataType) -> mujoco.Renderer:
+        """Return this thread's renderer for ``(name, data_type)``, creating it on first use.
+
+        A ``mujoco.Renderer``'s GL context belongs to the thread that constructed it, so rendering
+        a camera from a background thread needs that thread's own instance. Keying the cache by
+        ``threading.get_ident()`` gives each thread one renderer per camera/modality, built once.
+        """
+        if data_type not in self._cam_data_types[name]:
+            raise ValueError(f"Camera '{name}' does not render modality '{data_type}'.")
+        key = (threading.get_ident(), name, data_type)
+        renderer = self._mj_renderers.get(key)
+        if renderer is None:
+            height, width = self._cam_sizes[name]
+            renderer = mujoco.Renderer(self.model, height=height, width=width)
+            if data_type == "depth":
+                renderer.enable_depth_rendering()
+            self._mj_renderers[key] = renderer
+        return renderer
 
     def render_cameras(self, cameras: list[CameraRuntime]) -> None:
         # per-world render via the size-shared mujoco.Renderer (num_envs==1).
@@ -121,7 +139,7 @@ class ClassicBackend(IMujocoBackend):
             name = runtime.name
             cam_id = self._cam_ids[name]
             for dt in runtime.config.data_types:
-                renderer = self._mj_renderers[name][dt]
+                renderer = self._renderer_for(name, dt)
                 frames = []
                 for world_id in range(self.num_envs):
                     data = self.get_render_data(world_id=world_id)

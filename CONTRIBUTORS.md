@@ -1,10 +1,14 @@
 # Holosoma Contributors
 
 - **Pieter Abbeel**: project advisor
+- **Kevin Best**: contributor to retargeting
+- **Matteo Calabria**: contributor to training fixes
+- **Jinkun Cao**: contributor to whole-body tracking and depth-distillation integration
 - **Juyue Chen**: lead of whole-body tracking development
 - **Rocky Duan**: team lead, developer, and project advisor
 - **Alejandro Escontrela**: contributor to terrain locomotion
 - **Manan Gandhi**: contributor to system development
+- **Juan Garcia Bonilla**: contributor to sensor simulation, ROS2 plugins, and robot SDK bridges
 - **Samuel Gundry**: team lead and simulation architecture
 - **Xiaoyu Huang**: contributor to retargeting and whole-body tracking
 - **Angjoo Kanazawa**: project advisor
@@ -13,6 +17,7 @@
 - **Karen Liu**: project advisor
 - **Clay Rosenthal**: contributor to system development
 - **Younggyo Seo**: lead project architect and developer
+- **Adam Setapen**: contributor to demo scripts
 - **Carlo Sferrazza**: lead project architect and developer
 - **Guanya Shi**: project advisor
 - **Linda Shih**: lead system developer

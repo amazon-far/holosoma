@@ -40,6 +40,7 @@ Select the appropriate workflow guide based on your setup:
 #### Simulation (MuJoCo)
 - **[Sim-to-Sim Locomotion](docs/workflows/sim-to-sim-locomotion.md)** - Test locomotion policies in MuJoCo simulation
 - **[Sim-to-Sim Whole Body Tracking](docs/workflows/sim-to-sim-wbt.md)** - Test WBT policies in MuJoCo simulation
+- **[Sim-to-Sim Depth Distillation](docs/workflows/sim-to-sim-depth-distillation.md)** - Test vision-based (stair/rough-terrain) policies in MuJoCo simulation
 
 Each workflow guide includes:
 - Hardware/environment setup instructions

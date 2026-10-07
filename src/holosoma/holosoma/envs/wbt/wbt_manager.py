@@ -22,8 +22,19 @@ class WholeBodyTrackingManager(BaseTask):
         # -------------------------------- terms same with locomotion_manager.py [start]--------------------------------
         self.base_quat = self.simulator.base_quat
         self.need_to_refresh_envs = torch.ones(self.num_envs, dtype=torch.bool, device=self.device, requires_grad=False)
+        self._init_counters()
         self._configure_default_dof_pos()
         self._init_domain_rand_buffers()
+
+    def _init_counters(self) -> None:
+        # Global env-step counter, incremented once per ``env.step()`` call by
+        # ``BaseTask._post_physics_step`` (via ``_update_counters_each_step``).
+        # Needed by curriculum terms that key off ``common_step_counter`` — the
+        # base LocomotionManager has the same pair of overrides.
+        self.common_step_counter = 0
+
+    def _update_counters_each_step(self) -> None:
+        self.common_step_counter += 1
 
     def _configure_default_dof_pos(self):
         self.default_dof_pos_base = torch.zeros(

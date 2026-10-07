@@ -87,35 +87,12 @@ RUN echo "/usr/lib/aarch64-linux-gnu/libcudss/13" > /etc/ld.so.conf.d/cudss-13.c
 
 
 # ─── Stage: common-deps ───────────────────────────────────────────────────────
-# Python dependencies of holosoma_inference that rarely change.
-# Keep this layer separate from app source so edits to holosoma code don't
-# invalidate these installs.
+# Reserved for image-only setup that does not depend on holosoma_inference's own
+# metadata; currently empty. Every Python dependency is declared in
+# src/holosoma_inference/pyproject.toml and installed by the app-deps stage
+# (pinocchio via the `wbt` extra).
 FROM long-deps AS common-deps
 
-# Core deps from src/holosoma_inference/setup.py install_requires, plus
-# pinocchio for WBT policy support (not in setup.py — installed separately,
-# matching scripts/setup_inference_via_uv.sh).
-#
-# DRIFT RISK: this list duplicates setup.py's install_requires because we
-# want the layered-cache benefit (deps install ~once, source rebuilds
-# invalidate only the final layer). When setup.py deps change, this list
-# must be updated too. Source of truth: src/holosoma_inference/setup.py.
-RUN uv pip install \
-    "pydantic" \
-    "loguru" \
-    "netifaces" \
-    "onnx" \
-    "onnxruntime" \
-    "scipy" \
-    "sshkeyboard" \
-    "termcolor" \
-    "pyyaml" \
-    "tyro>=0.10.0a4" \
-    "wandb" \
-    "zmq" \
-    "defusedxml" \
-    "evdev" \
-    "pin>=3.8.0"
 
 
 # ─── Stage: app-deps ──────────────────────────────────────────────────────────
@@ -132,7 +109,7 @@ RUN uv pip install "far-unitree-sdk==${UNITREE_SDK2_VERSION}"
 # handled the runtime deps above).
 COPY src/holosoma_inference /opt/holosoma-src/src/holosoma_inference
 WORKDIR /opt/holosoma-src
-RUN uv pip install --no-deps -e src/holosoma_inference
+RUN uv pip install -e "src/holosoma_inference[wbt]"
 
 
 # ─── Stage: inference ─────────────────────────────────────────────────────────
@@ -214,22 +191,6 @@ RUN echo "/usr/lib/aarch64-linux-gnu/libcudss/13" > /etc/ld.so.conf.d/cudss-13.c
 # parent layers).
 FROM long-deps-ros AS common-deps-ros
 
-RUN uv pip install \
-    "pydantic" \
-    "loguru" \
-    "netifaces" \
-    "onnx" \
-    "onnxruntime" \
-    "scipy" \
-    "sshkeyboard" \
-    "termcolor" \
-    "pyyaml" \
-    "tyro>=0.10.0a4" \
-    "wandb" \
-    "zmq" \
-    "defusedxml" \
-    "evdev" \
-    "pin>=3.8.0"
 
 
 # ─── Stage: app-deps-ros ──────────────────────────────────────────────────────
@@ -243,7 +204,7 @@ COPY src/holosoma_inference /opt/holosoma-src/src/holosoma_inference
 # helper to drive /cmd_vel for cross-container DDS tests.
 COPY demo_scripts /opt/holosoma-src/demo_scripts
 WORKDIR /opt/holosoma-src
-RUN uv pip install --no-deps -e src/holosoma_inference
+RUN uv pip install -e "src/holosoma_inference[wbt]"
 
 
 # ─── Stage: inference-ros ─────────────────────────────────────────────────────

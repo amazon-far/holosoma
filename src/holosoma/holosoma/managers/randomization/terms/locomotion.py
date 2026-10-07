@@ -302,12 +302,18 @@ def setup_dof_pos_bias(
     *,
     dof_pos_bias_range: DistributionLike,
     enabled: bool = False,
+    dof_pos_bias_additive_overrides: dict[str, DistributionLike] | None = None,
     **_,
 ) -> None:
     """Apply startup DOF position bias randomization.
 
     ``dof_pos_bias_range`` is a config range value — a ``[lo, hi]`` pair (uniform) or a spec dict, drawn via
     the bound sampler. A gaussian bias gives a smoother initial-pose jitter than uniform.
+
+    ``dof_pos_bias_additive_overrides`` maps a joint-name substring to its own range; a bias drawn from
+    that range is **added** on top of the global bias for matching joints (e.g.
+    ``{"ankle": [-0.05, 0.05]}``). Drawn on a separate sampler stream from the global bias and keyed by
+    DOF index, so a joint's override is reproducible regardless of which patterns match.
     """
     env._randomize_dof_pos_bias = bool(enabled)
     env._dof_pos_bias_range = dof_pos_bias_range
@@ -323,6 +329,26 @@ def setup_dof_pos_bias(
         coords=(dof_ids,),
         device=env.device,
     )
+
+    # Additive per-joint-group overrides (e.g. ankle-specific bias). Each pattern draws full-width over
+    # every DOF, keyed by DOF index, on its own stream tag, then applies only at the matching indices —
+    # so a joint's override doesn't shift with how many joints a pattern matched. Overlapping patterns
+    # accumulate independently, as before. Streams are numbered over SORTED patterns (not dict order) so
+    # the draw is independent of config key ordering; the tags start at 1 to stay clear of the global
+    # bias draw above, which folds no int coord.
+    if dof_pos_bias_additive_overrides:
+        env_ids_all = torch.arange(env.num_envs, device="cpu")
+        for stream, pattern in enumerate(sorted(dof_pos_bias_additive_overrides), start=1):
+            indices = [i for i, name in enumerate(env.dof_names) if pattern in name]
+            if indices:
+                additive_bias = sampler.draw(
+                    dof_pos_bias_additive_overrides[pattern],
+                    env_ids=env_ids_all,
+                    coords=(stream, dof_ids),
+                    device=env.device,
+                )
+                default_dof_pos_bias[:, indices] += additive_bias[:, indices]
+
     env.default_dof_pos = env.default_dof_pos_base + default_dof_pos_bias
 
 

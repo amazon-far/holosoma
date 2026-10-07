@@ -108,3 +108,61 @@ waist_back_camera = CameraSensorConfig(
     data_types=["depth"],
     update_decimation="50Hz",
 )
+
+# Forward-facing depth camera pitched 71deg down, mounted on the torso — the rig the
+# depth-distillation stair policies were trained against. Renders at 240x135 (16:9,
+# matching the training raycast resolution); the depth-shm plugin resizes to the
+# backbone's 58x87 input. The orientation places the optical axis (-Z) along body +X
+# rotated 71deg toward -Z, with image-up perpendicular to it in the X-Z plane, so the
+# camera sees the ground a short distance ahead of the feet.
+stair_front_depth_camera = CameraSensorConfig(
+    mount=SensorMountConfig(
+        target_kind="robot_link",
+        target="torso_link",
+        position=[0.125, 0.06, 0.02],
+        orientation=[-0.69740924, -0.11670628, 0.11670628, 0.69740924],
+    ),
+    width=240,
+    height=135,
+    vertical_fov=69.0,
+    data_types=["depth"],
+    # ">50Hz" rather than "50Hz": the rate resolves against the CONTROL rate, and the sim2sim
+    # scripts run mujoco at 500Hz/4 = 125Hz, where a bare "50Hz" is not exactly achievable and raises.
+    update_decimation=">50Hz",
+)
+
+# Forward-facing RealSense D435i depth camera pitched 27deg down on the torso — the rig the
+# *D435i* depth-distillation checkpoints were trained against (training-side
+# `G1FlatRsD435iConfig`: offset_pos=(0.01, 0.01, 0.44), offset_rot=(1.0, 27.0, 1.0) roll/pitch/yaw
+# deg, 106x60, hfov 89.5deg, range [0.3, 3.0]m).
+#
+# The orientation is that training (roll, pitch, yaw) triple converted into MuJoCo's camera frame:
+# warp's camera looks along +Z in its data frame and reaches the sensor frame via
+# offset_rot_base = (-90, 0, -90), while MuJoCo's camera looks along -Z, so
+# ``q = q_user * q_base * Rx(180deg)`` (all wxyz).
+#
+# vertical_fov is deliberately derived from the 106x60 *raycast* aspect rather than the render
+# aspect, so the projection matches training's K matrix:
+#   f = (106/2) / tan(89.5deg/2);  vfov = 2*atan((60/2)/f) ~= 58.5953deg
+# Rendering at 106x60 keeps that consistent and lets the depth-shm plugin apply training's
+# [2:, 4:-4] crop before resizing to the backbone's 58x87 input.
+d435i_front_depth_camera = CameraSensorConfig(
+    mount=SensorMountConfig(
+        target_kind="robot_link",
+        target="torso_link",
+        position=[0.01, 0.01, 0.44],
+        orientation=[0.60290764, 0.37585401, -0.362958, -0.60290764],
+    ),
+    width=106,
+    height=60,
+    vertical_fov=58.5953,
+    # NOT near=0.3 / far=3.0, even though that is the training clamp range: MuJoCo's clip is a
+    # GLOBAL frustum (``model.vis.map.{znear,zfar}``) shared with the viewer, and it *removes*
+    # geometry rather than saturating it. A near plane at 0.3 would make an obstacle at 0.2m
+    # invisible and let the camera see the background behind it, whereas training clamps such a hit
+    # to 0.3 (a very close surface). So keep a permissive frustum and let the depth-shm plugin do
+    # the [near_clip, far_clip] clamp — that reproduces training's ``torch.clamp`` exactly.
+    near=0.1,
+    data_types=["depth"],
+    update_decimation=">50Hz",
+)

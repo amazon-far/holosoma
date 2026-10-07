@@ -9,6 +9,12 @@ from termcolor import colored
 
 from holosoma_inference.config.config_types.inference import InferenceConfig
 
+# Policy types shipped by this package, keyed as (module, class). Consulted only
+# after the entry-point lookup misses, so an extension can still override a name.
+_BUILTIN_POLICY_TYPES: dict[str, tuple[str, str]] = {
+    "depth_distillation": ("holosoma_inference.policies.depth_distillation", "DepthDistillationPolicy"),
+}
+
 
 def _select_policy_class(config: InferenceConfig):
     """Determine policy class from an explicit ``policy_type`` or the obs/robot heuristic.
@@ -37,6 +43,13 @@ def _select_policy_class(config: InferenceConfig):
         for ep in entry_points(group="holosoma.policies.by_type"):
             if ep.name == policy_type:
                 return ep.load()
+        # Core policy types resolve without entry-point metadata, so an editable
+        # install with stale metadata still finds them.
+        if policy_type in _BUILTIN_POLICY_TYPES:
+            module_path, class_name = _BUILTIN_POLICY_TYPES[policy_type]
+            from importlib import import_module
+
+            return getattr(import_module(module_path), class_name)
         # policy_type set but unregistered: fall through to the heuristic below.
 
     # 2. robot_type-keyed groups + observation heuristic.

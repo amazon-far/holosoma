@@ -22,6 +22,7 @@ classifiers = [
 dependencies = [
     "astor",
     "easydict",
+    "glfw",  # imported unguarded by simulator/mujoco/command_registry.py
     "importlib_resources; python_version < '3.9'",
     "ipdb",
     "joblib",
@@ -33,17 +34,24 @@ dependencies = [
     "mypy==1.14.1",
     "notebook",
     "numpy-stl",
+    # NOTE: deliberately incompatible with `holosoma-retargeting`, which pins
+    # numpy==2.3.5. The two packages cannot share one environment; install them
+    # into separate environments, as the demo scripts do.
     "numpy>=1.23.5,<2",
     "omegaconf",  # Used for config resolvers and DictConfig type hints
     "onnx",
     "onnxruntime",
     "open3d",
-    "opencv-python",
+    # Upper-bounded: public PyPI now serves OpenCV 5.x, which is not API-compatible
+    # with the 4.x calls used across the visualization and camera paths.
+    "opencv-python<5",
     "plotly",
+    "prettytable",  # imported by simulator/isaacsim/prim_utils.py
     "pydantic",
     "pygame",
     "pynput",
     "pytest",
+    "pyzmq",
     "rich",
     "scipy",
     "shapely",
@@ -65,7 +73,6 @@ dependencies = [
     # 3.10.0 batched camera renderer. A hard ==1.14.0 breaks the non-mujoco images (not on PyPI).
     "warp-lang>=1.10",
     "yourdfpy>=0.0.58",
-    "zmq",
 ]
 
 [project.optional-dependencies]
@@ -101,9 +108,18 @@ source-include = [
     "holosoma/py.typed",
     "holosoma/**/*.STL",
     "holosoma/**/*.urdf",
+    # MuJoCo MJCF and Isaac Sim USD models: without these the mujoco and
+    # isaacsim backends cannot locate their robots from a wheel install.
+    "holosoma/**/*.xml",
+    "holosoma/**/*.usda",
     "holosoma/**/*.yaml",
     "holosoma/**/*.npz",
     "holosoma/**/*.obj",
+    # Mesh materials/textures, and the per-asset LICENSE files that the asset
+    # licenses require to travel with the asset (e.g. the CC-BY rubber duck).
+    "holosoma/**/*.mtl",
+    "holosoma/**/*.png",
+    "holosoma/**/LICENSE",
 ]
 
 [tool.pytest.ini_options]

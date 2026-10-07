@@ -20,17 +20,27 @@ classifiers = [
     "Intended Audience :: Science/Research",
 ]
 dependencies = [
-    # Needs to ping numpy to 2.3.5;
-    # reason: later numpy version such as 2.4 will trigger
+    # Pinned to numpy 2.3.5; numpy 2.4+ triggers
     # "TypeError: only 0-dimensional arrays can be converted to Python scalars"
-    # in yourdf/urdf.py::1078 when converting float(q)
+    # in yourdf/urdf.py::1078 when converting float(q).
+    #
+    # NOTE: this is deliberately incompatible with `holosoma`, which requires
+    # numpy<2. The two packages cannot share one environment -- install them into
+    # separate environments, as the demo scripts do by switching conda envs.
     "numpy==2.3.5",
     "torch",
     "tqdm",
     "scipy",
     "matplotlib",
     "trimesh",
-    "smplx",
+    # NOTE: `smplx` and `human_body_prior` are intentionally NOT declared here.
+    # smplx carries the Max Planck research license (non-commercial, and
+    # explicitly No Distribution); human_body_prior is AGPL-3.0/GPLv3. Neither can
+    # be a dependency of an Apache-2.0 package published to PyPI. Both are now
+    # imported lazily, inside the one function that needs each, so this package
+    # installs and imports without them -- see src/utils.py::load_smpl_motion and
+    # data_utils/prep_amass_smplx_for_rt.py. Users who need those AMASS/SMPL-X
+    # data-prep paths install both themselves, under the upstream terms.
     "jinja2",
     "mujoco",
     "viser",

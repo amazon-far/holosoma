@@ -7,7 +7,6 @@ from pathlib import Path
 import numpy as np
 import torch
 import tyro
-from human_body_prior.body_model.body_model import BodyModel  # type: ignore[import-not-found]
 
 
 def load_ori_npz_file(npz_file_path, dest_fps=30):
@@ -134,6 +133,12 @@ def run_smplx_model(
 
 
 def prep_smplx_model(model_root_folder):
+    # `human_body_prior` is AGPL-3.0/GPLv3, so it is not a declared dependency of
+    # this Apache-2.0 package and is imported here rather than at module scope.
+    # Install it yourself if you need this AMASS/SMPL-X data-prep path; see the
+    # instructions in README.md.
+    from human_body_prior.body_model.body_model import BodyModel  # type: ignore[import-not-found]
+
     # Prepare SMPLX model
     support_base_dir = model_root_folder
     surface_model_type = "smplx"
@@ -230,13 +235,13 @@ def get_npz_files(amass_root_folder, subdataset_folder=None):
 class Config:
     """Configuration for processing AMASS SMPLX data."""
 
-    amass_root_folder: str = "/home/ubuntu/datasets/rt_ori_human_data/amass-smplx"
+    amass_root_folder: str = ""
     """Root folder containing AMASS SMPLX npz files."""
 
-    output_folder: str = "/home/ubuntu/datasets/rt_processed_data/amass-smplx-processed"
+    output_folder: str = ""
     """Output folder for processed data."""
 
-    model_root_folder: str = "/home/ubuntu/datasets/rt_ori_human_data/smpl_all_models"
+    model_root_folder: str = ""
     """Root folder containing SMPLX model files."""
 
     subdataset_folder: str | None = None
@@ -246,6 +251,12 @@ class Config:
 
 
 def main(cfg: Config):
+    # AMASS and the SMPL-X body models are license-gated downloads, so there is
+    # no sensible default location for them -- the caller must say where they are.
+    for field_name in ("amass_root_folder", "output_folder", "model_root_folder"):
+        if not getattr(cfg, field_name):
+            raise ValueError(f"--{field_name.replace('_', '-')} is required and has no default")
+
     # Get all the npz file paths in the amass-smplx folder
     npz_file_paths = get_npz_files(cfg.amass_root_folder, cfg.subdataset_folder)
 

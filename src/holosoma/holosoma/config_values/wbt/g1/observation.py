@@ -138,4 +138,9 @@ g1_29dof_wbt_observation_w_object = ObservationManagerCfg(
     },
 )
 
-__all__ = ["g1_29dof_wbt_observation", "g1_29dof_wbt_observation_w_object"]
+
+__all__ = [
+    "critic_obs_shared_terms",
+    "g1_29dof_wbt_observation",
+    "g1_29dof_wbt_observation_w_object",
+]

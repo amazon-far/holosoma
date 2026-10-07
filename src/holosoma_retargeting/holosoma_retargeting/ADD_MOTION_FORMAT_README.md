@@ -15,6 +15,13 @@ Prepare `.npz` files for each motion sequence:
 - **`.npz` format**: Should contain `global_joint_positions` array (T X J X 3) and `height` scalar
 
 **Example**: We provide `data_utils/prep_amass_smplx_for_rt.py` for converting AMASS SMPLX data:
+
+> **License note.** `human_body_prior` is AGPL-3.0/GPLv3 and the SMPL-X body
+> models carry the Max Planck research license (non-commercial, no
+> redistribution). Neither is a dependency of `holosoma-retargeting` nor
+> redistributed here; the imports are lazy. Installing them is your decision under
+> those upstream licenses. See the note in `../README.md`.
+
 ```bash
 # Install dependencies
 git clone https://github.com/nghorbani/human_body_prior.git

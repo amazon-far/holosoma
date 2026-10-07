@@ -372,7 +372,10 @@ class Terrain(TerrainInterface):
             Difficulty level in range [0, 1], controls step height.
         """
         step_width = np.random.uniform(self._cfg.step_width_range[0], self._cfg.step_width_range[1])
-        step_height = 0.05 + 0.18 * difficulty
+        if self._cfg.fixed_step_height > 0.0:
+            step_height = self._cfg.fixed_step_height
+        else:
+            step_height = 0.05 + 0.18 * difficulty
         random_01 = np.random.randint(0, 2)
         down = random_01 * 2 - 1
         step_height *= down

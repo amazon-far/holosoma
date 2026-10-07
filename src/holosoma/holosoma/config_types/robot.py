@@ -46,6 +46,19 @@ class RobotControlConfig:
     clip_actions: bool
     clip_torques: bool
     action_scales_by_effort_limit_over_p_gain: bool = False
+    control_mode: str = "explicit_pd_torque"
+    """Actuator control mode. ``"explicit_pd_torque"`` (default) routes through
+    ``JointPositionActionTerm`` which computes torques in Python.
+    ``"implicit_position_target"`` sends position targets to IsaacSim's
+    built-in PD drive; with this mode set, ``implicit_actuator_builder``
+    must point to a function returning ``dict[str, ImplicitActuatorCfg]``."""
+
+    implicit_actuator_builder: str | None = None
+    """Dotted ``module:callable`` path resolved at simulator init time when
+    ``control_mode="implicit_position_target"``. The callable takes no args
+    and returns ``dict[str, ImplicitActuatorCfg]`` with per-group motor
+    calibration (stiffness/damping/armature). Robot-specific; defined in
+    application code (e.g. ``wbt_training.actuators:build_g1_implicit_actuators``)."""
 
 
 @dataclass(frozen=True)
