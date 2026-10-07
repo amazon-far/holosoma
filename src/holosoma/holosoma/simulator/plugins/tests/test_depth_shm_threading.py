@@ -17,6 +17,7 @@ import threading
 import time
 from collections.abc import Iterator
 from multiprocessing import shared_memory
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
@@ -145,7 +146,7 @@ def _config(**overrides: Any) -> DepthShmPluginConfig:
 @pytest.fixture
 def accept_fake_backend(monkeypatch: pytest.MonkeyPatch) -> None:
     """Let ``_FakeBackend`` pass the ClassicBackend install check, which these tests are not about."""
-    monkeypatch.setattr(depth_shm_plugin, "_require_classic_backend", lambda simulator: None)  # noqa: ARG005
+    monkeypatch.setattr(depth_shm_plugin, "_require_classic_backend", lambda simulator, **kwargs: None)  # noqa: ARG005
 
 
 @pytest.fixture
@@ -290,6 +291,40 @@ def test_classic_backend_is_accepted() -> None:
     cast("Any", sim).backend = object.__new__(ClassicBackend)  # only the type is checked at install
 
     DepthShmPlugin(_config(), cast("BaseSimulator", sim)).stop()
+
+
+@pytest.mark.parametrize("backend_name", ["classic", "warp"])
+def test_backend_validation_during_mujoco_construction(backend_name: str) -> None:
+    """Plugins install in BaseSimulator.__init__, before MuJoCo.load_assets creates backend."""
+    pytest.importorskip("mujoco")
+    from holosoma.simulator.mujoco.mujoco import MuJoCo
+
+    sim = object.__new__(MuJoCo)
+    sim.__dict__.update(_FakeSimulator().__dict__)
+    del sim.backend
+    cast("Any", sim).simulator_config = SimpleNamespace(mujoco_backend=backend_name)
+
+    if backend_name == "warp":
+        with pytest.raises(ValueError, match="only safe on the MuJoCo ClassicBackend"):
+            DepthShmPlugin(_config(), sim)
+        return
+
+    plugin = DepthShmPlugin(_config(), sim)
+    try:
+        # A valid configuration permits installation, but cannot start rendering by itself.
+        with pytest.raises(ValueError, match="with no backend"):
+            plugin.start()
+        assert plugin._shm is None
+        assert plugin._thread is None
+
+        # Recheck the actual backend rather than trusting the earlier configuration.
+        cast("Any", sim).backend = _FakeBackend()
+        with pytest.raises(ValueError, match="with _FakeBackend"):
+            plugin.start()
+        assert plugin._shm is None
+        assert plugin._thread is None
+    finally:
+        plugin.stop()
 
 
 #########################################################################################################

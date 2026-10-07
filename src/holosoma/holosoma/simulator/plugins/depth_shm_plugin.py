@@ -39,13 +39,15 @@ if TYPE_CHECKING:
     from holosoma.simulator.mujoco.mujoco import MuJoCo
 
 
-def _require_classic_backend(simulator: BaseSimulator) -> None:
-    """Fail at install unless ``simulator`` steps on the MuJoCo ClassicBackend.
+def _require_classic_backend(simulator: BaseSimulator, *, allow_uninitialized: bool = False) -> None:
+    """Require ClassicBackend, allowing its configured MuJoCo instance during construction.
 
     The render thread calls ``backend.render_cameras`` while the physics thread runs. Only the
     ClassicBackend makes that safe (one renderer per thread): the WarpBackend shares its render
-    masks and CUDA graph between callers, and other simulators have no ``backend`` at all. Checked
-    in ``__init__`` because ``start()`` errors are logged and retried every frame, not raised.
+    masks and CUDA graph between callers, and other simulators have no ``backend`` at all.
+    BaseSimulator installs plugins before MuJoCo creates its backend in load_assets(). At install,
+    validate that pending backend through the simulator type and configuration; at start, require
+    the actual backend before creating shared memory or a render thread.
     """
     backend = getattr(simulator, "backend", None)
     try:
@@ -54,6 +56,13 @@ def _require_classic_backend(simulator: BaseSimulator) -> None:
         is_classic = False
     else:
         is_classic = isinstance(backend, ClassicBackend)
+        if backend is None and allow_uninitialized:
+            from holosoma.config_types.simulator import MujocoBackend
+            from holosoma.simulator.mujoco.mujoco import MuJoCo
+
+            is_classic = (
+                isinstance(simulator, MuJoCo) and simulator.simulator_config.mujoco_backend == MujocoBackend.CLASSIC
+            )
     if not is_classic:
         found = type(backend).__name__ if backend is not None else "no backend"
         raise ValueError(
@@ -90,7 +99,7 @@ class DepthShmPlugin(CameraConsumerPlugin):
     cfg: DepthShmPluginConfig
 
     def __init__(self, config: DepthShmPluginConfig, simulator: BaseSimulator) -> None:
-        _require_classic_backend(simulator)
+        _require_classic_backend(simulator, allow_uninitialized=True)
         # Read by wanted_streams(), which the base calls during __init__.
         self._camera = config.camera
         self._env_id = config.env_id
@@ -131,6 +140,7 @@ class DepthShmPlugin(CameraConsumerPlugin):
 
     def start(self) -> None:
         """Create (or adopt) the shared-memory block, then start the render thread."""
+        _require_classic_backend(self.simulator)
         from multiprocessing import shared_memory
 
         nbytes = int(np.prod(self._shape)) * np.dtype(np.float32).itemsize
