@@ -22,6 +22,7 @@ from holosoma.simulator.mujoco.geom_groups import (
 from holosoma.simulator.mujoco.scene_manager import LIDAR_FILTER_SITE_PREFIX, LIDAR_MOUNT_SITE_PREFIX
 from holosoma.simulator.shared.lidar_range import finalize_lidar_returns
 from holosoma.simulator.shared.sensor_manager import LidarRecord, SensorManager
+from holosoma.utils.warp_interop import from_torch_vec3
 
 if TYPE_CHECKING:
     from holosoma.simulator.mujoco.mujoco import MuJoCo
@@ -230,11 +231,11 @@ def _warp_workspace(
         if not isinstance(body_exclude, int):
             raise RuntimeError(f"LiDAR '{sensor_record.name}' has no resolved MuJoCo body exclusion.")
         workspace.excludes.fill_(body_exclude)
-        workspace.origins_wp = wp.from_torch(workspace.origins.contiguous(), dtype=wp.vec3)
-        workspace.directions_wp = wp.from_torch(workspace.directions.contiguous(), dtype=wp.vec3)
+        workspace.origins_wp = from_torch_vec3(workspace.origins, backend.mjw_device)
+        workspace.directions_wp = from_torch_vec3(workspace.directions, backend.mjw_device)
         workspace.distances_wp = wp.from_torch(workspace.distances)
         workspace.geom_ids_wp = wp.from_torch(workspace.geom_ids)
-        workspace.normals_wp = wp.from_torch(workspace.normals.contiguous(), dtype=wp.vec3)
+        workspace.normals_wp = from_torch_vec3(workspace.normals, backend.mjw_device)
         workspace.excludes_wp = wp.from_torch(workspace.excludes)
     sensor_record.backend_cache[cache_key] = workspace
     return workspace

@@ -12,22 +12,9 @@ import numpy.typing as npt
 import torch
 import warp as wp
 
+from holosoma.utils.warp_interop import from_torch_vec3
+
 wp.init()
-
-
-def _from_torch_vec3(tensor: torch.Tensor, device: Any) -> Any:
-    """Wrap a contiguous float32 ``[N, 3]`` Torch tensor as a zero-copy Warp array."""
-    if tensor.dtype != torch.float32:
-        raise TypeError(f"Expected a float32 Torch tensor, got {tensor.dtype}")
-    if tensor.ndim != 2 or tensor.shape[1] != 3:
-        raise ValueError(f"Expected a Torch tensor with shape [N, 3], got {tuple(tensor.shape)}")
-    if not tensor.is_contiguous():
-        raise ValueError("Expected a contiguous Torch tensor")
-
-    tensor_wp = wp.from_torch(tensor, dtype=wp.vec3)
-    if tensor_wp.device != device:
-        raise ValueError(f"Torch tensor is on {tensor_wp.device}, but the Warp mesh is on {device}")
-    return tensor_wp
 
 
 @wp.kernel
@@ -79,10 +66,11 @@ def ray_cast(ray_starts_world: torch.Tensor, ray_directions_world: torch.Tensor,
     ray_starts_world = ray_starts_world.view(-1, 3)
     ray_directions_world = ray_directions_world.view(-1, 3)
     num_rays = len(ray_starts_world)
-    ray_starts_world_wp = _from_torch_vec3(ray_starts_world, wp_mesh.device)
-    ray_directions_world_wp = _from_torch_vec3(ray_directions_world, wp_mesh.device)
+    ray_starts_world_wp = from_torch_vec3(ray_starts_world, wp_mesh.device)
+    ray_directions_world_wp = from_torch_vec3(ray_directions_world, wp_mesh.device)
     ray_hits_world = torch.full_like(ray_starts_world, float("inf"))
-    ray_hits_world_wp = _from_torch_vec3(ray_hits_world, wp_mesh.device)
+    # full_like preserves the checked layout and device, so this output only needs wrapping.
+    ray_hits_world_wp = wp.from_torch(ray_hits_world, dtype=wp.vec3)
     wp.launch(
         kernel=raycast_kernel,
         dim=num_rays,
@@ -121,20 +109,21 @@ def nearest_point_kernel(
 
 
 def nearest_point(points: torch.Tensor, wp_mesh: wp.Mesh) -> torch.Tensor:
-    """Performs ray casting on the terrain mesh.
+    """Find the nearest terrain-mesh position for each query point.
 
     Args:
-        point (Torch.tensor): The near point.
+        points (Torch.tensor): The query points.
 
     Returns:
-        [Torch.tensor]: The ray hit position. Returns float('inf') for missed hits.
+        [Torch.tensor]: The nearest mesh positions. Returns float('inf') when no point is found.
     """
     shape = points.shape
     points = points.view(-1, 3)
     num_points = len(points)
-    points_wp = _from_torch_vec3(points, wp_mesh.device)
+    points_wp = from_torch_vec3(points, wp_mesh.device)
     mesh_points = torch.full_like(points, float("inf"))
-    mesh_points_wp = _from_torch_vec3(mesh_points, wp_mesh.device)
+    # full_like preserves the checked layout and device, so this output only needs wrapping.
+    mesh_points_wp = wp.from_torch(mesh_points, dtype=wp.vec3)
     wp.launch(
         kernel=nearest_point_kernel,
         dim=num_points,
