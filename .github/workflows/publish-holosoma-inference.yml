@@ -30,7 +30,7 @@ jobs:
     needs: build
     # Only publish on a version tag, never on manual dispatch (build-only smoke).
     if: startsWith(github.ref, 'refs/tags/holosoma-inference-v')
-    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     environment: pypi
     permissions:
       id-token: write # required for Trusted Publishing (OIDC)

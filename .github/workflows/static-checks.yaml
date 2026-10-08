@@ -14,7 +14,7 @@ on:
 jobs:
   run-checks:
     name: Run Checks
-    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     container:
       image: ${{ vars.ECR_REGISTRY }}/holosoma:latest
       volumes:
