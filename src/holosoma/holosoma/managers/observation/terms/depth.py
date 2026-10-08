@@ -93,9 +93,10 @@ class WarpDepthImageObsTerm(ObservationTermBase):
 
         # NOTE: command_manager is constructed *after* observation_manager in
         # BaseTask.__init__, so we cannot resolve the motion command here. Defer
-        # the lookup to the first __call__.
+        # the lookup and the previous-timestep buffer to the first __call__.
         self._command_name: str = params["command_name"]
         self.command: Any = None
+        self._prev_time_step: torch.Tensor | None = None
 
         self._init_camera(cfg, env)
 
@@ -184,8 +185,7 @@ class WarpDepthImageObsTerm(ObservationTermBase):
     def reset(self, env_ids: torch.Tensor | None = None) -> None:
         if env_ids is None:
             env_ids = torch.arange(0, self.num_envs, device=self.device)
-        # Only mark env_ids: BaseTask also calls reset with an empty env_ids every
-        # step, which must not drop flags set since the last __call__ (that clears them).
+        self.reset_episodes[:] = False
         self.reset_episodes[env_ids] = True
 
     def _ensure_command_resolved(self, env: Any) -> None:
@@ -197,6 +197,7 @@ class WarpDepthImageObsTerm(ObservationTermBase):
                 f"WarpDepthImageObsTerm requires a stateful command "
                 f"'{self._command_name}'; got None from command_manager.get_state()."
             )
+        self._prev_time_step = self.command.time_steps.clone()
 
     def __call__(self, env: Any, *, modify_history: bool = True, **kwargs: Any) -> torch.Tensor:
         if not modify_history:
@@ -208,9 +209,11 @@ class WarpDepthImageObsTerm(ObservationTermBase):
         self.depth_buffer[:, :-1] = self.depth_buffer[:, 1:].clone()
         self.depth_buffer[:, -1] = processed_images.to(self.device)
 
-        # Episode resets plus motion-end resamples, which teleport the env in
-        # MotionCommand.step() without going through reset(), in either time direction.
-        reset_idxs = self.command.motion_end_reset | self.reset_episodes
+        # Preserve the compatibility branch's backward-timestep reset detection.
+        time_step_now = self.command.time_steps
+        motion_end_reset = time_step_now < self._prev_time_step
+        self._prev_time_step = time_step_now.clone()
+        reset_idxs = motion_end_reset | self.reset_episodes
         if reset_idxs.any():
             # Fill every buffer slot of a resetting env with the current frame.
             # The source is expanded to the destination shape explicitly rather

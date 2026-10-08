@@ -258,11 +258,9 @@ class Distillation(BaseAlgo):
 
             if it % self.config.save_interval == 0 and self.is_main_process:
                 self.save(os.path.join(self.log_dir, f"model_{it:05d}.pt"))
-                self.export(onnx_file_path=os.path.join(self.log_dir, f"model_{it:05d}.onnx"))
 
         if self.is_main_process:
             self.save(os.path.join(self.log_dir, f"model_{self.current_learning_iteration:05d}.pt"))
-            self.export(onnx_file_path=os.path.join(self.log_dir, f"model_{self.current_learning_iteration:05d}.onnx"))
 
     # ------------------------------------------------------------- rollout step
 

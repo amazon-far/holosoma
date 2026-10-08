@@ -252,7 +252,7 @@ def test_default_pose_transition_anchors_on_motion_root(
 
 
 #########################################################################################################
-## Relative body targets: the motion side anchors on the same body as the robot side
+## Compatibility relative targets: motion keeps its configured torso anchor
 #########################################################################################################
 def _place_robot_on_motion_root(env: SimpleNamespace) -> None:
     sim = env.simulator
@@ -260,7 +260,7 @@ def _place_robot_on_motion_root(env: SimpleNamespace) -> None:
     sim.robot_root_states[:, 3:7] = _yaw_quat_xyzw(BODY_YAW["pelvis"])
 
 
-def test_relative_targets_have_no_offset_at_episode_start(tmp_path: Path) -> None:
+def test_relative_targets_keep_motion_reference_at_episode_start(tmp_path: Path) -> None:
     env = _make_env(num_envs=3)
     command = _make_command(env, motion_file=str(_write_motion(tmp_path / "clip.npz", 12)))
     command.time_steps[:] = 2
@@ -269,11 +269,16 @@ def test_relative_targets_have_no_offset_at_episode_start(tmp_path: Path) -> Non
 
     command.step()
 
-    assert torch.allclose(command.body_pos_relative_w, command.body_pos_w, atol=1e-5)
-    _assert_quat_close(command.body_quat_relative_w, command.body_quat_w)
+    torso = ROBOT_BODIES.index("torso_link")
+    # With the motion torso anchored to the robot root, its target xy equals the
+    # robot root xy, its height remains the motion torso height, and yaw matches root.
+    expected_torso_pos = torch.cat((command.robot_root_pos_w[:, :2], command.ref_pos_w[:, 2:]), dim=-1)
+    assert torch.allclose(command.body_pos_relative_w[:, torso], expected_torso_pos, atol=1e-5)
+    _assert_quat_close(command.body_quat_relative_w[:, torso], command.robot_root_quat_w)
+    assert not torch.allclose(command.body_pos_relative_w, command.body_pos_w)
 
 
-def test_relative_targets_have_no_offset_after_motion_end_resample(tmp_path: Path) -> None:
+def test_relative_targets_keep_motion_reference_after_motion_end_resample(tmp_path: Path) -> None:
     num_frames = 12
     env = _make_env(num_envs=3)
     command = _make_command(
@@ -285,8 +290,13 @@ def test_relative_targets_have_no_offset_after_motion_end_resample(tmp_path: Pat
     command.step()
 
     assert command.motion_end_reset.all()
-    assert torch.allclose(command.body_pos_relative_w, command.body_pos_w, atol=1e-5)
-    _assert_quat_close(command.body_quat_relative_w, command.body_quat_w)
+    torso = ROBOT_BODIES.index("torso_link")
+    # With the motion torso anchored to the robot root, its target xy equals the
+    # robot root xy, its height remains the motion torso height, and yaw matches root.
+    expected_torso_pos = torch.cat((command.robot_root_pos_w[:, :2], command.ref_pos_w[:, 2:]), dim=-1)
+    assert torch.allclose(command.body_pos_relative_w[:, torso], expected_torso_pos, atol=1e-5)
+    _assert_quat_close(command.body_quat_relative_w[:, torso], command.robot_root_quat_w)
+    assert not torch.allclose(command.body_pos_relative_w, command.body_pos_w)
 
 
 #########################################################################################################

@@ -108,7 +108,7 @@ def test_learn_synchronizes_curriculum_every_iteration_on_multi_gpu(
 
 
 @pytest.mark.parametrize("algo_cls", [Distillation, DistillationPPO])
-def test_learn_exports_onnx_with_each_checkpoint(algo_cls: type[Distillation | DistillationPPO]) -> None:
+def test_learn_leaves_export_ownership_to_application_save_hook(algo_cls: type[Distillation | DistillationPPO]) -> None:
     events: list[tuple[Any, ...]] = []
     algo = _stub_learn_loop(algo_cls, events)
     algo.env = SimpleNamespace(reset_all=dict)
@@ -123,7 +123,7 @@ def test_learn_exports_onnx_with_each_checkpoint(algo_cls: type[Distillation | D
     saved = [event[1] for event in events if event[0] == "save"]
     exported = [event[1] for event in events if event[0] == "export"]
     assert saved == ["/tmp/run/model_00000.pt", "/tmp/run/model_00001.pt", "/tmp/run/model_00001.pt"]
-    assert exported == [path.replace(".pt", ".onnx") for path in saved]
+    assert exported == []
 
 
 class _TinyPolicy(torch.nn.Module):

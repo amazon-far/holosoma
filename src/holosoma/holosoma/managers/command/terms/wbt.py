@@ -1055,19 +1055,18 @@ class MotionCommand(CommandTermBase):
         # Solution:
         # ------------------------------------------------------------
         # if episode_length_buf == 0 OR motion just wrapped (motion_end_reset),
-        # use robot_root_pos_w and robot_root_quat_w as reference body, and the motion root to match.
-        # else, use configured reference body as reference body.
+        # use robot_root on the ROBOT side only. Motion side always uses
+        # ref_pos_w/ref_quat_w so tracking targets stay on the configured
+        # reference body (torso_link), not the motion pelvis.
         use_root = ((self._env.episode_length_buf == 0) | self.motion_end_reset).unsqueeze(1).float()
 
-        ref_pos_w = self.root_pos_w * use_root + self.ref_pos_w * (1 - use_root)
-        ref_quat_w = self.root_quat_w * use_root + self.ref_quat_w * (1 - use_root)
         robot_ref_pos_w = self.robot_root_pos_w * use_root + self.robot_ref_pos_w * (1 - use_root)
         robot_ref_quat_w = self.robot_root_quat_w * use_root + self.robot_ref_quat_w * (1 - use_root)
 
         ## 1.1 expand to match the number of body parts (no memory copy, unlike repeat)
         _nb = len(self.motion_cfg.body_names_to_track)
-        ref_pos_w_repeat = ref_pos_w[:, None, :].expand(-1, _nb, -1)
-        ref_quat_w_repeat = ref_quat_w[:, None, :].expand(-1, _nb, -1)
+        ref_pos_w_repeat = self.ref_pos_w[:, None, :].expand(-1, _nb, -1)
+        ref_quat_w_repeat = self.ref_quat_w[:, None, :].expand(-1, _nb, -1)
         robot_ref_pos_w_repeat = robot_ref_pos_w[:, None, :].expand(-1, _nb, -1)
         robot_ref_quat_w_repeat = robot_ref_quat_w[:, None, :].expand(-1, _nb, -1)
 

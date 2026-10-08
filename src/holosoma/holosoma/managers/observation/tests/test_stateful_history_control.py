@@ -119,7 +119,10 @@ def _depth_term_for_buffer_test(*, latency_frame: int | tuple[int, int]) -> tupl
     term.depth_buffer = torch.zeros(2, 3, 1, 2)
     term._cached_output = torch.zeros(2, 1, 2)
     term.reset_episodes = torch.tensor([False, True])
-    term.command = types.SimpleNamespace(motion_end_reset=torch.tensor([False, False]))
+    term.command = types.SimpleNamespace(
+        time_steps=torch.tensor([2, 4]), motion_end_reset=torch.tensor([False, False])
+    )
+    term._prev_time_step = term.command.time_steps.clone()
     term._ensure_command_resolved = lambda env: None  # type: ignore[method-assign]  # noqa: ARG005
     frame = torch.tensor([[[1.0, 2.0]], [[3.0, 4.0]]])
     term._get_depth_images = lambda env: frame  # type: ignore[method-assign]  # noqa: ARG005
@@ -201,7 +204,7 @@ def test_final_read_then_reset_advances_non_reset_env_only_once() -> None:
     assert torch.equal(post_reset_depth[1], frame[1])
 
 
-def test_empty_reset_after_reset_all_keeps_pending_depth_flush() -> None:
+def test_empty_reset_after_reset_all_clears_pending_flush_like_compat() -> None:
     term, frame = _depth_term_for_buffer_test(latency_frame=1)
     env = types.SimpleNamespace(device="cpu")
     term.reset_episodes[:] = False
@@ -214,12 +217,13 @@ def test_empty_reset_after_reset_all_keeps_pending_depth_flush() -> None:
     ObservationManager.reset(cast("ObservationManager", manager), torch.empty(0, dtype=torch.long))
     output = term(env, modify_history=True)
 
-    assert all(torch.equal(term.depth_buffer[env_id, i], frame[env_id]) for env_id in range(2) for i in range(3))
-    assert torch.equal(output, frame)
+    # Compatibility behavior: the empty reset clears the prior reset-all flags.
+    assert torch.equal(output, torch.full_like(frame, -1.0))
+    assert torch.equal(term.depth_buffer[:, -1], frame)
     assert not term.reset_episodes.any()
 
 
-def test_forward_motion_resample_refills_depth_buffer() -> None:
+def test_forward_motion_resample_keeps_history_like_compat() -> None:
     term, frame = _depth_term_for_buffer_test(latency_frame=1)
     env = types.SimpleNamespace(device="cpu")
     term.reset_episodes[:] = False
@@ -227,6 +231,21 @@ def test_forward_motion_resample_refills_depth_buffer() -> None:
     # Env 1 hit a clip end in MotionCommand.step() and was resampled to a later
     # frame (time step increased); reset() is not called on this path.
     term.command.motion_end_reset = torch.tensor([False, True])
+    term.command.time_steps = torch.tensor([3, 8])
+
+    output = term(env, modify_history=True)
+
+    assert torch.equal(output, torch.full_like(frame, -1.0))
+    assert torch.equal(term.depth_buffer[:, -1], frame)
+    assert torch.equal(term._prev_time_step, term.command.time_steps)
+
+
+def test_backward_motion_resample_refills_depth_buffer_like_compat() -> None:
+    term, frame = _depth_term_for_buffer_test(latency_frame=1)
+    env = types.SimpleNamespace(device="cpu")
+    term.reset_episodes[:] = False
+    term.depth_buffer[:] = -1.0
+    term.command.time_steps = torch.tensor([3, 1])
 
     output = term(env, modify_history=True)
 
