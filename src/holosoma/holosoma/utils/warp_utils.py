@@ -55,7 +55,7 @@ def raycast_kernel(
         ray_starts_world[tid],
         ray_directions_world[tid],
         max_dist,  # type: ignore[arg-type]
-        t,  # type: ignore[arg-type]
+        t,
         u,
         v,
         sign,
