@@ -300,15 +300,16 @@ def test_relative_targets_keep_motion_reference_after_motion_end_resample(tmp_pa
 
 
 #########################################################################################################
-## Adaptive sampler: adaptive_uniform_ratio sets the uniform floor
+## Adaptive sampler: compatibility keeps a fixed uniform floor
 #########################################################################################################
-@pytest.mark.parametrize("ratio", [0.1, 0.5])
-def test_adaptive_uniform_ratio_sets_uniform_floor(ratio: float) -> None:
+@pytest.mark.parametrize("ratio", [1e-6, 0.1, 0.5])
+def test_compat_sampler_keeps_fixed_uniform_floor(ratio: float) -> None:
     sampler = AdaptiveTimestepsSampler(99 * 50, "cpu", 50, adaptive_uniform_ratio=ratio)
     assert sampler.num_bins == 100
     sampler.bin_failed_count[0] = 1.0
 
-    expected = torch.full((100,), ratio / 100)
+    # The compatibility formula keeps its fixed floor regardless of this config field.
+    expected = torch.full((100,), 0.010001)
     expected[0] += 1.0
     assert torch.allclose(sampler.sampling_probabilities, expected / expected.sum())
 

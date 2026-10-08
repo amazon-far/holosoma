@@ -605,13 +605,15 @@ class AdaptiveTimestepsSampler:
 
     @property
     def sampling_probabilities(self) -> torch.Tensor:
-        sampling_probabilities = self.bin_failed_count + self.adaptive_uniform_ratio / float(self.num_bins)
+        # Preserve the PHP compatibility sampler: broad coverage after failures.
+        sampling_probabilities = self.bin_failed_count + 1e-6
         sampling_probabilities = torch.nn.functional.pad(
             sampling_probabilities.unsqueeze(0).unsqueeze(0),
             (0, self.adaptive_kernel_size - 1),  # Non-causal kernel
             mode="replicate",
         )
         sampling_probabilities = torch.nn.functional.conv1d(sampling_probabilities, self.kernel.view(1, 1, -1)).view(-1)
+        sampling_probabilities += 0.01  # Uniform floor post-convolution
         return sampling_probabilities / sampling_probabilities.sum()
 
     def sample(self, num_samples: int) -> torch.Tensor:
