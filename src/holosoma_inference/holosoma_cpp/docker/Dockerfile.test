@@ -1,0 +1,25 @@
+# Builds holosoma_cpp with the Unitree SDK2 backend and runs its tests.
+#
+# Build (context = repo root):
+#   docker build -f src/holosoma_inference/holosoma_cpp/docker/Dockerfile.test -t holosoma-cpp-test .
+# Run the tests:
+#   docker run --rm holosoma-cpp-test
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    cmake \
+    ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
+# The tests load the bundled ONNX models, so keep the repository layout.
+COPY src/holosoma_inference/holosoma_inference/models /ws/src/holosoma_inference/holosoma_inference/models
+COPY src/holosoma_inference/holosoma_cpp /ws/src/holosoma_inference/holosoma_cpp
+
+WORKDIR /ws/src/holosoma_inference/holosoma_cpp
+RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DHOLOSOMA_WITH_UNITREE_SDK=ON \
+    && cmake --build build -j"$(nproc)"
+
+CMD ["ctest", "--test-dir", "build", "--output-on-failure"]

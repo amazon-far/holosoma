@@ -19,6 +19,9 @@ Policy inference for humanoid robot policies.
 - 🚧 (in progress/partial support)
 - ❌ (no support)
 
+A native C++ runtime with the same presets, command line and controls is available for the G1 in
+[`holosoma_cpp`](holosoma_cpp/README.md).
+
 ## Quick Start
 
 ### Setup the Environment
