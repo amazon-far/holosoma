@@ -15,6 +15,21 @@ import warp as wp
 wp.init()
 
 
+def _from_torch_vec3(tensor: torch.Tensor, device: Any) -> Any:
+    """Wrap a contiguous float32 ``[N, 3]`` Torch tensor as a zero-copy Warp array."""
+    if tensor.dtype != torch.float32:
+        raise TypeError(f"Expected a float32 Torch tensor, got {tensor.dtype}")
+    if tensor.ndim != 2 or tensor.shape[1] != 3:
+        raise ValueError(f"Expected a Torch tensor with shape [N, 3], got {tuple(tensor.shape)}")
+    if not tensor.is_contiguous():
+        raise ValueError("Expected a contiguous Torch tensor")
+
+    tensor_wp = wp.from_torch(tensor, dtype=wp.vec3)
+    if tensor_wp.device != device:
+        raise ValueError(f"Torch tensor is on {tensor_wp.device}, but the Warp mesh is on {device}")
+    return tensor_wp
+
+
 @wp.kernel
 def raycast_kernel(
     mesh: wp.uint64,
@@ -40,7 +55,7 @@ def raycast_kernel(
         ray_starts_world[tid],
         ray_directions_world[tid],
         max_dist,  # type: ignore[arg-type]
-        t,
+        t,  # type: ignore[arg-type]
         u,
         v,
         sign,
@@ -64,32 +79,10 @@ def ray_cast(ray_starts_world: torch.Tensor, ray_directions_world: torch.Tensor,
     ray_starts_world = ray_starts_world.view(-1, 3)
     ray_directions_world = ray_directions_world.view(-1, 3)
     num_rays = len(ray_starts_world)
-    ray_starts_world_wp = wp.types.array(
-        ptr=ray_starts_world.data_ptr(),
-        dtype=wp.vec3,
-        shape=(num_rays,),
-        copy=False,
-        # owner=False,
-        device=wp_mesh.device,
-    )
-    ray_directions_world_wp = wp.types.array(
-        ptr=ray_directions_world.data_ptr(),
-        dtype=wp.vec3,
-        shape=(num_rays,),
-        copy=False,
-        # owner=False,
-        device=wp_mesh.device,
-    )
-    ray_hits_world = torch.zeros((num_rays, 3), device=ray_starts_world.device)
-    ray_hits_world[:] = float("inf")
-    ray_hits_world_wp = wp.types.array(
-        ptr=ray_hits_world.data_ptr(),
-        dtype=wp.vec3,
-        shape=(num_rays,),
-        copy=False,
-        # owner=False,
-        device=wp_mesh.device,
-    )
+    ray_starts_world_wp = _from_torch_vec3(ray_starts_world, wp_mesh.device)
+    ray_directions_world_wp = _from_torch_vec3(ray_directions_world, wp_mesh.device)
+    ray_hits_world = torch.full_like(ray_starts_world, float("inf"))
+    ray_hits_world_wp = _from_torch_vec3(ray_hits_world, wp_mesh.device)
     wp.launch(
         kernel=raycast_kernel,
         dim=num_rays,
@@ -139,24 +132,9 @@ def nearest_point(points: torch.Tensor, wp_mesh: wp.Mesh) -> torch.Tensor:
     shape = points.shape
     points = points.view(-1, 3)
     num_points = len(points)
-    points_wp = wp.types.array(
-        ptr=points.data_ptr(),
-        dtype=wp.vec3,
-        shape=(num_points,),
-        copy=False,
-        owner=False,
-        device=wp_mesh.device,
-    )
-    mesh_points = torch.zeros((num_points, 3), device=points.device)
-    mesh_points[:] = float("inf")
-    mesh_points_wp = wp.types.array(
-        ptr=mesh_points.data_ptr(),
-        dtype=wp.vec3,
-        shape=(num_points,),
-        copy=False,
-        owner=False,
-        device=wp_mesh.device,
-    )
+    points_wp = _from_torch_vec3(points, wp_mesh.device)
+    mesh_points = torch.full_like(points, float("inf"))
+    mesh_points_wp = _from_torch_vec3(mesh_points, wp_mesh.device)
     wp.launch(
         kernel=nearest_point_kernel,
         dim=num_points,
