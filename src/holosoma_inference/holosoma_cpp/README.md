@@ -39,6 +39,7 @@ Sim-to-sim whole-body tracking (start `python src/holosoma/holosoma/run_sim.py r
 ```bash
 src/holosoma_inference/holosoma_cpp/build/holosoma_run_policy inference:g1-29dof-wbt \
     --task.model-path src/holosoma_inference/holosoma_inference/models/wbt/fastsac_g1_29dof_dancing.onnx \
+    --task.no-action-scales-by-effort-limit-over-p-gain --task.policy-action-scale 1.0 \
     --task.use-sim-time \
     --task.interface lo
 ```
@@ -48,9 +49,14 @@ Real robot (Unitree wireless controller, robot on `eth0`):
 ```bash
 src/holosoma_inference/holosoma_cpp/build/holosoma_run_policy inference:g1-29dof-wbt \
     --task.model-path src/holosoma_inference/holosoma_inference/models/wbt/fastsac_g1_29dof_dancing.onnx \
+    --task.no-action-scales-by-effort-limit-over-p-gain --task.policy-action-scale 1.0 \
     --task.use-joystick \
     --task.interface eth0
 ```
+
+`fastsac_g1_29dof_dancing.onnx` has no `action_scale` metadata, so without the two action-scale flags the
+preset falls back to `robot.default_per_joint_action_scale`, and this model then falls in simulation. The
+same applies to the Python runtime.
 
 Locomotion uses `inference:g1-29dof-loco`. Keyboard and joystick controls, the stiff-hold prompt,
 dual mode (`x` / X switches to the FastSAC locomotion policy) and model switching (`1`-`9`,
@@ -63,10 +69,11 @@ per-tick latency reports:
 
 | Model | Python, per tick | C++, per tick | CPU while running (Python / C++) |
 |:--|--:|--:|--:|
-| `fastsac_g1_29dof_dancing.onnx` (WBT) | 0.92 ms | 0.14 ms | 2.2 / 0.10 cores |
-| `fastsac_g1_29dof.onnx` (locomotion) | 0.53 ms | 0.12 ms | 2.2 / 0.10 cores |
+| `fastsac_g1_29dof_dancing.onnx` (WBT) | 1.12 ms | 0.21 ms | 2.2 / 0.11 cores |
+| `fastsac_g1_29dof.onnx` (locomotion) | 0.76 ms | 0.17 ms | 2.2 / 0.11 cores |
 
-On the dance clip both runtimes track the reference equally well (mean joint error 0.280 vs 0.278 rad).
+Both runtimes track the full dance clip equally well (mean joint error 0.125 vs 0.126 rad, with the action-scale
+flags above) and follow the same locomotion commands (0.41 m/s for a 0.5 m/s forward command, over 5 runs each).
 
 ## Differences from the Python runtime
 
