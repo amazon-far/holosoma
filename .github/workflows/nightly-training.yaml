@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   training:
-    runs-on: codebuild-holosoma-l4-${{ matrix.multigpu == 'True' && 'x4' || 'x1' }}-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-holosoma-l4-${{ matrix.multigpu == 'True' && 'x4' || 'x1' }}-gpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     #TODO: test nightly on a10g/other GPUs
     # runs-on: codebuild-holosoma-a10g-${{ matrix.multigpu == 'True' && 'x4' || 'x1' }}-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
     continue-on-error: true
@@ -84,7 +84,7 @@ jobs:
 
   evaluate-results:
     needs: [training]
-    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     if: always()
     steps:
       - name: Checkout code

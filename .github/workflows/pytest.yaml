@@ -28,7 +28,7 @@ jobs:
           multigpu: "True"
     name: Run ${{ matrix.simulator }} Tests with ${{ matrix.multigpu == 'True' && 'multi-gpu' || 'single-gpu' }}
     runs-on:
-    - codebuild-holosoma-a10g-${{ matrix.multigpu == 'True' && 'x4' || 'x1' }}-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    - codebuild-holosoma-a10g-${{ matrix.multigpu == 'True' && 'x4' || 'x1' }}-gpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     continue-on-error: true
     container:
       image: ${{ vars.ECR_REGISTRY }}/holosoma-${{ matrix.simulator }}:latest
@@ -58,7 +58,7 @@ jobs:
         multigpu: ["False"]
     name: Run ${{ matrix.simulator }} Tests end-to-end with ${{ matrix.multigpu == 'True' && 'multi-gpu' || 'single-gpu' }}
     runs-on:
-    - codebuild-holosoma-a10g-${{ matrix.multigpu == 'True' && 'x4' || 'x1' }}-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    - codebuild-holosoma-a10g-${{ matrix.multigpu == 'True' && 'x4' || 'x1' }}-gpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     continue-on-error: true
     container:
       # needs both hsgym and hsinference envs
@@ -82,7 +82,7 @@ jobs:
 
   inference-tests:
     name: Run Inference Unit Tests
-    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     container:
       # TODO: Switch to `holosoma-inference` once it's been confirmed functional
       # image: ${{ vars.ECR_REGISTRY }}/holosoma-inference:latest
@@ -108,7 +108,7 @@ jobs:
     # Jazzy workspace (the inference-tests env above has no rclpy/colcon and
     # would only skip them). Builds the minimal test image and runs it.
     name: Run Service Integration Tests (ROS2)
-    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -122,7 +122,7 @@ jobs:
 
   no-sim-tests:
     name: Run No-Simulator Tests
-    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     container:
       # Pure tests, no GPU/sim libs needed; runs in the isaacsim env on a CPU runner.
       image: ${{ vars.ECR_REGISTRY }}/holosoma:latest

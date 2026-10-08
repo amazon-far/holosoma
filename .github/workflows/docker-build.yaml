@@ -37,7 +37,7 @@ jobs:
   # ---------------------------------------------------------------------------
   decide:
     name: Decide promotion
-    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     outputs:
       promote: ${{ steps.decide.outputs.promote }}
       short_sha: ${{ steps.decide.outputs.short_sha }}
@@ -98,7 +98,7 @@ jobs:
           runner_prefix: 'codebuild-holosoma-arm-build'
     name: Build ${{ matrix.environment }} Docker Image
     continue-on-error: true
-    runs-on: ${{ matrix.runner_prefix }}-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: ${{ matrix.runner_prefix }}-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -157,7 +157,7 @@ jobs:
     name: "Gate: mypy (sha image)"
     needs: [decide, build]
     if: needs.decide.outputs.promote == 'true'
-    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     container:
       image: ${{ vars.ECR_REGISTRY }}/holosoma:sha-${{ needs.decide.outputs.short_sha }}
       volumes:
@@ -187,7 +187,7 @@ jobs:
       fail-fast: false
       matrix:
         simulator: [isaacgym, isaacsim]
-    runs-on: codebuild-holosoma-a10g-x1-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-holosoma-a10g-x1-gpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     container:
       image: ${{ vars.ECR_REGISTRY }}/holosoma-${{ matrix.simulator }}:sha-${{ needs.decide.outputs.short_sha }}
       options: "--gpus all --runtime=nvidia --shm-size=12g"
@@ -210,7 +210,7 @@ jobs:
     name: "Gate: isaacgym e2e (sha image)"
     needs: [decide, build]
     if: needs.decide.outputs.promote == 'true'
-    runs-on: codebuild-holosoma-a10g-x1-gpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-holosoma-a10g-x1-gpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     container:
       image: ${{ vars.ECR_REGISTRY }}/holosoma:sha-${{ needs.decide.outputs.short_sha }}
       options: "--gpus all --runtime=nvidia --shm-size=12g"
@@ -233,7 +233,7 @@ jobs:
     name: "Gate: inference unit tests (sha image)"
     needs: [decide, build]
     if: needs.decide.outputs.promote == 'true'
-    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     container:
       image: ${{ vars.ECR_REGISTRY }}/holosoma:sha-${{ needs.decide.outputs.short_sha }}
     steps:
@@ -270,7 +270,7 @@ jobs:
       needs.gate-sim-tests.result == 'success' &&
       needs.gate-e2e-tests.result == 'success' &&
       needs.gate-inference-tests.result == 'success'
-    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
