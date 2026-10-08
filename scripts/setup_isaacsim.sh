@@ -19,6 +19,8 @@ echo "conda environment name is set to: $CONDA_ENV_NAME"
 # Create overall workspace
 source ${SCRIPT_DIR}/source_common.sh
 ENV_ROOT=$CONDA_ROOT/envs/$CONDA_ENV_NAME
+# Apply the same constraints throughout IsaacLab and Holosoma installation.
+export PIP_CONSTRAINT="${PIP_CONSTRAINT:-$SCRIPT_DIR/constraints/isaacsim-5.1.txt}"
 SENTINEL_FILE=${WORKSPACE_DIR}/.env_setup_finished_$CONDA_ENV_NAME
 echo "SENTINEL_FILE: $SENTINEL_FILE"
 
@@ -35,25 +37,23 @@ if [[ ! -f $SENTINEL_FILE ]]; then
 
   # Create the conda environment
   if [[ ! -d $ENV_ROOT ]]; then
-    $CONDA_ROOT/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
-    $CONDA_ROOT/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
-    if [[ ! -f $CONDA_ROOT/bin/mamba ]]; then
-      $CONDA_ROOT/bin/conda install -y mamba -c conda-forge -n base
-    fi
-    MAMBA_ROOT_PREFIX=$CONDA_ROOT $CONDA_ROOT/bin/mamba create -y -n $CONDA_ENV_NAME python=3.11 -c conda-forge --override-channels
+    # Use the bundled Conda solver without upgrading the base environment.
+    # Explicit conda-forge channels avoid requiring defaults-channel TOS plugins.
+    "$CONDA_ROOT/bin/conda" create -y --prefix "$ENV_ROOT" python=3.11 \
+      --override-channels -c conda-forge
   fi
 
   source $CONDA_ROOT/bin/activate $CONDA_ENV_NAME
 
   # Install ffmpeg for video encoding
-  conda install -c conda-forge -y ffmpeg
-  conda install -c conda-forge -y libiconv
-  conda install -c conda-forge -y libglu
+  conda install --override-channels -c conda-forge -y ffmpeg
+  conda install --override-channels -c conda-forge -y libiconv
+  conda install --override-channels -c conda-forge -y libglu
 
   # Below follows https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/pip_installation.html
   # Install IsaacSim
-  pip install --upgrade pip
-  pip install -U torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128
+  pip install --upgrade pip wheel
+  pip install -U torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu128
 
   # Install dependencies from PyPI first
   pip install pyperclip

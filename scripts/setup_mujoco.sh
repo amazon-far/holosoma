@@ -114,10 +114,10 @@ if [[ ! -f $SENTINEL_FILE ]]; then
 
   # Create the conda environment
   if [[ ! -d $ENV_ROOT ]]; then
-    $CONDA_ROOT/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
-    $CONDA_ROOT/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
-    $CONDA_ROOT/bin/conda install -y mamba -c conda-forge -n base
-    MAMBA_ROOT_PREFIX=$CONDA_ROOT $CONDA_ROOT/bin/mamba create -y -n $CONDA_ENV_NAME python=3.10 -c conda-forge --override-channels
+    # Use the bundled Conda solver without upgrading the base environment.
+    # Explicit conda-forge channels avoid requiring defaults-channel TOS plugins.
+    "$CONDA_ROOT/bin/conda" create -y --prefix "$ENV_ROOT" python=3.10 \
+      --override-channels -c conda-forge
   fi
 
   source $CONDA_ROOT/bin/activate $CONDA_ENV_NAME
@@ -130,11 +130,11 @@ if [[ ! -f $SENTINEL_FILE ]]; then
 
   # Install libstdcxx-ng to fix potential GLIBCXX issues (Linux only)
   if [[ "$OS_NAME" == "Linux" ]]; then
-    conda install -c conda-forge -y libstdcxx-ng
+    conda install --override-channels -c conda-forge -y libstdcxx-ng
   fi
 
   # Install ffmpeg for video encoding (consistent with other envs)
-  conda install -c conda-forge -y ffmpeg
+  conda install --override-channels -c conda-forge -y ffmpeg
 
   # Install MuJoCo and related packages
   echo "Installing MuJoCo Python bindings..."
@@ -280,7 +280,10 @@ if [[ "$INSTALL_WARP" == "true" ]] && [[ ! -f $WARP_SENTINEL_FILE ]]; then
       git -C $WORKSPACE_DIR/mujoco_warp checkout ${MUJOCO_WARP_COMMIT}
   fi
   pip install uv
-  uv pip install -e $WORKSPACE_DIR/mujoco_warp[dev,cuda]
+  # Runtime dependencies are public; ignore unrelated per-machine UV config.
+  uv --no-config pip install --python "$ENV_ROOT/bin/python" \
+    --default-index https://pypi.org/simple --index https://pypi.nvidia.com \
+    -e "$WORKSPACE_DIR/mujoco_warp[cuda]"
 
   touch $WARP_SENTINEL_FILE
 

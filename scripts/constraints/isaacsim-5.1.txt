@@ -1,0 +1,24 @@
+# Runtime/tooling versions compatible with IsaacSim 5.1 and Torch 2.7.
+# typing_extensions is intentionally not pinned here: tyro>=1.0 requires >=4.13,
+# while IsaacSim metadata pins 4.12.2. This known metadata conflict remains documented.
+torch==2.7.0
+torchvision==0.22.0
+torchaudio==2.7.0
+stable-baselines3==2.7.0
+packaging==23.0
+tornado==6.5.1
+psutil==5.9.8
+click==8.1.7
+idna==3.10
+ipython==8.37.0
+ipykernel==6.29.5
+jupyter-client==8.6.3
+jupyterlab==4.3.8
+notebook==7.3.3
+wheel==0.45.1
+wandb==0.22.0
+setuptools<81
+huggingface-hub==0.34.4
+typer==0.15.4
+transformers==4.51.3
+tokenizers==0.21.4
