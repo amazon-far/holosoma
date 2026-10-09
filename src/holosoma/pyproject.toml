@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "holosoma"
-version = "0.0.1"
+version = "0.0.2"
 description = "Holosoma: core training framework for humanoid robot reinforcement learning (locomotion + whole-body tracking)."
 readme = "README.md"
 requires-python = ">=3.8"
