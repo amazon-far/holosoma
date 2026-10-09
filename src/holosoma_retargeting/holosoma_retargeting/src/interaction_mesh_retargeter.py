@@ -133,6 +133,8 @@ class InteractionMeshRetargeter:
         else:
             self.has_dynamic_object = False
         self.nq = self.robot_model.nq
+        self._laplacian_topology = None
+        self._laplacian_operators = None
 
         self.q_a_init_idx = q_a_init_idx
         self.q_a_indices = np.arange(7 + self.q_a_init_idx, 7 + self.task_constants.ROBOT_DOF)
@@ -587,6 +589,7 @@ class InteractionMeshRetargeter:
         verbose=False,
         init_t=False,
         frame_idx: int = 0,
+        previous_foot_positions: dict[str, np.ndarray] | None = None,
     ):
         """The main function to solve a single iteration of the DiffIK problem.
         Args:
@@ -624,11 +627,7 @@ class InteractionMeshRetargeter:
         robot_pts_local = np.array([p_OC_dict[k] for k in robot_link_keys])
         vertices = np.vstack([robot_pts_local, obj_pts_local])  # (V x 3)
 
-        L = calculate_laplacian_matrix(vertices, adj_list)  # (V x V), EXPECT SPARSE OR SMALL
-        if not sp.issparse(L):
-            L = sp.csr_matrix(L)
-
-        Kron = sp.kron(L, sp.eye(3, format="csr"), format="csr")
+        L, Kron = self._get_laplacian_operators(vertices, adj_list)
         J_L = Kron @ J_V
 
         lap0 = L @ vertices
@@ -656,9 +655,11 @@ class InteractionMeshRetargeter:
 
             # Foot sticking: constrain XY to stay near previous frame position
             if apply_foot_sticking:
-                _, p_WF_t_last_dict, _ = self._calc_manipulator_jacobians(
-                    q_t_last, links=self.foot_links, obj_frame=False
-                )
+                p_WF_t_last_dict = previous_foot_positions
+                if p_WF_t_last_dict is None:
+                    _, p_WF_t_last_dict, _ = self._calc_manipulator_jacobians(
+                        q_t_last, links=self.foot_links, obj_frame=False
+                    )
                 left_key = right_key = None
                 for key in foot_sticking:
                     if key.lower().startswith("l"):
@@ -772,6 +773,18 @@ class InteractionMeshRetargeter:
 
         return q_star, cost
 
+    def _get_laplacian_operators(self, vertices, adj_list):
+        """Reuse uniform Laplacian operators while the ordered adjacency is unchanged."""
+        topology = (len(vertices), tuple(tuple(row) for row in adj_list))
+        if topology != self._laplacian_topology:
+            laplacian = calculate_laplacian_matrix(vertices, adj_list)
+            if not sp.issparse(laplacian):
+                laplacian = sp.csr_matrix(laplacian)
+            kron = sp.kron(laplacian, sp.eye(3, format="csr"), format="csr")
+            self._laplacian_operators = (laplacian, kron)
+            self._laplacian_topology = topology
+        return self._laplacian_operators
+
     def _is_foot_locked_in_window(self, foot_link_key: str, frame_idx: int) -> float | None:
         """Return z_floor if foot is locked at this frame, else None."""
         key_lower = foot_link_key.lower()
@@ -811,6 +824,7 @@ class InteractionMeshRetargeter:
 
         Js, phis = {}, {}
         fromto = np.zeros(6, dtype=float)
+        qdot_to_qvel = self._build_transform_qdot_to_qvel_fast()
 
         if not hasattr(self, "_geom_names"):
             raise RuntimeError(
@@ -832,6 +846,8 @@ class InteractionMeshRetargeter:
                     self._geom_names[geom_b],
                     fromto,
                     dist,
+                    qdot_to_qvel=qdot_to_qvel,
+                    kinematics_ready=True,
                 )
                 key = ("self", geom_a, geom_b)
                 Js[key] = J_rel
@@ -858,6 +874,11 @@ class InteractionMeshRetargeter:
         frame_idx: int = 0,
     ):
         """Iterate the solver for multiple iterations."""
+        previous_foot_positions = None
+        if self.object_name == "ground" and self.q_a_init_idx < 12 and self.activate_foot_sticking:
+            positions = self._get_robot_link_positions(q_t_last, self.foot_links.values())
+            previous_foot_positions = dict(zip(self.foot_links, positions))
+
         last_cost = np.inf
         for _ in range(n_iter):
             q_a_n_last = q_n[self.q_a_indices]
@@ -873,6 +894,7 @@ class InteractionMeshRetargeter:
                 w_nominal_tracking=w_nominal_tracking,
                 init_t=init_t,
                 frame_idx=frame_idx,
+                previous_foot_positions=previous_foot_positions,
             )
             if np.isclose(cost, last_cost):
                 break
@@ -1051,7 +1073,9 @@ class InteractionMeshRetargeter:
             line_width=0.01,
         )
 
-    def _compute_jacobian_for_contact_relative(self, geom1, geom2, geom1_name, geom2_name, fromto, dist):
+    def _compute_jacobian_for_contact_relative(
+        self, geom1, geom2, geom1_name, geom2_name, fromto, dist, qdot_to_qvel=None, kinematics_ready=False
+    ):
         # Get closest points from fromto buffer
         pos1 = fromto[:3]  # closest point on geom1
         pos2 = fromto[3:]  # closest point on geom2
@@ -1070,8 +1094,20 @@ class InteractionMeshRetargeter:
         else:
             nhat_BA_W = np.array([0.0, 0.0, 0.0])
 
-        J_bodyA = self._calc_contact_jacobian_from_point(geom1.bodyid, pos1, input_world=True)
-        J_bodyB = self._calc_contact_jacobian_from_point(geom2.bodyid, pos2, input_world=True)
+        J_bodyA = self._calc_contact_jacobian_from_point(
+            geom1.bodyid,
+            pos1,
+            input_world=True,
+            qdot_to_qvel=qdot_to_qvel,
+            kinematics_ready=kinematics_ready,
+        )
+        J_bodyB = self._calc_contact_jacobian_from_point(
+            geom2.bodyid,
+            pos2,
+            input_world=True,
+            qdot_to_qvel=qdot_to_qvel,
+            kinematics_ready=kinematics_ready,
+        )
 
         # Compute relative Jacobian
         Jc = J_bodyA - J_bodyB
@@ -1120,6 +1156,7 @@ class InteractionMeshRetargeter:
 
         Js, phis = {}, {}
         fromto = np.zeros(6, dtype=float)
+        qdot_to_qvel = self._build_transform_qdot_to_qvel_fast()
 
         # 2) Precise distance only on candidates (early-exit at threshold)
         contype, conaff = m.geom_contype, m.geom_conaffinity
@@ -1149,7 +1186,14 @@ class InteractionMeshRetargeter:
             dist = mujoco.mj_geomDistance(m, d, g1, g2, threshold, fromto)
             if dist <= threshold:
                 J_rel = self._compute_jacobian_for_contact_relative(
-                    m.geom(g1), m.geom(g2), self._geom_names[g1], self._geom_names[g2], fromto, dist
+                    m.geom(g1),
+                    m.geom(g2),
+                    self._geom_names[g1],
+                    self._geom_names[g2],
+                    fromto,
+                    dist,
+                    qdot_to_qvel=qdot_to_qvel,
+                    kinematics_ready=True,
                 )
                 Js[(g1, g2)] = J_rel
                 phis[(g1, g2)] = float(dist)
@@ -1255,7 +1299,14 @@ class InteractionMeshRetargeter:
 
         return T
 
-    def _calc_contact_jacobian_from_point(self, body_idx: int, p_body: np.ndarray, input_world=False):
+    def _calc_contact_jacobian_from_point(
+        self,
+        body_idx: int,
+        p_body: np.ndarray,
+        input_world=False,
+        qdot_to_qvel: np.ndarray | None = None,
+        kinematics_ready: bool = False,
+    ):
         """
         Translational Jacobian J(q) (3 x nq) such that
         v_point_world = J(q) @ qdot.
@@ -1266,7 +1317,12 @@ class InteractionMeshRetargeter:
         p_body = np.asarray(p_body, dtype=float).reshape(3)
 
         # 1) Make sure kinematics are current once
-        mujoco.mj_forward(self.robot_model, self.robot_data)
+        if not kinematics_ready:
+            mujoco.mj_forward(self.robot_model, self.robot_data)
+
+        # The fixed world body has an all-zero point Jacobian.
+        if int(body_idx) == 0:
+            return np.zeros((3, self.robot_model.nq), dtype=np.float64)
 
         # 2) World point (3,1) for mj_jac
         R_WB = self.robot_data.xmat[body_idx].reshape(3, 3)
@@ -1282,7 +1338,7 @@ class InteractionMeshRetargeter:
         Jr = np.zeros((3, self.robot_model.nv), dtype=np.float64, order="C")
         mujoco.mj_jac(self.robot_model, self.robot_data, Jp, Jr, p_W, int(body_idx))  # Jp = J_v
 
-        T = self._build_transform_qdot_to_qvel_fast()
+        T = qdot_to_qvel if qdot_to_qvel is not None else self._build_transform_qdot_to_qvel_fast()
 
         return Jp @ T
 
@@ -1312,6 +1368,7 @@ class InteractionMeshRetargeter:
         self.robot_data.qpos[:] = q_mujoco
 
         mujoco.mj_forward(self.robot_model, self.robot_data)
+        qdot_to_qvel = self._build_transform_qdot_to_qvel_fast()
 
         for name, link_name in links.items():
             body_id = mujoco.mj_name2id(self.robot_model, mujoco.mjtObj.mjOBJ_BODY, link_name)
@@ -1321,7 +1378,12 @@ class InteractionMeshRetargeter:
             else:
                 pC_B = np.zeros(3)
 
-            J = self._calc_contact_jacobian_from_point(body_id, pC_B)
+            J = self._calc_contact_jacobian_from_point(
+                body_id,
+                pC_B,
+                qdot_to_qvel=qdot_to_qvel,
+                kinematics_ready=True,
+            )
             pos_world = self.robot_data.xpos[body_id]
 
             if obj_frame:
