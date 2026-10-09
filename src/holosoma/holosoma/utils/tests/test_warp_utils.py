@@ -17,9 +17,9 @@ _DEVICE = "cuda:0"
 
 
 @wp.kernel
-def _translate_points(points: wp.array(dtype=wp.vec3, ndim=2)) -> None:  # type: ignore[valid-type]
-    env_id, point_id = wp.tid()
-    points[env_id, point_id] += wp.vec3(1.0, 2.0, 3.0)
+def _translate_points(points: wp.array(dtype=wp.vec3)) -> None:  # type: ignore[valid-type]
+    tid = wp.tid()
+    points[tid] += wp.vec3(1.0, 2.0, 3.0)
 
 
 @pytest.fixture
@@ -45,7 +45,8 @@ def test_torch_vec3_array_aliases_cuda_storage() -> None:
     assert points_wp.ptr == points.data_ptr()
     assert points_wp.shape == (2, 2)
     assert points_wp.dtype == wp.vec3
-    wp.launch(_translate_points, dim=(2, 2), inputs=[points_wp], device=_DEVICE)
+    flat_points_wp = from_torch_vec3(points.view(-1, 3), wp.get_device(_DEVICE))
+    wp.launch(_translate_points, dim=4, inputs=[flat_points_wp], device=_DEVICE)
     wp.synchronize()
     torch.testing.assert_close(points, torch.tensor([[[1.0, 2.0, 3.0]] * 2] * 2, device=_DEVICE))
 
