@@ -23,6 +23,7 @@ from holosoma.utils.simulator_config import SimulatorType, get_simulator_type
 if TYPE_CHECKING:
     from holosoma.simulator.shared.camera_controller import CameraController
     from holosoma.simulator.shared.camera_sensor import SensorManager
+    from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
     from holosoma.simulator.shared.simulator_bridge import SimulatorBridge
     from holosoma.simulator.shared.video_recorder import VideoRecorderInterface
     from holosoma.simulator.shared.virtual_gantry import VirtualGantry
@@ -127,7 +128,7 @@ class BaseSimulator:
     dof_pos: torch.Tensor
     dof_vel: torch.Tensor
     contact_forces: torch.Tensor
-    contact_forces_history: torch.Tensor
+    contact_recorder: ContactSubstepRecorder
 
     # Robot properties, populated by each backend during setup (see _setup_robot_props_*).
     num_dof: int
@@ -419,16 +420,6 @@ class BaseSimulator:
         Refreshes the state tensors in the simulation to ensure they are up-to-date.
         """
         raise NotImplementedError("The 'refresh_sim_tensors' method must be implemented in subclasses.")
-
-    def clear_contact_forces_history(self, env_ids: torch.Tensor) -> None:
-        """Clear the contact-forces history for the specified environments.
-
-        Parameters
-        ----------
-        env_ids : torch.Tensor
-            1-D tensor of environment IDs whose contact-force history is zeroed (empty -> no-op).
-        """
-        raise NotImplementedError("The 'clear_contact_forces_history' method must be implemented in subclasses.")
 
     # ----- Control Application Methods -----
 

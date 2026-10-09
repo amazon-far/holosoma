@@ -62,6 +62,7 @@ from holosoma.simulator.isaacsim.object_spawner import (
 )
 from holosoma.simulator.isaacsim.proxy_utils import RootStatesProxy
 from holosoma.simulator.shared.root_states_view import UnifiedRootStatesView
+from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.simulator.isaacsim.state_adapter import IsaacSimStateAdapter
 from holosoma.simulator.isaacsim.prim_utils import (
@@ -422,8 +423,8 @@ class IsaacSim(BaseSimulator):
 
         contact_sensor_config: ContactSensorCfg = ContactSensorCfg(
             prim_path="/World/envs/env_.*/Robot/.*",
-            history_length=self.simulator_config.contact_sensor_history_length,
-            update_period=0.005,
+            # 0.0 refreshes on every scene.update(), i.e. once per physics step at any fps
+            update_period=0.0,
             track_air_time=True,
             force_threshold=10.0,
             debug_vis=True,
@@ -959,12 +960,15 @@ class IsaacSim(BaseSimulator):
         # get/set_actor_states_by_index, which delegate to the state adapter.
         self.all_root_states = UnifiedRootStatesView(self)  # type: ignore[assignment]
 
-        self.contact_forces_history = torch.zeros(
+        self.contact_recorder = ContactSubstepRecorder(
+            self.hooks,
+            # Gathers from the sensor, not contact_forces: that is only reassigned in
+            # refresh_sim_tensors, so it would record one stale frame per substep.
+            self._robot_contact_forces,
             self.num_envs,
-            self.simulator_config.contact_sensor_history_length,
+            self.simulator_config.sim.control_decimation_steps,
             self.num_bodies,
-            3,
-            device=self.sim_device,
+            self.sim_device,
         )
 
         # Initialize virtual gantry system after object registry setup
@@ -1022,18 +1026,7 @@ class IsaacSim(BaseSimulator):
         self.dof_pos = self._robot.data.joint_pos[:, self.dof_ids]  # (num_envs, num_dof)
         self.dof_vel = self._robot.data.joint_vel[:, self.dof_ids]
 
-        # The body ordering of contact_sensor is different from the body ordering of the robot.
-        self.contact_forces = self.contact_sensor.data.net_forces_w[
-            :, self._contact_to_robot_body_ids
-        ]  # (num_envs, num_bodies, 3)
-
-        # Issue: data.net_forces_w_history is not cleared after a reset.
-        # Solution: We only read the most recent decimation_factor steps.
-        control_decimation = self.simulator_config.sim.control_decimation_steps
-        effective_history_length = min(control_decimation, self.simulator_config.contact_sensor_history_length)
-        self.contact_forces_history[:, :effective_history_length, :, :] = self.contact_sensor.data.net_forces_w_history[
-            :, :effective_history_length, self._contact_to_robot_body_ids
-        ]  # (num_envs, history_length, num_bodies, 3), the first index is the most recent
+        self.contact_forces = self._robot_contact_forces()
 
         self._rigid_body_pos = self._robot.data.body_pos_w[:, self.body_ids, :]
         self._rigid_body_rot = self._robot.data.body_quat_w[:, self.body_ids][
@@ -1042,9 +1035,10 @@ class IsaacSim(BaseSimulator):
         self._rigid_body_vel = self._robot.data.body_lin_vel_w[:, self.body_ids, :]
         self._rigid_body_ang_vel = self._robot.data.body_ang_vel_w[:, self.body_ids, :]
 
-    def clear_contact_forces_history(self, env_ids: torch.Tensor) -> None:
-        if len(env_ids) > 0:
-            self.contact_forces_history[env_ids, :, :, :] = 0.0
+    def _robot_contact_forces(self) -> torch.Tensor:
+        """Sensor forces in robot body order, (num_envs, num_bodies, 3). The contact sensor's body
+        ordering differs from the robot's, so every reader must go through this gather."""
+        return self.contact_sensor.data.net_forces_w[:, self._contact_to_robot_body_ids]
 
     def apply_torques_at_dof(self, torques):
         self._robot.set_joint_effort_target(torques, joint_ids=self.dof_ids)

@@ -93,9 +93,9 @@ class IMujocoBackend(abc.ABC):
 
         The returned tensor is full-model-width ([num_envs, model.nbody, 3]),
         including the world body (id 0) and any non-robot actor bodies. The
-        simulator layer gathers the robot-only rows (via ``body_ids``) and
-        owns the rolling-history rotation, keeping physics-tensor width independent
-        of the robot-only ``num_bodies``.
+        simulator layer gathers the robot-only rows (via ``body_ids``) and records them into
+        the per-substep buffer, keeping physics-tensor width independent of the robot-only
+        ``num_bodies``.
 
         Returns
         -------

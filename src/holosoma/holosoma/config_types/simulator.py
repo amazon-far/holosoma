@@ -285,9 +285,6 @@ class SimulatorInitConfig:
     reset_manager: ResetManagerConfig = field(default_factory=ResetManagerConfig)
     """Reset event manager configuration."""
 
-    contact_sensor_history_length: int = 3
-    """Number of frames of contact data retained for sensors."""
-
     robot_mjcf_filter: MujocoXMLFilterCfg = field(default_factory=MujocoXMLFilterCfg)
     """MuJoCo-specific XML filtering configuration for robot MJCF files."""
 
