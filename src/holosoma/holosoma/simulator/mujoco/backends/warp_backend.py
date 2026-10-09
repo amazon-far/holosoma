@@ -202,6 +202,13 @@ class WarpBackend(IMujocoBackend):
             # Upload model to GPU
             self.mjw_model = mjw.put_model(model)
 
+            # mjwarp gates rne_postconstraint, the pass that writes cfrc_ext, on the model carrying
+            # an acceleration-stage sensor; without one cfrc_ext stays exactly zero. Model has no
+            # __slots__, so a renamed field would make this a silent no-op.
+            if "sensor_rne_postconstraint" not in self.mjw_model.__dataclass_fields__:
+                raise RuntimeError("mujoco_warp Model has no sensor_rne_postconstraint; cfrc_ext would stay zero")
+            self.mjw_model.sensor_rne_postconstraint = True
+
             # Create bridge for tensor-like access to model fields (for randomization)
             self.warp_model_bridge = WarpBridge(self.mjw_model, nworld=self.num_envs)
 
@@ -223,7 +230,8 @@ class WarpBackend(IMujocoBackend):
             self.qvel_t = wp.to_torch(self.mjw_data.qvel)  # [num_envs, nv]
             self.qacc_t = wp.to_torch(self.mjw_data.qacc)  # [num_envs, nv]
             self.ctrl_t = wp.to_torch(self.mjw_data.ctrl)  # [num_envs, nu]
-            self.cfrc_t = wp.to_torch(self.mjw_data.cfrc_ext)  # [num_envs, nbody, 6]
+            self.cfrc_t = wp.to_torch(self.mjw_data.cfrc_ext)  # [num_envs, nbody, 6] - [torque(3), force(3)]
+            # xfrc_applied is [force(3), torque(3)], the opposite order from cfrc_ext above.
             self.xfrc_applied_t = wp.to_torch(self.mjw_data.xfrc_applied)  # [num_envs, nbody, 6]
 
             # Rigid body state tensors (for zero-copy access during refresh_sim_tensors)
@@ -508,10 +516,12 @@ class WarpBackend(IMujocoBackend):
         Returns
         -------
         torch.Tensor
-            Contact forces [num_envs, model.nbody, 3] (cfrc_ext force components).
+            World-frame contact forces [num_envs, model.nbody, 3].
         """
-        # cfrc_ext is [num_envs, model.nbody, 6]; take first 3 (forces, drop torque).
-        return self.cfrc_t[..., :3]
+        # cfrc_ext holds the total external force, so applied forces (the virtual gantry) have to
+        # come back out to match the ClassicBackend's contacts-only sum. The spatial translation to
+        # subtree_com leaves the force half alone, so the subtraction is exact.
+        return self.cfrc_t[..., 3:] - self.xfrc_applied_t[..., :3]
 
     def create_root_view(self, addrs: dict) -> BaseMujocoView:
         """Create root state view using zero-copy tensors.
