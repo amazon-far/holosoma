@@ -346,9 +346,12 @@ class IsaacSim(BaseSimulator):
             asset_path = robot_asset_cfg.urdf_file
             full_urdf_path = os.path.abspath(os.path.join(asset_root, asset_path))
 
-            # Get local rank to avoid race conditions in multi-GPU setups
+            # Separate distributed workers and independent jobs: single-GPU jobs
+            # all use rank 0 and must not rewrite each other's live USD assets.
             local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-            usd_conversion_dir = os.path.abspath(os.path.join(asset_root, f"converted_rank{local_rank}"))
+            usd_conversion_dir = os.path.abspath(
+                os.path.join(asset_root, f"converted_rank{local_rank}_pid{os.getpid()}")
+            )
 
             spawn = sim_utils.UrdfFileCfg(
                 usd_dir=usd_conversion_dir,
