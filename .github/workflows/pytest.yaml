@@ -120,6 +120,22 @@ jobs:
       - name: Run service integration tests
         run: docker run --rm holosoma-service-test
 
+  inference-cpp-tests:
+    # Builds the C++ runtime with the Unitree SDK2 backend and replays the
+    # Python reference runs (src/holosoma_inference/holosoma_cpp/tests/golden).
+    name: Run C++ Inference Tests
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build C++ test image
+        run: |
+          docker build \
+            -f src/holosoma_inference/holosoma_cpp/docker/Dockerfile.test \
+            -t holosoma-cpp-test .
+      - name: Run C++ tests
+        run: docker run --rm holosoma-cpp-test
+
   no-sim-tests:
     name: Run No-Simulator Tests
     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
