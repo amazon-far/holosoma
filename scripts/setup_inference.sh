@@ -74,8 +74,9 @@ if [[ ! -f $SENTINEL_FILE ]]; then
   if [[ ! -d $ENV_ROOT ]]; then
     $CONDA_ROOT/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
     $CONDA_ROOT/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
-    $CONDA_ROOT/bin/conda install -y mamba -c conda-forge -n base
-    MAMBA_ROOT_PREFIX=$CONDA_ROOT $CONDA_ROOT/bin/mamba create -y -n $CONDA_ENV_NAME python=3.10 -c conda-forge --override-channels
+    # Solve with libmamba, conda's own default solver, instead of installing mamba into base:
+    # that install pulls conda-forge's conda into base and breaks the bundled ToS plugin.
+    $CONDA_ROOT/bin/conda create -y --solver libmamba -n $CONDA_ENV_NAME python=3.10 -c conda-forge --override-channels
   fi
 
   source $CONDA_ROOT/bin/activate $CONDA_ENV_NAME

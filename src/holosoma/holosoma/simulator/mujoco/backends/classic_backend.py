@@ -7,20 +7,21 @@ environment simulation code.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import mujoco
 import numpy as np
+import numpy.typing as npt
 import torch
 from loguru import logger
 
-from .base import IMujocoBackend, holosoma_to_mj_quat, mj_to_holosoma_quat
+from .base import IMujocoBackend, apply_sensor_scene_flags, holosoma_to_mj_quat, mj_to_holosoma_quat
 
 if TYPE_CHECKING:
     from holosoma.config_types.full_sim import FullSimConfig
     from holosoma.config_types.sensor import CameraDataType
     from holosoma.simulator.mujoco.tensor_views import BaseMujocoView
-    from holosoma.simulator.shared.camera_sensor import CameraRuntime
+    from holosoma.simulator.shared.sensor_manager import CameraRecord
 
 
 class ClassicBackend(IMujocoBackend):
@@ -37,6 +38,8 @@ class ClassicBackend(IMujocoBackend):
     - Numpy arrays with PyTorch tensor conversion
     - Compatible with existing tensor_views.py proxy system
     """
+
+    _INITIAL_CONTACT_CAPACITY = 256
 
     def __init__(self, model: mujoco.MjModel, data: mujoco.MjData, config: FullSimConfig, device: str):
         """Initialize ClassicBackend with single-environment validation.
@@ -65,14 +68,79 @@ class ClassicBackend(IMujocoBackend):
                 f"Use WarpBackend (use_warp=True) for multi-environment simulation."
             )
 
-        # Pre-allocate contact force tensor
+        # Contact extraction storage is model-owned and survives every physics step.
         self._force_tensor = torch.zeros(1, model.nbody, 3, device=device)
+        self._body_contact_forces_32 = np.zeros((model.nbody, 3), dtype=np.float32)
+        self._body_contact_forces_t = torch.from_numpy(self._body_contact_forces_32)
+        self._contact_wrench_64 = np.empty(6, dtype=np.float64)
+        self._contact_capacity = 0
+        self._grow_contact_buffers(self._INITIAL_CONTACT_CAPACITY)
+        self._closed = False
+        self._cam_ids: dict[str, int] = {}
+        self._mj_renderers: dict[str, dict[CameraDataType, mujoco.Renderer]] = {}
+        self._sensor_scene_option = apply_sensor_scene_flags(False)
 
         logger.info(f"ClassicBackend initialized: {model.nbody} bodies, device={device}")
+
+    def configure_rigid_body_refresh(self, body_ids: list[int]) -> None:
+        """Allocate robot-body extraction buffers in holosoma body order."""
+        self._rigid_body_ids = np.array(body_ids, dtype=np.int32, copy=True)
+        body_count = len(self._rigid_body_ids)
+        self._rigid_body_positions = np.empty((body_count, 3), dtype=np.float64)
+        self._rigid_body_quaternions_mj = np.empty((body_count, 4), dtype=np.float64)
+        self._rigid_body_quaternions = np.empty((body_count, 4), dtype=np.float64)
+        self._rigid_body_velocities = np.empty((body_count, 6), dtype=np.float64)
+        self._rigid_body_state_tensors = (
+            torch.from_numpy(self._rigid_body_positions).unsqueeze(0),
+            torch.from_numpy(self._rigid_body_quaternions).unsqueeze(0),
+            torch.from_numpy(self._rigid_body_velocities[:, 3:]).unsqueeze(0),
+            torch.from_numpy(self._rigid_body_velocities[:, :3]).unsqueeze(0),
+        )
+
+    def refresh_rigid_body_states(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Refresh reusable CPU views for robot rigid-body state."""
+        np.take(self.data.xpos, self._rigid_body_ids, axis=0, out=self._rigid_body_positions)
+        np.take(self.data.xquat, self._rigid_body_ids, axis=0, out=self._rigid_body_quaternions_mj)
+        self._rigid_body_quaternions[:, :3] = self._rigid_body_quaternions_mj[:, 1:]
+        self._rigid_body_quaternions[:, 3] = self._rigid_body_quaternions_mj[:, 0]
+
+        for index, body_id in enumerate(self._rigid_body_ids):
+            mujoco.mj_objectVelocity(
+                self.model,
+                self.data,
+                mujoco.mjtObj.mjOBJ_XBODY,
+                int(body_id),
+                self._rigid_body_velocities[index],
+                0,
+            )
+
+        return self._rigid_body_state_tensors
+
+    def _grow_contact_buffers(self, required: int) -> None:
+        """Grow reusable per-contact storage geometrically."""
+        capacity = max(self._contact_capacity, 1)
+        while capacity < required:
+            capacity *= 2
+        self._contact_capacity = capacity
+        # Contiguous stages avoid NumPy's buffered casts into the interleaved
+        # contribution array and preserve the float64 world-frame conversion.
+        self._contact_frame_forces_64 = np.empty((capacity, 3), dtype=np.float64)
+        self._contact_world_forces_64 = np.empty((capacity, 3), dtype=np.float64)
+        self._contact_world_forces_32 = np.empty((capacity, 3), dtype=np.float32)
+        self._contact_body_ids = np.empty(capacity * 2, dtype=np.int32)
+        self._contact_contributions = np.empty((capacity * 2, 3), dtype=np.float32)
 
     def step(self) -> None:
         """Advance simulation by one timestep using mj_step."""
         mujoco.mj_step(self.model, self.data)
+
+    def physics_time(self) -> float:
+        """Return MuJoCo's native simulation clock."""
+        return float(self.data.time)
+
+    def forward_kinematics(self) -> None:
+        """FK-only refresh via mj_forward (no integration, data.time unchanged)."""
+        mujoco.mj_forward(self.model, self.data)
 
     def get_render_data(self, world_id: int = 0) -> mujoco.MjData:
         """Return data for rendering (already on CPU).
@@ -89,14 +157,22 @@ class ClassicBackend(IMujocoBackend):
         """
         return self.data
 
-    def create_renderers(self, cameras: list[CameraRuntime]) -> None:
+    def create_renderers(self, cameras: list[CameraRecord]) -> None:
         # Per-camera renderer (classic only), keyed by camera NAME:
         # mujoco.Renderer is RGB XOR depth, so depth cameras get a SEPARATE depth-enabled renderer
         # (per size); MuJoCo 3.x depth is already metric meters (image-plane), so no unit scaling.
         # Resolve each compiled <camera> id here (this backend's own name->id map); the shared
-        # CameraRuntime holds no handle.
-        self._cam_ids: dict[str, int] = {}
-        self._mj_renderers: dict[str, dict[CameraDataType, mujoco.Renderer]] = {}
+        # CameraRecord holds no handle.
+        if self._closed:
+            raise RuntimeError("Cannot create renderers on a closed ClassicBackend")
+        if self._mj_renderers:
+            raise RuntimeError("ClassicBackend renderers are already configured")
+        if cameras:
+            required_width = max(camera.config.width for camera in cameras)
+            required_height = max(camera.config.height for camera in cameras)
+            framebuffer = self.model.vis.global_
+            framebuffer.offwidth = max(framebuffer.offwidth, required_width)
+            framebuffer.offheight = max(framebuffer.offheight, required_height)
 
         for cam in cameras:
             name = cam.name
@@ -111,27 +187,42 @@ class ClassicBackend(IMujocoBackend):
                 if data_type == "depth":
                     renderer.enable_depth_rendering()
 
-    def render_cameras(self, cameras: list[CameraRuntime]) -> None:
+    def close(self) -> None:
+        """Close every mounted-camera renderer while its EGL context is still valid."""
+        if self._closed:
+            return
+        self._closed = True
+        failures: list[str] = []
+        for camera, renderers in self._mj_renderers.items():
+            for data_type, renderer in renderers.items():
+                try:
+                    renderer.close()
+                except Exception as exc:  # noqa: PERF203 - close every renderer before reporting failures.
+                    failures.append(f"{camera}/{data_type}: {exc!r}")
+        self._mj_renderers.clear()
+        self._cam_ids.clear()
+        if failures:
+            raise RuntimeError(f"Failed to close MuJoCo renderer(s): {'; '.join(failures)}")
+
+    def render_cameras(self, cameras: list[CameraRecord]) -> None:
         # per-world render via the size-shared mujoco.Renderer (num_envs==1).
         # No-hit reads the global far-clip plane (vis.map.zfar * extent, set across all cameras in
         # the simulator's _create_sensors); remap it to +inf. The far value comes back ~0.1% under
         # nominal (limited depth precision), so threshold at 0.99*far.
         far_clip = float(self.model.vis.map.zfar) * float(self.model.stat.extent)
-        for runtime in cameras:
-            name = runtime.name
+        for sensor_record in cameras:
+            name = sensor_record.name
             cam_id = self._cam_ids[name]
-            for dt in runtime.config.data_types:
+            for dt in sensor_record.config.data_types:
                 renderer = self._mj_renderers[name][dt]
-                frames = []
-                for world_id in range(self.num_envs):
-                    data = self.get_render_data(world_id=world_id)
-                    renderer.update_scene(data, camera=cam_id)
-                    frame = renderer.render()  # rgb: [H,W,3] uint8; depth: [H,W] float32 meters
-                    t = torch.from_numpy((frame[..., None] if dt == "depth" else frame).copy())
-                    if dt == "depth":
-                        t = torch.where(t >= far_clip * 0.99, torch.full_like(t, float("inf")), t)
-                    frames.append(t)
-                runtime.set_buffer(dt, torch.stack(frames, dim=0).to(self.device))  # [N,H,W,C]
+                data = self.get_render_data(world_id=0)
+                renderer.update_scene(data, camera=cam_id, scene_option=self._sensor_scene_option)
+                frame = renderer.render()  # rgb: [H,W,3] uint8; depth: [H,W] float32 meters
+                array = (frame[..., None] if dt == "depth" else frame).copy()
+                if dt == "depth":
+                    array[array >= far_clip * 0.99] = np.inf
+                tensor = torch.from_numpy(array).unsqueeze(0).to(self.device)
+                sensor_record.set_buffer(dt, tensor)  # [1,H,W,C]
 
     def get_ctrl_tensor(self) -> None:
         """Classic backend doesn't support direct tensor writes.
@@ -139,7 +230,7 @@ class ClassicBackend(IMujocoBackend):
         Returns
         -------
         None
-            Indicates that torque application must use the loop-based method
+            Indicates that torque application must use an addressed NumPy write.
         """
         return
 
@@ -154,37 +245,51 @@ class ClassicBackend(IMujocoBackend):
         Returns
         -------
         torch.Tensor
-            Contact forces [1, model.nbody, 3].
+            World-frame contact forces [1, model.nbody, 3].
         """
-        # Reset force accumulator
-        self._force_tensor.fill_(0.0)
+        contact_count = self.data.ncon
+        if contact_count > self._contact_capacity:
+            self._grow_contact_buffers(contact_count)
 
-        # Pre-allocate force/torque buffer for mj_contactForce
-        forcetorque = np.zeros(6, dtype=np.float64)
+        self._body_contact_forces_32.fill(0.0)
+        if contact_count == 0:
+            self._force_tensor[0].copy_(self._body_contact_forces_t)
+            return self._force_tensor
 
-        # Extract and accumulate contact forces
-        for i in range(self.data.ncon):
-            contact = self.data.contact[i]
+        for contact_index in range(contact_count):
+            mujoco.mj_contactForce(self.model, self.data, contact_index, self._contact_wrench_64)
+            self._contact_frame_forces_64[contact_index] = self._contact_wrench_64[:3]
 
-            # Get 6D force/torque vector
-            mujoco.mj_contactForce(self.model, self.data, i, forcetorque)
-
-            # Convert to torch tensor (forces only, ignore torques)
-            force = torch.from_numpy(forcetorque[:3]).float().to(self.device)
-
-            # Map geoms to bodies
-            b1 = self.model.geom_bodyid[contact.geom1]
-            b2 = self.model.geom_bodyid[contact.geom2]
-
-            # Apply Newton's 3rd law: body1 gets -force, body2 gets +force
-            if b1 < self.model.nbody:
-                self._force_tensor[0, b1] -= force
-            if b2 < self.model.nbody:
-                self._force_tensor[0, b2] += force
+        contact_frames = np.asarray(self.data.contact.frame)[:contact_count].reshape(-1, 3, 3)
+        np.matmul(
+            contact_frames.transpose(0, 2, 1),
+            self._contact_frame_forces_64[:contact_count, :, None],
+            out=self._contact_world_forces_64[:contact_count, :, None],
+        )
+        np.copyto(
+            self._contact_world_forces_32[:contact_count],
+            self._contact_world_forces_64[:contact_count],
+            casting="unsafe",
+        )
+        body_ids = self._contact_body_ids[: 2 * contact_count].reshape(contact_count, 2)
+        np.take(
+            self.model.geom_bodyid,
+            np.asarray(self.data.contact.geom)[:contact_count],
+            out=body_ids,
+        )
+        contributions = self._contact_contributions[: 2 * contact_count]
+        np.negative(self._contact_world_forces_32[:contact_count], out=contributions[::2])
+        np.copyto(contributions[1::2], self._contact_world_forces_32[:contact_count])
+        np.add.at(
+            self._body_contact_forces_32,
+            self._contact_body_ids[: 2 * contact_count],
+            contributions,
+        )
+        self._force_tensor[0].copy_(self._body_contact_forces_t)
 
         return self._force_tensor
 
-    def create_root_view(self, addrs: dict) -> BaseMujocoView:
+    def create_root_view(self, addrs: dict[str, Any]) -> BaseMujocoView:
         """Create root state view using existing tensor_views.
 
         Parameters
@@ -267,7 +372,7 @@ class ClassicBackend(IMujocoBackend):
 
         return create_dof_acceleration_view(self.data.qacc, indices, 1, num_dof, self.device)
 
-    def create_dof_state_view(self, dof_addrs: dict, num_dof: int) -> BaseMujocoView:
+    def create_dof_state_view(self, dof_addrs: dict[str, Any], num_dof: int) -> BaseMujocoView:
         """Create DOF state view using CPU numpy arrays.
 
         Parameters
@@ -294,7 +399,7 @@ class ClassicBackend(IMujocoBackend):
             device=self.device,
         )
 
-    def get_applied_forces_view(self) -> np.ndarray:
+    def get_applied_forces_view(self) -> npt.NDArray[Any]:
         """Get writable view for external applied forces.
 
         Returns direct view of MuJoCo's xfrc_applied array for applying
@@ -305,7 +410,7 @@ class ClassicBackend(IMujocoBackend):
         np.ndarray
             Writable numpy array view [num_bodies, 6]
         """
-        return self.data.xfrc_applied
+        return cast("npt.NDArray[Any]", self.data.xfrc_applied)
 
     def create_quaternion_view(self, quat_slice: slice) -> BaseMujocoView:
         """Create quaternion view with format conversion.
@@ -349,7 +454,7 @@ class ClassicBackend(IMujocoBackend):
             qvel_array=self.data.qvel, indices=ang_vel_slice, num_envs=1, device=self.device
         )
 
-    def set_root_state(self, env_ids: torch.Tensor, root_states: torch.Tensor, root_addrs: dict) -> None:
+    def set_root_state(self, env_ids: torch.Tensor, root_states: torch.Tensor, root_addrs: dict[str, Any]) -> None:
         """Set robot root states. The robot root is an actor freejoint, so this
         delegates to set_actor_state at the robot's qpos/qvel addresses, then runs
         mj_forward to update derived quantities.
@@ -361,7 +466,7 @@ class ClassicBackend(IMujocoBackend):
         if len(env_ids) > 0:
             mujoco.mj_forward(self.model, self.data)
 
-    def set_dof_state(self, env_ids: torch.Tensor, dof_states: torch.Tensor, dof_addrs: dict) -> None:
+    def set_dof_state(self, env_ids: torch.Tensor, dof_states: torch.Tensor, dof_addrs: dict[str, Any]) -> None:
         """Set DOF states using CPU numpy arrays.
 
         Converts tensors to numpy, writes to MuJoCo data arrays,

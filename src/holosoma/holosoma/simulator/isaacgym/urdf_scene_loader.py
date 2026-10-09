@@ -46,8 +46,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterator, List, cast
 
+import numpy as np
+import numpy.typing as npt
 import trimesh.transformations as tra
 import yourdfpy  # type:ignore[import-untyped]
 from isaacgym import gymapi
@@ -251,7 +253,7 @@ class URDFSceneLoader:
             specs.extend(self._expand_scene_file(scene_file_name, scene_file, scene_config))
         return specs
 
-    def _process_rigid_objects(self, scene_config) -> list[URDFSpec]:
+    def _process_rigid_objects(self, scene_config: SceneConfig) -> list[URDFSpec]:
         """Process rigid objects and return URDFSpec objects"""
         if not (hasattr(scene_config, "rigid_objects") and scene_config.rigid_objects):
             return []
@@ -295,7 +297,7 @@ class URDFSceneLoader:
         logger.info(f"Successfully loaded {len(object_assets)} URDF objects")
         return object_assets, object_initial_state
 
-    def _load_and_store_asset(self, name: str, urdf_path: str | None, asset_config: AssetConfig | None):
+    def _load_and_store_asset(self, name: str, urdf_path: str | None, asset_config: AssetConfig | None) -> gymapi.Asset:
         """Load the IsaacGym asset from a URDF file.
 
         Physics overrides are carried on the ``URDFSpec`` and stored by
@@ -316,7 +318,9 @@ class URDFSceneLoader:
             logger.error(error_msg)
             raise RuntimeError(error_msg) from e
 
-    def _expand_scene_file(self, scene_file_name, scene_file, scene_config):
+    def _expand_scene_file(
+        self, scene_file_name: str, scene_file: SceneFileConfig, scene_config: SceneConfig
+    ) -> list[URDFSpec]:
         """
         Parse a URDF as a "scene" file and return standardized URDF specs.
 
@@ -334,6 +338,7 @@ class URDFSceneLoader:
         """
         # Resolve via the shared resolver (handles "holosoma/..." package paths and
         # asset_root joins; scene_config.asset_root may be None).
+        assert scene_file.urdf_path is not None
         urdf_path = resolve_asset_path(scene_file.urdf_path, scene_file.asset_root or scene_config.asset_root)
         logger.debug(f"Loading scene URDF file: {urdf_path}")
 
@@ -417,7 +422,9 @@ class URDFSceneLoader:
         logger.debug(f"Generated {len(urdf_specs)} URDFSpec objects from scene URDF file")
         return urdf_specs
 
-    def _build_rigid_object_specs(self, rigid_objects, asset_root):
+    def _build_rigid_object_specs(
+        self, rigid_objects: dict[str, RigidObjectConfig], asset_root: str | None
+    ) -> list[URDFSpec]:
         """Generate URDF specs from the rigid_objects dict (name -> config)."""
         logger.debug("Loading rigid objects")
 
@@ -476,7 +483,7 @@ class URDFSceneLoader:
 
     # === ASSET CONFIGURATION ===
 
-    def _classify_scene_links(self, urdf) -> dict[str, bool]:
+    def _classify_scene_links(self, urdf: Any) -> dict[str, bool]:
         """Map each scene-file link name -> is_static, from the URDF joint structure.
 
         A link welded to its parent by a ``fixed`` joint is static; a link on a
@@ -531,7 +538,9 @@ class URDFSceneLoader:
             linear_damping=0.0 if is_scene_object else 0.1,
         )
 
-    def _apply_physics_config(self, asset_config, physics_config, object_name: str):
+    def _apply_physics_config(
+        self, asset_config: AssetConfig, physics_config: PhysicsConfig | None, object_name: str
+    ) -> AssetConfig:
         """Apply a ``PhysicsConfig`` override onto the IsaacGym ``AssetConfig`` (load-time options).
 
         Static-vs-free is NOT taken from here — it comes from ``fixed`` via
@@ -556,7 +565,7 @@ class URDFSceneLoader:
 
     # === ASSET LOADING ===
 
-    def _load_asset_from_urdf(self, urdf_path: str | None, asset_config: AssetConfig):
+    def _load_asset_from_urdf(self, urdf_path: str | None, asset_config: AssetConfig) -> gymapi.Asset:
         """Load asset from URDF file"""
         if not urdf_path:
             raise ValueError("Missing URDF path")
@@ -571,7 +580,7 @@ class URDFSceneLoader:
 
         return self._load_gym_asset(asset_root, asset_file, asset_config)
 
-    def _load_gym_asset(self, asset_root, asset_file, asset_cfg):
+    def _load_gym_asset(self, asset_root: str, asset_file: str, asset_cfg: AssetConfig) -> gymapi.Asset:
         """Load object asset using IsaacGym"""
         asset_path = str(Path(asset_root) / asset_file)
         gym_asset_root = str(Path(asset_path).parent)
@@ -612,7 +621,7 @@ class URDFSceneLoader:
 
     # === URDF PARSING & TRANSFORMATION ===
 
-    def _parse_scene_urdf_with_yourdfpy(self, scene_urdf_path, source):
+    def _parse_scene_urdf_with_yourdfpy(self, scene_urdf_path: str, source: SceneFileConfig) -> Any:
         """Parse scene URDF using yourdfpy"""
         logger.debug(f"Parsing scene URDF with yourdfpy: {scene_urdf_path}")
 
@@ -635,7 +644,7 @@ class URDFSceneLoader:
         return urdf
 
     @contextmanager
-    def _create_individual_link_urdf_tempfile(self, link, link_name, scene_urdf_path):
+    def _create_individual_link_urdf_tempfile(self, link: Any, link_name: str, scene_urdf_path: str) -> Iterator[Any]:
         """Create individual URDF file for a single link"""
         # Create minimal robot with just this link
         minimal_robot = Robot(name=link_name)
@@ -688,7 +697,7 @@ class URDFSceneLoader:
                 except OSError as e:
                     logger.warning(f"Failed to clean up temporary file {temp_file.name}: {e}")
 
-    def _fix_mesh_paths_in_urdf(self, xml_string, link_name, urdf_dir):
+    def _fix_mesh_paths_in_urdf(self, xml_string: str, link_name: str, urdf_dir: str) -> str:
         """Fix relative mesh paths to absolute paths in URDF XML, relative to ``urdf_dir``.
 
         ``urdf_dir`` is the directory of the scene file the link came from, threaded in by the
@@ -724,7 +733,9 @@ class URDFSceneLoader:
 
         return fixed_xml
 
-    def _extract_world_transform_from_scene(self, urdf, link_name, file_world_transform):
+    def _extract_world_transform_from_scene(
+        self, urdf: Any, link_name: str, file_world_transform: npt.NDArray[np.float64]
+    ) -> list[float]:
         """World pose of a link = file world transform ∘ the link's relative transform.
 
         ``file_world_transform`` is the 4x4 placing the whole file in the world; the
@@ -747,7 +758,7 @@ class URDFSceneLoader:
         # Convert from [w, x, y, z] to [x, y, z, w] format for IsaacGym
         quaternion_xyzw = [quaternion_wxyz[1], quaternion_wxyz[2], quaternion_wxyz[3], quaternion_wxyz[0]]
 
-        pose = translation.tolist() + quaternion_xyzw
+        pose = cast("list[float]", translation.tolist()) + quaternion_xyzw
         logger.debug(f"Extracted world pose for '{link_name}': {pose[:3]} (translation)")
 
         return pose

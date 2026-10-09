@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Iterator
+
 import torch
 from torch import Tensor
 
@@ -11,7 +13,7 @@ class RolloutStorage:
     and provides methods for adding data and generating mini-batches.
     """
 
-    def __init__(self, num_envs: int, num_transitions_per_env: int, device: str = "cpu"):
+    def __init__(self, num_envs: int, num_transitions_per_env: int, device: str = "cpu") -> None:
         """Initialize the rollout storage.
 
         Args:
@@ -27,7 +29,7 @@ class RolloutStorage:
         # Dictionary to store all data buffers
         self._buffers: dict[str, Tensor] = {}
 
-    def register(self, key: str, shape: tuple[int, ...] | list[int] = (), dtype: torch.dtype = torch.float):
+    def register(self, key: str, shape: tuple[int, ...] | list[int] = (), dtype: torch.dtype = torch.float) -> None:
         """Register a new data key to store in the buffer.
 
         Args:
@@ -45,7 +47,7 @@ class RolloutStorage:
         buffer = torch.zeros((self.num_transitions_per_env, self.num_envs, *shape), dtype=dtype, device=self.device)
         self._buffers[key] = buffer
 
-    def add(self, **data: Tensor):
+    def add(self, **data: Tensor) -> None:
         """Add a transition to the buffer.
 
         Args:
@@ -83,7 +85,7 @@ class RolloutStorage:
             raise KeyError(f"Key '{key}' not registered")
         return self._buffers[key]
 
-    def __setitem__(self, key: str, value: Tensor):
+    def __setitem__(self, key: str, value: Tensor) -> None:
         """Set the entire buffer for a specific key.
 
         Args:
@@ -98,11 +100,11 @@ class RolloutStorage:
 
         self._buffers[key].copy_(value)
 
-    def clear(self):
+    def clear(self) -> None:
         """Clear the buffer and reset the step counter."""
         self.step = 0
 
-    def mini_batch_generator(self, num_mini_batches: int, num_epochs: int = 8):
+    def mini_batch_generator(self, num_mini_batches: int, num_epochs: int = 8) -> Iterator[dict[str, Tensor]]:
         """Generate randomized mini-batches for training.
 
         This flattens the time and environment dimensions and creates random mini-batches.

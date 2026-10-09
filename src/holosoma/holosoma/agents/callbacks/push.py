@@ -12,14 +12,18 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import numpy.typing as npt
 from loguru import logger
 
 from holosoma.agents.callbacks.base_callback import RLEvalCallback
 from holosoma.config_types.eval_callback import PushConfig
 from holosoma.utils.safe_torch_import import torch
+
+if TYPE_CHECKING:
+    from holosoma.agents.callbacks.recording import EvalRecordingCallback
 
 
 class EvalPushCallback(RLEvalCallback):
@@ -40,11 +44,11 @@ class EvalPushCallback(RLEvalCallback):
         self,
         config: PushConfig,
         training_loop: Any = None,
-    ):
+    ) -> None:
         super().__init__(config, training_loop)
         self.env_id = config.env_id
         self.candidate_body_names = [s.strip() for s in config.body_names.split(",")]
-        self._record_buffers: dict[str, list[np.ndarray]] | None = None
+        self._record_buffers: dict[str, list[npt.NDArray[Any]]] | None = None
         self._record_metadata: dict[str, Any] | None = None
 
         # Resolved at on_pre_evaluate_policy
@@ -63,10 +67,10 @@ class EvalPushCallback(RLEvalCallback):
 
         self._step_count: int = 0
 
-    def _get_env(self):
+    def _get_env(self) -> Any:
         return self.training_loop._unwrap_env()
 
-    def _find_recording_callback(self):
+    def _find_recording_callback(self) -> EvalRecordingCallback | None:
         from holosoma.agents.callbacks.recording import EvalRecordingCallback
 
         for cb in self.training_loop.eval_callbacks:
@@ -126,14 +130,14 @@ class EvalPushCallback(RLEvalCallback):
         # Patch _apply_force_in_physics_step to inject push forces at every substep
         self._original_apply_force = env._apply_force_in_physics_step
 
-        def _patched_apply_force():
+        def _patched_apply_force() -> None:
             self._original_apply_force()
             if self._push_active:
                 self._apply_push_force()
 
         env._apply_force_in_physics_step = _patched_apply_force
 
-    def on_post_eval_env_step(self, actor_state: dict) -> dict:
+    def on_post_eval_env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
         # Manage push schedule
         if self._push_active:
             self._push_steps_remaining -= 1
@@ -259,5 +263,5 @@ class EvalPushCallback(RLEvalCallback):
         s = random.uniform(*self.config.interval_s)
         return max(1, round(s / self._dt))
 
-    def _get_buffers(self) -> dict[str, list[np.ndarray]] | None:
+    def _get_buffers(self) -> dict[str, list[npt.NDArray[Any]]] | None:
         return self._record_buffers

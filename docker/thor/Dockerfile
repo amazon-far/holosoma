@@ -21,9 +21,9 @@
 #   l4t-cuda       — CUDA 13 devel on Ubuntu 24.04 aarch64. Rebuilds ~never.
 #   python-base    — python3.12, build tools, uv. Rebuilds ~never.
 #   long-deps      — NVPL, cuDSS, TensorRT runtime libs. Rebuilds ~never.
-#   common-deps    — Python deps that rarely bump (numpy, scipy, pin, etc.).
-#   app-deps       — holosoma_inference + unitree_sdk2. Rebuilds every commit.
-#   inference      — entrypoint + cmd (terminal, no-ROS target).
+#   common-deps    — image-only Python dependencies.
+#   app-deps       — holosoma_inference metadata + unitree_sdk2.
+#   inference      — linked source layer + terminal entrypoint.
 #
 # The -ros branch mirrors long-deps/common-deps/app-deps on top of a
 # ros-jazzy layer, so the Jazzy apt install (~1.5 GB) is also cached stably.
@@ -44,7 +44,7 @@ ENV PYTHONUNBUFFERED=1
 # survives across layer boundaries and can be PATH-prepended.
 FROM l4t-cuda AS python-base
 
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     build-essential \
     cmake \
@@ -69,7 +69,7 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 # NVIDIA math + inference libs that rarely change.
 FROM python-base AS long-deps
 
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     # NVPL math libs (required by CUDA torch wheel on aarch64 SBSA)
     libnvpl-blas0 \
     libnvpl-lapack0 \
@@ -87,52 +87,31 @@ RUN echo "/usr/lib/aarch64-linux-gnu/libcudss/13" > /etc/ld.so.conf.d/cudss-13.c
 
 
 # ─── Stage: common-deps ───────────────────────────────────────────────────────
-# Python dependencies of holosoma_inference that rarely change.
-# Keep this layer separate from app source so edits to holosoma code don't
-# invalidate these installs.
+# Image-only dependencies not declared by holosoma_inference.
 FROM long-deps AS common-deps
 
-# Core deps from src/holosoma_inference/setup.py install_requires, plus
-# pinocchio for WBT policy support (not in setup.py — installed separately,
-# matching scripts/setup_inference_via_uv.sh).
-#
-# DRIFT RISK: this list duplicates setup.py's install_requires because we
-# want the layered-cache benefit (deps install ~once, source rebuilds
-# invalidate only the final layer). When setup.py deps change, this list
-# must be updated too. Source of truth: src/holosoma_inference/setup.py.
-RUN uv pip install \
-    "pydantic" \
-    "loguru" \
-    "netifaces" \
-    "onnx" \
-    "onnxruntime" \
-    "scipy" \
-    "sshkeyboard" \
-    "termcolor" \
-    "pyyaml" \
-    "tyro>=0.10.0a4" \
-    "wandb" \
-    "zmq" \
-    "defusedxml" \
-    "evdev" \
-    "pin>=3.8.0"
+RUN uv pip install "pin>=3.8.0"
+
+COPY docker/apt/zzzz-holosoma-security-updates /etc/apt/apt.conf.d/
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends unattended-upgrades \
+    && unattended-upgrade --verbose \
+    && apt-get purge -y unattended-upgrades \
+    && rm -rf /var/lib/apt/lists/*
 
 
 # ─── Stage: app-deps ──────────────────────────────────────────────────────────
-# Install far-unitree-sdk (PyPI) + copy holosoma_inference source.
-# This is the only layer that changes on every commit.
+# Install project dependencies and editable metadata at the final source path.
 FROM common-deps AS app-deps
 
-# far-unitree-sdk from PyPI. pip resolves the correct wheel for the
-# interpreter/platform. Bump UNITREE_SDK2_VERSION in one place on a new release.
-ARG UNITREE_SDK2_VERSION=0.1.5
-RUN uv pip install "far-unitree-sdk==${UNITREE_SDK2_VERSION}"
-
-# holosoma_inference source (editable install, --no-deps since common-deps
-# handled the runtime deps above).
-COPY src/holosoma_inference /opt/holosoma-src/src/holosoma_inference
+# Install against a placeholder module so source-only changes remain an
+# independent linked layer in the final target.
+COPY src/holosoma_inference/pyproject.toml src/holosoma_inference/README.md \
+    /opt/holosoma-src/src/holosoma_inference/
+RUN mkdir -p /opt/holosoma-src/src/holosoma_inference/holosoma_inference && \
+    touch /opt/holosoma-src/src/holosoma_inference/holosoma_inference/__init__.py
 WORKDIR /opt/holosoma-src
-RUN uv pip install --no-deps -e src/holosoma_inference
+RUN uv pip install -e "src/holosoma_inference[unitree]"
 
 
 # ─── Stage: inference ─────────────────────────────────────────────────────────
@@ -140,10 +119,15 @@ RUN uv pip install --no-deps -e src/holosoma_inference
 # Override CMD with the policy config + task flags at `docker run` time.
 FROM app-deps AS inference
 
-WORKDIR /opt/holosoma-src
+ARG HOLOSOMA_COMMIT=unknown
+ARG HOLOSOMA_SOURCE_TREE=unknown
+LABEL org.holosoma.commit="${HOLOSOMA_COMMIT}" \
+      org.holosoma.source-tree="${HOLOSOMA_SOURCE_TREE}"
 
 ENTRYPOINT ["python3", "src/holosoma_inference/holosoma_inference/run_policy.py"]
 CMD ["--help"]
+
+COPY --link src/holosoma_inference /opt/holosoma-src/src/holosoma_inference
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -156,7 +140,7 @@ CMD ["--help"]
 # the distribution mainline). Adds ~1.5 GB but is stable across code changes.
 FROM python-base AS ros-jazzy
 
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     gnupg \
     lsb-release \
     && rm -rf /var/lib/apt/lists/*
@@ -179,7 +163,7 @@ RUN curl -fsSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
 # Cross-container /cmd_vel interop: FastDDS ↔ CycloneDDS is validated on
 # Jazzy for standard message types (TwistStamped tested on aarch64). Pick
 # whichever RMW your publisher container uses; no alignment required.
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-ros-base \
     ros-jazzy-rmw-fastrtps-cpp \
     ros-jazzy-rmw-cyclonedds-cpp \
@@ -195,7 +179,7 @@ RUN echo "source /opt/ros/jazzy/setup.bash" >> /etc/bash.bashrc
 # NVIDIA math/inference libs on top of the ROS base.
 FROM ros-jazzy AS long-deps-ros
 
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libnvpl-blas0 \
     libnvpl-lapack0 \
     libcudss0-cuda-13 \
@@ -209,60 +193,38 @@ RUN echo "/usr/lib/aarch64-linux-gnu/libcudss/13" > /etc/ld.so.conf.d/cudss-13.c
 
 
 # ─── Stage: common-deps-ros ───────────────────────────────────────────────────
-# Same Python deps as common-deps (kept verbatim so this stage caches
-# independently — cross-branch cache sharing is not possible with different
-# parent layers).
 FROM long-deps-ros AS common-deps-ros
 
-RUN uv pip install \
-    "pydantic" \
-    "loguru" \
-    "netifaces" \
-    "onnx" \
-    "onnxruntime" \
-    "scipy" \
-    "sshkeyboard" \
-    "termcolor" \
-    "pyyaml" \
-    "tyro>=0.10.0a4" \
-    "wandb" \
-    "zmq" \
-    "defusedxml" \
-    "evdev" \
-    "pin>=3.8.0"
+RUN uv pip install "pin>=3.8.0"
+
+COPY docker/apt/zzzz-holosoma-security-updates /etc/apt/apt.conf.d/
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends unattended-upgrades \
+    && unattended-upgrade --verbose \
+    && apt-get purge -y unattended-upgrades \
+    && rm -rf /var/lib/apt/lists/*
 
 
 # ─── Stage: app-deps-ros ──────────────────────────────────────────────────────
 FROM common-deps-ros AS app-deps-ros
 
-ARG UNITREE_SDK2_VERSION=0.1.5
-RUN uv pip install "far-unitree-sdk==${UNITREE_SDK2_VERSION}"
-
-COPY src/holosoma_inference /opt/holosoma-src/src/holosoma_inference
-# demo_scripts/ros2_velocity_publisher.py is used by the run_shuttle_publisher.sh
-# helper to drive /cmd_vel for cross-container DDS tests.
-COPY demo_scripts /opt/holosoma-src/demo_scripts
+COPY src/holosoma_inference/pyproject.toml src/holosoma_inference/README.md \
+    /opt/holosoma-src/src/holosoma_inference/
+RUN mkdir -p /opt/holosoma-src/src/holosoma_inference/holosoma_inference && \
+    touch /opt/holosoma-src/src/holosoma_inference/holosoma_inference/__init__.py
 WORKDIR /opt/holosoma-src
-RUN uv pip install --no-deps -e src/holosoma_inference
+RUN uv pip install -e "src/holosoma_inference[unitree]"
 
-
-# ─── Stage: inference-ros ─────────────────────────────────────────────────────
-# ROS-enabled terminal target. Entrypoint sources Jazzy then runs the policy
-# so Ros2Input can use rclpy + TwistStamped to receive /cmd_vel.
-FROM app-deps-ros AS inference-ros
-
-WORKDIR /opt/holosoma-src
-
-# Wrap entrypoint to source ROS before execing python.
+# Wrap the ROS entrypoint in the dependency image so runtime source remains an
+# independent linked layer.
 #
 # DDS coexistence: rclpy uses FastDDS (RMW_IMPLEMENTATION=rmw_fastrtps_cpp),
 # unitree_sdk2 uses its bundled CycloneDDS 0.10.2. FastDDS and CycloneDDS
-# have disjoint symbol spaces, so they coexist in one process — BUT sourcing
-# ROS puts Jazzy's libddsc 0.10.5 on LD_LIBRARY_PATH, which would win when
-# unitree's bundled libddscxx resolves its libddsc dep, causing an ABI
-# mismatch (unitree built against 0.10.2 headers). Prepend unitree's bundle
-# dir to LD_LIBRARY_PATH so the bundled libddsc wins for unitree's use.
-# rclpy doesn't touch libddsc at all (it's on FastDDS), so no conflict.
+# have disjoint symbol spaces, so they coexist in one process. Sourcing ROS
+# puts Jazzy's libddsc 0.10.5 on LD_LIBRARY_PATH, which would win when
+# unitree's bundled libddscxx resolves its libddsc dependency and cause an ABI
+# mismatch. Prepend unitree's bundle so its matching libddsc wins; rclpy does
+# not touch libddsc because it uses FastDDS.
 RUN printf '%s\n' \
     '#!/bin/bash' \
     'set -e' \
@@ -272,5 +234,21 @@ RUN printf '%s\n' \
     > /usr/local/bin/run_policy_ros \
     && chmod +x /usr/local/bin/run_policy_ros
 
+
+# ─── Stage: inference-ros ─────────────────────────────────────────────────────
+# ROS-enabled terminal target. Entrypoint sources Jazzy then runs the policy
+# so Ros2Input can use rclpy + TwistStamped to receive /cmd_vel.
+FROM app-deps-ros AS inference-ros
+
+ARG HOLOSOMA_COMMIT=unknown
+ARG HOLOSOMA_SOURCE_TREE=unknown
+LABEL org.holosoma.commit="${HOLOSOMA_COMMIT}" \
+      org.holosoma.source-tree="${HOLOSOMA_SOURCE_TREE}"
+
 ENTRYPOINT ["/usr/local/bin/run_policy_ros"]
 CMD ["--help"]
+
+COPY --link src/holosoma_inference /opt/holosoma-src/src/holosoma_inference
+# demo_scripts/ros2_velocity_publisher.py is used by the run_shuttle_publisher.sh
+# helper to drive /cmd_vel for cross-container DDS tests.
+COPY --link demo_scripts /opt/holosoma-src/demo_scripts

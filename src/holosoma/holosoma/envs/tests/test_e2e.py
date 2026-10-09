@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import dataclasses
 
 import pytest
@@ -12,7 +14,7 @@ from holosoma.utils.safe_torch_import import torch
 pytestmark = pytest.mark.isaacgym
 
 
-def test_e2e_step():
+def test_e2e_step() -> None:
     seeding(0)
     num_envs = 16
     device = "cuda"
@@ -21,9 +23,10 @@ def test_e2e_step():
         experiment.g1_29dof, training=dataclasses.replace(experiment.g1_29dof.training, num_envs=num_envs)
     )
 
-    with training_context(tyro_config):
-        tyro_env_config = get_tyro_env_config(tyro_config)
-        env = get_class(tyro_config.env_class)(tyro_env_config, device=device)
+    tyro_env_config = get_tyro_env_config(tyro_config)
+    with training_context(tyro_config) as context, context.simulation_session(
+        get_class(tyro_config.env_class)(tyro_env_config, device=device)
+    ) as env:
         obs_dict = env.reset_all()
         assert len(obs_dict["actor_obs"]) == num_envs
         assert len(obs_dict["critic_obs"]) == num_envs

@@ -18,6 +18,7 @@ The code is adapted from Isaac Lab's terrain generation utilities with modificat
 from __future__ import annotations
 
 import numpy as np
+import numpy.typing as npt
 from scipy import interpolate
 
 
@@ -211,11 +212,11 @@ def pyramid_stairs_terrain(
 
 
 def convert_heightfield_to_trimesh(
-    height_field_raw: np.ndarray,
+    height_field_raw: npt.NDArray[np.int_],
     horizontal_scale: float,
     vertical_scale: float,
     slope_threshold: float | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.uint32]]:
     """Convert a heightfield array to a triangle mesh.
 
     Converts a 2D heightfield array to a triangle mesh represented by vertices
@@ -290,14 +291,14 @@ def convert_heightfield_to_trimesh(
         yy += (move_y + move_corners * (move_y == 0)) * horizontal_scale
 
     # Create vertex array
-    vertices = np.zeros((num_rows * num_cols, 3), dtype=np.float32)
+    vertices: npt.NDArray[np.float32] = np.zeros((num_rows * num_cols, 3), dtype=np.float32)
     vertices[:, 0] = xx.flatten()
     vertices[:, 1] = yy.flatten()
     vertices[:, 2] = hf.flatten() * vertical_scale
 
     # Create triangle indices
     # Each grid cell becomes 2 triangles
-    triangles = -np.ones((2 * (num_rows - 1) * (num_cols - 1), 3), dtype=np.uint32)
+    triangles: npt.NDArray[np.uint32] = -np.ones((2 * (num_rows - 1) * (num_cols - 1), 3), dtype=np.uint32)
     for i in range(num_rows - 1):
         # Calculate vertex indices for current row
         ind0 = np.arange(0, num_cols - 1) + i * num_cols
@@ -604,4 +605,4 @@ class SubTerrain:
         self.horizontal_scale = horizontal_scale
         self.width = width
         self.length = length
-        self.height_field_raw = np.zeros((self.width, self.length), dtype=np.int16)
+        self.height_field_raw: npt.NDArray[np.int16] = np.zeros((self.width, self.length), dtype=np.int16)

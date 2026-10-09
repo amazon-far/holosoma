@@ -1,16 +1,23 @@
+from __future__ import annotations
+
+from typing import Mapping, Sequence, cast
+
 import numpy as np
+import numpy.typing as npt
 import torch
 from torch import nn
 
 
 class AverageMeter(nn.Module):
-    def __init__(self, in_shape, max_size):
+    mean: torch.Tensor
+
+    def __init__(self, in_shape: int | Sequence[int], max_size: int) -> None:
         super().__init__()
         self.max_size = max_size
         self.current_size = 0
         self.register_buffer("mean", torch.zeros(in_shape, dtype=torch.float32))
 
-    def update(self, values):
+    def update(self, values: torch.Tensor) -> None:
         size = values.size()[0]
         if size == 0:
             return
@@ -21,27 +28,27 @@ class AverageMeter(nn.Module):
         self.current_size = size_sum
         self.mean = (self.mean * old_size + new_mean * size) / size_sum
 
-    def clear(self):
+    def clear(self) -> None:
         self.current_size = 0
         self.mean.fill_(0)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self.current_size
 
-    def get_mean(self):
-        return self.mean.squeeze(0).cpu().numpy()
+    def get_mean(self) -> npt.NDArray[np.float32]:
+        return cast("npt.NDArray[np.float32]", self.mean.squeeze(0).cpu().numpy())
 
 
 class TensorAverageMeter:
-    def __init__(self):
-        self.tensors = []
+    def __init__(self) -> None:
+        self.tensors: list[torch.Tensor] = []
 
-    def add(self, x):
+    def add(self, x: torch.Tensor) -> None:
         if len(x.shape) == 0:
             x = x.unsqueeze(0)
         self.tensors.append(x)
 
-    def mean(self):
+    def mean(self) -> torch.Tensor | int:
         if len(self.tensors) == 0:
             return 0
         cat = torch.cat(self.tensors, dim=0)
@@ -49,20 +56,20 @@ class TensorAverageMeter:
             return 0
         return cat.mean()
 
-    def clear(self):
+    def clear(self) -> None:
         self.tensors = []
 
-    def mean_and_clear(self):
+    def mean_and_clear(self) -> torch.Tensor | int:
         mean = self.mean()
         self.clear()
         return mean
 
 
 class TensorAverageMeterDict:
-    def __init__(self):
-        self.data = {}
+    def __init__(self) -> None:
+        self.data: dict[str, TensorAverageMeter] = {}
 
-    def add(self, data_dict):
+    def add(self, data_dict: Mapping[str, torch.Tensor]) -> None:
         for k, v in data_dict.items():
             # Originally used a defaultdict, this had lambda
             # pickling issues with DDP.
@@ -70,13 +77,13 @@ class TensorAverageMeterDict:
                 self.data[k] = TensorAverageMeter()
             self.data[k].add(v)
 
-    def mean(self):
+    def mean(self) -> dict[str, torch.Tensor | int]:
         return {k: v.mean() for k, v in self.data.items()}
 
-    def clear(self):
+    def clear(self) -> None:
         self.data = {}
 
-    def mean_and_clear(self):
+    def mean_and_clear(self) -> dict[str, torch.Tensor | int]:
         mean = self.mean()
         self.clear()
         return mean

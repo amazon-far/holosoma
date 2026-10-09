@@ -1,0 +1,9 @@
+# Keep Holosoma's dependencies within the Isaac Sim 5.1.0 runtime contract.
+click==8.1.7
+packaging==23.0
+psutil==5.9.8
+starlette==0.49.1
+torch==2.7.0
+torchvision==0.22.0
+typing_extensions==4.15.0
+warp-lang==1.16.0

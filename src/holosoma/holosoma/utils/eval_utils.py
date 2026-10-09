@@ -5,7 +5,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import Any, TypedDict, cast
 
 import yaml
 from loguru import logger
@@ -19,6 +19,7 @@ from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.utils.config_utils import CONFIG_NAME
 from holosoma.utils.file_cache import get_cached_file_path
 from holosoma.utils.logging import LoguruLoggingBridge
+from holosoma.utils.path import resolve_path
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.simulator_config import SimulatorType, get_simulator_type
 
@@ -79,7 +80,7 @@ def load_saved_experiment_config(checkpoint_cfg: CheckpointConfig) -> tuple[Expe
 
     checkpoint_str = str(checkpoint)
     if not checkpoint_str.startswith(_WANDB_PREFIX):
-        checkpoint_path = Path(checkpoint_str).expanduser()
+        checkpoint_path = Path(resolve_path(checkpoint_str))
         config, stored_wandb_path = _load_config_from_checkpoint(checkpoint_path)
         if stored_wandb_path:
             logger.info(f"Checkpoint originated from W&B run: {stored_wandb_path}")
@@ -193,7 +194,7 @@ def get_all_checkpoint_metadata(override_config: DictConfig) -> list[CheckpointM
                 }
             )
     elif override_config.get("checkpoint_dir", None) is not None:
-        checkpoint_dir = Path(override_config.checkpoint_dir)
+        checkpoint_dir = Path(resolve_path(override_config.checkpoint_dir))
         # Get all checkpoint files in the directory
         checkpoint_names = [f.name for f in checkpoint_dir.glob("*.pt") if extract_global_step(f.name) is not None]
         checkpoint_metadata = [
@@ -265,11 +266,11 @@ def load_checkpoint(checkpoint: str, log_dir: str) -> Path:
 
         return log_dir_checkpoint
 
-    # Local file path
-    return Path(checkpoint)
+    # Any non-W&B path supported by the generic loader system.
+    return Path(resolve_path(checkpoint))
 
 
-def init_sim_imports(tyro_config: ExperimentConfig):
+def init_sim_imports(tyro_config: ExperimentConfig) -> Any | None:
     """Initialize simulator imports - DEPRECATED.
 
     This function is deprecated in favor of the more focused functions in sim_utils.py.

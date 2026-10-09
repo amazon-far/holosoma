@@ -38,11 +38,11 @@ class ObservationManager:
         self.logger = getattr(env, "logger", None)
 
         # Storage for resolved functions and stateful terms
-        self._term_funcs: dict[str, dict[str, Callable]] = {}
+        self._term_funcs: dict[str, dict[str, Callable[..., torch.Tensor]]] = {}
         self._term_instances: dict[str, dict[str, ObservationTermBase]] = {}
 
         # History buffers: group_name -> term_name -> deque
-        self._history_buffers: dict[str, dict[str, deque]] = {}
+        self._history_buffers: dict[str, dict[str, deque[torch.Tensor]]] = {}
 
         # Initialize groups
         self._initialize_groups()
@@ -203,7 +203,7 @@ class ObservationManager:
         noise = (torch.rand_like(obs) * 2.0 - 1.0) * noise_scale
         return obs + noise
 
-    def _apply_scale(self, obs: torch.Tensor, scale: float | tuple) -> torch.Tensor:
+    def _apply_scale(self, obs: torch.Tensor, scale: float | tuple[float, ...]) -> torch.Tensor:
         """Apply scaling to an observation tensor.
 
         Parameters

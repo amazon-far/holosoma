@@ -38,6 +38,9 @@ logs/
 # Documentation
 *.md
 docs/
+!src/holosoma/README.md
+!src/holosoma_inference/README.md
+!src/holosoma_retargeting/README.md
 
 # Temporary files
 tmp/

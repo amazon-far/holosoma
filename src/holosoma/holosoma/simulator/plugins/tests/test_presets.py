@@ -11,12 +11,22 @@ sidecar published).
 from __future__ import annotations
 
 import sys
+from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 import pytest
 
-from holosoma.config_types.plugin import ROS2ImagePluginConfig, ROS2ImageRoute
-from holosoma.config_types.sensor import CameraSensorConfig, SensorMountConfig
+from holosoma.config_types.plugin import (
+    CameraVizPluginConfig,
+    FrameWriterPluginConfig,
+    LidarVizPluginConfig,
+    ROS2ImagePluginConfig,
+    ROS2ImageRoute,
+    ROS2PointCloudPluginConfig,
+)
+from holosoma.config_types.sensor import CameraSensorConfig, LidarSensorConfig, SensorConfig, SensorMountConfig
 from holosoma.config_values.plugin import PLUGIN_REGISTRY
 from holosoma.config_values.wbt.g1 import sensor as g1_cameras
 from holosoma.simulator.base_simulator.hooks import HookRegistry
@@ -64,24 +74,17 @@ class _FakeTrainingConfig:
 class _FakeSimulator:
     """Minimal stand-in exposing what a camera-consumer hook reads/registers on (no backend)."""
 
-    def __init__(self, sensors_config, num_envs=1):
+    def __init__(self, sensors_config: Mapping[str, SensorConfig] | Mapping[str, object], num_envs: int = 1) -> None:
         self.hooks = HookRegistry()
-        self.sensor_config = sensors_config
+        self.sensor_config: dict[str, Any] = dict(sensors_config)
         self.training_config = _FakeTrainingConfig(num_envs)
         self.headless = True
         self.simulator_config = _FakeSimulatorConfig()
         self.video_config = _FakeVideoConfig()
         self.sensor_manager = None
 
-    def sensor_config_by_name(self, name):
-        return self.sensor_config[name]
 
-
-def test_core_presets_present():
-    assert set(PLUGIN_REGISTRY) >= {"none", "ros2-image", "ros2-stereo", "viz", "viz-record"}
-
-
-def test_presets_resolve_get_cls_without_rclpy():
+def test_presets_resolve_get_cls_without_rclpy() -> None:
     # Resolving get_cls imports the ros2_image_egress MODULE but must NOT import rclpy (deferred to
     # start()), so presets are inspectable in a non-ROS env.
     for name in ("ros2-image", "ros2-stereo"):
@@ -90,7 +93,7 @@ def test_presets_resolve_get_cls_without_rclpy():
     assert "rclpy" not in sys.modules
 
 
-def test_stereo_preset_publishes_rfmpi_teleop_topics():
+def test_stereo_preset_publishes_rfmpi_teleop_topics() -> None:
     # The rfmpi teleop stack subscribes to /ros_camera/rgb/{left,right}/compressed. Topics are
     # published VERBATIM (no auto-suffix), so the preset spells the full topics out.
     inst = PLUGIN_REGISTRY["ros2-stereo"]
@@ -101,7 +104,7 @@ def test_stereo_preset_publishes_rfmpi_teleop_topics():
     assert cams == {"head_cam_left", "head_cam_right"}
 
 
-def test_stereo_egress_cameras_exist_in_g1_stereo_rig():
+def test_stereo_egress_cameras_exist_in_g1_stereo_rig() -> None:
     # The egress route cameras must exist in a rig you'd pair it with, else the hook fails loud at
     # construction. Pin that ros2-stereo lines up with a stereo head rig keyed head_cam_left/right.
     stereo_cams = set(_G1_STEREO_RIG)
@@ -109,14 +112,14 @@ def test_stereo_egress_cameras_exist_in_g1_stereo_rig():
     assert route_cams <= stereo_cams
 
 
-def test_g1_stereo_wrists_rig_composes_from_building_blocks():
+def test_g1_stereo_wrists_rig_composes_from_building_blocks() -> None:
     # The stereo-head-plus-wrists rig (previously a whole-config preset) now composes from the G1
     # camera building blocks, keyed to the names the egress routes reference.
     cams = set(_G1_STEREO_WRISTS_RIG)
     assert {"head_cam_left", "head_cam_right", "left_wrist_cam", "right_wrist_cam"} <= cams
 
 
-def test_waist_depth_color_preset_colorizes_depth_over_rgb_format():
+def test_waist_depth_color_preset_colorizes_depth_over_rgb_format() -> None:
     # The colorized-depth preset publishes DEPTH cameras on an RGB (jpeg) format => colorized to RGB.
     # Cameras must exist in the paired waist rig (else the hook fails loud at construction).
     inst = PLUGIN_REGISTRY["ros2-waist-depth-color"]
@@ -127,7 +130,7 @@ def test_waist_depth_color_preset_colorizes_depth_over_rgb_format():
     assert {r.camera for r in inst.routes.values()} <= set(_G1_WAIST_RIG)
 
 
-def test_waist_depth_raw_and_color_preset_shares_one_snapshot_per_camera():
+def test_waist_depth_raw_and_color_preset_shares_one_snapshot_per_camera() -> None:
     # The combined preset publishes each waist camera BOTH ways (raw 32FC1 + colorized jpeg) from a
     # single node. The two routes per camera share the same (camera, "depth", env) stream key, so
     # wanted_streams collapses to one triple per camera => ONE cached device->host copy each, not two.
@@ -147,30 +150,79 @@ def test_waist_depth_raw_and_color_preset_shares_one_snapshot_per_camera():
     assert "rclpy" not in sys.modules
 
 
-def test_real_egress_wanted_streams_and_async_default():
+def test_real_egress_wanted_streams_and_sync_default() -> None:
     # Construct the REAL ROS2ImagePlugin (no start -> no ROS) and check its wiring: wanted_streams
-    # from routes, and async_publish on by default.
+    # from routes, and lossless synchronous publication by default.
     inst = PLUGIN_REGISTRY["ros2-stereo"]
     egress = inst.get_cls()(inst, _FakeSimulator(_G1_STEREO_RIG))
     assert egress.wanted_streams() == {("head_cam_left", "rgb", 0), ("head_cam_right", "rgb", 0)}
-    assert inst.async_publish is True
+    assert inst.async_publish is False
     assert "rclpy" not in sys.modules
 
 
-def _depth_frame(camera, value=2.0, h=6, w=6):
-    arr = np.full((h, w, 1), value, np.float32)  # [H,W,1] float meters, as get_camera_data gives
+def test_pointcloud_preset_matches_default_lidar_sensor_key() -> None:
+    inst = PLUGIN_REGISTRY["ros2-pointcloud"]
+    assert isinstance(inst, ROS2PointCloudPluginConfig)
+    assert {(route.lidar, route.topic) for route in inst.routes.values()} == {("lidar", "/lidar/points")}
+    sensors = {
+        "head_cam": _G1_STEREO_RIG["head_cam_left"],
+        "lidar": LidarSensorConfig(mount=SensorMountConfig(target_kind="robot_link", target="pelvis")),
+    }
+    plugin = inst.get_cls()(inst, _FakeSimulator(sensors))
+    assert plugin.wanted_streams() == {("lidar", 0)}
+    assert "rclpy" not in sys.modules
+
+
+def test_lidar_viz_presets_select_the_default_lidar() -> None:
+    sensors = {
+        "lidar": LidarSensorConfig(mount=SensorMountConfig(target_kind="robot_link", target="pelvis")),
+    }
+    live_config = PLUGIN_REGISTRY["lidar-viz"]
+    saved_config = PLUGIN_REGISTRY["lidar-viz-save"]
+    recorded_config = PLUGIN_REGISTRY["lidar-viz-record"]
+    assert isinstance(live_config, LidarVizPluginConfig)
+    assert isinstance(saved_config, LidarVizPluginConfig)
+    assert isinstance(recorded_config, LidarVizPluginConfig)
+    assert live_config.live_window and not live_config.save_scans
+    assert saved_config.save_scans and not saved_config.live_window
+    assert recorded_config.record_video and not recorded_config.live_window
+
+    plugin = saved_config.get_cls()(saved_config, _FakeSimulator(sensors))
+    assert plugin.wanted_streams() == {("lidar", 0)}
+
+
+def test_camera_consumers_ignore_lidars_in_mixed_sensor_config() -> None:
+    sensors = {
+        "head": _G1_STEREO_RIG["head_cam_left"],
+        "lidar": LidarSensorConfig(mount=SensorMountConfig(target_kind="robot_link", target="pelvis")),
+    }
+    simulator = _FakeSimulator(sensors)
+
+    viz_config = CameraVizPluginConfig()
+    viz = viz_config.get_cls()(viz_config, simulator)
+    assert viz.wanted_streams() == {("head", "rgb", 0)}
+
+    writer_config = FrameWriterPluginConfig()
+    writer = writer_config.get_cls()(writer_config, simulator)
+    assert writer.wanted_streams() == {("head", "rgb", 0)}
+
+
+def _depth_frame(camera: str, value: float = 2.0, h: int = 6, w: int = 6) -> FramePacket:
+    arr: npt.NDArray[np.float32] = np.full(
+        (h, w, 1), value, np.float32
+    )  # [H,W,1] float meters, as get_camera_data gives
     intr = CameraIntrinsics(width=w, height=h, vertical_fov=45.0, near=0.01, far=100.0)
     return FramePacket(camera=camera, modality="depth", env_id=0, array=arr, sim_time=0.0, intrinsics=intr)
 
 
-def test_encode_threads_route_colormap_and_range_without_ros():
+def test_encode_threads_route_colormap_and_range_without_ros() -> None:
     # ROS2ImagePlugin._encode is ROS-free (never touches the node/simulator), so we can verify the
     # route's depth_colormap/depth_range actually reach encode_frame WITHOUT an rclpy env. Each knob
     # is isolated (routes differing in ONLY that field) so the test guards BOTH independently.
     mount = SensorMountConfig(target_kind="robot_link", target="torso_link")
     sensors = {"waist": CameraSensorConfig(mount=mount, data_types=["depth"])}
 
-    def _route(topic, colormap, drange):
+    def _route(topic: str, colormap: str, drange: list[float]) -> ROS2ImageRoute:
         return ROS2ImageRoute(
             camera="waist", topic=topic, modality="depth", format="rgb8", depth_colormap=colormap, depth_range=drange
         )

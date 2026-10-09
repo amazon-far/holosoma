@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Tuple
+from typing import TYPE_CHECKING, Any, Tuple
 
 from holosoma.managers.terrain.base import TerrainTermBase
 from holosoma.simulator.shared.terrain import Terrain
@@ -10,10 +10,14 @@ from holosoma.utils import draw, warp_utils
 from holosoma.utils.rotations import quat_apply_yaw
 from holosoma.utils.safe_torch_import import torch
 
+if TYPE_CHECKING:
+    import trimesh
+    import warp as wp
+
 ATTACHMENT_POS = (0.0, 0.0, 0.25)
 
 
-def interquartile_mean(x, dim=-1):
+def interquartile_mean(x: torch.Tensor, dim: int = -1) -> torch.Tensor:
     """Compute interquartile mean (mean of values between 25th and 75th percentile)"""
     sorted_x, _ = torch.sort(x, dim=dim)
     n = sorted_x.shape[dim]
@@ -37,7 +41,7 @@ def interquartile_mean(x, dim=-1):
 class TerrainLocomotion(TerrainTermBase):
     """Stateful terrain term that owns terrain buffers and updates them each step."""
 
-    def __init__(self, cfg: Any, env: Any):
+    def __init__(self, cfg: Any, env: Any) -> None:
         super().__init__(cfg, env)
         self._terrain = Terrain(self._cfg, self.num_envs)
         assert hasattr(self._terrain, "mesh")
@@ -48,15 +52,15 @@ class TerrainLocomotion(TerrainTermBase):
         self._get_env_origins()
 
     @property
-    def terrain(self):
+    def terrain(self) -> Terrain:
         return self._terrain
 
     @property
-    def mesh(self):
+    def mesh(self) -> trimesh.Trimesh:
         return self._terrain.mesh
 
     @property
-    def warp_mesh(self):
+    def warp_mesh(self) -> wp.Mesh:
         return self._warp_mesh
 
     def setup(self) -> None:
@@ -103,13 +107,13 @@ class TerrainLocomotion(TerrainTermBase):
     def feet_heights(self) -> torch.Tensor:
         return self._feet_heights
 
-    def update_heights(self, env_ids=None):
+    def update_heights(self, env_ids: torch.Tensor | None = None) -> None:
         idx = env_ids if env_ids is not None else slice(None)
         self._base_heights[idx], self._ray_hits_world_base[idx] = self._get_base_heights(env_ids)
         if self._compute_feet_heights:
             self._feet_heights[idx], self._ray_hits_world_feet[idx] = self._get_feet_heights(env_ids)
 
-    def _get_env_origins(self):
+    def _get_env_origins(self) -> None:
         """Sets environment origins. On rough terrain the origins are defined by the terrain platforms.
         Otherwise create a grid.
         """
@@ -123,7 +127,7 @@ class TerrainLocomotion(TerrainTermBase):
             origin_0_0 = torch.from_numpy(self.terrain._env_origins[0, 0]).to(self.device).to(torch.float)
             self._env_origins[:] = origin_0_0  # Broadcast to all robots
 
-    def _init_base_height_points(self):
+    def _init_base_height_points(self) -> tuple[torch.Tensor, torch.Tensor, int]:
         """Returns points at which the height measurments are sampled (in base frame)
 
         Returns:
@@ -166,7 +170,7 @@ class TerrainLocomotion(TerrainTermBase):
         ray_directions[..., :] = torch.tensor([0.0, 0.0, -1.0], device=self.device)
         return points, ray_directions, num_base_height_points
 
-    def _get_base_heights(self, env_ids=None) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _get_base_heights(self, env_ids: torch.Tensor | None = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """Get base heights from the terrain."""
         idx = env_ids if env_ids is not None else slice(None)
         base_positions = quat_apply_yaw(
@@ -180,7 +184,7 @@ class TerrainLocomotion(TerrainTermBase):
         base_heights = (base_positions - ray_hits_world)[..., 2]
         return interquartile_mean(base_heights, dim=1), ray_hits_world
 
-    def _get_feet_heights(self, env_ids=None) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _get_feet_heights(self, env_ids: torch.Tensor | None = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """Get feet heights from the terrain."""
         idx = env_ids if env_ids is not None else slice(None)
         foot_positions = self.env.simulator._rigid_body_pos[idx, self.env.feet_height_indices, :].clone()
@@ -267,7 +271,7 @@ class TerrainLocomotion(TerrainTermBase):
         # Extract Z coordinates (assumes above terrain heights)
         return ray_hits[:, 2]
 
-    def draw_debug_viz(self):
+    def draw_debug_viz(self) -> None:
         env_id = 0
         for j in range(self._num_base_height_points):
             position = self._ray_hits_world_base[env_id, j].detach().cpu().numpy()

@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 import numpy as np
+import numpy.typing as npt
 import trimesh
 
 
@@ -17,7 +18,7 @@ import trimesh
 class TerrainInterface(Protocol):
     """Protocol defining the terrain interface that all simulators must implement."""
 
-    def sample_env_origins(self) -> np.ndarray:
+    def sample_env_origins(self) -> npt.NDArray[np.float64]:
         """Environment origins for multi-environment setups.
 
         Returns

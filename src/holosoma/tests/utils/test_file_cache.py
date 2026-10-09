@@ -471,6 +471,12 @@ class TestLocalFilePaths:
         assert Path(result).is_absolute()
         assert Path(result).exists()
 
+    def test_package_prefixed_path_resolved(self):
+        """Registered package prefixes use the shared path resolver."""
+        result = get_cached_file_path("@holosoma/data/scene_objects/boxes/small_box.urdf")
+        assert Path(result).is_absolute()
+        assert Path(result).is_file()
+
     def test_local_files_not_cached(self, temp_cache_dir):
         """Local files don't get cached."""
         local_path = "/local/file.txt"

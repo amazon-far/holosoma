@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import RigidObject, RigidObjectCfg
@@ -50,7 +50,7 @@ from holosoma.simulator.isaacsim.converters import (
     physics_to_rigid_body_props,
 )
 from holosoma.simulator.isaacsim.prim_naming import distinguishing_names
-from holosoma.simulator.isaacsim.prim_utils import compute_world_transform, get_pose
+from holosoma.simulator.isaacsim.prim_utils import compute_world_transform, get_pose, is_rigid_body_enabled
 from holosoma.simulator.isaacsim.spawners.from_files_cfg import CustomUsdFileCfg
 from holosoma.simulator.shared.asset_format import select_asset_format
 from holosoma.utils.path import resolve_asset_path
@@ -59,7 +59,7 @@ if TYPE_CHECKING:
     from isaaclab.sim.spawners import SpawnerCfg
 
 
-def _shared_spawn_kwargs(physics_cfg: PhysicsConfig, fixed: bool) -> dict:
+def _shared_spawn_kwargs(physics_cfg: PhysicsConfig, fixed: bool) -> dict[str, Any]:
     """Format-independent spawn-cfg fields derived from ``PhysicsConfig``.
 
     These live on the common ``RigidObjectSpawnerCfg`` base of both ``UrdfFileCfg`` and
@@ -183,7 +183,7 @@ def _convert_urdf_to_usd(urdf_cfg: "sim_utils.UrdfFileCfg") -> str:
     from isaaclab.sim import converters
 
     loader = converters.UrdfConverter(urdf_cfg)
-    usd_path = loader.usd_path
+    usd_path: str = loader.usd_path
     if not usd_path or not os.path.exists(usd_path):
         raise RuntimeError(f"URDF->USD conversion produced no USD for '{urdf_cfg.asset_path}'.")
     return usd_path
@@ -209,30 +209,10 @@ def _assert_asset_exists(resolved_path: str, what: str) -> None:
     """Fail loud and early if a resolved local asset path does not exist.
 
     ``resolve_asset_path`` returns a path without checking existence, so without this a
-    missing file surfaces as an opaque IsaacLab/USD-stage error deep in spawn. Skipped for
-    self-locating remote paths (s3://) which aren't on the local filesystem.
+    missing file surfaces as an opaque IsaacLab/USD-stage error deep in spawn.
     """
-    if resolved_path.startswith("s3://"):
-        return
     if not os.path.exists(resolved_path):
         raise ValueError(f"{what} asset not found at path: '{resolved_path}'.")
-
-
-def _is_rigid_body_enabled(prim: "Usd.Prim") -> bool:
-    """Whether ``prim`` is an *enabled* rigid body.
-
-    True iff it has ``UsdPhysics.RigidBodyAPI`` and ``rigidBodyEnabled`` is not authored
-    ``false`` (the attr defaults to true when the API is applied, so applied-with-no-value or
-    applied-true both count). This is distinct from ``kinematicEnabled``: a kinematic body is
-    still an *enabled* rigid body — just static (the ``fixed`` path) — whereas
-    ``rigidBodyEnabled=false`` means "not a rigid body at all" and must NOT be treated as one.
-    """
-    if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
-        return False
-    attr = UsdPhysics.RigidBodyAPI(prim).GetRigidBodyEnabledAttr()
-    if attr and attr.HasAuthoredValue():
-        return bool(attr.Get())
-    return True
 
 
 def _structural_static(prim: "Usd.Prim") -> bool:
@@ -253,8 +233,8 @@ def _structural_static(prim: "Usd.Prim") -> bool:
 
 
 def _enabled_rigid_body_prims(stage: "Usd.Stage") -> list["Usd.Prim"]:
-    """Every prim in the stage that is an enabled rigid body (see :func:`_is_rigid_body_enabled`)."""
-    return [p for p in stage.Traverse() if _is_rigid_body_enabled(p)]
+    """Every prim in the stage that is an enabled rigid body."""
+    return [p for p in stage.Traverse() if is_rigid_body_enabled(p)]
 
 
 def _referenceable_ancestor(stage: "Usd.Stage", prim_path: str) -> str:
@@ -363,14 +343,11 @@ def resolve_asset_root(usd_path: str, obj_name: str) -> str | None:
     under a Scope all compose correctly without per-shape special-casing.
 
     Resolution order:
-      1. ``s3://`` path: return ``None`` (whole-file reference; not locally openable to inspect).
-      2. ``defaultPrim`` if set: the body the file represents.
-      3. else the unique active top-level prim under the pseudo-root.
-      4. else (no defaultPrim and zero or many top-level prims): fail with candidates, since the
+      1. ``defaultPrim`` if set: the body the file represents.
+      2. else the unique active top-level prim under the pseudo-root.
+      3. else (no defaultPrim and zero or many top-level prims): fail with candidates, since the
          asset root is ambiguous; the author must set a defaultPrim on the USD.
     """
-    if usd_path.startswith("s3://"):
-        return None
     stage = Usd.Stage.Open(usd_path)
     if stage is None:
         raise ValueError(f"Rigid object '{obj_name}' USD could not be opened: '{usd_path}'.")

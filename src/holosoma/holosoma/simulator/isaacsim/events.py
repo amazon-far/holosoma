@@ -75,7 +75,7 @@ def randomize_rigid_body_mass(
     axis: int = 0,
     min_mass: float = 1e-6,
     recompute_inertia: bool = True,
-):
+) -> None:
     """Randomize rigid-body mass, drawing through the bound keyed sampler.
 
     ``mass`` is a config range value ([lo, hi] pair / spec dict / DistributionSpec). Composes the
@@ -146,7 +146,7 @@ def randomize_body_com(
     specs: Sequence[DistributionSpec],
     operation: Literal["add", "abs", "scale"],
     sampler: TermSampler,
-):
+) -> None:
     """Randomize body center-of-mass by adding/scaling/setting a per-axis (x,y,z) sample.
 
     ``specs`` is one :class:`DistributionSpec` per axis. CoM is reset to ``env.default_coms`` before
@@ -197,7 +197,7 @@ def randomize_rigid_body_inertia(
     specs: Sequence[DistributionSpec],
     operation: Literal["add", "scale", "abs"],
     sampler: TermSampler,
-):
+) -> None:
     """Randomize the rigid-body inertia tensor by scaling/adding/setting per-component samples.
 
     ``specs`` holds 6 :class:`DistributionSpec` in the order [Ixx, Iyy, Izz, Ixy, Iyz, Ixz]. The 3x3
@@ -267,7 +267,7 @@ def randomize_rigid_body_material(
     sampler: TermSampler,
     make_consistent: bool = True,
     per_env: bool = False,
-):
+) -> None:
     """Randomize friction/restitution, bucketed or continuous, per shape or per env.
 
     Each channel is a config range value ([lo, hi] / spec dict / DistributionSpec), or ``None`` to leave
@@ -326,7 +326,7 @@ def randomize_rigid_body_material(
     # present (a [1, n_shapes] coord) -> an independent per-(env, shape) draw. The trailing shape
     # broadcast/assignment is identical either way.
     shape_ids = torch.arange(total_num_shapes)
-    shape_coord: tuple = () if per_env else (shape_ids[None, :],)
+    shape_coord: tuple[torch.Tensor, ...] = () if per_env else (shape_ids[None, :],)
 
     for k, spec in enumerate(channel_specs):
         if spec is None:

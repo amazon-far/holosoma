@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import importlib
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from omegaconf import DictConfig, OmegaConf
 
 from holosoma.config_types.command import CommandManagerCfg, CommandTermCfg
 
 from .base import CommandTermBase
+
+if TYPE_CHECKING:
+    from torch import Tensor
 
 
 def _resolve_command_cfg(command_params: dict[str, Any] | DictConfig | None) -> DictConfig:
@@ -150,7 +153,7 @@ class CommandManager:
                 func = self._setup_funcs[term_name]
                 func(self.env, **term_cfg.params)
 
-    def reset(self, env_ids) -> None:
+    def reset(self, env_ids: Tensor | None) -> None:
         for entry in self._class_entries:
             if "reset" in entry["stages"]:
                 entry["instance"].reset(env_ids)
@@ -186,7 +189,7 @@ class CommandManager:
         return self._state_terms.get(term_name)
 
     @property
-    def commands(self):
+    def commands(self) -> Tensor:
         """Expose the locomotion command buffer owned by the locomotion command term.
 
         Returns

@@ -44,7 +44,9 @@ ensure_api_and_modify(
 ```
 """
 
-from typing import Any, Callable, Type
+from __future__ import annotations
+
+from typing import Any, Callable
 
 import isaacsim.core.utils.stage as stage_utils
 import omni.log
@@ -52,7 +54,7 @@ import omni.usd
 from pxr import Usd
 
 
-def has_api_in_subtree(prim_path: str, api_class: Type, stage: Usd.Stage = None) -> bool:
+def has_api_in_subtree(prim_path: str, api_class: type[Any], stage: Usd.Stage | None = None) -> bool:
     """Check if a USD API exists anywhere in the subtree of a prim.
 
     Recursively searches through the prim hierarchy starting from the specified
@@ -84,7 +86,7 @@ def has_api_in_subtree(prim_path: str, api_class: Type, stage: Usd.Stage = None)
         return True
 
     # Recursively check all descendants
-    def _check_descendants(prim):
+    def _check_descendants(prim: Any) -> bool:
         for child in prim.GetChildren():
             if child.HasAPI(api_class):
                 omni.log.verbose(f"Found {api_class.__name__} on descendant prim: {child.GetPath()}")
@@ -99,9 +101,9 @@ def has_api_in_subtree(prim_path: str, api_class: Type, stage: Usd.Stage = None)
 def ensure_api_and_modify(
     prim_path: str,
     cfg: Any,
-    api_class: Type,
+    api_class: type[Any],
     modify_func: Callable[[str, Any, Usd.Stage], bool],
-    stage: Usd.Stage = None,
+    stage: Usd.Stage | None = None,
 ) -> bool:
     """Ensure a USD API exists before modifying its properties.
 

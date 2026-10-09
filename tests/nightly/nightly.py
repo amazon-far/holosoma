@@ -6,9 +6,11 @@ import datetime
 import os
 import subprocess
 import sys
+import time
 from datetime import timezone
 from os import getenv
 from pathlib import Path
+from typing import Any
 
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_values.experiment import get_annotated_experiment_config
@@ -22,13 +24,49 @@ GITHUB_SERVER_URL = getenv("GITHUB_SERVER_URL")
 GITHUB_REPOSITORY = getenv("GITHUB_REPOSITORY")
 GITHUB_RUN_ID = getenv("GITHUB_RUN_ID")
 
-# Number of GPUs used for a multi-GPU nightly run (matches torchrun --nproc_per_node
-# below and the x4 GPU runner in .github/workflows/nightly-training.yaml).
+# Number of GPUs used for a multi-GPU nightly run (matches the distributed
+# launcher below and the x4 GPU runner in .github/workflows/nightly-training.yaml).
 MULTIGPU_NUM_GPUS = 4
+
+NIGHTLY_STATUS_TAGS = frozenset({"nightly_test_passed", "nightly_test_failed"})
+WANDB_RUN_FINISH_ATTEMPTS = 10
+WANDB_STATUS_UPDATE_ATTEMPTS = 3
+WANDB_STATUS_UPDATE_DELAY_S = 3.0
 
 
 def now_timestamp() -> str:
     return datetime.datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+
+
+def wait_for_wandb_run(api: Any, run_path: str) -> Any:
+    for attempt in range(1, WANDB_RUN_FINISH_ATTEMPTS + 1):
+        run = api.run(run_path)
+        if run.state == "finished":
+            return run
+
+        print(f"W&B run is not finished yet (state={run.state!r}); retrying ({attempt}/{WANDB_RUN_FINISH_ATTEMPTS})")
+        time.sleep(WANDB_STATUS_UPDATE_DELAY_S)
+
+    raise RuntimeError(f"W&B run did not finish before validation: {run_path}")
+
+
+def update_wandb_status(api: Any, run_path: str, status_tag: str) -> None:
+    if status_tag not in NIGHTLY_STATUS_TAGS:
+        raise ValueError(f"Unexpected nightly status tag: {status_tag}")
+
+    for attempt in range(1, WANDB_STATUS_UPDATE_ATTEMPTS + 1):
+        run = api.run(run_path)
+        run.tags = [tag for tag in (run.tags or []) if tag not in NIGHTLY_STATUS_TAGS] + [status_tag]
+        run.update()
+        time.sleep(WANDB_STATUS_UPDATE_DELAY_S)
+
+        updated_run = api.run(run_path)
+        if status_tag in (updated_run.tags or []):
+            return
+
+        print(f"W&B status tag did not persist; retrying ({attempt}/{WANDB_STATUS_UPDATE_ATTEMPTS})")
+
+    raise RuntimeError(f"Failed to persist W&B status tag {status_tag!r} for {run_path}")
 
 
 def validate_wandb_metrics(config: ExperimentConfig):
@@ -37,7 +75,8 @@ def validate_wandb_metrics(config: ExperimentConfig):
 
     assert wandb.run is not None, "wandb run failed! wandb.run is `None`"
     api = wandb.Api()
-    run = api.run(f"{wandb.run.entity}/{wandb.run.project}/{wandb.run.id}")
+    run_path = f"{wandb.run.entity}/{wandb.run.project}/{wandb.run.id}"
+    run = wait_for_wandb_run(api, run_path)
     df_hist = run.history()
 
     failures: list[str] = []
@@ -55,28 +94,28 @@ def validate_wandb_metrics(config: ExperimentConfig):
             print(msg)
             failures.append(msg)
 
-    # 3. Any other post-training work can go here
-    if len(failures) > 0:
+    if failures:
         print(f"Some tests failed! Metrics outside of expected ranges: {failures}")
-        run.tags += ("nightly_test_failed",)
-        run.update()
-    else:
-        run.tags += ("nightly_test_passed",)
-        run.update()
+        update_wandb_status(api, run_path, "nightly_test_failed")
+        raise RuntimeError("Nightly metrics are outside their expected ranges")
+    update_wandb_status(api, run_path, "nightly_test_passed")
 
 
 def main():
     original_args = sys.argv[1:]
     config = parse_config(get_annotated_experiment_config)
 
-    # Check if multigpu is requested and we're not already in a torchrun process
+    # Check if multigpu is requested and we're not already in a distributed process
     if config.training.multigpu and "RANK" not in os.environ:
-        # Re-launch with torchrun
+        # The Isaac Sim environment does not install the torchrun console script,
+        # but its bundled PyTorch still provides the equivalent module entry point.
         env = os.environ.copy()
 
         result = subprocess.run(
             [
-                "torchrun",
+                sys.executable,
+                "-m",
+                "torch.distributed.run",
                 f"--nproc_per_node={MULTIGPU_NUM_GPUS}",
                 __file__,
                 *original_args,  # Pass all original arguments

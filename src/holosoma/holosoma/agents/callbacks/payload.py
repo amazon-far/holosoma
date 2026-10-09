@@ -8,14 +8,18 @@ force application via monkey-patching.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import numpy.typing as npt
 from loguru import logger
 
 from holosoma.agents.callbacks.base_callback import RLEvalCallback
 from holosoma.config_types.eval_callback import PayloadConfig
 from holosoma.utils.safe_torch_import import torch
+
+if TYPE_CHECKING:
+    from holosoma.agents.callbacks.recording import EvalRecordingCallback
 
 GRAVITY = 9.81
 
@@ -35,11 +39,11 @@ class EvalPayloadCallback(RLEvalCallback):
         self,
         config: PayloadConfig,
         training_loop: Any = None,
-    ):
+    ) -> None:
         super().__init__(config, training_loop)
         self.env_id = config.env_id
         self.candidate_body_names = [s.strip() for s in config.body_names.split(",")]
-        self._record_buffers: dict[str, list[np.ndarray]] | None = None
+        self._record_buffers: dict[str, list[npt.NDArray[Any]]] | None = None
         self._record_metadata: dict[str, Any] | None = None
 
         # Resolved at on_pre_evaluate_policy
@@ -49,10 +53,10 @@ class EvalPayloadCallback(RLEvalCallback):
         self._original_apply_force: Any = None
         self._step_count: int = 0
 
-    def _get_env(self):
+    def _get_env(self) -> Any:
         return self.training_loop._unwrap_env()
 
-    def _find_recording_callback(self):
+    def _find_recording_callback(self) -> EvalRecordingCallback | None:
         from holosoma.agents.callbacks.recording import EvalRecordingCallback
 
         for cb in self.training_loop.eval_callbacks:
@@ -111,13 +115,13 @@ class EvalPayloadCallback(RLEvalCallback):
         # Monkey-patch substep force application
         self._original_apply_force = env._apply_force_in_physics_step
 
-        def _patched_apply_force():
+        def _patched_apply_force() -> None:
             self._original_apply_force()
             self._apply_payload_forces()
 
         env._apply_force_in_physics_step = _patched_apply_force
 
-    def on_post_eval_env_step(self, actor_state: dict) -> dict:
+    def on_post_eval_env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
         buffers = self._get_buffers()
         if buffers is not None:
             eid = self.env_id
@@ -168,5 +172,5 @@ class EvalPayloadCallback(RLEvalCallback):
                 body_ids=torch.tensor([isaac_body_id], device=device),
             )
 
-    def _get_buffers(self) -> dict[str, list[np.ndarray]] | None:
+    def _get_buffers(self) -> dict[str, list[npt.NDArray[Any]]] | None:
         return self._record_buffers

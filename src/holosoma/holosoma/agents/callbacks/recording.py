@@ -11,10 +11,12 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 from loguru import logger
 
 from holosoma.agents.callbacks.base_callback import RLEvalCallback
 from holosoma.config_types.eval_callback import RecordingConfig
+from holosoma.utils.path import resolve_asset_path
 from holosoma.utils.safe_torch_import import torch
 
 
@@ -25,7 +27,7 @@ class EvalRecordingCallback(RLEvalCallback):
         self,
         config: RecordingConfig,
         training_loop: Any = None,
-    ):
+    ) -> None:
         super().__init__(config, training_loop)
         self.env_id = config.env_id
 
@@ -36,11 +38,11 @@ class EvalRecordingCallback(RLEvalCallback):
             output_path = str(Path(training_loop.log_dir) / output_path)
         self.output_path = output_path
 
-        self._buffers: dict[str, list[np.ndarray]] = {}
+        self._buffers: dict[str, list[npt.NDArray[Any]]] = {}
         self._metadata: dict[str, Any] = {}
         self._step_count = 0
 
-    def _get_env(self):
+    def _get_env(self) -> Any:
         """Get the unwrapped BaseTask environment."""
         return self.training_loop._unwrap_env()
 
@@ -49,7 +51,7 @@ class EvalRecordingCallback(RLEvalCallback):
         if self._step_count == 0:
             return
 
-        arrays: dict[str, np.ndarray] = {}
+        arrays: dict[str, npt.NDArray[Any]] = {}
         for name, values in self._buffers.items():
             if values:
                 arrays[name] = np.stack(values, axis=0)
@@ -87,7 +89,7 @@ class EvalRecordingCallback(RLEvalCallback):
         self._metadata["dof_pos_upper_limits"] = list(robot_cfg.dof_pos_upper_limit_list)
         self._metadata["velocity_limits"] = list(robot_cfg.dof_vel_limit_list)
         asset_cfg = robot_cfg.asset
-        self._metadata["urdf_path"] = str(Path(asset_cfg.asset_root) / asset_cfg.urdf_file)
+        self._metadata["urdf_path"] = resolve_asset_path(asset_cfg.urdf_file, asset_cfg.asset_root)
 
         channel_names = [
             "dof_pos_target",
@@ -111,13 +113,14 @@ class EvalRecordingCallback(RLEvalCallback):
 
         logger.info(f"EvalRecordingCallback: recording env_id={self.env_id}, output={self.output_path}")
 
-    def on_post_eval_env_step(self, actor_state: dict) -> dict:
+    def on_post_eval_env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
         env = self._get_env()
         sim = env.simulator
         eid = self.env_id
 
-        def _to_np(t: torch.Tensor) -> np.ndarray:
-            return t.detach().cpu().numpy().copy()
+        def _to_np(t: torch.Tensor) -> npt.NDArray[Any]:
+            arr: npt.NDArray[Any] = t.detach().cpu().numpy()
+            return arr.copy()
 
         self._buffers["dof_pos"].append(_to_np(sim.dof_pos[eid]))  # post_eval_env_step, so after 4 decimation
         self._buffers["dof_vel"].append(_to_np(sim.dof_vel[eid]))
@@ -132,8 +135,8 @@ class EvalRecordingCallback(RLEvalCallback):
         self._buffers["root_lin_vel"].append(_to_np(root[7:10]))
         self._buffers["root_ang_vel"].append(_to_np(root[10:13]))
 
-        self._buffers["body_pos_w"].append(_to_np(sim._rigid_body_pos[eid]))
-        self._buffers["body_quat_xyzw"].append(_to_np(sim._rigid_body_rot[eid]))
+        self._buffers["body_pos_w"].append(_to_np(sim.rigid_body_pos_w[eid]))
+        self._buffers["body_quat_xyzw"].append(_to_np(sim.rigid_body_quat_w[eid]))
 
         # substep tensors: [decimation, num_dof] — one row per physics sub-step
         torques_substep, dof_pos_substep, dof_vel_substep = self._extract_substep_data(env, eid)

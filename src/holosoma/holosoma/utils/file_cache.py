@@ -7,9 +7,10 @@ import json
 import os
 import tempfile
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import IO, Any, cast
 
 from loguru import logger
 
@@ -19,7 +20,7 @@ from holosoma.utils.wandb import download_wandb_file
 _smart_open = None
 
 
-def _get_smart_open():
+def _get_smart_open() -> Any:
     """Lazy import smart_open."""
     global _smart_open  # noqa: PLW0603
     if _smart_open is None:
@@ -109,7 +110,7 @@ def _load_metadata(cache_path: Path) -> dict[str, Any] | None:
         return None
     try:
         with open(metadata_path) as f:
-            return json.load(f)
+            return cast("dict[str, Any]", json.load(f))
     except Exception as e:
         logger.warning(f"Failed to load metadata from {metadata_path}: {e}")
         return None
@@ -237,12 +238,11 @@ def get_cached_file_path(uri: str, *, use_cache: bool = True) -> str:
     # Check if caching is globally enabled
     cache_enabled = _is_cache_enabled() and use_cache
 
-    # Handle local files - always return as-is
+    # Handle local and package-prefixed files through the shared resolver.
     if not _is_remote_uri(uri):
-        path_obj = Path(uri)
-        if path_obj.is_absolute():
-            return str(path_obj)
-        return str(path_obj.resolve())
+        from holosoma.utils.path import resolve_path
+
+        return resolve_path(uri)
 
     # Handle remote files with caching disabled
     if not cache_enabled:
@@ -281,7 +281,7 @@ def get_cached_file_path(uri: str, *, use_cache: bool = True) -> str:
 
 
 @contextmanager
-def cached_open(uri: str, mode: str = "rb", *, use_cache: bool = True, **kwargs):
+def cached_open(uri: str, mode: str = "rb", *, use_cache: bool = True, **kwargs: Any) -> Iterator[IO[Any]]:
     """Context manager for opening files with caching.
 
     Drop-in replacement for smart_open.open() with caching support.

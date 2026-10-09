@@ -9,14 +9,13 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import os
 import sys
 
 if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config, step, steps_for_seconds
+from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step, steps_for_seconds
 
 SKIP_EXIT_CODE = 77
 
@@ -67,6 +66,7 @@ def main() -> int:
     )
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
+    sim.install_plugins()
 
     names = sim.get_sensor_names()
     if set(names) != {"front_cam", "down_cam"}:
@@ -108,13 +108,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    # IsaacSim teardown deadlocks in carbOnPluginShutdown tearing down the
-    # omni.syntheticdata/OmniGraph render-product graph a TiledCamera creates (native
-    # py-spy stack), so a normal interpreter exit hangs until the parent's subprocess
-    # timeout SIGKILLs it -- turning a PASS (verdict already written to --result-file) into
-    # a spurious timeout failure. Hard-exit past the atexit teardown, mirroring
-    # behavior_assert / scene_spawn_assert. Rendering itself is fine; only exit hangs.
-    _rc = main()
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(_rc)
+    run_and_hard_exit(main)

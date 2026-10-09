@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, Callable
 
 import torch
 import torch.distributed as dist
@@ -22,8 +23,8 @@ class SimpleReplayBuffer(nn.Module):
         n_critic_obs: int,
         n_steps: int = 1,
         gamma: float = 0.99,
-        device=None,
-    ):
+        device: torch.device | str | None = None,
+    ) -> None:
         """
         A simple replay buffer that stores transitions in a circular buffer.
         Supports n-step returns and asymmetric observations.
@@ -55,7 +56,7 @@ class SimpleReplayBuffer(nn.Module):
     def extend(
         self,
         tensor_dict: TensorDict,
-    ):
+    ) -> None:
         observations = tensor_dict["observations"]
         actions = tensor_dict["actions"]
         rewards = tensor_dict["next"]["rewards"]
@@ -78,7 +79,7 @@ class SimpleReplayBuffer(nn.Module):
         self.ptr += 1
 
     @torch.no_grad()
-    def sample(self, batch_size: int):
+    def sample(self, batch_size: int) -> TensorDict:
         # we will sample n_env * batch_size transitions
 
         if self.n_steps == 1:
@@ -238,14 +239,20 @@ class SimpleReplayBuffer(nn.Module):
 
         if self.n_steps > 1 and self.ptr >= self.buffer_size:
             # Roll back the truncation flags introduced for safe sampling
-            self.truncations[:, current_pos - 1] = curr_truncations
+            self.truncations[:, current_pos - 1] = curr_truncations  # type: ignore[possibly-undefined]
         return out
 
 
 class EmpiricalNormalization(nn.Module):
     """Normalize mean and variance of values based on empirical values."""
 
-    def __init__(self, shape, device, eps=1e-2, until=None):
+    def __init__(
+        self,
+        shape: int | tuple[int, ...],
+        device: torch.device | str,
+        eps: float = 1e-2,
+        until: int | None = None,
+    ) -> None:
         """Initialize EmpiricalNormalization module.
 
         Args:
@@ -264,11 +271,11 @@ class EmpiricalNormalization(nn.Module):
         self.register_buffer("count", torch.tensor(0, dtype=torch.long).to(device))
 
     @property
-    def mean(self):
+    def mean(self) -> torch.Tensor:
         return self._mean.squeeze(0).clone()
 
     @property
-    def std(self):
+    def std(self) -> torch.Tensor:
         return self._std.squeeze(0).clone()
 
     @torch.no_grad()
@@ -283,7 +290,7 @@ class EmpiricalNormalization(nn.Module):
         return x / (self._std + self.eps)
 
     @torch.jit.unused
-    def update(self, x):
+    def update(self, x: torch.Tensor) -> None:
         if self.until is not None and self.count >= self.until:
             return
 
@@ -329,11 +336,11 @@ class EmpiricalNormalization(nn.Module):
         self.count.copy_(new_count)
 
     @torch.jit.unused
-    def inverse(self, y):
+    def inverse(self, y: torch.Tensor) -> torch.Tensor:
         return y * (self._std + self.eps) + self._mean
 
 
-def cpu_state(sd):
+def cpu_state(sd: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     # detach & move to host without locking the compute stream
     return {k: v.detach().to("cpu", non_blocking=True) for k, v in sd.items()}
 
@@ -352,10 +359,10 @@ def save_params(
     scaler: GradScaler,
     args: FastSACConfig,
     save_path: str,
-    save_fn=torch.save,
+    save_fn: Callable[..., Any] = torch.save,
     metadata: dict[str, Any] | None = None,
     env_state: dict[str, torch.Tensor | float] | None = None,
-):
+) -> None:
     """Save model parameters and training configuration to disk."""
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     save_dict = {

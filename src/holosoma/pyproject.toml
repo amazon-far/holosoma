@@ -21,6 +21,7 @@ classifiers = [
 ]
 dependencies = [
     "astor",
+    "boto3",
     "easydict",
     "importlib_resources; python_version < '3.9'",
     "ipdb",
@@ -47,7 +48,7 @@ dependencies = [
     "rich",
     "scipy",
     "shapely",
-    "smart_open[s3]",
+    "smart_open",
     "tensorboard",
     "tensordict",
     "termcolor",
@@ -59,10 +60,8 @@ dependencies = [
     "types-tqdm",
     "tyro>=1.0.0",
     "wandb==0.22.0", # pin version until https://github.com/wandb/wandb/issues/10647 is fixed
-    # Floor, not a hard pin: public PyPI only publishes warp-lang up to 1.10.1, so the base holosoma
-    # install (holosoma/isaacgym images, plain pip, no NVIDIA index) resolves 1.10.1. In the mujoco
-    # image, mujoco_warp[cuda] (installed after, from pypi.nvidia.com) upgrades this to >=1.14 for the
-    # 3.10.0 batched camera renderer. A hard ==1.14.0 breaks the non-mujoco images (not on PyPI).
+    # Keep the package floor broad for non-MuJoCo environments. MuJoCo-Warp setup pins 1.15 because
+    # Warp 1.16 cannot compile the MuJoCo-Warp 3.10 sensor kernels.
     "warp-lang>=1.10",
     "yourdfpy>=0.0.58",
     "zmq",
@@ -73,7 +72,7 @@ dependencies = [
 # (`unitree_interface`, `booster_robotics_sdk`) — only the distribution names
 # differ from the historical GitHub-release wheels. Previously computed
 # dynamically in setup.py; now static since the versions are fixed pins.
-unitree = ["far-unitree-sdk==0.1.6"]
+unitree = ["far-unitree-sdk==0.1.8"]
 booster = ["far-booster-sdk==0.1.1"]
 # ROS2 example plugins (clock_publish, gantry_control). rclpy and the ROS message
 # packages ship with a ROS2 distro / RoboStack, not PyPI, so this extra is a
@@ -85,6 +84,18 @@ ros2 = []
 unitree = "holosoma.bridge.unitree.unitree_sdk2py_bridge:UnitreeSdk2Bridge"
 unitree_mp = "holosoma.bridge.unitree.unitree_sdk2py_bridge_mp:UnitreeMpSdk2Bridge"
 booster = "holosoma.bridge.booster.booster_sdk2py_bridge:BoosterSdk2Bridge"
+
+[project.entry-points."holosoma.path_loader"]
+package = "holosoma.utils.core_path_loaders:holosoma_package_path_loader"
+local = "holosoma.utils.core_path_loaders:local_path_loader"
+s3 = "holosoma.utils.s3_path_loaders:s3_path_loader"
+cached-remote = "holosoma.utils.core_path_loaders:cached_remote_path_loader"
+
+[project.entry-points."holosoma.paths_loader"]
+package = "holosoma.utils.core_path_loaders:holosoma_package_paths_loader"
+local = "holosoma.utils.core_path_loaders:local_paths_loader"
+s3 = "holosoma.utils.s3_path_loaders:s3_paths_loader"
+cached-remote = "holosoma.utils.core_path_loaders:cached_remote_paths_loader"
 
 # uv_build packaging. FLAT layout (the holosoma/ module lives at the project
 # root, not under src/), so module-root = "". Only the holosoma module ships —

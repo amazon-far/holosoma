@@ -4,7 +4,7 @@ Builds a sim for a chosen backend + scene preset WITHOUT the infinite run_sim lo
 steps it a few times, and asserts the configured objects spawned and behave correctly
 (free bodies fall under gravity; get_actor_states returns the right shape). Exits 0 on
 success, non-zero with a message on failure — so it works as a live integration test
-under each backend's launcher (MuJoCo venv, isaacgym setup, isaacsim DISPLAY/EULA).
+under each backend's launcher (MuJoCo venv, isaacgym setup, IsaacSim CUDA/EULA).
 
 Usage:
   python scripts/scene_spawn_assert.py --simulator mujoco   --scene g1-largebox
@@ -17,13 +17,14 @@ Asserts, in EVERY env (--num-envs spreads each env to a distinct origin), for th
   - after stepping, every env's free object z decreased (it fell); static objects held
   - configured initial velocity is live in every env and integrates into motion
   - for 1->N scene files, the authored body-to-body offset holds in every env
+  - in IsaacSim render-config probe mode, launcher Carb settings and fallback dome-light properties
 """
 
 from __future__ import annotations
 
 import argparse
 import dataclasses
-import os
+import math
 import sys
 
 # This file lives in tests/simulators/, which contains an ``isaacsim/`` subpackage.
@@ -33,11 +34,25 @@ import sys
 if sys.path and sys.path[0].endswith("tests/simulators"):
     sys.path.pop(0)
 
+from holosoma.config_types.light import (
+    DEFAULT_LIGHT_KEY,
+    DefaultLightConfig,
+    DistantLightConfig,
+    DomeLightConfig,
+    LightConfig,
+    RectLightConfig,
+    SphereLightConfig,
+)
 from holosoma.config_types.run_sim import RunSimConfig
+from holosoma.config_types.simulator import IsaacSimRenderConfig
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.sim_utils import setup_simulation_environment
 from tests.simulators import _scene_presets
-from tests.simulators._sim_harness import build_run_sim_config
+from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit
+
+_KIT_ARG_SETTING = "/holosoma/tests/launcherKitArg"
+_DEFAULT_SUN_INTENSITY = 1000.0
+_DEFAULT_SUN_COLOR = (1.0, 1.0, 1.0)
 
 
 def _build_run_sim_config(simulator: str, scene: str, robot: str, terrain: str, record_dir: str | None) -> RunSimConfig:
@@ -261,6 +276,16 @@ def main() -> int:
     # --headless false opens a real window (needs a display) and drives the headful render;
     # --headless true drives the headless render (viewer is None — must not crash).
     parser.add_argument("--headless", choices=["true", "false"], default="true")
+    # IsaacSim-only configuration probe. It builds the real AppLauncher + simulator, checks
+    # launcher settings in Carb and scene lighting on the composed USD stage, then exits before
+    # the general physics assertions below.
+    parser.add_argument("--probe-isaacsim-render-config", action="store_true")
+    parser.add_argument("--rendering-mode", choices=["performance", "balanced", "quality"])
+    parser.add_argument("--kit-arg-sentinel")
+    parser.add_argument("--scene-lights", choices=["default", "empty"])
+    # IsaacSim-only lighting probe: inject a SceneConfig.lights rig (one of each supported type), launch,
+    # then assert each environment got its own authored UsdLux lights, and exit.
+    parser.add_argument("--probe-lights", action="store_true")
     # Run the object physics-DR terms (mass + friction) after prepare_sim and assert they took
     # effect on the live backend (read mass/friction back per object/env). Works on any
     # DR-supporting backend (IsaacGym / IsaacSim / Warp).
@@ -272,6 +297,45 @@ def main() -> int:
     headless = args.headless == "true"
 
     config = _build_run_sim_config(args.simulator, args.scene, args.robot, args.terrain, args.record)
+    if args.probe_isaacsim_render_config:
+        if args.simulator != "isaacsim":
+            parser.error("--probe-isaacsim-render-config requires --simulator isaacsim")
+        render_config = IsaacSimRenderConfig(
+            rendering_mode=args.rendering_mode,
+            kit_args=(f"--{_KIT_ARG_SETTING}={args.kit_arg_sentinel}" if args.kit_arg_sentinel is not None else ""),
+        )
+        simulator = dataclasses.replace(
+            config.simulator,
+            config=dataclasses.replace(config.simulator.config, isaacsim=render_config),
+        )
+        scene = config.scene
+        if args.scene_lights == "empty":
+            # No rig: no default sun, only the scene's baked lights remain.
+            scene = dataclasses.replace(scene, lights={})
+        elif args.scene_lights == "default":
+            # The default rig: its "default_light" sun makes an unlit scene visible.
+            scene = dataclasses.replace(scene, lights={DEFAULT_LIGHT_KEY: DefaultLightConfig()})
+        config = dataclasses.replace(config, simulator=simulator, scene=scene)
+    if args.probe_lights:
+        if args.simulator != "isaacsim":
+            parser.error("--probe-lights requires --simulator isaacsim")
+        # One light per type, each exercising a distinct field the probe then checks on the authored
+        # prim: distant carries color-temperature + angle, dome an HDRI texture, sphere a radius, rect
+        # an exposure. sun/panel also carry a 90°-about-X orientation and lamp/panel a position, so the
+        # probe verifies the translate/orient ops (not just the prim type + photometrics).
+        _ROT_X_90 = (0.70710678, 0.70710678, 0.0, 0.0)  # rotates the default -Z emission axis to +Y
+        rig: dict[str, LightConfig] = {
+            "sun": DistantLightConfig(intensity=2000.0, angle=1.0, color_temperature_k=6500.0, orientation=_ROT_X_90),
+            "dome": DomeLightConfig(intensity=800.0, texture_file="/tmp/probe_env.exr", orientation=_ROT_X_90),
+            "lamp": SphereLightConfig(radius=0.4, position=(0.0, 0.0, 3.0), intensity=1500.0, color=(0.2, 0.4, 0.6)),
+            "panel": RectLightConfig(
+                width=0.2, height=0.3, position=(1.0, 0.0, 3.0), exposure=2.0, orientation=_ROT_X_90, normalize=False
+            ),
+        }
+        config = dataclasses.replace(
+            config,
+            scene=dataclasses.replace(config.scene, lights=rig),
+        )
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
     # num_envs must be set on the training config too: backends size their per-env state
     # tensors (Warp qpos/qvel, IsaacGym/IsaacSim buffers) from training_config.num_envs at
@@ -285,6 +349,172 @@ def main() -> int:
 
     env, device, _app = setup_simulation_environment(config, device=device)
     sim = env.sim
+    if args.probe_isaacsim_render_config:
+        import carb
+        import omni.usd
+
+        settings = carb.settings.get_settings()
+        if args.rendering_mode is not None:
+            actual_mode = settings.get("/isaaclab/rendering/rendering_mode")
+            if actual_mode != args.rendering_mode:
+                print(f"FAIL: rendering mode {actual_mode!r} != configured {args.rendering_mode!r}")
+                return 1
+        if args.kit_arg_sentinel is not None:
+            actual_sentinel = settings.get(_KIT_ARG_SETTING)
+            if actual_sentinel != args.kit_arg_sentinel:
+                print(f"FAIL: Kit arg setting {actual_sentinel!r} != configured {args.kit_arg_sentinel!r}")
+                return 1
+        from pxr import UsdLux
+
+        stage = omni.usd.get_context().get_stage()
+        sun_path = f"/World/Lights/{DEFAULT_LIGHT_KEY}"
+        sun_prim = stage.GetPrimAtPath(sun_path)
+        has_default_sun = sun_prim.IsValid()
+        # The default rig (a DefaultLightConfig entry) authors a sun; an empty rig authors none.
+        expected_sun = any(isinstance(cfg, DefaultLightConfig) for cfg in config.scene.lights.values())
+        if has_default_sun != expected_sun:
+            print(f"FAIL: {sun_path} existence={has_default_sun} != expected {expected_sun}")
+            return 1
+        if expected_sun:
+            sun_light = UsdLux.DistantLight(sun_prim)
+            if not sun_light:
+                print(f"FAIL: {sun_path} type {sun_prim.GetTypeName()!r} is not DistantLight")
+                return 1
+            intensity = float(sun_light.GetIntensityAttr().Get())
+            if abs(intensity - _DEFAULT_SUN_INTENSITY) > 1e-6:
+                print(f"FAIL: {sun_path} intensity={intensity} != {_DEFAULT_SUN_INTENSITY}")
+                return 1
+            color = tuple(float(channel) for channel in sun_light.GetColorAttr().Get())
+            if any(abs(actual - expected) > 1e-6 for actual, expected in zip(color, _DEFAULT_SUN_COLOR)):
+                print(f"FAIL: {sun_path} color={color} != {_DEFAULT_SUN_COLOR}")
+                return 1
+        print("PASS: IsaacSim launcher settings and scene lighting match configuration")
+        return 0
+
+    if args.probe_lights:
+        import omni.usd
+        from pxr import Gf, UsdGeom, UsdLux
+
+        stage = omni.usd.get_context().get_stage()
+
+        def _local_xf(prim):
+            return UsdGeom.Xformable(prim).GetLocalTransformation()
+
+        def _emit_dir(prim):
+            # The light's local -Z emission axis after its orientation; sign-invariant, so it verifies
+            # the orient op regardless of which quaternion sign the spawner stored.
+            d = _local_xf(prim).TransformDir(Gf.Vec3d(0.0, 0.0, -1.0))
+            return (d[0], d[1], d[2])
+
+        # Global lights (dome, distant) illuminate the whole stage and are authored once at /World.
+        global_expected = {"sun": UsdLux.DistantLight, "dome": UsdLux.DomeLight}
+        # Positioned lights (sphere, rect) are authored per environment by cloning.
+        per_env_expected = {"lamp": UsdLux.SphereLight, "panel": UsdLux.RectLight}
+
+        global_base = "/World/Lights"
+        for name, schema in global_expected.items():
+            path = f"{global_base}/{name}"
+            prim = stage.GetPrimAtPath(path)
+            if not prim.IsValid():
+                print(f"FAIL: {path} missing")
+                return 1
+            if not schema(prim):
+                print(f"FAIL: {path} type {prim.GetTypeName()!r} is not {schema.__name__}")
+                return 1
+            # A global light must NOT be duplicated per environment (that would multiply its intensity).
+            if stage.GetPrimAtPath(f"/World/envs/env_0/Lights/{name}").IsValid():
+                print(f"FAIL: global light {name!r} was also authored per-env")
+                return 1
+
+        # Every environment must have its own copy of each positioned light, with the right UsdLux type.
+        for env in range(args.num_envs):
+            for name, schema in per_env_expected.items():
+                path = f"/World/envs/env_{env}/Lights/{name}"
+                prim = stage.GetPrimAtPath(path)
+                if not prim.IsValid():
+                    print(f"FAIL: {path} missing")
+                    return 1
+                if not schema(prim):
+                    print(f"FAIL: {path} type {prim.GetTypeName()!r} is not {schema.__name__}")
+                    return 1
+
+        # Photometrics + geometry are checked on the single global copy / each positioned light's env_0
+        # copy, so a builder that authored the right prim type but dropped attributes is caught.
+        per_env_base = "/World/envs/env_0/Lights"
+        sun = UsdLux.DistantLight(stage.GetPrimAtPath(f"{global_base}/sun"))
+        if abs(float(sun.GetIntensityAttr().Get()) - 2000.0) > 1e-3:
+            print(f"FAIL: sun intensity={sun.GetIntensityAttr().Get()} != 2000")
+            return 1
+        # angle is configured in radians (1.0) and authored to UsdLux in its native degrees.
+        expected_angle_deg = math.degrees(1.0)
+        if abs(float(sun.GetAngleAttr().Get()) - expected_angle_deg) > 1e-4:
+            print(f"FAIL: sun angle={sun.GetAngleAttr().Get()} != {expected_angle_deg}")
+            return 1
+        if not sun.GetEnableColorTemperatureAttr().Get():
+            print("FAIL: sun color temperature not enabled")
+            return 1
+        if abs(float(sun.GetColorTemperatureAttr().Get()) - 6500.0) > 1e-3:
+            print(f"FAIL: sun colorTemperature={sun.GetColorTemperatureAttr().Get()} != 6500")
+            return 1
+        sun_dir = _emit_dir(sun.GetPrim())
+        if max(abs(a - b) for a, b in zip(sun_dir, (0.0, 1.0, 0.0))) > 1e-6:
+            print(f"FAIL: sun emission dir={sun_dir} != (0, 1, 0)")
+            return 1
+
+        lamp = UsdLux.SphereLight(stage.GetPrimAtPath(f"{per_env_base}/lamp"))
+        if abs(float(lamp.GetRadiusAttr().Get()) - 0.4) > 1e-4:
+            print(f"FAIL: lamp radius={lamp.GetRadiusAttr().Get()} != 0.4")
+            return 1
+        if abs(float(lamp.GetIntensityAttr().Get()) - 1500.0) > 1e-3:
+            print(f"FAIL: lamp intensity={lamp.GetIntensityAttr().Get()} != 1500")
+            return 1
+        lamp_pos = _local_xf(lamp.GetPrim()).ExtractTranslation()
+        if max(abs(a - b) for a, b in zip(lamp_pos, (0.0, 0.0, 3.0))) > 1e-5:
+            print(f"FAIL: lamp position={tuple(lamp_pos)} != (0, 0, 3)")
+            return 1
+        lamp_color = tuple(float(channel) for channel in lamp.GetColorAttr().Get())
+        if max(abs(a - b) for a, b in zip(lamp_color, (0.2, 0.4, 0.6))) > 1e-5:
+            print(f"FAIL: lamp color={lamp_color} != (0.2, 0.4, 0.6)")
+            return 1
+
+        panel = UsdLux.RectLight(stage.GetPrimAtPath(f"{per_env_base}/panel"))
+        if abs(float(panel.GetWidthAttr().Get()) - 0.2) > 1e-6:
+            print(f"FAIL: panel width={panel.GetWidthAttr().Get()} != 0.2")
+            return 1
+        if abs(float(panel.GetHeightAttr().Get()) - 0.3) > 1e-6:
+            print(f"FAIL: panel height={panel.GetHeightAttr().Get()} != 0.3")
+            return 1
+        if abs(float(panel.GetExposureAttr().Get()) - 2.0) > 1e-3:
+            print(f"FAIL: panel exposure={panel.GetExposureAttr().Get()} != 2.0")
+            return 1
+        panel_pos = _local_xf(panel.GetPrim()).ExtractTranslation()
+        if max(abs(a - b) for a, b in zip(panel_pos, (1.0, 0.0, 3.0))) > 1e-5:
+            print(f"FAIL: panel position={tuple(panel_pos)} != (1, 0, 3)")
+            return 1
+        panel_dir = _emit_dir(panel.GetPrim())
+        if max(abs(a - b) for a, b in zip(panel_dir, (0.0, 1.0, 0.0))) > 1e-6:
+            print(f"FAIL: panel emission dir={panel_dir} != (0, 1, 0)")
+            return 1
+        if panel.GetNormalizeAttr().Get():
+            print("FAIL: panel normalize is True, expected False")
+            return 1
+
+        dome = UsdLux.DomeLight(stage.GetPrimAtPath(f"{global_base}/dome"))
+        dome_tex = dome.GetTextureFileAttr().Get()
+        if dome_tex is None or dome_tex.path != "/tmp/probe_env.exr":
+            print(f"FAIL: dome texture={dome_tex!r} != /tmp/probe_env.exr")
+            return 1
+        dome_dir = _emit_dir(dome.GetPrim())
+        if max(abs(a - b) for a, b in zip(dome_dir, (0.0, 1.0, 0.0))) > 1e-6:
+            print(f"FAIL: dome emission dir={dome_dir} != (0, 1, 0)")
+            return 1
+
+        if stage.GetPrimAtPath(f"{global_base}/{DEFAULT_LIGHT_KEY}").IsValid():
+            print(f"FAIL: default '{DEFAULT_LIGHT_KEY}' sun present despite a configured lights rig")
+            return 1
+        print(f"PASS: SceneConfig.lights authored the expected UsdLux prims in each of {args.num_envs} envs")
+        return 0
+
     sim.set_headless(headless)
     sim.setup()
     sim.setup_terrain()
@@ -314,12 +544,16 @@ def main() -> int:
     _ROBOT_PARK_Y = -20.0
     base_init[1] = _ROBOT_PARK_Y
     sim.create_envs(n, env_origins, base_init)
+    # IsaacSim owns its environment grid and exposes those authoritative origins through
+    # sim.env_origins; MuJoCo and IsaacGym expose the origins requested above.
+    actual_env_origins = sim.env_origins
     sim.prepare_sim()
 
     # Mirror DirectSimulation: open the interactive viewer only when headful. When headless
     # this is skipped, so render() below must tolerate a None viewer.
     if not headless:
         sim.setup_viewer()
+    sim.install_plugins()
 
     # Start recording if --record was given. Each backend captures a frame inside its own
     # simulate_at_each_physics_step (gated on is_recording), so the existing step loop fills the
@@ -358,19 +592,26 @@ def main() -> int:
     # fall check. At num_envs=1 origins are zero and this reduces to the original placement.
     free_cfg = {name: o for name, o in config.scene.rigid_objects.items() if not o.fixed}
     if n > 1:
+        unique_origins = torch.unique(actual_env_origins, dim=0)
+        if unique_origins.shape[0] != n:
+            print(f"FAIL: only {unique_origins.shape[0]} distinct environment origins for {n} environments")
+            return 1
         for nm in free_names:
             obj = free_cfg.get(nm)
             if obj is None:  # scene-file body (no standalone RigidObjectConfig) — skip here
                 continue
             pos = sim.get_actor_states([nm], env_ids)[:, :3]
             for axis in (0, 1):
-                expected = env_origins[:, axis] + obj.position[axis]
+                expected = actual_env_origins[:, axis] + obj.position[axis]
                 ok_axis = torch.allclose(pos[:, axis], expected, atol=1e-2)
                 spread = [round(float(v), 3) for v in pos[:, axis].tolist()]
-                exp_round = [round(float(v), 3) for v in expected.tolist()]
+                # ``expected`` is a torch.Tensor at runtime; mypy loses that in per-file checking (it
+                # sees ``sim.env_origins`` as Any and collapses the sum to a dict), so ignore the bogus
+                # attr-defined here.
+                exp_round = [round(float(v), 3) for v in expected.tolist()]  # type: ignore[attr-defined]
                 print(f"  origin {nm}: axis{axis} {spread} (expected {exp_round})  ok={ok_axis}")
                 if not ok_axis:
-                    print(f"FAIL: {nm} not placed at per-env origin on axis{axis}: {spread} != {expected.tolist()}")
+                    print(f"FAIL: {nm} at wrong per-env origin axis{axis}: {spread} != {expected.tolist()}")  # type: ignore[attr-defined]
                     return 1
 
     # Configured initial velocities (world frame) per standalone free object. The preset
@@ -549,21 +790,8 @@ def main() -> int:
         sim.video_recorder.on_episode_end(env_id=sim.video_recorder.config.record_env_id)
         print(f"VIDEO saved under {args.record}")
 
-    # MuJoCo headful teardown race: the passive viewer runs a GLFW window on a background
-    # thread, and at normal interpreter exit the main thread's glfw.terminate() atexit handler
-    # races that still-live thread, segfaulting (exit 139) AFTER a correct PASS — masking the
-    # real result. We have everything we need by now (result printed, code computed), so for
-    # the MuJoCo backends with a viewer open, flush and hard-exit via os._exit to bypass the
-    # GLFW atexit teardown. Other backends (and all headless runs) fall through to a normal
-    # return so graceful shutdown (e.g. IsaacSim SimulationApp.close()) still happens.
-    viewer = getattr(sim, "viewer", None)
-    if viewer is not None and args.simulator in ("mujoco", "mjwarp"):
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os._exit(code)
-
     return code
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    run_and_hard_exit(main)

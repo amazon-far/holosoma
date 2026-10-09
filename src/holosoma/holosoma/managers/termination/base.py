@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 class TerminationTermBase(ABC):
     """Base class for stateful termination terms."""
 
-    def __init__(self, cfg: TerminationTermCfg, env: Any):
+    def __init__(self, cfg: TerminationTermCfg, env: Any) -> None:
         self.cfg = cfg
         self.env = env
 
@@ -23,5 +23,5 @@ class TerminationTermBase(ABC):
         """Reset internal state for specified environments."""
 
     @abstractmethod
-    def __call__(self, env: Any, **kwargs) -> torch.Tensor:
+    def __call__(self, env: Any, **kwargs: Any) -> torch.Tensor:
         """Evaluate termination condition."""

@@ -11,6 +11,13 @@ repos:
   - id: mypy
     pass_filenames: true
     additional_dependencies: [pydantic]
+    # This hook runs mypy in an isolated env WITHOUT numpy/torch/warp/mujoco/etc. Those imports
+    # then can't be resolved (import-not-found), and where they degrade to Any they make
+    # load-bearing `# type: ignore`s look unused and typed returns look like Any. Scope these
+    # relaxations to the HOOK only; the authoritative `mypy .` in CI (run in the deps-complete
+    # container) resolves every import and keeps warn_unused_ignores/warn_return_any fully active,
+    # so no real coverage is lost.
+    args: [--ignore-missing-imports, --disable-error-code=unused-ignore, --disable-error-code=no-any-return]
     exclude: ^(src/holosoma_inference/|src/.*/setup\.py$)
 - repo: https://github.com/pre-commit/mirrors-clang-format
   rev: v20.1.3

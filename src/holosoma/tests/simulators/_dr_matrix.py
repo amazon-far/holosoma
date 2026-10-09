@@ -95,8 +95,9 @@ def build_full_env(simulator_cfg, *, num_envs: int, device: str, scene_cfg=None,
             base.training, num_envs=num_envs, headless=True, seed=seed, torch_deterministic=False
         ),
     )
-    with training_context(cfg):
-        env = get_class(cfg.env_class)(get_tyro_env_config(cfg), device=device)
+    with training_context(cfg) as context, context.simulation_session(
+        get_class(cfg.env_class)(get_tyro_env_config(cfg), device=device)
+    ) as env:
         yield env
 
 

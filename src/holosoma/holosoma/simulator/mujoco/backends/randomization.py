@@ -29,11 +29,11 @@ def repeat_array_kernel(
     src: wp.array(dtype=Any),  # type: ignore[valid-type]
     nelems_per_world: int,
     dst: wp.array(dtype=Any),  # type: ignore[valid-type]
-):
+) -> None:
     """Warp kernel to repeat array elements across worlds."""
     tid = wp.tid()
     src_idx = tid % nelems_per_world
-    dst[tid] = src[src_idx]  # type: ignore[index]
+    dst[tid] = src[src_idx]
 
 
 def expand_model_fields(
@@ -61,15 +61,15 @@ def expand_model_fields(
 
     # Initialize registry to track which fields have been expanded
     if not hasattr(model, "_expanded_fields"):
-        model._expanded_fields = set()  # type: ignore[attr-defined]
+        model._expanded_fields = set()
 
-    def tile(x: wp.array) -> wp.array:
+    def tile(x: wp.array[Any]) -> wp.array[Any]:
         """Tile a Warp array across environments."""
         # Create new array with same shape but first dim multiplied by nworld.
         new_shape = list(x.shape)
         new_shape[0] = nworld
         wp_array = cast(
-            "Callable[..., Any]", {1: wp.array, 2: wp.array2d, 3: wp.array3d, 4: wp.array4d}[len(new_shape)]
+            "Callable[..., wp.array[Any]]", {1: wp.array, 2: wp.array2d, 3: wp.array3d, 4: wp.array4d}[len(new_shape)]
         )
         dst = wp_array(shape=new_shape, dtype=x.dtype, device=x.device)
 
@@ -92,11 +92,11 @@ def expand_model_fields(
         # would invalidate a captured CUDA step-graph that still points at the old array. Making
         # this idempotent lets the runtime static-move path call it safely (it's a no-op once the
         # field was expanded at setup); only the first expansion per field allocates.
-        if field in fields_to_expand and field not in model._expanded_fields:  # type: ignore[attr-defined]
+        if field in fields_to_expand and field not in model._expanded_fields:
             array = getattr(model, field)
             setattr(model, field, tile(array))
             # Register this field as expanded for validation
-            model._expanded_fields.add(field)  # type: ignore[attr-defined]
+            model._expanded_fields.add(field)
 
 
 def resolve_entity_ids(mj_model: mujoco.MjModel, names: list[str], entity_type: str) -> list[int]:

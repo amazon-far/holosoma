@@ -1,0 +1,180 @@
+name: Promote Docker Images
+
+on:
+  workflow_call:
+    inputs:
+      commit_sha:
+        description: Full Holosoma commit SHA whose images should become latest
+        required: true
+        type: string
+      source_tag:
+        description: Existing candidate or tested image tag to promote
+        required: false
+        type: string
+        default: ''
+      expected_source_tree:
+        description: Required source tree label for an already-tested image set
+        required: false
+        type: string
+        default: ''
+      tests_already_passed:
+        description: Promote a source-tree-validated tested-sha tag without rerunning tests
+        required: false
+        type: boolean
+        default: false
+permissions:
+  contents: read
+
+env:
+  ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
+  HOLOSOMA_COMMIT: ${{ inputs.commit_sha }}
+  SOURCE_TAG: ${{ inputs.source_tag || format('sha-{0}', inputs.commit_sha) }}
+
+jobs:
+  verify-images:
+    name: Verify Candidate Images
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
+    outputs:
+      holosoma_digest: ${{ steps.verify.outputs.holosoma_digest }}
+      holosoma_inference_digest: ${{ steps.verify.outputs.holosoma_inference_digest }}
+      holosoma_retargeting_digest: ${{ steps.verify.outputs.holosoma_retargeting_digest }}
+      holosoma_isaacgym_digest: ${{ steps.verify.outputs.holosoma_isaacgym_digest }}
+      holosoma_isaacsim_digest: ${{ steps.verify.outputs.holosoma_isaacsim_digest }}
+      holosoma_mujoco_digest: ${{ steps.verify.outputs.holosoma_mujoco_digest }}
+      holosoma_thor_inference_digest: ${{ steps.verify.outputs.holosoma_thor_inference_digest }}
+      holosoma_thor_inference_ros_digest: ${{ steps.verify.outputs.holosoma_thor_inference_ros_digest }}
+    steps:
+      - name: Check commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$HOLOSOMA_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "commit_sha must be a full 40-character lowercase Git SHA" >&2
+            exit 1
+          }
+          if [[ ! "$SOURCE_TAG" =~ ^(sha|tested-sha)-[0-9a-f]{40}$ ]] &&
+             [[ ! "$SOURCE_TAG" =~ ^candidate-${HOLOSOMA_COMMIT}-[0-9]+$ ]]; then
+            echo "source_tag must be a SHA tag or a run-unique candidate tag" >&2
+            exit 1
+          fi
+          if [[ "${{ inputs.tests_already_passed }}" == "true" ]]; then
+            [[ "$SOURCE_TAG" == "tested-sha-${HOLOSOMA_COMMIT}" ]] || {
+              echo "Already-tested promotion requires tested-sha-${HOLOSOMA_COMMIT}" >&2
+              exit 1
+            }
+            [[ "${{ inputs.expected_source_tree }}" =~ ^[0-9a-f]{40}$ ]] || {
+              echo "Already-tested promotion requires a full expected source tree" >&2
+              exit 1
+            }
+          fi
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Verify image labels
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          images=(
+            holosoma
+            holosoma-inference
+            holosoma-retargeting
+            holosoma-isaacgym
+            holosoma-isaacsim
+            holosoma-mujoco
+            holosoma-thor-inference
+            holosoma-thor-inference-ros
+          )
+
+          echo "## Candidate image verification" >> "$GITHUB_STEP_SUMMARY"
+          for image in "${images[@]}"; do
+            candidate="${ECR_REGISTRY}/${image}:${SOURCE_TAG}"
+            digest=$(docker buildx imagetools inspect \
+              --format '{{.Manifest.Digest}}' "$candidate")
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+              echo "Could not resolve ${candidate} to an image digest" >&2
+              exit 1
+            }
+            ref="${ECR_REGISTRY}/${image}@${digest}"
+            commit=$(docker buildx imagetools inspect \
+              --format '{{ index .Image.Config.Labels "org.holosoma.commit" }}' \
+              "$ref")
+            if [[ "$commit" != "$HOLOSOMA_COMMIT" ]]; then
+              echo "${ref} has org.holosoma.commit=${commit:-<missing>}" >&2
+              exit 1
+            fi
+            if [[ -n "${{ inputs.expected_source_tree }}" ]]; then
+              source_tree=$(docker buildx imagetools inspect \
+                --format '{{ index .Image.Config.Labels "org.holosoma.source-tree" }}' \
+                "$ref")
+              if [[ "$source_tree" != "${{ inputs.expected_source_tree }}" ]]; then
+                echo "${ref} has org.holosoma.source-tree=${source_tree:-<missing>}" >&2
+                exit 1
+              fi
+            fi
+            output_name=${image//-/_}
+            echo "${output_name}_digest=${digest}" >> "$GITHUB_OUTPUT"
+            echo "- \`${image}@${digest}\` from \`${SOURCE_TAG}\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+  test-images:
+    name: Test Candidate Images
+    needs: verify-images
+    if: ${{ !inputs.tests_already_passed }}
+    uses: ./.github/workflows/test-images.yaml
+    with:
+      combined_image: ${{ vars.ECR_REGISTRY }}/holosoma@${{ needs.verify-images.outputs.holosoma_digest }}
+      isaacgym_image: ${{ vars.ECR_REGISTRY }}/holosoma-isaacgym@${{ needs.verify-images.outputs.holosoma_isaacgym_digest }}
+      isaacsim_image: ${{ vars.ECR_REGISTRY }}/holosoma-isaacsim@${{ needs.verify-images.outputs.holosoma_isaacsim_digest }}
+      mujoco_image: ${{ vars.ECR_REGISTRY }}/holosoma-mujoco@${{ needs.verify-images.outputs.holosoma_mujoco_digest }}
+      run_mypy: true
+    secrets: inherit
+
+  promote-latest:
+    name: Promote Verified Images
+    needs:
+      - verify-images
+      - test-images
+    if: >-
+      !cancelled() &&
+      needs.verify-images.result == 'success' &&
+      (inputs.tests_already_passed || needs.test-images.result == 'success')
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Tag as latest
+        shell: bash
+        run: |
+          set -euo pipefail
+          images=(
+            holosoma
+            holosoma-inference
+            holosoma-retargeting
+            holosoma-isaacgym
+            holosoma-isaacsim
+            holosoma-mujoco
+            holosoma-thor-inference
+            holosoma-thor-inference-ros
+          )
+          digests=(
+            "${{ needs.verify-images.outputs.holosoma_digest }}"
+            "${{ needs.verify-images.outputs.holosoma_inference_digest }}"
+            "${{ needs.verify-images.outputs.holosoma_retargeting_digest }}"
+            "${{ needs.verify-images.outputs.holosoma_isaacgym_digest }}"
+            "${{ needs.verify-images.outputs.holosoma_isaacsim_digest }}"
+            "${{ needs.verify-images.outputs.holosoma_mujoco_digest }}"
+            "${{ needs.verify-images.outputs.holosoma_thor_inference_digest }}"
+            "${{ needs.verify-images.outputs.holosoma_thor_inference_ros_digest }}"
+          )
+          for index in "${!images[@]}"; do
+            image=${images[$index]}
+            digest=${digests[$index]}
+            src="${ECR_REGISTRY}/${image}@${digest}"
+            sha_dst="${ECR_REGISTRY}/${image}:sha-${HOLOSOMA_COMMIT}"
+            latest_dst="${ECR_REGISTRY}/${image}:latest"
+            docker buildx imagetools create \
+              --tag "$sha_dst" \
+              --tag "$latest_dst" \
+              "$src"
+          done
+          echo "Promoted the verified \`${SOURCE_TAG}\` digests to the SHA and latest image sets." >> "$GITHUB_STEP_SUMMARY"

@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from dataclasses import field
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic.dataclasses import dataclass
 
-from holosoma.config_types.frequency import DecimationLike, resolve_decimation
+from holosoma.config_types.frequency import DecimationLike, resolve_decimation, validate_decimation_like
 from holosoma.config_types.viewer import ViewerConfig
 
 
@@ -113,6 +113,27 @@ class MujocoXMLFilterCfg:
 
 
 @dataclass(frozen=True)
+class IsaacSimRenderConfig:
+    """Isaac Sim / Kit AppLauncher options applied at app startup."""
+
+    rendering_mode: Literal["performance", "balanced", "quality"] | None = None
+    """AppLauncher rendering-mode preset (e.g. ``quality`` or ``performance``)."""
+
+    kit_args: str = ""
+    """Space-separated Kit/carb settings forwarded to AppLauncher — the way to set RTX/render options,
+    e.g. ``--/rtx/rendermode=PathTracing --/rtx/pathtracing/spp=32``."""
+
+    def app_launcher_args(self) -> dict[str, Any]:
+        """The audited subset of settings accepted by Isaac Lab's AppLauncher."""
+        launcher_args: dict[str, Any] = {}
+        if self.rendering_mode is not None:
+            launcher_args["rendering_mode"] = self.rendering_mode
+        if self.kit_args:
+            launcher_args["kit_args"] = self.kit_args
+        return launcher_args
+
+
+@dataclass(frozen=True)
 class SimEngineConfig:
     """Top-level simulation engine settings."""
 
@@ -148,6 +169,13 @@ class SimEngineConfig:
 
     max_episode_length_s: float = 20.0
     """Maximum episode length in seconds."""
+
+    kinematic_playback: bool = False
+    """Disable physics: each step propagates externally written state through forward
+    kinematics instead of integrating. No gravity, contacts, or actuation, for the WHOLE sim.
+    For rendering-only replay of recorded trajectories. Mixing (kinematic robot, simulated
+    objects) is not supported; that would be a per-actor flag (e.g. IsaacLab's per-prim
+    ``kinematic_enabled``), not this global one."""
 
     @model_validator(mode="after")
     def _validate_rates(self) -> SimEngineConfig:
@@ -234,20 +262,41 @@ class BridgeConfig:
     interface: str | None = None
     """Network interface for robot communication. Auto-detected if None."""
 
-    # Rate limiting
-    rate_limit_dt: float | None = None
-    """Rate limiting timestep. If None, uses simulation timestep."""
+    transport_decimation: DecimationLike = 1
+    """SDK transport cadence. ``1`` exchanges data every physics step; an integer exchanges it every
+    Nth step. Frequency strings such as ``"50Hz"`` are resolved against the physics rate. This
+    setting does not change the torque-control cadence."""
 
     # ROS settings
     use_ros: bool = False
     """Whether to use ROS for communication."""
 
-    publish_odom: bool = False
-    """Publish base odometry over the SDK (SportModeState on rt/odommodestate) each step.
+    publish_odom: bool = True
+    """Publish base odometry over the SDK (SportModeState on rt/odommodestate) each transport update.
 
-    Off by default. Turn on when the sim should feed base odometry through the Unitree SDK bridge
+    On by default so the sim feeds base odometry through the Unitree SDK bridge
     (so a downstream telemetry read_odom_state -> /telemetry/odom is identical to hardware). Only
     SDKs with a base-state channel act on it; others (booster) treat publish_odom as a no-op."""
+
+    dds_config: str | None = None
+    """Complete inline CycloneDDS XML for unitree_mp on SDK domain 0 only.
+
+    Requires DDS_CONFIG_API_VERSION=1, available in far-unitree-sdk 0.1.8. XML overrides the interface;
+    detailed XML validation belongs to the native SDK. None preserves NIC-only initialization.
+    """
+
+    @field_validator("dds_config")
+    @classmethod
+    def validate_dds_config(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("dds_config must be a non-empty inline XML string or None")
+        return value
+
+    @model_validator(mode="after")
+    def validate_bridge(self) -> BridgeConfig:
+        """Validate transport cadence form; the hook registry resolves it against the physics rate."""
+        validate_decimation_like(self.transport_decimation, field="BridgeConfig.transport_decimation")
+        return self
 
 
 @dataclass(frozen=True)
@@ -290,6 +339,9 @@ class SimulatorInitConfig:
 
     robot_mjcf_filter: MujocoXMLFilterCfg = field(default_factory=MujocoXMLFilterCfg)
     """MuJoCo-specific XML filtering configuration for robot MJCF files."""
+
+    isaacsim: IsaacSimRenderConfig = field(default_factory=IsaacSimRenderConfig)
+    """Isaac Sim AppLauncher options (rendering mode + Kit/carb args)."""
 
     mujoco_backend: MujocoBackend = MujocoBackend.CLASSIC
     """MuJoCo physics backend selection.

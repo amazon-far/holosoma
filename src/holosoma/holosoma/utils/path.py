@@ -1,82 +1,203 @@
-"""Path resolution utilities for package data files."""
+"""Extensible conversion from path specifications to local machine paths."""
 
 from __future__ import annotations
 
-import sys
+import os
+import re
+from collections.abc import Iterator
+from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
+from typing import TYPE_CHECKING, Generic, Iterable, Protocol, TypeVar, Union
 
-if sys.version_info >= (3, 9):
-    from importlib.resources import files
+from loguru import logger
+
+from holosoma.utils.pycompat import entry_points
+
+PATH_LOADER_ENTRYPOINT_GROUP = "holosoma.path_loader"
+PATHS_LOADER_ENTRYPOINT_GROUP = "holosoma.paths_loader"
+
+if TYPE_CHECKING:
+    LocalPath = Union[str, os.PathLike[str]]
 else:
-    from importlib_resources import files  # type: ignore[import-not-found]
+    LocalPath = Union[str, os.PathLike]
+
+
+class PathLoader(Protocol):
+    """A generic one-to-one path loader."""
+
+    def matches(self, path: str) -> bool:
+        """Return whether this loader handles ``path`` without doing I/O."""
+        ...
+
+    def load(self, path: str) -> LocalPath:
+        """Resolve a matched string to one local machine path."""
+        ...
+
+
+class PathsLoader(Protocol):
+    """A generic one-to-many path loader."""
+
+    def matches(self, path: str) -> bool:
+        """Return whether this loader handles ``path`` without doing I/O."""
+        ...
+
+    def load(self, path: str) -> Iterable[LocalPath]:
+        """Resolve a matched string to zero or more local machine paths."""
+        ...
+
+
+LoaderT = TypeVar("LoaderT", PathLoader, PathsLoader)
+
+
+@dataclass(frozen=True)
+class _RegisteredLoader(Generic[LoaderT]):
+    loader: LoaderT
+    source: str
+
+
+_URI_PREFIX = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+
+
+def _resolve_local_path(path: str) -> str:
+    """Expand a plain local path to an absolute path."""
+    path_obj = Path(path).expanduser()
+    if path_obj.is_absolute():
+        return str(path_obj)
+    return str(path_obj.resolve())
+
+
+def _validate_loader(loader: object, *, kind: str) -> None:
+    """Validate the common matcher/loader object contract."""
+    if not callable(getattr(loader, "matches", None)):
+        raise TypeError(f"{kind} loader must define callable matches(path).")
+    if not callable(getattr(loader, "load", None)):
+        raise TypeError(f"{kind} loader must define callable load(path).")
+
+
+def _load_entrypoint_group(
+    group: str,
+    loaders: list[_RegisteredLoader[LoaderT]],
+    *,
+    kind: str,
+) -> None:
+    """Load one generic loader entry-point group with per-extension isolation."""
+    for ep in entry_points(group=group):
+        try:
+            loader = ep.load()
+            _validate_loader(loader, kind=kind)
+            loaders.append(_RegisteredLoader(loader, ep.value))
+        except Exception as exc:  # noqa: PERF203 - each entry point must fail independently
+            logger.warning(f"Skipping path loader from {ep.value!r}: {exc}")
+
+
+@lru_cache(maxsize=1)
+def _entrypoint_loaders() -> tuple[
+    tuple[_RegisteredLoader[PathLoader], ...],
+    tuple[_RegisteredLoader[PathsLoader], ...],
+]:
+    """Load and cache generic path loaders from package entry points."""
+    path_loaders: list[_RegisteredLoader[PathLoader]] = []
+    paths_loaders: list[_RegisteredLoader[PathsLoader]] = []
+    _load_entrypoint_group(PATH_LOADER_ENTRYPOINT_GROUP, path_loaders, kind="Path")
+    _load_entrypoint_group(PATHS_LOADER_ENTRYPOINT_GROUP, paths_loaders, kind="Paths")
+    return tuple(path_loaders), tuple(paths_loaders)
+
+
+def _select_loader(
+    path: str,
+    loaders: Iterable[_RegisteredLoader[LoaderT]],
+    *,
+    kind: str,
+) -> _RegisteredLoader[LoaderT] | None:
+    """Select the sole matching loader, rejecting ambiguous claims."""
+    matching = []
+    for registered in loaders:
+        try:
+            result = registered.loader.matches(path)
+        except Exception as exc:
+            raise RuntimeError(f"{kind} loader {registered.source!r} failed while matching {path!r}.") from exc
+        if not isinstance(result, bool):
+            raise TypeError(
+                f"{kind} loader {registered.source!r} returned {type(result).__name__} from matches(); expected bool."
+            )
+        if result:
+            matching.append(registered)
+    if len(matching) > 1:
+        sources = ", ".join(repr(registered.source) for registered in matching)
+        raise ValueError(f"Multiple {kind.lower()} loaders matched {path!r}: {sources}.")
+    return matching[0] if matching else None
+
+
+def _as_local_path(path: LocalPath, *, loader: str) -> str:
+    """Validate and normalize a loader result to an absolute local path string."""
+    try:
+        raw_path = os.fspath(path)
+    except TypeError as exc:
+        raise TypeError(f"Path loader {loader!r} did not return a local path.") from exc
+    if not isinstance(raw_path, str):
+        raise TypeError(f"Path loader {loader!r} returned bytes; expected a local string path.")
+    if raw_path.startswith("@") or _URI_PREFIX.match(raw_path) is not None:
+        raise ValueError(f"Path loader {loader!r} returned non-local path {raw_path!r}.")
+    return _resolve_local_path(raw_path)
+
+
+def _select_path_loader(path: str) -> _RegisteredLoader[PathLoader]:
+    path_loaders, _ = _entrypoint_loaders()
+    registered = _select_loader(path, path_loaders, kind="Path")
+    if registered is None:
+        raise ValueError(f"No path loader could resolve {path!r} to a local path.")
+    return registered
+
+
+def _load_path(path: str, registered: _RegisteredLoader[PathLoader]) -> str:
+    return _as_local_path(registered.loader.load(path), loader=registered.source)
+
+
+def resolve_path(path: str) -> str:
+    """Resolve one string to one local machine path."""
+    return _load_path(path, _select_path_loader(path))
+
+
+def _iter_local_paths(loaded: Iterable[LocalPath], *, source: str) -> Iterator[str]:
+    """Normalize a loader iterable one item at a time."""
+    if isinstance(loaded, (str, bytes, os.PathLike)):
+        raise TypeError(f"Paths loader {source!r} returned one path instead of an iterable.")
+    try:
+        iterator = iter(loaded)
+    except TypeError as exc:
+        raise TypeError(f"Paths loader {source!r} did not return an iterable.") from exc
+    return (_as_local_path(item, loader=source) for item in iterator)
+
+
+def resolve_paths(path: str) -> Iterator[str]:
+    """Resolve one string to an iterator of local machine paths.
+
+    Loader selection and ``load()`` happen immediately. The returned iterable is
+    consumed and each result is normalized only when the iterator advances. Plural
+    loaders are independent: this function never invokes a singular loader.
+    """
+    _, paths_loaders = _entrypoint_loaders()
+    registered = _select_loader(path, paths_loaders, kind="Paths")
+    if registered is None:
+        raise ValueError(f"No paths loader could resolve {path!r} to local paths.")
+    return _iter_local_paths(registered.loader.load(path), source=registered.source)
 
 
 def resolve_data_file_path(file_path: str) -> str:
-    """
-    Resolve a data file path.
-
-    Handles multiple path formats:
-    1. S3 paths: "s3://bucket/path/to/file.npz" -> returned as-is
-    2. Package paths: "holosoma/..." (or the "@holosoma/..." alias) -> resolved
-       relative to the installed holosoma package via importlib.resources
-    3. Absolute paths: "/path/to/file.npz" -> returned as-is
-    4. Relative paths: "./data/file.npz" or "../data/file.npz" -> resolved relative to CWD
-
-    Args:
-        file_path: The path to resolve
-
-    Returns:
-        The resolved absolute path as a string
-
-    Examples:
-        >>> # Package data (both forms resolve to the same location)
-        >>> resolve_data_file_path("holosoma/data/robots/g1/g1_29dof.xml")
-        '/path/to/installed/holosoma/data/robots/g1/g1_29dof.xml'
-        >>> resolve_data_file_path("@holosoma/data/robots/g1/g1_29dof.xml")
-        '/path/to/installed/holosoma/data/robots/g1/g1_29dof.xml'
-
-        >>> # User's custom file (absolute)
-        >>> resolve_data_file_path("/home/user/my_motions/custom.npz")
-        '/home/user/my_motions/custom.npz'
-
-        >>> # User's custom file (relative to CWD)
-        >>> resolve_data_file_path("./my_data/custom.npz")
-        '/current/working/dir/my_data/custom.npz'
-    """
-    # 1. If it's an S3 path, return as-is
-    if file_path.startswith("s3://"):
-        return file_path
-
-    # 2. Package path. "@holosoma/..." is a spelling alias for "holosoma/...";
-    #    normalize it so both forms resolve via the same importlib.resources path
-    #    (robust for namespace/zipped packages, unlike __file__ arithmetic).
-    if file_path.startswith("@holosoma/"):
-        file_path = file_path[len("@") :]  # "@holosoma/..." -> "holosoma/..."
-    if file_path.startswith("holosoma/"):
-        suffix = file_path[len("holosoma") :].lstrip("/")  # path within the holosoma package
-        base = files("holosoma")
-        return str(base / suffix) if suffix else str(base)
-
-    # 3. If it's an absolute path, return as-is
-    path_obj = Path(file_path)
-    if path_obj.is_absolute():
-        return file_path
-
-    # 4. Otherwise, resolve relative path to absolute (relative to CWD)
-    resolved = path_obj.resolve()
-    return str(resolved)
+    """Compatibility wrapper for callers that resolve one data file."""
+    return resolve_path(file_path)
 
 
 def resolve_asset_path(asset_file: str, asset_root: str | None) -> str:
     """Resolve an asset path, optionally rooted under ``asset_root``.
 
-    A package path ("holosoma/..." or "@holosoma/...") or an absolute/S3 path is
-    self-locating and resolved directly, ignoring ``asset_root`` — joining a root
-    onto it would turn it into a bogus filesystem path. Only a plain relative path is
-    joined onto ``asset_root`` (when one is given) before resolution. The self-locating
-    cases are exactly the non-CWD-relative branches of :func:`resolve_data_file_path`.
+    The selected loader may opt into asset-root joining by defining
+    ``accepts_asset_root(path)``. Holosoma's local loader opts in for relative
+    filesystem paths; package, remote, and extension paths remain self-locating.
     """
-    is_self_locating = asset_file.startswith(("holosoma/", "@holosoma/", "s3://")) or Path(asset_file).is_absolute()
-    if asset_root and not is_self_locating:
-        asset_file = f"{asset_root.rstrip('/')}/{asset_file}"
-    return resolve_data_file_path(asset_file)
+    registered = _select_path_loader(asset_file)
+    accepts_asset_root = getattr(registered.loader, "accepts_asset_root", None)
+    if asset_root and callable(accepts_asset_root) and accepts_asset_root(asset_file):
+        return resolve_path(f"{asset_root.rstrip('/')}/{asset_file}")
+    return _load_path(asset_file, registered)

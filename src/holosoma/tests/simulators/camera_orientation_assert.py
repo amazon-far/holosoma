@@ -15,14 +15,17 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import os
 import sys
+from typing import TYPE_CHECKING, cast
 
 if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config, step, steps_for_seconds
+from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step, steps_for_seconds
+
+if TYPE_CHECKING:
+    from holosoma.config_types.sensor import CameraSensorConfig
 
 SKIP_EXIT_CODE = 77
 
@@ -81,6 +84,7 @@ def main() -> int:
     )
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
+    sim.install_plugins()
 
     # Pin the robot upright at each origin so the camera aligns with the off-axis panel ahead.
     robot_states = sim.get_actor_states(["robot"], torch.arange(n, device=device)).clone()
@@ -91,7 +95,8 @@ def main() -> int:
     step(sim, max(2, steps_for_seconds(sim, 0.05)))
     sim.render_sensors()
 
-    cam_name, cam = next(iter(config.sensor.items()))
+    cam_name, sensor = next(iter(config.sensor.items()))
+    cam = cast("CameraSensorConfig", sensor)
     fails: list[str] = []
     img_all = sim.get_camera_data(cam_name, "rgb")  # [N,H,W,3]
     # Shape (N, height, width, 3) with height != width; catches a W/H transpose.
@@ -138,13 +143,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    # IsaacSim teardown deadlocks in carbOnPluginShutdown tearing down the
-    # omni.syntheticdata/OmniGraph render-product graph a TiledCamera creates (native
-    # py-spy stack), so a normal interpreter exit hangs until the parent's subprocess
-    # timeout SIGKILLs it -- turning a PASS (verdict already written to --result-file) into
-    # a spurious timeout failure. Hard-exit past the atexit teardown, mirroring
-    # behavior_assert / scene_spawn_assert. Rendering itself is fine; only exit hangs.
-    _rc = main()
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(_rc)
+    run_and_hard_exit(main)

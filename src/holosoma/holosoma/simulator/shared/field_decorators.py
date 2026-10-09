@@ -7,13 +7,13 @@ imported in any environment (IsaacGym, IsaacSim, MuJoCo).
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable
 
 # Module-level constant for the attribute name
 MUJOCO_FIELD_ATTR = "mujoco_field"
 
 
-def mujoco_required_field(field: str) -> Callable:
+def mujoco_required_field(field: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Mark a manager function as requiring a MuJoCo field for per-environment operations.
 
     This decorator attaches metadata to manager functions (randomization, observation,
@@ -49,7 +49,7 @@ def mujoco_required_field(field: str) -> Callable:
     >>>     pass
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         setattr(func, MUJOCO_FIELD_ATTR, field)
         return func
 

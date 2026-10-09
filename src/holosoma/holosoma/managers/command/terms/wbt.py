@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import os
 import re
-from pathlib import Path
+from glob import has_magic
 from typing import Any, List
 
 import numpy as np
@@ -14,7 +13,7 @@ from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
 from holosoma.managers.command.base import CommandTermBase
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.file_cache import cached_open
-from holosoma.utils.path import resolve_data_file_path
+from holosoma.utils.path import resolve_data_file_path, resolve_paths
 from holosoma.utils.rotations import (
     get_euler_xyz,
     quat_apply,
@@ -246,12 +245,12 @@ class MultiMotionLoader:
         device: str = "cpu",
     ):
         # Support comma-separated directories for combining multiple datasets
-        dirs = [d.strip() for d in motion_dir.split(",")]
+        dirs = [directory.strip() for directory in motion_dir.split(",") if directory.strip()]
         motion_files = []
         for d in dirs:
-            expanded = os.path.expanduser(d)
-            files = sorted(str(p) for p in Path(expanded).glob("*.npz"))
-            logger.info(f"MultiMotionLoader: found {len(files)} .npz files in {expanded}")
+            pattern = d if has_magic(d) else f"{d.rstrip('/')}/*.npz"
+            files = list(resolve_paths(pattern))
+            logger.info(f"MultiMotionLoader: found {len(files)} .npz files in {d}")
             motion_files.extend(files)
         assert len(motion_files) > 0, f"No .npz files found in {motion_dir}"
         logger.info(f"MultiMotionLoader: loading {len(motion_files)} total motion files")
@@ -455,11 +454,11 @@ class AdaptiveTimestepsSampler:
         # metrics
         self.metrics: dict[str, torch.Tensor] = {}
 
-    def init_buffers(self):
+    def init_buffers(self) -> None:
         self.current_bin_failed_count = torch.zeros(self.num_bins, dtype=torch.float, device=self.device)
         self.bin_failed_count = torch.zeros(self.num_bins, dtype=torch.float, device=self.device)
 
-    def update_current_bin_failed_count(self, failed_at_time_step: torch.Tensor):
+    def update_current_bin_failed_count(self, failed_at_time_step: torch.Tensor) -> None:
         """Update the current bin failed count with terminated time steps."""
         failed_bin = torch.clamp(
             (failed_at_time_step * self.num_bins) // max(self.motion_time_step_total, 1),
@@ -473,7 +472,7 @@ class AdaptiveTimestepsSampler:
         # this buffer. Overwriting clobbered the earlier wave's failures.
         self.current_bin_failed_count += torch.bincount(failed_bin, minlength=self.num_bins).float()
 
-    def update_bin_failed_count(self):
+    def update_bin_failed_count(self) -> None:
         """At every rl environment step, update the failed count with the current bin failed count."""
         self.bin_failed_count = (self.adaptive_alpha * self.current_bin_failed_count) + (
             1 - self.adaptive_alpha
@@ -509,7 +508,7 @@ class AdaptiveTimestepsSampler:
         global_idx = (phase * self.motion_time_step_total).long()
         return global_idx.clamp_(0, self.motion_time_step_total - 1)
 
-    def get_stats(self):
+    def get_stats(self) -> None:
         # Metrics
         prob = self.sampling_probabilities
         H = -(prob * (prob + 1e-12).log()).sum()
@@ -851,10 +850,10 @@ class MotionCommand(CommandTermBase):
         robot_ref_quat_w = self.robot_root_quat_w * use_root + self.robot_ref_quat_w * (1 - use_root)
 
         ## 1.1 repeat to match the number of body parts
-        ref_pos_w_repeat = ref_pos_w[:, None, :].repeat(1, len(self.motion_cfg.body_names_to_track), 1)  # type: ignore[arg-type]
-        ref_quat_w_repeat = ref_quat_w[:, None, :].repeat(1, len(self.motion_cfg.body_names_to_track), 1)  # type: ignore[arg-type]
-        robot_ref_pos_w_repeat = robot_ref_pos_w[:, None, :].repeat(1, len(self.motion_cfg.body_names_to_track), 1)  # type: ignore[arg-type]
-        robot_ref_quat_w_repeat = robot_ref_quat_w[:, None, :].repeat(1, len(self.motion_cfg.body_names_to_track), 1)  # type: ignore[arg-type]
+        ref_pos_w_repeat = ref_pos_w[:, None, :].repeat(1, len(self.motion_cfg.body_names_to_track), 1)
+        ref_quat_w_repeat = ref_quat_w[:, None, :].repeat(1, len(self.motion_cfg.body_names_to_track), 1)
+        robot_ref_pos_w_repeat = robot_ref_pos_w[:, None, :].repeat(1, len(self.motion_cfg.body_names_to_track), 1)
+        robot_ref_quat_w_repeat = robot_ref_quat_w[:, None, :].repeat(1, len(self.motion_cfg.body_names_to_track), 1)
 
         ## 1.2 compute the relative body poses
         delta_quat_w = yaw_quat(
@@ -971,19 +970,19 @@ class MotionCommand(CommandTermBase):
 
     @property
     def robot_root_pos_w(self) -> torch.Tensor:
-        return self._env.simulator.robot_root_states[:, :3]  # type: ignore[attr-defined]
+        return self._env.simulator.robot_root_states[:, :3]
 
     @property
     def robot_root_quat_w(self) -> torch.Tensor:
-        return self._env.simulator.robot_root_states[:, 3:7]  # type: ignore[attr-defined]
+        return self._env.simulator.robot_root_states[:, 3:7]
 
     @property
     def robot_root_lin_vel_w(self) -> torch.Tensor:
-        return self._env.simulator.robot_root_states[:, 7:10]  # type: ignore[attr-defined]
+        return self._env.simulator.robot_root_states[:, 7:10]
 
     @property
     def robot_root_ang_vel_w(self) -> torch.Tensor:
-        return self._env.simulator.robot_root_states[:, 10:13]  # type: ignore[attr-defined]
+        return self._env.simulator.robot_root_states[:, 10:13]
 
     @property
     def robot_ref_pos_w(self) -> torch.Tensor:
@@ -1046,21 +1045,21 @@ class MotionCommand(CommandTermBase):
     ## Methods that does not fit into setup/step/reset pattern
     #########################################################################################
 
-    def init_buffers(self):
+    def init_buffers(self) -> None:
         self.time_steps = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.motion_ids = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.body_pos_relative_w = torch.zeros(
             self.num_envs, len(self.motion_cfg.body_names_to_track), 3, device=self.device
-        )  # type: ignore[arg-type]
+        )
         self.body_quat_relative_w = torch.zeros(
             self.num_envs, len(self.motion_cfg.body_names_to_track), 4, device=self.device
-        )  # type: ignore[arg-type]
+        )
         self.body_quat_relative_w[:, :, 0] = 1.0
 
         if self.motion_cfg.use_adaptive_timesteps_sampler:
             self.adaptive_timesteps_sampler.init_buffers()
 
-    def update_metrics(self):
+    def update_metrics(self) -> None:
         """Update the metrics. After action, before step() is called."""
         self.metrics["motion/error_ref_pos"] = torch.norm(self.ref_pos_w - self.robot_ref_pos_w, dim=-1)
         self.metrics["motion/error_ref_rot"] = quat_error_magnitude(self.ref_quat_w, self.robot_ref_quat_w)
@@ -1436,7 +1435,7 @@ class MotionCommand(CommandTermBase):
         segments = self._build_transition_segments(start_state, target_state, alphas, alphas_joint, alphas_body)
         self._apply_transition_segments(segments, prepend=prepend)
 
-    def _setup_visualization_markers_for_isaacsim(self):
+    def _setup_visualization_markers_for_isaacsim(self) -> None:
         from isaaclab.markers import VisualizationMarkers
         from isaaclab.markers.config import FRAME_MARKER_CFG, RAY_CASTER_MARKER_CFG
 

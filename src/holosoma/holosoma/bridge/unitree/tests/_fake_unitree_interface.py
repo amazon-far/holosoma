@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 from enum import Enum
+from typing import Any
 
 
 class RobotType(Enum):
@@ -39,7 +40,7 @@ class _Motor:
 
 
 class _Imu:
-    def __init__(self):
+    def __init__(self) -> None:
         self.quat = [0.0, 0.0, 0.0, 0.0]
         self.omega = [0.0, 0.0, 0.0]
         self.accel = [0.0, 0.0, 0.0]
@@ -62,7 +63,7 @@ class MotorCommand:
 
 
 class WirelessController:
-    def __init__(self):
+    def __init__(self) -> None:
         self.lx = 0.0
         self.ly = 0.0
         self.rx = 0.0
@@ -71,7 +72,7 @@ class WirelessController:
 
 
 class OdomState:
-    def __init__(self):
+    def __init__(self) -> None:
         self.position = [0.0, 0.0, 0.0]
         self.velocity = [0.0, 0.0, 0.0]
         self.yaw_speed = 0.0
@@ -85,8 +86,36 @@ _RECORD_PATH_ENV = "FAKE_UNITREE_RECORD"
 _NUM_MOTOR_ENV = "FAKE_UNITREE_NUM_MOTOR"
 
 
-class UnitreeInterface:
-    def __init__(self, interface_name, robot_type, message_type):
+def _record(kind: str, payload: dict[str, Any]) -> None:
+    path = os.environ.get(_RECORD_PATH_ENV)
+    if path:
+        with open(path, "a") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "kind": kind,
+                        "payload": payload,
+                        "pid": os.getpid(),
+                        "cyclonedds_uri": os.environ.get("CYCLONEDDS_URI"),
+                        "ros_domain_id": os.environ.get("ROS_DOMAIN_ID"),
+                    }
+                )
+                + "\n"
+            )
+
+
+_record("import", {})
+if os.environ.get("FAKE_UNITREE_FAILURE") == "import":
+    raise ImportError("fake import failure")
+
+# By default this is a marker-less released-wheel stand-in with a strict old signature.
+_marker = os.environ.get("FAKE_UNITREE_API_VERSION")
+if _marker is not None:
+    DDS_CONFIG_API_VERSION = int(_marker)
+
+
+class _LegacyUnitreeInterface:
+    def __init__(self, interface_name: str, robot_type: RobotType, message_type: MessageType) -> None:
         self.interface_name = interface_name
         self.robot_type = robot_type
         self.message_type = message_type
@@ -95,14 +124,30 @@ class UnitreeInterface:
             {"interface": interface_name, "robot_type": robot_type.value, "message_type": message_type.value},
         )
 
-    def _record(self, kind, payload):
-        path = os.environ.get(_RECORD_PATH_ENV)
-        if not path:
-            return
-        with open(path, "a") as f:
-            f.write(json.dumps({"kind": kind, "payload": payload}) + "\n")
+        failure = os.environ.get("FAKE_UNITREE_FAILURE")
+        if failure == "unpicklable":
 
-    def publish_low_state(self, low_state: LowState):
+            class NativeError(RuntimeError):
+                def __reduce__(self) -> Any:
+                    raise TypeError("native exception cannot be pickled")
+
+            raise NativeError(
+                'dds_config must be inline CycloneDDS XML with exactly one Domain Id="0" or Id="any"'
+                f": {getattr(self, 'dds_config', None)!r}"
+            )
+        if failure in ("init", "type_error"):
+            error_type = TypeError if failure == "type_error" else RuntimeError
+            raise error_type(f"fake init failure: {getattr(self, 'dds_config', None)}")
+
+    def _record(self, kind: str, payload: dict[str, Any]) -> None:
+        _record(kind, payload)
+
+    def enable_motion_switcher_responder(self) -> None:
+        self._record("enable_motion_switcher_responder", {})
+        if os.environ.get("FAKE_UNITREE_FAILURE") == "responder":
+            raise RuntimeError(f"fake responder failure: {getattr(self, 'dds_config', None)}")
+
+    def publish_low_state(self, low_state: LowState) -> None:
         self._record(
             "publish_low_state",
             {
@@ -117,7 +162,7 @@ class UnitreeInterface:
             },
         )
 
-    def publish_odom_state(self, odom_state: OdomState):
+    def publish_odom_state(self, odom_state: OdomState) -> None:
         self._record(
             "publish_odom_state",
             {
@@ -129,6 +174,7 @@ class UnitreeInterface:
         )
 
     def read_incoming_command(self) -> MotorCommand:
+        self._record("read_incoming_command", {})
         n = int(os.environ.get(_NUM_MOTOR_ENV, "1"))
         cmd = MotorCommand(n)
         # Deterministic, distinguishable-per-field values so the parent can assert exact plumbing.
@@ -139,8 +185,27 @@ class UnitreeInterface:
         cmd.dq_target = [5.0] * n
         return cmd
 
-    def publish_wireless_controller(self, wc: WirelessController):
+    def publish_wireless_controller(self, wc: WirelessController) -> None:
         self._record(
             "publish_wireless_controller",
             {"lx": wc.lx, "ly": wc.ly, "rx": wc.rx, "ry": wc.ry, "keys": wc.keys},
         )
+
+
+class _ConfigUnitreeInterface(_LegacyUnitreeInterface):
+    def __init__(
+        self,
+        interface_name: str,
+        robot_type: RobotType,
+        message_type: MessageType,
+        *,
+        dds_config: str | None = None,
+    ) -> None:
+        self.dds_config = dds_config
+        self._record("dds_config", {"value": dds_config})
+        super().__init__(interface_name, robot_type, message_type)
+
+
+UnitreeInterface: type[_LegacyUnitreeInterface] = (
+    _ConfigUnitreeInterface if _marker is not None else _LegacyUnitreeInterface
+)

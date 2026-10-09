@@ -29,15 +29,60 @@ DistributionSpec(kind='gaussian', low=-1.0, high=1.0, mean=None, std=None)
 
 from __future__ import annotations
 
+import ast
+import dataclasses
 import math
 from dataclasses import dataclass
-from typing import Literal, Sequence, Union, get_args
+from typing import Any, Dict, Literal, Sequence, Union, get_args
+
+import tyro.constructors
+from typing_extensions import Annotated, TypeAlias
 
 Distribution = Literal["uniform", "log_uniform", "gaussian"]
 """Sampling distributions a randomization term may request."""
 
 # Derived from the Literal above so the two can't drift (one source of truth for the allowed kinds).
 _SUPPORTED_DISTRIBUTIONS: tuple[str, ...] = get_args(Distribution)
+
+
+def _distribution_from_cli(args: list[str]) -> Any:
+    """Parse one CLI token into a config range value, validating it loudly."""
+    try:
+        value = ast.literal_eval(args[0])
+    except (ValueError, SyntaxError) as exc:
+        raise ValueError(
+            f"expected a Python literal like [0.1, 0.6] or {{'kind': 'gaussian', 'low': -1.0, 'high': 1.0}}, "
+            f"got {args[0]!r}"
+        ) from exc
+    DistributionSpec.parse(value)  # reject invalid ranges at the CLI boundary, not deep in a physics write
+    return value
+
+
+def _distribution_to_cli(value: Any) -> list[str]:
+    """Render a config range value back to its single CLI token (for help-text defaults)."""
+    if isinstance(value, DistributionSpec):
+        return [repr({k: v for k, v in dataclasses.asdict(value).items() if v is not None})]
+    if isinstance(value, dict):
+        return [repr(value)]
+    return [repr(list(value))]
+
+
+def _is_distribution_like(value: Any) -> bool:
+    return isinstance(value, (DistributionSpec, dict)) or (isinstance(value, Sequence) and not isinstance(value, str))
+
+
+# On the CLI a range value is ONE token holding a Python literal (matching holosoma's list
+# convention): a pair `[0.1, 0.6]` or a spec dict `{'kind': 'gaussian', 'low': -1.0, 'high': 1.0}`.
+# Without this, tyro tries to build a parser branch per union member and dies on Dict[str, Any]
+# ("struct-type values requires a default value") — a latent error the parser only raises when a
+# flag under the same subtree forces the branch to be built eagerly.
+_DISTRIBUTION_CLI_SPEC = tyro.constructors.PrimitiveConstructorSpec(
+    nargs=1,
+    metavar="[LO,HI]|{SPEC}",
+    instance_from_str=_distribution_from_cli,
+    is_instance=_is_distribution_like,
+    str_from_instance=_distribution_to_cli,
+)
 
 # One randomized scalar's range, as written in a config: anything DistributionSpec.parse accepts.
 # This is the type a term takes from config and forwards to the sampler — three equivalent forms:
@@ -48,7 +93,10 @@ _SUPPORTED_DISTRIBUTIONS: tuple[str, ...] = get_args(Distribution)
 #   - a DistributionSpec     -> already-parsed (programmatic) passthrough
 # All three are accepted (rather than requiring DistributionSpec) because configs are written and
 # serialized as pairs/dicts, and a bare pair is the most common term input.
-DistributionLike = Union["DistributionSpec", Sequence[float], dict]
+# The Annotated CLI spec only affects tyro; pydantic and type checkers ignore it.
+DistributionLike: TypeAlias = Annotated[
+    Union["DistributionSpec", Sequence[float], Dict[str, Any]], _DISTRIBUTION_CLI_SPEC
+]
 
 
 @dataclass(frozen=True)

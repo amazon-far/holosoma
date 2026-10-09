@@ -7,7 +7,7 @@ Key features:
 - GPU-accelerated simulation via Warp kernels
 - Batched parallel environments (1 to thousands)
 - Zero-copy PyTorch tensor access via wp.to_torch()
-- Automatic contact force computation (cfrc_ext)
+- Per-body contact force computation through the public MuJoCo Warp API
 - Efficient GPU->CPU sync for rendering only when needed
 
 Optional Dependencies
@@ -32,22 +32,30 @@ to ClassicBackend (CPU-only simulation).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import mujoco
 import mujoco_warp as mjw
 import numpy as np
+import numpy.typing as npt
 import torch
 import warp as wp
 from loguru import logger
+
+from holosoma.simulator.mujoco.geom_groups import DEFAULT_RENDER_GEOM_GROUPS
 
 from .base import IMujocoBackend, holosoma_to_mj_quat, mj_to_holosoma_quat
 from .warp_bridge import WarpBridge
 
 if TYPE_CHECKING:
+    # Graph is not importable as ``wp.Graph`` for type checkers: warp's __init__ exposes it only
+    # through a runtime module __getattr__. Import its defining module directly, type-check-time
+    # only, so a future move of the class across warp releases can break mypy but never runtime.
+    from warp.context import Graph
+
     from holosoma.config_types.full_sim import FullSimConfig
     from holosoma.simulator.mujoco.tensor_views import BaseMujocoView
-    from holosoma.simulator.shared.camera_sensor import CameraRuntime
+    from holosoma.simulator.shared.sensor_manager import CameraRecord
 
 
 # Quaternion helpers on MuJoCo-convention (wxyz, scalar-first) quaternions, reimplemented locally so
@@ -68,7 +76,7 @@ def _mul_quat(u: wp.quat, v: wp.quat) -> wp.quat:
 def _rot_vec_quat(vec: wp.vec3, quat: wp.quat) -> wp.vec3:
     s = quat[0]
     u = wp.vec3(quat[1], quat[2], quat[3])
-    return 2.0 * (wp.dot(u, vec) * u) + (s * s - wp.dot(u, u)) * vec + 2.0 * s * wp.cross(u, vec)
+    return 2.0 * (wp.dot(u, vec) * u) + (s * s - wp.dot(u, u)) * vec + 2.0 * s * wp.cross(u, vec)  # type: ignore[no-any-return]
 
 
 @wp.func
@@ -108,7 +116,7 @@ def _static_geom_local_to_global(
     xquat: wp.array2d(dtype=wp.quat),  # type: ignore[valid-type]
     geom_xpos: wp.array2d(dtype=wp.vec3),  # type: ignore[valid-type]
     geom_xmat: wp.array2d(dtype=wp.mat33),  # type: ignore[valid-type]
-):
+) -> None:
     """Compose world geom poses for the given geoms and worlds.
 
     The composition forward kinematics applies to a geom, restricted to the given geoms/worlds,
@@ -127,6 +135,30 @@ def _static_geom_local_to_global(
     geom_xmat[worldid, geomid] = _quat_to_mat(_mul_quat(bquat, geom_quat[worldid % geom_quat.shape[0], geomid]))
 
 
+@wp.kernel
+def _accumulate_contact_forces(
+    active_contact_count: wp.array(dtype=wp.int32),  # type: ignore[valid-type]
+    contact_worldid: wp.array(dtype=wp.int32),  # type: ignore[valid-type]
+    contact_geom: wp.array(dtype=wp.vec2i),  # type: ignore[valid-type]
+    geom_bodyid: wp.array(dtype=wp.int32),  # type: ignore[valid-type]
+    contact_wrenches: wp.array(dtype=wp.spatial_vector),  # type: ignore[valid-type]
+    body_forces: wp.array3d(dtype=float),  # type: ignore[valid-type]
+) -> None:
+    """Accumulate public per-contact forces into world-frame body forces."""
+    contact_id = wp.tid()
+    if contact_id >= active_contact_count[0]:
+        return
+
+    world_id = contact_worldid[contact_id]
+    geoms = contact_geom[contact_id]
+    force = wp.spatial_top(contact_wrenches[contact_id])
+    for axis in range(3):
+        if geoms[0] >= 0:
+            wp.atomic_sub(body_forces, world_id, geom_bodyid[geoms[0]], axis, force[axis])  # type: ignore[index]
+        if geoms[1] >= 0:
+            wp.atomic_add(body_forces, world_id, geom_bodyid[geoms[1]], axis, force[axis])  # type: ignore[index]
+
+
 class WarpBackend(IMujocoBackend):
     """GPU-accelerated batched MuJoCo backend using mujoco_warp.
 
@@ -137,7 +169,7 @@ class WarpBackend(IMujocoBackend):
     Key characteristics:
     - Multi-environment support (1 to thousands)
     - GPU-based computation via Warp kernels
-    - Automatic contact force computation (cfrc_ext tensor)
+    - Per-body contact force computation through the public MuJoCo Warp API
     - Zero-copy PyTorch tensor access
     - Efficient GPU->CPU sync only for rendering
 
@@ -201,6 +233,10 @@ class WarpBackend(IMujocoBackend):
         with wp.ScopedDevice(self.mjw_device):
             # Upload model to GPU
             self.mjw_model = mjw.put_model(model)
+            self._lidar_render_context: Any = None
+            self._lidar_render_context_groups: tuple[int, ...] | None = None
+            self._sensor_refit_graphs: dict[int, Graph] = {}
+            self._sensor_refit_contexts: set[int] = set()
 
             # Create bridge for tensor-like access to model fields (for randomization)
             self.warp_model_bridge = WarpBridge(self.mjw_model, nworld=self.num_envs)
@@ -223,16 +259,30 @@ class WarpBackend(IMujocoBackend):
             self.qvel_t = wp.to_torch(self.mjw_data.qvel)  # [num_envs, nv]
             self.qacc_t = wp.to_torch(self.mjw_data.qacc)  # [num_envs, nv]
             self.ctrl_t = wp.to_torch(self.mjw_data.ctrl)  # [num_envs, nu]
-            self.cfrc_t = wp.to_torch(self.mjw_data.cfrc_ext)  # [num_envs, nbody, 6]
             self.xfrc_applied_t = wp.to_torch(self.mjw_data.xfrc_applied)  # [num_envs, nbody, 6]
+            contact_capacity = int(self.mjw_data.contact.geom.shape[0])
+            self._contact_ids: wp.array[Any] = wp.array(np.arange(contact_capacity), dtype=wp.int32)
+            self._contact_wrenches = wp.zeros(contact_capacity, dtype=wp.spatial_vector)
+            self._body_contact_forces = wp.zeros((self.num_envs, model.nbody, 3), dtype=float)
+            self._body_contact_forces_t = wp.to_torch(self._body_contact_forces)
 
             # Rigid body state tensors (for zero-copy access during refresh_sim_tensors)
             self.xpos_t = wp.to_torch(self.mjw_data.xpos)  # [num_envs, nbody, 3] - positions
             self.xquat_t = wp.to_torch(self.mjw_data.xquat)  # [num_envs, nbody, 4] - orientations [w,x,y,z]
             self.cvel_t = wp.to_torch(self.mjw_data.cvel)  # [num_envs, nbody, 6] - velocities [ang(3), lin(3)]
+            self.subtree_com_t = wp.to_torch(self.mjw_data.subtree_com)  # cvel reference point per root body
+            self.body_rootid_t = torch.as_tensor(model.body_rootid, dtype=torch.long, device=device)
 
         # Keep reference to CPU data for rendering (synced on demand)
         self.render_data = data
+        self._physics_time = float(data.time)
+        self._closed = False
+        self._cam_ids: dict[str, int] = {}
+        self._render_context: Any = None
+        self._render_rgb_out: dict[int, Any] = {}
+        self._render_depth_out: dict[int, Any] = {}
+        self._render_graph: Graph | None = None
+        self._torch_render_stream: torch.cuda.Stream | None = None
 
         # Expand the per-world model fields BEFORE capturing the step graph, so the graph (and the
         # collision kernels that read m.geom_friction / m.body_mass etc. per world) reference the
@@ -278,6 +328,26 @@ class WarpBackend(IMujocoBackend):
         with wp.ScopedDevice(self.mjw_device):
             with wp.ScopedCapture() as capture:
                 mjw.step(self.mjw_model, self.mjw_data)
+                self._body_contact_forces.zero_()
+                mjw.contact_force(
+                    self.mjw_model,
+                    self.mjw_data,
+                    self._contact_ids,
+                    True,
+                    self._contact_wrenches,
+                )
+                wp.launch(
+                    _accumulate_contact_forces,
+                    dim=self._contact_ids.shape[0],
+                    inputs=[
+                        self.mjw_data.nacon,
+                        self.mjw_data.contact.worldid,
+                        self.mjw_data.contact.geom,
+                        self.mjw_model.geom_bodyid,
+                        self._contact_wrenches,
+                    ],
+                    outputs=[self._body_contact_forces],
+                )
             self.step_graph = capture.graph
         logger.info("CUDA graph captured successfully")
 
@@ -310,15 +380,34 @@ class WarpBackend(IMujocoBackend):
             # Tile the state across all environments
             qpos_cpu = np.tile(data.qpos, (self.num_envs, 1))
             qvel_cpu = np.tile(data.qvel, (self.num_envs, 1))
+            time_cpu = np.full(self.num_envs, data.time, dtype=np.float32)
 
             wp.copy(self.mjw_data.qpos, wp.array(qpos_cpu, dtype=float))
             wp.copy(self.mjw_data.qvel, wp.array(qvel_cpu, dtype=float))
+            wp.copy(self.mjw_data.time, wp.array(time_cpu, dtype=float))
 
             # Compute forward kinematics to update derived quantities
             # (body positions, orientations, etc.)
             mjw.forward(self.mjw_model, self.mjw_data)
 
+        self._physics_time = float(data.time)
         logger.info("Initial state synced to GPU successfully")
+
+    def forward_kinematics(self) -> None:
+        """FK-only refresh: recompute body/geom/camera poses from the written qpos, no dynamics.
+
+        Runs ``mjw.kinematics`` + ``mjw.camlight`` (the position stage the batched renderer
+        reads: geom_xpos/geom_xmat, cam_xpos/cam_xmat) rather than full ``mjw.forward`` —
+        forward's solver/collision stages allocate per call and are useless without a step.
+        Out-of-graph launches into the same mjw_data the step graph uses are safe (same
+        pattern as set_static_body_world_pose / offset_world_cameras); ``mjw_data.time`` is
+        untouched (only integrators advance it).
+        """
+        import warp as wp
+
+        with wp.ScopedDevice(self.mjw_device):
+            mjw.kinematics(self.mjw_model, self.mjw_data)
+            mjw.camlight(self.mjw_model, self.mjw_data)
 
     def step(self) -> None:
         """Advance batched simulation by one timestep using CUDA graph.
@@ -336,6 +425,11 @@ class WarpBackend(IMujocoBackend):
         with wp.ScopedDevice(self.mjw_device):
             wp.capture_launch(self.step_graph)
             # No wp.synchronize() - let GPU work in parallel with CPU
+        self._physics_time += float(self.model.opt.timestep)
+
+    def physics_time(self) -> float:
+        """Return the logical time of the simulation steps enqueued on the GPU."""
+        return self._physics_time
 
     def get_render_data(self, world_id: int = 0) -> mujoco.MjData:
         """Sync GPU data to CPU for rendering.
@@ -376,14 +470,54 @@ class WarpBackend(IMujocoBackend):
 
         return self.render_data
 
-    def create_renderers(self, cameras: list[CameraRuntime]) -> None:
+    def begin_sensor_render(self) -> None:
+        """Reset per-frame BVH refit tracking before cameras and LiDARs render."""
+        self._sensor_refit_contexts.clear()
+
+    def prepare_lidar_ray_context(self, enabled_geom_groups: list[int]) -> Any:
+        """Return a current BVH shared by all due LiDAR queries."""
+        with wp.ScopedDevice(self.mjw_device):
+            groups = tuple(enabled_geom_groups)
+            camera_context = getattr(self, "_render_context", None)
+            if set(groups).issubset(DEFAULT_RENDER_GEOM_GROUPS) and camera_context is not None:
+                context = camera_context
+            else:
+                if self._lidar_render_context is None:
+                    self._lidar_render_context = mjw.create_render_context(
+                        self.model,
+                        nworld=self.num_envs,
+                        enabled_geom_groups=list(groups),
+                        cam_active=[False] * self.model.ncam,
+                        use_textures=False,
+                        use_shadows=False,
+                    )
+                    self._lidar_render_context_groups = groups
+                elif self._lidar_render_context_groups != groups:
+                    raise RuntimeError("MuJoCo LiDAR geom groups changed after the render context was created.")
+                context = self._lidar_render_context
+
+            context_id = id(context)
+            if context_id in self._sensor_refit_contexts:
+                return context
+            graph = self._sensor_refit_graphs.get(context_id)
+            if graph is None:
+                with wp.ScopedCapture() as capture:
+                    mjw.refit_bvh(self.mjw_model, self.mjw_data, context)
+                graph = capture.graph
+                self._sensor_refit_graphs[context_id] = graph
+            wp.capture_launch(graph)
+            self._sensor_refit_contexts.add(context_id)
+        return context
+
+    def create_renderers(self, cameras: list[CameraRecord]) -> None:
+        if self._closed:
+            raise RuntimeError("Cannot create renderers on a closed WarpBackend")
+
         # Appearance flags are GLOBAL to the shared render context (not per-camera);
         # validate_camera_dict already rejected any cross-camera conflict, so
         # collecting each set (non-None) value is unambiguous regardless of order. None => default.
-        render_options: dict = {}
+        render_options: dict[str, Any] = {}
         for cam in cameras:
-            if cam.config.mujoco is None:
-                continue
             for attr in ("use_shadows", "use_textures", "use_precomputed_rays"):
                 value = getattr(cam.config.mujoco, attr)
                 if value is not None:
@@ -392,13 +526,13 @@ class WarpBackend(IMujocoBackend):
         # Per-camera modality flags in ACTIVE-camera space. cam_active is left unset, so
         # create_render_context keeps every model camera active and the active index equals the
         # MuJoCo camera id. Resolve each compiled <camera> id here into this backend's own name->id
-        # map (the shared CameraRuntime holds no handle). create_render_context allocates an output
+        # map (the shared CameraRecord holds no handle). create_render_context allocates an output
         # buffer + write address for a (camera, modality) ONLY if its flag is True at creation
         # (io.py: rgb_adr/depth_adr stay -1 otherwise). render_cameras() can then only toggle these
         # flags DOWN to the due subset, not up, so this enables the UNION of every modality each
         # camera will ever produce. render_seg stays off: holosoma cameras only produce rgb/depth.
         ncam = self.model.ncam
-        self._cam_ids: dict[str, int] = {}
+        self._cam_ids = {}
         rgb_flags = [False] * ncam
         depth_flags = [False] * ncam
         for cam in cameras:
@@ -422,6 +556,7 @@ class WarpBackend(IMujocoBackend):
                 render_rgb=rgb_flags,
                 render_depth=depth_flags,
                 render_seg=False,
+                enabled_geom_groups=list(DEFAULT_RENDER_GEOM_GROUPS),
                 **render_options,
             )
             # Preallocate per-camera output buffers (reused each render), keyed by active id
@@ -443,12 +578,34 @@ class WarpBackend(IMujocoBackend):
                 if "depth" in cam.config.data_types
             }
             self._depth_far = max(c.config.far for c in cameras)
+            self._torch_render_stream = torch.cuda.ExternalStream(wp.get_stream(self.mjw_device).cuda_stream)
+        self._render_graph = None
 
-    def render_cameras(self, cameras: list[CameraRuntime]) -> None:
+    def close(self) -> None:
+        """Release Warp rendering ownership after pending device work completes."""
+        if self._closed:
+            return
+        self._closed = True
+
         with wp.ScopedDevice(self.mjw_device):
-            # Ensure the step graph's writes to mjw_data are complete before rendering reads them.
             wp.synchronize()
 
+        self.step_graph = None
+        self._render_graph = None
+        self._render_rgb_out.clear()
+        self._render_depth_out.clear()
+        self._render_context = None
+        self._lidar_render_context = None
+        self._lidar_render_context_groups = None
+        self._sensor_refit_graphs.clear()
+        self._sensor_refit_contexts.clear()
+        self._torch_render_stream = None
+        self._cam_ids.clear()
+
+    def render_cameras(self, cameras: list[CameraRecord]) -> None:
+        assert self._torch_render_stream is not None
+        consumer_stream = torch.cuda.current_stream(self.device)
+        with wp.ScopedDevice(self.mjw_device):
             # Toggle the per-camera modality flags DOWN to just the cameras due this step. These are
             # device wp.array("ncam", bool) kernel inputs (NOT wp.static), so mutating their contents
             # here (outside any graph capture) makes mjw.render render a different subset with no
@@ -458,8 +615,8 @@ class WarpBackend(IMujocoBackend):
             # address. Cameras absent from `due` keep their last buffer below; render() clears the
             # shared output every call (render.py), so a non-due camera's slice is wiped, not stale.
             ncam = self.model.ncam
-            rgb_mask = np.zeros(ncam, dtype=bool)
-            depth_mask = np.zeros(ncam, dtype=bool)
+            rgb_mask: npt.NDArray[np.bool_] = np.zeros(ncam, dtype=bool)
+            depth_mask: npt.NDArray[np.bool_] = np.zeros(ncam, dtype=bool)
             for cam in cameras:
                 cam_id = self._cam_ids[cam.name]
                 if "rgb" in cam.config.data_types:
@@ -469,24 +626,40 @@ class WarpBackend(IMujocoBackend):
             self._render_context.render_rgb.assign(rgb_mask)
             self._render_context.render_depth.assign(depth_mask)
 
-            mjw.refit_bvh(self.mjw_model, self.mjw_data, self._render_context)
-            mjw.render(self.mjw_model, self.mjw_data, self._render_context)
+            # Capture refit_bvh + render into a CUDA graph once, replay thereafter.
+            # Eager mjw.render rebuilds its scene-specialized megakernel closure per
+            # call (~300 ms CPU of warp codegen hashing, even with a warm kernel
+            # cache); graph replay skips that. The mask .assign() above mutates device
+            # array contents the captured kernels read by reference, so the per-step
+            # camera subset still applies.
+            if self._render_graph is None:
+                with wp.ScopedCapture() as capture:
+                    mjw.refit_bvh(self.mjw_model, self.mjw_data, self._render_context)
+                    mjw.render(self.mjw_model, self.mjw_data, self._render_context)
+                self._render_graph = capture.graph
+            wp.capture_launch(self._render_graph)
+            self._sensor_refit_contexts.add(id(self._render_context))
 
-            for cam in cameras:
-                cam_id = self._cam_ids[cam.name]
-                if "rgb" in cam.config.data_types:
-                    mjw.get_rgb(self._render_context, cam_id, self._render_rgb_out[cam_id])
-                    rgb_f = wp.to_torch(self._render_rgb_out[cam_id])  # [N,H,W,3] float32 in [0,1]
-                    cam.set_buffer("rgb", (rgb_f.clamp(0.0, 1.0) * 255.0).round().to(torch.uint8))
-                if "depth" in cam.config.data_types:
-                    # mjw.get_depth writes clamp(val/depth_scale, 0, 1): a normalized [0,1] image,
-                    # NOT meters. Pass depth_scale=depth_far so [0,far]->[0,1], then multiply back by
-                    # far to recover meters across the full range. No-hit comes back 0 ->
-                    # remap to +inf (the no-hit sentinel).
-                    mjw.get_depth(self._render_context, cam_id, self._depth_far, self._render_depth_out[cam_id])
-                    dep = wp.to_torch(self._render_depth_out[cam_id]) * self._depth_far  # [N,H,W] meters
-                    dep = torch.where(dep <= 0, torch.full_like(dep, float("inf")), dep)
-                    cam.set_buffer("depth", dep.unsqueeze(-1))  # [N,H,W,1]
+            # The float render buffers are reused. Convert them on Warp's stream so the next render
+            # cannot overwrite one while Torch is reading it, then hand the outputs to the caller's
+            # Torch stream with a GPU-side wait rather than synchronizing the entire device.
+            with torch.cuda.stream(self._torch_render_stream):
+                for cam in cameras:
+                    cam_id = self._cam_ids[cam.name]
+                    if "rgb" in cam.config.data_types:
+                        mjw.get_rgb(self._render_context, cam_id, self._render_rgb_out[cam_id])
+                        rgb_f = wp.to_torch(self._render_rgb_out[cam_id])  # [N,H,W,3] float32 in [0,1]
+                        cam.set_buffer("rgb", (rgb_f.clamp(0.0, 1.0) * 255.0).round().to(torch.uint8))
+                    if "depth" in cam.config.data_types:
+                        # mjw.get_depth writes clamp(val/depth_scale, 0, 1): a normalized [0,1] image,
+                        # NOT meters. Pass depth_scale=depth_far so [0,far]->[0,1], then multiply back by
+                        # far to recover meters across the full range. No-hit comes back 0 ->
+                        # remap to +inf (the no-hit sentinel).
+                        mjw.get_depth(self._render_context, cam_id, self._depth_far, self._render_depth_out[cam_id])
+                        dep = wp.to_torch(self._render_depth_out[cam_id]) * self._depth_far  # [N,H,W] meters
+                        dep = torch.where(dep <= 0, torch.full_like(dep, float("inf")), dep)
+                        cam.set_buffer("depth", dep.unsqueeze(-1))  # [N,H,W,1]
+        consumer_stream.wait_stream(self._torch_render_stream)
 
     def get_ctrl_tensor(self) -> torch.Tensor:
         """Return control tensor for direct zero-copy writing.
@@ -501,19 +674,18 @@ class WarpBackend(IMujocoBackend):
     def compute_contact_forces(self) -> torch.Tensor:
         """Return net per-body contact forces for ALL model bodies (GPU, zero-copy).
 
-        Warp computes contact forces into cfrc_ext during simulation. Returns the
-        full-model-width force slice [num_envs, model.nbody, 3]; the simulator
-        gathers robot-only rows and rotates the history.
+        The captured step graph extracts contacts through the public
+        ``mujoco_warp.contact_force`` API and accumulates them by body. The
+        simulator gathers robot-only rows and rotates the history.
 
         Returns
         -------
         torch.Tensor
-            Contact forces [num_envs, model.nbody, 3] (cfrc_ext force components).
+            Contact forces [num_envs, model.nbody, 3].
         """
-        # cfrc_ext is [num_envs, model.nbody, 6]; take first 3 (forces, drop torque).
-        return self.cfrc_t[..., :3]
+        return self._body_contact_forces_t
 
-    def create_root_view(self, addrs: dict) -> BaseMujocoView:
+    def create_root_view(self, addrs: dict[str, Any]) -> BaseMujocoView:
         """Create root state view using zero-copy tensors.
 
         Parameters
@@ -604,7 +776,7 @@ class WarpBackend(IMujocoBackend):
         """
         return self.qacc_t[:, indices]
 
-    def create_dof_state_view(self, dof_addrs: dict, num_dof: int) -> BaseMujocoView:
+    def create_dof_state_view(self, dof_addrs: dict[str, Any], num_dof: int) -> BaseMujocoView:
         """Create DOF state view using zero-copy GPU tensors.
 
         Parameters
@@ -645,7 +817,7 @@ class WarpBackend(IMujocoBackend):
         """
         return self.xfrc_applied_t
 
-    def create_quaternion_view(self, quat_slice: slice):
+    def create_quaternion_view(self, quat_slice: slice) -> BaseMujocoView:
         """Create quaternion view with format conversion.
 
         Parameters
@@ -662,7 +834,7 @@ class WarpBackend(IMujocoBackend):
 
         return MjwQuaternionView(qpos=self.qpos_t, quat_slice=quat_slice, num_envs=self.num_envs)
 
-    def create_angular_velocity_view(self, ang_vel_slice: slice):
+    def create_angular_velocity_view(self, ang_vel_slice: slice) -> BaseMujocoView:
         """Create angular velocity view with proper reshaping.
 
         Parameters
@@ -701,13 +873,16 @@ class WarpBackend(IMujocoBackend):
         # Orientation: convert MuJoCo [w,x,y,z] → holosoma [x,y,z,w]
         orientations = mj_to_holosoma_quat(self.xquat_t)  # [N, nbody, 4]
 
-        # Velocities: split cvel [angular(3), linear(3)]
+        # cvel is expressed in world orientation but referenced at each kinematic tree's subtree
+        # COM. Translate its linear component to xpos so pose and velocity describe the same link
+        # frame, matching mj_objectVelocity(..., mjOBJ_XBODY, ..., flg_local=0).
         angular_vel = self.cvel_t[..., 0:3]  # [N, nbody, 3]
-        linear_vel = self.cvel_t[..., 3:6]  # [N, nbody, 3]
+        root_com = self.subtree_com_t[:, self.body_rootid_t]
+        linear_vel = self.cvel_t[..., 3:6] + torch.cross(angular_vel, positions - root_com, dim=-1)
 
         return positions, orientations, linear_vel, angular_vel
 
-    def set_root_state(self, env_ids: torch.Tensor, root_states: torch.Tensor, root_addrs: dict) -> None:
+    def set_root_state(self, env_ids: torch.Tensor, root_states: torch.Tensor, root_addrs: dict[str, Any]) -> None:
         """Set robot root states. The robot root is an actor freejoint, so this
         delegates to set_actor_state at the robot's qpos/qvel addresses.
 
@@ -716,7 +891,7 @@ class WarpBackend(IMujocoBackend):
         """
         self.set_actor_state(env_ids, root_states, root_addrs["robot_qpos_addr"], root_addrs["robot_qvel_addr"])
 
-    def set_dof_state(self, env_ids: torch.Tensor, dof_states: torch.Tensor, dof_addrs: dict) -> None:
+    def set_dof_state(self, env_ids: torch.Tensor, dof_states: torch.Tensor, dof_addrs: dict[str, Any]) -> None:
         """Set DOF states via direct GPU tensor writes.
 
         Writes DOF positions and velocities directly to GPU tensors

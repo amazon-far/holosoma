@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import mujoco
 import numpy as np
+import numpy.typing as npt
 
 from holosoma.utils.adapters.draw_utils import convert_to_numpy
 from holosoma.utils.safe_torch_import import torch
@@ -30,7 +31,7 @@ def clear_lines(simulator: MuJoCo) -> None:
 
 def draw_sphere(
     simulator: MuJoCo,
-    pos: list[float] | tuple[float, float, float] | np.ndarray | torch.Tensor,
+    pos: list[float] | tuple[float, float, float] | npt.NDArray[Any] | torch.Tensor,
     radius: float,
     color: list[float] | tuple[float, float, float] | torch.Tensor,
     env_id: int,
@@ -73,7 +74,7 @@ def draw_sphere(
     pos_array = convert_to_numpy(pos)
 
     # Convert color to numpy array with alpha
-    color_array = np.array([color[0], color[1], color[2], 0.7], dtype=np.float32)
+    color_array: npt.NDArray[np.float32] = np.array([color[0], color[1], color[2], 0.7], dtype=np.float32)
 
     # Initialize the geometry using MuJoCo's official API
     mujoco.mjv_initGeom(
@@ -91,8 +92,8 @@ def draw_sphere(
 
 def draw_line(
     simulator: MuJoCo,
-    start_point: list[float] | tuple[float, float, float] | np.ndarray | torch.Tensor,
-    end_point: list[float] | tuple[float, float, float] | np.ndarray | torch.Tensor,
+    start_point: list[float] | tuple[float, float, float] | npt.NDArray[Any] | torch.Tensor,
+    end_point: list[float] | tuple[float, float, float] | npt.NDArray[Any] | torch.Tensor,
     color: list[float] | tuple[float, float, float] | torch.Tensor,
     env_id: int,
 ) -> None:
@@ -160,7 +161,7 @@ def draw_line(
         rotation_matrix = cos_angle * np.eye(3) + sin_angle * cross_matrix + (1 - cos_angle) * np.outer(axis, axis)
 
     # Convert color to numpy array with alpha
-    color_array = np.array([color[0], color[1], color[2], 0.8], dtype=np.float32)
+    color_array: npt.NDArray[np.float32] = np.array([color[0], color[1], color[2], 0.8], dtype=np.float32)
 
     # Initialize the capsule geometry
     mujoco.mjv_initGeom(
@@ -178,9 +179,9 @@ def draw_line(
 
 def draw_height_points(
     simulator: MuJoCo,
-    base_pos: list[float] | tuple[float, float, float] | np.ndarray | torch.Tensor,
-    height_points: np.ndarray | torch.Tensor,
-    heights: np.ndarray | torch.Tensor,
+    base_pos: list[float] | tuple[float, float, float] | npt.NDArray[Any] | torch.Tensor,
+    height_points: npt.NDArray[Any] | torch.Tensor,
+    heights: npt.NDArray[Any] | torch.Tensor,
     env_id: int,
     point_color: list[float] | tuple[float, float, float] = (1, 1, 0),
     point_size: float = 0.02,
@@ -228,7 +229,7 @@ def draw_height_points(
 
 def draw_foot_height_points(
     simulator: MuJoCo,
-    foot_pos: list[float] | tuple[float, float, float] | np.ndarray | torch.Tensor,
+    foot_pos: list[float] | tuple[float, float, float] | npt.NDArray[Any] | torch.Tensor,
     terrain_height: float,
     env_id: int,
     foot_color: list[float] | tuple[float, float, float] = (1, 0, 0),
@@ -270,9 +271,9 @@ def draw_foot_height_points(
 
 def draw_points(
     simulator: MuJoCo,
-    points: list[list[float]] | list[tuple[float, float, float]] | np.ndarray | torch.Tensor,
-    colors: list[list[float]] | list[tuple[float, float, float]] | np.ndarray | torch.Tensor,
-    sizes: list[float] | np.ndarray | torch.Tensor,
+    points: list[list[float]] | list[tuple[float, float, float]] | npt.NDArray[Any] | torch.Tensor,
+    colors: list[list[float]] | list[tuple[float, float, float]] | npt.NDArray[Any] | torch.Tensor,
+    sizes: list[float] | npt.NDArray[Any] | torch.Tensor,
     env_id: int,
 ) -> None:
     """Stub: Log draw_points calls to understand usage patterns.

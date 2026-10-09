@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import itertools
 import os
-from typing import TypedDict
+from typing import Any, Callable, TypedDict, cast
 
 import torch
 import torch.distributed as dist
@@ -40,7 +40,13 @@ console = Console()
 class EmpiricalNormalization(nn.Module):
     """Normalize mean and variance of values based on empirical values."""
 
-    def __init__(self, shape, device, eps=1e-2, until=None):
+    def __init__(
+        self,
+        shape: int | tuple[int, ...] | torch.Size,
+        device: torch.device | str,
+        eps: float = 1e-2,
+        until: int | None = None,
+    ) -> None:
         super().__init__()
         self.eps = eps
         self.until = until
@@ -62,7 +68,7 @@ class EmpiricalNormalization(nn.Module):
         return x / (self._std + self.eps)
 
     @torch.jit.unused
-    def update(self, x):
+    def update(self, x: torch.Tensor) -> None:
         if self.until is not None and self.count >= self.until:
             return
 
@@ -178,7 +184,14 @@ class Minibatch(TypedDict):
 class PPO(BaseAlgo):
     config: PPOConfig
 
-    def __init__(self, env: BaseTask, config: PPOConfig, log_dir, device="cpu", multi_gpu_cfg: dict | None = None):
+    def __init__(
+        self,
+        env: BaseTask,
+        config: PPOConfig,
+        log_dir: str,
+        device: torch.device | str = "cpu",
+        multi_gpu_cfg: dict[str, int] | None = None,
+    ) -> None:
         super().__init__(env, config, device, multi_gpu_cfg)
         self.log_dir = log_dir
         self.writer = TensorboardSummaryWriter(log_dir=self.log_dir, flush_secs=10)
@@ -223,11 +236,11 @@ class PPO(BaseAlgo):
         self.empirical_normalization = self.config.empirical_normalization
         self._init_obs_keys()
 
-    def _init_obs_keys(self):
+    def _init_obs_keys(self) -> None:
         self.actor_obs_keys = self.config.module_dict.actor.input_dim
         self.critic_obs_keys = self.config.module_dict.critic.input_dim
 
-    def setup(self):
+    def setup(self) -> None:  # type: ignore[override]
         logger.info("Setting up PPO")
         self._setup_models_and_optimizer()
         logger.info("Setting up Storage")
@@ -238,7 +251,7 @@ class PPO(BaseAlgo):
             if self.has_curricula_enabled():
                 logger.info(f"Multi-GPU curriculum synchronization enabled across {self.gpu_world_size} GPUs")
 
-    def _setup_models_and_optimizer(self):
+    def _setup_models_and_optimizer(self) -> None:
         self.actor = setup_ppo_actor_module(
             obs_dim_dict=self.algo_obs_dim_dict,
             module_config=self.config.module_dict.actor,
@@ -287,7 +300,7 @@ class PPO(BaseAlgo):
             obs_dim += key_dim
         return obs_dim
 
-    def _get_zero_input(self):
+    def _get_zero_input(self) -> torch.Tensor:
         """
         Create a dummy (all-zero) input for the actor.
 
@@ -306,7 +319,7 @@ class PPO(BaseAlgo):
             return self.critic_obs_normalizer(critic_obs, update=update)
         return critic_obs
 
-    def _setup_storage(self):
+    def _setup_storage(self) -> None:
         self.storage = RolloutStorage(self.env.num_envs, self.config.num_steps_per_env, device=self.device)
         actor_obs_dim = self._get_obs_dim(self.actor_obs_keys)
         print(f"Registering key: actor_obs with shape: {actor_obs_dim}")
@@ -331,19 +344,19 @@ class PPO(BaseAlgo):
         for key, shape, dtype in minibatch_keys:
             self.storage.register(key, shape=shape, dtype=dtype)
 
-    def _eval_mode(self):
+    def _eval_mode(self) -> None:
         self.actor.eval()
         self.critic.eval()
         self.actor_obs_normalizer.eval()
         self.critic_obs_normalizer.eval()
 
-    def _train_mode(self):
+    def _train_mode(self) -> None:
         self.actor.train()
         self.critic.train()
         self.actor_obs_normalizer.train()
         self.critic_obs_normalizer.train()
 
-    def learn(self):
+    def learn(self) -> None:  # type: ignore[override]
         self._train_mode()
 
         obs_dict = self.env.reset_all()
@@ -384,7 +397,7 @@ class PPO(BaseAlgo):
             self.save(os.path.join(self.log_dir, f"model_{self.current_learning_iteration:05d}.pt"))
             self.export(onnx_file_path=os.path.join(self.log_dir, f"model_{self.current_learning_iteration:05d}.onnx"))
 
-    def _rollout_step(self, obs_dict):
+    def _rollout_step(self, obs_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         with torch.inference_mode():
             for _ in range(self.config.num_steps_per_env):
                 # Environment step
@@ -449,7 +462,13 @@ class PPO(BaseAlgo):
 
         return obs_dict
 
-    def _compute_returns_and_advantages(self, last_values, values, dones, rewards):
+    def _compute_returns_and_advantages(
+        self,
+        last_values: torch.Tensor,
+        values: torch.Tensor,
+        dones: torch.Tensor,
+        rewards: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         advantage = 0
         returns = torch.zeros_like(values)
         num_steps = returns.shape[0]
@@ -474,9 +493,9 @@ class PPO(BaseAlgo):
     def _training_step(self) -> dict[str, float]:
         generator = self.storage.mini_batch_generator(self.config.num_mini_batches, self.config.num_learning_epochs)
 
-        minibatch: Minibatch
         loss_dict = {"Value": 0.0, "Surrogate": 0.0, "Entropy": 0.0, "KL": 0.0}
-        for minibatch in generator:
+        for raw_minibatch in generator:
+            minibatch = cast("Minibatch", raw_minibatch)
             loss_dict = self._update_algo_step(minibatch, loss_dict)
 
         num_updates = self.config.num_learning_epochs * self.config.num_mini_batches
@@ -485,7 +504,7 @@ class PPO(BaseAlgo):
         self.storage.clear()
         return loss_dict
 
-    def _update_algo_step(self, minibatch: Minibatch, loss_dict: dict[str, float]):
+    def _update_algo_step(self, minibatch: Minibatch, loss_dict: dict[str, float]) -> dict[str, float]:
         ppo_loss_dict = self._compute_ppo_loss(minibatch)
 
         self.actor_optimizer.zero_grad()
@@ -515,7 +534,7 @@ class PPO(BaseAlgo):
             loss_dict[key] += loss_value
         return loss_dict
 
-    def _compute_ppo_loss(self, minibatch: Minibatch):
+    def _compute_ppo_loss(self, minibatch: Minibatch) -> dict[str, torch.Tensor]:
         actions_batch = minibatch["actions"]
         target_values_batch = minibatch["values"]
         advantages_batch = minibatch["advantages"]
@@ -556,7 +575,8 @@ class PPO(BaseAlgo):
         sigma_batch = self.actor.action_std[:original_batch_size]
         entropy_batch = self.actor.entropy[:original_batch_size]
 
-        if self.config.desired_kl is not None and self.config.schedule == "adaptive":
+        kl_mean = torch.zeros((), device=self.device)
+        if self.config.desired_kl is not None and self.config.schedule == "adaptive":  # type: ignore[redundant-expr]
             # Compute the KL divergence between the old and new action distributions
             kl_mean = self._compute_kl_div(old_mu_batch, old_sigma_batch, mu_batch, sigma_batch)
             self._update_learning_rate(kl_mean)
@@ -620,7 +640,13 @@ class PPO(BaseAlgo):
             "kl_mean": kl_mean,
         }
 
-    def _compute_kl_div(self, old_mu_batch, old_sigma_batch, mu_batch, sigma_batch) -> torch.Tensor:
+    def _compute_kl_div(
+        self,
+        old_mu_batch: torch.Tensor,
+        old_sigma_batch: torch.Tensor,
+        mu_batch: torch.Tensor,
+        sigma_batch: torch.Tensor,
+    ) -> torch.Tensor:
         with torch.inference_mode():
             # Compute the KL divergence between the old and new action distributions
             old_dist = Normal(old_mu_batch, old_sigma_batch)
@@ -634,7 +660,7 @@ class PPO(BaseAlgo):
                 kl_mean /= self.gpu_world_size
         return kl_mean
 
-    def _update_learning_rate(self, kl_mean: torch.Tensor):
+    def _update_learning_rate(self, kl_mean: torch.Tensor) -> None:
         if kl_mean > self.config.desired_kl * 2.0:
             self.actor_learning_rate = max(self.min_actor_learning_rate, self.actor_learning_rate / 1.5)
             self.critic_learning_rate = max(self.min_critic_learning_rate, self.critic_learning_rate / 1.5)
@@ -647,7 +673,7 @@ class PPO(BaseAlgo):
         for param_group in self.critic_optimizer.param_groups:
             param_group["lr"] = self.critic_learning_rate
 
-    def load(self, ckpt_path: str | None) -> dict | None:
+    def load(self, ckpt_path: str | None) -> dict[str, Any] | None:  # type: ignore[override]
         if ckpt_path is not None:
             logger.info(f"Loading checkpoint from {ckpt_path}")
             loaded_dict = torch.load(ckpt_path, map_location=self.device)
@@ -665,10 +691,10 @@ class PPO(BaseAlgo):
                 logger.info("Optimizer loaded from checkpoint")
             self.current_learning_iteration = loaded_dict["iter"]
             self._restore_env_state(loaded_dict.get("env_state"))
-            return loaded_dict.get("infos")
+            return cast("dict[str, Any] | None", loaded_dict.get("infos"))
         return None
 
-    def save(self, path, infos=None):
+    def save(self, path: str, infos: dict[str, Any] | None = None) -> None:  # type: ignore[override]
         checkpoint_dict = {
             "actor_model_state_dict": self.actor.state_dict(),
             "critic_model_state_dict": self.critic.state_dict(),
@@ -689,7 +715,7 @@ class PPO(BaseAlgo):
             checkpoint_dict["env_state"] = env_state
         self.logging_helper.save_checkpoint_artifact(checkpoint_dict, path)
 
-    def export(self, onnx_file_path: str):
+    def export(self, onnx_file_path: str) -> None:
         """Export the `.onnx` of the policy to & save it to `path`.
 
         This is intended to enable deployment, but not resuming training.
@@ -751,7 +777,7 @@ class PPO(BaseAlgo):
         if was_training:
             self._train_mode()
 
-    def _post_epoch_logging(self, it, loss_dict):
+    def _post_epoch_logging(self, it: int, loss_dict: dict[str, float]) -> None:
         extra_log_dicts = {
             "Policy": {
                 "mean_noise_std": self.actor.std.mean().item(),
@@ -762,13 +788,9 @@ class PPO(BaseAlgo):
         # Use logging helper
         self.logging_helper.post_epoch_logging(it=it, loss_dict=loss_dict, extra_log_dicts=extra_log_dicts)
 
-    def _reduce_parameters(self):
-        grads = [
-            param.grad.view(-1)
-            for model in [self.actor, self.critic]
-            for param in model.parameters()
-            if param.grad is not None
-        ]
+    def _reduce_parameters(self) -> None:
+        models: list[nn.Module] = [self.actor, self.critic]
+        grads = [param.grad.view(-1) for model in models for param in model.parameters() if param.grad is not None]
         if not grads:
             return
         all_grads = torch.cat(grads)
@@ -777,14 +799,14 @@ class PPO(BaseAlgo):
         all_grads /= self.gpu_world_size
 
         offset = 0
-        for model in [self.actor, self.critic]:
+        for model in models:
             for param in model.parameters():
                 if param.grad is not None:
                     numel = param.numel()
                     param.grad.data.copy_(all_grads[offset : offset + numel].view_as(param.grad))
                     offset += numel
 
-    def _synchronize_model_weights(self):
+    def _synchronize_model_weights(self) -> None:
         """Synchronize actor and critic weights across all GPUs."""
         # Broadcast actor weights from rank 0 to all other ranks
         for param in self.actor.parameters():
@@ -796,7 +818,7 @@ class PPO(BaseAlgo):
 
         logger.info(f"Synchronized model weights across {self.gpu_world_size} GPUs")
 
-    def _normalize_advantages_multi_gpu(self, advantages):
+    def _normalize_advantages_multi_gpu(self, advantages: torch.Tensor) -> torch.Tensor:
         local_stats = torch.stack(
             [
                 advantages.mean(),
@@ -817,28 +839,30 @@ class PPO(BaseAlgo):
     ##########################################################################################
 
     @property
-    def actor_onnx_wrapper(self):
+    def actor_onnx_wrapper(self) -> nn.Module:
         class ActorWrapper(nn.Module):
-            def __init__(self, actor, actor_obs_normalizer, empirical_normalization):
+            def __init__(
+                self, actor: nn.Module, actor_obs_normalizer: nn.Module, empirical_normalization: bool
+            ) -> None:
                 super().__init__()
                 self.actor = actor
                 self.actor_obs_normalizer = actor_obs_normalizer
                 self.empirical_normalization = empirical_normalization
 
-            def forward(self, actor_obs):
+            def forward(self, actor_obs: torch.Tensor) -> torch.Tensor:
                 if self.empirical_normalization:
                     actor_obs = self.actor_obs_normalizer(actor_obs, update=False)
                 return self.actor.act_inference({"actor_obs": actor_obs})
 
         return ActorWrapper(self.actor, self.actor_obs_normalizer, self.empirical_normalization)
 
-    def env_step(self, actor_state):
+    def env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:  # type: ignore[override]
         obs_dict, rewards, dones, extras = self.env.step(actor_state)
         actor_state.update({"obs": obs_dict, "rewards": rewards, "dones": dones, "extras": extras})
         return actor_state
 
     @torch.no_grad()
-    def get_example_obs(self):
+    def get_example_obs(self) -> dict[str, torch.Tensor]:
         """Used for exporting policy as onnx."""
         obs_dict = self.env.reset_all()
         return {
@@ -847,7 +871,7 @@ class PPO(BaseAlgo):
         }
 
     @torch.no_grad()
-    def evaluate_policy(self, max_eval_steps: int | None = None):
+    def evaluate_policy(self, max_eval_steps: int | None = None) -> None:
         self._create_eval_callbacks()
         self._pre_evaluate_policy()
         actor_state = self._create_actor_state()
@@ -870,15 +894,15 @@ class PPO(BaseAlgo):
 
         self._post_evaluate_policy()
 
-    def _create_actor_state(self):
+    def _create_actor_state(self) -> dict[str, Any]:
         return {"done_indices": [], "stop": False}
 
-    def _create_eval_callbacks(self):
+    def _create_eval_callbacks(self) -> None:
         if self.config.eval_callbacks is not None:
             for cb in self.config.eval_callbacks:
                 self.eval_callbacks.append(instantiate(self.config.eval_callbacks[cb], training_loop=self))
 
-    def _pre_evaluate_policy(self, reset_env=True):
+    def _pre_evaluate_policy(self, reset_env: bool = True) -> None:
         self._eval_mode()
         self.env.set_is_evaluating()
         if reset_env:
@@ -887,11 +911,11 @@ class PPO(BaseAlgo):
         for c in self.eval_callbacks:
             c.on_pre_evaluate_policy()
 
-    def _post_evaluate_policy(self):
+    def _post_evaluate_policy(self) -> None:
         for c in self.eval_callbacks:
             c.on_post_evaluate_policy()
 
-    def _pre_eval_env_step(self, actor_state: dict):
+    def _pre_eval_env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
         actor_obs = torch.cat([actor_state["obs"][k] for k in self.actor_obs_keys], dim=1)
         actions = self.eval_policy({"actor_obs": actor_obs})
         actor_state.update({"actions": actions})
@@ -899,12 +923,14 @@ class PPO(BaseAlgo):
             actor_state = c.on_pre_eval_env_step(actor_state)
         return actor_state
 
-    def _post_eval_env_step(self, actor_state):
+    def _post_eval_env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
         for c in self.eval_callbacks:
             actor_state = c.on_post_eval_env_step(actor_state)
         return actor_state
 
-    def get_inference_policy(self, device=None):
+    def get_inference_policy(
+        self, device: torch.device | str | None = None
+    ) -> Callable[[dict[str, torch.Tensor]], torch.Tensor]:
         self.actor.eval()  # switch to evaluation mode (dropout for example)
         self.actor_obs_normalizer.eval()
         if device is not None:

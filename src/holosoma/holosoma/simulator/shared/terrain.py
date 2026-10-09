@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import math
 import pathlib
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
+import numpy.typing as npt
 import trimesh
 
 from holosoma.config_types.terrain import TerrainTermCfg
@@ -89,7 +90,7 @@ class Terrain(TerrainInterface):
                 tile.apply_translation([c * stride[0], r * stride[1], 0.0])
                 tiles.append(tile)
 
-        return trimesh.util.concatenate(tiles)
+        return cast("trimesh.Trimesh", trimesh.util.concatenate(tiles))
 
     def _initialize_terrain_config(self) -> trimesh.Trimesh:
         terrain_config = self._cfg.terrain_config
@@ -110,7 +111,7 @@ class Terrain(TerrainInterface):
 
         self._border_size: float = self._cfg.border_size * self._cfg.scale_factor
         self._num_sub_terrains: int = self._num_rows * self._num_cols
-        self._env_origins: np.ndarray = np.zeros((self._num_rows, self._num_cols, 3))
+        self._env_origins: npt.NDArray[np.float64] = np.zeros((self._num_rows, self._num_cols, 3))
 
         # don't apply scale factor to horizontal scale, it's applied indirectly through other params
         self._horizontal_scale: float = self._cfg.horizontal_scale
@@ -128,7 +129,7 @@ class Terrain(TerrainInterface):
         self._total_width: float = self._num_cols * self._env_width + 2 * self._border_size
         self._total_length: float = self._num_rows * self._env_length + 2 * self._border_size
 
-        self._height_field_raw: np.ndarray = np.zeros((self._tot_rows, self._tot_cols), dtype=np.int16)
+        self._height_field_raw: npt.NDArray[np.int16] = np.zeros((self._tot_rows, self._tot_cols), dtype=np.int16)
         self._max_slope: float = self._cfg.max_slope
         self.randomized_terrain()
 
@@ -139,31 +140,32 @@ class Terrain(TerrainInterface):
         mesh.vertices[..., :2] -= self._border_size
         return mesh
 
-    def sample_env_origins(self) -> np.ndarray:
+    def sample_env_origins(self) -> npt.NDArray[np.float64]:
+        origin_grid: npt.NDArray[np.floating[Any]]
         if self._type == "load_obj":
             origin_grid = self._get_load_obj_env_origin_grid()
         else:
             origin_grid = self._env_origins
 
         terrain_levels = np.random.randint(0, self._num_rows, (self._num_robots,))
-        terrain_types = np.floor_divide(
+        terrain_types: npt.NDArray[np.int32] = np.floor_divide(
             np.arange(self._num_robots),
             (self._num_robots / self._num_cols),
         ).astype(np.int32)
-        return origin_grid[terrain_levels, terrain_types]
+        return cast("npt.NDArray[np.float64]", origin_grid[terrain_levels, terrain_types])
 
     @property
     def mesh(self) -> trimesh.Trimesh:
         return self._mesh
 
-    def _get_load_obj_env_origin_grid(self) -> np.ndarray:
+    def _get_load_obj_env_origin_grid(self) -> npt.NDArray[np.float32]:
         grid = getattr(self, "_load_obj_origin_grid", None)
         if grid is None:
             grid = self._build_load_obj_env_origin_grid()
             self._load_obj_origin_grid = grid
         return grid
 
-    def _build_load_obj_env_origin_grid(self) -> np.ndarray:
+    def _build_load_obj_env_origin_grid(self) -> npt.NDArray[np.float32]:
         """Compute per-tile origins for OBJ terrains."""
         if not hasattr(self, "_mesh"):
             raise RuntimeError("Mesh must be initialized before computing load_obj env origins.")
@@ -181,7 +183,7 @@ class Terrain(TerrainInterface):
         col_centers = min_corner[1] + (np.arange(self._num_cols) + 0.5) * tile_width
         grid_x, grid_y = np.meshgrid(row_centers, col_centers, indexing="ij")
 
-        heights = np.full((self._num_rows, self._num_cols), min_corner[2], dtype=np.float64)
+        heights: npt.NDArray[np.float64] = np.full((self._num_rows, self._num_cols), min_corner[2], dtype=np.float64)
         vertices = self._mesh.vertices
         if vertices.size > 0:
             row_indices = np.clip(

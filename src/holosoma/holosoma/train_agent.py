@@ -5,11 +5,14 @@ import logging
 import os
 import sys
 import traceback
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from types import TracebackType
 from typing import Any, TypedDict, cast
 
 from loguru import logger
+from typing_extensions import Self
 
 from holosoma.config_types.env import get_tyro_env_config
 from holosoma.config_types.experiment import ExperimentConfig
@@ -19,24 +22,54 @@ from holosoma.utils.eval_utils import (
     load_checkpoint,
 )
 from holosoma.utils.helpers import get_class
-from holosoma.utils.sim_utils import close_simulation_app
+from holosoma.utils.sim_utils import (
+    close_simulation_app,
+    close_simulation_resources,
+    exit_on_sigterm,
+    graceful_simulation_signals,
+    simulation_resource_session,
+)
 
 
 class TrainingContext:
     """Context manager for training lifecycle and resource management."""
 
-    def __init__(self, config: ExperimentConfig):
+    def __init__(self, config: ExperimentConfig) -> None:
         self.config = config
         self.simulation_app: Any | None = None
+        self._close_app_on_exit = True
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         # Initialize simulation app
+        self._close_app_on_exit = True
         self.simulation_app = init_sim_imports(self.config)
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        # Clean shutdown using the utility function
-        close_simulation_app(self.simulation_app)
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        if not self._close_app_on_exit:
+            return
+        try:
+            close_simulation_app(self.simulation_app)
+        except Exception:
+            if exc_val is None:
+                raise
+            logger.exception("Training cleanup failed while preserving the active exception")
+
+    def _keep_provider_open(self) -> None:
+        """Keep the provider alive when dependent environment teardown failed."""
+        self._close_app_on_exit = False
+
+    @contextmanager
+    def simulation_session(self, env: Any) -> Iterator[Any]:
+        """Own one environment and this context's provider as a dependency-ordered pair."""
+        self._close_app_on_exit = False
+        with simulation_resource_session(env, self.simulation_app) as owned_env:
+            yield owned_env
 
     def train(self) -> None:
         """Train using this context's sim app."""
@@ -44,9 +77,9 @@ class TrainingContext:
 
 
 @contextmanager
-def training_context(config: ExperimentConfig):
+def training_context(config: ExperimentConfig) -> Iterator[TrainingContext]:
     """Context manager function for training."""
-    with TrainingContext(config) as ctx:
+    with exit_on_sigterm(), TrainingContext(config) as ctx:
         yield ctx
 
 
@@ -97,28 +130,29 @@ def configure_multi_gpu() -> MultGPUConfig | None:
     return multi_gpu_config
 
 
-def get_device(config, distributed_conf: MultGPUConfig | None) -> str:
+def get_device(config: ExperimentConfig, distributed_conf: MultGPUConfig | None) -> str:
     import torch
 
     is_config_device_specified = hasattr(config, "device") and config.device is not None
     is_multi_gpu = distributed_conf is not None
 
     if is_config_device_specified:
-        if is_multi_gpu and config.device != cast("dict", distributed_conf)["local_rank"]:
+        config_device = config.device  # type: ignore[attr-defined]
+        if is_multi_gpu and config_device != cast("dict[str, int]", distributed_conf)["local_rank"]:
+            local_rank = cast("dict[str, int]", distributed_conf)["local_rank"]
             raise ValueError(
-                f"Device specified in config ({config.device}) \
-                              does not match expected local rank {cast('dict', distributed_conf)['local_rank']}"
+                f"Device specified in config ({config_device}) does not match expected local rank {local_rank}"
             )
-        device = config.device
+        device = config_device
     elif is_multi_gpu:
-        device = f"cuda:{cast('dict', distributed_conf)['local_rank']}"
+        device = f"cuda:{cast('dict[str, int]', distributed_conf)['local_rank']}"
     else:
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
 
-    return device
+    return cast("str", device)
 
 
-def configure_logging(distributed_conf: MultGPUConfig | None = None, log_dir: Path | None = None):
+def configure_logging(distributed_conf: MultGPUConfig | None = None, log_dir: Path | None = None) -> None:
     # Configure logging.
     from holosoma.utils.logging import LoguruLoggingBridge
 
@@ -141,6 +175,7 @@ def configure_logging(distributed_conf: MultGPUConfig | None = None, log_dir: Pa
     logging.getLogger().addHandler(LoguruLoggingBridge())
 
 
+@graceful_simulation_signals
 def train(tyro_config: ExperimentConfig, training_context: TrainingContext | None = None) -> None:
     """Train an agent with optional context for sim app management.
 
@@ -293,7 +328,7 @@ def train(tyro_config: ExperimentConfig, training_context: TrainingContext | Non
             tyro_config = dataclasses.replace(
                 tyro_config, training=dataclasses.replace(tyro_config.training, checkpoint=str(loaded_checkpoint))
             )
-            algo.load(loaded_checkpoint)
+            algo.load(str(loaded_checkpoint))
 
         # handle saving config
         algo.learn()
@@ -312,18 +347,15 @@ def train(tyro_config: ExperimentConfig, training_context: TrainingContext | Non
         logger.error(f"Exception occurred during training: {e}\n{tb_str}")
         sys.exit(1)  # manually set exit code, not possible via isaacsim app.close()
     finally:
-        # Fire the simulator CLOSE phase (bridge/video teardown). Prefer env.close() if the env
-        # wrapper defines one; else reach the simulator directly.
-        if env is not None:
-            try:
-                if hasattr(env, "close"):
-                    env.close()
-                elif hasattr(env, "simulator") and hasattr(env.simulator, "close"):
-                    env.simulator.close()
-            except Exception as e:
-                logger.warning(f"Environment close failed: {e}")
-        if auto_close:
-            close_simulation_app(simulation_app)
+        active_exception = sys.exc_info()[1]
+        try:
+            close_simulation_resources(env, simulation_app if auto_close else None)
+        except Exception:
+            if training_context is not None:
+                training_context._keep_provider_open()
+            if active_exception is None:
+                raise
+            logger.exception("Training cleanup failed while preserving the active exception")
 
     logger.info("Training shutdown complete.")
 

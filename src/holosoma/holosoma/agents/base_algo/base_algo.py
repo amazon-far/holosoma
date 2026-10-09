@@ -11,7 +11,13 @@ if TYPE_CHECKING:
 
 
 class BaseAlgo:
-    def __init__(self, env: BaseTask, config: AlgoInitConfig, device, multi_gpu_cfg=None):
+    def __init__(
+        self,
+        env: BaseTask,
+        config: AlgoInitConfig,
+        device: str,
+        multi_gpu_cfg: dict[str, int] | None = None,
+    ) -> None:
         self.env = env
         self.config = config
         self.device = device
@@ -29,25 +35,27 @@ class BaseAlgo:
         self._experiment_config: ExperimentConfig | None = None
         self._wandb_run_path: str | None = None
 
-    def setup(self):
+    def setup(self) -> type[NotImplementedError]:
         return NotImplementedError
 
-    def learn(self):
+    def learn(self) -> type[NotImplementedError]:
         return NotImplementedError
 
-    def load(self, path):
-        return NotImplementedError
-
-    @property
-    def inference_model(self):
+    def load(self, path: str) -> type[NotImplementedError]:
         return NotImplementedError
 
     @property
-    def actor_onnx_wrapper(self):
+    def inference_model(self) -> type[NotImplementedError]:
         return NotImplementedError
 
-    def env_step(self, actions, extra_info=None):
-        obs_dict, rewards, dones, extras = self.env.step(actions, extra_info)
+    @property
+    def actor_onnx_wrapper(self) -> type[NotImplementedError]:
+        return NotImplementedError
+
+    def env_step(
+        self, actions: torch.Tensor, extra_info: dict[str, Any] | None = None
+    ) -> tuple[dict[str, Any], torch.Tensor, torch.Tensor, dict[str, Any]]:
+        obs_dict, rewards, dones, extras = self.env.step(actions, extra_info)  # type: ignore[call-arg]
         return obs_dict, rewards, dones, extras
 
     def attach_checkpoint_metadata(
@@ -87,7 +95,7 @@ class BaseAlgo:
             self.env, "use_domain_rand_scale_curriculum", False
         )
 
-    def _synchronize_curriculum_metrics(self):
+    def _synchronize_curriculum_metrics(self) -> None:
         """Synchronize curriculum-related metrics across all GPUs."""
         # Check if any curricula are enabled before synchronizing
         if not self.has_curricula_enabled():
@@ -126,10 +134,10 @@ class BaseAlgo:
         raise NotImplementedError
 
     @torch.no_grad()
-    def evaluate_policy(self, max_eval_steps: int | None = None):
+    def evaluate_policy(self, max_eval_steps: int | None = None) -> Any:
         raise NotImplementedError
 
-    def save(self, path=None, name="last.ckpt"):
+    def save(self, path: str | None = None, name: str = "last.ckpt") -> Any:
         raise NotImplementedError
 
     def _unwrap_env(self) -> BaseTask | Any:

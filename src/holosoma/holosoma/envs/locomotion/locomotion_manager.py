@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Mapping, cast
+
 from loguru import logger
 
 from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.torch_utils import torch_rand_float
+
+if TYPE_CHECKING:
+    from holosoma.config_types.env import EnvConfig
+    from holosoma.managers.command.terms.locomotion import LocomotionGait
+    from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker
+    from holosoma.managers.randomization.terms.locomotion import PushRandomizerState
+    from holosoma.managers.terrain.terms.locomotion import TerrainLocomotion
 
 
 class LeggedRobotLocomotionManager(BaseTask):
@@ -12,10 +21,10 @@ class LeggedRobotLocomotionManager(BaseTask):
 
     def __init__(
         self,
-        tyro_config,
+        tyro_config: EnvConfig,
         *,
-        device,
-    ):
+        device: str,
+    ) -> None:
         self.init_done = False
         super().__init__(
             tyro_config,
@@ -26,7 +35,7 @@ class LeggedRobotLocomotionManager(BaseTask):
     def _get_task_name(self) -> str:
         return "locomotion"
 
-    def _init_buffers(self):
+    def _init_buffers(self) -> None:
         """Initialize torch tensors which will contain simulation states and processed quantities"""
         super()._init_buffers()
 
@@ -54,13 +63,13 @@ class LeggedRobotLocomotionManager(BaseTask):
 
         self.lidar_height_offset = getattr(self.robot_config, "lidar_height_offset", 0.5)
 
-    def _init_counters(self):
+    def _init_counters(self) -> None:
         self.common_step_counter = 0
 
-    def _update_counters_each_step(self):
+    def _update_counters_each_step(self) -> None:
         self.common_step_counter += 1
 
-    def _init_domain_rand_buffers(self):
+    def _init_domain_rand_buffers(self) -> None:
         ######################################### DR related tensors #########################################
         # Action delay buffers are now initialized by randomization manager's setup_action_delay_buffers term
 
@@ -73,7 +82,7 @@ class LeggedRobotLocomotionManager(BaseTask):
         self._randomize_push_robots = False
         self._max_push_vel = torch.zeros(2, dtype=torch.float32, device=self.device)
 
-    def _setup_robot_body_indices(self):
+    def _setup_robot_body_indices(self) -> None:
         foot_body_names = [s for s in self.body_names if self.robot_config.foot_body_name in s]
         foot_height_names = [s for s in self.body_names if self.robot_config.foot_height_name in s]
 
@@ -101,7 +110,7 @@ class LeggedRobotLocomotionManager(BaseTask):
             self.torso_name = self.robot_config.torso_name
             self.torso_index = self.simulator.find_rigid_body_indice(self.torso_name)
 
-    def set_is_evaluating(self, command=None):
+    def set_is_evaluating(self, command: Any = None) -> None:
         logger.info("Setting Env is evaluating")
         super().set_is_evaluating()
         commands = self.command_manager.commands
@@ -109,47 +118,49 @@ class LeggedRobotLocomotionManager(BaseTask):
         if command is not None:
             command_tensor = torch.as_tensor(command, device=self.device, dtype=commands.dtype)
             commands[:] = command_tensor.view(1, -1).expand_as(commands)
-        gait_state = self.command_manager.get_state("locomotion_gait")
+        gait_state = cast("LocomotionGait", self.command_manager.get_state("locomotion_gait"))
         gait_state.set_eval_mode(True)
 
-    def _setup_simulator_next_task(self):
+    def _setup_simulator_next_task(self) -> None:
         pass
 
-    def _setup_simulator_control(self):
-        self.simulator.commands = self.command_manager.commands
+    def _setup_simulator_control(self) -> None:
+        self.simulator.commands = self.command_manager.commands  # type: ignore[attr-defined]
 
-    def _get_envs_to_refresh(self):
+    def _get_envs_to_refresh(self) -> torch.Tensor:
         return self.need_to_refresh_envs.nonzero(as_tuple=False).flatten()
 
-    def _refresh_envs_after_reset(self, env_ids):
+    def _refresh_envs_after_reset(self, env_ids: torch.Tensor) -> None:
         self.simulator.set_actor_root_state_tensor(env_ids, self.simulator.all_root_states)
-        self.simulator.set_dof_state_tensor(env_ids, self.simulator.dof_state)
+        self.simulator.set_dof_state_tensor(env_ids, self.simulator.dof_state)  # type: ignore[attr-defined]
         self.simulator.clear_contact_forces_history(env_ids)
         self.need_to_refresh_envs[env_ids] = False
         self.simulator.refresh_sim_tensors()
         self._pre_compute_observations_callback()
 
-    def _pre_compute_observations_callback(self):
+    def _pre_compute_observations_callback(self) -> None:
         # prepare quantities
         self.base_quat[:] = self.simulator.base_quat[:]
         self.terrain_manager.update_heights()
 
-    def _update_tasks_callback(self):
+    def _update_tasks_callback(self) -> None:
         super()._update_tasks_callback()
 
         # Assign commands to simulator for headless recording
         if hasattr(self.simulator, "headless_recording") and self.simulator.headless_recording:
             if hasattr(self.command_manager, "commands"):
-                self.simulator.commands = self.command_manager.commands
+                self.simulator.commands = self.command_manager.commands  # type: ignore[attr-defined]
 
-    def _post_compute_observations_callback(self):
+    def _post_compute_observations_callback(self) -> None:
         return
 
-    def reset_all(self):
+    def reset_all(self) -> dict[str, Any]:
         self._init_buffers()
         return super().reset_all()
 
-    def _reset_robot_states_callback(self, env_ids, target_states=None):
+    def _reset_robot_states_callback(
+        self, env_ids: torch.Tensor, target_states: Mapping[str, torch.Tensor] | None = None
+    ) -> None:
         # if target_states is not None, reset to target states
         if target_states is not None:
             self._reset_dofs(env_ids, target_states["dof_states"])
@@ -158,7 +169,9 @@ class LeggedRobotLocomotionManager(BaseTask):
             self._reset_dofs(env_ids)
             self._reset_root_states(env_ids)
 
-    def _reset_buffers_callback(self, env_ids, target_buf=None):
+    def _reset_buffers_callback(
+        self, env_ids: torch.Tensor, target_buf: Mapping[str, torch.Tensor] | None = None
+    ) -> None:
         # Observation manager reset is now handled in base_task.py
         self.need_to_refresh_envs[env_ids] = True
 
@@ -176,17 +189,17 @@ class LeggedRobotLocomotionManager(BaseTask):
             self.reset_buf[env_ids] = 1
             self._pending_episode_update_mask[env_ids] = True
 
-    def _update_log_dict(self):
+    def _update_log_dict(self) -> None:
         avg = self._get_average_episode_tracker().get_average()
         self.log_dict["average_episode_length"] = avg.detach().cpu()
 
     ################ Curriculum #################
 
-    def _get_average_episode_tracker(self):
+    def _get_average_episode_tracker(self) -> AverageEpisodeLengthTracker:
         tracker = self.curriculum_manager.get_term("average_episode_tracker")
         if tracker is None:
             raise RuntimeError("AverageEpisodeLengthTracker is not registered with the curriculum manager.")
-        return tracker
+        return cast("AverageEpisodeLengthTracker", tracker)
 
     @property
     def average_episode_length(self) -> float:
@@ -210,7 +223,7 @@ class LeggedRobotLocomotionManager(BaseTask):
         tracker_state = state.get("average_episode_tracker")
         if tracker_state is not None:
             tracker = self._get_average_episode_tracker()
-            tracker.load_state_dict(tracker_state)
+            tracker.load_state_dict(cast("dict[str, Any]", tracker_state))
             tracker.suppress_next_update()
 
         penalty_state = state.get("reward_penalty_scale")
@@ -235,14 +248,14 @@ class LeggedRobotLocomotionManager(BaseTask):
             torch.distributed.broadcast(penalty_tensor, src=0)
             self.reward_penalty_scale = float(penalty_tensor.item())
 
-    def _push_robots(self, env_ids):
+    def _push_robots(self, env_ids: torch.Tensor) -> None:
         """Random pushes the robots. Emulates an impulse by setting a randomized base velocity."""
         if len(env_ids) == 0:
             return
         self.need_to_refresh_envs[env_ids] = True
         max_vel_tensor = self._max_push_vel
         if self.randomization_manager is not None:
-            state = self.randomization_manager.get_state("push_randomizer_state")
+            state = cast("PushRandomizerState | None", self.randomization_manager.get_state("push_randomizer_state"))
             if state is not None:
                 max_vel_tensor = state.max_push_vel.clone().to(self.device)
 
@@ -259,7 +272,7 @@ class LeggedRobotLocomotionManager(BaseTask):
 
     ################ ENV CALLBACKS #################
 
-    def _reset_dofs(self, env_ids, target_state=None):
+    def _reset_dofs(self, env_ids: torch.Tensor, target_state: torch.Tensor | None = None) -> None:
         """Resets DOF position and velocities of selected environmments
         Positions are randomly selected within 0.5:1.5 x default positions.
         Velocities are set to zero.
@@ -278,7 +291,7 @@ class LeggedRobotLocomotionManager(BaseTask):
             )
             self.simulator.dof_vel[env_ids] = 0.0
 
-    def _reset_root_states(self, env_ids, target_root_states=None):
+    def _reset_root_states(self, env_ids: torch.Tensor, target_root_states: torch.Tensor | None = None) -> None:
         """Resets ROOT states position and velocities of selected environmments
             if target_root_states is not None, reset to target_root_states
         Args:
@@ -313,7 +326,7 @@ class LeggedRobotLocomotionManager(BaseTask):
                     current_xy = self.simulator.robot_root_states[env_ids, :2]
                     new_xy = current_xy + xy_offsets
 
-                    terrain_state = self.terrain_manager.get_state("locomotion_terrain")
+                    terrain_state = cast("TerrainLocomotion", self.terrain_manager.get_state("locomotion_terrain"))
                     terrain_heights = terrain_state.query_terrain_heights(
                         new_xy,
                         use_grid_sampling=spawn_cfg.use_grid_sampling,

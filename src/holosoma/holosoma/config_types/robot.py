@@ -6,6 +6,7 @@ from pydantic import model_validator
 from pydantic.dataclasses import dataclass
 
 from holosoma.config_types.scene import PhysicsConfig
+from holosoma.config_types.value_types import UnitQuaternionXYZW
 
 
 @dataclass(frozen=True)
@@ -26,11 +27,35 @@ class RobotBridgeConfig:
     motor_type: str = "serial"
     """Motor communication type ('serial', etc.)."""
 
+    controlled_dof_names: tuple[str, ...] = ()
+    """Explicit allow-list of DOF names this SDK bridge controls, in order. When non-empty this
+    WINS over ``excluded_dof_names``. Empty (default) = control every DOF.
+
+    Use when the robot has more simulated DOFs than the SDK models (so the bridge must drive only
+    a named subset and leave the rest to a co-controller); leave empty when the SDK owns the whole
+    robot."""
+
+    excluded_dof_names: tuple[str, ...] = ()
+    """DOF names to LEAVE OUT of this bridge (control everything else). Used only when
+    ``controlled_dof_names`` is empty. Empty (default) = control every DOF.
+
+    The complement of ``controlled_dof_names``: name the few DOFs a co-controller owns instead of
+    the many the SDK drives."""
+
+    sdk_robot_type: str | None = None
+    """robot_type presented to the SDK bridge (its supported-type gate + motor-vector sizing).
+    ``None`` (default) = use ``asset.robot_type`` unchanged.
+
+    Set this when the asset's ``robot_type`` is not itself an SDK motor model — e.g. a robot whose
+    asset id differs from the SDK's fixed-size motor model it should be driven as. The controlled
+    DOF subset must then match that model's motor count."""
+
 
 @dataclass(frozen=True)
 class RobotInitState:
     pos: list[float]
-    rot: list[float]
+    rot: UnitQuaternionXYZW
+    """Initial unit quaternion [x, y, z, w]. Norm deviations up to 1e-4 are normalized."""
     lin_vel: list[float]
     ang_vel: list[float]
     default_joint_angles: dict[str, float]

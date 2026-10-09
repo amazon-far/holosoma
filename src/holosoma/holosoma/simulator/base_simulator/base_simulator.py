@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
@@ -13,6 +13,7 @@ from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.simulator.shared.external_wrench import ExternalWrenchAccumulator, WrenchTarget
 from holosoma.simulator.shared.object_registry import ObjectRegistry, ObjectType
 from holosoma.simulator.shared.scene_types import SceneInterface
 from holosoma.simulator.types import ActorIndices, ActorNames, ActorPoses, ActorStates, EnvIds
@@ -22,7 +23,7 @@ from holosoma.utils.simulator_config import SimulatorType, get_simulator_type
 
 if TYPE_CHECKING:
     from holosoma.simulator.shared.camera_controller import CameraController
-    from holosoma.simulator.shared.camera_sensor import SensorManager
+    from holosoma.simulator.shared.sensor_manager import SensorManager
     from holosoma.simulator.shared.simulator_bridge import SimulatorBridge
     from holosoma.simulator.shared.video_recorder import VideoRecorderInterface
     from holosoma.simulator.shared.virtual_gantry import VirtualGantry
@@ -113,6 +114,22 @@ class BaseSimulator:
     >>> sim.set_actor_states(["obj0"], env_ids, states1, write_updates=False)
     >>> sim.set_actor_states(["obj1"], env_ids, states2, write_updates=False)
     >>> sim.write_state_updates()  # Single batch sync
+
+    **External forces (cross-backend)**: apply a world-frame force/torque to a robot or object body
+    via :meth:`apply_external_force`. Forces accumulate per substep and reset after each step, so
+    re-apply every step (e.g. from a ``PRE_STEP`` hook) to sustain them:
+    >>> sim.apply_external_force("robot", forces=f, body_names=["torso_link"], env_ids=env_ids)
+    >>> sim.apply_external_force("tbox", torques=t, env_ids=env_ids)  # torque only
+    >>> sim.apply_external_force("obj0", forces=f, torques=t, env_ids=env_ids)
+
+    **Robot rigid-body kinematics (cross-backend)**: read per-body world-frame pose/velocity of the
+    robot's link frames via the zero-cost properties :attr:`rigid_body_pos_w`,
+    :attr:`rigid_body_quat_w` (xyzw), :attr:`rigid_body_lin_vel_w`,
+    :attr:`rigid_body_ang_vel_w` — each ``[num_envs, num_bodies, k]`` in holosoma body order.
+    Position and linear velocity refer to the same link-frame origin (not the inertial COM). Index
+    the body axis by name with :meth:`find_rigid_body_indice`:
+    >>> foot_z = sim.rigid_body_pos_w[:, sim.find_rigid_body_indice("left_ankle_roll_link"), 2]
+    An object (non-robot actor) body state is its root state — use :meth:`get_actor_states`.
     """
 
     training_config: TrainingConfig
@@ -121,7 +138,7 @@ class BaseSimulator:
     robot_config: RobotConfig
 
     sim_dt: float
-    viewer: object
+    viewer: object | None
     robot_root_states: torch.Tensor
     base_quat: torch.Tensor
     dof_pos: torch.Tensor
@@ -138,7 +155,7 @@ class BaseSimulator:
     # Unified all-actors (robot + objects) root-state view: a duck-typed UnifiedRootStatesView,
     # not a torch.Tensor. Index with get_actor_indices results for any actor; supports [indices]
     # read/write, .shape/.device/.dtype/.clone(), not Tensor-only methods (.view/.reshape/.to).
-    all_root_states: torch.Tensor  # type: ignore[assignment]
+    all_root_states: torch.Tensor
 
     height_samples: None | torch.Tensor
 
@@ -146,6 +163,9 @@ class BaseSimulator:
 
     debug_viz_enabled: bool = False
 
+    # Raw robot per-body kinematics storage, refreshed by each backend every step; [num_envs,
+    # num_bodies, k] in holosoma body order, _rigid_body_rot xyzw. Read via the rigid_body_*_w
+    # properties below.
     _rigid_body_pos: torch.Tensor
     _rigid_body_rot: torch.Tensor
     _rigid_body_vel: torch.Tensor
@@ -165,31 +185,34 @@ class BaseSimulator:
             Device type for simulation ('cpu' or 'cuda').
 
         """
+        self.viewer = None
         self.terrain_manager = terrain_manager
         self.training_config = tyro_config.training
         self.simulator_config = tyro_config.simulator
         self.scene_config = tyro_config.scene
         self.sensor_config = tyro_config.sensors
         self.robot_config = tyro_config.robot
+        self.plugin_config = tyro_config.plugin
         self.video_config = tyro_config.logger.video
         self.sim_device = device
         self.headless = False
         self.debug_viz_enabled = self.simulator_config.debug_viz
         self.object_registry = ObjectRegistry(device)
+        # External-force accumulator (apply_external_force / flush_external_wrench). Composed
+        # helper, like the bridge/gantry below; allocates per-actor buffers lazily on first use.
+        self._external_wrench = ExternalWrenchAccumulator(self)
+        self.kinematic_playback: bool = self.simulator_config.sim.kinematic_playback
+        self._kinematic_time = 0.0
         self.hooks = HookRegistry(base_rates=self._hook_base_rates())
-        # Register camera rendering FIRST (before the plugins below), so on FRAME_END cameras render
-        # before any camera-consumer plugin (egress/viz/video) reads. No-ops until a backend builds
-        # sensor_manager during setup; harmless when no cameras are configured.
+        # Register sensor rendering before plugins so FRAME_END consumers read fresh outputs.
+        # This no-ops until a backend builds its sensor manager during setup.
         self.hooks.add(Phase.FRAME_END, self.render_sensors, name="sensors.render")
-        # Build plugins from tyro_config.plugin and keep the instances alive (key -> plugin).
-        # Constructing each here registers its hooks on self.hooks, so they fire on later
-        # emit(). The `none` preset disables a slot.
-        self.installed_plugins: dict[str, Any] = {
-            key: cfg.get_cls()(cfg, self) for key, cfg in tyro_config.plugin.items()
-        }
-        if self.installed_plugins:
-            logger.info(f"Installed plugins: {sorted(self.installed_plugins)}")
+        self.installed_plugins: dict[str, Any] = {}
+        self._plugins_installed = False
         self._closed = False
+        # Cooperative shutdown flag: set via request_shutdown(), polled by loop owners (run_sim).
+        self.shutdown_requested = False
+        self._shutdown_reason = ""
 
         # Virtual gantry system
         self.virtual_gantry: VirtualGantry | None = None
@@ -203,8 +226,7 @@ class BaseSimulator:
         # Bridge system
         self.bridge: SimulatorBridge | None = None
 
-        # Mounted-camera sensors, populated by each backend during its own sensor setup (None until
-        # then, and when no cameras are configured). The render_sensors hook above no-ops until it exists.
+        # Mounted sensors, populated by each backend during setup. The render hook no-ops until it exists.
         self.sensor_manager: SensorManager | None = None
 
         # To be overridden by subclasses
@@ -223,7 +245,7 @@ class BaseSimulator:
 
     # ----- Configuration Setup Methods -----
 
-    def set_headless(self, headless):
+    def set_headless(self, headless: bool) -> None:
         """
         Sets the headless mode for the simulator.
 
@@ -232,7 +254,7 @@ class BaseSimulator:
         """
         self.headless = headless
 
-    def set_startup_randomization_callback(self, callback):
+    def set_startup_randomization_callback(self, callback: Callable[[], None]) -> None:
         """Sets a callback to be invoked during environment startup for domain randomization.
 
         This method allows the environment to inject domain randomization logic during
@@ -246,14 +268,14 @@ class BaseSimulator:
         """
         # Default no-op implementation
 
-    def setup(self):
+    def setup(self) -> None:
         """
         Initializes the simulator parameters and environment. This method should be implemented
         by subclasses to set specific simulator configurations.
         """
         raise NotImplementedError("The 'setup' method must be implemented in subclasses.")
 
-    def prepare_manager_fields(self, **managers) -> None:
+    def prepare_manager_fields(self, **managers: Any) -> None:
         """Scan managers for field requirements and prepare them.
 
         Parameters
@@ -265,7 +287,7 @@ class BaseSimulator:
 
     # ----- Terrain Setup Methods -----
 
-    def setup_terrain(self):
+    def setup_terrain(self) -> None:
         """
         Configures the terrain based on specified mesh type.
 
@@ -276,7 +298,7 @@ class BaseSimulator:
 
     # ----- Robot Asset Setup Methods -----
 
-    def load_assets(self):
+    def load_assets(self) -> None:
         """
         Loads the robot assets into the simulation environment.
         save self.num_dofs, self.num_bodies, self.dof_names, self.body_names
@@ -305,7 +327,13 @@ class BaseSimulator:
 
     # ----- Environment Creation Methods -----
 
-    def create_envs(self, num_envs, env_origins, base_init_state, env_config):
+    def create_envs(
+        self,
+        num_envs: int,
+        env_origins: torch.Tensor,
+        base_init_state: torch.Tensor,
+        env_config: dict[str, Any],
+    ) -> None:
         """
         Creates and initializes environments with specified configurations.
 
@@ -358,7 +386,9 @@ class BaseSimulator:
             self.object_registry.register_object(name, object_type, position, pose, velocity)
         self.object_registry.finalize_registration()
 
-    def _collect_spawned_actors(self):
+    def _collect_spawned_actors(
+        self,
+    ) -> tuple[torch.Tensor, list[tuple[str, bool, torch.Tensor, torch.Tensor | None]]]:
         """Return ``(robot_pose, items)`` describing what this backend spawned.
 
         - ``robot_pose``: the robot's ``[num_envs, 7]`` initial pose, in the backend's own
@@ -385,7 +415,7 @@ class BaseSimulator:
         """
         return get_simulator_type()
 
-    def get_dof_limits_properties(self):
+    def get_dof_limits_properties(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Retrieves the DOF (degrees of freedom) limits and properties.
 
@@ -394,7 +424,7 @@ class BaseSimulator:
         """
         raise NotImplementedError("The 'get_dof_limits_properties' method must be implemented in subclasses.")
 
-    def find_rigid_body_indice(self, body_name):
+    def find_rigid_body_indice(self, body_name: str) -> int:
         """
         Finds the index of a specified rigid body.
 
@@ -406,15 +436,106 @@ class BaseSimulator:
         """
         raise NotImplementedError("The 'find_rigid_body_indice' method must be implemented in subclasses.")
 
+    # ----- Robot rigid-body kinematics (public, cross-backend) -----
+    #
+    # Bare properties, not getters: each returns the backend's live _rigid_body_* storage so the hot
+    # path (reward/command/terrain terms indexing [:, body_idx, :] every step) pays nothing. Treat as
+    # read-only — mutate state via set_actor_states / apply_external_force, not through these tensors.
+
+    @property
+    def rigid_body_pos_w(self) -> torch.Tensor:
+        """Robot per-body world positions, ``[num_envs, num_bodies, 3]`` (holosoma body order)."""
+        return self._rigid_body_pos
+
+    @property
+    def rigid_body_quat_w(self) -> torch.Tensor:
+        """Robot per-body world orientations (xyzw), ``[num_envs, num_bodies, 4]``."""
+        return self._rigid_body_rot
+
+    @property
+    def rigid_body_lin_vel_w(self) -> torch.Tensor:
+        """Robot link-origin world linear velocities, ``[num_envs, num_bodies, 3]``."""
+        return self._rigid_body_vel
+
+    @property
+    def rigid_body_ang_vel_w(self) -> torch.Tensor:
+        """Robot per-body world angular velocities, ``[num_envs, num_bodies, 3]``."""
+        return self._rigid_body_ang_vel
+
+    # ----- External forces (public, cross-backend) -----
+
+    def apply_external_force(
+        self,
+        actor_name: str,
+        *,
+        forces: torch.Tensor | None = None,
+        torques: torch.Tensor | None = None,
+        body_names: list[str] | None = None,
+        env_ids: EnvIds | None = None,
+    ) -> None:
+        """Add a world-frame external force and/or torque to a body for THIS substep.
+
+        ``forces`` and ``torques`` are peers — pass either or both (at least one). Both ACCUMULATE,
+        so multiple callers per substep compose, and last exactly ONE substep — re-apply every step
+        (e.g. from a ``PRE_STEP`` hook) to sustain them. Applied at the body centre of mass in the
+        WORLD frame on every backend.
+
+        Args:
+            actor_name: ``"robot"`` (the robot articulation) or an object/scene actor name (e.g.
+                ``"obj0"``). Objects must be free bodies to respond; a wrench on a static/kinematic
+                body is written but inert.
+            forces: World-frame force (N). Shapes (``N`` = envs, ``B`` = bodies): ``[3]``, ``[N, 3]``
+                (per-env), ``[B, 3]`` (per-body, when ``N != B``), or ``[N, B, 3]`` (required when
+                ``N == B``). ``None`` => no force.
+            torques: World-frame torque (N·m) at the CoM, same shape rules as ``forces``. ``None`` =>
+                no torque.
+            body_names: Actor bodies to target, by name; ``None`` => all (its single body, for an
+                object).
+            env_ids: Environments to target; ``None`` => all. Duplicated ids accumulate (consistent
+                with the additive contract).
+
+        Raises:
+            ValueError: both ``forces`` and ``torques`` are ``None``; unknown ``actor_name`` /
+                ``body_names``; an ``env_id`` outside ``[0, num_envs)``; or a component not
+                broadcastable to ``[N, B, 3]``.
+
+        Note:
+            All external forces should go through this API. The flush writes a touched body across
+            ALL envs (untargeted envs read the accumulator's zeros), so code applying forces through
+            a backend's native API directly is only safe on bodies this API never touches.
+        """
+        self._external_wrench.apply(actor_name, forces=forces, torques=torques, body_names=body_names, env_ids=env_ids)
+
+    def flush_external_wrench(self) -> None:
+        """Apply this substep's accumulated external forces to native buffers, then reset them.
+
+        Backends MUST call this at the top of :meth:`simulate_at_each_physics_step` (after
+        ``PRE_STEP`` hooks accumulate, before the native step) via the
+        :meth:`_write_external_wrench_native` hook.
+        """
+        self._external_wrench.flush()
+
+    def _write_external_wrench_native(self, targets: list[WrenchTarget]) -> None:
+        """Backend hook: write world-frame wrench accumulators to native force buffers.
+
+        Each target carries a ``[num_envs, n_bodies, 6]`` world-frame ``wrench`` and ``write_cols``.
+        Implementations must, for the columns in ``write_cols`` only (leaving other bodies untouched):
+        SET (not add) the native buffer to the wrench, mapping columns to native body indices and
+        converting frame if the native API needs it (only IsaacSim, which is body-local).
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement _write_external_wrench_native for apply_external_force()"
+        )
+
     # ----- Simulation Preparation and Refresh Methods -----
 
-    def prepare_sim(self):
+    def prepare_sim(self) -> None:
         """
         Prepares the simulation environment and refreshes any relevant tensors.
         """
         raise NotImplementedError("The 'prepare_sim' method must be implemented in subclasses.")
 
-    def refresh_sim_tensors(self):
+    def refresh_sim_tensors(self) -> None:
         """
         Refreshes the state tensors in the simulation to ensure they are up-to-date.
         """
@@ -432,30 +553,57 @@ class BaseSimulator:
 
     # ----- Control Application Methods -----
 
-    def apply_torques_at_dof(self, torques):
+    def apply_torques_at_dof(self, torques: torch.Tensor, dof_indices: list[int] | None = None) -> None:
         """
         Applies the specified torques to the robot's degrees of freedom (DOF).
 
         Args:
-            torques (tensor): Tensor containing torques to apply.
+            torques (tensor): Tensor containing torques to apply. When ``dof_indices`` is None it is
+                the full per-DOF vector; otherwise it is aligned with ``dof_indices``.
+            dof_indices (list[int] | None): When None (default), write every DOF (the historical
+                full-width path). When a list, scatter ``torques`` into ONLY those DOFs' actuators,
+                leaving the other slots as their owner wrote them this substep (so a co-controller
+                driving the complementary DOFs is not clobbered).
         """
         raise NotImplementedError("The 'apply_torques_at_dof' method must be implemented in subclasses.")
 
-    def simulate_at_each_physics_step(self):
+    def simulate_at_each_physics_step(self) -> None:
+        """Advance the simulation by a single step.
+
+        One physics integration step, or — with ``sim.kinematic_playback`` — one
+        forward-kinematics pass over externally written state.
         """
-        Advances the simulation by a single physics step.
+        if self.kinematic_playback:
+            self.forward_kinematics()
+            self._kinematic_time += 1.0 / self.simulator_config.sim.fps
+        else:
+            self._step_dynamics()
+
+    def _step_dynamics(self) -> None:
+        """Advance the physics engine by one integration step.
+
+        Implementations must call ``self.flush_external_wrench()`` at the top (after ``PRE_STEP``
+        hooks, before the native step) so :meth:`apply_external_force` takes effect this substep.
         """
-        raise NotImplementedError("The 'simulate_at_each_physics_step' method must be implemented in subclasses.")
+        raise NotImplementedError("The '_step_dynamics' method must be implemented in subclasses.")
+
+    def forward_kinematics(self) -> None:
+        """Propagate written joint/root state to derived body and camera poses, without dynamics.
+
+        Makes everything renderers read consistent with state set via the ``set_*`` APIs.
+        No integration and no time advance.
+        """
+        raise NotImplementedError("The 'forward_kinematics' method must be implemented in subclasses.")
 
     # ----- Viewer Setup and Rendering Methods -----
 
-    def setup_viewer(self):
+    def setup_viewer(self) -> None:
         """
         Sets up a viewer for visualizing the simulation, allowing keyboard interactions.
         """
         raise NotImplementedError("The 'setup_viewer' method must be implemented in subclasses.")
 
-    def render(self, sync_frame_time=True):
+    def render(self, sync_frame_time: bool = True) -> None:
         """
         Renders the simulation frame-by-frame, syncing frame time if required.
 
@@ -472,21 +620,25 @@ class BaseSimulator:
         to allow policies (especially WBT policies) to advance motion timesteps
         in sync with the simulation.
 
+        Under ``sim.kinematic_playback`` this is the kinematic clock (one sim dt per step);
+        the engine's own clock does not advance without integration.
+
         Returns
         -------
         float
             Current simulation time in seconds.
 
-        Raises
-        ------
-        NotImplementedError
-            If not implemented by subclass.
-
         See Also
         --------
-        SimulatorBridge.step : Publishes this time via ClockPub
+        SimulatorBridge.transport_step : Publishes this time via ClockPub
         """
-        raise NotImplementedError("The 'time' method must be implemented in subclasses.")
+        if self.kinematic_playback:
+            return self._kinematic_time
+        return self._physics_time()
+
+    def _physics_time(self) -> float:
+        """The backend's native physics clock (seconds). Implemented per backend."""
+        raise NotImplementedError("The '_physics_time' method must be implemented in subclasses.")
 
     def get_dof_forces(self, env_id: int = 0) -> torch.Tensor:
         """Get DOF forces for a specific environment (simulator-agnostic interface).
@@ -517,7 +669,7 @@ class BaseSimulator:
         """
         raise NotImplementedError("The 'get_dof_forces' method must be implemented in subclasses.")
 
-    def draw_debug_viz(self):
+    def draw_debug_viz(self) -> None:
         pass
 
     # ----- Camera Controller Helper Methods -----
@@ -584,7 +736,6 @@ class BaseSimulator:
             from holosoma.simulator.shared.simulator_bridge import SimulatorBridge
 
             self.bridge = SimulatorBridge(self, self.simulator_config.bridge)
-            self.bridge.register_hooks(self.hooks)
             logger.info("Bridge system initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize bridge system: {e}")
@@ -605,18 +756,40 @@ class BaseSimulator:
             Phase.FRAME_END: control_hz,
         }
 
+    def install_plugins(self) -> None:
+        """Install configured plugins after the concrete backend is ready."""
+        if self._plugins_installed:
+            return
+        if self._closed:
+            raise RuntimeError("Cannot install plugins on a closed simulator")
+
+        # Mark the stage before construction. A failed plugin install is terminal for this
+        # simulator; the outer lifecycle owner will emit CLOSE for callbacks already registered.
+        self._plugins_installed = True
+        for key, cfg in self.plugin_config.items():
+            self.installed_plugins[key] = cfg.get_cls()(cfg, self)
+        if self.installed_plugins:
+            logger.info(f"Installed plugins: {sorted(self.installed_plugins)}")
+
     def close(self) -> None:
-        """Tear down simulator-owned runtime participants."""
+        """Emit the one-pass simulator teardown phase."""
         if self._closed:
             return
         self._closed = True
         self.hooks.emit(Phase.CLOSE)
 
-    def _stop_bridge(self) -> None:
-        """Tear down the bridge if enabled (joins the multiprocess Unitree DDS child). Safe if unset."""
-        if self.bridge is not None:
-            self.bridge.close()
-            self.bridge = None
+    def request_shutdown(self, reason: str = "") -> None:
+        """Ask the driving loop to end the run gracefully after the current frame.
+
+        Cooperative: sets :attr:`shutdown_requested`; loop owners that support it (``run_sim``'s
+        ``DirectSimulation``) check the flag once per step and exit their loop, running the normal
+        CLOSE teardown. Lets a plugin end a finite run (e.g. motion playback reaching the end of
+        its clip). Idempotent; the first reason is kept.
+        """
+        if not self.shutdown_requested:
+            self.shutdown_requested = True
+            self._shutdown_reason = reason
+            logger.info(f"Simulator shutdown requested{f': {reason}' if reason else ''}")
 
     # ----- Actor/Object Access Interface -----
     # These methods provide unified access to objects registered with ObjectType enum
@@ -759,14 +932,14 @@ class BaseSimulator:
         zeros = torch.zeros(poses.shape[0], 6, device=poses.device, dtype=poses.dtype)
         self.set_actor_states(list(names), env_ids, torch.cat([poses, zeros], dim=1))
 
-    # ----- Sensor (camera) interface -----
+    # ----- Mounted sensor interface -----
 
     def render_sensors(self) -> None:
-        """Render all due cameras once, at control frequency, into their cached buffers.
+        """Capture all due mounted sensors at control frequency into their cached buffers.
 
         Called once per control step from the task loop (after sim tensors refresh, before
-        observations compute), honoring each camera's ``update_decimation``. Consumers then do
-        cheap cached reads via :meth:`get_camera_data`."""
+        observations compute), honoring each sensor's ``update_decimation``. Consumers then do
+        cheap cached reads through the camera/LiDAR accessors."""
         raise NotImplementedError("The 'render_sensors' method must be implemented in subclasses.")
 
     def get_camera_data(
@@ -783,7 +956,9 @@ class BaseSimulator:
         - **Shape** ``[len(env_ids), H, W, C]``, environment axis FIRST.
         - **Layout** HWC, row-major: row 0 = TOP of the image, column 0 = LEFT.
         - **rgb**: ``torch.uint8`` in ``[0, 255]``, channel order **R, G, B** (C=3).
-        - **depth**: ``torch.float32`` meters, distance-to-image-plane, ``+inf`` for no-hit, C=1.
+        - **depth**: ``torch.float32`` meters, distance-to-image-plane, C=1. No returns use the
+          camera's ``depth_clipping_behavior``: ``+inf`` (``"none"``), ``far`` (``"max"``), or
+          ``0.0`` (``"zero"``).
         - **device**: ``device`` if given, else ``self.sim_device``.
         - **Optical frame**: camera looks down its local ``-Z``, ``+Y`` up; the
           mount offset is applied in the mount-body frame.
@@ -810,16 +985,15 @@ class BaseSimulator:
             If the backend has no camera support (no ``sensor_manager``).
         """
         if self.sensor_manager is None or not self.sensor_manager.has_camera(name):
-            raise NotImplementedError(
-                f"{type(self).__name__} has no camera '{name}'. Created cameras: {self.get_sensor_names()}."
-            )
-        runtime = self.sensor_manager.get(name)
-        if data_type not in runtime.buffers:
+            created = [] if self.sensor_manager is None else self.sensor_manager.camera_names
+            raise NotImplementedError(f"{type(self).__name__} has no camera '{name}'. Created cameras: {created}.")
+        record = self.sensor_manager.get(name)
+        if data_type not in record.buffers:
             raise RuntimeError(
                 f"Camera '{name}' has no '{data_type}' frame. Ensure '{data_type}' is in the camera's "
-                f"data_types and render_sensors() has run. Buffered: {sorted(runtime.buffers)}."
+                f"data_types and render_sensors() has run. Buffered: {sorted(record.buffers)}."
             )
-        buf = runtime.buffer_on(data_type, device)
+        buf = record.buffer_on(data_type, device)
         return buf if env_ids is None else buf[env_ids]
 
     def get_sensor_names(self) -> list[str]:
@@ -828,15 +1002,31 @@ class BaseSimulator:
             return []
         return self.sensor_manager.names
 
-    def sensor_config_by_name(self, name: str):
-        """The ``CameraSensorConfig`` for ``name`` from the active mounted-camera dict.
+    def get_lidar_data(
+        self,
+        name: str,
+        data_type: str = "points",
+        env_ids: EnvIds | None = None,
+        device: torch.device | str | None = None,
+    ) -> torch.Tensor:
+        """Read a LiDAR's latest ``points``, ``ranges``, or backend-provided auxiliary output.
 
-        Used by camera-consumer hooks (egress) to read a camera's intrinsics. Raises if unknown.
+        ``points`` is ``float32 [N, R, 3]`` in the sensor optical frame (``-Z`` forward,
+        ``+Y`` up). ``ranges`` is ``float32 [N, R]`` in meters. No-return values follow the
+        LiDAR's ``range_clipping_behavior``: the default ``"none"`` uses XYZ NaNs and ``+inf``;
+        ``"max"`` uses the ray endpoint at ``far``; and ``"zero"`` uses the sensor origin.
         """
-        cam = self.sensor_config.get(name)
-        if cam is None:
-            raise KeyError(f"No camera named '{name}'. Defined cameras: {list(self.sensor_config)}.")
-        return cam
+        if self.sensor_manager is None or not self.sensor_manager.has_lidar(name):
+            created = [] if self.sensor_manager is None else self.sensor_manager.lidar_names
+            raise NotImplementedError(f"{type(self).__name__} has no LiDAR '{name}'. Created LiDARs: {created}.")
+        record = self.sensor_manager.get_lidar(name)
+        if data_type not in record.buffers:
+            raise RuntimeError(
+                f"LiDAR '{name}' has no '{data_type}' output. Ensure render_sensors() has run. "
+                f"Buffered: {sorted(record.buffers)}."
+            )
+        buf = record.buffer_on(data_type, device)
+        return buf if env_ids is None else buf[env_ids]
 
     # Explicit names-based methods
     def get_actor_states_by_names(self, names: ActorNames, env_ids: EnvIds) -> ActorStates:

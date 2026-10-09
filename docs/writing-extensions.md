@@ -71,6 +71,68 @@ my_robot = ROBOT_REGISTRY.add("my_robot", RobotConfig(...))
 
 Register hyphen-case (`go2-12dof`). The CLI token is `<field>:<key>` and accepts both forms — `robot:g1_29dof` and `robot:g1-29dof` both work.
 
+## Extension paths
+
+Use `resolve_path(value)` when one local path is required and
+`resolve_paths(value)` when a value may produce zero or more local paths.
+
+Path loaders let configs keep portable names such as
+`@my_ext/data/robot.urdf`. Code that opens the file still receives an ordinary
+absolute path on the current machine. This avoids rewriting configs or
+monkey-patching each simulator that consumes them.
+
+For files shipped inside a Python package, use `PackagePathLoader`:
+
+```python
+# my_ext/paths.py
+from holosoma.utils.package_path_loader import PackagePathLoader
+
+path_loader = PackagePathLoader("my_ext", "@my_ext", multiple=False)
+paths_loader = PackagePathLoader("my_ext", "@my_ext", multiple=True)
+```
+
+```toml
+[project.entry-points."holosoma.path_loader"]
+package-data = "my_ext.paths:path_loader"
+
+[project.entry-points."holosoma.paths_loader"]
+package-data = "my_ext.paths:paths_loader"
+```
+
+Entry-point keys such as `package-data` are labels only. A loader claims values
+with `matches(value)` and resolves them with `load(value)`.
+
+Create a different loader only when the value cannot be expressed as a path
+inside an installed package. Examples include a company asset service, an
+object-store URI, or another reference that must be downloaded or materialized
+before use:
+
+```python
+class AssetServicePathLoader:
+    def matches(self, value: str) -> bool:
+        return value.startswith("asset://")
+
+    def load(self, value: str) -> str:
+        return download_to_local_cache(value)
+
+
+path_loader = AssetServicePathLoader()
+```
+
+`matches()` should only inspect the string; put network and filesystem work in
+`load()`. Exactly one loader must match, and every result must be a local path.
+Register singular and plural loaders independently. A plural loader owns all
+semantics for the values it accepts: Holosoma does not compose it with another
+loader or add globbing on its behalf.
+
+Built-in plural loaders provide standard Python glob behavior for local,
+Holosoma-package, and S3 paths. Remote results are cached locally.
+`resolve_paths()` returns a one-shot iterator.
+
+At asset I/O boundaries, use `resolve_asset_path(asset_file, asset_root)`.
+Loaders may opt into joining relative values to `asset_root` with
+`accepts_asset_root(value)`.
+
 ## Config families
 
 Publish an entry point under the group whose config type matches your preset. Training and inference share some group names on purpose — the type check routes each preset to the right registry.
@@ -136,7 +198,7 @@ A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=No
 
 `every` sub-samples a phase: an int runs the callback every Nth emission; a frequency string (`"100Hz"`, `">100Hz"`, `"<100Hz"`) is resolved against the phase's base rate (`fps` for the per-substep `*_STEP` phases, `fps/control_decimation` for the per-frame `FRAME_*` phases). Frequency strings are periodic-phases only; `CLOSE` always fires once. The registry sub-samples natively — hooks never write their own counters.
 
-Built-ins to copy: the dependency-free `none` no-op in `holosoma/simulator/shared/builtin_plugins.py`; `clock_publish` / `gantry_control` / `odometry` (ROS2, `rclpy` imported lazily so core stays ROS-free) in `ros2_plugins.py`. Camera-frame egress ships as plugins too — `ros2-image` / `ros2-stereo` / `ros2-waist-depth*` publish rendered cameras over ROS2, `viz` / `viz-record` tile them into a live window or an mp4; their impls live in `holosoma/simulator/plugins/` and subclass the shared `CameraConsumerPlugin` base (which self-serves each step's fresh frames via `get_camera_data`). Select `plugin.<key>:none` to disable a slot.
+Built-ins to copy: the dependency-free `none` no-op in `holosoma/simulator/shared/builtin_plugins.py`; `clock_publish` / `gantry_control` / `odometry` (ROS2, `rclpy` imported lazily so core stays ROS-free) in `ros2_plugins.py`. Sensor egress ships as plugins too: `ros2-image` / `ros2-stereo` / `ros2-waist-depth*` publish rendered cameras, `ros2-pointcloud` publishes LiDAR XYZ returns, `viz` / `viz-record` tile cameras into a live window or an mp4, and `lidar-viz` / `lidar-viz-save` / `lidar-viz-record` inspect fresh LiDAR scans as 3D point clouds. Their implementations live in `holosoma/simulator/plugins/` and consume fresh data through `CameraConsumerPlugin` or `LidarConsumerPlugin`. Select `plugin.<key>:none` to disable a slot.
 
 ## Don't
 

@@ -47,6 +47,7 @@ def _finish_build(env, num_envs, env_origins, base_init):
     sim.load_assets()
     sim.create_envs(num_envs, env_origins, base_init)
     sim.prepare_sim()
+    sim.install_plugins()
     return sim
 
 
@@ -56,13 +57,24 @@ def _robot_base_init():
     return torch.tensor(list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel))
 
 
-def build_classic_sim(scene: SceneConfig | None = None):
-    """Build a ClassicBackend MuJoCo sim (CPU, single env) for ``scene`` (default: empty)."""
+def build_classic_sim(scene: SceneConfig | None = None, *, plugin=None, kinematic_playback: bool = False):
+    """Build a ClassicBackend MuJoCo sim (CPU, single env) for ``scene`` (default: empty).
+
+    ``plugin`` is an optional ``{key: PluginConfig}`` dict to install; ``kinematic_playback``
+    sets the corresponding ``sim`` flag.
+    """
     from holosoma.utils.sim_utils import setup_simulation_environment
 
     sim_cfg = _bridge_gantry_off(run_sim_values.mujoco)
+    if kinematic_playback:
+        sim_cfg = dataclasses.replace(
+            sim_cfg,
+            config=dataclasses.replace(
+                sim_cfg.config, sim=dataclasses.replace(sim_cfg.config.sim, kinematic_playback=True)
+            ),
+        )
     config = dataclasses.replace(
-        RunSimConfig(simulator=sim_cfg, robot=robot_values.g1_29dof, scene=scene or SceneConfig()),
+        RunSimConfig(simulator=sim_cfg, robot=robot_values.g1_29dof, scene=scene or SceneConfig(), plugin=plugin or {}),
         device="cpu",
     )
     env, device, _ = setup_simulation_environment(config, device="cpu")

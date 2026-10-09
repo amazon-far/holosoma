@@ -6,7 +6,6 @@ cd /workspace/holosoma
 
 source scripts/source_isaacgym_setup.sh
 pip install -e 'src/holosoma[unitree,booster]'
-pip install -e src/holosoma_inference
 
 marker="isaacgym"
 if [[ "$HOLOSOMA_MULTIGPU" == "True" ]]; then

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+from typing import Any, Callable
 
 import pytest
 from typing_extensions import Annotated, TypeAlias
@@ -65,6 +66,9 @@ def test_ros2_presets_resolve_with_independent_gantry_topics() -> None:
             "--plugin.clk.topic=/sim_clock",
             "plugin.g:gantry_control",
             "--plugin.g.length-topic=/g/len",
+            "--plugin.g.length-readback-topic=/g/len/readback",
+            "--plugin.g.position-topic=None",
+            "--plugin.g.enabled-readback-topic=None",
         ],
     )
     assert isinstance(cfg.plugin["clk"], ClockPublishPluginConfig)
@@ -72,9 +76,13 @@ def test_ros2_presets_resolve_with_independent_gantry_topics() -> None:
     gantry = cfg.plugin["g"]
     assert isinstance(gantry, GantryControlPluginConfig)
     assert gantry.length_topic == "/g/len"
-    # Untouched topics keep their defaults (independent control).
-    assert gantry.position_topic == "/gantry/position"
+    assert gantry.length_readback_topic == "/g/len/readback"
+    # None disables one command and one readback independently.
+    assert gantry.position_topic is None
+    assert gantry.enabled_readback_topic is None
+    # Untouched topics keep their defaults.
     assert gantry.enabled_topic == "/gantry/enabled"
+    assert gantry.position_readback_topic == "/gantry/position/readback"
 
 
 def test_declare_plugin_with_leaf_override() -> None:
@@ -118,7 +126,7 @@ def test_unknown_plugin_variant_fails_loud() -> None:
 class _PublishPluginConfig(PluginConfig):
     topic: str = "state"
 
-    def get_cls(self):  # pragma: no cover - not instantiated in this test
+    def get_cls(self) -> Callable[..., Any]:  # pragma: no cover - not instantiated in this test
         raise NotImplementedError
 
 

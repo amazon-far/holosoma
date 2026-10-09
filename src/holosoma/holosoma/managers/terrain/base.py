@@ -11,6 +11,7 @@ from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
     from holosoma.config_types.terrain import TerrainTermCfg
+    from holosoma.simulator.shared.terrain import Terrain
 
 
 class TerrainTermBase(ABC):
@@ -43,7 +44,7 @@ class TerrainTermBase(ABC):
 
     @property
     @abstractmethod
-    def terrain(self):
+    def terrain(self) -> Terrain:
         """The terrain object."""
 
     @property
@@ -67,7 +68,7 @@ class TerrainTermBase(ABC):
         """Feet heights."""
 
     @abstractmethod
-    def update_heights(self, env_ids=None) -> None:
+    def update_heights(self, env_ids: torch.Tensor | None = None) -> None:
         """Update the base and feet heights."""
 
     @abstractmethod

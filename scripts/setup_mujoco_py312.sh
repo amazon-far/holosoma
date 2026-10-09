@@ -16,10 +16,11 @@ ROOT_DIR=$(dirname "$SCRIPT_DIR")
 PROJECTS_DIR=$(dirname "$ROOT_DIR")
 
 source ${SCRIPT_DIR}/source_common.sh
+source "${SCRIPT_DIR}/versions.sh"
 
 CONDA_ENV_NAME=hsmujoco_py312
 ENV_ROOT=$CONDA_ROOT/envs/$CONDA_ENV_NAME
-SENTINEL_FILE=${WORKSPACE_DIR}/.env_setup_finished_${CONDA_ENV_NAME}
+SENTINEL_FILE=${WORKSPACE_DIR}/.env_setup_finished_${CONDA_ENV_NAME}_mujoco-${MUJOCO_VERSION}_mujoco-warp-${MUJOCO_WARP_COMMIT}_warp-${WARP_LANG_VERSION}
 
 mkdir -p $WORKSPACE_DIR
 
@@ -31,7 +32,9 @@ fi
 # --- Create conda env ---
 if [[ ! -d $ENV_ROOT ]]; then
   echo "Creating conda env $CONDA_ENV_NAME with Python 3.12..."
-  MAMBA_ROOT_PREFIX=$CONDA_ROOT $CONDA_ROOT/bin/mamba create -y -n $CONDA_ENV_NAME python=3.12 -c conda-forge --override-channels
+  # Solve with libmamba, conda's own default solver, instead of installing mamba into base:
+  # that install pulls conda-forge's conda into base and breaks the bundled ToS plugin.
+  $CONDA_ROOT/bin/conda create -y --solver libmamba -n $CONDA_ENV_NAME python=3.12 -c conda-forge --override-channels
 fi
 
 source $CONDA_ROOT/bin/activate $CONDA_ENV_NAME
@@ -41,14 +44,15 @@ conda install -c conda-forge -y libstdcxx-ng ffmpeg
 
 # --- Core Python deps ---
 pip install --upgrade pip
-pip install "mujoco>=3.0.0" mujoco-python-viewer
+pip install "mujoco==${MUJOCO_VERSION}" mujoco-python-viewer
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 
 # --- Holosoma runtime deps (compatible with Python 3.12) ---
 pip install astor easydict ipdb joblib loguru lxml matplotlib meshcat omegaconf \
     opencv-python plotly pygame pynput rich scipy tensorboard tensordict \
     termcolor tqdm trimesh "yourdfpy>=0.0.58" zmq shapely click \
-    "warp-lang>=1.10" pydantic "tyro>=1.0.0" "numpy<2"
+    "mujoco-warp[cuda] @ git+https://github.com/google-deepmind/mujoco_warp.git@${MUJOCO_WARP_COMMIT}" \
+    "warp-lang==${WARP_LANG_VERSION}" pydantic "tyro>=1.0.0" "numpy<2"
 
 # --- Install holosoma + extensions (--no-deps to skip numpy==1.23.5 pin) ---
 pip install --no-deps -e $ROOT_DIR/src/holosoma

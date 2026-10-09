@@ -21,15 +21,18 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import os
 import sys
+from typing import TYPE_CHECKING, cast
 
 # Pop this dir off sys.path[0] so tests/simulators/isaacsim/ can't shadow the real isaacsim pkg.
 if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config, step, steps_for_seconds
+from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step, steps_for_seconds
+
+if TYPE_CHECKING:
+    from holosoma.config_types.sensor import CameraSensorConfig
 
 SKIP_EXIT_CODE = 77
 
@@ -125,9 +128,8 @@ def main() -> int:
     )
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
+    sim.install_plugins()
 
-    # Hooks (incl. the --check-recorder CameraVizPlugin) were installed by the simulator in __init__ from
-    # FullSimConfig.plugin; nothing to install here.
     from holosoma.simulator.base_simulator.hooks import Phase
 
     names = sim.get_sensor_names()
@@ -142,7 +144,7 @@ def main() -> int:
     sim.hooks.emit(Phase.FRAME_END)
 
     fails: list[str] = []
-    cam_cfgs = dict(config.sensor)
+    cam_cfgs = cast("dict[str, CameraSensorConfig]", dict(config.sensor))
     for name in names:
         cam = cam_cfgs[name]
         img = sim.get_camera_data(name, "rgb")
@@ -163,7 +165,7 @@ def main() -> int:
         if not recorders:
             fails.append(
                 f"{args.simulator}: recorder requested (plugin.rec:viz-record) but no CameraVizPlugin was "
-                f"installed; the simulator did not build hooks from FullSimConfig.plugin in __init__."
+                "installed during the explicit plugin stage."
             )
         else:
             n_frames = max(len(getattr(r, "_frames_video", [])) for r in recorders)
@@ -185,13 +187,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    # IsaacSim teardown deadlocks in carbOnPluginShutdown tearing down the
-    # omni.syntheticdata/OmniGraph render-product graph a TiledCamera creates (native
-    # py-spy stack), so a normal interpreter exit hangs until the parent's subprocess
-    # timeout SIGKILLs it -- turning a PASS (verdict already written to --result-file) into
-    # a spurious timeout failure. Hard-exit past the atexit teardown, mirroring
-    # behavior_assert / scene_spawn_assert. Rendering itself is fine; only exit hangs.
-    _rc = main()
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(_rc)
+    run_and_hard_exit(main)

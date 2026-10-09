@@ -10,6 +10,7 @@ import dataclasses
 import importlib
 import pkgutil
 import sys
+import typing
 import warnings
 from typing import Any, Callable, TypeVar
 
@@ -265,7 +266,7 @@ def parse_config(
             dynamic_defaults[field_name] = built
 
     kwargs: dict[str, Any] = {"config": TYRO_CONIFG, "args": argv, **tyro_kwargs}
-    merged_default = _merge_dynamic_default(config_type, default, dynamic_defaults)
+    merged_default = _merge_dynamic_default(config_type, default, dynamic_defaults, argv)
     if merged_default is not None:
         kwargs["default"] = merged_default
     if use_sys_argv:
@@ -279,7 +280,37 @@ def _resolve_config(config: Any) -> Any:
     return config() if is_factory else config
 
 
-def _merge_dynamic_default(config_type: Any, default: Any, dynamic_defaults: dict[str, Any]) -> Any:
+def _root_subcommand_default(config_type: Any, argv: list[str]) -> Any:
+    """Return the preset selected by a root-level subcommand token in ``argv``, if any.
+
+    A root alias like ``Annotated[ExperimentConfig, tyro.conf.arg(constructor=
+    subcommand_type_from_defaults({'exp:name': preset, ...}))]`` carries each preset as
+    the ``default`` of a ``tyro.conf.subcommand`` on the union members. When argv picks
+    one (e.g. ``exp:g1-29dof-wbt``), that preset — not a bare instance — is the correct
+    base for dynamic-dict injection. Tokens match with tyro's hyphen/underscore
+    equivalence. Returns None when the root is not such an alias or no token matches.
+    """
+    tokens = {t.replace("_", "-") for t in argv if not t.startswith("-")}
+    if not tokens:
+        return None
+    for marker in getattr(config_type, "__metadata__", ()):
+        factory = getattr(marker, "constructor_factory", None)
+        if factory is None:
+            continue
+        try:
+            union = factory()
+        except Exception as exc:  # malformed alias: fall back to base() below
+            logger.debug(f"Ignoring unresolvable root-subcommand alias: {exc}")
+            continue
+        for member in typing.get_args(union):
+            for sub in getattr(member, "__metadata__", ()):
+                name = getattr(sub, "name", None)
+                if isinstance(name, str) and name.replace("_", "-") in tokens:
+                    return getattr(sub, "default", None)
+    return None
+
+
+def _merge_dynamic_default(config_type: Any, default: Any, dynamic_defaults: dict[str, Any], argv: list[str]) -> Any:
     """Return a default config with dynamic-dict fields applied."""
     if not dynamic_defaults:
         return default
@@ -288,6 +319,13 @@ def _merge_dynamic_default(config_type: Any, default: Any, dynamic_defaults: dic
 
     if default is not None:
         return dataclasses.replace(default, **dynamic_defaults)
+
+    # Root subcommand selected on the CLI: seed from ITS preset. A bare base() here
+    # would silently override every field of the selected preset (tyro applies the
+    # explicit default over the subcommand's).
+    selected = _root_subcommand_default(config_type, argv)
+    if selected is not None:
+        return dataclasses.replace(selected, **dynamic_defaults)
 
     base = _strip_annotated(config_type)
     try:

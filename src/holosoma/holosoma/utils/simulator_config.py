@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import cast
+
+from typing_extensions import Self
 
 import holosoma.config_types.simulator
 
@@ -26,10 +29,10 @@ class SimulatorConfig:
     _simulator_type: SimulatorType | None = None
     _supported_simulator_names = {sim_type.value for sim_type in SimulatorType}
 
-    def __new__(cls):
+    def __new__(cls) -> Self:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-        return cls._instance
+        return cast("Self", cls._instance)
 
     @classmethod
     def set_simulator_type(cls, config: holosoma.config_types.simulator.SimulatorConfig) -> None:

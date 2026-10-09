@@ -7,7 +7,6 @@ cd /workspace/holosoma
 
 source scripts/source_isaacsim_setup.sh
 python -m pip install -e 'src/holosoma[unitree,booster]'
-python -m pip install -e src/holosoma_inference
 
 marker="isaacsim"
 if [[ "$HOLOSOMA_MULTIGPU" == "True" ]]; then

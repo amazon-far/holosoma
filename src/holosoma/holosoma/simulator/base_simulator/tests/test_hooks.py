@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
+from holosoma.config_types.video import VideoConfig
+from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.base_simulator.hooks import HookCloseError, HookRegistry, HookRegistryError, Phase
 
 pytestmark = pytest.mark.no_sim
@@ -44,25 +48,81 @@ def test_mutating_current_phase_during_emit_raises() -> None:
         hooks.emit(Phase.FRAME_END)
 
 
-def test_close_runs_reverse_order_once_and_reports_failures() -> None:
+def test_close_runs_reverse_order_once() -> None:
     calls: list[str] = []
     hooks = HookRegistry()
 
     hooks.add(Phase.CLOSE, lambda: calls.append("first"), name="first")
+    hooks.add(Phase.CLOSE, lambda: calls.append("second"), name="second")
 
-    def fail() -> None:
-        calls.append("second")
+    hooks.emit(Phase.CLOSE)
+    hooks.emit(Phase.CLOSE)
+
+    assert calls == ["second", "first"]
+
+
+def test_close_failure_keeps_earlier_provider_open() -> None:
+    calls: list[str] = []
+    hooks = HookRegistry()
+    hooks.add(Phase.CLOSE, lambda: calls.append("provider"), name="provider")
+
+    def fail_consumer() -> None:
+        calls.append("consumer")
         raise RuntimeError("boom")
 
-    hooks.add(Phase.CLOSE, fail, name="second")
-
+    hooks.add(Phase.CLOSE, fail_consumer, name="consumer")
     with pytest.raises(HookCloseError) as exc_info:
         hooks.emit(Phase.CLOSE)
 
     hooks.emit(Phase.CLOSE)
 
-    assert calls == ["second", "first"]
-    assert exc_info.value.failures[0][0] == "second"
+    assert calls == ["consumer"]
+    assert len(exc_info.value.failures) == 1
+    name, error = exc_info.value.failures[0]
+    assert name == "consumer"
+    assert isinstance(error, RuntimeError)
+    assert str(error) == "boom"
+
+
+def test_constructor_defers_plugins_until_explicit_installation() -> None:
+    created: list[object] = []
+
+    class _Plugin:
+        def __init__(self, cfg: object, sim: BaseSimulator) -> None:
+            assert cfg is config
+            assert sim is simulator
+            created.append(self)
+
+    class _Config:
+        @staticmethod
+        def get_cls() -> type[_Plugin]:
+            return _Plugin
+
+    config = _Config()
+    simulator_config = SimpleNamespace(
+        debug_viz=False,
+        sim=SimpleNamespace(kinematic_playback=False, fps=200.0, control_decimation_steps=4),
+    )
+    tyro_config = SimpleNamespace(
+        training=SimpleNamespace(),
+        simulator=simulator_config,
+        scene=SimpleNamespace(),
+        sensors={},
+        robot=SimpleNamespace(),
+        logger=SimpleNamespace(video=VideoConfig(enabled=False), headless_recording=False),
+        plugin={"probe": config},
+        experiment_dir=None,
+    )
+
+    simulator = BaseSimulator(tyro_config, terrain_manager=SimpleNamespace(), device="cpu")  # type: ignore[arg-type]
+    assert created == []
+    assert simulator.installed_plugins == {}
+
+    simulator.install_plugins()
+    simulator.install_plugins()
+
+    assert simulator.installed_plugins == {"probe": created[0]}
+    assert len(created) == 1
 
 
 def test_close_phase_rejects_payload() -> None:

@@ -4,8 +4,8 @@ Each value is one :class:`CameraSensorConfig`; compose them per-key on the CLI, 
 ``--sensor.my_head:g1-head --sensor.my_left_wrist:g1-left-wrist``. Mounts on ``g1_29dof`` body
 names and frames (see ``data/robots/g1/g1_29dof.xml``):
 
-- Head: the ``torso_link`` frame origin is at the waist-pitch joint; the head and ``mid360``
-  Livox site sit at ``z ~= 0.41`` in that frame.
+- Head: the ``torso_link`` frame origin is at the waist-pitch joint; the head and upper sensor
+  mount sit at ``z ~= 0.41`` in that frame.
 - Wrists: in the ``*_wrist_yaw_link`` frame the hand points along +X (``*_palm`` site at
   ``[0.08,0,0]``).
 
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from holosoma.config_types.sensor import CameraSensorConfig, SensorMountConfig
 
-# Egocentric head camera (torso-frame z~=0.41, by the mid360 mount), looking forward and upright.
+# Egocentric head camera (torso-frame z~=0.41), looking forward and upright.
 head_camera = CameraSensorConfig(
     mount=SensorMountConfig(
         target_kind="robot_link",

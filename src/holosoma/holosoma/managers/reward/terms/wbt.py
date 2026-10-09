@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, Any, List
 
 import torch
 from loguru import logger
@@ -152,7 +152,7 @@ class UndesiredContacts(RewardTermBase):
         )
         self.threshold = cfg.params.get("threshold", 1.0)
 
-    def __call__(self, env: WholeBodyTrackingManager, **kwargs) -> torch.Tensor:
+    def __call__(self, env: WholeBodyTrackingManager, **kwargs: Any) -> torch.Tensor:
         # (num_envs, history_length, num_bodies, 3)
         net_contact_forces = self.env.simulator.contact_forces_history
         is_contact = (

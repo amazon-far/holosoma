@@ -6,12 +6,16 @@ fields that need per-environment expansion (e.g., body_mass, geom_friction).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
 from holosoma.config_types.simulator import MujocoBackend
 from holosoma.simulator.shared.field_decorators import MUJOCO_FIELD_ATTR
+
+if TYPE_CHECKING:
+    from holosoma.simulator.mujoco.backends.warp_backend import WarpBackend
+    from holosoma.simulator.mujoco.mujoco import MuJoCo
 
 
 def collect_required_fields(*managers: Any) -> list[str]:
@@ -53,7 +57,7 @@ def collect_required_fields(*managers: Any) -> list[str]:
     return list(fields)
 
 
-def prepare_manager_fields(simulator, **managers) -> None:
+def prepare_manager_fields(simulator: MuJoCo, **managers: Any) -> None:
     """Scan managers for field requirements and prepare them.
 
     This function collects MuJoCo field requirements from all configured manager
@@ -92,7 +96,7 @@ def prepare_manager_fields(simulator, **managers) -> None:
         logger.info("Discovered ZERO MuJoCo fields required by managers")
 
 
-def prepare_fields(simulator, field_names: list[str]) -> None:
+def prepare_fields(simulator: MuJoCo, field_names: list[str]) -> None:
     """Prepare MuJoCo model fields for per-environment operations.
 
     This function expands MuJoCo model fields to support per-environment physics
@@ -125,9 +129,10 @@ def prepare_fields(simulator, field_names: list[str]) -> None:
     # Expand model fields (internal implementation detail)
     from holosoma.simulator.mujoco.backends.randomization import expand_model_fields
 
-    expand_model_fields(simulator.backend.mjw_model, nworld=simulator.num_envs, fields_to_expand=field_names)
+    backend = cast("WarpBackend", simulator.backend)
+    expand_model_fields(backend.mjw_model, nworld=simulator.num_envs, fields_to_expand=field_names)
 
     # Clear bridge cache to reflect expanded arrays (internal implementation detail)
-    simulator.backend.warp_model_bridge.clear_cache()
+    backend.warp_model_bridge.clear_cache()
 
     logger.info("Field expansion complete")

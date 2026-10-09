@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import field
 from typing import Any, List, Union
 
+from pydantic import model_validator
 from pydantic.dataclasses import dataclass
 
 
@@ -68,6 +69,15 @@ class LayerConfig:
 
     module_input_name: tuple[str, ...] = ()
     """Input names for module. Only used for encoder modules."""
+
+    @model_validator(mode="after")
+    def _validate_encoder_output_dim(self) -> LayerConfig:
+        """An MLPEncoder with encoder hidden layers must declare its output dim: the encoder's
+        final Linear needs a concrete out-features, and the value also feeds the module input size.
+        Without it the network build would fail with an opaque TypeError."""
+        if self.encoder_hidden_dims is not None and self.encoder_output_dim is None:
+            raise ValueError("LayerConfig.encoder_output_dim must be set when encoder_hidden_dims is provided.")
+        return self
 
 
 @dataclass(frozen=True)

@@ -2,6 +2,8 @@
 *.py[cod]
 # Log files
 *.log
+# MuJoCo writes this render log to the working dir on headless runs
+MUJOCO_LOG.TXT
 * ONNX files
 *.onnx
 

@@ -8,6 +8,7 @@ uint8 image term) without flattening or clipping it, by calling the unbound meth
 from __future__ import annotations
 
 import types
+from typing import cast
 
 import pytest
 
@@ -17,16 +18,16 @@ from holosoma.utils.safe_torch_import import torch
 pytestmark = pytest.mark.no_sim
 
 
-def _make_stub(obs_buf_dict, clip_limit=100.0):
+def _make_stub(obs_buf_dict: dict[str, torch.Tensor | dict[str, torch.Tensor]], clip_limit: float = 100.0) -> BaseTask:
     """Minimal object carrying just what the two methods touch."""
     stub = types.SimpleNamespace()
     stub.obs_buf_dict = obs_buf_dict
     stub.extras = {}
     stub.observation_manager = types.SimpleNamespace(cfg=types.SimpleNamespace(clip_observations=clip_limit))
-    return stub
+    return cast("BaseTask", stub)
 
 
-def test_clip_observations_handles_dict_group_and_uint8():
+def test_clip_observations_handles_dict_group_and_uint8() -> None:
     """A flat float group is clipped; a dict group recurses; uint8 images pass through unclipped."""
     flat = torch.tensor([[500.0, -500.0, 1.0]])  # exceeds +/-100, gets clipped
     image = torch.full((1, 4, 4, 3), 200, dtype=torch.uint8)  # uint8 image, stays unclipped
@@ -50,7 +51,7 @@ def test_clip_observations_handles_dict_group_and_uint8():
     assert torch.equal(stub.obs_buf_dict["image_group"]["proprio"], proprio)
 
 
-def test_clip_observations_preserves_depth_inf_sentinel():
+def test_clip_observations_preserves_depth_inf_sentinel() -> None:
     """A float32 depth image (4-D) keeps its +inf no-hit sentinel; clipping would corrupt it."""
     depth = torch.full((1, 4, 4, 1), 250.0)  # finite far depth, beyond the +/-100 clip
     depth[0, 0, 0, 0] = float("inf")  # no-hit sentinel
@@ -64,7 +65,7 @@ def test_clip_observations_preserves_depth_inf_sentinel():
     assert float(out[0, 1, 1, 0]) == 250.0  # far depth not clamped
 
 
-def test_store_final_observations_handles_dict_group():
+def test_store_final_observations_handles_dict_group() -> None:
     """Final-obs copy works for both a flat group and a dict (image) group, per env."""
     num_envs = 3
     cur = {
@@ -92,7 +93,7 @@ def test_store_final_observations_handles_dict_group():
     assert int(img_store[1].sum()) == 0  # env 1 untouched
 
 
-def test_store_final_observations_empty_is_noop():
+def test_store_final_observations_empty_is_noop() -> None:
     """An empty final-obs dict stores nothing."""
     stub = _make_stub({"actor_obs": torch.zeros(2, 2)})
     BaseTask._store_final_observations(stub, torch.tensor([0]), {})

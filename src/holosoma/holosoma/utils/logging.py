@@ -1,7 +1,11 @@
+from __future__ import annotations
+
 import logging
 import os
 import sys
+from collections.abc import Iterator
 from contextlib import contextmanager
+from types import FrameType
 
 from loguru import logger
 
@@ -13,15 +17,17 @@ class LoguruLoggingBridge(logging.Handler):
     providing unified logging output.
     """
 
-    def emit(self, record):
+    def emit(self, record: logging.LogRecord) -> None:
         # Get corresponding loguru level
+        level: str | int
         try:
             level = logger.level(record.levelname).name
         except ValueError:
             level = record.levelno
 
         # Find caller from where the logged message originated
-        frame, depth = logging.currentframe(), 2
+        frame: FrameType | None = logging.currentframe()
+        depth = 2
         while frame and frame.f_code.co_filename == logging.__file__:
             frame = frame.f_back
             depth += 1
@@ -30,16 +36,16 @@ class LoguruLoggingBridge(logging.Handler):
 
 
 class LoguruStream:
-    def write(self, message):
+    def write(self, message: str) -> None:
         if message.strip():  # Only log non-empty messages
             logger.info(message.strip())  # Changed to debug level
 
-    def flush(self):
+    def flush(self) -> None:
         pass
 
 
 @contextmanager
-def capture_stdout_to_loguru():
+def capture_stdout_to_loguru() -> Iterator[None]:
     logger.remove()
     logger.add(sys.stdout, level="INFO")
     loguru_stream = LoguruStream()

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -31,7 +31,6 @@ class SimulatorBridge:
     functionality.
 
     Currently it is tested with MuJoCo-only via the base bridge interface.
-
     """
 
     def __init__(self, simulator: BaseSimulator, bridge_config: BridgeConfig):
@@ -52,8 +51,10 @@ class SimulatorBridge:
         self.simulator: BaseSimulator = simulator
         self.bridge_config: BridgeConfig = bridge_config
         self.robot_bridge: BasicSdk2Bridge | None = None
+        self._started = False
+        self._closed = False
+        self._hooks_registered = False
 
-        # Initialize clock publisher for WBT motion synchronization
         self.clock_pub: ClockPub = ClockPub()
 
         if self.bridge_config.interface is None:
@@ -61,26 +62,48 @@ class SimulatorBridge:
             logger.info(f"Auto-detected bridge interface '{interface}'")
             self.bridge_config = replace(self.bridge_config, interface=interface)
 
-        if bridge_config.enabled:
-            logger.info("Robot bridge is enabled, initializing...")
-            self._init_robot_bridge()
-            # Start clock publisher for motion synchronization
-            self.clock_pub.start()
-            logger.info("Clock publisher initialized for motion synchronization")
-        else:
-            # We don't support runtime toggling on/off
-            logger.info("Robot bridge disabled")
+        self.register_hooks(simulator.hooks)
+        self.start()
 
     def register_hooks(self, hooks: HookRegistry) -> None:
-        """Register bridge lifecycle hooks with the simulator loop.
-
-        step() is PRE_STEP: it applies SDK-computed torques, which must land before the substep
-        integrates them.
-        """
-        hooks.add(Phase.PRE_STEP, self.step, name="bridge.step")
+        """Register bridge lifecycle hooks with the simulator loop."""
+        if self._hooks_registered:
+            return
+        self._hooks_registered = True
+        hooks.add(
+            Phase.PRE_STEP,
+            self.transport_step,
+            name="bridge.transport",
+            every=self.bridge_config.transport_decimation,
+        )
+        hooks.add(Phase.PRE_STEP, self.control_step, name="bridge.control")
         hooks.add(Phase.CLOSE, self.close, name="bridge.close")
 
-    def _init_robot_bridge(self):
+    def start(self) -> None:
+        """Acquire external resources after the simulator has registered ownership."""
+        if self._started:
+            return
+        if self._closed:
+            raise RuntimeError("Cannot start a closed simulator bridge")
+        if not self.bridge_config.enabled:
+            logger.info("Robot bridge disabled")
+            self._started = True
+            return
+
+        logger.info("Robot bridge is enabled, initializing...")
+        try:
+            self._init_robot_bridge()
+            self.clock_pub.start()
+        except BaseException:
+            try:
+                self.close()
+            except Exception:
+                logger.exception("Bridge cleanup failed while preserving the startup error")
+            raise
+        self._started = True
+        logger.info("Clock publisher initialized for motion synchronization")
+
+    def _init_robot_bridge(self) -> None:
         """Initialize the robot bridge using the copied factory function."""
         try:
             # Create robot bridge using the factory function from holosoma.bridge
@@ -97,9 +120,10 @@ class SimulatorBridge:
             logger.error(f"Failed to initialize robot bridge: {e}")
             raise
 
-    def _setup_joystick(self):
+    def _setup_joystick(self) -> None:
         """Setup joystick/gamepad for robot control."""
         try:
+            assert self.robot_bridge is not None
             self.robot_bridge.setup_joystick(
                 device_id=self.bridge_config.joystick_device, js_type=self.bridge_config.joystick_type
             )
@@ -110,24 +134,18 @@ class SimulatorBridge:
         except Exception as e:
             raise RuntimeError(f"Failed to initialize joystick: {e}") from e
 
-    def _auto_detect_interface(self):
-        # Auto-detect interface based on platform (like holosoma_inference)
-        if sys.platform == "linux":
-            return "lo"
-        if sys.platform == "darwin":
-            return "lo0"
-        raise NotImplementedError("Only support Linux and MacOS for Unitree SDK.")
+    def _auto_detect_interface(self) -> str:
+        # Auto-detect interface based on platform (like holosoma_inference). A dict lookup
+        # instead of an if-chain: mypy runs with a fixed platform and warn_unreachable, so a
+        # literal `sys.platform == "darwin"` branch is "unreachable" on the linux CI checker.
+        loopback_by_platform = {"linux": "lo", "darwin": "lo0"}
+        interface = loopback_by_platform.get(sys.platform)
+        if interface is None:
+            raise NotImplementedError("Only support Linux and MacOS for Unitree SDK.")
+        return interface
 
-    def step(self):
-        """Execute bridge step during simulation.
-
-        This method should be called during each simulation step when the bridge
-        is enabled. It handles:
-        - Publishing robot state to SDK
-        - Publishing simulation clock for motion synchronization
-        - Processing joystick input (if enabled)
-        - Computing and applying torques from SDK commands
-        """
+    def transport_step(self) -> None:
+        """Exchange SDK data at the configured transport cadence."""
         if not self.robot_bridge:
             return
 
@@ -135,7 +153,6 @@ class SimulatorBridge:
         self.robot_bridge.publish_low_state()
 
         # Publish base odometry over the SDK (SportModeState on rt/odommodestate) when configured.
-        # Off by default.
         if self.bridge_config.publish_odom:
             self.robot_bridge.publish_odom()
 
@@ -147,19 +164,26 @@ class SimulatorBridge:
         # Read incoming commands from DDS
         self.robot_bridge.low_cmd_handler()
 
-        # Compute torques based on received commands
+        # Publish simulation clock for e.g, WBT policies
+        sim_time = self.simulator.time()
+        self.clock_pub.publish(sim_time)
+
+    def control_step(self) -> None:
+        """Recompute and apply torque before every physics step."""
+        if not self.robot_bridge:
+            return
+
         self.robot_bridge.compute_torques()
 
         # Apply torques to simulator
         # (for now: convert to/from tensor for unified interface, which is unnecessary for mujoco...)
         torques_tensor = torch.from_numpy(self.robot_bridge.torques).to(
-            device=self.simulator.device, dtype=torch.float32
+            device=self.simulator.device,  # type: ignore[attr-defined]
+            dtype=torch.float32,
         )
-        self.simulator.apply_torques_at_dof(torques_tensor)
-
-        # Publish simulation clock for e.g, WBT policies
-        sim_time = self.simulator.time()
-        self.clock_pub.publish(sim_time)
+        # None when the bridge controls every DOF (fast full-width write); a list when it controls a
+        # subset (scatter into only those DOFs, leaving a co-controller's slots untouched).
+        self.simulator.apply_torques_at_dof(torques_tensor, dof_indices=self.robot_bridge._apply_indices)
 
     def is_enabled(self) -> bool:
         """Check if the bridge is enabled and functional.
@@ -171,7 +195,7 @@ class SimulatorBridge:
         """
         return self.bridge_config.enabled and self.robot_bridge is not None
 
-    def get_bridge_info(self) -> dict:
+    def get_bridge_info(self) -> dict[str, Any]:
         """Get information about the current bridge configuration.
 
         Returns
@@ -189,9 +213,26 @@ class SimulatorBridge:
     def close(self) -> None:
         """Tear down the bridge and its resources.
 
-        Stops the clock publisher and, for the multiprocess Unitree bridge, joins its spawned DDS
-        child (a plain in-process bridge has no ``close`` and is skipped). Safe to call more than once.
+        Stops the clock publisher and delegates resource cleanup to the SDK bridge's ``close``
+        extension point. Safe to call more than once.
         """
-        if self.robot_bridge is not None and hasattr(self.robot_bridge, "close"):
-            self.robot_bridge.close()
-        self.clock_pub.close()
+        if self._closed:
+            return
+        self._closed = True
+
+        failures: list[Exception] = []
+        robot_bridge = self.robot_bridge
+        self.robot_bridge = None
+        if robot_bridge is not None and hasattr(robot_bridge, "close"):
+            try:
+                robot_bridge.close()
+            except Exception as exc:
+                failures.append(exc)
+        try:
+            self.clock_pub.close()
+        except Exception as exc:
+            failures.append(exc)
+
+        if failures:
+            details = "; ".join(repr(exc) for exc in failures)
+            raise RuntimeError(f"Failed to close simulator bridge: {details}")

@@ -41,7 +41,7 @@ class RewardTermBase(ABC):
         """
 
     @abstractmethod
-    def __call__(self, env: Any, **kwargs) -> torch.Tensor:
+    def __call__(self, env: Any, **kwargs: Any) -> torch.Tensor:
         """Compute reward.
 
         Args:

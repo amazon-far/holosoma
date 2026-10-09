@@ -4,6 +4,8 @@ This module provides conversion functions between the unified physics configurat
 system and IsaacLab's specific configuration types.
 """
 
+from __future__ import annotations
+
 import isaaclab.sim as sim_utils
 from holosoma.config_types.scene import PhysicsConfig, PhysXPhysicsConfig
 

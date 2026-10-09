@@ -5,7 +5,9 @@ panel is bright red), then their depth is checked against the known distance. As
 
   1. shape ``[num_envs, H, W, 1]``, dtype float32, device == sim device.
   2. Metric: panel pixel depth ~= known camera-to-panel face distance (meters).
-  3. No-hit sentinel: background (no geometry) reads a large value or +inf, not a near distance.
+  3. No-hit clipping: identical background no-returns become ``+inf``, per-camera ``far``, or
+     zero for the ``none``, ``max``, and ``zero`` policies; a panel beyond a short camera's range
+     follows the same rule.
   4. Image-plane convention: a flat fronto-parallel panel reads ~constant depth, not increasing
      toward the edges (which distance-to-camera/radial depth would show).
 
@@ -17,14 +19,17 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import math
-import os
 import sys
+from typing import TYPE_CHECKING, cast
 
 if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config, step, steps_for_seconds
+from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step, steps_for_seconds
+
+if TYPE_CHECKING:
+    from holosoma.config_types.sensor import CameraSensorConfig
 
 
 def _red_mask(env_rgb):
@@ -33,7 +38,7 @@ def _red_mask(env_rgb):
     return (r > g + 40) & (r > b + 40)
 
 
-def _check_depth(rgb, depth, cam_to_panel, panel_half, fov_deg, label):
+def _check_depth(rgb, depth, cam_to_panel, panel_half, fov_deg, label, *, expect_infinite_no_hit: bool):
     """Depth shape/dtype + metric assertions on one env's frame. Returns failure strings."""
     import torch
 
@@ -63,18 +68,18 @@ def _check_depth(rgb, depth, cam_to_panel, panel_half, fov_deg, label):
             f"per-backend depth NOT normalized to meters"
         )
 
-    # 3. No-hit: open sky around the panel maps to the +inf sentinel. Assert some background pixels
-    #    are +inf, and finite background is clearly beyond the panel (else depth is inverted/uncalibrated).
-    bg = dep[~mask]
-    if not bool(torch.isinf(bg).any()):
-        fails.append(f"{label}: no +inf no-hit pixels in the background (sentinel missing or finite-far)")
-    bg_finite = bg[torch.isfinite(bg)]
-    bg_ref = float(bg_finite.median()) if bg_finite.numel() else math.inf
-    if bg_ref <= cam_to_panel * 1.2:
-        fails.append(
-            f"{label}: finite background depth {bg_ref:.3f}m not clearly beyond the panel {cam_to_panel:.3f}m "
-            f"(depth inverted/uncalibrated)"
-        )
+    # 3. The "none" camera supplies a known no-return mask for the other policy cameras below.
+    if expect_infinite_no_hit:
+        bg = dep[~mask]
+        if not bool(torch.isinf(bg).any()):
+            fails.append(f"{label}: no +inf no-hit pixels in the background (sentinel missing or finite-far)")
+        bg_finite = bg[torch.isfinite(bg)]
+        bg_ref = float(bg_finite.median()) if bg_finite.numel() else math.inf
+        if bg_ref <= cam_to_panel * 1.2:
+            fails.append(
+                f"{label}: finite background depth {bg_ref:.3f}m not clearly beyond the panel {cam_to_panel:.3f}m "
+                f"(depth inverted/uncalibrated)"
+            )
 
     # 4. Image-plane: a fronto-parallel flat panel reads ~constant depth (distance-to-camera would
     #    grow toward the edges by 1/cos(angle)). Inlier-core spread must be small relative to distance.
@@ -101,9 +106,9 @@ def main() -> int:
 
     headless = args.headless == "true"
     sim_arg = "mujoco" if args.simulator == "mjwarp" else args.simulator
-    # front-cam-depth: the forward camera producing both rgb (to locate the panel) and depth.
+    # The clipping rig has otherwise-identical cameras with every shared no-return policy.
     config = build_run_sim_config(
-        sim_arg, "panel-target", args.robot, args.terrain, sensors=_camera_presets.front_cam_depth
+        sim_arg, "panel-target", args.robot, args.terrain, sensors=_camera_presets.front_cam_depth_clipping
     )
     if args.simulator == "mjwarp":
         config = _camera_presets.as_mjwarp(config)
@@ -129,6 +134,7 @@ def main() -> int:
     )
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
+    sim.install_plugins()
 
     # Pin the robot upright at the origin so the camera aligns with the panel ahead.
     robot_states = sim.get_actor_states(["robot"], torch.arange(n, device=device)).clone()
@@ -145,35 +151,76 @@ def main() -> int:
     step(sim, max(2, steps_for_seconds(sim, 0.05)))
     sim.render_sensors()
 
-    cam_name, cam = next(iter(config.sensor.items()))
-    cam_to_panel = _camera_presets._PANEL_DISTANCE - cam.mount.position[0] - 0.01  # camera->panel FACE (m)
-
     fails: list[str] = []
-    rgb_all = sim.get_camera_data(cam_name, "rgb")  # [N,H,W,3] uint8
-    depth_all = sim.get_camera_data(cam_name, "depth")  # [N,H,W,1] float32 meters
-    # The buffer device should equal the sim device.
-    if str(rgb_all.device) != str(sim.sim_device) or str(depth_all.device) != str(sim.sim_device):
-        fails.append(
-            f"{args.simulator}: camera buffers on {rgb_all.device}/{depth_all.device} != sim_device {sim.sim_device}"
+    cameras = cast("dict[str, CameraSensorConfig]", config.sensor)
+    depth_outputs = {}
+    rgb_outputs = {}
+    for cam_name, cam in cameras.items():
+        rgb_all = sim.get_camera_data(cam_name, "rgb")  # [N,H,W,3] uint8
+        depth_all = sim.get_camera_data(cam_name, "depth")  # [N,H,W,1] float32 meters
+        rgb_outputs[cam_name] = rgb_all
+        depth_outputs[cam_name] = depth_all
+        if str(rgb_all.device) != str(sim.sim_device) or str(depth_all.device) != str(sim.sim_device):
+            fails.append(
+                f"{args.simulator}/{cam_name}: camera buffers on {rgb_all.device}/{depth_all.device} "
+                f"!= sim_device {sim.sim_device}"
+            )
+
+        cam_to_panel = _camera_presets._PANEL_DISTANCE - cam.mount.position[0] - 0.01
+        print(
+            f"[{args.simulator}/{cam_name}] depth shape={tuple(depth_all.shape)} dtype={depth_all.dtype} "
+            f"expected_panel_depth={cam_to_panel:.3f}m"
         )
-    print(
-        f"[{args.simulator}] depth shape={tuple(depth_all.shape)} dtype={depth_all.dtype} "
-        f"expected_panel_depth={cam_to_panel:.3f}m"
-    )
+        if cam_name == "short_max":
+            expected_shape = (n, cam.height, cam.width, 1)
+            if tuple(depth_all.shape) != expected_shape or depth_all.dtype != torch.float32:
+                fails.append(
+                    f"{args.simulator}/{cam_name}: depth shape/dtype {tuple(depth_all.shape)} {depth_all.dtype} "
+                    f"!= {expected_shape} float32"
+                )
+            continue
+
+        for e in range(n):
+            env_fails = _check_depth(
+                rgb_all[e],
+                depth_all[e],
+                cam_to_panel,
+                _camera_presets._PANEL_HALF_SIZE,
+                cam.vertical_fov,
+                f"{args.simulator}/{cam_name}/env{e}",
+                expect_infinite_no_hit=cam_name == "none",
+            )
+            for failure in env_fails:
+                print(f"[{args.simulator}] FAIL: {failure}")
+            fails += env_fails
+
+    # The raw "none" camera gives a scene-derived no-return mask. Each policy camera must report
+    # its exact sentinel at those same pixels, while the short-range camera also clips the known
+    # panel return. This catches a backend that bypasses CameraRecord's shared clipping boundary.
     for e in range(n):
-        env_fails = _check_depth(
-            rgb_all[e],
-            depth_all[e],
-            cam_to_panel,
-            _camera_presets._PANEL_HALF_SIZE,
-            cam.vertical_fov,
-            f"{args.simulator}/env{e}",
-        )
-        for f in env_fails:
-            print(f"[{args.simulator}] FAIL: {f}")
-        fails += env_fails
-        if not env_fails:
-            print(f"[{args.simulator}] env{e}: depth OK (metric, image-plane, no-hit sentinel)")
+        none_rgb = rgb_outputs["none"][e]
+        none_depth = depth_outputs["none"][e, ..., 0]
+        panel_mask = _red_mask(none_rgb)
+        no_return_mask = ~panel_mask & torch.isinf(none_depth)
+        if not bool(no_return_mask.any()):
+            fails.append(f"{args.simulator}/env{e}: no scene-derived no-return pixels for clipping checks")
+            continue
+
+        for cam_name, sentinel in (("max", cameras["max"].far), ("zero", 0.0)):
+            actual = depth_outputs[cam_name][e, ..., 0][no_return_mask]
+            expected = torch.full_like(actual, sentinel)
+            if not torch.allclose(actual, expected, atol=1e-5, rtol=0.0):
+                fails.append(
+                    f"{args.simulator}/{cam_name}/env{e}: no-return pixels do not use the configured "
+                    f"{cameras[cam_name].depth_clipping_behavior!r} sentinel"
+                )
+
+        short_panel = depth_outputs["short_max"][e, ..., 0][panel_mask]
+        expected_short = torch.full_like(short_panel, cameras["short_max"].far)
+        if not torch.allclose(short_panel, expected_short, atol=1e-5, rtol=0.0):
+            fails.append(
+                f"{args.simulator}/short_max/env{e}: the panel beyond this camera's far plane was not re-clipped"
+            )
 
     if args.result_file:
         with open(args.result_file, "w") as fh:
@@ -185,13 +232,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    # IsaacSim teardown deadlocks in carbOnPluginShutdown tearing down the
-    # omni.syntheticdata/OmniGraph render-product graph a TiledCamera creates (native
-    # py-spy stack), so a normal interpreter exit hangs until the parent's subprocess
-    # timeout SIGKILLs it -- turning a PASS (verdict already written to --result-file) into
-    # a spurious timeout failure. Hard-exit past the atexit teardown, mirroring
-    # behavior_assert / scene_spawn_assert. Rendering itself is fine; only exit hangs.
-    _rc = main()
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(_rc)
+    run_and_hard_exit(main)

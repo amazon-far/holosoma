@@ -4,6 +4,7 @@ set -e
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 ROOT_DIR=$(dirname "$SCRIPT_DIR")
+source "${SCRIPT_DIR}/versions.sh"
 
 if ! command -v sudo &> /dev/null; then
   # in docker build sudo isn't avaiable, but its ok
@@ -11,14 +12,6 @@ if ! command -v sudo &> /dev/null; then
   function sudo { "$@"; }
   export -f sudo
 fi
-
-# MuJoCo Warp version to install -- the repo is missing version tags and branches.
-# Pinned to the 3.10.0 line, which ships the batched-camera renderer API
-# (mujoco_warp.create_render_context / render / get_rgb / get_depth) the WarpBackend uses;
-# the older 09ec1da mainline predated it. mujoco_warp[cuda]'s own deps pull warp-lang>=1.14 from
-# pypi.nvidia.com (public PyPI caps at 1.10.1), installed after holosoma below; holosoma itself only
-# floors warp-lang>=1.10 so the non-mujoco images (plain PyPI) still resolve.
-MUJOCO_WARP_COMMIT="ecaef88917a3c90cd238bf76681ca770f58033df"
 
 # Parse command-line arguments
 INSTALL_WARP=true  # Default: install warp (GPU-accelerated)
@@ -77,10 +70,20 @@ echo "conda environment name is set to: $CONDA_ENV_NAME"
 
 source ${SCRIPT_DIR}/source_common.sh
 ENV_ROOT=$CONDA_ROOT/envs/$CONDA_ENV_NAME
-SENTINEL_FILE=${WORKSPACE_DIR}/.env_setup_finished_$CONDA_ENV_NAME
-WARP_SENTINEL_FILE=${WORKSPACE_DIR}/.env_setup_finished_$CONDA_ENV_NAME_warp
+SENTINEL_FILE=${WORKSPACE_DIR}/.env_setup_finished_${CONDA_ENV_NAME}_mujoco-${MUJOCO_VERSION}
+WARP_SENTINEL_FILE=${WORKSPACE_DIR}/.env_setup_finished_${CONDA_ENV_NAME}_mujoco-warp-${MUJOCO_WARP_COMMIT}_warp-${WARP_LANG_VERSION}
 
 mkdir -p $WORKSPACE_DIR
+
+if [[ -x $ENV_ROOT/bin/python ]]; then
+  ACTUAL_PYTHON_VERSION=$("$ENV_ROOT/bin/python" -c \
+    'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+  if [[ $ACTUAL_PYTHON_VERSION != "3.11" ]]; then
+    echo "$CONDA_ENV_NAME requires Python 3.11; the existing environment uses $ACTUAL_PYTHON_VERSION."
+    echo "Remove $ENV_ROOT and rerun this script."
+    exit 1
+  fi
+fi
 
 if [[ ! -f $SENTINEL_FILE ]]; then
   # Detect OS and architecture
@@ -116,8 +119,9 @@ if [[ ! -f $SENTINEL_FILE ]]; then
   if [[ ! -d $ENV_ROOT ]]; then
     $CONDA_ROOT/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
     $CONDA_ROOT/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
-    $CONDA_ROOT/bin/conda install -y mamba -c conda-forge -n base
-    MAMBA_ROOT_PREFIX=$CONDA_ROOT $CONDA_ROOT/bin/mamba create -y -n $CONDA_ENV_NAME python=3.10 -c conda-forge --override-channels
+    # Solve with libmamba, conda's own default solver, instead of installing mamba into base:
+    # that install pulls conda-forge's conda into base and breaks the bundled ToS plugin.
+    $CONDA_ROOT/bin/conda create -y --solver libmamba -n $CONDA_ENV_NAME python=3.11 -c conda-forge --override-channels
   fi
 
   source $CONDA_ROOT/bin/activate $CONDA_ENV_NAME
@@ -141,7 +145,7 @@ if [[ ! -f $SENTINEL_FILE ]]; then
   pip install --upgrade pip
 
   # Core MuJoCo packages
-  pip install 'mujoco>=3.0.0'
+  pip install "mujoco==${MUJOCO_VERSION}"
   pip install mujoco-python-viewer
   # Optional: Gymnasium MuJoCo environments (if needed for compatibility)
  # pip install "gymnasium[mujoco]"
@@ -276,11 +280,17 @@ if [[ "$INSTALL_WARP" == "true" ]] && [[ ! -f $WARP_SENTINEL_FILE ]]; then
   fi
 
   if [[ ! -d $WORKSPACE_DIR/mujoco_warp ]]; then
-    git clone https://github.com/google-deepmind/mujoco_warp.git $WORKSPACE_DIR/mujoco_warp && \
-      git -C $WORKSPACE_DIR/mujoco_warp checkout ${MUJOCO_WARP_COMMIT}
+    git clone https://github.com/google-deepmind/mujoco_warp.git "$WORKSPACE_DIR/mujoco_warp"
+  fi
+  if [[ $(git -C "$WORKSPACE_DIR/mujoco_warp" rev-parse HEAD) != "$MUJOCO_WARP_COMMIT" ]]; then
+    git -C "$WORKSPACE_DIR/mujoco_warp" fetch origin "$MUJOCO_WARP_COMMIT"
+    git -C "$WORKSPACE_DIR/mujoco_warp" checkout "$MUJOCO_WARP_COMMIT"
   fi
   pip install uv
-  uv pip install -e $WORKSPACE_DIR/mujoco_warp[dev,cuda]
+  # uv resolves only the packages named in this operation and otherwise may
+  # upgrade NumPy past Holosoma's <2 requirement through the JAX CUDA extra.
+  uv pip install -e "$WORKSPACE_DIR/mujoco_warp[dev,cuda]" \
+    "warp-lang==$WARP_LANG_VERSION" "numpy>=1.23.5,<2"
 
   touch $WARP_SENTINEL_FILE
 

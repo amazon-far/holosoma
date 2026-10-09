@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 import tyro
 from loguru import logger
@@ -19,21 +20,43 @@ from holosoma.utils.eval_utils import (
 from holosoma.utils.experiment_paths import get_experiment_dir, get_timestamp
 from holosoma.utils.helpers import get_class
 from holosoma.utils.sim_utils import (
-    close_simulation_app,
+    graceful_simulation_signals,
     setup_simulation_environment,
+    simulation_resource_session,
 )
 
 
+@graceful_simulation_signals
 def run_eval_with_tyro(
     tyro_config: ExperimentConfig,
     checkpoint_cfg: CheckpointConfig,
     saved_config: ExperimentConfig,
     saved_wandb_path: str | None,
     eval_cbs_cfg: EvalCallbacksConfig | None = None,
-):
-    # Use shared simulation environment setup
+) -> None:
     env, device, simulation_app = setup_simulation_environment(tyro_config)
+    with simulation_resource_session(env, simulation_app):
+        _run_eval_session(
+            env,
+            device,
+            tyro_config,
+            checkpoint_cfg,
+            saved_config=saved_config,
+            saved_wandb_path=saved_wandb_path,
+            eval_cbs_cfg=eval_cbs_cfg,
+        )
 
+
+def _run_eval_session(
+    env: Any,
+    device: str,
+    tyro_config: ExperimentConfig,
+    checkpoint_cfg: CheckpointConfig,
+    *,
+    saved_config: ExperimentConfig,
+    saved_wandb_path: str | None,
+    eval_cbs_cfg: EvalCallbacksConfig | None,
+) -> None:
     eval_log_dir = get_experiment_dir(tyro_config.logger, tyro_config.training, get_timestamp(), task_name="eval")
     eval_log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -76,16 +99,12 @@ def run_eval_with_tyro(
                 f"{algo_class.__name__} is missing an `export` method required for ONNX export during evaluation."
             )
 
-        algo.export(onnx_file_path=exported_onnx_path)  # type: ignore[attr-defined]
+        algo.export(onnx_file_path=exported_onnx_path)
         logger.info(f"Exported policy as onnx to: {exported_onnx_path}")
 
     algo.evaluate_policy(
         max_eval_steps=tyro_config.training.max_eval_steps,
     )
-
-    # Cleanup simulation app
-    if simulation_app:
-        close_simulation_app(simulation_app)
 
 
 def main() -> None:

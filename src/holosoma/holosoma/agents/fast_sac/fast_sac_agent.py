@@ -5,7 +5,7 @@ import itertools
 import math
 import os
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Sequence
+from typing import Any, Callable, Dict, Iterator, Sequence
 
 import tqdm
 from loguru import logger
@@ -60,7 +60,7 @@ class FastSACEnv:
         # Initialize per-joint action boundaries for proper tanh scaling
         self._action_boundaries = self._compute_action_boundaries()
 
-    def __getattr__(self, name: str):
+    def __getattr__(self, name: str) -> Any:
         """Delegate attribute access to the wrapped environment."""
         return getattr(self._env, name)
 
@@ -76,7 +76,7 @@ class FastSACEnv:
 
     def step(self, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, Any]]:
         # Actions are now already scaled by the actor, so pass them directly to the environment
-        obs_dict, rew_buf, reset_buf, info_dict = self._env.step({"actions": actions})  # type: ignore[attr-defined]
+        obs_dict, rew_buf, reset_buf, info_dict = self._env.step({"actions": actions})
         actor_obs = torch.cat([obs_dict[k] for k in self._actor_obs_keys], dim=1)
         critic_obs = torch.cat([obs_dict[k] for k in self._critic_obs_keys], dim=1)
         if "final_observations" in info_dict:
@@ -158,7 +158,12 @@ class FastSACAgent(BaseAlgo):
     qnet: Critic
 
     def __init__(
-        self, env: BaseTask, config: FastSACConfig, device: str, log_dir: str, multi_gpu_cfg: dict | None = None
+        self,
+        env: BaseTask,
+        config: FastSACConfig,
+        device: str,
+        log_dir: str,
+        multi_gpu_cfg: dict[str, Any] | None = None,
     ):
         wrapped_env = FastSACEnv(env, config.actor_obs_keys, config.critic_obs_keys)
 
@@ -181,7 +186,7 @@ class FastSACAgent(BaseAlgo):
         self.training_metrics = TensorAverageMeterDict()
         self.eval_callbacks: list[RLEvalCallback] = []
 
-    def setup(self) -> None:
+    def setup(self) -> None:  # type: ignore[override]
         logger.info("Setting up FastSAC")
 
         # Log curriculum synchronization status for multi-GPU training
@@ -356,12 +361,12 @@ class FastSACAgent(BaseAlgo):
             self._synchronize_model_parameters()
 
     @contextmanager
-    def _maybe_amp(self):
+    def _maybe_amp(self) -> Iterator[None]:
         amp_dtype = torch.bfloat16 if self.config.amp_dtype == "bf16" else torch.float16
         with autocast(device_type="cuda", dtype=amp_dtype, enabled=self.config.amp):
             yield
 
-    def _synchronize_model_parameters(self):
+    def _synchronize_model_parameters(self) -> None:
         """Synchronize actor, qnet, and log_alpha parameters across all GPUs."""
         # Broadcast actor weights from rank 0 to all other ranks
         for param in self.actor.parameters():
@@ -535,7 +540,11 @@ class FastSACAgent(BaseAlgo):
         )
 
     def _sample_and_prepare_batches(
-        self, batch_size: int, num_updates: int, normalize_obs, normalize_critic_obs
+        self,
+        batch_size: int,
+        num_updates: int,
+        normalize_obs: Callable[..., torch.Tensor],
+        normalize_critic_obs: Callable[..., torch.Tensor],
     ) -> list[TensorDict]:
         """
         Sample a large batch once and split it into smaller batches for each update.
@@ -580,10 +589,10 @@ class FastSACAgent(BaseAlgo):
                 "observations should be a Tensor after data augmentation"
             )
             num_aug = int(observations_tensor.shape[0] / large_data["next"]["rewards"].shape[0])
-            augmented_large_data["next"]["rewards"] = large_data["next"]["rewards"].repeat(num_aug)  # type: ignore[index]
-            augmented_large_data["next"]["dones"] = large_data["next"]["dones"].repeat(num_aug)  # type: ignore[index]
-            augmented_large_data["next"]["truncations"] = large_data["next"]["truncations"].repeat(num_aug)  # type: ignore[index]
-            augmented_large_data["next"]["effective_n_steps"] = large_data["next"]["effective_n_steps"].repeat(num_aug)  # type: ignore[index]
+            augmented_large_data["next"]["rewards"] = large_data["next"]["rewards"].repeat(num_aug)
+            augmented_large_data["next"]["dones"] = large_data["next"]["dones"].repeat(num_aug)
+            augmented_large_data["next"]["truncations"] = large_data["next"]["truncations"].repeat(num_aug)
+            augmented_large_data["next"]["effective_n_steps"] = large_data["next"]["effective_n_steps"].repeat(num_aug)
 
             # Override large_data
             large_data = augmented_large_data
@@ -623,7 +632,7 @@ class FastSACAgent(BaseAlgo):
 
         return prepared_batches
 
-    def load(self, ckpt_path: str | None) -> None:
+    def load(self, ckpt_path: str | None) -> None:  # type: ignore[override]
         if not ckpt_path:
             return
         # Load checkpoint if specified
@@ -647,7 +656,7 @@ class FastSACAgent(BaseAlgo):
         self.global_step = torch_checkpoint["global_step"]
         self._restore_env_state(torch_checkpoint.get("env_state"))
 
-    def learn(self) -> None:
+    def learn(self) -> None:  # type: ignore[override]
         args = self.config
         device = self.device
         if args.compile:
@@ -832,7 +841,7 @@ class FastSACAgent(BaseAlgo):
         )
 
     @torch.no_grad()
-    def get_example_obs(self):
+    def get_example_obs(self) -> dict[str, torch.Tensor]:
         """Used for exporting policy as onnx."""
         obs_dict = self.unwrapped_env.reset_all()
         for k in obs_dict:
@@ -861,18 +870,18 @@ class FastSACAgent(BaseAlgo):
         return policy_fn
 
     @property
-    def actor_onnx_wrapper(self):
+    def actor_onnx_wrapper(self) -> nn.Module:
         # Use the underlying module for ONNX export
         actor = copy.deepcopy(self.actor).to("cpu")
         obs_normalizer = copy.deepcopy(self.obs_normalizer).to("cpu")
 
         class ActorWrapper(nn.Module):
-            def __init__(self, actor, obs_normalizer):
+            def __init__(self, actor: nn.Module, obs_normalizer: nn.Module | None) -> None:
                 super().__init__()
                 self.actor = actor
                 self.obs_normalizer = obs_normalizer
 
-            def forward(self, actor_obs):
+            def forward(self, actor_obs: torch.Tensor) -> torch.Tensor:
                 if self.obs_normalizer is not None:
                     normalized_obs = self.obs_normalizer(actor_obs, update=False)
                 else:
@@ -1008,7 +1017,7 @@ class FastSACAgent(BaseAlgo):
                 self.obs_normalizer.train()
 
     @torch.no_grad()
-    def evaluate_policy(self, max_eval_steps: int | None = None):
+    def evaluate_policy(self, max_eval_steps: int | None = None) -> None:
         self._create_eval_callbacks()
         self._pre_evaluate_policy()
 
@@ -1031,26 +1040,26 @@ class FastSACAgent(BaseAlgo):
 
         self._post_evaluate_policy()
 
-    def _create_eval_callbacks(self):
+    def _create_eval_callbacks(self) -> None:
         if self.config.eval_callbacks is not None:
             for cb_name in self.config.eval_callbacks:
                 self.eval_callbacks.append(instantiate(self.config.eval_callbacks[cb_name], training_loop=self))
 
-    def _pre_evaluate_policy(self):
+    def _pre_evaluate_policy(self) -> None:
         self.env.set_is_evaluating()
         for c in self.eval_callbacks:
             c.on_pre_evaluate_policy()
 
-    def _post_evaluate_policy(self):
+    def _post_evaluate_policy(self) -> None:
         for c in self.eval_callbacks:
             c.on_post_evaluate_policy()
 
-    def _pre_eval_env_step(self, actor_state: dict) -> dict:
+    def _pre_eval_env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
         for c in self.eval_callbacks:
             actor_state = c.on_pre_eval_env_step(actor_state)
         return actor_state
 
-    def _post_eval_env_step(self, actor_state: dict) -> dict:
+    def _post_eval_env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
         for c in self.eval_callbacks:
             actor_state = c.on_post_eval_env_step(actor_state)
         return actor_state

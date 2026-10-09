@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from typing import Any
+from typing import Any, ItemsView, cast
 
 import torch
 
@@ -36,7 +36,7 @@ class ActionManager:
         Device to place tensors on
     """
 
-    def __init__(self, cfg: ActionManagerCfg, env: Any, device: str):
+    def __init__(self, cfg: ActionManagerCfg, env: Any, device: str) -> None:
         self.cfg = cfg
         self.env = env
         self.device = device
@@ -97,7 +97,7 @@ class ActionManager:
         module_path, class_name = class_path.split(":", 1)
         try:
             module = importlib.import_module(module_path)
-            return getattr(module, class_name)
+            return cast("type", getattr(module, class_name))
         except (ImportError, AttributeError) as e:
             raise ValueError(f"Failed to import action term class '{class_path}': {e}") from e
 
@@ -110,7 +110,7 @@ class ActionManager:
         for term in self._term_instances.values():
             term.setup()
 
-    def iter_terms(self):
+    def iter_terms(self) -> ItemsView[str, ActionTermBase]:
         """Iterate over registered action terms."""
         return self._term_instances.items()
 

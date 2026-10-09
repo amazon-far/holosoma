@@ -13,19 +13,20 @@ from __future__ import annotations
 from typing import Any, Callable, Protocol, Tuple
 
 import numpy as np
+import numpy.typing as npt
 import torch
 
 from holosoma.utils.rotations import quat_rotate, quat_rotate_inverse
 
 
-def quat_mujoco_to_holosoma(quat_mujoco: np.ndarray) -> np.ndarray:
+def quat_mujoco_to_holosoma(quat_mujoco: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     """
     Convert quaternion from MuJoCo format [w, x, y, z] to holosoma format [x, y, z, w].
     """
     return quat_mujoco[..., [1, 2, 3, 0]]
 
 
-def quat_holosoma_to_mujoco(quat_holosoma: np.ndarray) -> np.ndarray:
+def quat_holosoma_to_mujoco(quat_holosoma: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     """
     Convert quaternion from holosoma format [x, y, z, w] to MuJoCo format [w, x, y, z].
     """
@@ -49,11 +50,11 @@ class BaseMujocoView(Protocol):
         """Return the shape of the view."""
         ...
 
-    def __getitem__(self, key) -> torch.Tensor:
+    def __getitem__(self, key: Any) -> torch.Tensor:
         """Get data from the view, returning a PyTorch tensor."""
         ...
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: Any, value: torch.Tensor | npt.NDArray[np.float64]) -> None:
         """Set data in the view from a PyTorch tensor or array."""
         ...
 
@@ -87,7 +88,7 @@ class BaseMujocoViewMixin:
         """Return the shape of the view. Must be implemented by subclass."""
         raise NotImplementedError("Subclasses must implement shape")
 
-    def __getitem__(self, key) -> torch.Tensor:
+    def __getitem__(self, key: Any) -> torch.Tensor:
         """Get data from the view. Must be implemented by subclass."""
         raise NotImplementedError("Subclasses must implement __getitem__")
 
@@ -103,15 +104,15 @@ class BaseMujocoViewMixin:
         """Return a cloned tensor of the view data."""
         return self[:].clone()
 
-    def repeat(self, *sizes):
+    def repeat(self, *sizes: int) -> torch.Tensor:
         """Repeat the tensor along specified dimensions."""
         return self[:].repeat(*sizes)
 
-    def unsqueeze(self, dim):
+    def unsqueeze(self, dim: int) -> torch.Tensor:
         """Add a dimension of size 1 at the specified position."""
         return self[:].unsqueeze(dim)
 
-    def view(self, *shape):
+    def view(self, *shape: int) -> torch.Tensor:
         """Return a new tensor with the same data but different shape."""
         return self[:].view(*shape)
 
@@ -119,7 +120,13 @@ class BaseMujocoViewMixin:
         return f"<{self.__class__.__name__} shape={self.shape} device={self.device}>"
 
     @classmethod
-    def __torch_function__(cls, func: Callable, types: tuple, args: tuple = (), kwargs: dict | None = None) -> Any:
+    def __torch_function__(
+        cls,
+        func: Callable[..., Any],
+        types: tuple[type, ...],
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> Any:
         """
         PyTorch compatibility for critical operations.
 
@@ -159,12 +166,12 @@ class MujocoView(BaseMujocoViewMixin):
 
     def __init__(
         self,
-        base_array: np.ndarray,
-        indices: slice | np.ndarray,
-        transform_get: Callable | None = None,
-        transform_set: Callable | None = None,
+        base_array: npt.NDArray[np.float64],
+        indices: slice | npt.NDArray[np.intp],
+        transform_get: Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]] | None = None,
+        transform_set: Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]] | None = None,
         device: str = "cpu",
-    ):
+    ) -> None:
         """
         Initialize a view into a MuJoCo data array.
 
@@ -181,7 +188,7 @@ class MujocoView(BaseMujocoViewMixin):
         self.transform_set = transform_set
         self.device = device
 
-    def __getitem__(self, key) -> torch.Tensor:
+    def __getitem__(self, key: Any) -> torch.Tensor:
         """Get data from the view, returning a PyTorch tensor."""
         raw_data = self.base_array[self.indices]
 
@@ -195,7 +202,7 @@ class MujocoView(BaseMujocoViewMixin):
         # Handle partial indexing like [0, :3], [0], or full slicing [:]
         return tensor_data[key]
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: Any, value: torch.Tensor | npt.NDArray[np.float64]) -> None:
         """Set data in the view from a PyTorch tensor or numpy array."""
         if isinstance(value, torch.Tensor):
             np_value = value.detach().cpu().numpy()
@@ -257,15 +264,15 @@ class MujocoRootStateView:
 
     def __init__(
         self,
-        qpos_array: np.ndarray,
-        qvel_array: np.ndarray,
+        qpos_array: npt.NDArray[np.float64],
+        qvel_array: npt.NDArray[np.float64],
         pos_indices: slice,
         quat_indices: slice,
         vel_indices: slice,
         ang_vel_indices: slice,
         num_envs: int,
         device: str = "cpu",
-    ):
+    ) -> None:
         self.qpos_array = qpos_array
         self.qvel_array = qvel_array
         self.pos_indices = pos_indices
@@ -279,7 +286,7 @@ class MujocoRootStateView:
     def shape(self) -> Tuple[int, ...]:
         return (self.num_envs, 13)
 
-    def __getitem__(self, key) -> torch.Tensor:
+    def __getitem__(self, key: Any) -> torch.Tensor:
         """Get 13-element root state with quaternion conversion."""
         pos = self.qpos_array[self.pos_indices].reshape(self.num_envs, 3)
         quat_mujoco = self.qpos_array[self.quat_indices].reshape(self.num_envs, 4)
@@ -299,7 +306,7 @@ class MujocoRootStateView:
 
         return tensor_data[key]
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: Any, value: torch.Tensor | npt.NDArray[np.float64]) -> None:
         """Set 13-element root state with quaternion conversion."""
         if isinstance(value, torch.Tensor):
             np_value = value.detach().cpu().numpy()
@@ -364,14 +371,14 @@ class MujocoDofStateView:
 
     def __init__(
         self,
-        qpos_array: np.ndarray,
-        qvel_array: np.ndarray,
+        qpos_array: npt.NDArray[np.float64],
+        qvel_array: npt.NDArray[np.float64],
         dof_pos_indices: slice,
         dof_vel_indices: slice,
         num_envs: int,
         num_dof: int,
         device: str = "cpu",
-    ):
+    ) -> None:
         self.qpos_array = qpos_array
         self.qvel_array = qvel_array
         self.dof_pos_indices = dof_pos_indices
@@ -384,7 +391,7 @@ class MujocoDofStateView:
     def shape(self) -> Tuple[int, ...]:
         return (self.num_envs * self.num_dof, 2)
 
-    def __getitem__(self, key) -> torch.Tensor:
+    def __getitem__(self, key: Any) -> torch.Tensor:
         """Get DOF states in IsaacGym flattened format."""
         dof_pos = self.qpos_array[self.dof_pos_indices].reshape(self.num_envs, self.num_dof)
         dof_vel = self.qvel_array[self.dof_vel_indices].reshape(self.num_envs, self.num_dof)
@@ -396,7 +403,7 @@ class MujocoDofStateView:
 
         return tensor_data[key]
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: Any, value: torch.Tensor | npt.NDArray[np.float64]) -> None:
         """Set DOF states from IsaacGym flattened format."""
         if key != slice(None, None, None):
             raise IndexError("Only full slicing `[:]` is supported for setting DOF state.")
@@ -429,14 +436,16 @@ class MujocoDofStateView:
 # --- Factory functions for common view types ---
 
 
-def create_quaternion_view(qpos_array: np.ndarray, indices: slice, num_envs: int, device: str = "cpu") -> MujocoView:
+def create_quaternion_view(
+    qpos_array: npt.NDArray[np.float64], indices: slice, num_envs: int, device: str = "cpu"
+) -> MujocoView:
     """Create a view for quaternions with format conversion."""
 
-    def reshape_quat_get(data):
+    def reshape_quat_get(data: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         reshaped_data = data.reshape(num_envs, 4)
         return quat_mujoco_to_holosoma(reshaped_data)
 
-    def reshape_quat_set(data):
+    def reshape_quat_set(data: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         quat_mujoco = quat_holosoma_to_mujoco(data)
         return quat_mujoco.flatten()
 
@@ -446,41 +455,41 @@ def create_quaternion_view(qpos_array: np.ndarray, indices: slice, num_envs: int
 
 
 def create_dof_position_view(
-    qpos_array: np.ndarray, indices: slice, num_envs: int, num_dof: int, device: str = "cpu"
+    qpos_array: npt.NDArray[np.float64], indices: slice, num_envs: int, num_dof: int, device: str = "cpu"
 ) -> MujocoView:
     """Create a view for DOF positions reshaped for multi-env."""
 
-    def reshape_get(data):
+    def reshape_get(data: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         return data.reshape(num_envs, num_dof)
 
-    def reshape_set(data):
+    def reshape_set(data: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         return data.flatten()
 
     return MujocoView(qpos_array, indices, transform_get=reshape_get, transform_set=reshape_set, device=device)
 
 
 def create_dof_velocity_view(
-    qvel_array: np.ndarray, indices: slice, num_envs: int, num_dof: int, device: str = "cpu"
+    qvel_array: npt.NDArray[np.float64], indices: slice, num_envs: int, num_dof: int, device: str = "cpu"
 ) -> MujocoView:
     """Create a view for DOF velocities reshaped for multi-env."""
 
-    def reshape_get(data):
+    def reshape_get(data: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         return data.reshape(num_envs, num_dof)
 
-    def reshape_set(data):
+    def reshape_set(data: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         return data.flatten()
 
     return MujocoView(qvel_array, indices, transform_get=reshape_get, transform_set=reshape_set, device=device)
 
 
 def create_dof_acceleration_view(
-    qacc_array: np.ndarray, indices: slice, num_envs: int, num_dof: int, device: str = "cpu"
+    qacc_array: npt.NDArray[np.float64], indices: slice, num_envs: int, num_dof: int, device: str = "cpu"
 ) -> MujocoView:
     """Create a view for DOF accelerations reshaped for multi-env.
 
     Parameters
     ----------
-    qacc_array : np.ndarray
+    qacc_array : npt.NDArray[np.float64]
         MuJoCo's qacc array
     indices : slice
         Slice object defining which elements to view
@@ -497,23 +506,23 @@ def create_dof_acceleration_view(
         View of DOF accelerations with shape [num_envs, num_dof]
     """
 
-    def reshape_get(data):
+    def reshape_get(data: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         return data.reshape(num_envs, num_dof)
 
-    def reshape_set(data):
+    def reshape_set(data: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         return data.flatten()
 
     return MujocoView(qacc_array, indices, transform_get=reshape_get, transform_set=reshape_set, device=device)
 
 
 def create_base_angular_velocity_view(
-    qvel_array: np.ndarray, indices: slice, num_envs: int, device: str = "cpu"
+    qvel_array: npt.NDArray[np.float64], indices: slice, num_envs: int, device: str = "cpu"
 ) -> MujocoView:
     """Create a view for base angular velocity reshaped for multi-env.
 
     Parameters
     ----------
-    qvel_array : np.ndarray
+    qvel_array : npt.NDArray[np.float64]
         MuJoCo's qvel array
     indices : slice
         Slice object defining which elements to view
@@ -528,23 +537,23 @@ def create_base_angular_velocity_view(
         View of base angular velocity with shape [num_envs, 3]
     """
 
-    def reshape_get(data):
+    def reshape_get(data: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         return data.reshape(num_envs, 3)
 
-    def reshape_set(data):
+    def reshape_set(data: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         return data.flatten()
 
     return MujocoView(qvel_array, indices, transform_get=reshape_get, transform_set=reshape_set, device=device)
 
 
 def create_base_linear_acceleration_view(
-    qacc_array: np.ndarray, indices: slice, num_envs: int, device: str = "cpu"
+    qacc_array: npt.NDArray[np.float64], indices: slice, num_envs: int, device: str = "cpu"
 ) -> MujocoView:
     """Create a view for base linear acceleration reshaped for multi-env.
 
     Parameters
     ----------
-    qacc_array : np.ndarray
+    qacc_array : npt.NDArray[np.float64]
         MuJoCo's qacc array
     indices : slice
         Slice object defining which elements to view
@@ -559,10 +568,10 @@ def create_base_linear_acceleration_view(
         View of base linear acceleration with shape [num_envs, 3]
     """
 
-    def reshape_get(data):
+    def reshape_get(data: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         return data.reshape(num_envs, 3)
 
-    def reshape_set(data):
+    def reshape_set(data: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         return data.flatten()
 
     return MujocoView(qacc_array, indices, transform_get=reshape_get, transform_set=reshape_set, device=device)

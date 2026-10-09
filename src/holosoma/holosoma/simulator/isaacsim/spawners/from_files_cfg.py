@@ -16,12 +16,16 @@ This module provides custom USD file configuration that supports source prim pat
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
 from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
 from isaaclab.utils import configclass
 
 from . import from_files
+
+if TYPE_CHECKING:
+    from pxr import Usd
 
 
 @configclass
@@ -51,7 +55,7 @@ class CustomUsdFileCfg(UsdFileCfg):
         False for a legitimately geometry-less asset.
     """
 
-    func: Callable = from_files.spawn_from_usd
+    func: Callable[..., Usd.Prim] = from_files.spawn_from_usd
     source_path: str | None = None
     disable_instanceable: bool = False
     physics_material: RigidBodyMaterialCfg | None = None

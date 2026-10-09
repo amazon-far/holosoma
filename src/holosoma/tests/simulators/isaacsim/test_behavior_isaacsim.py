@@ -34,6 +34,7 @@ _SCENARIOS = [
     "dr-friction-governs",
     "dr-damping-governs",
     "galileo-freefall",
+    "external-force",
     "damping-decay",
     "restitution-bounce",
     "angular-velocity-spin",

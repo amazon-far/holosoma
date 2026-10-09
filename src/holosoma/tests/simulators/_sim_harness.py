@@ -11,11 +11,35 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from typing import Any
+import os
+import sys
+from typing import Any, Callable, NoReturn
 
 import tyro
 
 from holosoma.config_types.run_sim import RunSimConfig
+
+
+def run_and_hard_exit(main: Callable[[], int]) -> NoReturn:
+    """Run a harness ``main`` and terminate the process immediately with its return code.
+
+    Standalone IsaacSim harnesses MUST end this way instead of ``sys.exit(main())``. On IsaacSim,
+    the interpreter's normal atexit teardown deadlocks in ``carbOnPluginShutdown`` while unwinding
+    the ``omni.syntheticdata`` / OmniGraph render-product graph a TiledCamera creates, so the
+    process never exits — the parent's ``subprocess`` timeout then SIGKILLs it, turning a PASS
+    (verdict already written to ``--result-file``) into a spurious timeout failure. Flushing then
+    ``os._exit`` skips the atexit teardown entirely; rendering itself is fine, only clean shutdown
+    hangs. (behavior_assert / scene_spawn_assert use the same escape for the MuJoCo-viewer race.)
+
+    Use in a harness entrypoint::
+
+        if __name__ == "__main__":
+            run_and_hard_exit(main)
+    """
+    rc = main()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(rc)
 
 
 def steps_for_seconds(sim: Any, seconds: float) -> int:

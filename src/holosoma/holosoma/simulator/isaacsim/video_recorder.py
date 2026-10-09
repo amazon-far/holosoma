@@ -8,9 +8,10 @@ and asynchronous recording modes with full feature parity to IsaacGym and MuJoCo
 from __future__ import annotations
 
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import numpy.typing as npt
 
 import torch
 from loguru import logger
@@ -24,6 +25,7 @@ from isaaclab.utils.math import (
 from holosoma.simulator.shared.video_recorder import VideoRecorderInterface
 
 if TYPE_CHECKING:
+    from holosoma.config_types.video import VideoConfig
     from holosoma.simulator.isaacsim.isaacsim import IsaacSim
 
 
@@ -49,7 +51,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         Reference to the IsaacSim simulator instance.
     """
 
-    def __init__(self, config, simulator: IsaacSim) -> None:
+    def __init__(self, config: VideoConfig, simulator: IsaacSim) -> None:
         """Initialize IsaacSim video recorder.
 
         Parameters
@@ -65,8 +67,8 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         self.simulator: IsaacSim = simulator
 
         # IsaacSim-specific attributes using replicator
-        self._render_product = None
-        self._rgb_annotator = None
+        self._render_product: Any = None
+        self._rgb_annotator: Any = None
         self._camera_prim_path: str | None = None
 
         logger.info(
@@ -174,6 +176,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
                 rgb_data = np.frombuffer(rgb_data, dtype=np.uint8).reshape(*rgb_data.shape)
 
             # note: initially the renderer is warming up and returns empty data
+            rgb_array: npt.NDArray[np.uint8]
             if rgb_data.size == 0:
                 rgb_array = np.zeros((self.config.height, self.config.width, 3), dtype=np.uint8)
             else:
@@ -226,30 +229,56 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
 
         Releases replicator resources and clears frame buffers.
         """
-        super().cleanup()
+        failures: list[Exception] = []
+        try:
+            super().cleanup()
+        except Exception as exc:
+            failures.append(exc)
 
-        # Clean up replicator resources
+        if self.worker_stopped:
+            failures.extend(self._cleanup_backend_resources())
+
+        if failures:
+            details = "; ".join(repr(exc) for exc in failures)
+            raise RuntimeError(f"IsaacSim video recorder cleanup failed: {details}")
+        logger.debug("IsaacSim video recorder cleanup completed")
+
+    def _cleanup_backend_resources(self) -> list[Exception]:
+        """Destroy Replicator and USD resources after the worker exits."""
+        failures: list[Exception] = []
         if self._rgb_annotator is not None:
             try:
-                # Detach annotator from render product
                 if self._render_product is not None:
                     self._rgb_annotator.detach([self._render_product])
+            except Exception as exc:
+                failures.append(exc)
+            else:
                 self._rgb_annotator = None
-            except Exception as e:
-                logger.warning(f"Error cleaning up RGB annotator: {e}")
 
-        # Clear render product
-        if self._render_product is not None:
+        if self._rgb_annotator is None and self._render_product is not None:
             try:
-                # Render product cleanup is handled by replicator
+                self._render_product.destroy()
+            except Exception as exc:
+                failures.append(exc)
+            else:
                 self._render_product = None
-            except Exception as e:
-                logger.warning(f"Error cleaning up render product: {e}")
 
-        # Clear camera prim path
-        self._camera_prim_path = None
+        if self._rgb_annotator is None and self._render_product is None and self._camera_prim_path is not None:
+            camera_prim_path = self._camera_prim_path
+            self.camera_prim = None
+            self._view = None
+            try:
+                import omni.usd
 
-        logger.debug("IsaacSim video recorder cleanup completed")
+                removed = omni.usd.get_context().get_stage().RemovePrim(camera_prim_path)
+                if removed is False:
+                    raise RuntimeError(f"Failed to remove camera prim {camera_prim_path!r}")
+            except Exception as exc:
+                failures.append(exc)
+            else:
+                self._camera_prim_path = None
+
+        return failures
 
     def _start_persistent_thread(self) -> None:
         """Start persistent recording thread for IsaacSim.

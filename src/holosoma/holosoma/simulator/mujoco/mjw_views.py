@@ -47,11 +47,17 @@ All views maintain zero-copy access to underlying Warp GPU arrays:
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Any, Callable, Sequence, Tuple, Union
 
+import numpy as np
 import torch
 
 from holosoma.utils.rotations import quat_rotate, quat_rotate_inverse
+
+# Index passed to __getitem__/__setitem__ (forwarded to torch tensor indexing).
+IndexKey = Union[int, slice, "torch.Tensor", Tuple[Any, ...], Sequence[int]]
+# Value accepted by __setitem__ / copy_ (converted to a tensor if not already one).
+IndexValue = Union["torch.Tensor", "np.ndarray[Any, Any]", Sequence[Any], "MjwDofStateView", "MjwRootStateView"]
 
 
 class MjwDofStateView:
@@ -90,7 +96,7 @@ class MjwDofStateView:
         dof_vel_indices: slice,
         num_envs: int,
         num_dof: int,
-    ):
+    ) -> None:
         """Initialize DOF state view.
 
         Parameters
@@ -121,7 +127,7 @@ class MjwDofStateView:
         """Return shape [num_envs * num_dof, 2]."""
         return (self.num_envs * self.num_dof, 2)
 
-    def __getitem__(self, key) -> torch.Tensor:
+    def __getitem__(self, key: IndexKey) -> torch.Tensor:
         """Read DOF states in IsaacGym flattened format.
 
         Returns states as [num_envs * num_dof, 2] where:
@@ -150,7 +156,7 @@ class MjwDofStateView:
 
         return dof_state_flat[key]
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: IndexKey, value: IndexValue) -> None:
         """Write DOF states from IsaacGym flattened format.
 
         Expects states as [num_envs * num_dof, 2] where:
@@ -202,7 +208,7 @@ class MjwDofStateView:
     def __repr__(self) -> str:
         return f"<MjwDofStateView shape={self.shape} device={self.device}>"
 
-    def copy_(self, other):
+    def copy_(self, other: IndexValue) -> MjwDofStateView:
         """Support in-place copy: self.copy_(other)
 
         Mimics PyTorch's tensor.copy_() API for compatibility with
@@ -222,7 +228,13 @@ class MjwDofStateView:
         return self
 
     @classmethod
-    def __torch_function__(cls, func, types, args=(), kwargs=None):
+    def __torch_function__(
+        cls,
+        func: Callable[..., Any],
+        types: Tuple[type, ...],
+        args: Tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> Any:
         """Enable PyTorch operations to work with our views.
 
         This allows PyTorch functions to accept our view objects by automatically
@@ -278,7 +290,7 @@ class MjwQuaternionView:
     # Flag for PyTorch compatibility
     _is_tensor_proxy: bool = True
 
-    def __init__(self, qpos: torch.Tensor, quat_slice: slice, num_envs: int):
+    def __init__(self, qpos: torch.Tensor, quat_slice: slice, num_envs: int) -> None:
         """Initialize quaternion view.
 
         Parameters
@@ -300,7 +312,7 @@ class MjwQuaternionView:
         """Return shape [num_envs, 4]."""
         return (self.num_envs, 4)
 
-    def __getitem__(self, key) -> torch.Tensor:
+    def __getitem__(self, key: IndexKey) -> torch.Tensor:
         """Read quaternion with format conversion [w,x,y,z] -> [x,y,z,w].
 
         Parameters
@@ -317,7 +329,7 @@ class MjwQuaternionView:
         quat_holo = quat_mj[:, [1, 2, 3, 0]]  # [x, y, z, w]
         return quat_holo[key]
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: IndexKey, value: IndexValue) -> None:
         """Write quaternion with format conversion [x,y,z,w] -> [w,x,y,z].
 
         Parameters
@@ -380,7 +392,7 @@ class MjwAngularVelocityView:
     # Flag for PyTorch compatibility
     _is_tensor_proxy: bool = True
 
-    def __init__(self, qvel: torch.Tensor, ang_vel_slice: slice, num_envs: int):
+    def __init__(self, qvel: torch.Tensor, ang_vel_slice: slice, num_envs: int) -> None:
         """Initialize angular velocity view.
 
         Parameters
@@ -402,7 +414,7 @@ class MjwAngularVelocityView:
         """Return shape [num_envs, 3]."""
         return (self.num_envs, 3)
 
-    def __getitem__(self, key) -> torch.Tensor:
+    def __getitem__(self, key: IndexKey) -> torch.Tensor:
         """Read angular velocity.
 
         Parameters
@@ -418,7 +430,7 @@ class MjwAngularVelocityView:
         ang_vel = self.qvel[:, self.ang_vel_slice]  # [N, 3]
         return ang_vel[key]
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: IndexKey, value: IndexValue) -> None:
         """Write angular velocity.
 
         Parameters
@@ -500,7 +512,7 @@ class MjwRootStateView:
         vel_slice: slice,
         ang_vel_slice: slice,
         num_envs: int,
-    ):
+    ) -> None:
         """Initialize root state view.
 
         Parameters
@@ -534,7 +546,7 @@ class MjwRootStateView:
         """Return shape [num_envs, 13]."""
         return (self.num_envs, 13)
 
-    def __getitem__(self, key) -> torch.Tensor:
+    def __getitem__(self, key: IndexKey) -> torch.Tensor:
         """Read root state with quaternion conversion.
 
         Returns 13-element state in holosoma convention:
@@ -570,7 +582,7 @@ class MjwRootStateView:
 
         return root_state[key]
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: IndexKey, value: IndexValue) -> None:
         """Write root state with quaternion conversion.
 
         Expects 13-element state in holosoma convention:
