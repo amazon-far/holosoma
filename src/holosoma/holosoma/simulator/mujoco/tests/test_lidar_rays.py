@@ -587,7 +587,7 @@ def test_mjwarp_captures_distinct_reusable_ray_graphs_per_lidar(monkeypatch: pyt
         pattern_at=lambda _: SimpleNamespace(directions=torch.tensor([[0.0, 0.0, -1.0], [1.0, 0.0, 0.0]])),
     )
     backend = SimpleNamespace(
-        mjw_device="cuda:0",
+        mjw_device="cpu",
         mjw_model=object(),
         mjw_data=SimpleNamespace(
             site_xpos=torch.zeros((1, 2, 3)),
@@ -773,7 +773,7 @@ def test_mjwarp_replayed_graph_reads_current_directions_and_updates_cloud(monkey
 
     record = _Record()
     backend = SimpleNamespace(
-        mjw_device="cuda:0",
+        mjw_device="cpu",
         mjw_model=object(),
         mjw_data=SimpleNamespace(
             site_xpos=torch.zeros((1, 1, 3)),
