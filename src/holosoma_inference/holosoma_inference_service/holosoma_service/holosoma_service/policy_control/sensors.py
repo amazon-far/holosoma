@@ -12,8 +12,9 @@ import threading
 import time
 from collections import deque
 
-import cv2
 import numpy as np
+import torch
+import torchvision.transforms as T
 from loguru import logger
 from message_filters import ApproximateTimeSynchronizer, Subscriber
 from rclpy.node import Node
@@ -99,6 +100,15 @@ class Ros2DepthConsumer(Sensor):
         self._far_clip = far_clip
         self._timeout = timeout
         self._frame_delay_s = frame_delay_ms / 1000.0
+        # Match the image_server's resize EXACTLY so the policy sees the same
+        # filtered depth it trained on: torchvision Resize(BICUBIC), constructed
+        # identically to image_server._resize_clip_expand_transpose's
+        # resize_transform (no explicit antialias arg — inherit the torchvision
+        # default, matching the producer rather than betting on a specific value).
+        self._resize = T.Resize(
+            (resized_height, resized_width),
+            interpolation=T.InterpolationMode.BICUBIC,
+        )
         # Ring buffer of (monotonic_stamp, (N, 1, H, W)) sets, newest last. A
         # depth of 1 reproduces the original freshest-frame behavior; otherwise
         # we keep enough history to look back ``frame_delay_ms``. The publish
@@ -128,11 +138,35 @@ class Ros2DepthConsumer(Sensor):
         pass  # subscriptions live on the caller's node; nothing to start
 
     def _preprocess(self, frame: np.ndarray) -> np.ndarray:
-        """resize -> clip -> normalize to [-0.5, 0.5]. Returns (1, H, W) float32."""
-        resized = cv2.resize(frame, (self._resized_width, self._resized_height), interpolation=cv2.INTER_AREA)
+        """Sanitize no-return pixels, resize (training transform), clip, normalize.
+
+        Returns ``(1, H, W)`` float32 in ``[-0.5, 0.5]``.
+
+        No-return pixels are mapped BEFORE resize — bicubic interpolation blends
+        neighbors, so a non-finite value would smear into surrounding output
+        pixels. REP-117 (zed-ros2-wrapper) encoding:
+
+        * ``-Inf`` (below min range, too close) -> ``near_clip``
+        * ``+Inf`` (beyond max range, too far)  -> ``far_clip``
+        * ``NaN``  (occluded / no measurement)  -> ``far_clip``
+        * ``<= 0`` (sim raycast no-hit)          -> ``far_clip``
+
+        No-measurement -> ``far_clip`` (open space): mapping unknowns to
+        ``near_clip`` would fabricate phantom close obstacles.
+        """
+        # Writable float32 copy: the decoded frame is a read-only np.frombuffer
+        # view. ±Inf mapped before NaN so the <=0 pass is on all-finite data.
+        sanitized = frame.astype(np.float32, copy=True)
+        sanitized[np.isneginf(sanitized)] = self._near_clip
+        sanitized[np.isposinf(sanitized)] = self._far_clip
+        sanitized[np.isnan(sanitized)] = self._far_clip
+        sanitized[sanitized <= 0.0] = self._far_clip
+
+        # (H, W) -> (1, H, W) tensor; Resize maps it to (1, H', W') (no expand_dims).
+        chw = torch.from_numpy(sanitized).unsqueeze(0)
+        resized = self._resize(chw).numpy()  # (1, H', W')
         clipped = np.clip(resized, self._near_clip, self._far_clip)
-        normalized = (clipped - self._near_clip) / (self._far_clip - self._near_clip) - 0.5
-        return normalized[np.newaxis, :, :].astype(np.float32)
+        return ((clipped - self._near_clip) / (self._far_clip - self._near_clip) - 0.5).astype(np.float32)
 
     def _store(self, frames: list[np.ndarray]) -> None:
         # Each raw (H_raw, W_raw) -> preprocessed (1, H, W) -> stack to (N, 1, H, W).
