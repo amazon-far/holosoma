@@ -40,6 +40,7 @@ dependencies = [
     "onnxruntime",
     "open3d",
     "opencv-python",
+    "pandas>=1.5,<3",  # Nightly validation uses W&B's DataFrame history.
     "plotly",
     "pydantic",
     "pygame",

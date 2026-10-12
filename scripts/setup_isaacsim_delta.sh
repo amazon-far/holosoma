@@ -129,6 +129,15 @@ isaacsim_install_delta() {
   python -m pip install -c "$ISAACSIM_RUNTIME_CONSTRAINTS" \
     -e "$ISAACSIM_ROOT_DIR/src/holosoma[unitree,booster]"
 
+  if [[ -n ${ISAACSIM_ROOT_PATH:-} ]]; then
+    # Isaac Lab 2.3.2 pins URDF importer 2.4.31; the native image bundles 2.4.30.
+    # Cache it during image setup so distributed workers do not race to download it.
+    "$ISAACSIM_ROOT_PATH/kit/kit" "$ISAACLAB_DIR/apps/isaaclab.python.headless.kit" \
+      --allow-root --no-window --ext-precache-mode \
+      --enable isaacsim.asset.importer.urdf-2.4.31 \
+      "--/app/extensions/registryCacheFull=$ISAACSIM_ROOT_PATH/extscache"
+  fi
+
   touch "$ISAACSIM_SENTINEL_FILE"
 }
 
