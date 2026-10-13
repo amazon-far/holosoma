@@ -20,6 +20,19 @@ if TYPE_CHECKING:
 class BasicSdk2Bridge(ABC):
     """Abstract base class for SDK2Py bridge implementations."""
 
+    def requires_explicit_dof_order(self) -> bool:
+        """Whether the transport gives motor slots a fixed order independent of the simulator.
+
+        Return ``True`` for SDK packets whose unnamed motor array follows a hardware model's
+        order. Reordering ``RobotConfig.dof_names`` changes the policy's action order, so it
+        cannot also redefine those packet slots. Such bridges require ``controlled_dof_names``.
+
+        Return ``False`` when the receiving API accepts the simulator's order or transmits
+        joint names. The default selection is then canonical order minus ``excluded_dof_names``;
+        an explicit controlled tuple can still select or reorder that subset.
+        """
+        return False
+
     def __init__(
         self,
         simulator: BaseSimulator,
@@ -36,10 +49,7 @@ class BasicSdk2Bridge(ABC):
         # Store simulator reference for generic access
         self.simulator = simulator
 
-        # The DOFs this bridge controls (subset of the simulator's DOFs, in bridge order). Default
-        # (empty controlled/excluded config) is every DOF, matching the historical 1:1 SDK-motor <->
-        # sim-DOF behavior. A robot with more sim DOFs than the SDK models (so a co-controller owns
-        # the rest) narrows it via RobotBridgeConfig.controlled_dof_names / excluded_dof_names.
+        # Resolve motor order before starting transport so an invalid mapping cannot receive commands.
         self.dof_indices = self._resolve_dof_indices(simulator, robot_config)
         # None when the subset is every DOF in natural order -> simulator applies the fast full-width
         # ctrl write; a list -> the simulator scatters into ONLY these DOFs' ctrl slots.
@@ -53,7 +63,8 @@ class BasicSdk2Bridge(ABC):
         # SDK motor count is the size of the controlled subset (was: simulator.num_dof).
         self.num_motor = len(self.dof_indices)
         self.torques = np.zeros(self.num_motor)  # Avoids config/model mismatches
-        self.torque_limit = np.array([self.robot.dof_effort_limit_list[i] for i in self.dof_indices])
+        # The effort limits the simulator enforces (config where given, asset otherwise), for the controlled subset.
+        self.torque_limit = simulator.get_dof_limits_properties()[2].cpu().numpy()[self.dof_indices]
         self.low_cmd: Any = None
 
         # robot_type presented to the SDK (its type gate + motor-vector sizing). Falls back to the
@@ -131,30 +142,38 @@ class BasicSdk2Bridge(ABC):
         return row.copy() if self._dof_index is None else row[self._dof_index]
 
     def _resolve_dof_indices(self, simulator: BaseSimulator, robot_config: RobotConfig) -> list[int]:
-        """Resolve which simulator DOFs this bridge controls, as indices into ``simulator.dof_names``.
-
-        ``controlled_dof_names`` (allow-list, in order) wins over ``excluded_dof_names``
-        (control-everything-else). Both empty -> every DOF in natural order (the default, so an
-        SDK that owns the whole robot is unchanged). Names are validated against the loaded robot.
-        """
+        """Resolve controlled names to simulator indices, preserving the configured bridge order."""
         bridge_cfg = robot_config.bridge
-
-        # Default (no subset configured): control every DOF. Uses only num_dof, so it needs no
-        # dof_names — keeps the historical whole-robot behavior for any simulator.
+        # Fixed-format SDK slots have a physical meaning independent of config or asset DOF order.
+        if self.requires_explicit_dof_order() and not bridge_cfg.controlled_dof_names:
+            raise ValueError(
+                f"{type(self).__name__} requires bridge.controlled_dof_names in SDK motor order, "
+                "including when controlling the whole robot; excluded_dof_names alone does not define that order."
+            )
         if not bridge_cfg.controlled_dof_names and not bridge_cfg.excluded_dof_names:
             return list(range(simulator.num_dof))
 
+        dof_names = list(simulator.dof_names)
+        name_to_idx = {n: i for i, n in enumerate(dof_names)}
+
+        indices: list[int] = []
         if bridge_cfg.controlled_dof_names:
-            try:
-                indices = simulator.dof_indices(bridge_cfg.controlled_dof_names)
-            except ValueError as exc:
-                raise ValueError(f"bridge.controlled_dof_names: {exc}") from exc
+            missing: list[str] = []
+            for name in bridge_cfg.controlled_dof_names:
+                idx = name_to_idx.get(name)
+                (indices.append(idx) if idx is not None else missing.append(name))
+            if missing:
+                raise ValueError(
+                    f"bridge.controlled_dof_names {missing} not in the loaded robot (dof_names={dof_names})."
+                )
         else:  # excluded_dof_names (controlled empty, but not both — the both-empty case returned above)
-            try:
-                excluded = set(simulator.dof_indices(bridge_cfg.excluded_dof_names))
-            except ValueError as exc:
-                raise ValueError(f"bridge.excluded_dof_names: {exc}") from exc
-            indices = [i for i in range(simulator.num_dof) if i not in excluded]
+            excluded = set(bridge_cfg.excluded_dof_names)
+            unknown = excluded - set(name_to_idx)
+            if unknown:
+                raise ValueError(
+                    f"bridge.excluded_dof_names {sorted(unknown)} not in the loaded robot (dof_names={dof_names})."
+                )
+            indices = [i for i, n in enumerate(dof_names) if n not in excluded]
 
         if not indices:
             raise ValueError("bridge DOF subset resolved to empty; nothing to control.")

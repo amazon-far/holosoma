@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
+
+from loguru import logger
 
 from holosoma.managers.terrain.base import TerrainTermBase
-from holosoma.managers.utils import body_indices
 from holosoma.simulator.shared.terrain import Terrain
 from holosoma.utils import draw, warp_utils
 from holosoma.utils.rotations import quat_apply_yaw
@@ -51,6 +52,25 @@ class TerrainLocomotion(TerrainTermBase):
         self._env_origins = torch.zeros(self.num_envs, 3, device=self.device, requires_grad=False)
         self._get_env_origins()
 
+    def _resolve_feet_height_indices(self) -> torch.Tensor:
+        """Body indices for ``cfg.feet_height_bodies`` (None = ``["#feet_height"]`` iff the robot declares that tag).
+
+        Logs the decision at INFO: under the None default a misspelled tag looks the same as a missing one.
+        """
+        spec = self._cfg.feet_height_bodies
+        if spec is None:
+            body_tags = self.env.robot_config.body_tags
+            if "#feet_height" in body_tags:
+                spec, why = ["#feet_height"], "robot declares the '#feet_height' body tag"
+            else:
+                spec, why = [], f"no '#feet_height' body tag; body tags: {sorted(body_tags)}"
+        else:
+            why = f"feet_height_bodies={list(spec)}"
+        logger.info(f"feet height raycasts {'on' if spec else 'off'}: {why}")
+        if not spec:
+            return torch.zeros(0, dtype=torch.long, device=self.device)
+        return cast("torch.Tensor", self.env.robot_names.resolve_body_indices(spec))
+
     @property
     def terrain(self) -> Terrain:
         return self._terrain
@@ -63,7 +83,7 @@ class TerrainLocomotion(TerrainTermBase):
         self._base_height_points, self._ray_directions, self._num_base_height_points = self._init_base_height_points()
         self._offset_pos = torch.tensor(list(ATTACHMENT_POS), device=self.device)
 
-        self._feet_height_indices = body_indices(self.env, self.env.robot_config.foot_height_name)
+        self._feet_height_indices = self._resolve_feet_height_indices()
         num_feet = len(self._feet_height_indices)
         self._ray_directions_feet = torch.zeros(self.num_envs, num_feet, 3, device=self.device, requires_grad=False)
         self._ray_directions_feet[..., :] = torch.tensor([0.0, 0.0, -1.0], device=self.device)

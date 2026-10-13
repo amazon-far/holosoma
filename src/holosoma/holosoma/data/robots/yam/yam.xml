@@ -1,0 +1,72 @@
+<!-- I2RT YAM (6-DOF arm + parallel gripper, 8 DOF) in MJCF form, generated from yam.urdf with MuJoCo
+     3.9 (MjSpec.from_string with balanceinertia="true" fusestatic="false", so the jointless root body 'base'
+     survives for holosoma's fixed-base rule; then the URDF's placeholder actuatorfrcrange="-1 1" removed and the
+     geom colours replaced by the two named materials). Body order [base, link1, link2, link3, link4, link5,
+     gripper, tip_left, tip_right] and joint order joint1..joint8 equal the URDF tree and the 'yam' preset. The
+     mesh geoms are the collision geoms (the URDF ships one mesh per link). No actuators: holosoma adds a torque
+     motor per DOF at load; limits, armature and friction come from the preset. Source and license: README.md /
+     LICENSE. -->
+<mujoco model="yam">
+  <compiler angle="radian" autolimits="true"/>
+
+  <asset>
+    <material name="yam_black" rgba="0.25 0.25 0.25 1" specular="0.4" shininess="0.5"/>
+    <material name="yam_white" rgba="0.9 0.9 0.9 1" specular="0.5" shininess="0.6"/>
+    <mesh name="base" content_type="model/stl" file="assets/base.stl"/>
+    <mesh name="gripper" content_type="model/stl" file="assets/gripper.stl"/>
+    <mesh name="link1" content_type="model/stl" file="assets/link1.stl"/>
+    <mesh name="link2" content_type="model/stl" file="assets/link2.stl"/>
+    <mesh name="link3" content_type="model/stl" file="assets/link3.stl"/>
+    <mesh name="link4" content_type="model/stl" file="assets/link4.stl"/>
+    <mesh name="link5" content_type="model/stl" file="assets/link5.stl"/>
+    <mesh name="tip_left" content_type="model/stl" file="assets/tip_left.stl"/>
+    <mesh name="tip_right" content_type="model/stl" file="assets/tip_right.stl"/>
+  </asset>
+
+  <worldbody>
+    <body name="base">
+      <inertial pos="-3.83909e-05 2.40069e-05 0.0247678" quat="0.500738 0.500087 -0.499793 0.499381" mass="0.873654" diaginertia="0.00169404 0.00157059 0.000678306"/>
+      <geom pos="0.0374957 0.0464006 0.187501" quat="-1.29867e-06 -0.707108 -1.29868e-06 0.707105" type="mesh" material="yam_black" mesh="base"/>
+      <body name="link1" pos="-2.49778e-07 0 0.068" quat="-1.29867e-06 -0.707108 -1.29868e-06 0.707105">
+        <inertial pos="-0.0233636 -0.00172503 -0.00727828" quat="0.350044 0.317088 -0.649919 0.595424" mass="0.101218" diaginertia="0.000134913 0.000106251 4.71815e-05"/>
+        <joint name="joint1" pos="0 0 0" axis="-1 0 0" range="-2.61799 3.14159"/>
+        <geom pos="-0.119501 -0.0464 -0.0374968" quat="1 0 0 0" type="mesh" material="yam_black" mesh="link1"/>
+        <body name="link2" pos="-0.0455 -0.0339 -0.02" quat="1.32679e-06 0 0 -1">
+          <inertial pos="0.000134495 -0.0331253 0.129165" quat="1 0.000113256 1.56201e-05 -8.02079e-05" mass="1.46908" diaginertia="0.0146686 0.014599 0.000800088"/>
+          <joint name="joint2" pos="0 0 0" axis="0 1 0" range="0 3.66519"/>
+          <geom pos="-0.0740001 -0.08025 -0.0174977" quat="1 0 0 0" type="mesh" material="yam_white" mesh="link2"/>
+          <body name="link3" pos="4.08431e-07 -0.0688 0.264" quat="1.32679e-06 0 0 -1">
+            <inertial pos="-0.0556042 -0.0340514 -0.135083" quat="0.990999 0.00518347 0.0472812 0.125137" mass="0.982553" diaginertia="0.00765198 0.0076296 0.000876442"/>
+            <joint name="joint3" pos="0 0 0" axis="0 1 0" range="0 3.14159"/>
+            <geom pos="-0.0740003 -0.0813 -0.281499" type="mesh" material="yam_white" mesh="link3"/>
+            <body name="link4" pos="-0.0600003 -0.0688 -0.244999" quat="1 0 0 0">
+              <inertial pos="-0.0550959 0.032726 -0.0575534" quat="0.127536 0.44423 0.0147443 0.886666" mass="0.462165" diaginertia="0.000787888 0.00076643 0.00028779"/>
+              <joint name="joint4" pos="0 0 0" axis="0 1 0" range="-1.69297 1.5708"/>
+              <geom pos="-0.0140003 -0.0125 -0.0364989" quat="1 0 0 0" type="mesh" material="yam_black" mesh="link4"/>
+              <body name="link5" pos="-0.0405003 0.0338995 -0.0739989" quat="1 0 0 0">
+                <inertial pos="0.0375847 -3.55003e-05 -0.000825911" quat="0.661372 -0.253166 -0.247107 0.661387" mass="0.403307" diaginertia="0.000219794 0.000195686 0.000169647"/>
+                <joint name="joint5" pos="0 0 0" axis="1 0 0" range="-1.5708 1.5708"/>
+                <geom pos="0.0265 -0.0463995 0.0375" quat="1 0 0 0" type="mesh" material="yam_black" mesh="link5"/>
+                <body name="gripper" pos="0.0404996 2.39858e-07 -0.0356" quat="1 0 0 0">
+                  <inertial pos="-3.57064e-05 0.000249371 -0.0293133" quat="0.667981 0.744113 -0.0043308 0.00882784" mass="0.553219" diaginertia="0.000409687 0.000369758 0.000324415"/>
+                  <joint name="joint6" pos="0 0 0" axis="0 0 -1" range="-2.0944 2.0944"/>
+                  <geom pos="-0.014 -0.0463995 0.0731" quat="1 0 0 0" type="mesh" material="yam_black" mesh="gripper"/>
+                  <body name="tip_left" pos="-0.0239931 0.0445119 -0.0566829" quat="1 0 0 0">
+                    <inertial pos="0.014584 -0.042586 -0.0228318" quat="0.80517 -0.425818 -0.124987 0.393393" mass="0.069657" diaginertia="6.18569e-05 5.94605e-05 2.79862e-05"/>
+                    <joint name="joint7" pos="0 0 0" axis="0 1 0" type="slide" range="-0.04695 0"/>
+                    <geom pos="0.00999321 -0.0914614 0.129783" type="mesh" material="yam_black" mesh="tip_left"/>
+                  </body>
+                  <body name="tip_right" pos="0.0239931 -0.0445119 -0.0566829" quat="1 0 0 0">
+                    <inertial pos="-0.014584 0.042586 -0.0228318" quat="0.80517 0.425818 0.124987 0.393393" mass="0.069657" diaginertia="6.18569e-05 5.94605e-05 2.79862e-05"/>
+                    <joint name="joint8" pos="0 0 0" axis="0 -1 0" type="slide" range="-0.04695 0"/>
+                    <geom pos="-0.0379932 -0.00133753 0.129783" quat="1 0 0 0" type="mesh" material="yam_black" mesh="tip_right"/>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

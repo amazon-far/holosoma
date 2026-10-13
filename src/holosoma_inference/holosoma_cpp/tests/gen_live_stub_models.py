@@ -142,6 +142,7 @@ def _write_model(
     flat_error: str = "",
     history_initialization: str | None = None,
     control: dict | None = None,
+    current_clip: tuple[float, float] | None = None,
     constant_action: float | None = None,
     action_scale: float = 1.0,
     nonfinite_last_action: bool = False,
@@ -149,6 +150,16 @@ def _write_model(
     experiment, width = _experiment(body_name, history, lookahead_layout)
     if control is not None:
         experiment["robot"]["control"] = control
+    if current_clip is not None:
+        experiment["action"] = {
+            "terms": {
+                "joint_control": {
+                    "func": "holosoma.managers.action.terms.joint_control:JointPositionActionTerm",
+                    "clip": current_clip,
+                }
+            }
+        }
+        experiment["robot"]["init_state"] = {"default_joint_positions": {"#all": 0.0}}
     width += width_delta
     if flat_error:
         targets = experiment["observation"]["groups"]["actor_targets"]
@@ -245,6 +256,8 @@ def main() -> None:
         lookahead_layout="flat_0p2s",
         history_initialization="repeat_first",
     )
+    _write_model(output / "current_asymmetric_clip.onnx", current_clip=(-5.0, 10.0), constant_action=50.0)
+    _write_model(output / "current_invalid_clip.onnx", current_clip=(10.0, -5.0), constant_action=50.0)
     for value in (5.0, 50.0, 150.0):
         for limit in (None, 10.0, 20.0, 30.0):
             _write_model(

@@ -26,7 +26,6 @@ class PolicyTask(BaseTask):
             if getattr(tyro_config, name) is None:
                 raise ValueError(f"{name}_config must be provided for manager-based environments.")
         self.is_evaluating = False
-        self.dim_obs = tyro_config.robot.policy_obs_dim
         super().__init__(tyro_config)
         if not self.headless:
             setup_keyboard_listener(self)

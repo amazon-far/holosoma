@@ -19,6 +19,7 @@ from tqdm import tqdm
 # This file contains all settings for training and evaluation of models
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
+from holosoma.utils.config_migration import migrate_legacy_experiment_config
 from holosoma.utils.config_utils import CONFIG_NAME
 from holosoma.utils.file_cache import get_cached_file_path
 from holosoma.utils.logging import LoguruLoggingBridge
@@ -145,7 +146,7 @@ def _terms_named(manager: Any, func_suffix: str) -> list[dict[str, Any]]:
 
 def _experiment_config_from_saved(config_data: dict[str, Any]) -> ExperimentConfig:
     """Transition historical saved fields; CLI/YAML inputs keep the current schema."""
-    data = _fold_task_subclass(_drop_retired_isaacgym_fields(config_data))
+    data = _fold_task_subclass(_drop_retired_isaacgym_fields(migrate_legacy_experiment_config(config_data)))
     simulator = data.get("simulator", {}).get("config", {})
     if "mujoco_warp" in simulator:
         native = simulator["sim"].setdefault("mujoco", {})

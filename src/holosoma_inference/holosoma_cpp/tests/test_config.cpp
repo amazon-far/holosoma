@@ -9,6 +9,7 @@
 
 #include "holosoma_cpp/cli.hpp"
 #include "holosoma_cpp/config.hpp"
+#include "holosoma_cpp/robot_config.hpp"
 
 namespace holosoma {
 namespace {
@@ -137,3 +138,17 @@ TEST(Config, ContextualDefaultsToContinuousAndGravityFrameDistinguishesAbsentFro
 
 }  // namespace
 }  // namespace holosoma
+
+TEST(RobotConfigDefaults, ResolvesNestedTagsWithZeroForUnspecifiedJoints) {
+  const nlohmann::json robot{{"dof_names", {"a", "b", "c"}},
+                             {"joint_tags", {{"#arms", {"#left", "b"}}, {"#left", {"a"}}}},
+                             {"init_state", {{"default_joint_positions", {{"#arms", 0.25f}}}}}};
+  EXPECT_EQ(holosoma::ResolveDefaultDofPositions(robot, {"a", "b", "c"}), (std::vector<float>{0.25f, 0.25f, 0.0f}));
+  auto invalid = robot;
+  invalid["init_state"]["default_joint_positions"]["a"] = 1.0f;
+  EXPECT_THROW(holosoma::ResolveDefaultDofPositions(invalid, {"a", "b", "c"}), std::invalid_argument);
+  invalid = robot;
+  invalid["joint_tags"]["#left"] = {"#arms"};
+  EXPECT_THROW(holosoma::ResolveDefaultDofPositions(invalid, {"a", "b", "c"}), std::invalid_argument);
+  EXPECT_THROW(holosoma::ResolveDefaultDofPositions(robot, {"b", "a", "c"}), std::invalid_argument);
+}

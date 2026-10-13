@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from holosoma.simulator.shared.dof_limits import soft_limits
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
@@ -34,11 +35,9 @@ def limits_dof_pos(env: PolicyTask, soft_dof_pos_limit: float = 0.95) -> torch.T
     Returns:
         Reward tensor [num_envs]
     """
-    # Use soft limits as fraction of hard limits
-    m = (env.simulator.hard_dof_pos_limits[:, 0] + env.simulator.hard_dof_pos_limits[:, 1]) / 2  # type: ignore[attr-defined]
-    r = env.simulator.hard_dof_pos_limits[:, 1] - env.simulator.hard_dof_pos_limits[:, 0]  # type: ignore[attr-defined]
-    lower_soft_limit = m - 0.5 * r * soft_dof_pos_limit
-    upper_soft_limit = m + 0.5 * r * soft_dof_pos_limit
+    lower_soft_limit, upper_soft_limit = soft_limits(
+        env.simulator.get_dof_limits_properties()[0], soft_dof_pos_limit
+    ).unbind(1)
 
     out_of_limits = -(env.simulator.dof_pos - lower_soft_limit).clip(max=0.0)  # lower limit
     out_of_limits += (env.simulator.dof_pos - upper_soft_limit).clip(min=0.0)

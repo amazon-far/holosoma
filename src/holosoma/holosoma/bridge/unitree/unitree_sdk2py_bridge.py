@@ -12,6 +12,14 @@ from holosoma.bridge.base.basic_sdk2py_bridge import BasicSdk2Bridge
 class UnitreeSdk2Bridge(BasicSdk2Bridge):
     """Unitree SDK bridge implementation using unitree_interface C++ bindings."""
 
+    def requires_explicit_dof_order(self) -> bool:
+        """Unitree low-command/state arrays use the selected SDK model's fixed motor IDs.
+
+        They do not carry joint names. An explicit tuple preserves that wire order when
+        canonical action order is changed or the simulated robot contains extra joints.
+        """
+        return True
+
     SUPPORTED_ROBOT_TYPES = {"g1_29dof", "h1", "h1-2", "go2_12dof"}
 
     # robot_type -> SDK enum member NAME (resolved to the real enum via getattr where the binding is

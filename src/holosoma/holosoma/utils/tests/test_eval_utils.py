@@ -26,6 +26,8 @@ from holosoma.utils.eval_utils import (
 )
 from holosoma.utils.simulator_config import set_simulator_type
 
+pytestmark = pytest.mark.no_sim
+
 
 @pytest.fixture
 def mock_wandb_run() -> mock.MagicMock:
@@ -310,6 +312,30 @@ def test_load_saved_experiment_config_uses_generic_remote_loader(
     assert run_path is None
 
 
+@pytest.mark.parametrize("extra_default", [False, True], ids=["exact-defaults", "superset-defaults"])
+def test_load_saved_experiment_config_migrates_legacy_checkpoint(tmp_path: Path, extra_default: bool) -> None:
+    """A checkpoint dumped before the RobotConfig refactor loads through the legacy migration."""
+    import yaml
+
+    legacy_dump = Path(__file__).parent / "data" / "legacy_g1_29dof_experiment_config.yaml"
+    raw = yaml.safe_load(legacy_dump.read_text())
+    raw["robot"]["init_state"]["rot"] = [0.0, 0.6, 0.0, 0.8]  # xyzw; a non-identity rotation pins the reorder
+    expected_defaults = dict(raw["robot"]["init_state"]["default_joint_angles"])
+    if extra_default:
+        raw["robot"]["init_state"]["default_joint_angles"]["imu_in_torso_joint"] = 0.0
+    checkpoint_path = tmp_path / "model.pt"
+    torch.save({"experiment_config": raw}, checkpoint_path)
+
+    loaded_cfg, _ = load_saved_experiment_config(CheckpointConfig(checkpoint=str(checkpoint_path)))
+    assert loaded_cfg.robot.body_tags["#feet"] == ["left_ankle_roll_link", "right_ankle_roll_link"]
+    assert loaded_cfg.robot.init_state.orientation == [0.8, 0.0, 0.6, 0.0]
+    assert loaded_cfg.robot.init_state.orientation_xyzw == [0.0, 0.6, 0.0, 0.8]
+    assert loaded_cfg.robot.init_state.default_joint_positions == expected_defaults
+    assert loaded_cfg.robot.default_dof_positions() == expected_defaults
+    assert list(loaded_cfg.robot.default_dof_positions()) == raw["robot"]["dof_names"]
+    assert "default_joint_angles" not in loaded_cfg.to_serializable_dict()["robot"]["init_state"]
+
+
 def test_load_saved_experiment_config_no_inputs() -> None:
     """Test that load_saved_experiment_config raises ValueError when no inputs are provided."""
     checkpoint_cfg = CheckpointConfig(
@@ -500,6 +526,9 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
     fixture_name: str, boundary: str, tmp_path: Path
 ) -> None:
     saved = _previous_schema(fixture_name)
+    if _SURVIVING_BACKEND_FIXTURES[fixture_name] == "mjwarp":
+        # Old MuJoCo body order cannot be inferred from the saved schema.
+        saved["command"]["setup_terms"]["motion_command"]["params"]["motion_config"]["root_body"] = "pelvis"
 
     loaded_cfg = _load_through(boundary, saved, tmp_path)
     loaded = loaded_cfg.to_serializable_dict()
@@ -508,6 +537,7 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
     assert (loaded_cfg.simulator._target_, loaded_cfg.simulator.config.name) == (preset._target_, preset.config.name)
     saved_simulator = copy.deepcopy(saved["simulator"])
     saved_simulator["config"].pop("contact_sensor_history_length")
+    saved_simulator["config"]["sim"]["physx"].setdefault("max_gpu_contact_pairs", 16 * 1024 * 1024)
     saved_warp = saved_simulator["config"].pop("mujoco_warp")
     loaded_simulator = copy.deepcopy(loaded["simulator"])
     loaded_simulator["config"]["sim"].pop("mujoco")

@@ -7,6 +7,7 @@ from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import yaml
+from pydantic import model_validator
 from pydantic.dataclasses import dataclass
 
 import holosoma.config_values.action
@@ -178,6 +179,41 @@ class ExperimentConfig:
     nightly: NightlyConfig | None = None
 
     eval_overrides: EvalOverridesConfig = EvalOverridesConfig()
+
+    @model_validator(mode="after")
+    def _validate_robot_references(self) -> ExperimentConfig:
+        """Resolve action-controller gains and symmetry selections against the selected robot.
+
+        These checks run at config time so invalid joint names or tags fail before a simulator starts.
+        """
+        if self.action is not None:
+            for term_name, term in self.action.terms.items():
+                if term.controller is None:
+                    continue
+                try:
+                    term.controller.resolve_gains(self.robot)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"action term {term_name!r} controller does not resolve against the robot: {exc}"
+                    ) from exc
+
+        if not getattr(self.algo.config, "use_symmetry", False):
+            return self
+        from holosoma.config_types.algo import FastSACConfig, PPOConfig
+
+        assert isinstance(self.algo.config, (FastSACConfig, PPOConfig))
+        symmetry = self.algo.config.symmetry
+
+        robot_type = self.robot.asset.robot_type
+        hint = "Declare the joint tags on the robot, override algo.config.symmetry, or set use_symmetry=False."
+        try:
+            symmetry.resolve(self.robot.joint_tags, self.robot.dof_names, what="algo.config.symmetry")
+        except ValueError as exc:
+            raise ValueError(
+                f"algo.config.use_symmetry=True but algo.config.symmetry does not resolve against robot "
+                f"'{robot_type}': {exc}. {hint}"
+            ) from exc
+        return self
 
     def get_nightly_config(self) -> ExperimentConfig:
         if self.nightly is None:

@@ -23,6 +23,14 @@ from holosoma.utils.safe_torch_import import torch
 class BoosterSdk2Bridge(BasicSdk2Bridge):
     """Booster SDK2Py bridge implementation."""
 
+    def requires_explicit_dof_order(self) -> bool:
+        """Booster motor arrays use SDK motor IDs and carry no joint names.
+
+        The controlled tuple maps those IDs to canonical joints even when the policy's
+        DOF order changes. Filtering canonical order alone cannot establish that mapping.
+        """
+        return True
+
     SUPPORTED_ROBOT_TYPES = {"t1_23dof", "t1_29dof"}
 
     def _init_sdk_components(self) -> None:
