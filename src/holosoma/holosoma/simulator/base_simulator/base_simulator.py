@@ -927,6 +927,17 @@ class BaseSimulator:
         cheap cached reads through the camera/LiDAR accessors."""
         raise NotImplementedError("The 'render_sensors' method must be implemented in subclasses.")
 
+    def rerender_sensors(self, env_ids: torch.Tensor) -> None:
+        """Re-render the given envs for sensors that support partial rendering.
+
+        ``render_sensors`` runs at ``FRAME_END``, before terminations and resets, so envs that
+        are reset or teleported afterwards would otherwise be observed with a frame of their
+        previous state. ``ObservationManager.step`` calls this with those envs before reading
+        observations; sensors that can only render every env keep their frame (see
+        ``SensorRecord.rerender``)."""
+        if self.sensor_manager is not None:
+            self.sensor_manager.rerender(env_ids)
+
     def get_camera_data(
         self,
         name: str,
