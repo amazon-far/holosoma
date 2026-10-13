@@ -41,6 +41,7 @@ add_library(holosoma_cpp_core SHARED
   src/controller.cpp
   src/input.cpp
   src/api.cpp
+  src/robot_config.cpp
   src/holosoma_inference_core.cpp
   src/locomotion_policy.cpp
   src/logging.cpp

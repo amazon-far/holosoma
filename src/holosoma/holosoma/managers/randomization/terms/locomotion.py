@@ -327,6 +327,14 @@ def setup_dof_pos_bias(
     env.default_dof_pos = env.default_dof_pos_base + default_dof_pos_bias
 
 
+def _require_floating_base_for_pushes(env: Any, state: PushRandomizerState) -> None:
+    if state.enabled and env.robot_config.asset.fix_base_link:
+        raise ValueError(
+            "push_robots changes root velocity and requires a floating base (robot.asset.fix_base_link is True); "
+            "disable the push randomizer for this robot"
+        )
+
+
 def randomize_push_schedule(
     env: Any,
     env_ids: Sequence[int] | torch.Tensor | None,
@@ -343,6 +351,7 @@ def randomize_push_schedule(
         raise AttributeError("PushRandomizerState is not registered with the randomization manager.")
 
     state.configure(enabled=enabled, push_interval_s=push_interval_s, max_push_vel=max_push_vel)
+    _require_floating_base_for_pushes(env, state)
     env._max_push_vel = state.max_push_vel.clone()
 
     if not state.enabled:
@@ -455,29 +464,21 @@ def randomize_action_delay(
     """
     if enabled is not None:
         env._randomize_ctrl_delay = bool(enabled)
-    elif not hasattr(env, "_randomize_ctrl_delay"):
-        raise AttributeError(
-            "randomize_action_delay() requires setup_action_delay_buffers to run before it can infer 'enabled'."
-        )
 
     if ctrl_delay_step_range is not None:
         env._ctrl_delay_step_range = list(ctrl_delay_step_range)
-    elif not hasattr(env, "_ctrl_delay_step_range"):
+
+    if not getattr(env, "_randomize_ctrl_delay", False):
+        return
+    if not hasattr(env, "_ctrl_delay_step_range"):
         raise AttributeError(
             "randomize_action_delay() requires setup_action_delay_buffers "
             "to run before it can infer ctrl_delay_step_range."
         )
 
-    if not env._randomize_ctrl_delay:
-        return
-
     idx = _ensure_env_ids_tensor(env, env_ids)
     if idx.numel() == 0:
         return
-
-    # Reset action queue in the action manager
-    if hasattr(env.action_manager, "action_queue"):
-        env.action_manager.action_queue[idx] *= 0.0
 
     delay_low = int(env._ctrl_delay_step_range[0])
     delay_high = int(env._ctrl_delay_step_range[1])
@@ -525,6 +526,24 @@ def randomize_dof_state(
     env.simulator.dof_vel[idx] = sampler.draw(joint_vel_range, env_ids=idx, coords=(2, dof_ids), device=env.device)
 
 
+def _resolve_one_body(env: Any, spec: str, *, what: str) -> str:
+    """Resolve an exact body name or tag to exactly one body through the task's robot resolver."""
+    names: list[str] = env.robot_names.resolve_body_names([spec])
+    if len(names) != 1:
+        raise ValueError(f"{what} targets one body; {spec!r} resolved to {names}")
+    return names[0]
+
+
+def _robot_body_id_map(simulator: Any) -> dict[str, int]:
+    """Map canonical robot body names to backend-native IDs for one operation."""
+    if len(simulator.body_names) != len(simulator.body_ids):
+        raise RuntimeError(
+            f"Robot body name/ID mappings have different lengths: "
+            f"{len(simulator.body_names)} names and {len(simulator.body_ids)} IDs."
+        )
+    return dict(zip(simulator.body_names, simulator.body_ids, strict=False))
+
+
 @mujoco_required_field("body_ipos")
 def randomize_base_com_startup(
     env: Any,
@@ -532,19 +551,17 @@ def randomize_base_com_startup(
     *,
     sampler: TermSampler,
     base_com_range: BaseComRange | dict[str, DistributionLike],
+    body: str = "#base",
     enabled: bool = True,
     **_: Any,
 ) -> None:
-    """Randomize base (torso) center of mass.
+    """Add sampled offsets in metres to one body's center of mass at startup.
 
-    Note: Uses ADDITION operation to offset CoM position (e.g., x: [-0.01, 0.01] m).
-
-    ``base_com_range`` is a :class:`BaseComRange` (or an equivalent ``{x, y, z}`` dict); each axis is a
-    ``[lo, hi]`` pair (uniform) or a ``{kind, low, high, mean, std}`` spec dict —
-    honored identically on ALL backends (MuJoCo ``randomize_field``, IsaacSim
-    project-owned ``randomize_body_com``), all via the shared keyed
-    :meth:`holosoma.utils.sampler.TermSampler.draw`. A gaussian spec is a truncated normal on
-    ``[lo, hi]``; log_uniform requires positive bounds.
+    ``body`` is an exact name or tag resolving to one body; the default is ``"#base"``.
+    ``base_com_range`` is a :class:`BaseComRange` or equivalent ``{x, y, z}`` dict. Each axis accepts
+    a uniform ``[low, high]`` range or a :class:`DistributionSpec` value. Gaussian draws are truncated
+    to the bounds; log-uniform bounds must be positive. All backends use the supplied keyed sampler.
+    Inertia is preserved. ``enabled=False`` skips the operation.
     """
     if isinstance(base_com_range, BaseComRange):
         base_com_range = {"x": base_com_range.x, "y": base_com_range.y, "z": base_com_range.z}
@@ -561,6 +578,8 @@ def randomize_base_com_startup(
     )
 
     simulator = env.simulator
+    base_name = _resolve_one_body(env, body, what="base CoM DR")
+    base_body_id = _robot_body_id_map(simulator)[base_name]
 
     idx = _ensure_env_ids_tensor(env, env_ids)
     if idx.numel() == 0:
@@ -573,12 +592,11 @@ def randomize_base_com_startup(
             raise RuntimeError("IsaacSim base COM randomization requires isaaclab.") from exc
         from holosoma.simulator.isaacsim.events import randomize_body_com
 
-        torso_name = env.robot_config.torso_name
         env_ids_cpu = idx.to(device="cpu", dtype=torch.long)
 
         # One spec per axis (x, y, z).
         specs = [DistributionSpec.parse(base_com_range[axis]) for axis in ("x", "y", "z")]
-        asset_cfg = SceneEntityCfg("robot", body_names=[torso_name])
+        asset_cfg = SceneEntityCfg("robot", body_ids=[base_body_id])
         asset_cfg.resolve(simulator.scene)  # Required to avoid applying randomization to all bodies
         randomize_body_com(
             simulator,
@@ -600,7 +618,7 @@ def randomize_base_com_startup(
             ranges=base_com_range_remapped,
             sampler=sampler,
             env_ids=idx,
-            entity_names=[env.robot_config.torso_name],
+            entity_ids=torch.tensor([base_body_id], device=simulator.sim_device),
             entity_type="body",
             operation="add",
         )
@@ -618,8 +636,10 @@ def randomize_mass_startup(
     *,
     sampler: TermSampler,
     enable_link_mass: bool = True,
+    link_bodies: Sequence[str] = (),
     link_mass_range: DistributionLike = (1.0, 1.0),
     enable_base_mass: bool = True,
+    base_body: str = "#base",
     added_mass_range: DistributionLike = (0.0, 0.0),
     enabled: bool = True,
     recompute_inertia: bool = True,
@@ -627,21 +647,16 @@ def randomize_mass_startup(
 ) -> None:
     """Randomize link and base masses at startup.
 
-    Note: link_mass_range uses SCALING (e.g., 0.9-1.2 = 90-120% of original),
-          added_mass_range uses ADDITION (e.g., -1.0 to 3.0 kg offset).
+    ``link_mass_range`` scales ``link_bodies``; supply exact names or tags when ``enable_link_mass``.
+    ``added_mass_range`` adds kilograms to ``base_body``, which must resolve to one body when
+    ``enable_base_mass``. The default base is ``"#base"``. Scaling runs before addition.
 
-    ``recompute_inertia`` (default True): each body's inertia is rescaled by the SAME factor its mass
-    changed by (``m_after / m_before``), identically on all backends (explicit multiplicative ratio —
-    NOT a from-geometry recompute — so it commutes with a separate inertia DR term). This mirrors the
-    object mass term's contract. When False, mass changes and inertia is left untouched.
+    With ``recompute_inertia=True``, each mass change scales inertia by ``m_after / m_before``.
+    False preserves inertia. ``enabled=False`` skips both operations.
 
-    Each range is a config range value — a ``[lo, hi]`` pair (uniform) or a ``{kind, low, high, mean, std}``
-    spec dict — honored identically on ALL backends (MuJoCo
-    ``randomize_field``, IsaacSim via the project-owned ``randomize_rigid_body_mass``), all via the
-    shared keyed :meth:`holosoma.utils.sampler.TermSampler.draw`. A gaussian spec is a truncated normal
-    on ``[lo, hi]``; log_uniform requires positive bounds (so it suits the scale operation,
-    ``link_mass_range``, and by design RAISES on a signed ``added_mass_range`` rather than silently
-    mis-sampling).
+    Ranges accept uniform ``[low, high]`` pairs or :class:`DistributionSpec` values. Gaussian draws
+    are truncated to the bounds; log-uniform bounds must be positive, including for additive ranges.
+    All backends use the supplied keyed sampler.
     """
     if not enabled:
         return
@@ -653,10 +668,26 @@ def randomize_mass_startup(
     )
 
     simulator = env.simulator
+    if enable_link_mass and not link_bodies:
+        raise ValueError(
+            "randomize_mass_startup: enable_link_mass=True requires link_bodies; list the link body names "
+            "(exact names or #tags) to scale in the term params."
+        )
+    # Names only (no indices): on IsaacGym this runs inside create_envs, before body handles resolve.
+    link_names: list[str] = env.robot_names.resolve_body_names(link_bodies) if enable_link_mass else []
+    base_name = _resolve_one_body(env, base_body, what="base mass DR") if enable_base_mass else None
+    # Scaling and addition are independent writes, but both inputs belong to
+    # this startup operation. Reject an invalid later input before either write.
+    if enable_link_mass:
+        link_mass_range = DistributionSpec.parse(link_mass_range)
+    if enable_base_mass:
+        added_mass_range = DistributionSpec.parse(added_mass_range)
+
     idx = _ensure_env_ids_tensor(env, env_ids)
     if idx.numel() == 0:
         return
 
+    body_id_by_name = _robot_body_id_map(simulator) if link_names or base_name is not None else {}
     env._randomize_link_mass = bool(enable_link_mass)
     env._randomize_base_mass = bool(enable_base_mass)
 
@@ -670,8 +701,8 @@ def randomize_mass_startup(
 
         env_ids_cpu = idx.to(device="cpu", dtype=torch.long)
 
-        if enable_link_mass:
-            asset_cfg = SceneEntityCfg("robot", body_names=env.robot_config.randomize_link_body_names)
+        if link_names:
+            asset_cfg = SceneEntityCfg("robot", body_ids=[body_id_by_name[name] for name in link_names])
             asset_cfg.resolve(simulator.scene)  # Required to avoid applying randomization to all bodies
             randomize_rigid_body_mass(
                 simulator,
@@ -683,8 +714,8 @@ def randomize_mass_startup(
                 recompute_inertia=recompute_inertia,
             )
 
-        if enable_base_mass:
-            asset_cfg = SceneEntityCfg("robot", body_names=[env.robot_config.torso_name])
+        if base_name is not None:
+            asset_cfg = SceneEntityCfg("robot", body_ids=[body_id_by_name[base_name]])
             asset_cfg.resolve(simulator.scene)  # Required to avoid applying randomization to all bodies
             randomize_rigid_body_mass(
                 simulator,
@@ -700,7 +731,6 @@ def randomize_mass_startup(
         from holosoma.simulator.mujoco.backends.randomization import (
             _field_view,
             randomize_field,
-            resolve_entity_ids,
             scale_inertia_by_mass_ratio,
         )
 
@@ -713,7 +743,7 @@ def randomize_mass_startup(
             # same bodies, and snapshot mass BEFORE so the ratio matches the exact write this produced
             # (mirrors the object mass term + the IsaacSim explicit m_after/m_before scale).
             body_ids = torch.tensor(
-                resolve_entity_ids(simulator.backend.model, list(names), "body"),
+                [body_id_by_name[name] for name in names],
                 device=simulator.sim_device,
                 dtype=torch.long,
             )
@@ -732,13 +762,11 @@ def randomize_mass_startup(
                 scale_inertia_by_mass_ratio(simulator, body_ids, mass_before)
 
         # each range is a pair or spec dict, passed to randomize_field which builds the spec.
-        if enable_link_mass:
+        if link_names:
+            _mass_write(link_names, link_mass_range, operation="scale", axis_base=0)  # link-scale stream
+        if base_name is not None:
             _mass_write(
-                env.robot_config.randomize_link_body_names, link_mass_range, operation="scale", axis_base=0
-            )  # link-scale stream
-        if enable_base_mass:
-            _mass_write(
-                [env.robot_config.torso_name], added_mass_range, operation="add", axis_base=1
+                [base_name], added_mass_range, operation="add", axis_base=1
             )  # base-add stream (distinct from link-scale)
 
     else:  # pragma: no cover - defensive
@@ -932,6 +960,7 @@ def apply_pushes(
         raise AttributeError("PushRandomizerState is not registered with the randomization manager.")
 
     state.configure(enabled=enabled, push_interval_s=push_interval_s, max_push_vel=max_push_vel)
+    _require_floating_base_for_pushes(env, state)
     env._push_robots_enabled = state.enabled
 
     if env.is_evaluating or not state.enabled:

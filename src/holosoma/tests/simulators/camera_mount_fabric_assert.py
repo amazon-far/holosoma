@@ -92,9 +92,7 @@ def main() -> int:
     import torch
 
     init = config.robot.init_state
-    base_init = torch.tensor(
-        list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
-    )
+    base_init = torch.tensor(init.root_state_list(), device=device, dtype=torch.float32)
     sim.create_envs(args.num_envs, torch.zeros(args.num_envs, 3, device=device), base_init)
     sim.prepare_sim()
 

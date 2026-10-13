@@ -147,6 +147,8 @@ class WbtPolicy {
   WbtHistoryInitialization history_initialization_ = WbtHistoryInitialization::kRepeatFirstValidObs;
   std::optional<WbtHistoryInitialization> declared_history_;
   float action_clip_ = kWbtActionCeiling;
+  float action_clip_min_ = -kWbtActionCeiling;
+  float action_clip_max_ = kWbtActionCeiling;
   std::string action_clip_source_;
   std::uint64_t tick_ = 0;
 

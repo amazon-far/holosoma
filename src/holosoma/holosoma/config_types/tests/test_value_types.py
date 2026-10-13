@@ -50,10 +50,10 @@ _CONFIG_FIELDS = [
     pytest.param(ROS2PointCloudRoute, "point_rotation", {"lidar": "scan", "topic": "/scan"}, list, id="pointcloud"),
     pytest.param(
         RobotInitState,
-        "rot",
-        {"pos": [0.0] * 3, "lin_vel": [0.0] * 3, "ang_vel": [0.0] * 3, "default_joint_angles": {}},
+        "orientation",
+        {"position": [0.0] * 3},
         list,
-        id="robot-xyzw",
+        id="robot-wxyz",
     ),
 ]
 
@@ -154,8 +154,10 @@ def test_rotation_cli_preserves_literal_syntax(
     assert tuple(getattr(parsed, field_name)) == (1.0, 0.0, 0.0, 0.0)
 
     args[-1] = repr(container([2.0, 0.0, 0.0, 0.0]))
-    with pytest.raises(SystemExit), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+    err = io.StringIO()
+    with pytest.raises((SystemExit, ValidationError)) as exc, redirect_stdout(io.StringIO()), redirect_stderr(err):
         tyro.cli(config_type, default=default, args=args, config=TYRO_CONIFG)
+    assert "Quaternion norm must be within" in " ".join((err.getvalue() + str(exc.value)).split())
 
 
 def test_nested_scene_rejects_invalid_saved_rotation() -> None:
@@ -172,13 +174,12 @@ def test_light_direction_uses_normalized_wxyz_orientation() -> None:
 
 def test_robot_reset_keeps_xyzw_list_layout() -> None:
     robot = RobotInitState(
-        pos=[1.0, 2.0, 3.0],
-        rot=[0.0, 0.0, 0.0, 1.000001],
+        position=[1.0, 2.0, 3.0],
+        orientation=[1.000001, 0.0, 0.0, 0.0],
         lin_vel=[0.0] * 3,
         ang_vel=[0.0] * 3,
-        default_joint_angles={},
     )
-    assert robot.pos + robot.rot + robot.lin_vel + robot.ang_vel == [1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0] + [0.0] * 6
+    assert robot.root_state_list() == [1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0] + [0.0] * 6
 
 
 @pytest.mark.parametrize("alias", _ALL_TYPES)

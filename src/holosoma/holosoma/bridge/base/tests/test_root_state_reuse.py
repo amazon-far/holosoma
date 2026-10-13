@@ -59,6 +59,9 @@ class _FakeSim:
         self.robot_root_states = _CountingRootStates(root)
         self.base_linear_acc = torch.zeros(1, 3)
 
+    def get_dof_limits_properties(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return torch.zeros(_NUM_DOF, 2), torch.zeros(_NUM_DOF), torch.full((_NUM_DOF,), 100.0)
+
     def time(self) -> float:
         return 1.5
 

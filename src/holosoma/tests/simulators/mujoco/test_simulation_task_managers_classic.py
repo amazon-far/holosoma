@@ -13,6 +13,7 @@ pytestmark = pytest.mark.mujoco_classic
 
 from holosoma.config_types.randomization import RandomizationManagerCfg, RandomizationTermCfg  # noqa: E402
 from holosoma.config_types.run_sim import RunSimConfig  # noqa: E402
+from holosoma.config_types.simulator import BridgeConfig  # noqa: E402
 from holosoma.config_values import termination  # noqa: E402
 from holosoma.simulator.base_simulator.hooks import Phase  # noqa: E402
 
@@ -21,6 +22,12 @@ EPISODE_S = 0.1
 
 def test_a_timeout_term_ends_and_restarts_the_episode():
     base = RunSimConfig()
+    base = dataclasses.replace(
+        base,
+        simulator=dataclasses.replace(
+            base.simulator, config=dataclasses.replace(base.simulator.config, bridge=BridgeConfig(enabled=False))
+        ),
+    )
     sim_cfg = base.simulator.config
     config = dataclasses.replace(
         base,
@@ -46,6 +53,12 @@ def test_a_timeout_term_ends_and_restarts_the_episode():
 
 def test_a_reset_randomization_term_sets_the_joint_state():
     base = RunSimConfig()
+    base = dataclasses.replace(
+        base,
+        simulator=dataclasses.replace(
+            base.simulator, config=dataclasses.replace(base.simulator.config, bridge=BridgeConfig(enabled=False))
+        ),
+    )
     scale_twice = RandomizationTermCfg(
         func="holosoma.managers.randomization.terms.locomotion:randomize_dof_state",
         params={

@@ -7,6 +7,8 @@ received. Per-backend native writes are covered by the behavioral harness (behav
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
@@ -30,7 +32,7 @@ class _FakeSim(BaseSimulator):
     def __init__(self, num_envs: int = 3) -> None:
         self.num_envs = num_envs
         self.sim_device = "cpu"
-        self.body_names = ["pelvis", "torso_link"]
+        self.robot_config = SimpleNamespace(body_names=["pelvis", "torso_link"], dof_names=[])  # type: ignore[assignment]
         self.object_registry = self._FakeRegistry()  # type: ignore[assignment]  # test double
         self._external_wrench = ExternalWrenchAccumulator(self)
         self._flushed: list[tuple[str, bool, list[str], torch.Tensor]] = []

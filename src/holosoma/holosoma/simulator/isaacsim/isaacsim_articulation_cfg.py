@@ -1,21 +1,23 @@
 from __future__ import annotations
 
-import copy
 import os
-from collections.abc import Sequence
-from typing import TYPE_CHECKING
+import re
+from typing import Any, TYPE_CHECKING
 
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import IdealPDActuatorCfg, ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.sensors import ContactSensorCfg
+from isaaclab.sim.utils import clone
 
 from holosoma.simulator.isaacsim.converters import (
     physics_to_collision_props,
     physics_to_mass_props,
     physics_to_rigid_body_props,
 )
+from holosoma.simulator.isaacsim.urdf_visual_colors import spawn_from_urdf_with_visual_colors
 from holosoma.utils.path import resolve_asset_path
+from holosoma.utils.robot_properties import resolve_dof_properties
 
 if TYPE_CHECKING:
     from holosoma.config_types.robot import RobotConfig
@@ -114,25 +116,15 @@ ARTICULATION_CFG = ArticulationCfg(
 )
 
 
-def _per_joint_map(joint_names: Sequence[str], values: Sequence[float], property_name: str) -> dict[str, float]:
-    """Map a DOF property by exact joint name without relying on source or simulator ordering."""
-    if len(joint_names) != len(values):
-        raise ValueError(
-            f"Robot DOF property '{property_name}' has {len(values)} values for {len(joint_names)} joint names."
-        )
-    if len(set(joint_names)) != len(joint_names):
-        raise ValueError("Robot DOF names must be unique to build per-joint Isaac Lab actuator properties.")
-    return {joint_name: float(values[index]) for index, joint_name in enumerate(joint_names)}
-
-
 def build_robot_articulation_cfg(robot_config: RobotConfig) -> ArticulationCfg:
     """Assemble the robot ``ArticulationCfg`` from ``robot_config``.
 
     Resolves the asset root, maps the shared ``link_physics`` onto IsaacLab rigid/collision/mass
     props (via the same converters scene objects use), builds the URDF-convert or USD spawn cfg,
-    the initial-state cfg, and one ``IdealPDActuatorCfg`` covering every DOF, then overrides the template
+    the initial-state cfg, and actuator groups with consistent property coverage, then overrides the template
     :data:`ARTICULATION_CFG`. Pure config -> cfg: the caller instantiates the ``Articulation``.
     """
+    overrides = resolve_dof_properties(robot_config)
     robot_asset_cfg = robot_config.asset
 
     # PhysX solver knobs (damping, velocity caps) come from the shared link_physics.physx via the
@@ -163,12 +155,17 @@ def build_robot_articulation_cfg(robot_config: RobotConfig) -> ArticulationCfg:
     # byte-for-byte the prior spawn for a robot with no link_physics density (e.g. g1).
     robot_mass_props = physics_to_mass_props(robot_link_physics)
 
-    robot_articulation_props = sim_utils.ArticulationRootPropertiesCfg(
-        enabled_self_collisions=robot_asset_cfg.enable_self_collisions,
+    articulation_kwargs: dict[str, Any] = {
+        "enabled_self_collisions": robot_asset_cfg.enable_self_collisions,
         # NOTE: (4, 0) -> (8, 4) necessary for reproducing FAR-tracking-implementation
-        solver_position_iteration_count=8,
-        solver_velocity_iteration_count=4,
-    )
+        "solver_position_iteration_count": 8,
+        "solver_velocity_iteration_count": 4,
+    }
+    if robot_asset_cfg.fix_base_link:
+        # Welds the root for a USD asset too (the URDF converter already honours fix_base below);
+        # left unset otherwise so an authored USD keeps its own root setting.
+        articulation_kwargs["fix_root_link"] = True
+    robot_articulation_props = sim_utils.ArticulationRootPropertiesCfg(**articulation_kwargs)
 
     spawn: sim_utils.UrdfFileCfg | sim_utils.UsdFileCfg
     if robot_asset_cfg.usd_file is None:
@@ -180,6 +177,9 @@ def build_robot_articulation_cfg(robot_config: RobotConfig) -> ArticulationCfg:
         usd_conversion_dir = os.path.join(os.path.dirname(full_urdf_path), f"converted_rank{local_rank}")
 
         spawn = sim_utils.UrdfFileCfg(
+            # IsaacLab's URDF spawn plus the URDF visual colours on the converted meshes (the importer leaves
+            # STL visuals white); wrapped with ``clone`` like the stock spawner so env cloning still works.
+            func=clone(spawn_from_urdf_with_visual_colors),
             usd_dir=usd_conversion_dir,
             asset_path=full_urdf_path,
             fix_base=robot_asset_cfg.fix_base_link,
@@ -209,34 +209,39 @@ def build_robot_articulation_cfg(robot_config: RobotConfig) -> ArticulationCfg:
             articulation_props=robot_articulation_props,
         )
 
-    default_joint_angles = copy.deepcopy(robot_config.init_state.default_joint_angles)
+    dof_names_list = [re.escape(name) for name in robot_config.dof_names]
     init_state = ArticulationCfg.InitialStateCfg(
-        pos=tuple(robot_config.init_state.pos),
-        joint_pos={joint_name: joint_angle for joint_name, joint_angle in default_joint_angles.items()},
+        pos=tuple(robot_config.init_state.position),
+        rot=tuple(robot_config.init_state.orientation),  # [w,x,y,z], IsaacLab's convention too
+        joint_pos=dict(zip(dof_names_list, robot_config.default_dof_positions().values())),
         joint_vel={".*": 0.0},
     )
 
-    dof_names_list = copy.deepcopy(robot_config.dof_names)
-    dof_effort_limit_list = robot_config.dof_effort_limit_list
-    dof_vel_limit_list = robot_config.dof_vel_limit_list
-    dof_armature_list = robot_config.dof_armature_list
-    dof_joint_friction_list = robot_config.dof_joint_friction_list
-
-    if dof_names_list:
-        zero_gains = {joint_name: 0.0 for joint_name in dof_names_list}
-        actuators = {
-            "all_dofs": IdealPDActuatorCfg(
-                joint_names_expr=dof_names_list,
-                effort_limit=_per_joint_map(dof_names_list, dof_effort_limit_list, "effort_limit"),
-                velocity_limit=_per_joint_map(dof_names_list, dof_vel_limit_list, "velocity_limit"),
-                stiffness=zero_gains,
-                damping=zero_gains.copy(),
-                armature=_per_joint_map(dof_names_list, dof_armature_list, "armature"),
-                friction=_per_joint_map(dof_names_list, dof_joint_friction_list, "friction"),
-            )
+    # IsaacLab initializes uncovered entries of a nonempty parameter dict to zero. Group by
+    # which properties are authored so each parameter covers its entire actuator group or is
+    # None (asset values). Expansion and collision checks above precede any grouping.
+    property_sources = {
+        "effort_limit": overrides.effort,
+        "velocity_limit": overrides.velocity,
+        "armature": overrides.armature,
+        "friction": overrides.friction,
+    }
+    groups: dict[tuple[bool, ...], list[str]] = {}
+    for name in robot_config.dof_names:
+        supplied = tuple(name in values for values in property_sources.values())
+        groups.setdefault(supplied, []).append(name)
+    actuators = {}
+    for index, (supplied, names) in enumerate(groups.items()):
+        expressions = {name: re.escape(name) for name in names}
+        parameters = {
+            prop: {expressions[name]: values[name] for name in names} if present else None
+            for (prop, values), present in zip(property_sources.items(), supplied)
         }
-    else:
-        actuators = {}
+        parameters["velocity_limit_sim"] = parameters["velocity_limit"]
+        key = "all_dofs" if len(groups) == 1 else f"dofs_{index}"
+        actuators[key] = IdealPDActuatorCfg(
+            joint_names_expr=list(expressions.values()), stiffness=0.0, damping=0.0, **parameters
+        )
 
     return ARTICULATION_CFG.replace(
         prim_path="/World/envs/env_.*/Robot", spawn=spawn, init_state=init_state, actuators=actuators
