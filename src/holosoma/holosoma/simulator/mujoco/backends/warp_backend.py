@@ -676,7 +676,7 @@ class WarpBackend(IMujocoBackend):
 
         The captured step graph extracts contacts through the public
         ``mujoco_warp.contact_force`` API and accumulates them by body. The
-        simulator gathers robot-only rows and rotates the history.
+        simulator gathers robot-only rows and records them per substep.
 
         Returns
         -------

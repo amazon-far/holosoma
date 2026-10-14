@@ -24,6 +24,7 @@ from holosoma.simulator.isaacgym.physics import (
 )
 from holosoma.simulator.isaacgym.urdf_scene_loader import URDFSceneLoader
 from holosoma.simulator.isaacgym.video_recorder import IsaacGymVideoRecorder
+from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
 from holosoma.simulator.shared.dof_limits import soft_limit_range
 from holosoma.simulator.shared.external_wrench import WrenchTarget
 from holosoma.simulator.shared.object_registry import ObjectType
@@ -677,19 +678,19 @@ class IsaacGym(BaseSimulator):
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
         self.dof_pos = self.dof_state.view(self.num_envs, -1, 2)[..., 0]
         self.dof_vel = self.dof_state.view(self.num_envs, -1, 2)[..., 1]
-        # Slice to robot bodies only (the first num_bodies rows), matching _rigid_body_*
-        # above and contact_forces_history below. The net-contact tensor spans all actor
-        # bodies (robot + any spawned objects), so an unsliced view would be wider than
-        # the robot-only history buffer.
+        # The net-contact tensor spans all actor bodies (robot + spawned objects); slice to the
+        # robot's first num_bodies rows to match _rigid_body_* above and the substep buffer below.
         self.contact_forces = gymtorch.wrap_tensor(net_contact_forces).view(self.num_envs, -1, 3)[
             :, : self.num_bodies, :
         ]  # shape: num_envs, num_bodies, xyz axis
-        # To be compatible with isaacsim, we add the contact forces history
-        self.contact_forces_history = torch.zeros(
-            self.num_envs, self.simulator_config.contact_sensor_history_length, self.num_bodies, 3, device=self.device
+        self.contact_recorder = ContactSubstepRecorder(
+            self.hooks,
+            lambda: self.contact_forces,
+            self.num_envs,
+            self.simulator_config.sim.control_decimation_steps,
+            self.num_bodies,
+            self.device,
         )
-        # (num_envs, history_length, num_bodies, xyz axis), the first index is the most recent
-        self.contact_forces_history[:, 0, :, :] = self.contact_forces.clone()  # deep copy
 
         # Initialize acceleration tensors ONLY if bridge is enabled
         if self.simulator_config.bridge.enabled:
@@ -729,10 +730,6 @@ class IsaacGym(BaseSimulator):
             self._rigid_body_vel.copy_(
                 self._rigid_body_com_vel - torch.cross(self._rigid_body_ang_vel, com_offset_world, dim=-1)
             )
-
-    def clear_contact_forces_history(self, env_ids: torch.Tensor) -> None:
-        if len(env_ids) > 0:
-            self.contact_forces_history[env_ids, :, :, :] = 0.0
 
     def _get_num_actors_per_env(self) -> int:
         return int(self._root_states_raw.shape[0] // self.num_envs)
@@ -843,10 +840,8 @@ class IsaacGym(BaseSimulator):
 
         # refresh force sensor tensor at each physics step (0.005s)
         self.gym.refresh_force_sensor_tensor(self.sim)
-        if hasattr(self, "contact_forces_history") and hasattr(self, "contact_forces"):
-            self.contact_forces_history = torch.cat(
-                [self.contact_forces.clone().unsqueeze(1), self.contact_forces_history[:, :-1, :, :]], dim=1
-            )
+        # contact_forces wraps this tensor; without the refresh every substep records the same frame
+        self.gym.refresh_net_contact_force_tensor(self.sim)
 
         self.step_counter += 1
 
