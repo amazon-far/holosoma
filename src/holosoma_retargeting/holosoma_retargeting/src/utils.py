@@ -440,14 +440,19 @@ def calculate_laplacian_coordinates(vertices, adj_list, epsilon=1e-6, uniform_we
         np.ndarray: (N, 3) array of Laplacian coordinates.
     """
     laplacian = np.zeros_like(vertices)
+    # Preserve the original accumulation behavior for other dtypes.
+    use_uniform_mean = uniform_weight and vertices.dtype in (np.dtype(np.float32), np.dtype(np.float64))
 
     for i in range(len(vertices)):
         neighbors_indices = adj_list[i]
         if len(neighbors_indices) > 0:
             vi = vertices[i]
             neighbor_positions = vertices[neighbors_indices]
+            if use_uniform_mean:
+                center_of_neighbors = np.mean(neighbor_positions, axis=0)
+                laplacian[i] = vi - center_of_neighbors
+                continue
             distances = np.linalg.norm(vi - neighbor_positions, axis=1)
-
             if uniform_weight:
                 weights = np.ones_like(distances)
             else:
