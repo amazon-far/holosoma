@@ -13,7 +13,7 @@ from loguru import logger
 
 from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import PhysicsConfig, RigidObjectConfig, SceneFileConfig
-from holosoma.config_types.sensor import CameraSensorConfig, LidarSensorConfig
+from holosoma.config_types.sensor import CameraSensorConfig, ImuSensorConfig, LidarSensorConfig
 from holosoma.config_types.simulator import MujocoXMLFilterCfg, SimulatorConfig
 from holosoma.managers.terrain.base import TerrainTermBase
 from holosoma.simulator.mujoco.geom_groups import tag_compiled_robot_geom_groups
@@ -22,6 +22,16 @@ from holosoma.utils.path import resolve_asset_path
 
 LIDAR_MOUNT_SITE_PREFIX = "holosoma_lidar_mount_"
 LIDAR_FILTER_SITE_PREFIX = "holosoma_lidar_filter_"
+IMU_MOUNT_SITE_PREFIX = "holosoma_imu_mount_"
+
+# One native MuJoCo sensor per IMU output, all attached to the IMU's mount site. Accelerometer and
+# gyro report in the site frame; ``framequat`` reports the site frame's world attitude as [w,x,y,z].
+# The suffix is appended to the sensor key so sensor_setup can resolve each address after compile.
+IMU_SENSOR_SPECS: tuple[tuple[str, mujoco.mjtSensor], ...] = (
+    ("accelerometer", mujoco.mjtSensor.mjSENS_ACCELEROMETER),
+    ("gyro", mujoco.mjtSensor.mjSENS_GYRO),
+    ("framequat", mujoco.mjtSensor.mjSENS_FRAMEQUAT),
+)
 
 
 @dataclass
@@ -649,6 +659,39 @@ class MujocoSceneManager:
                     size=[0.001, 0.0, 0.0],
                     rgba=[0.0, 0.0, 0.0, 0.0],
                 )
+
+    def add_imu_sensors(self, imus: dict[str, ImuSensorConfig]) -> None:
+        """Add a mount site and the three native sensors backing each configured IMU.
+
+        MuJoCo solves these analytically from ``mj_rnePostConstraint``, so an offset mount reports
+        its centripetal term correctly — the reason Holosoma reads the native sensor instead of
+        differencing body velocities itself.
+        """
+        for imu_name, imu in imus.items():
+            mount = imu.mount
+            # ImuSensorConfig rejects target_kind="world", so a mount body is always named.
+            body_name = self.resolve_sensor_body_name(mount.target_kind, mount.target)
+            body = self.world_spec.body(body_name)
+            if body is None:
+                raise ValueError(
+                    f"IMU '{imu_name}' mounts on body '{body_name}' (kind={mount.target_kind}, "
+                    f"target='{mount.target}') which is not present in the compiled scene."
+                )
+            site_name = f"{IMU_MOUNT_SITE_PREFIX}{imu_name}"
+            body.add_site(
+                name=site_name,
+                pos=list(mount.position),
+                quat=list(mount.orientation),
+                type=mujoco.mjtGeom.mjGEOM_SPHERE,
+                size=[0.001, 0.0, 0.0],
+                rgba=[0.0, 0.0, 0.0, 0.0],
+            )
+            for suffix, sensor_type in IMU_SENSOR_SPECS:
+                sensor = self.world_spec.add_sensor()
+                sensor.name = f"{site_name}_{suffix}"
+                sensor.type = sensor_type
+                sensor.objtype = mujoco.mjtObj.mjOBJ_SITE
+                sensor.objname = site_name
 
     def resolve_sensor_body_name(self, target_kind: str, target: str) -> str:
         """Resolve a sensor body reference to its composed-spec body name.

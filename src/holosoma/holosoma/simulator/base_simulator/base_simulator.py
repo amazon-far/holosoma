@@ -10,6 +10,7 @@ from holosoma.config_types.experiment import TrainingConfig
 from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
+from holosoma.config_types.sensor import ImuSensorConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
@@ -203,6 +204,7 @@ class BaseSimulator:
         self._external_wrench = ExternalWrenchAccumulator(self)
         self.kinematic_playback: bool = self.simulator_config.sim.kinematic_playback
         self._kinematic_time = 0.0
+        self._reject_imus_under_kinematic_playback()
         self.hooks = HookRegistry(base_rates=self._hook_base_rates())
         # Register sensor rendering before plugins so FRAME_END consumers read fresh outputs.
         # This no-ops until a backend builds its sensor manager during setup.
@@ -934,12 +936,31 @@ class BaseSimulator:
 
     # ----- Mounted sensor interface -----
 
+    def _reject_imus_under_kinematic_playback(self) -> None:
+        """Fail at construction if an IMU is configured alongside ``sim.kinematic_playback``.
+
+        Kinematic playback writes poses and joint positions without integrating, so nothing ever
+        sets a velocity. Both native IMUs derive their output from velocity, which means the
+        accelerometer would report a constant ``+g`` and the gyro a constant zero no matter how fast
+        the clip moves — a plausible-looking stream that carries no motion. Rejecting is better than
+        recording that silently.
+        """
+        if not self.kinematic_playback:
+            return
+        imu_names = [name for name, config in self.sensor_config.items() if isinstance(config, ImuSensorConfig)]
+        if imu_names:
+            raise NotImplementedError(
+                f"IMU sensors {sorted(imu_names)} cannot be used with sim.kinematic_playback: playback "
+                "never sets velocities, so both backends' IMUs would report a constant +g and zero "
+                "rate regardless of the clip. Drop the IMU, or play the clip back through physics."
+            )
+
     def render_sensors(self) -> None:
         """Capture all due mounted sensors at control frequency into their cached buffers.
 
         Called once per control step from the task loop (after sim tensors refresh, before
         observations compute), honoring each sensor's ``update_decimation``. Consumers then do
-        cheap cached reads through the camera/LiDAR accessors."""
+        cheap cached reads through the camera/LiDAR/IMU accessors."""
         raise NotImplementedError("The 'render_sensors' method must be implemented in subclasses.")
 
     def get_camera_data(
@@ -1023,6 +1044,36 @@ class BaseSimulator:
         if data_type not in record.buffers:
             raise RuntimeError(
                 f"LiDAR '{name}' has no '{data_type}' output. Ensure render_sensors() has run. "
+                f"Buffered: {sorted(record.buffers)}."
+            )
+        buf = record.buffer_on(data_type, device)
+        return buf if env_ids is None else buf[env_ids]
+
+    def get_imu_data(
+        self,
+        name: str,
+        data_type: str = "angular_velocity",
+        env_ids: EnvIds | None = None,
+        device: torch.device | str | None = None,
+    ) -> torch.Tensor:
+        """Read an IMU's latest ``angular_velocity``, ``linear_acceleration``, or ``orientation``.
+
+        The two rates are ``float32 [N, 3]`` in the sensor frame — body rates in rad/s, and specific
+        force in m/s² reading ``+9.81`` along the sensor's up axis at rest and zero in free fall.
+        ``orientation`` is ``float32 [N, 4]`` world attitude as ``xyzw``, matching
+        :attr:`rigid_body_quat_w`. Unlike cameras and LiDARs the IMU frame is NOT optical: it is the
+        mount frame as authored (``+X`` forward, ``+Z`` up).
+
+        Values come from the backend's native IMU, so precision differs — MuJoCo is analytic, Isaac
+        Sim differentiates over its own ``dt``, and Isaac Gym has no IMU at all.
+        """
+        if self.sensor_manager is None or not self.sensor_manager.has_imu(name):
+            created = [] if self.sensor_manager is None else self.sensor_manager.imu_names
+            raise NotImplementedError(f"{type(self).__name__} has no IMU '{name}'. Created IMUs: {created}.")
+        record = self.sensor_manager.get_imu(name)
+        if data_type not in record.buffers:
+            raise RuntimeError(
+                f"IMU '{name}' has no '{data_type}' output. Ensure render_sensors() has run. "
                 f"Buffered: {sorted(record.buffers)}."
             )
         buf = record.buffer_on(data_type, device)

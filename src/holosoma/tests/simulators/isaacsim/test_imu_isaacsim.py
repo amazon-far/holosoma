@@ -1,0 +1,34 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+"""Live Isaac Sim IMU test (IsaacLab ``Imu`` sensor)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.isaacsim
+
+pytest.importorskip("isaaclab")
+torch = pytest.importorskip("torch")
+if not torch.cuda.is_available():
+    pytest.skip("IsaacSim requires a CUDA device", allow_module_level=True)
+
+from tests.simulators._run_harness import run_harness  # noqa: E402
+
+_HARNESS = Path(__file__).resolve().parents[1] / "imu_assert.py"
+
+
+def test_imu(tmp_path):
+    result_file = tmp_path / "imu_isaacsim.txt"
+    run_harness(
+        _HARNESS,
+        "--simulator",
+        "isaacsim",
+        "--result-file",
+        str(result_file),
+        label="isaacsim/imu",
+        timeout=600,
+        result_file=result_file,
+    )

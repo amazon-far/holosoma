@@ -19,6 +19,7 @@ from holosoma.config_types.sensor import (
     CameraSensorConfig,
     CustomLidarRayPatternConfig,
     GridLidarRayPatternConfig,
+    ImuSensorConfig,
     IsaacGymCameraConfig,
     IsaacSimCameraConfig,
     IsaacSimFisheyeConfig,
@@ -335,5 +336,61 @@ def test_lidar_body_filter_is_backend_neutral_and_validated() -> None:
         LidarBodyFilterConfig(target_kind="actor", target=" ")
 
 
+def test_imu_accepts_body_mounts_and_decimation() -> None:
+    link = SensorMountConfig(target_kind="robot_link", target="pelvis")
+    assert ImuSensorConfig(mount=link).update_decimation == 1
+    assert ImuSensorConfig(mount=link, update_decimation="200Hz").update_decimation == "200Hz"
+    actor = SensorMountConfig(target_kind="actor", target="cart")
+    assert ImuSensorConfig(mount=actor).mount.target == "cart"
+
+
+def test_imu_rejects_world_mount() -> None:
+    """Unlike cameras and LiDARs, an IMU must follow a body: MuJoCo would read a constant and
+    IsaacLab's Imu has no rigid body to attach to."""
+    assert CameraSensorConfig(mount=SensorMountConfig(target_kind="world")) is not None
+    with pytest.raises(ValueError, match="does not support mount.target_kind='world'"):
+        ImuSensorConfig(mount=SensorMountConfig(target_kind="world"))
+
+
+def test_imu_rejects_actor_named_robot_and_bad_decimation() -> None:
+    with pytest.raises(ValueError, match="use target_kind='robot_link'"):
+        ImuSensorConfig(mount=SensorMountConfig(target_kind="actor", target="robot"))
+    with pytest.raises(ValueError, match="update_decimation"):
+        ImuSensorConfig(mount=SensorMountConfig(target_kind="robot_link", target="pelvis"), update_decimation="fast")
+
+
+def test_sensor_configs_reject_unknown_fields() -> None:
+    """``_FORBID_EXTRA`` is on every sensor config so a typo'd field fails at construction."""
+    mount = SensorMountConfig(target_kind="robot_link", target="pelvis")
+    for factory in (ImuSensorConfig, LidarSensorConfig, CameraSensorConfig):
+        with pytest.raises(ValueError, match="nonexistent_field"):
+            factory(mount=mount, nonexistent_field=1.0)  # type: ignore[call-arg]
+
+
 # The camera-frame sink fields (cameras/modalities/record_video/...) live on CameraVizPluginConfig;
 # their validation is covered in config_types/tests/test_plugin_egress_config.py.
+
+
+def test_imu_is_rejected_under_kinematic_playback() -> None:
+    """Playback writes poses without integrating, so it never sets the velocities an IMU needs.
+
+    The guard lives on BaseSimulator because ``kinematic_playback`` is simulator state that a sensor
+    config cannot see. Exercised here against the real method, with a stub carrying only the two
+    attributes it reads.
+    """
+    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+
+    sim = BaseSimulator.__new__(BaseSimulator)
+    mount = SensorMountConfig(target_kind="robot_link", target="pelvis")
+    sim.sensor_config = {"imu": ImuSensorConfig(mount=mount), "head": CameraSensorConfig(mount=mount)}
+
+    sim.kinematic_playback = False
+    sim._reject_imus_under_kinematic_playback()  # physics: fine
+
+    sim.kinematic_playback = True
+    with pytest.raises(NotImplementedError, match="kinematic_playback"):
+        sim._reject_imus_under_kinematic_playback()
+
+    # A camera-only rig is untouched by the guard.
+    sim.sensor_config = {"head": CameraSensorConfig(mount=mount)}
+    sim._reject_imus_under_kinematic_playback()

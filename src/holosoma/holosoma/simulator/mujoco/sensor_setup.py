@@ -1,6 +1,11 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-"""MuJoCo mounted camera and LiDAR sensor setup."""
+"""MuJoCo mounted camera, LiDAR, and IMU sensor setup.
+
+Cameras render and LiDARs cast rays, but IMUs are only *read*: ``mj_step`` already solved the
+native accelerometer/gyro/framequat on each mount site, so capture is a slice out of
+``sensordata``.
+"""
 
 from __future__ import annotations
 
@@ -12,16 +17,27 @@ import numpy as np
 import numpy.typing as npt
 import torch
 
-from holosoma.config_types.sensor import DEFAULT_MUJOCO_LIDAR_GEOM_GROUPS, CameraSensorConfig, LidarSensorConfig
+from holosoma.config_types.sensor import (
+    DEFAULT_MUJOCO_LIDAR_GEOM_GROUPS,
+    CameraSensorConfig,
+    ImuSensorConfig,
+    LidarSensorConfig,
+)
 from holosoma.simulator.mujoco.backends import WarpBackend
 from holosoma.simulator.mujoco.geom_groups import (
     ROBOT_COLLISION_GEOM_GROUP,
     ROBOT_VISUAL_GEOM_GROUP,
     map_authored_geom_group_mask,
 )
-from holosoma.simulator.mujoco.scene_manager import LIDAR_FILTER_SITE_PREFIX, LIDAR_MOUNT_SITE_PREFIX
+from holosoma.simulator.mujoco.scene_manager import (
+    IMU_MOUNT_SITE_PREFIX,
+    IMU_SENSOR_SPECS,
+    LIDAR_FILTER_SITE_PREFIX,
+    LIDAR_MOUNT_SITE_PREFIX,
+)
+from holosoma.simulator.shared.imu_sensor import finalize_imu_outputs
 from holosoma.simulator.shared.lidar_range import finalize_lidar_returns
-from holosoma.simulator.shared.sensor_manager import LidarRecord, SensorManager
+from holosoma.simulator.shared.sensor_manager import ImuRecord, LidarRecord, SensorManager
 from holosoma.utils.warp_interop import from_torch_vec3
 
 if TYPE_CHECKING:
@@ -104,6 +120,84 @@ def register_lidars(sim: MuJoCo, manager: SensorManager) -> None:
             raise RuntimeError(f"LiDAR mount site '{site_name}' is missing from the compiled MuJoCo model.")
         sensor_record.backend_cache["mujoco_site_id"] = site_id
         sensor_record.backend_cache["mujoco_body_exclude_id"] = _resolve_body_exclude(sim, name, lidar, site_id)
+
+
+def register_imus(sim: MuJoCo, manager: SensorManager) -> None:
+    """Register configured IMUs and resolve their compiled native sensor addresses.
+
+    ``scene_manager.add_imu_sensors`` authored one site plus an accelerometer/gyro/framequat triple
+    per IMU before compile; here each sensor's ``(adr, dim)`` slice into ``sensordata`` is cached.
+    """
+    assert sim.root_model is not None
+    for name, imu in sim.sensor_config.items():
+        if not isinstance(imu, ImuSensorConfig):
+            continue
+        sensor_record = manager.register_imu(name, imu)
+        site_name = f"{IMU_MOUNT_SITE_PREFIX}{name}"
+        for suffix, _ in IMU_SENSOR_SPECS:
+            sensor_name = f"{site_name}_{suffix}"
+            sensor_id = mujoco.mj_name2id(sim.root_model, mujoco.mjtObj.mjOBJ_SENSOR, sensor_name)
+            if sensor_id < 0:
+                raise RuntimeError(
+                    f"IMU '{name}' native sensor '{sensor_name}' is missing from the compiled MuJoCo model."
+                )
+            adr = int(sim.root_model.sensor_adr[sensor_id])
+            dim = int(sim.root_model.sensor_dim[sensor_id])
+            sensor_record.backend_cache[f"mujoco_{suffix}_slice"] = (adr, dim)
+
+
+def _imu_slices(sensor_record: ImuRecord) -> tuple[tuple[int, int], ...]:
+    """Return the ``(adr, dim)`` slices for this IMU, in ``IMU_SENSOR_SPECS`` order."""
+    slices = []
+    for suffix, _ in IMU_SENSOR_SPECS:
+        entry = sensor_record.backend_cache.get(f"mujoco_{suffix}_slice")
+        if not isinstance(entry, tuple):
+            raise RuntimeError(f"IMU '{sensor_record.name}' has no resolved MuJoCo '{suffix}' sensor address.")
+        slices.append(entry)
+    return tuple(slices)
+
+
+def _capture_imu_cpu(sim: MuJoCo, sensor_record: ImuRecord) -> None:
+    """Read one IMU out of each environment's own ``MjData.sensordata``."""
+    (accel_adr, accel_dim), (gyro_adr, gyro_dim), (quat_adr, quat_dim) = _imu_slices(sensor_record)
+    rows = [np.asarray(sim.backend.get_render_data(world_id=env_id).sensordata) for env_id in range(sim.num_envs)]
+    sensordata = torch.from_numpy(np.stack(rows)).to(sim.sim_device)
+    finalize_imu_outputs(
+        sensor_record,
+        linear_acceleration=sensordata[:, accel_adr : accel_adr + accel_dim],
+        angular_velocity=sensordata[:, gyro_adr : gyro_adr + gyro_dim],
+        orientation_wxyz=sensordata[:, quat_adr : quat_adr + quat_dim],
+    )
+
+
+def _capture_imu_warp(sim: MuJoCo, sensor_record: ImuRecord, backend: WarpBackend) -> None:
+    """Read one IMU out of MJWarp's batched ``sensordata`` (``[nworld, nsensordata]``)."""
+    import warp as wp
+
+    (accel_adr, accel_dim), (gyro_adr, gyro_dim), (quat_adr, quat_dim) = _imu_slices(sensor_record)
+    sensordata = wp.to_torch(backend.mjw_data.sensordata)
+    finalize_imu_outputs(
+        sensor_record,
+        linear_acceleration=sensordata[:, accel_adr : accel_adr + accel_dim],
+        angular_velocity=sensordata[:, gyro_adr : gyro_adr + gyro_dim],
+        orientation_wxyz=sensordata[:, quat_adr : quat_adr + quat_dim],
+    )
+
+
+def capture_imus(sim: MuJoCo) -> None:
+    """Copy out every IMU due this control step. No ray work or rendering is involved: MuJoCo has
+    already solved these sensors during ``mj_step``."""
+    if sim.sensor_manager is None:
+        return
+    due = sim.sensor_manager.collect_imus_due()
+    if not due:
+        return
+    if isinstance(sim.backend, WarpBackend):
+        for sensor_record in due:
+            _capture_imu_warp(sim, sensor_record, sim.backend)
+        return
+    for sensor_record in due:
+        _capture_imu_cpu(sim, sensor_record)
 
 
 def _resolve_body_exclude(sim: MuJoCo, name: str, lidar: LidarSensorConfig, site_id: int) -> int:
@@ -364,11 +458,13 @@ def create_sensors(sim: MuJoCo) -> None:
     sim.sensor_manager = manager
     register_cameras(sim, manager)
     register_lidars(sim, manager)
+    register_imus(sim, manager)
 
 
 def render_sensors(sim: MuJoCo) -> None:
-    """Capture all camera and LiDAR sensors due this control step."""
+    """Capture all camera, LiDAR, and IMU sensors due this control step."""
     if isinstance(sim.backend, WarpBackend):
         sim.backend.begin_sensor_render()
     render_cameras(sim)
     render_lidars(sim)
+    capture_imus(sim)

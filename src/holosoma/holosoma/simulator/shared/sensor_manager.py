@@ -1,4 +1,9 @@
-"""Backend-neutral mounted-sensor registry, cadence, and output buffering."""
+"""Backend-neutral mounted-sensor registry, cadence, and output buffering.
+
+Cameras, LiDARs, and IMUs share one manager. Each type has its own record subclass and
+``collect_*_due`` call, so a backend captures only the types it supports; names are unique across
+all three.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +20,7 @@ from holosoma.simulator.shared.range_clipping import clip_sensor_ranges
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
-    from holosoma.config_types.sensor import LidarSensorConfig, SensorConfig
+    from holosoma.config_types.sensor import ImuSensorConfig, LidarSensorConfig, SensorConfig
 
 SensorRecordT = TypeVar("SensorRecordT", bound="SensorRecord")
 
@@ -29,6 +34,8 @@ class SensorRecord:
     buffers: dict[str, torch.Tensor] = field(default_factory=dict)
     step_counter: int = -1
     effective_decimation: int = 1
+    backend_cache: dict[str, Any] = field(default_factory=dict)
+    """Backend-owned per-sensor state: native ids and handles, query buffers, compiled work."""
     _device_cache: dict[tuple[str, str], torch.Tensor] = field(default_factory=dict)
 
     def set_buffer(self, output: str, tensor: torch.Tensor) -> None:
@@ -71,8 +78,6 @@ class CameraRecord(SensorRecord):
 class LidarRecord(SensorRecord):
     config: LidarSensorConfig
     pattern_provider: LidarPatternProvider | None = None
-    backend_cache: dict[str, Any] = field(default_factory=dict)
-    """Backend-owned fixed-shape query buffers and compiled work for this LiDAR."""
 
     @property
     def pattern_shape(self) -> tuple[int, int]:
@@ -86,20 +91,30 @@ class LidarRecord(SensorRecord):
         return self.pattern_provider.pattern_at(sim_time)
 
 
+@dataclass
+class ImuRecord(SensorRecord):
+    """One mounted IMU. No derived state — the native sensor's ids or handle live in
+    ``backend_cache``."""
+
+    config: ImuSensorConfig
+
+
 class SensorManager:
-    """Registry and independent update cadence for cameras and LiDARs."""
+    """Registry and independent update cadence for cameras, LiDARs, and IMUs."""
 
     def __init__(self, device: str, control_hz: float) -> None:
         self.device = device
         self.control_hz = control_hz
         self._cameras: dict[str, CameraRecord] = {}
         self._lidars: dict[str, LidarRecord] = {}
+        self._imus: dict[str, ImuRecord] = {}
         self._order: list[str] = []
         self._last_camera_due: set[str] = set()
         self._last_lidar_due: set[str] = set()
+        self._last_imu_due: set[str] = set()
 
     def _assert_name_available(self, name: str) -> None:
-        if name in self._cameras or name in self._lidars:
+        if name in self._cameras or name in self._lidars or name in self._imus:
             raise ValueError(f"Sensor '{name}' already registered.")
 
     def register_camera(self, name: str, config: CameraSensorConfig) -> CameraRecord:
@@ -133,11 +148,24 @@ class SensorManager:
         self._order.append(name)
         return record
 
+    def register_imu(self, name: str, config: ImuSensorConfig) -> ImuRecord:
+        self._assert_name_available(name)
+        effective = resolve_decimation(
+            config.update_decimation, self.control_hz, field=f"IMU '{name}' update_decimation"
+        )
+        record = ImuRecord(name=name, config=config, effective_decimation=effective)
+        self._imus[name] = record
+        self._order.append(name)
+        return record
+
     def has_camera(self, name: str) -> bool:
         return name in self._cameras
 
     def has_lidar(self, name: str) -> bool:
         return name in self._lidars
+
+    def has_imu(self, name: str) -> bool:
+        return name in self._imus
 
     def get(self, name: str) -> CameraRecord:
         if name not in self._cameras:
@@ -148,6 +176,11 @@ class SensorManager:
         if name not in self._lidars:
             raise KeyError(f"No LiDAR named '{name}'. Registered LiDARs: {sorted(self._lidars)}.")
         return self._lidars[name]
+
+    def get_imu(self, name: str) -> ImuRecord:
+        if name not in self._imus:
+            raise KeyError(f"No IMU named '{name}'. Registered IMUs: {sorted(self._imus)}.")
+        return self._imus[name]
 
     @property
     def names(self) -> list[str]:
@@ -162,12 +195,20 @@ class SensorManager:
         return list(self._lidars)
 
     @property
+    def imu_names(self) -> list[str]:
+        return list(self._imus)
+
+    @property
     def cameras(self) -> list[CameraRecord]:
         return list(self._cameras.values())
 
     @property
     def lidars(self) -> list[LidarRecord]:
         return list(self._lidars.values())
+
+    @property
+    def imus(self) -> list[ImuRecord]:
+        return list(self._imus.values())
 
     @staticmethod
     def _collect_due(records: Sequence[SensorRecordT]) -> list[SensorRecordT]:
@@ -189,6 +230,11 @@ class SensorManager:
         self._last_lidar_due = {record.name for record in due}
         return due
 
+    def collect_imus_due(self) -> list[ImuRecord]:
+        due = self._collect_due(self.imus)
+        self._last_imu_due = {record.name for record in due}
+        return due
+
     @property
     def last_due(self) -> set[str]:
         """Camera names rendered by the latest camera collection."""
@@ -198,12 +244,18 @@ class SensorManager:
     def last_lidar_due(self) -> set[str]:
         return self._last_lidar_due
 
+    @property
+    def last_imu_due(self) -> set[str]:
+        return self._last_imu_due
+
     def frames_produced(self, name: str) -> int:
         record: SensorRecord
         if name in self._cameras:
             record = self._cameras[name]
         elif name in self._lidars:
             record = self._lidars[name]
+        elif name in self._imus:
+            record = self._imus[name]
         else:
             raise KeyError(f"No sensor named '{name}'. Registered sensors: {self._order}.")
         return record.step_counter // record.effective_decimation + 1
