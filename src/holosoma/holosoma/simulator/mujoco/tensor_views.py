@@ -2,7 +2,7 @@
 MuJoCo Proxy System
 
 This module provides a tensor-like interface into Mujoco's state so envs/tasks have a unified interface
-across IsaacGym, IsaacLab and Mujoco.
+across IsaacLab and Mujoco.
 
 The current implementation is intended for evaluation only. The performance may be suboptimal
 for training many parallel environments and requires profiling.
@@ -10,7 +10,8 @@ for training many parallel environments and requires profiling.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Protocol, Tuple
+from collections.abc import Callable
+from typing import Any, Protocol
 
 import numpy as np
 import numpy.typing as npt
@@ -46,7 +47,7 @@ class BaseMujocoView(Protocol):
     _is_tensor_proxy: bool
 
     @property
-    def shape(self) -> Tuple[int, ...]:
+    def shape(self) -> tuple[int, ...]:
         """Return the shape of the view."""
         ...
 
@@ -84,7 +85,7 @@ class BaseMujocoViewMixin:
     _is_tensor_proxy: bool = True
 
     @property
-    def shape(self) -> Tuple[int, ...]:
+    def shape(self) -> tuple[int, ...]:
         """Return the shape of the view. Must be implemented by subclass."""
         raise NotImplementedError("Subclasses must implement shape")
 
@@ -160,7 +161,7 @@ class MujocoView(BaseMujocoViewMixin):
     Provides tensor-like access to slices of MuJoCo data arrays with optional
     data transformation functions for format conversion.
 
-    Allows tasks to interface with Mujoco like they do with IsaacLab and IsaacGym, albeit potentially
+    Allows tasks to interface with Mujoco like they do with IsaacLab, albeit potentially
     sub-optimally depending on conversions.
     """
 
@@ -235,7 +236,7 @@ class MujocoView(BaseMujocoViewMixin):
             self.base_array[self.indices] = current_data
 
     @property
-    def shape(self) -> Tuple[int, ...]:
+    def shape(self) -> tuple[int, ...]:
         """Return the shape of the view."""
         if self.transform_get:
             # If a transform exists, its output shape is authoritative
@@ -283,7 +284,7 @@ class MujocoRootStateView:
         self.device = device
 
     @property
-    def shape(self) -> Tuple[int, ...]:
+    def shape(self) -> tuple[int, ...]:
         return (self.num_envs, 13)
 
     def __getitem__(self, key: Any) -> torch.Tensor:
@@ -300,7 +301,7 @@ class MujocoRootStateView:
 
         # MuJoCo's freejoint qvel stores angular velocity in the BODY-LOCAL frame, but the
         # unified robot_root_states contract is WORLD-frame for both velocities (matching
-        # IsaacGym/IsaacSim, and what every consumer of robot_root_states[:, 10:13] expects).
+        # IsaacSim, and what every consumer of robot_root_states[:, 10:13] expects).
         # Rotate the body-local angular velocity into world using the root's world orientation.
         tensor_data[:, 10:13] = quat_rotate(tensor_data[:, 3:7], tensor_data[:, 10:13], w_last=True)
 
@@ -360,7 +361,7 @@ class MujocoRootStateView:
 
 class MujocoDofStateView:
     """
-    Specialized view for DOF states compatible with IsaacGym's flattened format.
+    Specialized view for DOF states in holosoma's canonical flattened format.
 
     Provides access to joint positions and velocities as a (num_envs * num_dof, 2) array.
 
@@ -388,11 +389,11 @@ class MujocoDofStateView:
         self.device = device
 
     @property
-    def shape(self) -> Tuple[int, ...]:
+    def shape(self) -> tuple[int, ...]:
         return (self.num_envs * self.num_dof, 2)
 
     def __getitem__(self, key: Any) -> torch.Tensor:
-        """Get DOF states in IsaacGym flattened format."""
+        """Get DOF states in flattened format."""
         dof_pos = self.qpos_array[self.dof_pos_indices].reshape(self.num_envs, self.num_dof)
         dof_vel = self.qvel_array[self.dof_vel_indices].reshape(self.num_envs, self.num_dof)
 
@@ -404,7 +405,7 @@ class MujocoDofStateView:
         return tensor_data[key]
 
     def __setitem__(self, key: Any, value: torch.Tensor | npt.NDArray[np.float64]) -> None:
-        """Set DOF states from IsaacGym flattened format."""
+        """Set DOF states from flattened format."""
         if key != slice(None, None, None):
             raise IndexError("Only full slicing `[:]` is supported for setting DOF state.")
 

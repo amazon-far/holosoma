@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Mapping, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 

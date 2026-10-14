@@ -29,7 +29,7 @@ def _to_transforms(msg: CmdSMPLH) -> np.ndarray:
     """CmdSMPLH -> (24, 7) [xyz, qxyzw], canonical order, identity for missing."""
     out = np.zeros((NUM_JOINTS, 7))
     out[:, 6] = 1.0
-    for name, pose in zip(msg.joint_names, msg.joint_poses):
+    for name, pose in zip(msg.joint_names, msg.joint_poses, strict=False):
         if (i := _IDX.get(name)) is not None:
             p, q = pose.position, pose.orientation
             out[i] = [p.x, p.y, p.z, q.x, q.y, q.z, q.w]

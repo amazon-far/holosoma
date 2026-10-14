@@ -151,7 +151,7 @@ class IsaacSim(BaseSimulator):
             # Narrow the type from the base class's SceneInterface (which declares only
             # env_origins) to IsaacLab's InteractiveScene, what self.scene actually is on this
             # backend, so the rich .rigid_objects/.articulations/.sensors/... accesses below
-            # type-check. The base protocol stays correct for MuJoCo/IsaacGym, whose scenes
+            # type-check. The base protocol stays correct for MuJoCo, whose scenes
             # implement only env_origins.
             self.scene: InteractiveScene = InteractiveScene(scene_config)
             # Per-camera TiledCamera map, keyed by sensor name; populated by
@@ -476,7 +476,7 @@ class IsaacSim(BaseSimulator):
         self.body_ids, self.body_names = self._robot.find_bodies(self.robot_config.body_names, preserve_order=True)
 
         self._body_list = self.body_names.copy()
-        # dof_ids and body_ids is convert dfs order (isaacsim) to dfs order (isaacgym, holosoma config)
+        # dof_ids and body_ids convert DFS order (isaacsim) to holosoma's config order
         # i.e., bfs_order_tensor = dfs_order_tensor[dof_ids]
 
         # add joint names with "joint" postfix
@@ -532,7 +532,7 @@ class IsaacSim(BaseSimulator):
         # IsaacSim does NOT honor the passed env_origins: InteractiveScene clones the envs on its own
         # env_spacing grid (built in __init__), and every internal placement (robot/object poses,
         # terrain) uses self.scene.env_origins, not the argument. Storing the passed value here left
-        # self.env_origins disagreeing with where envs actually are (unlike mujoco/isaacgym, where the
+        # self.env_origins disagreeing with where envs actually are (unlike mujoco, where the
         # passed origins ARE the placement) — so callers reading sim.env_origins (e.g. a multi-env
         # camera harness pinning a robot relative to its env) landed off from the grid-placed scene.
         # Reconcile to the real grid so sim.env_origins means the same thing on every backend.
@@ -910,7 +910,7 @@ class IsaacSim(BaseSimulator):
         """See base class.
 
         IsaacSim-specific notes:
-        - Tensor format: 3D [num_envs, num_dofs, 2] (differs from IsaacGym's flattened format)
+        - Tensor format: 3D [num_envs, num_dofs, 2] (differs from the flattened format)
 
         Examples
         --------
@@ -968,7 +968,7 @@ class IsaacSim(BaseSimulator):
         and flush once with :meth:`write_state_updates`.
         """
         if not names or (env_ids is not None and len(env_ids) == 0):
-            return  # uniform no-op on empty input, matching get_actor_states / IsaacGym / MuJoCo
+            return  # uniform no-op on empty input, matching get_actor_states / MuJoCo
         self.set_actor_states_by_index(self.get_actor_indices(names, env_ids), states, write_updates)
 
     def get_actor_initial_poses(self, names: ActorNames, env_ids: EnvIds | None = None) -> ActorPoses:
@@ -1060,7 +1060,7 @@ class IsaacSim(BaseSimulator):
 
         This method provides access to measured joint forces. For IsaacSim,
         joint forces are computed from applied torques since direct force
-        sensing is not available in the same way as IsaacGym.
+        sensing is not available.
 
         Args:
             env_id: Environment index (default: 0)
@@ -1069,11 +1069,11 @@ class IsaacSim(BaseSimulator):
             torch.Tensor: Tensor of shape [num_dof] with computed joint forces
 
         Note:
-            IsaacSim doesn't have the same DOF force sensor infrastructure as IsaacGym.
+            IsaacSim has no DOF force sensor infrastructure.
             This implementation returns the applied torques as an approximation.
             For actual force sensing, consider using contact sensors or force/torque sensors.
         """
-        # IsaacSim doesn't have direct DOF force sensors like IsaacGym
+        # IsaacSim has no direct DOF force sensors
         # Return the applied torques (which are the commanded forces)
         # This matches the bridge's usage pattern where forces are used for feedback
         if not hasattr(self._robot, "data") or not hasattr(self._robot.data, "applied_torque"):

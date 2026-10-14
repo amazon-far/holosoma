@@ -6,7 +6,7 @@ This guide provides a complete workflow for running whole body tracking (WBT) po
 
 ## Overview
 
-The sim-to-sim workflow allows you to replay IsaacSim/IsaacGym-trained WBT checkpoints inside MuJoCo for evaluation and testing.
+The sim-to-sim workflow allows you to replay IsaacSim-trained WBT checkpoints inside MuJoCo for evaluation and testing.
 
 ## Prerequisites
 

@@ -12,7 +12,7 @@ Centering, optical-axis, and FOV validation live in ``camera_geometry_assert.py`
 
 Run per backend (each in its own env):
     python tests/simulators/camera_assert.py --simulator mujoco --scene <preset> --sensors <preset>
-    python tests/simulators/camera_assert.py --simulator {mjwarp,isaacgym,isaacsim} ...
+    python tests/simulators/camera_assert.py --simulator {mjwarp,isaacsim} ...
 
 Exits 0 on PASS, 1 on FAIL, 77 on SKIP.
 """
@@ -64,7 +64,7 @@ def _check_not_blank(img, label: str) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacgym", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
     parser.add_argument("--scene", default="camera-target", help="scene preset (front-facing bright object)")
     parser.add_argument("--sensors", default="front-cam", help="sensors preset (one robot-base camera)")
     parser.add_argument("--robot", default="g1-29dof")

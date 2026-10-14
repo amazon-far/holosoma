@@ -74,8 +74,7 @@ def _safe_startup_reason(exc: Exception) -> str:
         return "native reason withheld (unreadable diagnostic)"
     # Released SDK wraps CycloneDDS initialization errors before pybind exposes them.
     wrapper = "Catch dds::core exception. Class:::dds::core::Error, Message:Error Error - "
-    if message.startswith(wrapper):
-        message = message[len(wrapper) :]
+    message = message.removeprefix(wrapper)
     for reason in (
         "dds_config must be nonempty inline CycloneDDS XML (no filename, URI or BOM)",
         'dds_config must be inline CycloneDDS XML with exactly one Domain Id="0" or Id="any"',

@@ -9,10 +9,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import TracebackType
-from typing import Any, TypedDict, cast
+from typing import Any, Self, TypedDict, cast
 
 from loguru import logger
-from typing_extensions import Self
 
 from holosoma.config_types.env import get_tyro_env_config
 from holosoma.config_types.experiment import ExperimentConfig
@@ -197,7 +196,7 @@ def train(tyro_config: ExperimentConfig, training_context: TrainingContext | Non
 
     env = None
     try:
-        # have to import torch after isaacgym
+        # Deferred: the IsaacSim launcher must initialize before torch is imported.
         import torch  # noqa: F401
         import torch.distributed as dist
         import wandb

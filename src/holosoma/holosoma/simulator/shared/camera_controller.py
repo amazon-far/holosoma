@@ -30,7 +30,7 @@ class CameraParameters:
     """Standardized camera parameters for simulator APIs.
 
     This class provides a uniform interface for camera positioning that can be
-    used across different simulator backends (MuJoCo, IsaacGym, IsaacSim).
+    used across different simulator backends (MuJoCo, IsaacSim).
 
     Parameters
     ----------
@@ -276,7 +276,7 @@ class CameraController:
                 self.robot_body_id = self.simulator.find_rigid_body_indice(name)
                 logger.debug(f"Camera controller resolved tracking body: {name}")
                 return
-            except Exception:  # noqa: S112, PERF203
+            except Exception:  # noqa: S112
                 continue
 
         # If no names worked, fail with helpful error

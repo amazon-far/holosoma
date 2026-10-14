@@ -15,22 +15,6 @@ from holosoma.config_types.distribution import DistributionLike, DistributionSpe
 
 
 @dataclass(frozen=True)
-class IsaacGymMaterialDR:
-    """Material-DR ranges IsaacGym honors (per-shape ``RigidShapeProperties``).
-
-    IsaacGym friction is a SINGLE sliding coefficient (no static/dynamic split), and restitution is
-    native per-shape. A field left ``None`` is not randomized. Mirrors
-    :class:`~holosoma.config_types.scene.IsaacGymPhysicsConfig`'s channel set.
-    """
-
-    friction: DistributionLike | None = None
-    """Sliding-friction range. ``None`` keeps the spawned friction."""
-
-    restitution: DistributionLike | None = None
-    """Restitution range. ``None`` keeps the spawned restitution."""
-
-
-@dataclass(frozen=True)
 class IsaacSimMaterialDR:
     """Material-DR ranges IsaacSim honors (per-shape PhysX material, via a bucket table).
 
@@ -82,7 +66,6 @@ class MaterialRandomizationConfig:
     ``[lo, hi]`` pair (uniform) or a spec dict for a non-uniform distribution.
     """
 
-    isaacgym: IsaacGymMaterialDR | None = None
     isaacsim: IsaacSimMaterialDR | None = None
     mujoco: MujocoMaterialDR | None = None
 
@@ -108,7 +91,7 @@ class InertiaScale:
     MULTIPLIES the spawned moment; the default ``(1.0, 1.0)`` leaves a component unchanged, so name
     only what you randomize, e.g. ``InertiaScale(Ixx=[0.5, 1.5])``. MuJoCo stores inertia as the three
     diagonal principal moments and scales only Ixx/Iyy/Izz (the off-diagonals stay at their identity
-    default there); IsaacSim/IsaacGym scale all six.
+    default there); IsaacSim scale all six.
     """
 
     Ixx: DistributionLike = (1.0, 1.0)

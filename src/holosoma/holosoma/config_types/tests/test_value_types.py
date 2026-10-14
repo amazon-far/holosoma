@@ -108,7 +108,7 @@ def test_normalization_preserves_sign_order_and_input(alias: Any) -> None:
     expected = [-1 / math.sqrt(30), 2 / math.sqrt(30), -3 / math.sqrt(30), 4 / math.sqrt(30)]
     value = [component * 1.000001 for component in expected]
     before = value.copy()
-    result = TypeAdapter(alias).validate_python(value)
+    result: list[float] | tuple[float, ...] = TypeAdapter(alias).validate_python(value)
     assert result == pytest.approx(expected)
     assert math.hypot(*result) == pytest.approx(1.0, abs=1e-15)
     assert value == before

@@ -28,7 +28,7 @@ jobs:
         - g1-29dof-fast-sac
         - t1-29dof-fast-sac
         multigpu: ['True', 'False']
-        simulator: [isaacgym, isaacsim]
+        simulator: [isaacsim]
         extra_args: [""]
         include:
         - experiment: g1-29dof-wbt

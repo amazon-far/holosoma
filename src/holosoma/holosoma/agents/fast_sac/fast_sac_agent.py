@@ -4,8 +4,9 @@ import copy
 import itertools
 import math
 import os
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterator, Sequence
+from typing import Any
 
 import tqdm
 from loguru import logger
@@ -200,7 +201,7 @@ class FastSACAgent(BaseAlgo):
 
         algo_obs_dim_dict = self.env.observation_manager.get_obs_dims()
 
-        algo_history_length_dict: Dict[str, int] = {}
+        algo_history_length_dict: dict[str, int] = {}
 
         for group_cfg in self.env.observation_manager.cfg.groups.values():
             history_len = getattr(group_cfg, "history_length", 1)
@@ -558,7 +559,7 @@ class FastSACAgent(BaseAlgo):
         if self.config.use_symmetry:
             samples_per_update *= 2
 
-            augmented_large_data: Dict[str, torch.Tensor | Dict[str, torch.Tensor]] = {"next": {}}
+            augmented_large_data: dict[str, torch.Tensor | dict[str, torch.Tensor]] = {"next": {}}
 
             augmented_large_data["observations"] = self.symmetry_utils.augment_observations(
                 obs=large_data["observations"],

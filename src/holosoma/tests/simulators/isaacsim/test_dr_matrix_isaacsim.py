@@ -5,7 +5,7 @@ SimulationContext is a process singleton — one sim per process): it builds ONE
 fully-managed locomotion env (real action_manager + randomization_manager, no shims) and asserts
 every robot + object DR term took effect, reading back the isaaclab physx-view properties
 (``get_masses`` / ``get_material_properties`` / ``get_inertias`` / ``get_coms``). The MuJoCo
-columns are under ../mujoco/; IsaacGym under ../isaacgym/.
+columns are under ../mujoco/.
 
 Marked ``isaacsim`` so only the IsaacSim CI job (``-m isaacsim``) collects it.
 ``importorskip("isaaclab")``/CUDA-gated otherwise.

@@ -19,11 +19,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import field
-from typing import Literal, Union
+from typing import Literal, TypeAlias
 
 from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
-from typing_extensions import TypeAlias
 
 from holosoma.config_types.value_types import UnitQuaternionWXYZTuple
 
@@ -38,7 +37,7 @@ DEFAULT_LIGHT_KEY = "default_light"
 def light_ray_direction(orientation: UnitQuaternionWXYZTuple) -> tuple[float, float, float]:
     """The ray direction of a light with a validated unit quaternion (w, x, y, z): the default
     straight-down (-Z) emission axis rotated by the quaternion, normalized. Backends that take a
-    direction vector (MuJoCo, IsaacGym) build it from this."""
+    direction vector (MuJoCo) builds it from this."""
     w, x, y, z = orientation
     dx = -2.0 * (x * z + w * y)
     dy = -2.0 * (y * z - w * x)
@@ -50,7 +49,7 @@ def light_ray_direction(orientation: UnitQuaternionWXYZTuple) -> tuple[float, fl
 def kelvin_to_rgb(kelvin: float) -> tuple[float, float, float]:
     """Neil Bartlett's blackbody color-temperature to linear RGB approximation (each channel [0, 1]).
 
-    Backends without a native color-temperature control (MuJoCo, IsaacGym) convert
+    Backends without a native color-temperature control (MuJoCo) convert
     ``color_temperature_k`` to a light color with this, so it matches Isaac Sim's native handling.
     Continuous over ~1000-40000 K: ~6600 K is near-white, lower is warm, higher is cool."""
     t = min(max(kelvin, 1000.0), 40000.0) / 100.0
@@ -89,26 +88,26 @@ class LightConfigBase:
     """Author the light. False leaves it out of the rig."""
 
     intensity: float = 1000.0
-    """Light intensity in radiance units (Isaac Sim). MuJoCo/IsaacGym have no radiance scale — their
+    """Light intensity in radiance units (Isaac Sim). MuJoCo has no radiance scale — its
     brightness comes from ``color`` (and ``exposure``)."""
 
     color: tuple[float, float, float] = (1.0, 1.0, 1.0)
     """Linear RGB color, used when ``color_temperature_k`` is None."""
 
     exposure: float = 0.0
-    """Exposure in EV. Isaac Sim applies it natively on top of ``intensity``; MuJoCo/IsaacGym fold it
+    """Exposure in EV. Isaac Sim applies it natively on top of ``intensity``; MuJoCo folds it
     into the light color (``color * 2 ** exposure``)."""
 
     color_temperature_k: float | None = None
     """Color temperature in Kelvin; overrides ``color`` when set. Isaac Sim applies it natively;
-    MuJoCo/IsaacGym convert it to an RGB color via :func:`kelvin_to_rgb`."""
+    MuJoCo converts it to an RGB color via :func:`kelvin_to_rgb`."""
 
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)
 class DefaultLightConfig(LightConfigBase):
-    """Each backend's native default lighting: Isaac Sim a directional sun, IsaacGym its viewer
-    directional light, MuJoCo its camera headlight. ``intensity``/``color``/``orientation`` tune the
-    backends that author a real light (Isaac Sim, IsaacGym); MuJoCo's headlight ignores them."""
+    """Each backend's native default lighting: Isaac Sim a directional sun, MuJoCo its camera
+    headlight. ``intensity``/``color``/``orientation`` tune the backends that author a real light
+    (Isaac Sim); MuJoCo's headlight ignores them."""
 
     orientation: UnitQuaternionWXYZTuple = field(default=(1.0, 0.0, 0.0, 0.0), metadata={"validate_default": True})
     """Orientation quaternion (w, x, y, z) of the sun; rotates the default straight-down (-Z) ray."""
@@ -171,6 +170,4 @@ class RectLightConfig(LightConfigBase):
 # Every concrete light type. ``SceneConfig.lights`` values are typed as this union so a saved config
 # reconstructs each light as its concrete type: a plain dict of a dome's fields rebuilds a
 # DomeLightConfig rather than the field-less base. Extend it when adding a light type.
-LightConfig: TypeAlias = Union[
-    DefaultLightConfig, DomeLightConfig, DistantLightConfig, SphereLightConfig, RectLightConfig
-]
+LightConfig: TypeAlias = DefaultLightConfig | DomeLightConfig | DistantLightConfig | SphereLightConfig | RectLightConfig

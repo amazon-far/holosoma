@@ -37,11 +37,11 @@ def raycast_kernel(
     f = int(0)  # hit face index
     max_dist = float(1e6)  # max raycast disance
     # ray cast against the mesh
-    if wp.mesh_query_ray(  # type: ignore[call-arg, truthy-bool]
+    if wp.mesh_query_ray(  # type: ignore[call-arg]
         mesh,
         ray_starts_world[tid],
         ray_directions_world[tid],
-        max_dist,  # type: ignore[arg-type]
+        max_dist,
         t,
         u,
         v,
@@ -95,16 +95,16 @@ def nearest_point_kernel(
     tid = wp.tid()
 
     max_dist = float(1e6)  # max raycast disance
-    query = wp.mesh_query_point(mesh, points[tid], max_dist=max_dist)  # type: ignore[arg-type]
-    if not query.result:  # type: ignore[attr-defined]
+    query = wp.mesh_query_point(mesh, points[tid], max_dist=max_dist)
+    if not query.result:
         return
 
     # Evaluate the position of the nearest location found.
     mesh_points[tid] = wp.mesh_eval_position(
         mesh,
-        query.face,  # type: ignore[attr-defined]
-        query.u,  # type: ignore[attr-defined]
-        query.v,  # type: ignore[attr-defined]
+        query.face,
+        query.u,
+        query.v,
     )
 
 

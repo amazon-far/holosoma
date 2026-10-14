@@ -19,7 +19,6 @@ from holosoma.config_types.sensor import (
     CameraSensorConfig,
     CustomLidarRayPatternConfig,
     GridLidarRayPatternConfig,
-    IsaacGymCameraConfig,
     IsaacSimCameraConfig,
     IsaacSimFisheyeConfig,
     IsaacSimLidarConfig,
@@ -108,7 +107,6 @@ def test_none_warp_render_flag_imposes_no_constraint() -> None:
 def test_camera_backend_configs_default_to_concrete_structs() -> None:
     camera = _cam()
     assert isinstance(camera.isaacsim, IsaacSimCameraConfig)
-    assert isinstance(camera.isaacgym, IsaacGymCameraConfig)
     assert isinstance(camera.mujoco, MujocoCameraConfig)
 
 
@@ -129,8 +127,6 @@ def test_camera_backend_configs_reject_none() -> None:
     mount = SensorMountConfig(target_kind="robot_link", target="pelvis")
     with pytest.raises(ValueError, match="isaacsim"):
         CameraSensorConfig(mount=mount, isaacsim=None)  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="isaacgym"):
-        CameraSensorConfig(mount=mount, isaacgym=None)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="mujoco"):
         CameraSensorConfig(mount=mount, mujoco=None)  # type: ignore[arg-type]
 

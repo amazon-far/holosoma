@@ -11,7 +11,7 @@ Exits 0 on success, non-zero with a message on failure. Run under each backend's
 
 Usage:
   python subset_write_assert.py --simulator isaacsim
-  python subset_write_assert.py --simulator isaacgym
+  python subset_write_assert.py --simulator isaacsim
   python subset_write_assert.py --simulator mjwarp
 """
 
@@ -36,7 +36,7 @@ from tests.simulators.static_move_assert import (
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Non-contiguous env_ids subset write probe.")
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacgym", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
     parser.add_argument("--num-envs", type=int, default=4)
     args = parser.parse_args()
     num_envs = args.num_envs

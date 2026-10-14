@@ -88,7 +88,7 @@ def spin_executor_until_stopped(executor: Any, stop_event: threading.Event, *, t
     while not stop_event.is_set():
         try:
             executor.spin_once(timeout_sec=timeout_sec)
-        except shutdown_exceptions:  # noqa: PERF203 - spin-loop shutdown is exception-signaled by rclpy.
+        except shutdown_exceptions:
             return
         except Exception:
             if stop_event.is_set():

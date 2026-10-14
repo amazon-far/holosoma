@@ -46,8 +46,8 @@ def run_simulation(config: RunSimConfig) -> None:
             # MuJoCo Warp only runs on CUDA, so cpu is never a valid choice for it.
             resolved_device = "cuda:0"
             logger.info("Auto-detected MuJoCo Warp backend - setting device to cuda:0")
-        elif sim_name in ("isaacsim", "isaacgym"):
-            # Isaac backends are GPU-first; prefer cuda:0 when it is actually available,
+        elif sim_name == "isaacsim":
+            # IsaacSim is GPU-first; prefer cuda:0 when it is actually available,
             # otherwise fall back to cpu (IsaacSim can run PhysX on CPU).
             if torch.cuda.is_available():
                 resolved_device = "cuda:0"
@@ -98,7 +98,7 @@ def main() -> None:
         "Examples:\n"
         "  python -m holosoma.run_sim # defaults \n"
         "  python -m holosoma.run_sim simulator:mujoco robot:t1_29dof_waist_wrist terrain:terrain_locomotion_plane\n"
-        "  python -m holosoma.run_sim simulator:isaacgym robot:g1_29dof terrain:terrain_locomotion_mix",
+        "  python -m holosoma.run_sim simulator:isaacsim robot:g1_29dof terrain:terrain_locomotion_mix",
     )
 
     # Run simulation directly with parsed config

@@ -136,7 +136,7 @@ def test_batched_body_refresh_preserves_order_quaternions_and_velocity_calls(
 
     assert [object_id for _, object_id in calls] == body_ids
     assert all(object_type == mujoco.mjtObj.mjOBJ_XBODY for object_type, _ in calls)
-    for actual_tensor, expected_tensor in zip(actual, expected):
+    for actual_tensor, expected_tensor in zip(actual, expected, strict=False):
         assert torch.equal(actual_tensor[0].float(), expected_tensor)
     assert backend.refresh_rigid_body_states() is actual
 
@@ -190,7 +190,7 @@ def test_contact_accumulation_preserves_float32_order_and_signs(monkeypatch: pyt
 
     actual = backend.compute_contact_forces()[0]
     expected = torch.zeros(backend.model.nbody, 3, dtype=torch.float32)
-    for geom_pair, force_64 in zip(geom_pairs, forces):
+    for geom_pair, force_64 in zip(geom_pairs, forces, strict=False):
         force_32 = torch.from_numpy(force_64).float()
         body_1, body_2 = backend.model.geom_bodyid[geom_pair]
         expected[body_1] -= force_32
@@ -279,7 +279,7 @@ def test_live_refresh_matches_legacy_state_contacts_and_history() -> None:
         sim._rigid_body_vel,
         sim._rigid_body_ang_vel,
     )
-    for actual, expected in zip(actual_state, expected_state):
+    for actual, expected in zip(actual_state, expected_state, strict=False):
         assert torch.equal(actual[0], expected)
     assert torch.equal(sim.contact_forces, expected_contacts)
     assert torch.equal(sim.contact_forces_history, expected_history)

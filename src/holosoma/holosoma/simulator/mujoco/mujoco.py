@@ -122,9 +122,9 @@ class MuJoCo(BaseSimulator):
         self.viewer_input: ViewerInputController | None = None
 
         # Command system for keyboard/joystick controls
-        # Initialize commands tensor matching IsaacGym format:
+        # Initialize commands tensor using the flattened command format:
         #    [vx, vy, vz, yaw_rate, walk_stand, waist_yaw, ..., height, ...]
-        # Shape: [num_envs, 9] to match IsaacGym command structure
+        # Shape: [num_envs, 9] for the canonical command structure
         self.commands: torch.Tensor | None = None  # Will be initialized in create_envs when num_envs is known
 
         logger.info("=== MuJoCo Simulator Initialization Completed ===")
@@ -416,7 +416,7 @@ class MuJoCo(BaseSimulator):
 
         # Map each robot body (by prefixed name) to its compiled MuJoCo body id,
         # in body_names order. This is the cross-backend ``body_ids`` mapping
-        # (body_ids[holosoma_idx] -> backend body id; mirrors IsaacGym/IsaacSim) used to
+        # (body_ids[holosoma_idx] -> backend body id; mirrors IsaacSim) used to
         # map a 0-based body_names index to the full-model xfrc/applied_forces layout
         # (e.g. virtual gantry). The tensor form gathers robot rows out of the
         # full-model physics tensors in refresh_sim_tensors.
@@ -633,10 +633,10 @@ class MuJoCo(BaseSimulator):
         self.dof_vel = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
 
         # Initialize contact forces tensor with correct shape [num_envs, num_bodies, 3]
-        # This matches the interface expected by holosoma (IsaacGym/IsaacSim pattern)
+        # This matches the interface expected by holosoma (IsaacSim pattern)
         self.contact_forces = torch.zeros(self.num_envs, self.num_bodies, 3, device=self.sim_device)
 
-        # Initialize contact forces history tensor to match IsaacGym/IsaacSim pattern
+        # Initialize contact forces history tensor to match IsaacSim pattern
         # Shape: [num_envs, history_length, num_bodies, 3]
         history_length = self.simulator_config.contact_sensor_history_length
         self.contact_forces_history = torch.zeros(
@@ -644,7 +644,7 @@ class MuJoCo(BaseSimulator):
         )
 
         # Initialize command system (Phase 1)
-        # Command tensor format matching IsaacGym: [vx, vy, vz, yaw_rate, walk_stand, waist_yaw, ..., height, ...]
+        # Command tensor format: [vx, vy, vz, yaw_rate, walk_stand, waist_yaw, ..., height, ...]
         self.commands = torch.zeros(self.num_envs, 9, device=self.sim_device, dtype=torch.float32)
         logger.info(f"Initialized command system with shape: {self.commands.shape}")
 
@@ -999,7 +999,7 @@ class MuJoCo(BaseSimulator):
 
         MuJoCo's freejoint qvel stores LINEAR velocity in world frame but ANGULAR velocity in the
         body's LOCAL frame. The unified actor-state representation (base_simulator) is world-frame for
-        BOTH (matching IsaacGym/IsaacSim), so convert at this backend boundary using the actor's
+        BOTH (matching IsaacSim), so convert at this backend boundary using the actor's
         world orientation (xyzw quat in cols 3:7). In-place on a copy; returns it.
         """
         if states.shape[0] == 0:
@@ -1043,7 +1043,7 @@ class MuJoCo(BaseSimulator):
         assert self.root_data
 
         if len(indices) == 0:
-            # Empty input is a uniform no-op across backends (matches IsaacGym/IsaacSim).
+            # Empty input is a uniform no-op across backends (matches IsaacSim).
             return torch.empty(0, 13, device=self.sim_device)
 
         resolved_objects = self.object_registry.resolve_indices(indices)
@@ -1115,7 +1115,7 @@ class MuJoCo(BaseSimulator):
         assert self.root_data is not None
 
         if len(indices) == 0:
-            # Empty input is a uniform no-op across backends (matches IsaacGym/IsaacSim);
+            # Empty input is a uniform no-op across backends (matches IsaacSim);
             # short-circuit before resolve/convert so we skip the stray write_state_updates
             # (mj_forward on ClassicBackend) at the tail.
             return
@@ -1214,7 +1214,7 @@ class MuJoCo(BaseSimulator):
     def write_state_updates(self) -> None:
         """Flush pending state writes so derived quantities reflect them.
 
-        Mirrors the cross-backend batch flush (IsaacGym: no-op; IsaacSim:
+        Mirrors the cross-backend batch flush (IsaacSim:
         ``scene.write_data_to_sim()``). For MuJoCo:
           - ClassicBackend: run ``mj_forward`` on the CPU data so xpos/xquat/cvel and
             other derived quantities reflect the qpos/qvel just written.
@@ -1260,7 +1260,7 @@ class MuJoCo(BaseSimulator):
         env_ids : Optional[EnvIds]
             Which environments to update (None = all).
         dof_states : Optional[torch.Tensor]
-            DOF states tensor (flattened IsaacGym format).
+            DOF states tensor (flattened format).
         """
         self.set_dof_state_tensor_robots(env_ids, dof_states)
 
@@ -1329,7 +1329,7 @@ class MuJoCo(BaseSimulator):
         env_ids : Optional[EnvIds]
             Which environments to update (None = all).
         dof_states : Optional[torch.Tensor]
-            DOF states in the IsaacGym-flattened 2D format ``[N * num_dof, 2]`` where
+            DOF states in the flattened 2D format ``[N * num_dof, 2]`` where
             ``[:, 0] = positions`` and ``[:, 1] = velocities``. The required first
             dimension depends on the active backend:
 
@@ -1361,12 +1361,12 @@ class MuJoCo(BaseSimulator):
             return
 
         assert dof_states is not None
-        # Both MuJoCo backends consume the IsaacGym-flattened 2D format only; neither
+        # Both MuJoCo backends consume the flattened 2D format only; neither
         # handles the 3D [num_envs, num_dofs, 2] form (that is IsaacSim-specific).
         if dof_states.dim() != 2:
             raise ValueError(
                 f"Unsupported dof_states tensor shape {tuple(dof_states.shape)}: expected a 2D "
-                f"[N * num_dof, 2] tensor (IsaacGym-flattened, [:, 0]=pos, [:, 1]=vel)."
+                f"[N * num_dof, 2] tensor (flattened, [:, 0]=pos, [:, 1]=vel)."
             )
         # The required first dimension is backend-specific: WarpBackend.set_dof_state
         # indexes the FULL global tensor by env_ids ([num_envs * num_dof, 2]), whereas
@@ -1411,7 +1411,7 @@ class MuJoCo(BaseSimulator):
         """Find a robot body's 0-based index in ``body_names``.
 
         Returns the holosoma-facing index (0-based over the robot-only ``body_names``,
-        world excluded), matching the cross-backend convention (IsaacGym/IsaacSim) and
+        world excluded), matching the cross-backend convention (IsaacSim) and
         the layout of the ``_rigid_body_*`` / ``contact_forces`` tensors. This is NOT
         the raw MuJoCo body id. Callers needing the raw MuJoCo body id (e.g. xfrc /
         ``applied_forces``) map through ``body_ids[index]``.

@@ -38,7 +38,7 @@ class SceneInterface(Protocol):
 class EnvOriginsScene:
     """Minimal :class:`SceneInterface` wrapping env origins for the tensor backends.
 
-    MuJoCo and IsaacGym have no rich scene object of their own (unlike IsaacSim's
+    MuJoCo has no rich scene object of its own (unlike IsaacSim's
     ``InteractiveScene``); their scene is just the per-env origins. This coerces the input to a
     float32 tensor on the sim device, validates its shape, and exposes it via ``env_origins``.
     """

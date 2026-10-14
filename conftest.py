@@ -1,9 +1,9 @@
-"""Pytest config: safe torch import order + backend-marker taxonomy.
+"""Pytest config: backend-marker taxonomy.
 
 CI selects tests positively: each job runs ``pytest -m "<backend>"`` for one run-target marker.
 
 Run-target markers (exactly one per test; mutually exclusive):
-    isaacgym / isaacsim / mujoco  — needs that simulator backend
+    isaacsim / mujoco             — needs that simulator backend
     no_sim                        — pure test, no simulator (CPU job)
     requires_inference            — needs the inference env (e2e job)
 
@@ -21,20 +21,16 @@ import os
 
 import pytest
 
-# Import torch before any isaacgym import during collection.
-from holosoma.utils.safe_torch_import import torch  # noqa: F401
-
-_RUN_TARGETS = ("isaacgym", "isaacsim", "mujoco", "no_sim", "requires_inference")
-_SIM_DIRS = ("isaacgym", "isaacsim", "mujoco")
+_RUN_TARGETS = ("isaacsim", "mujoco", "no_sim", "requires_inference")
+_SIM_DIRS = ("isaacsim", "mujoco")
 
 _ALL_MARKERS = {
-    "isaacgym": "Isaac Gym",
     "isaacsim": "Isaac Sim",
     "mujoco": "MuJoCo (either backend)",
     "mujoco_classic": "the MuJoCo ClassicBackend (CPU)",
     "mujoco_warp": "the MuJoCo WarpBackend (CUDA)",
-    "no_sim": "no simulator (pure / CPU-only)",
     "multi_gpu": "multiple GPUs",
+    "no_sim": "no simulator (pure / CPU-only)",
     "requires_inference": "the inference environment",
 }
 

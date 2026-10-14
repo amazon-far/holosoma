@@ -1,10 +1,10 @@
 # Holosoma
 
-Holosoma (Greek: "whole-body") is a comprehensive humanoid robotics framework for training and deploying reinforcement learning policies on humanoid robots, as well as motion retargeting. Supports locomotion (velocity tracking) and whole-body tracking tasks across multiple simulators (IsaacGym, IsaacSim, MJWarp, MuJoCo) with algorithms like PPO and FastSAC.
+Holosoma (Greek: "whole-body") is a comprehensive humanoid robotics framework for training and deploying reinforcement learning policies on humanoid robots, as well as motion retargeting. Supports locomotion (velocity tracking) and whole-body tracking tasks across multiple simulators (IsaacSim, MJWarp, MuJoCo) with algorithms like PPO and FastSAC.
 
 ## Features
 
-- **Multi-simulator support**: IsaacGym, IsaacSim, MuJoCo Warp (MJWarp), and MuJoCo (inference only)
+- **Multi-simulator support**: IsaacSim, MuJoCo Warp (MJWarp), and MuJoCo (inference only)
 - **Multiple RL algorithms**: PPO and FastSAC
 - **Robot support**: Unitree G1 and Booster T1 humanoids
 - **Task types**: Locomotion (velocity tracking) and whole-body tracking
@@ -23,7 +23,7 @@ src/
 
 ## Documentation
 
-- **[Training Guide](src/holosoma/README.md)** - Train locomotion and whole-body tracking policies in IsaacGym/IsaacSim
+- **[Training Guide](src/holosoma/README.md)** - Train locomotion and whole-body tracking policies in IsaacSim/MJWarp
 - **[Inference & Deployment Guide](src/holosoma_inference/README.md)** - Deploy policies to real robots or evaluate in MuJoCo simulation
 - **[Retargeting Guide](src/holosoma_retargeting/holosoma_retargeting/README.md)** - Convert human motion capture data to robot motions
 
@@ -34,9 +34,6 @@ src/
 Choose the appropriate setup script based on your use case:
 
 ```bash
-# For IsaacGym training
-bash scripts/setup_isaacgym.sh
-
 # For IsaacSim training
 # Requires Ubuntu 22.04 or later due to IsaacSim dependencies
 bash scripts/setup_isaacsim.sh
@@ -56,13 +53,13 @@ bash scripts/setup_retargeting.sh
 
 ### Training
 
-Train a G1 robot with FastSAC on IsaacGym:
+Train a G1 robot with FastSAC on IsaacSim:
 
 ```bash
-source scripts/source_isaacgym_setup.sh
+source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    simulator:isaacgym \
+    simulator:isaacsim \
     logger:wandb \
     --training.seed 1
 ```

@@ -4,8 +4,7 @@ Pin the cross-backend routing for ``link_physics`` and freejoint damping without
 
 - ``damping-decay`` is Isaac-only (driven by the PhysX config-time ``linear_damping`` path); the
   MuJoCo wrappers statically skip it.
-- ``dr-damping-governs`` (the runtime damping DR term): MuJoCo and IsaacSim supported, IsaacGym
-  self-skipped.
+- ``dr-damping-governs`` (the runtime damping DR term) runs on every backend.
 """
 
 from __future__ import annotations
@@ -34,12 +33,12 @@ def test_damping_decay_is_isaac_only():
 
 
 def test_dr_damping_governs_unchanged():
-    # Runtime damping DR term: MuJoCo and IsaacSim supported, IsaacGym self-skipped.
+    # Runtime damping DR term: supported on every surviving backend.
     scene_key, _fn, min_envs, mujoco_ok, unsupported = behavior_assert.SCENARIOS["dr-damping-governs"]
     assert scene_key == "dr-damping-pair"
     assert min_envs == 1
     assert mujoco_ok is True
-    assert unsupported == ("isaacgym",)
+    assert unsupported == ()
 
 
 def test_mujoco_wrappers_statically_skip_damping_decay():
@@ -57,8 +56,6 @@ def test_mujoco_wrappers_statically_skip_damping_decay():
 
 def test_damping_decay_runs_on_isaac():
     # An Isaac backend absent from the unsupported tuple runs damping-decay. Checked here without
-    # importing the Isaac-only wrapper modules (which importorskip on isaacgym/isaaclab, absent
-    # off-cluster).
+    # importing the Isaac-only wrapper module (which importorskips isaaclab, absent off-cluster).
     _scene, _fn, _min, _mj, unsupported = behavior_assert.SCENARIOS["damping-decay"]
-    assert "isaacgym" not in unsupported
     assert "isaacsim" not in unsupported

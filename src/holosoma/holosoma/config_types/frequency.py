@@ -14,11 +14,10 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Union
 
 from loguru import logger
 
-DecimationLike = Union[int, str]
+DecimationLike = int | str
 """A rate field: a decimation int (every Nth base tick), or a frequency string resolved against a base
 rate via :func:`resolve_decimation`. Form-checked by :func:`validate_decimation_like`."""
 

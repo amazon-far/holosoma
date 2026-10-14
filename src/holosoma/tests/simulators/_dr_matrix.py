@@ -3,7 +3,7 @@
 The DR terms themselves are backend-agnostic: every term is called identically on every
 backend (the per-backend dispatch lives inside the term). Only *reading back* the mutated
 physics-model field differs — MuJoCo classic exposes float64 numpy on ``backend.model``,
-MuJoCo Warp a per-world ``warp_model_bridge`` view, IsaacGym/IsaacSim per-actor property
+MuJoCo Warp a per-world ``warp_model_bridge`` view, IsaacSim per-actor property
 structs. So these helpers take a small ``ModelReader`` that abstracts the four read-backs and
 run the FULL matrix of DR terms against ONE already-built real environment.
 
@@ -25,7 +25,6 @@ from typing import Protocol, cast
 
 import torch
 
-from holosoma.managers.randomization.exceptions import RandomizerNotSupportedError
 from holosoma.managers.randomization.terms import locomotion as L
 from holosoma.managers.randomization.terms import objects as O
 from holosoma.simulator.shared.object_registry import ObjectType
@@ -66,7 +65,7 @@ def build_full_env(simulator_cfg, *, num_envs: int, device: str, scene_cfg=None,
     Parameters
     ----------
     simulator_cfg : SimulatorConfig
-        One of ``config_values.simulator.{mujoco, mjwarp, isaacgym, isaacsim}``.
+        One of ``config_values.simulator.{mujoco, mjwarp, isaacsim}``.
     num_envs : int
         1 for the MuJoCo ClassicBackend (single-env only); >1 for the GPU backends.
     device : str
@@ -75,7 +74,7 @@ def build_full_env(simulator_cfg, *, num_envs: int, device: str, scene_cfg=None,
         Scene preset; defaults to ``free_and_static`` so object DR has a free body to target.
     """
     # Imported lazily: importing config_values / train_agent pulls in the simulator stack, which
-    # the per-backend launcher (isaacgym/isaacsim) must initialize before torch is imported.
+    # the per-backend launcher (isaacsim) must initialize before torch is imported.
     from holosoma.config_types.env import get_tyro_env_config
     from holosoma.config_values import experiment
     from holosoma.train_agent import training_context
@@ -95,9 +94,10 @@ def build_full_env(simulator_cfg, *, num_envs: int, device: str, scene_cfg=None,
             base.training, num_envs=num_envs, headless=True, seed=seed, torch_deterministic=False
         ),
     )
-    with training_context(cfg) as context, context.simulation_session(
-        get_class(cfg.env_class)(get_tyro_env_config(cfg), device=device)
-    ) as env:
+    with (
+        training_context(cfg) as context,
+        context.simulation_session(get_class(cfg.env_class)(get_tyro_env_config(cfg), device=device)) as env,
+    ):
         yield env
 
 
@@ -113,7 +113,7 @@ class ModelReader(Protocol):
     banner does not claim that field for the backend.
     """
 
-    # Whether ``body_com`` returns the live integrated CoM after a CoM write (see _IsaacGymReader).
+    # Whether ``body_com`` returns the live integrated CoM after a CoM write.
     COM_READBACK_TRUSTED: bool = True
     # Whether the backend models restitution and exposes it (only IsaacSim, see _IsaacSimReader).
     RESTITUTION_READBACK_TRUSTED: bool = False
@@ -149,7 +149,7 @@ DOF_VEL = (0.1, 0.2)
 OBJ_MASS_ADD = (5.0, 6.0)
 OBJ_FRICTION = (0.2, 0.3)
 # Restitution band disjoint from friction so a mis-wired slot is unambiguous; IsaacSim only
-# (the only backend that models restitution — IsaacGym/MuJoCo ignore it, gated below).
+# (the only backend that models restitution — MuJoCo ignore it, gated below).
 OBJ_RESTITUTION = (0.7, 0.8)
 OBJ_INERTIA_IXX_SCALE = (2.0, 3.0)
 
@@ -165,7 +165,7 @@ def run_robot_dr(env, reader: ModelReader) -> list[str]:
     RFI-limit, action-delay, DOF-state randomizers (manager/action state, read directly).
 
     Returns the list of check labels that were SKIPPED because the backend cannot honestly read
-    the live field back (e.g. ``["base CoM"]`` on IsaacGym). The caller uses this to scope the
+    the live field back (e.g. ``["base CoM"]``). The caller uses this to scope the
     success banner so it never claims a field it did not actually verify.
     """
     skipped: list[str] = []
@@ -214,12 +214,12 @@ def run_robot_dr(env, reader: ModelReader) -> list[str]:
 
     # --- base CoM (add to body_ipos) ------------------------------------------------------------
     # The setup preset already applied a base-CoM bias, and the backends differ in how a second
-    # call composes: MuJoCo ADDs to body_ipos (accumulate), IsaacGym overwrites from the original.
+    # call composes: MuJoCo ADDs to body_ipos (accumulate).
     # A zero-range call first neutralizes any prior bias to a clean baseline so the before/after
     # delta equals exactly this call's offset on either semantics.
     #
     # The band assertion reads the LIVE CoM via reader.body_com and is gated by the reader's
-    # COM_READBACK_TRUSTED flag. On IsaacGym that flag is False: its get_actor_rigid_body_properties
+    # COM_READBACK_TRUSTED flag. A backend sets it False when its property read-back
     # does not reliably reflect a CoM write back (undocumented/version-fragile) and the state tensor
     # carries no body-frame CoM, so there is NO trustworthy live read-back in this harness. We still
     # RUN the term (so a hard write-path failure raises) but SKIP the band assertion and record it,
@@ -357,7 +357,7 @@ def run_object_dr(env, reader: ModelReader) -> None:
     )
 
     # --- object material (friction abs; + restitution on IsaacSim only) -------------------------
-    # Restitution is modelled only by IsaacSim (PhysX material slot 2); IsaacGym and MuJoCo ignore
+    # Restitution is modelled only by IsaacSim (PhysX material slot 2); MuJoCo ignores
     # restitution_range entirely (they log a warning and set sliding friction only). So we pass a
     # DISJOINT restitution band and assert it only when the reader declares restitution trusted —
     # never where the backend would ignore the write (which would make the assert vacuous/false).
@@ -374,7 +374,6 @@ def run_object_dr(env, reader: ModelReader) -> None:
         sampler=_sampler(env),
         object_names=[name],
         material={
-            "isaacgym": {"friction": OBJ_FRICTION, "restitution": restitution_range},
             "isaacsim": {
                 "static_friction": OBJ_FRICTION,
                 "dynamic_friction": OBJ_FRICTION,
@@ -438,15 +437,6 @@ LOGU_LINK_MASS_SCALE = {"kind": "log_uniform", "low": 2.0, "high": 3.0}  # stric
 SIGNED_LOGU_MASS_ADD = {"kind": "log_uniform", "low": -1.0, "high": 3.0}  # signed -> invalid (must raise)
 GAUSS_OBJ_MASS_ADD = {"kind": "gaussian", "low": 5.0, "high": 6.0}
 EXPLICIT_GAUSS_BASE_MASS = {"kind": "gaussian", "low": 2.0, "high": 3.0, "mean": 2.5, "std": 0.1}
-
-
-def _assert_damping_term_unsupported(env, idx, term, object_name: str) -> None:
-    try:
-        term(env, idx, sampler=_sampler(env), damping_range=(0.0, 0.05), object_names=[object_name])
-    except RandomizerNotSupportedError:
-        pass
-    else:
-        raise AssertionError(f"IsaacGym {term.__name__} should raise RandomizerNotSupportedError")
 
 
 def run_distribution_dr(env, reader: ModelReader) -> list[str]:
@@ -526,7 +516,7 @@ def run_distribution_dr(env, reader: ModelReader) -> list[str]:
     else:
         raise AssertionError("log_uniform on a signed range should raise ValueError, but did not")
 
-    # (5) gaussian FRICTION lands in-band on every backend (continuous on IsaacGym/MuJoCo;
+    # (5) gaussian FRICTION lands in-band on every backend (continuous on MuJoCo;
     #     64-bucket quantile staircase on IsaacSim — both marginal-matched to the same band). Uses
     #     GAUSS_FRICTION (disjoint from the ROBOT_FRICTION band run_robot_dr already applied) so the
     #     "took effect" check is unambiguous even though the keyed sampler reuses the same uniform.
@@ -570,12 +560,6 @@ def run_distribution_dr(env, reader: ModelReader) -> list[str]:
         assert lo - 1e-2 <= after - before <= hi + 1e-2, f"gaussian object mass offset out of band: {before} -> {after}"
     else:
         skipped.append("object-mass gaussian (robot-only scene)")
-
-    # IsaacGym has no runtime body-damping path; assert BOTH damping terms raise rather than silently
-    # no-op (covers linear AND angular — only linear is exercised behaviorally elsewhere).
-    if free and env.simulator.get_simulator_type() == SimulatorType.ISAACGYM:
-        for term in (O.randomize_object_linear_damping_startup, O.randomize_object_angular_damping_startup):
-            _assert_damping_term_unsupported(env, idx, term, free[0])
 
     # Robot material term (IsaacSim-only; distinct from randomize_friction_startup). Friction lands in
     # band per the reader; restitution only asserted where the reader trusts it (gated above).

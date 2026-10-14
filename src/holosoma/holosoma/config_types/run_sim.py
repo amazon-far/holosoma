@@ -11,9 +11,7 @@ from __future__ import annotations
 import datetime
 import warnings
 from dataclasses import dataclass, field
-from typing import Any
-
-from typing_extensions import Annotated
+from typing import Annotated, Any
 
 import holosoma.config_values.plugin
 import holosoma.config_values.robot
@@ -57,7 +55,7 @@ def _warn_env_class_deprecated(usage: str) -> None:
         f"for env-based entry points. This {usage} becomes an error after "
         f"{_ENV_CLASS_REMOVAL_DATE.isoformat()}."
     )
-    if datetime.datetime.now(tz=datetime.timezone.utc).date() > _ENV_CLASS_REMOVAL_DATE:
+    if datetime.datetime.now(tz=datetime.UTC).date() > _ENV_CLASS_REMOVAL_DATE:
         raise RuntimeError(message)
     # FutureWarning: shown by default (DeprecationWarning is filtered outside __main__).
     warnings.warn(message, FutureWarning, stacklevel=3)
@@ -70,7 +68,7 @@ class RunSimConfig:
 
     Usage Examples:
         python -m holosoma.run_sim simulator:mujoco robot:t1 terrain:terrain-locomotion-plane
-        python -m holosoma.run_sim simulator:isaacgym robot:g1 terrain:terrain-locomotion-mix
+        python -m holosoma.run_sim simulator:isaacsim robot:g1 terrain:terrain-locomotion-mix
     """
 
     # Core components for simulation - using Annotated subcommands like ExperimentConfig
@@ -125,8 +123,8 @@ class RunSimConfig:
 
     device: str | None = None
     """Device to use for simulation. None (the default) auto-detects based on the simulator
-    backend: cuda:0 for MuJoCo Warp, cuda:0 for IsaacSim/IsaacGym when CUDA is available (else
-    cpu), and cpu for classic MuJoCo. Pass an explicit value (e.g. "cpu" or "cuda:1") to override.
+    backend: cuda:0 for MuJoCo Warp, cuda:0 for IsaacSim when CUDA is available (else cpu), and
+    cpu for classic MuJoCo. Pass an explicit value (e.g. "cpu" or "cuda:1") to override.
     """
 
     def __post_init__(self) -> None:

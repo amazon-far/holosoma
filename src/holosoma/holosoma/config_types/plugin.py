@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import abc
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from pydantic import ConfigDict, field_validator, model_validator
 from pydantic.dataclasses import dataclass as pydantic_dataclass

@@ -7,7 +7,7 @@ name = "holosoma-inference"
 version = "0.1.2"
 description = "holosoma-inference: inference components for humanoid robot policies"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 authors = [{ name = "Amazon FAR Team" }]
 keywords = ["humanoid", "robotics", "inference", "policy", "onnx"]
 dependencies = [
@@ -26,15 +26,8 @@ dependencies = [
     "defusedxml",
     "evdev",
     "importlib_metadata>=4.6; python_version<'3.12'",
-    "eval_type_backport; python_version<'3.10'",
-    # pinocchio, imported by policies/wbt_utils.py. pin and its dep coal both stopped
-    # shipping cp38 wheels while still advertising Requires-Python >=3.8, so on the
-    # isaacgym env (py3.8) pip falls back to their sdists and the source builds need
-    # cmeel packages that were never published. Cap both to their last cp38 release,
-    # on the 3.8 leg only; py3.9+ tracks latest.
-    "pin<=3.7.0; python_version<'3.9'",
-    "coal<=3.0.1; python_version<'3.9'",
-    "pin; python_version>='3.9'",
+    # pinocchio, imported by policies/wbt_utils.py.
+    "pin",
 ]
 
 [project.optional-dependencies]

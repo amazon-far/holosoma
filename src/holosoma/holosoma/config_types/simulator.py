@@ -304,7 +304,7 @@ class SimulatorInitConfig:
     """Top-level simulator initialisation configuration."""
 
     name: str
-    """Name of the simulator backend (e.g. ``isaacgym``)."""
+    """Name of the simulator backend (e.g. ``isaacsim``)."""
 
     sim: SimEngineConfig
     """Simulation engine configuration settings."""
@@ -351,7 +351,7 @@ class SimulatorInitConfig:
     - 'warp': GPU-accelerated multi-environment with mujoco_warp
 
     This setting only applies when using the MuJoCo simulator (name='mujoco').
-    For other simulators (isaacgym, isaacsim), this field is ignored.
+    For other simulators (isaacsim), this field is ignored.
 
     Command line usage:
         --simulator.config.mujoco-backend=warp

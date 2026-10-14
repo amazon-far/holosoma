@@ -11,7 +11,6 @@ Policy inference for humanoid robot policies.
 
 | Simulator               | Locomotion | WBT |
 |:-----------------------:|:----------:|:---:|
-| IsaacGym                | ✅         | ❌  |
 | IsaacSim                | ✅         | ✅  |
 | MuJoCo (inference only) | ✅         | ✅  |
 

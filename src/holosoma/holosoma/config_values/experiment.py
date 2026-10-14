@@ -1,5 +1,6 @@
+from typing import Annotated
+
 import tyro
-from typing_extensions import Annotated
 
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_values.loco.g1.experiment import g1_29dof, g1_29dof_fast_sac

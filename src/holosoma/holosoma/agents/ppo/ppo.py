@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import itertools
 import os
-from typing import Any, Callable, TypedDict, cast
+from collections.abc import Callable
+from typing import Any, TypedDict, cast
 
 import torch
 import torch.distributed as dist

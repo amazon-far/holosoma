@@ -30,9 +30,9 @@ Example Usage:
 from __future__ import annotations
 
 import functools
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Any, Callable, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from holosoma.utils.safe_torch_import import torch
 

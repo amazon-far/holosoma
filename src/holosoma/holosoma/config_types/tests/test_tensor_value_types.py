@@ -65,7 +65,7 @@ def test_unit_tensors_reject_bad_norms(alias: Any, norm: float) -> None:
 @pytest.mark.parametrize("delta", [-1e-4, -1e-6, 0.0, 1e-6, 1e-4])
 def test_unit_tensors_normalize_inclusive_tolerance(alias: Any, dtype: torch.dtype, delta: float) -> None:
     values = torch.tensor([[-(1.0 + delta), 0.0, 0.0, 0.0]], dtype=dtype)
-    result = TypeAdapter(alias).validate_python(values)
+    result: torch.Tensor = TypeAdapter(alias).validate_python(values)
     assert torch.equal(result, torch.tensor([[-1.0, 0.0, 0.0, 0.0]], dtype=dtype))
 
 
@@ -79,7 +79,7 @@ def test_unit_tensors_preserve_shape_dtype_sign_order_and_input(alias: Any, dtyp
     storage[..., 3:7] = expected * 1.00001
     values = storage[..., 3:7]
     before = storage.clone()
-    result = TypeAdapter(alias).validate_python(values)
+    result: torch.Tensor = TypeAdapter(alias).validate_python(values)
     assert result is not values
     assert result.shape == values.shape
     assert result.dtype == values.dtype
@@ -93,7 +93,7 @@ def test_unit_tensors_preserve_shape_dtype_sign_order_and_input(alias: Any, dtyp
 def test_tensor_aliases_accept_empty_batches_and_single_quaternions(alias: Any, shape: tuple[int, ...]) -> None:
     values = torch.zeros(shape)
     values[..., 3] = 1.0
-    result = TypeAdapter(alias).validate_python(values)
+    result: torch.Tensor = TypeAdapter(alias).validate_python(values)
     assert result.shape == shape
     assert torch.equal(result, values)
 
@@ -104,7 +104,7 @@ def test_low_precision_norm_cannot_hide_large_deviation(dtype: torch.dtype) -> N
     with pytest.raises(ValidationError, match="not unit-norm"):
         TypeAdapter(UnitQuaternionWXYZTensor).validate_python(values)
     unit = torch.tensor([[0.5, -0.5, 0.5, -0.5]], dtype=dtype)
-    result = TypeAdapter(UnitQuaternionWXYZTensor).validate_python(unit)
+    result: torch.Tensor = TypeAdapter(UnitQuaternionWXYZTensor).validate_python(unit)
     assert result.dtype == dtype
     assert torch.equal(result, unit)
 
@@ -143,7 +143,7 @@ def test_tensor_aliases_work_in_models_dataclasses_and_validated_functions() -> 
 
 def test_unit_tensor_validation_preserves_autograd() -> None:
     values = torch.tensor([[0.0, 0.0, 0.0, 1.00001]], requires_grad=True)
-    result = TypeAdapter(UnitQuaternionXYZWTensor).validate_python(values)
+    result: torch.Tensor = TypeAdapter(UnitQuaternionXYZWTensor).validate_python(values)
     result.sum().backward()
     assert values.grad is not None
     assert torch.isfinite(values.grad).all()
@@ -152,7 +152,7 @@ def test_unit_tensor_validation_preserves_autograd() -> None:
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
 def test_unit_tensor_validation_preserves_cuda_device() -> None:
     values = torch.tensor([[0.0, 0.0, 0.0, -1.00001]], device="cuda")
-    result = TypeAdapter(UnitQuaternionXYZWTensor).validate_python(values)
+    result: torch.Tensor = TypeAdapter(UnitQuaternionXYZWTensor).validate_python(values)
     assert result.device == values.device
     assert result.dtype == values.dtype
     assert torch.equal(result, torch.tensor([[0.0, 0.0, 0.0, -1.0]], device=values.device))

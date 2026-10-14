@@ -58,7 +58,7 @@ def test_quat_yaw(test_angles: list[list[float]]) -> None:
 
 
 def test_quat_apply_yaw(test_angles: list[list[float]], test_vecs: list[list[float]]) -> None:
-    for euler, vec in zip(test_angles, test_vecs):
+    for euler, vec in zip(test_angles, test_vecs, strict=False):
         quat = Rotation.from_euler("xyz", euler, degrees=False).as_quat()
         quat_torch = torch.tensor(quat).unsqueeze(0).float()
         vec_torch = torch.tensor(vec).unsqueeze(0).float()

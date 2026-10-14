@@ -34,10 +34,10 @@ What it demonstrates, in order:
      RandomizationManager's *setup* terms, so the manager APPLIES them once at env build (the demo
      never calls a term directly — it sets config and reads the result back). Each term dispatches
      per backend: on MuJoCo (Warp GPU + Classic CPU) every property routes through the shared
-     ``randomize_field`` chokepoint, while IsaacGym uses native ``gym.set_actor_rigid_*_properties``
-     and IsaacSim uses isaaclab event helpers. Mass, friction, and inertia are ALL cross-backend.
+     ``randomize_field`` chokepoint, while IsaacSim uses isaaclab event helpers against the live
+     USD stage. Mass, friction, and inertia are ALL cross-backend.
      The demo reads mass + friction back from the live model on MuJoCo (verifying they landed in
-     the configured bands); on IsaacGym/IsaacSim it reports which setup terms the manager ran (the
+     the configured bands); on IsaacSim it reports which setup terms the manager ran (the
      per-backend physics effect is asserted in the dedicated DR tests).
 
 Run it (MuJoCo CPU needs no GPU; the others need their SDK + a CUDA device):
@@ -49,7 +49,7 @@ Run it (MuJoCo CPU needs no GPU; the others need their SDK + a CUDA device):
     python -m holosoma.examples.object_managers_demo --backend mjwarp --num-envs 4
 
     # Isaac backends (need the respective SDK):
-    python -m holosoma.examples.object_managers_demo --backend isaacgym --num-envs 4
+    python -m holosoma.examples.object_managers_demo --backend isaacsim --num-envs 4
     python -m holosoma.examples.object_managers_demo --backend isaacsim
 
 The scene is the ``object-managers-demo`` preset (``config_values/scene.py``); it is also
@@ -73,11 +73,10 @@ if TYPE_CHECKING:
     from holosoma.utils.safe_torch_import import torch
 
 # name -> config_values.simulator preset attribute. MuJoCo classic is CPU + single-env only;
-# mjwarp/isaacgym/isaacsim are GPU and support multiple envs.
+# mjwarp/isaacsim are GPU and support multiple envs.
 _BACKENDS = {
     "mujoco": ("mujoco", "cpu"),
     "mjwarp": ("mjwarp", "cuda:0"),
-    "isaacgym": ("isaacgym", "cuda:0"),
     "isaacsim": ("isaacsim", "cuda:0"),
 }
 
@@ -141,7 +140,6 @@ def _experiment_config(backend: str, num_envs: int, headless: bool) -> Experimen
         func=f"{_OBJ_RAND}:randomize_object_rigid_body_material_startup",
         params={
             "material": {
-                "isaacgym": {"friction": [0.2, 0.3], "restitution": [0.0, 0.0]},
                 "isaacsim": {
                     "static_friction": [0.2, 0.3],
                     "dynamic_friction": [0.2, 0.3],
@@ -202,7 +200,7 @@ def run_demo(backend: str, num_envs: int, headless: bool = True) -> int:
     Builds the env inside ``training_context`` (which owns the IsaacSim app lifecycle — closing it
     only at block exit), so the whole demo runs while the simulator is alive.
     """
-    # Imported lazily so the per-backend launcher (isaacgym/isaacsim) initializes before torch.
+    # Imported lazily so the per-backend launcher (isaacsim) initializes before torch.
     from holosoma.config_types.env import get_tyro_env_config
     from holosoma.simulator.shared.object_registry import ObjectType
     from holosoma.train_agent import training_context
@@ -216,9 +214,10 @@ def run_demo(backend: str, num_envs: int, headless: bool = True) -> int:
     cfg = _experiment_config(backend, num_envs, headless)
     seeding(cfg.training.seed)
 
-    with training_context(cfg) as context, context.simulation_session(
-        get_class(cfg.env_class)(get_tyro_env_config(cfg), device=device)
-    ) as env:
+    with (
+        training_context(cfg) as context,
+        context.simulation_session(get_class(cfg.env_class)(get_tyro_env_config(cfg), device=device)) as env,
+    ):
         sim = env.simulator
         env_ids = torch.arange(env.num_envs, device=env.device)
 
@@ -317,7 +316,7 @@ def _report_object_dr(env: LeggedRobotLocomotionManager, free_names: list[str], 
     Reads (does NOT apply) each free body's mass + sliding friction. On MuJoCo, reads from the
     live model (per-world GPU bridge on WarpBackend, else the CPU model) and verifies the values
     landed in the configured bands (default 0.1 kg mass << [5,6] proves the manager ran the DR).
-    On IsaacGym/IsaacSim the model fields aren't introspected here — the per-backend physics
+    On IsaacSim the model fields aren't introspected here — the per-backend physics
     effect is asserted in the dedicated DR tests — so just confirm the bodies are addressable.
     """
     sim = env.simulator
@@ -376,7 +375,7 @@ def _close(a: torch.Tensor, b: torch.Tensor, atol: float = 1e-4) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--backend", choices=list(_BACKENDS), default="mujoco", help="Simulator backend.")
-    parser.add_argument("--num-envs", type=int, default=1, help="Parallel envs (>1 needs mjwarp/isaacgym/isaacsim).")
+    parser.add_argument("--num-envs", type=int, default=1, help="Parallel envs (>1 needs mjwarp/isaacsim).")
     parser.add_argument("--headless", choices=["true", "false"], default="true")
     args = parser.parse_args()
 

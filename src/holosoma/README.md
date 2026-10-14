@@ -4,7 +4,7 @@ Core training framework for humanoid robot reinforcement learning with support f
 
 | **Category** | **Supported Options** |
 |-------------|----------------------|
-| **Simulators** | IsaacGym, IsaacSim, MJWarp (training) \| Mujoco (evaluation) |
+| **Simulators** | IsaacSim, MJWarp (training) \| Mujoco (evaluation) |
 | **Algorithms** | PPO, FastSAC |
 | **Robots** | Unitree G1, Booster T1 |
 
@@ -19,11 +19,11 @@ All training/eval scripts support `--help` for discovering available flags, e.g.
 Train robots to track velocity commands.
 
 ```bash
-# G1 with FastSAC on IsaacGym
-source scripts/source_isaacgym_setup.sh
+# G1 with FastSAC on IsaacSim
+source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    simulator:isaacgym \
+    simulator:isaacsim \
     logger:wandb \
     --training.seed 1
 
@@ -148,7 +148,7 @@ This evaluation mode:
 ### Cross-Simulator Evaluation (MuJoCo)
 
 For testing trained policies in MuJoCo simulation or deploying to real robots, see the [holosoma_inference documentation](../holosoma_inference/README.md). This covers:
-- Sim-to-sim evaluation (IsaacGym/IsaacSim → MuJoCo)
+- Sim-to-sim evaluation (IsaacSim/MJWarp → MuJoCo)
 - Real robot deployment (both locomotion and WBT)
 
 **Note**: ONNX policies are typically exported alongside `.pt` checkpoints during training, but can also be generated using the in-training evaluation script above.
@@ -195,36 +195,35 @@ If training fails on headless servers with display/rendering errors (e.g., `GLXB
 
 - **IsaacSim:** Disable video with `--logger.video.enabled False`, or force EGL with `DISPLAY= python ...`, or use virtual display with `xvfb-run -a python ...`
 - **MJWarp/MuJoCo:** Set environment variable before training: `export MUJOCO_GL=egl`. See [MuJoCo docs](https://mujoco.readthedocs.io/en/stable/programming/index.html#using-opengl)
-- **IsaacGym:** Usually works in headless environments. If issues occur, disable video with `--logger.video.enabled False`
 
 ### Terrain
 
 ```bash
 # Use plane terrain instead of mixed terrain
-source scripts/source_isaacgym_setup.sh
+source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    simulator:isaacgym \
+    simulator:isaacsim \
     terrain:terrain-locomotion-plane
 ```
 
 ### Multi-GPU Training
 
 ```bash
-source scripts/source_isaacgym_setup.sh
+source scripts/source_isaacsim_setup.sh
 torchrun --nproc_per_node=4 src/holosoma/holosoma/train_agent.py \
     exp:t1-29dof-fast-sac \
-    simulator:isaacgym \
+    simulator:isaacsim \
     --training.num-envs 16384  # global/total number of environments
 ```
 
 ### Custom Reward Weights
 
 ```bash
-source scripts/source_isaacgym_setup.sh
+source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    simulator:isaacgym \
+    simulator:isaacsim \
     --reward.terms.tracking-lin-vel.weight=2.5 \
     --reward.terms.feet-phase.params.swing-height=0.12
 ```
@@ -233,10 +232,10 @@ python src/holosoma/holosoma/train_agent.py \
 
 ```bash
 # Disable observation noise
-source scripts/source_isaacgym_setup.sh
+source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    simulator:isaacgym \
+    simulator:isaacsim \
     --observation.groups.actor-obs.enable-noise=False
 ```
 
@@ -245,10 +244,10 @@ python src/holosoma/holosoma/train_agent.py \
 Some policies benefit from stacking multiple timesteps of observations. You can increase the history length used during training with:
 
 ```bash
-source scripts/source_isaacgym_setup.sh
+source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    simulator:isaacgym \
+    simulator:isaacsim \
     --observation.groups.actor_obs.history-length 4
 ```
 
@@ -258,17 +257,17 @@ Make sure to pass the same history length when running inference so the exported
 
 ```bash
 # Disable curriculum
-source scripts/source_isaacgym_setup.sh
+source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    simulator:isaacgym \
+    simulator:isaacsim \
     --curriculum.setup-terms.penalty-curriculum.params.enabled=False
 
 # Custom curriculum threshold (for shorter episodes)
-source scripts/source_isaacgym_setup.sh
+source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    simulator:isaacgym \
+    simulator:isaacsim \
     --simulator.config.sim.max-episode-length-s=10.0 \
     --curriculum.setup-terms.penalty-curriculum.params.level-up-threshold=350
 ```
@@ -276,10 +275,10 @@ python src/holosoma/holosoma/train_agent.py \
 ### Domain Randomization
 
 ```bash
-source scripts/source_isaacgym_setup.sh
+source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    simulator:isaacgym \
+    simulator:isaacsim \
     --randomization.setup-terms.push-randomizer-state.params.enabled=False \
     --randomization.setup-terms.randomize-base-com-startup.params.enabled=True \
     --randomization.setup-terms.mass-randomizer.params.added-mass-range=[-1.0,3.0]

@@ -26,6 +26,11 @@ def run_mini_training(workflow_name: str) -> str:
             "python",
             f"{REPO_ROOT}/src/holosoma/holosoma/train_agent.py",
             f"exp:{workflow_name}",
+            # Pin the backend instead of inheriting the preset default: this job trains in the
+            # combined image's MuJoCo env, so an implicit default would try to build whatever
+            # backend the preset happens to name and fail on a missing SDK. mjwarp (not classic
+            # mujoco) keeps this on the GPU, which ClassicBackend cannot do -- it is single-env only.
+            "simulator:mjwarp",
             "--algo.config.num-learning-iterations=2",
             "--training.num-envs=4",
             "--logger.video.enabled=False",

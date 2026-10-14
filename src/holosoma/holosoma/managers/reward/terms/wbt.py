@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, List
+from typing import TYPE_CHECKING, Any
 
 import torch
 from loguru import logger
@@ -167,7 +167,7 @@ class UndesiredContacts(RewardTermBase):
     #########################################################################################################
     ## Internal Helper functions
     #########################################################################################################
-    def _get_index_of_a_in_b(self, a_names: List[str], b_names: List[str], device: str = "cpu") -> torch.Tensor:
+    def _get_index_of_a_in_b(self, a_names: list[str], b_names: list[str], device: str = "cpu") -> torch.Tensor:
         indexes = []
         for name in a_names:
             assert name in b_names, f"The specified name ({name}) doesn't exist: {b_names}"

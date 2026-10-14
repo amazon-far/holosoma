@@ -142,23 +142,6 @@ ISAACSIM_ONLY_WORKFLOWS = [
 ]
 
 
-# Default workflows run on simulator.isaacgym (the experiment-preset default).
-@pytest.mark.isaacgym
-@pytest.mark.parametrize(
-    "workflow_name",
-    WORKFLOWS,
-)
-@pytest.mark.parametrize(
-    "multi_gpu",
-    [
-        pytest.param(False, id="single-gpu"),
-        pytest.param(True, marks=pytest.mark.multi_gpu, id="multi-gpu"),
-    ],
-)
-def test_training_and_eval_workflow(workflow_name: str, multi_gpu: bool):
-    assert_training_and_eval_workflow(workflow_name, multi_gpu=multi_gpu)
-
-
 @pytest.mark.isaacsim
 @pytest.mark.parametrize(
     "workflow_name",

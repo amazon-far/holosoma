@@ -12,7 +12,7 @@ Main script that runs nightly training experiments. It:
 
 Usage:
 ```bash
-python tests/nightly/nightly.py exp:g1-29dof logger:wandb simulator:isaacgym
+python tests/nightly/nightly.py exp:g1-29dof logger:wandb simulator:isaacsim
 ```
 
 ### `run_summary.py`

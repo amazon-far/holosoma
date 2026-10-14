@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Sequence, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from holosoma.config_types.frequency import resolve_decimation
 from holosoma.config_types.sensor import CameraSensorConfig

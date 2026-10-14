@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Annotated, Any, TypeAlias
 
 import pytest
-from typing_extensions import Annotated, TypeAlias
 
 from holosoma.config_types.plugin import (
     ClockPublishPluginConfig,

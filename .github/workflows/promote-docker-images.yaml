@@ -38,7 +38,6 @@ jobs:
       holosoma_digest: ${{ steps.verify.outputs.holosoma_digest }}
       holosoma_inference_digest: ${{ steps.verify.outputs.holosoma_inference_digest }}
       holosoma_retargeting_digest: ${{ steps.verify.outputs.holosoma_retargeting_digest }}
-      holosoma_isaacgym_digest: ${{ steps.verify.outputs.holosoma_isaacgym_digest }}
       holosoma_isaacsim_digest: ${{ steps.verify.outputs.holosoma_isaacsim_digest }}
       holosoma_mujoco_digest: ${{ steps.verify.outputs.holosoma_mujoco_digest }}
       holosoma_thor_inference_digest: ${{ steps.verify.outputs.holosoma_thor_inference_digest }}
@@ -78,7 +77,6 @@ jobs:
             holosoma
             holosoma-inference
             holosoma-retargeting
-            holosoma-isaacgym
             holosoma-isaacsim
             holosoma-mujoco
             holosoma-thor-inference
@@ -123,7 +121,6 @@ jobs:
     uses: ./.github/workflows/test-images.yaml
     with:
       combined_image: ${{ vars.ECR_REGISTRY }}/holosoma@${{ needs.verify-images.outputs.holosoma_digest }}
-      isaacgym_image: ${{ vars.ECR_REGISTRY }}/holosoma-isaacgym@${{ needs.verify-images.outputs.holosoma_isaacgym_digest }}
       isaacsim_image: ${{ vars.ECR_REGISTRY }}/holosoma-isaacsim@${{ needs.verify-images.outputs.holosoma_isaacsim_digest }}
       mujoco_image: ${{ vars.ECR_REGISTRY }}/holosoma-mujoco@${{ needs.verify-images.outputs.holosoma_mujoco_digest }}
       run_mypy: true
@@ -150,7 +147,6 @@ jobs:
             holosoma
             holosoma-inference
             holosoma-retargeting
-            holosoma-isaacgym
             holosoma-isaacsim
             holosoma-mujoco
             holosoma-thor-inference
@@ -160,7 +156,6 @@ jobs:
             "${{ needs.verify-images.outputs.holosoma_digest }}"
             "${{ needs.verify-images.outputs.holosoma_inference_digest }}"
             "${{ needs.verify-images.outputs.holosoma_retargeting_digest }}"
-            "${{ needs.verify-images.outputs.holosoma_isaacgym_digest }}"
             "${{ needs.verify-images.outputs.holosoma_isaacsim_digest }}"
             "${{ needs.verify-images.outputs.holosoma_mujoco_digest }}"
             "${{ needs.verify-images.outputs.holosoma_thor_inference_digest }}"

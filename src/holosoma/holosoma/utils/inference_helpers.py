@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence, Tuple, cast
+from typing import Any, cast
 
 import onnx
 import torch
@@ -37,7 +38,7 @@ def _find_input_dim_from_module(module: torch.nn.Module) -> int:
     raise ValueError(f"Cannot determine input dimension from module: {type(module)}")
 
 
-def _extract_actor_model_and_input_dim(actor_wrapper: Any) -> Tuple[torch.nn.Module, int]:
+def _extract_actor_model_and_input_dim(actor_wrapper: Any) -> tuple[torch.nn.Module, int]:
     """Extracts the underlying actor model and input dimension from various actor wrapper types.
 
     This function handles the complete actor pipeline including observation normalization.
@@ -195,7 +196,7 @@ class _OnnxMotionPolicyExporter(torch.nn.Module):
 
     def forward(
         self, x: torch.Tensor, time_step: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         time_step_clamped = torch.clamp(time_step.long().squeeze(-1), max=self.time_step_total - 1)
         return (
             self._wrapped_actor(x),

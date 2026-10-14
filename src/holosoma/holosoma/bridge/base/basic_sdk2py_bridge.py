@@ -388,7 +388,7 @@ class BasicSdk2Bridge(ABC):
         # robot_root_states[:, 10:13] is WORLD-frame angular velocity on every backend (the
         # unified contract). A physical IMU gyro reports angular velocity in the BODY frame,
         # so rotate world -> body using the base orientation. This is backend-agnostic and
-        # keeps the gyro body-frame on MuJoCo, IsaacGym, and IsaacSim alike.
+        # keeps the gyro body-frame on MuJoCo and IsaacSim alike.
         ang_vel_world = self.simulator.robot_root_states[0, 10:13]
         gyro = quat_rotate_inverse(quat_holosoma.unsqueeze(0), ang_vel_world.unsqueeze(0), w_last=True).squeeze(0)
 

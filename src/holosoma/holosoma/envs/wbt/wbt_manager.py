@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any, Mapping, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 
@@ -11,17 +12,12 @@ from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.utils.simulator_config import SimulatorType
 
 if TYPE_CHECKING:
-    from holosoma.config_types.env import EnvConfig
     from holosoma.managers.command.terms.wbt import MotionCommand
     from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker
     from holosoma.managers.randomization.terms.locomotion import PushRandomizerState
 
 
 class WholeBodyTrackingManager(BaseTask):
-    def __init__(self, tyro_config: EnvConfig, *, device: str) -> None:
-        super().__init__(tyro_config, device=device)
-        assert not hasattr(self.simulator, "gym"), "WBT requires IsaacSim — IsaacGym is not supported."
-
     def _init_buffers(self) -> None:
         """Initialize torch tensors which will contain simulation states and processed quantities"""
         super()._init_buffers()
@@ -176,40 +172,9 @@ class WholeBodyTrackingManager(BaseTask):
                 motion_object_pos_xyz, motion_object_quat_wxyz
             )
 
-    def _draw_debug_vis_isaacgym(self) -> None:
-        self.simulator.clear_lines()  # type: ignore[attr-defined]
-        motion_command = cast("MotionCommand", self.motion_command)  # type: ignore[attr-defined]
-        n_bodies = len(motion_command.motion_cfg.body_names_to_track)
-        for env_id in range(self.num_envs):
-            for body_idx in range(n_bodies):
-                color = (0.0, 1.0, 0.0)
-                self.simulator.draw_sphere(  # type: ignore[attr-defined]
-                    motion_command.body_pos_relative_w[env_id, body_idx],  # type: ignore[has-type]
-                    0.03,
-                    color,
-                    env_id,
-                    body_idx,
-                )
-
-                color = (0.0, 0.0, 1.0)
-                self.simulator.draw_sphere(  # type: ignore[attr-defined]
-                    motion_command.robot_body_pos_w[env_id, body_idx], 0.03, color, env_id, n_bodies + body_idx
-                )
-
-            color = (0.0, 1.0, 0.0)
-            self.simulator.draw_sphere(  # type: ignore[attr-defined]
-                motion_command.ref_pos_w[env_id], 0.05, color, env_id, n_bodies * 2 + 0
-            )
-            color = (0.0, 0.0, 1.0)
-            self.simulator.draw_sphere(  # type: ignore[attr-defined]
-                motion_command.robot_ref_pos_w[env_id], 0.05, color, env_id, n_bodies * 2 + 1
-            )
-
     def _draw_debug_vis(self) -> None:
         if self.simulator.get_simulator_type() == SimulatorType.ISAACSIM:
             self._draw_debug_vis_isaacsim()
-        elif self.simulator.get_simulator_type() == SimulatorType.ISAACGYM:
-            self._draw_debug_vis_isaacgym()
 
     def step_visualize_motion(self, actions: torch.Tensor) -> bool:
         motion_command = cast("MotionCommand", self.command_manager.get_state("motion_command"))

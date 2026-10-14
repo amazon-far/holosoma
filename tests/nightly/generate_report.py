@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from os import getenv
 
 import wandb
@@ -86,6 +86,7 @@ def get_nightly_run_ids(gh_run_id: str | None = None) -> dict[str, list[str]]:
         for tag in run.tags:
             if tag.startswith("nightly-"):
                 continue
+            # "isaacgym" kept for archived runs (retired backend); see run_summary.KNOWN_SIMULATORS.
             if tag in ["isaacgym", "isaacsim", "singlegpu", "multigpu", "nightly_test_passed", "nightly_test_failed"]:
                 continue
             if tag.startswith(("gha-run-id-", "gpus-")):
@@ -287,7 +288,7 @@ def create_nightly_report(gh_run_id: str, hours: int = 24, publish: bool = False
     # Create report blocks
     report_blocks = [
         wr.H1("Nightly Training Report"),
-        wr.P(f"Automated report generated on {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC"),
+        wr.P(f"Automated report generated on {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC"),
         wr.P(f"This report contains analysis of {num_runs} nightly training runs across {num_exps} experiments."),
     ]
 
@@ -314,7 +315,7 @@ def create_nightly_report(gh_run_id: str, hours: int = 24, publish: bool = False
     print("\nCreating report...")
 
     title_suffix = f" (GHA Run {gh_run_id})" if gh_run_id else ""
-    report_title = f"Nightly Training Report - {datetime.now(timezone.utc).strftime('%Y-%m-%d')}{title_suffix}"
+    report_title = f"Nightly Training Report - {datetime.now(UTC).strftime('%Y-%m-%d')}{title_suffix}"
 
     report = wr.Report(
         entity=WANDB_ENTITY,

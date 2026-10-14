@@ -94,7 +94,7 @@ class JointPositionActionTerm(ActionTermBase):
         self.dof_pos_substep = torch.zeros(self.env.num_envs, decimation, self._action_dim, device=self.env.device)
         self.dof_vel_substep = torch.zeros(self.env.num_envs, decimation, self._action_dim, device=self.env.device)
 
-        # IsaacGym creates randomization buffers before the action manager exists.
+        # Randomization buffers are created before the action manager exists.
         # Once we reach setup(), try attaching any pre-created actuator scales.
         self._attach_actuator_randomizer_scales()
 
