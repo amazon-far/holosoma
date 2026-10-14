@@ -753,6 +753,7 @@ class PPO(BaseAlgo):
             action_scale_metadata = action_scales.detach().cpu().tolist()
         # Extract URDF text from the robot config
         urdf_file_path, urdf_str = get_urdf_text_from_robot_config(self.env.robot_config)
+        observation_manager = self.env.observation_manager
 
         metadata = {
             "dof_names": self.env.robot_config.dof_names,
@@ -762,6 +763,8 @@ class PPO(BaseAlgo):
             "command_ranges": cmd_ranges,
             "robot_urdf": urdf_str,
             "robot_urdf_path": urdf_file_path,
+            "observation_layout": observation_manager.get_observation_layout(self.actor_obs_keys),
+            "observation_clip": observation_manager.cfg.clip_observations,
         }
         metadata.update(self._checkpoint_metadata(iteration=self.current_learning_iteration))
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 import torch
 
@@ -351,3 +351,44 @@ class ObservationManager:
                     term_dims[term_name] = obs.shape[1] if obs.ndim == 2 else tuple(obs.shape[1:])
                 dims[group_name] = term_dims
         return dims
+
+    def get_observation_layout(self, group_names: Sequence[str]) -> list[dict[str, Any]]:
+        """Describe the flat vector formed by concatenating ``group_names`` in order.
+
+        One entry per term, in concatenation order: groups as given, terms sorted by name
+        within a group (as in :meth:`compute_group`). A term occupies ``dim * history_length``
+        consecutive values, oldest frame first, with zeros for frames not yet observed. Like
+        :meth:`get_obs_dims`, each term is computed once to measure ``dim``.
+
+        Parameters
+        ----------
+        group_names : Sequence[str]
+            Concatenated observation groups, in the order the policy consumes them.
+
+        Returns
+        -------
+        list[dict[str, Any]]
+            Per-term ``group``, ``name``, ``func``, ``dim``, ``history_length``, ``scale``,
+            ``clip`` and ``params``.
+        """
+        layout: list[dict[str, Any]] = []
+        for group_name in group_names:
+            group_cfg = self.cfg.groups[group_name]
+            if not group_cfg.concatenate:
+                raise ValueError(f"Observation group '{group_name}' is not concatenated, so it has no flat layout.")
+            for term_name in sorted(group_cfg.terms):
+                term_cfg = group_cfg.terms[term_name]
+                obs = self._compute_term(group_name, term_name, term_cfg)
+                layout.append(
+                    {
+                        "group": group_name,
+                        "name": term_name,
+                        "func": term_cfg.func,
+                        "dim": obs.shape[1],
+                        "history_length": group_cfg.history_length,
+                        "scale": term_cfg.scale,
+                        "clip": term_cfg.clip,
+                        "params": term_cfg.params,
+                    }
+                )
+        return layout
