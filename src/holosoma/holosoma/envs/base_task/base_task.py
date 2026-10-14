@@ -234,6 +234,8 @@ class BaseTask:
         self._pending_episode_lengths = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self._pending_episode_update_mask = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self._pending_torque_rfi: tuple[bool, float] = (False, 0.0)
+        # Envs whose simulator state was overwritten since the last observation compute.
+        self._state_overwritten_mask = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
 
     def _refresh_sim_tensors(self) -> None:
         self.simulator.refresh_sim_tensors()
@@ -307,6 +309,8 @@ class BaseTask:
 
         # Call manager-based reset events
         self.reset_manager.reset_scene(env_ids)
+
+        self.notify_state_overwritten(env_ids)
 
         # Call episode start for environments that have been reset
         for env_id in env_ids:
@@ -601,7 +605,29 @@ class BaseTask:
         self.episode_sums = getattr(self.reward_manager, "episode_sums", {})
         self.episode_sums_raw = getattr(self.reward_manager, "episode_sums_raw", {})
 
+    def notify_state_overwritten(self, env_ids: torch.Tensor) -> None:
+        """Record that ``env_ids`` had their simulator state overwritten between physics steps.
+
+        Call this from any code that teleports environments, i.e. writes root or DOF state
+        outside the physics step, as :meth:`reset_envs_idx` does. Sensors render at
+        ``FRAME_END``, before resets run, so without this their frames for those envs would
+        show the state from before the overwrite. Before the next observation compute,
+        sensors that support partial rendering re-render these envs, and stateful
+        observation terms receive :meth:`ObservationTermBase.on_state_overwritten`.
+        """
+        self._state_overwritten_mask[env_ids.to(device=self.device, dtype=torch.long)] = True
+
+    def _apply_state_overwrites(self) -> None:
+        """Re-render and notify for envs overwritten since the last observation compute."""
+        if not bool(self._state_overwritten_mask.any()):
+            return
+        env_ids = self._state_overwritten_mask.nonzero(as_tuple=False).flatten()
+        self._state_overwritten_mask[:] = False
+        self.simulator.rerender_sensors(env_ids)
+        self.observation_manager.on_state_overwritten(env_ids)
+
     def _compute_observations(self) -> None:
+        self._apply_state_overwrites()
         self.obs_buf_dict = self.observation_manager.compute()
 
     def _compute_final_observations(self) -> dict[str, Any]:

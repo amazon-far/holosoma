@@ -306,6 +306,19 @@ class ObservationManager:
             for instance in group_instances.values():
                 instance.reset(env_ids_tensor)
 
+    def on_state_overwritten(self, env_ids: torch.Tensor) -> None:
+        """Forward a state-overwrite notification to every stateful term.
+
+        Parameters
+        ----------
+        env_ids : torch.Tensor
+            Environment IDs whose simulator state was overwritten since the last compute.
+        """
+        env_ids_tensor = env_ids.to(device=self.device, dtype=torch.long)
+        for group_instances in self._term_instances.values():
+            for instance in group_instances.values():
+                instance.on_state_overwritten(env_ids_tensor)
+
     def get_obs_dims(self) -> dict[str, int | dict[str, int | tuple[int, ...]]]:
         """Get observation dimensions for each group.
 
