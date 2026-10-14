@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import threading
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -88,7 +89,7 @@ def test_classic_backend_closes_every_renderer_and_is_idempotent() -> None:
     rgb = _Renderer()
     depth = _Renderer()
     backend._cam_ids = {"head": 1}
-    backend._mj_renderers = {"head": {"rgb": rgb, "depth": depth}}
+    backend._mj_renderers = {(0, "head", "rgb"): rgb, (0, "head", "depth"): depth}
 
     backend.close()
     backend.close()
@@ -105,7 +106,7 @@ def test_classic_backend_continues_closing_after_renderer_failure() -> None:
     failed = _Renderer(fail=True)
     healthy = _Renderer()
     backend._cam_ids = {"head": 1}
-    backend._mj_renderers = {"head": {"rgb": failed, "depth": healthy}}
+    backend._mj_renderers = {(0, "head", "rgb"): failed, (0, "head", "depth"): healthy}
 
     with pytest.raises(RuntimeError, match="head/rgb"):
         backend.close()
@@ -163,6 +164,8 @@ def test_classic_backend_sizes_framebuffer_for_mounted_cameras(
     )
     backend._cam_ids = {}
     backend._mj_renderers = {}
+    backend._cam_sizes = {}
+    backend._cam_data_types = {}
     monkeypatch.setattr(classic_backend_module.mujoco, "mj_name2id", lambda *_args: 7)
     monkeypatch.setattr(classic_backend_module.mujoco, "Renderer", _CameraRenderer)
     cameras = [
@@ -226,7 +229,9 @@ def test_classic_camera_render_uses_configured_sensor_scene_option() -> None:
     backend.data = render_data
     backend.device = "cpu"
     backend._cam_ids = {"head": 7}
-    backend._mj_renderers = {"head": {"rgb": _CameraRenderer()}}
+    backend._mj_renderers = {(threading.get_ident(), "head", "rgb"): _CameraRenderer()}
+    backend._cam_data_types = {"head": ("rgb",)}
+    backend._cam_sizes = {"head": (1, 1)}
     backend._sensor_scene_option = scene_option
 
     def _set_buffer(data_type: str, value: Any) -> None:
