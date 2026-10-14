@@ -57,9 +57,10 @@ def _render_depth_kernel(
     # wp.tid() returns a tuple for a 3D launch; Warp's stubs type it as an int.
     i, x, y = wp.tid()  # type: ignore[misc]
     env = env_ids[i]  # type: ignore[has-type]
-    origin = cam_pos[env]  # type: ignore[has-type]
-    rotation = cam_quat[env]  # type: ignore[has-type]
-    ray = wp.normalize(wp.quat_rotate(rotation, wp.transform_vector(k_inv, wp.vec3(float(x), float(y), 1.0))))
+    origin = cam_pos[env]
+    rotation = cam_quat[env]
+    pixel = wp.vec3(float(x), float(y), 1.0)  # type: ignore[has-type]
+    ray = wp.normalize(wp.quat_rotate(rotation, wp.transform_vector(k_inv, pixel)))
     principal = wp.normalize(wp.quat_rotate(rotation, wp.transform_vector(k_inv, wp.vec3(float(c_x), float(c_y), 1.0))))
     # Distance along the ray times this cosine is the distance to the image plane.
     cosine = wp.min(wp.max(wp.dot(ray, principal), wp.float32(1.0e-6)), wp.float32(1.0))
@@ -74,8 +75,8 @@ def _render_depth_kernel(
     normal = wp.vec3()
     face = wp.int32(0)
     for b in range(num_bodies):
-        q = body_quat[env, b]  # type: ignore[has-type]
-        local_origin = wp.quat_rotate_inv(q, origin - body_pos[env, b])  # type: ignore[has-type]
+        q = body_quat[env, b]
+        local_origin = wp.quat_rotate_inv(q, origin - body_pos[env, b])
         local_ray = wp.quat_rotate_inv(q, ray)
         if wp.mesh_query_ray(  # type: ignore[call-arg, truthy-bool]
             body_meshes[b], local_origin, local_ray, bound / cosine, distance, u, v, sign, normal, face
@@ -116,7 +117,7 @@ class WarpDepthCamera:
         self._body_ids = [sim.find_rigid_body_indice(link) for link in cfg.self_occlusion]
         self._body_meshes = [self._load_mesh(path) for path in cfg.self_occlusion.values()]
         # Warp kernels need a non-empty array even when no link occludes the camera.
-        self._body_mesh_ids = wp.array(
+        self._body_mesh_ids: wp.array[Any] = wp.array(
             [mesh.id for mesh in self._body_meshes] or [0], dtype=wp.uint64, device=self._wp_device
         )
         terrain = sim.terrain_manager.get_state("locomotion_terrain")
