@@ -186,6 +186,11 @@ ObservationConfig parse_observation(const YAML::Node& node, const std::string& p
   r.required("obs_dims", obs.obs_dims);
   r.required("obs_scales", obs.obs_scales);
   r.required("history_length_dict", obs.history_length_dict);
+  bool sort_obs_terms = true;
+  r.optional("sort_obs_terms", sort_obs_terms);
+  if (!sort_obs_terms) {
+    throw ConfigError(r.field("sort_obs_terms") + ": the C++ runtime always concatenates terms in sorted order");
+  }
   r.finish();
   return obs;
 }
@@ -247,6 +252,15 @@ TaskConfig parse_task(const YAML::Node& node, const std::string& path, const std
     d.finish();
   }
 
+  std::string policy_type;
+  r.optional("policy_type", policy_type);
+  if (!policy_type.empty()) {
+    throw ConfigError(r.field("policy_type") + ": policy type '" + policy_type +
+                      "' is not supported by the C++ runtime");
+  }
+  // Shared-memory depth transport of the Python depth policies; unused here.
+  r.ignore("depth_shm");
+
   const YAML::Node debug = r.child("debug");
   if (debug && !debug.IsNull()) {
     MapReader d(debug, r.field("debug"));
@@ -266,7 +280,7 @@ TaskConfig parse_task(const YAML::Node& node, const std::string& path, const std
   }
 
   for (const char* key : {"joystick_type", "joystick_device", "ros_cmd_vel_topic", "ros_state_input_topic",
-                          "ros_vel_timeout", "residual_upper_body_action"}) {
+                          "ros_vel_timeout", "residual_upper_body_action", "record_dir", "record_label"}) {
     r.ignore(key);
   }
   r.finish();
@@ -300,6 +314,10 @@ InferenceConfig parse_document(const YAML::Node& node, const std::string& base_d
     config.runtime = *inherited_runtime;
   } else {
     config.runtime = parse_runtime(runtime, path + ".runtime");
+  }
+  const YAML::Node camera = r.child("camera");
+  if (camera && !camera.IsNull()) {
+    throw ConfigError(path + ".camera: camera-based policies are not supported by the C++ runtime");
   }
   const YAML::Node secondary = r.child("secondary");
   if (secondary && !secondary.IsNull()) {

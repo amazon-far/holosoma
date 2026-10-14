@@ -6,6 +6,8 @@ for different robot types.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from holosoma_inference.config.config_types.robot import RobotConfig
 from holosoma_inference.utils.config_registry import (
     ConfigRegistry,
@@ -229,12 +231,81 @@ t1_29dof = RobotConfig(
 
 
 # =============================================================================
+# G1 Depth Distillation Robot Config
+# =============================================================================
+
+# fmt: off
+# Gains for the distillation policy, derived from motor armatures:
+#   Kp = armature * omega^2,  Kd = 2 * zeta * armature * omega
+# with omega = 62.83 rad/s, zeta = 2.0.
+#
+# These are authoritative and intentionally take priority over the student's
+# ONNX metadata: the exporter writes per-joint ``joint_stiffness``/``joint_damping``
+# fitted during training, which differ from these by a few percent (e.g. hip_pitch
+# 38.869 vs 40.179). The reference deployment runs these config values, so
+# matching it means the config must win.
+_DISTILL_MOTOR_KP = (
+    40.179, 99.098, 40.179, 99.098, 28.501, 28.501,           # left leg
+    40.179, 99.098, 40.179, 99.098, 28.501, 28.501,           # right leg
+    40.179, 28.501, 28.501,                                   # waist
+    14.251, 14.251, 14.251, 14.251, 14.251, 16.778, 16.778,   # left arm
+    14.251, 14.251, 14.251, 14.251, 14.251, 16.778, 16.778,   # right arm
+)
+
+_DISTILL_MOTOR_KD = (
+    2.558, 6.309, 2.558, 6.309, 1.814, 1.814,
+    2.558, 6.309, 2.558, 6.309, 1.814, 1.814,
+    2.558, 1.814, 1.814,
+    0.907, 0.907, 0.907, 0.907, 0.907, 1.068, 1.068,
+    0.907, 0.907, 0.907, 0.907, 0.907, 1.068, 1.068,
+)
+
+# Pose the robot eases into before the policy takes over: a slightly-crouched,
+# left/right-symmetric standing stance matching the distillation policy's
+# starting configuration.
+_DISTILL_STIFF_POS = (
+    -0.16277, -0.02224, 0.00908, 0.29148, -0.14721, 0.02468,   # left leg
+    -0.16277, 0.02224, -0.00908, 0.29148, -0.14721, -0.02468,  # right leg
+    0.0, 0.0, 0.0063,                                          # waist
+    0.25452, 0.28698, -0.08782, 0.80775, 0.00437, 0.00578, -0.00094,   # left arm
+    0.25452, -0.28698, 0.08782, 0.80775, -0.00437, 0.00578, 0.00094,   # right arm
+)
+
+_DISTILL_STIFF_KP = (
+    350.0, 200.0, 200.0, 300.0, 300.0, 150.0,
+    350.0, 200.0, 200.0, 300.0, 300.0, 150.0,
+    200.0, 200.0, 200.0,
+    40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0,
+    40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0,
+)
+
+_DISTILL_STIFF_KD = (
+    5.0, 5.0, 5.0, 10.0, 5.0, 5.0,
+    5.0, 5.0, 5.0, 10.0, 5.0, 5.0,
+    5.0, 5.0, 5.0,
+    3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0,
+    3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0,
+)
+# fmt: on
+
+g1_29dof_wbt_distillation = replace(
+    g1_29dof,
+    motor_kp=_DISTILL_MOTOR_KP,
+    motor_kd=_DISTILL_MOTOR_KD,
+    stiff_startup_pos=_DISTILL_STIFF_POS,
+    stiff_startup_kp=_DISTILL_STIFF_KP,
+    stiff_startup_kd=_DISTILL_STIFF_KD,
+)
+
+
+# =============================================================================
 # Default Configurations Dictionary
 # =============================================================================
 
 # Register core presets. Keys use hyphen-case naming convention for CLI compatibility.
 ROBOT_REGISTRY.add("g1-29dof", g1_29dof)
 ROBOT_REGISTRY.add("t1-29dof", t1_29dof)
+ROBOT_REGISTRY.add("g1-29dof-wbt-distillation", g1_29dof_wbt_distillation)
 
 __getattr__ = deprecated_defaults_alias(__name__, ROBOT_REGISTRY)
 get_defaults = deprecated_get_defaults(__name__, ROBOT_REGISTRY)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pydantic.dataclasses import dataclass
 
+from .camera import CameraConfig
 from .observation import ObservationConfig
 from .robot import RobotConfig
 from .task import TaskConfig
@@ -25,6 +26,14 @@ class InferenceConfig:
 
     task: TaskConfig
     """Task execution configuration."""
+
+    camera: CameraConfig | None = None
+    """Depth/RGB camera geometry and image properties.
+
+    Required by perception policies (e.g. depth distillation); ``None`` for
+    blind policies. The resized image dimensions must match the vision
+    backbone's expected input.
+    """
 
     secondary: InferenceConfig | None = None
     """Secondary policy config for dual-mode (X-button switch).

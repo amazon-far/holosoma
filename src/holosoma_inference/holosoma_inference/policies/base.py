@@ -131,8 +131,9 @@ class BasePolicy:
         self.obs_terms_sorted: dict[str, list[str]] = {}
         self.obs_buf_dict: dict[str, np.ndarray] = {}
 
+        sort_terms = getattr(self.obs_config, "sort_obs_terms", True)
         for group, term_names in self.obs_dict.items():
-            self.obs_terms_sorted[group] = sorted(term_names)
+            self.obs_terms_sorted[group] = sorted(term_names) if sort_terms else list(term_names)
             history_len = self.history_length_dict.get(group, 1)
             self.obs_history_buffers[group] = {}
             flattened_terms: list[np.ndarray] = []
@@ -187,9 +188,18 @@ class BasePolicy:
         self._resolve_control_gains()
 
     def _collect_model_paths(self, model_path):
-        """Normalize model_path into a list of up to nine entries."""
+        """Normalize model_path into a list of up to nine entries.
+
+        A single string may encode several paths. ``TaskConfig.model_path`` is
+        typed ``str | list[str]``, and the CLI resolves that union to ``str``, so
+        a multi-model invocation arrives as one token — either a Python list
+        literal (``"['a.onnx','b.onnx']"``) or a comma/space-separated list.
+        Parsing it here keeps every multi-model policy working from the CLI.
+        """
         if isinstance(model_path, (list, tuple)):
             paths = list(model_path)
+        elif isinstance(model_path, str):
+            paths = self._split_model_path_string(model_path)
         elif model_path is not None:
             paths = [model_path]
         else:
@@ -202,6 +212,32 @@ class BasePolicy:
             # Error out instead of warning
             raise ValueError("Received more than nine model paths. Only up to nine model paths are supported.")
         return paths
+
+    @staticmethod
+    def _split_model_path_string(value: str) -> list[str]:
+        """Split one CLI token into model paths.
+
+        Accepts a Python list literal, or a comma- or whitespace-separated list.
+        A plain single path is returned unchanged, so ordinary use is unaffected.
+        """
+        text = value.strip()
+        if text.startswith("[") and text.endswith("]"):
+            import ast
+
+            try:
+                parsed = ast.literal_eval(text)
+            except (ValueError, SyntaxError):
+                parsed = None
+            if isinstance(parsed, (list, tuple)):
+                return [str(p) for p in parsed]
+        if "," in text:
+            return [part.strip() for part in text.split(",")]
+        # Whitespace only splits when every piece looks like a model file, so
+        # paths containing spaces are not broken apart.
+        pieces = text.split()
+        if len(pieces) > 1 and all(p.endswith(".onnx") for p in pieces):
+            return pieces
+        return [text]
 
     def _resolve_model_path(self, model_path: str) -> str:
         """Resolve model path, downloading from W&B if required."""

@@ -110,8 +110,19 @@ observation:
     cos_phase: 1.0
   history_length_dict:
     actor_obs: 1
+  sort_obs_terms: true
 task:
   model_path: ../../../holosoma_inference/models/loco/g1_29dof/fastsac_g1_29dof.onnx
+  policy_type: ''
+  depth_shm:
+    name: depth_img_shm
+    required: true
+    heartbeat: true
+    heartbeat_endpoint: ''
+    stale_warn_s: 0.25
+    stale_stop_s: 0.5
+  record_dir: ''
+  record_label: clip
   rl_rate: 50.0
   policy_action_scale: 0.25
   action_scales_by_effort_limit_over_p_gain: false
@@ -151,6 +162,7 @@ task:
     record_rosbag: false
     rosbag_dir: ~/run_policy_sessions
     rosbag_cpu: 0
+camera: null
 secondary:
   robot:
     robot_type: g1_29dof
@@ -262,8 +274,19 @@ secondary:
       cos_phase: 1.0
     history_length_dict:
       actor_obs: 1
+    sort_obs_terms: true
   task:
     model_path: ../../../holosoma_inference/models/loco/g1_29dof/fastsac_g1_29dof.onnx
+    policy_type: ''
+    depth_shm:
+      name: depth_img_shm
+      required: true
+      heartbeat: true
+      heartbeat_endpoint: ''
+      stale_warn_s: 0.25
+      stale_stop_s: 0.5
+    record_dir: ''
+    record_label: clip
     rl_rate: 50.0
     policy_action_scale: 0.25
     action_scales_by_effort_limit_over_p_gain: false
@@ -303,4 +326,5 @@ secondary:
       record_rosbag: false
       rosbag_dir: ~/run_policy_sessions
       rosbag_cpu: 0
+  camera: null
   secondary: null
