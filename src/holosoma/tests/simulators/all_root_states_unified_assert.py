@@ -196,6 +196,21 @@ def main() -> int:
         print("FAIL: wholesale set_actor_root_state_tensor(all_root_states) disturbed the object")
         return 1
 
+    # A full permutation has the same row count as a global tensor. Selecting a proxy twice
+    # would send each environment another environment's pose.
+    for selected in (env_ids.flip(0), env_ids[1::2]):
+        if selected.numel() == 0:
+            continue
+        expected = sim.robot_root_states[:].clone()
+        expected[selected, 2] += 0.05
+        expected[:, 7:] = 0.0
+        sim.robot_root_states[:] = expected
+        sim.set_actor_root_state_tensor_robots(selected, sim.robot_root_states)
+        sim.write_state_updates()
+        _step(sim, STEPS_AFTER_WRITE)
+        actual = sim.get_actor_states(["robot"], selected)
+        torch.testing.assert_close(actual[:, :3], expected[selected, :3], atol=POS_ATOL, rtol=0)
+
     # ---- 7. UNIFIED set_actor_states(robot + object) ---------------------------------------
     # The unified set_actor_states method (NOT the proxy) must accept the ROBOT alongside an
     # object in one name-major call and write both straight through in WORLD frame. This is the

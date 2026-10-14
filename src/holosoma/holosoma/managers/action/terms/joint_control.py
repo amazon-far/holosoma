@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -32,6 +33,9 @@ class JointPositionActionTerm(ActionTermBase):
             env: Environment instance (typically a ``BaseTask`` subclass)
         """
         super().__init__(cfg, env)
+        if cfg.controller is None:
+            raise ValueError("JointPositionActionTerm requires ActionTermCfg.controller.")
+        self.controller = cfg.controller
 
         # Get action dimension from environment
         self._action_dim: int = env.num_dof
@@ -83,7 +87,6 @@ class JointPositionActionTerm(ActionTermBase):
         """
         super().setup()
 
-        # Initialize action delay queue if randomization is enabled
         if getattr(self.env, "_randomize_ctrl_delay", False):
             max_delay = self.env._ctrl_delay_step_range[1]
             self.action_queue = torch.zeros(self.env.num_envs, max_delay + 1, self._action_dim, device=self.env.device)
@@ -119,13 +122,15 @@ class JointPositionActionTerm(ActionTermBase):
         self._raw_actions[:] = actions
 
         # Clip actions
-        if self.env.robot_config.control.clip_actions:
-            clip_limit = self.env.robot_config.control.action_clip_value
+        if self.cfg.clip is not None:
+            lower, upper = self.cfg.clip
+            if not math.isfinite(lower) or not math.isfinite(upper) or lower > upper:
+                raise ValueError(f"ActionTermCfg.clip must be finite and ordered, got {self.cfg.clip}.")
             assert self._processed_actions is not None
-            self._processed_actions[:] = torch.clip(actions, -clip_limit, clip_limit)
+            self._processed_actions[:] = torch.clip(actions, lower, upper)
             # Log clipping fraction
             self.env.log_dict["action_clip_frac"] = (
-                self._processed_actions.abs() == clip_limit
+                (self._processed_actions == lower) | (self._processed_actions == upper)
             ).sum() / self._processed_actions.numel()
         else:
             assert self._processed_actions is not None
@@ -150,7 +155,7 @@ class JointPositionActionTerm(ActionTermBase):
 
         # Apply uniform delay
         self._actions_after_delay[:] = self.action_queue[
-            torch.arange(self.env.num_envs), self.env.action_delay_idx
+            torch.arange(self.env.num_envs, device=self.env.device), self.env.action_delay_idx
         ].clone()
 
     def apply_actions(self) -> None:
@@ -180,7 +185,7 @@ class JointPositionActionTerm(ActionTermBase):
         actions_scaled = actions * self.action_scales
 
         # Compute torques based on control type
-        control_type = self.env.robot_config.control.control_type
+        control_type = self.controller.control_type
 
         if control_type == "P":
             # Position control
@@ -208,7 +213,7 @@ class JointPositionActionTerm(ActionTermBase):
             )
 
         # Clip torques if configured
-        if self.env.robot_config.control.clip_torques:
+        if self.controller.clip_torques:
             torques = torch.clip(torques, -self.env.torque_limits, self.env.torque_limits)
 
         return torques
@@ -222,7 +227,7 @@ class JointPositionActionTerm(ActionTermBase):
         super().reset(env_ids)
 
         # Reset action delay queue if applicable
-        if self.env._randomize_ctrl_delay and self.action_queue is not None:
+        if self.action_queue is not None:
             if env_ids is None:
                 self.action_queue.zero_()
             else:
@@ -262,9 +267,11 @@ class JointPositionActionTerm(ActionTermBase):
 
     def configure_torque_rfi(self, *, enabled: bool, rfi_lim: float | None = None) -> None:
         """Configure residual force injection behaviour."""
-        self._randomize_torque_rfi = enabled
         if rfi_lim is not None:
             self._rfi_lim = float(rfi_lim)
+        if enabled:
+            self._require_finite_torque_limits("torque RFI")
+        self._randomize_torque_rfi = enabled
 
     def get_pd_scale_tensors(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Return references to the PD gain scale buffers."""
@@ -298,40 +305,61 @@ class JointPositionActionTerm(ActionTermBase):
         self.attach_actuator_scales(state.kp_scale_tensor, state.kd_scale_tensor, state.rfi_lim_scale_tensor)
 
     def _configure_pd_gains(self, env: Any) -> None:
-        control_cfg = env.robot_config.control
-        stiffness_cfg = control_cfg.stiffness
-        damping_cfg = control_cfg.damping
-        integral_cfg = getattr(control_cfg, "integral", {})
+        robot_config = env.robot_config
+        # Per-DOF gains from the exact-name / #joint_tag keys; coverage is validated at config construction.
+        stiffness, damping = self.controller.resolve_gains(robot_config)
+        p_by_name = dict(zip(robot_config.dof_names, stiffness))
+        d_by_name = dict(zip(robot_config.dof_names, damping))
 
         for i, name in enumerate(env.dof_names):
-            if name not in env.robot_config.init_state.default_joint_angles:
-                raise ValueError(f"Missing default joint angle for DOF '{name}' in robot configuration.")
-
-            matched = False
-            for dof_name, stiffness in stiffness_cfg.items():
-                if dof_name in name:
-                    self.p_gains[i] = stiffness
-                    self.d_gains[i] = damping_cfg[dof_name]
-                    self.i_gains[i] = integral_cfg.get(dof_name, 0.0)
-                    matched = True
-            if not matched:
-                self.p_gains[i] = 0.0
-                self.d_gains[i] = 0.0
-                self.i_gains[i] = 0.0
-                if control_cfg.control_type in ["P", "V"]:
-                    raise ValueError(
-                        f"PD gains for joint '{name}' were not defined. Please specify them in the YAML configuration."
-                    )
+            if name not in p_by_name:
+                raise ValueError(f"Simulator DOF '{name}' is not in robot_config.dof_names.")
+            self.p_gains[i] = p_by_name[name]
+            self.d_gains[i] = d_by_name[name]
+            self.i_gains[i] = 0.0
 
     def _configure_action_scales(self, env: Any) -> None:
-        control_cfg = env.robot_config.control
-        if control_cfg.action_scales_by_effort_limit_over_p_gain:
-            dof_effort_limit_list = env.robot_config.dof_effort_limit_list
-            for i, effort in enumerate(dof_effort_limit_list):
+        configured = self.cfg.scale
+        if isinstance(configured, tuple):
+            if len(configured) != self._action_dim:
+                raise ValueError(f"ActionTermCfg.scale has {len(configured)} entries, expected {self._action_dim}.")
+            base_scales = torch.tensor(configured, dtype=torch.float, device=env.device)
+        else:
+            if not math.isfinite(configured):
+                raise ValueError(f"ActionTermCfg.scale must be finite, got {configured!r}.")
+            base_scales = torch.full((self._action_dim,), configured, dtype=torch.float, device=env.device)
+        if not bool(torch.isfinite(base_scales).all()):
+            raise ValueError(f"ActionTermCfg.scale entries must be finite, got {configured!r}.")
+
+        if self.controller.action_scales_by_effort_limit_over_p_gain:
+            invalid = [
+                env.dof_names[i]
+                for i, effort in enumerate(env.torque_limits.tolist())
+                if self.p_gains[i] != 0.0 and not math.isfinite(effort)
+            ]
+            if invalid:
+                raise ValueError(
+                    "action_scales_by_effort_limit_over_p_gain requires finite simulator effort limits for "
+                    f"DOFs with nonzero P gain; unbounded DOFs: {invalid}. Set dof_effort_limits or disable "
+                    "effort-derived action scales."
+                )
+            for i, effort in enumerate(env.torque_limits.tolist()):
                 stiffness = self.p_gains[i]
                 if stiffness == 0.0:
                     self.action_scales[i] = 0.0
                 else:
-                    self.action_scales[i] = control_cfg.action_scale * effort / stiffness
+                    self.action_scales[i] = base_scales[i] * effort / stiffness
         else:
-            self.action_scales[:] = control_cfg.action_scale
+            self.action_scales[:] = base_scales
+
+    def _require_finite_torque_limits(self, feature: str) -> None:
+        invalid = [
+            self.env.dof_names[i]
+            for i, finite in enumerate(torch.isfinite(self.env.torque_limits).tolist())
+            if not finite
+        ]
+        if invalid:
+            raise ValueError(
+                f"{feature} requires finite simulator effort limits; unbounded DOFs: {invalid}. "
+                "Set dof_effort_limits or disable this feature."
+            )

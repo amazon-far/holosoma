@@ -104,7 +104,7 @@ def test_task_installs_plugins_only_after_provider_setup(monkeypatch: pytest.Mon
         observation=object(),
         simulator=simulator_config,
         terrain=object(),
-        robot=SimpleNamespace(policy_obs_dim=1, critic_obs_dim=1, actions_dim=1),
+        robot=SimpleNamespace(dof_names=["j0"], body_names=["base"], body_tags={}, joint_tags={}),
         action=object(),
         reward=object(),
         termination=object(),

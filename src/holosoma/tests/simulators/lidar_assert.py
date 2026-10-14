@@ -227,6 +227,107 @@ def _check_isaacsim_prim_resolution_helpers() -> list[str]:
     if resolve_robot_link_prim_expression("geometry_link", stage) != expected_geometry:
         failures.append("a rigid body authored directly on geometry was not accepted as a robot link")
 
+    # GMA's USD repeats each wrist-link name on a visual mesh. Geometry and its
+    # containing link are one candidate.
+    wrist_path = f"{robot_path}/import_root/native_wrist"
+    wrist = UsdGeom.Xform.Define(stage, wrist_path).GetPrim()
+    UsdPhysics.RigidBodyAPI.Apply(wrist).CreateRigidBodyEnabledAttr(True)
+    for container in ("visuals", "collisions", "arbitrary_exporter_folder"):
+        wrapper_path = f"{wrist_path}/{container}/native_wrist"
+        UsdGeom.Xform.Define(stage, wrapper_path)
+        UsdGeom.Mesh.Define(stage, f"{wrapper_path}/node_STL_BINARY_")
+    UsdGeom.Mesh.Define(stage, f"{wrist_path}/direct_geometry/native_wrist")
+    expected_wrist = "/World/envs/env_.*/Robot/import_root/native_wrist"
+    authored_stage = stage.GetRootLayer().ExportToString()
+    if resolve_robot_link_prim_expression("native_wrist", stage) != expected_wrist:
+        failures.append("matching visual/collision meshes did not resolve to their link")
+    if resolve_robot_link_rigid_body_prim_expression("native_wrist", stage) != expected_wrist:
+        failures.append("matching visual/collision meshes changed the rigid-body owner")
+    if stage.GetRootLayer().ExportToString() != authored_stage:
+        failures.append("link resolution changed the authored USD stage")
+
+    # Removing visual duplicates must not hide a different link with the same name.
+    other_wrist_path = f"{robot_path}/other/native_wrist"
+    other_wrist = UsdGeom.Xform.Define(stage, other_wrist_path).GetPrim()
+    UsdPhysics.RigidBodyAPI.Apply(other_wrist).CreateRigidBodyEnabledAttr(True)
+    UsdGeom.Mesh.Define(stage, f"{other_wrist_path}/visuals/native_wrist")
+    try:
+        resolve_robot_link_prim_expression("native_wrist", stage)
+    except ValueError as exc:
+        if repr(wrist_path) not in str(exc) or repr(other_wrist_path) not in str(exc):
+            failures.append("name collision did not identify both conflicting link paths")
+    else:
+        failures.append("a link name silently took precedence over a different link with the same name")
+    stage.RemovePrim(other_wrist_path)
+
+    # A nested body authored directly on geometry remains a separate link candidate.
+    child_body_path = f"{wrist_path}/child/native_wrist"
+    child_body = UsdGeom.Cube.Define(stage, child_body_path).GetPrim()
+    child_body_api = UsdPhysics.RigidBodyAPI.Apply(child_body)
+    for enabled in (True, False):
+        child_body_api.CreateRigidBodyEnabledAttr(enabled)
+        try:
+            resolve_robot_link_prim_expression("native_wrist", stage)
+        except ValueError as exc:
+            if repr(wrist_path) not in str(exc) or repr(child_body_path) not in str(exc):
+                failures.append("nested rigid-body collision did not identify both link paths")
+        else:
+            failures.append(f"a nested geometry prim with its own rigid body (enabled={enabled}) was discarded")
+    stage.RemovePrim(child_body_path)
+
+    # An authored fixed link remains distinct even when it has geometry children.
+    # Joint-body relationships establish link identity independently of folder names.
+    UsdGeom.Xform.Define(stage, child_body_path)
+    UsdGeom.Mesh.Define(stage, f"{child_body_path}/mesh")
+    fixed_joint = UsdPhysics.FixedJoint.Define(stage, f"{robot_path}/fixed_mount_joint")
+    fixed_joint.CreateBody0Rel().SetTargets([wrist_path])
+    fixed_joint.CreateBody1Rel().SetTargets([child_body_path])
+    try:
+        resolve_robot_link_prim_expression("native_wrist", stage)
+    except ValueError:
+        pass
+    else:
+        failures.append("an authored fixed link with geometry children was discarded")
+    stage.RemovePrim(child_body_path)
+
+    stage.RemovePrim(f"{robot_path}/fixed_mount_joint")
+
+    # A differently named body's visual mesh is not another link candidate, even
+    # when it reuses an ancestor link's name.
+    child_owner = UsdGeom.Xform.Define(stage, f"{wrist_path}/child").GetPrim()
+    UsdPhysics.RigidBodyAPI.Apply(child_owner).CreateRigidBodyEnabledAttr(True)
+    UsdGeom.Mesh.Define(stage, f"{wrist_path}/child/visuals/native_wrist")
+    if resolve_robot_link_prim_expression("native_wrist", stage) != expected_wrist:
+        failures.append("another body's visual geometry obscured the requested link")
+    if resolve_robot_link_rigid_body_prim_expression("native_wrist", stage) != expected_wrist:
+        failures.append("another body's visual geometry changed the requested rigid-body owner")
+
+    mount_path = f"{robot_path}/owner/mount"
+    UsdGeom.Xform.Define(stage, mount_path)
+    UsdGeom.Mesh.Define(stage, f"{mount_path}/mesh")
+    if resolve_robot_link_prim_expression("mount", stage) != "/World/envs/env_.*/Robot/owner/mount":
+        failures.append("a uniquely named fixed mount with geometry was discarded")
+    other_mount_path = f"{wrist_path}/other/mount"
+    UsdGeom.Xform.Define(stage, other_mount_path)
+    try:
+        resolve_robot_link_prim_expression("mount", stage)
+    except ValueError as exc:
+        if repr(other_mount_path) not in str(exc) or repr(mount_path) not in str(exc):
+            failures.append("fixed-mount name collision did not identify both paths")
+    else:
+        failures.append("a fixed mount with geometry was discarded in favor of another frame with the same name")
+    stage.RemovePrim(other_mount_path)
+
+    # Fixed link frames can share a rigid-body owner but still define distinct mounts.
+    UsdGeom.Xform.Define(stage, f"{robot_path}/fixed_frame")
+    UsdGeom.Xform.Define(stage, f"{robot_path}/fixed_frame/child/fixed_frame")
+    try:
+        resolve_robot_link_prim_expression("fixed_frame", stage)
+    except ValueError:
+        pass
+    else:
+        failures.append("nested fixed link frames were merged by ancestry")
+
     UsdGeom.Xform.Define(stage, f"{robot_path}/owner/a/duplicate")
     UsdGeom.Xform.Define(stage, f"{robot_path}/owner/b/duplicate")
     try:
@@ -246,12 +347,16 @@ def _check_isaacsim_prim_resolution_helpers() -> list[str]:
 
     template = UsdGeom.Xform.Define(stage, "/Template").GetPrim()
     UsdGeom.Xform.Define(stage, "/Template/proxy_link")
+    UsdGeom.Xform.Define(stage, "/Template/proxy_link/visuals/proxy_link")
+    UsdGeom.Mesh.Define(stage, "/Template/proxy_link/visuals/proxy_link/mesh")
     instance = UsdGeom.Xform.Define(stage, f"{robot_path}/instance").GetPrim()
     instance.GetReferences().AddInternalReference(template.GetPath())
     instance.SetInstanceable(True)
     proxy_path = f"{robot_path}/instance/proxy_link"
     if not stage.GetPrimAtPath(proxy_path).IsInstanceProxy():
         failures.append("USD instance fixture did not create an instance proxy")
+    elif resolve_robot_link_prim_expression("proxy_link", stage) != "/World/envs/env_.*/Robot/instance/proxy_link":
+        failures.append("an instance-proxy visual mesh did not resolve to its link")
     elif not set_instanceable(stage, robot_path, False):
         failures.append("robot deinstancing rejected a valid robot root")
     elif stage.GetPrimAtPath(proxy_path).IsInstanceProxy():
@@ -779,7 +884,7 @@ def main() -> int:
         env_origins[:, 2] = torch.arange(args.num_envs, device=device, dtype=torch.float32) * 0.25
     init = config.robot.init_state
     base_init = torch.tensor(
-        list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel),
+        init.root_state_list(),
         device=device,
         dtype=torch.float32,
     )

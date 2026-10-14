@@ -109,7 +109,7 @@ def _build(simulator: str):
     origins = torch.zeros(1, 3, device=resolved_device)
     init = config.robot.init_state
     base_init = torch.tensor(
-        list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel),
+        init.root_state_list(),
         device=resolved_device,
     )
     sim.create_envs(1, origins, base_init)

@@ -12,7 +12,7 @@ import numpy.typing as npt
 import omni
 import omni.log
 import omni.usd
-from pxr import Gf, Usd, UsdGeom, UsdPhysics
+from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics
 
 
 def get_current_stage() -> Usd.Stage:
@@ -27,21 +27,77 @@ def is_rigid_body_enabled(prim: Usd.Prim) -> bool:
     return not (attr and attr.HasAuthoredValue()) or bool(attr.Get())
 
 
+def resolve_robot_root_prim_expression(stage: Usd.Stage | None = None) -> str:
+    """Find the asset's articulation root independently of the observation body order."""
+    stage = stage or get_current_stage()
+    root_path = "/World/envs/env_0/Robot"
+    robot = stage.GetPrimAtPath(root_path)
+    roots = [prim for prim in Usd.PrimRange(robot) if prim.HasAPI(UsdPhysics.ArticulationRootAPI)]
+    if len(roots) != 1:
+        raise ValueError(f"Expected one robot articulation root below '{root_path}', found {len(roots)}.")
+    root = roots[0]
+    # A fixed articulation may author the API on its world weld instead of its root link.
+    if root.IsA(UsdPhysics.Joint):
+        joint = UsdPhysics.Joint(root)
+        targets = joint.GetBody0Rel().GetTargets() + joint.GetBody1Rel().GetTargets()
+        bodies = [target for target in targets if str(target).startswith(root_path + "/")]
+        if len(bodies) != 1:
+            raise ValueError(f"Robot root joint '{root.GetPath()}' must attach exactly one robot body to the world.")
+        root = stage.GetPrimAtPath(bodies[0])
+    return str(root.GetPath()).replace("/env_0/", "/env_.*/", 1)
+
+
+def _is_geometry_of_matching_link(
+    prim: Usd.Prim, matching_paths: set[Sdf.Path], joint_link_paths: set[Sdf.Path]
+) -> bool:
+    """Recognize geometry by schema and ownership, independently of exporter directory names.
+
+    A geometry wrapper repeating an ancestor link's name belongs to that link. A separate
+    link reusing that name must establish its identity with RigidBodyAPI (even disabled) or
+    a joint-body relationship. Ordinary differently named frames remain candidates.
+    """
+    if prim.HasAPI(UsdPhysics.RigidBodyAPI) or prim.GetPath() in joint_link_paths:
+        return False
+    descendants = iter(Usd.PrimRange(prim, Usd.TraverseInstanceProxies()))
+    is_geometry = False
+    for descendant in descendants:
+        if descendant.HasAPI(UsdPhysics.RigidBodyAPI) or descendant.GetPath() in joint_link_paths:
+            descendants.PruneChildren()
+        elif descendant.IsA(UsdGeom.Gprim):
+            is_geometry = True
+            break
+    parent = prim.GetParent()
+    while parent.IsValid():
+        if parent.GetPath() in matching_paths:
+            return is_geometry
+        # A mesh owned by another body is not a link. An Xform with a different name
+        # can be a fixed mount with its own geometry, so retain that frame.
+        if parent.HasAPI(UsdPhysics.RigidBodyAPI):
+            return bool(prim.IsA(UsdGeom.Gprim))
+        parent = parent.GetParent()
+    return False
+
+
 def _find_robot_link_prim(link_name: str, stage: Usd.Stage) -> Usd.Prim:
     robot_root_path = "/World/envs/env_0/Robot"
     robot_root = stage.GetPrimAtPath(robot_root_path)
     if not robot_root.IsValid():
         raise ValueError(f"Cannot resolve robot link '{link_name}': prim '{robot_root_path}' does not exist.")
 
-    direct = stage.GetPrimAtPath(f"{robot_root_path}/{link_name}")
-    if direct.IsValid() and UsdGeom.Xformable(direct):
-        return direct
-
-    matches = [
-        prim
-        for prim in Usd.PrimRange(robot_root, Usd.TraverseInstanceProxies())
-        if prim.GetName() == link_name and UsdGeom.Xformable(prim)
-    ]
+    prims = list(Usd.PrimRange(robot_root, Usd.TraverseInstanceProxies()))
+    joint_link_paths = {
+        path
+        for prim in prims
+        if prim.IsA(UsdPhysics.Joint)
+        for path in (
+            UsdPhysics.Joint(prim).GetBody0Rel().GetTargets() + UsdPhysics.Joint(prim).GetBody1Rel().GetTargets()
+        )
+    }
+    matches = [prim for prim in prims if prim.GetName() == link_name and UsdGeom.Xformable(prim)]
+    # USD exports can reuse a link's name for its visual/collision mesh. Resolve those
+    # descendants to the matching link before checking uniqueness.
+    matching_paths = {prim.GetPath() for prim in matches}
+    matches = [prim for prim in matches if not _is_geometry_of_matching_link(prim, matching_paths, joint_link_paths)]
     if len(matches) != 1:
         paths = [str(prim.GetPath()) for prim in matches]
         raise ValueError(

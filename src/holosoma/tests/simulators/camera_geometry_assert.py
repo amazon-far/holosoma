@@ -144,9 +144,7 @@ def main() -> int:
     # All envs co-located at the origin so every env's robot and panel align.
     env_origins = torch.zeros(n, 3, device=device)
     init = config.robot.init_state
-    base_init = torch.tensor(
-        list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
-    )
+    base_init = torch.tensor(init.root_state_list(), device=device, dtype=torch.float32)
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
     sim.install_plugins()
@@ -186,8 +184,8 @@ def main() -> int:
         # dropped write lets the pelvis drift and drags its mounted camera off the panel (the
         # multi-env flake where a random env's panel leaves frame / lands off-center). Retry until it
         # sticks.
-        target_pos = env_origins + _torch.tensor(list(init.pos), device=device)
-        target_rot = _torch.tensor(list(init.rot), device=device)
+        target_pos = env_origins + _torch.tensor(list(init.position), device=device)
+        target_rot = _torch.tensor(list(init.orientation_xyzw), device=device)
         for _ in range(3):
             robot_states = sim.get_actor_states(["robot"], _all_ids).clone()
             robot_states[:, :3] = target_pos

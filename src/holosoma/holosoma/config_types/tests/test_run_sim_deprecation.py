@@ -26,7 +26,15 @@ def test_default_construction_is_silent() -> None:
     assert _future_warnings(record) == []
 
 
-def test_explicit_env_class_warns_on_init_and_read() -> None:
+def test_explicit_env_class_warns_on_init_and_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FrozenDateTime(datetime.datetime):
+        @classmethod
+        def now(cls, tz: datetime.tzinfo | None = None) -> _FrozenDateTime:
+            date = _ENV_CLASS_REMOVAL_DATE
+            return cls(date.year, date.month, date.day, tzinfo=tz)
+
+    monkeypatch.setattr(run_sim_module.datetime, "datetime", _FrozenDateTime)
+
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
         cfg = RunSimConfig(env_class="pkg.mod.Env")

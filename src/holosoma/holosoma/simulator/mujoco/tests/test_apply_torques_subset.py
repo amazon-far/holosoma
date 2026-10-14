@@ -53,10 +53,9 @@ class _ClassicStub:
         self.root_data = mujoco.MjData(self.root_model)
         self.dof_names = list(_DOFS)
         self.num_dof = len(_DOFS)
+        self.dof_actuator_ids = list(range(len(_DOFS)))  # motors authored in DOF order
+        self._dof_actuator_ids_t = None
         self.backend = type("B", (), {"get_ctrl_tensor": staticmethod(lambda: None)})()
-
-    def _get_prefixed_name(self, clean_name: str) -> str:
-        return clean_name  # no prefix in this minimal model
 
     def apply_torques_at_dof(self, torques: torch.Tensor, dof_indices: list[int] | None = None) -> None:
         # Run the REAL method body against this stub (it reads only the attributes above).
@@ -71,6 +70,8 @@ class _WarpStub:
         self.root_data = mujoco.MjData(self.root_model)
         self.dof_names = list(_DOFS)
         self.num_dof = len(_DOFS)
+        self.dof_actuator_ids = list(range(len(_DOFS)))  # motors authored in DOF order
+        self._dof_actuator_ids_t = None
         self._ctrl = torch.zeros(num_envs, len(_DOFS))
         self.backend = type("B", (), {"get_ctrl_tensor": staticmethod(lambda: self._ctrl)})()
 

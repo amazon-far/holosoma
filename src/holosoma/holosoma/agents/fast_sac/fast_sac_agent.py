@@ -28,8 +28,9 @@ from holosoma.utils.inference_helpers import (
     attach_onnx_metadata,
     export_motion_and_policy_as_onnx,
     export_policy_as_onnx,
+    get_action_scales_from_env,
     get_command_ranges_from_env,
-    get_control_gains_from_config,
+    get_control_gains_from_env,
     get_urdf_text_from_robot_config,
 )
 from holosoma.utils.safe_torch_import import (
@@ -114,23 +115,36 @@ class FastSACEnv:
         """
         robot_config = self._env.robot_config
 
-        # Get joint limits and default positions
-        dof_pos_lower_limits = torch.tensor(robot_config.dof_pos_lower_limit_list, device=self._env.device)
-        dof_pos_upper_limits = torch.tensor(robot_config.dof_pos_upper_limit_list, device=self._env.device)
+        # Joint limits as the simulator enforces them, and default positions
+        dof_pos_lower_limits = self._env.dof_pos_limits[:, 0].to(self._env.device)
+        dof_pos_upper_limits = self._env.dof_pos_limits[:, 1].to(self._env.device)
+        unbounded = ~(torch.isfinite(dof_pos_lower_limits) & torch.isfinite(dof_pos_upper_limits))
+        if bool(unbounded.any()):
+            names = [name for name, flag in zip(self._env.dof_names, unbounded.tolist()) if flag]
+            raise ValueError(
+                f"FastSAC maps actions onto the joint position range, which is unbounded for {names}; "
+                "give the robot config finite dof_pos_limits entries for these DOFs."
+            )
 
-        # Get default joint angles
-        default_joint_angles = torch.zeros(len(robot_config.dof_names), device=self._env.device)
-        for i, joint_name in enumerate(robot_config.dof_names):
-            if joint_name in robot_config.init_state.default_joint_angles:
-                default_joint_angles[i] = robot_config.init_state.default_joint_angles[joint_name]
+        default_joint_positions = torch.tensor(
+            list(robot_config.default_dof_positions().values()), device=self._env.device
+        )
 
-        # Get action scale from robot config
-        action_scale = robot_config.control.action_scale
+        action_scale = torch.as_tensor(get_action_scales_from_env(self._env), device=self._env.device)
+        if action_scale.numel() != len(robot_config.dof_names):
+            raise ValueError(
+                f"FastSAC requires one action scale per DOF, got {action_scale.numel()} for "
+                f"{len(robot_config.dof_names)} DOFs."
+            )
+        invalid_scale = ~torch.isfinite(action_scale) | (action_scale <= 0.0)
+        if bool(invalid_scale.any()):
+            invalid = [name for name, flag in zip(self._env.dof_names, invalid_scale.tolist()) if flag]
+            raise ValueError(f"FastSAC requires finite positive action scales; invalid DOFs: {invalid}.")
 
         # Compute maximum range from default to either limit for each joint
         # This ensures symmetric scaling where action=0 -> default position
-        range_to_lower = torch.abs(dof_pos_lower_limits - default_joint_angles)
-        range_to_upper = torch.abs(dof_pos_upper_limits - default_joint_angles)
+        range_to_lower = torch.abs(dof_pos_lower_limits - default_joint_positions)
+        range_to_upper = torch.abs(dof_pos_upper_limits - default_joint_positions)
         max_range = torch.maximum(range_to_lower, range_to_upper)
 
         # Account for action_scale: the environment applies actions_scaled = actions * action_scale
@@ -210,7 +224,7 @@ class FastSACAgent(BaseAlgo):
         actor_obs_keys = self.config.actor_obs_keys
         critic_obs_keys = self.config.critic_obs_keys
 
-        n_act = self.env.robot_config.actions_dim
+        n_act = self.env.dim_actions
 
         # Compute actor observation dimensions and store indices
         actor_obs_dim = 0
@@ -354,7 +368,7 @@ class FastSACAgent(BaseAlgo):
 
         if args.use_symmetry:
             # using env._env is not really ideal..
-            self.symmetry_utils = SymmetryUtils(env._env)
+            self.symmetry_utils = SymmetryUtils(env._env, args.symmetry)
 
         # Synchronize model parameters across GPUs for consistent initialization
         if self.is_multi_gpu:
@@ -982,13 +996,9 @@ class FastSACAgent(BaseAlgo):
             )
 
         # Extract control gains and velocity limits & attach to onnx as metadata
-        kp_list, kd_list = get_control_gains_from_config(self.env.robot_config)
+        kp_list, kd_list = get_control_gains_from_env(self.unwrapped_env)
         cmd_ranges = get_command_ranges_from_env(self.unwrapped_env)
-        action_scales = getattr(self.unwrapped_env, "action_scales", None)
-        if action_scales is None:
-            action_scale_metadata: float | list[float] = float(self.env.robot_config.control.action_scale)
-        else:
-            action_scale_metadata = action_scales.detach().cpu().tolist()
+        action_scale_metadata = get_action_scales_from_env(self.unwrapped_env).detach().cpu().tolist()
         # Extract URDF text from the robot config
         urdf_file_path, urdf_str = get_urdf_text_from_robot_config(self.env.robot_config)
 

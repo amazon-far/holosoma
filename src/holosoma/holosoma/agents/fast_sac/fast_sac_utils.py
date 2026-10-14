@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import os
 from collections.abc import Mapping
 from typing import Any, Callable
@@ -380,7 +381,9 @@ def save_params(
         "q_optimizer_state_dict": q_optimizer.state_dict(),
         "alpha_optimizer_state_dict": alpha_optimizer.state_dict(),
         "grad_scaler_state_dict": scaler.state_dict() if scaler is not None else None,
-        "args": vars(args),  # Save all arguments
+        # Primitives only: nested configs (e.g. ``symmetry``) must not be pickled as objects, or a
+        # ``torch.load(weights_only=True)`` reader (eval_utils on torch >= 2.6) rejects the checkpoint.
+        "args": dataclasses.asdict(args),
         "global_step": global_step,
     }
     if env_state:

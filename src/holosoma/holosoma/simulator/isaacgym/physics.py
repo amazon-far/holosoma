@@ -13,7 +13,7 @@ from isaacgym import gymapi
 from loguru import logger
 
 if TYPE_CHECKING:
-    from holosoma.config_types.robot import RobotAssetConfig
+    from holosoma.config_types.robot import RobotAssetConfig, RobotConfig
     from holosoma.config_types.scene import PhysicsConfig
 
 
@@ -31,14 +31,14 @@ def build_robot_asset_options(asset_cfg: RobotAssetConfig) -> gymapi.AssetOption
     def set_value_if_not_none(prev_value: Any, new_value: Any) -> Any:
         return new_value if new_value is not None else prev_value
 
-    # Asset-import knobs that stay on RobotAssetConfig (no PhysicsConfig analogue).
+    # Asset-import knobs that stay on RobotAssetConfig (no PhysicsConfig analogue). Armature is not
+    # among them: the per-DOF dof_armature is written onto the DOF properties after load.
     asset_config_options = [
         "default_dof_drive_mode",
         "collapse_fixed_joints",
         "replace_cylinder_with_capsule",
         "flip_visual_attachments",
         "fix_base_link",
-        "armature",
         "thickness",
         "disable_gravity",
     ]
@@ -199,3 +199,39 @@ def apply_mass_from_config(
     # Priority 3: No mass/density config - use URDF values
     current_mass = sum(prop.mass for prop in body_props)
     logger.debug(f"Using URDF mass for '{object_name}': {current_mass}")
+
+
+def apply_dof_properties_from_config(props: Any, robot_config: RobotConfig, dof_ids: list[int] | None = None) -> Any:
+    """Apply validated name/tag overrides; uncovered joints keep the URDF properties.
+
+    Position limits -> ``lower`` / ``upper`` (and ``hasLimits``), ``velocity``, ``effort``, ``armature``,
+    ``friction``, indexed by canonical ``dof_names`` and scattered through ``dof_ids`` into asset order.
+    Mutates and returns ``props`` (the ``gymapi`` DOF-properties structured array); the simulator reads
+    its limit tensors back from it, so they are what PhysX enforces.
+    """
+    from holosoma.utils.robot_properties import resolve_dof_properties
+
+    overrides = resolve_dof_properties(robot_config)
+    num_dof = len(props)
+    if num_dof != len(robot_config.dof_names):
+        raise ValueError(
+            f"Asset has {num_dof} DOFs but robot_config.dof_names has {len(robot_config.dof_names)}; "
+            "DOF overrides cannot be applied."
+        )
+    dof_ids = list(range(num_dof)) if dof_ids is None else dof_ids
+    native_ids = dict(zip(robot_config.dof_names, dof_ids))
+    for name, bounds in overrides.position.items():
+        native_id = native_ids[name]
+        props["lower"][native_id] = bounds[0]
+        props["upper"][native_id] = bounds[1]
+        props["hasLimits"][native_id] = True
+    fields = (
+        ("velocity", overrides.velocity),
+        ("effort", overrides.effort),
+        ("armature", overrides.armature),
+        ("friction", overrides.friction),
+    )
+    for field, values in fields:
+        for name, value in values.items():
+            props[field][native_ids[name]] = value
+    return props

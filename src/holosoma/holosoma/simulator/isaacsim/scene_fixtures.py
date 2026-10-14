@@ -17,7 +17,7 @@ from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.terrains.utils import create_prim_from_mesh
 from pxr import Usd, UsdGeom
 
-from holosoma.simulator.isaacsim.prim_utils import resolve_robot_link_prim_expression
+from holosoma.simulator.isaacsim.prim_utils import resolve_robot_root_prim_expression
 
 if TYPE_CHECKING:
     from isaaclab.scene import InteractiveScene
@@ -52,7 +52,8 @@ def _hide_prim_subtree(stage: Usd.Stage, prim_path: str) -> None:
 
 
 def build_terrain_fixtures(
-    terrain_manager: TerrainManager, scene: InteractiveScene, robot_base_body_name: str
+    terrain_manager: TerrainManager,
+    scene: InteractiveScene,
 ) -> TerrainFixtures:
     """Author the terrain ground prim + optional height scanner cfg.
 
@@ -62,8 +63,6 @@ def build_terrain_fixtures(
         Source of the ``locomotion_terrain`` state (mesh type, friction, visibility).
     scene : InteractiveScene
         The scene being built; its ``cfg.num_envs`` / ``cfg.env_spacing`` size the plane importer.
-    robot_base_body_name : str
-        Robot base-link body name the height scanner attaches to.
 
     Returns
     -------
@@ -80,10 +79,10 @@ def build_terrain_fixtures(
 
     height_scanner_cfg: RayCasterCfg | None = None
     if terrain_state.mesh_type not in ["fake", None]:
-        # Add a height scanner to the torso to detect the height of the terrain mesh
+        # Add a height scanner to the robot articulation root to detect the terrain height.
         # TODO: Scene USD files need ground mapping
         height_scanner_cfg = RayCasterCfg(
-            prim_path=resolve_robot_link_prim_expression(robot_base_body_name),
+            prim_path=resolve_robot_root_prim_expression(),
             offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
             attach_yaw_only=True,
             # Apply a grid pattern that is smaller than the resolution to only return one height value.

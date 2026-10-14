@@ -23,6 +23,7 @@ dependencies = [
     "astor",
     "boto3",
     "easydict",
+    "eval_type_backport; python_version < '3.10'",
     "importlib_resources; python_version < '3.9'",
     "ipdb",
     "joblib",

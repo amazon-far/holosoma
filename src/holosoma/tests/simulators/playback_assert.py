@@ -76,12 +76,7 @@ def _build(simulator: str, num_envs: int, plugin=None, kinematic: bool = False):
     sim.setup()
     sim.setup_terrain()
     sim.load_assets()
-    base_init = torch.tensor(
-        list(config.robot.init_state.pos)
-        + list(config.robot.init_state.rot)
-        + list(config.robot.init_state.lin_vel)
-        + list(config.robot.init_state.ang_vel)
-    )
+    base_init = torch.tensor(list(config.robot.init_state.root_state_list()))
     sim.create_envs(num_envs, torch.zeros(num_envs, 3, device=device), base_init)
     sim.prepare_sim()
     sim.install_plugins()

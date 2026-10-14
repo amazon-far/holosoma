@@ -476,6 +476,8 @@ class _PlaybackSim(_FakeSim):
         self.num_envs = 1
         self.num_dof = 2
         self.sim_device = "cpu"
+        # The plugin skips a clip's root block on a fixed-base robot; this fake is a floating one.
+        self.robot_config = SimpleNamespace(asset=SimpleNamespace(fix_base_link=False))
         self.dof_pos = torch.zeros(1, self.num_dof)
         self.dof_vel = torch.zeros(1, self.num_dof)
         self.robot_root_states = torch.zeros(1, 13)

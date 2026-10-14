@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import field
 
-from pydantic import model_validator
+from pydantic import ConfigDict, model_validator
 from pydantic.dataclasses import dataclass
 
 from holosoma.config_types.scene import PhysicsConfig
-from holosoma.config_types.value_types import UnitQuaternionXYZW
+from holosoma.config_types.value_types import UnitQuaternionWXYZ
+from holosoma.utils.name_tags import expand_joint_value_map, validate_tag_table
+from holosoma.utils.robot_properties import resolve_dof_properties
+
+# Unknown fields are a configuration error, not something to drop silently: a removed or misspelled
+# key would otherwise change behaviour without a trace.
+_FORBID_EXTRA = ConfigDict(extra="forbid")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=_FORBID_EXTRA)
 class RobotBridgeConfig:
     """Bridge-specific configuration for robot SDK communication.
 
@@ -28,19 +35,15 @@ class RobotBridgeConfig:
     """Motor communication type ('serial', etc.)."""
 
     controlled_dof_names: tuple[str, ...] = ()
-    """Explicit allow-list of DOF names this SDK bridge controls, in order. When non-empty this
-    WINS over ``excluded_dof_names``. Empty (default) = control every DOF.
-
-    Use when the robot has more simulated DOFs than the SDK models (so the bridge must drive only
-    a named subset and leave the rest to a co-controller); leave empty when the SDK owns the whole
-    robot."""
+    """Canonical DOF names in bridge motor order, without duplicates. Required by transports with
+    fixed unnamed motor slots, such as Unitree and Booster, even for whole-robot control. A nonempty
+    tuple takes precedence over ``excluded_dof_names``. Preserve this order when reordering
+    ``RobotConfig.dof_names``."""
 
     excluded_dof_names: tuple[str, ...] = ()
-    """DOF names to LEAVE OUT of this bridge (control everything else). Used only when
-    ``controlled_dof_names`` is empty. Empty (default) = control every DOF.
-
-    The complement of ``controlled_dof_names``: name the few DOFs a co-controller owns instead of
-    the many the SDK drives."""
+    """DOFs to omit when ``controlled_dof_names`` is empty; remaining DOFs follow canonical order.
+    Both empty selects all DOFs for bridges whose transport accepts canonical order. Unitree and Booster
+    use fixed hardware motor IDs and require an explicit controlled tuple instead."""
 
     sdk_robot_type: str | None = None
     """robot_type presented to the SDK bridge (its supported-type gate + motor-vector sizing).
@@ -51,35 +54,56 @@ class RobotBridgeConfig:
     DOF subset must then match that model's motor count."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=_FORBID_EXTRA)
 class RobotInitState:
-    pos: list[float]
-    rot: UnitQuaternionXYZW
-    """Initial unit quaternion [x, y, z, w]. Norm deviations up to 1e-4 are normalized."""
-    lin_vel: list[float]
-    ang_vel: list[float]
-    default_joint_angles: dict[str, float]
+    """Where the robot spawns and how its joints start."""
+
+    position: list[float]
+    """Base position [x, y, z] in metres, before per-env origins are added."""
+
+    orientation: UnitQuaternionWXYZ = field(
+        default_factory=lambda: [1.0, 0.0, 0.0, 0.0], metadata={"validate_default": True}
+    )
+    """Base unit quaternion ``[w, x, y, z]``. Norm deviations up to 1e-4 are normalized. Default identity."""
+
+    lin_vel: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
+    """Initial base linear velocity [m/s], world frame."""
+
+    ang_vel: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
+    """Initial base angular velocity [rad/s], world frame."""
+
+    default_joint_positions: dict[str, float] = field(default_factory=dict)
+    """Default joint positions (radians for hinge/revolute joints, metres for slide/prismatic joints) keyed
+    by an exact ``dof_names`` entry or a ``#joint_tag`` of the owning ``RobotConfig``. Unspecified
+    joints start at zero; overlapping source keys are rejected. See :meth:`RobotConfig.default_dof_positions`."""
+
+    @property
+    def orientation_xyzw(self) -> list[float]:
+        """The orientation in the runtime tensor convention ``[x, y, z, w]``."""
+        w, x, y, z = self.orientation
+        return [x, y, z, w]
+
+    def root_state_list(self) -> list[float]:
+        """The 13-wide runtime root-state row ``[position(3), quat_xyzw(4), lin_vel(3), ang_vel(3)]``."""
+        return [*self.position, *self.orientation_xyzw, *self.lin_vel, *self.ang_vel]
+
+    @model_validator(mode="after")
+    def _validate_shapes(self) -> RobotInitState:
+        if len(self.position) != 3:
+            raise ValueError(f"RobotInitState.position must have 3 entries, got {self.position}")
+        if len(self.lin_vel) != 3 or len(self.ang_vel) != 3:
+            raise ValueError(
+                f"RobotInitState.lin_vel/ang_vel must have 3 entries each, got {self.lin_vel} / {self.ang_vel}"
+            )
+        return self
 
 
-@dataclass(frozen=True)
-class RobotControlConfig:
-    control_type: str
-    stiffness: dict[str, float]
-    damping: dict[str, float]
-    action_scale: float
-    action_clip_value: float
-    clip_actions: bool
-    clip_torques: bool
-    action_scales_by_effort_limit_over_p_gain: bool = False
-
-
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=_FORBID_EXTRA)
 class RobotAssetConfig:
     asset_root: str
     collapse_fixed_joints: bool
     replace_cylinder_with_capsule: bool
     flip_visual_attachments: bool
-    armature: float
     thickness: float
     urdf_file: str
     usd_file: str | None
@@ -88,7 +112,7 @@ class RobotAssetConfig:
     enable_self_collisions: bool
     default_dof_drive_mode: int
     fix_base_link: bool
-    mesh_root: str | None = None
+    """Weld the robot's root to the world, for example for a fixed-base arm, instead of giving it a free joint."""
     disable_gravity: bool | None = None
 
     link_physics: PhysicsConfig | None = None
@@ -121,74 +145,94 @@ class RobotAssetConfig:
         return self
 
 
-@dataclass(frozen=True)
-class RobotForceControlConfig:
-    apply_force_link: list[str] | None = None
-    left_hand_link: str | None = None
-    right_hand_link: str | None = None
-
-
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=_FORBID_EXTRA)
 class RobotConfig:
-    num_bodies: int
-    dof_obs_size: int
-    algo_obs_dim_dict: dict[str, int]
-    actions_dim: int
-    policy_obs_dim: int
-    critic_obs_dim: int
-    contact_pairs_multiplier: int
-    key_bodies: list[str]
-    num_feet: int
-    foot_body_name: str
-    """Name/pattern of the real foot link(s) used for contacts and kinematics."""
-    foot_height_name: str
-    """Name/pattern of auxiliary 'fake' foot link(s) used only to compute foot height/clearance"""
-    knee_name: str
-    torso_name: str
-    dof_names: list[str]
-    upper_dof_names: list[str]
-    upper_left_arm_dof_names: list[str]
-    upper_right_arm_dof_names: list[str]
-    lower_dof_names: list[str]
-    has_torso: bool
-    has_upper_body_dof: bool
-    left_ankle_dof_names: list[str]
-    right_ankle_dof_names: list[str]
-    knee_dof_names: list[str]
-    hips_dof_names: list[str]
-    dof_pos_lower_limit_list: list[float]
-    dof_pos_upper_limit_list: list[float]
-    dof_vel_limit_list: list[float]
-    dof_effort_limit_list: list[float]
-    dof_armature_list: list[float]
-    dof_joint_friction_list: list[float]
-    body_names: list[str]
-    terminate_after_contacts_on: list[str]
-    penalize_contacts_on: list[str]
-    init_state: RobotInitState
-    randomize_link_body_names: list[str]
+    """Robot articulation, initial state, and physical properties shared by the simulators.
 
-    control: RobotControlConfig
+    ``dof_names`` defines action and per-DOF value order; ``body_names`` defines body-observation order.
+    Names match the asset exactly; tags select joints or bodies in task terms.
+    Sparse name/tag property maps override asset values only for the joints they cover.
+    """
+
+    dof_names: list[str]
+    """Every robot DOF is a NAMED 1-DOF joint (hinge/revolute or slide/prismatic). This order is the
+    action order, independent of asset enumeration. Physical properties are keyed by name/tag."""
+    body_names: list[str]
+    """Canonical robot bodies in observation order. Extra asset helper bodies may be omitted."""
+    init_state: RobotInitState
+
     asset: RobotAssetConfig
+
+    dof_pos_limits: dict[str, tuple[float, float]] | None = None
+    """Name/tag -> (lower, upper) position bounds (rad / m). Unspecified joints keep asset limits."""
+    dof_vel_limits: dict[str, float] | None = None
+    """Name/tag -> velocity limit (rad/s or m/s). Unspecified joints keep asset limits.
+    MuJoCo reports these values (otherwise infinity), but does not enforce joint velocity limits."""
+    dof_effort_limits: dict[str, float] | None = None
+    """Name/tag -> effort limit (N m for hinges, N for slides). Unspecified joints keep asset limits."""
+    dof_armature: dict[str, float] | None = None
+    """Name/tag -> armature. Unspecified joints keep asset values."""
+    dof_joint_friction: dict[str, float] | None = None
+    """Name/tag -> joint friction. Unspecified joints keep asset values. MuJoCo uses friction loss
+    (N m for hinges, N for slides); PhysX uses a dimensionless coefficient."""
 
     bridge: RobotBridgeConfig = field(default_factory=RobotBridgeConfig)
     """Bridge SDK configuration for this robot."""
 
-    waist_dof_names: list[str] | None = None
-    waist_yaw_dof_name: str | None = None
-    waist_roll_dof_name: str | None = None
-    waist_pitch_dof_name: str | None = None
+    body_tags: dict[str, list[str]] = field(default_factory=dict)
+    """Named sets of robot bodies, declared and referenced with a leading ``#``
+    (``{"#feet": ["left_ankle_roll_link", "right_ankle_roll_link"]}``). Entries are exact ``body_names``
+    entries or other ``#tags``. ``#all`` (every body) is defined automatically unless given. Used by
+    tag-aware term parameters, e.g. a termination term's ``bodies=["#root", "#hip_links"]`` or the
+    mass-randomization ``link_bodies``; see ``holosoma.utils.name_tags``."""
 
-    arm_dof_names: list[str] | None = None
-    left_arm_dof_names: list[str] | None = None
-    right_arm_dof_names: list[str] | None = None
+    joint_tags: dict[str, list[str]] = field(default_factory=dict)
+    """Named sets of robot DOFs, same syntax as ``body_tags`` over ``dof_names``, ``#all`` included
+    automatically. Used by action/controller parameters, ``default_joint_positions`` keys, or
+    algorithm configs such as the symmetry augmentation's
+    ``#mirror_left`` / ``#mirror_right`` pairs."""
 
-    symmetry_joint_names: dict[str, str] | None = None
-    flip_sign_joint_names: list[str] | None = None
+    def default_dof_positions(self) -> dict[str, float]:
+        """Return a fresh, validated map of exact DOF names to default joint positions.
 
-    apply_dof_armature_in_isaacgym: bool = True
-    knee_joint_min_threshold: float = 0.2
-    lidar_height_offset: float = 0.5
+        Expands tags in ``dof_names`` order without modifying the config. Unspecified joints get zero;
+        overlapping assignments and non-finite values are rejected (rad for hinges, m for slides).
+        Use ``list(result.values())`` for a vector.
+        """
+        supplied = expand_joint_value_map(
+            self.init_state.default_joint_positions,
+            self.joint_tags,
+            self.dof_names,
+            what="RobotConfig.init_state.default_joint_positions",
+            required=False,
+        )
+        return {name: supplied.get(name, 0.0) for name in self.dof_names}
 
-    soft_dof_pos_limit: float = 0.95
-    termination_close_to_dof_pos_limit: float = 0.98
+    @model_validator(mode="after")
+    def _validate_articulation(self) -> RobotConfig:
+        """Cross-field consistency: every per-DOF table is indexed by ``dof_names``."""
+        _require_unique(self.dof_names, "dof_names")
+        if not self.body_names:
+            raise ValueError("RobotConfig.body_names must not be empty.")
+        _require_unique(self.body_names, "body_names")
+        _require_unique(list(self.bridge.controlled_dof_names), "bridge.controlled_dof_names")
+        bridge_names = set(self.bridge.controlled_dof_names) | set(self.bridge.excluded_dof_names)
+        unknown_bridge = sorted(bridge_names - set(self.dof_names))
+        if unknown_bridge:
+            raise ValueError(f"RobotConfig.bridge names {unknown_bridge} are not in dof_names.")
+
+        # '#all' is always available; a declared '#all' wins.
+        object.__setattr__(self, "body_tags", {"#all": list(self.body_names), **self.body_tags})
+        if self.dof_names:
+            object.__setattr__(self, "joint_tags", {"#all": list(self.dof_names), **self.joint_tags})
+        validate_tag_table(self.body_tags, self.body_names, kind="body")
+        validate_tag_table(self.joint_tags, self.dof_names, kind="joint")
+        # Keyed-by-DOF tables resolve against the validated tag table.
+        resolve_dof_properties(self)
+        return self
+
+
+def _require_unique(names: list[str], field_name: str) -> None:
+    duplicates = sorted(name for name, count in Counter(names).items() if count > 1)
+    if duplicates:
+        raise ValueError(f"RobotConfig.{field_name} has duplicate entries: {duplicates}")

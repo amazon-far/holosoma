@@ -161,7 +161,7 @@ def main() -> int:
     env_origins = torch.zeros(n, 3, device=device)
     init = config.robot.init_state
     base_init = torch.tensor(
-        list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel),
+        init.root_state_list(),
         device=device,
         dtype=torch.float32,
     )
@@ -178,9 +178,9 @@ def main() -> int:
     actual_origins = sim.env_origins
     all_ids = torch.arange(n, device=device)
     states = sim.get_actor_states(["robot"], all_ids).clone()
-    states[:, :3] = actual_origins + torch.tensor(list(init.pos), device=device)
+    states[:, :3] = actual_origins + torch.tensor(init.position, device=device)
     states[:, 1] -= 1.5
-    states[:, 3:7] = torch.tensor(list(init.rot), device=device)
+    states[:, 3:7] = torch.tensor(init.orientation_xyzw, device=device)
     states[:, 7:] = 0.0
     sim.set_actor_states(["robot"], all_ids, states)
 

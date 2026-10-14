@@ -17,6 +17,7 @@ from holosoma.config_types.sensor import CameraSensorConfig, LidarSensorConfig
 from holosoma.config_types.simulator import MujocoXMLFilterCfg, SimulatorConfig
 from holosoma.managers.terrain.base import TerrainTermBase
 from holosoma.simulator.mujoco.geom_groups import tag_compiled_robot_geom_groups
+from holosoma.simulator.mujoco.robot_addressing import add_missing_dof_motors, validate_robot_joint_types
 from holosoma.simulator.shared.asset_format import select_asset_format
 from holosoma.utils.path import resolve_asset_path
 
@@ -72,7 +73,6 @@ class MujocoSceneManager:
         self.world_spec = mujoco.MjSpec()
         self.world_spec.copy_during_attach = True
         self._setup_world_options(simulator_config)
-        self.robot_config: RobotConfig | None = None  # Set when adding robot
         # Actor name -> prefixed root-body name, for resolving each actor's freejoint
         # by exact body (avoids prefix-startswith collisions like "a_" vs "a_b_").
         self.robot_root_body: str | None = None  # Set when adding robot
@@ -370,8 +370,15 @@ class MujocoSceneManager:
             # assumes the robot XML knows what it's doing
             self._apply_collision_settings(robot_spec, robot_config)
 
-        # Require a single free body; capture its root-body name for addressing.
-        root_body = self._ensure_single_root_body(robot_spec, robot_config.asset.robot_type, add_freejoint=True)
+        # Require a single root body; capture its root-body name for addressing. A floating base
+        # gets a freejoint (reused if authored); a fixed base is welded to the world like a static
+        # scene object (root-joint rule in _set_root_joint).
+        fixed = robot_config.asset.fix_base_link
+        root_body = self._ensure_single_root_body(robot_spec, robot_config.asset.robot_type, free=not fixed)
+        # Every non-free joint must be a named hinge/slide (one qpos/dof address per DOF); a DOF joint
+        # without a motor of its name gets one.
+        validate_robot_joint_types(robot_spec, robot_config.asset.robot_type)
+        add_missing_dof_motors(robot_spec, robot_config.asset.robot_type)
 
         # Apply the robot's shared link_physics (geom material/density) to every link body via the
         # same seam objects use, before attach/compile so it lands in root_model before put_model.
@@ -381,9 +388,14 @@ class MujocoSceneManager:
         # Capture the robot's element inventory before attach (see ActorSpecMeta).
         self.robot_spec_meta = self._capture_spec_meta(robot_spec, prefix, root_body)
 
-        # Attach at a unit frame; the real initial pose is set later via qpos.
-        unit_frame = self.world_spec.worldbody.add_frame()
-        self.world_spec.attach(robot_spec, frame=unit_frame, prefix=prefix)
+        # A floating robot attaches at a unit frame; its initial pose is set later via qpos. A fixed
+        # robot has no qpos, so its init_state pose is baked into the attach frame (same as a fixed
+        # rigid object; config orientation is wxyz, which MjSpec frames use).
+        frame = self.world_spec.worldbody.add_frame()
+        if fixed:
+            frame.pos = list(robot_config.init_state.position)
+            frame.quat = list(robot_config.init_state.orientation)  # [w, x, y, z]
+        self.world_spec.attach(robot_spec, frame=frame, prefix=prefix)
 
         # Store the prefixed root-body name for the simulator's freejoint resolution. (Robot
         # element membership / name maps come from robot_spec_meta, captured above, not a prefix.)
@@ -401,9 +413,9 @@ class MujocoSceneManager:
 
         A free object (``fixed=False``) gets a free joint so it can move and is
         addressed via its qpos slice. A static object (``fixed=True``) is attached to
-        the world with no joint, so it holds its pose; it has no qpos slice and its
-        pose is read from xpos. The asset format is chosen by ``supported_formats``
-        preference order via ``select_asset_format``.
+        the world with no joint (an authored root freejoint is dropped), so it holds its
+        pose; it has no qpos slice and its pose is read from xpos. The asset format is
+        chosen by ``supported_formats`` preference order via ``select_asset_format``.
 
         Parameters
         ----------
@@ -431,8 +443,9 @@ class MujocoSceneManager:
             # Asset files may carry their own lights/ground; strip them like the robot.
             obj_spec = self._filter_worldbody(obj_spec, xml_filter)
 
-        # Single top-level body; add a free joint only for free (non-fixed) objects.
-        root_body = self._ensure_single_root_body(obj_spec, name, add_freejoint=not obj_config.fixed)
+        # Single top-level body; free objects get a freejoint, fixed objects are welded (root-joint
+        # rule in _set_root_joint, shared with the robot and scene-file paths).
+        root_body = self._ensure_single_root_body(obj_spec, name, free=not obj_config.fixed)
 
         # Apply the per-object physics override (shared PhysicsConfig) to the body before attach,
         # while the spec still holds only this object's elements.
@@ -513,8 +526,8 @@ class MujocoSceneManager:
 
         # Classify each top-level body: free joint => free, jointless => static (the file's
         # structure), with any per-object config override applied. The body is then made to
-        # match (a freejoint dropped from a forced-static body, or added to a forced-free
-        # one) so its joint state and registered type always agree.
+        # match via the shared root-joint rule (a freejoint dropped from a forced-static body,
+        # or added to a forced-free one) so its joint state and registered type always agree.
         body_is_static: dict[str, bool] = {}
         for body in included:
             if body.name in body_is_static:
@@ -522,12 +535,9 @@ class MujocoSceneManager:
                     f"Scene file '{scene_file_name}' has duplicate top-level body '{body.name}'; "
                     "body names must be unique within a file."
                 )
-            freejoint = next((j for j in body.joints if j.type == mujoco.mjtJoint.mjJNT_FREE), None)
-            is_static = scene_file.resolve_fixed(body.name, structural_default=freejoint is None)
-            if is_static and freejoint is not None:
-                spec.delete(freejoint)  # override: forced static -> drop its freejoint
-            elif not is_static and freejoint is None:
-                body.add_freejoint()  # override: forced free -> give it a freejoint
+            has_freejoint = any(j.type == mujoco.mjtJoint.mjJNT_FREE for j in body.joints)
+            is_static = scene_file.resolve_fixed(body.name, structural_default=not has_freejoint)
+            self._set_root_joint(spec, body, free=not is_static)
             # Per-body physics override (shared resolve_physics rule, same as IsaacGym/IsaacSim),
             # applied to this body before the file is attached.
             self._apply_physics_to_body(body, scene_file.resolve_physics(body.name), f"{scene_file_name}_{body.name}")
@@ -661,11 +671,9 @@ class MujocoSceneManager:
             meta = self.robot_spec_meta
             if meta is None:
                 raise ValueError(f"Sensor mount target_kind='robot_link' (link '{target}') but no robot was added.")
-            if target != meta.root_body and target not in meta.body_names:
-                raise ValueError(
-                    f"Sensor mount robot_link '{target}' is not a robot body. "
-                    f"Known links: {[meta.root_body, *meta.body_names]}."
-                )
+            from holosoma.utils.robot_names import validate_asset_names
+
+            validate_asset_names([target], meta.body_names, kind="body")
             return f"{meta.prefix}{target}"
         if target_kind == "actor":
             if target in self.rigid_object_root_bodies:
@@ -745,22 +753,21 @@ class MujocoSceneManager:
                 continue
             self._apply_physics_to_body(body, asset.link_physics, f"{asset.robot_type}/{body.name}", apply_mass=False)
 
-    def _ensure_single_root_body(self, spec: mujoco.MjSpec, name: str, add_freejoint: bool = True) -> str:
-        """Require a single top-level body; return its root-body name.
+    @staticmethod
+    def _ensure_single_root_body(spec: mujoco.MjSpec, name: str, *, free: bool) -> str:
+        """Require a single top-level body, set its root joint via :meth:`_set_root_joint`, return its name.
 
-        Every actor (robot or rigid object) is modelled as a single top-level body.
-        Raises if the asset has multiple. When ``add_freejoint`` is True (free bodies),
-        reuses an existing freejoint or adds one; when False (static SCENE bodies), the
-        body is left jointless so it stays welded to the world.
+        Every single-body actor (robot or rigid object) is modelled as one top-level body; raises if
+        the asset has several.
 
         Parameters
         ----------
         spec : mujoco.MjSpec
-            The asset spec (mutated: a freejoint is added if requested and absent).
+            The asset spec (mutated by ``_set_root_joint``).
         name : str
             Actor name, for error messages.
-        add_freejoint : bool
-            Add a free joint (free body) vs. leave jointless (static body).
+        free : bool
+            Free body (freejoint) vs. welded body (jointless root).
 
         Returns
         -------
@@ -771,9 +778,28 @@ class MujocoSceneManager:
         if len(root_bodies) != 1:
             raise ValueError(f"Actor '{name}' asset has {len(root_bodies)} top-level bodies; exactly one is supported.")
         root_body = root_bodies[0]
-        if add_freejoint and not any(j.type == mujoco.mjtJoint.mjJNT_FREE for j in root_body.joints):
-            root_body.add_freejoint()
+        MujocoSceneManager._set_root_joint(spec, root_body, free=free)
         return str(root_body.name)
+
+    @staticmethod
+    def _set_root_joint(spec: mujoco.MjSpec, body: mujoco.MjSpec.Body, *, free: bool) -> None:
+        """Make ``body``'s root joint match ``free``: the one root-joint rule for every actor path.
+
+        A free body ends up with exactly one freejoint (an authored one is kept, one is added when
+        absent); a welded body ends up with none (an authored freejoint is deleted). Shared by
+        ``add_robot`` (floating vs. fixed base), ``add_rigid_object`` (``fixed``) and
+        ``add_scene_file`` (per-body static classification) so an actor's joint state and its
+        registered free/static type always agree.
+        """
+        freejoint = next((j for j in body.joints if j.type == mujoco.mjtJoint.mjJNT_FREE), None)
+        if free and freejoint is None:
+            body.add_freejoint()
+        elif not free and freejoint is not None:
+            spec.delete(freejoint)
+            # An authored keyframe's qpos counts the deleted freejoint's 7 entries and would fail to
+            # compile; holosoma never reads MJCF keyframes.
+            for key in list(spec.keys):
+                spec.delete(key)
 
     def _capture_spec_meta(self, spec: mujoco.MjSpec, prefix: str, root_body: str) -> ActorSpecMeta:
         """Record an actor's named element inventory from its isolated (pre-attach) spec.

@@ -31,7 +31,7 @@ def test_e2e_step() -> None:
         assert len(obs_dict["actor_obs"]) == num_envs
         assert len(obs_dict["critic_obs"]) == num_envs
 
-        actions_dim = tyro_config.robot.actions_dim
+        actions_dim = env.dim_actions
         actions = torch.zeros(num_envs, actions_dim, device=device)
 
         n_dones = 0

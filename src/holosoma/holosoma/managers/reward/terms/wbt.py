@@ -11,6 +11,7 @@ from loguru import logger
 from holosoma.config_types.reward import RewardTermCfg
 from holosoma.managers.command.terms.wbt import MotionCommand
 from holosoma.managers.reward.base import RewardTermBase
+from holosoma.simulator.shared.dof_limits import soft_limits
 from holosoma.utils.rotations import quat_error_magnitude
 
 if TYPE_CHECKING:
@@ -48,16 +49,13 @@ def limits_dof_pos(env: WholeBodyTrackingManager, soft_dof_pos_limit: float = 0.
 
     Args:
         env: The environment instance
-        soft_dof_pos_limit: Soft limit as fraction of hard limit
+        soft_dof_pos_limit: Fraction of the hard position interval. The shared soft_limits utility
+            handles unbounded joints without NaNs and keeps contraction out of simulator state.
 
     Returns:
         Reward tensor [num_envs]
     """
-    # Use soft limits as fraction of hard limits
-    m = (env.simulator.hard_dof_pos_limits[:, 0] + env.simulator.hard_dof_pos_limits[:, 1]) / 2  # type: ignore[attr-defined]
-    r = env.simulator.hard_dof_pos_limits[:, 1] - env.simulator.hard_dof_pos_limits[:, 0]  # type: ignore[attr-defined]
-    lower_soft_limit = m - 0.5 * r * soft_dof_pos_limit
-    upper_soft_limit = m + 0.5 * r * soft_dof_pos_limit
+    lower_soft_limit, upper_soft_limit = soft_limits(env.simulator.dof_pos_limits, soft_dof_pos_limit).unbind(1)
 
     out_of_limits = -(env.simulator.dof_pos - lower_soft_limit).clip(max=0.0)  # lower limit
     out_of_limits += (env.simulator.dof_pos - upper_soft_limit).clip(min=0.0)

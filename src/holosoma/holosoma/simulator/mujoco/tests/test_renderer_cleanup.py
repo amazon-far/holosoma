@@ -57,6 +57,39 @@ def _mujoco_simulator() -> MuJoCo:
     return MuJoCo(tyro_config, terrain_manager=SimpleNamespace(), device="cpu")  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize("fixed", [False, True], ids=["floating", "fixed"])
+def test_render_tracks_the_selected_world_robot_root(fixed: bool) -> None:
+    simulator = object.__new__(MuJoCo)
+    selected_world = 3
+    root_position = np.array([4.0, 5.0, 6.0])
+    data = SimpleNamespace(qpos=np.zeros(10), xpos=np.zeros((8, 3)))
+    data.qpos[2:5] = root_position
+    data.xpos[7] = root_position
+    render_worlds: list[int] = []
+    syncs: list[None] = []
+
+    def get_render_data(*, world_id: int) -> Any:
+        render_worlds.append(world_id)
+        return data
+
+    simulator.backend = cast("Any", SimpleNamespace(get_render_data=get_render_data))
+    simulator.current_world_id = selected_world
+    simulator.viewer = SimpleNamespace(
+        cam=SimpleNamespace(lookat=np.zeros(3)),
+        sync=lambda: syncs.append(None),
+    )
+    simulator.simulator_config = cast("Any", SimpleNamespace(viewer=SimpleNamespace(enable_tracking=True)))
+    simulator.object_addrs = {} if fixed else {"robot": {"qpos_addr": 2}}
+    simulator.static_object_body_ids = {"robot": 7} if fixed else {}
+    simulator.debug_viz_enabled = False
+
+    simulator.render()
+
+    assert render_worlds == [selected_world]
+    np.testing.assert_array_equal(simulator.viewer.cam.lookat, root_position)
+    assert syncs == [None]
+
+
 def test_mujoco_closes_viewer_before_backend_once(monkeypatch: pytest.MonkeyPatch) -> None:
     simulator = _mujoco_simulator()
     events: list[str] = []

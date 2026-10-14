@@ -1,0 +1,34 @@
+<!-- Minimal fixed-base 3-DOF arm for the fixed-base robot tests (MJCF form of test_arm.urdf).
+
+     One top-level body with NO freejoint: the scene manager adds one only for a floating-base robot,
+     so with asset.fix_base_link=True base_link stays welded to the world. DFS body order
+     [base_link, link1, link2, slider] and joint order [shoulder_joint, elbow_joint, slide_joint]
+     equal the URDF link/joint order and the test_arm_fixed preset. One pure torque <motor> per DOF,
+     named like its joint, in DOF order (robot_addressing.validate_dof_actuators). Joint ranges and motor
+     ctrlrange equal the URDF limits / efforts (radians / metres / N); armature and frictionloss come from the
+     config. -->
+<mujoco model="test_arm">
+  <compiler angle="radian" autolimits="true"/>
+  <worldbody>
+    <body name="base_link">
+      <geom type="box" size="0.05 0.05 0.05" pos="0 0 0.05" mass="2.0"/>
+      <body name="link1" pos="0 0 0.1">
+        <joint name="shoulder_joint" type="hinge" axis="0 0 1" range="-1.5 1.5"/>
+        <geom type="box" size="0.15 0.025 0.025" pos="0.15 0 0" mass="1.0"/>
+        <body name="link2" pos="0.3 0 0">
+          <joint name="elbow_joint" type="hinge" axis="0 1 0" range="-1.5 1.5"/>
+          <geom type="box" size="0.15 0.025 0.025" pos="0.15 0 0" mass="1.0"/>
+          <body name="slider" pos="0.3 0 0">
+            <joint name="slide_joint" type="slide" axis="1 0 0" range="0 0.05"/>
+            <geom type="box" size="0.02 0.02 0.02" pos="0.02 0 0" mass="0.1"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="shoulder_joint" joint="shoulder_joint" ctrlrange="-20 20"/>
+    <motor name="elbow_joint" joint="elbow_joint" ctrlrange="-20 20"/>
+    <motor name="slide_joint" joint="slide_joint" ctrlrange="-50 50"/>
+  </actuator>
+</mujoco>

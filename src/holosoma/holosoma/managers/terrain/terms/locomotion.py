@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Tuple
+from typing import TYPE_CHECKING, Any, Tuple, cast
+
+from loguru import logger
 
 from holosoma.managers.terrain.base import TerrainTermBase
 from holosoma.simulator.shared.terrain import Terrain
@@ -71,25 +73,33 @@ class TerrainLocomotion(TerrainTermBase):
         )
         self._offset_pos = torch.tensor(list(ATTACHMENT_POS), device=self.device)
 
-        if hasattr(self.env, "feet_height_indices"):
-            # Environment requires feet heights
-            self._compute_feet_heights = True
-            self._feet_heights = torch.zeros(
-                self.num_envs, len(self.env.feet_height_indices), device=self.device, requires_grad=False
-            )
-            self._ray_directions_feet = torch.zeros(
-                self.num_envs, len(self.env.feet_height_indices), 3, device=self.device, requires_grad=False
-            )
-            self._ray_directions_feet[..., :] = torch.tensor([0.0, 0.0, -1.0], device=self.device)
-            self._ray_hits_world_feet = torch.zeros(
-                self.num_envs, len(self.env.feet_height_indices), 3, device=self.device, requires_grad=False
-            )
+        # Feet-height raycasts: one column per resolved body; F=0 turns them off (tensors keep shape [N, 0]).
+        self._feet_height_indices = self._resolve_feet_height_indices()
+        num_feet = len(self._feet_height_indices)
+        self._compute_feet_heights = num_feet > 0
+        self._feet_heights = torch.zeros(self.num_envs, num_feet, device=self.device, requires_grad=False)
+        self._ray_directions_feet = torch.zeros(self.num_envs, num_feet, 3, device=self.device, requires_grad=False)
+        self._ray_directions_feet[..., :] = torch.tensor([0.0, 0.0, -1.0], device=self.device)
+        self._ray_hits_world_feet = torch.zeros(self.num_envs, num_feet, 3, device=self.device, requires_grad=False)
+
+    def _resolve_feet_height_indices(self) -> torch.Tensor:
+        """Body indices for ``cfg.feet_height_bodies`` (None = ``["#feet_height"]`` iff the robot declares that tag).
+
+        Logs the decision at INFO: under the None default a misspelled tag looks the same as a missing one.
+        """
+        spec = self._cfg.feet_height_bodies
+        if spec is None:
+            body_tags = self.env.robot_config.body_tags
+            if "#feet_height" in body_tags:
+                spec, why = ["#feet_height"], "robot declares the '#feet_height' body tag"
+            else:
+                spec, why = [], f"no '#feet_height' body tag; body tags: {sorted(body_tags)}"
         else:
-            # Initialize not-used feet heights tensors with empty tensors
-            self._compute_feet_heights = False
-            self._feet_heights = torch.zeros(0, device=self.device, requires_grad=False)
-            self._ray_directions_feet = torch.zeros(0, 0, 3, device=self.device, requires_grad=False)
-            self._ray_hits_world_feet = torch.zeros(0, 0, 3, device=self.device, requires_grad=False)
+            why = f"feet_height_bodies={list(spec)}"
+        logger.info(f"feet height raycasts {'on' if spec else 'off'}: {why}")
+        if not spec:
+            return torch.zeros(0, dtype=torch.long, device=self.device)
+        return cast("torch.Tensor", self.env.robot_names.resolve_body_indices(spec))
 
     @property
     def env_origins(self) -> torch.Tensor:
@@ -187,7 +197,7 @@ class TerrainLocomotion(TerrainTermBase):
     def _get_feet_heights(self, env_ids: torch.Tensor | None = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """Get feet heights from the terrain."""
         idx = env_ids if env_ids is not None else slice(None)
-        foot_positions = self.env.simulator._rigid_body_pos[idx, self.env.feet_height_indices, :].clone()
+        foot_positions = self.env.simulator._rigid_body_pos[idx, self._feet_height_indices, :]
         ray_starts_world = foot_positions + self._offset_pos[None, None, ...]
         ray_directions_world = self._ray_directions_feet[idx]
         ray_hits_world = warp_utils.ray_cast(ray_starts_world, ray_directions_world, self.warp_mesh)
@@ -277,6 +287,6 @@ class TerrainLocomotion(TerrainTermBase):
             position = self._ray_hits_world_base[env_id, j].detach().cpu().numpy()
             draw.draw_sphere(self.env.simulator, position, 0.02, (1, 0, 0), env_id)
         if self._compute_feet_heights:
-            for j in range(len(self.env.feet_height_indices)):
+            for j in range(len(self._feet_height_indices)):
                 position = self._ray_hits_world_feet[env_id, j].detach().cpu().numpy()
                 draw.draw_sphere(self.env.simulator, position, 0.02, (0, 1, 0), env_id)

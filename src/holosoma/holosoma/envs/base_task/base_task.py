@@ -20,12 +20,18 @@ from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.helpers import get_class
+from holosoma.utils.robot_name_resolver import RobotNameResolver
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.torch_utils import to_torch
 
 
 # Base class for RL tasks built around the manager-based architecture.
 class BaseTask:
+    # Populated by the active joint action term and shared with randomization/export consumers.
+    p_gains: torch.Tensor
+    d_gains: torch.Tensor
+    action_scales: torch.Tensor
+
     def __init__(
         self,
         tyro_config: EnvConfig,
@@ -119,10 +125,8 @@ class BaseTask:
         )
 
         self.num_envs = training_config.num_envs
-        self.dim_obs = robot_config.policy_obs_dim
-        self.dim_critic_obs = robot_config.critic_obs_dim
-        self.dim_actions = robot_config.actions_dim
         self.device = device
+        self.robot_names = RobotNameResolver(robot_config, device)
 
         # Domain-randomization keying state (read by the randomization manager to bind TermSamplers).
         # base_seed makes every DR draw value = f(seed, term, env, episode); the per-env episode
@@ -256,6 +260,7 @@ class BaseTask:
         env_ids = torch.arange(self.num_envs, device=self.device)
         self.reset_envs_idx(env_ids)
 
+        # For a fixed base this is a same-pose no-op on every backend (the simulator's fixed-base root-write rule).
         self.simulator.set_actor_root_state_tensor_robots(env_ids, self.simulator.robot_root_states)
         self.simulator.set_dof_state_tensor_robots(env_ids, self.simulator.dof_state)  # type: ignore[attr-defined]
 
@@ -359,21 +364,18 @@ class BaseTask:
             self.simulator.body_names,
         )
 
-        # check dimensions
-        assert self.num_dof == self.dim_actions, (
-            f"Number of DOFs ({self.num_dof}) must be equal to number of actions ({self.dim_actions})"
+        # One action per DOF; the simulator's DOF list must be the config's (each backend checks the order).
+        assert self.num_dof == len(self.robot_config.dof_names), (
+            f"Simulator reports {self.num_dof} DOFs but robot_config.dof_names has {len(self.robot_config.dof_names)}"
         )
+        self.dim_actions = self.num_dof
 
         # other properties
         self.num_bodies = len(self.body_names)
         self.num_dofs = len(self.dof_names)
-        base_init_state_list = (
-            self.robot_config.init_state.pos
-            + self.robot_config.init_state.rot
-            + self.robot_config.init_state.lin_vel
-            + self.robot_config.init_state.ang_vel
+        self.base_init_state = to_torch(
+            self.robot_config.init_state.root_state_list(), device=self.device, requires_grad=False
         )
-        self.base_init_state = to_torch(base_init_state_list, device=self.device, requires_grad=False)
 
     def _create_envs(self) -> None:
         """Creates environments:

@@ -28,6 +28,9 @@ class RegisteredObject(NamedTuple):
         Initial poses [num_envs, 7] in world coordinates, [x,y,z,qx,qy,qz,qw].
     initial_velocities : torch.Tensor
         Initial world-frame velocities [num_envs, 6], [vx,vy,vz,wx,wy,wz].
+    is_static : bool
+        Welded to the world (no root freejoint): every SCENE body, and the robot when its base is
+        fixed. Static actors are placed/moved by kinematic pose writes; their velocity is zero.
     """
 
     name: str
@@ -36,6 +39,7 @@ class RegisteredObject(NamedTuple):
     indices: torch.Tensor
     initial_poses: torch.Tensor
     initial_velocities: torch.Tensor
+    is_static: bool
 
 
 class ObjectType(Enum):
@@ -160,6 +164,7 @@ class ObjectRegistry:
         position_in_type: int,
         initial_poses: torch.Tensor,
         initial_velocities: torch.Tensor | None = None,
+        is_static: bool | None = None,
     ) -> None:
         """Register object with pre-calculated initial poses (and velocities) for all environments.
 
@@ -183,6 +188,9 @@ class ObjectRegistry:
             Initial world-frame velocities for ALL environments [num_envs, 6], format
             [vx, vy, vz, wx, wy, wz] per environment. ``None`` (the common case — static
             bodies and most free bodies) stores zeros.
+        is_static : bool | None, default=None
+            Welded to the world (no root freejoint). ``None`` derives it from the band: SCENE
+            bodies are static, ROBOT/INDIVIDUAL are free. Pass ``True`` for a fixed-base robot.
 
         Raises
         ------
@@ -204,12 +212,17 @@ class ObjectRegistry:
         elif self.num_envs > 0 and initial_velocities.shape != (self.num_envs, 6):
             raise ValueError(f"initial_velocities must have shape [{self.num_envs}, 6], got {initial_velocities.shape}")
 
+        if is_static is None:
+            is_static = object_type == ObjectType.SCENE
+
         # Create placeholder indices (will be updated during finalization)
         indices = torch.arange(self.num_envs or 1, device=self.device)
 
         # Store type as its string value for backward compatibility with existing consumers.
         self.objects.append(
-            RegisteredObject(name, object_type.value, position_in_type, indices, initial_poses, initial_velocities)
+            RegisteredObject(
+                name, object_type.value, position_in_type, indices, initial_poses, initial_velocities, is_static
+            )
         )
         self.name_to_index[name] = len(self.objects) - 1
 
@@ -559,3 +572,12 @@ class ObjectRegistry:
         scene elements query here rather than reaching into per-backend config.
         """
         return [obj.name for obj in self.objects if obj.type == object_type.value]
+
+    def static_names(self) -> list[str]:
+        """Registered actor names that are welded to the world, in registration order.
+
+        Every SCENE body plus a fixed-base robot. This is the set the kinematic placement
+        paths (spawn spread, ``set_static_body_pose``) operate on; ``get_names_by_type(SCENE)``
+        is the band view and excludes the robot.
+        """
+        return [obj.name for obj in self.objects if obj.is_static]

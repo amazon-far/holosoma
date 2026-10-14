@@ -61,9 +61,7 @@ def main() -> int:
     n = args.num_envs
     env_origins = torch.zeros(n, 3, device=device)
     init = config.robot.init_state
-    base_init = torch.tensor(
-        list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
-    )
+    base_init = torch.tensor(init.root_state_list(), device=device, dtype=torch.float32)
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
     sim.install_plugins()
@@ -75,8 +73,8 @@ def main() -> int:
 
     # Pin the robot upright so front_cam frames the panel ahead.
     states = sim.get_actor_states(["robot"], torch.arange(n, device=device)).clone()
-    states[:, :3] = env_origins + torch.tensor(list(init.pos), device=device)
-    states[:, 3:7] = torch.tensor(list(init.rot), device=device)
+    states[:, :3] = env_origins + torch.tensor(list(init.position), device=device)
+    states[:, 3:7] = torch.tensor(list(init.orientation_xyzw), device=device)
     states[:, 7:] = 0.0
     sim.set_actor_states(["robot"], torch.arange(n, device=device), states)
     step(sim, max(2, steps_for_seconds(sim, 0.05)))

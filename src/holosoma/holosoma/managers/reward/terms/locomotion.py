@@ -6,6 +6,8 @@ compatible with the reward manager system.
 
 from __future__ import annotations
 
+import numbers
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, cast
 
 from holosoma.managers.observation.terms.locomotion import (
@@ -15,6 +17,7 @@ from holosoma.managers.observation.terms.locomotion import (
     get_projected_gravity,
     gravity_vector,
 )
+from holosoma.simulator.shared.dof_limits import soft_limits
 from holosoma.utils.rotations import (
     quat_apply,
     quat_rotate_inverse,
@@ -89,24 +92,36 @@ def penalty_orientation(env: LeggedRobotLocomotionManager) -> torch.Tensor:
     return torch.sum(torch.square(projected[:, :2]), dim=1)
 
 
-def penalty_feet_ori(env: LeggedRobotLocomotionManager) -> torch.Tensor:
+def _is_axis_index(value: object) -> bool:
+    return isinstance(value, numbers.Integral) and not isinstance(value, bool)
+
+
+def penalty_feet_ori(
+    env: LeggedRobotLocomotionManager, feet: Sequence[str] = ("#feet",), sole_axes: Sequence[int] = (0, 1)
+) -> torch.Tensor:
     """Penalize feet orientation deviation from flat.
 
     Args:
         env: The environment instance
+        feet: Foot bodies (exact names or ``#tag`` references); the per-foot penalty is summed over them
+        sole_axes: The two foot-frame axes spanning the sole plane; gravity projected onto them is the tilt.
+            ``(0, 1)`` for a z-up foot frame, ``(0, 2)`` for a foot link whose x-z plane is the sole.
 
     Returns:
         Reward tensor [num_envs]
     """
-    left_quat = env.simulator._rigid_body_rot[:, env.feet_indices[0]]
-    gravity = gravity_vector(env)
-    left_gravity = quat_rotate_inverse(left_quat, gravity, w_last=True)
-    right_quat = env.simulator._rigid_body_rot[:, env.feet_indices[1]]
-    right_gravity = quat_rotate_inverse(right_quat, gravity, w_last=True)
-    return (
-        torch.sum(torch.square(left_gravity[:, :2]), dim=1) ** 0.5
-        + torch.sum(torch.square(right_gravity[:, :2]), dim=1) ** 0.5
-    )
+    axes = [int(a) for a in sole_axes] if all(_is_axis_index(a) for a in sole_axes) else []
+    if len(axes) != 2 or len(set(axes)) != 2 or not all(0 <= a <= 2 for a in axes):
+        raise ValueError(
+            f"penalty_feet_ori: sole_axes must be two distinct integer axes in 0..2, got {list(sole_axes)}"
+        )
+    idx = env.robot_names.resolve_body_indices(feet)
+    quats = env.simulator._rigid_body_rot[:, idx]  # [N, F, 4]
+    num_envs, num_feet = quats.shape[:2]
+    gravity = gravity_vector(env).unsqueeze(1).expand(-1, num_feet, -1).reshape(-1, 3)
+    foot_gravity = quat_rotate_inverse(quats.reshape(-1, 4), gravity, w_last=True).reshape(num_envs, num_feet, 3)
+    tilt = foot_gravity[..., axes]
+    return torch.sum(torch.sum(torch.square(tilt), dim=-1) ** 0.5, dim=1)
 
 
 # ================================================================================================
@@ -124,11 +139,7 @@ def limits_dof_pos(env: LeggedRobotLocomotionManager, soft_dof_pos_limit: float 
     Returns:
         Reward tensor [num_envs]
     """
-    # Use soft limits as fraction of hard limits
-    m = (env.simulator.hard_dof_pos_limits[:, 0] + env.simulator.hard_dof_pos_limits[:, 1]) / 2  # type: ignore[attr-defined]
-    r = env.simulator.hard_dof_pos_limits[:, 1] - env.simulator.hard_dof_pos_limits[:, 0]  # type: ignore[attr-defined]
-    lower_soft_limit = m - 0.5 * r * soft_dof_pos_limit
-    upper_soft_limit = m + 0.5 * r * soft_dof_pos_limit
+    lower_soft_limit, upper_soft_limit = soft_limits(env.simulator.dof_pos_limits, soft_dof_pos_limit).unbind(1)
 
     out_of_limits = -(env.simulator.dof_pos - lower_soft_limit).clip(max=0.0)  # lower limit
     out_of_limits += (env.simulator.dof_pos - upper_soft_limit).clip(min=0.0)
@@ -188,18 +199,27 @@ def penalty_ang_vel_xy(env: LeggedRobotLocomotionManager) -> torch.Tensor:
     return torch.sum(torch.square(ang_vel[:, :2]), dim=1)
 
 
-def penalty_close_feet_xy(env: LeggedRobotLocomotionManager, close_feet_threshold: float = 0.05) -> torch.Tensor:
+def penalty_close_feet_xy(
+    env: LeggedRobotLocomotionManager, close_feet_threshold: float = 0.05, feet: Sequence[str] = ("#feet",)
+) -> torch.Tensor:
     """Penalize when feet are too close together in xy plane.
 
     Args:
         env: The environment instance
         close_feet_threshold: Minimum distance threshold between feet
+        feet: The left/right foot pair (exact names or ``#tag`` references); must resolve to exactly 2 bodies
 
     Returns:
         Reward tensor [num_envs]
     """
-    left_foot_xy = env.simulator._rigid_body_pos[:, env.feet_indices[0], :2]
-    right_foot_xy = env.simulator._rigid_body_pos[:, env.feet_indices[1], :2]
+    idx = env.robot_names.resolve_body_indices(feet)
+    if idx.numel() != 2:
+        raise ValueError(
+            f"penalty_close_feet_xy is a lateral left/right pair term: feet={list(feet)!r} resolved to "
+            f"{idx.numel()} bodies ({env.robot_names.resolve_body_names(feet)}), expected exactly 2."
+        )
+    feet_xy = env.simulator._rigid_body_pos[:, idx, :2]  # [N, 2, 2]
+    left_foot_xy, right_foot_xy = feet_xy[:, 0], feet_xy[:, 1]
 
     # Get base orientation
     base_forward = quat_apply(env.base_quat, base_forward_vector(env), w_last=True)
@@ -268,22 +288,20 @@ def feet_phase(
     Returns:
         Reward tensor [num_envs]
     """
-    # Get foot heights (relative to terrain)
-    foot_z_left = env.terrain_manager.get_state("locomotion_terrain").feet_heights[:, 0]
-    foot_z_right = env.terrain_manager.get_state("locomotion_terrain").feet_heights[:, 1]
-
-    # Calculate expected foot heights based on phase
+    # Foot heights relative to the terrain, one column per foot: [N, F]
+    feet_heights = env.terrain_manager.get_state("locomotion_terrain").feet_heights
     gait_state = cast("LocomotionGait", env.command_manager.get_state("locomotion_gait"))
-    phase = cast("torch.Tensor", gait_state.phase)
-    rz_left = _expected_foot_height(phase[:, 0], swing_height)
-    rz_right = _expected_foot_height(phase[:, 1], swing_height)
+    phase = cast("torch.Tensor", gait_state.phase)  # [N, F]
+    if feet_heights.ndim != 2 or feet_heights.shape[1] != phase.shape[1]:
+        raise ValueError(
+            f"feet_phase needs one terrain foot height per gait phase column: feet_heights has shape "
+            f"{tuple(feet_heights.shape)}, phase has {phase.shape[1]} columns. Declare the robot's 'feet_height' "
+            "body tag (or set TerrainTermCfg.feet_height_bodies) so the terrain term raycasts one height per foot."
+        )
 
-    # Calculate height tracking errors
-    error_left = torch.square(foot_z_left - rz_left)
-    error_right = torch.square(foot_z_right - rz_right)
-
-    # Combine errors and apply exponential reward
-    total_error = error_left + error_right
+    # Expected foot height from the phase, per foot; squared error summed over feet
+    expected_heights = _expected_foot_height(phase, swing_height)
+    total_error = torch.sum(torch.square(feet_heights - expected_heights), dim=1)
 
     return torch.exp(-total_error / tracking_sigma)
 
@@ -319,18 +337,20 @@ def pose(
     return torch.sum(weighted_error, dim=1)
 
 
-def penalty_stumble(env: LeggedRobotLocomotionManager) -> torch.Tensor:
+def penalty_stumble(env: LeggedRobotLocomotionManager, feet: Sequence[str] = ("#feet",)) -> torch.Tensor:
     """Penalize feet hitting vertical surfaces.
 
     Args:
         env: The environment instance
+        feet: Foot bodies (exact names or ``#tag`` references)
 
     Returns:
         Reward tensor [num_envs]
     """
+    idx = env.robot_names.resolve_body_indices(feet)
     return torch.any(
-        torch.norm(env.simulator.contact_forces[:, env.feet_indices, :2], dim=2)
-        > 4 * torch.abs(env.simulator.contact_forces[:, env.feet_indices, 2]),
+        torch.norm(env.simulator.contact_forces[:, idx, :2], dim=2)
+        > 4 * torch.abs(env.simulator.contact_forces[:, idx, 2]),
         dim=1,
     )
 

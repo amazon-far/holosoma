@@ -184,7 +184,7 @@ def test_file_preset_adds_to_registry(tmp_path: Path) -> None:
             """
             from dataclasses import replace
             from holosoma.config_values.robot import ROBOT_REGISTRY, g1_29dof
-            ROBOT_REGISTRY.add("my_robot", replace(g1_29dof, asset=replace(g1_29dof.asset, armature=0.05)))
+            ROBOT_REGISTRY.add("my_robot", replace(g1_29dof, asset=replace(g1_29dof.asset, thickness=0.05)))
             """
         )
     )
@@ -192,7 +192,7 @@ def test_file_preset_adds_to_registry(tmp_path: Path) -> None:
 
     try:
         registry.load_file_presets([str(f)])
-        assert ROBOT_REGISTRY["my_robot"].asset.armature == 0.05
+        assert ROBOT_REGISTRY["my_robot"].asset.thickness == 0.05
         assert ROBOT_REGISTRY["g1_29dof"] is g1_29dof  # imported base was NOT re-registered
     finally:
         ROBOT_REGISTRY.pop("my_robot", None)

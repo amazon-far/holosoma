@@ -84,11 +84,13 @@ class _FakeSim:
 
     def __init__(self, num_motor: int, device: str = "cpu") -> None:
         self.num_dof = num_motor
+        self.dof_names = [f"joint_{i}" for i in range(num_motor)]
         self.device = device
         self._n = num_motor
         self.dof_pos = torch.arange(num_motor, dtype=torch.float32).reshape(1, num_motor) * 0.1
         self.dof_vel = torch.zeros(1, num_motor)
         self.dof_acc = torch.zeros(1, num_motor)
+        self.torque_limits = torch.full((num_motor,), 100.0)
         # root state: pos(3) quat(3:7 = x,y,z,w = identity) lin(7:10) ang(10:13)
         # Distinct, non-trivial pos/vel so publish_odom's world->body rotation and xyzw->wxyz
         # conversion are actually exercised (identity quat => body == world, so values pass through).
@@ -103,6 +105,9 @@ class _FakeSim:
     def time(self) -> float:
         return 1.5
 
+    def get_dof_limits_properties(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return torch.zeros(self._n, 2), torch.zeros(self._n), self.torque_limits
+
     def get_dof_forces(self, env_id: int) -> torch.Tensor:
         return torch.full((self._n,), 7.0)
 
@@ -111,9 +116,9 @@ def _robot_full_config(num_motor: int, robot_type: str = "g1_29dof", sdk_type: s
     from holosoma.config_types.robot import RobotBridgeConfig
 
     return SimpleNamespace(
-        dof_effort_limit_list=[100.0] * num_motor,
+        dof_gains=lambda: ([0.0] * num_motor, [0.0] * num_motor),
         asset=SimpleNamespace(robot_type=robot_type),
-        bridge=RobotBridgeConfig(sdk_type=sdk_type),
+        bridge=RobotBridgeConfig(sdk_type=sdk_type, controlled_dof_names=tuple(f"joint_{i}" for i in range(num_motor))),
     )
 
 
@@ -366,7 +371,10 @@ def test_explicit_startup_failures_propagate_without_fallback_or_leaked_child(
     assert type(error.value) is RuntimeError
     assert str(pickle.loads(pickle.dumps(error.value))) == str(error.value)
     if failure == "preload":
-        assert "libddsc.so.0: file too short" in str(error.value)
+        if sys.platform == "darwin":
+            assert "native reason withheld (unrecognized diagnostic)" in str(error.value)
+        else:
+            assert "libddsc.so.0: file too short" in str(error.value)
     assert not bridge._proc.is_alive()
     assert bridge._proc.exitcode is not None
     assert bridge._queues_closed

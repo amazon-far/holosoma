@@ -11,13 +11,21 @@ A plain `.py` file that calls `REGISTRY.add(...)`:
 ```python
 # my_presets.py  (anywhere on disk)
 from dataclasses import replace
-from holosoma.config_values.robot import ROBOT_REGISTRY, g1_29dof
+from holosoma.config_values.action import ACTION_REGISTRY
+from holosoma.config_values.loco.g1.action import g1_29dof_joint_pos
 
-ROBOT_REGISTRY.add("g1_stiff", replace(g1_29dof, control=replace(g1_29dof.control, action_scale=0.1)))
+joint_control = g1_29dof_joint_pos.terms["joint_control"]
+ACTION_REGISTRY.add(
+    "g1-small-actions",
+    replace(
+        g1_29dof_joint_pos,
+        terms={**g1_29dof_joint_pos.terms, "joint_control": replace(joint_control, scale=0.1)},
+    ),
+)
 ```
 
 ```bash
-python -m holosoma.run_sim --import-file my_presets.py robot:g1-stiff   # repeatable; selectable like a built-in
+python -m holosoma.run_sim --import-file my_presets.py action:g1-small-actions
 ```
 
 `.add(name, value)` type-checks `value` and returns it, so `x = REGISTRY.add(...)` also keeps a normal module attribute.
@@ -67,19 +75,73 @@ Edit the family's `config_values` module and register with `.add()`:
 my_robot = ROBOT_REGISTRY.add("my_robot", RobotConfig(...))
 ```
 
+## Adding a robot (`RobotConfig`)
+
+Start with [`RobotConfig`](../src/holosoma/holosoma/config_types/robot.py) and the
+[G1, T1 and YAM presets](../src/holosoma/holosoma/config_values/robot.py). Export a `RobotConfig` instance
+from your extension module and declare it as a packaged entry point:
+
+```toml
+[project.entry-points."holosoma.config.robot"]
+my-robot = "my_extension.config_values.robot:my_robot"
+```
+
+Install the extension with `pip install -e .`, then select `robot:my-robot`. The registry discovers the
+entry point automatically. Importing the preset validates names, tags, defaults and physical overrides;
+then run it on each backend you intend to support.
+
+`dof_names` defines canonical joint order and `body_names` defines body-observation order. Every DOF must be a named
+one-dimensional hinge/revolute or slide/prismatic joint. Names must match the asset exactly; the asset may
+enumerate them differently. Tags select these names to express common behavior across robots, for example
+`joint_tags={"#waist": ["waist_pitch_joint"]}`.
+
+Use exact names or tags in default positions and physical-property maps:
+
+```python
+init_state=RobotInitState(position=[0, 0, 0.8], default_joint_positions={"#knees": 0.5})
+dof_effort_limits={"#knees": 100.0}
+dof_pos_limits={"waist_pitch_joint": (-0.4, 0.4)}
+```
+
+Unspecified default positions are zero. Unspecified physical properties keep the asset's values. Positions are
+radians for hinges and metres for slides. `robot.default_dof_positions()` returns a validated exact-name map in
+canonical order without expanding the stored map in place. Controller gains, action scaling and action clipping
+belong to the action term or plugin that applies them.
+
+Selections deduplicate after expansion, preserving first-seen order. Assignment maps reject overlap between
+separate keys, even for equal values. Defaults and overrides are separate validated layers with explicit
+precedence; exact names have no automatic priority. Ordered symmetry pairs reject repetitions before
+deduplication. The shared helpers live in [`name_tags.py`](../src/holosoma/holosoma/utils/name_tags.py);
+physical-property validation lives in [`robot_properties.py`](../src/holosoma/holosoma/utils/robot_properties.py).
+Task terms can use `env.robot_names.resolve_body_indices(...)` and the corresponding name/joint methods.
+
+For Unitree and Booster, `bridge.controlled_dof_names` must give SDK motor order. Their wire messages contain
+unnamed motor slots, so reordering policy actions must not reorder the hardware protocol. Other bridges may use
+canonical order minus `excluded_dof_names`; an explicit controlled tuple takes precedence. When renaming joints,
+audit inherited tags, maps and bridge names. Reordering names alone does not require reordering maps.
+
+Set `asset.fix_base_link=True` for a welded base. Root velocity stays zero; IsaacGym rejects teleporting that
+root, while MuJoCo and IsaacSim support it. Push randomization changes root velocity and therefore requires a
+floating base. For motion tracking, `MotionConfig.root_body=None` discovers the physical root from the loaded
+articulation. Include that body in observations and motion data; an explicit selection must identify the same
+root. `body_name_ref` independently selects the tracking reference.
+
+For existing presets and saved checkpoints, follow [the migration guide](robotconfig-migration.md).
+
 ## Naming
 
 Register hyphen-case (`go2-12dof`). The CLI token is `<field>:<key>` and accepts both forms — `robot:g1_29dof` and `robot:g1-29dof` both work.
 
 ## Extension paths
 
-Use `resolve_path(value)` when one local path is required and
-`resolve_paths(value)` when a value may produce zero or more local paths.
+Resolve path specifications only at the I/O boundary:
 
-Path loaders let configs keep portable names such as
-`@my_ext/data/robot.urdf`. Code that opens the file still receives an ordinary
-absolute path on the current machine. This avoids rewriting configs or
-monkey-patching each simulator that consumes them.
+- `resolve_path(value)` returns one absolute local path.
+- `resolve_paths(value)` returns a one-shot iterator of zero or more absolute local paths.
+- `resolve_asset_path(asset_file, asset_root)` handles an asset file that may be relative to an asset root.
+
+Configs can then store portable values such as `@my_ext/data/robot.urdf`, while file-opening code receives a local
+path.
 
 For files shipped inside a Python package, use `PackagePathLoader`:
 
@@ -99,13 +161,10 @@ package-data = "my_ext.paths:path_loader"
 package-data = "my_ext.paths:paths_loader"
 ```
 
-Entry-point keys such as `package-data` are labels only. A loader claims values
-with `matches(value)` and resolves them with `load(value)`.
+Register singular and plural loaders independently. Entry-point keys such as `package-data` are labels only.
 
-Create a different loader only when the value cannot be expressed as a path
-inside an installed package. Examples include a company asset service, an
-object-store URI, or another reference that must be downloaded or materialized
-before use:
+Write a custom loader only when a value cannot name a file inside an installed package, such as an asset-service
+reference or object-store URI:
 
 ```python
 class AssetServicePathLoader:
@@ -119,18 +178,16 @@ class AssetServicePathLoader:
 path_loader = AssetServicePathLoader()
 ```
 
-`matches()` should only inspect the string; put network and filesystem work in
-`load()`. Exactly one loader must match, and every result must be a local path.
-Register singular and plural loaders independently. A plural loader owns all
-semantics for the values it accepts: Holosoma does not compose it with another
-loader or add globbing on its behalf.
+The loader contract is strict:
 
-Built-in plural loaders provide standard Python glob behavior for local,
-Holosoma-package, and S3 paths. Remote results are cached locally.
-`resolve_paths()` returns a one-shot iterator.
+1. `matches()` inspects only the string and returns `bool`.
+2. Exactly one loader must match.
+3. `load()` performs I/O and returns local paths.
+4. A plural loader owns matching, loading, and glob behavior for its values; Holosoma does not compose it with a
+   singular loader.
 
-At asset I/O boundaries, use `resolve_asset_path(asset_file, asset_root)`.
-Loaders may opt into joining relative values to `asset_root` with
+Built-in plural loaders provide standard Python glob behavior for local, Holosoma-package, and S3 paths. Remote
+results are cached locally. A loader may opt into joining relative asset files to `asset_root` by implementing
 `accepts_asset_root(value)`.
 
 ## Config families

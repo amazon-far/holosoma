@@ -59,9 +59,7 @@ def main() -> int:
     n = args.num_envs
     env_origins = torch.zeros(n, 3, device=device)
     init = config.robot.init_state
-    base_init = torch.tensor(
-        list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
-    )
+    base_init = torch.tensor(init.root_state_list(), device=device, dtype=torch.float32)
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
     sim.install_plugins()
