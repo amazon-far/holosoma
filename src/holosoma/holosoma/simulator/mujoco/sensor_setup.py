@@ -22,6 +22,7 @@ from holosoma.simulator.mujoco.geom_groups import (
 from holosoma.simulator.mujoco.scene_manager import LIDAR_FILTER_SITE_PREFIX, LIDAR_MOUNT_SITE_PREFIX
 from holosoma.simulator.shared.lidar_range import finalize_lidar_returns
 from holosoma.simulator.shared.sensor_manager import LidarRecord, SensorManager
+from holosoma.simulator.shared.warp_depth_camera import register_warp_depth_cameras
 from holosoma.utils.warp_interop import from_torch_vec3
 
 if TYPE_CHECKING:
@@ -364,6 +365,7 @@ def create_sensors(sim: MuJoCo) -> None:
     sim.sensor_manager = manager
     register_cameras(sim, manager)
     register_lidars(sim, manager)
+    register_warp_depth_cameras(sim, manager)
 
 
 def render_sensors(sim: MuJoCo) -> None:
@@ -372,3 +374,5 @@ def render_sensors(sim: MuJoCo) -> None:
         sim.backend.begin_sensor_render()
     render_cameras(sim)
     render_lidars(sim)
+    if sim.sensor_manager is not None:
+        sim.sensor_manager.render_shared()

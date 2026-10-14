@@ -23,6 +23,7 @@ from loguru import logger
 from holosoma.config_types.sensor import CameraSensorConfig, LidarSensorConfig
 from holosoma.simulator.shared.lidar_range import finalize_lidar_returns
 from holosoma.simulator.shared.sensor_manager import LidarRecord, SensorManager
+from holosoma.simulator.shared.warp_depth_camera import register_warp_depth_cameras
 from holosoma.utils.rotations import quat_apply, quat_mul
 
 if TYPE_CHECKING:
@@ -261,9 +262,12 @@ def create_sensors(sim: IsaacGym) -> None:
     sim.sensor_manager = manager
     register_cameras(sim, manager)
     register_lidars(sim, manager)
+    register_warp_depth_cameras(sim, manager)
 
 
 def render_sensors(sim: IsaacGym) -> None:
     """Capture all camera and LiDAR sensors due this control step."""
     render_cameras(sim)
     render_lidars(sim)
+    if sim.sensor_manager is not None:
+        sim.sensor_manager.render_shared()
