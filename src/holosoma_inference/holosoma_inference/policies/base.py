@@ -15,6 +15,7 @@ import onnxruntime
 from loguru import logger
 from termcolor import colored
 
+from holosoma_inference.command import JointCommand
 from holosoma_inference.config.config_types.inference import InferenceConfig
 from holosoma_inference.config.config_types.robot import RobotConfig
 from holosoma_inference.inputs import create_input
@@ -517,6 +518,51 @@ class BasePolicy:
             di = f"{d(dq[i]):8.1f}" if dq is not None and i < len(dq) else "     n/a"
             ai = f"{d(act[i]):7.1f}" if act is not None and i < len(act) else "    n/a"
             print(f"  {name:<{w}}  {qi}  {di}  {ai}")
+
+    def reset(self):
+        """Clear everything the policy carries between steps.
+
+        Observation history, the fed-back last action and the gait phase. ``step(obs)`` consumes
+        none of those -- with the observation assembled by the caller it is a pure function of
+        ``obs``, so reset is a no-op for that path. It is load-bearing for ``policy_action``,
+        which assembles the observation here, and for any policy that owns a reference or a
+        history internally. Defined now so that re-arming never means "construct it again",
+        which would reload the ONNX -- something a real-time host cannot do mid-session.
+        """
+        self._initialize_history_state()
+        self.last_policy_action = np.zeros((1, self.num_dofs))
+        self.scaled_policy_action = None
+        self._init_phase_components()
+
+    def step(self, obs) -> JointCommand:
+        """One inference step from an already-assembled actor observation.
+
+        The transport-free half of ``policy_action``: no state read, no publish. Takes the
+        ``actor_obs`` vector, returns the joint command the driver would be sent. Observation
+        assembly stays with the caller here, so the width is checked against the model's input
+        rather than assumed -- a reordered observation of the right width still cannot be
+        detected, which is why ``step`` is the low-level entry point and not the only one.
+        """
+        obs = np.asarray(obs, dtype=np.float32)
+        if obs.ndim == 1:
+            obs = obs[None]
+        expected = self.obs_buf_dict["actor_obs"].shape[1]
+        if obs.shape != (1, expected):
+            raise ValueError(f"actor_obs must have shape (1, {expected}), got {tuple(obs.shape)}")
+        if not np.isfinite(obs).all():
+            raise ValueError("actor_obs is not finite")
+
+        action = np.clip(self.policy({"actor_obs": obs}), -100, 100)
+        self.last_policy_action = action.copy()
+        self.scaled_policy_action = action * self.policy_action_scale
+        if self.scaled_policy_action.shape[1] != self.num_dofs:
+            raise ValueError(f"model returned {self.scaled_policy_action.shape[1]} actions for {self.num_dofs} joints")
+        q_target = self.scaled_policy_action + self.default_dof_angles
+        return JointCommand(
+            q=q_target[0] + self.joint_offsets,
+            kp=np.asarray(self.robot_config.motor_kp, dtype=float) if self.robot_config.motor_kp else None,
+            kd=np.asarray(self.robot_config.motor_kd, dtype=float) if self.robot_config.motor_kd else None,
+        )
 
     def rl_inference(self, robot_state_data):
         """Perform RL inference to get policy action."""
