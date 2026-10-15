@@ -183,7 +183,7 @@ Select plugins as the dynamic-dict `plugin.<key>:<preset>` (per-key leaf overrid
 
 ### Phases
 
-A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=None, every=1)`. Per control frame the loop emits, in order:
+A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=None, every=1, after=(), before=())`. Per control frame the loop emits, in order:
 
 | Phase | When | Callback args | Cadence |
 |---|---|---|---|
@@ -192,7 +192,19 @@ A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=No
 | `POST_STEP` | after each physics substep (freshest sim time) | — | physics `fps` |
 | `FRAME_END` | after the substeps + state-tensor refresh (read state here) | — | control rate |
 | `EPISODE_START` / `EPISODE_END` | on reset boundaries | `env_id` | per event |
-| `CLOSE` | teardown (release resources); runs in reverse registration order | — | once |
+| `CLOSE` | teardown (release resources); runs the resolved order backwards | — | once |
+
+### Ordering
+
+Within a phase, hooks run in registration order — which for plugins means the order their slots were selected, so don't rely on it. Declare what you actually need instead: `after` / `before` name the same-phase hooks you must follow or precede, and the registry orders you against them, leaving everything unconstrained in its registration slot.
+
+```python
+simulator.hooks.add(
+    Phase.FRAME_END, self.publish, name="my_plugin.publish", after=["sensors.render"],
+)
+```
+
+Names need not be unique — a constraint applies to every hook registered under the name, so a plugin selected in two slots is covered by one reference. Lookup is per phase: a name registered only on another phase doesn't exist from here, and an unresolvable name is dropped with a one-time warning rather than failing the run (a run that configures no cameras has no `sensors.render` to follow). A set of constraints that can't all hold raises `HookOrderError` from the next `emit` of that phase, naming the hooks in the cycle. `CLOSE` resolves the same way and then runs backwards, so a hook that declares `after` tears down *before* the hook it follows — publishers close before the runtime they publish through. For debugging, `hooks.names(phase)` returns the resolved order.
 
 ### Cadence
 

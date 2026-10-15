@@ -1,4 +1,8 @@
-"""Backend-neutral host snapshot path for LiDAR consumer plugins."""
+"""Backend-neutral host snapshot path for LiDAR consumer plugins.
+
+The per-step ``FRAME_END`` callback declares ``after=["sensors.render"]``, so the registry runs it
+behind the sensor capture that fills the buffers it reads.
+"""
 
 from __future__ import annotations
 
@@ -45,7 +49,12 @@ class LidarConsumerPlugin:
         self._validate_streams()
         self._started = False
         self._closed = False
-        simulator.hooks.add(Phase.FRAME_END, self._on_frame_end, name=f"{type(self).__name__}.publish")
+        simulator.hooks.add(
+            Phase.FRAME_END,
+            self._on_frame_end,
+            name=f"{type(self).__name__}.publish",
+            after=["sensors.render"],
+        )
         simulator.hooks.add(Phase.CLOSE, self._on_close, name=f"{type(self).__name__}.stop")
 
     @abstractmethod
