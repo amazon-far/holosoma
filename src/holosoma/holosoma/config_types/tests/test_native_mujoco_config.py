@@ -12,6 +12,7 @@ from pydantic import TypeAdapter, ValidationError
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
 from holosoma.config_types.run_sim import RunSimConfig
+from holosoma.config_types.scene import MujocoPhysicsConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.config_values.simulator import mujoco as preset
 from holosoma.utils.config_registry import parse_config
@@ -110,6 +111,27 @@ def test_extra_cli_false_and_yaml_values_roundtrip() -> None:
 def test_pydantic_rejects_invalid_values_and_duplicate_owners(kwargs: dict[str, Any], reason: str) -> None:
     with pytest.raises(ValidationError, match=reason):
         MujocoConfig(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "reason"),
+    [
+        ({"friction": (-0.1, 0, 0)}, "friction"),
+        ({"solref": (0.02, -1)}, "solref"),
+        ({"solref": (float("inf"), 1)}, "solref"),
+        ({"solimp": (0.8, 0.9, 0.001, 0.5)}, "solimp"),
+        ({"solimp": (-0.1, 0.9, 0.001, 0.5, 2)}, "solimp"),
+        ({"solimp": (0.8, 1.1, 0.001, 0.5, 2)}, "solimp"),
+        ({"solimp": (0.8, 0.9, -0.001, 0.5, 2)}, "solimp"),
+        ({"solimp": (0.8, 0.9, 0.001, 1.1, 2)}, "solimp"),
+        ({"solimp": (0.8, 0.9, 0.001, 0.5, 0.5)}, "solimp"),
+        ({"condim": 2}, "condim"),
+        ({"contype": 2147483648}, "contype"),
+    ],
+)
+def test_geom_contact_config_rejects_invalid_native_parameters(kwargs: dict[str, Any], reason: str) -> None:
+    with pytest.raises(ValidationError, match=reason):
+        MujocoPhysicsConfig(**kwargs)
 
 
 def test_old_warp_capacity_location_fails_with_replacement_in_yaml_and_python() -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from dataclasses import fields, replace
+from inspect import signature
 from typing import get_type_hints
 
 import mujoco
@@ -14,6 +15,7 @@ import torch
 import yaml
 from pydantic import TypeAdapter
 
+from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.scene import MujocoPhysicsConfig, PhysicsConfig
@@ -46,6 +48,17 @@ def compiled(native, backend=preset, *, xml=XML):
     return manager.compile()
 
 
+def warp_backend_config(native):
+    run = RunSimConfig()
+    return FullSimConfig(
+        simulator=replace(mjwarp.config, sim=replace(mjwarp.config.sim, fps=100, mujoco=native)),
+        robot=run.robot,
+        training=replace(run.training, num_envs=2),
+        logger=run.logger,
+        plugin={},
+    )
+
+
 @pytest.mark.parametrize("yaml_roundtrip", [False, True])
 def test_unset_preserves_asset_options_and_contacts_but_fps_owns_dt(yaml_roundtrip):
     baseline = mujoco.MjModel.from_xml_string(XML)
@@ -73,6 +86,34 @@ def test_all_integrators_are_applied_and_stepped(integrator):
     assert data.qvel[2] == pytest.approx(-0.2)
     expected_z = 0.099 - (0.01 if integrator == "rk4" else 0.011)
     assert data.qpos[2] == pytest.approx(expected_z)
+
+
+@pytest.mark.parametrize("solver", ["pgs", "cg", "newton"])
+def test_named_contact_solver_settings_override_assets_and_step(solver):
+    native = MujocoConfig(
+        solver=solver,
+        cone="elliptic",
+        jacobian="sparse",
+        impratio=10,
+        iterations=17,
+        tolerance=1e-7,
+        ls_iterations=9,
+        ls_tolerance=0.005,
+        noslip_iterations=1,
+    )
+    asset_solver = "CG" if solver == "newton" else "Newton"
+    model = compiled(native, xml=XML.replace("<option ", f'<option solver="{asset_solver}" '))
+    assert model.opt.solver == getattr(mujoco.mjtSolver, "mjSOL_" + solver.upper())
+    assert model.opt.cone == mujoco.mjtCone.mjCONE_ELLIPTIC
+    assert model.opt.jacobian == mujoco.mjtJacobian.mjJAC_SPARSE
+    for name in ("impratio", "iterations", "tolerance", "ls_iterations", "ls_tolerance", "noslip_iterations"):
+        assert getattr(model.opt, name) == pytest.approx(getattr(native, name)), name
+    data = mujoco.MjData(model)
+    for _ in range(100):
+        mujoco.mj_step(model, data)
+    assert data.ncon > 0
+    assert data.qpos[2] > 0.09
+    assert data.time == pytest.approx(1)
 
 
 def test_contact_flags_change_real_dynamics():
@@ -113,7 +154,7 @@ def test_geom_masks_solver_mixing_and_signed_parameters_reach_model():
     physics = MujocoPhysicsConfig(
         friction=(0.9, 0.02, 0.003),
         solref=(-1000, -10),
-        solimp=(0.8, 0.95, 0.001, 0.5, 2),
+        solimp=(0.8, 0.92, 0.002, 0.4, 3),
         condim=6,
         contype=2,
         conaffinity=4,
@@ -127,6 +168,7 @@ def test_geom_masks_solver_mixing_and_signed_parameters_reach_model():
     model = manager.compile()
     np.testing.assert_allclose(model.geom_friction[1], [0.9, 0.02, 0.003])
     np.testing.assert_allclose(model.geom_solref[1], [-1000, -10])
+    np.testing.assert_allclose(model.geom_solimp[1], [0.8, 0.92, 0.002, 0.4, 3])
     assert (model.geom_contype[1], model.geom_conaffinity[1], model.geom_condim[1]) == (2, 4, 6)
     assert model.geom_priority[1] == 3
     assert model.geom_solmix[1] == 0
@@ -305,6 +347,51 @@ assert "warp" not in sys.modules and "mujoco_warp" not in sys.modules
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_legacy_mujoco_version_metadata_preserves_unset_but_rejects_native_overrides(monkeypatch):
+    # Only environment metadata changes; compilation and stepping use the installed native library.
+    monkeypatch.setattr(mujoco, "__version__", "3.9.0")
+    model = compiled(MujocoConfig())
+    assert model.opt.integrator == mujoco.mjtIntegrator.mjINT_EULER
+    assert model.opt.tolerance == pytest.approx(0.003)
+    assert model.opt.timestep == pytest.approx(0.01)
+    data = mujoco.MjData(model)
+    mujoco.mj_step(model, data)
+    assert data.time == pytest.approx(0.01)
+    with pytest.raises(ValueError, match=r"simulator\.config\.sim\.mujoco:.*require MuJoCo 3\.10\.0.*3\.9\.0"):
+        compiled(MujocoConfig(integrator="rk4"))
+
+
+@pytest.mark.parametrize("mismatch", ["mujoco", "warp", "distribution", "revision", None])
+def test_warp_backend_version_policy_rejects_before_device_initialization(mismatch, tmp_path, monkeypatch):
+    pytest.importorskip("mujoco_warp")
+    wp = pytest.importorskip("warp")
+    from holosoma.simulator.mujoco.backends.warp_backend import WarpBackend
+
+    native = MujocoConfig()
+    model = compiled(native)
+    # Real distribution discovery reads temporary metadata. No application/allocation/step function is mocked.
+    info = tmp_path / "mujoco_warp-3.10.0.dist-info"
+    info.mkdir()
+    version = "3.9.0" if mismatch == "distribution" else "3.10.0"
+    (info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: mujoco-warp\nVersion: {version}\n")
+    revision = "0" * 40 if mismatch == "revision" else "ecaef88917a3c90cd238bf76681ca770f58033df"
+    (info / "direct_url.json").write_text(f'{{"vcs_info": {{"commit_id": "{revision}"}}}}')
+    monkeypatch.syspath_prepend(str(tmp_path))
+    if mismatch == "mujoco":
+        monkeypatch.setattr(mujoco, "__version__", "3.9.0")
+    if mismatch == "warp":
+        monkeypatch.setattr(wp, "__version__", "1.16.0")
+    reason = (
+        "unsupported revision"
+        if mismatch == "revision"
+        else "use MuJoCo 3.10.0"
+        if mismatch
+        else "requires a CUDA device"
+    )
+    with pytest.raises(ValueError, match=rf"simulator\.config\.sim\.mujoco:.*{reason}"):
+        WarpBackend(model, mujoco.MjData(model), warp_backend_config(native), device="cpu")
+
+
 def test_warp_allocation_uses_real_api_and_preserves_default_units():
     mjw = pytest.importorskip("mujoco_warp")
     wp = pytest.importorskip("warp")
@@ -336,6 +423,9 @@ def test_warp_allocation_uses_real_api_and_preserves_default_units():
     for settings, reason in [
         ({"extras": {"unknown": 3}}, "make_data"),
         ({"extras": {"nccdmax": -1}}, "nonnegative"),
+        ({"extras": {"nvmax": model.nv + 1}}, "exceeds model.nv"),
+        ({"nconmax_per_env": 5, "extras": {"nccdmax": 6}}, "CCD capacity"),
+        ({"naconmax": 11, "extras": {"naccdmax": 12}}, "CCD capacity"),
         ({"extras": {"contact_sensor_maxmatch": 1.5}}, "integer"),
         ({"extras": {"run_collision_detection": 2}}, "boolean"),
         ({"extras": {"broadphase": "typo"}}, "BroadphaseType"),
@@ -346,11 +436,12 @@ def test_warp_allocation_uses_real_api_and_preserves_default_units():
         config = MujocoWarpConfig(**settings)
         validate, args = (
             (allocation_kwargs, (model, config, 3))
-            if "nccdmax" in config.extras
+            if config.extras.keys() & signature(mjw.make_data).parameters.keys()
             else (warp_option_overrides, (config,))
         )
-        with pytest.raises(ValueError, match=reason):
+        with pytest.raises(ValueError, match=r"simulator\.config\.sim\.mujoco\.warp") as error:
             validate(*args)
+        assert reason in str(error.value)
 
 
 def test_remaining_warp_only_options_reach_real_cpu_converted_model():
@@ -405,6 +496,73 @@ def test_warp_device_array_conversion_on_cpu_does_not_claim_gpu_execution():
     with wp.ScopedDevice("cpu"):
         apply_warp_model(uploaded, native, {"impratio": 0})
     np.testing.assert_allclose(uploaded.opt.impratio_invsqrt.numpy(), [1 / np.sqrt(mujoco.mjMINVAL)])
+
+
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "cuda:0",
+            marks=[
+                pytest.mark.mujoco_warp,
+                pytest.mark.skipif(not torch.cuda.is_available(), reason="Captured contact stepping requires CUDA"),
+            ],
+        ),
+    ],
+)
+def test_warp_contact_extra_changes_real_kernel_trajectories(device):
+    mjw = pytest.importorskip("mujoco_warp")
+    wp = pytest.importorskip("warp")
+    outcomes = {}
+    for collision in (True, False):
+        native = MujocoConfig(
+            integrator="euler",
+            cone="elliptic",
+            impratio=10,
+            gravity=(0, 0, -2),
+            warp=MujocoWarpConfig(
+                nconmax_per_env=8,
+                njmax_per_env=40,
+                graph_conditional=False,
+                extras={"run_collision_detection": collision},
+            ),
+        )
+        config = warp_backend_config(native)
+        model = compiled(native, backend=mjwarp)
+        initial = mujoco.MjData(model)
+        backend = None
+        with wp.ScopedDevice(device):
+            try:
+                if device == "cpu":
+                    # Execute real upstream kernels on CPU; CUDA backend/capture is tested in the other case.
+                    uploaded = mjw.put_model(model)
+                    apply_warp_model(uploaded, native, effective_options(config.simulator))
+                    data = mjw.make_data(model, **allocation_kwargs(model, native.warp, 2))
+                    data.qpos.assign(np.tile(initial.qpos, (2, 1)).astype(np.float32))
+                    for _ in range(100):
+                        mjw.step(uploaded, data)
+                else:
+                    from holosoma.simulator.mujoco.backends.warp_backend import WarpBackend
+
+                    assert config.plugin == {}
+                    backend = WarpBackend(model, initial, config, device)
+                    backend.initialize_state(model, initial)
+                    assert backend.step_graph is not None
+                    for _ in range(100):
+                        backend.step()
+                    data = backend.mjw_data
+                np.testing.assert_allclose(data.time.numpy(), [1, 1], atol=1e-6, rtol=0)
+                assert (data.nacon.numpy()[0] > 0) == collision
+                outcomes[collision] = data.qpos.numpy()[:, 2]
+                if not collision:
+                    np.testing.assert_allclose(data.qvel.numpy()[:, 2], [-2, -2], atol=1e-5, rtol=0)
+            finally:
+                if backend is not None:
+                    backend.close()
+    assert np.all(outcomes[True] > 0.09)
+    # Semi-implicit Euler free fall for 100 steps at dt=0.01 under gravity=-2.
+    np.testing.assert_allclose(outcomes[False], [0.099 - 1.01] * 2, atol=1e-5, rtol=0)
 
 
 @pytest.mark.parametrize(
