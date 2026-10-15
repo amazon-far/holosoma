@@ -163,6 +163,7 @@ def test_training_interrupt_closes_environment_before_app(
             project=None,
             name=None,
             checkpoint=None,
+            teacher_checkpoint=None,
             num_envs=1,
         ),
         robot=SimpleNamespace(asset=SimpleNamespace(robot_type="test")),

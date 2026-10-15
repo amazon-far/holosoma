@@ -78,6 +78,13 @@ class TrainingConfig:
     checkpoint: str | None = None
     """Path to checkpoint for resuming training."""
 
+    teacher_checkpoint: str | None = None
+    """Optional path to a teacher-only checkpoint, loaded into the student-teacher
+    policy's teacher branch after env+algo setup. Orthogonal to ``checkpoint``:
+    ``checkpoint`` resumes full algo state (for distillation this includes student,
+    critic, optimizer, storage); ``teacher_checkpoint`` only populates the frozen
+    teacher MLP from a trained PPO-actor checkpoint."""
+
     # Logging settings
     project: str = "default_project"
     """Project name for logging. `logger.project` takes precedence if set."""

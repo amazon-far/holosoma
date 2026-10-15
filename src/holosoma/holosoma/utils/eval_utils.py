@@ -245,17 +245,20 @@ def load_checkpoint(checkpoint: str, log_dir: str) -> Path:
         logger.info(f"Checkpoint cached at: {cached_path}")
 
         # 2. Extract original filename from W&B URI to preserve it in log_dir
-        _, artifact_path = _parse_wandb_reference(checkpoint)
+        run_path, artifact_path = _parse_wandb_reference(checkpoint)
         if artifact_path:
             checkpoint_filename = Path(artifact_path).name
         else:
             # Fallback to cache name if no artifact path in URI
             checkpoint_filename = Path(cached_path).name
 
-        # 3. Copy to log_dir for backward compatibility
+        # 3. Copy to log_dir for backward compatibility. Prefix with the run_id so
+        # checkpoints with the same filename from different runs (e.g. several
+        # distillation teachers) don't overwrite each other.
+        run_id = run_path.rsplit("/", 1)[-1]
         log_dir_path = Path(log_dir)
         log_dir_path.mkdir(parents=True, exist_ok=True)
-        log_dir_checkpoint = log_dir_path / checkpoint_filename
+        log_dir_checkpoint = log_dir_path / f"{run_id}_{checkpoint_filename}"
 
         # Copy if not already there or outdated
         if not log_dir_checkpoint.exists() or log_dir_checkpoint.stat().st_mtime < Path(cached_path).stat().st_mtime:

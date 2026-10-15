@@ -81,6 +81,15 @@ def _run_eval_session(
         log_dir=str(eval_log_dir),
         multi_gpu_cfg=None,
     )
+    # Size the policy like the saved one (e.g. its teacher slots) before setup() allocates it.
+    restore_structure = getattr(algo, "restore_structure_from_checkpoint", None)
+    if restore_structure is not None:
+        import torch
+
+        checkpoint_data = torch.load(checkpoint_path, map_location="cpu")
+        if not isinstance(checkpoint_data, dict):
+            raise TypeError("Evaluation checkpoint must contain a dictionary.")
+        restore_structure(checkpoint_data)
     algo.setup()
     algo.attach_checkpoint_metadata(saved_config, saved_wandb_path)
     algo.load(checkpoint_path)
