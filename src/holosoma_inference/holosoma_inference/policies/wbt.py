@@ -160,6 +160,9 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self.onnx_kp = np.array(metadata["kp"]) if "kp" in metadata else None
         self.onnx_kd = np.array(metadata["kd"]) if "kd" in metadata else None
 
+        # Provenance stamped at export ("<entity>/<project>/<run_id>").
+        self.onnx_wandb_run_path = metadata.get("wandb_run_path")
+
         if self.onnx_kp is not None:
             from pathlib import Path
 

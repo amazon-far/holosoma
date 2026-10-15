@@ -9,7 +9,7 @@ Inputs:
 | Topic | Type | Description | Exp. Rate |
 |---|---|---|---|
 | `/holosoma/smplh_command` | `CmdSMPLH.msg` | SMPL-H 24-joint pose targets, retargeted to dense before the policy | 50Hz |
-| `/holosoma/dense_tracking_command` | `CmdDense.msg` | Dense per-joint 29-DoF target (q/dq + root quat) consumed directly by the policy | 50Hz |
+| `/holosoma/dense_tracking_command` | `CmdDense.msg` | Dense per-joint 29-DoF target (q/dq + root quat) consumed directly by the policy. Dual-role boundary topic: published either by an external client or by the retargeter (from `CmdSMPLH`). | 50Hz |
 | `/cmd_vel` | `geometry_msgs/TwistStamped` | Velocity command for the locomotion policy | any (timeout-guarded) |
 | `/holosoma/state_input` | `std_msgs/String` | Discrete state commands: `start` / `stop` / `init` / `walk` / `stand` / `switch_mode` / `kill` (in-band emergency kill) | on demand |
 | `/holosoma/exoskeleton_command` | `CmdExoskeleton.msg` | Left/right arm joint targets (7+7) plus base twist for the split-body controller | 50Hz |
@@ -20,10 +20,17 @@ Outputs:
 
 | Topic | Type | Description | Rate |
 |---|---|---|---|
-| `/holosoma/holosoma_executed_cmd` | `JointState.msg` | Executed joint command, always full 29-DoF | Policy Rate (typ. 50Hz)  |
+| `/holosoma/observation` | `Observation.msg` | Raw observation vector (`actor_obs`) fed to the policy this tick; sliceable by name via the schema on `/holosoma/policy_metadata`. `header.stamp` is robot time; `source_stamp` carries the teleop-input stamp of the consumed `CmdDense`. Tagged with `wandb_id`. | Policy Rate (typ. 50Hz) |
+| `/holosoma/action` | `Action.msg` | Raw policy output (pre-scale network action) this tick. Shares `header.stamp` + `source_stamp` with the paired `/holosoma/observation`. Tagged with `wandb_id`. | Policy Rate (typ. 50Hz) |
+| `/holosoma/policy_metadata` | `PolicyMetadata.msg` | Everything needed to reproduce the obs→action→command chain offline: observation-term schema (JSON), `policy_action_scale`, `default_dof_angles`, `dof_names`, `wandb_id`. **Latched** (transient-local), published once per policy activation. | On start + policy swap |
+| `/holosoma/holosoma_executed_cmd` | `JointState.msg` | Executed joint command, always full 29-DoF. **Deprecated** — use `/holosoma/action`. | Policy Rate (typ. 50Hz)  |
 | `/holosoma/heartbeat` | `Heartbeat.msg` | Liveness + status | every 10th control tick (5Hz at 50Hz) |
 
 Note: for `/holosoma/holosoma_executed_cmd`, the policy backend fills all 29 values. The split-body backend fills the 14 arm joints (indices 15–28) and zeros the rest.
+
+Note: the dense target need not be recorded separately for policy replay — it is embedded in `/holosoma/observation` (`motion_command` / `motion_ref_ori_b` terms), tick-exact as consumed.
+
+Note: `/holosoma/observation` + `/holosoma/action` + `/holosoma/policy_metadata` make an inference step fully reproducible from a bag alone. The metadata topic is latched (transient-local) so a recorder that subscribes after startup still captures it — record with compatible QoS. On a policy swap the schema is re-published with the new `wandb_id`, so every observation/action row keys to the metadata that describes it.
 
 ## Internal structure
 
