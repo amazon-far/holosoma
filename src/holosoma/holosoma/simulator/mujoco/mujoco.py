@@ -273,8 +273,8 @@ class MuJoCo(BaseSimulator):
         self.root_model = self.scene_manager.compile()
         self.root_data = mujoco.MjData(self.root_model)
 
-        # Apply post-compilation settings
-        self.root_model.opt.timestep = self.sim_dt
+        if self.root_model.opt.timestep != self.sim_dt:
+            raise ValueError("Compiled MuJoCo timestep differs from sim_dt; sim.fps owns the physics timestep")
 
         # Resolve per-actor freejoint addressing (depends only on the compiled model + scene config).
         # Runs before backend creation so the WarpBackend's put_model sees the final model.

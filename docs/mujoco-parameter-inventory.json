@@ -1,0 +1,1458 @@
+{
+  "versions": {
+    "mujoco": "3.10.0",
+    "mujoco_warp": "ecaef88917a3c90cd238bf76681ca770f58033df",
+    "warp": "1.15.0"
+  },
+  "sources": [
+    "https://github.com/google-deepmind/mujoco/blob/3.10.0/include/mujoco/mjmodel.h",
+    "https://github.com/google-deepmind/mujoco_warp/blob/ecaef88917a3c90cd238bf76681ca770f58033df/mujoco_warp/_src/types.py",
+    "https://github.com/google-deepmind/mujoco_warp/blob/ecaef88917a3c90cd238bf76681ca770f58033df/mujoco_warp/_src/io.py"
+  ],
+  "options": [
+    {
+      "upstream": "MjOption.ccd_iterations",
+      "path": "simulator.config.sim.mujoco.extra.ccd_iterations",
+      "type": "int",
+      "native_default": 35,
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.ccd_tolerance",
+      "path": "simulator.config.sim.mujoco.extra.ccd_tolerance",
+      "type": "float",
+      "native_default": 1e-06,
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.cone",
+      "path": "simulator.config.sim.mujoco.cone",
+      "type": "int",
+      "native_default": 0,
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.density",
+      "path": "simulator.config.sim.mujoco.extra.density",
+      "type": "float",
+      "native_default": 0.0,
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.disableactuator",
+      "path": "simulator.config.sim.mujoco.extra.disableactuator",
+      "type": "int",
+      "native_default": 0,
+      "backends": "classic",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.disableflags",
+      "path": "simulator.config.sim.mujoco.disableflags",
+      "type": "int",
+      "native_default": 0,
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Readable names validated against upstream enums; Warp rejects unsupported bits and retains its disabled island solver."
+    },
+    {
+      "upstream": "MjOption.enableflags",
+      "path": "simulator.config.sim.mujoco.enableflags",
+      "type": "int",
+      "native_default": 0,
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Readable names validated against upstream enums; Warp rejects unsupported bits and retains its disabled island solver."
+    },
+    {
+      "upstream": "MjOption.gravity",
+      "path": "simulator.config.sim.mujoco.gravity",
+      "type": "ndarray",
+      "native_default": [
+        0.0,
+        0.0,
+        -9.81
+      ],
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.impratio",
+      "path": "simulator.config.sim.mujoco.impratio",
+      "type": "float",
+      "native_default": 1.0,
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Uploaded as impratio_invsqrt; explicit value applies before capture."
+    },
+    {
+      "upstream": "MjOption.integrator",
+      "path": "simulator.config.sim.mujoco.integrator",
+      "type": "int",
+      "native_default": 0,
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.iterations",
+      "path": "simulator.config.sim.mujoco.iterations",
+      "type": "int",
+      "native_default": 100,
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.jacobian",
+      "path": "simulator.config.sim.mujoco.jacobian",
+      "type": "int",
+      "native_default": 2,
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Conversion selects layout; dense nv>60 rejected by pinned upstream."
+    },
+    {
+      "upstream": "MjOption.ls_iterations",
+      "path": "simulator.config.sim.mujoco.ls_iterations",
+      "type": "int",
+      "native_default": 50,
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.ls_tolerance",
+      "path": "simulator.config.sim.mujoco.ls_tolerance",
+      "type": "float",
+      "native_default": 0.01,
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.magnetic",
+      "path": "simulator.config.sim.mujoco.extra.magnetic",
+      "type": "ndarray",
+      "native_default": [
+        0.0,
+        -0.5,
+        0.0
+      ],
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.noslip_iterations",
+      "path": "simulator.config.sim.mujoco.noslip_iterations",
+      "type": "int",
+      "native_default": 0,
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Warp supports only zero; no no-slip solver."
+    },
+    {
+      "upstream": "MjOption.noslip_tolerance",
+      "path": "simulator.config.sim.mujoco.extra.noslip_tolerance",
+      "type": "float",
+      "native_default": 1e-06,
+      "backends": "classic",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.o_friction",
+      "path": "simulator.config.sim.mujoco.extra.o_friction",
+      "type": "ndarray",
+      "native_default": [
+        1.0,
+        1.0,
+        0.005,
+        0.0001,
+        0.0001
+      ],
+      "backends": "classic",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.o_margin",
+      "path": "simulator.config.sim.mujoco.extra.o_margin",
+      "type": "float",
+      "native_default": 0.0,
+      "backends": "classic",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.o_solimp",
+      "path": "simulator.config.sim.mujoco.extra.o_solimp",
+      "type": "ndarray",
+      "native_default": [
+        0.9,
+        0.95,
+        0.001,
+        0.5,
+        2.0
+      ],
+      "backends": "classic",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.o_solref",
+      "path": "simulator.config.sim.mujoco.extra.o_solref",
+      "type": "ndarray",
+      "native_default": [
+        0.02,
+        1.0
+      ],
+      "backends": "classic",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.sdf_initpoints",
+      "path": "simulator.config.sim.mujoco.extra.sdf_initpoints",
+      "type": "int",
+      "native_default": 40,
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.sdf_iterations",
+      "path": "simulator.config.sim.mujoco.extra.sdf_iterations",
+      "type": "int",
+      "native_default": 10,
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.sleep_tolerance",
+      "path": "simulator.config.sim.mujoco.extra.sleep_tolerance",
+      "type": "float",
+      "native_default": 0.0001,
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.solver",
+      "path": "simulator.config.sim.mujoco.solver",
+      "type": "int",
+      "native_default": 2,
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.timestep",
+      "path": "simulator.config.sim.fps",
+      "type": "float",
+      "native_default": 0.002,
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Excluded from native input: derived as 1/fps; owns all rates and simulation time."
+    },
+    {
+      "upstream": "MjOption.tolerance",
+      "path": "simulator.config.sim.mujoco.tolerance",
+      "type": "float",
+      "native_default": 1e-08,
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset Warp upload uses at least 1e-6; explicit values are restored on the uploaded array before capture."
+    },
+    {
+      "upstream": "MjOption.viscosity",
+      "path": "simulator.config.sim.mujoco.extra.viscosity",
+      "type": "float",
+      "native_default": 0.0,
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    },
+    {
+      "upstream": "MjOption.wind",
+      "path": "simulator.config.sim.mujoco.extra.wind",
+      "type": "ndarray",
+      "native_default": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "backends": "classic + warp",
+      "stage": "final compilation, then upload before capture",
+      "notes": "Unset retains compiled asset/native values."
+    }
+  ],
+  "warp_options": [
+    {
+      "upstream": "mujoco_warp.Option.timestep",
+      "path": "simulator.config.sim.fps",
+      "type": "array[float32]",
+      "native_default": "conversion from compiled MjOption",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "Native conversion default retained when unset.",
+      "exclusion": "Derived from sim.fps; not a native input."
+    },
+    {
+      "upstream": "mujoco_warp.Option.tolerance",
+      "path": "simulator.config.sim.mujoco.tolerance",
+      "type": "array[float32]",
+      "native_default": "conversion from compiled MjOption",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "One shared input is applied during compilation and restored on upload as needed.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.ls_tolerance",
+      "path": "simulator.config.sim.mujoco.ls_tolerance",
+      "type": "array[float32]",
+      "native_default": "conversion from compiled MjOption",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "One shared input is applied during compilation and restored on upload as needed.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.ccd_tolerance",
+      "path": "simulator.config.sim.mujoco.extra.ccd_tolerance",
+      "type": "array[float32]",
+      "native_default": "conversion from compiled MjOption",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "One shared input is applied during compilation and restored on upload as needed.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.sleep_tolerance",
+      "path": "simulator.config.sim.mujoco.extra.sleep_tolerance",
+      "type": "array[float32]",
+      "native_default": "conversion from compiled MjOption",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "One shared input is applied during compilation and restored on upload as needed.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.gravity",
+      "path": "simulator.config.sim.mujoco.gravity",
+      "type": "array[vec3f]",
+      "native_default": "conversion from compiled MjOption",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "One shared input is applied during compilation and restored on upload as needed.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.wind",
+      "path": "simulator.config.sim.mujoco.extra.wind",
+      "type": "array[vec3f]",
+      "native_default": "conversion from compiled MjOption",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "One shared input is applied during compilation and restored on upload as needed.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.magnetic",
+      "path": "simulator.config.sim.mujoco.extra.magnetic",
+      "type": "array[vec3f]",
+      "native_default": "conversion from compiled MjOption",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "One shared input is applied during compilation and restored on upload as needed.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.density",
+      "path": "simulator.config.sim.mujoco.extra.density",
+      "type": "array[float32]",
+      "native_default": "conversion from compiled MjOption",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "One shared input is applied during compilation and restored on upload as needed.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.viscosity",
+      "path": "simulator.config.sim.mujoco.extra.viscosity",
+      "type": "array[float32]",
+      "native_default": "conversion from compiled MjOption",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "One shared input is applied during compilation and restored on upload as needed.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.integrator",
+      "path": "simulator.config.sim.mujoco.integrator",
+      "type": "int",
+      "native_default": "conversion from compiled MjOption",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "One shared input is applied during compilation and restored on upload as needed.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.cone",
+      "path": "simulator.config.sim.mujoco.cone",
+      "type": "int",
+      "native_default": "conversion from compiled MjOption",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "One shared input is applied during compilation and restored on upload as needed.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.solver",
+      "path": "simulator.config.sim.mujoco.solver",
+      "type": "int",
+      "native_default": "conversion from compiled MjOption",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "One shared input is applied during compilation and restored on upload as needed.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.iterations",
+      "path": "simulator.config.sim.mujoco.iterations",
+      "type": "int",
+      "native_default": "conversion from compiled MjOption",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "One shared input is applied during compilation and restored on upload as needed.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.ls_iterations",
+      "path": "simulator.config.sim.mujoco.ls_iterations",
+      "type": "int",
+      "native_default": "conversion from compiled MjOption",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "One shared input is applied during compilation and restored on upload as needed.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.ccd_iterations",
+      "path": "simulator.config.sim.mujoco.extra.ccd_iterations",
+      "type": "int",
+      "native_default": "conversion from compiled MjOption",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "One shared input is applied during compilation and restored on upload as needed.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.disableflags",
+      "path": "simulator.config.sim.mujoco.disableflags",
+      "type": "int",
+      "native_default": "conversion from compiled MjOption",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "One shared input is applied during compilation and restored on upload as needed.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.enableflags",
+      "path": "simulator.config.sim.mujoco.enableflags",
+      "type": "int",
+      "native_default": "conversion from compiled MjOption",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "One shared input is applied during compilation and restored on upload as needed.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.sdf_initpoints",
+      "path": "simulator.config.sim.mujoco.extra.sdf_initpoints",
+      "type": "int",
+      "native_default": "conversion from compiled MjOption",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "One shared input is applied during compilation and restored on upload as needed.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.sdf_iterations",
+      "path": "simulator.config.sim.mujoco.extra.sdf_iterations",
+      "type": "int",
+      "native_default": "conversion from compiled MjOption",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "One shared input is applied during compilation and restored on upload as needed.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.impratio_invsqrt",
+      "path": null,
+      "type": "array[float32]",
+      "native_default": "upstream put_model default",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "Upstream derived impedance representation; use mujoco.impratio.",
+      "exclusion": "Derived from impratio; direct override would create competing sources of truth."
+    },
+    {
+      "upstream": "mujoco_warp.Option.broadphase",
+      "path": "simulator.config.sim.mujoco.warp.extras.broadphase",
+      "type": "BroadphaseType",
+      "native_default": "upstream put_model default",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "Native conversion default retained when unset.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.broadphase_filter",
+      "path": "simulator.config.sim.mujoco.warp.extras.broadphase_filter",
+      "type": "BroadphaseFilter",
+      "native_default": "upstream put_model default",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "Native conversion default retained when unset.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.graph_conditional",
+      "path": "simulator.config.sim.mujoco.warp.graph_conditional",
+      "type": "bool",
+      "native_default": "upstream put_model default",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "Native conversion default retained when unset.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.run_collision_detection",
+      "path": "simulator.config.sim.mujoco.warp.extras.run_collision_detection",
+      "type": "bool",
+      "native_default": "upstream put_model default",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "Native conversion default retained when unset.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.Option.contact_sensor_maxmatch",
+      "path": "simulator.config.sim.mujoco.warp.extras.contact_sensor_maxmatch",
+      "type": "int",
+      "native_default": "upstream put_model default",
+      "backends": "warp",
+      "stage": "conversion, then explicit overrides before capture",
+      "notes": "Native conversion default retained when unset.",
+      "exclusion": null
+    }
+  ],
+  "allocation": [
+    {
+      "upstream": "mujoco_warp.make_data.mjm",
+      "path": null,
+      "type": "MjModel",
+      "native_default": null,
+      "backends": "warp",
+      "stage": "before allocation",
+      "notes": "Owned by shared simulator setup.",
+      "exclusion": "Compiled model input, not a configurable resource."
+    },
+    {
+      "upstream": "mujoco_warp.make_data.nworld",
+      "path": "training.num_envs",
+      "type": "int",
+      "native_default": 1,
+      "backends": "warp",
+      "stage": "before allocation",
+      "notes": "Owned by shared simulator setup.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.make_data.nconmax",
+      "path": "simulator.config.sim.mujoco.warp.nconmax_per_env",
+      "type": "Optional",
+      "native_default": null,
+      "backends": "warp",
+      "stage": "before allocation",
+      "notes": "Average contacts per world, pooled across worlds; Holosoma default 96.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.make_data.nccdmax",
+      "path": "simulator.config.sim.mujoco.warp.extras.nccdmax",
+      "type": "Optional",
+      "native_default": null,
+      "backends": "warp",
+      "stage": "before allocation",
+      "notes": "Average CCD contacts per world; defaults to nconmax; must not exceed nconmax.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.make_data.njmax",
+      "path": "simulator.config.sim.mujoco.warp.njmax_per_env",
+      "type": "Optional",
+      "native_default": null,
+      "backends": "warp",
+      "stage": "before allocation",
+      "notes": "Hard constraint rows per world; Holosoma default max(6*nconmax_per_env, 4*nv).",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.make_data.njmax_nnz",
+      "path": "simulator.config.sim.mujoco.warp.extras.njmax_nnz",
+      "type": "Optional",
+      "native_default": null,
+      "backends": "warp",
+      "stage": "before allocation",
+      "notes": "Sparse constraint Jacobian nonzeros per world; native model-dependent estimate.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.make_data.naconmax",
+      "path": "simulator.config.sim.mujoco.warp.naconmax",
+      "type": "Optional",
+      "native_default": null,
+      "backends": "warp",
+      "stage": "before allocation",
+      "notes": "Total pooled contacts; overrides nconmax*nworld.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.make_data.naccdmax",
+      "path": "simulator.config.sim.mujoco.warp.extras.naccdmax",
+      "type": "Optional",
+      "native_default": null,
+      "backends": "warp",
+      "stage": "before allocation",
+      "notes": "Total CCD pool; overrides nccdmax*nworld; defaults to naconmax; cannot exceed it.",
+      "exclusion": null
+    },
+    {
+      "upstream": "mujoco_warp.make_data.nvmax",
+      "path": "simulator.config.sim.mujoco.warp.extras.nvmax",
+      "type": "Optional",
+      "native_default": null,
+      "backends": "warp",
+      "stage": "before allocation",
+      "notes": "Compacted active DOFs per world; defaults to model.nv; must be in [0, model.nv].",
+      "exclusion": null
+    }
+  ],
+  "block_dimensions": [
+    {
+      "upstream": "mujoco_warp.Model.block_dim.segmented_sort",
+      "path": null,
+      "type": "int",
+      "native_default": 128,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    },
+    {
+      "upstream": "mujoco_warp.Model.block_dim.actuator_velocity",
+      "path": null,
+      "type": "int",
+      "native_default": 32,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    },
+    {
+      "upstream": "mujoco_warp.Model.block_dim.ray",
+      "path": null,
+      "type": "int",
+      "native_default": 64,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    },
+    {
+      "upstream": "mujoco_warp.Model.block_dim.contact_sort",
+      "path": null,
+      "type": "int",
+      "native_default": 64,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    },
+    {
+      "upstream": "mujoco_warp.Model.block_dim.energy_vel_kinetic",
+      "path": null,
+      "type": "int",
+      "native_default": 32,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    },
+    {
+      "upstream": "mujoco_warp.Model.block_dim.cholesky_factorize",
+      "path": null,
+      "type": "int",
+      "native_default": 96,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    },
+    {
+      "upstream": "mujoco_warp.Model.block_dim.cholesky_factorize_solve",
+      "path": null,
+      "type": "int",
+      "native_default": 128,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    },
+    {
+      "upstream": "mujoco_warp.Model.block_dim.cholesky_solve",
+      "path": null,
+      "type": "int",
+      "native_default": 64,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    },
+    {
+      "upstream": "mujoco_warp.Model.block_dim.solve_LD_sparse_fused",
+      "path": null,
+      "type": "int",
+      "native_default": 128,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    },
+    {
+      "upstream": "mujoco_warp.Model.block_dim.update_gradient_cholesky",
+      "path": null,
+      "type": "int",
+      "native_default": 64,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    },
+    {
+      "upstream": "mujoco_warp.Model.block_dim.update_gradient_cholesky_blocked",
+      "path": null,
+      "type": "int",
+      "native_default": 32,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    },
+    {
+      "upstream": "mujoco_warp.Model.block_dim.update_gradient_JTDAJ_sparse",
+      "path": null,
+      "type": "int",
+      "native_default": 64,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    },
+    {
+      "upstream": "mujoco_warp.Model.block_dim.update_gradient_JTDAJ_dense",
+      "path": null,
+      "type": "int",
+      "native_default": 128,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    },
+    {
+      "upstream": "mujoco_warp.Model.block_dim.linesearch_iterative",
+      "path": null,
+      "type": "int",
+      "native_default": 32,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    },
+    {
+      "upstream": "mujoco_warp.Model.block_dim.update_gradient_grad",
+      "path": null,
+      "type": "int",
+      "native_default": 256,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    },
+    {
+      "upstream": "mujoco_warp.Model.block_dim.solve_beta_accumulate",
+      "path": null,
+      "type": "int",
+      "native_default": 256,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    },
+    {
+      "upstream": "mujoco_warp.Model.block_dim.solve_search_update_cg",
+      "path": null,
+      "type": "int",
+      "native_default": 256,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    },
+    {
+      "upstream": "mujoco_warp.Model.block_dim.solve_init_search_cg",
+      "path": null,
+      "type": "int",
+      "native_default": 256,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    },
+    {
+      "upstream": "mujoco_warp.Model.block_dim.contact_jac_tiled",
+      "path": null,
+      "type": "int",
+      "native_default": 32,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    },
+    {
+      "upstream": "mujoco_warp.Model.block_dim.qderiv_actuator_dense",
+      "path": null,
+      "type": "int",
+      "native_default": 32,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    },
+    {
+      "upstream": "mujoco_warp.Model.block_dim.render",
+      "path": null,
+      "type": "int",
+      "native_default": 64,
+      "backends": "warp",
+      "stage": "before kernel loading and capture",
+      "notes": "Native kernel block dimensions remain unchanged.",
+      "exclusion": "Kernel tiling is outside this focused physics/resource configuration."
+    }
+  ],
+  "compilation": [
+    {
+      "upstream": "warp.module_options.block_dim",
+      "path": null,
+      "type": "int",
+      "native_default": 256,
+      "backends": "warp",
+      "stage": "before kernel loading",
+      "notes": "Native Warp module compilation policy remains unchanged.",
+      "exclusion": "Process-wide compiler settings belong to backend execution, not per-simulator physics configuration."
+    },
+    {
+      "upstream": "warp.module_options.compile_time_trace",
+      "path": null,
+      "type": "bool",
+      "native_default": false,
+      "backends": "warp",
+      "stage": "before kernel loading",
+      "notes": "Native Warp module compilation policy remains unchanged.",
+      "exclusion": "Process-wide compiler settings belong to backend execution, not per-simulator physics configuration."
+    },
+    {
+      "upstream": "warp.module_options.cpu_compiler_flags",
+      "path": null,
+      "type": "NoneType",
+      "native_default": null,
+      "backends": "warp",
+      "stage": "before kernel loading",
+      "notes": "Native Warp module compilation policy remains unchanged.",
+      "exclusion": "Process-wide compiler settings belong to backend execution, not per-simulator physics configuration."
+    },
+    {
+      "upstream": "warp.module_options.cuda_output",
+      "path": null,
+      "type": "NoneType",
+      "native_default": null,
+      "backends": "warp",
+      "stage": "before kernel loading",
+      "notes": "Native Warp module compilation policy remains unchanged.",
+      "exclusion": "Process-wide compiler settings belong to backend execution, not per-simulator physics configuration."
+    },
+    {
+      "upstream": "warp.module_options.default_grid_stride",
+      "path": null,
+      "type": "NoneType",
+      "native_default": null,
+      "backends": "warp",
+      "stage": "before kernel loading",
+      "notes": "Native Warp module compilation policy remains unchanged.",
+      "exclusion": "Process-wide compiler settings belong to backend execution, not per-simulator physics configuration."
+    },
+    {
+      "upstream": "warp.module_options.deterministic",
+      "path": null,
+      "type": "DeterministicMode",
+      "native_default": 0,
+      "backends": "warp",
+      "stage": "before kernel loading",
+      "notes": "Native Warp module compilation policy remains unchanged.",
+      "exclusion": "Process-wide compiler settings belong to backend execution, not per-simulator physics configuration."
+    },
+    {
+      "upstream": "warp.module_options.deterministic_max_records",
+      "path": null,
+      "type": "int",
+      "native_default": 0,
+      "backends": "warp",
+      "stage": "before kernel loading",
+      "notes": "Native Warp module compilation policy remains unchanged.",
+      "exclusion": "Process-wide compiler settings belong to backend execution, not per-simulator physics configuration."
+    },
+    {
+      "upstream": "warp.module_options.enable_backward",
+      "path": null,
+      "type": "bool",
+      "native_default": true,
+      "backends": "warp",
+      "stage": "before kernel loading",
+      "notes": "Native Warp module compilation policy remains unchanged.",
+      "exclusion": "Process-wide compiler settings belong to backend execution, not per-simulator physics configuration."
+    },
+    {
+      "upstream": "warp.module_options.enable_mathdx_fft",
+      "path": null,
+      "type": "NoneType",
+      "native_default": null,
+      "backends": "warp",
+      "stage": "before kernel loading",
+      "notes": "Native Warp module compilation policy remains unchanged.",
+      "exclusion": "Process-wide compiler settings belong to backend execution, not per-simulator physics configuration."
+    },
+    {
+      "upstream": "warp.module_options.enable_mathdx_gemm",
+      "path": null,
+      "type": "NoneType",
+      "native_default": null,
+      "backends": "warp",
+      "stage": "before kernel loading",
+      "notes": "Native Warp module compilation policy remains unchanged.",
+      "exclusion": "Process-wide compiler settings belong to backend execution, not per-simulator physics configuration."
+    },
+    {
+      "upstream": "warp.module_options.enable_mathdx_solver",
+      "path": null,
+      "type": "NoneType",
+      "native_default": null,
+      "backends": "warp",
+      "stage": "before kernel loading",
+      "notes": "Native Warp module compilation policy remains unchanged.",
+      "exclusion": "Process-wide compiler settings belong to backend execution, not per-simulator physics configuration."
+    },
+    {
+      "upstream": "warp.module_options.fast_math",
+      "path": null,
+      "type": "bool",
+      "native_default": false,
+      "backends": "warp",
+      "stage": "before kernel loading",
+      "notes": "Native Warp module compilation policy remains unchanged.",
+      "exclusion": "Process-wide compiler settings belong to backend execution, not per-simulator physics configuration."
+    },
+    {
+      "upstream": "warp.module_options.fuse_fp",
+      "path": null,
+      "type": "bool",
+      "native_default": true,
+      "backends": "warp",
+      "stage": "before kernel loading",
+      "notes": "Native Warp module compilation policy remains unchanged.",
+      "exclusion": "Process-wide compiler settings belong to backend execution, not per-simulator physics configuration."
+    },
+    {
+      "upstream": "warp.module_options.lineinfo",
+      "path": null,
+      "type": "bool",
+      "native_default": false,
+      "backends": "warp",
+      "stage": "before kernel loading",
+      "notes": "Native Warp module compilation policy remains unchanged.",
+      "exclusion": "Process-wide compiler settings belong to backend execution, not per-simulator physics configuration."
+    },
+    {
+      "upstream": "warp.module_options.max_unroll",
+      "path": null,
+      "type": "int",
+      "native_default": 16,
+      "backends": "warp",
+      "stage": "before kernel loading",
+      "notes": "Native Warp module compilation policy remains unchanged.",
+      "exclusion": "Process-wide compiler settings belong to backend execution, not per-simulator physics configuration."
+    },
+    {
+      "upstream": "warp.module_options.mode",
+      "path": null,
+      "type": "NoneType",
+      "native_default": null,
+      "backends": "warp",
+      "stage": "before kernel loading",
+      "notes": "Native Warp module compilation policy remains unchanged.",
+      "exclusion": "Process-wide compiler settings belong to backend execution, not per-simulator physics configuration."
+    },
+    {
+      "upstream": "warp.module_options.optimization_level",
+      "path": null,
+      "type": "NoneType",
+      "native_default": null,
+      "backends": "warp",
+      "stage": "before kernel loading",
+      "notes": "Native Warp module compilation policy remains unchanged.",
+      "exclusion": "Process-wide compiler settings belong to backend execution, not per-simulator physics configuration."
+    },
+    {
+      "upstream": "warp.module_options.strip_hash",
+      "path": null,
+      "type": "bool",
+      "native_default": false,
+      "backends": "warp",
+      "stage": "before kernel loading",
+      "notes": "Native Warp module compilation policy remains unchanged.",
+      "exclusion": "Process-wide compiler settings belong to backend execution, not per-simulator physics configuration."
+    }
+  ],
+  "capture": [
+    {
+      "upstream": "warp.ScopedCapture.device",
+      "path": null,
+      "type": "DeviceLike",
+      "native_default": null,
+      "backends": "warp",
+      "stage": "capture",
+      "notes": "Core backend setup retains its native capture defaults.",
+      "exclusion": "Device/stream objects are owned by simulator execution, not scalar configuration."
+    },
+    {
+      "upstream": "warp.ScopedCapture.stream",
+      "path": null,
+      "type": "NoneType",
+      "native_default": null,
+      "backends": "warp",
+      "stage": "capture",
+      "notes": "Core backend setup retains its native capture defaults.",
+      "exclusion": "Device/stream objects are owned by simulator execution, not scalar configuration."
+    },
+    {
+      "upstream": "warp.ScopedCapture.force_module_load",
+      "path": null,
+      "type": "NoneType",
+      "native_default": null,
+      "backends": "warp",
+      "stage": "capture",
+      "notes": "Core backend setup retains its native capture defaults.",
+      "exclusion": "Core backend owns graph capture; execution plumbing is outside this focused configuration."
+    },
+    {
+      "upstream": "warp.ScopedCapture.external",
+      "path": null,
+      "type": "bool",
+      "native_default": false,
+      "backends": "warp",
+      "stage": "capture",
+      "notes": "Core backend setup retains its native capture defaults.",
+      "exclusion": "Core backend owns graph capture; execution plumbing is outside this focused configuration."
+    },
+    {
+      "upstream": "warp.ScopedCapture.apic",
+      "path": null,
+      "type": "bool",
+      "native_default": false,
+      "backends": "warp",
+      "stage": "capture",
+      "notes": "Core backend setup retains its native capture defaults.",
+      "exclusion": "Core backend owns graph capture; execution plumbing is outside this focused configuration."
+    },
+    {
+      "upstream": "warp.ScopedCapture.capture_mode",
+      "path": null,
+      "type": "CaptureMode",
+      "native_default": 1,
+      "backends": "warp",
+      "stage": "capture",
+      "notes": "Core backend setup retains its native capture defaults.",
+      "exclusion": "Core backend owns graph capture; execution plumbing is outside this focused configuration."
+    }
+  ],
+  "conversion": [
+    {
+      "upstream": "mujoco_warp.put_model.mjm",
+      "path": null,
+      "type": "MjModel",
+      "native_default": null,
+      "backends": "warp",
+      "stage": "conversion",
+      "notes": "Compiled model comes from core world assembly.",
+      "exclusion": "Model input is not a setting."
+    },
+    {
+      "upstream": "mujoco_warp.put_model.batch_sizes",
+      "path": null,
+      "type": "int",
+      "native_default": "1 (shared) for each field",
+      "backends": "warp",
+      "stage": "conversion",
+      "notes": "Core domain-randomization setup expands its owned model fields to nworld before capture.",
+      "exclusion": "Per-field model batching is owned by core domain randomization, not a competing configuration input."
+    }
+  ],
+  "batchable_model_fields": [
+    "actuator_acc0",
+    "actuator_actrange",
+    "actuator_biasprm",
+    "actuator_cranklength",
+    "actuator_ctrlrange",
+    "actuator_dynprm",
+    "actuator_forcerange",
+    "actuator_gainprm",
+    "actuator_gear",
+    "actuator_lengthrange",
+    "body_gravcomp",
+    "body_inertia",
+    "body_invweight0",
+    "body_ipos",
+    "body_iquat",
+    "body_mass",
+    "body_pos",
+    "body_quat",
+    "body_subtreemass",
+    "cam_fovy",
+    "cam_intrinsic",
+    "cam_mat0",
+    "cam_pos",
+    "cam_pos0",
+    "cam_poscom0",
+    "cam_quat",
+    "dof_armature",
+    "dof_damping",
+    "dof_dampingpoly",
+    "dof_frictionloss",
+    "dof_invweight0",
+    "dof_solimp",
+    "dof_solref",
+    "eq_data",
+    "eq_solimp",
+    "eq_solref",
+    "geom_aabb",
+    "geom_dataid",
+    "geom_friction",
+    "geom_gap",
+    "geom_margin",
+    "geom_matid",
+    "geom_pos",
+    "geom_quat",
+    "geom_rbound",
+    "geom_rgba",
+    "geom_size",
+    "geom_solimp",
+    "geom_solmix",
+    "geom_solref",
+    "jnt_actfrcrange",
+    "jnt_axis",
+    "jnt_margin",
+    "jnt_pos",
+    "jnt_range",
+    "jnt_solimp",
+    "jnt_solref",
+    "jnt_stiffness",
+    "jnt_stiffnesspoly",
+    "light_active",
+    "light_ambient",
+    "light_attenuation",
+    "light_castshadow",
+    "light_cutoff",
+    "light_diffuse",
+    "light_dir",
+    "light_dir0",
+    "light_exponent",
+    "light_pos",
+    "light_pos0",
+    "light_poscom0",
+    "light_specular",
+    "light_type",
+    "mat_emission",
+    "mat_rgba",
+    "mat_shininess",
+    "mat_specular",
+    "mat_texid",
+    "mat_texrepeat",
+    "pair_friction",
+    "pair_gap",
+    "pair_margin",
+    "pair_solimp",
+    "pair_solref",
+    "pair_solreffriction",
+    "qpos0",
+    "qpos_spring",
+    "site_pos",
+    "site_quat",
+    "tendon_actfrcrange",
+    "tendon_armature",
+    "tendon_damping",
+    "tendon_dampingpoly",
+    "tendon_frictionloss",
+    "tendon_invweight0",
+    "tendon_length0",
+    "tendon_lengthspring",
+    "tendon_margin",
+    "tendon_range",
+    "tendon_solimp_fri",
+    "tendon_solimp_lim",
+    "tendon_solref_fri",
+    "tendon_solref_lim",
+    "tendon_stiffness",
+    "tendon_stiffnesspoly"
+  ],
+  "authoring_exclusions": {
+    "compiler/size/visual": "Authored in existing MJCF XML asset paths; no second model-authoring schema.",
+    "pairs/joints/tendons/equalities": "Per-element attributes authored in MJCF; do not mean global contact overrides.",
+    "native sensors": "Authored in MJCF; mounted cameras/LiDAR use existing shared SensorConfig.",
+    "model/data arrays": "Generated tables, addresses, transient state and arbitrary array writes are not settings."
+  },
+  "warp_option_fields": [
+    "broadphase",
+    "broadphase_filter",
+    "ccd_iterations",
+    "ccd_tolerance",
+    "cone",
+    "contact_sensor_maxmatch",
+    "density",
+    "disableflags",
+    "enableflags",
+    "graph_conditional",
+    "gravity",
+    "impratio_invsqrt",
+    "integrator",
+    "iterations",
+    "ls_iterations",
+    "ls_tolerance",
+    "magnetic",
+    "run_collision_detection",
+    "sdf_initpoints",
+    "sdf_iterations",
+    "sleep_tolerance",
+    "solver",
+    "timestep",
+    "tolerance",
+    "viscosity",
+    "wind"
+  ],
+  "make_data_parameters": [
+    "mjm",
+    "nworld",
+    "nconmax",
+    "nccdmax",
+    "njmax",
+    "njmax_nnz",
+    "naconmax",
+    "naccdmax",
+    "nvmax"
+  ],
+  "extra_name_collisions": [],
+  "put_model_parameters": [
+    "mjm",
+    "batch_sizes"
+  ],
+  "block_dim_fields": [
+    "segmented_sort",
+    "actuator_velocity",
+    "ray",
+    "contact_sort",
+    "energy_vel_kinetic",
+    "cholesky_factorize",
+    "cholesky_factorize_solve",
+    "cholesky_solve",
+    "solve_LD_sparse_fused",
+    "update_gradient_cholesky",
+    "update_gradient_cholesky_blocked",
+    "update_gradient_JTDAJ_sparse",
+    "update_gradient_JTDAJ_dense",
+    "linesearch_iterative",
+    "update_gradient_grad",
+    "solve_beta_accumulate",
+    "solve_search_update_cg",
+    "solve_init_search_cg",
+    "contact_jac_tiled",
+    "qderiv_actuator_dense",
+    "render"
+  ],
+  "compilation_fields": [
+    "block_dim",
+    "compile_time_trace",
+    "cpu_compiler_flags",
+    "cuda_output",
+    "default_grid_stride",
+    "deterministic",
+    "deterministic_max_records",
+    "enable_backward",
+    "enable_mathdx_fft",
+    "enable_mathdx_gemm",
+    "enable_mathdx_solver",
+    "fast_math",
+    "fuse_fp",
+    "lineinfo",
+    "max_unroll",
+    "mode",
+    "optimization_level",
+    "strip_hash"
+  ],
+  "capture_parameters": [
+    "device",
+    "stream",
+    "force_module_load",
+    "external",
+    "apic",
+    "capture_mode"
+  ],
+  "enum_choices": {
+    "mjtIntegrator": [
+      "mjINT_EULER",
+      "mjINT_RK4",
+      "mjINT_IMPLICIT",
+      "mjINT_IMPLICITFAST"
+    ],
+    "mjtSolver": [
+      "mjSOL_PGS",
+      "mjSOL_CG",
+      "mjSOL_NEWTON"
+    ],
+    "mjtCone": [
+      "mjCONE_PYRAMIDAL",
+      "mjCONE_ELLIPTIC"
+    ],
+    "mjtJacobian": [
+      "mjJAC_DENSE",
+      "mjJAC_SPARSE",
+      "mjJAC_AUTO"
+    ],
+    "mjtEnableBit": [
+      "mjENBL_OVERRIDE",
+      "mjENBL_ENERGY",
+      "mjENBL_FWDINV",
+      "mjENBL_INVDISCRETE",
+      "mjENBL_SLEEP",
+      "mjENBL_DIAGEXACT",
+      "mjNENABLE"
+    ],
+    "mjtDisableBit": [
+      "mjDSBL_CONSTRAINT",
+      "mjDSBL_EQUALITY",
+      "mjDSBL_FRICTIONLOSS",
+      "mjDSBL_LIMIT",
+      "mjDSBL_CONTACT",
+      "mjDSBL_SPRING",
+      "mjDSBL_DAMPER",
+      "mjDSBL_GRAVITY",
+      "mjDSBL_CLAMPCTRL",
+      "mjDSBL_WARMSTART",
+      "mjDSBL_FILTERPARENT",
+      "mjDSBL_ACTUATION",
+      "mjDSBL_REFSAFE",
+      "mjDSBL_SENSOR",
+      "mjDSBL_MIDPHASE",
+      "mjDSBL_EULERDAMP",
+      "mjDSBL_AUTORESET",
+      "mjDSBL_NATIVECCD",
+      "mjDSBL_ISLAND",
+      "mjDSBL_MULTICCD",
+      "mjNDISABLE"
+    ]
+  },
+  "warp_enum_choices": {
+    "IntegratorType": [
+      "EULER",
+      "RK4",
+      "IMPLICITFAST",
+      "IMPLICIT"
+    ],
+    "SolverType": [
+      "CG",
+      "NEWTON"
+    ],
+    "ConeType": [
+      "PYRAMIDAL",
+      "ELLIPTIC"
+    ],
+    "DisableBit": [
+      "CONSTRAINT",
+      "EQUALITY",
+      "FRICTIONLOSS",
+      "LIMIT",
+      "CONTACT",
+      "SPRING",
+      "DAMPER",
+      "GRAVITY",
+      "CLAMPCTRL",
+      "WARMSTART",
+      "FILTERPARENT",
+      "ACTUATION",
+      "REFSAFE",
+      "SENSOR",
+      "EULERDAMP",
+      "NATIVECCD",
+      "ISLAND",
+      "MULTICCD"
+    ],
+    "EnableBit": [
+      "ENERGY",
+      "INVDISCRETE",
+      "SLEEP"
+    ],
+    "BroadphaseType": [
+      "NXN",
+      "SAP_TILE",
+      "SAP_SEGMENTED"
+    ],
+    "BroadphaseFilter": [
+      "PLANE",
+      "SPHERE",
+      "AABB",
+      "OBB"
+    ],
+    "DeterministicMode": [
+      "NOT_GUARANTEED",
+      "RUN_TO_RUN",
+      "GPU_TO_GPU"
+    ],
+    "CaptureMode": [
+      "GLOBAL",
+      "THREAD_LOCAL",
+      "RELAXED"
+    ]
+  }
+}

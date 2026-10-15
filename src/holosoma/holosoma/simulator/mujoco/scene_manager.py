@@ -16,6 +16,7 @@ from holosoma.config_types.sensor import CameraSensorConfig, LidarSensorConfig
 from holosoma.config_types.simulator import MujocoXMLFilterCfg, SimulatorConfig
 from holosoma.managers.terrain.base import TerrainTermBase
 from holosoma.simulator.mujoco.geom_groups import tag_compiled_robot_geom_groups
+from holosoma.simulator.mujoco.native_config import apply_fields, apply_world_config
 from holosoma.simulator.shared.asset_format import select_asset_format
 from holosoma.utils.path import resolve_asset_path
 
@@ -69,6 +70,7 @@ class MujocoSceneManager:
             Simulator configuration containing physics and rendering parameters.
         """
         self.world_spec = mujoco.MjSpec()
+        self.simulator_config = simulator_config
         self.world_spec.copy_during_attach = True
         self._setup_world_options(simulator_config)
         self.robot_config: RobotConfig | None = None  # Set when adding robot
@@ -711,14 +713,7 @@ class MujocoSceneManager:
             if physics.density is not None:
                 geom.density = physics.density
             if mj is not None:
-                if mj.friction is not None:
-                    geom.friction = list(mj.friction)
-                if mj.solref is not None:
-                    geom.solref = list(mj.solref)
-                if mj.solimp is not None:
-                    geom.solimp = list(mj.solimp)
-                if mj.condim is not None:
-                    geom.condim = mj.condim
+                apply_fields(geom, mj, f"physics.{name}.mujoco")
 
     def _apply_link_physics_to_robot(self, robot_spec: mujoco.MjSpec, robot_config: RobotConfig) -> None:
         """Apply the robot's ``link_physics`` to every robot link body, before attach/compile.
@@ -919,6 +914,7 @@ class MujocoSceneManager:
             Compiled MuJoCo model ready for simulation.
         """
         logger.info("Compiling world model using MjSpec")
+        apply_world_config(self.world_spec, self.simulator_config)
         model = self.world_spec.compile()
 
         meta = self.robot_spec_meta

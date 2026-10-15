@@ -16,6 +16,7 @@ from pydantic.dataclasses import dataclass
 
 import holosoma.config_values.light
 from holosoma.config_types.light import DEFAULT_LIGHT_KEY, DefaultLightConfig, LightConfig
+from holosoma.config_types.mujoco import MujocoGeomPhysicsConfig
 from holosoma.config_types.value_types import UnitQuaternionWXYZ
 from holosoma.utils.config_registry import UseRegistry
 
@@ -100,25 +101,13 @@ class IsaacSimPhysicsConfig:
 
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)
-class MujocoPhysicsConfig:
+class MujocoPhysicsConfig(MujocoGeomPhysicsConfig):
     """MuJoCo geom-level physics, set on an ``MjSpec`` before compile.
 
-    These are geom attributes (friction/solref/solimp/condim) that apply to any body's geoms,
+    These contact attributes apply to any body's geoms,
     whether a free scene object or a robot link, so this config is shared across both entity kinds.
     ``None`` on any field keeps the asset's value.
     """
-
-    friction: list[float] | None = None
-    """Geom friction ``[sliding, torsional, rolling]``. ``None`` keeps the asset's value."""
-
-    solref: list[float] | None = None
-    """Constraint solver reference ``[timeconst, dampratio]``. ``None`` keeps the asset's value."""
-
-    solimp: list[float] | None = None
-    """Constraint solver impedance ``[dmin, dmax, width, midpoint, power]``. ``None`` keeps it."""
-
-    condim: int | None = None
-    """Contact dimensionality (1/3/4/6). ``None`` keeps the asset's value."""
 
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)
