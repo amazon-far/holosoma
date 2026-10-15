@@ -415,9 +415,10 @@ class InteractionMeshRetargeter:
             q_locked_list = q_nominal_list
         else:
             q_locked_list = np.zeros((num_frames, self.nq))
-            q_locked_list[0, self.q_a_indices] = q_a_init
+            q_locked_list[:, self.q_a_indices] = q_a_init
 
-        q_locked_list[:, -7:] = object_poses_augmented
+        if self.has_dynamic_object:
+            q_locked_list[:, -7:] = object_poses_augmented
         q = np.copy(q_locked_list[0])
         retargeted_motions = [q]
 
@@ -646,7 +647,7 @@ class InteractionMeshRetargeter:
         constraints = []
 
         # Linear equality
-        constraints += [cp.Constant(J_L[:, self.q_a_indices]) @ dqa - lap_var == -lap0_vec]
+        constraints += [cp.Constant(J_L) @ dqa - lap_var == -lap0_vec]
 
         # Foot constraints (sticking + foot lock window Z pinning)
         apply_foot_sticking = (self.q_a_init_idx < 12) and self.activate_foot_sticking
@@ -675,7 +676,7 @@ class InteractionMeshRetargeter:
                         p_lb = p_WF_t_last_dict[key] - p_WF_dict[key] - self.foot_sticking_tolerance
                         p_ub = p_lb + 2 * self.foot_sticking_tolerance  # symmetric window
 
-                        Jxy = J_WF[:2, self.q_a_indices]  # (2 x nq_act)
+                        Jxy = J_WF[:2]  # (2 x nq_a)
                         constraints += [
                             Jxy @ dqa >= p_lb[:2],
                             Jxy @ dqa <= p_ub[:2],
@@ -689,7 +690,7 @@ class InteractionMeshRetargeter:
                         continue
 
                     z_delta = z_anchor - p_WF_dict[key][2]
-                    Jz = J_WF[2, self.q_a_indices]
+                    Jz = J_WF[2]
                     constraints += [
                         Jz @ dqa >= z_delta - self.foot_lock.tolerance,
                         Jz @ dqa <= z_delta + self.foot_lock.tolerance,
@@ -1246,11 +1247,11 @@ class InteractionMeshRetargeter:
         # ---- remaining hinge/slide joints: v = qdot ----
         for j in range(1, self.robot_model.njnt):
             jt = self.robot_model.jnt_type[j]
-            if jt in (mujoco.mjtJoint.mjJNT_HINGE, mujoco.mjtJoint.mjJNT_SLIDE):
+            if int(jt) in (int(mujoco.mjtJoint.mjJNT_HINGE), int(mujoco.mjtJoint.mjJNT_SLIDE)):
                 qa = self.robot_model.jnt_qposadr[j]
                 da = self.robot_model.jnt_dofadr[j]
                 T[da, qa] = 1.0
-            elif jt == mujoco.mjtJoint.mjJNT_BALL:
+            elif int(jt) == int(mujoco.mjtJoint.mjJNT_BALL):
                 raise NotImplementedError("BALL joint block not implemented.")
 
         return T
