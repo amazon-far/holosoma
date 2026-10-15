@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from dataclasses import replace
+from dataclasses import fields, replace
+from typing import get_type_hints
 
 import mujoco
 import numpy as np
@@ -38,10 +39,10 @@ XML = """<mujoco><option integrator="Euler" tolerance="0.003"/>
 </worldbody></mujoco>"""
 
 
-def compiled(native, backend=preset):
+def compiled(native, backend=preset, *, xml=XML):
     config = replace(backend.config, sim=replace(backend.config.sim, fps=100, mujoco=native))
     manager = MujocoSceneManager(config)
-    manager.world_spec = mujoco.MjSpec.from_string(XML)
+    manager.world_spec = mujoco.MjSpec.from_string(xml)
     return manager.compile()
 
 
@@ -62,7 +63,9 @@ def test_unset_preserves_asset_options_and_contacts_but_fps_owns_dt(yaml_roundtr
 
 @pytest.mark.parametrize("integrator", ["euler", "rk4", "implicit", "implicitfast"])
 def test_all_integrators_are_applied_and_stepped(integrator):
-    model = compiled(MujocoConfig(integrator=integrator, gravity=(0, 0, -2), disableflags=("contact",)))
+    xml = XML if integrator == "rk4" else XML.replace('integrator="Euler"', 'integrator="RK4"')
+    model = compiled(MujocoConfig(integrator=integrator, gravity=(0, 0, -2), disableflags=("contact",)), xml=xml)
+    assert model.opt.integrator == getattr(mujoco.mjtIntegrator, "mjINT_" + integrator.upper())
     data = mujoco.MjData(model)
     for _ in range(10):
         mujoco.mj_step(model, data)
@@ -308,13 +311,28 @@ def test_warp_allocation_uses_real_api_and_preserves_default_units():
     model = compiled(MujocoConfig())
     baseline = allocation_kwargs(model, MujocoWarpConfig(), 3)
     assert baseline == {"nworld": 3, "nconmax": 96, "njmax": max(576, model.nv * 4)}
-    cfg = MujocoWarpConfig(nconmax_per_env=5, njmax_per_env=40, naconmax=11, extras={"nccdmax": 0})
+    with wp.ScopedDevice("cpu"):
+        default_data = mjw.make_data(model, **baseline)
+    assert default_data.contact.geom.shape == (96 * 3,)
+    assert default_data.njmax == 576
+    model = compiled(MujocoConfig(jacobian="sparse"))
+    cfg = MujocoWarpConfig(
+        nconmax_per_env=5,
+        njmax_per_env=40,
+        naconmax=11,
+        extras={"nccdmax": 2, "naccdmax": 4, "njmax_nnz": 120, "nvmax": 3},
+    )
     with wp.ScopedDevice("cpu"):
         data = mjw.make_data(model, **allocation_kwargs(model, cfg, 3))
     assert data.contact.geom.shape == (11,)
     assert data.njmax == 40
     assert data.qpos.shape[0] == 3
-    assert data.naccdmax == 0
+    assert data.naccdmax == 4
+    assert data.nvmax == 3
+    assert data.efc.J.shape == (3, 1, 120)
+    with wp.ScopedDevice("cpu"):
+        zero_ccd = mjw.make_data(model, **allocation_kwargs(model, MujocoWarpConfig(extras={"nccdmax": 0}), 3))
+    assert zero_ccd.naccdmax == 0
     for settings, reason in [
         ({"extras": {"unknown": 3}}, "make_data"),
         ({"extras": {"nccdmax": -1}}, "nonnegative"),
@@ -333,6 +351,33 @@ def test_warp_allocation_uses_real_api_and_preserves_default_units():
         )
         with pytest.raises(ValueError, match=reason):
             validate(*args)
+
+
+def test_remaining_warp_only_options_reach_real_cpu_converted_model():
+    mjw = pytest.importorskip("mujoco_warp")
+    wp = pytest.importorskip("warp")
+    model = compiled(MujocoConfig())
+    option_types = get_type_hints(mjw.Option)
+    with wp.ScopedDevice("cpu"):
+        for field in fields(mjw.Option):
+            name = field.name
+            if isinstance(getattr(mujoco.MjOption, name, None), property) or name in {
+                "impratio_invsqrt",  # Derived from the named shared impratio setting.
+                "graph_conditional",  # Named Warp field, covered separately.
+            }:
+                continue
+            uploaded = mjw.put_model(model)
+            current = getattr(uploaded.opt, name)
+            native_type = option_types[name]
+            if hasattr(native_type, "__members__"):
+                expected = next(member for member in native_type if int(member) != int(current))
+                override = expected.name.lower()
+            else:
+                override = expected = not current if native_type is bool else current + 1
+            native = MujocoConfig(warp=MujocoWarpConfig(extras={name: override}))
+            apply_warp_model(uploaded, native, {})
+            assert getattr(uploaded.opt, name) == expected, name
+            assert getattr(uploaded.opt, name) != current, name
 
 
 def test_warp_device_array_conversion_on_cpu_does_not_claim_gpu_execution():
