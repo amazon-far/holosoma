@@ -72,7 +72,7 @@ def test_extra_cli_false_and_yaml_values_roundtrip() -> None:
         MujocoConfig,
         args=[
             "--extra",
-            "{'ccd_iterations': 0}",
+            "{'ccd_iterations': 0, 'wind': [0, 0, 0]}",
             "--warp.graph-conditional",
             "False",
             "--warp.extras",
@@ -80,11 +80,35 @@ def test_extra_cli_false_and_yaml_values_roundtrip() -> None:
         ],
     )
     assert cfg.extra["ccd_iterations"] == 0
+    assert cfg.extra["wind"] == [0, 0, 0]
     assert cfg.warp.extras["run_collision_detection"] is False
     assert cfg.warp.extras["nccdmax"] == 0
     assert cfg.warp.graph_conditional is False
     adapter = TypeAdapter(MujocoConfig)
     assert adapter.validate_python(yaml.safe_load(yaml.safe_dump(adapter.dump_python(cfg, mode="json")))) == cfg
+
+
+@pytest.mark.parametrize(
+    ("kind", "values"),
+    [
+        (MujocoConfig, {"gravity": [0, 0, -2]}),
+        (
+            MujocoPhysicsConfig,
+            {"friction": [0.4, 0.01, 0.001], "solref": [-3000, -3], "solimp": [0.8, 0.9, 0.001, 0.5, 2]},
+        ),
+    ],
+)
+def test_native_vectors_preserve_existing_list_cli_yaml_and_preset_conventions(
+    kind: type, values: dict[str, list[float]]
+) -> None:
+    args = [token for name, value in values.items() for token in (f"--{name}", repr(value))]
+    parsed = parse_config(kind, args=args)
+    for name, value in values.items():
+        assert getattr(parsed, name) == value
+        assert isinstance(getattr(parsed, name), list)
+    assert replace(kind(), **values) == parsed
+    adapter: TypeAdapter[Any] = TypeAdapter(kind)
+    assert adapter.validate_python(yaml.safe_load(yaml.safe_dump(adapter.dump_python(parsed, mode="json")))) == parsed
 
 
 @pytest.mark.parametrize(
@@ -112,7 +136,10 @@ def test_cli_timestep_override_fails_during_config_parsing(path: str, capsys: py
         ({"integrator": "bad"}, "integrator"),
         ({"iterations": -1}, "iterations"),
         ({"gravity": [1, 2]}, "gravity"),
+        ({"gravity": [1, 2, 3, 4]}, "gravity"),
+        ({"gravity": [0, 0, float("inf")]}, "finite"),
         ({"tolerance": float("nan")}, "tolerance"),
+        ({"extra": {"wind": [0, float("nan"), 0]}}, "finite"),
         ({"extra": {"timestep": 0.005}}, "fps"),
         ({"extra": {"integrator": "rk4"}}, "explicit"),
         ({"extra": {"_private": 0}}, "public"),
@@ -135,15 +162,22 @@ def test_pydantic_rejects_invalid_values_and_duplicate_owners(kwargs: dict[str, 
 @pytest.mark.parametrize(
     ("kwargs", "reason"),
     [
-        ({"friction": (-0.1, 0, 0)}, "friction"),
-        ({"solref": (0.02, -1)}, "solref"),
-        ({"solref": (float("inf"), 1)}, "solref"),
-        ({"solimp": (0.8, 0.9, 0.001, 0.5)}, "solimp"),
-        ({"solimp": (-0.1, 0.9, 0.001, 0.5, 2)}, "solimp"),
-        ({"solimp": (0.8, 1.1, 0.001, 0.5, 2)}, "solimp"),
-        ({"solimp": (0.8, 0.9, -0.001, 0.5, 2)}, "solimp"),
-        ({"solimp": (0.8, 0.9, 0.001, 1.1, 2)}, "solimp"),
-        ({"solimp": (0.8, 0.9, 0.001, 0.5, 0.5)}, "solimp"),
+        ({"friction": [-0.1, 0, 0]}, "friction"),
+        ({"friction": [0.1, 0]}, "friction"),
+        ({"friction": [0.1, 0, 0, 0]}, "friction"),
+        ({"friction": [0.1, float("nan"), 0]}, "finite"),
+        ({"solref": [0.02, -1]}, "solref"),
+        ({"solref": [0.02]}, "solref"),
+        ({"solref": [0.02, 1, 0]}, "solref"),
+        ({"solref": [float("inf"), 1]}, "solref"),
+        ({"solimp": [0.8, 0.9, 0.001, 0.5]}, "solimp"),
+        ({"solimp": [0.8, 0.9, 0.001, 0.5, 2, 0]}, "solimp"),
+        ({"solimp": [0.8, 0.9, float("inf"), 0.5, 2]}, "finite"),
+        ({"solimp": [-0.1, 0.9, 0.001, 0.5, 2]}, "solimp"),
+        ({"solimp": [0.8, 1.1, 0.001, 0.5, 2]}, "solimp"),
+        ({"solimp": [0.8, 0.9, -0.001, 0.5, 2]}, "solimp"),
+        ({"solimp": [0.8, 0.9, 0.001, 1.1, 2]}, "solimp"),
+        ({"solimp": [0.8, 0.9, 0.001, 0.5, 0.5]}, "solimp"),
         ({"condim": 2}, "condim"),
         ({"contype": 2147483648}, "contype"),
     ],

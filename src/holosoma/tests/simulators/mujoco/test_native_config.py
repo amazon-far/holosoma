@@ -77,7 +77,7 @@ def test_unset_preserves_asset_options_and_contacts_but_fps_owns_dt(yaml_roundtr
 @pytest.mark.parametrize("integrator", ["euler", "rk4", "implicit", "implicitfast"])
 def test_all_integrators_are_applied_and_stepped(integrator):
     xml = XML if integrator == "rk4" else XML.replace('integrator="Euler"', 'integrator="RK4"')
-    model = compiled(MujocoConfig(integrator=integrator, gravity=(0, 0, -2), disableflags=("contact",)), xml=xml)
+    model = compiled(MujocoConfig(integrator=integrator, gravity=[0, 0, -2], disableflags=("contact",)), xml=xml)
     assert model.opt.integrator == getattr(mujoco.mjtIntegrator, "mjINT_" + integrator.upper())
     data = mujoco.MjData(model)
     for _ in range(10):
@@ -152,9 +152,9 @@ def test_geom_masks_solver_mixing_and_signed_parameters_reach_model():
     manager.world_spec = mujoco.MjSpec.from_string(XML)
     body = manager.world_spec.bodies[1]
     physics = MujocoPhysicsConfig(
-        friction=(0.9, 0.02, 0.003),
-        solref=(-1000, -10),
-        solimp=(0.8, 0.92, 0.002, 0.4, 3),
+        friction=[0.9, 0.02, 0.003],
+        solref=[-1000, -10],
+        solimp=[0.8, 0.92, 0.002, 0.4, 3],
         condim=6,
         contype=2,
         conaffinity=4,
@@ -254,7 +254,7 @@ def test_same_shared_settings_reach_both_compiled_backends():
     ],
 )
 def test_classic_keeps_warp_only_inputs_inactive_and_preserves_shared_dynamics(settings):
-    shared = {"integrator": "rk4", "gravity": (0, 0, -2), "disableflags": ("contact",)}
+    shared = {"integrator": "rk4", "gravity": [0, 0, -2], "disableflags": ("contact",)}
     native = MujocoConfig(**shared, warp=MujocoWarpConfig(**settings))
     model = compiled(native)
     baseline = compiled(MujocoConfig(**shared))
@@ -328,7 +328,7 @@ import mujoco
 from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
 from holosoma.config_values.simulator import mujoco as preset
 from holosoma.simulator.mujoco.native_config import apply_world_config
-native = MujocoConfig(integrator="rk4", gravity=(0, 0, -2), disableflags=("contact",),
+native = MujocoConfig(integrator="rk4", gravity=[0, 0, -2], disableflags=("contact",),
                       warp=MujocoWarpConfig(graph_conditional=False, naconmax=300,
                             extras={{"nccdmax": 64, "run_collision_detection": False}}))
 config = replace(preset.config, sim=replace(preset.config.sim, fps=100, mujoco=native))
@@ -351,7 +351,7 @@ assert "warp" not in sys.modules and "mujoco_warp" not in sys.modules
 def test_native_options_use_public_api_without_runtime_version_pins(reported_version, monkeypatch):
     # Changing only metadata tests the absence of a runtime version gate, not other binaries' dynamics.
     monkeypatch.setattr(mujoco, "__version__", reported_version)
-    model = compiled(MujocoConfig(integrator="rk4", gravity=(0, 0, -2), disableflags=("contact",)))
+    model = compiled(MujocoConfig(integrator="rk4", gravity=[0, 0, -2], disableflags=("contact",)))
     assert model.opt.integrator == mujoco.mjtIntegrator.mjINT_RK4
     data = mujoco.MjData(model)
     for _ in range(10):
@@ -444,7 +444,7 @@ def test_warp_device_array_conversion_on_cpu_does_not_claim_gpu_execution():
     mjw = pytest.importorskip("mujoco_warp")
     wp = pytest.importorskip("warp")
     native = MujocoConfig(
-        gravity=(0, 0, -2),
+        gravity=[0, 0, -2],
         tolerance=1e-8,
         impratio=10,
         disableflags=(),
@@ -489,7 +489,7 @@ def test_warp_contact_extra_changes_real_kernel_trajectories(device):
             integrator="euler",
             cone="elliptic",
             impratio=10,
-            gravity=(0, 0, -2),
+            gravity=[0, 0, -2],
             warp=MujocoWarpConfig(
                 nconmax_per_env=8,
                 njmax_per_env=40,
@@ -589,7 +589,7 @@ def test_core_warp_actual_upload_allocation_capture_and_reset():
         integrator="rk4",
         cone="elliptic",
         impratio=10,
-        gravity=(0, 0, -2),
+        gravity=[0, 0, -2],
         tolerance=1e-8,
         warp=MujocoWarpConfig(nconmax_per_env=128, njmax_per_env=800, naconmax=300, graph_conditional=False),
     )

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import ast
 import json
+import math
 from dataclasses import field
-from typing import Dict, Literal, Tuple, Union
+from typing import Dict, List, Literal, Union
 
 from pydantic import AfterValidator, ConfigDict, Field, model_validator
 from pydantic.dataclasses import dataclass
@@ -15,7 +16,18 @@ from tyro.constructors import PrimitiveConstructorSpec
 Finite = Annotated[float, Field(allow_inf_nan=False)]
 Count = Annotated[int, Field(ge=0, strict=True)]
 SignedInt = Annotated[int, Field(ge=-2147483648, le=2147483647, strict=True)]
-NativeValue = Union[bool, int, Finite, str, Tuple[Finite, ...]]
+
+
+def _validate_finite_vector(value: List[float]) -> List[float]:
+    """Reject nonfinite components while preserving Holosoma's list representation."""
+    if not all(math.isfinite(component) for component in value):
+        raise ValueError("vector components must be finite")
+    return value
+
+
+# Keep elements as plain floats so Tyro retains Holosoma's literal-list CLI syntax.
+FiniteVector = Annotated[List[float], AfterValidator(_validate_finite_vector)]
+NativeValue = Union[bool, int, Finite, str, FiniteVector]
 
 
 def _extra_from_cli(args: list[str]) -> dict[str, NativeValue]:
@@ -115,8 +127,8 @@ class MujocoConfig:
     """CG/Newton line-search stopping tolerance; zero disables early stopping. None preserves it."""
     noslip_iterations: Count | None = None
     """Classic no-slip post-solver iterations; zero disables it. MJWarp supports only zero."""
-    gravity: tuple[Finite, Finite, Finite] | None = None
-    """World-frame acceleration (x,y,z), in m/s²; None retains Holosoma's existing gravity."""
+    gravity: Annotated[FiniteVector, Field(min_length=3, max_length=3)] | None = None
+    """World-frame acceleration [x,y,z], in m/s²; None retains Holosoma's existing gravity."""
     disableflags: tuple[str, ...] | None = None
     """Replace the disable mask with upstream flag names (e.g. contact); () clears it, None preserves it."""
     enableflags: tuple[str, ...] | None = None
@@ -144,12 +156,12 @@ class MujocoGeomPhysicsConfig:
     same application path in the core scene manager.
     """
 
-    friction: tuple[Finite, Finite, Finite] | None = None
+    friction: Annotated[FiniteVector, Field(min_length=3, max_length=3)] | None = None
     """Sliding, torsional and rolling friction coefficients; applied to each geom, None preserves the asset."""
-    solref: tuple[Finite, Finite] | None = None
+    solref: Annotated[FiniteVector, Field(min_length=2, max_length=2)] | None = None
     """Contact reference: positive (time constant in seconds,damping ratio) or nonpositive (-stiffness,-damping).
     None preserves each geom's values."""
-    solimp: tuple[Finite, Finite, Finite, Finite, Finite] | None = None
+    solimp: Annotated[FiniteVector, Field(min_length=5, max_length=5)] | None = None
     """Contact impedance (dmin,dmax,width,midpoint,power); width is in metres. None preserves each geom's values."""
     condim: Literal[1, 3, 4, 6] | None = None
     """Contact dimensions: 1 normal, 3 adds sliding, 4 adds torsion, 6 adds rolling. None preserves the asset."""
