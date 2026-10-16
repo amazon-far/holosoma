@@ -849,7 +849,7 @@ class PPO(BaseAlgo):
     def evaluate_policy(self, max_eval_steps: int | None = None) -> None:
         self._create_eval_callbacks()
         self._pre_evaluate_policy()
-        actor_state = self._create_actor_state()
+        actor_state: dict[str, Any] = {}
         self.eval_policy = self.get_inference_policy()
 
         obs_dict = self.env.reset_all()
@@ -866,9 +866,6 @@ class PPO(BaseAlgo):
             actor_state = self._post_eval_env_step(actor_state)
 
         self._post_evaluate_policy()
-
-    def _create_actor_state(self) -> dict[str, Any]:
-        return {"done_indices": [], "stop": False}
 
     def _create_eval_callbacks(self) -> None:
         if self.config.eval_callbacks is not None:
