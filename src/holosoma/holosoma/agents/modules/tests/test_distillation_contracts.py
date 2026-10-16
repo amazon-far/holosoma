@@ -686,8 +686,9 @@ def test_student_evaluation_needs_only_the_student_inputs(
     algo = _build_algo(algo_cls, _FakeEnv(depth_group=None), tmp_path)
     _load_random_teacher(algo, tmp_path, make_ppo_teacher_checkpoint)
     student_obs = {"actor_obs": torch.randn(_FakeEnv.num_envs, 3)}
+    algo.eval_policy = algo.get_inference_policy()
 
-    state = algo._pre_eval_env_step({"obs": student_obs}, algo.get_inference_policy())
+    state = algo._pre_eval_env_step({"obs": student_obs})
 
     assert set(algo._extract_student_obs(student_obs)) == {"actor_obs"}
     assert state["actions"].shape == (_FakeEnv.num_envs, 2)

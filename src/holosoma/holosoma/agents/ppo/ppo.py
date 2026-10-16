@@ -14,7 +14,6 @@ from torch.distributions import Normal, kl_divergence
 from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 
 from holosoma.agents.base_algo.base_algo import BaseAlgo
-from holosoma.agents.callbacks.base_callback import RLEvalCallback
 from holosoma.agents.modules.advantages import compute_gae_returns, normalize_advantages
 from holosoma.agents.modules.augmentation_utils import SymmetryUtils
 from holosoma.agents.modules.data_utils import RolloutStorage
@@ -210,7 +209,6 @@ class PPO(BaseAlgo):
         self._init_config()
 
         self.current_learning_iteration = 0
-        self.eval_callbacks: list[RLEvalCallback] = []
         _ = self.env.reset_all()
 
     def _init_config(self) -> None:
@@ -863,32 +861,9 @@ class PPO(BaseAlgo):
 
         self._post_evaluate_policy()
 
-    def _create_eval_callbacks(self) -> None:
-        if self.config.eval_callbacks is not None:
-            for cb in self.config.eval_callbacks:
-                self.eval_callbacks.append(instantiate(self.config.eval_callbacks[cb], training_loop=self))
-
-    def _pre_evaluate_policy(self) -> None:
-        self._eval_mode()
-        self.env.set_is_evaluating()
-        for c in self.eval_callbacks:
-            c.on_pre_evaluate_policy()
-
-    def _post_evaluate_policy(self) -> None:
-        for c in self.eval_callbacks:
-            c.on_post_evaluate_policy()
-
-    def _pre_eval_env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
+    def _compute_eval_actions(self, actor_state: dict[str, Any]) -> dict[str, Any]:
         actor_obs = torch.cat([actor_state["obs"][k] for k in self.actor_obs_keys], dim=1)
-        actions = self.eval_policy({"actor_obs": actor_obs})
-        actor_state.update({"actions": actions})
-        for c in self.eval_callbacks:
-            actor_state = c.on_pre_eval_env_step(actor_state)
-        return actor_state
-
-    def _post_eval_env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
-        for c in self.eval_callbacks:
-            actor_state = c.on_post_eval_env_step(actor_state)
+        actor_state["actions"] = self.eval_policy({"actor_obs": actor_obs})
         return actor_state
 
     def get_inference_policy(
