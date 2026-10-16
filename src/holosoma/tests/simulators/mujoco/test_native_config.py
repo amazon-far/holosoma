@@ -24,6 +24,7 @@ from holosoma.config_values.simulator import mjwarp  # noqa: E402
 from holosoma.config_values.simulator import mujoco as preset  # noqa: E402
 from holosoma.simulator.mujoco.native_config import (  # noqa: E402
     allocation_kwargs,
+    apply_warp_data,
     apply_warp_model,
     effective_options,
     warp_option_overrides,
@@ -467,6 +468,73 @@ def test_warp_device_array_conversion_on_cpu_does_not_claim_gpu_execution():
     np.testing.assert_allclose(uploaded.opt.impratio_invsqrt.numpy(), [1 / np.sqrt(mujoco.mjMINVAL)])
 
 
+@pytest.mark.parametrize("tolerance", [None, 0, 1e-8])
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "cuda:0",
+            marks=[
+                pytest.mark.mujoco_warp,
+                pytest.mark.skipif(not torch.cuda.is_available(), reason="Captured sleeping solver requires CUDA"),
+            ],
+        ),
+    ],
+)
+def test_sleeping_warp_uses_explicit_tolerance_in_compact_solver(tolerance, device):
+    mjw = pytest.importorskip("mujoco_warp")
+    wp = pytest.importorskip("warp")
+    native = MujocoConfig(
+        solver="newton",
+        iterations=5,
+        tolerance=tolerance,
+        enableflags=("sleep",),
+        warp=MujocoWarpConfig(nconmax_per_env=8, njmax_per_env=40, graph_conditional=False),
+    )
+    config = warp_backend_config(native)
+    model = compiled(native, backend=mjwarp, xml=XML.replace('tolerance="0.003"', 'tolerance="1e-8"'))
+    initial = mujoco.MjData(model)
+    backend = None
+    with wp.ScopedDevice(device):
+        try:
+            if device == "cpu":
+                uploaded = mjw.put_model(model)
+                apply_warp_model(uploaded, native, effective_options(config.simulator))
+                data = mjw.make_data(model, **allocation_kwargs(model, native.warp, 2))
+                apply_warp_data(data, model, native)
+                data.qpos.assign(np.tile(initial.qpos, (2, 1)).astype(np.float32))
+                for _ in range(3):
+                    mjw.step(uploaded, data)
+            else:
+                from holosoma.simulator.mujoco.backends.warp_backend import WarpBackend
+
+                assert config.plugin == {}
+                backend = WarpBackend(model, initial, config, device)
+                backend.initialize_state(model, initial)
+                assert backend.step_graph is not None
+                for _ in range(3):
+                    backend.step()
+                data = backend.mjw_data
+            expected = 1e-6 if tolerance is None else tolerance
+            np.testing.assert_allclose(data.ctol.numpy(), [expected * model.nv / data.nvmax_pad])
+            np.testing.assert_allclose(data.time.numpy(), [0.03, 0.03], atol=1e-7, rtol=0)
+            assert data.nacon.numpy()[0] > 0
+            if tolerance == 0:
+                # Zero disables convergence stopping in the actual compact solve.
+                np.testing.assert_array_equal(data.solver_niter.numpy(), [native.iterations] * 2)
+            elif tolerance is None:
+                assert np.all(data.solver_niter.numpy() < native.iterations)
+            if backend is not None:
+                backend.initialize_state(model, initial)
+                np.testing.assert_allclose(data.ctol.numpy(), [expected * model.nv / data.nvmax_pad])
+                backend.step()
+                np.testing.assert_allclose(data.time.numpy(), [0.01, 0.01], atol=1e-7, rtol=0)
+        finally:
+            if backend is not None:
+                backend.close()
+
+
 @pytest.mark.parametrize(
     "device",
     [
@@ -494,7 +562,7 @@ def test_warp_contact_extra_changes_real_kernel_trajectories(device):
                 nconmax_per_env=8,
                 njmax_per_env=40,
                 graph_conditional=False,
-                extras={"run_collision_detection": collision},
+                extras={"run_collision_detection": collision, "contact_sensor_maxmatch": 0},
             ),
         )
         config = warp_backend_config(native)
@@ -542,6 +610,11 @@ def test_warp_contact_extra_changes_real_kernel_trajectories(device):
         (MujocoConfig(enableflags=("override",)), NotImplementedError, "mjENBL_OVERRIDE"),
         (MujocoConfig(extra={"o_margin": 0.01}), ValueError, "not implemented"),
         (MujocoConfig(warp=MujocoWarpConfig(extras={"impratio_invsqrt": 2})), ValueError, "derived"),
+        (
+            MujocoConfig(warp=MujocoWarpConfig(extras={"contact_sensor_maxmatch": -1})),
+            ValueError,
+            r"simulator\.config\.sim\.mujoco\.warp\.extras\.contact_sensor_maxmatch.*nonnegative",
+        ),
     ],
 )
 def test_warp_unsupported_combinations_are_rejected_by_native_conversion(native, error, reason):

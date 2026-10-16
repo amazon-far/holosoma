@@ -323,6 +323,8 @@ def warp_option_overrides(cfg: MujocoWarpConfig) -> dict[str, Any]:
                 result[name] = enum_value(native_type, value, path)
         elif native_type in (bool, int, float, str):
             result[name] = validate_value(native_type(), value, path)
+            if name == "contact_sensor_maxmatch" and value < 0:
+                raise ValueError(f"{path}: expected a nonnegative contact-match capacity")
         else:
             raise ValueError(f"{path}: structural/generated Option field is not a configurable scalar")
     return result
@@ -356,3 +358,15 @@ def apply_warp_model(model: Any, cfg: MujocoConfig, options: dict[str, Any]) -> 
             setattr(model.opt, name, applied)
     for name, value in warp_option_overrides(cfg.warp).items():
         setattr(model.opt, name, value)
+
+
+def apply_warp_data(data: Any, model: mujoco.MjModel, cfg: MujocoConfig) -> None:
+    """Restore an explicit tolerance in the sleeping solver's allocated workspace.
+
+    make_data clamps its compact tolerance independently of put_model. Preserve
+    the native DOF normalization, then update the real array before graph capture.
+    Unset tolerances and allocations without a compact workspace retain defaults.
+    """
+    if cfg.tolerance is not None and data.ctol.size:
+        scale = model.nv / data.nvmax_pad
+        data.ctol.assign(np.asarray([cfg.tolerance * scale], dtype=np.float32))

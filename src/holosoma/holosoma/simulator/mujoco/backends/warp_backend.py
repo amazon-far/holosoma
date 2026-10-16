@@ -45,6 +45,7 @@ from loguru import logger
 from holosoma.simulator.mujoco.geom_groups import DEFAULT_RENDER_GEOM_GROUPS
 from holosoma.simulator.mujoco.native_config import (
     allocation_kwargs,
+    apply_warp_data,
     apply_warp_model,
     effective_options,
     validate_warp_option_coverage,
@@ -257,6 +258,7 @@ class WarpBackend(IMujocoBackend):
                 self.mjw_data = mjw.make_data(model, **allocation)
             except (ValueError, NotImplementedError) as exc:
                 raise ValueError(f"simulator.config.sim.mujoco.warp allocation: {exc}") from exc
+            apply_warp_data(self.mjw_data, model, warp_config)
 
             # Create zero-copy PyTorch tensors tethered to Warp arrays
             # These tensors share memory with the Warp arrays - no copying!
