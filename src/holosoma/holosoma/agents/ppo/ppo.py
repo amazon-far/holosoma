@@ -825,11 +825,6 @@ class PPO(BaseAlgo):
 
         return ActorWrapper(self.actor, self.actor_obs_normalizer, self.empirical_normalization)
 
-    def env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:  # type: ignore[override]
-        obs_dict, rewards, dones, extras = self.env.step(actor_state)
-        actor_state.update({"obs": obs_dict, "rewards": rewards, "dones": dones, "extras": extras})
-        return actor_state
-
     @torch.no_grad()
     def get_example_obs(self) -> dict[str, torch.Tensor]:
         """Used for exporting policy as onnx."""

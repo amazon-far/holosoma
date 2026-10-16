@@ -607,9 +607,3 @@ class DistillationBase(BaseAlgo):
     def _compute_eval_actions(self, actor_state: dict[str, Any]) -> dict[str, Any]:
         actor_state["actions"] = self.eval_policy(self._extract_student_obs(actor_state["obs"]))
         return actor_state
-
-    # Keep the returned actor_state the same shape as PPO's.
-    def env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:  # type: ignore[override]
-        obs_dict, rewards, dones, extras = self.env.step(actor_state)
-        actor_state.update({"obs": obs_dict, "rewards": rewards, "dones": dones, "extras": extras})
-        return actor_state
