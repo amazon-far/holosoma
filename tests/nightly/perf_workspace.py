@@ -48,8 +48,8 @@ def _stat_key(stem: str, stat: str) -> str:
 def _scatter(key: str, title: str, trend: bool) -> wr.ScatterPlot:
     """One point per run against run start time.
 
-    `trend` adds a regression line and a running min/max envelope across runs --
-    these describe the night-to-night series, not the within-run spread.
+    `trend` adds a regression line and a running min/max envelope across runs -- these
+    describe the night-to-night series, not the within-run spread.
     """
     return wr.ScatterPlot(
         title=title,
@@ -61,6 +61,19 @@ def _scatter(key: str, title: str, trend: bool) -> wr.ScatterPlot:
     )
 
 
+def _runset_settings() -> ws.RunsetSettings:
+    """Runset ordered by run date, with every run in the project selected.
+
+    Deliberately not grouped. Grouping by tags would be the natural way to separate the
+    experiment / simulator / GPU-count matrix cells, but `Tags()` serializes into the
+    saved view as a metric named "Tags", which matches nothing: the runset then resolves
+    to zero runs and every panel fails. The same underlying bug is noted against
+    `FilterExpr` in generate_report.py. Grouping is a one-click control in the UI, so
+    it is left to the reader.
+    """
+    return ws.RunsetSettings(order=[ws.Ordering(ws.Summary(RUN_DATE_KEY))])
+
+
 def _bar(keys: list[str], title: str) -> wr.BarPlot:
     """All requested summary keys side by side, one bar group per run."""
     return wr.BarPlot(
@@ -70,13 +83,13 @@ def _bar(keys: list[str], title: str) -> wr.BarPlot:
     )
 
 
-def _metric_section(title: str, stem: str) -> ws.Section:
+def _metric_section(title: str, stem: str, trend: bool) -> ws.Section:
     """Min/mean/max scatters plus a combined bar panel for one metric."""
     return ws.Section(
         name=title,
         is_open=True,
         panels=[
-            _scatter(_stat_key(stem, "mean"), f"{stem} mean per run", trend=True),
+            _scatter(_stat_key(stem, "mean"), f"{stem} mean per run", trend=trend),
             _scatter(_stat_key(stem, "min"), f"{stem} min per run", trend=False),
             _scatter(_stat_key(stem, "max"), f"{stem} max per run", trend=False),
             _bar([_stat_key(stem, stat) for stat in ("min", "mean", "max")], f"{stem} min/mean/max by run"),
@@ -84,35 +97,29 @@ def _metric_section(title: str, stem: str) -> ws.Section:
     )
 
 
-def _duration_section() -> ws.Section:
+def _duration_section(trend: bool) -> ws.Section:
     """Total wall-clock duration. One value per run, so no min/mean/max."""
     return ws.Section(
         name="Total run duration (s)",
         is_open=True,
         panels=[
-            _scatter(RUN_DURATION_KEY, "Run duration per run", trend=True),
+            _scatter(RUN_DURATION_KEY, "Run duration per run", trend=trend),
             _bar([RUN_DURATION_KEY], "Run duration by run"),
         ],
     )
 
 
-def build_workspace(view_name: str, project: str) -> ws.Workspace:
+def build_workspace(view_name: str, project: str, trend: bool = True) -> ws.Workspace:
     """Assembles the view: one section per metric, plus run duration."""
-    sections = [_metric_section(title, stem) for title, stem in METRIC_SECTIONS]
-    sections.append(_duration_section())
+    sections = [_metric_section(title, stem, trend) for title, stem in METRIC_SECTIONS]
+    sections.append(_duration_section(trend))
 
     return ws.Workspace(
         entity=WANDB_ENTITY,
         project=project,
         name=view_name,
         sections=sections,
-        # Group by tags so the experiment / simulator / GPU-count matrix cells are
-        # distinguishable. They share a y-axis, so multi-GPU throughput (~4x by
-        # construction) sits well above single-GPU; filter in the UI to compare one cell.
-        runset_settings=ws.RunsetSettings(
-            groupby=[ws.Tags()],
-            order=[ws.Ordering(ws.Summary(RUN_DATE_KEY))],
-        ),
+        runset_settings=_runset_settings(),
     )
 
 
@@ -123,9 +130,10 @@ def main() -> None:
     )
     parser.add_argument("--name", default=DEFAULT_VIEW_NAME, help="Name for the saved view")
     parser.add_argument("--project", default=WANDB_PROJECT, help="wandb project to build the view against")
+    parser.add_argument("--no-trend", action="store_true", help="Omit the regression line and running min/max overlays")
     args = parser.parse_args()
 
-    workspace = build_workspace(args.name, args.project)
+    workspace = build_workspace(args.name, args.project, trend=not args.no_trend)
     saved = workspace.save_as_new_view()
     print(f"Saved workspace view: {saved.url}")
 
