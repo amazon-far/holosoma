@@ -47,14 +47,19 @@ def _stat_key(stem: str, stat: str) -> str:
 
 
 def _scatter(key: str, title: str, trend: bool) -> wr.ScatterPlot:
-    """One point per run against run start time.
+    """One point per run against when that run started.
+
+    The x-axis is wandb's own run-creation field rather than the numeric `perf/run_date`
+    summary key, because the backend knows that field is a timestamp and labels the axis
+    with dates. A summary key is just a number, so it renders as raw epoch seconds, and
+    ScatterPlot has no axis-format option to correct it.
 
     `trend` adds a regression line and a running min/max envelope across runs -- these
     describe the night-to-night series, not the within-run spread.
     """
     return wr.ScatterPlot(
         title=title,
-        x=wr.SummaryMetric(RUN_DATE_KEY),
+        x=wr.Metric("CreatedTimestamp"),
         y=wr.SummaryMetric(key),
         regression=trend,
         running_ymin=trend,
