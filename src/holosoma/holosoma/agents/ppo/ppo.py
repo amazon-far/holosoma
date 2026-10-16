@@ -859,8 +859,6 @@ class PPO(BaseAlgo):
         critic_obs = torch.cat([actor_state["obs"][k] for k in self.critic_obs_keys], dim=1)
         actor_state["obs"]["critic_obs"] = critic_obs
 
-        actor_state = self._pre_eval_env_step(actor_state)
-
         for step in itertools.islice(itertools.count(), max_eval_steps):
             actor_state["step"] = step
             actor_state = self._pre_eval_env_step(actor_state)
