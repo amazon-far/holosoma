@@ -272,7 +272,6 @@ class MuJoCo(BaseSimulator):
         self.root_model = self.scene_manager.compile()
         self.root_data = mujoco.MjData(self.root_model)
 
-        # Apply post-compilation settings
         self.root_model.opt.timestep = self.sim_dt
 
         # Resolve per-actor freejoint addressing (depends only on the compiled model + scene config).
