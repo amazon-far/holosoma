@@ -56,11 +56,10 @@ class BaseAlgo:
     def actor_onnx_wrapper(self) -> type[NotImplementedError]:
         return NotImplementedError
 
-    def env_step(
-        self, actions: torch.Tensor, extra_info: dict[str, Any] | None = None
-    ) -> tuple[dict[str, Any], torch.Tensor, torch.Tensor, dict[str, Any]]:
-        obs_dict, rewards, dones, extras = self.env.step(actions, extra_info)  # type: ignore[call-arg]
-        return obs_dict, rewards, dones, extras
+    def env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
+        obs_dict, rewards, dones, extras = self.env.step(actor_state)
+        actor_state.update({"obs": obs_dict, "rewards": rewards, "dones": dones, "extras": extras})
+        return actor_state
 
     def attach_checkpoint_metadata(
         self,
