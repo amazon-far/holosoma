@@ -27,6 +27,7 @@ from typing import Any, Iterable, NamedTuple
 import wandb
 
 WANDB_ENTITY = getenv("WANDB_ENTITY", "amazon-far")
+WANDB_PROJECT = "nightly-holosoma-runs"
 
 # Per-iteration metrics written by LoggingHelper._logging_to_writer. All three are
 # logged in the same wandb.log call, so scan_history can request them together.
@@ -156,11 +157,18 @@ def backfill_run(run: Any, dry_run: bool) -> bool:
     return True
 
 
-def nightly_projects(api: wandb.Api, project: str | None) -> list[str]:
-    """Project names to process: an explicit one, else every `nightly*` project."""
+def nightly_projects(api: wandb.Api, project: str | None, all_projects: bool) -> list[str]:
+    """Project names to process.
+
+    Defaults to the project the nightly build writes to. The older per-experiment
+    `nightly-<exp>` projects are only included with `all_projects`, since scanning
+    their history is slow and they no longer receive runs.
+    """
     if project:
         return [project]
-    return [p.name for p in api.projects(WANDB_ENTITY) if p.name.startswith("nightly")]
+    if all_projects:
+        return [p.name for p in api.projects(WANDB_ENTITY) if p.name.startswith("nightly")]
+    return [WANDB_PROJECT]
 
 
 def main() -> None:
@@ -168,17 +176,20 @@ def main() -> None:
         "backfill_perf_summary",
         description="Writes per-run Perf/* min/mean/max into wandb run summaries",
     )
-    parser.add_argument("--project", default=None, help="Single project to process (default: all nightly* projects)")
+    parser.add_argument("--project", default=None, help=f"Single project to process (default: {WANDB_PROJECT})")
+    parser.add_argument(
+        "--all-projects", action="store_true", help="Also process the legacy per-experiment nightly projects"
+    )
     parser.add_argument("--limit", type=int, default=None, help="Process at most this many runs per project")
     parser.add_argument("--dry-run", action="store_true", help="Report what would change without writing")
-    parser.add_argument("--force", action="store_true", help="Recompute runs that already have the summary keys")
+    parser.add_argument("--force", action="store_true", help="Recompute runs that are already marked processed")
     args = parser.parse_args()
 
     api = wandb.Api(timeout=60)
     written = 0
     skipped = 0
 
-    for project_name in nightly_projects(api, args.project):
+    for project_name in nightly_projects(api, args.project, args.all_projects):
         print(f"\n=== {WANDB_ENTITY}/{project_name}")
         runs = api.runs(path=f"{WANDB_ENTITY}/{project_name}", order="-created_at")
 

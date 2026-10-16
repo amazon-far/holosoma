@@ -94,16 +94,23 @@ after each nightly build and can be used once to backfill history. Runs that log
 `Perf/*` history (a crash, say) are still marked, so they aren't rescanned on every pass;
 bump `BACKFILL_VERSION` in the script to reprocess everything after changing what it writes.
 
+By default it processes `nightly-holosoma-runs`, the project the nightly build writes to.
+The older per-experiment `nightly-<exp>` projects no longer receive runs and are only
+included with `--all-projects`.
+
 ```bash
 # Preview without writing
 uv run --script ./tests/nightly/backfill_perf_summary.py --dry-run --limit 3
 
-# Backfill every nightly run
+# Backfill every run in the nightly project
 uv run --script ./tests/nightly/backfill_perf_summary.py
 
-# One project only, recomputing runs that already have the keys
-uv run --script ./tests/nightly/backfill_perf_summary.py --project nightly-holosoma-runs --force
+# Recompute runs that are already marked processed
+uv run --script ./tests/nightly/backfill_perf_summary.py --force
 ```
+
+The first full pass reads every run's history and takes a while. It is resumable, so it
+can be interrupted and restarted without redoing completed runs.
 
 ### `perf_workspace.py`
 Creates a saved wandb workspace view plotting the above over time — one point per run
@@ -141,7 +148,9 @@ The nightly workflow automatically:
 ## Environment Variables
 
 All scripts support the following environment variables:
-- `WANDB_ENTITY`: wandb entity/org name (default: "amazon-far")
+- `WANDB_ENTITY`: wandb entity/org name (default: "amazon-far"). CI sets this from a
+  repository variable; set it yourself when running these scripts locally, or they will
+  query an entity you have no runs in.
 - `WANDB_API_KEY`: wandb API key for authentication
 - `WANDB_BASE_URL`: wandb server URL
 - `GITHUB_RUN_ID`: GitHub Actions run ID (automatically set in CI)
