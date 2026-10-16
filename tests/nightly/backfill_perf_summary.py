@@ -23,6 +23,7 @@ import contextlib
 import itertools
 import json
 import math
+import sys
 from datetime import datetime, timezone
 from os import getenv
 from typing import Any, Iterable, NamedTuple
@@ -43,6 +44,16 @@ PERF_METRICS = ("Perf/total_fps", "Perf/collection_time", "Perf/learning_time")
 # dropped: trimming further discards the genuine early-training ramp, which is real
 # behaviour worth seeing.
 WARMUP_ROWS = 1
+
+# `history` with a sample cap above a run's length returns every row in one request, in
+# step order, identical to a paged scan -- measured at 0.7s against 18s for the same
+# 10k-row run. The cap is a ceiling rather than a bucket count, so this is exact only
+# while it exceeds the row count: asking for fewer samples than a run has rows silently
+# downsamples and corrupts the extremes (a 100-sample read of one run reported a minimum
+# of 55607 against a true 50651). Any run that reaches the cap is therefore re-read with
+# the paged scan, which never samples.
+HISTORY_SAMPLE_CAP = 200_000
+HISTORY_PAGE_SIZE = 10_000
 
 # Summary keys are written under their own prefix rather than reusing the `Perf/`
 # history namespace, so a run's history and its aggregates can't shadow each other.
@@ -108,6 +119,20 @@ def aggregate_history(rows: Iterable[dict[str, Any]]) -> dict[str, Aggregate]:
     return aggregates
 
 
+def read_history(run: Any) -> list[dict[str, Any]]:
+    """Every history row carrying the Perf metrics, in step order.
+
+    Takes the single-request path when the run fits under the sample cap, and falls back
+    to the paged scan otherwise so the result is never sampled.
+    """
+    rows = run.history(keys=list(PERF_METRICS), samples=HISTORY_SAMPLE_CAP, pandas=False)
+    if len(rows) < HISTORY_SAMPLE_CAP:
+        return rows
+
+    print(f"  run has at least {HISTORY_SAMPLE_CAP} rows; re-reading with a paged scan")
+    return list(run.scan_history(keys=list(PERF_METRICS), page_size=HISTORY_PAGE_SIZE))
+
+
 def run_start_epoch(run: Any) -> float | None:
     """Unix timestamp of a run's creation, or None when wandb reports no value.
 
@@ -151,7 +176,7 @@ def backfill_run(run: Any, dry_run: bool, backup: Any = None) -> bool:
     on every subsequent pass. When `backup` is an open file, each run's prior summary
     is appended to it as JSON before anything is written.
     """
-    aggregates = aggregate_history(run.scan_history(keys=list(PERF_METRICS)))
+    aggregates = aggregate_history(read_history(run))
     if not aggregates:
         print("  no Perf/* history, marking processed")
 
@@ -215,6 +240,10 @@ def main() -> None:
         "--backup", default=None, help="Append each run's prior summary to this file as JSON before writing"
     )
     args = parser.parse_args()
+
+    # A full pass takes a while and is usually watched through a redirected log, which
+    # would otherwise block-buffer and show nothing for minutes at a time.
+    sys.stdout.reconfigure(line_buffering=True)
 
     api = wandb.Api(timeout=60)
     written = 0
