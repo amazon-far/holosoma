@@ -11,7 +11,6 @@ import tqdm
 from loguru import logger
 
 from holosoma.agents.base_algo.base_algo import BaseAlgo
-from holosoma.agents.callbacks.base_callback import RLEvalCallback
 from holosoma.agents.fast_sac.fast_sac import Actor, CNNActor, CNNCritic, Critic
 from holosoma.agents.fast_sac.fast_sac_utils import (
     EmpiricalNormalization,
@@ -23,7 +22,6 @@ from holosoma.agents.modules.logging_utils import LoggingHelper
 from holosoma.config_types.algo import FastSACConfig
 from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.utils.average_meters import TensorAverageMeterDict
-from holosoma.utils.helpers import instantiate
 from holosoma.utils.inference_helpers import (
     attach_onnx_metadata,
     export_motion_and_policy_as_onnx,
@@ -184,7 +182,6 @@ class FastSACAgent(BaseAlgo):
         )
 
         self.training_metrics = TensorAverageMeterDict()
-        self.eval_callbacks: list[RLEvalCallback] = []
 
     def setup(self) -> None:  # type: ignore[override]
         logger.info("Setting up FastSAC")
@@ -1016,6 +1013,11 @@ class FastSACAgent(BaseAlgo):
             if self.obs_normalization:
                 self.obs_normalizer.train()
 
+    def _eval_mode(self) -> None:
+        self.actor.eval()
+        if self.obs_normalization:
+            self.obs_normalizer.eval()
+
     @torch.no_grad()
     def evaluate_policy(self, max_eval_steps: int | None = None) -> None:
         self._create_eval_callbacks()
@@ -1024,14 +1026,7 @@ class FastSACAgent(BaseAlgo):
         obs = self.env.reset()
 
         for step in itertools.islice(itertools.count(), max_eval_steps):
-            if self.obs_normalization:
-                normalized_obs = self.obs_normalizer(obs, update=False)
-            else:
-                normalized_obs = obs
-            # Actions are already scaled by the actor
-            actions = self.actor(normalized_obs)[0]
-
-            actor_state = {"step": step, "actions": actions, "obs": obs}
+            actor_state: dict[str, Any] = {"step": step, "obs": obs}
             actor_state = self._pre_eval_env_step(actor_state)
 
             obs, _, _, _ = self.env.step(actor_state["actions"])
@@ -1040,26 +1035,9 @@ class FastSACAgent(BaseAlgo):
 
         self._post_evaluate_policy()
 
-    def _create_eval_callbacks(self) -> None:
-        if self.config.eval_callbacks is not None:
-            for cb_name in self.config.eval_callbacks:
-                self.eval_callbacks.append(instantiate(self.config.eval_callbacks[cb_name], training_loop=self))
-
-    def _pre_evaluate_policy(self) -> None:
-        self.env.set_is_evaluating()
-        for c in self.eval_callbacks:
-            c.on_pre_evaluate_policy()
-
-    def _post_evaluate_policy(self) -> None:
-        for c in self.eval_callbacks:
-            c.on_post_evaluate_policy()
-
-    def _pre_eval_env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
-        for c in self.eval_callbacks:
-            actor_state = c.on_pre_eval_env_step(actor_state)
-        return actor_state
-
-    def _post_eval_env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
-        for c in self.eval_callbacks:
-            actor_state = c.on_post_eval_env_step(actor_state)
+    def _compute_eval_actions(self, actor_state: dict[str, Any]) -> dict[str, Any]:
+        obs = actor_state["obs"]
+        normalized_obs = self.obs_normalizer(obs, update=False) if self.obs_normalization else obs
+        # Actions are already scaled by the actor
+        actor_state["actions"] = self.actor(normalized_obs)[0]
         return actor_state
