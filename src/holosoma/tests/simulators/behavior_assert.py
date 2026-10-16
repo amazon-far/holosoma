@@ -169,8 +169,8 @@ def assert_collide_into_fixed(ctx):
     n = steps_for_seconds(ctx.sim, 1.5)
     peak_x = hammer0_x.clone()
     for _ in range(n):
-        ctx.sim.refresh_sim_tensors()
         ctx.sim.simulate_at_each_physics_step()
+        ctx.sim.refresh_sim_tensors()
         ctx.sim.render()
         peak_x = ctx.torch.maximum(peak_x, ctx.states("hammer")[:, 0])
     hammer = ctx.states("hammer")

@@ -1,9 +1,9 @@
 """Apply native settings at the scene and backend stages that consume them.
 
 ``MujocoSceneManager.compile`` applies world options before compiling the spec.
-``WarpBackend`` converts that model, allocates data with the configured capacities,
-then applies uploaded options before CUDA graph capture. Reset preserves those
-settings; changing them requires constructing a new simulator.
+``WarpBackend`` converts that model and applies uploaded options, then allocates
+data and applies workspace options before CUDA graph capture. Reset preserves
+those settings; changing them requires constructing a new simulator.
 
 Generic inputs are checked against public properties, Option fields and allocation
 signatures. MJWarp's own conversion checks reject unsupported solvers and flags.
