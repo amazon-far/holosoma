@@ -43,6 +43,13 @@ STATS = ("min", "mean", "max")
 RUN_DATE_KEY = f"{SUMMARY_PREFIX}run_date"
 RUN_DURATION_KEY = f"{SUMMARY_PREFIX}run_duration_s"
 
+# Marks a run as processed. Keyed on a version rather than on the presence of the
+# aggregates themselves, because a run that logged no Perf/* history (a crash, say)
+# would otherwise look unprocessed forever and be rescanned on every pass. Bump this
+# to reprocess every run after changing what gets written.
+BACKFILL_VERSION_KEY = f"{SUMMARY_PREFIX}backfill_version"
+BACKFILL_VERSION = 1
+
 
 class Aggregate(NamedTuple):
     """Min/mean/max of one metric over a single run."""
@@ -57,10 +64,9 @@ def summary_key(metric: str, stat: str) -> str:
     return f"{SUMMARY_PREFIX}{metric.split('/')[-1]}_{stat}"
 
 
-def expected_keys() -> list[str]:
-    """Every summary key this script writes."""
-    keys = [summary_key(metric, stat) for metric in PERF_METRICS for stat in STATS]
-    return keys + [RUN_DATE_KEY, RUN_DURATION_KEY]
+def aggregate_keys() -> list[str]:
+    """The per-metric aggregate keys this script writes when history is available."""
+    return [summary_key(metric, stat) for metric in PERF_METRICS for stat in STATS]
 
 
 def aggregate_history(rows: Iterable[dict[str, Any]]) -> dict[str, Aggregate]:
@@ -108,19 +114,21 @@ def run_start_epoch(run: Any) -> float | None:
 
 
 def needs_backfill(run: Any) -> bool:
-    """Whether a run is missing any of the summary keys this script writes."""
-    summary = run.summary or {}
-    return any(key not in summary for key in expected_keys())
+    """Whether a run has yet to be processed at the current version."""
+    return (run.summary or {}).get(BACKFILL_VERSION_KEY) != BACKFILL_VERSION
 
 
 def backfill_run(run: Any, dry_run: bool) -> bool:
-    """Computes and stores one run's aggregates. Returns whether anything was written."""
+    """Computes and stores one run's aggregates. Returns whether anything was written.
+
+    Runs with no usable history are still marked processed, so they aren't rescanned
+    on every subsequent pass.
+    """
     aggregates = aggregate_history(run.scan_history(keys=list(PERF_METRICS)))
     if not aggregates:
-        print("  no Perf/* history, skipping")
-        return False
+        print("  no Perf/* history, marking processed")
 
-    updates: dict[str, float] = {}
+    updates: dict[str, float | int] = {BACKFILL_VERSION_KEY: BACKFILL_VERSION}
     for metric, aggregate in aggregates.items():
         updates[summary_key(metric, "min")] = aggregate.minimum
         updates[summary_key(metric, "mean")] = aggregate.mean

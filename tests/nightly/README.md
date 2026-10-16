@@ -87,9 +87,12 @@ derives those values with `scan_history` (not `history`, which samples) and writ
 - `perf/learning_time_{min,mean,max}`
 - `perf/run_date` — run start as a Unix timestamp, used as the x-axis of the trend panels
 - `perf/run_duration_s` — total wall-clock duration
+- `perf/backfill_version` — marks the run as processed
 
-Runs that already carry every key are skipped, so it is safe to re-run. It runs after each
-nightly build and can be used once to backfill history.
+Runs already marked at the current version are skipped, so it is safe to re-run. It runs
+after each nightly build and can be used once to backfill history. Runs that logged no
+`Perf/*` history (a crash, say) are still marked, so they aren't rescanned on every pass;
+bump `BACKFILL_VERSION` in the script to reprocess everything after changing what it writes.
 
 ```bash
 # Preview without writing
