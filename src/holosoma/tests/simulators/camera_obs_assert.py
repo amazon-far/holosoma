@@ -1,6 +1,6 @@
 """Cross-backend camera observation-pipeline assertion harness.
 
-Each step runs render_sensors() then ObservationManager.compute(), the order
+Each step runs render_sensors() then ObservationManager.step(), the order
 BaseTask._post_physics_step uses.
 
 Checks:
@@ -122,7 +122,8 @@ def main() -> int:
     def _obs():
         """Render the cameras, then compute and return the "image" obs group."""
         sim.render_sensors()
-        return mgr.compute()["image"]
+        mgr.new_frame()
+        return mgr.step()["image"]
 
     # 1. Format: the transformed rgb term is CHW float32 in [0,1] with the configured H,W.
     first = _obs()

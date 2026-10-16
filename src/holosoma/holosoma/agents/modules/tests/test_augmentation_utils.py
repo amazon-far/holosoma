@@ -75,7 +75,11 @@ def mock_env_with_history() -> MagicMock:
     }
 
     # Mock _compute_term to return tensors with expected dimensions
-    def mock_compute_term(group_name: str, term_name: str, term_cfg: MagicMock) -> torch.Tensor:
+    def mock_compute_term(
+        group_name: str, term_name: str, term_cfg: MagicMock, env_ids: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        # Sizing must read zero envs so stateful terms are not advanced.
+        assert env_ids is not None and env_ids.numel() == 0
         num_envs = 2
         dims = {
             "base_ang_vel": 3,
@@ -342,7 +346,9 @@ def test_different_history_lengths(history_length: int) -> None:
         "actor_obs": MagicMock(history_length=history_length, terms={"dof_pos": MagicMock()}),
     }
 
-    def mock_compute_term(group_name: str, term_name: str, term_cfg: MagicMock) -> torch.Tensor:
+    def mock_compute_term(
+        group_name: str, term_name: str, term_cfg: MagicMock, env_ids: torch.Tensor | None = None
+    ) -> torch.Tensor:
         return torch.randn(2, 2)  # 2 dofs
 
     obs_manager._compute_term = mock_compute_term

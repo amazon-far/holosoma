@@ -97,6 +97,7 @@ class SymmetryUtils:
         import torch
 
         obs_manager = self.env.observation_manager
+        no_envs = torch.zeros(0, dtype=torch.long, device=self.env.device)
 
         # Compute sub_observation_dims: dimension of each observation term
         self.sub_observation_dims = {}
@@ -116,9 +117,9 @@ class SymmetryUtils:
             idx = 0
             idx_single_frame = 0
             for term_name in term_keys:
-                # Compute the term once to get its dimension
+                # Read the term for zero envs to get its dimension without advancing stateful terms
                 term_cfg = group_cfg.terms[term_name]
-                obs = obs_manager._compute_term(group_name, term_name, term_cfg)
+                obs = obs_manager._compute_term(group_name, term_name, term_cfg, env_ids=no_envs)
                 term_dim = obs.shape[1]
 
                 # Store the base dimension (without history)
