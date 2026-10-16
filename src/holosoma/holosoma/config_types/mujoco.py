@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import ast
 import json
-import math
 from dataclasses import field
 from typing import Dict, Literal, Tuple, Union
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import AfterValidator, ConfigDict, Field, model_validator
 from pydantic.dataclasses import dataclass
 from typing_extensions import Annotated
 from tyro.constructors import PrimitiveConstructorSpec
@@ -20,6 +19,7 @@ NativeValue = Union[bool, int, Finite, str, Tuple[Finite, ...]]
 
 
 def _extra_from_cli(args: list[str]) -> dict[str, NativeValue]:
+    """Parse one CLI token as JSON or a Python dict; Pydantic validates its contents."""
     try:
         value = json.loads(args[0])
     except ValueError:
@@ -29,8 +29,17 @@ def _extra_from_cli(args: list[str]) -> dict[str, NativeValue]:
     return value
 
 
+def _validate_extra_names(settings: Dict[str, NativeValue]) -> Dict[str, NativeValue]:
+    """Require bare public attribute names; upstream existence is checked during setup."""
+    for name in settings:
+        if not name.isidentifier() or name.startswith("_"):
+            raise ValueError(f"{name}: use a bare public native name, without prefixes")
+    return settings
+
+
 ExtraSettings = Annotated[
     Dict[str, NativeValue],
+    AfterValidator(_validate_extra_names),
     PrimitiveConstructorSpec(
         nargs=1,
         metavar="JSON",
@@ -39,27 +48,6 @@ ExtraSettings = Annotated[
         str_from_instance=lambda value: [repr(value)],
     ),
 ]
-
-
-@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
-class NativeConfig:
-    """Frozen typed settings with a validated escape hatch for uncommon native inputs.
-
-    Extra names are checked against the active upstream API during simulator setup.
-    They never accept private attributes or bypass settings already owned by Holosoma.
-    """
-
-    extra: ExtraSettings = field(default_factory=dict)
-    """Other public native properties, using bare upstream names; validated and applied during core setup."""
-
-    @model_validator(mode="after")
-    def validate_extra(self) -> NativeConfig:
-        for name, value in self.extra.items():
-            if not name.isidentifier() or name.startswith("_"):
-                raise ValueError(f"extra.{name}: use a bare public native name, without prefixes")
-            if isinstance(value, float) and not math.isfinite(value):
-                raise ValueError(f"extra.{name}: value must be finite")
-        return self
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
@@ -90,8 +78,6 @@ class MujocoWarpConfig:
             "mjm": "the model from core setup",
         }
         for name in self.extras:
-            if not name.isidentifier() or name.startswith("_"):
-                raise ValueError(f"warp.extras.{name}: use a bare public native name, without prefixes")
             if name in self.__dataclass_fields__:
                 raise ValueError(f"warp.extras.{name}: use the explicit warp.{name} field")
             if name in allocation_owners:
@@ -102,7 +88,7 @@ class MujocoWarpConfig:
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
-class MujocoConfig(NativeConfig):
+class MujocoConfig:
     """Native physics options, applied by core setup before compilation and upload.
 
     None preserves asset/current Holosoma behavior; sim.fps owns timestep.
@@ -137,6 +123,8 @@ class MujocoConfig(NativeConfig):
     """Replace the enable mask with upstream flag names; () clears it, None preserves it. Backend limits apply."""
     warp: MujocoWarpConfig = field(default_factory=MujocoWarpConfig)
     """MJWarp-only allocation and execution settings; retained but unused when the backend is classic."""
+    extra: ExtraSettings = field(default_factory=dict)
+    """Other public MjOption properties, using bare names; validated and applied before compilation."""
 
     @model_validator(mode="after")
     def validate_ownership(self) -> MujocoConfig:
@@ -149,8 +137,12 @@ class MujocoConfig(NativeConfig):
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
-class MujocoGeomPhysicsConfig(NativeConfig):
-    """Surface contact overrides, shared by scene objects and robot link_physics."""
+class MujocoGeomPhysicsConfig:
+    """Contact overrides for scene objects and robot links, applied to each geom before compilation.
+
+    None preserves the asset's authored values. Named fields and ``extra`` share the
+    same application path in the core scene manager.
+    """
 
     friction: tuple[Finite, Finite, Finite] | None = None
     """Sliding, torsional and rolling friction coefficients; applied to each geom, None preserves the asset."""
@@ -176,6 +168,8 @@ class MujocoGeomPhysicsConfig(NativeConfig):
     gap: Finite | None = None
     """Inactive-contact band inside margin, in metres; contacts above margin-gap exert no force.
     None preserves each geom's value."""
+    extra: ExtraSettings = field(default_factory=dict)
+    """Other public MjsGeom properties, using bare names; shared mass/density and identity fields are excluded."""
 
     @model_validator(mode="after")
     def validate_contact(self) -> MujocoGeomPhysicsConfig:

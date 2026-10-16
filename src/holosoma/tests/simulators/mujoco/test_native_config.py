@@ -8,29 +8,29 @@ from dataclasses import fields, replace
 from inspect import signature
 from typing import get_type_hints
 
-import mujoco
 import numpy as np
 import pytest
-import torch
 import yaml
 from pydantic import TypeAdapter
 
-from holosoma.config_types.full_sim import FullSimConfig
-from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
-from holosoma.config_types.run_sim import RunSimConfig
-from holosoma.config_types.scene import MujocoPhysicsConfig, PhysicsConfig
-from holosoma.config_values.simulator import mjwarp
-from holosoma.config_values.simulator import mujoco as preset
-from holosoma.simulator.mujoco.native_config import (
+mujoco = pytest.importorskip("mujoco")
+torch = pytest.importorskip("torch")
+
+from holosoma.config_types.full_sim import FullSimConfig  # noqa: E402
+from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig  # noqa: E402
+from holosoma.config_types.run_sim import RunSimConfig  # noqa: E402
+from holosoma.config_types.scene import MujocoPhysicsConfig, PhysicsConfig  # noqa: E402
+from holosoma.config_values.simulator import mjwarp  # noqa: E402
+from holosoma.config_values.simulator import mujoco as preset  # noqa: E402
+from holosoma.simulator.mujoco.native_config import (  # noqa: E402
     allocation_kwargs,
     apply_warp_model,
-    apply_world_config,
     effective_options,
     warp_option_overrides,
 )
-from holosoma.simulator.mujoco.scene_manager import MujocoSceneManager
-from holosoma.utils.config_registry import parse_config
-from tests.simulators.mujoco._build import build_classic_sim, build_warp_sim
+from holosoma.simulator.mujoco.scene_manager import MujocoSceneManager  # noqa: E402
+from holosoma.utils.config_registry import parse_config  # noqa: E402
+from tests.simulators.mujoco._build import build_classic_sim, build_warp_sim  # noqa: E402
 
 pytestmark = pytest.mark.mujoco_classic
 
@@ -347,49 +347,18 @@ assert "warp" not in sys.modules and "mujoco_warp" not in sys.modules
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_legacy_mujoco_version_metadata_preserves_unset_but_rejects_native_overrides(monkeypatch):
-    # Only environment metadata changes; compilation and stepping use the installed native library.
-    monkeypatch.setattr(mujoco, "__version__", "3.9.0")
-    model = compiled(MujocoConfig())
-    assert model.opt.integrator == mujoco.mjtIntegrator.mjINT_EULER
-    assert model.opt.tolerance == pytest.approx(0.003)
-    assert model.opt.timestep == pytest.approx(0.01)
+@pytest.mark.parametrize("reported_version", ["3.9.0", "3.11.0"])
+def test_native_options_use_public_api_without_runtime_version_pins(reported_version, monkeypatch):
+    # Changing only metadata tests the absence of a runtime version gate, not other binaries' dynamics.
+    monkeypatch.setattr(mujoco, "__version__", reported_version)
+    model = compiled(MujocoConfig(integrator="rk4", gravity=(0, 0, -2), disableflags=("contact",)))
+    assert model.opt.integrator == mujoco.mjtIntegrator.mjINT_RK4
     data = mujoco.MjData(model)
-    mujoco.mj_step(model, data)
-    assert data.time == pytest.approx(0.01)
-    with pytest.raises(ValueError, match=r"simulator\.config\.sim\.mujoco:.*require MuJoCo 3\.10\.0.*3\.9\.0"):
-        compiled(MujocoConfig(integrator="rk4"))
-
-
-@pytest.mark.parametrize("mismatch", ["mujoco", "warp", "distribution", "revision", None])
-def test_warp_backend_version_policy_rejects_before_device_initialization(mismatch, tmp_path, monkeypatch):
-    pytest.importorskip("mujoco_warp")
-    wp = pytest.importorskip("warp")
-    from holosoma.simulator.mujoco.backends.warp_backend import WarpBackend
-
-    native = MujocoConfig()
-    model = compiled(native)
-    # Real distribution discovery reads temporary metadata. No application/allocation/step function is mocked.
-    info = tmp_path / "mujoco_warp-3.10.0.dist-info"
-    info.mkdir()
-    version = "3.9.0" if mismatch == "distribution" else "3.10.0"
-    (info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: mujoco-warp\nVersion: {version}\n")
-    revision = "0" * 40 if mismatch == "revision" else "ecaef88917a3c90cd238bf76681ca770f58033df"
-    (info / "direct_url.json").write_text(f'{{"vcs_info": {{"commit_id": "{revision}"}}}}')
-    monkeypatch.syspath_prepend(str(tmp_path))
-    if mismatch == "mujoco":
-        monkeypatch.setattr(mujoco, "__version__", "3.9.0")
-    if mismatch == "warp":
-        monkeypatch.setattr(wp, "__version__", "1.16.0")
-    reason = (
-        "unsupported revision"
-        if mismatch == "revision"
-        else "use MuJoCo 3.10.0"
-        if mismatch
-        else "requires a CUDA device"
-    )
-    with pytest.raises(ValueError, match=rf"simulator\.config\.sim\.mujoco:.*{reason}"):
-        WarpBackend(model, mujoco.MjData(model), warp_backend_config(native), device="cpu")
+    for _ in range(10):
+        mujoco.mj_step(model, data)
+    assert data.time == pytest.approx(0.1)
+    assert data.qvel[2] == pytest.approx(-0.2)
+    assert data.qpos[2] == pytest.approx(0.099 - 0.01)
 
 
 def test_warp_allocation_uses_real_api_and_preserves_default_units():
@@ -566,21 +535,29 @@ def test_warp_contact_extra_changes_real_kernel_trajectories(device):
 
 
 @pytest.mark.parametrize(
-    ("native", "reason"),
+    ("native", "error", "reason"),
     [
-        (MujocoConfig(solver="pgs"), "solver"),
-        (MujocoConfig(noslip_iterations=1), "no-slip"),
-        (MujocoConfig(enableflags=("override",)), "flags"),
-        (MujocoConfig(extra={"o_margin": 0.01}), "not implemented"),
-        (MujocoConfig(disableflags=("NATIVECCD",)), "ignored"),
-        (MujocoConfig(warp=MujocoWarpConfig(extras={"impratio_invsqrt": 2})), "derived"),
+        (MujocoConfig(solver="pgs"), NotImplementedError, "mjSOL_PGS"),
+        (MujocoConfig(noslip_iterations=1), NotImplementedError, "noslip solver"),
+        (MujocoConfig(enableflags=("override",)), NotImplementedError, "mjENBL_OVERRIDE"),
+        (MujocoConfig(extra={"o_margin": 0.01}), ValueError, "not implemented"),
+        (MujocoConfig(warp=MujocoWarpConfig(extras={"impratio_invsqrt": 2})), ValueError, "derived"),
     ],
 )
-def test_warp_unsupported_combinations_fail_before_gpu_startup(native, reason):
-    pytest.importorskip("mujoco_warp")
-    config = replace(mjwarp.config, sim=replace(mjwarp.config.sim, mujoco=native))
-    with pytest.raises(ValueError, match=reason):
-        apply_world_config(mujoco.MjSpec.from_string(XML), config)
+def test_warp_unsupported_combinations_are_rejected_by_native_conversion(native, error, reason):
+    mjw = pytest.importorskip("mujoco_warp")
+    wp = pytest.importorskip("warp")
+    with wp.ScopedDevice("cpu"), pytest.raises(error, match=reason):
+        mjw.put_model(compiled(native, backend=mjwarp))
+
+
+def test_nativeccd_flag_is_accepted_by_mjwarp():
+    mjw = pytest.importorskip("mujoco_warp")
+    wp = pytest.importorskip("warp")
+    native = MujocoConfig(disableflags=("NATIVECCD",))
+    with wp.ScopedDevice("cpu"):
+        uploaded = mjw.put_model(compiled(native, backend=mjwarp))
+    assert uploaded.opt.disableflags & mujoco.mjtDisableBit.mjDSBL_NATIVECCD
 
 
 def test_core_classic_empty_plugins_initialization_reset_and_reconstruction():

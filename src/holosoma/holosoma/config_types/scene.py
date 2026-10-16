@@ -16,7 +16,7 @@ from pydantic.dataclasses import dataclass
 
 import holosoma.config_values.light
 from holosoma.config_types.light import DEFAULT_LIGHT_KEY, DefaultLightConfig, LightConfig
-from holosoma.config_types.mujoco import MujocoGeomPhysicsConfig
+from holosoma.config_types.mujoco import MujocoGeomPhysicsConfig as MujocoPhysicsConfig
 from holosoma.config_types.value_types import UnitQuaternionWXYZ
 from holosoma.utils.config_registry import UseRegistry
 
@@ -98,16 +98,6 @@ class IsaacSimPhysicsConfig:
                 f"IsaacSimPhysicsConfig.torsional_patch_radius ({self.torsional_patch_radius}) must be >= 0."
             )
         return self
-
-
-@dataclass(frozen=True, config=_FORBID_EXTRA)
-class MujocoPhysicsConfig(MujocoGeomPhysicsConfig):
-    """MuJoCo geom-level physics, set on an ``MjSpec`` before compile.
-
-    These contact attributes apply to any body's geoms,
-    whether a free scene object or a robot link, so this config is shared across both entity kinds.
-    ``None`` on any field keeps the asset's value.
-    """
 
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)

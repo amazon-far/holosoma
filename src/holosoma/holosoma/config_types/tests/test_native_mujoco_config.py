@@ -88,6 +88,25 @@ def test_extra_cli_false_and_yaml_values_roundtrip() -> None:
 
 
 @pytest.mark.parametrize(
+    ("kind", "field"),
+    [(MujocoConfig, "extra"), (MujocoWarpConfig, "extras"), (MujocoPhysicsConfig, "extra")],
+)
+@pytest.mark.parametrize("name", ["option.tolerance", "_private"])
+def test_extra_name_validation_is_shared_by_all_native_configs(kind: type, field: str, name: str) -> None:
+    with pytest.raises(ValidationError, match="bare public native name"):
+        TypeAdapter(kind).validate_python({field: {name: 0}})
+
+
+@pytest.mark.parametrize("path", ["extra", "warp.extras"])
+def test_cli_timestep_override_fails_during_config_parsing(path: str, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises((ValidationError, SystemExit)) as error:
+        parse_config(MujocoConfig, args=[f"--{path}", '{"timestep": 0.005}'])
+    if isinstance(error.value, SystemExit):
+        assert error.value.code == 2
+    assert "sim.fps owns timestep" in str(error.value) + capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
     ("kwargs", "reason"),
     [
         ({"integrator": "bad"}, "integrator"),

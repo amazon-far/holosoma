@@ -1,9 +1,17 @@
-"""Native configuration application and API-derived validation, owned by core setup."""
+"""Apply native settings at the scene and backend stages that consume them.
+
+``MujocoSceneManager.compile`` applies world options before compiling the spec.
+``WarpBackend`` converts that model, allocates data with the configured capacities,
+then applies uploaded options before CUDA graph capture. Reset preserves those
+settings; changing them requires constructing a new simulator.
+
+Generic inputs are checked against public properties, Option fields and allocation
+signatures. MJWarp's own conversion checks reject unsupported solvers and flags.
+Dependency versions belong to the setup requirements in ``scripts/versions.sh``.
+"""
 
 from __future__ import annotations
 
-import importlib.metadata
-import json
 import math
 from dataclasses import fields
 from enum import Flag
@@ -14,23 +22,25 @@ from typing import Any, get_type_hints
 import mujoco
 import numpy as np
 
-from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig, NativeConfig
+from holosoma.config_types.mujoco import MujocoConfig, MujocoGeomPhysicsConfig, MujocoWarpConfig
 
-MUJOCO_VERSION = "3.10.0"
-MJWARP_COMMIT = "ecaef88917a3c90cd238bf76681ca770f58033df"
-WARP_VERSION = "1.15.0"
-# Type relationships, not accepted values: enum members come from the installed API.
+# MuJoCo exposes these properties as plain ints, without their enum type metadata.
+# Keep the four type relationships explicit; choices come from the installed enums.
 ENUMS = {
-    "integrator": ("mjtIntegrator", "mjINT_"),
-    "cone": ("mjtCone", "mjCONE_"),
-    "solver": ("mjtSolver", "mjSOL_"),
-    "jacobian": ("mjtJacobian", "mjJAC_"),
+    "integrator": mujoco.mjtIntegrator,
+    "cone": mujoco.mjtCone,
+    "solver": mujoco.mjtSolver,
+    "jacobian": mujoco.mjtJacobian,
 }
 MODEL_INTERNAL = {"id", "signature", "name", "info", "group"}
 
 
-def requested(config: NativeConfig) -> dict[str, Any]:
-    """Include explicit zero/false values; omit optional overrides left unset."""
+def requested(config: MujocoConfig | MujocoGeomPhysicsConfig) -> dict[str, Any]:
+    """Collect configured dataclass fields for application.
+
+    None and empty extra mappings are inactive. Zero, False and empty flag tuples
+    remain explicit overrides, including tuples that clear an authored flag mask.
+    """
     result = {}
     for field in fields(config):
         value = getattr(config, field.name)
@@ -40,6 +50,11 @@ def requested(config: NativeConfig) -> dict[str, Any]:
 
 
 def enum_value(enum: Any, value: Any, path: str) -> int:
+    """Resolve a native enum name or integer, reporting invalid values at ``path``.
+
+    Names accept the upstream spelling or its suffix, case-insensitively. Flag
+    integers may combine defined bits; ordinary enums require an actual member.
+    """
     members = enum.__members__
     if isinstance(value, str):
         matches = [
@@ -60,9 +75,13 @@ def enum_value(enum: Any, value: Any, path: str) -> int:
 
 
 def native_value(name: str, value: Any, path: str) -> Any:
+    """Convert readable MuJoCo enum/flag inputs to the integers required by MjOption.
+
+    Flag-name sequences replace the whole mask; an empty sequence clears it.
+    Other scalar/vector properties retain their value for native type validation.
+    """
     if name in ENUMS:
-        enum_name, _ = ENUMS[name]
-        return enum_value(getattr(mujoco, enum_name), value, path)
+        return enum_value(ENUMS[name], value, path)
     if name in ("disableflags", "enableflags"):
         enum_name, prefix = ("mjtDisableBit", "mjDSBL_") if name == "disableflags" else ("mjtEnableBit", "mjENBL_")
         enum = getattr(mujoco, enum_name)
@@ -87,25 +106,25 @@ def native_value(name: str, value: Any, path: str) -> Any:
     return value
 
 
-def resolve_public(target: Any, path: str, config_path: str) -> tuple[Any, str]:
-    """Only public writable scalar/vector properties; never arbitrary model/data arrays."""
-    parts = path.split(".")
-    for name in parts:
-        if not name or name.startswith("_"):
-            raise ValueError(f"{config_path}: expected a public upstream setting")
-    for name in parts[:-1]:
-        descriptor = getattr(type(target), name, None)
-        if not isinstance(descriptor, property):
-            raise ValueError(f"{config_path}: unknown upstream setting {path!r}")
-        target = getattr(target, name)
-    name = parts[-1]
+def resolve_public(target: Any, name: str, config_path: str) -> tuple[Any, str]:
+    """Find a public writable binding on an MjOption or MjsGeom.
+
+    Reject unknown/read-only names before assignment and include the Holosoma
+    config path in the error. Generic settings do not traverse nested attributes.
+    """
     descriptor = getattr(type(target), name, None)
-    if not isinstance(descriptor, property) or descriptor.fset is None:
-        raise ValueError(f"{config_path}: unknown or read-only upstream setting {path!r}")
+    if name.startswith("_") or not isinstance(descriptor, property) or descriptor.fset is None:
+        raise ValueError(f"{config_path}: unknown or read-only upstream setting {name!r}")
     return target, name
 
 
 def validate_value(current: Any, value: Any, path: str) -> Any:
+    """Check a generic input against the native scalar or vector it will replace.
+
+    Vectors must have the native shape and finite numeric elements. Scalars retain
+    native bool/integer/real/string distinctions. Structural fields are rejected;
+    model authoring is outside this simulator configuration interface.
+    """
     if hasattr(type(current), "__members__"):
         return type(current)(enum_value(type(current), value, path))
     if isinstance(current, np.ndarray):
@@ -133,6 +152,12 @@ def validate_value(current: Any, value: Any, path: str) -> Any:
 
 
 def effective_options(config: Any) -> dict[str, Any]:
+    """Merge named world options and ``extra`` from a SimulatorInitConfig.
+
+    Return explicit MjOption overrides, without changing the config or model.
+    Extra keys must exist on the installed public API; Pydantic has already
+    rejected duplicates and timestep overrides during configuration parsing.
+    """
     cfg = config.sim.mujoco
     selected = requested(cfg)
     result = {
@@ -149,29 +174,34 @@ def effective_options(config: Any) -> dict[str, Any]:
 
 
 def apply_world_config(spec: mujoco.MjSpec, config: Any) -> None:
+    """Apply world options immediately before spec compilation.
+
+    Unset options retain the spec values. The physics rate always supplies timestep.
+    For Warp, reject requested fields that conversion would silently discard and
+    validate Warp extras; native conversion owns solver/flag compatibility checks.
+    """
     options = effective_options(config)
-    if options and mujoco.__version__ != MUJOCO_VERSION:
-        raise ValueError(
-            f"simulator.config.sim.mujoco: native settings require MuJoCo {MUJOCO_VERSION}; "
-            f"installed {mujoco.__version__}"
-        )
     for name, value in options.items():
         path = (
             f"simulator.config.sim.mujoco.{name}"
             if name in MujocoConfig.__dataclass_fields__
             else f"simulator.config.sim.mujoco.extra.{name}"
         )
-        if name == "timestep":
-            raise ValueError(f"{path}: sim.fps owns timestep")
         target, key = resolve_public(spec.option, name, path)
         setattr(target, key, validate_value(getattr(target, key), native_value(name, value, path), path))
     spec.option.timestep = 1.0 / config.sim.fps
     if config.mujoco_backend == "warp":
-        validate_warp_options(spec.option, options)
+        validate_warp_option_coverage(options)
         warp_option_overrides(config.sim.mujoco.warp)
 
 
-def apply_fields(target: Any, config: NativeConfig, path: str) -> None:
+def apply_fields(target: Any, config: MujocoGeomPhysicsConfig, path: str) -> None:
+    """Apply surface contact overrides to one MjsGeom before compilation.
+
+    The scene manager calls this for every geom of a scene object or robot link.
+    Extra inputs cannot overwrite identity/generated fields or the mass/density
+    settings already owned by shared PhysicsConfig.
+    """
     for name, value in requested(config).items():
         if name == "extra":
             continue
@@ -183,45 +213,28 @@ def apply_fields(target: Any, config: NativeConfig, path: str) -> None:
         setattr(obj, key, validate_value(getattr(obj, key), value, f"{path}.extra.{name}"))
 
 
-def validate_warp_options(option: Any, overrides: dict[str, Any]) -> None:
+def validate_warp_option_coverage(overrides: dict[str, Any]) -> None:
+    """Reject explicit MuJoCo options that MJWarp conversion would silently omit.
+
+    ``put_model`` already rejects unsupported integrators, solvers, flags and the
+    no-slip solver. This check only covers valid MuJoCo properties absent from
+    Warp's Option surface, with allowances for transformed or compilation inputs.
+    """
     import mujoco_warp as mjw
 
-    for name, enum in [("integrator", mjw.IntegratorType), ("solver", mjw.SolverType), ("cone", mjw.ConeType)]:
-        if getattr(option, name) not in set(enum):
-            raise ValueError(f"simulator.config.sim.mujoco.{name}: unsupported by pinned MJWarp")
-    for name, enum in [("disableflags", mjw.DisableBit), ("enableflags", mjw.EnableBit)]:
-        allowed = 0
-        for flag in enum:
-            allowed |= int(flag)
-        if getattr(option, name) & ~allowed:
-            raise ValueError(f"simulator.config.sim.mujoco.{name}: contains flags unsupported by pinned MJWarp")
-    if option.noslip_iterations:
-        raise ValueError("simulator.config.sim.mujoco.noslip_iterations: pinned MJWarp has no no-slip solver")
     supported = {f.name for f in fields(mjw.Option)} | {"impratio", "jacobian", "noslip_iterations"}
     for name in overrides:
         if name not in supported:
-            raise ValueError(f"simulator.config.sim.mujoco.extra.{name}: not implemented by pinned MJWarp")
-    if "disableflags" in overrides and option.disableflags & mujoco.mjtDisableBit.mjDSBL_NATIVECCD:
-        raise ValueError("simulator.config.sim.mujoco.disableflags.nativeccd: ignored by pinned MJWarp")
-
-
-def check_warp_version() -> None:
-    import warp as wp
-
-    distribution = importlib.metadata.distribution("mujoco-warp")
-    if mujoco.__version__ != MUJOCO_VERSION or distribution.version != "3.10.0" or wp.__version__ != WARP_VERSION:
-        raise ValueError(
-            "simulator.config.sim.mujoco: use MuJoCo 3.10.0, pinned MJWarp ecaef889 "
-            "and Warp 1.15.0 from scripts/versions.sh"
-        )
-    direct = distribution.read_text("direct_url.json")
-    revision = json.loads(direct).get("vcs_info", {}).get("commit_id") if direct else None
-    if revision and revision != MJWARP_COMMIT:
-        raise ValueError(f"simulator.config.sim.mujoco: unsupported revision {revision}")
+            raise ValueError(f"simulator.config.sim.mujoco.extra.{name}: not implemented by MJWarp")
 
 
 def warp_extra_inputs(cfg: MujocoWarpConfig) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Route bare names using the public API; reject ambiguous or generated inputs."""
+    """Partition ``warp.extras`` between execution options and allocation arguments.
+
+    Names come from Option fields and the public make_data signature. Shared physics
+    stays in MujocoConfig; derived fields and ambiguous names are errors. Return
+    separate dictionaries without allocating data or modifying the uploaded model.
+    """
     import mujoco_warp as mjw
 
     option_names = {field.name for field in fields(mjw.Option)}
@@ -247,6 +260,13 @@ def warp_extra_inputs(cfg: MujocoWarpConfig) -> tuple[dict[str, Any], dict[str, 
 
 
 def allocation_kwargs(model: mujoco.MjModel, cfg: MujocoWarpConfig, nworld: int) -> dict[str, Any]:
+    """Build validated make_data arguments before backend allocation.
+
+    Contacts use an average per-world capacity in a shared pool, unless naconmax
+    sets the total explicitly. Constraint rows have a hard per-world limit.
+    Preserve Holosoma's existing defaults and reject invalid CCD/velocity capacities
+    with config paths before starting GPU work.
+    """
     nconmax = cfg.nconmax_per_env if cfg.nconmax_per_env is not None else 96
     result = {
         "nworld": nworld,
@@ -274,7 +294,12 @@ def allocation_kwargs(model: mujoco.MjModel, cfg: MujocoWarpConfig, nworld: int)
 
 
 def warp_option_overrides(cfg: MujocoWarpConfig) -> dict[str, Any]:
-    """Validate Warp-only scalar options against their actual native field types."""
+    """Convert requested Warp-only options using the installed Option annotations.
+
+    This validates scalar types and readable enum/flag names before graph capture.
+    Structural fields are not supported as generic settings. Allocation extras are
+    handled separately by allocation_kwargs.
+    """
     import mujoco_warp as mjw
 
     option_types = get_type_hints(mjw.Option)
@@ -304,6 +329,14 @@ def warp_option_overrides(cfg: MujocoWarpConfig) -> dict[str, Any]:
 
 
 def apply_warp_model(model: Any, cfg: MujocoConfig, options: dict[str, Any]) -> None:
+    """Apply effective physics and execution options to a converted Warp model.
+
+    Call inside the backend's device scope after put_model and before graph capture.
+    Restore explicit values that conversion changes, including tolerances below its
+    default float32 floor. Transform impratio to its inverse square root and preserve
+    Warp's required ISLAND disable bit. Assign real device arrays or scalar options;
+    this function does not update an already captured graph.
+    """
     import mujoco_warp as mjw
 
     applied: Any

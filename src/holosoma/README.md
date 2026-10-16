@@ -79,7 +79,7 @@ python src/holosoma/holosoma/train_agent.py \
 > - These examples use `--training.num-envs=4096`, but you may need to adjust this value based on your hardware.
 > - When training T1 with PPO on mixed terrain, use `--terrain.terrain-term.scale-factor=0.5` to avoid training instabilities.
 
-Native physics settings use `--simulator.config.sim.mujoco.*`, for example `--simulator.config.sim.mujoco.integrator implicitfast`, and also work in YAML and presets. Uncommon options use bare upstream names in `mujoco.extra` or `mujoco.warp.extras`; CLI mappings take one JSON object. Unset fields preserve existing behavior, `sim.fps` owns timestep, and changes require reconstructing the simulator. Classic MuJoCo ignores the Warp block. The former `simulator.config.mujoco_warp` capacity block raises an error pointing to `simulator.config.sim.mujoco.warp`.
+Native physics settings use `--simulator.config.sim.mujoco.*`, for example `--simulator.config.sim.mujoco.integrator implicitfast`. Uncommon options use bare upstream names in `mujoco.extra` or `mujoco.warp.extras`; CLI mappings take one JSON object. Unset fields preserve existing behavior, and `sim.fps` owns timestep.
 
 ### Whole-Body Tracking
 

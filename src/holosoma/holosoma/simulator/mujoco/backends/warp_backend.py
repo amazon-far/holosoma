@@ -46,9 +46,8 @@ from holosoma.simulator.mujoco.geom_groups import DEFAULT_RENDER_GEOM_GROUPS
 from holosoma.simulator.mujoco.native_config import (
     allocation_kwargs,
     apply_warp_model,
-    check_warp_version,
     effective_options,
-    validate_warp_options,
+    validate_warp_option_coverage,
 )
 
 from .base import IMujocoBackend, holosoma_to_mj_quat, mj_to_holosoma_quat
@@ -208,10 +207,9 @@ class WarpBackend(IMujocoBackend):
             If GPU initialization fails
         """
         super().__init__(model, data, config, device)
-        check_warp_version()
         warp_config = config.simulator.sim.mujoco
         overrides = effective_options(config.simulator)
-        validate_warp_options(model.opt, overrides)
+        validate_warp_option_coverage(overrides)
         allocation = allocation_kwargs(model, warp_config.warp, self.num_envs)
 
         # Import warp packages (fail fast if not available)
