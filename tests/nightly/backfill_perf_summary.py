@@ -66,6 +66,23 @@ STATS = ("min", "mean", "max")
 RUN_DATE_KEY = f"{SUMMARY_PREFIX}run_date"
 RUN_DURATION_KEY = f"{SUMMARY_PREFIX}run_duration_s"
 
+# Flat identifier for the nightly matrix cell a run belongs to, so the dashboard can
+# group by it. Throughput is only comparable within a cell. It has to be a scalar
+# summary key: run config is entirely nested dicts, and grouping a saved view by tags
+# does not survive being written (see perf_workspace.py).
+CELL_KEY = f"{SUMMARY_PREFIX}cell"
+
+# Tag vocabulary written by nightly.py. Keep in sync with it and with run_summary.py.
+KNOWN_SIMULATORS = {"isaacgym", "isaacsim", "mujoco"}
+RESERVED_TAG_PREFIXES = ("nightly-", "gha-run-id-", "gpus-")
+RESERVED_TAGS = KNOWN_SIMULATORS | {
+    "singlegpu",
+    "multigpu",
+    "nightly_test_passed",
+    "nightly_test_failed",
+    "nightly_perf_warning",
+}
+
 # Marks a run as processed. Keyed on a version rather than on the presence of the
 # aggregates themselves, because a run that logged no Perf/* history (a crash, say)
 # would otherwise look unprocessed forever and be rescanned on every pass. Bump this
@@ -119,6 +136,27 @@ def aggregate_history(rows: Iterable[dict[str, Any]]) -> dict[str, Aggregate]:
     return aggregates
 
 
+def run_cell(run: Any) -> str:
+    """Matrix cell label for a run, as "<experiment> | <simulator> | <gpus>".
+
+    Derived from the tags nightly.py applies. Missing components are reported rather
+    than dropped, so an untagged run groups somewhere visible instead of silently
+    joining another cell.
+    """
+    tags = list(run.tags or [])
+
+    gpus = next((t for t in tags if t.startswith("gpus-")), None)
+    if gpus is None:
+        gpus = "gpus-4" if "multigpu" in tags else "gpus-1" if "singlegpu" in tags else "gpus-?"
+
+    simulator = next((t for t in tags if t in KNOWN_SIMULATORS), "sim-?")
+    experiment = next(
+        (t for t in tags if not t.startswith(RESERVED_TAG_PREFIXES) and t not in RESERVED_TAGS),
+        "exp-?",
+    )
+    return f"{experiment} | {simulator} | {gpus}"
+
+
 def read_history(run: Any) -> list[dict[str, Any]]:
     """Every history row carrying the Perf metrics, in step order.
 
@@ -156,7 +194,7 @@ def needs_backfill(run: Any) -> bool:
     return (run.summary or {}).get(BACKFILL_VERSION_KEY) != BACKFILL_VERSION
 
 
-def write_summary(run: Any, updates: dict[str, float | int]) -> None:
+def write_summary(run: Any, updates: dict[str, Any]) -> None:
     """Persists summary keys without touching the rest of the run.
 
     Uses `run.summary.update()` rather than `run.update()`: the latter also re-upserts
@@ -180,7 +218,7 @@ def backfill_run(run: Any, dry_run: bool, backup: Any = None) -> bool:
     if not aggregates:
         print("  no Perf/* history, marking processed")
 
-    updates: dict[str, float | int] = {BACKFILL_VERSION_KEY: BACKFILL_VERSION}
+    updates: dict[str, Any] = {BACKFILL_VERSION_KEY: BACKFILL_VERSION, CELL_KEY: run_cell(run)}
     for metric, aggregate in aggregates.items():
         updates[summary_key(metric, "min")] = aggregate.minimum
         updates[summary_key(metric, "mean")] = aggregate.mean
@@ -207,6 +245,25 @@ def backfill_run(run: Any, dry_run: bool, backup: Any = None) -> bool:
 
     write_summary(run, updates)
     print(f"  wrote {len(updates)} keys")
+    return True
+
+
+def backfill_cell_only(run: Any, dry_run: bool) -> bool:
+    """Writes just the matrix-cell label. Returns whether anything was written.
+
+    The label comes from a run's tags, so this needs no history read -- which lets runs
+    aggregated before the label existed be topped up cheaply, rather than reprocessed.
+    """
+    if CELL_KEY in (run.summary or {}):
+        return False
+
+    cell = run_cell(run)
+    print(f"  cell -> {cell}")
+    if dry_run:
+        print("  [dry-run] would write 1 key")
+        return False
+
+    write_summary(run, {CELL_KEY: cell})
     return True
 
 
@@ -239,6 +296,11 @@ def main() -> None:
     parser.add_argument(
         "--backup", default=None, help="Append each run's prior summary to this file as JSON before writing"
     )
+    parser.add_argument(
+        "--cells-only",
+        action="store_true",
+        help=f"Only add the missing {CELL_KEY} label, without reading history",
+    )
     args = parser.parse_args()
 
     # A full pass takes a while and is usually watched through a redirected log, which
@@ -261,6 +323,17 @@ def main() -> None:
                 if args.limit is not None and processed >= args.limit:
                     break
                 processed += 1
+
+                if args.cells_only:
+                    try:
+                        if backfill_cell_only(run, args.dry_run):
+                            print(f"{run.name} ({run.id})")
+                            written += 1
+                        else:
+                            skipped += 1
+                    except Exception as e:  # keep going; one bad run shouldn't stop the pass
+                        print(f"{run.name}: failed: {e}")
+                    continue
 
                 if not args.force and not needs_backfill(run):
                     skipped += 1

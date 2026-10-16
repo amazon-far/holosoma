@@ -31,6 +31,7 @@ DEFAULT_VIEW_NAME = "Nightly performance trends"
 SUMMARY_PREFIX = "perf/"
 RUN_DATE_KEY = f"{SUMMARY_PREFIX}run_date"
 RUN_DURATION_KEY = f"{SUMMARY_PREFIX}run_duration_s"
+CELL_KEY = f"{SUMMARY_PREFIX}cell"
 
 # (section title, summary key stem) for the three per-iteration metrics.
 METRIC_SECTIONS = (
@@ -62,16 +63,19 @@ def _scatter(key: str, title: str, trend: bool) -> wr.ScatterPlot:
 
 
 def _runset_settings() -> ws.RunsetSettings:
-    """Runset ordered by run date, with every run in the project selected.
+    """Runset grouped by matrix cell and ordered by run date.
 
-    Deliberately not grouped. Grouping by tags would be the natural way to separate the
-    experiment / simulator / GPU-count matrix cells, but `Tags()` serializes into the
-    saved view as a metric named "Tags", which matches nothing: the runset then resolves
-    to zero runs and every panel fails. The same underlying bug is noted against
-    `FilterExpr` in generate_report.py. Grouping is a one-click control in the UI, so
-    it is left to the reader.
+    Grouping is by the `perf/cell` summary key that backfill_perf_summary.py writes,
+    rather than by tags: `Tags()` serializes into the saved view as a metric named
+    "Tags", which matches nothing, leaving the runset empty and every panel broken. The
+    same underlying bug is noted against `FilterExpr` in generate_report.py. A scalar
+    summary key avoids it, and keeps each experiment / simulator / GPU-count combination
+    on its own series -- necessary because throughput isn't comparable across them.
     """
-    return ws.RunsetSettings(order=[ws.Ordering(ws.Summary(RUN_DATE_KEY))])
+    return ws.RunsetSettings(
+        groupby=[ws.Summary(CELL_KEY)],
+        order=[ws.Ordering(ws.Summary(RUN_DATE_KEY))],
+    )
 
 
 def _bar(keys: list[str], title: str) -> wr.BarPlot:
