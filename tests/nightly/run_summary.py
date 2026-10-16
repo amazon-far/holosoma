@@ -29,6 +29,9 @@ GITHUB_SERVER_URL = getenv("GITHUB_SERVER_URL")
 GITHUB_REPOSITORY = getenv("GITHUB_REPOSITORY")
 GITHUB_RUN_ID = getenv("GITHUB_RUN_ID")
 
+# Throughput regression warning applied by nightly.py. Keep in sync with that script.
+PERF_WARNING_TAG = "nightly_perf_warning"
+
 # Simulator tag values set by nightly.py (config.simulator.config.name). "isaacgym" is retained
 # for ARCHIVED runs only -- the backend is retired; dropping it would make historical runs resolve
 # their exp_name to the literal tag instead of falling back to "unknown-sim".
@@ -44,6 +47,7 @@ class RunStatus(Enum):
     SUCCEEDED = auto()
     CRASHED = auto()
     METRICS_REGRESSION = auto()
+    PERF_WARNING = auto()
     FAILED = auto()
     UNKNOWN = auto()
 
@@ -53,9 +57,14 @@ RunStatus2Emoji = {
     RunStatus.SUCCEEDED: "🟩",
     RunStatus.CRASHED: "🟥",
     RunStatus.METRICS_REGRESSION: "⚠️",
+    RunStatus.PERF_WARNING: "🐌",
     RunStatus.FAILED: "🚫",
     RunStatus.UNKNOWN: "❓",
 }
+
+# Statuses that shouldn't be called out as failures. A throughput warning means the
+# run passed its metrics but was slower than recent runs of the same matrix cell.
+HEALTHY_STATUSES = frozenset({RunStatus.SUCCEEDED, RunStatus.PERF_WARNING})
 
 
 class NightlyRun(NamedTuple):
@@ -109,7 +118,9 @@ def _get_run_status(run: wandb.Run) -> RunStatus:
     run_tags = getattr(run, "tags", []) or []
 
     if run_state == "finished" and "nightly_test_passed" in run_tags:
-        status = RunStatus.SUCCEEDED
+        # A metrics failure is the more serious signal, so the throughput warning
+        # only surfaces on runs that otherwise passed.
+        status = RunStatus.PERF_WARNING if PERF_WARNING_TAG in run_tags else RunStatus.SUCCEEDED
     elif run_state == "finished" and "nightly_test_failed" in run_tags:
         status = RunStatus.METRICS_REGRESSION
     elif run_state == "crashed":
@@ -130,7 +141,13 @@ def _run_exp_name(run: wandb.Run) -> str:
     """
     run_tags = getattr(run, "tags", []) or []
     reserved_prefixes = ("nightly-", "gha-run-id-", "gpus-")
-    reserved_exact = KNOWN_SIMULATORS | {"singlegpu", "multigpu", "nightly_test_passed", "nightly_test_failed"}
+    reserved_exact = KNOWN_SIMULATORS | {
+        "singlegpu",
+        "multigpu",
+        "nightly_test_passed",
+        "nightly_test_failed",
+        PERF_WARNING_TAG,
+    }
     for tag in run_tags:
         if tag.startswith(reserved_prefixes) or tag in reserved_exact:
             continue
@@ -295,7 +312,7 @@ def post_summary_to_slack():
     # Each failed run is labelled with its simulator + GPU count so the same
     # experiment failing on different matrix dimensions (single- vs multi-GPU,
     # isaacgym vs isaacsim) shows up as distinct entries instead of duplicates.
-    problem_runs = [run.failed_run_label() for run in nightly_runs if run.status != RunStatus.SUCCEEDED]
+    problem_runs = [run.failed_run_label() for run in nightly_runs if run.status not in HEALTHY_STATUSES]
 
     if problem_runs:
         summary_message += "\nFailed runs: " + ", ".join(problem_runs)

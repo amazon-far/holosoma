@@ -74,6 +74,60 @@ The script automatically:
 - Generates line plots for all tracked metrics
 - Provides cross-experiment comparisons when multiple experiments are present
 
+### `backfill_perf_summary.py`
+Writes per-run performance aggregates into each run's wandb summary.
+
+The `Perf/*` metrics are logged once per training iteration, so they only exist as per-run
+time series. wandb's cross-run panels read run summary and config rather than history, so
+plotting throughput across nights needs one value per run at the run level. This script
+derives those values with `scan_history` (not `history`, which samples) and writes:
+
+- `perf/total_fps_{min,mean,max}`
+- `perf/collection_time_{min,mean,max}`
+- `perf/learning_time_{min,mean,max}`
+- `perf/run_date` — run start as a Unix timestamp, used as the x-axis of the trend panels
+- `perf/run_duration_s` — total wall-clock duration
+
+Runs that already carry every key are skipped, so it is safe to re-run. It runs after each
+nightly build and can be used once to backfill history.
+
+```bash
+# Preview without writing
+uv run --script ./tests/nightly/backfill_perf_summary.py --dry-run --limit 3
+
+# Backfill every nightly run
+uv run --script ./tests/nightly/backfill_perf_summary.py
+
+# One project only, recomputing runs that already have the keys
+uv run --script ./tests/nightly/backfill_perf_summary.py --project nightly-holosoma-runs --force
+```
+
+### `perf_workspace.py`
+Creates a saved wandb workspace view plotting the above over time — one point per run
+against when that run started, so drift is visible across nights rather than within a run.
+
+Sections cover training throughput, collection time and learning time (min, mean and max
+per run, plus a combined bar panel), and total run duration. Run
+`backfill_perf_summary.py` first or the panels will be empty.
+
+```bash
+uv run --script ./tests/nightly/perf_workspace.py
+uv run --script ./tests/nightly/perf_workspace.py --name "My trends view"
+```
+
+Runs are grouped by tag so the experiment / simulator / GPU-count matrix cells are
+distinguishable. They share a y-axis, and multi-GPU throughput is roughly 4x single-GPU by
+construction, so filter to one cell in the UI when comparing absolute numbers.
+
+## Throughput warnings
+
+`nightly.py` also compares each run's mean fps against the median of the last
+`PERF_BASELINE_RUNS` runs of the same matrix cell (matching experiment, simulator and GPU
+count), and tags runs below `PERF_WARN_RATIO` of that baseline with `nightly_perf_warning`.
+These appear in the Slack summary as 🐌 and are **not** counted as failures — throughput
+moves with the runner, so the check never fails a build. It is skipped until at least
+`PERF_BASELINE_MIN_RUNS` prior runs carry the metric.
+
 ## GitHub Actions Integration
 
 The nightly workflow automatically:

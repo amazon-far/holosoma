@@ -97,6 +97,16 @@ jobs:
           ref: ${{ github.event.inputs.branch || 'main' }}
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      # Stores per-run performance aggregates in each run's summary, which is what the
+      # performance workspace view plots. Already-processed runs are skipped, so this
+      # only does work for the runs this build added.
+      - name: Backfill performance summaries
+        continue-on-error: true
+        env:
+          WANDB_ENTITY: ${{ vars.WANDB_ENTITY }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          WANDB_BASE_URL: ${{ vars.WANDB_BASE_URL }}
+        run: uv run --script ./tests/nightly/backfill_perf_summary.py
       - name: Generate wandb report
         env:
           WANDB_ENTITY: ${{ vars.WANDB_ENTITY }}

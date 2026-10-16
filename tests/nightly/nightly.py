@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import math
 import os
+import statistics
 import subprocess
 import sys
 import time
@@ -31,6 +33,18 @@ NIGHTLY_STATUS_TAGS = frozenset({"nightly_test_passed", "nightly_test_failed"})
 WANDB_RUN_FINISH_ATTEMPTS = 10
 WANDB_STATUS_UPDATE_ATTEMPTS = 3
 WANDB_STATUS_UPDATE_DELAY_S = 3.0
+
+# Throughput regression warning. Deliberately kept out of NIGHTLY_STATUS_TAGS: a slow
+# night is reported but never fails the build, so it must not displace the pass/fail tag.
+PERF_WARNING_TAG = "nightly_perf_warning"
+# Per-run mean fps, written by backfill_perf_summary.py. Keep in sync with that script.
+PERF_FPS_MEAN_KEY = "perf/total_fps_mean"
+PERF_BASELINE_RUNS = 14
+PERF_BASELINE_MIN_RUNS = 5
+# Fraction of the baseline below which a run is called out. Thresholding at the
+# baseline itself would fire on roughly half of all runs, since noise is symmetric
+# about it. Tune once the dashboard shows the real spread.
+PERF_WARN_RATIO = 0.80
 
 
 def now_timestamp() -> str:
@@ -66,6 +80,99 @@ def update_wandb_status(api: Any, run_path: str, status_tag: str) -> None:
         print(f"W&B status tag did not persist; retrying ({attempt}/{WANDB_STATUS_UPDATE_ATTEMPTS})")
 
     raise RuntimeError(f"Failed to persist W&B status tag {status_tag!r} for {run_path}")
+
+
+def append_wandb_tag(api: Any, run_path: str, tag: str) -> None:
+    """Adds a tag to a finished run, leaving its existing tags in place."""
+    run = api.run(run_path)
+    existing = list(run.tags or [])
+    if tag in existing:
+        return
+    run.tags = existing + [tag]
+    run.update()
+
+
+def mean_run_fps(run: Any) -> float | None:
+    """Mean of a run's per-iteration fps, or None when it logged none.
+
+    Reads the full history rather than `run.history()`, which samples.
+    """
+    total = 0.0
+    count = 0
+    for row in run.scan_history(keys=["Perf/total_fps"]):
+        value = row.get("Perf/total_fps")
+        if isinstance(value, (int, float)) and math.isfinite(value):
+            total += float(value)
+            count += 1
+    return total / count if count else None
+
+
+def baseline_fps(api: Any, run_path: str, cell_tags: list[str], current_run_id: str) -> float | None:
+    """Median mean-fps of recent prior runs sharing this run's matrix cell.
+
+    Median rather than mean so a single slow night cannot drag the baseline down and
+    mask a later regression. Returns None when too few prior runs carry the metric.
+    """
+    entity, project, _ = run_path.split("/")
+    previous: list[float] = []
+    required = set(cell_tags)
+
+    for other in api.runs(path=f"{entity}/{project}", filters={"tags": {"$all": cell_tags}}, order="-created_at"):
+        if other.id == current_run_id:
+            continue
+        # The filter above is only an optimisation; re-check locally so an unsupported
+        # or ignored server-side filter can't silently pool runs from other cells.
+        if not required.issubset(set(other.tags or [])):
+            continue
+        value = (other.summary or {}).get(PERF_FPS_MEAN_KEY)
+        if isinstance(value, (int, float)) and math.isfinite(value):
+            previous.append(float(value))
+        if len(previous) >= PERF_BASELINE_RUNS:
+            break
+
+    if len(previous) < PERF_BASELINE_MIN_RUNS:
+        print(
+            f"Throughput baseline needs {PERF_BASELINE_MIN_RUNS} prior runs with {PERF_FPS_MEAN_KEY}, "
+            f"found {len(previous)}; skipping throughput check"
+        )
+        return None
+    return statistics.median(previous)
+
+
+def check_throughput_regression(cell_tags: list[str]) -> None:
+    """Tags the run when its mean fps falls well below recent runs of the same cell.
+
+    Warn-only: throughput moves with the runner, so this never raises and never fails
+    the build. Any error here is reported and ignored for the same reason.
+    """
+    # lazy import to avoid conflicts with Isaac
+    import wandb
+
+    try:
+        if wandb.run is None:
+            return
+        api = wandb.Api()
+        run_path = f"{wandb.run.entity}/{wandb.run.project}/{wandb.run.id}"
+        run = wait_for_wandb_run(api, run_path)
+
+        current = mean_run_fps(run)
+        if current is None:
+            print("Run logged no fps history; skipping throughput check")
+            return
+
+        baseline = baseline_fps(api, run_path, cell_tags, wandb.run.id)
+        if baseline is None:
+            return
+
+        threshold = baseline * PERF_WARN_RATIO
+        summary = f"mean fps {current:0.0f} vs baseline median {baseline:0.0f} (warn below {threshold:0.0f})"
+        if current < threshold:
+            print(f"Throughput regression warning: {summary}")
+            append_wandb_tag(api, run_path, PERF_WARNING_TAG)
+        else:
+            print(f"Throughput within range: {summary}")
+    except Exception as e:
+        print(f"Throughput check failed, ignoring: {e}")
 
 
 def validate_wandb_metrics(config: ExperimentConfig):
@@ -153,6 +260,14 @@ def main():
         run_tags.append("singlegpu")
         run_tags.append("gpus-1")
 
+    # Tags identifying this matrix cell (experiment, simulator, GPU count). Throughput
+    # is only comparable within a cell, so the regression baseline is limited to these.
+    cell_tags = [
+        sanitized_exp,
+        config.simulator.config.name,
+        f"gpus-{MULTIGPU_NUM_GPUS}" if config.training.multigpu else "gpus-1",
+    ]
+
     nightly_name = f"nightly-{sanitized_exp}{multigpu_suffix}-{now_timestamp()}"
 
     config = dataclasses.replace(
@@ -172,6 +287,8 @@ def main():
 
         # 2. Validate metrics (explicit, linear flow) - only on rank 0
         if os.environ.get("RANK", "0") == "0":
+            # Warn-only, and ahead of validation so it still reports on a failing night.
+            check_throughput_regression(cell_tags)
             validate_wandb_metrics(config)
 
     # 4. simulation_app automatically closed when exiting context
