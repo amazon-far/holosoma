@@ -173,9 +173,32 @@ class DualModePolicy:
             logger.info(
                 colored("Loco → WBT (motion): immediate switch…", "magenta", attrs=["bold"])
             )
+            # Preserve the outgoing position command. Starting from measured
+            # joint angles would remove the PD position error supplying stance
+            # support; reusing secondary._last_sent_q could instead use a stale
+            # command from a previous dance. Snapshot before changing policies.
+            outgoing_q = self.active._last_sent_q
+            if outgoing_q is None:
+                state = self.active.interface.get_low_state()
+                outgoing_q = state[0, 7 : 7 + self._num_dofs]
+                start_source = "measured pose (no outgoing command available)"
+            else:
+                start_source = "outgoing policy command"
+            outgoing_q = np.asarray(outgoing_q).reshape(1, self._num_dofs).copy()
+
             self.active._cancel_policy_interp()
             self._activate_target(self.secondary, "secondary")
             self.secondary._handle_start_motion_clip()
+            transition = self.secondary._target_transition
+            if transition is not None:
+                # _last_sent_q includes calibration offsets; transitions blend
+                # before BasePolicy adds the incoming policy's offsets again.
+                self.secondary._begin_target_transition(
+                    str(transition["name"]),
+                    int(transition["steps"]),
+                    start_q=outgoing_q - self.secondary.joint_offsets,
+                )
+                logger.info(f"WBT handoff transition starts from {start_source}")
             logger.info(colored("WBT policy now active – motion started.", "magenta"))
             return
 
