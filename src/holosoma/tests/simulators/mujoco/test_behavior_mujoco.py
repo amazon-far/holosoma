@@ -25,9 +25,10 @@ from pathlib import Path
 import pytest
 
 torch = pytest.importorskip("torch")
-pytest.importorskip("mujoco")
+mujoco = pytest.importorskip("mujoco")
 
 from tests.simulators._run_harness import run_harness  # noqa: E402
+from tests.simulators.behavior_assert import assert_collide_into_fixed  # noqa: E402
 
 _HARNESS = Path(__file__).resolve().parents[1] / "behavior_assert.py"
 
@@ -120,3 +121,73 @@ def test_behavior_warp_multi_env(scenario):
         label=f"mjwarp/{scenario} (num_envs=4)",
         timeout=400,
     )
+
+
+class _MinimalCollisionContext:
+    """Exercise the shared collision assertion with four real CPU MuJoCo worlds."""
+
+    def __init__(self, case):
+        self.n = 4
+        self.sim = self
+        self.sim_dt = 0.005
+        self.torch = torch
+        self.models = []
+        self.data = []
+        self.wall_contacts = [0] * self.n
+        self.peak_x = [1.4] * self.n
+        for env_id in range(self.n):
+            mask = 0 if case == "missing-collision" and env_id == self.n - 1 else 1
+            wall_solver = 'solref="0.02 0.5" priority="1"' if case == "rebound" else ""
+            model = mujoco.MjModel.from_xml_string(
+                f"""<mujoco><option timestep="{self.sim_dt}"/>
+                <worldbody>
+                  <geom type="plane" size="10 10 .1" friction=".05 .005 .001"/>
+                  <body name="hammer" pos="1.4 0 .05"><freejoint/>
+                    <geom type="box" size=".05 .05 .05" mass="1" friction=".05 .005 .001"/>
+                  </body>
+                  <body name="wall" pos="1.7 0 .5">
+                    <geom name="wall" type="box" size=".05 .5 .5"
+                          contype="{mask}" conaffinity="{mask}" {wall_solver}/>
+                  </body>
+                </worldbody></mujoco>"""
+            )
+            data = mujoco.MjData(model)
+            data.qvel[0] = 0 if case == "missing-velocity" and env_id == self.n - 1 else 2
+            mujoco.mj_forward(model, data)
+            self.models.append(model)
+            self.data.append(data)
+
+    def states(self, name):
+        states = torch.zeros((self.n, 13), dtype=torch.float64)
+        for env_id, (model, data) in enumerate(zip(self.models, self.data)):
+            if name == "hammer":
+                states[env_id, :3] = torch.from_numpy(data.qpos[:3].copy())
+                states[env_id, 7:10] = torch.from_numpy(data.qvel[:3].copy())
+            else:
+                states[env_id, :3] = torch.from_numpy(model.body("wall").pos.copy())
+        return states
+
+    def simulate_at_each_physics_step(self):
+        for env_id, (model, data) in enumerate(zip(self.models, self.data)):
+            mujoco.mj_step(model, data)
+            self.peak_x[env_id] = max(self.peak_x[env_id], data.qpos[0])
+            self.wall_contacts[env_id] += any(model.geom("wall").id in data.contact[i].geom for i in range(data.ncon))
+
+    def refresh_sim_tensors(self):
+        pass  # states() reads live native arrays.
+
+    def render(self):
+        pass  # These assertion regressions do not need a renderer.
+
+
+@pytest.mark.mujoco_classic
+@pytest.mark.parametrize("case", ["solid", "rebound", "missing-collision", "missing-velocity"])
+def test_collision_assertion_accepts_rebounds_and_rejects_broken_worlds(case):
+    ctx = _MinimalCollisionContext(case)
+    assert assert_collide_into_fixed(ctx) is (case in {"solid", "rebound"})
+    assert all(data.time == pytest.approx(1.5) for data in ctx.data)
+    assert all(count > 0 for count in ctx.wall_contacts[:3])
+    if case == "rebound":
+        assert all(peak - data.qpos[0] > 0.1 for peak, data in zip(ctx.peak_x, ctx.data))
+    elif case in {"missing-collision", "missing-velocity"}:
+        assert ctx.wall_contacts[-1] == 0

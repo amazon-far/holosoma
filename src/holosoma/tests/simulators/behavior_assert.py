@@ -177,23 +177,26 @@ def assert_collide_into_fixed(ctx):
     wall = ctx.states("wall")
     hammer_x = hammer[:, 0]
     rebound = peak_x - hammer_x  # how far it retreated from its closest approach
-    # Assert the collision STORY, not a stopping position. The hammer must (a) advance from spawn
-    # and REACH the wall — its closest approach (peak +x) lands within a hair of the near face
-    # face_x = wall_x - 0.10 (the two 0.05 half-extents); and (b) end up AT-OR-BEHIND that face
-    # rather than tunneling through it. Backends differ on the post-contact settle: IsaacSim
-    # typically comes to rest flush (rebound ~0), MuJoCo rebounds a few cm back off the face. Both
-    # are correct "hit a wall and stopped/bounced" outcomes, so the
-    # final-position band is loose (face_x - 0.10 .. face_x + 0.02): it still rejects a dead velocity
-    # write (never advances, peak stays at spawn) and a tunnel-through (ends well past the face).
-    reached_wall = _all(peak_x > hammer0_x + 0.15) and _all(peak_x > face_x - 3e-2)
-    bounced_or_rests = _all((hammer_x > face_x - 0.10) & (hammer_x < face_x + 2e-2))
+    # Require arrival, no tunneling at any sampled step, and a stopped or rebounding hammer.
+    # A valid rebound can retreat more than 10 cm during this window; its final position alone
+    # cannot distinguish a collision from an unchanged forward velocity.
+    reached = (peak_x > hammer0_x + 0.15) & (peak_x > face_x - 3e-2)
+    contained = peak_x < face_x + 2e-2
+    hammer_vx = hammer[:, 7]
+    stopped_or_rebounding = ctx.torch.isfinite(hammer_vx) & (hammer_vx <= 0.1)
+    reached_wall = _all(reached)
+    bounced_or_rests = _all(contained & stopped_or_rebounding)
     # Wall (static) must not move on any axis.
-    wall_fixed = _all((wall[:, :3] - wall0).abs().amax(dim=1) < 1e-3)
-    print(
-        f"  collide: hammer_x env0 {float(hammer_x[0]):.3f} peak {float(peak_x[0]):.3f} "
-        f"face {float(face_x[0]):.3f} rebound {float(rebound[0]):+.3f} "
-        f"reached_wall={reached_wall} bounced_or_rests={bounced_or_rests} wall_fixed={wall_fixed}"
-    )
+    fixed = (wall[:, :3] - wall0).abs().amax(dim=1) < 1e-3
+    wall_fixed = _all(fixed)
+    for env_id in range(ctx.n):
+        print(
+            f"  collide env{env_id}: hammer_x {float(hammer_x[env_id]):.3f} "
+            f"peak {float(peak_x[env_id]):.3f} face {float(face_x[env_id]):.3f} "
+            f"rebound {float(rebound[env_id]):+.3f} vx {float(hammer_vx[env_id]):+.3f} "
+            f"reached={bool(reached[env_id])} contained={bool(contained[env_id])} "
+            f"stopped_or_rebounding={bool(stopped_or_rebounding[env_id])} fixed={bool(fixed[env_id])}"
+        )
     return reached_wall and bounced_or_rests and wall_fixed
 
 
