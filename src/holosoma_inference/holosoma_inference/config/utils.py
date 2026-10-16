@@ -1,3 +1,3 @@
 import tyro
 
-TYRO_CONFIG = ((tyro.conf.CascadeSubcommandArgs, tyro.conf.FlagConversionOff),)
+TYRO_CONFIG = (tyro.conf.CascadeSubcommandArgs, tyro.conf.FlagConversionOff)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import typing
-from typing import Any
 
 from pydantic.dataclasses import dataclass
 
@@ -162,6 +161,14 @@ class RobotConfig:
     message_type: typing.Literal["HG", "GO2"] = "HG"
     """Message protocol type."""
 
+    h1_imu_on_torso: bool = False
+    """Convert confirmed torso-frame H1 SDK IMU readings to pelvis state.
+
+    Enable only when LowState reports uncompensated torso IMU data, with
+    sensor axes aligned to torso_link. Leave disabled for the standard
+    Holosoma simulation bridge, which already publishes pelvis state.
+    """
+
     # =========================================================================
     # Dimensions (OPTIONAL - with defaults)
     # =========================================================================
@@ -189,7 +196,7 @@ class RobotConfig:
     # SDK-Specific Configuration (optional)
     # =========================================================================
 
-    unitree_legged_const: dict[str, Any] | None = None
+    unitree_legged_const: dict[str, int | float] | None = None
     """Unitree SDK-specific constants.
 
     Contains protocol-specific values like HIGHLEVEL, LOWLEVEL, etc.

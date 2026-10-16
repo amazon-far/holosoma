@@ -41,6 +41,8 @@ h1_19dof_loco = InferenceConfig(
         velocity_input="interface",
         state_input="interface",
         auto_walk_on_vel_cmd=True,
+        gait_period=1.15,
+        clip_velocity_commands_to_training_range=True,
     ),
 )
 
@@ -54,6 +56,8 @@ _h1_safety_secondary = InferenceConfig(
         velocity_input="interface",
         state_input="interface",
         auto_walk_on_vel_cmd=True,
+        gait_period=1.15,
+        clip_velocity_commands_to_training_range=True,
     ),
 )
 
@@ -141,6 +145,8 @@ h1_19dof_loco_wbt = InferenceConfig(
         velocity_input="interface",
         state_input="interface",
         auto_walk_on_vel_cmd=True,
+        gait_period=1.15,
+        clip_velocity_commands_to_training_range=True,
     ),
     secondary=InferenceConfig(
         robot=_h1_19dof_wbt_robot,
@@ -152,6 +158,9 @@ h1_19dof_loco_wbt = InferenceConfig(
             velocity_input="interface",
             state_input="interface",
             motion_start_timestep=150,
+            # Keep the dynamic opening moving during the target transition.
+            motion_start_wait_for_transition=False,
+            use_sim_time=True,
         ),
     ),
 )
@@ -209,6 +218,8 @@ h1_19dof_loco_real = InferenceConfig(
         velocity_input="interface",
         state_input="interface",
         auto_walk_on_vel_cmd=True,
+        gait_period=1.15,
+        clip_velocity_commands_to_training_range=True,
     ),
 )
 
@@ -222,6 +233,8 @@ h1_19dof_loco_wbt_real = InferenceConfig(
         velocity_input="interface",
         state_input="interface",
         auto_walk_on_vel_cmd=True,
+        gait_period=1.15,
+        clip_velocity_commands_to_training_range=True,
     ),
     secondary=InferenceConfig(
         robot=_h1_19dof_real_wbt_robot,
@@ -233,6 +246,8 @@ h1_19dof_loco_wbt_real = InferenceConfig(
             velocity_input="interface",
             state_input="interface",
             motion_start_timestep=150,
+            # Keep the dynamic opening moving during the target transition.
+            motion_start_wait_for_transition=False,
         ),
     ),
 )

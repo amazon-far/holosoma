@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pydantic.dataclasses import dataclass
+import tyro
 
 from .observation import ObservationConfig
 from .robot import RobotConfig
@@ -26,7 +27,7 @@ class InferenceConfig:
     task: TaskConfig
     """Task execution configuration."""
 
-    secondary: InferenceConfig | None = None
+    secondary: tyro.conf.Suppress[InferenceConfig | None] = None
     """Secondary policy config for dual-mode (X-button switch).
     When set, enables runtime switching between this (primary) policy and the secondary.
     Override any field: --secondary.task.model-path, --secondary.task.rl-rate, etc.

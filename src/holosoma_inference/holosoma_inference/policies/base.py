@@ -279,6 +279,7 @@ class BasePolicy:
         self.cmd_dq = np.zeros(self.num_dofs)
         self.cmd_tau = np.zeros(self.num_dofs)
         self._last_sent_q: np.ndarray | None = None
+        self._control_diagnostic_samples: list = []
         self._target_transition: dict[str, np.ndarray | int | str | None] | None = None
 
         # Smooth policy-switch interpolation (loco ↔ wbt)
@@ -753,6 +754,55 @@ class BasePolicy:
                 kp_override=kp_override,
                 kd_override=kd_override,
             )
+
+        if self.config.task.control_diagnostics:
+            self._record_control_diagnostics(robot_state_data)
+
+    def _record_control_diagnostics(self, robot_state_data):
+        received_at = getattr(self.interface, "_last_low_state_time", None)
+        age_ms = (time.perf_counter() - received_at) * 1000 if received_at else float("nan")
+        self._control_diagnostic_samples.append((
+            self.cmd_q.copy(), robot_state_data[0, 7 : 7 + self.num_dofs].copy(), age_ms,
+            robot_state_data[0, 13 + self.num_dofs : 13 + 2*self.num_dofs].copy(),
+        ))
+        if len(self._control_diagnostic_samples) < max(1, round(self.rl_rate)):
+            return
+        samples = self._control_diagnostic_samples
+        self._control_diagnostic_samples = []
+        targets = np.stack([s[0] for s in samples])
+        actual = np.stack([s[1] for s in samples])
+        ages = np.asarray([s[2] for s in samples])
+        velocities = np.stack([s[3] for s in samples])
+        target_step_peak = (
+            np.max(np.abs(np.diff(targets, axis=0)), axis=0)
+            if len(samples) > 1 else np.zeros(self.num_dofs)
+        )
+        lower_body = [
+            i for i, name in enumerate(self.dof_names)
+            if any(part in name.lower() for part in ("hip", "knee", "ankle"))
+        ]
+        details = "; ".join(
+            f"{self.dof_names[i]}: target_pp={np.ptp(targets[:, i]):.4f}, "
+            f"actual_pp={np.ptp(actual[:, i]):.4f}, "
+            f"error_rms={np.sqrt(np.mean((targets[:, i] - actual[:, i])**2)):.4f} rad, "
+            f"target_step_peak={target_step_peak[i]:.4f} rad, "
+            f"dq_rms={np.sqrt(np.mean(velocities[:, i]**2)):.4f} rad/s"
+            for i in lower_body
+        )
+        motion_step = getattr(self, "curr_motion_timestep", None)
+        base_omega = robot_state_data[0, 10 + self.num_dofs : 13 + self.num_dofs]
+        waist = ""
+        if "torso_joint" in self.dof_names:
+            idx = self.dof_names.index("torso_joint")
+            waist = f", waist_q={actual[-1, idx]:.4f}, waist_dq={velocities[-1, idx]:.4f}"
+        self.logger.info(
+            f"Control diagnostics: policy={self.use_policy_action}, "
+            f"motion_step={motion_step}, "
+            f"vel={self.lin_vel_command.tolist()}/{self.ang_vel_command.tolist()}, "
+            f"phase={self.phase.tolist()}, state_age_max_ms={np.max(ages):.1f}, "
+            f"base_quat_wxyz={robot_state_data[0, 3:7].tolist()}, "
+            f"base_omega={base_omega.tolist()}{waist}; {details}"
+        )
 
     # ------------------------------------------------------------------
     #  Smooth policy-switch interpolation (loco ↔ wbt)

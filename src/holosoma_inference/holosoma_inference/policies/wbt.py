@@ -30,6 +30,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
         # initialize motion state
         self.motion_clip_progressing = False
+        self._motion_start_pending = False
         self._dual_mode_active = False  # set True by DualModePolicy when wrapping
         self.curr_motion_timestep = config.task.motion_start_timestep
         self.motion_command_t = None
@@ -395,6 +396,16 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
     def _set_motion_timestep(self):
         if self.motion_clip_progressing:
+            if self._motion_start_pending:
+                # Start transitions are applied after inference in BasePolicy.
+                # Re-anchor the clock while blending so elapsed preparation time
+                # cannot skip reference frames when playback is released.
+                self.timestep_util.reset(start_timestep=self.config.task.motion_start_timestep)
+                self.curr_motion_timestep = self.timestep_util.timestep
+                if self._target_transition is None:
+                    self._motion_start_pending = False
+                    self.logger.info("WBT start transition complete; advancing reference motion")
+                return
             prev = self.curr_motion_timestep
 
             if self.use_sim_time:
@@ -425,6 +436,7 @@ class WholeBodyTrackingPolicy(BasePolicy):
         self.use_policy_action = False
         self.get_ready_state = False
         self.motion_clip_progressing = False
+        self._motion_start_pending = False
         self.timestep_util.reset(start_timestep=0)
         self.curr_motion_timestep = self.timestep_util.timestep
         self.ref_quat_xyzw_t = self.ref_quat_xyzw_0.copy()
@@ -456,6 +468,18 @@ class WholeBodyTrackingPolicy(BasePolicy):
 
         self.timestep_util.reset(start_timestep=self.config.task.motion_start_timestep)
         self.curr_motion_timestep = self.timestep_util.timestep
+        self.motion_command_t = self.motion_command_0.copy()
+        self.ref_quat_xyzw_t = self.ref_quat_xyzw_0.copy()
+        self.last_policy_action.fill(0.0)
+        self._motion_start_pending = False
+        if self.config.task.motion_start_wait_for_transition:
+            robot_state = self.interface.get_low_state()
+            self._begin_target_transition(
+                "motion_start",
+                self._seconds_to_steps(self.config.task.policy_start_transition_s),
+                start_q=robot_state[:, 7 : 7 + self.num_dofs],
+            )
+            self._motion_start_pending = self._target_transition is not None
         self.motion_clip_progressing = True
 
         if self.config.task.motion_start_timestep > 0 or self.config.task.motion_end_timestep is not None:

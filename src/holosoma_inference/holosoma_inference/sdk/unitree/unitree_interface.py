@@ -16,6 +16,7 @@ from loguru import logger
 
 from holosoma_inference.config.config_types import RobotConfig
 from holosoma_inference.sdk.base.base_interface import BaseInterface
+from holosoma_inference.sdk.unitree.imu import torso_imu_to_pelvis
 
 
 class _WirelessMsg(NamedTuple):
@@ -43,6 +44,10 @@ class UnitreeInterface(BaseInterface):
         self._kp_level = 1.0
         self._kd_level = 1.0
         self._backend = "sdk2py" if self._should_use_sdk2py() else "binding"
+        if robot_config.h1_imu_on_torso:
+            if self._backend != "sdk2py" or "torso_joint" not in robot_config.dof_names:
+                raise ValueError("h1_imu_on_torso requires the H1 GO2 SDK backend and torso_joint.")
+            logger.info("H1 IMU conversion enabled: torso -> pelvis (waist yaw and velocity removed)")
         self._low_state = None
         self._last_low_state_time = 0.0
         if self._backend == "sdk2py":
@@ -232,6 +237,12 @@ class UnitreeInterface(BaseInterface):
         for j_id, m_id in enumerate(self.robot_config.joint2motor):
             joint_pos[j_id] = float(motor_pos[m_id])
             joint_vel[j_id] = float(motor_vel[m_id])
+
+        if self.robot_config.h1_imu_on_torso:
+            waist_idx = self.robot_config.dof_names.index("torso_joint")
+            quat, base_ang_vel = torso_imu_to_pelvis(
+                quat, base_ang_vel, joint_pos[waist_idx], joint_vel[waist_idx],
+            )
 
         return np.concatenate([base_pos, quat, joint_pos, base_lin_vel, base_ang_vel, joint_vel]).reshape(1, -1)
 

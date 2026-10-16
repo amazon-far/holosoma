@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 from termcolor import colored
 
@@ -13,6 +15,18 @@ class LocomotionPolicy(BasePolicy):
 
     def _apply_velocity(self, vc: VelCmd) -> None:
         """Gate velocity by stand_command — zero when standing."""
+        if self.config.task.clip_velocity_commands_to_training_range:
+            metadata = self.onnx_policy_session.get_modelmeta().custom_metadata_map
+            ranges = json.loads(metadata.get("command_ranges", "null"))
+            if ranges is None:
+                raise ValueError("Velocity command clipping requires ONNX command_ranges metadata")
+            vc = VelCmd(
+                (
+                    float(np.clip(vc.lin_vel[0], *ranges["lin_vel_x"])),
+                    float(np.clip(vc.lin_vel[1], *ranges["lin_vel_y"])),
+                ),
+                float(np.clip(vc.ang_vel, *ranges["ang_vel_yaw"])),
+            )
         self._maybe_switch_to_walk_mode(vc)
         s = self.stand_command[0, 0]
         self.lin_vel_command[0] = (vc.lin_vel[0] * s, vc.lin_vel[1] * s)

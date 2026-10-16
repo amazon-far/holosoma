@@ -115,6 +115,12 @@ class TaskConfig:
     print_observations: bool = False
     """Print observation vectors for debugging."""
 
+    control_diagnostics: bool = False
+    """Log one-second hip target/state ranges and SDK state age without changing control."""
+
+    clip_velocity_commands_to_training_range: bool = False
+    """Clamp locomotion velocity commands to the active ONNX model's command_ranges."""
+
     motion_start_timestep: int = 0
     """Starting timestep for motion clip playback."""
 
@@ -123,6 +129,9 @@ class TaskConfig:
 
     policy_start_transition_s: float = 1.0
     """Seconds used to blend from the current command/pose into policy actions."""
+
+    motion_start_wait_for_transition: bool = False
+    """Keep the WBT reference at its start frame until the start transition completes."""
 
     policy_stop_transition_s: float = 1.0
     """Seconds used to blend out of policy actions into the post-stop target."""
