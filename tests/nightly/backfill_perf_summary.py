@@ -19,6 +19,8 @@ given, so it can backfill history once and then run after each nightly build.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import json
 import math
 from datetime import datetime, timezone
 from os import getenv
@@ -119,11 +121,25 @@ def needs_backfill(run: Any) -> bool:
     return (run.summary or {}).get(BACKFILL_VERSION_KEY) != BACKFILL_VERSION
 
 
-def backfill_run(run: Any, dry_run: bool) -> bool:
+def write_summary(run: Any, updates: dict[str, float | int]) -> None:
+    """Persists summary keys without touching the rest of the run.
+
+    Uses `run.summary.update()` rather than `run.update()`: the latter also re-upserts
+    tags, config, display name, notes, group and job type from the in-memory run, which
+    risks overwriting metadata this script has no business changing.
+    `summary.update()` issues a summary-only mutation.
+    """
+    for key, value in updates.items():
+        run.summary[key] = value
+    run.summary.update()
+
+
+def backfill_run(run: Any, dry_run: bool, backup: Any = None) -> bool:
     """Computes and stores one run's aggregates. Returns whether anything was written.
 
     Runs with no usable history are still marked processed, so they aren't rescanned
-    on every subsequent pass.
+    on every subsequent pass. When `backup` is an open file, each run's prior summary
+    is appended to it as JSON before anything is written.
     """
     aggregates = aggregate_history(run.scan_history(keys=list(PERF_METRICS)))
     if not aggregates:
@@ -150,9 +166,11 @@ def backfill_run(run: Any, dry_run: bool) -> bool:
         print(f"  [dry-run] would write {len(updates)} keys")
         return False
 
-    for key, value in updates.items():
-        run.summary[key] = value
-    run.update()
+    if backup is not None:
+        backup.write(json.dumps({"id": run.id, "path": str(run.path), "summary": dict(run.summary or {})}) + "\n")
+        backup.flush()
+
+    write_summary(run, updates)
     print(f"  wrote {len(updates)} keys")
     return True
 
@@ -183,32 +201,38 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None, help="Process at most this many runs per project")
     parser.add_argument("--dry-run", action="store_true", help="Report what would change without writing")
     parser.add_argument("--force", action="store_true", help="Recompute runs that are already marked processed")
+    parser.add_argument(
+        "--backup", default=None, help="Append each run's prior summary to this file as JSON before writing"
+    )
     args = parser.parse_args()
 
     api = wandb.Api(timeout=60)
     written = 0
     skipped = 0
 
-    for project_name in nightly_projects(api, args.project, args.all_projects):
-        print(f"\n=== {WANDB_ENTITY}/{project_name}")
-        runs = api.runs(path=f"{WANDB_ENTITY}/{project_name}", order="-created_at")
+    with contextlib.ExitStack() as stack:
+        backup = stack.enter_context(open(args.backup, "a")) if args.backup else None
 
-        processed = 0
-        for run in runs:
-            if args.limit is not None and processed >= args.limit:
-                break
-            processed += 1
+        for project_name in nightly_projects(api, args.project, args.all_projects):
+            print(f"\n=== {WANDB_ENTITY}/{project_name}")
+            runs = api.runs(path=f"{WANDB_ENTITY}/{project_name}", order="-created_at")
 
-            if not args.force and not needs_backfill(run):
-                skipped += 1
-                continue
+            processed = 0
+            for run in runs:
+                if args.limit is not None and processed >= args.limit:
+                    break
+                processed += 1
 
-            print(f"{run.name} ({run.id})")
-            try:
-                if backfill_run(run, args.dry_run):
-                    written += 1
-            except Exception as e:  # keep going; one bad run shouldn't stop the pass
-                print(f"  failed: {e}")
+                if not args.force and not needs_backfill(run):
+                    skipped += 1
+                    continue
+
+                print(f"{run.name} ({run.id})")
+                try:
+                    if backfill_run(run, args.dry_run, backup):
+                        written += 1
+                except Exception as e:  # keep going; one bad run shouldn't stop the pass
+                    print(f"  failed: {e}")
 
     print(f"\nUpdated {written} run(s), skipped {skipped} already-current run(s)")
 
