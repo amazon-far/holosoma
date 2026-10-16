@@ -169,3 +169,20 @@ g1_head_d435i_depth = WarpDepthCameraConfig(
         euler_deg_max=[2.5, 3.0, 2.5],
     ),
 )
+
+# Rendered counterpart of ``g1_head_d435i_depth`` for sim-to-sim: the same 106x60 pinhole camera
+# and mount as a native depth camera, published by the ``depth-shm-d435i`` plugin. ``near=0.1``
+# rather than the D435i's 0.3 working range: MuJoCo's near plane removes geometry instead of
+# saturating it, so a closer surface would vanish and reveal what is behind it. The plugin's
+# preprocessing clamps to the working range instead, as training does.
+d435i_front_depth_camera = CameraSensorConfig(
+    mount=g1_head_d435i_depth.mount,
+    width=g1_head_d435i_depth.width,
+    height=g1_head_d435i_depth.height,
+    vertical_fov=g1_head_d435i_depth.vertical_fov,
+    near=0.1,
+    data_types=["depth"],
+    # The rate resolves against the control rate; sim-to-sim runs MuJoCo at 500 Hz / 4 = 125 Hz,
+    # where a bare "50Hz" is not exactly achievable.
+    update_decimation=">50Hz",
+)
