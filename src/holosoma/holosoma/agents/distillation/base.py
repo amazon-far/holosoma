@@ -610,11 +610,9 @@ class DistillationBase(BaseAlgo):
             for cb in self.config.eval_callbacks:
                 self.eval_callbacks.append(instantiate(self.config.eval_callbacks[cb], training_loop=self))
 
-    def _pre_evaluate_policy(self, reset_env: bool = True) -> None:
+    def _pre_evaluate_policy(self) -> None:
         self._eval_mode()
         self.env.set_is_evaluating()
-        if reset_env:
-            _ = self.env.reset_all()
         for c in self.eval_callbacks:
             c.on_pre_evaluate_policy()
 
