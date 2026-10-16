@@ -5,9 +5,11 @@ from typing import TYPE_CHECKING, Any
 
 from holosoma.config_types.algo import AlgoInitConfig
 from holosoma.envs.base_task.base_task import BaseTask
+from holosoma.utils.helpers import instantiate
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
+    from holosoma.agents.callbacks.base_callback import RLEvalCallback
     from holosoma.config_types.experiment import ExperimentConfig
 
 
@@ -35,6 +37,7 @@ class BaseAlgo:
         self.is_main_process = self.gpu_global_rank == 0
         self._experiment_config: ExperimentConfig | None = None
         self._wandb_run_path: str | None = None
+        self.eval_callbacks: list[RLEvalCallback] = []
 
     def setup(self) -> type[NotImplementedError]:
         return NotImplementedError
@@ -136,6 +139,46 @@ class BaseAlgo:
 
     @torch.no_grad()
     def evaluate_policy(self, max_eval_steps: int | None = None) -> Any:
+        raise NotImplementedError
+
+    def _create_eval_callbacks(self) -> None:
+        """Instantiate the configured evaluation callbacks.
+
+        Appends in configuration order, one at a time: a callback may scan
+        ``self.eval_callbacks`` during its own construction to share state with an
+        earlier one.
+        """
+        if self.config.eval_callbacks is None:
+            return
+        for name in self.config.eval_callbacks:
+            self.eval_callbacks.append(instantiate(self.config.eval_callbacks[name], training_loop=self))
+
+    def _pre_evaluate_policy(self) -> None:
+        self._eval_mode()
+        self.env.set_is_evaluating()
+        for c in self.eval_callbacks:
+            c.on_pre_evaluate_policy()
+
+    def _post_evaluate_policy(self) -> None:
+        for c in self.eval_callbacks:
+            c.on_post_evaluate_policy()
+
+    def _pre_eval_env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
+        actor_state = self._compute_eval_actions(actor_state)
+        for c in self.eval_callbacks:
+            actor_state = c.on_pre_eval_env_step(actor_state)
+        return actor_state
+
+    def _post_eval_env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
+        for c in self.eval_callbacks:
+            actor_state = c.on_post_eval_env_step(actor_state)
+        return actor_state
+
+    def _compute_eval_actions(self, actor_state: dict[str, Any]) -> dict[str, Any]:
+        """Set ``actor_state["actions"]`` from the observations it already carries."""
+        raise NotImplementedError
+
+    def _eval_mode(self) -> None:
         raise NotImplementedError
 
     def save(self, path: str | None = None, name: str = "last.ckpt") -> Any:
