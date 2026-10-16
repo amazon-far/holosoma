@@ -1016,6 +1016,11 @@ class FastSACAgent(BaseAlgo):
             if self.obs_normalization:
                 self.obs_normalizer.train()
 
+    def _eval_mode(self) -> None:
+        self.actor.eval()
+        if self.obs_normalization:
+            self.obs_normalizer.eval()
+
     @torch.no_grad()
     def evaluate_policy(self, max_eval_steps: int | None = None) -> None:
         self._create_eval_callbacks()
@@ -1046,6 +1051,7 @@ class FastSACAgent(BaseAlgo):
                 self.eval_callbacks.append(instantiate(self.config.eval_callbacks[cb_name], training_loop=self))
 
     def _pre_evaluate_policy(self) -> None:
+        self._eval_mode()
         self.env.set_is_evaluating()
         for c in self.eval_callbacks:
             c.on_pre_evaluate_policy()
