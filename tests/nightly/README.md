@@ -80,7 +80,10 @@ Writes per-run performance aggregates into each run's wandb summary.
 The `Perf/*` metrics are logged once per training iteration, so they only exist as per-run
 time series. wandb's cross-run panels read run summary and config rather than history, so
 plotting throughput across nights needs one value per run at the run level. This script
-derives those values with `scan_history` (not `history`, which samples) and writes:
+derives those values with `scan_history` (not `history`, which samples) and writes the
+following. Iteration zero is excluded from every statistic: it pays for JIT compilation
+and CUDA graph capture, and is slow enough to otherwise become the reported fps minimum
+and timing maximum for the entire run.
 
 - `perf/total_fps_{min,mean,max}`
 - `perf/collection_time_{min,mean,max}`

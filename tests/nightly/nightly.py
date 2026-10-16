@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import itertools
 import math
 import os
 import statistics
@@ -37,8 +38,11 @@ WANDB_STATUS_UPDATE_DELAY_S = 3.0
 # Throughput regression warning. Deliberately kept out of NIGHTLY_STATUS_TAGS: a slow
 # night is reported but never fails the build, so it must not displace the pass/fail tag.
 PERF_WARNING_TAG = "nightly_perf_warning"
-# Per-run mean fps, written by backfill_perf_summary.py. Keep in sync with that script.
+# Per-run mean fps, written by backfill_perf_summary.py. Keep in sync with that script,
+# including the number of leading iterations skipped, or this run's mean won't be
+# comparable to the stored baselines.
 PERF_FPS_MEAN_KEY = "perf/total_fps_mean"
+PERF_WARMUP_ROWS = 1
 PERF_BASELINE_RUNS = 14
 PERF_BASELINE_MIN_RUNS = 5
 # Fraction of the baseline below which a run is called out. Thresholding at the
@@ -95,11 +99,13 @@ def append_wandb_tag(api: Any, run_path: str, tag: str) -> None:
 def mean_run_fps(run: Any) -> float | None:
     """Mean of a run's per-iteration fps, or None when it logged none.
 
-    Reads the full history rather than `run.history()`, which samples.
+    Reads the full history rather than `run.history()`, which samples, and skips the
+    same leading rows as backfill_perf_summary.py so the result is comparable to the
+    baseline values that script stores.
     """
     total = 0.0
     count = 0
-    for row in run.scan_history(keys=["Perf/total_fps"]):
+    for row in itertools.islice(run.scan_history(keys=["Perf/total_fps"]), PERF_WARMUP_ROWS, None):
         value = row.get("Perf/total_fps")
         if isinstance(value, (int, float)) and math.isfinite(value):
             total += float(value)

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import itertools
 import json
 import math
 from datetime import datetime, timezone
@@ -34,6 +35,14 @@ WANDB_PROJECT = "nightly-holosoma-runs"
 # Per-iteration metrics written by LoggingHelper._logging_to_writer. All three are
 # logged in the same wandb.log call, so scan_history can request them together.
 PERF_METRICS = ("Perf/total_fps", "Perf/collection_time", "Perf/learning_time")
+
+# Iteration zero pays for JIT compilation and CUDA graph capture, and is dramatically
+# slower than the rest: one measured run reported 53s of learning time and a fifth of its
+# steady-state fps on that row, then settled from the next one onward. Left in, it becomes
+# the reported fps minimum and timing maximum for the whole run. Only the first row is
+# dropped: trimming further discards the genuine early-training ramp, which is real
+# behaviour worth seeing.
+WARMUP_ROWS = 1
 
 # Summary keys are written under their own prefix rather than reusing the `Perf/`
 # history namespace, so a run's history and its aggregates can't shadow each other.
@@ -75,12 +84,13 @@ def aggregate_keys() -> list[str]:
 def aggregate_history(rows: Iterable[dict[str, Any]]) -> dict[str, Aggregate]:
     """Reduces history rows to per-metric min/mean/max in a single pass.
 
-    Accumulates rather than materializing the history, because the fast-SAC configs
-    log tens of thousands of iterations per run. Non-finite values are ignored.
+    Skips the first `WARMUP_ROWS` rows, whose compilation cost is not representative of
+    the run. Accumulates rather than materializing the history, because the fast-SAC
+    configs log tens of thousands of iterations per run. Non-finite values are ignored.
     """
     totals: dict[str, list[float]] = {metric: [math.inf, -math.inf, 0.0, 0.0] for metric in PERF_METRICS}
 
-    for row in rows:
+    for row in itertools.islice(rows, WARMUP_ROWS, None):
         for metric in PERF_METRICS:
             value = row.get(metric)
             if value is None or not isinstance(value, (int, float)) or not math.isfinite(value):
