@@ -591,7 +591,7 @@ class DistillationBase(BaseAlgo):
     def evaluate_policy(self, max_eval_steps: int | None = None) -> None:
         self._create_eval_callbacks()
         self._pre_evaluate_policy()
-        actor_state: dict[str, Any] = {"done_indices": [], "stop": False}
+        actor_state: dict[str, Any] = {}
         eval_policy = self.get_inference_policy()
 
         obs_dict = self.env.reset_all()
