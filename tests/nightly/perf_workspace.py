@@ -17,6 +17,7 @@ run that first, or the panels will be empty.
 from __future__ import annotations
 
 import argparse
+import unicodedata
 from os import getenv
 
 import wandb_workspaces.reports.v2 as wr
@@ -44,6 +45,19 @@ METRIC_SECTIONS = (
 def _stat_key(stem: str, stat: str) -> str:
     """Summary key for one metric stem/stat pair, e.g. `perf/total_fps_mean`."""
     return f"{SUMMARY_PREFIX}{stem}_{stat}"
+
+
+def _safe_view_name(name: str) -> str:
+    """Replaces characters wandb refuses in a view name.
+
+    wandb rejects symbol characters in view names, reporting "Emojis are not allowed"
+    whatever the character actually was. The categories it refuses include Sm, which
+    covers the "|" separating the parts of a cell label. Only the name is affected; the
+    label itself is still matched verbatim by the runset filter.
+    """
+    disallowed = ("So", "Sk", "Sm", "Sc", "Cs")
+    cleaned = "".join("-" if unicodedata.category(c).startswith(disallowed) else c for c in name)
+    return " ".join(cleaned.split())
 
 
 def _scatter(key: str, title: str, trend: bool) -> wr.ScatterPlot:
@@ -133,7 +147,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    name = args.name if args.cell is None else f"{args.name} - {args.cell}"
+    name = _safe_view_name(args.name if args.cell is None else f"{args.name} - {args.cell}")
     workspace = build_workspace(name, args.project, trend=not args.no_trend, cell=args.cell)
     saved = workspace.save_as_new_view()
     print(f"Saved workspace view: {saved.url}")
