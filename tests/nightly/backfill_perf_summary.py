@@ -248,23 +248,23 @@ def backfill_run(run: Any, dry_run: bool, backup: Any = None) -> bool:
     return True
 
 
-def backfill_cell_only(run: Any, dry_run: bool) -> bool:
-    """Writes just the matrix-cell label. Returns whether anything was written.
+def backfill_cell_only(run: Any, dry_run: bool) -> str | None:
+    """Writes just the matrix-cell label, returning it, or None if nothing was written.
 
     The label comes from a run's tags, so this needs no history read -- which lets runs
     aggregated before the label existed be topped up cheaply, rather than reprocessed.
+    Reporting is left to the caller so each run's name and label stay on one line.
     """
     if CELL_KEY in (run.summary or {}):
-        return False
+        return None
 
     cell = run_cell(run)
-    print(f"  cell -> {cell}")
     if dry_run:
-        print("  [dry-run] would write 1 key")
-        return False
+        print(f"[dry-run] {run.name} -> {cell}")
+        return None
 
     write_summary(run, {CELL_KEY: cell})
-    return True
+    return cell
 
 
 def nightly_projects(api: wandb.Api, project: str | None, all_projects: bool) -> list[str]:
@@ -326,11 +326,12 @@ def main() -> None:
 
                 if args.cells_only:
                     try:
-                        if backfill_cell_only(run, args.dry_run):
-                            print(f"{run.name} ({run.id})")
-                            written += 1
-                        else:
+                        cell = backfill_cell_only(run, args.dry_run)
+                        if cell is None:
                             skipped += 1
+                        else:
+                            print(f"{run.name} -> {cell}")
+                            written += 1
                     except Exception as e:  # keep going; one bad run shouldn't stop the pass
                         print(f"{run.name}: failed: {e}")
                     continue
