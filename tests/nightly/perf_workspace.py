@@ -67,33 +67,23 @@ def _scatter(key: str, title: str, trend: bool) -> wr.ScatterPlot:
     )
 
 
-def _runset_settings() -> ws.RunsetSettings:
-    """Runset grouped by matrix cell and ordered by run date.
+def _runset_settings(cell: str | None) -> ws.RunsetSettings:
+    """Runset ordered by run date, optionally narrowed to a single matrix cell.
 
-    Grouping is by the `perf/cell` summary key that backfill_perf_summary.py writes,
-    rather than by tags: `Tags()` serializes into the saved view as a metric named
-    "Tags", which matches nothing, leaving the runset empty and every panel broken. The
-    same underlying bug is noted against `FilterExpr` in generate_report.py. A scalar
-    summary key avoids it, and keeps each experiment / simulator / GPU-count combination
-    on its own series -- necessary because throughput isn't comparable across them.
+    Deliberately ungrouped. Grouping collapses each group to one aggregated point rather
+    than one point per run, and the aggregation cannot combine run timestamps: the
+    x-axis degenerates to meaningless dates (the Unix epoch among them) and the
+    regression reports NaN. Cells are separated by filtering a view to one of them
+    instead, which keeps a point per run.
     """
     return ws.RunsetSettings(
-        groupby=[ws.Summary(CELL_KEY)],
+        filters=[ws.Summary(CELL_KEY) == cell] if cell else [],
         order=[ws.Ordering(ws.Summary(RUN_DATE_KEY))],
     )
 
 
-def _bar(keys: list[str], title: str) -> wr.BarPlot:
-    """All requested summary keys side by side, one bar group per run."""
-    return wr.BarPlot(
-        title=title,
-        metrics=[wr.SummaryMetric(key) for key in keys],
-        orientation="v",
-    )
-
-
 def _metric_section(title: str, stem: str, trend: bool) -> ws.Section:
-    """Min/mean/max scatters plus a combined bar panel for one metric."""
+    """Min, mean and max per run for one metric."""
     return ws.Section(
         name=title,
         is_open=True,
@@ -101,7 +91,6 @@ def _metric_section(title: str, stem: str, trend: bool) -> ws.Section:
             _scatter(_stat_key(stem, "mean"), f"{stem} mean per run", trend=trend),
             _scatter(_stat_key(stem, "min"), f"{stem} min per run", trend=False),
             _scatter(_stat_key(stem, "max"), f"{stem} max per run", trend=False),
-            _bar([_stat_key(stem, stat) for stat in ("min", "mean", "max")], f"{stem} min/mean/max by run"),
         ],
     )
 
@@ -111,14 +100,11 @@ def _duration_section(trend: bool) -> ws.Section:
     return ws.Section(
         name="Total run duration (s)",
         is_open=True,
-        panels=[
-            _scatter(RUN_DURATION_KEY, "Run duration per run", trend=trend),
-            _bar([RUN_DURATION_KEY], "Run duration by run"),
-        ],
+        panels=[_scatter(RUN_DURATION_KEY, "Run duration per run", trend=trend)],
     )
 
 
-def build_workspace(view_name: str, project: str, trend: bool = True) -> ws.Workspace:
+def build_workspace(view_name: str, project: str, trend: bool = True, cell: str | None = None) -> ws.Workspace:
     """Assembles the view: one section per metric, plus run duration."""
     sections = [_metric_section(title, stem, trend) for title, stem in METRIC_SECTIONS]
     sections.append(_duration_section(trend))
@@ -128,7 +114,7 @@ def build_workspace(view_name: str, project: str, trend: bool = True) -> ws.Work
         project=project,
         name=view_name,
         sections=sections,
-        runset_settings=_runset_settings(),
+        runset_settings=_runset_settings(cell),
     )
 
 
@@ -140,9 +126,15 @@ def main() -> None:
     parser.add_argument("--name", default=DEFAULT_VIEW_NAME, help="Name for the saved view")
     parser.add_argument("--project", default=WANDB_PROJECT, help="wandb project to build the view against")
     parser.add_argument("--no-trend", action="store_true", help="Omit the regression line and running min/max overlays")
+    parser.add_argument(
+        "--cell",
+        default=None,
+        help='Restrict the view to one matrix cell, e.g. "t1_29dof_manager | isaacsim | gpus-4"',
+    )
     args = parser.parse_args()
 
-    workspace = build_workspace(args.name, args.project, trend=not args.no_trend)
+    name = args.name if args.cell is None else f"{args.name} - {args.cell}"
+    workspace = build_workspace(name, args.project, trend=not args.no_trend, cell=args.cell)
     saved = workspace.save_as_new_view()
     print(f"Saved workspace view: {saved.url}")
 
