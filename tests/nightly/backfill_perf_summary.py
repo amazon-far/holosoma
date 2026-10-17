@@ -316,7 +316,12 @@ def main() -> None:
 
         for project_name in nightly_projects(api, args.project, args.all_projects):
             print(f"\n=== {WANDB_ENTITY}/{project_name}")
-            runs = api.runs(path=f"{WANDB_ENTITY}/{project_name}", order="-created_at")
+            # Have the backend skip runs that already carry a cell label. The in-code
+            # check catches them anyway, but only after fetching each run in full, which
+            # is the entire cost of this pass -- so without this, resuming an interrupted
+            # pass costs as much as starting one.
+            filters = {f"summary_metrics.{CELL_KEY}": {"$exists": False}} if args.cells_only else None
+            runs = api.runs(path=f"{WANDB_ENTITY}/{project_name}", filters=filters, order="-created_at")
 
             processed = 0
             for run in runs:
