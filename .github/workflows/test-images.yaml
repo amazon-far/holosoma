@@ -129,24 +129,3 @@ jobs:
         run: |
           cd /workspace/holosoma
           bash tests/ci/no_sim_ci_tests.sh
-
-  service-integration-tests:
-    name: Test ROS2 Service
-    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
-    env:
-      COMBINED_IMAGE: ${{ inputs.combined_image }}
-    steps:
-      - name: Extract image source
-        shell: bash
-        run: |
-          set -euo pipefail
-          container=$(docker create "$COMBINED_IMAGE")
-          trap 'docker rm -f "$container" >/dev/null' EXIT
-          docker cp "${container}:/workspace/holosoma/." "$GITHUB_WORKSPACE"
-      - name: Build service test image
-        run: |
-          docker build \
-            -f src/holosoma_inference/holosoma_inference_service/docker/Dockerfile.test \
-            -t holosoma-service-test .
-      - name: Run service integration tests
-        run: docker run --rm holosoma-service-test

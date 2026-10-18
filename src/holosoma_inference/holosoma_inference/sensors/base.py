@@ -1,6 +1,6 @@
 """Sensor ABC for the holosoma policy pipeline.
 
-Implementations live in the transport layer (e.g. ``holosoma_service``).
+Implementations live in the transport layer, alongside whatever owns the robot I/O.
 Policies depend only on this interface; they never import a concrete sensor.
 
 Usage in a policy subclass::

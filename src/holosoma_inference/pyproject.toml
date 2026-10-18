@@ -60,7 +60,7 @@ g1-29dof-wbt = "holosoma_inference.config.config_values.inference:g1_29dof_wbt"
 # uv_build packaging. This is a FLAT layout (the holosoma_inference/ module
 # lives at the project root, not under src/), so module-root = "". Only the
 # holosoma_inference module ships — the sibling directories
-# (holosoma_inference_service, jetson_clocks_service, docker, docs) are not part
+# (jetson_clocks_service, docker, docs) are not part
 # of this distribution, same as the old bare find_packages() behavior.
 [tool.uv.build-backend]
 module-name = "holosoma_inference"
