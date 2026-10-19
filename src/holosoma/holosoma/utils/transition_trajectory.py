@@ -1,20 +1,7 @@
-"""Building blocks for synthesising a transition segment between two motion frames.
+"""Lead-in / lead-out trajectories whose stored velocities are the derivative of their positions.
 
-These are used to splice a lead-in / lead-out around a reference motion clip (see
-``managers/command/terms/wbt.py``). The contract that matters is *derivative consistency*:
-whatever a caller stores as a velocity must be the derivative of what it stores as a position,
-because a tracking policy is commanded on both and penalised for disagreeing with either.
-
-Two ways to honour that contract live here, and the choice is not stylistic:
-
-* ``hermite_segment`` returns a position and its **exact analytic** derivative from one
-  polynomial. Use it wherever the quantity is genuinely a free variable of the trajectory
-  (joint angles, the root position).
-* ``linear_velocity_from_positions`` / ``angular_velocity_from_quats`` **difference** a pose
-  sequence. Use them for quantities that are *derived* from the free variables through
-  kinematics (body poses), where no closed-form derivative is available without a Jacobian.
-  Difference the same reference point the consumer expects -- a link-origin position sequence
-  yields a link-origin velocity, which is not the centre-of-mass velocity a motion file stores.
+``hermite_segment`` gives an analytic derivative for free variables (joint angles, root position);
+the ``*_velocity_from_*`` helpers difference poses derived through kinematics (body poses).
 """
 
 from __future__ import annotations
@@ -46,21 +33,13 @@ def hermite_segment(
     Args:
         p0, v0: position and velocity at t=0. Any shape, all four arguments must match.
         p1, v1: position and velocity at t=duration_s.
-        duration_s: segment duration. Must be the *effective* duration
-            ``num_intervals * dt``, not a nominal config value, or the returned velocities are
-            scaled wrong relative to the frame spacing the consumer replays them at.
+        duration_s: segment duration; must equal ``num_intervals * dt`` or velocities are mis-scaled.
         num_intervals: number of steps; the result has ``num_intervals + 1`` frames spanning
             both endpoints inclusive.
 
     Returns:
         ``(position, velocity)``, each shaped ``(num_intervals + 1, *p0.shape)``. ``velocity``
-        is the exact time derivative of ``position``, and both endpoints are hit exactly in
-        position *and* velocity, which is what makes the seam into the clip continuous.
-
-    A cubic is the exact fit to the four constraints we have. A quintic would need two more, and
-    the only ones available are the endpoint accelerations: zero is correct at a resting endpoint
-    but wrong at a clip frame, which is generally accelerating. Imposing it anyway also raises peak
-    mid-segment speed by 25% for the same endpoints.
+        is the exact time derivative of ``position``.
     """
     if duration_s <= 0.0:
         raise ValueError(f"Transition duration must be positive, got {duration_s}")
@@ -93,17 +72,13 @@ def slerp_series(q0: torch.Tensor, q1: torch.Tensor, num_intervals: int) -> torc
     """Spherically interpolate from ``q0`` to ``q1`` over a uniform grid.
 
     Args:
-        q0, q1: quaternions of matching shape ``(..., 4)``. A bare ``(4,)`` is accepted, so
-            callers do not have to hand-roll ``unsqueeze``/``squeeze`` around a single rotation.
+        q0, q1: quaternions of matching shape ``(..., 4)``, including a bare ``(4,)``.
         num_intervals: as in :func:`hermite_segment`.
 
     Returns:
-        ``(num_intervals + 1, *q0.shape)``, unit norm, endpoints included. Quaternion order
-        follows the inputs; :func:`holosoma.utils.rotations.slerp` is order-agnostic.
+        ``(num_intervals + 1, *q0.shape)``, unit norm, endpoints included.
 
-    Sign continuity across the series comes from ``slerp`` flipping ``q1`` into ``q0``'s
-    hemisphere. Do not "clean up" the result with ``quat_normalize`` -- that forces w>=0
-    per frame, which would tear the series in half wherever it crosses w=0.
+    Don't ``quat_normalize`` the result: forcing w>=0 per frame breaks sign continuity at w=0.
     """
     if q0.shape != q1.shape:
         raise ValueError(f"Quaternion endpoint shapes must match, got {q0.shape}/{q1.shape}")
@@ -142,20 +117,8 @@ def hermite_rotation_series(
     Returns:
         ``(num_intervals + 1, 4)``, unit norm, endpoints included.
 
-    :func:`slerp_series` turns at a constant rate, so it lands on ``q1``'s orientation with an
-    angular velocity of its own choosing. Splicing that against a clip whose root is already
-    turning leaves a step in the commanded angular velocity at the seam, of the clip's full
-    turn rate. This runs the cubic in rotation-vector space instead, so the rate matches too.
-
-    Matching a nonzero ``omega1`` while starting from rest necessarily means turning past the
-    endpoint orientation and back -- there is no way to be at a fixed orientation, at rest, and
-    then arrive at that same orientation already turning. That excursion is the honest cost of a
-    continuous hand-off, and is the same trade the position channels already make.
-
-    Angular velocity is not the plain derivative of a rotation vector away from the origin, so the
-    endpoint derivative is mapped through the inverse left Jacobian of SO(3). Without that the
-    endpoint rate is only matched to first order, and a rotation whose axis differs from ``omega1``
-    keeps tens of percent of the error.
+    Runs the cubic in rotation-vector space, mapping ``omega1`` through the inverse left Jacobian
+    of SO(3) so the endpoint rate is matched exactly, not only to first order.
     """
     for name, value, expected in (("q0", q0, 4), ("q1", q1, 4), ("omega0", omega0, 3), ("omega1", omega1, 3)):
         if value.shape != (expected,):
@@ -253,10 +216,7 @@ def angular_velocity_from_quats(quat: torch.Tensor, dt: float) -> torch.Tensor:
 
 
 def _rotation_vector(quat: torch.Tensor) -> torch.Tensor:
-    """Axis scaled by angle, in radians, for xyzw quaternions.
-
-    Despite the name, ``quat_to_angle_axis`` already scales its second return value by the angle,
-    so multiplying by the returned angle would apply that scale twice.
-    """
+    """Axis scaled by angle, in radians, for xyzw quaternions."""
+    # quat_to_angle_axis's second return is already scaled by the angle.
     _, rotation_vector = quat_to_angle_axis(quat)
     return rotation_vector

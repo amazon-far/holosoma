@@ -1,16 +1,7 @@
 """Tests for splicing default-pose transitions around WBT motion clips (no sim).
 
-The user-visible defect these pin: a transition used to be registered as its own motion, and
-``MotionCommand.step()`` resets and resamples the moment ``time_steps`` reaches a motion's end
-index. So the robot played a lead-in and was teleported to a random clip at exactly the instant it
-should have handed off to the reference motion. Pins:
-
-- the boundary arithmetic folds each segment into the clip it joins, leaving the clip count alone;
-- a robot advancing one frame per step walks from a lead-in into its clip without a reset;
-- the frames land in the right order in the raw arrays, for every clip, both directions;
-- clip-count and frame-count mismatches are rejected rather than silently mis-spliced;
-- the setup-time consistency log measures the row the hand-off actually falls on, since that index
-  arithmetic runs once at startup and would otherwise never be exercised.
+``MotionCommand.step()`` resamples when ``time_steps`` reaches a motion's end index, so each
+transition must fold into the clip it joins rather than become a motion of its own.
 """
 
 from __future__ import annotations
@@ -86,7 +77,7 @@ def _tags(loader: _FakeLoader) -> list[float]:
     return loader._joint_pos[:, 0].tolist()
 
 
-def test_boundaries_grow_the_clip_that_owns_the_segment():
+def test_boundaries_grow_the_clip_that_owns_the_segment() -> None:
     starts = torch.tensor([0, 10, 30])
     ends = torch.tensor([10, 30, 60])
     added = torch.tensor([2, 3, 4])
@@ -98,7 +89,7 @@ def test_boundaries_grow_the_clip_that_owns_the_segment():
     torch.testing.assert_close(new_ends, torch.tensor([12, 35, 69]))
 
 
-def test_boundaries_leave_no_gaps_and_keep_the_clip_count():
+def test_boundaries_leave_no_gaps_and_keep_the_clip_count() -> None:
     starts = torch.tensor([0, 7, 11, 20])
     ends = torch.tensor([7, 11, 20, 24])
     added = torch.tensor([5, 5, 5, 5])
@@ -111,18 +102,14 @@ def test_boundaries_leave_no_gaps_and_keep_the_clip_count():
     assert int(new_ends[-1]) == int(ends[-1]) + int(added.sum())
 
 
-def test_boundaries_of_a_single_clip_absorb_the_whole_segment():
+def test_boundaries_of_a_single_clip_absorb_the_whole_segment() -> None:
     new_starts, new_ends = splice_transition_boundaries(torch.tensor([0]), torch.tensor([50]), torch.tensor([12]))
     torch.testing.assert_close(new_starts, torch.tensor([0]))
     torch.testing.assert_close(new_ends, torch.tensor([62]))
 
 
-def test_prepended_transition_flows_into_its_clip_without_a_reset():
-    """Replays MotionCommand.step()'s advance rule: +1 per step, reset when the end index is hit.
-
-    Before the fix the lead-in was its own motion, so the counter hit an end index -- and thus a
-    resample -- exactly at the hand-off. Now it must reach the clip's first real frame untouched.
-    """
+def test_prepended_transition_flows_into_its_clip_without_a_reset() -> None:
+    """Replays MotionCommand.step()'s advance rule: +1 per step, reset when the end index is hit."""
     clip_lengths = [20, 30]
     added = 6
     starts, ends = _FakeLoader(clip_lengths).boundaries()
@@ -143,7 +130,7 @@ def test_prepended_transition_flows_into_its_clip_without_a_reset():
     assert time_step == first_clip_frame
 
 
-def test_appended_transition_is_reached_before_the_clip_ends():
+def test_appended_transition_is_reached_before_the_clip_ends() -> None:
     clip_lengths = [20]
     added = 6
     starts, ends = _FakeLoader(clip_lengths).boundaries()
@@ -154,30 +141,30 @@ def test_appended_transition_is_reached_before_the_clip_ends():
     assert int(new_ends[0]) - added == clip_lengths[0]
 
 
-def test_prepend_puts_each_segment_immediately_before_its_clip():
+def test_prepend_puts_each_segment_immediately_before_its_clip() -> None:
     loader = _FakeLoader([3, 2])
     starts, ends = loader.boundaries()
 
-    added = _splice_motion_frames(loader, [_segment(2, -1.0), _segment(2, -2.0)], starts, ends, prepend=True)
+    added = _splice_motion_frames(loader, [_segment(2, -1.0), _segment(2, -2.0)], starts, ends, prepend=True)  # type: ignore[arg-type]
 
     torch.testing.assert_close(added, torch.tensor([2, 2]))
     assert _tags(loader) == [-1.0, -1.0, 0.0, 1.0, 2.0, -2.0, -2.0, 100.0, 101.0]
 
 
-def test_append_puts_each_segment_immediately_after_its_clip():
+def test_append_puts_each_segment_immediately_after_its_clip() -> None:
     loader = _FakeLoader([3, 2])
     starts, ends = loader.boundaries()
 
-    _splice_motion_frames(loader, [_segment(2, -1.0), _segment(2, -2.0)], starts, ends, prepend=False)
+    _splice_motion_frames(loader, [_segment(2, -1.0), _segment(2, -2.0)], starts, ends, prepend=False)  # type: ignore[arg-type]
 
     assert _tags(loader) == [0.0, 1.0, 2.0, -1.0, -1.0, 100.0, 101.0, -2.0, -2.0]
 
 
-def test_splice_rewrites_every_field_consistently():
+def test_splice_rewrites_every_field_consistently() -> None:
     loader = _FakeLoader([3], has_object=True)
     starts, ends = loader.boundaries()
 
-    _splice_motion_frames(loader, [_segment(2, -1.0, has_object=True)], starts, ends, prepend=True)
+    _splice_motion_frames(loader, [_segment(2, -1.0, has_object=True)], starts, ends, prepend=True)  # type: ignore[arg-type]
 
     for _, attr_name in _SEGMENT_CONCAT_TARGETS:
         assert getattr(loader, attr_name).shape[0] == 5, attr_name
@@ -185,33 +172,37 @@ def test_splice_rewrites_every_field_consistently():
         assert getattr(loader, attr_name).shape[0] == 5, attr_name
 
 
-def test_splice_ignores_object_fields_when_the_clip_has_no_object():
+def test_splice_ignores_object_fields_when_the_clip_has_no_object() -> None:
     loader = _FakeLoader([3], has_object=False)
     starts, ends = loader.boundaries()
 
     # A segment without object fields must be accepted, and object arrays left untouched.
-    _splice_motion_frames(loader, [_segment(2, -1.0)], starts, ends, prepend=True)
+    _splice_motion_frames(loader, [_segment(2, -1.0)], starts, ends, prepend=True)  # type: ignore[arg-type]
 
     assert loader._joint_pos.shape[0] == 5
     assert loader._object_pos_w.shape[0] == 3
 
 
-def test_splice_rejects_a_segment_whose_fields_disagree_on_frame_count():
+def test_splice_rejects_a_segment_whose_fields_disagree_on_frame_count() -> None:
     loader = _FakeLoader([3])
     starts, ends = loader.boundaries()
     segment = _segment(2, -1.0)
     segment["body_pos"] = torch.zeros(5, NUM_BODIES, 3)
 
     with pytest.raises(ValueError, match="disagree on frame count"):
-        _splice_motion_frames(loader, [segment], starts, ends, prepend=True)
+        _splice_motion_frames(loader, [segment], starts, ends, prepend=True)  # type: ignore[arg-type]
 
 
-def test_splice_leaves_untouched_clips_alone_when_segments_differ_in_length():
+def test_splice_leaves_untouched_clips_alone_when_segments_differ_in_length() -> None:
     loader = _FakeLoader([2, 2, 2])
     starts, ends = loader.boundaries()
 
     added = _splice_motion_frames(
-        loader, [_segment(1, -1.0), _segment(3, -2.0), _segment(2, -3.0)], starts, ends, prepend=True
+        loader,  # type: ignore[arg-type]
+        [_segment(1, -1.0), _segment(3, -2.0), _segment(2, -3.0)],
+        starts,
+        ends,
+        prepend=True,
     )
 
     torch.testing.assert_close(added, torch.tensor([1, 3, 2]))
@@ -253,7 +244,7 @@ def _consistency_command(num_clips: int, clip_len: int, spike_row: int) -> Any:
     return command
 
 
-def _logged(command, num_steps: int, prepend: bool) -> str:
+def _logged(command: Any, num_steps: int, prepend: bool) -> str:
     messages: list[str] = []
     sink_id = logger.add(lambda message: messages.append(message.record["message"]), level="INFO")
     try:
@@ -264,7 +255,7 @@ def _logged(command, num_steps: int, prepend: bool) -> str:
 
 
 @pytest.mark.parametrize("num_clips", [1, 3])
-def test_consistency_log_finds_the_prepend_seam(num_clips):
+def test_consistency_log_finds_the_prepend_seam(num_clips: int) -> None:
     """The lead-in occupies rows 0..num_steps-1, so the hand-off step lands on row num_steps."""
     num_steps = 4
     command = _consistency_command(num_clips, clip_len=10, spike_row=num_steps)
@@ -275,7 +266,7 @@ def test_consistency_log_finds_the_prepend_seam(num_clips):
 
 
 @pytest.mark.parametrize("num_clips", [1, 3])
-def test_consistency_log_finds_the_append_seam(num_clips):
+def test_consistency_log_finds_the_append_seam(num_clips: int) -> None:
     """The lead-out occupies the clip's last num_steps rows, so the step lands where it starts."""
     num_steps = 4
     clip_len = 10
@@ -286,7 +277,7 @@ def test_consistency_log_finds_the_append_seam(num_clips):
     assert "Seam step 1.0000 rad" in message
 
 
-def test_consistency_log_skips_a_segment_too_short_to_difference():
+def test_consistency_log_skips_a_segment_too_short_to_difference() -> None:
     # num_steps=2 leaves no interior row once the one-sided ends are trimmed.
     command = _consistency_command(1, clip_len=6, spike_row=1)
     assert _logged(command, 2, prepend=True) == ""

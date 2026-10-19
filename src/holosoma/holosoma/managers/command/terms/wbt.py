@@ -70,14 +70,8 @@ def splice_transition_boundaries(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Grow each clip's interval to swallow the frames inserted next to it.
 
-    The transition must belong to the clip it leads into (or out of) rather than becoming a clip
-    of its own: ``step()`` resets and resamples the moment ``time_steps`` reaches a clip's end
-    index, so a standalone transition gets the robot teleported at exactly the instant it should
-    have handed off to the reference motion.
-
-    The arithmetic is the same whether the segment goes before or after each clip's frames --
-    only the interleaving differs -- because either way clip ``i`` is preceded by every segment
-    inserted for clips ``j < i`` and grows by its own.
+    ``step()`` resamples when ``time_steps`` reaches a clip's end index, so a transition registered
+    as its own clip would teleport the robot at the handoff.
     """
     inclusive = added_frames.cumsum(dim=0)
     return start_idx + inclusive - added_frames, end_idx + inclusive
@@ -428,12 +422,7 @@ class MultiMotionLoader:
     def splice_transition_segments(
         self, segments_per_motion: list[dict[str, torch.Tensor]], prepend: bool
     ) -> MultiMotionLoader:
-        """Splice one transition segment around each clip, mutating in place.
-
-        The clip count is unchanged: each segment joins the clip it leads into (or out of), so
-        the robot walks straight from a lead-in into its clip's frames instead of being
-        resampled at the hand-off.
-        """
+        """Splice one transition segment into each clip's own interval, mutating in place."""
         if len(segments_per_motion) != self._num_motions:
             raise ValueError(
                 f"Expected one transition segment per clip ({self._num_motions}), got {len(segments_per_motion)}"
@@ -581,10 +570,9 @@ class MotionCommand(CommandTermBase):
         else:
             self.motion_cfg = MotionConfig(**cfg.params["motion_config"])
         self.init_pose_cfg: NoiseToInitialPoseConfig = self.motion_cfg.noise_to_initial_pose
-        # Resolved in setup(); declared here so their types are visible to callers and to mypy.
+        # Set by _build_motion_scatter_map() in setup().
         self._body_scatter_src: torch.Tensor
         self._body_scatter_dst: torch.Tensor
-        # Per-body centre-of-mass offsets, read from the articulation on first use.
         self._com_offsets_cache: torch.Tensor | None = None
 
     def setup(self) -> None:
@@ -616,10 +604,7 @@ class MotionCommand(CommandTermBase):
                 device=self.device,
             )
 
-        # Store body and joint indexes for interpolation. Two index spaces coexist here: the raw
-        # loader arrays (motion._body_pos_w and friends) are in *motion* order, while the
-        # same-named properties (motion.body_pos_w) re-index them into *robot* order. These
-        # indexes map robot -> motion, so they gather for reads and scatter for writes.
+        # Store body and joint indexes for interpolation; they map robot -> motion order.
         self._body_indexes_in_motion = self.motion._body_indexes
         self._joint_indexes_in_motion = self.motion._joint_indexes
         self._build_motion_scatter_map(robot_body_names, robot_body_names_alias)
@@ -1167,9 +1152,7 @@ class MotionCommand(CommandTermBase):
             )
             return
 
-        # Frames are consumed one per policy step, so the grid spacing is env.dt and the polynomial
-        # duration has to be the grid's, not the configured one -- otherwise the analytic velocities
-        # are scaled by duration / effective_duration relative to the spacing they are replayed at.
+        # Frames replay at env.dt, so the polynomial must span the rounded grid, not the configured duration.
         effective_duration = num_steps * self._env.dt
         if abs(effective_duration - duration) > 1e-9:
             logger.warning(
@@ -1189,9 +1172,6 @@ class MotionCommand(CommandTermBase):
                 f"default pose and each of {num_clips} clip(s)"
             )
         except Exception as exc:
-            # Do not name a cause: this wraps the backend check, the at-rest init_state check, the
-            # body-slot collision check and the FK freshness check, and the inner error already says
-            # which fired. Add only the configuration that produced it.
             raise RuntimeError(
                 f"Failed to {action} a {effective_duration}s default-pose transition "
                 f"({num_steps} frames) onto {num_clips} clip(s): {exc}"
@@ -1211,8 +1191,7 @@ class MotionCommand(CommandTermBase):
         init_root_quat = torch.tensor(init_state.rot, dtype=torch.float32, device=self.device).unsqueeze(0)
         init_roll, init_pitch, _ = get_euler_xyz(init_root_quat, w_last=True)
 
-        # Robot body 0 is the floating base; index the raw array rather than the re-indexed view, so
-        # reading one row does not gather the whole thing.
+        # Robot body 0 is the floating base.
         root_slot = int(self._body_indexes_in_motion[0])
         motion_root_pos = self.motion._body_pos_w[anchor_frame_idx, root_slot].to(self.device)
         motion_root_quat = self.motion._body_quat_w[anchor_frame_idx, root_slot].to(self.device).unsqueeze(0)
@@ -1232,8 +1211,7 @@ class MotionCommand(CommandTermBase):
         )
         default_root_lin_vel = torch.tensor(init_state.lin_vel, dtype=torch.float32, device=self.device)
         default_root_ang_vel = torch.tensor(init_state.ang_vel, dtype=torch.float32, device=self.device)
-        # The segment forces the default-pose frame's body velocities to zero, which only holds for a
-        # robot spawned at rest. No shipped robot config does otherwise; fail loudly if one starts to.
+        # The segment zeroes the default-pose frame's body velocities, which assumes a robot spawned at rest.
         if default_root_lin_vel.any() or default_root_ang_vel.any():
             raise NotImplementedError(
                 "Default-pose transitions assume the robot's init_state is at rest, but this robot "
@@ -1263,12 +1241,7 @@ class MotionCommand(CommandTermBase):
         return lower, upper
 
     def _add_transition_to_motion(self, num_steps: int, duration_s: float, prepend: bool) -> None:
-        """Add interpolated frames before or after every clip the loader holds.
-
-        Three passes rather than one loop, because forward kinematics is the expensive step: every
-        clip's free variables are built first, put through FK in a single batched call, and only then
-        assembled back into per-clip segments.
-        """
+        """Add interpolated frames before or after every clip, batching FK across all clips in one call."""
         assert self._body_indexes_in_motion is not None
         assert self._joint_indexes_in_motion is not None
         assert num_steps > 0, f"Caller must reject non-positive step counts, got {num_steps}"
@@ -1325,22 +1298,14 @@ class MotionCommand(CommandTermBase):
         try:
             self._log_transition_consistency(num_steps, dt, prepend=prepend)
         except Exception as exc:
-            # A diagnostic must not fail the splice it reports on -- the caller turns anything
-            # raised here into "critical error during motion interpolation setup", which would be
-            # a lie once the splice itself has succeeded.
+            # A diagnostic must not fail a splice that already succeeded.
             logger.warning(f"Could not measure default-pose transition consistency: {exc}")
 
     def _log_transition_consistency(self, num_steps: int, dt: float, prepend: bool) -> None:
-        """Log how well the spliced segment honours the derivative contract, once per transition.
+        """Log how well the spliced segment honors the derivative contract, once per transition.
 
-        Measured over the segment's own rows only. A clip's ``body_lin_vel_w`` comes from
-        ``mj_objectVelocity`` -- an analytic velocity from qvel -- while its ``body_pos_w`` is a
-        sampled position, so on fast motion the two disagree by metres per second with nothing wrong.
-        Including clip rows here made every healthy run print that number and look broken.
-
-        The seam steps are reported next to the clip's own typical frame-to-frame step, because the
-        absolute value is meaningless without that scale: a transition into a fast clip should step
-        about as much as the clip does.
+        Measured over the segment's rows only: a clip's ``body_lin_vel_w`` is ``mj_objectVelocity``
+        from qvel while ``body_pos_w`` is sampled, so on fast motion they disagree by m/s.
         """
         clip_start = int(self.motion.motion_start_idx[0])
         clip_end = int(self.motion.motion_end_idx[0])
@@ -1361,8 +1326,7 @@ class MotionCommand(CommandTermBase):
             (self.motion._joint_vel[segment] - linear_velocity_from_positions(joint_pos, dt)[segment]).abs().max()
         )
 
-        # Differentiate the centre of mass, not the link origin -- body_lin_vel_w is CoM-referenced,
-        # so differencing body_pos_w would report a healthy transition as an omega-cross-r failure.
+        # body_lin_vel_w is CoM-referenced.
         offsets = self._body_com_offsets_b().to(device=body_pos.device, dtype=body_pos.dtype)
         com_pos = body_pos.clone()
         tracked = self._body_scatter_dst
@@ -1409,20 +1373,11 @@ class MotionCommand(CommandTermBase):
 
         Returns:
             ``(body_pos, body_quat, body_com_pos)`` shaped ``(num_frames, num_robot_bodies, ·)``,
-            relative to the env origin, in ``simulator._body_list`` order. ``body_quat`` is xyzw,
-            matching both the simulator buffers and the loader's in-memory arrays. ``body_pos`` is
-            the link frame origin; ``body_com_pos`` is the centre of mass, which is the reference
-            point a motion file's body velocities use -- differencing the wrong one leaves an
-            omega-cross-r error on every rotating body.
+            relative to the env origin, in ``simulator._body_list`` order, quats xyzw.
+            ``body_com_pos`` is the center of mass, the point a motion file's body velocities use.
 
-        One write and one read per chunk, rather than one per frame. Besides being far cheaper than
-        a per-frame loop, it removes a correctness hazard: IsaacLab's ``body_*_w`` are
-        timestamp-gated lazy buffers, so a loop that writes and reads without advancing the sim
-        clock could return the same stale pose for every frame and yield a body trajectory frozen
-        at frame 0.
-
-        Velocities are deliberately not read back. Callers derive body velocities by differencing
-        these poses, which keeps them consistent with the poses actually stored.
+        One frame per env, not a per-frame loop: IsaacLab's ``body_*_w`` are timestamp-gated lazy
+        buffers, so repeated write/read without stepping the sim returns the same stale pose.
         """
         simulator = self._env.simulator
         if simulator.get_simulator_type() != SimulatorType.ISAACSIM:
@@ -1443,8 +1398,7 @@ class MotionCommand(CommandTermBase):
         )
         body_quat = torch.empty((num_frames, body_pos.shape[1], 4), device=self.device, dtype=joint_pos.dtype)
 
-        # setup() runs before init_buffers() and the first reset(), so nothing observes these
-        # writes -- but an exception mid-loop must not leave every env parked in a bogus pose.
+        # Restore the sim state even if FK fails mid-loop.
         root_backup = simulator.robot_root_states[:].clone()
         dof_pos_backup = simulator.dof_pos[:].clone()
         dof_vel_backup = simulator.dof_vel[:].clone()
@@ -1456,8 +1410,7 @@ class MotionCommand(CommandTermBase):
                 simulator.robot_root_states[env_ids, :3] = root_pos[chunk_start:chunk_end] + env_origins[env_ids]
                 simulator.robot_root_states[env_ids, 3:7] = root_quat[chunk_start:chunk_end]
                 simulator.robot_root_states[env_ids, 7:13] = 0.0
-                # refresh_sim_tensors rebinds dof_pos/dof_vel to fresh tensors, so these writes have
-                # to be redone on every chunk rather than hoisted.
+                # refresh_sim_tensors rebinds dof_pos/dof_vel, so these writes can't be hoisted.
                 simulator.dof_pos[env_ids] = joint_pos[chunk_start:chunk_end]
                 simulator.dof_vel[env_ids] = 0.0
 
@@ -1487,10 +1440,9 @@ class MotionCommand(CommandTermBase):
         return body_pos, body_quat, body_com_pos
 
     def _body_com_offsets_b(self) -> torch.Tensor:
-        """Per-body centre-of-mass offset in the body frame, ``(num_robot_bodies, 3)``.
+        """Per-body center-of-mass offset in the body frame, ``(num_robot_bodies, 3)``, read from env 0.
 
-        Constant for the run, so read once. ``get_coms`` rows are ``(pos, quat)`` per body over all
-        environments; the transition only ever uses env 0, and CoM randomisation happens later.
+        Cached on first call, which is before CoM randomization runs.
         """
         if self._com_offsets_cache is None:
             simulator = self._env.simulator
@@ -1501,11 +1453,7 @@ class MotionCommand(CommandTermBase):
     def _check_fk_poses_are_fresh(
         self, body_pos: torch.Tensor, root_pos: torch.Tensor, joint_pos: torch.Tensor
     ) -> None:
-        """Catch the simulator handing back stale poses instead of the state we just wrote.
-
-        Raises rather than asserts: this is the one guard against a silent failure mode (a body
-        trajectory frozen at frame 0), and ``python -O`` would strip an assert.
-        """
+        """Raise if the simulator hands back stale poses instead of the state just written."""
         stale_hint = (
             "The simulator returned body poses that do not reflect the state just written. This is "
             "what a stale lazy pose buffer looks like; the sim clock may need advancing before the "
@@ -1525,15 +1473,9 @@ class MotionCommand(CommandTermBase):
     def _build_motion_scatter_map(self, robot_body_names: list[str], robot_body_names_alias: list[str]) -> None:
         """Resolve which robot body writes each motion body slot.
 
-        ``_body_indexes_in_motion`` is fine to *gather* with -- two robot bodies reading the same
-        motion slot is exactly what an alias is for -- but scattering with it is last-write-wins.
-        The fake foot contact points alias onto their ankle links and sit immediately after them in
-        ``body_names``, so the contact point used to overwrite the ankle's own pose with one taken
-        a few centimetres lower down the URDF; those ankle links are tracked bodies, so the error
-        went straight into the tracking reward.
-
-        Drop an aliased row when the body it aliases onto is itself present, and refuse to guess if
-        any collision survives that rule.
+        Scattering with ``_body_indexes_in_motion`` is last-write-wins, and the fake foot contact
+        points alias onto their (tracked) ankle links. Drop an aliased row when the body it aliases
+        onto is present, and raise if any collision survives that.
         """
         assert self._body_indexes_in_motion is not None
         real_slots = {
@@ -1569,10 +1511,8 @@ class MotionCommand(CommandTermBase):
 
         Args:
             robot_tensor: ``(..., num_robot_bodies, C)``. Leading dims (e.g. time) pass through.
-            fill: value for motion slots no robot body covers, broadcast over the leading dims.
-                Motion files legitimately carry bodies the robot does not have (including the
-                MuJoCo ``world`` row), and zeros are not a valid rotation. Passing the clip's anchor
-                frame keeps those slots constant and correct at the seam. ``None`` keeps zeros.
+            fill: value for motion slots no robot body covers (e.g. MuJoCo's ``world`` row),
+                broadcast over the leading dims. ``None`` fills zeros, which is not a valid quaternion.
         """
         num_motion_bodies = self.motion._body_pos_w.shape[1]
         motion_shape = robot_tensor.shape[:-2] + (num_motion_bodies,) + robot_tensor.shape[-1:]
@@ -1624,9 +1564,7 @@ class MotionCommand(CommandTermBase):
         anchor_frame_idx: int,
     ) -> dict[str, torch.Tensor]:
         """Map default robot-state tensors into motion order for interpolation."""
-        # Motion joint columns with no robot counterpart (a 29-DoF robot against a 31-DoF clip) are
-        # never read by either field below -- motion.joint_pos gathers only the covered ones -- so
-        # whatever they interpolate to is inert. Filled from the anchor to keep the array honest.
+        # Motion joints the robot lacks (29-DoF robot, 31-DoF clip) are never read back; fill from the anchor.
         state = {
             "joint_pos": self._map_robot_joints_to_motion_order(
                 default_state["joint_pos"].to(device=device, dtype=dtype),
@@ -1653,19 +1591,12 @@ class MotionCommand(CommandTermBase):
         num_steps: int,
         duration_s: float,
     ) -> dict[str, torch.Tensor]:
-        """Interpolate the quantities a transition is free to choose, over ``num_steps + 1`` frames.
+        """Interpolate joint angles and root pose over ``num_steps + 1`` frames with a cubic Hermite.
 
-        Joint angles and the root pose are those quantities; everything else in a motion frame is
-        determined by them through kinematics. They get a cubic Hermite and its exact analytic
-        derivative, so position and velocity come from one polynomial and therefore agree at every
-        frame rather than only at the endpoints.
+        Velocity is the polynomial's exact derivative; every other frame field follows by kinematics.
         """
-        # Both endpoints at rest, which makes the cubic a smoothstep: monotone between the two
-        # poses, so no joint can wander past either of them, let alone past its limit. The cost is a
-        # velocity step into the clip. Matching the clip's arrival velocity instead removes that step
-        # but forces the trajectory to travel out and back whenever the net displacement is small --
-        # on an ordinary clip that was a 1.05 rad detour to make a 0.05 rad move, on 10 of 29 joints.
-        # A monotone path with one bad frame beats a hundred frames of wandering.
+        # Both endpoints at rest makes the cubic a smoothstep, monotone between the poses. Matching the
+        # clip's arrival velocity instead gives a 1.05 rad detour for a 0.05 rad move on 10 of 29 joints.
         at_rest = torch.zeros_like(start["joint_vel"])
         joint_pos, joint_vel = hermite_segment(
             start["joint_pos"], at_rest, target["joint_pos"], at_rest, duration_s, num_steps
@@ -1688,11 +1619,8 @@ class MotionCommand(CommandTermBase):
         )
         free = {"joint_pos": joint_pos, "joint_vel": joint_vel, "root_pos": root_pos, "root_quat": root_quat}
         if self.motion.has_object:
-            # The object holds its anchor pose for the whole segment. A lead-in has nothing driving
-            # it yet; a lead-out freezes an object the robot may still be holding, which is an
-            # approximation. The alternative is worse: a Hermite between equal positions with the
-            # clip's nonzero endpoint velocity bulges out and back, i.e. phantom object motion the
-            # policy would be rewarded for tracking.
+            # Hold the object at its anchor pose: a Hermite between equal positions with the clip's
+            # nonzero endpoint velocity bulges out and back, which the policy would be rewarded to track.
             free["object_pos"] = start["object_pos"].expand(num_steps + 1, -1).clone()
             free["object_quat"] = start["object_quat"].expand(num_steps + 1, -1).clone()
             free["object_lin_vel"] = torch.zeros_like(free["object_pos"])
@@ -1711,13 +1639,8 @@ class MotionCommand(CommandTermBase):
     ) -> dict[str, torch.Tensor]:
         """Turn one clip's free variables plus its FK result into the frames that get spliced in.
 
-        Body poses come from forward kinematics of the free variables, so a frame's body poses and
-        its joint angles describe the same configuration. Linear velocity differences ``fk_com_pos``
-        rather than ``fk_pos`` -- see :meth:`_fk_body_poses`.
-
-        The grid spans both endpoints; the one coinciding with the clip frame is dropped so the
-        splice does not duplicate it. A lead-in keeps rows 0..N-1 (row N *is* the clip frame) and a
-        lead-out keeps rows 1..N (row 0 is). Either way exactly ``num_steps`` rows survive.
+        The grid spans both endpoints; the one that is the clip frame is dropped, so a lead-in keeps
+        rows 0..N-1 and a lead-out keeps rows 1..N.
         """
         body_pos = self._map_robot_bodies_to_motion_order(fk_pos, fill=self.motion._body_pos_w[anchor_frame_idx])
         body_quat = self._map_robot_bodies_to_motion_order(fk_quat, fill=self.motion._body_quat_w[anchor_frame_idx])
@@ -1752,14 +1675,7 @@ class MotionCommand(CommandTermBase):
         return segment
 
     def _check_joints_stay_between_the_endpoints(self, joint_pos: torch.Tensor) -> None:
-        """Refuse a joint path that leaves the interval between the poses it connects.
-
-        Monotonicity is the property this path is judged on: a lead-in exists to walk the robot from
-        one pose to another, and a joint that overshoots and comes back is doing something the clip
-        never asked for. With both endpoint velocities at rest the cubic is a smoothstep and cannot
-        overshoot, so this only fires if someone reintroduces a non-zero endpoint velocity -- which is
-        exactly when it needs to fire, since that is what caused a 1.05 rad detour on a 0.05 rad move.
-        """
+        """Raise if any joint leaves the interval between the two poses it connects."""
         lower = torch.minimum(joint_pos[0], joint_pos[-1])
         upper = torch.maximum(joint_pos[0], joint_pos[-1])
         excursion = torch.maximum(lower - joint_pos, joint_pos - upper).amax(dim=0)
@@ -1776,13 +1692,7 @@ class MotionCommand(CommandTermBase):
     def _check_joints_within_limits(
         self, joint_pos: torch.Tensor, free: dict[str, torch.Tensor], anchor_frame_idx: int
     ) -> None:
-        """Refuse to emit a frame that commands a joint past its limit.
-
-        Self-consistency is not reachability. Everything else here checks that a frame's fields agree
-        with each other; nothing checked whether the pose could be held. A cubic that arrives at the
-        clip's velocity overshoots its endpoints, and at the default duration that overshoot ran a
-        joint 0.6 rad past its limit without anything noticing.
-        """
+        """Raise if a frame commands a joint further past its limit than either endpoint already is."""
         limits = self._joint_limits_in_motion_order()
         if limits is None:
             return
@@ -1800,8 +1710,7 @@ class MotionCommand(CommandTermBase):
                 f"Default-pose transition commands motion joint {joint} {worst:.4f} rad beyond its "
                 f"limit ({float(lower[joint]):.3f}..{float(upper[joint]):.3f}); the segment spans "
                 f"{float(joint_pos[:, joint].min()):.3f}..{float(joint_pos[:, joint].max()):.3f} "
-                f"between endpoints {float(endpoints[0, joint]):.3f} and {float(endpoints[1, joint]):.3f}. "
-                "The duration cap should have prevented this."
+                f"between endpoints {float(endpoints[0, joint]):.3f} and {float(endpoints[1, joint]):.3f}."
             )
 
     def _setup_visualization_markers_for_isaacsim(self) -> None:

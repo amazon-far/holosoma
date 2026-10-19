@@ -1,28 +1,13 @@
 """Probe: the batched forward kinematics behind WBT default-pose transitions returns fresh poses.
 
-``MotionCommand._fk_body_poses`` writes one interpolated frame per environment, flushes
-once, and reads the rigid-body pose buffers back. That is only correct if the write actually
-invalidates those buffers. IsaacLab's ``ArticulationData.body_*_w`` are timestamp-gated lazy
-caches, so a read that does not see the write would hand back the pose from before it -- and the
-failure mode is silent: every transition frame would carry the same body pose while the joint
-angles vary, i.e. a reference trajectory whose limbs never move. Nothing else in the codebase
-depends on this, so nothing else would catch it.
+IsaacLab's ``ArticulationData.body_*_w`` are timestamp-gated lazy caches; if a state write does not
+invalidate them, every transition frame silently gets the same body pose. Asserts, on a real G1:
+  (a) the root pose round-trips;
+  (b) distinct joint configurations produce distinct body poses;
+  (c) writing N frames across N envs matches writing them one env at a time;
+  (d) center-of-mass positions differ from link origins.
 
-Asserts, on a real G1:
-  (a) the root pose round-trips -- the poses we read back are the state we just wrote;
-  (b) distinct joint configurations produce distinct body poses (buffers are not frozen);
-  (c) writing N frames across N envs matches writing them one env at a time, so the batching is
-      not itself hiding a staleness bug;
-  (d) the centre-of-mass positions differ from the link origins, so the caller's velocity
-      differencing has a real offset to work with (a zero offset would silently be link-origin).
-
-Kinematic consistency of the emitted trajectory is covered on CPU against a closed-form chain in
-``managers/command/tests/test_wbt_transition_fields.py``; this harness only checks the parts that
-need a live articulation.
-
-Writes "OK" to ``--result-file`` once every check passes. Success is judged on that sentinel, not
-the exit code: IsaacSim's teardown swallows a non-zero status, so a crashed run exits 0 and would
-otherwise be reported as a pass.
+Writes "OK" to ``--result-file`` once every check passes; IsaacSim teardown swallows a non-zero exit.
 
 Usage:
   python wbt_fk_assert.py --simulator isaacsim --result-file /tmp/ok.txt
@@ -50,12 +35,7 @@ JOINT_SWEEP_RAD = 0.4
 
 
 class _FkProbe:
-    """The smallest object ``_fk_body_poses`` will run against.
-
-    Borrows the real methods rather than reimplementing them, so this probes shipped code. Building
-    a full MotionCommand would need a task, a config tree and a motion file, none of which this
-    check is about.
-    """
+    """The smallest object ``_fk_body_poses`` will run against, borrowing MotionCommand's real methods."""
 
     _fk_body_poses = MotionCommand._fk_body_poses
     _body_com_offsets_b = MotionCommand._body_com_offsets_b
@@ -115,7 +95,7 @@ def _sweep_frames(sim, config, device):
     init = config.robot.init_state
     root_pos = torch.tensor(list(init.pos), device=device, dtype=torch.float32).unsqueeze(0).repeat(NUM_FRAMES, 1)
     root_pos[:, 0] += tau * 0.25
-    # xyzw identity; the sweep is what this probe is about, not the base orientation.
+    # xyzw identity.
     root_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device).unsqueeze(0).repeat(NUM_FRAMES, 1)
     return joint_pos, root_pos, root_quat
 
@@ -149,8 +129,7 @@ def main() -> int:
         print(f"FAIL: body poses barely move across a {JOINT_SWEEP_RAD} rad joint sweep (spread={spread.tolist()})")
         return 1
 
-    # (c) one frame per env must agree with one frame at a time. This is the real staleness check:
-    # the chunked path re-reads the buffers per chunk, so if a write is not seen it diverges here.
+    # (c) one frame per env must agree with one frame at a time; a write the read misses diverges here.
     chunked = _FkProbe(sim, device, 1)
     chunk_pos, chunk_quat, _ = chunked._fk_body_poses(joint_pos, root_pos, root_quat)  # type: ignore[misc]
     pos_gap = float((chunk_pos - body_pos).abs().max())
@@ -160,8 +139,7 @@ def main() -> int:
         print(f"FAIL: batched and per-frame FK disagree (pos {pos_gap:.6f}, quat {quat_gap:.6f})")
         return 1
 
-    # (d) the CoM offsets are real, so differencing CoM positions is not secretly the same as
-    # differencing link origins. G1 links all have mass, so at least one offset must be nonzero.
+    # (d) G1 links all have mass, so at least one CoM offset must be nonzero.
     com_offset = float((body_com_pos - body_pos).norm(dim=-1).max())
     if com_offset < 1e-4:
         print(f"FAIL: every body CoM sits on its link origin (max offset {com_offset:.2e} m)")

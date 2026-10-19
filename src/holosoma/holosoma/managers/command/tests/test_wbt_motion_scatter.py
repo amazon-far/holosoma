@@ -1,16 +1,7 @@
 """Tests for scattering robot-ordered tensors into motion body/joint order (no sim).
 
-Two index directions share ``_body_indexes_in_motion``. Gathering with it is fine: several robot
-bodies reading one motion slot is exactly what ``FAKE_BODY_NAME_ALIASES`` is for. Scattering with it
-is last-write-wins, and G1/T1 list each fake foot contact point directly after the ankle link it
-aliases onto -- so the contact point overwrote the ankle's own pose with one taken from a few
-centimetres lower in the URDF, on a body that is in ``body_names_to_track``. Pins:
-
-- an aliased body never clobbers the real body it aliases onto;
-- motion slots no robot body covers take the clip's value, not zeros (a zero quaternion is
-  degenerate for slerp);
-- a genuine slot collision raises instead of silently keeping one writer;
-- leading (time) dimensions pass through, since the transition scatters a whole segment at once.
+Scattering with ``_body_indexes_in_motion`` is last-write-wins, and G1/T1 list each fake foot
+contact point directly after the ankle link it aliases onto.
 """
 
 from __future__ import annotations
@@ -63,7 +54,7 @@ def _body_values(num_bodies: int, offset: float = 0.0) -> torch.Tensor:
     return (torch.arange(num_bodies, dtype=torch.float32) + 1.0 + offset).reshape(-1, 1).expand(num_bodies, 3).clone()
 
 
-def test_aliased_contact_point_does_not_clobber_its_ankle():
+def test_aliased_contact_point_does_not_clobber_its_ankle() -> None:
     command = _command()
     robot_values = _body_values(len(ROBOT_BODIES))
 
@@ -76,7 +67,7 @@ def test_aliased_contact_point_does_not_clobber_its_ankle():
     assert not torch.allclose(motion_values[ankle_slot], robot_values[contact_row])
 
 
-def test_both_ankles_keep_their_own_pose():
+def test_both_ankles_keep_their_own_pose() -> None:
     command = _command()
     robot_values = _body_values(len(ROBOT_BODIES))
 
@@ -86,7 +77,7 @@ def test_both_ankles_keep_their_own_pose():
         torch.testing.assert_close(motion_values[MOTION_BODIES.index(name)], robot_values[ROBOT_BODIES.index(name)])
 
 
-def test_uncovered_motion_slot_takes_the_fill_value():
+def test_uncovered_motion_slot_takes_the_fill_value() -> None:
     command = _command()
     fill = _body_values(len(MOTION_BODIES), offset=100.0)
 
@@ -96,13 +87,13 @@ def test_uncovered_motion_slot_takes_the_fill_value():
     torch.testing.assert_close(motion_values[torso_slot], fill[torso_slot])
 
 
-def test_uncovered_motion_slot_is_zero_without_a_fill():
+def test_uncovered_motion_slot_is_zero_without_a_fill() -> None:
     command = _command()
     motion_values = MotionCommand._map_robot_bodies_to_motion_order(command, _body_values(len(ROBOT_BODIES)))
     torch.testing.assert_close(motion_values[MOTION_BODIES.index("torso_link")], torch.zeros(3))
 
 
-def test_fill_does_not_alias_the_caller_s_tensor():
+def test_fill_does_not_alias_the_caller_s_tensor() -> None:
     command = _command()
     fill = _body_values(len(MOTION_BODIES), offset=100.0)
     original = fill.clone()
@@ -112,7 +103,7 @@ def test_fill_does_not_alias_the_caller_s_tensor():
     torch.testing.assert_close(fill, original)
 
 
-def test_scatter_passes_leading_time_dimensions_through():
+def test_scatter_passes_leading_time_dimensions_through() -> None:
     command = _command()
     num_frames = 7
     robot_values = _body_values(len(ROBOT_BODIES)).unsqueeze(0).repeat(num_frames, 1, 1)
@@ -126,7 +117,7 @@ def test_scatter_passes_leading_time_dimensions_through():
     torch.testing.assert_close(motion_values[:, ankle_slot], robot_values[:, ankle_row])
 
 
-def test_scatter_broadcasts_a_single_frame_fill_over_time():
+def test_scatter_broadcasts_a_single_frame_fill_over_time() -> None:
     command = _command()
     num_frames = 4
     robot_values = _body_values(len(ROBOT_BODIES)).unsqueeze(0).expand(num_frames, -1, -1)
@@ -139,14 +130,14 @@ def test_scatter_broadcasts_a_single_frame_fill_over_time():
     torch.testing.assert_close(motion_values[:, torso_slot], expected.contiguous())
 
 
-def test_two_real_bodies_on_one_slot_raise_rather_than_silently_dropping_one():
+def test_two_real_bodies_on_one_slot_raise_rather_than_silently_dropping_one() -> None:
     """Only aliases are safe to drop; a real collision means the index map is wrong."""
     robot_bodies = ["pelvis", "left_ankle_roll_link", "left_ankle_roll_link"]
     with pytest.raises(RuntimeError, match="same motion body slot"):
         _command(robot_bodies)
 
 
-def test_alias_is_kept_when_its_real_body_is_absent():
+def test_alias_is_kept_when_its_real_body_is_absent() -> None:
     """With no real ankle in the robot list the alias is the only writer, so it must survive."""
     robot_bodies = ["pelvis", "left_foot_contact_point", "right_ankle_roll_link"]
     command = _command(robot_bodies)
@@ -157,7 +148,7 @@ def test_alias_is_kept_when_its_real_body_is_absent():
     torch.testing.assert_close(motion_values[MOTION_BODIES.index("left_ankle_roll_link")], robot_values[1])
 
 
-def test_joint_scatter_fills_uncovered_columns_from_the_clip():
+def test_joint_scatter_fills_uncovered_columns_from_the_clip() -> None:
     command = _command()
     robot_values = torch.tensor([1.0, 2.0, 3.0])
     fill = torch.tensor([10.0, 20.0, 30.0, 40.0])
@@ -168,7 +159,7 @@ def test_joint_scatter_fills_uncovered_columns_from_the_clip():
     torch.testing.assert_close(motion_values, torch.tensor([1.0, 2.0, 3.0, 40.0]))
 
 
-def test_joint_scatter_zero_fills_without_a_fill():
+def test_joint_scatter_zero_fills_without_a_fill() -> None:
     command = _command()
     motion_values = MotionCommand._map_robot_joints_to_motion_order(command, torch.tensor([1.0, 2.0, 3.0]))
     torch.testing.assert_close(motion_values, torch.tensor([1.0, 2.0, 3.0, 0.0]))

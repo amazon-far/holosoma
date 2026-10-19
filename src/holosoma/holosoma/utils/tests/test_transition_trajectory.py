@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import pytest
 import torch
 
@@ -11,7 +13,6 @@ from holosoma.utils.transition_trajectory import (
     slerp_series,
 )
 
-# The root conftest applies no_sim as a fallback, but be explicit like the sibling test modules.
 pytestmark = pytest.mark.no_sim
 
 DT = 0.02
@@ -19,7 +20,7 @@ NUM_INTERVALS = 100
 DURATION = NUM_INTERVALS * DT
 
 
-def test_hermite_hits_both_endpoints_in_position_and_velocity():
+def test_hermite_hits_both_endpoints_in_position_and_velocity() -> None:
     p0 = torch.tensor([0.0, 1.0, -2.0])
     v0 = torch.zeros(3)
     p1 = torch.tensor([0.5, -1.0, 3.0])
@@ -35,13 +36,8 @@ def test_hermite_hits_both_endpoints_in_position_and_velocity():
     torch.testing.assert_close(vel[-1], v1)
 
 
-def test_hermite_velocity_integrates_back_to_its_own_position():
-    """The defect this module exists to prevent: a velocity that is not d/dt of the position.
-
-    The old path interpolated position and velocity independently, so the stored velocity was a
-    ramp where the true derivative was a constant. Simpson's rule is exact for the quadratic
-    velocity of a cubic, so this is an equality rather than an approximation.
-    """
+def test_hermite_velocity_integrates_back_to_its_own_position() -> None:
+    """Simpson's rule is exact for a cubic's quadratic velocity, so this is an equality."""
     torch.manual_seed(0)
     p0, p1 = torch.randn(29), torch.randn(29)
     v0, v1 = torch.zeros(29), torch.randn(29) * 0.5
@@ -52,13 +48,8 @@ def test_hermite_velocity_integrates_back_to_its_own_position():
     torch.testing.assert_close(simpson, pos[2:] - pos[:-2], rtol=1e-5, atol=1e-6)
 
 
-def test_hermite_velocity_matches_what_a_consumer_would_measure():
-    """A consumer differencing the stored positions must recover the stored velocities.
-
-    Agreement is limited by the central difference's own O(dt^2) truncation error, so the bound
-    is stated relative to peak speed rather than pointwise -- the analytic velocity crosses zero,
-    where a relative comparison is meaningless.
-    """
+def test_hermite_velocity_matches_what_a_consumer_would_measure() -> None:
+    """Bounded relative to peak speed, not pointwise: the analytic velocity crosses zero."""
     torch.manual_seed(0)
     p0, p1 = torch.randn(29), torch.randn(29)
     v0, v1 = torch.zeros(29), torch.randn(29) * 0.5
@@ -71,7 +62,7 @@ def test_hermite_velocity_matches_what_a_consumer_would_measure():
     assert error < 1e-3 * vel.abs().max()
 
 
-def test_hermite_peak_speed_is_cubic_not_quintic():
+def test_hermite_peak_speed_is_cubic_not_quintic() -> None:
     """Guards the interpolant choice: a quintic would peak at 1.875x, a cubic at 1.5x."""
     displacement = 2.0
     p0 = torch.zeros(1)
@@ -84,7 +75,7 @@ def test_hermite_peak_speed_is_cubic_not_quintic():
     assert peak == pytest.approx(1.5 * displacement / DURATION, rel=1e-3)
 
 
-def test_hermite_reduces_to_a_straight_line_for_matched_endpoint_velocities():
+def test_hermite_reduces_to_a_straight_line_for_matched_endpoint_velocities() -> None:
     """With v0 = v1 = (p1 - p0) / T the cubic terms vanish, so the result is exactly linear."""
     p0 = torch.tensor([0.0, 0.0])
     p1 = torch.tensor([1.0, -2.0])
@@ -98,7 +89,7 @@ def test_hermite_reduces_to_a_straight_line_for_matched_endpoint_velocities():
 
 
 @pytest.mark.parametrize("shape", [(29,), (3,), (51, 3), (4, 5, 3)])
-def test_hermite_broadcasts_over_trailing_dims(shape):
+def test_hermite_broadcasts_over_trailing_dims(shape: tuple[int, ...]) -> None:
     torch.manual_seed(1)
     p0, v0, p1, v1 = (torch.randn(shape) for _ in range(4))
 
@@ -110,7 +101,7 @@ def test_hermite_broadcasts_over_trailing_dims(shape):
     torch.testing.assert_close(pos[-1], p1)
 
 
-def test_hermite_preserves_input_dtype():
+def test_hermite_preserves_input_dtype() -> None:
     p0 = torch.zeros(3, dtype=torch.float32)
     pos, vel = hermite_segment(p0, p0, p0 + 1.0, p0, DURATION, NUM_INTERVALS)
     assert pos.dtype == torch.float32
@@ -126,18 +117,18 @@ def test_hermite_preserves_input_dtype():
         (1.0, -3, "at least one interval"),
     ],
 )
-def test_hermite_rejects_degenerate_grids(duration, num_intervals, message):
+def test_hermite_rejects_degenerate_grids(duration: float, num_intervals: int, message: str) -> None:
     p = torch.zeros(3)
     with pytest.raises(ValueError, match=message):
         hermite_segment(p, p, p, p, duration, num_intervals)
 
 
-def test_hermite_rejects_mismatched_endpoint_shapes():
+def test_hermite_rejects_mismatched_endpoint_shapes() -> None:
     with pytest.raises(ValueError, match="shapes must all match"):
         hermite_segment(torch.zeros(3), torch.zeros(3), torch.zeros(4), torch.zeros(3), 1.0, 10)
 
 
-def test_slerp_series_hits_endpoints_and_stays_unit_norm():
+def test_slerp_series_hits_endpoints_and_stays_unit_norm() -> None:
     axis = torch.tensor([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]])
     q0 = quat_from_angle_axis(torch.tensor([0.0, 0.1]), axis, w_last=True)
     q1 = quat_from_angle_axis(torch.tensor([1.2, -0.8]), axis, w_last=True)
@@ -150,7 +141,7 @@ def test_slerp_series_hits_endpoints_and_stays_unit_norm():
     torch.testing.assert_close(series.norm(dim=-1), torch.ones(NUM_INTERVALS + 1, 2))
 
 
-def test_slerp_series_accepts_a_bare_quaternion():
+def test_slerp_series_accepts_a_bare_quaternion() -> None:
     q0 = quat_from_angle_axis(torch.tensor([0.0]), torch.tensor([[0.0, 1.0, 0.0]]), w_last=True)[0]
     q1 = quat_from_angle_axis(torch.tensor([0.9]), torch.tensor([[0.0, 1.0, 0.0]]), w_last=True)[0]
 
@@ -161,19 +152,19 @@ def test_slerp_series_accepts_a_bare_quaternion():
     torch.testing.assert_close(series[-1], q1, atol=1e-6, rtol=1e-6)
 
 
-def test_slerp_series_of_identical_endpoints_is_constant():
+def test_slerp_series_of_identical_endpoints_is_constant() -> None:
     q = quat_from_angle_axis(torch.tensor([0.4]), torch.tensor([[0.0, 0.0, 1.0]]), w_last=True)
     series = slerp_series(q, q, 10)
     torch.testing.assert_close(series, q.expand_as(series).contiguous())
 
 
-def test_slerp_series_rejects_mismatched_shapes():
+def test_slerp_series_rejects_mismatched_shapes() -> None:
     q = torch.tensor([[0.0, 0.0, 0.0, 1.0]])
     with pytest.raises(ValueError, match="shapes must match"):
         slerp_series(q, q.expand(2, 4), 10)
 
 
-def test_linear_velocity_recovers_a_constant_rate():
+def test_linear_velocity_recovers_a_constant_rate() -> None:
     velocity = torch.tensor([1.0, -2.0, 0.5])
     steps = torch.arange(20, dtype=torch.float32).unsqueeze(-1)
     pos = steps * velocity * DT
@@ -183,12 +174,12 @@ def test_linear_velocity_recovers_a_constant_rate():
     torch.testing.assert_close(derived, velocity.expand_as(derived).contiguous())
 
 
-def test_linear_velocity_of_a_single_frame_is_zero():
+def test_linear_velocity_of_a_single_frame_is_zero() -> None:
     pos = torch.randn(1, 5, 3)
     torch.testing.assert_close(linear_velocity_from_positions(pos, DT), torch.zeros_like(pos))
 
 
-def test_angular_velocity_recovers_a_constant_body_rate():
+def test_angular_velocity_recovers_a_constant_body_rate() -> None:
     axis = torch.tensor([0.0, 0.0, 1.0])
     rate = 1.3  # rad/s
     steps = torch.arange(20, dtype=torch.float32)
@@ -200,7 +191,7 @@ def test_angular_velocity_recovers_a_constant_body_rate():
     torch.testing.assert_close(omega, expected.contiguous(), rtol=1e-4, atol=1e-5)
 
 
-def test_angular_velocity_is_world_frame_not_body_frame():
+def test_angular_velocity_is_world_frame_not_body_frame() -> None:
     """A world-frame omega must be independent of any constant pre-rotation of the sequence."""
     axis = torch.tensor([0.0, 0.0, 1.0])
     steps = torch.arange(12, dtype=torch.float32)
@@ -208,19 +199,19 @@ def test_angular_velocity_is_world_frame_not_body_frame():
     offset = quat_from_angle_axis(torch.tensor([0.7]), torch.tensor([[1.0, 0.0, 0.0]]), w_last=True)
 
     plain = angular_velocity_from_quats(spin, DT)
-    # Right-multiplying by a constant re-parameterises the body frame; world omega is unchanged.
+    # Right-multiplying by a constant reparameterizes the body frame; world omega is unchanged.
     rotated = angular_velocity_from_quats(quat_mul(spin, offset.expand(12, 4), w_last=True), DT)
 
     torch.testing.assert_close(plain, rotated, rtol=1e-4, atol=1e-5)
 
 
-def test_angular_velocity_of_a_static_sequence_is_zero():
+def test_angular_velocity_of_a_static_sequence_is_zero() -> None:
     q = quat_from_angle_axis(torch.tensor([0.3]), torch.tensor([[0.0, 1.0, 0.0]]), w_last=True)
     omega = angular_velocity_from_quats(q.expand(8, 4).contiguous(), DT)
     torch.testing.assert_close(omega, torch.zeros(8, 3), atol=1e-6, rtol=0.0)
 
 
-def test_angular_velocity_handles_per_body_sequences():
+def test_angular_velocity_handles_per_body_sequences() -> None:
     torch.manual_seed(2)
     axes = torch.nn.functional.normalize(torch.randn(51, 3), dim=-1)
     steps = torch.arange(15, dtype=torch.float32)
@@ -234,7 +225,7 @@ def test_angular_velocity_handles_per_body_sequences():
     torch.testing.assert_close(omega, (axes * 0.5).expand(15, 51, 3).contiguous(), rtol=1e-4, atol=1e-5)
 
 
-def test_angular_velocity_of_a_two_frame_sequence_uses_a_forward_difference():
+def test_angular_velocity_of_a_two_frame_sequence_uses_a_forward_difference() -> None:
     axis = torch.tensor([[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]])
     quats = quat_from_angle_axis(torch.tensor([0.0, 0.6 * DT]), axis, w_last=True)
 
@@ -245,20 +236,20 @@ def test_angular_velocity_of_a_two_frame_sequence_uses_a_forward_difference():
     torch.testing.assert_close(omega[0], torch.tensor([0.0, 0.0, 0.6]), rtol=1e-4, atol=1e-5)
 
 
-def test_angular_velocity_of_a_single_frame_is_zero():
+def test_angular_velocity_of_a_single_frame_is_zero() -> None:
     q = torch.tensor([[[0.0, 0.0, 0.0, 1.0]]])
     torch.testing.assert_close(angular_velocity_from_quats(q, DT), torch.zeros(1, 1, 3))
 
 
 @pytest.mark.parametrize("dt", [0.0, -0.01])
-def test_velocity_helpers_reject_nonpositive_dt(dt):
+def test_velocity_helpers_reject_nonpositive_dt(dt: float) -> None:
     with pytest.raises(ValueError, match="dt must be positive"):
         linear_velocity_from_positions(torch.zeros(5, 3), dt)
     with pytest.raises(ValueError, match="dt must be positive"):
         angular_velocity_from_quats(torch.zeros(5, 4), dt)
 
 
-def test_rotation_series_hits_both_endpoint_orientations():
+def test_rotation_series_hits_both_endpoint_orientations() -> None:
     z = torch.tensor([0.0, 0.0, 1.0])
     q0 = quat_from_angle_axis(torch.tensor([0.2]), z.unsqueeze(0), w_last=True)[0]
     q1 = quat_from_angle_axis(torch.tensor([1.0]), z.unsqueeze(0), w_last=True)[0]
@@ -272,12 +263,7 @@ def test_rotation_series_hits_both_endpoint_orientations():
     torch.testing.assert_close(series.norm(dim=-1), torch.ones(NUM_INTERVALS + 1), atol=1e-6, rtol=0.0)
 
 
-def test_rotation_series_hits_both_endpoint_angular_velocities():
-    """The reason this exists: slerp lands on the orientation but not the turn rate.
-
-    A lead-in that arrives at the right orientation turning at the wrong rate leaves a step in the
-    commanded angular velocity at the seam, of the clip's whole turn rate.
-    """
+def test_rotation_series_hits_both_endpoint_angular_velocities() -> None:
     z = torch.tensor([0.0, 0.0, 1.0])
     q0 = quat_from_angle_axis(torch.tensor([0.0]), z.unsqueeze(0), w_last=True)[0]
     q1 = quat_from_angle_axis(torch.tensor([0.5]), z.unsqueeze(0), w_last=True)[0]
@@ -286,22 +272,16 @@ def test_rotation_series_hits_both_endpoint_angular_velocities():
     series = hermite_rotation_series(q0, torch.zeros(3), q1, omega1, DURATION, NUM_INTERVALS)
     measured = angular_velocity_from_quats(series, DT)
 
-    # A central difference's end frames repeat their nearest interior value, so both measurements
-    # are one step in from the endpoint -- and the cubic is still accelerating there. One step of
-    # the endpoint acceleration is ~3% of omega1 here, which is what the tolerances allow.
-    # test_rotation_series_beats_slerp_at_the_endpoint_rate is the discriminating comparison.
+    # Both measurements sit one step in from the endpoint, where the cubic is still accelerating;
+    # one step of that is ~3% of omega1 here, which is what the tolerances allow.
     assert float(measured[0].abs().max()) < 0.02 * float(omega1.norm())
     torch.testing.assert_close(measured[-1], omega1, atol=1e-3, rtol=0.05)
 
 
-def test_rotation_series_endpoint_rate_converges_as_the_grid_refines():
-    """Proves the endpoint rate is matched *exactly*, rather than to some tolerance.
+def test_rotation_series_endpoint_rate_converges_as_the_grid_refines() -> None:
+    """An exact match leaves an O(dt) residual; an approximate one plateaus.
 
-    The measured rate is a difference over the final interval, so it lags the endpoint by one step of
-    the cubic's endpoint acceleration. If the rate is genuinely matched that residual is O(dt) and
-    vanishes as the grid refines; if it is not, it plateaus at a fixed error. Deliberately uses a
-    rotation whose axis differs from omega1, which is the case the SO(3) Jacobian correction exists
-    for -- without it this plateaus instead.
+    The axis differs from omega1, which is the case the SO(3) Jacobian correction exists for.
     """
     z = torch.tensor([0.0, 0.0, 1.0])
     q0 = quat_from_angle_axis(torch.tensor([0.35]), torch.tensor([[0.6, 0.0, 0.8]]), w_last=True)[0]
@@ -309,7 +289,7 @@ def test_rotation_series_endpoint_rate_converges_as_the_grid_refines():
     omega1 = z * 1.2
     duration = 2.0
 
-    def endpoint_gap(num_intervals):
+    def endpoint_gap(num_intervals: int) -> float:
         series = hermite_rotation_series(q0, torch.zeros(3), q1, omega1, duration, num_intervals)
         relative = quat_mul(series[-1:], quat_conjugate(series[-2:-1], w_last=True), w_last=True)
         _, rotvec = quat_to_angle_axis(relative)
@@ -321,12 +301,11 @@ def test_rotation_series_endpoint_rate_converges_as_the_grid_refines():
     assert finer < 1e-2
 
 
-def test_left_jacobian_inverse_is_the_identity_at_zero():
+def test_left_jacobian_inverse_is_the_identity_at_zero() -> None:
     torch.testing.assert_close(_left_jacobian_inverse(torch.zeros(3)), torch.eye(3), atol=1e-9, rtol=0.0)
 
 
-def test_rotation_series_beats_slerp_at_the_endpoint_rate():
-    """Guards against a silent revert to slerp_series for the root rotation."""
+def test_rotation_series_beats_slerp_at_the_endpoint_rate() -> None:
     z = torch.tensor([0.0, 0.0, 1.0])
     q0 = quat_from_angle_axis(torch.tensor([0.0]), z.unsqueeze(0), w_last=True)[0]
     q1 = quat_from_angle_axis(torch.tensor([0.5]), z.unsqueeze(0), w_last=True)[0]
@@ -347,13 +326,13 @@ def test_rotation_series_beats_slerp_at_the_endpoint_rate():
     assert float(hermite_error) < 0.05 * float(slerp_error)
 
 
-def test_rotation_series_of_equal_endpoints_at_rest_is_constant():
+def test_rotation_series_of_equal_endpoints_at_rest_is_constant() -> None:
     q = quat_from_angle_axis(torch.tensor([0.4]), torch.tensor([[0.0, 1.0, 0.0]]), w_last=True)[0]
     series = hermite_rotation_series(q, torch.zeros(3), q, torch.zeros(3), DURATION, NUM_INTERVALS)
     torch.testing.assert_close(series, q.expand_as(series).contiguous(), atol=1e-6, rtol=1e-6)
 
 
-def test_rotation_series_rejects_batched_input():
+def test_rotation_series_rejects_batched_input() -> None:
     q = torch.tensor([[0.0, 0.0, 0.0, 1.0]])
     with pytest.raises(ValueError, match="shape"):
         hermite_rotation_series(q, torch.zeros(3), q, torch.zeros(3), DURATION, NUM_INTERVALS)
