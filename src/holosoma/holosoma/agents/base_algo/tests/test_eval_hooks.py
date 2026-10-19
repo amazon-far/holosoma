@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from holosoma.agents.base_algo.base_algo import BaseAlgo
 from holosoma.agents.callbacks.base_callback import RLEvalCallback
+from holosoma.config_types.algo import AlgoInitConfig
+from holosoma.envs.base_task.base_task import BaseTask
 
 pytestmark = pytest.mark.no_sim
 
@@ -48,6 +50,11 @@ class _HookLogger(RLEvalCallback):
 _HOOK_LOGGER_TARGET = f"{__name__}.{_HookLogger.__qualname__}"
 
 
+def _algo_config(eval_callbacks: Any) -> AlgoInitConfig:
+    """Stand in for a real algorithm config, which only eval_callbacks is read from."""
+    return cast("AlgoInitConfig", SimpleNamespace(eval_callbacks=eval_callbacks))
+
+
 class _FakeEnv:
     def __init__(self) -> None:
         self.evaluating = False
@@ -65,7 +72,7 @@ class _FakeAlgo(BaseAlgo):
     """Minimal algorithm driving the shared hooks the way the real ones do."""
 
     def __init__(self, env: Any, eval_callbacks: Any) -> None:
-        super().__init__(env, SimpleNamespace(eval_callbacks=eval_callbacks), device="cpu")
+        super().__init__(env, _algo_config(eval_callbacks), device="cpu")
         self.events: list[str] = []
         self.eval_mode_calls = 0
 
@@ -152,7 +159,7 @@ def test_compute_eval_actions_must_be_implemented() -> None:
     class _NoHook(BaseAlgo):
         pass
 
-    algo = _NoHook(_FakeEnv(), SimpleNamespace(eval_callbacks=None), device="cpu")
+    algo = _NoHook(cast("BaseTask", _FakeEnv()), _algo_config(None), device="cpu")
 
     with pytest.raises(NotImplementedError):
         algo._pre_eval_env_step({})
