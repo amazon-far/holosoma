@@ -23,9 +23,10 @@ The message also carries a one-line performance trend for a single tracked confi
 (`TREND_CELL`), comparing the mean of `TREND_METRIC_KEY` across three timescales: the two
 most recent runs, the last 7 days against the 7 before, and the last 30 days against the
 30 before. The weekly and monthly figures include the standard error of their mean; the
-run-to-run pair cannot, having one run each side. An arrow gives the direction of travel,
-with changes inside `TREND_DEADBAND` shown as flat so ordinary noise doesn't read as a
-trend. For a timing metric, up means slower.
+run-to-run pair cannot, having one run each side. Each comparison reads earlier to later,
+so the `→` between the two figures is the direction time runs; the trailing arrow is the
+verdict, with changes inside `TREND_DEADBAND` shown as flat so ordinary noise doesn't read
+as a trend. For a timing metric, up means slower.
 
 The two most recent runs are used rather than calendar days, so a skipped night compares
 against the previous run that exists instead of reporting a gap.

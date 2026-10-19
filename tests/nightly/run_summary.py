@@ -383,15 +383,18 @@ def format_trend_line() -> str | None:
             end = now - timedelta(days=to_days_ago)
             return _period_stat([value for stamp, value in series if start <= stamp < end])
 
-        # The two newest runs rather than calendar days, so a skipped night compares
-        # against the previous run that exists instead of reporting a gap.
-        comparisons = [("today", _period_stat([series[0][1]]), _period_stat([series[1][1]]))]
-        for label, span in (("7d", 7), ("30d", 30)):
-            comparisons.append((label, window(span, 0), window(span * 2, span)))
+        # Each comparison reads earlier to later, so the arrow between the two figures
+        # is the direction time runs and the trailing emoji is the verdict.
+        # The two newest runs are used rather than calendar days, so a skipped night
+        # compares against the previous run that exists instead of reporting a gap.
+        comparisons = [
+            ("yesterday", "today", _period_stat([series[1][1]]), _period_stat([series[0][1]])),
+            *((f"prev {span}d", f"this {span}d", window(span * 2, span), window(span, 0)) for span in (7, 30)),
+        ]
 
         parts = [
-            f"{label} {_format_stat(current)} vs {_format_stat(previous)} {_trend_emoji(current, previous)}"
-            for label, current, previous in comparisons
+            f"{before_label} {_format_stat(before)} → {after_label} {_format_stat(after)} {_trend_emoji(after, before)}"
+            for before_label, after_label, before, after in comparisons
         ]
         return f"⏱️ {TREND_METRIC_LABEL} · {TREND_CELL} — " + " · ".join(parts)
     except Exception as e:
