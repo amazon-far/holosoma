@@ -385,18 +385,19 @@ def format_trend_line() -> str | None:
 
         # Each comparison reads earlier to later, so the arrow between the two figures
         # is the direction time runs and the trailing emoji is the verdict.
-        # The two newest runs are used rather than calendar days, so a skipped night
-        # compares against the previous run that exists instead of reporting a gap.
+        # The 1d pair is the two newest runs rather than calendar days, so a skipped
+        # night compares against the previous run that exists instead of reporting a gap.
         comparisons = [
-            ("yesterday", "today", _period_stat([series[1][1]]), _period_stat([series[0][1]])),
-            *((f"prev {span}d", f"this {span}d", window(span * 2, span), window(span, 0)) for span in (7, 30)),
+            ("1d", _period_stat([series[1][1]]), _period_stat([series[0][1]])),
+            *((f"{span}d", window(span * 2, span), window(span, 0)) for span in (7, 30)),
         ]
 
-        parts = [
-            f"{before_label} {_format_stat(before)} → {after_label} {_format_stat(after)} {_trend_emoji(after, before)}"
-            for before_label, after_label, before, after in comparisons
+        lines = [f"⏱️ {TREND_METRIC_LABEL} · {TREND_CELL}"]
+        lines += [
+            f"- {label}: {_format_stat(before)} → {_format_stat(after)} {_trend_emoji(after, before)}"
+            for label, before, after in comparisons
         ]
-        return f"⏱️ {TREND_METRIC_LABEL} · {TREND_CELL} — " + " · ".join(parts)
+        return "\n".join(lines)
     except Exception as e:
         print(f"Could not build the performance trend line: {e}")
         return None

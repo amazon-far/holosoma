@@ -19,17 +19,23 @@ python tests/nightly/nightly.py exp:g1-29dof logger:wandb simulator:isaacsim
 Generates a summary of recent nightly runs and posts to Slack. Automatically includes a link to the most recent wandb report at the top of the message.
 
 Usage:
-The message also carries a one-line performance trend for a single tracked configuration
-(`TREND_CELL`), comparing the mean of `TREND_METRIC_KEY` across three timescales: the two
-most recent runs, the last 7 days against the 7 before, and the last 30 days against the
-30 before. The weekly and monthly figures include the standard error of their mean; the
-run-to-run pair cannot, having one run each side. Each comparison reads earlier to later,
-so the `→` between the two figures is the direction time runs; the trailing arrow is the
-verdict, with changes inside `TREND_DEADBAND` shown as flat so ordinary noise doesn't read
-as a trend. For a timing metric, up means slower.
+The message also carries a performance trend for a single tracked configuration
+(`TREND_CELL`): a heading naming the metric and configuration, then one bullet per
+timescale comparing the mean of `TREND_METRIC_KEY`, each rendered as
+`<window>: <earlier> → <later>`:
 
-The two most recent runs are used rather than calendar days, so a skipped night compares
-against the previous run that exists instead of reporting a gap.
+- `1d` — the two most recent runs
+- `7d` — the last 7 days against the 7 before
+- `30d` — the last 30 days against the 30 before
+
+The 7d and 30d figures include the standard error of their mean; the `1d` pair cannot,
+having one run each side. The earlier figure is always on the left, so the `→` is the
+direction time runs; the trailing arrow is the verdict, with changes inside
+`TREND_DEADBAND` shown as flat so ordinary noise doesn't read as a trend. For a timing
+metric, up means slower.
+
+The `1d` pair is the two most recent runs rather than calendar days, so a skipped night
+compares against the previous run that exists instead of reporting a gap.
 
 ```bash
 # Print summary to console
