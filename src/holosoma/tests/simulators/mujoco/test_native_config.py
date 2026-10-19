@@ -273,6 +273,26 @@ def test_robot_native_masks_preserve_retained_asset_floor_contacts(tmp_path):
     assert all(floor in data.contact[index].geom for index in range(data.ncon))
 
 
+def test_robot_native_masks_keep_separate_scene_actors_outside_self_collision_check(tmp_path):
+    manager = robot_scene(
+        tmp_path,
+        MujocoPhysicsConfig(contype=4, conaffinity=2),
+        False,
+        xml=ROBOT_XML.replace('pos="0 0 1"', 'pos="0 0 .079"'),
+    )
+    body = manager.world_spec.worldbody.add_body(name="fixture")
+    body.add_geom(name="fixture_floor", type=mujoco.mjtGeom.mjGEOM_PLANE, size=[2, 2, 0.1], contype=2, conaffinity=1)
+    model = manager.compile()
+    floor = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "fixture_floor")
+    body_id = model.geom_bodyid[floor]
+    assert body_id > mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "robot_right")
+    assert model.body_parentid[body_id] == 0
+    data = mujoco.MjData(model)
+    mujoco.mj_step(model, data)
+    assert data.ncon == 2
+    assert all(floor in data.contact[index].geom for index in range(data.ncon))
+
+
 FILTERED_ROBOT_XML = """<mujoco><worldbody><body name="root"><freejoint/><geom size=".1" mass="1"/>
 <body name="child"><joint name="hinge"/><geom size=".1" mass="1"/></body>
 </body></worldbody></mujoco>"""
