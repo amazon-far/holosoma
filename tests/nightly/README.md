@@ -30,9 +30,14 @@ timescale comparing the mean of `TREND_METRIC_KEY`, each rendered as
 
 The 7d and 30d figures include the standard error of their mean; the `1d` pair cannot,
 having one run each side. The earlier figure is always on the left, so the `→` is the
-direction time runs; the trailing arrow is the verdict, with changes inside
-`TREND_DEADBAND` shown as flat so ordinary noise doesn't read as a trend. For a timing
-metric, up means slower.
+direction time runs.
+
+The trailing marker is a verdict rather than a direction — 🟢 better, 🔴 worse, ⚪ inside
+`TREND_DEADBAND` and so flat — because the two figures already show which way the metric
+moved. Which direction counts as better comes from `TREND_LOWER_IS_BETTER`, which must be
+flipped if `TREND_METRIC_KEY` is pointed at a metric like throughput where higher is
+better. The markers are circles so they don't read as the squares in the run-status
+legend lower down the same message.
 
 The `1d` pair is the two most recent runs rather than calendar days, so a skipped night
 compares against the previous run that exists instead of reporting a gap.

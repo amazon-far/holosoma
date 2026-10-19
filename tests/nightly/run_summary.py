@@ -46,6 +46,16 @@ TREND_LOOKBACK_DAYS = 60
 # Relative change below which a comparison reads as flat. Without it, ordinary
 # run-to-run noise shows as a direction every night.
 TREND_DEADBAND = 0.01
+# Whether a falling value is an improvement. True for a timing metric, false if the
+# tracked metric is changed to something like throughput, where higher is better.
+TREND_LOWER_IS_BETTER = True
+# Verdict markers. Colour rather than direction: the figures either side of the arrow
+# already show which way the metric moved, so what the marker adds is whether that is
+# good or bad. Deliberately circles, not the squares the run-status legend uses, so the
+# two sets don't read as the same thing in one message.
+TREND_BETTER = "🟢"
+TREND_WORSE = "🔴"
+TREND_FLAT = "⚪"
 
 # Simulator tag values set by nightly.py (config.simulator.config.name). "isaacgym" is retained
 # for ARCHIVED runs only -- the backend is retired; dropping it would make historical runs resolve
@@ -326,16 +336,14 @@ def _format_stat(stat: PeriodStat | None) -> str:
 
 
 def _trend_emoji(current: PeriodStat | None, previous: PeriodStat | None) -> str:
-    """Direction of travel between two periods, or flat inside the deadband.
-
-    Up means the metric grew. For a timing metric that is slower, not better.
-    """
+    """Whether the move between two periods is an improvement, or flat within noise."""
     if current is None or previous is None or not previous.mean:
         return "❔"
     change = (current.mean - previous.mean) / abs(previous.mean)
     if abs(change) < TREND_DEADBAND:
-        return "➡️"
-    return "⬆️" if change > 0 else "⬇️"
+        return TREND_FLAT
+    improved = change < 0 if TREND_LOWER_IS_BETTER else change > 0
+    return TREND_BETTER if improved else TREND_WORSE
 
 
 def _fetch_trend_series() -> list[tuple[datetime, float]]:
