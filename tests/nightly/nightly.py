@@ -43,12 +43,14 @@ PERF_WARNING_TAG = "nightly_perf_warning"
 # comparable to the stored baselines.
 PERF_FPS_MEAN_KEY = "perf/total_fps_mean"
 PERF_WARMUP_ROWS = 1
+# One nightly run per cell, so the last 14 runs are the last 14 nights. Counted in runs
+# rather than days so a skipped night shortens the window instead of thinning the sample.
 PERF_BASELINE_RUNS = 14
 PERF_BASELINE_MIN_RUNS = 5
-# Fraction of the baseline below which a run is called out. Thresholding at the
-# baseline itself would fire on roughly half of all runs, since noise is symmetric
-# about it. Tune once the dashboard shows the real spread.
-PERF_WARN_RATIO = 0.80
+# How far below the baseline mean a run has to fall, in standard deviations of that
+# baseline, before it is called out. Scaling to the measured spread rather than a fixed
+# percentage means the threshold tightens on a cell that normally runs consistently.
+PERF_WARN_SIGMA = 2.0
 
 
 def now_timestamp() -> str:
@@ -113,11 +115,11 @@ def mean_run_fps(run: Any) -> float | None:
     return total / count if count else None
 
 
-def baseline_fps(api: Any, run_path: str, cell_tags: list[str], current_run_id: str) -> float | None:
-    """Median mean-fps of recent prior runs sharing this run's matrix cell.
+def baseline_fps(api: Any, run_path: str, cell_tags: list[str], current_run_id: str) -> tuple[float, float] | None:
+    """Mean and standard deviation of recent prior runs sharing this run's matrix cell.
 
-    Median rather than mean so a single slow night cannot drag the baseline down and
-    mask a later regression. Returns None when too few prior runs carry the metric.
+    Returns None when too few prior runs carry the metric, or when they are all
+    identical and so give no spread to measure against.
     """
     entity, project, _ = run_path.split("/")
     previous: list[float] = []
@@ -142,7 +144,12 @@ def baseline_fps(api: Any, run_path: str, cell_tags: list[str], current_run_id: 
             f"found {len(previous)}; skipping throughput check"
         )
         return None
-    return statistics.median(previous)
+
+    spread = statistics.stdev(previous)
+    if spread <= 0:
+        print("Throughput baseline has no spread; skipping throughput check")
+        return None
+    return statistics.fmean(previous), spread
 
 
 def check_throughput_regression(cell_tags: list[str]) -> None:
@@ -166,12 +173,16 @@ def check_throughput_regression(cell_tags: list[str]) -> None:
             print("Run logged no fps history; skipping throughput check")
             return
 
-        baseline = baseline_fps(api, run_path, cell_tags, wandb.run.id)
-        if baseline is None:
+        stats = baseline_fps(api, run_path, cell_tags, wandb.run.id)
+        if stats is None:
             return
 
-        threshold = baseline * PERF_WARN_RATIO
-        summary = f"mean fps {current:0.0f} vs baseline median {baseline:0.0f} (warn below {threshold:0.0f})"
+        baseline, spread = stats
+        threshold = baseline - PERF_WARN_SIGMA * spread
+        summary = (
+            f"mean fps {current:0.0f} vs baseline {baseline:0.0f} ±{spread:0.0f} "
+            f"(warn below {threshold:0.0f}, {PERF_WARN_SIGMA:g} sigma)"
+        )
         if current < threshold:
             print(f"Throughput regression warning: {summary}")
             append_wandb_tag(api, run_path, PERF_WARNING_TAG)

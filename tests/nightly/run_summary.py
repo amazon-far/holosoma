@@ -43,9 +43,13 @@ TREND_METRIC_KEY = "perf/collection_time_mean"
 TREND_METRIC_LABEL = "collection_time mean"
 # Enough history to cover the longest comparison window and its predecessor.
 TREND_LOOKBACK_DAYS = 60
-# Relative change below which a comparison reads as flat. Without it, ordinary
-# run-to-run noise shows as a direction every night.
-TREND_DEADBAND = 0.01
+# How many standard deviations the two figures must be apart before the change counts as
+# real rather than noise. The spread used is that of the *difference*, so a comparison
+# accounts for the uncertainty on both sides rather than only the earlier one.
+TREND_SIGMA = 2.0
+# A single night has no spread of its own, so it is judged against how much this cell
+# normally varies from night to night, measured over this many recent runs.
+TREND_DAILY_BASELINE_RUNS = 14
 # Whether a falling value is an improvement. True for a timing metric, false if the
 # tracked metric is changed to something like throughput, where higher is better.
 TREND_LOWER_IS_BETTER = True
@@ -335,15 +339,35 @@ def _format_stat(stat: PeriodStat | None) -> str:
     return f"{stat.mean:.3f} ±{stat.stderr:.3f}s"
 
 
-def _trend_emoji(current: PeriodStat | None, previous: PeriodStat | None) -> str:
-    """Whether the move between two periods is an improvement, or flat within noise."""
-    if current is None or previous is None or not previous.mean:
+def _difference_error(earlier: PeriodStat | None, later: PeriodStat | None) -> float | None:
+    """Standard error of the difference between two period means.
+
+    Combining both sides' errors in quadrature is the denominator of Welch's t: dividing
+    the gap between the means by it asks how many standard deviations apart the two
+    distributions are, given how well each mean is known. None when either side is a
+    single run and so carries no error of its own.
+    """
+    if earlier is None or later is None or earlier.stderr is None or later.stderr is None:
+        return None
+    return math.hypot(earlier.stderr, later.stderr)
+
+
+def _trend_marker(later: PeriodStat | None, earlier: PeriodStat | None, sigma: float | None) -> str:
+    """Colour for the verdict, diagonal arrow for the direction.
+
+    A gap smaller than `TREND_SIGMA` times `sigma` is reported as flat, so the colour
+    only calls out a change large enough to be distinguishable from noise.
+    """
+    if later is None or earlier is None:
         return "❔"
-    change = (current.mean - previous.mean) / abs(previous.mean)
-    if abs(change) < TREND_DEADBAND:
-        return TREND_FLAT
-    improved = change < 0 if TREND_LOWER_IS_BETTER else change > 0
-    return TREND_BETTER if improved else TREND_WORSE
+
+    delta = later.mean - earlier.mean
+    if sigma is None or sigma <= 0 or abs(delta) <= TREND_SIGMA * sigma:
+        return f"{TREND_FLAT}➡️"
+
+    improved = delta < 0 if TREND_LOWER_IS_BETTER else delta > 0
+    arrow = "↘️" if delta < 0 else "↗️"
+    return f"{TREND_BETTER if improved else TREND_WORSE}{arrow}"
 
 
 def _fetch_trend_series() -> list[tuple[datetime, float]]:
@@ -391,19 +415,25 @@ def format_trend_line() -> str | None:
             end = now - timedelta(days=to_days_ago)
             return _period_stat([value for stamp, value in series if start <= stamp < end])
 
+        # A single night carries no error of its own, so it is judged against how much
+        # this cell normally varies from night to night.
+        recent = [value for _, value in series[:TREND_DAILY_BASELINE_RUNS]]
+        nightly_spread = statistics.stdev(recent) if len(recent) > 1 else None
+
         # Each comparison reads earlier to later, so the arrow between the two figures
-        # is the direction time runs and the trailing emoji is the verdict.
+        # is the direction time runs and the trailing marker is the verdict.
         # The 1d pair is the two newest runs rather than calendar days, so a skipped
         # night compares against the previous run that exists instead of reporting a gap.
+        segments = [(f"{span}d", window(span * 2, span), window(span, 0)) for span in (7, 30)]
         comparisons = [
-            ("1d", _period_stat([series[1][1]]), _period_stat([series[0][1]])),
-            *((f"{span}d", window(span * 2, span), window(span, 0)) for span in (7, 30)),
+            ("1d", _period_stat([series[1][1]]), _period_stat([series[0][1]]), nightly_spread),
+            *((label, before, after, _difference_error(before, after)) for label, before, after in segments),
         ]
 
         lines = [f"⏱️ {TREND_METRIC_LABEL} · {TREND_CELL}"]
         lines += [
-            f"- {label}: {_format_stat(before)} → {_format_stat(after)} {_trend_emoji(after, before)}"
-            for label, before, after in comparisons
+            f"- {label}: {_format_stat(before)} → {_format_stat(after)} {_trend_marker(after, before, sigma)}"
+            for label, before, after, sigma in comparisons
         ]
         return "\n".join(lines)
     except Exception as e:

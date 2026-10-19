@@ -32,12 +32,22 @@ The 7d and 30d figures include the standard error of their mean; the `1d` pair c
 having one run each side. The earlier figure is always on the left, so the `→` is the
 direction time runs.
 
-The trailing marker is a verdict rather than a direction — 🟢 better, 🔴 worse, ⚪ inside
-`TREND_DEADBAND` and so flat — because the two figures already show which way the metric
-moved. Which direction counts as better comes from `TREND_LOWER_IS_BETTER`, which must be
-flipped if `TREND_METRIC_KEY` is pointed at a metric like throughput where higher is
-better. The markers are circles so they don't read as the squares in the run-status
-legend lower down the same message.
+The trailing marker pairs a verdict colour with a diagonal arrow for the direction: 🟢
+better, 🔴 worse, ⚪ flat. Which direction counts as better comes from
+`TREND_LOWER_IS_BETTER`, which must be flipped if `TREND_METRIC_KEY` is pointed at a
+metric like throughput where higher is better. The colours are circles so they don't read
+as the squares in the run-status legend lower down the same message.
+
+A change is only coloured when the two figures are more than `TREND_SIGMA` standard
+deviations apart, so ordinary noise reads as flat:
+
+- For `7d` and `30d`, the spread used is that of the *difference* between the two means,
+  combining both sides' standard errors in quadrature. That is the denominator of
+  Welch's t, so the test asks how many standard deviations apart the two distributions
+  are given how well each mean is known — rather than comparing against one side alone.
+- For `1d` there is one run each side and so no error to use. That change is measured
+  against how much the cell normally varies from night to night, the standard deviation
+  of the last `TREND_DAILY_BASELINE_RUNS` runs.
 
 The `1d` pair is the two most recent runs rather than calendar days, so a skipped night
 compares against the previous run that exists instead of reporting a gap.
@@ -160,12 +170,17 @@ construction, so filter to one cell in the UI when comparing absolute numbers.
 
 ## Throughput warnings
 
-`nightly.py` also compares each run's mean fps against the median of the last
-`PERF_BASELINE_RUNS` runs of the same matrix cell (matching experiment, simulator and GPU
-count), and tags runs below `PERF_WARN_RATIO` of that baseline with `nightly_perf_warning`.
-These appear in the Slack summary as 🐌 and are **not** counted as failures — throughput
-moves with the runner, so the check never fails a build. It is skipped until at least
-`PERF_BASELINE_MIN_RUNS` prior runs carry the metric.
+`nightly.py` also compares each run's mean fps against the last `PERF_BASELINE_RUNS` runs
+of the same matrix cell (matching experiment, simulator and GPU count), and tags runs more
+than `PERF_WARN_SIGMA` standard deviations below that baseline's mean with
+`nightly_perf_warning`. Scaling to the measured spread rather than a fixed percentage
+means the threshold tightens automatically on a cell that normally runs consistently.
+
+These appear in the Slack summary as 🐌, and only ever on runs that otherwise passed: a
+crash or a metrics regression takes precedence. They are **not** counted as failures —
+throughput moves with the runner, so the check never fails a build. It is skipped until at
+least `PERF_BASELINE_MIN_RUNS` prior runs carry the metric, and also when those runs are
+all identical and so give no spread to measure against.
 
 ## GitHub Actions Integration
 
