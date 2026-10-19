@@ -10,7 +10,9 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
+import statistics
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from enum import Enum, auto
@@ -31,6 +33,19 @@ GITHUB_RUN_ID = getenv("GITHUB_RUN_ID")
 
 # Throughput regression warning applied by nightly.py. Keep in sync with that script.
 PERF_WARNING_TAG = "nightly_perf_warning"
+
+# One-line performance trend included in the Slack summary. The cell label and the metric
+# key are written by backfill_perf_summary.py; keep in sync with that script.
+PERF_PROJECT = "nightly-holosoma-runs"
+PERF_CELL_KEY = "perf/cell"
+TREND_CELL = "g1_29dof_manager | isaacsim | gpus-1"
+TREND_METRIC_KEY = "perf/collection_time_mean"
+TREND_METRIC_LABEL = "collection_time mean"
+# Enough history to cover the longest comparison window and its predecessor.
+TREND_LOOKBACK_DAYS = 60
+# Relative change below which a comparison reads as flat. Without it, ordinary
+# run-to-run noise shows as a direction every night.
+TREND_DEADBAND = 0.01
 
 # Simulator tag values set by nightly.py (config.simulator.config.name). "isaacgym" is retained
 # for ARCHIVED runs only -- the backend is retired; dropping it would make historical runs resolve
@@ -284,6 +299,106 @@ def get_last_nightly_runs() -> list[NightlyRun]:
     return nightly_runs
 
 
+class PeriodStat(NamedTuple):
+    """A metric averaged over one period, with the standard error of that average."""
+
+    mean: float
+    stderr: float | None  # undefined, and so None, for a single run
+
+
+def _period_stat(values: list[float]) -> PeriodStat | None:
+    """Averages a period's values, or None when the period holds no runs."""
+    if not values:
+        return None
+    mean = statistics.fmean(values)
+    if len(values) < 2:
+        return PeriodStat(mean=mean, stderr=None)
+    return PeriodStat(mean=mean, stderr=statistics.stdev(values) / math.sqrt(len(values)))
+
+
+def _format_stat(stat: PeriodStat | None) -> str:
+    """Renders a period as "3.358 ±0.006s", dropping the error where it is undefined."""
+    if stat is None:
+        return "n/a"
+    if stat.stderr is None:
+        return f"{stat.mean:.3f}s"
+    return f"{stat.mean:.3f} ±{stat.stderr:.3f}s"
+
+
+def _trend_emoji(current: PeriodStat | None, previous: PeriodStat | None) -> str:
+    """Direction of travel between two periods, or flat inside the deadband.
+
+    Up means the metric grew. For a timing metric that is slower, not better.
+    """
+    if current is None or previous is None or not previous.mean:
+        return "❔"
+    change = (current.mean - previous.mean) / abs(previous.mean)
+    if abs(change) < TREND_DEADBAND:
+        return "➡️"
+    return "⬆️" if change > 0 else "⬇️"
+
+
+def _fetch_trend_series() -> list[tuple[datetime, float]]:
+    """The tracked metric for the tracked cell, newest first."""
+    api = wandb.Api(timeout=60)
+    since = (datetime.now(timezone.utc) - timedelta(days=TREND_LOOKBACK_DAYS)).isoformat()
+
+    runs = api.runs(
+        path=f"{WANDB_ENTITY}/{PERF_PROJECT}",
+        filters={
+            f"summary_metrics.{PERF_CELL_KEY}": {"$eq": TREND_CELL},
+            "created_at": {"$gte": since},
+        },
+        order="-created_at",
+    )
+
+    series: list[tuple[datetime, float]] = []
+    for run in runs:
+        value = (run.summary or {}).get(TREND_METRIC_KEY)
+        created = getattr(run, "created_at", None)
+        if not isinstance(value, (int, float)) or not math.isfinite(value) or not created:
+            continue
+        series.append((datetime.fromisoformat(str(created).replace("Z", "+00:00")), float(value)))
+
+    series.sort(key=lambda entry: entry[0], reverse=True)
+    return series
+
+
+def format_trend_line() -> str | None:
+    """One line comparing the tracked metric across three timescales.
+
+    Returns None rather than raising: this is a nicety on top of the run summary and
+    must never be the reason the summary fails to post.
+    """
+    try:
+        series = _fetch_trend_series()
+        if len(series) < 2:
+            print(f"Not enough history for {TREND_CELL!r} to build a trend line")
+            return None
+
+        now = datetime.now(timezone.utc)
+
+        def window(from_days_ago: int, to_days_ago: int) -> PeriodStat | None:
+            start = now - timedelta(days=from_days_ago)
+            end = now - timedelta(days=to_days_ago)
+            return _period_stat([value for stamp, value in series if start <= stamp < end])
+
+        # The two newest runs rather than calendar days, so a skipped night compares
+        # against the previous run that exists instead of reporting a gap.
+        comparisons = [("today", _period_stat([series[0][1]]), _period_stat([series[1][1]]))]
+        for label, span in (("7d", 7), ("30d", 30)):
+            comparisons.append((label, window(span, 0), window(span * 2, span)))
+
+        parts = [
+            f"{label} {_format_stat(current)} vs {_format_stat(previous)} {_trend_emoji(current, previous)}"
+            for label, current, previous in comparisons
+        ]
+        return f"⏱️ {TREND_METRIC_LABEL} · {TREND_CELL} — " + " · ".join(parts)
+    except Exception as e:
+        print(f"Could not build the performance trend line: {e}")
+        return None
+
+
 def format_run_line(run: NightlyRun) -> str:
     """Formats a single run as an emoji-prefixed WandB link line for Slack/CLI."""
     return f"{RunStatus2Emoji.get(run.status)} {run.url} ({run.simulator}, {run.gpus})"
@@ -306,6 +421,10 @@ def post_summary_to_slack():
 
     run_url = f"{GITHUB_SERVER_URL}/{GITHUB_REPOSITORY}/actions/runs/{GITHUB_RUN_ID}"
     summary_message += f"Build Link: [Githun Run {GITHUB_RUN_ID}]({run_url})"
+
+    trend_line = format_trend_line()
+    if trend_line:
+        summary_message += f"\n{trend_line}"
 
     nightly_runs = get_last_nightly_runs()
 
@@ -330,11 +449,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser("run_summary", description="Summarizes latest nightly runs")
 
     parser.add_argument("--slack", action="store_true")
+    parser.add_argument("--trend-only", action="store_true", help="Print just the performance trend line")
 
     args = parser.parse_args()
 
     if args.slack:
         post_summary_to_slack()
+    elif args.trend_only:
+        print(format_trend_line() or "no trend line available")
     else:
         print("\n")  # To make the message layout cleaner
+        print(format_trend_line() or "no trend line available")
         print("\n".join(format_run_line(run) for run in get_last_nightly_runs()))
