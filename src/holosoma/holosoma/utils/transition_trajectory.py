@@ -16,7 +16,6 @@ from holosoma.utils.rotations import (
     quat_mul,
     quat_to_angle_axis,
     quat_unit,
-    slerp,
 )
 
 
@@ -66,37 +65,6 @@ def hermite_segment(
     position = a0 + a1 * tau + a2 * tau**2 + a3 * tau**3
     velocity = (a1 + 2.0 * a2 * tau + 3.0 * a3 * tau**2) / duration_s
     return position.to(out_dtype), velocity.to(out_dtype)
-
-
-def slerp_series(q0: torch.Tensor, q1: torch.Tensor, num_intervals: int) -> torch.Tensor:
-    """Spherically interpolate from ``q0`` to ``q1`` over a uniform grid.
-
-    Args:
-        q0, q1: quaternions of matching shape ``(..., 4)``, including a bare ``(4,)``.
-        num_intervals: as in :func:`hermite_segment`.
-
-    Returns:
-        ``(num_intervals + 1, *q0.shape)``, unit norm, endpoints included.
-
-    Don't ``quat_normalize`` the result: forcing w>=0 per frame breaks sign continuity at w=0.
-    """
-    if q0.shape != q1.shape:
-        raise ValueError(f"Quaternion endpoint shapes must match, got {q0.shape}/{q1.shape}")
-    if q0.shape[-1] != 4:
-        raise ValueError(f"Expected quaternions with trailing dim 4, got {q0.shape}")
-    if num_intervals < 1:
-        raise ValueError(f"Transition must contain at least one interval, got {num_intervals}")
-
-    num_frames = num_intervals + 1
-    num_quats = q0.numel() // 4
-    tau = torch.linspace(0.0, 1.0, num_frames, device=q0.device, dtype=q0.dtype)
-
-    flat0 = q0.reshape(1, -1, 4).expand(num_frames, -1, -1).reshape(-1, 4)
-    flat1 = q1.reshape(1, -1, 4).expand(num_frames, -1, -1).reshape(-1, 4)
-    blend = tau.repeat_interleave(num_quats).unsqueeze(-1)
-
-    interpolated = quat_unit(slerp(flat0, flat1, blend))
-    return interpolated.reshape((num_frames,) + tuple(q0.shape))
 
 
 def hermite_rotation_series(

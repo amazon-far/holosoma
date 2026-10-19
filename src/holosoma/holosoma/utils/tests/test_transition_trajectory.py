@@ -10,7 +10,6 @@ from holosoma.utils.transition_trajectory import (
     hermite_rotation_series,
     hermite_segment,
     linear_velocity_from_positions,
-    slerp_series,
 )
 
 pytestmark = pytest.mark.no_sim
@@ -126,42 +125,6 @@ def test_hermite_rejects_degenerate_grids(duration: float, num_intervals: int, m
 def test_hermite_rejects_mismatched_endpoint_shapes() -> None:
     with pytest.raises(ValueError, match="shapes must all match"):
         hermite_segment(torch.zeros(3), torch.zeros(3), torch.zeros(4), torch.zeros(3), 1.0, 10)
-
-
-def test_slerp_series_hits_endpoints_and_stays_unit_norm() -> None:
-    axis = torch.tensor([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]])
-    q0 = quat_from_angle_axis(torch.tensor([0.0, 0.1]), axis, w_last=True)
-    q1 = quat_from_angle_axis(torch.tensor([1.2, -0.8]), axis, w_last=True)
-
-    series = slerp_series(q0, q1, NUM_INTERVALS)
-
-    assert series.shape == (NUM_INTERVALS + 1, 2, 4)
-    torch.testing.assert_close(series[0], q0)
-    torch.testing.assert_close(series[-1], q1, atol=1e-6, rtol=1e-6)
-    torch.testing.assert_close(series.norm(dim=-1), torch.ones(NUM_INTERVALS + 1, 2))
-
-
-def test_slerp_series_accepts_a_bare_quaternion() -> None:
-    q0 = quat_from_angle_axis(torch.tensor([0.0]), torch.tensor([[0.0, 1.0, 0.0]]), w_last=True)[0]
-    q1 = quat_from_angle_axis(torch.tensor([0.9]), torch.tensor([[0.0, 1.0, 0.0]]), w_last=True)[0]
-
-    series = slerp_series(q0, q1, 10)
-
-    assert series.shape == (11, 4)
-    torch.testing.assert_close(series[0], q0)
-    torch.testing.assert_close(series[-1], q1, atol=1e-6, rtol=1e-6)
-
-
-def test_slerp_series_of_identical_endpoints_is_constant() -> None:
-    q = quat_from_angle_axis(torch.tensor([0.4]), torch.tensor([[0.0, 0.0, 1.0]]), w_last=True)
-    series = slerp_series(q, q, 10)
-    torch.testing.assert_close(series, q.expand_as(series).contiguous())
-
-
-def test_slerp_series_rejects_mismatched_shapes() -> None:
-    q = torch.tensor([[0.0, 0.0, 0.0, 1.0]])
-    with pytest.raises(ValueError, match="shapes must match"):
-        slerp_series(q, q.expand(2, 4), 10)
 
 
 def test_linear_velocity_recovers_a_constant_rate() -> None:
@@ -303,27 +266,6 @@ def test_rotation_series_endpoint_rate_converges_as_the_grid_refines() -> None:
 
 def test_left_jacobian_inverse_is_the_identity_at_zero() -> None:
     torch.testing.assert_close(_left_jacobian_inverse(torch.zeros(3)), torch.eye(3), atol=1e-9, rtol=0.0)
-
-
-def test_rotation_series_beats_slerp_at_the_endpoint_rate() -> None:
-    z = torch.tensor([0.0, 0.0, 1.0])
-    q0 = quat_from_angle_axis(torch.tensor([0.0]), z.unsqueeze(0), w_last=True)[0]
-    q1 = quat_from_angle_axis(torch.tensor([0.5]), z.unsqueeze(0), w_last=True)[0]
-    omega1 = z * 1.2
-
-    hermite_error = (
-        (
-            angular_velocity_from_quats(
-                hermite_rotation_series(q0, torch.zeros(3), q1, omega1, DURATION, NUM_INTERVALS), DT
-            )[-1]
-            - omega1
-        )
-        .abs()
-        .max()
-    )
-    slerp_error = (angular_velocity_from_quats(slerp_series(q0, q1, NUM_INTERVALS), DT)[-1] - omega1).abs().max()
-
-    assert float(hermite_error) < 0.05 * float(slerp_error)
 
 
 def test_rotation_series_of_equal_endpoints_at_rest_is_constant() -> None:
