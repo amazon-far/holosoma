@@ -185,7 +185,7 @@ class MujocoGeomPhysicsConfig:
     """Inactive-contact band inside margin, in metres; contacts above margin-gap exert no force.
     None preserves each geom's value."""
     extra: ExtraSettings = field(default_factory=dict)
-    """Other public MjsGeom properties, using bare names; shared mass/density and identity fields are excluded."""
+    """Other native geom physics properties, using bare names; asset authoring and shared mass/density are excluded."""
 
     @model_validator(mode="after")
     def validate_contact(self) -> MujocoGeomPhysicsConfig:

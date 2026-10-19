@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from itertools import combinations
 
 import mujoco
 import mujoco.viewer
@@ -381,6 +382,7 @@ class MujocoSceneManager:
 
         # Capture the robot's element inventory before attach (see ActorSpecMeta).
         self.robot_spec_meta = self._capture_spec_meta(robot_spec, prefix, root_body)
+        self.robot_config = robot_config
 
         # Attach at a unit frame; the real initial pose is set later via qpos.
         unit_frame = self.world_spec.worldbody.add_frame()
@@ -738,26 +740,38 @@ class MujocoSceneManager:
             if not body.name or body.name == worldbody_name:
                 continue
             self._apply_physics_to_body(body, asset.link_physics, f"{asset.robot_type}/{body.name}", apply_mass=False)
-        self._validate_robot_collision_masks(robot_spec, robot_config)
 
-    def _validate_robot_collision_masks(self, robot_spec: mujoco.MjSpec, robot_config: RobotConfig) -> None:
-        """Keep explicit native masks consistent with the robot's self-collision setting."""
-        asset = robot_config.asset
+    def _validate_robot_collision_masks(self, model: mujoco.MjModel, root_body_id: int) -> None:
+        """Reject mask overrides that permit self-contact after native body filtering."""
+        if self.robot_config is None:
+            return
+        asset = self.robot_config.asset
         native = asset.link_physics.mujoco if asset.link_physics is not None else None
         if asset.enable_self_collisions or native is None or (native.contype is None and native.conaffinity is None):
             return
-        geoms_by_body = [list(body.geoms) for body in robot_spec.bodies]
-        for index, geoms in enumerate(geoms_by_body):
-            for other_geoms in geoms_by_body[index + 1 :]:
-                if any(
-                    (left.contype & right.conaffinity) or (right.contype & left.conaffinity)
-                    for left in geoms
-                    for right in other_geoms
-                ):
-                    raise ValueError(
-                        "robot.asset.link_physics.mujoco: collision masks allow self-collision while "
-                        "robot.asset.enable_self_collisions=False; restrict the masks or enable self-collisions"
-                    )
+        # Compiled body IDs follow tree order; retained worldbody geoms are environment.
+        bodies = {root_body_id}
+        for body in range(root_body_id + 1, model.nbody):
+            if int(model.body_parentid[body]) in bodies:
+                bodies.add(body)
+        exclusions = set(map(int, model.exclude_signature))
+        filter_parent = not (model.opt.disableflags & mujoco.mjtDisableBit.mjDSBL_FILTERPARENT)
+        for left, right in combinations(sorted(bodies), 2):
+            weld_left, weld_right = int(model.body_weldid[left]), int(model.body_weldid[right])
+            if weld_left == weld_right or (left << 16) + right in exclusions:
+                continue
+            if filter_parent and weld_left != 0 and weld_right != 0:
+                parent_left = int(model.body_weldid[model.body_parentid[weld_left]])
+                parent_right = int(model.body_weldid[model.body_parentid[weld_right]])
+                if weld_left == parent_right or weld_right == parent_left:
+                    continue
+            if (int(model.body_contype[left]) & int(model.body_conaffinity[right])) or (
+                int(model.body_contype[right]) & int(model.body_conaffinity[left])
+            ):
+                raise ValueError(
+                    "robot.asset.link_physics.mujoco: collision masks allow self-collision while "
+                    "robot.asset.enable_self_collisions=False; restrict the masks or enable self-collisions"
+                )
 
     def _ensure_single_root_body(self, spec: mujoco.MjSpec, name: str, add_freejoint: bool = True) -> str:
         """Require a single top-level body; return its root-body name.
@@ -948,5 +962,6 @@ class MujocoSceneManager:
         if root_body_id < 0:
             raise RuntimeError(f"Compiled MuJoCo model is missing robot root body '{root_body_name}'.")
 
+        self._validate_robot_collision_masks(model, root_body_id)
         tag_compiled_robot_geom_groups(model, root_body_id)
         return model

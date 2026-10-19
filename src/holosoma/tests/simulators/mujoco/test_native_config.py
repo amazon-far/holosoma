@@ -245,7 +245,7 @@ def test_robot_native_masks_preserve_visuals_and_select_real_self_contacts(
 @pytest.mark.parametrize("masks", [{"conaffinity": 3}, {"contype": 2}, {"contype": 4, "conaffinity": 6}])
 def test_robot_native_masks_cannot_enable_disabled_self_collisions(tmp_path, masks):
     with pytest.raises(ValueError, match=r"robot\.asset\.link_physics\.mujoco.*enable_self_collisions=False"):
-        robot_scene(tmp_path, MujocoPhysicsConfig(**masks), False)
+        robot_scene(tmp_path, MujocoPhysicsConfig(**masks), False).compile()
 
 
 def test_authored_custom_robot_masks_are_preserved_when_unset(tmp_path):
@@ -259,8 +259,63 @@ def test_authored_custom_robot_masks_are_preserved_when_unset(tmp_path):
     assert data.ncon == 0
 
 
-@pytest.mark.parametrize("extra", [{"type": "box"}, {"pos": [1, 2, 3]}, {"size": [1, 1, 1]}, {"meshname": "mesh"}])
-def test_geom_extras_do_not_replace_asset_authoring(extra):
+def test_robot_native_masks_preserve_retained_asset_floor_contacts(tmp_path):
+    xml = ROBOT_XML.replace(
+        "<worldbody>", '<worldbody><geom name="floor" type="plane" size="2 2 .1" contype="2" conaffinity="1"/>'
+    ).replace('pos="0 0 1"', 'pos="0 0 .079"')
+    model = robot_scene(tmp_path, MujocoPhysicsConfig(contype=4, conaffinity=2), False, xml=xml).compile()
+    floor = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "robot_floor")
+    assert model.geom_bodyid[floor] == 0
+    assert (model.geom_contype[floor], model.geom_conaffinity[floor]) == (2, 1)
+    data = mujoco.MjData(model)
+    mujoco.mj_step(model, data)
+    assert data.ncon == 2
+    assert all(floor in data.contact[index].geom for index in range(data.ncon))
+
+
+FILTERED_ROBOT_XML = """<mujoco><worldbody><body name="root"><freejoint/><geom size=".1" mass="1"/>
+<body name="child"><joint name="hinge"/><geom size=".1" mass="1"/></body>
+</body></worldbody></mujoco>"""
+
+
+@pytest.mark.parametrize(
+    "xml",
+    [
+        FILTERED_ROBOT_XML,
+        FILTERED_ROBOT_XML.replace('<joint name="hinge"/>', ""),
+        ROBOT_XML.replace("</mujoco>", '<contact><exclude body1="left" body2="right"/></contact></mujoco>'),
+    ],
+    ids=["parent", "weld", "exclude"],
+)
+def test_robot_native_masks_respect_native_body_collision_filters(tmp_path, xml):
+    model = robot_scene(tmp_path, MujocoPhysicsConfig(conaffinity=1), False, xml=xml).compile()
+    assert np.any(model.geom_contype & model.geom_conaffinity)
+    data = mujoco.MjData(model)
+    mujoco.mj_step(model, data)
+    assert data.ncon == 0
+
+
+def test_disabling_parent_filter_requires_self_collision_permission(tmp_path):
+    for self_collisions in [False, True]:
+        manager = robot_scene(tmp_path, MujocoPhysicsConfig(conaffinity=1), self_collisions, xml=FILTERED_ROBOT_XML)
+        manager.simulator_config = replace(
+            preset.config, sim=replace(preset.config.sim, mujoco=MujocoConfig(disableflags=("filterparent",)))
+        )
+        if not self_collisions:
+            with pytest.raises(ValueError, match="enable_self_collisions=False"):
+                manager.compile()
+        else:
+            model = manager.compile()
+            data = mujoco.MjData(model)
+            mujoco.mj_step(model, data)
+            assert data.ncon == 1
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [{"type": "box"}, {"pos": [1, 2, 3]}, {"size": [1, 1, 1]}, {"meshname": "mesh"}, {"mass": 7}, {"density": 900}],
+)
+def test_geom_extras_respect_asset_and_shared_physics_ownership(extra):
     manager = MujocoSceneManager(preset.config)
     manager.world_spec = mujoco.MjSpec.from_string(XML)
     with pytest.raises(ValueError, match="asset authoring"):
