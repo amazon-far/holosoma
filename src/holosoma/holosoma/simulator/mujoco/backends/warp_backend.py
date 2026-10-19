@@ -42,14 +42,15 @@ import torch
 import warp as wp
 from loguru import logger
 
-from holosoma.simulator.mujoco.geom_groups import DEFAULT_RENDER_GEOM_GROUPS
-from holosoma.simulator.mujoco.native_config import (
+from holosoma.simulator.mujoco.backends.native_config import (
     allocation_kwargs,
-    apply_warp_data,
     apply_warp_model,
-    effective_options,
-    validate_warp_option_coverage,
+    validate_warp_options,
+    warp_extra_inputs,
+    warp_option_overrides,
 )
+from holosoma.simulator.mujoco.geom_groups import DEFAULT_RENDER_GEOM_GROUPS
+from holosoma.simulator.mujoco.native_config import effective_options
 
 from .base import IMujocoBackend, holosoma_to_mj_quat, mj_to_holosoma_quat
 from .warp_bridge import WarpBridge
@@ -210,8 +211,10 @@ class WarpBackend(IMujocoBackend):
         super().__init__(model, data, config, device)
         warp_config = config.simulator.sim.mujoco
         overrides = effective_options(config.simulator)
-        validate_warp_option_coverage(overrides)
-        allocation = allocation_kwargs(model, warp_config.warp, self.num_envs)
+        validate_warp_options(model, overrides)
+        option_inputs, allocation_inputs = warp_extra_inputs(warp_config.warp)
+        options = warp_option_overrides(warp_config.warp, inputs=option_inputs)
+        allocation = allocation_kwargs(model, warp_config.warp, self.num_envs, inputs=allocation_inputs)
 
         # Import warp packages (fail fast if not available)
         try:
@@ -240,7 +243,7 @@ class WarpBackend(IMujocoBackend):
                 self.mjw_model = mjw.put_model(model)
             except (ValueError, NotImplementedError) as exc:
                 raise ValueError(f"simulator.config.sim.mujoco / model attributes: {exc}") from exc
-            apply_warp_model(self.mjw_model, warp_config, overrides)
+            apply_warp_model(self.mjw_model, warp_config, options)
             self._lidar_render_context: Any = None
             self._lidar_render_context_groups: tuple[int, ...] | None = None
             self._sensor_refit_graphs: dict[int, Graph] = {}
@@ -258,7 +261,6 @@ class WarpBackend(IMujocoBackend):
                 self.mjw_data = mjw.make_data(model, **allocation)
             except (ValueError, NotImplementedError) as exc:
                 raise ValueError(f"simulator.config.sim.mujoco.warp allocation: {exc}") from exc
-            apply_warp_data(self.mjw_data, model, warp_config)
 
             # Create zero-copy PyTorch tensors tethered to Warp arrays
             # These tensors share memory with the Warp arrays - no copying!

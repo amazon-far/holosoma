@@ -285,7 +285,7 @@ class MuJoCo(BaseSimulator):
                 raise RuntimeError(
                     "WarpBackend requested (mujoco_backend='warp') but dependencies not available.\n\n"
                     "To enable GPU acceleration, reinstall with warp support:\n"
-                    "  bash scripts/setup_mujoco.sh --with-warp\n\n"
+                    "  bash scripts/setup_mujoco.sh\n\n"
                     "Or install dependencies manually:\n"
                     "  pip install warp-lang mujoco-warp\n\n"
                     "System requirements: CUDA-capable GPU required"

@@ -691,8 +691,8 @@ class MujocoSceneManager:
         are ignored.
 
         ``mass`` sets the body's explicit mass (``explicitinertial`` so MuJoCo keeps it rather than
-        recomputing from geom density); ``density`` and the geom props are applied to every geom of
-        the body. ``None`` on any field keeps the asset's authored value.
+        recomputing from geom density); ``density`` and contact props apply to every geom.
+        Collision-mask overrides skip visual-only geoms. ``None`` keeps authored values.
 
         ``apply_mass=False`` skips the ``mass`` write. It is passed when applying the whole-robot
         ``link_physics`` default to every link, where one mass on every link is meaningless (the
@@ -738,6 +738,26 @@ class MujocoSceneManager:
             if not body.name or body.name == worldbody_name:
                 continue
             self._apply_physics_to_body(body, asset.link_physics, f"{asset.robot_type}/{body.name}", apply_mass=False)
+        self._validate_robot_collision_masks(robot_spec, robot_config)
+
+    def _validate_robot_collision_masks(self, robot_spec: mujoco.MjSpec, robot_config: RobotConfig) -> None:
+        """Keep explicit native masks consistent with the robot's self-collision setting."""
+        asset = robot_config.asset
+        native = asset.link_physics.mujoco if asset.link_physics is not None else None
+        if asset.enable_self_collisions or native is None or (native.contype is None and native.conaffinity is None):
+            return
+        geoms_by_body = [list(body.geoms) for body in robot_spec.bodies]
+        for index, geoms in enumerate(geoms_by_body):
+            for other_geoms in geoms_by_body[index + 1 :]:
+                if any(
+                    (left.contype & right.conaffinity) or (right.contype & left.conaffinity)
+                    for left in geoms
+                    for right in other_geoms
+                ):
+                    raise ValueError(
+                        "robot.asset.link_physics.mujoco: collision masks allow self-collision while "
+                        "robot.asset.enable_self_collisions=False; restrict the masks or enable self-collisions"
+                    )
 
     def _ensure_single_root_body(self, spec: mujoco.MjSpec, name: str, add_freejoint: bool = True) -> str:
         """Require a single top-level body; return its root-body name.

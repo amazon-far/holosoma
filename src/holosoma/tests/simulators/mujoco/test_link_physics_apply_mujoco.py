@@ -5,10 +5,6 @@ Exercise the spawn-time seam ``MujocoSceneManager._apply_link_physics_to_robot``
 the compiled ``MjModel``. Checks that configured values land on robot link geoms, that the
 whole-robot path does not write mass, and that foreign-backend sub-configs are ignored on MuJoCo.
 
-The seam methods only touch ``self._apply_physics_to_body``, ``robot_config.asset``, and the spec,
-so they are called via a tiny ``_Shim`` ``self`` plus a ``SimpleNamespace`` robot-config stub, with
-no full ``MujocoSceneManager`` construction.
-
 The seam applies the whole-robot ``link_physics`` uniformly with ``apply_mass=False`` (no per-link
 override).
 """
@@ -22,7 +18,7 @@ mujoco = pytest.importorskip("mujoco")
 # MuJoCo ClassicBackend (CPU) only.
 pytestmark = pytest.mark.mujoco_classic
 
-from types import SimpleNamespace  # noqa: E402
+from dataclasses import replace  # noqa: E402
 
 from holosoma.config_types.scene import (  # noqa: E402
     IsaacSimPhysicsConfig,
@@ -30,22 +26,14 @@ from holosoma.config_types.scene import (  # noqa: E402
     PhysicsConfig,
     PhysXPhysicsConfig,
 )
+from holosoma.config_values.robot import g1_29dof  # noqa: E402
+from holosoma.config_values.simulator import mujoco as preset  # noqa: E402
 from holosoma.simulator.mujoco.scene_manager import MujocoSceneManager  # noqa: E402
 
 # Authored baseline geom values, distinct from anything a test applies, so "kept unchanged" and
 # "overwritten" are distinguishable.
 _BASE_FRICTION = [0.3, 0.005, 0.0001]
 _BASE_CONDIM = 3
-
-
-class _Shim:
-    """A stand-in ``self`` exposing the unbound ``_apply_physics_to_body``.
-
-    ``_apply_link_physics_to_robot`` calls ``self._apply_physics_to_body(...)``; binding it here
-    drives the seam without constructing a full ``MujocoSceneManager``.
-    """
-
-    _apply_physics_to_body = MujocoSceneManager._apply_physics_to_body
 
 
 def _make_robot_spec(link_masses: list[float] | None = None) -> mujoco.MjSpec:  # type: ignore[name-defined]
@@ -98,12 +86,12 @@ def _make_density_spec() -> mujoco.MjSpec:  # type: ignore[name-defined]
 
 
 def _robot_stub(link_physics: PhysicsConfig | None):
-    return SimpleNamespace(asset=SimpleNamespace(link_physics=link_physics, robot_type="testrobot"))
+    return replace(g1_29dof, asset=replace(g1_29dof.asset, link_physics=link_physics))
 
 
 def _apply_whole_robot(spec, link_physics):
     """Run the whole-robot seam (``apply_mass=False``)."""
-    MujocoSceneManager._apply_link_physics_to_robot(_Shim(), spec, _robot_stub(link_physics))
+    MujocoSceneManager(preset.config)._apply_link_physics_to_robot(spec, _robot_stub(link_physics))
 
 
 def _compile(spec):
@@ -178,7 +166,7 @@ def test_apply_mass_false_never_writes_mass():
     spec = _make_robot_spec()
     body = spec.body("link_a")
     MujocoSceneManager._apply_physics_to_body(
-        _Shim(),
+        MujocoSceneManager(preset.config),
         body,
         PhysicsConfig(mass=99.0, mujoco=MujocoPhysicsConfig(friction=[2.0, 0.005, 0.0001])),
         "link_a",
@@ -209,7 +197,7 @@ def test_apply_mass_true_writes_mass():
     # apply_mass=True writes the explicit mass and sets explicitinertial.
     spec = _make_robot_spec()
     body = spec.body("link_a")
-    MujocoSceneManager._apply_physics_to_body(_Shim(), body, PhysicsConfig(mass=7.5), "link_a", apply_mass=True)
+    MujocoSceneManager(preset.config)._apply_physics_to_body(body, PhysicsConfig(mass=7.5), "link_a", apply_mass=True)
     model = _compile(spec)
     bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "link_a")
     assert float(model.body_mass[bid]) == pytest.approx(7.5, abs=1e-3)

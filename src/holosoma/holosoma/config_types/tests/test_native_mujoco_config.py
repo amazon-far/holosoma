@@ -72,7 +72,7 @@ def test_extra_cli_false_and_yaml_values_roundtrip() -> None:
         MujocoConfig,
         args=[
             "--extra",
-            "{'ccd_iterations': 0, 'wind': [0, 0, 0]}",
+            "{'ccd_iterations': 0, 'wind': [0, 0, 0], 'gravity': [0, 0, -2]}",
             "--warp.graph-conditional",
             "False",
             "--warp.extras",
@@ -81,6 +81,7 @@ def test_extra_cli_false_and_yaml_values_roundtrip() -> None:
     )
     assert cfg.extra["ccd_iterations"] == 0
     assert cfg.extra["wind"] == [0, 0, 0]
+    assert cfg.extra["gravity"] == [0, 0, -2]
     assert cfg.warp.extras["run_collision_detection"] is False
     assert cfg.warp.extras["nccdmax"] == 0
     assert cfg.warp.graph_conditional is False
@@ -91,7 +92,6 @@ def test_extra_cli_false_and_yaml_values_roundtrip() -> None:
 @pytest.mark.parametrize(
     ("kind", "values"),
     [
-        (MujocoConfig, {"gravity": [0, 0, -2]}),
         (
             MujocoPhysicsConfig,
             {"friction": [0.4, 0.01, 0.001], "solref": [-3000, -3], "solimp": [0.8, 0.9, 0.001, 0.5, 2]},
@@ -135,9 +135,8 @@ def test_cli_timestep_override_fails_during_config_parsing(path: str, capsys: py
     [
         ({"integrator": "bad"}, "integrator"),
         ({"iterations": -1}, "iterations"),
-        ({"gravity": [1, 2]}, "gravity"),
-        ({"gravity": [1, 2, 3, 4]}, "gravity"),
-        ({"gravity": [0, 0, float("inf")]}, "finite"),
+        ({"gravity": [0, 0, -2]}, "gravity"),
+        ({"extra": {"gravity": [0, 0, float("inf")]}}, "finite"),
         ({"tolerance": float("nan")}, "tolerance"),
         ({"extra": {"wind": [0, float("nan"), 0]}}, "finite"),
         ({"extra": {"timestep": 0.005}}, "fps"),

@@ -79,7 +79,8 @@ class MujocoWarpConfig:
     graph_conditional: Annotated[bool, Field(strict=True)] | None = None
     """Use conditional CUDA graph nodes for solver loops; set before capture. None keeps MJWarp's default."""
     extras: ExtraSettings = field(default_factory=dict)
-    """Other MJWarp-only Option fields or make_data inputs, using bare names; applied before capture."""
+    """Advanced MJWarp Option fields or make_data inputs, using bare names; applied before capture.
+    Upstream validation does not guarantee support throughout Holosoma."""
 
     @model_validator(mode="after")
     def validate_ownership(self) -> MujocoWarpConfig:
@@ -127,16 +128,18 @@ class MujocoConfig:
     """CG/Newton line-search stopping tolerance; zero disables early stopping. None preserves it."""
     noslip_iterations: Count | None = None
     """Classic no-slip post-solver iterations; zero disables it. MJWarp supports only zero."""
-    gravity: Annotated[FiniteVector, Field(min_length=3, max_length=3)] | None = None
-    """World-frame acceleration [x,y,z], in m/s²; None retains Holosoma's existing gravity."""
     disableflags: tuple[str, ...] | None = None
-    """Replace the disable mask with upstream flag names (e.g. contact); () clears it, None preserves it."""
+    """Replace the disable mask with upstream names (e.g. contact); () clears it, None preserves it.
+    Advanced flags may affect behavior Holosoma does not support."""
     enableflags: tuple[str, ...] | None = None
-    """Replace the enable mask with upstream flag names; () clears it, None preserves it. Backend limits apply."""
+    """Replace the enable mask with upstream names; () clears it, None preserves it.
+    Advanced flags may exceed Holosoma support; Warp rejects sleep because state resets cannot wake trees."""
     warp: MujocoWarpConfig = field(default_factory=MujocoWarpConfig)
     """MJWarp-only allocation and execution settings; retained but unused when the backend is classic."""
     extra: ExtraSettings = field(default_factory=dict)
-    """Other public MjOption properties, using bare names; validated and applied before compilation."""
+    """Advanced MjOption properties, using bare names; validated and applied before compilation.
+    For example, gravity=[0,0,-2] changes acceleration in m/s² on MuJoCo only.
+    Upstream validation does not guarantee support throughout Holosoma."""
 
     @model_validator(mode="after")
     def validate_ownership(self) -> MujocoConfig:
@@ -167,9 +170,10 @@ class MujocoGeomPhysicsConfig:
     """Contact dimensions: 1 normal, 3 adds sliding, 4 adds torsion, 6 adds rolling. None preserves the asset."""
     contype: SignedInt | None = None
     """Collision-type bitmask tested against the other geom's conaffinity; zero disables that direction.
-    None preserves the asset mask."""
+    None preserves the asset mask. Overrides preserve visual-only geoms and must respect enable_self_collisions."""
     conaffinity: SignedInt | None = None
-    """Geom collision-affinity bitmask; either direction's contype intersection enables collision. None preserves it."""
+    """Collision-affinity bitmask; either direction's contype intersection enables collision.
+    None preserves the asset mask. Custom masks are MuJoCo-specific; robot self-collision settings still apply."""
     priority: SignedInt | None = None
     """Higher-priority geom supplies mixed contact parameters; equal priority uses native mixing.
     None preserves each geom's priority."""
