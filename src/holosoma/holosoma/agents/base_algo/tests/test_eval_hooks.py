@@ -125,6 +125,15 @@ def test_callbacks_are_built_in_config_order_and_see_earlier_ones() -> None:
     assert algo.eval_callbacks[1].visible_at_construction == ["first"]
 
 
+def test_a_second_evaluation_does_not_stack_duplicate_callbacks() -> None:
+    algo = _FakeAlgo(_FakeEnv(), {"only": _callback_config("only")})
+
+    algo.evaluate_policy(max_eval_steps=1)
+    algo.evaluate_policy(max_eval_steps=1)
+
+    assert [cb.name for cb in algo.eval_callbacks] == ["only"]
+
+
 def test_evaluation_runs_without_configured_callbacks() -> None:
     env = _FakeEnv()
     algo = _FakeAlgo(env, None)

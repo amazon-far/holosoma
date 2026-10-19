@@ -141,12 +141,15 @@ class BaseAlgo:
         raise NotImplementedError
 
     def _create_eval_callbacks(self) -> None:
-        """Instantiate the configured evaluation callbacks.
+        """Instantiate the configured evaluation callbacks, replacing any existing ones.
 
         Appends in configuration order, one at a time: a callback may scan
         ``self.eval_callbacks`` during its own construction to share state with an
-        earlier one.
+        earlier one. Clearing first keeps a second evaluation run from stacking a
+        duplicate set, which would leave callbacks that patch the environment unable
+        to unwind.
         """
+        self.eval_callbacks.clear()
         if self.config.eval_callbacks is None:
             return
         for name in self.config.eval_callbacks:
@@ -174,7 +177,11 @@ class BaseAlgo:
         return actor_state
 
     def _compute_eval_actions(self, actor_state: dict[str, Any]) -> dict[str, Any]:
-        """Set ``actor_state["actions"]`` from the observations it already carries."""
+        """Set ``actor_state["actions"]`` from the observations it already carries.
+
+        Implementations read ``self.eval_policy``, so callers driving these hooks
+        directly must set it before the first step.
+        """
         raise NotImplementedError
 
     def _eval_mode(self) -> None:
