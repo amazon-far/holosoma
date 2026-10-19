@@ -20,7 +20,7 @@ import torch
 from isaacgym import gymapi, gymtorch
 from loguru import logger
 
-from holosoma.config_types.sensor import CameraSensorConfig, LidarSensorConfig
+from holosoma.config_types.sensor import CameraSensorConfig, ImuSensorConfig, LidarSensorConfig
 from holosoma.simulator.shared.lidar_range import finalize_lidar_returns
 from holosoma.simulator.shared.sensor_manager import LidarRecord, SensorManager
 from holosoma.utils.rotations import quat_apply, quat_mul
@@ -252,10 +252,27 @@ def render_lidars(sim: IsaacGym) -> None:
         finalize_lidar_returns(lidar_record, pattern.directions, distances)
 
 
+def reject_imus(sim: IsaacGym) -> None:
+    """Fail loudly on a configured IMU: Isaac Gym Preview 4 exposes no IMU or accelerometer.
+
+    Unlike LiDAR there is no degraded fallback worth shipping — an IMU synthesized from differenced
+    body velocities would silently omit the centripetal term an offset mount measures, so the two
+    backends that have a native sensor would disagree with this one for a non-obvious reason.
+    """
+    imu_names = [name for name, config in sim.sensor_config.items() if isinstance(config, ImuSensorConfig)]
+    if imu_names:
+        raise NotImplementedError(
+            f"Isaac Gym has no IMU sensor, so {sorted(imu_names)} cannot be created. Isaac Gym "
+            "Preview 4 exposes neither an IMU nor an accelerometer; run IMU sensors on MuJoCo or "
+            "Isaac Sim, which both have a native one."
+        )
+
+
 def create_sensors(sim: IsaacGym) -> None:
     """Create one shared manager and register every configured sensor."""
     if not sim.sensor_config:
         return
+    reject_imus(sim)
     cfg = sim.simulator_config.sim
     manager = SensorManager(sim.device, cfg.fps / cfg.control_decimation_steps)
     sim.sensor_manager = manager

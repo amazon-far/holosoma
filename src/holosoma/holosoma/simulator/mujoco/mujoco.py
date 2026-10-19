@@ -15,7 +15,7 @@ import torch
 from loguru import logger
 
 from holosoma.config_types.full_sim import FullSimConfig
-from holosoma.config_types.sensor import CameraSensorConfig, LidarSensorConfig
+from holosoma.config_types.sensor import CameraSensorConfig, ImuSensorConfig, LidarSensorConfig
 from holosoma.config_types.simulator import MujocoBackend
 from holosoma.managers.terrain.manager import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
@@ -383,8 +383,10 @@ class MuJoCo(BaseSimulator):
             name: config for name, config in self.sensor_config.items() if isinstance(config, CameraSensorConfig)
         }
         lidars = {name: config for name, config in self.sensor_config.items() if isinstance(config, LidarSensorConfig)}
+        imus = {name: config for name, config in self.sensor_config.items() if isinstance(config, ImuSensorConfig)}
         self.scene_manager.add_cameras(cameras)
         self.scene_manager.add_lidar_sites(lidars)
+        self.scene_manager.add_imu_sensors(imus)
 
     def _set_robot_properties(self) -> None:
         """Set robot properties including DOF names, body names, and index mappings.

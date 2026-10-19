@@ -1,9 +1,9 @@
 """Named mounted-sensor building blocks, selectable per key via the dynamic ``--sensor`` dict.
 
-Each preset is one camera or LiDAR config. Compose a rig by giving each sensor its own key,
-e.g. ``sensor.my_head:g1-head sensor.lidar:g1-pelvis-lidar``; the key becomes the name used by
-``get_camera_data`` or ``get_lidar_data``. Fields can be overridden per key, e.g.
-``--sensor.my_head.width 224``.
+Each preset is one camera, LiDAR, or IMU config. Compose a rig by giving each sensor its own key,
+e.g. ``sensor.my_head:g1-head sensor.lidar:g1-pelvis-lidar sensor.imu:g1-pelvis-imu``; the key
+becomes the name used by ``get_camera_data``, ``get_lidar_data``, or ``get_imu_data``. Fields can be
+overridden per key, e.g. ``--sensor.my_head.width 224``.
 
 Combination presets (a head + two wrists, stereo + wrists, ...) are intentionally gone: the dynamic
 dict composes them from these building blocks at the CLI.
@@ -16,6 +16,7 @@ from holosoma.config_types.sensor import (
     CameraSensorConfig,
     CustomLidarRayPatternConfig,
     GridLidarRayPatternConfig,
+    ImuSensorConfig,
     LidarSensorConfig,
     SensorMountConfig,
 )
@@ -30,7 +31,9 @@ from holosoma.config_values.wbt.g1.sensor import (
 )
 from holosoma.utils.config_registry import ConfigRegistry
 
-SENSOR_REGISTRY = ConfigRegistry((CameraSensorConfig, LidarSensorConfig), group="holosoma.config.sensor")
+SENSOR_REGISTRY = ConfigRegistry(
+    (CameraSensorConfig, LidarSensorConfig, ImuSensorConfig), group="holosoma.config.sensor"
+)
 # Compatibility alias for extensions written before the registry became heterogeneous.
 CAMERA_REGISTRY = SENSOR_REGISTRY
 
@@ -66,6 +69,15 @@ custom_lidar = LidarSensorConfig(
     pattern=CustomLidarRayPatternConfig(ray_directions=[[0.0, 0.0, -1.0]]),
 )
 
+# IMU at the G1 pelvis origin. Root link, zero offset, identity rotation, so the sensor frame is the
+# base frame and this preset is directly comparable to the locomotion obs terms: its gyro tracks
+# ``base_ang_vel`` and, at rest, its accelerometer over 9.81 tracks the negated
+# ``projected_gravity``. Expect agreement only up to one physics step, not exactly — on MuJoCo the
+# sensors are solved inside mj_forward, before the integration that advances the qpos/qvel those obs
+# terms read, so the gyro trails by |alpha| * dt whenever the rate is changing. Override the mount
+# per key for a real device pose.
+g1_pelvis_imu = ImuSensorConfig(mount=SensorMountConfig(target_kind="robot_link", target="pelvis"))
+
 # Egocentric G1 head camera, forward-facing.
 CAMERA_REGISTRY.add("g1-head", head_camera)
 # G1 stereo head eyes (compose both for a stereo pair).
@@ -83,3 +95,5 @@ CAMERA_REGISTRY.add("overview", overview_camera)
 SENSOR_REGISTRY.add("g1-pelvis-lidar", g1_pelvis_lidar)
 # Explicit optical-frame directions, intended for per-key overrides.
 SENSOR_REGISTRY.add("custom-lidar", custom_lidar)
+# IMU at the G1 pelvis origin, where the sensor frame is the base frame.
+SENSOR_REGISTRY.add("g1-pelvis-imu", g1_pelvis_imu)

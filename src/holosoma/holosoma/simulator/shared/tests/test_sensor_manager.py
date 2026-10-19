@@ -17,6 +17,7 @@ from holosoma.config_types.sensor import (
     CustomLidarRayPatternConfig,
     DepthClippingBehavior,
     GridLidarRayPatternConfig,
+    ImuSensorConfig,
     LidarRayPatternConfig,
     LidarSensorConfig,
     SensorMountConfig,
@@ -157,21 +158,36 @@ def test_camera_depth_uses_the_shared_range_clipping_policy(
     assert torch.equal(record.buffers["depth"], torch.tensor([[[[value] for value in expected_with_nonfinite]]]))
 
 
-def test_camera_and_lidar_cadence_are_independent() -> None:
+def test_camera_lidar_and_imu_cadences_are_independent() -> None:
     sm = SensorManager(device="cpu", control_hz=100.0)
     sm.register_camera("camera", _cam(update_decimation=2))
     sm.register_lidar("lidar", LidarSensorConfig(mount=_MOUNT, update_decimation=3))
+    sm.register_imu("imu", ImuSensorConfig(mount=_MOUNT, update_decimation=4))
 
     camera_due = []
     lidar_due = []
+    imu_due = []
     for _ in range(7):
         camera_due.append(bool(sm.collect_due()))
         lidar_due.append(bool(sm.collect_lidars_due()))
+        imu_due.append(bool(sm.collect_imus_due()))
 
     assert camera_due == [True, False, True, False, True, False, True]
     assert lidar_due == [True, False, False, True, False, False, True]
+    assert imu_due == [True, False, False, False, True, False, False]
     assert sm.camera_names == ["camera"]
     assert sm.lidar_names == ["lidar"]
+    assert sm.imu_names == ["imu"]
+    assert sm.last_imu_due == set()  # step 7 is not an IMU step
+
+
+def test_imu_frequency_string_resolves_against_control_rate() -> None:
+    sm = SensorManager(device="cpu", control_hz=200.0)
+    record = sm.register_imu("imu", ImuSensorConfig(mount=_MOUNT, update_decimation="50Hz"))
+
+    assert record.effective_decimation == 4
+    assert [bool(sm.collect_imus_due()) for _ in range(5)] == [True, False, False, False, True]
+    assert sm.frames_produced("imu") == 2
 
 
 @pytest.mark.parametrize(
@@ -234,3 +250,12 @@ def test_sensor_names_must_be_unique_across_types() -> None:
     sm.register_camera("sensor", _cam())
     with pytest.raises(ValueError, match="already registered"):
         sm.register_lidar("sensor", LidarSensorConfig(mount=_MOUNT))
+    with pytest.raises(ValueError, match="already registered"):
+        sm.register_imu("sensor", ImuSensorConfig(mount=_MOUNT))
+
+    # ...and the IMU namespace is just as closed to the other two.
+    sm.register_imu("inertial", ImuSensorConfig(mount=_MOUNT))
+    with pytest.raises(ValueError, match="already registered"):
+        sm.register_camera("inertial", _cam())
+    with pytest.raises(ValueError, match="already registered"):
+        sm.register_lidar("inertial", LidarSensorConfig(mount=_MOUNT))

@@ -447,6 +447,9 @@ def test_mjwarp_lidar_reuses_camera_bvh_without_duplicate_same_frame_refit(
         def collect_lidars_due(self):
             return [lidar]
 
+        def collect_imus_due(self):
+            return []  # this test configures no IMU; render_sensors still polls every type
+
     rendered = []
     sim = SimpleNamespace(
         sensor_manager=_Manager(),

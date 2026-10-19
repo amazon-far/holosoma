@@ -21,7 +21,7 @@ from isaaclab.envs import ViewerCfg, mdp
 from isaaclab.managers import EventManager, SceneEntityCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
-from isaaclab.sensors import ContactSensor, RayCaster, TiledCamera
+from isaaclab.sensors import ContactSensor, Imu, RayCaster, TiledCamera
 from isaaclab.sim import PhysxCfg, SimulationCfg, SimulationContext
 from isaaclab.sim.utils import bind_physics_material
 from isaaclab.terrains import TerrainGeneratorCfg
@@ -157,6 +157,9 @@ class IsaacSim(BaseSimulator):
             # Per-camera TiledCamera map, keyed by sensor name; populated by
             # sensor_setup.build_cameras (called from _setup_scene, pre-clone), read at render.
             self.tiled_cameras: dict[str, TiledCamera] = {}
+            # Per-IMU IsaacLab Imu map, same lifecycle as tiled_cameras. Declared here so the
+            # per-physics-step sensor_setup.refresh_imus is a no-op before/without build_imus.
+            self.imu_sensors: dict[str, Imu] = {}
             self._setup_scene()
         print("[INFO]: Scene manager: ", self.scene)
 
@@ -767,6 +770,8 @@ class IsaacSim(BaseSimulator):
 
         # update buffers at sim
         self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
+        # IsaacLab's Imu divides by the dt just passed, so it must be refreshed at this cadence.
+        sensor_setup.refresh_imus(self)
 
         # Need to update these tensors after each step, since they are used in `_apply_force_in_physics_step`
         self.dof_pos = self._robot.data.joint_pos[:, self.dof_ids]  # (num_envs, num_dof)
@@ -805,6 +810,8 @@ class IsaacSim(BaseSimulator):
                 self.draw_debug_viz()
 
         self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
+        # No refresh_imus here: this path is reached only under sim.kinematic_playback, which
+        # BaseSimulator rejects alongside an IMU because playback never sets velocities.
 
     def _write_external_wrench_native(self, targets: list[WrenchTarget]) -> None:
         """Set world-frame wrenches on the robot articulation and object RigidObjects.

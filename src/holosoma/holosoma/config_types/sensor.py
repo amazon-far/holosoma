@@ -1,12 +1,14 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
-"""Mounted camera and LiDAR configuration types.
+"""Mounted camera, LiDAR, and IMU configuration types.
 
 A sensor is a read-only producer mounted onto an existing body (a robot link or a
 spawned scene actor) that it follows.
 
-Every mounted sensor uses the OpenGL/USD/MuJoCo optical frame: ``-Z`` forward and ``+Y`` up.
-Isaac Gym converts this convention to its native sensor frame internally.
+Cameras and LiDARs use the OpenGL/USD/MuJoCo optical frame: ``-Z`` forward and ``+Y`` up. Isaac Gym
+converts this convention to its native sensor frame internally. :class:`ImuSensorConfig` is the
+exception — an IMU has no optical axis, so it measures in its mount frame as authored (``+X``
+forward, ``+Z`` up).
 """
 
 from __future__ import annotations
@@ -355,9 +357,10 @@ class SensorMountConfig:
         default_factory=lambda: [1.0, 0.0, 0.0, 0.0], metadata={"validate_default": True}
     )
     """Offset orientation quaternion ``[w, x, y, z]`` (w-first). In the mount-body frame for
-    ``robot_link``/``actor``; in the per-env frame for ``world``. Identity uses the shared
-    optical convention: ``-Z`` forward and ``+Y`` up. Must be unit length; norm deviations
-    up to 1e-4 are normalized."""
+    ``robot_link``/``actor``; in the per-env frame for ``world``. For cameras and LiDARs identity
+    is the optical convention, ``-Z`` forward and ``+Y`` up; for :class:`ImuSensorConfig` identity
+    leaves the sensor's axes equal to the mount body's. Must be unit length; norm deviations up to
+    1e-4 are normalized."""
 
     @model_validator(mode="after")
     def validate_mount(self) -> SensorMountConfig:
@@ -611,7 +614,7 @@ class CameraSensorConfig:
         # The robot is addressed via the ``robot_link`` kind; an ``actor`` mount must not name it.
         if self.mount.target_kind == "actor" and self.mount.target == "robot":
             raise ValueError(
-                "Camera mounts on actor 'robot'; use target_kind='robot_link' "
+                "Camera cannot mount on actor 'robot'; use target_kind='robot_link' "
                 "(name the robot link, e.g. 'pelvis') for the robot."
             )
         return self
@@ -672,13 +675,63 @@ class LidarSensorConfig:
         validate_decimation_like(self.update_decimation, field="LidarSensorConfig update_decimation")
         if self.mount.target_kind == "actor" and self.mount.target == "robot":
             raise ValueError(
-                "LiDAR mounts on actor 'robot'; use target_kind='robot_link' "
+                "LiDAR cannot mount on actor 'robot'; use target_kind='robot_link' "
                 "(name the robot link, e.g. 'pelvis') for the robot."
             )
         return self
 
 
-SensorConfig = Union[CameraSensorConfig, LidarSensorConfig]
+@dataclass(frozen=True, config=_FORBID_EXTRA)
+class ImuSensorConfig:
+    """One mounted inertial measurement unit, read from the backend's native IMU.
+
+    Measures in its mount frame as authored — the optical convention in this module's docstring
+    does **not** apply here.
+
+    ``linear_acceleration`` is solved analytically on MuJoCo, from ``accelerometer`` / ``gyro`` /
+    ``framequat`` on a site, and is a one-step backward difference of mount-point velocity on Isaac
+    Sim, via IsaacLab's ``Imu``. The two therefore disagree while the mount body rotates, with Isaac
+    Sim first-order in the physics timestep. Isaac Gym Preview 4 has no IMU and rejects this sensor,
+    as does ``sim.kinematic_playback`` on any backend, which never sets the velocities an IMU needs.
+
+    None of the outputs is simultaneous with ``robot_root_states``. MuJoCo solves its sensors inside
+    ``mj_forward``, before the integration that advances the ``qpos``/``qvel`` those tensors proxy,
+    so a reading trails the root state by one physics step — ``|alpha| * dt`` on the rates, which
+    vanishes only while the body's rate is steady.
+
+    Both backends report specific force, reading ``+9.81`` along the sensor's up axis at rest.
+
+    On Isaac Sim every IMU is refreshed once per physics step rather than per read, which costs more
+    than ``update_decimation`` suggests; see ``sensor_setup.refresh_imus``.
+
+    Keyed by its sensor name in the ``--sensor`` dict, the handle for ``get_imu_data(name, ...)``.
+    """
+
+    mount: SensorMountConfig
+    """Robot link or scene actor the IMU follows, plus its fixed offset in that body's frame."""
+
+    update_decimation: DecimationLike = 1
+    """Sample every Nth control step, or a frequency string such as ``"200Hz"``. Governs only how
+    often the native reading is copied out, not the rate the backend computes it at."""
+
+    @model_validator(mode="after")
+    def validate_imu(self) -> ImuSensorConfig:
+        validate_decimation_like(self.update_decimation, field="ImuSensorConfig update_decimation")
+        # Would read a constant on MuJoCo, and IsaacLab's Imu has no rigid body to attach to.
+        if self.mount.target_kind == "world":
+            raise ValueError(
+                "ImuSensorConfig does not support mount.target_kind='world': an IMU must follow a "
+                "body. Mount it on a robot link (e.g. 'pelvis') or on a registered scene actor."
+            )
+        if self.mount.target_kind == "actor" and self.mount.target == "robot":
+            raise ValueError(
+                "IMU cannot mount on actor 'robot'; use target_kind='robot_link' "
+                "(name the robot link, e.g. 'pelvis') for the robot."
+            )
+        return self
+
+
+SensorConfig = Union[CameraSensorConfig, LidarSensorConfig, ImuSensorConfig]
 
 
 def validate_camera_dict(cameras: dict[str, CameraSensorConfig]) -> None:

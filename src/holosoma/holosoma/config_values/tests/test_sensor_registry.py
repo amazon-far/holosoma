@@ -10,6 +10,7 @@ from holosoma.config_types.sensor import (
     CameraSensorConfig,
     CustomLidarRayPatternConfig,
     GridLidarRayPatternConfig,
+    ImuSensorConfig,
     IsaacSimCameraConfig,
     IsaacSimFisheyeConfig,
     LidarSensorConfig,
@@ -20,10 +21,59 @@ from holosoma.utils.config_registry import parse_config
 pytestmark = pytest.mark.no_sim
 
 
-def test_sensor_registry_contains_camera_and_lidar_presets() -> None:
+def test_sensor_registry_contains_camera_lidar_and_imu_presets() -> None:
     assert isinstance(SENSOR_REGISTRY["g1-head"], CameraSensorConfig)
     assert isinstance(SENSOR_REGISTRY["g1-pelvis-lidar"], LidarSensorConfig)
     assert isinstance(SENSOR_REGISTRY["custom-lidar"].pattern, CustomLidarRayPatternConfig)
+    assert isinstance(SENSOR_REGISTRY["g1-pelvis-imu"], ImuSensorConfig)
+
+
+def test_g1_pelvis_imu_is_the_zero_offset_base_frame_reference() -> None:
+    """This preset is the oracle case: identical to the base frame, so its gyro must match the
+    ``base_ang_vel`` obs term. A nonzero offset or rotation here would silently break that."""
+    imu = SENSOR_REGISTRY["g1-pelvis-imu"]
+    assert isinstance(imu, ImuSensorConfig)
+    assert (imu.mount.target_kind, imu.mount.target) == ("robot_link", "pelvis")
+    assert imu.mount.position == [0.0, 0.0, 0.0]
+    assert imu.mount.orientation == [1.0, 0.0, 0.0, 0.0]
+
+
+def test_cli_composes_an_imu_alongside_a_camera_and_lidar() -> None:
+    config = parse_config(
+        RunSimConfig,
+        args=[
+            "simulator:mujoco",
+            "sensor.head:g1-head",
+            "sensor.scan:g1-pelvis-lidar",
+            "sensor.imu:g1-pelvis-imu",
+            "--sensor.imu.update-decimation=200Hz",
+            "--sensor.imu.mount.target=torso_link",
+            "--sensor.imu.mount.position=[0.1,0.0,0.2]",
+        ],
+    )
+
+    assert isinstance(config.sensor["head"], CameraSensorConfig)
+    assert isinstance(config.sensor["scan"], LidarSensorConfig)
+    imu = config.sensor["imu"]
+    assert isinstance(imu, ImuSensorConfig)
+    assert imu.update_decimation == "200Hz"
+    assert imu.mount.target == "torso_link"
+    assert imu.mount.position == [0.1, 0.0, 0.2]
+
+
+def test_cli_rejects_a_world_mounted_imu(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        parse_config(
+            RunSimConfig,
+            # Clear target as well: leaving it set makes the generic SensorMountConfig check fire
+            # first, so this would pass even with validate_imu's world rejection deleted.
+            args=[
+                "simulator:mujoco",
+                "sensor.imu:g1-pelvis-imu",
+                "--sensor.imu.mount.target-kind=world",
+                "--sensor.imu.mount.target=",
+            ],
+        )
 
 
 def test_cli_composes_camera_lidar_and_pointcloud_route() -> None:

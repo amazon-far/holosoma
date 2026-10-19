@@ -1,4 +1,4 @@
-"""Isaac Sim mounted camera and LiDAR sensor setup.
+"""Isaac Sim mounted camera, LiDAR, and IMU sensor setup.
 
 Each configured camera is a ``TiledCamera`` created before ``clone_environments`` as a child prim
 of its mount body, so the USD transform hierarchy makes it follow that body natively across all
@@ -19,11 +19,17 @@ from typing import TYPE_CHECKING, Any, cast
 
 import torch
 import isaaclab.sim as sim_utils
-from isaaclab.sensors import TiledCamera, TiledCameraCfg, patterns
+from isaaclab.sensors import Imu, ImuCfg, TiledCamera, TiledCameraCfg, patterns
 from isaaclab.utils.math import quat_apply
 
 from holosoma.config_types.frequency import resolve_decimation
-from holosoma.config_types.sensor import CameraSensorConfig, IsaacSimLidarConfig, LidarSensorConfig
+from holosoma.config_types.sensor import (
+    CameraSensorConfig,
+    ImuSensorConfig,
+    IsaacSimLidarConfig,
+    LidarSensorConfig,
+)
+from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.isaacsim.camera_projection import camera_spawn_cfg_for
 from holosoma.simulator.isaacsim.lidar_target_discovery import (
     _is_path_at_or_below,
@@ -36,6 +42,7 @@ from holosoma.simulator.isaacsim.prim_utils import (
     resolve_robot_link_rigid_body_prim_expression,
     set_instanceable,
 )
+from holosoma.simulator.shared.imu_sensor import finalize_imu_outputs
 from holosoma.simulator.shared.lidar_range import finalize_lidar_returns
 from holosoma.simulator.shared.sensor_manager import SensorManager
 
@@ -459,6 +466,105 @@ def render_lidars(sim: IsaacSim) -> None:
         finalize_lidar_returns(lidar_record, pattern.directions, distances)
 
 
+def build_imus(sim: IsaacSim) -> None:
+    """Create one IsaacLab ``Imu`` per configured IMU before environment cloning.
+
+    The mount must be a rigid body: ``Imu`` drives a PhysX rigid-body view, so a ``robot_link``
+    resolves to the body that *owns* the link rather than the link Xform itself. Unlike the camera
+    and LiDAR mounts there is no ``world`` branch — ``ImuSensorConfig`` rejects that mount kind.
+
+    Populates ``sim.imu_sensors`` (mirroring ``sim.tiled_cameras``) so :func:`refresh_imus` costs
+    nothing when no IMU is configured.
+    """
+    sim.imu_sensors = {}
+    for name, imu in sim.sensor_config.items():
+        if not isinstance(imu, ImuSensorConfig):
+            continue
+        if imu.mount.target_kind == "robot_link":
+            prim_path = resolve_robot_link_rigid_body_prim_expression(imu.mount.target)
+        else:
+            prim_path = f"/World/envs/env_.*/{imu.mount.target}"
+        cfg = ImuCfg(
+            prim_path=prim_path,
+            offset=ImuCfg.OffsetCfg(
+                pos=tuple(imu.mount.position),
+                rot=tuple(imu.mount.orientation),  # (w, x, y, z), as IsaacLab expects
+            ),
+            # Report specific force, matching MuJoCo's native accelerometer and real IMU drivers:
+            # +g along the sensor's up axis at rest. Taken from the scene's own gravity so a scene
+            # that changes it stays consistent.
+            gravity_bias=tuple(-component for component in sim.sim.cfg.gravity),
+            update_period=0.0,
+        )
+        sensor = Imu(cfg)
+        sim.scene.sensors[name] = sensor
+        sim.imu_sensors[name] = sensor
+
+
+def refresh_imus(sim: IsaacSim) -> None:
+    """Recompute every IMU's buffers, once per ``scene.update``.
+
+    IsaacLab's ``Imu`` divides its velocity difference by the ``dt`` of the most recent
+    ``scene.update`` (``imu.py:122`` then ``:218``), but the difference itself only advances when
+    ``.data`` is touched — and ``SensorBase.update`` deliberately does not touch it. Reading at any
+    slower cadence therefore divides an N-step velocity change by a one-step ``dt`` and inflates the
+    acceleration N-fold. Holosoma otherwise reads at control rate, so this call is what keeps the
+    two cadences equal.
+
+    The same mismatch is present in IsaacLab's own ``manager_based_rl_env`` + ``imu_lin_acc`` term;
+    its ``test_imu`` reads every physics step, which is the cadence assumed here.
+
+    Each call does three PhysX view reads, so the cost scales with physics rate and IMU count and
+    amortizes across ``num_envs``.
+    """
+    for sensor in sim.imu_sensors.values():
+        sensor.data  # noqa: B018 - property access is the documented way to force the update
+
+
+def register_imus(sim: IsaacSim, manager: SensorManager) -> None:
+    """Register IMUs and wire IsaacLab's own differencing history to episode resets.
+
+    ``Imu`` differentiates mount-point velocity across steps, so a reset that teleports the robot
+    would otherwise difference against its pre-teleport velocity and report one garbage sample.
+    Holosoma never calls ``scene.reset()``, so the reset is driven from the central
+    ``EPISODE_START`` emission instead. MuJoCo needs no equivalent: its sensors are analytic.
+    """
+    imu_names = [name for name, config in sim.sensor_config.items() if isinstance(config, ImuSensorConfig)]
+    for name in imu_names:
+        manager.register_imu(name, cast("ImuSensorConfig", sim.sensor_config[name]))
+    if imu_names:
+        sim.hooks.add(Phase.EPISODE_START, partial(_reset_imus, sim, imu_names), name="sensors.imu_reset")
+
+
+def _reset_imus(sim: IsaacSim, imu_names: list[str], env_id: int) -> None:
+    """Drop one environment's velocity history after it resets."""
+    for name in imu_names:
+        sensor = sim.imu_sensors.get(name)
+        if sensor is not None:
+            sensor.reset([env_id])
+
+
+def capture_imus(sim: IsaacSim) -> None:
+    """Copy each due IMU's native reading into its output buffers.
+
+    ``Imu`` is a lazily-updated IsaacLab sensor: reading ``.data`` refreshes it if the scene has
+    stepped since the last read.
+    """
+    if sim.sensor_manager is None:
+        return
+    for imu_record in sim.sensor_manager.collect_imus_due():
+        sensor = sim.imu_sensors.get(imu_record.name)
+        if sensor is None:
+            raise RuntimeError(f"IMU '{imu_record.name}' has no IsaacLab Imu sensor in the scene.")
+        native = sensor.data
+        finalize_imu_outputs(
+            imu_record,
+            linear_acceleration=native.lin_acc_b,
+            angular_velocity=native.ang_vel_b,
+            orientation_wxyz=native.quat_w,
+        )
+
+
 def build_sensors(sim: IsaacSim) -> None:
     """Build native sensors before environment cloning."""
     needs_expanded_robot = any(
@@ -470,6 +576,7 @@ def build_sensors(sim: IsaacSim) -> None:
         set_instanceable(get_current_stage(), "/World/envs/env_0/Robot", False)
     build_cameras(sim)
     build_lidars(sim)
+    build_imus(sim)
 
 
 def create_sensors(sim: IsaacSim) -> None:
@@ -481,9 +588,11 @@ def create_sensors(sim: IsaacSim) -> None:
     sim.sensor_manager = manager
     register_cameras(sim, manager)
     register_lidars(sim, manager)
+    register_imus(sim, manager)
 
 
 def render_sensors(sim: IsaacSim) -> None:
-    """Capture all camera and LiDAR sensors due this control step."""
+    """Capture all camera, LiDAR, and IMU sensors due this control step."""
     render_cameras(sim)
     render_lidars(sim)
+    capture_imus(sim)
