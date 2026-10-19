@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import io
 import itertools
 import json
 import math
@@ -304,8 +305,10 @@ def main() -> None:
     args = parser.parse_args()
 
     # A full pass takes a while and is usually watched through a redirected log, which
-    # would otherwise block-buffer and show nothing for minutes at a time.
-    sys.stdout.reconfigure(line_buffering=True)
+    # would otherwise block-buffer and show nothing for minutes at a time. Guarded
+    # because stdout is not always a file wrapper, such as when it has been captured.
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(line_buffering=True)
 
     api = wandb.Api(timeout=60)
     written = 0
