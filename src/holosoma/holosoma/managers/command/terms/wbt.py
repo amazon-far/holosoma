@@ -58,7 +58,7 @@ def _concat_targets(has_object: bool) -> tuple[tuple[str, str], ...]:
 
 def _segment_frame_count(segment: dict[str, torch.Tensor], targets: tuple[tuple[str, str], ...]) -> int:
     """Frame count of a transition segment, raising if any field disagrees."""
-    counts = {segment[seg_key].shape[0] for seg_key, _ in targets}
+    counts = {int(segment[seg_key].shape[0]) for seg_key, _ in targets}
     if len(counts) != 1:
         per_key = {seg_key: segment[seg_key].shape[0] for seg_key, _ in targets}
         raise ValueError(f"Transition segment fields disagree on frame count: {per_key}")

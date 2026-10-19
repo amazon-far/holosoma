@@ -74,7 +74,8 @@ def _segment(num_frames: int, tag: float, has_object: bool = False) -> dict[str,
 
 
 def _tags(loader: _FakeLoader) -> list[float]:
-    return loader._joint_pos[:, 0].tolist()
+    tags: list[float] = loader._joint_pos[:, 0].tolist()
+    return tags
 
 
 def test_boundaries_grow_the_clip_that_owns_the_segment() -> None:
