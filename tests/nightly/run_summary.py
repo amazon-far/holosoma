@@ -41,6 +41,11 @@ PERF_CELL_KEY = "perf/cell"
 TREND_CELL = "g1_29dof_manager | isaacsim | gpus-1"
 TREND_METRIC_KEY = "perf/collection_time_mean"
 TREND_METRIC_LABEL = "collection_time mean"
+# Unit of the tracked metric, appended to every figure. Change alongside the metric key.
+TREND_UNIT = "s"
+# Saved workspace view scoped to TREND_CELL, linked under the figures.
+TREND_VIEW_URL = "https://far.wandb.io/far-wandb/nightly-holosoma-runs?nw=cehaiiecce4"
+TREND_VIEW_LABEL = "Performance trends"
 # Enough history to cover the longest comparison window and its predecessor.
 TREND_LOOKBACK_DAYS = 60
 # How many standard deviations the two figures must be apart before the change counts as
@@ -331,12 +336,12 @@ def _period_stat(values: list[float]) -> PeriodStat | None:
 
 
 def _format_stat(stat: PeriodStat | None) -> str:
-    """Renders a period as "3.358 ±0.006s", dropping the error where it is undefined."""
+    """Renders a period as "3.358s ±0.006s", dropping the error where it is undefined."""
     if stat is None:
         return "n/a"
     if stat.stderr is None:
-        return f"{stat.mean:.3f}s"
-    return f"{stat.mean:.3f} ±{stat.stderr:.3f}s"
+        return f"{stat.mean:.3f}{TREND_UNIT}"
+    return f"{stat.mean:.3f}{TREND_UNIT} ±{stat.stderr:.3f}{TREND_UNIT}"
 
 
 def _difference_error(earlier: PeriodStat | None, later: PeriodStat | None) -> float | None:
@@ -415,10 +420,13 @@ def format_trend_line() -> str | None:
             end = now - timedelta(days=to_days_ago)
             return _period_stat([value for stamp, value in series if start <= stamp < end])
 
-        # A single night carries no error of its own, so it is judged against how much
-        # this cell normally varies from night to night.
+        # A single night carries no error of its own, so the scale for the 1d comparison
+        # comes from how much this cell normally varies from night to night. Two single
+        # observations are being differenced, so their spreads combine in quadrature the
+        # same way the segment errors do -- giving sd * sqrt(2), not sd.
         recent = [value for _, value in series[:TREND_DAILY_BASELINE_RUNS]]
-        nightly_spread = statistics.stdev(recent) if len(recent) > 1 else None
+        nightly_sd = statistics.stdev(recent) if len(recent) > 1 else None
+        nightly_spread = math.hypot(nightly_sd, nightly_sd) if nightly_sd else None
 
         # Each comparison reads earlier to later, so the arrow between the two figures
         # is the direction time runs and the trailing marker is the verdict.
@@ -430,12 +438,27 @@ def format_trend_line() -> str | None:
             *((label, before, after, _difference_error(before, after)) for label, before, after in segments),
         ]
 
-        lines = [f"⏱️ {TREND_METRIC_LABEL} · {TREND_CELL}"]
-        lines += [
-            f"- {label}: {_format_stat(before)} → {_format_stat(after)} {_trend_marker(after, before, sigma)}"
+        # Fenced and column-aligned: Slack renders ordinary text proportionally, so the
+        # padding that lines the arrows up only holds inside a code block.
+        rendered = [
+            (_trend_marker(after, before, sigma), label, _format_stat(before), _format_stat(after))
             for label, before, after, sigma in comparisons
         ]
-        return "\n".join(lines)
+        label_width = max(len(label) for _, label, _, _ in rendered)
+        before_width = max(len(before) for _, _, before, _ in rendered)
+
+        return "\n".join(
+            [
+                f"⏱️ {TREND_METRIC_LABEL} · {TREND_CELL}",
+                "```",
+                *(
+                    f"{marker} {label:>{label_width}}: {before:<{before_width}} → {after}"
+                    for marker, label, before, after in rendered
+                ),
+                "```",
+                f"📈 [{TREND_VIEW_LABEL}]({TREND_VIEW_URL})",
+            ]
+        )
     except Exception as e:
         print(f"Could not build the performance trend line: {e}")
         return None

@@ -45,9 +45,12 @@ deviations apart, so ordinary noise reads as flat:
   combining both sides' standard errors in quadrature. That is the denominator of
   Welch's t, so the test asks how many standard deviations apart the two distributions
   are given how well each mean is known — rather than comparing against one side alone.
-- For `1d` there is one run each side and so no error to use. That change is measured
-  against how much the cell normally varies from night to night, the standard deviation
-  of the last `TREND_DAILY_BASELINE_RUNS` runs.
+- For `1d` there is one run each side and so no error to use. The two runs supply the
+  change and the scale comes from elsewhere: the standard deviation of the last
+  `TREND_DAILY_BASELINE_RUNS` runs, which is how much the cell normally wanders from one
+  night to the next. Since two single observations are being differenced, that deviation
+  is combined in quadrature with itself — `sd * sqrt(2)` — so the row is testing the same
+  quantity as the segment rows rather than a figure 1.4x stricter.
 
 The `1d` pair is the two most recent runs rather than calendar days, so a skipped night
 compares against the previous run that exists instead of reporting a gap.
