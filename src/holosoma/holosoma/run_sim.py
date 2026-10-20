@@ -8,7 +8,6 @@ or evaluation environments.
 
 from __future__ import annotations
 
-import dataclasses
 import sys
 import traceback
 
@@ -16,65 +15,19 @@ from loguru import logger
 
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.utils.eval_utils import init_eval_logging
-from holosoma.utils.sim_utils import DirectSimulation, graceful_simulation_signals, setup_simulation_environment
 
 
-@graceful_simulation_signals
 def run_simulation(config: RunSimConfig) -> None:
-    """Run simulation with direct simulator control.
-
-    This function provides direct access to the simulator for continuous simulation
-    with bridge support using the DirectSimulation class.
+    """Build the configured simulation task and run it until shutdown.
 
     Parameters
     ----------
     config : RunSimConfig
         Configuration containing all simulation settings.
     """
-    # Resolve the simulation device from the backend when the user did not set one (device=None).
-    # An explicit --device (including "cpu") is always honored.
-    if config.device is None:
-        from holosoma.config_types.simulator import MujocoBackend
-        from holosoma.utils.safe_torch_import import torch
-
-        sim_name = config.simulator.config.name
-        is_warp = (
-            hasattr(config.simulator.config, "mujoco_backend")
-            and config.simulator.config.mujoco_backend == MujocoBackend.WARP
-        )
-        if is_warp:
-            # MuJoCo Warp only runs on CUDA, so cpu is never a valid choice for it.
-            resolved_device = "cuda:0"
-            logger.info("Auto-detected MuJoCo Warp backend - setting device to cuda:0")
-        elif sim_name == "isaacsim":
-            # IsaacSim is GPU-first; prefer cuda:0 when it is actually available,
-            # otherwise fall back to cpu (IsaacSim can run PhysX on CPU).
-            if torch.cuda.is_available():
-                resolved_device = "cuda:0"
-                logger.info(f"Auto-detected {sim_name} backend with CUDA available - setting device to cuda:0")
-            else:
-                resolved_device = "cpu"
-                logger.warning(f"{sim_name} backend selected but CUDA is unavailable - defaulting to cpu")
-        else:
-            # Classic MuJoCo (CPU physics engine).
-            resolved_device = "cpu"
-            logger.info(f"Auto-detected {sim_name} backend - setting device to cpu")
-
-        config = dataclasses.replace(config, device=resolved_device)
-
-    logger.info("Starting Holosoma Direct Simulation...")
-    logger.info(f"Robot: {config.robot.asset.robot_type}")
-    logger.info(f"Simulator: {config.simulator._target_}")
-    logger.info(f"Terrain: {config.terrain.terrain_term.mesh_type} ({config.terrain.terrain_term.func})")
-
     try:
-        # Use shared utils for setup
-        env, device, simulation_app = setup_simulation_environment(config, device=config.device)
-
-        # Create and run direct simulation using context manager for automatic clean-up
-        with DirectSimulation(config, env, device, simulation_app) as sim:
-            sim.run()
-
+        with config.create_task() as task:
+            task.run()
     except Exception as e:
         logger.error(f"Error during simulation: {e}")
         traceback.print_exc()

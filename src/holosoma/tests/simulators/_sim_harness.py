@@ -14,6 +14,7 @@ import math
 import os
 import sys
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any, NoReturn
 
 import tyro
@@ -65,6 +66,49 @@ def step(sim: Any, n: int, *, render: bool = False) -> None:
         sim.simulate_at_each_physics_step()
         if render:
             sim.render()
+
+
+def launch_simulator(config: RunSimConfig, device: str | None = None) -> tuple[Any, str, Any]:
+    """Construct the configured simulator without running its setup lifecycle.
+
+    Harnesses drive ``setup -> setup_terrain -> load_assets -> create_envs -> prepare_sim``
+    themselves so they can act between stages; tasks use ``RunSimConfig.create_task()`` instead.
+
+    Returns
+    -------
+    tuple
+        ``(simulator, device, simulation_app)``; ``simulation_app`` is None outside IsaacSim.
+    """
+    from holosoma.config_types.env import get_run_sim_env_config
+    from holosoma.config_types.full_sim import FullSimConfig
+    from holosoma.managers.terrain.manager import TerrainManager
+    from holosoma.utils.helpers import get_class
+    from holosoma.utils.safe_torch_import import torch
+    from holosoma.utils.sim_utils import setup_isaaclab_launcher, setup_simulator_imports
+    from holosoma.utils.simulator_config import SimulatorType, get_simulator_type
+
+    if device is None:
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    env_config = get_run_sim_env_config(config)
+    setup_simulator_imports(env_config)
+    simulation_app = None
+    if get_simulator_type() == SimulatorType.ISAACSIM:
+        simulation_app = setup_isaaclab_launcher(env_config, device)
+
+    full_config = FullSimConfig(
+        simulator=config.simulator.config,
+        robot=config.robot,
+        scene=config.scene,
+        sensors=dict(config.sensor),
+        training=config.training,
+        logger=config.logger,
+        plugin=config.plugin,
+    )
+    # Without a task, TerrainManager construction needs only num_envs and device from its env.
+    terrain_env = SimpleNamespace(num_envs=config.training.num_envs, device=device)
+    terrain_manager = TerrainManager(config.terrain, env=terrain_env, device=device)
+    simulator = get_class(config.simulator._target_)(full_config, terrain_manager, device)
+    return simulator, device, simulation_app
 
 
 def build_run_sim_config(

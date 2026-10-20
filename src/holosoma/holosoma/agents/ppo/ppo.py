@@ -3,7 +3,7 @@ from __future__ import annotations
 import itertools
 import os
 from collections.abc import Callable
-from typing import Any, TypedDict, cast
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 import torch
 import torch.distributed as dist
@@ -25,7 +25,6 @@ from holosoma.agents.modules.module_utils import (
     setup_ppo_critic_module,
 )
 from holosoma.config_types.algo import PPOConfig
-from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.utils.helpers import instantiate
 from holosoma.utils.inference_helpers import (
     attach_onnx_metadata,
@@ -35,6 +34,9 @@ from holosoma.utils.inference_helpers import (
     get_control_gains_from_config,
     get_urdf_text_from_robot_config,
 )
+
+if TYPE_CHECKING:
+    from holosoma.policy_task import PolicyTask
 
 console = Console()
 
@@ -188,7 +190,7 @@ class PPO(BaseAlgo):
 
     def __init__(
         self,
-        env: BaseTask,
+        env: PolicyTask,
         config: PPOConfig,
         log_dir: str,
         device: torch.device | str = "cpu",
@@ -385,6 +387,10 @@ class PPO(BaseAlgo):
             with self.logging_helper.record_collection_time():
                 obs_dict = self._rollout_step(obs_dict)
 
+            if self.env.shutdown_requested:
+                logger.info("Stopping PPO after a task shutdown request.")
+                break
+
             with self.logging_helper.record_learn_time():
                 loss_dict = self._training_step()
 
@@ -447,6 +453,9 @@ class PPO(BaseAlgo):
                 if self.log_dir is not None:
                     # Update episode stats using logging helper
                     self.logging_helper.update_episode_stats(rewards, dones, infos)
+
+                if self.env.shutdown_requested:
+                    return obs_dict
 
             # Return / Advantage computation
             last_critic_obs = torch.cat([obs_dict[k] for k in self.critic_obs_keys], dim=1)
@@ -831,7 +840,7 @@ class PPO(BaseAlgo):
 
         return ActorWrapper(self.actor, self.actor_obs_normalizer, self.empirical_normalization)
 
-    def env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:  # type: ignore[override]
+    def env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
         obs_dict, rewards, dones, extras = self.env.step(actor_state)
         actor_state.update({"obs": obs_dict, "rewards": rewards, "dones": dones, "extras": extras})
         return actor_state
@@ -866,6 +875,9 @@ class PPO(BaseAlgo):
             actor_state = self._pre_eval_env_step(actor_state)
             actor_state = self.env_step(actor_state)
             actor_state = self._post_eval_env_step(actor_state)
+            if self.env.shutdown_requested:
+                logger.info("Stopping PPO evaluation after a task shutdown request.")
+                break
 
         self._post_evaluate_policy()
 

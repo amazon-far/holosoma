@@ -6,7 +6,7 @@ import math
 import os
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import tqdm
 from loguru import logger
@@ -22,7 +22,6 @@ from holosoma.agents.fast_sac.fast_sac_utils import (
 from holosoma.agents.modules.augmentation_utils import SymmetryUtils
 from holosoma.agents.modules.logging_utils import LoggingHelper
 from holosoma.config_types.algo import FastSACConfig
-from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.utils.average_meters import TensorAverageMeterDict
 from holosoma.utils.helpers import instantiate
 from holosoma.utils.inference_helpers import (
@@ -44,6 +43,9 @@ from holosoma.utils.safe_torch_import import (
     torch,
 )
 
+if TYPE_CHECKING:
+    from holosoma.policy_task import PolicyTask
+
 torch.set_float32_matmul_precision("high")
 
 
@@ -59,7 +61,7 @@ def _clone_outputs(fn: Callable[..., Any]) -> Callable[..., Any]:
 class FastSACEnv:
     def __init__(
         self,
-        env: BaseTask,
+        env: PolicyTask,
         actor_obs_keys: Sequence[str],
         critic_obs_keys: Sequence[str],
     ):
@@ -169,7 +171,7 @@ class FastSACAgent(BaseAlgo):
 
     def __init__(
         self,
-        env: BaseTask,
+        env: PolicyTask,
         config: FastSACConfig,
         device: str,
         log_dir: str,
@@ -845,6 +847,9 @@ class FastSACAgent(BaseAlgo):
             # `args.num_learning_iterations` is a multiple of `args.logging_interval`).
             if self.global_step >= args.num_learning_iterations:
                 break
+            if self.unwrapped_env.shutdown_requested:
+                logger.info("Stopping FastSAC after a task shutdown request.")
+                break
             self.global_step += 1
             pbar.update(1)
 
@@ -1082,6 +1087,9 @@ class FastSACAgent(BaseAlgo):
             obs, _, _, _ = self.env.step(actor_state["actions"])
             actor_state["obs"] = obs
             actor_state = self._post_eval_env_step(actor_state)
+            if self.unwrapped_env.shutdown_requested:
+                logger.info("Stopping FastSAC evaluation after a task shutdown request.")
+                break
 
         self._post_evaluate_policy()
 
