@@ -9,12 +9,15 @@ import sys
 import time
 from os import getenv
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_values.experiment import get_annotated_experiment_config
-from holosoma.train_agent import training_context
+from holosoma.train_agent import train_on_task
 from holosoma.utils.config_registry import parse_config
+
+if TYPE_CHECKING:
+    from holosoma.policy_task import PolicyTask
 
 REPO_ROOT = Path(__file__).parent.parent.parent.absolute()
 
@@ -166,9 +169,9 @@ def main():
         ),
     )
 
-    with training_context(config) as ctx:
+    with config.create_task() as env:
         # 1. Train
-        ctx.train()
+        train_on_task(config, cast("PolicyTask", env))
 
         # 2. Validate metrics (explicit, linear flow) - only on rank 0
         if os.environ.get("RANK", "0") == "0":

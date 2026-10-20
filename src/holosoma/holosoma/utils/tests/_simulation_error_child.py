@@ -108,7 +108,6 @@ class NativeApp:
 
 class Environment:
     def __init__(self, ready_file: Path | None) -> None:
-        self.sim: Any = object()
         self.ready_file = ready_file
 
     def close(self) -> None:
@@ -118,50 +117,83 @@ class Environment:
             Event().wait()
 
 
-def run_entrypoint(
-    monkeypatch: pytest.MonkeyPatch, entrypoint: str, fail: Callable[[], None], env: Environment, app: NativeApp
+def run_task_session(
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: str,
+    fail: Callable[[], None],
+    env: Any,
+    app: Any,
+    *,
+    on_enter: Callable[[], None] | None = None,
 ) -> None:
-    config = cast(
-        "sim_utils.RunSimConfig",
-        SimpleNamespace(
-            simulator=SimpleNamespace(config=SimpleNamespace(sim=SimpleNamespace(fps=100, control_decimation_steps=1))),
-            time_scale=0,
-            viewer_dt=0.02,
-            training=SimpleNamespace(headless=True),
-        ),
-    )
-    if entrypoint == "setup":
-        monkeypatch.setattr(sim_utils, "setup_simulator_imports", lambda _config: None)
-        monkeypatch.setattr(sim_utils, "setup_isaaclab_launcher", lambda _config, _device: app)
-        monkeypatch.setattr(sim_utils, "_create_simulation_environment", lambda _config, _device: fail())
-        sim_utils.setup_simulation_environment(config, device="cpu")
-    elif entrypoint == "app":
+    """Run ``fail`` at ``scenario``'s point in a real task session over a stub task and provider.
+
+    ``on_enter`` runs once the task exists, before the scenario fails.
+    """
+    from holosoma.envs.simulation_task import SimulationTask
+    from holosoma.simulator import session
+
+    class Task(SimulationTask):
+        shutdown_requested = False
+
+        def __init__(self, _config: object) -> None:
+            if scenario == "construct":
+                fail()
+            self.simulator = cast("Any", SimpleNamespace(video_recorder=None))
+            self.config = cast(
+                "Any",
+                SimpleNamespace(
+                    robot=SimpleNamespace(asset=SimpleNamespace(robot_type="test")),
+                    simulator=SimpleNamespace(
+                        _target_="test.Simulator",
+                        config=SimpleNamespace(sim=SimpleNamespace(fps=100, control_decimation_steps=1)),
+                    ),
+                    terrain=SimpleNamespace(terrain_term=SimpleNamespace(mesh_type="plane", func="test")),
+                ),
+            )
+
+        def reset_all(self) -> None:
+            if scenario == "run_reset":
+                fail()
+
+        def step(self, actor_state: dict[str, Any] | None = None) -> None:
+            fail()
+
+        def close(self) -> None:
+            env.close()
+
+    monkeypatch.setattr(session, "setup_simulator_imports", lambda _config: None)
+    monkeypatch.setattr(session, "resolve_simulation_device", lambda *_args: "cpu")
+    monkeypatch.setattr(session, "get_simulator_type", lambda: SimulatorType.ISAACSIM)
+    monkeypatch.setattr(session, "setup_isaaclab_launcher", lambda _config, _device: app)
+    monkeypatch.setattr(session, "get_class", lambda _target: Task)
+    config = cast("Any", SimpleNamespace(env_class="test.Task", training=SimpleNamespace(headless=True)))
+    with session.task_session(config, SimulationTask) as task:
+        if on_enter is not None:
+            on_enter()
+        if scenario in {"run_reset", "run_step"}:
+            task.run()
+        else:
+            fail()
+
+
+def run_entrypoint(
+    monkeypatch: pytest.MonkeyPatch,
+    entrypoint: str,
+    fail: Callable[[], None],
+    env: Environment,
+    app: NativeApp,
+    configure: Callable[[], None],
+) -> None:
+    if entrypoint == "app":
+        configure()
         try:
             fail()
         finally:
             sim_utils.close_simulation_app(app)
-    elif entrypoint in {"direct_initialize", "direct_body", "direct_run"}:
-        monkeypatch.setattr(
-            sim_utils.DirectSimulation,
-            "initialize",
-            lambda _self: fail() if entrypoint == "direct_initialize" else None,
-        )
-        env.sim = SimpleNamespace(
-            shutdown_requested=False,
-            refresh_sim_tensors=lambda: None,
-            hooks=SimpleNamespace(emit=lambda *_args: None),
-            simulate_at_each_physics_step=fail,
-        )
-        with sim_utils.DirectSimulation(config, env, "cpu", app) as simulation:
-            if entrypoint == "direct_run":
-                simulation.run()
-            elif entrypoint == "direct_initialize":
-                raise AssertionError("Initialization unexpectedly succeeded")
-            else:
-                fail()
     else:
-        with sim_utils.simulation_resource_session(env, app):
-            fail()
+        # Logging faults start once the task exists, so task setup logs cannot trip them first.
+        run_task_session(monkeypatch, entrypoint, fail, env, app, on_enter=configure)
 
 
 def main() -> None:
@@ -189,15 +221,18 @@ def main() -> None:
             raise failure
 
     monkeypatch = pytest.MonkeyPatch()
-    if args.diagnostic in {"sink_error", "sink_all"}:
-        # A healthy default sink would hide a missing fallback.
-        sim_utils.logger.remove()
-    configure_logging(monkeypatch, args.sink, args.diagnostic)
+
+    def configure() -> None:
+        if args.diagnostic in {"sink_error", "sink_all"}:
+            # A healthy default sink would hide a missing fallback.
+            sim_utils.logger.remove()
+        configure_logging(monkeypatch, args.sink, args.diagnostic)
+
     app = NativeApp(monkeypatch, args.quit)
     env = Environment(args.ready_file)
     monkeypatch.setattr(sim_utils, "get_simulator_type", lambda: SimulatorType.ISAACSIM)
     with sim_utils.exit_on_sigterm():
-        run_entrypoint(monkeypatch, args.entrypoint, fail, env, app)
+        run_entrypoint(monkeypatch, args.entrypoint, fail, env, app, configure)
 
     raise AssertionError("Native provider shutdown must terminate the process")
 

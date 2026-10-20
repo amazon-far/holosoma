@@ -20,14 +20,8 @@ from holosoma.utils.eval_utils import (
 )
 from holosoma.utils.experiment_paths import get_experiment_dir, get_timestamp
 from holosoma.utils.helpers import get_class
-from holosoma.utils.sim_utils import (
-    graceful_simulation_signals,
-    setup_simulation_environment,
-    simulation_resource_session,
-)
 
 
-@graceful_simulation_signals
 def run_eval_with_tyro(
     tyro_config: ExperimentConfig,
     checkpoint_cfg: CheckpointConfig,
@@ -35,11 +29,10 @@ def run_eval_with_tyro(
     saved_wandb_path: str | None,
     eval_cbs_cfg: EvalCallbacksConfig | None = None,
 ) -> None:
-    env, device, simulation_app = setup_simulation_environment(tyro_config)
-    with simulation_resource_session(env, simulation_app):
+    with tyro_config.create_task() as env:
         _run_eval_session(
             env,
-            device,
+            env.device,
             tyro_config,
             checkpoint_cfg,
             saved_config=saved_config,

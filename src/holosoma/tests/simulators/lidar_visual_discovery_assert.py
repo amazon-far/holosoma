@@ -25,9 +25,12 @@ if PROJECT_ROOT not in sys.path:
 
 from holosoma.config_types.scene import PhysicsConfig, RigidObjectConfig  # noqa: E402
 from holosoma.simulator.base_simulator.hooks import Phase  # noqa: E402
-from holosoma.utils.sim_utils import setup_simulation_environment  # noqa: E402
 from tests.simulators import _camera_presets, _lidar_presets  # noqa: E402, F401
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit  # noqa: E402
+from tests.simulators._sim_harness import (  # noqa: E402
+    build_run_sim_config,
+    launch_simulator,
+    run_and_hard_exit,
+)
 
 
 def _check_exact_downward_return(sim, name: str, expected_ranges) -> list[str]:
@@ -117,8 +120,7 @@ def main() -> int:
         training=dataclasses.replace(config.training, num_envs=args.num_envs),
     )
 
-    env, device, _app = setup_simulation_environment(config, device="cuda:0")
-    sim = env.sim
+    sim, device, _app = launch_simulator(config, device="cuda:0")
     sim.set_headless(True)
     sim.setup()
     sim.setup_terrain()

@@ -745,25 +745,16 @@ class IsaacSim(BaseSimulator):
 
     def _step_dynamics(self) -> None:
         self._sim_step_counter += 1
-        # Only render if actively recording (not just if video recorder exists)
-        has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording
-        is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors() or has_video_recording
-
         # Buffers external forces onto the articulation / object handles; write_data_to_sim() below
         # flushes them into PhysX before sim.step().
         self.flush_external_wrench()
 
         self.scene.write_data_to_sim()
 
-        render_now = is_rendering and self._sim_step_counter % self.simulator_config.sim.render_interval_steps == 0
-
         # Physics: exactly one step, never through the renderer. sim.step(render=True) falls
         # through to a bare app.update() in isaacsim.core, which also runs the physics engine on
         # the app clock — sim time ran ~3x too fast whenever a camera/GUI was active.
         self.sim.step(render=False)
-
-        if render_now:
-            self.render()
 
         # update buffers at sim
         self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
@@ -786,25 +777,23 @@ class IsaacSim(BaseSimulator):
     def forward_kinematics(self) -> None:
         """Flush pending state writes and update articulation kinematics, fabric, and the render
         products — without stepping physics. ``sim.current_time`` does not advance."""
-        self._sim_step_counter += 1
-        has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording
-        is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors() or has_video_recording
 
         self.scene.write_data_to_sim()
         # sim.forward() runs physics_sim_view.update_articulations_kinematic() and flushes
         # fabric, so body/camera prims match the written joint/root state without integrating.
         self.sim.forward()
 
-        # Same render gate as _step_dynamics: RTX sensors (TiledCameras) only track the new
-        # poses after a render tick.
-        render_now = is_rendering and self._sim_step_counter % self.simulator_config.sim.render_interval_steps == 0
-        if render_now:
-            self.sim.render()
-            if self.debug_viz_enabled:
-                self.clear_lines()
-                self.draw_debug_viz()
-
         self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
+
+    def synchronize_after_reset(self) -> None:
+        """Flush reset state and update derived articulation state without integration."""
+
+        self.forward_kinematics()
+        self.sync_sim_state()
+
+    def requires_step_render(self) -> bool:
+        has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording
+        return self.sim.has_rtx_sensors() or has_video_recording
 
     def _write_external_wrench_native(self, targets: list[WrenchTarget]) -> None:
         """Set world-frame wrenches on the robot articulation and object RigidObjects.
