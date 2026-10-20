@@ -56,36 +56,14 @@ def _run_config(render_interval: int):
 def _construct(config) -> None:
     """Construct the IsaacSim backend for ``config``, launching the app but building no scene.
 
-    Deliberately not ``setup_simulation_environment``: its cleanup calls the Isaac app's ``close()``,
-    which exits the process itself rather than returning, so a construction error there never reaches
-    the caller and the run ends silently with status 0. Launching the app and calling the backend
+    Deliberately not ``config.create_task()``: its cleanup calls the Isaac app's ``close()``, which
+    exits the process itself rather than returning, so a construction error there never reaches the
+    caller and the run ends silently with status 0. Launching the app and calling the backend
     directly keeps the exception observable, which is the whole point of this check.
     """
-    from holosoma.config_types.full_sim import FullSimConfig
-    from holosoma.managers.terrain import TerrainManager
-    from holosoma.utils.helpers import get_class
-    from holosoma.utils.sim_utils import setup_isaaclab_launcher, setup_simulator_imports
+    from tests.simulators._sim_harness import launch_simulator
 
-    setup_simulator_imports(config)
-    setup_isaaclab_launcher(config, device=config.device)
-
-    full_config = FullSimConfig(
-        simulator=config.simulator.config,
-        robot=config.robot,
-        scene=config.scene,
-        sensors=dict(config.sensor),
-        training=config.training,
-        logger=config.logger,
-        plugin=config.plugin,
-        experiment_dir=None,
-    )
-
-    class _EnvProxy:
-        num_envs = config.training.num_envs
-        device = config.device
-
-    terrain_manager = TerrainManager(config.terrain, env=_EnvProxy(), device=config.device)
-    get_class(config.simulator._target_)(full_config, terrain_manager, config.device)
+    launch_simulator(config, config.device)
 
 
 def _main() -> int:
