@@ -64,7 +64,9 @@ def step(sim: Any, n: int, *, render: bool = False) -> None:
     for _ in range(n):
         sim.refresh_sim_tensors()
         sim.simulate_at_each_physics_step()
-        if render:
+        # Offscreen sensors (e.g. IsaacSim RTX cameras) only update when rendered; a task does
+        # this on the backend's render interval, and a harness stepping the raw sim must too.
+        if render or sim.requires_step_render():
             sim.render()
 
 
