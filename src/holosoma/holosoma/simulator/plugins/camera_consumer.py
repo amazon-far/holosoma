@@ -5,13 +5,12 @@ Defines :class:`CameraConsumerPlugin`, the base for a plugin that consumes rende
 
 A consumer is a plugin (``cls(cfg, simulator)``, no base class required): it registers its per-step
 :meth:`~CameraConsumerPlugin.publish` on ``FRAME_END`` and its :meth:`~CameraConsumerPlugin.stop`
-on ``CLOSE`` in ``__init__``. The cameras' ``render_sensors`` is registered on the SAME phase first
-(before ``install_plugins``), so by registration order the buffers are
-fresh when a consumer's callback runs. Each consumer declares the streams it needs via
-:meth:`~CameraConsumerPlugin.wanted_streams`; the base validates them against the configured cameras
-at construction (fail-loud) and, each step, snapshots exactly those to host once — sharing the single
-``get_camera_data(device="cpu")`` copy across every consumer of the same (camera, modality) — and
-hands the consumer a per-step batch of just its streams.
+on ``CLOSE`` in ``__init__``. That ``FRAME_END`` registration declares ``after=["sensors.render"]``, so
+the registry runs it behind the sensor capture and its buffers are fresh. Each consumer declares the
+streams it needs via :meth:`~CameraConsumerPlugin.wanted_streams`; the base validates them against
+the configured cameras at construction (fail-loud) and, each step, snapshots exactly those to host
+once — sharing the single ``get_camera_data(device="cpu")`` copy across every consumer of the same
+(camera, modality) — and hands the consumer a per-step batch of just its streams.
 
 Stream identity is a :data:`StreamKey` = ``(camera, modality, env_id)``. ROS2 wants env 0 only; a
 tiling recorder may want several envs — env selection is a per-consumer lever, not a global bake-in.
@@ -36,7 +35,7 @@ from holosoma.config_types.sensor import (
     IsaacSimCameraConfig,
     MujocoCameraConfig,
 )
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.simulator.base_simulator.hooks import SENSOR_RENDER_HOOK, Phase
 from holosoma.utils.simulator_config import SimulatorType
 
 if TYPE_CHECKING:
@@ -119,7 +118,12 @@ class CameraConsumerPlugin:
         self._validate_streams()
         self._started = False
         self._closed = False
-        simulator.hooks.add(Phase.FRAME_END, self._on_frame_end, name=f"{self._label()}.publish")
+        simulator.hooks.add(
+            Phase.FRAME_END,
+            self._on_frame_end,
+            name=f"{self._label()}.publish",
+            after=[SENSOR_RENDER_HOOK],
+        )
         simulator.hooks.add(Phase.CLOSE, self._on_close, name=f"{self._label()}.stop")
 
     def _label(self) -> str:

@@ -14,7 +14,7 @@ import pytest
 
 from holosoma.config_types.plugin import ROS2PointCloudPluginConfig, ROS2PointCloudRoute
 from holosoma.config_types.sensor import GridLidarRayPatternConfig, LidarSensorConfig, SensorMountConfig
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.simulator.base_simulator.hooks import SENSOR_RENDER_HOOK, HookRegistry, Phase
 from holosoma.simulator.plugins.lidar_consumer import PointCloudPacket
 from holosoma.simulator.plugins.ros2 import ros2_pointcloud_plugin
 from holosoma.simulator.plugins.ros2.ros2_pointcloud_plugin import ROS2PointCloudPlugin
@@ -501,7 +501,7 @@ def test_frame_end_drives_lazy_start_publish_and_skips_non_due_scan(fake_ros: di
         if due:
             sim.sensor_manager.get_lidar("lidar").set_buffer("points", points)
 
-    sim.hooks.add(Phase.FRAME_END, _render_sensor, name="sensors.render")
+    sim.hooks.add(Phase.FRAME_END, _render_sensor, name=SENSOR_RENDER_HOOK)
     plugin = cast("ROS2PointCloudPlugin", config.get_cls()(config, sim))
     sim.hooks.emit(Phase.FRAME_END)
     publisher_node = cast("_FakeNode", fake_ros["node"])

@@ -12,7 +12,7 @@ from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.simulator.base_simulator.hooks import SENSOR_RENDER_HOOK, HookRegistry, Phase
 from holosoma.simulator.shared.external_wrench import ExternalWrenchAccumulator, WrenchTarget
 from holosoma.simulator.shared.object_registry import ObjectRegistry, ObjectType
 from holosoma.simulator.shared.scene_types import SceneInterface
@@ -204,9 +204,9 @@ class BaseSimulator:
         self.kinematic_playback: bool = self.simulator_config.sim.kinematic_playback
         self._kinematic_time = 0.0
         self.hooks = HookRegistry(base_rates=self._hook_base_rates())
-        # Register sensor rendering before plugins so FRAME_END consumers read fresh outputs.
-        # This no-ops until a backend builds its sensor manager during setup.
-        self.hooks.add(Phase.FRAME_END, self.render_sensors, name="sensors.render")
+        # Egress consumers declare `after=[SENSOR_RENDER_HOOK]`, so this runs ahead of them
+        # whatever order they register in. No-ops until a backend builds its sensor manager.
+        self.hooks.add(Phase.FRAME_END, self.render_sensors, name=SENSOR_RENDER_HOOK)
         self.installed_plugins: dict[str, Any] = {}
         self._plugins_installed = False
         self._closed = False

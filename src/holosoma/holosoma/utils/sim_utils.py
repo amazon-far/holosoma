@@ -790,7 +790,7 @@ class DirectSimulation:
                 self.simulator.hooks.emit(Phase.POST_STEP)
 
                 # Mounted cameras render and egress consumers publish here, as FRAME_END plugins
-                # (once per control step). render_sensors is registered before any consumer, so
+                # (once per control step). Consumers declare `after` the sensor render hook, so
                 # buffers are fresh; both no-op when no cameras/consumers are configured.
                 #
                 # Closing on the control step's LAST substep is what makes the image a consumer reads

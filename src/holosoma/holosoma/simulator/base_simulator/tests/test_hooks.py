@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import functools
+from contextlib import contextmanager
 from types import SimpleNamespace
+from typing import Any, Callable, Iterator
 
 import pytest
+from loguru import logger
 
 from holosoma.config_types.video import VideoConfig
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-from holosoma.simulator.base_simulator.hooks import HookCloseError, HookRegistry, HookRegistryError, Phase
+from holosoma.simulator.base_simulator.hooks import (
+    HookCloseError,
+    HookOrderError,
+    HookRegistry,
+    HookRegistryError,
+    Phase,
+)
 
 pytestmark = pytest.mark.no_sim
 
@@ -332,3 +342,327 @@ def test_add_arity_guard_tolerates_uninspectable_callback() -> None:
     # Some C-level callables reject inspect.signature; the guard must not block them.
     hooks = HookRegistry()
     hooks.add(Phase.EPISODE_END, print, name="builtin")  # print(*args) — accepts env_id
+
+
+@contextmanager
+def captured_logs(level: str) -> Iterator[list[str]]:
+    """Collect loguru messages at or above ``level`` for the duration of the block."""
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(message.record["message"]), level=level)
+    try:
+        yield messages
+    finally:
+        logger.remove(sink_id)
+
+
+def recorder(calls: list[str], name: str) -> Callable[[], None]:
+    return lambda: calls.append(name)
+
+
+def test_after_runs_hook_behind_its_dependency() -> None:
+    calls: list[str] = []
+    hooks = HookRegistry()
+
+    hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="consumer", after=["render"])
+    hooks.add(Phase.FRAME_END, recorder(calls, "render"), name="render")
+
+    hooks.emit(Phase.FRAME_END)
+
+    assert calls == ["render", "consumer"]
+
+
+def test_before_runs_hook_ahead_of_its_dependency() -> None:
+    calls: list[str] = []
+    hooks = HookRegistry()
+
+    hooks.add(Phase.FRAME_END, recorder(calls, "late"), name="late")
+    hooks.add(Phase.FRAME_END, recorder(calls, "early"), name="early", before=["late"])
+
+    hooks.emit(Phase.FRAME_END)
+
+    assert calls == ["early", "late"]
+
+
+def test_unconstrained_hooks_keep_their_relative_order() -> None:
+    # 'b' and 'c' stay in that order, but both overtake the blocked 'a' rather than holding its slot.
+    calls: list[str] = []
+    hooks = HookRegistry()
+
+    hooks.add(Phase.FRAME_END, recorder(calls, "a"), name="a", after=["c"])
+    hooks.add(Phase.FRAME_END, recorder(calls, "b"), name="b")
+    hooks.add(Phase.FRAME_END, recorder(calls, "c"), name="c")
+
+    hooks.emit(Phase.FRAME_END)
+
+    assert calls == ["b", "c", "a"]
+
+
+def test_constraint_matches_every_hook_sharing_the_name() -> None:
+    # Two plugin slots of the same class register the same hook name; the constraint covers both.
+    calls: list[str] = []
+    hooks = HookRegistry()
+
+    hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="consumer", after=["publish"])
+    hooks.add(Phase.FRAME_END, recorder(calls, "publish_1"), name="publish")
+    hooks.add(Phase.FRAME_END, recorder(calls, "publish_2"), name="publish")
+
+    hooks.emit(Phase.FRAME_END)
+
+    assert calls == ["publish_1", "publish_2", "consumer"]
+
+
+def test_order_is_recomputed_after_a_later_registration() -> None:
+    calls: list[str] = []
+    hooks = HookRegistry()
+    hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="consumer", after=["render"])
+
+    hooks.emit(Phase.FRAME_END)
+    hooks.add(Phase.FRAME_END, recorder(calls, "render"), name="render")
+    hooks.emit(Phase.FRAME_END)
+
+    assert calls == ["consumer", "render", "consumer"]
+
+
+def test_cycle_raises_on_emit() -> None:
+    hooks = HookRegistry()
+    hooks.add(Phase.FRAME_END, lambda: None, name="a", after=["b"])
+    hooks.add(Phase.FRAME_END, lambda: None, name="b", after=["a"])
+
+    with pytest.raises(HookOrderError, match="cycle on phase 'frame_end' among: a, b"):
+        hooks.emit(Phase.FRAME_END)
+
+
+def test_missing_dependency_is_ignored_silently() -> None:
+    # A constraint on something this run didn't configure is satisfied by its absence, not a problem.
+    calls: list[str] = []
+    hooks = HookRegistry()
+    hooks.add(Phase.FRAME_END, recorder(calls, "a"), name="a", after=["nope"])
+    hooks.add(Phase.FRAME_END, recorder(calls, "b"), name="b", after=["nope"])
+
+    with captured_logs("WARNING") as messages:
+        hooks.emit(Phase.FRAME_END)
+
+    assert calls == ["a", "b"]
+    assert messages == []
+
+
+def test_dependency_on_another_phase_does_not_order_or_resolve() -> None:
+    # Names are looked up per phase: a FRAME_BEGIN hook is not a FRAME_END dependency.
+    calls: list[str] = []
+    hooks = HookRegistry()
+    hooks.add(Phase.FRAME_BEGIN, recorder(calls, "elsewhere"), name="elsewhere")
+    hooks.add(Phase.FRAME_END, recorder(calls, "a"), name="a", after=["elsewhere"])
+
+    with captured_logs("WARNING") as messages:
+        hooks.emit(Phase.FRAME_END)
+
+    assert calls == ["a"]
+    assert messages == []
+
+
+def test_disabled_dependency_is_inert_and_returns_on_enable() -> None:
+    calls: list[str] = []
+    hooks = HookRegistry()
+    render = hooks.add(Phase.FRAME_END, recorder(calls, "render"), name="render")
+    hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="consumer", after=["render"])
+
+    render.disable()
+    hooks.emit(Phase.FRAME_END)
+    render.enable()
+    hooks.emit(Phase.FRAME_END)
+
+    assert calls == ["consumer", "render", "consumer"]
+
+
+def test_removed_dependency_stops_constraining() -> None:
+    calls: list[str] = []
+    hooks = HookRegistry()
+    render = hooks.add(Phase.FRAME_END, recorder(calls, "render"), name="render")
+    hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="consumer", after=["render"])
+
+    render.remove()
+    with captured_logs("WARNING") as messages:
+        hooks.emit(Phase.FRAME_END)
+
+    assert calls == ["consumer"]
+    assert messages == []
+
+
+def test_close_runs_resolved_order_backwards() -> None:
+    # The consumer follows the runtime while running, so it tears down before the runtime does.
+    calls: list[str] = []
+    hooks = HookRegistry()
+
+    hooks.add(Phase.CLOSE, recorder(calls, "consumer"), name="consumer", after=["runtime"])
+    hooks.add(Phase.CLOSE, recorder(calls, "runtime"), name="runtime")
+
+    hooks.emit(Phase.CLOSE)
+
+    assert calls == ["consumer", "runtime"]
+
+
+def test_close_cycle_falls_back_to_registration_order() -> None:
+    # A cycle must not cost every hook its teardown.
+    calls: list[str] = []
+    hooks = HookRegistry()
+    hooks.add(Phase.CLOSE, recorder(calls, "a"), name="a", after=["b"])
+    hooks.add(Phase.CLOSE, recorder(calls, "b"), name="b", after=["a"])
+
+    with captured_logs("ERROR") as messages:
+        hooks.emit(Phase.CLOSE)
+
+    assert calls == ["b", "a"]
+    assert any("cycle" in message for message in messages)
+
+
+class _Producer:
+    """Two instances register the same callback; a subclass override registers a different one."""
+
+    def tick(self) -> None: ...
+
+
+class _Subclass(_Producer):
+    def tick(self) -> None: ...
+
+
+def test_default_name_is_module_and_qualname() -> None:
+    hooks = HookRegistry()
+
+    handle = hooks.add(Phase.FRAME_END, _Producer().tick, name=None)
+
+    assert handle.name == f"{__name__}._Producer.tick"
+
+
+def test_instances_share_a_default_name_but_an_override_gets_its_own() -> None:
+    hooks = HookRegistry()
+
+    first = hooks.add(Phase.FRAME_END, _Producer().tick)
+    second = hooks.add(Phase.FRAME_END, _Producer().tick)
+    override = hooks.add(Phase.FRAME_END, _Subclass().tick)
+
+    assert first.name == second.name
+    assert override.name == f"{__name__}._Subclass.tick"
+
+
+def test_default_name_unwraps_partial_and_decorators() -> None:
+    def target(env_id: int) -> None: ...
+
+    @functools.wraps(target)
+    def decorated(env_id: int) -> None: ...
+
+    hooks = HookRegistry()
+
+    partial_handle = hooks.add(Phase.EPISODE_START, functools.partial(target))
+    decorated_handle = hooks.add(Phase.EPISODE_END, decorated)
+
+    expected = f"{__name__}.test_default_name_unwraps_partial_and_decorators.<locals>.target"
+    assert partial_handle.name.startswith(expected)
+    assert decorated_handle.name.startswith(expected)
+
+
+def test_lambdas_on_different_lines_get_distinct_default_names() -> None:
+    hooks = HookRegistry()
+
+    first = hooks.add(Phase.FRAME_END, lambda: None)
+    second = hooks.add(Phase.FRAME_END, lambda: None)
+
+    assert first.name != second.name
+
+
+def test_one_name_reference_covers_every_hook_sharing_the_default() -> None:
+    # The multi-slot case: one callback registered twice, one reference orders against both.
+    calls: list[str] = []
+    hooks = HookRegistry()
+
+    class Egress:
+        def __init__(self, label: str) -> None:
+            self.label = label
+
+        def publish(self) -> None:
+            calls.append(self.label)
+
+    head = hooks.add(Phase.FRAME_END, Egress("head").publish)
+    waist = hooks.add(Phase.FRAME_END, Egress("waist").publish)
+    assert head.name == waist.name  # one place in the source, so one name
+    hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="consumer", after=[head.name])
+
+    hooks.emit(Phase.FRAME_END)
+
+    assert calls == ["head", "waist", "consumer"]
+
+
+def test_handle_orders_against_one_instance_not_its_namesake() -> None:
+    # A.foo(seed=1) -> B.foo -> A.foo(seed=2): same callback twice, ordered by handle.
+    calls: list[str] = []
+    hooks = HookRegistry()
+
+    def seeded(seed: int) -> Callable[[], None]:
+        return lambda: calls.append(f"a{seed}")
+
+    first = hooks.add(Phase.FRAME_END, seeded(1), name="a.foo")
+    second = hooks.add(Phase.FRAME_END, seeded(2), name="a.foo")
+    hooks.add(Phase.FRAME_END, recorder(calls, "b"), name="b.foo", after=[first], before=[second])
+
+    hooks.emit(Phase.FRAME_END)
+
+    assert calls == ["a1", "b", "a2"]
+
+
+def test_handle_for_another_phase_is_rejected() -> None:
+    hooks = HookRegistry()
+    elsewhere = hooks.add(Phase.FRAME_BEGIN, lambda: None, name="elsewhere.tick")
+
+    with pytest.raises(HookRegistryError, match="Constraints apply within one phase"):
+        hooks.add(Phase.FRAME_END, lambda: None, name="here.tick", after=[elsewhere])
+
+
+def test_dependency_that_is_neither_name_nor_handle_is_rejected() -> None:
+    # The overloads reject this at type-check time; the runtime guard catches whoever ignores them,
+    # since a callback or plugin object would match no hook and silence is for absent names only.
+    hooks = HookRegistry()
+    target = hooks.add(Phase.FRAME_END, lambda: None, name="target.tick")
+    deps: list[Any] = [target.name, object()]
+
+    with pytest.raises(HookRegistryError, match="pass a hook name or the HookHandle"):
+        hooks.add(Phase.FRAME_END, lambda: None, name="dependent.tick", after=deps)
+
+
+def test_handle_from_another_registry_is_rejected() -> None:
+    hooks = HookRegistry()
+    other = HookRegistry()
+    elsewhere = other.add(Phase.FRAME_END, lambda: None, name="elsewhere.tick")
+
+    with pytest.raises(HookRegistryError, match="from a different registry"):
+        hooks.add(Phase.FRAME_END, lambda: None, name="here.tick", after=[elsewhere])
+
+
+def test_handle_to_a_removed_hook_stops_constraining() -> None:
+    calls: list[str] = []
+    hooks = HookRegistry()
+    render = hooks.add(Phase.FRAME_END, recorder(calls, "render"), name="render.one")
+    hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="consumer.one", after=[render])
+
+    render.remove()
+    hooks.emit(Phase.FRAME_END)
+
+    assert calls == ["consumer"]
+
+
+def test_names_reports_resolved_order_per_phase() -> None:
+    hooks = HookRegistry()
+    hooks.add(Phase.FRAME_END, lambda: None, name="consumer", after=["render"])
+    hooks.add(Phase.FRAME_END, lambda: None, name="render")
+    hooks.add(Phase.CLOSE, lambda: None, name="consumer", after=["runtime"])
+    hooks.add(Phase.CLOSE, lambda: None, name="runtime")
+
+    assert hooks.names(Phase.FRAME_END) == ("render", "consumer")
+    assert hooks.names(Phase.CLOSE) == ("consumer", "runtime")  # teardown order
+    assert hooks.names(Phase.PRE_STEP) == ()
+
+
+def test_bare_string_dependency_is_rejected() -> None:
+    # A str satisfies Sequence[str], so the types allow this and only the runtime guard catches it.
+    hooks = HookRegistry()
+
+    with pytest.raises(HookRegistryError, match="pass a sequence of hook names"):
+        hooks.add(Phase.FRAME_END, lambda: None, name="a", after="render")

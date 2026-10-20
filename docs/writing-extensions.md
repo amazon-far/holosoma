@@ -183,7 +183,7 @@ Select plugins as the dynamic-dict `plugin.<key>:<preset>` (per-key leaf overrid
 
 ### Phases
 
-A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=None, every=1)`. Per control frame the loop emits, in order:
+A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=None, every=1, after=(), before=())`. Per control frame the loop emits, in order:
 
 | Phase | When | Callback args | Cadence |
 |---|---|---|---|
@@ -192,7 +192,28 @@ A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=No
 | `POST_STEP` | after each physics substep (freshest sim time) | — | physics `fps` |
 | `FRAME_END` | after the substeps + state-tensor refresh (read state here) | — | control rate |
 | `EPISODE_START` / `EPISODE_END` | on reset boundaries | `env_id` | per event |
-| `CLOSE` | teardown (release resources); runs in reverse registration order | — | once |
+| `CLOSE` | teardown (release resources); runs the resolved order backwards | — | once |
+
+### Ordering
+
+Within a phase, hooks run in registration order — which for plugins means the order their slots were selected, so don't rely on it. Declare what you actually need instead: `after` / `before` name the same-phase hooks you must follow or precede, and the registry orders you against them. Hooks with no constraints keep their order relative to each other, though a constraint can move others past them.
+
+```python
+simulator.hooks.add(
+    Phase.FRAME_END, self.publish, name="my_plugin.publish", after=["sensors.render"],
+)
+```
+
+**Naming.** `name` defaults to where the callback is defined — `module.QualName`, with `partial` and decorators unwrapped — so it is unique per place in the source without anyone coordinating, and most hooks need no name at all. Pass one explicitly to give a hook a short public handle others depend on (`"sensors.render"`), and for a callback that moves: a method overridden per backend derives a different default in each subclass, so a cross-backend dependency needs the explicit name.
+
+**What a reference means.** A name matches **every** hook registered under it, so one reference covers a plugin selected in several slots, and a base class registering on behalf of its subclasses is one name covering all of them. To pin one particular hook instead — ordering two instances of the same callback against each other — pass the `HookHandle` that `add` returned:
+
+```python
+first = hooks.add(Phase.FRAME_END, seeded(1), name="dr.apply")
+hooks.add(Phase.FRAME_END, self.place, name="dr.place", after=[first])
+```
+
+Lookup is per phase: a name registered only on another phase doesn't exist from here, and a handle for another phase is rejected. A name constraint is advisory, so one that matches nothing is silently not applied — a run that configures no cameras has no `sensors.render` to follow, and that's a satisfied constraint rather than a problem to report. A set of constraints that can't all hold raises `HookOrderError` from the next `emit` of that phase, naming the hooks in the cycle. `CLOSE` resolves the same way and then runs backwards, so a hook that declares `after` tears down *before* the hook it follows — publishers close before the runtime they publish through. For debugging, `hooks.names(phase)` returns the resolved order.
 
 ### Cadence
 
