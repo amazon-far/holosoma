@@ -866,12 +866,7 @@ class DirectSimulation:
         torch.Tensor
             Base initialization state tensor.
         """
-        base_init_state_list = (
-            self.config.robot.init_state.pos
-            + self.config.robot.init_state.rot
-            + self.config.robot.init_state.lin_vel
-            + self.config.robot.init_state.ang_vel
-        )
+        base_init_state_list = self.config.robot.init_state.root_state_list()
         return to_torch(base_init_state_list, device=self.device, requires_grad=False)
 
     def _calculate_viewer_steps(self) -> int:

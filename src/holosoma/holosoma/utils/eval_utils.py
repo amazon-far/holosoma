@@ -16,6 +16,7 @@ from tqdm import tqdm
 # CONFIG_NAME is "holosoma_config.yaml" - the primary configuration file for Holosoma
 # This file contains all settings for training and evaluation of models
 from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.utils.config_migration import migrate_legacy_experiment_config
 from holosoma.utils.config_utils import CONFIG_NAME
 from holosoma.utils.file_cache import get_cached_file_path
 from holosoma.utils.logging import LoguruLoggingBridge
@@ -94,7 +95,8 @@ def load_saved_experiment_config(checkpoint_cfg: CheckpointConfig) -> tuple[Expe
     cached_config_path = get_cached_file_path(config_uri)
 
     with open(cached_config_path) as f:
-        return ExperimentConfig(**yaml.safe_load(f)), wandb_run_path
+        # No-op for a current dump; rewrites a pre-refactor robot block (see config_migration).
+        return ExperimentConfig(**migrate_legacy_experiment_config(yaml.safe_load(f))), wandb_run_path
 
 
 def _load_config_from_checkpoint(checkpoint_path: Path) -> tuple[ExperimentConfig, str | None]:
@@ -102,7 +104,8 @@ def _load_config_from_checkpoint(checkpoint_path: Path) -> tuple[ExperimentConfi
 
     checkpoint_contents = torch.load(checkpoint_path, map_location="cpu")
     config_data = checkpoint_contents["experiment_config"]
-    return ExperimentConfig(**config_data), checkpoint_contents.get("wandb_run_path")
+    experiment_config = ExperimentConfig(**migrate_legacy_experiment_config(config_data))
+    return experiment_config, checkpoint_contents.get("wandb_run_path")
 
 
 class CheckpointMetadata(TypedDict):

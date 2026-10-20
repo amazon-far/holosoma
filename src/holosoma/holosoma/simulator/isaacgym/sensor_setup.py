@@ -96,7 +96,7 @@ def _resolve_mount_body_handle(sim: IsaacGym, env_ptr: Any, robot_handle: Any, m
     """
     if mount.target_kind == "robot_link":
         body_name = mount.target
-        handle = sim.gym.find_actor_rigid_body_handle(env_ptr, robot_handle, body_name)
+        handle = sim.gym.find_actor_rigid_body_handle(env_ptr, robot_handle, sim.body_name_map[body_name])
         if handle < 0:
             raise ValueError(f"Camera robot mount body '{body_name}' not found in robot bodies {sim._body_list}.")
         return cast("int", handle)

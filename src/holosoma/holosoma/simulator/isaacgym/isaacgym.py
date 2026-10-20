@@ -18,15 +18,17 @@ from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.isaacgym import light_setup, sensor_setup
 from holosoma.simulator.isaacgym.physics import (
+    apply_dof_properties_from_config,
     apply_mass_from_config,
     apply_rigid_shape_properties,
     build_robot_asset_options,
 )
+from holosoma.simulator.isaacgym.root_state import fixed_base_robot_rows, robot_start_pose
 from holosoma.simulator.isaacgym.urdf_scene_loader import URDFSceneLoader
 from holosoma.simulator.isaacgym.video_recorder import IsaacGymVideoRecorder
-from holosoma.simulator.shared.dof_limits import soft_limit_range
 from holosoma.simulator.shared.external_wrench import WrenchTarget
 from holosoma.simulator.shared.object_registry import ObjectType
+from holosoma.simulator.shared.root_states import robot_rows
 from holosoma.simulator.shared.root_states_view import UnifiedRootStatesView
 from holosoma.simulator.shared.scene_types import EnvOriginsScene
 from holosoma.simulator.shared.terrain import Terrain
@@ -38,9 +40,10 @@ from holosoma.simulator.shared.virtual_gantry import (
 from holosoma.simulator.types import ActorIndices, ActorNames, ActorPoses, ActorStates, EnvIds
 from holosoma.utils.draw import draw_line, draw_sphere
 from holosoma.utils.path import resolve_asset_path
+from holosoma.utils.robot_names import configure_robot_names
 from holosoma.utils.rotations import quat_rotate
 from holosoma.utils.safe_torch_import import torch
-from holosoma.utils.torch_utils import to_torch, torch_rand_float
+from holosoma.utils.torch_utils import to_torch
 
 if TYPE_CHECKING:
     import numpy.typing as npt
@@ -177,7 +180,7 @@ class IsaacGym(BaseSimulator):
         sim_params.physx.num_threads = self.simulator_config.sim.physx.num_threads
         sim_params.physx.use_gpu = True
         sim_params.physx.num_subscenes = 0
-        sim_params.physx.max_gpu_contact_pairs = self.robot_config.contact_pairs_multiplier * 1024 * 1024
+        sim_params.physx.max_gpu_contact_pairs = self.simulator_config.sim.physx.max_gpu_contact_pairs
         sim_params.use_gpu_pipeline = True
 
         gymutil.parse_sim_config(dataclasses.asdict(self.simulator_config.sim), sim_params)
@@ -256,16 +259,7 @@ class IsaacGym(BaseSimulator):
         asset_root = str(asset_path.parent)
         asset_file = asset_path.name
         self.robot_asset = self._setup_robot_asset_when_env_created(asset_root, asset_file, self.robot_config.asset)
-        self.num_dof, self.num_bodies, self.dof_names, self.body_names = self._setup_robot_props_when_env_created()
-
-        # assert if  aligns with config
-        assert self.num_dof == len(self.robot_config.dof_names), "Number of DOFs must be equal to number of actions"
-        assert self.num_bodies == len(self.robot_config.body_names), (
-            f"Number of bodies ({self.num_bodies}) must be equal to number of body names "
-            f"({len(self.robot_config.body_names)})"
-        )
-        assert self.dof_names == self.robot_config.dof_names, "DOF names must match the config"
-        assert self.body_names == self.robot_config.body_names, "Body names must match the config"
+        self._setup_robot_props_when_env_created()
 
     @property
     def has_scene_objects(self) -> bool:
@@ -300,15 +294,16 @@ class IsaacGym(BaseSimulator):
         self.robot_asset = self.gym.load_asset(self.sim, gym_asset_root, gym_asset_file, asset_options)
         return self.robot_asset
 
-    def _setup_robot_props_when_env_created(self) -> tuple[int, int, list[str], list[str]]:
-        self.num_dof = self.gym.get_asset_dof_count(self.robot_asset)
-        self.num_bodies = self.gym.get_asset_rigid_body_count(self.robot_asset)
-
-        # save body names from the asset
-        self.dof_names = self.gym.get_asset_dof_names(self.robot_asset)
-        self.body_names = self.gym.get_asset_rigid_body_names(self.robot_asset)
-
-        return self.num_dof, self.num_bodies, self.dof_names, self.body_names
+    def _setup_robot_props_when_env_created(self) -> None:
+        configure_robot_names(
+            self,
+            list(self.gym.get_asset_dof_names(self.robot_asset)),
+            list(self.gym.get_asset_rigid_body_names(self.robot_asset)),
+        )
+        self._dof_ids_t = torch.tensor(self.dof_ids, device=self.device, dtype=torch.long)
+        self._body_ids_t = torch.tensor(self.body_ids, device=self.device, dtype=torch.long)
+        self._dof_order_is_native = self.dof_ids == list(range(self.num_dof))
+        self._body_order_is_native = self.body_ids == list(range(self.num_bodies))
 
     def create_envs(  # type: ignore[override]
         self, num_envs: int, env_origins: torch.Tensor, base_init_state: torch.Tensor
@@ -397,15 +392,17 @@ class IsaacGym(BaseSimulator):
             self.startup_randomization_callback()
 
     def _build_each_env(self, env_id: int, env_ptr: Any) -> None:
+        pos, quat_xyzw = robot_start_pose(
+            env_id,
+            env_origins=self.env_origins,
+            base_init_state=self.base_init_state,
+            fixed_base=self.robot_config.asset.fix_base_link,
+            device=str(self.device),
+        )
         start_pose = gymapi.Transform()
-        start_pose.p = gymapi.Vec3(*self.base_init_state[:3])
-        # keep the base height the same as the initial height
-        # TODO: Move randomization of robot position out of simulator, kept now for backwards
-        # compatibility.
-        pos = self.env_origins[env_id].clone()
-        pos[:2] += torch_rand_float(-1.0, 1.0, (2, 1), device=str(self.device)).squeeze(1)
-        pos[2] = self.base_init_state[2]
         start_pose.p = gymapi.Vec3(*pos)
+        if quat_xyzw is not None:
+            start_pose.r = gymapi.Quat(*quat_xyzw)
 
         if env_id == 0:
             # Map objects indices into envs by name
@@ -427,7 +424,6 @@ class IsaacGym(BaseSimulator):
         )
         if self.simulator_config.sim.physx.enable_dof_force_sensors:
             self.gym.enable_actor_dof_force_sensors(env_ptr, robot_handle)
-        self._body_list = self.gym.get_actor_rigid_body_names(env_ptr, robot_handle)
 
         # Apply the robot's shared link_physics friction/restitution/compliance to all robot shapes
         # via the apply_rigid_shape_properties seam objects use (isaacgym sub-config; ignores the
@@ -439,8 +435,7 @@ class IsaacGym(BaseSimulator):
             apply_rigid_shape_properties(self.gym, env_ptr, robot_handle, self.robot_config.asset.link_physics, "robot")
 
         dof_props_asset = self.gym.get_asset_dof_properties(self.robot_asset)
-        if self.robot_config.apply_dof_armature_in_isaacgym:
-            dof_props_asset = self._apply_dof_armature_from_config_to_props(dof_props_asset)
+        dof_props_asset = apply_dof_properties_from_config(dof_props_asset, self.robot_config, self.dof_ids)
         dof_props = self._process_dof_props(dof_props_asset, env_id)
         self.gym.set_actor_dof_properties(env_ptr, robot_handle, dof_props)
 
@@ -507,52 +502,21 @@ class IsaacGym(BaseSimulator):
         """No-op. Randomization manager will handle friction domain randomization."""
         return props
 
-    def _apply_dof_armature_from_config_to_props(self, props: Any) -> Any:
-        dof_armature_from_config = self.robot_config.dof_armature_list
-
-        for i in range(len(props)):
-            props["armature"][i] = dof_armature_from_config[i]
-        return props
-
     def _process_dof_props(self, props: Any, env_id: int) -> Any:
-        """Callback allowing to store/change/randomize the DOF properties of each environment.
-            Called During environment creation.
-            Base behavior: stores position, velocity and torques limits defined in the URDF
-
-        Args:
-            props (numpy.array): Properties of each DOF of the asset
-            env_id (int): Environment id
-
-        Returns:
-            [numpy.array]: Modified DOF properties
-        """
+        """Record the actor's limits in canonical DOF order and return ``props`` unchanged."""
         if env_id == 0:
-            self.hard_dof_pos_limits = torch.zeros(
-                self.num_dof, 2, dtype=torch.float, device=self.device, requires_grad=False
-            )
             self.dof_pos_limits = torch.zeros(
                 self.num_dof, 2, dtype=torch.float, device=self.device, requires_grad=False
             )
             self.dof_vel_limits = torch.zeros(self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
             self.torque_limits = torch.zeros(self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
 
-            self.dof_pos_limits_termination = torch.zeros(
-                self.num_dof, 2, dtype=torch.float, device=self.device, requires_grad=False
-            )
-            for i in range(len(props)):
-                lower = props["lower"][i].item()
-                upper = props["upper"][i].item()
-                self.hard_dof_pos_limits[i, 0] = lower
-                self.hard_dof_pos_limits[i, 1] = upper
-                self.dof_vel_limits[i] = props["velocity"][i].item()
-                self.torque_limits[i] = props["effort"][i].item()
-                # soft limits (same contraction formula as the config-sourced backends)
-                self.dof_pos_limits[i, 0], self.dof_pos_limits[i, 1] = soft_limit_range(
-                    lower, upper, self.robot_config.soft_dof_pos_limit
-                )
-                self.dof_pos_limits_termination[i, 0], self.dof_pos_limits_termination[i, 1] = soft_limit_range(
-                    lower, upper, self.robot_config.termination_close_to_dof_pos_limit
-                )
+            for i, native_id in enumerate(self.dof_ids):
+                limited = props["hasLimits"][native_id]
+                self.dof_pos_limits[i, 0] = props["lower"][native_id].item() if limited else -float("inf")
+                self.dof_pos_limits[i, 1] = props["upper"][native_id].item() if limited else float("inf")
+                self.dof_vel_limits[i] = props["velocity"][native_id].item()
+                self.torque_limits[i] = props["effort"][native_id].item()
         return props
 
     def _process_rigid_body_props(self, props: Any, env_id: int) -> Any:
@@ -560,61 +524,20 @@ class IsaacGym(BaseSimulator):
         return props
 
     def get_dof_limits_properties(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        # assert the isaacgym dof limits are the same as the config
-        for i in range(self.num_dof):
-            # import pdb; pdb.set_trace()
-            assert abs(self.hard_dof_pos_limits[i, 0].item() - self.robot_config.dof_pos_lower_limit_list[i]) < 1e-5, (
-                f"DOF {i} lower limit does not match: {self.hard_dof_pos_limits[i, 0].item()} != "
-                f"{self.robot_config.dof_pos_lower_limit_list[i]}"
-            )
-            assert abs(self.hard_dof_pos_limits[i, 1].item() - self.robot_config.dof_pos_upper_limit_list[i]) < 1e-5, (
-                f"DOF {i} upper limit does not match: {self.hard_dof_pos_limits[i, 1].item()} != "
-                f"{self.robot_config.dof_pos_upper_limit_list[i]}"
-            )
-            assert abs(self.dof_vel_limits[i].item() - self.robot_config.dof_vel_limit_list[i]) < 1e-5, (
-                f"DOF {i} velocity limit does not match: {self.dof_vel_limits[i].item()} != "
-                f"{self.robot_config.dof_vel_limit_list[i]}"
-            )
-            assert abs(self.torque_limits[i].item() - self.robot_config.dof_effort_limit_list[i]) < 1e-5, (
-                f"DOF {i} effort limit does not match: {self.torque_limits[i].item()} != "
-                f"{self.robot_config.dof_effort_limit_list[i]}"
-            )
+        """Return position, velocity and effort limits in canonical DOF order.
 
+        Shapes are ``[num_dof, 2]``, ``[num_dof]`` and ``[num_dof]``. Config lists override asset values.
+        """
         return self.dof_pos_limits, self.dof_vel_limits, self.torque_limits
 
     def find_rigid_body_indice(self, body_name: str) -> int:
-        return cast("int", self.gym.find_actor_rigid_body_handle(self.envs[0], self.robot_handles[0], body_name))
-
-    def _get_base_body_name(self, preference_order: list[str]) -> str:
-        """Get the base body name with fallback logic.
-
-        Args:
-            preference_order: List of body names to try in order
-
-        Returns:
-            The first body name found in the robot's body list
-
-        Raises:
-            ValueError: If none of the preferred body names are found
-        """
-        # Use the robot configuration's base_link field if available as first priority
-        if hasattr(self.robot_config, "base_link") and self.robot_config.base_link:
-            if self.robot_config.base_link in self._body_list:
-                return cast("str", self.robot_config.base_link)
-
-        # Fallback to preference order
-        for preferred_name in preference_order:
-            if preferred_name in self._body_list:
-                return preferred_name
-
-        raise ValueError(
-            f"None of the preferred base body names {preference_order} found in robot body names: {self._body_list}"
-        )
+        """Return the canonical body-observation index; raise ``ValueError`` for an unknown name."""
+        return self.body_names.index(body_name)
 
     def prepare_sim(self) -> None:
         self.gym.prepare_sim(self.sim)
         # Refresh tensors BEFORE we acquire them https://forums.developer.nvidia.com/t/isaacgym-preview-4-actor-root-state-returns-nans-with-isaacgymenvs-style-task/223738/4
-        self.refresh_sim_tensors()
+        self._refresh_native_tensors()
 
         actor_root_state = self.gym.acquire_actor_root_state_tensor(self.sim)
         dof_state_tensor = self.gym.acquire_dof_state_tensor(self.sim)
@@ -627,28 +550,53 @@ class IsaacGym(BaseSimulator):
         _jacobian = self.gym.acquire_jacobian_tensor(self.sim, robot_name)
         _massmatrix = self.gym.acquire_mass_matrix_tensor(self.sim, robot_name)
 
-        self.jacobian = gymtorch.wrap_tensor(_jacobian)
-        self.massmatrix = gymtorch.wrap_tensor(_massmatrix)
+        self._jacobian_native = gymtorch.wrap_tensor(_jacobian)
+        self._massmatrix_native = gymtorch.wrap_tensor(_massmatrix)
+        fixed = self.robot_config.asset.fix_base_link
+        # IsaacGym omits the welded root's Jacobian row and includes six base columns for a free root.
+        jac_body_ids = [i - int(fixed) for i in self.body_ids if not fixed or i != 0]
+        base_columns = 0 if fixed else 6
+        jac_dof_ids = list(range(base_columns)) + [i + base_columns for i in self.dof_ids]
+        self.jacobian_body_names = [name for name, i in zip(self.body_names, self.body_ids) if not fixed or i != 0]
+        self._jac_body_ids = torch.tensor(jac_body_ids, device=self._jacobian_native.device, dtype=torch.long)
+        self._jac_dof_ids = torch.tensor(jac_dof_ids, device=self._jacobian_native.device, dtype=torch.long)
+        self._mass_dof_ids = self._dof_ids_t.to(self._massmatrix_native.device)
+        self._jac_order_is_native = jac_body_ids == list(range(self._jacobian_native.shape[1])) and jac_dof_ids == list(
+            range(self._jacobian_native.shape[-1])
+        )
+        self.jacobian = (
+            self._jacobian_native
+            if self._jac_order_is_native
+            else self._jacobian_native.index_select(1, self._jac_body_ids).index_select(3, self._jac_dof_ids)
+        )
+        self.massmatrix = (
+            self._massmatrix_native
+            if self._dof_order_is_native
+            else self._massmatrix_native.index_select(1, self._mass_dof_ids).index_select(2, self._mass_dof_ids)
+        )
 
-        # Full per-env rigid-body width (robot + any scene bodies); the robot occupies
-        # the first num_bodies rows. Stored so force application (e.g. the virtual gantry)
+        # Full per-env rigid-body width (all asset bodies + scene bodies). Canonical
+        # body_ids select the configured robot bodies. Stored so force application
         # can size tensors to the real buffer width, not just the robot's body count.
         self.bodies_per_env = self._rigid_body_state.shape[0] // self.num_envs
         self._rigid_body_state_reshaped = self._rigid_body_state.view(self.num_envs, self.bodies_per_env, 13)
-        self._rigid_body_pos = self._rigid_body_state_reshaped[..., : self.num_bodies, 0:3]
-        self._rigid_body_rot = self._rigid_body_state_reshaped[..., : self.num_bodies, 3:7]
-        self._rigid_body_com_vel = self._rigid_body_state_reshaped[..., : self.num_bodies, 7:10]
-        self._rigid_body_ang_vel = self._rigid_body_state_reshaped[..., : self.num_bodies, 10:13]
+        self._robot_body_state = (
+            self._rigid_body_state_reshaped[:, : self.num_bodies]
+            if self._body_order_is_native
+            else self._rigid_body_state_reshaped[:, self._body_ids_t]
+        )
+        self._rigid_body_pos = self._robot_body_state[..., 0:3]
+        self._rigid_body_rot = self._robot_body_state[..., 3:7]
+        self._rigid_body_com_vel = self._robot_body_state[..., 7:10]
+        self._rigid_body_ang_vel = self._robot_body_state[..., 10:13]
         # IsaacGym's rigid-body tensor pairs link-frame poses with COM linear velocities. Snapshot
         # the post-startup-randomization COM offsets and maintain a link-origin velocity buffer.
         assert len(self.envs) == len(self.robot_handles) == self.num_envs
         self._rigid_body_com_pos_b = torch.tensor(
             [
-                [
-                    [prop.com.x, prop.com.y, prop.com.z]
-                    for prop in self.gym.get_actor_rigid_body_properties(env, handle)[: self.num_bodies]
-                ]
+                [[prop.com.x, prop.com.y, prop.com.z] for prop in [props[i] for i in self.body_ids]]
                 for env, handle in zip(self.envs, self.robot_handles)
+                for props in [self.gym.get_actor_rigid_body_properties(env, handle)]
             ],
             dtype=self._rigid_body_com_vel.dtype,
             device=self.device,
@@ -657,9 +605,12 @@ class IsaacGym(BaseSimulator):
 
         # DOF forces
         _dof_forces = self.gym.acquire_dof_force_tensor(self.sim)
-        self.dof_forces = gymtorch.wrap_tensor(_dof_forces).view(self.num_envs, self.num_dof)
+        self._dof_forces_native = gymtorch.wrap_tensor(_dof_forces).view(self.num_envs, self.num_dof)
+        self.dof_forces = (
+            self._dof_forces_native if self._dof_order_is_native else self._dof_forces_native[:, self._dof_ids_t]
+        )
 
-        self.refresh_sim_tensors()
+        self._refresh_native_tensors()
 
         # _root_states_raw is the raw gym buffer passed to the C-API (gymtorch.unwrap_tensor)
         # and viewed by robot_root_states. all_root_states is the unified all-actors view.
@@ -667,23 +618,29 @@ class IsaacGym(BaseSimulator):
         self.all_root_states = UnifiedRootStatesView(self)
         num_actors = self._get_num_actors_per_env()
 
-        # robot_root_states shares memory with the raw root-state buffer.
+        # robot_root_states shares memory with the raw root-state buffer: slot 0 of each env block.
+        # The fixed-base rule in _set_actor_root_state_tensor_by_index maps a robot actor index back
+        # to its env with `index // num_actors`, which relies on the same layout.
+        assert torch.equal(self.robot_indices, torch.arange(self.num_envs, device=self.device) * num_actors), (
+            "robot actor indices are not slot 0 of each env block"
+        )
         self.robot_root_states = self._root_states_raw.view(self.num_envs, num_actors, actor_root_state.shape[-1])[
             ..., 0, :
         ]
 
         self.base_quat = self.robot_root_states[..., 3:7]  # isaacgym uses xyzw
 
-        self.dof_state = gymtorch.wrap_tensor(dof_state_tensor)
-        self.dof_pos = self.dof_state.view(self.num_envs, -1, 2)[..., 0]
-        self.dof_vel = self.dof_state.view(self.num_envs, -1, 2)[..., 1]
-        # Slice to robot bodies only (the first num_bodies rows), matching _rigid_body_*
-        # above and contact_forces_history below. The net-contact tensor spans all actor
-        # bodies (robot + any spawned objects), so an unsliced view would be wider than
-        # the robot-only history buffer.
-        self.contact_forces = gymtorch.wrap_tensor(net_contact_forces).view(self.num_envs, -1, 3)[
-            :, : self.num_bodies, :
-        ]  # shape: num_envs, num_bodies, xyz axis
+        self._dof_state_native = gymtorch.wrap_tensor(dof_state_tensor)
+        native_dofs = self._dof_state_native.view(self.num_envs, self.num_dof, 2)
+        self.dof_state = (native_dofs if self._dof_order_is_native else native_dofs[:, self._dof_ids_t]).reshape(-1, 2)
+        self.dof_pos = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 0]
+        self.dof_vel = self.dof_state.view(self.num_envs, self.num_dof, 2)[..., 1]
+        self._contact_forces_native = gymtorch.wrap_tensor(net_contact_forces).view(self.num_envs, -1, 3)
+        self.contact_forces = (
+            self._contact_forces_native[:, : self.num_bodies]
+            if self._body_order_is_native
+            else self._contact_forces_native[:, self._body_ids_t]
+        )
         # To be compatible with isaacsim, we add the contact forces history
         self.contact_forces_history = torch.zeros(
             self.num_envs, self.simulator_config.contact_sensor_history_length, self.num_bodies, 3, device=self.device
@@ -698,6 +655,9 @@ class IsaacGym(BaseSimulator):
             self.base_linear_acc = torch.zeros(self.num_envs, 3, device=self.device)
             self.prev_base_lin_vel = torch.zeros(self.num_envs, 3, device=self.device)
 
+        # Every canonical view is now initialized; gather once before exposing state.
+        self.refresh_sim_tensors()
+
         # Apply each free object's configured initial velocity now that the root-state tensor
         # is acquired. Pose is already set at spawn (create_actor), so re-writing it (merged
         # with the velocity) is a cheap round-trip; set_actor_states wants the full 13-vector.
@@ -708,7 +668,19 @@ class IsaacGym(BaseSimulator):
             vels = self.get_actor_initial_velocities(free_names, env_ids)  # [n*num_envs, 6]
             self.set_actor_states(free_names, env_ids, torch.cat([poses, vels], dim=1))
 
-    def refresh_sim_tensors(self) -> None:
+    def _refresh_dof_order(self) -> None:
+        """Gather native joint state only when canonical order differs from the asset order.
+
+        ``_dof_state_native`` is the Gym-owned buffer; ``dof_state`` either aliases it or
+        is a canonical-order copy. Both are initialized together in ``prepare_sim``.
+        """
+        if not self._dof_order_is_native:
+            self.dof_state.view(self.num_envs, self.num_dof, 2)[:] = self._dof_state_native.view(
+                self.num_envs, self.num_dof, 2
+            )[:, self._dof_ids_t]
+
+    def _refresh_native_tensors(self) -> None:
+        """Refresh provider buffers; usable before canonical views are acquired in prepare_sim."""
         self.gym.refresh_dof_state_tensor(self.sim)
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_rigid_body_state_tensor(self.sim)
@@ -719,16 +691,34 @@ class IsaacGym(BaseSimulator):
 
         self.gym.refresh_jacobian_tensors(self.sim)
         self.gym.refresh_mass_matrix_tensors(self.sim)
-        if hasattr(self, "_rigid_body_com_vel"):
-            shape = self._rigid_body_com_pos_b.shape
-            com_offset_world = quat_rotate(
-                self._rigid_body_rot.reshape(-1, 4),
-                self._rigid_body_com_pos_b.reshape(-1, 3),
-                w_last=True,
-            ).reshape(shape)
-            self._rigid_body_vel.copy_(
-                self._rigid_body_com_vel - torch.cross(self._rigid_body_ang_vel, com_offset_world, dim=-1)
+
+    def refresh_sim_tensors(self) -> None:
+        """Refresh provider state and update the canonical views initialized by prepare_sim."""
+        self._refresh_native_tensors()
+        self._refresh_dof_order()
+        if not self._jac_order_is_native:
+            self.jacobian[:] = self._jacobian_native.index_select(1, self._jac_body_ids).index_select(
+                3, self._jac_dof_ids
             )
+        if not self._dof_order_is_native:
+            self.massmatrix[:] = self._massmatrix_native.index_select(1, self._mass_dof_ids).index_select(
+                2, self._mass_dof_ids
+            )
+        if not self._body_order_is_native:
+            self._robot_body_state[:] = self._rigid_body_state_reshaped[:, self._body_ids_t]
+        if not self._body_order_is_native:
+            self.contact_forces[:] = self._contact_forces_native[:, self._body_ids_t]
+        if not self._dof_order_is_native:
+            self.dof_forces[:] = self._dof_forces_native[:, self._dof_ids_t]
+        shape = self._rigid_body_com_pos_b.shape
+        com_offset_world = quat_rotate(
+            self._rigid_body_rot.reshape(-1, 4),
+            self._rigid_body_com_pos_b.reshape(-1, 3),
+            w_last=True,
+        ).reshape(shape)
+        self._rigid_body_vel.copy_(
+            self._rigid_body_com_vel - torch.cross(self._rigid_body_ang_vel, com_offset_world, dim=-1)
+        )
 
     def clear_contact_forces_history(self, env_ids: torch.Tensor) -> None:
         if len(env_ids) > 0:
@@ -742,26 +732,18 @@ class IsaacGym(BaseSimulator):
         # return num_actors
 
     def apply_torques_at_dof(self, torques: torch.Tensor, dof_indices: list[int] | None = None) -> None:
-        """Apply torques with detailed logging to match MuJoCo implementation.
+        """Write efforts in canonical DOF order, or in ``dof_indices`` order for a subset.
 
-        ``set_dof_actuation_force_tensor`` is a full replacement of the actuation-force buffer, so a
-        subset write must scatter into a persistent full-width buffer (leaving the other DOFs as
-        their owner last wrote them) and then set the whole tensor. The full path (``dof_indices``
-        None) passes the caller's tensor straight through, unchanged from before.
+        ``torques`` has shape ``[num_envs, selected_dofs]``. Unselected efforts retain their previous values.
         """
-        if dof_indices is None:
-            self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(torques))
-            return
-
-        # Persistent [num_envs, num_dof] buffer: unowned slots keep their previous value across
-        # substeps (mirrors MuJoCo's persistent ctrl), so a co-controller on the other DOFs composes.
+        # Gym replaces the entire force tensor on each call. Keep a native-order buffer so a subset
+        # write preserves efforts from other controllers before submitting the complete tensor.
         if self._dof_actuation_forces is None:
             self._dof_actuation_forces = torch.zeros(
                 self.num_envs, self.num_dof, dtype=torch.float32, device=self.device
             )
-        idx_t = torch.as_tensor(dof_indices, device=self.device, dtype=torch.long)
-        # torques is aligned with dof_indices (1-D for the single-robot SDK bridge); broadcast over envs.
-        self._dof_actuation_forces[:, idx_t] = torques.reshape(-1).to(self._dof_actuation_forces.dtype)
+        native_ids = self._dof_ids_t if dof_indices is None else self._dof_ids_t[dof_indices]
+        self._dof_actuation_forces[:, native_ids] = torques.to(self._dof_actuation_forces.dtype)
         self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(self._dof_actuation_forces))
 
     def apply_rigid_body_force_at_pos_tensor(self, force_tensor: torch.Tensor, pos_tensor: torch.Tensor) -> None:
@@ -801,7 +783,7 @@ class IsaacGym(BaseSimulator):
         for target in targets:
             wrench = target.wrench.to(device=self.device, dtype=forces.dtype)  # [num_envs, n_bodies, 6]
             for col in target.write_cols:
-                row = col if target.is_robot else self._object_body_row(target.actor_name)
+                row = self.body_ids[col] if target.is_robot else self._object_body_row(target.actor_name)
                 forces[:, row, :] = wrench[:, col, 0:3]
                 torques[:, row, :] = wrench[:, col, 3:6]
         self.gym.apply_rigid_body_force_tensors(
@@ -829,6 +811,7 @@ class IsaacGym(BaseSimulator):
             self.gym.fetch_results(self.sim, True)
 
         self.gym.refresh_dof_state_tensor(self.sim)
+        self._refresh_dof_order()
 
         # Update accelerations ONLY if bridge is enabled
         if self.simulator_config.bridge.enabled:
@@ -862,6 +845,7 @@ class IsaacGym(BaseSimulator):
         if self.sim_device == "cpu":
             self.gym.fetch_results(self.sim, True)
         self.gym.refresh_dof_state_tensor(self.sim)
+        self._refresh_dof_order()
 
     def setup_viewer(self) -> None:
         self.enable_viewer_sync = True
@@ -1156,9 +1140,9 @@ class IsaacGym(BaseSimulator):
         config pose is registered WORLD too (origins added), so ``get_actor_initial_poses`` is
         world-frame for every actor including "robot".
         """
-        pos = torch.tensor(self.robot_config.init_state.pos, device=self.device, dtype=torch.float32)
-        rot = torch.tensor(self.robot_config.init_state.rot, device=self.device, dtype=torch.float32)
-        robot_pose = torch.cat([pos, rot]).unsqueeze(0).expand(self.num_envs, 7).clone()
+        # [position, orientation_xyzw] per env, world frame.
+        init_pose = self.robot_config.init_state.root_state_list()[:7]
+        robot_pose = torch.tensor(init_pose, device=self.device, dtype=torch.float32).expand(self.num_envs, 7).clone()
         robot_pose[:, :3] += self.env_origins
 
         static_names = {
@@ -1194,37 +1178,21 @@ class IsaacGym(BaseSimulator):
             items.append((obj_name, obj_name in static_names, base_pose, velocity))
         return robot_pose, items
 
-    def set_actor_root_state_tensor(self, set_env_ids: torch.Tensor, root_states: Any) -> None:
-        """Sets the **robot** state -- backwards compatible method
-
-        Does NOT apply env origins
-        Detects if all_root_states tensor is passed
-        """
-
-        if root_states is self.all_root_states:
-            # Use robot states view directly
-            self.set_actor_root_state_tensor_robots(set_env_ids, self.robot_root_states[set_env_ids])
-        else:
-            # Otherwise, assume it's already robot states
-            self.set_actor_root_state_tensor_robots(set_env_ids, root_states)
-
     def set_actor_root_state_tensor_robots(
-        self, env_ids: torch.Tensor | None = None, robot_root_states: torch.Tensor | None = None
+        self, env_ids: torch.Tensor | None = None, root_states: torch.Tensor | None = None
     ) -> None:
-        """Set robot root states (position/orientation) following IsaacGym best practices
+        """See base class.
 
-        Args:
-            env_ids: Optional[torch.Tensor] - Which environments (None = all)
-            root_states: Optional[torch.Tensor] - Robot states to set (None = use current robot_root_states)
+        ``root_states`` takes the forms ``simulator.shared.root_states.robot_rows`` accepts; the selected rows are
+        written into the raw root buffer (world frame, no env-origin re-add) and flushed through
+        :meth:`_set_actor_root_state_tensor_by_index`, which applies the fixed-base rule.
         """
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self.device)
-
-        if robot_root_states is None:
-            robot_root_states = self.robot_root_states[env_ids]
-
-        robot_indices = self.robot_indices[env_ids]
-        self._set_actor_root_state_tensor_by_index(robot_indices, robot_root_states)
+        if len(env_ids) == 0:
+            return
+        rows = robot_rows(self, env_ids, root_states)
+        self._set_actor_root_state_tensor_by_index(self.robot_indices[env_ids], rows)
 
     def set_dof_state_tensor_robots(
         self, env_ids: torch.Tensor | None = None, dof_states: torch.Tensor | None = None
@@ -1276,10 +1244,14 @@ class IsaacGym(BaseSimulator):
                 )
             self.dof_state.view(self.num_envs, self.num_dof, 2)[env_ids] = selected_states
 
+        if not self._dof_order_is_native:
+            self._dof_state_native.view(self.num_envs, self.num_dof, 2)[env_ids[:, None], self._dof_ids_t[None, :]] = (
+                self.dof_state.view(self.num_envs, self.num_dof, 2)[env_ids]
+            )
         robot_indices = self.robot_indices[env_ids].to(torch.int32)
         self.gym.set_dof_state_tensor_indexed(
             self.sim,
-            gymtorch.unwrap_tensor(self.dof_state),
+            gymtorch.unwrap_tensor(self._dof_state_native),
             gymtorch.unwrap_tensor(robot_indices),
             len(robot_indices),
         )
@@ -1316,7 +1288,6 @@ class IsaacGym(BaseSimulator):
         # in at create_actor), so write straight through with no env_origins re-add. `states` and
         # `actor_indices` are both NAME-MAJOR / ENV-MINOR (all envs for names[0], then names[1],
         # ...), aligned row-for-row, so a non-contiguous env_ids subset addresses exactly its rows.
-        self._root_states_raw[actor_indices] = states
         self._set_actor_root_state_tensor_by_index(actor_indices, states)
 
     def get_actor_indices(self, names: str | ActorNames, env_ids: EnvIds | None = None) -> ActorIndices:
@@ -1482,7 +1453,26 @@ class IsaacGym(BaseSimulator):
         logger.debug(f"Applied physics properties to '{object_name}'")
 
     def _set_actor_root_state_tensor_by_index(self, actor_indices: torch.Tensor, states: torch.Tensor) -> None:
-        """Reset specific actors by their actual indices using IsaacGym's indexed API"""
+        """Write ``states`` into the raw root buffer at ``actor_indices`` and flush them to PhysX.
+
+        The single funnel for every root write (robot and objects); ``states`` is ``[len(actor_indices), 13]``
+        world-frame xyzw, aligned row-for-row with ``actor_indices``. With a fixed-base robot the robot rows
+        follow the cross-backend rule: a row whose pose equals the spawn pose is a no-op (its velocity columns
+        are ignored, the buffer keeps spawn pose + zero velocity, which PhysX also reports); a row that changes
+        the pose raises ``NotImplementedError`` before anything is written, since PhysX keeps a welded
+        articulation root where it spawned and ignores root-state writes.
+        """
+        if len(actor_indices) == 0:
+            return
+        if self.robot_config.asset.fix_base_link:
+            states = fixed_base_robot_rows(
+                actor_indices,
+                states,
+                robot_indices=self.robot_indices,
+                actors_per_env=self._get_num_actors_per_env(),
+                spawn_poses_for=lambda env_ids: self.get_actor_initial_poses(["robot"], env_ids),
+            )
+        self._root_states_raw[actor_indices] = states
 
         # Convert indices to int32 as required by IsaacGym
         actor_indices_int32 = actor_indices.to(torch.int32)
@@ -1511,7 +1501,4 @@ class IsaacGym(BaseSimulator):
         Writes into the raw world-frame buffer and flushes via the indexed gym API.
         ``write_updates`` is ignored; IsaacGym writes are immediate.
         """
-        if len(indices) == 0:
-            return
-        self._root_states_raw[indices] = states
         self._set_actor_root_state_tensor_by_index(indices, states)

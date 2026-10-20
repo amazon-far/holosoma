@@ -259,29 +259,21 @@ def attach_onnx_metadata(onnx_path: str, metadata: dict[str, Any]) -> None:
     onnx.save(model, onnx_path)
 
 
-def get_control_gains_from_config(robot_config: RobotConfig) -> tuple[list[float], list[float]]:
-    """Extract Kp & Kd gains from env.
+def get_control_gains_from_env(env: BaseTask) -> tuple[list[float], list[float]]:
+    """Return the gains applied by the active joint action term."""
+    p_gains = getattr(env, "p_gains", None)
+    d_gains = getattr(env, "d_gains", None)
+    if p_gains is None or d_gains is None:
+        raise ValueError("Policy export requires an active joint controller exposing p_gains and d_gains.")
+    return p_gains.detach().cpu().tolist(), d_gains.detach().cpu().tolist()
 
-    The order of returned lists is determined by `env.robot_config.dof_names`.
-    """
 
-    kp_list = []
-    kd_list = []
-    stiffness_dict = robot_config.control.stiffness
-    damping_dict = robot_config.control.damping
-
-    for dof_name in robot_config.dof_names:
-        # Map each DOF to its corresponding kp/kd value using substring matching
-        # e.g. `left_hip_pitch_joint` from `dof_names` to  `hip_pitch` in `robot_config.control.stiffness`
-        matches = [p for p in stiffness_dict if p in dof_name]
-        if len(matches) != 1:
-            raise ValueError(f"Expected exactly 1 pattern match for '{dof_name}', got {len(matches)}: {matches}")
-
-        pattern = matches[0]
-        kp_list.append(float(stiffness_dict[pattern]))
-        kd_list.append(float(damping_dict[pattern]))
-
-    return kp_list, kd_list
+def get_action_scales_from_env(env: BaseTask) -> torch.Tensor:
+    """Return the action scales applied by the active joint action term."""
+    action_scales = getattr(env, "action_scales", None)
+    if action_scales is None:
+        raise ValueError("Joint-position control requires an active action term exposing action_scales.")
+    return cast("torch.Tensor", action_scales)
 
 
 def get_command_ranges_from_env(env: BaseTask) -> dict[str, Sequence[float]] | None:

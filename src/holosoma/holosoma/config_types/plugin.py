@@ -21,11 +21,12 @@ from __future__ import annotations
 import abc
 import math
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, Sequence
 
 from pydantic import ConfigDict, field_validator, model_validator
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
+from holosoma.config_types.action import JointControllerCfg
 from holosoma.config_types.frequency import DecimationLike, validate_decimation_like
 from holosoma.config_types.value_types import UnitQuaternionWXYZ
 
@@ -206,6 +207,55 @@ class ROS2OdometryPluginConfig(PluginConfig):
         from holosoma.simulator.shared.ros2_plugins import ROS2OdometryPlugin
 
         return ROS2OdometryPlugin
+
+
+@pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class JointWaypoint:
+    """Joint positions reached at ``time`` seconds; omitted joints keep their preceding target."""
+
+    time: float
+    targets: dict[str, float] = field(default_factory=dict)
+    """Exact joint name or joint tag to position, in radians for hinges and metres for slides."""
+
+    @model_validator(mode="after")
+    def _validate_targets(self) -> JointWaypoint:
+        invalid = {name: target for name, target in self.targets.items() if not math.isfinite(target)}
+        if invalid:
+            raise ValueError(f"JointWaypoint targets must be finite: {invalid}")
+        return self
+
+
+def validate_waypoint_times(waypoints: Sequence[JointWaypoint]) -> None:
+    """Validate authored order, including runtime checks after a waypoint-list mutation."""
+    times = [waypoint.time for waypoint in waypoints]
+    if any(not math.isfinite(t) or t <= 0.0 for t in times) or any(b <= a for a, b in zip(times, times[1:])):
+        raise ValueError(
+            f"JointTrajectoryPluginConfig waypoint times must be finite, > 0 and strictly increasing: {times}"
+        )
+
+
+@pydantic_dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class JointTrajectoryPluginConfig(PluginConfig):
+    """Track sparse joint waypoints with an explicitly configured position controller."""
+
+    waypoints: list[JointWaypoint] = field(default_factory=list)
+    loop: bool = False
+    joints: tuple[str, ...] = ("#all",)
+    """Joint names or tags in controller order. Waypoints may target only these joints."""
+
+    controller: JointControllerCfg = field(default_factory=JointControllerCfg)
+
+    @model_validator(mode="after")
+    def _validate_times(self) -> JointTrajectoryPluginConfig:
+        validate_waypoint_times(self.waypoints)
+        if self.controller.control_type != "P":
+            raise ValueError("JointTrajectoryPluginConfig requires a position ('P') controller.")
+        return self
+
+    def get_cls(self) -> Callable[..., Any]:
+        from holosoma.simulator.plugins.joint_trajectory import JointTrajectoryPlugin
+
+        return JointTrajectoryPlugin
 
 
 @dataclass(frozen=True)

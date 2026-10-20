@@ -200,6 +200,8 @@ class WarpBackend(IMujocoBackend):
         RuntimeError
             If GPU initialization fails
         """
+        # Contiguous canonical addresses alias native tensors; reordered addresses need gathered views.
+        self._dof_views_need_gather = False
         super().__init__(model, data, config, device)
 
         # Import warp packages (fail fast if not available)
@@ -256,6 +258,7 @@ class WarpBackend(IMujocoBackend):
             # Create zero-copy PyTorch tensors tethered to Warp arrays
             # These tensors share memory with the Warp arrays - no copying!
             self.qpos_t = wp.to_torch(self.mjw_data.qpos)  # [num_envs, nq]
+            self.actuator_force_t: torch.Tensor = wp.to_torch(self.mjw_data.actuator_force)  # [num_envs, nu]
             self.qvel_t = wp.to_torch(self.mjw_data.qvel)  # [num_envs, nv]
             self.qacc_t = wp.to_torch(self.mjw_data.qacc)  # [num_envs, nv]
             self.ctrl_t = wp.to_torch(self.mjw_data.ctrl)  # [num_envs, nu]
@@ -426,6 +429,19 @@ class WarpBackend(IMujocoBackend):
             wp.capture_launch(self.step_graph)
             # No wp.synchronize() - let GPU work in parallel with CPU
         self._physics_time += float(self.model.opt.timestep)
+        self.refresh_dof_views()
+
+    def refresh_dof_views(self) -> None:
+        """Refresh copies used for reordered/noncontiguous DOFs.
+
+        The contiguous slice path shares native storage and observes physics writes immediately;
+        gathering it again would only add copies and GPU work. The mode is selected once when
+        ``create_dof_state_view`` constructs the robot views.
+        """
+        if self._dof_views_need_gather:
+            self._mapped_dof_state[..., 0] = self.qpos_t[:, self._mapped_pos_indices]
+            self._mapped_dof_state[..., 1] = self.qvel_t[:, self._mapped_vel_indices]
+            self._mapped_dof_acc[:] = self.qacc_t[:, self._mapped_vel_indices]
 
     def physics_time(self) -> float:
         """Return the logical time of the simulation steps enqueued on the GPU."""
@@ -710,7 +726,7 @@ class WarpBackend(IMujocoBackend):
             num_envs=self.num_envs,
         )
 
-    def create_dof_pos_view(self, indices: slice, num_dof: int) -> torch.Tensor:
+    def create_dof_pos_view(self, indices: slice | list[int], num_dof: int) -> torch.Tensor:
         """Return DOF position tensor directly (no wrapper needed).
 
         wp.to_torch() already returns a native PyTorch tensor that:
@@ -730,9 +746,11 @@ class WarpBackend(IMujocoBackend):
         torch.Tensor
             DOF positions [num_envs, num_dof] - native PyTorch tensor
         """
+        if self._dof_views_need_gather:
+            return self._mapped_dof_state[..., 0]
         return self.qpos_t[:, indices]
 
-    def create_dof_vel_view(self, indices: slice, num_dof: int) -> torch.Tensor:
+    def create_dof_vel_view(self, indices: slice | list[int], num_dof: int) -> torch.Tensor:
         """Return DOF velocity tensor directly (no wrapper needed).
 
         wp.to_torch() already returns a native PyTorch tensor that:
@@ -752,9 +770,11 @@ class WarpBackend(IMujocoBackend):
         torch.Tensor
             DOF velocities [num_envs, num_dof] - native PyTorch tensor
         """
+        if self._dof_views_need_gather:
+            return self._mapped_dof_state[..., 1]
         return self.qvel_t[:, indices]
 
-    def create_dof_acc_view(self, indices: slice, num_dof: int) -> torch.Tensor:
+    def create_dof_acc_view(self, indices: slice | list[int], num_dof: int) -> torch.Tensor:
         """Return DOF acceleration tensor directly (no wrapper needed).
 
         wp.to_torch() already returns a native PyTorch tensor that:
@@ -774,9 +794,11 @@ class WarpBackend(IMujocoBackend):
         torch.Tensor
             DOF accelerations [num_envs, num_dof] - native PyTorch tensor
         """
+        if self._dof_views_need_gather:
+            return self._mapped_dof_acc
         return self.qacc_t[:, indices]
 
-    def create_dof_state_view(self, dof_addrs: dict[str, Any], num_dof: int) -> BaseMujocoView:
+    def create_dof_state_view(self, dof_addrs: dict[str, Any], num_dof: int) -> BaseMujocoView | torch.Tensor:
         """Create DOF state view using zero-copy GPU tensors.
 
         Parameters
@@ -791,6 +813,17 @@ class WarpBackend(IMujocoBackend):
         MjwDofStateView
             DOF state view with IsaacGym flattened format [num_envs * num_dof, 2]
         """
+        pos_indices, vel_indices = dof_addrs["dof_pos_indices"], dof_addrs["dof_vel_indices"]
+        self._dof_views_need_gather = not isinstance(pos_indices, slice) or not isinstance(vel_indices, slice)
+        if self._dof_views_need_gather:
+            self._mapped_pos_indices = torch.as_tensor(pos_indices, device=self.qpos_t.device, dtype=torch.long)
+            self._mapped_vel_indices = torch.as_tensor(vel_indices, device=self.qvel_t.device, dtype=torch.long)
+            self._mapped_dof_state: torch.Tensor = torch.stack(
+                [self.qpos_t[:, self._mapped_pos_indices], self.qvel_t[:, self._mapped_vel_indices]], dim=-1
+            )
+            self._mapped_dof_acc = self.qacc_t[:, self._mapped_vel_indices]
+            return self._mapped_dof_state.view(-1, 2)
+
         from holosoma.simulator.mujoco.mjw_views import MjwDofStateView
 
         return MjwDofStateView(
@@ -939,6 +972,9 @@ class WarpBackend(IMujocoBackend):
 
         self.qpos_t[env_idx, qpos_idx] = dof_pos
         self.qvel_t[env_idx, qvel_idx] = dof_vel
+        if self._dof_views_need_gather:
+            self._mapped_dof_state[env_ids, :, 0] = dof_pos
+            self._mapped_dof_state[env_ids, :, 1] = dof_vel
 
         # No mj_forward call - next step() will handle forward kinematics
 
@@ -1042,7 +1078,7 @@ class WarpBackend(IMujocoBackend):
             mjw.forward(self.mjw_model, self.mjw_data)  # recompute cam_xpos from the shifted cam_pos
 
     def _sync_static_geom_xpos(self, body_ids: list[int], env_ids: torch.Tensor | None) -> None:
-        """Refresh ``geom_xpos``/``geom_xmat`` for the geoms of welded ``body_ids``, per world.
+        """Refresh geom poses for ``body_ids`` and their world-welded descendants, per world.
 
         Forward kinematics skips world-static geoms, so it never recomposes their collision pose
         from a moved body. This launches the same composition over just these geoms, reading the
@@ -1068,7 +1104,7 @@ class WarpBackend(IMujocoBackend):
             )
 
     def _geom_ids_for_bodies(self, body_ids: list[int]) -> object:
-        """Warp ``int32`` array of every geom id owned by ``body_ids`` (cached; model is static)."""
+        """Cached geom ids for ``body_ids`` and their world-welded descendants."""
         import warp as wp
 
         cache: dict[tuple[int, ...], object] | None = getattr(self, "_static_geom_id_cache", None)
@@ -1077,8 +1113,18 @@ class WarpBackend(IMujocoBackend):
             self._static_geom_id_cache = cache
         key = tuple(body_ids)
         if key not in cache:
+            selected_body_ids = set(body_ids)
             ids: list[int] = []
-            for body_id in body_ids:
+            # Native body order visits parents first. Expand only through world-welded
+            # descendants: articulated geoms already receive normal forward kinematics.
+            for body_id in range(self.model.nbody):
+                if body_id not in selected_body_ids:
+                    if (
+                        self.model.body_weldid[body_id] != 0
+                        or int(self.model.body_parentid[body_id]) not in selected_body_ids
+                    ):
+                        continue
+                    selected_body_ids.add(body_id)
                 adr = int(self.model.body_geomadr[body_id])
                 ids.extend(range(adr, adr + int(self.model.body_geomnum[body_id])))
             with wp.ScopedDevice(self.mjw_device):

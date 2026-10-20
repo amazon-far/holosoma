@@ -315,7 +315,7 @@ class ClassicBackend(IMujocoBackend):
             device=self.device,
         )
 
-    def create_dof_pos_view(self, indices: slice, num_dof: int) -> BaseMujocoView:
+    def create_dof_pos_view(self, indices: slice | list[int], num_dof: int) -> BaseMujocoView:
         """Create DOF position view.
 
         Parameters
@@ -334,7 +334,7 @@ class ClassicBackend(IMujocoBackend):
 
         return create_dof_position_view(self.data.qpos, indices, 1, num_dof, self.device)
 
-    def create_dof_vel_view(self, indices: slice, num_dof: int) -> BaseMujocoView:
+    def create_dof_vel_view(self, indices: slice | list[int], num_dof: int) -> BaseMujocoView:
         """Create DOF velocity view.
 
         Parameters
@@ -353,7 +353,7 @@ class ClassicBackend(IMujocoBackend):
 
         return create_dof_velocity_view(self.data.qvel, indices, 1, num_dof, self.device)
 
-    def create_dof_acc_view(self, indices: slice, num_dof: int) -> BaseMujocoView:
+    def create_dof_acc_view(self, indices: slice | list[int], num_dof: int) -> BaseMujocoView:
         """Create DOF acceleration view.
 
         Parameters

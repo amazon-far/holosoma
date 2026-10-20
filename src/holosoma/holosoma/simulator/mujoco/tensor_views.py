@@ -167,7 +167,7 @@ class MujocoView(BaseMujocoViewMixin):
     def __init__(
         self,
         base_array: npt.NDArray[np.float64],
-        indices: slice | npt.NDArray[np.intp],
+        indices: slice | list[int] | npt.NDArray[np.intp],
         transform_get: Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]] | None = None,
         transform_set: Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]] | None = None,
         device: str = "cpu",
@@ -373,8 +373,8 @@ class MujocoDofStateView:
         self,
         qpos_array: npt.NDArray[np.float64],
         qvel_array: npt.NDArray[np.float64],
-        dof_pos_indices: slice,
-        dof_vel_indices: slice,
+        dof_pos_indices: slice | list[int],
+        dof_vel_indices: slice | list[int],
         num_envs: int,
         num_dof: int,
         device: str = "cpu",
@@ -455,7 +455,7 @@ def create_quaternion_view(
 
 
 def create_dof_position_view(
-    qpos_array: npt.NDArray[np.float64], indices: slice, num_envs: int, num_dof: int, device: str = "cpu"
+    qpos_array: npt.NDArray[np.float64], indices: slice | list[int], num_envs: int, num_dof: int, device: str = "cpu"
 ) -> MujocoView:
     """Create a view for DOF positions reshaped for multi-env."""
 
@@ -469,7 +469,7 @@ def create_dof_position_view(
 
 
 def create_dof_velocity_view(
-    qvel_array: npt.NDArray[np.float64], indices: slice, num_envs: int, num_dof: int, device: str = "cpu"
+    qvel_array: npt.NDArray[np.float64], indices: slice | list[int], num_envs: int, num_dof: int, device: str = "cpu"
 ) -> MujocoView:
     """Create a view for DOF velocities reshaped for multi-env."""
 
@@ -483,7 +483,7 @@ def create_dof_velocity_view(
 
 
 def create_dof_acceleration_view(
-    qacc_array: npt.NDArray[np.float64], indices: slice, num_envs: int, num_dof: int, device: str = "cpu"
+    qacc_array: npt.NDArray[np.float64], indices: slice | list[int], num_envs: int, num_dof: int, device: str = "cpu"
 ) -> MujocoView:
     """Create a view for DOF accelerations reshaped for multi-env.
 

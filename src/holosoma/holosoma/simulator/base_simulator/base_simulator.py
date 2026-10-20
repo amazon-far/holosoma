@@ -145,12 +145,16 @@ class BaseSimulator:
     dof_vel: torch.Tensor
     contact_forces: torch.Tensor
     contact_forces_history: torch.Tensor
+    # Hard DOF limits, populated by get_dof_limits_properties(): [num_dof, 2] (lower, upper) and [num_dof].
+    dof_pos_limits: torch.Tensor
+    dof_vel_limits: torch.Tensor
+    torque_limits: torch.Tensor
 
-    # Robot properties, populated by each backend during setup (see _setup_robot_props_*).
-    num_dof: int
-    num_bodies: int
-    dof_names: list[str]
-    body_names: list[str]
+    # Backend mappings populated during setup. Canonical names/counts are properties of robot_config.
+    body_ids: list[int]
+    dof_ids: list[int]
+    body_name_map: dict[str, str]
+    root_body_name: str | None  # None if the physical root is omitted from canonical body observations.
     scene: SceneInterface
     # Unified all-actors (robot + objects) root-state view: a duck-typed UnifiedRootStatesView,
     # not a torch.Tensor. Index with get_actor_indices results for any actor; supports [indices]
@@ -243,6 +247,31 @@ class BaseSimulator:
         video_recording_enabled = self.logger_cfg.headless_recording or self.video_config.enabled
         self.video_config = dataclasses.replace(self.video_config, enabled=video_recording_enabled)
 
+    @property
+    def num_dof(self) -> int:
+        """Number of canonical robot DOFs."""
+        return len(self.robot_config.dof_names)
+
+    @property
+    def num_bodies(self) -> int:
+        """Number of canonical robot bodies."""
+        return len(self.robot_config.body_names)
+
+    @property
+    def dof_names(self) -> list[str]:
+        """Canonical robot DOFs in configured order."""
+        return self.robot_config.dof_names
+
+    @property
+    def body_names(self) -> list[str]:
+        """Canonical robot bodies in configured observation order."""
+        return self.robot_config.body_names
+
+    @property
+    def _body_list(self) -> list[str]:
+        """Legacy backend alias of canonical ``body_names``."""
+        return self.robot_config.body_names
+
     # ----- Configuration Setup Methods -----
 
     def set_headless(self, headless: bool) -> None:
@@ -299,10 +328,7 @@ class BaseSimulator:
     # ----- Robot Asset Setup Methods -----
 
     def load_assets(self) -> None:
-        """
-        Loads the robot assets into the simulation environment.
-        save self.num_dofs, self.num_bodies, self.dof_names, self.body_names
-        """
+        """Load robot assets and establish backend name/ID mappings."""
         raise NotImplementedError("The 'load_assets' method must be implemented in subclasses.")
 
     def get_supported_scene_formats(self) -> list[str]:
@@ -363,16 +389,17 @@ class BaseSimulator:
         items = sorted(items, key=lambda item: item[0])
 
         # The robot's name/type/position are fixed and it carries no scene-configured velocity,
-        # so it's the same constant entry for every backend (only its pose differs). The rest
-        # split into the SCENE (static) / INDIVIDUAL (free) bands; pose/velocity pass through.
-        entries = [("robot", ObjectType.ROBOT, 0, robot_pose, None)]
+        # so it's the same constant entry for every backend (only its pose differs). A fixed-base
+        # robot stays in the ROBOT band at slot 0 but is flagged static like a welded SCENE body.
+        # The rest split into the SCENE (static) / INDIVIDUAL (free) bands; pose/velocity pass through.
+        entries = [("robot", ObjectType.ROBOT, 0, robot_pose, None, self.robot_config.asset.fix_base_link)]
         free_pos = scene_pos = 0
         for name, is_static, pose, velocity in items:
             if is_static:
-                entries.append((name, ObjectType.SCENE, scene_pos, pose, velocity))
+                entries.append((name, ObjectType.SCENE, scene_pos, pose, velocity, True))
                 scene_pos += 1
             else:
-                entries.append((name, ObjectType.INDIVIDUAL, free_pos, pose, velocity))
+                entries.append((name, ObjectType.INDIVIDUAL, free_pos, pose, velocity, False))
                 free_pos += 1
 
         self.object_registry.setup_ranges(
@@ -382,8 +409,8 @@ class BaseSimulator:
             individual_count=free_pos,
         )
 
-        for name, object_type, position, pose, velocity in entries:
-            self.object_registry.register_object(name, object_type, position, pose, velocity)
+        for name, object_type, position, pose, velocity, is_static in entries:
+            self.object_registry.register_object(name, object_type, position, pose, velocity, is_static=is_static)
         self.object_registry.finalize_registration()
 
     def _collect_spawned_actors(
@@ -435,6 +462,8 @@ class BaseSimulator:
             int: Index of the rigid body.
         """
         raise NotImplementedError("The 'find_rigid_body_indice' method must be implemented in subclasses.")
+
+    # ----- Robot base (public, cross-backend) -----
 
     # ----- Robot rigid-body kinematics (public, cross-backend) -----
     #
@@ -1361,74 +1390,26 @@ class BaseSimulator:
     # ----- Robot-Specific Interface -----
 
     def set_actor_root_state_tensor(self, set_env_ids: EnvIds, root_states: torch.Tensor) -> None:
-        """Set **robot** root states (position/orientation) - backwards compatibility interface.
+        """Set robot root states through the legacy interface.
 
-        This method provides backwards compatibility for existing code that expects
-        to set robot states using the legacy interface. Delegates to the standardized
-        robot-specific method.
-
-        Parameters
-        ----------
-        set_env_ids : EnvIds
-            Environment IDs to update (see EnvIds type)
-        root_states : torch.Tensor
-            Robot root states to set, shape [num_envs, 13], dtype torch.float32.
-            Format: [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz]
-            where quaternion is in xyzw format.
-
-        Note
-        ----
-        This method is kept for backwards compatibility. New code should use
-        `set_actor_root_state_tensor_robots` directly.
+        Use :meth:`set_actor_root_state_tensor_robots` in new code; it defines the accepted row layouts
+        and fixed-base behavior. Passing ``all_root_states`` writes only the robot rows.
         """
-        # Reset the robot, kept for backwards compatiblity
         return self.set_actor_root_state_tensor_robots(set_env_ids, root_states)
 
     def set_actor_root_state_tensor_robots(
         self, env_ids: EnvIds | None = None, root_states: torch.Tensor | None = None
     ) -> None:
-        """Set robot root states (position/orientation) - standardized interface.
+        """Write robot poses and velocities in world coordinates for ``env_ids`` (None selects all).
 
-        This method provides a consistent interface across simulators for setting
-        robot root states including position, orientation, and velocities.
+        ``root_states`` is float32 with columns ``[x,y,z,qx,qy,qz,qw,vx,vy,vz,wx,wy,wz]``.
+        Supply ``[num_envs, 13]`` rows indexed by environment ID, or pre-sliced ``[len(env_ids), 13]``
+        rows when that length differs from ``num_envs``. Passing ``all_root_states`` selects its robot
+        rows; None uses ``robot_root_states``. See ``simulator.shared.root_states.robot_rows``.
 
-        Parameters
-        ----------
-        env_ids : EnvIds | None, default=None
-            Environment IDs to query (see EnvIds type). If None, applies to all environments.
-        root_states : torch.Tensor | None, default=None
-            Robot states to set, shape [num_envs, 13], dtype torch.float32.
-            Format: [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz]
-            where quaternion is in xyzw format. If None, uses current robot_root_states.
-
-        Examples
-        --------
-        >>> # Reset specific environments to current states
-        >>> env_ids = torch.tensor([0, 1, 2], device=device)
-        >>> sim.set_actor_root_state_tensor_robots(env_ids)
-
-        >>> # Set specific robot states
-        >>> reset_states = torch.zeros(len(env_ids), 13, device=device)
-        >>> reset_states[:, :3] = initial_positions  # Set positions
-        >>> reset_states[:, 3:7] = initial_quaternions  # Set orientations (xyzw)
-        >>> reset_states[:, 7:] = 0.0  # Zero velocities
-        >>> sim.set_actor_root_state_tensor_robots(env_ids, reset_states)
-
-        Notes
-        -----
-        - Works consistently across IsaacGym and IsaacSim
-        - Environment origins are automatically handled by the framework
-        - Quaternion format is xyzw (standard format)
-
-        See Also
-        --------
-        set_dof_state_tensor_robots : Set robot joint states
-        set_actor_states : Unified interface for all objects
-
-        Raises
-        ------
-        NotImplementedError
-            If not implemented by subclass
+        For ``robot_config.asset.fix_base_link=True``, velocity columns are ignored and a same-pose
+        write is a no-op. A changed pose teleports on MuJoCo/IsaacSim; IsaacGym raises
+        ``NotImplementedError`` before writing.
         """
         raise NotImplementedError("Subclasses must implement set_actor_root_state_tensor_robots")
 

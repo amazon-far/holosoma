@@ -158,6 +158,17 @@ def _env_ids(env) -> torch.Tensor:
     return torch.arange(env.num_envs, device=env.device, dtype=torch.long)
 
 
+def _base_body(env) -> str:
+    """The robot's ``#base`` body (the default target of the base mass / CoM terms)."""
+    return cast("str", env.robot_names.resolve_body_names(["#base"])[0])
+
+
+def _link_bodies(env) -> list[str]:
+    """The ``link_bodies`` spec of the env's own ``mass_randomizer`` preset term (g1 under ``build_full_env``)."""
+    params = env.randomization_manager.cfg.setup_terms["mass_randomizer"].params
+    return list(params["link_bodies"])
+
+
 def run_robot_dr(env, reader: ModelReader) -> list[str]:
     """Run every robot DR term against ``env`` and assert each took effect.
 
@@ -170,9 +181,10 @@ def run_robot_dr(env, reader: ModelReader) -> list[str]:
     """
     skipped: list[str] = []
     idx = _env_ids(env)
-    torso = env.robot_config.torso_name
-    link_names = list(env.robot_config.randomize_link_body_names or [])
-    assert link_names, "robot config declares no randomize_link_body_names"
+    torso = _base_body(env)
+    link_bodies = _link_bodies(env)
+    assert link_bodies, "mass_randomizer preset declares no link_bodies"
+    link_names = env.robot_names.resolve_body_names(link_bodies)
 
     # --- base mass (additive offset); isolate from link scaling --------------------------------
     before = reader.body_mass(torso)
@@ -197,6 +209,7 @@ def run_robot_dr(env, reader: ModelReader) -> list[str]:
         idx,
         sampler=_sampler(env),
         enable_link_mass=True,
+        link_bodies=link_bodies,
         link_mass_range=ROBOT_LINK_MASS_SCALE,
         enable_base_mass=False,
     )
@@ -463,7 +476,7 @@ def run_distribution_dr(env, reader: ModelReader) -> list[str]:
     """
     skipped: list[str] = []
     idx = _env_ids(env)
-    torso = env.robot_config.torso_name
+    torso = _base_body(env)
 
     # (1) gaussian base mass (add): truncated to the band on every backend incl. IsaacSim.
     before = reader.body_mass(torso)
@@ -495,15 +508,16 @@ def run_distribution_dr(env, reader: ModelReader) -> list[str]:
     )
 
     # (3) log_uniform link mass (scale, strictly positive): lands in the positive band.
-    link_names = list(env.robot_config.randomize_link_body_names or [])
-    assert link_names, "robot config declares no randomize_link_body_names"
-    link0 = link_names[0]
+    link_bodies = _link_bodies(env)
+    assert link_bodies, "mass_randomizer preset declares no link_bodies"
+    link0 = env.robot_names.resolve_body_names(link_bodies)[0]
     before = reader.body_mass(link0)
     L.randomize_mass_startup(
         env,
         idx,
         sampler=_sampler(env),
         enable_link_mass=True,
+        link_bodies=link_bodies,
         link_mass_range=LOGU_LINK_MASS_SCALE,
         enable_base_mass=False,
     )

@@ -1,0 +1,103 @@
+<?xml version="1.0" ?>
+<!-- Minimal fixed-base 3-DOF arm for the fixed-base robot tests (asset.fix_base_link=True).
+
+     Chain: base_link -> shoulder_joint (hinge, z) -> link1 -> elbow_joint (hinge, y) -> link2
+            -> slide_joint (prismatic, x) -> slider.
+     base_link is the URDF root with no joint to the world; IsaacGym welds it via fix_base_link and
+     MuJoCo leaves the MJCF root body jointless (see test_arm.xml). Link order here equals the MJCF
+     DFS body order: [base_link, link1, link2, slider]; joint order [shoulder_joint, elbow_joint,
+     slide_joint]. Joint limits/effort/velocity equal the test_arm_fixed preset lists exactly.
+
+     base_link is a 0.1 m cube from z=0 to z=0.1 in its own frame; the arm leaves the shoulder at
+     z=0.1 and points along +x, so at the zero pose the tip sits ~0.63 m from the base origin and
+     drops under gravity (elbow) when unactuated. All inertias are the analytic box values MuJoCo
+     derives from the same geoms in test_arm.xml. -->
+<robot name="test_arm">
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0 0 0.05"/>
+      <mass value="2.0"/>
+      <inertia ixx="0.0033333" ixy="0" ixz="0" iyy="0.0033333" iyz="0" izz="0.0033333"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0.05"/>
+      <geometry><box size="0.1 0.1 0.1"/></geometry>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0.05"/>
+      <geometry><box size="0.1 0.1 0.1"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="shoulder_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="link1"/>
+    <origin rpy="0 0 0" xyz="0 0 0.1"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1.5" upper="1.5" effort="20" velocity="10"/>
+  </joint>
+
+  <link name="link1">
+    <inertial>
+      <origin xyz="0.15 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.00041667" ixy="0" ixz="0" iyy="0.0077083" iyz="0" izz="0.0077083"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0.15 0 0"/>
+      <geometry><box size="0.3 0.05 0.05"/></geometry>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0.15 0 0"/>
+      <geometry><box size="0.3 0.05 0.05"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="elbow_joint" type="revolute">
+    <parent link="link1"/>
+    <child link="link2"/>
+    <origin rpy="0 0 0" xyz="0.3 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.5" upper="1.5" effort="20" velocity="10"/>
+  </joint>
+
+  <link name="link2">
+    <inertial>
+      <origin xyz="0.15 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.00041667" ixy="0" ixz="0" iyy="0.0077083" iyz="0" izz="0.0077083"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0.15 0 0"/>
+      <geometry><box size="0.3 0.05 0.05"/></geometry>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0.15 0 0"/>
+      <geometry><box size="0.3 0.05 0.05"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="slide_joint" type="prismatic">
+    <parent link="link2"/>
+    <child link="slider"/>
+    <origin rpy="0 0 0" xyz="0.3 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="0.0" upper="0.05" effort="50" velocity="1"/>
+  </joint>
+
+  <link name="slider">
+    <inertial>
+      <origin xyz="0.02 0 0"/>
+      <mass value="0.1"/>
+      <inertia ixx="0.000026667" ixy="0" ixz="0" iyy="0.000026667" iyz="0" izz="0.000026667"/>
+    </inertial>
+    <visual>
+      <origin rpy="0 0 0" xyz="0.02 0 0"/>
+      <geometry><box size="0.04 0.04 0.04"/></geometry>
+    </visual>
+    <collision>
+      <origin rpy="0 0 0" xyz="0.02 0 0"/>
+      <geometry><box size="0.04 0.04 0.04"/></geometry>
+    </collision>
+  </link>
+</robot>

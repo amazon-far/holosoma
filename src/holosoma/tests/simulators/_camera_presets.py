@@ -36,7 +36,7 @@ _LOOK_FORWARD_WXYZ = [_C, 0.0, _S, 0.0]  # (w, x, y, z)
 
 # Bright static box 0.5 m in front of the robot at camera height; fills the center of a
 # forward-looking camera. urdf and usd for the respective backends.
-_BASE_Z = 0.79  # g1 base/pelvis spawn height (init_state.pos z); camera mounts here.
+_BASE_Z = 0.79  # g1 base/pelvis spawn height (init_state.position z); camera mounts here.
 camera_target = SceneConfig(
     rigid_objects={
         "target": RigidObjectConfig(

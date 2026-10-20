@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import field
 from typing import Any, List, Union
 
 from pydantic import model_validator
 from pydantic.dataclasses import dataclass
+
+from holosoma.utils.name_tags import expand_name_spec, expand_unique_name_spec
 
 
 @dataclass(frozen=True)
@@ -115,6 +118,58 @@ class PPOModuleDictConfig:
 
 
 @dataclass(frozen=True)
+class JointSymmetryConfig:
+    """Sagittal-plane joint mirror used by the symmetry augmentation.
+
+    Entries are exact joint names or ``#tag`` references into ``RobotConfig.joint_tags`` (see
+    ``holosoma.utils.name_tags``); the defaults point at the ``mirror_*`` tags the shipped robots declare.
+    Resolved against the robot at ``ExperimentConfig`` construction and by ``SymmetryUtils`` via the env.
+    """
+
+    left: list[str] = field(default_factory=lambda: ["#mirror_left"])
+    """Joints on one side of the mirror, in order."""
+
+    right: list[str] = field(default_factory=lambda: ["#mirror_right"])
+    """Mirror image of ``left``: same length, ``right[i]`` mirrors ``left[i]``."""
+
+    flip_sign: list[str] = field(default_factory=lambda: ["#mirror_flip_sign"])
+    """Joints whose value negates under the mirror (roll/yaw axes)."""
+
+    def resolve(
+        self,
+        joint_tags: Mapping[str, Sequence[str]],
+        dof_names: Sequence[str],
+        *,
+        what: str = "symmetry",
+    ) -> tuple[list[str], list[str], list[str]]:
+        """Validate ordered pairs and return fresh left/right lists plus a deduplicated flip selection."""
+        left = expand_unique_name_spec(self.left, joint_tags, dof_names, what=f"{what}.left")
+        right = expand_unique_name_spec(self.right, joint_tags, dof_names, what=f"{what}.right")
+        flip = expand_name_spec(self.flip_sign, joint_tags, dof_names, kind="joint")
+        if not left or len(left) != len(right):
+            raise ValueError(
+                f"{what}.left ({len(left)} joints) and .right ({len(right)} joints) must be "
+                f"non-empty and the same length; right[i] mirrors left[i] "
+                f"(left={self.left!r}, right={self.right!r})."
+            )
+        overlap = sorted(set(left) & set(right))
+        if overlap:
+            raise ValueError(
+                f"{what}.left and .right share joints {overlap}; a joint appears on one side "
+                f"(left={self.left!r}, right={self.right!r})."
+            )
+        flipped = set(flip)
+        for left_name, right_name in zip(left, right):
+            if (left_name in flipped) != (right_name in flipped):
+                raise ValueError(
+                    f"{what}.flip_sign must include both or neither joint in mirror pair "
+                    f"{left_name!r} and {right_name!r}, so mirroring twice restores the input "
+                    f"(left={self.left!r}, right={self.right!r}, flip_sign={self.flip_sign!r})."
+                )
+        return left, right, flip
+
+
+@dataclass(frozen=True)
 class PPOConfig:
     """Configuration for PPO algorithm."""
 
@@ -171,6 +226,9 @@ class PPOConfig:
 
     symmetry_critic_coef: float = 0.0
     """Symmetry coefficient for critic."""
+
+    symmetry: JointSymmetryConfig = field(default_factory=JointSymmetryConfig)
+    """Joint mirror spec read when ``use_symmetry`` is True."""
 
     num_steps_per_env: int = 24
     """Number of steps per environment."""
@@ -260,6 +318,9 @@ class FastSACConfig:
 
     use_symmetry: bool = False
     """whether to use symmetry"""
+
+    symmetry: JointSymmetryConfig = field(default_factory=JointSymmetryConfig)
+    """joint mirror spec read when ``use_symmetry`` is True"""
 
     alpha_init: float = 0.001
     """the initial value of the alpha"""

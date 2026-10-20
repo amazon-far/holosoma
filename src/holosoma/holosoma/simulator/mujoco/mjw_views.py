@@ -92,27 +92,15 @@ class MjwDofStateView:
         self,
         qpos: torch.Tensor,
         qvel: torch.Tensor,
-        dof_pos_indices: slice,
-        dof_vel_indices: slice,
+        dof_pos_indices: slice | list[int],
+        dof_vel_indices: slice | list[int],
         num_envs: int,
         num_dof: int,
     ) -> None:
-        """Initialize DOF state view.
+        """View native ``qpos[num_envs, nq]`` and ``qvel[num_envs, nv]`` in canonical DOF order.
 
-        Parameters
-        ----------
-        qpos : torch.Tensor
-            Position state tensor [num_envs, nq] (tethered to Warp)
-        qvel : torch.Tensor
-            Velocity state tensor [num_envs, nv] (tethered to Warp)
-        dof_pos_indices : slice
-            Slice for extracting DOF positions
-        dof_vel_indices : slice
-            Slice for extracting DOF velocities
-        num_envs : int
-            Number of parallel environments
-        num_dof : int
-            Number of degrees of freedom
+        Each index slice or list selects the ``num_dof`` native columns in that order.
+        Writes update the supplied tensors.
         """
         self.qpos = qpos
         self.qvel = qvel
@@ -128,22 +116,7 @@ class MjwDofStateView:
         return (self.num_envs * self.num_dof, 2)
 
     def __getitem__(self, key: IndexKey) -> torch.Tensor:
-        """Read DOF states in IsaacGym flattened format.
-
-        Returns states as [num_envs * num_dof, 2] where:
-        - [:, 0] = positions
-        - [:, 1] = velocities
-
-        Parameters
-        ----------
-        key : int, slice, tuple, or tensor
-            Index or slice specification
-
-        Returns
-        -------
-        torch.Tensor
-            DOF states in IsaacGym format
-        """
+        """Read ``key`` from flattened ``[num_envs * num_dof, 2]`` position/velocity pairs."""
         # Extract DOF positions and velocities
         dof_pos = self.qpos[:, self.dof_pos_indices]  # [num_envs, num_dof]
         dof_vel = self.qvel[:, self.dof_vel_indices]  # [num_envs, num_dof]
@@ -157,19 +130,7 @@ class MjwDofStateView:
         return dof_state_flat[key]
 
     def __setitem__(self, key: IndexKey, value: IndexValue) -> None:
-        """Write DOF states from IsaacGym flattened format.
-
-        Expects states as [num_envs * num_dof, 2] where:
-        - [:, 0] = positions
-        - [:, 1] = velocities
-
-        Parameters
-        ----------
-        key : int, slice, tuple, or tensor
-            Index or slice specification
-        value : torch.Tensor, np.ndarray, or sequence
-            DOF state data to write
-        """
+        """Write ``key`` in flattened ``[num_envs * num_dof, 2]`` position/velocity pairs."""
         if isinstance(value, torch.Tensor):
             val = value.to(self.device)
         else:

@@ -8,11 +8,14 @@ compose per-key on the CLI, e.g. ``plugin.clk:clock_publish plugin.head:ros2-ima
 Imported at CLI-build time; stays ROS-free (a preset's impl loads only when its ``get_cls`` fires).
 """
 
+from holosoma.config_types.action import JointControllerCfg
 from holosoma.config_types.plugin import (
     CameraVizPluginConfig,
     ClockPublishPluginConfig,
     FrameWriterPluginConfig,
     GantryControlPluginConfig,
+    JointTrajectoryPluginConfig,
+    JointWaypoint,
     LidarVizPluginConfig,
     MotionPlaybackPluginConfig,
     NoOpPluginConfig,
@@ -23,9 +26,35 @@ from holosoma.config_types.plugin import (
     ROS2PointCloudPluginConfig,
     ROS2PointCloudRoute,
 )
+from holosoma.config_values.robot import yam
 from holosoma.utils.config_registry import ConfigRegistry, deprecated_defaults_alias
 
 PLUGIN_REGISTRY = ConfigRegistry(PluginConfig, group="holosoma.config.plugin")
+
+# Position PD control is a plugin, independent of SDK transport and RobotConfig.
+# Example: python -m holosoma.run_sim robot:yam plugin.motion:yam-trajectory
+yam_trajectory = JointTrajectoryPluginConfig(
+    waypoints=[
+        JointWaypoint(time=2.0, targets={"joint2": 0.8, "joint3": 0.6, "joint4": 0.3}),
+        JointWaypoint(time=2.75),
+        JointWaypoint(time=3.25, targets={"#gripper": -0.04}),
+        JointWaypoint(time=4.0),
+        JointWaypoint(time=6.0, targets={"joint1": 0.8, "joint2": 1.2, "joint6": 0.6}),
+        JointWaypoint(time=6.75),
+        JointWaypoint(time=7.25, targets={"#gripper": -0.003}),
+        JointWaypoint(time=8.0),
+        JointWaypoint(time=10.0, targets=yam.default_dof_positions()),
+        JointWaypoint(time=10.75),
+    ],
+    loop=True,
+    # Explicit torque PD gains for this trajectory. They are plugin behavior, not physical
+    # actuator properties of the YAM robot.
+    controller=JointControllerCfg(
+        stiffness={"#dm4340": 200.0, "#dm4310": 50.0, "#gripper": 200.0},
+        damping={"#dm4340": 8.0, "#dm4310": 0.3, "#gripper": 10.0},
+    ),
+)
+PLUGIN_REGISTRY.add("yam-trajectory", yam_trajectory)
 
 # `none` disables a slot (plugin.<key>:none), mirroring every other config family's `none`
 # preset. Unlike the scalar families (which register a literal None), this dict field

@@ -47,6 +47,7 @@ g1_29dof_randomization = RandomizationManagerCfg(
             func="holosoma.managers.randomization.terms.locomotion:randomize_mass_startup",
             params={
                 "enable_link_mass": True,
+                "link_bodies": ["#root", "#hip_links", "#knee_links"],
                 "link_mass_range": [0.9, 1.2],
                 "enable_base_mass": True,
                 "added_mass_range": [-1.0, 3.0],

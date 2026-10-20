@@ -30,8 +30,9 @@ from holosoma.utils.inference_helpers import (
     attach_onnx_metadata,
     export_motion_and_policy_as_onnx,
     export_policy_as_onnx,
+    get_action_scales_from_env,
     get_command_ranges_from_env,
-    get_control_gains_from_config,
+    get_control_gains_from_env,
     get_urdf_text_from_robot_config,
 )
 
@@ -223,7 +224,7 @@ class PPO(BaseAlgo):
             "critic_obs": self.env.observation_manager.cfg.groups["critic_obs"].history_length,
         }
 
-        self.num_act = self.env.robot_config.actions_dim
+        self.num_act = self.env.dim_actions
 
         self.actor_learning_rate = self.config.actor_learning_rate
         self.max_actor_learning_rate = self.config.max_actor_learning_rate or max(self.actor_learning_rate, 1e-2)
@@ -278,7 +279,7 @@ class PPO(BaseAlgo):
             self.critic_obs_normalizer = nn.Identity()
 
         if self.use_symmetry:
-            self.symmetry_utils = SymmetryUtils(self.env)
+            self.symmetry_utils = SymmetryUtils(self.env, self.config.symmetry)
 
         # Synchronize model weights across GPUs after initialization
         if self.is_multi_gpu:
@@ -731,13 +732,9 @@ class PPO(BaseAlgo):
             )
 
         # Extract control gains and velocity limits & attach to onnx as metadata
-        kp_list, kd_list = get_control_gains_from_config(self.env.robot_config)
+        kp_list, kd_list = get_control_gains_from_env(self.env)
         cmd_ranges = get_command_ranges_from_env(self.env)
-        action_scales = getattr(self.env, "action_scales", None)
-        if action_scales is None:
-            action_scale_metadata: float | list[float] = float(self.env.robot_config.control.action_scale)
-        else:
-            action_scale_metadata = action_scales.detach().cpu().tolist()
+        action_scale_metadata = get_action_scales_from_env(self.env).detach().cpu().tolist()
         # Extract URDF text from the robot config
         urdf_file_path, urdf_str = get_urdf_text_from_robot_config(self.env.robot_config)
         observation_manager = self.env.observation_manager

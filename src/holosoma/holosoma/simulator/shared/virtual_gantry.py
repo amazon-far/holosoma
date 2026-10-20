@@ -15,6 +15,7 @@ from loguru import logger
 
 from holosoma.config_types.simulator import VirtualGantryCfg
 from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.utils.name_tags import resolve_single_name_spec
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
@@ -312,12 +313,10 @@ def create_virtual_gantry(
     cfg: VirtualGantryCfg | None = None,
     **kwargs: Any,
 ) -> VirtualGantry:
-    """Factory function to create and setup virtual gantry with automatic body detection.
+    """Create a virtual gantry attached through an exact body name or semantic tag.
 
-    Attempts to attach the virtual gantry to one of the specified body names,
-    trying each name in order until a valid body is found. This provides a
-    convenient way to set up the gantry without needing to know the exact
-    body names used in different robot models.
+    Attempts each configured body selector in order. A selector can be an exact
+    body name or a tag that resolves to exactly one body.
 
     Parameters
     ----------
@@ -326,8 +325,8 @@ def create_virtual_gantry(
     enable : bool, default=False
         Whether gantry should be initially enabled.
     attachment_body_names : list[str] | None, default=None
-        List of body names to try for attachment (in preference order).
-        If None, uses common default body names.
+        Exact body names or single-body tags to try in preference order.
+        If None, uses ``cfg.attachment_body_names`` (``["#base"]`` by default).
     cfg : VirtualGantryCfg | None, default=None
         Configuration parameters for the gantry. If None, uses default configuration.
     **kwargs : Any
@@ -342,7 +341,7 @@ def create_virtual_gantry(
     Raises
     ------
     RuntimeError
-        If no suitable attachment body is found from the provided names.
+        If no suitable attachment body is found from the provided selectors.
 
     Examples
     --------
@@ -360,17 +359,22 @@ def create_virtual_gantry(
     ...     enable=True
     ... )
     """
+    if cfg is None:
+        cfg = VirtualGantryCfg()
+
     # A disabled gantry applies no force and reads no body, so it should not require a humanoid
     # attachment body to exist; otherwise a non-humanoid robot (e.g. a single-link test body) cannot
     # boot with the gantry off. Return a disabled instance attached to body 0, a valid index that is
     # never read while disabled. Only the enabled path needs a real attachment body.
+    if enable and sim.robot_config.asset.fix_base_link:
+        logger.info("Virtual gantry disabled: the robot base is fixed (asset.fix_base_link=True).")
+        enable = False
     if not enable:
         logger.info("Virtual gantry disabled; skipping attachment-body resolution.")
         return VirtualGantry(sim=sim, enable=False, body_link_id=0, cfg=cfg, **kwargs)
 
     if attachment_body_names is None:
-        # Default names from holosoma_inference, likely needs updating or removing to force users to specify
-        attachment_body_names = ["torso_link", "torso", "base_link", "pelvis", "Trunk", "Waist", "base"]
+        attachment_body_names = list(cfg.attachment_body_names)
 
     logger.info("=== Setting up virtual gantry system ===")
 
@@ -380,21 +384,28 @@ def create_virtual_gantry(
     # errors (e.g. the num_envs=1 guard) would otherwise be swallowed and mis-reported below as a
     # "could not find attachment body".
     body_id = None
-    for body_name in attachment_body_names:
+    body_name = ""
+    for body_spec in attachment_body_names:
         try:
+            body_name = resolve_single_name_spec(
+                body_spec,
+                sim.robot_config.body_tags,
+                sim.body_names,
+                kind="body",
+            )
             body_id = sim.find_rigid_body_indice(body_name)
-        except (RuntimeError, ValueError):
+        except (RuntimeError, TypeError, ValueError):
             continue
         if body_id >= 0:
             break
     else:
         available_bodies = getattr(sim, "body_names", "unknown")
         raise RuntimeError(
-            f"Could not find suitable attachment body from {attachment_body_names}. "
+            f"Could not resolve a gantry attachment body from {attachment_body_names}. "
             f"Available bodies: {available_bodies}"
         )
 
-    logger.info(f"Virtual gantry attached to body '{body_name}' (ID: {body_id})")
+    logger.info(f"Virtual gantry attached through {body_spec!r} to body {body_name!r} (ID: {body_id})")
     gantry = VirtualGantry(sim=sim, enable=enable, body_link_id=body_id, cfg=cfg, **kwargs)
     logger.info("=== Virtual gantry system setup completed ===")
     return gantry

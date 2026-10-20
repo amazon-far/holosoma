@@ -124,7 +124,20 @@ def find_dynamic_dict_fields(config_type: Any) -> dict[str, Any]:
         return {}
 
     try:
-        hints = typing_extensions.get_type_hints(base, include_extras=True)
+        if sys.version_info < (3, 10):
+            from eval_type_backport import eval_type_backport
+
+            # get_type_hints cannot evaluate postponed dict[...] / X | None on
+            # Python before 3.10 otherwise silently hides every plugin/sensor field.
+            hints: dict[str, Any] = {}
+            for owner in reversed(base.__mro__):
+                namespace = vars(sys.modules[owner.__module__])
+                for name, hint in owner.__dict__.get("__annotations__", {}).items():
+                    hints[name] = eval_type_backport(
+                        typing.ForwardRef(hint) if isinstance(hint, str) else hint, namespace, dict(vars(owner))
+                    )
+        else:
+            hints = typing_extensions.get_type_hints(base, include_extras=True)
     except Exception:  # unresolvable annotations -> nothing to scan
         return {}
 

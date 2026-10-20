@@ -61,9 +61,14 @@ class MuJoCoVideoRecorder(VideoRecorderInterface):
         """Lazy-create MuJoCo renderer on current thread."""
         if self._renderer is None:
             logger.debug(f"Creating MuJoCo renderer on thread: {threading.current_thread().name}")
-            self._renderer = mujoco.Renderer(
-                self.simulator.root_model, height=self.config.height, width=self.config.width
-            )
+            model = self.simulator.root_model
+            assert model is not None, "root_model must be compiled before rendering"
+            # Mounted-camera sizing happens in the classic backend. This recorder also runs without
+            # mounted cameras (and on Warp), so include its independently configured video dimensions.
+            vis = model.vis.global_
+            vis.offwidth = max(int(vis.offwidth), self.config.width)
+            vis.offheight = max(int(vis.offheight), self.config.height)
+            self._renderer = mujoco.Renderer(model, height=self.config.height, width=self.config.width)
         return self._renderer
 
     @property
@@ -167,10 +172,12 @@ class MuJoCoVideoRecorder(VideoRecorderInterface):
         # Use camera controller via shared helper method
         camera_params = self._get_camera_parameters(robot_pos)
 
-        # Apply to MuJoCo camera using spherical coordinates
+        # Apply to MuJoCo camera using spherical coordinates. MjvCamera azimuth/elevation describe the VIEW
+        # direction (camera position = lookat - distance * forward), while the controller's angles describe the
+        # camera POSITION around the target, so the azimuth flips by 180 deg and the elevation changes sign.
         camera.lookat[:] = camera_params.target
         camera.distance = camera_params.distance
-        camera.azimuth = camera_params.azimuth
+        camera.azimuth = camera_params.azimuth + 180.0
         camera.elevation = -camera_params.elevation
 
     def cleanup(self) -> None:

@@ -53,17 +53,6 @@ class VideoRecorderInterface(ABC):
         Reference to the simulator instance for accessing simulation state.
     """
 
-    # Default tracking body names to try in order of preference
-    DEFAULT_TRACKING_BODY_NAMES = [
-        "Trunk",  # Common in humanoid robots (e.g., user's example)
-        "torso",  # Standard anatomical naming
-        "base_link",  # ROS standard naming convention
-        "Waist",  # Alternative trunk naming (e.g., user's example)
-        "pelvis",  # Anatomical naming for hip area
-        "hip",  # Simple hip naming
-        "base",  # Generic base naming
-    ]
-
     def __init__(self, config: VideoConfig, simulator: BaseSimulator) -> None:
         """Initialize the video recorder with configuration and simulator reference.
 

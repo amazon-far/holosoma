@@ -30,14 +30,13 @@ from holosoma.config_types.scene import (
 
 pytestmark = pytest.mark.no_sim
 
-# The 13 required RobotAssetConfig fields, so each test only varies link_physics. Values are
+# The 12 required RobotAssetConfig fields, so each test only varies link_physics. Values are
 # arbitrary since no asset is loaded here.
 _BASE: dict[str, Any] = {
     "asset_root": "x",
     "collapse_fixed_joints": True,
     "replace_cylinder_with_capsule": True,
     "flip_visual_attachments": False,
-    "armature": 0.001,
     "thickness": 0.01,
     "urdf_file": "u.urdf",
     "usd_file": None,
@@ -121,12 +120,14 @@ def test_w_object_inherits_link_physics() -> None:
 
 
 def test_legacy_flat_fields_removed() -> None:
-    # RobotAssetConfig is not extra='forbid', so an unknown kwarg is silently dropped rather than
-    # raising; assert field absence rather than using pytest.raises.
     cfg = RobotAssetConfig(**_BASE)
     for name in _MIGRATED_FIELDS:
         assert name not in RobotAssetConfig.__dataclass_fields__, f"{name} resurrected as a flat field"
         assert not hasattr(cfg, name), f"{name} still present on the instance"
+        # extra='forbid': a removed field is rejected, not silently dropped.
+        with_legacy: dict[str, Any] = {**_BASE, name: 0.0}
+        with pytest.raises(pydantic.ValidationError):
+            RobotAssetConfig(**with_legacy)
 
 
 # --------------------------------------------------------------------------------------------

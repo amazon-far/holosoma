@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import signal
 import sys
@@ -13,8 +14,10 @@ from typing import Any, Callable, cast
 
 import pytest
 
-from holosoma.utils import sim_utils
-from holosoma.utils.simulator_config import SimulatorType
+# Keep native SDK import banners separate from the stdout shutdown-event sequence.
+with contextlib.redirect_stdout(sys.stderr):
+    from holosoma.utils import sim_utils
+    from holosoma.utils.simulator_config import SimulatorType
 
 
 def configure_logging(monkeypatch: pytest.MonkeyPatch, sink_kind: str, diagnostic: str) -> int | None:

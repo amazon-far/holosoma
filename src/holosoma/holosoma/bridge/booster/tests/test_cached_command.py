@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
@@ -7,12 +8,27 @@ import numpy as np
 import pytest
 
 from holosoma.bridge.booster.booster_sdk2py_bridge import BoosterSdk2Bridge
+from holosoma.config_types.simulator import BridgeConfig
+from holosoma.config_values.robot import t1_29dof_waist_wrist
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 
 pytestmark = pytest.mark.no_sim
+
+
+def test_motor_order_is_required_before_transport_starts(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unexpected_transport(_bridge: BoosterSdk2Bridge) -> None:
+        pytest.fail("Transport must not start before motor order is validated")
+
+    monkeypatch.setattr(BoosterSdk2Bridge, "_init_sdk_components", unexpected_transport)
+    robot = replace(
+        t1_29dof_waist_wrist,
+        bridge=replace(t1_29dof_waist_wrist.bridge, controlled_dof_names=()),
+    )
+    with pytest.raises(ValueError, match="requires bridge.controlled_dof_names in SDK motor order"):
+        BoosterSdk2Bridge(cast("BaseSimulator", SimpleNamespace()), robot, BridgeConfig(enabled=False))
 
 
 def test_subscriber_command_is_sampled_on_transport_tick() -> None:

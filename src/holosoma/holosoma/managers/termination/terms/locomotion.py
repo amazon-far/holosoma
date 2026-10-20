@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from holosoma.managers.observation.terms.locomotion import get_projected_gravity
@@ -18,15 +19,13 @@ def _apply_probability(mask: torch.Tensor, probability: float, device: torch.dev
     return mask & (sample < probability)
 
 
-def contact_forces_exceeded(
-    env: Any, force_threshold: float = 1.0, contact_indices_attr: str = "termination_contact_indices"
-) -> torch.Tensor:
-    """Terminate if contact forces exceed threshold.
+def contact_forces_exceeded(env: Any, bodies: Sequence[str], force_threshold: float = 1.0) -> torch.Tensor:
+    """Terminate when any of ``bodies`` (exact names or ``#tag`` references) has a contact force above threshold.
 
     Note: If you want to disable contact termination, simply don't add this term to your
     termination config instead of using a flag.
     """
-    indices = getattr(env, contact_indices_attr)
+    indices = env.robot_names.resolve_body_indices(bodies)
     contact_forces = env.simulator.contact_forces[:, indices, :]
     return torch.any(torch.norm(contact_forces, dim=-1) > force_threshold, dim=1)
 
@@ -47,16 +46,6 @@ def base_height_below_threshold(env: Any, min_height: float) -> torch.Tensor:
         return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
     base_height = env.simulator.robot_root_states[:, 2]
     return base_height < min_height
-
-
-def dof_position_limit_exceeded(env: Any, probability: float = 1.0) -> torch.Tensor:
-    """Terminate when DOF position limits are exceeded."""
-    if not getattr(env.config.termination, "terminate_when_close_to_dof_pos_limit", False):
-        return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
-    lower_violation = -(env.simulator.dof_pos - env.simulator.dof_pos_limits_termination[:, 0]).clip(max=0.0)
-    upper_violation = (env.simulator.dof_pos - env.simulator.dof_pos_limits_termination[:, 1]).clip(min=0.0)
-    violation = torch.sum(lower_violation + upper_violation, dim=1) > 0.0
-    return _apply_probability(violation, probability, env.device)
 
 
 def dof_velocity_limit_exceeded(env: Any, probability: float = 1.0) -> torch.Tensor:

@@ -1490,7 +1490,7 @@ def main() -> int:
         env_origins[:, 0] = torch.arange(n, device=device, dtype=torch.float32) * 5.0
     init = config.robot.init_state
     base_init = torch.tensor(
-        list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel),
+        init.root_state_list(),
         device=device,
         dtype=torch.float32,
     )

@@ -61,9 +61,7 @@ def _build(device: str):
     sim.setup_terrain()
     sim.load_assets()
     init = config.robot.init_state
-    base_init = torch.tensor(
-        list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
-    )
+    base_init = torch.tensor(init.root_state_list(), device=device, dtype=torch.float32)
     sim.create_envs(1, torch.zeros(1, 3, device=device), base_init)
     sim.prepare_sim()
     sim.install_plugins()
@@ -91,7 +89,7 @@ def _main() -> int:
     camera = next(iter(config.sensor))
     env_ids = torch.arange(1, device=device)
     init = config.robot.init_state
-    home = sim.env_origins + torch.tensor(list(init.pos), device=device)
+    home = sim.env_origins + torch.tensor(list(init.position), device=device)
     spawn_dof = sim.dof_pos.clone()
 
     def write_pose(offset_y: float) -> None:
@@ -102,7 +100,7 @@ def _main() -> int:
         """
         states = sim.get_actor_states(["robot"], env_ids).clone()
         states[:, :3] = home + torch.tensor([0.0, offset_y, 0.0], device=device)
-        states[:, 3:7] = torch.tensor(list(init.rot), device=device)
+        states[:, 3:7] = torch.tensor(init.orientation_xyzw, device=device)
         states[:, 7:] = 0.0
         sim.set_actor_states(["robot"], env_ids, states)
         dof_state = torch.zeros(1, sim.num_dof, 2, device=device)

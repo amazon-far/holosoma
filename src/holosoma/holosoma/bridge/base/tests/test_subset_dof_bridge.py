@@ -16,6 +16,8 @@ import numpy.typing as npt
 import pytest
 
 from holosoma.bridge.base.basic_sdk2py_bridge import BasicSdk2Bridge
+from holosoma.bridge.unitree.unitree_sdk2py_bridge import UnitreeSdk2Bridge
+from holosoma.bridge.unitree.unitree_sdk2py_bridge_mp import UnitreeMpSdk2Bridge
 from holosoma.config_types.robot import RobotBridgeConfig
 from holosoma.utils.safe_torch_import import torch
 
@@ -54,6 +56,10 @@ class _FakeSim:
         self.dof_pos = torch.arange(n, dtype=torch.float32).reshape(1, n) * 0.1
         self.dof_vel = torch.zeros(1, n)
         self.dof_acc = torch.zeros(1, n)
+        self.torque_limits = torch.tensor([float(10 * (i + 1)) for i in range(n)])
+
+    def get_dof_limits_properties(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return torch.zeros(self.num_dof, 2), torch.zeros(self.num_dof), self.torque_limits
 
 
 def _robot_config(
@@ -65,7 +71,6 @@ def _robot_config(
     robot_type: str = "my_robot",
 ) -> SimpleNamespace:
     return SimpleNamespace(
-        dof_effort_limit_list=[float(10 * (i + 1)) for i in range(len(dof_names))],
         asset=SimpleNamespace(robot_type=robot_type),
         bridge=RobotBridgeConfig(
             controlled_dof_names=controlled,
@@ -119,6 +124,23 @@ def test_controlled_dofs_wins_over_excluded_and_preserves_order() -> None:
 def test_unknown_controlled_name_raises() -> None:
     with pytest.raises(ValueError, match="controlled_dof_names"):
         _build(controlled=("a", "nope"))
+
+
+@pytest.mark.parametrize("bridge_cls", [UnitreeSdk2Bridge, UnitreeMpSdk2Bridge])
+@pytest.mark.parametrize("excluded", [(), ("f",)], ids=["empty", "exclusions-only"])
+def test_fixed_sdk_requires_order_before_transport_starts(
+    bridge_cls: type[BasicSdk2Bridge], excluded: tuple[str, ...], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unexpected_transport(_bridge: BasicSdk2Bridge) -> None:
+        pytest.fail("Transport must not start before motor order is validated")
+
+    monkeypatch.setattr(bridge_cls, "_init_sdk_components", unexpected_transport)
+    with pytest.raises(ValueError, match="requires bridge.controlled_dof_names in SDK motor order"):
+        bridge_cls(
+            cast("BaseSimulator", _FakeSim(_DOFS)),
+            cast("RobotConfig", _robot_config(_DOFS, excluded=excluded)),
+            cast("BridgeConfig", SimpleNamespace(interface="lo")),
+        )
 
 
 def test_unknown_excluded_name_raises() -> None:

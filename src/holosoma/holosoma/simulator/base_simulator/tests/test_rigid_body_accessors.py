@@ -6,6 +6,8 @@ storage (identity, no copy) and track reassignment (IsaacSim rebinds them each r
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
@@ -22,8 +24,12 @@ class _FakeSim(BaseSimulator):
 
     def __init__(self) -> None:
         self.num_envs = 2
-        self.num_bodies = 3
-        self.body_names = ["pelvis", "torso_link", "left_ankle_roll_link"]
+        self.robot_config = SimpleNamespace(
+            body_names=["pelvis", "torso_link", "left_ankle_roll_link"],
+            dof_names=[],
+            body_tags={"#base": ["torso_link"], "#lower_body": ["pelvis", "left_ankle_roll_link"]},
+        )  # type: ignore[assignment]
+        self.body_ids = [7, 11, 19]
         # Distinct, checkable values per (env, body, field).
         e, b = self.num_envs, self.num_bodies
         base = torch.arange(e * b, dtype=torch.float32).reshape(e, b, 1)

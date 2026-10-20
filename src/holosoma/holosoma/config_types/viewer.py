@@ -41,7 +41,7 @@ class ViewerConfig:
     ...         azimuth=90.0,
     ...         elevation=30.0,
     ...         smoothing=0.9,
-    ...         tracking_body_name="Trunk",
+    ...         tracking_body_name="#base",
     ...     ),
     ... )
     """

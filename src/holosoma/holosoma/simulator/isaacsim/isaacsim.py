@@ -9,6 +9,7 @@ from typing import Any
 import pathlib
 import trimesh
 
+from holosoma.utils.robot_names import configure_robot_names
 from holosoma.config_types.full_sim import FullSimConfig
 import isaaclab.sim as sim_utils
 import isaaclab.terrains as terrain_gen
@@ -33,6 +34,7 @@ from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.sensor import CameraSensorConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
+from holosoma.simulator.shared.root_states import robot_rows
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.isaacsim.event_cfg import EventCfg
 from holosoma.simulator.isaacsim.events import randomize_body_com, randomize_rigid_body_inertia
@@ -50,7 +52,6 @@ from holosoma.simulator.isaacsim.object_spawner import (
 )
 from holosoma.simulator.isaacsim.scene_fixtures import build_terrain_fixtures
 from holosoma.simulator.isaacsim.proxy_utils import RootStatesProxy
-from holosoma.simulator.shared.dof_limits import build_dof_limits_from_config
 from holosoma.simulator.shared.external_wrench import WrenchTarget
 from holosoma.simulator.shared.root_states_view import UnifiedRootStatesView
 from holosoma.simulator.shared.object_registry import ObjectType
@@ -290,7 +291,8 @@ class IsaacSim(BaseSimulator):
         # The robot must be spawned before fixtures and mounted sensors resolve imported link prims.
         # URDF conversion may preserve a dummy root link between /Robot and the configured bodies.
         global_collision_prims, height_scanner_config, self.terrain = build_terrain_fixtures(
-            self.terrain_manager, self.scene, self.robot_config.body_names[0]
+            self.terrain_manager,
+            self.scene,
         )
 
         # Bind the robot's link_physics friction/restitution material to every link, before clone so
@@ -332,28 +334,6 @@ class IsaacSim(BaseSimulator):
     def render_sensors(self) -> None:
         """Capture all due mounted sensors into their cached buffers."""
         sensor_setup.render_sensors(self)
-
-    def _get_base_body_name(self, preference_order: list[str]) -> str:
-        """Get the base body name with fallback logic.
-
-        Args:
-            preference_order: List of body names to try in order
-
-        Returns:
-            The first body name found in the robot's body list
-
-        Raises:
-            ValueError: If none of the preferred body names are found
-        """
-        _, body_names = self._robot.find_bodies(self.robot_config.body_names, preserve_order=True)
-
-        for preferred_name in preference_order:
-            if preferred_name in body_names:
-                return preferred_name
-
-        raise ValueError(
-            f"None of the preferred base body names {preference_order} found in robot body names: {body_names}"
-        )
 
     def get_supported_scene_formats(self) -> list[str]:
         """See base class.
@@ -433,90 +413,7 @@ class IsaacSim(BaseSimulator):
         save self.num_dofs, self.num_bodies, self.dof_names, self.body_names in simulator class
         """
 
-        dof_names_list = copy.deepcopy(self.robot_config.dof_names)
-        # for i, name in enumerate(dof_names_list):
-        #     dof_names_list[i] = name.replace("_joint", "")
-        # isaacsim only support matching joint names without "joint" postfix
-
-        # init_state=ArticulationCfg.InitialStateCfg(
-        #     pos=(0.0, 0.0, 1.05),
-        #     joint_pos={
-        #         ".*_hip_yaw": 0.0,
-        #         ".*_hip_roll": 0.0,
-        #         ".*_hip_pitch": -0.28,  # -16 degrees
-        #         ".*_knee": 0.79,  # 45 degrees
-        #         ".*_ankle": -0.52,  # -30 degrees
-        #         "torso": 0.0,
-        #         ".*_shoulder_pitch": 0.28,
-        #         ".*_shoulder_roll": 0.0,
-        #         ".*_shoulder_yaw": 0.0,
-        #         ".*_elbow": 0.52,
-        #     },
-        #     joint_vel={".*": 0.0},
-        # ),
-
-        # spawn=sim_utils.UsdFileCfg(
-        #     usd_path=f"{ISAACLAB_NUCLEUS_DIR}/Robots/Unitree/G1/g1.usd",
-        #     activate_contact_sensors=True,
-        #     rigid_props=sim_utils.RigidBodyPropertiesCfg(
-        #         disable_gravity=False,
-        #         retain_accelerations=False,
-        #         linear_damping=0.0,
-        #         angular_damping=0.0,
-        #         max_linear_velocity=1000.0,
-        #         max_angular_velocity=1000.0,
-        #         max_depenetration_velocity=1.0,
-        #     ),
-        #     articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-        #         enabled_self_collisions=False, solver_position_iteration_count=8, solver_velocity_iteration_count=4
-        #     ),
-        # ),
-
-        self.dof_ids, self.dof_names = self._robot.find_joints(dof_names_list, preserve_order=True)
-        self.body_ids, self.body_names = self._robot.find_bodies(self.robot_config.body_names, preserve_order=True)
-
-        self._body_list = self.body_names.copy()
-        # dof_ids and body_ids is convert dfs order (isaacsim) to dfs order (isaacgym, holosoma config)
-        # i.e., bfs_order_tensor = dfs_order_tensor[dof_ids]
-
-        # add joint names with "joint" postfix
-        # for i, name in enumerate(self.dof_names):
-        #     self.dof_names[i] = name + "_joint"
-        """
-        ipdb> self._robot.find_bodies(robot_config.body_names, preserve_order=True)
-        ([0, 1, 4, 8, 12, 16, 2, 5, 9, 13, 17, 3, 6, 10, 14, 18, 7, 11, 15, 19],
-        ['pelvis', 'left_hip_yaw_link', 'left_hip_roll_link', 'left_hip_pitch_link', 'left_knee_link',
-        'left_ankle_link', 'right_hip_yaw_link', 'right_hip_roll_link', 'right_hip_pitch_link',
-        'right_knee_link', 'right_ankle_link', 'torso_link', 'left_shoulder_pitch_link',
-        'left_shoulder_roll_link', 'left_shoulder_yaw_link', 'left_elbow_link', 'right_shoulder_pitch_link',
-        'right_shoulder_roll_link', 'right_shoulder_yaw_link', 'right_elbow_link'])
-        ipdb> self._robot.find_bodies(robot_config.body_names, preserve_order=False)
-        ([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
-        ['pelvis', 'left_hip_yaw_link', 'right_hip_yaw_link', 'torso_link', 'left_hip_roll_link',
-        'right_hip_roll_link', 'left_shoulder_pitch_link', 'right_shoulder_pitch_link', 'left_hip_pitch_link',
-        'right_hip_pitch_link', 'left_shoulder_roll_link', 'right_shoulder_roll_link', 'left_knee_link',
-        'right_knee_link', 'left_shoulder_yaw_link', 'right_shoulder_yaw_link', 'left_ankle_link',
-        'right_ankle_link', 'left_elbow_link', 'right_elbow_link'])
-        """
-
-        self.num_dof = len(self.dof_ids)
-        self.num_bodies = len(self.body_ids)
-
-        # warning if the dof_ids order does not match the joint_names order in robot_config
-        if self.dof_ids != list(range(self.num_dof)):
-            logger.warning(
-                "The order of the joint_names in the robot_config does not match the "
-                "order of the joint_ids in IsaacSim."
-            )
-
-        # assert if  aligns with config
-        assert self.num_dof == len(self.robot_config.dof_names), "Number of DOFs must be equal to number of actions"
-        assert self.num_bodies == len(self.robot_config.body_names), (
-            "Number of bodies must be equal to number of body names"
-        )
-        # import ipdb; ipdb.set_trace()
-        assert self.dof_names == self.robot_config.dof_names, "DOF names must match the config"
-        assert self.body_names == self.robot_config.body_names, "Body names must match the config"
+        configure_robot_names(self, list(self._robot.joint_names), list(self._robot.body_names))
 
         self._contact_to_robot_body_ids = torch.tensor(
             [self.contact_sensor.body_names.index(body_name) for body_name in self.body_names],
@@ -529,6 +426,7 @@ class IsaacSim(BaseSimulator):
         self, num_envs: int, env_origins: torch.Tensor, base_init_state: torch.Tensor
     ) -> tuple[InteractiveScene, Articulation]:
         self.num_envs = num_envs
+        self._initialize_dof_limit_properties()
         # IsaacSim does NOT honor the passed env_origins: InteractiveScene clones the envs on its own
         # env_spacing grid (built in __init__), and every internal placement (robot/object poses,
         # terrain) uses self.scene.env_origins, not the argument. Storing the passed value here left
@@ -542,35 +440,52 @@ class IsaacSim(BaseSimulator):
         return self.scene, self._robot
 
     def get_dof_limits_properties(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        (
-            self.hard_dof_pos_limits,
-            self.dof_pos_limits,
-            self.dof_vel_limits,
-            self.torque_limits,
-        ) = build_dof_limits_from_config(self.robot_config, self.num_dof, self.sim_device)
-        return self.dof_pos_limits, self.dof_vel_limits, self.torque_limits
+        """Return cached setup limits; repeated reads do not allocate or write simulator state."""
+        return self._dof_limit_properties
+
+    def _initialize_dof_limit_properties(self) -> None:
+        """Apply configured limits and cache them in canonical DOF order.
+
+        Shapes are ``[num_dof, 2]``, ``[num_dof]`` and ``[num_dof]``. Config maps override asset values for the joints they cover.
+        Configured position limits are written during environment creation, before either the task
+        or direct-simulation API can start stepping.
+        """
+        from holosoma.utils.robot_properties import resolve_dof_properties
+
+        robot_config = self.robot_config
+        overrides = resolve_dof_properties(robot_config)
+        device = self.sim_device
+        if self.num_dof == 0:
+            self.dof_pos_limits = torch.zeros(0, 2, device=device)
+            self.dof_vel_limits = torch.zeros(0, device=device)
+            self.torque_limits = torch.zeros(0, device=device)
+            self._dof_limit_properties = self.dof_pos_limits, self.dof_vel_limits, self.torque_limits
+            return
+
+        pos_limits = self._robot.data.joint_pos_limits[0, self.dof_ids].clone()
+        for name, bounds in overrides.position.items():
+            pos_limits[robot_config.dof_names.index(name)] = torch.tensor(bounds, device=pos_limits.device)
+        if overrides.position:
+            self._robot.write_joint_position_limit_to_sim(
+                pos_limits.unsqueeze(0).expand(self.num_envs, -1, -1), joint_ids=self.dof_ids
+            )
+
+        # Explicit actuators clip at their own effort_limit, independently of effort_limit_sim.
+        vel_limits = torch.full((self._robot.num_joints,), float("inf"), device=pos_limits.device)
+        effort_limits = torch.full_like(vel_limits, float("inf"))
+        for actuator in self._robot.actuators.values():
+            joint_indices = actuator.joint_indices
+            vel_limits[joint_indices] = actuator.velocity_limit[0]
+            effort_limits[joint_indices] = actuator.effort_limit[0]
+
+        self.dof_pos_limits = pos_limits.to(device=device, dtype=torch.float)
+        self.dof_vel_limits = vel_limits[self.dof_ids].to(device=device, dtype=torch.float)
+        self.torque_limits = effort_limits[self.dof_ids].to(device=device, dtype=torch.float)
+        self._dof_limit_properties = self.dof_pos_limits, self.dof_vel_limits, self.torque_limits
 
     def find_rigid_body_indice(self, body_name: str) -> int:
-        """
-        ipdb> self.simulator._robot.find_bodies("left_ankle_link")
-        ([16], ['left_ankle_link'])
-        ipdb> self.simulator.contact_sensor.find_bodies("left_ankle_link")
-        ([4], ['left_ankle_link'])
-
-        this function returns the indice of the body in BFS order
-
-        Raises
-        ------
-        RuntimeError
-            If the body name is not found, or matches more than one body.
-        """
-        raw_indices, names = self._robot.find_bodies(body_name)
-        indices: list[int] = [self.body_ids.index(i) for i in raw_indices]
-        if len(indices) == 0:
-            raise RuntimeError(f"Body '{body_name}' not found in robot bodies.")
-        if len(indices) > 1:
-            raise RuntimeError(f"Multiple bodies found for '{body_name}': {names}.")
-        return indices[0]
+        """Return the canonical body-observation index; raise ``ValueError`` for an unknown name."""
+        return self.body_names.index(body_name)
 
     def _collect_spawned_actors(
         self,
@@ -581,14 +496,9 @@ class IsaacSim(BaseSimulator):
         is set or it is in ``scene_file_static_names`` (the file marked it kinematic); otherwise
         free.
         """
-        # Robot: config base pose with env_origins added (world coordinates).
-        base = torch.cat(
-            [
-                torch.tensor(self.robot_config.init_state.pos, device=self.sim_device, dtype=torch.float32),
-                torch.tensor(self.robot_config.init_state.rot, device=self.sim_device, dtype=torch.float32),
-            ]
-        )
-        robot_pose = base.unsqueeze(0).repeat(self.num_envs, 1)
+        # Robot: config base pose [position, orientation_xyzw] with env_origins added (world coordinates).
+        init_pose = self.robot_config.init_state.root_state_list()[:7]
+        robot_pose = torch.tensor(init_pose, device=self.sim_device, dtype=torch.float32).repeat(self.num_envs, 1)
         robot_pose[:, :3] += self.scene.env_origins
 
         static_names = {
@@ -635,6 +545,7 @@ class IsaacSim(BaseSimulator):
             scene=self.scene,
             robot=self._robot,
             robot_states=self.robot_root_states,
+            robot_fixed_base=self.robot_config.asset.fix_base_link,
         )
 
         # Unified all-actors view: routes [indices] reads/writes through
@@ -884,25 +795,14 @@ class IsaacSim(BaseSimulator):
     ) -> None:
         """See base class.
 
-        IsaacSim-specific notes:
-        - Quaternions converted from (x,y,z,w) to (w,x,y,z) format for IsaacSim compatibility
+        Also accepts a ``RootStatesProxy`` in global environment order.
         """
         if env_ids is None:
             env_ids = torch.arange(getattr(self, "num_envs", self.training_config.num_envs), device=self.sim_device)
-
-        if root_states is None:
-            robot_root_states = self.robot_root_states
-        elif root_states is self.all_root_states:
-            # Wholesale-pass of the unified view: write the robot only.
-            robot_root_states = self.robot_root_states
-        elif isinstance(root_states, RootStatesProxy):
-            # assumes the user passed in robot_root_states directly
-            robot_root_states = root_states
-        else:
-            raise ValueError(f"Unexpected root states type: {type(root_states)}")
-
-        self._robot.write_root_pose_to_sim(robot_root_states._get_wxyz(env_ids)[:, :7], env_ids)
-        self._robot.write_root_velocity_to_sim(robot_root_states._get_wxyz(env_ids)[:, 7:], env_ids)
+        if isinstance(root_states, RootStatesProxy):
+            # Convert without selecting: robot_rows owns environment selection, including full permutations.
+            root_states = root_states[:]
+        self._state_adapter.write_robot_root_states(robot_rows(self, env_ids, root_states), env_ids)
 
     def set_dof_state_tensor_robots(
         self, env_ids: EnvIds | None = None, dof_states: torch.Tensor | None = None
@@ -985,11 +885,9 @@ class IsaacSim(BaseSimulator):
         base_poses = []
         for obj_name in names:
             if obj_name == "robot":
-                # Get robot base pose from configuration
-                pos = torch.tensor(self.robot_config.init_state.pos, device=self.sim_device, dtype=torch.float32)
-                rot = torch.tensor(self.robot_config.init_state.rot, device=self.sim_device, dtype=torch.float32)
-                pose = torch.cat([pos, rot])  # [7] - [x,y,z,qx,qy,qz,qw]
-                base_poses.append(pose)
+                # Config base pose [x,y,z,qx,qy,qz,qw]
+                init_pose = self.robot_config.init_state.root_state_list()[:7]
+                base_poses.append(torch.tensor(init_pose, device=self.sim_device, dtype=torch.float32))
 
             elif obj_name in self.scene.rigid_objects:
                 # Get object pose from its rigid object (scene-file bodies included).

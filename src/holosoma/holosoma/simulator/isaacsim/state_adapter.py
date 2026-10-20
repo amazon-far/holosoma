@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 
+from holosoma.simulator.shared.root_states import root_pose_changed
+
 from .state_utils import fullstate_wxyz_to_xyzw, fullstate_xyzw_to_wxyz
 
 if TYPE_CHECKING:
@@ -47,12 +49,15 @@ class IsaacSimStateAdapter:
         scene: Any,
         robot: Any,
         robot_states: RootStatesProxy,
+        robot_fixed_base: bool = False,
     ) -> None:
         self.device = device
         self._object_registry = object_registry
         self._scene = scene
         self._robot = robot
         self._robot_states = robot_states
+        # A welded root takes pose writes as kinematic teleports and ignores velocity columns.
+        self._robot_fixed_base = robot_fixed_base
         self._objects_dirty = False
 
     def resolve_indices(self, indices: torch.Tensor) -> list[tuple[str, torch.Tensor]]:
@@ -158,12 +163,9 @@ class IsaacSimStateAdapter:
         obj_type = self._object_registry.get_object_type(obj_name)
 
         if obj_type == "robot":
-            # Write the robot directly via write_root_pose/velocity_to_sim (xyzw->wxyz).
             # NOTE: Intentionally does NOT apply env origins offsets for backwards compatibilty
             #       with existing robot root state setters
-            converted_states = fullstate_xyzw_to_wxyz(states)
-            self._robot.write_root_pose_to_sim(converted_states[:, :7], env_ids)
-            self._robot.write_root_velocity_to_sim(converted_states[:, 7:], env_ids)
+            self.write_robot_root_states(states, env_ids)
 
         elif obj_type in ("individual", "scene") and obj_name in self._scene.rigid_objects:
             # A scene rigid object — free (INDIVIDUAL) or static (SCENE). Every object,
@@ -181,6 +183,22 @@ class IsaacSimStateAdapter:
 
         # Mark states as dirty for batch synchronization
         self.mark_dirty()
+
+    def write_robot_root_states(self, states: torch.Tensor, env_ids: torch.Tensor) -> None:
+        """Write ``[len(env_ids), 13]`` xyzw robot root states; the single robot root writer.
+
+        Floating base: pose and velocity go to the sim. Fixed base: the velocity columns are ignored
+        and the pose is written (a kinematic teleport) only when it differs from the robot's current
+        root pose; a same-pose write is a no-op. Does not mark the adapter dirty.
+        """
+        states_wxyz = fullstate_xyzw_to_wxyz(states)
+        if self._robot_fixed_base:
+            current = self._robot.data.root_state_w[env_ids, :7]  # wxyz, reflects the last write
+            if root_pose_changed(states_wxyz[:, :7], current):
+                self._robot.write_root_pose_to_sim(states_wxyz[:, :7], env_ids)
+            return
+        self._robot.write_root_pose_to_sim(states_wxyz[:, :7], env_ids)
+        self._robot.write_root_velocity_to_sim(states_wxyz[:, 7:], env_ids)
 
     def is_dirty(self) -> bool:
         """Check if states have been modified and need synchronization.

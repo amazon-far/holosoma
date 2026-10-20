@@ -44,15 +44,12 @@ class LeggedRobotLocomotionManager(BaseTask):
         # initialize some data used later on
         self._init_counters()
         # joint positions offsets
-        self.default_dof_pos_base = torch.zeros(
-            self.num_dof, dtype=torch.float, device=self.device, requires_grad=False
+        self.default_dof_pos_base = torch.tensor(
+            list(self.robot_config.default_dof_positions().values()),
+            dtype=torch.float,
+            device=self.device,
+            requires_grad=False,
         )
-        for i in range(self.num_dofs):
-            name = self.dof_names[i]
-            if name not in self.robot_config.init_state.default_joint_angles:
-                raise ValueError(f"Missing default joint angle for DOF '{name}' in robot configuration.")
-            angle = self.robot_config.init_state.default_joint_angles[name]
-            self.default_dof_pos_base[i] = angle
 
         self.default_dof_pos_base = self.default_dof_pos_base.unsqueeze(0)  # (1, num_dof)
         self.default_dof_pos = self.default_dof_pos_base.repeat(self.num_envs, 1).clone()  # (num_envs, num_dof)
@@ -60,8 +57,6 @@ class LeggedRobotLocomotionManager(BaseTask):
         self.need_to_refresh_envs = torch.ones(self.num_envs, dtype=torch.bool, device=self.device, requires_grad=False)
 
         self._init_domain_rand_buffers()
-
-        self.lidar_height_offset = getattr(self.robot_config, "lidar_height_offset", 0.5)
 
     def _init_counters(self) -> None:
         self.common_step_counter = 0
@@ -81,34 +76,6 @@ class LeggedRobotLocomotionManager(BaseTask):
         )
         self._randomize_push_robots = False
         self._max_push_vel = torch.zeros(2, dtype=torch.float32, device=self.device)
-
-    def _setup_robot_body_indices(self) -> None:
-        foot_body_names = [s for s in self.body_names if self.robot_config.foot_body_name in s]
-        foot_height_names = [s for s in self.body_names if self.robot_config.foot_height_name in s]
-
-        termination_contact_names = []
-        for name in self.robot_config.terminate_after_contacts_on:
-            termination_contact_names.extend([s for s in self.body_names if name in s])
-
-        self.feet_indices = torch.zeros(len(foot_body_names), dtype=torch.long, device=self.device, requires_grad=False)
-        for i, name in enumerate(foot_body_names):
-            self.feet_indices[i] = self.simulator.find_rigid_body_indice(name)
-
-        self.feet_height_indices = torch.zeros(
-            len(foot_height_names), dtype=torch.long, device=self.device, requires_grad=False
-        )
-        for i, name in enumerate(foot_height_names):
-            self.feet_height_indices[i] = self.simulator.find_rigid_body_indice(name)
-
-        self.termination_contact_indices = torch.zeros(
-            len(termination_contact_names), dtype=torch.long, device=self.device, requires_grad=False
-        )
-        for i in range(len(termination_contact_names)):
-            self.termination_contact_indices[i] = self.simulator.find_rigid_body_indice(termination_contact_names[i])
-
-        if self.robot_config.has_torso:
-            self.torso_name = self.robot_config.torso_name
-            self.torso_index = self.simulator.find_rigid_body_indice(self.torso_name)
 
     def set_is_evaluating(self, command: Any = None) -> None:
         logger.info("Setting Env is evaluating")
@@ -311,8 +278,12 @@ class LeggedRobotLocomotionManager(BaseTask):
                 "locomotion_terrain"
             ).env_origins[env_ids]
 
-            # Apply randomized XY offset if custom_origins
-            if self.terrain_manager.get_state("locomotion_terrain").custom_origins:
+            # Randomized XY spawn offset on custom origins, floating bases only: a welded base resets to its
+            # mount pose, a same-pose write on every backend (IsaacGym cannot move it, see robot_fixed_base).
+            if (
+                self.terrain_manager.get_state("locomotion_terrain").custom_origins
+                and not self.robot_config.asset.fix_base_link
+            ):
                 # Get spawn config from terrain term
                 spawn_cfg = self.terrain_manager.cfg.terrain_term.spawn
 
@@ -333,7 +304,7 @@ class LeggedRobotLocomotionManager(BaseTask):
                         grid_size=spawn_cfg.grid_size,
                         grid_spacing=spawn_cfg.grid_spacing,
                     )
-                    robot_base_height = self.robot_config.init_state.pos[2]  # Robot base height above ground
+                    robot_base_height = self.robot_config.init_state.position[2]  # Robot base height above ground
                     new_z = terrain_heights + robot_base_height
 
                     # Write new XYZ position all at once

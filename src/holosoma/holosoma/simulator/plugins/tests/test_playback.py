@@ -11,12 +11,14 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 import pytest
 import torch
+from loguru import logger
 
 from holosoma.config_types.plugin import MotionPlaybackPluginConfig
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
@@ -262,6 +264,7 @@ class _FakeSimulator:
         self.dof_pos = torch.zeros(num_envs, NUM_DOF)
         self.dof_vel = torch.zeros(num_envs, NUM_DOF)
         self.robot_root_states = torch.zeros(num_envs, 13)
+        self.robot_config = SimpleNamespace(asset=SimpleNamespace(fix_base_link=False))
         self.shutdown_requested = False
         self.root_writes: list[torch.Tensor] = []
         self.dof_writes: list[torch.Tensor] = []
@@ -434,6 +437,24 @@ def test_plugin_fixed_base_skips_root_write(tmp_path: Path) -> None:
     _frame(sim)
     assert sim.dof_writes  # joints still written
     assert not sim.root_writes  # no root state on a fixed-base clip
+
+
+def test_plugin_fixed_base_robot_ignores_clip_root(tmp_path: Path) -> None:
+    """A clip WITH a root block on a welded robot: the root is skipped (one warning), joints are written."""
+    sim = _FakeSimulator()
+    sim.robot_config.asset.fix_base_link = True
+    records: list[str] = []
+    handle = logger.add(lambda msg: records.append(str(msg)), level="WARNING")
+    try:
+        _make(_cfg(tmp_path), sim)
+        for _ in range(3):
+            _frame(sim)
+    finally:
+        logger.remove(handle)
+    assert not sim.root_writes
+    assert len(sim.dof_writes) == 6
+    assert torch.all(sim.robot_root_states == 0)  # the clip's root pose never reached the buffer
+    assert sum("clip root ignored" in record for record in records) == 1
 
 
 def test_plugin_requires_clip() -> None:

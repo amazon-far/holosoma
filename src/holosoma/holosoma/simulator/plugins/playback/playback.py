@@ -240,6 +240,7 @@ class MotionPlaybackPlugin:
         self._final_frame_rendered = False
         self._final_episode = False
         self._lookahead_error: Exception | None = None
+        self._fixed_base_root_warned = False
 
         simulator.hooks.add(Phase.FRAME_BEGIN, self.advance, name="motion_playback.advance")
         simulator.hooks.add(Phase.PRE_STEP, self.write_state, name="motion_playback.write_state")
@@ -452,7 +453,12 @@ class MotionPlaybackPlugin:
 
         sim.dof_pos[:] = state["joint_pos"]
         sim.dof_vel[:] = 0.0
-        if self.clip.has_root:
+        if self.clip.has_root and sim.robot_config.asset.fix_base_link:
+            # A welded root cannot follow the clip; the joints are still written below.
+            if not self._fixed_base_root_warned:
+                logger.warning("MotionPlaybackPlugin: fixed-base robot: clip root ignored")
+                self._fixed_base_root_warned = True
+        elif self.clip.has_root:
             rs = sim.robot_root_states
             rs[:, :3] = state["root_pos"]
             rs[:, 3:7] = state["root_quat"]

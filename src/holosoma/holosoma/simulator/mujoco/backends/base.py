@@ -171,7 +171,7 @@ class IMujocoBackend(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def create_dof_pos_view(self, indices: slice, num_dof: int) -> BaseMujocoView:
+    def create_dof_pos_view(self, indices: slice | list[int], num_dof: int) -> BaseMujocoView:
         """Create view for DOF positions.
 
         Parameters
@@ -189,7 +189,7 @@ class IMujocoBackend(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def create_dof_vel_view(self, indices: slice, num_dof: int) -> BaseMujocoView:
+    def create_dof_vel_view(self, indices: slice | list[int], num_dof: int) -> BaseMujocoView:
         """Create view for DOF velocities.
 
         Parameters
@@ -207,7 +207,7 @@ class IMujocoBackend(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def create_dof_acc_view(self, indices: slice, num_dof: int) -> BaseMujocoView:
+    def create_dof_acc_view(self, indices: slice | list[int], num_dof: int) -> BaseMujocoView:
         """Create view for DOF accelerations.
 
         Parameters
@@ -225,7 +225,7 @@ class IMujocoBackend(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def create_dof_state_view(self, dof_addrs: dict[str, Any], num_dof: int) -> BaseMujocoView:
+    def create_dof_state_view(self, dof_addrs: dict[str, Any], num_dof: int) -> BaseMujocoView | torch.Tensor:
         """Create view for DOF states in IsaacGym flattened format.
 
         Returns view with shape [num_envs * num_dof, 2] where:

@@ -33,15 +33,12 @@ class WholeBodyTrackingManager(BaseTask):
         self._init_domain_rand_buffers()
 
     def _configure_default_dof_pos(self) -> None:
-        self.default_dof_pos_base = torch.zeros(
-            self.num_dof, dtype=torch.float, device=self.device, requires_grad=False
+        self.default_dof_pos_base = torch.tensor(
+            list(self.robot_config.default_dof_positions().values()),
+            dtype=torch.float,
+            device=self.device,
+            requires_grad=False,
         )
-        for i in range(self.num_dofs):
-            name = self.dof_names[i]
-            if name not in self.robot_config.init_state.default_joint_angles:
-                raise ValueError(f"Missing default joint angle for DOF '{name}' in robot configuration.")
-            angle = self.robot_config.init_state.default_joint_angles[name]
-            self.default_dof_pos_base[i] = angle
 
         self.default_dof_pos_base = self.default_dof_pos_base.unsqueeze(0)  # (1, num_dof)
         self.default_dof_pos = self.default_dof_pos_base.repeat(self.num_envs, 1).clone()  # (num_envs, num_dof)

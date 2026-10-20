@@ -88,6 +88,9 @@ class PhysxConfig:
     bounce_threshold_velocity: float = 0.5
     """Velocity threshold below which bounce responses are suppressed."""
 
+    max_gpu_contact_pairs: int = 16 * 1024 * 1024
+    """PhysX GPU contact-pair buffer size (IsaacGym). Raise for many-object or multi-contact scenes."""
+
 
 @dataclass(frozen=True)
 class MujocoXMLFilterCfg:
@@ -207,10 +210,8 @@ class VirtualGantryCfg:
     enabled: bool = False
     """Whether to enable the virtual gantry system."""
 
-    attachment_body_names: list[str] = field(
-        default_factory=lambda: ["Trunk", "torso_link", "torso", "base_link", "pelvis", "base"]
-    )
-    """List of body names to try for attachment (in preference order)."""
+    attachment_body_names: list[str] = field(default_factory=lambda: ["#base"])
+    """Exact body names or single-body tags to try for attachment, in preference order."""
 
     stiffness: float = 200.0
     """Spring stiffness coefficient for elastic band force calculation."""

@@ -84,9 +84,7 @@ def main() -> int:
     if n > 1:
         env_origins[:, 0] = torch.arange(n, device=device, dtype=torch.float32) * 10.0
     init = config.robot.init_state
-    base_init = torch.tensor(
-        list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
-    )
+    base_init = torch.tensor(init.root_state_list(), device=device, dtype=torch.float32)
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
     sim.install_plugins()
@@ -126,7 +124,7 @@ def main() -> int:
     move = 0.3  # meters to advance the robot toward the panel (+X base frame)
     yaw = math.radians(40.0)  # body yaw that swings the forward panel out of frame
 
-    base_rot = list(init.rot)  # (x, y, z, w) actor-state quaternion order
+    base_rot = list(init.orientation_xyzw)  # [x, y, z, w] actor-state quaternion order
 
     def _quat_mul_yaw(q_xyzw, yaw_rad):
         """Compose a world-Z yaw onto the base orientation (xyzw) so the robot turns in place."""
@@ -143,7 +141,7 @@ def main() -> int:
 
     def _set_root(x_offset: float, rot_xyzw) -> None:
         states = sim.get_actor_states(["robot"], _all_ids).clone()
-        states[:, :3] = env_origins + torch.tensor(list(init.pos), device=device)
+        states[:, :3] = env_origins + torch.tensor(list(init.position), device=device)
         states[:, 0] += x_offset
         states[:, 3:7] = torch.tensor(rot_xyzw, device=device)
         states[:, 7:] = 0.0
@@ -212,7 +210,7 @@ def main() -> int:
     if n > 1 and not fails:
         all_ids = torch.arange(n, device=device)
         states = sim.get_actor_states(["robot"], all_ids).clone()
-        states[:, :3] = env_origins + torch.tensor(list(init.pos), device=device)
+        states[:, :3] = env_origins + torch.tensor(list(init.position), device=device)
         states[:, 3:7] = torch.tensor(base_rot, device=device)
         states[0, 3:7] = torch.tensor(_quat_mul_yaw(base_rot, yaw), device=device)  # env 0 only
         states[:, 7:] = 0.0

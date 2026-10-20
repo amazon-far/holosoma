@@ -17,6 +17,8 @@ from holosoma.utils.eval_utils import (
     load_saved_experiment_config,
 )
 
+pytestmark = pytest.mark.no_sim
+
 
 @pytest.fixture
 def mock_wandb_run() -> mock.MagicMock:
@@ -261,6 +263,30 @@ def test_load_saved_experiment_config_uses_generic_remote_loader(
 
     assert loaded_cfg == cfg
     assert run_path is None
+
+
+@pytest.mark.parametrize("extra_default", [False, True], ids=["exact-defaults", "superset-defaults"])
+def test_load_saved_experiment_config_migrates_legacy_checkpoint(tmp_path: Path, extra_default: bool) -> None:
+    """A checkpoint dumped before the RobotConfig refactor loads through the legacy migration."""
+    import yaml
+
+    legacy_dump = Path(__file__).parent / "data" / "legacy_g1_29dof_experiment_config.yaml"
+    raw = yaml.safe_load(legacy_dump.read_text())
+    raw["robot"]["init_state"]["rot"] = [0.0, 0.6, 0.0, 0.8]  # xyzw; a non-identity rotation pins the reorder
+    expected_defaults = dict(raw["robot"]["init_state"]["default_joint_angles"])
+    if extra_default:
+        raw["robot"]["init_state"]["default_joint_angles"]["imu_in_torso_joint"] = 0.0
+    checkpoint_path = tmp_path / "model.pt"
+    torch.save({"experiment_config": raw}, checkpoint_path)
+
+    loaded_cfg, _ = load_saved_experiment_config(CheckpointConfig(checkpoint=str(checkpoint_path)))
+    assert loaded_cfg.robot.body_tags["#feet"] == ["left_ankle_roll_link", "right_ankle_roll_link"]
+    assert loaded_cfg.robot.init_state.orientation == [0.8, 0.0, 0.6, 0.0]
+    assert loaded_cfg.robot.init_state.orientation_xyzw == [0.0, 0.6, 0.0, 0.8]
+    assert loaded_cfg.robot.init_state.default_joint_positions == expected_defaults
+    assert loaded_cfg.robot.default_dof_positions() == expected_defaults
+    assert list(loaded_cfg.robot.default_dof_positions()) == raw["robot"]["dof_names"]
+    assert "default_joint_angles" not in loaded_cfg.to_serializable_dict()["robot"]["init_state"]
 
 
 def test_load_saved_experiment_config_no_inputs() -> None:

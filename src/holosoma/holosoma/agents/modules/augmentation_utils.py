@@ -4,25 +4,30 @@ from typing import Any, Dict, List, Sequence
 
 import torch
 
+from holosoma.config_types.algo import JointSymmetryConfig
+
 
 class SymmetryUtils:
-    """Symmetry utilities for humanoid robots using configuration-driven approach.
+    """Sagittal-plane mirroring of observations and actions for symmetry augmentation.
 
-    This class provides symmetry transformations for data augmentation and mirroring
-    operations. All robot-specific information is loaded from the environment's
-    robot configuration.
+    The joint mirror comes from the algorithm's ``JointSymmetryConfig`` (exact joint names or ``#tag``
+    references), validated against ``env.robot_config.joint_tags`` before conversion to DOF indices;
+    the observation layout comes from the env's observation manager.
     """
 
-    def __init__(self, env: Any) -> None:
+    def __init__(self, env: Any, symmetry: JointSymmetryConfig) -> None:
         """Initializes the symmetry utilities.
 
         Parameters
         ----------
         env : Any
-            Environment object containing robot configuration and observation specifications.
+            Environment exposing ``dof_names``, ``robot_config``, ``device`` and the observation
+            specification.
+        symmetry : JointSymmetryConfig
+            Left/right joint pairs and sign-flip joints, as names or ``#tag`` references.
         """
         self.env = env
-        self.robot_config = env.robot_config
+        self.symmetry = symmetry
 
         # Initialize attributes that will be set during initialization
         self.observation_dims: Dict[str, int] = {}
@@ -37,8 +42,8 @@ class SymmetryUtils:
         self.joint_index_map: torch.Tensor = torch.empty(0)
         self.sign_flip_mask: torch.Tensor = torch.empty(0)
 
-        self._init_observation_config()
         self._init_robot_config()
+        self._init_observation_config()
 
     def _init_observation_config(self) -> None:
         """Initializes observation configuration from environment.
@@ -48,49 +53,7 @@ class SymmetryUtils:
         """
         self.history_lengths = self.env.history_length
 
-        # Check if using observation manager or direct system
-        if getattr(self.env, "observation_manager", None):
-            # Observation manager system - get info from observation manager
-            self._init_observation_config_from_manager()
-        else:
-            # Direct observation system
-            self._init_observation_config_direct()
-
-    def _init_observation_config_direct(self) -> None:
-        """Initialize observation config from direct system."""
-        # sub_observation_dims contains the dimension of each observation component
-        # e.g.) sub_observation_dims: {base_ang_vel: 3, projected_gravity: 3, ...}
-        # observation_dims contains the total dimension per observation type (including history)
-        # e.g.) observation_dims: {actor_obs: (3 + 3 + ...) * history_length}
-        self.sub_observation_dims = self.env.config.obs.obs_dims
-        self.observation_dims = self.env.dim_obs
-
-        self.sub_observation_indices = {}
-        self.sub_observation_indices_single_frame = {}
-        self.sub_observation_keys = {}
-        self.observation_dims_single_frame = {}
-
-        for obs_key, obs_config in self.env.config.obs.obs_dict.items():
-            # e.g.) obs_key: actor_obs, obs_config: [base_ang_vel, projected_gravity, ...]
-            sub_obs_keys = sorted(obs_config)
-            self.sub_observation_keys[obs_key] = sub_obs_keys
-            self.sub_observation_indices[obs_key] = {}
-            self.sub_observation_indices_single_frame[obs_key] = {}
-            idx = 0
-            for key in sub_obs_keys:
-                # Indices for single frame (used during mirroring after reshape)
-                self.sub_observation_indices_single_frame[obs_key][key] = torch.arange(
-                    idx, idx + self.sub_observation_dims[key], device=self.env.device
-                )
-                # For direct config, observations may not have explicit history handling in indices
-                # These indices work with the full flattened observation
-                self.sub_observation_indices[obs_key][key] = torch.arange(
-                    idx, idx + self.sub_observation_dims[key], device=self.env.device
-                )
-                idx += self.sub_observation_dims[key]
-
-            # Store single-frame dimension (sum of all sub-observation dimensions)
-            self.observation_dims_single_frame[obs_key] = idx
+        self._init_observation_config_from_manager()
 
     def _init_observation_config_from_manager(self) -> None:
         """Initialize observation config from observation manager."""
@@ -148,45 +111,32 @@ class SymmetryUtils:
             self.observation_dims_single_frame[group_name] = idx_single_frame
 
     def _init_robot_config(self) -> None:
-        """Initializes robot configuration from config files.
+        """Builds the joint index map and sign-flip mask from the symmetry spec.
 
-        This method loads joint mappings and sign flip configurations directly from
-        the robot config.
+        ``left[i]`` and ``right[i]`` swap; every other DOF maps to itself. Indices are positions in
+        ``env.dof_names``. The config and runtime share ordered correspondence validation, including
+        repetitions within tags and sign masks that would prevent the mirror from being its own inverse.
         """
-        # Validate required config attributes
-        if not self.robot_config.dof_names:
-            raise ValueError("Robot config must contain 'dof_names' list")
-        if not self.robot_config.symmetry_joint_names:
-            raise ValueError("Robot config must contain 'symmetry_joint_names' mapping")
-        if not self.robot_config.flip_sign_joint_names:
-            raise ValueError("Robot config must contain 'flip_sign_joint_names' list")
-
-        # Get joint configuration from robot config
-        dof_names = self.robot_config.dof_names
-        joint_name_mapping = self.robot_config.symmetry_joint_names
-        sign_flip_joints = self.robot_config.flip_sign_joint_names
-
-        # Create name to index mapping
-        name_to_idx = {name: idx for idx, name in enumerate(dof_names)}
-
-        # Build joint index mapping
-        joint_index_mapping = {}
-        for joint1, joint2 in joint_name_mapping.items():
-            if joint1 in name_to_idx and joint2 in name_to_idx:
-                joint_index_mapping[name_to_idx[joint1]] = name_to_idx[joint2]
-
-        # Create joint mapping tensor
-        self.joint_index_map = torch.tensor(
-            [joint_index_mapping.get(i, i) for i in range(len(dof_names))], device=self.env.device, dtype=torch.long
+        left_names, right_names, flip_names = self.symmetry.resolve(
+            self.env.robot_config.joint_tags, self.env.dof_names
         )
+        indices = {name: index for index, name in enumerate(self.env.dof_names)}
 
-        # Create sign flip mask
-        sign_flip_indices = {name_to_idx[name] for name in sign_flip_joints if name in name_to_idx}
-        self.sign_flip_mask = torch.tensor(
-            [-1.0 if i in sign_flip_indices else 1.0 for i in range(len(dof_names))],
-            device=self.env.device,
-            dtype=torch.float,
-        )
+        def index_tensor(names: list[str]) -> torch.Tensor:
+            return torch.tensor([indices[name] for name in names], device=self.env.device, dtype=torch.long)
+
+        left, right, flip = index_tensor(left_names), index_tensor(right_names), index_tensor(flip_names)
+
+        num_dof = len(self.env.dof_names)
+        identity = torch.arange(num_dof, device=self.env.device, dtype=torch.long)
+        joint_index_map = identity.clone()
+        joint_index_map[left] = right
+        joint_index_map[right] = left
+        self.joint_index_map = joint_index_map
+
+        sign_flip_mask = torch.ones(num_dof, device=self.env.device, dtype=torch.float)
+        sign_flip_mask[flip] = -1.0
+        self.sign_flip_mask = sign_flip_mask
 
     def augment_observations(self, obs: torch.Tensor, env: Any, obs_list: Sequence[str]) -> torch.Tensor:
         """Applies x-z plane symmetry transformation for observation data augmentation.
@@ -260,17 +210,17 @@ class SymmetryUtils:
 
         for obs_key in obs_list:
             cur_obs_length = self.observation_dims[obs_key]
-            mirrored_obs = mirrored_obs_all[..., idx : idx + cur_obs_length]
-            # Reshape to [batch, history_length, single_frame_obs_dim]
-            mirrored_obs = mirrored_obs.reshape(
-                B, self.history_lengths[obs_key], self.observation_dims_single_frame[obs_key]
-            )
-            # Apply mirroring to each sub-observation component using single-frame indices
+            group = mirrored_obs_all[..., idx : idx + cur_obs_length]
+            history = self.history_lengths[obs_key]
+            # The observation manager stacks history per TERM and concatenates the terms (term-major:
+            # all frames of term a, then all frames of term b), so each term is mirrored on its own
+            # [batch, history, term_dim] block.
             for sub_obs_key in self.sub_observation_keys[obs_key]:
-                mirrored_obs[..., self.sub_observation_indices_single_frame[obs_key][sub_obs_key]] = getattr(
-                    self, f"mirror_obs_{sub_obs_key}"
-                )(mirrored_obs[..., self.sub_observation_indices_single_frame[obs_key][sub_obs_key]])
-            mirrored_obs_all[..., idx : idx + cur_obs_length] = mirrored_obs.reshape(B, cur_obs_length)
+                block_idx = self.sub_observation_indices[obs_key][sub_obs_key]
+                # A shared term name can have different feature widths in different groups.
+                term_dim = block_idx.numel() // history
+                block = group[..., block_idx].reshape(B, history, term_dim)
+                group[..., block_idx] = getattr(self, f"mirror_obs_{sub_obs_key}")(block).reshape(B, -1)
             idx += cur_obs_length
 
         return mirrored_obs_all

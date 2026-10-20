@@ -20,6 +20,7 @@ from holosoma.config_types.video import (
     FixedCameraConfig,
     SphericalCameraConfig,
 )
+from holosoma.utils.name_tags import resolve_single_name_spec
 
 if TYPE_CHECKING:
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
@@ -85,16 +86,7 @@ class CameraController:
         Smoothed camera target for reducing shake.
     """
 
-    # Default tracking body names to try in order of preference
-    DEFAULT_TRACKING_BODY_NAMES = [
-        "Trunk",  # Common in humanoid robots
-        "torso",  # Standard anatomical naming
-        "base_link",  # ROS standard naming convention
-        "Waist",  # Alternative trunk naming
-        "pelvis",  # Anatomical naming for hip area
-        "hip",  # Simple hip naming
-        "base",  # Generic base naming
-    ]
+    DEFAULT_TRACKING_BODY_SPEC = "#base"
 
     def __init__(
         self,
@@ -250,11 +242,10 @@ class CameraController:
         self.smoothed_cam_target = None
 
     def _resolve_tracking_body(self) -> None:
-        """Resolve robot tracking body using automatic fallback logic.
+        """Resolve the configured exact body name or single-body tag.
 
-        Tries body names in order using the simulator's find_rigid_body_indice()
-        method. First tries the explicitly configured tracking_body_name (if set),
-        then falls back to default body names.
+        An explicitly configured selector is tried first; ``#base`` is the semantic
+        default and fallback.
 
         Raises
         ------
@@ -264,25 +255,29 @@ class CameraController:
         # Get tracking_body_name from config (with fallback for configs without this field)
         tracking_body_name = getattr(self.config, "tracking_body_name", "auto")
 
-        # Build list of names to try: explicit name first (if set), then defaults
+        # Build selectors to try: explicit name/tag first (if set), then the semantic default.
         if tracking_body_name and tracking_body_name != "auto":
-            names_to_try = [tracking_body_name] + self.DEFAULT_TRACKING_BODY_NAMES
+            specs_to_try = list(dict.fromkeys((tracking_body_name, self.DEFAULT_TRACKING_BODY_SPEC)))
         else:
-            names_to_try = self.DEFAULT_TRACKING_BODY_NAMES
+            specs_to_try = [self.DEFAULT_TRACKING_BODY_SPEC]
 
-        # Try each name in order until one works
-        for name in names_to_try:
+        for spec in specs_to_try:
             try:
+                name = resolve_single_name_spec(
+                    spec,
+                    self.simulator.robot_config.body_tags,
+                    self.simulator.body_names,
+                    kind="body",
+                )
                 self.robot_body_id = self.simulator.find_rigid_body_indice(name)
-                logger.debug(f"Camera controller resolved tracking body: {name}")
+                logger.debug(f"Camera controller resolved tracking body {spec!r} to {name!r}")
                 return
-            except Exception:  # noqa: S112, PERF203
+            except (RuntimeError, TypeError, ValueError):  # noqa: PERF203
                 continue
 
-        # If no names worked, fail with helpful error
         raise ValueError(
-            f"No suitable tracking body found. Tried: {names_to_try}. "
-            f"Please set tracking_body_name explicitly to a valid body name in your robot model."
+            f"No suitable tracking body found. Tried: {specs_to_try}. "
+            "Set tracking_body_name to an exact body name or a tag that resolves to one body."
         )
 
     def _get_robot_position(self) -> tuple[float, float, float]:

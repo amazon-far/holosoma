@@ -209,6 +209,12 @@ class TerrainTermCfg:
     name: str = "floor"
     """Mujoco-only: object (geom) name to assign to terrain. Use to match MJCF files <contacts> e.g, 'floor'."""
 
+    feet_height_bodies: list[str] | None = None
+    """Robot bodies whose height above the terrain is raycast each step (``feet_heights`` columns, in order).
+    Entries are exact body names or ``#tag`` references into the robot's ``body_tags``.
+    ``None`` (default) = auto: ``["#feet_height"]`` iff the robot declares a ``feet_height`` body tag, else
+    feet-height raycasts are off. ``[]`` = off. An explicit list is resolved strictly (unknown name/tag raises)."""
+
 
 @dataclass(frozen=True)
 class TerrainManagerCfg:

@@ -40,7 +40,7 @@ def _build(device: str):
     env_origins[:, 0] = torch.arange(NUM_ENVS, device=sim.device, dtype=torch.float32) * 5.0
     init = config.robot.init_state
     base_init = torch.tensor(
-        list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel),
+        init.root_state_list(),
         device=device,
         dtype=torch.float32,
     )
@@ -90,8 +90,8 @@ def main() -> int:
 
     selected_envs = torch.tensor([0, 2], device=sim.device, dtype=torch.long)
     unselected_envs = torch.tensor([1, 3], device=sim.device, dtype=torch.long)
-    lower = sim.hard_dof_pos_limits[:, 0]
-    upper = sim.hard_dof_pos_limits[:, 1]
+    lower = sim.dof_pos_limits[:, 0]
+    upper = sim.dof_pos_limits[:, 1]
     midpoint = (lower + upper) * 0.5
     offset = (upper - lower) * 0.1
     target = torch.empty(len(selected_envs), sim.num_dof, 2, device=sim.device)
