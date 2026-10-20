@@ -1,10 +1,10 @@
 """Live Isaac Sim regression: a frame egressed at FRAME_END shows the state written for that frame.
 
-The direct loop closes a frame on the control step's LAST substep, on the premise that IsaacSim's
-periodic render pass has drawn by then, so a camera consumer sees the state that step wrote and not
-the previous step's. The unit tests in ``utils/tests/test_sim_utils.py`` assert that against a fake
-whose render gate reproduces this schedule as read from ``isaacsim.py`` — which cannot notice the
-backend changing underneath it. This measures the premise on the real renderer instead.
+The task control frame closes on the control step's LAST substep, on the premise that the scheduled
+render has drawn by then, so a camera consumer sees the state that step wrote and not the previous
+step's. The unit tests in ``envs/base_task/tests/test_frame_egress.py`` assert that against a fake
+renderer — which cannot notice the backend changing underneath it. This measures the premise on the
+real renderer instead, through a real ``SimulationTask``.
 
 Method: the robot carries the camera and faces a red panel. One control step writes the pose that
 frames the panel, the next writes one 10 m to the side. If the loop's frame boundary is right, the
@@ -39,43 +39,26 @@ def _red_fraction(image) -> float:
     return float(mask.sum()) / float(mask.numel())
 
 
-def _build(device: str):
-    """A one-env headless IsaacSim on the panel-target scene with the forward camera mounted."""
+def _config(device: str):
+    """A one-env headless, unpaced IsaacSim task on the panel-target scene with the forward camera."""
     from tests.simulators import _camera_presets
-    from tests.simulators._sim_harness import build_run_sim_config, launch_simulator
+    from tests.simulators._sim_harness import build_run_sim_config
 
     config = build_run_sim_config(
         "isaacsim", "panel-target", "g1-29dof", "terrain_locomotion_plane", sensors=_camera_presets.front_cam
     )
-    config = dataclasses.replace(
-        config, device=device, training=dataclasses.replace(config.training, num_envs=1, headless=True)
+    return dataclasses.replace(
+        config,
+        device=device,
+        time_scale=0.0,
+        training=dataclasses.replace(config.training, num_envs=1, headless=True),
     )
-
-    import torch
-
-    sim, device, _app = launch_simulator(config, device=device)
-    sim.set_headless(True)
-    sim.setup()
-    sim.setup_terrain()
-    sim.load_assets()
-    init = config.robot.init_state
-    base_init = torch.tensor(
-        list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
-    )
-    sim.create_envs(1, torch.zeros(1, 3, device=device), base_init)
-    sim.prepare_sim()
-    sim.install_plugins()
-    return sim, config, device
 
 
 def _main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--result-file", default=None, help="write 'OK' here after PASS (teardown-robust)")
     args = parser.parse_args()
-
-    import torch
-
-    from holosoma.simulator.base_simulator.hooks import Phase
 
     failures: list[str] = []
 
@@ -84,8 +67,17 @@ def _main() -> int:
         if not ok:
             failures.append(name)
 
-    sim, config, device = _build("cuda:0")
-    decimation = config.simulator.config.sim.control_decimation_steps
+    config = _config("cuda:0")
+    with config.create_task() as task:
+        return _check_frames(task, config, check, failures, args.result_file)
+
+
+def _check_frames(task, config, check, failures: list[str], result_file: str | None) -> int:
+    import torch
+
+    from holosoma.simulator.base_simulator.hooks import Phase
+
+    sim, device = task.simulator, task.device
     camera = next(iter(config.sensor))
     env_ids = torch.arange(1, device=device)
     init = config.robot.init_state
@@ -107,17 +99,16 @@ def _main() -> int:
         dof_state[:, :, 0] = spawn_dof
         sim.set_dof_state_tensor_robots(env_ids, dof_state)
 
+    offset = [0.0]
+    task.hooks.add(Phase.PRE_STEP, lambda: write_pose(offset[0]), name="test.write_pose")
+
     def frame(offset_y: float) -> float:
-        """Drive one control step the way DirectSimulation.run does; return the egressed red fraction."""
-        sim.hooks.emit(Phase.FRAME_BEGIN)
-        for _ in range(decimation):
-            write_pose(offset_y)
-            sim.hooks.emit(Phase.PRE_STEP)
-            sim.simulate_at_each_physics_step()
-            sim.hooks.emit(Phase.POST_STEP)
-        sim.refresh_sim_tensors()
-        sim.hooks.emit(Phase.FRAME_END)  # render_sensors runs here, as it does under the real loop
+        """Drive one real task control frame; return the red fraction egressed at its FRAME_END."""
+        offset[0] = offset_y
+        task.step({})
         return _red_fraction(sim.get_camera_data(camera, "rgb")[0])
+
+    task.reset_all()
 
     # Settle so the first measured frame is not competing with spawn transients.
     for _ in range(6):
@@ -142,8 +133,8 @@ def _main() -> int:
         print(f"FAILED: {failures}")
         return 1
     print("ALL PASS")
-    if args.result_file:
-        Path(args.result_file).write_text("OK\n")
+    if result_file:
+        Path(result_file).write_text("OK\n")
     return 0
 
 
