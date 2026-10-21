@@ -661,8 +661,7 @@ class FastSACAgent(BaseAlgo):
         args = self.config
         device = self.device
         if args.compile:
-            # Compiling _update_main destabilizes multi-GPU training when the compile cache is cold.
-            update_main = self._update_main if self.is_multi_gpu else torch.compile(self._update_main)
+            update_main = torch.compile(self._update_main)
             update_pol = torch.compile(self._update_pol)
             policy = torch.compile(self.policy)
             normalize_obs = torch.compile(self.obs_normalizer.forward)
