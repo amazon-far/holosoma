@@ -394,6 +394,7 @@ def train(tyro_config: ExperimentConfig, training_context: TrainingContext | Non
         if is_distributed:
             logger.info("Shutting down distributed processes...")
             dist.destroy_process_group()
+        logger.info("Training complete; closing simulation resources.")
     except Exception as e:
         tb_str = traceback.format_exc()
         logger.error(f"Exception occurred during training: {e}\n{tb_str}")
@@ -408,8 +409,6 @@ def train(tyro_config: ExperimentConfig, training_context: TrainingContext | Non
             if active_exception is None:
                 raise
             logger.exception("Training cleanup failed while preserving the active exception")
-
-    logger.info("Training shutdown complete.")
 
 
 def main() -> None:
