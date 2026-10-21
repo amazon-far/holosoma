@@ -22,12 +22,20 @@ on:
         required: false
         type: boolean
         default: false
+      release_commit:
+        description: >-
+          Commit being released, when it differs from commit_sha (a reused PR image set is
+          labelled with the PR head; this also tags it with the merge commit)
+        required: false
+        type: string
+        default: ''
 permissions:
   contents: read
 
 env:
   ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
   HOLOSOMA_COMMIT: ${{ inputs.commit_sha }}
+  RELEASE_COMMIT: ${{ inputs.release_commit }}
   SOURCE_TAG: ${{ inputs.source_tag || format('sha-{0}', inputs.commit_sha) }}
 
 jobs:
@@ -49,6 +57,10 @@ jobs:
           set -euo pipefail
           [[ "$HOLOSOMA_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
             echo "commit_sha must be a full 40-character lowercase Git SHA" >&2
+            exit 1
+          }
+          [[ -z "$RELEASE_COMMIT" || "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "release_commit must be empty or a full 40-character lowercase Git SHA" >&2
             exit 1
           }
           if [[ ! "$SOURCE_TAG" =~ ^(sha|tested-sha)-[0-9a-f]{40}$ ]] &&
@@ -161,15 +173,33 @@ jobs:
             "${{ needs.verify-images.outputs.holosoma_thor_inference_digest }}"
             "${{ needs.verify-images.outputs.holosoma_thor_inference_ros_digest }}"
           )
+          # A reused PR image set is labelled with the PR head; also tag it with the merged commit.
+          commits=("$HOLOSOMA_COMMIT")
+          if [[ -n "$RELEASE_COMMIT" && "$RELEASE_COMMIT" != "$HOLOSOMA_COMMIT" ]]; then
+            commits+=("$RELEASE_COMMIT")
+          fi
           for index in "${!images[@]}"; do
             image=${images[$index]}
             digest=${digests[$index]}
             src="${ECR_REGISTRY}/${image}@${digest}"
-            sha_dst="${ECR_REGISTRY}/${image}:sha-${HOLOSOMA_COMMIT}"
-            latest_dst="${ECR_REGISTRY}/${image}:latest"
-            docker buildx imagetools create \
-              --tag "$sha_dst" \
-              --tag "$latest_dst" \
-              "$src"
+            tags=(--tag "${ECR_REGISTRY}/${image}:latest")
+            dependency_tags=()
+            for commit in "${commits[@]}"; do
+              tags+=(--tag "${ECR_REGISTRY}/${image}:sha-${commit}")
+              dependency_tags+=(--tag "${ECR_REGISTRY}/${image}:dependencies-sha-${commit}")
+            done
+            docker buildx imagetools create "${tags[@]}" "$src"
+
+            # Downstream images build on the dependency stage, so publish it under the same commits.
+            # Image sets tested before dependency tags existed have none; skip rather than fail.
+            dependency="${ECR_REGISTRY}/${image}:dependencies-${SOURCE_TAG}"
+            if dependency_digest=$(docker buildx imagetools inspect \
+                --format '{{.Manifest.Digest}}' "$dependency" 2>/dev/null) &&
+               [[ "$dependency_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              docker buildx imagetools create "${dependency_tags[@]}" \
+                "${ECR_REGISTRY}/${image}@${dependency_digest}"
+            else
+              echo "::warning::No dependency image at ${dependency}; not tagging dependencies-sha for ${image}."
+            fi
           done
-          echo "Promoted the verified \`${SOURCE_TAG}\` digests to the SHA and latest image sets." >> "$GITHUB_STEP_SUMMARY"
+          echo "Promoted the verified \`${SOURCE_TAG}\` digests and their dependency images to the SHA and latest image sets for: ${commits[*]}." >> "$GITHUB_STEP_SUMMARY"

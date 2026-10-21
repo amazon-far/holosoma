@@ -163,6 +163,7 @@ jobs:
       source_tag: tested-sha-${{ needs.find-tested-images.outputs.commit_sha }}
       expected_source_tree: ${{ needs.find-tested-images.outputs.source_tree }}
       tests_already_passed: true
+      release_commit: ${{ github.sha }}
     secrets: inherit
 
   test-and-promote-built-images:
@@ -183,6 +184,7 @@ jobs:
     with:
       commit_sha: ${{ github.sha }}
       source_tag: candidate-${{ github.sha }}-${{ github.run_id }}
+      release_commit: ${{ github.sha }}
     secrets: inherit
 
   report-main-failure:

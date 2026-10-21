@@ -143,5 +143,19 @@ jobs:
               --tag "$sha_dst" \
               --tag "$tested_dst" \
               "$src"
+
+            # Tag the dependency image the same way, so release promotion and downstream builds
+            # (which layer on the dependency stage) can find it without this run's id.
+            dependency="${ECR_REGISTRY}/${image}:dependencies-${CANDIDATE_TAG}"
+            dependency_digest=$(docker buildx imagetools inspect \
+              --format '{{.Manifest.Digest}}' "$dependency")
+            [[ "$dependency_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+              echo "Could not resolve ${dependency} to an image digest" >&2
+              exit 1
+            }
+            docker buildx imagetools create \
+              --tag "${ECR_REGISTRY}/${image}:dependencies-sha-${HOLOSOMA_COMMIT}" \
+              --tag "${ECR_REGISTRY}/${image}:dependencies-tested-sha-${HOLOSOMA_COMMIT}" \
+              "${ECR_REGISTRY}/${image}@${dependency_digest}"
           done
-          echo "Promoted tested candidate \`${CANDIDATE_TAG}\` to the SHA image set." >> "$GITHUB_STEP_SUMMARY"
+          echo "Promoted tested candidate \`${CANDIDATE_TAG}\` and its dependency images to the SHA image set." >> "$GITHUB_STEP_SUMMARY"
