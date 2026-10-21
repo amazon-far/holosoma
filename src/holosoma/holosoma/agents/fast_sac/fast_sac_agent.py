@@ -661,11 +661,14 @@ class FastSACAgent(BaseAlgo):
         args = self.config
         device = self.device
         if args.compile:
-            update_main = torch.compile(self._update_main)
-            update_pol = torch.compile(self._update_pol)
-            policy = torch.compile(self.policy)
-            normalize_obs = torch.compile(self.obs_normalizer.forward)
-            normalize_critic_obs = torch.compile(self.critic_obs_normalizer.forward)
+            if args.compile_mode is not None and args.compile_options is not None:
+                raise ValueError("Set at most one of compile_mode and compile_options; torch.compile accepts only one.")
+            mode, options = args.compile_mode, args.compile_options
+            update_main = torch.compile(self._update_main, mode=mode, options=options)
+            update_pol = torch.compile(self._update_pol, mode=mode, options=options)
+            policy = torch.compile(self.policy, mode=mode, options=options)
+            normalize_obs = torch.compile(self.obs_normalizer.forward, mode=mode, options=options)
+            normalize_critic_obs = torch.compile(self.critic_obs_normalizer.forward, mode=mode, options=options)
         else:
             update_main = self._update_main
             update_pol = self._update_pol
