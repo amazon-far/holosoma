@@ -35,7 +35,10 @@ def _extra_from_cli(args: list[str]) -> dict[str, NativeValue]:
     try:
         value = json.loads(args[0])
     except ValueError:
-        value = ast.literal_eval(args[0])
+        try:
+            value = ast.literal_eval(args[0])
+        except SyntaxError as exc:
+            raise ValueError("extra settings expect a valid JSON object or Python dictionary") from exc
     if not isinstance(value, dict):
         raise ValueError("extra settings expect a JSON object or Python dictionary")
     return value

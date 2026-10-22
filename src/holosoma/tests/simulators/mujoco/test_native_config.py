@@ -693,6 +693,18 @@ def test_warp_rejects_sleep_before_device_allocation_but_scene_compilation_is_ba
         WarpBackend(model, mujoco.MjData(model), config, "cpu")
 
 
+def test_warp_rejects_cpu_with_device_argument_in_error():
+    pytest.importorskip("mujoco_warp")
+    from holosoma.simulator.mujoco.backends.warp_backend import WarpBackend
+
+    native = MujocoConfig()
+    model = compiled(native, backend=mjwarp)
+    config = warp_backend_config(native)
+    assert config.plugin == {}
+    with pytest.raises(ValueError, match=r"device='cpu'.*CUDA"):
+        WarpBackend(model, mujoco.MjData(model), config, "cpu")
+
+
 @pytest.mark.parametrize(
     "device",
     [

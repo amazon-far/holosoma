@@ -89,6 +89,20 @@ def test_extra_cli_false_and_yaml_values_roundtrip() -> None:
     assert adapter.validate_python(yaml.safe_load(yaml.safe_dump(adapter.dump_python(cfg, mode="json")))) == cfg
 
 
+@pytest.mark.parametrize("path", ["simulator.config.sim.mujoco.extra", "simulator.config.sim.mujoco.warp.extras"])
+@pytest.mark.parametrize("value", ["{'a': 0", '{"a": }'])
+def test_malformed_extra_cli_values_report_usage_errors(
+    path: str, value: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as error:
+        parse_config(RunSimConfig, args=["simulator:mujoco", f"--{path}", value])
+    assert error.value.code == 2
+    message = capsys.readouterr().err
+    assert f"--{path}" in message
+    assert "JSON" in message and "dictionary" in message
+    assert "Traceback" not in message
+
+
 @pytest.mark.parametrize(
     ("kind", "values"),
     [

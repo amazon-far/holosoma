@@ -205,6 +205,8 @@ class WarpBackend(IMujocoBackend):
         ------
         ImportError
             If warp or mujoco_warp packages are not installed
+        ValueError
+            If native settings are invalid or unsupported, or device is not CUDA
         RuntimeError
             If GPU initialization fails
         """
@@ -230,7 +232,7 @@ class WarpBackend(IMujocoBackend):
         wp.init()
         self.mjw_device = wp.get_device(device)
         if not self.mjw_device.is_cuda:
-            raise ValueError("simulator.config.sim.mujoco: WarpBackend requires a CUDA device")
+            raise ValueError(f"device={device!r}: WarpBackend requires a CUDA device")
 
         logger.info(f"Initializing WarpBackend: {self.num_envs} envs on {device}")
 
@@ -256,7 +258,7 @@ class WarpBackend(IMujocoBackend):
             # Memory allocation strategy (following mujoco_warp API):
             # - nconmax: average contacts per environment, pooled across all environments
             # - njmax: hard constraint capacity per environment
-            # - naconmax: total contacts across ALL environments (auto-calculated internally)
+            # - naconmax: total contact pool, configured explicitly or defaulting to nconmax*num_envs
             try:
                 self.mjw_data = mjw.make_data(model, **allocation)
             except (ValueError, NotImplementedError) as exc:
