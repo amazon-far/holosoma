@@ -25,9 +25,10 @@ import itertools
 import json
 import math
 import sys
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from os import getenv
-from typing import Any, Iterable, NamedTuple
+from typing import Any, NamedTuple
 
 import wandb
 
