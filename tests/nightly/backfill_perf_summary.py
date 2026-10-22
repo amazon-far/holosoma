@@ -57,6 +57,11 @@ WARMUP_ROWS = 1
 HISTORY_SAMPLE_CAP = 200_000
 HISTORY_PAGE_SIZE = 10_000
 
+# Runs in these states have not finished logging. Aggregating one would store figures
+# from a partial history and mark it processed, so the real numbers would never be
+# recorded. They are left for a later pass instead.
+UNFINISHED_STATES = frozenset({"running", "pending"})
+
 # Summary keys are written under their own prefix rather than reusing the `Perf/`
 # history namespace, so a run's history and its aggregates can't shadow each other.
 SUMMARY_PREFIX = "perf/"
@@ -341,28 +346,34 @@ def main() -> None:
                     break
                 processed += 1
 
-                if args.cells_only:
-                    try:
+                # One guard around everything this run touches. Reading a run's summary
+                # loads it lazily and can raise on its own -- a project can list runs
+                # that no longer load individually -- so a check placed outside the
+                # guard lets a single unreadable run end the pass.
+                try:
+                    if run.state in UNFINISHED_STATES:
+                        print(f"{run.name}: still {run.state}, leaving for a later pass")
+                        skipped += 1
+                        continue
+
+                    if args.cells_only:
                         cell = backfill_cell_only(run, args.dry_run)
                         if cell is None:
                             skipped += 1
                         else:
                             print(f"{run.name} -> {cell}")
                             written += 1
-                    except Exception as e:  # keep going; one bad run shouldn't stop the pass
-                        print(f"{run.name}: failed: {e}")
-                    continue
+                        continue
 
-                if not args.force and not needs_backfill(run):
-                    skipped += 1
-                    continue
+                    if not args.force and not needs_backfill(run):
+                        skipped += 1
+                        continue
 
-                print(f"{run.name} ({run.id})")
-                try:
+                    print(f"{run.name} ({run.id})")
                     if backfill_run(run, args.dry_run, backup):
                         written += 1
                 except Exception as e:  # keep going; one bad run shouldn't stop the pass
-                    print(f"  failed: {e}")
+                    print(f"{run.name}: failed: {e}")
 
     print(f"\nUpdated {written} run(s), skipped {skipped} already-current run(s)")
 
