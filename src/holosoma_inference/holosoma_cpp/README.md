@@ -64,6 +64,25 @@ Select) are the same as in the [Python runtime](../README.md#policy-controls).
 
 ## Performance
 
+### Contextual policy library
+
+An optional `contextual` configuration section selects the depth-conditioned policy through `holosoma::Policy`. It uses the same `OnnxModel`, provider setup, buffers, profiling and factory as the other native policies. Configure `task.use_phase: false`, the runtime joint names/defaults/gains, and the contextual depth geometry. Models use float32 `obs` and `depth_image`, optional `time_step`, named `actions`, and optional `climb_pred` outputs. The contextual policy supplies zero for the legacy `time_step` input.
+
+```cpp
+holosoma::Policy policy(config);
+holosoma::ContextualInput input;
+input.monotonic_time = now_seconds;
+input.depth = normalized_depth_frame;
+input.velocity = std::array<double, 3>{vx, vy, yaw_rate};
+const auto& command = policy.step(robot_state, input);
+```
+
+Each inference tick requires its own input. Optional command fields are events: omitting them retains the current command rather than resetting a pending transition. Missing depth inserts one zero frame; the caller owns freshness and any startup gate. Climb arbitration can evaluate twice using the same observation/history tick. Reset clears temporal policy state. The contextual identity-orientation fallback is retained for zero/nonfinite quaternions; other policy kinds keep their strict state validation.
+
+Contextual and live WBT share a ±20 raw-action ceiling before action scaling and previous-action feedback; live WBT can retain a tighter checkpoint limit. Observation clipping and research-policy behavior are independent. Nearest-primitive calibration is caller-supplied through `velocity_primitives`, distance scales and an optional in-place yaw threshold. Metadata joint permutations and configured-gain precedence are retained.
+
+The generic Python `Policy` binding accepts the same `ContextualInput`, and `NativePolicy.step_contextual` forwards to it. There is no Python contextual inference implementation. The standalone SDK runner does not acquire depth frames: transports embed this API and supply their own sensor input, engagement lifecycle and command publication. Existing performance figures below concern the named research policies, not contextual deployment latency.
+
 Measured in sim-to-sim with the MuJoCo bridge on a c6i.4xlarge (Intel Xeon 8375C), using the runtimes' own
 per-tick latency reports:
 

@@ -113,7 +113,7 @@ class BasePolicy {
   // Builds actor_obs for this tick into last_obs_ (updates history).
   const std::vector<float>& prepare_actor_obs(const RobotState& state);
   void print_observations(const std::vector<float>& obs) const;
-  void resolve_gains(ModelSlot& slot) const;
+  virtual void resolve_gains(ModelSlot& slot) const;
   ModelSlot& active_slot() { return *slots_.at(static_cast<size_t>(active_index_)); }
   const ModelSlot& active_slot() const { return *slots_.at(static_cast<size_t>(active_index_)); }
   static std::vector<double> clip_action(const std::vector<float>& raw);
