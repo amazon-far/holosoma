@@ -4,13 +4,13 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from holosoma.config_types.algo import AlgoInitConfig
+from holosoma.policy_task import PolicyTask
 from holosoma.utils.helpers import instantiate
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
     from holosoma.agents.callbacks.base_callback import RLEvalCallback
     from holosoma.config_types.experiment import ExperimentConfig
-    from holosoma.policy_task import PolicyTask
 
 
 class BaseAlgo:

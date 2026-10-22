@@ -25,7 +25,7 @@ before PPO takes over.
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any, TypedDict, cast
+from typing import Any, TypedDict, cast
 
 import torch
 from torch import nn
@@ -37,9 +37,7 @@ from holosoma.agents.modules.advantages import compute_gae_returns, normalize_ad
 from holosoma.agents.modules.module_utils import setup_student_teacher_module
 from holosoma.agents.modules.student_teacher_modules import StudentTeacherCritic
 from holosoma.config_types.algo import DistillationPPOConfig
-
-if TYPE_CHECKING:
-    from holosoma.policy_task import PolicyTask
+from holosoma.policy_task import PolicyTask
 
 
 class DistillationMinibatch(TypedDict):
