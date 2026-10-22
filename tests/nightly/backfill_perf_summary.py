@@ -338,7 +338,12 @@ def main() -> None:
                 filters = {f"summary_metrics.{CELL_KEY}": {"$exists": False}}
             else:
                 filters = {f"summary_metrics.{BACKFILL_VERSION_KEY}": {"$ne": BACKFILL_VERSION}}
-            runs = api.runs(path=f"{WANDB_ENTITY}/{project_name}", filters=filters, order="-created_at")
+            # Read the whole list before writing anything. The filter selects runs that
+            # are not yet current, so processing one removes it from that selection; a
+            # paginator still walking the selection then shifts under itself and skips
+            # roughly a page for every page completed, silently doing half the work.
+            runs = list(api.runs(path=f"{WANDB_ENTITY}/{project_name}", filters=filters, order="-created_at"))
+            print(f"{len(runs)} run(s) to consider")
 
             processed = 0
             for run in runs:
