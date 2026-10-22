@@ -56,10 +56,10 @@ def _render_depth_kernel(
 ) -> None:
     # wp.tid() returns a tuple for a 3D launch; Warp's stubs type it as an int.
     i, x, y = wp.tid()  # type: ignore[misc]
-    env = env_ids[i]  # type: ignore[has-type]
+    env = env_ids[i]
     origin = cam_pos[env]
     rotation = cam_quat[env]
-    pixel = wp.vec3(float(x), float(y), 1.0)  # type: ignore[has-type]
+    pixel = wp.vec3(float(x), float(y), 1.0)
     ray = wp.normalize(wp.quat_rotate(rotation, wp.transform_vector(k_inv, pixel)))
     principal = wp.normalize(wp.quat_rotate(rotation, wp.transform_vector(k_inv, wp.vec3(float(c_x), float(c_y), 1.0))))
     # Distance along the ray times this cosine is the distance to the image plane.
@@ -78,18 +78,36 @@ def _render_depth_kernel(
         q = body_quat[env, b]
         local_origin = wp.quat_rotate_inv(q, origin - body_pos[env, b])
         local_ray = wp.quat_rotate_inv(q, ray)
-        if wp.mesh_query_ray(  # type: ignore[call-arg, truthy-bool]
-            body_meshes[b], local_origin, local_ray, bound / cosine, distance, u, v, sign, normal, face
+        if wp.mesh_query_ray(  # type: ignore[call-arg]
+            body_meshes[b],
+            local_origin,  # type: ignore[arg-type]
+            local_ray,  # type: ignore[arg-type]
+            bound / cosine,
+            distance,
+            u,
+            v,
+            sign,
+            normal,
+            face,
         ):
             hit = cosine * distance
             if best == _NO_HIT or hit < best:
                 best = hit
                 bound = hit
-    if wp.mesh_query_ray(  # type: ignore[call-arg, truthy-bool]
-        terrain_mesh, origin, ray, bound / cosine, distance, u, v, sign, normal, face
+    if wp.mesh_query_ray(  # type: ignore[call-arg]
+        terrain_mesh,
+        origin,
+        ray,  # type: ignore[arg-type]
+        bound / cosine,
+        distance,
+        u,
+        v,
+        sign,
+        normal,
+        face,
     ):
         best = cosine * distance
-    depth[env, y, x] = best  # type: ignore[has-type]
+    depth[env, y, x] = best
 
 
 class WarpDepthCamera:
