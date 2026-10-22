@@ -319,6 +319,7 @@ def main() -> None:
     api = wandb.Api(timeout=60)
     written = 0
     skipped = 0
+    deferred = 0
 
     with contextlib.ExitStack() as stack:
         backup = stack.enter_context(open(args.backup, "a")) if args.backup else None
@@ -358,7 +359,7 @@ def main() -> None:
                 try:
                     if run.state in UNFINISHED_STATES:
                         print(f"{run.name}: still {run.state}, leaving for a later pass")
-                        skipped += 1
+                        deferred += 1
                         continue
 
                     if args.cells_only:
@@ -380,7 +381,9 @@ def main() -> None:
                 except Exception as e:  # keep going; one bad run shouldn't stop the pass
                     print(f"{run.name}: failed: {e}")
 
-    print(f"\nUpdated {written} run(s), skipped {skipped} already-current run(s)")
+    # Counted separately: a deferred run will be picked up later, whereas a skipped one
+    # is finished with. Reporting them as one number hid which had happened.
+    print(f"\nUpdated {written} run(s), skipped {skipped} already-current, deferred {deferred} unfinished")
 
 
 if __name__ == "__main__":
