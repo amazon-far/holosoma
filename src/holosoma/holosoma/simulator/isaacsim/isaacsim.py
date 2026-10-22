@@ -790,9 +790,13 @@ class IsaacSim(BaseSimulator):
         """No-op: joint state is re-read every physics step and root state is read lazily."""
 
     def synchronize_after_reset(self) -> None:
-        """Flush reset state and update derived articulation state without integration."""
+        """Update link kinematics for reset writes, then refresh, without advancing physics or sensors.
 
-        self.forward_kinematics()
+        Reset writes already reached PhysX. Unlike ``forward_kinematics``, this skips
+        ``scene.update``, which would advance sensor clocks and contact history with no time passing.
+        """
+        self.sim.forward()
+        self._state_version += 1
         self.refresh_sim_tensors()
 
     def requires_step_render(self) -> bool:
