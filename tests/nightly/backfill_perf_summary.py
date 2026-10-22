@@ -80,7 +80,7 @@ RUN_DURATION_KEY = f"{SUMMARY_PREFIX}run_duration_s"
 CELL_KEY = f"{SUMMARY_PREFIX}cell"
 
 # Tag vocabulary written by nightly.py. Keep in sync with it and with run_summary.py.
-KNOWN_SIMULATORS = {"isaacgym", "isaacsim", "mujoco"}
+KNOWN_SIMULATORS = {"isaacgym", "isaacsim", "mujoco", "mjwarp"}
 RESERVED_TAG_PREFIXES = ("nightly-", "gha-run-id-", "gpus-")
 RESERVED_TAGS = KNOWN_SIMULATORS | {
     "singlegpu",

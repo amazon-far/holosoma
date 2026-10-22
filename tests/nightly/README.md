@@ -217,9 +217,11 @@ path is not exercised for MuJoCo. Those cells set `sim_preset: mjwarp` while lea
 in the MuJoCo one. The preset matters: training needs thousands of parallel environments
 and the classic MuJoCo backend is single-env, so only MJWarp can run it.
 
-Both MuJoCo backends report `mujoco` as their simulator name, so these runs are tagged
-and labelled `mujoco` rather than `mjwarp`, and a classic-backend run would be
-indistinguishable from an MJWarp one in a `perf/cell` label.
+Both MuJoCo backends report `mujoco` as their simulator name, so `nightly.py` tags runs
+using `simulator_tag`, which reports `mjwarp` when the backend is the GPU one. Without
+that the two engines — one CPU and single-env, the other GPU and multi-env — would share a
+tag, be indistinguishable in a `perf/cell` label, and have their throughput pooled into
+one baseline.
 
 ## Environment Variables
 

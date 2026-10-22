@@ -41,7 +41,7 @@ PERF_PROJECT = "nightly-holosoma-runs"
 PERF_CELL_KEY = "perf/cell"
 TREND_CELLS = (
     "g1_29dof_manager | isaacsim | gpus-1",
-    "g1_29dof_manager | mujoco | gpus-1",
+    "g1_29dof_manager | mjwarp | gpus-1",
 )
 TREND_METRIC_KEY = "perf/collection_time_mean"
 TREND_METRIC_LABEL = "collection_time mean"
@@ -80,7 +80,7 @@ TREND_FLAT = "⚪"
 # Simulator tag values set by nightly.py (config.simulator.config.name). "isaacgym" is retained
 # for ARCHIVED runs only -- the backend is retired; dropping it would make historical runs resolve
 # their exp_name to the literal tag instead of falling back to "unknown-sim".
-KNOWN_SIMULATORS = {"isaacgym", "isaacsim", "mujoco"}
+KNOWN_SIMULATORS = {"isaacgym", "isaacsim", "mujoco", "mjwarp"}
 # GPU count for a multi-GPU nightly run; used only as a fallback for legacy runs
 # tagged with "multigpu" but no explicit "gpus-N" tag. Keep in sync with nightly.py.
 MULTIGPU_NUM_GPUS = 4
