@@ -43,8 +43,12 @@ TREND_METRIC_KEY = "perf/collection_time_mean"
 TREND_METRIC_LABEL = "collection_time mean"
 # Unit of the tracked metric, appended to every figure. Change alongside the metric key.
 TREND_UNIT = "s"
-# Saved workspace view scoped to TREND_CELL, linked under the figures.
-TREND_VIEW_URL = "https://far.wandb.io/far-wandb/nightly-holosoma-runs?nw=cehaiiecce4"
+# Link offered under the figures. A saved view's identifier only exists on the instance
+# it was created on, so naming one here would break as soon as the job is pointed
+# elsewhere; set PERF_TREND_VIEW_URL to a view scoped to TREND_CELL to use one. Left
+# unset, the link falls back to the project the runs were read from, derived from a run's
+# own URL and so correct on any instance.
+TREND_VIEW_URL = getenv("PERF_TREND_VIEW_URL", "")
 TREND_VIEW_LABEL = "Performance trends"
 # Enough history to cover the longest comparison window and its predecessor.
 TREND_LOOKBACK_DAYS = 60
@@ -375,8 +379,12 @@ def _trend_marker(later: PeriodStat | None, earlier: PeriodStat | None, sigma: f
     return f"{TREND_BETTER if improved else TREND_WORSE}{arrow}"
 
 
-def _fetch_trend_series() -> list[tuple[datetime, float]]:
-    """The tracked metric for the tracked cell, newest first."""
+def _fetch_trend_series() -> tuple[list[tuple[datetime, float]], str | None]:
+    """The tracked metric for the tracked cell newest first, with a link to its project.
+
+    The link is taken from a run's own URL so it addresses whichever wandb instance the
+    job is pointed at, rather than naming one.
+    """
     api = wandb.Api(timeout=60)
     since = (datetime.now(timezone.utc) - timedelta(days=TREND_LOOKBACK_DAYS)).isoformat()
 
@@ -390,15 +398,19 @@ def _fetch_trend_series() -> list[tuple[datetime, float]]:
     )
 
     series: list[tuple[datetime, float]] = []
+    project_url: str | None = None
     for run in runs:
         value = (run.summary or {}).get(TREND_METRIC_KEY)
         created = getattr(run, "created_at", None)
         if not isinstance(value, (int, float)) or not math.isfinite(value) or not created:
             continue
         series.append((datetime.fromisoformat(str(created).replace("Z", "+00:00")), float(value)))
+        run_url = getattr(run, "url", None)
+        if project_url is None and run_url and "/runs/" in run_url:
+            project_url = run_url.rsplit("/runs/", 1)[0]
 
     series.sort(key=lambda entry: entry[0], reverse=True)
-    return series
+    return series, project_url
 
 
 def format_trend_line() -> str | None:
@@ -408,7 +420,7 @@ def format_trend_line() -> str | None:
     must never be the reason the summary fails to post.
     """
     try:
-        series = _fetch_trend_series()
+        series, project_url = _fetch_trend_series()
         if len(series) < 2:
             print(f"Not enough history for {TREND_CELL!r} to build a trend line")
             return None
@@ -447,18 +459,19 @@ def format_trend_line() -> str | None:
         label_width = max(len(label) for _, label, _, _ in rendered)
         before_width = max(len(before) for _, _, before, _ in rendered)
 
-        return "\n".join(
-            [
-                f"⏱️ {TREND_METRIC_LABEL} · {TREND_CELL}",
-                "```",
-                *(
-                    f"{marker} {label:>{label_width}}: {before:<{before_width}} → {after}"
-                    for marker, label, before, after in rendered
-                ),
-                "```",
-                f"📈 [{TREND_VIEW_LABEL}]({TREND_VIEW_URL})",
-            ]
-        )
+        lines = [
+            f"⏱️ {TREND_METRIC_LABEL} · {TREND_CELL}",
+            "```",
+            *(
+                f"{marker} {label:>{label_width}}: {before:<{before_width}} → {after}"
+                for marker, label, before, after in rendered
+            ),
+            "```",
+        ]
+        link = TREND_VIEW_URL or project_url
+        if link:
+            lines.append(f"📈 [{TREND_VIEW_LABEL}]({link})")
+        return "\n".join(lines)
     except Exception as e:
         print(f"Could not build the performance trend line: {e}")
         return None
