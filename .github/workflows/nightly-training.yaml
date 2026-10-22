@@ -74,6 +74,13 @@ jobs:
             "$ECR_REGISTRY/holosoma:latest" \
             bash -e -o pipefail -c """
               source scripts/source_${{ matrix.simulator }}_setup.sh
+              # Every rank's Kit startup creates this directory, and when several do it
+              # at once the losers of the race die on it. A rank that dies during startup
+              # never joins the first collective, so the survivors wait there until the
+              # job's own timeout, burning a multi-GPU runner for sixteen hours and
+              # logging no training steps. Creating it up front removes the race.
+              # The version is part of the path, so this needs revisiting on an upgrade.
+              mkdir -p /isaac-sim/kit/data/Kit/Isaac-Sim/5.1/pip3-envs/default || true
               # The checkout is bind-mounted over the image, so refresh the
               # editable install metadata and its entry-point registrations.
               python -m pip install --force-reinstall --no-deps \
