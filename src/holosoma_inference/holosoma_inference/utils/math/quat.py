@@ -68,6 +68,30 @@ def quat_inverse(q01):
     return np.concatenate((q01[:, 0:1], -q01[:, 1:]), axis=1)
 
 
+def quat_from_angle_axis(angle, axis):
+    """Quaternion (wxyz) for a rotation of ``angle`` radians about ``axis``.
+
+    Parameters
+    ----------
+    angle : float
+        Rotation angle in radians.
+    axis : np.ndarray
+        Rotation axis, shape (3,). Normalized internally.
+
+    Returns
+    -------
+    np.ndarray
+        Quaternion of shape (1, 4) in wxyz order.
+    """
+    axis = np.asarray(axis, dtype=np.float64)
+    norm = np.linalg.norm(axis)
+    if norm == 0.0:
+        return np.array([[1.0, 0.0, 0.0, 0.0]])
+    axis = axis / norm
+    half = 0.5 * float(angle)
+    return np.concatenate([[[np.cos(half)]], (np.sin(half) * axis).reshape(1, 3)], axis=1)
+
+
 def quat_mul(a, b):
     "a: (1, 4), b: (1, 4), wxyz"
     assert a.shape == b.shape

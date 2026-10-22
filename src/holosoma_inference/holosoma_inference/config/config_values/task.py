@@ -67,9 +67,31 @@ safety_locomotion_g1 = TaskConfig(
     joystick_device=0,
 )
 
+# Depth distillation (vision-based locomotion over stairs / rough terrain).
+# model_path must be given as the ordered pair
+# [depth_backbone.onnx, student.onnx]; policy_action_scale is overridden by the
+# student's ONNX ``action_scale`` metadata when present.
+wbt_distillation = TaskConfig(
+    model_path="",  # user supplies both paths
+    policy_type="depth_distillation",
+    rl_rate=50,
+    policy_action_scale=1.0,
+    use_phase=False,
+    gait_period=1.0,
+    desired_base_height=0.75,
+    residual_upper_body_action=False,
+    domain_id=0,
+    interface="lo",
+    velocity_input="keyboard",
+    state_input="keyboard",
+    joystick_type="xbox",
+    joystick_device=0,
+)
+
 TASK_REGISTRY.add("locomotion", locomotion)
 TASK_REGISTRY.add("wbt", wbt)
 TASK_REGISTRY.add("safety_locomotion_g1", safety_locomotion_g1)
+TASK_REGISTRY.add("wbt-distillation", wbt_distillation)
 
 __getattr__ = deprecated_defaults_alias(__name__, TASK_REGISTRY)
 get_defaults = deprecated_get_defaults(__name__, TASK_REGISTRY)
