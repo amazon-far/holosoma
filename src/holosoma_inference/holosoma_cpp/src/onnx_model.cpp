@@ -37,6 +37,8 @@ int64_t TensorInfo::element_count() const {
 }
 
 struct OnnxModel::Impl {
+  bool use_gpu = false;
+  bool profiling = false;
   std::unique_ptr<Ort::Session> session;
   Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
   std::vector<const char*> input_names;
@@ -46,20 +48,21 @@ struct OnnxModel::Impl {
   Ort::RunOptions run_options;
 };
 
-OnnxModel::OnnxModel(const std::string& path, bool use_gpu, int intra_op_threads)
+OnnxModel::OnnxModel(const std::string& path, bool use_gpu, int intra_op_threads, const std::string& profile_prefix)
     : impl_(std::make_unique<Impl>()), path_(path) {
   if (!std::filesystem::is_regular_file(path)) {
     throw std::runtime_error("ONNX model not found: " + path);
   }
   Ort::SessionOptions options;
+  impl_->use_gpu = use_gpu;
+  impl_->profiling = !profile_prefix.empty();
+  if (impl_->profiling) options.EnableProfiling(profile_prefix.c_str());
   // A single thread: these MLPs are tiny and a pool only adds wake-up jitter.
   options.SetIntraOpNumThreads(intra_op_threads > 0 ? intra_op_threads : 1);
   options.SetInterOpNumThreads(1);
   options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-  if (use_gpu) {
-    enable_cuda(options);
-  }
   try {
+    if (use_gpu) enable_cuda(options);
     impl_->session = std::make_unique<Ort::Session>(ort_env(), path.c_str(), options);
   } catch (const Ort::Exception& e) {
     throw std::runtime_error("Failed to load ONNX model " + path + ": " + e.what());
@@ -108,6 +111,17 @@ OnnxModel::OnnxModel(const std::string& path, bool use_gpu, int intra_op_threads
 }
 
 OnnxModel::~OnnxModel() = default;
+
+std::string OnnxModel::finish_profile() {
+  if (!impl_->profiling) throw std::logic_error("Profiling was not enabled");
+  Ort::AllocatorWithDefaultOptions allocator;
+  return impl_->session->EndProfilingAllocated(allocator).get();
+}
+
+const char* OnnxModel::provider() const { return impl_->use_gpu ? "CUDAExecutionProvider" : "CPUExecutionProvider"; }
+
+std::string onnx_runtime_version() { return Ort::GetVersionString(); }
+std::vector<std::string> onnx_available_providers() { return Ort::GetAvailableProviders(); }
 
 const TensorInfo* OnnxModel::find_input(const std::string& name) const {
   for (const auto& info : inputs_) {
