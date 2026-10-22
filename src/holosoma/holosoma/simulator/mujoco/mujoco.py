@@ -852,13 +852,12 @@ class MuJoCo(BaseSimulator):
         self._sync_sim_state(advance_contact_history=True)
 
     def sync_sim_state(self) -> None:
-        """Expose fresh MuJoCo state without rotating control-frame contact history."""
-        self._sync_sim_state(advance_contact_history=False)
+        """No-op: joint and root state are live views of the MuJoCo data."""
 
     def synchronize_after_reset(self) -> None:
         """Run FK after state writes, then expose reset state without rotating history."""
         self.forward_kinematics()
-        self.sync_sim_state()
+        self._sync_sim_state(advance_contact_history=False)
 
     def _sync_sim_state(self, *, advance_contact_history: bool) -> None:
         if self.num_bodies <= 0:

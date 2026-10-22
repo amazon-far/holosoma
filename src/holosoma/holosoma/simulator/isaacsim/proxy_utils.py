@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import torch
 
 from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw, fullstate_xyzw_to_wxyz
@@ -19,6 +21,12 @@ class RootStatesProxy:
     ----------
     tensor_wxyz : torch.Tensor
         Root states tensor with quaternions in wxyz format.
+    version : Callable[[], int], optional
+        Returns the backend's state version. When it differs from the version the cached
+        tensors were taken at, the next access re-reads ``latest()``. Writes through the
+        proxy stay authoritative until the version advances.
+    latest : Callable[[], torch.Tensor], optional
+        Returns the backend's current wxyz root states. Required with ``version``.
 
     Attributes
     ----------
@@ -28,12 +36,32 @@ class RootStatesProxy:
         Converted tensor with quaternions in xyzw format.
     """
 
-    def __init__(self, tensor_wxyz: torch.Tensor) -> None:
+    def __init__(
+        self,
+        tensor_wxyz: torch.Tensor,
+        *,
+        version: Callable[[], int] | None = None,
+        latest: Callable[[], torch.Tensor] | None = None,
+    ) -> None:
+        if (version is None) != (latest is None):
+            raise ValueError("RootStatesProxy needs both version and latest, or neither.")
+        self._version = version
+        self._latest = latest
         self.reset(tensor_wxyz)
 
     def reset(self, tensor_wxyz: torch.Tensor) -> None:
         self.tensor_wxyz = tensor_wxyz
         self.tensor_xyzw = fullstate_wxyz_to_xyzw(tensor_wxyz)
+        self._cached_version = None if self._version is None else self._version()
+
+    def invalidate(self) -> None:
+        """Re-read on next access, e.g. after a root write that bypassed this proxy."""
+        self._cached_version = None
+
+    def _ensure_current(self) -> None:
+        if self._version is not None and self._cached_version != self._version():
+            assert self._latest is not None
+            self.reset(self._latest())
 
     def __getitem__(self, index: int | slice | torch.Tensor) -> torch.Tensor:
         """Get tensor values in xyzw quaternion format.
@@ -48,6 +76,7 @@ class RootStatesProxy:
         torch.Tensor
             Tensor values with quaternions in xyzw format.
         """
+        self._ensure_current()
         return self.tensor_xyzw[index]
 
     def __setitem__(self, index: int | slice | torch.Tensor, value_xyzw: torch.Tensor) -> None:
@@ -60,6 +89,7 @@ class RootStatesProxy:
         value_xyzw : torch.Tensor
             Values to set with quaternions in xyzw format.
         """
+        self._ensure_current()
         self.tensor_xyzw[index] = value_xyzw
         self.tensor_wxyz = fullstate_xyzw_to_wxyz(self.tensor_xyzw)
 
@@ -76,6 +106,7 @@ class RootStatesProxy:
         torch.Tensor
             Tensor with quaternions in wxyz format.
         """
+        self._ensure_current()
         if env_ids is None:
             return self.tensor_wxyz
         return self.tensor_wxyz[env_ids]

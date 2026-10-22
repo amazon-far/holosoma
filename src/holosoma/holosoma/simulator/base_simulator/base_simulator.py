@@ -528,13 +528,18 @@ class BaseSimulator:
         raise NotImplementedError("The 'refresh_sim_tensors' method must be implemented in subclasses.")
 
     def sync_sim_state(self) -> None:
-        """Expose fresh state without advancing once-per-control-frame history."""
+        """Make robot root and joint state current between physics substeps.
+
+        Called before every substep. Body and contact state need only be current after
+        ``refresh_sim_tensors``. The default does a full refresh; backends override it with
+        something cheaper when their root and joint state are already current.
+        """
         self.refresh_sim_tensors()
 
     def synchronize_after_reset(self) -> None:
         """Flush reset state and refresh backend state without advancing physics."""
         self.write_state_updates()
-        self.sync_sim_state()
+        self.refresh_sim_tensors()
 
     def clear_contact_forces_history(self, env_ids: torch.Tensor) -> None:
         """Clear the contact-forces history for the specified environments.

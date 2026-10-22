@@ -219,6 +219,9 @@ class IsaacSim(BaseSimulator):
         # self.metadata["render_fps"] = 1. / self.config.sim.fps * self.config.sim.control_decimation
 
         self._sim_step_counter = 0
+        # Advanced whenever articulation buffers change (physics step or FK); read by the
+        # robot root-state proxy to decide when to re-read.
+        self._state_version = 0
 
         # Set True by the keyboard controller's push-robots key; polled by external tooling.
         self.push_requested: bool = False
@@ -626,7 +629,11 @@ class IsaacSim(BaseSimulator):
         self._register_scene_assets()
 
         # Create before state adapter, needs a reference
-        self.robot_root_states = RootStatesProxy(self._robot.data.root_state_w)  # (num_envs, 13)
+        self.robot_root_states = RootStatesProxy(
+            self._robot.data.root_state_w,
+            version=lambda: self._state_version,
+            latest=lambda: self._robot.data.root_state_w,
+        )  # (num_envs, 13)
 
         # Create state adapter after object registry and robot root states are set
         self._state_adapter = IsaacSimStateAdapter(
@@ -758,6 +765,7 @@ class IsaacSim(BaseSimulator):
 
         # update buffers at sim
         self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
+        self._state_version += 1
 
         # Need to update these tensors after each step, since they are used in `_apply_force_in_physics_step`
         self.dof_pos = self._robot.data.joint_pos[:, self.dof_ids]  # (num_envs, num_dof)
@@ -784,12 +792,16 @@ class IsaacSim(BaseSimulator):
         self.sim.forward()
 
         self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
+        self._state_version += 1
+
+    def sync_sim_state(self) -> None:
+        """No-op: joint state is re-read every physics step and root state is read lazily."""
 
     def synchronize_after_reset(self) -> None:
         """Flush reset state and update derived articulation state without integration."""
 
         self.forward_kinematics()
-        self.sync_sim_state()
+        self.refresh_sim_tensors()
 
     def requires_step_render(self) -> bool:
         has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording
