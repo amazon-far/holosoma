@@ -55,6 +55,11 @@ deviations apart, so ordinary noise reads as flat:
 The `1d` pair is the two most recent runs rather than calendar days, so a skipped night
 compares against the previous run that exists instead of reporting a gap.
 
+Under the figures is a link to a saved workspace view of the same configuration, taken
+from `PERF_TREND_VIEW_URL_<CELL>` (see [Environment Variables](#environment-variables)).
+With that variable unset the link falls back to the whole project, which shows every
+configuration at once.
+
 ```bash
 # Print summary to console
 uv run --script ./tests/nightly/run_summary.py
@@ -159,17 +164,27 @@ Creates a saved wandb workspace view plotting the above over time — one point 
 against when that run started, so drift is visible across nights rather than within a run.
 
 Sections cover training throughput, collection time and learning time (min, mean and max
-per run, plus a combined bar panel), and total run duration. Run
-`backfill_perf_summary.py` first or the panels will be empty.
+per run), and total run duration. Run `backfill_perf_summary.py` first or the panels will
+be empty.
 
 ```bash
 uv run --script ./tests/nightly/perf_workspace.py
 uv run --script ./tests/nightly/perf_workspace.py --name "My trends view"
+
+# A view of a single matrix cell, which is what the Slack trend block links to
+uv run --script ./tests/nightly/perf_workspace.py --cell "g1_29dof_manager | isaacsim | gpus-1"
 ```
 
-Runs are grouped by tag so the experiment / simulator / GPU-count matrix cells are
-distinguishable. They share a y-axis, and multi-GPU throughput is roughly 4x single-GPU by
-construction, so filter to one cell in the UI when comparing absolute numbers.
+Throughput is not comparable across cells — multi-GPU figures are roughly 4x single-GPU by
+construction — and the panels share a y-axis, so a view covering every cell is only useful
+for spotting shape. `--cell` filters a view to one cell on the `perf/cell` summary key,
+which keeps a point per run; grouping would not, because it collapses each group to one
+aggregated point and the aggregation cannot combine run timestamps.
+
+The command prints the saved view's URL. Nothing derives it: a view identifier is assigned
+when the view is saved and only exists on the instance it was created on, and it is the
+only thing a view URL carries — the cell filter is part of the stored view, not a query
+parameter — so a per-cell link has to be created once and then configured.
 
 ## Throughput warnings
 
@@ -203,6 +218,14 @@ All scripts support the following environment variables:
 - `GITHUB_RUN_ID`: GitHub Actions run ID (automatically set in CI)
 - `SLACK_BOT_TOKEN`: Slack bot token for posting messages
 - `SLACK_CHANNEL`: Slack channel to post to
+- `PERF_TREND_VIEW_URL_<CELL>`: saved workspace view the Slack trend block links to, one
+  variable per tracked configuration. `<CELL>` is the cell label upper-cased with every
+  run of other characters replaced by an underscore, so the tracked
+  `g1_29dof_manager | isaacsim | gpus-1` reads
+  `PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_ISAACSIM_GPUS_1`. Set it to the URL
+  `perf_workspace.py --cell` printed for that cell; the summary logs the name it looked
+  for whenever it is unset. CI supplies these from repository variables, because a view
+  identifier is specific to the wandb instance the view was created on.
 
 Reports are created in the `nightly-holosoma-runs` project on wandb.
 

@@ -127,6 +127,12 @@ jobs:
           WANDB_BASE_URL: ${{ vars.WANDB_BASE_URL }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL: '#far-holosoma-nightly-tests'
+          # Saved workspace view each trend block links to, one repository variable per
+          # tracked configuration, named after it (see run_summary.py) -- so tracking
+          # another configuration adds a line here. A view identifier is specific to the
+          # wandb instance the view was created on, so it is configured rather than
+          # committed; left unset, that block links the project instead.
+          PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_ISAACSIM_GPUS_1: ${{ vars.PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_ISAACSIM_GPUS_1 }}
         run: uv run --script ./tests/nightly/run_summary.py --slack
       - name: Check results
         run: |

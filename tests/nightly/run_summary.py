@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import re
 import statistics
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
@@ -43,12 +44,15 @@ TREND_METRIC_KEY = "perf/collection_time_mean"
 TREND_METRIC_LABEL = "collection_time mean"
 # Unit of the tracked metric, appended to every figure. Change alongside the metric key.
 TREND_UNIT = "s"
-# Link offered under the figures. A saved view's identifier only exists on the instance
-# it was created on, so naming one here would break as soon as the job is pointed
-# elsewhere; set PERF_TREND_VIEW_URL to a view scoped to TREND_CELL to use one. Left
-# unset, the link falls back to the project the runs were read from, derived from a run's
-# own URL and so correct on any instance.
-TREND_VIEW_URL = getenv("PERF_TREND_VIEW_URL", "")
+# Link offered under the figures, pointing at a saved workspace view of the tracked cell.
+# A view URL carries nothing but the view's identifier -- the cell filter lives in the
+# saved view rather than in the URL, so one view per cell is needed and no single base URL
+# can be narrowed to a cell. That identifier also only exists on the instance the view was
+# created on, so each one is named from the environment rather than here, in
+# `PERF_TREND_VIEW_URL_<cell>` (see `_trend_view_url`). Left unset, the link falls back to
+# the project the runs were read from, derived from a run's own URL and so correct on any
+# instance.
+TREND_VIEW_URL_ENV_PREFIX = "PERF_TREND_VIEW_URL"
 TREND_VIEW_LABEL = "Performance trends"
 # Enough history to cover the longest comparison window and its predecessor.
 TREND_LOOKBACK_DAYS = 60
@@ -379,6 +383,21 @@ def _trend_marker(later: PeriodStat | None, earlier: PeriodStat | None, sigma: f
     return f"{TREND_BETTER if improved else TREND_WORSE}{arrow}"
 
 
+def _trend_view_url(cell: str) -> str:
+    """URL of the saved workspace view scoped to one cell, or "" if nothing names it.
+
+    The variable name is the prefix followed by the cell label upper-cased, with every run
+    of other characters replaced by an underscore -- derived from the label so that
+    tracking another cell needs no second table to be kept in step with it. The view it
+    should point at is the one `perf_workspace.py --cell <cell>` creates.
+    """
+    variable = f"{TREND_VIEW_URL_ENV_PREFIX}_{re.sub('[^A-Z0-9]+', '_', cell.upper()).strip('_')}"
+    url = getenv(variable, "")
+    if not url:
+        print(f"{variable} is unset; linking the whole project rather than a view of {cell!r}")
+    return url
+
+
 def _fetch_trend_series() -> tuple[list[tuple[datetime, float]], str | None]:
     """The tracked metric for the tracked cell newest first, with a link to its project.
 
@@ -468,7 +487,7 @@ def format_trend_line() -> str | None:
             ),
             "```",
         ]
-        link = TREND_VIEW_URL or project_url
+        link = _trend_view_url(TREND_CELL) or project_url
         if link:
             lines.append(f"📈 [{TREND_VIEW_LABEL}]({link})")
         return "\n".join(lines)
