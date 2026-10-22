@@ -864,6 +864,9 @@ class MuJoCo(BaseSimulator):
         self._rigid_body_vel.copy_(linear_vel)
         self._rigid_body_ang_vel.copy_(angular_vel)
 
+    def sync_sim_state(self) -> None:
+        """No-op: joint and root state are live views of the MuJoCo data."""
+
     def synchronize_after_reset(self) -> None:
         """Run FK after state writes, then refresh the robot body state."""
         self.forward_kinematics()
