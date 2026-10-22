@@ -320,11 +320,19 @@ def main() -> None:
 
         for project_name in nightly_projects(api, args.project, args.all_projects):
             print(f"\n=== {WANDB_ENTITY}/{project_name}")
-            # Have the backend skip runs that already carry a cell label. The in-code
-            # check catches them anyway, but only after fetching each run in full, which
-            # is the entire cost of this pass -- so without this, resuming an interrupted
-            # pass costs as much as starting one.
-            filters = {f"summary_metrics.{CELL_KEY}": {"$exists": False}} if args.cells_only else None
+            # Have the backend skip runs that are already current. The in-code checks
+            # catch them anyway, but only after fetching each run in full, which is
+            # essentially the whole cost of a pass: without this, finding one night's
+            # runs among a project's history means fetching and discarding all of it.
+            # Matching on inequality rather than absence also re-selects runs left at
+            # an older version. --force wants everything, so it filters nothing.
+            filters: dict[str, dict[str, Any]] | None
+            if args.force:
+                filters = None
+            elif args.cells_only:
+                filters = {f"summary_metrics.{CELL_KEY}": {"$exists": False}}
+            else:
+                filters = {f"summary_metrics.{BACKFILL_VERSION_KEY}": {"$ne": BACKFILL_VERSION}}
             runs = api.runs(path=f"{WANDB_ENTITY}/{project_name}", filters=filters, order="-created_at")
 
             processed = 0
