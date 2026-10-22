@@ -19,8 +19,11 @@ python tests/nightly/nightly.py exp:g1-29dof logger:wandb simulator:isaacsim
 Generates a summary of recent nightly runs and posts to Slack. Automatically includes a link to the most recent wandb report at the top of the message.
 
 Usage:
-The message also carries a performance trend for a single tracked configuration
-(`TREND_CELL`): a heading naming the metric and configuration, then one bullet per
+The message also carries a performance trend for each configuration in `TREND_CELLS`,
+reported as its own block because the metric is not comparable across them. A
+configuration with too little history is skipped with a printed reason, so adding one
+before it has runs is harmless. Each block is a heading naming the metric and
+configuration, then one bullet per
 timescale comparing the mean of `TREND_METRIC_KEY`, each rendered as
 `<window>: <earlier> → <later>`:
 
@@ -206,6 +209,17 @@ The nightly workflow automatically:
 1. Runs training for multiple experiments across different configurations (simulator, GPU setup)
 2. Generates a wandb report with all results
 3. Posts a summary to Slack with a link to the report at the top
+
+Isaac Sim cells come from the matrix cross-product. MuJoCo cells are listed under
+`include` instead, so they are not crossed with the multi-GPU dimension — the distributed
+path is not exercised for MuJoCo. Those cells set `sim_preset: mjwarp` while leaving
+`simulator: mujoco`, because `simulator` names the environment to source and MJWarp ships
+in the MuJoCo one. The preset matters: training needs thousands of parallel environments
+and the classic MuJoCo backend is single-env, so only MJWarp can run it.
+
+Both MuJoCo backends report `mujoco` as their simulator name, so these runs are tagged
+and labelled `mujoco` rather than `mjwarp`, and a classic-backend run would be
+indistinguishable from an MJWarp one in a `perf/cell` label.
 
 ## Environment Variables
 
