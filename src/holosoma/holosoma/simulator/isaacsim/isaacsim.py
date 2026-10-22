@@ -222,6 +222,7 @@ class IsaacSim(BaseSimulator):
         # Advanced whenever articulation buffers change (physics step or FK); read by the
         # robot root-state proxy to decide when to re-read.
         self._state_version = 0
+        self._rigid_body_vel_cache: torch.Tensor | None = None
 
         # Set True by the keyboard controller's push-robots key; polled by external tooling.
         self.push_requested: bool = False
@@ -728,10 +729,25 @@ class IsaacSim(BaseSimulator):
         self._rigid_body_rot = self._robot.data.body_quat_w[:, self.body_ids][
             :, :, [1, 2, 3, 0]
         ]  # (num_envs, 4) 3 isaacsim use wxyz, we keep xyzw for consistency
-        # Match rigid_body_pos_w's link-frame origin. IsaacLab's legacy body_lin_vel_w alias is
-        # COM velocity, while body_link_lin_vel_w applies the required omega x (-COM offset).
-        self._rigid_body_vel = self._robot.data.body_link_lin_vel_w[:, self.body_ids, :]
+        self._rigid_body_vel_cache = None
         self._rigid_body_ang_vel = self._robot.data.body_ang_vel_w[:, self.body_ids, :]
+
+    @property
+    def _rigid_body_vel(self) -> torch.Tensor:
+        """Body link linear velocities, computed on first read after each refresh.
+
+        Isaac Lab's link-velocity path fetches body COMs from PhysX on every call, so tasks
+        that never read it do not pay for it.
+        """
+        if self._rigid_body_vel_cache is None:
+            # Match rigid_body_pos_w's link-frame origin. IsaacLab's legacy body_lin_vel_w alias is
+            # COM velocity, while body_link_lin_vel_w applies the required omega x (-COM offset).
+            self._rigid_body_vel_cache = self._robot.data.body_link_lin_vel_w[:, self.body_ids, :]
+        return self._rigid_body_vel_cache
+
+    @_rigid_body_vel.setter
+    def _rigid_body_vel(self, value: torch.Tensor) -> None:
+        self._rigid_body_vel_cache = value
 
     def clear_contact_forces_history(self, env_ids: torch.Tensor) -> None:
         if len(env_ids) > 0:
