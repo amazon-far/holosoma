@@ -6,7 +6,7 @@ import math
 import os
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import tqdm
 from loguru import logger
@@ -22,6 +22,7 @@ from holosoma.agents.fast_sac.fast_sac_utils import (
 from holosoma.agents.modules.augmentation_utils import SymmetryUtils
 from holosoma.agents.modules.logging_utils import LoggingHelper
 from holosoma.config_types.algo import FastSACConfig
+from holosoma.policy_task import PolicyTask
 from holosoma.utils.average_meters import TensorAverageMeterDict
 from holosoma.utils.helpers import instantiate
 from holosoma.utils.inference_helpers import (
@@ -42,9 +43,6 @@ from holosoma.utils.safe_torch_import import (
     optim,
     torch,
 )
-
-if TYPE_CHECKING:
-    from holosoma.policy_task import PolicyTask
 
 torch.set_float32_matmul_precision("high")
 

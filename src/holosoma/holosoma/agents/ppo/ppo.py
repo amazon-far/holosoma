@@ -3,7 +3,7 @@ from __future__ import annotations
 import itertools
 import os
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, TypedDict, cast
+from typing import Any, TypedDict, cast
 
 import torch
 import torch.distributed as dist
@@ -25,6 +25,7 @@ from holosoma.agents.modules.module_utils import (
     setup_ppo_critic_module,
 )
 from holosoma.config_types.algo import PPOConfig
+from holosoma.policy_task import PolicyTask
 from holosoma.utils.helpers import instantiate
 from holosoma.utils.inference_helpers import (
     attach_onnx_metadata,
@@ -34,9 +35,6 @@ from holosoma.utils.inference_helpers import (
     get_control_gains_from_config,
     get_urdf_text_from_robot_config,
 )
-
-if TYPE_CHECKING:
-    from holosoma.policy_task import PolicyTask
 
 console = Console()
 
