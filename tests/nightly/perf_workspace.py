@@ -19,7 +19,9 @@ from __future__ import annotations
 import argparse
 import unicodedata
 from os import getenv
+from urllib.parse import urlsplit
 
+import wandb
 import wandb_workspaces.reports.v2 as wr
 import wandb_workspaces.workspaces as ws
 
@@ -132,6 +134,26 @@ def build_workspace(view_name: str, project: str, trend: bool = True, cell: str 
     )
 
 
+def _browser_url(saved_url: str, project: str) -> str:
+    """The saved view's URL as a browser needs it.
+
+    View URLs are built from the host alone, dropping any path prefix a deployment
+    serves the app under, which gives a 404 where one is used. A run's own URL carries
+    the prefix, so rebuild the view URL on top of that. Falls back to the original if no
+    run is readable.
+    """
+    try:
+        api = wandb.Api(timeout=60)
+        run = next(iter(api.runs(path=f"{WANDB_ENTITY}/{project}", per_page=1)), None)
+        run_url = getattr(run, "url", None) if run else None
+        if not run_url or "/runs/" not in run_url:
+            return saved_url
+        return f"{run_url.rsplit('/runs/', 1)[0]}?{urlsplit(saved_url).query}"
+    except Exception as e:
+        print(f"Could not resolve the browser URL, reporting the raw one: {e}")
+        return saved_url
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         "perf_workspace",
@@ -150,7 +172,7 @@ def main() -> None:
     name = _safe_view_name(args.name if args.cell is None else f"{args.name} - {args.cell}")
     workspace = build_workspace(name, args.project, trend=not args.no_trend, cell=args.cell)
     saved = workspace.save_as_new_view()
-    print(f"Saved workspace view: {saved.url}")
+    print(f"Saved workspace view: {_browser_url(saved.url, args.project)}")
 
 
 if __name__ == "__main__":
