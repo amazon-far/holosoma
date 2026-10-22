@@ -7,6 +7,7 @@ environment simulation code.
 
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING, Any, cast
 
 import mujoco
@@ -77,7 +78,12 @@ class ClassicBackend(IMujocoBackend):
         self._grow_contact_buffers(self._INITIAL_CONTACT_CAPACITY)
         self._closed = False
         self._cam_ids: dict[str, int] = {}
-        self._mj_renderers: dict[str, dict[CameraDataType, mujoco.Renderer]] = {}
+        # A mujoco.Renderer's GL context belongs to the thread that built it, so renderers are kept
+        # per (thread, camera, modality). The control loop's are built in create_renderers; another
+        # thread (e.g. a plugin rendering off the physics thread) gets its own on first use.
+        self._mj_renderers: dict[tuple[int, str, CameraDataType], mujoco.Renderer] = {}
+        self._cam_sizes: dict[str, tuple[int, int]] = {}
+        self._cam_data_types: dict[str, tuple[CameraDataType, ...]] = {}
         self._sensor_scene_option = apply_sensor_scene_flags(False)
 
         logger.info(f"ClassicBackend initialized: {model.nbody} bodies, device={device}")
@@ -180,12 +186,24 @@ class ClassicBackend(IMujocoBackend):
             if cam_id < 0:
                 raise RuntimeError(f"Camera '{name}' not found in compiled model (expected a <camera> element).")
             self._cam_ids[name] = cam_id
-            cam_renderers = self._mj_renderers[name] = {}
+            self._cam_sizes[name] = (cam.config.height, cam.config.width)
+            self._cam_data_types[name] = tuple(cam.config.data_types)
             for data_type in cam.config.data_types:
-                renderer = mujoco.Renderer(self.model, height=cam.config.height, width=cam.config.width)
-                cam_renderers[data_type] = renderer
-                if data_type == "depth":
-                    renderer.enable_depth_rendering()
+                self._renderer_for(name, data_type)
+
+    def _renderer_for(self, name: str, data_type: CameraDataType) -> mujoco.Renderer:
+        """This thread's renderer for ``(name, data_type)``, built on first use."""
+        if data_type not in self._cam_data_types[name]:
+            raise ValueError(f"Camera '{name}' does not render modality '{data_type}'.")
+        key = (threading.get_ident(), name, data_type)
+        renderer = self._mj_renderers.get(key)
+        if renderer is None:
+            height, width = self._cam_sizes[name]
+            renderer = mujoco.Renderer(self.model, height=height, width=width)
+            if data_type == "depth":
+                renderer.enable_depth_rendering()
+            self._mj_renderers[key] = renderer
+        return renderer
 
     def close(self) -> None:
         """Close every mounted-camera renderer while its EGL context is still valid."""
@@ -193,12 +211,11 @@ class ClassicBackend(IMujocoBackend):
             return
         self._closed = True
         failures: list[str] = []
-        for camera, renderers in self._mj_renderers.items():
-            for data_type, renderer in renderers.items():
-                try:
-                    renderer.close()
-                except Exception as exc:  # noqa: PERF203 - close every renderer before reporting failures.
-                    failures.append(f"{camera}/{data_type}: {exc!r}")
+        for (_thread, camera, data_type), renderer in self._mj_renderers.items():
+            try:
+                renderer.close()
+            except Exception as exc:  # noqa: PERF203 - close every renderer before reporting failures.
+                failures.append(f"{camera}/{data_type}: {exc!r}")
         self._mj_renderers.clear()
         self._cam_ids.clear()
         if failures:
@@ -214,7 +231,7 @@ class ClassicBackend(IMujocoBackend):
             name = sensor_record.name
             cam_id = self._cam_ids[name]
             for dt in sensor_record.config.data_types:
-                renderer = self._mj_renderers[name][dt]
+                renderer = self._renderer_for(name, dt)
                 data = self.get_render_data(world_id=0)
                 renderer.update_scene(data, camera=cam_id, scene_option=self._sensor_scene_option)
                 frame = renderer.render()  # rgb: [H,W,3] uint8; depth: [H,W] float32 meters
