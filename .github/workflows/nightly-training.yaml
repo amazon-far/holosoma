@@ -159,6 +159,7 @@ jobs:
           # wandb instance the view was created on, so it is configured rather than
           # committed; left unset, that block links the project instead.
           PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_ISAACSIM_GPUS_1: ${{ vars.PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_ISAACSIM_GPUS_1 }}
+          PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_MJWARP_GPUS_1: ${{ vars.PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_MJWARP_GPUS_1 }}
         run: uv run --script ./tests/nightly/run_summary.py --slack
       - name: Check results
         run: |
