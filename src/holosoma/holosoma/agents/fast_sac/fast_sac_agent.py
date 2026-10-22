@@ -671,9 +671,18 @@ class FastSACAgent(BaseAlgo):
         device = self.device
         uses_cudagraphs = False
         if args.compile:
-            if args.compile_mode is not None and args.compile_options is not None:
-                raise ValueError("Set at most one of compile_mode and compile_options; torch.compile accepts only one.")
             mode, options = args.compile_mode, args.compile_options
+            source = "configured"
+            if mode == "auto":
+                # Multi-GPU training defaults to CUDA graphs; explicit compile options imply the default mode.
+                mode = "reduce-overhead" if self.is_multi_gpu and options is None else None
+                source = f"auto, {'multi' if self.is_multi_gpu else 'single'}-GPU"
+            if mode is not None and options is not None:
+                raise ValueError("Set at most one of compile_mode and compile_options; torch.compile accepts only one.")
+            if self.is_main_process:
+                logger.info(
+                    f"torch.compile mode: {mode or 'default'} ({source})" + (f", options: {options}" if options else "")
+                )
             if mode is not None:
                 uses_cudagraphs = bool(torch._inductor.list_mode_options(mode).get("triton.cudagraphs", False))
             elif options is not None:
