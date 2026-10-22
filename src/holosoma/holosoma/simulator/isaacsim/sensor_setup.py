@@ -38,6 +38,7 @@ from holosoma.simulator.isaacsim.prim_utils import (
 )
 from holosoma.simulator.shared.lidar_range import finalize_lidar_returns
 from holosoma.simulator.shared.sensor_manager import SensorManager
+from holosoma.simulator.shared.warp_depth_camera import register_warp_depth_cameras
 
 if TYPE_CHECKING:
     from holosoma.config_types.sensor import LidarRayPatternConfig, SensorMountConfig
@@ -462,7 +463,8 @@ def render_lidars(sim: IsaacSim) -> None:
 def build_sensors(sim: IsaacSim) -> None:
     """Build native sensors before environment cloning."""
     needs_expanded_robot = any(
-        isinstance(config, LidarSensorConfig) or config.mount.target_kind == "robot_link"
+        isinstance(config, LidarSensorConfig)
+        or (isinstance(config, CameraSensorConfig) and config.mount.target_kind == "robot_link")
         for config in sim.sensor_config.values()
     )
     if needs_expanded_robot:
@@ -481,9 +483,12 @@ def create_sensors(sim: IsaacSim) -> None:
     sim.sensor_manager = manager
     register_cameras(sim, manager)
     register_lidars(sim, manager)
+    register_warp_depth_cameras(sim, manager)
 
 
 def render_sensors(sim: IsaacSim) -> None:
     """Capture all camera and LiDAR sensors due this control step."""
     render_cameras(sim)
     render_lidars(sim)
+    if sim.sensor_manager is not None:
+        sim.sensor_manager.render_shared()

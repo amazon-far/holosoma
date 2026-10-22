@@ -660,7 +660,114 @@ class LidarSensorConfig:
         return self
 
 
-SensorConfig = CameraSensorConfig | LidarSensorConfig
+@dataclass(frozen=True, config=_FORBID_EXTRA)
+class WarpDepthMountRandomizationConfig:
+    """Per-environment perturbation of a Warp depth camera's mount, drawn once at creation.
+
+    Offsets are uniform in ``[min, max]`` and expressed in the mount-link frame: the position
+    offset is added to ``mount.position``, and the XYZ Euler angles (degrees) rotate the mount
+    about the link axes before ``mount.orientation`` is applied.
+    """
+
+    position_min: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
+    """Lower bound of the position offset ``[x, y, z]`` in meters."""
+
+    position_max: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
+    """Upper bound of the position offset ``[x, y, z]`` in meters."""
+
+    euler_deg_min: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
+    """Lower bound of the XYZ Euler rotation offset in degrees."""
+
+    euler_deg_max: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
+    """Upper bound of the XYZ Euler rotation offset in degrees."""
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> WarpDepthMountRandomizationConfig:
+        """Each bound is a finite 3-vector and every lower bound is at most its upper bound."""
+        for lo_name, hi_name in (("position_min", "position_max"), ("euler_deg_min", "euler_deg_max")):
+            lo, hi = getattr(self, lo_name), getattr(self, hi_name)
+            if len(lo) != 3 or len(hi) != 3 or not all(math.isfinite(v) for v in (*lo, *hi)):
+                raise ValueError(f"{lo_name}/{hi_name} must be finite [x, y, z], got {lo} and {hi}.")
+            if any(a > b for a, b in zip(lo, hi, strict=True)):
+                raise ValueError(f"{lo_name} must not exceed {hi_name}, got {lo} and {hi}.")
+        return self
+
+
+@dataclass(frozen=True, config=_FORBID_EXTRA)
+class WarpDepthCameraConfig:
+    """A pinhole depth camera ray cast with Warp, identically on every simulator backend.
+
+    Rays hit the terrain mesh and, for self-occlusion, the meshes of the robot links listed in
+    ``self_occlusion`` at their current poses. Its frame is read through
+    ``get_camera_data(name, "depth")`` like any depth camera: ``[N, H, W, 1]`` float32 meters,
+    distance to the image plane. Unlike a rendered camera it can re-render a subset of envs, so
+    envs reset or teleported in a control step are observed at their new state.
+
+    Keyed by its sensor name in the ``--sensor`` dict.
+    """
+
+    mount: SensorMountConfig
+    """Robot link the camera follows and its optical-frame offset (``-Z`` forward, ``+Y`` up).
+    Only ``target_kind="robot_link"`` is supported."""
+
+    width: int = 106
+    """Image width in pixels."""
+
+    height: int = 60
+    """Image height in pixels."""
+
+    vertical_fov: float = 58.6
+    """Pinhole vertical field of view in degrees. Pixels are square; rays pass through integer
+    pixel coordinates measured from a principal point at ``(width / 2, height / 2)``."""
+
+    near: float = 0.0
+    """Returns closer than this are treated as no return, as for :class:`CameraSensorConfig`."""
+
+    far: float = 3.0
+    """Maximum ray length in meters; farther surfaces are no return."""
+
+    depth_clipping_behavior: DepthClippingBehavior = "max"
+    """How no-return pixels are reported: ``+inf`` (``"none"``), ``far`` (``"max"``), or ``0.0``
+    (``"zero"``), as for :class:`CameraSensorConfig`."""
+
+    update_decimation: DecimationLike = 1
+    """Render every Nth control step, or a frequency string such as ``"50Hz"``."""
+
+    self_occlusion: dict[str, str] = field(default_factory=dict)
+    """Robot link name -> triangle mesh file (STL/OBJ, link frame) cast against at the link's
+    current pose. Paths are resolved with ``resolve_data_file_path``. Empty casts against the
+    terrain only."""
+
+    mount_randomization: WarpDepthMountRandomizationConfig | None = None
+    """Optional per-env mount perturbation, drawn once when the camera is created."""
+
+    @property
+    def data_types(self) -> list[CameraDataType]:
+        """The modalities this camera produces: depth only."""
+        return ["depth"]
+
+    @model_validator(mode="after")
+    def validate_camera(self) -> WarpDepthCameraConfig:
+        """Validate resolution, field of view, range, cadence, and mount target."""
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError(f"WarpDepthCameraConfig needs positive width/height, got {self.width}x{self.height}.")
+        if not math.isfinite(self.vertical_fov) or not 0.0 < self.vertical_fov < 180.0:
+            raise ValueError(
+                f"WarpDepthCameraConfig.vertical_fov must be finite and in (0, 180), got {self.vertical_fov}."
+            )
+        if not math.isfinite(self.near) or self.near < 0.0:
+            raise ValueError(f"WarpDepthCameraConfig.near must be finite and >= 0, got {self.near}.")
+        if not math.isfinite(self.far) or self.far <= self.near:
+            raise ValueError(f"WarpDepthCameraConfig.far must be finite and > near, got {self.near}..{self.far}.")
+        validate_decimation_like(self.update_decimation, field="WarpDepthCameraConfig update_decimation")
+        if self.mount.target_kind != "robot_link":
+            raise ValueError(
+                f"WarpDepthCameraConfig only mounts on robot links, got target_kind='{self.mount.target_kind}'."
+            )
+        return self
+
+
+SensorConfig = CameraSensorConfig | LidarSensorConfig | WarpDepthCameraConfig
 
 
 def validate_camera_dict(cameras: dict[str, CameraSensorConfig]) -> None:

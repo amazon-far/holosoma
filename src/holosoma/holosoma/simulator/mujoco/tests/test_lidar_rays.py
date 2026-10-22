@@ -447,6 +447,9 @@ def test_mjwarp_lidar_reuses_camera_bvh_without_duplicate_same_frame_refit(
         def collect_lidars_due(self):
             return [lidar]
 
+        def render_shared(self):
+            pass
+
     rendered = []
     sim = SimpleNamespace(
         sensor_manager=_Manager(),
