@@ -22,7 +22,7 @@ import itertools
 import os
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import Any, ClassVar, cast
 
 import torch
 import torch.nn.functional as F
@@ -40,6 +40,7 @@ from holosoma.agents.distillation.checkpoint import (
 from holosoma.agents.modules.logging_utils import LoggingHelper
 from holosoma.agents.modules.student_teacher_modules import StudentTeacher
 from holosoma.config_types.algo import DistillationConfig, DistillationPPOConfig
+from holosoma.policy_task import PolicyTask
 from holosoma.utils.helpers import instantiate
 from holosoma.utils.inference_helpers import (
     attach_onnx_metadata,
@@ -48,9 +49,6 @@ from holosoma.utils.inference_helpers import (
     get_control_gains_from_config,
     get_urdf_text_from_robot_config,
 )
-
-if TYPE_CHECKING:
-    from holosoma.policy_task import PolicyTask
 
 ACTOR_GROUP = "actor_obs"
 TEACHER_GROUP = "teacher_obs"
