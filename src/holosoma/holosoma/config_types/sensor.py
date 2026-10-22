@@ -688,7 +688,7 @@ class WarpDepthMountRandomizationConfig:
             lo, hi = getattr(self, lo_name), getattr(self, hi_name)
             if len(lo) != 3 or len(hi) != 3 or not all(math.isfinite(v) for v in (*lo, *hi)):
                 raise ValueError(f"{lo_name}/{hi_name} must be finite [x, y, z], got {lo} and {hi}.")
-            if any(a > b for a, b in zip(lo, hi)):
+            if any(a > b for a, b in zip(lo, hi, strict=True)):
                 raise ValueError(f"{lo_name} must not exceed {hi_name}, got {lo} and {hi}.")
         return self
 
