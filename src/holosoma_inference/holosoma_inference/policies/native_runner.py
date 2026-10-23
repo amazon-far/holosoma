@@ -329,7 +329,12 @@ class NativeContextualRunner(NativeRunnerPolicy):
     on a frame the policy never saw.
     """
 
-    def __init__(self, config, *, depth=None, depth_latency_s=0.0, **kwargs):
+    # Checkpoints in this family expect a delayed depth observation, not the freshest frame. The
+    # midpoint of the range they are trained against; override per checkpoint. That range is
+    # resampled per step upstream, which this fixed delay does not reproduce.
+    TRAINED_DEPTH_LATENCY_S = 0.19
+
+    def __init__(self, config, *, depth=None, depth_latency_s=TRAINED_DEPTH_LATENCY_S, **kwargs):
         self.depth = depth if depth is not None else DepthDelay(depth_latency_s)
         self._monotonic_base = time.monotonic()
         self._synthetic_stamp = 0.0

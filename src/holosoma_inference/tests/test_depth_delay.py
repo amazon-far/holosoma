@@ -13,9 +13,9 @@ def _frame(value: float) -> np.ndarray:
 
 
 def test_withholds_until_a_frame_is_old_enough():
-    """Engage must not start on a frame fresher than the trained latency."""
+    """A frame fresher than the configured delay must not satisfy the gate."""
     delay = DepthDelay(0.3, shape=SHAPE)
-    for tick in range(9):  # 9 frames at 30 Hz spans 0.267 s, short of 0.3
+    for tick in range(9):  # spans 0.267 s at this cadence, short of the 0.3 s delay
         delay.push(_frame(tick), tick / 30)
     assert not delay.ready()
     delay.push(_frame(9), 9 / 30)
@@ -26,7 +26,7 @@ def test_serves_the_delayed_frame_not_the_freshest():
     delay = DepthDelay(0.3, shape=SHAPE)
     for tick in range(20):
         delay.push(_frame(tick), tick / 30)
-    # Newest stamp is 19/30; the newest frame at or before 19/30 - 0.3 is tick 10.
+    # Newest stamp is 19/30 s; the newest frame at or before 19/30 - 0.3 is tick 10.
     assert delay.latest()[0, 0] == pytest.approx(10.0)
 
 
