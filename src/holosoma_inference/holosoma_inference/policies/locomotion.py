@@ -106,16 +106,20 @@ class LocomotionPolicy(BasePolicy):
         """Print current control status."""
         super()._print_control_status()
 
-        # Extract values for better formatting
-        lin_vel_x = self.lin_vel_command[0, 0]
-        lin_vel_y = self.lin_vel_command[0, 1]
-        ang_vel_z = self.ang_vel_command[0, 0]
+        # Show the raw operator input, not the mode-gated command. The gated
+        # command (lin_vel_command) is zeroed while standing, so printing it
+        # here would read 0 even when the operator is commanding a velocity.
+        # The raw input reflects what is being commanded now.
+        vc = self._last_vel_input
+        lin_vel_x = vc.lin_vel[0]
+        lin_vel_y = vc.lin_vel[1]
+        ang_vel_z = vc.ang_vel
         is_walking = self.stand_command[0, 0] == 1
 
         # Print with clear labels and units
         mode = "Walking" if is_walking else "Standing"
         status = "✓ applied" if is_walking else "✗ not applied"
-        print(f"Linear velocity: x={lin_vel_x:+.2f} m/s, y={lin_vel_y:+.2f} m/s")
+        print(f"Velocity input: x={lin_vel_x:+.2f} m/s, y={lin_vel_y:+.2f} m/s")
         print(f"Angular velocity: {ang_vel_z:+.2f} rad/s")
         print(f"Mode: {mode} ({status})")
         print("💡 Terminal keys: W/A/S/D (lin) | Q/E (ang) | = (toggle mode)")
