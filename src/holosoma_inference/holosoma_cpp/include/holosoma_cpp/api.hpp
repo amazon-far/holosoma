@@ -45,6 +45,7 @@ class Policy {
   void set_reference(const ReferenceWindow* window);
   // One tick; the returned command stays valid until the next step/destruction.
   const JointCommand& step(const RobotState& state);
+  const JointCommand& step(const RobotState& state, ContextualInput input);
   int num_dofs() const;
   const std::vector<std::string>& dof_names() const;
   const InferenceConfig& config() const;

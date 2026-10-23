@@ -6,6 +6,7 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "holosoma_cpp/contextual_policy.hpp"
 #include "holosoma_cpp/controller.hpp"
 #include "holosoma_cpp/wbt_policy.hpp"
 
@@ -123,6 +124,25 @@ JointCommand Policy::step_state(const RobotState& state, bool advance_phase) {
 const JointCommand& Policy::step(const RobotState& state) {
   step_state(state);
   return impl_->robot.command();
+}
+const JointCommand& Policy::step(const RobotState& state, ContextualInput input) {
+  auto* contextual = dynamic_cast<ContextualPolicy*>(impl_->policy.get());
+  if (!contextual) throw std::invalid_argument("ContextualInput requires a contextual policy configuration");
+  auto normalized = state;
+  if (normalized.base_quat_wxyz.size() == 4) {
+    // Preserve the contextual model's legacy identity fallback for an unusable
+    // orientation. Other policy kinds retain the strict public state contract.
+    double norm = 0;
+    for (double value : normalized.base_quat_wxyz) norm += value * value;
+    if (!std::isfinite(norm) || norm < 1e-12) normalized.base_quat_wxyz = {1, 0, 0, 0};
+  }
+  set_state(normalized);
+  struct InputScope {
+    ContextualPolicy* policy;
+    ~InputScope() { policy->clear_input(); }
+  } scope{contextual};
+  contextual->set_input(std::move(input));
+  return step(normalized);
 }
 void Policy::command(StateCommand cmd) {
   if (cmd == StateCommand::START || cmd == StateCommand::STOP || cmd == StateCommand::INIT)
