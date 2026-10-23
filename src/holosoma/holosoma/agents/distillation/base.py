@@ -31,7 +31,6 @@ from torch import nn
 from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 
 from holosoma.agents.base_algo.base_algo import BaseAlgo
-from holosoma.agents.callbacks.base_callback import RLEvalCallback
 from holosoma.agents.distillation.checkpoint import (
     convert_legacy_teacher_state,
     infer_num_teachers_from_checkpoint,
@@ -41,7 +40,6 @@ from holosoma.agents.modules.logging_utils import LoggingHelper
 from holosoma.agents.modules.student_teacher_modules import StudentTeacher
 from holosoma.config_types.algo import DistillationConfig, DistillationPPOConfig
 from holosoma.envs.base_task.base_task import BaseTask
-from holosoma.utils.helpers import instantiate
 from holosoma.utils.inference_helpers import (
     attach_onnx_metadata,
     export_policy_as_onnx,
@@ -99,7 +97,6 @@ class DistillationBase(BaseAlgo):
 
         # Index of the next training iteration to run; iterations below it are complete.
         self.current_learning_iteration = 0
-        self.eval_callbacks: list[RLEvalCallback] = []
         self.learning_rate = self.config.learning_rate
 
         # Number of frozen teacher MLPs to build in ``_build_policy``. Set before
@@ -589,8 +586,8 @@ class DistillationBase(BaseAlgo):
     def evaluate_policy(self, max_eval_steps: int | None = None) -> None:
         self._create_eval_callbacks()
         self._pre_evaluate_policy()
-        actor_state: dict[str, Any] = {"done_indices": [], "stop": False}
-        eval_policy = self.get_inference_policy()
+        actor_state: dict[str, Any] = {}
+        self.eval_policy = self.get_inference_policy()
 
         obs_dict = self.env.reset_all()
         init_actions = torch.zeros(self.env.num_envs, self.num_act, device=self.device)
@@ -599,44 +596,12 @@ class DistillationBase(BaseAlgo):
 
         for step in itertools.islice(itertools.count(), max_eval_steps):
             actor_state["step"] = step
-            actor_state = self._pre_eval_env_step(actor_state, eval_policy)
+            actor_state = self._pre_eval_env_step(actor_state)
             actor_state = self.env_step(actor_state)
             actor_state = self._post_eval_env_step(actor_state)
 
         self._post_evaluate_policy()
 
-    def _create_eval_callbacks(self) -> None:
-        if self.config.eval_callbacks is not None:
-            for cb in self.config.eval_callbacks:
-                self.eval_callbacks.append(instantiate(self.config.eval_callbacks[cb], training_loop=self))
-
-    def _pre_evaluate_policy(self, reset_env: bool = True) -> None:
-        self._eval_mode()
-        self.env.set_is_evaluating()
-        if reset_env:
-            _ = self.env.reset_all()
-        for c in self.eval_callbacks:
-            c.on_pre_evaluate_policy()
-
-    def _post_evaluate_policy(self) -> None:
-        for c in self.eval_callbacks:
-            c.on_post_evaluate_policy()
-
-    def _pre_eval_env_step(
-        self, actor_state: dict[str, Any], eval_policy: Callable[[dict[str, torch.Tensor]], torch.Tensor]
-    ) -> dict[str, Any]:
-        actor_state["actions"] = eval_policy(self._extract_student_obs(actor_state["obs"]))
-        for c in self.eval_callbacks:
-            actor_state = c.on_pre_eval_env_step(actor_state)
-        return actor_state
-
-    def _post_eval_env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
-        for c in self.eval_callbacks:
-            actor_state = c.on_post_eval_env_step(actor_state)
-        return actor_state
-
-    # Keep the returned actor_state the same shape as PPO's.
-    def env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:  # type: ignore[override]
-        obs_dict, rewards, dones, extras = self.env.step(actor_state)
-        actor_state.update({"obs": obs_dict, "rewards": rewards, "dones": dones, "extras": extras})
+    def _compute_eval_actions(self, actor_state: dict[str, Any]) -> dict[str, Any]:
+        actor_state["actions"] = self.eval_policy(self._extract_student_obs(actor_state["obs"]))
         return actor_state
