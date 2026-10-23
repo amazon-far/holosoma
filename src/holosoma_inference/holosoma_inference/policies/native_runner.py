@@ -7,6 +7,8 @@ import time
 
 import numpy as np
 
+from holosoma_inference import _native
+from holosoma_inference.depth import DepthDelay
 from holosoma_inference.inputs.api.commands import StateCommand
 from holosoma_inference.native import NativePolicy
 from holosoma_inference.policies.transport import RunnerTransport
@@ -248,11 +250,15 @@ class NativeRunnerPolicy(RunnerTransport):
         if hasattr(self.interface, "no_action"):
             self.interface.no_action = 0
 
+    def _step_native(self, state):
+        """One native step; subclasses whose engine takes extra per-tick input override this."""
+        return self.native.step_state(state, tick_ms=self._tick_ms(), advance_phase=False)
+
     def policy_action(self):
         state = self.interface.get_low_state()
         if not self._await_valid_state(state):
             return False
-        command = self.native.step_state(state, tick_ms=self._tick_ms(), advance_phase=False)
+        command = self._step_native(state)
         transformed = self.transform_command(command, state) or {}
         q = np.asarray(transformed.get("q", command.q), dtype=float).reshape(-1)
         kp = np.asarray(transformed.get("kp", command.kp), dtype=float).reshape(-1)
@@ -313,3 +319,53 @@ class NativeWbtRunner(NativeRunnerPolicy):
     """Native embedded-motion tracking with Python-owned transport."""
 
     is_wbt = True
+
+
+class NativeContextualRunner(NativeRunnerPolicy):
+    """Depth-conditioned locomotion; the native engine needs one ContextualInput per tick.
+
+    Callers push frames with ``set_depth`` from whatever transport they own. Engage is refused
+    until a frame is old enough to match the latency the policy trained with, rather than starting
+    on a frame the policy never saw.
+    """
+
+    # Checkpoints in this family expect a delayed depth observation, not the freshest frame. The
+    # midpoint of the range they are trained against; override per checkpoint. That range is
+    # resampled per step upstream, which this fixed delay does not reproduce.
+    TRAINED_DEPTH_LATENCY_S = 0.19
+
+    def __init__(self, config, *, depth=None, depth_latency_s=TRAINED_DEPTH_LATENCY_S, **kwargs):
+        self.depth = depth if depth is not None else DepthDelay(depth_latency_s)
+        self._monotonic_base = time.monotonic()
+        self._synthetic_stamp = 0.0
+        super().__init__(config, **kwargs)
+        # Logged every run: a silent zero here is a train/deploy mismatch, not a default.
+        self.logger.info("Contextual depth latency: {} s", self.depth.latency_s)
+
+    def set_depth(self, frame, stamp_s=None):
+        """Push one depth frame; callers with no publisher stamp get policy-tick stamps instead."""
+        if stamp_s is None:
+            self._synthetic_stamp += 1.0 / self.config.task.rl_rate
+            stamp_s = self._synthetic_stamp
+        accepted = self.depth.push(frame, stamp_s)
+        if accepted and self._start_pending and self.depth.ready():
+            self._start_pending = False
+            self._handle_start_policy()
+        return accepted
+
+    def _step_native(self, state):
+        inputs = _native.ContextualInput()
+        frame = self.depth.latest()
+        if frame is not None:
+            inputs.depth = frame.reshape(-1)
+        inputs.monotonic_time = time.monotonic() - self._monotonic_base
+        return self.native.step_contextual(state, inputs, tick_ms=self._tick_ms())
+
+    def _handle_start_policy(self):
+        # Deferred, not refused: start arrives before the first frame is pushed, so refusing here
+        # would drop the engage and leave the policy idle with nothing to retry it.
+        if not self.depth.ready():
+            self._start_pending = True
+            self.logger.info("Deferring start until a depth frame {}s old arrives", self.depth.latency_s)
+            return
+        super()._handle_start_policy()

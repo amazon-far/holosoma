@@ -8,13 +8,15 @@ from loguru import logger
 from termcolor import colored
 
 from holosoma_inference.config.config_types.inference import InferenceConfig
+from holosoma_inference.policies.native_runner import NativeContextualRunner
 
 
 def _select_policy_class(config: InferenceConfig):
-    """Determine policy class from an explicit ``policy_type`` or the obs/robot heuristic.
+    """Determine policy class from a contextual section, an explicit ``policy_type``, or the heuristic.
 
     Resolution order:
 
+    0. ``config.contextual`` selects the depth-conditioned policy, mirroring ``make_policy`` in C++.
     1. ``config.task.policy_type`` (when set) against the ``holosoma.policies.by_type``
        entry-point group. This lets extensions register custom policy classes keyed by an
        explicit type string -- the same mechanism the standalone ``run_policy`` path uses --
@@ -29,6 +31,10 @@ def _select_policy_class(config: InferenceConfig):
     """
     from holosoma_inference.policies.native_runner import NativeLocomotionRunner, NativeWbtRunner
     from holosoma_inference.pycompat import entry_points
+
+    # 0. A contextual section selects the depth-conditioned policy, as make_policy does in C++.
+    if getattr(config, "contextual", None) is not None:
+        return NativeContextualRunner
 
     # 1. Explicit policy_type -> by_type entry-point group.
     policy_type = getattr(config.task, "policy_type", None)
