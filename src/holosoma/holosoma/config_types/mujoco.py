@@ -6,11 +6,10 @@ import ast
 import json
 import math
 from dataclasses import field
-from typing import Dict, List, Literal, Union
+from typing import Annotated, Literal
 
 from pydantic import AfterValidator, ConfigDict, Field, model_validator
 from pydantic.dataclasses import dataclass
-from typing_extensions import Annotated
 from tyro.constructors import PrimitiveConstructorSpec
 
 Finite = Annotated[float, Field(allow_inf_nan=False)]
@@ -18,7 +17,7 @@ Count = Annotated[int, Field(ge=0, strict=True)]
 SignedInt = Annotated[int, Field(ge=-2147483648, le=2147483647, strict=True)]
 
 
-def _validate_finite_vector(value: List[float]) -> List[float]:
+def _validate_finite_vector(value: list[float]) -> list[float]:
     """Reject nonfinite components while preserving Holosoma's list representation."""
     if not all(math.isfinite(component) for component in value):
         raise ValueError("vector components must be finite")
@@ -26,8 +25,8 @@ def _validate_finite_vector(value: List[float]) -> List[float]:
 
 
 # Keep elements as plain floats so Tyro retains Holosoma's literal-list CLI syntax.
-FiniteVector = Annotated[List[float], AfterValidator(_validate_finite_vector)]
-NativeValue = Union[bool, int, Finite, str, FiniteVector]
+FiniteVector = Annotated[list[float], AfterValidator(_validate_finite_vector)]
+NativeValue = bool | int | Finite | str | FiniteVector
 
 
 def _extra_from_cli(args: list[str]) -> dict[str, NativeValue]:
@@ -44,7 +43,7 @@ def _extra_from_cli(args: list[str]) -> dict[str, NativeValue]:
     return value
 
 
-def _validate_extra_names(settings: Dict[str, NativeValue]) -> Dict[str, NativeValue]:
+def _validate_extra_names(settings: dict[str, NativeValue]) -> dict[str, NativeValue]:
     """Require bare public attribute names; upstream existence is checked during setup."""
     for name in settings:
         if not name.isidentifier() or name.startswith("_"):
@@ -53,7 +52,7 @@ def _validate_extra_names(settings: Dict[str, NativeValue]) -> Dict[str, NativeV
 
 
 ExtraSettings = Annotated[
-    Dict[str, NativeValue],
+    dict[str, NativeValue],
     AfterValidator(_validate_extra_names),
     PrimitiveConstructorSpec(
         nargs=1,

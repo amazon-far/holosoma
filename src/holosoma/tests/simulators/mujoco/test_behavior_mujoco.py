@@ -164,7 +164,7 @@ class _MinimalCollisionContext:
 
     def states(self, name):
         states = torch.zeros((self.n, 13), dtype=torch.float64)
-        for env_id, (model, data) in enumerate(zip(self.models, self.data)):
+        for env_id, (model, data) in enumerate(zip(self.models, self.data, strict=False)):
             if name == "hammer":
                 states[env_id, :3] = torch.from_numpy(data.qpos[:3].copy())
                 states[env_id, 7:10] = torch.from_numpy(data.qvel[:3].copy())
@@ -173,7 +173,7 @@ class _MinimalCollisionContext:
         return states
 
     def simulate_at_each_physics_step(self):
-        for env_id, (model, data) in enumerate(zip(self.models, self.data)):
+        for env_id, (model, data) in enumerate(zip(self.models, self.data, strict=False)):
             if self.case == "forward-at-end" and env_id == self.n - 1 and self.steps == 299:
                 # A real final-step force isolates the terminal-velocity guard after a valid hit.
                 data.xfrc_applied[model.body("hammer").id, 0] = 100
@@ -202,7 +202,7 @@ def test_collision_assertion_accepts_rebounds_and_rejects_broken_worlds(case):
     assert all(data.time == pytest.approx(1.5) for data in ctx.data)
     assert all(count > 0 for count in ctx.wall_contacts[:3])
     if case == "rebound":
-        assert all(peak - data.qpos[0] > 0.1 for peak, data in zip(ctx.peak_x, ctx.data))
+        assert all(peak - data.qpos[0] > 0.1 for peak, data in zip(ctx.peak_x, ctx.data, strict=False))
     elif case in {"missing-collision", "missing-velocity"}:
         assert ctx.wall_contacts[-1] == 0
     elif case == "forward-at-end":
