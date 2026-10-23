@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.simulator import MujocoBackend
 from holosoma.config_values.experiment import get_annotated_experiment_config
 from holosoma.train_agent import training_context
 from holosoma.utils.config_registry import parse_config
@@ -51,6 +52,19 @@ PERF_BASELINE_MIN_RUNS = 5
 # baseline, before it is called out. Scaling to the measured spread rather than a fixed
 # percentage means the threshold tightens on a cell that normally runs consistently.
 PERF_WARN_SIGMA = 2.0
+
+
+def simulator_tag(config: ExperimentConfig) -> str:
+    """Simulator name to tag a run with, distinguishing the two MuJoCo backends.
+
+    Both report `mujoco`, but they are different engines -- one CPU and single-env, the
+    other GPU and multi-env -- so sharing a tag would make their runs indistinguishable
+    and pool their throughput into one baseline.
+    """
+    name = config.simulator.config.name
+    if name == "mujoco" and getattr(config.simulator.config, "mujoco_backend", None) == MujocoBackend.WARP:
+        return "mjwarp"
+    return name
 
 
 def now_timestamp() -> str:
@@ -264,7 +278,7 @@ def main():
 
     run_tags = [
         sanitized_exp,
-        config.simulator.config.name,
+        simulator_tag(config),
     ]
 
     if GITHUB_RUN_ID:
@@ -281,7 +295,7 @@ def main():
     # is only comparable within a cell, so the regression baseline is limited to these.
     cell_tags = [
         sanitized_exp,
-        config.simulator.config.name,
+        simulator_tag(config),
         f"gpus-{MULTIGPU_NUM_GPUS}" if config.training.multigpu else "gpus-1",
     ]
 

@@ -31,6 +31,32 @@ jobs:
         simulator: [isaacsim]
         extra_args: [""]
         include:
+        # MuJoCo cells, added through include rather than the simulator list so they are
+        # not crossed with the multigpu dimension: the distributed path is not exercised
+        # for MuJoCo. `sim_preset` selects the MJWarp backend while `simulator` still
+        # names the environment to source -- training needs thousands of parallel
+        # environments, and the classic backend is single-env.
+        #
+        # The halved terrain scale is required, not a tuning choice: src/holosoma/README.md
+        # documents it for MJWarp on mixed terrain, and without it training destabilises
+        # during the first rollout.
+        #
+        # G1 only. T1 on MJWarp does not train here and is left out rather than failing
+        # the nightly every night: PPO reaches a non-finite policy mean within its first
+        # rollouts and aborts, and FastSAC paces ~24x slower than the same algorithm on
+        # G1, far outside this job's timeout. Both reproduce with the terrain scale above
+        # and with the contact limit raised past what T1's own MJCF asks for, so neither
+        # is a configuration gap on this side. Tracked separately; MJWarp is beta.
+        - experiment: g1-29dof
+          simulator: mujoco
+          sim_preset: mjwarp
+          multigpu: 'False'
+          extra_args: --terrain.terrain-term.scale-factor=0.5
+        - experiment: g1-29dof-fast-sac
+          simulator: mujoco
+          sim_preset: mjwarp
+          multigpu: 'False'
+          extra_args: --terrain.terrain-term.scale-factor=0.5
         - experiment: g1-29dof-wbt
           simulator: isaacsim
           multigpu: 'False'
@@ -40,7 +66,7 @@ jobs:
           multigpu: 'False'
           extra_args: --command.setup_terms.motion_command.params.motion_config.motion_file=s3://far-holosoma-assets/data/motions/g1_29dof/whole_body_tracking/motion_dance_v3.npz --algo.config.buffer_size=384
 
-    name: Train ${{ matrix.experiment }} on ${{ matrix.multigpu == 'True' && 'multi-gpu' || 'single-gpu' }} using ${{ matrix.simulator }}
+    name: Train ${{ matrix.experiment }} on ${{ matrix.multigpu == 'True' && 'multi-gpu' || 'single-gpu' }} using ${{ matrix.sim_preset || matrix.simulator }}
     timeout-minutes: 1000 # ~16 hours
 
     steps:
@@ -88,7 +114,7 @@ jobs:
               python -m wandb login
               python tests/nightly/nightly.py exp:${{ matrix.experiment }} \
                 logger:wandb --logger.video.enabled=False \
-                simulator:${{ matrix.simulator }} \
+                simulator:${{ matrix.sim_preset || matrix.simulator }} \
                 --training.multigpu=${{ matrix.multigpu }} ${{ matrix.extra_args }}
             """
 
@@ -133,6 +159,7 @@ jobs:
           # wandb instance the view was created on, so it is configured rather than
           # committed; left unset, that block links the project instead.
           PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_ISAACSIM_GPUS_1: ${{ vars.PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_ISAACSIM_GPUS_1 }}
+          PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_MJWARP_GPUS_1: ${{ vars.PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_MJWARP_GPUS_1 }}
         run: uv run --script ./tests/nightly/run_summary.py --slack
       - name: Check results
         run: |
