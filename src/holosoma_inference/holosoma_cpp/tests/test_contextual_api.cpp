@@ -35,6 +35,29 @@ RobotState state() {
 }
 const contextual::Policy& core(Policy& policy) { return dynamic_cast<const ContextualPolicy&>(policy.policy()).core(); }
 
+TEST(ContextualApi, DepthFrameSizingDoesNotOverflowSignedInt) {
+  contextual::Spec spec;
+  EXPECT_EQ(spec.depth_frame_size(), 5046u);
+  // Exercise the overflow boundary without allocating a multi-gigabyte ONNX tensor.
+  spec.height = spec.width = 50000;
+  ASSERT_GT(2500000000ull, std::numeric_limits<int>::max());
+  EXPECT_EQ(spec.depth_frame_size(), 2500000000ull);
+}
+
+TEST(ContextualApi, DepthFramesAreSizedAndValidatedThroughPublicStep) {
+  Policy policy(config());
+  ContextualInput input;
+  policy.step(state(), input);
+  EXPECT_EQ(core(policy).depth(), std::vector<float>(12, 0.0f));
+  input.depth = std::vector<float>(6, .25f);
+  policy.step(state(), input);
+  EXPECT_EQ(core(policy).depth(), (std::vector<float>{0, 0, 0, 0, 0, 0, .25f, .25f, .25f, .25f, .25f, .25f}));
+  for (size_t size : {0u, 5u, 7u}) {
+    input.depth = std::vector<float>(size, .5f);
+    EXPECT_THROW(policy.step(state(), input), std::invalid_argument);
+  }
+}
+
 TEST(ContextualApi, SharedFactoryClipsBeforeScalingAndFeedbackInNamedJointOrder) {
   Policy policy(config());
   ASSERT_EQ(policy.policy().kind(), "ContextualPolicy");

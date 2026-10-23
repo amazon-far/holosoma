@@ -68,6 +68,8 @@ Select) are the same as in the [Python runtime](../README.md#policy-controls).
 
 An optional `contextual` configuration section selects the depth-conditioned policy through `holosoma::Policy`. It uses the same `OnnxModel`, provider setup, buffers, profiling and factory as the other native policies. Configure `task.use_phase: false`, the runtime joint names/defaults/gains, and the contextual depth geometry. Models use float32 `obs` and `depth_image`, optional `time_step`, named `actions`, and optional `climb_pred` outputs. The contextual policy supplies zero for the legacy `time_step` input.
 
+The existing API is preserved: locomotion and WBT callers still construct `Policy(config)` or `Policy(preset, checkpoint)` and call `step(robot_state)`. WBT's `set_reference(...)`, commands, reset and `JointCommand` output remain unchanged. Contextual inference adds the overload below; existing callers do not need to supply a `ContextualInput`. Passing the depth and command events together with the robot state keeps them scoped to one tick, including failed or inactive ticks, rather than leaving a pending sensor frame behind a separate setter.
+
 ```cpp
 holosoma::Policy policy(config);
 holosoma::ContextualInput input;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <deque>
 #include <memory>
 #include <optional>
@@ -27,6 +28,9 @@ struct Spec {
   double action_scale = 1;
   int command_dim = 15, height = 58, width = 87;
   bool upright = false, zero_omega = false;
+
+  // Promote before multiplying: positive int dimensions can exceed INT_MAX pixels.
+  std::size_t depth_frame_size() const { return static_cast<std::size_t>(height) * static_cast<std::size_t>(width); }
 };
 
 using Options = ContextualConfig;

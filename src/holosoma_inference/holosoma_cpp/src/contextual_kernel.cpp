@@ -410,9 +410,9 @@ std::vector<double> Policy::Target(const State &state, const std::optional<std::
   // Branch rather than value_or: value_or evaluates its argument every call,
   // which zero-fills a height*width frame on the control loop even when a
   // depth frame is present.
-  std::vector<float> frame = depth ? *depth : std::vector<float>(spec_.height * spec_.width, 0);
-  if (frame.size() != static_cast<size_t>(spec_.height * spec_.width))
-    throw std::invalid_argument("depth frame size mismatch");
+  const auto frame_size = spec_.depth_frame_size();
+  std::vector<float> frame = depth ? *depth : std::vector<float>(frame_size, 0);
+  if (frame.size() != frame_size) throw std::invalid_argument("depth frame size mismatch");
   frames_.push_back(std::move(frame));
   if (frames_.size() > static_cast<size_t>(history_)) frames_.pop_front();
   depth_.clear();
