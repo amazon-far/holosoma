@@ -13,6 +13,7 @@ import math
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
+from .api import ISAACSIM5, IsaacLabApi
 
 from holosoma.config_types.light import (
     DefaultLightConfig,
@@ -25,7 +26,12 @@ from holosoma.config_types.light import (
 from holosoma.utils.path import resolve_path
 
 if TYPE_CHECKING:
-    from holosoma.simulator.isaacsim.isaacsim import IsaacSim
+    from holosoma.simulator.isaacsim.isaacsim import IsaacSim as IsaacSim5
+    from holosoma.simulator.isaacsim6.isaacsim import IsaacSim as IsaacSim6
+
+    from typing import Union
+
+    IsaacSim = Union[IsaacSim5, IsaacSim6]
 
 # Global lights (default sun, dome, distant) illuminate the whole stage, so one copy lives at /World.
 # Positioned lights (sphere, rect) are authored under the first environment; cloning replicates them per env.
@@ -39,36 +45,36 @@ _GLOBAL_LIGHT_TYPES = (DefaultLightConfig, DomeLightConfig, DistantLightConfig)
 _DEFAULT_SUN_ANGLE_DEG = math.degrees(0.0093)
 
 
-def build_lights(sim: IsaacSim) -> None:
+def build_lights(sim: IsaacSim, *, api: IsaacLabApi = ISAACSIM5) -> None:
     """Author each enabled light in the scene's rig, global lights once and positioned lights per env.
     The default rig's ``default_light`` is authored as a directional sun."""
     for name, cfg in sim.scene_config.lights.items():
         if cfg.enabled:
             root = _GLOBAL_LIGHTS_ROOT if isinstance(cfg, _GLOBAL_LIGHT_TYPES) else _PER_ENV_LIGHTS_ROOT
-            _author_light(f"{root}/{name}", cfg)
+            _author_light(f"{root}/{name}", cfg, api=api)
 
 
-def _author_light(prim_path: str, cfg: LightConfigBase) -> None:
+def _author_light(prim_path: str, cfg: LightConfigBase, *, api: IsaacLabApi = ISAACSIM5) -> None:
     """Author one light at ``prim_path`` for its type; skip (with a warning) unsupported types."""
     import isaaclab.sim as sim_utils
 
     if isinstance(cfg, DefaultLightConfig):
         # The default rig's directional sun; Isaac Sim headless stages have no built-in light.
         spawn = sim_utils.DistantLightCfg(**_common(cfg), angle=_DEFAULT_SUN_ANGLE_DEG)
-        spawn.func(prim_path, spawn, orientation=cfg.orientation)
+        spawn.func(prim_path, spawn, orientation=api.config_quaternion(cfg.orientation))
     elif isinstance(cfg, DomeLightConfig):
         texture_file = resolve_path(cfg.texture_file) if cfg.texture_file is not None else None
         spawn = sim_utils.DomeLightCfg(**_common(cfg), texture_file=texture_file, texture_format=cfg.texture_format)
-        spawn.func(prim_path, spawn, orientation=cfg.orientation)
+        spawn.func(prim_path, spawn, orientation=api.config_quaternion(cfg.orientation))
     elif isinstance(cfg, DistantLightConfig):
         # UsdLux/Isaac Lab express the source angular diameter in degrees; the config is radians.
         spawn = sim_utils.DistantLightCfg(**_common(cfg), angle=math.degrees(cfg.angle))
-        spawn.func(prim_path, spawn, orientation=cfg.orientation)
+        spawn.func(prim_path, spawn, orientation=api.config_quaternion(cfg.orientation))
     elif isinstance(cfg, SphereLightConfig):
         spawn = sim_utils.SphereLightCfg(**_common(cfg), radius=cfg.radius)
         spawn.func(prim_path, spawn, translation=cfg.position)
     elif isinstance(cfg, RectLightConfig):
-        _author_rect_light(prim_path, cfg)
+        _author_rect_light(prim_path, cfg, api=api)
     else:
         logger.warning(f"Isaac Sim does not support light {prim_path!r} ({type(cfg).__name__}); skipping")
 
@@ -82,9 +88,9 @@ def _common(cfg: LightConfigBase) -> dict[str, Any]:
     return kwargs
 
 
-def _author_rect_light(prim_path: str, cfg: RectLightConfig) -> None:
+def _author_rect_light(prim_path: str, cfg: RectLightConfig, *, api: IsaacLabApi = ISAACSIM5) -> None:
     """Author a rectangular area light via ``UsdLux`` (Isaac Lab has no rectangular-light spawner)."""
-    import isaacsim.core.utils.stage as stage_utils
+    stage_utils = api.stage_utils()
     from pxr import Gf, UsdGeom, UsdLux
 
     light = UsdLux.RectLight.Define(stage_utils.get_current_stage(), prim_path)

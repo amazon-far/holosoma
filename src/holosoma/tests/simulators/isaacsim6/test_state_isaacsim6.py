@@ -1,19 +1,8 @@
-"""Live Isaac Sim 6.1 state read/write and cloning, on both physics backends.
+"""Headless Isaac Lab 3.0 state, scene and playback regressions.
 
-One sim per subprocess, because ``SimulationContext`` is a process singleton. These are the 6.1
-counterparts of ``../isaacsim/test_static_move_isaacsim.py`` and siblings; they run the same
-harnesses, selecting the lane through ``--simulator``.
-
-Parametrized over ``isaacsim6`` (PhysX) and ``isaacsim6-newton``, which is the point: the whole
-reason the 6.1 lane exists is that Isaac Lab 3.0 makes the physics engine a configuration choice,
-and a single-backend test would leave that claim unverified. Newton needed two holosoma-side
-changes to get here -- the ClonePlan-based model population in
-``physics_backend.replicate_environments`` and the bulk-property adapter in
-``physics_properties`` -- and neither is covered by anything that does not launch a sim.
-
-Marked ``isaacsim6`` so only the Isaac Sim 6.1 CI job runs it. The preset selects
-PhysX or Newton within this generation.
-"""
+Each harness runs in a separate process. Both PhysX and Newton exercise the same
+state contract and multi-environment scenarios; completion markers guard against
+Kit shutdown masking an early exit."""
 
 from __future__ import annotations
 
@@ -34,7 +23,7 @@ from tests.simulators._run_harness import run_harness  # noqa: E402
 _HARNESS_DIR = Path(__file__).resolve().parents[1]
 
 BACKENDS = ["isaacsim6", "isaacsim6-newton"]
-"""The constructible 6.1 presets. ``isaacsim6-ovphysx`` is deliberately absent.
+"""The constructible 6.2 presets. ``isaacsim6-ovphysx`` is deliberately absent.
 
 OvPhysX is Isaac Lab 3.0's *Kit-free* PhysX runtime and holosoma always launches Kit, so
 ``capabilities.validate`` rejects it at startup -- a test here would assert the rejection, not the
@@ -53,7 +42,7 @@ def test_static_move(simulator: str, num_envs: str) -> None:
     ``InteractiveSceneCfg`` in Isaac Lab 3.0 replicates *nothing* while still reporting correct
     ``env_origins``, so a one-env-shaped cloning bug passes silently at ``num_envs=1``.
     """
-    run_harness(
+    result = run_harness(
         _HARNESS_DIR / "static_move_assert.py",
         "--simulator",
         simulator,
@@ -62,6 +51,7 @@ def test_static_move(simulator: str, num_envs: str) -> None:
         label=f"{simulator}/static-move (num_envs={num_envs})",
         timeout=900,
     )
+    assert "STATIC-MOVE OK:" in result.stdout, result.stdout[-3000:] + result.stderr[-2000:]
 
 
 @pytest.mark.parametrize("simulator", BACKENDS)
@@ -97,7 +87,8 @@ def test_all_root_states_unified(simulator: str) -> None:
 
 
 @pytest.mark.parametrize("simulator", BACKENDS)
-def test_scene_spawn(simulator: str) -> None:
+@pytest.mark.parametrize("scene", ["multibody", "multibody-override"])
+def test_scene_spawn(simulator: str, scene: str) -> None:
     """Multi-body USD scene spawn, including the light rig.
 
     A wrong light *orientation* does not raise -- it aims the lights elsewhere and the scene
@@ -108,6 +99,54 @@ def test_scene_spawn(simulator: str) -> None:
         _HARNESS_DIR / "scene_spawn_assert.py",
         "--simulator",
         simulator,
+        "--scene",
+        scene,
+        "--num-envs",
+        "4",
         label=f"{simulator}/scene-spawn",
         timeout=900,
     )
+
+
+@pytest.mark.parametrize("simulator", BACKENDS)
+def test_lights(simulator: str) -> None:
+    result = run_harness(
+        _HARNESS_DIR / "scene_spawn_assert.py",
+        "--simulator",
+        simulator,
+        "--probe-lights",
+        "--num-envs",
+        "4",
+        label=f"{simulator}/lights",
+        timeout=900,
+    )
+    assert "PASS: SceneConfig.lights" in result.stdout, result.stdout[-3000:] + result.stderr[-2000:]
+
+
+@pytest.mark.parametrize("simulator", BACKENDS)
+def test_spawn_configs(simulator: str, tmp_path: Path) -> None:
+    sentinel = tmp_path / "spawn-config-result.txt"
+    run_harness(
+        _HARNESS_DIR / "object_spawner_cfg_assert.py",
+        "--simulator",
+        simulator,
+        "--result-file",
+        str(sentinel),
+        result_file=sentinel,
+        label=f"{simulator}/spawn-configs",
+        timeout=900,
+    )
+
+
+@pytest.mark.parametrize("simulator", BACKENDS)
+def test_kinematic_playback(simulator: str) -> None:
+    result = run_harness(
+        _HARNESS_DIR / "playback_assert.py",
+        "--simulator",
+        simulator,
+        "--num-envs",
+        "4",
+        label=f"{simulator}/playback",
+        timeout=900,
+    )
+    assert "ALL PASS" in result.stdout, result.stdout[-3000:] + result.stderr[-2000:]

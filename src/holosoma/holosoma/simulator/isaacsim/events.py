@@ -4,10 +4,10 @@ These deliberately do NOT route through IsaacLab's ``mdp.randomize_rigid_body_*`
 samplers read a gaussian's two parameters as ``(mean, std)``, which conflicts with the project's
 ``[lo, hi]`` BOUNDS convention and silently produces a wrong distribution. By owning the write here
 and sampling through the shared keyed :meth:`holosoma.utils.sampler.TermSampler.draw`, a config means exactly
-the same thing on IsaacSim as on MuJoCo — including gaussian and log_uniform.
+the same thing on IsaacSim as on MuJoCo and IsaacGym — including gaussian and log_uniform.
 
 The mass/CoM/inertia writers take a list of per-component :class:`DistributionSpec` (validated at the
-term boundary) and write through ``asset.root_physx_view``; CoM/inertia reset to the asset's captured
+term boundary) and write through ``asset.root_view``; CoM/inertia reset to the asset's captured
 defaults (``asset.data.default_*``) before applying, so repeated calls compose from the original.
 
 The MATERIAL writer (:func:`randomize_rigid_body_material`) is different in kind because PhysX caps
@@ -17,7 +17,7 @@ values (:func:`~holosoma.utils.sampler.quantiles`) and picks a bucket (matching 
 bounding unique materials at ``num_buckets`` — an ``n``-atom staircase matching the continuous
 backends APPROXIMATELY (raise to tighten); ``None`` draws continuously. ``per_env`` controls
 GRANULARITY: ``False`` (default) draws per shape (IsaacLab-native, for object/robot material terms),
-``True`` draws one value per env broadcast across its shapes — the per-env friction
+``True`` draws one value per env broadcast across its shapes — matching the IsaacGym per-env friction
 path and capping unique materials at ~``num_envs`` when continuous.
 """
 
@@ -26,6 +26,8 @@ from __future__ import annotations
 from typing import Literal, Sequence
 
 import torch
+
+from holosoma.simulator.isaacsim import physics_properties
 from isaaclab.assets import Articulation, RigidObject
 from isaaclab.envs import ManagerBasedEnv
 from isaaclab.managers import SceneEntityCfg
@@ -83,12 +85,12 @@ def randomize_rigid_body_mass(
     (add/scale; see the comment below), clamps to ``min_mass``, and — when ``recompute_inertia`` —
     rescales each body's inertia by the SAME factor its mass changed by THIS call (``m_after /
     m_before``). Unlike IsaacLab's event it draws from the project ``TermSampler`` — so gaussian /
-    log_uniform mean the same thing here as on MuJoCo and the draw is reproducible per
+    log_uniform mean the same thing here as on MuJoCo/IsaacGym and the draw is reproducible per
     (term, env, episode).
 
     ``axis`` is the sampler STREAM coord (a plain int) so independent mass draws stay decorrelated — a
     link-mass SCALE and a base-mass ADD must use different stream coords, or a body in both lists (e.g.
-    the torso) would get perfectly-correlated scale and add. (MuJoCo decorrelate these the
+    the torso) would get perfectly-correlated scale and add. (IsaacGym/MuJoCo decorrelate these the
     same way; this matches them.)
 
     ``recompute_inertia`` uses an explicit MULTIPLICATIVE ratio (not PhysX recompute-from-geometry),
@@ -105,12 +107,12 @@ def randomize_rigid_body_mass(
 
     body_ids = _resolve_body_ids(asset, asset_cfg)
 
-    # Compose onto the CURRENT live mass (add/scale) (``mass += offset`` /
+    # Compose onto the CURRENT live mass (add/scale), matching IsaacGym (``mass += offset`` /
     # ``mass *= scale``) and MuJoCo (``current + random`` / ``current * random``). DR mass terms are
     # setup-stage (run once), so onto-current == onto-default at startup; composing onto current is
     # what keeps "the same config means the same thing" across backends (a reset-to-default here made
     # a second call return ``draw - prior_draw`` instead of ``draw`` — a cross-backend divergence).
-    masses = asset.root_physx_view.get_masses()
+    masses = physics_properties.get_masses(asset)
     mass_before = masses[env_ids[:, None], body_ids].clone()
 
     # ``axis`` int coord = stream; body_ids as a [1, n_body] coord -> [n_env, n_body] to match the index.
@@ -126,17 +128,25 @@ def randomize_rigid_body_mass(
         raise ValueError(f"Unknown operation: '{operation}'. Use 'add', 'abs' or 'scale'.")
 
     masses[env_ids[:, None], body_ids] = masses[env_ids[:, None], body_ids].clamp(min=min_mass)
-    asset.root_physx_view.set_masses(masses, env_ids)
+    physics_properties.set_masses(asset, masses, env_ids)
 
     if recompute_inertia:
         # Scale inertia by the per-body mass ratio THIS call produced (commutes with inertia DR).
         ratios = masses[env_ids[:, None], body_ids] / mass_before.clamp(min=min_mass)
-        inertias = asset.root_physx_view.get_inertias()
-        if isinstance(asset, Articulation):
+        inertias = physics_properties.get_inertias(asset)
+        # `BaseArticulation`, not `Articulation`: in Isaac Lab 3.0 the generic `Articulation` is
+        # a `FactoryBase` that dispatches to a per-physics-backend implementation, and the object
+        # the scene actually holds derives from `BaseArticulation` -- *not* from the factory. So
+        # `isinstance(asset, Articulation)` is always False here, silently taking the
+        # single-rigid-body branch for an articulation and indexing a [num_envs, num_bodies, 9]
+        # inertia array as if it were [num_envs, 9]. It surfaced as a shape error
+        # ("size of tensor a (42) must match ... (4)"), but a shape that happened to broadcast
+        # would have corrupted inertia instead.
+        if inertias.ndim == 3:
             inertias[env_ids[:, None], body_ids] *= ratios[..., None]
         else:
             inertias[env_ids] *= ratios
-        asset.root_physx_view.set_inertias(inertias, env_ids)
+        physics_properties.set_inertias(asset, inertias, env_ids)
 
 
 def randomize_body_com(
@@ -171,7 +181,7 @@ def randomize_body_com(
         f"(asset_cfg.body_names={asset_cfg.body_names!r}); CoM DR targets one body (the torso)."
     )
 
-    coms = asset.root_physx_view.get_coms()
+    coms = physics_properties.get_coms(asset)
     coms[env_ids[:, None], body_ids] = env.default_coms[env_ids[:, None], body_ids].clone()
 
     # One (x,y,z) sample per env (first resolved body's row); CoM DR targets the torso, a single body.
@@ -187,7 +197,7 @@ def randomize_body_com(
     else:
         raise ValueError(f"Unknown operation: '{operation}'. Use 'add', 'abs' or 'scale'.")
 
-    asset.root_physx_view.set_coms(coms, env_ids)
+    physics_properties.set_coms(asset, coms, env_ids)
 
 
 def randomize_rigid_body_inertia(
@@ -202,7 +212,7 @@ def randomize_rigid_body_inertia(
 
     ``specs`` holds 6 :class:`DistributionSpec` in the order [Ixx, Iyy, Izz, Ixy, Iyz, Ixz]. The 3x3
     inertia is symmetric; off-diagonals are mirrored. Draws through the bound keyed sampler, so a
-    gaussian or log_uniform scale config means the same thing as on MuJoCo and is
+    gaussian or log_uniform scale config means the same thing as on MuJoCo/IsaacGym and is
     reproducible per (term, env, episode).
 
     The inertia matrix is stored (PhysX) in the order Ixx, Iyx, Izx, Ixy, Iyy, Izy, Ixz, Iyz, Izz.
@@ -216,7 +226,7 @@ def randomize_rigid_body_inertia(
 
     body_ids = _resolve_body_ids(asset, asset_cfg)
 
-    inertias_original = asset.root_physx_view.get_inertias()  # (num_envs, 9) or (num_envs, num_bodies, 9)
+    inertias_original = physics_properties.get_inertias(asset)  # (num_envs, 9) or (num_envs, num_bodies, 9)
     if inertias_original.ndim == 2:
         inertias = inertias_original.unsqueeze(1).clone()  # (num_envs, 1, 9)
     else:
@@ -253,7 +263,7 @@ def randomize_rigid_body_inertia(
     if inertias_original.ndim == 2:
         inertias = inertias.squeeze(1)
 
-    asset.root_physx_view.set_inertias(inertias, env_ids)
+    physics_properties.set_inertias(asset, inertias, env_ids)
 
 
 def randomize_rigid_body_material(
@@ -285,7 +295,7 @@ def randomize_rigid_body_material(
     ``per_env`` controls GRANULARITY (independent of quantization):
     - ``False`` (default): draw independently PER SHAPE — the IsaacLab-native behavior, kept for the
       object/robot material terms.
-    - ``True``: draw ONE value per env and broadcast it across that env's shapes, matching the
+    - ``True``: draw ONE value per env and broadcast it across that env's shapes, matching the IsaacGym
       per-env friction path (and MuJoCo's ``shared_across_entities``). The friction term uses this so
       one robot has a single contact-friction coefficient on every backend. Per-env also caps unique
       materials at ~``num_envs`` when continuous, keeping it under the PhysX limit.
@@ -318,8 +328,28 @@ def randomize_rigid_body_material(
     else:
         env_ids = env_ids.cpu()
 
-    materials = asset.root_physx_view.get_material_properties()
-    total_num_shapes = asset.root_physx_view.max_shapes
+    # Newton has one friction coefficient where PhysX has two, and `set_material_properties`
+    # resolves that by writing the *dynamic* column. A request to randomize static friction
+    # without also randomizing dynamic therefore reaches the engine as nothing at all -- the
+    # drawn values land in a column that is never written. Refused rather than dropped: a
+    # friction term that silently does nothing is indistinguishable from one that worked, and
+    # `config_types/randomization.py` states the no-silent-cross-backend-drop rule this would
+    # break. Supplying both is supported (the dynamic draw is what applies).
+    if (
+        static_friction_spec is not None
+        and dynamic_friction_spec is None
+        and not physics_properties.has_split_friction(asset)
+    ):
+        raise NotImplementedError(
+            "static_friction randomization without dynamic_friction is not supported on the "
+            "Newton physics backend: Newton has a single `shape_material_mu`, so only the "
+            "dynamic column is written and the static draw would be discarded silently. "
+            "Randomize dynamic_friction (optionally both), or use "
+            "isaac_physics_backend='physx'."
+        )
+
+    materials = physics_properties.get_material_properties(asset)
+    total_num_shapes = physics_properties.max_shapes(asset)
     samples = materials[env_ids].clone()  # (n_env, n_shapes, 3); start from current, overwrite chosen cols
 
     # ``per_env`` picks the shape coordinate: absent -> one draw per env, broadcast across shapes;
@@ -349,4 +379,4 @@ def randomize_rigid_body_material(
         samples[..., 1] = torch.min(samples[..., 0], samples[..., 1])  # dynamic <= static (PhysX)
 
     materials[env_ids] = samples.to(materials.dtype)
-    asset.root_physx_view.set_material_properties(materials, env_ids)
+    physics_properties.set_material_properties(asset, materials, env_ids)

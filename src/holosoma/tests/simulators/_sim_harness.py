@@ -68,7 +68,15 @@ def run_and_hard_exit(main: Callable[[], int]) -> NoReturn:
         if __name__ == "__main__":
             run_and_hard_exit(main)
     """
-    rc = main()
+    try:
+        rc = main()
+    except SystemExit as exc:
+        rc = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+    except BaseException:
+        import traceback
+
+        traceback.print_exc()
+        rc = 1
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(rc)
@@ -127,7 +135,7 @@ def build_run_sim_config(
 
     argv = [f"simulator:{simulator}"]
     if visualizers is not None:
-        # The renderer is the second independent axis on Isaac Sim 6.1, and the harnesses could not
+        # The renderer is the second independent axis on Isaac Sim 6.2, and the harnesses could not
         # reach it at all: they take a preset name through plain argparse, so `isaac_visualizers`
         # could not be varied and the rendering dimension went untested. Overridden here rather
         # than by adding a preset per visualizer, since those combinations multiply with the
@@ -151,7 +159,9 @@ def build_run_sim_config(
             virtual_gantry=VirtualGantryCfg(enabled=False),
         ),
     )
-    config = dataclasses.replace(config, simulator=sim_cfg)
+    config = dataclasses.replace(
+        config, simulator=sim_cfg, training=dataclasses.replace(config.training, headless=True)
+    )
 
     if record_dir is not None:
         video_kwargs: dict[str, Any] = {

@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# Isaac Sim 6.1.0 / Isaac Lab 3.0 image. Mirrors isaacsim.Dockerfile's two-stage shape -- a
+# Isaac Sim 6.2.0 / Isaac Lab 3.0 image. Mirrors isaacsim.Dockerfile's two-stage shape -- a
 # source-free `dependencies` target that downstream images reuse across Holosoma Python-only
 # releases, plus a cheap `runtime` source layer -- so both lanes are built and cached the same way.
 #
@@ -13,10 +13,10 @@
 #     checkout under whatever this points at -- aiming it at the 5.1 workspace would delete the
 #     other lane's IsaacLab. It is set as an ENV (not left to the script's default) so the value
 #     is visible to anything that runs in the container, not just to setup.
-#   * A git clone during build. Isaac Lab 3.0 is pre-GA with no release wheel, so the lane
+#   * A git clone during build. Isaac Lab 3.0 GA ships a workspace lockfile, so the lane
 #     resolves dependencies from the pinned checkout's own pyproject.toml + uv.lock. That means
 #     the build needs network access to github.com, which the 5.1 build does not.
-FROM nvcr.io/nvidia/isaac-sim:6.1.0 AS dependencies
+FROM nvcr.io/nvidia/isaac-sim:6.2.0 AS dependencies
 
 USER root
 

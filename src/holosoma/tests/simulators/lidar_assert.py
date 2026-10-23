@@ -151,6 +151,8 @@ def _check_static_cloud(sim, sensor_heights, plane_normal, directions) -> list[s
 
 def _check_isaacsim_prim_resolution_helpers(lane: str) -> list[str]:
     """Exercise link and native-owner resolution against independent USD fixtures."""
+    import re
+
     from pxr import Usd, UsdGeom, UsdPhysics
 
     # Lane-resolved: `prim_utils` lives inside a backend package, and the two Isaac Sim
@@ -171,14 +173,14 @@ def _check_isaacsim_prim_resolution_helpers(lane: str) -> list[str]:
     UsdPhysics.RigidBodyAPI.Apply(owner).CreateRigidBodyEnabledAttr(True)
     fixed_link = UsdGeom.Xform.Define(stage, f"{robot_path}/owner/fixed_link").GetPrim()
     UsdPhysics.RigidBodyAPI.Apply(fixed_link).CreateRigidBodyEnabledAttr(False)
-    expected_owner = "/World/envs/env_.*/Robot/owner"
-    if resolve_robot_link_rigid_body_prim_expression("fixed_link", stage) != expected_owner:
+    expected_owner = "/World/envs/env_7/Robot/owner"
+    if not re.fullmatch(resolve_robot_link_rigid_body_prim_expression("fixed_link", stage), expected_owner):
         failures.append("disabled RigidBodyAPI did not resolve to its nearest enabled owner")
 
     geometry_link = UsdGeom.Cube.Define(stage, f"{robot_path}/geometry_link").GetPrim()
     UsdPhysics.RigidBodyAPI.Apply(geometry_link).CreateRigidBodyEnabledAttr(True)
-    expected_geometry = "/World/envs/env_.*/Robot/geometry_link"
-    if resolve_robot_link_prim_expression("geometry_link", stage) != expected_geometry:
+    expected_geometry = "/World/envs/env_7/Robot/geometry_link"
+    if not re.fullmatch(resolve_robot_link_prim_expression("geometry_link", stage), expected_geometry):
         failures.append("a rigid body authored directly on geometry was not accepted as a robot link")
 
     UsdGeom.Xform.Define(stage, f"{robot_path}/owner/a/duplicate")
@@ -210,7 +212,9 @@ def _check_isaacsim_prim_resolution_helpers(lane: str) -> list[str]:
         failures.append("robot deinstancing rejected a valid robot root")
     elif stage.GetPrimAtPath(proxy_path).IsInstanceProxy():
         failures.append("robot deinstancing left a nested instance proxy unresolved")
-    elif resolve_robot_link_prim_expression("proxy_link", stage) != "/World/envs/env_.*/Robot/instance/proxy_link":
+    elif not re.fullmatch(
+        resolve_robot_link_prim_expression("proxy_link", stage), "/World/envs/env_7/Robot/instance/proxy_link"
+    ):
         failures.append("a deinstanced nested robot link did not resolve to its environment expression")
 
     return failures
@@ -228,6 +232,7 @@ def _check_isaacsim_native_configs(sim, manager) -> list[str]:
     resolve_robot_link_rigid_body_prim_expression = _prim_utils.resolve_robot_link_rigid_body_prim_expression
     _is_visual_raycast_prim = isaac_lane_submodule(sim, "sensor_setup")._is_visual_raycast_prim
 
+    namespace = sim.scene.env_regex_ns
     failures = []
     for lidar_record in manager.lidars:
         native = sim.scene.sensors.get(lidar_record.name)
@@ -259,7 +264,7 @@ def _check_isaacsim_native_configs(sim, manager) -> list[str]:
                 failures.append(f"{lidar_record.name}: auto-discovered targets omit the static ground")
             elif any(track for _path, track in ground_specs):
                 failures.append(f"{lidar_record.name}: auto-discovered static ground tracks transforms")
-            if "/World/envs/env_.*/.*" in target_paths:
+            if f"{namespace}/.*" in target_paths:
                 failures.append(f"{lidar_record.name}: auto-discovery retained the unsafe environment catch-all")
             body_filter = lidar_record.config.body_filter
             exclude_robot = body_filter.target_kind == "robot"
@@ -276,7 +281,7 @@ def _check_isaacsim_native_configs(sim, manager) -> list[str]:
                 excluded_path = (
                     resolve_robot_link_rigid_body_prim_expression(target)
                     if kind == "robot_link"
-                    else f"/World/envs/env_.*/{target}"
+                    else f"{namespace}/{target}"
                 )
             if excluded_path is not None:
                 if excluded_target is not None and excluded_target[0] == "actor":
@@ -284,11 +289,11 @@ def _check_isaacsim_native_configs(sim, manager) -> list[str]:
                         failures.append(f"{lidar_record.name}: auto-discovery includes filtered actor {excluded_path}")
                 else:
                     stage = get_current_stage()
-                    excluded_source = excluded_path.replace("env_.*", "env_0")
+                    excluded_source = excluded_path.replace(namespace, "/World/envs/env_0")
                     for path in target_paths:
-                        if not path.startswith("/World/envs/env_.*/Robot/"):
+                        if not path.startswith(f"{namespace}/Robot/"):
                             continue
-                        owner = stage.GetPrimAtPath(path.replace("env_.*", "env_0"))
+                        owner = stage.GetPrimAtPath(path.replace(namespace, "/World/envs/env_0"))
                         while owner.IsValid() and str(owner.GetPath()).startswith("/World/envs/env_0/Robot"):
                             if is_rigid_body_enabled(owner):
                                 break
@@ -301,7 +306,7 @@ def _check_isaacsim_native_configs(sim, manager) -> list[str]:
                             break
             stage = get_current_stage()
             source_root = "/World/envs/env_0/Robot"
-            expression_root = "/World/envs/env_.*/Robot"
+            expression_root = f"{namespace}/Robot"
             expected_robot_targets = set()
             if not exclude_robot:
                 for mesh_prim in sim_utils.get_all_matching_child_prims(
@@ -313,11 +318,13 @@ def _check_isaacsim_native_configs(sim, manager) -> list[str]:
                         if is_rigid_body_enabled(owner):
                             break
                         owner = owner.GetParent()
-                    if excluded_path is not None and str(owner.GetPath()) == excluded_path.replace("env_.*", "env_0"):
+                    if excluded_path is not None and str(owner.GetPath()) == excluded_path.replace(
+                        namespace, "/World/envs/env_0"
+                    ):
                         continue
                     mesh_path = str(mesh_prim.GetPath())
                     expected_robot_targets.add(f"{expression_root}{mesh_path[len(source_root) :]}")
-            actual_robot_targets = {path for path in target_paths if path.startswith("/World/envs/env_.*/Robot/")}
+            actual_robot_targets = {path for path in target_paths if path.startswith(f"{namespace}/Robot/")}
             if actual_robot_targets != expected_robot_targets:
                 failures.append(
                     f"{lidar_record.name}: robot visual discovery differs from the eligible geometry "
@@ -330,7 +337,7 @@ def _check_isaacsim_native_configs(sim, manager) -> list[str]:
             if not exclude_robot and not actual_robot_targets:
                 failures.append(f"{lidar_record.name}: auto-discovery found no robot-link visual targets")
             expected_actors = {
-                f"/World/envs/env_.*/{actor_name}"
+                f"{namespace}/{actor_name}"
                 for actor_name in sim.scene.rigid_objects
                 if excluded_target != ("actor", actor_name)
             }
@@ -342,7 +349,9 @@ def _check_isaacsim_native_configs(sim, manager) -> list[str]:
             if missing_actors:
                 failures.append(f"{lidar_record.name}: auto-discovery omits scene actors {sorted(missing_actors)}")
         else:
-            expected_targets = set(lidar_record.config.isaacsim.mesh_prim_paths)
+            expected_targets = {
+                path.replace("/World/envs/env_.*", namespace) for path in lidar_record.config.isaacsim.mesh_prim_paths
+            }
             if target_paths != expected_targets:
                 failures.append(
                     f"{lidar_record.name}: explicit Isaac targets changed "
@@ -705,7 +714,7 @@ def main() -> int:
     config = dataclasses.replace(
         config,
         device=device,
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        training=dataclasses.replace(config.training, headless=True, num_envs=args.num_envs),
     )
 
     if is_isaacsim(args.simulator):

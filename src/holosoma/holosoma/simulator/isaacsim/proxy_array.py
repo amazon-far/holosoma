@@ -71,7 +71,7 @@ def as_warp(value: Any) -> Any:
     """Return ``value`` as a ``warp.array``, for the physics-view *setters*.
 
     The counterpart to :func:`as_tensor`, and needed for the same reason in the other direction.
-    Isaac Sim 6.1's ``omni.physics.tensors`` uses a warp frontend, so ``root_view.set_masses`` /
+    Isaac Sim 6.2's ``omni.physics.tensors`` uses a warp frontend, so ``root_view.set_masses`` /
     ``set_inertias`` / ``set_coms`` / ``set_material_properties`` expect warp arrays. Handing one
     a ``torch.Tensor`` does not raise a clear type error -- it reaches
     ``warp.types.type_ctype`` deep inside the extension and fails with

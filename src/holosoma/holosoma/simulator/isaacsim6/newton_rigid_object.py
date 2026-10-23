@@ -1,50 +1,14 @@
-"""Newton's rigid-object view, addressed by articulation rather than by body prim.
+"""Address Newton rigid-object views by their owning articulation.
 
-Why this exists
----------------
-``isaaclab_newton.assets.RigidObject._initialize_impl`` resolves the prim carrying
-``UsdPhysics.RigidBodyAPI`` beneath its configured ``prim_path`` and then builds an
-``ArticulationView`` from *that* path::
+The GA RigidObject implementation resolves the body prim and passes that path to
+ArticulationView. Converted Holosoma assets put the body below the articulation
+root (for example, /freebox/Geometry/baseLink versus /freebox), so that lookup
+fails despite a complete model. This adapter keeps the native body resolution
+and finds its owning articulation before constructing the view.
 
-    resolve_kwargs = {"predicate": has_rigid_body_api, "expected_num_matches": 1}
-    _, root_prim_path_expr = resolve_matching_prims_from_source(self.cfg.prim_path, **resolve_kwargs)[0]
-    self._root_view = ArticulationView(SimulationManager.get_model(), path_expr_to_glob(root_prim_path_expr))
-
-Those are two different namespaces in Newton's model, and for holosoma's assets they do not
-coincide. Measured on a 2-environment scene, both labels exist and differ::
-
-    body_label         ['/World/envs/env_0/freebox/Geometry/baseLink', ...]   <- what it searches
-    articulation_label ['/World/envs/env_0/freebox', ...]                     <- what it indexes
-
-so the lookup raises ``KeyError: No articulations matching pattern
-'/World/envs/env_*/freebox/Geometry/baseLink'`` even though the model is complete and correct.
-
-This only bites assets whose ``RigidBodyAPI`` sits *below* the asset root. Isaac Lab's own Newton
-tests spawn primitives (``CuboidCfg`` at ``/World/Cube``), where the API is on the root prim and
-the two namespaces coincide -- which is why upstream does not see it. holosoma's scene objects come
-from USD/URDF conversion and carry a ``Geometry/baseLink`` substructure, so they do.
-
-Note holosoma is not passing the wrong path: ``object_spawner`` configures
-``prim_path="/World/envs/env_[^/]+/{name}"``, the asset root, which is exactly what Newton
-indexes. The mismatch is introduced by the resolution step above.
-
-Why an override and not a config change
----------------------------------------
-There is no configuration that reconciles them: the body prim is wherever the asset author put
-``RigidBodyAPI``, and moving it would change the USD that the PhysX path (the verified one) also
-consumes. Re-pointing ``prim_path`` at the inner body does not help either -- resolution would
-return the same inner path and the articulation lookup would still miss.
-
-So the fix is to keep upstream's body resolution (it correctly identifies *which* body this object
-is) and then ask the model which articulation owns that body, instead of assuming the two paths
-are the same string.
-
-This subclasses the **concrete** ``isaaclab_newton`` class deliberately. The generic
-``isaaclab.assets.RigidObject`` is a ``FactoryBase`` whose ``__init_subclass__`` raises
-``ImportError: Factory class ... must be defined within the 'isaaclab' package``, so a subclass
-outside Isaac Lab must derive from the backend implementation -- the same constraint the LiDAR
-ray-caster override runs into.
-"""
+Only the initialization method is overridden: the upstream constructor raises
+before a call to super() could return. Physics data, buffers and reset callbacks
+continue to use the upstream implementation."""
 
 from __future__ import annotations
 

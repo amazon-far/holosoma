@@ -41,7 +41,7 @@ isaacsim = SIMULATOR_REGISTRY.add(
 isaacsim6 = SIMULATOR_REGISTRY.add(
     "isaacsim6",
     SimulatorConfig(
-        # Isaac Sim 6.1 / Isaac Lab 3.0, implemented in its own backend package. The two
+        # Isaac Sim 6.2 / Isaac Lab 3.0, implemented in its own backend package. The two
         # generations diverge in ways a shim cannot express -- 3.0 inverted the quaternion
         # convention globally, renamed or removed most of the accessors holosoma calls, and made
         # the physics engine selectable -- so each generation gets a complete implementation
@@ -79,7 +79,7 @@ isaacsim6 = SIMULATOR_REGISTRY.add(
 )
 
 
-# Isaac Sim 6.1 under the non-default physics engines.
+# Isaac Sim 6.2 under the non-default physics engines.
 #
 # A preset per engine, following `mujoco` / `mjwarp`: same `_target_`, same simulator identity,
 # differing only in which engine `SimulationCfg.physics` resolves to. This is also what makes the

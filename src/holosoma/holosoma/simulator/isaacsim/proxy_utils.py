@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+from .api import ISAACSIM5, IsaacLabApi
 
 from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw, fullstate_xyzw_to_wxyz
 
@@ -28,12 +29,15 @@ class RootStatesProxy:
         Converted tensor with quaternions in xyzw format.
     """
 
-    def __init__(self, tensor_wxyz: torch.Tensor) -> None:
+    def __init__(self, tensor_wxyz: torch.Tensor, *, api: IsaacLabApi = ISAACSIM5) -> None:
+        self.api = api
         self.reset(tensor_wxyz)
 
     def reset(self, tensor_wxyz: torch.Tensor) -> None:
         self.tensor_wxyz = tensor_wxyz
-        self.tensor_xyzw = fullstate_wxyz_to_xyzw(tensor_wxyz)
+        self.tensor_xyzw = self.api.read_state(tensor_wxyz)
+        if self.api.quaternions_xyzw:
+            self.tensor_xyzw = self.tensor_xyzw.clone()
 
     def __getitem__(self, index: int | slice | torch.Tensor) -> torch.Tensor:
         """Get tensor values in xyzw quaternion format.
@@ -61,7 +65,7 @@ class RootStatesProxy:
             Values to set with quaternions in xyzw format.
         """
         self.tensor_xyzw[index] = value_xyzw
-        self.tensor_wxyz = fullstate_xyzw_to_wxyz(self.tensor_xyzw)
+        self.tensor_wxyz = self.api.write_state(self.tensor_xyzw)
 
     def _get_wxyz(self, env_ids: torch.Tensor | None = None) -> torch.Tensor:
         """Get tensor in wxyz quaternion format for IsaacSim interfacing.
@@ -79,3 +83,7 @@ class RootStatesProxy:
         if env_ids is None:
             return self.tensor_wxyz
         return self.tensor_wxyz[env_ids]
+
+    def _get_sim_order(self, env_ids: torch.Tensor | None = None) -> torch.Tensor:
+        native = self.api.write_state(self.tensor_xyzw)
+        return native if env_ids is None else native[env_ids]

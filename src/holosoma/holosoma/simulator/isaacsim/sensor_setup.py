@@ -21,6 +21,8 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab.sensors import TiledCamera, TiledCameraCfg, patterns
 from isaaclab.utils.math import quat_apply
+from .api import ISAACSIM5, IsaacLabApi
+from .proxy_array import as_tensor
 
 from holosoma.config_types.frequency import resolve_decimation
 from holosoma.config_types.sensor import CameraSensorConfig, IsaacSimLidarConfig, LidarSensorConfig
@@ -41,7 +43,12 @@ from holosoma.simulator.shared.sensor_manager import SensorManager
 
 if TYPE_CHECKING:
     from holosoma.config_types.sensor import LidarRayPatternConfig, SensorMountConfig
-    from holosoma.simulator.isaacsim.isaacsim import IsaacSim
+    from holosoma.simulator.isaacsim.isaacsim import IsaacSim as IsaacSim5
+    from holosoma.simulator.isaacsim6.isaacsim import IsaacSim as IsaacSim6
+
+    from typing import Union
+
+    IsaacSim = Union[IsaacSim5, IsaacSim6]
 
 
 def build_cameras(sim: IsaacSim) -> None:
@@ -52,18 +59,19 @@ def build_cameras(sim: IsaacSim) -> None:
     Mount quat is the config-layer ``[w,x,y,z]`` (IsaacLab OffsetCfg.rot is also w-first). Populates
     ``sim.tiled_cameras`` and registers each camera prim into ``sim.scene.sensors``.
     """
+    api = getattr(sim, "api", ISAACSIM5)
     sim.tiled_cameras = {}
     for cam_name, cam in sim.sensor_config.items():
         if not isinstance(cam, CameraSensorConfig):
             continue
-        parent = _camera_mount_prim_path(cam.mount)
+        parent = _camera_mount_prim_path(cam.mount, api=api)
         # Map holosoma data_types -> IsaacLab annotators.
         annotators = [{"rgb": "rgb", "depth": "distance_to_image_plane"}[d] for d in cam.data_types]
         cam_cfg = TiledCameraCfg(
             prim_path=f"{parent}/{cam_name}",
             offset=TiledCameraCfg.OffsetCfg(
                 pos=tuple(cam.mount.position),
-                rot=tuple(cam.mount.orientation),  # (w, x, y, z)
+                rot=api.config_quaternion(cam.mount.orientation),  # (w, x, y, z)
                 convention="opengl",  # -Z forward / +Y up, the frame holosoma uses
             ),
             data_types=annotators,
@@ -77,16 +85,16 @@ def build_cameras(sim: IsaacSim) -> None:
         sim.scene.sensors[cam_name] = sim.tiled_cameras[cam_name]
 
 
-def _camera_mount_prim_path(mount: SensorMountConfig) -> str:
+def _camera_mount_prim_path(mount: SensorMountConfig, *, api: IsaacLabApi = ISAACSIM5) -> str:
     """Resolve a sensor mount to a per-env camera prim path (parent = the mount body prim).
 
     ``robot_link`` -> a robot link prim (name the root link to mount on the base);
     ``actor`` -> a spawned scene-object prim. The camera prim is created as a child of this
     path so the USD transform hierarchy makes it follow the body natively.
     """
-    ns = "/World/envs/env_.*"
+    ns = api.env_regex
     if mount.target_kind == "robot_link":
-        return resolve_robot_link_prim_expression(mount.target)
+        return resolve_robot_link_prim_expression(mount.target, api=api)
     if mount.target_kind == "actor":
         return f"{ns}/{mount.target}"
     if mount.target_kind == "world":
@@ -116,14 +124,14 @@ def render_cameras(sim: IsaacSim) -> None:
     for camera_record in sim.sensor_manager.collect_due():
         out = sim.tiled_cameras[camera_record.name].data.output
         if "rgb" in camera_record.config.data_types:
-            rgb = out["rgb"][..., :3]  # [N,H,W,3], drop alpha
+            rgb = as_tensor(out["rgb"])[..., :3]  # [N,H,W,3], drop alpha
             if rgb.dtype != torch.uint8:
                 rgb = rgb.clamp(0, 255).to(torch.uint8)
             camera_record.set_buffer("rgb", rgb)
         if "depth" in camera_record.config.data_types:
             # distance_to_image_plane is float32 meters, image-plane. Ensure a trailing channel
             # dim; CameraRecord applies the configured cross-backend no-return convention.
-            depth = out["distance_to_image_plane"].to(torch.float32)
+            depth = as_tensor(out["distance_to_image_plane"]).to(torch.float32)
             camera_record.set_buffer("depth", depth if depth.ndim == 4 else depth.unsqueeze(-1))
 
 
@@ -256,10 +264,10 @@ def _mutable_multi_mesh_ray_caster_cls() -> type[Any]:
     return MutableMultiMeshRayCaster
 
 
-def _mount_parent_path(mount: SensorMountConfig) -> str:
-    namespace = "/World/envs/env_.*"
+def _mount_parent_path(mount: SensorMountConfig, *, api: IsaacLabApi = ISAACSIM5) -> str:
+    namespace = api.env_regex
     if mount.target_kind == "robot_link":
-        return resolve_robot_link_prim_expression(mount.target)
+        return resolve_robot_link_prim_expression(mount.target, api=api)
     if mount.target_kind == "actor":
         return f"{namespace}/{mount.target}"
     if mount.target_kind == "world":
@@ -337,14 +345,16 @@ def _body_filter_target(lidar: LidarSensorConfig) -> tuple[str, str] | None:
     return body_filter.target_kind, body_filter.target
 
 
-def _robot_mesh_prim_paths(excluded_link: str | None) -> list[str]:
+def _robot_mesh_prim_paths(excluded_link: str | None, *, api: IsaacLabApi = ISAACSIM5) -> list[str]:
     """Return robot visual-geometry expressions, omitting one native body owner."""
     source_root = "/World/envs/env_0/Robot"
-    expression_root = "/World/envs/env_.*/Robot"
+    expression_root = f"{api.env_regex}/Robot"
     excluded_body_path = (
         None
         if excluded_link is None
-        else resolve_robot_link_rigid_body_prim_expression(excluded_link).replace("env_.*", "env_0")
+        else resolve_robot_link_rigid_body_prim_expression(excluded_link, api=api).replace(
+            api.env_regex, "/World/envs/env_0"
+        )
     )
     return _visual_mesh_prim_paths(
         source_root,
@@ -364,7 +374,7 @@ def _default_mesh_prim_paths(sim: IsaacSim, lidar: LidarSensorConfig) -> list[st
             )
     return assemble_default_mesh_prim_paths(
         excluded_target=excluded_target,
-        robot_mesh_prim_paths=_robot_mesh_prim_paths,
+        robot_mesh_prim_paths=partial(_robot_mesh_prim_paths, api=getattr(sim, "api", ISAACSIM5)),
         # InteractiveScene.rigid_objects includes standalone objects and every static or dynamic
         # body expanded from scene files, so this covers all Holosoma scene-object meshes.
         actor_names=sim.scene.rigid_objects,
@@ -374,6 +384,7 @@ def _default_mesh_prim_paths(sim: IsaacSim, lidar: LidarSensorConfig) -> list[st
 
 def build_lidars(sim: IsaacSim) -> None:
     """Create one mutable MultiMeshRayCaster per configured LiDAR before environment cloning."""
+    api = getattr(sim, "api", ISAACSIM5)
     control_hz = sim.simulator_config.sim.fps / sim.simulator_config.sim.control_decimation_steps
     lidars = [(name, config) for name, config in sim.sensor_config.items() if isinstance(config, LidarSensorConfig)]
     if not lidars:
@@ -382,22 +393,22 @@ def build_lidars(sim: IsaacSim) -> None:
     for name, lidar in lidars:
         from isaaclab.sensors import MultiMeshRayCasterCfg
 
-        parent = _mount_parent_path(lidar.mount)
+        parent = _mount_parent_path(lidar.mount, api=api)
         if lidar.mount.target_kind == "world":
             mount_path = f"{parent}/holosoma_lidar_{name}"
-            source_path = mount_path.replace("env_.*", "env_0")
+            source_path = mount_path.replace(api.env_regex, "/World/envs/env_0")
             sim_utils.create_prim(
                 source_path,
                 prim_type="Xform",
                 translation=tuple(lidar.mount.position),
-                orientation=tuple(lidar.mount.orientation),
+                orientation=api.config_quaternion(lidar.mount.orientation),
             )
             offset = MultiMeshRayCasterCfg.OffsetCfg()
         else:
             mount_path = parent
             offset = MultiMeshRayCasterCfg.OffsetCfg(
                 pos=tuple(lidar.mount.position),
-                rot=tuple(lidar.mount.orientation),
+                rot=api.config_quaternion(lidar.mount.orientation),
             )
         update_decimation = resolve_decimation(
             lidar.update_decimation,
@@ -419,7 +430,7 @@ def build_lidars(sim: IsaacSim) -> None:
             mesh_paths = isaacsim_config.mesh_prim_paths
         mesh_targets = [
             MultiMeshRayCasterCfg.RaycastTargetCfg(
-                prim_expr=path,
+                prim_expr=path.replace("/World/envs/env_.*", api.env_regex),
                 # Discovery returns exact ground descendants; the whole ground subtree is static.
                 track_mesh_transforms=not (path == "/World/ground" or path.startswith("/World/ground/")),
             )
@@ -435,7 +446,7 @@ def build_lidars(sim: IsaacSim) -> None:
             mesh_prim_paths=mesh_targets,
             max_distance=lidar.far,
         )
-        sensor = _mutable_multi_mesh_ray_caster_cls()(cfg)
+        sensor = _ray_caster_class(sim)(cfg)
         sim.scene.sensors[name] = sensor
 
 
@@ -451,11 +462,11 @@ def render_lidars(sim: IsaacSim) -> None:
     for lidar_record in sim.sensor_manager.collect_lidars_due():
         pattern = lidar_record.pattern_at(sim.time())
         sensor = sim.scene.sensors.get(lidar_record.name)
-        if not isinstance(sensor, _mutable_multi_mesh_ray_caster_cls()):
+        if not isinstance(sensor, _ray_caster_class(sim)):
             raise TypeError(f"LiDAR '{lidar_record.name}' has no mutable MultiMeshRayCaster.")
         sensor.set_ray_directions(pattern.directions)
         native = sensor.data
-        distances = torch.linalg.vector_norm(native.ray_hits_w - sensor.ray_starts_w, dim=-1)
+        distances = torch.linalg.vector_norm(as_tensor(native.ray_hits_w) - as_tensor(sensor.ray_starts_w), dim=-1)
         finalize_lidar_returns(lidar_record, pattern.directions, distances)
 
 
@@ -467,7 +478,7 @@ def build_sensors(sim: IsaacSim) -> None:
     )
     if needs_expanded_robot:
         # IsaacLab cannot author children or resolve exact targets through instance proxies.
-        set_instanceable(get_current_stage(), "/World/envs/env_0/Robot", False)
+        set_instanceable(get_current_stage(getattr(sim, "api", ISAACSIM5)), "/World/envs/env_0/Robot", False)
     build_cameras(sim)
     build_lidars(sim)
 
@@ -487,3 +498,52 @@ def render_sensors(sim: IsaacSim) -> None:
     """Capture all camera and LiDAR sensors due this control step."""
     render_cameras(sim)
     render_lidars(sim)
+
+
+def _ray_caster_class(sim: Any) -> type[Any]:
+    if getattr(sim, "api", ISAACSIM5).quaternions_xyzw:
+        from isaaclab.sensors import MultiMeshRayCaster
+
+        return _native_mutable_ray_caster_cls(MultiMeshRayCaster.resolve_class())
+    return _mutable_multi_mesh_ray_caster_cls()
+
+
+@lru_cache(maxsize=None)
+def _native_mutable_ray_caster_cls(base: type[Any]) -> type[Any]:
+    """Keep Lab 3's native mesh tracking; add only Holosoma's changing ray pattern."""
+
+    class MutableMultiMeshRayCaster(base):
+        def _register_sites_for_expr(self, prim_expr: str) -> list[str]:
+            # Newton registers sites while sensors are constructed, before Holosoma
+            # publishes the ClonePlan. Its default path cannot resolve world-fixed
+            # attachment frames without that plan. Declare a native per-world site
+            # using the authored mount transform; body-mounted sites stay upstream.
+            from holosoma.simulator.isaacsim.api import ISAACLAB3
+
+            if prim_expr.startswith(f"{ISAACLAB3.env_regex}/holosoma_lidar_"):
+                import warp as wp
+                from isaaclab_newton.physics import NewtonManager
+
+                env_path = "/World/envs/env_0"
+                stage = sim_utils.get_current_stage()
+                prim = stage.GetPrimAtPath(prim_expr.replace(ISAACLAB3.env_regex, env_path))
+                pos, quat = sim_utils.resolve_prim_pose(prim, stage.GetPrimAtPath(env_path))
+                transform = wp.transform(wp.vec3(*pos), wp.quat(*quat))
+                return [NewtonManager.cl_register_site(None, transform, per_world=True)]
+            labels: list[str] = super()._register_sites_for_expr(prim_expr)
+            return labels
+
+        @property
+        def ray_starts_w(self) -> torch.Tensor:
+            return as_tensor(self._ray_starts_w)
+
+        def set_ray_directions(self, directions: torch.Tensor) -> None:
+            rays = as_tensor(self.ray_directions)
+            if directions.shape != (self.num_rays, 3):
+                raise ValueError(f"Expected {(self.num_rays, 3)} directions, got {directions.shape}.")
+            offset = torch.tensor(self.cfg.offset.rot, device=rays.device, dtype=rays.dtype)
+            local = quat_apply(offset.expand(self.num_rays, -1), directions.to(rays))
+            rays.copy_(local.unsqueeze(0).expand_as(rays))
+            self.update(0.0, force_recompute=True)
+
+    return MutableMultiMeshRayCaster

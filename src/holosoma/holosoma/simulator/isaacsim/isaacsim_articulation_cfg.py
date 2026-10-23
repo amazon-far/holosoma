@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import copy
 import os
+import xml.etree.ElementTree as ET
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import isaaclab.sim as sim_utils
-from isaaclab.actuators import IdealPDActuatorCfg, ImplicitActuatorCfg
+from isaaclab.actuators import IdealPDActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.sensors import ContactSensorCfg
 
@@ -15,103 +16,11 @@ from holosoma.simulator.isaacsim.converters import (
     physics_to_mass_props,
     physics_to_rigid_body_props,
 )
-from holosoma.utils.path import resolve_asset_path
+from holosoma.utils.path import resolve_asset_path, urdf_conversion_cache_dir
+from .api import ISAACSIM5, IsaacLabApi
 
 if TYPE_CHECKING:
     from holosoma.config_types.robot import RobotConfig
-
-ARTICULATION_CFG = ArticulationCfg(
-    spawn=sim_utils.UsdFileCfg(
-        # usd_path=f"{ISAACLAB_NUCLEUS_DIR}/Robots/Unitree/H1/h1.usd",
-        usd_path="holosoma/data/robots/h1/h1.usd",
-        activate_contact_sensors=True,
-        rigid_props=sim_utils.RigidBodyPropertiesCfg(
-            disable_gravity=False,
-            retain_accelerations=False,
-            linear_damping=0.0,
-            angular_damping=0.0,
-            max_linear_velocity=1000.0,
-            max_angular_velocity=1000.0,
-            max_depenetration_velocity=1.0,
-        ),
-        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-            enabled_self_collisions=False, solver_position_iteration_count=4, solver_velocity_iteration_count=4
-        ),
-    ),
-    init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 1.05),
-        joint_pos={
-            ".*_hip_yaw_joint": 0.0,
-            ".*_hip_roll_joint": 0.0,
-            ".*_hip_pitch_joint": -0.28,  # -16 degrees
-            ".*_knee_joint": 0.79,  # 45 degrees
-            ".*_ankle_joint": -0.52,  # -30 degrees
-            "torso_joint": 0.0,
-            ".*_shoulder_pitch_joint": 0.28,
-            ".*_shoulder_roll_joint": 0.0,
-            ".*_shoulder_yaw_joint": 0.0,
-            ".*_elbow_joint": 0.52,
-        },
-        joint_vel={".*": 0.0},
-    ),
-    soft_joint_pos_limit_factor=0.9,
-    actuators={
-        "legs": ImplicitActuatorCfg(
-            joint_names_expr=[
-                ".*_hip_yaw_joint",
-                ".*_hip_roll_joint",
-                ".*_hip_pitch_joint",
-                ".*_knee_joint",
-                "torso_joint",
-            ],
-            effort_limit=300,
-            velocity_limit=100.0,
-            stiffness={
-                ".*_hip_yaw_joint": 150.0,
-                ".*_hip_roll_joint": 150.0,
-                ".*_hip_pitch_joint": 200.0,
-                ".*_knee_joint": 200.0,
-                "torso_joint": 200.0,
-            },
-            damping={
-                ".*_hip_yaw_joint": 5.0,
-                ".*_hip_roll_joint": 5.0,
-                ".*_hip_pitch_joint": 5.0,
-                ".*_knee_joint": 5.0,
-                "torso_joint": 5.0,
-            },
-        ),
-        "feet": ImplicitActuatorCfg(
-            joint_names_expr=[".*_ankle_joint"],
-            effort_limit=100,
-            velocity_limit=100.0,
-            stiffness={".*_ankle_joint": 20.0},
-            damping={".*_ankle_joint": 4.0},
-        ),
-        "arms": ImplicitActuatorCfg(
-            joint_names_expr=[
-                ".*_shoulder_pitch_joint",
-                ".*_shoulder_roll_joint",
-                ".*_shoulder_yaw_joint",
-                ".*_elbow_joint",
-            ],
-            effort_limit=300,
-            velocity_limit=100.0,
-            stiffness={
-                ".*_shoulder_pitch_joint": 40.0,
-                ".*_shoulder_roll_joint": 40.0,
-                ".*_shoulder_yaw_joint": 40.0,
-                ".*_elbow_joint": 40.0,
-            },
-            damping={
-                ".*_shoulder_pitch_joint": 10.0,
-                ".*_shoulder_roll_joint": 10.0,
-                ".*_shoulder_yaw_joint": 10.0,
-                ".*_elbow_joint": 10.0,
-            },
-        ),
-    },
-)
 
 
 def _per_joint_map(joint_names: Sequence[str], values: Sequence[float], property_name: str) -> dict[str, float]:
@@ -125,13 +34,12 @@ def _per_joint_map(joint_names: Sequence[str], values: Sequence[float], property
     return {joint_name: float(values[index]) for index, joint_name in enumerate(joint_names)}
 
 
-def build_robot_articulation_cfg(robot_config: RobotConfig) -> ArticulationCfg:
+def build_robot_articulation_cfg(robot_config: RobotConfig, *, api: IsaacLabApi = ISAACSIM5) -> ArticulationCfg:
     """Assemble the robot ``ArticulationCfg`` from ``robot_config``.
 
     Resolves the asset root, maps the shared ``link_physics`` onto IsaacLab rigid/collision/mass
     props (via the same converters scene objects use), builds the URDF-convert or USD spawn cfg,
-    the initial-state cfg, and one ``IdealPDActuatorCfg`` covering every DOF, then overrides the template
-    :data:`ARTICULATION_CFG`. Pure config -> cfg: the caller instantiates the ``Articulation``.
+    the initial-state cfg, and one ``IdealPDActuatorCfg`` covering every DOF, with the shared soft joint limit factor. Pure config -> cfg: the caller instantiates the ``Articulation``.
     """
     robot_asset_cfg = robot_config.asset
 
@@ -177,13 +85,21 @@ def build_robot_articulation_cfg(robot_config: RobotConfig) -> ArticulationCfg:
 
         # Get local rank to avoid race conditions in multi-GPU setups
         local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-        usd_conversion_dir = os.path.join(os.path.dirname(full_urdf_path), f"converted_rank{local_rank}")
+        usd_conversion_dir = os.path.join(urdf_conversion_cache_dir(full_urdf_path), f"converted_rank{local_rank}")
+        merge_fixed_joints = robot_asset_cfg.collapse_fixed_joints
+        if merge_fixed_joints and not api.importer_preserves_fixed_joint_markers:
+            # Sim 6.2's preprocessing still removes marked fixed joints. Preserve the
+            # configured contact frames until its importer honors dont_collapse.
+            merge_fixed_joints = not any(
+                joint.get("type") == "fixed" and joint.get("dont_collapse") == "true"
+                for joint in ET.parse(full_urdf_path).getroot().findall("joint")
+            )
 
         spawn = sim_utils.UrdfFileCfg(
             usd_dir=usd_conversion_dir,
             asset_path=full_urdf_path,
             fix_base=robot_asset_cfg.fix_base_link,
-            merge_fixed_joints=robot_asset_cfg.collapse_fixed_joints,
+            merge_fixed_joints=merge_fixed_joints,
             replace_cylinders_with_capsules=robot_asset_cfg.replace_cylinder_with_capsule,
             force_usd_conversion=True,
             joint_drive=sim_utils.UrdfConverterCfg.JointDriveCfg(
@@ -238,12 +154,16 @@ def build_robot_articulation_cfg(robot_config: RobotConfig) -> ArticulationCfg:
     else:
         actuators = {}
 
-    return ARTICULATION_CFG.replace(
-        prim_path="/World/envs/env_.*/Robot", spawn=spawn, init_state=init_state, actuators=actuators
+    return ArticulationCfg(
+        prim_path=f"{api.env_regex}/Robot",
+        spawn=spawn,
+        init_state=init_state,
+        actuators=actuators,
+        soft_joint_pos_limit_factor=0.9,
     )
 
 
-def build_contact_sensor_cfg(history_length: int, debug_vis: bool) -> ContactSensorCfg:
+def build_contact_sensor_cfg(history_length: int, debug_vis: bool, *, api: IsaacLabApi = ISAACSIM5) -> ContactSensorCfg:
     """Build the robot ContactSensorCfg covering every robot body prim.
 
     ``debug_vis`` draws the red contact spheres; the caller passes ``SimulatorInitConfig.debug_viz``
@@ -253,7 +173,7 @@ def build_contact_sensor_cfg(history_length: int, debug_vis: bool) -> ContactSen
     sweep after the first reset if you need to toggle the markers at runtime.
     """
     return ContactSensorCfg(
-        prim_path="/World/envs/env_.*/Robot/.*",
+        prim_path=f"{api.env_regex}/Robot/.*",
         history_length=history_length,
         update_period=0.005,
         # Holosoma consumes net_forces_w and net_forces_w_history only. Tracking the four

@@ -122,7 +122,7 @@ def main() -> int:
         config,
         device="cuda:0",
         scene=dataclasses.replace(config.scene, rigid_objects=scene_objects),
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        training=dataclasses.replace(config.training, headless=True, num_envs=args.num_envs),
     )
 
     env, device, _app = setup_simulation_environment(config, device="cuda:0")

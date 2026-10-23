@@ -33,7 +33,7 @@ isaacsim = RUN_SIM_REGISTRY.add(
     ),
 )
 
-# IsaacSim 6.1 with sim2sim optimizations
+# IsaacSim 6.2 with sim2sim optimizations
 #
 # There are two independent simulator registries: SIMULATOR_REGISTRY (config_values/simulator.py,
 # used by training) and this one, bound to RunSimConfig.simulator and used by run_sim plus every
@@ -56,7 +56,7 @@ isaacsim6 = RUN_SIM_REGISTRY.add(
     ),
 )
 
-# Isaac Sim 6.1 under the non-default physics engines, for run_sim and the assert harnesses.
+# Isaac Sim 6.2 under the non-default physics engines, for run_sim and the assert harnesses.
 for _preset in ("isaacsim6-newton", "isaacsim6-ovphysx"):
     RUN_SIM_REGISTRY.add(
         _preset,

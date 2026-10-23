@@ -1,4 +1,4 @@
-"""The Isaac Sim 6.1 image must agree with the lane it packages.
+"""The Isaac Sim 6.2 image must agree with the lane it packages.
 
 Why assert on a Dockerfile from pytest
 --------------------------------------

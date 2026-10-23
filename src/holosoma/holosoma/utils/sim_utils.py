@@ -147,9 +147,13 @@ def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str
     Any | None
         IsaacSim simulation app instance, or None for other simulators.
     """
-    from isaaclab.app import AppLauncher
-
     from holosoma.simulator.isaac_lane import isaac_lane_optional_module
+
+    lane_launcher = isaac_lane_optional_module(config.simulator._target_, "launcher")
+    if lane_launcher is not None and hasattr(lane_launcher, "launch"):
+        return lane_launcher.launch(config, device)
+
+    from isaaclab.app import AppLauncher
 
     parser = argparse.ArgumentParser(description="Run simulation with IsaacSim.")
     parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
@@ -185,24 +189,9 @@ def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str
     cameras_enabled = any(isinstance(sensor, CameraSensorConfig) for sensor in getattr(config, "sensor", {}).values())
     needs_rendering = video_enabled or cameras_enabled
 
-    # The rendering flags are the one part of launcher setup that differs between Isaac Sim
-    # generations: 3.0 deleted both `--headless` and `--enable_cameras` in favour of
-    # `--visualizer`. Rather than branch on a version here, ask the configured backend package
-    # whether it wants to own the mapping. A lane that ships a `launcher` module decides; a lane
-    # that does not keeps the 2.3.2 mapping below unchanged. That keeps this shared function free
-    # of generation names, so adding or retiring a generation touches only its own folder.
-    lane_launcher = isaac_lane_optional_module(config.simulator._target_, "launcher")
-    if lane_launcher is not None:
-        lane_launcher.apply_launcher_args(
-            args_cli,
-            headless=config.training.headless,
-            needs_rendering=needs_rendering,
-            visualizers=config.simulator.config.isaac_visualizers,
-        )
-    else:
-        args_cli.headless = config.training.headless
-        if needs_rendering:
-            args_cli.enable_cameras = True
+    args_cli.headless = config.training.headless
+    if needs_rendering:
+        args_cli.enable_cameras = True
 
     isaacsim_config = config.simulator.config.isaacsim
     for name, value in isaacsim_config.app_launcher_args().items():
@@ -210,7 +199,7 @@ def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str
         # reads it back, so a configured setting is simply dropped and the run proceeds looking
         # healthy. That is not hypothetical across generations -- Isaac Lab 2.3.2 accepts
         # `--rendering_mode` and 3.0 removed it, so a config setting `isaacsim.rendering_mode`
-        # would quietly render with the default preset on the 6.1 lane.
+        # would quietly render with the default preset on the 6.2 lane.
         #
         # argparse defines an attribute for every argument it knows, so absence here means the
         # installed Isaac Lab cannot express this setting. Fail loudly rather than pretend.
@@ -306,7 +295,7 @@ def setup_keyboard_listener(env: Any) -> threading.Thread:
 
 
 _ISAACSIM6_ONLY_FIELDS = ("isaac_physics_backend", "isaac_visualizers", "isaac_newton")
-"""``SimulatorInitConfig`` fields only the Isaac Sim 6.1 backend reads.
+"""``SimulatorInitConfig`` fields only the Isaac Sim 6.2 backend reads.
 
 They live on the shared init config, so every backend *accepts* them; only
 ``simulator/isaacsim6`` acts on them. :func:`reject_unsupported_isaac_fields` turns that into an
@@ -315,9 +304,9 @@ error rather than a shrug.
 
 
 def reject_unsupported_isaac_fields(config: ExperimentConfig | RunSimConfig) -> None:
-    """Reject Isaac Sim 6.1-only configuration aimed at a backend that cannot honour it.
+    """Reject Isaac Sim 6.2-only configuration aimed at a backend that cannot honour it.
 
-    ``isaac_physics_backend`` / ``isaac_visualizers`` / ``isaac_newton`` are read only by the 6.1
+    ``isaac_physics_backend`` / ``isaac_visualizers`` / ``isaac_newton`` are read only by the 6.2
     lane. Because ``SimulatorInitConfig`` is shared, nothing stops them being set alongside
     ``simulator:isaacsim`` (5.1, which has one engine and different launcher flags), or alongside
     MuJoCo -- and the result is silence: the value is simply never read, so a run
@@ -330,7 +319,7 @@ def reject_unsupported_isaac_fields(config: ExperimentConfig | RunSimConfig) -> 
     Raises
     ------
     ValueError
-        If any 6.1-only field is set to a non-default value for a non-6.1 backend. Names the
+        If any 6.2-only field is set to a non-default value for a non-6.2 backend. Names the
         fields and the backend, since the fix is either to drop them or to switch preset.
     """
     import dataclasses
@@ -369,7 +358,7 @@ def reject_unsupported_isaac_fields(config: ExperimentConfig | RunSimConfig) -> 
         return
 
     raise ValueError(
-        f"{sorted(offenders)} are Isaac Sim 6.1 settings, but the configured backend is "
+        f"{sorted(offenders)} are Isaac Sim 6.2 settings, but the configured backend is "
         f"{target!r}, which never reads them -- so they would be silently "
         f"ignored and the run would not do what the configuration says. Values supplied: "
         f"{offenders}. Either drop them, or select `simulator:isaacsim6` "
@@ -574,6 +563,9 @@ def close_simulation_app(simulation_app: Any) -> None:
 
 def _close_simulation_app(simulation_app: Any, failure: BaseException | None) -> None:
     """Shut down the provider after its owner has reported any active failure."""
+    if simulation_app is not None and hasattr(simulation_app, "close_with_failure"):
+        simulation_app.close_with_failure(failure)
+        return
     if simulation_app is not None and get_simulator_type() == SimulatorType.ISAACSIM:
         # Kit can terminate the process inside close(), before Python reaches the
         # caller's exception handler. Set its exit status before closing the app.

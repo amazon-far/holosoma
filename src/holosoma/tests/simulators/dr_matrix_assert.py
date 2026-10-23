@@ -100,7 +100,7 @@ class _MujocoReader:
 def _properties(simulator: str):
     """The bulk-property accessor for ``simulator``'s lane.
 
-    The Isaac Sim 6.1 lane ships ``physics_properties``, a per-engine adapter, because Newton's
+    The Isaac Sim 6.2 lane ships ``physics_properties``, a per-engine adapter, because Newton's
     view provides none of the PhysX tensor view's ``get_masses`` / ``get_coms`` family. Reading
     through it means this harness verifies the *same* accessor the randomization terms write
     through, rather than a PhysX-only path that simply does not exist under Newton -- which is how

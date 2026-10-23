@@ -14,14 +14,14 @@ import isaaclab.cloner as cloner
 import isaaclab.sim as sim_utils
 import isaaclab.terrains as terrain_gen
 
-# Isaac Sim 6.1 removed `isaacsim.core.utils`; Isaac Lab 3.0 owns the stage helpers now.
+# Isaac Sim 6.2 removed `isaacsim.core.utils`; Isaac Lab 3.0 owns the stage helpers now.
 import isaaclab.sim.utils.stage as stage_utils
 import omni.log
 import numpy as np
 import torch
 from pxr import Usd
 from isaaclab.assets import Articulation
-from isaaclab.envs import ViewerCfg, mdp
+from isaaclab.envs import mdp
 from isaaclab.managers import EventManager, SceneEntityCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
@@ -39,17 +39,21 @@ from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.isaacsim6.capabilities import validate as validate_capabilities
-from holosoma.simulator.isaacsim6.newton_rigid_object import rigid_object_cls
 from holosoma.simulator.isaacsim6.physics_backend import (
     build_physics_cfg,
     replicate_environments,
     use_newton_actuators_for,
 )
-from holosoma.simulator.isaacsim6.event_cfg import EventCfg
-from holosoma.simulator.isaacsim6.events import randomize_body_com, randomize_rigid_body_inertia
-from holosoma.simulator.isaacsim6 import light_setup, physics_properties, sensor_setup
-from holosoma.simulator.isaacsim6.viewer_input import ViewerInputController
-from holosoma.simulator.isaacsim6.isaaclab_viewpoint_camera_controller import ViewportCameraController
+from holosoma.simulator.isaacsim.event_cfg import EventCfg
+from holosoma.simulator.isaacsim.events import randomize_body_com, randomize_rigid_body_inertia
+from holosoma.simulator.isaacsim6 import light_setup
+from holosoma.simulator.isaacsim import physics_properties
+from holosoma.simulator.isaacsim import sensor_setup
+from holosoma.simulator.isaacsim.viewer_input import ViewerInputController
+from holosoma.simulator.isaacsim.isaaclab_viewpoint_camera_controller import (
+    ViewportCameraCfg,
+    ViewportCameraController,
+)
 from holosoma.simulator.isaacsim6.isaacsim_articulation_cfg import (
     build_contact_sensor_cfg,
     build_robot_articulation_cfg,
@@ -60,7 +64,7 @@ from holosoma.simulator.isaacsim6.object_spawner import (
     physics_material_cfg,
 )
 from holosoma.simulator.isaacsim6.scene_fixtures import build_terrain_fixtures
-from holosoma.simulator.isaacsim6.proxy_array import as_tensor
+from holosoma.simulator.isaacsim.proxy_array import as_tensor
 from holosoma.simulator.isaacsim6.proxy_utils import RootStatesProxy
 from holosoma.simulator.shared.dof_limits import build_dof_limits_from_config
 from holosoma.simulator.shared.external_wrench import WrenchTarget
@@ -79,7 +83,13 @@ from holosoma.simulator.shared.virtual_gantry import (
 from holosoma.simulator.types import ActorNames, ActorIndices, EnvIds, ActorStates, ActorPoses
 
 
+from .launcher import active_simulation_cfg
+from holosoma.simulator.isaacsim.api import ISAACLAB3
+
+
 class IsaacSim(BaseSimulator):
+    api = ISAACLAB3
+
     def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str):
         super().__init__(tyro_config, terrain_manager, device)
 
@@ -117,29 +127,11 @@ class IsaacSim(BaseSimulator):
         # Which concrete `RigidObject` the scene objects are built from. Engine-dependent:
         # Newton needs its view addressed by owning articulation rather than by body prim (see
         # newton_rigid_object). Resolved once here so the spawner never names an engine.
+        from .newton_rigid_object import rigid_object_cls
+
         self._rigid_object_cls = rigid_object_cls(self.simulator_config.isaac_physics_backend)
 
-        sim_config: SimulationCfg = SimulationCfg(
-            dt=1.0 / self.simulator_config.sim.fps,
-            render_interval=self.simulator_config.sim.render_interval_steps,
-            device=self.sim_device,
-            # Isaac Lab 3.0 replaced `physx=` with `physics=`, widened to a `PhysicsCfg`
-            # because PhysX is no longer the only engine. The engine and its tuning come
-            # from configuration -- see physics_backend for why each engine reads its own
-            # config rather than sharing one struct.
-            physics=build_physics_cfg(self.simulator_config),
-            # New in 3.0 and defaults True, which would silently change the actuator
-            # model. Derived from the selected engine rather than pinned.
-            use_newton_actuators=use_newton_actuators_for(self.simulator_config),
-            # Global physics material, can be overridden by the individual articulation
-            # Can be inspected by:
-            # materials = self._robot.root_view.get_material_properties()
-            physics_material=sim_utils.RigidBodyMaterialCfg(
-                static_friction=1.0,  # default is 0.5
-                dynamic_friction=1.0,  # default is 0.5
-                restitution=0.0,
-            ),
-        )
+        sim_config = active_simulation_cfg()
 
         # create a simulation context to control the simulator
         if SimulationContext.instance() is None:
@@ -185,32 +177,16 @@ class IsaacSim(BaseSimulator):
             self._setup_scene()
         print("[INFO]: Scene manager: ", self.scene)
 
-        viewer_config: ViewerCfg
-        if self.simulator_config.viewer.enable_tracking:
-            viewer_config = ViewerCfg(origin_type="asset_root", asset_name="robot", eye=(0.0, -1.5, 1.5))
-        else:
-            viewer_config = ViewerCfg()
-
-        # Isaac Lab 3.0 deleted `SimulationContext.render_mode` and the `RenderMode` enum: its
-        # SimulationContext is standalone and no longer inherits Isaac Sim's. In 2.3.2 the test
-        # `render_mode >= PARTIAL_RENDERING` was exactly "a GUI or offscreen rendering exists"
-        # (simulation_context.py:185-210 sets NO_GUI_OR_RENDERING only when both are false), so
-        # the two booleans below reproduce it rather than approximate it. Both are properties in
-        # 3.0, where 2.3.2 had `has_gui()` as a method.
-        if self.sim.has_gui or self.sim.has_offscreen_render:
-            self.viewport_camera_controller: ViewportCameraController | None = ViewportCameraController(
-                self, viewer_config
+        self.sim.reset()
+        self.sim.initialize_visualizers()
+        self.viewport_camera_controller: ViewportCameraController | None = None
+        if self.sim.has_active_visualizers():
+            viewer_cfg = (
+                ViewportCameraCfg(origin_type="asset_root", asset_name="robot", eye=(0.0, -1.5, 1.5))
+                if self.simulator_config.viewer.enable_tracking
+                else ViewportCameraCfg()
             )
-        else:
-            self.viewport_camera_controller = None
-
-        # play the simulator to activate physics handles
-        # note: this activates the physics simulation view that exposes TensorAPIs
-        # note: when started in extension mode, first call sim.reset_async() and then initialize the managers
-        if builtins.ISAAC_LAUNCHED_FROM_TERMINAL is False:  # type: ignore[attr-defined]
-            logger.info("Starting the simulation. This may take a few seconds. Please wait...")
-            with Timer("[INFO]: Time taken for simulation start", "simulation_start"):
-                self.sim.reset()
+            self.viewport_camera_controller = ViewportCameraController(self, viewer_cfg, use_sim_render_callback=True)
 
         # 3.0's physics views hand back warp arrays, so unwrap before the torch .clone().
         self.default_coms = physics_properties.get_coms(self._robot).clone()
@@ -350,37 +326,7 @@ class IsaacSim(BaseSimulator):
         # empty rig authors nothing, leaving only the scene asset's baked lights.
         light_setup.build_lights(self)
 
-        # clone, filter, and replicate
-        #
-        # Isaac Lab 3.0 removed `InteractiveScene.clone_environments`. Its documented replacement
-        # is the ClonePlan pipeline, which wants the whole scene declared as cfg fields up front
-        # and replicated before any entity is constructed -- the inverse of what holosoma does
-        # here, since three of its cfg builders (terrain fixtures, cameras, LiDAR) read the
-        # authored env_0 stage to discover robot link prims, and 3.0 permits only one plan per
-        # simulation.
-        #
-        # `cloner.usd_replicate` is the imperative primitive underneath that pipeline, and it
-        # carries the semantics holosoma needs: copy an already-authored subtree to the other
-        # environments. `InteractiveScene.__init__` itself calls it this way for the non-cfg
-        # branch, so this is the supported path rather than a workaround -- the migration guide
-        # simply never mentions it.
-        #
-        # `disabled_fabric_change_notifies(restore=False)` matches that call site: replicating
-        # thousands of prims with fabric change notifications live is pathologically slow, and
-        # the scene is not read again before play().
-        # Which replication an engine needs is engine-specific (PhysX reads the stage, Newton does
-        # not), so the dispatch lives in `physics_backend` with the rest of the per-engine
-        # knowledge rather than as a backend test here.
-        with cloner.disabled_fabric_change_notifies(self.scene.stage, restore=False):
-            replicate_environments(
-                self.simulator_config,
-                stage=self.scene.stage,
-                source=f"{self.scene.env_ns}/env_0",
-                destination=self.scene.cfg.clone_cfg.clone_template,
-                env_ids=np.arange(self.scene.num_envs),
-                env_origins=self.scene.env_origins,
-                global_paths=tuple(global_collision_prims),
-            )
+        replicate_environments(self.simulator_config, scene=self.scene, global_paths=tuple(global_collision_prims))
 
         self.scene.filter_collisions(global_prim_paths=global_collision_prims)
 
@@ -470,7 +416,7 @@ class IsaacSim(BaseSimulator):
             # Isaac Lab 3.0 ships a leaner Kit experience that does not load
             # `isaacsim.util.debug_draw`, so importing it directly -- as the 5.1 lane does --
             # raises ModuleNotFoundError on *every* non-headless run. The extension still exists
-            # in Isaac Sim 6.1; it just has to be enabled first. Without this, debug_viz (which
+            # in Isaac Sim 6.2; it just has to be enabled first. Without this, debug_viz (which
             # defaults to True) takes down any GUI run with an error that names a missing module
             # rather than a missing extension.
             from isaaclab.sim.utils import enable_extension
@@ -1001,7 +947,7 @@ class IsaacSim(BaseSimulator):
             self.commands = torch.zeros((self.training_config.num_envs, 12), device=self.sim_device)
 
         # Set up viewer input (owns the carb.input subscription for its lifetime)
-        if self.viewport_camera_controller is not None:
+        if self.viewport_camera_controller is not None and self.sim.has_gui:
             self.viewer_input = ViewerInputController(self)
 
     def render(self, sync_frame_time: bool = True) -> None:
@@ -1259,6 +1205,9 @@ class IsaacSim(BaseSimulator):
 
         # Single call to sync all object state changes
         self.scene.write_data_to_sim()
+        # Newton pose writes update generalized coordinates. Resolve body transforms
+        # before an immediate sensor query, without advancing the simulation clock.
+        self.sim.forward()
 
         # Clear dirty flag via state adapter
         self._state_adapter.clear_dirty()

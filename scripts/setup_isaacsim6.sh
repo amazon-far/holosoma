@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Setup the hssim6 environment -- Isaac Sim 6.1.0 + Isaac Lab 3.0, Python 3.12.
+# Setup the hssim6 environment -- Isaac Sim 6.2.0 + Isaac Lab 3.0, Python 3.12.
 #
 # This lane is deliberately NOT a conda environment, unlike hssim. Isaac Lab 3.0 removed
 # `isaaclab.sh --conda` (the script is deprecated outright, to be deleted in 3.1) and actively
@@ -8,13 +8,12 @@
 #
 # Dependency resolution is delegated to the IsaacLab checkout's own pyproject.toml + uv.lock via
 # `uv sync`. That matters: in 3.0 the member packages declare `dependencies = []` and every real
-# pin (torch 2.12.0 from the cu130 index, warp-lang 1.17.0, numpy>=2, the 12 editable members)
+# pin (torch 2.11.0 from the cu130 index, warp-lang 1.17.0, numpy>=2, the 12 editable members)
 # lives in the root project. Installing members directly would therefore install code with no
 # dependencies, and restating the 63 root dependencies here would be a second source of truth.
 #
-# holosoma is then installed into the same venv with its numpy ceiling overridden. holosoma pins
-# numpy>=1.23.5,<2 while Isaac Lab 3.0 requires numpy>=2, and that conflict is resolved for this
-# lane only -- holosoma's published metadata is untouched, so the hssim / hsmujoco lanes
+# holosoma is then installed with its NumPy and pandas ceilings overridden for GA.
+# These conflicts are resolved for this lane only -- holosoma's published metadata is untouched, so the hssim / hsmujoco lanes
 # keep numpy 1.
 set -ex
 
@@ -44,14 +43,14 @@ if [[ -f $SENTINEL_FILE ]]; then
 fi
 
 if ! command -v uv >/dev/null; then
-  echo "uv is required for the Isaac Sim 6.1 lane but was not found on PATH."
+  echo "uv is required for the Isaac Sim 6.2 lane but was not found on PATH."
   echo "Install it from https://docs.astral.sh/uv/ and re-run this script."
   exit 1
 fi
 
 mkdir -p "$WORKSPACE_DIR"
 
-# Pin the exact commit, not the branch. release/3.0.0 is pre-GA and advances daily, so a
+# Pin the exact commit, not the branch. The release tag is pinned to its exact GA commit, so a
 # branch-tracking clone would silently change the environment between two runs of this script.
 # Compare against the commit rather than `rev-parse $branch`, which drifts with the remote.
 if [[ ! -d $ISAACLAB_DIR ]]; then
@@ -70,19 +69,24 @@ export UV_PROJECT_ENVIRONMENT=$VENV_ROOT
 # `--extra isaacsim` adds Isaac Sim itself: in 3.0 `isaacsim` is an optional extra, since the
 # base install targets Newton. holosoma needs the Kit runtime, so the extra is required.
 cd "$ISAACLAB_DIR"
-uv sync --extra isaacsim --python "$ISAACSIM6_PYTHON_VERSION"
+uv sync --locked --extra isaacsim --extra video --python "$ISAACSIM6_PYTHON_VERSION"
 
 # Override rather than --no-deps: this resolves holosoma's full dependency set while forcing the
-# one genuinely incompatible pin, so the lane cannot silently drift from pyproject.toml the way a
+# incompatible NumPy and pandas ceilings, so the lane cannot silently drift from pyproject.toml the way a
 # hand-maintained dependency list would.
-NUMPY_OVERRIDE=$WORKSPACE_DIR/holosoma-overrides.txt
-cat > "$NUMPY_OVERRIDE" <<'EOF'
+OVERRIDE_FILE=$WORKSPACE_DIR/holosoma-overrides.txt
+cat > "$OVERRIDE_FILE" <<'EOF'
 # Isaac Lab 3.0 requires numpy>=2; holosoma's own pin is numpy>=1.23.5,<2. Overridden for the
-# Isaac Sim 6.1 lane only. See scripts/setup_isaacsim6.sh.
+# Isaac Sim 6.2 lane only. See scripts/setup_isaacsim6.sh.
 numpy>=2
+pandas>=3
 EOF
 
-uv pip install --python "$VENV_ROOT/bin/python" --overrides "$NUMPY_OVERRIDE" \
+# Preserve the simulator dependency versions selected by uv.lock. W&B requires the
+# stable protobuf 6 series; the release lock currently selects a protobuf 7 prerelease.
+LOCK_CONSTRAINTS=$WORKSPACE_DIR/holosoma-lab3-constraints.txt
+uv pip freeze --python "$VENV_ROOT/bin/python" --exclude-editable | sed '/^protobuf==/d' > "$LOCK_CONSTRAINTS"
+uv pip install --python "$VENV_ROOT/bin/python" --overrides "$OVERRIDE_FILE" --constraint "$LOCK_CONSTRAINTS" \
   -e "$ROOT_DIR/src/holosoma[unitree,booster]"
 
 touch "$SENTINEL_FILE"

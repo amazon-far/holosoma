@@ -1,4 +1,4 @@
-"""Isaac Sim 6.1-only configuration must not be silently ignored by another backend.
+"""Isaac Sim 6.2-only configuration must not be silently ignored by another backend.
 
 ``isaac_physics_backend`` / ``isaac_visualizers`` / ``isaac_newton`` live on the shared
 ``SimulatorInitConfig``, so every backend accepts them and only ``simulator/isaacsim6`` reads
@@ -71,19 +71,19 @@ def test_the_6_1_presets_are_always_accepted(preset: str) -> None:
 )
 def test_each_6_1_field_is_rejected_on_the_5_1_backend(field: str, value: Any) -> None:
     """Isaac Sim 5.1 has one engine and different launcher flags, so none of these can apply."""
-    with pytest.raises(ValueError, match="Isaac Sim 6.1 settings"):
+    with pytest.raises(ValueError, match="Isaac Sim 6.2 settings"):
         reject_unsupported_isaac_fields(_holder("isaacsim", **{field: value}))
 
 
 def test_rejection_is_not_isaac_specific() -> None:
     """A non-Isaac backend cannot honour them either, so it must not accept them quietly."""
-    with pytest.raises(ValueError, match="Isaac Sim 6.1 settings"):
+    with pytest.raises(ValueError, match="Isaac Sim 6.2 settings"):
         reject_unsupported_isaac_fields(_holder("mujoco", isaac_physics_backend=IsaacPhysicsBackend.NEWTON))
 
 
 def test_the_message_names_the_field_and_the_alternative() -> None:
     """ "Unsupported" alone leaves the reader stuck; the fix is a different preset."""
-    with pytest.raises(ValueError, match="Isaac Sim 6.1 settings") as excinfo:
+    with pytest.raises(ValueError, match="Isaac Sim 6.2 settings") as excinfo:
         reject_unsupported_isaac_fields(_holder("isaacsim", isaac_visualizers=("rerun",)))
     message = str(excinfo.value)
     assert "isaac_visualizers" in message

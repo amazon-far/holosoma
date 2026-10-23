@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from holosoma.simulator.isaacsim6.lidar_target_discovery import (
+from holosoma.simulator.isaacsim.lidar_target_discovery import (
     _is_path_at_or_below,
     assemble_default_mesh_prim_paths,
 )

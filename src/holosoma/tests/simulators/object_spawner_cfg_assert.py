@@ -149,8 +149,8 @@ def _check_robot_link_physics_cfg(lane: str) -> None:
       - friction/restitution and both combine modes to physics_material_cfg (the bound-material channel).
     """
     from holosoma.config_types.scene import IsaacSimPhysicsConfig, PhysicsConfig, PhysXPhysicsConfig
+    from holosoma.simulator.isaacsim import converters as _converters
 
-    _converters = isaac_lane_module(lane, "converters")
     physics_to_collision_props = _converters.physics_to_collision_props
     physics_to_mass_props = _converters.physics_to_mass_props
     physics_to_rigid_body_props = _converters.physics_to_rigid_body_props
@@ -227,9 +227,9 @@ def _check_scene_body_discovery(lane: str) -> None:
     from pxr import Usd
 
     from holosoma.config_types.scene import SceneFileConfig
-    from holosoma.simulator.isaacsim6.prim_naming import distinguishing_names
+    from holosoma.simulator.isaacsim import object_spawner as _spawner
+    from holosoma.simulator.isaacsim.prim_naming import distinguishing_names
 
-    _spawner = isaac_lane_module(lane, "object_spawner")
     _discover_scene_body_prim_paths = _spawner._discover_scene_body_prim_paths
     resolve_asset_root = _spawner.resolve_asset_root
 
@@ -280,11 +280,13 @@ def main() -> int:
     parser.add_argument("--simulator", default="isaacsim", choices=sorted(ISAAC_LANE_PACKAGES))
     args = parser.parse_args()
 
-    # Boot a minimal headless IsaacSim app so isaaclab.sim (carb) is importable.
-    from isaaclab.app import AppLauncher
+    # Import configuration builders only after the selected runtime is active.
+    from holosoma.utils.sim_utils import setup_isaaclab_launcher
+    from tests.simulators._sim_harness import build_run_sim_config
 
-    app_launcher = AppLauncher(headless=True)
-    simulation_app = app_launcher.app
+    config = build_run_sim_config(args.simulator, "empty", "g1-29dof", "terrain_locomotion_plane")
+    simulation_app = setup_isaaclab_launcher(config)
+    assert simulation_app is not None
 
     try:
         import isaaclab.sim as sim_utils

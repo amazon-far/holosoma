@@ -12,7 +12,7 @@ import math
 
 import pytest
 
-from holosoma.simulator.isaacsim6.quat_convention import wxyz_to_xyzw
+from holosoma.simulator.isaacsim.quat_convention import wxyz_to_xyzw
 
 pytestmark = pytest.mark.no_sim
 

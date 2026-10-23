@@ -87,7 +87,7 @@ def main() -> int:
     parser.add_argument(
         "--visualizers",
         default=None,
-        help="comma-separated isaac_visualizers (Isaac Sim 6.1 only); default is headless",
+        help="comma-separated isaac_visualizers (Isaac Sim 6.2 only); default is headless",
     )
     parser.add_argument("--result-file", default=None, help="write PASS/FAIL here before teardown")
     args = parser.parse_args()
@@ -113,7 +113,7 @@ def main() -> int:
     config = dataclasses.replace(
         config,
         device=device,
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        training=dataclasses.replace(config.training, headless=headless, num_envs=args.num_envs),
     )
 
     if args.check_recorder:

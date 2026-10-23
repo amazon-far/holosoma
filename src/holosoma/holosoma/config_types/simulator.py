@@ -416,7 +416,7 @@ class SimulatorInitConfig:
     isaac_physics_backend: IsaacPhysicsBackend = IsaacPhysicsBackend.PHYSX
     """Isaac Sim physics engine selection.
 
-    Only meaningful for the Isaac Sim 6.1 backend (``simulator:isaacsim6``), which resolves the
+    Only meaningful for the Isaac Sim 6.2 backend (``simulator:isaacsim6``), which resolves the
     engine from ``SimulationCfg.physics``. Isaac Sim 5.1 has one engine, so the 5.1 backend
     **rejects** any non-default value instead of ignoring it -- a silently ignored engine choice
     would be a config that lies about what ran.
@@ -437,23 +437,11 @@ class SimulatorInitConfig:
     """
 
     isaac_visualizers: tuple[str, ...] = ()
-    """Isaac Lab 3.0 rendering backends to enable, by name.
+    """Isaac Lab 3.0 visualizers: kit, newton_gl, newton_rtx, rerun, or viser.
 
-    Maps onto Isaac Lab 3.0's ``--visualizer`` argument, which takes a CSV of backend names
-    (``kit``, ``newton``, ``rerun``, ``viser``). Empty means headless, which is 3.0's default and
-    the cheapest configuration; ``('kit',)`` is required for a GUI viewport *and* for offscreen
-    RTX sensors such as ``TiledCamera``.
-
-    Names rather than typed configs on purpose: ``isaaclab.visualizers`` exports only the
-    ``VisualizerCfg`` base, and the concrete visualizers live in separate packages resolved by
-    name at launch, so a name list is what the API actually accepts. An unavailable name raises
-    at startup rather than silently rendering nothing.
-
-    Isaac Sim 6.1 only; the 5.1 backend rejects a non-empty value (2.3.2 used ``--headless`` /
-    ``--enable_cameras``, which have no equivalent spelling here).
-
-    Command line usage:
-        --simulator.config.isaac-visualizers kit
+    An empty tuple follows training.headless: no viewer when headless, Kit otherwise.
+    Camera rendering is configured independently and works without a viewer.
+    Isaac Sim 5.1 rejects a non-empty value because it has a different launcher API.
     """
 
     mujoco_warp: MujocoWarpConfig = field(default_factory=MujocoWarpConfig)

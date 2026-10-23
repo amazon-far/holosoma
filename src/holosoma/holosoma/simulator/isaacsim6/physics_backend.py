@@ -1,28 +1,8 @@
-"""Building Isaac Lab 3.0's ``SimulationCfg.physics`` for the configured engine.
+"""Build native Isaac Lab 3.0 physics configurations and clone declarations.
 
-Isaac Lab 2.3.2 had one physics engine, configured through ``SimulationCfg.physx``. Isaac Lab 3.0
-replaced that field with ``physics: PhysicsCfg | None`` and resolves a concrete engine from it, so
-the engine is now a configuration choice: PhysX (``isaaclab_physx``), Newton
-(``isaaclab_newton``) or OmniPhysX (``isaaclab_ov``).
-
-This module is the one place that knows how holosoma's configuration maps onto each engine's own
-config object, so the rest of the lane never names an engine.
-
-Why the engines do not share a tuning struct
---------------------------------------------
-holosoma's :class:`~holosoma.config_types.simulator.PhysxConfig` is genuinely PhysX-shaped.
-Measured against the pinned Isaac Lab 3.0: ``isaaclab_newton.physics.NewtonCfg`` shares **none**
-of its fields (no ``solver_type``, no position/velocity iteration counts, no
-``bounce_threshold_velocity``; it has substepping and solver sub-configs instead), and
-``isaaclab_ov.physics.OvPhysxCfg`` shares only two of six. Mapping one struct onto all three would
-mean silently dropping whichever fields the selected engine does not understand, so each engine
-reads its own config and supplying the wrong one is an error (see :mod:`.capabilities`).
-
-Import timing
--------------
-The engine packages are imported lazily, inside the branch that needs them. Only the selected
-engine's package is touched, so a run does not pay for -- or fail on -- an engine it is not using.
-"""
+PhysX reads Holosoma's existing solver settings; Newton reads isaac_newton.
+Engine packages are imported lazily. Scene replication includes the authored
+assets, sensors, lights and world-mounted sensor frames in one native ClonePlan."""
 
 from __future__ import annotations
 
@@ -79,81 +59,56 @@ def use_newton_actuators_for(config: SimulatorInitConfig) -> bool:
     return config.isaac_physics_backend is IsaacPhysicsBackend.NEWTON
 
 
-def replicate_environments(
-    config: SimulatorInitConfig,
-    *,
-    stage: Usd.Stage,
-    source: str,
-    destination: str,
-    env_ids: npt.NDArray[np.integer[Any]],
-    env_origins: torch.Tensor,
-    global_paths: tuple[str, ...],
-) -> None:
-    """Replicate ``source`` into every environment, for the configured engine.
-
-    ``cloner.usd_replicate`` copies prim specs on the USD stage. That is the whole job on PhysX,
-    which parses its physics model *from* the stage -- but Newton does not. Newton builds its
-    model from a ClonePlan, so for it the USD copy is only the visual half and its ``ModelBuilder``
-    would stay empty; the first thing to read that empty model (contact-sensor site injection)
-    then fails with ``Site 'ft_0' ... matched no builder bodies``, which reads like a sensor
-    problem rather than an unpopulated model.
-
-    So Newton gets ``isaaclab_newton.cloner.newton_physics_replicate`` as well -- the Newton
-    counterpart of ``usd_replicate``, taking the same source/destination/env_ids plus a boolean
-    source-to-environment ``mapping``. Both run: the USD clones are still needed for rendering and
-    for the RTX sensors, which read the stage no matter which engine owns the physics.
-
-    Ordering matters. The Newton import reads ``source`` as its prototype, so it must run *before*
-    the USD copy exists -- otherwise its stage-wide import sees all N environments and double
-    counts them against its own per-world replication.
-    """
-    # Imported here rather than at module scope, matching this module's lazy-import rule: an
-    # eager `isaaclab` import reaches `omni.physics.tensors`, which exists only inside a running
-    # Kit runtime, so it makes the module unimportable in every other environment.
+def replicate_environments(config: SimulatorInitConfig, *, scene: Any, global_paths: tuple[str, ...]) -> None:
+    """Publish and replicate one native ClonePlan for the authored source environment."""
     import isaaclab.cloner as cloner
+    from isaaclab.assets import AssetBaseCfg
+    from isaaclab.cloner.usd import UsdReplicateContext
+    from isaaclab.sensors import RayCasterCfg
 
-    if config.isaac_physics_backend is IsaacPhysicsBackend.NEWTON:
-        from isaaclab_newton.cloner import newton_physics_replicate
-
-        newton_physics_replicate(
-            stage,
-            [source],
-            [destination],
-            env_ids,
-            # One source routed to every environment. `usd_replicate` defaults this (`mask=None`
-            # means "all"); the Newton entry point has no default, so it is spelled out.
-            np.ones((1, len(env_ids)), dtype=bool),
-            # numpy, not torch: this path reaches `np.unique`/`wp.transform` directly and a CUDA
-            # tensor raises "can't convert cuda:0 device type tensor to numpy" deep inside.
-            positions=env_origins.cpu().numpy(),
-            global_paths=global_paths,
-        )
-
-    cloner.usd_replicate(stage, [source], [destination], env_ids, positions=env_origins)
+    asset_cfgs = [asset.cfg for asset in (*scene.articulations.values(), *scene.rigid_objects.values())]
+    sensor_cfgs = [sensor.cfg for sensor in scene.sensors.values()]
+    cfgs = [*asset_cfgs, *sensor_cfgs]
+    cfgs.extend(AssetBaseCfg(prim_path=path, spawn=None) for path in global_paths)
+    # Include authored visual fixtures that are not physics assets or sensors.
+    env_root = scene.stage.GetPrimAtPath("/World/envs/env_0")
+    prefix = scene.env_regex_ns + "/"
+    # Sensor views with no spawner do not own clone sources. Their authored world
+    # attachment frames still need a USD declaration, just like light fixtures.
+    owned_cfgs = [
+        *asset_cfgs,
+        *(cfg for cfg in sensor_cfgs if not isinstance(cfg, RayCasterCfg) and getattr(cfg, "spawn", None) is not None),
+    ]
+    declared = {cfg.prim_path[len(prefix) :].split("/", 1)[0] for cfg in owned_cfgs if cfg.prim_path.startswith(prefix)}
+    for child in env_root.GetChildren():
+        if child.GetName() not in declared:
+            # Already-authored fixtures have no spawner to declare their representation.
+            # Route their copies explicitly to the native USD clone context.
+            cfgs.append(
+                AssetBaseCfg(
+                    prim_path=f"{scene.env_regex_ns}/{child.GetName()}",
+                    spawn=None,
+                    cloning_contexts=(UsdReplicateContext,),
+                )
+            )
+    plan = cloner.clone_plan_from_env_0(
+        scene.cfg.clone_cfg, cfgs, scene.num_envs, scene.cfg.env_spacing, positions=scene.env_origins.cpu().numpy()
+    )
+    cloner.replicate(plan, replicate_physics=scene.cfg.replicate_physics)
 
 
 def _physx_cfg(config: SimulatorInitConfig) -> Any:
-    """PhysX, tuned from holosoma's ``PhysxConfig``. The verified path."""
-    from isaaclab.physics.physics_manager_cfg import PhysxAutoCfg
+    """Isaac Sim PhysX with Holosoma's existing solver parameters."""
     from isaaclab_physx.physics import PhysxCfg
 
     physx = config.sim.physx
-    # `PhysxAutoCfg` resolves the concrete PhysX implementation at launch while `isaacsim_physx`
-    # carries the tuning. Every keyword below kept its 2.3.2 name through the move to
-    # `isaaclab_physx.physics.PhysxCfg`, so the values are unchanged from the 5.1 lane.
-    return PhysxAutoCfg(
-        isaacsim_physx=PhysxCfg(
-            bounce_threshold_velocity=physx.bounce_threshold_velocity,
-            solver_type=physx.solver_type,
-            max_position_iteration_count=physx.num_position_iterations,
-            max_velocity_iteration_count=physx.num_velocity_iterations,
-            gpu_max_rigid_patch_count=10 * 2**15,
-            # Pinned, not inherited: 2.3.2 defaults this False and 3.0 defaults it True. holosoma
-            # applies external pushes (agents/callbacks/push.py, payload.py), so accepting the new
-            # default would change push dynamics relative to the 5.1 lane -- a divergence visible
-            # only as different numbers.
-            enable_external_forces_every_iteration=False,
-        )
+    return PhysxCfg(
+        bounce_threshold_velocity=physx.bounce_threshold_velocity,
+        solver_type=physx.solver_type,
+        max_position_iteration_count=physx.num_position_iterations,
+        max_velocity_iteration_count=physx.num_velocity_iterations,
+        gpu_max_rigid_patch_count=10 * 2**15,
+        enable_external_forces_every_iteration=False,
     )
 
 

@@ -120,7 +120,7 @@ source-include = [
 [tool.pytest.ini_options]
 markers = [
     "isaacsim: needs the Isaac Sim 5.1 backend",
-    "isaacsim6: needs the Isaac Sim 6.1 backend",
+    "isaacsim6: needs the Isaac Sim 6.2 backend",
     "mujoco: needs the MuJoCo backend (either ClassicBackend or WarpBackend)",
     "mujoco_classic: needs the MuJoCo ClassicBackend (CPU)",
     "mujoco_warp: needs the MuJoCo WarpBackend (CUDA)",

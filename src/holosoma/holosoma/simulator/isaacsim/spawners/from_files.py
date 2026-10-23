@@ -52,8 +52,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-import isaacsim.core.utils.prims as prim_utils
-import isaacsim.core.utils.stage as stage_utils
+from holosoma.simulator.isaacsim.runtime import prim_utils, stage_utils
 import omni.kit.commands
 import omni.log
 from isaaclab.sim import schemas

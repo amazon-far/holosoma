@@ -48,7 +48,7 @@ from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.sim_utils import setup_simulation_environment
 
 # steps_for_seconds re-exported (subset_write_assert imports it from here).
-from tests.simulators._sim_harness import SIMULATOR_CHOICES, step, steps_for_seconds
+from tests.simulators._sim_harness import SIMULATOR_CHOICES, run_and_hard_exit, step, steps_for_seconds
 
 SMALL_BOX = "holosoma/data/scene_objects/boxes/small_box.urdf"
 BOX_HALF = 0.05  # small_box is a 0.1 m cube.
@@ -91,7 +91,7 @@ def _build(simulator: str, num_envs: int):
         simulator=sim_cfg,
         scene=_scene(),
         device=("cpu" if simulator == "mujoco" else "cuda:0"),
-        training=dataclasses.replace(config.training, num_envs=num_envs),
+        training=dataclasses.replace(config.training, headless=True, num_envs=num_envs),
     )
     import torch
 
@@ -199,4 +199,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    run_and_hard_exit(main)

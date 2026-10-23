@@ -1,16 +1,7 @@
-"""Live Isaac Sim 6.1 domain randomization and camera capture, across both axes.
+"""Headless Isaac Lab 3.0 randomization, RGB and depth regressions.
 
-Isaac Lab 3.0 made the physics engine *and* the renderer independent configuration choices, so
-these cover both: domain randomization per physics backend, and cameras per visualizer selection.
-
-Domain randomization is the highest-value sim test in this lane. Its terms read and write mass,
-inertia, centre of mass and shape friction through what used to be the PhysX tensor view, and
-Newton's ``ArticulationView`` provides *none* of those seven members -- the adapter in
-``physics_properties`` reconciles three separate layout differences (a per-articulation axis,
-``mat33`` inertia, host-vs-device placement), each of which produced a distinct failure during the
-port and none of which any CPU test can reach. ``dr_matrix_assert`` verifies by read-back, so it
-catches a write that silently lands nowhere.
-"""
+Property randomization is checked by live read-back on both engines. Camera
+checks use offscreen rendering and never request desktop visualizers."""
 
 from __future__ import annotations
 
@@ -32,16 +23,8 @@ from tests.simulators.isaacsim6.test_state_isaacsim6 import BACKENDS  # noqa: E4
 
 _HARNESS_DIR = Path(__file__).resolve().parents[1]
 
-INSTALLED_VISUALIZERS = ["", "kit", "newton"]
-"""Visualizer selections this environment can actually run.
-
-``rerun`` and ``viser`` are valid *names* -- ``capabilities.KNOWN_VISUALIZERS`` keeps them, and
-``--visualizer`` accepts them -- but Isaac Lab resolves a visualizer by import path
-(``isaaclab_visualizers.rerun.rerun_visualizer:RerunVisualizer``) and raises
-``ModuleNotFoundError`` when the backing distribution is absent, which it is here. Listing them
-would test the environment rather than the lane; ``setup_isaacsim6.sh`` installing the extra is
-what would change that.
-"""
+INSTALLED_VISUALIZERS = [""]
+"""GPU regression tests capture offscreen frames without opening desktop viewers."""
 
 
 @pytest.mark.parametrize("simulator", BACKENDS)
@@ -111,8 +94,7 @@ def test_depth(simulator: str, tmp_path: pathlib.Path) -> None:
 def test_world_mounted_camera(simulator: str, tmp_path: pathlib.Path) -> None:
     """A camera mounted to the environment rather than to a robot link.
 
-    Kept distinct from the robot-link mount because the actor mount -- the third kind -- renders
-    blank on this lane for reasons still not established, so which mounts are proven matters.
+    The world mount must remain fixed while the robot moves, independently in each environment.
     """
     sentinel = tmp_path / "world_camera_result.txt"
     run_harness(

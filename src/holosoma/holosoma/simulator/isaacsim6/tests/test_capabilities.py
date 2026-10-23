@@ -1,15 +1,4 @@
-"""The Isaac Sim 6.1 capability gate: everything unsupported must fail loudly, not degrade.
-
-These run on the CPU lane -- ``capabilities.validate`` is pure configuration inspection and
-touches no Isaac Sim API, which is deliberate so a bad config is rejected before any simulator
-state exists.
-
-The reason each of these is a test rather than a comment: the alternative to raising is producing
-plausible-but-wrong output (a LiDAR that ignores its scan pattern, a camera parented to a pose
-that never updates, a physics engine tuned by another engine's settings). Those do not fail, they
-just quietly disagree with the configuration, so the gate is the only thing standing between a
-user and a silently wrong run.
-"""
+"""Pure configuration validation and consistency checks for the GA capability report."""
 
 from __future__ import annotations
 
@@ -40,7 +29,7 @@ def _config(**overrides: Any) -> SimulatorInitConfig:
 
 
 def test_the_shipped_preset_validates() -> None:
-    """The default 6.1 preset must pass its own gate, or nobody can run the backend."""
+    """The default 6.2 preset must pass its own gate, or nobody can run the backend."""
     validate(_config(), {})
 
 
@@ -213,23 +202,14 @@ def test_unusable_backends_explain_the_measurement() -> None:
             assert len(status.detail.strip()) > 100, f"{status.backend.value} detail is too thin to act on"
 
 
-def test_configured_lidar_is_rejected() -> None:
-    """LiDAR is unported on this lane and must say so by name.
-
-    The gate reads the sensors passed in, not off the simulator config -- sensors live on
-    ``FullSimConfig`` -- so this also pins that the wiring is right. With the sensors read from
-    the wrong object every sensor check passes vacuously and the deeper failure surfaces much
-    later as an Isaac Lab ``AttributeError``.
-    """
+def test_configured_lidar_is_accepted() -> None:
     from tests.simulators import _lidar_presets
 
-    sensors = {"scan": _lidar_presets.isaacsim_ground_visual_lidar}
-    with pytest.raises(NotImplementedError, match="LiDAR"):
-        validate(_config(), sensors)
+    validate(_config(), {"scan": _lidar_presets.isaacsim_ground_visual_lidar})
 
 
-def test_actor_mounted_camera_is_rejected() -> None:
-    """An actor-mounted camera renders blank and does not follow; robot/world mounts are fine."""
+def test_actor_mounted_camera_is_accepted() -> None:
+    """Every existing camera mount is available through the shared sensor builder."""
     from tests.simulators import _camera_presets
 
     actor_cams = {
@@ -238,8 +218,7 @@ def test_actor_mounted_camera_is_rejected() -> None:
         if getattr(getattr(cfg, "mount", None), "target_kind", None) == "actor"
     }
     assert actor_cams, "the actor-cam preset no longer contains an actor-mounted camera"
-    with pytest.raises(NotImplementedError, match="actor"):
-        validate(_config(), actor_cams)
+    validate(_config(), actor_cams)
 
 
 def test_robot_mounted_camera_is_accepted() -> None:

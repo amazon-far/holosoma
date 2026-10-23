@@ -53,7 +53,9 @@ def main() -> int:
 
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
     config = dataclasses.replace(
-        config, device=device, training=dataclasses.replace(config.training, num_envs=args.num_envs)
+        config,
+        device=device,
+        training=dataclasses.replace(config.training, headless=args.headless == "true", num_envs=args.num_envs),
     )
 
     env, device, _app = setup_simulation_environment(config, device=device)
@@ -73,6 +75,7 @@ def main() -> int:
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
     sim.install_plugins()
+    env_origins = sim.env_origins
 
     names = sim.get_sensor_names()
     if set(names) != {"front_cam", "down_cam"}:

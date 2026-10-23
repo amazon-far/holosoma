@@ -16,7 +16,7 @@ from holosoma.config_types.sensor import (
     IsaacSimFisheyeConfig,
     SensorMountConfig,
 )
-from holosoma.simulator.isaacsim6.camera_projection import camera_spawn_cfg_for
+from holosoma.simulator.isaacsim.camera_projection import camera_spawn_cfg_for
 
 pytestmark = pytest.mark.no_sim
 

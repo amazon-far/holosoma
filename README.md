@@ -24,7 +24,7 @@ src/
 ## Documentation
 
 - **[Training Guide](src/holosoma/README.md)** - Train locomotion and whole-body tracking policies in IsaacSim/MJWarp
-- **[Isaac Sim Backends](docs/isaac-sim-backends.md)** - Set up Isaac Sim 6.1 with PhysX or Newton and compare capabilities with 5.1
+- **[Isaac Sim Backends](docs/isaac-sim-backends.md)** - Set up Isaac Sim 6.2 with PhysX or Newton and compare capabilities with 5.1
 - **[Inference & Deployment Guide](src/holosoma_inference/README.md)** - Deploy policies to real robots or evaluate in MuJoCo simulation
 - **[Retargeting Guide](src/holosoma_retargeting/holosoma_retargeting/README.md)** - Convert human motion capture data to robot motions
 

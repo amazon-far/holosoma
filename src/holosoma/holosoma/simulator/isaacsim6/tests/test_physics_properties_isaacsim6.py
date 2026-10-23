@@ -25,7 +25,7 @@ from typing import Any
 import pytest
 import torch
 
-from holosoma.simulator.isaacsim6 import physics_properties as pp
+from holosoma.simulator.isaacsim import physics_properties as pp
 
 pytestmark = pytest.mark.no_sim
 

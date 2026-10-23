@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import weakref
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -15,10 +16,26 @@ import omni.kit.app
 import omni.timeline
 import torch
 
-if TYPE_CHECKING:
-    from omni.isaac.lab.envs import ViewerCfg
+from holosoma.simulator.isaacsim.proxy_array import as_tensor
 
-    from holosoma.simulator.isaacsim.isaacsim import IsaacSim
+if TYPE_CHECKING:
+    from holosoma.simulator.isaacsim.isaacsim import IsaacSim as IsaacSim5
+    from holosoma.simulator.isaacsim6.isaacsim import IsaacSim as IsaacSim6
+
+    from typing import Union
+
+    IsaacSim = Union[IsaacSim5, IsaacSim6]
+
+
+@dataclass
+class ViewportCameraCfg:
+    """Holosoma's viewport tracking settings, shared across Isaac Lab generations."""
+
+    eye: tuple[float, float, float] = (7.5, 7.5, 7.5)
+    lookat: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    origin_type: str = "world"
+    env_index: int = 0
+    asset_name: str | None = None
 
 
 class ViewportCameraController:
@@ -36,7 +53,7 @@ class ViewportCameraController:
     root position. For this, it registers a callback to the post update event stream from the simulation app.
     """
 
-    def __init__(self, env: IsaacSim, cfg: ViewerCfg) -> None:
+    def __init__(self, env: IsaacSim, cfg: ViewportCameraCfg, *, use_sim_render_callback: bool = False) -> None:
         """Initialize the ViewportCameraController.
 
         Args:
@@ -72,14 +89,25 @@ class ViewportCameraController:
             self.update_view_to_world()
 
         # subscribe to post update event so that camera view can be updated at each rendering step
-        app_interface = omni.kit.app.get_app_interface()
-        app_event_stream = app_interface.get_post_update_event_stream()
-        self._viewport_camera_update_handle = app_event_stream.create_subscription_to_pop(
-            lambda event, obj=weakref.proxy(self): obj._update_tracking_callback(event)  # noqa: B008
-        )
+        self._viewport_camera_update_handle: Any = None
+        self._sim_render_callback = use_sim_render_callback
+        controller = weakref.proxy(self)
+
+        def callback(event: Any) -> None:
+            controller._update_tracking_callback(event)
+
+        if use_sim_render_callback:
+            # Native Lab 3 callbacks also run for visualizers that do not pump Kit.
+            self._env.sim.add_render_callback("holosoma_viewport_tracking", callback)
+        else:
+            app_interface = omni.kit.app.get_app_interface()
+            app_event_stream = app_interface.get_post_update_event_stream()
+            self._viewport_camera_update_handle = app_event_stream.create_subscription_to_pop(callback)
 
     def __del__(self) -> None:
         """Unsubscribe from the callback."""
+        if getattr(self, "_sim_render_callback", False):
+            self._env.sim.remove_render_callback("holosoma_viewport_tracking")
         # use hasattr to handle case where __init__ has not completed before __del__ is called
         if hasattr(self, "_viewport_camera_update_handle") and self._viewport_camera_update_handle is not None:
             self._viewport_camera_update_handle.unsubscribe()
@@ -90,7 +118,7 @@ class ViewportCameraController:
     """
 
     @property
-    def cfg(self) -> ViewerCfg:
+    def cfg(self) -> ViewportCameraCfg:
         """The configuration for the viewer."""
         return self._cfg
 
@@ -158,7 +186,7 @@ class ViewportCameraController:
         # set origin type to asset_root
         self.cfg.origin_type = "asset_root"
         # update the camera origins
-        self.viewer_origin = self._env.scene[self.cfg.asset_name].data.root_pos_w[self.cfg.env_index]
+        self.viewer_origin = as_tensor(self._env.scene[self.cfg.asset_name].data.root_pos_w)[self.cfg.env_index]
         # update the camera view
         self.update_view_location()
 

@@ -1,4 +1,4 @@
-# Source this file to activate the hssim6 environment (Isaac Sim 6.1 + Isaac Lab 3.0, Python 3.12).
+# Source this file to activate the hssim6 environment (Isaac Sim 6.2 + Isaac Lab 3.0, Python 3.12).
 #
 # This lane is a uv venv, not a conda environment -- Isaac Lab 3.0 rejects conda (see
 # scripts/setup_isaacsim6.sh). Use scripts/source_isaacsim_setup.sh for the 5.1 lane.
@@ -42,4 +42,4 @@ export OMNI_KIT_ACCEPT_EULA=1
 # otherwise write __pycache__ into it side by side.
 export PYTHONPYCACHEPREFIX=$HOLOSOMA_DEPS_DIR/pycache
 
-echo "hssim6 active (Isaac Sim ${ISAACSIM6_VERSION:-6.1.0} / Isaac Lab 3.0, $(python --version 2>&1))"
+echo "hssim6 active (Isaac Sim ${ISAACSIM6_VERSION:-6.2.0} / Isaac Lab 3.0, $(python --version 2>&1))"
