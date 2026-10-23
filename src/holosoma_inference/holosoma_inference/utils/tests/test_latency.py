@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Unit tests for the latency tracking implementation."""
 
+import csv
+import tempfile
 import time
 import unittest
+from pathlib import Path
 
-from holosoma_inference.utils.latency import LatencyStats, LatencyTracker
+from holosoma_inference.utils.latency import STAGE_ORDER, LatencyStats, LatencyTracker
 
 
 class TestLatencyTracker(unittest.TestCase):
@@ -96,6 +99,49 @@ class TestLatencyTracker(unittest.TestCase):
         assert "inference:" in stats_str
         assert "ms" in stats_str
         assert "|" in stats_str  # Pipe separator
+
+    def test_get_stats_str_reports_max(self):
+        """The one-line report carries a max, not just mean±std."""
+        tracker = LatencyTracker()
+
+        for sleep_s in (0.001, 0.005):
+            with tracker.measure("inference"):
+                time.sleep(sleep_s)
+
+        stats_str = tracker.get_stats_str()
+        stat = tracker.get_stats(["inference"])["inference"]
+
+        assert f"max {stat.max_ms:.3f}ms" in stats_str
+
+    def test_csv_dump(self):
+        """csv_path writes one row per cycle with a column per stage."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "cycles.csv"
+            tracker = LatencyTracker(csv_path=str(csv_path))
+
+            for _ in range(3):
+                tracker.start_cycle()
+                with tracker.measure("inference"):
+                    time.sleep(0.001)
+                tracker.end_cycle()
+            tracker._csv.flush()
+
+            with csv_path.open() as handle:
+                rows = list(csv.DictReader(handle))
+
+        assert [row["iter"] for row in rows] == ["0", "1", "2"]
+        assert list(rows[0]) == ["iter", *STAGE_ORDER]
+        assert float(rows[0]["inference"]) >= 1.0
+        # Stages that did not run this cycle are nan, not zero.
+        assert rows[0]["read_state"] == "nan"
+
+    def test_no_csv_by_default(self):
+        """No csv_path means no file handle and no per-cycle write."""
+        tracker = LatencyTracker()
+        tracker.start_cycle()
+        tracker.end_cycle()
+
+        assert tracker._csv is None
 
     def test_reset_functionality(self):
         """Test reset functionality."""
