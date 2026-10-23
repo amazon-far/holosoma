@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 
-from .state_utils import fullstate_wxyz_to_xyzw, fullstate_xyzw_to_wxyz
+from .api import ISAACSIM5, IsaacLabApi
+from .proxy_array import as_tensor
 
 if TYPE_CHECKING:
     from holosoma.simulator.shared.object_registry import ObjectRegistry
@@ -47,7 +48,10 @@ class IsaacSimStateAdapter:
         scene: Any,
         robot: Any,
         robot_states: RootStatesProxy,
+        *,
+        api: IsaacLabApi = ISAACSIM5,
     ) -> None:
+        self.api = api
         self.device = device
         self._object_registry = object_registry
         self._scene = scene
@@ -137,8 +141,8 @@ class IsaacSimStateAdapter:
             # object, including multi-body scene-file bodies, lives under its own name in
             # scene.rigid_objects; read directly (wxyz->xyzw).
             rigid_object = self._scene.rigid_objects[obj_name]
-            raw_states = rigid_object.data.root_state_w[env_ids]
-            return fullstate_wxyz_to_xyzw(raw_states)
+            raw_states = as_tensor(rigid_object.data.root_state_w)[env_ids]
+            return self.api.read_state(raw_states)
 
         else:
             raise ValueError(f"Cannot resolve object '{obj_name}' (type '{obj_type}')")
@@ -161,7 +165,7 @@ class IsaacSimStateAdapter:
             # Write the robot directly via write_root_pose/velocity_to_sim (xyzw->wxyz).
             # NOTE: Intentionally does NOT apply env origins offsets for backwards compatibilty
             #       with existing robot root state setters
-            converted_states = fullstate_xyzw_to_wxyz(states)
+            converted_states = self.api.write_state(states)
             self._robot.write_root_pose_to_sim(converted_states[:, :7], env_ids)
             self._robot.write_root_velocity_to_sim(converted_states[:, 7:], env_ids)
 
@@ -169,7 +173,7 @@ class IsaacSimStateAdapter:
             # A scene rigid object — free (INDIVIDUAL) or static (SCENE). Every object,
             # including multi-body scene-file bodies, lives under its own name.
             rigid_object = self._scene.rigid_objects[obj_name]
-            converted_states = fullstate_xyzw_to_wxyz(states)
+            converted_states = self.api.write_state(states)
             # For now, do NOT apply env origins as WBT does this itself. We need to update WBT first
             # before uncommenting this.
             # converted_states[:, 0:3] += self._scene.env_origins[env_ids]  # Apply environment origins

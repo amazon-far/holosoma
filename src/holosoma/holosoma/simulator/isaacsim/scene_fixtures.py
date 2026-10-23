@@ -11,7 +11,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import isaaclab.sim as sim_utils
-import isaacsim.core.utils.stage as stage_utils
+from holosoma.simulator.isaacsim.runtime import stage_utils
+from .api import ISAACSIM5, IsaacLabApi
 from isaaclab.sensors import RayCasterCfg, patterns
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.terrains.utils import create_prim_from_mesh
@@ -52,7 +53,7 @@ def _hide_prim_subtree(stage: Usd.Stage, prim_path: str) -> None:
 
 
 def build_terrain_fixtures(
-    terrain_manager: TerrainManager, scene: InteractiveScene, robot_base_body_name: str
+    terrain_manager: TerrainManager, scene: InteractiveScene, robot_base_body_name: str, *, api: IsaacLabApi = ISAACSIM5
 ) -> TerrainFixtures:
     """Author the terrain ground prim + optional height scanner cfg.
 
@@ -83,9 +84,9 @@ def build_terrain_fixtures(
         # Add a height scanner to the torso to detect the height of the terrain mesh
         # TODO: Scene USD files need ground mapping
         height_scanner_cfg = RayCasterCfg(
-            prim_path=resolve_robot_link_prim_expression(robot_base_body_name),
+            prim_path=resolve_robot_link_prim_expression(robot_base_body_name, api=api),
             offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
-            attach_yaw_only=True,
+            ray_alignment="yaw",
             # Apply a grid pattern that is smaller than the resolution to only return one height value.
             pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[0.05, 0.05]),
             debug_vis=False,

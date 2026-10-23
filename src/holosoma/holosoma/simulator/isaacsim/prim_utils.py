@@ -1,6 +1,4 @@
-"""
-Utility functions for working with USD prims in IsaacSim.
-"""
+"""Shared USD prim traversal and robot link resolution."""
 
 from __future__ import annotations
 
@@ -9,14 +7,16 @@ from typing import Any
 
 import numpy as np
 import numpy.typing as npt
-import omni
-import omni.log
-import omni.usd
+from .api import ISAACSIM5, IsaacLabApi
 from pxr import Gf, Usd, UsdGeom, UsdPhysics
 
 
-def get_current_stage() -> Usd.Stage:
-    return omni.usd.get_context().get_stage()
+def get_current_stage(api: IsaacLabApi | None = None) -> Usd.Stage:
+    if api is not None:
+        return api.stage_utils().get_current_stage()
+    from .runtime import stage_utils
+
+    return stage_utils.get_current_stage()
 
 
 def is_rigid_body_enabled(prim: Usd.Prim) -> bool:
@@ -42,16 +42,51 @@ def _find_robot_link_prim(link_name: str, stage: Usd.Stage) -> Usd.Prim:
         for prim in Usd.PrimRange(robot_root, Usd.TraverseInstanceProxies())
         if prim.GetName() == link_name and UsdGeom.Xformable(prim)
     ]
-    if len(matches) != 1:
-        paths = [str(prim.GetPath()) for prim in matches]
-        raise ValueError(
-            f"Cannot resolve robot link '{link_name}' below '{robot_root_path}': "
-            f"expected one matching prim, found {len(matches)} ({paths})."
-        )
-    return matches[0]
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        return _disambiguate_link_prims(link_name, robot_root_path, matches)
+
+    raise ValueError(
+        f"Cannot resolve robot link '{link_name}' below '{robot_root_path}': no Xformable prim with that name exists."
+    )
 
 
-def resolve_robot_link_prim_expression(link_name: str, stage: Usd.Stage | None = None) -> str:
+def _disambiguate_link_prims(link_name: str, robot_root_path: str, matches: list[Usd.Prim]) -> Usd.Prim:
+    """Pick the body prim when a link name matches several nested prims.
+
+    Isaac Sim 6.2's URDF importer repeats the link name at three depths under a ``Geometry``
+    scope -- for example ``Robot/Geometry/pelvis`` (Xform, the rigid body),
+    ``Robot/Geometry/pelvis/pelvis`` (an intermediate Xform) and
+    ``Robot/Geometry/pelvis/pelvis/pelvis`` (the visual Mesh). Isaac Sim 5.1 produced a single
+    match, so this only engages on the newer importer.
+
+    Choosing by *rigid body* rather than by depth is what makes this safe: the body prim is the
+    one carrying an enabled ``UsdPhysics.RigidBodyAPI``, which is a statement about the asset
+    rather than an assumption about the importer's layout. Picking the wrong prim would yield
+    silently wrong transforms, so an ambiguous result still raises.
+    """
+    candidates = [prim for prim in matches if is_rigid_body_enabled(prim)]
+    if not candidates:
+        # Links the importer merged away (fixed joints, massless frames) carry no rigid body on any
+        # prim. The shallowest match is then the link frame and the deeper ones are its geometry.
+        fewest = min(prim.GetPath().pathElementCount for prim in matches)
+        candidates = [prim for prim in matches if prim.GetPath().pathElementCount == fewest]
+
+    if len(candidates) == 1:
+        return candidates[0]
+
+    raise ValueError(
+        f"Cannot resolve robot link '{link_name}' below '{robot_root_path}': expected one body "
+        f"prim, found {len(candidates)} equally plausible "
+        f"({[str(prim.GetPath()) for prim in candidates]}). "
+        f"All name matches: {[str(prim.GetPath()) for prim in matches]}."
+    )
+
+
+def resolve_robot_link_prim_expression(
+    link_name: str, stage: Usd.Stage | None = None, *, api: IsaacLabApi = ISAACSIM5
+) -> str:
     """Resolve a configured body name to its per-environment Isaac prim expression.
 
     URDF importers may preserve an extra root link, placing robot bodies below paths such as
@@ -62,10 +97,12 @@ def resolve_robot_link_prim_expression(link_name: str, stage: Usd.Stage | None =
     stage = stage or get_current_stage()
     robot_root_path = "/World/envs/env_0/Robot"
     suffix = str(_find_robot_link_prim(link_name, stage).GetPath())[len(robot_root_path) :]
-    return f"/World/envs/env_.*/Robot{suffix}"
+    return f"{api.env_regex}/Robot{suffix}"
 
 
-def resolve_robot_link_rigid_body_prim_expression(link_name: str, stage: Usd.Stage | None = None) -> str:
+def resolve_robot_link_rigid_body_prim_expression(
+    link_name: str, stage: Usd.Stage | None = None, *, api: IsaacLabApi = ISAACSIM5
+) -> str:
     """Resolve a source robot link to the Isaac rigid body that owns its geometry."""
     stage = stage or get_current_stage()
     robot_root_path = "/World/envs/env_0/Robot"
@@ -73,7 +110,7 @@ def resolve_robot_link_rigid_body_prim_expression(link_name: str, stage: Usd.Sta
     while prim.IsValid() and str(prim.GetPath()).startswith(robot_root_path):
         if is_rigid_body_enabled(prim):
             suffix = str(prim.GetPath())[len(robot_root_path) :]
-            return f"/World/envs/env_.*/Robot{suffix}"
+            return f"{api.env_regex}/Robot{suffix}"
         prim = prim.GetParent()
     raise ValueError(f"Robot link '{link_name}' is not owned by a rigid body below '{robot_root_path}'.")
 
@@ -111,6 +148,8 @@ def print_prim_tree(
     """
     # Get stage if not provided
     if stage is None:
+        import omni.usd
+
         stage = omni.usd.get_context().get_stage()
 
     # Get prim at path
@@ -206,6 +245,7 @@ def log_robot_properties(robot_path: str, pattern: str = "*", stage: Usd.Stage |
         robot_path: Base path to the robot prim
         pattern: Pattern to match link names (e.g. "*" for all, "*/hand/*" for hand links)
     """
+    import omni.log
 
     from prettytable import PrettyTable
     from pxr import PhysxSchema, UsdPhysics
@@ -338,6 +378,8 @@ def list_prims_in_stage(stage: Usd.Stage, path: str = "/", recurse: bool = True)
     Returns:
         List of prim paths as strings
     """
+    import omni.log
+
     root_prim = stage.GetPrimAtPath(path)
 
     if not root_prim.IsValid():
@@ -364,6 +406,8 @@ def compute_world_transform(stage: Usd.Stage, prim_path: str) -> Gf.Matrix4d:
     Returns:
         Gf.Matrix4d: World transform matrix
     """
+    import omni.log
+
     prim = stage.GetPrimAtPath(prim_path)
     if not prim.IsValid():
         omni.log.warn(f"Invalid prim path for transform computation: {prim_path}")

@@ -97,6 +97,69 @@ class _MujocoReader:
         return tuple(float(x) for x in src)
 
 
+def _properties(simulator: str):
+    """The bulk-property accessor for ``simulator``'s lane.
+
+    The Isaac Sim 6.2 lane ships ``physics_properties``, a per-engine adapter, because Newton's
+    view provides none of the PhysX tensor view's ``get_masses`` / ``get_coms`` family. Reading
+    through it means this harness verifies the *same* accessor the randomization terms write
+    through, rather than a PhysX-only path that simply does not exist under Newton -- which is how
+    this reader produced ``AttributeError: 'ArticulationView' object has no attribute
+    'get_masses'`` on a run whose DR terms had all succeeded.
+
+    Isaac Sim 5.1 has one engine and no such module, so it keeps the direct view access: returning
+    ``None`` selects that path and leaves the verified 5.1 behaviour untouched.
+    """
+    # Imported here rather than at module scope: this harness runs before the Isaac app is
+    # launched, and the launch order is what the rest of the suite depends on.
+    from tests.simulators._sim_harness import is_isaacsim, isaac_lane_module
+
+    if not is_isaacsim(simulator):
+        return None
+    try:
+        return isaac_lane_module(simulator, "physics_properties")
+    except ModuleNotFoundError:
+        # Isaac Sim 5.1 has one engine and ships no adapter; the direct view access is correct
+        # there. Narrow on purpose -- a broad `except` here swallowed a missing
+        # ISAAC_LANE_PACKAGES entry and silently sent the 6.1 lane down the PhysX-only path,
+        # which failed much later as "'ArticulationView' object has no attribute 'get_masses'".
+        return None
+
+
+def _physics_view(asset):
+    """The asset's physics tensor view, under whichever name this Isaac Lab generation uses.
+
+    Isaac Lab 2.3.2 exposes it as ``root_physx_view``; 3.0 renamed it to ``root_view`` and
+    **removed** the old name (it is not a deprecation alias). Resolved by attribute rather than by
+    version so this harness reads both lanes, and raised explicitly rather than falling back,
+    because a silently missing view would make every DR read-back return a default and the matrix
+    would pass while verifying nothing.
+    """
+    for name in ("root_view", "root_physx_view"):
+        view = getattr(asset, name, None)
+        if view is not None:
+            return view
+    raise AttributeError(
+        f"{type(asset).__name__} exposes neither `root_view` (Isaac Lab 3.x) nor "
+        f"`root_physx_view` (2.3.x); the DR read-back cannot verify anything."
+    )
+
+
+def _view_array(value):
+    """Physics-view results as something indexable with a ``.ndim``.
+
+    Isaac Lab 3.0's views return ``warp.array`` rather than ``torch.Tensor``. Warp arrays carry
+    ``ndim`` and support indexing, but converting keeps the float() conversions below uniform.
+    """
+    if hasattr(value, "numpy") and not hasattr(value, "ndim"):
+        return value.numpy()
+    try:
+        import warp as wp
+    except ImportError:
+        return value
+    return wp.to_torch(value) if isinstance(value, wp.array) else value
+
+
 class _IsaacSimReader:
     """IsaacSim physx-view read-back via the isaaclab assets (env 0)."""
 
@@ -106,9 +169,16 @@ class _IsaacSimReader:
     # restitution band assertion is enabled here (see run_object_dr).
     RESTITUTION_READBACK_TRUSTED = True
 
-    def __init__(self, sim):
+    def __init__(self, sim, properties=None):
         self._sim = sim
         self._scene = sim.scene
+        self._properties = properties
+
+    def _get(self, asset, name: str):
+        """One bulk property, through the lane's adapter if it has one."""
+        if self._properties is not None:
+            return _view_array(getattr(self._properties, name)(asset))
+        return _view_array(getattr(_physics_view(asset), name)())
 
     def _asset_and_body(self, body_name: str):
         """Return (asset, body_index). Object names (from the registry) resolve to the matching
@@ -131,35 +201,35 @@ class _IsaacSimReader:
 
     def body_mass(self, body_name: str) -> float:
         asset, bidx = self._asset_and_body(body_name)
-        masses = asset.root_physx_view.get_masses()  # [num_envs, num_bodies] or [num_envs]
+        masses = self._get(asset, "get_masses")  # [num_envs, num_bodies] or [num_envs]
         return float(masses[0, bidx] if masses.ndim == 2 else masses[0])
 
     def geom_friction_for_body(self, body_name: str) -> float:
         asset, _bidx = self._asset_and_body(body_name)
         # [num_envs, num_shapes, 3] = (static, dynamic, restitution)
-        mats = asset.root_physx_view.get_material_properties()
+        mats = self._get(asset, "get_material_properties")
         return float(mats[0, 0, 0])
 
     def dynamic_friction_for_body(self, body_name: str) -> float:
         asset, _bidx = self._asset_and_body(body_name)
         # [num_envs, num_shapes, 3] = (static, dynamic, restitution) -> dynamic friction at slot 1.
-        mats = asset.root_physx_view.get_material_properties()
+        mats = self._get(asset, "get_material_properties")
         return float(mats[0, 0, 1])
 
     def restitution_for_body(self, body_name: str) -> float:
         asset, _bidx = self._asset_and_body(body_name)
         # [num_envs, num_shapes, 3] = (static, dynamic, restitution) -> restitution at slot 2.
-        mats = asset.root_physx_view.get_material_properties()
+        mats = self._get(asset, "get_material_properties")
         return float(mats[0, 0, 2])
 
     def body_inertia(self, body_name: str):
         asset, bidx = self._asset_and_body(body_name)
-        row = self._row(asset.root_physx_view.get_inertias(), bidx)  # 9 = row-major 3x3
+        row = self._row(self._get(asset, "get_inertias"), bidx)  # 9 = row-major 3x3
         return (float(row[0]), float(row[4]), float(row[8]))  # Ixx, Iyy, Izz
 
     def body_com(self, body_name: str):
         asset, bidx = self._asset_and_body(body_name)
-        row = self._row(asset.root_physx_view.get_coms(), bidx)  # [..,7] (pos+quat) or [..,3]
+        row = self._row(self._get(asset, "get_coms"), bidx)  # [..,7] (pos+quat) or [..,3]
         return (float(row[0]), float(row[1]), float(row[2]))
 
 
@@ -167,6 +237,14 @@ _READERS = {
     "mujoco": _MujocoReader,
     "mjwarp": _MujocoReader,
     "isaacsim": _IsaacSimReader,
+    # Same reader for every Isaac Sim preset: the physics view is resolved by attribute name, so
+    # it reads both generations without a second implementation. The per-engine presets must be
+    # listed explicitly -- `--simulator` validates against these keys, so omitting one makes the
+    # harness reject it at argparse. That reads as a backend failure in a capability sweep when it
+    # is really an unmeasured cell.
+    "isaacsim6": _IsaacSimReader,
+    "isaacsim6-newton": _IsaacSimReader,
+    "isaacsim6-ovphysx": _IsaacSimReader,
 }
 
 
@@ -179,7 +257,10 @@ def main() -> int:
 
     from holosoma.config_values import simulator as sim_values
 
-    sim_cfg = getattr(sim_values, args.simulator)
+    # Looked up in the registry rather than as a module attribute: preset names are not all
+    # valid Python identifiers (e.g. "isaacsim6-newton"), and the registry is the
+    # authoritative mapping anyway.
+    sim_cfg = sim_values.SIMULATOR_REGISTRY[args.simulator]
     num_envs = args.num_envs if args.num_envs is not None else (1 if args.simulator == "mujoco" else 4)
     device = "cpu" if args.simulator == "mujoco" else "cuda:0"
 
@@ -193,7 +274,15 @@ def main() -> int:
         if args.simulator == "mjwarp":
             # Object inertia field isn't in the loco preset; expand every field the matrix touches.
             env.simulator.prepare_randomization_fields(["body_mass", "geom_friction", "body_ipos", "body_inertia"])
-        reader = cast("ModelReader", _READERS[args.simulator](env.simulator))
+        # The Isaac readers take the lane's bulk-property adapter so the read-back uses the same
+        # accessor the randomization terms wrote through; the other backends ignore the argument.
+        from tests.simulators._sim_harness import is_isaacsim
+
+        reader_cls = _READERS[args.simulator]
+        if is_isaacsim(args.simulator):
+            reader = cast("ModelReader", reader_cls(env.simulator, _properties(args.simulator)))
+        else:
+            reader = cast("ModelReader", reader_cls(env.simulator))
         # Run each stage inside an explicit try so a failure is LOGGED with a traceback before the
         # with-block exits — IsaacSim's close_simulation_app (on __exit__) can hard-terminate the
         # process and swallow a propagating exception, leaving exit 0 and no diagnostic otherwise.

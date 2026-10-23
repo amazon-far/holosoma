@@ -19,7 +19,14 @@ if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step, steps_for_seconds
+from tests.simulators._sim_harness import (
+    SIMULATOR_CHOICES,
+    build_run_sim_config,
+    is_isaacsim,
+    run_and_hard_exit,
+    step,
+    steps_for_seconds,
+)
 
 SKIP_EXIT_CODE = 77
 
@@ -47,7 +54,7 @@ def _red_fraction(rgb):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATOR_CHOICES)
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
@@ -67,7 +74,9 @@ def main() -> int:
 
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
     config = dataclasses.replace(
-        config, device=device, training=dataclasses.replace(config.training, num_envs=args.num_envs)
+        config,
+        device=device,
+        training=dataclasses.replace(config.training, headless=args.headless == "true", num_envs=args.num_envs),
     )
 
     env, device, _app = setup_simulation_environment(config, device=device)
@@ -112,7 +121,7 @@ def main() -> int:
         # Restore joints to the spawn pose with zero velocity; per-backend DOF-state tensor shapes
         # (IsaacSim 3D [n, ndof, 2]). MuJoCo is unaffected by this flake.
         ndof = sim.num_dof
-        if args.simulator == "isaacsim":
+        if is_isaacsim(args.simulator):
             ds = torch.zeros(n, ndof, 2, device=device)
             ds[:, :, 0] = _spawn_dof_pos
             sim.set_dof_state_tensor_robots(_all_ids, ds)

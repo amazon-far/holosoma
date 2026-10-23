@@ -186,6 +186,39 @@ def resolve_data_file_path(file_path: str) -> str:
     return resolve_path(file_path)
 
 
+def holosoma_deps_dir() -> Path:
+    """The per-environment dependency workspace, matching ``scripts/source_common.sh``.
+
+    The shell scripts export ``HOLOSOMA_DEPS_DIR`` (and the Dockerfiles set it as an ``ENV``);
+    the default here must stay identical to ``source_common.sh``'s, since the two are separate
+    sources of truth for the same path. ``test_holosoma_deps_dir_matches_source_common`` asserts
+    they agree.
+
+    Each Isaac Sim lane uses a different value -- ``~/.holosoma_deps`` for the 5.1 lane,
+    ``~/.holosoma_deps_sim6`` for the 6.1 lane -- so anything keyed off this is lane-isolated
+    without further work.
+    """
+    return Path(os.environ.get("HOLOSOMA_DEPS_DIR", "~/.holosoma_deps")).expanduser()
+
+
+def urdf_conversion_cache_dir(urdf_path: str) -> str:
+    """Directory for USD files converted from ``urdf_path``, created if absent.
+
+    Deliberately *outside* the source tree. The URDF itself lives inside the installed holosoma
+    package, so writing conversions next to it put generated USD into the git worktree (hence the
+    ``converted*/`` entries in ``.gitignore``) and -- worse -- made the two Isaac Sim lanes share
+    one cache. They produce different USD for the same URDF, so a stale hit crossed generations.
+
+    Keyed on the dependency workspace, which already differs per lane, plus the URDF's own
+    directory name to keep robots apart. Override with ``HOLOSOMA_USD_CACHE_DIR``.
+    """
+    override = os.environ.get("HOLOSOMA_USD_CACHE_DIR")
+    base = Path(override).expanduser() if override else holosoma_deps_dir() / "usd_cache"
+    cache_dir = base / Path(urdf_path).parent.name
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return str(cache_dir)
+
+
 def resolve_asset_path(asset_file: str, asset_root: str | None) -> str:
     """Resolve an asset path, optionally rooted under ``asset_root``.
 

@@ -29,7 +29,7 @@ import numpy as np
 from holosoma.config_types.plugin import ROS2OdometryPluginConfig
 from holosoma.simulator.shared.ros2_plugins import ROS2OdometryPlugin
 from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit
+from tests.simulators._sim_harness import SIMULATOR_CHOICES, build_run_sim_config, run_and_hard_exit
 
 BODY_NAME = "pelvis"
 FRAME_POSITION_B = np.array([0.31, -0.17, 0.23], dtype=np.float64)
@@ -176,7 +176,7 @@ def _norm(vector: np.ndarray) -> float:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Cross-backend arbitrary-frame odometry regression.")
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATOR_CHOICES)
     parser.add_argument("--result-file", type=Path)
     args = parser.parse_args()
 

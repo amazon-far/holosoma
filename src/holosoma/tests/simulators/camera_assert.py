@@ -29,7 +29,13 @@ if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step, steps_for_seconds
+from tests.simulators._sim_harness import (
+    SIMULATOR_CHOICES,
+    build_run_sim_config,
+    run_and_hard_exit,
+    step,
+    steps_for_seconds,
+)
 
 if TYPE_CHECKING:
     from holosoma.config_types.sensor import CameraSensorConfig
@@ -64,7 +70,7 @@ def _check_not_blank(img, label: str) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATOR_CHOICES)
     parser.add_argument("--scene", default="camera-target", help="scene preset (front-facing bright object)")
     parser.add_argument("--sensors", default="front-cam", help="sensors preset (one robot-base camera)")
     parser.add_argument("--robot", default="g1-29dof")
@@ -78,6 +84,11 @@ def main() -> int:
         help="install a CameraVizPlugin recorder hook (record_video) and assert it was installed + buffered "
         "a frame, regardless of backend; guards that camera-consumer hooks fire on FRAME_END.",
     )
+    parser.add_argument(
+        "--visualizers",
+        default=None,
+        help="comma-separated isaac_visualizers (Isaac Sim 6.2 only); default is headless",
+    )
     parser.add_argument("--result-file", default=None, help="write PASS/FAIL here before teardown")
     args = parser.parse_args()
 
@@ -88,7 +99,12 @@ def main() -> int:
 
     sim_arg = "mujoco" if args.simulator == "mjwarp" else args.simulator
     config = build_run_sim_config(
-        sim_arg, args.scene, args.robot, args.terrain, sensors=_camera_presets.SENSOR_PRESETS[args.sensors]
+        sim_arg,
+        args.scene,
+        args.robot,
+        args.terrain,
+        sensors=_camera_presets.SENSOR_PRESETS[args.sensors],
+        visualizers=args.visualizers,
     )
     if args.simulator == "mjwarp":
         config = _camera_presets.as_mjwarp(config)
@@ -97,7 +113,7 @@ def main() -> int:
     config = dataclasses.replace(
         config,
         device=device,
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        training=dataclasses.replace(config.training, headless=headless, num_envs=args.num_envs),
     )
 
     if args.check_recorder:

@@ -48,7 +48,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-import isaacsim.core.utils.stage as stage_utils
+from holosoma.simulator.isaacsim.runtime import stage_utils
 import omni.log
 import omni.usd
 from pxr import Usd

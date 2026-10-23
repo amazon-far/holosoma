@@ -27,7 +27,11 @@ from holosoma.config_types.scene import PhysicsConfig, RigidObjectConfig  # noqa
 from holosoma.simulator.base_simulator.hooks import Phase  # noqa: E402
 from holosoma.utils.sim_utils import setup_simulation_environment  # noqa: E402
 from tests.simulators import _camera_presets, _lidar_presets  # noqa: E402, F401
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit  # noqa: E402
+from tests.simulators._sim_harness import (  # noqa: E402
+    ISAAC_LANE_PACKAGES,
+    build_run_sim_config,
+    run_and_hard_exit,
+)
 
 
 def _check_exact_downward_return(sim, name: str, expected_ranges) -> list[str]:
@@ -77,6 +81,10 @@ def _check_native_target_contract(sim) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    # Isaac-only harness, but both Isaac Sim generations must be exercisable: it hard-coded
+    # "isaacsim" below, so running it under the 6.1 environment built the 5.1 backend and
+    # died importing an Isaac Sim 5.1-only module. Defaults to 5.1 so CI is unchanged.
+    parser.add_argument("--simulator", default="isaacsim", choices=sorted(ISAAC_LANE_PACKAGES))
     parser.add_argument("--num-envs", type=int, default=3)
     parser.add_argument("--result-file", default=None)
     args = parser.parse_args()
@@ -96,7 +104,7 @@ def main() -> int:
         "robot_visual": _lidar_presets.isaacsim_robot_visual_lidar,
     }
     config = build_run_sim_config(
-        "isaacsim",
+        args.simulator,
         "camera-target",
         "g1-29dof",
         "terrain_locomotion_plane",
@@ -114,7 +122,7 @@ def main() -> int:
         config,
         device="cuda:0",
         scene=dataclasses.replace(config.scene, rigid_objects=scene_objects),
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        training=dataclasses.replace(config.training, headless=True, num_envs=args.num_envs),
     )
 
     env, device, _app = setup_simulation_environment(config, device="cuda:0")

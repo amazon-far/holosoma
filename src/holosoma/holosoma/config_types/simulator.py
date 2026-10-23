@@ -24,6 +24,57 @@ class MujocoBackend(str, Enum):
     """GPU-accelerated multi-environment backend."""
 
 
+class IsaacPhysicsBackend(str, Enum):
+    """Isaac Sim physics engine selection.
+
+    Isaac Lab 2.3.2 (Isaac Sim 5.1) had exactly one engine, so this is meaningless there and the
+    5.1 backend rejects any non-default value rather than ignoring it. Isaac Lab 3.0 (Isaac Sim
+    6.1) resolves the engine from ``SimulationCfg.physics``, which is what this selects.
+
+    ``PHYSX`` and ``NEWTON`` are supported. PhysX stays the default because it is the engine the
+    5.1 backend uses; Newton is a separate physics target. ``OVPHYSX`` is rejected at startup
+    because it cannot run under Kit. Unsupported capabilities fail loudly -- see
+    ``simulator/isaacsim6/capabilities.py`` and ``docs/isaac-sim-backends.md``.
+    """
+
+    PHYSX = "physx"
+    """PhysX via ``isaaclab_physx``. The default, and the engine 5.1 uses."""
+
+    NEWTON = "newton"
+    """NVIDIA Newton via ``isaaclab_newton``. Warp-native; different solver and actuator model."""
+
+    OVPHYSX = "ovphysx"
+    """OmniPhysX via ``isaaclab_ov``."""
+
+
+@dataclass(frozen=True)
+class IsaacNewtonConfig:
+    """Tunables for the Isaac Lab 3.0 Newton physics backend.
+
+    Deliberately *not* a reuse of :class:`PhysxConfig`. The two engines share no tuning surface:
+    ``isaaclab_newton.physics.NewtonCfg`` has none of PhysX's ``solver_type`` /
+    ``num_position_iterations`` / ``num_velocity_iterations`` / ``bounce_threshold_velocity``, and
+    exposes substepping plus solver sub-configurations instead. Mapping one struct onto both would
+    mean silently dropping whichever fields the selected engine does not understand, so each
+    engine gets its own.
+
+    Only used when ``isaac_physics_backend='newton'``. Fields left ``None`` keep Isaac Lab's own
+    default rather than holosoma imposing one.
+    """
+
+    num_substeps: int | None = None
+    """Physics substeps per simulation step. Isaac Lab default is 1."""
+
+    collision_decimation: int | None = None
+    """How many steps between collision detection passes. Isaac Lab default is 0 (every step)."""
+
+    use_cuda_graph: bool | None = None
+    """Capture the step as a CUDA graph. Isaac Lab default is True; disabling aids debugging."""
+
+    deterministic_mode: str | None = None
+    """Newton's determinism level, e.g. ``'not_guaranteed'`` (its default)."""
+
+
 @dataclass(frozen=True)
 class MujocoWarpConfig:
     """Configuration for MuJoCo Warp backend memory allocation.
@@ -360,6 +411,37 @@ class SimulatorInitConfig:
     Or use the syntactic sugar configs:
         simulator:mujoco   (uses classic backend)
         simulator:mjwarp   (uses warp backend)
+    """
+
+    isaac_physics_backend: IsaacPhysicsBackend = IsaacPhysicsBackend.PHYSX
+    """Isaac Sim physics engine selection.
+
+    Only meaningful for the Isaac Sim 6.2 backend (``simulator:isaacsim6``), which resolves the
+    engine from ``SimulationCfg.physics``. Isaac Sim 5.1 has one engine, so the 5.1 backend
+    **rejects** any non-default value instead of ignoring it -- a silently ignored engine choice
+    would be a config that lies about what ran.
+
+    ``physx`` matches 5.1's numerics; ``newton`` is a separate supported physics target.
+    ``ovphysx`` and unported capabilities raise at startup. See
+    ``docs/isaac-sim-backends.md`` for the per-backend matrix.
+
+    Command line usage:
+        --simulator.config.isaac-physics-backend=newton
+    """
+
+    isaac_newton: IsaacNewtonConfig = field(default_factory=IsaacNewtonConfig)
+    """Newton backend tunables. Only used when ``isaac_physics_backend='newton'``.
+
+    Separate from ``physx`` because the engines share no tuning fields (see
+    :class:`IsaacNewtonConfig`).
+    """
+
+    isaac_visualizers: tuple[str, ...] = ()
+    """Isaac Lab 3.0 visualizers: kit, newton_gl, newton_rtx, rerun, or viser.
+
+    An empty tuple follows training.headless: no viewer when headless, Kit otherwise.
+    Camera rendering is configured independently and works without a viewer.
+    Isaac Sim 5.1 rejects a non-empty value because it has a different launcher API.
     """
 
     mujoco_warp: MujocoWarpConfig = field(default_factory=MujocoWarpConfig)

@@ -39,7 +39,7 @@ from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.sampler import STAGE_RESET, STAGE_SETUP, TermSampler
 from holosoma.utils.sim_utils import setup_simulation_environment
 from tests.simulators import _scene_presets
-from tests.simulators._sim_harness import build_run_sim_config, step, steps_for_seconds
+from tests.simulators._sim_harness import SIMULATOR_CHOICES, build_run_sim_config, step, steps_for_seconds
 
 GRAVITY = 9.81
 
@@ -239,15 +239,31 @@ def assert_static_support(ctx):
     # Clean rest on the post top (0.35) puts the 0.1-cube center at exactly 0.40. Tight band (8mm)
     # so a box that came to rest PENETRATING the post (soft/mis-scaled contact, center < ~0.39)
     # fails — a 3cm band would accept a box sunk most of the way into the post.
-    rests_on = _all((rest_z - 0.40).abs() < 8e-3)
+    z_err = (rest_z - 0.40).abs()
+    rests_on = _all(z_err < 8e-3)
     # Still over the post in x,y (didn't slide off the edge / tip) — an independent guard, not the
     # dead "above floor" clause the tight z-band already subsumes. Post + box both at x=1.5,y=0.
-    over_post = _all((rest[:, :2] - post0[:, :2]).abs().amax(dim=1) < 3e-2)
+    xy_err = (rest[:, :2] - post0[:, :2]).abs().amax(dim=1)
+    over_post = _all(xy_err < 3e-2)
     post_fixed = _all((post[:, :3] - post0).abs().amax(dim=1) < 1e-3)
     print(
         f"  support: restbox_z env0 {float(rest_z[0]):.4f} (want ~0.40)  rests_on_all={rests_on}  "
         f"over_post={over_post} post_fixed_all={post_fixed}"
     )
+    # Per-env detail for the envs that actually failed. The summary above reports env0 while the
+    # predicates are `_all` over every env, so a failure in env1+ printed a *passing* number next
+    # to FAIL -- which is exactly how one of these cost a long investigation that could not even
+    # establish which environment broke. Printed only on failure so a passing run stays quiet.
+    if not (rests_on and over_post):
+        for env in range(rest.shape[0]):
+            if float(z_err[env]) < 8e-3 and float(xy_err[env]) < 3e-2:
+                continue
+            print(
+                f"    env{env}: z={float(rest_z[env]):.4f} (err {float(z_err[env]) * 1e3:.1f}mm, "
+                f"limit 8mm)  xy=({float(rest[env, 0]):.4f}, {float(rest[env, 1]):.4f}) vs post "
+                f"({float(post0[env, 0]):.4f}, {float(post0[env, 1]):.4f}) "
+                f"(err {float(xy_err[env]) * 1e3:.1f}mm, limit 30mm)"
+            )
     return rests_on and over_post and post_fixed
 
 
@@ -1396,7 +1412,7 @@ def main() -> int:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenario", required=True, choices=sorted(SCENARIOS))
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATOR_CHOICES)
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
@@ -1437,7 +1453,7 @@ def main() -> int:
     config = dataclasses.replace(
         config,
         device=device,
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        training=dataclasses.replace(config.training, headless=args.headless == "true", num_envs=args.num_envs),
     )
 
     # Apply the scenario's link_physics onto the one-link robot's asset, so the robot link carries the

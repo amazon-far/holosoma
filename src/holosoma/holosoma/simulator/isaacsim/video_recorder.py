@@ -26,7 +26,12 @@ from holosoma.simulator.shared.video_recorder import VideoRecorderInterface
 
 if TYPE_CHECKING:
     from holosoma.config_types.video import VideoConfig
-    from holosoma.simulator.isaacsim.isaacsim import IsaacSim
+    from holosoma.simulator.isaacsim.isaacsim import IsaacSim as IsaacSim5
+    from holosoma.simulator.isaacsim6.isaacsim import IsaacSim as IsaacSim6
+
+    from typing import Union
+
+    IsaacSim = Union[IsaacSim5, IsaacSim6]
 
 
 class IsaacSimVideoRecorder(VideoRecorderInterface):
@@ -120,11 +125,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         self.camera_prim.GetVerticalApertureAttr().Set(vertical_aperture)
 
         # Create a view for the sensor
-        from isaacsim.core.prims import XFormPrim
-
-        self._view = XFormPrim(self._camera_prim_path, reset_xform_properties=True)
-
-        self._view.initialize()
+        self._view = self._create_camera_view(self._camera_prim_path)
 
         # Create render product using replicator
         resolution = (self.config.width, self.config.height)
@@ -139,6 +140,19 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         logger.debug(f"Created replicator camera at: {self._camera_prim_path}")
         logger.debug(f"Render product resolution: {resolution}")
         logger.debug("IsaacSim video recording setup completed")
+
+    def _create_camera_view(self, prim_path: str) -> Any:
+        from isaacsim.core.prims import XFormPrim
+
+        view = XFormPrim(prim_path, reset_xform_properties=True)
+        view.initialize()
+        return view
+
+    def _set_camera_pose(self, positions: torch.Tensor, orientations: torch.Tensor) -> None:
+        self._view.set_world_poses(positions=positions, orientations=orientations)
+
+    def _render_recording_frame(self) -> None:
+        """Isaac Sim 5.1 updates Replicator products in the simulation render loop."""
 
     def _capture_frame_impl(self) -> None:
         """Capture frame using replicator annotator.
@@ -160,6 +174,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         try:
             # Update camera position to track robot using shared logic
             self._update_camera_position()
+            self._render_recording_frame()
 
             # Get RGB data from replicator annotator
             rgb_data = self._rgb_annotator.get_data()
@@ -215,10 +230,9 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
                 create_rotation_matrix_from_view(position, target, up_axis, device=self.simulator.device)
             )
 
-            self._view.set_world_poses(
+            self._set_camera_pose(
                 position,
                 orientations,
-                torch.tensor([self.config.record_env_id], device=self.simulator.device, dtype=torch.int32),
             )
 
         except Exception as e:
@@ -249,7 +263,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         if self._rgb_annotator is not None:
             try:
                 if self._render_product is not None:
-                    self._rgb_annotator.detach([self._render_product])
+                    self._rgb_annotator.detach([self._render_product.path])
             except Exception as exc:
                 failures.append(exc)
             else:

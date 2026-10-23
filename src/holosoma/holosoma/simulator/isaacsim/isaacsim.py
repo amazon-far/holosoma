@@ -17,7 +17,7 @@ import omni.log
 import torch
 from pxr import Usd
 from isaaclab.assets import Articulation
-from isaaclab.envs import ViewerCfg, mdp
+from isaaclab.envs import mdp
 from isaaclab.managers import EventManager, SceneEntityCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
@@ -160,11 +160,13 @@ class IsaacSim(BaseSimulator):
             self._setup_scene()
         print("[INFO]: Scene manager: ", self.scene)
 
-        viewer_config: ViewerCfg
+        from holosoma.simulator.isaacsim.isaaclab_viewpoint_camera_controller import ViewportCameraCfg
+
+        viewer_config: ViewportCameraCfg
         if self.simulator_config.viewer.enable_tracking:
-            viewer_config = ViewerCfg(origin_type="asset_root", asset_name="robot", eye=(0.0, -1.5, 1.5))
+            viewer_config = ViewportCameraCfg(origin_type="asset_root", asset_name="robot", eye=(0.0, -1.5, 1.5))
         else:
-            viewer_config = ViewerCfg()
+            viewer_config = ViewportCameraCfg()
 
         if self.sim.render_mode >= self.sim.RenderMode.PARTIAL_RENDERING:
             self.viewport_camera_controller: ViewportCameraController | None = ViewportCameraController(

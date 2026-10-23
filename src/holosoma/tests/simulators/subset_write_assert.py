@@ -25,6 +25,7 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 
 # Reuse static_move_assert's scene/build/step helpers so the scene is identical to the passing test.
 from holosoma.simulator.shared.object_registry import ObjectType
+from tests.simulators._sim_harness import SIMULATOR_CHOICES
 from tests.simulators.static_move_assert import (
     PILLAR_Z,
     SETTLE_SECONDS,
@@ -36,7 +37,7 @@ from tests.simulators.static_move_assert import (
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Non-contiguous env_ids subset write probe.")
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATOR_CHOICES)
     parser.add_argument("--num-envs", type=int, default=4)
     args = parser.parse_args()
     num_envs = args.num_envs

@@ -23,11 +23,13 @@ import sys
 import tempfile
 from pathlib import Path
 
+from tests.simulators._sim_harness import SIMULATOR_CHOICES
+
 # Shadow-fix: keep this file's dir from hiding the real isaacsim package.
 if sys.path and Path(sys.path[0]).resolve() == Path(__file__).parent.resolve():
     sys.path.pop(0)
 
-from holosoma.utils.safe_torch_import import torch
+import torch
 
 SKIP_EXIT_CODE = 77
 
@@ -68,7 +70,7 @@ def _build(simulator: str, num_envs: int, plugin=None, kinematic: bool = False):
         simulator=sim_cfg,
         device=device,
         plugin=plugin or {},
-        training=dataclasses.replace(config.training, num_envs=num_envs),
+        training=dataclasses.replace(config.training, headless=True, num_envs=num_envs),
     )
     env, device, _ = setup_simulation_environment(config, device=device)
     sim = env.sim
@@ -107,7 +109,7 @@ def _frame(sim) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATOR_CHOICES)
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--result-file", default=None, help="write 'OK' here after PASS (teardown-robust)")
     args = parser.parse_args()

@@ -74,6 +74,7 @@ jobs:
     with:
       combined_image: ${{ vars.ECR_REGISTRY }}/holosoma:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
       isaacsim_image: ${{ vars.ECR_REGISTRY }}/holosoma-isaacsim:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+      isaacsim6_image: ${{ vars.ECR_REGISTRY }}/holosoma-isaacsim6:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
       mujoco_image: ${{ vars.ECR_REGISTRY }}/holosoma-mujoco:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
     secrets: inherit
 
@@ -124,6 +125,7 @@ jobs:
             holosoma-inference
             holosoma-retargeting
             holosoma-isaacsim
+            holosoma-isaacsim6
             holosoma-mujoco
             holosoma-thor-inference
             holosoma-thor-inference-ros

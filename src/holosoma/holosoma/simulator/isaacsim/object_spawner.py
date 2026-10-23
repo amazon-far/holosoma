@@ -44,12 +44,13 @@ from loguru import logger
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics
 
 from holosoma.config_types.scene import PhysicsConfig, RigidObjectConfig, SceneFileConfig
+from holosoma.simulator.isaacsim.prim_naming import distinguishing_names
+from .api import ISAACSIM5, IsaacLabApi
 from holosoma.simulator.isaacsim.converters import (
     physics_to_collision_props,
     physics_to_mass_props,
     physics_to_rigid_body_props,
 )
-from holosoma.simulator.isaacsim.prim_naming import distinguishing_names
 from holosoma.simulator.isaacsim.prim_utils import compute_world_transform, get_pose, is_rigid_body_enabled
 from holosoma.simulator.isaacsim.spawners.from_files_cfg import CustomUsdFileCfg
 from holosoma.simulator.shared.asset_format import select_asset_format
@@ -374,6 +375,8 @@ def build_rigid_object(
     fixed: bool,
     physics: PhysicsConfig | None = None,
     source_prim_path: str | None = None,
+    rigid_object_cls: type[RigidObject] = RigidObject,
+    api: IsaacLabApi = ISAACSIM5,
 ) -> RigidObject:
     """Build the IsaacLab ``RigidObject`` both formats and both shapes flow through.
 
@@ -383,15 +386,24 @@ def build_rigid_object(
     _assert_asset_exists(resolved_path, f"Object '{name}' ({fmt})")
     spawn = select_spawn_cfg(fmt, resolved_path, fixed=fixed, physics=physics, source_prim_path=source_prim_path)
     cfg = RigidObjectCfg(
-        prim_path=f"/World/envs/env_.*/{name}",
+        prim_path=f"{api.env_regex}/{name}",
         spawn=spawn,
-        init_state=RigidObjectCfg.InitialStateCfg(pos=tuple(pos), rot=tuple(rot_wxyz)),  # wxyz
+        # Isaac Lab 3.0 takes cfg quaternions w-LAST (2.3.2 took w-first), so the w-first
+        # value holosoma carries is reordered here. See quat_convention for why this is
+        # a named call rather than an inline slice.
+        init_state=RigidObjectCfg.InitialStateCfg(pos=tuple(pos), rot=api.config_quaternion(rot_wxyz)),
     )
-    return RigidObject(cfg)
+    return rigid_object_cls(cfg)
 
 
 def build_standalone_rigid_object(
-    name: str, obj: RigidObjectConfig, supported_formats: list[str], scene_asset_root: str | None
+    name: str,
+    obj: RigidObjectConfig,
+    supported_formats: list[str],
+    scene_asset_root: str | None,
+    rigid_object_cls: type[RigidObject] = RigidObject,
+    *,
+    api: IsaacLabApi = ISAACSIM5,
 ) -> RigidObject:
     """Spawn one standalone ``RigidObjectConfig`` (1->1), USD or URDF, via the shared tail.
 
@@ -413,11 +425,19 @@ def build_standalone_rigid_object(
         fixed=obj.fixed,
         physics=obj.physics,
         source_prim_path=source_prim_path,
+        rigid_object_cls=rigid_object_cls,
+        api=api,
     )
 
 
 def expand_scene_file(
-    scene_file_name: str, scene_file: SceneFileConfig, supported_formats: list[str], scene_asset_root: str | None
+    scene_file_name: str,
+    scene_file: SceneFileConfig,
+    supported_formats: list[str],
+    scene_asset_root: str | None,
+    rigid_object_cls: type[RigidObject] = RigidObject,
+    *,
+    api: IsaacLabApi = ISAACSIM5,
 ) -> tuple[dict[str, RigidObject], set[str]]:
     """Expand a multi-body USD scene file into per-body ``RigidObject`` instances (1->N).
 
@@ -535,6 +555,8 @@ def expand_scene_file(
             fixed=is_static,
             physics=body_physics,
             source_prim_path=prim_path,
+            rigid_object_cls=rigid_object_cls,
+            api=api,
         )
         if is_static:
             static_names.add(actor_name)

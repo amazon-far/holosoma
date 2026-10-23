@@ -18,7 +18,12 @@ from loguru import logger
 from holosoma.simulator.shared.virtual_gantry import GantryCommand, GantryCommandData
 
 if TYPE_CHECKING:
-    from holosoma.simulator.isaacsim.isaacsim import IsaacSim
+    from holosoma.simulator.isaacsim.isaacsim import IsaacSim as IsaacSim5
+    from holosoma.simulator.isaacsim6.isaacsim import IsaacSim as IsaacSim6
+
+    from typing import Union
+
+    IsaacSim = Union[IsaacSim5, IsaacSim6]
 
 
 class ViewerInputController:

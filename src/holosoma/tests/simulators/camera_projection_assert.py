@@ -17,7 +17,14 @@ if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step, steps_for_seconds
+from tests.simulators._sim_harness import (
+    SIMULATOR_CHOICES,
+    build_run_sim_config,
+    is_isaacsim,
+    run_and_hard_exit,
+    step,
+    steps_for_seconds,
+)
 from tests.simulators.camera_assert import _check_contract
 from tests.simulators.camera_geometry_assert import _check_geometry, _measure, _red_mask
 
@@ -120,7 +127,7 @@ def _check_pinhole_fallback(pinhole_img, configured_img, label: str) -> list[str
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATOR_CHOICES)
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
@@ -145,7 +152,7 @@ def main() -> int:
     config = dataclasses.replace(
         config,
         device=device,
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        training=dataclasses.replace(config.training, headless=args.headless == "true", num_envs=args.num_envs),
     )
 
     env, device, _app = setup_simulation_environment(config, device=device)
@@ -213,7 +220,7 @@ def main() -> int:
             _camera_presets._PANEL_HALF_SIZE,
             f"{args.simulator}/pinhole/env{env_id}",
         )
-        if args.simulator == "isaacsim":
+        if is_isaacsim(args.simulator):
             fails += _check_fisheye_geometry(
                 pinhole_img,
                 fisheye_img,
@@ -233,7 +240,7 @@ def main() -> int:
                 f"{args.simulator}/fallback/env{env_id}",
             )
 
-    if args.simulator == "isaacsim":
+    if is_isaacsim(args.simulator):
         fails += _check_isaacsim_authored_calibration(sim, fisheye_config.isaacsim)
 
     if args.result_file:

@@ -147,6 +147,12 @@ def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str
     Any | None
         IsaacSim simulation app instance, or None for other simulators.
     """
+    from holosoma.simulator.isaac_lane import isaac_lane_optional_module
+
+    lane_launcher = isaac_lane_optional_module(config.simulator._target_, "launcher")
+    if lane_launcher is not None and hasattr(lane_launcher, "launch"):
+        return lane_launcher.launch(config, device)
+
     from isaaclab.app import AppLauncher
 
     parser = argparse.ArgumentParser(description="Run simulation with IsaacSim.")
@@ -168,7 +174,6 @@ def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str
     args_cli.seed = config.training.seed
     args_cli.env_spacing = config.scene.env_spacing
     args_cli.output_dir = config.logger.base_dir
-    args_cli.headless = config.training.headless
     if world_size > 1:
         # Distribute simulator across GPUs when using multi-gpu training
         args_cli.device = f"cuda:{int(os.environ.get('LOCAL_RANK', '0'))}"
@@ -183,11 +188,29 @@ def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str
     video_enabled = config.logger.video.enabled or config.logger.headless_recording
     cameras_enabled = any(isinstance(sensor, CameraSensorConfig) for sensor in getattr(config, "sensor", {}).values())
     needs_rendering = video_enabled or cameras_enabled
+
+    args_cli.headless = config.training.headless
     if needs_rendering:
         args_cli.enable_cameras = True
 
     isaacsim_config = config.simulator.config.isaacsim
     for name, value in isaacsim_config.app_launcher_args().items():
+        # `setattr` on a name the launcher does not define is a silent no-op: argparse never
+        # reads it back, so a configured setting is simply dropped and the run proceeds looking
+        # healthy. That is not hypothetical across generations -- Isaac Lab 2.3.2 accepts
+        # `--rendering_mode` and 3.0 removed it, so a config setting `isaacsim.rendering_mode`
+        # would quietly render with the default preset on the 6.2 lane.
+        #
+        # argparse defines an attribute for every argument it knows, so absence here means the
+        # installed Isaac Lab cannot express this setting. Fail loudly rather than pretend.
+        if not hasattr(args_cli, name):
+            supported = ", ".join(sorted(vars(args_cli)))
+            raise RuntimeError(
+                f"simulator.config.isaacsim requests launcher setting {name!r}={value!r}, but the "
+                f"installed Isaac Lab's launcher does not accept it, so it would be silently "
+                f"ignored. Either drop the setting for this backend or express it another way "
+                f"(e.g. via `kit_args`). Launcher settings available here: {supported}."
+            )
         setattr(args_cli, name, value)
 
     simulation_app: Any = None
@@ -271,6 +294,78 @@ def setup_keyboard_listener(env: Any) -> threading.Thread:
     return key_listener_thread
 
 
+_ISAACSIM6_ONLY_FIELDS = ("isaac_physics_backend", "isaac_visualizers", "isaac_newton")
+"""``SimulatorInitConfig`` fields only the Isaac Sim 6.2 backend reads.
+
+They live on the shared init config, so every backend *accepts* them; only
+``simulator/isaacsim6`` acts on them. :func:`reject_unsupported_isaac_fields` turns that into an
+error rather than a shrug.
+"""
+
+
+def reject_unsupported_isaac_fields(config: ExperimentConfig | RunSimConfig) -> None:
+    """Reject Isaac Sim 6.2-only configuration aimed at a backend that cannot honour it.
+
+    ``isaac_physics_backend`` / ``isaac_visualizers`` / ``isaac_newton`` are read only by the 6.2
+    lane. Because ``SimulatorInitConfig`` is shared, nothing stops them being set alongside
+    ``simulator:isaacsim`` (5.1, which has one engine and different launcher flags), or alongside
+    MuJoCo -- and the result is silence: the value is simply never read, so a run
+    configured for Newton quietly executes on PhysX and reports success.
+
+    That is the failure this whole surface was designed to avoid, and the field docstrings already
+    promise it cannot happen, so the check belongs here: ``setup_simulation_environment`` is the
+    one place every backend passes through, before any simulator is built.
+
+    Raises
+    ------
+    ValueError
+        If any 6.2-only field is set to a non-default value for a non-6.2 backend. Names the
+        fields and the backend, since the fix is either to drop them or to switch preset.
+    """
+    import dataclasses
+
+    from holosoma.config_types.simulator import SimulatorInitConfig
+    from holosoma.simulator.isaac_lane import isaac_lane_package_for_target
+
+    # Read defensively. This is a guard, so it must not become a new way for an otherwise valid
+    # run to fail: anything that does not present a `_target_` and a `config` cannot be naming a
+    # backend preset at all, and the silent-drop this catches needs a real preset to occur.
+    simulator = getattr(config, "simulator", None)
+    target = getattr(simulator, "_target_", None)
+    init_config = getattr(simulator, "config", None)
+    if not isinstance(target, str) or init_config is None:
+        return
+
+    lane = isaac_lane_package_for_target(target)
+    if lane is not None and lane.rsplit(".", 1)[-1] != "isaacsim":
+        # An Isaac lane other than 5.1 -- i.e. isaacsim6 (or a later generation that ships these
+        # fields). Nothing to reject.
+        return
+
+    # Defaults come from the field definitions, not from `SimulatorInitConfig()`: the class has
+    # required fields, so instantiating it bare raises a pydantic ValidationError.
+    defaults = {
+        field.name: field.default_factory() if field.default_factory is not dataclasses.MISSING else field.default
+        for field in dataclasses.fields(SimulatorInitConfig)
+        if field.name in _ISAACSIM6_ONLY_FIELDS
+    }
+    offenders = {
+        name: getattr(init_config, name)
+        for name in _ISAACSIM6_ONLY_FIELDS
+        if getattr(init_config, name, defaults[name]) != defaults[name]
+    }
+    if not offenders:
+        return
+
+    raise ValueError(
+        f"{sorted(offenders)} are Isaac Sim 6.2 settings, but the configured backend is "
+        f"{target!r}, which never reads them -- so they would be silently "
+        f"ignored and the run would not do what the configuration says. Values supplied: "
+        f"{offenders}. Either drop them, or select `simulator:isaacsim6` "
+        f"(or `simulator:isaacsim6-newton`)."
+    )
+
+
 def setup_simulation_environment(
     config: ExperimentConfig | RunSimConfig, device: str | None = None
 ) -> tuple[Any, str, Any]:
@@ -296,6 +391,8 @@ def setup_simulation_environment(
         simulation_app is None for simulators that don't need it (MuJoCo).
     """
     logger.info("🚀 Setting up simulation environment...")
+
+    reject_unsupported_isaac_fields(config)
 
     # Setup simulator imports
     setup_simulator_imports(config)
@@ -466,6 +563,9 @@ def close_simulation_app(simulation_app: Any) -> None:
 
 def _close_simulation_app(simulation_app: Any, failure: BaseException | None) -> None:
     """Shut down the provider after its owner has reported any active failure."""
+    if simulation_app is not None and hasattr(simulation_app, "close_with_failure"):
+        simulation_app.close_with_failure(failure)
+        return
     if simulation_app is not None and get_simulator_type() == SimulatorType.ISAACSIM:
         # Kit can terminate the process inside close(), before Python reaches the
         # caller's exception handler. Set its exit status before closing the app.

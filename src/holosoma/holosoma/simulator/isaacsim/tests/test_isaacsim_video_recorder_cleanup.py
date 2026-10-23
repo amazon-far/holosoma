@@ -18,10 +18,13 @@ def test_cleanup_detaches_destroys_and_removes_camera_in_order(monkeypatch: pyte
 
     class _Annotator:
         @staticmethod
-        def detach(_products: list[object]) -> None:
+        def detach(products: list[str]) -> None:
+            assert products == ["/Render/Recording"]
             events.append("detach")
 
     class _RenderProduct:
+        path = "/Render/Recording"
+
         @staticmethod
         def destroy() -> None:
             events.append("destroy")
