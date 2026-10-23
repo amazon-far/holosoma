@@ -16,8 +16,13 @@ from typing import TYPE_CHECKING, cast
 if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
-from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step, steps_for_seconds
+from tests.simulators._sim_harness import (
+    build_run_sim_config,
+    launch_simulator,
+    run_and_hard_exit,
+    step,
+    steps_for_seconds,
+)
 from tests.simulators.camera_assert import _check_contract
 from tests.simulators.camera_geometry_assert import _check_geometry, _measure, _red_mask
 
@@ -148,8 +153,7 @@ def main() -> int:
         training=dataclasses.replace(config.training, num_envs=args.num_envs),
     )
 
-    env, device, _app = setup_simulation_environment(config, device=device)
-    sim = env.sim
+    sim, device, _app = launch_simulator(config, device=device)
     sim.set_headless(args.headless == "true")
     sim.setup()
     sim.setup_terrain()

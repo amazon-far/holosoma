@@ -219,6 +219,10 @@ class IsaacSim(BaseSimulator):
         # self.metadata["render_fps"] = 1. / self.config.sim.fps * self.config.sim.control_decimation
 
         self._sim_step_counter = 0
+        # Advanced whenever articulation buffers change (physics step or FK); read by the
+        # robot root-state proxy to decide when to re-read.
+        self._state_version = 0
+        self._rigid_body_vel_cache: torch.Tensor | None = None
 
         # Set True by the keyboard controller's push-robots key; polled by external tooling.
         self.push_requested: bool = False
@@ -626,7 +630,11 @@ class IsaacSim(BaseSimulator):
         self._register_scene_assets()
 
         # Create before state adapter, needs a reference
-        self.robot_root_states = RootStatesProxy(self._robot.data.root_state_w)  # (num_envs, 13)
+        self.robot_root_states = RootStatesProxy(
+            self._robot.data.root_state_w,
+            version=lambda: self._state_version,
+            latest=lambda: self._robot.data.root_state_w,
+        )  # (num_envs, 13)
 
         # Create state adapter after object registry and robot root states are set
         self._state_adapter = IsaacSimStateAdapter(
@@ -721,10 +729,25 @@ class IsaacSim(BaseSimulator):
         self._rigid_body_rot = self._robot.data.body_quat_w[:, self.body_ids][
             :, :, [1, 2, 3, 0]
         ]  # (num_envs, 4) 3 isaacsim use wxyz, we keep xyzw for consistency
-        # Match rigid_body_pos_w's link-frame origin. IsaacLab's legacy body_lin_vel_w alias is
-        # COM velocity, while body_link_lin_vel_w applies the required omega x (-COM offset).
-        self._rigid_body_vel = self._robot.data.body_link_lin_vel_w[:, self.body_ids, :]
+        self._rigid_body_vel_cache = None
         self._rigid_body_ang_vel = self._robot.data.body_ang_vel_w[:, self.body_ids, :]
+
+    @property
+    def _rigid_body_vel(self) -> torch.Tensor:
+        """Body link linear velocities, computed on first read after each refresh.
+
+        Isaac Lab's link-velocity path fetches body COMs from PhysX on every call, so tasks
+        that never read it do not pay for it.
+        """
+        if self._rigid_body_vel_cache is None:
+            # Match rigid_body_pos_w's link-frame origin. IsaacLab's legacy body_lin_vel_w alias is
+            # COM velocity, while body_link_lin_vel_w applies the required omega x (-COM offset).
+            self._rigid_body_vel_cache = self._robot.data.body_link_lin_vel_w[:, self.body_ids, :]
+        return self._rigid_body_vel_cache
+
+    @_rigid_body_vel.setter
+    def _rigid_body_vel(self, value: torch.Tensor) -> None:
+        self._rigid_body_vel_cache = value
 
     def clear_contact_forces_history(self, env_ids: torch.Tensor) -> None:
         if len(env_ids) > 0:
@@ -745,28 +768,20 @@ class IsaacSim(BaseSimulator):
 
     def _step_dynamics(self) -> None:
         self._sim_step_counter += 1
-        # Only render if actively recording (not just if video recorder exists)
-        has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording
-        is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors() or has_video_recording
-
         # Buffers external forces onto the articulation / object handles; write_data_to_sim() below
         # flushes them into PhysX before sim.step().
         self.flush_external_wrench()
 
         self.scene.write_data_to_sim()
 
-        render_now = is_rendering and self._sim_step_counter % self.simulator_config.sim.render_interval_steps == 0
-
         # Physics: exactly one step, never through the renderer. sim.step(render=True) falls
         # through to a bare app.update() in isaacsim.core, which also runs the physics engine on
         # the app clock — sim time ran ~3x too fast whenever a camera/GUI was active.
         self.sim.step(render=False)
 
-        if render_now:
-            self.render()
-
         # update buffers at sim
         self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
+        self._state_version += 1
 
         # Need to update these tensors after each step, since they are used in `_apply_force_in_physics_step`
         self.dof_pos = self._robot.data.joint_pos[:, self.dof_ids]  # (num_envs, num_dof)
@@ -786,25 +801,31 @@ class IsaacSim(BaseSimulator):
     def forward_kinematics(self) -> None:
         """Flush pending state writes and update articulation kinematics, fabric, and the render
         products — without stepping physics. ``sim.current_time`` does not advance."""
-        self._sim_step_counter += 1
-        has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording
-        is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors() or has_video_recording
 
         self.scene.write_data_to_sim()
         # sim.forward() runs physics_sim_view.update_articulations_kinematic() and flushes
         # fabric, so body/camera prims match the written joint/root state without integrating.
         self.sim.forward()
 
-        # Same render gate as _step_dynamics: RTX sensors (TiledCameras) only track the new
-        # poses after a render tick.
-        render_now = is_rendering and self._sim_step_counter % self.simulator_config.sim.render_interval_steps == 0
-        if render_now:
-            self.sim.render()
-            if self.debug_viz_enabled:
-                self.clear_lines()
-                self.draw_debug_viz()
-
         self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
+        self._state_version += 1
+
+    def sync_sim_state(self) -> None:
+        """No-op: joint state is re-read every physics step and root state is read lazily."""
+
+    def synchronize_after_reset(self) -> None:
+        """Update link kinematics for reset writes, then refresh, without advancing physics or sensors.
+
+        Reset writes already reached PhysX. Unlike ``forward_kinematics``, this skips
+        ``scene.update``, which would advance sensor clocks and contact history with no time passing.
+        """
+        self.sim.forward()
+        self._state_version += 1
+        self.refresh_sim_tensors()
+
+    def requires_step_render(self) -> bool:
+        has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording
+        return self.sim.has_rtx_sensors() or has_video_recording
 
     def _write_external_wrench_native(self, targets: list[WrenchTarget]) -> None:
         """Set world-frame wrenches on the robot articulation and object RigidObjects.

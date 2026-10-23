@@ -849,6 +849,17 @@ class MuJoCo(BaseSimulator):
         MuJoCo simulation state. Most state tensors use proxy views that
         automatically reflect the current state.
         """
+        self._sync_sim_state(advance_contact_history=True)
+
+    def sync_sim_state(self) -> None:
+        """No-op: joint and root state are live views of the MuJoCo data."""
+
+    def synchronize_after_reset(self) -> None:
+        """Run FK after state writes, then expose reset state without rotating history."""
+        self.forward_kinematics()
+        self._sync_sim_state(advance_contact_history=False)
+
+    def _sync_sim_state(self, *, advance_contact_history: bool) -> None:
         if self.num_bodies <= 0:
             logger.info("No bodies to refresh (empty world)")
             return
@@ -867,9 +878,10 @@ class MuJoCo(BaseSimulator):
         if hasattr(self, "contact_forces_history") and hasattr(self, "contact_forces"):
             full_forces = self.backend.compute_contact_forces()  # [num_envs, nbody, 3]
             self.contact_forces[:] = full_forces[:, self._body_ids_t]
-            self.contact_forces_history[:] = torch.cat(
-                [self.contact_forces.unsqueeze(1), self.contact_forces_history[:, :-1]], dim=1
-            )
+            if advance_contact_history:
+                self.contact_forces_history[:] = torch.cat(
+                    [self.contact_forces.unsqueeze(1), self.contact_forces_history[:, :-1]], dim=1
+                )
 
     def clear_contact_forces_history(self, env_ids: torch.Tensor) -> None:
         """Clear contact forces history for specified environments.
@@ -1300,10 +1312,6 @@ class MuJoCo(BaseSimulator):
         # Validate inputs
         if len(env_ids) == 0:
             logger.info("No environments to update")
-            return
-
-        if self.num_dof == 0:
-            logger.info("No robot DOFs available - skipping root state update")
             return
 
         # Incoming angular velocity is world-frame (the robot_root_states / all_root_states

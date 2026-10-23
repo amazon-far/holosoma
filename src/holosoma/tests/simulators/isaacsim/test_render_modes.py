@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from holosoma.config_types.env import get_run_sim_env_config
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.simulator import IsaacSimRenderConfig
 from holosoma.config_values import run_sim as run_sim_values
@@ -93,7 +94,7 @@ def test_launcher_config_reaches_app_launcher_namespace(
     monkeypatch.setattr(sys, "argv", ["test-render-modes"])
     monkeypatch.delenv("WORLD_SIZE", raising=False)
 
-    app = setup_isaaclab_launcher(_run_config(render_config))
+    app = setup_isaaclab_launcher(get_run_sim_env_config(_run_config(render_config)), "cuda:0")
 
     assert app is app_sentinel
     assert captured_args["rendering_mode"] == expected_rendering_mode

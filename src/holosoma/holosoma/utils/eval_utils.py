@@ -24,7 +24,6 @@ from holosoma.utils.file_cache import get_cached_file_path
 from holosoma.utils.logging import LoguruLoggingBridge
 from holosoma.utils.path import resolve_path
 from holosoma.utils.safe_torch_import import torch
-from holosoma.utils.simulator_config import SimulatorType, get_simulator_type
 
 _WANDB_PREFIX = "wandb://"
 _WANDB_REFERENCE_FORMAT = f"{_WANDB_PREFIX}<entity>/<project>/<run_id>/[<artifact_name>]"
@@ -333,32 +332,3 @@ def load_checkpoint(checkpoint: str, log_dir: str) -> Path:
 
     # Any non-W&B path supported by the generic loader system.
     return Path(resolve_path(checkpoint))
-
-
-def init_sim_imports(tyro_config: ExperimentConfig) -> Any | None:
-    """Initialize simulator imports - DEPRECATED.
-
-    This function is deprecated in favor of the more focused functions in sim_utils.py.
-    Use setup_simulation_environment() for new code.
-
-    Parameters
-    ----------
-    tyro_config : ExperimentConfig
-        Configuration containing simulator settings.
-
-    Returns
-    -------
-    Any | None
-        Simulation app instance for IsaacSim, None for other simulators.
-    """
-    from holosoma.utils.sim_utils import setup_isaaclab_launcher, setup_simulator_imports
-
-    # Use the new focused functions
-    setup_simulator_imports(tyro_config)
-
-    simulator_type = get_simulator_type()
-    if simulator_type == SimulatorType.ISAACSIM:
-        return setup_isaaclab_launcher(tyro_config)
-
-    # For other simulators, no app is needed
-    return None

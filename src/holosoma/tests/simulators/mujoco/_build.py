@@ -38,9 +38,8 @@ def _bridge_gantry_off(preset):
     )
 
 
-def _finish_build(env, num_envs, env_origins, base_init):
+def _finish_build(sim, num_envs, env_origins, base_init):
     """Run the shared headless ``setup -> ... -> prepare_sim`` tail and return the sim."""
-    sim = env.sim
     sim.set_headless(True)
     sim.setup()
     sim.setup_terrain()
@@ -63,7 +62,7 @@ def build_classic_sim(scene: SceneConfig | None = None, *, plugin=None, kinemati
     ``plugin`` is an optional ``{key: PluginConfig}`` dict to install; ``kinematic_playback``
     sets the corresponding ``sim`` flag.
     """
-    from holosoma.utils.sim_utils import setup_simulation_environment
+    from tests.simulators._sim_harness import launch_simulator
 
     sim_cfg = _bridge_gantry_off(run_sim_values.mujoco)
     if kinematic_playback:
@@ -77,8 +76,8 @@ def build_classic_sim(scene: SceneConfig | None = None, *, plugin=None, kinemati
         RunSimConfig(simulator=sim_cfg, robot=robot_values.g1_29dof, scene=scene or SceneConfig(), plugin=plugin or {}),
         device="cpu",
     )
-    env, device, _ = setup_simulation_environment(config, device="cpu")
-    return _finish_build(env, 1, torch.zeros(1, 3, device=device), _robot_base_init())
+    sim, device, _ = launch_simulator(config, device="cpu")
+    return _finish_build(sim, 1, torch.zeros(1, 3, device=device), _robot_base_init())
 
 
 def build_warp_sim(
@@ -99,7 +98,7 @@ def build_warp_sim(
     pytest.importorskip("mujoco_warp")
     if getattr(run_sim_values.mjwarp.config, "mujoco_backend", None) != MujocoBackend.WARP:
         pytest.skip("mjwarp config is not the Warp backend")
-    from holosoma.utils.sim_utils import setup_simulation_environment
+    from tests.simulators._sim_harness import launch_simulator
 
     sim_cfg = _bridge_gantry_off(run_sim_values.mjwarp)
     config = dataclasses.replace(
@@ -111,10 +110,10 @@ def build_warp_sim(
         ),
         device="cuda:0",
     )
-    env, device, _ = setup_simulation_environment(config, device="cuda:0")
+    sim, device, _ = launch_simulator(config, device="cuda:0")
     if env_origins is None:
         env_origins = torch.zeros(num_envs, 3, device=device)
-    return _finish_build(env, num_envs, env_origins, {})
+    return _finish_build(sim, num_envs, env_origins, {})
 
 
 def env_shell(sim, num_envs, **extra):
