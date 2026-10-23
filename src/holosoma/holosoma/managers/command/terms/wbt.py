@@ -13,7 +13,7 @@ from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
 from holosoma.managers.command.base import CommandTermBase
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.file_cache import cached_open
-from holosoma.utils.path import resolve_data_file_path, resolve_paths
+from holosoma.utils.path import resolve_asset_path, resolve_data_file_path, resolve_paths
 from holosoma.utils.rotations import (
     get_euler_xyz,
     quat_apply,
@@ -30,6 +30,7 @@ from holosoma.utils.transition_trajectory import (
     hermite_segment,
     linear_velocity_from_positions,
 )
+from holosoma.utils.urdf_kinematics import UrdfForwardKinematics
 
 #########################################################################################################
 ## MotionLoader and AdaptiveTimestepsSampler
@@ -576,6 +577,7 @@ class MotionCommand(CommandTermBase):
         self._body_scatter_src: torch.Tensor
         self._body_scatter_dst: torch.Tensor
         self._com_offsets_cache: torch.Tensor | None = None
+        self._urdf_fk: UrdfForwardKinematics | None = None
 
     def setup(self) -> None:
         self.num_envs = self._env.num_envs
@@ -1366,7 +1368,7 @@ class MotionCommand(CommandTermBase):
     def _fk_body_poses(
         self, joint_pos: torch.Tensor, root_pos: torch.Tensor, root_quat: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Forward kinematics for a batch of frames, by writing each into its own environment.
+        """Forward kinematics of the robot URDF for a batch of frames; never touches the sim.
 
         Args:
             joint_pos: ``(num_frames, num_robot_dofs)`` in robot joint order.
@@ -1377,63 +1379,16 @@ class MotionCommand(CommandTermBase):
             ``(body_pos, body_quat, body_com_pos)`` shaped ``(num_frames, num_robot_bodies, ·)``,
             relative to the env origin, in ``simulator._body_list`` order, quats xyzw.
             ``body_com_pos`` is the center of mass, the point a motion file's body velocities use.
-
-        One frame per env, not a per-frame loop: IsaacLab's ``body_*_w`` are timestamp-gated lazy
-        buffers, so repeated write/read without stepping the sim returns the same stale pose.
         """
-        simulator = self._env.simulator
-        if simulator.get_simulator_type() != SimulatorType.ISAACSIM:
-            raise NotImplementedError(
-                "Default-pose transitions need a backend whose state write runs forward kinematics. "
-                "MuJoCo's ClassicBackend does run mj_forward and could be supported, but its body ordering "
-                "and the Warp backend (which skips forward on state writes) need validating first."
+        if self._urdf_fk is None:
+            simulator = self._env.simulator
+            asset = self._env.robot_config.asset
+            self._urdf_fk = UrdfForwardKinematics(
+                resolve_asset_path(asset.urdf_file, asset.asset_root),
+                list(simulator.dof_names),
+                list(simulator._body_list),  # type: ignore[attr-defined]
             )
-
-        num_frames = joint_pos.shape[0]
-        chunk_size = min(num_frames, self.num_envs)
-        env_origins = simulator.scene.env_origins.to(self.device)
-
-        body_pos = torch.empty(
-            (num_frames, simulator._rigid_body_pos.shape[1], 3), device=self.device, dtype=joint_pos.dtype
-        )
-        body_quat = torch.empty((num_frames, body_pos.shape[1], 4), device=self.device, dtype=joint_pos.dtype)
-
-        # Restore the sim state even if FK fails mid-loop.
-        root_backup = simulator.robot_root_states[:].clone()
-        dof_pos_backup = simulator.dof_pos[:].clone()
-        dof_vel_backup = simulator.dof_vel[:].clone()
-        try:
-            for chunk_start in range(0, num_frames, chunk_size):
-                chunk_end = min(chunk_start + chunk_size, num_frames)
-                env_ids = torch.arange(chunk_end - chunk_start, device=self.device)
-
-                simulator.robot_root_states[env_ids, :3] = root_pos[chunk_start:chunk_end] + env_origins[env_ids]
-                simulator.robot_root_states[env_ids, 3:7] = root_quat[chunk_start:chunk_end]
-                simulator.robot_root_states[env_ids, 7:13] = 0.0
-                # refresh_sim_tensors rebinds dof_pos/dof_vel, so these writes can't be hoisted.
-                simulator.dof_pos[env_ids] = joint_pos[chunk_start:chunk_end]
-                simulator.dof_vel[env_ids] = 0.0
-
-                simulator.set_actor_root_state_tensor_robots(env_ids, simulator.robot_root_states)
-                simulator.set_dof_state_tensor_robots(env_ids, simulator.dof_state)  # type: ignore[attr-defined]
-                simulator.write_state_updates()
-                simulator.refresh_sim_tensors()
-
-                chunk_pos = simulator._rigid_body_pos[env_ids] - env_origins[env_ids].unsqueeze(1)
-                body_pos[chunk_start:chunk_end] = chunk_pos.to(body_pos.dtype)
-                body_quat[chunk_start:chunk_end] = simulator._rigid_body_rot[env_ids].to(body_quat.dtype)
-
-                self._check_fk_poses_are_fresh(
-                    body_pos[chunk_start:chunk_end], root_pos[chunk_start:chunk_end], joint_pos[chunk_start:chunk_end]
-                )
-        finally:
-            simulator.robot_root_states[:] = root_backup
-            simulator.dof_pos[:] = dof_pos_backup
-            simulator.dof_vel[:] = dof_vel_backup
-            simulator.set_actor_root_state_tensor_robots()
-            simulator.set_dof_state_tensor_robots()
-            simulator.write_state_updates()
-            simulator.refresh_sim_tensors()
+        body_pos, body_quat = self._urdf_fk(joint_pos, root_pos, root_quat)
 
         com_offset = self._body_com_offsets_b().to(device=body_pos.device, dtype=body_pos.dtype)
         body_com_pos = body_pos + quat_apply(body_quat, com_offset.expand_as(body_pos), w_last=True)
@@ -1446,29 +1401,11 @@ class MotionCommand(CommandTermBase):
         """
         if self._com_offsets_cache is None:
             simulator = self._env.simulator
+            if simulator.get_simulator_type() != SimulatorType.ISAACSIM:
+                raise NotImplementedError("Default-pose transitions read body CoM offsets from IsaacSim's PhysX view.")
             coms = simulator._robot.root_physx_view.get_coms()  # type: ignore[attr-defined]
             self._com_offsets_cache = coms[0, simulator.body_ids, :3].to(self.device)  # type: ignore[attr-defined]
         return self._com_offsets_cache
-
-    def _check_fk_poses_are_fresh(
-        self, body_pos: torch.Tensor, root_pos: torch.Tensor, joint_pos: torch.Tensor
-    ) -> None:
-        """Raise if the simulator hands back stale poses instead of the state just written."""
-        stale_hint = (
-            "The simulator returned body poses that do not reflect the state just written. This is "
-            "what a stale lazy pose buffer looks like; the sim clock may need advancing before the "
-            "read (e.g. simulator.scene.update(dt))."
-        )
-        # Robot body 0 is the floating base, the same assumption root_pos_w makes of motion body 0.
-        root_error = float((body_pos[:, 0] - root_pos).abs().max())
-        if root_error >= 1e-3:
-            raise RuntimeError(f"Root pose did not round-trip through FK (max error {root_error:.6f}). {stale_hint}")
-
-        if body_pos.shape[0] > 1 and not torch.allclose(joint_pos[0], joint_pos[-1]):
-            # Root-relative, or the root's own motion would mask frozen joints.
-            relative = body_pos - body_pos[:, :1]
-            if float((relative - relative[0]).abs().max()) == 0.0:
-                raise RuntimeError(f"FK returned identical body poses for distinct joint angles. {stale_hint}")
 
     def _build_motion_scatter_map(self, robot_body_names: list[str], robot_body_names_alias: list[str]) -> None:
         """Resolve which robot body writes each motion body slot.

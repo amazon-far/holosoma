@@ -1,4 +1,4 @@
-"""Live IsaacSim batched forward kinematics for WBT default-pose transitions (GPU), one sim per subprocess.
+"""Live check that WBT default-pose URDF forward kinematics matches IsaacSim (GPU), one sim per subprocess.
 
 Runs wbt_fk_assert.py on a real G1. Marked ``isaacsim`` so the IsaacSim CI job collects it;
 ``importorskip("isaaclab")``/CUDA-gated.
@@ -22,7 +22,7 @@ from tests.simulators._run_harness import run_harness  # noqa: E402
 _HARNESS = Path(__file__).resolve().parents[1] / "wbt_fk_assert.py"
 
 
-def test_wbt_batched_fk_returns_fresh_poses(tmp_path):
+def test_wbt_urdf_fk_matches_isaacsim(tmp_path):
     # Judged on the sentinel, not the exit code: IsaacSim teardown swallows a non-zero status, so a
     # crashed harness exits 0 and this would report a pass.
     result_file = tmp_path / "wbt_fk_isaacsim.txt"
@@ -30,11 +30,9 @@ def test_wbt_batched_fk_returns_fresh_poses(tmp_path):
         _HARNESS,
         "--simulator",
         "isaacsim",
-        "--num-envs",
-        "8",
         "--result-file",
         str(result_file),
-        label="isaacsim/wbt-batched-fk (num_envs=8)",
+        label="isaacsim/wbt-urdf-fk",
         timeout=900,
         result_file=result_file,
     )

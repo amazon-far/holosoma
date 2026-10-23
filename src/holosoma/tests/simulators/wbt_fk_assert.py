@@ -1,11 +1,9 @@
-"""Probe: the batched forward kinematics behind WBT default-pose transitions returns fresh poses.
+"""Probe: the URDF forward kinematics behind WBT default-pose transitions agrees with IsaacSim's.
 
-IsaacLab's ``ArticulationData.body_*_w`` are timestamp-gated lazy caches; if a state write does not
-invalidate them, every transition frame silently gets the same body pose. Asserts, on a real G1:
-  (a) the root pose round-trips;
-  (b) distinct joint configurations produce distinct body poses;
-  (c) writing N frames across N envs matches writing them one env at a time;
-  (d) center-of-mass positions differ from link origins.
+Asserts, on a real G1:
+  (a) ``_fk_body_poses`` leaves the sim's root, joint and body state untouched;
+  (b) its body poses match the ones IsaacSim computes for the same states;
+  (c) center-of-mass positions differ from link origins.
 
 Writes "OK" to ``--result-file`` once every check passes; IsaacSim teardown swallows a non-zero exit.
 
@@ -30,8 +28,9 @@ from holosoma.managers.command.terms.wbt import MotionCommand
 from holosoma.utils.sim_utils import setup_simulation_environment
 
 NUM_FRAMES = 8
-# Enough joint travel that a frozen-buffer bug cannot hide inside numerical noise.
+# Enough joint travel that a wrong joint mapping cannot hide inside numerical noise.
 JOINT_SWEEP_RAD = 0.4
+POS_TOL_M = 1e-4
 
 
 class _FkProbe:
@@ -39,14 +38,13 @@ class _FkProbe:
 
     _fk_body_poses = MotionCommand._fk_body_poses
     _body_com_offsets_b = MotionCommand._body_com_offsets_b
-    _check_fk_poses_are_fresh = MotionCommand._check_fk_poses_are_fresh
 
-    def __init__(self, simulator, device, num_envs: int):
-        self._env = types.SimpleNamespace(simulator=simulator)
+    def __init__(self, simulator, robot_config, device):
+        self._env = types.SimpleNamespace(simulator=simulator, robot_config=robot_config)
         self.device = device
-        self.num_envs = num_envs
-        # MotionCommand.__init__ declares this; the probe borrows methods, not the constructor.
+        # MotionCommand.__init__ declares these; the probe borrows methods, not the constructor.
         self._com_offsets_cache = None
+        self._urdf_fk = None
 
 
 def _build(simulator: str, num_envs: int):
@@ -100,46 +98,66 @@ def _sweep_frames(sim, config, device):
     return joint_pos, root_pos, root_quat
 
 
+def _sim_state(sim):
+    return [
+        t.clone()
+        for t in (sim.robot_root_states[:], sim.dof_pos, sim.dof_vel, sim.rigid_body_pos_w, sim.rigid_body_quat_w)
+    ]
+
+
+def _isaacsim_fk(sim, joint_pos, root_pos, root_quat):
+    """Write frame i into env i and read back the body poses IsaacSim computes for it."""
+    import torch
+
+    env_ids = torch.arange(joint_pos.shape[0], device=joint_pos.device)
+    origins = sim.scene.env_origins[env_ids]
+    sim.robot_root_states[env_ids, :3] = root_pos + origins
+    sim.robot_root_states[env_ids, 3:7] = root_quat
+    sim.robot_root_states[env_ids, 7:13] = 0.0
+    sim.dof_pos[env_ids] = joint_pos
+    sim.dof_vel[env_ids] = 0.0
+    sim.set_actor_root_state_tensor_robots(env_ids, sim.robot_root_states)
+    sim.set_dof_state_tensor_robots(env_ids, sim.dof_state)
+    sim.write_state_updates()
+    sim.refresh_sim_tensors()
+    return sim.rigid_body_pos_w[env_ids] - origins.unsqueeze(1), sim.rigid_body_quat_w[env_ids]
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Batched FK freshness probe for WBT transitions.")
+    parser = argparse.ArgumentParser(description="URDF-vs-IsaacSim FK probe for WBT transitions.")
     parser.add_argument("--simulator", required=True, choices=["isaacsim"])
-    parser.add_argument("--num-envs", type=int, default=NUM_FRAMES)
     parser.add_argument("--result-file", default=None, help="write 'OK' here after PASS (teardown-robust)")
     args = parser.parse_args()
 
     import torch
 
-    sim, config, device = _build(args.simulator, args.num_envs)
+    sim, config, device = _build(args.simulator, NUM_FRAMES)
     joint_pos, root_pos, root_quat = _sweep_frames(sim, config, device)
 
-    # (a) is checked inside _check_fk_poses_are_fresh, which runs on every chunk below.
-    batched = _FkProbe(sim, device, args.num_envs)
-    body_pos, body_quat, body_com_pos = batched._fk_body_poses(joint_pos, root_pos, root_quat)  # type: ignore[misc]
+    before = _sim_state(sim)
+    body_pos, body_quat, body_com_pos = _FkProbe(sim, config.robot, device)._fk_body_poses(  # type: ignore[misc]
+        joint_pos, root_pos, root_quat
+    )
+    # (a) exact equality: nothing may have been written.
+    if not all(torch.equal(b, a) for b, a in zip(before, _sim_state(sim), strict=True)):
+        print("FAIL: _fk_body_poses changed the simulator state")
+        return 1
 
-    if body_pos.shape != (NUM_FRAMES, sim._rigid_body_pos.shape[1], 3):
+    if body_pos.shape != (NUM_FRAMES, sim.rigid_body_pos_w.shape[1], 3):
         print(f"FAIL: unexpected body_pos shape {tuple(body_pos.shape)}")
         return 1
-    if not all(torch.isfinite(t).all() for t in (body_pos, body_quat, body_com_pos)):
-        print("FAIL: forward kinematics produced non-finite poses")
-        return 1
 
-    # (b) distinct joint configurations must produce distinct body poses.
-    spread = (body_pos - body_pos[0]).abs().amax(dim=(1, 2))
-    if float(spread[1:].min()) < 1e-4:
-        print(f"FAIL: body poses barely move across a {JOINT_SWEEP_RAD} rad joint sweep (spread={spread.tolist()})")
-        return 1
-
-    # (c) one frame per env must agree with one frame at a time; a write the read misses diverges here.
-    chunked = _FkProbe(sim, device, 1)
-    chunk_pos, chunk_quat, _ = chunked._fk_body_poses(joint_pos, root_pos, root_quat)  # type: ignore[misc]
-    pos_gap = float((chunk_pos - body_pos).abs().max())
+    # (b) a URDF/USD import difference (merged fixed joints, reordered bodies) diverges here.
+    sim_pos, sim_quat = _isaacsim_fk(sim, joint_pos, root_pos, root_quat)
+    pos_gap = float((sim_pos - body_pos).abs().max())
     # q and -q are the same rotation, so compare by angle rather than by component.
-    quat_gap = float((1.0 - (chunk_quat * body_quat).sum(dim=-1).abs()).max())
-    if pos_gap > 1e-4 or quat_gap > 1e-4:
-        print(f"FAIL: batched and per-frame FK disagree (pos {pos_gap:.6f}, quat {quat_gap:.6f})")
+    quat_gap = float((1.0 - (sim_quat * body_quat).sum(dim=-1).abs()).max())
+    if pos_gap > POS_TOL_M or quat_gap > 1e-6:
+        worst = int((sim_pos - body_pos).abs().amax(dim=(0, 2)).argmax())
+        print(f"FAIL: URDF and IsaacSim FK disagree (pos {pos_gap:.6f} m, quat {quat_gap:.2e}, worst body {worst})")
         return 1
 
-    # (d) G1 links all have mass, so at least one CoM offset must be nonzero.
+    # (c) G1 links all have mass, so at least one CoM offset must be nonzero.
     com_offset = float((body_com_pos - body_pos).norm(dim=-1).max())
     if com_offset < 1e-4:
         print(f"FAIL: every body CoM sits on its link origin (max offset {com_offset:.2e} m)")
@@ -147,8 +165,7 @@ def main() -> int:
 
     print(
         f"[{args.simulator}] FK ok: {NUM_FRAMES} frames, {body_pos.shape[1]} bodies, "
-        f"max spread {float(spread.max()):.4f} m, batched-vs-chunked gap {pos_gap:.2e}, "
-        f"max CoM offset {com_offset:.4f} m"
+        f"URDF-vs-sim gap {pos_gap:.2e} m / {quat_gap:.2e}, max CoM offset {com_offset:.4f} m"
     )
     if args.result_file:
         with open(args.result_file, "w") as handle:
