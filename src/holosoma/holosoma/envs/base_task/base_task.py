@@ -295,6 +295,8 @@ class BaseTask:
         # Call manager-based reset events
         self.reset_manager.reset_scene(env_ids)
 
+        self.observation_manager.notify_state_overwritten(env_ids)
+
         # Call episode start for environments that have been reset
         for env_id in env_ids:
             self.simulator.hooks.emit(Phase.EPISODE_START, env_id.item())
