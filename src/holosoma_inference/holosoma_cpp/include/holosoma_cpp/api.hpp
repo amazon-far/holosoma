@@ -3,6 +3,8 @@
 //   const JointCommand& command = policy.step(state);
 #pragma once
 
+#include <cstdint>
+
 #include "holosoma_cpp/general_wbt_policy.hpp"
 
 namespace holosoma {
@@ -56,6 +58,9 @@ class Policy {
   void set_state(const RobotState& state);
   void command(StateCommand command);
   void velocity(const VelCmd& command);
+  // Times a command asked the operator velocity input to zero. A host that owns
+  // that input (the Python runner) zeroes its own provider when this advances.
+  std::uint64_t velocity_zero_requests() const;
   void update_phase();
   // Start a new episode: clear history/action feedback and reanchor BOTH robot
   // and reference heading plus motion time on the next step. Keeps the reference.

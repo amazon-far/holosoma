@@ -110,8 +110,10 @@ if(HOLOSOMA_BUILD_PYTHON)
 endif()
 
 # Keep installed libraries loadable after the build/download directory is gone.
+# Only ONNX Runtime's own libraries (core plus execution providers): the directory
+# can be a system lib dir such as /usr/lib/x86_64-linux-gnu.
 install(DIRECTORY "${ONNXRuntime_LIBRARY_DIR}/" DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  FILES_MATCHING PATTERN "*.so*" PATTERN "*.dylib" PATTERN "*.dll")
+  FILES_MATCHING PATTERN "libonnxruntime*.so*" PATTERN "libonnxruntime*.dylib" PATTERN "onnxruntime*.dll")
 foreach(dependency ${HOLOSOMA_YAML_TARGET} ${HOLOSOMA_TINYXML2_TARGET})
   get_target_property(dependency_type ${dependency} TYPE)
   if(dependency_type STREQUAL "SHARED_LIBRARY")

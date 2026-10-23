@@ -168,11 +168,12 @@ class TaskConfig:
     """Use synchronized simulation time for WBT policies."""
 
     wbt_history_initialization: Literal["repeat_first_valid_obs", "zero_pad"] = "repeat_first_valid_obs"
-    """WBT: how an empty observation history is filled until it holds history_length frames.
+    """Metadata-driven (live) WBT only: how an empty history is filled until it holds history_length frames.
 
     ``repeat_first_valid_obs`` repeats the first valid, fully built observation term;
     ``zero_pad`` fills the missing slots with zeros. This runtime setting overrides the
-    checkpoint's declared mode, and the difference is logged at load."""
+    checkpoint's declared mode, and the difference is logged at load. Embedded-motion WBT and
+    locomotion presets ignore it: their observation history is always zero-padded."""
 
     startup_state_timeout: float = 30.0
     """Seconds the SDK runner waits for its first valid robot state before failing.
@@ -234,7 +235,9 @@ class TaskConfig:
 
         if shortcut is not None:
             has_custom_input = self.velocity_input != DEFAULT_VELOCITY_INPUT or self.state_input != DEFAULT_STATE_INPUT
-            if has_custom_input:
+            # dataclasses.replace() re-runs this on an already-resolved config.
+            already_resolved = self.velocity_input == shortcut and self.state_input == shortcut
+            if has_custom_input and not already_resolved:
                 raise ValueError(
                     f"Cannot combine --task.use-{flag_name} with --task.velocity-input or "
                     "--task.state-input. Use either the shortcut flag or the individual "

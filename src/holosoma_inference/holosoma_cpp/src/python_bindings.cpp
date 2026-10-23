@@ -158,7 +158,8 @@ PYBIND11_MODULE(_native, m) {
                              })
       .def_property_readonly("last_observation", [](const InferenceEngine& e) { return e.policy().last_observation(); })
       .def_property_readonly("joint_kp", [](const InferenceEngine& e) { return e.policy().joint_kp(); })
-      .def_property_readonly("joint_kd", [](const InferenceEngine& e) { return e.policy().joint_kd(); });
+      .def_property_readonly("joint_kd", [](const InferenceEngine& e) { return e.policy().joint_kd(); })
+      .def_property_readonly("velocity_zero_requests", &InferenceEngine::velocity_zero_requests);
 
   // The serialized-config preview constructor remains available for existing callers.
   m.def(

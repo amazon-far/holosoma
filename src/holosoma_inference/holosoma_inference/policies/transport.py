@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import sys
 
 import numpy as np
 from loguru import logger
@@ -49,11 +50,16 @@ class RunnerTransport:
         task = self.config.task
         sources = {task.velocity_input, task.state_input}
         self.use_joystick = bool({"interface", "joystick"} & sources)
+        if self.use_joystick and sys.platform == "darwin":
+            self.logger.warning("Joystick is not supported on Mac; falling back to keyboard for the joystick channel")
+            self.use_joystick = False
         self._create_input_providers()
 
     def _setup_keyboard_listener(self):
         task = self.config.task
         sources = {task.velocity_input, task.state_input}
+        if not self.use_joystick and {"interface", "joystick"} & sources:
+            sources.add("keyboard")  # create_input falls back to the keyboard
         if "keyboard" in sources:
             from holosoma_inference.inputs.impl.keyboard import get_keyboard_listener
 
@@ -70,6 +76,12 @@ class RunnerTransport:
             if task.velocity_input == task.state_input
             else create_input(self, task.state_input, "command")
         )
+        # An injected provider belongs to whoever attached it; close() stops only ours.
+        self._owned_inputs = []
+        if task.velocity_input != "injected":
+            self._owned_inputs.append(self._velocity_input)
+        if task.state_input != "injected" and self._command_provider is not self._velocity_input:
+            self._owned_inputs.append(self._command_provider)
         self._velocity_input.start()
         if self._command_provider is not self._velocity_input:
             self._command_provider.start()

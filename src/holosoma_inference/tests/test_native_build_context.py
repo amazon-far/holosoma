@@ -2,7 +2,10 @@
 
 import ast
 import importlib.util
+import re
 import shlex
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -63,3 +66,26 @@ def test_cpp_image_provisions_the_fixture_generator_before_configuring():
         word.split("==")[0] for words in before_cmake if "pip" in words and "install" in words for word in words
     }
     assert required <= installed
+
+
+@pytest.mark.skipif(shutil.which("cmake") is None, reason="needs cmake")
+def test_install_copies_only_onnx_runtime_libraries_from_its_directory(tmp_path):
+    # Run the shipped install rule against a system-like library directory.
+    cmake_lists = (ROOT / "src/holosoma_inference/holosoma_cpp/CMakeLists.txt").read_text()
+    rule = re.search(r'install\(DIRECTORY "\$\{ONNXRuntime_LIBRARY_DIR\}/".*?\)\n', cmake_lists, re.DOTALL)
+    assert rule, "ONNX Runtime install rule not found"
+    libdir = tmp_path / "usr-lib"
+    libdir.mkdir()
+    shipped = ["libonnxruntime.so", "libonnxruntime.so.1", "libonnxruntime_providers_shared.so"]
+    for name in [*shipped, "libc.so.6", "libstdc++.so.6", "libcudart.so.12"]:
+        (libdir / name).write_text(name)
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "CMakeLists.txt").write_text(
+        "cmake_minimum_required(VERSION 3.16)\nproject(rule NONE)\n"
+        f'set(ONNXRuntime_LIBRARY_DIR "{libdir}")\nset(CMAKE_INSTALL_LIBDIR lib)\n' + rule.group(0)
+    )
+    build, prefix = tmp_path / "build", tmp_path / "prefix"
+    subprocess.run(["cmake", "-S", project, "-B", build], check=True, capture_output=True)
+    subprocess.run(["cmake", "--install", build, "--prefix", prefix], check=True, capture_output=True)
+    assert sorted(path.name for path in (prefix / "lib").iterdir()) == sorted(shipped)

@@ -88,6 +88,16 @@ std::vector<double> GeneralWBTPolicy::rl_inference(const RobotState& state) {
   copy_finite(state.dof_vel, observation.dof_vel_mj);
   copy_finite(state.base_quat_wxyz, observation.root_quat_wxyz);
   copy_finite(state.base_ang_vel, observation.base_ang_vel);
+  // Same debug overrides and corrected gravity as BasePolicy::compute_terms.
+  const DebugConfig& debug = config_.task.debug;
+  if (debug.force_zero_angular_velocity) observation.base_ang_vel.fill(0.0f);
+  if (debug.force_upright_imu) {
+    observation.projected_gravity = std::array<float, 3>{0.0f, 0.0f, -1.0f};
+  } else if (state.projected_gravity) {
+    std::array<float, 3> gravity{};
+    copy_finite(*state.projected_gravity, gravity);
+    observation.projected_gravity = gravity;
+  }
   live::WbtReferenceSequence reference;
   for (size_t slot = 0; slot < slots; ++slot) {
     live::WbtReferenceFrame frame;
@@ -108,6 +118,7 @@ std::vector<double> GeneralWBTPolicy::rl_inference(const RobotState& state) {
   std::array<float, live::kActionDim> offsets{};
   if (!core().ComputeAction(observation, reference, offsets.data()))
     throw std::runtime_error("Live WBT inference failed");
+  if (debug.force_zero_action) offsets.fill(0.0f);
   last_obs_ = core().LastObservation();
   if (config_.task.print_observations) print_observations(last_obs_);
   std::vector<double> result(live::kActionDim);

@@ -718,7 +718,10 @@ bool WbtPolicy::BuildTermValue(const Term &term, const RobotObservation &obs, co
       value[0] = 1.0f;
       break;
     case TermKind::kProjectedGravity: {
-      const Eigen::Vector3f gravity = math::projected_gravity(SafeQuat(obs.root_quat_wxyz));
+      const Eigen::Vector3f gravity =
+          obs.projected_gravity
+              ? Eigen::Vector3f((*obs.projected_gravity)[0], (*obs.projected_gravity)[1], (*obs.projected_gravity)[2])
+              : math::projected_gravity(SafeQuat(obs.root_quat_wxyz));
       value[0] = gravity.x();
       value[1] = gravity.y();
       value[2] = gravity.z();

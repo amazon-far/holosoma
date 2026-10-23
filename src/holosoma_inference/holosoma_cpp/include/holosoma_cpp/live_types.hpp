@@ -3,6 +3,7 @@
 #include <Eigen/Geometry>
 #include <array>
 #include <cmath>
+#include <optional>
 #include <vector>
 
 namespace holosoma::live {
@@ -24,6 +25,9 @@ struct RobotObservation {
   std::array<float, kActionDim> dof_pos_mj{};
   std::array<float, kActionDim> dof_vel_mj{};
   std::array<float, 3> base_ang_vel{};
+  // Gravity in the base frame when the host supplies a corrected one; otherwise
+  // it is derived from root_quat_wxyz.
+  std::optional<std::array<float, 3>> projected_gravity;
 };
 struct WbtReferenceFrame {
   std::array<float, kActionDim> dof_pos{};

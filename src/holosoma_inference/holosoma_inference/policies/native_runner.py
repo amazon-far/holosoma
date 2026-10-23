@@ -27,6 +27,27 @@ class NativeRunnerPolicy(RunnerTransport):
 
     is_wbt = False
 
+    # Hooks of the retired Python policy classes. The native runner never calls
+    # them, so a subclass overriding one would silently run the native policy.
+    _RETIRED_HOOKS = (
+        "setup_policy",
+        "rl_inference",
+        "get_current_obs_buffer_dict",
+        "_get_manual_command",
+        "get_init_target",
+        "_target_source",
+    )
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        overridden = [name for name in cls._RETIRED_HOOKS if name in vars(cls)]
+        if overridden:
+            raise TypeError(
+                f"{cls.__qualname__} overrides {', '.join(overridden)}, which the native runner never calls: "
+                "observation building and inference run in the native engine. Adapt final joint commands "
+                "with transform_command, or drive a NativePolicy directly."
+            )
+
     def __init__(
         self, config, *, interface=None, velocity_input=None, command_provider=None, shared_hardware=None, clock=None
     ):
@@ -50,7 +71,7 @@ class NativeRunnerPolicy(RunnerTransport):
         self._commands_sent = 0
         self._clock = clock
         self._owns_clock = False
-        self._owns_inputs = velocity_input is None and command_provider is None and shared_hardware is None
+        self._owned_inputs = []
         if shared_hardware is not None:
             interface = shared_hardware.interface
             velocity_input = shared_hardware._velocity_input
@@ -79,7 +100,11 @@ class NativeRunnerPolicy(RunnerTransport):
                 self._clock.start()
                 self._owns_clock = True
         if self.is_wbt and shared_hardware is None and not config.task.skip_stiff_prompt and sys.stdin.isatty():
-            input("Ready to enter stiff hold mode. Press Enter to continue...")
+            try:
+                input("Ready to enter stiff hold mode. Press Enter to continue...")
+            except EOFError:
+                # isatty() can be true while stdin is already closed (some launchers).
+                self.logger.warning("No stdin to confirm stiff hold; continuing without the prompt")
 
     @property
     def use_policy_action(self):
@@ -154,7 +179,11 @@ class NativeRunnerPolicy(RunnerTransport):
         else:
             if self.is_wbt and self._state_ready:
                 self.native.set_state(self.interface.get_low_state(), tick_ms=self._tick_ms())
+            zero_requests = self.native._engine.velocity_zero_requests
             self.native.command(command)
+            if self.native._engine.velocity_zero_requests != zero_requests:
+                # The engine's own velocity input is a stub; the operator input is ours.
+                self._velocity_input.zero()
         self._resolve_control_gains()
         if self.active_policy_index != previous_index:
             self._on_policy_switched(self.active_model_path)
@@ -197,9 +226,12 @@ class NativeRunnerPolicy(RunnerTransport):
         return False
 
     def _handle_start_policy(self):
-        if not self._state_ready:
+        # A dual-mode secondary never steps while inactive, so it has not seen a
+        # state yet when it is switched to; read the shared interface now.
+        if not self._state_ready and not _is_valid_state(self.interface.get_low_state()):
             self.logger.warning("Ignoring start: no valid robot state received yet")
             return
+        self._state_ready = True
         self.native.set_state(self.interface.get_low_state(), tick_ms=self._tick_ms())
         self.native.command("START")
         if hasattr(self.interface, "no_action"):
@@ -260,15 +292,11 @@ class NativeRunnerPolicy(RunnerTransport):
         if self._owns_clock and self._clock is not None:
             self._clock.close()
             self._clock = None
-        if self._owns_inputs:
-            for provider in {
-                id(self._velocity_input): self._velocity_input,
-                id(self._command_provider): self._command_provider,
-            }.values():
-                stop = getattr(provider, "stop", None)
-                if callable(stop):
-                    stop()
-            self._owns_inputs = False
+        owned, self._owned_inputs = self._owned_inputs, []
+        for provider in owned:
+            stop = getattr(provider, "stop", None)
+            if callable(stop):
+                stop()
 
     def run(self):
         try:

@@ -586,3 +586,222 @@ def test_live_wbt_policy_reports_and_applies_the_effective_action_clip(tmp_path,
 def test_live_wbt_policy_rejects_an_unknown_history_initialization(tmp_path):
     with pytest.raises(ValueError, match="repeat_first_valid_obs or zero_pad"):
         inference.LiveWbtPolicy(_write_live_model(tmp_path), history_initialization="zero")
+
+
+class _RecordingVelocity(_NoInput):
+    def __init__(self):
+        self.zeroed = 0
+        self.stopped = 0
+
+    def zero(self):
+        self.zeroed += 1
+
+    def start(self):
+        pass
+
+    def stop(self):
+        self.stopped += 1
+
+
+def test_dual_mode_secondary_engages_when_switched_to_before_it_has_stepped(native_config):
+    from holosoma_inference.policies.dual_mode import DualModePolicy
+    from holosoma_inference.policies.native_runner import NativeLocomotionRunner
+
+    config, _ = native_config
+    interface, inputs = _ScriptedInterface(_low_state()), _NoInput()
+
+    class Runner(NativeLocomotionRunner):
+        def __init__(self, config, shared_hardware=None):
+            if shared_hardware is not None:
+                super().__init__(config, shared_hardware=shared_hardware)
+            else:
+                super().__init__(config, interface=interface, velocity_input=inputs, command_provider=inputs)
+
+    dual = DualModePolicy(config, config, policy_selector=lambda _config: Runner)
+    dual.primary._handle_start_policy()
+    assert dual.primary.policy_action() is True and dual.primary.use_policy_action
+    dual._handle_mode_switch()
+    assert dual.active is dual.secondary
+    assert not dual.primary.use_policy_action
+    assert dual.secondary.use_policy_action
+
+
+@pytest.mark.parametrize("shortcut", ["use_joystick", "use_usb_joystick", "use_keyboard"])
+def test_input_shortcut_survives_the_native_model_path_rewrite(native_config, shortcut):
+    from holosoma_inference.native import NativePolicy
+
+    config, _ = native_config
+    config = replace(config, task=replace(config.task, **{shortcut: True}))
+    NativePolicy(config, autostart=False)
+    resolved = config.task.velocity_input
+    assert replace(config.task, model_path="other.onnx").velocity_input == resolved
+    with pytest.raises(ValueError, match="Cannot combine"):
+        replace(config.task, velocity_input="ros2")
+
+
+@pytest.mark.parametrize(
+    ("command", "zeroes"),
+    [("ZERO_VELOCITY", [1]), ("STAND_TOGGLE", [0, 1]), ("WALK", [0])],
+    ids=["zero-velocity", "stand-toggle-walk-then-stance", "walk"],
+)
+def test_runner_zeroes_the_operator_velocity_input_when_the_engine_does(native_config, command, zeroes):
+    from holosoma_inference.inputs.api.commands import StateCommand
+    from holosoma_inference.policies.native_runner import NativeLocomotionRunner
+
+    config, _ = native_config
+    velocity = _RecordingVelocity()
+    runner = NativeLocomotionRunner(
+        config, interface=_ScriptedInterface(_low_state()), velocity_input=velocity, command_provider=_NoInput()
+    )
+    for expected in zeroes:
+        runner._dispatch_command(StateCommand[command])
+        assert velocity.zeroed == expected
+
+
+def test_runner_rejects_subclasses_overriding_retired_python_policy_hooks():
+    from holosoma_inference.policies import BasePolicy, LocomotionPolicy, WholeBodyTrackingPolicy
+
+    for alias in (BasePolicy, LocomotionPolicy, WholeBodyTrackingPolicy):
+        with pytest.raises(TypeError, match="get_current_obs_buffer_dict, rl_inference|rl_inference"):
+
+            class _Teleop(alias):
+                def rl_inference(self, robot_state_data):
+                    return robot_state_data
+
+        with pytest.raises(TypeError, match="get_current_obs_buffer_dict"):
+
+            class _Obs(alias):
+                def get_current_obs_buffer_dict(self, robot_state_data):
+                    return {}
+
+        class _Supported(alias):
+            def transform_command(self, command, robot_state_data):
+                return None
+
+
+def test_close_stops_only_the_providers_the_runner_created(native_config, monkeypatch):
+    from holosoma_inference.policies import transport
+    from holosoma_inference.policies.native_runner import NativeLocomotionRunner
+
+    config, _ = native_config
+    injected, created = _RecordingVelocity(), _RecordingVelocity()
+    monkeypatch.setattr(
+        transport, "create_input", lambda _policy, source, _role: injected if source == "injected" else created
+    )
+    for state_input, created_stops in (("injected", 0), ("ros2", 1)):
+        task = replace(config.task, velocity_input="injected", state_input=state_input)
+        runner = object.__new__(NativeLocomotionRunner)
+        runner._injected_velocity_input = runner._injected_command_provider = injected
+        runner.__init__(replace(config, task=task), interface=_ScriptedInterface(_low_state()))
+        runner.close()
+        assert injected.stopped == 0
+        assert created.stopped == created_stops
+
+
+def test_stiff_hold_prompt_survives_a_closed_stdin(native_config, monkeypatch):
+    from holosoma_inference.policies.native_runner import NativeLocomotionRunner
+
+    class Runner(NativeLocomotionRunner):
+        is_wbt = True
+
+    prompts = []
+
+    def closed_stdin(prompt):
+        prompts.append(prompt)
+        raise EOFError
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr("builtins.input", closed_stdin)
+    config, _ = native_config
+    inputs = _NoInput()
+    Runner(config, interface=_ScriptedInterface(_low_state()), velocity_input=inputs, command_provider=inputs)
+    assert len(prompts) == 1
+
+
+@pytest.mark.parametrize(("platform", "expected"), [("darwin", "KeyboardInput"), ("linux", "UsbJoystickInput")])
+def test_joystick_input_falls_back_to_keyboard_on_macos(native_config, monkeypatch, platform, expected):
+    from holosoma_inference.inputs.impl import usb_joystick
+    from holosoma_inference.policies import transport
+    from holosoma_inference.policies.native_runner import NativeLocomotionRunner
+
+    class _FakeUsbJoystick(_RecordingVelocity):
+        def __init__(self, device_index=0):
+            super().__init__()
+
+        def start(self):
+            pass
+
+    _FakeUsbJoystick.__name__ = "UsbJoystickInput"
+    monkeypatch.setattr(usb_joystick, "UsbJoystickInput", _FakeUsbJoystick)
+    monkeypatch.setattr(transport.sys, "platform", platform)
+    config, _ = native_config
+    task = replace(config.task, velocity_input="joystick", state_input="joystick")
+    runner = NativeLocomotionRunner(replace(config, task=task), interface=_ScriptedInterface(_low_state()))
+    try:
+        assert type(runner._velocity_input).__name__ == expected
+        assert runner.use_joystick == (platform != "darwin")
+    finally:
+        runner.close()
+
+
+def test_booster_command_sender_uses_joint_gains_when_the_config_has_none():
+    from types import SimpleNamespace
+
+    from holosoma_inference.config.config_values.robot import t1_29dof
+    from holosoma_inference.sdk.booster.command_sender.base.basic_command_sender import BasicCommandSender
+
+    class Sender(BasicCommandSender):
+        def _init_sdk_components(self):
+            pass
+
+        def send_command(self, *args, **kwargs):
+            pass
+
+    config = replace(t1_29dof, motor_kp=None, motor_kd=None)
+    sender = Sender(config)
+    motors = [SimpleNamespace() for _ in range(config.num_motors)]
+    n = config.num_joints
+    kp, kd = np.arange(n) + 10.0, np.arange(n) + 1.0
+    sender._fill_motor_commands(motors, np.zeros(n), np.zeros(n), np.zeros(n), kp_override=kp, kd_override=kd)
+    for motor_id, joint_id in enumerate(config.motor2joint):
+        if joint_id != -1:
+            assert (motors[motor_id].kp, motors[motor_id].kd) == (kp[joint_id], kd[joint_id])
+    with pytest.raises(ValueError, match="No KP gain"):
+        sender._fill_motor_commands(motors, np.zeros(n), np.zeros(n), np.zeros(n))
+
+
+def _live_wbt_command(tmp_path, gravity=None, **debug):
+    from holosoma_inference.native import GeneralWBTPolicy
+
+    checkpoint = _write_live_model(tmp_path, lookahead_layout="split", constant_action=1.0)
+    config = inference.get_config("g1-29dof-loco")
+    observation = replace(config.observation, obs_dict={"actor_obs": [], "actor_targets": []})
+    task = replace(config.task, model_path=checkpoint, use_phase=False, debug=replace(config.task.debug, **debug))
+    policy = GeneralWBTPolicy(replace(config, observation=observation, task=task, secondary=None))
+    policy.set_reference(_split_window(0.0))
+    state = np.zeros(71)
+    state[3:7] = (np.cos(0.2), np.sin(0.2), 0.0, 0.0)  # rolled, so derived gravity is not straight down
+    state[39:42] = (0.1, 0.2, 0.3)  # base_ang_vel
+    if gravity is not None:
+        state = np.concatenate([state, gravity])
+    command = policy.step_state(state)
+    # Stub frame layout: motion_command (58), motion_ref_ori_b (6), projected_gravity (3), base_ang_vel (3).
+    obs = policy.last_observation
+    return np.asarray(command.q), obs[64:67], obs[67:70]
+
+
+def test_live_wbt_honours_debug_overrides_and_corrected_gravity(tmp_path):
+    defaults = 0.01 * np.arange(29)  # the stub checkpoint's default pose
+    q, gravity, ang_vel = _live_wbt_command(tmp_path)
+    assert not np.allclose(q, defaults)
+    assert not np.allclose(gravity, (0.0, 0.0, -1.0))
+    np.testing.assert_allclose(ang_vel, (0.1, 0.2, 0.3), rtol=1e-6)
+
+    q, _, _ = _live_wbt_command(tmp_path, force_zero_action=True)
+    np.testing.assert_allclose(q, defaults, atol=1e-6)
+    _, _, ang_vel = _live_wbt_command(tmp_path, force_zero_angular_velocity=True)
+    np.testing.assert_allclose(ang_vel, 0.0)
+    _, gravity, _ = _live_wbt_command(tmp_path, force_upright_imu=True)
+    np.testing.assert_allclose(gravity, (0.0, 0.0, -1.0))
+    _, gravity, _ = _live_wbt_command(tmp_path, gravity=(0.1, -0.2, -0.97))
+    np.testing.assert_allclose(gravity, (0.1, -0.2, -0.97), rtol=1e-6)

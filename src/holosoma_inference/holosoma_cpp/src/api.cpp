@@ -14,7 +14,9 @@ namespace {
 class MemoryVelocity final : public VelocityProvider {
  public:
   std::optional<VelCmd> poll_velocity() override { return std::nullopt; }
-  void zero() override {}
+  // The host owns the real operator input, so count requests for it to mirror.
+  void zero() override { ++zero_requests; }
+  std::uint64_t zero_requests = 0;
 };
 class NoCommands final : public CommandProvider {
  public:
@@ -128,6 +130,7 @@ void Policy::command(StateCommand cmd) {
   impl_->policy->dispatch_command(cmd);
 }
 void Policy::velocity(const VelCmd& cmd) { impl_->policy->apply_velocity(cmd); }
+std::uint64_t Policy::velocity_zero_requests() const { return impl_->velocity.zero_requests; }
 void Policy::update_phase() {
   if (impl_->policy->use_phase()) impl_->policy->update_phase_time();
 }
