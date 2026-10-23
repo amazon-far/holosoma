@@ -51,6 +51,7 @@ lint.ignore=[
 "src/holosoma/tests/simulators/_sim_harness.py" = ["PLC0415"]  # Shared harness helpers defer config imports the same way
 "src/holosoma/holosoma/utils/draw.py" = ["F401"]  # Disable since unused imports are required for the adapters
 "src/holosoma/holosoma/utils/eval_utils.py" = ["PLC0415"]  # Disable since imports after SimApp are inherent to IsaacSim
+"src/holosoma_inference/holosoma_inference/policies/__init__.py" = ["PLC0415"]  # Deferred wbt re-export keeps pinocchio off the locomotion path
 "src/holosoma_inference/holosoma_inference/policies/base.py" = ["PLC0415"]  # Deferred imports for optional heavy deps (ROS2, joystick, keyboard providers)
 "src/holosoma_inference/holosoma_inference/policies/locomotion.py" = ["PLC0415"]  # Deferred provider imports
 "src/holosoma_inference/holosoma_inference/policies/wbt.py" = ["PLC0415"]  # Deferred provider imports
