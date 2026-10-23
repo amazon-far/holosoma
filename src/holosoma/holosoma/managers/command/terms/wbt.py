@@ -94,7 +94,9 @@ def _splice_motion_frames(
     for seg_key, attr_name in targets:
         existing = getattr(loader, attr_name)
         pieces: list[torch.Tensor] = []
-        for segment, clip_start, clip_end in zip(segments_per_motion, start_idx.tolist(), end_idx.tolist()):
+        for segment, clip_start, clip_end in zip(
+            segments_per_motion, start_idx.tolist(), end_idx.tolist(), strict=True
+        ):
             clip = existing[clip_start:clip_end]
             pieces.extend((segment[seg_key], clip) if prepend else (clip, segment[seg_key]))
         setattr(loader, attr_name, torch.cat(pieces, dim=0))
@@ -1255,7 +1257,7 @@ class MotionCommand(CommandTermBase):
         clip_ends = self.motion.motion_end_idx.tolist()
         # The frame each transition joins: the clip's first frame for a lead-in, its last for a
         # lead-out. Absolute indices into the raw concatenated arrays.
-        anchors = [start if prepend else end - 1 for start, end in zip(clip_starts, clip_ends)]
+        anchors = [start if prepend else end - 1 for start, end in zip(clip_starts, clip_ends, strict=True)]
 
         free_variables = []
         for anchor_frame_idx in anchors:
@@ -1291,7 +1293,7 @@ class MotionCommand(CommandTermBase):
                 anchor_frame_idx=anchor_frame_idx,
                 prepend=prepend,
             )
-            for clip, (free, anchor_frame_idx) in enumerate(zip(free_variables, anchors))
+            for clip, (free, anchor_frame_idx) in enumerate(zip(free_variables, anchors, strict=True))
         ]
 
         self.motion = self.motion.splice_transition_segments(segments_per_motion, prepend=prepend)
@@ -1383,9 +1385,7 @@ class MotionCommand(CommandTermBase):
         if simulator.get_simulator_type() != SimulatorType.ISAACSIM:
             raise NotImplementedError(
                 "Default-pose transitions need a backend whose state write runs forward kinematics. "
-                "IsaacGym applies state writes immediately but does not run FK, so the rigid-body "
-                "buffers stay stale until the next simulate() (see reset()'s flush). MuJoCo's "
-                "ClassicBackend does run mj_forward and could be supported, but its body ordering "
+                "MuJoCo's ClassicBackend does run mj_forward and could be supported, but its body ordering "
                 "and the Warp backend (which skips forward on state writes) need validating first."
             )
 
@@ -1480,11 +1480,11 @@ class MotionCommand(CommandTermBase):
         assert self._body_indexes_in_motion is not None
         real_slots = {
             int(self._body_indexes_in_motion[i])
-            for i, (name, alias) in enumerate(zip(robot_body_names, robot_body_names_alias))
+            for i, (name, alias) in enumerate(zip(robot_body_names, robot_body_names_alias, strict=True))
             if name == alias
         }
         keep, dropped = [], []
-        for i, (name, alias) in enumerate(zip(robot_body_names, robot_body_names_alias)):
+        for i, (name, alias) in enumerate(zip(robot_body_names, robot_body_names_alias, strict=True)):
             if name != alias and int(self._body_indexes_in_motion[i]) in real_slots:
                 dropped.append(f"{name} -> {alias}")
             else:
