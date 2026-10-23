@@ -42,7 +42,15 @@ import torch
 import warp as wp
 from loguru import logger
 
+from holosoma.simulator.mujoco.backends.native_config import (
+    allocation_kwargs,
+    apply_warp_model,
+    validate_warp_options,
+    warp_extra_inputs,
+    warp_option_overrides,
+)
 from holosoma.simulator.mujoco.geom_groups import DEFAULT_RENDER_GEOM_GROUPS
+from holosoma.simulator.mujoco.native_config import effective_options
 
 from .base import IMujocoBackend, holosoma_to_mj_quat, mj_to_holosoma_quat
 from .warp_bridge import WarpBridge
@@ -197,10 +205,18 @@ class WarpBackend(IMujocoBackend):
         ------
         ImportError
             If warp or mujoco_warp packages are not installed
+        ValueError
+            If native settings are invalid or unsupported, or device is not CUDA
         RuntimeError
             If GPU initialization fails
         """
         super().__init__(model, data, config, device)
+        warp_config = config.simulator.sim.mujoco
+        overrides = effective_options(config.simulator)
+        validate_warp_options(model, overrides)
+        option_inputs, allocation_inputs = warp_extra_inputs(warp_config.warp)
+        options = warp_option_overrides(warp_config.warp, inputs=option_inputs)
+        allocation = allocation_kwargs(model, warp_config.warp, self.num_envs, inputs=allocation_inputs)
 
         # Import warp packages (fail fast if not available)
         try:
@@ -215,24 +231,21 @@ class WarpBackend(IMujocoBackend):
         # Initialize Warp runtime
         wp.init()
         self.mjw_device = wp.get_device(device)
+        if not self.mjw_device.is_cuda:
+            raise ValueError(f"device={device!r}: WarpBackend requires a CUDA device")
 
         logger.info(f"Initializing WarpBackend: {self.num_envs} envs on {device}")
 
-        # Get memory allocation config
-        warp_config = config.simulator.mujoco_warp
-        nconmax_per_env = warp_config.nconmax_per_env
-        njmax_per_env = warp_config.njmax_per_env
-
-        # Auto-calculate njmax if not specified
-        if njmax_per_env is None:
-            njmax_per_env = max(nconmax_per_env * 6, model.nv * 4)
-
-        logger.info(f"GPU memory allocation: nconmax={nconmax_per_env} per env, njmax={njmax_per_env} per env")
+        logger.info(f"GPU memory allocation: {allocation}")
 
         # Create Warp model and batched data within GPU context
         with wp.ScopedDevice(self.mjw_device):
             # Upload model to GPU
-            self.mjw_model = mjw.put_model(model)
+            try:
+                self.mjw_model = mjw.put_model(model)
+            except (ValueError, NotImplementedError) as exc:
+                raise ValueError(f"simulator.config.sim.mujoco / model attributes: {exc}") from exc
+            apply_warp_model(self.mjw_model, warp_config, options)
             self._lidar_render_context: Any = None
             self._lidar_render_context_groups: tuple[int, ...] | None = None
             self._sensor_refit_graphs: dict[int, Graph] = {}
@@ -243,15 +256,13 @@ class WarpBackend(IMujocoBackend):
 
             # Allocate batched data for parallel environments
             # Memory allocation strategy (following mujoco_warp API):
-            # - nconmax: contacts per environment (not total across all environments)
-            # - njmax: constraints per environment
-            # - naconmax: total contacts across ALL environments (auto-calculated internally)
-            self.mjw_data = mjw.make_data(
-                model,
-                nworld=self.num_envs,
-                nconmax=nconmax_per_env,
-                njmax=njmax_per_env,
-            )
+            # - nconmax: average contacts per environment, pooled across all environments
+            # - njmax: hard constraint capacity per environment
+            # - naconmax: total contact pool, configured explicitly or defaulting to nconmax*num_envs
+            try:
+                self.mjw_data = mjw.make_data(model, **allocation)
+            except (ValueError, NotImplementedError) as exc:
+                raise ValueError(f"simulator.config.sim.mujoco.warp allocation: {exc}") from exc
 
             # Create zero-copy PyTorch tensors tethered to Warp arrays
             # These tensors share memory with the Warp arrays - no copying!

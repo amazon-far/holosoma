@@ -273,7 +273,6 @@ class MuJoCo(BaseSimulator):
         self.root_model = self.scene_manager.compile()
         self.root_data = mujoco.MjData(self.root_model)
 
-        # Apply post-compilation settings
         self.root_model.opt.timestep = self.sim_dt
 
         # Resolve per-actor freejoint addressing (depends only on the compiled model + scene config).
@@ -286,7 +285,7 @@ class MuJoCo(BaseSimulator):
                 raise RuntimeError(
                     "WarpBackend requested (mujoco_backend='warp') but dependencies not available.\n\n"
                     "To enable GPU acceleration, reinstall with warp support:\n"
-                    "  bash scripts/setup_mujoco.sh --with-warp\n\n"
+                    "  bash scripts/setup_mujoco.sh\n\n"
                     "Or install dependencies manually:\n"
                     "  pip install warp-lang mujoco-warp\n\n"
                     "System requirements: CUDA-capable GPU required"

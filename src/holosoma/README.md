@@ -75,10 +75,11 @@ python src/holosoma/holosoma/train_agent.py \
 ```
 
 > **Note:**
-> - MJWarp uses `nconmax=96` (maximum contacts per environment) by default. This can be adjusted via `--simulator.config.mujoco-warp.nconmax-per-env=96` if needed.
+> - MJWarp allocates an average of 96 contacts per environment in a shared pool by default. Adjust it with `--simulator.config.sim.mujoco.warp.nconmax-per-env=128`; the constraint capacity has a separate per-environment limit.
 > - These examples use `--training.num-envs=4096`, but you may need to adjust this value based on your hardware.
 > - When training T1 with PPO on mixed terrain, use `--terrain.terrain-term.scale-factor=0.5` to avoid training instabilities.
 
+Native physics settings use `--simulator.config.sim.mujoco.*`, for example `--simulator.config.sim.mujoco.integrator implicitfast`. Uncommon options use bare upstream names in `mujoco.extra` or `mujoco.warp.extras`; CLI mappings take one JSON object, such as `--simulator.config.sim.mujoco.extra '{"gravity": [0, 0, -2]}'`. Flags and extras expose advanced upstream features that may exceed Holosoma's support. Unset fields preserve existing behavior, and `sim.fps` owns timestep.
 
 ### Whole-Body Tracking
 
