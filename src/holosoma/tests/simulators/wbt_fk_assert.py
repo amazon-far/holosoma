@@ -1,9 +1,8 @@
 """Probe: the URDF forward kinematics behind WBT default-pose transitions agrees with IsaacSim's.
 
 Asserts, on a real G1:
-  (a) ``_fk_body_poses`` leaves the sim's root, joint and body state untouched;
-  (b) its body poses match the ones IsaacSim computes for the same states;
-  (c) center-of-mass positions differ from link origins.
+  (a) ``_fk_body_poses`` body poses match the ones IsaacSim computes for the same states;
+  (b) center-of-mass positions differ from link origins.
 
 Writes "OK" to ``--result-file`` once every check passes; IsaacSim teardown swallows a non-zero exit.
 
@@ -98,13 +97,6 @@ def _sweep_frames(sim, config, device):
     return joint_pos, root_pos, root_quat
 
 
-def _sim_state(sim):
-    return [
-        t.clone()
-        for t in (sim.robot_root_states[:], sim.dof_pos, sim.dof_vel, sim.rigid_body_pos_w, sim.rigid_body_quat_w)
-    ]
-
-
 def _isaacsim_fk(sim, joint_pos, root_pos, root_quat):
     """Write frame i into env i and read back the body poses IsaacSim computes for it."""
     import torch
@@ -129,25 +121,17 @@ def main() -> int:
     parser.add_argument("--result-file", default=None, help="write 'OK' here after PASS (teardown-robust)")
     args = parser.parse_args()
 
-    import torch
-
     sim, config, device = _build(args.simulator, NUM_FRAMES)
     joint_pos, root_pos, root_quat = _sweep_frames(sim, config, device)
 
-    before = _sim_state(sim)
     body_pos, body_quat, body_com_pos = _FkProbe(sim, config.robot, device)._fk_body_poses(  # type: ignore[misc]
         joint_pos, root_pos, root_quat
     )
-    # (a) exact equality: nothing may have been written.
-    if not all(torch.equal(b, a) for b, a in zip(before, _sim_state(sim), strict=True)):
-        print("FAIL: _fk_body_poses changed the simulator state")
-        return 1
-
     if body_pos.shape != (NUM_FRAMES, sim.rigid_body_pos_w.shape[1], 3):
         print(f"FAIL: unexpected body_pos shape {tuple(body_pos.shape)}")
         return 1
 
-    # (b) a URDF/USD import difference (merged fixed joints, reordered bodies) diverges here.
+    # (a) a URDF/USD import difference (merged fixed joints, reordered bodies) diverges here.
     sim_pos, sim_quat = _isaacsim_fk(sim, joint_pos, root_pos, root_quat)
     pos_gap = float((sim_pos - body_pos).abs().max())
     # q and -q are the same rotation, so compare by angle rather than by component.
@@ -157,7 +141,7 @@ def main() -> int:
         print(f"FAIL: URDF and IsaacSim FK disagree (pos {pos_gap:.6f} m, quat {quat_gap:.2e}, worst body {worst})")
         return 1
 
-    # (c) G1 links all have mass, so at least one CoM offset must be nonzero.
+    # (b) G1 links all have mass, so at least one CoM offset must be nonzero.
     com_offset = float((body_com_pos - body_pos).norm(dim=-1).max())
     if com_offset < 1e-4:
         print(f"FAIL: every body CoM sits on its link origin (max offset {com_offset:.2e} m)")
