@@ -89,3 +89,20 @@ def test_install_copies_only_onnx_runtime_libraries_from_its_directory(tmp_path)
     subprocess.run(["cmake", "-S", project, "-B", build], check=True, capture_output=True)
     subprocess.run(["cmake", "--install", build, "--prefix", prefix], check=True, capture_output=True)
     assert sorted(path.name for path in (prefix / "lib").iterdir()) == sorted(shipped)
+
+
+def test_native_wheel_matrix_matches_requires_python_and_counts_what_cibuildwheel_selects():
+    import yaml
+    from packaging.specifiers import SpecifierSet
+
+    workflow = yaml.safe_load((ROOT / ".github/workflows/_build-python-dist.yml").read_text())
+    (step,) = [s for s in workflow["jobs"]["native-wheels"]["steps"] if "CIBW_BUILD" in s.get("env", {})]
+    pyproject = (ROOT / "src/holosoma_inference/pyproject.toml").read_text()
+    supported = SpecifierSet(re.search(r'^requires-python = "([^"]+)"', pyproject, re.MULTILINE).group(1))
+    selected = re.findall(r"cp3(\d+)-", step["env"]["CIBW_BUILD"])
+    assert selected, "wheel matrix must select interpreters"
+    # cibuildwheel silently drops unsupported interpreters, so a listed one is a wrong expectation.
+    assert [f"3.{minor}" for minor in selected if f"3.{minor}" not in supported] == []
+    # The built-wheel gate must be derived from cibuildwheel's own selection, never a literal.
+    assert "--print-build-identifiers" in step["run"]
+    assert not re.search(r'-eq\s+"?\d', step["run"])

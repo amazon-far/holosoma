@@ -78,7 +78,8 @@ jobs:
         env:
           PACKAGE_DIR: ${{ inputs.package-dir }}
           CIBW_ARCHS: ${{ matrix.arch }}
-          CIBW_BUILD: 'cp38-manylinux_* cp39-manylinux_* cp310-manylinux_* cp311-manylinux_* cp312-manylinux_* cp313-manylinux_*'
+          # cibuildwheel also drops interpreters outside the package's requires-python.
+          CIBW_BUILD: 'cp310-manylinux_* cp311-manylinux_* cp312-manylinux_* cp313-manylinux_*'
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
           CIBW_BUILD_FRONTEND: 'build[uv]'
@@ -86,17 +87,17 @@ jobs:
             python -c "import numpy as np; import holosoma_inference as h;
             p = h.get_policy_from_preset('g1-29dof-loco');
             assert p.step(np.zeros((1,100))).shape == (1,29)"
-        run: uvx --with bashlex==0.18 --from cibuildwheel==2.23.3 cibuildwheel "$PACKAGE_DIR" --output-dir "$PACKAGE_DIR/dist"
-
-      - name: Require a wheel for this architecture
-        env:
-          PACKAGE_DIR: ${{ inputs.package-dir }}
-          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          count=$(find "$PACKAGE_DIR/dist" -name "*manylinux*_${ARCH}.whl" | wc -l)
-          echo "built ${count} ${ARCH} wheels"
-          [ "$count" -eq 6 ]
+          cibw() { uvx --with bashlex==0.18 --from cibuildwheel==2.23.3 cibuildwheel "$@"; }
+          # Expect exactly the wheels cibuildwheel itself selects for this runner.
+          expected=$(cibw --print-build-identifiers "$PACKAGE_DIR" | grep -c "_${CIBW_ARCHS}\$" || true)
+          echo "expecting ${expected} ${CIBW_ARCHS} wheels"
+          [ "$expected" -gt 0 ]
+          cibw "$PACKAGE_DIR" --output-dir "$PACKAGE_DIR/dist"
+          built=$(find "$PACKAGE_DIR/dist" -name "*manylinux*_${CIBW_ARCHS}.whl" | wc -l)
+          echo "built ${built} ${CIBW_ARCHS} wheels"
+          [ "$built" -eq "$expected" ]
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
