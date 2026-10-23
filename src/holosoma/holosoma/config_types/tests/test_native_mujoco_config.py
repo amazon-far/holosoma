@@ -85,7 +85,7 @@ def test_extra_cli_false_and_yaml_values_roundtrip() -> None:
     assert cfg.warp.extras["run_collision_detection"] is False
     assert cfg.warp.extras["nccdmax"] == 0
     assert cfg.warp.graph_conditional is False
-    adapter = TypeAdapter(MujocoConfig)
+    adapter: TypeAdapter[MujocoConfig] = TypeAdapter(MujocoConfig)
     assert adapter.validate_python(yaml.safe_load(yaml.safe_dump(adapter.dump_python(cfg, mode="json")))) == cfg
 
 
@@ -201,7 +201,8 @@ def test_geom_contact_config_rejects_invalid_native_parameters(kwargs: dict[str,
 
 
 def test_old_warp_capacity_location_fails_with_replacement_in_yaml_and_python() -> None:
-    old = TypeAdapter(SimulatorInitConfig).dump_python(preset.config, mode="json")
+    adapter: TypeAdapter[SimulatorInitConfig] = TypeAdapter(SimulatorInitConfig)
+    old = adapter.dump_python(preset.config, mode="json")
     old["mujoco_warp"] = {"nconmax_per_env": 128}
     with pytest.raises(ValidationError, match=r"sim.mujoco\."):
         SimulatorInitConfig(**yaml.safe_load(yaml.safe_dump(old)))
