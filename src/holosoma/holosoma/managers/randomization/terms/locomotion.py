@@ -17,6 +17,7 @@ from holosoma.managers.randomization.terms._shared import (
     _ensure_env_ids_tensor,
 )
 from holosoma.simulator import mujoco_required_field
+from holosoma.simulator.isaac_lane import isaac_lane_submodule
 from holosoma.simulator.shared.field_decorators import MUJOCO_FIELD_ATTR
 from holosoma.utils.sampler import DistributionLike, DistributionSpec, TermSampler
 from holosoma.utils.simulator_config import SimulatorType
@@ -572,7 +573,10 @@ def randomize_base_com_startup(
             from isaaclab.managers import SceneEntityCfg
         except ImportError as exc:  # pragma: no cover - dependency optional
             raise RuntimeError("IsaacSim base COM randomization requires isaaclab.") from exc
-        from holosoma.simulator.isaacsim.events import randomize_body_com
+        # Resolved from the live simulator rather than hard-coded: both Isaac Sim
+        # generations report SimulatorType.ISAACSIM but live in different backend
+        # packages (simulator/isaacsim vs simulator/isaacsim6).
+        randomize_body_com = isaac_lane_submodule(simulator, "events").randomize_body_com
 
         torso_name = env.robot_config.torso_name
         env_ids_cpu = idx.to(device="cpu", dtype=torch.long)
@@ -667,7 +671,10 @@ def randomize_mass_startup(
         except ImportError as exc:  # pragma: no cover - defensive
             raise RuntimeError("IsaacSim mass randomization requires isaaclab.") from exc
 
-        from holosoma.simulator.isaacsim.events import randomize_rigid_body_mass
+        # Resolved from the live simulator rather than hard-coded: both Isaac Sim
+        # generations report SimulatorType.ISAACSIM but live in different backend
+        # packages (simulator/isaacsim vs simulator/isaacsim6).
+        randomize_rigid_body_mass = isaac_lane_submodule(simulator, "events").randomize_rigid_body_mass
 
         env_ids_cpu = idx.to(device="cpu", dtype=torch.long)
 
@@ -800,7 +807,10 @@ def randomize_friction_startup(
             raise RuntimeError("IsaacSim friction randomization requires isaaclab.") from exc
         env_ids_cpu = idx.to(device="cpu", dtype=torch.long)
 
-        from holosoma.simulator.isaacsim.events import randomize_rigid_body_material
+        # Resolved from the live simulator rather than hard-coded: both Isaac Sim
+        # generations report SimulatorType.ISAACSIM but live in different backend
+        # packages (simulator/isaacsim vs simulator/isaacsim6).
+        randomize_rigid_body_material = isaac_lane_submodule(simulator, "events").randomize_rigid_body_material
 
         asset_cfg = SceneEntityCfg("robot", body_names=".*")
         asset_cfg.resolve(simulator.scene)  # Not stricly required, but a good practice
@@ -876,7 +886,10 @@ def randomize_robot_rigid_body_material_startup(
         from isaaclab.managers import SceneEntityCfg
     except ImportError as exc:  # pragma: no cover - defensive
         raise RuntimeError("IsaacSim material randomization requires isaaclab.") from exc
-    from holosoma.simulator.isaacsim.events import randomize_rigid_body_material
+    # Resolved from the live simulator rather than hard-coded: both Isaac Sim
+    # generations report SimulatorType.ISAACSIM but live in different backend
+    # packages (simulator/isaacsim vs simulator/isaacsim6).
+    randomize_rigid_body_material = isaac_lane_submodule(simulator, "events").randomize_rigid_body_material
 
     env_ids_cpu = idx.to(device="cpu", dtype=torch.long)
 

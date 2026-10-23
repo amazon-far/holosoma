@@ -26,6 +26,7 @@ from holosoma.managers.randomization.terms._shared import (
     _ensure_env_ids_tensor,
 )
 from holosoma.simulator import mujoco_required_field
+from holosoma.simulator.isaac_lane import isaac_lane_submodule
 from holosoma.simulator.shared.field_decorators import MUJOCO_FIELD_ATTR
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.rotations import quat_from_angle_axis, quat_mul
@@ -189,7 +190,10 @@ def randomize_object_rigid_body_material_startup(
             from isaaclab.managers import SceneEntityCfg
         except ImportError as exc:  # pragma: no cover - defensive
             raise RuntimeError("IsaacSim material randomization requires isaaclab.") from exc
-        from holosoma.simulator.isaacsim.events import randomize_rigid_body_material
+        # Resolved from the live simulator rather than hard-coded: both Isaac Sim
+        # generations report SimulatorType.ISAACSIM but live in different backend
+        # packages (simulator/isaacsim vs simulator/isaacsim6).
+        randomize_rigid_body_material = isaac_lane_submodule(simulator, "events").randomize_rigid_body_material
 
         env_ids_cpu = idx.to(device="cpu", dtype=torch.long)
         for name in names:
@@ -300,7 +304,10 @@ def randomize_object_rigid_body_mass_startup(
     if sim_type == SimulatorType.ISAACSIM:
         from isaaclab.managers import SceneEntityCfg
 
-        from holosoma.simulator.isaacsim.events import randomize_rigid_body_mass
+        # Resolved from the live simulator rather than hard-coded: both Isaac Sim
+        # generations report SimulatorType.ISAACSIM but live in different backend
+        # packages (simulator/isaacsim vs simulator/isaacsim6).
+        randomize_rigid_body_mass = isaac_lane_submodule(simulator, "events").randomize_rigid_body_mass
 
         env_ids_cpu = idx.to(device="cpu", dtype=torch.long)
 
@@ -453,7 +460,10 @@ def randomize_object_rigid_body_inertia_startup(
     if sim_type == SimulatorType.ISAACSIM:
         from isaaclab.managers import SceneEntityCfg
 
-        from holosoma.simulator.isaacsim.events import randomize_rigid_body_inertia
+        # Resolved from the live simulator rather than hard-coded: both Isaac Sim
+        # generations report SimulatorType.ISAACSIM but live in different backend
+        # packages (simulator/isaacsim vs simulator/isaacsim6).
+        randomize_rigid_body_inertia = isaac_lane_submodule(simulator, "events").randomize_rigid_body_inertia
 
         env_ids_cpu = idx.to(device="cpu", dtype=torch.long)
         # One spec per component in [Ixx, Iyy, Izz, Ixy, Iyz, Ixz] order.

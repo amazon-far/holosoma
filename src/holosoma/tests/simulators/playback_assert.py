@@ -23,6 +23,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from tests.simulators._sim_harness import SIMULATOR_CHOICES
+
 # Shadow-fix: keep this file's dir from hiding the real isaacsim package.
 if sys.path and Path(sys.path[0]).resolve() == Path(__file__).parent.resolve():
     sys.path.pop(0)
@@ -107,7 +109,7 @@ def _frame(sim) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATOR_CHOICES)
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--result-file", default=None, help="write 'OK' here after PASS (teardown-robust)")
     args = parser.parse_args()

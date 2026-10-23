@@ -2,13 +2,31 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Protocol
 
 import numpy.typing as npt
 
-from holosoma.simulator.isaacsim.isaacsim import IsaacSim
 from holosoma.utils.adapters.draw_utils import convert_to_list, convert_to_tuple
 from holosoma.utils.safe_torch_import import torch
+
+
+class IsaacSim(Protocol):
+    """What these drawing helpers actually need from an Isaac Sim backend.
+
+    Previously this module imported ``holosoma.simulator.isaacsim.isaacsim.IsaacSim`` for the
+    annotation alone -- every function below is duck-typed, touching only ``.draw`` and
+    ``.isaacsim``. That import was a problem once a second Isaac generation existed: it ran at
+    *import* time (``utils/draw.py`` imports this module when ``SimulatorType.ISAACSIM`` is
+    configured, and that enum value covers both generations), so a process running the 6.1
+    backend would eagerly import the 5.1 package -- loading the wrong generation's module graph
+    purely to satisfy a type hint.
+
+    A protocol states the real requirement instead, so either generation's simulator satisfies it
+    structurally and neither package is imported here.
+    """
+
+    draw: Any
+    isaacsim: Any
 
 
 def clear_lines(simulator: IsaacSim) -> None:

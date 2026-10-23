@@ -48,7 +48,7 @@ from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.sim_utils import setup_simulation_environment
 
 # steps_for_seconds re-exported (subset_write_assert imports it from here).
-from tests.simulators._sim_harness import step, steps_for_seconds
+from tests.simulators._sim_harness import SIMULATOR_CHOICES, step, steps_for_seconds
 
 SMALL_BOX = "holosoma/data/scene_objects/boxes/small_box.urdf"
 BOX_HALF = 0.05  # small_box is a 0.1 m cube.
@@ -119,7 +119,7 @@ def _step(sim, n):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Cross-backend runtime static-move assertion harness.")
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATOR_CHOICES)
     parser.add_argument("--num-envs", type=int, default=None)
     args = parser.parse_args()
     num_envs = args.num_envs if args.num_envs is not None else (1 if args.simulator == "mujoco" else 4)

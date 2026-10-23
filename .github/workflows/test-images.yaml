@@ -9,6 +9,9 @@ on:
       isaacsim_image:
         required: true
         type: string
+      isaacsim6_image:
+        required: true
+        type: string
       mujoco_image:
         required: true
         type: string
@@ -49,6 +52,10 @@ jobs:
           - simulator: isaacsim
             multigpu: "False"
             image: ${{ inputs.isaacsim_image }}
+          # Each Isaac Sim generation runs in its own image; 6.1 covers PhysX and Newton.
+          - simulator: isaacsim6
+            multigpu: "False"
+            image: ${{ inputs.isaacsim6_image }}
           - simulator: mujoco
             multigpu: "False"
             image: ${{ inputs.mujoco_image }}

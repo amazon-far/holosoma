@@ -22,7 +22,13 @@ if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step, steps_for_seconds
+from tests.simulators._sim_harness import (
+    SIMULATOR_CHOICES,
+    build_run_sim_config,
+    run_and_hard_exit,
+    step,
+    steps_for_seconds,
+)
 
 if TYPE_CHECKING:
     from holosoma.config_types.sensor import CameraSensorConfig
@@ -44,7 +50,7 @@ def _red_centroid(img):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATOR_CHOICES)
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)

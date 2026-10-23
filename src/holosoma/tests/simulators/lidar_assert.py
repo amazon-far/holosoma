@@ -25,8 +25,16 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from holosoma.simulator.base_simulator.hooks import Phase  # noqa: E402
+from holosoma.simulator.isaac_lane import isaac_lane_submodule  # noqa: E402
 from holosoma.utils.sim_utils import setup_simulation_environment  # noqa: E402
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step  # noqa: E402
+from tests.simulators._sim_harness import (  # noqa: E402
+    SIMULATOR_CHOICES,
+    build_run_sim_config,
+    is_isaacsim,
+    isaac_lane_module,
+    run_and_hard_exit,
+    step,
+)
 from tests.simulators.lidar_figures import (  # noqa: E402
     save_pointcloud_figure,
     save_pointcloud_topdown_x_neg_z_projection,
@@ -141,15 +149,18 @@ def _check_static_cloud(sim, sensor_heights, plane_normal, directions) -> list[s
     return _check_known_plane_cloud(sim, "downward", sensor_heights, plane_normal, directions)
 
 
-def _check_isaacsim_prim_resolution_helpers() -> list[str]:
+def _check_isaacsim_prim_resolution_helpers(lane: str) -> list[str]:
     """Exercise link and native-owner resolution against independent USD fixtures."""
     from pxr import Usd, UsdGeom, UsdPhysics
 
-    from holosoma.simulator.isaacsim.prim_utils import (
-        resolve_robot_link_prim_expression,
-        resolve_robot_link_rigid_body_prim_expression,
-        set_instanceable,
-    )
+    # Lane-resolved: `prim_utils` lives inside a backend package, and the two Isaac Sim
+    # generations need different resolution logic (6.1's URDF importer nests link prims three
+    # deep under a `Geometry` scope). Importing the 5.1 copy while running 6.1 reported
+    # "expected one matching prim, found 3" and looked like a 6.1 defect.
+    _prim_utils = isaac_lane_module(lane, "prim_utils")
+    resolve_robot_link_prim_expression = _prim_utils.resolve_robot_link_prim_expression
+    resolve_robot_link_rigid_body_prim_expression = _prim_utils.resolve_robot_link_rigid_body_prim_expression
+    set_instanceable = _prim_utils.set_instanceable
 
     failures = []
     stage = Usd.Stage.CreateInMemory()
@@ -209,12 +220,13 @@ def _check_isaacsim_native_configs(sim, manager) -> list[str]:
     """Verify Isaac Sim preserves shared ray shapes, cadence, and scene target coverage."""
     import isaaclab.sim as sim_utils
 
-    from holosoma.simulator.isaacsim.prim_utils import (
-        get_current_stage,
-        is_rigid_body_enabled,
-        resolve_robot_link_rigid_body_prim_expression,
-    )
-    from holosoma.simulator.isaacsim.sensor_setup import _is_visual_raycast_prim
+    # Resolved from the live simulator: this check runs against a built sim, so the instance
+    # itself names the lane (no CLI round-trip needed).
+    _prim_utils = isaac_lane_submodule(sim, "prim_utils")
+    get_current_stage = _prim_utils.get_current_stage
+    is_rigid_body_enabled = _prim_utils.is_rigid_body_enabled
+    resolve_robot_link_rigid_body_prim_expression = _prim_utils.resolve_robot_link_rigid_body_prim_expression
+    _is_visual_raycast_prim = isaac_lane_submodule(sim, "sensor_setup")._is_visual_raycast_prim
 
     failures = []
     for lidar_record in manager.lidars:
@@ -661,7 +673,7 @@ def _check_cyclic_target_return(sim, direction, *, expected_range: float, snapsh
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATOR_CHOICES)
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--result-file", default=None)
     parser.add_argument(
@@ -696,7 +708,7 @@ def main() -> int:
         training=dataclasses.replace(config.training, num_envs=args.num_envs),
     )
 
-    if args.simulator == "isaacsim":
+    if is_isaacsim(args.simulator):
         isaaclab_spec = find_spec("isaaclab")
         isaaclab_roots = () if isaaclab_spec is None else (isaaclab_spec.submodule_search_locations or ())
         has_multi_mesh_ray_caster = any(
@@ -739,8 +751,8 @@ def main() -> int:
     if manager is None:
         failures.append("sensor manager was not created")
     else:
-        if args.simulator == "isaacsim":
-            failures += _check_isaacsim_prim_resolution_helpers()
+        if is_isaacsim(args.simulator):
+            failures += _check_isaacsim_prim_resolution_helpers(args.simulator)
             failures += _check_isaacsim_native_configs(sim, manager)
         manager.get_lidar("cyclic_target")  # registration assertion: raises if the preset omitted it
         first_target_direction = _expected_cyclic_directions(sim.time(), 1, device)[0]

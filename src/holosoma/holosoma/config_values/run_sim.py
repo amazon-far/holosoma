@@ -33,6 +33,43 @@ isaacsim = RUN_SIM_REGISTRY.add(
     ),
 )
 
+# IsaacSim 6.1 with sim2sim optimizations
+#
+# There are two independent simulator registries: SIMULATOR_REGISTRY (config_values/simulator.py,
+# used by training) and this one, bound to RunSimConfig.simulator and used by run_sim plus every
+# tests/simulators/*_assert.py harness. Registering a backend in only one is a real and easy
+# mistake: training works while every harness fails with "Unrecognized options:
+# simulator:isaacsim6", which reads like a tyro problem rather than a missing registration.
+isaacsim6 = RUN_SIM_REGISTRY.add(
+    "isaacsim6",
+    dataclasses.replace(
+        holosoma.config_values.simulator.isaacsim6,
+        config=dataclasses.replace(
+            holosoma.config_values.simulator.isaacsim6.config,
+            bridge=BridgeConfig(enabled=True),
+            virtual_gantry=VirtualGantryCfg(enabled=True),
+            sim=dataclasses.replace(
+                holosoma.config_values.simulator.isaacsim6.config.sim,
+                fps=200,
+            ),
+        ),
+    ),
+)
+
+# Isaac Sim 6.1 under the non-default physics engines, for run_sim and the assert harnesses.
+for _preset in ("isaacsim6-newton", "isaacsim6-ovphysx"):
+    RUN_SIM_REGISTRY.add(
+        _preset,
+        dataclasses.replace(
+            getattr(holosoma.config_values.simulator, _preset.replace("-", "_")),
+            config=dataclasses.replace(
+                getattr(holosoma.config_values.simulator, _preset.replace("-", "_")).config,
+                bridge=BridgeConfig(enabled=True),
+                virtual_gantry=VirtualGantryCfg(enabled=True),
+            ),
+        ),
+    )
+
 # MuJoCo with sim2sim optimizations
 mujoco = RUN_SIM_REGISTRY.add(
     "mujoco",

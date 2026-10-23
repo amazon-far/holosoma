@@ -48,7 +48,7 @@ from holosoma.config_types.simulator import IsaacSimRenderConfig
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.sim_utils import setup_simulation_environment
 from tests.simulators import _scene_presets
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit
+from tests.simulators._sim_harness import SIMULATOR_CHOICES, build_run_sim_config, is_isaacsim, run_and_hard_exit
 
 _KIT_ARG_SETTING = "/holosoma/tests/launcherKitArg"
 _DEFAULT_SUN_INTENSITY = 1000.0
@@ -143,7 +143,7 @@ def main() -> int:
     _scene_presets.register()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATOR_CHOICES)
     parser.add_argument("--scene", default="g1-largebox")
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
@@ -175,7 +175,7 @@ def main() -> int:
 
     config = _build_run_sim_config(args.simulator, args.scene, args.robot, args.terrain, args.record)
     if args.probe_isaacsim_render_config:
-        if args.simulator != "isaacsim":
+        if not is_isaacsim(args.simulator):
             parser.error("--probe-isaacsim-render-config requires --simulator isaacsim")
         render_config = IsaacSimRenderConfig(
             rendering_mode=args.rendering_mode,
@@ -194,7 +194,7 @@ def main() -> int:
             scene = dataclasses.replace(scene, lights={DEFAULT_LIGHT_KEY: DefaultLightConfig()})
         config = dataclasses.replace(config, simulator=simulator, scene=scene)
     if args.probe_lights:
-        if args.simulator != "isaacsim":
+        if not is_isaacsim(args.simulator):
             parser.error("--probe-lights requires --simulator isaacsim")
         # One light per type, each exercising a distinct field the probe then checks on the authored
         # prim: distant carries color-temperature + angle, dome an HDRI texture, sphere a radius, rect

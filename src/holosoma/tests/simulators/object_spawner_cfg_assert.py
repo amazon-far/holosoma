@@ -24,6 +24,8 @@ import sys
 import traceback
 from pathlib import Path
 
+from tests.simulators._sim_harness import ISAAC_LANE_PACKAGES, isaac_lane_module
+
 # tests/simulators/ has an ``isaacsim/`` subpackage that would shadow the real IsaacSim
 # ``isaacsim`` package when run as a script; drop sys.path[0] (mirrors the other harnesses).
 if sys.path and sys.path[0].endswith("tests/simulators"):
@@ -38,7 +40,7 @@ def _approx(a: float, b: float, tol: float = 1e-6) -> bool:
     return abs(a - b) <= tol
 
 
-def _check_format_symmetry(select_spawn_cfg, sim_utils) -> None:
+def _check_format_symmetry(select_spawn_cfg, sim_utils, lane: str) -> None:
     from holosoma.config_types.scene import PhysicsConfig, PhysXPhysicsConfig
 
     phys = PhysicsConfig(
@@ -97,7 +99,7 @@ _TINY_URDF = """<?xml version="1.0"?>
 """
 
 
-def _check_friction_symmetry(select_spawn_cfg) -> None:
+def _check_friction_symmetry(select_spawn_cfg, lane: str) -> None:
     """Friction/restitution (physics.isaacsim) reaches BOTH formats as a spawn physics_material.
 
     Both USD and URDF carry the configured friction/restitution as a ``physics_material`` on the
@@ -133,7 +135,7 @@ def _check_friction_symmetry(select_spawn_cfg) -> None:
     print("OK: URDF/USD friction symmetry — physics_material carried identically on both formats")
 
 
-def _check_robot_link_physics_cfg() -> None:
+def _check_robot_link_physics_cfg(lane: str) -> None:
     """Robot link_physics to spawn-cfg mapping and its gating, via the same converters objects use.
 
     The robot is an articulation (not a RigidObject), so it builds its spawn cfg from the converter
@@ -147,12 +149,12 @@ def _check_robot_link_physics_cfg() -> None:
       - friction/restitution and both combine modes to physics_material_cfg (the bound-material channel).
     """
     from holosoma.config_types.scene import IsaacSimPhysicsConfig, PhysicsConfig, PhysXPhysicsConfig
-    from holosoma.simulator.isaacsim.converters import (
-        physics_to_collision_props,
-        physics_to_mass_props,
-        physics_to_rigid_body_props,
-    )
-    from holosoma.simulator.isaacsim.object_spawner import physics_material_cfg
+
+    _converters = isaac_lane_module(lane, "converters")
+    physics_to_collision_props = _converters.physics_to_collision_props
+    physics_to_mass_props = _converters.physics_to_mass_props
+    physics_to_rigid_body_props = _converters.physics_to_rigid_body_props
+    physics_material_cfg = isaac_lane_module(lane, "object_spawner").physics_material_cfg
 
     # A link_physics exercising every robot channel: physx, collision offsets, material with combines.
     lp = PhysicsConfig(
@@ -214,7 +216,7 @@ def _abs_asset(rel: str) -> str:
     return str(Path(holosoma.__file__).resolve().parents[1] / rel)
 
 
-def _check_scene_body_discovery() -> None:
+def _check_scene_body_discovery(lane: str) -> None:
     """The 1->N body-discovery rules (Fix 3) on real USD assets, via the live USD runtime.
 
     Pins all three decomposition branches of ``_discover_scene_body_prim_paths`` plus the
@@ -225,11 +227,11 @@ def _check_scene_body_discovery() -> None:
     from pxr import Usd
 
     from holosoma.config_types.scene import SceneFileConfig
-    from holosoma.simulator.isaacsim.object_spawner import (
-        _discover_scene_body_prim_paths,
-        resolve_asset_root,
-    )
-    from holosoma.simulator.isaacsim.prim_naming import distinguishing_names
+    from holosoma.simulator.isaacsim6.prim_naming import distinguishing_names
+
+    _spawner = isaac_lane_module(lane, "object_spawner")
+    _discover_scene_body_prim_paths = _spawner._discover_scene_body_prim_paths
+    resolve_asset_root = _spawner.resolve_asset_root
 
     # AUTHORED: the file's enabled-RigidBodyAPI prims ARE the bodies (shipped multibody.usda).
     authored_path = _abs_asset(_MULTIBODY_USD)
@@ -272,6 +274,10 @@ def _check_scene_body_discovery() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="IsaacSim spawn-cfg assertion harness.")
     parser.add_argument("--result-file", default=None, help="write 'OK' here after all checks pass")
+    # Isaac-only harness, but not generation-only: it imports configuration builders that
+    # live inside a backend package, so it must be told which Isaac Sim lane to exercise.
+    # Defaults to the 5.1 lane so existing invocations and CI are unchanged.
+    parser.add_argument("--simulator", default="isaacsim", choices=sorted(ISAAC_LANE_PACKAGES))
     args = parser.parse_args()
 
     # Boot a minimal headless IsaacSim app so isaaclab.sim (carb) is importable.
@@ -283,12 +289,12 @@ def main() -> int:
     try:
         import isaaclab.sim as sim_utils
 
-        from holosoma.simulator.isaacsim.object_spawner import select_spawn_cfg
+        select_spawn_cfg = isaac_lane_module(args.simulator, "object_spawner").select_spawn_cfg
 
-        _check_format_symmetry(select_spawn_cfg, sim_utils)
-        _check_friction_symmetry(select_spawn_cfg)
-        _check_scene_body_discovery()
-        _check_robot_link_physics_cfg()
+        _check_format_symmetry(select_spawn_cfg, sim_utils, args.simulator)
+        _check_friction_symmetry(select_spawn_cfg, args.simulator)
+        _check_scene_body_discovery(args.simulator)
+        _check_robot_link_physics_cfg(args.simulator)
     except BaseException:
         print("SPAWNER CFG ASSERT FAILED:\n" + traceback.format_exc(), flush=True)
         simulation_app.close()

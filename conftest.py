@@ -3,7 +3,7 @@
 CI selects tests positively: each job runs ``pytest -m "<backend>"`` for one run-target marker.
 
 Run-target markers (exactly one per test; mutually exclusive):
-    isaacsim / mujoco             — needs that simulator backend
+    isaacsim / isaacsim6 / mujoco  — needs that simulator backend and generation
     no_sim                        — pure test, no simulator (CPU job)
     requires_inference            — needs the inference env (e2e job)
 
@@ -21,11 +21,12 @@ import os
 
 import pytest
 
-_RUN_TARGETS = ("isaacsim", "mujoco", "no_sim", "requires_inference")
-_SIM_DIRS = ("isaacsim", "mujoco")
+_RUN_TARGETS = ("isaacsim", "isaacsim6", "mujoco", "no_sim", "requires_inference")
+_SIM_DIRS = ("isaacsim", "isaacsim6", "mujoco")
 
 _ALL_MARKERS = {
-    "isaacsim": "Isaac Sim",
+    "isaacsim": "Isaac Sim 5.1",
+    "isaacsim6": "Isaac Sim 6.1",
     "mujoco": "MuJoCo (either backend)",
     "mujoco_classic": "the MuJoCo ClassicBackend (CPU)",
     "mujoco_warp": "the MuJoCo WarpBackend (CUDA)",

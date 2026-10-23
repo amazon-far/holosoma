@@ -494,7 +494,19 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
 
     preset = SIMULATOR_REGISTRY[_SURVIVING_BACKEND_FIXTURES[fixture_name]]
     assert (loaded_cfg.simulator._target_, loaded_cfg.simulator.config.name) == (preset._target_, preset.config.name)
-    assert loaded["simulator"] == saved["simulator"]
+    # Old checkpoints acquire the new lane's defaults without changing any saved backend setting.
+    expected_simulator = copy.deepcopy(saved["simulator"])
+    expected_simulator["config"].update(
+        isaac_physics_backend="physx",
+        isaac_newton={
+            "num_substeps": None,
+            "collision_decimation": None,
+            "use_cuda_graph": None,
+            "deterministic_mode": None,
+        },
+        isaac_visualizers=[],
+    )
+    assert loaded["simulator"] == expected_simulator
     assert loaded["robot"]["asset"]["link_physics"] == _without(saved["robot"]["asset"]["link_physics"])
     assert "apply_dof_armature_in_isaacgym" not in loaded["robot"]
     for name, sensor in saved["sensor"].items():

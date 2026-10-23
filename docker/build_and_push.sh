@@ -29,6 +29,7 @@ TAG="${IMAGE_TAG:-$(date +%Y_%m%d_%H%M)}"
 IMAGES=(
   "holosoma|docker/Dockerfile|holosoma|holosoma|"
   "isaacsim|docker/isaacsim.Dockerfile|holosoma-isaacsim|hs-isaacsim|"
+  "isaacsim6|docker/isaacsim6.Dockerfile|holosoma-isaacsim6|hs-isaacsim6|"
   "mujoco|docker/mujoco.Dockerfile|holosoma-mujoco|hs-mujoco|WARP=true"
   "retargeting|src/holosoma_retargeting/docker/Dockerfile|holosoma-retargeting|hs-retargeting|"
   "inference|src/holosoma_inference/docker/Dockerfile|holosoma-inference|hs-inference|"

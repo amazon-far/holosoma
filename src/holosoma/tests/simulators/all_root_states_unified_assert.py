@@ -50,6 +50,7 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 # Reuse static_move_assert's scene/build/step helpers so the scene (robot + freebox + pillar) is
 # identical to the passing static-move test.
 from holosoma.simulator.shared.object_registry import ObjectType
+from tests.simulators._sim_harness import SIMULATOR_CHOICES
 from tests.simulators.static_move_assert import (
     SETTLE_SECONDS,
     _build,
@@ -68,7 +69,7 @@ STEPS_AFTER_WRITE = 2
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Unified all_root_states (robot+object) probe.")
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATOR_CHOICES)
     parser.add_argument("--num-envs", type=int, default=None)
     args = parser.parse_args()
     num_envs = args.num_envs if args.num_envs is not None else (1 if args.simulator == "mujoco" else 4)
@@ -257,7 +258,17 @@ def main() -> int:
     if is_isaacsim:
         REFRESH_STEPS = 2  # clear IsaacSim's PhysX read-cache latency (introduces small dynamics drift)
         _step(sim, REFRESH_STEPS)
-        LIN_ATOL, ANG_ATOL = 3e-2, 3e-2
+        # The angular bound is looser than the linear one because the two refresh steps let the
+        # articulation's joints move, and how much the root angular velocity drifts in that time
+        # is PhysX-version dependent. Measured on the same scenario: Isaac Sim 5.1 drifts 0.0257
+        # and 6.1 drifts 0.0323, so a shared 3e-2 bound passes one generation and fails the other
+        # while both are behaving correctly -- it was fitted to 5.1 with 14% headroom.
+        #
+        # 5e-2 still has teeth for what this line is actually checking, which is the *frame and
+        # component order* of the angular velocity round-trip. The written value is
+        # (0.4, 0.5, -0.6) rad/s, so a swapped axis, a sign flip, or a body-vs-world frame error
+        # produces an error of order 1 rad/s -- roughly 20x this bound, not near it.
+        LIN_ATOL, ANG_ATOL = 3e-2, 5e-2
         vel_back = sim.get_actor_states(names, env_ids)
         # Frame check: x/y conserved; z fell under gravity (bounded by g*dt*steps, sign negative).
         max_z_drop = 9.81 * float(sim.sim_dt) * REFRESH_STEPS + 2e-2

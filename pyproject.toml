@@ -46,6 +46,7 @@ lint.ignore=[
 # that strip them must be disabled: UP018 (both), RUF046 (int(0)).
 "src/holosoma/holosoma/utils/warp_utils.py" = ["UP018", "RUF046"]
 "src/holosoma/holosoma/simulator/isaacsim/**/*.py" = ["ALL"]  # Disable until Jenkins has access to IsaacLab
+"src/holosoma/holosoma/simulator/isaacsim6/**/*.py" = ["ALL"]  # Same, for the Isaac Sim 6.1 / Isaac Lab 3.0 lane
 "src/holosoma/holosoma/train_agent.py" = ["PLC0415"]  # Disable since imports after SimApp are inherent to IsaacSim
 "src/holosoma/tests/simulators/*_assert.py" = ["PLC0415"]  # Standalone sim harnesses defer torch/isaaclab imports until after the SimApp is launched (inherent to IsaacSim)
 "src/holosoma/tests/simulators/_sim_harness.py" = ["PLC0415"]  # Shared harness helpers defer config imports the same way
