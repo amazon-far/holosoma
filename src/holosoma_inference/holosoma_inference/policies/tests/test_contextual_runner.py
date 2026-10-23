@@ -1,121 +1,147 @@
 """Unit tests for ``NativeContextualRunner``'s per-tick depth input and engage gate.
 
-Constructed with ``object.__new__`` because a real instance builds an SDK interface; these cover
-the two methods the contextual policy adds, not the transport around them.
+Drives a real native engine built from the redistributable contextual graph, with the injected
+interface/input doubles the other runner tests use, so the assertions are on engine state rather
+than on recorded calls.
 """
 
-import time
-from types import SimpleNamespace
+import runpy
+from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
+import pytest
 
+import holosoma_inference as inference
+from holosoma_inference.config.config_types.contextual import ContextualConfig
+from holosoma_inference.config.config_types.observation import ObservationConfig
+from holosoma_inference.config.config_types.robot import RobotConfig
 from holosoma_inference.depth import DepthDelay
 from holosoma_inference.policies.native_runner import NativeContextualRunner
 
-SHAPE = (58, 87)
+# The generated graph takes depth_image [-1, 2, 2, 3]: history 2, then 2x3 frames.
+SHAPE = (2, 3)
+# Its climb head is ReduceMean(depth_image), and the kernel enters climb at >= 0.1.
+CLIMB = np.ones(SHAPE, dtype=np.float32)
+FLAT = np.zeros(SHAPE, dtype=np.float32)
 
 
-class _StubNative:
-    def __init__(self):
-        self.inputs = []
-        self.commands = []
+class _Interface:
+    kp_level = kd_level = 1.0
 
-    def step_contextual(self, state, inputs, tick_ms=0):
-        self.inputs.append(inputs)
-        return "command"
+    def get_low_state(self):
+        state = np.zeros((1, 19))
+        state[0, 3] = 1
+        return state
 
-    def command(self, name):
-        self.commands.append(name)
-
-
-class _StubLogger:
-    def __init__(self):
-        self.messages = []
-
-    def info(self, message, *args):
-        self.messages.append(message)
-
-    warning = info
+    def send_low_command(self, *args, **kwargs):
+        self.sent = kwargs
 
 
-def _runner(depth):
-    runner = object.__new__(NativeContextualRunner)
-    runner.depth = depth
-    runner._monotonic_base = time.monotonic()
-    runner._synthetic_stamp = 0.0
-    runner._start_pending = False
-    runner.native = _StubNative()
-    runner.logger = _StubLogger()
-    runner._clock = None
-    runner.config = SimpleNamespace(task=SimpleNamespace(rl_rate=50.0))
-    return runner
+class _Input:
+    def poll_velocity(self):
+        return None
+
+    def poll_commands(self):
+        return []
 
 
-def _filled(latency_s=0.3):
-    delay = DepthDelay(latency_s, shape=SHAPE)
-    for tick in range(20):
-        delay.push(np.full(SHAPE, tick, dtype=np.float32), tick / 30)
-    return delay
+def _config(tmp_path):
+    generator = Path(__file__).parents[3] / "holosoma_cpp/tests/gen_contextual_models.py"
+    path = tmp_path / "contextual.onnx"
+    runpy.run_path(str(generator))["write_model"](path)
+    base = inference.get_config("g1-29dof-loco")
+    robot = RobotConfig(
+        robot_type="test",
+        robot="test",
+        num_joints=3,
+        num_motors=3,
+        dof_names=("hip", "knee", "ankle"),
+        dof_names_upper_body=(),
+        dof_names_lower_body=("hip", "knee", "ankle"),
+        default_dof_angles=(0.1, 0.2, 0.3),
+        default_motor_angles=(0.1, 0.2, 0.3),
+        motor2joint=(0, 1, 2),
+        joint2motor=(0, 1, 2),
+    )
+    return replace(
+        base,
+        robot=robot,
+        observation=ObservationConfig({"actor_obs": []}, {}, {}, {}),
+        task=replace(base.task, model_path=str(path), use_phase=False),
+        contextual=ContextualConfig(depth_height=SHAPE[0], depth_width=SHAPE[1]),
+        secondary=None,
+    )
 
 
-def test_step_passes_the_delayed_frame_flattened():
-    runner = _runner(_filled())
-    assert runner._step_native(np.zeros(71)) == "command"
-    (inputs,) = runner.native.inputs
-    assert len(inputs.depth) == SHAPE[0] * SHAPE[1]
-    # Frame 10 is the delayed one at 30 Hz with 0.3 s of latency.
-    assert inputs.depth[0] == 10.0
+def _runner(tmp_path, latency_s=0.0):
+    inputs = _Input()
+    return NativeContextualRunner(
+        _config(tmp_path),
+        depth=DepthDelay(latency_s, shape=SHAPE),
+        interface=_Interface(),
+        velocity_input=inputs,
+        command_provider=inputs,
+    )
 
 
-def test_step_supplies_an_input_even_with_no_frame():
-    """The kernel throws without a ContextualInput, so one must go in regardless of depth."""
-    runner = _runner(DepthDelay(0.3, shape=SHAPE))
-    runner._step_native(np.zeros(71))
-    (inputs,) = runner.native.inputs
-    assert inputs.depth is None
+def test_depth_reaches_the_graph(tmp_path):
+    """The graph's climb head is a mean over depth, so the frame must move the command column.
+
+    Driven forward first: from stand, ``StandBlocked`` stops the climb head having any effect, so
+    a stand-only comparison would pass with depth going nowhere.
+    """
+    columns = {}
+    for name, frame in (("flat", FLAT), ("climb", CLIMB)):
+        runner = _runner(tmp_path)
+        runner._handle_start_policy()
+        runner.native.velocity(0.5, 0.0, 0.0)
+        for _ in range(2):
+            runner.set_depth(frame)
+            runner._step_native(runner.interface.get_low_state())
+        columns[name] = int(np.argmax(np.asarray(runner.native.last_observation)[-15:]))
+    assert columns["flat"] != columns["climb"], columns
+    assert columns["climb"] == 14, columns
 
 
-def test_monotonic_time_is_finite_and_nonnegative():
-    """set_input rejects anything else."""
-    runner = _runner(_filled())
-    runner._step_native(np.zeros(71))
-    elapsed = runner.native.inputs[0].monotonic_time
-    assert np.isfinite(elapsed) and elapsed >= 0
+def test_a_missing_frame_still_supplies_an_input(tmp_path):
+    """The kernel raises on a tick with no ContextualInput, so one must go in regardless."""
+    runner = _runner(tmp_path)
+    command = runner._step_native(runner.interface.get_low_state())
+    assert np.isfinite(np.asarray(command.q, float)).all()
 
 
-def test_set_depth_without_a_stamp_advances_at_the_policy_rate():
-    """An in-process caller repeating one frame every tick still fills the buffer."""
-    runner = _runner(DepthDelay(0.2, shape=SHAPE))
-    frame = np.ones(SHAPE, dtype=np.float32)
-    # Stamps start one tick in, so the span from the oldest frame reaches 0.2 s on the 11th push.
-    for _ in range(10):
-        assert runner.set_depth(frame)
-    assert not runner.depth.ready()
-    runner.set_depth(frame)
-    assert runner.depth.ready()
-
-
-def test_set_depth_honours_a_publisher_stamp():
-    runner = _runner(DepthDelay(0.0, shape=SHAPE))
-    assert runner.set_depth(np.ones(SHAPE, dtype=np.float32), stamp_s=12.5)
-    assert not runner.set_depth(np.ones(SHAPE, dtype=np.float32), stamp_s=12.5)
-
-
-def test_engage_is_deferred_until_the_buffer_fills_then_completes():
+def test_engage_is_deferred_until_the_buffer_fills_then_completes(tmp_path):
     """Start arrives before the first frame, so it must be held and retried, not dropped."""
-    runner = _runner(DepthDelay(0.2, shape=SHAPE))
-    runner._state_ready = True
-    runner.interface = SimpleNamespace(get_low_state=lambda: np.zeros((1, 71)))
-    runner.native.set_state = lambda *_, **__: None
-
+    runner = _runner(tmp_path, latency_s=0.2)
     runner._handle_start_policy()
     assert runner._start_pending
-    assert runner.native.commands == []
+    assert not runner.use_policy_action
 
-    frame = np.ones(SHAPE, dtype=np.float32)
+    # Stamps start one tick in, so the span from the oldest frame reaches 0.2 s on the 11th push.
     for _ in range(10):
-        runner.set_depth(frame)
-    assert runner.native.commands == []
-    runner.set_depth(frame)
-    assert runner.native.commands == ["START"]
+        assert runner.set_depth(FLAT)
+    assert not runner.use_policy_action
+    runner.set_depth(FLAT)
+    assert runner.use_policy_action
     assert not runner._start_pending
+
+
+def test_zero_latency_engages_on_the_first_frame(tmp_path):
+    runner = _runner(tmp_path)
+    runner._handle_start_policy()
+    assert not runner.use_policy_action
+    runner.set_depth(FLAT)
+    assert runner.use_policy_action
+
+
+def test_set_depth_honours_a_publisher_stamp(tmp_path):
+    runner = _runner(tmp_path)
+    assert runner.set_depth(FLAT, stamp_s=12.5)
+    assert not runner.set_depth(FLAT, stamp_s=12.5)
+
+
+def test_set_depth_rejects_a_wrong_shape(tmp_path):
+    runner = _runner(tmp_path)
+    with pytest.raises(ValueError, match="expected depth"):
+        runner.set_depth(np.zeros((4, 4), dtype=np.float32))
