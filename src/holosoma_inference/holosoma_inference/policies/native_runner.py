@@ -8,7 +8,6 @@ import time
 import numpy as np
 
 from holosoma_inference import _native
-from holosoma_inference.depth import DepthDelay
 from holosoma_inference.inputs.api.commands import StateCommand
 from holosoma_inference.native import NativePolicy
 from holosoma_inference.policies.transport import RunnerTransport
@@ -324,47 +323,45 @@ class NativeWbtRunner(NativeRunnerPolicy):
 class NativeContextualRunner(NativeRunnerPolicy):
     """Depth-conditioned locomotion; the native engine needs one ContextualInput per tick.
 
-    Callers push frames with ``set_depth`` from whatever transport they own.
-
-    ``depth_latency_s`` adds delay on top of whatever the transport already carries, so it stays
-    zero on hardware: a real depth pipeline is already about as stale as training modelled, and
-    adding to it doubles the staleness. Simulated depth is instantaneous, so sim harnesses pass
-    the emulated pipeline latency here instead.
+    Callers push frames with ``set_depth`` from whatever transport they own, and the freshest one
+    is what the policy gets. Nothing here delays depth: a real pipeline is already about as stale
+    as training modelled it, so adding delay on a robot would double the staleness. Simulated
+    depth is instantaneous, so emulating that latency is the sim harness's job and it should delay
+    frames before pushing them.
     """
 
-    def __init__(self, config, *, depth=None, depth_latency_s=0.0, **kwargs):
-        self.depth = depth if depth is not None else DepthDelay(depth_latency_s)
+    def __init__(self, config, **kwargs):
+        self._frame = None
+        self._frame_stamp = None
         self._monotonic_base = time.monotonic()
-        self._synthetic_stamp = 0.0
         super().__init__(config, **kwargs)
-        # Logged every run: on hardware this should read 0, and anything else means the transport's
-        # own latency is being added to.
-        self.logger.info("Contextual depth: {} s of added delay", self.depth.latency_s)
 
     def set_depth(self, frame, stamp_s=None):
-        """Push one depth frame; callers with no publisher stamp get policy-tick stamps instead."""
-        if stamp_s is None:
-            self._synthetic_stamp += 1.0 / self.config.task.rl_rate
-            stamp_s = self._synthetic_stamp
-        accepted = self.depth.push(frame, stamp_s)
-        if accepted and self._start_pending and self.depth.ready():
+        """Store the newest depth frame; returns False for a repeated or out-of-order stamp."""
+        frame = np.asarray(frame, dtype=np.float32)
+        if not np.isfinite(frame).all():
+            raise ValueError("depth frame is not finite; the producer must clip and fill")
+        if stamp_s is not None and self._frame_stamp is not None and stamp_s <= self._frame_stamp:
+            return False
+        self._frame, self._frame_stamp = frame, stamp_s
+        if self._start_pending:
             self._start_pending = False
             self._handle_start_policy()
-        return accepted
+        return True
 
     def _step_native(self, state):
         inputs = _native.ContextualInput()
-        frame = self.depth.latest()
-        if frame is not None:
-            inputs.depth = frame.reshape(-1)
+        if self._frame is not None:
+            inputs.depth = self._frame.reshape(-1)
         inputs.monotonic_time = time.monotonic() - self._monotonic_base
         return self.native.step_contextual(state, inputs, tick_ms=self._tick_ms())
 
     def _handle_start_policy(self):
-        # Deferred, not refused: start arrives before the first frame is pushed, so refusing here
-        # would drop the engage and leave the policy idle with nothing to retry it.
-        if not self.depth.ready():
+        # Deferred, not refused: start arrives before the first frame does, so refusing here would
+        # drop the engage with nothing to retry it. A zero frame reads as ground at the clip
+        # midpoint rather than as missing data, which is not something to engage on.
+        if self._frame is None:
             self._start_pending = True
-            self.logger.info("Deferring start until a depth frame {}s old arrives", self.depth.latency_s)
+            self.logger.info("Deferring start until the first depth frame arrives")
             return
         super()._handle_start_policy()

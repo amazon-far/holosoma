@@ -16,7 +16,6 @@ import holosoma_inference as inference
 from holosoma_inference.config.config_types.contextual import ContextualConfig
 from holosoma_inference.config.config_types.observation import ObservationConfig
 from holosoma_inference.config.config_types.robot import RobotConfig
-from holosoma_inference.depth import DepthDelay
 from holosoma_inference.policies.native_runner import NativeContextualRunner
 
 # The generated graph takes depth_image [-1, 2, 2, 3]: history 2, then 2x3 frames.
@@ -74,14 +73,10 @@ def _config(tmp_path):
     )
 
 
-def _runner(tmp_path, latency_s=0.0):
+def _runner(tmp_path):
     inputs = _Input()
     return NativeContextualRunner(
-        _config(tmp_path),
-        depth=DepthDelay(latency_s, shape=SHAPE),
-        interface=_Interface(),
-        velocity_input=inputs,
-        command_provider=inputs,
+        _config(tmp_path), interface=_Interface(), velocity_input=inputs, command_provider=inputs
     )
 
 
@@ -111,28 +106,15 @@ def test_a_missing_frame_still_supplies_an_input(tmp_path):
     assert np.isfinite(np.asarray(command.q, float)).all()
 
 
-def test_engage_is_deferred_until_the_buffer_fills_then_completes(tmp_path):
-    """Start arrives before the first frame, so it must be held and retried, not dropped."""
-    runner = _runner(tmp_path, latency_s=0.2)
+def test_engage_is_deferred_until_the_first_frame(tmp_path):
+    """Start arrives before any frame, so it must be held and retried, not dropped."""
+    runner = _runner(tmp_path)
     runner._handle_start_policy()
     assert runner._start_pending
-    assert not runner.use_policy_action
-
-    # Stamps start one tick in, so the span from the oldest frame reaches 0.2 s on the 11th push.
-    for _ in range(10):
-        assert runner.set_depth(FLAT)
     assert not runner.use_policy_action
     runner.set_depth(FLAT)
     assert runner.use_policy_action
     assert not runner._start_pending
-
-
-def test_zero_latency_engages_on_the_first_frame(tmp_path):
-    runner = _runner(tmp_path)
-    runner._handle_start_policy()
-    assert not runner.use_policy_action
-    runner.set_depth(FLAT)
-    assert runner.use_policy_action
 
 
 def test_set_depth_honours_a_publisher_stamp(tmp_path):
@@ -141,7 +123,9 @@ def test_set_depth_honours_a_publisher_stamp(tmp_path):
     assert not runner.set_depth(FLAT, stamp_s=12.5)
 
 
-def test_set_depth_rejects_a_wrong_shape(tmp_path):
+def test_set_depth_rejects_a_non_finite_frame(tmp_path):
     runner = _runner(tmp_path)
-    with pytest.raises(ValueError, match="expected depth"):
-        runner.set_depth(np.zeros((4, 4), dtype=np.float32))
+    bad = FLAT.copy()
+    bad[0, 0] = np.nan
+    with pytest.raises(ValueError, match="must clip and fill"):
+        runner.set_depth(bad)

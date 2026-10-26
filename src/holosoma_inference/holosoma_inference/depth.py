@@ -1,4 +1,8 @@
-"""Depth delivery for the contextual policy: a stamp-keyed delay buffer."""
+"""Stamp-keyed depth delay, for simulation only.
+
+Deployment never delays depth -- see NativeContextualRunner. This exists so a sim harness can
+emulate the pipeline latency that real hardware supplies on its own.
+"""
 
 from __future__ import annotations
 
