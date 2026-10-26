@@ -27,8 +27,9 @@ def preprocess(depth_m, near_m: float = NEAR_M, far_m: float = FAR_M) -> np.ndar
         raise ValueError(f"expected a 2-D depth frame, got shape {frame.shape}")
     if not far_m > near_m:
         raise ValueError(f"far_m must exceed near_m, got {near_m} and {far_m}")
-    # The SDK marks "no return" as non-finite; those pixels read as far, not as holes.
-    frame = np.nan_to_num(frame, nan=far_m, posinf=far_m, neginf=near_m)
+    # Stereo leaves NaN where only one eye sees the pixel, which is beside something close, so NaN
+    # reads as near. +inf is beyond the SDK's maximum range and -inf inside its minimum.
+    frame = np.nan_to_num(frame, nan=near_m, posinf=far_m, neginf=near_m)
     # Clip before resizing as well as after, so out-of-range pixels cannot bleed into their
     # neighbours through the interpolation kernel.
     frame = np.clip(frame, near_m, far_m)

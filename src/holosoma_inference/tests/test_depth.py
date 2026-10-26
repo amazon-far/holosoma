@@ -39,14 +39,15 @@ def test_clips_beyond_the_trained_range():
     assert out.max() <= +0.5 + 1e-6
 
 
-def test_non_finite_pixels_read_as_far_not_as_holes():
-    """The SDK emits NaN/inf for no-return; the policy never saw holes."""
+def test_non_finite_pixels_read_as_the_nearest_plausible_depth():
+    """Stereo NaN borders near occluders, so it reads as near; +inf is past max range, so far."""
     frame = np.full((HEIGHT, WIDTH), 1.0, np.float32)
-    frame[0, 0], frame[0, 1] = np.nan, np.inf
+    frame[0, 0], frame[0, 1], frame[0, 2] = np.nan, np.inf, -np.inf
     out = preprocess(frame)
     assert np.isfinite(out).all()
-    assert out[0, 0] == pytest.approx(+0.5)
+    assert out[0, 0] == pytest.approx(-0.5)
     assert out[0, 1] == pytest.approx(+0.5)
+    assert out[0, 2] == pytest.approx(-0.5)
 
 
 def test_preserves_the_depth_gradient_direction():
