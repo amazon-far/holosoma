@@ -395,12 +395,12 @@ class BaseTask:
         """Reset simulator DOF/root states for the specified environments.
 
         The default restores the state captured after simulator preparation, or the
-        ``root_states``/``dof_states`` in ``target_states`` when given. Subclasses may
-        override this to add task-specific state sampling.
+        ``root_states``/``dof_states`` in ``target_states`` when given, one row per entry of
+        ``env_ids``. Subclasses may override this to add task-specific state sampling.
         """
         if target_states is None:
-            root_states = self._initial_robot_root_states
-            dof_states = self._initial_robot_dof_states
+            root_states = self._initial_robot_root_states[env_ids]
+            dof_states = self._initial_robot_dof_states[env_ids]
         else:
             root_states = target_states["root_states"]
             dof_states = target_states["dof_states"]
