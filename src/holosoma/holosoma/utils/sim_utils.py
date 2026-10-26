@@ -7,25 +7,20 @@ Provider launch, signal handling, and dependency-ordered teardown used by
 from __future__ import annotations
 
 import argparse
-import functools
 import os
 import signal
 import sys
 import threading
 import traceback
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager, suppress
-from typing import Any, TypeVar
+from typing import Any
 
 from loguru import logger
-from typing_extensions import ParamSpec
 
 from holosoma.config_types.env import EnvConfig
 from holosoma.config_types.sensor import CameraSensorConfig
 from holosoma.utils.simulator_config import SimulatorType, get_simulator_type, set_simulator_type
-
-P = ParamSpec("P")
-R = TypeVar("R")
 
 
 @contextmanager
@@ -45,17 +40,6 @@ def exit_on_sigterm() -> Iterator[None]:
         yield
     finally:
         signal.signal(signal.SIGTERM, previous_handler)
-
-
-def graceful_simulation_signals(func: Callable[P, R]) -> Callable[P, R]:
-    """Install simulation signal semantics around one public entrypoint."""
-
-    @functools.wraps(func)
-    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-        with exit_on_sigterm():
-            return func(*args, **kwargs)
-
-    return wrapper
 
 
 def format_simulation_performance(
