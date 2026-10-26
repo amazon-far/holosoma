@@ -5,10 +5,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from holosoma import policy_task as policy_task_module
+from holosoma.envs import policy_task as policy_task_module
 from holosoma.envs.base_task import base_task as base_task_module
 from holosoma.envs.base_task.base_task import BaseTask
-from holosoma.policy_task import PolicyTask
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.simulator.base_simulator.hooks import HookRegistry
 from holosoma.utils.safe_torch_import import torch
 

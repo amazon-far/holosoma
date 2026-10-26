@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import torch
 
-from holosoma.policy_task import PolicyTask
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.utils.simulator_config import SimulatorType
 
 if TYPE_CHECKING:

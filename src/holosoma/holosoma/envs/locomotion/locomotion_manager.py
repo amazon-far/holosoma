@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
-from holosoma.policy_task import PolicyTask
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.torch_utils import torch_rand_float
 
