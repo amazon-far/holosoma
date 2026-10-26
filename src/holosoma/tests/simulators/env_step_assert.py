@@ -16,7 +16,7 @@ import argparse
 import dataclasses
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 # Running this file directly puts tests/simulators first, where the isaacsim test package would
 # shadow NVIDIA's isaacsim package.
@@ -25,12 +25,10 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 
 from holosoma.config_values import experiment
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
+from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
 from holosoma.utils.common import seeding
 from holosoma.utils.safe_torch_import import torch
 from tests.simulators._sim_harness import run_and_hard_exit
-
-if TYPE_CHECKING:
-    from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
 
 NUM_ENVS = 16
 NUM_STEPS = 100

@@ -12,15 +12,13 @@ import sys
 import time
 from os import getenv
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_values.experiment import get_annotated_experiment_config
+from holosoma.policy_task import PolicyTask
 from holosoma.train_agent import train_on_task
 from holosoma.utils.config_registry import parse_config
-
-if TYPE_CHECKING:
-    from holosoma.policy_task import PolicyTask
 
 REPO_ROOT = Path(__file__).parent.parent.parent.absolute()
 
