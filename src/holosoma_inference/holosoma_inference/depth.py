@@ -23,12 +23,20 @@ DEPTH_TOPIC = "depth/depth_registered"
 def preprocess(depth_m, near_m: float = NEAR_M, far_m: float = FAR_M) -> np.ndarray:
     """Resize a metric depth frame to 58x87 and normalise it to [-0.5, +0.5]."""
     frame = np.asarray(depth_m, dtype=np.float32)
+    if frame.ndim == 3 and frame.shape[-1] == 1:
+        frame = frame[..., 0]
     if frame.ndim != 2:
         raise ValueError(f"expected a 2-D depth frame, got shape {frame.shape}")
     if not far_m > near_m:
         raise ValueError(f"far_m must exceed near_m, got {near_m} and {far_m}")
-    # The SDK marks "no return" as non-finite; those pixels read as far, not as holes.
-    frame = np.nan_to_num(frame, nan=far_m, posinf=far_m, neginf=near_m)
+    frame = frame.astype(np.float32, copy=True)
+    # Invalid pixels mean "no return", which is far, not near. The ZED reports them as non-finite
+    # *and* as zero or negative, and clipping a zero would read as an obstacle at the near plane.
+    # Training never saw either: a missed ray is written as 1000 m and clamps to far.
+    frame[np.isneginf(frame)] = near_m
+    frame[np.isposinf(frame)] = far_m
+    frame[np.isnan(frame)] = far_m
+    frame[frame <= 0.0] = far_m
     # Clip before resizing as well as after, so out-of-range pixels cannot bleed into their
     # neighbours through the interpolation kernel.
     frame = np.clip(frame, near_m, far_m)

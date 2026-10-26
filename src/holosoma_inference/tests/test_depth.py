@@ -96,3 +96,17 @@ def test_rejects_a_non_float_encoding():
 def test_rejects_padded_rows():
     with pytest.raises(ValueError, match="unpadded rows"):
         frame_from_image(_Image(np.ones((4, 4), np.float32), step=64))
+
+
+def test_zero_and_negative_read_as_far_not_near():
+    """The ZED reports invalid pixels as 0 as well as NaN; clipping would read 0 as an obstacle."""
+    frame = np.full((HEIGHT, WIDTH), 1.0, np.float32)
+    frame[0, 0], frame[0, 1] = 0.0, -1.0
+    out = preprocess(frame)
+    assert out[0, 0] == pytest.approx(+0.5)
+    assert out[0, 1] == pytest.approx(+0.5)
+
+
+def test_accepts_a_trailing_singleton_channel():
+    out = preprocess(np.full((63, 112, 1), 1.0, np.float32))
+    assert out.shape == (HEIGHT, WIDTH)
