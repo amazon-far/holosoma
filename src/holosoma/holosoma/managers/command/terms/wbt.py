@@ -792,7 +792,7 @@ class MotionCommand(CommandTermBase):
             self._env.simulator.set_actor_states([self.object_name], env_ids, object_states)
 
     def step(self) -> None:
-        """Called from the task's ``_step_managers`` once per control frame: after rewards and resets, before observations."""
+        """Advance the clip once per control frame, after rewards and resets and before observations."""
         # 0. update time steps, all motion joint/body poses are updated automatically with the time steps.
         advance_mask = torch.ones_like(self.time_steps, dtype=torch.bool)
 
