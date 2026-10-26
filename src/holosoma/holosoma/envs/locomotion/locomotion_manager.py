@@ -235,7 +235,6 @@ class LeggedRobotLocomotionManager(PolicyTask):
         """Random pushes the robots. Emulates an impulse by setting a randomized base velocity."""
         if len(env_ids) == 0:
             return
-        self.need_to_refresh_envs[env_ids] = True
         max_vel_tensor = self._max_push_vel
         if self.randomization_manager is not None:
             state = cast("PushRandomizerState | None", self.randomization_manager.get_state("push_randomizer_state"))
