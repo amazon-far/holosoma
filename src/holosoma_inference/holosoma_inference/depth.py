@@ -8,11 +8,18 @@ import numpy as np
 
 
 class DepthDelay:
-    """Hands back a depth frame delayed by a fixed duration, keyed on publisher stamps.
+    """Holds depth frames and optionally hands back an older one, keyed on publisher stamps.
 
-    The contextual policy trained with latency on the depth image, so the freshest frame is the
-    wrong one to feed it. Delay is measured against the newest stamp received rather than a local
-    clock, so no clock sync with the publisher is needed.
+    Training models the latency of a real depth pipeline, and on hardware that latency is already
+    there: frames off the camera arrive about that stale by the time the policy sees them, so the
+    freshest frame available is the right one and the delay here must be zero. Adding a delay on
+    hardware doubles the staleness.
+
+    The delay exists for simulation, where rendered or analytic depth is instantaneous and the
+    pipeline latency has to be emulated to match what the policy was trained against.
+
+    Delay is measured against the newest stamp received rather than a local clock, so no clock
+    sync with the publisher is needed.
     """
 
     def __init__(self, latency_s: float, shape: tuple[int, int] = (58, 87)):

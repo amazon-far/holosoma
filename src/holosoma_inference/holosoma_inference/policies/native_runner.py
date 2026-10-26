@@ -324,23 +324,22 @@ class NativeWbtRunner(NativeRunnerPolicy):
 class NativeContextualRunner(NativeRunnerPolicy):
     """Depth-conditioned locomotion; the native engine needs one ContextualInput per tick.
 
-    Callers push frames with ``set_depth`` from whatever transport they own. Engage is refused
-    until a frame is old enough to match the latency the policy trained with, rather than starting
-    on a frame the policy never saw.
+    Callers push frames with ``set_depth`` from whatever transport they own.
+
+    ``depth_latency_s`` adds delay on top of whatever the transport already carries, so it stays
+    zero on hardware: a real depth pipeline is already about as stale as training modelled, and
+    adding to it doubles the staleness. Simulated depth is instantaneous, so sim harnesses pass
+    the emulated pipeline latency here instead.
     """
 
-    # Checkpoints in this family expect a delayed depth observation, not the freshest frame. The
-    # midpoint of the range they are trained against; override per checkpoint. That range is
-    # resampled per step upstream, which this fixed delay does not reproduce.
-    TRAINED_DEPTH_LATENCY_S = 0.19
-
-    def __init__(self, config, *, depth=None, depth_latency_s=TRAINED_DEPTH_LATENCY_S, **kwargs):
+    def __init__(self, config, *, depth=None, depth_latency_s=0.0, **kwargs):
         self.depth = depth if depth is not None else DepthDelay(depth_latency_s)
         self._monotonic_base = time.monotonic()
         self._synthetic_stamp = 0.0
         super().__init__(config, **kwargs)
-        # Logged every run: a silent zero here is a train/deploy mismatch, not a default.
-        self.logger.info("Contextual depth latency: {} s", self.depth.latency_s)
+        # Logged every run: on hardware this should read 0, and anything else means the transport's
+        # own latency is being added to.
+        self.logger.info("Contextual depth: {} s of added delay", self.depth.latency_s)
 
     def set_depth(self, frame, stamp_s=None):
         """Push one depth frame; callers with no publisher stamp get policy-tick stamps instead."""
