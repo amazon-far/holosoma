@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from pydantic.dataclasses import dataclass
 
 from holosoma.config_types.action import ActionManagerCfg
@@ -14,14 +12,12 @@ from holosoma.config_types.plugin import PluginConfig
 from holosoma.config_types.randomization import RandomizationManagerCfg
 from holosoma.config_types.reward import RewardManagerCfg
 from holosoma.config_types.robot import RobotConfig
+from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.sensor import CameraSensorConfig, SensorConfig, validate_camera_dict
 from holosoma.config_types.simulator import SimulatorConfig
 from holosoma.config_types.termination import TerminationManagerCfg
 from holosoma.config_types.terrain import TerrainManagerCfg
-
-if TYPE_CHECKING:
-    from holosoma.config_types.run_sim import RunSimConfig
 
 
 @dataclass(frozen=True)

@@ -15,16 +15,14 @@ import threading
 import traceback
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import Any, TypeVar
 
 from loguru import logger
 from typing_extensions import ParamSpec
 
+from holosoma.config_types.env import EnvConfig
 from holosoma.config_types.sensor import CameraSensorConfig
 from holosoma.utils.simulator_config import SimulatorType, get_simulator_type, set_simulator_type
-
-if TYPE_CHECKING:
-    from holosoma.config_types.env import EnvConfig
 
 P = ParamSpec("P")
 R = TypeVar("R")

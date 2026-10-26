@@ -9,21 +9,19 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import numpy as np
 import pytest
 import torch
 
+from holosoma.config_types.env import EnvConfig
 from holosoma.config_types.plugin import MotionPlaybackPluginConfig
 from holosoma.envs.simulation_task import SimulationTask
+from holosoma.managers.randomization import RandomizationManager
+from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.shared.scene_types import EnvOriginsScene
-
-if TYPE_CHECKING:
-    from holosoma.config_types.env import EnvConfig
-    from holosoma.managers.randomization import RandomizationManager
-    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 
 FPS = 200
 DECIMATION = 4
