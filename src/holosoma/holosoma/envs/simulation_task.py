@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 
+import torch
 from loguru import logger
 
 from holosoma.envs.base_task.base_task import BaseTask
@@ -18,6 +19,15 @@ class SimulationTask(BaseTask):
     It uses the ordinary task lifecycle, including the default robot reset, reset events,
     and setup/reset/step randomization terms, but owns no policy managers.
     """
+
+    def _get_env_origins(self) -> torch.Tensor:
+        """Place a single environment at the world origin, so its poses are world coordinates.
+
+        Several environments keep the terrain's origins so they do not overlap.
+        """
+        if self.num_envs == 1:
+            return torch.zeros(1, 3, device=self.device)
+        return super()._get_env_origins()
 
     def run(self) -> None:
         """Start episodes and advance control frames until the task requests shutdown."""
