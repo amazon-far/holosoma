@@ -424,7 +424,7 @@ def main() -> int:
     actual_env_origins = sim.env_origins
     sim.prepare_sim()
 
-    # Mirror DirectSimulation: open the interactive viewer only when headful. When headless
+    # Mirror BaseTask: open the interactive viewer only when headful. When headless
     # this is skipped, so render() below must tolerate a None viewer.
     if not headless:
         sim.setup_viewer()

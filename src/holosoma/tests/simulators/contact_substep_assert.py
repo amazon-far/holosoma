@@ -50,8 +50,7 @@ import sys
 if sys.path and sys.path[0].endswith("tests/simulators"):
     sys.path.pop(0)
 
-from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config
+from tests.simulators._sim_harness import build_run_sim_config, launch_simulator
 
 SETTLE_CONTROL_STEPS = 60
 ROBOT = "g1-29dof"
@@ -69,8 +68,7 @@ def _build(simulator: str, num_envs: int):
         training=dataclasses.replace(config.training, num_envs=num_envs, headless=True),
     )
 
-    env, device, _ = setup_simulation_environment(config, device=config.device)
-    sim = env.sim
+    sim, device, _ = launch_simulator(config, device=config.device)
     sim.set_headless(True)
     sim.setup()
     sim.setup_terrain()
