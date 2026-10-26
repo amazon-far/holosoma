@@ -802,7 +802,8 @@ class IsaacSim(BaseSimulator):
         self._state_version += 1
 
     def sync_sim_state(self) -> None:
-        """No-op: joint state is re-read every physics step and root state is read lazily."""
+        """No-op: dynamics steps re-read joint state, kinematic-playback writers update it in place,
+        and root state is read lazily."""
 
     def synchronize_after_reset(self) -> None:
         """Update link kinematics for reset writes, then refresh, without advancing physics or sensors.
