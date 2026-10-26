@@ -244,6 +244,10 @@ class DistillationPPO(DistillationBase):
 
                 obs_dict = next_obs
 
+                # Multi-GPU ranks finish the rollout so they all reach the shared check in learn().
+                if self.env.shutdown_requested and not self.is_multi_gpu:
+                    return obs_dict
+
             # GAE / returns.
             last_values = self.policy.evaluate(self._extract_obs(obs_dict)).detach().to(self.device)
             returns, advantages = self._compute_returns_and_advantages(

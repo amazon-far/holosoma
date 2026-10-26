@@ -117,6 +117,10 @@ class Distillation(DistillationBase):
                     self.logging_helper.update_episode_stats(rewards, dones, infos)
 
                 obs_dict = next_obs
+
+                # Multi-GPU ranks finish the rollout so they all reach the shared check in learn().
+                if self.env.shutdown_requested and not self.is_multi_gpu:
+                    return obs_dict
         return obs_dict
 
     # ------------------------------------------------------------ training step
