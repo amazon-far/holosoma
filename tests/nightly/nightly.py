@@ -12,11 +12,10 @@ import sys
 import time
 from os import getenv
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_values.experiment import get_annotated_experiment_config
-from holosoma.policy_task import PolicyTask
 from holosoma.train_agent import split_envs_across_ranks, train_on_task
 from holosoma.utils.config_registry import parse_config
 
@@ -302,7 +301,7 @@ def main():
     config = split_envs_across_ranks(config)
     with config.create_task() as env:
         # 1. Train
-        train_on_task(config, cast("PolicyTask", env))
+        train_on_task(config, env)
 
         # 2. Validate metrics (explicit, linear flow) - only on rank 0
         if os.environ.get("RANK", "0") == "0":
