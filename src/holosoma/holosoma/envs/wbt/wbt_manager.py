@@ -84,6 +84,13 @@ class WholeBodyTrackingManager(PolicyTask):
         motion_command.init_buffers()
         return super().reset_all()
 
+    def _finish_reset(self) -> dict[str, Any]:
+        # reset_all() does not step, so compute the targets init_buffers() cleared before the
+        # observations and the first termination check read them.
+        motion_command = cast("MotionCommand", self.command_manager.get_state("motion_command"))
+        motion_command.update_relative_body_targets()
+        return super()._finish_reset()
+
     def _reset_robot_states_callback(
         self, env_ids: torch.Tensor, target_states: Mapping[str, torch.Tensor] | None = None
     ) -> None:
