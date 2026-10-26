@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from loguru import logger
 
+from holosoma.config_types.env import EnvConfig
 from holosoma.utils.helpers import get_class
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.sim_utils import (
@@ -21,7 +22,6 @@ from holosoma.utils.sim_utils import (
 from holosoma.utils.simulator_config import SimulatorType, get_simulator_type
 
 if TYPE_CHECKING:
-    from holosoma.config_types.env import EnvConfig
     from holosoma.envs.base_task.base_task import BaseTask
 
 _TaskT = TypeVar("_TaskT", bound="BaseTask")

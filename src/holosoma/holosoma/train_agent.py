@@ -6,18 +6,16 @@ import os
 import sys
 import traceback
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypedDict, cast
+from typing import Any, TypedDict, cast
 
 from loguru import logger
 
 from holosoma.agents.distillation.checkpoint import infer_num_teachers_from_checkpoint
 from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.policy_task import PolicyTask
 from holosoma.utils.config_utils import CONFIG_NAME
 from holosoma.utils.eval_utils import load_checkpoint
 from holosoma.utils.helpers import get_class
-
-if TYPE_CHECKING:
-    from holosoma.policy_task import PolicyTask
 
 
 class MultGPUConfig(TypedDict):
