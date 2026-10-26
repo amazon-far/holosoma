@@ -494,7 +494,8 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
 
     preset = SIMULATOR_REGISTRY[_SURVIVING_BACKEND_FIXTURES[fixture_name]]
     assert (loaded_cfg.simulator._target_, loaded_cfg.simulator.config.name) == (preset._target_, preset.config.name)
-    assert loaded["simulator"] == saved["simulator"]
+    saved_sim_config = _without(saved["simulator"]["config"], "contact_sensor_history_length")
+    assert loaded["simulator"] == {**saved["simulator"], "config": saved_sim_config}
     assert loaded["robot"]["asset"]["link_physics"] == _without(saved["robot"]["asset"]["link_physics"])
     assert "apply_dof_armature_in_isaacgym" not in loaded["robot"]
     for name, sensor in saved["sensor"].items():

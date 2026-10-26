@@ -6,6 +6,18 @@ from typing import Any
 import torch
 
 
+def _swap_leg_phase_channels(phase: torch.Tensor) -> torch.Tensor:
+    """Exchange the two legs' gait-phase channels, the left-right mirror of the phase.
+
+    ``LocomotionGait`` allocates exactly two phase channels and the reward terms pair channel i
+    with foot i (``feet_heights[:, i]``, ``feet_indices[i]``), so mirroring left and right is
+    exchanging them -- no per-robot foot naming needed.
+    """
+    if phase.shape[-1] != 2:
+        raise ValueError(f"Gait phase must have one channel per leg (2), got {phase.shape[-1]}")
+    return phase.flip(-1)
+
+
 class SymmetryUtils:
     """Symmetry utilities for humanoid robots using configuration-driven approach.
 
@@ -439,36 +451,34 @@ class SymmetryUtils:
         return command_base_height
 
     def mirror_obs_sin_phase(self, sin_phase: torch.Tensor) -> torch.Tensor:
-        """Mirrors the sine phase for gait timing.
+        """Mirrors the sine of the gait phase.
 
         Parameters
         ----------
         sin_phase : torch.Tensor
-            Sine of gait phase with layout [sin(φ_left), sin(φ_right), ...].
+            Sine of gait phase with layout [sin(φ_leg0), sin(φ_leg1)].
 
         Returns
         -------
         torch.Tensor
-            Mirrored phase with first component negated: [-sin(φ_left), sin(φ_right), ...].
+            The legs' channels exchanged: [sin(φ_leg1), sin(φ_leg0)].
         """
-        sin_phase[..., 0] = -sin_phase[..., 0]
-        return sin_phase
+        return _swap_leg_phase_channels(sin_phase)
 
     def mirror_obs_cos_phase(self, cos_phase: torch.Tensor) -> torch.Tensor:
-        """Mirrors the cosine phase for gait timing.
+        """Mirrors the cosine of the gait phase.
 
         Parameters
         ----------
         cos_phase : torch.Tensor
-            Cosine of gait phase with layout [cos(φ_left), cos(φ_right), ...].
+            Cosine of gait phase with layout [cos(φ_leg0), cos(φ_leg1)].
 
         Returns
         -------
         torch.Tensor
-            Mirrored phase with first component negated: [-cos(φ_left), cos(φ_right), ...].
+            The legs' channels exchanged: [cos(φ_leg1), cos(φ_leg0)].
         """
-        cos_phase[..., 0] = -cos_phase[..., 0]
-        return cos_phase
+        return _swap_leg_phase_channels(cos_phase)
 
     def mirror_obs_dof_pos(self, dof_pos: torch.Tensor) -> torch.Tensor:
         """Mirrors the joint positions using joint mapping and sign flipping.
