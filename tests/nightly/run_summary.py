@@ -21,7 +21,6 @@ from os import getenv
 from typing import NamedTuple
 
 import wandb
-from slack_sdk import WebClient
 
 WANDB_ENTITY = getenv("WANDB_ENTITY", "amazon-far")
 SLACK_CHANNEL = getenv("SLACK_CHANNEL", "")
@@ -77,7 +76,8 @@ TREND_BETTER = "🟢"
 TREND_WORSE = "🔴"
 TREND_FLAT = "⚪"
 
-# Simulator tag values set by nightly.py (config.simulator.config.name). "isaacgym" is retained
+# Simulator tag values set by nightly.simulator_tag, which is not always a config name --
+# both MuJoCo backends report `mujoco`, and the GPU one is tagged `mjwarp`. "isaacgym" is retained
 # for ARCHIVED runs only -- the backend is retired; dropping it would make historical runs resolve
 # their exp_name to the literal tag instead of falling back to "unknown-sim".
 KNOWN_SIMULATORS = {"isaacgym", "isaacsim", "mujoco", "mjwarp"}
@@ -505,7 +505,9 @@ def format_trend_report() -> str | None:
     Cells are reported separately because the metric is not comparable across them.
     """
     blocks = [block for cell in TREND_CELLS if (block := _format_trend_block(cell))]
-    return "\n".join(blocks) if blocks else None
+    # Blank line between blocks: each ends with its own link, and a single newline puts the
+    # next cell's heading directly under it.
+    return "\n\n".join(blocks) if blocks else None
 
 
 def format_run_line(run: NightlyRun) -> str:
@@ -515,6 +517,11 @@ def format_run_line(run: NightlyRun) -> str:
 
 def post_summary_to_slack():
     """Posts summary of runs to slack channel."""
+    # Imported here rather than at module scope: slack-sdk is declared by this script's own
+    # dependencies and is not installed in the environment the unit tests run in, which
+    # imports this module for the pure reporting helpers.
+    from slack_sdk import WebClient
+
     if not SLACK_TOKEN or not SLACK_CHANNEL:
         raise ValueError("SLACK_BOT_TOKEN or SLACK_CHANNEL env var not set, can't post message to slack")
     slack_client = WebClient(token=SLACK_TOKEN)

@@ -38,15 +38,9 @@ jobs:
         # environments, and the classic backend is single-env.
         #
         # The halved terrain scale is required, not a tuning choice: src/holosoma/README.md
-        # documents it for MJWarp on mixed terrain, and without it training destabilises
-        # during the first rollout.
+        # documents it for MJWarp on mixed terrain.
         #
-        # G1 only. T1 on MJWarp does not train here and is left out rather than failing
-        # the nightly every night: PPO reaches a non-finite policy mean within its first
-        # rollouts and aborts, and FastSAC paces ~24x slower than the same algorithm on
-        # G1, far outside this job's timeout. Both reproduce with the terrain scale above
-        # and with the contact limit raised past what T1's own MJCF asks for, so neither
-        # is a configuration gap on this side. Tracked separately; MJWarp is beta.
+        # G1 only: T1 on MJWarp diverges under PPO and is far too slow under FastSAC.
         - experiment: g1-29dof
           simulator: mujoco
           sim_preset: mjwarp
