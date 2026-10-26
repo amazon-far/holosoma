@@ -733,7 +733,8 @@ class IsaacSim(BaseSimulator):
         """Body link linear velocities, computed on first read after each refresh.
 
         Isaac Lab's link-velocity path fetches body COMs from PhysX on every call, so tasks
-        that never read it do not pay for it.
+        that never read it do not pay for it. Like the other body tensors, read it only after
+        ``refresh_sim_tensors()``, not between substeps.
         """
         if self._rigid_body_vel_cache is None:
             # Match rigid_body_pos_w's link-frame origin. IsaacLab's legacy body_lin_vel_w alias is
