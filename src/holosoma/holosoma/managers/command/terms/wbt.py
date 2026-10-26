@@ -824,6 +824,18 @@ class MotionCommand(CommandTermBase):
             sim.synchronize_after_reset()
 
         # 1. update body_pos_relative_w and body_quat_relative_w
+        self.update_relative_body_targets()
+
+        ### 1.3 update the adaptive timesteps sampler (training only — eval episodes
+        ### must not decay/fold failure stats into the training sampler).
+        if self.motion_cfg.use_adaptive_timesteps_sampler and not self._env.is_evaluating:
+            self.adaptive_timesteps_sampler.update_bin_failed_count()
+
+    def update_relative_body_targets(self) -> None:
+        """Recompute the tracked bodies' target poses for the current motion frame and robot pose.
+
+        Does not advance the motion clip.
+        """
         # definition of body_pos/quat_relative_w:
         # If I take this motion data and adapt it to where my robot currently is
         # (accounting for position(x, y) offset and yaw difference of a reference body),
@@ -870,11 +882,6 @@ class MotionCommand(CommandTermBase):
             + delta_pos_w_height
             + quat_apply(delta_quat_w, self.body_pos_w - ref_pos_w_repeat, w_last=True)
         )
-
-        ### 1.3 update the adaptive timesteps sampler (training only — eval episodes
-        ### must not decay/fold failure stats into the training sampler).
-        if self.motion_cfg.use_adaptive_timesteps_sampler and not self._env.is_evaluating:
-            self.adaptive_timesteps_sampler.update_bin_failed_count()
 
     @property
     def command(self) -> torch.Tensor:
