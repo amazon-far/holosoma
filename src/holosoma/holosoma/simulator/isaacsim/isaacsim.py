@@ -810,7 +810,7 @@ class IsaacSim(BaseSimulator):
         """Update link kinematics for reset writes, then refresh, without advancing physics or sensors.
 
         Reset writes already reached PhysX. Unlike ``forward_kinematics``, this skips
-        ``scene.update``, which would advance sensor clocks and contact history with no time passing.
+        ``scene.update``, which would advance sensor clocks with no time passing.
         """
         self.sim.forward()
         self._state_version += 1

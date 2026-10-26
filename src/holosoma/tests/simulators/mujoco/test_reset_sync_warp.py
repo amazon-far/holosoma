@@ -1,4 +1,4 @@
-"""Live MuJoCo Warp check: syncing after a mid-frame state write updates body poses, not history."""
+"""Live MuJoCo Warp check: syncing after a mid-frame state write updates body poses, not contacts."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from tests.simulators.mujoco._build import build_warp_sim  # noqa: E402
 SHIFT_X = 1.0
 
 
-def test_synchronize_after_reset_moves_bodies_without_rotating_contact_history():
+def test_synchronize_after_reset_moves_bodies_without_touching_recorded_contacts():
     sim = build_warp_sim(num_envs=2)
     for _ in range(20):
         sim.simulate_at_each_physics_step()
@@ -26,7 +26,7 @@ def test_synchronize_after_reset_moves_bodies_without_rotating_contact_history()
     # them from the current state so the comparison isolates the write.
     sim.synchronize_after_reset()
 
-    history = sim.contact_forces_history.clone()
+    recorded = sim.contact_recorder.buffer.clone()
     bodies = sim._rigid_body_pos.clone()
     root_states = sim.robot_root_states[:].clone()
     root_states[0, 0] += SHIFT_X
@@ -41,4 +41,4 @@ def test_synchronize_after_reset_moves_bodies_without_rotating_contact_history()
     expected = torch.zeros_like(shift)
     expected[0, :, 0] = SHIFT_X
     torch.testing.assert_close(shift, expected, atol=1e-4, rtol=0)
-    assert torch.equal(sim.contact_forces_history, history), "reset sync rotated the contact-force history"
+    torch.testing.assert_close(sim.contact_recorder.buffer, recorded, atol=0, rtol=0, equal_nan=True)
