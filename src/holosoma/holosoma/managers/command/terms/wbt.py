@@ -816,14 +816,12 @@ class MotionCommand(CommandTermBase):
             # Flush the mutated root/dof state into the simulator so that
             # rigid-body positions are up-to-date for downstream consumers
             # (termination checks, observations, rewards). The reset sync also runs the
-            # kinematics MuJoCo Warp defers to the next step, and unlike refresh_sim_tensors it
-            # does not advance the once-per-frame contact history.
+            # kinematics MuJoCo Warp defers to the next step.
             sim = self._env.simulator
             sim.set_actor_root_state_tensor_robots(ended_env_ids, sim.robot_root_states)
             sim.set_dof_state_tensor_robots(ended_env_ids, sim.dof_state)  # type: ignore[attr-defined]
             sim.synchronize_after_reset()
 
-        # 1. update body_pos_relative_w and body_quat_relative_w
         self.update_relative_body_targets()
 
         ### 1.3 update the adaptive timesteps sampler (training only — eval episodes

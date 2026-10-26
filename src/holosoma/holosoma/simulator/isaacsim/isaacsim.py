@@ -732,9 +732,8 @@ class IsaacSim(BaseSimulator):
     def _rigid_body_vel(self) -> torch.Tensor:
         """Body link linear velocities, computed on first read after each refresh.
 
-        Isaac Lab's link-velocity path fetches body COMs from PhysX on every call, so tasks
-        that never read it do not pay for it. Like the other body tensors, read it only after
-        ``refresh_sim_tensors()``, not between substeps.
+        The Isaac Lab read fetches body COMs from PhysX. Like the other body tensors, read it
+        only after ``refresh_sim_tensors()``, not between substeps.
         """
         if self._rigid_body_vel_cache is None:
             # Match rigid_body_pos_w's link-frame origin. IsaacLab's legacy body_lin_vel_w alias is
@@ -792,9 +791,8 @@ class IsaacSim(BaseSimulator):
             self.prev_base_lin_vel = current_base_vel.clone()
 
     def forward_kinematics(self) -> None:
-        """Flush pending state writes and update articulation kinematics, fabric, and the render
-        products — without stepping physics. ``sim.current_time`` does not advance."""
-
+        """Flush pending state writes and update articulation kinematics and fabric without
+        stepping physics. ``sim.current_time`` does not advance."""
         self.scene.write_data_to_sim()
         # sim.forward() runs physics_sim_view.update_articulations_kinematic() and flushes
         # fabric, so body/camera prims match the written joint/root state without integrating.

@@ -1354,7 +1354,6 @@ class BaseSimulator:
 
     def set_robot_state(self, env_ids: EnvIds, *, root_states: torch.Tensor, dof_states: torch.Tensor) -> None:
         """Write selected robot states through backend-native live tensor views."""
-
         env_ids = torch.as_tensor(env_ids, device=self.dof_pos.device, dtype=torch.long)
         selected_root_states = root_states[env_ids] if len(root_states) == self.num_envs else root_states
         if len(selected_root_states) != len(env_ids):

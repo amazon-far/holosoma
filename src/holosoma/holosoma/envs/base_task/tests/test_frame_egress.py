@@ -274,7 +274,7 @@ def test_a_beating_render_cadence_misaligns_state_and_image() -> None:
     assert sim.alignment == [(4, 3), (8, 6), (12, 12)]
 
 
-# ----- the loop's other per-backend and viewer branches -----
+# ----- the loop's state-sync and render branches -----
 
 
 def test_state_sync_precedes_every_substep_and_refresh_precedes_egress() -> None:

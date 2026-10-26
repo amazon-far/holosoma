@@ -56,16 +56,14 @@ def steps_for_seconds(sim: Any, seconds: float) -> int:
 
 
 def step(sim: Any, n: int, *, render: bool = False) -> None:
-    """Advance ``n`` physics steps. With ``render=True`` also drive the render path each step.
+    """Advance ``n`` physics steps, rendering each step when ``render`` is set or the backend needs it.
 
-    Every harness sim exposes ``simulate_at_each_physics_step``. ``render`` is on for the recording
-    harness (so a video captures the motion) and off for the headless physics-only checks.
+    ``render`` is on for the recording harness (so a video captures the motion). Backends whose
+    offscreen sensors (e.g. IsaacSim RTX cameras) only update when rendered always render.
     """
     for _ in range(n):
         sim.refresh_sim_tensors()
         sim.simulate_at_each_physics_step()
-        # Offscreen sensors (e.g. IsaacSim RTX cameras) only update when rendered; a task does
-        # this on the backend's render interval, and a harness stepping the raw sim must too.
         if render or sim.requires_step_render():
             sim.render()
 

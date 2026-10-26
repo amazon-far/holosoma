@@ -2,8 +2,8 @@
 
 This is a runnable, self-documenting tour of the scene-asset + object-manager features. It
 builds a REAL, fully-managed locomotion environment (the same production path training uses —
-``cfg.create_task()``, NO shims) on a scene that mixes every
-asset kind, then drives each manager-layer feature in turn and narrates what happened. Reading
+``cfg.create_task()``, NO shims) on a scene that mixes every asset kind, then drives each
+manager-layer feature in turn and narrates what happened. Reading
 the printed output (or this source) shows how the pieces compose in a real setup. It is
 backend-switchable: sections 1-4 are identical code on all four backends (only ``--backend``
 changes); section 5 (physics DR) dispatches per backend and reads the result back on MuJoCo.
@@ -197,19 +197,16 @@ def _section(title: str) -> None:
 def run_demo(backend: str, num_envs: int, headless: bool = True) -> int:
     """Run the full object-managers tour on ``backend`` via a real env. Returns an exit code.
 
-    Builds the env inside ``cfg.create_task()`` (which owns the IsaacSim app lifecycle — closing it
-    only at block exit), so the whole demo runs while the simulator is alive.
+    Runs inside ``cfg.create_task()``, which closes the simulator only at block exit.
     """
     # Imported lazily so the per-backend launcher (isaacsim) initializes before torch.
     from holosoma.simulator.shared.object_registry import ObjectType
-    from holosoma.utils.common import seeding
     from holosoma.utils.safe_torch_import import torch
     from holosoma.utils.simulator_config import SimulatorType
 
     device = _BACKENDS[backend][1]
     _section(f"BUILD — backend={backend}  num_envs={num_envs}  device={device}")
     cfg = _experiment_config(backend, num_envs, headless)
-    seeding(cfg.training.seed)
 
     with cfg.create_task() as task:
         env = cast("LeggedRobotLocomotionManager", task)

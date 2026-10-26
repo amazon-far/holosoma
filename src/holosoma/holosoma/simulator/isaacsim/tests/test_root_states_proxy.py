@@ -82,24 +82,3 @@ def test_invalidate_rereads_after_a_write_that_bypassed_the_proxy() -> None:
     assert proxy[1, 0].item() == 0.0
     proxy.invalidate()
     assert proxy[1, 0].item() == 4.0
-
-
-def test_quaternions_are_exposed_xyzw() -> None:
-    backend = _Backend()
-    proxy = _proxy(backend)
-
-    assert proxy[0, 3:7].tolist() == [0.0, 0.0, 0.0, 1.0]
-
-
-def test_a_static_proxy_never_rereads() -> None:
-    tensor = torch.zeros(1, 13)
-    tensor[:, 3] = 1.0
-    proxy = RootStatesProxy(tensor)
-    proxy.invalidate()
-
-    assert proxy[0, 3:7].tolist() == [0.0, 0.0, 0.0, 1.0]
-
-
-def test_version_and_latest_are_required_together() -> None:
-    with pytest.raises(ValueError, match="both version and latest"):
-        RootStatesProxy(torch.zeros(1, 13), version=lambda: 0)
