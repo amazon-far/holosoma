@@ -22,7 +22,7 @@ from holosoma.agents.fast_sac.fast_sac_utils import (
 from holosoma.agents.modules.augmentation_utils import SymmetryUtils
 from holosoma.agents.modules.logging_utils import LoggingHelper
 from holosoma.config_types.algo import FastSACConfig
-from holosoma.policy_task import PolicyTask
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.utils.average_meters import TensorAverageMeterDict
 from holosoma.utils.helpers import instantiate
 from holosoma.utils.inference_helpers import (

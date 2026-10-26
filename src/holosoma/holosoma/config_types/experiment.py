@@ -42,7 +42,7 @@ from holosoma.config_types.terrain import TerrainManagerCfg
 from holosoma.utils.config_registry import UseRegistry
 
 if TYPE_CHECKING:
-    from holosoma.policy_task import PolicyTask
+    from holosoma.envs.policy_task import PolicyTask
 
 
 def now_timestamp() -> str:
@@ -228,7 +228,7 @@ class ExperimentConfig:
     def create_task(self) -> AbstractContextManager[PolicyTask]:
         """Return a context that builds the configured policy task and owns its resources."""
         from holosoma.config_types.env import get_tyro_env_config
-        from holosoma.policy_task import PolicyTask
+        from holosoma.envs.policy_task import PolicyTask
         from holosoma.simulator.session import task_session
 
         return task_session(get_tyro_env_config(self), PolicyTask)

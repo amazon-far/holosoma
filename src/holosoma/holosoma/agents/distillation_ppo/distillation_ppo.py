@@ -37,7 +37,7 @@ from holosoma.agents.modules.advantages import compute_gae_returns, normalize_ad
 from holosoma.agents.modules.module_utils import setup_student_teacher_module
 from holosoma.agents.modules.student_teacher_modules import StudentTeacherCritic
 from holosoma.config_types.algo import DistillationPPOConfig
-from holosoma.policy_task import PolicyTask
+from holosoma.envs.policy_task import PolicyTask
 
 
 class DistillationMinibatch(TypedDict):

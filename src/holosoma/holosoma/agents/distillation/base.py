@@ -40,7 +40,7 @@ from holosoma.agents.distillation.checkpoint import (
 from holosoma.agents.modules.logging_utils import LoggingHelper
 from holosoma.agents.modules.student_teacher_modules import StudentTeacher
 from holosoma.config_types.algo import DistillationConfig, DistillationPPOConfig
-from holosoma.policy_task import PolicyTask
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.utils.helpers import instantiate
 from holosoma.utils.inference_helpers import (
     attach_onnx_metadata,

@@ -25,7 +25,7 @@ from holosoma.agents.modules.module_utils import (
     setup_ppo_critic_module,
 )
 from holosoma.config_types.algo import PPOConfig
-from holosoma.policy_task import PolicyTask
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.utils.helpers import instantiate
 from holosoma.utils.inference_helpers import (
     attach_onnx_metadata,
