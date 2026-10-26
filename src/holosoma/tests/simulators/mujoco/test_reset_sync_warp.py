@@ -33,7 +33,7 @@ def test_synchronize_after_reset_moves_bodies():
 
     # Warp state writes defer kinematics to the next step, so a plain refresh would read stale poses.
     env_ids = torch.tensor([0], device=sim.sim_device)
-    sim.set_robot_state(env_ids, root_states=root_states, dof_states=dof_states)
+    sim.set_robot_state(env_ids, root_states=root_states[env_ids], dof_states=dof_states[env_ids])
     sim.synchronize_after_reset()
 
     shift = sim._rigid_body_pos - bodies
