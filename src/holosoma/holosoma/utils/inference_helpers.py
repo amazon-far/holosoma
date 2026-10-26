@@ -10,7 +10,7 @@ import onnx
 import torch
 
 from holosoma.config_types.robot import RobotConfig
-from holosoma.policy_task import PolicyTask
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.utils.path import resolve_asset_path
 
 

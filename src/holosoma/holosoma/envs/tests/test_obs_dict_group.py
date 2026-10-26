@@ -12,7 +12,7 @@ from typing import cast
 
 import pytest
 
-from holosoma.policy_task import PolicyTask
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.utils.safe_torch_import import torch
 
 pytestmark = pytest.mark.no_sim

@@ -18,9 +18,9 @@ import torch.multiprocessing as mp
 
 from holosoma.config_types.curriculum import CurriculumManagerCfg, CurriculumTermCfg
 from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.managers.curriculum.manager import CurriculumManager
 from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker, PenaltyCurriculum
-from holosoma.policy_task import PolicyTask
 
 pytestmark = pytest.mark.no_sim
 
