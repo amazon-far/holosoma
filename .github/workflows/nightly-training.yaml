@@ -37,8 +37,8 @@ jobs:
         # names the environment to source -- training needs thousands of parallel
         # environments, and the classic backend is single-env.
         #
-        # The halved terrain scale is required, not a tuning choice: src/holosoma/README.md
-        # documents it for MJWarp on mixed terrain.
+        # The halved terrain scale is required, not a tuning choice: PPO on MJWarp diverges
+        # in its first rollouts at full scale on mixed terrain (see src/holosoma/README.md).
         #
         # G1 only: T1 on MJWarp diverges under PPO and is far too slow under FastSAC.
         - experiment: g1-29dof

@@ -197,7 +197,9 @@ def _run_exp_name(run: wandb.Run) -> str:
         if tag.startswith(reserved_prefixes) or tag in reserved_exact:
             continue
         return tag
-    # Fallback: URL looks like .../runs/nightly-<exp>-[multigpu-]<timestamp>
+    # Fallback: URL looks like .../runs/nightly-<exp>-<simulator>[-multigpu]-<timestamp>.
+    # Only the experiment is taken, so this holds for the older names that carried no
+    # simulator too. Reached only by untagged runs; nightly.py has always set the tag.
     try:
         if not run.url or run.url is None:
             return "unknwon"

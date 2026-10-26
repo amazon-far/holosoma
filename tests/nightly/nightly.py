@@ -276,9 +276,11 @@ def main():
 
     config = config.get_nightly_config()
 
+    simulator = simulator_tag(config)
+
     run_tags = [
         sanitized_exp,
-        simulator_tag(config),
+        simulator,
     ]
 
     if GITHUB_RUN_ID:
@@ -295,11 +297,15 @@ def main():
     # is only comparable within a cell, so the regression baseline is limited to these.
     cell_tags = [
         sanitized_exp,
-        simulator_tag(config),
+        simulator,
         f"gpus-{MULTIGPU_NUM_GPUS}" if config.training.multigpu else "gpus-1",
     ]
 
-    nightly_name = f"nightly-{sanitized_exp}{multigpu_suffix}-{now_timestamp()}"
+    # The simulator belongs in the name, not just the tags: the name is also the run id, and
+    # one experiment now runs on more than one simulator at the same GPU count. Without it
+    # two such cells differ only by a timestamp taken seconds apart, so they can collide on
+    # the id and overwrite each other, and the report plots them under indistinguishable names.
+    nightly_name = f"nightly-{sanitized_exp}-{simulator}{multigpu_suffix}-{now_timestamp()}"
 
     config = dataclasses.replace(
         config,

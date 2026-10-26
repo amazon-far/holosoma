@@ -76,6 +76,44 @@ def test_simulator_from_tags(rs: Any, tags: list[str], expected: str) -> None:
     assert rs._simulator_from_tags(tags) == expected
 
 
+class _StubRun:
+    """Enough of a wandb run for the experiment-name helper."""
+
+    def __init__(self, tags: list[str], url: str) -> None:
+        self.tags = tags
+        self.url = url
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        # Current shape, carrying the simulator.
+        "nightly-g1_29dof_manager-mjwarp-20261022_220755",
+        "nightly-g1_29dof_manager-isaacsim-multigpu-20261022_220755",
+        # Older runs, saved before the name carried a simulator.
+        "nightly-g1_29dof_manager-20261022_220755",
+        "nightly-g1_29dof_manager-multigpu-20261022_220755",
+    ],
+)
+def test_exp_name_falls_back_to_the_url_for_untagged_runs(rs: Any, name: str) -> None:
+    """Untagged runs are read from the URL, which has to survive the name gaining a simulator.
+
+    The URL is built without a path prefix because the fallback indexes a fixed path segment,
+    so a deployment serving the app under a prefix shifts it. That is pre-existing and only
+    reachable by an untagged run; what matters here is that the name format still parses.
+    """
+    run = _StubRun(tags=[], url=f"https://host/entity/nightly-holosoma-runs/runs/{name}")
+    assert rs._run_exp_name(run) == "g1_29dof_manager"
+
+
+def test_exp_name_prefers_the_tag_over_the_url(rs: Any) -> None:
+    run = _StubRun(
+        tags=["g1_29dof_manager", "mjwarp", "gpus-1"],
+        url="https://host/wandb/entity/nightly-holosoma-runs/runs/nightly-something_else-mjwarp-1",
+    )
+    assert rs._run_exp_name(run) == "g1_29dof_manager"
+
+
 def test_every_tracked_cell_names_a_known_simulator(rs: Any) -> None:
     """A cell label whose simulator has drifted would silently never match a run."""
     for cell in rs.TREND_CELLS:
