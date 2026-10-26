@@ -88,20 +88,28 @@ def configure_logging(distributed_conf: MultGPUConfig | None = None, log_dir: Pa
     logging.getLogger().addHandler(LoguruLoggingBridge())
 
 
+def split_envs_across_ranks(tyro_config: ExperimentConfig) -> ExperimentConfig:
+    """Return ``tyro_config`` with ``training.num_envs`` divided among the distributed ranks.
+
+    Call it before ``create_task()``: each rank builds only its share of the environments.
+    """
+    world_size = int(os.getenv("WORLD_SIZE", "1"))
+    if world_size <= 1:
+        return tyro_config
+    original_num_envs = tyro_config.training.num_envs
+    tyro_config = dataclasses.replace(
+        tyro_config, training=dataclasses.replace(tyro_config.training, num_envs=original_num_envs // world_size)
+    )
+    logger.info(
+        f"Distributed training: each of {world_size} GPUs will run {tyro_config.training.num_envs} "
+        f"environments (total across all GPUs: {original_num_envs})"
+    )
+    return tyro_config
+
+
 def train(tyro_config: ExperimentConfig) -> None:
     """Train an agent on the task built from ``tyro_config``."""
-    # Distribute environments across GPUs for proper multi-GPU training
-    world_size = int(os.getenv("WORLD_SIZE", "1"))
-    if world_size > 1:
-        original_num_envs = tyro_config.training.num_envs
-        tyro_config = dataclasses.replace(
-            tyro_config, training=dataclasses.replace(tyro_config.training, num_envs=original_num_envs // world_size)
-        )
-        logger.info(
-            f"Distributed training: each of {world_size} GPUs will run {tyro_config.training.num_envs} "
-            f"environments (total across all GPUs: {original_num_envs})"
-        )
-
+    tyro_config = split_envs_across_ranks(tyro_config)
     try:
         with tyro_config.create_task() as env:
             train_on_task(tyro_config, cast("PolicyTask", env))

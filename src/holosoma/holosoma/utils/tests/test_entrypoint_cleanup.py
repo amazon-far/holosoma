@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import signal
 import sys
 import types
@@ -209,3 +210,20 @@ def test_task_session_closes_task_before_app(
 
     expected_events = ["env.close"] if environment_close_fails else ["env.close", "app.close"]
     assert events == expected_events
+
+
+@pytest.mark.parametrize(("world_size", "expected"), [(None, 4096), ("1", 4096), ("4", 1024)])
+def test_split_envs_across_ranks_gives_each_rank_its_share(
+    monkeypatch: pytest.MonkeyPatch, world_size: str | None, expected: int
+) -> None:
+    from holosoma.config_values import experiment
+
+    if world_size is None:
+        monkeypatch.delenv("WORLD_SIZE", raising=False)
+    else:
+        monkeypatch.setenv("WORLD_SIZE", world_size)
+    config = dataclasses.replace(
+        experiment.g1_29dof, training=dataclasses.replace(experiment.g1_29dof.training, num_envs=4096)
+    )
+
+    assert train_agent.split_envs_across_ranks(config).training.num_envs == expected
