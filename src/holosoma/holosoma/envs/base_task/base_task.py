@@ -468,7 +468,9 @@ class BaseTask:
             self._apply_force_in_physics_step()
             self.hooks.emit(Phase.PRE_STEP)
             self.simulator.simulate_at_each_physics_step()
-            render_due = self._physics_step_count % sim_config.render_interval_steps == 0
+            # Count the step just taken, so with render_interval == decimation the render lands on
+            # the frame's last substep and FRAME_END consumers see the image for the published state.
+            render_due = (self._physics_step_count + 1) % sim_config.render_interval_steps == 0
             if self.simulator.requires_step_render() and render_due:
                 self.simulator.render()
                 rendered_this_step = True

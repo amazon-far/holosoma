@@ -373,6 +373,28 @@ def test_headless_never_renders_the_viewport() -> None:
     assert sim.viewer_renders == []
 
 
+class _OffscreenSim(_FakeSim):
+    """A backend with offscreen outputs (RTX cameras, video), so BaseTask schedules its renders."""
+
+    def requires_step_render(self) -> bool:
+        return True
+
+
+@pytest.mark.parametrize("render_interval", [1, 2, DECIMATION])
+def test_scheduled_renders_land_on_the_last_substep_of_each_interval(render_interval: int) -> None:
+    """BaseTask renders offscreen outputs after every ``render_interval``-th substep.
+
+    With ``render_interval == decimation`` that is each frame's last substep, so the image a
+    FRAME_END consumer reads was drawn for the same state as the tensors published beside it.
+    ``render`` records the substep counter after the step it follows (1-based).
+    """
+    sim = _OffscreenSim(frames=3, render_interval=render_interval)
+
+    _run(sim)
+
+    assert sim.viewer_renders == list(range(render_interval, 3 * DECIMATION + 1, render_interval))
+
+
 # ----- integration: the real playback plugin driven by the real loop -----
 
 

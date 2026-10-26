@@ -99,8 +99,22 @@ def _check_frames(task, config, check, failures: list[str], result_file: str | N
         dof_state[:, :, 0] = spawn_dof
         sim.set_dof_state_tensor_robots(env_ids, dof_state)
 
+    decimation = config.simulator.config.sim.control_decimation_steps
     offset = [0.0]
-    task.hooks.add(Phase.PRE_STEP, lambda: write_pose(offset[0]), name="test.write_pose")
+    substep = [0]
+
+    def start_frame() -> None:
+        substep[0] = 0
+
+    def write_on_last_substep() -> None:
+        # Writing only on the frame's last substep leaves earlier substeps on the previous pose, so
+        # an image rendered before the last substep would still show the old frame.
+        if substep[0] == decimation - 1:
+            write_pose(offset[0])
+        substep[0] += 1
+
+    task.hooks.add(Phase.FRAME_BEGIN, start_frame, name="test.start_frame")
+    task.hooks.add(Phase.PRE_STEP, write_on_last_substep, name="test.write_pose")
 
     def frame(offset_y: float) -> float:
         """Drive one real task control frame; return the red fraction egressed at its FRAME_END."""
