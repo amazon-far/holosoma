@@ -109,9 +109,15 @@ def test_learn_synchronizes_curriculum_every_iteration_on_multi_gpu(
     algo.gpu_world_size = 2
     algo.is_main_process = False
 
+    def any_rank_requested_shutdown(requested: bool) -> bool:
+        events.append(("shutdown-agreement",))
+        return requested
+
+    algo._any_rank_requested_shutdown = any_rank_requested_shutdown
+
     algo_cls.learn(algo)
 
-    assert events == [("sync", 2), ("rollout",), ("sync", 2), ("rollout",)]
+    assert events == [("sync", 2), ("rollout",), ("shutdown-agreement",)] * 2
 
 
 @pytest.mark.parametrize("algo_cls", [Distillation, DistillationPPO])
