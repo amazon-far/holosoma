@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 
+import torch
 from loguru import logger
 
 from holosoma.envs.base_task.base_task import BaseTask
@@ -21,6 +22,15 @@ class SimulationTask(BaseTask):
 
     # Bridge, gantry and playback plugins read simulator state between substeps.
     syncs_state_between_substeps = True
+
+    def _get_env_origins(self) -> torch.Tensor:
+        """Place a single environment at the world origin, so its poses are world coordinates.
+
+        Several environments keep the terrain's origins so they do not overlap.
+        """
+        if self.num_envs == 1:
+            return torch.zeros(1, 3, device=self.device)
+        return super()._get_env_origins()
 
     def run(self) -> None:
         """Start episodes and advance control frames until the task requests shutdown."""
