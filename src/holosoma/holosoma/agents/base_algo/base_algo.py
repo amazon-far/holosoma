@@ -36,6 +36,17 @@ class BaseAlgo:
         self._experiment_config: ExperimentConfig | None = None
         self._wandb_run_path: str | None = None
 
+    def _any_rank_requested_shutdown(self, requested: bool) -> bool:
+        """Return whether any rank's task requested shutdown.
+
+        A collective on multi-GPU runs: every rank must call it at the same point in its loop.
+        """
+        if not self.is_multi_gpu:
+            return requested
+        flag = torch.tensor(float(requested), device=self.device)
+        torch.distributed.all_reduce(flag, op=torch.distributed.ReduceOp.MAX)
+        return bool(flag.item())
+
     def setup(self) -> type[NotImplementedError]:
         return NotImplementedError
 
