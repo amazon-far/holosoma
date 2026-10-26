@@ -42,7 +42,7 @@ from holosoma.config_types.terrain import TerrainManagerCfg
 from holosoma.utils.config_registry import UseRegistry
 
 if TYPE_CHECKING:
-    from holosoma.envs.base_task.base_task import BaseTask
+    from holosoma.policy_task import PolicyTask
 
 
 def now_timestamp() -> str:
@@ -225,13 +225,13 @@ class ExperimentConfig:
             logger=holosoma.config_values.logger.disabled if self.eval_overrides.disable_logger else self.logger,
         )
 
-    def create_task(self) -> AbstractContextManager[BaseTask]:
-        """Return a context that builds the configured task and owns its resources."""
+    def create_task(self) -> AbstractContextManager[PolicyTask]:
+        """Return a context that builds the configured policy task and owns its resources."""
         from holosoma.config_types.env import get_tyro_env_config
-        from holosoma.envs.base_task.base_task import BaseTask
+        from holosoma.policy_task import PolicyTask
         from holosoma.simulator.session import task_session
 
-        return task_session(get_tyro_env_config(self), BaseTask)
+        return task_session(get_tyro_env_config(self), PolicyTask)
 
     def save_config(self, path: str) -> None:
         with open(path, "w") as file:
