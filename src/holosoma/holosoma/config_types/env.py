@@ -53,12 +53,6 @@ class EnvConfig:
     viewer_dt: float = 1 / 60.0
     """Sim-time period between viewer renders, in seconds."""
 
-    def __post_init__(self) -> None:
-        if self.time_scale < 0:
-            raise ValueError(f"EnvConfig.time_scale must be >= 0, got {self.time_scale}.")
-        if self.viewer_dt <= 0:
-            raise ValueError(f"EnvConfig.viewer_dt must be > 0, got {self.viewer_dt}.")
-
 
 def _validate_cameras(sensors: dict[str, SensorConfig]) -> None:
     validate_camera_dict({name: sensor for name, sensor in sensors.items() if isinstance(sensor, CameraSensorConfig)})
