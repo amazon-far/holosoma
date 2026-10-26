@@ -845,7 +845,7 @@ class FastSACAgent(BaseAlgo):
             # `args.num_learning_iterations` is a multiple of `args.logging_interval`).
             if self.global_step >= args.num_learning_iterations:
                 break
-            if self.unwrapped_env.shutdown_requested:
+            if self._any_rank_requested_shutdown(self.unwrapped_env.shutdown_requested):
                 logger.info("Stopping FastSAC after a task shutdown request.")
                 break
             self.global_step += 1

@@ -294,7 +294,7 @@ class DistillationBase(BaseAlgo):
             with self.logging_helper.record_collection_time():
                 obs_dict = self._rollout_step(obs_dict)
 
-            if self.env.shutdown_requested:
+            if self._any_rank_requested_shutdown(self.env.shutdown_requested):
                 logger.info("Stopping distillation after a task shutdown request.")
                 break
 
