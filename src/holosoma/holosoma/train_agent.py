@@ -6,7 +6,7 @@ import os
 import sys
 import traceback
 from pathlib import Path
-from typing import Any, TypedDict, cast
+from typing import Any, TypedDict
 
 from loguru import logger
 
@@ -112,7 +112,7 @@ def train(tyro_config: ExperimentConfig) -> None:
     tyro_config = split_envs_across_ranks(tyro_config)
     try:
         with tyro_config.create_task() as env:
-            train_on_task(tyro_config, cast("PolicyTask", env))
+            train_on_task(tyro_config, env)
     except Exception as e:
         tb_str = traceback.format_exc()
         logger.error(f"Exception occurred during training: {e}\n{tb_str}")

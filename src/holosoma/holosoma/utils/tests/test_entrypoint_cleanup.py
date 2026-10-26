@@ -227,3 +227,22 @@ def test_split_envs_across_ranks_gives_each_rank_its_share(
     )
 
     assert train_agent.split_envs_across_ranks(config).training.num_envs == expected
+
+
+def test_experiment_create_task_rejects_a_non_policy_task_before_building_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from holosoma.config_values import experiment
+    from holosoma.envs.simulation_task import SimulationTask
+
+    class _Rejected(SimulationTask):
+        def __new__(cls, _config: object) -> Any:
+            raise AssertionError("a rejected env_class must not be constructed")
+
+    monkeypatch.setattr(session, "setup_simulator_imports", lambda _config: None)
+    monkeypatch.setattr(session, "resolve_simulation_device", lambda *_args: "cpu")
+    monkeypatch.setattr(session, "get_simulator_type", lambda: SimulatorType.MUJOCO)
+    monkeypatch.setattr(session, "get_class", lambda _target: _Rejected)
+
+    with pytest.raises(TypeError, match="not a PolicyTask subclass"), experiment.g1_29dof.create_task():
+        pass
