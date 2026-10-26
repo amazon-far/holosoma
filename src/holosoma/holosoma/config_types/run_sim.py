@@ -110,6 +110,8 @@ class RunSimConfig:
     def __post_init__(self) -> None:
         if self.time_scale < 0:
             raise ValueError(f"RunSimConfig.time_scale must be >= 0, got {self.time_scale}.")
+        if self.viewer_dt <= 0:
+            raise ValueError(f"RunSimConfig.viewer_dt must be > 0, got {self.viewer_dt}.")
 
     def create_task(self) -> AbstractContextManager[SimulationTask]:
         """Return a context that builds the configured simulation task and owns its resources."""
