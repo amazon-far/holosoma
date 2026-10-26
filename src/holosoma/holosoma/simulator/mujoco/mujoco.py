@@ -1295,6 +1295,10 @@ class MuJoCo(BaseSimulator):
             logger.info("No environments to update")
             return
 
+        if self.num_dof == 0:
+            logger.info("No robot DOFs available - skipping root state update")
+            return
+
         # Incoming angular velocity is world-frame (the robot_root_states / all_root_states
         # convention); MuJoCo's freejoint qvel wants it body-local. Convert before the backend
         # write (which scatters cols 10:13 raw into qvel), symmetric with the view __getitem__
