@@ -28,8 +28,9 @@ import wandb_workspaces.workspaces as ws
 WANDB_ENTITY = getenv("WANDB_ENTITY", "amazon-far")
 WANDB_PROJECT = "nightly-holosoma-runs"
 
-# Prefix of every view this creates; a cell-scoped view appends its cell. Must match the
-# views saved on the project, or re-running this saves a second set beside them.
+# Prefix of every view this creates; a cell-scoped view appends its cell. Only a display
+# label: `save_as_new_view` assigns a fresh identifier each time, so every run adds a view
+# rather than replacing the one with the same name.
 DEFAULT_VIEW_NAME = "Nightly perf"
 
 # Summary keys written by backfill_perf_summary.py. Keep in sync with that script.

@@ -34,8 +34,8 @@ GITHUB_RUN_ID = getenv("GITHUB_RUN_ID")
 # Throughput regression warning applied by nightly.py. Keep in sync with that script.
 PERF_WARNING_TAG = "nightly_perf_warning"
 
-# One-line performance trend included in the Slack summary. The cell label and the metric
-# key are written by backfill_perf_summary.py; keep in sync with that script.
+# Performance trend included in the Slack summary, one block per cell. The cell label and the
+# metric key are written by backfill_perf_summary.py; keep in sync with that script.
 PERF_PROJECT = "nightly-holosoma-runs"
 PERF_CELL_KEY = "perf/cell"
 TREND_CELLS = (

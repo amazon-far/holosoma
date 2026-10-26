@@ -62,7 +62,7 @@ def simulator_tag(config: ExperimentConfig) -> str:
     and pool their throughput into one baseline.
     """
     name = config.simulator.config.name
-    if name == "mujoco" and getattr(config.simulator.config, "mujoco_backend", None) == MujocoBackend.WARP:
+    if name == "mujoco" and config.simulator.config.mujoco_backend == MujocoBackend.WARP:
         return "mjwarp"
     return name
 
