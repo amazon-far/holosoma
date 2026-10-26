@@ -87,20 +87,18 @@ class _StubRun:
 @pytest.mark.parametrize(
     "name",
     [
-        # Current shape, carrying the simulator.
         "nightly-g1_29dof_manager-mjwarp-20261022_220755",
         "nightly-g1_29dof_manager-isaacsim-multigpu-20261022_220755",
-        # Older runs, saved before the name carried a simulator.
+        # Names without a simulator, still present on older runs.
         "nightly-g1_29dof_manager-20261022_220755",
         "nightly-g1_29dof_manager-multigpu-20261022_220755",
     ],
 )
 def test_exp_name_falls_back_to_the_url_for_untagged_runs(rs: Any, name: str) -> None:
-    """Untagged runs are read from the URL, which has to survive the name gaining a simulator.
+    """Untagged runs are read from the URL, for both the current and the older name shapes.
 
-    The URL is built without a path prefix because the fallback indexes a fixed path segment,
-    so a deployment serving the app under a prefix shifts it. That is pre-existing and only
-    reachable by an untagged run; what matters here is that the name format still parses.
+    The URL carries no path prefix: the fallback indexes a fixed path segment, so a deployment
+    serving the app under one does not reach this path.
     """
     run = _StubRun(tags=[], url=f"https://host/entity/nightly-holosoma-runs/runs/{name}")
     assert rs._run_exp_name(run) == "g1_29dof_manager"

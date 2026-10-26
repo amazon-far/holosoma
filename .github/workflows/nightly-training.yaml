@@ -31,16 +31,15 @@ jobs:
         simulator: [isaacsim]
         extra_args: [""]
         include:
-        # MuJoCo cells, added through include rather than the simulator list so they are
+        # MuJoCo cells live under include rather than the simulator list so they are
         # not crossed with the multigpu dimension: the distributed path is not exercised
         # for MuJoCo. `sim_preset` selects the MJWarp backend while `simulator` still
         # names the environment to source -- training needs thousands of parallel
         # environments, and the classic backend is single-env.
         #
-        # The halved terrain scale is required, not a tuning choice: PPO on MJWarp diverges
-        # in its first rollouts at full scale on mixed terrain (see src/holosoma/README.md).
-        #
-        # G1 only: T1 on MJWarp diverges under PPO and is far too slow under FastSAC.
+        # PPO on MJWarp needs the halved terrain scale: at full scale on mixed terrain it
+        # diverges in its first rollouts. See src/holosoma/README.md, which also covers why
+        # there are no T1 cells here.
         - experiment: g1-29dof
           simulator: mujoco
           sim_preset: mjwarp

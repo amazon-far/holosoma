@@ -197,9 +197,7 @@ def _run_exp_name(run: wandb.Run) -> str:
         if tag.startswith(reserved_prefixes) or tag in reserved_exact:
             continue
         return tag
-    # Fallback: URL looks like .../runs/nightly-<exp>-<simulator>[-multigpu]-<timestamp>.
-    # Only the experiment is taken, so this holds for the older names that carried no
-    # simulator too. Reached only by untagged runs; nightly.py has always set the tag.
+    # Fallback for untagged runs: URL ends in nightly-<exp>-<simulator>[-multigpu]-<timestamp>.
     try:
         if not run.url or run.url is None:
             return "unknwon"
@@ -507,8 +505,6 @@ def format_trend_report() -> str | None:
     Cells are reported separately because the metric is not comparable across them.
     """
     blocks = [block for cell in TREND_CELLS if (block := _format_trend_block(cell))]
-    # Blank line between blocks: each ends with its own link, and a single newline puts the
-    # next cell's heading directly under it.
     return "\n\n".join(blocks) if blocks else None
 
 
@@ -519,9 +515,8 @@ def format_run_line(run: NightlyRun) -> str:
 
 def post_summary_to_slack():
     """Posts summary of runs to slack channel."""
-    # Imported here rather than at module scope: slack-sdk is declared by this script's own
-    # dependencies and is not installed in the environment the unit tests run in, which
-    # imports this module for the pure reporting helpers.
+    # Local: slack-sdk is only in this script's own dependencies, so importing it at module
+    # scope would make the module unimportable anywhere else.
     from slack_sdk import WebClient
 
     if not SLACK_TOKEN or not SLACK_CHANNEL:
