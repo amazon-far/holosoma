@@ -90,6 +90,7 @@ def get_tyro_env_config(tyro_config: ExperimentConfig) -> EnvConfig:
         curriculum=tyro_config.curriculum,
         robot=tyro_config.robot,
         logger=tyro_config.logger,
+        device=tyro_config.device,
     )
 
 
