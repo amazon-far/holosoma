@@ -11,7 +11,7 @@ from __future__ import annotations
 import sys
 import types
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 import torch
@@ -24,6 +24,9 @@ from holosoma.config_types.plugin import (
 )
 from holosoma.hooks import HookRegistry, Phase, frame_base_rates
 from holosoma.simulator.plugins.tests._task import plugin_task
+
+if TYPE_CHECKING:
+    from holosoma.config_types.simulator import SimEngineConfig
 
 pytestmark = pytest.mark.no_sim
 
@@ -258,7 +261,8 @@ class _FakeSim:
         fps: int = 200,
         control_decimation_steps: int = 4,
     ) -> None:
-        self.hooks = HookRegistry(base_rates=frame_base_rates(float(fps), control_decimation_steps))
+        sim_config = types.SimpleNamespace(fps=fps, control_decimation_steps=control_decimation_steps)
+        self.hooks = HookRegistry(base_rates=frame_base_rates(cast("SimEngineConfig", sim_config)))
         self.virtual_gantry = gantry
         self._t = sim_time
         self.body_names: list[str] = []

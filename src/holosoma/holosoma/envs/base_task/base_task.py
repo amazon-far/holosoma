@@ -129,10 +129,7 @@ class BaseTask:
         self.dr_base_seed = training_config.seed
         self.dr_episode_count = torch.zeros(self.num_envs, dtype=torch.long, device="cpu")
 
-        sim_config = simulator_config.config.sim
-        self.hooks = HookRegistry(
-            base_rates=frame_base_rates(float(sim_config.fps), sim_config.control_decimation_steps)
-        )
+        self.hooks = HookRegistry(base_rates=frame_base_rates(simulator_config.config.sim))
         self.terrain_manager = TerrainManager(terrain_config, self, self.device)
         self.simulator: BaseSimulator = SimulatorClass(
             tyro_config=full_sim_config, terrain_manager=self.terrain_manager, device=self.device, hooks=self.hooks

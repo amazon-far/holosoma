@@ -107,8 +107,7 @@ def launch_simulator(config: RunSimConfig, device: str | None = None) -> tuple[A
     # Without a task, TerrainManager construction needs only num_envs and device from its env.
     terrain_env = SimpleNamespace(num_envs=config.training.num_envs, device=device)
     terrain_manager = TerrainManager(config.terrain, env=terrain_env, device=device)
-    sim_config = config.simulator.config.sim
-    hooks = HookRegistry(base_rates=frame_base_rates(float(sim_config.fps), sim_config.control_decimation_steps))
+    hooks = HookRegistry(base_rates=frame_base_rates(config.simulator.config.sim))
     simulator = get_class(config.simulator._target_)(full_config, terrain_manager, device, hooks)
     return simulator, device, simulation_app
 
