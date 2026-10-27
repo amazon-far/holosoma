@@ -168,19 +168,18 @@ def _check_contact_sensor_config() -> None:
 
     from holosoma.simulator.isaacsim.isaacsim_articulation_cfg import build_contact_sensor_cfg
 
-    cfg = build_contact_sensor_cfg(history_length=3, debug_vis=False)
+    cfg = build_contact_sensor_cfg(debug_vis=False)
     assert cfg.track_air_time is False
-    assert cfg.history_length == 3
-    assert cfg.update_period == 0.005
+    # 0.005 would hold the sensor stale across substeps at any fps above 200.
+    assert cfg.update_period == 0.0
     assert cfg.force_threshold == 10.0
     assert cfg.debug_vis is False
-    assert build_contact_sensor_cfg(history_length=3, debug_vis=True).debug_vis is True
+    assert build_contact_sensor_cfg(debug_vis=True).debug_vis is True
 
-    # These are the only ContactSensorData fields Holosoma reads. They remain available when
+    # net_forces_w is the only ContactSensorData field Holosoma reads. It remains available when
     # duration tracking is disabled; only the unused air/contact-time values stay unallocated.
     data = ContactSensorData()
     assert hasattr(data, "net_forces_w")
-    assert hasattr(data, "net_forces_w_history")
     assert data.last_air_time is None
     assert data.current_air_time is None
     assert data.last_contact_time is None

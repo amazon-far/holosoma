@@ -1,55 +1,55 @@
-// Actor-only whole-body tracking: the reference comes from the host, not from the graph.
-//
-// The embedded-motion WBT policy runs a graph emitting joint_pos/joint_vel/ref_quat_xyzw
-// alongside actions and feeds its own reference back. A 0p2s actor-only export
-// (wbt_onnx_export_mode = actor_only) emits `actions` alone, takes (obs, time_step), and is
-// driven by a window the caller supplies.
-//
-// The observation layout is config, not code: two groups, actor_obs at history 9 and
-// actor_targets at history 1, terms sorted by their zero-padded names. The only assembly added
-// here is concatenating the two groups, which is what the export's flat input expects.
 #pragma once
 
 #include <array>
-#include <set>
-#include <string>
-#include <vector>
+#include <optional>
 
+#include "holosoma_cpp/holosoma_inference_core.hpp"
 #include "holosoma_cpp/policy.hpp"
 
 namespace holosoma {
 
-constexpr int kNumOffsets = 5;  // 0p2s: frames 0, 2, 4, 6, 8
+constexpr int kNumOffsets = 5;  // The 0p2s preset; other exports declare their own offsets.
 
-// The five future offsets of the reference, in the export's dof order. Host-supplied.
-struct ReferenceWindow {
-  std::vector<double> q;                    // kNumOffsets * num_dofs, offset-major
-  std::vector<double> dq;                   // kNumOffsets * num_dofs
-  std::vector<std::array<double, 4>> quat;  // kNumOffsets, wxyz
+struct ReferenceFrame {
+  std::vector<double> q;
+  std::vector<double> dq;
+  std::array<double, 4> quat{1, 0, 0, 0};  // wxyz
 };
 
+// Offset-major, canonical joint order. The caller keeps this alive until it is replaced.
+// For exports without lookahead, supply one frame. For legacy exports whose current
+// reference differs from the first future sample, set current explicitly.
+struct ReferenceWindow {
+  std::vector<double> q;
+  std::vector<double> dq;
+  std::vector<std::array<double, 4>> quat;
+  std::optional<ReferenceFrame> current;
+};
+
+// The public policy adapter uses the same metadata-driven implementation as live inference.
+// Observation layout, history, gains, default pose and anchor FK come from the checkpoint.
 class GeneralWBTPolicy : public BasePolicy {
  public:
   GeneralWBTPolicy(InferenceConfig config, PolicyContext& context);
-
-  // Set before each step(); borrowed, never owned, so a clip and a live stream are swappable.
+  // Buffer lifetime only; a new clip/heading needs reset() before inference.
   void set_reference(const ReferenceWindow* window) { reference_ = window; }
+  void handle_start_policy() override;
+  std::vector<double> infer_observation(const std::vector<float>& obs) override;
+  live::WbtPolicy& core();
+  const live::WbtPolicy& core() const;
 
  protected:
   void setup_policy(ModelSlot& slot) override;
   std::set<std::string> available_terms() const override;
-  void compute_terms(const RobotState& state, TermValues& terms) override;
+  void on_policy_switched() override;
   std::vector<double> rl_inference(const RobotState& state) override;
 
  private:
-  const std::vector<float>& prepare_flat_obs(const RobotState& state);
-
   const ReferenceWindow* reference_ = nullptr;
-  std::vector<double> policy_default_pos_;
-  std::vector<double> action_scale_;
-  std::array<double, 2> yaw0_{};
-  bool yaw0_captured_ = false;
-  std::vector<float> flat_obs_;
+  std::vector<std::unique_ptr<live::WbtPolicy>> cores_;
 };
+
+// Build an inference-only configuration for a metadata-complete G1 checkpoint.
+InferenceConfig live_policy_config(const std::string& checkpoint, bool use_gpu = false, int intra_op_threads = 2);
 
 }  // namespace holosoma

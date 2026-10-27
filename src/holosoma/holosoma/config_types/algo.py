@@ -279,6 +279,14 @@ class FastSACConfig:
     compile: bool = True
     """whether to use torch.compile."""
 
+    compile_mode: str | None = "auto"
+    """torch.compile mode for the compiled training functions. "auto" uses "reduce-overhead" (CUDA graphs) for
+    multi-GPU training and the default mode otherwise; None forces the default mode; any other string is passed to
+    torch.compile unchanged."""
+
+    compile_options: dict[str, bool | int | float | str] | None = None
+    """torch.compile Inductor options, e.g. {"coordinate_descent_tuning": True}; exclusive with compile_mode."""
+
     obs_normalization: bool = True
     """whether to enable observation normalization"""
 

@@ -2,62 +2,43 @@
 
 #include <algorithm>
 #include <cmath>
-#include <nlohmann/json.hpp>
+#include <numeric>
 #include <stdexcept>
-
-#include "holosoma_cpp/math.hpp"
 
 namespace holosoma {
 namespace {
-
-constexpr double kActionClip = 20.0;  // the export's configured action clip
-constexpr const char* kObsInput = "obs";
-constexpr const char* kTimeStepInput = "time_step";
-constexpr const char* kActionsOutput = "actions";
-
-// Zero because this checkpoint was trained that way: its experiment_config carries
-// enable_smpl_encoder = false, and teleop is gated on the SMPL path. obs15_encoder_index's
-// [1, 0, 0] one-hot selects the live modality. A SMPL-enabled export would need these
-// produced -- so these zeros belong in config read from the checkpoint, not in code.
-const std::vector<std::pair<const char*, int>> kInactive{
-    {"obs08_teleop_lower_body_future", 240},        {"obs09_teleop_tracker_positions", 9},
-    {"obs10_teleop_tracker_quaternions", 12},       {"obs11_teleop_anchor_rotation", 6},
-    {"obs12_smpl_joints_local_future", 720},        {"obs13_smpl_root_rotation_future", 60},
-    {"obs14_smpl_wrist_joint_positions_future", 60}};
-
-std::vector<double> number_list(const std::string& raw, int expected) {
-  const auto json = nlohmann::json::parse(raw);
-  std::vector<double> out;
-  if (json.is_number()) {
-    out.assign(static_cast<size_t>(expected), json.get<double>());
-  } else {
-    for (const auto& v : json) out.push_back(v.get<double>());
+template <size_t N, class Values>
+void copy_finite(const Values& values, std::array<float, N>& out) {
+  if (values.size() != N) throw std::invalid_argument("Reference/state dimension mismatch");
+  for (size_t i = 0; i < N; ++i) {
+    out[i] = static_cast<float>(values[i]);
+    if (!std::isfinite(out[i])) throw std::invalid_argument("Reference/state must be finite");
   }
-  if (static_cast<int>(out.size()) != expected) throw std::runtime_error("metadata width mismatch");
-  return out;
 }
 
-// math.hpp has remove_yaw_offset / subtract_frame_transforms / matrix_from_quat but not these.
-math::Mat3 multiply(const math::Mat3& a, const math::Mat3& b) {
-  math::Mat3 out{};
-  for (int row = 0; row < 3; ++row)
-    for (int col = 0; col < 3; ++col)
-      for (int k = 0; k < 3; ++k)
-        out[static_cast<size_t>(row * 3 + col)] +=
-            a[static_cast<size_t>(row * 3 + k)] * b[static_cast<size_t>(k * 3 + col)];
-  return out;
+void copy_quat(const std::array<double, 4>& values, std::array<float, 4>& out) {
+  copy_finite(values, out);
+  double norm = 0;
+  for (double value : values) norm += value * value;
+  if (norm < 1e-12) throw std::invalid_argument("Reference orientation must be nonzero");
 }
-
-math::Mat3 transpose(const math::Mat3& r) { return {r[0], r[3], r[6], r[1], r[4], r[7], r[2], r[5], r[8]}; }
-
-double heading(const math::Mat3& r) { return std::atan2(r[3], r[0]); }
-
-math::Mat3 strip_yaw(const math::Mat3& r, double yaw) {
-  const double c = std::cos(-yaw), s = std::sin(-yaw);
-  return multiply(math::Mat3{c, -s, 0, s, c, 0, 0, 0, 1}, r);
-}
-
 }  // namespace
+
+InferenceConfig live_policy_config(const std::string& checkpoint, bool use_gpu, int intra_op_threads) {
+  InferenceConfig config;
+  config.robot.dof_names.assign(live::kG1BodyJointNames.begin(), live::kG1BodyJointNames.end());
+  config.robot.default_dof_angles.assign(live::kActionDim, 0.0);
+  config.robot.default_motor_angles = config.robot.default_dof_angles;
+  config.robot.joint2motor.resize(live::kActionDim);
+  std::iota(config.robot.joint2motor.begin(), config.robot.joint2motor.end(), 0);
+  config.robot.motor2joint = config.robot.joint2motor;
+  config.observation.obs_dict = {{"actor_obs", {}}, {"actor_targets", {}}};
+  config.task.model_path = {checkpoint};
+  config.task.use_phase = false;
+  config.runtime.use_gpu = use_gpu;
+  config.runtime.intra_op_threads = intra_op_threads;
+  return config;
+}
 
 GeneralWBTPolicy::GeneralWBTPolicy(InferenceConfig config, PolicyContext& context)
     : BasePolicy(std::move(config), context) {
@@ -65,98 +46,84 @@ GeneralWBTPolicy::GeneralWBTPolicy(InferenceConfig config, PolicyContext& contex
 }
 
 void GeneralWBTPolicy::setup_policy(ModelSlot& slot) {
-  slot.model = std::make_unique<OnnxModel>(slot.path);
-  const OnnxModel& model = *slot.model;
-  const auto mode = model.metadata_value("wbt_onnx_export_mode").value_or("");
-  if (mode != "actor_only" && mode != "\"actor_only\"") {
-    throw std::runtime_error(slot.path + ": expected an actor_only export");
-  }
-  if (model.find_input(kObsInput) == nullptr || model.find_input(kTimeStepInput) == nullptr) {
-    throw std::runtime_error(slot.path + ": expected inputs (obs, time_step)");
-  }
-  policy_default_pos_ = number_list(*model.metadata_value("default_joint_pos"), num_dofs_);
-  action_scale_ = number_list(*model.metadata_value("action_scale"), num_dofs_);
-  slot.kp = number_list(*model.metadata_value("kp"), config_.robot.num_motors);
-  slot.kd = number_list(*model.metadata_value("kd"), config_.robot.num_motors);
-  slot.gain_source = "ONNX metadata";
-  yaw0_captured_ = false;
+  auto core = std::make_unique<live::WbtPolicy>();
+  live::WbtHistoryInitialization history;
+  if (!live::ParseWbtHistoryInitialization(config_.task.wbt_history_initialization, history))
+    throw ConfigError("task.wbt_history_initialization: '" + config_.task.wbt_history_initialization +
+                      "' is not repeat_first_valid_obs or zero_pad");
+  core->SetHistoryInitialization(history);
+  if (!core->Initialize(slot.model)) throw ConfigError(slot.path + ": invalid live WBT checkpoint");
+  if (config_.robot.dof_names != core->JointNames())
+    throw ConfigError("Live WBT robot.dof_names must match checkpoint metadata order");
+  core->SetControlInterval(1.0 / config_.task.rl_rate);
+  cores_.push_back(std::move(core));
 }
 
 std::set<std::string> GeneralWBTPolicy::available_terms() const {
-  std::set<std::string> terms{"obs0_projected_gravity",
-                              "obs1_base_ang_vel",
-                              "obs2_dof_pos",
-                              "obs3_dof_vel",
-                              "obs4_actions",
-                              "obs05_motion_joint_pos_future",
-                              "obs06_motion_joint_vel_future",
-                              "obs07_motion_future_ref_ori_b",
-                              "obs15_encoder_index"};
-  for (const auto& [name, dim] : kInactive) terms.insert(name);
-  return terms;
+  // Metadata validation in the core owns the actual layout. Preset terms describe
+  // the default export but do not override a different checkpoint's contract.
+  const auto terms = obs_builder_.all_terms();
+  return {terms.begin(), terms.end()};
 }
 
-void GeneralWBTPolicy::compute_terms(const RobotState& state, TermValues& terms) {
-  const math::Quat quat{state.base_quat_wxyz[0], state.base_quat_wxyz[1], state.base_quat_wxyz[2],
-                        state.base_quat_wxyz[3]};
-  const math::Vec3 g = math::quat_rotate_inverse(quat, {0.0, 0.0, -1.0});
-  terms["obs0_projected_gravity"] = {g[0], g[1], g[2]};
-  terms["obs1_base_ang_vel"] = state.base_ang_vel;
-  auto& dof_pos = terms["obs2_dof_pos"];
-  dof_pos.resize(static_cast<size_t>(num_dofs_));
-  for (size_t i = 0; i < dof_pos.size(); ++i) dof_pos[i] = state.dof_pos[i] - policy_default_pos_[i];
-  terms["obs3_dof_vel"] = state.dof_vel;
-  terms["obs4_actions"] = last_policy_action_;
-
-  if (reference_ == nullptr) throw std::runtime_error("set_reference() before stepping");
-  terms["obs05_motion_joint_pos_future"] = reference_->q;
-  terms["obs06_motion_joint_vel_future"] = reference_->dq;
-
-  const math::Mat3 robot = math::matrix_from_quat(quat);
-  if (!yaw0_captured_) {
-    yaw0_ = {heading(robot), heading(math::matrix_from_quat(reference_->quat.front()))};
-    yaw0_captured_ = true;
-  }
-  const math::Mat3 robot_stripped = strip_yaw(robot, yaw0_[0]);
-  auto& rot6d = terms["obs07_motion_future_ref_ori_b"];
-  rot6d.clear();
-  for (const auto& q : reference_->quat) {
-    const math::Mat3 rel = multiply(transpose(robot_stripped), strip_yaw(math::matrix_from_quat(q), yaw0_[1]));
-    for (int i : {0, 1, 3, 4, 6, 7}) rot6d.push_back(rel[static_cast<size_t>(i)]);
-  }
-  terms["obs15_encoder_index"] = {1.0, 0.0, 0.0};
-  for (const auto& [name, dim] : kInactive) terms[name].assign(static_cast<size_t>(dim), 0.0);
+live::WbtPolicy& GeneralWBTPolicy::core() { return *cores_.at(static_cast<size_t>(active_index_)); }
+const live::WbtPolicy& GeneralWBTPolicy::core() const { return *cores_.at(static_cast<size_t>(active_index_)); }
+void GeneralWBTPolicy::on_policy_switched() { core().Reset(); }
+void GeneralWBTPolicy::handle_start_policy() {
+  BasePolicy::handle_start_policy();
+  core().ResetHeading();
 }
-
-const std::vector<float>& GeneralWBTPolicy::prepare_flat_obs(const RobotState& state) {
-  TermValues terms;
-  compute_terms(state, terms);
-  ObservationGroup& proprio = obs_builder_.group("actor_obs");
-  ObservationGroup& targets = obs_builder_.group("actor_targets");
-  flat_obs_.resize(static_cast<size_t>(proprio.dim() + targets.dim()));
-  proprio.update(terms, flat_obs_.data());
-  targets.update(terms, flat_obs_.data() + proprio.dim());
-  // TODO: also assign last_obs_ -- print_observations() and the parity harness read it.
-  return flat_obs_;
+std::vector<double> GeneralWBTPolicy::infer_observation(const std::vector<float>&) {
+  throw std::invalid_argument("Live WBT requires step(RobotState) with set_reference(), not packed observations");
 }
 
 std::vector<double> GeneralWBTPolicy::rl_inference(const RobotState& state) {
-  const std::vector<float>& obs = prepare_flat_obs(state);
-  OnnxModel& model = *active_slot().model;
-  std::copy(obs.begin(), obs.end(), model.input(kObsInput).begin());
-  model.input(kTimeStepInput)[0] = 0.0f;
-  model.run();
-
-  const std::vector<float>& raw = model.output(kActionsOutput);
-  last_policy_action_.resize(raw.size());
-  scaled_policy_action_.resize(raw.size());
-  for (size_t i = 0; i < raw.size(); ++i) {
-    last_policy_action_[i] = std::clamp(static_cast<double>(raw[i]), -kActionClip, kActionClip);
-    // Core adds robot.default_dof_angles; the export's own default pose is authoritative.
-    scaled_policy_action_[i] =
-        last_policy_action_[i] * action_scale_[i] + policy_default_pos_[i] - default_dof_angles_[i];
+  if (!reference_) throw std::runtime_error("set_reference() before stepping");
+  const size_t slots = static_cast<size_t>(std::max(1, core().LookaheadSlots()));
+  if (reference_->q.size() != slots * live::kActionDim || reference_->dq.size() != reference_->q.size() ||
+      reference_->quat.size() != slots)
+    throw std::invalid_argument("Reference window must match the checkpoint's lookahead slots and joint count");
+  live::RobotObservation observation;
+  copy_finite(state.dof_pos, observation.dof_pos_mj);
+  copy_finite(state.dof_vel, observation.dof_vel_mj);
+  copy_finite(state.base_quat_wxyz, observation.root_quat_wxyz);
+  copy_finite(state.base_ang_vel, observation.base_ang_vel);
+  // Same debug overrides and corrected gravity as BasePolicy::compute_terms.
+  const DebugConfig& debug = config_.task.debug;
+  if (debug.force_zero_angular_velocity) observation.base_ang_vel.fill(0.0f);
+  if (debug.force_upright_imu) {
+    observation.projected_gravity = std::array<float, 3>{0.0f, 0.0f, -1.0f};
+  } else if (state.projected_gravity) {
+    std::array<float, 3> gravity{};
+    copy_finite(*state.projected_gravity, gravity);
+    observation.projected_gravity = gravity;
   }
-  return scaled_policy_action_;
+  live::WbtReferenceSequence reference;
+  for (size_t slot = 0; slot < slots; ++slot) {
+    live::WbtReferenceFrame frame;
+    const size_t start = slot * live::kActionDim;
+    copy_finite(std::vector<double>(reference_->q.begin() + start, reference_->q.begin() + start + live::kActionDim),
+                frame.dof_pos);
+    copy_finite(std::vector<double>(reference_->dq.begin() + start, reference_->dq.begin() + start + live::kActionDim),
+                frame.dof_vel);
+    copy_quat(reference_->quat[slot], frame.root_quat_wxyz);
+    reference.lookahead.push_back(frame);
+  }
+  reference.current = reference.lookahead.front();
+  if (reference_->current) {
+    copy_finite(reference_->current->q, reference.current.dof_pos);
+    copy_finite(reference_->current->dq, reference.current.dof_vel);
+    copy_quat(reference_->current->quat, reference.current.root_quat_wxyz);
+  }
+  std::array<float, live::kActionDim> offsets{};
+  if (!core().ComputeAction(observation, reference, offsets.data()))
+    throw std::runtime_error("Live WBT inference failed");
+  if (debug.force_zero_action) offsets.fill(0.0f);
+  last_obs_ = core().LastObservation();
+  if (config_.task.print_observations) print_observations(last_obs_);
+  std::vector<double> result(live::kActionDim);
+  for (size_t i = 0; i < result.size(); ++i)
+    result[i] = static_cast<double>(offsets[i]) + core().DefaultDofPos()[i] - default_dof_angles_[i];
+  return result;
 }
-
 }  // namespace holosoma

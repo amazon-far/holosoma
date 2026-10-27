@@ -73,7 +73,8 @@ void BasePolicy::initialize() {
   for (const auto& path : config_.task.model_path) {
     auto slot = std::make_unique<ModelSlot>();
     slot->path = path;
-    slot->model = std::make_unique<OnnxModel>(path);
+    slot->model = std::make_unique<OnnxModel>(path, config_.runtime.use_gpu, config_.runtime.intra_op_threads,
+                                              config_.runtime.profile_prefix);
     setup_policy(*slot);
     resolve_gains(*slot);
     slots_.push_back(std::move(slot));
@@ -197,6 +198,8 @@ void BasePolicy::compute_terms(const RobotState& state, TermValues& terms) {
   terms["dof_vel"] = state.dof_vel;
   if (config_.task.debug.force_upright_imu) {
     terms["projected_gravity"] = {0.0, 0.0, -1.0};
+  } else if (state.projected_gravity) {
+    terms["projected_gravity"] = *state.projected_gravity;
   } else {
     const math::Quat q{state.base_quat_wxyz[0], state.base_quat_wxyz[1], state.base_quat_wxyz[2],
                        state.base_quat_wxyz[3]};
@@ -217,6 +220,7 @@ const std::vector<float>& BasePolicy::prepare_actor_obs(const RobotState& state)
 std::vector<double> BasePolicy::clip_action(const std::vector<float>& raw) {
   std::vector<double> out(raw.size());
   for (size_t i = 0; i < raw.size(); ++i) {
+    if (!std::isfinite(raw[i])) throw std::runtime_error("ONNX produced a non-finite action");
     out[i] = static_cast<double>(std::clamp(raw[i], -100.0f, 100.0f));
   }
   return out;
@@ -225,9 +229,15 @@ std::vector<double> BasePolicy::clip_action(const std::vector<float>& raw) {
 std::vector<double> BasePolicy::rl_inference(const RobotState& state) {
   const std::vector<float>& obs = prepare_actor_obs(state);
   if (config_.task.print_observations) print_observations(obs);
+  return infer_observation(obs);
+}
 
+std::vector<double> BasePolicy::infer_observation(const std::vector<float>& obs) {
   OnnxModel& model = *active_slot().model;
   std::vector<float>& input = model.input("actor_obs");
+  if (obs.size() != input.size()) throw std::invalid_argument("Actor observation has the wrong width");
+  if (!std::all_of(obs.begin(), obs.end(), [](float v) { return std::isfinite(v); }))
+    throw std::invalid_argument("Actor observation must be finite");
   std::copy(obs.begin(), obs.end(), input.begin());
   model.run();
   const std::vector<double> action = clip_action(model.output(model.outputs()[0].name));
@@ -243,6 +253,16 @@ std::vector<double> BasePolicy::rl_inference(const RobotState& state) {
     std::fill(scaled_policy_action_.begin(), scaled_policy_action_.end(), 0.0);
   }
   return scaled_policy_action_;
+}
+
+void BasePolicy::reset() {
+  obs_builder_ = ObservationBuilder(config_.observation);
+  std::fill(last_policy_action_.begin(), last_policy_action_.end(), 0.0);
+  std::fill(scaled_policy_action_.begin(), scaled_policy_action_.end(), 0.0);
+  last_obs_.clear();
+  init_count_ = 0;
+  on_policy_switched();
+  init_phase_components();
 }
 
 std::optional<ManualCommand> BasePolicy::manual_command(const RobotState&) { return std::nullopt; }

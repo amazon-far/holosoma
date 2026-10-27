@@ -252,24 +252,19 @@ class _RefreshStub:
         self._rigid_body_vel = torch.zeros(1, len(body_ids), 3)
         self._rigid_body_ang_vel = torch.zeros(1, len(body_ids), 3)
         self.contact_forces = torch.zeros(1, len(body_ids), 3)
-        self.contact_forces_history = torch.arange(
-            9 * len(body_ids),
-            dtype=torch.float32,
-        ).reshape(1, 3, len(body_ids), 3)
+
+    def flush_external_wrench(self) -> None:
+        pass
 
 
-def test_live_refresh_matches_legacy_state_contacts_and_history() -> None:
+def test_live_refresh_matches_legacy_body_state() -> None:
     backend = _backend(_CONTACT_MJCF)
     mujoco.mj_step(backend.model, backend.data)
     assert backend.data.ncon == 3
     body_ids = [2, 1]
     backend.configure_rigid_body_refresh(body_ids)
     expected_state = _legacy_body_state(backend, body_ids)
-    expected_full_forces = _legacy_contact_forces(backend)
     sim = _RefreshStub(backend, body_ids)
-    old_history = sim.contact_forces_history.clone()
-    expected_contacts = expected_full_forces[:, sim._body_ids_t]
-    expected_history = torch.cat([expected_contacts.unsqueeze(1), old_history[:, :-1]], dim=1)
 
     MuJoCo.refresh_sim_tensors(cast("MuJoCo", sim))
 
@@ -281,7 +276,21 @@ def test_live_refresh_matches_legacy_state_contacts_and_history() -> None:
     )
     for actual, expected in zip(actual_state, expected_state, strict=False):
         assert torch.equal(actual[0], expected)
+    assert all(tensor.dtype == torch.float32 for tensor in actual_state)
+
+
+def test_step_gathers_robot_contact_rows() -> None:
+    """The gather runs inside _step_dynamics, so the forces are the ones the step just produced."""
+    backend = _backend(_CONTACT_MJCF)
+    body_ids = [2, 1]
+    backend.configure_rigid_body_refresh(body_ids)
+    sim = _RefreshStub(backend, body_ids)
+
+    MuJoCo._step_dynamics(cast("MuJoCo", sim))
+
+    assert backend.data.ncon == 3
+    expected_contacts = _legacy_contact_forces(backend)[:, sim._body_ids_t]
+    assert torch.count_nonzero(expected_contacts) > 0
     assert torch.equal(sim.contact_forces, expected_contacts)
-    assert torch.equal(sim.contact_forces_history, expected_history)
-    assert all(tensor.dtype == torch.float32 for tensor in (*actual_state, sim.contact_forces))
+    assert sim.contact_forces.dtype == torch.float32
     assert sim.contact_forces.device.type == "cpu"

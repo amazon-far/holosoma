@@ -29,7 +29,6 @@ isaacsim = SIMULATOR_REGISTRY.add(
                 render_mode="human",
                 render_interval=4,
             ),
-            contact_sensor_history_length=3,
         ),
     ),
 )
