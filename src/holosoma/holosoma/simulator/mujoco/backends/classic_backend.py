@@ -315,88 +315,17 @@ class ClassicBackend(IMujocoBackend):
             device=self.device,
         )
 
-    def create_dof_pos_view(self, indices: slice, num_dof: int) -> BaseMujocoView:
-        """Create DOF position view.
+    def configure_dof_refresh(self, qpos_addrs: list[int], qvel_addrs: list[int]) -> None:
+        """Store robot DOF addresses in holosoma DOF order."""
+        self._dof_qpos_ids = np.array(qpos_addrs, dtype=np.intp)
+        self._dof_qvel_ids = np.array(qvel_addrs, dtype=np.intp)
 
-        Parameters
-        ----------
-        indices : slice
-            Slice into qpos array
-        num_dof : int
-            Number of degrees of freedom
-
-        Returns
-        -------
-        BaseMujocoView
-            View for DOF positions [1, num_dof]
-        """
-        from holosoma.simulator.mujoco.tensor_views import create_dof_position_view
-
-        return create_dof_position_view(self.data.qpos, indices, 1, num_dof, self.device)
-
-    def create_dof_vel_view(self, indices: slice, num_dof: int) -> BaseMujocoView:
-        """Create DOF velocity view.
-
-        Parameters
-        ----------
-        indices : slice
-            Slice into qvel array
-        num_dof : int
-            Number of degrees of freedom
-
-        Returns
-        -------
-        BaseMujocoView
-            View for DOF velocities [1, num_dof]
-        """
-        from holosoma.simulator.mujoco.tensor_views import create_dof_velocity_view
-
-        return create_dof_velocity_view(self.data.qvel, indices, 1, num_dof, self.device)
-
-    def create_dof_acc_view(self, indices: slice, num_dof: int) -> BaseMujocoView:
-        """Create DOF acceleration view.
-
-        Parameters
-        ----------
-        indices : slice
-            Slice into qacc array
-        num_dof : int
-            Number of degrees of freedom
-
-        Returns
-        -------
-        BaseMujocoView
-            View for DOF accelerations [1, num_dof]
-        """
-        from holosoma.simulator.mujoco.tensor_views import create_dof_acceleration_view
-
-        return create_dof_acceleration_view(self.data.qacc, indices, 1, num_dof, self.device)
-
-    def create_dof_state_view(self, dof_addrs: dict[str, Any], num_dof: int) -> BaseMujocoView:
-        """Create DOF state view using CPU numpy arrays.
-
-        Parameters
-        ----------
-        dof_addrs : dict
-            Dictionary with 'dof_pos_indices' and 'dof_vel_indices' slices
-        num_dof : int
-            Number of degrees of freedom
-
-        Returns
-        -------
-        BaseMujocoView
-            MujocoDofStateView with flattened format [1 * num_dof, 2]
-        """
-        from holosoma.simulator.mujoco.tensor_views import MujocoDofStateView
-
-        return MujocoDofStateView(
-            qpos_array=self.data.qpos,
-            qvel_array=self.data.qvel,
-            dof_pos_indices=dof_addrs["dof_pos_indices"],
-            dof_vel_indices=dof_addrs["dof_vel_indices"],
-            num_envs=1,
-            num_dof=num_dof,
-            device=self.device,
+    def refresh_dof_states(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Gather robot DOF state from the CPU data arrays."""
+        return (
+            torch.from_numpy(self.data.qpos[self._dof_qpos_ids]).unsqueeze(0).to(self.device, torch.float32),
+            torch.from_numpy(self.data.qvel[self._dof_qvel_ids]).unsqueeze(0).to(self.device, torch.float32),
+            torch.from_numpy(self.data.qacc[self._dof_qvel_ids]).unsqueeze(0).to(self.device, torch.float32),
         )
 
     def get_applied_forces_view(self) -> npt.NDArray[Any]:

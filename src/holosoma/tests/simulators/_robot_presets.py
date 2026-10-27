@@ -9,11 +9,16 @@ robots.
 ``link_physics`` to it and compares its physical outcome against an object twin carrying the same
 ``PhysicsConfig``.
 
+``g1-29dof-reordered`` is G1 with its DOF order rotated away from the asset's joint order, for
+``dof_order_assert``.
+
 ``behavior_assert.main`` calls :func:`register` so ``--robot onelink-box`` resolves through the
 tyro path. Core does not import this module; tests register into it.
 """
 
 from __future__ import annotations
+
+import dataclasses
 
 from holosoma.config_types.robot import (
     RobotAssetConfig,
@@ -124,10 +129,41 @@ def _onelink_robot(link_physics: PhysicsConfig | None) -> RobotConfig:
 # material-carrying variants.
 onelink_box = _onelink_robot(link_physics=None)
 
+
+# --------------------------------------------------------------------------------------------
+# G1 with dof_names (and every per-DOF list) rotated, so config order differs from asset order.
+# --------------------------------------------------------------------------------------------
+
+
+def _rotated_dof_order(robot: RobotConfig, shift: int) -> RobotConfig:
+    """Return ``robot`` with ``dof_names`` and its positional per-DOF lists rotated together by ``shift``."""
+
+    def rotate(values: list) -> list:
+        return values[shift:] + values[:shift]
+
+    return dataclasses.replace(
+        robot,
+        dof_names=rotate(robot.dof_names),
+        dof_pos_lower_limit_list=rotate(robot.dof_pos_lower_limit_list),
+        dof_pos_upper_limit_list=rotate(robot.dof_pos_upper_limit_list),
+        dof_vel_limit_list=rotate(robot.dof_vel_limit_list),
+        dof_effort_limit_list=rotate(robot.dof_effort_limit_list),
+        dof_armature_list=rotate(robot.dof_armature_list),
+        dof_joint_friction_list=rotate(robot.dof_joint_friction_list),
+    )
+
+
+def _g1_29dof_reordered() -> RobotConfig:
+    from holosoma.config_values.robot import g1_29dof
+
+    return _rotated_dof_order(g1_29dof, shift=7)
+
+
 # The scenario harness sets the material-carrying link_physics per scenario via dataclasses.replace,
 # so the registry needs only the bare preset.
 TEST_ROBOT_PRESETS = {
     "onelink-box": onelink_box,
+    "g1-29dof-reordered": _g1_29dof_reordered(),
 }
 
 

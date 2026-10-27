@@ -171,82 +171,6 @@ class IMujocoBackend(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def create_dof_pos_view(self, indices: slice, num_dof: int) -> BaseMujocoView:
-        """Create view for DOF positions.
-
-        Parameters
-        ----------
-        indices : slice
-            Slice into qpos array
-        num_dof : int
-            Number of degrees of freedom
-
-        Returns
-        -------
-        BaseMujocoView
-            View for DOF positions [num_envs, num_dof]
-        """
-        ...
-
-    @abc.abstractmethod
-    def create_dof_vel_view(self, indices: slice, num_dof: int) -> BaseMujocoView:
-        """Create view for DOF velocities.
-
-        Parameters
-        ----------
-        indices : slice
-            Slice into qvel array
-        num_dof : int
-            Number of degrees of freedom
-
-        Returns
-        -------
-        BaseMujocoView
-            View for DOF velocities [num_envs, num_dof]
-        """
-        ...
-
-    @abc.abstractmethod
-    def create_dof_acc_view(self, indices: slice, num_dof: int) -> BaseMujocoView:
-        """Create view for DOF accelerations.
-
-        Parameters
-        ----------
-        indices : slice
-            Slice into qacc array
-        num_dof : int
-            Number of degrees of freedom
-
-        Returns
-        -------
-        BaseMujocoView
-            View for DOF accelerations [num_envs, num_dof]
-        """
-        ...
-
-    @abc.abstractmethod
-    def create_dof_state_view(self, dof_addrs: dict[str, Any], num_dof: int) -> BaseMujocoView:
-        """Create view for DOF states in flattened format.
-
-        Returns view with shape [num_envs * num_dof, 2] where:
-        - [:, 0] = positions
-        - [:, 1] = velocities
-
-        Parameters
-        ----------
-        dof_addrs : dict
-            Dictionary with 'dof_pos_indices' and 'dof_vel_indices' slices
-        num_dof : int
-            Number of degrees of freedom
-
-        Returns
-        -------
-        BaseMujocoView
-            View for DOF states [num_envs * num_dof, 2]
-        """
-        ...
-
-    @abc.abstractmethod
     def get_applied_forces_view(self) -> npt.NDArray[Any] | torch.Tensor:
         """Get writable view for external applied forces.
 
@@ -391,6 +315,20 @@ class IMujocoBackend(abc.ABC):
             linear_vel[:, body_ids],
             angular_vel[:, body_ids],
         )
+
+    def configure_dof_refresh(self, qpos_addrs: list[int], qvel_addrs: list[int]) -> None:
+        """Configure extraction for robot DOFs in holosoma DOF order."""
+        self._dof_qpos_ids_t = torch.tensor(qpos_addrs, dtype=torch.long, device=self.device)
+        self._dof_qvel_ids_t = torch.tensor(qvel_addrs, dtype=torch.long, device=self.device)
+
+    @abc.abstractmethod
+    def refresh_dof_states(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return robot DOF ``(positions, velocities, accelerations)`` in holosoma DOF order.
+
+        Each tensor is ``[num_envs, num_dof]``, gathered at the addresses passed to
+        :meth:`configure_dof_refresh`.
+        """
+        ...
 
     def initialize_state(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
         """Sync CPU initial state to backend storage after construction.

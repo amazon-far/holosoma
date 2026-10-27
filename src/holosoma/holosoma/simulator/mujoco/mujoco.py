@@ -28,7 +28,9 @@ from holosoma.simulator.mujoco.model_debug import print_mujoco_model_tree
 from holosoma.simulator.mujoco.robot_addressing import (
     apply_initial_joint_angles,
     build_name_maps,
+    check_dof_names,
     resolve_actor_addressing,
+    resolve_dof_actuator_ids,
     resolve_dof_addresses,
     resolve_robot_body_ids,
 )
@@ -143,21 +145,6 @@ class MuJoCo(BaseSimulator):
         meta = self.scene_manager.robot_spec_meta
         assert meta is not None, "robot_spec_meta must be captured before building name maps"
         self.clean_to_prefixed_names, self.prefixed_to_clean_names = build_name_maps(meta)
-
-    def _get_prefixed_name(self, clean_name: str) -> str:
-        """Get prefixed name from clean name using map lookup.
-
-        Parameters
-        ----------
-        clean_name : str
-            Clean name without prefix.
-
-        Returns
-        -------
-        str
-            Prefixed name for MuJoCo lookup, or original name if not found.
-        """
-        return self.clean_to_prefixed_names.get(clean_name, clean_name)
 
     def _get_clean_name(self, prefixed_name: str) -> str:
         """Get clean name from prefixed name using map lookup.
@@ -406,8 +393,9 @@ class MuJoCo(BaseSimulator):
         # Build clean<->prefixed name maps from the recorded robot elements first.
         self._build_name_maps()
 
-        # Robot DOFs: the recorded named, non-free joints (clean names).
-        self.dof_names = list(meta.dof_joint_names)
+        # Robot DOFs (clean names) in robot_config order; the model's own order is mapped by name.
+        check_dof_names(self.robot_config.dof_names, meta.dof_joint_names)
+        self.dof_names = list(self.robot_config.dof_names)
         self.num_dof = len(self.dof_names)
 
         # Robot bodies (clean names), in the recorded spec (DFS) order.
@@ -444,6 +432,9 @@ class MuJoCo(BaseSimulator):
         self.dof_qpos_addrs, self.dof_qvel_addrs = resolve_dof_addresses(
             self.root_model, self.dof_names, self.clean_to_prefixed_names
         )
+        self.backend.configure_dof_refresh(self.dof_qpos_addrs, self.dof_qvel_addrs)
+        self._dof_actuator_ids = resolve_dof_actuator_ids(self.root_model, self.dof_names, self.clean_to_prefixed_names)
+        self._dof_actuator_ids_t = torch.tensor(self._dof_actuator_ids, dtype=torch.long, device=self.sim_device)
         logger.info("=== Robot joint addressing setup completed ===")
 
     @property
@@ -631,6 +622,7 @@ class MuJoCo(BaseSimulator):
         # Initialize state tensors based on actual DOF count
         self.dof_pos = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
         self.dof_vel = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
+        self.dof_acc = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
 
         # Initialize contact forces tensor with correct shape [num_envs, num_bodies, 3]
         # This matches the interface expected by holosoma (IsaacSim pattern)
@@ -722,26 +714,6 @@ class MuJoCo(BaseSimulator):
         # that set_actor_root_state_tensor uses (it detects this proxy by identity).
         self.all_root_states = UnifiedRootStatesView(self)
 
-        # Calculate indices for DOF positions and velocities
-        dof_pos_indices = (
-            slice(min(self.dof_qpos_addrs), max(self.dof_qpos_addrs) + 1) if self.dof_qpos_addrs else slice(0, 0)
-        )
-        dof_vel_indices = (
-            slice(min(self.dof_qvel_addrs), max(self.dof_qvel_addrs) + 1) if self.dof_qvel_addrs else slice(0, 0)
-        )
-        dof_acc_indices = (
-            slice(min(self.dof_qvel_addrs), max(self.dof_qvel_addrs) + 1) if self.dof_qvel_addrs else slice(0, 0)
-        )
-
-        # Create DOF state proxy via backend factory
-        dof_addrs = {"dof_pos_indices": dof_pos_indices, "dof_vel_indices": dof_vel_indices}
-        self.dof_state = self.backend.create_dof_state_view(dof_addrs, self.num_dof)
-
-        # Create individual DOF views via backend factories
-        self.dof_pos = self.backend.create_dof_pos_view(dof_pos_indices, self.num_dof)
-        self.dof_vel = self.backend.create_dof_vel_view(dof_vel_indices, self.num_dof)
-        self.dof_acc = self.backend.create_dof_acc_view(dof_acc_indices, self.num_dof)
-
         # contact_forces stays the robot-only, num_bodies-wide tensor allocated in create_envs;
         # simulate_at_each_physics_step gathers robot rows into it each substep. It is
         # intentionally not bound to the backend's full-model-width force view.
@@ -820,6 +792,8 @@ class MuJoCo(BaseSimulator):
             )
             self.backend.set_static_body_world_pose(body_ids, positions)  # position-only at spawn
 
+        self._refresh_dof_states()
+
     def prepare_randomization_fields(self, field_names: list[str]) -> None:
         """Prepare model fields for per-environment randomization.
 
@@ -855,8 +829,9 @@ class MuJoCo(BaseSimulator):
             logger.info("No bodies to refresh (empty world)")
             return
 
-        # NOTE: With the proxy system, most state tensors (dof_pos, dof_vel, dof_state, robot_root_states)
-        # automatically reflect the current MuJoCo state, so we only need to update the non-proxy tensors.
+        # robot_root_states is a proxy view onto the live MuJoCo state; the DOF and rigid-body
+        # buffers are copies, refreshed here.
+        self._refresh_dof_states()
 
         positions, orientations, linear_vel, angular_vel = self.backend.refresh_rigid_body_states()
         self._rigid_body_pos.copy_(positions)
@@ -880,7 +855,7 @@ class MuJoCo(BaseSimulator):
         Raises
         ------
         ValueError
-            If torque count doesn't match actuator count or actuator not found.
+            If the torque count doesn't match the number of DOFs written (ClassicBackend).
         """
         assert self.root_model
         assert self.root_data
@@ -889,36 +864,28 @@ class MuJoCo(BaseSimulator):
             logger.warning("No actuators found in MuJoCo model")
             return
 
-        # The DOFs to write, and their aligned torques. Full path -> every DOF in order.
-        target_dofs = list(range(self.num_dof)) if dof_indices is None else dof_indices
-
         # Check if backend supports direct tensor writes
         ctrl_tensor = self.backend.get_ctrl_tensor()
 
         if ctrl_tensor is not None:
-            # Fast path: Direct zero-copy write (WarpBackend). ctrl is [num_envs, nu] in DOF order.
+            # Fast path: Direct zero-copy write (WarpBackend). ctrl is [num_envs, nu].
             if dof_indices is None:
-                ctrl_tensor[:] = torques
+                ctrl_tensor[:, self._dof_actuator_ids_t] = torques.to(ctrl_tensor.dtype)
             else:
-                idx_t = torch.as_tensor(dof_indices, device=ctrl_tensor.device, dtype=torch.long)
-                ctrl_tensor[:, idx_t] = torques.reshape(-1).to(ctrl_tensor.dtype)
+                idx_t = self._dof_actuator_ids_t[
+                    torch.as_tensor(dof_indices, device=ctrl_tensor.device, dtype=torch.long)
+                ]
+                ctrl_tensor[:, idx_t] = torques.reshape(-1, len(dof_indices)).to(ctrl_tensor.dtype)
         else:
-            # Slow path: Loop-based write (ClassicBackend)
+            # Slow path: addressed NumPy write (ClassicBackend)
             torques_np = torques.detach().cpu().numpy().flatten()
+            target_dofs = list(range(self.num_dof)) if dof_indices is None else dof_indices
 
             # Verify torque count matches the DOFs being written.
             if len(torques_np) != len(target_dofs):
                 raise ValueError(f"Torque count mismatch: got {len(torques_np)}, expected {len(target_dofs)}")
 
-            # Map holosoma DOF indices to MuJoCo actuator indices (write only the target DOFs).
-            for i, dof_idx in enumerate(target_dofs):
-                # Add prefix for MuJoCo actuator lookup (dof_names are clean, need prefixed version)
-                dof_name = self.dof_names[dof_idx]
-                actuator_name = self._get_prefixed_name(dof_name)
-                actuator_id = mujoco.mj_name2id(self.root_model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
-                if actuator_id == -1:
-                    raise ValueError(f"Actuator for DOF '{dof_name}' (MuJoCo name: '{actuator_name}') not found")
-                self.root_data.ctrl[actuator_id] = torques_np[i]
+            self.root_data.ctrl[[self._dof_actuator_ids[i] for i in target_dofs]] = torques_np
 
     def draw_debug_viz(self) -> None:
         if self.virtual_gantry:
@@ -929,12 +896,27 @@ class MuJoCo(BaseSimulator):
         # Must run before backend.step() consumes xfrc_applied.
         self.flush_external_wrench()
         self.backend.step()
+        self._refresh_dof_states()
 
         # The recorder's POST_STEP hook reads contact_forces, so it must be fresh by the end of the
         # substep. Empty world: no robot rows to gather.
         if self.num_bodies > 0:
             full_forces = self.backend.compute_contact_forces()
             self.contact_forces[:] = full_forces[:, self._body_ids_t]
+
+    @property
+    def dof_state(self) -> torch.Tensor:
+        """Robot DOF states flattened to ``[num_envs * num_dof, 2]`` (``[:, 0]`` positions, ``[:, 1]`` velocities)."""
+        return torch.stack([self.dof_pos, self.dof_vel], dim=-1).reshape(-1, 2)
+
+    def _refresh_dof_states(self) -> None:
+        """Copy the backend's robot DOF state into ``dof_pos``/``dof_vel``/``dof_acc`` (robot_config order)."""
+        if self.num_dof == 0:
+            return
+        positions, velocities, accelerations = self.backend.refresh_dof_states()
+        self.dof_pos.copy_(positions)
+        self.dof_vel.copy_(velocities)
+        self.dof_acc.copy_(accelerations)
 
     def forward_kinematics(self) -> None:
         """Recompute body/geom/camera poses from written state (classic: ``mj_forward``; warp:
@@ -1378,6 +1360,7 @@ class MuJoCo(BaseSimulator):
         # Delegate to backend
         dof_addrs = {"dof_qpos_addrs": self.dof_qpos_addrs, "dof_qvel_addrs": self.dof_qvel_addrs}
         self.backend.set_dof_state(env_ids, dof_states, dof_addrs)
+        self._refresh_dof_states()
 
     def get_dof_limits_properties(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Get DOF limits properties from the robot config (shared builder).
@@ -1527,7 +1510,7 @@ class MuJoCo(BaseSimulator):
             raise RuntimeError(f"MuJoCo classic currently only supports single environment (env_id=0), got {env_id}")
 
         assert self.root_data is not None
-        return torch.from_numpy(self.root_data.actuator_force[: self.num_dof]).float().to(self.sim_device)
+        return torch.from_numpy(self.root_data.actuator_force[self._dof_actuator_ids]).float().to(self.sim_device)
 
     def print_mujoco_model_tree(self) -> None:
         """Print comprehensive MuJoCo model structure for debugging."""

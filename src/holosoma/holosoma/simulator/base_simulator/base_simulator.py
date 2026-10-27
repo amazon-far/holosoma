@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -543,6 +544,70 @@ class BaseSimulator:
                 driving the complementary DOFs is not clobbered).
         """
         raise NotImplementedError("The 'apply_torques_at_dof' method must be implemented in subclasses.")
+
+    # ----- DOF access by joint name (public, cross-backend) -----
+    #
+    # ``dof_pos``/``dof_vel`` and torques are in ``robot_config.dof_names`` order on every backend;
+    # these address the same tensors by joint name.
+
+    def dof_indices(self, names: Sequence[str]) -> list[int]:
+        """Return each named DOF's index in ``dof_names``.
+
+        Raises:
+            ValueError: a name is not one of the robot's DOFs.
+        """
+        index = {name: i for i, name in enumerate(self.dof_names)}
+        unknown = [name for name in names if name not in index]
+        if unknown:
+            raise ValueError(f"Unknown DOF names {unknown}; the robot's DOFs are {self.dof_names}")
+        return [index[name] for name in names]
+
+    def get_dof_state_by_name(
+        self, names: Sequence[str] | None = None, env_ids: EnvIds | None = None
+    ) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
+        """Return ``{joint_name: (position, velocity)}``, each a ``[len(env_ids)]`` tensor.
+
+        Args:
+            names: DOFs to read; ``None`` => all, in ``dof_names`` order.
+            env_ids: Environments to read; ``None`` => all.
+        """
+        names = list(self.dof_names) if names is None else list(names)
+        cols = self.dof_indices(names)
+        rows = slice(None) if env_ids is None else env_ids
+        positions, velocities = self.dof_pos[rows][:, cols], self.dof_vel[rows][:, cols]
+        return {name: (positions[:, i], velocities[:, i]) for i, name in enumerate(names)}
+
+    def set_dof_state_by_name(
+        self,
+        env_ids: EnvIds | None,
+        positions: Mapping[str, float | torch.Tensor],
+        velocities: Mapping[str, float | torch.Tensor] | None = None,
+    ) -> None:
+        """Write the named DOFs' positions (and optionally velocities); other DOFs keep their state.
+
+        Args:
+            env_ids: Environments to write; ``None`` => all.
+            positions: ``{joint_name: value}``; each value a scalar or a ``[len(env_ids)]`` tensor.
+            velocities: Same form as ``positions``; ``None`` leaves velocities unchanged.
+        """
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.sim_device)
+        for target, values in ((self.dof_pos, positions), (self.dof_vel, velocities or {})):
+            for col, value in zip(self.dof_indices(list(values)), values.values(), strict=True):
+                target[env_ids, col] = torch.as_tensor(value, dtype=target.dtype, device=target.device)
+        self.set_dof_state_tensor(env_ids)
+
+    def apply_torques_by_name(self, torques: Mapping[str, float | torch.Tensor]) -> None:
+        """Apply torques to the named DOFs only (see :meth:`apply_torques_at_dof` with ``dof_indices``).
+
+        Args:
+            torques: ``{joint_name: value}``; each value a scalar or a ``[num_envs]`` tensor.
+        """
+        columns = [
+            torch.as_tensor(value, dtype=torch.float32, device=self.sim_device).expand(self.num_envs)
+            for value in torques.values()
+        ]
+        self.apply_torques_at_dof(torch.stack(columns, dim=-1), dof_indices=self.dof_indices(list(torques)))
 
     def simulate_at_each_physics_step(self) -> None:
         """Advance the simulation by a single step.

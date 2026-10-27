@@ -721,96 +721,12 @@ class WarpBackend(IMujocoBackend):
             num_envs=self.num_envs,
         )
 
-    def create_dof_pos_view(self, indices: slice, num_dof: int) -> torch.Tensor:
-        """Return DOF position tensor directly (no wrapper needed).
-
-        wp.to_torch() already returns a native PyTorch tensor that:
-        - Shares memory with Warp array (zero-copy)
-        - Supports all PyTorch operations natively
-        - Works seamlessly on GPU
-
-        Parameters
-        ----------
-        indices : slice
-            Slice into qpos array
-        num_dof : int
-            Number of degrees of freedom (unused, for interface compatibility)
-
-        Returns
-        -------
-        torch.Tensor
-            DOF positions [num_envs, num_dof] - native PyTorch tensor
-        """
-        return self.qpos_t[:, indices]
-
-    def create_dof_vel_view(self, indices: slice, num_dof: int) -> torch.Tensor:
-        """Return DOF velocity tensor directly (no wrapper needed).
-
-        wp.to_torch() already returns a native PyTorch tensor that:
-        - Shares memory with Warp array (zero-copy)
-        - Supports all PyTorch operations natively
-        - Works seamlessly on GPU
-
-        Parameters
-        ----------
-        indices : slice
-            Slice into qvel array
-        num_dof : int
-            Number of degrees of freedom (unused, for interface compatibility)
-
-        Returns
-        -------
-        torch.Tensor
-            DOF velocities [num_envs, num_dof] - native PyTorch tensor
-        """
-        return self.qvel_t[:, indices]
-
-    def create_dof_acc_view(self, indices: slice, num_dof: int) -> torch.Tensor:
-        """Return DOF acceleration tensor directly (no wrapper needed).
-
-        wp.to_torch() already returns a native PyTorch tensor that:
-        - Shares memory with Warp array (zero-copy)
-        - Supports all PyTorch operations natively
-        - Works seamlessly on GPU
-
-        Parameters
-        ----------
-        indices : slice
-            Slice into qacc array
-        num_dof : int
-            Number of degrees of freedom (unused, for interface compatibility)
-
-        Returns
-        -------
-        torch.Tensor
-            DOF accelerations [num_envs, num_dof] - native PyTorch tensor
-        """
-        return self.qacc_t[:, indices]
-
-    def create_dof_state_view(self, dof_addrs: dict[str, Any], num_dof: int) -> BaseMujocoView:
-        """Create DOF state view using zero-copy GPU tensors.
-
-        Parameters
-        ----------
-        dof_addrs : dict
-            Dictionary with 'dof_pos_indices' and 'dof_vel_indices' slices
-        num_dof : int
-            Number of degrees of freedom
-
-        Returns
-        -------
-        MjwDofStateView
-            DOF state view with flattened format [num_envs * num_dof, 2]
-        """
-        from holosoma.simulator.mujoco.mjw_views import MjwDofStateView
-
-        return MjwDofStateView(
-            qpos=self.qpos_t,
-            qvel=self.qvel_t,
-            dof_pos_indices=dof_addrs["dof_pos_indices"],
-            dof_vel_indices=dof_addrs["dof_vel_indices"],
-            num_envs=self.num_envs,
-            num_dof=num_dof,
+    def refresh_dof_states(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Gather robot DOF state from the full-model GPU tensors."""
+        return (
+            self.qpos_t[:, self._dof_qpos_ids_t],
+            self.qvel_t[:, self._dof_qvel_ids_t],
+            self.qacc_t[:, self._dof_qvel_ids_t],
         )
 
     def get_applied_forces_view(self) -> torch.Tensor:

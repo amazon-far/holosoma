@@ -256,6 +256,9 @@ class _RefreshStub:
     def flush_external_wrench(self) -> None:
         pass
 
+    def _refresh_dof_states(self) -> None:
+        pass
+
 
 def test_live_refresh_matches_legacy_body_state() -> None:
     backend = _backend(_CONTACT_MJCF)

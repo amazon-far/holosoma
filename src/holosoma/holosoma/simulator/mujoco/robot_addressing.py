@@ -93,6 +93,59 @@ def resolve_dof_addresses(
     return qpos_addrs, qvel_addrs
 
 
+def check_dof_names(config_dof_names: Sequence[str], model_dof_names: Sequence[str]) -> None:
+    """Check that the robot config names exactly the model's DOF joints.
+
+    The order may differ: holosoma presents DOFs in ``config_dof_names`` order and maps to the
+    model's order by name.
+
+    Raises
+    ------
+    ValueError
+        If either list has a joint the other lacks, or ``config_dof_names`` has duplicates.
+    """
+    config_set, model_set = set(config_dof_names), set(model_dof_names)
+    if len(config_set) != len(config_dof_names):
+        raise ValueError(f"robot_config.dof_names has duplicate entries: {list(config_dof_names)}")
+    if config_set != model_set:
+        raise ValueError(
+            "robot_config.dof_names does not match the model's DOF joints. "
+            f"Missing from the model: {sorted(config_set - model_set)}. "
+            f"Missing from the config: {sorted(model_set - config_set)}."
+        )
+    if list(config_dof_names) != list(model_dof_names):
+        logger.info("Model joint order differs from robot_config.dof_names; DOFs are mapped by name.")
+
+
+def resolve_dof_actuator_ids(
+    model: mujoco.MjModel, dof_names: Sequence[str], clean_to_prefixed: Mapping[str, str]
+) -> list[int]:
+    """Return the id of the actuator driving each DOF joint, in ``dof_names`` order.
+
+    Actuators are matched by their transmission target joint, not by name. Returns an empty list
+    when the model has no actuators.
+
+    Raises
+    ------
+    ValueError
+        If the model has actuators but a DOF joint is not driven by exactly one of them.
+    """
+    if model.nu == 0:
+        return []
+    joint_to_actuators: dict[int, list[int]] = {}
+    for actuator_id in range(model.nu):
+        if model.actuator_trntype[actuator_id] == mujoco.mjtTrn.mjTRN_JOINT:
+            joint_to_actuators.setdefault(int(model.actuator_trnid[actuator_id, 0]), []).append(actuator_id)
+    actuator_ids: list[int] = []
+    for dof_name in dof_names:
+        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, clean_to_prefixed.get(dof_name, dof_name))
+        actuators = joint_to_actuators.get(joint_id, [])
+        if len(actuators) != 1:
+            raise ValueError(f"DOF joint '{dof_name}' must be driven by exactly one actuator, found {len(actuators)}")
+        actuator_ids.append(actuators[0])
+    return actuator_ids
+
+
 def apply_initial_joint_angles(
     model: mujoco.MjModel,
     data: mujoco.MjData,

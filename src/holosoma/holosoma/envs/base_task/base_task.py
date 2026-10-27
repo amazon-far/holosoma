@@ -346,6 +346,11 @@ class BaseTask:
             self.simulator.body_names,
         )
 
+        # Per-DOF config lists are positional in robot_config.dof_names, so the simulator must use that order.
+        assert self.dof_names == self.robot_config.dof_names, (
+            f"Simulator DOF order {self.dof_names} must match robot_config.dof_names {self.robot_config.dof_names}"
+        )
+
         # check dimensions
         assert self.num_dof == self.dim_actions, (
             f"Number of DOFs ({self.num_dof}) must be equal to number of actions ({self.dim_actions})"
