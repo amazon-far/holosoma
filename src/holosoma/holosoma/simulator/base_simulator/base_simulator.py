@@ -928,13 +928,10 @@ class BaseSimulator:
         raise NotImplementedError("The 'render_sensors' method must be implemented in subclasses.")
 
     def rerender_sensors(self, env_ids: torch.Tensor) -> None:
-        """Re-render the given envs for sensors that support partial rendering.
+        """Re-render ``env_ids`` for sensors that support partial rendering; other sensors keep their frame.
 
-        ``render_sensors`` runs at ``FRAME_END``, before terminations and resets, so envs that
-        are reset or teleported afterwards would otherwise be observed with a frame of their
-        previous state. ``ObservationManager.step`` calls this with those envs before reading
-        observations; sensors that can only render every env keep their frame (see
-        ``SensorRecord.rerender``)."""
+        Body poses must already reflect the state written for those envs.
+        """
         if self.sensor_manager is not None:
             self.sensor_manager.rerender(env_ids)
 

@@ -820,6 +820,8 @@ class MotionCommand(CommandTermBase):
             sim.set_actor_root_state_tensor_robots(ended_env_ids, sim.robot_root_states)
             sim.set_dof_state_tensor_robots(ended_env_ids, sim.dof_state)  # type: ignore[attr-defined]
             sim.refresh_sim_tensors()
+            # The teleport is an observation reset: drop history and re-render these envs.
+            self._env.observation_manager.reset(ended_env_ids)
 
         # 1. update body_pos_relative_w and body_quat_relative_w
         # definition of body_pos/quat_relative_w:

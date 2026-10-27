@@ -41,20 +41,6 @@ class ObservationTermBase(ABC):
         """
         del env_ids
 
-    def on_state_overwritten(self, env_ids: torch.Tensor) -> None:
-        """Handle envs whose simulator state was overwritten since the last step.
-
-        Called once at the start of the next :meth:`ObservationManager.step` with every env that was
-        reset or teleported since the previous one (see ``ObservationManager.notify_state_overwritten``).
-        For an episode reset this follows :meth:`reset`. Terms that buffer past frames, such as a
-        latency-delayed sensor, should drop data captured before the overwrite. The default
-        does nothing.
-
-        Args:
-            env_ids: Environment IDs whose state was overwritten.
-        """
-        del env_ids  # stateless by default
-
     @abstractmethod
     def read(self, env: Any, env_ids: torch.Tensor | None = None, **kwargs: Any) -> torch.Tensor:
         """Compute the observation of ``env_ids`` and advance only their internal state.

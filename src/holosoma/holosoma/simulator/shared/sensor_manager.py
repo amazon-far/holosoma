@@ -41,7 +41,9 @@ class SensorRecord:
 
     def set_buffer_rows(self, output: str, env_ids: torch.Tensor, rows: torch.Tensor) -> None:
         """Overwrite the ``env_ids`` rows of an existing output, e.g. after a partial re-render."""
-        self.buffers[output][env_ids] = rows
+        buffer = self.buffers[output].clone()
+        buffer[env_ids] = rows
+        self.buffers[output] = buffer
         self._drop_device_cache(output)
 
     def _drop_device_cache(self, output: str) -> None:

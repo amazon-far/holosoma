@@ -53,9 +53,9 @@ class ObservationManager:
         self._frame_ready = False
         self._terminal_ran = False
         self._terminal_rows = torch.zeros(env.num_envs, dtype=torch.bool, device=device)
-        # Envs whose simulator state was overwritten since the last step (see notify_state_overwritten).
-        self._overwritten_rows = torch.zeros(env.num_envs, dtype=torch.bool, device=device)
-        self._has_overwrites = False
+        # Envs reset since the last step, re-rendered before it reads (see reset).
+        self._rerender_rows = torch.zeros(env.num_envs, dtype=torch.bool, device=device)
+        self._has_rerenders = False
 
         # Initialize groups
         self._initialize_groups()
@@ -113,8 +113,8 @@ class ObservationManager:
             )
         self._frame_ready = False
         self._terminal_ran = False
-        if self._has_overwrites:
-            self._apply_state_overwrites()
+        if self._has_rerenders:
+            self._rerender_reset_rows()
         return {group_name: self._compute_group(group_name, None) for group_name in self.cfg.groups}
 
     def step_terminal(self, env_ids: torch.Tensor) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
@@ -256,6 +256,9 @@ class ObservationManager:
     def reset(self, env_ids: torch.Tensor | None = None) -> None:
         """Reset observation history and stateful terms.
 
+        Call on episode resets and teleports. The next :meth:`step` re-renders ``env_ids`` for
+        sensors that support partial rendering, so it observes the state written after this call.
+
         Parameters
         ----------
         env_ids : torch.Tensor or None, optional
@@ -272,8 +275,13 @@ class ObservationManager:
 
         if env_ids_tensor is None:
             self._terminal_rows[:] = False
+            self._rerender_rows[:] = True
+            self._has_rerenders = True
         else:
             self._terminal_rows[env_ids_tensor] = False
+            if env_ids_tensor.numel() > 0:
+                self._rerender_rows[env_ids_tensor] = True
+                self._has_rerenders = True
 
         # Reset or clear history buffers
         for group_buffers in self._history_buffers.values():
@@ -310,30 +318,12 @@ class ObservationManager:
         except ValueError as err:
             raise ValueError(f"Observation term '{term_name}' in group '{group_name}': {err}") from err
 
-    def notify_state_overwritten(self, env_ids: torch.Tensor) -> None:
-        """Mark ``env_ids`` as having had their simulator state overwritten outside the physics step.
-
-        Call after resetting or teleporting envs. The next :meth:`step` re-renders them for sensors
-        that support partial rendering and calls :meth:`ObservationTermBase.on_state_overwritten`.
-
-        Parameters
-        ----------
-        env_ids : torch.Tensor
-            Environment IDs whose state was overwritten.
-        """
-        if env_ids.numel() > 0:
-            self._overwritten_rows[env_ids.to(device=self.device, dtype=torch.long)] = True
-            self._has_overwrites = True
-
-    def _apply_state_overwrites(self) -> None:
-        """Re-render and notify terms for the envs marked by :meth:`notify_state_overwritten`."""
-        env_ids = self._overwritten_rows.nonzero(as_tuple=False).flatten()
-        self._overwritten_rows[:] = False
-        self._has_overwrites = False
+    def _rerender_reset_rows(self) -> None:
+        """Re-render the envs marked by :meth:`reset`, after all state writes for this frame."""
+        env_ids = self._rerender_rows.nonzero(as_tuple=False).flatten()
+        self._rerender_rows[:] = False
+        self._has_rerenders = False
         self.env.simulator.rerender_sensors(env_ids)
-        for group_terms in self._terms.values():
-            for term in group_terms.values():
-                term.on_state_overwritten(env_ids)
 
     def get_obs_dims(self) -> dict[str, int | dict[str, int | tuple[int, ...]]]:
         """Get observation dimensions for each group.
