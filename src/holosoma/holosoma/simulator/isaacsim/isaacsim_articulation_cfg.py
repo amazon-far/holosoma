@@ -243,7 +243,7 @@ def build_robot_articulation_cfg(robot_config: RobotConfig) -> ArticulationCfg:
     )
 
 
-def build_contact_sensor_cfg(history_length: int, debug_vis: bool) -> ContactSensorCfg:
+def build_contact_sensor_cfg(debug_vis: bool) -> ContactSensorCfg:
     """Build the robot ContactSensorCfg covering every robot body prim.
 
     ``debug_vis`` draws the red contact spheres; the caller passes ``SimulatorInitConfig.debug_viz``
@@ -254,10 +254,10 @@ def build_contact_sensor_cfg(history_length: int, debug_vis: bool) -> ContactSen
     """
     return ContactSensorCfg(
         prim_path="/World/envs/env_.*/Robot/.*",
-        history_length=history_length,
-        update_period=0.005,
-        # Holosoma consumes net_forces_w and net_forces_w_history only. Tracking the four
-        # air/contact-duration tensors adds per-step work without serving a production consumer.
+        # 0.0 refreshes on every scene.update(), i.e. once per physics step at any fps
+        update_period=0.0,
+        # Holosoma consumes net_forces_w only, sampled per substep by ContactSubstepRecorder; the
+        # sensor's own history and the four air/contact-duration tensors serve no consumer.
         track_air_time=False,
         force_threshold=10.0,
         debug_vis=debug_vis,

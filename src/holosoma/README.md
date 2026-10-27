@@ -55,16 +55,17 @@ source scripts/source_mujoco_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof \
     simulator:mjwarp \
-    logger:wandb
+    logger:wandb \
+    --terrain.terrain-term.scale-factor=0.5  # required to avoid training instabilities
 
-# T1 with FastSAC
+# T1 with FastSAC -- see the T1 note below
 source scripts/source_mujoco_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:t1-29dof-fast-sac \
     simulator:mjwarp \
     logger:wandb
 
-# T1 with PPO
+# T1 with PPO -- see the T1 note below
 source scripts/source_mujoco_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:t1-29dof \
@@ -75,10 +76,12 @@ python src/holosoma/holosoma/train_agent.py \
 ```
 
 > **Note:**
-> - MJWarp uses `nconmax=96` (maximum contacts per environment) by default. This can be adjusted via `--simulator.config.mujoco-warp.nconmax-per-env=96` if needed.
+> - MJWarp allocates an average of 96 contacts per environment in a shared pool by default. Adjust it with `--simulator.config.sim.mujoco.warp.nconmax-per-env=128`; the constraint capacity has a separate per-environment limit.
 > - These examples use `--training.num-envs=4096`, but you may need to adjust this value based on your hardware.
-> - When training T1 with PPO on mixed terrain, use `--terrain.terrain-term.scale-factor=0.5` to avoid training instabilities.
+> - When training with PPO on mixed terrain, use `--terrain.terrain-term.scale-factor=0.5` to avoid training instabilities. This applies to G1 as well as T1: at full scale the policy's action distribution goes non-finite within the first few rollouts and training aborts on a device-side assert.
+> - T1 on MJWarp does not currently train, with or without the halved terrain scale. PPO aborts as above, and FastSAC runs roughly 25x slower than the same configuration on G1, which makes a full training run impractical. Only the G1 configurations are covered by the nightly.
 
+Native physics settings use `--simulator.config.sim.mujoco.*`, for example `--simulator.config.sim.mujoco.integrator implicitfast`. Uncommon options use bare upstream names in `mujoco.extra` or `mujoco.warp.extras`; CLI mappings take one JSON object, such as `--simulator.config.sim.mujoco.extra '{"gravity": [0, 0, -2]}'`. Flags and extras expose advanced upstream features that may exceed Holosoma's support. Unset fields preserve existing behavior, and `sim.fps` owns timestep.
 
 ### Whole-Body Tracking
 

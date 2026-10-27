@@ -18,8 +18,10 @@ Policy inference for humanoid robot policies.
 - 🚧 (in progress/partial support)
 - ❌ (no support)
 
-A native C++ runtime with the same presets, command line and controls is available for the G1 in
-[`holosoma_cpp`](holosoma_cpp/README.md).
+Built-in Python policies and `run_policy` use the shared native C++ engine.
+The [in-process library guide](docs/native-library.md) covers the device-free
+Python API, explicit transport injection, live-reference WBT, and CMake consumers.
+The standalone C++ executable remains in [`holosoma_cpp`](holosoma_cpp/README.md).
 
 ## Quick Start
 

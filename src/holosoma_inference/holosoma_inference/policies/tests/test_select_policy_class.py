@@ -17,22 +17,26 @@ from unittest import mock
 
 from holosoma_inference.policies import dual_mode
 from holosoma_inference.policies.locomotion import LocomotionPolicy
+from holosoma_inference.policies.native_runner import NativeContextualRunner
 from holosoma_inference.policies.wbt import WholeBodyTrackingPolicy
 
 
-def _config(*, robot_type="g1_29dof", actor_obs=None, policy_type=None):
+def _config(*, robot_type="g1_29dof", actor_obs=None, policy_type=None, contextual=None):
     """Build a duck-typed stand-in for InferenceConfig (no pydantic construction).
 
     ``policy_type`` is omitted from ``task`` when None so we also exercise the
     ``getattr(config.task, "policy_type", None)`` path for core TaskConfigs that
-    do not define the field.
+    do not define the field. ``contextual`` is likewise omitted when None.
     """
     task = SimpleNamespace()
     if policy_type is not None:
         task.policy_type = policy_type
     obs = SimpleNamespace(obs_dict={"actor_obs": list(actor_obs or [])})
     robot = SimpleNamespace(robot_type=robot_type)
-    return SimpleNamespace(task=task, robot=robot, observation=obs)
+    config = SimpleNamespace(task=task, robot=robot, observation=obs)
+    if contextual is not None:
+        config.contextual = contextual
+    return config
 
 
 class _FakeEP:
@@ -90,6 +94,14 @@ def test_no_policy_type_no_motion_command_is_locomotion():
     cfg = _config(actor_obs=["base_lin_vel"])
     with _patch_entry_points({}):
         assert dual_mode._select_policy_class(cfg) is LocomotionPolicy
+
+
+def test_contextual_section_selects_the_contextual_runner():
+    """A contextual section wins over every other rule, as make_policy does in C++."""
+    cfg = _config(actor_obs=["motion_command"], policy_type="ext_custom_type", contextual=SimpleNamespace())
+    groups = {"holosoma.policies.by_type": [_FakeEP("ext_custom_type", _SentinelPolicy)]}
+    with _patch_entry_points(groups):
+        assert dual_mode._select_policy_class(cfg) is NativeContextualRunner
 
 
 def test_robot_type_wbt_group_takes_precedence_over_core_default():

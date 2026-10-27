@@ -4,7 +4,7 @@ Egress sinks are plugins: each preset is a single ``ROS2ImagePluginConfig`` / ``
 (a ``PluginConfig``) registered in ``PLUGIN_REGISTRY``, selected per-key as ``plugin.<key>:<variant>``.
 The ROS2ImagePlugin impl defers rclpy to start(), so we can construct it (which validates streams +
 registers callbacks, no rclpy) and inspect wiring — only start()/publish() would need a ROS env. This
-pins the preset / topic guarantees (incl. the rfmpi teleop topics the removed holosoma_sim_stereo
+pins the preset / topic guarantees (incl. the teleop topics the removed holosoma_sim_stereo
 sidecar published).
 """
 
@@ -93,8 +93,8 @@ def test_presets_resolve_get_cls_without_rclpy() -> None:
     assert "rclpy" not in sys.modules
 
 
-def test_stereo_preset_publishes_rfmpi_teleop_topics() -> None:
-    # The rfmpi teleop stack subscribes to /ros_camera/rgb/{left,right}/compressed. Topics are
+def test_stereo_preset_publishes_teleop_topics() -> None:
+    # Teleoperation subscribes to /ros_camera/rgb/{left,right}/compressed. Topics are
     # published VERBATIM (no auto-suffix), so the preset spells the full topics out.
     inst = PLUGIN_REGISTRY["ros2-stereo"]
     assert isinstance(inst, ROS2ImagePluginConfig)

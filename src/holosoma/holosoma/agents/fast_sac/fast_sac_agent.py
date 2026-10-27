@@ -47,6 +47,15 @@ from holosoma.utils.safe_torch_import import (
 torch.set_float32_matmul_precision("high")
 
 
+def _clone_outputs(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Return copies of fn's tensor outputs; CUDA graph replays overwrite the outputs of earlier replays."""
+
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        return torch.utils._pytree.tree_map_only(torch.Tensor, torch.Tensor.clone, fn(*args, **kwargs))
+
+    return wrapped
+
+
 class FastSACEnv:
     def __init__(
         self,
@@ -660,13 +669,33 @@ class FastSACAgent(BaseAlgo):
     def learn(self) -> None:  # type: ignore[override]
         args = self.config
         device = self.device
+        uses_cudagraphs = False
         if args.compile:
-            # Compiling _update_main destabilizes multi-GPU training when the compile cache is cold.
-            update_main = self._update_main if self.is_multi_gpu else torch.compile(self._update_main)
-            update_pol = torch.compile(self._update_pol)
-            policy = torch.compile(self.policy)
-            normalize_obs = torch.compile(self.obs_normalizer.forward)
-            normalize_critic_obs = torch.compile(self.critic_obs_normalizer.forward)
+            mode, options = args.compile_mode, args.compile_options
+            source = "configured"
+            if mode == "auto":
+                # Multi-GPU training defaults to CUDA graphs; explicit compile options imply the default mode.
+                mode = "reduce-overhead" if self.is_multi_gpu and options is None else None
+                source = f"auto, {'multi' if self.is_multi_gpu else 'single'}-GPU"
+            if mode is not None and options is not None:
+                raise ValueError("Set at most one of compile_mode and compile_options; torch.compile accepts only one.")
+            if self.is_main_process:
+                logger.info(
+                    f"torch.compile mode: {mode or 'default'} ({source})" + (f", options: {options}" if options else "")
+                )
+            if mode is not None:
+                uses_cudagraphs = bool(torch._inductor.list_mode_options(mode).get("triton.cudagraphs", False))
+            elif options is not None:
+                uses_cudagraphs = bool(options.get("triton.cudagraphs", False))
+            update_main = torch.compile(self._update_main, mode=mode, options=options)
+            update_pol = torch.compile(self._update_pol, mode=mode, options=options)
+            policy = torch.compile(self.policy, mode=mode, options=options)
+            normalize_obs = torch.compile(self.obs_normalizer.forward, mode=mode, options=options)
+            normalize_critic_obs = torch.compile(self.critic_obs_normalizer.forward, mode=mode, options=options)
+            if uses_cudagraphs:
+                update_main, update_pol, policy, normalize_obs, normalize_critic_obs = (
+                    _clone_outputs(fn) for fn in (update_main, update_pol, policy, normalize_obs, normalize_critic_obs)
+                )
         else:
             update_main = self._update_main
             update_pol = self._update_pol
@@ -690,6 +719,8 @@ class FastSACAgent(BaseAlgo):
         pbar = tqdm.tqdm(total=args.num_learning_iterations, initial=self.global_step)
 
         while self.global_step <= args.num_learning_iterations:
+            if uses_cudagraphs:
+                torch.compiler.cudagraph_mark_step_begin()
             # Synchronize curriculum metrics across GPUs before rollout
             if self.is_multi_gpu:
                 self._synchronize_curriculum_metrics()
@@ -820,6 +851,15 @@ class FastSACAgent(BaseAlgo):
         if self.is_main_process:
             self.save(os.path.join(self.log_dir, f"model_{self.global_step:07d}.pt"))
             self.export(onnx_file_path=os.path.join(self.log_dir, f"model_{self.global_step:07d}.onnx"))
+
+        if uses_cudagraphs:
+            # Release the captured CUDA graphs, which can contain NCCL collectives, on every rank before the caller
+            # destroys the process group; tearing down NCCL while they are alive hangs.
+            if torch.device(device).type == "cuda":
+                torch.cuda.synchronize()
+            torch.compiler.reset()
+            if torch.distributed.is_initialized():
+                torch.distributed.barrier()
 
     def save(self, path: str) -> None:  # type: ignore[override]
         env_state = self._collect_env_state()

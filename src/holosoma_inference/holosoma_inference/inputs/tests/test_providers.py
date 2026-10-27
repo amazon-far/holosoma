@@ -844,36 +844,36 @@ class TestApplyVelocity:
     def test_base_policy_passthrough(self):
         from holosoma_inference.policies.base import BasePolicy
 
-        bp = BasePolicy.__new__(BasePolicy)
-        bp.lin_vel_command = np.array([[0.0, 0.0]])
-        bp.ang_vel_command = np.array([[0.0]])
-
-        bp._apply_velocity(VelCmd((0.5, -0.3), 0.8))
-
-        assert bp.lin_vel_command[0, 0] == pytest.approx(0.5)
-        assert bp.lin_vel_command[0, 1] == pytest.approx(-0.3)
-        assert bp.ang_vel_command[0, 0] == pytest.approx(0.8)
+        bp = SimpleNamespace(native=MagicMock())
+        BasePolicy._apply_velocity(bp, VelCmd((0.5, -0.3), 0.8))
+        bp.native.velocity.assert_called_once_with(0.5, -0.3, 0.8)
 
     def test_locomotion_gates_by_stand_command(self):
-        from types import SimpleNamespace
+        from dataclasses import replace
 
-        from holosoma_inference.policies.locomotion import LocomotionPolicy
+        import holosoma_inference as inference
 
-        lp = LocomotionPolicy.__new__(LocomotionPolicy)
-        lp.config = SimpleNamespace(task=SimpleNamespace(auto_walk_on_vel_cmd=False))
-        lp.lin_vel_command = np.array([[0.0, 0.0]])
-        lp.ang_vel_command = np.array([[0.0]])
+        config = inference.get_config("g1-29dof-loco")
+        config = replace(config, task=replace(config.task, auto_walk_on_vel_cmd=False))
+        policy = inference.get_policy_from_preset(config)
+        state = np.zeros((1, 71))
+        state[0, 3] = 1
+        terms = sorted(config.observation.obs_dict["actor_obs"])
 
-        lp.stand_command = np.array([[0]])
-        lp._apply_velocity(VelCmd((0.5, -0.3), 0.8))
-        assert lp.lin_vel_command[0, 0] == pytest.approx(0.0)
-        assert lp.ang_vel_command[0, 0] == pytest.approx(0.0)
+        def command_term(name):
+            start = sum(config.observation.obs_dims[t] for t in terms[: terms.index(name)])
+            return policy.last_observation[start : start + config.observation.obs_dims[name]]
 
-        lp.stand_command = np.array([[1]])
-        lp._apply_velocity(VelCmd((0.5, -0.3), 0.8))
-        assert lp.lin_vel_command[0, 0] == pytest.approx(0.5)
-        assert lp.lin_vel_command[0, 1] == pytest.approx(-0.3)
-        assert lp.ang_vel_command[0, 0] == pytest.approx(0.8)
+        policy.command("STAND")
+        policy.velocity(0.5, -0.3, 0.8)
+        policy.step_state(state)
+        np.testing.assert_allclose(command_term("command_lin_vel"), [0, 0])
+        np.testing.assert_allclose(command_term("command_ang_vel"), [0])
+        policy.command("WALK")
+        policy.velocity(0.5, -0.3, 0.8)
+        policy.step_state(state)
+        np.testing.assert_allclose(command_term("command_lin_vel"), [0.5, -0.3])
+        np.testing.assert_allclose(command_term("command_ang_vel"), [0.8])
 
 
 # ============================================================================
