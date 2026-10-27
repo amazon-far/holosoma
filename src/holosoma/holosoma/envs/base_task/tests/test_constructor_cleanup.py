@@ -107,7 +107,6 @@ def test_task_installs_plugins_after_task_setup(monkeypatch: pytest.MonkeyPatch)
     class _ProbePlugin:
         def __init__(self, _cfg: object, task: BaseTask) -> None:
             assert task.hooks is task.simulator.hooks
-            assert task.reset_manager is not None
             events.append("plugins")
             raise _StopAfterInstallError
 

@@ -127,9 +127,8 @@ def main() -> int:
 
     recorder = None
     if args.check_recorder:
-        # A CameraVizPlugin recorder with record_video (not live_window), so the check runs without a
-        # DISPLAY. Built after the simulator, as a task builds its plugins, so its FRAME_END publish
-        # follows the render hook.
+        # record_video, not live_window, so the check needs no DISPLAY. Built after the simulator so
+        # its FRAME_END publish follows the render hook.
         from holosoma.config_types.plugin import CameraVizPluginConfig
         from holosoma.simulator.plugins.tests._task import plugin_task
 
