@@ -3,8 +3,8 @@
 :class:`DelayedDepthImageObsTerm` reads a camera's metric depth through ``get_camera_data``,
 preprocesses it with :mod:`holosoma.utils.depth_processing` (optionally adding sensor
 artifacts), and serves each env a frame from a short history to model camera latency. Envs
-whose state is overwritten (reset or teleported) have their history replaced by the current
-frame, so they never see frames from before the overwrite.
+that are reset (including teleports, which reset observations) have their history replaced by
+the current frame, so they never see frames from before the reset.
 
 Example term config (in a ``concatenate=False`` group)::
 
@@ -78,12 +78,6 @@ class DelayedDepthImageObsTerm(ObservationTermBase):
     # ----------------------------------------------------------- lifecycle
 
     def reset(self, env_ids: torch.Tensor | None = None) -> None:
-        self._mark_refill(env_ids)
-
-    def on_state_overwritten(self, env_ids: torch.Tensor) -> None:
-        self._mark_refill(env_ids)
-
-    def _mark_refill(self, env_ids: torch.Tensor | None) -> None:
         if env_ids is None:
             self.pending_refill[:] = True
         else:

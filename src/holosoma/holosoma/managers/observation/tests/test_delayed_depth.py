@@ -107,19 +107,19 @@ def test_fixed_latency_serves_the_frame_from_n_steps_ago_after_an_initial_refill
     assert served == pytest.approx(expected, abs=1e-6)
 
 
-def test_overwritten_envs_are_refilled_with_the_current_frame_and_others_keep_their_delay() -> None:
+def test_reset_envs_are_refilled_with_the_current_frame_and_others_keep_their_delay() -> None:
     term, env = _term()
     for _ in range(4):
         _served(term, env)
 
-    term.on_state_overwritten(torch.tensor([0]))
+    term.reset(torch.tensor([0]))
     env0, env1 = _served(term, env)
 
     assert env0 == pytest.approx(_normalized(env.simulator.depth(4)), abs=1e-6)
     assert env1 == pytest.approx(_normalized(env.simulator.depth(2)), abs=1e-6)
 
 
-def test_an_empty_notification_after_reset_all_keeps_the_pending_refill() -> None:
+def test_an_empty_reset_after_reset_all_keeps_the_pending_refill() -> None:
     # reset_all resets every env and then steps once, which resets an empty set of envs: the
     # refill requested by the first must survive the second.
     term, env = _term()
@@ -127,8 +127,7 @@ def test_an_empty_notification_after_reset_all_keeps_the_pending_refill() -> Non
         _served(term, env)
 
     term.reset(None)
-    term.on_state_overwritten(torch.tensor([0, 1]))
-    term.on_state_overwritten(torch.tensor([], dtype=torch.long))
+    term.reset(torch.tensor([], dtype=torch.long))
 
     assert _served(term, env) == pytest.approx([_normalized(env.simulator.depth(4))] * 2, abs=1e-6)
 
@@ -201,7 +200,6 @@ def test_the_observation_manager_sizes_steps_and_refills_the_term() -> None:
     manager.new_frame()
     terminal = manager.step_terminal(torch.tensor([0]))["depth"]["image"]
     manager.reset(torch.tensor([0]))
-    manager.notify_state_overwritten(torch.tensor([0]))
     env0, env1 = [round(v, 6) for v in manager.step()["depth"]["image"][:, 0, 0].tolist()]
 
     assert terminal[0, 0, 0].item() == pytest.approx(_normalized(camera.depth(2)), abs=1e-6)
