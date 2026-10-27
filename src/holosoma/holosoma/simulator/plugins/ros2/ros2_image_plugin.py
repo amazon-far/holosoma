@@ -34,7 +34,7 @@ from holosoma.simulator.shared.ros2_lifecycle import (
 
 if TYPE_CHECKING:
     from holosoma.config_types.plugin import ROS2ImagePluginConfig, ROS2ImageRoute
-    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+    from holosoma.envs.base_task.base_task import BaseTask
     from holosoma.simulator.plugins.camera_consumer import FramePacket, StreamKey
 
 
@@ -55,7 +55,7 @@ class ROS2ImagePlugin(CameraConsumerPlugin):
 
     config: ROS2ImagePluginConfig
 
-    def __init__(self, config: ROS2ImagePluginConfig, simulator: BaseSimulator) -> None:
+    def __init__(self, config: ROS2ImagePluginConfig, task: BaseTask) -> None:
         # rclpy/sensor_msgs objects are typed Any: their stubs are absent in non-ROS envs (e.g. the
         # mujoco venv), and these are only populated in start() under a real ROS environment.
         self._node: Any = None
@@ -65,9 +65,9 @@ class ROS2ImagePlugin(CameraConsumerPlugin):
         self._publishers: dict[str, Any] = {}  # topic -> rclpy publisher
         self._info_publishers: dict[str, Any] = {}  # camera -> CameraInfo publisher (latched)
         self._workers: dict[str, PublishWorker[FramePacket]] = {}  # topic -> worker (async only)
-        self._ros2_runtime = get_ros2_runtime(simulator)
+        self._ros2_runtime = get_ros2_runtime(task)
         # Validates routes against the configured cameras and registers the publish/close callbacks.
-        super().__init__(config, simulator)
+        super().__init__(config, task)
 
     def wanted_streams(self) -> set[StreamKey]:
         # One env per node (config.env_id; default 0 = the single real-time robot).

@@ -12,7 +12,7 @@ from holosoma.config_types.frequency import DecimationLike, is_frequency_string,
 
 
 class Phase(str, Enum):
-    """Lifecycle points emitted by the active simulator loop.
+    """Lifecycle points emitted by the owning task's control loop.
 
     ``payload`` names the positional args ``emit`` forwards to callbacks. ``periodic`` marks phases
     that fire on a fixed clock (per-substep or per-frame ticks) — only these accept a frequency-string
@@ -53,6 +53,20 @@ EpisodeCallback = Callable[[int], Any]
 """Callback for an episode phase (``EPISODE_START``/``EPISODE_END``); receives ``env_id``."""
 CloseCallback = Callable[[], Any]
 """Callback for ``CLOSE`` (zero payload, fires once at teardown)."""
+
+
+def frame_base_rates(fps: float, control_decimation: int) -> dict[Phase, float]:
+    """Base tick rate (Hz) of each periodic phase, so hooks can request a rate via ``every="30Hz"``.
+
+    Per-substep phases tick at ``fps``; per-frame phases at the control rate ``fps / control_decimation``.
+    """
+    control_hz = fps / control_decimation
+    return {
+        Phase.PRE_STEP: fps,
+        Phase.POST_STEP: fps,
+        Phase.FRAME_BEGIN: control_hz,
+        Phase.FRAME_END: control_hz,
+    }
 
 
 class HookRegistryError(RuntimeError):

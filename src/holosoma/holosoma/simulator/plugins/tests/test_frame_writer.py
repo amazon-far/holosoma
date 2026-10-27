@@ -24,12 +24,13 @@ from holosoma.config_types.plugin import FrameWriterPluginConfig
 from holosoma.config_types.sensor import CameraDataType, CameraSensorConfig, SensorMountConfig
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.plugins.frame_writer import FrameWriterPlugin
+from holosoma.simulator.plugins.tests._task import plugin_task
 from holosoma.utils.simulator_config import SimulatorType
 
 
 def _make(cfg: FrameWriterPluginConfig, sim: Any) -> FrameWriterPlugin:
     # Construct via get_cls() (untyped), as the other plugin tests do with their fake simulators.
-    plugin: FrameWriterPlugin = cfg.get_cls()(cfg, sim)
+    plugin: FrameWriterPlugin = cfg.get_cls()(cfg, plugin_task(sim, num_envs=sim.training_config.num_envs))
     return plugin
 
 

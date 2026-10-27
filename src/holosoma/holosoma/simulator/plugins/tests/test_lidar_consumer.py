@@ -10,6 +10,7 @@ import pytest
 from holosoma.config_types.sensor import GridLidarRayPatternConfig, LidarSensorConfig, SensorMountConfig
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.plugins.lidar_consumer import LidarConsumerPlugin, LidarStreamKey, PointCloudPacket
+from holosoma.simulator.plugins.tests._task import plugin_task
 from holosoma.simulator.shared.sensor_manager import SensorManager
 from holosoma.utils.safe_torch_import import torch
 
@@ -62,7 +63,7 @@ class _Consumer(LidarConsumerPlugin):
         self.stopped = False
         self.stop_count = 0
         self.batches: list[dict[LidarStreamKey, PointCloudPacket]] = []
-        super().__init__(cast("Any", None), cast("Any", simulator))
+        super().__init__(cast("Any", None), plugin_task(simulator))
 
     def wanted_streams(self) -> set[LidarStreamKey]:
         return self._streams

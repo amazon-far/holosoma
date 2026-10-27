@@ -172,7 +172,7 @@ class BaseSimulator:
     _rigid_body_vel: torch.Tensor
     _rigid_body_ang_vel: torch.Tensor
 
-    def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str):
+    def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str, hooks: HookRegistry):
         """
         Initializes the base simulator with configuration settings and simulation device.
 
@@ -184,6 +184,8 @@ class BaseSimulator:
             Terrain manager for the simulation.
         device: str
             Device type for simulation ('cpu' or 'cuda').
+        hooks: HookRegistry
+            The owning task's hook registry; the simulator registers its own callbacks on it.
 
         """
         self.viewer = None
@@ -193,7 +195,6 @@ class BaseSimulator:
         self.scene_config = tyro_config.scene
         self.sensor_config = tyro_config.sensors
         self.robot_config = tyro_config.robot
-        self.plugin_config = tyro_config.plugin
         self.video_config = tyro_config.logger.video
         self.sim_device = device
         self.headless = False
@@ -204,16 +205,11 @@ class BaseSimulator:
         self._external_wrench = ExternalWrenchAccumulator(self)
         self.kinematic_playback: bool = self.simulator_config.sim.kinematic_playback
         self._kinematic_time = 0.0
-        self.hooks = HookRegistry(base_rates=self._hook_base_rates())
+        self.hooks = hooks
         # Register sensor rendering before plugins so FRAME_END consumers read fresh outputs.
         # This no-ops until a backend builds its sensor manager during setup.
         self.hooks.add(Phase.FRAME_END, self.render_sensors, name="sensors.render")
-        self.installed_plugins: dict[str, Any] = {}
-        self._plugins_installed = False
         self._closed = False
-        # Cooperative shutdown flag: set via request_shutdown(), polled through the owning task.
-        self.shutdown_requested = False
-        self._shutdown_reason = ""
 
         # Virtual gantry system
         self.virtual_gantry: VirtualGantry | None = None
@@ -736,55 +732,12 @@ class BaseSimulator:
             logger.error(f"Failed to initialize bridge system: {e}")
             raise
 
-    def _hook_base_rates(self) -> dict[Phase, float]:
-        """Base tick rate (Hz) of each periodic phase, so hooks can request a rate via ``every="30Hz"``.
-
-        Per-substep phases tick at ``fps``; per-frame phases at the control rate ``fps / control_decimation``.
-        """
-        sim = self.simulator_config.sim
-        fps = float(sim.fps)
-        control_hz = fps / sim.control_decimation_steps
-        return {
-            Phase.PRE_STEP: fps,
-            Phase.POST_STEP: fps,
-            Phase.FRAME_BEGIN: control_hz,
-            Phase.FRAME_END: control_hz,
-        }
-
-    def install_plugins(self) -> None:
-        """Install configured plugins after the concrete backend is ready."""
-        if self._plugins_installed:
-            return
-        if self._closed:
-            raise RuntimeError("Cannot install plugins on a closed simulator")
-
-        # Mark the stage before construction. A failed plugin install is terminal for this
-        # simulator; the outer lifecycle owner will emit CLOSE for callbacks already registered.
-        self._plugins_installed = True
-        for key, cfg in self.plugin_config.items():
-            self.installed_plugins[key] = cfg.get_cls()(cfg, self)
-        if self.installed_plugins:
-            logger.info(f"Installed plugins: {sorted(self.installed_plugins)}")
-
     def close(self) -> None:
         """Emit the one-pass simulator teardown phase."""
         if self._closed:
             return
         self._closed = True
         self.hooks.emit(Phase.CLOSE)
-
-    def request_shutdown(self, reason: str = "") -> None:
-        """Ask the driving loop to end the run gracefully after the current frame.
-
-        Cooperative: sets :attr:`shutdown_requested`, which the owning task reports through
-        ``BaseTask.shutdown_requested``; its run loop exits at the next frame boundary and runs the
-        normal CLOSE teardown. Lets a plugin end a finite run (e.g. motion playback reaching the
-        end of its clip). Idempotent; the first reason is kept.
-        """
-        if not self.shutdown_requested:
-            self.shutdown_requested = True
-            self._shutdown_reason = reason
-            logger.info(f"Simulator shutdown requested{f': {reason}' if reason else ''}")
 
     # ----- Actor/Object Access Interface -----
     # These methods provide unified access to objects registered with ObjectType enum

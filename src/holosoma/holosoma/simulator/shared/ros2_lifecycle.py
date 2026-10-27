@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import threading
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
 from holosoma.simulator.base_simulator.hooks import Phase
 
+if TYPE_CHECKING:
+    from holosoma.envs.base_task.base_task import BaseTask
+
 _RUNTIME_ATTRIBUTE = "_holosoma_ros2_runtime"
 
 
 class ROS2Runtime:
-    """One private ROS context owned by a simulator."""
+    """One private ROS context shared by a task's plugins."""
 
     def __init__(self) -> None:
         self._context: Any = None
@@ -58,15 +61,15 @@ class ROS2Runtime:
             context.shutdown()
 
 
-def get_ros2_runtime(simulator: Any) -> ROS2Runtime:
-    """Return the simulator's ROS runtime and register its close hook once."""
-    runtime = cast("ROS2Runtime | None", getattr(simulator, _RUNTIME_ATTRIBUTE, None))
+def get_ros2_runtime(task: BaseTask) -> ROS2Runtime:
+    """Return the task's ROS runtime and register its close hook once."""
+    runtime = cast("ROS2Runtime | None", getattr(task, _RUNTIME_ATTRIBUTE, None))
     if runtime is not None:
         return runtime
 
     runtime = ROS2Runtime()
-    setattr(simulator, _RUNTIME_ATTRIBUTE, runtime)
-    simulator.hooks.add(Phase.CLOSE, runtime.close, name="ros2.runtime.close")
+    setattr(task, _RUNTIME_ATTRIBUTE, runtime)
+    task.hooks.add(Phase.CLOSE, runtime.close, name="ros2.runtime.close")
     return runtime
 
 
@@ -107,7 +110,7 @@ def close_ros2_executor(
 ) -> None:
     """Stop one plugin's executor, join its thread, then destroy its node.
 
-    The simulator-scoped ROS context is closed by a separate, earlier-registered CLOSE hook.
+    The task-scoped ROS context is closed by a separate, earlier-registered CLOSE hook.
     """
     stop_event.set()
     failures: list[str] = []

@@ -19,7 +19,7 @@ from holosoma.config_types.sensor import CameraSensorConfig, LidarSensorConfig
 from holosoma.config_types.simulator import MujocoBackend
 from holosoma.managers.terrain.manager import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.mujoco import light_setup
 from holosoma.simulator.mujoco.backends import WARP_AVAILABLE, ClassicBackend, IMujocoBackend, WarpBackend
 from holosoma.simulator.mujoco.backends.base import apply_sensor_scene_flags, mj_to_holosoma_quat
@@ -58,7 +58,9 @@ class MuJoCo(BaseSimulator):
     the holosoma simulator interface with unified state access and the shared terrain system.
     """
 
-    def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str) -> None:
+    def __init__(
+        self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str, hooks: HookRegistry
+    ) -> None:
         """Initialize MuJoCo simulator.
 
         Parameters
@@ -67,6 +69,8 @@ class MuJoCo(BaseSimulator):
             Tyro configuration containing simulator, robot, and terrain settings.
         device : str
             Device type for simulation ('cpu' or 'cuda').
+        hooks : HookRegistry
+            The owning task's hook registry.
 
         Raises
         ------
@@ -79,7 +83,7 @@ class MuJoCo(BaseSimulator):
         logger.info(f"Device: {device}")
         logger.info(f"Simulator config: {simulator_config}")
 
-        super().__init__(tyro_config, terrain_manager, device)
+        super().__init__(tyro_config, terrain_manager, device, hooks)
         self.hooks.add(Phase.CLOSE, self._close_backend, name="mujoco.backend.close")
         self.hooks.add(Phase.CLOSE, self._close_viewer, name="mujoco.viewer.close")
 

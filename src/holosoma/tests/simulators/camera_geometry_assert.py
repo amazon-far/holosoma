@@ -153,7 +153,6 @@ def main() -> int:
     )
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
-    sim.install_plugins()
 
     # Pin the robot to a known upright pose at each env origin so the (pelvis-mounted) camera aligns
     # with the panel placed ahead (backends that jitter the spawn xy need it; others are at origin).

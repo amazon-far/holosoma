@@ -31,7 +31,7 @@ from holosoma.utils.video_utils import create_video
 
 if TYPE_CHECKING:
     from holosoma.config_types.plugin import CameraVizPluginConfig
-    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+    from holosoma.envs.base_task.base_task import BaseTask
     from holosoma.simulator.plugins.camera_consumer import FramePacket, StreamKey
 
 _WINDOW = "holosoma camera sensors"
@@ -42,7 +42,7 @@ class CameraVizPlugin(CameraConsumerPlugin):
 
     config: CameraVizPluginConfig
 
-    def __init__(self, config: CameraVizPluginConfig, simulator: BaseSimulator) -> None:
+    def __init__(self, config: CameraVizPluginConfig, task: BaseTask) -> None:
         self._frames_video: list[npt.NDArray[np.uint8]] = []  # buffered grids for the mp4
         self._step = -1  # batches seen (proxy for the fastest watched camera's render count)
         self._last_captured = -1
@@ -51,7 +51,9 @@ class CameraVizPlugin(CameraConsumerPlugin):
         # sim's camera dict directly (the sensors_config property needs self.simulator, set by super
         # below — but wanted_streams runs inside super().__init__, so the panels must exist first).
         cams_by_name = {
-            name: sensor for name, sensor in simulator.sensor_config.items() if isinstance(sensor, CameraSensorConfig)
+            name: sensor
+            for name, sensor in task.simulator.sensor_config.items()
+            if isinstance(sensor, CameraSensorConfig)
         }
         all_cams = list(cams_by_name)
         self._cam_names = config.cameras if config.cameras is not None else all_cams
@@ -75,12 +77,12 @@ class CameraVizPlugin(CameraConsumerPlugin):
 
         # Panels + env_ids are set, so wanted_streams() works: validate streams and register the
         # publish/close callbacks. Fields below use self.config / self.control_hz (set by super).
-        super().__init__(config, simulator)
+        super().__init__(config, task)
 
         self._frame_decimation = self._resolve_frame_decimation()
 
         # Live window viable only with a non-headless sim AND a usable display.
-        self._show_live = config.live_window and not simulator.headless and bool(os.environ.get("DISPLAY"))
+        self._show_live = config.live_window and not task.simulator.headless and bool(os.environ.get("DISPLAY"))
         if config.live_window and not self._show_live:
             logger.warning("CameraVizPlugin: live_window requested but no display; window disabled.")
         self._window_open = False

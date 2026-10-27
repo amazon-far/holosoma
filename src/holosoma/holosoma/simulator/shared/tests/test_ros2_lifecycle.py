@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 import threading
 import types
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -16,6 +16,9 @@ from holosoma.simulator.shared.ros2_lifecycle import (
     get_ros2_runtime,
     spin_executor_until_stopped,
 )
+
+if TYPE_CHECKING:
+    from holosoma.envs.base_task.base_task import BaseTask
 
 pytestmark = pytest.mark.no_sim
 
@@ -173,11 +176,11 @@ def test_runtime_context_closes_after_plugin_hooks() -> None:
         def shutdown() -> None:
             events.append("context")
 
-    simulator = types.SimpleNamespace(hooks=HookRegistry())
-    runtime = get_ros2_runtime(simulator)
+    task = cast("BaseTask", types.SimpleNamespace(hooks=HookRegistry()))
+    runtime = get_ros2_runtime(task)
     runtime._context = _Context()
-    simulator.hooks.add(Phase.CLOSE, lambda: events.append("plugin"), name="plugin.close")
+    task.hooks.add(Phase.CLOSE, lambda: events.append("plugin"), name="plugin.close")
 
-    simulator.hooks.emit(Phase.CLOSE)
+    task.hooks.emit(Phase.CLOSE)
 
     assert events == ["plugin", "context"]

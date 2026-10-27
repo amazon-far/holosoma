@@ -31,6 +31,7 @@ from holosoma.config_values.plugin import PLUGIN_REGISTRY
 from holosoma.config_values.wbt.g1 import sensor as g1_cameras
 from holosoma.simulator.base_simulator.hooks import HookRegistry
 from holosoma.simulator.plugins.camera_consumer import CameraIntrinsics, FramePacket
+from holosoma.simulator.plugins.tests._task import plugin_task
 
 pytestmark = pytest.mark.no_sim
 
@@ -145,7 +146,7 @@ def test_waist_depth_raw_and_color_preset_shares_one_snapshot_per_camera() -> No
     assert any(r.format == "jpeg" and r.depth_colormap == "turbo" for r in inst.routes.values())
     assert {r.camera for r in inst.routes.values()} <= set(_G1_WAIST_RIG)
     # The single-copy guarantee: 4 routes but only 2 wanted streams (one per camera).
-    egress = inst.get_cls()(inst, _FakeSimulator(_G1_WAIST_RIG))
+    egress = inst.get_cls()(inst, plugin_task(_FakeSimulator(_G1_WAIST_RIG)))
     assert egress.wanted_streams() == {("waist_front_cam", "depth", 0), ("waist_back_cam", "depth", 0)}
     assert "rclpy" not in sys.modules
 
@@ -154,7 +155,7 @@ def test_real_egress_wanted_streams_and_sync_default() -> None:
     # Construct the REAL ROS2ImagePlugin (no start -> no ROS) and check its wiring: wanted_streams
     # from routes, and lossless synchronous publication by default.
     inst = PLUGIN_REGISTRY["ros2-stereo"]
-    egress = inst.get_cls()(inst, _FakeSimulator(_G1_STEREO_RIG))
+    egress = inst.get_cls()(inst, plugin_task(_FakeSimulator(_G1_STEREO_RIG)))
     assert egress.wanted_streams() == {("head_cam_left", "rgb", 0), ("head_cam_right", "rgb", 0)}
     assert inst.async_publish is False
     assert "rclpy" not in sys.modules
@@ -168,7 +169,7 @@ def test_pointcloud_preset_matches_default_lidar_sensor_key() -> None:
         "head_cam": _G1_STEREO_RIG["head_cam_left"],
         "lidar": LidarSensorConfig(mount=SensorMountConfig(target_kind="robot_link", target="pelvis")),
     }
-    plugin = inst.get_cls()(inst, _FakeSimulator(sensors))
+    plugin = inst.get_cls()(inst, plugin_task(_FakeSimulator(sensors)))
     assert plugin.wanted_streams() == {("lidar", 0)}
     assert "rclpy" not in sys.modules
 
@@ -187,7 +188,7 @@ def test_lidar_viz_presets_select_the_default_lidar() -> None:
     assert saved_config.save_scans and not saved_config.live_window
     assert recorded_config.record_video and not recorded_config.live_window
 
-    plugin = saved_config.get_cls()(saved_config, _FakeSimulator(sensors))
+    plugin = saved_config.get_cls()(saved_config, plugin_task(_FakeSimulator(sensors)))
     assert plugin.wanted_streams() == {("lidar", 0)}
 
 
@@ -199,11 +200,11 @@ def test_camera_consumers_ignore_lidars_in_mixed_sensor_config() -> None:
     simulator = _FakeSimulator(sensors)
 
     viz_config = CameraVizPluginConfig()
-    viz = viz_config.get_cls()(viz_config, simulator)
+    viz = viz_config.get_cls()(viz_config, plugin_task(simulator))
     assert viz.wanted_streams() == {("head", "rgb", 0)}
 
     writer_config = FrameWriterPluginConfig()
-    writer = writer_config.get_cls()(writer_config, simulator)
+    writer = writer_config.get_cls()(writer_config, plugin_task(simulator, num_envs=1))
     assert writer.wanted_streams() == {("head", "rgb", 0)}
 
 
@@ -237,7 +238,7 @@ def test_encode_threads_route_colormap_and_range_without_ros() -> None:
         publish_camera_info=False,
         routes={"ca": cmap_a, "cb": cmap_b, "ra": range_a, "rb": range_b},
     )
-    egress = cfg.get_cls()(cfg, _FakeSimulator(sensors))  # no start() -> no rclpy
+    egress = cfg.get_cls()(cfg, plugin_task(_FakeSimulator(sensors)))  # no start() -> no rclpy
     frame = _depth_frame("waist")
     enc = {k: egress._encode(r, frame).data for k, r in cfg.routes.items()}
     assert enc["ca"] != enc["cb"]  # colormap reaches encode_frame (would collide if defaulted)

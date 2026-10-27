@@ -47,7 +47,7 @@ class _FakeSim:
     written/rendered/egressed state makes the loop's schedule observable without a real backend: a
     playback-style plugin samples on FRAME_BEGIN, writes on PRE_STEP, and egresses on FRAME_END.
 
-    The substep budget is enforced from ``simulate_at_each_physics_step`` rather than
+    The substep budget is enforced from ``simulate_at_each_physics_step`` rather than the task's
     ``shutdown_requested``, because that is the one call every iteration of the loop must make: a
     regression that stops egress, or drops the shutdown check altogether, then fails an assertion
     instead of hanging the suite.
@@ -62,7 +62,6 @@ class _FakeSim:
         self._budget = (frames + 2) * decimation
         self.substeps = 0
         self.refreshes = 0
-        self._shutdown = False
         self._sampled: int | None = None
         self._written: int | None = None
         self._rendered: object = None
@@ -81,12 +80,9 @@ class _FakeSim:
         self.egress_hook = self.hooks.add(Phase.FRAME_END, self._egress, name="fake.egress")
 
     @property
-    def shutdown_requested(self) -> bool:
-        """End on the wanted frame count, or when a hook asked — the behavior under test either way."""
-        return self._shutdown or len(self.captured) >= self.frames
-
-    def request_shutdown(self, reason: str = "") -> None:
-        self._shutdown = True
+    def frames_reached(self) -> bool:
+        """Whether the wanted frame count has been egressed, which ends the run."""
+        return len(self.captured) >= self.frames
 
     def refresh_sim_tensors(self) -> None:
         """Stand in for resyncing the state tensors: record which substep they now describe."""
@@ -171,6 +167,11 @@ class _LoopTask(SimulationTask):
         self.randomization_manager = cast("RandomizationManager", SimpleNamespace(step=lambda: None))
         self._episode_active = torch.zeros(self.num_envs, dtype=torch.bool)
         self._init_buffers()
+
+    @property
+    def shutdown_requested(self) -> bool:
+        """End when a hook asked, or on the fake's wanted frame count."""
+        return super().shutdown_requested or cast("_FakeSim", self.simulator).frames_reached
 
     def reset_all(self) -> None:
         self._start_episodes(torch.arange(self.num_envs))
@@ -314,14 +315,15 @@ def test_shutdown_asked_for_inside_a_frame_still_egresses_that_frame() -> None:
     telemetry to a mid-frame exit.
     """
     sim = _FakeSim(frames=99)  # the ask below ends the run, not the frame budget
+    task = _LoopTask(sim)
 
     def ask_mid_frame() -> None:
         if sim.substeps == DECIMATION + 1:  # first substep of the second frame
-            sim.request_shutdown("test")
+            task.request_shutdown("test")
 
     sim.hooks.add(Phase.POST_STEP, ask_mid_frame, name="test.ask")
 
-    _run(sim)
+    task.run()
 
     assert sim.captured == [0, 1]
     assert sim.substeps == 2 * DECIMATION
@@ -335,14 +337,15 @@ def test_a_frame_that_opens_always_closes() -> None:
     egressed asks from FRAME_END instead, which is how MotionPlaybackPlugin ends a finite run.
     """
     sim = _FakeSim(frames=99)
+    task = _LoopTask(sim)
 
     def ask_on_frame_begin() -> None:
         if sim.control_steps == 3:  # the third frame asks to stop while being opened
-            sim.request_shutdown("test")
+            task.request_shutdown("test")
 
     sim.hooks.add(Phase.FRAME_BEGIN, ask_on_frame_begin, name="test.ask")
 
-    _run(sim)
+    task.run()
 
     assert sim.captured == [0, 1, 2]
     assert sim.phases == _expected_phases(groups=3)
@@ -465,11 +468,8 @@ class _PlaybackSim(_FakeSim):
         return torch.cat([self.dof_pos[..., None], self.dof_vel[..., None]], dim=-1)
 
     @property
-    def shutdown_requested(self) -> bool:
-        return self._shutdown
-
-    def request_shutdown(self, reason: str = "") -> None:
-        self._shutdown = True
+    def frames_reached(self) -> bool:
+        return False
 
     def set_actor_root_state_tensor_robots(self, env_ids: torch.Tensor, root_states: torch.Tensor) -> None:
         pass
@@ -502,8 +502,9 @@ def test_playback_egresses_every_clip_frame_exactly_once(
         fps=FPS / decimation,  # one clip frame per control step
         n_run=1,
     )
-    cfg.get_cls()(cfg, sim)
+    task = _LoopTask(sim)
+    cfg.get_cls()(cfg, task)
 
-    _run(sim)
+    task.run()
 
     assert sim.captured == CLIP_JOINT0 * clips

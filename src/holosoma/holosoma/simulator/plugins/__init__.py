@@ -1,7 +1,7 @@
 """Simulator plugins: runtime plugin classes selected on the CLI as ``plugin.<key>:<variant>``.
 
-A plugin is any class constructed as ``cls(cfg, simulator)`` that registers hooks on
-``simulator.hooks`` — there is no base class to inherit (see
+A plugin is any class constructed as ``cls(cfg, task)`` that registers hooks on
+``task.hooks`` — there is no base class to inherit (see
 :mod:`holosoma.config_types.plugin`). This package holds the in-tree camera-frame egress
 plugins and their shared substrate:
 

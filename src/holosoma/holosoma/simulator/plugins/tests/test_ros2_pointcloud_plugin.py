@@ -18,6 +18,7 @@ from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.plugins.lidar_consumer import PointCloudPacket
 from holosoma.simulator.plugins.ros2 import ros2_pointcloud_plugin
 from holosoma.simulator.plugins.ros2.ros2_pointcloud_plugin import ROS2PointCloudPlugin
+from holosoma.simulator.plugins.tests._task import plugin_task
 from holosoma.simulator.shared.sensor_manager import SensorManager
 from holosoma.utils.safe_torch_import import torch
 
@@ -232,7 +233,7 @@ def _start_plugin(
     route = ROS2PointCloudRoute(lidar="lidar", topic="/scan", frame_id=frame_id)
     kwargs: dict[str, Any] = {} if async_publish is None else {"async_publish": async_publish}
     config = ROS2PointCloudPluginConfig(qos=qos, routes={"scan": route}, **kwargs)
-    plugin = cast("ROS2PointCloudPlugin", config.get_cls()(config, _FakeSimulator()))
+    plugin = cast("ROS2PointCloudPlugin", config.get_cls()(config, plugin_task(_FakeSimulator())))
     plugin.start()
     publisher = cast("_FakeNode", fake_ros["node"]).publishers[0]
     return plugin, publisher
@@ -326,7 +327,7 @@ def test_route_transform_rotates_and_translates_points_into_frame(fake_ros: dict
         point_translation=[1.0, 2.0, 3.0],
     )
     config = ROS2PointCloudPluginConfig(async_publish=False, routes={"scan": route})
-    plugin = cast("ROS2PointCloudPlugin", config.get_cls()(config, _FakeSimulator()))
+    plugin = cast("ROS2PointCloudPlugin", config.get_cls()(config, plugin_task(_FakeSimulator())))
     plugin.start()
     packet = PointCloudPacket(
         lidar="lidar",
@@ -370,7 +371,7 @@ def test_fans_out_one_fresh_scan_to_every_configured_route(fake_ros: dict[str, A
         "debug": ROS2PointCloudRoute(lidar="lidar", topic="/debug/lidar/points", frame_id="lidar_debug"),
     }
     config = ROS2PointCloudPluginConfig(async_publish=False, routes=routes)
-    plugin = cast("ROS2PointCloudPlugin", config.get_cls()(config, _FakeSimulator()))
+    plugin = cast("ROS2PointCloudPlugin", config.get_cls()(config, plugin_task(_FakeSimulator())))
     plugin.start()
     packet = PointCloudPacket(
         lidar="lidar",
@@ -427,7 +428,9 @@ def test_async_fanout_routes_each_lidar_packet_to_its_configured_topics(
         "rear": ROS2PointCloudRoute(lidar="rear_lidar", topic="/rear/points", frame_id="rear_lidar"),
     }
     config = ROS2PointCloudPluginConfig(async_publish=True, routes=routes)
-    plugin = cast("ROS2PointCloudPlugin", config.get_cls()(config, _FakeSimulator(include_rear_lidar=True)))
+    plugin = cast(
+        "ROS2PointCloudPlugin", config.get_cls()(config, plugin_task(_FakeSimulator(include_rear_lidar=True)))
+    )
     plugin.start()
     front_packet = PointCloudPacket(
         lidar="lidar",
@@ -502,7 +505,7 @@ def test_frame_end_drives_lazy_start_publish_and_skips_non_due_scan(fake_ros: di
             sim.sensor_manager.get_lidar("lidar").set_buffer("points", points)
 
     sim.hooks.add(Phase.FRAME_END, _render_sensor, name="sensors.render")
-    plugin = cast("ROS2PointCloudPlugin", config.get_cls()(config, sim))
+    plugin = cast("ROS2PointCloudPlugin", config.get_cls()(config, plugin_task(sim)))
     sim.hooks.emit(Phase.FRAME_END)
     publisher_node = cast("_FakeNode", fake_ros["node"])
     publisher = publisher_node.publishers[0]

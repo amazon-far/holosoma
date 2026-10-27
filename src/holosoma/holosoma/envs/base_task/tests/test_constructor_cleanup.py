@@ -5,11 +5,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from holosoma.envs import policy_task as policy_task_module
 from holosoma.envs.base_task import base_task as base_task_module
 from holosoma.envs.base_task.base_task import BaseTask
-from holosoma.envs.policy_task import PolicyTask
-from holosoma.simulator.base_simulator.hooks import HookRegistry
+from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.utils.safe_torch_import import torch
 
 pytestmark = pytest.mark.no_sim
@@ -45,17 +43,33 @@ def test_task_preserves_interrupt_when_constructor_cleanup_fails(monkeypatch: py
     simulator.close.assert_called_once_with()
 
 
-def test_task_installs_plugins_only_after_provider_setup(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_task_runs_close_hooks_when_simulator_construction_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed: list[str] = []
+
+    def fail_inside_simulator_construction(self: BaseTask, *_args: object, **_kwargs: object) -> None:
+        self.hooks = HookRegistry()
+        self.hooks.add(Phase.CLOSE, lambda: closed.append("backend"))
+        raise RuntimeError("backend failed")
+
+    monkeypatch.setattr(BaseTask, "_initialize_base_task", fail_inside_simulator_construction)
+
+    with pytest.raises(RuntimeError, match="backend failed"):
+        BaseTask(object())  # type: ignore[arg-type]
+
+    assert closed == ["backend"]
+
+
+def test_task_installs_plugins_after_task_setup(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[str] = []
 
     class _StopAfterInstallError(Exception):
         pass
 
     class _Simulator:
-        def __init__(self, **_kwargs: object) -> None:
+        def __init__(self, *, hooks: HookRegistry, **_kwargs: object) -> None:
             self.sim_dt = 0.005
             self.simulator_config = SimpleNamespace(reset_manager=object())
-            self.hooks = HookRegistry()
+            self.hooks = hooks
             self.robot_root_states = torch.zeros(1, 13)
             self.dof_pos = torch.zeros(1, 1)
             self.dof_vel = torch.zeros(1, 1)
@@ -84,47 +98,36 @@ def test_task_installs_plugins_only_after_provider_setup(monkeypatch: pytest.Mon
             self.viewer = object()
             events.append("viewer")
 
-        def install_plugins(self) -> None:
-            assert self.prepared
-            assert hasattr(self, "viewer")
-            events.append("plugins")
+        def prepare_manager_fields(self, **_managers: object) -> None:
+            events.append("manager_fields")
 
         def close(self) -> None:
             events.append("close")
 
-    def load_assets(_task: BaseTask) -> None:
-        events.append("assets")
-
-    def create_envs(_task: BaseTask) -> None:
-        events.append("envs")
-
-    def create_observation_manager(*_args: object, **_kwargs: object) -> None:
-        events.append("manager")
-        raise _StopAfterInstallError
+    class _ProbePlugin:
+        def __init__(self, _cfg: object, task: BaseTask) -> None:
+            assert task.hooks is task.simulator.hooks
+            assert task.reset_manager is not None
+            events.append("plugins")
+            raise _StopAfterInstallError
 
     simulator_config = SimpleNamespace(
         _target_="test.Simulator",
         config=SimpleNamespace(
             name="test",
-            sim=SimpleNamespace(control_decimation_steps=4, max_episode_length_s=20.0),
+            sim=SimpleNamespace(fps=200, control_decimation_steps=4, max_episode_length_s=20.0),
         ),
     )
     config = SimpleNamespace(
-        observation=object(),
         simulator=simulator_config,
         terrain=object(),
-        robot=SimpleNamespace(policy_obs_dim=1, critic_obs_dim=1, actions_dim=1),
-        action=object(),
-        reward=object(),
-        termination=object(),
+        robot=SimpleNamespace(),
         randomization=object(),
-        command=object(),
-        curriculum=object(),
         training=SimpleNamespace(num_envs=1, seed=0, headless=False, torch_deterministic=False),
         logger=object(),
         scene=object(),
         sensors={},
-        plugin={},
+        plugin={"probe": SimpleNamespace(get_cls=lambda: _ProbePlugin)},
         device="cpu",
         time_scale=0.0,
         viewer_dt=1 / 60,
@@ -132,17 +135,28 @@ def test_task_installs_plugins_only_after_provider_setup(monkeypatch: pytest.Mon
 
     monkeypatch.setattr(base_task_module, "get_class", lambda _target: _Simulator)
     monkeypatch.setattr(base_task_module, "FullSimConfig", lambda **kwargs: SimpleNamespace(**kwargs))
-    monkeypatch.setattr(base_task_module, "TerrainManager", lambda *_args: SimpleNamespace())
-    monkeypatch.setattr(policy_task_module, "ObservationManager", create_observation_manager)
-    monkeypatch.setattr(PolicyTask, "_validate_loaded_assets", lambda _task: None)
-    monkeypatch.setattr(BaseTask, "_load_assets", load_assets)
-    monkeypatch.setattr(BaseTask, "_create_envs", create_envs)
+    monkeypatch.setattr(
+        base_task_module, "TerrainManager", lambda *_args: SimpleNamespace(setup=lambda: events.append("terrain_setup"))
+    )
+    monkeypatch.setattr(
+        base_task_module,
+        "RandomizationManager",
+        lambda *_args: SimpleNamespace(setup=lambda: events.append("randomization")),
+    )
+
+    def create_reset_manager(*_args: object) -> object:
+        events.append("reset_manager")
+        return object()
+
+    monkeypatch.setattr(base_task_module, "ResetEventManager", create_reset_manager)
+    monkeypatch.setattr(BaseTask, "_load_assets", lambda _task: events.append("assets"))
+    monkeypatch.setattr(BaseTask, "_create_envs", lambda _task: events.append("envs"))
     monkeypatch.setattr(BaseTask, "_setup_robot_body_indices", lambda _task: events.append("body_indices"))
     monkeypatch.setattr(base_task_module, "get_timestamp", lambda: "timestamp")
     monkeypatch.setattr(base_task_module, "get_experiment_dir", lambda *_args, **_kwargs: ".")
 
     with pytest.raises(_StopAfterInstallError):
-        PolicyTask(config)  # type: ignore[arg-type]
+        BaseTask(config)  # type: ignore[arg-type]
 
-    assert events.index("prepare") < events.index("viewer") < events.index("plugins") < events.index("manager")
-    assert events[-1] == "close"
+    assert events.index("viewer") < events.index("reset_manager") < events.index("plugins")
+    assert events[-2:] == ["plugins", "close"]

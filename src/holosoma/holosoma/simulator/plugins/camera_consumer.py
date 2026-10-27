@@ -3,10 +3,10 @@
 Defines :class:`CameraConsumerPlugin`, the base for a plugin that consumes rendered camera frames
 (ROS2 publish, live window, mp4 recording), plus :class:`FramePacket` and :class:`CameraIntrinsics`.
 
-A consumer is a plugin (``cls(cfg, simulator)``, no base class required): it registers its per-step
+A consumer is a plugin (``cls(cfg, task)``, no base class required): it registers its per-step
 :meth:`~CameraConsumerPlugin.publish` on ``FRAME_END`` and its :meth:`~CameraConsumerPlugin.stop`
 on ``CLOSE`` in ``__init__``. The cameras' ``render_sensors`` is registered on the SAME phase first
-(before ``install_plugins``), so by registration order the buffers are
+(before the task installs plugins), so by registration order the buffers are
 fresh when a consumer's callback runs. Each consumer declares the streams it needs via
 :meth:`~CameraConsumerPlugin.wanted_streams`; the base validates them against the configured cameras
 at construction (fail-loud) and, each step, snapshots exactly those to host once — sharing the single
@@ -40,7 +40,7 @@ from holosoma.utils.simulator_config import SimulatorType
 
 if TYPE_CHECKING:
     from holosoma.config_types.plugin import PluginConfig
-    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+    from holosoma.envs.base_task.base_task import BaseTask
 
 # (camera_name, modality, env_id). The unit of stream identity across the egress system.
 StreamKey = tuple[str, str, int]
@@ -95,7 +95,7 @@ class CameraConsumerPlugin:
     """Base for a plugin that consumes rendered camera frames each control step.
 
     Subclass and, in ``__init__``, set any transport fields then call
-    ``super().__init__(config, simulator)`` (which validates the streams and registers the callbacks;
+    ``super().__init__(config, task)`` (which validates the streams and registers the callbacks;
     ``wanted_streams`` runs there, so fields it reads must be set first). Open the live transport lazily
     in :meth:`start` — the base defers ``start`` to the first :meth:`publish`. Implement
     :meth:`wanted_streams`, :meth:`start`, :meth:`publish`, and :meth:`stop`.
@@ -106,18 +106,18 @@ class CameraConsumerPlugin:
     frame-processing failure isolation. Teardown failures propagate through CLOSE so providers stay alive.
     """
 
-    def __init__(self, config: PluginConfig, simulator: BaseSimulator) -> None:
-        # A plugin is duck-typed (cls(cfg, simulator) registering on simulator.hooks); no base to call.
+    def __init__(self, config: PluginConfig, task: BaseTask) -> None:
+        # A plugin is duck-typed (cls(cfg, task) registering on task.hooks); no base to call.
         # ``config`` is typed per subclass; ``cfg`` mirrors the plugin convention (ClockPublishPlugin etc).
         self.cfg = config
         self.config = config
-        self.simulator = simulator
+        self.simulator = task.simulator
         self._wanted = self.wanted_streams()
         self._validate_streams()
         self._started = False
         self._closed = False
-        simulator.hooks.add(Phase.FRAME_END, self._on_frame_end, name=f"{self._label()}.publish")
-        simulator.hooks.add(Phase.CLOSE, self._on_close, name=f"{self._label()}.stop")
+        task.hooks.add(Phase.FRAME_END, self._on_frame_end, name=f"{self._label()}.publish")
+        task.hooks.add(Phase.CLOSE, self._on_close, name=f"{self._label()}.stop")
 
     def _label(self) -> str:
         return type(self).__name__

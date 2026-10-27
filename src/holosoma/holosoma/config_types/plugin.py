@@ -1,19 +1,19 @@
-"""Config types for simulator plugins.
+"""Config types for task plugins.
 
 A *plugin* is a bundle of behavior — a set of lifecycle hooks plus whatever state and
-side effects they need — that an extension attaches to a running simulator without
-subclassing a backend. Plugins are built on the lifecycle hook system (``simulator.hooks``,
+side effects they need — that an extension attaches to a running task without
+subclassing it. Plugins are built on the lifecycle hook system (``task.hooks``,
 :class:`~holosoma.simulator.base_simulator.hooks.Phase`) and may depend on other simulator
 contracts (the virtual gantry, the clock, etc.). Each plugin pairs:
 
 - a ``PluginConfig`` subclass (the CLI-visible, serializable knobs), registered under a
   name in ``holosoma.config_values.plugin.PLUGIN_REGISTRY``, and
 - a runtime plugin class, returned by the config's :meth:`PluginConfig.get_cls`. There is
-  no base class to inherit: any class constructed as ``cls(cfg, simulator)`` that
-  registers its hooks on ``simulator.hooks`` works (duck-typed).
+  no base class to inherit: any class constructed as ``cls(cfg, task)`` that
+  registers its hooks on ``task.hooks`` works (duck-typed).
 
 The config is resolved on the CLI as a dynamic-dict field (see ``RunSimConfig.plugin``);
-``BaseSimulator.install_plugins`` instantiates each ``get_cls()`` after backend setup.
+``BaseTask`` instantiates each ``get_cls()`` at the end of task setup.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ _FORBID_EXTRA = ConfigDict(extra="forbid")
 
 @dataclass(frozen=True)
 class PluginConfig(abc.ABC):
-    """Base config for a simulator plugin.
+    """Base config for a task plugin.
 
     Subclass with the plugin's parameters as dataclass fields and implement
     :meth:`get_cls` to point at the runtime plugin class. Register an instance in
@@ -47,8 +47,8 @@ class PluginConfig(abc.ABC):
     def get_cls(self) -> Callable[..., Any]:
         """Return the runtime plugin class this config configures.
 
-        The class is constructed as ``cls(cfg, simulator)`` and is expected to register
-        its hooks on ``simulator.hooks`` in ``__init__`` — no base class required.
+        The class is constructed as ``cls(cfg, task)`` and is expected to register
+        its hooks on ``task.hooks`` in ``__init__`` — no base class required.
         Import it lazily inside this method so that registering the config preset does
         not pull the (possibly heavy) runtime module at import time.
         """
