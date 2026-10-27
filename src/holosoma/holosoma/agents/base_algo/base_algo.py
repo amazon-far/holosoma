@@ -143,11 +143,9 @@ class BaseAlgo:
     def _create_eval_callbacks(self) -> None:
         """Instantiate the configured evaluation callbacks, replacing any existing ones.
 
-        Appends in configuration order, one at a time: a callback may scan
+        Appends in configuration order, one at a time, because a callback may scan
         ``self.eval_callbacks`` during its own construction to share state with an
-        earlier one. Clearing first keeps a second evaluation run from stacking a
-        duplicate set, which would leave callbacks that patch the environment unable
-        to unwind.
+        earlier one.
         """
         self.eval_callbacks.clear()
         if self.config.eval_callbacks is None:

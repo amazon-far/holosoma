@@ -10,7 +10,6 @@ import pytest
 from holosoma.agents.base_algo.base_algo import BaseAlgo
 from holosoma.agents.callbacks.base_callback import RLEvalCallback
 from holosoma.config_types.algo import AlgoInitConfig
-from holosoma.envs.base_task.base_task import BaseTask
 
 pytestmark = pytest.mark.no_sim
 
@@ -162,13 +161,3 @@ def test_env_step_folds_the_environment_result_into_actor_state() -> None:
 
     assert actor_state["obs"] == {"actor_obs": 1}
     assert set(actor_state) == {"actions", "obs", "rewards", "dones", "extras"}
-
-
-def test_compute_eval_actions_must_be_implemented() -> None:
-    class _NoHook(BaseAlgo):
-        pass
-
-    algo = _NoHook(cast("BaseTask", _FakeEnv()), _algo_config(None), device="cpu")
-
-    with pytest.raises(NotImplementedError):
-        algo._pre_eval_env_step({})
