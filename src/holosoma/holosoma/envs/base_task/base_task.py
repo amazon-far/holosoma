@@ -7,7 +7,7 @@ from loguru import logger
 from holosoma.config_types.env import EnvConfig
 from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.randomization import RandomizationManagerCfg
-from holosoma.envs.base_task.hooks import HookRegistry, Phase, frame_base_rates
+from holosoma.hooks import HookRegistry, Phase, frame_base_rates
 from holosoma.managers.randomization import RandomizationManager
 from holosoma.managers.reset_events.manager import ResetEventManager
 from holosoma.managers.terrain import TerrainManager
@@ -30,8 +30,10 @@ class BaseTask:
         try:
             self._initialize_base_task(tyro_config)
         except BaseException:
+            hooks = getattr(self, "hooks", None)
             try:
-                self._close_plugins_and_simulator()
+                if hooks is not None:
+                    hooks.emit(Phase.CLOSE)
             except Exception:
                 logger.exception("Task cleanup failed while preserving the task setup error")
             raise
@@ -52,7 +54,7 @@ class BaseTask:
             logger.info(f"Task shutdown requested{f': {reason}' if reason else ''}")
 
     def close(self) -> None:
-        """End active episodes, then close plugins and the simulator exactly once."""
+        """End active episodes, then emit ``CLOSE`` exactly once."""
         if self._closed:
             return
         self._closed = True
@@ -64,28 +66,15 @@ class BaseTask:
             primary_error = exc
 
         try:
-            self._close_plugins_and_simulator()
+            self.hooks.emit(Phase.CLOSE)
         except BaseException as exc:
             if primary_error is None:
                 primary_error = exc
             else:
-                logger.opt(exception=exc).error("Plugin or simulator cleanup also failed")
+                logger.opt(exception=exc).error("Close hooks also failed")
 
         if primary_error is not None:
             raise primary_error
-
-    def _close_plugins_and_simulator(self) -> None:
-        """Emit ``CLOSE`` to plugins, then close the simulator they read from.
-
-        A plugin teardown failure leaves the simulator open, so a consumer that could not stop its
-        workers never outlives the resources they use.
-        """
-        hooks = getattr(self, "hooks", None)
-        if hooks is not None:
-            hooks.emit(Phase.CLOSE)
-        simulator = getattr(self, "simulator", None)
-        if simulator is not None:
-            simulator.close()
 
     def _initialize_base_task(self, tyro_config: EnvConfig) -> None:
         """Initialize the simulator and BaseTask-owned managers.
@@ -146,7 +135,7 @@ class BaseTask:
         )
         self.terrain_manager = TerrainManager(terrain_config, self, self.device)
         self.simulator: BaseSimulator = SimulatorClass(
-            tyro_config=full_sim_config, terrain_manager=self.terrain_manager, device=self.device
+            tyro_config=full_sim_config, terrain_manager=self.terrain_manager, device=self.device, hooks=self.hooks
         )
 
         self._validate_task()
@@ -213,7 +202,11 @@ class BaseTask:
         self._install_plugins()
 
     def _install_plugins(self) -> None:
-        """Construct each configured plugin as ``cls(cfg, task)`` once the task is fully built."""
+        """Construct each configured plugin as ``cls(cfg, task)``.
+
+        Runs once the task is fully built, so plugins can use any part of it. Their CLOSE hooks
+        are registered last and therefore run first during reverse-order teardown.
+        """
         self.installed_plugins: dict[str, Any] = {}
         for key, plugin_config in self.config.plugin.items():
             self.installed_plugins[key] = plugin_config.get_cls()(plugin_config, self)
@@ -239,13 +232,11 @@ class BaseTask:
     def _end_episodes(self, env_ids: torch.Tensor) -> None:
         self._episode_active[env_ids] = False
         for env_id in env_ids.tolist():
-            self.simulator.on_episode_end(env_id)
             self.hooks.emit(Phase.EPISODE_END, env_id)
 
     def _start_episodes(self, env_ids: torch.Tensor) -> None:
         self._episode_active[env_ids] = True
         for env_id in env_ids.tolist():
-            self.simulator.on_episode_start(env_id)
             self.hooks.emit(Phase.EPISODE_START, env_id)
 
     def reset_envs_idx(
@@ -481,11 +472,8 @@ class BaseTask:
 
             self.simulator.sync_sim_state()
             if substep == 0:
-                self.simulator.begin_frame()
                 self.hooks.emit(Phase.FRAME_BEGIN)
             self._apply_force_in_physics_step()
-            self.simulator.before_substep()
-            self.hooks.emit(Phase.PRE_STEP)
             self.simulator.simulate_at_each_physics_step()
             # Count the step just taken, so with render_interval == decimation the render lands on
             # the frame's last substep and FRAME_END consumers see the image for the published state.
@@ -493,8 +481,6 @@ class BaseTask:
             if self.simulator.requires_step_render() and render_due:
                 self.simulator.render()
                 rendered_this_step = True
-            self.simulator.after_substep()
-            self.hooks.emit(Phase.POST_STEP)
 
             if viewer_due:
                 if self.viewer is not None and not rendered_this_step:
@@ -512,8 +498,8 @@ class BaseTask:
 
     def _post_physics_step(self) -> Any:
         self._refresh_sim_tensors()
-        # Cameras render before FRAME_END, so egress plugins read fresh buffers.
-        self.simulator.end_frame()
+        # Cameras render and egress consumers publish here, as FRAME_END plugins (the cameras'
+        # render_sensors is registered before any consumer, so buffers are fresh on read).
         self.hooks.emit(Phase.FRAME_END)
         self.episode_length_buf += 1
         self._after_physics_step()

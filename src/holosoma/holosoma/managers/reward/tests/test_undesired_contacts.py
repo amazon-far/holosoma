@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from holosoma.config_types.reward import RewardTermCfg
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.managers.reward.terms.wbt import UndesiredContacts
 from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
 from holosoma.utils.safe_torch_import import torch
@@ -29,20 +30,21 @@ DECIMATION = 4
 
 
 class _ContactSim:
-    """Stub simulator: body names plus a real recorder, driven as the simulator drives it."""
+    """Stub simulator: body names plus a real recorder, driven through its own hooks."""
 
     def __init__(self, num_envs: int = 1) -> None:
         self.body_names = BODY_NAMES
+        self.hooks = HookRegistry()
         self.contact_forces = torch.zeros(num_envs, len(BODY_NAMES), 3)
         self.contact_recorder = ContactSubstepRecorder(
-            lambda: self.contact_forces, num_envs, DECIMATION, len(BODY_NAMES), "cpu"
+            self.hooks, lambda: self.contact_forces, num_envs, DECIMATION, len(BODY_NAMES), "cpu"
         )
 
     def control_step(self, substep_frames: list[torch.Tensor]) -> None:
-        self.contact_recorder.begin_frame()
+        self.hooks.emit(Phase.FRAME_BEGIN)
         for frame in substep_frames:
             self.contact_forces[:] = frame
-            self.contact_recorder.record_current()
+            self.hooks.emit(Phase.POST_STEP)
 
 
 class _Env:

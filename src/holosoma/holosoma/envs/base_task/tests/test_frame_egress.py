@@ -17,8 +17,8 @@ import torch
 
 from holosoma.config_types.env import EnvConfig
 from holosoma.config_types.plugin import MotionPlaybackPluginConfig
-from holosoma.envs.base_task.hooks import HookRegistry, Phase
 from holosoma.envs.simulation_task import SimulationTask
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.managers.randomization import RandomizationManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 
@@ -32,13 +32,6 @@ SUBSTEP = "physics_substep"
 Without it a phase log cannot tell PRE_STEP/POST_STEP bracketing the substep from both firing on
 the same side of it, and POST_STEP consumers are documented to read post-step state.
 """
-
-
-SIM_BEGIN_FRAME = "sim.begin_frame"
-SIM_BEFORE_SUBSTEP = "sim.before_substep"
-SIM_AFTER_SUBSTEP = "sim.after_substep"
-SIM_END_FRAME = "sim.end_frame"
-"""Markers for the simulator's own per-frame work, which runs before the matching plugin phase."""
 
 
 class _LoopOverranError(AssertionError):
@@ -105,24 +98,6 @@ class _FakeSim:
     def render(self, sync_frame_time: bool = True) -> None:
         self.viewer_renders.append(self.substeps)
 
-    def begin_frame(self) -> None:
-        self.phases.append(SIM_BEGIN_FRAME)
-
-    def before_substep(self) -> None:
-        self.phases.append(SIM_BEFORE_SUBSTEP)
-
-    def after_substep(self) -> None:
-        self.phases.append(SIM_AFTER_SUBSTEP)
-
-    def end_frame(self) -> None:
-        self.phases.append(SIM_END_FRAME)
-
-    def on_episode_start(self, env_id: int) -> None:
-        pass
-
-    def on_episode_end(self, env_id: int) -> None:
-        pass
-
     def simulate_at_each_physics_step(self) -> None:
         self.substeps += 1
         if self.substeps > self._budget:
@@ -130,10 +105,13 @@ class _FakeSim:
                 f"the loop ran {self.substeps} substeps without reaching {self.frames} frame(s) "
                 f"(budget {self._budget}); egressed {len(self.captured)}"
             )
+        # Physics phases bracket the substep here, as BaseSimulator.simulate_at_each_physics_step emits them.
+        self.hooks.emit(Phase.PRE_STEP)
         self.phases.append(SUBSTEP)
         if self.substeps % self.render_interval == 0:
             self._rendered = self._scene_state()
             self.rendered_at = self.substeps
+        self.hooks.emit(Phase.POST_STEP)
 
     def _scene_state(self) -> object:
         """What a draw would capture — here the value PRE_STEP wrote, as a subclass may redefine."""
@@ -208,15 +186,9 @@ def _run(sim: _FakeSim, *, headless: bool = True, viewer_dt: float = 1.0) -> Non
 
 
 def _expected_phases(groups: int, decimation: int = DECIMATION) -> list[Phase | str]:
-    """The control-frame schedule: FRAME_BEGIN, every substep, then FRAME_END, each phase after its simulator call."""
-    substeps: list[Phase | str] = [
-        SIM_BEFORE_SUBSTEP,
-        Phase.PRE_STEP,
-        SUBSTEP,
-        SIM_AFTER_SUBSTEP,
-        Phase.POST_STEP,
-    ] * decimation
-    return [SIM_BEGIN_FRAME, Phase.FRAME_BEGIN, *substeps, SIM_END_FRAME, Phase.FRAME_END] * groups
+    """The schedule ``BaseTask._physics_step`` emits: FRAME_BEGIN, every substep, then FRAME_END."""
+    substeps: list[Phase | str] = [Phase.PRE_STEP, SUBSTEP, Phase.POST_STEP] * decimation
+    return [Phase.FRAME_BEGIN, *substeps, Phase.FRAME_END] * groups
 
 
 # ----- frame freshness: the invariant the control-frame schedule exists to preserve -----

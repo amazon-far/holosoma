@@ -7,14 +7,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
 from loguru import logger
 
 from holosoma.config_types.simulator import VirtualGantryCfg
+from holosoma.hooks import Phase
 from holosoma.utils.safe_torch_import import torch
+
+if TYPE_CHECKING:
+    from holosoma.hooks import HookRegistry
 
 
 class GantryCommand(Enum):
@@ -103,6 +107,15 @@ class VirtualGantry:
 
         self._enabled: bool = enable
         self.set_enable(enable)
+
+    def register_hooks(self, hooks: HookRegistry) -> None:
+        """Register virtual gantry lifecycle hooks with the simulator loop.
+
+        step() is PRE_STEP: gantry forces must be applied before the substep so they act within it,
+        not reactively after.
+        """
+        hooks.add(Phase.PRE_STEP, self.step, name="virtual_gantry.step")
+        hooks.add(Phase.EPISODE_START, self.on_episode_start, name="virtual_gantry.on_episode_start")
 
     @property
     def enabled(self) -> bool:

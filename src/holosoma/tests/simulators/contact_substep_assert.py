@@ -89,19 +89,19 @@ def _check(sim, num_envs: int) -> tuple[list[str], list[str]]:
     """Run the checks. Returns (failures, report lines)."""
     import torch
 
+    from holosoma.hooks import Phase
+
     decimation = sim.simulator_config.sim.control_decimation_steps
     recorder = sim.contact_recorder
     buffer = recorder.buffer  # never reallocated, so one binding stays valid
     failures = []
 
-    # The recorder records in after_substep, which the task calls right after the physics step;
-    # this harness drives the simulator directly, so it calls it itself.
+    # The recorder records on POST_STEP, which simulate_at_each_physics_step emits after the step.
     def physics_step():
         sim.simulate_at_each_physics_step()
-        sim.after_substep()
 
     def control_step():
-        sim.begin_frame()
+        sim.hooks.emit(Phase.FRAME_BEGIN)
         for _ in range(decimation):
             physics_step()
         sim.refresh_sim_tensors()
@@ -133,7 +133,7 @@ def _check(sim, num_envs: int) -> tuple[list[str], list[str]]:
             failures.append(f"STABLE: refresh_sim_tensors mutated the buffer ({when})")
 
     # One control step, snapshotting after every substep, so ORDERED can see when each slot moves.
-    sim.begin_frame()
+    sim.hooks.emit(Phase.FRAME_BEGIN)
     snapshots = []
     for substep in range(decimation):
         physics_step()
@@ -186,10 +186,10 @@ def _check(sim, num_envs: int) -> tuple[list[str], list[str]]:
         for _ in range(decimation - 1):
             physics_step()
         buffer.fill_(float("nan"))
-        sim.begin_frame()
+        sim.hooks.emit(Phase.FRAME_BEGIN)
         physics_step()
         if bool(buffer[:, 0].isnan().any()):
-            failures.append("RESTARTS: begin_frame did not re-anchor the next substep to slot 0")
+            failures.append("RESTARTS: FRAME_BEGIN did not re-anchor the next substep to slot 0")
         for i in range(1, decimation):
             if not bool(buffer[:, i].isnan().all()):
                 failures.append(f"RESTARTS: slot {i} was written instead of slot 0 after FRAME_BEGIN")

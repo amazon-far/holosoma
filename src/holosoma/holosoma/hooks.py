@@ -12,7 +12,7 @@ from holosoma.config_types.frequency import DecimationLike, is_frequency_string,
 
 
 class Phase(str, Enum):
-    """Lifecycle points emitted by the owning task's control loop.
+    """Lifecycle points on the hook registry a task shares with its simulator.
 
     ``payload`` names the positional args ``emit`` forwards to callbacks. ``periodic`` marks phases
     that fire on a fixed clock (per-substep or per-frame ticks) — only these accept a frequency-string
@@ -21,6 +21,7 @@ class Phase(str, Enum):
     fires once and rejects any decimation.
 
     ``FRAME_*`` bracket the outer tick (once per frame); ``*_STEP`` bracket each physics substep. The
+    simulator emits ``*_STEP`` around each physics step; the task emits every other phase. The
     names are engine-agnostic — they don't assume what drives the outer tick (a policy, a bridge, ...).
     """
 

@@ -125,17 +125,17 @@ def main() -> int:
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
 
-    from holosoma.envs.base_task.hooks import HookRegistry, Phase
-
-    plugin_hooks = HookRegistry()
     recorder = None
     if args.check_recorder:
-        # record_video, not live_window, so the check needs no DISPLAY.
+        # record_video, not live_window, so the check needs no DISPLAY. Built after the simulator so
+        # its FRAME_END publish follows the render hook.
         from holosoma.config_types.plugin import CameraVizPluginConfig
         from holosoma.simulator.plugins.tests._task import plugin_task
 
         recorder_config = CameraVizPluginConfig(record_video=True)
-        recorder = recorder_config.get_cls()(recorder_config, plugin_task(sim, hooks=plugin_hooks))
+        recorder = recorder_config.get_cls()(recorder_config, plugin_task(sim))
+
+    from holosoma.hooks import Phase
 
     names = sim.get_sensor_names()
     print(f"[{args.simulator}] sensors created: {names}")
@@ -146,8 +146,7 @@ def main() -> int:
     # Step so the renderer warms up and body poses settle, then fire the control-post-refresh hooks
     # (cameras render, egress consumers publish) once — the same emission the task loop drives.
     step(sim, max(args.steps, steps_for_seconds(sim, 0.05)))
-    sim.end_frame()
-    plugin_hooks.emit(Phase.FRAME_END)
+    sim.hooks.emit(Phase.FRAME_END)
 
     fails: list[str] = []
     cam_cfgs = cast("dict[str, CameraSensorConfig]", dict(config.sensor))

@@ -19,7 +19,7 @@ import pytest
 import torch
 
 from holosoma.config_types.plugin import MotionPlaybackPluginConfig
-from holosoma.envs.base_task.hooks import HookRegistry, Phase
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.plugins.playback import MotionPlaybackPlugin, PlaybackClip
 from holosoma.simulator.plugins.playback import playback as playback_module
 from holosoma.simulator.plugins.tests._task import plugin_task
@@ -281,12 +281,6 @@ class _FakeSimulator:
 
     def set_actor_states(self, names: list[str], env_ids: torch.Tensor, states: torch.Tensor) -> None:
         self.object_writes.append((names, states.clone()))
-
-    def on_episode_start(self, env_id: int) -> None:
-        pass
-
-    def on_episode_end(self, env_id: int) -> None:
-        pass
 
     def request_shutdown(self, reason: str = "") -> None:
         self.shutdown_requested = True

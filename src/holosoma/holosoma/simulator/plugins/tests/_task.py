@@ -7,9 +7,5 @@ from typing import Any
 
 
 def plugin_task(simulator: Any, **attrs: Any) -> Any:
-    """Return a stand-in task exposing ``simulator`` and any extra ``attrs``.
-
-    ``hooks`` defaults to the fake simulator's own registry, which the unit tests emit on directly.
-    """
-    attrs.setdefault("hooks", getattr(simulator, "hooks", None))
-    return SimpleNamespace(simulator=simulator, **attrs)
+    """Return a stand-in task exposing ``simulator``, its ``hooks``, and any extra ``attrs``."""
+    return SimpleNamespace(simulator=simulator, hooks=simulator.hooks, **attrs)

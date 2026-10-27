@@ -32,7 +32,7 @@ from holosoma.config_types.sensor import (
     IsaacSimFisheyeConfig,
     SensorMountConfig,
 )
-from holosoma.envs.base_task.hooks import HookRegistry
+from holosoma.hooks import HookRegistry
 from holosoma.simulator.plugins.camera_consumer import CameraIntrinsics, FramePacket
 from holosoma.simulator.plugins.tests._task import plugin_task
 from holosoma.utils.simulator_config import SimulatorType

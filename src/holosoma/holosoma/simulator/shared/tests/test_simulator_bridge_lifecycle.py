@@ -9,6 +9,7 @@ import numpy.typing as npt
 import pytest
 
 from holosoma.config_types.simulator import BridgeConfig
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.shared import simulator_bridge
 from holosoma.simulator.shared.simulator_bridge import SimulatorBridge
@@ -20,7 +21,7 @@ def _simulator() -> BaseSimulator:
     simulator = SimpleNamespace(
         apply_torques_at_dof=MagicMock(),
         device="cpu",
-        simulator_config=SimpleNamespace(sim=SimpleNamespace(fps=200)),
+        hooks=HookRegistry(base_rates={Phase.PRE_STEP: 200.0}),
         robot_config=SimpleNamespace(bridge=SimpleNamespace(sdk_type="test")),
         time=MagicMock(return_value=0.0),
     )
@@ -35,7 +36,7 @@ def _robot_bridge() -> MagicMock:
     return robot_bridge
 
 
-def test_bridge_constructor_starts_transport_and_close_releases_it(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_bridge_constructor_starts_transport_and_owns_its_hooks(monkeypatch: pytest.MonkeyPatch) -> None:
     robot_bridge = _robot_bridge()
     factory = MagicMock(return_value=robot_bridge)
     clock = MagicMock()
@@ -44,8 +45,9 @@ def test_bridge_constructor_starts_transport_and_close_releases_it(monkeypatch: 
     simulator = _simulator()
 
     bridge = SimulatorBridge(simulator, BridgeConfig(enabled=True, interface="lo"))
-    bridge.before_substep()
-    bridge.close()
+    bridge.register_hooks(simulator.hooks)
+    simulator.hooks.emit(Phase.PRE_STEP)
+    simulator.hooks.emit(Phase.CLOSE)
 
     factory.assert_called_once()
     clock.start.assert_called_once_with()
@@ -61,9 +63,9 @@ def test_bridge_default_runs_transport_and_control_every_physics_step(monkeypatc
     monkeypatch.setattr(simulator_bridge, "ClockPub", lambda: clock)
     simulator = _simulator()
 
-    bridge = SimulatorBridge(simulator, BridgeConfig(enabled=True, interface="lo"))
+    SimulatorBridge(simulator, BridgeConfig(enabled=True, interface="lo"))
     for _ in range(8):
-        bridge.before_substep()
+        simulator.hooks.emit(Phase.PRE_STEP)
 
     assert robot_bridge.publish_low_state.call_count == 8
     assert robot_bridge.publish_odom.call_count == 8
@@ -97,14 +99,14 @@ def test_bridge_transport_decimation_keeps_physics_rate_control_and_cached_comma
     monkeypatch.setattr(simulator_bridge, "ClockPub", lambda: clock)
     simulator = _simulator()
 
-    bridge = SimulatorBridge(
+    SimulatorBridge(
         simulator,
         BridgeConfig(enabled=True, interface="lo", transport_decimation="50Hz"),
     )
     for _ in range(8):
-        bridge.before_substep()
+        simulator.hooks.emit(Phase.PRE_STEP)
 
-    # 200Hz physics / 50Hz transport: SDK I/O fires on the 4th and 8th substeps.
+    # 200Hz physics / 50Hz transport: SDK I/O fires on the 4th and 8th emissions.
     assert robot_bridge.publish_low_state.call_count == 2
     assert robot_bridge.publish_odom.call_count == 2
     assert robot_bridge.publish_wireless_controller.call_count == 2
@@ -169,14 +171,15 @@ def test_explicit_dds_config_survives_auto_interface_replace(monkeypatch: pytest
         bridge.close()
 
 
-def test_dds_startup_failure_closes_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dds_startup_failure_closes_clock_and_leaves_close_hook_safe(monkeypatch: pytest.MonkeyPatch) -> None:
     factory = MagicMock(side_effect=RuntimeError("DDS capability check failed"))
     clock = MagicMock()
     monkeypatch.setattr(simulator_bridge, "create_sdk2py_bridge", factory)
     monkeypatch.setattr(simulator_bridge, "ClockPub", lambda: clock)
+    simulator = _simulator()
     with pytest.raises(RuntimeError, match="DDS capability check failed"):
-        SimulatorBridge(
-            _simulator(), BridgeConfig(enabled=True, dds_config='<CycloneDDS><Domain Id="0"/></CycloneDDS>')
-        )
+        SimulatorBridge(simulator, BridgeConfig(enabled=True, dds_config='<CycloneDDS><Domain Id="0"/></CycloneDDS>'))
     clock.start.assert_not_called()
+    clock.close.assert_called_once_with()
+    simulator.hooks.emit(Phase.CLOSE)
     clock.close.assert_called_once_with()

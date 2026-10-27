@@ -155,7 +155,7 @@ from dataclasses import dataclass
 from loguru import logger
 from holosoma.config_types.plugin import PluginConfig
 from holosoma.config_values.plugin import PLUGIN_REGISTRY
-from holosoma.envs.base_task.hooks import Phase
+from holosoma.hooks import Phase
 
 @dataclass(frozen=True)
 class LogHeightPluginConfig(PluginConfig):
@@ -183,16 +183,17 @@ Select plugins as the dynamic-dict `plugin.<key>:<preset>` (per-key leaf overrid
 
 ### Phases
 
-A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=None, every=1)`. Per control frame the loop emits, in order:
+A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=None, every=1)`. Per control frame they fire in this order; the simulator emits the per-substep phases around each
+physics step, and the task emits the rest:
 
-| Phase | When | Callback args | Cadence |
-|---|---|---|---|
-| `FRAME_BEGIN` | before the physics substeps (push commands to the sim here) | — | control rate |
-| `PRE_STEP` | before each physics substep | — | physics `fps` |
-| `POST_STEP` | after each physics substep (freshest sim time) | — | physics `fps` |
-| `FRAME_END` | after the substeps + state-tensor refresh (read state here) | — | control rate |
-| `EPISODE_START` / `EPISODE_END` | on reset boundaries | `env_id` | per event |
-| `CLOSE` | teardown (release resources); runs in reverse registration order | — | once |
+| Phase | Emitted by | When | Callback args | Cadence |
+|---|---|---|---|---|
+| `FRAME_BEGIN` | task | before the physics substeps (push commands to the sim here) | — | control rate |
+| `PRE_STEP` | simulator | before each physics substep | — | physics `fps` |
+| `POST_STEP` | simulator | after each physics substep (freshest sim time) | — | physics `fps` |
+| `FRAME_END` | task | after the substeps + state-tensor refresh (read state here) | — | control rate |
+| `EPISODE_START` / `EPISODE_END` | task | on reset boundaries | `env_id` | per event |
+| `CLOSE` | task | teardown (release resources); runs in reverse registration order | — | once |
 
 ### Cadence
 

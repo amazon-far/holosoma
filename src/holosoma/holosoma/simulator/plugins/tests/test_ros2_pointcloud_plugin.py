@@ -14,7 +14,7 @@ import pytest
 
 from holosoma.config_types.plugin import ROS2PointCloudPluginConfig, ROS2PointCloudRoute
 from holosoma.config_types.sensor import GridLidarRayPatternConfig, LidarSensorConfig, SensorMountConfig
-from holosoma.envs.base_task.hooks import HookRegistry, Phase
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.plugins.lidar_consumer import PointCloudPacket
 from holosoma.simulator.plugins.ros2 import ros2_pointcloud_plugin
 from holosoma.simulator.plugins.ros2.ros2_pointcloud_plugin import ROS2PointCloudPlugin

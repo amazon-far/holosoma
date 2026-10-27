@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
-from holosoma.envs.base_task.hooks import HookRegistry, Phase
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.shared.ros2_lifecycle import (
     ROS2Runtime,
     close_ros2_executor,

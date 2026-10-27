@@ -38,7 +38,7 @@ import numpy.typing as npt
 import torch
 from loguru import logger
 
-from holosoma.envs.base_task.hooks import Phase
+from holosoma.hooks import Phase
 from holosoma.utils.file_cache import cached_open
 from holosoma.utils.path import resolve_data_file_path, resolve_paths
 from holosoma.utils.rotations import quat_slerp
@@ -422,12 +422,10 @@ class MotionPlaybackPlugin:
         """Close the previous episode and open the next: emit boundaries, rewind clock, arm settle."""
         task = self.task
         for env_id in range(task.num_envs):
-            task.simulator.on_episode_end(env_id)
             task.hooks.emit(Phase.EPISODE_END, env_id)
         self._t = self.cfg.start_time
         self._settle_left = self.cfg.settle_frames
         for env_id in range(task.num_envs):
-            task.simulator.on_episode_start(env_id)
             task.hooks.emit(Phase.EPISODE_START, env_id)
         playlist_index = self._playlist_index(self._episode_idx)
         assert playlist_index is not None

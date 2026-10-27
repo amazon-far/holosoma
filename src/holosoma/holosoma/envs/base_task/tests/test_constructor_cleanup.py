@@ -7,17 +7,18 @@ import pytest
 
 from holosoma.envs.base_task import base_task as base_task_module
 from holosoma.envs.base_task.base_task import BaseTask
-from holosoma.envs.base_task.hooks import HookRegistry, Phase
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.utils.safe_torch_import import torch
 
 pytestmark = pytest.mark.no_sim
 
 
-def test_task_setup_failure_closes_created_simulator(monkeypatch: pytest.MonkeyPatch) -> None:
-    simulator = SimpleNamespace(close=MagicMock())
+def test_task_setup_failure_emits_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed: list[str] = []
 
     def fail_after_simulator_creation(self: BaseTask, *_args: object, **_kwargs: object) -> None:
-        self.simulator = simulator  # type: ignore[assignment]
+        self.hooks = HookRegistry()
+        self.hooks.add(Phase.CLOSE, lambda: closed.append("backend"))
         raise ValueError("manager setup failed")
 
     monkeypatch.setattr(BaseTask, "_initialize_base_task", fail_after_simulator_creation)
@@ -25,14 +26,15 @@ def test_task_setup_failure_closes_created_simulator(monkeypatch: pytest.MonkeyP
     with pytest.raises(ValueError, match="manager setup failed"):
         BaseTask(object())  # type: ignore[arg-type]
 
-    simulator.close.assert_called_once_with()
+    assert closed == ["backend"]
 
 
 def test_task_preserves_interrupt_when_constructor_cleanup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    simulator = SimpleNamespace(close=MagicMock(side_effect=RuntimeError("close failed")))
+    close = MagicMock(side_effect=RuntimeError("close failed"))
 
     def interrupt_after_simulator_creation(self: BaseTask, *_args: object, **_kwargs: object) -> None:
-        self.simulator = simulator  # type: ignore[assignment]
+        self.hooks = HookRegistry()
+        self.hooks.add(Phase.CLOSE, close)
         raise KeyboardInterrupt
 
     monkeypatch.setattr(BaseTask, "_initialize_base_task", interrupt_after_simulator_creation)
@@ -40,24 +42,7 @@ def test_task_preserves_interrupt_when_constructor_cleanup_fails(monkeypatch: py
     with pytest.raises(KeyboardInterrupt):
         BaseTask(object())  # type: ignore[arg-type]
 
-    simulator.close.assert_called_once_with()
-
-
-def test_task_setup_failure_closes_plugins_before_simulator(monkeypatch: pytest.MonkeyPatch) -> None:
-    closed: list[str] = []
-
-    def fail_after_a_plugin_installed(self: BaseTask, *_args: object, **_kwargs: object) -> None:
-        self.simulator = SimpleNamespace(close=lambda: closed.append("simulator"))  # type: ignore[assignment]
-        self.hooks = HookRegistry()
-        self.hooks.add(Phase.CLOSE, lambda: closed.append("plugin"))
-        raise RuntimeError("second plugin failed")
-
-    monkeypatch.setattr(BaseTask, "_initialize_base_task", fail_after_a_plugin_installed)
-
-    with pytest.raises(RuntimeError, match="second plugin failed"):
-        BaseTask(object())  # type: ignore[arg-type]
-
-    assert closed == ["plugin", "simulator"]
+    close.assert_called_once_with()
 
 
 def test_task_installs_plugins_after_task_setup(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -67,9 +52,11 @@ def test_task_installs_plugins_after_task_setup(monkeypatch: pytest.MonkeyPatch)
         pass
 
     class _Simulator:
-        def __init__(self, **_kwargs: object) -> None:
+        def __init__(self, *, hooks: HookRegistry, **_kwargs: object) -> None:
             self.sim_dt = 0.005
             self.simulator_config = SimpleNamespace(reset_manager=object())
+            self.hooks = hooks
+            hooks.add(Phase.CLOSE, lambda: events.append("close"))
             self.robot_root_states = torch.zeros(1, 13)
             self.dof_pos = torch.zeros(1, 1)
             self.dof_vel = torch.zeros(1, 1)
@@ -101,11 +88,9 @@ def test_task_installs_plugins_after_task_setup(monkeypatch: pytest.MonkeyPatch)
         def prepare_manager_fields(self, **_managers: object) -> None:
             events.append("manager_fields")
 
-        def close(self) -> None:
-            events.append("close")
-
     class _ProbePlugin:
         def __init__(self, _cfg: object, task: BaseTask) -> None:
+            assert task.hooks is task.simulator.hooks
             events.append("plugins")
             raise _StopAfterInstallError
 
