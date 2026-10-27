@@ -162,8 +162,8 @@ class SensorManager:
         """Register a camera that shared code renders on every backend.
 
         ``render(record, env_ids)`` renders every env (``env_ids=None``) or only ``env_ids`` into
-        ``record``. It runs from :meth:`render_shared` on the camera's cadence and, for envs whose
-        state was overwritten, from :meth:`rerender`. Backends' own render loops never see it:
+        ``record``. It runs from :meth:`render_shared` on the camera's cadence and, for envs reset
+        or teleported since the last render, from :meth:`rerender`. Backends' own render loops never see it:
         :meth:`collect_due` returns only backend-rendered cameras."""
         self._assert_name_available(name)
         effective = resolve_decimation(
