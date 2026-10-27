@@ -4,6 +4,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace holosoma {
@@ -25,10 +26,20 @@ struct ContextualConfig {
   double forward_distance_scale = 0.5;
   double yaw_distance_scale = 1.2;
   std::optional<double> in_place_yaw_threshold;
+  // Joints between the IMU body and the frame the model reads gravity in, as
+  // (joint name, rotation axis "x"/"y"/"z") in kinematic order from the IMU.
+  // The default is the G1 waist chain (pelvis IMU, torso-frame gravity). Empty
+  // keeps gravity in the IMU frame. Every listed joint must be a runtime joint.
+  std::vector<std::pair<std::string, std::string>> gravity_frame_joints{
+      {"waist_yaw_joint", "z"}, {"waist_roll_joint", "x"}, {"waist_pitch_joint", "y"}};
+  // Transport-owned (the Python runner enforces it); carried for config parity.
+  double max_depth_age_s = 0.25;
 };
 
 struct ContextualInput {
-  // No depth inserts a zero frame. Freshness is the transport's decision.
+  // No depth inserts a zero frame. Freshness is the transport's decision: the
+  // Python runner stops the policy once its newest frame is older than
+  // ContextualConfig::max_depth_age_s.
   std::optional<std::vector<float>> depth;
   double monotonic_time = 0.0;
   // Optional fields are command events: absence preserves current state.

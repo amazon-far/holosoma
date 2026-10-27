@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <array>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -24,6 +26,8 @@ InferenceConfig config(const char* model = "contextual.onnx") {
   c.contextual.emplace();
   c.contextual->depth_height = 2;
   c.contextual->depth_width = 3;
+  // The fixture robot has no waist; gravity-frame tests set their own chain.
+  c.contextual->gravity_frame_joints = {};
   c.runtime.intra_op_threads = 2;
   return c;
 }
@@ -180,12 +184,92 @@ TEST(ContextualApi, ConfiguredGainsAndSharedModelProfilingArePreserved) {
   EXPECT_GT(matrix_calls, 0u);
 }
 
-TEST(ContextualApi, PreservesContextualIdentityFallbackWithoutWeakeningOtherStateChecks) {
+TEST(ContextualApi, UnusableOrientationFaultsInsteadOfReadingUpright) {
   Policy policy(config());
   auto s = state();
-  s.base_quat_wxyz = {0, 0, 0, 0};
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  for (const auto& quat : std::vector<std::vector<double>>{{0, 0, 0, 0}, {nan, 0, 0, 0}, {1, 0, nan, 0}}) {
+    s.base_quat_wxyz = quat;
+    EXPECT_THROW(policy.step(s, ContextualInput{}), std::invalid_argument);
+  }
+  // The kernel itself refuses too, for callers that drive it without the public state check.
+  contextual::State raw;
+  raw.q = {.1, .2, .3};
+  raw.dq = {0, 0, 0};
+  raw.quat = {0, 0, 0, 0};
+  EXPECT_THROW(core(policy).Observation(raw), std::invalid_argument);
+  raw.quat = {2, 0, 0, 0};  // Unnormalised but usable.
+  EXPECT_NO_THROW(core(policy).Observation(raw));
+  // A valid orientation still steps, and other fields keep their checks.
+  s.base_quat_wxyz = {1, 0, 0, 0};
   EXPECT_DOUBLE_EQ(policy.step(s, ContextualInput{}).q[0], 15.1);
-  s.dof_vel[0] = std::numeric_limits<double>::quiet_NaN();
+  s.dof_vel[0] = nan;
   EXPECT_THROW(policy.step(s, ContextualInput{}), std::invalid_argument);
 }
+
+// Independent reference: gravity (0, 0, -1) expressed in the frame of a unit quaternion,
+// through the rotation matrix rather than the kernel's quaternion sandwich.
+std::array<double, 3> gravity_in(const std::array<double, 4>& q) {
+  const auto [w, x, y, z] = q;
+  // Third row of R(q), negated: R^T (0, 0, -1).
+  return {-(2 * (x * z - w * y)), -(2 * (y * z + w * x)), -(1 - 2 * (x * x + y * y))};
+}
+std::array<double, 4> mul(const std::array<double, 4>& a, const std::array<double, 4>& b) {
+  return {a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3], a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+          a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1], a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0]};
+}
+
+TEST(ContextualApi, OrientationAndCorrectedGravityReachTheModelInOneFrame) {
+  auto c = config();
+  c.contextual->gravity_frame_joints = {{"hip", "z"}, {"knee", "x"}, {"ankle", "y"}};
+  Policy policy(c);
+  auto s = state();
+  s.dof_pos = {.4, -.3, .25};
+  const double n = std::sqrt(.9 * .9 + .2 * .2 + .3 * .3 + .1 * .1);
+  const std::array<double, 4> base{.9 / n, .2 / n, -.3 / n, .1 / n};
+  s.base_quat_wxyz.assign(base.begin(), base.end());
+  // Expected: the IMU orientation composed with the chain, in configured order.
+  auto torso = base;
+  for (const auto& [angle, axis] : std::vector<std::pair<double, int>>{{.4, 3}, {-.3, 1}, {.25, 2}}) {
+    std::array<double, 4> r{std::cos(angle / 2), 0, 0, 0};
+    r[axis] = std::sin(angle / 2);
+    torso = mul(torso, r);
+  }
+  const auto expected = gravity_in(torso);
+  const auto imu = gravity_in(base);
+  // Anti-vacuity: the chain must actually move gravity at these angles.
+  ASSERT_GT(std::abs(expected[0] - imu[0]) + std::abs(expected[1] - imu[1]) + std::abs(expected[2] - imu[2]), .1);
+
+  policy.step(s, ContextualInput{});
+  const auto from_quat = core(policy).observation();
+  // The interface's corrected gravity is IMU-frame; it must take the same rotation.
+  s.projected_gravity = std::vector<double>(imu.begin(), imu.end());
+  s.base_quat_wxyz = {1, 0, 0, 0};  // Proves the supplied vector, not the quaternion, is used.
+  policy.reset();
+  policy.step(s, ContextualInput{});
+  const auto from_supplied = core(policy).observation();
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_NEAR(from_quat[i], expected[i], 1e-6) << i;
+    EXPECT_NEAR(from_supplied[i], expected[i], 1e-6) << i;
+  }
+
+  // An empty chain keeps IMU-frame gravity for both sources.
+  c.contextual->gravity_frame_joints = {};
+  Policy imu_frame(c);
+  imu_frame.step(s, ContextualInput{});
+  for (int i = 0; i < 3; ++i) EXPECT_NEAR(core(imu_frame).observation()[i], imu[i], 1e-6) << i;
+}
+
+TEST(ContextualApi, GravityFrameChainMustNameRuntimeJoints) {
+  auto c = config();
+  c.contextual = ContextualConfig{};  // Default G1 waist chain on a robot without a waist.
+  c.contextual->depth_height = 2;
+  c.contextual->depth_width = 3;
+  EXPECT_THROW(Policy{c}, std::invalid_argument);
+  c.contextual->gravity_frame_joints = {{"hip", "w"}};
+  EXPECT_THROW(Policy{c}, std::invalid_argument);
+  c.contextual->gravity_frame_joints = {{"hip", "z"}};
+  EXPECT_NO_THROW(Policy{c});
+}
+
 }  // namespace

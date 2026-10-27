@@ -128,21 +128,15 @@ const JointCommand& Policy::step(const RobotState& state) {
 const JointCommand& Policy::step(const RobotState& state, ContextualInput input) {
   auto* contextual = dynamic_cast<ContextualPolicy*>(impl_->policy.get());
   if (!contextual) throw std::invalid_argument("ContextualInput requires a contextual policy configuration");
-  auto normalized = state;
-  if (normalized.base_quat_wxyz.size() == 4) {
-    // Preserve the contextual model's legacy identity fallback for an unusable
-    // orientation. Other policy kinds retain the strict public state contract.
-    double norm = 0;
-    for (double value : normalized.base_quat_wxyz) norm += value * value;
-    if (!std::isfinite(norm) || norm < 1e-12) normalized.base_quat_wxyz = {1, 0, 0, 0};
-  }
-  set_state(normalized);
+  // Same strict state contract as every other policy: an unusable orientation
+  // throws here rather than reaching the model as an upright robot.
+  set_state(state);
   struct InputScope {
     ContextualPolicy* policy;
     ~InputScope() { policy->clear_input(); }
   } scope{contextual};
   contextual->set_input(std::move(input));
-  return step(normalized);
+  return step(state);
 }
 void Policy::command(StateCommand cmd) {
   if (cmd == StateCommand::START || cmd == StateCommand::STOP || cmd == StateCommand::INIT)
