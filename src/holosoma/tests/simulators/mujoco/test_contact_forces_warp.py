@@ -73,3 +73,19 @@ def test_applied_force_on_airborne_box_is_not_reported_as_contact():
     assert float(sim.get_actor_states(["box"], env_ids)[0, 7]) > 0.0, "applied force did not accelerate the box"
     force = float(torch.linalg.vector_norm(sim.backend.compute_contact_forces()[0, box_id]))
     assert force < 0.01, f"applied wrench leaked into contact force ({force:.3f} N)"
+
+
+def test_holding_up_half_the_weight_halves_the_ground_reaction():
+    """Reading a total external force instead of the contacts leaves this at the full weight."""
+    scene = SceneConfig(rigid_objects={"box": RigidObjectConfig(urdf_file=SMALL_BOX, position=[3.0, 0.0, 0.2])})
+    sim = build_warp_sim(scene, num_envs=2)
+    box_id = object_body_id(sim, "box")
+    weight = float(sim.root_model.body_mass[box_id]) * abs(float(sim.root_model.opt.gravity[2]))
+
+    sim.backend.get_applied_forces_view()[:, box_id, 2] = 0.5 * weight
+    for _ in range(300):
+        sim.backend.step()
+
+    forces = sim.backend.compute_contact_forces()[:, box_id]
+    expected = torch.tensor([0.0, 0.0, 0.5 * weight], device=forces.device, dtype=forces.dtype)
+    torch.testing.assert_close(forces, expected.expand_as(forces), atol=0.02 * weight, rtol=0)

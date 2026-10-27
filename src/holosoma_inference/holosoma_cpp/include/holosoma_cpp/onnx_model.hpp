@@ -18,7 +18,8 @@ struct TensorInfo {
 
 class OnnxModel {
  public:
-  explicit OnnxModel(const std::string& path);
+  explicit OnnxModel(const std::string& path, bool use_gpu = false, int intra_op_threads = 1,
+                     const std::string& profile_prefix = "");
   ~OnnxModel();
   OnnxModel(const OnnxModel&) = delete;
   OnnxModel& operator=(const OnnxModel&) = delete;
@@ -40,6 +41,8 @@ class OnnxModel {
   void run();
 
   const std::vector<float>& output(const std::string& name) const;
+  std::string finish_profile();
+  const char* provider() const;
 
  private:
   struct Impl;
@@ -51,5 +54,8 @@ class OnnxModel {
   std::map<std::string, std::vector<float>> input_buffers_;
   std::map<std::string, std::vector<float>> output_buffers_;
 };
+
+std::string onnx_runtime_version();
+std::vector<std::string> onnx_available_providers();
 
 }  // namespace holosoma

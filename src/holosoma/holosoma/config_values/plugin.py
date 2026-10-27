@@ -71,7 +71,7 @@ ros2_image = PLUGIN_REGISTRY.add(
     ),
 )
 
-# Stereo head pair as CompressedImage on the exact topics the rfmpi teleop stack subscribes to:
+# Stereo head pair as CompressedImage on the standard teleoperation camera topics:
 # /ros_camera/rgb/{left,right}/compressed. Pair with a stereo head rig keyed head_cam_left/right.
 # CameraInfo off for this teleop stack.
 ros2_stereo = PLUGIN_REGISTRY.add(

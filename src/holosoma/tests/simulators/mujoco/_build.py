@@ -57,15 +57,23 @@ def _robot_base_init():
     return torch.tensor(list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel))
 
 
-def build_classic_sim(scene: SceneConfig | None = None, *, plugin=None, kinematic_playback: bool = False):
+def build_classic_sim(
+    scene: SceneConfig | None = None, *, plugin=None, kinematic_playback: bool = False, native=None, simulator=None
+):
     """Build a ClassicBackend MuJoCo sim (CPU, single env) for ``scene`` (default: empty).
 
     ``plugin`` is an optional ``{key: PluginConfig}`` dict to install; ``kinematic_playback``
-    sets the corresponding ``sim`` flag.
+    sets the corresponding ``sim`` flag. ``simulator`` can provide a saved preset with
+    its backend overridden to classic.
     """
     from holosoma.utils.sim_utils import setup_simulation_environment
 
-    sim_cfg = _bridge_gantry_off(run_sim_values.mujoco)
+    sim_cfg = _bridge_gantry_off(simulator or run_sim_values.mujoco)
+    if native is not None:
+        sim_cfg = dataclasses.replace(
+            sim_cfg,
+            config=dataclasses.replace(sim_cfg.config, sim=dataclasses.replace(sim_cfg.config.sim, mujoco=native)),
+        )
     if kinematic_playback:
         sim_cfg = dataclasses.replace(
             sim_cfg,
@@ -87,6 +95,7 @@ def build_warp_sim(
     num_envs: int = 4,
     env_origins=None,
     seed: int = 42,
+    native=None,
 ):
     """Build a WarpBackend MuJoCo sim (CUDA, multi-env) for ``scene`` (default: empty).
 
@@ -102,6 +111,11 @@ def build_warp_sim(
     from holosoma.utils.sim_utils import setup_simulation_environment
 
     sim_cfg = _bridge_gantry_off(run_sim_values.mjwarp)
+    if native is not None:
+        sim_cfg = dataclasses.replace(
+            sim_cfg,
+            config=dataclasses.replace(sim_cfg.config, sim=dataclasses.replace(sim_cfg.config.sim, mujoco=native)),
+        )
     config = dataclasses.replace(
         RunSimConfig(
             simulator=sim_cfg,

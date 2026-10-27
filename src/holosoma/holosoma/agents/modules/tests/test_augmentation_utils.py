@@ -363,5 +363,37 @@ def test_different_history_lengths(history_length: int) -> None:
     assert mirrored.shape == observation.shape
 
 
+def test_mirror_obs_phase_exchanges_the_legs(mock_env_direct_config: MagicMock) -> None:
+    """Negating leg 0 instead of swapping collapsed the antiphase: both legs came out identical."""
+    symmetry_utils = SymmetryUtils(mock_env_direct_config)
+    phase = torch.tensor([[0.25, -0.75]])
+
+    assert symmetry_utils.mirror_obs_sin_phase(phase.clone()).tolist() == [[-0.75, 0.25]]
+    assert symmetry_utils.mirror_obs_cos_phase(phase.clone()).tolist() == [[-0.75, 0.25]]
+
+
+def test_mirror_obs_phase_is_an_involution(mock_env_direct_config: MagicMock) -> None:
+    symmetry_utils = SymmetryUtils(mock_env_direct_config)
+    phase = torch.tensor([[0.25, -0.75]])
+
+    once = symmetry_utils.mirror_obs_sin_phase(phase.clone())
+    assert symmetry_utils.mirror_obs_sin_phase(once).tolist() == phase.tolist()
+
+
+def test_mirror_obs_phase_leaves_a_standing_robot_standing(mock_env_direct_config: MagicMock) -> None:
+    """LocomotionGait drives both channels to stand_phase_value when the command is zero."""
+    symmetry_utils = SymmetryUtils(mock_env_direct_config)
+    phase = torch.tensor([[-1.0, -1.0]])
+
+    assert symmetry_utils.mirror_obs_sin_phase(phase.clone()).tolist() == phase.tolist()
+
+
+def test_mirror_obs_phase_rejects_a_width_that_is_not_two_legs(mock_env_direct_config: MagicMock) -> None:
+    symmetry_utils = SymmetryUtils(mock_env_direct_config)
+
+    with pytest.raises(ValueError, match="one channel per leg"):
+        symmetry_utils.mirror_obs_sin_phase(torch.zeros(1, 4))
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

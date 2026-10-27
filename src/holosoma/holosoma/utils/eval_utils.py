@@ -109,8 +109,25 @@ def _load_config_from_checkpoint(checkpoint_path: Path) -> tuple[ExperimentConfi
 
 
 def _experiment_config_from_saved(config_data: dict[str, Any]) -> ExperimentConfig:
-    """Build an ExperimentConfig from a saved config, migrating fields retired with Isaac Gym."""
-    return ExperimentConfig(**_drop_retired_isaacgym_fields(config_data))
+    """Transition historical saved fields; CLI/YAML inputs keep the current schema."""
+    data = _drop_retired_isaacgym_fields(config_data)
+    simulator = data.get("simulator", {}).get("config", {})
+    if "mujoco_warp" in simulator:
+        native = simulator["sim"].setdefault("mujoco", {})
+        warp = native.setdefault("warp", {})
+        for name, value in simulator.pop("mujoco_warp").items():
+            if name in warp and warp[name] is not None and value is not None and warp[name] != value:
+                raise ValueError(f"Saved config has conflicting mujoco_warp.{name} and sim.mujoco.warp.{name}")
+            if warp.get(name) is None:
+                warp[name] = value
+    native = simulator.get("sim", {}).get("mujoco", {})
+    gravity = native.pop("gravity", None)
+    if gravity is not None:
+        extra = native.setdefault("extra", {})
+        if "gravity" in extra and extra["gravity"] != gravity:
+            raise ValueError("Saved config has conflicting sim.mujoco.gravity and sim.mujoco.extra.gravity")
+        extra["gravity"] = gravity
+    return ExperimentConfig(**data)
 
 
 def replace_retired_simulator(eval_cfg: ExperimentConfig, args: list[str]) -> ExperimentConfig:

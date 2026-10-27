@@ -691,7 +691,7 @@ def test_pattern_scope_is_the_pattern_not_the_folder(tmp_path: Path) -> None:
     assert [Path(p).name for p in _resolve_playlist(recursive)] == ["clip0.npy", "clip1.npy", "clip9.npy"]
 
     # A non-pattern entry is left exactly as configured, directory included: subclasses give such
-    # entries their own meaning (FAR-pi's SimulatorStatePlaybackPlugin reads a folder of MCAPs).
+    # entries their own meaning (a playback plugin may read a folder of MCAPs).
     folder = _make(MotionPlaybackPluginConfig(motion_files=[str(tmp_path)], fps=50.0), _FakeSimulator())
     assert _resolve_playlist(folder) == [str(tmp_path)]
 

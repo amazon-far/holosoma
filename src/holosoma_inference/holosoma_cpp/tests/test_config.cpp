@@ -70,6 +70,20 @@ TEST(Config, JoystickShortcutSelectsTheWirelessController) {
                ConfigError);
 }
 
+TEST(Config, WbtHistoryInitializationDefaultsToRepeatFirstAndAcceptsZeroPad) {
+  for (const auto* preset : {"inference:g1-29dof-loco", "inference:g1-29dof-general-wbt"}) {
+    SCOPED_TRACE(preset);
+    EXPECT_EQ(parse({preset, "--task.model-path", kWbtModel}).config.task.wbt_history_initialization,
+              "repeat_first_valid_obs");
+    EXPECT_EQ(parse({preset, "--task.model-path", kWbtModel, "--task.wbt-history-initialization", "zero_pad"})
+                  .config.task.wbt_history_initialization,
+              "zero_pad");
+    for (const auto* bad : {"zero", "repeat_first", "ZERO_PAD"})
+      EXPECT_THROW(parse({preset, "--task.model-path", kWbtModel, "--task.wbt-history-initialization", bad}),
+                   ConfigError);
+  }
+}
+
 TEST(Config, RejectsMistakes) {
   EXPECT_THROW(parse({}), ConfigError);
   EXPECT_THROW(parse({"inference:does-not-exist"}), ConfigError);
