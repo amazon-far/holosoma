@@ -190,9 +190,9 @@ physics step, and the task emits the rest:
 |---|---|---|---|---|
 | `FRAME_BEGIN` | task | before the physics substeps (push commands to the sim here) | — | control rate |
 | `PRE_STEP` | simulator | before each physics substep | — | physics `fps` |
-| `POST_STEP` | simulator | after each physics substep (freshest sim time) | — | physics `fps` |
+| `POST_STEP` | simulator | after each physics substep (freshest sim time), before that substep's scheduled offscreen render, so read images on `FRAME_END` | — | physics `fps` |
 | `FRAME_END` | task | after the substeps + state-tensor refresh (read state here) | — | control rate |
-| `EPISODE_START` / `EPISODE_END` | task | on reset boundaries | `env_id` | per event |
+| `EPISODE_START` / `EPISODE_END` | task (motion playback also emits them at clip boundaries) | on reset boundaries | `env_id` | per event |
 | `CLOSE` | task | teardown (release resources); runs in reverse registration order | — | once |
 
 ### Cadence

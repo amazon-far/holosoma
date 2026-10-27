@@ -22,17 +22,28 @@ from holosoma.config_types.plugin import MotionPlaybackPluginConfig
 from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.plugins.playback import MotionPlaybackPlugin, PlaybackClip
 from holosoma.simulator.plugins.playback import playback as playback_module
-from holosoma.simulator.plugins.tests._task import plugin_task
 
 pytestmark = pytest.mark.no_sim
 
 NUM_DOF = 2
 
 
+class _FakeTask:
+    """Stand-in task: the fake simulator, its hooks, and a recorded shutdown request."""
+
+    def __init__(self, simulator: Any) -> None:
+        self.simulator = simulator
+        self.hooks = simulator.hooks
+        self.num_envs = simulator.num_envs
+        self.shutdown_requested = False
+
+    def request_shutdown(self, reason: str = "") -> None:
+        self.shutdown_requested = True
+
+
 def _make(cfg: MotionPlaybackPluginConfig, sim: Any) -> MotionPlaybackPlugin:
     # Construct via get_cls() (untyped), as the other plugin tests do with their fake simulators.
-    task = plugin_task(sim, num_envs=sim.num_envs, request_shutdown=sim.request_shutdown)
-    plugin: MotionPlaybackPlugin = cfg.get_cls()(cfg, task)
+    plugin: MotionPlaybackPlugin = cfg.get_cls()(cfg, _FakeTask(sim))
     return plugin
 
 
@@ -264,7 +275,6 @@ class _FakeSimulator:
         self.dof_pos = torch.zeros(num_envs, NUM_DOF)
         self.dof_vel = torch.zeros(num_envs, NUM_DOF)
         self.robot_root_states = torch.zeros(num_envs, 13)
-        self.shutdown_requested = False
         self.root_writes: list[torch.Tensor] = []
         self.dof_writes: list[torch.Tensor] = []
         self.object_writes: list[tuple[list[str], torch.Tensor]] = []
@@ -281,9 +291,6 @@ class _FakeSimulator:
 
     def set_actor_states(self, names: list[str], env_ids: torch.Tensor, states: torch.Tensor) -> None:
         self.object_writes.append((names, states.clone()))
-
-    def request_shutdown(self, reason: str = "") -> None:
-        self.shutdown_requested = True
 
 
 def _frame(sim: _FakeSimulator, substeps: int = 2) -> None:
@@ -327,11 +334,11 @@ def test_plugin_advances_playback_clock_per_frame(tmp_path: Path) -> None:
 
 def test_plugin_holds_last_frame_and_requests_shutdown(tmp_path: Path) -> None:
     sim = _FakeSimulator()
-    _make(_cfg(tmp_path, frames=2), sim)
+    task = _make(_cfg(tmp_path, frames=2), sim).task
     for _ in range(10):
         _frame(sim)
     assert sim.robot_root_states[0, 0].item() == pytest.approx(1.0)  # clamped to last frame
-    assert sim.shutdown_requested
+    assert task.shutdown_requested
 
 
 def test_shutdown_is_requested_from_the_final_frame_not_while_selecting_it(tmp_path: Path) -> None:
@@ -342,20 +349,20 @@ def test_shutdown_is_requested_from_the_final_frame_not_while_selecting_it(tmp_p
     next one, so the clip's final frame is published exactly once.
     """
     sim = _FakeSimulator()
-    _make(_cfg(tmp_path, frames=2), sim)
+    task = _make(_cfg(tmp_path, frames=2), sim).task
 
     asked_while_selecting = []
     for _ in range(20):
         sim.hooks.emit(Phase.FRAME_BEGIN)
-        asked_while_selecting.append(sim.shutdown_requested)
+        asked_while_selecting.append(task.shutdown_requested)
         sim.hooks.emit(Phase.PRE_STEP)
         sim.hooks.emit(Phase.POST_STEP)
         sim.hooks.emit(Phase.FRAME_END)
-        if sim.shutdown_requested:
+        if task.shutdown_requested:
             break
 
     assert not any(asked_while_selecting), "shutdown was requested while a frame was being selected"
-    assert sim.shutdown_requested
+    assert task.shutdown_requested
     assert sim.robot_root_states[0, 0].item() == pytest.approx(1.0)  # the clip's last frame
 
 
@@ -370,14 +377,14 @@ def test_a_playlist_error_waits_until_the_chosen_frame_is_egressed(tmp_path: Pat
     clip = _write(tmp_path, "clip.npy", _matrix(frames=2))
     cfg = MotionPlaybackPluginConfig(motion_files=[clip, str(tmp_path / "absent-*.npy")], fps=10.0)
     sim = _FakeSimulator()
-    _make(cfg, sim)
+    task = _make(cfg, sim).task
 
     # Six frames reach and egress the clip's final frame; the bad entry is resolved on the last one.
     for _ in range(6):
         _frame(sim, substeps=1)
 
     assert sim.robot_root_states[0, 0].item() == pytest.approx(1.0)  # the final frame was written
-    assert not sim.shutdown_requested  # an unanswered lookahead must not end the run quietly
+    assert not task.shutdown_requested  # an unanswered lookahead must not end the run quietly
 
     with pytest.raises(ValueError, match="resolved to no"):
         _frame(sim, substeps=1)
@@ -392,25 +399,25 @@ def test_a_driver_that_never_egresses_still_ends_a_finite_run(tmp_path: Path) ->
     The supported path, asserted above, ends the run from FRAME_END and publishes each frame once.
     """
     sim = _FakeSimulator()
-    _make(_cfg(tmp_path, frames=2), sim)
+    task = _make(_cfg(tmp_path, frames=2), sim).task
 
     for _ in range(20):
         sim.hooks.emit(Phase.FRAME_BEGIN)
         sim.hooks.emit(Phase.PRE_STEP)
-        if sim.shutdown_requested:
+        if task.shutdown_requested:
             break
 
-    assert sim.shutdown_requested
+    assert task.shutdown_requested
 
 
 def test_plugin_n_run_zero_loops_forever(tmp_path: Path) -> None:
     sim = _FakeSimulator()
-    _make(_cfg(tmp_path, frames=2, n_run=0), sim)
+    task = _make(_cfg(tmp_path, frames=2, n_run=0), sim).task
     xs = []
     for _ in range(30):
         _frame(sim)
         xs.append(sim.robot_root_states[0, 0].item())
-    assert not sim.shutdown_requested  # n_run == 0 never terminates on its own
+    assert not task.shutdown_requested  # n_run == 0 never terminates on its own
     assert all(x <= 1.0 for x in xs)  # every rendered frame stayed inside the 2-frame clip
     assert xs.count(0.0) >= 2  # the clip genuinely replays: frame 0 (root-x 0) is revisited each loop
 
@@ -489,11 +496,11 @@ def _spy(sim: _FakeSimulator) -> list[tuple[str, int]]:
     return log
 
 
-def _run_until_shutdown(sim: _FakeSimulator, max_frames: int = 1000) -> tuple[int, list[float]]:
+def _run_until_shutdown(sim: _FakeSimulator, task: Any, max_frames: int = 1000) -> tuple[int, list[float]]:
     """Drive frames until shutdown; return (frame_count, root-x written each frame)."""
     xs: list[float] = []
     n = 0
-    while not sim.shutdown_requested and n < max_frames:
+    while not task.shutdown_requested and n < max_frames:
         _frame(sim, substeps=1)
         xs.append(sim.robot_root_states[0, 0].item())
         n += 1
@@ -502,32 +509,32 @@ def _run_until_shutdown(sim: _FakeSimulator, max_frames: int = 1000) -> tuple[in
 
 def test_episodic_playlist_plays_clips_in_order(tmp_path: Path) -> None:
     sim = _FakeSimulator(num_envs=1)
-    _make(_multi_cfg(tmp_path, [0.0, 100.0, 200.0]), sim)  # 3 clips, n_run=1 -> 3 episodes
+    task = _make(_multi_cfg(tmp_path, [0.0, 100.0, 200.0]), sim).task  # 3 clips, n_run=1 -> 3 episodes
     log = _spy(sim)
-    _, xs = _run_until_shutdown(sim)
+    _, xs = _run_until_shutdown(sim, task)
     # The frame-0 root-x of each episode appears in playlist order.
     assert [x for x in xs if x in (0.0, 100.0, 200.0)][:3] == [0.0, 100.0, 200.0]
-    assert sim.shutdown_requested
+    assert task.shutdown_requested
     # 3 episodes -> 2 internal boundaries (episode 0 uses the sim's startup EPISODE_START).
     assert [p for p, _ in log] == ["end", "start", "end", "start"]
 
 
 def test_n_run_repeats_playlist(tmp_path: Path) -> None:
     sim = _FakeSimulator(num_envs=1)
-    _make(_multi_cfg(tmp_path, [0.0, 100.0], n_run=2), sim)  # 2 clips x 2 runs = 4 episodes
+    task = _make(_multi_cfg(tmp_path, [0.0, 100.0], n_run=2), sim).task  # 2 clips x 2 runs = 4 episodes
     log = _spy(sim)
-    _, xs = _run_until_shutdown(sim)
+    _, xs = _run_until_shutdown(sim, task)
     assert [x for x in xs if x in (0.0, 100.0)][:4] == [0.0, 100.0, 0.0, 100.0]  # playlist-repeat order
-    assert sim.shutdown_requested
+    assert task.shutdown_requested
     assert log.count(("start", 0)) == 3  # 4 episodes -> 3 boundaries
 
 
 def test_n_run_repeats_single_clip(tmp_path: Path) -> None:
     sim = _FakeSimulator(num_envs=1)
-    _make(_multi_cfg(tmp_path, [0.0], n_run=3), sim)  # 1 clip x 3 runs = 3 episodes
+    task = _make(_multi_cfg(tmp_path, [0.0], n_run=3), sim).task  # 1 clip x 3 runs = 3 episodes
     log = _spy(sim)
-    _, xs = _run_until_shutdown(sim)
-    assert sim.shutdown_requested
+    _, xs = _run_until_shutdown(sim, task)
+    assert task.shutdown_requested
     assert log.count(("start", 0)) == 2  # 3 episodes -> 2 boundaries
     # The clip is genuinely re-played (not just boundaries fired): its frame-0 pose (root-x == 0)
     # is rendered once at the start of each of the 3 episodes.
@@ -536,9 +543,9 @@ def test_n_run_repeats_single_clip(tmp_path: Path) -> None:
 
 def test_episode_boundary_emits_end_then_start_per_env(tmp_path: Path) -> None:
     sim = _FakeSimulator(num_envs=2)
-    _make(_multi_cfg(tmp_path, [0.0, 100.0]), sim)  # 2 episodes -> 1 boundary
+    task = _make(_multi_cfg(tmp_path, [0.0, 100.0]), sim).task  # 2 episodes -> 1 boundary
     log = _spy(sim)
-    _run_until_shutdown(sim)
+    _run_until_shutdown(sim, task)
     # One boundary: EPISODE_END for every env, then EPISODE_START for every env.
     assert log == [("end", 0), ("end", 1), ("start", 0), ("start", 1)]
 
@@ -546,12 +553,12 @@ def test_episode_boundary_emits_end_then_start_per_env(tmp_path: Path) -> None:
 def test_settle_frames_hold_after_each_boundary(tmp_path: Path) -> None:
     # Baseline (no settle) vs settle=3: the single A->B boundary adds exactly 3 held frames.
     base_sim = _FakeSimulator(num_envs=1)
-    _make(_multi_cfg(tmp_path, [0.0, 100.0], settle_frames=0), base_sim)
-    base_frames, _ = _run_until_shutdown(base_sim)
+    base_task = _make(_multi_cfg(tmp_path, [0.0, 100.0], settle_frames=0), base_sim).task
+    base_frames, _ = _run_until_shutdown(base_sim, base_task)
 
     settle_sim = _FakeSimulator(num_envs=1)
-    _make(_multi_cfg(tmp_path, [0.0, 100.0], settle_frames=3), settle_sim)
-    settle_frames, xs = _run_until_shutdown(settle_sim)
+    settle_task = _make(_multi_cfg(tmp_path, [0.0, 100.0], settle_frames=3), settle_sim).task
+    settle_frames, xs = _run_until_shutdown(settle_sim, settle_task)
 
     assert settle_frames == base_frames + 3
     # During the settle window the clip is held at B's frame 0 (root-x == 100, clock frozen).
@@ -561,11 +568,11 @@ def test_settle_frames_hold_after_each_boundary(tmp_path: Path) -> None:
 def test_single_clip_once_emits_no_boundaries(tmp_path: Path) -> None:
     # A single clip played once holds its last frame and shuts down without emitting a boundary.
     sim = _FakeSimulator(num_envs=1)
-    _make(_multi_cfg(tmp_path, [0.0], n_run=1), sim)
+    task = _make(_multi_cfg(tmp_path, [0.0], n_run=1), sim).task
     log = _spy(sim)
-    _run_until_shutdown(sim)
+    _run_until_shutdown(sim, task)
     assert log == []  # no episode boundaries for a single once-through clip
-    assert sim.shutdown_requested
+    assert task.shutdown_requested
 
 
 def test_config_rejects_bad_n_run_and_settle() -> None:
@@ -579,9 +586,9 @@ def test_settle_emits_single_episode_start_per_boundary(tmp_path: Path) -> None:
     # A boundary emits EPISODE_END/START exactly once even with a multi-frame settle window
     # (the held settle frames must not re-emit the boundary).
     sim = _FakeSimulator(num_envs=1)
-    _make(_multi_cfg(tmp_path, [0.0, 100.0], settle_frames=5), sim)  # 2 episodes -> 1 boundary
+    task = _make(_multi_cfg(tmp_path, [0.0, 100.0], settle_frames=5), sim).task  # 2 episodes -> 1 boundary
     log = _spy(sim)
-    _run_until_shutdown(sim)
+    _run_until_shutdown(sim, task)
     assert log.count(("start", 0)) == 1
     assert log.count(("end", 0)) == 1
 
@@ -590,8 +597,8 @@ def test_episodic_renders_each_clips_final_frame(tmp_path: Path) -> None:
     # Each episode plays through its clip's LAST frame before the boundary (never dropped).
     # A 2-frame clip's final frame (index 1) has root-x == x0 + 1, distinct from its frame 0 (x0).
     sim = _FakeSimulator(num_envs=1)
-    _make(_multi_cfg(tmp_path, [0.0, 100.0], frames=2), sim)
-    _, xs = _run_until_shutdown(sim)
+    task = _make(_multi_cfg(tmp_path, [0.0, 100.0], frames=2), sim).task
+    _, xs = _run_until_shutdown(sim, task)
     assert 1.0 in xs  # clip A final frame (x0=0 + last-frame offset 1)
     assert 101.0 in xs  # clip B final frame (x0=100 + 1)
 
@@ -616,12 +623,12 @@ def test_playlist_expansion_drives_episode_count(tmp_path: Path) -> None:
     # A glob playlist is episodic like an explicit one: 3 matched clips x n_run=2 -> 6 episodes.
     _multi_cfg(tmp_path, [0.0, 100.0, 200.0])
     sim = _FakeSimulator(num_envs=1)
-    _make(MotionPlaybackPluginConfig(motion_files=[str(tmp_path / "*.npy")], fps=50.0, n_run=2), sim)
+    task = _make(MotionPlaybackPluginConfig(motion_files=[str(tmp_path / "*.npy")], fps=50.0, n_run=2), sim).task
     log = _spy(sim)
-    _, xs = _run_until_shutdown(sim)
+    _, xs = _run_until_shutdown(sim, task)
     assert [x for x in xs if x in (0.0, 100.0, 200.0)][:6] == [0.0, 100.0, 200.0, 0.0, 100.0, 200.0]
     assert log.count(("start", 0)) == 5  # 6 episodes -> 5 boundaries
-    assert sim.shutdown_requested
+    assert task.shutdown_requested
 
 
 def test_playlist_mixes_explicit_and_expanded_entries(tmp_path: Path) -> None:
@@ -668,9 +675,9 @@ def test_repeated_clip_stays_repeated(tmp_path: Path) -> None:
     assert _resolve_playlist(overlapping) == files + files
 
     sim = _FakeSimulator(num_envs=1)  # and the repeat is really played twice, not just listed twice
-    _make(MotionPlaybackPluginConfig(motion_files=[files[0], files[0]], fps=50.0), sim)
+    task = _make(MotionPlaybackPluginConfig(motion_files=[files[0], files[0]], fps=50.0), sim).task
     log = _spy(sim)
-    _, xs = _run_until_shutdown(sim)
+    _, xs = _run_until_shutdown(sim, task)
     assert log.count(("start", 0)) == 1  # 2 episodes -> 1 boundary
     assert xs.count(0.0) == 2  # the clip's frame 0 is rendered once per episode
 
@@ -831,8 +838,8 @@ def test_episodic_object_rewinds_to_new_clip_frame0(tmp_path: Path) -> None:
     # At an episode boundary the driven object is re-pinned to the NEXT clip's frame 0
     # (object-x jumps from clip A's 0 to clip B's 100), same rewind as the robot root.
     sim = _FakeSimulator(num_envs=1)
-    _make(_multi_cfg(tmp_path, [0.0, 100.0], objects=["crate"]), sim)
-    _run_until_shutdown(sim)
+    task = _make(_multi_cfg(tmp_path, [0.0, 100.0], objects=["crate"]), sim).task
+    _run_until_shutdown(sim, task)
     obj_x = [states[0, 0].item() for _, states in sim.object_writes]
     assert 0.0 in obj_x and 100.0 in obj_x
     assert obj_x.index(0.0) < obj_x.index(100.0)  # clip A object before clip B object

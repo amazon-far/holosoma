@@ -112,6 +112,7 @@ class CameraConsumerPlugin:
         self.cfg = config
         self.config = config
         self.simulator = task.simulator
+        self.num_envs = task.num_envs
         self._wanted = self.wanted_streams()
         self._validate_streams()
         self._started = False
@@ -171,9 +172,7 @@ class CameraConsumerPlugin:
     def _validate_streams(self) -> None:
         """Fail loud if a wanted stream names a camera/modality/env the sim does not provide."""
         cams = dict(self.sensors_config)
-        # training_config.num_envs is set at __init__ on every backend; self.num_envs is not yet
-        # populated when IsaacSim builds hooks during scene setup (it lands in create_envs).
-        num_envs = self.simulator.training_config.num_envs
+        num_envs = self.num_envs
         for cam, mod, env in sorted(self._wanted):
             if cam not in cams:
                 raise ValueError(

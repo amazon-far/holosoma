@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import sys
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 # Pop this dir off sys.path[0] so tests/simulators/isaacsim/ can't shadow the real isaacsim pkg.
@@ -130,10 +131,10 @@ def main() -> int:
         # record_video, not live_window, so the check needs no DISPLAY. Built after the simulator so
         # its FRAME_END publish follows the render hook.
         from holosoma.config_types.plugin import CameraVizPluginConfig
-        from holosoma.simulator.plugins.tests._task import plugin_task
 
         recorder_config = CameraVizPluginConfig(record_video=True)
-        recorder = recorder_config.get_cls()(recorder_config, plugin_task(sim))
+        task = SimpleNamespace(simulator=sim, hooks=sim.hooks, num_envs=n)
+        recorder = recorder_config.get_cls()(recorder_config, task)
 
     from holosoma.hooks import Phase
 

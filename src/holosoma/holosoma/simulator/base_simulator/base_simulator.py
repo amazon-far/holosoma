@@ -491,9 +491,8 @@ class BaseSimulator:
     def flush_external_wrench(self) -> None:
         """Apply this substep's accumulated external forces to native buffers, then reset them.
 
-        Backends MUST call this at the top of :meth:`simulate_at_each_physics_step` (after
-        ``PRE_STEP`` hooks accumulate, before the native step) via the
-        :meth:`_write_external_wrench_native` hook.
+        Backends MUST call this at the top of :meth:`_step_dynamics` (after ``PRE_STEP`` hooks
+        accumulate, before the native step) via the :meth:`_write_external_wrench_native` hook.
         """
         self._external_wrench.flush()
 

@@ -41,6 +41,7 @@ class LidarConsumerPlugin:
         self.cfg = config
         self.config = config
         self.simulator = task.simulator
+        self.num_envs = task.num_envs
         self._wanted = self.wanted_streams()
         self._validate_streams()
         self._started = False
@@ -70,7 +71,7 @@ class LidarConsumerPlugin:
             for name, config in self.simulator.sensor_config.items()
             if isinstance(config, LidarSensorConfig)
         }
-        num_envs = self.simulator.training_config.num_envs
+        num_envs = self.num_envs
         for name, env_id in sorted(self._wanted):
             if name not in lidars:
                 raise ValueError(

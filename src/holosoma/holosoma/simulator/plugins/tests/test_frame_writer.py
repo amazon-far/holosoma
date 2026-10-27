@@ -30,7 +30,7 @@ from holosoma.utils.simulator_config import SimulatorType
 
 def _make(cfg: FrameWriterPluginConfig, sim: Any) -> FrameWriterPlugin:
     # Construct via get_cls() (untyped), as the other plugin tests do with their fake simulators.
-    plugin: FrameWriterPlugin = cfg.get_cls()(cfg, plugin_task(sim, num_envs=sim.training_config.num_envs))
+    plugin: FrameWriterPlugin = cfg.get_cls()(cfg, plugin_task(sim))
     return plugin
 
 

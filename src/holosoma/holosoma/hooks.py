@@ -21,7 +21,8 @@ class Phase(str, Enum):
     fires once and rejects any decimation.
 
     ``FRAME_*`` bracket the outer tick (once per frame); ``*_STEP`` bracket each physics substep. The
-    simulator emits ``*_STEP`` around each physics step; the task emits every other phase. The
+    simulator emits ``*_STEP`` around each physics step and the task emits the other phases; motion
+    playback also emits ``EPISODE_*`` itself at clip boundaries, outside the task's episode state. The
     names are engine-agnostic — they don't assume what drives the outer tick (a policy, a bridge, ...).
     """
 
