@@ -16,6 +16,10 @@ half MUST stay in the parent. Only the four DDS operations move to the child:
     * ``read_incoming_command``   (child polls DDS, ships a picklable command back),
     * ``publish_wireless_controller`` (parent reads the joystick, ships the axes/keys).
 
+Each round trip blocks the simulator's step thread while the child is scheduled, so the publishes
+are queued and sent together with the command read as a single batched request per transport update
+(see ``_flush``); the child still runs them one at a time, in the order they were queued.
+
 ``compute_torques`` and every ``_get_*`` simulator read stay inherited from :class:`UnitreeSdk2Bridge`
 unchanged: the parent-side ``self.low_cmd`` is a picklable :class:`LowCommand` carrying exactly the
 attributes ``compute_torques`` reads (``tau_ff``/``kp``/``kd``/``q_target``/``dq_target``). The
@@ -28,12 +32,16 @@ from __future__ import annotations
 import multiprocessing as mp
 import queue
 import re
+from contextlib import contextmanager
 from types import SimpleNamespace
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from loguru import logger
 
 from holosoma.bridge.unitree.unitree_sdk2py_bridge import UnitreeSdk2Bridge
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 # Seconds to wait for the child to construct the binding (DDS init) before declaring it dead.
 _STARTUP_TIMEOUT_S = 30.0
@@ -58,6 +66,9 @@ class LowCommand(NamedTuple):
 
 # Sentinel that tells the worker to shut down.
 _STOP = None
+# Pseudo-method that carries a whole transport update's operations in one request. Not a real SDK
+# call, so it cannot collide with a method name the child dispatches.
+_BATCH = "__batch__"
 
 
 def _safe_startup_reason(exc: Exception) -> str:
@@ -194,6 +205,7 @@ def _worker(
         res_q.close()
         res_q.join_thread()
         os._exit(0)
+
     res_q.put(("ready", None))
 
     try:
@@ -204,51 +216,55 @@ def _worker(
 
             method, args, kwargs = msg
             try:
-                if method == "publish_low_state":
-                    q, dq, ddq, tau_est, quat, omega, accel, tick = args
-                    low_state.motor.q = q
-                    low_state.motor.dq = dq
-                    low_state.motor.ddq = ddq
-                    low_state.motor.tau_est = tau_est
-                    low_state.imu.quat = quat
-                    low_state.imu.omega = omega
-                    low_state.imu.accel = accel
-                    low_state.tick = tick
-                    interface.publish_low_state(low_state)  # CRC calculated in C++
-                    res_q.put(("ok", None))
-                elif method == "publish_odom_state":
-                    position, velocity, yaw_speed, quat = args
-                    odom_state.position = position
-                    odom_state.velocity = velocity
-                    odom_state.yaw_speed = yaw_speed
-                    odom_state.quat = quat
-                    interface.publish_odom_state(odom_state)
-                    res_q.put(("ok", None))
-                elif method == "read_incoming_command":
-                    cmd = interface.read_incoming_command()
-                    res_q.put(
-                        (
-                            "ok",
+                # A _BATCH request carries a whole transport update's operations. Running them in a
+                # loop here (rather than one request each) keeps the DDS writes in the order the
+                # parent queued them, while costing the parent a single blocking round trip.
+                operations = list(args[0]) if method == _BATCH else [(method, args)]
+                payloads: list[Any] = []
+                for op_method, op_args in operations:
+                    if op_method == "publish_low_state":
+                        q, dq, ddq, tau_est, quat, omega, accel, tick = op_args
+                        low_state.motor.q = q
+                        low_state.motor.dq = dq
+                        low_state.motor.ddq = ddq
+                        low_state.motor.tau_est = tau_est
+                        low_state.imu.quat = quat
+                        low_state.imu.omega = omega
+                        low_state.imu.accel = accel
+                        low_state.tick = tick
+                        interface.publish_low_state(low_state)  # CRC calculated in C++
+                        payloads.append(None)
+                    elif op_method == "publish_odom_state":
+                        position, velocity, yaw_speed, quat = op_args
+                        odom_state.position = position
+                        odom_state.velocity = velocity
+                        odom_state.yaw_speed = yaw_speed
+                        odom_state.quat = quat
+                        interface.publish_odom_state(odom_state)
+                        payloads.append(None)
+                    elif op_method == "read_incoming_command":
+                        cmd = interface.read_incoming_command()
+                        payloads.append(
                             LowCommand(
                                 tau_ff=list(cmd.tau_ff),
                                 kp=list(cmd.kp),
                                 kd=list(cmd.kd),
                                 q_target=list(cmd.q_target),
                                 dq_target=list(cmd.dq_target),
-                            ),
+                            )
                         )
-                    )
-                elif method == "publish_wireless_controller":
-                    lx, ly, rx, ry, keys = args
-                    wireless_controller.lx = lx
-                    wireless_controller.ly = ly
-                    wireless_controller.rx = rx
-                    wireless_controller.ry = ry
-                    wireless_controller.keys = keys
-                    interface.publish_wireless_controller(wireless_controller)
-                    res_q.put(("ok", None))
-                else:
-                    res_q.put(("err", ValueError(f"Unknown method '{method}'")))
+                    elif op_method == "publish_wireless_controller":
+                        lx, ly, rx, ry, keys = op_args
+                        wireless_controller.lx = lx
+                        wireless_controller.ly = ly
+                        wireless_controller.rx = rx
+                        wireless_controller.ry = ry
+                        wireless_controller.keys = keys
+                        interface.publish_wireless_controller(wireless_controller)
+                        payloads.append(None)
+                    else:
+                        raise ValueError(f"Unknown method '{op_method}'")
+                res_q.put(("ok", payloads if method == _BATCH else payloads[0]))
             except Exception as exc:
                 res_q.put(("err", exc))
     finally:
@@ -273,6 +289,9 @@ class UnitreeMpSdk2Bridge(UnitreeSdk2Bridge):
 
     def _init_sdk_components(self) -> None:
         """Spawn the DDS child; keep only picklable, binding-free stand-ins in the parent."""
+        # Writes queued by this transport update, flushed with its command read. See _flush().
+        self._pending: list[tuple[str, tuple[Any, ...]]] = []
+
         robot_type = self.sdk_robot_type
         if robot_type not in self.SUPPORTED_ROBOT_TYPES:
             raise ValueError(f"Invalid robot type '{robot_type}'. Unitree SDK supports: {self.SUPPORTED_ROBOT_TYPES}")
@@ -341,11 +360,56 @@ class UnitreeMpSdk2Bridge(UnitreeSdk2Bridge):
             raise payload
         return payload
 
+    def _queue(self, method: str, *args: Any) -> None:
+        """Defer one child-side DDS write to this transport update's flush.
+
+        With no update in flight there is nothing to batch with and nothing that will flush it, so
+        send it straight away — a caller driving the bridge's publishes directly (rather than
+        through ``SimulatorBridge.transport_step``) gets exactly the unbatched behaviour it had
+        before, instead of a write that silently waits for a flush that never comes.
+        """
+        if not self._in_transport_update:
+            self._call(method, *args)
+            return
+        self._pending.append((method, args))
+
+    def _flush(self, *trailing: tuple[str, tuple[Any, ...]]) -> list[Any]:
+        """Send every deferred write plus ``trailing`` in ONE round trip; return their payloads.
+
+        A transport update makes three SDK calls (state, odometry, command read), and each round
+        trip blocks the simulator's step thread while the child is scheduled. At the default
+        transport cadence of one exchange per physics step, that is a large share of the step
+        budget. The child runs them in queue order, so the DDS writes reach the wire in the same
+        order as before.
+        """
+        operations = self._pending + list(trailing)
+        self._pending = []
+        if not operations:
+            return []
+        if len(operations) == 1:
+            method, args = operations[0]
+            return [self._call(method, *args)]
+        return cast("list[Any]", self._call(_BATCH, operations))
+
+    @contextmanager
+    def transport_update(self) -> Iterator[None]:
+        """Scope one transport update, flushing anything still queued when it ends.
+
+        ``SimulatorBridge.transport_step`` ends its update with the command read, which flushes the
+        queued publishes with it. The flush here covers every other order (and an update that raises
+        part-way through, which previously left its earlier publishes already sent).
+        """
+        with super().transport_update():
+            try:
+                yield
+            finally:
+                self._flush()
+
     # ── overridden DDS operations (everything else inherited) ──────────
 
     def low_cmd_handler(self, msg: Any = None) -> None:
-        """Poll the child for the latest incoming command; store its picklable carrier."""
-        self.low_cmd = self._call("read_incoming_command")
+        """Flush this update's queued publishes and take the latest incoming command back."""
+        self.low_cmd = self._flush(("read_incoming_command", ()))[-1]
 
     def publish_low_state(self) -> None:
         """Compute the state fields from sim state (parent), ship them to the child to publish."""
@@ -358,7 +422,7 @@ class UnitreeMpSdk2Bridge(UnitreeSdk2Bridge):
         quat_array = quaternion.detach().cpu().numpy()
         quat = [float(quat_array[0]), float(quat_array[1]), float(quat_array[2]), float(quat_array[3])]
 
-        self._call(
+        self._queue(
             "publish_low_state",
             positions.tolist(),
             velocities.tolist(),
@@ -378,7 +442,7 @@ class UnitreeMpSdk2Bridge(UnitreeSdk2Bridge):
         the child, which owns the C++ OdomState and writes SportModeState on rt/odommodestate.
         """
         position, quat_wxyz, lin_vel_body, yaw_speed = self._get_base_odometry()
-        self._call("publish_odom_state", position, lin_vel_body, yaw_speed, quat_wxyz)
+        self._queue("publish_odom_state", position, lin_vel_body, yaw_speed, quat_wxyz)
 
     def publish_wireless_controller(self) -> None:
         """Populate the parent stand-in from the joystick (base class), ship it to the child."""
@@ -388,7 +452,7 @@ class UnitreeMpSdk2Bridge(UnitreeSdk2Bridge):
 
         if self.joystick is not None:
             wc = self.wireless_controller
-            self._call("publish_wireless_controller", wc.lx, wc.ly, wc.rx, wc.ry, wc.keys)
+            self._queue("publish_wireless_controller", wc.lx, wc.ly, wc.rx, wc.ry, wc.keys)
 
     # ── lifecycle ──────────────────────────────────────────────────────
 
