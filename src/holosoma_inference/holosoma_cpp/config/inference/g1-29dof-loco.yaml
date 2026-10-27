@@ -139,6 +139,8 @@ task:
   ros_vel_timeout: 1.0
   auto_walk_on_vel_cmd: false
   use_sim_time: false
+  wbt_history_initialization: repeat_first_valid_obs
+  startup_state_timeout: 30.0
   desired_base_height: 0.75
   residual_upper_body_action: false
   print_observations: false
@@ -291,6 +293,8 @@ secondary:
     ros_vel_timeout: 1.0
     auto_walk_on_vel_cmd: false
     use_sim_time: false
+    wbt_history_initialization: repeat_first_valid_obs
+    startup_state_timeout: 30.0
     desired_base_height: 0.75
     residual_upper_body_action: false
     print_observations: false
@@ -304,3 +308,5 @@ secondary:
       rosbag_dir: ~/run_policy_sessions
       rosbag_cpu: 0
   secondary: null
+  contextual: null
+contextual: null

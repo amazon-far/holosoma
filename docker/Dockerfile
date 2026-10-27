@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Combined development image with every Holosoma environment. Dependencies are
-# installed without implementation source so Python-only changes reuse this layer.
+# installed with the native core; Python-only changes reuse this layer.
 FROM nvcr.io/nvidia/isaac-sim:5.1.0 AS dependencies
 
 USER root
@@ -40,6 +40,7 @@ COPY scripts/setup_all.sh scripts/setup_inference.sh \
 COPY src/holosoma/pyproject.toml src/holosoma/README.md ./src/holosoma/
 COPY src/holosoma_inference/pyproject.toml src/holosoma_inference/README.md \
     ./src/holosoma_inference/
+COPY src/holosoma_inference/holosoma_cpp ./src/holosoma_inference/holosoma_cpp
 COPY src/holosoma_retargeting/pyproject.toml src/holosoma_retargeting/README.md \
     ./src/holosoma_retargeting/
 RUN mkdir -p \

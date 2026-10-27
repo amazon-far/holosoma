@@ -103,6 +103,7 @@ class TestCreateInputProvidersIntegration:
         from holosoma_inference.policies.base import BasePolicy
 
         bp = BasePolicy.__new__(BasePolicy)
+        bp.native = MagicMock()
         bp.config = SimpleNamespace(task=SimpleNamespace(velocity_input="keyboard", state_input="keyboard"))
         bp.use_joystick = False
         bp.use_keyboard = False
@@ -123,6 +124,7 @@ class TestCreateInputProvidersIntegration:
         monkeypatch.setattr(Ros2Input, "start", lambda *_: None)
 
         bp = BasePolicy.__new__(BasePolicy)
+        bp.native = MagicMock()
         bp.config = SimpleNamespace(
             task=SimpleNamespace(
                 velocity_input="keyboard",

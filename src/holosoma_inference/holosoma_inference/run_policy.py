@@ -28,7 +28,7 @@ from holosoma_inference.utils.session_recorder import SessionRecorder
 
 def _print_control_guide(policy_class, use_joystick: bool, dual_mode: bool = False):
     """Print control guide for users."""
-    is_wbt = issubclass(policy_class, WholeBodyTrackingPolicy)
+    is_wbt = getattr(policy_class, "is_wbt", False) or issubclass(policy_class, WholeBodyTrackingPolicy)
 
     logger.info("=" * 80)
     logger.info("🎮 POLICY CONTROLS")

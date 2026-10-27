@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
-import pinocchio as pin
 from defusedxml import ElementTree
 
 from holosoma_inference.config.config_types.robot import RobotConfig
@@ -91,6 +90,9 @@ class TimestepUtil:
 
 class PinocchioRobot:
     def __init__(self, robot_cfg: RobotConfig, urdf_text: str):
+        import pinocchio as pin
+
+        self._pin = pin
         # create pinocchio robot
         xml_text = self._create_xml_from_urdf(urdf_text)
         self.robot_model = pin.buildModelFromXML(xml_text, pin.JointModelFreeFlyer())
@@ -111,11 +113,11 @@ class PinocchioRobot:
 
     def fk_and_get_ref_body_orientation_in_world(self, configuration: np.ndarray) -> np.ndarray:
         # forward kinematics
-        pin.framesForwardKinematics(self.robot_model, self.robot_data, configuration)
+        self._pin.framesForwardKinematics(self.robot_model, self.robot_data, configuration)
 
         # get ref body pose in world
         ref_body_pose_in_world = self.robot_data.oMf[self.ref_body_frame_id]
-        quaternion = pin.Quaternion(ref_body_pose_in_world.rotation)  # (4, )
+        quaternion = self._pin.Quaternion(ref_body_pose_in_world.rotation)  # (4, )
 
         return np.expand_dims(quaternion.coeffs(), axis=0)  # xyzw, (1, 4)
 
