@@ -13,14 +13,13 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from holosoma.bridge import BasicSdk2Bridge, create_sdk2py_bridge
+from holosoma.config_types.frequency import resolve_decimation
 from holosoma.config_types.simulator import BridgeConfig
-from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.utils.clock import ClockPub
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-    from holosoma.simulator.base_simulator.hooks import HookRegistry
 
 
 class SimulatorBridge:
@@ -53,7 +52,13 @@ class SimulatorBridge:
         self.robot_bridge: BasicSdk2Bridge | None = None
         self._started = False
         self._closed = False
-        self._hooks_registered = False
+        self._transport_every = resolve_decimation(
+            bridge_config.transport_decimation,
+            float(simulator.simulator_config.sim.fps),
+            field="BridgeConfig.transport_decimation",
+            log=True,
+        )
+        self._substeps_since_transport = 0
 
         self.clock_pub: ClockPub = ClockPub()
 
@@ -62,25 +67,18 @@ class SimulatorBridge:
             logger.info(f"Auto-detected bridge interface '{interface}'")
             self.bridge_config = replace(self.bridge_config, interface=interface)
 
-        self.register_hooks(simulator.hooks)
         self.start()
 
-    def register_hooks(self, hooks: HookRegistry) -> None:
-        """Register bridge lifecycle hooks with the simulator loop."""
-        if self._hooks_registered:
-            return
-        self._hooks_registered = True
-        hooks.add(
-            Phase.PRE_STEP,
-            self.transport_step,
-            name="bridge.transport",
-            every=self.bridge_config.transport_decimation,
-        )
-        hooks.add(Phase.PRE_STEP, self.control_step, name="bridge.control")
-        hooks.add(Phase.CLOSE, self.close, name="bridge.close")
+    def before_substep(self) -> None:
+        """Exchange SDK data every ``transport_decimation`` substeps, then apply bridge torques."""
+        self._substeps_since_transport += 1
+        if self._substeps_since_transport >= self._transport_every:
+            self._substeps_since_transport = 0
+            self.transport_step()
+        self.control_step()
 
     def start(self) -> None:
-        """Acquire external resources after the simulator has registered ownership."""
+        """Acquire external resources; a failed start closes what it acquired."""
         if self._started:
             return
         if self._closed:

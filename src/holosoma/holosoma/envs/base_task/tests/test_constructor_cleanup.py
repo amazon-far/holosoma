@@ -43,20 +43,21 @@ def test_task_preserves_interrupt_when_constructor_cleanup_fails(monkeypatch: py
     simulator.close.assert_called_once_with()
 
 
-def test_task_runs_close_hooks_when_simulator_construction_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_task_setup_failure_closes_plugins_before_simulator(monkeypatch: pytest.MonkeyPatch) -> None:
     closed: list[str] = []
 
-    def fail_inside_simulator_construction(self: BaseTask, *_args: object, **_kwargs: object) -> None:
+    def fail_after_a_plugin_installed(self: BaseTask, *_args: object, **_kwargs: object) -> None:
+        self.simulator = SimpleNamespace(close=lambda: closed.append("simulator"))  # type: ignore[assignment]
         self.hooks = HookRegistry()
-        self.hooks.add(Phase.CLOSE, lambda: closed.append("backend"))
-        raise RuntimeError("backend failed")
+        self.hooks.add(Phase.CLOSE, lambda: closed.append("plugin"))
+        raise RuntimeError("second plugin failed")
 
-    monkeypatch.setattr(BaseTask, "_initialize_base_task", fail_inside_simulator_construction)
+    monkeypatch.setattr(BaseTask, "_initialize_base_task", fail_after_a_plugin_installed)
 
-    with pytest.raises(RuntimeError, match="backend failed"):
+    with pytest.raises(RuntimeError, match="second plugin failed"):
         BaseTask(object())  # type: ignore[arg-type]
 
-    assert closed == ["backend"]
+    assert closed == ["plugin", "simulator"]
 
 
 def test_task_installs_plugins_after_task_setup(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -66,10 +67,9 @@ def test_task_installs_plugins_after_task_setup(monkeypatch: pytest.MonkeyPatch)
         pass
 
     class _Simulator:
-        def __init__(self, *, hooks: HookRegistry, **_kwargs: object) -> None:
+        def __init__(self, **_kwargs: object) -> None:
             self.sim_dt = 0.005
             self.simulator_config = SimpleNamespace(reset_manager=object())
-            self.hooks = hooks
             self.robot_root_states = torch.zeros(1, 13)
             self.dof_pos = torch.zeros(1, 1)
             self.dof_vel = torch.zeros(1, 1)
@@ -106,7 +106,6 @@ def test_task_installs_plugins_after_task_setup(monkeypatch: pytest.MonkeyPatch)
 
     class _ProbePlugin:
         def __init__(self, _cfg: object, task: BaseTask) -> None:
-            assert task.hooks is task.simulator.hooks
             events.append("plugins")
             raise _StopAfterInstallError
 

@@ -422,10 +422,12 @@ class MotionPlaybackPlugin:
         """Close the previous episode and open the next: emit boundaries, rewind clock, arm settle."""
         task = self.task
         for env_id in range(task.num_envs):
+            task.simulator.on_episode_end(env_id)
             task.hooks.emit(Phase.EPISODE_END, env_id)
         self._t = self.cfg.start_time
         self._settle_left = self.cfg.settle_frames
         for env_id in range(task.num_envs):
+            task.simulator.on_episode_start(env_id)
             task.hooks.emit(Phase.EPISODE_START, env_id)
         playlist_index = self._playlist_index(self._episode_idx)
         assert playlist_index is not None

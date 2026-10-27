@@ -19,7 +19,6 @@ from holosoma.config_types.sensor import CameraSensorConfig, LidarSensorConfig
 from holosoma.config_types.simulator import MujocoBackend
 from holosoma.managers.terrain.manager import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.mujoco import light_setup
 from holosoma.simulator.mujoco.backends import WARP_AVAILABLE, ClassicBackend, IMujocoBackend, WarpBackend
 from holosoma.simulator.mujoco.backends.base import apply_sensor_scene_flags, mj_to_holosoma_quat
@@ -58,9 +57,7 @@ class MuJoCo(BaseSimulator):
     the holosoma simulator interface with unified state access and the shared terrain system.
     """
 
-    def __init__(
-        self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str, hooks: HookRegistry
-    ) -> None:
+    def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str) -> None:
         """Initialize MuJoCo simulator.
 
         Parameters
@@ -69,8 +66,6 @@ class MuJoCo(BaseSimulator):
             Tyro configuration containing simulator, robot, and terrain settings.
         device : str
             Device type for simulation ('cpu' or 'cuda').
-        hooks : HookRegistry
-            The owning task's hook registry.
 
         Raises
         ------
@@ -83,9 +78,7 @@ class MuJoCo(BaseSimulator):
         logger.info(f"Device: {device}")
         logger.info(f"Simulator config: {simulator_config}")
 
-        super().__init__(tyro_config, terrain_manager, device, hooks)
-        self.hooks.add(Phase.CLOSE, self._close_backend, name="mujoco.backend.close")
-        self.hooks.add(Phase.CLOSE, self._close_viewer, name="mujoco.viewer.close")
+        super().__init__(tyro_config, terrain_manager, device)
 
         # Set robot config for consistency with Isaac simulators
         if not hasattr(tyro_config, "robot"):
@@ -315,7 +308,6 @@ class MuJoCo(BaseSimulator):
             attachment_body_names=gantry_cfg.attachment_body_names,
             cfg=gantry_cfg,
         )
-        self.virtual_gantry.register_hooks(self.hooks)
 
         # Initialize bridge system using base class helper
         self._init_bridge()
@@ -326,7 +318,6 @@ class MuJoCo(BaseSimulator):
 
         if self.video_config.enabled:
             self.video_recorder = MuJoCoVideoRecorder(self.video_config, self)
-            self.video_recorder.register_hooks(self.hooks)
             self.video_recorder.setup_recording()
 
         # For debugging
@@ -641,7 +632,6 @@ class MuJoCo(BaseSimulator):
         self.contact_forces = torch.zeros(self.num_envs, self.num_bodies, 3, device=self.sim_device)
 
         self.contact_recorder = ContactSubstepRecorder(
-            self.hooks,
             lambda: self.contact_forces,
             self.num_envs,
             self.simulator_config.sim.control_decimation_steps,
@@ -1500,6 +1490,11 @@ class MuJoCo(BaseSimulator):
     def _physics_time(self) -> float:
         """Return the active MuJoCo backend's simulation clock in seconds."""
         return self.backend.physics_time()
+
+    def _close_resources(self) -> None:
+        """Close the viewer, then the backend."""
+        self._close_viewer()
+        self._close_backend()
 
     def _close_viewer(self) -> None:
         """Close the viewer handle once."""

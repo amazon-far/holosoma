@@ -24,7 +24,6 @@ PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from holosoma.simulator.base_simulator.hooks import Phase  # noqa: E402
 from tests.simulators._sim_harness import (  # noqa: E402
     build_run_sim_config,
     launch_simulator,
@@ -498,7 +497,7 @@ def _check_tracked_target(sim, env_ids, actor_states, physics_per_control: int) 
     sim.write_state_updates()
     for _ in range(physics_per_control):
         step(sim, 1)
-    sim.hooks.emit(Phase.FRAME_END)
+    sim.end_frame()
 
     after = sim.get_lidar_data("tracked_target", "ranges")
     expected_after = expected_ground.to(after.device, after.dtype)
@@ -579,7 +578,7 @@ def _check_actor_mount_origin_refresh(
     sim.write_state_updates()
     for _ in range(physics_per_control):
         step(sim, 1)
-    sim.hooks.emit(Phase.FRAME_END)
+    sim.end_frame()
 
     ranges = sim.get_lidar_data("downward", "ranges")
     points = sim.get_lidar_data("downward", "points")
@@ -753,7 +752,7 @@ def main() -> int:
             first_target_direction,
             distance=2.0,
         )
-        sim.hooks.emit(Phase.FRAME_END)
+        sim.end_frame()
         figure_summaries = []
         plane_normal = torch.tensor(_lidar_presets.PLANE_NORMAL_SENSOR, dtype=torch.float32, device=device)
         cyclic_plane_normal = torch.tensor(
@@ -860,7 +859,7 @@ def main() -> int:
                 second_target_direction,
                 distance=2.0,
             )
-            sim.hooks.emit(Phase.FRAME_END)
+            sim.end_frame()
             if cyclic_record.name in manager.last_lidar_due:
                 captured_next_cyclic_window = True
                 break

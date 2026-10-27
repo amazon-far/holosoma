@@ -282,6 +282,12 @@ class _FakeSimulator:
     def set_actor_states(self, names: list[str], env_ids: torch.Tensor, states: torch.Tensor) -> None:
         self.object_writes.append((names, states.clone()))
 
+    def on_episode_start(self, env_id: int) -> None:
+        pass
+
+    def on_episode_end(self, env_id: int) -> None:
+        pass
+
     def request_shutdown(self, reason: str = "") -> None:
         self.shutdown_requested = True
 

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import pytest
 
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
 from holosoma.utils.safe_torch_import import torch
 
@@ -28,21 +27,18 @@ def _frame(value: float) -> torch.Tensor:
 
 
 class _Driver:
-    """A recorder plus the source tensor its getter reads, stepped through the hook phases."""
+    """A recorder plus the source tensor its getter reads, stepped as the simulator steps it."""
 
     def __init__(self, decimation: int) -> None:
-        self.hooks = HookRegistry()
         self.source = _frame(0)
-        self.recorder = ContactSubstepRecorder(
-            self.hooks, lambda: self.source, NUM_ENVS, decimation, NUM_BODIES, device="cpu"
-        )
+        self.recorder = ContactSubstepRecorder(lambda: self.source, NUM_ENVS, decimation, NUM_BODIES, device="cpu")
 
     def begin_frame(self) -> None:
-        self.hooks.emit(Phase.FRAME_BEGIN)
+        self.recorder.begin_frame()
 
     def step(self, value: float) -> None:
         self.source[:] = float(value)
-        self.hooks.emit(Phase.POST_STEP)
+        self.recorder.record_current()
 
 
 @pytest.mark.parametrize("decimation", [1, 4, 8])

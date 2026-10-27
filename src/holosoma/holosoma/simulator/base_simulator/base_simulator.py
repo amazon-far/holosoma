@@ -12,7 +12,6 @@ from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.shared.external_wrench import ExternalWrenchAccumulator, WrenchTarget
 from holosoma.simulator.shared.object_registry import ObjectRegistry, ObjectType
 from holosoma.simulator.shared.scene_types import SceneInterface
@@ -172,7 +171,7 @@ class BaseSimulator:
     _rigid_body_vel: torch.Tensor
     _rigid_body_ang_vel: torch.Tensor
 
-    def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str, hooks: HookRegistry):
+    def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str):
         """
         Initializes the base simulator with configuration settings and simulation device.
 
@@ -184,8 +183,6 @@ class BaseSimulator:
             Terrain manager for the simulation.
         device: str
             Device type for simulation ('cpu' or 'cuda').
-        hooks: HookRegistry
-            The owning task's hook registry; the simulator registers its own callbacks on it.
 
         """
         self.viewer = None
@@ -205,10 +202,6 @@ class BaseSimulator:
         self._external_wrench = ExternalWrenchAccumulator(self)
         self.kinematic_playback: bool = self.simulator_config.sim.kinematic_playback
         self._kinematic_time = 0.0
-        self.hooks = hooks
-        # Register sensor rendering before plugins so FRAME_END consumers read fresh outputs.
-        # This no-ops until a backend builds its sensor manager during setup.
-        self.hooks.add(Phase.FRAME_END, self.render_sensors, name="sensors.render")
         self._closed = False
 
         # Virtual gantry system
@@ -223,7 +216,7 @@ class BaseSimulator:
         # Bridge system
         self.bridge: SimulatorBridge | None = None
 
-        # Mounted sensors, populated by each backend during setup. The render hook no-ops until it exists.
+        # Mounted sensors, populated by each backend during setup. Rendering no-ops until it exists.
         self.sensor_manager: SensorManager | None = None
 
         # To be overridden by subclasses
@@ -732,12 +725,60 @@ class BaseSimulator:
             logger.error(f"Failed to initialize bridge system: {e}")
             raise
 
+    # ----- Control-frame lifecycle -----
+    # The owning task calls each method just before emitting the matching plugin phase, so the
+    # simulator's own work on a phase precedes every plugin's.
+
+    def begin_frame(self) -> None:
+        """Start a control frame, before ``FRAME_BEGIN``."""
+        contact_recorder = getattr(self, "contact_recorder", None)
+        if contact_recorder is not None:
+            contact_recorder.begin_frame()
+
+    def before_substep(self) -> None:
+        """Apply gantry and bridge forces for the coming physics substep, before ``PRE_STEP``."""
+        if self.virtual_gantry is not None:
+            self.virtual_gantry.step()
+        if self.bridge is not None:
+            self.bridge.before_substep()
+
+    def after_substep(self) -> None:
+        """Record the substep just taken, before ``POST_STEP``."""
+        contact_recorder = getattr(self, "contact_recorder", None)
+        if contact_recorder is not None:
+            contact_recorder.record_current()
+
+    def end_frame(self) -> None:
+        """Render sensors and capture video after the frame's state refresh, before ``FRAME_END``."""
+        self.render_sensors()
+        if self.video_recorder is not None:
+            self.video_recorder.capture_frame()
+
+    def on_episode_start(self, env_id: int) -> None:
+        """Handle an environment's episode start, before ``EPISODE_START``."""
+        if self.virtual_gantry is not None:
+            self.virtual_gantry.on_episode_start(env_id)
+        if self.video_recorder is not None:
+            self.video_recorder.on_episode_start(env_id)
+
+    def on_episode_end(self, env_id: int) -> None:
+        """Handle an environment's episode end, before ``EPISODE_END``."""
+        if self.video_recorder is not None:
+            self.video_recorder.on_episode_end(env_id)
+
     def close(self) -> None:
-        """Emit the one-pass simulator teardown phase."""
+        """Release the simulator's resources once; stops at the first failure."""
         if self._closed:
             return
         self._closed = True
-        self.hooks.emit(Phase.CLOSE)
+        if self.video_recorder is not None:
+            self.video_recorder.cleanup()
+        if self.bridge is not None:
+            self.bridge.close()
+        self._close_resources()
+
+    def _close_resources(self) -> None:
+        """Release backend-specific resources after the shared components."""
 
     # ----- Actor/Object Access Interface -----
     # These methods provide unified access to objects registered with ObjectType enum

@@ -20,14 +20,12 @@ import numpy as np
 import numpy.typing as npt
 from loguru import logger
 
-from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.shared.camera_controller import CameraController, CameraParameters
 from holosoma.utils.video_utils import create_video, format_command_labels, overlay_text_on_image
 
 if TYPE_CHECKING:
     from holosoma.config_types.video import VideoConfig
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-    from holosoma.simulator.base_simulator.hooks import HookRegistry
 
 
 class VideoRecorderInterface(ABC):
@@ -97,13 +95,6 @@ class VideoRecorderInterface(ABC):
 
         if config.use_recording_thread:
             self._setup_threaded_recording()
-
-    def register_hooks(self, hooks: HookRegistry) -> None:
-        """Register video lifecycle hooks with the simulator loop."""
-        hooks.add(Phase.EPISODE_START, self.on_episode_start, name="video.on_episode_start")
-        hooks.add(Phase.EPISODE_END, self.on_episode_end, name="video.on_episode_end")
-        hooks.add(Phase.FRAME_END, self.capture_frame, name="video.capture_frame")
-        hooks.add(Phase.CLOSE, self.cleanup, name="video.cleanup")
 
     def _setup_threaded_recording(self) -> None:
         """Shared threading setup logic."""
@@ -181,8 +172,8 @@ class VideoRecorderInterface(ABC):
     def capture_frame(self, env_id: int = 0) -> None:
         """Shared frame capture dispatch logic.
 
-        Registered on FRAME_END, which fires once per frame, so this captures at control frequency
-        without tracking physics steps. Filters on recording state and record_env_id.
+        Called once per control frame by the simulator's ``end_frame``, so this captures at control
+        frequency without tracking physics steps. Filters on recording state and record_env_id.
 
         Parameters
         ----------

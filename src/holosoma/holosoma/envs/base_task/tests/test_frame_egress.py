@@ -34,6 +34,13 @@ the same side of it, and POST_STEP consumers are documented to read post-step st
 """
 
 
+SIM_BEGIN_FRAME = "sim.begin_frame"
+SIM_BEFORE_SUBSTEP = "sim.before_substep"
+SIM_AFTER_SUBSTEP = "sim.after_substep"
+SIM_END_FRAME = "sim.end_frame"
+"""Markers for the simulator's own per-frame work, which runs before the matching plugin phase."""
+
+
 class _LoopOverranError(AssertionError):
     """The loop outlived the fake's substep budget: a stalled run must fail, not spin forever."""
 
@@ -97,6 +104,24 @@ class _FakeSim:
 
     def render(self, sync_frame_time: bool = True) -> None:
         self.viewer_renders.append(self.substeps)
+
+    def begin_frame(self) -> None:
+        self.phases.append(SIM_BEGIN_FRAME)
+
+    def before_substep(self) -> None:
+        self.phases.append(SIM_BEFORE_SUBSTEP)
+
+    def after_substep(self) -> None:
+        self.phases.append(SIM_AFTER_SUBSTEP)
+
+    def end_frame(self) -> None:
+        self.phases.append(SIM_END_FRAME)
+
+    def on_episode_start(self, env_id: int) -> None:
+        pass
+
+    def on_episode_end(self, env_id: int) -> None:
+        pass
 
     def simulate_at_each_physics_step(self) -> None:
         self.substeps += 1
@@ -183,9 +208,15 @@ def _run(sim: _FakeSim, *, headless: bool = True, viewer_dt: float = 1.0) -> Non
 
 
 def _expected_phases(groups: int, decimation: int = DECIMATION) -> list[Phase | str]:
-    """The schedule ``BaseTask._physics_step`` emits: FRAME_BEGIN, every substep, then FRAME_END."""
-    substeps: list[Phase | str] = [Phase.PRE_STEP, SUBSTEP, Phase.POST_STEP] * decimation
-    return [Phase.FRAME_BEGIN, *substeps, Phase.FRAME_END] * groups
+    """The control-frame schedule: FRAME_BEGIN, every substep, then FRAME_END, each phase after its simulator call."""
+    substeps: list[Phase | str] = [
+        SIM_BEFORE_SUBSTEP,
+        Phase.PRE_STEP,
+        SUBSTEP,
+        SIM_AFTER_SUBSTEP,
+        Phase.POST_STEP,
+    ] * decimation
+    return [SIM_BEGIN_FRAME, Phase.FRAME_BEGIN, *substeps, SIM_END_FRAME, Phase.FRAME_END] * groups
 
 
 # ----- frame freshness: the invariant the control-frame schedule exists to preserve -----

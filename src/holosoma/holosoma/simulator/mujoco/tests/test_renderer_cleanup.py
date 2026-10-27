@@ -13,7 +13,6 @@ pytest.importorskip("mujoco")
 
 from holosoma.config_types.sensor import MujocoCameraConfig
 from holosoma.config_types.video import VideoConfig
-from holosoma.simulator.base_simulator.hooks import HookRegistry
 from holosoma.simulator.mujoco import mujoco as mujoco_module
 from holosoma.simulator.mujoco.backends import classic_backend as classic_backend_module
 from holosoma.simulator.mujoco.backends.base import apply_sensor_scene_flags
@@ -54,7 +53,7 @@ def _mujoco_simulator() -> MuJoCo:
         logger=SimpleNamespace(video=VideoConfig(enabled=False), headless_recording=False),
         experiment_dir=None,
     )
-    return MuJoCo(tyro_config, terrain_manager=SimpleNamespace(), device="cpu", hooks=HookRegistry())  # type: ignore[arg-type]
+    return MuJoCo(tyro_config, terrain_manager=SimpleNamespace(), device="cpu")  # type: ignore[arg-type]
 
 
 def test_mujoco_closes_viewer_before_backend_once(monkeypatch: pytest.MonkeyPatch) -> None:

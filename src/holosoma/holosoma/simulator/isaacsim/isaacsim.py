@@ -34,7 +34,6 @@ from holosoma.config_types.sensor import CameraSensorConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-from holosoma.simulator.base_simulator.hooks import HookRegistry
 from holosoma.simulator.isaacsim.event_cfg import EventCfg
 from holosoma.simulator.isaacsim.events import randomize_body_com, randomize_rigid_body_inertia
 from holosoma.simulator.isaacsim import light_setup, sensor_setup
@@ -70,8 +69,8 @@ from holosoma.simulator.types import ActorNames, ActorIndices, EnvIds, ActorStat
 
 
 class IsaacSim(BaseSimulator):
-    def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str, hooks: HookRegistry):
-        super().__init__(tyro_config, terrain_manager, device, hooks)
+    def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str):
+        super().__init__(tyro_config, terrain_manager, device)
 
         # Public interface attribute read across backends (video_recorder, virtual_gantry,
         # simulator_bridge). For IsaacSim it always equals self.sim_device; internal tensor
@@ -650,7 +649,6 @@ class IsaacSim(BaseSimulator):
         self.all_root_states = UnifiedRootStatesView(self)
 
         self.contact_recorder = ContactSubstepRecorder(
-            self.hooks,
             # Gathers from the sensor, not contact_forces: that is only reassigned in
             # refresh_sim_tensors, so it would record one stale frame per substep.
             self._robot_contact_forces,
@@ -669,14 +667,12 @@ class IsaacSim(BaseSimulator):
             attachment_body_names=gantry_cfg.attachment_body_names,
             cfg=gantry_cfg,
         )
-        self.virtual_gantry.register_hooks(self.hooks)
 
         # Initialize bridge system using base class helper
         self._init_bridge()
 
         # Setup video recording after scene is ready
         if self.video_recorder:
-            self.video_recorder.register_hooks(self.hooks)
             self.video_recorder.setup_recording()
 
         # Initialize robot tensors
