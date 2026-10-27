@@ -407,9 +407,8 @@ class BasicSdk2Bridge(ABC):
         Returns:
             numpy.ndarray: Actuator forces
         """
-        # Bridge operates on env 0 by default
-        env_id = getattr(self, "env_id", 0)
-        forces = self.simulator.get_dof_forces(env_id)
+        # Env 0, like every other simulator read this bridge makes.
+        forces = self.simulator.get_dof_forces(0)
         # Force sensors may be disabled (enable_dof_force_sensors=False) -> empty tensor; a
         # fancy-index would raise, so pass the empty tensor through as the full-width path does.
         if forces.numel() == 0:
