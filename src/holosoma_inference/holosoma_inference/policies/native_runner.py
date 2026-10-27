@@ -7,6 +7,7 @@ import time
 
 import numpy as np
 
+from holosoma_inference import _native
 from holosoma_inference.inputs.api.commands import StateCommand
 from holosoma_inference.native import NativePolicy
 from holosoma_inference.policies.transport import RunnerTransport
@@ -181,8 +182,9 @@ class NativeRunnerPolicy(RunnerTransport):
                 self.native.set_state(self.interface.get_low_state(), tick_ms=self._tick_ms())
             zero_requests = self.native._engine.velocity_zero_requests
             self.native.command(command)
-            if self.native._engine.velocity_zero_requests != zero_requests:
-                # The engine's own velocity input is a stub; the operator input is ours.
+            # The engine's own velocity input is a stub; the operator input is ours. Only the
+            # locomotion engine handles ZERO_VELOCITY, so zero it here for every policy.
+            if command == StateCommand.ZERO_VELOCITY or self.native._engine.velocity_zero_requests != zero_requests:
                 self._velocity_input.zero()
         self._resolve_control_gains()
         if self.active_policy_index != previous_index:
@@ -248,11 +250,15 @@ class NativeRunnerPolicy(RunnerTransport):
         if hasattr(self.interface, "no_action"):
             self.interface.no_action = 0
 
+    def _step_native(self, state):
+        """One native step; subclasses whose engine takes extra per-tick input override this."""
+        return self.native.step_state(state, tick_ms=self._tick_ms(), advance_phase=False)
+
     def policy_action(self):
         state = self.interface.get_low_state()
         if not self._await_valid_state(state):
             return False
-        command = self.native.step_state(state, tick_ms=self._tick_ms(), advance_phase=False)
+        command = self._step_native(state)
         transformed = self.transform_command(command, state) or {}
         q = np.asarray(transformed.get("q", command.q), dtype=float).reshape(-1)
         kp = np.asarray(transformed.get("kp", command.kp), dtype=float).reshape(-1)
@@ -313,3 +319,50 @@ class NativeWbtRunner(NativeRunnerPolicy):
     """Native embedded-motion tracking with Python-owned transport."""
 
     is_wbt = True
+
+
+class NativeContextualRunner(NativeRunnerPolicy):
+    """Depth-conditioned locomotion; the native engine needs one ContextualInput per tick.
+
+    Callers push frames with ``set_depth`` from whatever transport they own, and the freshest one
+    is what the policy gets. Nothing here delays depth: a real pipeline is already about as stale
+    as training modelled it, so adding delay on a robot would double the staleness. Simulated
+    depth is instantaneous, so emulating that latency is the sim harness's job and it should delay
+    frames before pushing them.
+    """
+
+    def __init__(self, config, **kwargs):
+        self._frame = None
+        self._frame_stamp = None
+        self._monotonic_base = time.monotonic()
+        super().__init__(config, **kwargs)
+
+    def set_depth(self, frame, stamp_s=None):
+        """Store the newest depth frame; returns False for a repeated or out-of-order stamp."""
+        frame = np.asarray(frame, dtype=np.float32)
+        if not np.isfinite(frame).all():
+            raise ValueError("depth frame is not finite; the producer must clip and fill")
+        if stamp_s is not None and self._frame_stamp is not None and stamp_s <= self._frame_stamp:
+            return False
+        self._frame, self._frame_stamp = frame, stamp_s
+        if self._start_pending:
+            self._start_pending = False
+            self._handle_start_policy()
+        return True
+
+    def _step_native(self, state):
+        inputs = _native.ContextualInput()
+        if self._frame is not None:
+            inputs.depth = self._frame.reshape(-1)
+        inputs.monotonic_time = time.monotonic() - self._monotonic_base
+        return self.native.step_contextual(state, inputs, tick_ms=self._tick_ms())
+
+    def _handle_start_policy(self):
+        # Deferred, not refused: start arrives before the first frame does, so refusing here would
+        # drop the engage with nothing to retry it. A zero frame reads as ground at the clip
+        # midpoint rather than as missing data, which is not something to engage on.
+        if self._frame is None:
+            self._start_pending = True
+            self.logger.info("Deferring start until the first depth frame arrives")
+            return
+        super()._handle_start_policy()
