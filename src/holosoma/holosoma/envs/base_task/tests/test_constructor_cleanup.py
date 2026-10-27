@@ -7,7 +7,7 @@ import pytest
 
 from holosoma.envs.base_task import base_task as base_task_module
 from holosoma.envs.base_task.base_task import BaseTask
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.envs.base_task.hooks import HookRegistry, Phase
 from holosoma.utils.safe_torch_import import torch
 
 pytestmark = pytest.mark.no_sim

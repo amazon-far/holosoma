@@ -3,7 +3,7 @@
 A *plugin* is a bundle of behavior — a set of lifecycle hooks plus whatever state and
 side effects they need — that an extension attaches to a running task without
 subclassing it. Plugins are built on the lifecycle hook system (``task.hooks``,
-:class:`~holosoma.simulator.base_simulator.hooks.Phase`) and may depend on other simulator
+:class:`~holosoma.envs.base_task.hooks.Phase`) and may depend on other simulator
 contracts (the virtual gantry, the clock, etc.). Each plugin pairs:
 
 - a ``PluginConfig`` subclass (the CLI-visible, serializable knobs), registered under a

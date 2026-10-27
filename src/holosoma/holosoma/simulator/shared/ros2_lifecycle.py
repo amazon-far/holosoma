@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.envs.base_task.hooks import Phase
 
 if TYPE_CHECKING:
     from holosoma.envs.base_task.base_task import BaseTask

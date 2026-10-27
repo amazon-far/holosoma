@@ -9,8 +9,8 @@ import pytest
 
 from holosoma.config_types.plugin import NoOpPluginConfig, PluginConfig
 from holosoma.envs.base_task.base_task import BaseTask
+from holosoma.envs.base_task.hooks import HookRegistry, Phase
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 
 pytestmark = pytest.mark.no_sim
 

@@ -17,10 +17,10 @@ import torch
 
 from holosoma.config_types.env import EnvConfig
 from holosoma.config_types.plugin import MotionPlaybackPluginConfig
+from holosoma.envs.base_task.hooks import HookRegistry, Phase
 from holosoma.envs.simulation_task import SimulationTask
 from holosoma.managers.randomization import RandomizationManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 
 FPS = 200
 DECIMATION = 4

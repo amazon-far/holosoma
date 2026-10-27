@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.envs.base_task.hooks import Phase
 from holosoma.simulator.shared.ros2_lifecycle import (
     close_ros2_executor,
     get_ros2_runtime,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from holosoma.simulator.base_simulator.hooks import HookCloseError, HookRegistry, HookRegistryError, Phase
+from holosoma.envs.base_task.hooks import HookCloseError, HookRegistry, HookRegistryError, Phase
 
 pytestmark = pytest.mark.no_sim
 

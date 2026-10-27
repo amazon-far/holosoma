@@ -38,7 +38,7 @@ import numpy.typing as npt
 import torch
 from loguru import logger
 
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.envs.base_task.hooks import Phase
 from holosoma.utils.file_cache import cached_open
 from holosoma.utils.path import resolve_data_file_path, resolve_paths
 from holosoma.utils.rotations import quat_slerp

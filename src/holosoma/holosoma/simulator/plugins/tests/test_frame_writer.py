@@ -22,7 +22,7 @@ import torch
 
 from holosoma.config_types.plugin import FrameWriterPluginConfig
 from holosoma.config_types.sensor import CameraDataType, CameraSensorConfig, SensorMountConfig
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.envs.base_task.hooks import HookRegistry, Phase
 from holosoma.simulator.plugins.frame_writer import FrameWriterPlugin
 from holosoma.simulator.plugins.tests._task import plugin_task
 from holosoma.utils.simulator_config import SimulatorType

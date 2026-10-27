@@ -25,7 +25,7 @@ from holosoma.config_types.sensor import (
     IsaacSimFisheyeConfig,
     SensorMountConfig,
 )
-from holosoma.simulator.base_simulator.hooks import HookCloseError, HookRegistry, Phase
+from holosoma.envs.base_task.hooks import HookCloseError, HookRegistry, Phase
 from holosoma.simulator.plugins.camera_consumer import CameraConsumerPlugin, FramePacket, StreamKey
 from holosoma.simulator.plugins.tests._task import plugin_task
 from holosoma.utils.safe_torch_import import torch

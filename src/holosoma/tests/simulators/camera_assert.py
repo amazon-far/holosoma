@@ -125,7 +125,7 @@ def main() -> int:
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
 
-    from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+    from holosoma.envs.base_task.hooks import HookRegistry, Phase
 
     plugin_hooks = HookRegistry()
     recorder = None

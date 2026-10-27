@@ -17,7 +17,7 @@ from mpl_toolkits.mplot3d.axes3d import Axes3D
 
 from holosoma.config_types.plugin import LidarVizPluginConfig
 from holosoma.config_types.sensor import CustomLidarRayPatternConfig, LidarSensorConfig, SensorMountConfig
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.envs.base_task.hooks import HookRegistry, Phase
 from holosoma.simulator.plugins.tests._task import plugin_task
 from holosoma.simulator.plugins.viz.lidar_viz_plugin import LidarVizPlugin
 from holosoma.simulator.shared.sensor_manager import SensorManager
