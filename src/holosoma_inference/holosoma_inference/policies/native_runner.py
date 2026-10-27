@@ -182,8 +182,9 @@ class NativeRunnerPolicy(RunnerTransport):
                 self.native.set_state(self.interface.get_low_state(), tick_ms=self._tick_ms())
             zero_requests = self.native._engine.velocity_zero_requests
             self.native.command(command)
-            if self.native._engine.velocity_zero_requests != zero_requests:
-                # The engine's own velocity input is a stub; the operator input is ours.
+            # The engine's own velocity input is a stub; the operator input is ours. Only the
+            # locomotion engine handles ZERO_VELOCITY, so zero it here for every policy.
+            if command == StateCommand.ZERO_VELOCITY or self.native._engine.velocity_zero_requests != zero_requests:
                 self._velocity_input.zero()
         self._resolve_control_gains()
         if self.active_policy_index != previous_index:

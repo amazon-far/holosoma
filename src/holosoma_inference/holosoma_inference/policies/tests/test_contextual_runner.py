@@ -16,6 +16,7 @@ import holosoma_inference as inference
 from holosoma_inference.config.config_types.contextual import ContextualConfig
 from holosoma_inference.config.config_types.observation import ObservationConfig
 from holosoma_inference.config.config_types.robot import RobotConfig
+from holosoma_inference.inputs.api.commands import StateCommand
 from holosoma_inference.policies.native_runner import NativeContextualRunner
 
 # The generated graph takes depth_image [-1, 2, 2, 3]: history 2, then 2x3 frames.
@@ -38,11 +39,16 @@ class _Interface:
 
 
 class _Input:
+    zeroed = 0
+
     def poll_velocity(self):
         return None
 
     def poll_commands(self):
         return []
+
+    def zero(self):
+        self.zeroed += 1
 
 
 def _config(tmp_path):
@@ -129,3 +135,10 @@ def test_set_depth_rejects_a_non_finite_frame(tmp_path):
     bad[0, 0] = np.nan
     with pytest.raises(ValueError, match="must clip and fill"):
         runner.set_depth(bad)
+
+
+def test_zero_velocity_zeroes_the_operator_input(tmp_path):
+    """The contextual engine ignores ZERO_VELOCITY, so the runner must zero the operator input itself."""
+    runner = _runner(tmp_path)
+    runner._dispatch_command(StateCommand.ZERO_VELOCITY)
+    assert runner._velocity_input.zeroed == 1
