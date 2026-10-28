@@ -141,3 +141,78 @@ def test_a_depth_source_needs_a_contextual_policy() -> None:
     with pytest.raises(ValueError, match="not both"):
         _start_depth_source(_Policy(), contextual, "depth_img_shm", "depth/topic")
     assert _start_depth_source(_Policy(), contextual, None, None) is None
+
+
+@pytest.fixture
+def logs():
+    from loguru import logger
+
+    records: list[str] = []
+    sink = logger.add(lambda message: records.append(message.record["message"]), level="WARNING")
+    yield records
+    logger.remove(sink)
+
+
+def test_a_missing_heartbeat_is_reported_once_as_no_frames_delivered(logs: list[str]) -> None:
+    now = [0.0]
+    name = f"depth_test_{uuid4().hex}"
+    consumer = DepthShmConsumer(_Policy(), shape=SHAPE, name=name, clock=lambda: now[0])
+    consumer._sensor._heartbeat = _Heartbeat()
+    _write(name, 0.25)
+
+    for now[0] in (0.0, 1.0, 2.5, 5.0):
+        assert not consumer.poll_once()
+
+    warnings = [m for m in logs if "no depth frames will be delivered" in m]
+    assert len(warnings) == 1 and "--no-depth-heartbeat" in warnings[0]
+
+
+def test_an_error_on_the_polling_thread_is_logged_and_raised_at_stop(logs: list[str]) -> None:
+    import time
+
+    consumer, _, _, name = _consumer(heartbeat=False)
+    _write(name, 0.25)
+
+    def broken():
+        raise ValueError("size mismatch")
+
+    consumer._sensor.get_latest = broken  # type: ignore[method-assign]
+    consumer.start()
+    for _ in range(100):
+        if consumer.error is not None:
+            break
+        time.sleep(0.01)
+
+    assert isinstance(consumer.error, ValueError)
+    assert any(name in m and "size mismatch" in m for m in logs)
+    with pytest.raises(RuntimeError, match=name) as raised:
+        consumer.stop()
+    assert raised.value.__cause__ is consumer.error
+
+
+def test_waiting_for_a_restarted_producer_logs_once(logs: list[str]) -> None:
+    consumer, policy, heartbeat, name = _consumer()
+    _write(name, 0.25)
+    heartbeat.beat(seq=7, t_capture=10.0)
+    assert consumer.poll_once()
+
+    del _FakeSharedMemory.blocks[name]  # the producer restarts and has not recreated its block yet
+    heartbeat.beat(seq=1, t_capture=20.0, restarted=True)
+    for _ in range(50):
+        assert not consumer.poll_once()
+    _write(name, -0.25)
+    heartbeat.beat(seq=2, t_capture=20.1)
+    assert consumer.poll_once()
+
+    assert sum("waiting for the restarted producer" in m for m in logs) == 1
+    assert not any("zero depth" in m for m in logs)
+    assert [stamp for _, stamp in policy.frames] == [10.0, 20.1]
+
+
+def test_no_depth_heartbeat_reads_the_block_without_one() -> None:
+    contextual = SimpleNamespace(contextual=SimpleNamespace(depth_height=2, depth_width=3))
+    source = _start_depth_source(_Policy(), contextual, "depth_img_shm", None, depth_heartbeat=False)
+    try:
+        assert source._sensor._heartbeat_endpoint is None
+    finally:
+        source.stop()

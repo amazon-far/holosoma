@@ -35,7 +35,9 @@ def _model(nodes, inputs, outputs, initializers, metadata=None) -> onnx.ModelPro
     return model
 
 
-def _write_pair(tmp_path: Path, student_obs_dim: int = PROPRIO + LATENT) -> tuple[Path, Path]:
+def _write_pair(
+    tmp_path: Path, student_obs_dim: int = PROPRIO + LATENT, observation_names: str | None = None
+) -> tuple[Path, Path]:
     rng = np.random.default_rng(0)
     backbone = _model(
         [
@@ -65,7 +67,11 @@ def _write_pair(tmp_path: Path, student_obs_dim: int = PROPRIO + LATENT) -> tupl
             helper.make_tensor_value_info("joint_pos", TensorProto.FLOAT, [1, student_obs_dim]),
         ],
         [numpy_helper.from_array(rng.standard_normal((student_obs_dim, JOINTS)).astype(np.float32), "w")],
-        metadata={"joint_names": "a,b,c", "action_scale": "1.0,1.0,1.0"},
+        metadata={
+            "joint_names": "a,b,c",
+            "action_scale": "1.0,1.0,1.0",
+            **({"observation_names": observation_names} if observation_names else {}),
+        },
     )
     paths = tmp_path / "depth_backbone.onnx", tmp_path / "student.onnx"
     onnx.save(backbone, paths[0])
@@ -103,4 +109,65 @@ def test_a_student_whose_width_does_not_fit_is_rejected(tmp_path: Path) -> None:
     backbone_path, student_path = _write_pair(tmp_path, student_obs_dim=PROPRIO + LATENT + 1)
 
     with pytest.raises(ValueError, match="expected"):
+        _fuser().fuse(onnx.load(backbone_path), onnx.load(student_path))
+
+
+# The released PHP students record their terms in declaration order; current exports record them
+# sorted. Both consume them sorted.
+DECLARATION_ORDER = "robot_anchor_projected_gravity,base_ang_vel,dof_pos,dof_vel,actions,velocity_command,placeholder"
+SORTED_ORDER = "actions,base_ang_vel,dof_pos,dof_vel,robot_anchor_projected_gravity,velocity_command,placeholder"
+
+
+@pytest.mark.parametrize("names", [DECLARATION_ORDER, SORTED_ORDER])
+def test_recorded_term_names_are_consumed_sorted(tmp_path: Path, names: str) -> None:
+    fuser = _fuser()
+    backbone_path, student_path = _write_pair(tmp_path, observation_names=names)
+
+    fused = fuser.fuse(onnx.load(backbone_path), onnx.load(student_path))
+
+    fused_from = json.loads({p.key: p.value for p in fused.metadata_props}["fused_from"])
+    assert fused_from["student_obs_order"] == SORTED_ORDER.replace("placeholder", "depth_latent")
+    assert fused_from["student_obs_order_source"] == "observation_names, sorted"
+    terms = fuser.student_terms(onnx.load(student_path))[0]
+    assert np.array_equal(
+        fuser.contextual_to_training_order(JOINTS, terms=terms), fuser.contextual_to_training_order(JOINTS)
+    )
+
+
+def test_a_different_recorded_order_changes_the_gather(tmp_path: Path) -> None:
+    fuser = _fuser()
+    # Sorted, "a_projected_gravity" comes first: gravity, then actions, omega, q, dq, command.
+    names = "a_projected_gravity,base_ang_vel,dof_pos,dof_vel,actions,velocity_command,placeholder"
+    backbone_path, student_path = _write_pair(tmp_path, observation_names=names)
+    out = tmp_path / "contextual.onnx"
+    onnx.save(fuser.fuse(onnx.load(backbone_path), onnx.load(student_path)), out)
+
+    n = JOINTS
+    expected = [0, 1, 2, *range(6 + 2 * n, 6 + 3 * n), 3, 4, 5, *range(6, 6 + 2 * n), *range(6 + 3 * n, PROPRIO)]
+    terms = fuser.student_terms(onnx.load(student_path))[0]
+    assert fuser.contextual_to_training_order(n, terms=terms).tolist() == expected
+    assert fuser.check(backbone_path, student_path, out) == 0.0
+
+
+def test_without_term_names_the_usual_order_is_assumed_and_recorded(tmp_path: Path) -> None:
+    fuser = _fuser()
+    backbone_path, student_path = _write_pair(tmp_path)
+
+    fused = fuser.fuse(onnx.load(backbone_path), onnx.load(student_path))
+
+    fused_from = json.loads({p.key: p.value for p in fused.metadata_props}["fused_from"])
+    assert fused_from["student_obs_order_source"].startswith("assumed")
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        "base_ang_vel,dof_pos,dof_vel,actions,velocity_command,height_scan,placeholder",  # no contextual block
+        "projected_gravity,base_ang_vel,dof_pos,dof_vel,velocity_command,placeholder",  # a block missing
+    ],
+)
+def test_term_names_that_do_not_match_the_contextual_obs_are_rejected(tmp_path: Path, names: str) -> None:
+    backbone_path, student_path = _write_pair(tmp_path, observation_names=names)
+
+    with pytest.raises(ValueError, match="contextual"):
         _fuser().fuse(onnx.load(backbone_path), onnx.load(student_path))

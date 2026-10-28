@@ -4,10 +4,15 @@ holosoma_inference's native contextual policy (``ContextualPolicy`` / ``NativeCo
 runs one model with inputs ``obs [1, 6 + 3n + command_dim]`` and ``depth_image [1, T, H, W]`` and
 output ``actions [1, n]``. Its ``obs`` is ``[gravity | omega | q - default | dq | last action |
 command]``. A depth-distillation student pair instead runs the backbone on one depth frame and feeds
-the student ``[actions | ang_vel | dof_pos | dof_vel | projected_gravity | command | depth_latent]``
-(the training group's sorted term order). The fused graph reorders ``obs`` into that order, runs
-the backbone on the single depth frame, concatenates the latent and runs the student. Every term
-has the same meaning on both sides; only the order differs.
+the student its actor terms in the order the observation manager concatenates them (sorted by term
+name), then the depth latent. The fused graph reorders ``obs`` into that order, runs the backbone
+on the single depth frame, concatenates the latent and runs the student. Every term has the same
+meaning on both sides; only the order differs.
+
+The term names come from the student's ``observation_names`` metadata. Exporters wrote it either
+already sorted (``sorted(actor_terms) + ["placeholder"]``) or in declaration order, so the names are
+sorted here either way. Without that metadata the usual PHP student terms are assumed; ``fused_from``
+records which applied.
 
 Usage:
     python src/holosoma_inference/holosoma_cpp/scripts/fuse_depth_student_onnx.py \
@@ -25,16 +30,51 @@ import onnx
 from onnx import TensorProto, compose, helper, numpy_helper
 
 COMMAND_DIM = 15
+LATENT_TERM = "placeholder"  # the exporters' label for the appended depth latent
+ASSUMED_TERMS = ("actions", "base_ang_vel", "dof_pos", "dof_vel", "projected_gravity", "velocity_command")
 
 
-def contextual_to_training_order(num_joints: int, command_dim: int = COMMAND_DIM) -> np.ndarray:
-    """Indices that turn a contextual ``obs`` into the student's training order."""
+def _contextual_block(term: str) -> str:
+    """The contextual ``obs`` block a student actor term reads."""
+    if term.endswith("projected_gravity"):  # e.g. robot_anchor_projected_gravity
+        return "gravity"
+    blocks = {
+        "base_ang_vel": "omega",
+        "dof_pos": "q",
+        "dof_vel": "dq",
+        "actions": "action",
+        "velocity_command": "command",
+    }
+    if term not in blocks:
+        raise ValueError(f"Student observation term {term!r} has no counterpart in the contextual obs.")
+    return blocks[term]
+
+
+def student_terms(student: onnx.ModelProto) -> tuple[list[str], str]:
+    """The student's actor terms in the order it consumes them, and where that order came from."""
+    names = {p.key: p.value for p in student.metadata_props}.get("observation_names")
+    if not names:
+        return list(ASSUMED_TERMS), "assumed (no observation_names metadata)"
+    return sorted(t for t in names.split(",") if t and t != LATENT_TERM), "observation_names, sorted"
+
+
+def contextual_to_training_order(
+    num_joints: int, command_dim: int = COMMAND_DIM, terms: list[str] | tuple[str, ...] = ASSUMED_TERMS
+) -> np.ndarray:
+    """Indices that turn a contextual ``obs`` into the student's ``terms`` order."""
     n = num_joints
-    gravity, omega = np.arange(0, 3), np.arange(3, 6)
-    q, dq = np.arange(6, 6 + n), np.arange(6 + n, 6 + 2 * n)
-    action = np.arange(6 + 2 * n, 6 + 3 * n)
-    command = np.arange(6 + 3 * n, 6 + 3 * n + command_dim)
-    return np.concatenate([action, omega, q, dq, gravity, command]).astype(np.int64)
+    blocks = {
+        "gravity": np.arange(0, 3),
+        "omega": np.arange(3, 6),
+        "q": np.arange(6, 6 + n),
+        "dq": np.arange(6 + n, 6 + 2 * n),
+        "action": np.arange(6 + 2 * n, 6 + 3 * n),
+        "command": np.arange(6 + 3 * n, 6 + 3 * n + command_dim),
+    }
+    order = [_contextual_block(t) for t in terms]
+    if sorted(order) != sorted(blocks):
+        raise ValueError(f"Student terms {list(terms)} must read each contextual block exactly once.")
+    return np.concatenate([blocks[b] for b in order]).astype(np.int64)
 
 
 def _json_number_list(value: str) -> str:
@@ -67,6 +107,7 @@ def fuse(backbone: onnx.ModelProto, student: onnx.ModelProto, command_dim: int =
     actions = next(o for o in student.graph.output if o.name == "actions")
     num_joints = _dims(actions)[1]
     proprio_dim = 6 + 3 * num_joints + command_dim
+    terms, order_source = student_terms(student)
     if student_obs_dim != proprio_dim + latent_dim:
         raise ValueError(f"Student obs is {student_obs_dim} wide, expected {proprio_dim} + latent {latent_dim}.")
 
@@ -75,7 +116,7 @@ def fuse(backbone: onnx.ModelProto, student: onnx.ModelProto, command_dim: int =
     _, height, width = frame_shape
 
     initializers = [
-        numpy_helper.from_array(contextual_to_training_order(num_joints, command_dim), "fuse/obs_order"),
+        numpy_helper.from_array(contextual_to_training_order(num_joints, command_dim, terms), "fuse/obs_order"),
         numpy_helper.from_array(np.asarray(frame_shape, dtype=np.int64), "fuse/frame_shape"),
         *bb.graph.initializer,
         *st.graph.initializer,
@@ -105,13 +146,13 @@ def fuse(backbone: onnx.ModelProto, student: onnx.ModelProto, command_dim: int =
     fused = helper.make_model(graph, opset_imports=[helper.make_opsetid("", opset)])
     fused.ir_version = student.ir_version
     metadata = {p.key: _json_number_list(p.value) for p in student.metadata_props}
-    # The student's observation_names lists the training config's declaration order, not the order
-    # it consumed; record the fused input explicitly.
+    # The fused model reads the contextual obs; the student's own order is kept in fused_from.
     metadata["observation_names"] = "projected_gravity,base_ang_vel,dof_pos,dof_vel,actions,velocity_command"
     metadata["fused_from"] = json.dumps(
         {
             "backbone_input": bb_in.name,
-            "student_obs_order": "actions,base_ang_vel,dof_pos,dof_vel,projected_gravity,velocity_command,depth_latent",
+            "student_obs_order": ",".join([*terms, "depth_latent"]),
+            "student_obs_order_source": order_source,
             "latent_dim": latent_dim,
         }
     )
@@ -122,7 +163,11 @@ def fuse(backbone: onnx.ModelProto, student: onnx.ModelProto, command_dim: int =
 
 
 def check(backbone_path: Path, student_path: Path, fused_path: Path, trials: int = 32) -> float:
-    """Max abs action difference between the fused model and the pair run separately."""
+    """Max abs action difference between the fused model and the pair run separately.
+
+    The pair is fed in the same term order the fusion used, so this checks the fused graph, not the
+    order itself; that rests on ``observation_names`` (see the module docstring).
+    """
     import onnxruntime as ort
 
     bb = ort.InferenceSession(str(backbone_path))
@@ -130,7 +175,7 @@ def check(backbone_path: Path, student_path: Path, fused_path: Path, trials: int
     fused = ort.InferenceSession(str(fused_path))
     student_inputs = {i.name for i in st.get_inputs()}
     num_joints = st.get_outputs()[0].shape[1]
-    order = contextual_to_training_order(num_joints)
+    order = contextual_to_training_order(num_joints, terms=student_terms(onnx.load(str(student_path)))[0])
     height, width = bb.get_inputs()[0].shape[1:]
     rng = np.random.default_rng(0)
     worst = 0.0
