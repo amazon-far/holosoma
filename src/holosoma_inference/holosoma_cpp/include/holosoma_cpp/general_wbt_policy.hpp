@@ -50,6 +50,7 @@ class GeneralWBTPolicy : public BasePolicy {
 };
 
 // Build an inference-only configuration for a metadata-complete G1 checkpoint.
-InferenceConfig live_policy_config(const std::string& checkpoint, bool use_gpu = false, int intra_op_threads = 2);
+InferenceConfig live_policy_config(const std::string& checkpoint, Backend backend = Backend::kCpu,
+                                   int intra_op_threads = 2);
 
 }  // namespace holosoma

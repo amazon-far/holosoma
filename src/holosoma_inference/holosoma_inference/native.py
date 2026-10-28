@@ -22,7 +22,7 @@ def get_config(name: str) -> InferenceConfig:
     return copy.deepcopy(INFERENCE_REGISTRY[name.removeprefix("inference:")])
 
 
-def _native_config(config: InferenceConfig, *, use_gpu=False) -> str:
+def _native_config(config: InferenceConfig, *, backend="cpu") -> str:
     document = asdict(config)
     # Robot subclasses can carry SDK transport settings. The original config
     # remains available to the transport owner; only the common robot contract
@@ -36,7 +36,7 @@ def _native_config(config: InferenceConfig, *, use_gpu=False) -> str:
     for shortcut in ("use_keyboard", "use_joystick", "use_usb_joystick"):
         task[shortcut] = False
     task.get("debug", {})["record_rosbag"] = False
-    document["runtime"] = {"use_gpu": use_gpu}
+    document["runtime"] = {"backend": backend}
     return json.dumps(document)
 
 
@@ -48,7 +48,8 @@ class NativePolicy:
     Construction and stepping never initialize a robot SDK or send motor I/O.
     """
 
-    def __init__(self, config: InferenceConfig, *, use_gpu=False, autostart=True):
+    def __init__(self, config: InferenceConfig, *, backend="cpu", autostart=True):
+        """``backend`` is "cpu", "cuda" or "tensorrt"; a build without it raises rather than falls back."""
         from holosoma_inference import _native
 
         self.config = config
@@ -65,7 +66,7 @@ class NativePolicy:
                 resolved_path = str(load_checkpoint(None, resolved_path))
             resolved.append(resolved_path)
         native_config = replace(config, task=replace(config.task, model_path=resolved))
-        self._engine = _native.Policy.from_config(_native_config(native_config, use_gpu=use_gpu), autostart)
+        self._engine = _native.Policy.from_config(_native_config(native_config, backend=backend), autostart)
 
     def reset(self):
         with self._lock:

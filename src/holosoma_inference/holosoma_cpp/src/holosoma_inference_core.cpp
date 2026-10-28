@@ -177,7 +177,7 @@ bool WbtPolicy::IsWbtModelFile(const std::string &model_path) {
   return fs::is_regular_file(path, ec) && path.extension() == ".onnx";
 }
 
-bool WbtPolicy::Initialize(const std::string &model_path, bool use_gpu, int intra_op_threads) {
+bool WbtPolicy::Initialize(const std::string &model_path, holosoma::Backend backend, int intra_op_threads) {
   initialized_ = false;
   session_.reset();
   fk_body_.reset();
@@ -191,9 +191,8 @@ bool WbtPolicy::Initialize(const std::string &model_path, bool use_gpu, int intr
   }
 
   try {
-    auto session = std::make_shared<holosoma::OnnxModel>(model_path, use_gpu, intra_op_threads);
-    std::cout << "[WbtPolicy] inference provider: "
-              << (use_gpu ? "CUDAExecutionProvider (device 0)" : "CPUExecutionProvider") << std::endl;
+    auto session = std::make_shared<holosoma::OnnxModel>(model_path, backend, intra_op_threads);
+    std::cout << "[WbtPolicy] inference provider: " << session->provider() << std::endl;
     return Initialize(std::move(session));
   } catch (const std::exception &e) {
     std::cerr << "[WbtPolicy] failed to load " << model_path << ": " << e.what() << std::endl;
