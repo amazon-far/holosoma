@@ -820,7 +820,6 @@ class MotionCommand(CommandTermBase):
             # The teleport is an observation reset: drop history and re-render these envs.
             self._env.observation_manager.reset(ended_env_ids)
 
-        # 1. update body_pos_relative_w and body_quat_relative_w
         self.update_relative_body_targets()
 
         ### 1.3 update the adaptive timesteps sampler (training only — eval episodes

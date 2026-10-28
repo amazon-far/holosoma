@@ -265,7 +265,7 @@ def test_a_beating_render_cadence_misaligns_state_and_image() -> None:
     assert sim.drawn_at_egress == [3, 6, 12]  # frames close on substeps 4, 8, 12
 
 
-# ----- the loop's other per-backend and viewer branches -----
+# ----- the loop's state-sync and render branches -----
 
 
 @pytest.mark.parametrize("render_interval", [1, 2, DECIMATION])

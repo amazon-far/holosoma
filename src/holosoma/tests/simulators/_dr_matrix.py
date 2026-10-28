@@ -50,8 +50,8 @@ def build_full_env(simulator_cfg, *, num_envs: int, device: str, scene_cfg=None,
     Swaps the ``simulator`` (and optionally ``scene``) of the ``g1_29dof`` experiment preset and
     constructs the env through the production path (``cfg.create_task()``), so it has a real
     action_manager (with the ``joint_control`` term) and randomization_manager (push/actuator
-    states) wired exactly as training does. The
-    ``g1_29dof`` randomization preset already runs the setup DR terms during construction; this
+    states) wired exactly as training does. The ``g1_29dof`` randomization preset already runs the
+    setup DR terms during construction; this
     yields the built env (NO ``reset_all``) so the per-term checks can re-run each term with known
     ranges and read the result straight off the model.
 
@@ -73,7 +73,7 @@ def build_full_env(simulator_cfg, *, num_envs: int, device: str, scene_cfg=None,
     scene_cfg : SceneConfig | None
         Scene preset; defaults to ``free_and_static`` so object DR has a free body to target.
     """
-    # Imported lazily: importing config_values / train_agent pulls in the simulator stack, which
+    # Imported lazily: importing config_values pulls in the simulator stack, which
     # the per-backend launcher (isaacsim) must initialize before torch is imported.
     from holosoma.config_values import experiment
     from holosoma.utils.common import seeding

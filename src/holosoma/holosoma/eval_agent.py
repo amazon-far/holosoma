@@ -32,7 +32,6 @@ def run_eval_with_tyro(
     with tyro_config.create_task() as env:
         _run_eval_session(
             env,
-            env.device,
             tyro_config,
             checkpoint_cfg,
             saved_config=saved_config,
@@ -43,7 +42,6 @@ def run_eval_with_tyro(
 
 def _run_eval_session(
     env: Any,
-    device: str,
     tyro_config: ExperimentConfig,
     checkpoint_cfg: CheckpointConfig,
     *,
@@ -69,7 +67,7 @@ def _run_eval_session(
 
     algo_class = get_class(tyro_config.algo._target_)
     algo: BaseAlgo = algo_class(
-        device=device,
+        device=env.device,
         env=env,
         config=tyro_config.algo.config,
         log_dir=str(eval_log_dir),
