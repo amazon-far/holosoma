@@ -28,6 +28,7 @@ from holosoma.config_types.sensor import (
     MountKind,
     MujocoCameraConfig,
     MujocoLidarConfig,
+    RayCastDepthCameraConfig,
     SensorMountConfig,
     validate_camera_dict,
 )
@@ -329,6 +330,11 @@ def test_lidar_body_filter_is_backend_neutral_and_validated() -> None:
         LidarBodyFilterConfig(target_kind="robot", target="head_link")
     with pytest.raises(ValueError, match="non-empty name"):
         LidarBodyFilterConfig(target_kind="actor", target=" ")
+
+
+def test_raycast_depth_camera_rejects_non_link_mounts() -> None:
+    with pytest.raises(ValueError, match="robot links"):
+        RayCastDepthCameraConfig(mount=SensorMountConfig(target_kind="world"))
 
 
 # The camera-frame sink fields (cameras/modalities/record_video/...) live on CameraVizPluginConfig;

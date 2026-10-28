@@ -38,7 +38,7 @@ from holosoma.simulator.isaacsim.prim_utils import (
 )
 from holosoma.simulator.shared.lidar_range import finalize_lidar_returns
 from holosoma.simulator.shared.sensor_manager import SensorManager
-from holosoma.simulator.shared.warp_depth_camera import register_warp_depth_cameras
+from holosoma.simulator.shared.raycast_depth_camera import register_raycast_depth_cameras
 
 if TYPE_CHECKING:
     from holosoma.config_types.sensor import LidarRayPatternConfig, SensorMountConfig
@@ -483,7 +483,7 @@ def create_sensors(sim: IsaacSim) -> None:
     sim.sensor_manager = manager
     register_cameras(sim, manager)
     register_lidars(sim, manager)
-    register_warp_depth_cameras(sim, manager)
+    register_raycast_depth_cameras(sim, manager)
 
 
 def render_sensors(sim: IsaacSim) -> None:

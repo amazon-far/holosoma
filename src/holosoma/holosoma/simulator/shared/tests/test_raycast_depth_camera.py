@@ -1,4 +1,4 @@
-"""Warp depth camera geometry, self-occlusion, partial rendering, and the optical-frame convention.
+"""Ray-cast depth camera geometry, self-occlusion, partial rendering, and the optical-frame convention.
 
 Runs on the CPU Warp device against a fake simulator exposing only the state the camera reads.
 """
@@ -13,13 +13,9 @@ from typing import Any
 import numpy as np
 import pytest
 
-from holosoma.config_types.sensor import (
-    SensorMountConfig,
-    WarpDepthCameraConfig,
-    WarpDepthMountRandomizationConfig,
-)
+from holosoma.config_types.sensor import RayCastDepthCameraConfig, SensorMountConfig
+from holosoma.simulator.shared.raycast_depth_camera import register_raycast_depth_cameras
 from holosoma.simulator.shared.sensor_manager import SensorManager
-from holosoma.simulator.shared.warp_depth_camera import register_warp_depth_cameras
 from holosoma.utils.safe_torch_import import torch
 
 pytestmark = pytest.mark.no_sim
@@ -40,7 +36,7 @@ def _ground(size: float = 50.0) -> Any:
 class _FakeSim:
     """Robot links ``base`` (camera mount) and ``occluder``, over a ground plane at z = 0."""
 
-    def __init__(self, config: WarpDepthCameraConfig, base_height: float = 2.0) -> None:
+    def __init__(self, config: RayCastDepthCameraConfig, base_height: float = 2.0) -> None:
         self.num_envs = NUM_ENVS
         self.sim_device = "cpu"
         self.sensor_config = {"depth": config}
@@ -56,7 +52,7 @@ class _FakeSim:
         return LINKS.index(name)
 
 
-def _camera(tmp_path: Path, **overrides: Any) -> WarpDepthCameraConfig:
+def _camera(tmp_path: Path, **overrides: Any) -> RayCastDepthCameraConfig:
     box = tmp_path / "box.stl"
     if not box.exists():
         trimesh.creation.box(extents=[0.4, 0.4, 0.4]).export(box)
@@ -70,13 +66,13 @@ def _camera(tmp_path: Path, **overrides: Any) -> WarpDepthCameraConfig:
         "self_occlusion": {"occluder": str(box)},
     }
     fields.update(overrides)
-    return WarpDepthCameraConfig(**fields)
+    return RayCastDepthCameraConfig(**fields)
 
 
 def _render(sim: _FakeSim) -> tuple[torch.Tensor, Any, Any]:
     """Register the fake sim's camera, render one control step, and return (depth, record, camera)."""
     manager = SensorManager(device="cpu", control_hz=50.0)
-    cameras = register_warp_depth_cameras(sim, manager)  # type: ignore[arg-type]
+    cameras = register_raycast_depth_cameras(sim, manager)  # type: ignore[arg-type]
     record = manager.get("depth")
     manager.render_shared()
     return record.buffers["depth"][..., 0], record, cameras["depth"]
@@ -86,6 +82,13 @@ def test_ground_plane_parallel_to_the_image_plane_has_constant_depth(tmp_path: P
     depth, _, _ = _render(_FakeSim(_camera(tmp_path), base_height=2.0))
 
     assert depth.shape == (NUM_ENVS, 12, 16)
+    torch.testing.assert_close(depth, torch.full_like(depth, 2.0), atol=1e-4, rtol=0.0)
+
+
+@pytest.mark.parametrize(("width", "height"), [(15, 11), (16, 11)])
+def test_odd_image_sizes_measure_depth_to_the_image_plane(tmp_path: Path, width: int, height: int) -> None:
+    depth, _, _ = _render(_FakeSim(_camera(tmp_path, width=width, height=height), base_height=2.0))
+
     torch.testing.assert_close(depth, torch.full_like(depth, 2.0), atol=1e-4, rtol=0.0)
 
 
@@ -149,42 +152,37 @@ def test_partial_rerender_updates_only_the_requested_envs(tmp_path: Path) -> Non
 
 def test_shared_cameras_are_not_returned_to_backend_render_loops(tmp_path: Path) -> None:
     manager = SensorManager(device="cpu", control_hz=50.0)
-    register_warp_depth_cameras(_FakeSim(_camera(tmp_path)), manager)  # type: ignore[arg-type]
+    register_raycast_depth_cameras(_FakeSim(_camera(tmp_path)), manager)  # type: ignore[arg-type]
 
     assert manager.collect_due() == []
     assert manager.has_camera("depth")
 
 
-def test_mount_randomization_stays_within_bounds(tmp_path: Path) -> None:
-    randomization = WarpDepthMountRandomizationConfig(
-        position_min=[-0.1, -0.1, -0.1],
-        position_max=[0.1, 0.1, 0.1],
-        euler_deg_min=[-5.0, -5.0, -5.0],
-        euler_deg_max=[5.0, 5.0, 5.0],
-    )
-    torch.manual_seed(0)
-    sim = _FakeSim(_camera(tmp_path, mount_randomization=randomization), base_height=2.0)
-    _, record, camera = _render(sim)
+@pytest.mark.parametrize("before_first_render", [True, False])
+def test_mount_offsets_move_and_tilt_the_camera_per_env(tmp_path: Path, before_first_render: bool) -> None:
+    sim = _FakeSim(_camera(tmp_path), base_height=2.0)
+    manager = SensorManager(device="cpu", control_hz=50.0)
+    camera = register_raycast_depth_cameras(sim, manager)["depth"]  # type: ignore[arg-type]
+    record = manager.get("depth")
+    position = torch.zeros(NUM_ENVS, 3)
+    euler = torch.zeros(NUM_ENVS, 3)
+    position[0, 2] = 0.1  # env 0 raised 10 cm
+    euler[1, 0] = math.radians(20.0)  # env 1 tilted about the link's +X
+    if not before_first_render:
+        manager.render_shared()
 
-    offsets = camera._cam_pos - sim.rigid_body_pos_w[:, 0]
-    assert torch.all(offsets.abs() <= 0.1 + 1e-6)
-    assert not torch.allclose(offsets[0], offsets[1])
-    # The principal ray reaches the ground at the perturbed height over the cosine of the tilt,
-    # which two 5 deg rotations bound by about 7.1 deg.
+    camera.set_mount_offset(position, euler)
+    manager.render_shared()
     center = record.buffers["depth"][:, 6, 8, 0]
-    assert torch.all((center >= 1.9 - 1e-4) & (center <= 2.1 / math.cos(math.radians(7.1))))
+
+    assert center[0].item() == pytest.approx(2.1, abs=1e-4)
+    assert center[1].item() == pytest.approx(2.0 / math.cos(math.radians(20.0)), abs=1e-3)
+    assert center[2].item() == pytest.approx(2.0, abs=1e-4)
 
 
-def test_config_rejects_non_link_mounts() -> None:
-    with pytest.raises(ValueError, match="robot links"):
-        WarpDepthCameraConfig(mount=SensorMountConfig(target_kind="world"))
+def test_mount_offsets_must_cover_every_env(tmp_path: Path) -> None:
+    sim = _FakeSim(_camera(tmp_path))
+    camera = register_raycast_depth_cameras(sim, SensorManager(device="cpu", control_hz=50.0))["depth"]  # type: ignore[arg-type]
 
-
-def test_g1_head_preset_meshes_are_shipped() -> None:
-    from holosoma.config_values.sensor import SENSOR_REGISTRY
-    from holosoma.utils.path import resolve_data_file_path
-
-    preset = SENSOR_REGISTRY["g1-head-d435i-depth"]
-    assert isinstance(preset, WarpDepthCameraConfig)
-    for link, mesh in preset.self_occlusion.items():
-        assert Path(resolve_data_file_path(mesh)).is_file(), (link, mesh)
+    with pytest.raises(ValueError, match="Mount offsets"):
+        camera.set_mount_offset(torch.zeros(1, 3), torch.zeros(1, 3))
