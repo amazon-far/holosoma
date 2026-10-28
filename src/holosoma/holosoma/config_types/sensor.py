@@ -661,7 +661,7 @@ class LidarSensorConfig:
 
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)
-class WarpDepthCameraConfig:
+class RayCastDepthCameraConfig:
     """A pinhole depth camera ray cast with Warp, identically on every simulator backend.
 
     Rays hit the terrain mesh and, for self-occlusion, the meshes of the robot links listed in
@@ -712,27 +712,27 @@ class WarpDepthCameraConfig:
         return ["depth"]
 
     @model_validator(mode="after")
-    def validate_camera(self) -> WarpDepthCameraConfig:
+    def validate_camera(self) -> RayCastDepthCameraConfig:
         """Validate resolution, field of view, range, cadence, and mount target."""
         if self.width <= 0 or self.height <= 0:
-            raise ValueError(f"WarpDepthCameraConfig needs positive width/height, got {self.width}x{self.height}.")
+            raise ValueError(f"RayCastDepthCameraConfig needs positive width/height, got {self.width}x{self.height}.")
         if not math.isfinite(self.vertical_fov) or not 0.0 < self.vertical_fov < 180.0:
             raise ValueError(
-                f"WarpDepthCameraConfig.vertical_fov must be finite and in (0, 180), got {self.vertical_fov}."
+                f"RayCastDepthCameraConfig.vertical_fov must be finite and in (0, 180), got {self.vertical_fov}."
             )
         if not math.isfinite(self.near) or self.near < 0.0:
-            raise ValueError(f"WarpDepthCameraConfig.near must be finite and >= 0, got {self.near}.")
+            raise ValueError(f"RayCastDepthCameraConfig.near must be finite and >= 0, got {self.near}.")
         if not math.isfinite(self.far) or self.far <= self.near:
-            raise ValueError(f"WarpDepthCameraConfig.far must be finite and > near, got {self.near}..{self.far}.")
-        validate_decimation_like(self.update_decimation, field="WarpDepthCameraConfig update_decimation")
+            raise ValueError(f"RayCastDepthCameraConfig.far must be finite and > near, got {self.near}..{self.far}.")
+        validate_decimation_like(self.update_decimation, field="RayCastDepthCameraConfig update_decimation")
         if self.mount.target_kind != "robot_link":
             raise ValueError(
-                f"WarpDepthCameraConfig only mounts on robot links, got target_kind='{self.mount.target_kind}'."
+                f"RayCastDepthCameraConfig only mounts on robot links, got target_kind='{self.mount.target_kind}'."
             )
         return self
 
 
-SensorConfig = CameraSensorConfig | LidarSensorConfig | WarpDepthCameraConfig
+SensorConfig = CameraSensorConfig | LidarSensorConfig | RayCastDepthCameraConfig
 
 
 def validate_camera_dict(cameras: dict[str, CameraSensorConfig]) -> None:

@@ -15,7 +15,7 @@ from holosoma.config_types.sensor import (
     IsaacSimCameraConfig,
     IsaacSimFisheyeConfig,
     LidarSensorConfig,
-    WarpDepthCameraConfig,
+    RayCastDepthCameraConfig,
 )
 from holosoma.config_values.sensor import SENSOR_REGISTRY
 from holosoma.utils.config_registry import parse_config
@@ -179,6 +179,6 @@ def test_cli_configures_lidar_viz_saved_scan_selection() -> None:
 
 def test_g1_head_depth_preset_meshes_are_shipped() -> None:
     preset = SENSOR_REGISTRY["g1-head-d435i-depth"]
-    assert isinstance(preset, WarpDepthCameraConfig)
+    assert isinstance(preset, RayCastDepthCameraConfig)
     for link, mesh in preset.self_occlusion.items():
         assert Path(resolve_data_file_path(mesh)).is_file(), (link, mesh)

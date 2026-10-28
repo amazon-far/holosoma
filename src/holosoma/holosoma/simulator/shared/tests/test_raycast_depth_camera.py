@@ -1,4 +1,4 @@
-"""Warp depth camera geometry, self-occlusion, partial rendering, and the optical-frame convention.
+"""Ray-cast depth camera geometry, self-occlusion, partial rendering, and the optical-frame convention.
 
 Runs on the CPU Warp device against a fake simulator exposing only the state the camera reads.
 """
@@ -13,9 +13,9 @@ from typing import Any
 import numpy as np
 import pytest
 
-from holosoma.config_types.sensor import SensorMountConfig, WarpDepthCameraConfig
+from holosoma.config_types.sensor import RayCastDepthCameraConfig, SensorMountConfig
+from holosoma.simulator.shared.raycast_depth_camera import register_raycast_depth_cameras
 from holosoma.simulator.shared.sensor_manager import SensorManager
-from holosoma.simulator.shared.warp_depth_camera import register_warp_depth_cameras
 from holosoma.utils.safe_torch_import import torch
 
 pytestmark = pytest.mark.no_sim
@@ -36,7 +36,7 @@ def _ground(size: float = 50.0) -> Any:
 class _FakeSim:
     """Robot links ``base`` (camera mount) and ``occluder``, over a ground plane at z = 0."""
 
-    def __init__(self, config: WarpDepthCameraConfig, base_height: float = 2.0) -> None:
+    def __init__(self, config: RayCastDepthCameraConfig, base_height: float = 2.0) -> None:
         self.num_envs = NUM_ENVS
         self.sim_device = "cpu"
         self.sensor_config = {"depth": config}
@@ -52,7 +52,7 @@ class _FakeSim:
         return LINKS.index(name)
 
 
-def _camera(tmp_path: Path, **overrides: Any) -> WarpDepthCameraConfig:
+def _camera(tmp_path: Path, **overrides: Any) -> RayCastDepthCameraConfig:
     box = tmp_path / "box.stl"
     if not box.exists():
         trimesh.creation.box(extents=[0.4, 0.4, 0.4]).export(box)
@@ -66,13 +66,13 @@ def _camera(tmp_path: Path, **overrides: Any) -> WarpDepthCameraConfig:
         "self_occlusion": {"occluder": str(box)},
     }
     fields.update(overrides)
-    return WarpDepthCameraConfig(**fields)
+    return RayCastDepthCameraConfig(**fields)
 
 
 def _render(sim: _FakeSim) -> tuple[torch.Tensor, Any, Any]:
     """Register the fake sim's camera, render one control step, and return (depth, record, camera)."""
     manager = SensorManager(device="cpu", control_hz=50.0)
-    cameras = register_warp_depth_cameras(sim, manager)  # type: ignore[arg-type]
+    cameras = register_raycast_depth_cameras(sim, manager)  # type: ignore[arg-type]
     record = manager.get("depth")
     manager.render_shared()
     return record.buffers["depth"][..., 0], record, cameras["depth"]
@@ -152,7 +152,7 @@ def test_partial_rerender_updates_only_the_requested_envs(tmp_path: Path) -> Non
 
 def test_shared_cameras_are_not_returned_to_backend_render_loops(tmp_path: Path) -> None:
     manager = SensorManager(device="cpu", control_hz=50.0)
-    register_warp_depth_cameras(_FakeSim(_camera(tmp_path)), manager)  # type: ignore[arg-type]
+    register_raycast_depth_cameras(_FakeSim(_camera(tmp_path)), manager)  # type: ignore[arg-type]
 
     assert manager.collect_due() == []
     assert manager.has_camera("depth")
@@ -162,7 +162,7 @@ def test_shared_cameras_are_not_returned_to_backend_render_loops(tmp_path: Path)
 def test_mount_offsets_move_and_tilt_the_camera_per_env(tmp_path: Path, before_first_render: bool) -> None:
     sim = _FakeSim(_camera(tmp_path), base_height=2.0)
     manager = SensorManager(device="cpu", control_hz=50.0)
-    camera = register_warp_depth_cameras(sim, manager)["depth"]  # type: ignore[arg-type]
+    camera = register_raycast_depth_cameras(sim, manager)["depth"]  # type: ignore[arg-type]
     record = manager.get("depth")
     position = torch.zeros(NUM_ENVS, 3)
     euler = torch.zeros(NUM_ENVS, 3)
@@ -182,7 +182,7 @@ def test_mount_offsets_move_and_tilt_the_camera_per_env(tmp_path: Path, before_f
 
 def test_mount_offsets_must_cover_every_env(tmp_path: Path) -> None:
     sim = _FakeSim(_camera(tmp_path))
-    camera = register_warp_depth_cameras(sim, SensorManager(device="cpu", control_hz=50.0))["depth"]  # type: ignore[arg-type]
+    camera = register_raycast_depth_cameras(sim, SensorManager(device="cpu", control_hz=50.0))["depth"]  # type: ignore[arg-type]
 
     with pytest.raises(ValueError, match="Mount offsets"):
         camera.set_mount_offset(torch.zeros(1, 3), torch.zeros(1, 3))

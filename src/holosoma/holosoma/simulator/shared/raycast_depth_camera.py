@@ -1,6 +1,6 @@
-"""Warp ray-cast depth camera, rendered the same way on every simulator backend.
+"""Ray-cast depth camera, rendered with Warp the same way on every simulator backend.
 
-A :class:`~holosoma.config_types.sensor.WarpDepthCameraConfig` camera casts one ray per pixel
+A :class:`~holosoma.config_types.sensor.RayCastDepthCameraConfig` camera casts one ray per pixel
 against the terrain mesh and against the meshes of selected robot links at their current
 poses (self-occlusion). It reads only backend-neutral simulator state -- ``rigid_body_pos_w``,
 ``rigid_body_quat_w`` (xyzw), ``find_rigid_body_indice`` and the terrain term's
@@ -21,7 +21,7 @@ import numpy as np
 import trimesh
 import warp as wp
 
-from holosoma.config_types.sensor import WarpDepthCameraConfig
+from holosoma.config_types.sensor import RayCastDepthCameraConfig
 from holosoma.utils.path import resolve_data_file_path
 from holosoma.utils.rotations import quat_apply, quat_from_euler_xyz, quat_mul
 from holosoma.utils.safe_torch_import import torch
@@ -110,15 +110,15 @@ def _render_depth_kernel(
     depth[env, y, x] = best
 
 
-class WarpDepthCamera:
-    """Renders one :class:`WarpDepthCameraConfig` camera into its sensor record.
+class RayCastDepthCamera:
+    """Renders one :class:`RayCastDepthCameraConfig` camera into its sensor record.
 
     Simulator state it needs (body indices, terrain mesh) is resolved on the first render, when
     every backend has finished building its scene. Per-env mount offsets come from a
     randomization setup term through :meth:`set_mount_offset`.
     """
 
-    def __init__(self, sim: BaseSimulator, config: WarpDepthCameraConfig) -> None:
+    def __init__(self, sim: BaseSimulator, config: RayCastDepthCameraConfig) -> None:
         self.sim = sim
         self.config = config
         self.device = str(sim.sim_device)
@@ -160,7 +160,7 @@ class WarpDepthCamera:
         terrain_mesh = getattr(terrain, "warp_mesh", None)
         if terrain_mesh is None:
             raise RuntimeError(
-                f"WarpDepthCamera needs a terrain term with a 'warp_mesh'; got {type(terrain).__name__}."
+                f"RayCastDepthCamera needs a terrain term with a 'warp_mesh'; got {type(terrain).__name__}."
             )
         self._terrain_mesh = terrain_mesh
 
@@ -255,11 +255,11 @@ class WarpDepthCamera:
             record.set_buffer_rows("depth", long_ids, self._image[long_ids].unsqueeze(-1))
 
 
-def register_warp_depth_cameras(sim: BaseSimulator, manager: SensorManager) -> dict[str, WarpDepthCamera]:
-    """Register every configured :class:`WarpDepthCameraConfig` camera with ``manager``."""
-    cameras: dict[str, WarpDepthCamera] = {}
+def register_raycast_depth_cameras(sim: BaseSimulator, manager: SensorManager) -> dict[str, RayCastDepthCamera]:
+    """Register every configured :class:`RayCastDepthCameraConfig` camera with ``manager``."""
+    cameras: dict[str, RayCastDepthCamera] = {}
     for name, config in sim.sensor_config.items():
-        if isinstance(config, WarpDepthCameraConfig):
-            cameras[name] = WarpDepthCamera(sim, config)
+        if isinstance(config, RayCastDepthCameraConfig):
+            cameras[name] = RayCastDepthCamera(sim, config)
             manager.register_shared_camera(name, config, cameras[name].render).camera = cameras[name]
     return cameras

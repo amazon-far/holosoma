@@ -21,8 +21,8 @@ from holosoma.config_types.sensor import (
     GridLidarRayPatternConfig,
     LidarRayPatternConfig,
     LidarSensorConfig,
+    RayCastDepthCameraConfig,
     SensorMountConfig,
-    WarpDepthCameraConfig,
 )
 from holosoma.simulator.shared.lidar_sensor import LidarPatternProvider
 from holosoma.simulator.shared.sensor_manager import SensorManager
@@ -247,7 +247,7 @@ def test_shared_cameras_render_on_their_cadence_and_rerender_requested_envs() ->
         calls.append(env_ids)
         record.set_buffer("depth", torch.full((2, 1, 1, 1), math.inf))
 
-    config = WarpDepthCameraConfig(mount=_MOUNT, far=3.0, depth_clipping_behavior="max", update_decimation=2)
+    config = RayCastDepthCameraConfig(mount=_MOUNT, far=3.0, depth_clipping_behavior="max", update_decimation=2)
     sm = SensorManager(device="cpu", control_hz=100.0)
     record = sm.register_shared_camera("depth", config, render)
 

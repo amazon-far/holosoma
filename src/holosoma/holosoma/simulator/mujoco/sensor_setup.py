@@ -16,7 +16,7 @@ from holosoma.config_types.sensor import (
     DEFAULT_MUJOCO_LIDAR_GEOM_GROUPS,
     CameraSensorConfig,
     LidarSensorConfig,
-    WarpDepthCameraConfig,
+    RayCastDepthCameraConfig,
 )
 from holosoma.simulator.mujoco.backends import WarpBackend
 from holosoma.simulator.mujoco.geom_groups import (
@@ -369,11 +369,11 @@ def create_sensors(sim: MuJoCo) -> None:
     sim.sensor_manager = manager
     register_cameras(sim, manager)
     register_lidars(sim, manager)
-    if any(isinstance(config, WarpDepthCameraConfig) for config in sim.sensor_config.values()):
+    if any(isinstance(config, RayCastDepthCameraConfig) for config in sim.sensor_config.values()):
         # Imported here: Warp is optional for the classic backend, and only these cameras need it.
-        from holosoma.simulator.shared.warp_depth_camera import register_warp_depth_cameras
+        from holosoma.simulator.shared.raycast_depth_camera import register_raycast_depth_cameras
 
-        register_warp_depth_cameras(sim, manager)
+        register_raycast_depth_cameras(sim, manager)
 
 
 def render_sensors(sim: MuJoCo) -> None:

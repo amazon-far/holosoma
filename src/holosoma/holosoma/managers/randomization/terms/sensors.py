@@ -24,7 +24,7 @@ def setup_depth_camera_mount(
 
     ``position_range`` and ``euler_deg_range`` give one config range value (a ``[lo, hi]`` pair or a
     spec dict) per axis: ``[x, y, z]`` position offsets in meters and XYZ Euler offsets in degrees, in
-    the mount-link frame (see ``WarpDepthCamera.set_mount_offset``). ``sensor`` is the camera's key in
+    the mount-link frame (see ``RayCastDepthCamera.set_mount_offset``). ``sensor`` is the camera's key in
     the ``--sensor`` dict.
     """
     if not enabled:

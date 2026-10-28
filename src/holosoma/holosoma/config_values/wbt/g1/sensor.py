@@ -16,8 +16,8 @@ from __future__ import annotations
 
 from holosoma.config_types.sensor import (
     CameraSensorConfig,
+    RayCastDepthCameraConfig,
     SensorMountConfig,
-    WarpDepthCameraConfig,
 )
 
 # Egocentric head camera (torso-frame z~=0.41), looking forward and upright.
@@ -148,7 +148,7 @@ _G1_SELF_OCCLUSION = {
 # ``g1_head_d435i_mount_setup_terms`` randomization setup term.
 # ``near=0`` keeps returns closer than the D435i's 0.3 m working range so preprocessing can clamp
 # them to it, as the hardware pipeline does.
-g1_head_d435i_depth = WarpDepthCameraConfig(
+g1_head_d435i_depth = RayCastDepthCameraConfig(
     mount=SensorMountConfig(
         target_kind="robot_link",
         target="torso_link",
