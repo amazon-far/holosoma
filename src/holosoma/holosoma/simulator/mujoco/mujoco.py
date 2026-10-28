@@ -432,7 +432,8 @@ class MuJoCo(BaseSimulator):
         self.dof_qpos_addrs, self.dof_qvel_addrs = resolve_dof_addresses(
             self.root_model, self.dof_names, self.clean_to_prefixed_names
         )
-        self.backend.configure_dof_refresh(self.dof_qpos_addrs, self.dof_qvel_addrs)
+        self._dof_qpos_ids_t = torch.tensor(self.dof_qpos_addrs, dtype=torch.long, device=self.sim_device)
+        self._dof_qvel_ids_t = torch.tensor(self.dof_qvel_addrs, dtype=torch.long, device=self.sim_device)
         self._dof_actuator_ids = resolve_dof_actuator_ids(self.root_model, self.dof_names, self.clean_to_prefixed_names)
         self._dof_actuator_ids_t = torch.tensor(self._dof_actuator_ids, dtype=torch.long, device=self.sim_device)
         logger.info("=== Robot joint addressing setup completed ===")
@@ -913,10 +914,15 @@ class MuJoCo(BaseSimulator):
         """Copy the backend's robot DOF state into ``dof_pos``/``dof_vel``/``dof_acc`` (robot_config order)."""
         if self.num_dof == 0:
             return
-        positions, velocities, accelerations = self.backend.refresh_dof_states()
-        self.dof_pos.copy_(positions)
-        self.dof_vel.copy_(velocities)
-        self.dof_acc.copy_(accelerations)
+        if isinstance(self.backend, WarpBackend):
+            self.dof_pos.copy_(self.backend.qpos_t[:, self._dof_qpos_ids_t])
+            self.dof_vel.copy_(self.backend.qvel_t[:, self._dof_qvel_ids_t])
+            self.dof_acc.copy_(self.backend.qacc_t[:, self._dof_qvel_ids_t])
+        else:
+            assert self.root_data
+            self.dof_pos.copy_(torch.from_numpy(self.root_data.qpos[self.dof_qpos_addrs]))
+            self.dof_vel.copy_(torch.from_numpy(self.root_data.qvel[self.dof_qvel_addrs]))
+            self.dof_acc.copy_(torch.from_numpy(self.root_data.qacc[self.dof_qvel_addrs]))
 
     def forward_kinematics(self) -> None:
         """Recompute body/geom/camera poses from written state (classic: ``mj_forward``; warp:

@@ -96,27 +96,17 @@ class BasicSdk2Bridge(ABC):
         if not bridge_cfg.controlled_dof_names and not bridge_cfg.excluded_dof_names:
             return list(range(simulator.num_dof))
 
-        dof_names = list(simulator.dof_names)
-        name_to_idx = {n: i for i, n in enumerate(dof_names)}
-
-        indices: list[int] = []
         if bridge_cfg.controlled_dof_names:
-            missing: list[str] = []
-            for name in bridge_cfg.controlled_dof_names:
-                idx = name_to_idx.get(name)
-                (indices.append(idx) if idx is not None else missing.append(name))
-            if missing:
-                raise ValueError(
-                    f"bridge.controlled_dof_names {missing} not in the loaded robot (dof_names={dof_names})."
-                )
+            try:
+                indices = simulator.dof_indices(bridge_cfg.controlled_dof_names)
+            except ValueError as exc:
+                raise ValueError(f"bridge.controlled_dof_names: {exc}") from exc
         else:  # excluded_dof_names (controlled empty, but not both — the both-empty case returned above)
-            excluded = set(bridge_cfg.excluded_dof_names)
-            unknown = excluded - set(name_to_idx)
-            if unknown:
-                raise ValueError(
-                    f"bridge.excluded_dof_names {sorted(unknown)} not in the loaded robot (dof_names={dof_names})."
-                )
-            indices = [i for i, n in enumerate(dof_names) if n not in excluded]
+            try:
+                excluded = set(simulator.dof_indices(bridge_cfg.excluded_dof_names))
+            except ValueError as exc:
+                raise ValueError(f"bridge.excluded_dof_names: {exc}") from exc
+            indices = [i for i in range(simulator.num_dof) if i not in excluded]
 
         if not indices:
             raise ValueError("bridge DOF subset resolved to empty; nothing to control.")

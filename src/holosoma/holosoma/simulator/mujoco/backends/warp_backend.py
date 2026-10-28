@@ -721,14 +721,6 @@ class WarpBackend(IMujocoBackend):
             num_envs=self.num_envs,
         )
 
-    def refresh_dof_states(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Gather robot DOF state from the full-model GPU tensors."""
-        return (
-            self.qpos_t[:, self._dof_qpos_ids_t],
-            self.qvel_t[:, self._dof_qvel_ids_t],
-            self.qacc_t[:, self._dof_qvel_ids_t],
-        )
-
     def get_applied_forces_view(self) -> torch.Tensor:
         """Get writable view for external applied forces (GPU tensor).
 

@@ -111,33 +111,33 @@ def main() -> int:
     # 2. STATE
     defaults = {name: robot.init_state.default_joint_angles[name] for name in robot.dof_names}
     zero_vel = dict.fromkeys(robot.dof_names, 0.0)
-    sim.set_dof_state_by_name(None, defaults, zero_vel)
+    sim.set_dof_state_by_names(None, defaults, zero_vel)
     baseline = _body_positions(sim)
     for joint, moves, stays in STATE_CASES:
         target = defaults[joint] + JOINT_OFFSET
-        sim.set_dof_state_by_name(None, {joint: target})
+        sim.set_dof_state_by_names(None, {joint: target})
         delta = (_body_positions(sim) - baseline).norm(dim=-1)  # [num_envs, num_bodies]
         moved = delta[:, sim.find_rigid_body_indice(moves)]
         still = delta[:, sim.find_rigid_body_indice(stays)]
-        read_back = sim.get_dof_state_by_name([joint])[joint][0]
+        read_back = sim.get_dof_state_by_names([joint])[joint][0]
         print(f"  STATE {joint}: {moves} moved {moved.tolist()}, {stays} moved {still.tolist()}")
         if not bool((moved > 1e-2).all()) or not bool((still < 1e-4).all()):
             failures.append(f"setting {joint} moved the wrong bodies")
         if not torch.allclose(read_back, torch.full_like(read_back, target), atol=1e-5):
             failures.append(f"{joint} read back {read_back.tolist()}, wrote {target}")
-        sim.set_dof_state_by_name(None, {joint: defaults[joint]})
+        sim.set_dof_state_by_names(None, {joint: defaults[joint]})
 
     # 3. TORQUE
     for joint in TORQUE_JOINTS:
-        sim.set_dof_state_by_name(None, defaults, zero_vel)
+        sim.set_dof_state_by_names(None, defaults, zero_vel)
         for _ in range(TORQUE_STEPS):
             sim.apply_torques_at_dof(torch.zeros(num_envs, sim.num_dof, device=sim.sim_device))
-            sim.apply_torques_by_name({joint: TORQUE})
+            sim.apply_torques_by_names({joint: TORQUE})
             step(sim, 1)
         sim.refresh_sim_tensors()
         velocities = sim.dof_vel.abs()
         fastest = [sim.dof_names[i] for i in velocities.argmax(dim=-1).tolist()]
-        joint_vel = sim.get_dof_state_by_name([joint])[joint][1]
+        joint_vel = sim.get_dof_state_by_names([joint])[joint][1]
         print(f"  TORQUE {joint}: fastest DOF per env {fastest}, its velocity {joint_vel.tolist()}")
         if any(name != joint for name in fastest) or not bool((joint_vel > 0).all()):
             failures.append(f"torque on {joint} did not drive {joint}")

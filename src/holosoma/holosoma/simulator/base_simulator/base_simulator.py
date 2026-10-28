@@ -562,7 +562,7 @@ class BaseSimulator:
             raise ValueError(f"Unknown DOF names {unknown}; the robot's DOFs are {self.dof_names}")
         return [index[name] for name in names]
 
-    def get_dof_state_by_name(
+    def get_dof_state_by_names(
         self, names: Sequence[str] | None = None, env_ids: EnvIds | None = None
     ) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
         """Return ``{joint_name: (position, velocity)}``, each a ``[len(env_ids)]`` tensor.
@@ -577,7 +577,7 @@ class BaseSimulator:
         positions, velocities = self.dof_pos[rows][:, cols], self.dof_vel[rows][:, cols]
         return {name: (positions[:, i], velocities[:, i]) for i, name in enumerate(names)}
 
-    def set_dof_state_by_name(
+    def set_dof_state_by_names(
         self,
         env_ids: EnvIds | None,
         positions: Mapping[str, float | torch.Tensor],
@@ -597,7 +597,7 @@ class BaseSimulator:
                 target[env_ids, col] = torch.as_tensor(value, dtype=target.dtype, device=target.device)
         self.set_dof_state_tensor(env_ids)
 
-    def apply_torques_by_name(self, torques: Mapping[str, float | torch.Tensor]) -> None:
+    def apply_torques_by_names(self, torques: Mapping[str, float | torch.Tensor]) -> None:
         """Apply torques to the named DOFs only (see :meth:`apply_torques_at_dof` with ``dof_indices``).
 
         Args:

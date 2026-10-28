@@ -315,19 +315,6 @@ class ClassicBackend(IMujocoBackend):
             device=self.device,
         )
 
-    def configure_dof_refresh(self, qpos_addrs: list[int], qvel_addrs: list[int]) -> None:
-        """Store robot DOF addresses in holosoma DOF order."""
-        self._dof_qpos_ids = np.array(qpos_addrs, dtype=np.intp)
-        self._dof_qvel_ids = np.array(qvel_addrs, dtype=np.intp)
-
-    def refresh_dof_states(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Gather robot DOF state from the CPU data arrays."""
-        return (
-            torch.from_numpy(self.data.qpos[self._dof_qpos_ids]).unsqueeze(0).to(self.device, torch.float32),
-            torch.from_numpy(self.data.qvel[self._dof_qvel_ids]).unsqueeze(0).to(self.device, torch.float32),
-            torch.from_numpy(self.data.qacc[self._dof_qvel_ids]).unsqueeze(0).to(self.device, torch.float32),
-        )
-
     def get_applied_forces_view(self) -> npt.NDArray[Any]:
         """Get writable view for external applied forces.
 

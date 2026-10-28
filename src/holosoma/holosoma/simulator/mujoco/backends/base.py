@@ -316,20 +316,6 @@ class IMujocoBackend(abc.ABC):
             angular_vel[:, body_ids],
         )
 
-    def configure_dof_refresh(self, qpos_addrs: list[int], qvel_addrs: list[int]) -> None:
-        """Configure extraction for robot DOFs in holosoma DOF order."""
-        self._dof_qpos_ids_t = torch.tensor(qpos_addrs, dtype=torch.long, device=self.device)
-        self._dof_qvel_ids_t = torch.tensor(qvel_addrs, dtype=torch.long, device=self.device)
-
-    @abc.abstractmethod
-    def refresh_dof_states(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Return robot DOF ``(positions, velocities, accelerations)`` in holosoma DOF order.
-
-        Each tensor is ``[num_envs, num_dof]``, gathered at the addresses passed to
-        :meth:`configure_dof_refresh`.
-        """
-        ...
-
     def initialize_state(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
         """Sync CPU initial state to backend storage after construction.
 
