@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 from typing import cast
 
@@ -31,13 +32,15 @@ def test_classic_backend_allocates_and_closes_native_renderer() -> None:
     backend._closed = False
     backend._cam_ids = {}
     backend._mj_renderers = {}
+    backend._cam_sizes = {}
+    backend._cam_data_types = {}
     camera = SimpleNamespace(
         name="head",
         config=SimpleNamespace(data_types=("rgb",), height=1080, width=1920),
     )
 
     backend.create_renderers([cast("CameraRecord", camera)])
-    renderer = backend._mj_renderers["head"]["rgb"]
+    renderer = backend._mj_renderers[(threading.get_ident(), "head", "rgb")]
     assert model.vis.global_.offwidth == 1920
     assert model.vis.global_.offheight == 1080
 

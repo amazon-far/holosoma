@@ -27,6 +27,7 @@ from typing import Any, Literal
 from pydantic import ConfigDict, field_validator, model_validator
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
+from holosoma.config_types.depth import DepthProcessingConfig
 from holosoma.config_types.frequency import DecimationLike, validate_decimation_like
 from holosoma.config_types.value_types import UnitQuaternionWXYZ
 
@@ -604,6 +605,67 @@ class FrameWriterPluginConfig(PluginConfig):
             )
         if not 1 <= self.jpeg_quality <= 100:
             raise ValueError(f"FrameWriterPluginConfig.jpeg_quality must be in [1, 100], got {self.jpeg_quality}.")
+        return self
+
+
+@pydantic_dataclass(frozen=True, config=_FORBID_EXTRA)
+class DepthShmPluginConfig(PluginConfig):
+    """Publish one camera's preprocessed depth to shared memory for a policy process (sim-to-sim).
+
+    Each frame is transformed with ``processing`` -- the same
+    :mod:`holosoma.utils.depth_processing` transform depth observation terms use in training --
+    so the policy reads the exact tensor its depth backbone was trained on, shaped
+    ``[1, 1, height, width]`` float32. Shared memory rather than a ROS2 topic because the
+    consumer runs on the same host at the control rate: no serialization and no per-frame
+    allocation. A zmq heartbeat after every write lets the consumer tell a stalled producer from
+    a live one.
+
+    Renders on its own thread at ``render_hz``, off the physics loop, which is only safe on the
+    MuJoCo ClassicBackend.
+    """
+
+    camera: str = ""
+    """Name of the configured depth camera to publish. Required."""
+
+    env_id: int = 0
+    """Which environment's view to publish."""
+
+    processing: DepthProcessingConfig = field(default_factory=lambda: DepthProcessingConfig(resize=[58, 87]))
+    """Depth preprocessing; must match the training term's ``processing``. ``resize`` is required."""
+
+    shm_name: str = "depth_img_shm"
+    """Shared-memory block name; the consumer attaches by this name."""
+
+    heartbeat: bool = True
+    """Publish a liveness heartbeat after every frame write."""
+
+    heartbeat_endpoint: str = ""
+    """zmq endpoint of the heartbeat; empty uses ``ipc:///tmp/<shm_name>.heartbeat``."""
+
+    render_hz: float = 10.0
+    """Rate of the render thread in Hz, independent of the control rate (D435i publishes at 10)."""
+
+    latency_frames: int = 0
+    """Publish the frame this many renders old, modeling camera and transport delay."""
+
+    def get_cls(self) -> Callable[..., Any]:
+        # Deferred import: keeps torch out of CLI-build import.
+        from holosoma.simulator.plugins.depth_shm_plugin import DepthShmPlugin
+
+        return DepthShmPlugin
+
+    @model_validator(mode="after")
+    def validate_depth_shm(self) -> DepthShmPluginConfig:
+        if not self.camera:
+            raise ValueError("DepthShmPluginConfig.camera must name a configured camera.")
+        if self.processing.resize is None:
+            raise ValueError("DepthShmPluginConfig.processing.resize must give the backbone's [height, width].")
+        if self.env_id < 0:
+            raise ValueError(f"DepthShmPluginConfig.env_id must be >= 0, got {self.env_id}.")
+        if not self.render_hz > 0:
+            raise ValueError(f"DepthShmPluginConfig.render_hz must be > 0, got {self.render_hz}.")
+        if self.latency_frames < 0:
+            raise ValueError(f"DepthShmPluginConfig.latency_frames must be >= 0, got {self.latency_frames}.")
         return self
 
 
