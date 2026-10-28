@@ -37,6 +37,18 @@ def contextual_to_training_order(num_joints: int, command_dim: int = COMMAND_DIM
     return np.concatenate([action, omega, q, dq, gravity, command]).astype(np.int64)
 
 
+def _json_number_list(value: str) -> str:
+    """A comma-separated number list as a JSON list; other values unchanged.
+
+    The exported students write ``action_scale``, ``kp`` and ``kd`` as ``"1.0,1.0,..."``; the contextual
+    kernel reads those keys as JSON lists.
+    """
+    try:
+        return json.dumps([float(v) for v in value.split(",") if v.strip()]) if "," in value else value
+    except ValueError:
+        return value
+
+
 def _dims(value_info: onnx.ValueInfoProto) -> list[int]:
     return [d.dim_value for d in value_info.type.tensor_type.shape.dim]
 
@@ -92,7 +104,7 @@ def fuse(backbone: onnx.ModelProto, student: onnx.ModelProto, command_dim: int =
     opset = max(o.version for o in [*backbone.opset_import, *student.opset_import] if o.domain in ("", "ai.onnx"))
     fused = helper.make_model(graph, opset_imports=[helper.make_opsetid("", opset)])
     fused.ir_version = student.ir_version
-    metadata = {p.key: p.value for p in student.metadata_props}
+    metadata = {p.key: _json_number_list(p.value) for p in student.metadata_props}
     # The student's observation_names lists the training config's declaration order, not the order
     # it consumed; record the fused input explicitly.
     metadata["observation_names"] = "projected_gravity,base_ang_vel,dof_pos,dof_vel,actions,velocity_command"

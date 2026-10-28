@@ -1,6 +1,7 @@
 """fuse_depth_student_onnx: a backbone + student pair becomes one contextual ONNX with the same actions."""
 
 import importlib.util
+import json
 from pathlib import Path
 
 import numpy as np
@@ -85,6 +86,7 @@ def test_fused_model_reproduces_the_pair_on_the_contextual_contract(tmp_path: Pa
     assert [o.name for o in fused.graph.output] == ["actions"]
     metadata = {p.key: p.value for p in fused.metadata_props}
     assert metadata["joint_names"] == "a,b,c" and "fused_from" in metadata
+    assert json.loads(metadata["action_scale"]) == [1.0, 1.0, 1.0]  # the kernel reads number lists as JSON
     assert fuser.check(backbone_path, student_path, out) == 0.0
 
 
