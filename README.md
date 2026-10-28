@@ -26,6 +26,7 @@ src/
 - **[Training Guide](src/holosoma/README.md)** - Train locomotion and whole-body tracking policies in IsaacSim/MJWarp
 - **[Inference & Deployment Guide](src/holosoma_inference/README.md)** - Deploy policies to real robots or evaluate in MuJoCo simulation
 - **[Retargeting Guide](src/holosoma_retargeting/holosoma_retargeting/README.md)** - Convert human motion capture data to robot motions
+- **[Robot SDK Bridges](src/holosoma/holosoma/bridge/README.md)** - Choose a bridge and tune sim-to-sim transport performance
 
 ## Quick Start
 

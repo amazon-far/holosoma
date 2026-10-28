@@ -22,7 +22,8 @@ class RobotBridgeConfig:
     'unitree_mp' runs the Unitree SDK's C++/CycloneDDS binding in a spawned child process so it never
     shares the simulator's address space. Select it when this process also loads rclpy (a ROS2 sensor
     egress): the Unitree SDK's bundled CycloneDDS heap-corrupts if it coexists with rclpy's CycloneDDS
-    in one process. Otherwise 'unitree' (in-process) is fine."""
+    in one process. Otherwise prefer 'unitree' (in-process): it is the same behaviour without the
+    blocking parent/child round trip each transport update costs. See ``holosoma/bridge/README.md``."""
 
     motor_type: str = "serial"
     """Motor communication type ('serial', etc.)."""

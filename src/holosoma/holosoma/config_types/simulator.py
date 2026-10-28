@@ -236,7 +236,11 @@ class BridgeConfig:
     transport_decimation: DecimationLike = 1
     """SDK transport cadence. ``1`` exchanges data every physics step; an integer exchanges it every
     Nth step. Frequency strings such as ``"50Hz"`` are resolved against the physics rate. This
-    setting does not change the torque-control cadence."""
+    setting does not change the torque-control cadence.
+
+    The default exchanges on every physics step (200 Hz at ``sim.fps 200``). Raising it is the
+    bridge's largest performance setting, traded against state freshness. See
+    ``holosoma/bridge/README.md``."""
 
     # ROS settings
     use_ros: bool = False
@@ -247,7 +251,11 @@ class BridgeConfig:
 
     On by default so the sim feeds base odometry through the Unitree SDK bridge
     (so a downstream telemetry read_odom_state -> /telemetry/odom is identical to hardware). Only
-    SDKs with a base-state channel act on it; others (booster) treat publish_odom as a no-op."""
+    SDKs with a base-state channel act on it; others (booster) treat publish_odom as a no-op.
+
+    Set it False when nothing reads rt/odommodestate. The DDS write is the cheap part; the
+    simulator state read and world->body conversion in front of it are the cost. See
+    ``holosoma/bridge/README.md``."""
 
     dds_config: str | None = None
     """Complete inline CycloneDDS XML for unitree_mp on SDK domain 0 only.
