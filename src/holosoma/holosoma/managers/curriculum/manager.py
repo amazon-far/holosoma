@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import ItemsView
+from collections.abc import ItemsView, Mapping
 from typing import Any
+
+from loguru import logger
 
 from holosoma.config_types.curriculum import CurriculumManagerCfg, CurriculumTermCfg
 from holosoma.managers.utils import resolve_callable
@@ -172,3 +174,16 @@ class CurriculumManager:
     def iter_terms(self) -> ItemsView[str, CurriculumTermBase]:
         """Iterate over registered class-based curriculum terms."""
         return self._class_terms.items()
+
+    def state_dict(self) -> dict[str, dict[str, Any]]:
+        """Collect checkpoint state from class-based terms by name; terms with no state are left out."""
+        return {name: s for name, term in self._class_terms.items() if (s := term.state_dict())}
+
+    def load_state_dict(self, state: Mapping[str, dict[str, Any]]) -> None:
+        """Restore term state returned by :meth:`state_dict`."""
+        for name, term_state in state.items():
+            term = self._class_terms.get(name)
+            if term is None:
+                logger.warning(f"Checkpoint has curriculum state for unknown term '{name}'; ignoring it.")
+                continue
+            term.load_state_dict(term_state)

@@ -66,3 +66,13 @@ class CurriculumTermBase(ABC):
         - Monitoring progress
         - Triggering adaptive changes
         """
+
+    def state_dict(self) -> dict[str, Any]:
+        """Return state to persist in checkpoints; empty for stateless terms.
+
+        Values should be CPU tensors or Python scalars so checkpoints load on any device.
+        """
+        return {}
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:  # noqa: B027 - stateless terms have nothing to restore.
+        """Restore state returned by :meth:`state_dict`."""
