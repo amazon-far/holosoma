@@ -39,13 +39,13 @@ def test_clips_beyond_the_trained_range():
     assert out.max() <= +0.5 + 1e-6
 
 
-def test_non_finite_pixels_read_as_far_not_as_holes():
-    """The SDK emits NaN/inf for no-return; the policy never saw holes."""
+def test_non_finite_pixels_are_filled_by_their_cause():
+    """NaN is an unresolved pixel, which is the robot's own body; +inf is a genuine no-return."""
     frame = np.full((HEIGHT, WIDTH), 1.0, np.float32)
     frame[0, 0], frame[0, 1] = np.nan, np.inf
     out = preprocess(frame)
     assert np.isfinite(out).all()
-    assert out[0, 0] == pytest.approx(+0.5)
+    assert out[0, 0] == pytest.approx(-0.5)
     assert out[0, 1] == pytest.approx(+0.5)
 
 
@@ -98,13 +98,13 @@ def test_rejects_padded_rows():
         frame_from_image(_Image(np.ones((4, 4), np.float32), step=64))
 
 
-def test_zero_and_negative_read_as_far_not_near():
-    """The ZED reports invalid pixels as 0 as well as NaN; clipping would read 0 as an obstacle."""
+def test_zero_and_negative_read_as_near():
+    """The ZED reports an unresolved pixel as 0 as well as NaN, so both get the same fill."""
     frame = np.full((HEIGHT, WIDTH), 1.0, np.float32)
     frame[0, 0], frame[0, 1] = 0.0, -1.0
     out = preprocess(frame)
-    assert out[0, 0] == pytest.approx(+0.5)
-    assert out[0, 1] == pytest.approx(+0.5)
+    assert out[0, 0] == pytest.approx(-0.5)
+    assert out[0, 1] == pytest.approx(-0.5)
 
 
 def test_accepts_a_trailing_singleton_channel():

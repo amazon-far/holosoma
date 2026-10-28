@@ -30,13 +30,14 @@ def preprocess(depth_m, near_m: float = NEAR_M, far_m: float = FAR_M) -> np.ndar
     if not far_m > near_m:
         raise ValueError(f"far_m must exceed near_m, got {near_m} and {far_m}")
     frame = frame.astype(np.float32, copy=True)
-    # Invalid pixels mean "no return", which is far, not near. The ZED reports them as non-finite
-    # *and* as zero or negative, and clipping a zero would read as an obstacle at the near plane.
-    # Training never saw either: a missed ray is written as 1000 m and clamps to far.
-    frame[np.isneginf(frame)] = near_m
+    # Unresolved pixels read as near, not as clear space: NaN and zero mark what the stereo
+    # matcher could not resolve, which is the robot's own body and depth edges. Training raycast
+    # the 29 body meshes, so a near return there is what the encoder saw. Only +inf is a genuine
+    # "nothing out there", matching training's 1000 m miss sentinel clamping to far.
     frame[np.isposinf(frame)] = far_m
-    frame[np.isnan(frame)] = far_m
-    frame[frame <= 0.0] = far_m
+    frame[np.isneginf(frame)] = near_m
+    frame[np.isnan(frame)] = near_m
+    frame[frame <= 0.0] = near_m
     # Clip before resizing as well as after, so out-of-range pixels cannot bleed into their
     # neighbours through the interpolation kernel.
     frame = np.clip(frame, near_m, far_m)
@@ -68,7 +69,14 @@ class DepthConsumer:
     extra, and ``preprocess`` is useful without it.
     """
 
-    def __init__(self, policy, topic: str = DEPTH_TOPIC, *, near_m: float = NEAR_M, far_m: float = FAR_M):
+    def __init__(
+        self,
+        policy,
+        topic: str = DEPTH_TOPIC,
+        *,
+        near_m: float = NEAR_M,
+        far_m: float = FAR_M,
+    ):
         import rclpy
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.node import Node
@@ -77,6 +85,9 @@ class DepthConsumer:
 
         self._policy = policy
         self._near_m, self._far_m = near_m, far_m
+        # Asked of the policy, not configured: a graph that preprocesses internally wants the
+        # driver's frame untouched, and nothing should be able to disagree with the graph.
+        self._raw = getattr(policy, "expects_raw_depth", False)
         self.frames = 0
         self.rejected = 0
         if not rclpy.ok():
@@ -96,7 +107,9 @@ class DepthConsumer:
         self._topic = topic
 
     def _on_depth(self, msg) -> None:
-        frame = preprocess(frame_from_image(msg), self._near_m, self._far_m)
+        frame = frame_from_image(msg)
+        if not self._raw:
+            frame = preprocess(frame, self._near_m, self._far_m)
         if self._policy.set_depth(frame, stamp_seconds(msg)):
             self.frames += 1
         else:
