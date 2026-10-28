@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Mapping, overload
+from typing import Any, Literal, overload
 
-from typing_extensions import Literal, Self
+from typing_extensions import Self
 
 from holosoma.config_types.frequency import DecimationLike, is_frequency_string, resolve_decimation
 

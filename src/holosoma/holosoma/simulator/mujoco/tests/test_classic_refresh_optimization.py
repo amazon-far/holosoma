@@ -136,7 +136,7 @@ def test_batched_body_refresh_preserves_order_quaternions_and_velocity_calls(
 
     assert [object_id for _, object_id in calls] == body_ids
     assert all(object_type == mujoco.mjtObj.mjOBJ_XBODY for object_type, _ in calls)
-    for actual_tensor, expected_tensor in zip(actual, expected):
+    for actual_tensor, expected_tensor in zip(actual, expected, strict=False):
         assert torch.equal(actual_tensor[0].float(), expected_tensor)
     assert backend.refresh_rigid_body_states() is actual
 
@@ -190,7 +190,7 @@ def test_contact_accumulation_preserves_float32_order_and_signs(monkeypatch: pyt
 
     actual = backend.compute_contact_forces()[0]
     expected = torch.zeros(backend.model.nbody, 3, dtype=torch.float32)
-    for geom_pair, force_64 in zip(geom_pairs, forces):
+    for geom_pair, force_64 in zip(geom_pairs, forces, strict=False):
         force_32 = torch.from_numpy(force_64).float()
         body_1, body_2 = backend.model.geom_bodyid[geom_pair]
         expected[body_1] -= force_32
@@ -252,24 +252,19 @@ class _RefreshStub:
         self._rigid_body_vel = torch.zeros(1, len(body_ids), 3)
         self._rigid_body_ang_vel = torch.zeros(1, len(body_ids), 3)
         self.contact_forces = torch.zeros(1, len(body_ids), 3)
-        self.contact_forces_history = torch.arange(
-            9 * len(body_ids),
-            dtype=torch.float32,
-        ).reshape(1, 3, len(body_ids), 3)
+
+    def flush_external_wrench(self) -> None:
+        pass
 
 
-def test_live_refresh_matches_legacy_state_contacts_and_history() -> None:
+def test_live_refresh_matches_legacy_body_state() -> None:
     backend = _backend(_CONTACT_MJCF)
     mujoco.mj_step(backend.model, backend.data)
     assert backend.data.ncon == 3
     body_ids = [2, 1]
     backend.configure_rigid_body_refresh(body_ids)
     expected_state = _legacy_body_state(backend, body_ids)
-    expected_full_forces = _legacy_contact_forces(backend)
     sim = _RefreshStub(backend, body_ids)
-    old_history = sim.contact_forces_history.clone()
-    expected_contacts = expected_full_forces[:, sim._body_ids_t]
-    expected_history = torch.cat([expected_contacts.unsqueeze(1), old_history[:, :-1]], dim=1)
 
     MuJoCo.refresh_sim_tensors(cast("MuJoCo", sim))
 
@@ -279,9 +274,23 @@ def test_live_refresh_matches_legacy_state_contacts_and_history() -> None:
         sim._rigid_body_vel,
         sim._rigid_body_ang_vel,
     )
-    for actual, expected in zip(actual_state, expected_state):
+    for actual, expected in zip(actual_state, expected_state, strict=False):
         assert torch.equal(actual[0], expected)
+    assert all(tensor.dtype == torch.float32 for tensor in actual_state)
+
+
+def test_step_gathers_robot_contact_rows() -> None:
+    """The gather runs inside _step_dynamics, so the forces are the ones the step just produced."""
+    backend = _backend(_CONTACT_MJCF)
+    body_ids = [2, 1]
+    backend.configure_rigid_body_refresh(body_ids)
+    sim = _RefreshStub(backend, body_ids)
+
+    MuJoCo._step_dynamics(cast("MuJoCo", sim))
+
+    assert backend.data.ncon == 3
+    expected_contacts = _legacy_contact_forces(backend)[:, sim._body_ids_t]
+    assert torch.count_nonzero(expected_contacts) > 0
     assert torch.equal(sim.contact_forces, expected_contacts)
-    assert torch.equal(sim.contact_forces_history, expected_history)
-    assert all(tensor.dtype == torch.float32 for tensor in (*actual_state, sim.contact_forces))
+    assert sim.contact_forces.dtype == torch.float32
     assert sim.contact_forces.device.type == "cpu"

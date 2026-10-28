@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Literal
 
 from pydantic.dataclasses import dataclass
@@ -81,82 +82,11 @@ class Ros2DepthConsumerConfig:
 
 
 @dataclass(frozen=True)
-class DepthShmConfig:
-    """Shared-memory transport for depth frames produced by an external server.
-
-    The producer (e.g. the MuJoCo image server) creates a POSIX shared-memory
-    block holding a float32 array of shape
-    ``(num_cameras, 1, resized_height, resized_width)`` with already
-    resized/clipped/normalized depth. The policy attaches read-only and polls it
-    each control tick, so there is no serialization or IPC cost in the loop.
-
-    Preferred over :class:`Ros2DepthConsumerConfig` for sim-to-sim on one host:
-    no ROS2 dependency and no per-frame copy over a socket.
-    """
-
-    name: str = "depth_img_shm"
-    """Shared-memory block name, must match the producer's."""
-
-    required: bool = True
-    """Fail policy startup if the block is absent.
-
-    ``False`` substitutes zero frames and logs a warning, which lets the policy
-    run without a depth producer (useful for smoke-testing the control loop).
-    """
-
-    heartbeat: bool = True
-    """Follow the producer's liveness heartbeat and stop the policy if depth goes stale.
-
-    Producers that do not publish one keep working; the policy logs one warning
-    and leaves liveness unchecked."""
-
-    heartbeat_endpoint: str = ""
-    """zmq endpoint of the heartbeat. Empty uses ``ipc:///tmp/<name>.heartbeat``."""
-
-    stale_warn_s: float = 0.25
-    """Warn once the depth frame has not advanced for this many seconds.
-
-    Must exceed the producer's frame period: the D435i (and the sim plugin's default
-    ``render_hz``) publishes at 10 Hz, so a healthy stream already goes 0.1 s between
-    frames. 0.25 s is about 2.5 missed frames."""
-
-    stale_stop_s: float = 0.5
-    """Enter stiff hold once the depth frame has not advanced for this many seconds
-    (5 missed frames at 10 Hz), or as soon as the producer reports FAILED. The
-    operator resumes with ``]``."""
-
-
-@dataclass(frozen=True)
 class TaskConfig:
     """Task execution configuration for policy inference."""
 
     model_path: str | list[str]
-    """Path to ONNX model(s). Supports local paths and wandb:// URIs. Required field.
-
-    Most policies take a single path. Composite policies take an ordered list of
-    the models they compose — e.g. depth distillation takes exactly
-    ``[depth_backbone.onnx, student.onnx]``. This differs from the multi-policy
-    case, where a list means several independently switchable policies.
-    """
-
-    policy_type: str = ""
-    """Explicit policy class selector, resolved against the
-    ``holosoma.policies.by_type`` entry-point group. Empty means infer the class
-    from the observation/robot heuristic."""
-
-    depth_shm: DepthShmConfig = DepthShmConfig()
-    """Shared-memory depth transport (used when the policy consumes depth
-    images and no ROS2 depth consumer is configured)."""
-
-    record_dir: str = ""
-    """Subdirectory under ``recorded_motion/`` for saved motion clips.
-
-    Empty means ``"default_run"``. Recording is armed with the ``c`` key while
-    the policy is running, not by setting this field."""
-
-    record_label: str = "clip"
-    """Filename label for recorded clips. Clips are written to
-    ``recorded_motion/<record_dir>/<record_label>_duration<X.X>s_motion.npz``."""
+    """Path to ONNX model(s). Supports local paths and wandb:// URIs. Required field."""
 
     rl_rate: float = 50
     """Policy inference rate in Hz."""
@@ -237,6 +167,21 @@ class TaskConfig:
     use_sim_time: bool = False
     """Use synchronized simulation time for WBT policies."""
 
+    wbt_history_initialization: Literal["repeat_first_valid_obs", "zero_pad"] = "repeat_first_valid_obs"
+    """Metadata-driven (live) WBT only: how an empty history is filled until it holds history_length frames.
+
+    ``repeat_first_valid_obs`` repeats the first valid, fully built observation term;
+    ``zero_pad`` fills the missing slots with zeros. This runtime setting overrides the
+    checkpoint's declared mode, and the difference is logged at load. Embedded-motion WBT and
+    locomotion presets ignore it: their observation history is always zero-padded."""
+
+    startup_state_timeout: float = 30.0
+    """Seconds the SDK runner waits for its first valid robot state before failing.
+
+    Until the robot (or simulator) publishes a finite state with a nonzero orientation,
+    the runner neither infers nor sends commands. Allow for robot/DDS discovery time.
+    Once a valid state has been received, an invalid state is an error, not a wait."""
+
     # Deprecation candidates:
     desired_base_height: float = 0.75
     """Target base height in meters."""
@@ -258,6 +203,8 @@ class TaskConfig:
 
     def __post_init__(self):
         """Resolve use_keyboard/use_joystick/use_usb_joystick shortcuts into velocity_input/state_input."""
+        if not math.isfinite(self.startup_state_timeout) or self.startup_state_timeout <= 0:
+            raise ValueError("--task.startup-state-timeout must be a finite number of seconds greater than 0")
         active_shortcuts = [
             name
             for name, enabled in (
@@ -288,7 +235,9 @@ class TaskConfig:
 
         if shortcut is not None:
             has_custom_input = self.velocity_input != DEFAULT_VELOCITY_INPUT or self.state_input != DEFAULT_STATE_INPUT
-            if has_custom_input:
+            # dataclasses.replace() re-runs this on an already-resolved config.
+            already_resolved = self.velocity_input == shortcut and self.state_input == shortcut
+            if has_custom_input and not already_resolved:
                 raise ValueError(
                     f"Cannot combine --task.use-{flag_name} with --task.velocity-input or "
                     "--task.state-input. Use either the shortcut flag or the individual "

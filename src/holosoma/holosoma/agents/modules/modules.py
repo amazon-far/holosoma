@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import inspect
-from typing import TYPE_CHECKING, Sequence, cast
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, cast
 
 import torch
 from torch import nn

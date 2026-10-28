@@ -12,7 +12,8 @@ single-world model across environments and are a no-op for the single-env Classi
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Literal, cast
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import mujoco
 import torch
@@ -31,8 +32,10 @@ def repeat_array_kernel(
     dst: wp.array(dtype=Any),  # type: ignore[valid-type]
 ) -> None:
     """Warp kernel to repeat array elements across worlds."""
+    # 1-D launch, so wp.tid() is the scalar-int member of Warp's stubbed return union; mypy cannot
+    # narrow it, hence the operator ignore (comment-only — the Warp DSL rejects cast()).
     tid = wp.tid()
-    src_idx = tid % nelems_per_world
+    src_idx = tid % nelems_per_world  # type: ignore[operator]
     dst[tid] = src[src_idx]
 
 

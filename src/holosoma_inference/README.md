@@ -11,7 +11,6 @@ Policy inference for humanoid robot policies.
 
 | Simulator               | Locomotion | WBT |
 |:-----------------------:|:----------:|:---:|
-| IsaacGym                | ✅         | ❌  |
 | IsaacSim                | ✅         | ✅  |
 | MuJoCo (inference only) | ✅         | ✅  |
 
@@ -19,8 +18,10 @@ Policy inference for humanoid robot policies.
 - 🚧 (in progress/partial support)
 - ❌ (no support)
 
-A native C++ runtime with the same presets, command line and controls is available for the G1 in
-[`holosoma_cpp`](holosoma_cpp/README.md).
+Built-in Python policies and `run_policy` use the shared native C++ engine.
+The [in-process library guide](docs/native-library.md) covers the device-free
+Python API, explicit transport injection, live-reference WBT, and CMake consumers.
+The standalone C++ executable remains in [`holosoma_cpp`](holosoma_cpp/README.md).
 
 ## Quick Start
 
@@ -43,7 +44,6 @@ Select the appropriate workflow guide based on your setup:
 #### Simulation (MuJoCo)
 - **[Sim-to-Sim Locomotion](docs/workflows/sim-to-sim-locomotion.md)** - Test locomotion policies in MuJoCo simulation
 - **[Sim-to-Sim Whole Body Tracking](docs/workflows/sim-to-sim-wbt.md)** - Test WBT policies in MuJoCo simulation
-- **[Sim-to-Sim Depth Locomotion](docs/workflows/sim-to-sim-depth-locomotion.md)** - Test depth-based locomotion policies in MuJoCo simulation
 
 Each workflow guide includes:
 - Hardware/environment setup instructions

@@ -22,7 +22,6 @@ including BOTH ``"robot"`` and the free object, in EVERY env:
      the robot (the object is untouched).
   7. UNIFIED set_actor_states — set_actor_states(["robot", "freebox"], ...) (the method, not the
      proxy) writes robot AND object uniformly in WORLD frame; both move, no origin double-count.
-     This is the path the old IsaacGym "Cannot set 'robot' state" guard rejected.
   8. WORLD-FRAME VELOCITY ROUND-TRIP — a known world-frame LINEAR and ANGULAR velocity written via
      set_actor_states reads back (after a few free-flight cache-refresh steps; x/y conserved, z by
      gravity) through get_actor_states for robot AND object. Guards the freejoint
@@ -34,7 +33,7 @@ Exits 0 on success, non-zero with a message on failure. Run under each backend's
 Usage:
   python all_root_states_unified_assert.py --simulator mujoco                 # ClassicBackend, 1 env, cpu
   python all_root_states_unified_assert.py --simulator mjwarp   --num-envs 4  # WarpBackend, cuda
-  python all_root_states_unified_assert.py --simulator isaacgym --num-envs 4  # IsaacGym, cuda
+  python all_root_states_unified_assert.py --simulator isaacsim --num-envs 4  # IsaacSim, cuda
   python all_root_states_unified_assert.py --simulator isaacsim --num-envs 4  # IsaacSim, cuda
 """
 
@@ -61,7 +60,7 @@ from tests.simulators.static_move_assert import (
 POS_ATOL = 2e-2  # world-position tolerance (m)
 QUAT_ATOL = 2e-2  # quaternion-component tolerance
 # Steps to advance after a write before reading back. MuJoCo (mj_forward in write_state_updates)
-# and IsaacGym (the read tensor is the live buffer) reflect writes immediately; IsaacSim refreshes
+# (the read tensor is the live buffer) reflect writes immediately; IsaacSim refreshes
 # its read cache (.data.root_state_w) from PhysX on a sim step. A zero-velocity body drifts
 # ~5e-4 m over 2 steps, well within POS_ATOL.
 STEPS_AFTER_WRITE = 2
@@ -69,7 +68,7 @@ STEPS_AFTER_WRITE = 2
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Unified all_root_states (robot+object) probe.")
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacgym", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
     parser.add_argument("--num-envs", type=int, default=None)
     args = parser.parse_args()
     num_envs = args.num_envs if args.num_envs is not None else (1 if args.simulator == "mujoco" else 4)
@@ -199,7 +198,7 @@ def main() -> int:
     # ---- 7. UNIFIED set_actor_states(robot + object) ---------------------------------------
     # The unified set_actor_states method (NOT the proxy) must accept the ROBOT alongside an
     # object in one name-major call and write both straight through in WORLD frame. This is the
-    # path the old IsaacGym "Cannot set 'robot' state" guard rejected; it now writes the robot's
+    # the robot is just another actor here; it writes the robot's
     # world state straight to the world-frame buffer (no env_origins re-add), exactly like an
     # object. Pose round-trip catches an origin double-count / robot-vs-object asymmetry.
     base = sim.get_actor_states(names, env_ids).clone()  # name-major: [robot envs..., freebox envs...]
@@ -231,9 +230,9 @@ def main() -> int:
     # conversion FOR THE ROBOT, not just objects.
     #
     # Read-back timing (verified on-cluster, all 4 backends):
-    #   - MuJoCo (classic + warp) and IsaacGym reflect a set_actor_states velocity write IMMEDIATELY
+    #   - MuJoCo (classic + warp) reflects a set_actor_states velocity write IMMEDIATELY
     #     (pre-step) for BOTH robot and object — so we read back with no step and compare EXACTLY,
-    #     no dynamics/gravity drift to mask a frame bug. (Note: IsaacGym has a known one-step read
+    #     no dynamics/gravity drift to mask a frame bug. (Note: some backends have a one-step read
     #     latency where a free object's velocity transiently reads 0 at exactly step 1 then recovers
     #     from step 2 — irrelevant here since we read pre-step, but it's why we do NOT step on the
     #     immediate path.)
@@ -266,7 +265,7 @@ def main() -> int:
         lin_z_ok = bool(((vel_back[:, 9] <= 1e-3) & (vel_back[:, 9] >= -max_z_drop)).all())
         robot_lin_ok = torch.allclose(vel_back[:num_envs, 7:9], world_lin[:2].expand(num_envs, 2), atol=LIN_ATOL)
     else:
-        # MuJoCo (classic + warp) and IsaacGym reflect the velocity write IMMEDIATELY -> read back
+        # MuJoCo (classic + warp) reflects the velocity write IMMEDIATELY -> read back
         # with NO step and require the write to round-trip EXACTLY (no dynamics/gravity to mask a bug).
         LIN_ATOL, ANG_ATOL = 1e-3, 1e-3
         vel_back = sim.get_actor_states(names, env_ids)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterator
+from collections.abc import Iterator
 
 import torch
 from torch import Tensor
@@ -104,7 +104,9 @@ class RolloutStorage:
         """Clear the buffer and reset the step counter."""
         self.step = 0
 
-    def mini_batch_generator(self, num_mini_batches: int, num_epochs: int = 8) -> Iterator[dict[str, Tensor]]:
+    def mini_batch_generator(
+        self, num_mini_batches: int, num_epochs: int = 8, reshuffle_each_epoch: bool = False
+    ) -> Iterator[dict[str, Tensor]]:
         """Generate randomized mini-batches for training.
 
         This flattens the time and environment dimensions and creates random mini-batches.
@@ -112,6 +114,8 @@ class RolloutStorage:
         Args:
             num_mini_batches: Number of mini-batches to create per epoch
             num_epochs: Number of times to iterate over the data
+            reshuffle_each_epoch: Draw a new permutation at the start of every epoch
+                instead of reusing the first one for all epochs
 
         Yields:
             Dictionary mapping buffer keys to mini-batch tensors
@@ -125,7 +129,9 @@ class RolloutStorage:
         # Flatten all buffers: [num_transitions_per_env, num_envs, ...] -> [batch_size, ...]
         flattened = {key: buf.flatten(0, 1) for key, buf in self._buffers.items()}
 
-        for _ in range(num_epochs):
+        for epoch in range(num_epochs):
+            if epoch > 0 and reshuffle_each_epoch:
+                indices = torch.randperm(num_mini_batches * mini_batch_size, requires_grad=False, device=self.device)
             for i in range(num_mini_batches):
                 start = i * mini_batch_size
                 end = (i + 1) * mini_batch_size

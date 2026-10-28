@@ -73,7 +73,6 @@ jobs:
     uses: ./.github/workflows/test-images.yaml
     with:
       combined_image: ${{ vars.ECR_REGISTRY }}/holosoma:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
-      isaacgym_image: ${{ vars.ECR_REGISTRY }}/holosoma-isaacgym:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
       isaacsim_image: ${{ vars.ECR_REGISTRY }}/holosoma-isaacsim:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
       mujoco_image: ${{ vars.ECR_REGISTRY }}/holosoma-mujoco:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
     secrets: inherit
@@ -124,7 +123,6 @@ jobs:
             holosoma
             holosoma-inference
             holosoma-retargeting
-            holosoma-isaacgym
             holosoma-isaacsim
             holosoma-mujoco
             holosoma-thor-inference

@@ -205,7 +205,7 @@ class RandomizationManager:
                         raise
 
         # Run setup for function-based terms
-        for term_name, term_cfg in zip(self._setup_names, self._setup_cfgs):
+        for term_name, term_cfg in zip(self._setup_names, self._setup_cfgs, strict=False):
             if term_name in self._setup_funcs:
                 func = self._setup_funcs[term_name]
                 try:
@@ -222,10 +222,9 @@ class RandomizationManager:
                     else:
                         raise
 
-        # Note: Do NOT call refresh_sim_tensors() here for IsaacGym during startup.
-        # For manager-based environments, setup() is called BEFORE prepare_sim(), so tensors
-        # haven't been acquired yet. The tensors will be properly initialized in prepare_sim().
-        # For IsaacSim, we still need to write data and refresh.
+        # IsaacSim needs the startup writes pushed to the sim and its tensors refreshed. MuJoCo
+        # acquires nothing up front, so there is nothing to refresh. The name check avoids importing
+        # the isaacsim module here.
         if type(self.env.simulator).__name__ == "IsaacSim":
             self.env.simulator.scene.write_data_to_sim()
             self.env.simulator.refresh_sim_tensors()
@@ -245,7 +244,7 @@ class RandomizationManager:
                     TermSampler.bind(self.env.dr_base_seed, entry["name"], STAGE_RESET, self.env.dr_episode_count),
                 )
 
-        for term_name, term_cfg in zip(self._reset_names, self._reset_cfgs):
+        for term_name, term_cfg in zip(self._reset_names, self._reset_cfgs, strict=False):
             if term_name in self._reset_funcs and term_name not in self._failed_randomizers:
                 func = self._reset_funcs[term_name]
                 # Don't catch unsupported here because setup() has already checked
@@ -264,7 +263,7 @@ class RandomizationManager:
                     TermSampler.bind(self.env.dr_base_seed, entry["name"], STAGE_STEP, self.env.dr_episode_count)
                 )
 
-        for term_name, term_cfg in zip(self._step_names, self._step_cfgs):
+        for term_name, term_cfg in zip(self._step_names, self._step_cfgs, strict=False):
             if term_name in self._step_funcs and term_name not in self._failed_randomizers:
                 func = self._step_funcs[term_name]
                 func(

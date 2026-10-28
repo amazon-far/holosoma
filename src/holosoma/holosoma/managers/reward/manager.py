@@ -149,7 +149,7 @@ class RewardManager:
         self._reward_buf[:] = 0.0
 
         # Iterate over all reward terms
-        for term_name, term_cfg in zip(self._term_names, self._term_cfgs):
+        for term_name, term_cfg in zip(self._term_names, self._term_cfgs, strict=False):
             # Compute raw reward value
             if term_name in self._term_instances:
                 # Stateful term
@@ -328,6 +328,6 @@ class RewardManager:
         """String representation of reward manager."""
         msg = f"<RewardManager> contains {len(self._term_names)} active terms.\n"
         msg += "Terms:\n"
-        for name, cfg in zip(self._term_names, self._term_cfgs):
+        for name, cfg in zip(self._term_names, self._term_cfgs, strict=False):
             msg += f"  - {name}: weight={cfg.weight}\n"
         return msg

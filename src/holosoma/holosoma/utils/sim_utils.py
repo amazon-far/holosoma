@@ -14,9 +14,10 @@ import sys
 import threading
 import time
 import traceback
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from types import TracebackType
-from typing import Any, Callable, Iterator, TypeVar
+from typing import Any, TypeVar
 
 from loguru import logger
 from typing_extensions import ParamSpec, Self
@@ -107,10 +108,6 @@ def setup_simulator_imports(config: ExperimentConfig | RunSimConfig) -> None:
         import mujoco
 
         assert mujoco is not None
-    elif simulator_type == SimulatorType.ISAACGYM:
-        import isaacgym
-
-        assert isaacgym is not None
 
     # IsaacSim imports handled in setup_isaaclab_launcher
 
@@ -296,7 +293,7 @@ def setup_simulation_environment(
     -------
     tuple[Any, str, Any]
         Tuple of (environment, device_string, simulation_app).
-        simulation_app is None for simulators that don't need it (MuJoCo, IsaacGym).
+        simulation_app is None for simulators that don't need it (MuJoCo).
     """
     logger.info("🚀 Setting up simulation environment...")
 
@@ -459,7 +456,7 @@ def close_simulation_app(simulation_app: Any) -> None:
     ----------
     simulation_app : Any
         The simulation app instance returned by init_sim_imports().
-        Can be None for simulators that don't have an app (e.g., IsaacGym).
+        Can be None for simulators that don't have an app (e.g., MuJoCo).
     """
     failure = sys.exc_info()[1]
     if simulation_app is not None and get_simulator_type() == SimulatorType.ISAACSIM:
@@ -745,11 +742,11 @@ class DirectSimulation:
         logger.info(f"Viewer rate: {1 / self.config.viewer_dt:.1f} Hz (sync every {viewer_steps} steps)")
 
         # Determine refresh strategy based on simulator type
-        # IsaacGym/IsaacSim: need pre-step to refresh tensors to sync simulator state
+        # IsaacSim: needs pre-step to refresh tensors to sync simulator state
         # MuJoCo: no pre-step refresh needed because we are NOT running an envs/tasks requiring
         #         those tensors e.g, _rigid_body_rot, _rigid_body_vel, etc.
         simulator_type = get_simulator_type()
-        if simulator_type in [SimulatorType.ISAACGYM, SimulatorType.ISAACSIM]:
+        if simulator_type == SimulatorType.ISAACSIM:
             refresh_tensors = self.simulator.refresh_sim_tensors
         else:
             refresh_tensors = lambda: None  # noqa: E731  (No-op for MuJoCo)

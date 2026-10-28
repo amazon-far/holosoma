@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 # Collection imports every test module regardless of the -m marker, so guard the mujoco-only imports:
-# in the isaacgym/isaacsim CI jobs (no mujoco installed) this skips the module instead of erroring.
+# in the isaacsim CI jobs (no mujoco installed) this skips the module instead of erroring.
 pytest.importorskip("mujoco")
 
 import mujoco

@@ -15,9 +15,8 @@ source $CONDA_ROOT/etc/profile.d/conda.sh
 
 
 cd "$SCRIPT_DIR"
-chmod +x setup_isaacsim.sh setup_isaacgym.sh setup_mujoco.sh setup_inference.sh setup_retargeting.sh
+chmod +x setup_isaacsim.sh setup_mujoco.sh setup_inference.sh setup_retargeting.sh
 OMNI_KIT_ACCEPT_EULA=1 ./setup_isaacsim.sh
-./setup_isaacgym.sh
-./setup_mujoco.sh --no-warp
+./setup_mujoco.sh --skip-driver-check  # build hosts have no GPU; mjwarp needs one only at run time
 ./setup_inference.sh
 ./setup_retargeting.sh

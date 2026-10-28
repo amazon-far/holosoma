@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import importlib
-from typing import Any, ItemsView, cast
+from collections.abc import ItemsView
+from typing import Any, cast
 
 import torch
 
@@ -237,6 +238,6 @@ class ActionManager:
         msg = f"<ActionManager> contains {len(self._term_names)} active terms.\n"
         msg += f"Total action dimension: {self._total_action_dim}\n"
         msg += "Terms:\n"
-        for name, dim in zip(self._term_names, self._term_dims):
+        for name, dim in zip(self._term_names, self._term_dims, strict=False):
             msg += f"  - {name}: {dim}\n"
         return msg

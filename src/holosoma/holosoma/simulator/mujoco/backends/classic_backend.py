@@ -239,8 +239,8 @@ class ClassicBackend(IMujocoBackend):
 
         Extracts contact forces from MuJoCo's contact system using mj_contactForce
         and accumulates them per body (Newton's 3rd law). Full-model-width
-        [1, model.nbody, 3]; the simulator gathers robot-only rows and rotates the
-        history. (Single environment for ClassicBackend.)
+        [1, model.nbody, 3]; the simulator gathers robot-only rows and records them per
+        substep. (Single environment for ClassicBackend.)
 
         Returns
         -------
@@ -385,7 +385,7 @@ class ClassicBackend(IMujocoBackend):
         Returns
         -------
         BaseMujocoView
-            MujocoDofStateView with IsaacGym flattened format [1 * num_dof, 2]
+            MujocoDofStateView with flattened format [1 * num_dof, 2]
         """
         from holosoma.simulator.mujoco.tensor_views import MujocoDofStateView
 
@@ -477,7 +477,7 @@ class ClassicBackend(IMujocoBackend):
         env_ids : torch.Tensor
             Environment IDs to update (must be single environment)
         dof_states : torch.Tensor
-            DOF states [num_selected_envs * num_dofs, 2] in IsaacGym format
+            DOF states [num_selected_envs * num_dofs, 2] in the flattened format
             where [:, 0] = positions, [:, 1] = velocities
         dof_addrs : dict
             Address dictionary with 'dof_qpos_addrs' and 'dof_qvel_addrs' lists
@@ -503,7 +503,7 @@ class ClassicBackend(IMujocoBackend):
         dof_vel = dof_states[:, 1].view(len(env_ids), num_dof)[0].detach().cpu().numpy()
 
         # Write to MuJoCo data arrays
-        for i, (qpos_idx, qvel_idx) in enumerate(zip(qpos_addrs, qvel_addrs)):
+        for i, (qpos_idx, qvel_idx) in enumerate(zip(qpos_addrs, qvel_addrs, strict=False)):
             self.data.qpos[qpos_idx] = dof_pos[i]
             self.data.qvel[qvel_idx] = dof_vel[i]
 

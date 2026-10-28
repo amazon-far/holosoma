@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from typing import Tuple
-
 import numpy as np
 
-Pair = Tuple[str, str]
+Pair = tuple[str, str]
 
 
 def _mesh_local_vf(model, geom_id):

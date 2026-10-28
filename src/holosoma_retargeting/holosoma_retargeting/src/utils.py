@@ -182,7 +182,9 @@ def weighted_surface_sampling_by_face_normal(mesh, sample_count, weight_func, se
     face_centers = np.array(face_centers)
     face_normals = np.array(face_normals)
 
-    weights = np.array([weight_func(normal, center) for normal, center in zip(face_normals, face_centers)])
+    weights = np.array(
+        [weight_func(normal, center) for normal, center in zip(face_normals, face_centers, strict=False)]
+    )
     weighted_areas = face_areas * weights
 
     total_weighted_area = np.sum(weighted_areas)

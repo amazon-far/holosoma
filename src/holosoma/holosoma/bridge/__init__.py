@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from importlib.metadata import entry_points
 from typing import TYPE_CHECKING, Any, cast
 
@@ -12,13 +11,7 @@ if TYPE_CHECKING:
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 
 # Auto-discover bridge implementations from installed extensions
-# Handle Python 3.8/3.9 vs 3.10+ API difference for entry_points
-if sys.version_info >= (3, 10):
-    _bridge_registry = {ep.name: ep.load for ep in entry_points(group="holosoma.bridge")}
-else:
-    _eps = entry_points()
-    _bridge_eps = _eps.get("holosoma.bridge", [])
-    _bridge_registry = {ep.name: ep.load for ep in _bridge_eps}
+_bridge_registry = {ep.name: ep.load for ep in entry_points(group="holosoma.bridge")}
 
 
 def create_sdk2py_bridge(

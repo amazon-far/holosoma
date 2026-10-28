@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Combined development image with every Holosoma environment. Dependencies are
-# installed without implementation source so Python-only changes reuse this layer.
+# installed with the native core; Python-only changes reuse this layer.
 FROM nvcr.io/nvidia/isaac-sim:5.1.0 AS dependencies
 
 USER root
@@ -33,13 +33,14 @@ RUN echo ". $CONDA_ROOT/etc/profile.d/conda.sh" >> ~/.bashrc && \
 # Install editable package metadata at the final source paths. The runtime
 # stage supplies the implementation without rerunning package installation.
 WORKDIR /workspace/holosoma
-COPY scripts/setup_all.sh scripts/setup_inference.sh scripts/setup_isaacgym.sh \
+COPY scripts/setup_all.sh scripts/setup_inference.sh \
     scripts/setup_isaacsim.sh scripts/setup_isaacsim_delta.sh scripts/setup_mujoco.sh \
     scripts/setup_retargeting.sh scripts/source_common.sh scripts/versions.sh \
-    scripts/isaacgym_constraints.txt scripts/isaacsim_constraints.txt ./scripts/
+    scripts/isaacsim_constraints.txt ./scripts/
 COPY src/holosoma/pyproject.toml src/holosoma/README.md ./src/holosoma/
 COPY src/holosoma_inference/pyproject.toml src/holosoma_inference/README.md \
     ./src/holosoma_inference/
+COPY src/holosoma_inference/holosoma_cpp ./src/holosoma_inference/holosoma_cpp
 COPY src/holosoma_retargeting/pyproject.toml src/holosoma_retargeting/README.md \
     ./src/holosoma_retargeting/
 RUN mkdir -p \
@@ -52,9 +53,7 @@ RUN mkdir -p \
       src/holosoma_retargeting/holosoma_retargeting/__init__.py
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=cache,target=/var/cache/holosoma \
     PIP_NO_CACHE_DIR=1 \
-    ISAACGYM_ARCHIVE_PATH=/var/cache/holosoma/IsaacGym_Preview_4_Package.tar.gz \
       bash scripts/setup_all.sh && \
     conda clean -a -y
 

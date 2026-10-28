@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic.dataclasses import dataclass
 
-from .camera import CameraConfig
+from .contextual import ContextualConfig
 from .observation import ObservationConfig
 from .robot import RobotConfig
 from .task import TaskConfig
@@ -27,16 +27,11 @@ class InferenceConfig:
     task: TaskConfig
     """Task execution configuration."""
 
-    camera: CameraConfig | None = None
-    """Depth/RGB camera geometry and image properties.
-
-    Required by perception policies (e.g. depth distillation); ``None`` for
-    blind policies. The resized image dimensions must match the vision
-    backbone's expected input.
-    """
-
     secondary: InferenceConfig | None = None
     """Secondary policy config for dual-mode (X-button switch).
     When set, enables runtime switching between this (primary) policy and the secondary.
     Override any field: --secondary.task.model-path, --secondary.task.rl-rate, etc.
     Set to None to disable dual-mode."""
+
+    contextual: ContextualConfig | None = None
+    """Select the shared native contextual policy; callers supply depth and command inputs."""

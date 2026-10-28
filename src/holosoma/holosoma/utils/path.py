@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Generic, Iterable, Protocol, TypeVar, Union
+from typing import Generic, Protocol, TypeVar
 
 from loguru import logger
 
@@ -17,10 +17,7 @@ from holosoma.utils.pycompat import entry_points
 PATH_LOADER_ENTRYPOINT_GROUP = "holosoma.path_loader"
 PATHS_LOADER_ENTRYPOINT_GROUP = "holosoma.paths_loader"
 
-if TYPE_CHECKING:
-    LocalPath = Union[str, os.PathLike[str]]
-else:
-    LocalPath = Union[str, os.PathLike]
+LocalPath = str | os.PathLike[str]
 
 
 class PathLoader(Protocol):

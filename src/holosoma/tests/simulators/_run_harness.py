@@ -1,7 +1,7 @@
 """Shared subprocess-harness runner for the per-process simulator tests.
 
-Several backends must build their sim in a fresh process (IsaacGym segfaults on a second
-gymapi sim per process; IsaacSim/Warp teardown can mask the exit code). Those tests all run
+Several backends must build their sim in a fresh process (IsaacSim/Warp teardown can mask the
+exit code, so a failure would otherwise read as a pass). Those tests all run
 an ``*_assert.py`` harness via ``subprocess`` and assert success the same way — either on the
 process return code, or on an ``--result-file`` sentinel the harness writes after its checks
 pass (more robust when teardown corrupts the exit code). That boilerplate lived copy-pasted
@@ -56,9 +56,9 @@ def run_harness(
     harness:
         Path to the ``*_assert.py`` harness script.
     *args:
-        Extra CLI args passed after the harness path (e.g. ``"--simulator", "isaacgym"``).
+        Extra CLI args passed after the harness path (e.g. ``"--simulator", "isaacsim"``).
     label:
-        Human-readable scenario name for the failure message (e.g. ``"isaacgym/multibody"``).
+        Human-readable scenario name for the failure message (e.g. ``"isaacsim/multibody"``).
     timeout:
         Subprocess timeout in seconds.
     result_file:

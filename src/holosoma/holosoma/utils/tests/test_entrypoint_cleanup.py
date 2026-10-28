@@ -163,6 +163,7 @@ def test_training_interrupt_closes_environment_before_app(
             project=None,
             name=None,
             checkpoint=None,
+            teacher_checkpoint=None,
             num_envs=1,
         ),
         robot=SimpleNamespace(asset=SimpleNamespace(robot_type="test")),
@@ -232,9 +233,10 @@ def test_training_context_session_preserves_provider_order(
     monkeypatch.setattr(train_agent, "init_sim_imports", lambda _config: app)
 
     def run_session() -> None:
-        with train_agent.training_context(object()) as context, context.simulation_session(  # type: ignore[arg-type]
-            env
-        ) as owned_env:
+        with (
+            train_agent.training_context(object()) as context,  # type: ignore[arg-type]
+            context.simulation_session(env) as owned_env,
+        ):
             assert owned_env is env
 
     if environment_close_fails:

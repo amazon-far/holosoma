@@ -149,17 +149,6 @@ class BaseTask:
         # create envs, sim and viewer
         self._load_assets()
 
-        # For IsaacGym manager-based environments: Initialize randomization manager BEFORE creating envs
-        # so it can be applied during env creation (before prepare_sim).
-        # For IsaacSim: The manager will be initialized later (scene is already created in __init__)
-        is_isaacgym_manager = hasattr(self.simulator, "gym")
-        # IsaacGym needs tasks callback before termination to avoid physics instabilities
-        self._update_tasks_before_termination = is_isaacgym_manager
-        if is_isaacgym_manager:
-            self.randomization_manager = RandomizationManager(randomization_config, self, self.device)
-            if self.randomization_manager is not None:
-                self.simulator.set_startup_randomization_callback(self.randomization_manager.setup)
-
         self._create_envs()
         self.dof_pos_limits, self.dof_vel_limits, self.torque_limits = self.simulator.get_dof_limits_properties()
         self._setup_robot_body_indices()
@@ -181,9 +170,7 @@ class BaseTask:
         self.action_manager = ActionManager(action_config, self, self.device)
         self.reward_manager = RewardManager(reward_config, self, self.device)
         self.termination_manager = TerminationManager(termination_config, self, self.device)
-        # For IsaacSim, initialize randomization_manager now
-        if not is_isaacgym_manager:
-            self.randomization_manager = RandomizationManager(randomization_config, self, self.device)
+        self.randomization_manager = RandomizationManager(randomization_config, self, self.device)
         self.command_manager = CommandManager(command_config, self, self.device)
         self.curriculum_manager = CurriculumManager(curriculum_config, self, self.device)
 
@@ -198,7 +185,7 @@ class BaseTask:
         )
 
         # Call setup for managers that need it
-        if self.randomization_manager is not None and not is_isaacgym_manager:  # type: ignore[redundant-expr]
+        if self.randomization_manager is not None:
             self.randomization_manager.setup()
         if self.action_manager is not None:
             self.action_manager.setup()
@@ -502,27 +489,22 @@ class BaseTask:
         # Cameras render and egress consumers publish here, as FRAME_END plugins (the cameras'
         # render_sensors is registered before any consumer, so buffers are fresh on read).
         self.simulator.hooks.emit(Phase.FRAME_END)
+        self.observation_manager.new_frame()
         self.episode_length_buf += 1
         self._update_counters_each_step()
 
         self._pre_compute_observations_callback()
-
-        # IsaacGym requires the original callback ordering (before termination
-        # and reward) to avoid numerical instabilities in its GPU physics
-        # pipeline. IsaacSim doesn't suffer from this issue, but WBT needs the callback
-        # AFTER reset so that WBT termination checks see the actual tracking error
-        # before the command manager advances the motion clip.
-        if self._update_tasks_before_termination:
-            self._update_tasks_callback()
 
         self._check_termination()
         self._compute_reward()
         self._update_log_dict()
 
         env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
+        # Only timed-out envs are bootstrapped from their terminal observation (time-outs are a subset of resets).
+        timeout_ids = self.time_out_buf.nonzero(as_tuple=False).flatten() if env_ids.numel() > 0 else env_ids
         final_obs_dict = {}
-        if env_ids.numel() > 0:
-            final_obs_dict = self._compute_final_observations()
+        if timeout_ids.numel() > 0:
+            final_obs_dict = self.observation_manager.step_terminal(timeout_ids)
 
         self.reset_envs_idx(env_ids)
 
@@ -530,17 +512,16 @@ class BaseTask:
         if refresh_env_ids.numel() > 0:
             self._refresh_envs_after_reset(refresh_env_ids)
 
-        if not self._update_tasks_before_termination:
-            self._update_tasks_callback()
+        # The callback runs AFTER reset so that WBT termination checks see the actual tracking
+        # error before the command manager advances the motion clip.
+        self._update_tasks_callback()
 
-        self._compute_observations()
+        self.obs_buf_dict = self.observation_manager.step()
 
-        if env_ids.numel() > 0 and final_obs_dict:
-            env_ids_long = self._ensure_long_tensor(env_ids)
-            self._store_final_observations(env_ids_long, final_obs_dict)
+        if final_obs_dict:
+            self._store_final_observations(timeout_ids, final_obs_dict)
 
         self._post_compute_observations_callback()
-        self._clip_observations()
 
         self.extras["to_log"] = self.log_dict
         if self.viewer:
@@ -574,38 +555,15 @@ class BaseTask:
                 return
             if key not in store_parent:
                 store_parent[key] = torch.zeros_like(template)
-            store_parent[key][env_ids] = value[env_ids]
+            store_parent[key][env_ids] = value
 
         for obs_key, values in final_obs_dict.items():
             _store_value(final_store, obs_key, values, self.obs_buf_dict[obs_key])
-
-    def _clip_observations(self) -> None:
-        clip_limit = self.observation_manager.cfg.clip_observations
-
-        def _clip_value(value: Any) -> Any:
-            # A concatenate=False group is a dict of per-term tensors; recurse one level.
-            if isinstance(value, dict):
-                return {k: _clip_value(v) for k, v in value.items()}
-            # Only clip flat (2-D [N, feature]) float observations. Image/depth terms
-            # ([N, H, W, C]) are not bounded observations and clipping would corrupt them
-            # (e.g. collapse the depth +inf no-hit sentinel to clip_limit).
-            if isinstance(value, torch.Tensor) and value.is_floating_point() and value.ndim == 2:
-                return torch.clip(value, -clip_limit, clip_limit)
-            return value
-
-        for obs_key, obs_val in self.obs_buf_dict.items():
-            self.obs_buf_dict[obs_key] = _clip_value(obs_val)
 
     def _compute_reward(self) -> None:
         self.rew_buf[:] = self.reward_manager.compute(self.dt)
         self.episode_sums = getattr(self.reward_manager, "episode_sums", {})
         self.episode_sums_raw = getattr(self.reward_manager, "episode_sums_raw", {})
-
-    def _compute_observations(self) -> None:
-        self.obs_buf_dict = self.observation_manager.compute()
-
-    def _compute_final_observations(self) -> dict[str, Any]:
-        return self.observation_manager.compute(modify_history=False)
 
     def _update_tasks_callback(self) -> None:
         self.command_manager.step()

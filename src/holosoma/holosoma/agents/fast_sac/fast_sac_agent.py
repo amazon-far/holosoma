@@ -4,14 +4,14 @@ import copy
 import itertools
 import math
 import os
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterator, Sequence
+from typing import Any
 
 import tqdm
 from loguru import logger
 
 from holosoma.agents.base_algo.base_algo import BaseAlgo
-from holosoma.agents.callbacks.base_callback import RLEvalCallback
 from holosoma.agents.fast_sac.fast_sac import Actor, CNNActor, CNNCritic, Critic
 from holosoma.agents.fast_sac.fast_sac_utils import (
     EmpiricalNormalization,
@@ -23,7 +23,6 @@ from holosoma.agents.modules.logging_utils import LoggingHelper
 from holosoma.config_types.algo import FastSACConfig
 from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.utils.average_meters import TensorAverageMeterDict
-from holosoma.utils.helpers import instantiate
 from holosoma.utils.inference_helpers import (
     attach_onnx_metadata,
     export_motion_and_policy_as_onnx,
@@ -44,6 +43,15 @@ from holosoma.utils.safe_torch_import import (
 )
 
 torch.set_float32_matmul_precision("high")
+
+
+def _clone_outputs(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Return copies of fn's tensor outputs; CUDA graph replays overwrite the outputs of earlier replays."""
+
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        return torch.utils._pytree.tree_map_only(torch.Tensor, torch.Tensor.clone, fn(*args, **kwargs))
+
+    return wrapped
 
 
 class FastSACEnv:
@@ -184,7 +192,6 @@ class FastSACAgent(BaseAlgo):
         )
 
         self.training_metrics = TensorAverageMeterDict()
-        self.eval_callbacks: list[RLEvalCallback] = []
 
     def setup(self) -> None:  # type: ignore[override]
         logger.info("Setting up FastSAC")
@@ -200,7 +207,7 @@ class FastSACAgent(BaseAlgo):
 
         algo_obs_dim_dict = self.env.observation_manager.get_obs_dims()
 
-        algo_history_length_dict: Dict[str, int] = {}
+        algo_history_length_dict: dict[str, int] = {}
 
         for group_cfg in self.env.observation_manager.cfg.groups.values():
             history_len = getattr(group_cfg, "history_length", 1)
@@ -558,7 +565,7 @@ class FastSACAgent(BaseAlgo):
         if self.config.use_symmetry:
             samples_per_update *= 2
 
-            augmented_large_data: Dict[str, torch.Tensor | Dict[str, torch.Tensor]] = {"next": {}}
+            augmented_large_data: dict[str, torch.Tensor | dict[str, torch.Tensor]] = {"next": {}}
 
             augmented_large_data["observations"] = self.symmetry_utils.augment_observations(
                 obs=large_data["observations"],
@@ -659,12 +666,33 @@ class FastSACAgent(BaseAlgo):
     def learn(self) -> None:  # type: ignore[override]
         args = self.config
         device = self.device
+        uses_cudagraphs = False
         if args.compile:
-            update_main = torch.compile(self._update_main)
-            update_pol = torch.compile(self._update_pol)
-            policy = torch.compile(self.policy)
-            normalize_obs = torch.compile(self.obs_normalizer.forward)
-            normalize_critic_obs = torch.compile(self.critic_obs_normalizer.forward)
+            mode, options = args.compile_mode, args.compile_options
+            source = "configured"
+            if mode == "auto":
+                # Multi-GPU training defaults to CUDA graphs; explicit compile options imply the default mode.
+                mode = "reduce-overhead" if self.is_multi_gpu and options is None else None
+                source = f"auto, {'multi' if self.is_multi_gpu else 'single'}-GPU"
+            if mode is not None and options is not None:
+                raise ValueError("Set at most one of compile_mode and compile_options; torch.compile accepts only one.")
+            if self.is_main_process:
+                logger.info(
+                    f"torch.compile mode: {mode or 'default'} ({source})" + (f", options: {options}" if options else "")
+                )
+            if mode is not None:
+                uses_cudagraphs = bool(torch._inductor.list_mode_options(mode).get("triton.cudagraphs", False))
+            elif options is not None:
+                uses_cudagraphs = bool(options.get("triton.cudagraphs", False))
+            update_main = torch.compile(self._update_main, mode=mode, options=options)
+            update_pol = torch.compile(self._update_pol, mode=mode, options=options)
+            policy = torch.compile(self.policy, mode=mode, options=options)
+            normalize_obs = torch.compile(self.obs_normalizer.forward, mode=mode, options=options)
+            normalize_critic_obs = torch.compile(self.critic_obs_normalizer.forward, mode=mode, options=options)
+            if uses_cudagraphs:
+                update_main, update_pol, policy, normalize_obs, normalize_critic_obs = (
+                    _clone_outputs(fn) for fn in (update_main, update_pol, policy, normalize_obs, normalize_critic_obs)
+                )
         else:
             update_main = self._update_main
             update_pol = self._update_pol
@@ -688,6 +716,8 @@ class FastSACAgent(BaseAlgo):
         pbar = tqdm.tqdm(total=args.num_learning_iterations, initial=self.global_step)
 
         while self.global_step <= args.num_learning_iterations:
+            if uses_cudagraphs:
+                torch.compiler.cudagraph_mark_step_begin()
             # Synchronize curriculum metrics across GPUs before rollout
             if self.is_multi_gpu:
                 self._synchronize_curriculum_metrics()
@@ -818,6 +848,15 @@ class FastSACAgent(BaseAlgo):
         if self.is_main_process:
             self.save(os.path.join(self.log_dir, f"model_{self.global_step:07d}.pt"))
             self.export(onnx_file_path=os.path.join(self.log_dir, f"model_{self.global_step:07d}.onnx"))
+
+        if uses_cudagraphs:
+            # Release the captured CUDA graphs, which can contain NCCL collectives, on every rank before the caller
+            # destroys the process group; tearing down NCCL while they are alive hangs.
+            if torch.device(device).type == "cuda":
+                torch.cuda.synchronize()
+            torch.compiler.reset()
+            if torch.distributed.is_initialized():
+                torch.distributed.barrier()
 
     def save(self, path: str) -> None:  # type: ignore[override]
         env_state = self._collect_env_state()
@@ -991,6 +1030,7 @@ class FastSACAgent(BaseAlgo):
             action_scale_metadata = action_scales.detach().cpu().tolist()
         # Extract URDF text from the robot config
         urdf_file_path, urdf_str = get_urdf_text_from_robot_config(self.env.robot_config)
+        observation_manager = self.unwrapped_env.observation_manager
 
         metadata = {
             "dof_names": self.env.robot_config.dof_names,
@@ -1000,6 +1040,8 @@ class FastSACAgent(BaseAlgo):
             "command_ranges": cmd_ranges,
             "robot_urdf": urdf_str,
             "robot_urdf_path": urdf_file_path,
+            "observation_layout": observation_manager.get_observation_layout(self.config.actor_obs_keys),
+            "observation_clip": observation_manager.cfg.clip_observations,
         }
         metadata.update(self._checkpoint_metadata(iteration=self.global_step))
 
@@ -1016,6 +1058,11 @@ class FastSACAgent(BaseAlgo):
             if self.obs_normalization:
                 self.obs_normalizer.train()
 
+    def _eval_mode(self) -> None:
+        self.actor.eval()
+        if self.obs_normalization:
+            self.obs_normalizer.eval()
+
     @torch.no_grad()
     def evaluate_policy(self, max_eval_steps: int | None = None) -> None:
         self._create_eval_callbacks()
@@ -1024,14 +1071,7 @@ class FastSACAgent(BaseAlgo):
         obs = self.env.reset()
 
         for step in itertools.islice(itertools.count(), max_eval_steps):
-            if self.obs_normalization:
-                normalized_obs = self.obs_normalizer(obs, update=False)
-            else:
-                normalized_obs = obs
-            # Actions are already scaled by the actor
-            actions = self.actor(normalized_obs)[0]
-
-            actor_state = {"step": step, "actions": actions, "obs": obs}
+            actor_state: dict[str, Any] = {"step": step, "obs": obs}
             actor_state = self._pre_eval_env_step(actor_state)
 
             obs, _, _, _ = self.env.step(actor_state["actions"])
@@ -1040,26 +1080,9 @@ class FastSACAgent(BaseAlgo):
 
         self._post_evaluate_policy()
 
-    def _create_eval_callbacks(self) -> None:
-        if self.config.eval_callbacks is not None:
-            for cb_name in self.config.eval_callbacks:
-                self.eval_callbacks.append(instantiate(self.config.eval_callbacks[cb_name], training_loop=self))
-
-    def _pre_evaluate_policy(self) -> None:
-        self.env.set_is_evaluating()
-        for c in self.eval_callbacks:
-            c.on_pre_evaluate_policy()
-
-    def _post_evaluate_policy(self) -> None:
-        for c in self.eval_callbacks:
-            c.on_post_evaluate_policy()
-
-    def _pre_eval_env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
-        for c in self.eval_callbacks:
-            actor_state = c.on_pre_eval_env_step(actor_state)
-        return actor_state
-
-    def _post_eval_env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
-        for c in self.eval_callbacks:
-            actor_state = c.on_post_eval_env_step(actor_state)
+    def _compute_eval_actions(self, actor_state: dict[str, Any]) -> dict[str, Any]:
+        obs = actor_state["obs"]
+        normalized_obs = self.obs_normalizer(obs, update=False) if self.obs_normalization else obs
+        # Actions are already scaled by the actor
+        actor_state["actions"] = self.actor(normalized_obs)[0]
         return actor_state

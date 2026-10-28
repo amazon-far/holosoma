@@ -28,6 +28,10 @@ class ObsTermCfg:
     clip: tuple[float, float] | None = None
     """Optional min/max clip bounds applied after scaling."""
 
+    global_clip: bool = True
+    """Whether ``ObservationManagerCfg.clip_observations`` applies to this term. Set ``False`` for image
+    terms, whose values (e.g. uint8 RGB, the depth ``+inf`` no-hit sentinel) must not be clipped."""
+
 
 @dataclass(frozen=True)
 class ObsGroupCfg:
@@ -54,4 +58,4 @@ class ObservationManagerCfg:
     """Mapping of group name to its configuration."""
 
     clip_observations: float = 100.0
-    """Global observation clipping threshold (applied to all non-image observations)."""
+    """Global observation clipping threshold, applied to every term with ``global_clip`` set."""

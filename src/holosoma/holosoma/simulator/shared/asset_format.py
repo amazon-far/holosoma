@@ -6,8 +6,7 @@ Each backend loads a different subset of the tri-format sibling fields on
     backend     supported formats (in preference order)
     --------    ----------------------------------------
     MuJoCo      xml, urdf            (MjSpec cannot load USD)
-    IsaacGym    urdf                 (loads URDF only)
-    IsaacSim    usd, urdf            (UrdfFileCfg converts URDF->USD)
+        IsaacSim    usd, urdf            (UrdfFileCfg converts URDF->USD)
 
 ``select_asset_format`` is the single place that turns "what the object provides"
 plus "what this backend supports" into the chosen ``(format, path)`` — so all three

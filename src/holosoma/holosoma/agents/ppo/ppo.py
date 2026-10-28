@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import itertools
 import os
-from typing import Any, Callable, TypedDict, cast
+from collections.abc import Callable
+from typing import Any, TypedDict, cast
 
 import torch
 import torch.distributed as dist
@@ -14,7 +15,7 @@ from torch.distributions import Normal, kl_divergence
 from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 
 from holosoma.agents.base_algo.base_algo import BaseAlgo
-from holosoma.agents.callbacks.base_callback import RLEvalCallback
+from holosoma.agents.modules.advantages import compute_gae_returns, normalize_advantages
 from holosoma.agents.modules.augmentation_utils import SymmetryUtils
 from holosoma.agents.modules.data_utils import RolloutStorage
 from holosoma.agents.modules.logging_utils import LoggingHelper
@@ -209,7 +210,6 @@ class PPO(BaseAlgo):
         self._init_config()
 
         self.current_learning_iteration = 0
-        self.eval_callbacks: list[RLEvalCallback] = []
         _ = self.env.reset_all()
 
     def _init_config(self) -> None:
@@ -469,25 +469,8 @@ class PPO(BaseAlgo):
         dones: torch.Tensor,
         rewards: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        advantage = 0
-        returns = torch.zeros_like(values)
-        num_steps = returns.shape[0]
-        for step in reversed(range(num_steps)):
-            if step == num_steps - 1:
-                next_values = last_values
-            else:
-                next_values = values[step + 1]
-            next_is_not_terminal = 1.0 - dones[step].float()
-            delta = rewards[step] + next_is_not_terminal * self.config.gamma * next_values - values[step]
-            advantage = delta + next_is_not_terminal * self.config.gamma * self.config.lam * advantage
-            returns[step] = advantage + values[step]
-        advantages = returns - values
-
-        if self.is_multi_gpu:
-            advantages = self._normalize_advantages_multi_gpu(advantages)
-        else:
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-
+        returns = compute_gae_returns(last_values, values, dones, rewards, self.config.gamma, self.config.lam)
+        advantages = normalize_advantages(returns - values, self.gpu_world_size if self.is_multi_gpu else None)
         return returns, advantages
 
     def _training_step(self) -> dict[str, float]:
@@ -708,6 +691,9 @@ class PPO(BaseAlgo):
             ),
             "iter": self.current_learning_iteration,
             "infos": infos,
+            # The actor's input layout, so a distillation student can rebuild it as a teacher.
+            "obs_dim_dict": self.algo_obs_dim_dict,
+            "history_length_dict": self.algo_history_length_dict,
         }
         checkpoint_dict.update(self._checkpoint_metadata(iteration=self.current_learning_iteration))
         env_state = self._collect_env_state()
@@ -753,6 +739,7 @@ class PPO(BaseAlgo):
             action_scale_metadata = action_scales.detach().cpu().tolist()
         # Extract URDF text from the robot config
         urdf_file_path, urdf_str = get_urdf_text_from_robot_config(self.env.robot_config)
+        observation_manager = self.env.observation_manager
 
         metadata = {
             "dof_names": self.env.robot_config.dof_names,
@@ -762,6 +749,8 @@ class PPO(BaseAlgo):
             "command_ranges": cmd_ranges,
             "robot_urdf": urdf_str,
             "robot_urdf_path": urdf_file_path,
+            "observation_layout": observation_manager.get_observation_layout(self.actor_obs_keys),
+            "observation_clip": observation_manager.cfg.clip_observations,
         }
         metadata.update(self._checkpoint_metadata(iteration=self.current_learning_iteration))
 
@@ -818,22 +807,6 @@ class PPO(BaseAlgo):
 
         logger.info(f"Synchronized model weights across {self.gpu_world_size} GPUs")
 
-    def _normalize_advantages_multi_gpu(self, advantages: torch.Tensor) -> torch.Tensor:
-        local_stats = torch.stack(
-            [
-                advantages.mean(),
-                (advantages**2).mean(),
-            ]
-        )
-        torch.distributed.all_reduce(local_stats, op=torch.distributed.ReduceOp.SUM)
-
-        global_mean = local_stats[0] / self.gpu_world_size
-        global_sq_mean = local_stats[1] / self.gpu_world_size
-        global_variance = global_sq_mean - global_mean**2
-        global_std = torch.sqrt(global_variance + 1e-8)
-
-        return (advantages - global_mean) / global_std
-
     ##########################################################################################
     # Code for Evaluation
     ##########################################################################################
@@ -856,11 +829,6 @@ class PPO(BaseAlgo):
 
         return ActorWrapper(self.actor, self.actor_obs_normalizer, self.empirical_normalization)
 
-    def env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:  # type: ignore[override]
-        obs_dict, rewards, dones, extras = self.env.step(actor_state)
-        actor_state.update({"obs": obs_dict, "rewards": rewards, "dones": dones, "extras": extras})
-        return actor_state
-
     @torch.no_grad()
     def get_example_obs(self) -> dict[str, torch.Tensor]:
         """Used for exporting policy as onnx."""
@@ -874,7 +842,7 @@ class PPO(BaseAlgo):
     def evaluate_policy(self, max_eval_steps: int | None = None) -> None:
         self._create_eval_callbacks()
         self._pre_evaluate_policy()
-        actor_state = self._create_actor_state()
+        actor_state: dict[str, Any] = {}
         self.eval_policy = self.get_inference_policy()
 
         obs_dict = self.env.reset_all()
@@ -884,8 +852,6 @@ class PPO(BaseAlgo):
         critic_obs = torch.cat([actor_state["obs"][k] for k in self.critic_obs_keys], dim=1)
         actor_state["obs"]["critic_obs"] = critic_obs
 
-        actor_state = self._pre_eval_env_step(actor_state)
-
         for step in itertools.islice(itertools.count(), max_eval_steps):
             actor_state["step"] = step
             actor_state = self._pre_eval_env_step(actor_state)
@@ -894,38 +860,9 @@ class PPO(BaseAlgo):
 
         self._post_evaluate_policy()
 
-    def _create_actor_state(self) -> dict[str, Any]:
-        return {"done_indices": [], "stop": False}
-
-    def _create_eval_callbacks(self) -> None:
-        if self.config.eval_callbacks is not None:
-            for cb in self.config.eval_callbacks:
-                self.eval_callbacks.append(instantiate(self.config.eval_callbacks[cb], training_loop=self))
-
-    def _pre_evaluate_policy(self, reset_env: bool = True) -> None:
-        self._eval_mode()
-        self.env.set_is_evaluating()
-        if reset_env:
-            _ = self.env.reset_all()
-
-        for c in self.eval_callbacks:
-            c.on_pre_evaluate_policy()
-
-    def _post_evaluate_policy(self) -> None:
-        for c in self.eval_callbacks:
-            c.on_post_evaluate_policy()
-
-    def _pre_eval_env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
+    def _compute_eval_actions(self, actor_state: dict[str, Any]) -> dict[str, Any]:
         actor_obs = torch.cat([actor_state["obs"][k] for k in self.actor_obs_keys], dim=1)
-        actions = self.eval_policy({"actor_obs": actor_obs})
-        actor_state.update({"actions": actions})
-        for c in self.eval_callbacks:
-            actor_state = c.on_pre_eval_env_step(actor_state)
-        return actor_state
-
-    def _post_eval_env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
-        for c in self.eval_callbacks:
-            actor_state = c.on_post_eval_env_step(actor_state)
+        actor_state["actions"] = self.eval_policy({"actor_obs": actor_obs})
         return actor_state
 
     def get_inference_policy(

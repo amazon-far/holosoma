@@ -30,10 +30,9 @@ numerical quaternion operations and explicit order conversions remain in ``utils
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Any, List, Tuple, Union
+from typing import TYPE_CHECKING, Annotated, Any, TypeAlias
 
 from pydantic import AfterValidator, Field, PlainValidator, ValidationInfo
-from typing_extensions import Annotated, TypeAlias
 
 if TYPE_CHECKING:
     from torch import Tensor as _Tensor
@@ -43,7 +42,7 @@ else:
 
 UNIT_QUATERNION_NORM_TOLERANCE = 1e-4
 """Absolute norm tolerance shared by scalar configuration and tensor input validation."""
-_QuaternionValue: TypeAlias = Union[List[float], Tuple[float, ...]]
+_QuaternionValue: TypeAlias = list[float] | tuple[float, ...]
 
 
 def _validate_finite_components(value: _QuaternionValue) -> _QuaternionValue:
@@ -91,7 +90,7 @@ def _validated_unit_quaternion(value: _QuaternionValue) -> _QuaternionValue:
 _QUATERNION_WIDTH = Field(min_length=4, max_length=4)
 
 QuaternionWXYZ: TypeAlias = Annotated[
-    List[float],
+    list[float],
     _QUATERNION_WIDTH,
     Field(description="Quaternion in [w, x, y, z] order."),
     AfterValidator(_validate_finite_components),
@@ -99,7 +98,7 @@ QuaternionWXYZ: TypeAlias = Annotated[
 """Four finite WXYZ components. Unit length is not required; zero is allowed."""
 
 QuaternionXYZW: TypeAlias = Annotated[
-    List[float],
+    list[float],
     _QUATERNION_WIDTH,
     Field(description="Quaternion in [x, y, z, w] order."),
     AfterValidator(_validate_finite_components),
@@ -107,7 +106,7 @@ QuaternionXYZW: TypeAlias = Annotated[
 """Four finite XYZW components. Unit length is not required; zero is allowed."""
 
 UnitQuaternionWXYZ: TypeAlias = Annotated[
-    List[float],
+    list[float],
     _QUATERNION_WIDTH,
     Field(description="Unit quaternion in [w, x, y, z] order; norm tolerance 1e-4."),
     AfterValidator(_validated_unit_quaternion),
@@ -115,7 +114,7 @@ UnitQuaternionWXYZ: TypeAlias = Annotated[
 """WXYZ rotation stored as a list, normalized only after its near-unit norm is validated."""
 
 UnitQuaternionXYZW: TypeAlias = Annotated[
-    List[float],
+    list[float],
     _QUATERNION_WIDTH,
     Field(description="Unit quaternion in [x, y, z, w] order; norm tolerance 1e-4."),
     AfterValidator(_validated_unit_quaternion),
@@ -123,7 +122,7 @@ UnitQuaternionXYZW: TypeAlias = Annotated[
 """XYZW rotation stored as a list, normalized only after its near-unit norm is validated."""
 
 UnitQuaternionWXYZTuple: TypeAlias = Annotated[
-    Tuple[float, float, float, float],
+    tuple[float, float, float, float],
     Field(description="Unit quaternion in [w, x, y, z] order; norm tolerance 1e-4."),
     AfterValidator(_validated_unit_quaternion),
 ]

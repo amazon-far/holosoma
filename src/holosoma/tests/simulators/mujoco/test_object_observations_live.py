@@ -73,7 +73,8 @@ def test_object_obs_dim_measured_for_two_objects():
     # pos(3) + quat(4) + lin(3) + ang(3) = 13 per object, 2 objects.
     assert dims["object_obs"] == 13 * 2
 
-    obs = mgr.compute()["object_obs"]
+    mgr.new_frame()
+    obs = mgr.step()["object_obs"]
     assert obs.shape == (1, 26)
     assert torch.isfinite(obs).all()
 
@@ -85,7 +86,8 @@ def test_object_obs_empty_for_robot_only_scene():
 
     mgr = ObservationManager(_obs_cfg(), _TaskShell(sim), "cpu")
     assert mgr.get_obs_dims()["object_obs"] == 0
-    assert mgr.compute()["object_obs"].shape == (1, 0)
+    mgr.new_frame()
+    assert mgr.step()["object_obs"].shape == (1, 0)
 
 
 # ----- base-frame transform correctness -----

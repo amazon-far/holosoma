@@ -5,8 +5,8 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Callable
 
 from holosoma.config_types.sensor import (
     CustomLidarRayPatternConfig,
@@ -147,8 +147,7 @@ cyclic_lidar = LidarSensorConfig(
     isaacsim=IsaacSimLidarConfig(mesh_prim_paths=["/World/ground"]),
 )
 
-# One-ray source for the mutable-direction moving-object oracle. Isaac Gym is excluded because
-# its terrain-only compatibility caster cannot return scene objects.
+# One-ray source for the mutable-direction moving-object oracle.
 CYCLIC_TARGET_MOUNT_POSITION = [2.5, -3.0, ACTOR_MOUNT_HEIGHT]
 CYCLIC_TARGET_MOUNT_ORIENTATION_WXYZ = _ACTOR_MOUNT.orientation
 cyclic_target_lidar = LidarSensorConfig(
@@ -167,7 +166,7 @@ cyclic_target_lidar = LidarSensorConfig(
 
 # MuJoCo and Isaac Sim use this world-fixed ray to verify that their native scene queries observe a
 # kinematically moved target cube as well as the ground. Isaac Sim intentionally uses default mesh
-# discovery here. Isaac Gym is excluded because its compatibility caster is terrain-only.
+# discovery here.
 tracked_target_lidar = LidarSensorConfig(
     mount=SensorMountConfig(target_kind="world", position=[0.5, 0.0, 2.0]),
     pattern=CustomLidarRayPatternConfig(ray_directions=[[0.0, 0.0, -1.0]]),

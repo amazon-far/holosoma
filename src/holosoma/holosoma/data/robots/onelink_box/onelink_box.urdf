@@ -3,8 +3,8 @@
      0.1 m cube, mass 0.1, isotropic inertia): structurally the small_box object, loaded through the
      robot path so robot link_physics can be exercised and compared against an object twin.
 
-     IsaacSim and IsaacGym model a robot as an articulation, which requires at least one joint (a
-     jointless single-link URDF gets no ArticulationRootAPI on IsaacSim and "no DOFs" on IsaacGym,
+     IsaacSim models a robot as an articulation, which requires at least one joint (a
+     jointless single-link URDF gets no ArticulationRootAPI on IsaacSim,
      so neither initializes it). One tiny massless `dummy` link on a revolute joint satisfies this.
      The joint is unactuated and the dummy is near-massless with negligible inertia, so it adds no
      meaningful dynamics: `baseLink` still free-falls, bounces, and slides like the object twin,
@@ -27,7 +27,7 @@
   </link>
 
   <!-- Massless dummy link plus unactuated revolute joint: makes this a 1-DOF articulation (required
-       by IsaacSim/IsaacGym) without adding meaningful dynamics. No collision/visual geometry. -->
+       by IsaacSim) without adding meaningful dynamics. No collision/visual geometry. -->
   <link name="dummy">
     <inertial>
       <mass value="1e-6"/>

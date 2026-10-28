@@ -1,8 +1,21 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import torch
+
+
+def _swap_leg_phase_channels(phase: torch.Tensor) -> torch.Tensor:
+    """Exchange the two legs' gait-phase channels, the left-right mirror of the phase.
+
+    ``LocomotionGait`` allocates exactly two phase channels and the reward terms pair channel i
+    with foot i (``feet_heights[:, i]``, ``feet_indices[i]``), so mirroring left and right is
+    exchanging them -- no per-robot foot naming needed.
+    """
+    if phase.shape[-1] != 2:
+        raise ValueError(f"Gait phase must have one channel per leg (2), got {phase.shape[-1]}")
+    return phase.flip(-1)
 
 
 class SymmetryUtils:
@@ -25,15 +38,15 @@ class SymmetryUtils:
         self.robot_config = env.robot_config
 
         # Initialize attributes that will be set during initialization
-        self.observation_dims: Dict[str, int] = {}
-        self.observation_dims_single_frame: Dict[str, int] = {}  # Dimension without history
-        self.history_lengths: Dict[str, int] = {}
-        self.sub_observation_keys: Dict[str, List[str]] = {}
-        self.sub_observation_indices: Dict[str, Dict[str, torch.Tensor]] = {}
-        self.sub_observation_indices_single_frame: Dict[
-            str, Dict[str, torch.Tensor]
+        self.observation_dims: dict[str, int] = {}
+        self.observation_dims_single_frame: dict[str, int] = {}  # Dimension without history
+        self.history_lengths: dict[str, int] = {}
+        self.sub_observation_keys: dict[str, list[str]] = {}
+        self.sub_observation_indices: dict[str, dict[str, torch.Tensor]] = {}
+        self.sub_observation_indices_single_frame: dict[
+            str, dict[str, torch.Tensor]
         ] = {}  # Indices within single frame
-        self.sub_observation_dims: Dict[str, int] = {}
+        self.sub_observation_dims: dict[str, int] = {}
         self.joint_index_map: torch.Tensor = torch.empty(0)
         self.sign_flip_mask: torch.Tensor = torch.empty(0)
 
@@ -116,10 +129,7 @@ class SymmetryUtils:
             idx = 0
             idx_single_frame = 0
             for term_name in term_keys:
-                # Compute the term once to get its dimension
-                term_cfg = group_cfg.terms[term_name]
-                obs = obs_manager._compute_term(group_name, term_name, term_cfg)
-                term_dim = obs.shape[1]
+                term_dim = obs_manager.term_shape(group_name, term_name)[0]
 
                 # Store the base dimension (without history)
                 self.sub_observation_dims[term_name] = term_dim
@@ -441,36 +451,34 @@ class SymmetryUtils:
         return command_base_height
 
     def mirror_obs_sin_phase(self, sin_phase: torch.Tensor) -> torch.Tensor:
-        """Mirrors the sine phase for gait timing.
+        """Mirrors the sine of the gait phase.
 
         Parameters
         ----------
         sin_phase : torch.Tensor
-            Sine of gait phase with layout [sin(φ_left), sin(φ_right), ...].
+            Sine of gait phase with layout [sin(φ_leg0), sin(φ_leg1)].
 
         Returns
         -------
         torch.Tensor
-            Mirrored phase with first component negated: [-sin(φ_left), sin(φ_right), ...].
+            The legs' channels exchanged: [sin(φ_leg1), sin(φ_leg0)].
         """
-        sin_phase[..., 0] = -sin_phase[..., 0]
-        return sin_phase
+        return _swap_leg_phase_channels(sin_phase)
 
     def mirror_obs_cos_phase(self, cos_phase: torch.Tensor) -> torch.Tensor:
-        """Mirrors the cosine phase for gait timing.
+        """Mirrors the cosine of the gait phase.
 
         Parameters
         ----------
         cos_phase : torch.Tensor
-            Cosine of gait phase with layout [cos(φ_left), cos(φ_right), ...].
+            Cosine of gait phase with layout [cos(φ_leg0), cos(φ_leg1)].
 
         Returns
         -------
         torch.Tensor
-            Mirrored phase with first component negated: [-cos(φ_left), cos(φ_right), ...].
+            The legs' channels exchanged: [cos(φ_leg1), cos(φ_leg0)].
         """
-        cos_phase[..., 0] = -cos_phase[..., 0]
-        return cos_phase
+        return _swap_leg_phase_channels(cos_phase)
 
     def mirror_obs_dof_pos(self, dof_pos: torch.Tensor) -> torch.Tensor:
         """Mirrors the joint positions using joint mapping and sign flipping.

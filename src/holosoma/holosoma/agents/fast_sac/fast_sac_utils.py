@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
-from typing import Any, Callable
+from collections.abc import Callable, Mapping
+from typing import Any
 
 import torch
 import torch.distributed as dist

@@ -27,6 +27,14 @@ isaacsim_ensure_miniconda() {
     rm "$CONDA_ROOT/miniconda.sh"
   fi
 
+  # Isaac Sim's PYTHONPATH bundles packaging 23.0, which shadows base conda's packaging and breaks
+  # every conda command (conda >= 26.9 imports packaging.metadata) inside an activated hssim env.
+  # Run conda in isolated mode so it ignores PYTHONPATH. `conda update conda` rewrites this line,
+  # so re-apply it on every run.
+  if head -n 1 "$CONDA_ROOT/bin/conda" | grep -q '^#!.*/python[0-9.]*$'; then
+    sed -i '1s|$| -I|' "$CONDA_ROOT/bin/conda"
+  fi
+
   "$CONDA_ROOT/bin/conda" tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
   "$CONDA_ROOT/bin/conda" tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
 }
@@ -128,6 +136,15 @@ isaacsim_install_delta() {
   python -m pip install --upgrade pip
   python -m pip install -c "$ISAACSIM_RUNTIME_CONSTRAINTS" \
     -e "$ISAACSIM_ROOT_DIR/src/holosoma[unitree,booster]"
+
+  if [[ -n ${ISAACSIM_ROOT_PATH:-} ]]; then
+    # Isaac Lab 2.3.2 pins URDF importer 2.4.31; the native image bundles 2.4.30.
+    # Cache it during image setup so distributed workers do not race to download it.
+    "$ISAACSIM_ROOT_PATH/kit/kit" "$ISAACLAB_DIR/apps/isaaclab.python.headless.kit" \
+      --allow-root --no-window --ext-precache-mode \
+      --enable isaacsim.asset.importer.urdf-2.4.31 \
+      "--/app/extensions/registryCacheFull=$ISAACSIM_ROOT_PATH/extscache"
+  fi
 
   touch "$ISAACSIM_SENTINEL_FILE"
 }

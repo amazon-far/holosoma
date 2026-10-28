@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
+from itertools import combinations
 
 import mujoco
 import mujoco.viewer
@@ -17,6 +17,7 @@ from holosoma.config_types.sensor import CameraSensorConfig, LidarSensorConfig
 from holosoma.config_types.simulator import MujocoXMLFilterCfg, SimulatorConfig
 from holosoma.managers.terrain.base import TerrainTermBase
 from holosoma.simulator.mujoco.geom_groups import tag_compiled_robot_geom_groups
+from holosoma.simulator.mujoco.native_config import apply_fields, apply_world_config
 from holosoma.simulator.shared.asset_format import select_asset_format
 from holosoma.utils.path import resolve_asset_path
 
@@ -70,6 +71,7 @@ class MujocoSceneManager:
             Simulator configuration containing physics and rendering parameters.
         """
         self.world_spec = mujoco.MjSpec()
+        self.simulator_config = simulator_config
         self.world_spec.copy_during_attach = True
         self._setup_world_options(simulator_config)
         self.robot_config: RobotConfig | None = None  # Set when adding robot
@@ -380,6 +382,7 @@ class MujocoSceneManager:
 
         # Capture the robot's element inventory before attach (see ActorSpecMeta).
         self.robot_spec_meta = self._capture_spec_meta(robot_spec, prefix, root_body)
+        self.robot_config = robot_config
 
         # Attach at a unit frame; the real initial pose is set later via qpos.
         unit_frame = self.world_spec.worldbody.add_frame()
@@ -528,7 +531,7 @@ class MujocoSceneManager:
                 spec.delete(freejoint)  # override: forced static -> drop its freejoint
             elif not is_static and freejoint is None:
                 body.add_freejoint()  # override: forced free -> give it a freejoint
-            # Per-body physics override (shared resolve_physics rule, same as IsaacGym/IsaacSim),
+            # Per-body physics override (shared resolve_physics rule, same as IsaacSim),
             # applied to this body before the file is attached.
             self._apply_physics_to_body(body, scene_file.resolve_physics(body.name), f"{scene_file_name}_{body.name}")
             # Per-body world-frame position offset. body.pos is relative to the attach frame, so
@@ -686,12 +689,12 @@ class MujocoSceneManager:
 
         Applies the cross-backend core (``density`` kg/m³, and ``mass`` kg when ``apply_mass``) plus
         MuJoCo's own geom-level sub-config (``physics.mujoco``: friction/solref/solimp/condim). The
-        other engines' sub-configs (``physx``/``isaacgym``/``isaacsim``) do not apply to MuJoCo and
+        other engines' sub-configs (``physx``/``isaacsim``) do not apply to MuJoCo and
         are ignored.
 
         ``mass`` sets the body's explicit mass (``explicitinertial`` so MuJoCo keeps it rather than
-        recomputing from geom density); ``density`` and the geom props are applied to every geom of
-        the body. ``None`` on any field keeps the asset's authored value.
+        recomputing from geom density); ``density`` and contact props apply to every geom.
+        Collision-mask overrides skip visual-only geoms. ``None`` keeps authored values.
 
         ``apply_mass=False`` skips the ``mass`` write. It is passed when applying the whole-robot
         ``link_physics`` default to every link, where one mass on every link is meaningless (the
@@ -712,14 +715,7 @@ class MujocoSceneManager:
             if physics.density is not None:
                 geom.density = physics.density
             if mj is not None:
-                if mj.friction is not None:
-                    geom.friction = list(mj.friction)
-                if mj.solref is not None:
-                    geom.solref = list(mj.solref)
-                if mj.solimp is not None:
-                    geom.solimp = list(mj.solimp)
-                if mj.condim is not None:
-                    geom.condim = mj.condim
+                apply_fields(geom, mj, f"physics.{name}.mujoco")
 
     def _apply_link_physics_to_robot(self, robot_spec: mujoco.MjSpec, robot_config: RobotConfig) -> None:
         """Apply the robot's ``link_physics`` to every robot link body, before attach/compile.
@@ -744,6 +740,38 @@ class MujocoSceneManager:
             if not body.name or body.name == worldbody_name:
                 continue
             self._apply_physics_to_body(body, asset.link_physics, f"{asset.robot_type}/{body.name}", apply_mass=False)
+
+    def _validate_robot_collision_masks(self, model: mujoco.MjModel, root_body_id: int) -> None:
+        """Reject mask overrides that permit self-contact after native body filtering."""
+        if self.robot_config is None:
+            return
+        asset = self.robot_config.asset
+        native = asset.link_physics.mujoco if asset.link_physics is not None else None
+        if asset.enable_self_collisions or native is None or (native.contype is None and native.conaffinity is None):
+            return
+        # Compiled body IDs follow tree order; retained worldbody geoms are environment.
+        bodies = {root_body_id}
+        for body in range(root_body_id + 1, model.nbody):
+            if int(model.body_parentid[body]) in bodies:
+                bodies.add(body)
+        exclusions = set(map(int, model.exclude_signature))
+        filter_parent = not (model.opt.disableflags & mujoco.mjtDisableBit.mjDSBL_FILTERPARENT)
+        for left, right in combinations(sorted(bodies), 2):
+            weld_left, weld_right = int(model.body_weldid[left]), int(model.body_weldid[right])
+            if weld_left == weld_right or (left << 16) + right in exclusions:
+                continue
+            if filter_parent and weld_left != 0 and weld_right != 0:
+                parent_left = int(model.body_weldid[model.body_parentid[weld_left]])
+                parent_right = int(model.body_weldid[model.body_parentid[weld_right]])
+                if weld_left == parent_right or weld_right == parent_left:
+                    continue
+            if (int(model.body_contype[left]) & int(model.body_conaffinity[right])) or (
+                int(model.body_contype[right]) & int(model.body_conaffinity[left])
+            ):
+                raise ValueError(
+                    "robot.asset.link_physics.mujoco: collision masks allow self-collision while "
+                    "robot.asset.enable_self_collisions=False; restrict the masks or enable self-collisions"
+                )
 
     def _ensure_single_root_body(self, spec: mujoco.MjSpec, name: str, add_freejoint: bool = True) -> str:
         """Require a single top-level body; return its root-body name.
@@ -797,7 +825,7 @@ class MujocoSceneManager:
     def _apply_collision_settings(self, robot_spec: mujoco.MjSpec, robot_config: RobotConfig) -> None:
         """Apply collision settings based on unified self_collisions configuration.
 
-        This matches IsaacGym/IsaacSim behavior programmatically by configuring
+        This matches IsaacSim behavior programmatically by configuring
         MuJoCo collision classes based on the robot's self_collisions setting.
 
         Parameters
@@ -890,7 +918,7 @@ class MujocoSceneManager:
 
         return spec
 
-    def _is_ground_geom(self, geom: mujoco.MjSpec.Geom, ground_names: List[str]) -> bool:
+    def _is_ground_geom(self, geom: mujoco.MjSpec.Geom, ground_names: list[str]) -> bool:
         """Determine if a geometry represents ground/floor.
 
         Parameters
@@ -920,6 +948,7 @@ class MujocoSceneManager:
             Compiled MuJoCo model ready for simulation.
         """
         logger.info("Compiling world model using MjSpec")
+        apply_world_config(self.world_spec, self.simulator_config)
         model = self.world_spec.compile()
 
         meta = self.robot_spec_meta
@@ -933,5 +962,6 @@ class MujocoSceneManager:
         if root_body_id < 0:
             raise RuntimeError(f"Compiled MuJoCo model is missing robot root body '{root_body_name}'.")
 
+        self._validate_robot_collision_masks(model, root_body_id)
         tag_compiled_robot_geom_groups(model, root_body_id)
         return model

@@ -42,7 +42,15 @@ import torch
 import warp as wp
 from loguru import logger
 
+from holosoma.simulator.mujoco.backends.native_config import (
+    allocation_kwargs,
+    apply_warp_model,
+    validate_warp_options,
+    warp_extra_inputs,
+    warp_option_overrides,
+)
 from holosoma.simulator.mujoco.geom_groups import DEFAULT_RENDER_GEOM_GROUPS
+from holosoma.simulator.mujoco.native_config import effective_options
 
 from .base import IMujocoBackend, holosoma_to_mj_quat, mj_to_holosoma_quat
 from .warp_bridge import WarpBridge
@@ -76,7 +84,7 @@ def _mul_quat(u: wp.quat, v: wp.quat) -> wp.quat:
 def _rot_vec_quat(vec: wp.vec3, quat: wp.quat) -> wp.vec3:
     s = quat[0]
     u = wp.vec3(quat[1], quat[2], quat[3])
-    return 2.0 * (wp.dot(u, vec) * u) + (s * s - wp.dot(u, u)) * vec + 2.0 * s * wp.cross(u, vec)  # type: ignore[no-any-return]
+    return 2.0 * (wp.dot(u, vec) * u) + (s * s - wp.dot(u, u)) * vec + 2.0 * s * wp.cross(u, vec)
 
 
 @wp.func
@@ -122,12 +130,12 @@ def _static_geom_local_to_global(
     The composition forward kinematics applies to a geom, restricted to the given geoms/worlds,
     using the local wxyz quaternion helpers above.
     """
-    # wp.tid() returns a 2-tuple for a 2D launch, but Warp's stub's first overload types a 0-arg
-    # call as scalar int, so mypy reports "int not iterable" on the unpack (misc) and cannot type
-    # wi/gi (has-type). Comment-only ignores keep this valid in the Warp DSL (which rejects cast()).
+    # wp.tid() returns a 2-tuple for a 2D launch, but Warp's stub types the 0-arg call as a union
+    # whose first member is a scalar int, so mypy reports "int not iterable" on the unpack. A
+    # comment-only ignore keeps this valid in the Warp DSL (which rejects cast()).
     wi, gi = wp.tid()  # type: ignore[misc]
-    worldid = worlds[wi]  # type: ignore[has-type]
-    geomid = geom_ids[gi]  # type: ignore[has-type]
+    worldid = worlds[wi]
+    geomid = geom_ids[gi]
     bodyid = geom_bodyid[geomid]
     bpos = xpos[worldid, bodyid]
     bquat = xquat[worldid, bodyid]
@@ -197,10 +205,18 @@ class WarpBackend(IMujocoBackend):
         ------
         ImportError
             If warp or mujoco_warp packages are not installed
+        ValueError
+            If native settings are invalid or unsupported, or device is not CUDA
         RuntimeError
             If GPU initialization fails
         """
         super().__init__(model, data, config, device)
+        warp_config = config.simulator.sim.mujoco
+        overrides = effective_options(config.simulator)
+        validate_warp_options(model, overrides)
+        option_inputs, allocation_inputs = warp_extra_inputs(warp_config.warp)
+        options = warp_option_overrides(warp_config.warp, inputs=option_inputs)
+        allocation = allocation_kwargs(model, warp_config.warp, self.num_envs, inputs=allocation_inputs)
 
         # Import warp packages (fail fast if not available)
         try:
@@ -215,24 +231,21 @@ class WarpBackend(IMujocoBackend):
         # Initialize Warp runtime
         wp.init()
         self.mjw_device = wp.get_device(device)
+        if not self.mjw_device.is_cuda:
+            raise ValueError(f"device={device!r}: WarpBackend requires a CUDA device")
 
         logger.info(f"Initializing WarpBackend: {self.num_envs} envs on {device}")
 
-        # Get memory allocation config
-        warp_config = config.simulator.mujoco_warp
-        nconmax_per_env = warp_config.nconmax_per_env
-        njmax_per_env = warp_config.njmax_per_env
-
-        # Auto-calculate njmax if not specified
-        if njmax_per_env is None:
-            njmax_per_env = max(nconmax_per_env * 6, model.nv * 4)
-
-        logger.info(f"GPU memory allocation: nconmax={nconmax_per_env} per env, njmax={njmax_per_env} per env")
+        logger.info(f"GPU memory allocation: {allocation}")
 
         # Create Warp model and batched data within GPU context
         with wp.ScopedDevice(self.mjw_device):
             # Upload model to GPU
-            self.mjw_model = mjw.put_model(model)
+            try:
+                self.mjw_model = mjw.put_model(model)
+            except (ValueError, NotImplementedError) as exc:
+                raise ValueError(f"simulator.config.sim.mujoco / model attributes: {exc}") from exc
+            apply_warp_model(self.mjw_model, warp_config, options)
             self._lidar_render_context: Any = None
             self._lidar_render_context_groups: tuple[int, ...] | None = None
             self._sensor_refit_graphs: dict[int, Graph] = {}
@@ -243,15 +256,13 @@ class WarpBackend(IMujocoBackend):
 
             # Allocate batched data for parallel environments
             # Memory allocation strategy (following mujoco_warp API):
-            # - nconmax: contacts per environment (not total across all environments)
-            # - njmax: constraints per environment
-            # - naconmax: total contacts across ALL environments (auto-calculated internally)
-            self.mjw_data = mjw.make_data(
-                model,
-                nworld=self.num_envs,
-                nconmax=nconmax_per_env,
-                njmax=njmax_per_env,
-            )
+            # - nconmax: average contacts per environment, pooled across all environments
+            # - njmax: hard constraint capacity per environment
+            # - naconmax: total contact pool, configured explicitly or defaulting to nconmax*num_envs
+            try:
+                self.mjw_data = mjw.make_data(model, **allocation)
+            except (ValueError, NotImplementedError) as exc:
+                raise ValueError(f"simulator.config.sim.mujoco.warp allocation: {exc}") from exc
 
             # Create zero-copy PyTorch tensors tethered to Warp arrays
             # These tensors share memory with the Warp arrays - no copying!
@@ -676,7 +687,7 @@ class WarpBackend(IMujocoBackend):
 
         The captured step graph extracts contacts through the public
         ``mujoco_warp.contact_force`` API and accumulates them by body. The
-        simulator gathers robot-only rows and rotates the history.
+        simulator gathers robot-only rows and records them per substep.
 
         Returns
         -------
@@ -789,7 +800,7 @@ class WarpBackend(IMujocoBackend):
         Returns
         -------
         MjwDofStateView
-            DOF state view with IsaacGym flattened format [num_envs * num_dof, 2]
+            DOF state view with flattened format [num_envs * num_dof, 2]
         """
         from holosoma.simulator.mujoco.mjw_views import MjwDofStateView
 
@@ -902,7 +913,7 @@ class WarpBackend(IMujocoBackend):
         env_ids : torch.Tensor
             Environment IDs to update [num_selected_envs]
         dof_states : torch.Tensor
-            DOF states [num_all_envs * num_dofs, 2] in IsaacGym format
+            DOF states [num_all_envs * num_dofs, 2] in the flattened format
             where [:, 0] = positions, [:, 1] = velocities
             NOTE: Contains states for ALL environments, we select based on env_ids
         dof_addrs : dict
@@ -921,7 +932,7 @@ class WarpBackend(IMujocoBackend):
 
         selected_dof_states = dof_states[indices]  # [len(env_ids) * num_dof, 2]
 
-        # Reshape from flattened IsaacGym format
+        # Reshape from the flattened format
         dof_pos = selected_dof_states[:, 0].view(len(env_ids), num_dof)  # [num_selected_envs, num_dof]
         dof_vel = selected_dof_states[:, 1].view(len(env_ids), num_dof)  # [num_selected_envs, num_dof]
 

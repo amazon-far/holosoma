@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -23,6 +23,7 @@ from holosoma.utils.simulator_config import SimulatorType, get_simulator_type
 
 if TYPE_CHECKING:
     from holosoma.simulator.shared.camera_controller import CameraController
+    from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
     from holosoma.simulator.shared.sensor_manager import SensorManager
     from holosoma.simulator.shared.simulator_bridge import SimulatorBridge
     from holosoma.simulator.shared.video_recorder import VideoRecorderInterface
@@ -36,7 +37,7 @@ class BaseSimulator:
     over robotic assets and simulation properties. Includes unified state accessors
     for cross-simulator compatibility.
 
-    The unified interface abstracts differences between IsaacGym's flat tensor approach
+    The unified interface abstracts differences between the flat tensor approach
     and IsaacSim's object-based tensors, providing consistent APIs for object state
     management across both simulators.
 
@@ -75,7 +76,7 @@ class BaseSimulator:
     index values in task/environment code.
 
     **State Synchronization**:
-    - IsaacGym: State changes applied immediately
+    - MuJoCo: State changes applied immediately
     - IsaacSim: State changes can be deferred for batching (see write_state_updates)
 
     Examples
@@ -144,7 +145,7 @@ class BaseSimulator:
     dof_pos: torch.Tensor
     dof_vel: torch.Tensor
     contact_forces: torch.Tensor
-    contact_forces_history: torch.Tensor
+    contact_recorder: ContactSubstepRecorder
 
     # Robot properties, populated by each backend during setup (see _setup_robot_props_*).
     num_dof: int
@@ -253,20 +254,6 @@ class BaseSimulator:
             headless (bool): If True, runs the simulation without graphical display.
         """
         self.headless = headless
-
-    def set_startup_randomization_callback(self, callback: Callable[[], None]) -> None:
-        """Sets a callback to be invoked during environment startup for domain randomization.
-
-        This method allows the environment to inject domain randomization logic during
-        environment creation. The callback behavior and timing may vary by simulator.
-
-        Note: This is currently only used by IsaacGym. Other simulators may implement
-        this as a no-op if they don't support startup randomization callbacks.
-
-        Args:
-            callback: A callable to be invoked during environment startup.
-        """
-        # Default no-op implementation
 
     def setup(self) -> None:
         """
@@ -411,7 +398,7 @@ class BaseSimulator:
         """Get the simulator type for this simulator instance.
 
         Returns:
-            SimulatorType: The type of simulator (ISAACGYM, ISAACSIM, MUJOCO)
+            SimulatorType: The type of simulator (ISAACSIM, MUJOCO)
         """
         return get_simulator_type()
 
@@ -540,16 +527,6 @@ class BaseSimulator:
         Refreshes the state tensors in the simulation to ensure they are up-to-date.
         """
         raise NotImplementedError("The 'refresh_sim_tensors' method must be implemented in subclasses.")
-
-    def clear_contact_forces_history(self, env_ids: torch.Tensor) -> None:
-        """Clear the contact-forces history for the specified environments.
-
-        Parameters
-        ----------
-        env_ids : torch.Tensor
-            1-D tensor of environment IDs whose contact-force history is zeroed (empty -> no-op).
-        """
-        raise NotImplementedError("The 'clear_contact_forces_history' method must be implemented in subclasses.")
 
     # ----- Control Application Methods -----
 
@@ -817,7 +794,6 @@ class BaseSimulator:
 
         Implementation Notes
         --------------------
-        - **IsaacGym**: No-op, state changes are always applied immediately
         - **IsaacSim**: Flushes deferred updates via scene.write_data_to_sim()
 
         See Also
@@ -902,8 +878,8 @@ class BaseSimulator:
         Convenience over :meth:`set_actor_states` for the common "move a static obstacle" case:
         it zero-pads the 7-wide pose to a full 13-wide state (static/kinematic bodies ignore the
         velocity columns, moving by pose target, not commanded velocity) and forwards. Works
-        the same on every backend (MuJoCo via body_pos/body_quat + forward-kinematics; IsaacGym
-        via the fixed-base root-state teleport; IsaacSim via the kinematic rigid-body write).
+        the same on every backend (MuJoCo via body_pos/body_quat + forward-kinematics; IsaacSim
+        via the kinematic rigid-body write).
 
         Parameters
         ----------
@@ -941,6 +917,14 @@ class BaseSimulator:
         observations compute), honoring each sensor's ``update_decimation``. Consumers then do
         cheap cached reads through the camera/LiDAR accessors."""
         raise NotImplementedError("The 'render_sensors' method must be implemented in subclasses.")
+
+    def rerender_sensors(self, env_ids: torch.Tensor) -> None:
+        """Re-render ``env_ids`` for sensors that support partial rendering; other sensors keep their frame.
+
+        Body poses must already reflect the state written for those envs.
+        """
+        if self.sensor_manager is not None:
+            self.sensor_manager.rerender(env_ids)
 
     def get_camera_data(
         self,
@@ -1114,7 +1098,6 @@ class BaseSimulator:
           velocity are origin-invariant). For a name-major/env-minor tensor ``t`` over ``names`` x
           ``env_ids``: ``t[:, 0:3] -= self.env_origins[env_ids].repeat(len(names), 1)`` to go
           world->local, ``+=`` to go local->world. (No frame kwarg exists; poses are world-frame.)
-        - IsaacGym: write_updates parameter has no effect (always immediate)
         - IsaacSim: write_updates=False allows batching for performance
         - State ordering matches ObjectRegistry index calculation
 
@@ -1204,7 +1187,6 @@ class BaseSimulator:
         - Performance-optimized method for hot paths
         - No name lookup overhead
         - Indices must be pre-computed using get_actor_indices()
-        - IsaacGym: write_updates parameter has no effect (always immediate)
         - IsaacSim: write_updates=False allows batching for performance
 
         See Also
@@ -1416,7 +1398,7 @@ class BaseSimulator:
 
         Notes
         -----
-        - Works consistently across IsaacGym and IsaacSim
+        - Works consistently across every backend
         - Environment origins are automatically handled by the framework
         - Quaternion format is xyzw (standard format)
 
@@ -1474,7 +1456,6 @@ class BaseSimulator:
             DOF states to set, dtype torch.float32. **Shape varies by simulator**:
 
             - **IsaacSim**: [num_envs, num_dofs, 2] - 3D tensor
-            - **IsaacGym**: [num_envs * num_dofs, 2] - 2D flattened tensor
 
             Format: positions and velocities (see simulator docs for indexing).
             If None, uses current dof_state.
@@ -1483,7 +1464,6 @@ class BaseSimulator:
         --------
         See simulator-specific implementations for correct tensor format examples:
         - IsaacSim: `holosoma.simulator.isaacsim.IsaacSim.set_dof_state_tensor_robots`
-        - IsaacGym: `holosoma.simulator.isaacgym.IsaacGym.set_dof_state_tensor_robots`
 
         Notes
         -----

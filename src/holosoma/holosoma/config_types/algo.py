@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import field
-from typing import Any, List, Union
+from typing import Any
 
 from pydantic import model_validator
 from pydantic.dataclasses import dataclass
@@ -22,7 +22,7 @@ class OptimizerConfig:
 class LayerConfig:
     """Configuration for neural network layer settings."""
 
-    hidden_dims: List[int] = field(default_factory=lambda: [512, 256, 128])
+    hidden_dims: list[int] = field(default_factory=lambda: [512, 256, 128])
     """List of hidden layer dimensions."""
 
     activation: str = "ELU"
@@ -40,7 +40,7 @@ class LayerConfig:
     encoder_output_dim: int | None = None
     """Output dimension for encoder. Only used for encoder modules."""
 
-    encoder_hidden_dims: List[int] | None = None
+    encoder_hidden_dims: list[int] | None = None
     """Hidden dimensions for encoder. Only used for encoder modules."""
 
     encoder_input_name: str = ""
@@ -87,10 +87,10 @@ class ModuleConfig:
     type: str
     """Module type (e.g., MLP)."""
 
-    input_dim: List[str] = field(default_factory=list)
+    input_dim: list[str] = field(default_factory=list)
     """Input dimension specification."""
 
-    output_dim: List[str | int] = field(default_factory=list)
+    output_dim: list[str | int] = field(default_factory=list)
     """Output dimension specification."""
 
     layer_config: LayerConfig = field(default_factory=LayerConfig)
@@ -279,6 +279,14 @@ class FastSACConfig:
     compile: bool = True
     """whether to use torch.compile."""
 
+    compile_mode: str | None = "auto"
+    """torch.compile mode for the compiled training functions. "auto" uses "reduce-overhead" (CUDA graphs) for
+    multi-GPU training and the default mode otherwise; None forces the default mode; any other string is passed to
+    torch.compile unchanged."""
+
+    compile_options: dict[str, bool | int | float | str] | None = None
+    """torch.compile Inductor options, e.g. {"coordinate_descent_tuning": True}; exclusive with compile_mode."""
+
     obs_normalization: bool = True
     """whether to enable observation normalization"""
 
@@ -315,8 +323,8 @@ class FastSACConfig:
     use_cnn_encoder: bool = False
     """whether to use CNN for the encoder"""
 
-    actor_obs_keys: List[str] = field(default_factory=lambda: ["actor_obs"])
-    critic_obs_keys: List[str] = field(default_factory=lambda: ["critic_obs"])
+    actor_obs_keys: list[str] = field(default_factory=lambda: ["actor_obs"])
+    critic_obs_keys: list[str] = field(default_factory=lambda: ["critic_obs"])
 
     eval_callbacks: Any = None
     """Evaluation callbacks configuration."""
@@ -350,6 +358,217 @@ class FastSACAlgoConfig:
     """Algorithm-specific configuration."""
 
 
-AlgoInitConfig = Union[PPOConfig, FastSACConfig]
+@dataclass(frozen=True)
+class StudentTeacherModuleConfig:
+    """Configuration for the student/teacher(/critic) module of the distillation algorithms.
 
-AlgoConfig = Union[PPOAlgoConfig, FastSACAlgoConfig]
+    Slots into :class:`DistillationPPOConfig` and :class:`DistillationConfig`.
+    Dimensions are resolved at runtime from the observation manager; only
+    hidden-layer shapes and the optional depth backbone are declared here.
+    """
+
+    student_hidden_dims: list[int] = field(default_factory=lambda: [2048, 1024, 512, 256, 128])
+    """Student MLP hidden layer widths."""
+
+    teacher_hidden_dims: list[int] = field(default_factory=lambda: [512, 256, 128])
+    """Hidden layer widths of the MLP teachers in student checkpoints saved before teachers recorded
+    their construction; used only to rebuild those. Teachers are otherwise rebuilt from their own
+    checkpoints, so this does not need to match a new teacher."""
+
+    critic_hidden_dims: list[int] = field(default_factory=lambda: [512, 256, 128])
+    """Critic MLP hidden layer widths. Ignored by :class:`DistillationConfig`, which has no critic."""
+
+    activation: str = "ELU"
+    """Activation function name."""
+
+    depth_backbone: str | None = "holosoma.agents.modules.depth_backbone.DepthOnlyFCBackbone58x87Small"
+    """Dotted path to a depth-backbone ``nn.Module`` class, instantiated as ``cls(depth_output_dim)``.
+    The student also consumes the backbone's latent of the depth image. ``None`` builds a student
+    that sees only ``actor_obs`` and needs no depth observation group."""
+
+    depth_output_dim: int = 32
+    """Latent dim produced by the depth backbone and concatenated onto the student input."""
+
+    depth_obs_group: str = "depth_camera"
+    """Observation group holding the depth image. Only read when ``depth_backbone`` is set."""
+
+    depth_obs_term: str = "depth_cam"
+    """Term of ``depth_obs_group`` holding the depth image, if the group is not concatenated."""
+
+
+@dataclass(frozen=True)
+class DistillationPPOConfig:
+    """Configuration for the :class:`DistillationPPO` algorithm.
+
+    Mirrors :class:`PPOConfig` but replaces ``module_dict`` with a single
+    :class:`StudentTeacherModuleConfig` and adds DAgger schedule knobs.
+    """
+
+    module: StudentTeacherModuleConfig
+    """Student/teacher/critic module configuration."""
+
+    num_learning_epochs: int = 2
+    """Number of learning epochs per update."""
+
+    num_mini_batches: int = 96
+    """Number of mini-batches per epoch."""
+
+    clip_param: float = 0.2
+    """PPO clipping parameter."""
+
+    gamma: float = 0.99
+    """Discount factor for future rewards."""
+
+    lam: float = 0.95
+    """GAE lambda parameter."""
+
+    value_loss_coef: float = 1.0
+    """Value loss coefficient."""
+
+    entropy_coef: float = 0.001
+    """Entropy coefficient for exploration."""
+
+    learning_rate: float = 3e-4
+    """Learning rate applied to all parameter groups."""
+
+    max_grad_norm: float = 1.0
+    """Maximum gradient norm for clipping."""
+
+    schedule: str = "adaptive"
+    """Learning rate schedule type."""
+
+    desired_kl: float = 0.01
+    """Desired KL divergence for adaptive learning rate."""
+
+    min_learning_rate: float = 1e-5
+    """Lower bound of the adaptive learning rate."""
+
+    max_learning_rate: float = 1e-2
+    """Upper bound of the adaptive learning rate."""
+
+    num_steps_per_env: int = 24
+    """Number of rollout steps per environment."""
+
+    save_interval: int = 500
+    """Interval for saving model checkpoints."""
+
+    init_noise_std: float = 0.01
+    """Initial action noise standard deviation (forwarded to the student-teacher module)."""
+
+    num_learning_iterations: int = 20000
+    """Total number of learning iterations."""
+
+    empirical_normalization: bool = False
+    """Whether to apply empirical normalization. Not supported for distillation."""
+
+    ppo_start_epoch: int = 0
+    """Iteration at which PPO coefficient begins ramping up from 0."""
+
+    dagger_end_epoch: int = 10000
+    """Iteration at which PPO coefficient reaches its plateau, ``max_ppo_coef``."""
+
+    max_ppo_coef: float = 0.9
+    """Plateau of the PPO coefficient. The imitation term keeps weight
+    ``(1 - max_ppo_coef) * dagger_loss_coef`` after the ramp, so ``1.0`` turns imitation off."""
+
+    ppo_active_threshold: float = 0.1
+    """PPO coefficient above which the action noise std is trained and the adaptive
+    learning rate updates; below it, DAgger dominates and both stay fixed."""
+
+    distill_loss_type: str = "mse"
+    """``mse`` or ``huber``."""
+
+    dagger_loss_coef: float = 10.0
+    """Multiplier applied to the (1 - ppo_coef) * distill_loss term."""
+
+    distillation_warmup_steps: int = 0
+    """Initial training iterations during which the teacher drives the env.
+    Updates are DAgger-only because PPO cannot use rewards generated by a
+    different behavior policy. ``0`` disables warmup."""
+
+    weight_decay: float = 0.0
+    """Weight decay for the student/critic AdamW param groups."""
+
+    depth_weight_decay: float = 1e-2
+    """Weight decay for the depth-backbone AdamW parameter group. Unused without a depth backbone."""
+
+    eval_callbacks: Any = None
+    """Evaluation callbacks configuration."""
+
+
+@dataclass(frozen=True)
+class DistillationPPOAlgoConfig:
+    """Wrapper paralleling :class:`PPOAlgoConfig`."""
+
+    _target_: str
+    _recursive_: bool
+    config: DistillationPPOConfig
+
+
+@dataclass(frozen=True)
+class DistillationConfig:
+    """Configuration for the :class:`Distillation` (pure-DAgger) algorithm.
+
+    Strips all PPO-related fields from :class:`DistillationPPOConfig`. The
+    student is trained purely against teacher actions; there is no critic,
+    no value loss, and no KL-adaptive LR schedule.
+    """
+
+    module: StudentTeacherModuleConfig
+    """Student/teacher module configuration. ``critic_hidden_dims`` on the
+    shared module cfg is ignored here since Distillation doesn't build a critic."""
+
+    num_learning_epochs: int = 2
+    """Number of learning epochs per update."""
+
+    num_mini_batches: int = 96
+    """Number of mini-batches per epoch."""
+
+    learning_rate: float = 3e-4
+    """Learning rate for the Adam optimizer (applied uniformly to the student and
+    its depth backbone, if any)."""
+
+    max_grad_norm: float = 1.0
+    """Maximum gradient norm for clipping."""
+
+    num_steps_per_env: int = 24
+    """Number of rollout steps per environment between updates."""
+
+    save_interval: int = 500
+    """Interval for saving model checkpoints."""
+
+    init_noise_std: float = 0.001
+    """Initial action noise std forwarded to the student module. Pure DAgger
+    uses near-zero noise so the student mostly mirrors the teacher during
+    rollouts."""
+
+    num_learning_iterations: int = 10000
+    """Total number of learning iterations."""
+
+    empirical_normalization: bool = False
+    """Not supported; must remain False."""
+
+    distill_loss_type: str = "mse"
+    """``mse`` or ``huber``."""
+
+    distillation_warmup_steps: int = 0
+    """Initial training iterations during which the teacher drives the env.
+    The count is absolute, so resuming or calling ``learn()`` again does not
+    restart warmup."""
+
+    eval_callbacks: Any = None
+    """Evaluation callbacks configuration."""
+
+
+@dataclass(frozen=True)
+class DistillationAlgoConfig:
+    """Wrapper paralleling :class:`DistillationPPOAlgoConfig`."""
+
+    _target_: str
+    _recursive_: bool
+    config: DistillationConfig
+
+
+AlgoInitConfig = PPOConfig | FastSACConfig | DistillationPPOConfig | DistillationConfig
+
+AlgoConfig = PPOAlgoConfig | FastSACAlgoConfig | DistillationPPOAlgoConfig | DistillationAlgoConfig

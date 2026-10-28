@@ -3,7 +3,7 @@
 Builds ONE real, fully-managed locomotion env (real action_manager + randomization_manager, no
 shims) and runs every robot + object DR term against it via the shared ``_dr_matrix`` checks,
 reading mutated fields back through the ``dr_matrix_assert`` MuJoCo reader. This is the
-classic-CPU column of the matrix; the GPU columns (mjwarp / isaacgym / isaacsim) run the SAME
+classic-CPU column of the matrix; the GPU columns (mjwarp / isaacsim) run the SAME
 ``dr_matrix_assert`` harness in a subprocess under their own launcher.
 
 The MuJoCo ClassicBackend is safe to build in-process, so this runs the harness pieces directly

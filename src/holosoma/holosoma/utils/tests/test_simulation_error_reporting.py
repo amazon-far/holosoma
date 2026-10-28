@@ -8,9 +8,10 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Iterator, cast
+from typing import Any, cast
 
 import pytest
 
@@ -287,13 +288,16 @@ def test_traceback_survives_forced_termination_during_environment_cleanup(tmp_pa
     stderr_path = tmp_path / "stderr.log"
     command = _child_command("direct_run", "runtime", sink_kind=sink_kind)
     command.extend(["--ready-file", str(ready_file)])
-    with stderr_path.open("w") as stderr, subprocess.Popen(
-        command,
-        env={**os.environ, "LOGURU_COLORIZE": "NO"},
-        stdout=subprocess.PIPE,
-        stderr=stderr,
-        text=True,
-    ) as process:
+    with (
+        stderr_path.open("w") as stderr,
+        subprocess.Popen(
+            command,
+            env={**os.environ, "LOGURU_COLORIZE": "NO"},
+            stdout=subprocess.PIPE,
+            stderr=stderr,
+            text=True,
+        ) as process,
+    ):
         try:
             deadline = time.monotonic() + 30
             while not ready_file.exists():

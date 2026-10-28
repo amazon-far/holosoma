@@ -40,7 +40,7 @@ def test_bridge_dds_config_defaults_roundtrip_replace_and_schema() -> None:
     config = BridgeConfig(dds_config=_XML)
     assert BridgeConfig(**asdict(config)).dds_config == _XML
     assert replace(config, interface="lo").dds_config == _XML
-    adapter = TypeAdapter(BridgeConfig)
+    adapter: TypeAdapter[BridgeConfig] = TypeAdapter(BridgeConfig)
     assert adapter.validate_json(adapter.dump_json(config)).dds_config == _XML
     assert adapter.json_schema()["properties"]["dds_config"]["default"] is None
 

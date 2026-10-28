@@ -53,6 +53,7 @@ from holosoma.simulator.isaacsim.proxy_utils import RootStatesProxy
 from holosoma.simulator.shared.dof_limits import build_dof_limits_from_config
 from holosoma.simulator.shared.external_wrench import WrenchTarget
 from holosoma.simulator.shared.root_states_view import UnifiedRootStatesView
+from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.simulator.isaacsim.state_adapter import IsaacSimStateAdapter
 from holosoma.simulator.isaacsim.prim_utils import log_robot_properties, print_prim_tree
@@ -151,7 +152,7 @@ class IsaacSim(BaseSimulator):
             # Narrow the type from the base class's SceneInterface (which declares only
             # env_origins) to IsaacLab's InteractiveScene, what self.scene actually is on this
             # backend, so the rich .rigid_objects/.articulations/.sensors/... accesses below
-            # type-check. The base protocol stays correct for MuJoCo/IsaacGym, whose scenes
+            # type-check. The base protocol stays correct for MuJoCo, whose scenes
             # implement only env_origins.
             self.scene: InteractiveScene = InteractiveScene(scene_config)
             # Per-camera TiledCamera map, keyed by sensor name; populated by
@@ -281,9 +282,7 @@ class IsaacSim(BaseSimulator):
         self._load_scene_config()
 
         robot_articulation_config = build_robot_articulation_cfg(self.robot_config)
-        contact_sensor_config = build_contact_sensor_cfg(
-            self.simulator_config.contact_sensor_history_length, self.debug_viz_enabled
-        )
+        contact_sensor_config = build_contact_sensor_cfg(self.debug_viz_enabled)
 
         self._robot = Articulation(robot_articulation_config)
 
@@ -476,7 +475,7 @@ class IsaacSim(BaseSimulator):
         self.body_ids, self.body_names = self._robot.find_bodies(self.robot_config.body_names, preserve_order=True)
 
         self._body_list = self.body_names.copy()
-        # dof_ids and body_ids is convert dfs order (isaacsim) to dfs order (isaacgym, holosoma config)
+        # dof_ids and body_ids convert DFS order (isaacsim) to holosoma's config order
         # i.e., bfs_order_tensor = dfs_order_tensor[dof_ids]
 
         # add joint names with "joint" postfix
@@ -532,7 +531,7 @@ class IsaacSim(BaseSimulator):
         # IsaacSim does NOT honor the passed env_origins: InteractiveScene clones the envs on its own
         # env_spacing grid (built in __init__), and every internal placement (robot/object poses,
         # terrain) uses self.scene.env_origins, not the argument. Storing the passed value here left
-        # self.env_origins disagreeing with where envs actually are (unlike mujoco/isaacgym, where the
+        # self.env_origins disagreeing with where envs actually are (unlike mujoco, where the
         # passed origins ARE the placement) — so callers reading sim.env_origins (e.g. a multi-env
         # camera harness pinning a robot relative to its env) landed off from the grid-placed scene.
         # Reconcile to the real grid so sim.env_origins means the same thing on every backend.
@@ -641,12 +640,15 @@ class IsaacSim(BaseSimulator):
         # get/set_actor_states_by_index, which delegate to the state adapter.
         self.all_root_states = UnifiedRootStatesView(self)
 
-        self.contact_forces_history = torch.zeros(
+        self.contact_recorder = ContactSubstepRecorder(
+            self.hooks,
+            # Gathers from the sensor, not contact_forces: that is only reassigned in
+            # refresh_sim_tensors, so it would record one stale frame per substep.
+            self._robot_contact_forces,
             self.num_envs,
-            self.simulator_config.contact_sensor_history_length,
+            self.simulator_config.sim.control_decimation_steps,
             self.num_bodies,
-            3,
-            device=self.sim_device,
+            self.sim_device,
         )
 
         # Initialize virtual gantry system after object registry setup
@@ -704,18 +706,7 @@ class IsaacSim(BaseSimulator):
         self.dof_pos = self._robot.data.joint_pos[:, self.dof_ids]  # (num_envs, num_dof)
         self.dof_vel = self._robot.data.joint_vel[:, self.dof_ids]
 
-        # The body ordering of contact_sensor is different from the body ordering of the robot.
-        self.contact_forces = self.contact_sensor.data.net_forces_w[
-            :, self._contact_to_robot_body_ids
-        ]  # (num_envs, num_bodies, 3)
-
-        # Issue: data.net_forces_w_history is not cleared after a reset.
-        # Solution: We only read the most recent decimation_factor steps.
-        control_decimation = self.simulator_config.sim.control_decimation_steps
-        effective_history_length = min(control_decimation, self.simulator_config.contact_sensor_history_length)
-        self.contact_forces_history[:, :effective_history_length, :, :] = self.contact_sensor.data.net_forces_w_history[
-            :, :effective_history_length, self._contact_to_robot_body_ids
-        ]  # (num_envs, history_length, num_bodies, 3), the first index is the most recent
+        self.contact_forces = self._robot_contact_forces()
 
         self._rigid_body_pos = self._robot.data.body_pos_w[:, self.body_ids, :]
         self._rigid_body_rot = self._robot.data.body_quat_w[:, self.body_ids][
@@ -726,9 +717,10 @@ class IsaacSim(BaseSimulator):
         self._rigid_body_vel = self._robot.data.body_link_lin_vel_w[:, self.body_ids, :]
         self._rigid_body_ang_vel = self._robot.data.body_ang_vel_w[:, self.body_ids, :]
 
-    def clear_contact_forces_history(self, env_ids: torch.Tensor) -> None:
-        if len(env_ids) > 0:
-            self.contact_forces_history[env_ids, :, :, :] = 0.0
+    def _robot_contact_forces(self) -> torch.Tensor:
+        """Sensor forces in robot body order, (num_envs, num_bodies, 3). The contact sensor's body
+        ordering differs from the robot's, so every reader must go through this gather."""
+        return self.contact_sensor.data.net_forces_w[:, self._contact_to_robot_body_ids]
 
     def apply_torques_at_dof(self, torques: torch.Tensor, dof_indices: list[int] | None = None) -> None:
         # set_joint_effort_target writes only the given joint_ids without clobbering the rest, so a
@@ -910,7 +902,7 @@ class IsaacSim(BaseSimulator):
         """See base class.
 
         IsaacSim-specific notes:
-        - Tensor format: 3D [num_envs, num_dofs, 2] (differs from IsaacGym's flattened format)
+        - Tensor format: 3D [num_envs, num_dofs, 2] (differs from the flattened format)
 
         Examples
         --------
@@ -968,7 +960,7 @@ class IsaacSim(BaseSimulator):
         and flush once with :meth:`write_state_updates`.
         """
         if not names or (env_ids is not None and len(env_ids) == 0):
-            return  # uniform no-op on empty input, matching get_actor_states / IsaacGym / MuJoCo
+            return  # uniform no-op on empty input, matching get_actor_states / MuJoCo
         self.set_actor_states_by_index(self.get_actor_indices(names, env_ids), states, write_updates)
 
     def get_actor_initial_poses(self, names: ActorNames, env_ids: EnvIds | None = None) -> ActorPoses:
@@ -1060,7 +1052,7 @@ class IsaacSim(BaseSimulator):
 
         This method provides access to measured joint forces. For IsaacSim,
         joint forces are computed from applied torques since direct force
-        sensing is not available in the same way as IsaacGym.
+        sensing is not available.
 
         Args:
             env_id: Environment index (default: 0)
@@ -1069,11 +1061,11 @@ class IsaacSim(BaseSimulator):
             torch.Tensor: Tensor of shape [num_dof] with computed joint forces
 
         Note:
-            IsaacSim doesn't have the same DOF force sensor infrastructure as IsaacGym.
+            IsaacSim has no DOF force sensor infrastructure.
             This implementation returns the applied torques as an approximation.
             For actual force sensing, consider using contact sensors or force/torque sensors.
         """
-        # IsaacSim doesn't have direct DOF force sensors like IsaacGym
+        # IsaacSim has no direct DOF force sensors
         # Return the applied torques (which are the commanded forces)
         # This matches the bridge's usage pattern where forces are used for feedback
         if not hasattr(self._robot, "data") or not hasattr(self._robot.data, "applied_torque"):

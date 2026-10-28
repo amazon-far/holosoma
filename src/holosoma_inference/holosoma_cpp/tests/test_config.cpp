@@ -18,7 +18,7 @@ CliOptions parse(std::vector<std::string> args) { return parse_cli(args, kPreset
 
 TEST(Config, PresetsLoad) {
   const auto presets = list_presets(kPresetDir);
-  ASSERT_EQ(presets, (std::vector<std::string>{"g1-29dof-loco", "g1-29dof-wbt"}));
+  ASSERT_EQ(presets, (std::vector<std::string>{"g1-29dof-general-wbt", "g1-29dof-loco", "g1-29dof-wbt"}));
 
   const auto loco = parse({"inference:g1-29dof-loco"}).config;
   EXPECT_FALSE(loco.is_wbt());
@@ -68,6 +68,20 @@ TEST(Config, JoystickShortcutSelectsTheWirelessController) {
   EXPECT_THROW(parse({"inference:g1-29dof-loco", "--task.use-joystick", "--task.velocity-input", "keyboard",
                       "--task.state-input", "interface"}),
                ConfigError);
+}
+
+TEST(Config, WbtHistoryInitializationDefaultsToRepeatFirstAndAcceptsZeroPad) {
+  for (const auto* preset : {"inference:g1-29dof-loco", "inference:g1-29dof-general-wbt"}) {
+    SCOPED_TRACE(preset);
+    EXPECT_EQ(parse({preset, "--task.model-path", kWbtModel}).config.task.wbt_history_initialization,
+              "repeat_first_valid_obs");
+    EXPECT_EQ(parse({preset, "--task.model-path", kWbtModel, "--task.wbt-history-initialization", "zero_pad"})
+                  .config.task.wbt_history_initialization,
+              "zero_pad");
+    for (const auto* bad : {"zero", "repeat_first", "ZERO_PAD"})
+      EXPECT_THROW(parse({preset, "--task.model-path", kWbtModel, "--task.wbt-history-initialization", bad}),
+                   ConfigError);
+  }
 }
 
 TEST(Config, RejectsMistakes) {

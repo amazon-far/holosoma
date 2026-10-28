@@ -6,9 +6,6 @@ on:
       combined_image:
         required: true
         type: string
-      isaacgym_image:
-        required: true
-        type: string
       isaacsim_image:
         required: true
         type: string
@@ -40,7 +37,7 @@ jobs:
         shell: bash
         run: |
           cd /workspace/holosoma
-          source scripts/source_isaacgym_setup.sh
+          source scripts/source_mujoco_setup.sh
           pip install mypy
           mypy .
 
@@ -49,18 +46,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - simulator: isaacgym
-            multigpu: "False"
-            image: ${{ inputs.isaacgym_image }}
           - simulator: isaacsim
             multigpu: "False"
             image: ${{ inputs.isaacsim_image }}
           - simulator: mujoco
             multigpu: "False"
             image: ${{ inputs.mujoco_image }}
-          - simulator: isaacgym
+          - simulator: isaacsim
             multigpu: "True"
-            image: ${{ inputs.isaacgym_image }}
+            image: ${{ inputs.isaacsim_image }}
     name: Test ${{ matrix.simulator }} (${{ matrix.multigpu == 'True' && 'multi-gpu' || 'single-gpu' }})
     runs-on:
       - codebuild-holosoma-a10g-${{ matrix.multigpu == 'True' && 'x4' || 'x1' }}-gpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
@@ -82,14 +76,12 @@ jobs:
     container:
       image: ${{ inputs.combined_image }}
       options: "--gpus all --runtime=nvidia --shm-size=12g"
-      env:
-        HOLOSOMA_MULTIGPU: "False"
     steps:
       - name: Pytest
         shell: bash
         run: |
           cd /workspace/holosoma
-          bash tests/ci/isaacgym_e2e_ci_tests.sh
+          bash tests/ci/e2e_ci_tests.sh
 
   inference-tests:
     name: Test Inference in Combined Image
@@ -137,24 +129,3 @@ jobs:
         run: |
           cd /workspace/holosoma
           bash tests/ci/no_sim_ci_tests.sh
-
-  service-integration-tests:
-    name: Test ROS2 Service
-    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
-    env:
-      COMBINED_IMAGE: ${{ inputs.combined_image }}
-    steps:
-      - name: Extract image source
-        shell: bash
-        run: |
-          set -euo pipefail
-          container=$(docker create "$COMBINED_IMAGE")
-          trap 'docker rm -f "$container" >/dev/null' EXIT
-          docker cp "${container}:/workspace/holosoma/." "$GITHUB_WORKSPACE"
-      - name: Build service test image
-        run: |
-          docker build \
-            -f src/holosoma_inference/holosoma_inference_service/docker/Dockerfile.test \
-            -t holosoma-service-test .
-      - name: Run service integration tests
-        run: docker run --rm holosoma-service-test
