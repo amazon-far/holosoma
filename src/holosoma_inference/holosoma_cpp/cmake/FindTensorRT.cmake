@@ -18,11 +18,18 @@ find_path(TensorRT_CUDA_INCLUDE_DIR NAMES cuda_runtime_api.h HINTS ${_cuda_hints
 find_library(TensorRT_CUDART NAMES cudart HINTS ${_cuda_hints} PATH_SUFFIXES lib lib64 lib/aarch64-linux-gnu targets/aarch64-linux/lib)
 
 if(TensorRT_INCLUDE_DIR AND EXISTS "${TensorRT_INCLUDE_DIR}/NvInferVersion.h")
-  file(STRINGS "${TensorRT_INCLUDE_DIR}/NvInferVersion.h" _trt_version_lines REGEX "#define NV_TENSORRT_(MAJOR|MINOR|PATCH) ")
-  string(REGEX REPLACE ".*NV_TENSORRT_MAJOR ([0-9]+).*" "\\1" _trt_major "${_trt_version_lines}")
-  string(REGEX REPLACE ".*NV_TENSORRT_MINOR ([0-9]+).*" "\\1" _trt_minor "${_trt_version_lines}")
-  string(REGEX REPLACE ".*NV_TENSORRT_PATCH ([0-9]+).*" "\\1" _trt_patch "${_trt_version_lines}")
-  set(TensorRT_VERSION "${_trt_major}.${_trt_minor}.${_trt_patch}")
+  # TensorRT 10 defines NV_TENSORRT_MAJOR indirectly as TRT_MAJOR_ENTERPRISE, so read the numbers.
+  file(STRINGS "${TensorRT_INCLUDE_DIR}/NvInferVersion.h" _trt_version_lines
+    REGEX "#define TRT_(MAJOR|MINOR|PATCH)_ENTERPRISE +[0-9]+")
+  set(TensorRT_VERSION "")
+  foreach(_part MAJOR MINOR PATCH)
+    foreach(_line ${_trt_version_lines})
+      if(_line MATCHES "#define TRT_${_part}_ENTERPRISE +([0-9]+)")
+        string(APPEND TensorRT_VERSION "${CMAKE_MATCH_1}.")
+      endif()
+    endforeach()
+  endforeach()
+  string(REGEX REPLACE "\\.$" "" TensorRT_VERSION "${TensorRT_VERSION}")
 endif()
 
 include(FindPackageHandleStandardArgs)
