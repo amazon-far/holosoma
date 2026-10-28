@@ -115,10 +115,10 @@ waist_back_camera = CameraSensorConfig(
 
 
 _G1_MESHES = "holosoma/data/robots/g1/meshes"
-# Links that can occlude the head camera, each with one link-frame mesh. ``combined_pelvis`` is the
-# pelvis plus its contour shell; the wrists omit the rubber hands, which sit in a separate mesh.
-_G1_SELF_OCCLUSION = {
-    "pelvis": f"{_G1_MESHES}/combined_pelvis.STL",
+# Links that can occlude the head camera, with their link-frame meshes. The pelvis contour shell is
+# fixed to the pelvis frame; the wrists omit the rubber hands, which sit in a separate mesh.
+_G1_SELF_OCCLUSION: dict[str, str | list[str]] = {
+    "pelvis": [f"{_G1_MESHES}/pelvis.STL", f"{_G1_MESHES}/pelvis_contour_link.STL"],
     **{
         f"{side}_{link}": f"{_G1_MESHES}/{side}_{link}.STL"
         for side in ("left", "right")

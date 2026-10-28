@@ -701,10 +701,10 @@ class RayCastDepthCameraConfig:
     update_decimation: DecimationLike = 1
     """Render every Nth control step, or a frequency string such as ``"50Hz"``."""
 
-    self_occlusion: dict[str, str] = field(default_factory=dict)
-    """Robot link name -> triangle mesh file (STL/OBJ, link frame) cast against at the link's
-    current pose. Paths are resolved with ``resolve_data_file_path``. Empty casts against the
-    terrain only."""
+    self_occlusion: dict[str, str | list[str]] = field(default_factory=dict)
+    """Robot link name -> triangle mesh file, or list of files (STL/OBJ, link frame), cast against
+    at the link's current pose. Paths are resolved with ``resolve_data_file_path``. Empty casts
+    against the terrain only."""
 
     @property
     def data_types(self) -> list[CameraDataType]:
@@ -725,6 +725,9 @@ class RayCastDepthCameraConfig:
         if not math.isfinite(self.far) or self.far <= self.near:
             raise ValueError(f"RayCastDepthCameraConfig.far must be finite and > near, got {self.near}..{self.far}.")
         validate_decimation_like(self.update_decimation, field="RayCastDepthCameraConfig update_decimation")
+        for link, meshes in self.self_occlusion.items():
+            if not meshes or (not isinstance(meshes, str) and not all(meshes)):
+                raise ValueError(f"RayCastDepthCameraConfig.self_occlusion['{link}'] needs at least one mesh path.")
         if self.mount.target_kind != "robot_link":
             raise ValueError(
                 f"RayCastDepthCameraConfig only mounts on robot links, got target_kind='{self.mount.target_kind}'."

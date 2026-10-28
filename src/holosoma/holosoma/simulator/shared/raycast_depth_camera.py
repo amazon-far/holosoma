@@ -150,8 +150,14 @@ class RayCastDepthCamera:
         self._wp_device = wp.get_device(self.device)
 
         self._mount_body = sim.find_rigid_body_indice(cfg.mount.target)
-        self._body_ids = [sim.find_rigid_body_indice(link) for link in cfg.self_occlusion]
-        self._body_meshes = [self._load_mesh(path) for path in cfg.self_occlusion.values()]
+        # One entry per mesh; a link with several meshes appears once for each.
+        occluders = [
+            (link, path)
+            for link, paths in cfg.self_occlusion.items()
+            for path in ([paths] if isinstance(paths, str) else paths)
+        ]
+        self._body_ids = [sim.find_rigid_body_indice(link) for link, _ in occluders]
+        self._body_meshes = [self._load_mesh(path) for _, path in occluders]
         # Warp kernels need a non-empty array even when no link occludes the camera.
         self._body_mesh_ids: wp.array[Any] = wp.array(
             [mesh.id for mesh in self._body_meshes] or [0], dtype=wp.uint64, device=self._wp_device
