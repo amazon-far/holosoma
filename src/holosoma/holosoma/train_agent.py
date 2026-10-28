@@ -188,15 +188,6 @@ def train_on_task(tyro_config: ExperimentConfig, env: PolicyTask) -> None:
         if wandb.run is not None:
             wandb_run_path = f"{wandb.run.entity}/{wandb.run.project}/{wandb.run.id}"
 
-    # For manager system, pre-process config AFTER env creation
-    # (need managers to compute dims)
-    observation_manager = getattr(env, "observation_manager", None)
-    if observation_manager is None:
-        raise RuntimeError(
-            f"Manager environment {tyro_config.env_class} is missing observation_manager attribute. "
-            "This should not happen if the environment is properly configured."
-        )
-
     experiment_save_dir = experiment_dir
     experiment_save_dir.mkdir(exist_ok=True, parents=True)
 

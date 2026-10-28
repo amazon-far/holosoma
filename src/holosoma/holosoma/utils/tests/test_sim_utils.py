@@ -5,7 +5,7 @@ from __future__ import annotations
 from holosoma.utils.sim_utils import format_simulation_performance
 
 
-def testformat_simulation_performance_names_rates_and_time_ratio() -> None:
+def test_format_simulation_performance_names_rates_and_time_ratio() -> None:
     message = format_simulation_performance(
         physics_steps=1000,
         control_steps=250,
@@ -19,7 +19,7 @@ def testformat_simulation_performance_names_rates_and_time_ratio() -> None:
     )
 
 
-def testformat_simulation_performance_handles_empty_measurement() -> None:
+def test_format_simulation_performance_handles_empty_measurement() -> None:
     assert (
         format_simulation_performance(
             physics_steps=0,

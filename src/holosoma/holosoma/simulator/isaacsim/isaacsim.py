@@ -767,9 +767,8 @@ class IsaacSim(BaseSimulator):
             self.prev_base_lin_vel = current_base_vel.clone()
 
     def forward_kinematics(self) -> None:
-        """Flush pending state writes and update articulation kinematics, fabric, and the render
-        products — without stepping physics. ``sim.current_time`` does not advance."""
-
+        """Flush pending state writes and update articulation kinematics and fabric without
+        stepping physics. ``sim.current_time`` does not advance."""
         self.scene.write_data_to_sim()
         # sim.forward() runs physics_sim_view.update_articulations_kinematic() and flushes
         # fabric, so body/camera prims match the written joint/root state without integrating.

@@ -57,7 +57,7 @@ class SimulationTask(BaseTask):
         window_start = time.perf_counter()
         start_time = window_start
         while not self.shutdown_requested:
-            self.step({})
+            self.step()
             control_steps += 1
             window_control_steps += 1
 

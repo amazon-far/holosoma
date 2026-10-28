@@ -821,7 +821,6 @@ class MotionCommand(CommandTermBase):
             sim.set_dof_state_tensor_robots(ended_env_ids, sim.dof_state)  # type: ignore[attr-defined]
             sim.refresh_sim_tensors()
 
-        # 1. update body_pos_relative_w and body_quat_relative_w
         self.update_relative_body_targets()
 
         ### 1.3 update the adaptive timesteps sampler (training only — eval episodes

@@ -191,7 +191,7 @@ class PolicyTask(BaseTask):
         timeout_ids, final_obs_dict = reset_state
         self.obs_buf_dict = self.observation_manager.step()
         if final_obs_dict:
-            self._store_final_observations(self._ensure_long_tensor(timeout_ids), final_obs_dict)
+            self._store_final_observations(timeout_ids, final_obs_dict)
 
         self._post_compute_observations_callback()
 

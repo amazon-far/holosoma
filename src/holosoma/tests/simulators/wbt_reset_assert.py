@@ -52,8 +52,9 @@ def main() -> int:
 
         actions = torch.zeros(NUM_ENVS, tyro_config.robot.actions_dim, device=env.device)
         _, _, dones, _ = env.step({"actions": actions})
-        if int(dones.sum()) != 0:
-            failures.append(f"{int(dones.sum())}/{NUM_ENVS} episodes ended on the first zero-action step")
+        ended = int(dones.sum())
+        if ended:
+            failures.append(f"{ended}/{NUM_ENVS} episodes ended on the first zero-action step")
 
         # Report before leaving the session: closing the Isaac Sim app ends the process.
         if failures:
