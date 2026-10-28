@@ -703,30 +703,31 @@ class WarpDepthCameraConfig:
     distance to the image plane. Unlike a rendered camera it can re-render a subset of envs, so
     envs reset or teleported in a control step are observed at their new state.
 
-    Keyed by its sensor name in the ``--sensor`` dict.
+    The defaults match :class:`CameraSensorConfig`; device values live in presets such as
+    ``g1-head-d435i-depth``. Keyed by its sensor name in the ``--sensor`` dict.
     """
 
     mount: SensorMountConfig
     """Robot link the camera follows and its optical-frame offset (``-Z`` forward, ``+Y`` up).
     Only ``target_kind="robot_link"`` is supported."""
 
-    width: int = 106
+    width: int = 128
     """Image width in pixels."""
 
-    height: int = 60
+    height: int = 128
     """Image height in pixels."""
 
-    vertical_fov: float = 58.6
+    vertical_fov: float = 45.0
     """Pinhole vertical field of view in degrees. Pixels are square; rays pass through integer
     pixel coordinates measured from a principal point at ``(width / 2, height / 2)``."""
 
-    near: float = 0.0
+    near: float = 0.01
     """Returns closer than this are treated as no return, as for :class:`CameraSensorConfig`."""
 
-    far: float = 3.0
+    far: float = 1000.0
     """Maximum ray length in meters; farther surfaces are no return."""
 
-    depth_clipping_behavior: DepthClippingBehavior = "max"
+    depth_clipping_behavior: DepthClippingBehavior = "none"
     """How no-return pixels are reported: ``+inf`` (``"none"``), ``far`` (``"max"``), or ``0.0``
     (``"zero"``), as for :class:`CameraSensorConfig`."""
 

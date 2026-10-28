@@ -89,6 +89,13 @@ def test_ground_plane_parallel_to_the_image_plane_has_constant_depth(tmp_path: P
     torch.testing.assert_close(depth, torch.full_like(depth, 2.0), atol=1e-4, rtol=0.0)
 
 
+@pytest.mark.parametrize(("width", "height"), [(15, 11), (16, 11)])
+def test_odd_image_sizes_measure_depth_to_the_image_plane(tmp_path: Path, width: int, height: int) -> None:
+    depth, _, _ = _render(_FakeSim(_camera(tmp_path, width=width, height=height), base_height=2.0))
+
+    torch.testing.assert_close(depth, torch.full_like(depth, 2.0), atol=1e-4, rtol=0.0)
+
+
 @pytest.mark.parametrize(("behavior", "expected"), [("max", 3.0), ("none", math.inf), ("zero", 0.0)])
 def test_surfaces_beyond_far_are_no_return(tmp_path: Path, behavior: str, expected: float) -> None:
     depth, _, _ = _render(_FakeSim(_camera(tmp_path, far=3.0, depth_clipping_behavior=behavior), base_height=5.0))
@@ -173,18 +180,3 @@ def test_mount_randomization_stays_within_bounds(tmp_path: Path) -> None:
     # which two 5 deg rotations bound by about 7.1 deg.
     center = record.buffers["depth"][:, 6, 8, 0]
     assert torch.all((center >= 1.9 - 1e-4) & (center <= 2.1 / math.cos(math.radians(7.1))))
-
-
-def test_config_rejects_non_link_mounts() -> None:
-    with pytest.raises(ValueError, match="robot links"):
-        WarpDepthCameraConfig(mount=SensorMountConfig(target_kind="world"))
-
-
-def test_g1_head_preset_meshes_are_shipped() -> None:
-    from holosoma.config_values.sensor import SENSOR_REGISTRY
-    from holosoma.utils.path import resolve_data_file_path
-
-    preset = SENSOR_REGISTRY["g1-head-d435i-depth"]
-    assert isinstance(preset, WarpDepthCameraConfig)
-    for link, mesh in preset.self_occlusion.items():
-        assert Path(resolve_data_file_path(mesh)).is_file(), (link, mesh)

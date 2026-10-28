@@ -49,19 +49,19 @@ def _render_depth_kernel(
     cam_pos: wp.array(dtype=wp.vec3),  # type: ignore[valid-type]
     cam_quat: wp.array(dtype=wp.quat),  # type: ignore[valid-type]
     k_inv: wp.mat44,
-    c_x: int,
-    c_y: int,
     far: float,
     depth: wp.array(dtype=wp.float32, ndim=3),  # type: ignore[valid-type]
 ) -> None:
     # wp.tid() returns a tuple for a 3D launch; Warp's stubs type it as an int.
-    i, x, y = wp.tid()  # type: ignore[misc]
+    i, y, x = wp.tid()  # type: ignore[misc]
     env = env_ids[i]
     origin = cam_pos[env]
     rotation = cam_quat[env]
     pixel = wp.vec3(float(x), float(y), 1.0)
     ray = wp.normalize(wp.quat_rotate(rotation, wp.transform_vector(k_inv, pixel)))
-    principal = wp.normalize(wp.quat_rotate(rotation, wp.transform_vector(k_inv, wp.vec3(float(c_x), float(c_y), 1.0))))
+    # K^-1 maps the principal point (width / 2, height / 2) to +Z, so the principal ray is the
+    # camera's +Z axis for any image size.
+    principal = wp.quat_rotate(rotation, wp.vec3(0.0, 0.0, 1.0))
     # Distance along the ray times this cosine is the distance to the image plane.
     cosine = wp.min(wp.max(wp.dot(ray, principal), wp.float32(1.0e-6)), wp.float32(1.0))
 
@@ -80,8 +80,8 @@ def _render_depth_kernel(
         local_ray = wp.quat_rotate_inv(q, ray)
         if wp.mesh_query_ray(  # type: ignore[call-arg]
             body_meshes[b],
-            local_origin,  # type: ignore[arg-type]
-            local_ray,  # type: ignore[arg-type]
+            wp.vec3(local_origin),
+            wp.vec3(local_ray),
             bound / cosine,
             distance,
             u,
@@ -96,8 +96,8 @@ def _render_depth_kernel(
                 bound = hit
     if wp.mesh_query_ray(  # type: ignore[call-arg]
         terrain_mesh,
-        origin,
-        ray,  # type: ignore[arg-type]
+        wp.vec3(origin),
+        wp.vec3(ray),
         bound / cosine,
         distance,
         u,
@@ -148,7 +148,6 @@ class WarpDepthCamera:
 
         # Square pixels; the principal point is the image center, as in the PHP release camera.
         focal = (cfg.height / 2) / math.tan(math.radians(cfg.vertical_fov) / 2)
-        self._c_x, self._c_y = cfg.width // 2, cfg.height // 2
         intrinsics = np.array(
             [[focal, 0.0, cfg.width / 2, 0.0], [0.0, focal, cfg.height / 2, 0.0], [0.0, 0.0, 1.0, 0.0], [0, 0, 0, 1]],
             dtype=np.float32,
@@ -169,10 +168,10 @@ class WarpDepthCamera:
                 for b in (rand.euler_deg_min, rand.euler_deg_max)
             )
             euler = lo + (hi - lo) * torch.rand(num_envs, 3, device=dev)
-            mount_quat = quat_mul(quat_from_euler_xyz(euler[:, 0], euler[:, 1], euler[:, 2]), mount_quat, True)
+            mount_quat = quat_mul(quat_from_euler_xyz(euler[:, 0], euler[:, 1], euler[:, 2]), mount_quat, w_last=True)
         to_pinhole = torch.tensor(_OPTICAL_TO_PINHOLE_XYZW, dtype=torch.float32, device=dev).expand(num_envs, 4)
         self._local_position = position
-        self._local_quat = quat_mul(mount_quat, to_pinhole.contiguous(), True)
+        self._local_quat = quat_mul(mount_quat, to_pinhole.contiguous(), w_last=True)
 
         # Persistent buffers the kernel reads and writes.
         num_bodies = len(self._body_ids)
@@ -196,8 +195,8 @@ class WarpDepthCamera:
     def _update_poses(self) -> None:
         link_pos = self.sim.rigid_body_pos_w[:, self._mount_body]
         link_quat = self.sim.rigid_body_quat_w[:, self._mount_body]
-        self._cam_pos[:] = link_pos + quat_apply(link_quat, self._local_position, True)
-        self._cam_quat[:] = quat_mul(link_quat.contiguous(), self._local_quat, True)
+        self._cam_pos[:] = link_pos + quat_apply(link_quat, self._local_position, w_last=True)
+        self._cam_quat[:] = quat_mul(link_quat.contiguous(), self._local_quat, w_last=True)
         if self._body_ids:
             self._body_pos[:] = self.sim.rigid_body_pos_w[:, self._body_ids]
             self._body_quat[:] = self.sim.rigid_body_quat_w[:, self._body_ids]
@@ -211,9 +210,12 @@ class WarpDepthCamera:
         if ids.numel() == 0:
             return
         cfg = self.config
+        # On torch's current stream, so the launch is ordered after the pose updates above and
+        # before the reads below without a host sync, whichever stream torch is using.
+        stream = wp.stream_from_torch(self.device) if self._wp_device.is_cuda else None
         wp.launch(
             _render_depth_kernel,
-            dim=(ids.numel(), cfg.width, cfg.height),
+            dim=(ids.numel(), cfg.height, cfg.width),
             inputs=[
                 wp.from_torch(ids.contiguous(), dtype=wp.int32),
                 self._terrain_mesh.id,
@@ -224,12 +226,11 @@ class WarpDepthCamera:
                 wp.from_torch(self._cam_pos, dtype=wp.vec3),
                 wp.from_torch(self._cam_quat, dtype=wp.quat),
                 self._k_inv,
-                self._c_x,
-                self._c_y,
                 float(cfg.far),
                 wp.from_torch(self._image, dtype=wp.float32),
             ],
             device=self._wp_device,
+            stream=stream,
         )
         if env_ids is None or "depth" not in record.buffers:
             record.set_buffer("depth", self._image.unsqueeze(-1))
