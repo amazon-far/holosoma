@@ -114,7 +114,8 @@ class WarpDepthCamera:
     """Renders one :class:`WarpDepthCameraConfig` camera into its sensor record.
 
     Simulator state it needs (body indices, terrain mesh) is resolved on the first render, when
-    every backend has finished building its scene. The per-env mount perturbation is drawn then.
+    every backend has finished building its scene. Per-env mount offsets come from a
+    randomization setup term through :meth:`set_mount_offset`.
     """
 
     def __init__(self, sim: BaseSimulator, config: WarpDepthCameraConfig) -> None:
@@ -122,6 +123,23 @@ class WarpDepthCamera:
         self.config = config
         self.device = str(sim.sim_device)
         self._ready = False
+        self._position_offset: torch.Tensor | None = None
+        self._euler_offset: torch.Tensor | None = None
+
+    def set_mount_offset(self, position: torch.Tensor, euler: torch.Tensor) -> None:
+        """Perturb each env's mount by ``position`` ``[N, 3]`` (meters) and XYZ Euler ``euler``
+        ``[N, 3]`` (radians), in the mount-link frame: the position offset is added to
+        ``mount.position`` and the rotation is applied about the link axes before
+        ``mount.orientation``."""
+        expected = (self.sim.num_envs, 3)
+        if tuple(position.shape) != expected or tuple(euler.shape) != expected:
+            raise ValueError(
+                f"Mount offsets must be {list(expected)}, got {list(position.shape)} and {list(euler.shape)}."
+            )
+        self._position_offset = position.to(device=self.device, dtype=torch.float32)
+        self._euler_offset = euler.to(device=self.device, dtype=torch.float32)
+        if self._ready:
+            self._set_mount_pose()
 
     # ------------------------------------------------------------------ setup
 
@@ -154,26 +172,10 @@ class WarpDepthCamera:
         )
         self._k_inv = wp.mat44(*np.linalg.inv(intrinsics).astype(np.float32).flatten().tolist())
 
-        # Mount pose in the link frame, per env, with the optional perturbation.
-        dev = self.device
-        position = torch.tensor(cfg.mount.position, dtype=torch.float32, device=dev).expand(num_envs, 3).clone()
-        w, x, y, z = cfg.mount.orientation
-        mount_quat = torch.tensor([x, y, z, w], dtype=torch.float32, device=dev).expand(num_envs, 4).clone()
-        rand = cfg.mount_randomization
-        if rand is not None:
-            lo, hi = (torch.tensor(b, dtype=torch.float32, device=dev) for b in (rand.position_min, rand.position_max))
-            position += lo + (hi - lo) * torch.rand(num_envs, 3, device=dev)
-            lo, hi = (
-                torch.tensor(b, dtype=torch.float32, device=dev).deg2rad()
-                for b in (rand.euler_deg_min, rand.euler_deg_max)
-            )
-            euler = lo + (hi - lo) * torch.rand(num_envs, 3, device=dev)
-            mount_quat = quat_mul(quat_from_euler_xyz(euler[:, 0], euler[:, 1], euler[:, 2]), mount_quat, w_last=True)
-        to_pinhole = torch.tensor(_OPTICAL_TO_PINHOLE_XYZW, dtype=torch.float32, device=dev).expand(num_envs, 4)
-        self._local_position = position
-        self._local_quat = quat_mul(mount_quat, to_pinhole.contiguous(), w_last=True)
+        self._set_mount_pose()
 
         # Persistent buffers the kernel reads and writes.
+        dev = self.device
         num_bodies = len(self._body_ids)
         self._cam_pos = torch.zeros(num_envs, 3, device=dev)
         self._cam_quat = torch.zeros(num_envs, 4, device=dev)
@@ -183,6 +185,20 @@ class WarpDepthCamera:
         self._image = torch.zeros(num_envs, cfg.height, cfg.width, device=dev)
         self._all_envs = torch.arange(num_envs, dtype=torch.int32, device=dev)
         self._ready = True
+
+    def _set_mount_pose(self) -> None:
+        """Each env's camera pose in its mount link's frame, with any offsets applied."""
+        cfg, dev, num_envs = self.config, self.device, self.sim.num_envs
+        position = torch.tensor(cfg.mount.position, dtype=torch.float32, device=dev).expand(num_envs, 3)
+        w, x, y, z = cfg.mount.orientation
+        mount_quat = torch.tensor([x, y, z, w], dtype=torch.float32, device=dev).expand(num_envs, 4).contiguous()
+        if self._position_offset is not None and self._euler_offset is not None:
+            position = position + self._position_offset
+            euler = self._euler_offset
+            mount_quat = quat_mul(quat_from_euler_xyz(euler[:, 0], euler[:, 1], euler[:, 2]), mount_quat, w_last=True)
+        to_pinhole = torch.tensor(_OPTICAL_TO_PINHOLE_XYZW, dtype=torch.float32, device=dev).expand(num_envs, 4)
+        self._local_position = position.clone()
+        self._local_quat = quat_mul(mount_quat, to_pinhole.contiguous(), w_last=True)
 
     def _load_mesh(self, path: str) -> Any:
         mesh = trimesh.load_mesh(resolve_data_file_path(path), force="mesh")
@@ -245,5 +261,5 @@ def register_warp_depth_cameras(sim: BaseSimulator, manager: SensorManager) -> d
     for name, config in sim.sensor_config.items():
         if isinstance(config, WarpDepthCameraConfig):
             cameras[name] = WarpDepthCamera(sim, config)
-            manager.register_shared_camera(name, config, cameras[name].render)
+            manager.register_shared_camera(name, config, cameras[name].render).camera = cameras[name]
     return cameras

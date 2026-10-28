@@ -97,6 +97,8 @@ class SharedCameraRecord(SensorRecord):
     """A camera rendered by shared, backend-neutral code (see ``SensorManager.register_shared_camera``)."""
 
     config: WarpDepthCameraConfig
+    camera: Any = None
+    """The object that renders this camera, e.g. for randomization terms that configure it."""
 
     def set_buffer(self, output: str, tensor: torch.Tensor) -> None:
         super().set_buffer(output, _clip_depth(self.config, tensor) if output == "depth" else tensor)

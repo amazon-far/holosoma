@@ -13,11 +13,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from holosoma.config_types.sensor import (
-    SensorMountConfig,
-    WarpDepthCameraConfig,
-    WarpDepthMountRandomizationConfig,
-)
+from holosoma.config_types.sensor import SensorMountConfig, WarpDepthCameraConfig
 from holosoma.simulator.shared.sensor_manager import SensorManager
 from holosoma.simulator.shared.warp_depth_camera import register_warp_depth_cameras
 from holosoma.utils.safe_torch_import import torch
@@ -162,21 +158,31 @@ def test_shared_cameras_are_not_returned_to_backend_render_loops(tmp_path: Path)
     assert manager.has_camera("depth")
 
 
-def test_mount_randomization_stays_within_bounds(tmp_path: Path) -> None:
-    randomization = WarpDepthMountRandomizationConfig(
-        position_min=[-0.1, -0.1, -0.1],
-        position_max=[0.1, 0.1, 0.1],
-        euler_deg_min=[-5.0, -5.0, -5.0],
-        euler_deg_max=[5.0, 5.0, 5.0],
-    )
-    torch.manual_seed(0)
-    sim = _FakeSim(_camera(tmp_path, mount_randomization=randomization), base_height=2.0)
-    _, record, camera = _render(sim)
+@pytest.mark.parametrize("before_first_render", [True, False])
+def test_mount_offsets_move_and_tilt_the_camera_per_env(tmp_path: Path, before_first_render: bool) -> None:
+    sim = _FakeSim(_camera(tmp_path), base_height=2.0)
+    manager = SensorManager(device="cpu", control_hz=50.0)
+    camera = register_warp_depth_cameras(sim, manager)["depth"]  # type: ignore[arg-type]
+    record = manager.get("depth")
+    position = torch.zeros(NUM_ENVS, 3)
+    euler = torch.zeros(NUM_ENVS, 3)
+    position[0, 2] = 0.1  # env 0 raised 10 cm
+    euler[1, 0] = math.radians(20.0)  # env 1 tilted about the link's +X
+    if not before_first_render:
+        manager.render_shared()
 
-    offsets = camera._cam_pos - sim.rigid_body_pos_w[:, 0]
-    assert torch.all(offsets.abs() <= 0.1 + 1e-6)
-    assert not torch.allclose(offsets[0], offsets[1])
-    # The principal ray reaches the ground at the perturbed height over the cosine of the tilt,
-    # which two 5 deg rotations bound by about 7.1 deg.
+    camera.set_mount_offset(position, euler)
+    manager.render_shared()
     center = record.buffers["depth"][:, 6, 8, 0]
-    assert torch.all((center >= 1.9 - 1e-4) & (center <= 2.1 / math.cos(math.radians(7.1))))
+
+    assert center[0].item() == pytest.approx(2.1, abs=1e-4)
+    assert center[1].item() == pytest.approx(2.0 / math.cos(math.radians(20.0)), abs=1e-3)
+    assert center[2].item() == pytest.approx(2.0, abs=1e-4)
+
+
+def test_mount_offsets_must_cover_every_env(tmp_path: Path) -> None:
+    sim = _FakeSim(_camera(tmp_path))
+    camera = register_warp_depth_cameras(sim, SensorManager(device="cpu", control_hz=50.0))["depth"]  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="Mount offsets"):
+        camera.set_mount_offset(torch.zeros(1, 3), torch.zeros(1, 3))

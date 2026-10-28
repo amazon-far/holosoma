@@ -661,39 +661,6 @@ class LidarSensorConfig:
 
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)
-class WarpDepthMountRandomizationConfig:
-    """Per-environment perturbation of a Warp depth camera's mount, drawn once at creation.
-
-    Offsets are uniform in ``[min, max]`` and expressed in the mount-link frame: the position
-    offset is added to ``mount.position``, and the XYZ Euler angles (degrees) rotate the mount
-    about the link axes before ``mount.orientation`` is applied.
-    """
-
-    position_min: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
-    """Lower bound of the position offset ``[x, y, z]`` in meters."""
-
-    position_max: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
-    """Upper bound of the position offset ``[x, y, z]`` in meters."""
-
-    euler_deg_min: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
-    """Lower bound of the XYZ Euler rotation offset in degrees."""
-
-    euler_deg_max: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
-    """Upper bound of the XYZ Euler rotation offset in degrees."""
-
-    @model_validator(mode="after")
-    def validate_bounds(self) -> WarpDepthMountRandomizationConfig:
-        """Each bound is a finite 3-vector and every lower bound is at most its upper bound."""
-        for lo_name, hi_name in (("position_min", "position_max"), ("euler_deg_min", "euler_deg_max")):
-            lo, hi = getattr(self, lo_name), getattr(self, hi_name)
-            if len(lo) != 3 or len(hi) != 3 or not all(math.isfinite(v) for v in (*lo, *hi)):
-                raise ValueError(f"{lo_name}/{hi_name} must be finite [x, y, z], got {lo} and {hi}.")
-            if any(a > b for a, b in zip(lo, hi, strict=True)):
-                raise ValueError(f"{lo_name} must not exceed {hi_name}, got {lo} and {hi}.")
-        return self
-
-
-@dataclass(frozen=True, config=_FORBID_EXTRA)
 class WarpDepthCameraConfig:
     """A pinhole depth camera ray cast with Warp, identically on every simulator backend.
 
@@ -738,9 +705,6 @@ class WarpDepthCameraConfig:
     """Robot link name -> triangle mesh file (STL/OBJ, link frame) cast against at the link's
     current pose. Paths are resolved with ``resolve_data_file_path``. Empty casts against the
     terrain only."""
-
-    mount_randomization: WarpDepthMountRandomizationConfig | None = None
-    """Optional per-env mount perturbation, drawn once when the camera is created."""
 
     @property
     def data_types(self) -> list[CameraDataType]:
