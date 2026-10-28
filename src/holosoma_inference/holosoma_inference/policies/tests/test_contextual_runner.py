@@ -74,16 +74,31 @@ def _config(tmp_path):
         robot=robot,
         observation=ObservationConfig({"actor_obs": []}, {}, {}, {}),
         task=replace(base.task, model_path=str(path), use_phase=False),
-        contextual=ContextualConfig(depth_height=SHAPE[0], depth_width=SHAPE[1]),
+        contextual=ContextualConfig(depth_height=SHAPE[0], depth_width=SHAPE[1], imu_to_obs_joint_chain=()),
         secondary=None,
     )
 
 
+class _Clock:
+    def __init__(self):
+        self.now = 100.0
+
+    def __call__(self):
+        return self.now
+
+
 def _runner(tmp_path):
     inputs = _Input()
-    return NativeContextualRunner(
+    runner = NativeContextualRunner(
         _config(tmp_path), interface=_Interface(), velocity_input=inputs, command_provider=inputs
     )
+    runner._monotonic = _Clock()
+    runner._monotonic_base = runner._monotonic()
+    return runner
+
+
+def _tick(runner):
+    return runner._step_native(runner.interface.get_low_state())
 
 
 def test_depth_reaches_the_graph(tmp_path):
@@ -118,9 +133,74 @@ def test_engage_is_deferred_until_the_first_frame(tmp_path):
     runner._handle_start_policy()
     assert runner._start_pending
     assert not runner.use_policy_action
+    _tick(runner)
+    assert not runner.use_policy_action
     runner.set_depth(FLAT)
+    _tick(runner)
     assert runner.use_policy_action
     assert not runner._start_pending
+
+
+def test_set_depth_only_stores_and_never_engages(tmp_path):
+    """set_depth runs on the depth executor thread; engaging there races the policy thread.
+
+    The pending start must survive the frame and be taken by the next policy tick instead.
+    """
+    runner = _runner(tmp_path)
+    runner._handle_start_policy()
+    engaged = []
+    runner._handle_start_policy = lambda: engaged.append("start")
+    runner.native.command = lambda command: engaged.append(command)
+    runner.set_depth(FLAT)
+    assert engaged == []
+    assert runner._start_pending
+    assert not runner.use_policy_action
+
+
+def test_a_stale_frame_stops_an_engaged_policy(tmp_path):
+    """If the camera dies mid-walk the policy must not keep walking on the last image."""
+    runner = _runner(tmp_path)
+    limit = runner.config.contextual.max_depth_age_s
+    runner.set_depth(FLAT)
+    runner._handle_start_policy()
+    assert runner.use_policy_action
+    runner._monotonic.now += limit * 0.9
+    _tick(runner)
+    assert runner.use_policy_action, "a frame inside the limit must keep the policy engaged"
+    runner._monotonic.now += limit * 0.2
+    command = _tick(runner)
+    assert not runner.use_policy_action
+    # The stopped tick holds the measured pose, the same as an operator stop.
+    np.testing.assert_allclose(command.q, runner.interface.get_low_state()[0, 7:10])
+    # Frames coming back do not re-engage on their own; the operator starts again.
+    runner.set_depth(CLIMB)
+    _tick(runner)
+    assert not runner.use_policy_action
+    runner._handle_start_policy()
+    assert runner.use_policy_action
+
+
+def test_start_is_refused_not_deferred_once_frames_have_gone_stale(tmp_path):
+    """A deferred start would engage by itself whenever the camera came back."""
+    runner = _runner(tmp_path)
+    runner.set_depth(FLAT)
+    runner._monotonic.now += runner.config.contextual.max_depth_age_s * 2
+    runner._handle_start_policy()
+    assert not runner.use_policy_action
+    assert not runner._start_pending
+    runner.set_depth(CLIMB)
+    _tick(runner)
+    assert not runner.use_policy_action
+
+
+def test_frame_age_uses_receive_time_not_the_publisher_stamp(tmp_path):
+    """Publisher stamps may be sim or another host's clock; only local receipt measures staleness."""
+    runner = _runner(tmp_path)
+    runner.set_depth(FLAT, stamp_s=1.0)  # Ancient by any wall clock, but just received.
+    runner._handle_start_policy()
+    assert runner.use_policy_action
+    _tick(runner)
+    assert runner.use_policy_action
 
 
 def test_set_depth_honours_a_publisher_stamp(tmp_path):

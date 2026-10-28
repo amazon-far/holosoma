@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 import time
 
 import numpy as np
@@ -329,12 +330,20 @@ class NativeContextualRunner(NativeRunnerPolicy):
     as training modelled it, so adding delay on a robot would double the staleness. Simulated
     depth is instantaneous, so emulating that latency is the sim harness's job and it should delay
     frames before pushing them.
+
+    ``set_depth`` may run on any thread and only stores the frame. Engagement, and the stop when
+    the newest frame is older than ``contextual.max_depth_age_s``, happen on the policy thread at
+    the start of its next tick.
     """
 
     def __init__(self, config, **kwargs):
+        self._depth_lock = threading.Lock()
         self._frame = None
         self._frame_stamp = None
-        self._monotonic_base = time.monotonic()
+        self._frame_received = None
+        self._max_depth_age_s = config.contextual.max_depth_age_s
+        self._monotonic = time.monotonic
+        self._monotonic_base = self._monotonic()
         super().__init__(config, **kwargs)
 
     def set_depth(self, frame, stamp_s=None):
@@ -342,27 +351,54 @@ class NativeContextualRunner(NativeRunnerPolicy):
         frame = np.asarray(frame, dtype=np.float32)
         if not np.isfinite(frame).all():
             raise ValueError("depth frame is not finite; the producer must clip and fill")
-        if stamp_s is not None and self._frame_stamp is not None and stamp_s <= self._frame_stamp:
-            return False
-        self._frame, self._frame_stamp = frame, stamp_s
-        if self._start_pending:
-            self._start_pending = False
-            self._handle_start_policy()
+        with self._depth_lock:
+            if stamp_s is not None and self._frame_stamp is not None and stamp_s <= self._frame_stamp:
+                return False
+            self._frame, self._frame_stamp, self._frame_received = frame, stamp_s, self._monotonic()
         return True
 
+    def _latest_depth(self):
+        """The newest frame and its age in seconds, or (None, None) before the first frame."""
+        with self._depth_lock:
+            frame, received = self._frame, self._frame_received
+        if frame is None:
+            return None, None
+        return frame, self._monotonic() - received
+
     def _step_native(self, state):
+        frame, age = self._latest_depth()
+        fresh = age is not None and age <= self._max_depth_age_s
+        if self.use_policy_action and not fresh:
+            self.logger.error(
+                "Stopping the contextual policy: {} (max age {:.3f}s); check the depth camera, then start again",
+                "no depth frame" if age is None else f"newest depth frame is {age:.3f}s old",
+                self._max_depth_age_s,
+            )
+            self._handle_stop_policy()
+        elif self._start_pending and fresh:
+            self._start_pending = False
+            super()._handle_start_policy()
         inputs = _native.ContextualInput()
-        if self._frame is not None:
-            inputs.depth = self._frame.reshape(-1)
-        inputs.monotonic_time = time.monotonic() - self._monotonic_base
+        if frame is not None:
+            inputs.depth = frame.reshape(-1)
+        inputs.monotonic_time = self._monotonic() - self._monotonic_base
         return self.native.step_contextual(state, inputs, tick_ms=self._tick_ms())
 
     def _handle_start_policy(self):
-        # Deferred, not refused: start arrives before the first frame does, so refusing here would
-        # drop the engage with nothing to retry it. A zero frame reads as ground at the clip
-        # midpoint rather than as missing data, which is not something to engage on.
-        if self._frame is None:
+        # Deferred, not refused, before the first frame: start arrives before the camera does, so
+        # refusing here would drop the engage with nothing to retry it. A zero frame reads as
+        # ground at the clip midpoint rather than as missing data, which is not something to engage
+        # on. Once frames have arrived, a stale one means the camera has gone, and a deferred start
+        # would engage by itself whenever it came back, so that start is refused instead.
+        frame, age = self._latest_depth()
+        if frame is None:
             self._start_pending = True
             self.logger.info("Deferring start until the first depth frame arrives")
+            return
+        if age > self._max_depth_age_s:
+            self._start_pending = False
+            self.logger.error(
+                "Refusing start: newest depth frame is {:.3f}s old (max {:.3f}s)", age, self._max_depth_age_s
+            )
             return
         super()._handle_start_policy()
