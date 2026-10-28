@@ -16,6 +16,7 @@ import pickle
 import shutil
 import sys
 from collections.abc import Sequence
+from contextlib import ExitStack
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
@@ -525,14 +526,19 @@ def test_safe_startup_reason_recognizes_released_native_initialization_wrapper()
 
 
 def _counting_call(bridge: Any, monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Record the method of every round trip the bridge makes to its SDK child."""
+    """Record the method of every round trip the bridge makes to its SDK child.
+
+    Patches the batcher's own reference: it captures the bridge's ``_call`` when constructed, so
+    patching the bridge attribute afterwards would not be seen.
+    """
     round_trips: list[str] = []
-    original = bridge._call
+    original = bridge._calls._call
 
     def counting(method: str, *args: Any) -> Any:
         round_trips.append(method)
         return original(method, *args)
 
+    monkeypatch.setattr(bridge._calls, "_call", counting)
     monkeypatch.setattr(bridge, "_call", counting)
     return round_trips
 
@@ -554,7 +560,9 @@ def test_transport_update_sends_one_batched_round_trip_in_queue_order(
     )
     round_trips = _counting_call(bridge, monkeypatch)
     try:
-        with bridge.transport_update():
+        with ExitStack() as scope:
+            for collaborator in bridge.transport_scopes:
+                scope.enter_context(collaborator)
             bridge.publish_low_state()
             bridge.publish_odom()
             bridge.low_cmd_handler()
@@ -589,9 +597,11 @@ def test_queued_publish_is_flushed_when_an_update_ends_without_a_command_read(
     )
     round_trips = _counting_call(bridge, monkeypatch)
     try:
-        with bridge.transport_update():
+        with ExitStack() as scope:
+            for collaborator in bridge.transport_scopes:
+                scope.enter_context(collaborator)
             bridge.publish_low_state()
-        assert not bridge._pending
+        assert not bridge._calls._pending
     finally:
         bridge.close()
 
@@ -618,7 +628,9 @@ def test_update_that_raises_still_flushes_what_it_had_already_queued(
     )
 
     def update_that_fails_after_queueing_a_publish() -> None:
-        with bridge.transport_update():
+        with ExitStack() as scope:
+            for collaborator in bridge.transport_scopes:
+                scope.enter_context(collaborator)
             bridge.publish_low_state()
             raise RuntimeError("odometry failed")
 
@@ -678,7 +690,7 @@ def test_publishes_outside_a_transport_update_go_out_immediately(
         bridge.publish_low_state()
         # Published before anything else is asked of the bridge, not held for a later flush.
         assert "publish_low_state" in [r["kind"] for r in _read_records(record)]
-        assert not bridge._pending
+        assert not bridge._calls._pending
 
         bridge.publish_odom()
         bridge.low_cmd_handler()

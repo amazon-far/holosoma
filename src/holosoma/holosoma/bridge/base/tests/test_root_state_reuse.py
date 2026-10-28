@@ -1,9 +1,10 @@
-"""Tests for ``BasicSdk2Bridge.transport_update`` root-state reuse — pure, no simulator, no DDS.
+"""Tests for the bridge's root-state reuse — pure, no simulator, no DDS.
 
 ``robot_root_states`` is a backend-owned proxy whose every index rebuilds the whole 13-vector, and
 one transport update reads it three times (twice for the IMU, once for odometry) at the same
-simulator state. The update scope collapses that to one read; outside it, each reader still reads
-the proxy directly, and the values must be identical either way.
+simulator state. Holding the bridge's ``RootStateReader`` over the update collapses that to one
+read; outside it, each reader still reads the proxy directly, and the values must be identical
+either way.
 """
 
 from __future__ import annotations
@@ -97,7 +98,7 @@ def test_transport_update_reads_root_state_once_for_every_reader() -> None:
     bridge = _bridge(sim)
     sim.robot_root_states.reads = 0
 
-    with bridge.transport_update():
+    with bridge.root_state:
         bridge._get_base_imu_data()
         bridge._get_base_odometry()
 
@@ -124,7 +125,7 @@ def test_transport_update_does_not_change_the_values_either_reader_returns() -> 
     quat_direct, gyro_direct, acc_direct = bridge._get_base_imu_data()
     odom_direct = bridge._get_base_odometry()
 
-    with bridge.transport_update():
+    with bridge.root_state:
         quat_scoped, gyro_scoped, acc_scoped = bridge._get_base_imu_data()
         odom_scoped = bridge._get_base_odometry()
 
@@ -140,15 +141,17 @@ def test_cached_root_state_is_dropped_when_the_update_ends() -> None:
     sim = _FakeSim()
     bridge = _bridge(sim)
 
-    with bridge.transport_update():
+    with bridge.root_state:
         bridge._get_base_odometry()
-        assert bridge._root_state is not None
-    assert bridge._root_state is None
+        bridge._get_base_odometry()
+    sim.robot_root_states.reads = 0
 
-    # A later update sees state written between the two, rather than the first update's snapshot.
+    # A later update re-reads rather than serving the first update's snapshot, so it sees state
+    # written between the two.
     sim.robot_root_states._root[0, 0] = 9.0
-    with bridge.transport_update():
+    with bridge.root_state:
         position, _quat, _lin, _yaw = bridge._get_base_odometry()
+    assert sim.robot_root_states.reads == 1
     assert position[0] == pytest.approx(9.0)
 
 
@@ -157,15 +160,19 @@ def test_cache_is_dropped_even_when_the_update_raises() -> None:
     bridge = _bridge(sim)
 
     def update_that_fails_after_reading_state() -> None:
-        with bridge.transport_update():
+        with bridge.root_state:
             bridge._get_base_odometry()
             raise RuntimeError("publish failed")
 
     with pytest.raises(RuntimeError, match="publish failed"):
         update_that_fails_after_reading_state()
 
-    assert bridge._root_state is None
-    assert not bridge._in_transport_update
+    # The next read is served from the simulator, not from the failed update's snapshot.
+    sim.robot_root_states.reads = 0
+    sim.robot_root_states._root[0, 0] = 5.0
+    position, _quat, _lin, _yaw = bridge._get_base_odometry()
+    assert sim.robot_root_states.reads == 1
+    assert position[0] == pytest.approx(5.0)
 
 
 def test_nested_transport_updates_stay_correct() -> None:
@@ -173,16 +180,17 @@ def test_nested_transport_updates_stay_correct() -> None:
     sim = _FakeSim()
     bridge = _bridge(sim)
 
-    with bridge.transport_update():
+    with bridge.root_state:
         bridge._get_base_odometry()
-        with bridge.transport_update():
+        with bridge.root_state:
             bridge._get_base_odometry()
-        assert bridge._root_state is None  # the inner scope ended the shared read
 
-        # State written after the inner scope is still picked up by the outer one.
+        # The inner scope ended the shared read, so state written after it is still picked up.
         sim.robot_root_states._root[0, 0] = 7.0
         position, _quat, _lin, _yaw = bridge._get_base_odometry()
         assert position[0] == pytest.approx(7.0)
 
-    assert bridge._root_state is None
-    assert not bridge._in_transport_update
+    # And the outer scope left no snapshot behind either.
+    sim.robot_root_states.reads = 0
+    bridge._get_base_odometry()
+    assert sim.robot_root_states.reads == 1

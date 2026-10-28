@@ -18,7 +18,8 @@ half MUST stay in the parent. Only the four DDS operations move to the child:
 
 Each round trip blocks the simulator's step thread while the child is scheduled, so the publishes
 are queued and sent together with the command read as a single batched request per transport update
-(see ``_flush``); the child still runs them one at a time, in the order they were queued.
+(see :class:`~holosoma.bridge.unitree.batched_calls.BatchedSdkCalls`); the child still runs
+them one at a time, in the order they were queued.
 
 ``compute_torques`` and every ``_get_*`` simulator read stay inherited from :class:`UnitreeSdk2Bridge`
 unchanged: the parent-side ``self.low_cmd`` is a picklable :class:`LowCommand` carrying exactly the
@@ -32,16 +33,13 @@ from __future__ import annotations
 import multiprocessing as mp
 import queue
 import re
-from contextlib import contextmanager
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import Any, NamedTuple
 
 from loguru import logger
 
+from holosoma.bridge.unitree.batched_calls import BatchedSdkCalls
 from holosoma.bridge.unitree.unitree_sdk2py_bridge import UnitreeSdk2Bridge
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
 
 # Seconds to wait for the child to construct the binding (DDS init) before declaring it dead.
 _STARTUP_TIMEOUT_S = 30.0
@@ -289,9 +287,6 @@ class UnitreeMpSdk2Bridge(UnitreeSdk2Bridge):
 
     def _init_sdk_components(self) -> None:
         """Spawn the DDS child; keep only picklable, binding-free stand-ins in the parent."""
-        # Writes queued by this transport update, flushed with its command read. See _flush().
-        self._pending: list[tuple[str, tuple[Any, ...]]] = []
-
         robot_type = self.sdk_robot_type
         if robot_type not in self.SUPPORTED_ROBOT_TYPES:
             raise ValueError(f"Invalid robot type '{robot_type}'. Unitree SDK supports: {self.SUPPORTED_ROBOT_TYPES}")
@@ -337,6 +332,11 @@ class UnitreeMpSdk2Bridge(UnitreeSdk2Bridge):
         self.low_cmd = LowCommand(tau_ff=zeros, kp=zeros, kd=zeros, q_target=zeros, dq_target=zeros)
         self.wireless_controller = SimpleNamespace(lx=0.0, ly=0.0, rx=0.0, ry=0.0, keys=0)
 
+        # Batches this transport update's calls to the child into one round trip. Registered as a
+        # per-update collaborator, so SimulatorBridge.transport_step opens and flushes it.
+        self._calls = BatchedSdkCalls(self._call, _BATCH)
+        self.transport_scopes = (*self.transport_scopes, self._calls)
+
     # ── RPC helper ─────────────────────────────────────────────────────
 
     def _call(self, method: str, *args: Any) -> Any:
@@ -360,56 +360,11 @@ class UnitreeMpSdk2Bridge(UnitreeSdk2Bridge):
             raise payload
         return payload
 
-    def _queue(self, method: str, *args: Any) -> None:
-        """Defer one child-side DDS write to this transport update's flush.
-
-        With no update in flight there is nothing to batch with and nothing that will flush it, so
-        send it straight away — a caller driving the bridge's publishes directly (rather than
-        through ``SimulatorBridge.transport_step``) gets exactly the unbatched behaviour it had
-        before, instead of a write that silently waits for a flush that never comes.
-        """
-        if not self._in_transport_update:
-            self._call(method, *args)
-            return
-        self._pending.append((method, args))
-
-    def _flush(self, *trailing: tuple[str, tuple[Any, ...]]) -> list[Any]:
-        """Send every deferred write plus ``trailing`` in ONE round trip; return their payloads.
-
-        A transport update makes three SDK calls (state, odometry, command read), and each round
-        trip blocks the simulator's step thread while the child is scheduled. At the default
-        transport cadence of one exchange per physics step, that is a large share of the step
-        budget. The child runs them in queue order, so the DDS writes reach the wire in the same
-        order as before.
-        """
-        operations = self._pending + list(trailing)
-        self._pending = []
-        if not operations:
-            return []
-        if len(operations) == 1:
-            method, args = operations[0]
-            return [self._call(method, *args)]
-        return cast("list[Any]", self._call(_BATCH, operations))
-
-    @contextmanager
-    def transport_update(self) -> Iterator[None]:
-        """Scope one transport update, flushing anything still queued when it ends.
-
-        ``SimulatorBridge.transport_step`` ends its update with the command read, which flushes the
-        queued publishes with it. The flush here covers every other order (and an update that raises
-        part-way through, which previously left its earlier publishes already sent).
-        """
-        with super().transport_update():
-            try:
-                yield
-            finally:
-                self._flush()
-
     # ── overridden DDS operations (everything else inherited) ──────────
 
     def low_cmd_handler(self, msg: Any = None) -> None:
         """Flush this update's queued publishes and take the latest incoming command back."""
-        self.low_cmd = self._flush(("read_incoming_command", ()))[-1]
+        self.low_cmd = self._calls.flush(("read_incoming_command", ()))[-1]
 
     def publish_low_state(self) -> None:
         """Compute the state fields from sim state (parent), ship them to the child to publish."""
@@ -422,7 +377,7 @@ class UnitreeMpSdk2Bridge(UnitreeSdk2Bridge):
         quat_array = quaternion.detach().cpu().numpy()
         quat = [float(quat_array[0]), float(quat_array[1]), float(quat_array[2]), float(quat_array[3])]
 
-        self._queue(
+        self._calls.defer(
             "publish_low_state",
             positions.tolist(),
             velocities.tolist(),
@@ -442,7 +397,7 @@ class UnitreeMpSdk2Bridge(UnitreeSdk2Bridge):
         the child, which owns the C++ OdomState and writes SportModeState on rt/odommodestate.
         """
         position, quat_wxyz, lin_vel_body, yaw_speed = self._get_base_odometry()
-        self._queue("publish_odom_state", position, lin_vel_body, yaw_speed, quat_wxyz)
+        self._calls.defer("publish_odom_state", position, lin_vel_body, yaw_speed, quat_wxyz)
 
     def publish_wireless_controller(self) -> None:
         """Populate the parent stand-in from the joystick (base class), ship it to the child."""
@@ -452,7 +407,7 @@ class UnitreeMpSdk2Bridge(UnitreeSdk2Bridge):
 
         if self.joystick is not None:
             wc = self.wireless_controller
-            self._queue("publish_wireless_controller", wc.lx, wc.ly, wc.rx, wc.ry, wc.keys)
+            self._calls.defer("publish_wireless_controller", wc.lx, wc.ly, wc.rx, wc.ry, wc.keys)
 
     # ── lifecycle ──────────────────────────────────────────────────────
 
