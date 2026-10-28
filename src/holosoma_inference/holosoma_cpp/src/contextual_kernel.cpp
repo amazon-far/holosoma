@@ -44,6 +44,11 @@ std::array<double, 4> Multiply(const std::array<double, 4> &a, const std::array<
   return {a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3], a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
           a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1], a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0]};
 }
+// Express world-or-parent vector v in the frame of unit quaternion q (q* v q).
+std::array<double, 3> RotateInverse(const std::array<double, 4> &q, const std::array<double, 3> &v) {
+  const auto r = Multiply(Multiply({q[0], -q[1], -q[2], -q[3]}, {0, v[0], v[1], v[2]}), q);
+  return {r[1], r[2], r[3]};
+}
 std::vector<double> Vector(const Json &v) {
   if (!v.is_array()) return {v.get<double>()};
   std::vector<double> values;
@@ -88,6 +93,16 @@ Policy::Policy(std::shared_ptr<OnnxModel> model, Spec spec, Options options)
     if (options_.in_place_yaw_threshold &&
         (!std::isfinite(*options_.in_place_yaw_threshold) || *options_.in_place_yaw_threshold < 0))
       throw std::invalid_argument("invalid in-place yaw threshold");
+  }
+  for (const auto &[name, axis] : options_.imu_to_obs_joint_chain) {
+    const auto found = std::find(spec_.joints.begin(), spec_.joints.end(), name);
+    if (found == spec_.joints.end())
+      throw std::invalid_argument("imu_to_obs_joint_chain names " + name +
+                                  ", which is not a runtime joint; set the chain for this robot, or [] for IMU-frame "
+                                  "gravity");
+    const int component = axis == "x" ? 1 : axis == "y" ? 2 : axis == "z" ? 3 : 0;
+    if (!component) throw std::invalid_argument("imu_to_obs_joint_chain axis for " + name + " must be x, y or z");
+    imu_to_obs_chain_.emplace_back(static_cast<size_t>(found - spec_.joints.begin()), component);
   }
   std::map<std::string, std::vector<int64_t>> shapes;
   for (const auto &input : model_->inputs()) {
@@ -359,30 +374,30 @@ std::vector<float> Policy::Observation(const State &state) const {
   Finite(state.q, "q");
   Finite(state.dq, "dq");
   Finite(state.omega, "omega");
+  Finite(state.quat, "orientation");
   if (state.gravity) Finite(*state.gravity, "gravity");
+  // An IMU that reports no orientation is a fault, never "upright".
+  const double norm = std::sqrt(std::inner_product(state.quat.begin(), state.quat.end(), state.quat.begin(), 0.0));
+  if (!(norm >= 1e-8)) throw std::invalid_argument("orientation must be nonzero");
   std::array<double, 3> gravity{0, 0, -1};
   if (!spec_.upright) {
+    // Gravity in the IMU body frame, from the caller or from the orientation.
     if (state.gravity)
       gravity = *state.gravity;
     else {
       auto quat = state.quat;
-      double norm = std::sqrt(std::inner_product(quat.begin(), quat.end(), quat.begin(), 0.0));
-      if (!std::isfinite(norm) || norm < 1e-6)
-        quat = {1, 0, 0, 0};
-      else
-        for (auto &v : quat) v /= norm;
-      for (const auto &[name, axis] : std::vector<std::pair<std::string, int>>{
-               {"waist_yaw_joint", 3}, {"waist_roll_joint", 1}, {"waist_pitch_joint", 2}}) {
-        auto found = std::find(spec_.joints.begin(), spec_.joints.end(), name);
-        if (found == spec_.joints.end()) continue;
-        double half = state.q[found - spec_.joints.begin()] * .5;
-        std::array<double, 4> rotation{std::cos(half), 0, 0, 0};
-        rotation[axis] = std::sin(half);
-        quat = Multiply(quat, rotation);
-      }
-      const auto [w, x, y, z] = quat;
-      gravity = {2 * w * y - 2 * x * z, -2 * w * x - 2 * y * z, 1 - 2 * w * w - 2 * z * z};
+      for (auto &v : quat) v /= norm;
+      gravity = RotateInverse(quat, {0, 0, -1});
     }
+    // Then from the IMU frame into the observation frame through imu_to_obs_joint_chain.
+    std::array<double, 4> chain{1, 0, 0, 0};
+    for (const auto &[joint, component] : imu_to_obs_chain_) {
+      const double half = state.q[joint] * .5;
+      std::array<double, 4> rotation{std::cos(half), 0, 0, 0};
+      rotation[component] = std::sin(half);
+      chain = Multiply(chain, rotation);
+    }
+    gravity = RotateInverse(chain, gravity);
   }
   std::vector<float> obs;
   obs.reserve(6 + n * 3 + spec_.command_dim);
