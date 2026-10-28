@@ -246,11 +246,6 @@ class PPO(BaseAlgo):
         logger.info("Setting up Storage")
         self._setup_storage()
 
-        # Log curriculum synchronization status for multi-GPU training
-        if self.is_multi_gpu:
-            if self.has_curricula_enabled():
-                logger.info(f"Multi-GPU curriculum synchronization enabled across {self.gpu_world_size} GPUs")
-
     def _setup_models_and_optimizer(self) -> None:
         self.actor = setup_ppo_actor_module(
             obs_dim_dict=self.algo_obs_dim_dict,
