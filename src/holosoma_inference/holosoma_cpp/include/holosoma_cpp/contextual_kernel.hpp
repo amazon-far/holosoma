@@ -66,6 +66,7 @@ class Policy {
   const std::vector<float> &observation() const { return obs_; }
   const std::vector<float> &depth() const { return depth_; }
   const std::vector<int64_t> &depth_shape() const { return depth_shape_; }
+  const std::string &depth_input() const { return depth_input_; }
   const std::vector<float> &action() const { return action_; }
   const std::vector<float> &scaled() const { return scaled_; }
   bool has_climb_head() const { return climb_output_.has_value(); }
@@ -95,6 +96,10 @@ class Policy {
   Options options_;
   std::shared_ptr<OnnxModel> model_;
   std::vector<int64_t> depth_shape_;
+  // "depth_image" for a policy-ready 58x87 frame, "depth_raw" when the graph does its own
+  // sanitise/resize/normalise and takes whatever the camera publishes.
+  std::string depth_input_ = "depth_image";
+  size_t frame_size_ = 0;
   std::optional<size_t> climb_output_;
   std::vector<int> real_to_model_, model_to_real_;
   std::vector<double> kp_, kd_, scale_;

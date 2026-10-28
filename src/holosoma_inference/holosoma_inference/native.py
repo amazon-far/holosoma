@@ -143,6 +143,12 @@ class NativePolicy:
         with self._lock:
             return self._engine.initial_motion
 
+    @property
+    def depth_input(self):
+        """Name of the graph's depth input, or "" when the policy is not contextual."""
+        with self._lock:
+            return self._engine.depth_input
+
 
 class LocomotionPolicy(NativePolicy):
     """Configurable native locomotion inference without a hardware interface."""

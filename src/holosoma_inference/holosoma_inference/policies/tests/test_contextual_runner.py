@@ -51,10 +51,10 @@ class _Input:
         self.zeroed += 1
 
 
-def _config(tmp_path):
+def _config(tmp_path, **model_kwargs):
     generator = Path(__file__).parents[3] / "holosoma_cpp/tests/gen_contextual_models.py"
     path = tmp_path / "contextual.onnx"
-    runpy.run_path(str(generator))["write_model"](path)
+    runpy.run_path(str(generator))["write_model"](path, **model_kwargs)
     base = inference.get_config("g1-29dof-loco")
     robot = RobotConfig(
         robot_type="test",
@@ -74,15 +74,22 @@ def _config(tmp_path):
         robot=robot,
         observation=ObservationConfig({"actor_obs": []}, {}, {}, {}),
         task=replace(base.task, model_path=str(path), use_phase=False),
-        contextual=ContextualConfig(depth_height=SHAPE[0], depth_width=SHAPE[1]),
+        contextual=ContextualConfig(
+            depth_height=SHAPE[0],
+            depth_width=SHAPE[1],
+            require_climb_head=model_kwargs.get("head", True),
+        ),
         secondary=None,
     )
 
 
-def _runner(tmp_path):
+def _runner(tmp_path, **model_kwargs):
     inputs = _Input()
     return NativeContextualRunner(
-        _config(tmp_path), interface=_Interface(), velocity_input=inputs, command_provider=inputs
+        _config(tmp_path, **model_kwargs),
+        interface=_Interface(),
+        velocity_input=inputs,
+        command_provider=inputs,
     )
 
 
@@ -142,3 +149,14 @@ def test_zero_velocity_zeroes_the_operator_input(tmp_path):
     runner = _runner(tmp_path)
     runner._dispatch_command(StateCommand.ZERO_VELOCITY)
     assert runner._velocity_input.zeroed == 1
+
+
+def test_a_raw_depth_graph_takes_the_camera_frame_untouched(tmp_path):
+    """Preprocessing inside the graph makes NaN expected input, so no guard may reject it."""
+    runner = _runner(tmp_path, raw=True, head=False)
+    assert runner.expects_raw_depth
+    frame = FLAT.copy()
+    frame[0, 0] = np.nan
+    assert runner.set_depth(frame)
+    command = runner._step_native(runner.interface.get_low_state())
+    assert np.isfinite(np.asarray(command.q, float)).all()

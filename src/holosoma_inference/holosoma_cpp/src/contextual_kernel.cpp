@@ -92,7 +92,7 @@ Policy::Policy(std::shared_ptr<OnnxModel> model, Spec spec, Options options)
   std::map<std::string, std::vector<int64_t>> shapes;
   for (const auto &input : model_->inputs()) {
     const auto &name = input.name;
-    if (name != "obs" && name != "depth_image" && name != "time_step")
+    if (name != "obs" && name != "depth_image" && name != "depth_raw" && name != "time_step")
       throw std::runtime_error("unsupported contextual input: " + name);
     shapes[name] = input.shape;
   }
@@ -100,17 +100,31 @@ Policy::Policy(std::shared_ptr<OnnxModel> model, Spec spec, Options options)
   if (!shapes.count("obs") || shapes.at("obs").size() != 2 || shapes.at("obs").back() != width ||
       (shapes.at("obs")[0] != 1 && shapes.at("obs")[0] != -1))
     throw std::runtime_error("obs shape does not match contextual contract");
-  if (!shapes.count("depth_image")) throw std::runtime_error("missing depth_image input");
-  depth_shape_ = shapes.at("depth_image");
+  if (shapes.count("depth_image") == shapes.count("depth_raw"))
+    throw std::runtime_error("expected exactly one of depth_image or depth_raw");
+  depth_input_ = shapes.count("depth_raw") ? "depth_raw" : "depth_image";
+  const bool raw = depth_input_ == "depth_raw";
+  depth_shape_ = shapes.at(depth_input_);
   if (depth_shape_.size() != 3 && depth_shape_.size() != 4)
-    throw std::runtime_error("depth_image must have rank 3 or 4");
+    throw std::runtime_error(depth_input_ + " must have rank 3 or 4");
   const size_t offset = depth_shape_.size() - 3;
   if (offset && depth_shape_[0] != 1 && depth_shape_[0] != -1)
-    throw std::runtime_error("depth_image batch must be one");
+    throw std::runtime_error(depth_input_ + " batch must be one");
   if (offset) depth_shape_[0] = 1;
   history_ = depth_shape_[offset];
-  if (history_ <= 0 || depth_shape_[offset + 1] != spec_.height || depth_shape_[offset + 2] != spec_.width)
-    throw std::runtime_error("depth_image concrete dimensions do not match spec");
+  if (history_ <= 0) throw std::runtime_error(depth_input_ + " history must be positive");
+  if (raw) {
+    // The graph resizes, so the frame it wants is whatever it declares rather than the 58x87 the
+    // observation spec describes. Concrete dimensions are required: a dynamic axis would leave
+    // the caller free to change frame size tick to tick and the buffer unsized.
+    if (depth_shape_[offset + 1] <= 0 || depth_shape_[offset + 2] <= 0)
+      throw std::runtime_error("depth_raw needs concrete height and width; export it at a fixed size");
+    frame_size_ = static_cast<size_t>(depth_shape_[offset + 1]) * static_cast<size_t>(depth_shape_[offset + 2]);
+  } else {
+    if (depth_shape_[offset + 1] != spec_.height || depth_shape_[offset + 2] != spec_.width)
+      throw std::runtime_error("depth_image concrete dimensions do not match spec");
+    frame_size_ = spec_.depth_frame_size();
+  }
   // Same leading-batch rule as obs: a concrete 1 or a dynamic -1, since Run()
   // always feeds a [1, 1] tensor and the python kernel loads such a model.
   if (shapes.count("time_step") && (shapes.at("time_step").size() != 2 || shapes.at("time_step")[1] != 1 ||
@@ -397,7 +411,7 @@ std::vector<float> Policy::Observation(const State &state) const {
 
 void Policy::Run() {
   auto &obs = model_->input("obs");
-  auto &depth = model_->input("depth_image");
+  auto &depth = model_->input(depth_input_);
   std::copy(obs_.begin(), obs_.end(), obs.begin());
   std::copy(depth_.begin(), depth_.end(), depth.begin());
   if (model_->find_input("time_step")) model_->input("time_step")[0] = 0;
@@ -410,7 +424,7 @@ std::vector<double> Policy::Target(const State &state, const std::optional<std::
   // Branch rather than value_or: value_or evaluates its argument every call,
   // which zero-fills a height*width frame on the control loop even when a
   // depth frame is present.
-  const auto frame_size = spec_.depth_frame_size();
+  const auto frame_size = frame_size_;
   std::vector<float> frame = depth ? *depth : std::vector<float>(frame_size, 0);
   if (frame.size() != frame_size) throw std::invalid_argument("depth frame size mismatch");
   frames_.push_back(std::move(frame));
@@ -420,7 +434,9 @@ std::vector<double> Policy::Target(const State &state, const std::optional<std::
     depth_.insert(depth_.end(), frames_.front().begin(), frames_.front().end());
   for (const auto &f : frames_) depth_.insert(depth_.end(), f.begin(), f.end());
   Finite(obs_, "observation");
-  Finite(depth_, "depth");
+  // A raw frame is allowed to carry the camera's NaNs: the graph sanitises them itself, and
+  // that is the whole point of exporting the preprocessing inside it.
+  if (depth_input_ != "depth_raw") Finite(depth_, "depth");
   const auto command_start = obs_.size() - spec_.command_dim;
   if (ProbeClimb()) {
     // Read climb_pred under column 14: a head that sees commands 0-13 must not

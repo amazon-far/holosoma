@@ -9,7 +9,7 @@ import onnx
 from onnx import TensorProto, helper, numpy_helper
 
 
-def write_model(path, *, head=True, width=30, actions=3, nonfinite=False):
+def write_model(path, *, head=True, width=30, actions=3, nonfinite=False, raw=False):
     weights = np.zeros((width, actions), dtype=np.float32)
     weights[12, -1] = 1  # Previous clipped action, not scaled joint targets.
     weights[-1, -1] = 1  # Climb command column 14 affects the second inference.
@@ -19,15 +19,17 @@ def write_model(path, *, head=True, width=30, actions=3, nonfinite=False):
         helper.make_node("Add", ["feedback", "bias"], ["actions"]),
     ]
     outputs = [helper.make_tensor_value_info("actions", TensorProto.FLOAT, [1, actions])]
+    # A graph that preprocesses depth itself takes the camera's frame on "depth_raw" instead.
+    depth = "depth_raw" if raw else "depth_image"
     if head:
-        nodes.append(helper.make_node("ReduceMean", ["depth_image"], ["climb_pred"], keepdims=0))
+        nodes.append(helper.make_node("ReduceMean", [depth], ["climb_pred"], keepdims=0))
         outputs.insert(0, helper.make_tensor_value_info("climb_pred", TensorProto.FLOAT, []))
     graph = helper.make_graph(
         nodes,
         "contextual-api",
         [
             helper.make_tensor_value_info("obs", TensorProto.FLOAT, [-1, width]),
-            helper.make_tensor_value_info("depth_image", TensorProto.FLOAT, [-1, 2, 2, 3]),
+            helper.make_tensor_value_info(depth, TensorProto.FLOAT, [-1, 2, 2, 3]),
             helper.make_tensor_value_info("time_step", TensorProto.FLOAT, [-1, 1]),
         ],
         outputs,

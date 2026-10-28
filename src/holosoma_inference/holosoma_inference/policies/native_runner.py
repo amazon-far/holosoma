@@ -337,10 +337,17 @@ class NativeContextualRunner(NativeRunnerPolicy):
         self._monotonic_base = time.monotonic()
         super().__init__(config, **kwargs)
 
+    @property
+    def expects_raw_depth(self) -> bool:
+        """True when the graph sanitises, resizes and normalises depth itself."""
+        return self.native.depth_input == "depth_raw"
+
     def set_depth(self, frame, stamp_s=None):
         """Store the newest depth frame; returns False for a repeated or out-of-order stamp."""
         frame = np.asarray(frame, dtype=np.float32)
-        if not np.isfinite(frame).all():
+        # A graph that preprocesses internally expects the camera's NaNs; one that does not has
+        # already been handed a filled frame, so a non-finite value there is a producer bug.
+        if not self.expects_raw_depth and not np.isfinite(frame).all():
             raise ValueError("depth frame is not finite; the producer must clip and fill")
         if stamp_s is not None and self._frame_stamp is not None and stamp_s <= self._frame_stamp:
             return False

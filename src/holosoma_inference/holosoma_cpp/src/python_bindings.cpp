@@ -3,6 +3,7 @@
 #include <pybind11/stl.h>
 
 #include "holosoma_cpp/api.hpp"
+#include "holosoma_cpp/contextual_policy.hpp"
 #include "holosoma_cpp/holosoma_inference_core.hpp"
 #include "holosoma_cpp/wbt_policy.hpp"
 
@@ -98,6 +99,13 @@ PYBIND11_MODULE(_native, m) {
             return JointCommand(policy.step(state, std::move(input)));
           },
           py::arg("state"), py::arg("inputs"), py::call_guard<py::gil_scoped_release>())
+      // The depth contract is read off the loaded graph, so a consumer cannot be configured to
+      // preprocess a frame the model preprocesses itself. Empty for a non-contextual policy.
+      .def_property_readonly("depth_input",
+                             [](const Policy& policy) {
+                               const auto* ctx = dynamic_cast<const ContextualPolicy*>(&policy.policy());
+                               return ctx ? ctx->core().depth_input() : std::string{};
+                             })
       .def("num_dofs", &Policy::num_dofs)
       .def_property_readonly("dof_names", &Policy::dof_names)
       .def_property_readonly("lookahead_offsets",
