@@ -16,9 +16,8 @@ from __future__ import annotations
 
 from holosoma.config_types.sensor import (
     CameraSensorConfig,
+    RayCastDepthCameraConfig,
     SensorMountConfig,
-    WarpDepthCameraConfig,
-    WarpDepthMountRandomizationConfig,
 )
 
 # Egocentric head camera (torso-frame z~=0.41), looking forward and upright.
@@ -145,10 +144,11 @@ _G1_SELF_OCCLUSION = {
 
 # Ray-cast RealSense D435i depth in the G1 head, as used for perceptive locomotion: 106x60 at
 # 89.5deg horizontal FOV (58.6deg vertical), 0.44 m above the torso_link origin, looking along
-# body +X pitched 27deg down. The mount is perturbed per env by up to 2.5 cm and a few degrees.
+# body +X pitched 27deg down. Training perturbs the mount per env with the
+# ``g1_head_d435i_mount_setup_terms`` randomization setup term.
 # ``near=0`` keeps returns closer than the D435i's 0.3 m working range so preprocessing can clamp
 # them to it, as the hardware pipeline does.
-g1_head_d435i_depth = WarpDepthCameraConfig(
+g1_head_d435i_depth = RayCastDepthCameraConfig(
     mount=SensorMountConfig(
         target_kind="robot_link",
         target="torso_link",
@@ -162,10 +162,4 @@ g1_head_d435i_depth = WarpDepthCameraConfig(
     far=3.0,
     depth_clipping_behavior="max",
     self_occlusion=_G1_SELF_OCCLUSION,
-    mount_randomization=WarpDepthMountRandomizationConfig(
-        position_min=[-0.025, -0.025, -0.025],
-        position_max=[0.025, 0.025, 0.025],
-        euler_deg_min=[-2.5, -3.0, -2.5],
-        euler_deg_max=[2.5, 3.0, 2.5],
-    ),
 )

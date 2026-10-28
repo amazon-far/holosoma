@@ -17,8 +17,8 @@ from holosoma.config_types.sensor import (
     CustomLidarRayPatternConfig,
     GridLidarRayPatternConfig,
     LidarSensorConfig,
+    RayCastDepthCameraConfig,
     SensorMountConfig,
-    WarpDepthCameraConfig,
 )
 from holosoma.config_values.wbt.g1.sensor import (
     g1_head_d435i_depth,
@@ -33,7 +33,7 @@ from holosoma.config_values.wbt.g1.sensor import (
 from holosoma.utils.config_registry import ConfigRegistry
 
 SENSOR_REGISTRY = ConfigRegistry(
-    (CameraSensorConfig, LidarSensorConfig, WarpDepthCameraConfig), group="holosoma.config.sensor"
+    (CameraSensorConfig, LidarSensorConfig, RayCastDepthCameraConfig), group="holosoma.config.sensor"
 )
 # Compatibility alias for extensions written before the registry became heterogeneous.
 CAMERA_REGISTRY = SENSOR_REGISTRY
