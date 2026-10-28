@@ -264,7 +264,9 @@ def main(annotated_config=None):
         else:
             logger.warning("--secondary.* args ignored: no default secondary in this config")
 
-    run_policy(config, depth_shm=known.depth_shm, depth_topic=known.depth_topic)
+    # Only when given: run_policy(config) stays the call for policies without a depth source.
+    depth = {key: getattr(known, key) for key in ("depth_shm", "depth_topic") if getattr(known, key) is not None}
+    run_policy(config, **depth)
 
 
 if __name__ == "__main__":
