@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from abc import ABC, abstractmethod
+from contextlib import ExitStack, contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
@@ -9,12 +10,12 @@ import numpy.typing as npt
 import pygame
 from loguru import logger
 
-from holosoma.bridge.base.root_state import RootStateReader
 from holosoma.config_types.robot import RobotConfig
 from holosoma.utils.rotations import quat_rotate_inverse
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from contextlib import AbstractContextManager
 
     from holosoma.config_types.simulator import BridgeConfig
@@ -82,13 +83,49 @@ class BasicSdk2Bridge(ABC):
         }
         self.joystick: Any = None
 
-        self.root_state = RootStateReader(simulator)
-        # Collaborators that hold per-update state. SimulatorBridge.transport_step enters each one
-        # for the span of a transport update; a subclass extends the tuple with its own.
-        self.transport_scopes: tuple[AbstractContextManager[None], ...] = (self.root_state,)
+        # Set while a transport update is in flight, with the root state it reuses.
+        self._in_transport_update = False
+        self._root_state: torch.Tensor | None = None
+        # Collaborators that hold their own per-update state; a subclass appends its own, and
+        # transport_update enters each for the span of the update.
+        self.transport_scopes: tuple[AbstractContextManager[None], ...] = ()
 
         # Initialize SDK-specific components
         self._init_sdk_components()
+
+    @contextmanager
+    def transport_update(self) -> Iterator[None]:
+        """Scope one SDK transport update: hold one root-state read, and open any scoped collaborator.
+
+        ``robot_root_states`` is a backend-owned proxy, not a tensor: every index rebuilds the whole
+        ``[pos, quat, lin_vel, ang_vel]`` 13-vector and rotates the angular velocity into the world
+        frame. An update reads it more than once -- for the IMU, and for odometry -- always at the
+        same simulator state, since nothing steps the simulator inside the update, so one read
+        serves them all.
+
+        Outside this scope the readers index the proxy directly, so a bridge method called on its
+        own behaves exactly as it did before.
+        """
+        self._in_transport_update = True
+        try:
+            with ExitStack() as scopes:
+                for collaborator in self.transport_scopes:
+                    scopes.enter_context(collaborator)
+                yield
+        finally:
+            self._in_transport_update = False
+            self._root_state = None
+
+    def _read_root_state(self) -> torch.Tensor:
+        """Return the root-state 13-vector, reusing the transport update's read if there is one."""
+        if self._root_state is not None:
+            return self._root_state
+        # Env 0: one bridge drives one robot over one SDK connection, and the torque it writes back
+        # goes through apply_torques_at_dof, which takes no environment index at all.
+        root: torch.Tensor = self.simulator.robot_root_states[0]
+        if self._in_transport_update:
+            self._root_state = root
+        return root
 
     def _resolve_dof_indices(self, simulator: BaseSimulator, robot_config: RobotConfig) -> list[int]:
         """Resolve which simulator DOFs this bridge controls, as indices into ``simulator.dof_names``.
@@ -391,7 +428,7 @@ class BasicSdk2Bridge(ABC):
                 - gyro: angular velocity [wx, wy, wz] (3 elements)
                 - acceleration: linear acceleration [ax, ay, az] (3 elements)
         """
-        root = self.root_state.read()  # [13]
+        root = self._read_root_state()  # [13]
         quat_holosoma = root[3:7]  # [x, y, z, w]
         # robot_root_states[:, 10:13] is WORLD-frame angular velocity on every backend (the
         # unified contract). A physical IMU gyro reports angular velocity in the BODY frame,
@@ -431,7 +468,7 @@ class BasicSdk2Bridge(ABC):
                 - lin_vel_body: [vx, vy, vz] body frame (3 floats)
                 - yaw_speed: body-frame yaw rate [rad/s] (float)
         """
-        root = self.root_state.read()  # [13]
+        root = self._read_root_state()  # [13]
         quat_xyzw = root[3:7]  # [x, y, z, w]
         lin_vel_world = root[7:10].unsqueeze(0)
         ang_vel_world = root[10:13].unsqueeze(0)

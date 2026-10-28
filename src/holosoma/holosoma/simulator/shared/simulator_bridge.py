@@ -7,7 +7,6 @@ with different simulators (MuJoCo, IsaacSim, etc.).
 from __future__ import annotations
 
 import sys
-from contextlib import ExitStack
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
@@ -150,12 +149,10 @@ class SimulatorBridge:
         if not self.robot_bridge:
             return
 
-        # One scope for the whole exchange, holding whichever per-update collaborators the bridge
-        # declares: the root-state reader serves every publish in it from a single simulator read,
-        # and a multiprocess bridge batches its calls to the SDK child into one round trip.
-        with ExitStack() as transport_scope:
-            for collaborator in self.robot_bridge.transport_scopes:
-                transport_scope.enter_context(collaborator)
+        # One scope for the whole exchange: the bridge serves every publish in it from a single
+        # simulator root-state read, and a multiprocess bridge batches its calls to the SDK child
+        # into one round trip.
+        with self.robot_bridge.transport_update():
             # Publish robot state to SDK
             self.robot_bridge.publish_low_state()
 

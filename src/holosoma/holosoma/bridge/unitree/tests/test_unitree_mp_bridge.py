@@ -16,7 +16,6 @@ import pickle
 import shutil
 import sys
 from collections.abc import Sequence
-from contextlib import ExitStack
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
@@ -560,9 +559,7 @@ def test_transport_update_sends_one_batched_round_trip_in_queue_order(
     )
     round_trips = _counting_call(bridge, monkeypatch)
     try:
-        with ExitStack() as scope:
-            for collaborator in bridge.transport_scopes:
-                scope.enter_context(collaborator)
+        with bridge.transport_update():
             bridge.publish_low_state()
             bridge.publish_odom()
             bridge.low_cmd_handler()
@@ -597,9 +594,7 @@ def test_queued_publish_is_flushed_when_an_update_ends_without_a_command_read(
     )
     round_trips = _counting_call(bridge, monkeypatch)
     try:
-        with ExitStack() as scope:
-            for collaborator in bridge.transport_scopes:
-                scope.enter_context(collaborator)
+        with bridge.transport_update():
             bridge.publish_low_state()
         assert not bridge._calls._pending
     finally:
@@ -628,9 +623,7 @@ def test_update_that_raises_still_flushes_what_it_had_already_queued(
     )
 
     def update_that_fails_after_queueing_a_publish() -> None:
-        with ExitStack() as scope:
-            for collaborator in bridge.transport_scopes:
-                scope.enter_context(collaborator)
+        with bridge.transport_update():
             bridge.publish_low_state()
             raise RuntimeError("odometry failed")
 
