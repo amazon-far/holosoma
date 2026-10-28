@@ -1502,7 +1502,6 @@ def main() -> int:
 
     if not headless:
         sim.setup_viewer()
-    sim.install_plugins()
     if sim.video_recorder is not None:
         sim.video_recorder.setup_recording()
         # These scenarios are object-centric; aim the camera at the scene objects, not the robot.

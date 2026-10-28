@@ -25,8 +25,9 @@ from holosoma.config_types.sensor import (
     IsaacSimFisheyeConfig,
     SensorMountConfig,
 )
-from holosoma.simulator.base_simulator.hooks import HookCloseError, HookRegistry, Phase
+from holosoma.hooks import HookCloseError, HookRegistry, Phase
 from holosoma.simulator.plugins.camera_consumer import CameraConsumerPlugin, FramePacket, StreamKey
+from holosoma.simulator.plugins.tests._task import plugin_task
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.simulator_config import SimulatorType
 
@@ -55,7 +56,7 @@ class FakeConsumer(CameraConsumerPlugin):
         self.stopped = False
         self.stop_calls = 0
         self.batches: list[dict[StreamKey, FramePacket]] = []  # each control step's frames dict
-        super().__init__(config, simulator)
+        super().__init__(config, plugin_task(simulator))
 
     @property
     def received(self) -> list[FramePacket]:

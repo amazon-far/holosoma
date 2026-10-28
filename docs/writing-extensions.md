@@ -147,7 +147,7 @@ Group string is `holosoma.config.<family>`, registry var is `<FAMILY>_REGISTRY` 
 
 ## Plugins — custom per-step behavior
 
-A **plugin** is a bundle of behavior — a set of lifecycle hooks plus whatever state they need — that runs your code at points in the simulator loop, without subclassing a backend. It's built on the hook system (`simulator.hooks`, `Phase`) and can depend on other simulator contracts (the virtual gantry, the clock, …). Write a class taking `(cfg, simulator)` that registers hooks in `__init__`, and pair it with a `PluginConfig` (its CLI-visible knobs). There is no base class to inherit.
+A **plugin** is a bundle of behavior — a set of lifecycle hooks plus whatever state they need — that runs your code at points in the task's control loop, without subclassing the task or a backend. It's built on the hook system (`task.hooks`, `Phase`) and can use the task's simulator (`task.simulator`: state, the virtual gantry, the clock, …) and lifecycle (`task.request_shutdown()`). Write a class taking `(cfg, task)` that registers hooks in `__init__`, and pair it with a `PluginConfig` (its CLI-visible knobs). There is no base class to inherit.
 
 ```python
 # my_plugins.py — log the robot's height, sampled at a fixed rate
@@ -155,7 +155,7 @@ from dataclasses import dataclass
 from loguru import logger
 from holosoma.config_types.plugin import PluginConfig
 from holosoma.config_values.plugin import PLUGIN_REGISTRY
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 
 @dataclass(frozen=True)
 class LogHeightPluginConfig(PluginConfig):
@@ -164,10 +164,10 @@ class LogHeightPluginConfig(PluginConfig):
         return LogHeightPlugin               # import lazily here if the impl is heavy
 
 class LogHeightPlugin:
-    def __init__(self, cfg: LogHeightPluginConfig, simulator):
-        self.cfg, self.simulator = cfg, simulator
+    def __init__(self, cfg: LogHeightPluginConfig, task):
+        self.cfg, self.simulator = cfg, task.simulator
         # register one hook per phase you care about:
-        simulator.hooks.add(Phase.FRAME_END, self.log, name="log_height", every=cfg.every)
+        task.hooks.add(Phase.FRAME_END, self.log, name="log_height", every=cfg.every)
 
     def log(self):                           # signature = the phase's payload (below)
         logger.info(f"height = {self.simulator.robot_root_states[0, 2]:.3f}")
@@ -179,20 +179,21 @@ PLUGIN_REGISTRY.add("log_height", LogHeightPluginConfig())
 python -m holosoma.run_sim --import-file my_plugins.py plugin.h:log_height --plugin.h.every=5Hz
 ```
 
-Select plugins as the dynamic-dict `plugin.<key>:<preset>` (per-key leaf overrides via `--plugin.<key>.<field>=…`); each is constructed once in `BaseSimulator.__init__`. Ship them packaged via the `holosoma.config.plugin` entry-point group like any other preset.
+Select plugins as the dynamic-dict `plugin.<key>:<preset>` (per-key leaf overrides via `--plugin.<key>.<field>=…`); each is constructed once, after the task has finished setting up. Ship them packaged via the `holosoma.config.plugin` entry-point group like any other preset.
 
 ### Phases
 
-A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=None, every=1)`. Per control frame the loop emits, in order:
+A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=None, every=1)`. Per control frame they fire in this order; the simulator emits the per-substep phases around each
+physics step, and the task emits the rest:
 
-| Phase | When | Callback args | Cadence |
-|---|---|---|---|
-| `FRAME_BEGIN` | before the physics substeps (push commands to the sim here) | — | control rate |
-| `PRE_STEP` | before each physics substep | — | physics `fps` |
-| `POST_STEP` | after each physics substep (freshest sim time) | — | physics `fps` |
-| `FRAME_END` | after the substeps + state-tensor refresh (read state here) | — | control rate |
-| `EPISODE_START` / `EPISODE_END` | on reset boundaries | `env_id` | per event |
-| `CLOSE` | teardown (release resources); runs in reverse registration order | — | once |
+| Phase | Emitted by | When | Callback args | Cadence |
+|---|---|---|---|---|
+| `FRAME_BEGIN` | task | before the physics substeps (push commands to the sim here) | — | control rate |
+| `PRE_STEP` | simulator | before each physics substep | — | physics `fps` |
+| `POST_STEP` | simulator | after each physics substep (freshest sim time), before that substep's scheduled offscreen render, so read images on `FRAME_END` | — | physics `fps` |
+| `FRAME_END` | task | after the substeps + state-tensor refresh (read state here) | — | control rate |
+| `EPISODE_START` / `EPISODE_END` | task (motion playback also emits them at clip boundaries) | on reset boundaries | `env_id` | per event |
+| `CLOSE` | task | teardown (release resources); runs in reverse registration order | — | once |
 
 ### Cadence
 

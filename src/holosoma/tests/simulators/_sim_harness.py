@@ -81,6 +81,7 @@ def launch_simulator(config: RunSimConfig, device: str | None = None) -> tuple[A
     """
     from holosoma.config_types.env import get_run_sim_env_config
     from holosoma.config_types.full_sim import FullSimConfig
+    from holosoma.hooks import HookRegistry, frame_base_rates
     from holosoma.managers.terrain.manager import TerrainManager
     from holosoma.utils.helpers import get_class
     from holosoma.utils.safe_torch_import import torch
@@ -102,12 +103,12 @@ def launch_simulator(config: RunSimConfig, device: str | None = None) -> tuple[A
         sensors=dict(config.sensor),
         training=config.training,
         logger=config.logger,
-        plugin=config.plugin,
     )
     # Without a task, TerrainManager construction needs only num_envs and device from its env.
     terrain_env = SimpleNamespace(num_envs=config.training.num_envs, device=device)
     terrain_manager = TerrainManager(config.terrain, env=terrain_env, device=device)
-    simulator = get_class(config.simulator._target_)(full_config, terrain_manager, device)
+    hooks = HookRegistry(base_rates=frame_base_rates(config.simulator.config.sim))
+    simulator = get_class(config.simulator._target_)(full_config, terrain_manager, device, hooks)
     return simulator, device, simulation_app
 
 

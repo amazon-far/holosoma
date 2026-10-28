@@ -89,18 +89,16 @@ def _check(sim, num_envs: int) -> tuple[list[str], list[str]]:
     """Run the checks. Returns (failures, report lines)."""
     import torch
 
-    from holosoma.simulator.base_simulator.hooks import Phase
+    from holosoma.hooks import Phase
 
     decimation = sim.simulator_config.sim.control_decimation_steps
     recorder = sim.contact_recorder
     buffer = recorder.buffer  # never reallocated, so one binding stays valid
     failures = []
 
-    # The recorder records on POST_STEP, which the real loops (base_task, run_sim) emit right after
-    # the physics step; this harness drives the simulator directly, so it emits the phase itself.
+    # The recorder records on POST_STEP, which simulate_at_each_physics_step emits after the step.
     def physics_step():
         sim.simulate_at_each_physics_step()
-        sim.hooks.emit(Phase.POST_STEP)
 
     def control_step():
         sim.hooks.emit(Phase.FRAME_BEGIN)

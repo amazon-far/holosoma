@@ -1,7 +1,7 @@
 """ROS2 example plugins.
 
 Reference plugin implementations that talk ROS2 (each constructed as
-``cls(cfg, simulator)`` and registering hooks on ``simulator.hooks`` — no base class):
+``cls(cfg, task)`` and registering hooks on ``task.hooks`` — no base class):
 
 - :class:`ClockPublishPlugin` publishes sim time as ``rosgraph_msgs/msg/Clock``.
 - :class:`GantryControlPlugin` controls and reports virtual-gantry state over independent topics.
@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 from holosoma.simulator.shared.ros2_lifecycle import (
     close_ros2_executor,
     get_ros2_runtime,
@@ -40,7 +40,7 @@ if TYPE_CHECKING:
         GantryControlPluginConfig,
         ROS2OdometryPluginConfig,
     )
-    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+    from holosoma.envs.base_task.base_task import BaseTask
 
 
 class ClockPublishPlugin:
@@ -55,13 +55,13 @@ class ClockPublishPlugin:
 
     cfg: ClockPublishPluginConfig
 
-    def __init__(self, cfg: ClockPublishPluginConfig, simulator: BaseSimulator) -> None:
+    def __init__(self, cfg: ClockPublishPluginConfig, task: BaseTask) -> None:
         self.cfg = cfg
-        self.simulator = simulator
+        self.simulator = task.simulator
         self._node: Any = None
         self._pub: Any = None
-        runtime = get_ros2_runtime(simulator)
-        self.simulator.hooks.add(Phase.CLOSE, self.close, name="clock_publish.close")
+        runtime = get_ros2_runtime(task)
+        task.hooks.add(Phase.CLOSE, self.close, name="clock_publish.close")
 
         import rclpy
         from rosgraph_msgs.msg import Clock
@@ -72,7 +72,7 @@ class ClockPublishPlugin:
         logger.info(f"ClockPublishPlugin publishing sim time on '{cfg.topic}' (node '{cfg.node_name}')")
 
         # `every` accepts an int or a frequency string ("100Hz"); the registry decimates natively.
-        self.simulator.hooks.add(Phase.POST_STEP, self.publish, name="clock_publish.publish", every=cfg.publish_every)
+        task.hooks.add(Phase.POST_STEP, self.publish, name="clock_publish.publish", every=cfg.publish_every)
 
     def publish(self) -> None:
         sim_time = float(self.simulator.time())
@@ -115,9 +115,9 @@ class GantryControlPlugin:
 
     cfg: GantryControlPluginConfig
 
-    def __init__(self, cfg: GantryControlPluginConfig, simulator: BaseSimulator) -> None:
+    def __init__(self, cfg: GantryControlPluginConfig, task: BaseTask) -> None:
         self.cfg = cfg
-        self.simulator = simulator
+        self.simulator = task.simulator
         import rclpy
         from geometry_msgs.msg import Point
         from std_msgs.msg import Bool, Float64
@@ -134,8 +134,8 @@ class GantryControlPlugin:
         self._executor: Any = None
         self._spin_thread: threading.Thread | None = None
         self._spin_stop = threading.Event()
-        runtime = get_ros2_runtime(simulator)
-        self.simulator.hooks.add(Phase.CLOSE, self.close, name="gantry_control.close")
+        runtime = get_ros2_runtime(task)
+        task.hooks.add(Phase.CLOSE, self.close, name="gantry_control.close")
 
         context = runtime.start()
         self._node = rclpy.create_node(cfg.node_name, context=context)
@@ -180,7 +180,7 @@ class GantryControlPlugin:
         self._spin_thread = threading.Thread(target=self._spin, name="gantry_control_spin", daemon=True)
         self._spin_thread.start()
 
-        self.simulator.hooks.add(Phase.FRAME_BEGIN, self.apply, name="gantry_control.apply")
+        task.hooks.add(Phase.FRAME_BEGIN, self.apply, name="gantry_control.apply")
 
     # ----- ROS callbacks (spin thread): stash only, never touch the simulator -----
 
@@ -344,17 +344,17 @@ class ROS2OdometryPlugin:
 
     cfg: ROS2OdometryPluginConfig
 
-    def __init__(self, cfg: ROS2OdometryPluginConfig, simulator: BaseSimulator) -> None:
+    def __init__(self, cfg: ROS2OdometryPluginConfig, task: BaseTask) -> None:
         self.cfg = cfg
-        self.simulator = simulator
+        self.simulator = task.simulator
         # Resolve the configured body lazily on first publish.
         self._body_index: int | None = None
         self._node: Any = None
         self._executor: Any = None
         self._spin_thread: threading.Thread | None = None
         self._spin_stop = threading.Event()
-        runtime = get_ros2_runtime(simulator)
-        self.simulator.hooks.add(Phase.CLOSE, self.close, name="odometry.close")
+        runtime = get_ros2_runtime(task)
+        task.hooks.add(Phase.CLOSE, self.close, name="odometry.close")
 
         import rclpy
         from nav_msgs.msg import Odometry
@@ -387,7 +387,7 @@ class ROS2OdometryPlugin:
         )
 
         # `every` accepts an int decimation or a frequency string ("50Hz"); the registry decimates natively.
-        self.simulator.hooks.add(Phase.FRAME_END, self.publish, name="odometry.publish", every=cfg.publish_every)
+        task.hooks.add(Phase.FRAME_END, self.publish, name="odometry.publish", every=cfg.publish_every)
 
     def _spin(self) -> None:
         spin_executor_until_stopped(self._executor, self._spin_stop)

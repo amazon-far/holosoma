@@ -32,8 +32,9 @@ from holosoma.config_types.sensor import (
     IsaacSimFisheyeConfig,
     SensorMountConfig,
 )
-from holosoma.simulator.base_simulator.hooks import HookRegistry
+from holosoma.hooks import HookRegistry
 from holosoma.simulator.plugins.camera_consumer import CameraIntrinsics, FramePacket
+from holosoma.simulator.plugins.tests._task import plugin_task
 from holosoma.utils.simulator_config import SimulatorType
 
 if TYPE_CHECKING:
@@ -179,7 +180,7 @@ def fake_ros(monkeypatch: pytest.MonkeyPatch) -> dict[str, _FakeNode]:
 
 def _make(cfg: ROS2ImagePluginConfig, *cams: tuple[str, CameraSensorConfig]) -> ROS2ImagePlugin:
     """Construct the egress hook with a fake simulator built from the given cameras."""
-    return cast("ROS2ImagePlugin", cfg.get_cls()(cfg, _FakeSimulator(*cams)))
+    return cast("ROS2ImagePlugin", cfg.get_cls()(cfg, plugin_task(_FakeSimulator(*cams))))
 
 
 def _cam(name: str, **kw: Any) -> tuple[str, CameraSensorConfig]:

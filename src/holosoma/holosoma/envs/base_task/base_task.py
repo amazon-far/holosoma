@@ -7,11 +7,11 @@ from loguru import logger
 from holosoma.config_types.env import EnvConfig
 from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.randomization import RandomizationManagerCfg
+from holosoma.hooks import HookRegistry, Phase, frame_base_rates
 from holosoma.managers.randomization import RandomizationManager
 from holosoma.managers.reset_events.manager import ResetEventManager
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.session import get_local_rank, get_process_seed, resolve_simulation_device
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.common import seeding
@@ -30,12 +30,12 @@ class BaseTask:
         try:
             self._initialize_base_task(tyro_config)
         except BaseException:
-            simulator = getattr(self, "simulator", None)
-            if simulator is not None:
-                try:
-                    simulator.close()
-                except Exception:
-                    logger.exception("Simulator cleanup failed while preserving the task setup error")
+            hooks = getattr(self, "hooks", None)
+            try:
+                if hooks is not None:
+                    hooks.emit(Phase.CLOSE)
+            except Exception:
+                logger.exception("Task cleanup failed while preserving the task setup error")
             raise
 
     def run(self) -> None:
@@ -44,8 +44,8 @@ class BaseTask:
 
     @property
     def shutdown_requested(self) -> bool:
-        """Whether the task or its simulator has asked the outer run loop to stop."""
-        return self._shutdown_requested or self.simulator.shutdown_requested
+        """Whether something has asked the task's outer run loop to stop."""
+        return self._shutdown_requested
 
     def request_shutdown(self, reason: str = "") -> None:
         """Ask the task's outer run loop to stop after the current control frame."""
@@ -54,7 +54,7 @@ class BaseTask:
             logger.info(f"Task shutdown requested{f': {reason}' if reason else ''}")
 
     def close(self) -> None:
-        """End active episodes and close the simulator exactly once."""
+        """End active episodes, then emit ``CLOSE`` exactly once."""
         if self._closed:
             return
         self._closed = True
@@ -66,12 +66,12 @@ class BaseTask:
             primary_error = exc
 
         try:
-            self.simulator.close()
+            self.hooks.emit(Phase.CLOSE)
         except BaseException as exc:
             if primary_error is None:
                 primary_error = exc
             else:
-                logger.opt(exception=exc).error("Simulator cleanup also failed")
+                logger.opt(exception=exc).error("Close hooks also failed")
 
         if primary_error is not None:
             raise primary_error
@@ -114,7 +114,6 @@ class BaseTask:
             robot=robot_config,
             scene=tyro_config.scene,
             sensors=tyro_config.sensors,
-            plugin=tyro_config.plugin,
             training=training_config,
             logger=tyro_config.logger,
             experiment_dir=str(experiment_dir),
@@ -130,11 +129,11 @@ class BaseTask:
         self.dr_base_seed = training_config.seed
         self.dr_episode_count = torch.zeros(self.num_envs, dtype=torch.long, device="cpu")
 
+        self.hooks = HookRegistry(base_rates=frame_base_rates(simulator_config.config.sim))
         self.terrain_manager = TerrainManager(terrain_config, self, self.device)
         self.simulator: BaseSimulator = SimulatorClass(
-            tyro_config=full_sim_config, terrain_manager=self.terrain_manager, device=self.device
+            tyro_config=full_sim_config, terrain_manager=self.terrain_manager, device=self.device, hooks=self.hooks
         )
-        self.hooks = self.simulator.hooks
 
         self._validate_task()
         self.headless = training_config.headless
@@ -170,10 +169,6 @@ class BaseTask:
             self.simulator.setup_viewer()
             self.viewer = self.simulator.viewer
 
-        # Plugins may depend on backend/provider resources created above. Their CLOSE hooks are
-        # registered last and therefore run first during reverse-order teardown.
-        self.simulator.install_plugins()
-
         # Randomization is built between the task's managers because some terms bind to one another
         # during construction.
         self._initialize_task_managers()
@@ -200,6 +195,20 @@ class BaseTask:
 
         if not self.headless:
             self.viewer = self.simulator.viewer
+
+        self._install_plugins()
+
+    def _install_plugins(self) -> None:
+        """Construct each configured plugin as ``cls(cfg, task)``.
+
+        Runs once the task is fully built, so plugins can use any part of it. Their CLOSE hooks
+        are registered last and therefore run first during reverse-order teardown.
+        """
+        self.installed_plugins: dict[str, Any] = {}
+        for key, plugin_config in self.config.plugin.items():
+            self.installed_plugins[key] = plugin_config.get_cls()(plugin_config, self)
+        if self.installed_plugins:
+            logger.info(f"Installed plugins: {sorted(self.installed_plugins)}")
 
     def _init_buffers(self) -> None:
         self.episode_length_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
@@ -462,7 +471,6 @@ class BaseTask:
             if substep == 0:
                 self.hooks.emit(Phase.FRAME_BEGIN)
             self._apply_force_in_physics_step()
-            self.hooks.emit(Phase.PRE_STEP)
             self.simulator.simulate_at_each_physics_step()
             # Count the step just taken, so with render_interval == decimation the render lands on
             # the frame's last substep and FRAME_END consumers see the image for the published state.
@@ -470,7 +478,6 @@ class BaseTask:
             if self.simulator.requires_step_render() and render_due:
                 self.simulator.render()
                 rendered_this_step = True
-            self.hooks.emit(Phase.POST_STEP)
 
             if viewer_due:
                 if self.viewer is not None and not rendered_this_step:

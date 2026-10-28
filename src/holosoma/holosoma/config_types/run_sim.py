@@ -74,8 +74,8 @@ class RunSimConfig:
 
     # Plugins: declare on the CLI as ``plugin.<key>:<variant>`` (resolved from
     # PLUGIN_REGISTRY), optionally with per-key leaf overrides
-    # (e.g. ``--plugin.<key>.<field>=<value>``). Passed through to ``FullSimConfig.plugin`` and
-    # instantiated against the live simulator after backend setup. Empty by default.
+    # (e.g. ``--plugin.<key>.<field>=<value>``). The task constructs each as ``cls(cfg, task)``
+    # once it is built. Empty by default.
     plugin: dict[str, Annotated[PluginConfig, UseRegistry(holosoma.config_values.plugin.PLUGIN_REGISTRY)]] = field(
         default_factory=dict
     )

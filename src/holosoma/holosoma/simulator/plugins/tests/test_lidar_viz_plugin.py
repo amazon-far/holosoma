@@ -17,7 +17,8 @@ from mpl_toolkits.mplot3d.axes3d import Axes3D
 
 from holosoma.config_types.plugin import LidarVizPluginConfig
 from holosoma.config_types.sensor import CustomLidarRayPatternConfig, LidarSensorConfig, SensorMountConfig
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.hooks import HookRegistry, Phase
+from holosoma.simulator.plugins.tests._task import plugin_task
 from holosoma.simulator.plugins.viz.lidar_viz_plugin import LidarVizPlugin
 from holosoma.simulator.shared.sensor_manager import SensorManager
 from holosoma.utils.safe_torch_import import torch
@@ -80,7 +81,7 @@ def test_live_window_uses_headless_state_at_plugin_start(monkeypatch) -> None:
     monkeypatch.setenv("DISPLAY", ":99")
     plugin = LidarVizPluginConfig(live_window=True).get_cls()(
         LidarVizPluginConfig(live_window=True),
-        simulator,
+        plugin_task(simulator),
     )
 
     simulator.headless = True
@@ -102,7 +103,7 @@ def test_live_window_displays_offscreen_render_through_opencv(monkeypatch) -> No
     monkeypatch.setattr(cv2, "destroyWindow", destroyed.append)
 
     config = LidarVizPluginConfig(live_window=True)
-    config.get_cls()(config, simulator)
+    config.get_cls()(config, plugin_task(simulator))
     points = np.array([[[0.0, 1.0, -1.0], [1.0, 2.0, -2.0], [4.0, 5.0, -5.0]]], dtype=np.float32)
     _emit_fresh_scan(simulator, points)
 
@@ -126,7 +127,7 @@ def test_saves_numbered_finite_sensor_xyz_with_deterministic_subsampling(tmp_pat
         view_elevation=15.0,
         view_azimuth=-45.0,
     )
-    config.get_cls()(config, simulator)
+    config.get_cls()(config, plugin_task(simulator))
     captured: list[npt.NDArray[np.float64]] = []
     colors: list[npt.NDArray[np.float64]] = []
     marker_sizes: list[float] = []
@@ -182,7 +183,7 @@ def test_saves_numbered_finite_sensor_xyz_with_deterministic_subsampling(tmp_pat
 def test_default_stream_selection_includes_each_configured_lidar() -> None:
     simulator = _FakeSimulator()
     config = LidarVizPluginConfig(save_scans=True, save_dir="unused")
-    plugin: LidarVizPlugin = config.get_cls()(config, simulator)
+    plugin: LidarVizPlugin = config.get_cls()(config, plugin_task(simulator))
 
     assert plugin.wanted_streams() == {("front/scan", 0)}
 
@@ -211,7 +212,7 @@ def test_record_video_encodes_each_fresh_scan_with_simulation_time_cadence(
 
     monkeypatch.setattr("holosoma.simulator.plugins.viz.lidar_viz_plugin.create_video", capture_video)
     monkeypatch.setattr(LidarVizPlugin, "_render", capture_render)
-    config.get_cls()(config, simulator)
+    config.get_cls()(config, plugin_task(simulator))
     points = np.array(
         [
             [
@@ -252,7 +253,7 @@ def test_record_video_writes_a_decodable_mp4(tmp_path: Path) -> None:
         pytest.skip("ffmpeg not available (create_video h264 shells out to it)")
     simulator = _FakeSimulator()
     config = LidarVizPluginConfig(record_video=True, save_dir=str(tmp_path), lidars=["front/scan"])
-    config.get_cls()(config, simulator)
+    config.get_cls()(config, plugin_task(simulator))
     first = np.array([[[0.0, 1.0, -1.0], [1.0, 2.0, -2.0], [4.0, 5.0, -5.0]]], dtype=np.float32)
     second = first.copy()
     second[0, 1] = [-2.0, 3.0, -4.0]

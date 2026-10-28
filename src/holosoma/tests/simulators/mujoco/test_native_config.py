@@ -25,6 +25,7 @@ from holosoma.config_types.scene import MujocoPhysicsConfig, PhysicsConfig  # no
 from holosoma.config_values.robot import g1_29dof  # noqa: E402
 from holosoma.config_values.simulator import mjwarp  # noqa: E402
 from holosoma.config_values.simulator import mujoco as preset  # noqa: E402
+from holosoma.hooks import Phase  # noqa: E402
 from holosoma.simulator.mujoco.backends.native_config import (  # noqa: E402
     allocation_kwargs,
     apply_warp_model,
@@ -60,7 +61,6 @@ def warp_backend_config(native):
         robot=run.robot,
         training=replace(run.training, num_envs=2),
         logger=run.logger,
-        plugin={},
     )
 
 
@@ -455,7 +455,6 @@ def test_saved_warp_preset_can_override_only_backend_then_initialize_classic():
     assert classic.simulator.config.sim.mujoco == saved.simulator.config.sim.mujoco
     sim = build_classic_sim(simulator=classic.simulator)
     try:
-        assert sim.plugin_config == sim.installed_plugins == {}
         assert sim.root_model.opt.integrator == mujoco.mjtIntegrator.mjINT_RK4
         assert sim.root_model.opt.cone == mujoco.mjtCone.mjCONE_ELLIPTIC
         assert sim.root_model.opt.impratio == 10
@@ -467,7 +466,7 @@ def test_saved_warp_preset_can_override_only_backend_then_initialize_classic():
         sim.backend.step()
         assert sim.root_data.time == pytest.approx(sim.sim_dt)
     finally:
-        sim.close()
+        sim.hooks.emit(Phase.CLOSE)
 
 
 def test_scene_compilation_and_missing_warp_startup_without_optional_dependencies():
@@ -540,7 +539,6 @@ def test_training_checkpoint_native_physics_reaches_standalone_core_and_stepping
     )
     sim = build_classic_sim(simulator=standalone.simulator)
     try:
-        assert sim.plugin_config == sim.installed_plugins == {}
         assert sim.root_model.opt.integrator == mujoco.mjtIntegrator.mjINT_RK4
         assert sim.root_model.opt.cone == mujoco.mjtCone.mjCONE_ELLIPTIC
         assert sim.root_model.opt.impratio == 10
@@ -554,7 +552,7 @@ def test_training_checkpoint_native_physics_reaches_standalone_core_and_stepping
         assert sim.root_data.time == pytest.approx(elapsed)
         assert sim.simulator_config.sim.mujoco.warp == native.warp
     finally:
-        sim.close()
+        sim.hooks.emit(Phase.CLOSE)
 
 
 @pytest.mark.parametrize("reported_version", ["3.9.0", "3.11.0"])
@@ -688,7 +686,6 @@ def test_warp_rejects_sleep_before_device_allocation_but_scene_compilation_is_ba
     model = compiled(native, backend=mjwarp, xml=xml)
     assert model.opt.enableflags & mujoco.mjtEnableBit.mjENBL_SLEEP
     config = warp_backend_config(native)
-    assert config.plugin == {}
     with pytest.raises(ValueError, match=r"simulator\.config\.sim\.mujoco\.enableflags.*sleep.*state writes"):
         WarpBackend(model, mujoco.MjData(model), config, "cpu")
 
@@ -700,7 +697,6 @@ def test_warp_rejects_cpu_with_device_argument_in_error():
     native = MujocoConfig()
     model = compiled(native, backend=mjwarp)
     config = warp_backend_config(native)
-    assert config.plugin == {}
     with pytest.raises(ValueError, match=r"device='cpu'.*CUDA"):
         WarpBackend(model, mujoco.MjData(model), config, "cpu")
 
@@ -752,7 +748,6 @@ def test_warp_contact_extra_changes_real_kernel_trajectories(device):
                 else:
                     from holosoma.simulator.mujoco.backends.warp_backend import WarpBackend
 
-                    assert config.plugin == {}
                     backend = WarpBackend(model, initial, config, device)
                     backend.initialize_state(model, initial)
                     assert backend.step_graph is not None
@@ -817,7 +812,6 @@ def test_core_classic_empty_plugins_initialization_reset_and_reconstruction():
     for _ in range(2):
         sim = build_classic_sim(native=native)
         try:
-            assert sim.plugin_config == sim.installed_plugins == {}
             assert sim.root_model.opt.integrator == mujoco.mjtIntegrator.mjINT_IMPLICITFAST
             assert sim.root_model.opt.cone == mujoco.mjtCone.mjCONE_ELLIPTIC
             assert sim.root_model.opt.impratio == 10
@@ -829,7 +823,7 @@ def test_core_classic_empty_plugins_initialization_reset_and_reconstruction():
             assert sim.root_data.time == pytest.approx(sim.sim_dt)
             assert sim.root_model.opt.ccd_iterations == 12
         finally:
-            sim.close()
+            sim.hooks.emit(Phase.CLOSE)
 
 
 @pytest.mark.mujoco_warp
@@ -845,7 +839,6 @@ def test_core_warp_actual_upload_allocation_capture_and_reset():
     )
     sim = build_warp_sim(num_envs=2, native=native)
     try:
-        assert sim.plugin_config == sim.installed_plugins == {}
         backend = sim.backend
         assert backend.mjw_model.opt.integrator == mujoco.mjtIntegrator.mjINT_RK4
         np.testing.assert_allclose(backend.mjw_model.opt.gravity.numpy(), [[0, 0, -2]])
@@ -872,4 +865,4 @@ def test_core_warp_actual_upload_allocation_capture_and_reset():
         backend.step()
         assert backend.get_render_data().time == pytest.approx(sim.sim_dt)
     finally:
-        sim.close()
+        sim.hooks.emit(Phase.CLOSE)

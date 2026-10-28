@@ -19,7 +19,7 @@ from holosoma.simulator.shared.ros2_lifecycle import (
 
 if TYPE_CHECKING:
     from holosoma.config_types.plugin import ROS2PointCloudPluginConfig, ROS2PointCloudRoute
-    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+    from holosoma.envs.base_task.base_task import BaseTask
     from holosoma.simulator.plugins.lidar_consumer import LidarStreamKey, PointCloudPacket
 
 
@@ -39,15 +39,15 @@ class ROS2PointCloudPlugin(LidarConsumerPlugin):
 
     config: ROS2PointCloudPluginConfig
 
-    def __init__(self, config: ROS2PointCloudPluginConfig, simulator: BaseSimulator) -> None:
+    def __init__(self, config: ROS2PointCloudPluginConfig, task: BaseTask) -> None:
         self._node: Any = None
         self._executor: Any = None
         self._spin_thread: Any = None
         self._spin_stop = threading.Event()
         self._publishers: dict[str, Any] = {}
         self._workers: dict[str, PublishWorker[PointCloudPacket]] = {}
-        self._ros2_runtime = get_ros2_runtime(simulator)
-        super().__init__(config, simulator)
+        self._ros2_runtime = get_ros2_runtime(task)
+        super().__init__(config, task)
 
     def wanted_streams(self) -> set[LidarStreamKey]:
         return {(route.lidar, self.config.env_id) for route in self.config.routes.values()}

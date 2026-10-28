@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from holosoma.config_types.reward import RewardTermCfg
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.managers.reward.terms.wbt import UndesiredContacts
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
 from holosoma.utils.safe_torch_import import torch
 

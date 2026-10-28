@@ -11,7 +11,7 @@ from __future__ import annotations
 import sys
 import types
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 import torch
@@ -22,15 +22,18 @@ from holosoma.config_types.plugin import (
     PluginConfig,
     ROS2OdometryPluginConfig,
 )
-from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.hooks import HookRegistry, Phase, frame_base_rates
+from holosoma.simulator.plugins.tests._task import plugin_task
+
+if TYPE_CHECKING:
+    from holosoma.config_types.simulator import SimEngineConfig
 
 pytestmark = pytest.mark.no_sim
 
 
 def _build_plugin(sim: Any, cfg: PluginConfig) -> Any:
-    """Construct a single plugin the way BaseSimulator.install_plugins does."""
-    return cfg.get_cls()(cfg, cast("BaseSimulator", sim))
+    """Construct a single plugin as ``cls(cfg, task)``, the way BaseTask._install_plugins does."""
+    return cfg.get_cls()(cfg, plugin_task(sim))
 
 
 def test_configs_and_impl_import_without_rclpy() -> None:
@@ -249,7 +252,7 @@ class _FakeGantry:
 
 class _FakeSim:
     """Minimal simulator stand-in whose HookRegistry is wired with per-phase base rates,
-    mirroring BaseSimulator, so native ``every="20Hz"`` resolution works in tests."""
+    as the owning task wires its own, so native ``every="20Hz"`` resolution works in tests."""
 
     def __init__(
         self,
@@ -258,14 +261,8 @@ class _FakeSim:
         fps: int = 200,
         control_decimation_steps: int = 4,
     ) -> None:
-        control_hz = fps / control_decimation_steps
-        base_rates = {
-            Phase.PRE_STEP: float(fps),
-            Phase.POST_STEP: float(fps),
-            Phase.FRAME_BEGIN: control_hz,
-            Phase.FRAME_END: control_hz,
-        }
-        self.hooks = HookRegistry(base_rates=base_rates)
+        sim_config = types.SimpleNamespace(fps=fps, control_decimation_steps=control_decimation_steps)
+        self.hooks = HookRegistry(base_rates=frame_base_rates(cast("SimEngineConfig", sim_config)))
         self.virtual_gantry = gantry
         self._t = sim_time
         self.body_names: list[str] = []

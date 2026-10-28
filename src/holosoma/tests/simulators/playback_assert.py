@@ -1,14 +1,14 @@
 """Cross-backend kinematic-playback harness.
 
-Builds a sim with ``sim.kinematic_playback`` + the ``motion-playback`` plugin, drives the
-run_sim phase cycle for a generated clip (root held in the air, joints ramping), and asserts:
+Builds a simulation task with ``sim.kinematic_playback`` + the ``motion-playback`` plugin, steps
+it for a generated clip (root held in the air, joints ramping), and asserts:
 
 - exact clip tracking: root height and joint positions match the clip to tolerance — on a
   true-FK backend, no gravity sag at all; on a bounded one-substep fallback within
   a small tolerance
 - FK propagation: rigid-body positions reflect the written root pose
 - the kinematic clock advances while the engine clock does not (strict-FK backends)
-- the plugin requests shutdown once the clip ends
+- the plugin requests task shutdown once the clip ends
 
 Usage:
     python tests/simulators/playback_assert.py --simulator mujoco|mjwarp|isaacsim \
@@ -49,8 +49,8 @@ def _write_clip(path: Path, num_dof: int, fps: float) -> Path:
     return file
 
 
-def _build(simulator: str, num_envs: int, plugin=None, kinematic: bool = False):
-    from tests.simulators._sim_harness import build_run_sim_config, launch_simulator
+def _config(simulator: str, num_envs: int, plugin=None, kinematic: bool = False):
+    from tests.simulators._sim_harness import build_run_sim_config
 
     config = build_run_sim_config(simulator, "empty", "g1-29dof", "terrain_locomotion_plane")
     sim_cfg = config.simulator
@@ -62,45 +62,14 @@ def _build(simulator: str, num_envs: int, plugin=None, kinematic: bool = False):
             ),
         )
     device = "cuda:0" if simulator != "mujoco" else "cpu"
-    config = dataclasses.replace(
+    return dataclasses.replace(
         config,
         simulator=sim_cfg,
         device=device,
         plugin=plugin or {},
-        training=dataclasses.replace(config.training, num_envs=num_envs),
+        training=dataclasses.replace(config.training, num_envs=num_envs, headless=True),
+        time_scale=0.0,
     )
-    sim, device, _ = launch_simulator(config, device=device)
-    sim.set_headless(True)
-    sim.setup()
-    sim.setup_terrain()
-    sim.load_assets()
-    base_init = torch.tensor(
-        list(config.robot.init_state.pos)
-        + list(config.robot.init_state.rot)
-        + list(config.robot.init_state.lin_vel)
-        + list(config.robot.init_state.ang_vel)
-    )
-    sim.create_envs(num_envs, torch.zeros(num_envs, 3, device=device), base_init)
-    sim.prepare_sim()
-    sim.install_plugins()
-    return sim
-
-
-def _frame(sim) -> None:
-    from holosoma.simulator.base_simulator.hooks import Phase
-
-    control_decimation = sim.simulator_config.sim.control_decimation_steps
-    for substep in range(control_decimation):
-        if substep == 0:
-            sim.hooks.emit(Phase.FRAME_BEGIN)
-        sim.hooks.emit(Phase.PRE_STEP)
-        sim.simulate_at_each_physics_step()
-        sim.hooks.emit(Phase.POST_STEP)
-        if substep == control_decimation - 1:
-            # The frame closes on the LAST substep, as run_sim's loop does: a periodic-render backend
-            # has drawn by then, so a FRAME_END consumer sees this frame's image, not the last one's.
-            sim.refresh_sim_tensors()
-            sim.hooks.emit(Phase.FRAME_END)
 
 
 def main() -> int:
@@ -117,18 +86,23 @@ def main() -> int:
     from holosoma.config_types.plugin import MotionPlaybackPluginConfig
 
     # The clip needs the sim's num_dof but the plugin config needs the clip path + fps before the
-    # sim builds; the clip loads lazily on the first hook call, so build first, write after.
+    # task builds; the clip loads lazily on the first hook call, so build first, write after.
     tmp = Path(tempfile.mkdtemp(prefix="playback_assert_"))
     clip_path = tmp / "clip.npy"
     control_hz = 50.0  # a valid divisor of every backend preset's fps; set on the config below
     cfg = MotionPlaybackPluginConfig(motion_files=[str(clip_path)], fps=control_hz)
-    sim = _build(args.simulator, args.num_envs, plugin={"play": cfg}, kinematic=True)
+    config = _config(args.simulator, args.num_envs, plugin={"play": cfg}, kinematic=True)
+    with config.create_task() as task:
+        return _check_playback(task, tmp, cfg, args.result_file)
 
+
+def _check_playback(task, tmp: Path, cfg, result_file: str | None) -> int:
+    sim = task.simulator
     sim_cfg = sim.simulator_config.sim
     control_hz = sim_cfg.fps / sim_cfg.control_decimation_steps
     cfg = dataclasses.replace(cfg, fps=control_hz)  # sync clip fps to the actual control rate
     # Re-point the plugin's config so its lazy load uses the corrected fps.
-    sim.installed_plugins["play"].cfg = cfg
+    task.installed_plugins["play"].cfg = cfg
     _write_clip(tmp, sim.num_dof, control_hz)
     frames = int(CLIP_SECONDS * control_hz) + 1
 
@@ -143,13 +117,15 @@ def main() -> int:
         if not ok:
             failures.append(name)
 
+    task.reset_all()
     # Engine clock may have accrued time during scene setup; the invariant is that it does not
     # advance during PLAYBACK frames (strict-FK backends never step physics there).
     engine_t0 = sim._physics_time()
+    time_t0 = sim.time()
 
     n = frames // 2
     for _ in range(n):
-        _frame(sim)
+        task.step()
 
     # 1. Root held at clip height: no gravity accumulation.
     root_z = sim.robot_root_states[:, 2]
@@ -174,21 +150,22 @@ def main() -> int:
 
     # 4. Kinematic clock advanced one sim dt per step; engine clock did not.
     expected_t = n * sim_cfg.control_decimation_steps / sim_cfg.fps
-    check("kinematic-clock-advances", abs(sim.time() - expected_t) < 1e-6, f"time={sim.time()} vs {expected_t}")
+    elapsed = sim.time() - time_t0
+    check("kinematic-clock-advances", abs(elapsed - expected_t) < 1e-6, f"elapsed={elapsed} vs {expected_t}")
     drift = sim._physics_time() - engine_t0
     check("engine-clock-frozen", abs(drift) < 1e-9, f"drift={drift} over {n} frames")
 
-    # 5. Play to the end: shutdown requested.
+    # 5. Play to the end: task shutdown requested.
     for _ in range(frames - n + 2):
-        _frame(sim)
-    check("shutdown-at-clip-end", sim.shutdown_requested)
+        task.step()
+    check("shutdown-at-clip-end", task.shutdown_requested)
 
     if failures:
         print(f"FAILED: {failures}")
         return 1
     print("ALL PASS")
-    if args.result_file:
-        Path(args.result_file).write_text("OK\n")
+    if result_file:
+        Path(result_file).write_text("OK\n")
     return 0
 
 

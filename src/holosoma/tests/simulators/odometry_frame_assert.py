@@ -112,7 +112,6 @@ def _build(simulator: str):
     )
     sim.create_envs(1, origins, base_init)
     sim.prepare_sim()
-    sim.install_plugins()
     return sim
 
 

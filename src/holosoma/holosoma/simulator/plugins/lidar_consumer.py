@@ -11,11 +11,11 @@ import numpy.typing as npt
 from loguru import logger
 
 from holosoma.config_types.sensor import LidarSensorConfig
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 
 if TYPE_CHECKING:
     from holosoma.config_types.plugin import PluginConfig
-    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+    from holosoma.envs.base_task.base_task import BaseTask
 
 LidarStreamKey = tuple[str, int]
 
@@ -37,16 +37,17 @@ class PointCloudPacket:
 class LidarConsumerPlugin:
     """Base plugin for consumers of fresh sensor-local LiDAR point clouds."""
 
-    def __init__(self, config: PluginConfig, simulator: BaseSimulator) -> None:
+    def __init__(self, config: PluginConfig, task: BaseTask) -> None:
         self.cfg = config
         self.config = config
-        self.simulator = simulator
+        self.simulator = task.simulator
+        self.num_envs = task.num_envs
         self._wanted = self.wanted_streams()
         self._validate_streams()
         self._started = False
         self._closed = False
-        simulator.hooks.add(Phase.FRAME_END, self._on_frame_end, name=f"{type(self).__name__}.publish")
-        simulator.hooks.add(Phase.CLOSE, self._on_close, name=f"{type(self).__name__}.stop")
+        task.hooks.add(Phase.FRAME_END, self._on_frame_end, name=f"{type(self).__name__}.publish")
+        task.hooks.add(Phase.CLOSE, self._on_close, name=f"{type(self).__name__}.stop")
 
     @abstractmethod
     def wanted_streams(self) -> set[LidarStreamKey]:
@@ -70,7 +71,7 @@ class LidarConsumerPlugin:
             for name, config in self.simulator.sensor_config.items()
             if isinstance(config, LidarSensorConfig)
         }
-        num_envs = self.simulator.training_config.num_envs
+        num_envs = self.num_envs
         for name, env_id in sorted(self._wanted):
             if name not in lidars:
                 raise ValueError(

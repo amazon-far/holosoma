@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import sys
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 # Pop this dir off sys.path[0] so tests/simulators/isaacsim/ can't shadow the real isaacsim pkg.
@@ -105,14 +106,6 @@ def main() -> int:
         training=dataclasses.replace(config.training, num_envs=args.num_envs),
     )
 
-    if args.check_recorder:
-        # Attach a CameraVizPlugin recorder as a hook plugin with record_video (not live_window) so the
-        # check runs without a DISPLAY. Keyed by an arbitrary label ("rec"); the simulator builds it
-        # in __init__ and it registers its publish on FRAME_END (after the render hook).
-        from holosoma.config_types.plugin import CameraVizPluginConfig
-
-        config = dataclasses.replace(config, plugin={**config.plugin, "rec": CameraVizPluginConfig(record_video=True)})
-
     sim, device, _app = launch_simulator(config, device=device)
     sim.set_headless(headless)
     sim.setup()
@@ -132,9 +125,18 @@ def main() -> int:
     )
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
-    sim.install_plugins()
 
-    from holosoma.simulator.base_simulator.hooks import Phase
+    recorder = None
+    if args.check_recorder:
+        # record_video, not live_window, so the check needs no DISPLAY. Built after the simulator so
+        # its FRAME_END publish follows the render hook.
+        from holosoma.config_types.plugin import CameraVizPluginConfig
+
+        recorder_config = CameraVizPluginConfig(record_video=True)
+        task = SimpleNamespace(simulator=sim, hooks=sim.hooks, num_envs=n)
+        recorder = recorder_config.get_cls()(recorder_config, task)
+
+    from holosoma.hooks import Phase
 
     names = sim.get_sensor_names()
     print(f"[{args.simulator}] sensors created: {names}")
@@ -159,23 +161,12 @@ def main() -> int:
         fails += _check_contract(img, n, cam.width, cam.height, f"{args.simulator}/{name}")
         fails += _check_not_blank(img, f"{args.simulator}/{name}")
 
-    if args.check_recorder:
-        # The CameraVizPlugin recorder hook (installed from the `plugin` dict) must have registered on
-        # FRAME_END and buffered a frame from the emission above. Find it among the
-        # installed hooks and assert it captured at least one grid.
-        from holosoma.simulator.plugins.viz.viz_plugin import CameraVizPlugin
-
-        recorders = [h for h in sim.installed_plugins.values() if isinstance(h, CameraVizPlugin)]
-        if not recorders:
-            fails.append(
-                f"{args.simulator}: recorder requested (plugin.rec:viz-record) but no CameraVizPlugin was "
-                "installed during the explicit plugin stage."
-            )
-        else:
-            n_frames = max(len(getattr(r, "_frames_video", [])) for r in recorders)
-            print(f"[{args.simulator}] recorder buffered {n_frames} frame(s) after one emission")
-            if n_frames < 1:
-                fails.append(f"{args.simulator}: recorder hook installed but buffered no frame ({n_frames}).")
+    if recorder is not None:
+        # The recorder must have registered on FRAME_END and buffered a frame from the emission above.
+        n_frames = len(recorder._frames_video)
+        print(f"[{args.simulator}] recorder buffered {n_frames} frame(s) after one emission")
+        if n_frames < 1:
+            fails.append(f"{args.simulator}: recorder hook installed but buffered no frame ({n_frames}).")
 
     if args.result_file:
         # Persist the verdict before teardown: IsaacSim teardown can hard-kill the process and

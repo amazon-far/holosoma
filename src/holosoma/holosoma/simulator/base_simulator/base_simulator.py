@@ -11,8 +11,8 @@ from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.managers.terrain import TerrainManager
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.shared.external_wrench import ExternalWrenchAccumulator, WrenchTarget
 from holosoma.simulator.shared.object_registry import ObjectRegistry, ObjectType
 from holosoma.simulator.shared.scene_types import SceneInterface
@@ -172,7 +172,7 @@ class BaseSimulator:
     _rigid_body_vel: torch.Tensor
     _rigid_body_ang_vel: torch.Tensor
 
-    def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str):
+    def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str, hooks: HookRegistry):
         """
         Initializes the base simulator with configuration settings and simulation device.
 
@@ -184,6 +184,8 @@ class BaseSimulator:
             Terrain manager for the simulation.
         device: str
             Device type for simulation ('cpu' or 'cuda').
+        hooks: HookRegistry
+            The owning task's hook registry; the simulator registers its own callbacks on it.
 
         """
         self.viewer = None
@@ -193,7 +195,6 @@ class BaseSimulator:
         self.scene_config = tyro_config.scene
         self.sensor_config = tyro_config.sensors
         self.robot_config = tyro_config.robot
-        self.plugin_config = tyro_config.plugin
         self.video_config = tyro_config.logger.video
         self.sim_device = device
         self.headless = False
@@ -204,16 +205,10 @@ class BaseSimulator:
         self._external_wrench = ExternalWrenchAccumulator(self)
         self.kinematic_playback: bool = self.simulator_config.sim.kinematic_playback
         self._kinematic_time = 0.0
-        self.hooks = HookRegistry(base_rates=self._hook_base_rates())
+        self.hooks = hooks
         # Register sensor rendering before plugins so FRAME_END consumers read fresh outputs.
         # This no-ops until a backend builds its sensor manager during setup.
         self.hooks.add(Phase.FRAME_END, self.render_sensors, name="sensors.render")
-        self.installed_plugins: dict[str, Any] = {}
-        self._plugins_installed = False
-        self._closed = False
-        # Cooperative shutdown flag: set via request_shutdown(), polled through the owning task.
-        self.shutdown_requested = False
-        self._shutdown_reason = ""
 
         # Virtual gantry system
         self.virtual_gantry: VirtualGantry | None = None
@@ -496,9 +491,8 @@ class BaseSimulator:
     def flush_external_wrench(self) -> None:
         """Apply this substep's accumulated external forces to native buffers, then reset them.
 
-        Backends MUST call this at the top of :meth:`simulate_at_each_physics_step` (after
-        ``PRE_STEP`` hooks accumulate, before the native step) via the
-        :meth:`_write_external_wrench_native` hook.
+        Backends MUST call this at the top of :meth:`_step_dynamics` (after ``PRE_STEP`` hooks
+        accumulate, before the native step) via the :meth:`_write_external_wrench_native` hook.
         """
         self._external_wrench.flush()
 
@@ -559,16 +553,18 @@ class BaseSimulator:
         raise NotImplementedError("The 'apply_torques_at_dof' method must be implemented in subclasses.")
 
     def simulate_at_each_physics_step(self) -> None:
-        """Advance the simulation by a single step.
+        """Advance the simulation by a single step, emitting ``PRE_STEP`` before it and ``POST_STEP`` after.
 
         One physics integration step, or — with ``sim.kinematic_playback`` — one
         forward-kinematics pass over externally written state.
         """
+        self.hooks.emit(Phase.PRE_STEP)
         if self.kinematic_playback:
             self.forward_kinematics()
             self._kinematic_time += 1.0 / self.simulator_config.sim.fps
         else:
             self._step_dynamics()
+        self.hooks.emit(Phase.POST_STEP)
 
     def _step_dynamics(self) -> None:
         """Advance the physics engine by one integration step.
@@ -735,56 +731,6 @@ class BaseSimulator:
         except Exception as e:
             logger.error(f"Failed to initialize bridge system: {e}")
             raise
-
-    def _hook_base_rates(self) -> dict[Phase, float]:
-        """Base tick rate (Hz) of each periodic phase, so hooks can request a rate via ``every="30Hz"``.
-
-        Per-substep phases tick at ``fps``; per-frame phases at the control rate ``fps / control_decimation``.
-        """
-        sim = self.simulator_config.sim
-        fps = float(sim.fps)
-        control_hz = fps / sim.control_decimation_steps
-        return {
-            Phase.PRE_STEP: fps,
-            Phase.POST_STEP: fps,
-            Phase.FRAME_BEGIN: control_hz,
-            Phase.FRAME_END: control_hz,
-        }
-
-    def install_plugins(self) -> None:
-        """Install configured plugins after the concrete backend is ready."""
-        if self._plugins_installed:
-            return
-        if self._closed:
-            raise RuntimeError("Cannot install plugins on a closed simulator")
-
-        # Mark the stage before construction. A failed plugin install is terminal for this
-        # simulator; the outer lifecycle owner will emit CLOSE for callbacks already registered.
-        self._plugins_installed = True
-        for key, cfg in self.plugin_config.items():
-            self.installed_plugins[key] = cfg.get_cls()(cfg, self)
-        if self.installed_plugins:
-            logger.info(f"Installed plugins: {sorted(self.installed_plugins)}")
-
-    def close(self) -> None:
-        """Emit the one-pass simulator teardown phase."""
-        if self._closed:
-            return
-        self._closed = True
-        self.hooks.emit(Phase.CLOSE)
-
-    def request_shutdown(self, reason: str = "") -> None:
-        """Ask the driving loop to end the run gracefully after the current frame.
-
-        Cooperative: sets :attr:`shutdown_requested`, which the owning task reports through
-        ``BaseTask.shutdown_requested``; its run loop exits at the next frame boundary and runs the
-        normal CLOSE teardown. Lets a plugin end a finite run (e.g. motion playback reaching the
-        end of its clip). Idempotent; the first reason is kept.
-        """
-        if not self.shutdown_requested:
-            self.shutdown_requested = True
-            self._shutdown_reason = reason
-            logger.info(f"Simulator shutdown requested{f': {reason}' if reason else ''}")
 
     # ----- Actor/Object Access Interface -----
     # These methods provide unified access to objects registered with ObjectType enum

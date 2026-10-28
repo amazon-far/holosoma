@@ -2,16 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.utils.safe_torch_import import torch
 
 
 class ContactSubstepRecorder:
     """Contact forces at each physics substep of the current control step.
 
-    Owns its own hooks: ``POST_STEP`` appends ``current_forces()``, ``FRAME_BEGIN`` re-anchors the
-    next sample to slot 0. A loop that emits those phases therefore needs no contact-specific code,
-    but one that steps physics without emitting ``POST_STEP`` records nothing.
+    Owns its own hooks: ``POST_STEP``, which every physics step emits, appends ``current_forces()``;
+    ``FRAME_BEGIN`` re-anchors the next sample to slot 0, so slot order needs a loop that emits it.
 
     Slot i holds the forces *after* substep i, unlike the ``*_substep`` buffers in joint_control,
     which record the state entering the substep. Read through :attr:`recorded_forces`.
