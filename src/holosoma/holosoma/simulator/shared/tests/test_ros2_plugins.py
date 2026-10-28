@@ -32,7 +32,7 @@ pytestmark = pytest.mark.no_sim
 
 
 def _build_plugin(sim: Any, cfg: PluginConfig) -> Any:
-    """Construct a single plugin as ``cls(cfg, task)``, the way BaseTask._install_plugins does."""
+    """Construct a single plugin as ``cls(cfg, task)``, as BaseTask does at the end of setup."""
     return cfg.get_cls()(cfg, plugin_task(sim))
 
 
