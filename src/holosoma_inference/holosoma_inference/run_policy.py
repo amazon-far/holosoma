@@ -103,7 +103,9 @@ def _print_control_guide(policy_class, use_joystick: bool, dual_mode: bool = Fal
     logger.info("")
 
 
-def _start_depth_source(policy, config: InferenceConfig, depth_shm: str | None, depth_topic: str | None):
+def _start_depth_source(
+    policy, config: InferenceConfig, depth_shm: str | None, depth_topic: str | None, depth_heartbeat: bool = True
+):
     """Attach the requested depth source to a contextual policy; returns it, or None."""
     if depth_shm is None and depth_topic is None:
         return None
@@ -115,7 +117,7 @@ def _start_depth_source(policy, config: InferenceConfig, depth_shm: str | None, 
 
     if depth_shm is not None:
         shape = (1, 1, config.contextual.depth_height, config.contextual.depth_width)
-        source = DepthShmConsumer(policy, shape=shape, name=depth_shm)
+        source = DepthShmConsumer(policy, shape=shape, name=depth_shm, heartbeat=depth_heartbeat)
         logger.info(f"Contextual depth from shared memory '{depth_shm}'")
     else:
         source = DepthConsumer(policy, depth_topic)
@@ -123,11 +125,18 @@ def _start_depth_source(policy, config: InferenceConfig, depth_shm: str | None, 
     return source
 
 
-def run_policy(config: InferenceConfig, *, depth_shm: str | None = None, depth_topic: str | None = None):
+def run_policy(
+    config: InferenceConfig,
+    *,
+    depth_shm: str | None = None,
+    depth_topic: str | None = None,
+    depth_heartbeat: bool = True,
+):
     """Run policy with Tyro configuration.
 
     ``depth_shm`` / ``depth_topic`` feed a contextual policy from a depth shared-memory block or a
-    ROS2 depth topic (see ``holosoma_inference.depth``).
+    ROS2 depth topic (see ``holosoma_inference.depth``). ``depth_heartbeat=False`` reads the block
+    without its producer's heartbeat.
     """
     logger.info("🚀 Starting Policy with Tyro configuration...")
     logger.info(f"🤖 Robot: {config.robot.robot_type}")
@@ -149,7 +158,7 @@ def run_policy(config: InferenceConfig, *, depth_shm: str | None = None, depth_t
             policy = policy_class(config=config)
 
         logger.info("✅ Policy initialized successfully!")
-        depth_source = _start_depth_source(policy, config, depth_shm, depth_topic)
+        depth_source = _start_depth_source(policy, config, depth_shm, depth_topic, depth_heartbeat)
         use_joystick = bool({"joystick", "interface"} & {config.task.velocity_input, config.task.state_input})
         _print_control_guide(policy_class, use_joystick, dual_mode=dual_mode)
         # Optional per-session rosbag: records ros2 bag record --all for this run
@@ -225,6 +234,13 @@ def main(annotated_config=None):
         metavar="TOPIC",
         help="Feed a contextual preset from this ROS2 32FC1 depth topic.",
     )
+    pre.add_argument(
+        "--no-depth-heartbeat",
+        dest="depth_heartbeat",
+        action="store_false",
+        default=None,
+        help="With --depth-shm: read frames without the producer's heartbeat (unstamped, stalls undetected).",
+    )
     known, remaining = pre.parse_known_args()
 
     disable_secondary = known.secondary is not None and known.secondary.lower() == "none"
@@ -265,7 +281,11 @@ def main(annotated_config=None):
             logger.warning("--secondary.* args ignored: no default secondary in this config")
 
     # Only when given: run_policy(config) stays the call for policies without a depth source.
-    depth = {key: getattr(known, key) for key in ("depth_shm", "depth_topic") if getattr(known, key) is not None}
+    depth = {
+        key: getattr(known, key)
+        for key in ("depth_shm", "depth_topic", "depth_heartbeat")
+        if getattr(known, key) is not None
+    }
     run_policy(config, **depth)
 
 

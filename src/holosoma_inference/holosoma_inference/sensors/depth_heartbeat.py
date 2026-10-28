@@ -164,8 +164,8 @@ class DepthHeartbeatMonitor:
         if self._seq is None:
             if not self._warned_missing and now - self._created_at > self._missing_warn_after_s:
                 logger.warning(
-                    f"[DepthHeartbeat] no heartbeat on {self.endpoint}: the depth producer does not "
-                    f"publish one, so a stalled producer will not be detected"
+                    f"[DepthHeartbeat] no heartbeat on {self.endpoint} after "
+                    f"{self._missing_warn_after_s:g} s; liveness is unchecked until one arrives"
                 )
                 self._warned_missing = True
             return DepthLiveness(checked=False, state=None, stale_s=0.0, seq=None, restarted=False)

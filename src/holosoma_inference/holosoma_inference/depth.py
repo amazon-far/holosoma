@@ -13,7 +13,10 @@ latency by delaying what it publishes.
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
+from loguru import logger
 from scipy import ndimage
 
 HEIGHT, WIDTH = 58, 87
@@ -129,8 +132,11 @@ class DepthShmConsumer:
     ``(num_cameras, 1, height, width)``), so frames pass through unchanged. With the producer's
     heartbeat (``holosoma_inference.sensors.depth_heartbeat``), a frame is pushed once per new
     ``seq``, stamped with its ``t_capture``; frames are never pushed before the block is mapped,
-    since unmapped reads are zeros, and a zero frame is a valid depth reading. Without a heartbeat
-    every poll is pushed unstamped, and the policy cannot tell a stalled producer from a live one.
+    since unmapped reads are zeros, and a zero frame is a valid depth reading. While a heartbeat is
+    expected but none has arrived, nothing is pushed. With ``heartbeat=False`` every poll is pushed
+    unstamped, and the policy cannot tell a stalled producer from a live one.
+
+    An exception on the polling thread stops it; it is logged and re-raised by :meth:`stop`.
     """
 
     def __init__(
@@ -143,6 +149,8 @@ class DepthShmConsumer:
         heartbeat_endpoint: str | None = None,
         camera: int = 0,
         poll_hz: float = 200.0,
+        heartbeat_wait_warn_s: float = 2.0,
+        clock=time.monotonic,
     ):
         from holosoma_inference.sensors.depth_heartbeat import default_heartbeat_endpoint
         from holosoma_inference.sensors.depth_shm import DepthShmSensor
@@ -151,6 +159,12 @@ class DepthShmConsumer:
             raise ValueError(f"expected a (num_cameras, 1, height, width) block, got shape {shape}")
         endpoint = (heartbeat_endpoint or default_heartbeat_endpoint(name)) if heartbeat else None
         self._sensor = DepthShmSensor(shape, name=name, required=False, heartbeat_endpoint=endpoint)
+        self._name = name
+        self._clock = clock
+        self._heartbeat_wait_warn_s = heartbeat_wait_warn_s
+        self._waiting_since: float | None = None
+        self._warned_no_heartbeat = False
+        self.error: BaseException | None = None
         self._policy = policy
         self._camera = camera
         self._period_s = 1.0 / poll_hz
@@ -175,6 +189,7 @@ class DepthShmConsumer:
             self._last_seq = liveness.seq
             stamp = liveness.t_capture
         elif liveness is not None:
+            self._warn_if_no_heartbeat()
             return False  # heartbeat expected but none received yet
         else:
             stamp = None
@@ -184,6 +199,18 @@ class DepthShmConsumer:
             return True
         self.rejected += 1
         return False
+
+    def _warn_if_no_heartbeat(self) -> None:
+        now = self._clock()
+        if self._waiting_since is None:
+            self._waiting_since = now
+        if not self._warned_no_heartbeat and now - self._waiting_since > self._heartbeat_wait_warn_s:
+            logger.warning(
+                f"[DepthShmConsumer] no heartbeat from the producer of '{self._name}': no depth frames "
+                f"will be delivered until one arrives. If the producer runs without a heartbeat, pass "
+                f"--no-depth-heartbeat (frames are then unstamped and a stalled producer goes undetected)."
+            )
+            self._warned_no_heartbeat = True
 
     def start(self) -> None:
         """Poll the block on a daemon thread, leaving the policy loop blocking."""
@@ -197,13 +224,21 @@ class DepthShmConsumer:
         self._thread.start()
 
     def _run(self) -> None:
-        while not self._stop.is_set():
-            self.poll_once()
-            self._stop.wait(self._period_s)
+        try:
+            while not self._stop.is_set():
+                self.poll_once()
+                self._stop.wait(self._period_s)
+        except Exception as exc:
+            # The policy keeps its last frame; nothing is pushed from here on.
+            logger.error(f"[DepthShmConsumer] stopped reading '{self._name}': {exc}")
+            self.error = exc
 
     def stop(self) -> None:
+        """Stop polling; re-raises an exception that stopped the polling thread."""
         if self._thread is not None:
             self._stop.set()
             self._thread.join(timeout=2.0)
             self._thread = None
         self._sensor.stop()
+        if self.error is not None:
+            raise RuntimeError(f"depth shared-memory consumer for '{self._name}' failed") from self.error

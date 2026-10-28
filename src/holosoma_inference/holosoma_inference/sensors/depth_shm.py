@@ -67,6 +67,7 @@ class DepthShmSensor(Sensor):
         self._array: np.ndarray | None = None
         self._zeros = np.zeros(self._shape, dtype=np.float32)
         self._warned_missing = False
+        self._warned_reattach = False
 
     def start(self) -> None:
         """Attach to the shared-memory block and, if configured, the producer's heartbeat.
@@ -109,7 +110,7 @@ class DepthShmSensor(Sensor):
                     f"before the policy, or make the sensor optional to serve zero depth frames."
                 ) from None
             if not quiet:
-                logger.warning(f"[DepthShmSensor] '{self._name}' not found — serving zero depth frames")
+                logger.warning(f"[DepthShmSensor] '{self._name}' not found yet; waiting for the depth producer")
             return None
 
         expected_bytes = int(np.prod(self._shape)) * np.dtype(np.float32).itemsize
@@ -162,18 +163,24 @@ class DepthShmSensor(Sensor):
             logger.warning(f"[DepthShmSensor] depth producer restarted; re-attaching to '{self._name}'")
             self._reattach_pending = True
         if self._reattach_pending:
+            # Polled every tick until the restarted producer recreates its block: log once.
             try:
-                shm = self._open_block()
+                shm = self._open_block(quiet=True)
             except (FileNotFoundError, ValueError) as exc:
                 shm = None
-                logger.error(f"[DepthShmSensor] re-attach failed: {exc}")
+                if not self._warned_reattach:
+                    logger.error(f"[DepthShmSensor] re-attach failed: {exc}")
             if shm is None:
+                if not self._warned_reattach:
+                    logger.warning(f"[DepthShmSensor] waiting for the restarted producer to recreate '{self._name}'")
+                    self._warned_reattach = True
                 return DepthLiveness(
                     checked=True, state=STATE_FAILED, stale_s=math.inf, seq=status.seq, restarted=status.restarted
                 )
             self._detach()
             self._adopt(shm)
             self._reattach_pending = False
+            self._warned_reattach = False
         return status
 
     def stop(self) -> None:
