@@ -8,6 +8,10 @@ Usage:
     python run_policy.py inference:g1-29dof-loco --task.model-path path/to/model.onnx
     python run_policy.py inference:g1-29dof-loco --task.model-path wandb://project/run/model.onnx
     python run_policy.py inference:g1-29dof-loco --task.model-path https://wandb-url/files/model.onnx
+
+Contextual (depth-conditioned) presets need a depth source:
+    python run_policy.py --depth-shm depth_img_shm inference:g1-29dof-depth-d435i --task.model-path model.onnx
+    python run_policy.py --depth-topic depth/depth_registered inference:<contextual preset> ...
 """
 
 from __future__ import annotations
@@ -99,14 +103,39 @@ def _print_control_guide(policy_class, use_joystick: bool, dual_mode: bool = Fal
     logger.info("")
 
 
-def run_policy(config: InferenceConfig):
-    """Run policy with Tyro configuration."""
+def _start_depth_source(policy, config: InferenceConfig, depth_shm: str | None, depth_topic: str | None):
+    """Attach the requested depth source to a contextual policy; returns it, or None."""
+    if depth_shm is None and depth_topic is None:
+        return None
+    if depth_shm is not None and depth_topic is not None:
+        raise ValueError("Pass either --depth-shm or --depth-topic, not both")
+    if config.contextual is None or not hasattr(policy, "set_depth"):
+        raise ValueError("A depth source needs a contextual (depth-conditioned) preset")
+    from holosoma_inference.depth import DepthConsumer, DepthShmConsumer
+
+    if depth_shm is not None:
+        shape = (1, 1, config.contextual.depth_height, config.contextual.depth_width)
+        source = DepthShmConsumer(policy, shape=shape, name=depth_shm)
+        logger.info(f"Contextual depth from shared memory '{depth_shm}'")
+    else:
+        source = DepthConsumer(policy, depth_topic)
+    source.start()
+    return source
+
+
+def run_policy(config: InferenceConfig, *, depth_shm: str | None = None, depth_topic: str | None = None):
+    """Run policy with Tyro configuration.
+
+    ``depth_shm`` / ``depth_topic`` feed a contextual policy from a depth shared-memory block or a
+    ROS2 depth topic (see ``holosoma_inference.depth``).
+    """
     logger.info("🚀 Starting Policy with Tyro configuration...")
     logger.info(f"🤖 Robot: {config.robot.robot_type}")
     logger.info(f"📋 Observation groups: {list(config.observation.obs_dict.keys())}")
     logger.info(f"⚙️ RL Rate: {config.task.rl_rate} Hz")
     logger.info(f"📁 Model path: {config.task.model_path}")
 
+    depth_source = None
     try:
         # Determine policy class based on observation type
         policy_class = _select_policy_class(config)
@@ -120,6 +149,7 @@ def run_policy(config: InferenceConfig):
             policy = policy_class(config=config)
 
         logger.info("✅ Policy initialized successfully!")
+        depth_source = _start_depth_source(policy, config, depth_shm, depth_topic)
         use_joystick = bool({"joystick", "interface"} & {config.task.velocity_input, config.task.state_input})
         _print_control_guide(policy_class, use_joystick, dual_mode=dual_mode)
         # Optional per-session rosbag: records ros2 bag record --all for this run
@@ -133,6 +163,8 @@ def run_policy(config: InferenceConfig):
         traceback.print_exc()
         sys.exit(1)
     finally:
+        if depth_source is not None:
+            depth_source.stop()
         restore_terminal_settings()
 
 
@@ -181,6 +213,18 @@ def main(annotated_config=None):
         help=f"Select a preset for the secondary policy. Choices: {list(INFERENCE_REGISTRY.keys())}",
     )
     pre.add_argument("--secondary", default=None, help="Set to 'none' to disable dual-mode.")
+    pre.add_argument(
+        "--depth-shm",
+        default=None,
+        metavar="NAME",
+        help="Feed a contextual preset from this depth shared-memory block (e.g. depth_img_shm).",
+    )
+    pre.add_argument(
+        "--depth-topic",
+        default=None,
+        metavar="TOPIC",
+        help="Feed a contextual preset from this ROS2 32FC1 depth topic.",
+    )
     known, remaining = pre.parse_known_args()
 
     disable_secondary = known.secondary is not None and known.secondary.lower() == "none"
@@ -220,7 +264,7 @@ def main(annotated_config=None):
         else:
             logger.warning("--secondary.* args ignored: no default secondary in this config")
 
-    run_policy(config)
+    run_policy(config, depth_shm=known.depth_shm, depth_topic=known.depth_topic)
 
 
 if __name__ == "__main__":

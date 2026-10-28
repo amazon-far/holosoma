@@ -26,8 +26,9 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from loguru import logger
 
@@ -104,6 +105,8 @@ class DepthLiveness:
     seq: int | None
     restarted: bool
     """True on the poll where ``seq`` went backwards: the producer restarted."""
+    t_capture: float | None = None
+    """The producer's ``t_capture`` for ``seq``: its own clock, so only for ordering frames."""
 
 
 class DepthHeartbeatMonitor:
@@ -130,6 +133,7 @@ class DepthHeartbeatMonitor:
         self._created_at = clock()
         self._seq: int | None = None
         self._state: str | None = None
+        self._t_capture: float | None = None
         self._advanced_at = self._created_at
         self._warned_missing = False
         self._warned_malformed = False
@@ -152,6 +156,8 @@ class DepthHeartbeatMonitor:
             if self._seq is None or beat["seq"] != self._seq:
                 restarted = self._seq is not None and beat["seq"] < self._seq
                 self._seq = beat["seq"]
+                t_capture = beat.get("t_capture")
+                self._t_capture = float(t_capture) if isinstance(t_capture, (int, float)) else None
                 self._advanced_at = now
             self._state = beat["state"]
 
@@ -164,7 +170,12 @@ class DepthHeartbeatMonitor:
                 self._warned_missing = True
             return DepthLiveness(checked=False, state=None, stale_s=0.0, seq=None, restarted=False)
         return DepthLiveness(
-            checked=True, state=self._state, stale_s=now - self._advanced_at, seq=self._seq, restarted=restarted
+            checked=True,
+            state=self._state,
+            stale_s=now - self._advanced_at,
+            seq=self._seq,
+            restarted=restarted,
+            t_capture=self._t_capture,
         )
 
     def close(self) -> None:

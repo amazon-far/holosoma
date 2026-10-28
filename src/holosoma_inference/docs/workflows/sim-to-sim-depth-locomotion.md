@@ -8,21 +8,30 @@ with a simulated RealSense D435i depth camera.
 ## Overview
 
 Depth locomotion policies see the terrain ahead, so they can place footholds on
-terrain rather than walking blind. A policy is a pair of ONNX models:
+terrain rather than walking blind. They run in the native contextual policy: one ONNX model
+takes proprioception, a direction command and a depth image, and outputs joint targets.
 
-- **depth backbone** — encodes a depth image into a compact latent
-- **student** — maps proprioception + a direction command + that latent to joint targets
-
-The sim renders depth from a torso-mounted D435i camera and publishes it to shared memory;
-the policy process reads it each control tick. The same policy code runs on hardware
-against an on-robot depth server publishing the same format.
+The sim renders depth from a torso-mounted D435i camera, preprocesses it the way the policy was
+trained, and publishes it to shared memory with a liveness heartbeat. The policy process reads
+each new frame from there. The same policy runs on hardware against an on-robot depth server
+publishing the same format.
 
 ## Prerequisites
 
 - MuJoCo environment set up (`scripts/source_mujoco_setup.sh`)
 - Holosoma inference environment set up (`scripts/source_inference_setup.sh`)
-- A D435i-compatible checkpoint **pair**: `depth_backbone.onnx` and `student.onnx`
-- Keyboard and an X11 display for the MuJoCo viewer and hold-to-move controls
+- A D435i-compatible depth-distillation checkpoint. Exports come as a pair,
+  `depth_backbone.onnx` and `student.onnx`; fuse it into one contextual model first:
+
+  ```bash
+  CKPT=/absolute/path/to/checkpoint_directory
+  python src/holosoma_inference/holosoma_cpp/scripts/fuse_depth_student_onnx.py \
+      --backbone ${CKPT}/depth_backbone.onnx --student ${CKPT}/student.onnx \
+      --out ${CKPT}/contextual.onnx --check
+  ```
+
+  `--check` confirms the fused model reproduces the pair's actions.
+- Keyboard and an X11 display for the MuJoCo viewer
 
 Run the commands from the Holosoma repository root. When connecting over SSH,
 set `DISPLAY` to your graphical desktop's X server in both terminals.
@@ -74,10 +83,10 @@ In another terminal, run the policy inference:
 
 ```bash
 source scripts/source_inference_setup.sh
-CKPT=/absolute/path/to/checkpoint_directory
-python3 src/holosoma_inference/holosoma_inference/run_policy.py inference:g1-wbt-distillation-d435i \
+python3 src/holosoma_inference/holosoma_inference/run_policy.py --depth-shm depth_img_shm \
+    inference:g1-29dof-depth-d435i \
     --task.interface lo \
-    --task.model-path "['${CKPT}/depth_backbone.onnx','${CKPT}/student.onnx']"
+    --task.model-path ${CKPT}/contextual.onnx
 ```
 
 Confirm the policy attached to the sim's depth stream:
@@ -85,6 +94,8 @@ Confirm the policy attached to the sim's depth stream:
 ```
 [DepthShmSensor] attached to 'depth_img_shm' shape=(1, 1, 58, 87)
 ```
+
+A start request waits until the first depth frame arrives.
 
 ### 3. Deploy the Robot
 
@@ -101,8 +112,7 @@ In policy terminal, press `]` to activate the policy.
 
 ### 5. Control the Robot
 
-In policy terminal, use `w` `a` `s` `d` `q` `e` to steer and `=` to change speed mode.
-Each key selects a heading outright — see below.
+In policy terminal, use `w` `a` `s` `d` `q` `e` to steer; see below.
 
 ---
 
@@ -110,29 +120,18 @@ Each key selects a heading outright — see below.
 
 **Enter these commands in the policy terminal** (where you ran `run_policy.py`).
 
-### General Controls
-
 | Action | Keyboard |
 |--------|----------|
-| Start the policy | `]` |
-| Damping mode (Kp=0, Kd>0) | `o` |
-| Re-enter stiff hold | `i` |
+| Start the policy (waits for the first depth frame) | `]` |
+| Stop the policy | `o` |
+| Return to the default pose | `i` |
+| Forward / backward velocity | `w` / `s` (0.1 per press) |
+| Leftward / rightward velocity | `a` / `d` |
+| Turn left / right | `q` / `e` |
+| Zero the velocity (stand) | `z` |
 
-`o` enters a damping mode rather than zeroing all gains, so the robot yields but
-resists free-fall. `i` eases back to the startup pose over 2 s.
-
-### Direction Controls
-
-| Action | Keyboard |
-|--------|----------|
-| Forward / backward | **hold** `w` / `s` |
-| 45° left / right | **hold** `a` / `d` |
-| 90° left / right | **hold** `q` / `e` |
-| Stand | release all direction keys, or `z` |
-| Toggle speed mode (LOW ↔ HIGH) | `=` |
-
-Direction keys are **momentary**: the robot walks while a key is held and returns to stand as soon as
-you let go — like a gamepad d-pad.
+The policy was trained on discrete direction classes, so the commanded velocity is mapped to the
+nearest one; below 0.1 it is stand. The runner commands the low-speed classes.
 
 ### MuJoCo Controls Reference
 

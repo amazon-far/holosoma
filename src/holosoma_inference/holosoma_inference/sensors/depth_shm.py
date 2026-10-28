@@ -85,7 +85,19 @@ class DepthShmSensor(Sensor):
         if shm is not None:
             self._adopt(shm)
 
-    def _open_block(self):
+    def try_attach(self) -> bool:
+        """Map the block if it exists by now; returns whether the sensor is attached.
+
+        For consumers that start before the producer: unlike :meth:`start`, a missing block is
+        not reported.
+        """
+        if self._array is None:
+            shm = self._open_block(quiet=True)
+            if shm is not None:
+                self._adopt(shm)
+        return self.attached
+
+    def _open_block(self, quiet: bool = False):
         from multiprocessing import shared_memory
 
         try:
@@ -93,11 +105,11 @@ class DepthShmSensor(Sensor):
         except FileNotFoundError:
             if self._required:
                 raise FileNotFoundError(
-                    f"Depth shared memory '{self._name}' not found. Start the depth image "
-                    f"server before the policy, or set --task.depth-shm.no-required to run "
-                    f"with zero-filled depth frames."
+                    f"Depth shared memory '{self._name}' not found. Start the depth producer "
+                    f"before the policy, or make the sensor optional to serve zero depth frames."
                 ) from None
-            logger.warning(f"[DepthShmSensor] '{self._name}' not found — serving zero depth frames")
+            if not quiet:
+                logger.warning(f"[DepthShmSensor] '{self._name}' not found — serving zero depth frames")
             return None
 
         expected_bytes = int(np.prod(self._shape)) * np.dtype(np.float32).itemsize
@@ -115,6 +127,11 @@ class DepthShmSensor(Sensor):
         self._shm = shm
         self._array = np.ndarray(self._shape, dtype=np.float32, buffer=shm.buf)
         logger.info(f"[DepthShmSensor] attached to '{self._name}' shape={self._shape}")
+
+    @property
+    def attached(self) -> bool:
+        """Whether the producer's block is mapped; until then ``get_latest`` serves zeros."""
+        return self._array is not None
 
     def get_latest(self) -> np.ndarray:
         """Return a copy of the latest depth stack, shape ``self._shape``.
