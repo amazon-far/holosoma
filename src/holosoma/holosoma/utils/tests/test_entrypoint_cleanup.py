@@ -12,7 +12,9 @@ import pytest
 
 import holosoma.replay as replay_module
 from holosoma import eval_agent, train_agent
-from holosoma.utils import common, experiment_paths
+from holosoma.envs.base_task.base_task import BaseTask
+from holosoma.simulator import session
+from holosoma.utils import experiment_paths
 from holosoma.utils.simulator_config import SimulatorType
 
 pytestmark = pytest.mark.no_sim
@@ -22,6 +24,7 @@ class _Environment:
     def __init__(self, events: list[str], *, close_fails: bool = False) -> None:
         self.events = events
         self.close_fails = close_fails
+        self.device = "cpu"
         self.observation_manager = object()
         self.simulator = SimpleNamespace(sim=SimpleNamespace(step=lambda: None))
 
@@ -42,12 +45,29 @@ def _patch_app_close(monkeypatch: pytest.MonkeyPatch, events: list[str]) -> obje
         assert closed_app is app
         events.append("app.close")
 
-    def close_current_app(closed_app: object) -> None:
-        close_app(closed_app, sys.exc_info()[1])
-
     monkeypatch.setattr("holosoma.utils.sim_utils._close_simulation_app", close_app)
-    monkeypatch.setattr(train_agent, "close_simulation_app", close_current_app)
     return app
+
+
+def _patch_session(monkeypatch: pytest.MonkeyPatch, env: _Environment, app: object) -> SimpleNamespace:
+    """Make ``task_session`` launch ``app`` and yield ``env``; return a config whose create_task uses it."""
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def launch(_config: object, _device: str) -> object:
+        assert signal.getsignal(signal.SIGTERM) is not previous_sigterm
+        return app
+
+    class _Task(BaseTask):
+        def __new__(cls, _config: object) -> Any:
+            return env
+
+    monkeypatch.setattr(session, "setup_simulator_imports", lambda _config: None)
+    monkeypatch.setattr(session, "resolve_simulation_device", lambda *_args: "cpu")
+    monkeypatch.setattr(session, "get_simulator_type", lambda: SimulatorType.ISAACSIM)
+    monkeypatch.setattr(session, "setup_isaaclab_launcher", launch)
+    monkeypatch.setattr(session, "get_class", lambda _target: _Task)
+    env_config = SimpleNamespace(env_class="test.Task", training=SimpleNamespace(headless=True))
+    return SimpleNamespace(create_task=lambda: session.task_session(env_config, BaseTask))  # type: ignore[arg-type]
 
 
 def test_eval_interrupt_closes_environment_before_app(
@@ -76,19 +96,13 @@ def test_eval_interrupt_closes_environment_before_app(
             assert max_eval_steps == 5
             raise KeyboardInterrupt
 
-    config = SimpleNamespace(
-        logger=object(),
-        training=SimpleNamespace(export_onnx=False, max_eval_steps=5),
-        algo=SimpleNamespace(_target_="test.Algo", config=object()),
-        save_config=MagicMock(),
-    )
+    config = _patch_session(monkeypatch, env, app)
+    config.logger = object()
+    config.training = SimpleNamespace(export_onnx=False, max_eval_steps=5)
+    config.algo = SimpleNamespace(_target_="test.Algo", config=object())
+    config.save_config = MagicMock()
     checkpoint_cfg = SimpleNamespace(checkpoint="model.pt")
 
-    def setup_environment(_config: object) -> tuple[_Environment, str, object]:
-        assert signal.getsignal(signal.SIGTERM) is not previous_sigterm
-        return env, "cpu", app
-
-    monkeypatch.setattr(eval_agent, "setup_simulation_environment", setup_environment)
     monkeypatch.setattr(eval_agent, "get_experiment_dir", lambda *_args, **_kwargs: tmp_path)
     monkeypatch.setattr(eval_agent, "load_checkpoint", lambda *_args: tmp_path / "model.pt")
     monkeypatch.setattr(eval_agent, "get_class", lambda _target: _Algo)
@@ -110,31 +124,19 @@ def test_replay_interrupt_closes_environment_before_app(monkeypatch: pytest.Monk
         raise KeyboardInterrupt
 
     env.step_visualize_motion = stop_replay  # type: ignore[attr-defined]
-
-    def init_sim_imports(_config: object) -> object:
-        assert signal.getsignal(signal.SIGTERM) is not previous_sigterm
-        return app
-
-    monkeypatch.setattr(replay_module, "init_sim_imports", init_sim_imports)
-    monkeypatch.setattr(replay_module, "get_tyro_env_config", lambda _config: object())
-    monkeypatch.setattr(replay_module, "get_class", lambda _target: lambda *_args, **_kwargs: env)
-    monkeypatch.setattr(common, "seeding", lambda *_args, **_kwargs: None)
+    config = _patch_session(monkeypatch, env, app)
 
     with pytest.raises(KeyboardInterrupt):
-        replay_module.replay(SimpleNamespace(env_class="test.Environment"))  # type: ignore[arg-type]
+        replay_module.replay(config)  # type: ignore[arg-type]
 
     assert events == ["env.close", "app.close"]
     assert signal.getsignal(signal.SIGTERM) is previous_sigterm
 
 
-@pytest.mark.parametrize(
-    ("external_context", "environment_close_fails"),
-    [(False, False), (True, False), (True, True)],
-)
+@pytest.mark.parametrize("environment_close_fails", [False, True])
 def test_training_interrupt_closes_environment_before_app(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    external_context: bool,
     environment_close_fails: bool,
 ) -> None:
     events: list[str] = []
@@ -155,89 +157,49 @@ def test_training_interrupt_closes_environment_before_app(
         def learn(self) -> None:
             raise KeyboardInterrupt
 
-    config = SimpleNamespace(
-        logger=SimpleNamespace(type="local"),
-        training=SimpleNamespace(
-            seed=1,
-            torch_deterministic=False,
-            project=None,
-            name=None,
-            checkpoint=None,
-            teacher_checkpoint=None,
-            num_envs=1,
-        ),
-        robot=SimpleNamespace(asset=SimpleNamespace(robot_type="test")),
-        algo=SimpleNamespace(_target_="test.Algo", config=object()),
-        env_class="test.Environment",
-        save_config=MagicMock(),
+    config = _patch_session(monkeypatch, env, app)
+    config.logger = SimpleNamespace(type="local")
+    config.training = SimpleNamespace(
+        project=None,
+        name=None,
+        checkpoint=None,
+        teacher_checkpoint=None,
+        num_envs=1,
     )
+    config.robot = SimpleNamespace(asset=SimpleNamespace(robot_type="test"))
+    config.algo = SimpleNamespace(_target_="test.Algo", config=object())
+    config.env_class = "test.Task"
+    config.save_config = MagicMock()
     monkeypatch.setitem(sys.modules, "wandb", types.ModuleType("wandb"))
+    monkeypatch.delenv("WORLD_SIZE", raising=False)
 
-    def init_sim_imports(_config: object) -> object:
-        assert signal.getsignal(signal.SIGTERM) is not previous_sigterm
-        return app
-
-    monkeypatch.setattr(train_agent, "init_sim_imports", init_sim_imports)
     monkeypatch.setattr(train_agent, "configure_multi_gpu", lambda: None)
-    monkeypatch.setattr(train_agent, "get_device", lambda *_args: "cpu")
     monkeypatch.setattr(train_agent, "configure_logging", lambda **_kwargs: None)
-    monkeypatch.setattr(train_agent, "get_tyro_env_config", lambda _config: object())
-    monkeypatch.setattr(
-        train_agent,
-        "get_class",
-        lambda target: (lambda *_args, **_kwargs: env) if target == "test.Environment" else _Algo,
-    )
-    monkeypatch.setattr(common, "seeding", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(train_agent, "get_class", lambda _target: _Algo)
     monkeypatch.setattr(experiment_paths, "get_timestamp", lambda: "timestamp")
     monkeypatch.setattr(experiment_paths, "get_experiment_dir", lambda *_args, **_kwargs: tmp_path)
 
-    def run_training() -> None:
-        if external_context:
-            with train_agent.training_context(config) as context:  # type: ignore[arg-type]
-                context.train()
-        else:
-            train_agent.train(config)  # type: ignore[arg-type]
-
     with pytest.raises(KeyboardInterrupt):
-        run_training()
+        train_agent.train(config)  # type: ignore[arg-type]
 
     expected_events = ["env.close"] if environment_close_fails else ["env.close", "app.close"]
     assert events == expected_events
     assert signal.getsignal(signal.SIGTERM) is previous_sigterm
 
 
-def test_training_context_owns_only_the_provider_app(monkeypatch: pytest.MonkeyPatch) -> None:
-    events: list[str] = []
-    env = _Environment(events)
-    app = object()
-    close_app = MagicMock()
-    monkeypatch.setattr(train_agent, "init_sim_imports", lambda _config: app)
-    monkeypatch.setattr(train_agent, "close_simulation_app", close_app)
-
-    with train_agent.training_context(object()) as context:  # type: ignore[arg-type]
-        assert context.simulation_app is app
-        context.environment = env  # type: ignore[attr-defined]
-
-    close_app.assert_called_once_with(app)
-    assert events == []
-
-
 @pytest.mark.parametrize("environment_close_fails", [False, True])
-def test_training_context_session_preserves_provider_order(
+def test_task_session_closes_task_before_app(
     monkeypatch: pytest.MonkeyPatch,
     environment_close_fails: bool,
 ) -> None:
     events: list[str] = []
     env = _Environment(events, close_fails=environment_close_fails)
     app = _patch_app_close(monkeypatch, events)
-    monkeypatch.setattr(train_agent, "init_sim_imports", lambda _config: app)
+    config = _patch_session(monkeypatch, env, app)
 
     def run_session() -> None:
-        with (
-            train_agent.training_context(object()) as context,  # type: ignore[arg-type]
-            context.simulation_session(env) as owned_env,
-        ):
-            assert owned_env is env
+        with config.create_task() as task:
+            assert task is env
 
     if environment_close_fails:
         with pytest.raises(RuntimeError, match="Environment cleanup failed"):

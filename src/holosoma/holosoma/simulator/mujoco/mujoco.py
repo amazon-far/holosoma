@@ -864,6 +864,11 @@ class MuJoCo(BaseSimulator):
         self._rigid_body_vel.copy_(linear_vel)
         self._rigid_body_ang_vel.copy_(angular_vel)
 
+    def synchronize_after_reset(self) -> None:
+        """Run FK after state writes, then refresh the robot body state."""
+        self.forward_kinematics()
+        self.refresh_sim_tensors()
+
     def apply_torques_at_dof(self, torques: torch.Tensor, dof_indices: list[int] | None = None) -> None:
         """Apply torques with backend-specific optimization.
 
@@ -1288,10 +1293,6 @@ class MuJoCo(BaseSimulator):
         # Validate inputs
         if len(env_ids) == 0:
             logger.info("No environments to update")
-            return
-
-        if self.num_dof == 0:
-            logger.info("No robot DOFs available - skipping root state update")
             return
 
         # Incoming angular velocity is world-frame (the robot_root_states / all_root_states

@@ -21,36 +21,31 @@ _CHILD = textwrap.dedent(
     from types import SimpleNamespace
 
     import holosoma.run_sim as runner
+    from holosoma.envs.simulation_task import SimulationTask
+    from holosoma.simulator import session
+    from holosoma.utils.simulator_config import SimulatorType
 
-    class Env:
-        sim = object()
+    class Task(SimulationTask):
+        def __init__(self, _config):
+            pass
+
+        def run(self):
+            try:
+                print("READY", flush=True)
+                time.sleep(30)
+            except KeyboardInterrupt:
+                print("KEYBOARD_INTERRUPT", flush=True)
+                raise
 
         def close(self):
             print("CLEANUP", flush=True)
 
-    def setup(_config, *, device):
-        return Env(), device, None
-
-    def initialize(self):
-        pass
-
-    def run(self):
-        try:
-            print("READY", flush=True)
-            time.sleep(30)
-        except KeyboardInterrupt:
-            print("KEYBOARD_INTERRUPT", flush=True)
-            raise
-
-    runner.setup_simulation_environment = setup
-    runner.DirectSimulation.initialize = initialize
-    runner.DirectSimulation.run = run
-    config = SimpleNamespace(
-        device="cpu",
-        robot=SimpleNamespace(asset=SimpleNamespace(robot_type="test")),
-        simulator=SimpleNamespace(_target_="test.Simulator"),
-        terrain=SimpleNamespace(terrain_term=SimpleNamespace(mesh_type="plane", func="test")),
-    )
+    session.setup_simulator_imports = lambda _config: None
+    session.resolve_simulation_device = lambda *_args: "cpu"
+    session.get_simulator_type = lambda: SimulatorType.MUJOCO
+    session.get_class = lambda _target: Task
+    env_config = SimpleNamespace(env_class="test.Task", training=SimpleNamespace(headless=True))
+    config = SimpleNamespace(create_task=lambda: session.task_session(env_config, SimulationTask))
     runner.run_simulation(config)
     """
 )

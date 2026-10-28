@@ -25,8 +25,12 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from holosoma.simulator.base_simulator.hooks import Phase  # noqa: E402
-from holosoma.utils.sim_utils import setup_simulation_environment  # noqa: E402
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step  # noqa: E402
+from tests.simulators._sim_harness import (  # noqa: E402
+    build_run_sim_config,
+    launch_simulator,
+    run_and_hard_exit,
+    step,
+)
 from tests.simulators.lidar_figures import (  # noqa: E402
     save_pointcloud_figure,
     save_pointcloud_topdown_x_neg_z_projection,
@@ -706,8 +710,7 @@ def main() -> int:
             print("SKIP: Isaac Sim LiDAR requires IsaacLab 2.3.2 or newer")
             return 77
 
-    env, device, _app = setup_simulation_environment(config, device=device)
-    sim = env.sim
+    sim, device, _app = launch_simulator(config, device=device)
     sim.set_headless(True)
     sim.setup()
     sim.setup_terrain()
