@@ -22,7 +22,7 @@ import itertools
 import os
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import torch
 import torch.nn.functional as F
@@ -39,7 +39,6 @@ from holosoma.agents.distillation.checkpoint import (
 from holosoma.agents.modules.logging_utils import LoggingHelper
 from holosoma.agents.modules.student_teacher_modules import StudentTeacher
 from holosoma.config_types.algo import DistillationConfig, DistillationPPOConfig
-from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.utils.inference_helpers import (
     attach_onnx_metadata,
     export_policy_as_onnx,
@@ -47,6 +46,9 @@ from holosoma.utils.inference_helpers import (
     get_control_gains_from_config,
     get_urdf_text_from_robot_config,
 )
+
+if TYPE_CHECKING:
+    from holosoma.policy_task import PolicyTask
 
 ACTOR_GROUP = "actor_obs"
 TEACHER_GROUP = "teacher_obs"
@@ -71,7 +73,7 @@ class DistillationBase(BaseAlgo):
 
     def __init__(
         self,
-        env: BaseTask,
+        env: PolicyTask,
         config: DistillationConfig | DistillationPPOConfig,
         log_dir: str | os.PathLike[str],
         device: str = "cpu",
@@ -290,6 +292,10 @@ class DistillationBase(BaseAlgo):
 
             with self.logging_helper.record_collection_time():
                 obs_dict = self._rollout_step(obs_dict)
+
+            if self.env.shutdown_requested:
+                logger.info("Stopping distillation after a task shutdown request.")
+                break
 
             with self.logging_helper.record_learn_time():
                 loss_dict = self._training_step()
@@ -599,6 +605,9 @@ class DistillationBase(BaseAlgo):
             actor_state = self._pre_eval_env_step(actor_state)
             actor_state = self.env_step(actor_state)
             actor_state = self._post_eval_env_step(actor_state)
+            if self.env.shutdown_requested:
+                logger.info("Stopping distillation evaluation after a task shutdown request.")
+                break
 
         self._post_evaluate_policy()
 

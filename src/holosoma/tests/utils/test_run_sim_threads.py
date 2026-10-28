@@ -141,11 +141,11 @@ def test_explicit_environment_limit_wins(requested: list[int], monkeypatch: pyte
 # children drive the real entry point and read the pool back out of Torch at two points.
 #
 # The config is a REAL RunSimConfig from the production parser, not a stand-in: run_simulation
-# resolves an unset device through ``dataclasses.replace``, which rejects a SimpleNamespace, so a
-# stubbed config cannot reach the ``device is None`` branch at all -- and that branch is how
+# resolves an unset device from the config's simulator preset, which is how
 # ``python -m holosoma.run_sim simulator:mujoco`` actually runs.
 _CHILD = textwrap.dedent(
     """
+    import contextlib
     import dataclasses
 
     import holosoma.run_sim as runner
@@ -153,28 +153,18 @@ _CHILD = textwrap.dedent(
     from holosoma.utils.config_registry import parse_config
     from holosoma.utils.safe_torch_import import torch
 
-    class Env:
-        sim = object()
+    class Task:
+        def run(self):
+            print(f"AT_RUN={torch.get_num_threads()}", flush=True)
 
-        def close(self):
-            pass
-
-    def setup(_config, *, device):
-        # Reported here too: the cap has to land before the environment is constructed, since that
-        # is where the backend allocates its buffers. Checking only inside run() would let the call
-        # slide past setup_simulation_environment unnoticed.
+    @contextlib.contextmanager
+    def create_task(_config):
+        # Reported here too: the cap has to land before the task is constructed, since that is
+        # where the backend allocates its buffers.
         print(f"AT_SETUP={torch.get_num_threads()}", flush=True)
-        return Env(), device, None
+        yield Task()
 
-    def initialize(self):
-        pass
-
-    def run(self):
-        print(f"AT_RUN={torch.get_num_threads()}", flush=True)
-
-    runner.setup_simulation_environment = setup
-    runner.DirectSimulation.initialize = initialize
-    runner.DirectSimulation.run = run
+    RunSimConfig.create_task = create_task
 
     config = parse_config(RunSimConfig, args=[f"simulator:{PRESET}"])
     if DEVICE is not None:
@@ -220,8 +210,8 @@ def test_run_simulation_applies_the_limit_before_building_the_env(device: str | 
     assert _pools_after_run_simulation(CLASSIC_PRESET, device) == {"AT_SETUP": 1, "AT_RUN": 1}
 
 
-@pytest.mark.parametrize("preset", OTHER_PRESETS)
-@pytest.mark.parametrize("device", ["cpu", None])
+# MuJoCo Warp on cpu is rejected at device resolution, before any task exists.
+@pytest.mark.parametrize(("preset", "device"), [("isaacsim", "cpu"), ("isaacsim", None), ("mjwarp", None)])
 def test_run_simulation_leaves_other_backends_alone(preset: str, device: str | None, untouched_pool: int) -> None:
     # Guards the wiring from the other side: a cap applied unconditionally would show up here.
     # Comparing against Torch's own default rather than the literal 1 avoids a spurious failure on

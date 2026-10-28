@@ -183,7 +183,7 @@ def main() -> int:
     num_envs = args.num_envs if args.num_envs is not None else (1 if args.simulator == "mujoco" else 4)
     device = "cpu" if args.simulator == "mujoco" else "cuda:0"
 
-    # Imported here (not at top): for isaacsim, build_full_env's training_context must
+    # Imported here (not at top): for isaacsim, build_full_env's create_task() must
     # initialize the launcher first; _dr_matrix imports torch, which must come after that init.
     import traceback
 

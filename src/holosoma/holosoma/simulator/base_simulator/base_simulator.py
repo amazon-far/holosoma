@@ -226,7 +226,7 @@ class BaseSimulator:
         self.installed_plugins: dict[str, Any] = {}
         self._plugins_installed = False
         self._closed = False
-        # Cooperative shutdown flag: set via request_shutdown(), polled by loop owners (run_sim).
+        # Cooperative shutdown flag: set via request_shutdown(), polled through the owning task.
         self.shutdown_requested = False
         self._shutdown_reason = ""
 
@@ -670,6 +670,10 @@ class BaseSimulator:
         """
         raise NotImplementedError("The 'render' method must be implemented in subclasses.")
 
+    def requires_step_render(self) -> bool:
+        """Return whether this backend needs scheduled renders for offscreen outputs."""
+        return False
+
     def time(self) -> float:
         """Get current simulation time in seconds.
 
@@ -839,10 +843,10 @@ class BaseSimulator:
     def request_shutdown(self, reason: str = "") -> None:
         """Ask the driving loop to end the run gracefully after the current frame.
 
-        Cooperative: sets :attr:`shutdown_requested`; loop owners that support it (``run_sim``'s
-        ``DirectSimulation``) check the flag once per step and exit their loop, running the normal
-        CLOSE teardown. Lets a plugin end a finite run (e.g. motion playback reaching the end of
-        its clip). Idempotent; the first reason is kept.
+        Cooperative: sets :attr:`shutdown_requested`, which the owning task reports through
+        ``BaseTask.shutdown_requested``; its run loop exits at the next frame boundary and runs the
+        normal CLOSE teardown. Lets a plugin end a finite run (e.g. motion playback reaching the
+        end of its clip). Idempotent; the first reason is kept.
         """
         if not self.shutdown_requested:
             self.shutdown_requested = True
@@ -1427,6 +1431,42 @@ class BaseSimulator:
         "dof_state was removed: read and write sim.dof_pos and sim.dof_vel ([num_envs, num_dof]) in place, "
         "and call sim.forward_kinematics() where a write must apply before the next step"
     )
+
+    def set_robot_state(self, env_ids: EnvIds, *, root_states: torch.Tensor, dof_states: torch.Tensor) -> None:
+        """Write selected robot states in place; :meth:`forward_kinematics` applies them now."""
+
+        env_ids = torch.as_tensor(env_ids, device=self.dof_pos.device, dtype=torch.long)
+        selected_root_states = root_states[env_ids] if len(root_states) == self.num_envs else root_states
+        if len(selected_root_states) != len(env_ids):
+            raise ValueError(
+                f"Expected {len(env_ids)} selected root states or {self.num_envs} global root states, "
+                f"got {len(root_states)}."
+            )
+
+        if dof_states.ndim == 2:
+            if dof_states.shape[-1] != 2:
+                raise ValueError(f"Expected DOF state columns [position, velocity], got {tuple(dof_states.shape)}.")
+            if len(dof_states) == self.num_envs * self.num_dof:
+                dof_states = dof_states.view(self.num_envs, self.num_dof, 2)[env_ids]
+            elif len(dof_states) == len(env_ids) * self.num_dof:
+                dof_states = dof_states.view(len(env_ids), self.num_dof, 2)
+            else:
+                raise ValueError(
+                    f"Expected {len(env_ids) * self.num_dof} selected or "
+                    f"{self.num_envs * self.num_dof} global DOF rows, got {len(dof_states)}."
+                )
+        elif dof_states.ndim == 3:
+            dof_states = dof_states[env_ids] if len(dof_states) == self.num_envs else dof_states
+            if dof_states.shape != (len(env_ids), self.num_dof, 2):
+                raise ValueError(
+                    f"Expected DOF states with shape {(len(env_ids), self.num_dof, 2)}, got {tuple(dof_states.shape)}."
+                )
+        else:
+            raise ValueError(f"Expected 2D or 3D DOF states, got {tuple(dof_states.shape)}.")
+
+        self.robot_root_states[env_ids] = selected_root_states
+        self.dof_pos[env_ids] = dof_states[..., 0]
+        self.dof_vel[env_ids] = dof_states[..., 1]
 
     @property
     def dof_state(self) -> torch.Tensor:

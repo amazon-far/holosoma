@@ -1,4 +1,4 @@
-"""Tests for dict/dtype-aware observation handling in BaseTask.
+"""Tests for dict/dtype-aware observation handling in PolicyTask.
 
 A ``concatenate=False`` observation group computes to a dict of per-term tensors. These tests pin
 that ``_store_final_observations`` handles a dict group value (and a uint8 image term) without
@@ -12,18 +12,18 @@ from typing import cast
 
 import pytest
 
-from holosoma.envs.base_task.base_task import BaseTask
+from holosoma.policy_task import PolicyTask
 from holosoma.utils.safe_torch_import import torch
 
 pytestmark = pytest.mark.no_sim
 
 
-def _make_stub(obs_buf_dict: dict[str, torch.Tensor | dict[str, torch.Tensor]]) -> BaseTask:
+def _make_stub(obs_buf_dict: dict[str, torch.Tensor | dict[str, torch.Tensor]]) -> PolicyTask:
     """Minimal object carrying just what the method under test touches."""
     stub = types.SimpleNamespace()
     stub.obs_buf_dict = obs_buf_dict
     stub.extras = {}
-    return cast("BaseTask", stub)
+    return cast("PolicyTask", stub)
 
 
 def test_store_final_observations_handles_dict_group() -> None:
@@ -42,7 +42,7 @@ def test_store_final_observations_handles_dict_group() -> None:
         "image_group": {"front_rgb": torch.full((2, 2, 2, 3), 7, dtype=torch.uint8)},
     }
 
-    BaseTask._store_final_observations(stub, env_ids, final)
+    PolicyTask._store_final_observations(stub, env_ids, final)
 
     store = stub.extras["final_observations"]
     # Flat group: env 0 and 2 copied from final, env 1 left zero.
@@ -58,5 +58,5 @@ def test_store_final_observations_handles_dict_group() -> None:
 def test_store_final_observations_empty_is_noop() -> None:
     """An empty final-obs dict stores nothing."""
     stub = _make_stub({"actor_obs": torch.zeros(2, 2)})
-    BaseTask._store_final_observations(stub, torch.tensor([0]), {})
+    PolicyTask._store_final_observations(stub, torch.tensor([0]), {})
     assert "final_observations" not in stub.extras

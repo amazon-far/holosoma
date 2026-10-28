@@ -41,9 +41,8 @@ def _red_fraction(image) -> float:
 
 def _build(device: str):
     """A one-env headless IsaacSim on the panel-target scene with the forward camera mounted."""
-    from holosoma.utils.sim_utils import setup_simulation_environment
     from tests.simulators import _camera_presets
-    from tests.simulators._sim_harness import build_run_sim_config
+    from tests.simulators._sim_harness import build_run_sim_config, launch_simulator
 
     config = build_run_sim_config(
         "isaacsim", "panel-target", "g1-29dof", "terrain_locomotion_plane", sensors=_camera_presets.front_cam
@@ -54,8 +53,7 @@ def _build(device: str):
 
     import torch
 
-    env, device, _app = setup_simulation_environment(config, device=device)
-    sim = env.sim
+    sim, device, _app = launch_simulator(config, device=device)
     sim.set_headless(True)
     sim.setup()
     sim.setup_terrain()

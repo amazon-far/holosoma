@@ -11,13 +11,13 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
 from holosoma.utils import sim_utils
 from holosoma.utils.simulator_config import SimulatorConfig, SimulatorType
-from holosoma.utils.tests._simulation_error_child import configure_logging
+from holosoma.utils.tests._simulation_error_child import configure_logging, run_task_session
 
 pytestmark = pytest.mark.no_sim
 
@@ -72,7 +72,7 @@ def failed_cleanup(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]
         events.append("env.close")
         raise cleanup_error
 
-    env = SimpleNamespace(sim=object(), close=close_environment)
+    env = SimpleNamespace(close=close_environment)
     app = SimpleNamespace(
         app=SimpleNamespace(post_uncancellable_quit=lambda _code: events.append("quit")),
         close=lambda **_kwargs: events.append("app.close"),
@@ -85,19 +85,15 @@ def failed_cleanup(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]
         sim_utils.logger.remove(capture_sink)
 
 
-@pytest.mark.parametrize(
-    "entrypoint", ["setup", "app", "direct_initialize", "direct_body", "direct_run", "resource_body"]
-)
+@pytest.mark.parametrize("entrypoint", ["construct", "app", "run_reset", "run_step", "session_body"])
 def test_failure_is_reported_before_native_shutdown(entrypoint: str) -> None:
     result = _run_child(entrypoint, "runtime")
 
     assert result.returncode == 1, result.stderr
-    expected = [] if entrypoint in {"setup", "app"} else ["ENV_CLOSE"]
+    expected = [] if entrypoint in {"construct", "app"} else ["ENV_CLOSE"]
     assert result.stdout.splitlines() == [*expected, "WORKAROUNDS_OK", "APP_CLOSE"], result.stderr
     assert result.stderr.count("Traceback (most recent call last)") == 1
     assert "RuntimeError: Missing LiDAR prim: /World/missing_chair" in result.stderr
-    if entrypoint == "direct_run":
-        assert "Error during simulation step 0" in result.stderr
 
 
 @pytest.mark.parametrize("error", ["runtime", "exit_message"])
@@ -108,7 +104,7 @@ def test_failure_is_reported_before_native_shutdown(entrypoint: str) -> None:
 )
 def test_diagnostics_are_delivered_before_native_shutdown(error: str, sink_kind: str, color: str) -> None:
     # Plain direct diagnostics are covered by the entrypoint and exit-intent tests.
-    result = _run_child("resource_body", error, sink_kind=sink_kind, color=color)
+    result = _run_child("session_body", error, sink_kind=sink_kind, color=color)
 
     assert result.returncode == 1, result.stderr
     assert result.stdout.splitlines() == ["ENV_CLOSE", "WORKAROUNDS_OK", "APP_CLOSE"], result.stderr
@@ -125,7 +121,7 @@ def test_diagnostics_are_delivered_before_native_shutdown(error: str, sink_kind:
     [("none", 0), ("interrupt", 130), ("terminate", 143), ("exit_code", 7), ("exit_message", 1), ("exit_success", 0)],
 )
 def test_native_shutdown_preserves_exit_intent(error: str, return_code: int) -> None:
-    result = _run_child("resource_body", error)
+    result = _run_child("session_body", error)
 
     assert result.returncode == return_code, result.stderr
     assert result.stdout.splitlines() == ["ENV_CLOSE", "WORKAROUNDS_OK", "APP_CLOSE"], result.stderr
@@ -134,7 +130,7 @@ def test_native_shutdown_preserves_exit_intent(error: str, return_code: int) -> 
         assert "Invalid simulator configuration" in result.stderr
 
 
-@pytest.mark.parametrize("entrypoint", ["direct_initialize", "direct_body", "resource_body"])
+@pytest.mark.parametrize("entrypoint", ["run_reset", "run_step", "session_body"])
 @pytest.mark.parametrize("error", ["runtime", "interrupt", "exit_code"])
 def test_environment_cleanup_failure_reports_without_requesting_quit(
     entrypoint: str, error: str, failed_cleanup: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
@@ -146,25 +142,11 @@ def test_environment_cleanup_failure_reports_without_requesting_quit(
         "exit_code": SystemExit(7),
     }[error]
 
-    def initialize(_self: sim_utils.DirectSimulation) -> None:
-        if entrypoint == "direct_initialize":
-            raise failure
-
-    monkeypatch.setattr(sim_utils.DirectSimulation, "initialize", initialize)
-
-    def run_failure() -> None:
-        if entrypoint == "resource_body":
-            with sim_utils.simulation_resource_session(case.env, case.app):
-                raise failure
-        else:
-            config = cast("sim_utils.RunSimConfig", object())
-            with sim_utils.DirectSimulation(config, case.env, "cpu", case.app):
-                if entrypoint == "direct_initialize":
-                    raise AssertionError("Initialization unexpectedly succeeded")
-                raise failure
+    def fail() -> None:
+        raise failure
 
     with pytest.raises(type(failure)) as caught:
-        run_failure()
+        run_task_session(monkeypatch, entrypoint, fail, case.env, case.app)
 
     assert caught.value is failure
     assert case.events == ["env.close"]
@@ -190,13 +172,12 @@ def test_unconfigured_backend_still_closes_environment(
     events: list[str] = []
     env = SimpleNamespace(close=lambda: events.append("env.close"))
 
-    def run_session() -> None:
-        with sim_utils.simulation_resource_session(env, object()):
-            if failure is not None:
-                raise failure
+    def fail() -> None:
+        if failure is not None:
+            raise failure
 
     with pytest.raises(RuntimeError) as caught:
-        run_session()
+        run_task_session(monkeypatch, "session_body", fail, env, object())
 
     assert events == ["env.close"]
     if failure is not None:
@@ -211,7 +192,7 @@ def test_unconfigured_backend_still_closes_environment(
 @pytest.mark.parametrize("sink_kind", ["direct", "queued"])
 def test_unavailable_quit_api_can_exit_zero_but_still_cleans_up(quit_kind: str, sink_kind: str) -> None:
     """Simulate failures looking up or calling Kit's exit-status API."""
-    result = _run_child("resource_body", "runtime", quit_kind=quit_kind, sink_kind=sink_kind)
+    result = _run_child("session_body", "runtime", quit_kind=quit_kind, sink_kind=sink_kind)
 
     # The unavailable Kit API cannot override its default status, but the
     # diagnostic and both shutdown workarounds must survive through app.close().
@@ -224,14 +205,14 @@ def test_unavailable_quit_api_can_exit_zero_but_still_cleans_up(quit_kind: str, 
 @pytest.mark.parametrize(
     ("entrypoint", "diagnostic"),
     [
-        ("resource_body", "sink_error"),
-        ("resource_body", "sink_all"),
-        ("resource_body", "drain"),
-        ("resource_body", "flush"),
+        ("session_body", "sink_error"),
+        ("session_body", "sink_all"),
+        ("session_body", "drain"),
+        ("session_body", "flush"),
         ("app", "sink_error"),
         ("app", "drain"),
         ("app", "flush"),
-        ("direct_run", "sink_error"),
+        ("run_step", "sink_error"),
     ],
 )
 def test_diagnostic_failure_does_not_skip_exit_status_or_native_cleanup(entrypoint: str, diagnostic: str) -> None:
@@ -257,10 +238,12 @@ def test_diagnostic_failure_preserves_cleanup_error_and_original_exception(
     case = failed_cleanup
     failure = RuntimeError("Simulation failed")
 
+    def raise_failure() -> None:
+        raise failure
+
     def run_failure() -> None:
         if error == "runtime":
-            with sim_utils.simulation_resource_session(case.env, case.app):
-                raise failure
+            run_task_session(monkeypatch, "session_body", raise_failure, case.env, case.app)
         else:
             sim_utils.close_simulation_resources(case.env, case.app)
 
@@ -286,7 +269,7 @@ def test_diagnostic_failure_preserves_cleanup_error_and_original_exception(
 def test_traceback_survives_forced_termination_during_environment_cleanup(tmp_path: Path, sink_kind: str) -> None:
     ready_file = tmp_path / "cleanup-started"
     stderr_path = tmp_path / "stderr.log"
-    command = _child_command("direct_run", "runtime", sink_kind=sink_kind)
+    command = _child_command("run_step", "runtime", sink_kind=sink_kind)
     command.extend(["--ready-file", str(ready_file)])
     with (
         stderr_path.open("w") as stderr,

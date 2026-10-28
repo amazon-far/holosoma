@@ -10,7 +10,7 @@ import onnx
 import torch
 
 from holosoma.config_types.robot import RobotConfig
-from holosoma.envs.base_task.base_task import BaseTask
+from holosoma.policy_task import PolicyTask
 from holosoma.utils.path import resolve_asset_path
 
 
@@ -285,7 +285,7 @@ def get_control_gains_from_config(robot_config: RobotConfig) -> tuple[list[float
     return kp_list, kd_list
 
 
-def get_command_ranges_from_env(env: BaseTask) -> dict[str, Sequence[float]] | None:
+def get_command_ranges_from_env(env: PolicyTask) -> dict[str, Sequence[float]] | None:
     """Extract command limits from env command manager."""
 
     if env.command_manager is not None:

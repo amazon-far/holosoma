@@ -751,13 +751,7 @@ class IsaacSim(BaseSimulator):
 
     def _advance_substep(self) -> None:
         self._sim_step_counter += 1
-        # Only render if actively recording (not just if video recorder exists)
-        has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording
-        is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors() or has_video_recording
-
         with self.state.mutation():
-            render_now = is_rendering and self._sim_step_counter % self.simulator_config.sim.render_interval_steps == 0
-
             if self.kinematic_playback:
                 # sim.current_time does not advance.
                 self._forward_kinematics()
@@ -770,10 +764,6 @@ class IsaacSim(BaseSimulator):
                 # through to a bare app.update() in isaacsim.core, which also runs the physics engine
                 # on the app clock — sim time ran ~3x too fast whenever a camera/GUI was active.
                 self.sim.step(render=False)
-
-            # RTX sensors (TiledCameras) only track new poses after a render tick.
-            if render_now:
-                self.render()
 
             # update buffers at sim
             self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
@@ -797,6 +787,10 @@ class IsaacSim(BaseSimulator):
         # Isaac Lab resets its cached body velocities only on joint position writes.
         self._robot.data._body_link_vel_w.timestamp = -1.0
         self._robot.data._body_com_vel_w.timestamp = -1.0
+
+    def requires_step_render(self) -> bool:
+        has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording
+        return self.sim.has_rtx_sensors() or has_video_recording
 
     def _write_external_wrench_native(self, targets: list[WrenchTarget]) -> None:
         """Set world-frame wrenches on the robot articulation and object RigidObjects.
