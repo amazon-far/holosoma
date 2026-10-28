@@ -196,7 +196,14 @@ class BaseTask:
         if not self.headless:
             self.viewer = self.simulator.viewer
 
-        # Plugins are built last, as cls(cfg, task) on the finished task, so their CLOSE hooks run first.
+        self._install_plugins()
+
+    def _install_plugins(self) -> None:
+        """Construct each configured plugin as ``cls(cfg, task)``.
+
+        Runs once the task is fully built, so plugins can use any part of it. Their CLOSE hooks
+        are registered last and therefore run first during reverse-order teardown.
+        """
         self.installed_plugins: dict[str, Any] = {}
         for key, plugin_config in self.config.plugin.items():
             self.installed_plugins[key] = plugin_config.get_cls()(plugin_config, self)
