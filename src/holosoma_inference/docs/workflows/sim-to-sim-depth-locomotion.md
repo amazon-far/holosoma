@@ -97,22 +97,21 @@ Confirm the policy attached to the sim's depth stream:
 
 A start request waits until the first depth frame arrives.
 
-### 3. Deploy the Robot
+### 3. Start the Policy on the Gantry
 
+- In policy terminal, press `i` to move to the default pose (about 10 s)
 - In MuJoCo window, press `8` repeatedly to lower the gantry until the feet
   touch the ground
+- In policy terminal, press `]` to activate the policy
 - In MuJoCo window, press `9` to remove the gantry
 
-The policy holds a stiff standing pose until started, so the robot stays upright while
-the gantry comes down.
+Start the policy before removing the gantry: until it is started, the robot only holds
+its pose at the policy's gains and does not stand on its own.
 
-### 4. Start the Policy
+### 4. Control the Robot
 
-In policy terminal, press `]` to activate the policy.
-
-### 5. Control the Robot
-
-In policy terminal, use `w` `a` `s` `d` `q` `e` to steer; see below.
+In policy terminal, use `w` `a` `s` `d` `q` `e` to steer; see below. Press `w` twice to
+walk forward: a single press (0.1) is still read as stand.
 
 ---
 
@@ -131,7 +130,7 @@ In policy terminal, use `w` `a` `s` `d` `q` `e` to steer; see below.
 | Zero the velocity (stand) | `z` |
 
 The policy was trained on discrete direction classes, so the commanded velocity is mapped to the
-nearest one; below 0.1 it is stand. The runner commands the low-speed classes.
+nearest one; 0.1 or less is stand. The runner commands the low-speed classes.
 
 ### MuJoCo Controls Reference
 

@@ -80,7 +80,7 @@ g1_29dof_wbt = InferenceConfig(
 # `depth-shm-d435i` sim plugin: run with `--depth-shm depth_img_shm`. The students have no climb
 # head. No safety secondary: the depth source attaches to a single contextual runner.
 g1_29dof_depth_d435i = InferenceConfig(
-    robot=robot.g1_29dof_depth_distillation,
+    robot=robot.g1_29dof,
     observation=ObservationConfig({"actor_obs": []}, {}, {}, {}),
     task=replace(task.locomotion, use_phase=False, policy_action_scale=1.0),
     contextual=ContextualConfig(require_climb_head=False),
