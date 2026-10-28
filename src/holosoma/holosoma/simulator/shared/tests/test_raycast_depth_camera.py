@@ -110,6 +110,29 @@ def test_self_occlusion_mesh_is_cast_at_its_link_pose(tmp_path: Path) -> None:
     torch.testing.assert_close(depth[1:], torch.full_like(depth[1:], 2.0), atol=1e-4, rtol=0.0)
 
 
+def test_every_mesh_listed_for_a_link_is_cast_at_its_pose(tmp_path: Path) -> None:
+    left, right = tmp_path / "left.stl", tmp_path / "right.stl"
+    # Two halves of one link, side by side along the link's x axis.
+    trimesh.creation.box(
+        extents=[0.2, 0.4, 0.4], transform=trimesh.transformations.translation_matrix([-0.1, 0, 0])
+    ).export(left)
+    trimesh.creation.box(
+        extents=[0.2, 0.4, 0.2], transform=trimesh.transformations.translation_matrix([0.1, 0, 0])
+    ).export(right)
+    sim = _FakeSim(_camera(tmp_path, self_occlusion={"occluder": [str(left), str(right)]}), base_height=2.0)
+    sim.rigid_body_pos_w[0, 1] = torch.tensor([0.0, 0.0, 1.0])
+
+    depth, _, _ = _render(sim)
+
+    assert depth[0, 6, 7].item() == pytest.approx(2.0 - 1.2, abs=1e-4)  # left half, top at z = 1.2
+    assert depth[0, 6, 9].item() == pytest.approx(2.0 - 1.1, abs=1e-4)  # right half, top at z = 1.1
+
+
+def test_self_occlusion_links_need_a_mesh(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="at least one mesh"):
+        _camera(tmp_path, self_occlusion={"occluder": []})
+
+
 def test_image_rows_run_top_down_along_optical_plus_y_and_columns_along_plus_x(tmp_path: Path) -> None:
     sim = _FakeSim(_camera(tmp_path), base_height=2.0)
     sim.rigid_body_pos_w[0, 1] = torch.tensor([0.0, 0.5, 1.0])  # +Y of the camera
