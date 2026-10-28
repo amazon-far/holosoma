@@ -308,7 +308,7 @@ std::optional<ContextualConfig> parse_contextual(const YAML::Node& node, const s
   r.optional("forward_distance_scale", config.forward_distance_scale);
   r.optional("yaw_distance_scale", config.yaw_distance_scale);
   r.nullable("in_place_yaw_threshold", config.in_place_yaw_threshold);
-  r.optional("gravity_frame_joints", config.gravity_frame_joints);
+  r.optional("imu_to_obs_joint_chain", config.imu_to_obs_joint_chain);
   r.optional("max_depth_age_s", config.max_depth_age_s);
   if (!std::isfinite(config.max_depth_age_s) || config.max_depth_age_s <= 0)
     throw ConfigError(r.field("max_depth_age_s") + ": must be finite and positive");

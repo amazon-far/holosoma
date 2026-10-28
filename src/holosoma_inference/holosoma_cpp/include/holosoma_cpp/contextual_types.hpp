@@ -26,11 +26,18 @@ struct ContextualConfig {
   double forward_distance_scale = 0.5;
   double yaw_distance_scale = 1.2;
   std::optional<double> in_place_yaw_threshold;
-  // Joints between the IMU body and the frame the model reads gravity in, as
-  // (joint name, rotation axis "x"/"y"/"z") in kinematic order from the IMU.
-  // The default is the G1 waist chain (pelvis IMU, torso-frame gravity). Empty
-  // keeps gravity in the IMU frame. Every listed joint must be a runtime joint.
-  std::vector<std::pair<std::string, std::string>> gravity_frame_joints{
+  // The joint chain that carries the IMU frame to the observation frame, the
+  // body frame the model was trained to read projected gravity in. Entries are
+  // (joint name, rotation axis "x"/"y"/"z"), in kinematic order starting at the
+  // IMU's link. Each tick the IMU-frame gravity is rotated through each joint's
+  // current angle in turn. This is a chain rather than a fixed transform
+  // because the rotation depends on those joint angles. Each joint is treated as
+  // a pure rotation about its axis, with no fixed offset rotation between links
+  // (true of the G1 waist joints, whose URDF origins all have rpy = 0).
+  // The default is the G1 waist: pelvis IMU to torso-frame gravity. Empty means
+  // the observation frame is the IMU frame. Every listed joint must be a
+  // runtime joint.
+  std::vector<std::pair<std::string, std::string>> imu_to_obs_joint_chain{
       {"waist_yaw_joint", "z"}, {"waist_roll_joint", "x"}, {"waist_pitch_joint", "y"}};
   // Transport-owned (the Python runner enforces it); carried for config parity.
   double max_depth_age_s = 0.25;

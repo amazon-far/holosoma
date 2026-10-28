@@ -74,7 +74,7 @@ def _config(tmp_path):
         robot=robot,
         observation=ObservationConfig({"actor_obs": []}, {}, {}, {}),
         task=replace(base.task, model_path=str(path), use_phase=False),
-        contextual=ContextualConfig(depth_height=SHAPE[0], depth_width=SHAPE[1], gravity_frame_joints=()),
+        contextual=ContextualConfig(depth_height=SHAPE[0], depth_width=SHAPE[1], imu_to_obs_joint_chain=()),
         secondary=None,
     )
 

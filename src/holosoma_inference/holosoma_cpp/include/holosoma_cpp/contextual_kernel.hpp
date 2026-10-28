@@ -20,7 +20,7 @@ struct State {
   std::array<double, 3> omega{};
   // Optional gravity already projected into the IMU body frame (the same
   // quantity every other policy reads as projected_gravity). It replaces the
-  // quaternion-derived vector and then takes the same gravity_frame_joints
+  // quaternion-derived vector and then takes the same imu_to_obs_joint_chain
   // rotation, so both sources reach the model in one frame.
   std::optional<std::array<double, 3>> gravity;
 };
@@ -114,7 +114,7 @@ class Policy {
   std::string key_ = "z";
   std::optional<int> pending_;
   double release_time_ = 0;
-  // Resolved gravity_frame_joints: (runtime joint index, quaternion component 1..3).
-  std::vector<std::pair<size_t, int>> gravity_chain_;
+  // Resolved imu_to_obs_joint_chain: (runtime joint index, quaternion component 1..3).
+  std::vector<std::pair<size_t, int>> imu_to_obs_chain_;
 };
 }  // namespace holosoma::contextual

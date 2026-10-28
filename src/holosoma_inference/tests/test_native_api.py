@@ -77,7 +77,7 @@ def test_contextual_config_and_inputs_use_the_same_native_policy(tmp_path):
         robot=robot,
         observation=ObservationConfig({"actor_obs": []}, {}, {}, {}),
         task=replace(base.task, model_path=str(path), use_phase=False),
-        contextual=ContextualConfig(depth_height=2, depth_width=3, gravity_frame_joints=()),
+        contextual=ContextualConfig(depth_height=2, depth_width=3, imu_to_obs_joint_chain=()),
         secondary=None,
     )
     policy = inference.get_policy_from_preset(config)
@@ -105,7 +105,7 @@ def test_contextual_config_and_inputs_use_the_same_native_policy(tmp_path):
         policy.step_contextual(broken, inputs)
 
 
-def test_contextual_gravity_chain_and_depth_age_cross_the_native_config_boundary(tmp_path):
+def test_contextual_imu_to_obs_chain_and_depth_age_cross_the_native_config_boundary(tmp_path):
     import json
 
     from holosoma_inference import _native
@@ -142,9 +142,9 @@ def test_contextual_gravity_chain_and_depth_age_cross_the_native_config_boundary
         )
 
     # The default G1 waist chain names joints this robot does not have: loud, not skipped.
-    with pytest.raises(ValueError, match="gravity_frame_joints"):
+    with pytest.raises(ValueError, match="imu_to_obs_joint_chain"):
         inference.get_policy_from_preset(config(ContextualConfig(depth_height=2, depth_width=3)))
-    chained = config(ContextualConfig(depth_height=2, depth_width=3, gravity_frame_joints=(("hip", "x"),)))
+    chained = config(ContextualConfig(depth_height=2, depth_width=3, imu_to_obs_joint_chain=(("hip", "x"),)))
     policy = inference.get_policy_from_preset(chained)
     state = np.zeros(19)
     state[3] = 1

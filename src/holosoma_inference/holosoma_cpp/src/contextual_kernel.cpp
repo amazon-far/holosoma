@@ -94,15 +94,15 @@ Policy::Policy(std::shared_ptr<OnnxModel> model, Spec spec, Options options)
         (!std::isfinite(*options_.in_place_yaw_threshold) || *options_.in_place_yaw_threshold < 0))
       throw std::invalid_argument("invalid in-place yaw threshold");
   }
-  for (const auto &[name, axis] : options_.gravity_frame_joints) {
+  for (const auto &[name, axis] : options_.imu_to_obs_joint_chain) {
     const auto found = std::find(spec_.joints.begin(), spec_.joints.end(), name);
     if (found == spec_.joints.end())
-      throw std::invalid_argument("gravity_frame_joints names " + name +
+      throw std::invalid_argument("imu_to_obs_joint_chain names " + name +
                                   ", which is not a runtime joint; set the chain for this robot, or [] for IMU-frame "
                                   "gravity");
     const int component = axis == "x" ? 1 : axis == "y" ? 2 : axis == "z" ? 3 : 0;
-    if (!component) throw std::invalid_argument("gravity_frame_joints axis for " + name + " must be x, y or z");
-    gravity_chain_.emplace_back(static_cast<size_t>(found - spec_.joints.begin()), component);
+    if (!component) throw std::invalid_argument("imu_to_obs_joint_chain axis for " + name + " must be x, y or z");
+    imu_to_obs_chain_.emplace_back(static_cast<size_t>(found - spec_.joints.begin()), component);
   }
   std::map<std::string, std::vector<int64_t>> shapes;
   for (const auto &input : model_->inputs()) {
@@ -389,9 +389,9 @@ std::vector<float> Policy::Observation(const State &state) const {
       for (auto &v : quat) v /= norm;
       gravity = RotateInverse(quat, {0, 0, -1});
     }
-    // Then into the model's gravity frame through gravity_frame_joints.
+    // Then from the IMU frame into the observation frame through imu_to_obs_joint_chain.
     std::array<double, 4> chain{1, 0, 0, 0};
-    for (const auto &[joint, component] : gravity_chain_) {
+    for (const auto &[joint, component] : imu_to_obs_chain_) {
       const double half = state.q[joint] * .5;
       std::array<double, 4> rotation{std::cos(half), 0, 0, 0};
       rotation[component] = std::sin(half);

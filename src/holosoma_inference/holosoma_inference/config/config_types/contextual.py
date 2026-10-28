@@ -7,7 +7,7 @@ from dataclasses import field
 
 from pydantic.dataclasses import dataclass
 
-G1_WAIST_GRAVITY_FRAME = (("waist_yaw_joint", "z"), ("waist_roll_joint", "x"), ("waist_pitch_joint", "y"))
+G1_WAIST_IMU_TO_OBS_CHAIN = (("waist_yaw_joint", "z"), ("waist_roll_joint", "x"), ("waist_pitch_joint", "y"))
 
 
 @dataclass(frozen=True)
@@ -26,13 +26,17 @@ class ContextualConfig:
     forward_distance_scale: float = 0.5
     yaw_distance_scale: float = 1.2
     in_place_yaw_threshold: float | None = None
-    gravity_frame_joints: tuple[tuple[str, str], ...] = G1_WAIST_GRAVITY_FRAME
-    """Joints from the IMU body to the frame the model reads gravity in, as ``(name, axis)``.
+    imu_to_obs_joint_chain: tuple[tuple[str, str], ...] = G1_WAIST_IMU_TO_OBS_CHAIN
+    """Joint chain from the IMU frame to the observation frame, as ``(name, axis)`` pairs.
 
-    Gravity is first projected into the IMU body frame (from the orientation, or the interface's
-    corrected gravity when it supplies one), then rotated through these joints in order. The
-    default is the G1 waist chain, giving torso-frame gravity from the pelvis IMU. ``()`` keeps
-    gravity in the IMU frame. Every listed joint must be one of the robot's joints.
+    The observation frame is the body frame the model was trained to read projected gravity in.
+    Gravity is first projected into the IMU frame (from the orientation, or the interface's
+    corrected gravity when it supplies one), then rotated through each joint's current angle, in
+    kinematic order starting at the IMU's link. It is a chain rather than a fixed transform
+    because that rotation depends on the joint angles. Each joint is a pure rotation about
+    ``axis``, with no fixed offset rotation between links. The default is the G1 waist, giving
+    torso-frame gravity from the pelvis IMU. ``()`` means the observation frame is the IMU frame.
+    Every listed joint must be one of the robot's joints.
     """
     max_depth_age_s: float = 0.25
     """Oldest depth frame, by local receive time, the runner will act on.
@@ -44,6 +48,6 @@ class ContextualConfig:
     def __post_init__(self):
         if not (math.isfinite(self.max_depth_age_s) and self.max_depth_age_s > 0):
             raise ValueError("max_depth_age_s must be finite and positive")
-        for name, axis in self.gravity_frame_joints:
+        for name, axis in self.imu_to_obs_joint_chain:
             if axis not in {"x", "y", "z"}:
-                raise ValueError(f"gravity_frame_joints axis for {name} must be x, y or z")
+                raise ValueError(f"imu_to_obs_joint_chain axis for {name} must be x, y or z")
