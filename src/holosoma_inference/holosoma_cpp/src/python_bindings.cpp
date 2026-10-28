@@ -27,7 +27,24 @@ PYBIND11_MODULE(_native, m) {
   m.doc() = "Transport-independent native inference; construction never opens a robot interface.";
   py::class_<ContextualInput>(m, "ContextualInput")
       .def(py::init<>())
-      .def_readwrite("depth", &ContextualInput::depth)
+      // A buffer copy, not pybind's generic sequence conversion: a graph that preprocesses depth
+      // itself takes the camera's full frame, and converting half a million elements one Python
+      // float at a time costs 20 ms a tick on the robot's SoC.
+      .def_property(
+          "depth",
+          [](const ContextualInput& input) -> py::object {
+            if (!input.depth) return py::none();
+            return py::array_t<float>(static_cast<py::ssize_t>(input.depth->size()), input.depth->data());
+          },
+          [](ContextualInput& input, py::object value) {
+            if (value.is_none()) {
+              input.depth.reset();
+              return;
+            }
+            auto frame = value.cast<py::array_t<float, py::array::c_style | py::array::forcecast>>();
+            const float* data = frame.data();
+            input.depth = std::vector<float>(data, data + frame.size());
+          })
       .def_readwrite("monotonic_time", &ContextualInput::monotonic_time)
       .def_readwrite("velocity", &ContextualInput::velocity)
       .def_readwrite("command_index", &ContextualInput::command_index)
