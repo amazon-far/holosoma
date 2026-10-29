@@ -81,14 +81,18 @@ class IsaacSim(BaseSimulator):
         # populated by _load_scene_files; read in _collect_spawned_actors to classify.
         self.scene_file_static_names: set[str] = set()
 
-        # Cameras here are read out of the periodic render pass, which draws when the substep counter
+        # RTX cameras are read out of the periodic render pass, which draws when the substep counter
         # reaches render_interval. A driving loop closes its frame on the control step's last substep,
         # so only a render_interval dividing control_decimation puts the draw and the frame's state on
         # the same substep; anything else pairs an image with a pose from a different one. Checked
         # before the SimulationContext exists, so a rejected config leaves no global context behind.
         decimation = self.simulator_config.sim.control_decimation_steps
         render_interval = self.simulator_config.sim.render_interval_steps
-        cameras = sorted(n for n, c in self.sensor_config.items() if isinstance(c, CameraSensorConfig))
+        cameras = sorted(
+            n
+            for n, c in self.sensor_config.items()
+            if isinstance(c, CameraSensorConfig) and c.isaacsim.renderer == "rtx"
+        )
         if cameras and decimation % render_interval:
             raise ValueError(
                 f"render_interval ({render_interval}) must divide control_decimation ({decimation}) "
@@ -155,7 +159,7 @@ class IsaacSim(BaseSimulator):
             # type-check. The base protocol stays correct for MuJoCo, whose scenes
             # implement only env_origins.
             self.scene: InteractiveScene = InteractiveScene(scene_config)
-            # Per-camera TiledCamera map, keyed by sensor name; populated by
+            # Per-camera TiledCamera map for RTX cameras, keyed by sensor name; populated by
             # sensor_setup.build_cameras (called from _setup_scene, pre-clone), read at render.
             self.tiled_cameras: dict[str, TiledCamera] = {}
             self._setup_scene()

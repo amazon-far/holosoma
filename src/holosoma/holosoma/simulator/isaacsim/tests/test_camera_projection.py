@@ -16,7 +16,11 @@ from holosoma.config_types.sensor import (
     IsaacSimFisheyeConfig,
     SensorMountConfig,
 )
-from holosoma.simulator.isaacsim.camera_projection import camera_spawn_cfg_for
+from holosoma.simulator.isaacsim.camera_projection import (
+    camera_spawn_cfg_for,
+    raycast_max_distance,
+    raycast_pattern_cfg_for,
+)
 
 pytestmark = pytest.mark.no_sim
 
@@ -153,3 +157,27 @@ def test_fisheye_spawn_config_passes_native_projection_and_calibration() -> None
     assert config.fisheye_polynomial_d == 4.0
     assert config.fisheye_polynomial_e == 5.0
     assert config.fisheye_polynomial_f == 6.0
+
+
+def test_raycast_pattern_matches_rtx_intrinsics_and_reaches_far_at_the_corners() -> None:
+    camera = CameraSensorConfig(
+        mount=SensorMountConfig(target_kind="world"),
+        width=320,
+        height=240,
+        vertical_fov=60.0,
+        far=50.0,
+        data_types=["depth"],
+        isaacsim=IsaacSimCameraConfig(renderer="raycast", focal_length=18.0),
+    )
+    patterns = SimpleNamespace(PinholeCameraPatternCfg=lambda **kwargs: SimpleNamespace(**kwargs))
+
+    pattern = raycast_pattern_cfg_for(camera, patterns)
+    rtx = camera_spawn_cfg_for(camera, _SIM_UTILS)
+
+    assert (pattern.width, pattern.height) == (320, 240)
+    assert (pattern.focal_length, pattern.horizontal_aperture, pattern.vertical_aperture) == pytest.approx(
+        (rtx.focal_length, rtx.horizontal_aperture, rtx.vertical_aperture)
+    )
+    tan_v = math.tan(math.radians(60.0) / 2.0)
+    corner_cosine = 1.0 / math.sqrt(1.0 + tan_v**2 + (tan_v * 320.0 / 240.0) ** 2)
+    assert raycast_max_distance(camera) * corner_cosine == pytest.approx(camera.far)

@@ -28,6 +28,7 @@ from holosoma.config_types.sensor import (
     MountKind,
     MujocoCameraConfig,
     MujocoLidarConfig,
+    RayCastBodyFilterConfig,
     RayCastDepthCameraConfig,
     SensorMountConfig,
     validate_camera_dict,
@@ -168,6 +169,34 @@ def test_isaacsim_pinhole_allows_dormant_fisheye_calibration() -> None:
 def test_isaacsim_lens_values_must_be_valid(field: str, value: float) -> None:
     kwargs: dict[str, Any] = {field: value}
     with pytest.raises(ValueError, match=field):
+        IsaacSimCameraConfig(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("data_types", "isaacsim_kwargs", "match"),
+    [
+        (["rgb", "depth"], {}, "data_types"),
+        (["depth"], {"projection_type": "fisheyePolynomial"}, "projection_type"),
+        (["depth"], {"f_stop": 1.0}, "f_stop"),
+    ],
+)
+def test_isaacsim_raycast_camera_rejects_unsupported_settings(
+    data_types: list[Any], isaacsim_kwargs: dict[str, Any], match: str
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        CameraSensorConfig(
+            mount=SensorMountConfig(target_kind="robot_link", target="pelvis"),
+            data_types=data_types,
+            isaacsim=IsaacSimCameraConfig(renderer="raycast", **isaacsim_kwargs),
+        )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"mesh_prim_paths": ["/World/ground"]}, {"body_filter": RayCastBodyFilterConfig(target_kind="robot")}],
+)
+def test_isaacsim_raycast_only_fields_need_raycast_renderer(kwargs: dict[str, Any]) -> None:
+    with pytest.raises(ValueError, match="renderer='raycast'"):
         IsaacSimCameraConfig(**kwargs)
 
 

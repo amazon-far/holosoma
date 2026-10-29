@@ -1,8 +1,9 @@
 """Isaac Sim mounted camera and LiDAR sensor setup.
 
-Each configured camera is a ``TiledCamera`` created before ``clone_environments`` as a child prim
+Each configured RTX camera is a ``TiledCamera`` created before ``clone_environments`` as a child prim
 of its mount body, so the USD transform hierarchy makes it follow that body natively across all
-cloned envs. These module-level functions take the simulator (the ``fields.py`` / MuJoCo
+cloned envs. Cameras with ``isaacsim.renderer="raycast"`` and LiDARs are IsaacLab multi-mesh ray
+casters that track their mount body and the meshes they cast against. These module-level functions take the simulator (the ``fields.py`` / MuJoCo
 shared sensor setup convention) and drive that pipeline — prim-path resolution, the FOV->aperture
 pinhole cfg, per-env creation, ``SensorManager`` registration, and the per-control-step render
 read-out. The per-camera ``TiledCamera`` map lives on the simulator as ``sim.tiled_cameras``,
@@ -24,7 +25,11 @@ from isaaclab.utils.math import quat_apply
 
 from holosoma.config_types.frequency import resolve_decimation
 from holosoma.config_types.sensor import CameraSensorConfig, IsaacSimLidarConfig, LidarSensorConfig
-from holosoma.simulator.isaacsim.camera_projection import camera_spawn_cfg_for
+from holosoma.simulator.isaacsim.camera_projection import (
+    camera_spawn_cfg_for,
+    raycast_max_distance,
+    raycast_pattern_cfg_for,
+)
 from holosoma.simulator.isaacsim.lidar_target_discovery import (
     _is_path_at_or_below,
     assemble_default_mesh_prim_paths,
@@ -41,23 +46,29 @@ from holosoma.simulator.shared.sensor_manager import SensorManager
 from holosoma.simulator.shared.raycast_depth_camera import register_raycast_depth_cameras
 
 if TYPE_CHECKING:
-    from holosoma.config_types.sensor import LidarRayPatternConfig, SensorMountConfig
+    from holosoma.config_types.sensor import LidarRayPatternConfig, RayCastBodyFilterConfig, SensorMountConfig
     from holosoma.simulator.isaacsim.isaacsim import IsaacSim
+    from holosoma.simulator.shared.sensor_manager import CameraRecord
 
 
 def build_cameras(sim: IsaacSim) -> None:
-    """Build a TiledCamera per configured camera (before clone, so each replicates per env).
+    """Build a TiledCamera per RTX camera and a ray-cast camera per ``renderer="raycast"`` camera.
+
+    Both are built before clone, so each replicates per env.
 
     The camera optical convention is OpenGL (-Z forward, +Y up), the same frame holosoma uses,
     so the mount offset passes through with ``convention="opengl"`` and no extra rotation.
     Mount quat is the config-layer ``[w,x,y,z]`` (IsaacLab OffsetCfg.rot is also w-first). Populates
-    ``sim.tiled_cameras`` and registers each camera prim into ``sim.scene.sensors``.
+    ``sim.tiled_cameras`` with the RTX cameras and registers every camera into ``sim.scene.sensors``.
     """
     sim.tiled_cameras = {}
     for cam_name, cam in sim.sensor_config.items():
         if not isinstance(cam, CameraSensorConfig):
             continue
-        parent = _camera_mount_prim_path(cam.mount)
+        if cam.isaacsim.renderer == "raycast":
+            sim.scene.sensors[cam_name] = _build_raycast_camera(sim, cam_name, cam)
+            continue
+        parent = _mount_parent_path(cam.mount)
         # Map holosoma data_types -> IsaacLab annotators.
         annotators = [{"rgb": "rgb", "depth": "distance_to_image_plane"}[d] for d in cam.data_types]
         cam_cfg = TiledCameraCfg(
@@ -78,30 +89,13 @@ def build_cameras(sim: IsaacSim) -> None:
         sim.scene.sensors[cam_name] = sim.tiled_cameras[cam_name]
 
 
-def _camera_mount_prim_path(mount: SensorMountConfig) -> str:
-    """Resolve a sensor mount to a per-env camera prim path (parent = the mount body prim).
-
-    ``robot_link`` -> a robot link prim (name the root link to mount on the base);
-    ``actor`` -> a spawned scene-object prim. The camera prim is created as a child of this
-    path so the USD transform hierarchy makes it follow the body natively.
-    """
-    ns = "/World/envs/env_.*"
-    if mount.target_kind == "robot_link":
-        return resolve_robot_link_prim_expression(mount.target)
-    if mount.target_kind == "actor":
-        return f"{ns}/{mount.target}"
-    if mount.target_kind == "world":
-        # Free-floating: child of the env prim itself, so the mount offset is the pose in the
-        # per-env frame (each cloned env carries its own copy at the same relative pose).
-        return ns
-    raise ValueError(f"Unknown camera mount target_kind '{mount.target_kind}'.")
-
-
 def register_cameras(sim: IsaacSim, manager: SensorManager) -> None:
-    """Register TiledCameras built before environment cloning."""
+    """Register cameras built before environment cloning; ray-cast cameras can re-render a subset."""
     for name, config in sim.sensor_config.items():
         if isinstance(config, CameraSensorConfig):
-            manager.register_camera(name, config)
+            record = manager.register_camera(name, config)
+            if config.isaacsim.renderer == "raycast":
+                record.rerender = partial(_rerender_raycast_camera, sim, record)
 
 
 def render_cameras(sim: IsaacSim) -> None:
@@ -115,6 +109,9 @@ def render_cameras(sim: IsaacSim) -> None:
     if sim.sensor_manager is None:
         return
     for camera_record in sim.sensor_manager.collect_due():
+        if camera_record.config.isaacsim.renderer == "raycast":
+            _capture_raycast_depth(sim, camera_record, None)
+            continue
         out = sim.tiled_cameras[camera_record.name].data.output
         if "rgb" in camera_record.config.data_types:
             rgb = out["rgb"][..., :3]  # [N,H,W,3], drop alpha
@@ -126,6 +123,52 @@ def render_cameras(sim: IsaacSim) -> None:
             # dim; CameraRecord applies the configured cross-backend no-return convention.
             depth = out["distance_to_image_plane"].to(torch.float32)
             camera_record.set_buffer("depth", depth if depth.ndim == 4 else depth.unsqueeze(-1))
+
+
+def _build_raycast_camera(sim: IsaacSim, name: str, cam: CameraSensorConfig) -> Any:
+    """Create a ray-cast depth camera over the configured or discovered mesh targets."""
+    from isaaclab.sensors import MultiMeshRayCasterCameraCfg
+
+    mount_path, position, orientation = _ray_caster_mount(cam.mount, f"holosoma_camera_{name}")
+    mesh_paths = cam.isaacsim.mesh_prim_paths
+    if mesh_paths is None:
+        mesh_paths = _default_mesh_prim_paths(sim, cam.isaacsim.body_filter, cam.mount)
+    cfg = MultiMeshRayCasterCameraCfg(
+        prim_path=mount_path,
+        offset=MultiMeshRayCasterCameraCfg.OffsetCfg(pos=position, rot=orientation, convention="opengl"),
+        update_period=0.0,
+        data_types=["distance_to_image_plane"],
+        # Keep raw +inf no-return data; CameraRecord applies Holosoma's common depth policy.
+        depth_clipping_behavior="none",
+        max_distance=raycast_max_distance(cam),
+        pattern_cfg=raycast_pattern_cfg_for(cam, patterns),
+        mesh_prim_paths=_raycast_target_cfgs(mesh_paths),
+    )
+    return _raycast_camera_cls()(cfg)
+
+
+def _raycast_camera(sim: IsaacSim, name: str) -> Any:
+    sensor = sim.scene.sensors.get(name)
+    if not isinstance(sensor, _raycast_camera_cls()):
+        raise TypeError(f"Camera '{name}' has no ray-cast camera sensor.")
+    return sensor
+
+
+def _capture_raycast_depth(sim: IsaacSim, record: CameraRecord, env_ids: torch.Tensor | None) -> None:
+    """Cast ``record``'s camera for every env, or only ``env_ids``, and store its depth."""
+    sensor = _raycast_camera(sim, record.name)
+    if env_ids is None or "depth" not in record.buffers:
+        sensor.mark_outdated()
+        record.set_buffer("depth", sensor.data.output["distance_to_image_plane"])
+        return
+    sensor.mark_outdated(env_ids)
+    record.set_buffer_rows("depth", env_ids, sensor.data.output["distance_to_image_plane"][env_ids])
+
+
+def _rerender_raycast_camera(sim: IsaacSim, record: CameraRecord, env_ids: torch.Tensor) -> None:
+    """Refresh link poses after state writes, then re-cast ``env_ids`` into ``record``."""
+    sim.sim.forward()
+    _capture_raycast_depth(sim, record, env_ids)
 
 
 def _pattern(
@@ -141,35 +184,16 @@ def _pattern(
 
 
 @lru_cache(maxsize=1)
-def _mutable_multi_mesh_ray_caster_cls() -> type[Any]:
-    """Create the IsaacLab 2.3.2 LiDAR type only when a LiDAR is configured."""
+def _tracked_mesh_ray_caster_cls() -> type[Any]:
+    """Create the IsaacLab 2.3.2 ray-caster base shared by Holosoma's LiDARs and ray-cast cameras."""
     from isaaclab.sensors import MultiMeshRayCaster
 
-    class MutableMultiMeshRayCaster(MultiMeshRayCaster):
-        """Multi-mesh ray caster with fixed-shape direction updates."""
+    class TrackedMeshRayCaster(MultiMeshRayCaster):
+        """Multi-mesh ray caster that tracks enabled physics owners and composes mesh offsets."""
 
-        @property
-        def ray_starts_w(self) -> torch.Tensor:
-            """Return IsaacLab's current world-frame ray origins."""
-            return self._ray_starts_w
-
-        def set_ray_directions(self, directions: torch.Tensor) -> None:
-            expected = (self.num_rays, 3)
-            if directions.shape != expected:
-                raise ValueError(f"RayCaster directions must keep shape {expected}, got {directions.shape}.")
-            local = directions.to(device=self.ray_directions.device, dtype=self.ray_directions.dtype)
-            offset_quat = torch.tensor(
-                self.cfg.offset.rot,
-                device=self.ray_directions.device,
-                dtype=self.ray_directions.dtype,
-            ).expand(self.num_rays, -1)
-            local = quat_apply(offset_quat, local)
-            self.ray_directions.copy_(local.unsqueeze(0).expand_as(self.ray_directions))
-            self.mark_outdated()
-
-        def mark_outdated(self) -> None:
-            """Force the next data access to cast at the current final-step pose."""
-            self._is_outdated[:] = True
+        def mark_outdated(self, env_ids: torch.Tensor | None = None) -> None:
+            """Force the next data access to cast ``env_ids`` (all if ``None``) at the current pose."""
+            self._is_outdated[slice(None) if env_ids is None else env_ids] = True
 
         def _obtain_trackable_prim_view(self, target_prim_path: str) -> Any:
             """Track the nearest enabled physics owner, skipping disabled rigid-body APIs."""
@@ -199,7 +223,7 @@ def _mutable_multi_mesh_ray_caster_cls() -> type[Any]:
             view_prims = sim_utils.find_matching_prims(current_path_expr)
             if len(mesh_prims) != len(view_prims):
                 raise RuntimeError(
-                    f"LiDAR target '{target_prim_path}' resolves to {len(mesh_prims)} meshes but "
+                    f"Ray-cast target '{target_prim_path}' resolves to {len(mesh_prims)} meshes but "
                     f"{len(view_prims)} trackable owners at '{current_path_expr}'."
                 )
 
@@ -211,13 +235,11 @@ def _mutable_multi_mesh_ray_caster_cls() -> type[Any]:
                 orientations.append(torch.tensor(orientation, dtype=torch.float32, device=self.device))
             return prim_view, (torch.stack(positions), torch.stack(orientations))
 
-        def _update_buffers_impl(self, env_ids: Any) -> None:
-            """Update rays with correct rigid-body-to-mesh transform composition."""
+        def _update_mesh_poses(self) -> None:
+            """Write each tracked mesh's world pose: its owner's pose composed with the mesh offset."""
             from isaaclab.sensors.ray_caster.ray_cast_utils import obtain_world_pose_from_view
-            from isaaclab.utils.math import quat_apply, quat_mul
-            from isaaclab.utils.warp import raycast_dynamic_meshes
+            from isaaclab.utils.math import quat_mul
 
-            self._update_ray_infos(env_ids)
             mesh_idx = 0
             for view, target_cfg in zip(self._mesh_views, self._raycast_targets_cfg):
                 count = self._num_meshes_per_env[target_cfg.prim_expr]
@@ -242,6 +264,42 @@ def _mutable_multi_mesh_ray_caster_cls() -> type[Any]:
                 self._mesh_orientations_w[:, mesh_idx : mesh_idx + view_count] = ori_w
                 mesh_idx += view_count
 
+    return TrackedMeshRayCaster
+
+
+@lru_cache(maxsize=1)
+def _mutable_multi_mesh_ray_caster_cls() -> type[Any]:
+    """Create the IsaacLab 2.3.2 LiDAR type only when a LiDAR is configured."""
+    tracked: Any = _tracked_mesh_ray_caster_cls()
+
+    class MutableMultiMeshRayCaster(tracked):
+        """Multi-mesh ray caster with fixed-shape direction updates."""
+
+        @property
+        def ray_starts_w(self) -> torch.Tensor:
+            """Return IsaacLab's current world-frame ray origins."""
+            return self._ray_starts_w
+
+        def set_ray_directions(self, directions: torch.Tensor) -> None:
+            expected = (self.num_rays, 3)
+            if directions.shape != expected:
+                raise ValueError(f"RayCaster directions must keep shape {expected}, got {directions.shape}.")
+            local = directions.to(device=self.ray_directions.device, dtype=self.ray_directions.dtype)
+            offset_quat = torch.tensor(
+                self.cfg.offset.rot,
+                device=self.ray_directions.device,
+                dtype=self.ray_directions.dtype,
+            ).expand(self.num_rays, -1)
+            local = quat_apply(offset_quat, local)
+            self.ray_directions.copy_(local.unsqueeze(0).expand_as(self.ray_directions))
+            self.mark_outdated()
+
+        def _update_buffers_impl(self, env_ids: Any) -> None:
+            """Cast ``env_ids`` against the tracked mesh poses."""
+            from isaaclab.utils.warp import raycast_dynamic_meshes
+
+            self._update_ray_infos(env_ids)
+            self._update_mesh_poses()
             self._data.ray_hits_w[env_ids], _, _, _, mesh_ids = raycast_dynamic_meshes(
                 self._ray_starts_w[env_ids],
                 self._ray_directions_w[env_ids],
@@ -257,7 +315,56 @@ def _mutable_multi_mesh_ray_caster_cls() -> type[Any]:
     return MutableMultiMeshRayCaster
 
 
+@lru_cache(maxsize=1)
+def _raycast_camera_cls() -> type[Any]:
+    """Create the IsaacLab 2.3.2 ray-cast depth camera type only when one is configured."""
+    from isaaclab.sensors import MultiMeshRayCasterCamera
+    from isaaclab.utils.math import combine_frame_transforms
+
+    tracked: Any = _tracked_mesh_ray_caster_cls()
+
+    class IsaacSimRayCastCamera(tracked, MultiMeshRayCasterCamera):
+        """Pinhole depth camera ray cast against tracked USD meshes; misses are ``+inf``."""
+
+        _offset_pos: torch.Tensor
+        _offset_quat: torch.Tensor
+
+        def _initialize_rays_impl(self) -> None:
+            super()._initialize_rays_impl()
+            # The camera offset is relative to the mount prim, which may sit below its physics owner.
+            self._offset_pos, self._offset_quat = combine_frame_transforms(
+                self._offset[0], self._offset[1], self._offset_pos, self._offset_quat
+            )
+
+        def _update_buffers_impl(self, env_ids: Any) -> None:
+            """Cast ``env_ids`` and store their image-plane depth."""
+            from isaaclab.utils.warp import raycast_dynamic_meshes
+
+            if env_ids is None:
+                env_ids = self._ALL_INDICES
+            elif not isinstance(env_ids, torch.Tensor):
+                env_ids = torch.tensor(env_ids, device=self.device, dtype=torch.long)
+            self._update_ray_infos(env_ids)
+            self._frame[env_ids] += 1
+            self._update_mesh_poses()
+            self.ray_hits_w[env_ids], radial, _, _, _ = raycast_dynamic_meshes(
+                self._ray_starts_w[env_ids],
+                self._ray_directions_w[env_ids],
+                mesh_ids_wp=self._mesh_ids_wp,
+                max_dist=self.cfg.max_distance,
+                mesh_positions_w=self._mesh_positions_w[env_ids],
+                mesh_orientations_w=self._mesh_orientations_w[env_ids],
+                return_distance=True,
+            )
+            # Local ray directions are unit vectors with x along the optical axis.
+            depth = radial * self.ray_directions[env_ids, :, 0]
+            self._data.output["distance_to_image_plane"][env_ids] = depth.view(-1, *self.image_shape, 1)
+
+    return IsaacSimRayCastCamera
+
+
 def _mount_parent_path(mount: SensorMountConfig) -> str:
+    """Resolve a sensor mount to its per-env body prim, or the env prim for a world mount."""
     namespace = "/World/envs/env_.*"
     if mount.target_kind == "robot_link":
         return resolve_robot_link_prim_expression(mount.target)
@@ -265,13 +372,44 @@ def _mount_parent_path(mount: SensorMountConfig) -> str:
         return f"{namespace}/{mount.target}"
     if mount.target_kind == "world":
         return namespace
-    raise ValueError(f"Unknown LiDAR mount target_kind '{mount.target_kind}'.")
+    raise ValueError(f"Unknown sensor mount target_kind '{mount.target_kind}'.")
+
+
+def _ray_caster_mount(mount: SensorMountConfig, xform_name: str) -> tuple[str, tuple[float, ...], tuple[float, ...]]:
+    """Return the prim a ray caster tracks and its ``(position, orientation)`` offset from it.
+
+    A world mount gets an authored per-env Xform at the mount pose and an identity offset.
+    """
+    parent = _mount_parent_path(mount)
+    if mount.target_kind != "world":
+        return parent, tuple(mount.position), tuple(mount.orientation)
+    mount_path = f"{parent}/{xform_name}"
+    sim_utils.create_prim(
+        mount_path.replace("env_.*", "env_0"),
+        prim_type="Xform",
+        translation=tuple(mount.position),
+        orientation=tuple(mount.orientation),
+    )
+    return mount_path, (0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0)
+
+
+def _raycast_target_cfgs(mesh_paths: list[str]) -> list[Any]:
+    """Wrap mesh-target paths for IsaacLab; the ground subtree is static and not tracked."""
+    from isaaclab.sensors import MultiMeshRayCasterCfg
+
+    return [
+        MultiMeshRayCasterCfg.RaycastTargetCfg(
+            prim_expr=path,
+            track_mesh_transforms=not (path == "/World/ground" or path.startswith("/World/ground/")),
+        )
+        for path in mesh_paths
+    ]
 
 
 def _is_visual_raycast_prim(prim: Any) -> bool:
-    """Select geometry that represents an optical surface for default LiDAR discovery.
+    """Select geometry that represents an optical surface for default ray-cast discovery.
 
-    USD has no universal "LiDAR surface" schema. Holosoma therefore follows USD imaging
+    USD has no universal "ray-cast surface" schema. Holosoma therefore follows USD imaging
     semantics first: inherited-invisible geometry and ``proxy``/``guide`` purpose are omitted,
     while supported ``default`` and ``render`` purpose geometry is eligible. Material opacity is
     not inspected because USD materials can encode it through arbitrary shader graphs; transparent
@@ -328,12 +466,10 @@ def _visual_mesh_prim_paths(
     return sorted(mesh_paths)
 
 
-def _body_filter_target(lidar: LidarSensorConfig) -> tuple[str, str] | None:
-    body_filter = lidar.body_filter
+def _body_filter_target(body_filter: RayCastBodyFilterConfig, mount: SensorMountConfig) -> tuple[str, str] | None:
     if body_filter.target_kind == "none":
         return None
     if body_filter.target_kind == "mount":
-        mount = lidar.mount
         return None if mount.target_kind == "world" else (mount.target_kind, mount.target)
     return body_filter.target_kind, body_filter.target
 
@@ -354,13 +490,15 @@ def _robot_mesh_prim_paths(excluded_link: str | None) -> list[str]:
     )
 
 
-def _default_mesh_prim_paths(sim: IsaacSim, lidar: LidarSensorConfig) -> list[str]:
-    excluded_target = _body_filter_target(lidar)
+def _default_mesh_prim_paths(
+    sim: IsaacSim, body_filter: RayCastBodyFilterConfig, mount: SensorMountConfig
+) -> list[str]:
+    excluded_target = _body_filter_target(body_filter, mount)
     if excluded_target is not None and excluded_target[0] == "actor":
         actor_name = excluded_target[1]
         if actor_name not in sim.scene.rigid_objects:
             raise ValueError(
-                f"LiDAR body filter target 'actor:{actor_name}' is not registered. Known actors: "
+                f"Body filter target 'actor:{actor_name}' is not registered. Known actors: "
                 f"{list(sim.scene.rigid_objects)}."
             )
     return assemble_default_mesh_prim_paths(
@@ -383,23 +521,8 @@ def build_lidars(sim: IsaacSim) -> None:
     for name, lidar in lidars:
         from isaaclab.sensors import MultiMeshRayCasterCfg
 
-        parent = _mount_parent_path(lidar.mount)
-        if lidar.mount.target_kind == "world":
-            mount_path = f"{parent}/holosoma_lidar_{name}"
-            source_path = mount_path.replace("env_.*", "env_0")
-            sim_utils.create_prim(
-                source_path,
-                prim_type="Xform",
-                translation=tuple(lidar.mount.position),
-                orientation=tuple(lidar.mount.orientation),
-            )
-            offset = MultiMeshRayCasterCfg.OffsetCfg()
-        else:
-            mount_path = parent
-            offset = MultiMeshRayCasterCfg.OffsetCfg(
-                pos=tuple(lidar.mount.position),
-                rot=tuple(lidar.mount.orientation),
-            )
+        mount_path, position, orientation = _ray_caster_mount(lidar.mount, f"holosoma_lidar_{name}")
+        offset = MultiMeshRayCasterCfg.OffsetCfg(pos=position, rot=orientation)
         update_decimation = resolve_decimation(
             lidar.update_decimation,
             control_hz,
@@ -415,17 +538,9 @@ def build_lidars(sim: IsaacSim) -> None:
         )
         isaacsim_config = lidar.isaacsim or IsaacSimLidarConfig()
         if isaacsim_config.mesh_prim_paths is None:
-            mesh_paths = _default_mesh_prim_paths(sim, lidar)
+            mesh_paths = _default_mesh_prim_paths(sim, lidar.body_filter, lidar.mount)
         else:
             mesh_paths = isaacsim_config.mesh_prim_paths
-        mesh_targets = [
-            MultiMeshRayCasterCfg.RaycastTargetCfg(
-                prim_expr=path,
-                # Discovery returns exact ground descendants; the whole ground subtree is static.
-                track_mesh_transforms=not (path == "/World/ground" or path.startswith("/World/ground/")),
-            )
-            for path in mesh_paths
-        ]
         cfg = MultiMeshRayCasterCfg(
             prim_path=mount_path,
             offset=offset,
@@ -433,7 +548,7 @@ def build_lidars(sim: IsaacSim) -> None:
             ray_alignment="base",
             pattern_cfg=native_pattern,
             debug_vis=sim.debug_viz_enabled,
-            mesh_prim_paths=mesh_targets,
+            mesh_prim_paths=_raycast_target_cfgs(mesh_paths),
             max_distance=lidar.far,
         )
         sensor = _mutable_multi_mesh_ray_caster_cls()(cfg)
@@ -464,7 +579,10 @@ def build_sensors(sim: IsaacSim) -> None:
     """Build native sensors before environment cloning."""
     needs_expanded_robot = any(
         isinstance(config, LidarSensorConfig)
-        or (isinstance(config, CameraSensorConfig) and config.mount.target_kind == "robot_link")
+        or (
+            isinstance(config, CameraSensorConfig)
+            and (config.mount.target_kind == "robot_link" or config.isaacsim.renderer == "raycast")
+        )
         for config in sim.sensor_config.values()
     )
     if needs_expanded_robot:

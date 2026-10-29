@@ -136,6 +136,24 @@ def test_cli_configures_isaacsim_fisheye_projection() -> None:
     assert camera.isaacsim.fisheye.polynomial_a == 0.01
 
 
+def test_cli_configures_isaacsim_raycast_camera() -> None:
+    config = parse_config(
+        RunSimConfig,
+        args=[
+            "simulator:isaacsim",
+            "sensor.head:g1-head",
+            "--sensor.head.data-types=['depth']",
+            "--sensor.head.isaacsim.renderer=raycast",
+            "--sensor.head.isaacsim.body-filter.target-kind=robot",
+        ],
+    )
+
+    camera = config.sensor["head"]
+    assert isinstance(camera, CameraSensorConfig)
+    assert camera.isaacsim.renderer == "raycast"
+    assert camera.isaacsim.body_filter.target_kind == "robot"
+
+
 def test_cli_customizes_explicit_lidar_directions() -> None:
     config = parse_config(
         RunSimConfig,

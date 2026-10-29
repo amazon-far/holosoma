@@ -1,4 +1,4 @@
-"""Dependency-light conversion from Holosoma camera config to Isaac Lab spawn config."""
+"""Dependency-light conversion from Holosoma camera config to Isaac Lab camera configs."""
 
 from __future__ import annotations
 
@@ -35,10 +35,37 @@ def camera_spawn_cfg_for(cam: CameraSensorConfig, sim_utils: Any) -> Any:
             **fisheye_kwargs,
         )
 
-    v_aperture = 2.0 * isaacsim_cfg.focal_length * math.tan(math.radians(cam.vertical_fov) / 2)
-    h_aperture = v_aperture * (cam.width / cam.height)
+    h_aperture, v_aperture = _pinhole_apertures(cam)
     return sim_utils.PinholeCameraCfg(
         vertical_aperture=v_aperture,
         horizontal_aperture=h_aperture,
         **lens_kwargs,
     )
+
+
+def _pinhole_apertures(cam: CameraSensorConfig) -> tuple[float, float]:
+    """Return the ``(horizontal, vertical)`` apertures that give ``cam.vertical_fov``."""
+    v_aperture = 2.0 * cam.isaacsim.focal_length * math.tan(math.radians(cam.vertical_fov) / 2)
+    return v_aperture * (cam.width / cam.height), v_aperture
+
+
+def raycast_pattern_cfg_for(cam: CameraSensorConfig, patterns: Any) -> Any:
+    """Build the Isaac Lab pinhole ray pattern with the same intrinsics as the RTX camera.
+
+    ``patterns`` is ``isaaclab.sensors.ray_caster.patterns``, injected like ``sim_utils`` above.
+    """
+    h_aperture, v_aperture = _pinhole_apertures(cam)
+    return patterns.PinholeCameraPatternCfg(
+        focal_length=cam.isaacsim.focal_length,
+        horizontal_aperture=h_aperture,
+        vertical_aperture=v_aperture,
+        width=cam.width,
+        height=cam.height,
+    )
+
+
+def raycast_max_distance(cam: CameraSensorConfig) -> float:
+    """Ray length that reaches image-plane depth ``cam.far`` at the image corners."""
+    tan_v = math.tan(math.radians(cam.vertical_fov) / 2)
+    tan_h = tan_v * cam.width / cam.height
+    return cam.far * math.sqrt(1.0 + tan_h**2 + tan_v**2)

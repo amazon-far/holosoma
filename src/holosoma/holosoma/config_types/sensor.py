@@ -47,6 +47,9 @@ ISAACSIM_FISHEYE_PROJECTION_TYPES = cast(
     "tuple[IsaacSimCameraProjectionType, ...]",
     tuple(value for value in get_args(IsaacSimCameraProjectionType) if value != "pinhole"),
 )
+# Isaac Sim camera renderers: the native RTX TiledCamera, or a ray-cast depth camera over USD meshes.
+IsaacSimCameraRenderer = Literal["rtx", "raycast"]
+
 _ISAACSIM_FISHEYE_POLYNOMIAL_FIELDS = (
     "polynomial_a",
     "polynomial_b",
@@ -207,13 +210,75 @@ class IsaacSimFisheyeConfig:
 
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)
+class RayCastBodyFilterConfig:
+    """Select robot geometry or one body to omit from a ray-cast sensor's queries.
+
+    Keep ``target_kind="mount"`` to prevent the body carrying the sensor from enclosing the
+    ray origin, use ``target_kind="robot"`` to omit every robot-owned ray target, select a
+    ``robot_link`` or registered scene ``actor`` explicitly, or use ``"none"`` to include every
+    query target. Backends resolve a selected link to the native rigid body that owns it after
+    import or compilation; fixed or fused links therefore follow their owning body. An ``actor``
+    selects that registered actor's root body. The filter only affects ray queries and does not
+    remove visual or collision geometry.
+    """
+
+    target_kind: Literal["mount", "robot", "robot_link", "actor", "none"] = "mount"
+    """How ``target`` is resolved. ``"mount"`` uses the sensor's mount body, ``"robot"`` omits
+    every robot-owned target, ``"robot_link"`` resolves an unprefixed robot link, ``"actor"``
+    resolves a registered scene actor, and ``"none"`` disables the filter."""
+
+    target: str = ""
+    """Body or actor name for ``"robot_link"`` and ``"actor"``. Leave empty for ``"mount"``
+    ``"robot"``, and ``"none"``."""
+
+    @model_validator(mode="after")
+    def validate_target(self) -> RayCastBodyFilterConfig:
+        if self.target_kind in ("mount", "robot", "none"):
+            if self.target:
+                raise ValueError(
+                    f"RayCastBodyFilterConfig.target must be empty for "
+                    f"target_kind='{self.target_kind}', got '{self.target}'."
+                )
+        elif not self.target or self.target != self.target.strip():
+            raise ValueError(
+                "RayCastBodyFilterConfig.target must be a non-empty name without surrounding whitespace "
+                f"for target_kind='{self.target_kind}'."
+            )
+        return self
+
+
+LidarBodyFilterConfig = RayCastBodyFilterConfig
+
+
+def _validate_mesh_prim_paths(paths: list[str] | None, owner: str) -> None:
+    """Reject an explicit mesh-target list that is empty or has blank paths."""
+    if paths is not None and (not paths or any(not path.strip() for path in paths)):
+        raise ValueError(f"{owner}.mesh_prim_paths must be None or a non-empty list of paths.")
+
+
+@dataclass(frozen=True, config=_FORBID_EXTRA)
 class IsaacSimCameraConfig:
-    """Isaac Sim camera projection and lens settings.
+    """Isaac Sim camera renderer, projection, and lens settings.
 
     With ``projection_type="pinhole"``, :attr:`CameraSensorConfig.vertical_fov` determines the
     aperture. Native fisheye projections ignore ``CameraSensorConfig.vertical_fov`` and use
     :attr:`fisheye` for their angular calibration.
     """
+
+    renderer: IsaacSimCameraRenderer = "rtx"
+    """``"rtx"`` renders with an RTX ``TiledCamera``. ``"raycast"`` ray casts depth against USD
+    mesh geometry instead: depth only, pinhole only, no depth of field, and no RTX render pass.
+    Its ``near`` drops returns closer than ``near`` rather than clipping through them. Defaults
+    to ``"rtx"``."""
+
+    body_filter: RayCastBodyFilterConfig = field(default_factory=RayCastBodyFilterConfig)
+    """Geometry omitted from ``"raycast"`` queries. Defaults to the body carrying the camera, so a
+    camera mounted inside a link's mesh sees past it. Only valid with ``renderer="raycast"``."""
+
+    mesh_prim_paths: list[str] | None = None
+    """USD prims or expressions a ``"raycast"`` camera casts against, with the same semantics as
+    :attr:`IsaacSimLidarConfig.mesh_prim_paths`. ``None`` discovers the ground, scene objects, and
+    robot visuals, then applies :attr:`body_filter`. Only valid with ``renderer="raycast"``."""
 
     projection_type: IsaacSimCameraProjectionType = "pinhole"
     """Native USD/RTX camera projection. Defaults to ``"pinhole"``."""
@@ -240,6 +305,17 @@ class IsaacSimCameraConfig:
                 raise ValueError(f"IsaacSimCameraConfig.{attr} must be finite and > 0, got {value}.")
         if not math.isfinite(self.f_stop) or self.f_stop < 0.0:
             raise ValueError(f"IsaacSimCameraConfig.f_stop must be finite and >= 0, got {self.f_stop}.")
+        _validate_mesh_prim_paths(self.mesh_prim_paths, "IsaacSimCameraConfig")
+        if self.renderer == "raycast":
+            if self.projection_type != "pinhole":
+                raise ValueError(
+                    f"IsaacSimCameraConfig.renderer='raycast' needs projection_type='pinhole', "
+                    f"got '{self.projection_type}'."
+                )
+            if self.f_stop != 0.0:
+                raise ValueError("IsaacSimCameraConfig.renderer='raycast' has no depth of field; set f_stop=0.")
+        elif self.body_filter != RayCastBodyFilterConfig() or self.mesh_prim_paths is not None:
+            raise ValueError("IsaacSimCameraConfig.body_filter and mesh_prim_paths need renderer='raycast'.")
         return self
 
 
@@ -260,44 +336,6 @@ class MujocoCameraConfig:
     use_precomputed_rays: bool | None = None
     """(Warp, global) Precompute camera rays; set ``False`` to allow per-step intrinsics
     domain-randomization. ``None`` keeps the renderer default (True). Ignored by classic."""
-
-
-@dataclass(frozen=True, config=_FORBID_EXTRA)
-class LidarBodyFilterConfig:
-    """Select robot geometry or one body to omit from LiDAR ray queries.
-
-    Keep ``target_kind="mount"`` to prevent the body carrying the LiDAR from enclosing the
-    ray origin, use ``target_kind="robot"`` to omit every robot-owned ray target, select a
-    ``robot_link`` or registered scene ``actor`` explicitly, or use ``"none"`` to include every
-    query target. Backends resolve a selected link to the native rigid body that owns it after
-    import or compilation; fixed or fused links therefore follow their owning body. An ``actor``
-    selects that registered actor's root body. The filter only affects ray queries and does not
-    remove visual or collision geometry.
-    """
-
-    target_kind: Literal["mount", "robot", "robot_link", "actor", "none"] = "mount"
-    """How ``target`` is resolved. ``"mount"`` uses the sensor's mount body, ``"robot"`` omits
-    every robot-owned target, ``"robot_link"`` resolves an unprefixed robot link, ``"actor"``
-    resolves a registered scene actor, and ``"none"`` disables the filter."""
-
-    target: str = ""
-    """Body or actor name for ``"robot_link"`` and ``"actor"``. Leave empty for ``"mount"``
-    ``"robot"``, and ``"none"``."""
-
-    @model_validator(mode="after")
-    def validate_target(self) -> LidarBodyFilterConfig:
-        if self.target_kind in ("mount", "robot", "none"):
-            if self.target:
-                raise ValueError(
-                    f"LidarBodyFilterConfig.target must be empty for "
-                    f"target_kind='{self.target_kind}', got '{self.target}'."
-                )
-        elif not self.target or self.target != self.target.strip():
-            raise ValueError(
-                "LidarBodyFilterConfig.target must be a non-empty name without surrounding whitespace "
-                f"for target_kind='{self.target_kind}'."
-            )
-        return self
 
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)
@@ -504,10 +542,7 @@ class IsaacSimLidarConfig:
 
     @model_validator(mode="after")
     def validate_mesh_paths(self) -> IsaacSimLidarConfig:
-        if self.mesh_prim_paths is not None and (
-            not self.mesh_prim_paths or any(not path.strip() for path in self.mesh_prim_paths)
-        ):
-            raise ValueError("IsaacSimLidarConfig.mesh_prim_paths must be None or a non-empty list of paths.")
+        _validate_mesh_prim_paths(self.mesh_prim_paths, "IsaacSimLidarConfig")
         return self
 
 
@@ -589,6 +624,11 @@ class CameraSensorConfig:
             raise ValueError(f"CameraSensorConfig.far must be finite and > near, got {self.near}..{self.far}.")
         if not self.data_types:
             raise ValueError("CameraSensorConfig must request at least one data_type.")
+        if self.isaacsim.renderer == "raycast" and self.data_types != ["depth"]:
+            raise ValueError(
+                f"CameraSensorConfig with isaacsim.renderer='raycast' produces depth only; "
+                f"set data_types=['depth'], got {self.data_types}."
+            )
         validate_decimation_like(self.update_decimation, field="CameraSensorConfig update_decimation")
         # The robot is addressed via the ``robot_link`` kind; an ``actor`` mount must not name it.
         if self.mount.target_kind == "actor" and self.mount.target == "robot":
@@ -615,7 +655,7 @@ class LidarSensorConfig:
     mount: SensorMountConfig
     """Body or world frame the LiDAR follows, plus its fixed optical-frame offset."""
 
-    body_filter: LidarBodyFilterConfig = field(default_factory=LidarBodyFilterConfig)
+    body_filter: RayCastBodyFilterConfig = field(default_factory=RayCastBodyFilterConfig)
     """Robot geometry or one body omitted from scene queries on supporting backends. Defaults to
     the body carrying the LiDAR; use ``target_kind="none"`` to include every target, or select one
     robot link or scene actor."""
