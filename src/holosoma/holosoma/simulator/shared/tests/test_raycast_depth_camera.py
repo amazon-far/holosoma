@@ -52,7 +52,9 @@ class _FakeSim:
         return LINKS.index(name)
 
 
-def _camera(tmp_path: Path, *, self_occlusion: dict[str, Any] | None = None, **overrides: Any) -> CameraSensorConfig:
+def _camera(
+    tmp_path: Path, *, raycast_link_meshes: dict[str, Any] | None = None, **overrides: Any
+) -> CameraSensorConfig:
     box = tmp_path / "box.stl"
     if not box.exists():
         trimesh.creation.box(extents=[0.4, 0.4, 0.4]).export(box)
@@ -66,8 +68,12 @@ def _camera(tmp_path: Path, *, self_occlusion: dict[str, Any] | None = None, **o
         "data_types": ["depth"],
     }
     fields.update(overrides)
-    occluders: dict[str, str | list[str]] = {"occluder": str(box)} if self_occlusion is None else self_occlusion
-    return CameraSensorConfig(isaacsim=IsaacSimCameraConfig(renderer="raycast", self_occlusion=occluders), **fields)
+    occluders: dict[str, str | list[str]] = (
+        {"occluder": str(box)} if raycast_link_meshes is None else raycast_link_meshes
+    )
+    return CameraSensorConfig(
+        isaacsim=IsaacSimCameraConfig(renderer="raycast", raycast_link_meshes=occluders), **fields
+    )
 
 
 def _render(sim: _FakeSim) -> tuple[torch.Tensor, Any, Any]:
@@ -100,7 +106,7 @@ def test_surfaces_beyond_far_are_no_return(tmp_path: Path, behavior: str, expect
     assert torch.all(depth == expected)
 
 
-def test_self_occlusion_mesh_is_cast_at_its_link_pose(tmp_path: Path) -> None:
+def test_link_mesh_is_cast_at_its_link_pose(tmp_path: Path) -> None:
     sim = _FakeSim(_camera(tmp_path), base_height=2.0)
     sim.rigid_body_pos_w[0, 1] = torch.tensor([0.0, 0.0, 1.0])  # box spans z in [0.8, 1.2], centered below
 
@@ -120,7 +126,7 @@ def test_every_mesh_listed_for_a_link_is_cast_at_its_pose(tmp_path: Path) -> Non
     trimesh.creation.box(
         extents=[0.2, 0.4, 0.2], transform=trimesh.transformations.translation_matrix([0.1, 0, 0])
     ).export(right)
-    sim = _FakeSim(_camera(tmp_path, self_occlusion={"occluder": [str(left), str(right)]}), base_height=2.0)
+    sim = _FakeSim(_camera(tmp_path, raycast_link_meshes={"occluder": [str(left), str(right)]}), base_height=2.0)
     sim.rigid_body_pos_w[0, 1] = torch.tensor([0.0, 0.0, 1.0])
 
     depth, _, _ = _render(sim)
@@ -129,9 +135,9 @@ def test_every_mesh_listed_for_a_link_is_cast_at_its_pose(tmp_path: Path) -> Non
     assert depth[0, 6, 9].item() == pytest.approx(2.0 - 1.1, abs=1e-4)  # right half, top at z = 1.1
 
 
-def test_self_occlusion_links_need_a_mesh(tmp_path: Path) -> None:
+def test_link_meshes_need_a_mesh(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="at least one mesh"):
-        _camera(tmp_path, self_occlusion={"occluder": []})
+        _camera(tmp_path, raycast_link_meshes={"occluder": []})
 
 
 def test_image_rows_run_top_down_along_optical_plus_y_and_columns_along_plus_x(tmp_path: Path) -> None:

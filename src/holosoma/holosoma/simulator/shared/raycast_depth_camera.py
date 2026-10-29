@@ -152,7 +152,7 @@ class RayCastDepthCamera:
         # One entry per mesh; a link with several meshes appears once for each.
         occluders = [
             (link, path)
-            for link, paths in cfg.isaacsim.self_occlusion.items()
+            for link, paths in cfg.isaacsim.raycast_link_meshes.items()
             for path in ([paths] if isinstance(paths, str) else paths)
         ]
         self._body_ids = [sim.find_rigid_body_indice(link) for link, _ in occluders]
@@ -208,7 +208,7 @@ class RayCastDepthCamera:
     def _load_mesh(self, path: str) -> Any:
         mesh = trimesh.load_mesh(resolve_data_file_path(path), force="mesh")
         if not isinstance(mesh, trimesh.Trimesh):
-            raise TypeError(f"Self-occlusion mesh {path!r} is not a triangle mesh ({type(mesh).__name__}).")
+            raise TypeError(f"Link mesh {path!r} is not a triangle mesh ({type(mesh).__name__}).")
         return convert_to_wp_mesh(np.asarray(mesh.vertices), np.asarray(mesh.faces), self.device)
 
     # ----------------------------------------------------------------- render

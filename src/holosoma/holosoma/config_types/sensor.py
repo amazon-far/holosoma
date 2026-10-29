@@ -220,15 +220,15 @@ class IsaacSimCameraConfig:
 
     renderer: IsaacSimCameraRenderer = "rtx"
     """``"rtx"`` renders with an RTX ``TiledCamera``. ``"raycast"`` ray casts depth with Warp against
-    the terrain mesh and the :attr:`self_occlusion` link meshes at their current poses: depth only,
+    the terrain mesh and the :attr:`raycast_link_meshes` at their links' current poses: depth only,
     pinhole only, robot-link mounts only, no RTX render pass, and envs reset or teleported in a
     control step are re-rendered at their new state. Other backends ignore it and render the camera
     natively. Defaults to ``"rtx"``."""
 
-    self_occlusion: dict[str, str | list[str]] = field(default_factory=dict)
+    raycast_link_meshes: dict[str, str | list[str]] = field(default_factory=dict)
     """For ``renderer="raycast"``: robot link name -> triangle mesh file, or list of files (STL/OBJ,
-    link frame), cast against at the link's current pose. Paths are resolved with
-    ``resolve_data_file_path``. Empty casts against the terrain only."""
+    link frame), to ray cast against at the link's current pose in addition to the terrain. Paths are
+    resolved with ``resolve_data_file_path``. Empty casts against the terrain only."""
 
     projection_type: IsaacSimCameraProjectionType = "pinhole"
     """Native USD/RTX camera projection. Defaults to ``"pinhole"``."""
@@ -255,9 +255,9 @@ class IsaacSimCameraConfig:
                 raise ValueError(f"IsaacSimCameraConfig.{attr} must be finite and > 0, got {value}.")
         if not math.isfinite(self.f_stop) or self.f_stop < 0.0:
             raise ValueError(f"IsaacSimCameraConfig.f_stop must be finite and >= 0, got {self.f_stop}.")
-        for link, meshes in self.self_occlusion.items():
+        for link, meshes in self.raycast_link_meshes.items():
             if not meshes or (not isinstance(meshes, str) and not all(meshes)):
-                raise ValueError(f"IsaacSimCameraConfig.self_occlusion['{link}'] needs at least one mesh path.")
+                raise ValueError(f"IsaacSimCameraConfig.raycast_link_meshes['{link}'] needs at least one mesh path.")
         if self.renderer == "raycast":
             if self.projection_type != "pinhole":
                 raise ValueError(
@@ -266,8 +266,8 @@ class IsaacSimCameraConfig:
                 )
             if self.f_stop != 0.0:
                 raise ValueError("IsaacSimCameraConfig.renderer='raycast' has no depth of field; set f_stop=0.")
-        elif self.self_occlusion:
-            raise ValueError("IsaacSimCameraConfig.self_occlusion needs renderer='raycast'.")
+        elif self.raycast_link_meshes:
+            raise ValueError("IsaacSimCameraConfig.raycast_link_meshes needs renderer='raycast'.")
         return self
 
 

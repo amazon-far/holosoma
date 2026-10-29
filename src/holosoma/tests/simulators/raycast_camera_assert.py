@@ -1,7 +1,7 @@
 """Isaac Sim ray-cast depth camera assertion harness (``isaacsim.renderer="raycast"``).
 
 Uses the ``panel-target`` scene and the ``raycast_pair`` cameras: an RTX depth camera and a ray-cast
-one at the same mount. The ray-cast camera sees only the terrain and its ``self_occlusion`` links,
+one at the same mount. The ray-cast camera sees only the terrain and its ``raycast_link_meshes``,
 so the panel is excluded from comparisons. ``--check frame`` asserts the ray-cast camera is not an
 RTX ``TiledCamera`` and agrees with the RTX camera's ground depth. ``--check rerender`` raises the
 robot in two envs without stepping, re-renders those envs, and asserts their ground depth grows

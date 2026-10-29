@@ -117,7 +117,7 @@ waist_back_camera = CameraSensorConfig(
 _G1_MESHES = "holosoma/data/robots/g1/meshes"
 # Links that can occlude the head camera, with their link-frame meshes. The pelvis contour shell is
 # fixed to the pelvis frame; the wrists omit the rubber hands, which sit in a separate mesh.
-_G1_SELF_OCCLUSION: dict[str, str | list[str]] = {
+_G1_LINK_MESHES: dict[str, str | list[str]] = {
     "pelvis": [f"{_G1_MESHES}/pelvis.STL", f"{_G1_MESHES}/pelvis_contour_link.STL"],
     **{
         f"{side}_{link}": f"{_G1_MESHES}/{side}_{link}.STL"
@@ -163,5 +163,5 @@ g1_head_d435i_depth = CameraSensorConfig(
     far=3.0,
     depth_clipping_behavior="max",
     data_types=["depth"],
-    isaacsim=IsaacSimCameraConfig(renderer="raycast", self_occlusion=_G1_SELF_OCCLUSION),
+    isaacsim=IsaacSimCameraConfig(renderer="raycast", raycast_link_meshes=_G1_LINK_MESHES),
 )

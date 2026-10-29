@@ -338,8 +338,8 @@ def test_lidar_body_filter_is_backend_neutral_and_validated() -> None:
         ({"mount": SensorMountConfig(target_kind="world")}, {"renderer": "raycast"}, "robot links"),
         ({}, {"renderer": "raycast", "projection_type": "fisheyePolynomial"}, "projection_type"),
         ({}, {"renderer": "raycast", "f_stop": 1.0}, "f_stop"),
-        ({}, {"renderer": "raycast", "self_occlusion": {"pelvis": []}}, "self_occlusion"),
-        ({}, {"self_occlusion": {"pelvis": "pelvis.STL"}}, "renderer='raycast'"),
+        ({}, {"renderer": "raycast", "raycast_link_meshes": {"pelvis": []}}, "raycast_link_meshes"),
+        ({}, {"raycast_link_meshes": {"pelvis": "pelvis.STL"}}, "renderer='raycast'"),
     ],
 )
 def test_isaacsim_raycast_camera_rejects_unsupported_settings(
