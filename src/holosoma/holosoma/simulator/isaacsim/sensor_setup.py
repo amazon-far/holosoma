@@ -474,12 +474,14 @@ def render_lidars(sim: IsaacSim) -> None:
 
 def build_sensors(sim: IsaacSim) -> None:
     """Build native sensors before environment cloning."""
-    needs_expanded_robot = any(
-        isinstance(config, LidarSensorConfig)
-        or (not is_isaacsim_raycast_camera(config) and config.mount.target_kind == "robot_link")
+    has_lidar = any(isinstance(config, LidarSensorConfig) for config in sim.sensor_config.values())
+    has_rtx_camera_on_robot = any(
+        isinstance(config, CameraSensorConfig)
+        and not is_isaacsim_raycast_camera(config)
+        and config.mount.target_kind == "robot_link"
         for config in sim.sensor_config.values()
     )
-    if needs_expanded_robot:
+    if has_lidar or has_rtx_camera_on_robot:
         # IsaacLab cannot author children or resolve exact targets through instance proxies.
         set_instanceable(get_current_stage(), "/World/envs/env_0/Robot", False)
     build_cameras(sim)
