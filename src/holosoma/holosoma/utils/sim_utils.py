@@ -179,12 +179,9 @@ def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str
     else:  # AppLauncher auto-detects
         pass
 
-    # LiDAR and ray-cast camera queries do not need RTX; only video and RTX cameras enable the renderer.
+    # LiDAR ray queries do not need RTX; only video and TiledCamera sensors enable the renderer.
     video_enabled = config.logger.video.enabled or config.logger.headless_recording
-    cameras_enabled = any(
-        isinstance(sensor, CameraSensorConfig) and sensor.isaacsim.renderer == "rtx"
-        for sensor in getattr(config, "sensor", {}).values()
-    )
+    cameras_enabled = any(isinstance(sensor, CameraSensorConfig) for sensor in getattr(config, "sensor", {}).values())
     needs_rendering = video_enabled or cameras_enabled
     if needs_rendering:
         args_cli.enable_cameras = True

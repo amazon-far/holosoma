@@ -1,4 +1,4 @@
-"""Pure target-list assembly for Isaac Sim ray-cast sensor auto-discovery."""
+"""Pure target-list assembly for Isaac Sim LiDAR auto-discovery."""
 
 from __future__ import annotations
 
@@ -37,8 +37,8 @@ def assemble_default_mesh_prim_paths(
     if not paths:
         if exclude_robot:
             raise RuntimeError(
-                "Isaac Sim ray-cast auto-discovery found no supported visual scene meshes "
+                "Isaac Sim LiDAR auto-discovery found no supported visual scene meshes "
                 "(body filter 'robot' excluded the robot; ground and scene actors contributed none)."
             )
-        raise RuntimeError("Isaac Sim ray-cast auto-discovery found no supported visual scene meshes.")
+        raise RuntimeError("Isaac Sim LiDAR auto-discovery found no supported visual scene meshes.")
     return paths

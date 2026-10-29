@@ -19,11 +19,8 @@ from pathlib import Path
 from holosoma.config_types.scene import PhysicsConfig, RigidObjectConfig, SceneConfig
 from holosoma.config_types.sensor import (
     CameraSensorConfig,
-    CustomLidarRayPatternConfig,
     IsaacSimCameraConfig,
     IsaacSimFisheyeConfig,
-    LidarSensorConfig,
-    RayCastBodyFilterConfig,
     SensorMountConfig,
 )
 
@@ -315,47 +312,6 @@ SCENE_PRESETS = {
 }
 # Named camera-dict presets, for harnesses that take a ``--sensors`` NAME on the command line
 # (e.g. camera_assert.py) and inject the resolved dict onto the config's ``sensor`` field.
-# Isaac Sim ray-cast cameras against RTX references (``panel-target`` scene):
-#   - ``rtx``/``raycast``: co-located forward cameras on a non-root robot link.
-#   - ``head_mount``/``head_none``: inside the head shell; differ only in body filter.
-#   - ``side_rtx``/``side_raycast``: world-mounted at the robot's right, looking at it, sharing robot
-#     mesh targets with the forward ``lidar``.
-_RAYCAST = IsaacSimCameraConfig(renderer="raycast")
-_TORSO_FORWARD = SensorMountConfig(
-    target_kind="robot_link", target="torso_link", position=[0.1, 0.0, 0.0], orientation=_LOOK_FORWARD_WXYZ
-)
-_HEAD = SensorMountConfig(target_kind="robot_link", target="torso_link", position=[0.01, 0.01, 0.44])
-_SIDE = SensorMountConfig(
-    target_kind="world", position=[0.0, -1.5, _BASE_Z], orientation=[math.sqrt(0.5), math.sqrt(0.5), 0.0, 0.0]
-)
-raycast_rig = {
-    "rtx": CameraSensorConfig(
-        mount=_TORSO_FORWARD, width=64, height=64, vertical_fov=60.0, data_types=["rgb", "depth"]
-    ),
-    "raycast": CameraSensorConfig(
-        mount=_TORSO_FORWARD, width=64, height=64, vertical_fov=60.0, data_types=["depth"], isaacsim=_RAYCAST
-    ),
-    "head_mount": CameraSensorConfig(mount=_HEAD, width=32, height=32, data_types=["depth"], isaacsim=_RAYCAST),
-    "head_none": CameraSensorConfig(
-        mount=_HEAD,
-        width=32,
-        height=32,
-        data_types=["depth"],
-        isaacsim=IsaacSimCameraConfig(renderer="raycast", body_filter=RayCastBodyFilterConfig(target_kind="none")),
-    ),
-    "side_rtx": CameraSensorConfig(mount=_SIDE, width=64, height=64, vertical_fov=60.0, data_types=["rgb", "depth"]),
-    "side_raycast": CameraSensorConfig(
-        mount=_SIDE, width=64, height=64, vertical_fov=60.0, data_types=["depth"], isaacsim=_RAYCAST
-    ),
-    "lidar": LidarSensorConfig(
-        mount=SensorMountConfig(
-            target_kind="robot_link", target="pelvis", position=[0.1, 0.0, 0.0], orientation=_LOOK_FORWARD_WXYZ
-        ),
-        pattern=CustomLidarRayPatternConfig(ray_directions=[[0.0, 0.0, -1.0]]),
-        far=10.0,
-    ),
-}
-
 SENSOR_PRESETS = {
     "front-cam": front_cam,
     "front-cam-depth": front_cam_depth,
