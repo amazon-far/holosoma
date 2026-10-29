@@ -20,7 +20,6 @@ from .base import IMujocoBackend, apply_sensor_scene_flags, holosoma_to_mj_quat,
 if TYPE_CHECKING:
     from holosoma.config_types.full_sim import FullSimConfig
     from holosoma.config_types.sensor import CameraDataType
-    from holosoma.simulator.mujoco.tensor_views import BaseMujocoView
     from holosoma.simulator.shared.sensor_manager import CameraRecord
 
 
@@ -36,7 +35,6 @@ class ClassicBackend(IMujocoBackend):
     - CPU-based computation
     - Manual contact force extraction via mj_contactForce
     - Numpy arrays with PyTorch tensor conversion
-    - Compatible with existing tensor_views.py proxy system
     """
 
     _INITIAL_CONTACT_CAPACITY = 256
@@ -289,32 +287,6 @@ class ClassicBackend(IMujocoBackend):
 
         return self._force_tensor
 
-    def create_root_view(self, addrs: dict[str, Any]) -> BaseMujocoView:
-        """Create root state view using existing tensor_views.
-
-        Parameters
-        ----------
-        addrs : dict
-            Address dictionary with slices for pos, quat, vel, ang_vel
-
-        Returns
-        -------
-        BaseMujocoView
-            MujocoRootStateView with quaternion conversion
-        """
-        from holosoma.simulator.mujoco.tensor_views import MujocoRootStateView
-
-        return MujocoRootStateView(
-            qpos_array=self.data.qpos,
-            qvel_array=self.data.qvel,
-            pos_indices=addrs["pos_indices"],
-            quat_indices=addrs["quat_indices"],
-            vel_indices=addrs["vel_indices"],
-            ang_vel_indices=addrs["ang_vel_indices"],
-            num_envs=1,
-            device=self.device,
-        )
-
     def get_applied_forces_view(self) -> npt.NDArray[Any]:
         """Get writable view for external applied forces.
 
@@ -327,48 +299,6 @@ class ClassicBackend(IMujocoBackend):
             Writable numpy array view [num_bodies, 6]
         """
         return cast("npt.NDArray[Any]", self.data.xfrc_applied)
-
-    def create_quaternion_view(self, quat_slice: slice) -> BaseMujocoView:
-        """Create quaternion view with format conversion.
-
-        Delegates to tensor_views factory function for CPU numpy array views.
-
-        Parameters
-        ----------
-        quat_slice : slice
-            Slice for extracting quaternion from qpos
-
-        Returns
-        -------
-        BaseMujocoView
-            View for quaternion [1, 4] with [w,x,y,z] -> [x,y,z,w] conversion
-        """
-        from holosoma.simulator.mujoco.tensor_views import create_quaternion_view
-
-        return create_quaternion_view(qpos_array=self.data.qpos, indices=quat_slice, num_envs=1, device=self.device)
-
-    def create_angular_velocity_view(self, ang_vel_slice: slice) -> BaseMujocoView:
-        """Create angular velocity view with proper reshaping.
-
-        Delegates to tensor_views factory function for CPU numpy array views.
-
-        Parameters
-        ----------
-        ang_vel_slice : slice
-            Slice for extracting angular velocity from qvel
-
-        Returns
-        -------
-        BaseMujocoView
-            View for angular velocity [1, 3]
-        """
-        from holosoma.simulator.mujoco.tensor_views import (
-            create_base_angular_velocity_view,
-        )
-
-        return create_base_angular_velocity_view(
-            qvel_array=self.data.qvel, indices=ang_vel_slice, num_envs=1, device=self.device
-        )
 
     def set_root_state(self, env_ids: torch.Tensor, root_states: torch.Tensor, root_addrs: dict[str, Any]) -> None:
         """Set robot root states. The robot root is an actor freejoint, so this

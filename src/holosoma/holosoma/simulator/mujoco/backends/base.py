@@ -18,7 +18,6 @@ from holosoma.simulator.mujoco.geom_groups import DEFAULT_RENDER_GEOM_GROUPS
 
 if TYPE_CHECKING:
     from holosoma.config_types.full_sim import FullSimConfig
-    from holosoma.simulator.mujoco.tensor_views import BaseMujocoView
     from holosoma.simulator.shared.sensor_manager import CameraRecord
 
 
@@ -154,22 +153,6 @@ class IMujocoBackend(abc.ABC):
         ...
 
     # View factory methods
-    @abc.abstractmethod
-    def create_root_view(self, addrs: dict[str, Any]) -> BaseMujocoView:
-        """Create view for robot root states.
-
-        Parameters
-        ----------
-        addrs : dict
-            Dictionary with keys: pos_indices, quat_indices, vel_indices, ang_vel_indices
-
-        Returns
-        -------
-        BaseMujocoView
-            View for 13-element root state [pos, quat, lin_vel, ang_vel]
-        """
-        ...
-
     @abc.abstractmethod
     def get_applied_forces_view(self) -> npt.NDArray[Any] | torch.Tensor:
         """Get writable view for external applied forces.
@@ -332,40 +315,6 @@ class IMujocoBackend(abc.ABC):
             CPU MjData with initial state to copy to backend storage
         """
         return  # Default implementation - backends can override
-
-    @abc.abstractmethod
-    def create_quaternion_view(self, quat_slice: slice) -> BaseMujocoView:
-        """Create quaternion view with format conversion.
-
-        Converts between MuJoCo [w,x,y,z] and holosoma [x,y,z,w] quaternion formats.
-
-        Parameters
-        ----------
-        quat_slice : slice
-            Slice for extracting quaternion from qpos
-
-        Returns
-        -------
-        BaseMujocoView
-            View for quaternion [num_envs, 4] with format conversion
-        """
-        ...
-
-    @abc.abstractmethod
-    def create_angular_velocity_view(self, ang_vel_slice: slice) -> BaseMujocoView:
-        """Create angular velocity view with proper reshaping.
-
-        Parameters
-        ----------
-        ang_vel_slice : slice
-            Slice for extracting angular velocity from qvel
-
-        Returns
-        -------
-        BaseMujocoView
-            View for angular velocity [num_envs, 3]
-        """
-        ...
 
     def close(self) -> None:  # noqa: B027 - backends without native resources need no teardown.
         """Release backend-owned rendering resources. Must be idempotent."""

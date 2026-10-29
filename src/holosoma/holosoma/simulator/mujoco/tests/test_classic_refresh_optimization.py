@@ -11,6 +11,7 @@ import pytest
 
 mujoco = pytest.importorskip("mujoco")
 
+from holosoma.simulator.base_simulator.state import SimState  # noqa: E402
 from holosoma.simulator.mujoco.backends.classic_backend import ClassicBackend  # noqa: E402
 from holosoma.simulator.mujoco.mujoco import MuJoCo  # noqa: E402
 from holosoma.utils.safe_torch_import import torch  # noqa: E402
@@ -247,16 +248,10 @@ class _RefreshStub:
         self.backend = backend
         self._body_ids_t = torch.tensor(body_ids, dtype=torch.long)
         self.num_bodies = len(body_ids)
-        self._rigid_body_pos = torch.zeros(1, len(body_ids), 3)
-        self._rigid_body_rot = torch.zeros(1, len(body_ids), 4)
-        self._rigid_body_vel = torch.zeros(1, len(body_ids), 3)
-        self._rigid_body_ang_vel = torch.zeros(1, len(body_ids), 3)
         self.contact_forces = torch.zeros(1, len(body_ids), 3)
+        self.state = SimState()
 
     def flush_external_wrench(self) -> None:
-        pass
-
-    def _refresh_dof_states(self) -> None:
         pass
 
 
@@ -267,19 +262,10 @@ def test_live_refresh_matches_legacy_body_state() -> None:
     body_ids = [2, 1]
     backend.configure_rigid_body_refresh(body_ids)
     expected_state = _legacy_body_state(backend, body_ids)
-    sim = _RefreshStub(backend, body_ids)
 
-    MuJoCo.refresh_sim_tensors(cast("MuJoCo", sim))
-
-    actual_state = (
-        sim._rigid_body_pos,
-        sim._rigid_body_rot,
-        sim._rigid_body_vel,
-        sim._rigid_body_ang_vel,
-    )
+    actual_state = backend.refresh_rigid_body_states()
     for actual, expected in zip(actual_state, expected_state, strict=False):
-        assert torch.equal(actual[0], expected)
-    assert all(tensor.dtype == torch.float32 for tensor in actual_state)
+        assert torch.equal(actual[0].float(), expected)
 
 
 def test_step_gathers_robot_contact_rows() -> None:

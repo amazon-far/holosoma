@@ -62,7 +62,6 @@ if TYPE_CHECKING:
     from warp.context import Graph
 
     from holosoma.config_types.full_sim import FullSimConfig
-    from holosoma.simulator.mujoco.tensor_views import BaseMujocoView
     from holosoma.simulator.shared.sensor_manager import CameraRecord
 
 
@@ -696,31 +695,6 @@ class WarpBackend(IMujocoBackend):
         """
         return self._body_contact_forces_t
 
-    def create_root_view(self, addrs: dict[str, Any]) -> BaseMujocoView:
-        """Create root state view using zero-copy tensors.
-
-        Parameters
-        ----------
-        addrs : dict
-            Address dictionary with slices for pos, quat, vel, ang_vel
-
-        Returns
-        -------
-        MjwRootStateView
-            Root state view with quaternion conversion and zero-copy access
-        """
-        from holosoma.simulator.mujoco.mjw_views import MjwRootStateView
-
-        return MjwRootStateView(
-            qpos=self.qpos_t,
-            qvel=self.qvel_t,
-            pos_slice=addrs["pos_indices"],
-            quat_slice=addrs["quat_indices"],
-            vel_slice=addrs["vel_indices"],
-            ang_vel_slice=addrs["ang_vel_indices"],
-            num_envs=self.num_envs,
-        )
-
     def get_applied_forces_view(self) -> torch.Tensor:
         """Get writable view for external applied forces (GPU tensor).
 
@@ -735,40 +709,6 @@ class WarpBackend(IMujocoBackend):
             - [:, :, 3:6] = torques [tx, ty, tz]
         """
         return self.xfrc_applied_t
-
-    def create_quaternion_view(self, quat_slice: slice) -> BaseMujocoView:
-        """Create quaternion view with format conversion.
-
-        Parameters
-        ----------
-        quat_slice : slice
-            Slice for extracting quaternion from qpos
-
-        Returns
-        -------
-        MjwQuaternionView
-            Quaternion view with [w,x,y,z] -> [x,y,z,w] conversion
-        """
-        from holosoma.simulator.mujoco.mjw_views import MjwQuaternionView
-
-        return MjwQuaternionView(qpos=self.qpos_t, quat_slice=quat_slice, num_envs=self.num_envs)
-
-    def create_angular_velocity_view(self, ang_vel_slice: slice) -> BaseMujocoView:
-        """Create angular velocity view with proper reshaping.
-
-        Parameters
-        ----------
-        ang_vel_slice : slice
-            Slice for extracting angular velocity from qvel
-
-        Returns
-        -------
-        MjwAngularVelocityView
-            Angular velocity view with proper multi-env access
-        """
-        from holosoma.simulator.mujoco.mjw_views import MjwAngularVelocityView
-
-        return MjwAngularVelocityView(qvel=self.qvel_t, ang_vel_slice=ang_vel_slice, num_envs=self.num_envs)
 
     def get_rigid_body_state_views(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Get zero-copy views of rigid body states from GPU.
