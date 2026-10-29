@@ -89,17 +89,11 @@ def _render(sim: _FakeSim) -> tuple[torch.Tensor, Any, Any]:
     return record.buffers["depth"][..., 0], record, camera
 
 
-def test_ground_plane_parallel_to_the_image_plane_has_constant_depth(tmp_path: Path) -> None:
-    depth, _, _ = _render(_FakeSim(_camera(tmp_path), base_height=2.0))
-
-    assert depth.shape == (NUM_ENVS, 12, 16)
-    torch.testing.assert_close(depth, torch.full_like(depth, 2.0), atol=1e-4, rtol=0.0)
-
-
-@pytest.mark.parametrize(("width", "height"), [(15, 11), (16, 11)])
-def test_odd_image_sizes_measure_depth_to_the_image_plane(tmp_path: Path, width: int, height: int) -> None:
+@pytest.mark.parametrize(("width", "height"), [(16, 12), (15, 11), (16, 11)])
+def test_ground_plane_parallel_to_the_image_plane_has_constant_depth(tmp_path: Path, width: int, height: int) -> None:
     depth, _, _ = _render(_FakeSim(_camera(tmp_path, width=width, height=height), base_height=2.0))
 
+    assert depth.shape == (NUM_ENVS, height, width)
     torch.testing.assert_close(depth, torch.full_like(depth, 2.0), atol=1e-4, rtol=0.0)
 
 
@@ -161,10 +155,10 @@ def test_depth_is_measured_to_the_image_plane_for_a_tilted_camera(tmp_path: Path
         target="base",
         orientation=[math.cos(pitch / 2), math.sin(pitch / 2), 0.0, 0.0],
     )
-    depth, _, _ = _render(_FakeSim(_camera(tmp_path, mount=mount), base_height=2.0))
+    depth, _, _ = _render(_FakeSim(_camera(tmp_path, mount=mount, width=15, height=11), base_height=2.0))
 
-    # The principal ray hits the ground at 2 / cos(30deg) along the optical axis.
-    assert depth[0, 6, 8].item() == pytest.approx(2.0 / math.cos(pitch), abs=1e-3)
+    # Pixel (5, 7) is centred on the principal ray, which hits the ground at 2 / cos(30deg).
+    assert depth[0, 5, 7].item() == pytest.approx(2.0 / math.cos(pitch), abs=1e-3)
 
 
 def test_partial_rerender_updates_only_the_requested_envs(tmp_path: Path) -> None:
@@ -179,9 +173,19 @@ def test_partial_rerender_updates_only_the_requested_envs(tmp_path: Path) -> Non
     torch.testing.assert_close(depth[:2], torch.full_like(depth[:2], 2.0), atol=1e-4, rtol=0.0)
 
 
+def test_a_partial_first_render_still_renders_every_env(tmp_path: Path) -> None:
+    sim = _FakeSim(_camera(tmp_path), base_height=2.0)
+    camera, record = _camera_and_record(sim)
+
+    camera.render(record, torch.tensor([2]))
+    depth = record.buffers["depth"][..., 0]
+
+    torch.testing.assert_close(depth, torch.full_like(depth, 2.0), atol=1e-4, rtol=0.0)
+
+
 @pytest.mark.parametrize("before_first_render", [True, False])
 def test_mount_offsets_move_and_tilt_the_camera_per_env(tmp_path: Path, before_first_render: bool) -> None:
-    sim = _FakeSim(_camera(tmp_path), base_height=2.0)
+    sim = _FakeSim(_camera(tmp_path, width=15, height=11), base_height=2.0)
     camera, record = _camera_and_record(sim)
     position = torch.zeros(NUM_ENVS, 3)
     euler = torch.zeros(NUM_ENVS, 3)
@@ -192,7 +196,7 @@ def test_mount_offsets_move_and_tilt_the_camera_per_env(tmp_path: Path, before_f
 
     camera.set_mount_offset(position, euler)
     camera.render(record)
-    center = record.buffers["depth"][:, 6, 8, 0]
+    center = record.buffers["depth"][:, 5, 7, 0]
 
     assert center[0].item() == pytest.approx(2.1, abs=1e-4)
     assert center[1].item() == pytest.approx(2.0 / math.cos(math.radians(20.0)), abs=1e-3)

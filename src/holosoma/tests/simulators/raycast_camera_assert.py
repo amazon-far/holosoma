@@ -1,9 +1,9 @@
 """Isaac Sim ray-cast depth camera assertion harness (``isaacsim.renderer="raycast"``).
 
-Uses the ``raycast_cam`` camera, which sees the terrain and its ``raycast_link_meshes``.
-``--check frame`` asserts the camera produces a depth frame without an RTX ``TiledCamera`` or any
-RTX sensor. ``--check rerender`` raises the robot in two envs without stepping, re-renders those
-envs, and asserts their ground depth grows while the third env's frame is unchanged.
+Uses the ``raycast_cam`` camera, which casts against the terrain only. ``--check frame`` asserts the
+camera produces a depth frame without an RTX ``TiledCamera`` or any RTX sensor. ``--check rerender``
+raises the robot in two envs without stepping, re-renders those envs, and asserts their ground depth
+grows while the third env's frame is unchanged.
 
 Exits 0 PASS / 1 FAIL / 77 SKIP.
 """

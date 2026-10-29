@@ -14,7 +14,7 @@ import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import field
-from typing import TYPE_CHECKING, Literal, cast, get_args
+from typing import TYPE_CHECKING, Literal, TypeGuard, cast, get_args
 
 import tyro
 from pydantic import ConfigDict, model_validator
@@ -695,6 +695,11 @@ class LidarSensorConfig:
 
 
 SensorConfig = CameraSensorConfig | LidarSensorConfig
+
+
+def is_isaacsim_rtx_camera(config: object) -> TypeGuard[CameraSensorConfig]:
+    """Whether ``config`` is a camera Isaac Sim renders with an RTX ``TiledCamera``."""
+    return isinstance(config, CameraSensorConfig) and config.isaacsim.renderer == "rtx"
 
 
 def validate_camera_dict(cameras: dict[str, CameraSensorConfig]) -> None:

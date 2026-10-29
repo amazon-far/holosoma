@@ -145,8 +145,8 @@ _G1_LINK_MESHES: dict[str, str | list[str]] = {
 # RealSense D435i depth in the G1 head, as used for perceptive locomotion: 106x60 at 89.5deg
 # horizontal FOV (58.6deg vertical), 0.44 m above the torso_link origin, looking along body +X
 # pitched 27deg down. Isaac Sim ray casts it against the terrain and the robot links below; other
-# backends render it natively. Training perturbs the mount per env with the
-# ``g1_head_d435i_mount_setup_terms`` randomization setup term.
+# backends render it natively. The opt-in ``g1_head_d435i_mount_setup_terms`` perturb its mount
+# per env.
 # ``near`` keeps returns closer than the D435i's 0.3 m working range so preprocessing can clamp
 # them to it, as the hardware pipeline does.
 g1_head_d435i_depth = CameraSensorConfig(

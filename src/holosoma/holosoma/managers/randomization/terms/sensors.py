@@ -7,6 +7,7 @@ from typing import Any
 
 import torch
 
+from holosoma.managers.randomization.exceptions import RandomizerNotSupportedError
 from holosoma.utils.sampler import DistributionLike, TermSampler
 
 
@@ -34,12 +35,17 @@ def setup_raycast_depth_camera_mount(
             f"setup_raycast_depth_camera_mount needs one range per axis, got {len(position_range)} position and "
             f"{len(euler_deg_range)} rotation ranges."
         )
-    camera = getattr(env.simulator, "raycast_cameras", {}).get(sensor)
+    cameras = getattr(env.simulator, "raycast_cameras", None)
+    if cameras is None:
+        raise RandomizerNotSupportedError(
+            f"setup_raycast_depth_camera_mount does not support {type(env.simulator).__name__}; it needs "
+            f"Isaac Sim with a camera using isaacsim.renderer='raycast'."
+        )
+    camera = cameras.get(sensor)
     if camera is None:
         raise ValueError(
-            f"setup_raycast_depth_camera_mount: no ray-cast depth camera named '{sensor}'. It needs the "
-            f"Isaac Sim simulator and a camera with isaacsim.renderer='raycast'; other renderers and "
-            f"backends don't support mount randomization."
+            f"setup_raycast_depth_camera_mount: no ray-cast depth camera named '{sensor}'; it needs "
+            f"isaacsim.renderer='raycast'."
         )
 
     # Six decorrelated per-env streams: position x/y/z are 0-2, rotations about x/y/z are 3-5.

@@ -26,7 +26,7 @@ from holosoma.config_types.env import get_tyro_env_config
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.run_sim import RunSimConfig
-from holosoma.config_types.sensor import CameraSensorConfig, validate_camera_dict
+from holosoma.config_types.sensor import CameraSensorConfig, is_isaacsim_rtx_camera, validate_camera_dict
 from holosoma.managers.terrain.manager import TerrainManager
 from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.utils.common import seeding
@@ -181,10 +181,7 @@ def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str
 
     # LiDAR and ray-cast camera queries do not need RTX; only video and RTX cameras enable the renderer.
     video_enabled = config.logger.video.enabled or config.logger.headless_recording
-    cameras_enabled = any(
-        isinstance(sensor, CameraSensorConfig) and sensor.isaacsim.renderer == "rtx"
-        for sensor in getattr(config, "sensor", {}).values()
-    )
+    cameras_enabled = any(is_isaacsim_rtx_camera(sensor) for sensor in getattr(config, "sensor", {}).values())
     needs_rendering = video_enabled or cameras_enabled
     if needs_rendering:
         args_cli.enable_cameras = True

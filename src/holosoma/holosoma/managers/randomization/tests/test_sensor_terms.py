@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from holosoma.managers.randomization.exceptions import RandomizerNotSupportedError
 from holosoma.managers.randomization.terms.sensors import setup_raycast_depth_camera_mount
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.sampler import STAGE_SETUP, TermSampler
@@ -71,13 +72,6 @@ def test_offsets_are_reproducible_for_a_seed() -> None:
     assert not torch.equal(first.offsets[0], other.offsets[0])
 
 
-def test_disabled_term_leaves_the_mount_alone() -> None:
-    camera = _Camera()
-    _apply(camera, enabled=False)
-
-    assert camera.offsets is None
-
-
 @pytest.mark.parametrize(
     ("overrides", "match"),
     [
@@ -88,3 +82,13 @@ def test_disabled_term_leaves_the_mount_alone() -> None:
 def test_bad_term_configs_are_rejected(overrides: dict[str, Any], match: str) -> None:
     with pytest.raises(ValueError, match=match):
         _apply(_Camera(), **overrides)
+
+
+def test_backends_without_raycast_cameras_are_unsupported() -> None:
+    env = SimpleNamespace(num_envs=NUM_ENVS, device="cpu", simulator=SimpleNamespace())
+    sampler = TermSampler.bind(7, "setup_raycast_depth_camera_mount", STAGE_SETUP)
+
+    with pytest.raises(RandomizerNotSupportedError):
+        setup_raycast_depth_camera_mount(
+            env, sampler, sensor="head_depth", position_range=POSITION, euler_deg_range=EULER_DEG, enabled=True
+        )

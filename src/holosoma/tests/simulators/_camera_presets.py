@@ -310,8 +310,7 @@ SCENE_PRESETS = {
     "panel-target": panel_target,
     "panel-offaxis": panel_offaxis,
 }
-# Named camera-dict presets, for harnesses that take a ``--sensors`` NAME on the command line
-# (e.g. camera_assert.py) and inject the resolved dict onto the config's ``sensor`` field.
+
 # An Isaac Sim ray-cast depth camera on the robot base, looking forward.
 raycast_cam = {
     "raycast": CameraSensorConfig(
@@ -326,6 +325,8 @@ raycast_cam = {
     ),
 }
 
+# Named camera-dict presets, for harnesses that take a ``--sensors`` NAME on the command line
+# (e.g. camera_assert.py) and inject the resolved dict onto the config's ``sensor`` field.
 SENSOR_PRESETS = {
     "front-cam": front_cam,
     "front-cam-depth": front_cam_depth,

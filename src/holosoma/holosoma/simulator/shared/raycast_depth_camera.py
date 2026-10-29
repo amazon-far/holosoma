@@ -6,9 +6,8 @@ state -- ``rigid_body_pos_w``, ``rigid_body_quat_w`` (xyzw), ``find_rigid_body_i
 terrain term's ``warp_mesh``.
 
 The kernel is adapted from Aerial Gym Simulator's ``DepthCameraWarpKernels`` (BSD-3-Clause; see
-``THIRD_PARTY_LICENSES``), as used by the PHP release depth camera: rays pass through integer
-pixel coordinates of a pinhole camera, and each ray keeps the nearest robot-mesh hit unless the
-terrain is closer.
+``THIRD_PARTY_LICENSES``): rays pass through pixel centres of a pinhole camera, as in the native
+renderers, and each ray keeps the nearest robot-mesh hit unless the terrain is closer.
 """
 
 from __future__ import annotations
@@ -56,7 +55,7 @@ def _render_depth_kernel(
     env = env_ids[i]
     origin = cam_pos[env]
     rotation = cam_quat[env]
-    pixel = wp.vec3(float(x), float(y), 1.0)
+    pixel = wp.vec3(float(x) + 0.5, float(y) + 0.5, 1.0)
     ray = wp.normalize(wp.quat_rotate(rotation, wp.transform_vector(k_inv, pixel)))
     # K^-1 maps the principal point (width / 2, height / 2) to +Z, so the principal ray is the
     # camera's +Z axis for any image size.
@@ -224,9 +223,12 @@ class RayCastDepthCamera:
             self._body_quat[:] = self.sim.rigid_body_quat_w[:, self._body_ids]
 
     def render(self, record: CameraRecord, env_ids: torch.Tensor | None = None) -> None:
-        """Render all envs, or only ``env_ids``, into ``record``'s ``"depth"`` buffer."""
+        """Render all envs, or only ``env_ids``, into ``record``'s ``"depth"`` buffer. The first
+        render covers every env."""
         if not self._ready:
             self._setup()
+        if "depth" not in record.buffers:
+            env_ids = None
         self._update_poses()
         ids = self._all_envs if env_ids is None else env_ids.to(device=self.device, dtype=torch.int32)
         if ids.numel() == 0:
@@ -254,7 +256,7 @@ class RayCastDepthCamera:
             device=self._wp_device,
             stream=stream,
         )
-        if env_ids is None or "depth" not in record.buffers:
+        if env_ids is None:
             record.set_buffer("depth", self._image.unsqueeze(-1))
         else:
             long_ids = ids.long()
