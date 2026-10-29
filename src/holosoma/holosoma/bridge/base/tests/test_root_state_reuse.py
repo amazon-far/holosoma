@@ -1,9 +1,9 @@
 """Tests for the bridge's root-state reuse — pure, no simulator, no DDS.
 
 ``robot_root_states`` is a backend-owned proxy whose every index rebuilds the whole 13-vector, and
-one transport update reads it three times (twice for the IMU, once for odometry) at the same
-simulator state. The update scope collapses that to one read; outside it, each reader still reads
-the proxy directly, and the values must be identical either way.
+one exchange's publishes read it at the same simulator state. ``transport_exchange`` reads it once
+for all of them; a publish called outside an exchange still reads the proxy itself, and the values
+must be identical either way.
 """
 
 from __future__ import annotations
@@ -64,7 +64,11 @@ class _FakeSim:
 
 
 class _StubBridge(BasicSdk2Bridge):
-    """Minimal concrete bridge: no SDK, so the abstract hooks are trivial no-ops."""
+    """Minimal concrete bridge: no SDK, so a publish just reads what it would have sent."""
+
+    imu: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None
+    odom: tuple[list[float], list[float], list[float], float] | None = None
+    fail_on_publish_odom = False
 
     def _init_sdk_components(self) -> None:
         pass
@@ -73,7 +77,12 @@ class _StubBridge(BasicSdk2Bridge):
         pass
 
     def publish_low_state(self) -> None:
-        pass
+        self.imu = self._get_base_imu_data()
+
+    def publish_odom(self) -> None:
+        if self.fail_on_publish_odom:
+            raise RuntimeError("publish failed")
+        self.odom = self._get_base_odometry()
 
     def compute_torques(self) -> npt.NDArray[np.floating[Any]]:
         return self.torques
@@ -92,104 +101,112 @@ def _bridge(sim: _FakeSim) -> _StubBridge:
     )
 
 
-def test_transport_update_reads_root_state_once_for_every_reader() -> None:
+def test_an_exchange_reads_root_state_once_for_every_publish() -> None:
     sim = _FakeSim()
     bridge = _bridge(sim)
     sim.robot_root_states.reads = 0
 
-    with bridge.transport_update():
-        bridge._get_base_imu_data()
-        bridge._get_base_odometry()
+    bridge.transport_exchange()
 
-    # Two IMU reads + one odometry read collapse to a single proxy index.
+    # Two IMU reads plus one odometry read collapse to a single proxy index.
     assert sim.robot_root_states.reads == 1
+    assert bridge.imu is not None
+    assert bridge.odom is not None
 
 
-def test_readers_outside_a_transport_update_still_read_the_proxy_each_time() -> None:
+def test_a_publish_outside_an_exchange_reads_the_proxy_itself() -> None:
     sim = _FakeSim()
     bridge = _bridge(sim)
     sim.robot_root_states.reads = 0
 
-    bridge._get_base_imu_data()
-    bridge._get_base_odometry()
+    bridge.publish_low_state()
+    bridge.publish_odom()
 
-    # Unchanged from before the update scope existed: one read per reader call.
+    # Unchanged from before the exchange existed: one read per reader call.
     assert sim.robot_root_states.reads == 2
 
 
-def test_transport_update_does_not_change_the_values_either_reader_returns() -> None:
+def test_an_exchange_does_not_change_what_either_reader_returns() -> None:
     sim = _FakeSim()
     bridge = _bridge(sim)
 
     quat_direct, gyro_direct, acc_direct = bridge._get_base_imu_data()
     odom_direct = bridge._get_base_odometry()
 
-    with bridge.transport_update():
-        quat_scoped, gyro_scoped, acc_scoped = bridge._get_base_imu_data()
-        odom_scoped = bridge._get_base_odometry()
+    bridge.transport_exchange()
+    assert bridge.imu is not None and bridge.odom is not None
+    quat_exchanged, gyro_exchanged, acc_exchanged = bridge.imu
 
-    torch.testing.assert_close(quat_direct, quat_scoped)
-    torch.testing.assert_close(gyro_direct, gyro_scoped)
-    torch.testing.assert_close(acc_direct, acc_scoped)
-    assert odom_direct == odom_scoped
+    torch.testing.assert_close(quat_direct, quat_exchanged)
+    torch.testing.assert_close(gyro_direct, gyro_exchanged)
+    torch.testing.assert_close(acc_direct, acc_exchanged)
+    assert odom_direct == bridge.odom
     # The rotation is actually exercised: a 45 deg yaw makes body velocity differ from world.
-    assert odom_scoped[2] != pytest.approx(sim.robot_root_states._root[0, 7:10].tolist())
+    assert bridge.odom[2] != pytest.approx(sim.robot_root_states._root[0, 7:10].tolist())
 
 
-def test_cached_root_state_is_dropped_when_the_update_ends() -> None:
+def test_each_exchange_re_reads_rather_than_serving_the_last_one() -> None:
     sim = _FakeSim()
     bridge = _bridge(sim)
+    bridge.transport_exchange()
 
-    with bridge.transport_update():
-        bridge._get_base_odometry()
-        bridge._get_base_odometry()
-    sim.robot_root_states.reads = 0
-
-    # A later update re-reads rather than serving the first update's snapshot, so it sees state
-    # written between the two.
     sim.robot_root_states._root[0, 0] = 9.0
-    with bridge.transport_update():
-        position, _quat, _lin, _yaw = bridge._get_base_odometry()
+    sim.robot_root_states.reads = 0
+    bridge.transport_exchange()
+
     assert sim.robot_root_states.reads == 1
-    assert position[0] == pytest.approx(9.0)
+    assert bridge.odom is not None
+    assert bridge.odom[0][0] == pytest.approx(9.0)
 
 
-def test_cache_is_dropped_even_when_the_update_raises() -> None:
+def test_an_exchange_that_raises_leaves_no_stale_state_behind() -> None:
     sim = _FakeSim()
     bridge = _bridge(sim)
-
-    def update_that_fails_after_reading_state() -> None:
-        with bridge.transport_update():
-            bridge._get_base_odometry()
-            raise RuntimeError("publish failed")
+    bridge.fail_on_publish_odom = True
 
     with pytest.raises(RuntimeError, match="publish failed"):
-        update_that_fails_after_reading_state()
+        bridge.transport_exchange()
 
-    # The next read is served from the simulator, not from the failed update's snapshot.
-    sim.robot_root_states.reads = 0
+    # The next read is served from the simulator, not from the failed exchange's snapshot.
     sim.robot_root_states._root[0, 0] = 5.0
+    sim.robot_root_states.reads = 0
     position, _quat, _lin, _yaw = bridge._get_base_odometry()
     assert sim.robot_root_states.reads == 1
     assert position[0] == pytest.approx(5.0)
 
 
-def test_nested_transport_updates_stay_correct() -> None:
-    """A nested scope ends the cache early; readers then re-read, so values are never stale."""
+def test_an_exchange_publishes_in_order_and_reads_the_command_last() -> None:
+    """The order is the bridge's contract now, so pin it here rather than at the caller."""
     sim = _FakeSim()
     bridge = _bridge(sim)
+    order: list[str] = []
+    bridge.publish_low_state = lambda: order.append("low_state")  # type: ignore[method-assign]
+    bridge.publish_odom = lambda: order.append("odom")  # type: ignore[method-assign]
+    bridge.publish_wireless_controller = lambda: order.append("wireless")  # type: ignore[method-assign]
+    bridge.low_cmd_handler = lambda _msg=None: order.append("command_read")  # type: ignore[method-assign]
 
-    with bridge.transport_update():
-        bridge._get_base_odometry()
-        with bridge.transport_update():
-            bridge._get_base_odometry()
+    bridge.joystick = object()
+    bridge.transport_exchange()
 
-        # The inner scope ended the shared read, so state written after it is still picked up.
-        sim.robot_root_states._root[0, 0] = 7.0
-        position, _quat, _lin, _yaw = bridge._get_base_odometry()
-        assert position[0] == pytest.approx(7.0)
+    assert order == ["low_state", "odom", "wireless", "command_read"]
 
-    # And the outer scope left no snapshot behind either.
-    sim.robot_root_states.reads = 0
-    bridge._get_base_odometry()
-    assert sim.robot_root_states.reads == 1
+
+def test_an_exchange_skips_odometry_and_the_joystick_when_not_configured() -> None:
+    sim = _FakeSim()
+    robot_config = SimpleNamespace(
+        dof_effort_limit_list=[100.0] * _NUM_DOF,
+        asset=SimpleNamespace(robot_type="g1_29dof"),
+        bridge=RobotBridgeConfig(),
+    )
+    bridge = _StubBridge(
+        cast("BaseSimulator", sim),
+        cast("RobotConfig", robot_config),
+        BridgeConfig(interface="lo", publish_odom=False),
+    )
+    published: list[str] = []
+    bridge.publish_odom = lambda: published.append("odom")  # type: ignore[method-assign]
+    bridge.publish_wireless_controller = lambda: published.append("wireless")  # type: ignore[method-assign]
+
+    bridge.transport_exchange()
+
+    assert published == []

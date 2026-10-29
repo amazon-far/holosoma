@@ -18,8 +18,8 @@ half MUST stay in the parent. Only the four DDS operations move to the child:
 
 Each round trip blocks the simulator's step thread while the child is scheduled, so the publishes
 are queued and sent together with the command read as a single batched request per transport update
-(see :class:`~holosoma.bridge.unitree.batched_calls.BatchedSdkCalls`); the child still runs
-them one at a time, in the order they were queued.
+(see ``transport_exchange``); the child still runs them one at a time, in the order they were
+queued.
 
 ``compute_torques`` and every ``_get_*`` simulator read stay inherited from :class:`UnitreeSdk2Bridge`
 unchanged: the parent-side ``self.low_cmd`` is a picklable :class:`LowCommand` carrying exactly the
@@ -38,7 +38,6 @@ from typing import Any, NamedTuple
 
 from loguru import logger
 
-from holosoma.bridge.unitree.batched_calls import BatchedSdkCalls
 from holosoma.bridge.unitree.unitree_sdk2py_bridge import UnitreeSdk2Bridge
 
 # Seconds to wait for the child to construct the binding (DDS init) before declaring it dead.
@@ -332,10 +331,9 @@ class UnitreeMpSdk2Bridge(UnitreeSdk2Bridge):
         self.low_cmd = LowCommand(tau_ff=zeros, kp=zeros, kd=zeros, q_target=zeros, dq_target=zeros)
         self.wireless_controller = SimpleNamespace(lx=0.0, ly=0.0, rx=0.0, ry=0.0, keys=0)
 
-        # Batches this transport update's calls to the child into one round trip. Registered as a
-        # per-update collaborator, so SimulatorBridge.transport_step opens and flushes it.
-        self._calls = BatchedSdkCalls(self._call, _BATCH)
-        self.transport_scopes = (*self.transport_scopes, self._calls)
+        # Calls queued by the exchange in flight; see transport_exchange.
+        self._pending: list[tuple[str, tuple[Any, ...]]] = []
+        self._batching = False
 
     # ── RPC helper ─────────────────────────────────────────────────────
 
@@ -360,11 +358,48 @@ class UnitreeMpSdk2Bridge(UnitreeSdk2Bridge):
             raise payload
         return payload
 
+    def transport_exchange(self) -> None:
+        """Run the whole exchange as ONE round trip to the SDK child.
+
+        Each call to the child blocks the simulator's step thread while the child is scheduled, and
+        the inherited sequence makes three (state, odometry, command read). Queue the publishes
+        instead and send them with the command read, which the child runs in queue order -- so the
+        DDS writes reach the wire in the same order, and the same exchange, as one call each.
+
+        Only an exchange batches. A publish called on its own goes straight out, because nothing
+        would flush it.
+        """
+        self._batching = True
+        try:
+            super().transport_exchange()
+        finally:
+            self._batching = False
+            # Covers an exchange that raised before the command read, which unbatched would have
+            # sent its earlier publishes already.
+            self._send(self._pending)
+
+    def _queue(self, method: str, *args: Any) -> None:
+        """Add one call to the exchange in flight, or send it now if there is no exchange."""
+        if self._batching:
+            self._pending.append((method, args))
+        else:
+            self._call(method, *args)
+
+    def _send(self, operations: list[tuple[str, tuple[Any, ...]]]) -> Any:
+        """Send queued calls as one request; return the last one's reply."""
+        self._pending = []
+        if not operations:
+            return None
+        if len(operations) == 1:
+            method, args = operations[0]
+            return self._call(method, *args)
+        return self._call(_BATCH, operations)[-1]
+
     # ── overridden DDS operations (everything else inherited) ──────────
 
     def low_cmd_handler(self, msg: Any = None) -> None:
         """Flush this update's queued publishes and take the latest incoming command back."""
-        self.low_cmd = self._calls.flush(("read_incoming_command", ()))[-1]
+        self.low_cmd = self._send([*self._pending, ("read_incoming_command", ())])
 
     def publish_low_state(self) -> None:
         """Compute the state fields from sim state (parent), ship them to the child to publish."""
@@ -377,7 +412,7 @@ class UnitreeMpSdk2Bridge(UnitreeSdk2Bridge):
         quat_array = quaternion.detach().cpu().numpy()
         quat = [float(quat_array[0]), float(quat_array[1]), float(quat_array[2]), float(quat_array[3])]
 
-        self._calls.defer(
+        self._queue(
             "publish_low_state",
             positions.tolist(),
             velocities.tolist(),
@@ -397,7 +432,7 @@ class UnitreeMpSdk2Bridge(UnitreeSdk2Bridge):
         the child, which owns the C++ OdomState and writes SportModeState on rt/odommodestate.
         """
         position, quat_wxyz, lin_vel_body, yaw_speed = self._get_base_odometry()
-        self._calls.defer("publish_odom_state", position, lin_vel_body, yaw_speed, quat_wxyz)
+        self._queue("publish_odom_state", position, lin_vel_body, yaw_speed, quat_wxyz)
 
     def publish_wireless_controller(self) -> None:
         """Populate the parent stand-in from the joystick (base class), ship it to the child."""
@@ -407,7 +442,7 @@ class UnitreeMpSdk2Bridge(UnitreeSdk2Bridge):
 
         if self.joystick is not None:
             wc = self.wireless_controller
-            self._calls.defer("publish_wireless_controller", wc.lx, wc.ly, wc.rx, wc.ry, wc.keys)
+            self._queue("publish_wireless_controller", wc.lx, wc.ly, wc.rx, wc.ry, wc.keys)
 
     # ── lifecycle ──────────────────────────────────────────────────────
 

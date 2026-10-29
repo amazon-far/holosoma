@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sys
 from abc import ABC, abstractmethod
-from contextlib import ExitStack, contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
@@ -15,9 +14,6 @@ from holosoma.utils.rotations import quat_rotate_inverse
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-    from contextlib import AbstractContextManager
-
     from holosoma.config_types.simulator import BridgeConfig
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 
@@ -83,48 +79,45 @@ class BasicSdk2Bridge(ABC):
         }
         self.joystick: Any = None
 
-        # Set while a transport update is in flight, with the root state it reuses.
-        self._in_transport_update = False
+        # The root state this exchange is reading; see transport_exchange.
         self._root_state: torch.Tensor | None = None
-        # Collaborators that hold their own per-update state; a subclass appends its own, and
-        # transport_update enters each for the span of the update.
-        self.transport_scopes: tuple[AbstractContextManager[None], ...] = ()
 
         # Initialize SDK-specific components
         self._init_sdk_components()
 
-    @contextmanager
-    def transport_update(self) -> Iterator[None]:
-        """Scope one SDK transport update: hold one root-state read, and open any scoped collaborator.
+    def transport_exchange(self) -> None:
+        """Exchange one round of data with the SDK: robot state out, commands in.
+
+        The call order is the bridge's own: state first, then base odometry when configured, then
+        any joystick, and the incoming command last so it is the freshest thing the control step
+        will act on. A bridge whose transport can do better than one call per publish overrides
+        this to wrap the sequence.
 
         ``robot_root_states`` is a backend-owned proxy, not a tensor: every index rebuilds the whole
         ``[pos, quat, lin_vel, ang_vel]`` 13-vector and rotates the angular velocity into the world
-        frame. An update reads it more than once -- for the IMU, and for odometry -- always at the
-        same simulator state, since nothing steps the simulator inside the update, so one read
-        serves them all.
-
-        Outside this scope the readers index the proxy directly, so a bridge method called on its
-        own behaves exactly as it did before.
+        frame. The publishes in one exchange read it at the same simulator state -- nothing steps
+        the simulator in here -- so it is read once for all of them.
         """
-        self._in_transport_update = True
+        self._root_state = self.simulator.robot_root_states[0]
         try:
-            with ExitStack() as scopes:
-                for collaborator in self.transport_scopes:
-                    scopes.enter_context(collaborator)
-                yield
+            self.publish_low_state()
+            if self.bridge_config.publish_odom:
+                self.publish_odom()
+            if self.joystick:
+                self.publish_wireless_controller()
+            self.low_cmd_handler()
         finally:
-            self._in_transport_update = False
             self._root_state = None
 
     def _read_root_state(self) -> torch.Tensor:
-        """Return the root-state 13-vector, reusing the transport update's read if there is one."""
+        """This exchange's root state, or a fresh read for a publish made outside one.
+
+        Env 0: one bridge drives one robot over one SDK connection, and the torque it writes back
+        goes through ``apply_torques_at_dof``, which takes no environment index at all.
+        """
         if self._root_state is not None:
             return self._root_state
-        # Env 0: one bridge drives one robot over one SDK connection, and the torque it writes back
-        # goes through apply_torques_at_dof, which takes no environment index at all.
         root: torch.Tensor = self.simulator.robot_root_states[0]
-        if self._in_transport_update:
-            self._root_state = root
         return root
 
     def _resolve_dof_indices(self, simulator: BaseSimulator, robot_config: RobotConfig) -> list[int]:
