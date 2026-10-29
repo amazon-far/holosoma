@@ -22,6 +22,7 @@ from holosoma.config_types.plugin import MotionPlaybackPluginConfig
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.plugins.playback import MotionPlaybackPlugin, PlaybackClip
 from holosoma.simulator.plugins.playback import playback as playback_module
+from holosoma.simulator.shared.scene_types import EnvOriginsScene
 
 pytestmark = pytest.mark.no_sim
 
@@ -263,7 +264,7 @@ class _FakeSimulator:
         self.dof_vel = torch.zeros(num_envs, NUM_DOF)
         self.robot_root_states = torch.zeros(num_envs, 13)
         # Zero origins by default, so the other tests read the clip's own coordinates.
-        self.env_origins = torch.zeros(num_envs, 3) if env_origins is None else env_origins
+        self.scene = EnvOriginsScene(torch.zeros(num_envs, 3) if env_origins is None else env_origins, "cpu")
         self.shutdown_requested = False
         self.root_writes: list[torch.Tensor] = []
         self.dof_writes: list[torch.Tensor] = []

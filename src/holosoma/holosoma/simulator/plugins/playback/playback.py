@@ -23,7 +23,7 @@ Playlist entries may be single files or a glob pattern, local (``motions/*.npz``
 (``s3://bucket/motions/*.npz``), so a 100-clip run does not have to spell out 100 paths.
 
 Clip poses are relative to the origin of the env they were recorded in. Set-state writes are
-world-frame, so the plugin adds ``sim.env_origins`` to the root and object positions:
+world-frame, so the plugin adds ``sim.scene.env_origins`` to the root and object positions:
 ``world = clip + env_origins``. Quaternions are origin-invariant and velocities are zeroed.
 
 Replay is single-trajectory: the same clip state is written to every env, so a vectorized run
@@ -451,14 +451,14 @@ class MotionPlaybackPlugin:
         """PRE_STEP: write the sampled robot (and object) state into the simulator.
 
         Clip positions are env-local, so each env's root and object positions are offset by that
-        env's ``sim.env_origins`` row before the world-frame write.
+        env's ``sim.scene.env_origins`` row before the world-frame write.
         """
         if self._state is None:  # PRE_STEP before the first FRAME_BEGIN (BaseTask emits them together)
             self._state = self.clip.sample(self._t, self.cfg.interpolate)
         state = self._state
         sim = self.simulator
         env_ids = torch.arange(sim.num_envs, device=sim.sim_device)
-        env_origins = sim.env_origins  # type: ignore[attr-defined]  # [num_envs, 3], set by create_envs
+        env_origins = sim.scene.env_origins  # [num_envs, 3]
 
         sim.dof_pos[:] = state["joint_pos"]
         sim.dof_vel[:] = 0.0
