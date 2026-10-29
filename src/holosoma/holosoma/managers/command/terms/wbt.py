@@ -1383,16 +1383,41 @@ class MotionCommand(CommandTermBase):
         if self._urdf_fk is None:
             simulator = self._env.simulator
             asset = self._env.robot_config.asset
+            urdf_path = resolve_asset_path(asset.urdf_file, asset.asset_root)
             self._urdf_fk = UrdfForwardKinematics(
-                resolve_asset_path(asset.urdf_file, asset.asset_root),
+                urdf_path,
                 list(simulator.dof_names),
                 list(simulator._body_list),  # type: ignore[attr-defined]
             )
+            self._check_urdf_fk_matches_sim(self._urdf_fk, urdf_path)
         body_pos, body_quat = self._urdf_fk(joint_pos, root_pos, root_quat)
 
         com_offset = self._body_com_offsets_b().to(device=body_pos.device, dtype=body_pos.dtype)
         body_com_pos = body_pos + quat_apply(body_quat, com_offset.expand_as(body_pos), w_last=True)
         return body_pos, body_quat, body_com_pos
+
+    def _check_urdf_fk_matches_sim(self, urdf_fk: UrdfForwardKinematics, urdf_path: str) -> None:
+        """Raise if the URDF's link poses disagree with the simulator's at env 0's current state.
+
+        IsaacSim simulates ``usd_file`` when one is set, so the URDF may not be the simulated model.
+        A single pose: an axis error on a joint sitting at 0 rad still passes.
+        """
+        simulator = self._env.simulator
+        urdf_pos, urdf_quat = urdf_fk(
+            simulator.dof_pos[:1], simulator.robot_root_states[:1, :3], simulator.robot_root_states[:1, 3:7]
+        )
+        body_pos_error = (urdf_pos - simulator.rigid_body_pos_w[:1].to(urdf_pos)).abs().amax(dim=(0, 2))
+        # q and -q are the same rotation; 1e-6 here is about 3 mrad.
+        body_quat_error = (1.0 - (urdf_quat * simulator.rigid_body_quat_w[:1].to(urdf_quat)).sum(dim=-1).abs())[0]
+        pos_gap, quat_gap = float(body_pos_error.max()), float(body_quat_error.max())
+        if pos_gap > 1e-4 or quat_gap > 1e-6:
+            worst_index = body_pos_error.argmax() if pos_gap > 1e-4 else body_quat_error.argmax()
+            worst = simulator._body_list[int(worst_index)]  # type: ignore[attr-defined]
+            raise RuntimeError(
+                f"{urdf_path} disagrees with the simulated robot (pos {pos_gap:.2e} m, quat {quat_gap:.2e}, "
+                f"worst body {worst}). Default-pose transitions take link poses from robot_config.asset.urdf_file, "
+                "so it must describe the model the simulator loaded."
+            )
 
     def _body_com_offsets_b(self) -> torch.Tensor:
         """Per-body center-of-mass offset in the body frame, ``(num_robot_bodies, 3)``, read from env 0.
