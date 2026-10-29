@@ -301,20 +301,15 @@ def test_a_beating_render_cadence_misaligns_state_and_image(monkeypatch: pytest.
 
 
 @pytest.mark.parametrize("backend", [SimulatorType.ISAACSIM])
-def test_tensor_backends_refresh_every_substep_and_again_before_egress(
+def test_tensor_backends_refresh_once_before_each_egress(
     monkeypatch: pytest.MonkeyPatch, backend: SimulatorType
 ) -> None:
-    """IsaacSim resyncs before every substep, plus once more before each frame egresses.
-
-    The count is the observable here, not an implementation detail: it is what distinguishes a refresh
-    per substep (PRE_STEP writers see current state) from one per control step, which the alignment
-    assertion above cannot see because it only reads the last refresh before FRAME_END.
-    """
+    """IsaacSim resyncs once per frame, before it egresses; its state is current between substeps."""
     sim = _FakeSim(frames=3)
 
     _run(sim, monkeypatch, backend=backend)
 
-    assert sim.refreshes == sim.substeps + len(sim.captured)
+    assert sim.refreshes == len(sim.captured)
 
 
 def test_mujoco_never_refreshes_tensors(monkeypatch: pytest.MonkeyPatch) -> None:

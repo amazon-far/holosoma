@@ -741,10 +741,7 @@ class DirectSimulation:
         )
         logger.info(f"Viewer rate: {1 / self.config.viewer_dt:.1f} Hz (sync every {viewer_steps} steps)")
 
-        # Determine refresh strategy based on simulator type
-        # IsaacSim: needs pre-step to refresh tensors to sync simulator state
-        # MuJoCo: no pre-step refresh needed because we are NOT running an envs/tasks requiring
-        #         those tensors e.g, _rigid_body_rot, _rigid_body_vel, etc.
+        # IsaacSim refreshes once per control frame before FRAME_END; MuJoCo needs no refresh here.
         simulator_type = get_simulator_type()
         if simulator_type == SimulatorType.ISAACSIM:
             refresh_tensors = self.simulator.refresh_sim_tensors
@@ -777,9 +774,6 @@ class DirectSimulation:
                     logger.info("Simulation loop exiting: simulator shutdown requested.")
                     break
 
-                # Refresh tensors if needed (no-op for MuJoCo) so PRE_STEP writers see current state.
-                refresh_tensors()
-
                 if is_control_step:
                     self.simulator.hooks.emit(Phase.FRAME_BEGIN)
                 self.simulator.hooks.emit(Phase.PRE_STEP)
@@ -797,7 +791,7 @@ class DirectSimulation:
                 # from FRAME_END (motion playback does).
                 if is_frame_end:
                     # Resync first, as BaseTask._post_physics_step does, so state published beside the
-                    # image describes the same substep. The refresh above predates this substep's step.
+                    # image describes the same substep.
                     refresh_tensors()
                     self.simulator.hooks.emit(Phase.FRAME_END)
 
