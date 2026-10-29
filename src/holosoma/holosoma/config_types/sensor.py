@@ -697,9 +697,9 @@ class LidarSensorConfig:
 SensorConfig = CameraSensorConfig | LidarSensorConfig
 
 
-def is_isaacsim_rtx_camera(config: object) -> TypeGuard[CameraSensorConfig]:
-    """Whether ``config`` is a camera Isaac Sim renders with an RTX ``TiledCamera``."""
-    return isinstance(config, CameraSensorConfig) and config.isaacsim.renderer == "rtx"
+def is_isaacsim_raycast_camera(config: object) -> TypeGuard[CameraSensorConfig]:
+    """Whether ``config`` is a camera Isaac Sim ray casts (``isaacsim.renderer="raycast"``)."""
+    return isinstance(config, CameraSensorConfig) and config.isaacsim.renderer == "raycast"
 
 
 def validate_camera_dict(cameras: dict[str, CameraSensorConfig]) -> None:

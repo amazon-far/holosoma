@@ -30,7 +30,7 @@ from loguru import logger
 from omegaconf import DictConfig
 
 from holosoma.config_types.scene import SceneConfig
-from holosoma.config_types.sensor import is_isaacsim_rtx_camera
+from holosoma.config_types.sensor import CameraSensorConfig, is_isaacsim_raycast_camera
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
@@ -89,7 +89,11 @@ class IsaacSim(BaseSimulator):
         # before the SimulationContext exists, so a rejected config leaves no global context behind.
         decimation = self.simulator_config.sim.control_decimation_steps
         render_interval = self.simulator_config.sim.render_interval_steps
-        cameras = sorted(n for n, c in self.sensor_config.items() if is_isaacsim_rtx_camera(c))
+        cameras = sorted(
+            n
+            for n, c in self.sensor_config.items()
+            if isinstance(c, CameraSensorConfig) and not is_isaacsim_raycast_camera(c)
+        )
         if cameras and decimation % render_interval:
             raise ValueError(
                 f"render_interval ({render_interval}) must divide control_decimation ({decimation}) "

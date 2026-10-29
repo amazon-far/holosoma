@@ -27,7 +27,7 @@ from holosoma.config_types.sensor import (
     CameraSensorConfig,
     IsaacSimLidarConfig,
     LidarSensorConfig,
-    is_isaacsim_rtx_camera,
+    is_isaacsim_raycast_camera,
 )
 from holosoma.simulator.isaacsim.camera_projection import camera_spawn_cfg_for
 from holosoma.simulator.isaacsim.lidar_target_discovery import (
@@ -60,7 +60,7 @@ def build_cameras(sim: IsaacSim) -> None:
     """
     sim.tiled_cameras = {}
     for cam_name, cam in sim.sensor_config.items():
-        if not is_isaacsim_rtx_camera(cam):
+        if not isinstance(cam, CameraSensorConfig) or is_isaacsim_raycast_camera(cam):
             continue
         parent = _camera_mount_prim_path(cam.mount)
         # Map holosoma data_types -> IsaacLab annotators.
@@ -109,7 +109,7 @@ def register_cameras(sim: IsaacSim, manager: SensorManager) -> None:
         if not isinstance(config, CameraSensorConfig):
             continue
         record = manager.register_camera(name, config)
-        if config.isaacsim.renderer == "raycast":
+        if is_isaacsim_raycast_camera(config):
             sim.raycast_cameras[name] = RayCastDepthCamera(sim, config)
             record.rerender = partial(sim.raycast_cameras[name].render, record)
 
@@ -477,7 +477,7 @@ def build_sensors(sim: IsaacSim) -> None:
     """Build native sensors before environment cloning."""
     needs_expanded_robot = any(
         isinstance(config, LidarSensorConfig)
-        or (is_isaacsim_rtx_camera(config) and config.mount.target_kind == "robot_link")
+        or (not is_isaacsim_raycast_camera(config) and config.mount.target_kind == "robot_link")
         for config in sim.sensor_config.values()
     )
     if needs_expanded_robot:
