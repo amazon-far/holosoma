@@ -10,7 +10,7 @@ import torch
 from holosoma.utils.sampler import DistributionLike, TermSampler
 
 
-def setup_depth_camera_mount(
+def setup_raycast_depth_camera_mount(
     env: Any,
     sampler: TermSampler,
     *,
@@ -31,12 +31,16 @@ def setup_depth_camera_mount(
         return
     if len(position_range) != 3 or len(euler_deg_range) != 3:
         raise ValueError(
-            f"setup_depth_camera_mount needs one range per axis, got {len(position_range)} position and "
+            f"setup_raycast_depth_camera_mount needs one range per axis, got {len(position_range)} position and "
             f"{len(euler_deg_range)} rotation ranges."
         )
     camera = getattr(env.simulator, "raycast_cameras", {}).get(sensor)
     if camera is None:
-        raise ValueError(f"setup_depth_camera_mount: no ray-cast depth camera named '{sensor}'.")
+        raise ValueError(
+            f"setup_raycast_depth_camera_mount: no ray-cast depth camera named '{sensor}'. It needs the "
+            f"Isaac Sim simulator and a camera with isaacsim.renderer='raycast'; other renderers and "
+            f"backends don't support mount randomization."
+        )
 
     # Six decorrelated per-env streams: position x/y/z are 0-2, rotations about x/y/z are 3-5.
     env_ids = torch.arange(env.num_envs, device="cpu")

@@ -149,8 +149,8 @@ g1_29dof_wbt_randomization_w_object = RandomizationManagerCfg(
 # Per-env mount perturbation of the ``g1-head-d435i-depth`` camera, by up to 2.5 cm and a few
 # degrees. Add to ``setup_terms`` alongside the camera, keyed ``head_depth`` in ``--sensor``.
 g1_head_d435i_mount_setup_terms = {
-    "setup_depth_camera_mount": RandomizationTermCfg(
-        func="holosoma.managers.randomization.terms.sensors:setup_depth_camera_mount",
+    "setup_raycast_depth_camera_mount": RandomizationTermCfg(
+        func="holosoma.managers.randomization.terms.sensors:setup_raycast_depth_camera_mount",
         params={
             "sensor": "head_depth",
             "position_range": [[-0.025, 0.025], [-0.025, 0.025], [-0.025, 0.025]],

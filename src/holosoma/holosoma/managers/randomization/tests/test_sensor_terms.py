@@ -1,4 +1,4 @@
-"""``setup_depth_camera_mount``: per-env camera mount offsets drawn through the term sampler."""
+"""``setup_raycast_depth_camera_mount``: per-env camera mount offsets drawn through the term sampler."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from holosoma.managers.randomization.terms.sensors import setup_depth_camera_mount
+from holosoma.managers.randomization.terms.sensors import setup_raycast_depth_camera_mount
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.sampler import STAGE_SETUP, TermSampler
 
@@ -39,7 +39,9 @@ def _apply(camera: Any, seed: int = 7, **overrides: Any) -> None:
         "enabled": True,
     }
     params.update(overrides)
-    setup_depth_camera_mount(_env(camera), TermSampler.bind(seed, "setup_depth_camera_mount", STAGE_SETUP), **params)
+    setup_raycast_depth_camera_mount(
+        _env(camera), TermSampler.bind(seed, "setup_raycast_depth_camera_mount", STAGE_SETUP), **params
+    )
 
 
 def test_offsets_are_per_env_within_each_axis_range() -> None:
