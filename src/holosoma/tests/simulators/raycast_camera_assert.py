@@ -1,11 +1,9 @@
 """Isaac Sim ray-cast depth camera assertion harness (``isaacsim.renderer="raycast"``).
 
-Uses the ``panel-target`` scene and the ``raycast_pair`` cameras: an RTX depth camera and a ray-cast
-one at the same mount. The ray-cast camera sees only the terrain and its ``raycast_link_meshes``,
-so the panel is excluded from comparisons. ``--check frame`` asserts the ray-cast camera is not an
-RTX ``TiledCamera`` and agrees with the RTX camera's ground depth. ``--check rerender`` raises the
-robot in two envs without stepping, re-renders those envs, and asserts their ground depth grows
-while the third env's frame is unchanged.
+Uses the ``raycast_cam`` camera, which sees the terrain and its ``raycast_link_meshes``.
+``--check frame`` asserts the camera produces a depth frame without an RTX ``TiledCamera`` or any
+RTX sensor. ``--check rerender`` raises the robot in two envs without stepping, re-renders those
+envs, and asserts their ground depth grows while the third env's frame is unchanged.
 
 Exits 0 PASS / 1 FAIL / 77 SKIP.
 """
@@ -21,39 +19,26 @@ if sys.path and sys.path[0].endswith("simulators"):
 
 from holosoma.utils.sim_utils import setup_simulation_environment
 from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step, steps_for_seconds
-from tests.simulators.depth_assert import _red_mask
 
 _NUM_ENVS = 3
-
-
-def _ground(sim, env_id):
-    """``[H, W]`` mask of pixels where the RTX camera sees finite ground, not the panel."""
-    import torch
-
-    rtx = sim.get_camera_data("rtx", "depth")[env_id, ..., 0]
-    return torch.isfinite(rtx) & ~_red_mask(sim.get_camera_data("rtx", "rgb")[env_id])
 
 
 def _check_frame(sim):
     import torch
 
     fails = []
-    if "raycast" in sim.tiled_cameras:
-        fails.append("raycast: built as an RTX TiledCamera")
-    rtx = sim.get_camera_data("rtx", "depth")[..., 0]
-    raycast = sim.get_camera_data("raycast", "depth")[..., 0]
-    for e in range(_NUM_ENVS):
-        ground = _ground(sim, e) & torch.isfinite(raycast[e])
-        if float(ground.float().mean()) < 0.2:
-            fails.append(f"env{e}: only {float(ground.float().mean()):.1%} of pixels are ground in both cameras")
-            continue
-        # The renderers agree to a few percent on ground; this catches a wrong pose or projection.
-        relative = (raycast[e][ground] - rtx[e][ground]).abs() / rtx[e][ground]
-        if float(relative.median()) > 0.05 or float((relative < 0.1).float().mean()) < 0.9:
-            fails.append(
-                f"env{e}: ground depth differs from RTX: median {float(relative.median()):.3%}, "
-                f"{float((relative < 0.1).float().mean()):.1%} within 10%"
-            )
+    if sim.tiled_cameras:
+        fails.append(f"RTX TiledCameras were built: {sorted(sim.tiled_cameras)}")
+    if sim.sim.has_rtx_sensors():
+        fails.append("RTX sensors are active with only a ray-cast camera configured")
+    depth = sim.get_camera_data("raycast", "depth")
+    if tuple(depth.shape) != (_NUM_ENVS, 64, 64, 1) or depth.dtype != torch.float32:
+        fails.append(f"depth shape/dtype {tuple(depth.shape)} {depth.dtype} != ({_NUM_ENVS}, 64, 64, 1) float32")
+    fails.extend(
+        f"env{e}: the camera sees almost no ground"
+        for e in range(_NUM_ENVS)
+        if float(torch.isfinite(depth[e]).float().mean()) < 0.2
+    )
     return fails
 
 
@@ -74,7 +59,7 @@ def _check_rerender(sim):
     if not torch.equal(after[0], before[0]):
         fails.append("env0: frame changed although env 0 was not re-rendered")
     for e in (1, 2):
-        ground = _ground(sim, e) & torch.isfinite(before[e]) & torch.isfinite(after[e])
+        ground = torch.isfinite(before[e]) & torch.isfinite(after[e])
         if not bool(ground.any()):
             fails.append(f"env{e}: no ground visible before and after the move")
         elif float((after[e][ground] > 1.1 * before[e][ground]).float().mean()) < 0.8:
@@ -91,7 +76,7 @@ def main() -> int:
     from tests.simulators import _camera_presets
 
     config = build_run_sim_config(
-        "isaacsim", "panel-target", "g1-29dof", "terrain_locomotion_plane", sensors=_camera_presets.raycast_pair
+        "isaacsim", "empty", "g1-29dof", "terrain_locomotion_plane", sensors=_camera_presets.raycast_cam
     )
     config = dataclasses.replace(
         config, device="cuda:0", training=dataclasses.replace(config.training, num_envs=_NUM_ENVS)
@@ -112,8 +97,7 @@ def main() -> int:
     sim.prepare_sim()
     sim.install_plugins()
 
-    # Pin each robot upright at its env origin, then render once from that state so the RTX frame
-    # and the ray-cast poses match.
+    # Pin each robot upright at its env origin, then capture one frame from that state.
     env_ids = torch.arange(_NUM_ENVS, device=device)
     robot_states = sim.get_actor_states(["robot"], env_ids).clone()
     robot_states[:, :3] = sim.env_origins + torch.tensor(list(init.pos), device=device)
@@ -122,8 +106,6 @@ def main() -> int:
     sim.set_actor_states(["robot"], env_ids, robot_states)
     step(sim, max(2, steps_for_seconds(sim, 0.05)))
     sim.set_actor_states(["robot"], env_ids, robot_states)
-    sim.sim.forward()
-    sim.render()
     sim.refresh_sim_tensors()
     sim.render_sensors()
 

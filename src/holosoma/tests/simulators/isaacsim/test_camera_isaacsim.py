@@ -211,7 +211,7 @@ def test_camera_obs_pipeline(tmp_path):
 
 @pytest.mark.parametrize("check", ["frame", "rerender"])
 def test_raycast_camera(tmp_path, check):
-    # isaacsim.renderer="raycast": no TiledCamera, ground depth matches RTX, reset envs re-render.
+    # isaacsim.renderer="raycast": depth without any RTX sensor, and reset envs re-render.
     result_file = tmp_path / f"raycast_{check}_isaacsim.txt"
     run_harness(
         _RAYCAST_HARNESS,
