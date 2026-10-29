@@ -49,7 +49,7 @@ from holosoma.simulator.isaacsim.object_spawner import (
     physics_material_cfg,
 )
 from holosoma.simulator.isaacsim.scene_fixtures import build_terrain_fixtures
-from holosoma.simulator.isaacsim.proxy_utils import RootStatesProxy
+from holosoma.simulator.isaacsim.state_utils import fullstate_xyzw_to_wxyz
 from holosoma.simulator.shared.dof_limits import build_dof_limits_from_config
 from holosoma.simulator.shared.external_wrench import WrenchTarget
 from holosoma.simulator.shared.root_states_view import UnifiedRootStatesView
@@ -624,16 +624,15 @@ class IsaacSim(BaseSimulator):
         # Wait until play so rigid object collections are initialized
         self._register_scene_assets()
 
-        # Create before state adapter, needs a reference
-        self.robot_root_states = RootStatesProxy(self._robot.data.root_state_w)  # (num_envs, 13)
+        self._bind_state()
 
-        # Create state adapter after object registry and robot root states are set
+        # Create state adapter after object registry and robot state are set
         self._state_adapter = IsaacSimStateAdapter(
             device=self.sim_device,
             object_registry=self.object_registry,
             scene=self.scene,
             robot=self._robot,
-            robot_states=self.robot_root_states,
+            state=self.state,
         )
 
         # Unified all-actors view: routes [indices] reads/writes through
@@ -642,9 +641,7 @@ class IsaacSim(BaseSimulator):
 
         self.contact_recorder = ContactSubstepRecorder(
             self.hooks,
-            # Gathers from the sensor, not contact_forces: that is only reassigned in
-            # refresh_sim_tensors, so it would record one stale frame per substep.
-            self._robot_contact_forces,
+            lambda: self.contact_forces,
             self.num_envs,
             self.simulator_config.sim.control_decimation_steps,
             self.num_bodies,
@@ -669,9 +666,6 @@ class IsaacSim(BaseSimulator):
         if self.video_recorder:
             self.video_recorder.register_hooks(self.hooks)
             self.video_recorder.setup_recording()
-
-        # Initialize robot tensors
-        self.refresh_sim_tensors()
 
         # Initialize acceleration tensors ONLY if bridge is enabled
         if self.simulator_config.bridge.enabled:
@@ -698,24 +692,46 @@ class IsaacSim(BaseSimulator):
         # This will always use the latest dof_pos and dof_vel
         return torch.cat([self.dof_pos[..., None], self.dof_vel[..., None]], dim=-1)
 
-    def refresh_sim_tensors(self) -> None:
-        # Apply reset to recache new wyxz -> xyzw tensor
-        self.robot_root_states.reset(self._robot.data.root_state_w)  # (num_envs, 13)
+    def _bind_state(self) -> None:
+        """Bind the robot state tensors, read from the articulation and sensor buffers on first access.
 
-        self.base_quat = self.robot_root_states[:, 3:7]  # (num_envs, 4), xyzw
-        self.dof_pos = self._robot.data.joint_pos[:, self.dof_ids]  # (num_envs, num_dof)
-        self.dof_vel = self._robot.data.joint_vel[:, self.dof_ids]
+        Isaac Lab replaces these buffers on update, so every tensor is a lazy read. Body quantities are
+        separate reads because reading body link velocity makes PhysX copy body COMs to the host.
+        """
+        n, b, device = self.num_envs, self.num_bodies, self.sim_device
+        data = self._robot.data
+        body_ids = torch.tensor(self.body_ids, dtype=torch.long, device=device)
 
-        self.contact_forces = self._robot_contact_forces()
+        root = torch.zeros(n, 13, device=device)
 
-        self._rigid_body_pos = self._robot.data.body_pos_w[:, self.body_ids, :]
-        self._rigid_body_rot = self._robot.data.body_quat_w[:, self.body_ids][
-            :, :, [1, 2, 3, 0]
-        ]  # (num_envs, 4) 3 isaacsim use wxyz, we keep xyzw for consistency
-        # Match rigid_body_pos_w's link-frame origin. IsaacLab's legacy body_lin_vel_w alias is
-        # COM velocity, while body_link_lin_vel_w applies the required omega x (-COM offset).
-        self._rigid_body_vel = self._robot.data.body_link_lin_vel_w[:, self.body_ids, :]
-        self._rigid_body_ang_vel = self._robot.data.body_ang_vel_w[:, self.body_ids, :]
+        def read_root(root: torch.Tensor, _quat: torch.Tensor) -> None:
+            root.copy_(data.root_state_w)
+            root[:, 3:7] = data.root_state_w[:, [4, 5, 6, 3]]  # wxyz -> xyzw
+
+        self.state.lazy(("robot_root_states", "base_quat"), read_root, (root, root[:, 3:7]), sources=("root",))
+        self.state.columns("dof_pos", lambda: data.joint_pos, self.dof_ids, sources=("joints",))
+        self.state.columns("dof_vel", lambda: data.joint_vel, self.dof_ids, sources=("joints",))
+        self.state.lazy(
+            "contact_forces",
+            lambda out: out.copy_(self._robot_contact_forces()),
+            torch.zeros(n, b, 3, device=device),
+            sources=("contacts",),
+        )
+        body_reads = {
+            "_rigid_body_pos": (lambda: data.body_pos_w, 3),
+            # Isaac Lab stores wxyz; holosoma uses xyzw.
+            "_rigid_body_rot": (lambda: data.body_quat_w[..., [1, 2, 3, 0]], 4),
+            # Link-frame linear velocity, to match _rigid_body_pos: body_lin_vel_w is the COM velocity.
+            "_rigid_body_vel": (lambda: data.body_link_lin_vel_w, 3),
+            "_rigid_body_ang_vel": (lambda: data.body_ang_vel_w, 3),
+        }
+        for name, (read, width) in body_reads.items():
+            self.state.lazy(
+                name,
+                lambda out, read=read: out.copy_(read().index_select(1, body_ids)),
+                torch.zeros(n, b, width, device=device),
+                sources=("bodies",),
+            )
 
     def _robot_contact_forces(self) -> torch.Tensor:
         """Sensor forces in robot body order, (num_envs, num_bodies, 3). The contact sensor's body
@@ -759,20 +775,17 @@ class IsaacSim(BaseSimulator):
 
         # update buffers at sim
         self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
-
-        # Need to update these tensors after each step, since they are used in `_apply_force_in_physics_step`
-        self.dof_pos = self._robot.data.joint_pos[:, self.dof_ids]  # (num_envs, num_dof)
-        self.dof_vel = self._robot.data.joint_vel[:, self.dof_ids]
+        self.state.changed()
 
         # Update accelerations ONLY if bridge is enabled
         if self.simulator_config.bridge.enabled:
             # Update DOF acceleration using numerical differentiation
-            self.dof_acc = (self.dof_vel - self.prev_dof_vel) / self.sim_dt
+            self.dof_acc.copy_((self.dof_vel - self.prev_dof_vel) / self.sim_dt)
             self.prev_dof_vel = self.dof_vel.clone()
 
             # Update base linear acceleration using numerical differentiation
             current_base_vel = self.robot_root_states[:, 7:10]
-            self.base_linear_acc = (current_base_vel - self.prev_base_lin_vel) / self.sim_dt
+            self.base_linear_acc.copy_((current_base_vel - self.prev_base_lin_vel) / self.sim_dt)
             self.prev_base_lin_vel = current_base_vel.clone()
 
     def forward_kinematics(self) -> None:
@@ -797,6 +810,7 @@ class IsaacSim(BaseSimulator):
                 self.draw_debug_viz()
 
         self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
+        self.state.changed("bodies", "contacts")
 
     def _write_external_wrench_native(self, targets: list[WrenchTarget]) -> None:
         """Set world-frame wrenches on the robot articulation and object RigidObjects.
@@ -882,19 +896,16 @@ class IsaacSim(BaseSimulator):
         if env_ids is None:
             env_ids = torch.arange(getattr(self, "num_envs", self.training_config.num_envs), device=self.sim_device)
 
-        if root_states is None:
-            robot_root_states = self.robot_root_states
-        elif root_states is self.all_root_states:
-            # Wholesale-pass of the unified view: write the robot only.
-            robot_root_states = self.robot_root_states
-        elif isinstance(root_states, RootStatesProxy):
-            # assumes the user passed in robot_root_states directly
-            robot_root_states = root_states
-        else:
+        if root_states is None or root_states is self.all_root_states:
+            # The unified view passed wholesale writes the robot only.
+            root_states = self.robot_root_states
+        elif root_states is not self.robot_root_states:
             raise ValueError(f"Unexpected root states type: {type(root_states)}")
 
-        self._robot.write_root_pose_to_sim(robot_root_states._get_wxyz(env_ids)[:, :7], env_ids)
-        self._robot.write_root_velocity_to_sim(robot_root_states._get_wxyz(env_ids)[:, 7:], env_ids)
+        root_wxyz = fullstate_xyzw_to_wxyz(root_states[env_ids])
+        self._robot.write_root_pose_to_sim(root_wxyz[:, :7], env_ids)
+        self._robot.write_root_velocity_to_sim(root_wxyz[:, 7:], env_ids)
+        self.state.changed("root", "bodies")
 
     def set_dof_state_tensor_robots(
         self, env_ids: EnvIds | None = None, dof_states: torch.Tensor | None = None
@@ -921,6 +932,7 @@ class IsaacSim(BaseSimulator):
 
         dof_pos, dof_vel = dof_states[env_ids, :, 0], dof_states[env_ids, :, 1]
         self._robot.write_joint_state_to_sim(dof_pos, dof_vel, self.dof_ids, env_ids)
+        self.state.changed("joints", "bodies")
 
     def get_actor_indices(self, names: str | ActorNames, env_ids: EnvIds | None = None) -> ActorIndices:
         """See base class."""

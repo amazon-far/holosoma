@@ -40,7 +40,7 @@ class LeggedRobotLocomotionManager(BaseTask):
         """Initialize torch tensors which will contain simulation states and processed quantities"""
         super()._init_buffers()
 
-        self.base_quat = self.simulator.base_quat
+        self.base_quat = self.simulator.base_quat[:].clone()
 
         # initialize some data used later on
         self._init_counters()

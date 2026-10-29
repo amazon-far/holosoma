@@ -23,7 +23,7 @@ class WholeBodyTrackingManager(BaseTask):
         super()._init_buffers()
 
         # -------------------------------- terms same with locomotion_manager.py [start]--------------------------------
-        self.base_quat = self.simulator.base_quat
+        self.base_quat = self.simulator.base_quat[:].clone()
         self.need_to_refresh_envs = torch.ones(self.num_envs, dtype=torch.bool, device=self.device, requires_grad=False)
         self._configure_default_dof_pos()
         self._init_domain_rand_buffers()
