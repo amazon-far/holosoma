@@ -23,7 +23,12 @@ from isaaclab.sensors import TiledCamera, TiledCameraCfg, patterns
 from isaaclab.utils.math import quat_apply
 
 from holosoma.config_types.frequency import resolve_decimation
-from holosoma.config_types.sensor import CameraSensorConfig, IsaacSimLidarConfig, LidarSensorConfig
+from holosoma.config_types.sensor import (
+    CameraSensorConfig,
+    IsaacSimLidarConfig,
+    LidarSensorConfig,
+    is_isaacsim_raycast_camera,
+)
 from holosoma.simulator.isaacsim.camera_projection import camera_spawn_cfg_for
 from holosoma.simulator.isaacsim.lidar_target_discovery import (
     _is_path_at_or_below,
@@ -38,6 +43,7 @@ from holosoma.simulator.isaacsim.prim_utils import (
 )
 from holosoma.simulator.shared.lidar_range import finalize_lidar_returns
 from holosoma.simulator.shared.sensor_manager import SensorManager
+from holosoma.simulator.shared.raycast_depth_camera import RayCastDepthCamera
 
 if TYPE_CHECKING:
     from holosoma.config_types.sensor import LidarRayPatternConfig, SensorMountConfig
@@ -45,7 +51,7 @@ if TYPE_CHECKING:
 
 
 def build_cameras(sim: IsaacSim) -> None:
-    """Build a TiledCamera per configured camera (before clone, so each replicates per env).
+    """Build a TiledCamera per RTX camera (before clone, so each replicates per env).
 
     The camera optical convention is OpenGL (-Z forward, +Y up), the same frame holosoma uses,
     so the mount offset passes through with ``convention="opengl"`` and no extra rotation.
@@ -54,27 +60,26 @@ def build_cameras(sim: IsaacSim) -> None:
     """
     sim.tiled_cameras = {}
     for cam_name, cam in sim.sensor_config.items():
-        if not isinstance(cam, CameraSensorConfig):
-            continue
-        parent = _camera_mount_prim_path(cam.mount)
-        # Map holosoma data_types -> IsaacLab annotators.
-        annotators = [{"rgb": "rgb", "depth": "distance_to_image_plane"}[d] for d in cam.data_types]
-        cam_cfg = TiledCameraCfg(
-            prim_path=f"{parent}/{cam_name}",
-            offset=TiledCameraCfg.OffsetCfg(
-                pos=tuple(cam.mount.position),
-                rot=tuple(cam.mount.orientation),  # (w, x, y, z)
-                convention="opengl",  # -Z forward / +Y up, the frame holosoma uses
-            ),
-            data_types=annotators,
-            spawn=camera_spawn_cfg_for(cam, sim_utils),
-            width=cam.width,
-            height=cam.height,
-            # Keep raw +inf no-return data; CameraRecord applies Holosoma's common depth policy.
-            depth_clipping_behavior="none",
-        )
-        sim.tiled_cameras[cam_name] = TiledCamera(cam_cfg)
-        sim.scene.sensors[cam_name] = sim.tiled_cameras[cam_name]
+        if isinstance(cam, CameraSensorConfig) and not is_isaacsim_raycast_camera(cam):
+            parent = _camera_mount_prim_path(cam.mount)
+            # Map holosoma data_types -> IsaacLab annotators.
+            annotators = [{"rgb": "rgb", "depth": "distance_to_image_plane"}[d] for d in cam.data_types]
+            cam_cfg = TiledCameraCfg(
+                prim_path=f"{parent}/{cam_name}",
+                offset=TiledCameraCfg.OffsetCfg(
+                    pos=tuple(cam.mount.position),
+                    rot=tuple(cam.mount.orientation),  # (w, x, y, z)
+                    convention="opengl",  # -Z forward / +Y up, the frame holosoma uses
+                ),
+                data_types=annotators,
+                spawn=camera_spawn_cfg_for(cam, sim_utils),
+                width=cam.width,
+                height=cam.height,
+                # Keep raw +inf no-return data; CameraRecord applies Holosoma's common depth policy.
+                depth_clipping_behavior="none",
+            )
+            sim.tiled_cameras[cam_name] = TiledCamera(cam_cfg)
+            sim.scene.sensors[cam_name] = sim.tiled_cameras[cam_name]
 
 
 def _camera_mount_prim_path(mount: SensorMountConfig) -> str:
@@ -97,14 +102,19 @@ def _camera_mount_prim_path(mount: SensorMountConfig) -> str:
 
 
 def register_cameras(sim: IsaacSim, manager: SensorManager) -> None:
-    """Register TiledCameras built before environment cloning."""
+    """Register every camera; ray-cast cameras are created here and can re-render a subset of envs."""
+    sim.raycast_cameras = {}
     for name, config in sim.sensor_config.items():
-        if isinstance(config, CameraSensorConfig):
-            manager.register_camera(name, config)
+        if not isinstance(config, CameraSensorConfig):
+            continue
+        record = manager.register_camera(name, config)
+        if is_isaacsim_raycast_camera(config):
+            sim.raycast_cameras[name] = RayCastDepthCamera(sim, config)
+            record.rerender = partial(sim.raycast_cameras[name].render, record)
 
 
 def render_cameras(sim: IsaacSim) -> None:
-    """Cache each due TiledCamera's RGB/depth as an env-first frame into its buffer.
+    """Cache each due camera's frame into its buffer: ray-cast cameras cast here, TiledCameras are read out.
 
     TiledCameras are RTX sensors the sim already updates in its own render pass
     (``scene.update`` in ``simulate_at_each_physics_step``); this reads that output, drops
@@ -114,6 +124,9 @@ def render_cameras(sim: IsaacSim) -> None:
     if sim.sensor_manager is None:
         return
     for camera_record in sim.sensor_manager.collect_due():
+        if camera_record.name in sim.raycast_cameras:
+            sim.raycast_cameras[camera_record.name].render(camera_record)
+            continue
         out = sim.tiled_cameras[camera_record.name].data.output
         if "rgb" in camera_record.config.data_types:
             rgb = out["rgb"][..., :3]  # [N,H,W,3], drop alpha
@@ -461,11 +474,14 @@ def render_lidars(sim: IsaacSim) -> None:
 
 def build_sensors(sim: IsaacSim) -> None:
     """Build native sensors before environment cloning."""
-    needs_expanded_robot = any(
-        isinstance(config, LidarSensorConfig) or config.mount.target_kind == "robot_link"
+    has_lidar = any(isinstance(config, LidarSensorConfig) for config in sim.sensor_config.values())
+    has_rtx_camera_on_robot = any(
+        isinstance(config, CameraSensorConfig)
+        and not is_isaacsim_raycast_camera(config)
+        and config.mount.target_kind == "robot_link"
         for config in sim.sensor_config.values()
     )
-    if needs_expanded_robot:
+    if has_lidar or has_rtx_camera_on_robot:
         # IsaacLab cannot author children or resolve exact targets through instance proxies.
         set_instanceable(get_current_stage(), "/World/envs/env_0/Robot", False)
     build_cameras(sim)

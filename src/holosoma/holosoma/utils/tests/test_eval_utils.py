@@ -585,7 +585,10 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
     assert loaded["robot"]["asset"]["link_physics"] == _without(saved["robot"]["asset"]["link_physics"])
     assert "apply_dof_armature_in_isaacgym" not in loaded["robot"]
     for name, sensor in saved["sensor"].items():
-        assert loaded["sensor"][name] == _without(sensor)
+        loaded_sensor = copy.deepcopy(loaded["sensor"][name])
+        loaded_isaacsim = loaded_sensor["isaacsim"]
+        assert (loaded_isaacsim.pop("renderer"), loaded_isaacsim.pop("raycast_link_meshes")) == ("rtx", {})
+        assert loaded_sensor == _without(sensor)
     saved_material_term = saved["randomization"]["setup_terms"].get(_MATERIAL_TERM)
     if saved_material_term is not None:
         loaded_material = loaded["randomization"]["setup_terms"][_MATERIAL_TERM]["params"]["material"]

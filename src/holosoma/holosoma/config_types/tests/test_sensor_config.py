@@ -331,5 +331,26 @@ def test_lidar_body_filter_is_backend_neutral_and_validated() -> None:
         LidarBodyFilterConfig(target_kind="actor", target=" ")
 
 
+@pytest.mark.parametrize(
+    ("camera_kwargs", "isaacsim_kwargs", "match"),
+    [
+        ({"data_types": ["rgb", "depth"]}, {"renderer": "raycast"}, "data_types"),
+        ({"mount": SensorMountConfig(target_kind="world")}, {"renderer": "raycast"}, "robot links"),
+        ({}, {"renderer": "raycast", "projection_type": "fisheyePolynomial"}, "projection_type"),
+        ({}, {"renderer": "raycast", "f_stop": 1.0}, "f_stop"),
+    ],
+)
+def test_isaacsim_raycast_camera_rejects_unsupported_settings(
+    camera_kwargs: dict[str, Any], isaacsim_kwargs: dict[str, Any], match: str
+) -> None:
+    fields: dict[str, Any] = {
+        "mount": SensorMountConfig(target_kind="robot_link", target="pelvis"),
+        "data_types": ["depth"],
+        **camera_kwargs,
+    }
+    with pytest.raises(ValueError, match=match):
+        CameraSensorConfig(isaacsim=IsaacSimCameraConfig(**isaacsim_kwargs), **fields)
+
+
 # The camera-frame sink fields (cameras/modalities/record_video/...) live on CameraVizPluginConfig;
 # their validation is covered in config_types/tests/test_plugin_egress_config.py.

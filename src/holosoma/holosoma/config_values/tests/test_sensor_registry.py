@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from holosoma.config_types.plugin import LidarVizPluginConfig, ROS2PointCloudPluginConfig
@@ -16,6 +18,7 @@ from holosoma.config_types.sensor import (
 )
 from holosoma.config_values.sensor import SENSOR_REGISTRY
 from holosoma.utils.config_registry import parse_config
+from holosoma.utils.path import resolve_data_file_path
 
 pytestmark = pytest.mark.no_sim
 
@@ -171,3 +174,12 @@ def test_cli_configures_lidar_viz_saved_scan_selection() -> None:
     assert plugin.env_ids == [0]
     assert plugin.max_points == 500
     assert plugin.save_dir == "logs/debug-scans"
+
+
+def test_g1_head_depth_preset_meshes_are_shipped() -> None:
+    preset = SENSOR_REGISTRY["g1-head-d435i-depth"]
+    assert isinstance(preset, CameraSensorConfig)
+    assert preset.isaacsim.renderer == "raycast"
+    for link, meshes in preset.isaacsim.raycast_link_meshes.items():
+        for mesh in [meshes] if isinstance(meshes, str) else meshes:
+            assert Path(resolve_data_file_path(mesh)).is_file(), (link, mesh)

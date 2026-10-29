@@ -30,7 +30,7 @@ from loguru import logger
 from omegaconf import DictConfig
 
 from holosoma.config_types.scene import SceneConfig
-from holosoma.config_types.sensor import CameraSensorConfig
+from holosoma.config_types.sensor import CameraSensorConfig, is_isaacsim_raycast_camera
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
@@ -55,6 +55,7 @@ from holosoma.simulator.shared.external_wrench import WrenchTarget
 from holosoma.simulator.shared.root_states_view import UnifiedRootStatesView
 from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
 from holosoma.simulator.shared.object_registry import ObjectType
+from holosoma.simulator.shared.raycast_depth_camera import RayCastDepthCamera
 from holosoma.simulator.isaacsim.state_adapter import IsaacSimStateAdapter
 from holosoma.simulator.isaacsim.prim_utils import log_robot_properties, print_prim_tree
 from holosoma.simulator.isaacsim.video_recorder import IsaacSimVideoRecorder
@@ -81,14 +82,18 @@ class IsaacSim(BaseSimulator):
         # populated by _load_scene_files; read in _collect_spawned_actors to classify.
         self.scene_file_static_names: set[str] = set()
 
-        # Cameras here are read out of the periodic render pass, which draws when the substep counter
+        # RTX cameras are read out of the periodic render pass, which draws when the substep counter
         # reaches render_interval. A driving loop closes its frame on the control step's last substep,
         # so only a render_interval dividing control_decimation puts the draw and the frame's state on
         # the same substep; anything else pairs an image with a pose from a different one. Checked
         # before the SimulationContext exists, so a rejected config leaves no global context behind.
         decimation = self.simulator_config.sim.control_decimation_steps
         render_interval = self.simulator_config.sim.render_interval_steps
-        cameras = sorted(n for n, c in self.sensor_config.items() if isinstance(c, CameraSensorConfig))
+        cameras = sorted(
+            n
+            for n, c in self.sensor_config.items()
+            if isinstance(c, CameraSensorConfig) and not is_isaacsim_raycast_camera(c)
+        )
         if cameras and decimation % render_interval:
             raise ValueError(
                 f"render_interval ({render_interval}) must divide control_decimation ({decimation}) "
@@ -158,6 +163,9 @@ class IsaacSim(BaseSimulator):
             # Per-camera TiledCamera map, keyed by sensor name; populated by
             # sensor_setup.build_cameras (called from _setup_scene, pre-clone), read at render.
             self.tiled_cameras: dict[str, TiledCamera] = {}
+            # Ray-cast cameras (isaacsim.renderer="raycast"), keyed by sensor name; populated by
+            # sensor_setup.register_cameras, read at render.
+            self.raycast_cameras: dict[str, RayCastDepthCamera] = {}
             self._setup_scene()
         print("[INFO]: Scene manager: ", self.scene)
 
