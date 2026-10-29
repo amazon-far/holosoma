@@ -1,0 +1,141 @@
+# Sim-to-Sim Depth Locomotion Workflow
+
+> **See also:** [Inference & Deployment Guide](../../README.md) for all deployment options
+
+This guide runs a depth locomotion policy on the Unitree G1 (29-DOF) in MuJoCo
+with a simulated RealSense D435i depth camera.
+
+## Overview
+
+Depth locomotion policies see the terrain ahead, so they can place footholds on
+terrain rather than walking blind. They run in the native contextual policy: one ONNX model
+takes proprioception, a direction command and a depth image, and outputs joint targets.
+
+The sim renders depth from a torso-mounted D435i camera, preprocesses it the way the policy was
+trained, and publishes it to shared memory with a liveness heartbeat. The policy process reads
+each new frame from there. The same policy runs on hardware against an on-robot depth server
+publishing the same format.
+
+## Prerequisites
+
+- MuJoCo environment set up (`scripts/source_mujoco_setup.sh`)
+- Holosoma inference environment set up (`scripts/source_inference_setup.sh`)
+- A D435i-compatible depth-distillation checkpoint. Exports come as a pair,
+  `depth_backbone.onnx` and `student.onnx`; fuse it into one contextual model first:
+
+  ```bash
+  CKPT=/absolute/path/to/checkpoint_directory
+  python src/holosoma_inference/holosoma_cpp/scripts/fuse_depth_student_onnx.py \
+      --backbone ${CKPT}/depth_backbone.onnx --student ${CKPT}/student.onnx \
+      --out ${CKPT}/contextual.onnx --check
+  ```
+
+  `--check` confirms the fused model reproduces the pair's actions.
+- Keyboard and an X11 display for the MuJoCo viewer
+
+Run the commands from the Holosoma repository root. When connecting over SSH,
+set `DISPLAY` to your graphical desktop's X server in both terminals.
+
+**Note:** Always use `--task.interface lo` (loopback) when inference and MuJoCo run on
+the same machine.
+
+**Note:** Start the simulator **before** the policy — the sim creates the shared-memory
+block the policy attaches to.
+
+---
+
+## Unitree G1 (29-DOF)
+
+### 1. Start MuJoCo Environment
+
+In one terminal, launch the simulator with the depth camera and the shared-memory
+publisher:
+
+```bash
+source scripts/source_mujoco_setup.sh
+python src/holosoma/holosoma/run_sim.py robot:g1-29dof \
+    --simulator.config.sim.fps=500 \
+    sensor.d435i_front_depth:g1-d435i-front-depth \
+    plugin.depth:depth-shm-d435i \
+    terrain:terrain-locomotion-plane \
+    --simulator.config.bridge.enabled=True
+```
+
+The robot will spawn in the simulator, hanging from a gantry. The log should show:
+
+```
+[DepthShmPlugin] created 'depth_img_shm' (20184 bytes) shape=(1, 1, 58, 87)
+```
+
+These presets render at 106×60, crop to 98×58,
+and resize to the policy's 87×58 depth input. The simulator runs at 500 Hz.
+Swap the terrain preset for a mesh terrain (e.g. `terrain:terrain-load-obj`) to give the
+policy something to see.
+
+The [PHP repository](https://github.com/amazon-far/php_parkour) provides
+`run_php_sim.sh` and `run_php_inference.sh` launchers for this workflow, with its stair
+terrain and robot model; see its
+[sim2sim guide](https://github.com/amazon-far/php_parkour/blob/main/wbt_training/DEPLOY.md).
+
+### 2. Launch the Policy
+
+In another terminal, run the policy inference:
+
+```bash
+source scripts/source_inference_setup.sh
+python3 src/holosoma_inference/holosoma_inference/run_policy.py --depth-shm depth_img_shm \
+    inference:g1-29dof-depth-d435i \
+    --task.interface lo \
+    --task.model-path ${CKPT}/contextual.onnx
+```
+
+Confirm the policy attached to the sim's depth stream:
+
+```
+[DepthShmSensor] attached to 'depth_img_shm' shape=(1, 1, 58, 87)
+```
+
+A start request waits until the first depth frame arrives.
+
+### 3. Start the Policy on the Gantry
+
+- In policy terminal, press `i` to move to the default pose (about 10 s)
+- In MuJoCo window, press `8` repeatedly to lower the gantry until the feet
+  touch the ground
+- In policy terminal, press `]` to activate the policy
+- In MuJoCo window, press `9` to remove the gantry
+
+Start the policy before removing the gantry: until it is started, the robot only holds
+its pose at the policy's gains and does not stand on its own.
+
+### 4. Control the Robot
+
+In policy terminal, use `w` `a` `s` `d` `q` `e` to steer; see below. Press `w` twice to
+walk forward: a single press (0.1) is still read as stand.
+
+---
+
+## Policy Controls Reference
+
+**Enter these commands in the policy terminal** (where you ran `run_policy.py`).
+
+| Action | Keyboard |
+|--------|----------|
+| Start the policy (waits for the first depth frame) | `]` |
+| Stop the policy | `o` |
+| Return to the default pose | `i` |
+| Forward / backward velocity | `w` / `s` (0.1 per press) |
+| Leftward / rightward velocity | `a` / `d` |
+| Turn left / right | `q` / `e` |
+| Zero the velocity (stand) | `z` |
+
+The policy was trained on discrete direction classes, so the commanded velocity is mapped to the
+nearest one; 0.1 or less is stand. The runner commands the low-speed classes.
+
+### MuJoCo Controls Reference
+
+**Enter these in the MuJoCo window** (not the policy terminal):
+
+- `7` / `8`: Raise / lower the gantry
+- `9`: Disable/remove the gantry
+- `Backspace`: Reset simulation

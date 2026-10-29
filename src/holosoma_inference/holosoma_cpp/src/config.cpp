@@ -3,6 +3,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <set>
 #include <sstream>
@@ -283,9 +284,36 @@ RuntimeConfig parse_runtime(const YAML::Node& node, const std::string& path) {
   r.optional("state_timeout_s", runtime.state_timeout_s);
   r.optional("use_gpu", runtime.use_gpu);
   r.optional("intra_op_threads", runtime.intra_op_threads);
+  r.optional("profile_prefix", runtime.profile_prefix);
   r.optional("damping_kd", runtime.damping_kd);
   r.finish();
   return runtime;
+}
+
+std::optional<ContextualConfig> parse_contextual(const YAML::Node& node, const std::string& path) {
+  if (!node || node.IsNull()) return std::nullopt;
+  ContextualConfig config;
+  MapReader r(node, path);
+  r.optional("command_dim", config.command_dim);
+  r.optional("depth_height", config.depth_height);
+  r.optional("depth_width", config.depth_width);
+  r.optional("require_climb_head", config.require_climb_head);
+  r.optional("force_manual_climbing", config.force_manual_climbing);
+  r.optional("climb_enter", config.climb_enter);
+  r.optional("climb_exit", config.climb_exit);
+  r.optional("discretizer", config.discretizer);
+  r.optional("yaw_request_gain", config.yaw_request_gain);
+  r.optional("switch_margin", config.switch_margin);
+  r.optional("velocity_primitives", config.velocity_primitives);
+  r.optional("forward_distance_scale", config.forward_distance_scale);
+  r.optional("yaw_distance_scale", config.yaw_distance_scale);
+  r.nullable("in_place_yaw_threshold", config.in_place_yaw_threshold);
+  r.optional("imu_to_obs_joint_chain", config.imu_to_obs_joint_chain);
+  r.optional("max_depth_age_s", config.max_depth_age_s);
+  if (!std::isfinite(config.max_depth_age_s) || config.max_depth_age_s <= 0)
+    throw ConfigError(r.field("max_depth_age_s") + ": must be finite and positive");
+  r.finish();
+  return config;
 }
 
 InferenceConfig parse_document(const YAML::Node& node, const std::string& base_dir, const std::string& path,
@@ -295,6 +323,7 @@ InferenceConfig parse_document(const YAML::Node& node, const std::string& base_d
   config.robot = parse_robot(r.child("robot"), path + ".robot");
   config.observation = parse_observation(r.child("observation"), path + ".observation");
   config.task = parse_task(r.child("task"), path + ".task", base_dir);
+  config.contextual = parse_contextual(r.child("contextual"), path + ".contextual");
   const YAML::Node runtime = r.child("runtime");
   if (inherited_runtime != nullptr) {
     if (runtime && !runtime.IsNull()) {
@@ -345,7 +374,7 @@ void validate_one(const InferenceConfig& config, const std::string& path) {
   }
   if (robot.motor_kp) check_size(robot.motor_kp->size(), motors, path + ".robot.motor_kp");
   if (robot.motor_kd) check_size(robot.motor_kd->size(), motors, path + ".robot.motor_kd");
-  if (robot.motor_kp.has_value() != robot.motor_kd.has_value()) {
+  if (!config.contextual && robot.motor_kp.has_value() != robot.motor_kd.has_value()) {
     throw ConfigError(path + ".robot: motor_kp and motor_kd must be overridden together");
   }
   if (robot.stiff_startup_pos) check_size(robot.stiff_startup_pos->size(), joints, path + ".robot.stiff_startup_pos");
@@ -373,6 +402,8 @@ void validate_one(const InferenceConfig& config, const std::string& path) {
   }
 
   const TaskConfig& task = config.task;
+  if (config.contextual && (task.use_phase || config.is_wbt()))
+    throw ConfigError(path + ".contextual: contextual inference owns no gait phase or WBT reference");
   if (task.model_path.empty()) {
     throw ConfigError(path + ".task.model_path: at least one model path is required");
   }

@@ -45,7 +45,12 @@ def env_value(env: Any) -> torch.Tensor:
 
 
 def _env() -> SimpleNamespace:
-    return SimpleNamespace(num_envs=NUM_ENVS, device="cpu", value=torch.zeros(NUM_ENVS, 1))
+    return SimpleNamespace(
+        num_envs=NUM_ENVS,
+        device="cpu",
+        value=torch.zeros(NUM_ENVS, 1),
+        simulator=SimpleNamespace(rerender_sensors=lambda _env_ids: None),
+    )
 
 
 def _manager(env: SimpleNamespace, **group_kwargs: Any) -> ObservationManager:

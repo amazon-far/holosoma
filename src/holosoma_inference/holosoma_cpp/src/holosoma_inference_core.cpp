@@ -828,7 +828,7 @@ bool WbtPolicy::ComputeAction(const RobotObservation &obs, const WbtReferenceSeq
     }
     for (int i = 0; i < kActionDim; ++i) {
       last_raw_action_[i] = raw[i];
-      last_action_[i] = std::clamp(raw[i], -action_clip_, action_clip_);
+      last_action_[i] = holosoma::clip_policy_action(raw[i], action_clip_);
       action_out[i] = last_action_[i] * action_scale_[i];
     }
   } catch (const std::exception &e) {

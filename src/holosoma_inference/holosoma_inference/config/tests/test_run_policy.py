@@ -130,3 +130,18 @@ def test_control_guide_keeps_locomotion_controls(monkeypatch):
 
     assert any("Switch walking/standing mode" in line for line in lines)
     assert not any("Start motion clip" in line for line in lines)
+
+
+def test_main_passes_depth_options_only_when_given(monkeypatch):
+    calls = []
+    monkeypatch.setattr(run_policy_module, "parse_config", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(run_policy_module, "run_policy", lambda _config, **kwargs: calls.append(kwargs))
+
+    monkeypatch.setattr(run_policy_module.sys, "argv", ["run_policy.py"])
+    run_policy_module.main()
+    monkeypatch.setattr(
+        run_policy_module.sys, "argv", ["run_policy.py", "--depth-shm", "depth_img_shm", "--no-depth-heartbeat"]
+    )
+    run_policy_module.main()
+
+    assert calls == [{}, {"depth_shm": "depth_img_shm", "depth_heartbeat": False}]

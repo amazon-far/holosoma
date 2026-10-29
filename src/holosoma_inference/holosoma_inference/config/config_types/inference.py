@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pydantic.dataclasses import dataclass
 
+from .contextual import ContextualConfig
 from .observation import ObservationConfig
 from .robot import RobotConfig
 from .task import TaskConfig
@@ -31,3 +32,6 @@ class InferenceConfig:
     When set, enables runtime switching between this (primary) policy and the secondary.
     Override any field: --secondary.task.model-path, --secondary.task.rl-rate, etc.
     Set to None to disable dual-mode."""
+
+    contextual: ContextualConfig | None = None
+    """Select the shared native contextual policy; callers supply depth and command inputs."""

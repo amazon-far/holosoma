@@ -5,7 +5,9 @@ from typing import Annotated
 
 import tyro
 
+from holosoma_inference.config.config_types.contextual import ContextualConfig
 from holosoma_inference.config.config_types.inference import InferenceConfig
+from holosoma_inference.config.config_types.observation import ObservationConfig
 from holosoma_inference.config.config_values import observation, robot, task
 from holosoma_inference.utils.config_registry import (
     ConfigRegistry,
@@ -71,10 +73,24 @@ g1_29dof_wbt = InferenceConfig(
     secondary=_g1_safety_secondary,
 )
 
+# Depth-conditioned locomotion for students distilled on the RealSense D435i head rig (27deg-down
+# mount, depth clipped to [0.3, 3.0] m and resized to 58x87). The model is one contextual ONNX
+# fusing the depth backbone with the student (holosoma_cpp/scripts/fuse_depth_student_onnx.py).
+# Its depth comes from a producer that already applies that preprocessing, e.g. holosoma's
+# `depth-shm-d435i` sim plugin: run with `--depth-shm depth_img_shm`. The students have no climb
+# head. No safety secondary: the depth source attaches to a single contextual runner.
+g1_29dof_depth_d435i = InferenceConfig(
+    robot=robot.g1_29dof,
+    observation=ObservationConfig({"actor_obs": []}, {}, {}, {}),
+    task=replace(task.locomotion, use_phase=False, policy_action_scale=1.0),
+    contextual=ContextualConfig(require_climb_head=False),
+)
+
 # Register core presets. Keys use hyphen-case naming convention for CLI compatibility.
 INFERENCE_REGISTRY.add("g1-29dof-loco", g1_29dof_loco)
 INFERENCE_REGISTRY.add("t1-29dof-loco", t1_29dof_loco)
 INFERENCE_REGISTRY.add("g1-29dof-wbt", g1_29dof_wbt)
+INFERENCE_REGISTRY.add("g1-29dof-depth-d435i", g1_29dof_depth_d435i)
 
 
 def get_annotated_inference_config() -> type:

@@ -51,6 +51,118 @@ def test_library_import_has_no_robot_side_effects():
     subprocess.run([sys.executable, "-c", code], check=True)
 
 
+def test_contextual_config_and_inputs_use_the_same_native_policy(tmp_path):
+    from holosoma_inference.config.config_types.contextual import ContextualConfig
+    from holosoma_inference.config.config_types.observation import ObservationConfig
+
+    generator = Path(__file__).parents[1] / "holosoma_cpp/tests/gen_contextual_models.py"
+    path = tmp_path / "contextual.onnx"
+    runpy.run_path(str(generator))["write_model"](path)
+    base = inference.get_config("g1-29dof-loco")
+    robot = RobotConfig(
+        robot_type="test",
+        robot="test",
+        num_joints=3,
+        num_motors=3,
+        dof_names=("hip", "knee", "ankle"),
+        dof_names_upper_body=(),
+        dof_names_lower_body=("hip", "knee", "ankle"),
+        default_dof_angles=(0.1, 0.2, 0.3),
+        default_motor_angles=(0.1, 0.2, 0.3),
+        motor2joint=(0, 1, 2),
+        joint2motor=(0, 1, 2),
+    )
+    config = replace(
+        base,
+        robot=robot,
+        observation=ObservationConfig({"actor_obs": []}, {}, {}, {}),
+        task=replace(base.task, model_path=str(path), use_phase=False),
+        contextual=ContextualConfig(depth_height=2, depth_width=3, imu_to_obs_joint_chain=()),
+        secondary=None,
+    )
+    policy = inference.get_policy_from_preset(config)
+    assert isinstance(policy._engine, inference.Policy)
+    inputs = inference.ContextualInput()
+    inputs.monotonic_time = 1
+    state = np.zeros(19)
+    state[3] = 1
+    state[7:10] = robot.default_dof_angles
+    first = policy.step_contextual(state, inputs)
+    np.testing.assert_allclose(first.q, [15.1, -9.8, 40.3])
+    np.testing.assert_array_equal(first.kp, [10, 20, 30])
+    inputs.monotonic_time = 2
+    second = policy.step_contextual(state, inputs)
+    np.testing.assert_array_equal(policy.last_observation[12:15], [20, -20, 5])
+    np.testing.assert_allclose(second.q, [60.1, -9.8, 40.3])
+    with pytest.raises(ValueError, match="ContextualInput"):
+        policy.step_state(state)
+    policy.reset()
+    np.testing.assert_allclose(policy.step_contextual(state, inputs).q, first.q)
+    # A zero orientation is a fault through the Python binding too, not an upright robot.
+    broken = state.copy()
+    broken[3] = 0
+    with pytest.raises(ValueError, match="orientation"):
+        policy.step_contextual(broken, inputs)
+
+
+def test_contextual_imu_to_obs_chain_and_depth_age_cross_the_native_config_boundary(tmp_path):
+    import json
+
+    from holosoma_inference import _native
+    from holosoma_inference.config.config_types.contextual import ContextualConfig
+    from holosoma_inference.config.config_types.observation import ObservationConfig
+    from holosoma_inference.native import _native_config
+
+    generator = Path(__file__).parents[1] / "holosoma_cpp/tests/gen_contextual_models.py"
+    path = tmp_path / "contextual.onnx"
+    runpy.run_path(str(generator))["write_model"](path)
+    base = inference.get_config("g1-29dof-loco")
+    robot = RobotConfig(
+        robot_type="test",
+        robot="test",
+        num_joints=3,
+        num_motors=3,
+        dof_names=("hip", "knee", "ankle"),
+        dof_names_upper_body=(),
+        dof_names_lower_body=("hip", "knee", "ankle"),
+        default_dof_angles=(0.1, 0.2, 0.3),
+        default_motor_angles=(0.1, 0.2, 0.3),
+        motor2joint=(0, 1, 2),
+        joint2motor=(0, 1, 2),
+    )
+
+    def config(contextual):
+        return replace(
+            base,
+            robot=robot,
+            observation=ObservationConfig({"actor_obs": []}, {}, {}, {}),
+            task=replace(base.task, model_path=str(path), use_phase=False),
+            contextual=contextual,
+            secondary=None,
+        )
+
+    # The default G1 waist chain names joints this robot does not have: loud, not skipped.
+    with pytest.raises(ValueError, match="imu_to_obs_joint_chain"):
+        inference.get_policy_from_preset(config(ContextualConfig(depth_height=2, depth_width=3)))
+    chained = config(ContextualConfig(depth_height=2, depth_width=3, imu_to_obs_joint_chain=(("hip", "x"),)))
+    policy = inference.get_policy_from_preset(chained)
+    state = np.zeros(19)
+    state[3] = 1
+    state[7:10] = (np.pi / 2, 0.2, 0.3)
+    inputs = inference.ContextualInput()
+    policy.step_contextual(state, inputs)
+    # Upright IMU, hip rolled 90 degrees about x: gravity lands on the chained frame's y axis.
+    np.testing.assert_allclose(policy.last_observation[:3], [0, -1, 0], atol=1e-6)
+    for bad in (0.0, -1.0, float("nan")):
+        with pytest.raises(ValueError, match="max_depth_age_s"):
+            ContextualConfig(max_depth_age_s=bad)
+        # The native parser holds the same line for configs that skip the Python dataclass.
+        document = json.loads(_native_config(chained))
+        document["contextual"]["max_depth_age_s"] = bad
+        with pytest.raises(RuntimeError, match="max_depth_age_s"):
+            _native.Policy.from_config(json.dumps(document), True)
+
+
 def test_packed_observation_uses_native_graph_scaling_and_defaults(native_config):
     config, width = native_config
     policy = inference.LocomotionPolicy(config)
