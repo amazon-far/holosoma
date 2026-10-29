@@ -24,7 +24,7 @@ void copy_quat(const std::array<double, 4>& values, std::array<float, 4>& out) {
 }
 }  // namespace
 
-InferenceConfig live_policy_config(const std::string& checkpoint, bool use_gpu, int intra_op_threads) {
+InferenceConfig live_policy_config(const std::string& checkpoint, Backend backend, int intra_op_threads) {
   InferenceConfig config;
   config.robot.dof_names.assign(live::kG1BodyJointNames.begin(), live::kG1BodyJointNames.end());
   config.robot.default_dof_angles.assign(live::kActionDim, 0.0);
@@ -35,7 +35,7 @@ InferenceConfig live_policy_config(const std::string& checkpoint, bool use_gpu, 
   config.observation.obs_dict = {{"actor_obs", {}}, {"actor_targets", {}}};
   config.task.model_path = {checkpoint};
   config.task.use_phase = false;
-  config.runtime.use_gpu = use_gpu;
+  config.runtime.backend = backend;
   config.runtime.intra_op_threads = intra_op_threads;
   return config;
 }

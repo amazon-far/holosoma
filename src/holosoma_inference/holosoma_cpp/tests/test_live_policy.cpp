@@ -108,16 +108,16 @@ TEST(WbtPolicyInit, GpuRequestCannotSilentlyUseACpuOnlyRuntime) {
   if (std::find(providers.begin(), providers.end(), "CUDAExecutionProvider") != providers.end())
     GTEST_SKIP() << "CPU-only SDK regression";
   WbtPolicy policy;
-  EXPECT_FALSE(policy.Initialize(Model("split_history.onnx"), true));
+  EXPECT_FALSE(policy.Initialize(Model("split_history.onnx"), Backend::kCuda));
   EXPECT_FALSE(policy.IsInitialized());
-  EXPECT_TRUE(policy.Initialize(Model("split_history.onnx"), false));
+  EXPECT_TRUE(policy.Initialize(Model("split_history.onnx"), Backend::kCpu));
 }
 
 #ifdef WBT_GPU_SMOKE_TEST
 TEST(WbtPolicyGpu, MatchesCpuAcrossChangingReferences) {
   WbtPolicy cpu, gpu;
-  ASSERT_TRUE(cpu.Initialize(Model("split_history.onnx"), false));
-  ASSERT_TRUE(gpu.Initialize(Model("split_history.onnx"), true));
+  ASSERT_TRUE(cpu.Initialize(Model("split_history.onnx"), Backend::kCpu));
+  ASSERT_TRUE(gpu.Initialize(Model("split_history.onnx"), Backend::kCuda));
   std::array<float, kActionDim> cpu_action{}, gpu_action{};
   for (int tick = 0; tick < 20; ++tick) {
     const auto reference = Sequence(0.1f * tick, 0.2f * tick);

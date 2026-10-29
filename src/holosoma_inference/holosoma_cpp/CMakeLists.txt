@@ -21,6 +21,8 @@ option(HOLOSOMA_BUILD_PYTHON "Build the Python native extension" OFF)
 option(HOLOSOMA_BUILD_RUNNER "Build the standalone robot runner" ON)
 set(HOLOSOMA_WITH_UNITREE_SDK "AUTO" CACHE STRING "Build the Unitree SDK2 robot interface: AUTO (Linux), ON, OFF")
 set_property(CACHE HOLOSOMA_WITH_UNITREE_SDK PROPERTY STRINGS AUTO ON OFF)
+set(HOLOSOMA_WITH_TENSORRT "AUTO" CACHE STRING "Build the TensorRT inference backend: AUTO (when found), ON, OFF")
+set_property(CACHE HOLOSOMA_WITH_TENSORRT PROPERTY STRINGS AUTO ON OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(HolosomaDependencies)
@@ -57,6 +59,11 @@ target_link_libraries(holosoma_cpp_core
   PRIVATE ONNXRuntime::ONNXRuntime ${HOLOSOMA_YAML_TARGET} nlohmann_json::nlohmann_json ${HOLOSOMA_TINYXML2_TARGET} ${CMAKE_DL_LIBS})
 target_compile_definitions(holosoma_cpp_core PRIVATE
   HOLOSOMA_CPP_DEFAULT_PRESET_DIR="${HOLOSOMA_PRESET_DIR}")
+if(HOLOSOMA_TENSORRT_ENABLED)
+  target_sources(holosoma_cpp_core PRIVATE src/trt_backend.cpp)
+  target_link_libraries(holosoma_cpp_core PRIVATE TensorRT::TensorRT)
+  target_compile_definitions(holosoma_cpp_core PRIVATE HOLOSOMA_WITH_TENSORRT=1)
+endif()
 target_compile_options(holosoma_cpp_core PRIVATE -Wall -Wextra -Wpedantic)
 
 if(HOLOSOMA_BUILD_RUNNER)
