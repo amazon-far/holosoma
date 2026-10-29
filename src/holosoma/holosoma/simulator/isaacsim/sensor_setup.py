@@ -15,7 +15,7 @@ the scene is built.
 from __future__ import annotations
 
 from functools import lru_cache, partial
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
 import torch
 import isaaclab.sim as sim_utils
@@ -45,8 +45,13 @@ if TYPE_CHECKING:
     from holosoma.simulator.isaacsim.isaacsim import IsaacSim
 
 
+def _is_rtx_camera(config: object) -> TypeGuard[CameraSensorConfig]:
+    """Whether ``config`` is a camera Isaac Sim renders with an RTX ``TiledCamera``."""
+    return isinstance(config, CameraSensorConfig) and config.isaacsim.renderer == "rtx"
+
+
 def build_cameras(sim: IsaacSim) -> None:
-    """Build a TiledCamera per configured camera (before clone, so each replicates per env).
+    """Build a TiledCamera per RTX camera (before clone, so each replicates per env).
 
     The camera optical convention is OpenGL (-Z forward, +Y up), the same frame holosoma uses,
     so the mount offset passes through with ``convention="opengl"`` and no extra rotation.
@@ -55,7 +60,7 @@ def build_cameras(sim: IsaacSim) -> None:
     """
     sim.tiled_cameras = {}
     for cam_name, cam in sim.sensor_config.items():
-        if not isinstance(cam, CameraSensorConfig):
+        if not _is_rtx_camera(cam):
             continue
         parent = _camera_mount_prim_path(cam.mount)
         # Map holosoma data_types -> IsaacLab annotators.
@@ -100,7 +105,7 @@ def _camera_mount_prim_path(mount: SensorMountConfig) -> str:
 def register_cameras(sim: IsaacSim, manager: SensorManager) -> None:
     """Register TiledCameras built before environment cloning."""
     for name, config in sim.sensor_config.items():
-        if isinstance(config, CameraSensorConfig):
+        if _is_rtx_camera(config):
             manager.register_camera(name, config)
 
 
@@ -463,8 +468,7 @@ def render_lidars(sim: IsaacSim) -> None:
 def build_sensors(sim: IsaacSim) -> None:
     """Build native sensors before environment cloning."""
     needs_expanded_robot = any(
-        isinstance(config, LidarSensorConfig)
-        or (isinstance(config, CameraSensorConfig) and config.mount.target_kind == "robot_link")
+        isinstance(config, LidarSensorConfig) or (_is_rtx_camera(config) and config.mount.target_kind == "robot_link")
         for config in sim.sensor_config.values()
     )
     if needs_expanded_robot:

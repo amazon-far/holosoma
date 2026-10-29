@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from holosoma.config_types.frequency import resolve_decimation
-from holosoma.config_types.sensor import CameraSensorConfig, RayCastDepthCameraConfig
+from holosoma.config_types.sensor import CameraSensorConfig
 from holosoma.simulator.shared.lidar_sensor import (
     LidarPatternProvider,
     ResolvedRayPattern,
@@ -67,7 +67,7 @@ class SensorRecord:
 
 def _clip_depth(config: object, tensor: torch.Tensor) -> torch.Tensor:
     """Apply a camera's configured depth no-return semantics (records without a camera config store as-is)."""
-    if not isinstance(config, (CameraSensorConfig, RayCastDepthCameraConfig)):
+    if not isinstance(config, CameraSensorConfig):
         return tensor
     return clip_sensor_ranges(
         tensor,
@@ -96,7 +96,7 @@ class CameraRecord(SensorRecord):
 class SharedCameraRecord(SensorRecord):
     """A camera rendered by shared, backend-neutral code (see ``SensorManager.register_shared_camera``)."""
 
-    config: RayCastDepthCameraConfig
+    config: CameraSensorConfig
     camera: Any = None
     """The object that renders this camera, e.g. for randomization terms that configure it."""
 
@@ -158,10 +158,10 @@ class SensorManager:
     def register_shared_camera(
         self,
         name: str,
-        config: RayCastDepthCameraConfig,
+        config: CameraSensorConfig,
         render: Callable[[SharedCameraRecord, torch.Tensor | None], None],
     ) -> SharedCameraRecord:
-        """Register a camera that shared code renders on every backend.
+        """Register a camera rendered by shared code rather than by the backend.
 
         ``render(record, env_ids)`` renders every env (``env_ids=None``) or only ``env_ids`` into
         ``record``. It runs from :meth:`render_shared` on the camera's cadence and, for envs reset

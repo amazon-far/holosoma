@@ -1,10 +1,9 @@
-"""Ray-cast depth camera, rendered with Warp the same way on every simulator backend.
+"""Ray-cast depth camera, rendered with Warp for ``CameraSensorConfig.isaacsim.renderer="raycast"``.
 
-A :class:`~holosoma.config_types.sensor.RayCastDepthCameraConfig` camera casts one ray per pixel
-against the terrain mesh and against the meshes of selected robot links at their current
-poses (self-occlusion). It reads only backend-neutral simulator state -- ``rigid_body_pos_w``,
-``rigid_body_quat_w`` (xyzw), ``find_rigid_body_indice`` and the terrain term's
-``warp_mesh`` -- so every backend registers and renders it through the shared helpers below.
+The camera casts one ray per pixel against the terrain mesh and against the meshes of selected
+robot links at their current poses (self-occlusion). It reads only backend-neutral simulator
+state -- ``rigid_body_pos_w``, ``rigid_body_quat_w`` (xyzw), ``find_rigid_body_indice`` and the
+terrain term's ``warp_mesh``.
 
 The kernel is adapted from Aerial Gym Simulator's ``DepthCameraWarpKernels`` (BSD-3-Clause; see
 ``THIRD_PARTY_LICENSES``), as used by the PHP release depth camera: rays pass through integer
@@ -21,7 +20,7 @@ import numpy as np
 import trimesh
 import warp as wp
 
-from holosoma.config_types.sensor import RayCastDepthCameraConfig
+from holosoma.config_types.sensor import CameraSensorConfig
 from holosoma.utils.path import resolve_data_file_path
 from holosoma.utils.rotations import quat_apply, quat_from_euler_xyz, quat_mul
 from holosoma.utils.safe_torch_import import torch
@@ -111,14 +110,14 @@ def _render_depth_kernel(
 
 
 class RayCastDepthCamera:
-    """Renders one :class:`RayCastDepthCameraConfig` camera into its sensor record.
+    """Renders one ray-cast :class:`CameraSensorConfig` camera into its sensor record.
 
     Simulator state it needs (body indices, terrain mesh) is resolved on the first render, when
     every backend has finished building its scene. Per-env mount offsets come from a
     randomization setup term through :meth:`set_mount_offset`.
     """
 
-    def __init__(self, sim: BaseSimulator, config: RayCastDepthCameraConfig) -> None:
+    def __init__(self, sim: BaseSimulator, config: CameraSensorConfig) -> None:
         self.sim = sim
         self.config = config
         self.device = str(sim.sim_device)
@@ -153,7 +152,7 @@ class RayCastDepthCamera:
         # One entry per mesh; a link with several meshes appears once for each.
         occluders = [
             (link, path)
-            for link, paths in cfg.self_occlusion.items()
+            for link, paths in cfg.isaacsim.self_occlusion.items()
             for path in ([paths] if isinstance(paths, str) else paths)
         ]
         self._body_ids = [sim.find_rigid_body_indice(link) for link, _ in occluders]
@@ -262,10 +261,10 @@ class RayCastDepthCamera:
 
 
 def register_raycast_depth_cameras(sim: BaseSimulator, manager: SensorManager) -> dict[str, RayCastDepthCamera]:
-    """Register every configured :class:`RayCastDepthCameraConfig` camera with ``manager``."""
+    """Register every camera configured with ``isaacsim.renderer="raycast"`` with ``manager``."""
     cameras: dict[str, RayCastDepthCamera] = {}
     for name, config in sim.sensor_config.items():
-        if isinstance(config, RayCastDepthCameraConfig):
+        if isinstance(config, CameraSensorConfig) and config.isaacsim.renderer == "raycast":
             cameras[name] = RayCastDepthCamera(sim, config)
             manager.register_shared_camera(name, config, cameras[name].render).camera = cameras[name]
     return cameras

@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from holosoma.config_types.sensor import RayCastDepthCameraConfig, SensorMountConfig
+from holosoma.config_types.sensor import CameraSensorConfig, IsaacSimCameraConfig, SensorMountConfig
 from holosoma.simulator.shared.raycast_depth_camera import register_raycast_depth_cameras
 from holosoma.simulator.shared.sensor_manager import SensorManager
 from holosoma.utils.safe_torch_import import torch
@@ -36,7 +36,7 @@ def _ground(size: float = 50.0) -> Any:
 class _FakeSim:
     """Robot links ``base`` (camera mount) and ``occluder``, over a ground plane at z = 0."""
 
-    def __init__(self, config: RayCastDepthCameraConfig, base_height: float = 2.0) -> None:
+    def __init__(self, config: CameraSensorConfig, base_height: float = 2.0) -> None:
         self.num_envs = NUM_ENVS
         self.sim_device = "cpu"
         self.sensor_config = {"depth": config}
@@ -52,7 +52,7 @@ class _FakeSim:
         return LINKS.index(name)
 
 
-def _camera(tmp_path: Path, **overrides: Any) -> RayCastDepthCameraConfig:
+def _camera(tmp_path: Path, *, self_occlusion: dict[str, Any] | None = None, **overrides: Any) -> CameraSensorConfig:
     box = tmp_path / "box.stl"
     if not box.exists():
         trimesh.creation.box(extents=[0.4, 0.4, 0.4]).export(box)
@@ -63,10 +63,11 @@ def _camera(tmp_path: Path, **overrides: Any) -> RayCastDepthCameraConfig:
         "height": 12,
         "vertical_fov": 60.0,
         "far": 10.0,
-        "self_occlusion": {"occluder": str(box)},
+        "data_types": ["depth"],
     }
     fields.update(overrides)
-    return RayCastDepthCameraConfig(**fields)
+    occluders: dict[str, str | list[str]] = {"occluder": str(box)} if self_occlusion is None else self_occlusion
+    return CameraSensorConfig(isaacsim=IsaacSimCameraConfig(renderer="raycast", self_occlusion=occluders), **fields)
 
 
 def _render(sim: _FakeSim) -> tuple[torch.Tensor, Any, Any]:

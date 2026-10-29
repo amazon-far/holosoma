@@ -28,7 +28,6 @@ from holosoma.config_types.sensor import (
     MountKind,
     MujocoCameraConfig,
     MujocoLidarConfig,
-    RayCastDepthCameraConfig,
     SensorMountConfig,
     validate_camera_dict,
 )
@@ -332,9 +331,27 @@ def test_lidar_body_filter_is_backend_neutral_and_validated() -> None:
         LidarBodyFilterConfig(target_kind="actor", target=" ")
 
 
-def test_raycast_depth_camera_rejects_non_link_mounts() -> None:
-    with pytest.raises(ValueError, match="robot links"):
-        RayCastDepthCameraConfig(mount=SensorMountConfig(target_kind="world"))
+@pytest.mark.parametrize(
+    ("camera_kwargs", "isaacsim_kwargs", "match"),
+    [
+        ({"data_types": ["rgb", "depth"]}, {"renderer": "raycast"}, "data_types"),
+        ({"mount": SensorMountConfig(target_kind="world")}, {"renderer": "raycast"}, "robot links"),
+        ({}, {"renderer": "raycast", "projection_type": "fisheyePolynomial"}, "projection_type"),
+        ({}, {"renderer": "raycast", "f_stop": 1.0}, "f_stop"),
+        ({}, {"renderer": "raycast", "self_occlusion": {"pelvis": []}}, "self_occlusion"),
+        ({}, {"self_occlusion": {"pelvis": "pelvis.STL"}}, "renderer='raycast'"),
+    ],
+)
+def test_isaacsim_raycast_camera_rejects_unsupported_settings(
+    camera_kwargs: dict[str, Any], isaacsim_kwargs: dict[str, Any], match: str
+) -> None:
+    fields: dict[str, Any] = {
+        "mount": SensorMountConfig(target_kind="robot_link", target="pelvis"),
+        "data_types": ["depth"],
+        **camera_kwargs,
+    }
+    with pytest.raises(ValueError, match=match):
+        CameraSensorConfig(isaacsim=IsaacSimCameraConfig(**isaacsim_kwargs), **fields)
 
 
 # The camera-frame sink fields (cameras/modalities/record_video/...) live on CameraVizPluginConfig;

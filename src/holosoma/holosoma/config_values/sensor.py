@@ -17,7 +17,6 @@ from holosoma.config_types.sensor import (
     CustomLidarRayPatternConfig,
     GridLidarRayPatternConfig,
     LidarSensorConfig,
-    RayCastDepthCameraConfig,
     SensorMountConfig,
 )
 from holosoma.config_values.wbt.g1.sensor import (
@@ -32,9 +31,7 @@ from holosoma.config_values.wbt.g1.sensor import (
 )
 from holosoma.utils.config_registry import ConfigRegistry
 
-SENSOR_REGISTRY = ConfigRegistry(
-    (CameraSensorConfig, LidarSensorConfig, RayCastDepthCameraConfig), group="holosoma.config.sensor"
-)
+SENSOR_REGISTRY = ConfigRegistry((CameraSensorConfig, LidarSensorConfig), group="holosoma.config.sensor")
 # Compatibility alias for extensions written before the registry became heterogeneous.
 CAMERA_REGISTRY = SENSOR_REGISTRY
 
@@ -72,7 +69,7 @@ custom_lidar = LidarSensorConfig(
 
 # Egocentric G1 head camera, forward-facing.
 CAMERA_REGISTRY.add("g1-head", head_camera)
-# Ray-cast D435i depth in the G1 head, with self-occlusion by the legs, waist and arms.
+# D435i depth in the G1 head; Isaac Sim ray casts it with self-occlusion by the legs, waist and arms.
 SENSOR_REGISTRY.add("g1-head-d435i-depth", g1_head_d435i_depth)
 # G1 stereo head eyes (compose both for a stereo pair).
 CAMERA_REGISTRY.add("g1-stereo-left", stereo_head_camera_left)

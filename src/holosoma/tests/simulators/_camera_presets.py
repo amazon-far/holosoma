@@ -312,6 +312,22 @@ SCENE_PRESETS = {
 }
 # Named camera-dict presets, for harnesses that take a ``--sensors`` NAME on the command line
 # (e.g. camera_assert.py) and inject the resolved dict onto the config's ``sensor`` field.
+# Co-located RTX and Isaac Sim ray-cast depth cameras on the robot base (``panel-target``).
+_BASE_FORWARD = SensorMountConfig(
+    target_kind="robot_link", target="pelvis", position=[0.1, 0.0, 0.0], orientation=_LOOK_FORWARD_WXYZ
+)
+raycast_pair = {
+    "rtx": CameraSensorConfig(mount=_BASE_FORWARD, width=64, height=64, vertical_fov=60.0, data_types=["rgb", "depth"]),
+    "raycast": CameraSensorConfig(
+        mount=_BASE_FORWARD,
+        width=64,
+        height=64,
+        vertical_fov=60.0,
+        data_types=["depth"],
+        isaacsim=IsaacSimCameraConfig(renderer="raycast"),
+    ),
+}
+
 SENSOR_PRESETS = {
     "front-cam": front_cam,
     "front-cam-depth": front_cam_depth,
