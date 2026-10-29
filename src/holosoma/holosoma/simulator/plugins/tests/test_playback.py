@@ -253,7 +253,7 @@ class _FakeSimulatorConfig:
 class _FakeSimulator:
     """Stand-in exposing only what MotionPlaybackPlugin touches."""
 
-    def __init__(self, num_envs: int = 2) -> None:
+    def __init__(self, num_envs: int = 2, env_origins: torch.Tensor | None = None) -> None:
         self.hooks = HookRegistry()
         self.simulator_config = _FakeSimulatorConfig()
         self.sim_device = "cpu"
@@ -262,6 +262,8 @@ class _FakeSimulator:
         self.dof_pos = torch.zeros(num_envs, NUM_DOF)
         self.dof_vel = torch.zeros(num_envs, NUM_DOF)
         self.robot_root_states = torch.zeros(num_envs, 13)
+        # Zero origins by default, so the other tests read the clip's own coordinates.
+        self.env_origins = torch.zeros(num_envs, 3) if env_origins is None else env_origins
         self.shutdown_requested = False
         self.root_writes: list[torch.Tensor] = []
         self.dof_writes: list[torch.Tensor] = []
@@ -834,3 +836,41 @@ def test_episodic_object_rewinds_to_new_clip_frame0(tmp_path: Path) -> None:
     obj_x = [states[0, 0].item() for _, states in sim.object_writes]
     assert 0.0 in obj_x and 100.0 in obj_x
     assert obj_x.index(0.0) < obj_x.index(100.0)  # clip A object before clip B object
+
+
+# --- per-env placement ----------------------------------------------------------------------------
+
+
+def test_root_and_object_poses_are_offset_into_each_env(tmp_path: Path) -> None:
+    """Each env's root and object rows are the clip pose plus that env's origin; quats unchanged."""
+    origins = torch.tensor([[0.0, 0.0, 0.0], [10.0, -4.0, 0.5], [-20.0, 8.0, 1.0]])
+    sim = _FakeSimulator(num_envs=3, env_origins=origins)
+    _make(_cfg(tmp_path, frames=3, objects=["crate", "ball"]), sim)
+    for _ in range(3):
+        _frame(sim)
+
+    root = sim.root_writes[-1]
+    clip_root = torch.tensor([root[0, 0].item(), 0.0, 0.0])  # env 0 has a zero origin
+    assert clip_root[0].item() > 0  # the clip has moved off frame 0, so the offset is not masked
+    torch.testing.assert_close(root[:, :3], clip_root + origins)
+    torch.testing.assert_close(root[:, 3:7], torch.tensor([[0.0, 0.0, 0.0, 1.0]] * 3))  # xyzw identity
+
+    names, states = sim.object_writes[-1]
+    assert names == ["crate", "ball"]
+    assert states.shape == (6, 13)  # 2 objects x 3 envs, name-major, env-minor
+    for k in range(2):
+        rows = states[k * 3 : (k + 1) * 3]
+        clip_obj = torch.tensor([(k + 1) * clip_root[0].item(), 0.0, 0.0])  # object k walks k+1 x root
+        torch.testing.assert_close(rows[:, :3], clip_obj + origins)
+        torch.testing.assert_close(rows[:, 3:7], torch.tensor([[0.0, 0.0, 0.0, 1.0]] * 3))  # xyzw identity
+        assert torch.all(rows[:, 7:] == 0)
+
+
+def test_single_env_at_zero_origin_writes_the_clip_unchanged(tmp_path: Path) -> None:
+    """A single env at the origin (the run_sim case) sees the clip's own coordinates."""
+    sim = _FakeSimulator(num_envs=1)
+    _make(_cfg(tmp_path, objects=["crate"]), sim)
+    _frame(sim)
+    assert sim.root_writes[-1][0, :3].tolist() == [0.0, 0.0, 0.0]  # frame 0 of the fixture clip
+    _, states = sim.object_writes[-1]
+    assert states[0, :3].tolist() == [0.0, 0.0, 0.0]

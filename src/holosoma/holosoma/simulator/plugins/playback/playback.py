@@ -22,8 +22,13 @@ block, and ``object_motion_pos [T, 3]`` +
 Playlist entries may be single files or a glob pattern, local (``motions/*.npz``) or remote
 (``s3://bucket/motions/*.npz``), so a 100-clip run does not have to spell out 100 paths.
 
+Clip poses are relative to the origin of the env they were recorded in. Set-state writes are
+world-frame, so the plugin adds ``sim.env_origins`` to the root and object positions:
+``world = clip + env_origins``. Quaternions are origin-invariant and velocities are zeroed.
+
 Replay is single-trajectory: the same clip state is written to every env, so a vectorized run
-renders N identical copies. Per-env clip assignment is out of scope.
+renders N copies of one motion, each offset into its own env. Per-env clip assignment is out of
+scope.
 """
 
 from __future__ import annotations
@@ -443,18 +448,23 @@ class MotionPlaybackPlugin:
         )
 
     def write_state(self) -> None:
-        """PRE_STEP: write the sampled robot (and object) state into the simulator."""
+        """PRE_STEP: write the sampled robot (and object) state into the simulator.
+
+        Clip positions are env-local, so each env's root and object positions are offset by that
+        env's ``sim.env_origins`` row before the world-frame write.
+        """
         if self._state is None:  # PRE_STEP before the first FRAME_BEGIN (BaseTask emits them together)
             self._state = self.clip.sample(self._t, self.cfg.interpolate)
         state = self._state
         sim = self.simulator
         env_ids = torch.arange(sim.num_envs, device=sim.sim_device)
+        env_origins = sim.env_origins  # type: ignore[attr-defined]  # [num_envs, 3], set by create_envs
 
         sim.dof_pos[:] = state["joint_pos"]
         sim.dof_vel[:] = 0.0
         if self.clip.has_root:
             rs = sim.robot_root_states
-            rs[:, :3] = state["root_pos"]
+            rs[:, :3] = state["root_pos"] + env_origins
             rs[:, 3:7] = state["root_quat"]
             rs[:, 7:13] = 0.0
             sim.set_actor_root_state_tensor_robots(env_ids, rs)
@@ -465,6 +475,6 @@ class MotionPlaybackPlugin:
             obj = torch.zeros(len(self.cfg.objects) * sim.num_envs, 13, device=sim.sim_device)
             for k in range(len(self.cfg.objects)):
                 rows = obj[k * sim.num_envs : (k + 1) * sim.num_envs]
-                rows[:, :3] = state["object_pos"][k]
+                rows[:, :3] = state["object_pos"][k] + env_origins
                 rows[:, 3:7] = state["object_quat"][k]
             sim.set_actor_states(list(self.cfg.objects), env_ids, obj)
