@@ -154,6 +154,7 @@ class RayCastDepthCamera:
             (link, path)
             for link, paths in cfg.isaacsim.raycast_link_meshes.items()
             for path in ([paths] if isinstance(paths, str) else paths)
+            if path
         ]
         self._body_ids = [sim.find_rigid_body_indice(link) for link, _ in occluders]
         self._body_meshes = [self._load_mesh(path) for _, path in occluders]

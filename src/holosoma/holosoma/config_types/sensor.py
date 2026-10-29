@@ -228,7 +228,7 @@ class IsaacSimCameraConfig:
     raycast_link_meshes: dict[str, str | list[str]] = field(default_factory=dict)
     """For ``renderer="raycast"``: robot link name -> triangle mesh file, or list of files (STL/OBJ,
     link frame), to ray cast against at the link's current pose in addition to the terrain. Paths are
-    resolved with ``resolve_data_file_path``. Empty casts against the terrain only."""
+    resolved with ``resolve_data_file_path``; empty paths are skipped. Ignored by other renderers."""
 
     projection_type: IsaacSimCameraProjectionType = "pinhole"
     """Native USD/RTX camera projection. Defaults to ``"pinhole"``."""
@@ -255,9 +255,6 @@ class IsaacSimCameraConfig:
                 raise ValueError(f"IsaacSimCameraConfig.{attr} must be finite and > 0, got {value}.")
         if not math.isfinite(self.f_stop) or self.f_stop < 0.0:
             raise ValueError(f"IsaacSimCameraConfig.f_stop must be finite and >= 0, got {self.f_stop}.")
-        for link, meshes in self.raycast_link_meshes.items():
-            if not meshes or (not isinstance(meshes, str) and not all(meshes)):
-                raise ValueError(f"IsaacSimCameraConfig.raycast_link_meshes['{link}'] needs at least one mesh path.")
         if self.renderer == "raycast":
             if self.projection_type != "pinhole":
                 raise ValueError(
@@ -266,8 +263,6 @@ class IsaacSimCameraConfig:
                 )
             if self.f_stop != 0.0:
                 raise ValueError("IsaacSimCameraConfig.renderer='raycast' has no depth of field; set f_stop=0.")
-        elif self.raycast_link_meshes:
-            raise ValueError("IsaacSimCameraConfig.raycast_link_meshes needs renderer='raycast'.")
         return self
 
 

@@ -139,11 +139,6 @@ def test_every_mesh_listed_for_a_link_is_cast_at_its_pose(tmp_path: Path) -> Non
     assert depth[0, 6, 9].item() == pytest.approx(2.0 - 1.1, abs=1e-4)  # right half, top at z = 1.1
 
 
-def test_link_meshes_need_a_mesh(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="at least one mesh"):
-        _camera(tmp_path, raycast_link_meshes={"occluder": []})
-
-
 def test_image_rows_run_top_down_along_optical_plus_y_and_columns_along_plus_x(tmp_path: Path) -> None:
     sim = _FakeSim(_camera(tmp_path), base_height=2.0)
     sim.rigid_body_pos_w[0, 1] = torch.tensor([0.0, 0.5, 1.0])  # +Y of the camera
