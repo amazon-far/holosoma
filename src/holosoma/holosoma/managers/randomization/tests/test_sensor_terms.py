@@ -27,9 +27,8 @@ class _Camera:
 
 
 def _env(camera: Any) -> Any:
-    records = {"head_depth": SimpleNamespace(camera=camera)}
-    manager = SimpleNamespace(has_camera=records.__contains__, get=records.__getitem__)
-    return SimpleNamespace(num_envs=NUM_ENVS, device="cpu", simulator=SimpleNamespace(sensor_manager=manager))
+    simulator = SimpleNamespace(raycast_cameras={"head_depth": camera})
+    return SimpleNamespace(num_envs=NUM_ENVS, device="cpu", simulator=simulator)
 
 
 def _apply(camera: Any, seed: int = 7, **overrides: Any) -> None:

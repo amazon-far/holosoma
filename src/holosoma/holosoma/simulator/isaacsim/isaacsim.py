@@ -55,6 +55,7 @@ from holosoma.simulator.shared.external_wrench import WrenchTarget
 from holosoma.simulator.shared.root_states_view import UnifiedRootStatesView
 from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
 from holosoma.simulator.shared.object_registry import ObjectType
+from holosoma.simulator.shared.raycast_depth_camera import RayCastDepthCamera
 from holosoma.simulator.isaacsim.state_adapter import IsaacSimStateAdapter
 from holosoma.simulator.isaacsim.prim_utils import log_robot_properties, print_prim_tree
 from holosoma.simulator.isaacsim.video_recorder import IsaacSimVideoRecorder
@@ -162,6 +163,9 @@ class IsaacSim(BaseSimulator):
             # Per-camera TiledCamera map, keyed by sensor name; populated by
             # sensor_setup.build_cameras (called from _setup_scene, pre-clone), read at render.
             self.tiled_cameras: dict[str, TiledCamera] = {}
+            # Ray-cast cameras (isaacsim.renderer="raycast"), keyed by sensor name; populated by
+            # sensor_setup.register_cameras, read at render.
+            self.raycast_cameras: dict[str, RayCastDepthCamera] = {}
             self._setup_scene()
         print("[INFO]: Scene manager: ", self.scene)
 

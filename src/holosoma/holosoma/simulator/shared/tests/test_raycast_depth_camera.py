@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from holosoma.config_types.sensor import CameraSensorConfig, IsaacSimCameraConfig, SensorMountConfig
-from holosoma.simulator.shared.raycast_depth_camera import register_raycast_depth_cameras
+from holosoma.simulator.shared.raycast_depth_camera import RayCastDepthCamera
 from holosoma.simulator.shared.sensor_manager import SensorManager
 from holosoma.utils.safe_torch_import import torch
 
@@ -76,13 +76,17 @@ def _camera(
     )
 
 
+def _camera_and_record(sim: _FakeSim) -> tuple[RayCastDepthCamera, Any]:
+    config = sim.sensor_config["depth"]
+    record = SensorManager(device="cpu", control_hz=50.0).register_camera("depth", config)
+    return RayCastDepthCamera(sim, config), record  # type: ignore[arg-type]
+
+
 def _render(sim: _FakeSim) -> tuple[torch.Tensor, Any, Any]:
-    """Register the fake sim's camera, render one control step, and return (depth, record, camera)."""
-    manager = SensorManager(device="cpu", control_hz=50.0)
-    cameras = register_raycast_depth_cameras(sim, manager)  # type: ignore[arg-type]
-    record = manager.get("depth")
-    manager.render_shared()
-    return record.buffers["depth"][..., 0], record, cameras["depth"]
+    """Render the fake sim's camera once into its record and return (depth, record, camera)."""
+    camera, record = _camera_and_record(sim)
+    camera.render(record)
+    return record.buffers["depth"][..., 0], record, camera
 
 
 def test_ground_plane_parallel_to_the_image_plane_has_constant_depth(tmp_path: Path) -> None:
@@ -170,39 +174,29 @@ def test_depth_is_measured_to_the_image_plane_for_a_tilted_camera(tmp_path: Path
 
 def test_partial_rerender_updates_only_the_requested_envs(tmp_path: Path) -> None:
     sim = _FakeSim(_camera(tmp_path), base_height=2.0)
-    _, record, _ = _render(sim)
+    _, record, camera = _render(sim)
     sim.rigid_body_pos_w[:, 0, 2] = 1.5  # every env moved, but only env 2 is re-rendered
 
-    record.rerender(torch.tensor([2]))
+    camera.render(record, torch.tensor([2]))
     depth = record.buffers["depth"][..., 0]
 
     torch.testing.assert_close(depth[2], torch.full_like(depth[2], 1.5), atol=1e-4, rtol=0.0)
     torch.testing.assert_close(depth[:2], torch.full_like(depth[:2], 2.0), atol=1e-4, rtol=0.0)
 
 
-def test_shared_cameras_are_not_returned_to_backend_render_loops(tmp_path: Path) -> None:
-    manager = SensorManager(device="cpu", control_hz=50.0)
-    register_raycast_depth_cameras(_FakeSim(_camera(tmp_path)), manager)  # type: ignore[arg-type]
-
-    assert manager.collect_due() == []
-    assert manager.has_camera("depth")
-
-
 @pytest.mark.parametrize("before_first_render", [True, False])
 def test_mount_offsets_move_and_tilt_the_camera_per_env(tmp_path: Path, before_first_render: bool) -> None:
     sim = _FakeSim(_camera(tmp_path), base_height=2.0)
-    manager = SensorManager(device="cpu", control_hz=50.0)
-    camera = register_raycast_depth_cameras(sim, manager)["depth"]  # type: ignore[arg-type]
-    record = manager.get("depth")
+    camera, record = _camera_and_record(sim)
     position = torch.zeros(NUM_ENVS, 3)
     euler = torch.zeros(NUM_ENVS, 3)
     position[0, 2] = 0.1  # env 0 raised 10 cm
     euler[1, 0] = math.radians(20.0)  # env 1 tilted about the link's +X
     if not before_first_render:
-        manager.render_shared()
+        camera.render(record)
 
     camera.set_mount_offset(position, euler)
-    manager.render_shared()
+    camera.render(record)
     center = record.buffers["depth"][:, 6, 8, 0]
 
     assert center[0].item() == pytest.approx(2.1, abs=1e-4)
@@ -212,7 +206,7 @@ def test_mount_offsets_move_and_tilt_the_camera_per_env(tmp_path: Path, before_f
 
 def test_mount_offsets_must_cover_every_env(tmp_path: Path) -> None:
     sim = _FakeSim(_camera(tmp_path))
-    camera = register_raycast_depth_cameras(sim, SensorManager(device="cpu", control_hz=50.0))["depth"]  # type: ignore[arg-type]
+    camera, _ = _camera_and_record(sim)
 
     with pytest.raises(ValueError, match="Mount offsets"):
         camera.set_mount_offset(torch.zeros(1, 3), torch.zeros(1, 3))

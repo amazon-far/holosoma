@@ -65,46 +65,31 @@ class SensorRecord:
         return cached
 
 
-def _clip_depth(config: object, tensor: torch.Tensor) -> torch.Tensor:
-    """Apply a camera's configured depth no-return semantics (records without a camera config store as-is)."""
-    if not isinstance(config, CameraSensorConfig):
-        return tensor
-    return clip_sensor_ranges(
-        tensor,
-        near=config.near,
-        far=config.far,
-        behavior=config.depth_clipping_behavior,
-    ).ranges
-
-
 @dataclass
 class CameraRecord(SensorRecord):
-    """A camera its backend renders natively."""
-
     config: CameraSensorConfig
 
     def set_buffer(self, output: str, tensor: torch.Tensor) -> None:
         """Store a camera output, applying configured depth no-return semantics at the shared boundary."""
-        super().set_buffer(output, _clip_depth(self.config, tensor) if output == "depth" else tensor)
+        if output == "depth" and isinstance(self.config, CameraSensorConfig):
+            tensor = clip_sensor_ranges(
+                tensor,
+                near=self.config.near,
+                far=self.config.far,
+                behavior=self.config.depth_clipping_behavior,
+            ).ranges
+        super().set_buffer(output, tensor)
 
     def set_buffer_rows(self, output: str, env_ids: torch.Tensor, rows: torch.Tensor) -> None:
         """Overwrite camera output rows, applying the same depth no-return semantics as :meth:`set_buffer`."""
-        super().set_buffer_rows(output, env_ids, _clip_depth(self.config, rows) if output == "depth" else rows)
-
-
-@dataclass
-class SharedCameraRecord(SensorRecord):
-    """A camera rendered by shared, backend-neutral code (see ``SensorManager.register_shared_camera``)."""
-
-    config: CameraSensorConfig
-    camera: Any = None
-    """The object that renders this camera, e.g. for randomization terms that configure it."""
-
-    def set_buffer(self, output: str, tensor: torch.Tensor) -> None:
-        super().set_buffer(output, _clip_depth(self.config, tensor) if output == "depth" else tensor)
-
-    def set_buffer_rows(self, output: str, env_ids: torch.Tensor, rows: torch.Tensor) -> None:
-        super().set_buffer_rows(output, env_ids, _clip_depth(self.config, rows) if output == "depth" else rows)
+        if output == "depth" and isinstance(self.config, CameraSensorConfig):
+            rows = clip_sensor_ranges(
+                rows,
+                near=self.config.near,
+                far=self.config.far,
+                behavior=self.config.depth_clipping_behavior,
+            ).ranges
+        super().set_buffer_rows(output, env_ids, rows)
 
 
 @dataclass
@@ -133,16 +118,13 @@ class SensorManager:
         self.device = device
         self.control_hz = control_hz
         self._cameras: dict[str, CameraRecord] = {}
-        # Cameras rendered by shared, backend-neutral code rather than by the backend itself.
-        self._shared_cameras: dict[str, SharedCameraRecord] = {}
-        self._shared_renderers: dict[str, Callable[[SharedCameraRecord, torch.Tensor | None], None]] = {}
         self._lidars: dict[str, LidarRecord] = {}
         self._order: list[str] = []
         self._last_camera_due: set[str] = set()
         self._last_lidar_due: set[str] = set()
 
     def _assert_name_available(self, name: str) -> None:
-        if name in self._cameras or name in self._shared_cameras or name in self._lidars:
+        if name in self._cameras or name in self._lidars:
             raise ValueError(f"Sensor '{name}' already registered.")
 
     def register_camera(self, name: str, config: CameraSensorConfig) -> CameraRecord:
@@ -152,29 +134,6 @@ class SensorManager:
         )
         record = CameraRecord(name=name, config=config, effective_decimation=effective)
         self._cameras[name] = record
-        self._order.append(name)
-        return record
-
-    def register_shared_camera(
-        self,
-        name: str,
-        config: CameraSensorConfig,
-        render: Callable[[SharedCameraRecord, torch.Tensor | None], None],
-    ) -> SharedCameraRecord:
-        """Register a camera rendered by shared code rather than by the backend.
-
-        ``render(record, env_ids)`` renders every env (``env_ids=None``) or only ``env_ids`` into
-        ``record``. It runs from :meth:`render_shared` on the camera's cadence and, for envs reset
-        or teleported since the last render, from :meth:`rerender`. Backends' own render loops never see it:
-        :meth:`collect_due` returns only backend-rendered cameras."""
-        self._assert_name_available(name)
-        effective = resolve_decimation(
-            config.update_decimation, self.control_hz, field=f"camera '{name}' update_decimation"
-        )
-        record = SharedCameraRecord(name=name, config=config, effective_decimation=effective)
-        record.rerender = lambda env_ids: render(record, env_ids)
-        self._shared_cameras[name] = record
-        self._shared_renderers[name] = render
         self._order.append(name)
         return record
 
@@ -200,16 +159,14 @@ class SensorManager:
         return record
 
     def has_camera(self, name: str) -> bool:
-        return name in self._cameras or name in self._shared_cameras
+        return name in self._cameras
 
     def has_lidar(self, name: str) -> bool:
         return name in self._lidars
 
-    def get(self, name: str) -> CameraRecord | SharedCameraRecord:
-        if name in self._shared_cameras:
-            return self._shared_cameras[name]
+    def get(self, name: str) -> CameraRecord:
         if name not in self._cameras:
-            raise KeyError(f"No camera named '{name}'. Registered cameras: {self.camera_names}.")
+            raise KeyError(f"No camera named '{name}'. Registered cameras: {sorted(self._cameras)}.")
         return self._cameras[name]
 
     def get_lidar(self, name: str) -> LidarRecord:
@@ -223,7 +180,7 @@ class SensorManager:
 
     @property
     def camera_names(self) -> list[str]:
-        return [*self._cameras, *self._shared_cameras]
+        return list(self._cameras)
 
     @property
     def lidar_names(self) -> list[str]:
@@ -231,12 +188,7 @@ class SensorManager:
 
     @property
     def cameras(self) -> list[CameraRecord]:
-        """Backend-rendered cameras; shared-code cameras are in :attr:`shared_cameras`."""
         return list(self._cameras.values())
-
-    @property
-    def shared_cameras(self) -> list[SharedCameraRecord]:
-        return list(self._shared_cameras.values())
 
     @property
     def lidars(self) -> list[LidarRecord]:
@@ -252,16 +204,10 @@ class SensorManager:
         return due
 
     def collect_due(self) -> list[CameraRecord]:
-        """Advance the cadence of backend-rendered cameras and return those due this step."""
+        """Advance camera cadence (compatibility name retained for camera backends)."""
         due = self._collect_due(self.cameras)
         self._last_camera_due = {record.name for record in due}
         return due
-
-    def render_shared(self) -> None:
-        """Render every shared-code camera due this control step (see :meth:`register_shared_camera`)."""
-        for record in self._collect_due(self.shared_cameras):
-            self._shared_renderers[record.name](record, None)
-            self._last_camera_due.add(record.name)
 
     def collect_lidars_due(self) -> list[LidarRecord]:
         due = self._collect_due(self.lidars)
@@ -273,7 +219,7 @@ class SensorManager:
 
         Sensors without a ``rerender`` callback keep their last frame, so for one control step
         these envs observe the state from before their reset or teleport."""
-        records: list[SensorRecord] = [*self.cameras, *self.shared_cameras, *self.lidars]
+        records: list[SensorRecord] = [*self.cameras, *self.lidars]
         for record in records:
             if record.rerender is not None:
                 record.rerender(env_ids)

@@ -34,11 +34,8 @@ def setup_depth_camera_mount(
             f"setup_depth_camera_mount needs one range per axis, got {len(position_range)} position and "
             f"{len(euler_deg_range)} rotation ranges."
         )
-    manager = env.simulator.sensor_manager
-    camera = (
-        getattr(manager.get(sensor), "camera", None) if manager is not None and manager.has_camera(sensor) else None
-    )
-    if camera is None or not hasattr(camera, "set_mount_offset"):
+    camera = getattr(env.simulator, "raycast_cameras", {}).get(sensor)
+    if camera is None:
         raise ValueError(f"setup_depth_camera_mount: no ray-cast depth camera named '{sensor}'.")
 
     # Six decorrelated per-env streams: position x/y/z are 0-2, rotations about x/y/z are 3-5.

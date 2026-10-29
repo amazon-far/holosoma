@@ -38,7 +38,7 @@ from holosoma.simulator.isaacsim.prim_utils import (
 )
 from holosoma.simulator.shared.lidar_range import finalize_lidar_returns
 from holosoma.simulator.shared.sensor_manager import SensorManager
-from holosoma.simulator.shared.raycast_depth_camera import register_raycast_depth_cameras
+from holosoma.simulator.shared.raycast_depth_camera import RayCastDepthCamera
 
 if TYPE_CHECKING:
     from holosoma.config_types.sensor import LidarRayPatternConfig, SensorMountConfig
@@ -103,14 +103,19 @@ def _camera_mount_prim_path(mount: SensorMountConfig) -> str:
 
 
 def register_cameras(sim: IsaacSim, manager: SensorManager) -> None:
-    """Register TiledCameras built before environment cloning."""
+    """Register every camera; ray-cast cameras are created here and can re-render a subset of envs."""
+    sim.raycast_cameras = {}
     for name, config in sim.sensor_config.items():
-        if _is_rtx_camera(config):
-            manager.register_camera(name, config)
+        if not isinstance(config, CameraSensorConfig):
+            continue
+        record = manager.register_camera(name, config)
+        if config.isaacsim.renderer == "raycast":
+            sim.raycast_cameras[name] = RayCastDepthCamera(sim, config)
+            record.rerender = partial(sim.raycast_cameras[name].render, record)
 
 
 def render_cameras(sim: IsaacSim) -> None:
-    """Cache each due TiledCamera's RGB/depth as an env-first frame into its buffer.
+    """Cache each due camera's frame into its buffer: ray-cast cameras cast here, TiledCameras are read out.
 
     TiledCameras are RTX sensors the sim already updates in its own render pass
     (``scene.update`` in ``simulate_at_each_physics_step``); this reads that output, drops
@@ -120,6 +125,9 @@ def render_cameras(sim: IsaacSim) -> None:
     if sim.sensor_manager is None:
         return
     for camera_record in sim.sensor_manager.collect_due():
+        if camera_record.name in sim.raycast_cameras:
+            sim.raycast_cameras[camera_record.name].render(camera_record)
+            continue
         out = sim.tiled_cameras[camera_record.name].data.output
         if "rgb" in camera_record.config.data_types:
             rgb = out["rgb"][..., :3]  # [N,H,W,3], drop alpha
@@ -487,12 +495,9 @@ def create_sensors(sim: IsaacSim) -> None:
     sim.sensor_manager = manager
     register_cameras(sim, manager)
     register_lidars(sim, manager)
-    register_raycast_depth_cameras(sim, manager)
 
 
 def render_sensors(sim: IsaacSim) -> None:
     """Capture all camera and LiDAR sensors due this control step."""
     render_cameras(sim)
     render_lidars(sim)
-    if sim.sensor_manager is not None:
-        sim.sensor_manager.render_shared()

@@ -28,7 +28,7 @@ from holosoma.utils.warp_utils import convert_to_wp_mesh
 
 if TYPE_CHECKING:
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-    from holosoma.simulator.shared.sensor_manager import SensorManager, SharedCameraRecord
+    from holosoma.simulator.shared.sensor_manager import CameraRecord
 
 # Rotates the shared optical frame (-Z forward, +Y up) into the pinhole frame the kernel
 # casts in (+Z forward, +Y down): a half turn about X, as an xyzw quaternion.
@@ -222,7 +222,7 @@ class RayCastDepthCamera:
             self._body_pos[:] = self.sim.rigid_body_pos_w[:, self._body_ids]
             self._body_quat[:] = self.sim.rigid_body_quat_w[:, self._body_ids]
 
-    def render(self, record: SharedCameraRecord, env_ids: torch.Tensor | None = None) -> None:
+    def render(self, record: CameraRecord, env_ids: torch.Tensor | None = None) -> None:
         """Render all envs, or only ``env_ids``, into ``record``'s ``"depth"`` buffer."""
         if not self._ready:
             self._setup()
@@ -258,13 +258,3 @@ class RayCastDepthCamera:
         else:
             long_ids = ids.long()
             record.set_buffer_rows("depth", long_ids, self._image[long_ids].unsqueeze(-1))
-
-
-def register_raycast_depth_cameras(sim: BaseSimulator, manager: SensorManager) -> dict[str, RayCastDepthCamera]:
-    """Register every camera configured with ``isaacsim.renderer="raycast"`` with ``manager``."""
-    cameras: dict[str, RayCastDepthCamera] = {}
-    for name, config in sim.sensor_config.items():
-        if isinstance(config, CameraSensorConfig) and config.isaacsim.renderer == "raycast":
-            cameras[name] = RayCastDepthCamera(sim, config)
-            manager.register_shared_camera(name, config, cameras[name].render).camera = cameras[name]
-    return cameras
