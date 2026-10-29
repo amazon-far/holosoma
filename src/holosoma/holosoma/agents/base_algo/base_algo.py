@@ -4,7 +4,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from holosoma.config_types.algo import AlgoInitConfig
-from holosoma.envs.base_task.base_task import BaseTask
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.utils.helpers import instantiate
 from holosoma.utils.safe_torch_import import torch
 
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 class BaseAlgo:
     def __init__(
         self,
-        env: BaseTask,
+        env: PolicyTask,
         config: AlgoInitConfig,
         device: str,
         multi_gpu_cfg: dict[str, int] | None = None,
@@ -38,6 +38,17 @@ class BaseAlgo:
         self._experiment_config: ExperimentConfig | None = None
         self._wandb_run_path: str | None = None
         self.eval_callbacks: list[RLEvalCallback] = []
+
+    def _any_rank_requested_shutdown(self, requested: bool) -> bool:
+        """Return whether any rank's task requested shutdown.
+
+        A collective on multi-GPU runs: every rank must call it at the same point in its loop.
+        """
+        if not self.is_multi_gpu:
+            return requested
+        flag = torch.tensor(float(requested), device=self.device)
+        torch.distributed.all_reduce(flag, op=torch.distributed.ReduceOp.MAX)
+        return bool(flag.item())
 
     def setup(self) -> type[NotImplementedError]:
         return NotImplementedError
@@ -188,7 +199,7 @@ class BaseAlgo:
     def save(self, path: str | None = None, name: str = "last.ckpt") -> Any:
         raise NotImplementedError
 
-    def _unwrap_env(self) -> BaseTask | Any:
+    def _unwrap_env(self) -> PolicyTask | Any:
         """Return the underlying environment.
 
         Algorithms that wrap the task (e.g. ``FastSACEnv``) keep a reference to the

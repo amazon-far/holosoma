@@ -17,7 +17,7 @@ from typing import Any
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.simulator import MujocoBackend
 from holosoma.config_values.experiment import get_annotated_experiment_config
-from holosoma.train_agent import training_context
+from holosoma.train_agent import split_envs_across_ranks, train_on_task
 from holosoma.utils.config_registry import parse_config
 
 REPO_ROOT = Path(__file__).parent.parent.parent.absolute()
@@ -316,9 +316,10 @@ def main():
         ),
     )
 
-    with training_context(config) as ctx:
+    config = split_envs_across_ranks(config)
+    with config.create_task() as env:
         # 1. Train
-        ctx.train()
+        train_on_task(config, env)
 
         # 2. Validate metrics (explicit, linear flow) - only on rank 0
         if os.environ.get("RANK", "0") == "0":

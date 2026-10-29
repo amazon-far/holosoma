@@ -28,8 +28,13 @@ from typing import TYPE_CHECKING, cast
 if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
-from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step, steps_for_seconds
+from tests.simulators._sim_harness import (
+    build_run_sim_config,
+    launch_simulator,
+    run_and_hard_exit,
+    step,
+    steps_for_seconds,
+)
 
 if TYPE_CHECKING:
     from holosoma.config_types.sensor import CameraSensorConfig
@@ -108,8 +113,7 @@ def main() -> int:
 
         config = dataclasses.replace(config, plugin={**config.plugin, "rec": CameraVizPluginConfig(record_video=True)})
 
-    env, device, _app = setup_simulation_environment(config, device=device)
-    sim = env.sim
+    sim, device, _app = launch_simulator(config, device=device)
     sim.set_headless(headless)
     sim.setup()
     sim.setup_terrain()

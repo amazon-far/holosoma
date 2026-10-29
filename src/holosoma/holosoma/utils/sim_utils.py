@@ -1,45 +1,26 @@
 """Shared simulation utilities for holosoma.
 
-This module provides common functionality for setting up and running simulations,
-shared between eval_agent.py and run_sim.py.
+Provider launch, signal handling, and dependency-ordered teardown used by
+:func:`holosoma.simulator.session.task_session`.
 """
 
 from __future__ import annotations
 
 import argparse
-import functools
 import os
 import signal
 import sys
 import threading
-import time
 import traceback
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager, suppress
-from types import TracebackType
-from typing import Any, TypeVar
+from typing import Any
 
 from loguru import logger
-from typing_extensions import ParamSpec, Self
 
-from holosoma.config_types.env import get_tyro_env_config
-from holosoma.config_types.experiment import ExperimentConfig
-from holosoma.config_types.full_sim import FullSimConfig
-from holosoma.config_types.run_sim import RunSimConfig
-from holosoma.config_types.sensor import CameraSensorConfig, validate_camera_dict
-from holosoma.managers.terrain.manager import TerrainManager
-from holosoma.simulator.base_simulator.hooks import Phase
-from holosoma.utils.common import seeding
-from holosoma.utils.helpers import get_class
-from holosoma.utils.rate import RateLimiter
-from holosoma.utils.safe_torch_import import torch
+from holosoma.config_types.env import EnvConfig
+from holosoma.config_types.sensor import CameraSensorConfig
 from holosoma.utils.simulator_config import SimulatorType, get_simulator_type, set_simulator_type
-from holosoma.utils.torch_utils import to_torch
-
-_PERFORMANCE_LOG_INTERVAL_STEPS = 1000
-
-P = ParamSpec("P")
-R = TypeVar("R")
 
 
 @contextmanager
@@ -61,18 +42,7 @@ def exit_on_sigterm() -> Iterator[None]:
         signal.signal(signal.SIGTERM, previous_handler)
 
 
-def graceful_simulation_signals(func: Callable[P, R]) -> Callable[P, R]:
-    """Install simulation signal semantics around one public entrypoint."""
-
-    @functools.wraps(func)
-    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-        with exit_on_sigterm():
-            return func(*args, **kwargs)
-
-    return wrapper
-
-
-def _format_simulation_performance(
+def format_simulation_performance(
     physics_steps: int,
     control_steps: int,
     sim_dt: float,
@@ -93,12 +63,12 @@ def _format_simulation_performance(
     )
 
 
-def setup_simulator_imports(config: ExperimentConfig | RunSimConfig) -> None:
+def setup_simulator_imports(config: EnvConfig) -> None:
     """Setup simulator-specific imports without side effects.
 
     Parameters
     ----------
-    config : ExperimentConfig | RunSimConfig
+    config : EnvConfig
         Configuration containing simulator settings.
     """
     set_simulator_type(config.simulator)
@@ -132,13 +102,13 @@ def _ensure_render_pipeline_active() -> None:
         settings.set_bool("/isaaclab/render/offscreen", True)
 
 
-def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str | None = None) -> Any | None:
+def setup_isaaclab_launcher(config: EnvConfig, device: str) -> Any | None:
     """Handle IsaacSim-specific launcher setup.
 
     Parameters
     ----------
-    config : ExperimentConfig | RunSimConfig
-        Configuration containing simulator and training settings.
+    config : EnvConfig
+        Configuration of the task the app will host. ``training.num_envs`` is per process.
     device : str
         Resolved device string (e.g., 'cuda:0', 'cpu').
 
@@ -159,29 +129,19 @@ def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str
     # Parse known arguments to get argparse params
     args_cli, unknown_args = parser.parse_known_args()
 
-    # Set values from config — divide by world_size for multi-GPU so each rank's
-    # AppLauncher only allocates resources for its share of environments.
-    # (The full num_envs is divided again in train_agent.train(), but AppLauncher
-    # needs the per-rank count at init time to avoid over-allocating GPU memory.)
-    world_size = int(os.environ.get("WORLD_SIZE", "1"))
-    args_cli.num_envs = config.training.num_envs // world_size if world_size > 1 else config.training.num_envs
+    args_cli.num_envs = config.training.num_envs
     args_cli.seed = config.training.seed
     args_cli.env_spacing = config.scene.env_spacing
     args_cli.output_dir = config.logger.base_dir
     args_cli.headless = config.training.headless
-    if world_size > 1:
-        # Distribute simulator across GPUs when using multi-gpu training
-        args_cli.device = f"cuda:{int(os.environ.get('LOCAL_RANK', '0'))}"
+    args_cli.device = device
+    # Distribute the simulator across GPUs when using multi-GPU training.
+    if int(os.environ.get("WORLD_SIZE", "1")) > 1:
         args_cli.distributed = True
-    elif device is not None:
-        # Use the resolved device
-        args_cli.device = device
-    else:  # AppLauncher auto-detects
-        pass
 
     # LiDAR ray queries do not need RTX; only video and TiledCamera sensors enable the renderer.
     video_enabled = config.logger.video.enabled or config.logger.headless_recording
-    cameras_enabled = any(isinstance(sensor, CameraSensorConfig) for sensor in getattr(config, "sensor", {}).values())
+    cameras_enabled = any(isinstance(sensor, CameraSensorConfig) for sensor in config.sensors.values())
     needs_rendering = video_enabled or cameras_enabled
     if needs_rendering:
         args_cli.enable_cameras = True
@@ -271,137 +231,6 @@ def setup_keyboard_listener(env: Any) -> threading.Thread:
     return key_listener_thread
 
 
-def setup_simulation_environment(
-    config: ExperimentConfig | RunSimConfig, device: str | None = None
-) -> tuple[Any, str, Any]:
-    """Setup simulation environment with shared infrastructure.
-
-    This function handles common setup for training, evaluation and direct simulation:
-    - Simulator imports and initialization
-    - Device selection and seeding
-    - Environment creation
-    - Keyboard listener setup (if not headless)
-
-    Parameters
-    ----------
-    config : ExperimentConfig | RunSimConfig
-        Configuration containing all simulation settings.
-    device : str | None, optional
-        Device to use for simulation. If None, auto-detects CUDA availability.
-
-    Returns
-    -------
-    tuple[Any, str, Any]
-        Tuple of (environment, device_string, simulation_app).
-        simulation_app is None for simulators that don't need it (MuJoCo).
-    """
-    logger.info("🚀 Setting up simulation environment...")
-
-    # Setup simulator imports
-    setup_simulator_imports(config)
-
-    # Device selection - must happen before IsaacSim launcher setup
-    if device is None:
-        device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    logger.info(f"Device: {device}")
-
-    # Handle IsaacSim launcher if needed (for both ExperimentConfig and RunSimConfig)
-    simulation_app = None
-    if get_simulator_type() == SimulatorType.ISAACSIM:
-        simulation_app = setup_isaaclab_launcher(config, device)
-
-    try:
-        env = _create_simulation_environment(config, device)
-    except BaseException:
-        try:
-            close_simulation_resources(None, simulation_app)
-        except Exception:
-            with suppress(Exception):
-                logger.exception("Simulation app cleanup failed while preserving the setup error")
-        raise
-    return env, device, simulation_app
-
-
-def _create_simulation_environment(config: ExperimentConfig | RunSimConfig, device: str) -> Any:
-    """Construct the configured environment after its provider app is available."""
-    # Set random seed if specified (only for ExperimentConfig)
-    if isinstance(config, ExperimentConfig) and config.training.seed is not None:
-        seeding(config.training.seed, torch_deterministic=config.training.torch_deterministic)
-        logger.info(f"Seed: {config.training.seed}")
-
-    # For RunSimConfig, we need a different approach since it doesn't have env_class or training configs
-    if isinstance(config, RunSimConfig):
-        # For run_sim.py, we'll create the simulator directly instead of using environment wrapper
-        logger.info("Direct simulation mode - creating simulator directly, without experiment config")
-
-        # Cross-camera validation (Warp render-flag agreement) across the assembled camera dict.
-        validate_camera_dict(
-            {name: sensor for name, sensor in config.sensor.items() if isinstance(sensor, CameraSensorConfig)}
-        )
-
-        # Create FullSimConfig from RunSimConfig.
-        full_config = FullSimConfig(
-            simulator=config.simulator.config,
-            robot=config.robot,
-            scene=config.scene,
-            # The CLI declares mounted sensors per key (key = sensor name).
-            sensors=dict(config.sensor),
-            training=config.training,
-            logger=config.logger,
-            plugin=config.plugin,
-            experiment_dir=None,
-        )
-
-        # For compatibility, minimal proxy for TerrainManager since it depends on env.
-        # Carries the requested num_envs through to the terrain manager.
-        class EnvProxy:
-            def __init__(self, device: str, num_envs: int) -> None:
-                self.num_envs = num_envs
-                self.device = device
-
-        # For compatibility, wrap in a minimal object that has .sim attribute
-        class DirectSimWrapper:
-            def __init__(self, simulator: Any) -> None:
-                self.sim = simulator
-
-            def reset(self) -> None:
-                # Basic reset - just initialize the simulator if needed
-                if hasattr(self.sim, "reset"):
-                    self.sim.reset()
-
-            def close(self) -> None:
-                if hasattr(self.sim, "close"):
-                    self.sim.close()
-
-        # Use terrain configuration from RunSimConfig
-        terrain_manager = TerrainManager(config.terrain, env=EnvProxy(device, config.training.num_envs), device=device)
-
-        # Create simulator using get_class() to avoid circular imports
-        simulator_class = get_class(config.simulator._target_)
-        simulator = simulator_class(full_config, terrain_manager, device)
-
-        # Now we have an "env" to return which is actually the direct simulator
-        env = DirectSimWrapper(simulator)
-        logger.debug("Direct simulator created successfully!")
-
-    else:
-        # Original ExperimentConfig path
-        env_target = config.env_class
-        tyro_env_config = get_tyro_env_config(config)
-
-        logger.info(f"Creating environment: {env_target}")
-        env_class = get_class(env_target)
-        env = env_class(tyro_env_config, device=device)
-
-        logger.debug("Environment created successfully!")
-
-        # Setup keyboard listener if not headless
-        if not config.training.headless:
-            setup_keyboard_listener(env)
-
-    return env
-
-
 def _simulation_exit_code(failure: BaseException | None) -> int:
     """Match Python's exception and signal exit statuses."""
     if failure is None:
@@ -455,7 +284,7 @@ def close_simulation_app(simulation_app: Any) -> None:
     Parameters
     ----------
     simulation_app : Any
-        The simulation app instance returned by init_sim_imports().
+        The simulation app instance returned by setup_isaaclab_launcher().
         Can be None for simulators that don't have an app (e.g., MuJoCo).
     """
     failure = sys.exc_info()[1]
@@ -564,354 +393,3 @@ def close_simulation_resources(env: Any, simulation_app: Any) -> None:
         _close_simulation_app(simulation_app, failure)
     except Exception as exc:
         raise RuntimeError("Simulation app cleanup failed") from exc
-
-
-@contextmanager
-def simulation_resource_session(env: Any, simulation_app: Any) -> Iterator[Any]:
-    """Close one environment/app pair while preserving an active body exception."""
-    try:
-        yield env
-    except BaseException:
-        try:
-            close_simulation_resources(env, simulation_app)
-        except Exception:
-            with suppress(Exception):
-                logger.exception("Simulation cleanup failed while preserving the active exception")
-        raise
-    else:
-        close_simulation_resources(env, simulation_app)
-
-
-class DirectSimulation:
-    """Encapsulates direct simulation logic for run_sim.py.
-
-    This class provides a clean interface for running direct simulations without
-    training or evaluation environments, handling all initialization,
-    loop management, and cleanup logic.
-
-    Can be used as a context manager for resource management.
-
-    Examples
-    --------
-    >>> with DirectSimulation(config, env, device, simulation_app) as sim:
-    ...     sim.run()
-    """
-
-    def __init__(self, config: RunSimConfig, env: Any, device: str, simulation_app: Any):
-        """Initialize DirectSimulation instance.
-
-        Parameters
-        ----------
-        config : RunSimConfig
-            Configuration containing all simulation settings.
-        env : Any
-            Environment wrapper containing the simulator.
-        device : str
-            Device for tensor operations.
-        simulation_app : Any
-            Simulation app instance (if any).
-        """
-        self.config = config
-        self.env = env
-        self.device = device
-        self.simulation_app = simulation_app
-        self.simulator = env.sim
-
-    def __enter__(self) -> Self:
-        """Context manager entry - initialize the simulation.
-
-        Returns
-        -------
-        Self
-            Self for use in the with statement.
-        """
-        try:
-            self.initialize()
-        except BaseException:
-            try:
-                self.cleanup()
-            except Exception:
-                with suppress(Exception):
-                    logger.exception("Direct simulation cleanup failed after initialization error")
-            raise
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
-        """Context manager exit - cleanup the simulation.
-
-        Parameters
-        ----------
-        exc_type : type or None
-            Exception type if an exception occurred.
-        exc_val : Exception or None
-            Exception instance if an exception occurred.
-        exc_tb : traceback or None
-            Traceback if an exception occurred.
-        """
-        try:
-            self.cleanup()
-        except Exception:
-            if exc_val is None:
-                raise
-            with suppress(Exception):
-                logger.exception("Direct simulation cleanup failed while preserving the active exception")
-
-    def initialize(self) -> None:
-        """Handle the complete simulator initialization sequence.
-
-        Performs the initialization process required for proper simulator
-        lifecycle management. Ideally this is moved into the simulator interface and
-        to simplify training, evaluation and direct usage.
-        """
-        logger.debug("Initializing simulator...")
-
-        # Headless lives in training config. Honoring it here is what keeps --training.headless True
-        # from bringing up the viewer and pulling in isaacsim.util.debug_draw with it.
-        self.simulator.set_headless(self.config.training.headless)
-
-        # Step 1: Basic setup
-        self.simulator.setup()
-        logger.debug("simulator.setup() completed")
-
-        # Step 2: Setup terrain
-        self.simulator.setup_terrain()
-        logger.debug("simulator.setup_terrain() completed")
-
-        # Step 3: Load assets (this initializes the bridge!)
-        self.simulator.load_assets()
-        logger.debug("simulator.load_assets() completed - bridge should now be initialized")
-
-        # Step 4: Direct sim2sim controls one environment at the origin.
-        env_origins = torch.zeros(1, 3, device=self.device)
-
-        # Create base_init_state from robot config
-        base_init_state = self._create_base_init_state()
-
-        self.simulator.create_envs(1, env_origins, base_init_state)
-        logger.debug("simulator.create_envs() completed")
-
-        # Step 5: Prepare simulation
-        self.simulator.prepare_sim()
-        logger.debug("simulator.prepare_sim() completed")
-
-        # Step 6: Setup viewer if not headless
-        if not self.config.training.headless:
-            self.simulator.setup_viewer()
-            logger.debug("simulator.setup_viewer() completed")
-
-        self.simulator.install_plugins()
-
-        # Step 6.5: Initialize episode (positions virtual gantry, starts lifecycle participants, etc.)
-        self.simulator.hooks.emit(Phase.EPISODE_START, 0)
-        logger.debug("simulator episode-start hooks completed")
-
-        logger.info("Simulator initialized")
-
-        # Step 7: Toggle start recording if enabled
-        if self.simulator.video_recorder and self.simulator.video_recorder.enabled:
-            # arbitrary episode ID given this is sim2sim, we may want to
-            # actually support toggling recording and with better filenames too
-            self.simulator.video_recorder.start_recording(episode_id=0)
-
-    def run(self) -> None:
-        """Run the direct simulation loop with viewer sync and performance logging.
-
-        Manages the complete simulation loop including rate limiting,
-        viewer synchronization, performance logging, and error handling.
-        """
-        # Setup rate limiting
-        sim_frequency = self.config.simulator.config.sim.fps
-        control_decimation = self.config.simulator.config.sim.control_decimation_steps
-        control_frequency = sim_frequency / control_decimation
-        time_scale = self.config.time_scale
-        rate_limiter = RateLimiter(sim_frequency * time_scale) if time_scale > 0 else None
-
-        # Calculate viewer sync frequency
-        viewer_steps = self._calculate_viewer_steps()
-
-        logger.info(
-            f"Configured simulation rates: {sim_frequency} Hz physics "
-            f"({1.0 / sim_frequency * 1000:.2f} ms/step), {control_frequency:g} Hz control "
-            f"(every {control_decimation} physics steps)"
-        )
-        logger.info(f"Viewer rate: {1 / self.config.viewer_dt:.1f} Hz (sync every {viewer_steps} steps)")
-
-        # Determine refresh strategy based on simulator type
-        # IsaacSim: needs pre-step to refresh tensors to sync simulator state
-        # MuJoCo: no pre-step refresh needed because we are NOT running an envs/tasks requiring
-        #         those tensors e.g, _rigid_body_rot, _rigid_body_vel, etc.
-        simulator_type = get_simulator_type()
-        if simulator_type == SimulatorType.ISAACSIM:
-            refresh_tensors = self.simulator.refresh_sim_tensors
-        else:
-            refresh_tensors = lambda: None  # noqa: E731  (No-op for MuJoCo)
-
-        logger.info("Starting direct simulation loop...")
-        logger.info("Press Ctrl+C to stop simulation")
-
-        # Direct simulation loop (like holosoma_inference's simulation_thread)
-        step_count = 0
-        control_step_count = 0
-        window_physics_steps = 0
-        window_control_steps = 0
-        start_time = time.perf_counter()
-        performance_window_start = start_time
-
-        while True:
-            try:
-                # Direct simulator step with the same phase schedule BaseTask uses: one FRAME_BEGIN,
-                # then every substep of the control step, then one FRAME_END.
-                is_control_step = step_count % control_decimation == 0
-                is_frame_end = step_count % control_decimation == control_decimation - 1
-
-                # A plugin may end a finite run (e.g. motion playback reaching the end of its clip).
-                # request_shutdown promises to stop after the current frame, so the flag is acted on
-                # only at a frame boundary: a frame already under way runs its remaining substeps and
-                # egresses, rather than losing its render and telemetry to a mid-frame exit.
-                if is_control_step and self.simulator.shutdown_requested:
-                    logger.info("Simulation loop exiting: simulator shutdown requested.")
-                    break
-
-                # Refresh tensors if needed (no-op for MuJoCo) so PRE_STEP writers see current state.
-                refresh_tensors()
-
-                if is_control_step:
-                    self.simulator.hooks.emit(Phase.FRAME_BEGIN)
-                self.simulator.hooks.emit(Phase.PRE_STEP)
-                self.simulator.simulate_at_each_physics_step()
-                self.simulator.hooks.emit(Phase.POST_STEP)
-
-                # Mounted cameras render and egress consumers publish here, as FRAME_END plugins
-                # (once per control step). render_sensors is registered before any consumer, so
-                # buffers are fresh; both no-op when no cameras/consumers are configured.
-                #
-                # Closing on the control step's LAST substep is what makes the image a consumer reads
-                # the one drawn for the state this step wrote: a backend draws when its substep counter
-                # reaches render_interval. Every frame that opens closes, since plugins pair per-frame
-                # work across the two phases; one that must not egress its last frame asks for shutdown
-                # from FRAME_END (motion playback does).
-                if is_frame_end:
-                    # Resync first, as BaseTask._post_physics_step does, so state published beside the
-                    # image describes the same substep. The refresh above predates this substep's step.
-                    refresh_tensors()
-                    self.simulator.hooks.emit(Phase.FRAME_END)
-
-                # Headless backends render cameras/video on their own render schedule.
-                if not self.config.training.headless and step_count % viewer_steps == 0:
-                    self.simulator.render()
-
-                step_count += 1
-                window_physics_steps += 1
-                if is_control_step:
-                    control_step_count += 1
-                    window_control_steps += 1
-
-                if window_physics_steps == _PERFORMANCE_LOG_INTERVAL_STEPS:
-                    performance_window_start = self._log_performance(
-                        window_physics_steps,
-                        window_control_steps,
-                        performance_window_start,
-                    )
-                    window_physics_steps = 0
-                    window_control_steps = 0
-
-                if rate_limiter is not None:
-                    rate_limiter.sleep()
-
-            except KeyboardInterrupt:
-                with suppress(Exception):
-                    logger.info("Simulation interrupted by user (Ctrl+C)")
-                raise
-            except Exception:
-                # Native cleanup reports the traceback before environment teardown.
-                traceback_reported_by_cleanup = (
-                    simulator_type == SimulatorType.ISAACSIM and self.simulation_app is not None
-                )
-                with suppress(Exception):
-                    logger.opt(exception=not traceback_reported_by_cleanup).error(
-                        f"Error during simulation step {step_count}"
-                    )
-                raise
-
-        # Final statistics
-        total_elapsed = time.perf_counter() - start_time
-        logger.info(f"Simulation completed after {step_count} physics steps and {control_step_count} control steps")
-        logger.info(
-            _format_simulation_performance(
-                step_count,
-                control_step_count,
-                1.0 / sim_frequency,
-                total_elapsed,
-                prefix="Average simulation performance",
-            )
-        )
-
-    def cleanup(self) -> None:
-        """Handle simulation cleanup."""
-        close_simulation_resources(self.env, self.simulation_app)
-
-    def _create_base_init_state(self) -> torch.Tensor:
-        """Create base initialization state tensor from robot configuration.
-
-        Returns
-        -------
-        torch.Tensor
-            Base initialization state tensor.
-        """
-        base_init_state_list = (
-            self.config.robot.init_state.pos
-            + self.config.robot.init_state.rot
-            + self.config.robot.init_state.lin_vel
-            + self.config.robot.init_state.ang_vel
-        )
-        return to_torch(base_init_state_list, device=self.device, requires_grad=False)
-
-    def _calculate_viewer_steps(self) -> int:
-        """Calculate viewer synchronization frequency.
-
-        Returns
-        -------
-        int
-            Number of simulation steps between viewer updates.
-        """
-        viewer_dt = self.config.viewer_dt
-        sim_dt = 1.0 / self.config.simulator.config.sim.fps
-        return max(1, int(viewer_dt / sim_dt))
-
-    def _log_performance(
-        self,
-        physics_steps: int,
-        control_steps: int,
-        window_start_time: float,
-    ) -> float:
-        """Log simulation performance over the latest measurement window.
-
-        Parameters
-        ----------
-        physics_steps : int
-            Number of physics steps completed in the measurement window.
-        control_steps : int
-            Number of control steps completed in the measurement window.
-        window_start_time : float
-            Monotonic start time for the measurement window.
-
-        Returns
-        -------
-        float
-            Monotonic start time for the next measurement window.
-        """
-        now = time.perf_counter()
-        logger.info(
-            _format_simulation_performance(
-                physics_steps,
-                control_steps,
-                1.0 / self.config.simulator.config.sim.fps,
-                now - window_start_time,
-            )
-        )
-        return now

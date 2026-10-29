@@ -48,19 +48,19 @@ def build_full_env(simulator_cfg, *, num_envs: int, device: str, scene_cfg=None,
     """Yield a real, fully-managed locomotion env for DR testing — NO shims.
 
     Swaps the ``simulator`` (and optionally ``scene``) of the ``g1_29dof`` experiment preset and
-    constructs the env through the production path (``get_class(env_class)(get_tyro_env_config)``
-    under ``training_context``), so it has a real action_manager (with the ``joint_control`` term)
-    and randomization_manager (push/actuator states) wired exactly as training does. The
-    ``g1_29dof`` randomization preset already runs the setup DR terms during construction; this
+    constructs the env through the production path (``cfg.create_task()``), so it has a real
+    action_manager (with the ``joint_control`` term) and randomization_manager (push/actuator
+    states) wired exactly as training does. The ``g1_29dof`` randomization preset already runs the
+    setup DR terms during construction; this
     yields the built env (NO ``reset_all``) so the per-term checks can re-run each term with known
     ranges and read the result straight off the model.
 
-    ``reset_all`` is deliberately NOT called: it steps physics, which triggers the locomotion
+    ``reset_all`` is deliberately NOT called: its reset synchronization triggers the locomotion
     terrain height-scan (warp ray-cast) — unrelated to DR and version-fragile — while the DR
-    checks need only the constructed env + managers, not a physics step.
+    checks need only the constructed env + managers.
 
-    A context manager (not a plain return) so ``training_context`` stays open for the whole test —
-    its ``__exit__`` calls ``close_simulation_app``, which would tear down the IsaacSim app early.
+    A context manager (not a plain return) so the task context stays open for the whole test —
+    its exit closes the IsaacSim app.
 
     Parameters
     ----------
@@ -69,17 +69,14 @@ def build_full_env(simulator_cfg, *, num_envs: int, device: str, scene_cfg=None,
     num_envs : int
         1 for the MuJoCo ClassicBackend (single-env only); >1 for the GPU backends.
     device : str
-        ``"cpu"`` for classic, ``"cuda:0"`` for the GPU backends.
+        ``"cpu"`` for classic, ``"cuda:0"`` for the GPU backends; must match the resolved task device.
     scene_cfg : SceneConfig | None
         Scene preset; defaults to ``free_and_static`` so object DR has a free body to target.
     """
-    # Imported lazily: importing config_values / train_agent pulls in the simulator stack, which
+    # Imported lazily: importing config_values pulls in the simulator stack, which
     # the per-backend launcher (isaacsim) must initialize before torch is imported.
-    from holosoma.config_types.env import get_tyro_env_config
     from holosoma.config_values import experiment
-    from holosoma.train_agent import training_context
     from holosoma.utils.common import seeding
-    from holosoma.utils.helpers import get_class
 
     # Default object scene is a test preset (free + static bodies), injected here by object (no tyro).
     from tests.simulators._scene_presets import free_and_static
@@ -94,10 +91,8 @@ def build_full_env(simulator_cfg, *, num_envs: int, device: str, scene_cfg=None,
             base.training, num_envs=num_envs, headless=True, seed=seed, torch_deterministic=False
         ),
     )
-    with (
-        training_context(cfg) as context,
-        context.simulation_session(get_class(cfg.env_class)(get_tyro_env_config(cfg), device=device)) as env,
-    ):
+    with cfg.create_task() as env:
+        assert env.device == device, f"task resolved device {env.device!r}, expected {device!r}"
         yield env
 
 

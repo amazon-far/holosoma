@@ -864,6 +864,11 @@ class MuJoCo(BaseSimulator):
         self._rigid_body_vel.copy_(linear_vel)
         self._rigid_body_ang_vel.copy_(angular_vel)
 
+    def synchronize_after_reset(self) -> None:
+        """Run FK after state writes, then refresh the robot body state."""
+        self.forward_kinematics()
+        self.refresh_sim_tensors()
+
     def apply_torques_at_dof(self, torques: torch.Tensor, dof_indices: list[int] | None = None) -> None:
         """Apply torques with backend-specific optimization.
 

@@ -5,83 +5,17 @@ import logging
 import os
 import sys
 import traceback
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
-from types import TracebackType
-from typing import Any, TypedDict, cast
+from typing import Any, TypedDict
 
 from loguru import logger
-from typing_extensions import Self
 
 from holosoma.agents.distillation.checkpoint import infer_num_teachers_from_checkpoint
-from holosoma.config_types.env import get_tyro_env_config
 from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.utils.config_utils import CONFIG_NAME
-from holosoma.utils.eval_utils import (
-    init_sim_imports,
-    load_checkpoint,
-)
+from holosoma.utils.eval_utils import load_checkpoint
 from holosoma.utils.helpers import get_class
-from holosoma.utils.sim_utils import (
-    close_simulation_app,
-    close_simulation_resources,
-    exit_on_sigterm,
-    graceful_simulation_signals,
-    simulation_resource_session,
-)
-
-
-class TrainingContext:
-    """Context manager for training lifecycle and resource management."""
-
-    def __init__(self, config: ExperimentConfig) -> None:
-        self.config = config
-        self.simulation_app: Any | None = None
-        self._close_app_on_exit = True
-
-    def __enter__(self) -> Self:
-        # Initialize simulation app
-        self._close_app_on_exit = True
-        self.simulation_app = init_sim_imports(self.config)
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
-        if not self._close_app_on_exit:
-            return
-        try:
-            close_simulation_app(self.simulation_app)
-        except Exception:
-            if exc_val is None:
-                raise
-            logger.exception("Training cleanup failed while preserving the active exception")
-
-    def _keep_provider_open(self) -> None:
-        """Keep the provider alive when dependent environment teardown failed."""
-        self._close_app_on_exit = False
-
-    @contextmanager
-    def simulation_session(self, env: Any) -> Iterator[Any]:
-        """Own one environment and this context's provider as a dependency-ordered pair."""
-        self._close_app_on_exit = False
-        with simulation_resource_session(env, self.simulation_app) as owned_env:
-            yield owned_env
-
-    def train(self) -> None:
-        """Train using this context's sim app."""
-        train(self.config, training_context=self)
-
-
-@contextmanager
-def training_context(config: ExperimentConfig) -> Iterator[TrainingContext]:
-    """Context manager function for training."""
-    with exit_on_sigterm(), TrainingContext(config) as ctx:
-        yield ctx
 
 
 class MultGPUConfig(TypedDict):
@@ -131,28 +65,6 @@ def configure_multi_gpu() -> MultGPUConfig | None:
     return multi_gpu_config
 
 
-def get_device(config: ExperimentConfig, distributed_conf: MultGPUConfig | None) -> str:
-    import torch
-
-    is_config_device_specified = hasattr(config, "device") and config.device is not None
-    is_multi_gpu = distributed_conf is not None
-
-    if is_config_device_specified:
-        config_device = config.device  # type: ignore[attr-defined]
-        if is_multi_gpu and config_device != cast("dict[str, int]", distributed_conf)["local_rank"]:
-            local_rank = cast("dict[str, int]", distributed_conf)["local_rank"]
-            raise ValueError(
-                f"Device specified in config ({config_device}) does not match expected local rank {local_rank}"
-            )
-        device = config_device
-    elif is_multi_gpu:
-        device = f"cuda:{cast('dict[str, int]', distributed_conf)['local_rank']}"
-    else:
-        device = "cuda:0" if torch.cuda.is_available() else "cpu"
-
-    return cast("str", device)
-
-
 def configure_logging(distributed_conf: MultGPUConfig | None = None, log_dir: Path | None = None) -> None:
     # Configure logging.
     from holosoma.utils.logging import LoguruLoggingBridge
@@ -176,239 +88,198 @@ def configure_logging(distributed_conf: MultGPUConfig | None = None, log_dir: Pa
     logging.getLogger().addHandler(LoguruLoggingBridge())
 
 
-@graceful_simulation_signals
-def train(tyro_config: ExperimentConfig, training_context: TrainingContext | None = None) -> None:
-    """Train an agent with optional context for sim app management.
+def split_envs_across_ranks(tyro_config: ExperimentConfig) -> ExperimentConfig:
+    """Return ``tyro_config`` with ``training.num_envs`` divided among the distributed ranks.
 
-    Parameters
-    ----------
-    training_context : Optional[TrainingContext]
-        Optional training context with pre-initialized sim app.
-        If None, creates and manages sim app automatically.
+    Call it before ``create_task()``: each rank builds only its share of the environments.
     """
+    world_size = int(os.getenv("WORLD_SIZE", "1"))
+    if world_size <= 1:
+        return tyro_config
+    original_num_envs = tyro_config.training.num_envs
+    tyro_config = dataclasses.replace(
+        tyro_config, training=dataclasses.replace(tyro_config.training, num_envs=original_num_envs // world_size)
+    )
+    logger.info(
+        f"Distributed training: each of {world_size} GPUs will run {tyro_config.training.num_envs} "
+        f"environments (total across all GPUs: {original_num_envs})"
+    )
+    return tyro_config
 
-    if training_context is not None:
-        # Use the context's pre-initialized sim app
-        simulation_app = training_context.simulation_app
-        auto_close = False  # Context will handle closing
-    else:
-        # Default behavior - create and manage sim app ourselves
-        simulation_app = init_sim_imports(tyro_config)
-        auto_close = True
 
-    env = None
+def train(tyro_config: ExperimentConfig) -> None:
+    """Train an agent on the task built from ``tyro_config``."""
+    tyro_config = split_envs_across_ranks(tyro_config)
     try:
-        import torch
-        import torch.distributed as dist
-        import wandb
-
-        from holosoma.agents.base_algo.base_algo import BaseAlgo
-        from holosoma.utils.common import seeding
-
-        # unresolved_conf = dataclasses.asdict(tyro_config)
-        # import ipdb; ipdb.set_trace()
-
-        # Initialize process group
-        distributed_conf: MultGPUConfig | None = configure_multi_gpu()
-        device: str = get_device(tyro_config, distributed_conf)
-        is_distributed = distributed_conf is not None
-        is_main_process = distributed_conf is None or distributed_conf["global_rank"] == 0
-
-        # Configure logger
-        logger_cfg = tyro_config.logger
-        wandb_enabled = logger_cfg.type == "wandb"
-
-        # Compute experiment directory from logger and training config
-        from holosoma.utils.experiment_paths import get_experiment_dir, get_timestamp
-
-        timestamp = get_timestamp()
-        experiment_dir = get_experiment_dir(logger_cfg, tyro_config.training, timestamp, task_name="locomotion")
-
-        # Configure logging with experiment directory
-        configure_logging(distributed_conf=distributed_conf, log_dir=experiment_dir)
-
-        # Random seed
-        seed = tyro_config.training.seed
-        if distributed_conf is not None:
-            seed += distributed_conf["global_rank"]
-        seeding(seed, torch_deterministic=tyro_config.training.torch_deterministic)
-
-        wandb_run_path: str | None = None
-
-        # Configure wandb in rank 0
-        if wandb_enabled and is_main_process:
-            from holosoma.config_types.logger import WandbLoggerConfig
-
-            assert isinstance(logger_cfg, WandbLoggerConfig), (
-                "Logger config must be WandbLoggerConfig when type is wandb"
-            )
-            wandb_cfg = logger_cfg
-            # Use training config for project/name, fallback to logger config, then defaults
-            default_project = tyro_config.training.project or wandb_cfg.project or "default_project"
-            default_run_name = (
-                f"{timestamp}_{tyro_config.training.name or 'run'}_"
-                f"{wandb_cfg.group or 'default'}_{tyro_config.robot.asset.robot_type}"
-            )
-            wandb_dir = Path(wandb_cfg.dir or (experiment_dir / ".wandb"))
-            wandb_dir.mkdir(exist_ok=True, parents=True)
-            logger.info(f"Saving wandb logs to {wandb_dir}")
-
-            # Only pass optional parameters when specified so wandb can fall back to environment defaults.
-            wandb_kwargs: dict[str, Any] = {
-                "project": wandb_cfg.project or default_project,
-                "name": wandb_cfg.name or default_run_name,
-                "config": dataclasses.asdict(tyro_config),
-                "dir": str(wandb_dir),
-                "mode": wandb_cfg.mode,
-            }
-            wandb_entity = os.getenv("WANDB_ENTITY") or wandb_cfg.entity
-            if wandb_entity:
-                wandb_kwargs["entity"] = wandb_entity
-            if wandb_cfg.group:
-                wandb_kwargs["group"] = wandb_cfg.group
-            if wandb_cfg.id:
-                wandb_kwargs["id"] = wandb_cfg.id
-            if wandb_cfg.tags:
-                wandb_kwargs["tags"] = list(wandb_cfg.tags)
-            if wandb_cfg.resume is not None:
-                wandb_kwargs["resume"] = wandb_cfg.resume
-
-            wandb.init(**wandb_kwargs)
-            if wandb.run is not None:
-                wandb_run_path = f"{wandb.run.entity}/{wandb.run.project}/{wandb.run.id}"
-
-        # Distribute environments across GPUs for proper multi-GPU training
-        if distributed_conf is not None:
-            original_num_envs = tyro_config.training.num_envs
-            num_envs = original_num_envs // distributed_conf["world_size"]
-            tyro_config = dataclasses.replace(
-                tyro_config, training=dataclasses.replace(tyro_config.training, num_envs=num_envs)
-            )
-            logger.info(
-                f"Distributed training: GPU {distributed_conf['global_rank']} will run {tyro_config.training.num_envs} "
-                f"environments (total across all GPUs: {original_num_envs})"
-            )
-
-        env_target = tyro_config.env_class
-
-        tyro_env_config = get_tyro_env_config(tyro_config)
-        env = get_class(env_target)(tyro_env_config, device=device)
-
-        # For manager system, pre-process config AFTER env creation
-        # (need managers to compute dims)
-        observation_manager = getattr(env, "observation_manager", None)
-        if observation_manager is None:
-            raise RuntimeError(
-                f"Manager environment {env_target} is missing observation_manager attribute. "
-                "This should not happen if the environment is properly configured."
-            )
-
-        experiment_save_dir = experiment_dir
-        experiment_save_dir.mkdir(exist_ok=True, parents=True)
-
-        if is_main_process:
-            logger.info(f"Saving config file to {experiment_save_dir}")
-            config_path = experiment_save_dir / CONFIG_NAME
-            tyro_config.save_config(str(config_path))
-            if wandb_enabled:
-                wandb.save(str(config_path), base_path=experiment_save_dir)
-
-        algo_class = get_class(tyro_config.algo._target_)
-        algo: BaseAlgo = algo_class(
-            device=device,
-            env=env,
-            config=tyro_config.algo.config,
-            log_dir=experiment_save_dir,
-            multi_gpu_cfg=distributed_conf,
-        )
-
-        # Resolve teacher count before setup, when the policy allocates its slots.
-        # Full checkpoints are inspected so resume does not require teacher paths again.
-        teacher_checkpoints: list[str] = []
-        if tyro_config.training.teacher_checkpoint is not None:
-            teacher_checkpoints = [s.strip() for s in tyro_config.training.teacher_checkpoint.split(",") if s.strip()]
-            if not teacher_checkpoints:
-                raise ValueError("training.teacher_checkpoint must contain at least one checkpoint path.")
-
-        resume_checkpoint: Path | None = None
-        resume_teacher_count: int | None = None
-        if tyro_config.training.checkpoint is not None:
-            resume_checkpoint = load_checkpoint(tyro_config.training.checkpoint, str(experiment_save_dir))
-            checkpoint_data = torch.load(resume_checkpoint, map_location="cpu")
-            if not isinstance(checkpoint_data, dict):
-                raise TypeError("Training checkpoint must contain a dictionary.")
-            resume_teacher_count = infer_num_teachers_from_checkpoint(checkpoint_data)
-            tyro_config = dataclasses.replace(
-                tyro_config,
-                training=dataclasses.replace(
-                    tyro_config.training,
-                    checkpoint=str(resume_checkpoint),
-                ),
-            )
-
-        if teacher_checkpoints and resume_teacher_count is not None:
-            if len(teacher_checkpoints) != resume_teacher_count:
-                raise ValueError(
-                    f"Resume checkpoint contains {resume_teacher_count} teacher slots, but "
-                    f"{len(teacher_checkpoints)} teacher checkpoints were provided."
-                )
-
-        teacher_count = len(teacher_checkpoints) if teacher_checkpoints else resume_teacher_count
-        if teacher_count is not None:
-            if hasattr(algo, "num_teachers"):
-                algo.num_teachers = teacher_count
-            elif teacher_count > 1:
-                raise RuntimeError(
-                    f"Training requires {teacher_count} teacher slots, "
-                    f"but algorithm {type(algo).__name__} has no num_teachers attribute; "
-                    f"only 1 teacher is supported."
-                )
-
-        algo.setup()
-        algo.attach_checkpoint_metadata(tyro_config, wandb_run_path)
-        if resume_checkpoint is not None:
-            algo.load(str(resume_checkpoint))
-
-        # Load teacher-only checkpoint(s) into the student-teacher policy, if the
-        # algo supports it. Runs after `algo.load()` so a full-resume checkpoint
-        # wins for student/critic/optimizer state, and we only overwrite the
-        # frozen teacher branch(es) here.
-        if teacher_checkpoints:
-            if not hasattr(algo, "load_teacher"):
-                raise RuntimeError(
-                    f"`training.teacher_checkpoint` was set but algorithm "
-                    f"{type(algo).__name__} does not implement load_teacher()."
-                )
-            teacher_ckpt_paths = [str(load_checkpoint(tc, str(experiment_save_dir))) for tc in teacher_checkpoints]
-            algo.load_teacher(teacher_ckpt_paths)
-
-        # handle saving config
-        algo.learn()
-
-        # teardown wandb before SimApp closes ungracefully (IsaacLab)
-        if is_main_process and wandb_enabled:
-            logger.info("Shutting down wandb...")
-            wandb.teardown()
-
-        # shutdown dist before SimApp closes ungracefully (IsaacLab)
-        if is_distributed:
-            logger.info("Shutting down distributed processes...")
-            dist.destroy_process_group()
-        logger.info("Training complete; closing simulation resources.")
+        with tyro_config.create_task() as env:
+            train_on_task(tyro_config, env)
     except Exception as e:
         tb_str = traceback.format_exc()
         logger.error(f"Exception occurred during training: {e}\n{tb_str}")
         sys.exit(1)  # manually set exit code, not possible via isaacsim app.close()
-    finally:
-        active_exception = sys.exc_info()[1]
-        try:
-            close_simulation_resources(env, simulation_app if auto_close else None)
-        except Exception:
-            if training_context is not None:
-                training_context._keep_provider_open()
-            if active_exception is None:
-                raise
-            logger.exception("Training cleanup failed while preserving the active exception")
+
+
+def train_on_task(tyro_config: ExperimentConfig, env: PolicyTask) -> None:
+    """Train an agent on ``env``, a task built from ``tyro_config`` that the caller owns."""
+    import torch
+    import torch.distributed as dist
+    import wandb
+
+    from holosoma.agents.base_algo.base_algo import BaseAlgo
+
+    # Initialize process group
+    distributed_conf: MultGPUConfig | None = configure_multi_gpu()
+    device: str = env.device
+    is_distributed = distributed_conf is not None
+    is_main_process = distributed_conf is None or distributed_conf["global_rank"] == 0
+
+    # Configure logger
+    logger_cfg = tyro_config.logger
+    wandb_enabled = logger_cfg.type == "wandb"
+
+    # Compute experiment directory from logger and training config
+    from holosoma.utils.experiment_paths import get_experiment_dir, get_timestamp
+
+    timestamp = get_timestamp()
+    experiment_dir = get_experiment_dir(logger_cfg, tyro_config.training, timestamp, task_name="locomotion")
+
+    # Configure logging with experiment directory
+    configure_logging(distributed_conf=distributed_conf, log_dir=experiment_dir)
+
+    wandb_run_path: str | None = None
+
+    # Configure wandb in rank 0
+    if wandb_enabled and is_main_process:
+        from holosoma.config_types.logger import WandbLoggerConfig
+
+        assert isinstance(logger_cfg, WandbLoggerConfig), "Logger config must be WandbLoggerConfig when type is wandb"
+        wandb_cfg = logger_cfg
+        # Use training config for project/name, fallback to logger config, then defaults
+        default_project = tyro_config.training.project or wandb_cfg.project or "default_project"
+        default_run_name = (
+            f"{timestamp}_{tyro_config.training.name or 'run'}_"
+            f"{wandb_cfg.group or 'default'}_{tyro_config.robot.asset.robot_type}"
+        )
+        wandb_dir = Path(wandb_cfg.dir or (experiment_dir / ".wandb"))
+        wandb_dir.mkdir(exist_ok=True, parents=True)
+        logger.info(f"Saving wandb logs to {wandb_dir}")
+
+        # Only pass optional parameters when specified so wandb can fall back to environment defaults.
+        wandb_kwargs: dict[str, Any] = {
+            "project": wandb_cfg.project or default_project,
+            "name": wandb_cfg.name or default_run_name,
+            "config": dataclasses.asdict(tyro_config),
+            "dir": str(wandb_dir),
+            "mode": wandb_cfg.mode,
+        }
+        wandb_entity = os.getenv("WANDB_ENTITY") or wandb_cfg.entity
+        if wandb_entity:
+            wandb_kwargs["entity"] = wandb_entity
+        if wandb_cfg.group:
+            wandb_kwargs["group"] = wandb_cfg.group
+        if wandb_cfg.id:
+            wandb_kwargs["id"] = wandb_cfg.id
+        if wandb_cfg.tags:
+            wandb_kwargs["tags"] = list(wandb_cfg.tags)
+        if wandb_cfg.resume is not None:
+            wandb_kwargs["resume"] = wandb_cfg.resume
+
+        wandb.init(**wandb_kwargs)
+        if wandb.run is not None:
+            wandb_run_path = f"{wandb.run.entity}/{wandb.run.project}/{wandb.run.id}"
+
+    experiment_save_dir = experiment_dir
+    experiment_save_dir.mkdir(exist_ok=True, parents=True)
+
+    if is_main_process:
+        logger.info(f"Saving config file to {experiment_save_dir}")
+        config_path = experiment_save_dir / CONFIG_NAME
+        tyro_config.save_config(str(config_path))
+        if wandb_enabled:
+            wandb.save(str(config_path), base_path=experiment_save_dir)
+
+    algo_class = get_class(tyro_config.algo._target_)
+    algo: BaseAlgo = algo_class(
+        device=device,
+        env=env,
+        config=tyro_config.algo.config,
+        log_dir=experiment_save_dir,
+        multi_gpu_cfg=distributed_conf,
+    )
+
+    # Resolve teacher count before setup, when the policy allocates its slots.
+    # Full checkpoints are inspected so resume does not require teacher paths again.
+    teacher_checkpoints: list[str] = []
+    if tyro_config.training.teacher_checkpoint is not None:
+        teacher_checkpoints = [s.strip() for s in tyro_config.training.teacher_checkpoint.split(",") if s.strip()]
+        if not teacher_checkpoints:
+            raise ValueError("training.teacher_checkpoint must contain at least one checkpoint path.")
+
+    resume_checkpoint: Path | None = None
+    resume_teacher_count: int | None = None
+    if tyro_config.training.checkpoint is not None:
+        resume_checkpoint = load_checkpoint(tyro_config.training.checkpoint, str(experiment_save_dir))
+        checkpoint_data = torch.load(resume_checkpoint, map_location="cpu")
+        if not isinstance(checkpoint_data, dict):
+            raise TypeError("Training checkpoint must contain a dictionary.")
+        resume_teacher_count = infer_num_teachers_from_checkpoint(checkpoint_data)
+        tyro_config = dataclasses.replace(
+            tyro_config,
+            training=dataclasses.replace(
+                tyro_config.training,
+                checkpoint=str(resume_checkpoint),
+            ),
+        )
+
+    if teacher_checkpoints and resume_teacher_count is not None:
+        if len(teacher_checkpoints) != resume_teacher_count:
+            raise ValueError(
+                f"Resume checkpoint contains {resume_teacher_count} teacher slots, but "
+                f"{len(teacher_checkpoints)} teacher checkpoints were provided."
+            )
+
+    teacher_count = len(teacher_checkpoints) if teacher_checkpoints else resume_teacher_count
+    if teacher_count is not None:
+        if hasattr(algo, "num_teachers"):
+            algo.num_teachers = teacher_count
+        elif teacher_count > 1:
+            raise RuntimeError(
+                f"Training requires {teacher_count} teacher slots, "
+                f"but algorithm {type(algo).__name__} has no num_teachers attribute; "
+                f"only 1 teacher is supported."
+            )
+
+    algo.setup()
+    algo.attach_checkpoint_metadata(tyro_config, wandb_run_path)
+    if resume_checkpoint is not None:
+        algo.load(str(resume_checkpoint))
+
+    # Load teacher-only checkpoint(s) into the student-teacher policy, if the
+    # algo supports it. Runs after `algo.load()` so a full-resume checkpoint
+    # wins for student/critic/optimizer state, and we only overwrite the
+    # frozen teacher branch(es) here.
+    if teacher_checkpoints:
+        if not hasattr(algo, "load_teacher"):
+            raise RuntimeError(
+                f"`training.teacher_checkpoint` was set but algorithm "
+                f"{type(algo).__name__} does not implement load_teacher()."
+            )
+        teacher_ckpt_paths = [str(load_checkpoint(tc, str(experiment_save_dir))) for tc in teacher_checkpoints]
+        algo.load_teacher(teacher_ckpt_paths)
+
+    # handle saving config
+    algo.learn()
+
+    # teardown wandb before SimApp closes ungracefully (IsaacLab)
+    if is_main_process and wandb_enabled:
+        logger.info("Shutting down wandb...")
+        wandb.teardown()
+
+    # shutdown dist before SimApp closes ungracefully (IsaacLab)
+    if is_distributed:
+        logger.info("Shutting down distributed processes...")
+        dist.destroy_process_group()
+    logger.info("Training complete; closing simulation resources.")
 
 
 def main() -> None:

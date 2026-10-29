@@ -211,7 +211,7 @@ class BaseSimulator:
         self.installed_plugins: dict[str, Any] = {}
         self._plugins_installed = False
         self._closed = False
-        # Cooperative shutdown flag: set via request_shutdown(), polled by loop owners (run_sim).
+        # Cooperative shutdown flag: set via request_shutdown(), polled through the owning task.
         self.shutdown_requested = False
         self._shutdown_reason = ""
 
@@ -528,6 +528,14 @@ class BaseSimulator:
         """
         raise NotImplementedError("The 'refresh_sim_tensors' method must be implemented in subclasses.")
 
+    def sync_sim_state(self) -> None:
+        """Refresh state that tasks syncing between physics substeps read. The default does nothing."""
+
+    def synchronize_after_reset(self) -> None:
+        """Flush reset state and refresh backend state without advancing physics."""
+        self.write_state_updates()
+        self.refresh_sim_tensors()
+
     # ----- Control Application Methods -----
 
     def apply_torques_at_dof(self, torques: torch.Tensor, dof_indices: list[int] | None = None) -> None:
@@ -588,6 +596,10 @@ class BaseSimulator:
             sync_frame_time (bool): Whether to synchronize the frame time.
         """
         raise NotImplementedError("The 'render' method must be implemented in subclasses.")
+
+    def requires_step_render(self) -> bool:
+        """Return whether this backend needs scheduled renders for offscreen outputs."""
+        return False
 
     def time(self) -> float:
         """Get current simulation time in seconds.
@@ -758,10 +770,10 @@ class BaseSimulator:
     def request_shutdown(self, reason: str = "") -> None:
         """Ask the driving loop to end the run gracefully after the current frame.
 
-        Cooperative: sets :attr:`shutdown_requested`; loop owners that support it (``run_sim``'s
-        ``DirectSimulation``) check the flag once per step and exit their loop, running the normal
-        CLOSE teardown. Lets a plugin end a finite run (e.g. motion playback reaching the end of
-        its clip). Idempotent; the first reason is kept.
+        Cooperative: sets :attr:`shutdown_requested`, which the owning task reports through
+        ``BaseTask.shutdown_requested``; its run loop exits at the next frame boundary and runs the
+        normal CLOSE teardown. Lets a plugin end a finite run (e.g. motion playback reaching the
+        end of its clip). Idempotent; the first reason is kept.
         """
         if not self.shutdown_requested:
             self.shutdown_requested = True
@@ -1341,6 +1353,26 @@ class BaseSimulator:
         raise NotImplementedError("Must be implemented in subclasses.")
 
     # ----- Robot-Specific Interface -----
+
+    def set_robot_state(self, env_ids: EnvIds, *, root_states: torch.Tensor, dof_states: torch.Tensor) -> None:
+        """Write robot states for ``env_ids`` through backend-native live tensor views.
+
+        Row ``i`` of ``root_states`` ``[len(env_ids), 13]`` and ``dof_states``
+        ``[len(env_ids), num_dof, 2]`` (position, velocity) belongs to ``env_ids[i]``.
+        """
+        env_ids = torch.as_tensor(env_ids, device=self.dof_pos.device, dtype=torch.long)
+        if root_states.shape != (len(env_ids), 13):
+            raise ValueError(f"Expected root states with shape {(len(env_ids), 13)}, got {tuple(root_states.shape)}.")
+        if dof_states.shape != (len(env_ids), self.num_dof, 2):
+            raise ValueError(
+                f"Expected DOF states with shape {(len(env_ids), self.num_dof, 2)}, got {tuple(dof_states.shape)}."
+            )
+
+        self.robot_root_states[env_ids] = root_states
+        self.dof_pos[env_ids] = dof_states[..., 0]
+        self.dof_vel[env_ids] = dof_states[..., 1]
+        self.set_dof_state_tensor_robots(env_ids)
+        self.set_actor_root_state_tensor_robots(env_ids)
 
     def set_actor_root_state_tensor(self, set_env_ids: EnvIds, root_states: torch.Tensor) -> None:
         """Set **robot** root states (position/orientation) - backwards compatibility interface.

@@ -37,7 +37,7 @@ from holosoma.agents.modules.advantages import compute_gae_returns, normalize_ad
 from holosoma.agents.modules.module_utils import setup_student_teacher_module
 from holosoma.agents.modules.student_teacher_modules import StudentTeacherCritic
 from holosoma.config_types.algo import DistillationPPOConfig
-from holosoma.envs.base_task.base_task import BaseTask
+from holosoma.envs.policy_task import PolicyTask
 
 
 class DistillationMinibatch(TypedDict):
@@ -89,7 +89,7 @@ class DistillationPPO(DistillationBase):
 
     def __init__(
         self,
-        env: BaseTask,
+        env: PolicyTask,
         config: DistillationPPOConfig,
         log_dir: str | os.PathLike[str],
         device: str = "cpu",
@@ -243,6 +243,10 @@ class DistillationPPO(DistillationBase):
                     self.logging_helper.update_episode_stats(rewards, dones, infos)
 
                 obs_dict = next_obs
+
+                # Multi-GPU ranks finish the rollout so they all reach the shared check in learn().
+                if self.env.shutdown_requested and not self.is_multi_gpu:
+                    return obs_dict
 
             # GAE / returns.
             last_values = self.policy.evaluate(self._extract_obs(obs_dict)).detach().to(self.device)

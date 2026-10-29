@@ -41,7 +41,7 @@ def test_warmup_uses_absolute_iteration(
     )
     algo._train_mode = lambda: None
     algo.policy = SimpleNamespace(require_loaded_teachers=lambda: None)
-    algo.env = SimpleNamespace(reset_all=dict)
+    algo.env = SimpleNamespace(reset_all=dict, shutdown_requested=False)
     algo.logging_helper = SimpleNamespace(
         record_collection_time=nullcontext,
         record_learn_time=nullcontext,
@@ -100,6 +100,7 @@ def test_learn_synchronizes_curriculum_every_iteration_on_multi_gpu(
 
     algo.env = SimpleNamespace(
         reset_all=dict,
+        shutdown_requested=False,
         use_reward_penalty_curriculum=True,
         synchronize_curriculum_state=synchronize_curriculum_state,
     )
@@ -108,16 +109,22 @@ def test_learn_synchronizes_curriculum_every_iteration_on_multi_gpu(
     algo.gpu_world_size = 2
     algo.is_main_process = False
 
+    def any_rank_requested_shutdown(requested: bool) -> bool:
+        events.append(("shutdown-agreement",))
+        return requested
+
+    algo._any_rank_requested_shutdown = any_rank_requested_shutdown
+
     algo_cls.learn(algo)
 
-    assert events == [("sync", 2), ("rollout",), ("sync", 2), ("rollout",)]
+    assert events == [("sync", 2), ("rollout",), ("shutdown-agreement",)] * 2
 
 
 @pytest.mark.parametrize("algo_cls", [Distillation, DistillationPPO])
 def test_learn_leaves_export_ownership_to_application_save_hook(algo_cls: type[Distillation | DistillationPPO]) -> None:
     events: list[tuple[Any, ...]] = []
     algo = _stub_learn_loop(algo_cls, events)
-    algo.env = SimpleNamespace(reset_all=dict)
+    algo.env = SimpleNamespace(reset_all=dict, shutdown_requested=False)
     algo.is_multi_gpu = False
     algo.is_main_process = True
     algo._post_epoch_logging = lambda _it, _losses: None
@@ -465,6 +472,7 @@ class _FakeEnv:
     """Random-walk env exposing whatever observation groups it is given."""
 
     num_envs = 4
+    shutdown_requested = False
 
     def __init__(self, depth_group: tuple[str, str] | None = None) -> None:
         self.depth_group = depth_group
@@ -583,7 +591,7 @@ def test_learning_in_chunks_continues_after_the_completed_iteration(
 ) -> None:
     algo = _stub_learn_loop(algo_cls, [])
     algo.config.distillation_warmup_steps = 1
-    algo.env = SimpleNamespace(reset_all=dict)
+    algo.env = SimpleNamespace(reset_all=dict, shutdown_requested=False)
     algo.is_multi_gpu = False
     algo.is_main_process = True
     algo._post_epoch_logging = lambda _it, _losses: None

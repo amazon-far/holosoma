@@ -2,8 +2,8 @@
 
 This is a runnable, self-documenting tour of the scene-asset + object-manager features. It
 builds a REAL, fully-managed locomotion environment (the same production path training uses —
-``training_context`` + ``get_class(env_class)(...)``, NO shims) on a scene that mixes every
-asset kind, then drives each manager-layer feature in turn and narrates what happened. Reading
+``cfg.create_task()``, NO shims) on a scene that mixes every asset kind, then drives each
+manager-layer feature in turn and narrates what happened. Reading
 the printed output (or this source) shows how the pieces compose in a real setup. It is
 backend-switchable: sections 1-4 are identical code on all four backends (only ``--backend``
 changes); section 5 (physics DR) dispatches per backend and reads the result back on MuJoCo.
@@ -197,27 +197,19 @@ def _section(title: str) -> None:
 def run_demo(backend: str, num_envs: int, headless: bool = True) -> int:
     """Run the full object-managers tour on ``backend`` via a real env. Returns an exit code.
 
-    Builds the env inside ``training_context`` (which owns the IsaacSim app lifecycle — closing it
-    only at block exit), so the whole demo runs while the simulator is alive.
+    Runs inside ``cfg.create_task()``, which closes the simulator only at block exit.
     """
     # Imported lazily so the per-backend launcher (isaacsim) initializes before torch.
-    from holosoma.config_types.env import get_tyro_env_config
     from holosoma.simulator.shared.object_registry import ObjectType
-    from holosoma.train_agent import training_context
-    from holosoma.utils.common import seeding
-    from holosoma.utils.helpers import get_class
     from holosoma.utils.safe_torch_import import torch
     from holosoma.utils.simulator_config import SimulatorType
 
     device = _BACKENDS[backend][1]
     _section(f"BUILD — backend={backend}  num_envs={num_envs}  device={device}")
     cfg = _experiment_config(backend, num_envs, headless)
-    seeding(cfg.training.seed)
 
-    with (
-        training_context(cfg) as context,
-        context.simulation_session(get_class(cfg.env_class)(get_tyro_env_config(cfg), device=device)) as env,
-    ):
+    with cfg.create_task() as task:
+        env = cast("LeggedRobotLocomotionManager", task)
         sim = env.simulator
         env_ids = torch.arange(env.num_envs, device=env.device)
 
@@ -248,7 +240,7 @@ def run_demo(backend: str, num_envs: int, headless: bool = True) -> int:
             print(f"FAIL: object obs dim {dims['object_obs']} != {13 * n_free}")
             return 1
         env.observation_manager.new_frame()  # no env.step() here, so mark the frame by hand
-        obs = env.observation_manager.step()["object_obs"]
+        obs = cast("torch.Tensor", env.observation_manager.step()["object_obs"])
         print(f"  computed 'object_obs' tensor shape: {tuple(obs.shape)}  (finite={bool(torch.isfinite(obs).all())})")
         if obs.shape != (env.num_envs, 13 * n_free) or not torch.isfinite(obs).all():
             print("FAIL: object observation tensor malformed")
@@ -260,7 +252,7 @@ def run_demo(backend: str, num_envs: int, headless: bool = True) -> int:
         # (our jitter term perturbs the pose). We snapshot before/after one reset and check both.
         _section("3. EPISODE RESET — reset_envs_idx restores pose + configured velocity (real chain)")
         moving = "moving_box"
-        want_vel = sim.get_actor_initial_velocities([moving], env_ids)[0]  # [6], configured
+        want_vel = sim.get_actor_initial_velocities([moving], env_ids)[0]  # type: ignore[attr-defined]  # [6], configured
         before_reset = {nm: sim.get_actor_states([nm], env_ids).clone() for nm in free_names}
         static_before = sim.get_actor_states([static_names[0]], env_ids)[:, :2].clone()
 

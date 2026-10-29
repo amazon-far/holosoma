@@ -5,33 +5,19 @@ from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
-from holosoma.envs.base_task.base_task import BaseTask
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.torch_utils import torch_rand_float
 
 if TYPE_CHECKING:
-    from holosoma.config_types.env import EnvConfig
     from holosoma.managers.command.terms.locomotion import LocomotionGait
     from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker
     from holosoma.managers.randomization.terms.locomotion import PushRandomizerState
     from holosoma.managers.terrain.terms.locomotion import TerrainLocomotion
 
 
-class LeggedRobotLocomotionManager(BaseTask):
+class LeggedRobotLocomotionManager(PolicyTask):
     BASE_NUM_ENVS = 4096
-
-    def __init__(
-        self,
-        tyro_config: EnvConfig,
-        *,
-        device: str,
-    ) -> None:
-        self.init_done = False
-        super().__init__(
-            tyro_config,
-            device=device,
-        )
-        self.init_done = True
 
     def _get_task_name(self) -> str:
         return "locomotion"
@@ -132,19 +118,16 @@ class LeggedRobotLocomotionManager(BaseTask):
         return self.need_to_refresh_envs.nonzero(as_tuple=False).flatten()
 
     def _refresh_envs_after_reset(self, env_ids: torch.Tensor) -> None:
-        self.simulator.set_actor_root_state_tensor(env_ids, self.simulator.all_root_states)
-        self.simulator.set_dof_state_tensor(env_ids, self.simulator.dof_state)  # type: ignore[attr-defined]
+        super()._refresh_envs_after_reset(env_ids)
         self.need_to_refresh_envs[env_ids] = False
-        self.simulator.refresh_sim_tensors()
-        self._pre_compute_observations_callback()
 
     def _pre_compute_observations_callback(self) -> None:
         # prepare quantities
         self.base_quat[:] = self.simulator.base_quat[:]
         self.terrain_manager.update_heights()
 
-    def _update_tasks_callback(self) -> None:
-        super()._update_tasks_callback()
+    def _step_managers(self) -> None:
+        super()._step_managers()
 
         # Assign commands to simulator for headless recording
         if hasattr(self.simulator, "headless_recording") and self.simulator.headless_recording:
@@ -252,7 +235,6 @@ class LeggedRobotLocomotionManager(BaseTask):
         """Random pushes the robots. Emulates an impulse by setting a randomized base velocity."""
         if len(env_ids) == 0:
             return
-        self.need_to_refresh_envs[env_ids] = True
         max_vel_tensor = self._max_push_vel
         if self.randomization_manager is not None:
             state = cast("PushRandomizerState | None", self.randomization_manager.get_state("push_randomizer_state"))
