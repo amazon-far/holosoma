@@ -64,25 +64,32 @@ class _FakeSim:
 
 
 class _StubBridge(BasicSdk2Bridge):
-    """Minimal concrete bridge: no SDK, so a publish just reads what it would have sent."""
+    """Minimal concrete bridge: no SDK, so a publish records what it would have sent."""
 
     imu: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None
     odom: tuple[list[float], list[float], list[float], float] | None = None
     fail_on_publish_odom = False
 
     def _init_sdk_components(self) -> None:
-        pass
+        # Called from BasicSdk2Bridge.__init__, so this is the stub's own setup hook.
+        self.calls: list[str] = []
 
     def low_cmd_handler(self, msg: Any = None) -> None:
-        pass
+        self.calls.append("command_read")
 
     def publish_low_state(self) -> None:
+        self.calls.append("low_state")
         self.imu = self._get_base_imu_data()
 
     def publish_odom(self) -> None:
         if self.fail_on_publish_odom:
             raise RuntimeError("publish failed")
+        self.calls.append("odom")
         self.odom = self._get_base_odometry()
+
+    def publish_wireless_controller(self) -> None:
+        # Overridden so the test never reaches the base implementation's pygame read.
+        self.calls.append("wireless")
 
     def compute_torques(self) -> npt.NDArray[np.floating[Any]]:
         return self.torques
@@ -179,16 +186,11 @@ def test_an_exchange_publishes_in_order_and_reads_the_command_last() -> None:
     """The order is the bridge's contract now, so pin it here rather than at the caller."""
     sim = _FakeSim()
     bridge = _bridge(sim)
-    order: list[str] = []
-    bridge.publish_low_state = lambda: order.append("low_state")  # type: ignore[method-assign]
-    bridge.publish_odom = lambda: order.append("odom")  # type: ignore[method-assign]
-    bridge.publish_wireless_controller = lambda: order.append("wireless")  # type: ignore[method-assign]
-    bridge.low_cmd_handler = lambda _msg=None: order.append("command_read")  # type: ignore[method-assign]
-
     bridge.joystick = object()
+
     bridge.transport_exchange()
 
-    assert order == ["low_state", "odom", "wireless", "command_read"]
+    assert bridge.calls == ["low_state", "odom", "wireless", "command_read"]
 
 
 def test_an_exchange_skips_odometry_and_the_joystick_when_not_configured() -> None:
@@ -203,10 +205,7 @@ def test_an_exchange_skips_odometry_and_the_joystick_when_not_configured() -> No
         cast("RobotConfig", robot_config),
         BridgeConfig(interface="lo", publish_odom=False),
     )
-    published: list[str] = []
-    bridge.publish_odom = lambda: published.append("odom")  # type: ignore[method-assign]
-    bridge.publish_wireless_controller = lambda: published.append("wireless")  # type: ignore[method-assign]
-
     bridge.transport_exchange()
 
-    assert published == []
+    # No joystick and publish_odom off, so only the state publish and the command read run.
+    assert bridge.calls == ["low_state", "command_read"]
