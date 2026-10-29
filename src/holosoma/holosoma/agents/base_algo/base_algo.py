@@ -100,10 +100,6 @@ class BaseAlgo:
 
     def _synchronize_curriculum_metrics(self) -> None:
         """Synchronize curriculum-related metrics across all GPUs."""
-        # Check if any curricula are enabled before synchronizing
-        if not self.has_curricula_enabled():
-            return
-
         env = self._unwrap_env()
         env.synchronize_curriculum_state(device=self.device, world_size=self.gpu_world_size)
 
@@ -197,13 +193,13 @@ class BaseAlgo:
         """
         return getattr(self, "unwrapped_env", self.env)
 
-    def _collect_env_state(self) -> dict[str, torch.Tensor | float]:
+    def _collect_env_state(self) -> dict[str, Any]:
         """Collect environment state for checkpointing via the environment interface."""
         env = self._unwrap_env()
         state = env.get_checkpoint_state()
         return state or {}
 
-    def _restore_env_state(self, env_state: dict[str, torch.Tensor | float] | None) -> None:
+    def _restore_env_state(self, env_state: dict[str, Any] | None) -> None:
         """Restore environment state from checkpoint via the environment interface."""
         if not env_state:
             return

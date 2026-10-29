@@ -6,13 +6,13 @@ from typing import TYPE_CHECKING, Any, cast
 from loguru import logger
 
 from holosoma.envs.base_task.base_task import BaseTask
+from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker, PenaltyCurriculum
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.torch_utils import torch_rand_float
 
 if TYPE_CHECKING:
     from holosoma.config_types.env import EnvConfig
     from holosoma.managers.command.terms.locomotion import LocomotionGait
-    from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker
     from holosoma.managers.randomization.terms.locomotion import PushRandomizerState
     from holosoma.managers.terrain.terms.locomotion import TerrainLocomotion
 
@@ -209,44 +209,35 @@ class LeggedRobotLocomotionManager(BaseTask):
     # ------------------------------------------------------------------
     # Checkpoint helpers
 
-    def get_checkpoint_state(self) -> dict[str, torch.Tensor | float]:
-        state: dict[str, torch.Tensor | float] = {}
-        state["average_episode_tracker"] = self._get_average_episode_tracker().state_dict()
-        if hasattr(self, "reward_penalty_scale"):
-            state["reward_penalty_scale"] = float(self.reward_penalty_scale)
-        return state
-
-    def load_checkpoint_state(self, state: dict[str, torch.Tensor | float] | None) -> None:
+    def load_checkpoint_state(self, state: dict[str, Any] | None) -> None:
         if not state:
             return
+        if "curriculum" not in state:
+            state = self._convert_legacy_checkpoint_state(state)
+        super().load_checkpoint_state(state)
+        tracker_name = self._term_name(AverageEpisodeLengthTracker)
+        if tracker_name is not None and tracker_name in state.get("curriculum", {}):
+            self._get_average_episode_tracker().suppress_next_update()
 
+    def _term_name(self, term_cls: type) -> str | None:
+        return next((name for name, term in self.curriculum_manager.iter_terms() if isinstance(term, term_cls)), None)
+
+    def _convert_legacy_checkpoint_state(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Map the pre-``curriculum`` checkpoint layout onto curriculum term state."""
+        curriculum: dict[str, dict[str, Any]] = {}
         tracker_state = state.get("average_episode_tracker")
-        if tracker_state is not None:
-            tracker = self._get_average_episode_tracker()
-            tracker.load_state_dict(cast("dict[str, Any]", tracker_state))
-            tracker.suppress_next_update()
-
-        penalty_state = state.get("reward_penalty_scale")
-        if penalty_state is not None:
-            if isinstance(penalty_state, torch.Tensor):
-                self.reward_penalty_scale = float(penalty_state.item())
-            else:
-                self.reward_penalty_scale = float(penalty_state)
-
-    def synchronize_curriculum_state(self, *, device: str, world_size: int) -> None:
-        if world_size <= 1:
-            return
-        if not torch.distributed.is_available() or not torch.distributed.is_initialized():
-            return
-        tracker = self._get_average_episode_tracker()
-        avg_tensor = tracker.get_average().clone().detach().to(device)
-        torch.distributed.broadcast(avg_tensor, src=0)
-        tracker.set_average(avg_tensor.to(self.device), suppress_update=False)
-
-        if hasattr(self, "reward_penalty_scale"):
-            penalty_tensor = torch.tensor(float(self.reward_penalty_scale), device=device, dtype=torch.float)
-            torch.distributed.broadcast(penalty_tensor, src=0)
-            self.reward_penalty_scale = float(penalty_tensor.item())
+        tracker_name = self._term_name(AverageEpisodeLengthTracker)
+        if tracker_state is not None and tracker_name is not None:
+            curriculum[tracker_name] = tracker_state
+        penalty_scale = state.get("reward_penalty_scale")
+        penalty_name = self._term_name(PenaltyCurriculum)
+        if penalty_scale is not None and penalty_name is not None:
+            curriculum[penalty_name] = {"current_scale": float(penalty_scale)}
+        if curriculum:
+            logger.warning(
+                "Loading a checkpoint saved in the old env-state layout; re-save to store curriculum state per term."
+            )
+        return {**state, "curriculum": curriculum}
 
     def _push_robots(self, env_ids: torch.Tensor) -> None:
         """Random pushes the robots. Emulates an impulse by setting a randomized base velocity."""

@@ -225,18 +225,31 @@ class BaseTask:
     def _refresh_sim_tensors(self) -> None:
         self.simulator.refresh_sim_tensors()
 
-    def get_checkpoint_state(self) -> dict[str, torch.Tensor | float]:
+    def get_checkpoint_state(self) -> dict[str, Any]:
         """Return environment-specific state to persist in checkpoints."""
-        return {}
+        state: dict[str, Any] = {}
+        curriculum_state = self.curriculum_manager.state_dict()
+        if curriculum_state:
+            state["curriculum"] = curriculum_state
+        return state
 
-    def load_checkpoint_state(self, state: dict[str, torch.Tensor | float] | None) -> None:
+    def load_checkpoint_state(self, state: dict[str, Any] | None) -> None:
         """Restore environment-specific state from a checkpoint."""
         if not state:
             return
+        curriculum_state = state.get("curriculum")
+        if curriculum_state:
+            self.curriculum_manager.load_state_dict(curriculum_state)
 
     def synchronize_curriculum_state(self, *, device: str, world_size: int) -> None:
-        """Synchronize curriculum-related state across distributed processes."""
-        return
+        """Broadcast rank 0's curriculum state to every rank."""
+        if world_size <= 1:
+            return
+        if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+            return
+        payload = [self.curriculum_manager.state_dict()]
+        torch.distributed.broadcast_object_list(payload, src=0)
+        self.curriculum_manager.load_state_dict(payload[0])
 
     def reset_all(self) -> dict[str, Any]:
         """Reset all robots"""
