@@ -18,6 +18,7 @@ import torch
 
 from holosoma.config_types.plugin import MotionPlaybackPluginConfig
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.simulator.shared.scene_types import EnvOriginsScene
 from holosoma.utils.sim_utils import DirectSimulation, _format_simulation_performance
 from holosoma.utils.simulator_config import SimulatorType
 
@@ -479,6 +480,7 @@ class _PlaybackSim(_FakeSim):
         self.dof_pos = torch.zeros(1, self.num_dof)
         self.dof_vel = torch.zeros(1, self.num_dof)
         self.robot_root_states = torch.zeros(1, 13)
+        self.scene = EnvOriginsScene(torch.zeros(1, 3), self.sim_device)
         # Derived from the base fake's own rates, so the plugin's view of the sim and the driving
         # loop's (built by _run_sim_config from the same fields) cannot drift apart.
         self.simulator_config = SimpleNamespace(
