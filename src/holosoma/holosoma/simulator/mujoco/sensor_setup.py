@@ -12,7 +12,12 @@ import numpy as np
 import numpy.typing as npt
 import torch
 
-from holosoma.config_types.sensor import DEFAULT_MUJOCO_LIDAR_GEOM_GROUPS, CameraSensorConfig, LidarSensorConfig
+from holosoma.config_types.sensor import (
+    DEFAULT_MUJOCO_LIDAR_GEOM_GROUPS,
+    CameraSensorConfig,
+    LidarSensorConfig,
+    RayCastDepthCameraConfig,
+)
 from holosoma.simulator.mujoco.backends import WarpBackend
 from holosoma.simulator.mujoco.geom_groups import (
     ROBOT_COLLISION_GEOM_GROUP,
@@ -364,6 +369,11 @@ def create_sensors(sim: MuJoCo) -> None:
     sim.sensor_manager = manager
     register_cameras(sim, manager)
     register_lidars(sim, manager)
+    if any(isinstance(config, RayCastDepthCameraConfig) for config in sim.sensor_config.values()):
+        # Imported here: Warp is optional for the classic backend, and only these cameras need it.
+        from holosoma.simulator.shared.raycast_depth_camera import register_raycast_depth_cameras
+
+        register_raycast_depth_cameras(sim, manager)
 
 
 def render_sensors(sim: MuJoCo) -> None:
@@ -372,3 +382,5 @@ def render_sensors(sim: MuJoCo) -> None:
         sim.backend.begin_sensor_render()
     render_cameras(sim)
     render_lidars(sim)
+    if sim.sensor_manager is not None:
+        sim.sensor_manager.render_shared()

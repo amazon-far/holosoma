@@ -660,7 +660,82 @@ class LidarSensorConfig:
         return self
 
 
-SensorConfig = CameraSensorConfig | LidarSensorConfig
+@dataclass(frozen=True, config=_FORBID_EXTRA)
+class RayCastDepthCameraConfig:
+    """A pinhole depth camera ray cast with Warp, identically on every simulator backend.
+
+    Rays hit the terrain mesh and, for self-occlusion, the meshes of the robot links listed in
+    ``self_occlusion`` at their current poses. Its frame is read through
+    ``get_camera_data(name, "depth")`` like any depth camera: ``[N, H, W, 1]`` float32 meters,
+    distance to the image plane. Unlike a rendered camera it can re-render a subset of envs, so
+    envs reset or teleported in a control step are observed at their new state.
+
+    The defaults match :class:`CameraSensorConfig`; device values live in presets such as
+    ``g1-head-d435i-depth``. Keyed by its sensor name in the ``--sensor`` dict.
+    """
+
+    mount: SensorMountConfig
+    """Robot link the camera follows and its optical-frame offset (``-Z`` forward, ``+Y`` up).
+    Only ``target_kind="robot_link"`` is supported."""
+
+    width: int = 128
+    """Image width in pixels."""
+
+    height: int = 128
+    """Image height in pixels."""
+
+    vertical_fov: float = 45.0
+    """Pinhole vertical field of view in degrees. Pixels are square; rays pass through integer
+    pixel coordinates measured from a principal point at ``(width / 2, height / 2)``."""
+
+    near: float = 0.01
+    """Returns closer than this are treated as no return, as for :class:`CameraSensorConfig`."""
+
+    far: float = 1000.0
+    """Maximum ray length in meters; farther surfaces are no return."""
+
+    depth_clipping_behavior: DepthClippingBehavior = "none"
+    """How no-return pixels are reported: ``+inf`` (``"none"``), ``far`` (``"max"``), or ``0.0``
+    (``"zero"``), as for :class:`CameraSensorConfig`."""
+
+    update_decimation: DecimationLike = 1
+    """Render every Nth control step, or a frequency string such as ``"50Hz"``."""
+
+    self_occlusion: dict[str, str | list[str]] = field(default_factory=dict)
+    """Robot link name -> triangle mesh file, or list of files (STL/OBJ, link frame), cast against
+    at the link's current pose. Paths are resolved with ``resolve_data_file_path``. Empty casts
+    against the terrain only."""
+
+    @property
+    def data_types(self) -> list[CameraDataType]:
+        """The modalities this camera produces: depth only."""
+        return ["depth"]
+
+    @model_validator(mode="after")
+    def validate_camera(self) -> RayCastDepthCameraConfig:
+        """Validate resolution, field of view, range, cadence, and mount target."""
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError(f"RayCastDepthCameraConfig needs positive width/height, got {self.width}x{self.height}.")
+        if not math.isfinite(self.vertical_fov) or not 0.0 < self.vertical_fov < 180.0:
+            raise ValueError(
+                f"RayCastDepthCameraConfig.vertical_fov must be finite and in (0, 180), got {self.vertical_fov}."
+            )
+        if not math.isfinite(self.near) or self.near < 0.0:
+            raise ValueError(f"RayCastDepthCameraConfig.near must be finite and >= 0, got {self.near}.")
+        if not math.isfinite(self.far) or self.far <= self.near:
+            raise ValueError(f"RayCastDepthCameraConfig.far must be finite and > near, got {self.near}..{self.far}.")
+        validate_decimation_like(self.update_decimation, field="RayCastDepthCameraConfig update_decimation")
+        for link, meshes in self.self_occlusion.items():
+            if not meshes or (not isinstance(meshes, str) and not all(meshes)):
+                raise ValueError(f"RayCastDepthCameraConfig.self_occlusion['{link}'] needs at least one mesh path.")
+        if self.mount.target_kind != "robot_link":
+            raise ValueError(
+                f"RayCastDepthCameraConfig only mounts on robot links, got target_kind='{self.mount.target_kind}'."
+            )
+        return self
+
+
+SensorConfig = CameraSensorConfig | LidarSensorConfig | RayCastDepthCameraConfig
 
 
 def validate_camera_dict(cameras: dict[str, CameraSensorConfig]) -> None:

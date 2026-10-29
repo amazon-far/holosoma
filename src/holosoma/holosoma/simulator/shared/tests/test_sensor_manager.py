@@ -8,6 +8,8 @@ unsupported data_type.
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from holosoma.config_types.frequency import DecimationLike
@@ -19,6 +21,7 @@ from holosoma.config_types.sensor import (
     GridLidarRayPatternConfig,
     LidarRayPatternConfig,
     LidarSensorConfig,
+    RayCastDepthCameraConfig,
     SensorMountConfig,
 )
 from holosoma.simulator.shared.lidar_sensor import LidarPatternProvider
@@ -234,3 +237,26 @@ def test_sensor_names_must_be_unique_across_types() -> None:
     sm.register_camera("sensor", _cam())
     with pytest.raises(ValueError, match="already registered"):
         sm.register_lidar("sensor", LidarSensorConfig(mount=_MOUNT))
+
+
+def test_shared_cameras_render_on_their_cadence_and_rerender_requested_envs() -> None:
+    """``register_shared_camera`` / ``render_shared`` without a renderer backend: a fake render records calls."""
+    calls: list[torch.Tensor | None] = []
+
+    def render(record, env_ids):  # type: ignore[no-untyped-def]
+        calls.append(env_ids)
+        record.set_buffer("depth", torch.full((2, 1, 1, 1), math.inf))
+
+    config = RayCastDepthCameraConfig(mount=_MOUNT, far=3.0, depth_clipping_behavior="max", update_decimation=2)
+    sm = SensorManager(device="cpu", control_hz=100.0)
+    record = sm.register_shared_camera("depth", config, render)
+
+    for _ in range(4):
+        assert sm.collect_due() == []  # backends never render it
+        sm.render_shared()
+    sm.rerender(torch.tensor([1]))
+
+    assert sm.has_camera("depth") and sm.get("depth") is record
+    assert [c is None for c in calls] == [True, True, False]  # steps 0 and 2, then the rerender
+    assert torch.equal(calls[-1], torch.tensor([1]))
+    assert torch.all(record.buffers["depth"] == 3.0)  # no return clipped to far
