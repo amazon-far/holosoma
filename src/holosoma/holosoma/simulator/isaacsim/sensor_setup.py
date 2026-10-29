@@ -60,27 +60,26 @@ def build_cameras(sim: IsaacSim) -> None:
     """
     sim.tiled_cameras = {}
     for cam_name, cam in sim.sensor_config.items():
-        if not isinstance(cam, CameraSensorConfig) or is_isaacsim_raycast_camera(cam):
-            continue
-        parent = _camera_mount_prim_path(cam.mount)
-        # Map holosoma data_types -> IsaacLab annotators.
-        annotators = [{"rgb": "rgb", "depth": "distance_to_image_plane"}[d] for d in cam.data_types]
-        cam_cfg = TiledCameraCfg(
-            prim_path=f"{parent}/{cam_name}",
-            offset=TiledCameraCfg.OffsetCfg(
-                pos=tuple(cam.mount.position),
-                rot=tuple(cam.mount.orientation),  # (w, x, y, z)
-                convention="opengl",  # -Z forward / +Y up, the frame holosoma uses
-            ),
-            data_types=annotators,
-            spawn=camera_spawn_cfg_for(cam, sim_utils),
-            width=cam.width,
-            height=cam.height,
-            # Keep raw +inf no-return data; CameraRecord applies Holosoma's common depth policy.
-            depth_clipping_behavior="none",
-        )
-        sim.tiled_cameras[cam_name] = TiledCamera(cam_cfg)
-        sim.scene.sensors[cam_name] = sim.tiled_cameras[cam_name]
+        if isinstance(cam, CameraSensorConfig) and not is_isaacsim_raycast_camera(cam):
+            parent = _camera_mount_prim_path(cam.mount)
+            # Map holosoma data_types -> IsaacLab annotators.
+            annotators = [{"rgb": "rgb", "depth": "distance_to_image_plane"}[d] for d in cam.data_types]
+            cam_cfg = TiledCameraCfg(
+                prim_path=f"{parent}/{cam_name}",
+                offset=TiledCameraCfg.OffsetCfg(
+                    pos=tuple(cam.mount.position),
+                    rot=tuple(cam.mount.orientation),  # (w, x, y, z)
+                    convention="opengl",  # -Z forward / +Y up, the frame holosoma uses
+                ),
+                data_types=annotators,
+                spawn=camera_spawn_cfg_for(cam, sim_utils),
+                width=cam.width,
+                height=cam.height,
+                # Keep raw +inf no-return data; CameraRecord applies Holosoma's common depth policy.
+                depth_clipping_behavior="none",
+            )
+            sim.tiled_cameras[cam_name] = TiledCamera(cam_cfg)
+            sim.scene.sensors[cam_name] = sim.tiled_cameras[cam_name]
 
 
 def _camera_mount_prim_path(mount: SensorMountConfig) -> str:
