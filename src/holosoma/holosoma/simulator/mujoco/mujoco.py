@@ -688,10 +688,6 @@ class MuJoCo(BaseSimulator):
         # no contiguous all-actors root tensor.
         self.all_root_states = UnifiedRootStatesView(self)
 
-        # contact_forces stays the robot-only, num_bodies-wide tensor allocated in create_envs;
-        # simulate_at_each_physics_step gathers robot rows into it each substep. It is
-        # intentionally not bound to the backend's full-model-width force view.
-
         # Create unified applied forces accessor for external force application (e.g., virtual gantry)
         self.applied_forces = self.backend.get_applied_forces_view()
 
@@ -793,11 +789,21 @@ class MuJoCo(BaseSimulator):
 
         for name, source, ids in (("dof_pos", qpos, self.dof_qpos_addrs), ("dof_vel", qvel, self.dof_qvel_addrs)):
             state.columns(name, source, ids, sources=("joints",), device=device, write=write_columns(source, ids))
-        state.columns("dof_acc", qacc, self.dof_qvel_addrs, sources=("joints",), device=device)
+        # Classic's FK pass is a full mj_forward, which recomputes accelerations and contacts.
+        state.columns("dof_acc", qacc, self.dof_qvel_addrs, sources=("joints", "bodies"), device=device)
 
         qvel_addr = self.object_addrs["robot"]["qvel_addr"]
         state.columns("base_angular_vel", qvel, range(qvel_addr + 3, qvel_addr + 6), sources=("root",), device=device)
-        state.columns("base_linear_acc", qacc, range(qvel_addr, qvel_addr + 3), sources=("root",), device=device)
+        state.columns(
+            "base_linear_acc", qacc, range(qvel_addr, qvel_addr + 3), sources=("root", "bodies"), device=device
+        )
+        if b > 0:
+            state.lazy(
+                "contact_forces",
+                lambda out: out.copy_(self.backend.compute_contact_forces()[:, self._body_ids_t]),
+                torch.zeros(n, b, 3, device=device),
+                sources=("contacts",),
+            )
 
         env_ids = torch.arange(n, device=device)
 
@@ -903,12 +909,6 @@ class MuJoCo(BaseSimulator):
         # Must run before backend.step() consumes xfrc_applied.
         self.flush_external_wrench()
         self.backend.step()
-
-        # The recorder's POST_STEP hook reads contact_forces, so it must be fresh by the end of the
-        # substep. Empty world: no robot rows to gather.
-        if self.num_bodies > 0:
-            full_forces = self.backend.compute_contact_forces()
-            self.contact_forces[:] = full_forces[:, self._body_ids_t]
         self.state.changed()
 
     @property
@@ -921,7 +921,7 @@ class MuJoCo(BaseSimulator):
         ``mjw.kinematics`` + ``camlight``). No integration."""
         self.state.prepare(everything=True)
         self.backend.forward_kinematics()
-        self.state.changed("bodies")
+        self.state.changed("bodies", "contacts")
 
     def _write_external_wrench_native(self, targets: list[WrenchTarget]) -> None:
         """Set world-frame wrenches into xfrc_applied (world frame at CoM).
@@ -1203,7 +1203,7 @@ class MuJoCo(BaseSimulator):
         assert self.root_model
         assert self.root_data
         mujoco.mj_forward(self.root_model, self.root_data)
-        self.state.changed("bodies")
+        self.state.changed("bodies", "contacts")
 
     def set_actor_root_state_tensor(self, set_env_ids: torch.Tensor | None, root_states: torch.Tensor | None) -> None:
         """Legacy compatibility method for LeggedRobotBase.

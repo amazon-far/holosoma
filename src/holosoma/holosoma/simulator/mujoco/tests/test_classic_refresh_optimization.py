@@ -11,9 +11,7 @@ import pytest
 
 mujoco = pytest.importorskip("mujoco")
 
-from holosoma.simulator.base_simulator.state import SimState  # noqa: E402
 from holosoma.simulator.mujoco.backends.classic_backend import ClassicBackend  # noqa: E402
-from holosoma.simulator.mujoco.mujoco import MuJoCo  # noqa: E402
 from holosoma.utils.safe_torch_import import torch  # noqa: E402
 
 if TYPE_CHECKING:
@@ -243,18 +241,6 @@ def test_contact_buffers_grow_beyond_initial_capacity(monkeypatch: pytest.Monkey
     np.testing.assert_array_equal(actual[2], np.full(3, contact_count, dtype=np.float32))
 
 
-class _RefreshStub:
-    def __init__(self, backend: ClassicBackend, body_ids: list[int]) -> None:
-        self.backend = backend
-        self._body_ids_t = torch.tensor(body_ids, dtype=torch.long)
-        self.num_bodies = len(body_ids)
-        self.contact_forces = torch.zeros(1, len(body_ids), 3)
-        self.state = SimState()
-
-    def flush_external_wrench(self) -> None:
-        pass
-
-
 def test_live_refresh_matches_legacy_body_state() -> None:
     backend = _backend(_CONTACT_MJCF)
     mujoco.mj_step(backend.model, backend.data)
@@ -268,18 +254,10 @@ def test_live_refresh_matches_legacy_body_state() -> None:
         assert torch.equal(actual[0].float(), expected)
 
 
-def test_step_gathers_robot_contact_rows() -> None:
-    """The gather runs inside _step_dynamics, so the forces are the ones the step just produced."""
+def test_contact_forces_match_legacy_extraction() -> None:
     backend = _backend(_CONTACT_MJCF)
-    body_ids = [2, 1]
-    backend.configure_rigid_body_refresh(body_ids)
-    sim = _RefreshStub(backend, body_ids)
-
-    MuJoCo._step_dynamics(cast("MuJoCo", sim))
-
+    mujoco.mj_step(backend.model, backend.data)
     assert backend.data.ncon == 3
-    expected_contacts = _legacy_contact_forces(backend)[:, sim._body_ids_t]
-    assert torch.count_nonzero(expected_contacts) > 0
-    assert torch.equal(sim.contact_forces, expected_contacts)
-    assert sim.contact_forces.dtype == torch.float32
-    assert sim.contact_forces.device.type == "cpu"
+    expected = _legacy_contact_forces(backend)
+    assert torch.count_nonzero(expected) > 0
+    assert torch.equal(backend.compute_contact_forces().float(), expected)
