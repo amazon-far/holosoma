@@ -49,7 +49,7 @@ TREND_METRICS = (
 )
 # Unit of the tracked metrics, appended to every figure. Change alongside the metric keys.
 TREND_UNIT = "s"
-# Link offered under each cell's figures, pointing at a saved workspace view of that cell.
+# Each cell's heading links to a saved workspace view of that cell.
 # A view URL carries nothing but the view's identifier -- the cell filter lives in the
 # saved view rather than in the URL, so one view per cell is needed and no single base URL
 # can be narrowed to a cell. That identifier also only exists on the instance the view was

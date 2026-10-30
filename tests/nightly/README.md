@@ -58,7 +58,7 @@ deviations apart, so ordinary noise reads as flat:
 The `1d` pair is the two most recent runs rather than calendar days, so a skipped night
 compares against the previous run that exists instead of reporting a gap.
 
-Under the figures is a link to a saved workspace view of the same configuration, taken
+The heading links to a saved workspace view of the same configuration, taken
 from `PERF_TREND_VIEW_URL_<CELL>` (see [Environment Variables](#environment-variables)).
 With that variable unset the link falls back to the whole project, which shows every
 configuration at once.

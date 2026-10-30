@@ -215,6 +215,7 @@ def test_block_is_one_linked_heading_then_metrics_in_order(rs: Any, monkeypatch:
     collection_key, collection_label = rs.TREND_METRICS[0]
     learning_label = rs.TREND_METRICS[1][1]
     monkeypatch.setattr(rs, "_fetch_trend_series", lambda _cell: (_by_metric(rs, _series(8, 3.3)), "project-url"))
+    monkeypatch.delenv("PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_ISAACSIM_GPUS_1", raising=False)
 
     block = rs._format_trend_block(ISAACSIM_CELL)
     assert block is not None
