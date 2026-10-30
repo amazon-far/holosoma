@@ -276,7 +276,7 @@ class WarpBackend(IMujocoBackend):
             self._body_contact_forces = wp.zeros((self.num_envs, model.nbody, 3), dtype=float)
             self._body_contact_forces_t = wp.to_torch(self._body_contact_forces)
 
-            # Rigid body state tensors (for zero-copy access during refresh_sim_tensors)
+            # Rigid body state tensors (zero-copy views of the Warp data)
             self.xpos_t = wp.to_torch(self.mjw_data.xpos)  # [num_envs, nbody, 3] - positions
             self.xquat_t = wp.to_torch(self.mjw_data.xquat)  # [num_envs, nbody, 4] - orientations [w,x,y,z]
             self.cvel_t = wp.to_torch(self.mjw_data.cvel)  # [num_envs, nbody, 6] - velocities [ang(3), lin(3)]
@@ -715,7 +715,7 @@ class WarpBackend(IMujocoBackend):
 
         Returns native PyTorch tensors that share memory with Warp arrays,
         eliminating the need for CPU↔GPU synchronization or tensor allocation
-        during refresh_sim_tensors().
+        when body state is read.
 
         Returns
         -------

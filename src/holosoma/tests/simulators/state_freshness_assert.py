@@ -29,6 +29,10 @@ from tests.simulators.contact_substep_assert import _build
 
 SETTLE_CONTROL_STEPS = 20
 CHECKED_CONTROL_STEPS = 4
+ATOL = 1e-5
+# A substep must move some body by more than this, or a stale tensor could pass within ATOL.
+MIN_SUBSTEP_MOTION = 10 * ATOL
+JOINT_OFFSET = 0.02  # rad, written in place mid-frame
 
 
 def _fresh_isaacsim(sim):
@@ -54,8 +58,13 @@ def _fresh_mujoco(sim):
         qpos, qvel = sim.backend.qpos_t, sim.backend.qvel_t
     else:
         qpos, qvel = torch.from_numpy(sim.root_data.qpos)[None], torch.from_numpy(sim.root_data.qvel)[None]
-    env_ids = torch.arange(sim.num_envs, device=sim.sim_device)
-    root = sim.get_actor_states(["robot"], env_ids)
+    from holosoma.utils.rotations import quat_rotate
+
+    qp, qv = sim.object_addrs["robot"]["qpos_addr"], sim.object_addrs["robot"]["qvel_addr"]
+    quat = qpos[:, qp + 3 : qp + 7][:, [1, 2, 3, 0]].float()  # wxyz -> xyzw
+    # Freejoint angular velocity is body-local; robot_root_states is world-frame.
+    ang_vel = quat_rotate(quat, qvel[:, qv + 3 : qv + 6].float(), w_last=True)
+    root = torch.cat([qpos[:, qp : qp + 3].float(), quat, qvel[:, qv : qv + 3].float(), ang_vel], dim=1)
     return {
         "dof_pos": qpos[:, sim.dof_qpos_addrs].clone(),
         "dof_vel": qvel[:, sim.dof_qvel_addrs].clone(),
@@ -82,8 +91,10 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
 
     decimation = sim.simulator_config.sim.control_decimation_steps
     worst: dict[str, float] = {}
-    body_z: list[float] = []
+    failures: list[str] = []
+    motions: list[float] = []
     checks = 0
+    previous: list[torch.Tensor] = []
 
     def compare(phase: str) -> None:
         nonlocal checks
@@ -92,17 +103,34 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
             checks += 1
             served = sim.state.get(name)[:].float()
             expected = fresh_value.to(served)
-            if not torch.allclose(served, expected, atol=1e-5):
+            if not torch.allclose(served, expected, atol=ATOL):
                 error = (served - expected).abs().max().item()
                 key = f"{name} stale at {phase}"
                 worst[key] = max(worst.get(key, 0.0), error)
-        body_z.append(float(fresh["_rigid_body_pos"][0, 0, 2]))
+        if phase == "POST_STEP":
+            positions = fresh["_rigid_body_pos"].float()
+            if previous:
+                motions.append((positions - previous[0]).abs().max().item())
+            previous[:] = [positions.clone()]
 
-    def control_step(checked: bool) -> None:
+    def write_mid_frame() -> None:
+        """Write joint positions in place, never flushed by hand; the next FK pass must apply them."""
+        target = sim.dof_pos[:].clone() + JOINT_OFFSET
+        sim.dof_pos[:] = target
+        sim.forward_kinematics()
+        reached = _fresh(sim, simulator)["dof_pos"].to(target)
+        if not torch.allclose(reached, target, atol=ATOL):
+            error = (reached - target).abs().max().item()
+            failures.append(f"in-place dof_pos write did not reach the simulator (max error {error:.3e})")
+        compare("FK after an in-place write")
+
+    def control_step(checked: bool, write: bool = False) -> None:
         sim.hooks.emit(Phase.FRAME_BEGIN)
-        for _ in range(decimation):
+        for substep in range(decimation):
             if checked:
                 compare("PRE_STEP")
+            if write and substep == 1:
+                write_mid_frame()
             sim.hooks.emit(Phase.PRE_STEP)
             sim.simulate_at_each_physics_step()
             sim.hooks.emit(Phase.POST_STEP)
@@ -112,16 +140,17 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
 
     for _ in range(SETTLE_CONTROL_STEPS):
         control_step(checked=False)
-    for _ in range(CHECKED_CONTROL_STEPS):
-        control_step(checked=True)
+    for frame in range(CHECKED_CONTROL_STEPS):
+        control_step(checked=True, write=frame == 1)
 
-    failures = [f"{key} (max error {error:.3e})" for key, error in sorted(worst.items())]
+    failures += [f"{key} (max error {error:.3e})" for key, error in sorted(worst.items())]
     # Without motion between substeps a frame-end snapshot would pass, so require it.
-    if len(set(body_z)) < decimation:
-        failures.append(f"VACUOUS: the pelvis barely moved between substeps ({len(set(body_z))} distinct heights)")
+    slowest = min(motions)
+    if slowest <= MIN_SUBSTEP_MOTION:
+        failures.append(f"VACUOUS: a substep moved no body by more than {MIN_SUBSTEP_MOTION:g} m ({slowest:.2e})")
     live = [name for name in sim.state.names() if sim.state.is_live(name)]
     report = [
-        f"decimation={decimation} checks={checks} distinct pelvis heights={len(set(body_z))}",
+        f"decimation={decimation} checks={checks} slowest substep body motion={slowest:.2e} m",
         f"live views: {', '.join(live) or 'none'}",
     ]
     return failures, report

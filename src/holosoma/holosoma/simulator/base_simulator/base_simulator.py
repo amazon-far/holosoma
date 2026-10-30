@@ -535,7 +535,9 @@ class BaseSimulator:
 
         Backends keep state current across physics steps, FK passes and their own writers, so a
         read at any hook sees current state. Call this after changing simulation state another way.
+        Pending in-place writes are flushed first.
         """
+        self.state.prepare()
         self.state.changed()
 
     # ----- Control Application Methods -----

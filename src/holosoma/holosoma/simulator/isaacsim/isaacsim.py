@@ -49,7 +49,7 @@ from holosoma.simulator.isaacsim.object_spawner import (
     physics_material_cfg,
 )
 from holosoma.simulator.isaacsim.scene_fixtures import build_terrain_fixtures
-from holosoma.simulator.isaacsim.state_utils import fullstate_xyzw_to_wxyz
+from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw, fullstate_xyzw_to_wxyz
 from holosoma.simulator.shared.dof_limits import build_dof_limits_from_config
 from holosoma.simulator.shared.external_wrench import WrenchTarget
 from holosoma.simulator.shared.root_states_view import UnifiedRootStatesView
@@ -705,12 +705,28 @@ class IsaacSim(BaseSimulator):
         root = torch.zeros(n, 13, device=device)
 
         def read_root(root: torch.Tensor, _quat: torch.Tensor) -> None:
-            root.copy_(data.root_state_w)
-            root[:, 3:7] = data.root_state_w[:, [4, 5, 6, 3]]  # wxyz -> xyzw
+            root.copy_(fullstate_wxyz_to_xyzw(data.root_state_w))
 
-        self.state.lazy(("robot_root_states", "base_quat"), read_root, (root, root[:, 3:7]), sources=("root",))
-        self.state.columns("dof_pos", lambda: data.joint_pos, self.dof_ids, sources=("joints",))
-        self.state.columns("dof_vel", lambda: data.joint_vel, self.dof_ids, sources=("joints",))
+        def write_root(root: torch.Tensor, _quat: torch.Tensor) -> None:
+            self._write_root_states(None, root)
+
+        self.state.lazy(
+            ("robot_root_states", "base_quat"), read_root, (root, root[:, 3:7]), sources=("root",), write=write_root
+        )
+        self.state.columns(
+            "dof_pos",
+            lambda: data.joint_pos,
+            self.dof_ids,
+            sources=("joints",),
+            write=lambda out: self._robot.write_joint_position_to_sim(out, joint_ids=self.dof_ids),
+        )
+        self.state.columns(
+            "dof_vel",
+            lambda: data.joint_vel,
+            self.dof_ids,
+            sources=("joints",),
+            write=lambda out: self._robot.write_joint_velocity_to_sim(out, joint_ids=self.dof_ids),
+        )
         self.state.lazy(
             "contact_forces",
             lambda out: out.copy_(self._robot_contact_forces()),
@@ -757,6 +773,7 @@ class IsaacSim(BaseSimulator):
         has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording
         is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors() or has_video_recording
 
+        self.state.prepare()
         # Buffers external forces onto the articulation / object handles; write_data_to_sim() below
         # flushes them into PhysX before sim.step().
         self.flush_external_wrench()
@@ -795,6 +812,7 @@ class IsaacSim(BaseSimulator):
         has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording
         is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors() or has_video_recording
 
+        self.state.prepare(everything=True)
         self.scene.write_data_to_sim()
         # sim.forward() runs physics_sim_view.update_articulations_kinematic() and flushes
         # fabric, so body/camera prims match the written joint/root state without integrating.
@@ -895,17 +913,27 @@ class IsaacSim(BaseSimulator):
         """
         if env_ids is None:
             env_ids = torch.arange(getattr(self, "num_envs", self.training_config.num_envs), device=self.sim_device)
+        env_ids = torch.as_tensor(env_ids, device=self.sim_device, dtype=torch.long)
 
+        owned = ("robot_root_states", "base_quat")
+        self.state.prepare("root", "bodies", owned=owned)
         if root_states is None or root_states is self.all_root_states:
             # The unified view passed wholesale writes the robot only.
             root_states = self.robot_root_states
-        elif root_states is not self.robot_root_states:
-            raise ValueError(f"Unexpected root states type: {type(root_states)}")
+        if len(root_states) == self.num_envs and len(env_ids) != self.num_envs:
+            root_states = root_states[env_ids]
+        elif len(root_states) != len(env_ids):
+            raise ValueError(
+                f"root_states has {len(root_states)} rows; expected {len(env_ids)} (pre-sliced) or {self.num_envs}"
+            )
+        self._write_root_states(env_ids, root_states)
+        self.state.changed("root", "bodies", written=owned)
 
-        root_wxyz = fullstate_xyzw_to_wxyz(root_states[env_ids])
+    def _write_root_states(self, env_ids: torch.Tensor | None, root_states: torch.Tensor) -> None:
+        """Write xyzw robot root states, one row per entry of ``env_ids`` (``None``: every env)."""
+        root_wxyz = fullstate_xyzw_to_wxyz(root_states)
         self._robot.write_root_pose_to_sim(root_wxyz[:, :7], env_ids)
         self._robot.write_root_velocity_to_sim(root_wxyz[:, 7:], env_ids)
-        self.state.changed("root", "bodies")
 
     def set_dof_state_tensor_robots(
         self, env_ids: EnvIds | None = None, dof_states: torch.Tensor | None = None
@@ -927,12 +955,14 @@ class IsaacSim(BaseSimulator):
         if env_ids is None:
             env_ids = torch.arange(getattr(self, "num_envs", self.training_config.num_envs), device=self.sim_device)
 
+        owned = ("dof_pos", "dof_vel")
+        self.state.prepare("joints", "bodies", owned=owned)
         if dof_states is None:
             dof_states = self.dof_state
 
         dof_pos, dof_vel = dof_states[env_ids, :, 0], dof_states[env_ids, :, 1]
         self._robot.write_joint_state_to_sim(dof_pos, dof_vel, self.dof_ids, env_ids)
-        self.state.changed("joints", "bodies")
+        self.state.changed("joints", "bodies", written=owned)
 
     def get_actor_indices(self, names: str | ActorNames, env_ids: EnvIds | None = None) -> ActorIndices:
         """See base class."""
@@ -953,7 +983,9 @@ class IsaacSim(BaseSimulator):
         flag). ``write_updates=True`` (default) flushes via :meth:`write_state_updates`
         (``scene.write_data_to_sim``); ``False`` defers for batching.
         """
+        self.state.prepare("root", "bodies")
         self._state_adapter.write_states_by_index(indices, states)
+        self.state.changed("root", "bodies")
         if write_updates:
             self.write_state_updates()
 
@@ -1098,6 +1130,7 @@ class IsaacSim(BaseSimulator):
         - Uses IsaacLab's scene.write_data_to_sim() for efficient batch synchronization
         - Only performs sync if state adapter indicates dirty state (performance optimization)
         """
+        self.state.prepare(everything=True)
         if not self._state_adapter.is_dirty():
             logger.debug("No object state changes to sync")
             return

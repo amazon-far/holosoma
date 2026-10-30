@@ -162,7 +162,6 @@ class IsaacSimStateAdapter:
             converted_states = fullstate_xyzw_to_wxyz(states)
             self._robot.write_root_pose_to_sim(converted_states[:, :7], env_ids)
             self._robot.write_root_velocity_to_sim(converted_states[:, 7:], env_ids)
-            self._state.changed("root", "bodies")
 
         elif obj_type in ("individual", "scene") and obj_name in self._scene.rigid_objects:
             # A scene rigid object — free (INDIVIDUAL) or static (SCENE). Every object,

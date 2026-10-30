@@ -8,8 +8,10 @@ from holosoma.simulator.base_simulator.state import SimState, StateTensor
 pytestmark = pytest.mark.no_sim
 
 
-def _counting_state(sources: tuple[str, ...] = ("joints",)) -> tuple[SimState, torch.Tensor, list[int]]:
-    """A state serving ``x`` from ``backing``, counting reads."""
+def _counting_state(
+    sources: tuple[str, ...] = ("joints",), writable: bool = True
+) -> tuple[SimState, torch.Tensor, list[int]]:
+    """A state serving ``x`` from ``backing`` (written back by flushes), counting reads."""
     state = SimState()
     backing = torch.arange(6, dtype=torch.float32).reshape(2, 3)
     reads: list[int] = []
@@ -18,7 +20,8 @@ def _counting_state(sources: tuple[str, ...] = ("joints",)) -> tuple[SimState, t
         reads.append(1)
         out.copy_(backing)
 
-    state.lazy("x", read, torch.zeros(2, 3), sources=sources)  # type: ignore[arg-type]
+    write = backing.copy_ if writable else None
+    state.lazy("x", read, torch.zeros(2, 3), sources=sources, write=write)  # type: ignore[arg-type]
     return state, backing, reads
 
 
@@ -35,13 +38,46 @@ def test_lazy_reads_once_per_change_of_its_sources() -> None:
     assert torch.equal(state.get("x"), backing) and state.get("x") is served and len(reads) == 2
 
 
-def test_in_place_writes_survive_changes_to_other_sources() -> None:
-    state, _, _ = _counting_state()
+def test_in_place_writes_are_flushed_before_a_mutation_of_their_sources() -> None:
+    state, backing, _ = _counting_state()
     state.get("x")[0] = -1.0
-    state.changed("bodies", "root")
-    assert torch.all(state.get("x")[0] == -1.0)
+    state.prepare("bodies")
+    assert not torch.any(backing[0] == -1.0)
+
+    state.prepare("joints")
+    state.changed("joints")
+    assert torch.all(backing[0] == -1.0) and torch.all(state.get("x")[0] == -1.0)
+
+
+def test_owned_writes_are_left_to_the_mutation() -> None:
+    state, backing, _ = _counting_state()
+    state.get("x")[0] = -1.0
+    state.prepare("joints", owned=("x",))
+    state.changed("joints", written=("x",))
+    assert not torch.any(backing[0] == -1.0)
+    state.get("x")
+
+
+def test_unflushable_writes_raise() -> None:
+    state, _, _ = _counting_state(writable=False)
+    state.get("x")[0] = -1.0
+    with pytest.raises(RuntimeError, match="read-only"):
+        state.prepare()
+
+    state, _, _ = _counting_state()
+    served = state.get("x")
     state.changed()
-    assert not torch.any(state.get("x")[0] == -1.0)
+    served[0] = -1.0
+    with pytest.raises(RuntimeError, match="written in place after"):
+        state.get("x")
+
+
+def test_changed_without_sources_stales_every_lazy_tensor() -> None:
+    state, backing, reads = _counting_state(sources=())
+    state.get("x")
+    state.changed()
+    state.get("x")
+    assert len(reads) == 2
 
 
 def test_grouped_names_share_one_read() -> None:
@@ -57,6 +93,7 @@ def test_grouped_names_share_one_read() -> None:
     assert torch.equal(state.get("quat")[0], torch.arange(3.0, 7.0))
     state.get("root")
     assert len(reads) == 1
+    assert torch.equal(state.read_fresh("quat"), root[:, 3:7])
 
 
 def test_columns_are_live_only_for_a_contiguous_float32_run() -> None:

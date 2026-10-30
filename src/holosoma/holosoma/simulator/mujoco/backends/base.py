@@ -205,7 +205,7 @@ class IMujocoBackend(abc.ABC):
         """Read an actor's per-environment freejoint state from live backend storage.
 
         Reads each env's own value from the live qpos/qvel (GPU for WarpBackend). Velocity
-        is the freejoint qvel (body-local angular), matching the set path and robot proxy.
+        is the freejoint qvel (body-local angular), matching the set path and robot_root_states.
 
         ``qpos_addr`` / ``qvel_addr`` are the start of the actor's freejoint 7-dof pose and
         6-dof velocity slices. Returns ``[len(env_ids), 13]`` in holosoma format
@@ -260,7 +260,7 @@ class IMujocoBackend(abc.ABC):
 
         This method provides efficient access to rigid body states without
         CPU↔GPU synchronization or tensor allocation overhead. Backends should
-        implement this for optimal performance during refresh_sim_tensors().
+        implement this for optimal performance when body state is read.
 
         Returns
         -------

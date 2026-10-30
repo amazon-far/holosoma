@@ -754,7 +754,7 @@ def assert_object_obs_under_pose(ctx):
     names = sim.object_registry.get_names_by_type(ObjectType.INDIVIDUAL)  # >=2 objects (obox, obox2)
     # Per-env-distinct robot root pose: env i gets yaw 0.5*i about z. Copy, mutate, write back, push.
     yaws = t.tensor([0.5 * e for e in range(ctx.n)], device=sim.sim_device)
-    root = sim.robot_root_states[:].clone()
+    root = sim.robot_root_states.clone()
     for e in range(ctx.n):
         root[e, 3:7] = t.tensor([0.0, 0.0, math.sin(0.5 * e / 2), math.cos(0.5 * e / 2)], device=root.device)
     sim.robot_root_states[:] = root
