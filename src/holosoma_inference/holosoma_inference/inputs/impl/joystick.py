@@ -21,7 +21,9 @@ JOYSTICK_COMMANDS: dict[str, StateCommand] = {
     "L1+R1": StateCommand.KILL,
     "start": StateCommand.STAND_TOGGLE,
     "L2": StateCommand.ZERO_VELOCITY,
+    # R2 as well as the chord: a pad that does not report BTN_SELECT cannot reach select+A.
     "select+A": StateCommand.START_MOTION_CLIP,
+    "R2": StateCommand.START_MOTION_CLIP,
     "X": StateCommand.SWITCH_MODE,
     "x": StateCommand.SWITCH_MODE,
 }
