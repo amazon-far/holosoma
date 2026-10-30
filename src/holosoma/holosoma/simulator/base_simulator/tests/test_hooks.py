@@ -460,7 +460,23 @@ def test_dependency_on_another_phase_does_not_order_or_resolve() -> None:
     assert messages == []
 
 
-def test_disabled_dependency_is_inert_and_returns_on_enable() -> None:
+def test_disabling_a_link_keeps_the_rest_of_the_chain_ordered() -> None:
+    # Registered c, a, b so only b's edges put a ahead of c; disabling b must not let c overtake a.
+    calls: list[str] = []
+    hooks = HookRegistry()
+    hooks.add(Phase.FRAME_END, recorder(calls, "c"), name="x.c")
+    a = hooks.add(Phase.FRAME_END, recorder(calls, "a"), name="x.a")
+    b = hooks.add(Phase.FRAME_END, recorder(calls, "b"), name="x.b", after=[a], before=["x.c"])
+
+    hooks.emit(Phase.FRAME_END)
+    calls.clear()
+    b.disable()
+    hooks.emit(Phase.FRAME_END)
+
+    assert calls == ["a", "c"]
+
+
+def test_disabled_dependency_skips_its_turn_and_returns_on_enable() -> None:
     calls: list[str] = []
     hooks = HookRegistry()
     render = hooks.add(Phase.FRAME_END, recorder(calls, "render"), name="render")

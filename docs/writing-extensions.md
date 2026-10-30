@@ -213,7 +213,7 @@ first = hooks.add(Phase.FRAME_END, seeded(1), name="dr.apply")
 hooks.add(Phase.FRAME_END, self.place, name="dr.place", after=[first])
 ```
 
-Lookup is per phase: a name registered only on another phase doesn't exist from here, and a handle for another phase is rejected. A name constraint is advisory, so one that matches nothing is silently not applied — a run that configures no cameras has no `sensors.render` to follow, and that's a satisfied constraint rather than a problem to report. A set of constraints that can't all hold raises `HookOrderError` from the next `emit` of that phase, naming the hooks in the cycle. `CLOSE` resolves the same way and then runs backwards, so a hook that declares `after` tears down *before* the hook it follows — publishers close before the runtime they publish through. For debugging, `hooks.names(phase)` returns the resolved order.
+Lookup is per phase: a name registered only on another phase doesn't exist from here, and a handle for another phase is rejected. A name constraint is advisory, so one that matches nothing is silently not applied — you can name a hook belonging to a plugin a given run doesn't select, and that's a constraint satisfied by absence rather than a problem to report. Disabling a hook costs it its turn to run but not its ordering edges, so a chain outlives one of its links being switched off. A set of constraints that can't all hold raises `HookOrderError` from the next `emit` of that phase, naming the hooks in the cycle. `CLOSE` resolves the same way and then runs backwards, so a hook that declares `after` tears down *before* the hook it follows — publishers close before the runtime they publish through. For debugging, `hooks.names(phase)` returns the resolved order.
 
 ### Cadence
 
