@@ -122,7 +122,7 @@ def _seed_motion(sim) -> None:
     import torch
 
     env_ids = torch.tensor([0], dtype=torch.long, device=sim.sim_device)
-    root = sim.robot_root_states[:].clone()
+    root = sim.robot_root_states.clone()
     root[0, 0:3] = torch.as_tensor(ROOT_POSITION_W, dtype=root.dtype, device=root.device)
     root[0, 3:7] = torch.as_tensor(ROOT_ORIENTATION_XYZW, dtype=root.dtype, device=root.device)
     root[0, 7:10] = torch.as_tensor(ROOT_LINEAR_VELOCITY_W, dtype=root.dtype, device=root.device)

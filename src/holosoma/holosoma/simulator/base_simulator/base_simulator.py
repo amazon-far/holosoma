@@ -14,6 +14,7 @@ from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.simulator.base_simulator.state import SimState, StateTensor, sim_state
 from holosoma.simulator.shared.external_wrench import ExternalWrenchAccumulator, WrenchTarget
 from holosoma.simulator.shared.object_registry import ObjectRegistry, ObjectType
 from holosoma.simulator.shared.scene_types import SceneInterface
@@ -141,11 +142,17 @@ class BaseSimulator:
 
     sim_dt: float
     viewer: object | None
-    robot_root_states: torch.Tensor
-    base_quat: torch.Tensor
-    dof_pos: torch.Tensor
-    dof_vel: torch.Tensor
-    contact_forces: torch.Tensor
+    # Robot state, bound by each backend in prepare_sim (see holosoma.simulator.base_simulator.state).
+    dof_pos = StateTensor("Robot DOF positions, ``[num_envs, num_dof]`` in ``robot_config.dof_names`` order.")
+    dof_vel = StateTensor("Robot DOF velocities, ``[num_envs, num_dof]``.")
+    dof_acc = StateTensor("Robot DOF accelerations, ``[num_envs, num_dof]``.")
+    robot_root_states = StateTensor(
+        "Robot root state ``[num_envs, 13]``: position, orientation (xyzw), world-frame linear and angular velocity."
+    )
+    base_quat = StateTensor("Robot root orientation (xyzw), ``[num_envs, 4]``.")
+    base_angular_vel = StateTensor("Robot root angular velocity, ``[num_envs, 3]``.")
+    base_linear_acc = StateTensor("Robot root linear acceleration, ``[num_envs, 3]``.")
+    contact_forces = StateTensor("Net contact force per robot body, ``[num_envs, num_bodies, 3]``.")
     contact_recorder: ContactSubstepRecorder
 
     # Robot properties, populated by each backend during setup (see _setup_robot_props_*).
@@ -165,13 +172,12 @@ class BaseSimulator:
 
     debug_viz_enabled: bool = False
 
-    # Raw robot per-body kinematics storage, refreshed by each backend every step; [num_envs,
-    # num_bodies, k] in holosoma body order, _rigid_body_rot xyzw. Read via the rigid_body_*_w
-    # properties below.
-    _rigid_body_pos: torch.Tensor
-    _rigid_body_rot: torch.Tensor
-    _rigid_body_vel: torch.Tensor
-    _rigid_body_ang_vel: torch.Tensor
+    # Robot per-body kinematics, [num_envs, num_bodies, k] in holosoma body order, _rigid_body_rot xyzw.
+    # Read via the rigid_body_*_w properties below.
+    _rigid_body_pos = StateTensor("Robot per-body world positions.")
+    _rigid_body_rot = StateTensor("Robot per-body world orientations (xyzw).")
+    _rigid_body_vel = StateTensor("Robot link-origin world linear velocities.")
+    _rigid_body_ang_vel = StateTensor("Robot per-body world angular velocities.")
 
     def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str):
         """
@@ -209,6 +215,7 @@ class BaseSimulator:
         # Register sensor rendering before plugins so FRAME_END consumers read fresh outputs.
         # This no-ops until a backend builds its sensor manager during setup.
         self.hooks.add(Phase.FRAME_END, self.render_sensors, name="sensors.render")
+        self.state: SimState = sim_state(self)
         self.installed_plugins: dict[str, Any] = {}
         self._plugins_installed = False
         self._closed = False
@@ -426,9 +433,9 @@ class BaseSimulator:
 
     # ----- Robot rigid-body kinematics (public, cross-backend) -----
     #
-    # Bare properties, not getters: each returns the backend's live _rigid_body_* storage so the hot
-    # path (reward/command/terrain terms indexing [:, body_idx, :] every step) pays nothing. Treat as
-    # read-only — mutate state via set_actor_states / apply_external_force, not through these tensors.
+    # Bare properties, not getters: each returns the served _rigid_body_* tensor, which keeps its
+    # identity across steps. Treat as read-only — mutate state via set_actor_states /
+    # apply_external_force, not through these tensors.
 
     @property
     def rigid_body_pos_w(self) -> torch.Tensor:
@@ -524,10 +531,14 @@ class BaseSimulator:
         raise NotImplementedError("The 'prepare_sim' method must be implemented in subclasses.")
 
     def refresh_sim_tensors(self) -> None:
+        """Make every state tensor reflect the current simulation on its next read.
+
+        Backends keep state current across physics steps, FK passes and their own writers, so a
+        read at any hook sees current state. Call this after changing simulation state another way.
+        Pending in-place writes are flushed first.
         """
-        Refreshes the state tensors in the simulation to ensure they are up-to-date.
-        """
-        raise NotImplementedError("The 'refresh_sim_tensors' method must be implemented in subclasses.")
+        self.state.prepare()
+        self.state.changed()
 
     # ----- Control Application Methods -----
 

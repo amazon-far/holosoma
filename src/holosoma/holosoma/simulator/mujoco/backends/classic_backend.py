@@ -20,7 +20,6 @@ from .base import IMujocoBackend, apply_sensor_scene_flags, holosoma_to_mj_quat,
 if TYPE_CHECKING:
     from holosoma.config_types.full_sim import FullSimConfig
     from holosoma.config_types.sensor import CameraDataType
-    from holosoma.simulator.mujoco.tensor_views import BaseMujocoView
     from holosoma.simulator.shared.sensor_manager import CameraRecord
 
 
@@ -36,7 +35,6 @@ class ClassicBackend(IMujocoBackend):
     - CPU-based computation
     - Manual contact force extraction via mj_contactForce
     - Numpy arrays with PyTorch tensor conversion
-    - Compatible with existing tensor_views.py proxy system
     """
 
     _INITIAL_CONTACT_CAPACITY = 256
@@ -289,32 +287,6 @@ class ClassicBackend(IMujocoBackend):
 
         return self._force_tensor
 
-    def create_root_view(self, addrs: dict[str, Any]) -> BaseMujocoView:
-        """Create root state view using existing tensor_views.
-
-        Parameters
-        ----------
-        addrs : dict
-            Address dictionary with slices for pos, quat, vel, ang_vel
-
-        Returns
-        -------
-        BaseMujocoView
-            MujocoRootStateView with quaternion conversion
-        """
-        from holosoma.simulator.mujoco.tensor_views import MujocoRootStateView
-
-        return MujocoRootStateView(
-            qpos_array=self.data.qpos,
-            qvel_array=self.data.qvel,
-            pos_indices=addrs["pos_indices"],
-            quat_indices=addrs["quat_indices"],
-            vel_indices=addrs["vel_indices"],
-            ang_vel_indices=addrs["ang_vel_indices"],
-            num_envs=1,
-            device=self.device,
-        )
-
     def get_applied_forces_view(self) -> npt.NDArray[Any]:
         """Get writable view for external applied forces.
 
@@ -328,48 +300,6 @@ class ClassicBackend(IMujocoBackend):
         """
         return cast("npt.NDArray[Any]", self.data.xfrc_applied)
 
-    def create_quaternion_view(self, quat_slice: slice) -> BaseMujocoView:
-        """Create quaternion view with format conversion.
-
-        Delegates to tensor_views factory function for CPU numpy array views.
-
-        Parameters
-        ----------
-        quat_slice : slice
-            Slice for extracting quaternion from qpos
-
-        Returns
-        -------
-        BaseMujocoView
-            View for quaternion [1, 4] with [w,x,y,z] -> [x,y,z,w] conversion
-        """
-        from holosoma.simulator.mujoco.tensor_views import create_quaternion_view
-
-        return create_quaternion_view(qpos_array=self.data.qpos, indices=quat_slice, num_envs=1, device=self.device)
-
-    def create_angular_velocity_view(self, ang_vel_slice: slice) -> BaseMujocoView:
-        """Create angular velocity view with proper reshaping.
-
-        Delegates to tensor_views factory function for CPU numpy array views.
-
-        Parameters
-        ----------
-        ang_vel_slice : slice
-            Slice for extracting angular velocity from qvel
-
-        Returns
-        -------
-        BaseMujocoView
-            View for angular velocity [1, 3]
-        """
-        from holosoma.simulator.mujoco.tensor_views import (
-            create_base_angular_velocity_view,
-        )
-
-        return create_base_angular_velocity_view(
-            qvel_array=self.data.qvel, indices=ang_vel_slice, num_envs=1, device=self.device
-        )
-
     def set_root_state(self, env_ids: torch.Tensor, root_states: torch.Tensor, root_addrs: dict[str, Any]) -> None:
         """Set robot root states. The robot root is an actor freejoint, so this
         delegates to set_actor_state at the robot's qpos/qvel addresses, then runs
@@ -381,50 +311,6 @@ class ClassicBackend(IMujocoBackend):
         self.set_actor_state(env_ids, root_states, root_addrs["robot_qpos_addr"], root_addrs["robot_qvel_addr"])
         if len(env_ids) > 0:
             mujoco.mj_forward(self.model, self.data)
-
-    def set_dof_state(self, env_ids: torch.Tensor, dof_states: torch.Tensor, dof_addrs: dict[str, Any]) -> None:
-        """Set DOF states using CPU numpy arrays.
-
-        Converts tensors to numpy, writes to MuJoCo data arrays,
-        and calls mj_forward to update derived quantities.
-
-        Parameters
-        ----------
-        env_ids : torch.Tensor
-            Environment IDs to update (must be single environment)
-        dof_states : torch.Tensor
-            DOF states [num_selected_envs * num_dofs, 2] in the flattened format
-            where [:, 0] = positions, [:, 1] = velocities
-        dof_addrs : dict
-            Address dictionary with 'dof_qpos_addrs' and 'dof_qvel_addrs' lists
-
-        Raises
-        ------
-        AssertionError
-            If multiple environments specified
-        """
-        # ClassicBackend only supports single environment
-        assert len(env_ids) <= 1, f"ClassicBackend only supports single environment, got {len(env_ids)}"
-
-        if len(env_ids) == 0:
-            return
-
-        # Parse addresses
-        qpos_addrs = dof_addrs["dof_qpos_addrs"]
-        qvel_addrs = dof_addrs["dof_qvel_addrs"]
-        num_dof = len(qpos_addrs)
-
-        # Reshape and convert to numpy
-        dof_pos = dof_states[:, 0].view(len(env_ids), num_dof)[0].detach().cpu().numpy()
-        dof_vel = dof_states[:, 1].view(len(env_ids), num_dof)[0].detach().cpu().numpy()
-
-        # Write to MuJoCo data arrays
-        for i, (qpos_idx, qvel_idx) in enumerate(zip(qpos_addrs, qvel_addrs, strict=False)):
-            self.data.qpos[qpos_idx] = dof_pos[i]
-            self.data.qvel[qvel_idx] = dof_vel[i]
-
-        # Update derived quantities
-        mujoco.mj_forward(self.model, self.data)
 
     def get_actor_state(self, env_ids: torch.Tensor, qpos_addr: int, qvel_addr: int) -> torch.Tensor:
         """Read an actor's freejoint state from CPU qpos/qvel (single environment)."""

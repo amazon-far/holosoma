@@ -62,7 +62,6 @@ if TYPE_CHECKING:
     from warp.context import Graph
 
     from holosoma.config_types.full_sim import FullSimConfig
-    from holosoma.simulator.mujoco.tensor_views import BaseMujocoView
     from holosoma.simulator.shared.sensor_manager import CameraRecord
 
 
@@ -277,7 +276,7 @@ class WarpBackend(IMujocoBackend):
             self._body_contact_forces = wp.zeros((self.num_envs, model.nbody, 3), dtype=float)
             self._body_contact_forces_t = wp.to_torch(self._body_contact_forces)
 
-            # Rigid body state tensors (for zero-copy access during refresh_sim_tensors)
+            # Rigid body state tensors (zero-copy views of the Warp data)
             self.xpos_t = wp.to_torch(self.mjw_data.xpos)  # [num_envs, nbody, 3] - positions
             self.xquat_t = wp.to_torch(self.mjw_data.xquat)  # [num_envs, nbody, 4] - orientations [w,x,y,z]
             self.cvel_t = wp.to_torch(self.mjw_data.cvel)  # [num_envs, nbody, 6] - velocities [ang(3), lin(3)]
@@ -696,31 +695,6 @@ class WarpBackend(IMujocoBackend):
         """
         return self._body_contact_forces_t
 
-    def create_root_view(self, addrs: dict[str, Any]) -> BaseMujocoView:
-        """Create root state view using zero-copy tensors.
-
-        Parameters
-        ----------
-        addrs : dict
-            Address dictionary with slices for pos, quat, vel, ang_vel
-
-        Returns
-        -------
-        MjwRootStateView
-            Root state view with quaternion conversion and zero-copy access
-        """
-        from holosoma.simulator.mujoco.mjw_views import MjwRootStateView
-
-        return MjwRootStateView(
-            qpos=self.qpos_t,
-            qvel=self.qvel_t,
-            pos_slice=addrs["pos_indices"],
-            quat_slice=addrs["quat_indices"],
-            vel_slice=addrs["vel_indices"],
-            ang_vel_slice=addrs["ang_vel_indices"],
-            num_envs=self.num_envs,
-        )
-
     def get_applied_forces_view(self) -> torch.Tensor:
         """Get writable view for external applied forces (GPU tensor).
 
@@ -736,46 +710,12 @@ class WarpBackend(IMujocoBackend):
         """
         return self.xfrc_applied_t
 
-    def create_quaternion_view(self, quat_slice: slice) -> BaseMujocoView:
-        """Create quaternion view with format conversion.
-
-        Parameters
-        ----------
-        quat_slice : slice
-            Slice for extracting quaternion from qpos
-
-        Returns
-        -------
-        MjwQuaternionView
-            Quaternion view with [w,x,y,z] -> [x,y,z,w] conversion
-        """
-        from holosoma.simulator.mujoco.mjw_views import MjwQuaternionView
-
-        return MjwQuaternionView(qpos=self.qpos_t, quat_slice=quat_slice, num_envs=self.num_envs)
-
-    def create_angular_velocity_view(self, ang_vel_slice: slice) -> BaseMujocoView:
-        """Create angular velocity view with proper reshaping.
-
-        Parameters
-        ----------
-        ang_vel_slice : slice
-            Slice for extracting angular velocity from qvel
-
-        Returns
-        -------
-        MjwAngularVelocityView
-            Angular velocity view with proper multi-env access
-        """
-        from holosoma.simulator.mujoco.mjw_views import MjwAngularVelocityView
-
-        return MjwAngularVelocityView(qvel=self.qvel_t, ang_vel_slice=ang_vel_slice, num_envs=self.num_envs)
-
     def get_rigid_body_state_views(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Get zero-copy views of rigid body states from GPU.
 
         Returns native PyTorch tensors that share memory with Warp arrays,
         eliminating the need for CPU↔GPU synchronization or tensor allocation
-        during refresh_sim_tensors().
+        when body state is read.
 
         Returns
         -------
@@ -809,57 +749,6 @@ class WarpBackend(IMujocoBackend):
         'robot_qpos_addr' and 'robot_qvel_addr'.
         """
         self.set_actor_state(env_ids, root_states, root_addrs["robot_qpos_addr"], root_addrs["robot_qvel_addr"])
-
-    def set_dof_state(self, env_ids: torch.Tensor, dof_states: torch.Tensor, dof_addrs: dict[str, Any]) -> None:
-        """Set DOF states via direct GPU tensor writes.
-
-        Writes DOF positions and velocities directly to GPU tensors
-        without CPU roundtrip. Supports batched updates efficiently.
-
-        Parameters
-        ----------
-        env_ids : torch.Tensor
-            Environment IDs to update [num_selected_envs]
-        dof_states : torch.Tensor
-            DOF states [num_all_envs * num_dofs, 2] in the flattened format
-            where [:, 0] = positions, [:, 1] = velocities
-            NOTE: Contains states for ALL environments, we select based on env_ids
-        dof_addrs : dict
-            Address dictionary with 'dof_qpos_addrs' and 'dof_qvel_addrs' lists
-        """
-        # Parse addresses
-        qpos_addrs = dof_addrs["dof_qpos_addrs"]
-        qvel_addrs = dof_addrs["dof_qvel_addrs"]
-        num_dof = len(qpos_addrs)
-
-        # Vectorized selection: extract only rows for specified env_ids
-        # dof_states is [num_all_envs * num_dof, 2], need [len(env_ids) * num_dof, 2]
-        offsets = env_ids.unsqueeze(1) * num_dof  # [len(env_ids), 1]
-        dof_offsets = torch.arange(num_dof, device=env_ids.device).unsqueeze(0)  # [1, num_dof]
-        indices = (offsets + dof_offsets).flatten()  # [len(env_ids) * num_dof]
-
-        selected_dof_states = dof_states[indices]  # [len(env_ids) * num_dof, 2]
-
-        # Reshape from the flattened format
-        dof_pos = selected_dof_states[:, 0].view(len(env_ids), num_dof)  # [num_selected_envs, num_dof]
-        dof_vel = selected_dof_states[:, 1].view(len(env_ids), num_dof)  # [num_selected_envs, num_dof]
-
-        # Vectorized GPU tensor writes using explicit expand for shape matching
-        N = len(env_ids)
-
-        # Convert address lists to tensors
-        qpos_indices = torch.tensor(qpos_addrs, device=env_ids.device)  # [num_dof]
-        qvel_indices = torch.tensor(qvel_addrs, device=env_ids.device)  # [num_dof]
-
-        # Explicit expand to [N, num_dof] for both indices
-        env_idx = env_ids.unsqueeze(1).expand(N, num_dof)  # [N, num_dof]
-        qpos_idx = qpos_indices.unsqueeze(0).expand(N, num_dof)  # [N, num_dof]
-        qvel_idx = qvel_indices.unsqueeze(0).expand(N, num_dof)  # [N, num_dof]
-
-        self.qpos_t[env_idx, qpos_idx] = dof_pos
-        self.qvel_t[env_idx, qvel_idx] = dof_vel
-
-        # No mj_forward call - next step() will handle forward kinematics
 
     def _batched_slice(self, env_ids: torch.Tensor, addr: int, size: int) -> tuple[torch.Tensor, torch.Tensor]:
         """(row, col) advanced-index tensors selecting [env_ids, addr:addr+size] as [N, size]."""

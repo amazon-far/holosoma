@@ -14,9 +14,8 @@ import torch
 from .state_utils import fullstate_wxyz_to_xyzw, fullstate_xyzw_to_wxyz
 
 if TYPE_CHECKING:
+    from holosoma.simulator.base_simulator.state import SimState
     from holosoma.simulator.shared.object_registry import ObjectRegistry
-
-    from .proxy_utils import RootStatesProxy
 
 
 class IsaacSimStateAdapter:
@@ -36,8 +35,8 @@ class IsaacSimStateAdapter:
         IsaacLab scene containing rigid objects
     robot : Articulation
         Robot articulation handle used by write_object_states
-    robot_states : RootStatesProxy
-        Robot states proxy (already handles wxyz->xyzw conversion)
+    state : SimState
+        The simulator's state registry, serving ``robot_root_states`` in xyzw
     """
 
     def __init__(
@@ -46,13 +45,13 @@ class IsaacSimStateAdapter:
         object_registry: ObjectRegistry,
         scene: Any,
         robot: Any,
-        robot_states: RootStatesProxy,
+        state: SimState,
     ) -> None:
         self.device = device
         self._object_registry = object_registry
         self._scene = scene
         self._robot = robot
-        self._robot_states = robot_states
+        self._state = state
         self._objects_dirty = False
 
     def resolve_indices(self, indices: torch.Tensor) -> list[tuple[str, torch.Tensor]]:
@@ -129,8 +128,7 @@ class IsaacSimStateAdapter:
         obj_type = self._object_registry.get_object_type(obj_name)
 
         if obj_type == "robot":
-            # Robot states already converted to xyzw via RootStatesProxy
-            return self._robot_states[env_ids]
+            return self._state.get("robot_root_states")[env_ids]
 
         elif obj_type in ("individual", "scene") and obj_name in self._scene.rigid_objects:
             # A scene rigid object — free (INDIVIDUAL) or kinematic/static (SCENE). Every
