@@ -40,6 +40,7 @@ dependencies = [
     "open3d",
     "opencv-python",
     "pandas>=1.5,<3",  # Nightly validation uses W&B's DataFrame history.
+    "pin",  # URDF forward kinematics for WBT default-pose transitions.
     "plotly",
     "pydantic",
     "pygame",

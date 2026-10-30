@@ -158,7 +158,7 @@ class WholeBodyTrackingManager(BaseTask):
             )
 
         # object
-        if motion_command.motion.has_object:  # type: ignore[has-type]
+        if motion_command.motion.has_object:
             real_object_pos_xyz = motion_command.simulator_object_pos_w.clone()
             real_object_quat_xyzw = motion_command.simulator_object_quat_w.clone()
             real_object_quat_wxyz = real_object_quat_xyzw[:, [3, 0, 1, 2]]
@@ -203,7 +203,7 @@ class WholeBodyTrackingManager(BaseTask):
         self.simulator.set_actor_root_state_tensor(env_ids, self.simulator.all_root_states)
         self.simulator.set_dof_state_tensor(env_ids, self.simulator.dof_state)  # type: ignore[attr-defined]
 
-        if motion_command.motion.has_object:  # type: ignore[has-type]
+        if motion_command.motion.has_object:
             # set object root_states from motion command
             object_pos = motion_command.object_pos_w.clone()
             object_ori = motion_command.object_quat_w.clone()
