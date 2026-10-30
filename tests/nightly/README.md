@@ -22,11 +22,10 @@ Usage:
 The message also carries a performance trend for each configuration in `TREND_CELLS`,
 reported as its own block because the metric is not comparable across them. A
 configuration with too little history is skipped with a printed reason, so adding one
-before it has runs is harmless. Each block holds one section per metric in
-`TREND_METRICS` — a heading naming the metric and configuration, then one bullet per
-timescale comparing the metric's mean, each rendered as
-`<window>: <earlier> → <later>` — followed by a single link to that configuration's
-performance trends:
+before it has runs is harmless. Each block opens with a heading naming the
+configuration, linked to its performance trends, then holds one section per metric in
+`TREND_METRICS` — a heading naming the metric, then one bullet per timescale comparing
+the metric's mean, each rendered as `<window>: <earlier> → <later>`:
 
 - `1d` — the two most recent runs
 - `7d` — the last 7 days against the 7 before

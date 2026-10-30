@@ -444,7 +444,7 @@ def _fetch_trend_series(cell: str) -> tuple[dict[str, list[tuple[datetime, float
     return series, project_url
 
 
-def _format_metric_lines(metric_label: str, cell: str, series: list[tuple[datetime, float]]) -> list[str]:
+def _format_metric_lines(metric_label: str, series: list[tuple[datetime, float]]) -> list[str]:
     """One metric's figures across three timescales; `series` needs at least two points."""
     now = datetime.now(timezone.utc)
 
@@ -481,7 +481,7 @@ def _format_metric_lines(metric_label: str, cell: str, series: list[tuple[dateti
     before_width = max(len(before) for _, _, before, _ in rendered)
 
     return [
-        f"⏱️ {metric_label} · {cell}",
+        f"⏱️ {metric_label}",
         "```",
         *(
             f"{marker} {label:>{label_width}}: {before:<{before_width}} → {after}"
@@ -499,20 +499,20 @@ def _format_trend_block(cell: str) -> str | None:
     """
     try:
         series, project_url = _fetch_trend_series(cell)
-        lines = [
+        figures = [
             line
             for key, label in TREND_METRICS
             if len(series.get(key, [])) >= 2
-            for line in _format_metric_lines(label, cell, series[key])
+            for line in _format_metric_lines(label, series[key])
         ]
-        if not lines:
+        if not figures:
             print(f"Not enough history for {cell!r} to build a trend block")
             return None
 
+        # The heading is the only place the block names its cell, so it stays even unlinked.
+        heading = f"{TREND_VIEW_LABEL} - {cell}"
         link = _trend_view_url(cell) or project_url
-        if link:
-            lines.append(f"📈 [{TREND_VIEW_LABEL} - {cell}]({link})")
-        return "\n".join(lines)
+        return "\n".join([f"📈 [{heading}]({link})" if link else f"📈 {heading}", *figures])
     except Exception as e:
         print(f"Could not build the trend block for {cell!r}: {e}")
         return None

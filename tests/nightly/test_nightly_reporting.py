@@ -191,12 +191,12 @@ def test_block_falls_back_to_project_link(rs: Any, monkeypatch: pytest.MonkeyPat
 
 
 def test_blocks_are_separated_by_a_blank_line(rs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Without it a cell's heading renders directly under the previous cell's link."""
+    """Without it a cell's heading renders directly under the previous cell's figures."""
     monkeypatch.setattr(rs, "_fetch_trend_series", lambda _cell: (_by_metric(rs, _series(8, 3.3)), "project-url"))
 
     report = rs.format_trend_report()
     assert report is not None
-    assert f"\n\n⏱️ {rs.TREND_METRICS[0][1]} · {MJWARP_CELL}" in report
+    assert f"\n\n📈 [{rs.TREND_VIEW_LABEL} - {MJWARP_CELL}]" in report
 
 
 def test_block_reports_all_three_timescales_earlier_first(rs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -210,7 +210,7 @@ def test_block_reports_all_three_timescales_earlier_first(rs: Any, monkeypatch: 
     assert block.count("→") == 3 * len(rs.TREND_METRICS)
 
 
-def test_block_lists_metrics_in_order_then_one_link(rs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_block_is_one_linked_heading_then_metrics_in_order(rs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """A metric without history is left out rather than dropping the whole cell."""
     collection_key, collection_label = rs.TREND_METRICS[0]
     learning_label = rs.TREND_METRICS[1][1]
@@ -218,9 +218,10 @@ def test_block_lists_metrics_in_order_then_one_link(rs: Any, monkeypatch: pytest
 
     block = rs._format_trend_block(ISAACSIM_CELL)
     assert block is not None
-    assert block.index(collection_label) < block.index(learning_label) < block.index("📈")
+    assert block.startswith(f"📈 [{rs.TREND_VIEW_LABEL} - {ISAACSIM_CELL}](project-url)\n")
     assert block.count("📈") == 1
-    assert block.endswith(f"[{rs.TREND_VIEW_LABEL} - {ISAACSIM_CELL}](project-url)")
+    assert block.index(collection_label) < block.index(learning_label)
+    assert block.count(ISAACSIM_CELL) == 1
 
     only_collection = {collection_key: _series(8, 3.3)}
     monkeypatch.setattr(rs, "_fetch_trend_series", lambda _cell: (only_collection, "project-url"))
