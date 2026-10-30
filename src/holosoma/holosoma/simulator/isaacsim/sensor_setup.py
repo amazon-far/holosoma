@@ -103,6 +103,45 @@ def register_cameras(sim: IsaacSim, manager: SensorManager) -> None:
             manager.register_camera(name, config)
 
 
+def sync_camera_fabric_transforms(sim: IsaacSim) -> None:
+    """Reset each camera's Fabric local transform to its authored mount offset.
+
+    Call once after ``sim.reset()``: ``IsaacSim.__init__`` does so after its own reset, and a caller
+    that resets the simulation itself (an extension launch) must call it after that reset. The
+    renderer places cameras from Fabric. Isaac Lab initializes each TiledCamera during the reset; its
+    first pose read syncs the camera into Fabric through an app update that also steps physics. The
+    camera's world pose comes from USD, where the mount body has not moved, so a camera synced after
+    its mount body moved gets a local offset derived against the moved body, and renders off its
+    mount for the whole run by an amount that depends on the physics dt. This was measured on one of
+    four cameras (the last created; 4-8 cm and 5-8 deg on a wrist camera); which cameras are hit is
+    not explained. The USD offset stays correct, so it is copied back into Fabric for every camera.
+    """
+    import carb
+    import usdrt
+    from pxr import Usd, UsdGeom
+    from usdrt import Rt
+
+    # Isaac Lab's views keep camera poses in USD without Fabric or on a CPU device; the USD offset is
+    # then what renders, and there is no Fabric transform to correct.
+    if (
+        not sim.tiled_cameras
+        or sim.sim_device == "cpu"
+        or not carb.settings.get_settings().get("/physics/fabricEnabled")
+    ):
+        return
+    fabric_stage = usdrt.Usd.Stage.Attach(sim_utils.get_current_stage_id())
+    for camera in sim.tiled_cameras.values():
+        for prim in sim_utils.find_matching_prims(camera.cfg.prim_path):
+            local = UsdGeom.Xformable(prim).GetLocalTransformation(Usd.TimeCode.Default())
+            fabric_prim = Rt.Xformable(fabric_stage.GetPrimAtPath(str(prim.GetPath())))
+            fabric_prim.GetFabricHierarchyLocalMatrixAttr().Set(
+                usdrt.Gf.Matrix4d(*(local[row][col] for row in range(4) for col in range(4)))
+            )
+    usdrt.hierarchy.IFabricHierarchy().get_fabric_hierarchy(
+        fabric_stage.GetFabricId(), fabric_stage.GetStageIdAsStageId()
+    ).update_world_xforms()
+
+
 def render_cameras(sim: IsaacSim) -> None:
     """Cache each due TiledCamera's RGB/depth as an env-first frame into its buffer.
 
