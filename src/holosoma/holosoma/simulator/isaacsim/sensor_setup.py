@@ -14,9 +14,12 @@ the scene is built.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from functools import lru_cache, partial
 from typing import TYPE_CHECKING, Any, cast
 
+import carb
 import torch
 import isaaclab.sim as sim_utils
 from isaaclab.sensors import TiledCamera, TiledCameraCfg, patterns
@@ -445,6 +448,22 @@ def register_lidars(sim: IsaacSim, manager: SensorManager) -> None:
             manager.register_lidar(name, config)
 
 
+@contextmanager
+def _app_updates_without_physics() -> Iterator[None]:
+    """Keep Kit app updates from stepping physics, as ``SimulationContext.play``/``pause`` do.
+
+    Isaac Lab's ``XformPrimView`` syncs Fabric from USD on its first read through an app update
+    (``isaaclab.sim.utils.update_stage``), which would otherwise step physics while the timeline plays.
+    """
+    settings = carb.settings.get_settings()
+    previous = settings.get_as_bool("/app/player/playSimulations")
+    settings.set_bool("/app/player/playSimulations", False)
+    try:
+        yield
+    finally:
+        settings.set_bool("/app/player/playSimulations", previous)
+
+
 def render_lidars(sim: IsaacSim) -> None:
     if sim.sensor_manager is None:
         return
@@ -454,7 +473,8 @@ def render_lidars(sim: IsaacSim) -> None:
         if not isinstance(sensor, _mutable_multi_mesh_ray_caster_cls()):
             raise TypeError(f"LiDAR '{lidar_record.name}' has no mutable MultiMeshRayCaster.")
         sensor.set_ray_directions(pattern.directions)
-        native = sensor.data
+        with _app_updates_without_physics():
+            native = sensor.data
         distances = torch.linalg.vector_norm(native.ray_hits_w - sensor.ray_starts_w, dim=-1)
         finalize_lidar_returns(lidar_record, pattern.directions, distances)
 
