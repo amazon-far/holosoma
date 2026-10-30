@@ -750,57 +750,6 @@ class WarpBackend(IMujocoBackend):
         """
         self.set_actor_state(env_ids, root_states, root_addrs["robot_qpos_addr"], root_addrs["robot_qvel_addr"])
 
-    def set_dof_state(self, env_ids: torch.Tensor, dof_states: torch.Tensor, dof_addrs: dict[str, Any]) -> None:
-        """Set DOF states via direct GPU tensor writes.
-
-        Writes DOF positions and velocities directly to GPU tensors
-        without CPU roundtrip. Supports batched updates efficiently.
-
-        Parameters
-        ----------
-        env_ids : torch.Tensor
-            Environment IDs to update [num_selected_envs]
-        dof_states : torch.Tensor
-            DOF states [num_all_envs * num_dofs, 2] in the flattened format
-            where [:, 0] = positions, [:, 1] = velocities
-            NOTE: Contains states for ALL environments, we select based on env_ids
-        dof_addrs : dict
-            Address dictionary with 'dof_qpos_addrs' and 'dof_qvel_addrs' lists
-        """
-        # Parse addresses
-        qpos_addrs = dof_addrs["dof_qpos_addrs"]
-        qvel_addrs = dof_addrs["dof_qvel_addrs"]
-        num_dof = len(qpos_addrs)
-
-        # Vectorized selection: extract only rows for specified env_ids
-        # dof_states is [num_all_envs * num_dof, 2], need [len(env_ids) * num_dof, 2]
-        offsets = env_ids.unsqueeze(1) * num_dof  # [len(env_ids), 1]
-        dof_offsets = torch.arange(num_dof, device=env_ids.device).unsqueeze(0)  # [1, num_dof]
-        indices = (offsets + dof_offsets).flatten()  # [len(env_ids) * num_dof]
-
-        selected_dof_states = dof_states[indices]  # [len(env_ids) * num_dof, 2]
-
-        # Reshape from the flattened format
-        dof_pos = selected_dof_states[:, 0].view(len(env_ids), num_dof)  # [num_selected_envs, num_dof]
-        dof_vel = selected_dof_states[:, 1].view(len(env_ids), num_dof)  # [num_selected_envs, num_dof]
-
-        # Vectorized GPU tensor writes using explicit expand for shape matching
-        N = len(env_ids)
-
-        # Convert address lists to tensors
-        qpos_indices = torch.tensor(qpos_addrs, device=env_ids.device)  # [num_dof]
-        qvel_indices = torch.tensor(qvel_addrs, device=env_ids.device)  # [num_dof]
-
-        # Explicit expand to [N, num_dof] for both indices
-        env_idx = env_ids.unsqueeze(1).expand(N, num_dof)  # [N, num_dof]
-        qpos_idx = qpos_indices.unsqueeze(0).expand(N, num_dof)  # [N, num_dof]
-        qvel_idx = qvel_indices.unsqueeze(0).expand(N, num_dof)  # [N, num_dof]
-
-        self.qpos_t[env_idx, qpos_idx] = dof_pos
-        self.qvel_t[env_idx, qvel_idx] = dof_vel
-
-        # No mj_forward call - next step() will handle forward kinematics
-
     def _batched_slice(self, env_ids: torch.Tensor, addr: int, size: int) -> tuple[torch.Tensor, torch.Tensor]:
         """(row, col) advanced-index tensors selecting [env_ids, addr:addr+size] as [N, size]."""
         n = len(env_ids)

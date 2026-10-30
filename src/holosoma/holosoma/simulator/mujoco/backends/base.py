@@ -99,7 +99,7 @@ class IMujocoBackend(abc.ABC):
     def forward_kinematics(self) -> None:
         """Propagate written qpos/qvel to derived quantities (xpos/xquat/geom/cam poses), no dynamics.
 
-        The FK-only refresh for kinematic playback: after ``set_dof_state``/``set_actor_state``
+        The FK-only refresh for kinematic playback: after ``qpos``/``qvel`` or ``set_actor_state``
         writes, this makes everything the renderers read consistent with the written state
         without integrating (no gravity, no contacts, no time advance).
         """
@@ -182,21 +182,6 @@ class IMujocoBackend(abc.ABC):
             [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz]
         root_addrs : dict
             Address dictionary with 'robot_qpos_addr' and 'robot_qvel_addr'
-        """
-        ...
-
-    @abc.abstractmethod
-    def set_dof_state(self, env_ids: torch.Tensor, dof_states: torch.Tensor, dof_addrs: dict[str, Any]) -> None:
-        """Set DOF states for specified environments.
-
-        Parameters
-        ----------
-        env_ids : torch.Tensor
-            Environment IDs to update
-        dof_states : torch.Tensor
-            DOF states [num_selected_envs * num_dofs, 2] in the flattened format
-        dof_addrs : dict
-            Address dictionary with 'dof_qpos_addrs' and 'dof_qvel_addrs'
         """
         ...
 

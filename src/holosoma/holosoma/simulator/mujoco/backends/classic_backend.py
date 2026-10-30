@@ -312,50 +312,6 @@ class ClassicBackend(IMujocoBackend):
         if len(env_ids) > 0:
             mujoco.mj_forward(self.model, self.data)
 
-    def set_dof_state(self, env_ids: torch.Tensor, dof_states: torch.Tensor, dof_addrs: dict[str, Any]) -> None:
-        """Set DOF states using CPU numpy arrays.
-
-        Converts tensors to numpy, writes to MuJoCo data arrays,
-        and calls mj_forward to update derived quantities.
-
-        Parameters
-        ----------
-        env_ids : torch.Tensor
-            Environment IDs to update (must be single environment)
-        dof_states : torch.Tensor
-            DOF states [num_selected_envs * num_dofs, 2] in the flattened format
-            where [:, 0] = positions, [:, 1] = velocities
-        dof_addrs : dict
-            Address dictionary with 'dof_qpos_addrs' and 'dof_qvel_addrs' lists
-
-        Raises
-        ------
-        AssertionError
-            If multiple environments specified
-        """
-        # ClassicBackend only supports single environment
-        assert len(env_ids) <= 1, f"ClassicBackend only supports single environment, got {len(env_ids)}"
-
-        if len(env_ids) == 0:
-            return
-
-        # Parse addresses
-        qpos_addrs = dof_addrs["dof_qpos_addrs"]
-        qvel_addrs = dof_addrs["dof_qvel_addrs"]
-        num_dof = len(qpos_addrs)
-
-        # Reshape and convert to numpy
-        dof_pos = dof_states[:, 0].view(len(env_ids), num_dof)[0].detach().cpu().numpy()
-        dof_vel = dof_states[:, 1].view(len(env_ids), num_dof)[0].detach().cpu().numpy()
-
-        # Write to MuJoCo data arrays
-        for i, (qpos_idx, qvel_idx) in enumerate(zip(qpos_addrs, qvel_addrs, strict=False)):
-            self.data.qpos[qpos_idx] = dof_pos[i]
-            self.data.qvel[qvel_idx] = dof_vel[i]
-
-        # Update derived quantities
-        mujoco.mj_forward(self.model, self.data)
-
     def get_actor_state(self, env_ids: torch.Tensor, qpos_addr: int, qvel_addr: int) -> torch.Tensor:
         """Read an actor's freejoint state from CPU qpos/qvel (single environment)."""
         assert len(env_ids) <= 1, f"ClassicBackend only supports single environment, got {len(env_ids)}"

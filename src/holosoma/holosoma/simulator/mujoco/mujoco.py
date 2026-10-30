@@ -1245,7 +1245,7 @@ class MuJoCo(BaseSimulator):
     def set_actor_root_state_tensor_robots(
         self, env_ids: EnvIds | None = None, root_states: torch.Tensor | None = None
     ) -> None:
-        """Set robot root states via backend delegation.
+        """Write robot root states into the served ``robot_root_states`` and flush them now.
 
         Parameters
         ----------
@@ -1260,26 +1260,21 @@ class MuJoCo(BaseSimulator):
         """
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self.sim_device)
-
-        self.state.prepare("root", "bodies")
-        if root_states is None:
-            root_states = self.robot_root_states[env_ids]
-        # CRITICAL: Normalize calling convention - if caller passes full global tensor
-        # but only updating subset of envs, slice it to match env_ids dimension
-        elif len(root_states) != len(env_ids):
-            if len(root_states) == self.num_envs:
-                # Full global tensor provided, slice to match env_ids
-                root_states = root_states[env_ids]
-            else:
-                raise ValueError(
-                    f"root_states dimension mismatch: got {len(root_states)}, "
-                    f"expected either {len(env_ids)} (pre-sliced) or {self.num_envs} (global)"
-                )
-
         if len(env_ids) == 0:
             logger.info("No environments to update")
             return
-        self._write_root_states(env_ids, root_states)
+
+        if root_states is not None:
+            # Accept a pre-sliced tensor [len(env_ids), 13] or a global one [num_envs, 13].
+            if len(root_states) != len(env_ids):
+                if len(root_states) != self.num_envs:
+                    raise ValueError(
+                        f"root_states dimension mismatch: got {len(root_states)}, "
+                        f"expected either {len(env_ids)} (pre-sliced) or {self.num_envs} (global)"
+                    )
+                root_states = root_states[env_ids]
+            self.robot_root_states[env_ids] = root_states
+        self.state.prepare("root", "bodies")
         self.state.changed("root", "bodies")
 
     def _write_root_states(self, env_ids: EnvIds, root_states: torch.Tensor) -> None:
@@ -1304,7 +1299,7 @@ class MuJoCo(BaseSimulator):
     def set_dof_state_tensor_robots(
         self, env_ids: EnvIds | None = None, dof_states: torch.Tensor | None = None
     ) -> None:
-        """Set robot DOF states via backend delegation.
+        """Write robot DOF states into the served ``dof_pos``/``dof_vel`` and flush them now.
 
         Parameters
         ----------
@@ -1322,28 +1317,29 @@ class MuJoCo(BaseSimulator):
             - **ClassicBackend** (single environment): ``[len(env_ids) * num_dof, 2]``.
               With ``num_envs == 1`` this is equivalent to the global shape above.
 
-            If None, uses ``self.dof_state`` (already in the correct global format).
+            If None, flushes the served ``dof_pos``/``dof_vel``.
 
             Note: a 3D ``[num_envs, num_dofs, 2]`` tensor is NOT accepted by either
             MuJoCo backend (unlike the IsaacSim implementation of this method).
         """
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self.sim_device)
-
-        self.state.prepare("joints", "bodies")
-        if dof_states is None:
-            dof_states = self.dof_state
-
-        # Validate inputs
         if len(env_ids) == 0:
             logger.info("No environments to update")
             return
-
         if self.num_dof == 0:
             logger.info("No robot DOFs available - skipping DOF state update")
             return
 
-        assert dof_states is not None
+        if dof_states is not None:
+            self._write_dof_rows(env_ids, dof_states)
+        self.state.prepare("joints", "bodies")
+        # ClassicBackend's direct qpos writes leave derived quantities stale; mj_forward them.
+        self.write_state_updates()
+        self.state.changed("joints", "bodies")
+
+    def _write_dof_rows(self, env_ids: EnvIds, dof_states: torch.Tensor) -> None:
+        """Copy flattened ``dof_states`` rows for ``env_ids`` into the served ``dof_pos``/``dof_vel``."""
         # Both MuJoCo backends consume the flattened 2D format only; neither
         # handles the 3D [num_envs, num_dofs, 2] form (that is IsaacSim-specific).
         if dof_states.dim() != 2:
@@ -1370,10 +1366,11 @@ class MuJoCo(BaseSimulator):
                 f"{type(self.backend).__name__}."
             )
 
-        # Delegate to backend
-        dof_addrs = {"dof_qpos_addrs": self.dof_qpos_addrs, "dof_qvel_addrs": self.dof_qvel_addrs}
-        self.backend.set_dof_state(env_ids, dof_states, dof_addrs)
-        self.state.changed("joints", "bodies")
+        rows = dof_states.reshape(-1, self.num_dof, 2)
+        if isinstance(self.backend, WarpBackend):
+            rows = rows[torch.as_tensor(env_ids, device=rows.device, dtype=torch.long)]
+        self.dof_pos[env_ids] = rows[..., 0]
+        self.dof_vel[env_ids] = rows[..., 1]
 
     def get_dof_limits_properties(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Get DOF limits properties from the robot config (shared builder).

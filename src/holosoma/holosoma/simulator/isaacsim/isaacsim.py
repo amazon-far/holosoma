@@ -919,18 +919,19 @@ class IsaacSim(BaseSimulator):
             env_ids = torch.arange(getattr(self, "num_envs", self.training_config.num_envs), device=self.sim_device)
         env_ids = torch.as_tensor(env_ids, device=self.sim_device, dtype=torch.long)
 
+        # The unified view passed wholesale writes the robot's served state.
+        if root_states is not None and root_states is not self.all_root_states:
+            self.robot_root_states[env_ids] = self._rows_for(env_ids, root_states)
         self.state.prepare("root", "bodies")
-        if root_states is None or root_states is self.all_root_states:
-            # The unified view passed wholesale writes the robot only.
-            root_states = self.robot_root_states
-        if len(root_states) == self.num_envs and len(env_ids) != self.num_envs:
-            root_states = root_states[env_ids]
-        elif len(root_states) != len(env_ids):
-            raise ValueError(
-                f"root_states has {len(root_states)} rows; expected {len(env_ids)} (pre-sliced) or {self.num_envs}"
-            )
-        self._write_root_states(env_ids, root_states)
         self.state.changed("root", "bodies")
+
+    def _rows_for(self, env_ids: torch.Tensor, states: torch.Tensor) -> torch.Tensor:
+        """``states`` for ``env_ids``, given pre-sliced (one row per env id) or for every env."""
+        if len(states) == len(env_ids):
+            return states
+        if len(states) == self.num_envs:
+            return states[env_ids]
+        raise ValueError(f"states has {len(states)} rows; expected {len(env_ids)} (pre-sliced) or {self.num_envs}")
 
     def _write_root_states(self, env_ids: torch.Tensor | None, root_states: torch.Tensor) -> None:
         """Write xyzw robot root states, one row per entry of ``env_ids`` (``None``: every env)."""
@@ -957,13 +958,13 @@ class IsaacSim(BaseSimulator):
         """
         if env_ids is None:
             env_ids = torch.arange(getattr(self, "num_envs", self.training_config.num_envs), device=self.sim_device)
+        env_ids = torch.as_tensor(env_ids, device=self.sim_device, dtype=torch.long)
 
+        if dof_states is not None:
+            rows = self._rows_for(env_ids, dof_states)
+            self.dof_pos[env_ids] = rows[..., 0]
+            self.dof_vel[env_ids] = rows[..., 1]
         self.state.prepare("joints", "bodies")
-        if dof_states is None:
-            dof_states = self.dof_state
-
-        dof_pos, dof_vel = dof_states[env_ids, :, 0], dof_states[env_ids, :, 1]
-        self._robot.write_joint_state_to_sim(dof_pos, dof_vel, self.dof_ids, env_ids)
         self.state.changed("joints", "bodies")
 
     def get_actor_indices(self, names: str | ActorNames, env_ids: EnvIds | None = None) -> ActorIndices:
