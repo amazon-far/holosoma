@@ -252,12 +252,12 @@ _XML = (
 )
 
 
-def _construct_bridge(bridge_config: Any) -> Any:
+def _construct_bridge(bridge_config: Any, num_motor: int = 1) -> Any:
     from holosoma.bridge import create_sdk2py_bridge
 
     return create_sdk2py_bridge(
-        cast("BaseSimulator", _FakeSim(1)),
-        cast("RobotConfig", _robot_full_config(1)),
+        cast("BaseSimulator", _FakeSim(num_motor)),
+        cast("RobotConfig", _robot_full_config(num_motor)),
         bridge_config,
     )
 
@@ -545,13 +545,9 @@ def test_transport_update_sends_one_batched_round_trip_in_queue_order(
     monkeypatch.setenv("FAKE_UNITREE_NUM_MOTOR", str(num_motor))
     record = fake_binding_on_path
 
-    from holosoma.bridge.unitree.unitree_sdk2py_bridge_mp import _BATCH, UnitreeMpSdk2Bridge
+    from holosoma.bridge.unitree.unitree_sdk2py_bridge_mp import _BATCH
 
-    bridge = UnitreeMpSdk2Bridge(
-        cast("BaseSimulator", _FakeSim(num_motor)),
-        cast("RobotConfig", _robot_full_config(num_motor)),
-        BridgeConfig(interface="lo"),
-    )
+    bridge = _construct_bridge(BridgeConfig(interface="lo"), num_motor=num_motor)
     round_trips = _counting_call(bridge, monkeypatch)
     try:
         bridge.transport_exchange()
@@ -569,34 +565,6 @@ def test_transport_update_sends_one_batched_round_trip_in_queue_order(
     assert sdk_calls == ["publish_low_state", "publish_odom_state", "read_incoming_command"]
 
 
-def test_queued_publish_is_flushed_when_an_update_ends_without_a_command_read(
-    fake_binding_on_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A publish with no following read still reaches DDS, as a single un-batched call."""
-    num_motor = 2
-    monkeypatch.setenv("FAKE_UNITREE_NUM_MOTOR", str(num_motor))
-    record = fake_binding_on_path
-
-    from holosoma.bridge.unitree.unitree_sdk2py_bridge_mp import UnitreeMpSdk2Bridge
-
-    bridge = UnitreeMpSdk2Bridge(
-        cast("BaseSimulator", _FakeSim(num_motor)),
-        cast("RobotConfig", _robot_full_config(num_motor)),
-        BridgeConfig(interface="lo"),
-    )
-    round_trips = _counting_call(bridge, monkeypatch)
-    try:
-        bridge.publish_low_state()
-        assert not bridge._pending
-    finally:
-        bridge.close()
-
-    assert round_trips == ["publish_low_state"]
-    kinds = [r["kind"] for r in _read_records(record)]
-    assert kinds.count("publish_low_state") == 1
-    assert "read_incoming_command" not in kinds
-
-
 def test_update_that_raises_still_flushes_what_it_had_already_queued(
     fake_binding_on_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -605,13 +573,7 @@ def test_update_that_raises_still_flushes_what_it_had_already_queued(
     monkeypatch.setenv("FAKE_UNITREE_NUM_MOTOR", str(num_motor))
     record = fake_binding_on_path
 
-    from holosoma.bridge.unitree.unitree_sdk2py_bridge_mp import UnitreeMpSdk2Bridge
-
-    bridge = UnitreeMpSdk2Bridge(
-        cast("BaseSimulator", _FakeSim(num_motor)),
-        cast("RobotConfig", _robot_full_config(num_motor)),
-        BridgeConfig(interface="lo"),
-    )
+    bridge = _construct_bridge(BridgeConfig(interface="lo"), num_motor=num_motor)
 
     def failing_odometry() -> tuple[list[float], list[float], list[float], float]:
         raise RuntimeError("odometry failed")
@@ -633,13 +595,9 @@ def test_unknown_method_in_a_batch_is_reported_as_an_error(
     """The batch path raises the child's error the same way a single call does."""
     monkeypatch.setenv("FAKE_UNITREE_NUM_MOTOR", "2")
 
-    from holosoma.bridge.unitree.unitree_sdk2py_bridge_mp import _BATCH, UnitreeMpSdk2Bridge
+    from holosoma.bridge.unitree.unitree_sdk2py_bridge_mp import _BATCH
 
-    bridge = UnitreeMpSdk2Bridge(
-        cast("BaseSimulator", _FakeSim(2)),
-        cast("RobotConfig", _robot_full_config(2)),
-        BridgeConfig(interface="lo"),
-    )
+    bridge = _construct_bridge(BridgeConfig(interface="lo"), num_motor=2)
     try:
         with pytest.raises(ValueError, match="Unknown method 'nope'"):
             bridge._call(_BATCH, [("nope", ())])
@@ -661,18 +619,15 @@ def test_publishes_outside_a_transport_update_go_out_immediately(
     monkeypatch.setenv("FAKE_UNITREE_NUM_MOTOR", str(num_motor))
     record = fake_binding_on_path
 
-    from holosoma.bridge.unitree.unitree_sdk2py_bridge_mp import UnitreeMpSdk2Bridge
-
-    bridge = UnitreeMpSdk2Bridge(
-        cast("BaseSimulator", _FakeSim(num_motor)),
-        cast("RobotConfig", _robot_full_config(num_motor)),
-        BridgeConfig(interface="lo"),
-    )
+    bridge = _construct_bridge(BridgeConfig(interface="lo"), num_motor=num_motor)
     round_trips = _counting_call(bridge, monkeypatch)
     try:
         bridge.publish_low_state()
-        # Published before anything else is asked of the bridge, not held for a later flush.
-        assert "publish_low_state" in [r["kind"] for r in _read_records(record)]
+        # Published before anything else is asked of the bridge, not held for a later flush, and
+        # not piggy-backed onto a command read that has not happened yet.
+        kinds_after_publish = [r["kind"] for r in _read_records(record)]
+        assert "publish_low_state" in kinds_after_publish
+        assert "read_incoming_command" not in kinds_after_publish
         assert not bridge._pending
 
         bridge.publish_odom()
