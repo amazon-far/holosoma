@@ -44,6 +44,11 @@ def _series(count: int, value: float, spacing_days: float = 1.0) -> list[tuple[d
     return [(now - timedelta(days=i * spacing_days), value + (i % 2) * 0.1) for i in range(count)]
 
 
+def _by_metric(rs: Any, series: list[tuple[datetime, float]]) -> dict[str, list[tuple[datetime, float]]]:
+    """The same series for every tracked metric, as `_fetch_trend_series` returns them."""
+    return {key: series for key, _ in rs.TREND_METRICS}
+
+
 # --- tag parsing -------------------------------------------------------------------
 
 
@@ -142,13 +147,13 @@ def test_trend_view_url_empty_when_unset(rs: Any, monkeypatch: pytest.MonkeyPatc
 
 
 def test_report_is_none_when_no_cell_has_history(rs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(rs, "_fetch_trend_series", lambda _cell: ([], None))
+    monkeypatch.setattr(rs, "_fetch_trend_series", lambda _cell: ({}, None))
     assert rs.format_trend_report() is None
 
 
 def test_report_skips_the_cell_without_history(rs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    def fetch(cell: str) -> tuple[list[tuple[datetime, float]], str | None]:
-        return (_series(8, 3.3), "project-url") if cell == ISAACSIM_CELL else ([], None)
+    def fetch(cell: str) -> tuple[dict[str, list[tuple[datetime, float]]], str | None]:
+        return (_by_metric(rs, _series(8, 3.3)), "project-url") if cell == ISAACSIM_CELL else ({}, None)
 
     monkeypatch.setattr(rs, "_fetch_trend_series", fetch)
     report = rs.format_trend_report()
@@ -159,7 +164,7 @@ def test_report_skips_the_cell_without_history(rs: Any, monkeypatch: pytest.Monk
 
 
 def test_each_block_carries_only_its_own_view_link(rs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(rs, "_fetch_trend_series", lambda _cell: (_series(8, 3.3), "project-url"))
+    monkeypatch.setattr(rs, "_fetch_trend_series", lambda _cell: (_by_metric(rs, _series(8, 3.3)), "project-url"))
     monkeypatch.setenv("PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_ISAACSIM_GPUS_1", "url-isaac")
     monkeypatch.setenv("PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_MJWARP_GPUS_1", "url-mjwarp")
 
@@ -176,7 +181,7 @@ def test_each_block_carries_only_its_own_view_link(rs: Any, monkeypatch: pytest.
 
 
 def test_block_falls_back_to_project_link(rs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(rs, "_fetch_trend_series", lambda _cell: (_series(8, 3.3), "project-url"))
+    monkeypatch.setattr(rs, "_fetch_trend_series", lambda _cell: (_by_metric(rs, _series(8, 3.3)), "project-url"))
     for cell in rs.TREND_CELLS:
         monkeypatch.delenv(f"PERF_TREND_VIEW_URL_{cell.upper().replace(' | ', '_').replace('-', '_')}", raising=False)
 
@@ -187,28 +192,47 @@ def test_block_falls_back_to_project_link(rs: Any, monkeypatch: pytest.MonkeyPat
 
 def test_blocks_are_separated_by_a_blank_line(rs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Without it a cell's heading renders directly under the previous cell's link."""
-    monkeypatch.setattr(rs, "_fetch_trend_series", lambda _cell: (_series(8, 3.3), "project-url"))
+    monkeypatch.setattr(rs, "_fetch_trend_series", lambda _cell: (_by_metric(rs, _series(8, 3.3)), "project-url"))
 
     report = rs.format_trend_report()
     assert report is not None
-    assert f"\n\n⏱️ {rs.TREND_METRIC_LABEL} · {MJWARP_CELL}" in report
+    assert f"\n\n⏱️ {rs.TREND_METRICS[0][1]} · {MJWARP_CELL}" in report
 
 
 def test_block_reports_all_three_timescales_earlier_first(rs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(rs, "_fetch_trend_series", lambda _cell: (_series(80, 3.3), "project-url"))
+    monkeypatch.setattr(rs, "_fetch_trend_series", lambda _cell: (_by_metric(rs, _series(80, 3.3)), "project-url"))
 
     block = rs._format_trend_block(ISAACSIM_CELL)
     assert block is not None
     for label in ("1d:", "7d:", "30d:"):
         assert label in block
-    # The arrow reads earlier -> later, so every row carries one.
-    assert block.count("→") == 3
+    # The arrow reads earlier -> later, so every row of every metric carries one.
+    assert block.count("→") == 3 * len(rs.TREND_METRICS)
+
+
+def test_block_lists_metrics_in_order_then_one_link(rs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A metric without history is left out rather than dropping the whole cell."""
+    collection_key, collection_label = rs.TREND_METRICS[0]
+    learning_label = rs.TREND_METRICS[1][1]
+    monkeypatch.setattr(rs, "_fetch_trend_series", lambda _cell: (_by_metric(rs, _series(8, 3.3)), "project-url"))
+
+    block = rs._format_trend_block(ISAACSIM_CELL)
+    assert block is not None
+    assert block.index(collection_label) < block.index(learning_label) < block.index("📈")
+    assert block.count("📈") == 1
+    assert block.endswith(f"[{rs.TREND_VIEW_LABEL} - {ISAACSIM_CELL}](project-url)")
+
+    only_collection = {collection_key: _series(8, 3.3)}
+    monkeypatch.setattr(rs, "_fetch_trend_series", lambda _cell: (only_collection, "project-url"))
+    block = rs._format_trend_block(ISAACSIM_CELL)
+    assert block is not None
+    assert collection_label in block and learning_label not in block
 
 
 def test_block_is_none_rather_than_raising_on_a_fetch_failure(rs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """The trend is a nicety; it must never stop the summary posting."""
 
-    def boom(cell: str) -> tuple[list[tuple[datetime, float]], str | None]:
+    def boom(cell: str) -> tuple[dict[str, list[tuple[datetime, float]]], str | None]:
         raise RuntimeError("wandb unavailable")
 
     monkeypatch.setattr(rs, "_fetch_trend_series", boom)

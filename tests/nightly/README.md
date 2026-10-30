@@ -22,10 +22,11 @@ Usage:
 The message also carries a performance trend for each configuration in `TREND_CELLS`,
 reported as its own block because the metric is not comparable across them. A
 configuration with too little history is skipped with a printed reason, so adding one
-before it has runs is harmless. Each block is a heading naming the metric and
-configuration, then one bullet per
-timescale comparing the mean of `TREND_METRIC_KEY`, each rendered as
-`<window>: <earlier> → <later>`:
+before it has runs is harmless. Each block holds one section per metric in
+`TREND_METRICS` — a heading naming the metric and configuration, then one bullet per
+timescale comparing the metric's mean, each rendered as
+`<window>: <earlier> → <later>` — followed by a single link to that configuration's
+performance trends:
 
 - `1d` — the two most recent runs
 - `7d` — the last 7 days against the 7 before
@@ -37,8 +38,8 @@ direction time runs.
 
 The trailing marker pairs a verdict colour with a diagonal arrow for the direction: 🟢
 better, 🔴 worse, ⚪ flat. Which direction counts as better comes from
-`TREND_LOWER_IS_BETTER`, which must be flipped if `TREND_METRIC_KEY` is pointed at a
-metric like throughput where higher is better. The colours are circles so they don't read
+`TREND_LOWER_IS_BETTER`, which must be flipped if `TREND_METRICS` is pointed at
+metrics like throughput where higher is better. The colours are circles so they don't read
 as the squares in the run-status legend lower down the same message.
 
 A change is only coloured when the two figures are more than `TREND_SIGMA` standard

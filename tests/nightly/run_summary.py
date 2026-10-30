@@ -35,16 +35,19 @@ GITHUB_RUN_ID = getenv("GITHUB_RUN_ID")
 PERF_WARNING_TAG = "nightly_perf_warning"
 
 # Performance trend included in the Slack summary, one block per cell. The cell label and the
-# metric key are written by backfill_perf_summary.py; keep in sync with that script.
+# metric keys are written by backfill_perf_summary.py; keep in sync with that script.
 PERF_PROJECT = "nightly-holosoma-runs"
 PERF_CELL_KEY = "perf/cell"
 TREND_CELLS = (
     "g1_29dof_manager | isaacsim | gpus-1",
     "g1_29dof_manager | mjwarp | gpus-1",
 )
-TREND_METRIC_KEY = "perf/collection_time_mean"
-TREND_METRIC_LABEL = "collection_time mean"
-# Unit of the tracked metric, appended to every figure. Change alongside the metric key.
+# (summary key, label) of each metric reported per cell, in display order.
+TREND_METRICS = (
+    ("perf/collection_time_mean", "collection_time mean"),
+    ("perf/learning_time_mean", "learning_time mean"),
+)
+# Unit of the tracked metrics, appended to every figure. Change alongside the metric keys.
 TREND_UNIT = "s"
 # Link offered under each cell's figures, pointing at a saved workspace view of that cell.
 # A view URL carries nothing but the view's identifier -- the cell filter lives in the
@@ -66,7 +69,7 @@ TREND_SIGMA = 2.0
 # normally varies from night to night, measured over this many recent runs.
 TREND_DAILY_BASELINE_RUNS = 14
 # Whether a falling value is an improvement. True for a timing metric, false if the
-# tracked metric is changed to something like throughput, where higher is better.
+# tracked metrics are changed to something like throughput, where higher is better.
 TREND_LOWER_IS_BETTER = True
 # Verdict markers. Colour rather than direction: the figures either side of the arrow
 # already show which way the metric moved, so what the marker adds is whether that is
@@ -401,8 +404,9 @@ def _trend_view_url(cell: str) -> str:
     return url
 
 
-def _fetch_trend_series(cell: str) -> tuple[list[tuple[datetime, float]], str | None]:
-    """The tracked metric for one cell newest first, with a link to its project.
+def _fetch_trend_series(cell: str) -> tuple[dict[str, list[tuple[datetime, float]]], str | None]:
+    """Each tracked metric's series for one cell, keyed by summary key and newest first, with
+    a link to its project.
 
     The link is taken from a run's own URL so it addresses whichever wandb instance the
     job is pointed at, rather than naming one.
@@ -419,80 +423,95 @@ def _fetch_trend_series(cell: str) -> tuple[list[tuple[datetime, float]], str | 
         order="-created_at",
     )
 
-    series: list[tuple[datetime, float]] = []
+    series: dict[str, list[tuple[datetime, float]]] = {key: [] for key, _ in TREND_METRICS}
     project_url: str | None = None
     for run in runs:
-        value = (run.summary or {}).get(TREND_METRIC_KEY)
         created = getattr(run, "created_at", None)
-        if not isinstance(value, (int, float)) or not math.isfinite(value) or not created:
+        if not created:
             continue
-        series.append((datetime.fromisoformat(str(created).replace("Z", "+00:00")), float(value)))
+        stamp = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+        summary = run.summary or {}
+        for key, _ in TREND_METRICS:
+            value = summary.get(key)
+            if isinstance(value, (int, float)) and math.isfinite(value):
+                series[key].append((stamp, float(value)))
         run_url = getattr(run, "url", None)
         if project_url is None and run_url and "/runs/" in run_url:
             project_url = run_url.rsplit("/runs/", 1)[0]
 
-    series.sort(key=lambda entry: entry[0], reverse=True)
+    for values in series.values():
+        values.sort(key=lambda entry: entry[0], reverse=True)
     return series, project_url
 
 
+def _format_metric_lines(metric_label: str, cell: str, series: list[tuple[datetime, float]]) -> list[str]:
+    """One metric's figures across three timescales; `series` needs at least two points."""
+    now = datetime.now(timezone.utc)
+
+    def window(from_days_ago: int, to_days_ago: int) -> PeriodStat | None:
+        start = now - timedelta(days=from_days_ago)
+        end = now - timedelta(days=to_days_ago)
+        return _period_stat([value for stamp, value in series if start <= stamp < end])
+
+    # A single night carries no error of its own, so the scale for the 1d comparison
+    # comes from how much this cell normally varies from night to night. Two single
+    # observations are being differenced, so their spreads combine in quadrature the
+    # same way the segment errors do -- giving sd * sqrt(2), not sd.
+    recent = [value for _, value in series[:TREND_DAILY_BASELINE_RUNS]]
+    nightly_sd = statistics.stdev(recent) if len(recent) > 1 else None
+    nightly_spread = math.hypot(nightly_sd, nightly_sd) if nightly_sd else None
+
+    # Each comparison reads earlier to later, so the arrow between the two figures
+    # is the direction time runs and the trailing marker is the verdict.
+    # The 1d pair is the two newest runs rather than calendar days, so a skipped
+    # night compares against the previous run that exists instead of reporting a gap.
+    segments = [(f"{span}d", window(span * 2, span), window(span, 0)) for span in (7, 30)]
+    comparisons = [
+        ("1d", _period_stat([series[1][1]]), _period_stat([series[0][1]]), nightly_spread),
+        *((label, before, after, _difference_error(before, after)) for label, before, after in segments),
+    ]
+
+    # Fenced and column-aligned: Slack renders ordinary text proportionally, so the
+    # padding that lines the arrows up only holds inside a code block.
+    rendered = [
+        (_trend_marker(after, before, sigma), label, _format_stat(before), _format_stat(after))
+        for label, before, after, sigma in comparisons
+    ]
+    label_width = max(len(label) for _, label, _, _ in rendered)
+    before_width = max(len(before) for _, _, before, _ in rendered)
+
+    return [
+        f"⏱️ {metric_label} · {cell}",
+        "```",
+        *(
+            f"{marker} {label:>{label_width}}: {before:<{before_width}} → {after}"
+            for marker, label, before, after in rendered
+        ),
+        "```",
+    ]
+
+
 def _format_trend_block(cell: str) -> str | None:
-    """One cell's figures across three timescales, or None if it has too little history.
+    """One cell's figures for every tracked metric, or None if none has enough history.
 
     Returns None rather than raising: this is a nicety on top of the run summary and
     must never be the reason the summary fails to post.
     """
     try:
         series, project_url = _fetch_trend_series(cell)
-        if len(series) < 2:
+        lines = [
+            line
+            for key, label in TREND_METRICS
+            if len(series.get(key, [])) >= 2
+            for line in _format_metric_lines(label, cell, series[key])
+        ]
+        if not lines:
             print(f"Not enough history for {cell!r} to build a trend block")
             return None
 
-        now = datetime.now(timezone.utc)
-
-        def window(from_days_ago: int, to_days_ago: int) -> PeriodStat | None:
-            start = now - timedelta(days=from_days_ago)
-            end = now - timedelta(days=to_days_ago)
-            return _period_stat([value for stamp, value in series if start <= stamp < end])
-
-        # A single night carries no error of its own, so the scale for the 1d comparison
-        # comes from how much this cell normally varies from night to night. Two single
-        # observations are being differenced, so their spreads combine in quadrature the
-        # same way the segment errors do -- giving sd * sqrt(2), not sd.
-        recent = [value for _, value in series[:TREND_DAILY_BASELINE_RUNS]]
-        nightly_sd = statistics.stdev(recent) if len(recent) > 1 else None
-        nightly_spread = math.hypot(nightly_sd, nightly_sd) if nightly_sd else None
-
-        # Each comparison reads earlier to later, so the arrow between the two figures
-        # is the direction time runs and the trailing marker is the verdict.
-        # The 1d pair is the two newest runs rather than calendar days, so a skipped
-        # night compares against the previous run that exists instead of reporting a gap.
-        segments = [(f"{span}d", window(span * 2, span), window(span, 0)) for span in (7, 30)]
-        comparisons = [
-            ("1d", _period_stat([series[1][1]]), _period_stat([series[0][1]]), nightly_spread),
-            *((label, before, after, _difference_error(before, after)) for label, before, after in segments),
-        ]
-
-        # Fenced and column-aligned: Slack renders ordinary text proportionally, so the
-        # padding that lines the arrows up only holds inside a code block.
-        rendered = [
-            (_trend_marker(after, before, sigma), label, _format_stat(before), _format_stat(after))
-            for label, before, after, sigma in comparisons
-        ]
-        label_width = max(len(label) for _, label, _, _ in rendered)
-        before_width = max(len(before) for _, _, before, _ in rendered)
-
-        lines = [
-            f"⏱️ {TREND_METRIC_LABEL} · {cell}",
-            "```",
-            *(
-                f"{marker} {label:>{label_width}}: {before:<{before_width}} → {after}"
-                for marker, label, before, after in rendered
-            ),
-            "```",
-        ]
         link = _trend_view_url(cell) or project_url
         if link:
-            lines.append(f"📈 [{TREND_VIEW_LABEL}]({link})")
+            lines.append(f"📈 [{TREND_VIEW_LABEL} - {cell}]({link})")
         return "\n".join(lines)
     except Exception as e:
         print(f"Could not build the trend block for {cell!r}: {e}")
