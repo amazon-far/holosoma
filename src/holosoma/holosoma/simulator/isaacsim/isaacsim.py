@@ -707,8 +707,8 @@ class IsaacSim(BaseSimulator):
         def read_root(root: torch.Tensor, _quat: torch.Tensor) -> None:
             root.copy_(fullstate_wxyz_to_xyzw(data.root_state_w))
 
-        def write_root(root: torch.Tensor, _quat: torch.Tensor) -> None:
-            self._write_root_states(None, root)
+        def write_root(rows: torch.Tensor, root: torch.Tensor, _quat: torch.Tensor) -> None:
+            self._write_root_states(rows, root[rows])
 
         self.state.lazy(
             ("robot_root_states", "base_quat"), read_root, (root, root[:, 3:7]), sources=("root",), write=write_root
@@ -718,14 +718,18 @@ class IsaacSim(BaseSimulator):
             lambda: data.joint_pos,
             self.dof_ids,
             sources=("joints",),
-            write=lambda out: self._robot.write_joint_position_to_sim(out, joint_ids=self.dof_ids),
+            write=lambda rows, out: self._robot.write_joint_position_to_sim(
+                out[rows], joint_ids=self.dof_ids, env_ids=rows
+            ),
         )
         self.state.columns(
             "dof_vel",
             lambda: data.joint_vel,
             self.dof_ids,
             sources=("joints",),
-            write=lambda out: self._robot.write_joint_velocity_to_sim(out, joint_ids=self.dof_ids),
+            write=lambda rows, out: self._robot.write_joint_velocity_to_sim(
+                out[rows], joint_ids=self.dof_ids, env_ids=rows
+            ),
         )
         self.state.lazy(
             "contact_forces",
@@ -915,8 +919,7 @@ class IsaacSim(BaseSimulator):
             env_ids = torch.arange(getattr(self, "num_envs", self.training_config.num_envs), device=self.sim_device)
         env_ids = torch.as_tensor(env_ids, device=self.sim_device, dtype=torch.long)
 
-        owned = ("robot_root_states", "base_quat")
-        self.state.prepare("root", "bodies", owned=owned)
+        self.state.prepare("root", "bodies")
         if root_states is None or root_states is self.all_root_states:
             # The unified view passed wholesale writes the robot only.
             root_states = self.robot_root_states
@@ -927,7 +930,7 @@ class IsaacSim(BaseSimulator):
                 f"root_states has {len(root_states)} rows; expected {len(env_ids)} (pre-sliced) or {self.num_envs}"
             )
         self._write_root_states(env_ids, root_states)
-        self.state.changed("root", "bodies", written=owned)
+        self.state.changed("root", "bodies")
 
     def _write_root_states(self, env_ids: torch.Tensor | None, root_states: torch.Tensor) -> None:
         """Write xyzw robot root states, one row per entry of ``env_ids`` (``None``: every env)."""
@@ -955,14 +958,13 @@ class IsaacSim(BaseSimulator):
         if env_ids is None:
             env_ids = torch.arange(getattr(self, "num_envs", self.training_config.num_envs), device=self.sim_device)
 
-        owned = ("dof_pos", "dof_vel")
-        self.state.prepare("joints", "bodies", owned=owned)
+        self.state.prepare("joints", "bodies")
         if dof_states is None:
             dof_states = self.dof_state
 
         dof_pos, dof_vel = dof_states[env_ids, :, 0], dof_states[env_ids, :, 1]
         self._robot.write_joint_state_to_sim(dof_pos, dof_vel, self.dof_ids, env_ids)
-        self.state.changed("joints", "bodies", written=owned)
+        self.state.changed("joints", "bodies")
 
     def get_actor_indices(self, names: str | ActorNames, env_ids: EnvIds | None = None) -> ActorIndices:
         """See base class."""

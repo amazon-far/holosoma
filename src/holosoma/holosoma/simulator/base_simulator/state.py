@@ -5,15 +5,16 @@ A backend binds each state quantity once, in ``prepare_sim``:
 - :meth:`SimState.live` serves a tensor as is: a zero-copy view of backend storage, or a buffer the
   backend fills itself.
 - :meth:`SimState.lazy` serves preallocated buffers that ``read`` fills on the first access after
-  any of the group's sources changed, and that ``write`` flushes to the simulation. Several names may
-  share one read.
+  any of the group's sources changed, and that ``write`` flushes to the simulation, row by row. Several
+  names may share one read.
 - :meth:`SimState.columns` picks between the two for a column selection: a live ``narrow`` view when
   the selection is a contiguous ascending run of a stable float32 tensor, else a lazy gather.
 
 Every served tensor keeps its identity, so references to it stay valid. Reads see the current
 simulation state. In-place writes reach the simulation before its next physics step, FK pass, refresh
 or any state write that would replace them: a live view writes backend storage directly, and a lazy
-buffer is flushed through its ``write``. A lazy tensor bound without ``write`` is read-only.
+buffer's changed rows (environments) are flushed through its ``write``. A lazy tensor bound without
+``write`` is read-only.
 
 Backends bracket every state mutation with :meth:`SimState.prepare` (flush pending writes it depends
 on or would replace) and :meth:`SimState.changed` (mark what it touched stale), naming the sources it
@@ -22,7 +23,7 @@ touches.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, Literal, overload
 
 import torch
@@ -32,7 +33,7 @@ SOURCES: tuple[Source, ...] = ("joints", "root", "bodies", "contacts")
 
 
 class _LazyGroup:
-    __slots__ = ("buffers", "clean", "names", "read", "valid", "write")
+    __slots__ = ("buffers", "clean", "names", "read", "snapshots", "valid", "write")
 
     def __init__(
         self,
@@ -46,6 +47,10 @@ class _LazyGroup:
         self.write = write
         self.buffers = buffers
         self.valid = False
+        # Writable groups keep a copy of each buffer that is not a view of another, to find changed rows.
+        self.snapshots = (
+            None if write is None else tuple(buffer.clone() for buffer in buffers if buffer._base is None)
+        )
         self.clean = self._versions()
 
     def _versions(self) -> tuple[int, ...]:
@@ -55,7 +60,20 @@ class _LazyGroup:
         """Whether a buffer was written in place since the last read or flush."""
         return self._versions() != self.clean
 
+    def changed_rows(self) -> torch.Tensor:
+        """Rows (environments) that differ from the last read or flush."""
+        assert self.snapshots is not None
+        bases = [buffer for buffer in self.buffers if buffer._base is None]
+        changed = torch.zeros(bases[0].shape[0], dtype=torch.bool, device=bases[0].device)
+        for buffer, snapshot in zip(bases, self.snapshots, strict=True):
+            changed |= (buffer != snapshot).reshape(buffer.shape[0], -1).any(dim=1)
+        return changed.nonzero().squeeze(1)
+
     def mark_clean(self) -> None:
+        if self.snapshots is not None:
+            bases = [buffer for buffer in self.buffers if buffer._base is None]
+            for buffer, snapshot in zip(bases, self.snapshots, strict=True):
+                snapshot.copy_(buffer)
         self.clean = self._versions()
 
 
@@ -81,7 +99,7 @@ class SimState:
         sources: Sequence[Source],
         write: Callable[..., None] | None = None,
     ) -> None:
-        """Serve ``buffers`` as ``names``; ``read(*buffers)`` fills them, ``write(*buffers)`` flushes them."""
+        """Serve ``buffers`` as ``names``; ``read(*buffers)`` fills them, ``write(rows, *buffers)`` flushes ``rows``."""
         names = (names,) if isinstance(names, str) else tuple(names)
         buffers = (buffers,) if isinstance(buffers, torch.Tensor) else tuple(buffers)
         group = _LazyGroup(names, read, write, buffers)
@@ -100,13 +118,13 @@ class SimState:
         *,
         sources: Sequence[Source],
         device: torch.device | str | None = None,
-        write: Callable[[torch.Tensor], None] | None = None,
+        write: Callable[[torch.Tensor, torch.Tensor], None] | None = None,
     ) -> None:
         """Serve ``source[:, ids]`` as ``name``, live when possible.
 
         ``source`` is a ``[num_envs, n, ...]`` tensor, or a callable returning the current one when the
         backend replaces its storage (always read lazily). The served tensor is float32 on ``device``
-        (default: the source's). ``write`` flushes the lazy buffer; a live view writes ``source``.
+        (default: the source's). ``write(rows, buffer)`` flushes the lazy buffer; a live view writes ``source``.
         """
         if isinstance(source, torch.Tensor):
             view = contiguous_columns(source, ids)
@@ -130,32 +148,24 @@ class SimState:
 
         self.lazy(name, read, buffer, sources=sources, write=write)
 
-    def prepare(self, *sources: Source, everything: bool = False, owned: Collection[str] = ()) -> None:
-        """Flush pending writes before a mutation of ``sources`` (no arguments, or ``everything``: all).
-
-        ``owned`` names the tensors the mutation writes itself; their pending writes are left to it.
-        """
+    def prepare(self, *sources: Source, everything: bool = False) -> None:
+        """Flush the rows written in place before a mutation of ``sources`` (no arguments, or ``everything``: all)."""
         groups = self._all_groups() if everything or not sources else self._groups_of(sources)
         flushed = False
         for group in groups:
-            if group.valid and group.written() and not set(group.names) & set(owned):
+            if group.valid and group.written():
                 if group.write is None:
                     raise RuntimeError(f"Simulator state {', '.join(group.names)} is read-only")
-                group.write(*group.buffers)
+                rows = group.changed_rows()
+                if rows.numel():
+                    group.write(rows, *group.buffers)
+                    flushed = True
                 group.mark_clean()
-                flushed = True
         if flushed:
             self.changed("bodies")
 
-    def changed(self, *sources: Source, written: Collection[str] = ()) -> None:
-        """Mark tensors reading ``sources`` stale (no arguments: every lazy tensor).
-
-        ``written`` names tensors the mutation just wrote from their served buffers.
-        """
-        for name in written:
-            group = self._groups.get(name)
-            if group is not None:
-                group.mark_clean()
+    def changed(self, *sources: Source) -> None:
+        """Mark tensors reading ``sources`` stale (no arguments: every lazy tensor)."""
         for group in self._groups_of(sources) if sources else self._all_groups():
             group.valid = False
 

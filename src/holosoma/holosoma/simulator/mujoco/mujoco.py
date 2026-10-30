@@ -781,9 +781,10 @@ class MuJoCo(BaseSimulator):
         def write_columns(source: Any, ids: list[int]) -> Any:
             ids_t = torch.as_tensor(ids, dtype=torch.long, device=current(source).device)
 
-            def write(out: torch.Tensor) -> None:
+            def write(rows: torch.Tensor, out: torch.Tensor) -> None:
                 target = current(source)  # classic: a view of the MjData array
-                target[:, ids_t] = out.to(target)
+                target_rows = rows.to(target.device)
+                target[target_rows.unsqueeze(1), ids_t.unsqueeze(0)] = out[rows].to(target)
 
             return write
 
@@ -810,8 +811,8 @@ class MuJoCo(BaseSimulator):
         def read_root(root: torch.Tensor, _quat: torch.Tensor) -> None:
             root.copy_(self.get_actor_states(["robot"], env_ids))
 
-        def write_root(root: torch.Tensor, _quat: torch.Tensor) -> None:
-            self._write_root_states(env_ids, root)
+        def write_root(rows: torch.Tensor, root: torch.Tensor, _quat: torch.Tensor) -> None:
+            self._write_root_states(rows, root[rows])
 
         root = torch.zeros(n, 13, device=device)
         state.lazy(
@@ -1260,8 +1261,7 @@ class MuJoCo(BaseSimulator):
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self.sim_device)
 
-        owned = ("robot_root_states", "base_quat")
-        self.state.prepare("root", "bodies", owned=owned)
+        self.state.prepare("root", "bodies")
         if root_states is None:
             root_states = self.robot_root_states[env_ids]
         # CRITICAL: Normalize calling convention - if caller passes full global tensor
@@ -1280,7 +1280,7 @@ class MuJoCo(BaseSimulator):
             logger.info("No environments to update")
             return
         self._write_root_states(env_ids, root_states)
-        self.state.changed("root", "bodies", written=owned)
+        self.state.changed("root", "bodies")
 
     def _write_root_states(self, env_ids: EnvIds, root_states: torch.Tensor) -> None:
         """Write world-frame robot root states, one row per entry of ``env_ids``."""
@@ -1330,8 +1330,7 @@ class MuJoCo(BaseSimulator):
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self.sim_device)
 
-        owned = ("dof_pos", "dof_vel")
-        self.state.prepare("joints", "bodies", owned=owned)
+        self.state.prepare("joints", "bodies")
         if dof_states is None:
             dof_states = self.dof_state
 
@@ -1374,7 +1373,7 @@ class MuJoCo(BaseSimulator):
         # Delegate to backend
         dof_addrs = {"dof_qpos_addrs": self.dof_qpos_addrs, "dof_qvel_addrs": self.dof_qvel_addrs}
         self.backend.set_dof_state(env_ids, dof_states, dof_addrs)
-        self.state.changed("joints", "bodies", written=owned)
+        self.state.changed("joints", "bodies")
 
     def get_dof_limits_properties(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Get DOF limits properties from the robot config (shared builder).
