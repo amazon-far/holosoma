@@ -47,3 +47,25 @@ add_dependencies(holosoma_contextual_tests holosoma_contextual_fixtures)
 target_link_libraries(holosoma_contextual_tests PRIVATE holosoma_cpp_core GTest::gtest_main nlohmann_json::nlohmann_json)
 target_compile_definitions(holosoma_contextual_tests PRIVATE HOLOSOMA_CONTEXTUAL_FIXTURE_DIR="${CONTEXTUAL_FIXTURES}")
 gtest_discover_tests(holosoma_contextual_tests DISCOVERY_TIMEOUT 60)
+
+add_executable(holosoma_contextual_trace_tests test_contextual_primitive_trace.cpp)
+add_dependencies(holosoma_contextual_trace_tests holosoma_contextual_fixtures)
+target_link_libraries(holosoma_contextual_trace_tests PRIVATE holosoma_cpp_core GTest::gtest_main nlohmann_json::nlohmann_json)
+target_compile_definitions(holosoma_contextual_trace_tests PRIVATE
+  HOLOSOMA_CONTEXTUAL_FIXTURE_DIR="${CONTEXTUAL_FIXTURES}"
+  HOLOSOMA_CONTEXTUAL_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/golden")
+gtest_discover_tests(holosoma_contextual_trace_tests DISCOVERY_TIMEOUT 60)
+
+set(VELOCITY_FIXTURES "${CMAKE_CURRENT_BINARY_DIR}/velocity-fixtures")
+add_custom_command(OUTPUT "${VELOCITY_FIXTURES}/stamp"
+  COMMAND "${Python_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/gen_velocity_models.py" --output-dir "${VELOCITY_FIXTURES}"
+  COMMAND ${CMAKE_COMMAND} -E touch "${VELOCITY_FIXTURES}/stamp"
+  DEPENDS gen_velocity_models.py golden/velocity_export_metadata.json)
+add_custom_target(holosoma_velocity_fixtures DEPENDS "${VELOCITY_FIXTURES}/stamp")
+add_executable(holosoma_contextual_velocity_tests test_contextual_velocity.cpp)
+add_dependencies(holosoma_contextual_velocity_tests holosoma_velocity_fixtures)
+target_link_libraries(holosoma_contextual_velocity_tests PRIVATE holosoma_cpp_core GTest::gtest_main nlohmann_json::nlohmann_json)
+target_compile_definitions(holosoma_contextual_velocity_tests PRIVATE
+  HOLOSOMA_VELOCITY_FIXTURE_DIR="${VELOCITY_FIXTURES}"
+  HOLOSOMA_CONTEXTUAL_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/golden")
+gtest_discover_tests(holosoma_contextual_velocity_tests DISCOVERY_TIMEOUT 60)

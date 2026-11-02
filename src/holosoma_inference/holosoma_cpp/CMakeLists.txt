@@ -31,6 +31,7 @@ set(HOLOSOMA_PRESET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/config/inference" CACHE PAT
 add_library(holosoma_cpp_core SHARED
   src/contextual_kernel.cpp
   src/contextual_policy.cpp
+  src/contextual_velocity.cpp
   src/general_wbt_policy.cpp
   src/cli.cpp
   src/commands.cpp

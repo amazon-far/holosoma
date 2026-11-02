@@ -163,6 +163,54 @@ def test_contextual_imu_to_obs_chain_and_depth_age_cross_the_native_config_bound
             _native.Policy.from_config(json.dumps(document), True)
 
 
+def test_continuous_velocity_command_crosses_the_native_config_boundary(tmp_path):
+    from holosoma_inference import _native
+    from holosoma_inference.config.config_types.contextual import ContextualConfig
+    from holosoma_inference.config.config_types.observation import ObservationConfig
+    from holosoma_inference.native import _native_config
+
+    generator = runpy.run_path(str(Path(__file__).parents[1] / "holosoma_cpp/tests/gen_velocity_models.py"))
+    metadata = generator["EXPORT"]["metadata_props"]
+    path = tmp_path / "velocity.onnx"
+    generator["export_stub"](path, metadata)
+    base = inference.get_config("g1-29dof-loco")
+    assert list(base.robot.dof_names) == json.loads(metadata["dof_names"])
+
+    def config(contextual):
+        return replace(
+            base,
+            observation=ObservationConfig({"actor_obs": []}, {}, {}, {}),
+            task=replace(base.task, model_path=str(path), use_phase=False),
+            contextual=contextual,
+            secondary=None,
+        )
+
+    continuous = config(ContextualConfig(discretizer=None, require_climb_head=False))
+    document = json.loads(_native_config(continuous))
+    # None crosses as null, never as a sentinel word, and the frame stays unset.
+    assert document["contextual"]["discretizer"] is None
+    assert document["contextual"]["imu_to_obs_joint_chain"] is None
+    policy = inference.get_policy_from_preset(continuous)
+    n = base.robot.num_joints
+    state = np.zeros(13 + 2 * n)
+    state[3] = 1
+    state[7 : 7 + n] = base.robot.default_dof_angles
+    inputs = inference.ContextualInput()
+    inputs.velocity = (0.4, -0.1, 0.2)
+    inputs.depth = [0.0] * (58 * 87)
+    command = policy.step_contextual(state, inputs)
+    np.testing.assert_allclose(policy.last_observation[95:98], [0.4, -0.1, 0.2], rtol=1e-6)
+    np.testing.assert_allclose(command.kp, json.loads(metadata["kp"]))
+
+    # A continuous model has no climb head to require.
+    with pytest.raises(ValueError, match="require_climb_head"):
+        inference.get_policy_from_preset(config(ContextualConfig(discretizer=None)))
+    # An absent discretizer is the primitive default, which refuses this export by name.
+    del document["contextual"]["discretizer"]
+    with pytest.raises(RuntimeError, match="discretizer: null"):
+        _native.Policy.from_config(json.dumps(document), True)
+
+
 def test_packed_observation_uses_native_graph_scaling_and_defaults(native_config):
     config, width = native_config
     policy = inference.LocomotionPolicy(config)

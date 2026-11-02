@@ -1,8 +1,11 @@
 // Preset loading and the run_policy.py-style command line.
 
 #include <gtest/gtest.h>
+#include <yaml-cpp/yaml.h>
 
 #include <filesystem>
+#include <functional>
+#include <optional>
 
 #include "holosoma_cpp/cli.hpp"
 #include "holosoma_cpp/config.hpp"
@@ -94,6 +97,29 @@ TEST(Config, RejectsMistakes) {
                ConfigError);
   EXPECT_THROW(parse({"inference:g1-29dof-wbt"}), ConfigError);  // the WBT preset ships without a model
   EXPECT_THROW(parse({"inference:g1-29dof-loco", "--robot.motor-kp", "1", "2"}), ConfigError);
+}
+
+TEST(Config, ContextualDiscretizerAndGravityFrameDistinguishAbsentFromNull) {
+  auto contextual = [](const std::function<void(YAML::Node&)>& edit) {
+    YAML::Node node = YAML::LoadFile(kPresetDir + "/g1-29dof-loco.yaml");
+    node["task"]["use_phase"] = false;
+    node["contextual"] = YAML::Node(YAML::NodeType::Map);
+    auto section = node["contextual"];
+    edit(section);
+    return *parse_inference_config(node, kPresetDir).contextual;
+  };
+  // Absent keeps the primitive default; null selects the continuous velocity command.
+  EXPECT_EQ(contextual([](YAML::Node&) {}).discretizer, std::optional<std::string>("simple"));
+  EXPECT_FALSE(contextual([](YAML::Node& c) { c["discretizer"] = YAML::Null; }).discretizer);
+  EXPECT_EQ(contextual([](YAML::Node& c) { c["discretizer"] = "nearest_primitive"; }).discretizer,
+            std::optional<std::string>("nearest_primitive"));
+  // The gravity frame is unset unless given; an empty list is an explicit IMU frame.
+  EXPECT_FALSE(contextual([](YAML::Node&) {}).imu_to_obs_joint_chain);
+  EXPECT_FALSE(contextual([](YAML::Node& c) { c["imu_to_obs_joint_chain"] = YAML::Null; }).imu_to_obs_joint_chain);
+  const auto empty =
+      contextual([](YAML::Node& c) { c["imu_to_obs_joint_chain"] = YAML::Node(YAML::NodeType::Sequence); });
+  ASSERT_TRUE(empty.imu_to_obs_joint_chain);
+  EXPECT_TRUE(empty.imu_to_obs_joint_chain->empty());
 }
 
 }  // namespace

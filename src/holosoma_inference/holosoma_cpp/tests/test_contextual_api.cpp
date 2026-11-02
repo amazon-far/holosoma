@@ -13,6 +13,7 @@
 namespace {
 using namespace holosoma;
 const std::filesystem::path fixtures(HOLOSOMA_CONTEXTUAL_FIXTURE_DIR);
+using Chain = std::vector<std::pair<std::string, std::string>>;
 
 InferenceConfig config(const char* model = "contextual.onnx") {
   InferenceConfig c;
@@ -27,7 +28,7 @@ InferenceConfig config(const char* model = "contextual.onnx") {
   c.contextual->depth_height = 2;
   c.contextual->depth_width = 3;
   // The fixture robot has no waist; gravity-frame tests set their own chain.
-  c.contextual->imu_to_obs_joint_chain = {};
+  c.contextual->imu_to_obs_joint_chain = Chain{};
   c.runtime.intra_op_threads = 2;
   return c;
 }
@@ -221,7 +222,7 @@ std::array<double, 4> mul(const std::array<double, 4>& a, const std::array<doubl
 
 TEST(ContextualApi, OrientationAndCorrectedGravityReachTheModelInOneFrame) {
   auto c = config();
-  c.contextual->imu_to_obs_joint_chain = {{"hip", "z"}, {"knee", "x"}, {"ankle", "y"}};
+  c.contextual->imu_to_obs_joint_chain = Chain{{"hip", "z"}, {"knee", "x"}, {"ankle", "y"}};
   Policy policy(c);
   auto s = state();
   s.dof_pos = {.4, -.3, .25};
@@ -254,7 +255,7 @@ TEST(ContextualApi, OrientationAndCorrectedGravityReachTheModelInOneFrame) {
   }
 
   // An empty chain keeps IMU-frame gravity for both sources.
-  c.contextual->imu_to_obs_joint_chain = {};
+  c.contextual->imu_to_obs_joint_chain = Chain{};
   Policy imu_frame(c);
   imu_frame.step(s, ContextualInput{});
   for (int i = 0; i < 3; ++i) EXPECT_NEAR(core(imu_frame).observation()[i], imu[i], 1e-6) << i;
@@ -266,9 +267,9 @@ TEST(ContextualApi, ImuToObsJointChainMustNameRuntimeJoints) {
   c.contextual->depth_height = 2;
   c.contextual->depth_width = 3;
   EXPECT_THROW(Policy{c}, std::invalid_argument);
-  c.contextual->imu_to_obs_joint_chain = {{"hip", "w"}};
+  c.contextual->imu_to_obs_joint_chain = Chain{{"hip", "w"}};
   EXPECT_THROW(Policy{c}, std::invalid_argument);
-  c.contextual->imu_to_obs_joint_chain = {{"hip", "z"}};
+  c.contextual->imu_to_obs_joint_chain = Chain{{"hip", "z"}};
   EXPECT_NO_THROW(Policy{c});
 }
 
