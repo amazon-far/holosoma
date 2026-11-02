@@ -73,7 +73,8 @@ void BasePolicy::initialize() {
   for (const auto& path : config_.task.model_path) {
     auto slot = std::make_unique<ModelSlot>();
     slot->path = path;
-    slot->model = std::make_unique<OnnxModel>(path, config_.runtime.use_gpu, config_.runtime.intra_op_threads);
+    slot->model = std::make_unique<OnnxModel>(path, config_.runtime.use_gpu, config_.runtime.intra_op_threads,
+                                              config_.runtime.profile_prefix);
     setup_policy(*slot);
     resolve_gains(*slot);
     slots_.push_back(std::move(slot));

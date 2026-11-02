@@ -24,6 +24,18 @@ py::array_t<double> array(const std::vector<double>& values) {
 
 PYBIND11_MODULE(_native, m) {
   m.doc() = "Transport-independent native inference; construction never opens a robot interface.";
+  py::class_<ContextualInput>(m, "ContextualInput")
+      .def(py::init<>())
+      .def_readwrite("depth", &ContextualInput::depth)
+      .def_readwrite("monotonic_time", &ContextualInput::monotonic_time)
+      .def_readwrite("velocity", &ContextualInput::velocity)
+      .def_readwrite("command_index", &ContextualInput::command_index)
+      .def_readwrite("speed", &ContextualInput::speed)
+      .def_readwrite("fixed_arm", &ContextualInput::fixed_arm)
+      .def_readwrite("dz", &ContextualInput::dz)
+      .def_readwrite("allow_climb_at_stand", &ContextualInput::allow_climb_at_stand)
+      .def_readwrite("allow_climb_continuation", &ContextualInput::allow_climb_continuation)
+      .def_readwrite("key", &ContextualInput::key);
   py::class_<RobotState>(m, "RobotState")
       .def(py::init<>())
       .def_readwrite("base_pos", &RobotState::base_pos)
@@ -80,6 +92,12 @@ PYBIND11_MODULE(_native, m) {
       .def(
           "step", [](Policy& policy, const RobotState& state) { return JointCommand(policy.step(state)); },
           py::arg("state"), py::call_guard<py::gil_scoped_release>())
+      .def(
+          "step",
+          [](Policy& policy, const RobotState& state, ContextualInput input) {
+            return JointCommand(policy.step(state, std::move(input)));
+          },
+          py::arg("state"), py::arg("inputs"), py::call_guard<py::gil_scoped_release>())
       .def("num_dofs", &Policy::num_dofs)
       .def_property_readonly("dof_names", &Policy::dof_names)
       .def_property_readonly("lookahead_offsets",

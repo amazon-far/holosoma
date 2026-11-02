@@ -6,6 +6,7 @@
 #include <cstring>
 #include <thread>
 
+#include "holosoma_cpp/contextual_policy.hpp"
 #include "holosoma_cpp/general_wbt_policy.hpp"
 #include "holosoma_cpp/locomotion_policy.hpp"
 #include "holosoma_cpp/logging.hpp"
@@ -25,7 +26,9 @@ std::unique_ptr<BasePolicy> make_policy(const InferenceConfig& config, PolicyCon
   const auto& groups = own.observation.obs_dict;
   const bool live =
       std::any_of(groups.begin(), groups.end(), [](const auto& group) { return group.first == "actor_targets"; });
-  if (live) {
+  if (own.contextual) {
+    policy = std::make_unique<ContextualPolicy>(std::move(own), context);
+  } else if (live) {
     policy = std::make_unique<GeneralWBTPolicy>(std::move(own), context);
   } else if (own.is_wbt()) {
     policy = std::make_unique<WholeBodyTrackingPolicy>(std::move(own), context);

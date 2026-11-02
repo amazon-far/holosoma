@@ -14,6 +14,8 @@
 #include <utility>
 #include <vector>
 
+#include "holosoma_cpp/contextual_types.hpp"
+
 namespace YAML {
 class Node;
 }
@@ -90,6 +92,7 @@ struct TaskConfig {
 struct RuntimeConfig {
   bool use_gpu = false;
   int intra_op_threads = 1;
+  std::string profile_prefix;
   // Enter damping if the newest LowState is older than this while commanding (0 disables).
   double state_timeout_s = 0.5;
   // Derivative gain of the damping command (kp = 0) sent on faults and at exit.
@@ -101,6 +104,7 @@ struct InferenceConfig {
   ObservationConfig observation;
   TaskConfig task;
   RuntimeConfig runtime;
+  std::optional<ContextualConfig> contextual;
   std::shared_ptr<InferenceConfig> secondary;
 
   // True when the actor observations contain motion_command (the Python policy-class heuristic).

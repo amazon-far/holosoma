@@ -1,5 +1,4 @@
 #pragma once
-
 #include <array>
 #include <cstdint>
 #include <deque>
@@ -9,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "holosoma_cpp/action_clip.hpp"
 #include "holosoma_cpp/live_types.hpp"
 #include "holosoma_cpp/onnx_model.hpp"
 
@@ -25,7 +25,7 @@ bool ParseWbtHistoryInitialization(const std::string &text, WbtHistoryInitializa
 
 // Bound on raw single-file WBT actions, before action scale and previous-action feedback.
 // A tighter model-declared clip still applies. This is not a joint-angle limit.
-inline constexpr float kWbtActionCeiling = 20.0f;
+inline constexpr float kWbtActionCeiling = holosoma::kPolicyActionCeiling;
 
 // Single-graph holosoma WBT policy. The graph and its complete observation
 // contract are read from ONNX metadata; unsupported contracts fail at load.

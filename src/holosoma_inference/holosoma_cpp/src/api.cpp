@@ -6,6 +6,7 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "holosoma_cpp/contextual_policy.hpp"
 #include "holosoma_cpp/controller.hpp"
 #include "holosoma_cpp/wbt_policy.hpp"
 
@@ -123,6 +124,19 @@ JointCommand Policy::step_state(const RobotState& state, bool advance_phase) {
 const JointCommand& Policy::step(const RobotState& state) {
   step_state(state);
   return impl_->robot.command();
+}
+const JointCommand& Policy::step(const RobotState& state, ContextualInput input) {
+  auto* contextual = dynamic_cast<ContextualPolicy*>(impl_->policy.get());
+  if (!contextual) throw std::invalid_argument("ContextualInput requires a contextual policy configuration");
+  // Same strict state contract as every other policy: an unusable orientation
+  // throws here rather than reaching the model as an upright robot.
+  set_state(state);
+  struct InputScope {
+    ContextualPolicy* policy;
+    ~InputScope() { policy->clear_input(); }
+  } scope{contextual};
+  contextual->set_input(std::move(input));
+  return step(state);
 }
 void Policy::command(StateCommand cmd) {
   if (cmd == StateCommand::START || cmd == StateCommand::STOP || cmd == StateCommand::INIT)

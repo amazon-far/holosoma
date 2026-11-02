@@ -21,7 +21,6 @@ from os import getenv
 from typing import NamedTuple
 
 import wandb
-from slack_sdk import WebClient
 
 WANDB_ENTITY = getenv("WANDB_ENTITY", "amazon-far")
 SLACK_CHANNEL = getenv("SLACK_CHANNEL", "")
@@ -35,16 +34,19 @@ GITHUB_RUN_ID = getenv("GITHUB_RUN_ID")
 # Throughput regression warning applied by nightly.py. Keep in sync with that script.
 PERF_WARNING_TAG = "nightly_perf_warning"
 
-# One-line performance trend included in the Slack summary. The cell label and the metric
-# key are written by backfill_perf_summary.py; keep in sync with that script.
+# Performance trend included in the Slack summary, one block per cell. The cell label and the
+# metric key are written by backfill_perf_summary.py; keep in sync with that script.
 PERF_PROJECT = "nightly-holosoma-runs"
 PERF_CELL_KEY = "perf/cell"
-TREND_CELL = "g1_29dof_manager | isaacsim | gpus-1"
+TREND_CELLS = (
+    "g1_29dof_manager | isaacsim | gpus-1",
+    "g1_29dof_manager | mjwarp | gpus-1",
+)
 TREND_METRIC_KEY = "perf/collection_time_mean"
 TREND_METRIC_LABEL = "collection_time mean"
 # Unit of the tracked metric, appended to every figure. Change alongside the metric key.
 TREND_UNIT = "s"
-# Link offered under the figures, pointing at a saved workspace view of the tracked cell.
+# Link offered under each cell's figures, pointing at a saved workspace view of that cell.
 # A view URL carries nothing but the view's identifier -- the cell filter lives in the
 # saved view rather than in the URL, so one view per cell is needed and no single base URL
 # can be narrowed to a cell. That identifier also only exists on the instance the view was
@@ -74,10 +76,11 @@ TREND_BETTER = "🟢"
 TREND_WORSE = "🔴"
 TREND_FLAT = "⚪"
 
-# Simulator tag values set by nightly.py (config.simulator.config.name). "isaacgym" is retained
+# Simulator tag values set by nightly.simulator_tag, which is not always a config name --
+# both MuJoCo backends report `mujoco`, and the GPU one is tagged `mjwarp`. "isaacgym" is retained
 # for ARCHIVED runs only -- the backend is retired; dropping it would make historical runs resolve
 # their exp_name to the literal tag instead of falling back to "unknown-sim".
-KNOWN_SIMULATORS = {"isaacgym", "isaacsim", "mujoco"}
+KNOWN_SIMULATORS = {"isaacgym", "isaacsim", "mujoco", "mjwarp"}
 # GPU count for a multi-GPU nightly run; used only as a fallback for legacy runs
 # tagged with "multigpu" but no explicit "gpus-N" tag. Keep in sync with nightly.py.
 MULTIGPU_NUM_GPUS = 4
@@ -194,7 +197,7 @@ def _run_exp_name(run: wandb.Run) -> str:
         if tag.startswith(reserved_prefixes) or tag in reserved_exact:
             continue
         return tag
-    # Fallback: URL looks like .../runs/nightly-<exp>-[multigpu-]<timestamp>
+    # Fallback for untagged runs: URL ends in nightly-<exp>-<simulator>[-multigpu]-<timestamp>.
     try:
         if not run.url or run.url is None:
             return "unknwon"
@@ -398,8 +401,8 @@ def _trend_view_url(cell: str) -> str:
     return url
 
 
-def _fetch_trend_series() -> tuple[list[tuple[datetime, float]], str | None]:
-    """The tracked metric for the tracked cell newest first, with a link to its project.
+def _fetch_trend_series(cell: str) -> tuple[list[tuple[datetime, float]], str | None]:
+    """The tracked metric for one cell newest first, with a link to its project.
 
     The link is taken from a run's own URL so it addresses whichever wandb instance the
     job is pointed at, rather than naming one.
@@ -410,7 +413,7 @@ def _fetch_trend_series() -> tuple[list[tuple[datetime, float]], str | None]:
     runs = api.runs(
         path=f"{WANDB_ENTITY}/{PERF_PROJECT}",
         filters={
-            f"summary_metrics.{PERF_CELL_KEY}": {"$eq": TREND_CELL},
+            f"summary_metrics.{PERF_CELL_KEY}": {"$eq": cell},
             "created_at": {"$gte": since},
         },
         order="-created_at",
@@ -432,16 +435,16 @@ def _fetch_trend_series() -> tuple[list[tuple[datetime, float]], str | None]:
     return series, project_url
 
 
-def format_trend_line() -> str | None:
-    """One line comparing the tracked metric across three timescales.
+def _format_trend_block(cell: str) -> str | None:
+    """One cell's figures across three timescales, or None if it has too little history.
 
     Returns None rather than raising: this is a nicety on top of the run summary and
     must never be the reason the summary fails to post.
     """
     try:
-        series, project_url = _fetch_trend_series()
+        series, project_url = _fetch_trend_series(cell)
         if len(series) < 2:
-            print(f"Not enough history for {TREND_CELL!r} to build a trend line")
+            print(f"Not enough history for {cell!r} to build a trend block")
             return None
 
         now = datetime.now(timezone.utc)
@@ -479,7 +482,7 @@ def format_trend_line() -> str | None:
         before_width = max(len(before) for _, _, before, _ in rendered)
 
         lines = [
-            f"⏱️ {TREND_METRIC_LABEL} · {TREND_CELL}",
+            f"⏱️ {TREND_METRIC_LABEL} · {cell}",
             "```",
             *(
                 f"{marker} {label:>{label_width}}: {before:<{before_width}} → {after}"
@@ -487,13 +490,22 @@ def format_trend_line() -> str | None:
             ),
             "```",
         ]
-        link = _trend_view_url(TREND_CELL) or project_url
+        link = _trend_view_url(cell) or project_url
         if link:
             lines.append(f"📈 [{TREND_VIEW_LABEL}]({link})")
         return "\n".join(lines)
     except Exception as e:
-        print(f"Could not build the performance trend line: {e}")
+        print(f"Could not build the trend block for {cell!r}: {e}")
         return None
+
+
+def format_trend_report() -> str | None:
+    """A trend block per tracked cell, or None when none could be built.
+
+    Cells are reported separately because the metric is not comparable across them.
+    """
+    blocks = [block for cell in TREND_CELLS if (block := _format_trend_block(cell))]
+    return "\n\n".join(blocks) if blocks else None
 
 
 def format_run_line(run: NightlyRun) -> str:
@@ -503,6 +515,10 @@ def format_run_line(run: NightlyRun) -> str:
 
 def post_summary_to_slack():
     """Posts summary of runs to slack channel."""
+    # Local: slack-sdk is only in this script's own dependencies, so importing it at module
+    # scope would make the module unimportable anywhere else.
+    from slack_sdk import WebClient
+
     if not SLACK_TOKEN or not SLACK_CHANNEL:
         raise ValueError("SLACK_BOT_TOKEN or SLACK_CHANNEL env var not set, can't post message to slack")
     slack_client = WebClient(token=SLACK_TOKEN)
@@ -519,9 +535,9 @@ def post_summary_to_slack():
     run_url = f"{GITHUB_SERVER_URL}/{GITHUB_REPOSITORY}/actions/runs/{GITHUB_RUN_ID}"
     summary_message += f"Build Link: [Githun Run {GITHUB_RUN_ID}]({run_url})"
 
-    trend_line = format_trend_line()
-    if trend_line:
-        summary_message += f"\n{trend_line}"
+    trend_report = format_trend_report()
+    if trend_report:
+        summary_message += f"\n{trend_report}"
 
     nightly_runs = get_last_nightly_runs()
 
@@ -553,8 +569,8 @@ if __name__ == "__main__":
     if args.slack:
         post_summary_to_slack()
     elif args.trend_only:
-        print(format_trend_line() or "no trend line available")
+        print(format_trend_report() or "no trend report available")
     else:
         print("\n")  # To make the message layout cleaner
-        print(format_trend_line() or "no trend line available")
+        print(format_trend_report() or "no trend report available")
         print("\n".join(format_run_line(run) for run in get_last_nightly_runs()))

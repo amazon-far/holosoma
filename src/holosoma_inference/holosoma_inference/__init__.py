@@ -12,6 +12,7 @@ from holosoma_inference.native import (
 )
 
 __all__ = [
+    "ContextualInput",
     "InferenceConfig",
     "JointCommand",
     "LiveRobotObservation",
@@ -29,6 +30,7 @@ __all__ = [
 ]
 
 _LIVE_TYPES = {
+    "ContextualInput",
     "LiveWbtPolicy",
     "LiveRobotObservation",
     "ReferenceFrame",

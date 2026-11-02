@@ -35,3 +35,15 @@ target_compile_definitions(holosoma_api_tests PRIVATE
   HOLOSOMA_LIVE_FIXTURE_DIR="${LIVE_FIXTURES}"
   HOLOSOMA_TEST_PRESET_DIR="${HOLOSOMA_PRESET_DIR}")
 gtest_discover_tests(holosoma_api_tests DISCOVERY_TIMEOUT 60)
+
+set(CONTEXTUAL_FIXTURES "${CMAKE_CURRENT_BINARY_DIR}/contextual-fixtures")
+add_custom_command(OUTPUT "${CONTEXTUAL_FIXTURES}/stamp"
+  COMMAND "${Python_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/gen_contextual_models.py" --output-dir "${CONTEXTUAL_FIXTURES}"
+  COMMAND ${CMAKE_COMMAND} -E touch "${CONTEXTUAL_FIXTURES}/stamp"
+  DEPENDS gen_contextual_models.py)
+add_custom_target(holosoma_contextual_fixtures DEPENDS "${CONTEXTUAL_FIXTURES}/stamp")
+add_executable(holosoma_contextual_tests test_contextual_api.cpp)
+add_dependencies(holosoma_contextual_tests holosoma_contextual_fixtures)
+target_link_libraries(holosoma_contextual_tests PRIVATE holosoma_cpp_core GTest::gtest_main nlohmann_json::nlohmann_json)
+target_compile_definitions(holosoma_contextual_tests PRIVATE HOLOSOMA_CONTEXTUAL_FIXTURE_DIR="${CONTEXTUAL_FIXTURES}")
+gtest_discover_tests(holosoma_contextual_tests DISCOVERY_TIMEOUT 60)

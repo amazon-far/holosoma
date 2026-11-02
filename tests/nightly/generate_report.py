@@ -96,8 +96,20 @@ def get_nightly_run_ids(gh_run_id: str | None = None) -> dict[str, list[str]]:
         for tag in run.tags:
             if tag.startswith("nightly-"):
                 continue
-            # "isaacgym" kept for archived runs (retired backend); see run_summary.KNOWN_SIMULATORS.
-            if tag in ["isaacgym", "isaacsim", "singlegpu", "multigpu", "nightly_test_passed", "nightly_test_failed"]:
+            # Every simulator tag nightly.py can emit has to be listed, or it is taken for the
+            # experiment name: the first tag that survives these filters wins. "isaacgym" is kept
+            # for archived runs (retired backend); see run_summary.KNOWN_SIMULATORS.
+            if tag in [
+                "isaacgym",
+                "isaacsim",
+                "mujoco",
+                "mjwarp",
+                "singlegpu",
+                "multigpu",
+                "nightly_test_passed",
+                "nightly_test_failed",
+                "nightly_perf_warning",
+            ]:
                 continue
             if tag.startswith(("gha-run-id-", "gpus-")):
                 continue

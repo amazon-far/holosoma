@@ -64,6 +64,29 @@ Select) are the same as in the [Python runtime](../README.md#policy-controls).
 
 ## Performance
 
+### Contextual policy library
+
+An optional `contextual` configuration section selects the depth-conditioned policy through `holosoma::Policy`. It uses the same `OnnxModel`, provider setup, buffers, profiling and factory as the other native policies. Configure `task.use_phase: false`, the runtime joint names/defaults/gains, and the contextual depth geometry. Models use float32 `obs` and `depth_image`, optional `time_step`, named `actions`, and optional `climb_pred` outputs. The contextual policy supplies zero for the legacy `time_step` input.
+
+The existing API is preserved: locomotion and WBT callers still construct `Policy(config)` or `Policy(preset, checkpoint)` and call `step(robot_state)`. WBT's `set_reference(...)`, commands, reset and `JointCommand` output remain unchanged. Contextual inference adds the overload below; existing callers do not need to supply a `ContextualInput`. Passing the depth and command events together with the robot state keeps them scoped to one tick, including failed or inactive ticks, rather than leaving a pending sensor frame behind a separate setter.
+
+```cpp
+holosoma::Policy policy(config);
+holosoma::ContextualInput input;
+input.monotonic_time = now_seconds;
+input.depth = normalized_depth_frame;
+input.velocity = std::array<double, 3>{vx, vy, yaw_rate};
+const auto& command = policy.step(robot_state, input);
+```
+
+Each inference tick requires its own input. Optional command fields are events: omitting them retains the current command rather than resetting a pending transition. Missing depth inserts one zero frame; the caller owns freshness and any startup gate (the Python `NativeContextualRunner` stops an engaged policy once its newest frame is older than `contextual.max_depth_age_s`, 0.25 s by default, and refuses a start until frames return). Climb arbitration can evaluate twice using the same observation/history tick. Reset clears temporal policy state. A zero or non-finite orientation is rejected with the same strict state validation as every other policy kind.
+
+Gravity is computed in the IMU body frame, either from the orientation or from the optional corrected gravity in `RobotState::projected_gravity` (the same IMU-frame quantity the other policies read), and then rotated through the joint chain `contextual.imu_to_obs_joint_chain` (each joint's current angle about its axis, in order from the IMU's link) into the observation frame the model was trained on. The default chain is the G1 waist (`waist_yaw_joint` z, `waist_roll_joint` x, `waist_pitch_joint` y), giving torso-frame gravity from the pelvis IMU; set `[]` for IMU-frame gravity, or the chain for another robot. Every listed joint must be a runtime joint.
+
+Contextual and live WBT share a ±20 raw-action ceiling before action scaling and previous-action feedback; live WBT can retain a tighter checkpoint limit. Observation clipping and research-policy behavior are independent. Nearest-primitive calibration is caller-supplied through `velocity_primitives`, distance scales and an optional in-place yaw threshold. Metadata joint permutations and configured-gain precedence are retained.
+
+The generic Python `Policy` binding accepts the same `ContextualInput`, and `NativePolicy.step_contextual` forwards to it. There is no Python contextual inference implementation. The standalone SDK runner does not acquire depth frames: transports embed this API and supply their own sensor input, engagement lifecycle and command publication. Existing performance figures below concern the named research policies, not contextual deployment latency.
+
 Measured in sim-to-sim with the MuJoCo bridge on a c6i.4xlarge (Intel Xeon 8375C), using the runtimes' own
 per-tick latency reports:
 

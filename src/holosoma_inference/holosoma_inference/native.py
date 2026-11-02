@@ -106,6 +106,11 @@ class NativePolicy:
         with self._lock:
             return self._engine.step_state(self._state(state, tick_ms), advance_phase)
 
+    def step_contextual(self, state, inputs, *, tick_ms=0):
+        """Forward typed depth/command input to the shared C++ policy."""
+        with self._lock:
+            return self._engine.step(self._state(state, tick_ms), inputs)
+
     def set_state(self, state, *, tick_ms=0):
         with self._lock:
             self._engine.set_state(self._state(state, tick_ms))
@@ -154,6 +159,8 @@ class GeneralWBTPolicy(NativePolicy):
 def get_policy_from_preset(config: InferenceConfig | str, **kwargs) -> NativePolicy:
     if isinstance(config, str):
         config = get_config(config)
+    if config.contextual is not None:
+        return NativePolicy(config, **kwargs)
     if "actor_targets" in config.observation.obs_dict:
         return GeneralWBTPolicy(config, **kwargs)
     cls = (
