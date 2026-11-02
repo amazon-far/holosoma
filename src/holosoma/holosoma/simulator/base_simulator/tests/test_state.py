@@ -105,22 +105,23 @@ def test_grouped_names_share_one_read() -> None:
     assert torch.equal(state.read_fresh("quat"), root[:, 3:7])
 
 
-def test_columns_are_live_only_for_a_contiguous_float32_run() -> None:
+def test_columns_are_buffered_reads_of_the_selection() -> None:
     source = torch.arange(12, dtype=torch.float32).reshape(2, 6)
     state = SimState()
-    state.columns("live", source, [2, 3, 4], sources=("joints",))
+    state.columns("run", source, [2, 3, 4], sources=("joints",))
     state.columns("gathered", source, [4, 2], sources=("joints",))
     state.columns("callable", lambda: source, [2, 3, 4], sources=("joints",))
     state.columns("float64", source.double(), [2, 3, 4], sources=("joints",))
 
-    assert state.is_live("live") and state.get("live").data_ptr() == source[:, 2].data_ptr()
-    assert not any(state.is_live(name) for name in ("gathered", "callable", "float64"))
+    assert torch.equal(state.get("run"), source[:, 2:5])
+    assert state.get("run").untyped_storage().data_ptr() != source.untyped_storage().data_ptr()
     assert torch.equal(state.get("gathered"), source[:, [4, 2]])
     assert state.get("float64").dtype == torch.float32
 
     source += 100
-    assert torch.equal(state.get("live"), source[:, 2:5])
+    assert not torch.equal(state.get("run"), source[:, 2:5])
     state.changed("joints")
+    assert torch.equal(state.get("run"), source[:, 2:5])
     assert torch.equal(state.get("callable"), source[:, 2:5])
 
 

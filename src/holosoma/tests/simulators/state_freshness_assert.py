@@ -148,11 +148,7 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
     slowest = min(motions)
     if slowest <= MIN_SUBSTEP_MOTION:
         failures.append(f"VACUOUS: a substep moved no body by more than {MIN_SUBSTEP_MOTION:g} m ({slowest:.2e})")
-    live = [name for name in sim.state.names() if sim.state.is_live(name)]
-    report = [
-        f"decimation={decimation} checks={checks} slowest substep body motion={slowest:.2e} m",
-        f"live views: {', '.join(live) or 'none'}",
-    ]
+    report = [f"decimation={decimation} checks={checks} slowest substep body motion={slowest:.2e} m"]
     return failures, report
 
 

@@ -1,20 +1,17 @@
-"""Simulator state tensors, served as live backend views or as lazy reads into stable buffers.
+"""Simulator state tensors, served as lazy reads into stable buffers.
 
 A backend binds each state quantity once, in ``prepare_sim``:
 
-- :meth:`SimState.live` serves a tensor as is: a zero-copy view of backend storage, or a buffer the
-  backend fills itself.
 - :meth:`SimState.lazy` serves preallocated buffers that ``read`` fills on the first access after
   any of the group's sources changed, and that ``write`` flushes to the simulation, row by row. Several
   names may share one read.
-- :meth:`SimState.columns` picks between the two for a column selection: a live ``narrow`` view when
-  the selection is a contiguous ascending run of a stable float32 tensor, else a lazy gather.
+- :meth:`SimState.columns` serves a column selection of a backend tensor through :meth:`lazy`.
+- :meth:`SimState.live` serves a tensor as is, for buffers outside the simulation such as test fakes.
 
 Every served tensor keeps its identity, so references to it stay valid. Reads see the current
 simulation state. In-place writes reach the simulation before its next physics step, FK pass, refresh
-or any state write that would replace them: a live view writes backend storage directly, and a lazy
-buffer's changed rows (environments) are flushed through its ``write``. A lazy tensor bound without
-``write`` is read-only.
+or any state write that would replace them: the changed rows (environments) are flushed through the
+tensor's ``write``. A tensor bound without ``write`` is read-only.
 
 Backends bracket every state mutation with :meth:`SimState.prepare` (flush pending writes it depends
 on or would replace) and :meth:`SimState.changed` (mark what it touched stale), naming the sources it
@@ -48,9 +45,7 @@ class _LazyGroup:
         self.buffers = buffers
         self.valid = False
         # Writable groups keep a copy of each buffer that is not a view of another, to find changed rows.
-        self.snapshots = (
-            None if write is None else tuple(buffer.clone() for buffer in buffers if buffer._base is None)
-        )
+        self.snapshots = None if write is None else tuple(buffer.clone() for buffer in buffers if buffer._base is None)
         self.clean = self._versions()
 
     def _versions(self) -> tuple[int, ...]:
@@ -120,17 +115,14 @@ class SimState:
         device: torch.device | str | None = None,
         write: Callable[[torch.Tensor, torch.Tensor], None] | None = None,
     ) -> None:
-        """Serve ``source[:, ids]`` as ``name``, live when possible.
+        """Serve ``source[:, ids]`` as ``name``, read lazily into a float32 buffer on ``device``.
 
         ``source`` is a ``[num_envs, n, ...]`` tensor, or a callable returning the current one when the
-        backend replaces its storage (always read lazily). The served tensor is float32 on ``device``
-        (default: the source's). ``write(rows, buffer)`` flushes the lazy buffer; a live view writes ``source``.
+        backend replaces its storage. ``device`` defaults to the source's. ``write(rows, buffer)``
+        flushes changed rows; without it the tensor is read-only. A contiguous ascending run of ids is
+        copied as a slice, without a gather.
         """
         if isinstance(source, torch.Tensor):
-            view = contiguous_columns(source, ids)
-            if view is not None and (device is None or _same_device(view.device, device)):
-                self.live(name, view)
-                return
             tensor = source
 
             def current() -> torch.Tensor:
@@ -139,12 +131,15 @@ class SimState:
         else:
             current = source
         sample = current()
-        ids_t = torch.as_tensor(list(ids), dtype=torch.long, device=sample.device)
+        ids = list(ids)
         shape = (sample.shape[0], len(ids), *sample.shape[2:])
         buffer = torch.zeros(shape, dtype=torch.float32, device=device if device is not None else sample.device)
+        run = contiguous_run(ids)
+        ids_t = torch.as_tensor(ids, dtype=torch.long, device=sample.device)
 
         def read(out: torch.Tensor) -> None:
-            out.copy_(current().index_select(1, ids_t))
+            data = current()
+            out.copy_(data.narrow(1, run[0], run[1]) if run is not None else data.index_select(1, ids_t))
 
         self.lazy(name, read, buffer, sources=sources, write=write)
 
@@ -188,9 +183,6 @@ class SimState:
     def names(self) -> list[str]:
         return list(self._tensors)
 
-    def is_live(self, name: str) -> bool:
-        return name in self._tensors and name not in self._groups
-
     def read_fresh(self, name: str) -> torch.Tensor:
         """Return a fresh read of ``name`` without touching the served tensor."""
         group = self._groups.get(name)
@@ -214,10 +206,6 @@ class SimState:
                     groups.remove(group)
 
 
-def _same_device(a: torch.device, b: torch.device | str) -> bool:
-    return bool(a == torch.empty(0, device=b).device)
-
-
 def _scratch_like(buffers: tuple[torch.Tensor, ...]) -> tuple[torch.Tensor, ...]:
     """Fresh tensors laid out like ``buffers``, keeping views of an earlier buffer as views."""
     scratch: list[torch.Tensor] = []
@@ -236,12 +224,12 @@ def _scratch_like(buffers: tuple[torch.Tensor, ...]) -> tuple[torch.Tensor, ...]
     return tuple(scratch)
 
 
-def contiguous_columns(source: torch.Tensor, ids: Sequence[int]) -> torch.Tensor | None:
-    """Return ``source[:, ids]`` as a view when ``ids`` is a contiguous ascending run, else ``None``."""
+def contiguous_run(ids: Sequence[int]) -> tuple[int, int] | None:
+    """``(start, length)`` when ``ids`` is a contiguous ascending run, else ``None``."""
     ids = list(ids)
-    if source.dtype != torch.float32 or not ids or ids != list(range(ids[0], ids[0] + len(ids))):
+    if not ids or ids != list(range(ids[0], ids[0] + len(ids))):
         return None
-    return source.narrow(1, ids[0], len(ids))
+    return ids[0], len(ids)
 
 
 class StateTensor:

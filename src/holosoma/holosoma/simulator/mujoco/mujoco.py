@@ -769,8 +769,7 @@ class MuJoCo(BaseSimulator):
         )
 
     def _bind_state(self) -> None:
-        """Bind the robot state tensors: live views of Warp's buffers where no gather or conversion is
-        needed, otherwise lazy reads of the MuJoCo data."""
+        """Bind the robot state tensors as lazy reads of the MuJoCo data (Warp's GPU views or classic's arrays)."""
         n, b, device = self.num_envs, self.num_bodies, self.sim_device
         qpos, qvel, qacc = self._mj_arrays()
         state = self.state
@@ -823,26 +822,9 @@ class MuJoCo(BaseSimulator):
             return torch.zeros(n, b, width, device=device)
 
         body_names = ("_rigid_body_pos", "_rigid_body_rot", "_rigid_body_vel", "_rigid_body_ang_vel")
-        views = self.backend.get_rigid_body_state_views()
         if b == 0:
             for name, width in zip(body_names, (3, 4, 3, 3), strict=True):
                 state.live(name, body_buffer(width))
-        elif views is not None:
-            positions, _, _, angular_vel = views
-            state.columns("_rigid_body_pos", positions, self.body_ids, sources=("bodies",))
-            state.columns("_rigid_body_ang_vel", angular_vel, self.body_ids, sources=("bodies",))
-
-            def read_rot_vel(rot: torch.Tensor, vel: torch.Tensor) -> None:
-                _, orientations, linear_vel, _ = self.backend.get_rigid_body_state_views()  # type: ignore[misc]
-                rot.copy_(orientations[:, self._body_ids_t])
-                vel.copy_(linear_vel[:, self._body_ids_t])
-
-            state.lazy(
-                ("_rigid_body_rot", "_rigid_body_vel"),
-                read_rot_vel,
-                (body_buffer(4), body_buffer(3)),
-                sources=("bodies",),
-            )
         else:
 
             def read_bodies(*buffers: torch.Tensor) -> None:
@@ -1264,7 +1246,8 @@ class MuJoCo(BaseSimulator):
             logger.info("No environments to update")
             return
 
-        if root_states is not None:
+        served = self.robot_root_states
+        if root_states is not None and root_states is not served:
             # Accept a pre-sliced tensor [len(env_ids), 13] or a global one [num_envs, 13].
             if len(root_states) != len(env_ids):
                 if len(root_states) != self.num_envs:
@@ -1273,7 +1256,9 @@ class MuJoCo(BaseSimulator):
                         f"expected either {len(env_ids)} (pre-sliced) or {self.num_envs} (global)"
                     )
                 root_states = root_states[env_ids]
-            self.robot_root_states[env_ids] = root_states
+            if root_states.untyped_storage().data_ptr() == served.untyped_storage().data_ptr():
+                root_states = root_states.clone()  # a view of the served tensor
+            served[env_ids] = root_states
         self.state.prepare("root", "bodies")
         self.state.changed("root", "bodies")
 

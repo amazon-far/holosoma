@@ -670,10 +670,18 @@ class IsaacSim(BaseSimulator):
         # Initialize acceleration tensors ONLY if bridge is enabled
         if self.simulator_config.bridge.enabled:
             logger.info("Bridge enabled: initializing acceleration computation tensors")
-            self.dof_acc = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
+            # Differentiated by each physics step; served read-only.
+            self._dof_acc = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
             self.prev_dof_vel = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
-            self.base_linear_acc = torch.zeros(self.num_envs, 3, device=self.sim_device)
+            self._base_linear_acc = torch.zeros(self.num_envs, 3, device=self.sim_device)
             self.prev_base_lin_vel = torch.zeros(self.num_envs, 3, device=self.sim_device)
+            for name, computed in (("dof_acc", self._dof_acc), ("base_linear_acc", self._base_linear_acc)):
+                self.state.lazy(
+                    name,
+                    lambda out, computed=computed: out.copy_(computed),
+                    torch.zeros_like(computed),
+                    sources=("joints", "root"),
+                )
         else:
             logger.debug("Bridge disabled: skipping acceleration computation tensors")
 
@@ -801,12 +809,12 @@ class IsaacSim(BaseSimulator):
         # Update accelerations ONLY if bridge is enabled
         if self.simulator_config.bridge.enabled:
             # Update DOF acceleration using numerical differentiation
-            self.dof_acc.copy_((self.dof_vel - self.prev_dof_vel) / self.sim_dt)
+            self._dof_acc.copy_((self.dof_vel - self.prev_dof_vel) / self.sim_dt)
             self.prev_dof_vel = self.dof_vel.clone()
 
             # Update base linear acceleration using numerical differentiation
             current_base_vel = self.robot_root_states[:, 7:10]
-            self.base_linear_acc.copy_((current_base_vel - self.prev_base_lin_vel) / self.sim_dt)
+            self._base_linear_acc.copy_((current_base_vel - self.prev_base_lin_vel) / self.sim_dt)
             self.prev_base_lin_vel = current_base_vel.clone()
 
     def forward_kinematics(self) -> None:
@@ -919,11 +927,20 @@ class IsaacSim(BaseSimulator):
             env_ids = torch.arange(getattr(self, "num_envs", self.training_config.num_envs), device=self.sim_device)
         env_ids = torch.as_tensor(env_ids, device=self.sim_device, dtype=torch.long)
 
-        # The unified view passed wholesale writes the robot's served state.
+        # The served tensor, or the unified view passed wholesale, is flushed as is.
         if root_states is not None and root_states is not self.all_root_states:
-            self.robot_root_states[env_ids] = self._rows_for(env_ids, root_states)
+            self._write_served_rows(self.robot_root_states, env_ids, self._rows_for(env_ids, root_states))
         self.state.prepare("root", "bodies")
         self.state.changed("root", "bodies")
+
+    @staticmethod
+    def _write_served_rows(served: torch.Tensor, env_ids: torch.Tensor, rows: torch.Tensor) -> None:
+        """Copy ``rows`` into ``served[env_ids]``, unless they are the served tensor itself."""
+        if rows is served:
+            return
+        if rows.untyped_storage().data_ptr() == served.untyped_storage().data_ptr():
+            rows = rows.clone()
+        served[env_ids] = rows
 
     def _rows_for(self, env_ids: torch.Tensor, states: torch.Tensor) -> torch.Tensor:
         """``states`` for ``env_ids``, given pre-sliced (one row per env id) or for every env."""
