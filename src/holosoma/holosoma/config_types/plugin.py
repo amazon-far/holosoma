@@ -317,6 +317,55 @@ class MotionPlaybackPluginConfig(PluginConfig):
         return MotionPlaybackPlugin
 
 
+@dataclass(frozen=True)
+class CoSimLeaderPluginConfig(PluginConfig):
+    """Render this task's cameras in another simulator process (the ``cosim-follower``).
+
+    Requires ``--simulator.config.sim.remote_sensors True`` and the camera ``sensor.*`` configs
+    the follower uses. Each frame a camera is due, the plugin sends the robot and object state to
+    the follower and fills the camera buffers with the images it returns; reset envs are
+    re-rendered before observations read them. Select it as the first plugin, so later camera
+    consumers see the returned images.
+    """
+
+    endpoint: str = "tcp://127.0.0.1:5556"
+    """ZeroMQ endpoint the follower binds."""
+
+    connect_timeout_s: float = 600.0
+    """Seconds to wait for the follower's first reply (it may still be starting up)."""
+
+    step_timeout_s: float = 300.0
+    """Seconds to wait for each later reply."""
+
+    def get_cls(self) -> Callable[..., Any]:
+        from holosoma.simulator.plugins.cosim.leader import CoSimLeaderPlugin
+
+        return CoSimLeaderPlugin
+
+
+@dataclass(frozen=True)
+class CoSimFollowerPluginConfig(PluginConfig):
+    """Render camera images for a ``cosim-leader`` running in another process.
+
+    Run under ``run_sim`` with ``--simulator.config.sim.kinematic_playback True``, one physics step
+    per frame at the leader's control rate (``control_decimation`` and ``render_interval`` 1),
+    ``--time-scale 0``, and the leader's robot, terrain, scene and camera ``sensor.*`` configs.
+    Each leader request becomes one frame: the plugin writes the leader's state, the simulator
+    renders, and the plugin replies with the images. The run ends when the leader closes.
+    """
+
+    endpoint: str = "tcp://0.0.0.0:5556"
+    """ZeroMQ endpoint to bind."""
+
+    idle_timeout_s: float = 600.0
+    """Seconds to wait for each leader request before failing."""
+
+    def get_cls(self) -> Callable[..., Any]:
+        from holosoma.simulator.plugins.cosim.follower import CoSimFollowerPlugin
+
+        return CoSimFollowerPlugin
+
+
 # ----------------------------------------------------------------------------------------------- #
 # Camera-frame egress plugins
 #

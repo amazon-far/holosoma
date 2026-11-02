@@ -7,7 +7,7 @@ follower answers on a REP socket, strictly alternating.
 
 Message types (version 1):
 
-- ``hello``: environment facts; the reply carries the follower's.
+- ``hello``: environment facts (:func:`env_facts`); the reply carries the follower's.
 - ``step``: header ``cams`` (camera names to render) and ``rows`` (env ids, or null for all); arrays
   ``root`` ``[N, 7]`` (position, xyzw quaternion), ``dof_pos`` ``[N, D]`` and ``objects`` ``[K, N, 7]``,
   float32, with positions relative to each env's origin. The reply holds one ``"<camera>/<data type>"``
@@ -20,16 +20,34 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import zmq
+
+from holosoma.simulator.shared.object_registry import ObjectType
+
+if TYPE_CHECKING:
+    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 
 PROTOCOL_VERSION = 1
 
 
 class CoSimError(RuntimeError):
     """The peer reported an error, or sent a message this side cannot accept."""
+
+
+def env_facts(sim: BaseSimulator) -> dict[str, Any]:
+    """What both sides must agree on: env count, DOF order, free objects and camera images."""
+    manager = sim.sensor_manager
+    cameras = [] if manager is None else manager.cameras
+    return {
+        "simulator": sim.get_simulator_type().value,
+        "num_envs": sim.num_envs,
+        "dof_names": list(sim.dof_names),
+        "objects": sim.object_registry.get_names_by_type(ObjectType.INDIVIDUAL),
+        "cameras": {c.name: [c.config.width, c.config.height, list(c.config.data_types)] for c in cameras},
+    }
 
 
 @dataclass

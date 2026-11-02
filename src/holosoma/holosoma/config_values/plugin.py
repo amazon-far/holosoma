@@ -11,6 +11,8 @@ Imported at CLI-build time; stays ROS-free (a preset's impl loads only when its 
 from holosoma.config_types.plugin import (
     CameraVizPluginConfig,
     ClockPublishPluginConfig,
+    CoSimFollowerPluginConfig,
+    CoSimLeaderPluginConfig,
     FrameWriterPluginConfig,
     GantryControlPluginConfig,
     LidarVizPluginConfig,
@@ -48,6 +50,11 @@ odometry = PLUGIN_REGISTRY.add("odometry", ROS2OdometryPluginConfig())
 #   plugin.play:motion-playback '--plugin.play.motion_files=["clip.npz"]' \
 #   --sensor.head_cam:g1-head plugin.out:frame-writer
 motion_playback = PLUGIN_REGISTRY.add("motion-playback", MotionPlaybackPluginConfig())
+
+# Co-simulation: a physics task (leader) whose cameras are rendered by another simulator process
+# (follower), e.g. MuJoCo physics with Isaac Sim rendering. See docker/cosim/compose.yaml.
+cosim_leader = PLUGIN_REGISTRY.add("cosim-leader", CoSimLeaderPluginConfig())
+cosim_follower = PLUGIN_REGISTRY.add("cosim-follower", CoSimFollowerPluginConfig())
 
 # ------------------------------------------------------------------------------------------------ #
 # Camera-frame egress presets. Compose several on the CLI by giving each its own key, e.g.
