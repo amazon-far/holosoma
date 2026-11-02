@@ -884,11 +884,10 @@ class MuJoCo(BaseSimulator):
 
     def _step_dynamics(self) -> None:
         """Advance simulation by one physics step."""
-        self.state.prepare()
-        # Must run before backend.step() consumes xfrc_applied.
-        self.flush_external_wrench()
-        self.backend.step()
-        self.state.changed()
+        with self.state.mutation():
+            # Must run before backend.step() consumes xfrc_applied.
+            self.flush_external_wrench()
+            self.backend.step()
 
     @property
     def dof_state(self) -> torch.Tensor:
@@ -898,9 +897,8 @@ class MuJoCo(BaseSimulator):
     def forward_kinematics(self) -> None:
         """Recompute body/geom/camera poses from written state (classic: ``mj_forward``; warp:
         ``mjw.kinematics`` + ``camlight``). No integration."""
-        self.state.prepare()
-        self.backend.forward_kinematics()
-        self.state.changed()
+        with self.state.mutation():
+            self.backend.forward_kinematics()
 
     def _write_external_wrench_native(self, targets: list[WrenchTarget]) -> None:
         """Set world-frame wrenches into xfrc_applied (world frame at CoM).
@@ -1070,40 +1068,38 @@ class MuJoCo(BaseSimulator):
             return
 
         resolved_objects = self.object_registry.resolve_indices(indices)
-        self.state.prepare()
+        with self.state.mutation():
+            # Incoming angular velocity is world-frame (unified representation); MuJoCo's freejoint qvel
+            # wants it body-local. Convert up front using each row's world quat (cols 3:7) so the
+            # per-actor slices below write the correct local ang-vel, symmetric with the read path.
+            states = self._freejoint_angvel_to_local(states)
 
-        # Incoming angular velocity is world-frame (unified representation); MuJoCo's freejoint qvel
-        # wants it body-local. Convert up front using each row's world quat (cols 3:7) so the
-        # per-actor slices below write the correct local ang-vel, symmetric with the read path.
-        states = self._freejoint_angvel_to_local(states)
+            state_offset = 0
+            for obj_name, env_ids in resolved_objects:
+                num_states = len(env_ids)
+                obj_states = states[state_offset : state_offset + num_states]  # [num_envs, 13]
+                state_offset += num_states
 
-        state_offset = 0
-        for obj_name, env_ids in resolved_objects:
-            num_states = len(env_ids)
-            obj_states = states[state_offset : state_offset + num_states]  # [num_envs, 13]
-            state_offset += num_states
+                if obj_name in self.static_object_body_ids:
+                    # Static (welded, jointless) body: no qpos slice, so it moves via the model
+                    # body_pos/body_quat + forward-kinematics path rather than set_actor_state. This
+                    # is a kinematic teleport: the pose is honored (collisions recompute at the new
+                    # pose) but the velocity columns (7:13) are ignored (a welded body carries no
+                    # qvel). Pose is [pos(0:3), quat(3:7) xyzw]; shape to [len(env_ids), 1, 3/4].
+                    body_id = self.static_object_body_ids[obj_name]
+                    self.backend.set_static_body_world_pose(
+                        [body_id],
+                        obj_states[:, :3].unsqueeze(1),  # [N, 1, 3]
+                        obj_states[:, 3:7].unsqueeze(1),  # [N, 1, 4] xyzw
+                        env_ids=env_ids,
+                    )
+                    continue
 
-            if obj_name in self.static_object_body_ids:
-                # Static (welded, jointless) body: no qpos slice, so it moves via the model
-                # body_pos/body_quat + forward-kinematics path rather than set_actor_state. This
-                # is a kinematic teleport: the pose is honored (collisions recompute at the new
-                # pose) but the velocity columns (7:13) are ignored (a welded body carries no
-                # qvel). Pose is [pos(0:3), quat(3:7) xyzw]; shape to [len(env_ids), 1, 3/4].
-                body_id = self.static_object_body_ids[obj_name]
-                self.backend.set_static_body_world_pose(
-                    [body_id],
-                    obj_states[:, :3].unsqueeze(1),  # [N, 1, 3]
-                    obj_states[:, 3:7].unsqueeze(1),  # [N, 1, 4] xyzw
-                    env_ids=env_ids,
-                )
-                continue
-
-            # Write each requested env's state into this actor's freejoint slice on the
-            # live backend storage (GPU for WarpBackend), per-env. The CPU render
-            # snapshot does not sync back to the GPU, so writes must go to the backend.
-            qpos_addr, qvel_addr = self._actor_freejoint_addrs(obj_name)
-            self.backend.set_actor_state(env_ids, obj_states, qpos_addr, qvel_addr)
-        self.state.changed()
+                # Write each requested env's state into this actor's freejoint slice on the
+                # live backend storage (GPU for WarpBackend), per-env. The CPU render
+                # snapshot does not sync back to the GPU, so writes must go to the backend.
+                qpos_addr, qvel_addr = self._actor_freejoint_addrs(obj_name)
+                self.backend.set_actor_state(env_ids, obj_states, qpos_addr, qvel_addr)
 
         if write_updates:
             self.write_state_updates()
@@ -1173,13 +1169,12 @@ class MuJoCo(BaseSimulator):
             begins with forward kinematics) consumes the updated GPU qpos/qvel; no
             out-of-graph GPU forward runs here.
         """
-        self.state.prepare()
-        if isinstance(self.backend, WarpBackend):
-            return
-        assert self.root_model
-        assert self.root_data
-        mujoco.mj_forward(self.root_model, self.root_data)
-        self.state.changed()
+        with self.state.mutation():
+            if isinstance(self.backend, WarpBackend):
+                return
+            assert self.root_model
+            assert self.root_data
+            mujoco.mj_forward(self.root_model, self.root_data)
 
     def set_actor_root_state_tensor(self, set_env_ids: torch.Tensor | None, root_states: torch.Tensor | None) -> None:
         """Legacy compatibility method for LeggedRobotBase.
@@ -1252,8 +1247,7 @@ class MuJoCo(BaseSimulator):
             if root_states.untyped_storage().data_ptr() == served.untyped_storage().data_ptr():
                 root_states = root_states.clone()  # a view of the served tensor
             served[env_ids] = root_states
-        self.state.prepare()
-        self.state.changed()
+        self.state.flush_writes()
 
     def _write_root_states(self, env_ids: EnvIds, root_states: torch.Tensor) -> None:
         """Write world-frame robot root states, one row per entry of ``env_ids``."""
@@ -1311,10 +1305,9 @@ class MuJoCo(BaseSimulator):
 
         if dof_states is not None:
             self._write_dof_rows(env_ids, dof_states)
-        self.state.prepare()
+        self.state.flush_writes()
         # ClassicBackend's direct qpos writes leave derived quantities stale; mj_forward them.
         self.write_state_updates()
-        self.state.changed()
 
     def _write_dof_rows(self, env_ids: EnvIds, dof_states: torch.Tensor) -> None:
         """Copy flattened ``dof_states`` rows for ``env_ids`` into the served ``dof_pos``/``dof_vel``."""

@@ -34,7 +34,7 @@ def test_reads_once_per_state_change() -> None:
 
     backing += 10
     assert not torch.equal(state.get("x"), backing) and len(reads) == 1
-    state.changed()
+    state.mark_stale()
     assert torch.equal(state.get("x"), backing) and state.get("x") is served and len(reads) == 2
 
 
@@ -43,8 +43,8 @@ def test_in_place_writes_are_flushed_before_a_mutation() -> None:
     state.get("x")[0] = -1.0
     assert not torch.any(backing[0] == -1.0)
 
-    state.prepare()
-    state.changed()
+    state.flush_writes()
+    state.mark_stale()
     assert torch.all(backing[0] == -1.0) and torch.all(state.get("x")[0] == -1.0)
 
 
@@ -54,11 +54,11 @@ def test_a_flush_writes_only_changed_rows() -> None:
     served[1] = -1.0
     served[3, 2] = -2.0
     served[2] = served[2].clone()  # rewritten with the same values: not a change
-    state.prepare()
+    state.flush_writes()
     assert flushed == [[1, 3]]
     assert torch.equal(backing, served)
 
-    state.prepare()
+    state.flush_writes()
     assert flushed == [[1, 3]]
 
 
@@ -66,11 +66,11 @@ def test_unflushable_writes_raise() -> None:
     state, _, _, _ = _counting_state(writable=False)
     state.get("x")[0] = -1.0
     with pytest.raises(RuntimeError, match="read-only"):
-        state.prepare()
+        state.flush_writes()
 
     state, _, _, _ = _counting_state()
     served = state.get("x")
-    state.changed()
+    state.mark_stale()
     served[0] = -1.0
     with pytest.raises(RuntimeError, match="written in place after"):
         state.get("x")
@@ -107,7 +107,7 @@ def test_columns_are_buffered_reads_of_the_selection() -> None:
 
     source += 100
     assert not torch.equal(state.get("run"), source[:, 2:5])
-    state.changed()
+    state.mark_stale()
     assert torch.equal(state.get("run"), source[:, 2:5])
     assert torch.equal(state.get("callable"), source[:, 2:5])
 
@@ -130,3 +130,13 @@ def test_register_rejects_mismatched_read_and_buffers() -> None:
         state.register("x", Columns(torch.zeros(2, 3), [0]), torch.zeros(2, 1))  # type: ignore[call-overload]
     with pytest.raises(TypeError, match="needs the buffers"):
         state.register("x", lambda _out: None)  # type: ignore[call-overload]
+
+
+def test_mutation_flushes_first_and_marks_stale_after_even_on_error() -> None:
+    state, backing, reads, _ = _counting_state()
+    state.get("x")[0] = -1.0
+    with pytest.raises(ValueError), state.mutation():
+        assert torch.all(backing[0] == -1.0)
+        raise ValueError
+    state.get("x")
+    assert len(reads) == 2

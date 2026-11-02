@@ -537,8 +537,8 @@ class BaseSimulator:
         read at any hook sees current state. Call this after changing simulation state another way.
         Pending in-place writes are flushed first.
         """
-        self.state.prepare()
-        self.state.changed()
+        self.state.flush_writes()
+        self.state.mark_stale()
 
     # ----- Control Application Methods -----
 

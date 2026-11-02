@@ -777,26 +777,25 @@ class IsaacSim(BaseSimulator):
         has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording
         is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors() or has_video_recording
 
-        self.state.prepare()
-        # Buffers external forces onto the articulation / object handles; write_data_to_sim() below
-        # flushes them into PhysX before sim.step().
-        self.flush_external_wrench()
+        with self.state.mutation():
+            # Buffers external forces onto the articulation / object handles; write_data_to_sim() below
+            # flushes them into PhysX before sim.step().
+            self.flush_external_wrench()
 
-        self.scene.write_data_to_sim()
+            self.scene.write_data_to_sim()
 
-        render_now = is_rendering and self._sim_step_counter % self.simulator_config.sim.render_interval_steps == 0
+            render_now = is_rendering and self._sim_step_counter % self.simulator_config.sim.render_interval_steps == 0
 
-        # Physics: exactly one step, never through the renderer. sim.step(render=True) falls
-        # through to a bare app.update() in isaacsim.core, which also runs the physics engine on
-        # the app clock — sim time ran ~3x too fast whenever a camera/GUI was active.
-        self.sim.step(render=False)
+            # Physics: exactly one step, never through the renderer. sim.step(render=True) falls
+            # through to a bare app.update() in isaacsim.core, which also runs the physics engine on
+            # the app clock — sim time ran ~3x too fast whenever a camera/GUI was active.
+            self.sim.step(render=False)
 
-        if render_now:
-            self.render()
+            if render_now:
+                self.render()
 
-        # update buffers at sim
-        self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
-        self.state.changed()
+            # update buffers at sim
+            self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
 
         # Update accelerations ONLY if bridge is enabled
         if self.simulator_config.bridge.enabled:
@@ -816,23 +815,22 @@ class IsaacSim(BaseSimulator):
         has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording
         is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors() or has_video_recording
 
-        self.state.prepare()
-        self.scene.write_data_to_sim()
-        # sim.forward() runs physics_sim_view.update_articulations_kinematic() and flushes
-        # fabric, so body/camera prims match the written joint/root state without integrating.
-        self.sim.forward()
+        with self.state.mutation():
+            self.scene.write_data_to_sim()
+            # sim.forward() runs physics_sim_view.update_articulations_kinematic() and flushes
+            # fabric, so body/camera prims match the written joint/root state without integrating.
+            self.sim.forward()
 
-        # Same render gate as _step_dynamics: RTX sensors (TiledCameras) only track the new
-        # poses after a render tick.
-        render_now = is_rendering and self._sim_step_counter % self.simulator_config.sim.render_interval_steps == 0
-        if render_now:
-            self.sim.render()
-            if self.debug_viz_enabled:
-                self.clear_lines()
-                self.draw_debug_viz()
+            # Same render gate as _step_dynamics: RTX sensors (TiledCameras) only track the new
+            # poses after a render tick.
+            render_now = is_rendering and self._sim_step_counter % self.simulator_config.sim.render_interval_steps == 0
+            if render_now:
+                self.sim.render()
+                if self.debug_viz_enabled:
+                    self.clear_lines()
+                    self.draw_debug_viz()
 
-        self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
-        self.state.changed()
+            self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
 
     def _write_external_wrench_native(self, targets: list[WrenchTarget]) -> None:
         """Set world-frame wrenches on the robot articulation and object RigidObjects.
@@ -922,8 +920,7 @@ class IsaacSim(BaseSimulator):
         # The served tensor, or the unified view passed wholesale, is flushed as is.
         if root_states is not None and root_states is not self.all_root_states:
             self._write_served_rows(self.robot_root_states, env_ids, self._rows_for(env_ids, root_states))
-        self.state.prepare()
-        self.state.changed()
+        self.state.flush_writes()
 
     @staticmethod
     def _write_served_rows(served: torch.Tensor, env_ids: torch.Tensor, rows: torch.Tensor) -> None:
@@ -973,8 +970,7 @@ class IsaacSim(BaseSimulator):
             rows = self._rows_for(env_ids, dof_states)
             self.dof_pos[env_ids] = rows[..., 0]
             self.dof_vel[env_ids] = rows[..., 1]
-        self.state.prepare()
-        self.state.changed()
+        self.state.flush_writes()
 
     def get_actor_indices(self, names: str | ActorNames, env_ids: EnvIds | None = None) -> ActorIndices:
         """See base class."""
@@ -995,9 +991,8 @@ class IsaacSim(BaseSimulator):
         flag). ``write_updates=True`` (default) flushes via :meth:`write_state_updates`
         (``scene.write_data_to_sim``); ``False`` defers for batching.
         """
-        self.state.prepare()
-        self._state_adapter.write_states_by_index(indices, states)
-        self.state.changed()
+        with self.state.mutation():
+            self._state_adapter.write_states_by_index(indices, states)
         if write_updates:
             self.write_state_updates()
 
@@ -1142,7 +1137,7 @@ class IsaacSim(BaseSimulator):
         - Uses IsaacLab's scene.write_data_to_sim() for efficient batch synchronization
         - Only performs sync if state adapter indicates dirty state (performance optimization)
         """
-        self.state.prepare()
+        self.state.flush_writes()
         if not self._state_adapter.is_dirty():
             logger.debug("No object state changes to sync")
             return

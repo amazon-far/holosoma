@@ -11,13 +11,14 @@ simulation state. In-place writes reach the simulation before its next physics s
 or any state write that would replace them: the changed rows (environments) are flushed through the
 tensor's ``write``. A tensor bound without ``write`` is read-only.
 
-Backends bracket every state mutation with :meth:`SimState.prepare` (flush pending writes) and
-:meth:`SimState.changed` (mark every tensor stale).
+Backends wrap every state mutation in :meth:`SimState.mutation`, which flushes pending writes first and
+marks every tensor stale after.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, overload
 
@@ -162,8 +163,17 @@ class SimState:
         self._unbind(name)
         self._tensors[name] = tensor
 
-    def prepare(self) -> None:
-        """Flush the rows written in place, before a mutation of the simulation state."""
+    @contextmanager
+    def mutation(self) -> Iterator[None]:
+        """Wrap a mutation of the simulation state: flush pending writes first, mark every tensor stale after."""
+        self.flush_writes()
+        try:
+            yield
+        finally:
+            self.mark_stale()
+
+    def flush_writes(self) -> None:
+        """Write the rows written in place to the simulation, marking every tensor stale if any were."""
         flushed = False
         for group in self._group_list:
             if group.valid and group.written():
@@ -175,10 +185,10 @@ class SimState:
                     flushed = True
                 group.mark_clean()
         if flushed:
-            self.changed()
+            self.mark_stale()
 
-    def changed(self) -> None:
-        """Mark every tensor stale, after a mutation of the simulation state."""
+    def mark_stale(self) -> None:
+        """Mark every tensor stale, so the next access re-reads it."""
         for group in self._group_list:
             group.valid = False
 
