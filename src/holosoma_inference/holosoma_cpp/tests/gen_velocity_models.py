@@ -216,7 +216,12 @@ BROKEN = {
         "command_ranges.lin_vel_y must be [low, high]",
     ),
     "command_ranges_unknown_axis": (edit("command_ranges", with_field("lin_vel_z", [0, 1])), "unknown axis lin_vel_z"),
-    "command_ranges_null": (edit("command_ranges", lambda _: "null"), "command_ranges is null"),
+    "command_ranges_null": (edit("command_ranges", lambda _: "null"), "command_ranges is missing"),
+    "command_ranges_missing": (edit("command_ranges", lambda _: None), "command_ranges is missing"),
+    "command_ranges_axis_missing": (
+        edit("command_ranges", with_field("lin_vel_y", None)),
+        "command_ranges.lin_vel_y is missing",
+    ),
     "command_ranges_list": (edit("command_ranges", lambda _: [1, 2]), "command_ranges must be a JSON object"),
     "terms_missing": (edit("actor_observation_terms", lambda _: None), "actor_observation_terms is missing"),
     "terms_unknown": (edit("actor_observation_terms", with_item(0, "base_lin_vel")), "unsupported term base_lin_vel"),

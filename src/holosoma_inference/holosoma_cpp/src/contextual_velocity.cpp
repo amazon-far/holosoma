@@ -19,8 +19,6 @@ constexpr const char *kPolicyKind = "hybrid_velocity";
 // GMA fixed-arm flag: [left held, right held], never both.
 constexpr std::array<std::array<float, 2>, 3> kFixedArmFlags{{{0.f, 0.f}, {1.f, 0.f}, {0.f, 1.f}}};
 constexpr std::array<const char *, 3> kCommandAxes{"lin_vel_x", "lin_vel_y", "ang_vel_yaw"};
-// The command ranges this family assumes when an export names none.
-constexpr std::array<std::array<double, 2>, 3> kDefaultRanges{{{-1.5, 1.5}, {-1.5, 1.5}, {-2.0, 2.0}}};
 // Below this every command axis reads as standing.
 constexpr float kMovingThreshold = 1e-3f;
 
@@ -274,18 +272,17 @@ VelocityFamily::VelocityFamily(std::shared_ptr<OnnxModel> model, const Spec &spe
       (std::string(key) == "kp" ? kp_ : kd_) = to_real(gains);
     }
 
-    // Command ranges: lo <= hi, finite. An absent key keeps the default range.
-    ranges_ = kDefaultRanges;
-    if (const auto *ranges = c.Optional("command_ranges")) {
-      c.Object("command_ranges", *ranges);
-      for (const auto &[axis, value] : ranges->items())
+    // Command ranges: every axis the model was trained on, lo <= hi, finite.
+    {
+      const auto &ranges = c.Object("command_ranges", c.Required("command_ranges"));
+      for (const auto &[axis, value] : ranges.items())
         if (std::find_if(kCommandAxes.begin(), kCommandAxes.end(), [&](const char *a) { return axis == a; }) ==
             kCommandAxes.end())
           c.Fail("command_ranges", "names unknown axis " + axis);
       for (size_t i = 0; i < 3; ++i) {
-        if (!ranges->contains(kCommandAxes[i])) continue;
         const std::string key = std::string("command_ranges.") + kCommandAxes[i];
-        const auto bounds = c.FiniteNumbers(key, ranges->at(kCommandAxes[i]));
+        if (!ranges.contains(kCommandAxes[i])) c.Fail(key, "is missing");
+        const auto bounds = c.FiniteNumbers(key, ranges.at(kCommandAxes[i]));
         if (bounds.size() != 2 || !(bounds[0] <= bounds[1])) c.Fail(key, "must be [low, high] with low <= high");
         ranges_[i] = {bounds[0], bounds[1]};
       }
