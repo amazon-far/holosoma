@@ -86,8 +86,7 @@ def _build(simulator: str, num_envs: int):
 
 
 def _body_positions(sim):
-    sim.forward_kinematics()
-    sim.refresh_sim_tensors()
+    sim.apply_state_writes()
     return sim.rigid_body_pos_w.clone()
 
 
@@ -134,7 +133,6 @@ def main() -> int:
             sim.apply_torques_at_dof(torch.zeros(num_envs, sim.num_dof, device=sim.sim_device))
             sim.apply_torques_by_names({joint: TORQUE})
             step(sim, 1)
-        sim.refresh_sim_tensors()
         velocities = sim.dof_vel.abs()
         fastest = [sim.dof_names[i] for i in velocities.argmax(dim=-1).tolist()]
         joint_vel = sim.get_dof_state_by_names([joint])[joint][1]

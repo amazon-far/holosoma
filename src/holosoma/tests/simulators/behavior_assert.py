@@ -170,7 +170,6 @@ def assert_collide_into_fixed(ctx):
     peak_x = hammer0_x.clone()
     for _ in range(n):
         ctx.sim.simulate_at_each_physics_step()
-        ctx.sim.refresh_sim_tensors()
         ctx.sim.render()
         peak_x = ctx.torch.maximum(peak_x, ctx.states("hammer")[:, 0])
     hammer = ctx.states("hammer")
@@ -212,7 +211,6 @@ def assert_momentum_transfer(ctx):
     n = steps_for_seconds(ctx.sim, 0.4)
     target_vx_peak = ctx.states("target")[:, 7].clone()
     for _ in range(n):
-        ctx.sim.refresh_sim_tensors()
         ctx.sim.simulate_at_each_physics_step()
         ctx.sim.render()
         target_vx_peak = ctx.torch.maximum(target_vx_peak, ctx.states("target")[:, 7])
@@ -406,7 +404,6 @@ def _step_with_force(ctx, n, apply_fn):
     ``apply_fn=None`` coasts with no force, exercising the auto-zero contract.
     """
     for _ in range(n):
-        ctx.sim.refresh_sim_tensors()
         if apply_fn is not None:
             apply_fn()
         ctx.sim.simulate_at_each_physics_step()
@@ -619,7 +616,6 @@ def assert_restitution_bounce(ctx):
     # the END, so "max after the global min" misses the early rebound entirely.
     z_hist = []
     for _ in range(n):
-        ctx.sim.refresh_sim_tensors()
         ctx.sim.simulate_at_each_physics_step()
         ctx.sim.render()
         z_hist.append(ctx.states("ball")[:, 2].clone())
@@ -758,7 +754,7 @@ def assert_object_obs_under_pose(ctx):
     for e in range(ctx.n):
         root[e, 3:7] = t.tensor([0.0, 0.0, math.sin(0.5 * e / 2), math.cos(0.5 * e / 2)], device=root.device)
     sim.robot_root_states[:] = root
-    sim.set_actor_root_state_tensor_robots(ctx.env_ids)  # 2nd arg defaults to None on every backend
+    sim.apply_state_writes()
 
     shell = types.SimpleNamespace(simulator=sim, num_envs=ctx.n, device=sim.sim_device)
     rp = sim.robot_root_states[:][:, :3]
@@ -1106,7 +1102,6 @@ def assert_restitution_twin(ctx):
     t = ctx.torch
     zr_hist, zt_hist = [], []
     for _ in range(n):
-        ctx.sim.refresh_sim_tensors()
         ctx.sim.simulate_at_each_physics_step()
         ctx.sim.render()
         zr_hist.append(ctx.states("robot")[:, 2].clone())

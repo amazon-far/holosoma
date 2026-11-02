@@ -58,10 +58,8 @@ class WholeBodyTrackingManager(BaseTask):
         return self.need_to_refresh_envs.nonzero(as_tuple=False).flatten()
 
     def _refresh_envs_after_reset(self, env_ids: torch.Tensor) -> None:
-        self.simulator.set_actor_root_state_tensor(env_ids, self.simulator.all_root_states)
-        self.simulator.set_dof_state_tensor(env_ids, self.simulator.dof_state)  # type: ignore[attr-defined]
+        self.simulator.apply_state_writes()
         self.need_to_refresh_envs[env_ids] = False
-        self.simulator.refresh_sim_tensors()
         self._pre_compute_observations_callback()
 
     def _get_average_episode_tracker(self) -> AverageEpisodeLengthTracker:
@@ -131,7 +129,6 @@ class WholeBodyTrackingManager(BaseTask):
         # Additive push to match BeyondMimic/IsaacLab's push_by_setting_velocity.
         self.simulator.robot_root_states[env_ids, 7:13] += self.push_robot_vel_buf[env_ids]
         # Push impulses only take effect in the simulator once we write the mutated root state tensor back.
-        self.simulator.set_actor_root_state_tensor_robots(env_ids, self.simulator.robot_root_states)
         self._max_push_vel = max_vel_tensor.clone()
 
     #########################################################################################################
@@ -200,9 +197,6 @@ class WholeBodyTrackingManager(BaseTask):
         self.simulator.robot_root_states[env_ids, 7:10] = root_lin_vel
         self.simulator.robot_root_states[env_ids, 10:13] = root_ang_vel
 
-        self.simulator.set_actor_root_state_tensor(env_ids, self.simulator.all_root_states)
-        self.simulator.set_dof_state_tensor(env_ids, self.simulator.dof_state)  # type: ignore[attr-defined]
-
         if motion_command.motion.has_object:  # type: ignore[has-type]
             # set object root_states from motion command
             object_pos = motion_command.object_pos_w.clone()
@@ -217,10 +211,8 @@ class WholeBodyTrackingManager(BaseTask):
             object_name = motion_command.object_name  # type: ignore[has-type]
             self.simulator.set_actor_states([object_name], env_ids, object_states)
 
-        self.simulator.scene.write_data_to_sim()  # type: ignore[attr-defined]
-        self.simulator.sim.forward()  # type: ignore[attr-defined]
+        self.simulator.apply_state_writes()
         self.simulator.sim.render()  # type: ignore[attr-defined]
-        self.simulator.refresh_sim_tensors()
 
         time.sleep(dt)
 

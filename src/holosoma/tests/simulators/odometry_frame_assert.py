@@ -121,17 +121,13 @@ def _build(simulator: str):
 def _seed_motion(sim) -> None:
     import torch
 
-    env_ids = torch.tensor([0], dtype=torch.long, device=sim.sim_device)
     root = sim.robot_root_states.clone()
     root[0, 0:3] = torch.as_tensor(ROOT_POSITION_W, dtype=root.dtype, device=root.device)
     root[0, 3:7] = torch.as_tensor(ROOT_ORIENTATION_XYZW, dtype=root.dtype, device=root.device)
     root[0, 7:10] = torch.as_tensor(ROOT_LINEAR_VELOCITY_W, dtype=root.dtype, device=root.device)
     root[0, 10:13] = torch.as_tensor(ROOT_ANGULAR_VELOCITY_W, dtype=root.dtype, device=root.device)
     sim.robot_root_states[:] = root
-    # Passing no state uses the backend's live robot_root_states view/proxy on all backends.
-    sim.set_actor_root_state_tensor_robots(env_ids)
-    sim.write_state_updates()
-    sim.refresh_sim_tensors()
+    sim.apply_state_writes()
 
 
 def _make_plugin(sim) -> ROS2OdometryPlugin:
@@ -167,7 +163,6 @@ def _sample(sim, plugin: ROS2OdometryPlugin) -> dict[str, np.ndarray]:
 
 def _advance(sim) -> None:
     sim.simulate_at_each_physics_step()
-    sim.refresh_sim_tensors()
 
 
 def _norm(vector: np.ndarray) -> float:

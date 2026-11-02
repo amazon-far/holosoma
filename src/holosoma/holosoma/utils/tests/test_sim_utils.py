@@ -89,13 +89,11 @@ class _FakeSim:
         self.sensor_config: dict[str, object] = {}
         self._budget = (frames + 2) * decimation
         self.substeps = 0
-        self.refreshes = 0
         self._shutdown = False
         self._sampled: int | None = None
         self._written: int | None = None
         self._rendered: object = None
         self.rendered_at: int | None = None
-        self.tensors_at: int | None = None
         self.control_steps = 0
         self.captured: list[object] = []
         self.alignment: list[tuple[int | None, int | None]] = []
@@ -114,11 +112,6 @@ class _FakeSim:
 
     def request_shutdown(self, reason: str = "") -> None:
         self._shutdown = True
-
-    def refresh_sim_tensors(self) -> None:
-        """Stand in for resyncing the state tensors: record which substep they now describe."""
-        self.refreshes += 1
-        self.tensors_at = self.substeps
 
     def render(self) -> None:
         self.viewer_renders.append(self.substeps)
@@ -154,7 +147,7 @@ class _FakeSim:
     def _egress(self) -> None:
         self.phases.append(Phase.FRAME_END)
         self.captured.append(self._rendered)
-        self.alignment.append((self.tensors_at, self.rendered_at))
+        self.alignment.append((self.substeps, self.rendered_at))
 
 
 def _run_sim_config(
@@ -300,27 +293,6 @@ def test_a_beating_render_cadence_misaligns_state_and_image(monkeypatch: pytest.
 # ----- the loop's other per-backend and viewer branches -----
 
 
-@pytest.mark.parametrize("backend", [SimulatorType.ISAACSIM])
-def test_tensor_backends_refresh_once_before_each_egress(
-    monkeypatch: pytest.MonkeyPatch, backend: SimulatorType
-) -> None:
-    """IsaacSim resyncs once per frame, before it egresses; its state is current between substeps."""
-    sim = _FakeSim(frames=3)
-
-    _run(sim, monkeypatch, backend=backend)
-
-    assert sim.refreshes == len(sim.captured)
-
-
-def test_mujoco_never_refreshes_tensors(monkeypatch: pytest.MonkeyPatch) -> None:
-    """MuJoCo runs no env/task needing those tensors, so the direct loop leaves them alone."""
-    sim = _FakeSim(frames=3)
-
-    _run(sim, monkeypatch, backend=SimulatorType.MUJOCO)
-
-    assert sim.refreshes == 0
-
-
 @pytest.mark.parametrize("render_interval", [1, 2, DECIMATION])
 def test_state_tensors_and_image_describe_the_same_substep(
     monkeypatch: pytest.MonkeyPatch, render_interval: int
@@ -335,7 +307,7 @@ def test_state_tensors_and_image_describe_the_same_substep(
 
     _run(sim, monkeypatch)
 
-    # Frame g's last draw and its pre-egress refresh both land on substep (g + 1) * DECIMATION.
+    # Frame g's last draw and its egress both land on substep (g + 1) * DECIMATION.
     assert sim.alignment == [(4, 4), (8, 8), (12, 12)]
 
 

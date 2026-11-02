@@ -222,9 +222,6 @@ class BaseTask:
         self._pending_episode_update_mask = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self._pending_torque_rfi: tuple[bool, float] = (False, 0.0)
 
-    def _refresh_sim_tensors(self) -> None:
-        self.simulator.refresh_sim_tensors()
-
     def get_checkpoint_state(self) -> dict[str, torch.Tensor | float]:
         """Return environment-specific state to persist in checkpoints."""
         return {}
@@ -243,8 +240,7 @@ class BaseTask:
         env_ids = torch.arange(self.num_envs, device=self.device)
         self.reset_envs_idx(env_ids)
 
-        self.simulator.set_actor_root_state_tensor_robots(env_ids, self.simulator.robot_root_states)
-        self.simulator.set_dof_state_tensor_robots(env_ids, self.simulator.dof_state)  # type: ignore[attr-defined]
+        self.simulator.apply_state_writes()
 
         actions = torch.zeros(self.num_envs, self.dim_actions, device=self.device, requires_grad=False)
         actor_state = {}
@@ -485,7 +481,6 @@ class BaseTask:
             self.action_manager.apply_actions()
 
     def _post_physics_step(self) -> None:
-        self._refresh_sim_tensors()
         # Cameras render and egress consumers publish here, as FRAME_END plugins (the cameras'
         # render_sensors is registered before any consumer, so buffers are fresh on read).
         self.simulator.hooks.emit(Phase.FRAME_END)

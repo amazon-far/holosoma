@@ -33,7 +33,7 @@ from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.sensor import CameraSensorConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
-from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+from holosoma.simulator.base_simulator.base_simulator import BaseSimulator, warn_state_setter_deprecated
 from holosoma.simulator.isaacsim.event_cfg import EventCfg
 from holosoma.simulator.isaacsim.events import randomize_body_com, randomize_rigid_body_inertia
 from holosoma.simulator.isaacsim import light_setup, sensor_setup
@@ -790,6 +790,11 @@ class IsaacSim(BaseSimulator):
             self._base_linear_acc.copy_((current_base_vel - self.prev_base_lin_vel) / self.sim_dt)
             self.prev_base_lin_vel = current_base_vel.clone()
 
+    def _update_kinematics(self) -> None:
+        """Flush written state and update articulation kinematics, without scene.update() or rendering."""
+        self.scene.write_data_to_sim()
+        self.sim.forward()
+
     def forward_kinematics(self) -> None:
         """Flush pending state writes and update articulation kinematics, fabric, and the render
         products — without stepping physics. ``sim.current_time`` does not advance."""
@@ -890,11 +895,8 @@ class IsaacSim(BaseSimulator):
     def set_actor_root_state_tensor_robots(
         self, env_ids: EnvIds | None = None, root_states: torch.Tensor | None = None
     ) -> None:
-        """See base class.
-
-        IsaacSim-specific notes:
-        - Quaternions converted from (x,y,z,w) to (w,x,y,z) format for IsaacSim compatibility
-        """
+        """Deprecated: write ``robot_root_states`` in place, then :meth:`apply_state_writes` if needed now."""
+        warn_state_setter_deprecated("set_actor_root_state_tensor_robots")
         if env_ids is None:
             env_ids = torch.arange(getattr(self, "num_envs", self.training_config.num_envs), device=self.sim_device)
         env_ids = torch.as_tensor(env_ids, device=self.sim_device, dtype=torch.long)
@@ -902,7 +904,7 @@ class IsaacSim(BaseSimulator):
         # The served tensor, or the unified view passed wholesale, is flushed as is.
         if root_states is not None and root_states is not self.all_root_states:
             self._write_served_rows(self.robot_root_states, env_ids, self._rows_for(env_ids, root_states))
-        self.state.flush_writes()
+        self.apply_state_writes()
 
     @staticmethod
     def _write_served_rows(served: torch.Tensor, env_ids: torch.Tensor, rows: torch.Tensor) -> None:
@@ -930,20 +932,11 @@ class IsaacSim(BaseSimulator):
     def set_dof_state_tensor_robots(
         self, env_ids: EnvIds | None = None, dof_states: torch.Tensor | None = None
     ) -> None:
-        """See base class.
+        """Deprecated: write ``dof_pos``/``dof_vel`` in place, then :meth:`apply_state_writes` if needed now.
 
-        IsaacSim-specific notes:
-        - Tensor format: 3D [num_envs, num_dofs, 2] (differs from the flattened format)
-
-        Examples
-        --------
-        >>> # IsaacSim format: 3D [num_envs, num_dofs, 2]
-        >>> env_ids = torch.tensor([0, 1], device=device)
-        >>> dof_states = torch.zeros(len(env_ids), sim.num_dof, 2, device=device)
-        >>> dof_states[:, :, 0] = default_joint_positions  # 2D positions [envs, dofs]
-        >>> dof_states[:, :, 1] = 0.0  # Zero velocities
-        >>> sim.set_dof_state_tensor_robots(env_ids, dof_states)
+        ``dof_states`` is ``[len(env_ids) or num_envs, num_dof, 2]`` (positions, velocities).
         """
+        warn_state_setter_deprecated("set_dof_state_tensor_robots")
         if env_ids is None:
             env_ids = torch.arange(getattr(self, "num_envs", self.training_config.num_envs), device=self.sim_device)
         env_ids = torch.as_tensor(env_ids, device=self.sim_device, dtype=torch.long)
@@ -952,7 +945,7 @@ class IsaacSim(BaseSimulator):
             rows = self._rows_for(env_ids, dof_states)
             self.dof_pos[env_ids] = rows[..., 0]
             self.dof_vel[env_ids] = rows[..., 1]
-        self.state.flush_writes()
+        self.apply_state_writes()
 
     def get_actor_indices(self, names: str | ActorNames, env_ids: EnvIds | None = None) -> ActorIndices:
         """See base class."""

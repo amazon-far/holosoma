@@ -741,13 +741,7 @@ class DirectSimulation:
         )
         logger.info(f"Viewer rate: {1 / self.config.viewer_dt:.1f} Hz (sync every {viewer_steps} steps)")
 
-        # IsaacSim refreshes once per control frame before FRAME_END; MuJoCo needs no refresh here.
         simulator_type = get_simulator_type()
-        if simulator_type == SimulatorType.ISAACSIM:
-            refresh_tensors = self.simulator.refresh_sim_tensors
-        else:
-            refresh_tensors = lambda: None  # noqa: E731  (No-op for MuJoCo)
-
         logger.info("Starting direct simulation loop...")
         logger.info("Press Ctrl+C to stop simulation")
 
@@ -790,9 +784,6 @@ class DirectSimulation:
                 # work across the two phases; one that must not egress its last frame asks for shutdown
                 # from FRAME_END (motion playback does).
                 if is_frame_end:
-                    # Resync first, as BaseTask._post_physics_step does, so state published beside the
-                    # image describes the same substep.
-                    refresh_tensors()
                     self.simulator.hooks.emit(Phase.FRAME_END)
 
                 # Headless backends render cameras/video on their own render schedule.

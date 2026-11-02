@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -531,12 +532,13 @@ class BaseSimulator:
         raise NotImplementedError("The 'prepare_sim' method must be implemented in subclasses.")
 
     def refresh_sim_tensors(self) -> None:
-        """Make every state tensor reflect the current simulation on its next read.
-
-        Backends keep state current across physics steps, FK passes and their own writers, so a
-        read at any hook sees current state. Call this after changing simulation state another way.
-        Pending in-place writes are flushed first.
-        """
+        """Deprecated: state tensors are current at every read; use :meth:`apply_state_writes` to apply writes now."""
+        warnings.warn(
+            "refresh_sim_tensors is deprecated: state tensors are current at every read. Call "
+            "apply_state_writes() to apply in-place writes, or after changing simulation state directly.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.state.flush_writes()
         self.state.mark_stale()
 
@@ -606,7 +608,7 @@ class BaseSimulator:
         for target, values in ((self.dof_pos, positions), (self.dof_vel, velocities or {})):
             for col, value in zip(self.dof_indices(list(values)), values.values(), strict=True):
                 target[env_ids, col] = torch.as_tensor(value, dtype=target.dtype, device=target.device)
-        self.set_dof_state_tensor(env_ids)
+        self.apply_state_writes()
 
     def apply_torques_by_names(self, torques: Mapping[str, float | torch.Tensor]) -> None:
         """Apply torques to the named DOFs only (see :meth:`apply_torques_at_dof` with ``dof_indices``).
@@ -639,6 +641,19 @@ class BaseSimulator:
         hooks, before the native step) so :meth:`apply_external_force` takes effect this substep.
         """
         raise NotImplementedError("The '_step_dynamics' method must be implemented in subclasses.")
+
+    def apply_state_writes(self) -> None:
+        """Write the state written in place to the simulation now, and update the body poses derived from it.
+
+        Without this, in-place writes land before the next physics step or FK pass, and body poses update
+        with it. Unlike :meth:`forward_kinematics`, it does not render or advance sensor clocks.
+        """
+        with self.state.mutation():
+            self._update_kinematics()
+
+    def _update_kinematics(self) -> None:
+        """Recompute body poses from the written joint/root state, with no dynamics, rendering or clocks."""
+        raise NotImplementedError("The '_update_kinematics' method must be implemented in subclasses.")
 
     def forward_kinematics(self) -> None:
         """Propagate written joint/root state to derived body and camera poses, without dynamics.
@@ -1559,3 +1574,13 @@ class BaseSimulator:
             If not implemented by subclass
         """
         raise NotImplementedError("Subclasses must implement set_dof_state_tensor_robots")
+
+
+def warn_state_setter_deprecated(name: str) -> None:
+    """Warn that the robot state setter ``name`` is deprecated in favour of in-place writes."""
+    warnings.warn(
+        f"{name} is deprecated: write the simulator's state tensors in place, and call apply_state_writes() "
+        "when the write must be visible before the next physics step.",
+        DeprecationWarning,
+        stacklevel=3,
+    )

@@ -132,10 +132,8 @@ class LeggedRobotLocomotionManager(BaseTask):
         return self.need_to_refresh_envs.nonzero(as_tuple=False).flatten()
 
     def _refresh_envs_after_reset(self, env_ids: torch.Tensor) -> None:
-        self.simulator.set_actor_root_state_tensor(env_ids, self.simulator.all_root_states)
-        self.simulator.set_dof_state_tensor(env_ids, self.simulator.dof_state)  # type: ignore[attr-defined]
+        self.simulator.apply_state_writes()
         self.need_to_refresh_envs[env_ids] = False
-        self.simulator.refresh_sim_tensors()
         self._pre_compute_observations_callback()
 
     def _pre_compute_observations_callback(self) -> None:
@@ -267,7 +265,6 @@ class LeggedRobotLocomotionManager(BaseTask):
         self.record_push_robot_vel_buf[env_ids] = self.push_robot_vel_buf[env_ids].clone()
         self.simulator.robot_root_states[env_ids, 7:9] = self.push_robot_vel_buf[env_ids]
         # Push impulses only take effect in the simulator once we write the mutated root state tensor back.
-        self.simulator.set_actor_root_state_tensor_robots(env_ids, self.simulator.robot_root_states)
         self._max_push_vel = max_vel_tensor.clone()
 
     ################ ENV CALLBACKS #################

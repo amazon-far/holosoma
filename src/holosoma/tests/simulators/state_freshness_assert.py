@@ -136,7 +136,6 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
             sim.hooks.emit(Phase.POST_STEP)
             if checked:
                 compare("POST_STEP")
-        sim.refresh_sim_tensors()
 
     for _ in range(SETTLE_CONTROL_STEPS):
         control_step(checked=False)

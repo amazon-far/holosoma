@@ -18,7 +18,7 @@ from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.sensor import CameraSensorConfig, LidarSensorConfig
 from holosoma.config_types.simulator import MujocoBackend
 from holosoma.managers.terrain.manager import TerrainManager
-from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+from holosoma.simulator.base_simulator.base_simulator import BaseSimulator, warn_state_setter_deprecated
 from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.base_simulator.state import Columns
 from holosoma.simulator.mujoco import light_setup
@@ -878,6 +878,9 @@ class MuJoCo(BaseSimulator):
         """Robot DOF states flattened to ``[num_envs * num_dof, 2]`` (``[:, 0]`` positions, ``[:, 1]`` velocities)."""
         return torch.stack([self.dof_pos, self.dof_vel], dim=-1).reshape(-1, 2)
 
+    def _update_kinematics(self) -> None:
+        self.backend.forward_kinematics()
+
     def forward_kinematics(self) -> None:
         """Recompute body/geom/camera poses from written state (classic: ``mj_forward``; warp:
         ``mjw.kinematics`` + ``camlight``). No integration."""
@@ -1199,7 +1202,7 @@ class MuJoCo(BaseSimulator):
     def set_actor_root_state_tensor_robots(
         self, env_ids: EnvIds | None = None, root_states: torch.Tensor | None = None
     ) -> None:
-        """Write robot root states into the served ``robot_root_states`` and flush them now.
+        """Deprecated: write ``robot_root_states`` in place, then :meth:`apply_state_writes` if needed now.
 
         Parameters
         ----------
@@ -1212,6 +1215,7 @@ class MuJoCo(BaseSimulator):
             Format: [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz].
             If None, uses current robot_root_states.
         """
+        warn_state_setter_deprecated("set_actor_root_state_tensor_robots")
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self.sim_device)
         if len(env_ids) == 0:
@@ -1231,7 +1235,7 @@ class MuJoCo(BaseSimulator):
             if root_states.untyped_storage().data_ptr() == served.untyped_storage().data_ptr():
                 root_states = root_states.clone()  # a view of the served tensor
             served[env_ids] = root_states
-        self.state.flush_writes()
+        self.apply_state_writes()
 
     def _write_root_states(self, env_ids: EnvIds, root_states: torch.Tensor) -> None:
         """Write world-frame robot root states, one row per entry of ``env_ids``."""
@@ -1255,7 +1259,7 @@ class MuJoCo(BaseSimulator):
     def set_dof_state_tensor_robots(
         self, env_ids: EnvIds | None = None, dof_states: torch.Tensor | None = None
     ) -> None:
-        """Write robot DOF states into the served ``dof_pos``/``dof_vel`` and flush them now.
+        """Deprecated: write ``dof_pos``/``dof_vel`` in place, then :meth:`apply_state_writes` if needed now.
 
         Parameters
         ----------
@@ -1278,6 +1282,7 @@ class MuJoCo(BaseSimulator):
             Note: a 3D ``[num_envs, num_dofs, 2]`` tensor is NOT accepted by either
             MuJoCo backend (unlike the IsaacSim implementation of this method).
         """
+        warn_state_setter_deprecated("set_dof_state_tensor_robots")
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self.sim_device)
         if len(env_ids) == 0:
@@ -1289,9 +1294,7 @@ class MuJoCo(BaseSimulator):
 
         if dof_states is not None:
             self._write_dof_rows(env_ids, dof_states)
-        self.state.flush_writes()
-        # ClassicBackend's direct qpos writes leave derived quantities stale; mj_forward them.
-        self.write_state_updates()
+        self.apply_state_writes()
 
     def _write_dof_rows(self, env_ids: EnvIds, dof_states: torch.Tensor) -> None:
         """Copy flattened ``dof_states`` rows for ``env_ids`` into the served ``dof_pos``/``dof_vel``."""
