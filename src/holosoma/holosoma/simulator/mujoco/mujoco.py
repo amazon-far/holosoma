@@ -730,7 +730,7 @@ class MuJoCo(BaseSimulator):
             )
             self.backend.set_static_body_world_pose(body_ids, positions)  # position-only at spawn
 
-        self._bind_state()
+        self._register_state()
 
     def prepare_randomization_fields(self, field_names: list[str]) -> None:
         """Prepare model fields for per-environment randomization.
@@ -768,8 +768,8 @@ class MuJoCo(BaseSimulator):
             lambda: torch.from_numpy(data.qacc)[None],
         )
 
-    def _bind_state(self) -> None:
-        """Bind the robot state tensors as lazy reads of the MuJoCo data (Warp's GPU views or classic's arrays)."""
+    def _register_state(self) -> None:
+        """Register the robot state tensors as lazy reads of the MuJoCo data (Warp's GPU views or classic's arrays)."""
         n, b, device = self.num_envs, self.num_bodies, self.sim_device
         qpos, qvel, qacc = self._mj_arrays()
         state = self.state

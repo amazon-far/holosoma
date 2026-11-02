@@ -625,7 +625,7 @@ class IsaacSim(BaseSimulator):
         # Wait until play so rigid object collections are initialized
         self._register_scene_assets()
 
-        self._bind_state()
+        self._register_state()
 
         # Create state adapter after object registry and robot state are set
         self._state_adapter = IsaacSimStateAdapter(
@@ -696,8 +696,8 @@ class IsaacSim(BaseSimulator):
         # This will always use the latest dof_pos and dof_vel
         return torch.cat([self.dof_pos[..., None], self.dof_vel[..., None]], dim=-1)
 
-    def _bind_state(self) -> None:
-        """Bind the robot state tensors, read from the articulation and sensor buffers on first access.
+    def _register_state(self) -> None:
+        """Register the robot state tensors, read from the articulation and sensor buffers on first access.
 
         Isaac Lab replaces these buffers on update, so every tensor is a lazy read. Body quantities are
         separate reads because reading body link velocity makes PhysX copy body COMs to the host.
