@@ -48,9 +48,7 @@ class _LazyGroup:
         self.buffers = buffers
         self.valid = False
         # Writable groups keep a copy of each buffer that is not a view of another, to find changed rows.
-        self.snapshots = (
-            None if write is None else tuple(buffer.clone() for buffer in buffers if buffer._base is None)
-        )
+        self.snapshots = None if write is None else tuple(buffer.clone() for buffer in buffers if buffer._base is None)
         self.clean = self._versions()
 
     def _versions(self) -> tuple[int, ...]:
