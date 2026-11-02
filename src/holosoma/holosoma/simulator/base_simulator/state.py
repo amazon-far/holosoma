@@ -25,7 +25,7 @@ from typing import Any, overload
 import torch
 
 
-class _LazyGroup:
+class _Registration:
     __slots__ = ("buffers", "clean", "names", "read", "snapshots", "valid", "write")
 
     def __init__(
@@ -40,7 +40,7 @@ class _LazyGroup:
         self.write = write
         self.buffers = buffers
         self.valid = False
-        # Writable groups keep a copy of each buffer that is not a view of another, to find changed rows.
+        # Writable registrations keep a copy of each buffer that is not a view of another, to find changed rows.
         self.snapshots = None if write is None else tuple(buffer.clone() for buffer in buffers if buffer._base is None)
         self.clean = self._versions()
 
@@ -108,8 +108,8 @@ class SimState:
 
     def __init__(self) -> None:
         self._tensors: dict[str, torch.Tensor] = {}
-        self._groups: dict[str, _LazyGroup] = {}
-        self._group_list: list[_LazyGroup] = []
+        self._by_name: dict[str, _Registration] = {}
+        self._registrations: list[_Registration] = []
 
     @overload
     def register(
@@ -151,12 +151,12 @@ class SimState:
             raise TypeError("A read function needs the buffers it fills.")
         names = (names,) if isinstance(names, str) else tuple(names)
         buffers = (buffers,) if isinstance(buffers, torch.Tensor) else tuple(buffers)
-        group = _LazyGroup(names, read, write, buffers)
+        registration = _Registration(names, read, write, buffers)
         for name, buffer in zip(names, buffers, strict=True):
             self._unbind(name)
             self._tensors[name] = buffer
-            self._groups[name] = group
-        self._group_list.append(group)
+            self._by_name[name] = registration
+        self._registrations.append(registration)
 
     def _serve(self, name: str, tensor: Any) -> None:
         """Serve ``tensor`` as ``name`` as is, outside the registry's reads and writes."""
@@ -175,37 +175,36 @@ class SimState:
     def flush_writes(self) -> None:
         """Write the rows written in place to the simulation, marking every tensor stale if any were."""
         flushed = False
-        for group in self._group_list:
-            if group.valid and group.written():
-                if group.write is None:
-                    raise RuntimeError(f"Simulator state {', '.join(group.names)} is read-only")
-                rows = group.changed_rows()
+        for registration in self._registrations:
+            if registration.valid and registration.written():
+                if registration.write is None:
+                    raise RuntimeError(f"Simulator state {', '.join(registration.names)} is read-only")
+                rows = registration.changed_rows()
                 if rows.numel():
-                    group.write(rows, *group.buffers)
+                    registration.write(rows, *registration.buffers)
                     flushed = True
-                group.mark_clean()
+                registration.mark_clean()
         if flushed:
             self.mark_stale()
 
     def mark_stale(self) -> None:
         """Mark every tensor stale, so the next access re-reads it."""
-        for group in self._group_list:
-            group.valid = False
+        for registration in self._registrations:
+            registration.valid = False
 
     def get(self, name: str) -> Any:
         try:
             tensor = self._tensors[name]
         except KeyError:
             raise AttributeError(f"Simulator state {name!r} is not bound") from None
-        group = self._groups.get(name)
-        if group is not None and not group.valid:
-            if group.written():
-                raise RuntimeError(
-                    f"Simulator state {', '.join(group.names)} was written in place after the simulation changed it"
-                )
-            group.read(*group.buffers)
-            group.mark_clean()
-            group.valid = True
+        registration = self._by_name.get(name)
+        if registration is not None and not registration.valid:
+            if registration.written():
+                names = ", ".join(registration.names)
+                raise RuntimeError(f"Simulator state {names} was written in place after the simulation changed it")
+            registration.read(*registration.buffers)
+            registration.mark_clean()
+            registration.valid = True
         return tensor
 
     def names(self) -> list[str]:
@@ -213,17 +212,17 @@ class SimState:
 
     def read_fresh(self, name: str) -> torch.Tensor:
         """Return a fresh read of ``name`` without touching the served tensor."""
-        group = self._groups.get(name)
-        if group is None:
+        registration = self._by_name.get(name)
+        if registration is None:
             return torch.as_tensor(self._tensors[name][:]).clone()
-        scratch = _scratch_like(group.buffers)
-        group.read(*scratch)
-        return scratch[group.names.index(name)]
+        scratch = _scratch_like(registration.buffers)
+        registration.read(*scratch)
+        return scratch[registration.names.index(name)]
 
     def _unbind(self, name: str) -> None:
-        group = self._groups.pop(name, None)
-        if group is not None and group not in self._groups.values():
-            self._group_list.remove(group)
+        registration = self._by_name.pop(name, None)
+        if registration is not None and registration not in self._by_name.values():
+            self._registrations.remove(registration)
 
 
 def _scratch_like(buffers: tuple[torch.Tensor, ...]) -> tuple[torch.Tensor, ...]:
