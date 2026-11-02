@@ -192,11 +192,8 @@ class CameraConsumerPlugin:
 
     def _intrinsics_of(self, cam: str) -> CameraIntrinsics:
         c = self.sensors_config[cam]
-        manager = self.simulator.sensor_manager
         simulator_type = (
-            manager.simulator_type
-            if manager is not None and manager.simulator_type is not None
-            else self.simulator.get_simulator_type()
+            getattr(self.simulator.sensor_manager, "simulator_type", None) or self.simulator.get_simulator_type()
         )
         if simulator_type == SimulatorType.ISAACSIM:
             backend_config: CameraBackendConfig = c.isaacsim
