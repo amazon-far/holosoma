@@ -135,8 +135,18 @@ def test_register_rejects_mismatched_read_and_buffers() -> None:
 def test_mutation_flushes_first_and_marks_stale_after_even_on_error() -> None:
     state, backing, reads, _ = _counting_state()
     state.get("x")[0] = -1.0
-    with pytest.raises(ValueError), state.mutation():
-        assert torch.all(backing[0] == -1.0)
-        raise ValueError
+    flushed_on_entry: list[bool] = []
+
+    class MutationError(Exception):
+        pass
+
+    def failing_mutation() -> None:
+        with state.mutation():
+            flushed_on_entry.append(bool(torch.all(backing[0] == -1.0)))
+            raise MutationError
+
+    with pytest.raises(MutationError):
+        failing_mutation()
+    assert flushed_on_entry == [True]
     state.get("x")
     assert len(reads) == 2
