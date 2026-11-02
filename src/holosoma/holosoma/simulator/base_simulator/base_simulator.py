@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -13,6 +14,7 @@ from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.hooks import HookRegistry, Phase
 from holosoma.managers.terrain import TerrainManager
+from holosoma.simulator.base_simulator.state import SimState, StateTensor, sim_state
 from holosoma.simulator.shared.external_wrench import ExternalWrenchAccumulator, WrenchTarget
 from holosoma.simulator.shared.object_registry import ObjectRegistry, ObjectType
 from holosoma.simulator.shared.scene_types import SceneInterface
@@ -140,11 +142,17 @@ class BaseSimulator:
 
     sim_dt: float
     viewer: object | None
-    robot_root_states: torch.Tensor
-    base_quat: torch.Tensor
-    dof_pos: torch.Tensor
-    dof_vel: torch.Tensor
-    contact_forces: torch.Tensor
+    # Robot state, bound by each backend in prepare_sim (see holosoma.simulator.base_simulator.state).
+    dof_pos = StateTensor("Robot DOF positions, ``[num_envs, num_dof]`` in ``robot_config.dof_names`` order.")
+    dof_vel = StateTensor("Robot DOF velocities, ``[num_envs, num_dof]``.")
+    dof_acc = StateTensor("Robot DOF accelerations, ``[num_envs, num_dof]``.")
+    robot_root_states = StateTensor(
+        "Robot root state ``[num_envs, 13]``: position, orientation (xyzw), world-frame linear and angular velocity."
+    )
+    base_quat = StateTensor("Robot root orientation (xyzw), ``[num_envs, 4]``.")
+    base_angular_vel = StateTensor("Robot root angular velocity, ``[num_envs, 3]``.")
+    base_linear_acc = StateTensor("Robot root linear acceleration, ``[num_envs, 3]``.")
+    contact_forces = StateTensor("Net contact force per robot body, ``[num_envs, num_bodies, 3]``.")
     contact_recorder: ContactSubstepRecorder
 
     # Robot properties, populated by each backend during setup (see _setup_robot_props_*).
@@ -164,13 +172,12 @@ class BaseSimulator:
 
     debug_viz_enabled: bool = False
 
-    # Raw robot per-body kinematics storage, refreshed by each backend every step; [num_envs,
-    # num_bodies, k] in holosoma body order, _rigid_body_rot xyzw. Read via the rigid_body_*_w
-    # properties below.
-    _rigid_body_pos: torch.Tensor
-    _rigid_body_rot: torch.Tensor
-    _rigid_body_vel: torch.Tensor
-    _rigid_body_ang_vel: torch.Tensor
+    # Robot per-body kinematics, [num_envs, num_bodies, k] in holosoma body order, _rigid_body_rot xyzw.
+    # Read via the rigid_body_*_w properties below.
+    _rigid_body_pos = StateTensor("Robot per-body world positions.")
+    _rigid_body_rot = StateTensor("Robot per-body world orientations (xyzw).")
+    _rigid_body_vel = StateTensor("Robot link-origin world linear velocities.")
+    _rigid_body_ang_vel = StateTensor("Robot per-body world angular velocities.")
 
     def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str, hooks: HookRegistry):
         """
@@ -209,6 +216,7 @@ class BaseSimulator:
         # Register sensor rendering before plugins so FRAME_END consumers read fresh outputs.
         # This no-ops until a backend builds its sensor manager during setup.
         self.hooks.add(Phase.FRAME_END, self.render_sensors, name="sensors.render")
+        self.state: SimState = sim_state(self)
 
         # Virtual gantry system
         self.virtual_gantry: VirtualGantry | None = None
@@ -420,9 +428,9 @@ class BaseSimulator:
 
     # ----- Robot rigid-body kinematics (public, cross-backend) -----
     #
-    # Bare properties, not getters: each returns the backend's live _rigid_body_* storage so the hot
-    # path (reward/command/terrain terms indexing [:, body_idx, :] every step) pays nothing. Treat as
-    # read-only — mutate state via set_actor_states / apply_external_force, not through these tensors.
+    # Bare properties, not getters: each returns the served _rigid_body_* tensor, which keeps its
+    # identity across steps. Treat as read-only — mutate state via set_actor_states /
+    # apply_external_force, not through these tensors.
 
     @property
     def rigid_body_pos_w(self) -> torch.Tensor:
@@ -517,19 +525,17 @@ class BaseSimulator:
         raise NotImplementedError("The 'prepare_sim' method must be implemented in subclasses.")
 
     def refresh_sim_tensors(self) -> None:
+        """Make every state tensor reflect the current simulation on its next read.
+
+        Backends keep state current across physics steps, FK passes and their own writers, so a
+        read at any hook sees current state. Call this after changing simulation state another way.
+        Pending in-place writes are flushed first.
         """
-        Refreshes the state tensors in the simulation to ensure they are up-to-date.
-        """
-        raise NotImplementedError("The 'refresh_sim_tensors' method must be implemented in subclasses.")
+        self.state.prepare()
+        self.state.changed()
 
     def sync_sim_state(self) -> None:
-        """Make robot root and joint state current between physics substeps.
-
-        Called before every substep. Body and contact state need only be current after
-        ``refresh_sim_tensors``. The default does a full refresh; backends override it with
-        something cheaper when their root and joint state are already current.
-        """
-        self.refresh_sim_tensors()
+        """Make state current before a physics substep; a no-op, as state tensors are current on read."""
 
     def synchronize_after_reset(self) -> None:
         """Flush reset state and refresh backend state without advancing physics."""
@@ -551,6 +557,70 @@ class BaseSimulator:
                 driving the complementary DOFs is not clobbered).
         """
         raise NotImplementedError("The 'apply_torques_at_dof' method must be implemented in subclasses.")
+
+    # ----- DOF access by joint name (public, cross-backend) -----
+    #
+    # ``dof_pos``/``dof_vel`` and torques are in ``robot_config.dof_names`` order on every backend;
+    # these address the same tensors by joint name.
+
+    def dof_indices(self, names: Sequence[str]) -> list[int]:
+        """Return each named DOF's index in ``dof_names``.
+
+        Raises:
+            ValueError: a name is not one of the robot's DOFs.
+        """
+        index = {name: i for i, name in enumerate(self.dof_names)}
+        unknown = [name for name in names if name not in index]
+        if unknown:
+            raise ValueError(f"Unknown DOF names {unknown}; the robot's DOFs are {self.dof_names}")
+        return [index[name] for name in names]
+
+    def get_dof_state_by_names(
+        self, names: Sequence[str] | None = None, env_ids: EnvIds | None = None
+    ) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
+        """Return ``{joint_name: (position, velocity)}``, each a ``[len(env_ids)]`` tensor.
+
+        Args:
+            names: DOFs to read; ``None`` => all, in ``dof_names`` order.
+            env_ids: Environments to read; ``None`` => all.
+        """
+        names = list(self.dof_names) if names is None else list(names)
+        cols = self.dof_indices(names)
+        rows = slice(None) if env_ids is None else env_ids
+        positions, velocities = self.dof_pos[rows][:, cols], self.dof_vel[rows][:, cols]
+        return {name: (positions[:, i], velocities[:, i]) for i, name in enumerate(names)}
+
+    def set_dof_state_by_names(
+        self,
+        env_ids: EnvIds | None,
+        positions: Mapping[str, float | torch.Tensor],
+        velocities: Mapping[str, float | torch.Tensor] | None = None,
+    ) -> None:
+        """Write the named DOFs' positions (and optionally velocities); other DOFs keep their state.
+
+        Args:
+            env_ids: Environments to write; ``None`` => all.
+            positions: ``{joint_name: value}``; each value a scalar or a ``[len(env_ids)]`` tensor.
+            velocities: Same form as ``positions``; ``None`` leaves velocities unchanged.
+        """
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.sim_device)
+        for target, values in ((self.dof_pos, positions), (self.dof_vel, velocities or {})):
+            for col, value in zip(self.dof_indices(list(values)), values.values(), strict=True):
+                target[env_ids, col] = torch.as_tensor(value, dtype=target.dtype, device=target.device)
+        self.set_dof_state_tensor(env_ids)
+
+    def apply_torques_by_names(self, torques: Mapping[str, float | torch.Tensor]) -> None:
+        """Apply torques to the named DOFs only (see :meth:`apply_torques_at_dof` with ``dof_indices``).
+
+        Args:
+            torques: ``{joint_name: value}``; each value a scalar or a ``[num_envs]`` tensor.
+        """
+        columns = [
+            torch.as_tensor(value, dtype=torch.float32, device=self.sim_device).expand(self.num_envs)
+            for value in torques.values()
+        ]
+        self.apply_torques_at_dof(torch.stack(columns, dim=-1), dof_indices=self.dof_indices(list(torques)))
 
     def simulate_at_each_physics_step(self) -> None:
         """Advance the simulation by a single step, emitting ``PRE_STEP`` before it and ``POST_STEP`` after.
