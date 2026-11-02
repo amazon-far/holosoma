@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from holosoma.simulator.base_simulator.state import SimState, StateTensor
+from holosoma.simulator.base_simulator.state import Columns, SimState, StateTensor
 
 pytestmark = pytest.mark.no_sim
 
@@ -25,7 +25,7 @@ def _counting_state(
         flushed.append(env_rows.tolist())
         backing[env_rows] = out[env_rows]
 
-    state.lazy("x", read, torch.zeros(rows, 3), sources=sources, write=write if writable else None)  # type: ignore[arg-type]
+    state.register("x", read, torch.zeros(rows, 3), sources=sources, write=write if writable else None)  # type: ignore[arg-type]
     return state, backing, reads, flushed
 
 
@@ -98,7 +98,7 @@ def test_grouped_names_share_one_read() -> None:
         reads.append(1)
         root[:] = torch.arange(13.0)
 
-    state.lazy(("root", "quat"), read, (root, root[:, 3:7]), sources=("root",))
+    state.register(("root", "quat"), read, (root, root[:, 3:7]), sources=("root",))
     assert torch.equal(state.get("quat")[0], torch.arange(3.0, 7.0))
     state.get("root")
     assert len(reads) == 1
@@ -108,10 +108,10 @@ def test_grouped_names_share_one_read() -> None:
 def test_columns_are_buffered_reads_of_the_selection() -> None:
     source = torch.arange(12, dtype=torch.float32).reshape(2, 6)
     state = SimState()
-    state.columns("run", source, [2, 3, 4], sources=("joints",))
-    state.columns("gathered", source, [4, 2], sources=("joints",))
-    state.columns("callable", lambda: source, [2, 3, 4], sources=("joints",))
-    state.columns("float64", source.double(), [2, 3, 4], sources=("joints",))
+    state.register("run", Columns(source, [2, 3, 4]), sources=("joints",))
+    state.register("gathered", Columns(source, [4, 2]), sources=("joints",))
+    state.register("callable", Columns(lambda: source, [2, 3, 4]), sources=("joints",))
+    state.register("float64", Columns(source.double(), [2, 3, 4]), sources=("joints",))
 
     assert torch.equal(state.get("run"), source[:, 2:5])
     assert state.get("run").untyped_storage().data_ptr() != source.untyped_storage().data_ptr()
@@ -135,3 +135,11 @@ def test_state_tensor_assignment_binds_a_live_tensor() -> None:
     value = torch.ones(3)
     sim.x = value
     assert sim.x is value
+
+
+def test_register_rejects_mismatched_read_and_buffers() -> None:
+    state = SimState()
+    with pytest.raises(TypeError, match="builds its own buffer"):
+        state.register("x", Columns(torch.zeros(2, 3), [0]), torch.zeros(2, 1), sources=("joints",))  # type: ignore[call-overload]
+    with pytest.raises(TypeError, match="needs the buffers"):
+        state.register("x", lambda _out: None, sources=("joints",))  # type: ignore[call-overload]

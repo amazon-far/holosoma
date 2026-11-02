@@ -49,6 +49,7 @@ from holosoma.simulator.isaacsim.object_spawner import (
     physics_material_cfg,
 )
 from holosoma.simulator.isaacsim.scene_fixtures import build_terrain_fixtures
+from holosoma.simulator.base_simulator.state import Columns
 from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw, fullstate_xyzw_to_wxyz
 from holosoma.simulator.shared.dof_limits import build_dof_limits_from_config
 from holosoma.simulator.shared.external_wrench import WrenchTarget
@@ -676,7 +677,7 @@ class IsaacSim(BaseSimulator):
             self._base_linear_acc = torch.zeros(self.num_envs, 3, device=self.sim_device)
             self.prev_base_lin_vel = torch.zeros(self.num_envs, 3, device=self.sim_device)
             for name, computed in (("dof_acc", self._dof_acc), ("base_linear_acc", self._base_linear_acc)):
-                self.state.lazy(
+                self.state.register(
                     name,
                     lambda out, computed=computed: out.copy_(computed),
                     torch.zeros_like(computed),
@@ -718,28 +719,26 @@ class IsaacSim(BaseSimulator):
         def write_root(rows: torch.Tensor, root: torch.Tensor, _quat: torch.Tensor) -> None:
             self._write_root_states(rows, root[rows])
 
-        self.state.lazy(
+        self.state.register(
             ("robot_root_states", "base_quat"), read_root, (root, root[:, 3:7]), sources=("root",), write=write_root
         )
-        self.state.columns(
+        self.state.register(
             "dof_pos",
-            lambda: data.joint_pos,
-            self.dof_ids,
+            Columns(lambda: data.joint_pos, self.dof_ids),
             sources=("joints",),
             write=lambda rows, out: self._robot.write_joint_position_to_sim(
                 out[rows], joint_ids=self.dof_ids, env_ids=rows
             ),
         )
-        self.state.columns(
+        self.state.register(
             "dof_vel",
-            lambda: data.joint_vel,
-            self.dof_ids,
+            Columns(lambda: data.joint_vel, self.dof_ids),
             sources=("joints",),
             write=lambda rows, out: self._robot.write_joint_velocity_to_sim(
                 out[rows], joint_ids=self.dof_ids, env_ids=rows
             ),
         )
-        self.state.lazy(
+        self.state.register(
             "contact_forces",
             lambda out: out.copy_(self._robot_contact_forces()),
             torch.zeros(n, b, 3, device=device),
@@ -754,7 +753,7 @@ class IsaacSim(BaseSimulator):
             "_rigid_body_ang_vel": (lambda: data.body_ang_vel_w, 3),
         }
         for name, (read, width) in body_reads.items():
-            self.state.lazy(
+            self.state.register(
                 name,
                 lambda out, read=read: out.copy_(read().index_select(1, body_ids)),
                 torch.zeros(n, b, width, device=device),

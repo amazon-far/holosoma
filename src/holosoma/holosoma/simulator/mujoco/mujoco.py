@@ -20,7 +20,7 @@ from holosoma.config_types.simulator import MujocoBackend
 from holosoma.managers.terrain.manager import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.base_simulator.hooks import Phase
-from holosoma.simulator.base_simulator.state import Source
+from holosoma.simulator.base_simulator.state import Columns, Source
 from holosoma.simulator.mujoco import light_setup
 from holosoma.simulator.mujoco.backends import WARP_AVAILABLE, ClassicBackend, IMujocoBackend, WarpBackend
 from holosoma.simulator.mujoco.backends.base import apply_sensor_scene_flags, mj_to_holosoma_quat
@@ -788,17 +788,19 @@ class MuJoCo(BaseSimulator):
             return write
 
         for name, source, ids in (("dof_pos", qpos, self.dof_qpos_addrs), ("dof_vel", qvel, self.dof_qvel_addrs)):
-            state.columns(name, source, ids, sources=("joints",), device=device, write=write_columns(source, ids))
+            state.register(
+                name, Columns(source, ids, device=device), sources=("joints",), write=write_columns(source, ids)
+            )
         # Classic's FK pass is a full mj_forward, which recomputes accelerations and contacts.
-        state.columns("dof_acc", qacc, self.dof_qvel_addrs, sources=("joints", "bodies"), device=device)
+        state.register("dof_acc", Columns(qacc, self.dof_qvel_addrs, device=device), sources=("joints", "bodies"))
 
         qvel_addr = self.object_addrs["robot"]["qvel_addr"]
-        state.columns("base_angular_vel", qvel, range(qvel_addr + 3, qvel_addr + 6), sources=("root",), device=device)
-        state.columns(
-            "base_linear_acc", qacc, range(qvel_addr, qvel_addr + 3), sources=("root", "bodies"), device=device
-        )
+        angular_vel_ids = range(qvel_addr + 3, qvel_addr + 6)
+        state.register("base_angular_vel", Columns(qvel, angular_vel_ids, device=device), sources=("root",))
+        linear_acc_ids = range(qvel_addr, qvel_addr + 3)
+        state.register("base_linear_acc", Columns(qacc, linear_acc_ids, device=device), sources=("root", "bodies"))
         if b > 0:
-            state.lazy(
+            state.register(
                 "contact_forces",
                 lambda out: out.copy_(self.backend.compute_contact_forces()[:, self._body_ids_t]),
                 torch.zeros(n, b, 3, device=device),
@@ -814,7 +816,7 @@ class MuJoCo(BaseSimulator):
             self._write_root_states(rows, root[rows])
 
         root = torch.zeros(n, 13, device=device)
-        state.lazy(
+        state.register(
             ("robot_root_states", "base_quat"), read_root, (root, root[:, 3:7]), sources=("root",), write=write_root
         )
 
@@ -824,7 +826,7 @@ class MuJoCo(BaseSimulator):
         body_names = ("_rigid_body_pos", "_rigid_body_rot", "_rigid_body_vel", "_rigid_body_ang_vel")
         if b == 0:
             for name, width in zip(body_names, (3, 4, 3, 3), strict=True):
-                state.live(name, body_buffer(width))
+                state.register(name, lambda _buffer: None, body_buffer(width), sources=())
         else:
 
             def read_bodies(*buffers: torch.Tensor) -> None:
@@ -832,7 +834,7 @@ class MuJoCo(BaseSimulator):
                     out.copy_(value)
 
             buffers = tuple(body_buffer(width) for width in (3, 4, 3, 3))
-            state.lazy(body_names, read_bodies, buffers, sources=("bodies",))
+            state.register(body_names, read_bodies, buffers, sources=("bodies",))
 
     def apply_torques_at_dof(self, torques: torch.Tensor, dof_indices: list[int] | None = None) -> None:
         """Apply torques with backend-specific optimization.

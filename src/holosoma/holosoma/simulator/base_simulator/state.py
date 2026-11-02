@@ -1,12 +1,10 @@
 """Simulator state tensors, served as lazy reads into stable buffers.
 
-A backend binds each state quantity once, in ``prepare_sim``:
-
-- :meth:`SimState.lazy` serves preallocated buffers that ``read`` fills on the first access after
-  any of the group's sources changed, and that ``write`` flushes to the simulation, row by row. Several
-  names may share one read.
-- :meth:`SimState.columns` serves a column selection of a backend tensor through :meth:`lazy`.
-- :meth:`SimState.live` serves a tensor as is, for buffers outside the simulation such as test fakes.
+A backend binds each state quantity once, in ``prepare_sim``, with :meth:`SimState.register`. It
+serves preallocated buffers that a read fills on the first access after any of the quantity's sources
+changed, and that ``write`` flushes to the simulation, row by row. The read is either a function that
+fills the given buffers (several names may share one read), or a :class:`Columns` spec, a column
+selection of a backend tensor that builds its own read and buffer.
 
 Every served tensor keeps its identity, so references to it stay valid. Reads see the current
 simulation state. In-place writes reach the simulation before its next physics step, FK pass, refresh
@@ -21,6 +19,7 @@ touches.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal, overload
 
 import torch
@@ -72,6 +71,41 @@ class _LazyGroup:
         self.clean = self._versions()
 
 
+@dataclass(frozen=True)
+class Columns:
+    """The columns ``ids`` of a backend tensor ``source`` (``[num_envs, n, ...]``), read into a float32 buffer.
+
+    ``source`` may be a callable returning the current tensor, for backends that replace their storage.
+    The buffer is on ``device`` (default: the source's). A contiguous ascending run of ids is copied as a
+    slice, without a gather.
+    """
+
+    source: torch.Tensor | Callable[[], torch.Tensor]
+    ids: Sequence[int]
+    device: torch.device | str | None = None
+
+    def reader(self) -> tuple[Callable[[torch.Tensor], None], torch.Tensor]:
+        """A read function and the buffer it fills."""
+        source = self.source
+
+        def current() -> torch.Tensor:
+            return source if isinstance(source, torch.Tensor) else source()
+
+        sample = current()
+        ids = list(self.ids)
+        shape = (sample.shape[0], len(ids), *sample.shape[2:])
+        device = self.device if self.device is not None else sample.device
+        buffer = torch.zeros(shape, dtype=torch.float32, device=device)
+        run = contiguous_run(ids)
+        ids_t = torch.as_tensor(ids, dtype=torch.long, device=sample.device)
+
+        def read(out: torch.Tensor) -> None:
+            data = current()
+            out.copy_(data.narrow(1, run[0], run[1]) if run is not None else data.index_select(1, ids_t))
+
+        return read, buffer
+
+
 class SimState:
     """Registry of a simulator's state tensors, the sources each one reads, and its pending writes."""
 
@@ -80,12 +114,18 @@ class SimState:
         self._groups: dict[str, _LazyGroup] = {}
         self._by_source: dict[Source, list[_LazyGroup]] = {source: [] for source in SOURCES}
 
-    def live(self, name: str, tensor: Any) -> None:
-        """Serve ``tensor`` as ``name`` with no caching."""
-        self._unbind(name)
-        self._tensors[name] = tensor
+    @overload
+    def register(
+        self,
+        names: str,
+        read: Columns,
+        *,
+        sources: Sequence[Source],
+        write: Callable[[torch.Tensor, torch.Tensor], None] | None = None,
+    ) -> None: ...
 
-    def lazy(
+    @overload
+    def register(
         self,
         names: str | Sequence[str],
         read: Callable[..., None],
@@ -93,8 +133,28 @@ class SimState:
         *,
         sources: Sequence[Source],
         write: Callable[..., None] | None = None,
+    ) -> None: ...
+
+    def register(
+        self,
+        names: str | Sequence[str],
+        read: Columns | Callable[..., None],
+        buffers: torch.Tensor | Sequence[torch.Tensor] | None = None,
+        *,
+        sources: Sequence[Source],
+        write: Callable[..., None] | None = None,
     ) -> None:
-        """Serve ``buffers`` as ``names``; ``read(*buffers)`` fills them, ``write(rows, *buffers)`` flushes ``rows``."""
+        """Serve buffers as ``names``, filled by ``read`` when stale and flushed by ``write(rows, *buffers)``.
+
+        ``read`` is a :class:`Columns` spec, which builds its own buffer, or a function ``read(*buffers)``
+        that fills ``buffers``. Without ``write`` the tensors are read-only.
+        """
+        if isinstance(read, Columns):
+            if buffers is not None:
+                raise TypeError("A Columns spec builds its own buffer; do not pass buffers.")
+            read, buffers = read.reader()
+        elif buffers is None:
+            raise TypeError("A read function needs the buffers it fills.")
         names = (names,) if isinstance(names, str) else tuple(names)
         buffers = (buffers,) if isinstance(buffers, torch.Tensor) else tuple(buffers)
         group = _LazyGroup(names, read, write, buffers)
@@ -105,43 +165,10 @@ class SimState:
         for source in sources:
             self._by_source[source].append(group)
 
-    def columns(
-        self,
-        name: str,
-        source: torch.Tensor | Callable[[], torch.Tensor],
-        ids: Sequence[int],
-        *,
-        sources: Sequence[Source],
-        device: torch.device | str | None = None,
-        write: Callable[[torch.Tensor, torch.Tensor], None] | None = None,
-    ) -> None:
-        """Serve ``source[:, ids]`` as ``name``, read lazily into a float32 buffer on ``device``.
-
-        ``source`` is a ``[num_envs, n, ...]`` tensor, or a callable returning the current one when the
-        backend replaces its storage. ``device`` defaults to the source's. ``write(rows, buffer)``
-        flushes changed rows; without it the tensor is read-only. A contiguous ascending run of ids is
-        copied as a slice, without a gather.
-        """
-        if isinstance(source, torch.Tensor):
-            tensor = source
-
-            def current() -> torch.Tensor:
-                return tensor
-
-        else:
-            current = source
-        sample = current()
-        ids = list(ids)
-        shape = (sample.shape[0], len(ids), *sample.shape[2:])
-        buffer = torch.zeros(shape, dtype=torch.float32, device=device if device is not None else sample.device)
-        run = contiguous_run(ids)
-        ids_t = torch.as_tensor(ids, dtype=torch.long, device=sample.device)
-
-        def read(out: torch.Tensor) -> None:
-            data = current()
-            out.copy_(data.narrow(1, run[0], run[1]) if run is not None else data.index_select(1, ids_t))
-
-        self.lazy(name, read, buffer, sources=sources, write=write)
+    def _serve(self, name: str, tensor: Any) -> None:
+        """Serve ``tensor`` as ``name`` as is, outside the registry's reads and writes."""
+        self._unbind(name)
+        self._tensors[name] = tensor
 
     def prepare(self, *sources: Source, everything: bool = False) -> None:
         """Flush the rows written in place before a mutation of ``sources`` (no arguments, or ``everything``: all)."""
@@ -235,7 +262,7 @@ def contiguous_run(ids: Sequence[int]) -> tuple[int, int] | None:
 class StateTensor:
     """A simulator state quantity, served by the simulator's :class:`SimState`.
 
-    Assigning binds the value as a live tensor.
+    Assigning serves the value as is, for setup placeholders and test fakes.
     """
 
     def __init__(self, doc: str) -> None:
@@ -256,7 +283,7 @@ class StateTensor:
         return sim_state(sim).get(self._name)
 
     def __set__(self, sim: Any, value: Any) -> None:
-        sim_state(sim).live(self._name, value)
+        sim_state(sim)._serve(self._name, value)
 
 
 def sim_state(sim: Any) -> SimState:
