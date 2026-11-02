@@ -15,15 +15,15 @@ def _counting_state(writable: bool = True, rows: int = 2) -> tuple[SimState, tor
     reads: list[int] = []
     flushed: list[list[int]] = []
 
-    def read(out: torch.Tensor) -> None:
+    def read() -> torch.Tensor:
         reads.append(1)
-        out.copy_(backing)
+        return backing
 
     def write(env_rows: torch.Tensor, out: torch.Tensor) -> None:
         flushed.append(env_rows.tolist())
         backing[env_rows] = out[env_rows]
 
-    state.register("x", read, torch.zeros(rows, 3), write=write if writable else None)
+    state.register("x", read, write=write if writable else None)
     return state, backing, reads, flushed
 
 
@@ -76,23 +76,27 @@ def test_unflushable_writes_raise() -> None:
         state.get("x")
 
 
-def test_grouped_names_share_one_read() -> None:
+def test_one_read_serves_several_names() -> None:
     state = SimState()
     reads: list[int] = []
-    root = torch.zeros(2, 13)
+    values = (torch.arange(6.0).reshape(2, 3), torch.ones(2, 4, dtype=torch.float64))
 
-    def read(root: torch.Tensor, _quat: torch.Tensor) -> None:
+    def read() -> tuple[torch.Tensor, ...]:
         reads.append(1)
-        root[:] = torch.arange(13.0)
+        return values
 
-    state.register(("root", "quat"), read, (root, root[:, 3:7]))
-    assert torch.equal(state.get("quat")[0], torch.arange(3.0, 7.0))
-    state.get("root")
+    state.register(("a", "b"), read)
+    assert torch.equal(state.get("b"), values[1].float()) and state.get("b").dtype == torch.float32
+    state.get("a")
     assert len(reads) == 1
-    assert torch.equal(state.read_fresh("quat"), root[:, 3:7])
+    assert torch.equal(state.read_fresh("a"), values[0])
+
+    state.register("c", lambda: values)
+    with pytest.raises(ValueError, match="returned 2 tensors"):
+        state.get("c")
 
 
-def test_columns_are_buffered_reads_of_the_selection() -> None:
+def test_columns_return_the_selection() -> None:
     source = torch.arange(12, dtype=torch.float32).reshape(2, 6)
     state = SimState()
     state.register("run", Columns(source, [2, 3, 4]))
@@ -122,14 +126,6 @@ def test_state_tensor_assignment_serves_the_value() -> None:
     value = torch.ones(3)
     sim.x = value
     assert sim.x is value
-
-
-def test_register_rejects_mismatched_read_and_buffers() -> None:
-    state = SimState()
-    with pytest.raises(TypeError, match="builds its own buffer"):
-        state.register("x", Columns(torch.zeros(2, 3), [0]), torch.zeros(2, 1))  # type: ignore[call-overload]
-    with pytest.raises(TypeError, match="needs the buffers"):
-        state.register("x", lambda _out: None)  # type: ignore[call-overload]
 
 
 def test_mutation_flushes_first_and_marks_stale_after_even_on_error() -> None:

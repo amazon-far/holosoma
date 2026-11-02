@@ -676,12 +676,8 @@ class IsaacSim(BaseSimulator):
             self.prev_dof_vel = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
             self._base_linear_acc = torch.zeros(self.num_envs, 3, device=self.sim_device)
             self.prev_base_lin_vel = torch.zeros(self.num_envs, 3, device=self.sim_device)
-            for name, computed in (("dof_acc", self._dof_acc), ("base_linear_acc", self._base_linear_acc)):
-                self.state.register(
-                    name,
-                    lambda out, computed=computed: out.copy_(computed),
-                    torch.zeros_like(computed),
-                )
+            self.state.register("dof_acc", lambda: self._dof_acc)
+            self.state.register("base_linear_acc", lambda: self._base_linear_acc)
         else:
             logger.debug("Bridge disabled: skipping acceleration computation tensors")
 
@@ -706,19 +702,13 @@ class IsaacSim(BaseSimulator):
         Isaac Lab replaces these buffers on update, so every tensor is a lazy read. Body quantities are
         separate reads because reading body link velocity makes PhysX copy body COMs to the host.
         """
-        n, b, device = self.num_envs, self.num_bodies, self.sim_device
         data = self._robot.data
-        body_ids = torch.tensor(self.body_ids, dtype=torch.long, device=device)
-
-        root = torch.zeros(n, 13, device=device)
-
-        def read_root(root: torch.Tensor, _quat: torch.Tensor) -> None:
-            root.copy_(fullstate_wxyz_to_xyzw(data.root_state_w))
-
-        def write_root(rows: torch.Tensor, root: torch.Tensor, _quat: torch.Tensor) -> None:
-            self._write_root_states(rows, root[rows])
-
-        self.state.register(("robot_root_states", "base_quat"), read_root, (root, root[:, 3:7]), write=write_root)
+        self.state.register(
+            "robot_root_states",
+            lambda: fullstate_wxyz_to_xyzw(data.root_state_w),
+            write=lambda rows, root: self._write_root_states(rows, root[rows]),
+        )
+        self.state.register("base_quat", Columns(lambda: self.robot_root_states, range(3, 7)))
         self.state.register(
             "dof_pos",
             Columns(lambda: data.joint_pos, self.dof_ids),
@@ -733,25 +723,17 @@ class IsaacSim(BaseSimulator):
                 out[rows], joint_ids=self.dof_ids, env_ids=rows
             ),
         )
-        self.state.register(
-            "contact_forces",
-            lambda out: out.copy_(self._robot_contact_forces()),
-            torch.zeros(n, b, 3, device=device),
-        )
-        body_reads = {
-            "_rigid_body_pos": (lambda: data.body_pos_w, 3),
+        self.state.register("contact_forces", self._robot_contact_forces)
+        body_sources = {
+            "_rigid_body_pos": lambda: data.body_pos_w,
             # Isaac Lab stores wxyz; holosoma uses xyzw.
-            "_rigid_body_rot": (lambda: data.body_quat_w[..., [1, 2, 3, 0]], 4),
+            "_rigid_body_rot": lambda: data.body_quat_w[..., [1, 2, 3, 0]],
             # Link-frame linear velocity, to match _rigid_body_pos: body_lin_vel_w is the COM velocity.
-            "_rigid_body_vel": (lambda: data.body_link_lin_vel_w, 3),
-            "_rigid_body_ang_vel": (lambda: data.body_ang_vel_w, 3),
+            "_rigid_body_vel": lambda: data.body_link_lin_vel_w,
+            "_rigid_body_ang_vel": lambda: data.body_ang_vel_w,
         }
-        for name, (read, width) in body_reads.items():
-            self.state.register(
-                name,
-                lambda out, read=read: out.copy_(read().index_select(1, body_ids)),
-                torch.zeros(n, b, width, device=device),
-            )
+        for name, source in body_sources.items():
+            self.state.register(name, Columns(source, self.body_ids))
 
     def _robot_contact_forces(self) -> torch.Tensor:
         """Sensor forces in robot body order, (num_envs, num_bodies, 3). The contact sensor's body

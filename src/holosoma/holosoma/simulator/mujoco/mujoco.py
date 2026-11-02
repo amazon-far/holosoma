@@ -797,38 +797,22 @@ class MuJoCo(BaseSimulator):
         linear_acc_ids = range(qvel_addr, qvel_addr + 3)
         state.register("base_linear_acc", Columns(qacc, linear_acc_ids, device=device))
         if b > 0:
-            state.register(
-                "contact_forces",
-                lambda out: out.copy_(self.backend.compute_contact_forces()[:, self._body_ids_t]),
-                torch.zeros(n, b, 3, device=device),
-            )
+            state.register("contact_forces", lambda: self.backend.compute_contact_forces()[:, self._body_ids_t])
 
         env_ids = torch.arange(n, device=device)
-
-        def read_root(root: torch.Tensor, _quat: torch.Tensor) -> None:
-            root.copy_(self.get_actor_states(["robot"], env_ids))
-
-        def write_root(rows: torch.Tensor, root: torch.Tensor, _quat: torch.Tensor) -> None:
-            self._write_root_states(rows, root[rows])
-
-        root = torch.zeros(n, 13, device=device)
-        state.register(("robot_root_states", "base_quat"), read_root, (root, root[:, 3:7]), write=write_root)
-
-        def body_buffer(width: int) -> torch.Tensor:
-            return torch.zeros(n, b, width, device=device)
+        state.register(
+            "robot_root_states",
+            lambda: self.get_actor_states(["robot"], env_ids),
+            write=lambda rows, root: self._write_root_states(rows, root[rows]),
+        )
+        state.register("base_quat", Columns(lambda: self.robot_root_states, range(3, 7)))
 
         body_names = ("_rigid_body_pos", "_rigid_body_rot", "_rigid_body_vel", "_rigid_body_ang_vel")
         if b == 0:
-            for name, width in zip(body_names, (3, 4, 3, 3), strict=True):
-                state.register(name, lambda _buffer: None, body_buffer(width))
+            empty = tuple(torch.zeros(n, 0, width, device=device) for width in (3, 4, 3, 3))
+            state.register(body_names, lambda: empty)
         else:
-
-            def read_bodies(*buffers: torch.Tensor) -> None:
-                for out, value in zip(buffers, self.backend.refresh_rigid_body_states(), strict=True):
-                    out.copy_(value)
-
-            buffers = tuple(body_buffer(width) for width in (3, 4, 3, 3))
-            state.register(body_names, read_bodies, buffers)
+            state.register(body_names, self.backend.refresh_rigid_body_states)
 
     def apply_torques_at_dof(self, torques: torch.Tensor, dof_indices: list[int] | None = None) -> None:
         """Apply torques with backend-specific optimization.
