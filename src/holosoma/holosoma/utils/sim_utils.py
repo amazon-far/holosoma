@@ -141,7 +141,9 @@ def setup_isaaclab_launcher(config: EnvConfig, device: str) -> Any | None:
 
     # LiDAR ray queries do not need RTX; only video and TiledCamera sensors enable the renderer.
     video_enabled = config.logger.video.enabled or config.logger.headless_recording
-    cameras_enabled = any(isinstance(sensor, CameraSensorConfig) for sensor in config.sensors.values())
+    cameras_enabled = not config.simulator.config.sim.remote_sensors and any(
+        isinstance(sensor, CameraSensorConfig) for sensor in config.sensors.values()
+    )
     needs_rendering = video_enabled or cameras_enabled
     if needs_rendering:
         args_cli.enable_cameras = True

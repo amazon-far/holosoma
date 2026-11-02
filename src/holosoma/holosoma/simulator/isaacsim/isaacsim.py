@@ -90,7 +90,7 @@ class IsaacSim(BaseSimulator):
         decimation = self.simulator_config.sim.control_decimation_steps
         render_interval = self.simulator_config.sim.render_interval_steps
         cameras = sorted(n for n, c in self.sensor_config.items() if isinstance(c, CameraSensorConfig))
-        if cameras and decimation % render_interval:
+        if cameras and decimation % render_interval and not self.remote_sensors:
             raise ValueError(
                 f"render_interval ({render_interval}) must divide control_decimation ({decimation}) "
                 f"when cameras are configured ({cameras}); set it to a divisor, or to "
@@ -312,7 +312,8 @@ class IsaacSim(BaseSimulator):
 
         # Perception cameras: one TiledCamera per configured camera, as a child prim of its
         # mount body so it follows that body, created before clone so it replicates per env.
-        sensor_setup.build_sensors(self)
+        if not self.remote_sensors:
+            sensor_setup.build_sensors(self)
 
         # Author the light rig under env_0 before cloning so each environment gets its own lights; an
         # empty rig authors nothing, leaving only the scene asset's baked lights.
@@ -325,7 +326,10 @@ class IsaacSim(BaseSimulator):
 
         # Register the TiledCameras (built pre-clone above) into the shared SensorManager. Done
         # here at the end of scene build (IsaacSim builds its scene in __init__, not load_assets).
-        sensor_setup.create_sensors(self)
+        if self.remote_sensors:
+            self._create_remote_sensors()
+        else:
+            sensor_setup.create_sensors(self)
 
     # ----- Camera sensors (TiledCamera; child prim of the mount body, auto-follow) -----
 

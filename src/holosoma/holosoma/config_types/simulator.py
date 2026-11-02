@@ -145,6 +145,10 @@ class SimEngineConfig:
     objects) is not supported; that would be a per-actor flag (e.g. IsaacLab's per-prim
     ``kinematic_enabled``), not this global one."""
 
+    remote_sensors: bool = False
+    """Build no native cameras: camera buffers start zeroed and another process fills them (the
+    ``cosim-leader`` plugin). LiDARs are not supported in this mode."""
+
     mujoco: MujocoConfig = field(default_factory=MujocoConfig)
     """Native MuJoCo settings. None preserves existing behavior; other simulators ignore this block."""
 

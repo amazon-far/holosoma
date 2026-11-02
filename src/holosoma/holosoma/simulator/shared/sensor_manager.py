@@ -16,7 +16,10 @@ from holosoma.simulator.shared.range_clipping import clip_sensor_ranges
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from holosoma.config_types.sensor import LidarSensorConfig, SensorConfig
+    from holosoma.utils.simulator_config import SimulatorType
 
 SensorRecordT = TypeVar("SensorRecordT", bound="SensorRecord")
 
@@ -117,6 +120,8 @@ class SensorManager:
     def __init__(self, device: str, control_hz: float) -> None:
         self.device = device
         self.control_hz = control_hz
+        self.simulator_type: SimulatorType | None = None
+        """Backend that renders these sensors, when it is not this process's simulator."""
         self._cameras: dict[str, CameraRecord] = {}
         self._lidars: dict[str, LidarRecord] = {}
         self._order: list[str] = []
@@ -242,3 +247,28 @@ class SensorManager:
         else:
             raise KeyError(f"No sensor named '{name}'. Registered sensors: {self._order}.")
         return record.step_counter // record.effective_decimation + 1
+
+
+_CHANNELS = {"rgb": (3, torch.uint8), "depth": (1, torch.float32)}
+
+
+def create_remote_sensor_manager(
+    sensor_config: Mapping[str, SensorConfig], device: str, control_hz: float, num_envs: int
+) -> SensorManager:
+    """Register every configured camera with zeroed ``[num_envs, H, W, C]`` buffers and no renderer.
+
+    For a simulator whose images come from another process, which fills the buffers with
+    ``set_buffer``. Raises ``ValueError`` for LiDARs, which this mode does not support.
+    """
+    lidars = sorted(name for name, config in sensor_config.items() if not isinstance(config, CameraSensorConfig))
+    if lidars:
+        raise ValueError(f"Remote sensors support cameras only; remove the LiDARs {lidars}.")
+    manager = SensorManager(device, control_hz)
+    for name, config in sensor_config.items():
+        assert isinstance(config, CameraSensorConfig)
+        record = manager.register_camera(name, config)
+        for data_type in config.data_types:
+            channels, dtype = _CHANNELS[data_type]
+            shape = (num_envs, config.height, config.width, channels)
+            record.set_buffer(data_type, torch.zeros(shape, dtype=dtype, device=device))
+    return manager

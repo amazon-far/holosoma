@@ -213,9 +213,11 @@ class BaseSimulator:
         self.kinematic_playback: bool = self.simulator_config.sim.kinematic_playback
         self._kinematic_time = 0.0
         self.hooks = hooks
+        self.remote_sensors: bool = self.simulator_config.sim.remote_sensors
         # Register sensor rendering before plugins so FRAME_END consumers read fresh outputs.
         # This no-ops until a backend builds its sensor manager during setup.
-        self.hooks.add(Phase.FRAME_END, self.render_sensors, name="sensors.render")
+        if not self.remote_sensors:
+            self.hooks.add(Phase.FRAME_END, self.render_sensors, name="sensors.render")
         self.state: SimState = sim_state(self)
 
         # Virtual gantry system
@@ -951,6 +953,17 @@ class BaseSimulator:
         observations compute), honoring each sensor's ``update_decimation``. Consumers then do
         cheap cached reads through the camera/LiDAR accessors."""
         raise NotImplementedError("The 'render_sensors' method must be implemented in subclasses.")
+
+    def _create_remote_sensors(self) -> None:
+        """Create the sensor manager for ``sim.remote_sensors``: zeroed camera buffers, no native cameras."""
+        if not self.sensor_config:
+            return
+        from holosoma.simulator.shared.sensor_manager import create_remote_sensor_manager
+
+        cfg = self.simulator_config.sim
+        self.sensor_manager = create_remote_sensor_manager(
+            self.sensor_config, self.sim_device, cfg.fps / cfg.control_decimation_steps, self.training_config.num_envs
+        )
 
     def rerender_sensors(self, env_ids: torch.Tensor) -> None:
         """Re-render ``env_ids`` for sensors that support partial rendering; other sensors keep their frame.

@@ -368,6 +368,8 @@ class MuJoCo(BaseSimulator):
             )
 
         # Add native camera/site elements after all mount bodies exist but before compile.
+        if self.remote_sensors:
+            return
         cameras = {
             name: config for name, config in self.sensor_config.items() if isinstance(config, CameraSensorConfig)
         }
@@ -1430,6 +1432,9 @@ class MuJoCo(BaseSimulator):
 
     def _create_sensors(self) -> None:
         """Create one shared manager for mounted cameras and LiDARs after model compilation."""
+        if self.remote_sensors:
+            self._create_remote_sensors()
+            return
         create_sensors(self)
 
     def _offset_world_cameras(self) -> None:
