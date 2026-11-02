@@ -211,6 +211,128 @@ def test_continuous_velocity_command_crosses_the_native_config_boundary(tmp_path
         _native.Policy.from_config(json.dumps(document), True)
 
 
+def _contextual_runner(config):
+    from holosoma_inference.policies.native_runner import NativeContextualRunner
+
+    inputs = _NoInput()
+    return NativeContextualRunner(
+        config, interface=_ScriptedInterface(_low_state()), velocity_input=inputs, command_provider=inputs
+    )
+
+
+def _continuous_export_config(tmp_path, metadata=None):
+    from holosoma_inference.config.config_types.contextual import ContextualConfig
+    from holosoma_inference.config.config_types.observation import ObservationConfig
+
+    generator = runpy.run_path(str(Path(__file__).parents[1] / "holosoma_cpp/tests/gen_velocity_models.py"))
+    path = tmp_path / "velocity.onnx"
+    generator["export_stub"](path, metadata or generator["EXPORT"]["metadata_props"])
+    base = inference.get_config("g1-29dof-loco")
+    return replace(
+        base,
+        observation=ObservationConfig({"actor_obs": []}, {}, {}, {}),
+        task=replace(base.task, model_path=str(path), use_phase=False),
+        contextual=ContextualConfig(discretizer=None, require_climb_head=False),
+        secondary=None,
+    )
+
+
+class _RecordingDepthConsumer:
+    """Stands in for the ROS transport (rclpy is a deployment extra); records how it was built."""
+
+    built = []
+
+    def __init__(self, policy, topic, **settings):
+        self.settings = settings
+        self.started = False
+        _RecordingDepthConsumer.built.append(self)
+
+    def start(self):
+        self.started = True
+
+
+def test_a_continuous_export_exposes_the_depth_contract_its_metadata_declares(tmp_path):
+    runner = _contextual_runner(_continuous_export_config(tmp_path))
+    metadata = runpy.run_path(str(Path(__file__).parents[1] / "holosoma_cpp/tests/gen_velocity_models.py"))["EXPORT"][
+        "metadata_props"
+    ]
+    near, far = json.loads(metadata["depth_clip_m"])
+    fill = json.loads(metadata["depth_observation_params"])["invalid_fill"]
+    assert runner.depth_contract == {"near_m": near, "far_m": far, "invalid_fill": fill}
+    assert runner.depth_contract == {"near_m": 0.3, "far_m": 2.0, "invalid_fill": "near"}
+
+
+def test_the_depth_topic_is_refused_when_its_preprocessor_disagrees_with_the_export(tmp_path, monkeypatch):
+    from holosoma_inference import depth
+    from holosoma_inference.run_policy import _start_depth_source
+
+    monkeypatch.setattr(depth, "DepthConsumer", _RecordingDepthConsumer)
+    _RecordingDepthConsumer.built = []
+    config = _continuous_export_config(tmp_path)
+    runner = _contextual_runner(config)
+    # The default FAR-plane fill against an export trained with invalid pixels at near.
+    with pytest.raises(ValueError, match=depth.CONTRACT_MISMATCH) as refused:
+        _start_depth_source(runner, config, None, "depth/depth_registered")
+    assert "invalid_fill is 'far' but the model declares 'near'" in str(refused.value)
+    assert _RecordingDepthConsumer.built == []
+    # The matching fill starts, and the consumer preprocesses with it.
+    source = _start_depth_source(runner, config, None, "depth/depth_registered", depth_invalid_fill="near")
+    assert source.started and source.settings == {"invalid_fill": "near"}
+
+
+def test_a_continuous_export_that_declares_no_depth_contract_is_refused_at_load(tmp_path):
+    generator = runpy.run_path(str(Path(__file__).parents[1] / "holosoma_cpp/tests/gen_velocity_models.py"))
+    for key in ("depth_clip_m", "depth_observation_params"):
+        metadata = dict(generator["EXPORT"]["metadata_props"])
+        del metadata[key]
+        with pytest.raises(RuntimeError, match=f"ONNX metadata {key} is missing"):
+            _contextual_runner(_continuous_export_config(tmp_path, metadata))
+
+
+def test_a_primitive_export_declares_no_depth_contract_and_keeps_the_far_fill(tmp_path, monkeypatch):
+    from holosoma_inference import depth
+    from holosoma_inference.config.config_types.contextual import ContextualConfig
+    from holosoma_inference.config.config_types.observation import ObservationConfig
+    from holosoma_inference.run_policy import _start_depth_source
+
+    monkeypatch.setattr(depth, "DepthConsumer", _RecordingDepthConsumer)
+    _RecordingDepthConsumer.built = []
+    generator = Path(__file__).parents[1] / "holosoma_cpp/tests/gen_contextual_models.py"
+    path = tmp_path / "contextual.onnx"
+    runpy.run_path(str(generator))["write_model"](path)
+    base = inference.get_config("g1-29dof-loco")
+    robot = RobotConfig(
+        robot_type="test",
+        robot="test",
+        num_joints=3,
+        num_motors=3,
+        dof_names=("hip", "knee", "ankle"),
+        dof_names_upper_body=(),
+        dof_names_lower_body=("hip", "knee", "ankle"),
+        default_dof_angles=(0.1, 0.2, 0.3),
+        default_motor_angles=(0.1, 0.2, 0.3),
+        motor2joint=(0, 1, 2),
+        joint2motor=(0, 1, 2),
+    )
+    config = replace(
+        base,
+        robot=robot,
+        observation=ObservationConfig({"actor_obs": []}, {}, {}, {}),
+        task=replace(base.task, model_path=str(path), use_phase=False),
+        contextual=ContextualConfig(depth_height=2, depth_width=3, imu_to_obs_joint_chain=()),
+        secondary=None,
+    )
+    from holosoma_inference.policies.native_runner import NativeContextualRunner
+
+    inputs = _NoInput()
+    runner = NativeContextualRunner(
+        config, interface=_ScriptedInterface(np.zeros((1, 19))), velocity_input=inputs, command_provider=inputs
+    )
+    assert runner.depth_contract is None
+    source = _start_depth_source(runner, config, None, "depth/depth_registered")
+    assert source.started and source.settings == {"invalid_fill": "far"}
+
+
 def test_packed_observation_uses_native_graph_scaling_and_defaults(native_config):
     config, width = native_config
     policy = inference.LocomotionPolicy(config)

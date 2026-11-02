@@ -106,6 +106,16 @@ class NativePolicy:
         with self._lock:
             return self._engine.step_state(self._state(state, tick_ms), advance_phase)
 
+    @property
+    def depth_contract(self):
+        """The active contextual model's declared depth preprocessing, or None.
+
+        A dict of ``near_m``, ``far_m`` and ``invalid_fill`` for a continuous-velocity export;
+        None for a model that declares none (the primitive exports) or a non-contextual policy.
+        """
+        with self._lock:
+            return self._engine.depth_contract
+
     def step_contextual(self, state, inputs, *, tick_ms=0):
         """Forward typed depth/command input to the shared C++ policy."""
         with self._lock:

@@ -175,6 +175,8 @@ class PrimitiveFamily final : public Family {
   const std::vector<float> &observation() const override { return obs_; }
   const std::vector<float> &depth() const override { return depth_; }
   const std::vector<int64_t> &depth_shape() const override { return depth_shape_; }
+  // Primitive exports declare no depth preprocessing; the transport's own applies.
+  std::optional<DepthContract> depth_contract() const override { return std::nullopt; }
   const std::vector<float> &action() const override { return action_; }
   const std::vector<float> &scaled() const override { return scaled_; }
   bool has_climb_head() const override { return climb_output_.has_value(); }

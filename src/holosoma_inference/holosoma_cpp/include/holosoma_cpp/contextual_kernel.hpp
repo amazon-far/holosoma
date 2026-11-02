@@ -39,6 +39,16 @@ struct Spec {
 
 using Options = ContextualConfig;
 
+// How the model expects a metric depth frame to become its depth input, as its
+// export declares it. The policy never sees raw depth, so it cannot apply this;
+// whichever transport preprocesses depth compares its own settings against it.
+// Pixels below near read as near and beyond far as far; `invalid_fill` is the
+// plane a pixel with no reading (NaN, or depth <= 0) takes: "near" or "far".
+struct DepthContract {
+  double near_m = 0, far_m = 0;
+  std::string invalid_fill;
+};
+
 // One command interface for a depth-conditioned policy: how operator commands
 // become the model's command input, how the observation is assembled, and how
 // raw actions become joint targets. Policy selects one from the configured
@@ -78,6 +88,8 @@ class Family {
   virtual const std::vector<float> &observation() const = 0;
   virtual const std::vector<float> &depth() const = 0;
   virtual const std::vector<int64_t> &depth_shape() const = 0;
+  // The declared depth preprocessing, or nullopt when the model declares none.
+  virtual std::optional<DepthContract> depth_contract() const = 0;
   virtual const std::vector<float> &action() const = 0;
   virtual const std::vector<float> &scaled() const = 0;
   virtual bool has_climb_head() const = 0;
@@ -140,6 +152,7 @@ class Policy {
   const std::vector<float> &observation() const { return family_->observation(); }
   const std::vector<float> &depth() const { return family_->depth(); }
   const std::vector<int64_t> &depth_shape() const { return family_->depth_shape(); }
+  std::optional<DepthContract> depth_contract() const { return family_->depth_contract(); }
   const std::vector<float> &action() const { return family_->action(); }
   const std::vector<float> &scaled() const { return family_->scaled(); }
   bool has_climb_head() const { return family_->has_climb_head(); }

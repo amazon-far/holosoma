@@ -301,6 +301,23 @@ TEST(ContextualVelocity, AcceptsTheRealExportContractVerbatim) {
   EXPECT_NE(first.front(), first.back());
 }
 
+TEST(ContextualVelocity, ExposesTheDepthContractTheRealExportDeclares) {
+  auto policy = Make("velocity_export.onnx", ExportSpec());
+  const auto contract = policy->depth_contract();
+  ASSERT_TRUE(contract.has_value());
+  // Read back from the checked-in export metadata, not restated.
+  const auto& meta = Export().at("metadata_props");
+  const auto clip = Json::parse(meta.at("depth_clip_m").get<std::string>()).get<std::vector<double>>();
+  const auto params = Json::parse(meta.at("depth_observation_params").get<std::string>());
+  EXPECT_DOUBLE_EQ(contract->near_m, clip[0]);
+  EXPECT_DOUBLE_EQ(contract->far_m, clip[1]);
+  EXPECT_EQ(contract->invalid_fill, params.at("invalid_fill").get<std::string>());
+  // And the values themselves, so a fixture edit cannot move both sides at once.
+  EXPECT_DOUBLE_EQ(contract->near_m, 0.3);
+  EXPECT_DOUBLE_EQ(contract->far_m, 2.0);
+  EXPECT_EQ(contract->invalid_fill, "near");
+}
+
 TEST(ContextualVelocity, RefusesEachBrokenExportNamingWhatIsWrong) {
   const auto expected = Load(fixtures / "velocity_broken.json");
   // Anti-vacuity: the manifest must hold every case the generator writes.

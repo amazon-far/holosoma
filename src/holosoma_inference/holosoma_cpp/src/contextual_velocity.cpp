@@ -137,6 +137,7 @@ class VelocityFamily final : public Family {
   const std::vector<float> &observation() const override { return obs_; }
   const std::vector<float> &depth() const override { return depth_; }
   const std::vector<int64_t> &depth_shape() const override { return depth_shape_; }
+  std::optional<DepthContract> depth_contract() const override { return depth_contract_; }
   const std::vector<float> &action() const override { return action_; }
   const std::vector<float> &scaled() const override { return scaled_; }
   bool has_climb_head() const override { return false; }
@@ -179,6 +180,7 @@ class VelocityFamily final : public Family {
   std::array<float, 2> fixed_arm_flag_{};
   std::vector<float> last_action_, obs_, depth_, action_, scaled_;
   std::vector<int64_t> depth_shape_;
+  DepthContract depth_contract_;
   int fixed_arm_ = 0, calls_ = 0;
   std::string no_key_;
 };
@@ -375,6 +377,30 @@ void VelocityFamily::ReadDepthContract(const Contract &c) {
   if (const auto *groups = c.Optional("actor_policy_input_groups"))
     if (*groups != Json::array({"actor_obs", "depth_camera"}))
       c.Fail("actor_policy_input_groups", "must be [\"actor_obs\", \"depth_camera\"], the order this family feeds");
+
+  // The preprocessing a transport must match. The clip range and the invalid
+  // fill are required: without them nothing can tell a matching preprocessor
+  // from a mismatched one. The rest is checked when declared, against the one
+  // preprocessing every holosoma transport implements.
+  const auto clip = c.FiniteNumbers("depth_clip_m", c.Required("depth_clip_m"));
+  if (clip.size() != 2 || !(clip[0] >= 0) || !(clip[1] > clip[0]))
+    c.Fail("depth_clip_m", "must be [near, far] with 0 <= near < far");
+  depth_contract_.near_m = clip[0];
+  depth_contract_.far_m = clip[1];
+  const std::string params_key = "depth_observation_params";
+  const auto &params = c.Object(params_key, c.Required(params_key));
+  if (!params.contains("invalid_fill")) c.Fail(params_key + ".invalid_fill", "is missing");
+  const auto &fill = params.at("invalid_fill");
+  if (!fill.is_string() || (fill != "near" && fill != "far"))
+    c.Fail(params_key + ".invalid_fill", "must be \"near\" or \"far\"");
+  depth_contract_.invalid_fill = fill.get<std::string>();
+  if (const auto *norm = c.Optional("depth_normalization"))
+    if (*norm != "(clamp(depth, near, far) - near) / (far - near) - 0.5")
+      c.Fail("depth_normalization", "must be \"(clamp(depth, near, far) - near) / (far - near) - 0.5\"");
+  if (const auto *range = c.Optional("depth_sim_out_of_range"))
+    if (*range != Json{{"beyond_far", "far"}, {"below_near", "near"}})
+      c.Fail("depth_sim_out_of_range",
+             "must be {\"beyond_far\": \"far\", \"below_near\": \"near\"}, which clamping gives");
 }
 
 void VelocityFamily::ReadCommandContract(const Contract &c, size_t command_start, float command_scale) {

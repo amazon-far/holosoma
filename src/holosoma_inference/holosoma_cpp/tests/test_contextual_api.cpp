@@ -49,6 +49,12 @@ TEST(ContextualApi, DepthFrameSizingDoesNotOverflowSignedInt) {
   EXPECT_EQ(spec.depth_frame_size(), 2500000000ull);
 }
 
+TEST(ContextualApi, APrimitiveExportDeclaresNoDepthContract) {
+  // The transport's own preprocessing (FAR-plane invalid fill) stays in charge.
+  Policy policy(config());
+  EXPECT_FALSE(core(policy).depth_contract().has_value());
+}
+
 TEST(ContextualApi, DepthFramesAreSizedAndValidatedThroughPublicStep) {
   Policy policy(config());
   ContextualInput input;

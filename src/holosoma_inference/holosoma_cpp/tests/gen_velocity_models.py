@@ -89,6 +89,8 @@ def reference_model(path, c, nodes, initializers):
         "kd": c["kd"].tolist(),
         "command_ranges": RANGES,
         "depth_policy_shape_hw": [HEIGHT, WIDTH],
+        "depth_clip_m": [0.3, 2.0],
+        "depth_observation_params": {"invalid_fill": "near"},
     }
     save(path, graph, {key: json.dumps(value) for key, value in meta.items()})
 
@@ -286,6 +288,33 @@ BROKEN = {
         "observation_scale does not match",
     ),
     "projection_history": (edit("velocity_command_projection", with_field("history_length", 2)), "must be 1"),
+    "depth_clip_missing": (edit("depth_clip_m", lambda _: None), "depth_clip_m is missing"),
+    "depth_clip_inverted": (edit("depth_clip_m", lambda _: [2.0, 0.3]), "depth_clip_m must be [near, far]"),
+    "depth_clip_negative": (edit("depth_clip_m", lambda _: [-0.1, 2.0]), "depth_clip_m must be [near, far]"),
+    "depth_clip_one": (edit("depth_clip_m", lambda _: [2.0]), "depth_clip_m must be [near, far]"),
+    "depth_clip_nonfinite": (edit("depth_clip_m", lambda _: "[0.3, NaN]"), "depth_clip_m must"),
+    "depth_params_missing": (edit("depth_observation_params", lambda _: None), "depth_observation_params is missing"),
+    "depth_params_list": (edit("depth_observation_params", lambda _: [1]), "depth_observation_params must be a JSON"),
+    "depth_invalid_fill_missing": (
+        edit("depth_observation_params", with_field("invalid_fill", None)),
+        "depth_observation_params.invalid_fill is missing",
+    ),
+    "depth_invalid_fill_unknown": (
+        edit("depth_observation_params", with_field("invalid_fill", "zero")),
+        'depth_observation_params.invalid_fill must be "near" or "far"',
+    ),
+    "depth_invalid_fill_number": (
+        edit("depth_observation_params", with_field("invalid_fill", 0.0)),
+        'depth_observation_params.invalid_fill must be "near" or "far"',
+    ),
+    "depth_normalization_other": (
+        edit("depth_normalization", lambda _: json.dumps("clamp(depth, near, far) / far")),
+        "depth_normalization must be",
+    ),
+    "depth_out_of_range_swapped": (
+        edit("depth_sim_out_of_range", lambda _: {"beyond_far": "near", "below_near": "near"}),
+        "depth_sim_out_of_range must be",
+    ),
 }
 
 
