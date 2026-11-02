@@ -127,6 +127,24 @@ TEST(ContextualVelocity, ClipsAtTheSharedCeilingAndFeedsTheClippedActionBack) {
   for (size_t m = 0; m < 29; ++m) EXPECT_FLOAT_EQ(policy->observation()[m], 20.f) << m;
 }
 
+TEST(ContextualVelocity, ScaledActionsAreInRuntimeJointOrder) {
+  // The reference graph's joint order is a permutation of the runtime order,
+  // so a model-order scaled() cannot pass by coincidence.
+  auto policy = Make("velocity_linear.onnx");
+  const auto& order = policy->real_to_model();
+  size_t moved = 0;
+  for (size_t m = 0; m < order.size(); ++m) moved += order[m] != static_cast<int>(m);
+  ASSERT_GT(moved, 20u);
+  const auto& step = Reference().at("cases")[0].at("steps")[0];
+  std::optional<std::vector<float>> depth;
+  if (!step.at("depth").is_null()) depth = step.at("depth").get<std::vector<float>>();
+  const auto target = policy->Target(StepState(step), depth, 0);
+  const auto& stance = policy->default_dof_pos();
+  ASSERT_EQ(policy->scaled().size(), target.size());
+  for (size_t real = 0; real < target.size(); ++real)
+    EXPECT_NEAR(policy->scaled()[real], target[real] - stance[real], 1e-5) << real;
+}
+
 TEST(ContextualVelocity, ExposesTheModelsStanceAndGains) {
   const auto& linear = Reference().at("cases")[0];
   auto policy = Make("velocity_linear.onnx");
