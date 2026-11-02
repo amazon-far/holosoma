@@ -916,8 +916,12 @@ class IsaacSim(BaseSimulator):
             env_ids = torch.arange(getattr(self, "num_envs", self.training_config.num_envs), device=self.sim_device)
         env_ids = torch.as_tensor(env_ids, device=self.sim_device, dtype=torch.long)
 
-        # The unified view passed wholesale writes the robot's served state.
-        if root_states is not None and root_states is not self.all_root_states:
+        # The served state itself, or the unified view passed wholesale, already holds the writes.
+        if (
+            root_states is not None
+            and root_states is not self.all_root_states
+            and root_states is not self.robot_root_states
+        ):
             self.robot_root_states[env_ids] = self._rows_for(env_ids, root_states)
         self.state.prepare("root", "bodies")
         self.state.changed("root", "bodies")

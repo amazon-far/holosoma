@@ -1275,7 +1275,8 @@ class MuJoCo(BaseSimulator):
             logger.info("No environments to update")
             return
 
-        if root_states is not None:
+        # The served state itself already holds the writes.
+        if root_states is not None and root_states is not self.robot_root_states:
             # Accept a pre-sliced tensor [len(env_ids), 13] or a global one [num_envs, 13].
             if len(root_states) != len(env_ids):
                 if len(root_states) != self.num_envs:
