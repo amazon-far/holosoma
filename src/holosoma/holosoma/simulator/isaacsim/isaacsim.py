@@ -681,7 +681,6 @@ class IsaacSim(BaseSimulator):
                     name,
                     lambda out, computed=computed: out.copy_(computed),
                     torch.zeros_like(computed),
-                    sources=("joints", "root"),
                 )
         else:
             logger.debug("Bridge disabled: skipping acceleration computation tensors")
@@ -719,13 +718,10 @@ class IsaacSim(BaseSimulator):
         def write_root(rows: torch.Tensor, root: torch.Tensor, _quat: torch.Tensor) -> None:
             self._write_root_states(rows, root[rows])
 
-        self.state.register(
-            ("robot_root_states", "base_quat"), read_root, (root, root[:, 3:7]), sources=("root",), write=write_root
-        )
+        self.state.register(("robot_root_states", "base_quat"), read_root, (root, root[:, 3:7]), write=write_root)
         self.state.register(
             "dof_pos",
             Columns(lambda: data.joint_pos, self.dof_ids),
-            sources=("joints",),
             write=lambda rows, out: self._robot.write_joint_position_to_sim(
                 out[rows], joint_ids=self.dof_ids, env_ids=rows
             ),
@@ -733,7 +729,6 @@ class IsaacSim(BaseSimulator):
         self.state.register(
             "dof_vel",
             Columns(lambda: data.joint_vel, self.dof_ids),
-            sources=("joints",),
             write=lambda rows, out: self._robot.write_joint_velocity_to_sim(
                 out[rows], joint_ids=self.dof_ids, env_ids=rows
             ),
@@ -742,7 +737,6 @@ class IsaacSim(BaseSimulator):
             "contact_forces",
             lambda out: out.copy_(self._robot_contact_forces()),
             torch.zeros(n, b, 3, device=device),
-            sources=("contacts",),
         )
         body_reads = {
             "_rigid_body_pos": (lambda: data.body_pos_w, 3),
@@ -757,7 +751,6 @@ class IsaacSim(BaseSimulator):
                 name,
                 lambda out, read=read: out.copy_(read().index_select(1, body_ids)),
                 torch.zeros(n, b, width, device=device),
-                sources=("bodies",),
             )
 
     def _robot_contact_forces(self) -> torch.Tensor:
@@ -823,7 +816,7 @@ class IsaacSim(BaseSimulator):
         has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording
         is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors() or has_video_recording
 
-        self.state.prepare(everything=True)
+        self.state.prepare()
         self.scene.write_data_to_sim()
         # sim.forward() runs physics_sim_view.update_articulations_kinematic() and flushes
         # fabric, so body/camera prims match the written joint/root state without integrating.
@@ -839,7 +832,7 @@ class IsaacSim(BaseSimulator):
                 self.draw_debug_viz()
 
         self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
-        self.state.changed("bodies", "contacts")
+        self.state.changed()
 
     def _write_external_wrench_native(self, targets: list[WrenchTarget]) -> None:
         """Set world-frame wrenches on the robot articulation and object RigidObjects.
@@ -929,8 +922,8 @@ class IsaacSim(BaseSimulator):
         # The served tensor, or the unified view passed wholesale, is flushed as is.
         if root_states is not None and root_states is not self.all_root_states:
             self._write_served_rows(self.robot_root_states, env_ids, self._rows_for(env_ids, root_states))
-        self.state.prepare("root", "bodies")
-        self.state.changed("root", "bodies")
+        self.state.prepare()
+        self.state.changed()
 
     @staticmethod
     def _write_served_rows(served: torch.Tensor, env_ids: torch.Tensor, rows: torch.Tensor) -> None:
@@ -980,8 +973,8 @@ class IsaacSim(BaseSimulator):
             rows = self._rows_for(env_ids, dof_states)
             self.dof_pos[env_ids] = rows[..., 0]
             self.dof_vel[env_ids] = rows[..., 1]
-        self.state.prepare("joints", "bodies")
-        self.state.changed("joints", "bodies")
+        self.state.prepare()
+        self.state.changed()
 
     def get_actor_indices(self, names: str | ActorNames, env_ids: EnvIds | None = None) -> ActorIndices:
         """See base class."""
@@ -1002,9 +995,9 @@ class IsaacSim(BaseSimulator):
         flag). ``write_updates=True`` (default) flushes via :meth:`write_state_updates`
         (``scene.write_data_to_sim``); ``False`` defers for batching.
         """
-        self.state.prepare("root", "bodies")
+        self.state.prepare()
         self._state_adapter.write_states_by_index(indices, states)
-        self.state.changed("root", "bodies")
+        self.state.changed()
         if write_updates:
             self.write_state_updates()
 
@@ -1149,7 +1142,7 @@ class IsaacSim(BaseSimulator):
         - Uses IsaacLab's scene.write_data_to_sim() for efficient batch synchronization
         - Only performs sync if state adapter indicates dirty state (performance optimization)
         """
-        self.state.prepare(everything=True)
+        self.state.prepare()
         if not self._state_adapter.is_dirty():
             logger.debug("No object state changes to sync")
             return

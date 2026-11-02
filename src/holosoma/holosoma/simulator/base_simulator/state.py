@@ -1,7 +1,7 @@
 """Simulator state tensors, served as lazy reads into stable buffers.
 
 A backend binds each state quantity once, in ``prepare_sim``, with :meth:`SimState.register`. It
-serves preallocated buffers that a read fills on the first access after any of the quantity's sources
+serves preallocated buffers that a read fills on the first access after the simulation state
 changed, and that ``write`` flushes to the simulation, row by row. The read is either a function that
 fills the given buffers (several names may share one read), or a :class:`Columns` spec, a column
 selection of a backend tensor that builds its own read and buffer.
@@ -11,21 +11,17 @@ simulation state. In-place writes reach the simulation before its next physics s
 or any state write that would replace them: the changed rows (environments) are flushed through the
 tensor's ``write``. A tensor bound without ``write`` is read-only.
 
-Backends bracket every state mutation with :meth:`SimState.prepare` (flush pending writes it depends
-on or would replace) and :meth:`SimState.changed` (mark what it touched stale), naming the sources it
-touches.
+Backends bracket every state mutation with :meth:`SimState.prepare` (flush pending writes) and
+:meth:`SimState.changed` (mark every tensor stale).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, overload
+from typing import Any, overload
 
 import torch
-
-Source = Literal["joints", "root", "bodies", "contacts"]
-SOURCES: tuple[Source, ...] = ("joints", "root", "bodies", "contacts")
 
 
 class _LazyGroup:
@@ -107,12 +103,12 @@ class Columns:
 
 
 class SimState:
-    """Registry of a simulator's state tensors, the sources each one reads, and its pending writes."""
+    """Registry of a simulator's state tensors and their pending writes."""
 
     def __init__(self) -> None:
         self._tensors: dict[str, torch.Tensor] = {}
         self._groups: dict[str, _LazyGroup] = {}
-        self._by_source: dict[Source, list[_LazyGroup]] = {source: [] for source in SOURCES}
+        self._group_list: list[_LazyGroup] = []
 
     @overload
     def register(
@@ -120,7 +116,6 @@ class SimState:
         names: str,
         read: Columns,
         *,
-        sources: Sequence[Source],
         write: Callable[[torch.Tensor, torch.Tensor], None] | None = None,
     ) -> None: ...
 
@@ -131,7 +126,6 @@ class SimState:
         read: Callable[..., None],
         buffers: torch.Tensor | Sequence[torch.Tensor],
         *,
-        sources: Sequence[Source],
         write: Callable[..., None] | None = None,
     ) -> None: ...
 
@@ -141,10 +135,9 @@ class SimState:
         read: Columns | Callable[..., None],
         buffers: torch.Tensor | Sequence[torch.Tensor] | None = None,
         *,
-        sources: Sequence[Source],
         write: Callable[..., None] | None = None,
     ) -> None:
-        """Serve buffers as ``names``, filled by ``read`` when stale and flushed by ``write(rows, *buffers)``.
+        """Serve buffers as ``names``, filled by ``read`` after a state change and flushed by ``write(rows, *buffers)``.
 
         ``read`` is a :class:`Columns` spec, which builds its own buffer, or a function ``read(*buffers)``
         that fills ``buffers``. Without ``write`` the tensors are read-only.
@@ -162,19 +155,17 @@ class SimState:
             self._unbind(name)
             self._tensors[name] = buffer
             self._groups[name] = group
-        for source in sources:
-            self._by_source[source].append(group)
+        self._group_list.append(group)
 
     def _serve(self, name: str, tensor: Any) -> None:
         """Serve ``tensor`` as ``name`` as is, outside the registry's reads and writes."""
         self._unbind(name)
         self._tensors[name] = tensor
 
-    def prepare(self, *sources: Source, everything: bool = False) -> None:
-        """Flush the rows written in place before a mutation of ``sources`` (no arguments, or ``everything``: all)."""
-        groups = self._all_groups() if everything or not sources else self._groups_of(sources)
+    def prepare(self) -> None:
+        """Flush the rows written in place, before a mutation of the simulation state."""
         flushed = False
-        for group in groups:
+        for group in self._group_list:
             if group.valid and group.written():
                 if group.write is None:
                     raise RuntimeError(f"Simulator state {', '.join(group.names)} is read-only")
@@ -184,11 +175,11 @@ class SimState:
                     flushed = True
                 group.mark_clean()
         if flushed:
-            self.changed("bodies")
+            self.changed()
 
-    def changed(self, *sources: Source) -> None:
-        """Mark tensors reading ``sources`` stale (no arguments: every lazy tensor)."""
-        for group in self._groups_of(sources) if sources else self._all_groups():
+    def changed(self) -> None:
+        """Mark every tensor stale, after a mutation of the simulation state."""
+        for group in self._group_list:
             group.valid = False
 
     def get(self, name: str) -> Any:
@@ -219,18 +210,10 @@ class SimState:
         group.read(*scratch)
         return scratch[group.names.index(name)]
 
-    def _all_groups(self) -> list[_LazyGroup]:
-        return list({id(group): group for group in self._groups.values()}.values())
-
-    def _groups_of(self, sources: Sequence[Source]) -> list[_LazyGroup]:
-        return list({id(group): group for source in sources for group in self._by_source[source]}.values())
-
     def _unbind(self, name: str) -> None:
         group = self._groups.pop(name, None)
         if group is not None and group not in self._groups.values():
-            for groups in self._by_source.values():
-                if group in groups:
-                    groups.remove(group)
+            self._group_list.remove(group)
 
 
 def _scratch_like(buffers: tuple[torch.Tensor, ...]) -> tuple[torch.Tensor, ...]:
