@@ -404,10 +404,11 @@ class WarpBackend(IMujocoBackend):
         logger.info("Initial state synced to GPU successfully")
 
     def forward_kinematics(self) -> None:
-        """FK-only refresh: recompute body/geom/camera poses from the written qpos, no dynamics.
+        """FK-only refresh: recompute body poses/velocities and geom/camera poses from qpos/qvel, no dynamics.
 
-        Runs ``mjw.kinematics`` + ``mjw.camlight`` (the position stage the batched renderer
-        reads: geom_xpos/geom_xmat, cam_xpos/cam_xmat) rather than full ``mjw.forward`` —
+        Runs ``mjw.kinematics`` + ``com_pos`` + ``camlight`` + ``com_vel`` (body poses, the
+        ``subtree_com``/``cvel`` the body-velocity read uses, and the renderer's geom/camera poses)
+        rather than full ``mjw.forward`` —
         forward's solver/collision stages allocate per call and are useless without a step.
         Out-of-graph launches into the same mjw_data the step graph uses are safe (same
         pattern as set_static_body_world_pose / offset_world_cameras); ``mjw_data.time`` is
@@ -417,7 +418,9 @@ class WarpBackend(IMujocoBackend):
 
         with wp.ScopedDevice(self.mjw_device):
             mjw.kinematics(self.mjw_model, self.mjw_data)
+            mjw.com_pos(self.mjw_model, self.mjw_data)
             mjw.camlight(self.mjw_model, self.mjw_data)
+            mjw.com_vel(self.mjw_model, self.mjw_data)
 
     def step(self) -> None:
         """Advance batched simulation by one timestep using CUDA graph.

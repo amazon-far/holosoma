@@ -1265,9 +1265,6 @@ class MotionCommand(CommandTermBase):
     ) -> dict[str, torch.Tensor]:
         """Capture body states by temporarily setting the robot state in the simulator."""
         simulator = self._env.simulator
-        assert simulator.get_simulator_type() == SimulatorType.ISAACSIM, (
-            "Default-pose interpolation only supports IsaacSim (it requires FK on state writes)."
-        )
         env_id = 0
         env_origin = simulator.scene.env_origins[env_id].to(self.device)
 

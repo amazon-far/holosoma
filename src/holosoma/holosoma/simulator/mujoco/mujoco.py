@@ -882,7 +882,7 @@ class MuJoCo(BaseSimulator):
         return torch.stack([self.dof_pos, self.dof_vel], dim=-1).reshape(-1, 2)
 
     def _forward_kinematics(self) -> None:
-        """Classic: ``mj_forward``; Warp: ``mjw.kinematics`` + ``camlight``."""
+        """Classic: ``mj_forward``; Warp: ``mjw.kinematics`` + ``com_pos`` + ``camlight`` + ``com_vel``."""
         self.backend.forward_kinematics()
 
     def _write_external_wrench_native(self, targets: list[WrenchTarget]) -> None:
