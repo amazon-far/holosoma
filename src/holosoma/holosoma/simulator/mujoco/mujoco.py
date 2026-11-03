@@ -973,6 +973,7 @@ class MuJoCo(BaseSimulator):
         """
         assert self.root_model
         assert self.root_data
+        self.state.flush_writes()  # reads qpos/qvel directly, so in-place robot writes must land first
 
         if len(indices) == 0:
             # Empty input is a uniform no-op across backends (matches IsaacSim).

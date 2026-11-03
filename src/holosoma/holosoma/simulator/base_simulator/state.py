@@ -7,9 +7,10 @@ float32 buffer allocated on the first read, on the first access after the simula
 ``write`` flushes in-place changes back to the simulation, row by row.
 
 Every served tensor keeps its identity, so references to it stay valid. Reads see the current
-simulation state. In-place writes reach the simulation before its next physics step, FK pass or any
-state write that would replace them: the changed rows (environments) are flushed through the tensor's
-``write``. A tensor bound without ``write`` is read-only.
+simulation state, including in-place writes to other tensors: a read first flushes them. In-place
+writes reach the simulation before the next read of another tensor, physics step, FK pass or state
+write: the changed rows (environments) are flushed through the tensor's ``write``. A tensor bound
+without ``write`` is read-only.
 
 Backends wrap every state mutation in :meth:`SimState.mutation`, which flushes pending writes first and
 marks every tensor stale after.
@@ -110,6 +111,7 @@ class SimState:
         self._tensors: dict[str, torch.Tensor] = {}
         self._by_name: dict[str, _Registration] = {}
         self._registrations: list[_Registration] = []
+        self._flushing = False
 
     @overload
     def register(
@@ -163,6 +165,17 @@ class SimState:
 
     def flush_writes(self) -> None:
         """Write the rows written in place to the simulation, marking every tensor stale if any were."""
+        if self._flushing:  # a writer reading state
+            return
+        self._flushing = True
+        try:
+            flushed = self._flush()
+        finally:
+            self._flushing = False
+        if flushed:
+            self.mark_stale()
+
+    def _flush(self) -> bool:
         flushed = False
         for registration in self._registrations:
             if registration.valid and registration.written():
@@ -173,8 +186,7 @@ class SimState:
                     registration.write(rows, *registration.buffers)
                     flushed = True
                 registration.mark_clean()
-        if flushed:
-            self.mark_stale()
+        return flushed
 
     def mark_stale(self) -> None:
         """Mark every tensor stale, so the next access re-reads it."""
@@ -188,6 +200,8 @@ class SimState:
                 return self._tensors[name]
             except KeyError:
                 raise AttributeError(f"Simulator state {name!r} is not bound") from None
+        if self._other_writes_pending(registration):
+            self.flush_writes()
         if not registration.valid:
             if registration.written():
                 names = ", ".join(registration.names)
@@ -195,6 +209,14 @@ class SimState:
             registration.refresh()
             registration.valid = True
         return registration.buffers[registration.names.index(name)]
+
+    def _other_writes_pending(self, registration: _Registration) -> bool:
+        if self._flushing:
+            return False
+        return any(
+            other.write is not None and other is not registration and other.valid and other.written()
+            for other in self._registrations
+        )
 
     def names(self) -> list[str]:
         return [*self._by_name, *self._tensors]

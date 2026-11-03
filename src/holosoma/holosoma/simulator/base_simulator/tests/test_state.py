@@ -103,6 +103,18 @@ def test_columns_return_the_selection() -> None:
     assert torch.equal(state.get("callable"), source[:, 2:5])
 
 
+def test_a_read_sees_in_place_writes_to_other_tensors() -> None:
+    backing = torch.zeros(2, 13)
+    state = SimState()
+    state.register("root", lambda: backing, write=lambda rows, out: backing.__setitem__(rows, out[rows]))
+    state.register("quat", Columns(lambda: state.get("root"), range(3, 7)))
+    state.get("quat")
+
+    state.get("root")[1, 3:7] = 5.0
+    assert torch.all(state.get("quat")[1] == 5.0)
+    assert torch.all(backing[1, 3:7] == 5.0)
+
+
 def test_state_tensor_assignment_serves_the_value() -> None:
     class Sim:
         x = StateTensor("x")
