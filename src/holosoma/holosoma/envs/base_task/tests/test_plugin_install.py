@@ -91,6 +91,7 @@ class _InitializedFakeSim(BaseSimulator):
                 fps=100,
                 control_decimation_steps=2,
                 kinematic_playback=False,
+                remote_sensors=False,
             ),
         )
         config = SimpleNamespace(

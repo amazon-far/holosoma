@@ -579,6 +579,7 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
     saved_warp = saved_simulator["config"].pop("mujoco_warp")
     loaded_simulator = copy.deepcopy(loaded["simulator"])
     loaded_simulator["config"]["sim"].pop("mujoco")
+    loaded_simulator["config"]["sim"].pop("remote_sensors")
     assert loaded_simulator == saved_simulator
     assert loaded_cfg.simulator.config.sim.mujoco.warp.nconmax_per_env == saved_warp["nconmax_per_env"]
     assert loaded_cfg.simulator.config.sim.mujoco.warp.njmax_per_env == saved_warp["njmax_per_env"]

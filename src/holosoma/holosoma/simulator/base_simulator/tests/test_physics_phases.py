@@ -20,7 +20,9 @@ class _StepRecordingSim(BaseSimulator):
         self.events: list[str] = []
         sim_cfg = SimpleNamespace(
             debug_viz=False,
-            sim=SimpleNamespace(fps=100, control_decimation_steps=2, kinematic_playback=kinematic_playback),
+            sim=SimpleNamespace(
+                fps=100, control_decimation_steps=2, kinematic_playback=kinematic_playback, remote_sensors=False
+            ),
         )
         config = SimpleNamespace(
             training=TrainingConfig(num_envs=1),
