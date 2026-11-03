@@ -373,7 +373,7 @@ class H264StreamEncoder:
         if frame.shape != self.shape or frame.dtype != np.uint8:
             raise ValueError(f"expected uint8 frames of shape {self.shape}, got {frame.dtype} {frame.shape}")
         assert self._proc.stdin is not None
-        data = memoryview(np.ascontiguousarray(frame)).cast("B")
+        data = np.ascontiguousarray(frame).data.cast("B")
         try:
             while data:  # an unbuffered pipe write may take only part of the frame
                 data = data[self._proc.stdin.write(data) :]

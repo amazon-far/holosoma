@@ -128,7 +128,7 @@ def _decode(path: Path) -> list[npt.NDArray[np.uint8]]:
             valid, bgr = capture.read()
             if not valid:
                 return frames
-            frames.append(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+            frames.append(np.asarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), dtype=np.uint8))
     finally:
         capture.release()
 

@@ -41,7 +41,7 @@ def _decode(path: Path) -> tuple[list[npt.NDArray[np.uint8]], float]:
             valid, bgr = capture.read()
             if not valid:
                 return frames, fps
-            frames.append(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+            frames.append(np.asarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), dtype=np.uint8))
     finally:
         capture.release()
 
@@ -139,7 +139,7 @@ def test_create_video_mp4_removes_partial_file_on_bad_frame(tmp_path: Path, monk
         calls.append(code)
         if len(calls) == 2:
             raise cv2.error("bad frame")
-        return real_cvt(frame, code)
+        return np.asarray(real_cvt(frame, code), dtype=np.uint8)
 
     monkeypatch.setattr("holosoma.utils.video_utils.cv2.cvtColor", failing_cvt)
     frames = np.zeros((3, 16, 16, 3), dtype=np.uint8)
