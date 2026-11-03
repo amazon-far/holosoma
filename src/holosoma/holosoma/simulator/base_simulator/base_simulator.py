@@ -531,17 +531,6 @@ class BaseSimulator:
         """
         raise NotImplementedError("The 'prepare_sim' method must be implemented in subclasses.")
 
-    def refresh_sim_tensors(self) -> None:
-        """Deprecated: state tensors are current at every read; use :meth:`forward_kinematics` to apply writes now."""
-        warnings.warn(
-            "refresh_sim_tensors is deprecated: state tensors are current at every read. Call "
-            "forward_kinematics() to apply in-place writes, or after changing simulation state directly.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self.state.flush_writes()
-        self.state.mark_stale()
-
     # ----- Control Application Methods -----
 
     def apply_torques_at_dof(self, torques: torch.Tensor, dof_indices: list[int] | None = None) -> None:
