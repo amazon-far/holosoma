@@ -28,14 +28,13 @@ Read = Callable[[], "torch.Tensor | tuple[torch.Tensor, ...]"]
 
 
 class _Registration:
-    __slots__ = ("buffers", "clean", "names", "read", "snapshots", "valid", "write")
+    __slots__ = ("buffers", "clean", "names", "read", "valid", "write")
 
     def __init__(self, names: tuple[str, ...], read: Read, write: Callable[..., None] | None) -> None:
         self.names = names
         self.read = read
         self.write = write
         self.buffers: tuple[torch.Tensor, ...] = ()
-        self.snapshots: tuple[torch.Tensor, ...] = ()
         self.valid = False
         self.clean: tuple[int, ...] = ()
 
@@ -56,9 +55,6 @@ class _Registration:
                 self.buffers = tuple(
                     torch.empty(value.shape, dtype=torch.float32, device=device or value.device) for value in values
                 )
-                # Writable registrations keep a copy of their buffers, to find changed rows.
-                if self.write is not None:
-                    self.snapshots = tuple(torch.empty_like(buffer) for buffer in self.buffers)
         for buffer, value in zip(self.buffers, values, strict=True):
             buffer.copy_(value)
         self.mark_clean()
@@ -71,17 +67,15 @@ class _Registration:
         return self._versions() != self.clean
 
     def changed_rows(self) -> torch.Tensor:
-        """Rows (environments) that differ from the last read or flush."""
+        """Rows (environments) whose buffer differs from the simulation's current values."""
         changed = torch.zeros(self.buffers[0].shape[0], dtype=torch.bool, device=self.buffers[0].device)
-        for buffer, snapshot in zip(self.buffers, self.snapshots, strict=True):
-            differs = (buffer != snapshot) & ~(buffer.isnan() & snapshot.isnan())
+        for buffer, value in zip(self.buffers, self.values(), strict=True):
+            current = value.to(buffer)
+            differs = (buffer != current) & ~(buffer.isnan() & current.isnan())
             changed |= differs.reshape(buffer.shape[0], -1).any(dim=1)
         return changed.nonzero().squeeze(1)
 
     def mark_clean(self) -> None:
-        if self.snapshots:
-            for buffer, snapshot in zip(self.buffers, self.snapshots, strict=True):
-                snapshot.copy_(buffer)
         self.clean = self._versions()
 
 
@@ -187,8 +181,8 @@ class SimState:
             names = ", ".join(name for registration in read_only for name in registration.names)
             raise RuntimeError(f"Simulator state {names} is read-only")
         flushed = False
-        for registration in written:
-            rows = registration.changed_rows()
+        # Compare every written tensor with the simulation before writing any of them back.
+        for registration, rows in [(registration, registration.changed_rows()) for registration in written]:
             if rows.numel():
                 assert registration.write is not None
                 registration.write(rows, *registration.buffers)

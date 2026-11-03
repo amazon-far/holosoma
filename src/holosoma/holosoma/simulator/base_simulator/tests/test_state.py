@@ -165,5 +165,6 @@ def test_mutation_flushes_first_and_marks_stale_after_even_on_error() -> None:
     with pytest.raises(MutationError):
         failing_mutation()
     assert flushed_on_entry == [True]
+    reads_before = len(reads)
     state.get("x")
-    assert len(reads) == 2
+    assert len(reads) == reads_before + 1  # marked stale despite the error
