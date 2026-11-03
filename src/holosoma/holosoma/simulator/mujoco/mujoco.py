@@ -805,6 +805,7 @@ class MuJoCo(BaseSimulator):
             write=lambda rows, root: self._write_root_states(rows, root[rows]),
         )
         state.alias("base_quat", "robot_root_states", slice(3, 7))
+        state.derive("dof_state", lambda: torch.stack([self.dof_pos, self.dof_vel], dim=-1).reshape(-1, 2))
         # Body-frame, as the freejoint's qvel stores it.
         state.derive(
             "base_angular_vel",
@@ -879,11 +880,6 @@ class MuJoCo(BaseSimulator):
                 # Must run before backend.step() consumes xfrc_applied.
                 self.flush_external_wrench()
                 self.backend.step()
-
-    @property
-    def dof_state(self) -> torch.Tensor:
-        """Robot DOF states flattened to ``[num_envs * num_dof, 2]`` (``[:, 0]`` positions, ``[:, 1]`` velocities)."""
-        return torch.stack([self.dof_pos, self.dof_vel], dim=-1).reshape(-1, 2)
 
     def _forward_kinematics(self) -> None:
         """Classic: ``mj_forward``; Warp: ``mjw.kinematics`` + ``com_pos`` + ``camlight`` + ``com_vel``."""

@@ -43,6 +43,15 @@ class BaseSimulator:
     and IsaacSim's object-based tensors, providing consistent APIs for object state
     management across both simulators.
 
+    Robot State
+    -----------
+    Robot state tensors (``dof_pos``, ``robot_root_states``, body state, ...) are served by
+    ``self.state`` (:class:`~holosoma.simulator.base_simulator.state.SimState`). They are current at
+    every read, and written by assigning into them in place; call :meth:`forward_kinematics` when a
+    write must be visible before the next physics step. Code that changes the simulation's state
+    through the backend instead must wrap the change in ``with sim.state.mutation():``, so the served
+    tensors are re-read afterwards.
+
     Actor Concept
     -------------
     An "actor" in this simulation framework refers to any named physical entity
@@ -147,6 +156,10 @@ class BaseSimulator:
     dof_acc = StateTensor("Robot DOF accelerations, ``[num_envs, num_dof]``.")
     robot_root_states = StateTensor(
         "Robot root state ``[num_envs, 13]``: position, orientation (xyzw), world-frame linear and angular velocity."
+    )
+    dof_state = StateTensor(
+        "Robot DOF positions (``[..., 0]``) and velocities (``[..., 1]``), read-only: "
+        "``[num_envs, num_dof, 2]`` on IsaacSim, ``[num_envs * num_dof, 2]`` on MuJoCo."
     )
     base_quat = StateTensor("Robot root orientation (xyzw), ``[num_envs, 4]``.")
     base_angular_vel = StateTensor("Robot root angular velocity, ``[num_envs, 3]``.")

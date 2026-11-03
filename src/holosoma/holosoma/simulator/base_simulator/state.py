@@ -6,7 +6,7 @@ returns the current value: a function returning a tensor (or a tuple of tensors,
 float32 buffer on ``device``, allocated on the first read, on the first access after the simulation
 state changed, and ``write`` flushes in-place changes back to the simulation, row by row. Values derived
 from other served tensors are served with :meth:`SimState.alias` (a view sharing their storage) or
-:meth:`SimState.derive` (recomputed on every access).
+:meth:`SimState.derive` (recomputed into a read-only buffer on every access).
 
 Every served tensor keeps its identity, so references to it stay valid. Reads see the current
 simulation state. In-place writes reach the simulation before its next physics step, FK pass or any
@@ -84,6 +84,35 @@ class _Registration:
         self.clean = self._versions()
 
 
+class _Derived:
+    __slots__ = ("buffer", "compute", "name", "version")
+
+    def __init__(self, name: str, compute: Callable[[], torch.Tensor]) -> None:
+        self.name = name
+        self.compute = compute
+        self.buffer: torch.Tensor | None = None
+        self.version = 0
+
+    def written(self) -> bool:
+        return self.buffer is not None and self.buffer._version != self.version
+
+    def discard_write(self) -> None:
+        assert self.buffer is not None
+        self.version = self.buffer._version
+
+    def serve(self, device: torch.device | str | None) -> torch.Tensor:
+        """Recompute into the buffer, raising if it was written in place since it was served."""
+        if self.written():
+            self.discard_write()
+            raise RuntimeError(f"Simulator state {self.name} is read-only")
+        value = self.compute()
+        if self.buffer is None:
+            self.buffer = torch.empty(value.shape, dtype=torch.float32, device=device or value.device)
+        self.buffer.copy_(value)
+        self.version = self.buffer._version
+        return self.buffer
+
+
 @dataclass(frozen=True)
 class Columns:
     """A read returning the columns ``ids`` of a backend tensor ``source`` (``[num_envs, n, ...]``).
@@ -117,7 +146,8 @@ class SimState:
     def __init__(self, device: torch.device | str | None = None) -> None:
         self.device = device
         self._tensors: dict[str, torch.Tensor] = {}
-        self._derived: dict[str, Callable[[], torch.Tensor]] = {}
+        self._aliases: dict[str, Callable[[], torch.Tensor]] = {}
+        self._derived: dict[str, _Derived] = {}
         self._by_name: dict[str, _Registration] = {}
         self._registrations: list[_Registration] = []
 
@@ -167,12 +197,13 @@ class SimState:
                 cached[:] = [source, source[:, columns]]
             return cached[1]
 
-        self.derive(name, view)
+        self._unbind(name)
+        self._aliases[name] = view
 
     def derive(self, name: str, compute: Callable[[], torch.Tensor]) -> None:
-        """Serve ``compute()``, evaluated on every access, as ``name``; for values derived from served tensors."""
+        """Serve ``compute()``, evaluated into a read-only buffer on every access, as ``name``."""
         self._unbind(name)
-        self._derived[name] = compute
+        self._derived[name] = _Derived(name, compute)
 
     def _serve(self, name: str, tensor: Any) -> None:
         """Serve ``tensor`` as ``name`` as is, outside the registry's reads and writes."""
@@ -197,12 +228,16 @@ class SimState:
             registration for registration in self._registrations if registration.valid and registration.written()
         ]
         read_only = [registration for registration in written if registration.write is None]
-        if read_only:
+        derived = [derived for derived in self._derived.values() if derived.written()]
+        if read_only or derived:
             for registration in read_only:  # discard the write, so the next access re-reads
                 registration.mark_clean()
                 registration.valid = False
-            names = ", ".join(name for registration in read_only for name in registration.names)
-            raise RuntimeError(f"Simulator state {names} is read-only")
+            for entry in derived:
+                entry.discard_write()
+            names = [name for registration in read_only for name in registration.names]
+            names += [entry.name for entry in derived]
+            raise RuntimeError(f"Simulator state {', '.join(names)} is read-only")
         flushed = False
         for registration in written:
             rows = registration.changed_rows()
@@ -224,9 +259,12 @@ class SimState:
     def get(self, name: str) -> Any:
         registration = self._by_name.get(name)
         if registration is None:
-            compute = self._derived.get(name)
-            if compute is not None:
-                return compute()
+            derived = self._derived.get(name)
+            if derived is not None:
+                return derived.serve(self.device)
+            alias = self._aliases.get(name)
+            if alias is not None:
+                return alias()
             try:
                 return self._tensors[name]
             except KeyError:
@@ -240,17 +278,20 @@ class SimState:
         return registration.buffers[registration.names.index(name)]
 
     def names(self) -> list[str]:
-        return [*self._by_name, *self._derived, *self._tensors]
+        return [*self._by_name, *self._aliases, *self._derived, *self._tensors]
 
     def _read_fresh(self, name: str) -> torch.Tensor:
         """Return a fresh read of ``name`` without touching the served tensor, for consistency checks."""
         registration = self._by_name.get(name)
+        if name in self._derived:
+            return self._derived[name].compute().to(torch.float32).clone()
         if registration is None:
             return torch.as_tensor(self.get(name)[:]).clone()
         return registration.values()[registration.names.index(name)].to(torch.float32).clone()
 
     def _unbind(self, name: str) -> None:
         self._tensors.pop(name, None)
+        self._aliases.pop(name, None)
         self._derived.pop(name, None)
         registration = self._by_name.pop(name, None)
         if registration is not None and registration not in self._by_name.values():

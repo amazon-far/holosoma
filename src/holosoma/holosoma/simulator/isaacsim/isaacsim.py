@@ -691,11 +691,6 @@ class IsaacSim(BaseSimulator):
             vels = self.get_actor_initial_velocities(free_names, env_ids)  # [n*num_envs, 6]
             self.set_actor_states(free_names, env_ids, torch.cat([poses, vels], dim=1))
 
-    @property
-    def dof_state(self) -> torch.Tensor:
-        # This will always use the latest dof_pos and dof_vel
-        return torch.cat([self.dof_pos[..., None], self.dof_vel[..., None]], dim=-1)
-
     def _register_state(self) -> None:
         """Register the robot state tensors as lazy reads of the articulation and contact sensor buffers.
 
@@ -710,6 +705,7 @@ class IsaacSim(BaseSimulator):
             write=lambda rows, root: self._write_root_states(rows, root[rows]),
         )
         self.state.alias("base_quat", "robot_root_states", slice(3, 7))
+        self.state.derive("dof_state", lambda: torch.stack([self.dof_pos, self.dof_vel], dim=-1))
         self.state.register(
             "dof_pos",
             Columns(lambda: data.joint_pos, self.dof_ids),
