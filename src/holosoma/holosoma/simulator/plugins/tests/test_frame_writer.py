@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
+import tracemalloc
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -118,24 +120,194 @@ def test_writes_numbered_frames_and_index(tmp_path: Path) -> None:
     assert records[0]["camera"] == "head"
 
 
-def test_mp4_mode_buffers_and_encodes_at_stop(tmp_path: Path) -> None:
-    if shutil.which("ffmpeg") is None:
-        pytest.skip("ffmpeg not available (create_video h264 shells out to it)")
-    frames = _rgb(h=32, w=32)
-    sim = _FakeSimulator({"head": _cam()}, {("head", "rgb"): frames})
-    plugin = _make(FrameWriterPluginConfig(output_dir=str(tmp_path), rgb_format="mp4"), sim)
-    for i in range(5):
-        sim._t = i * 0.02  # 50Hz sim-time stamps -> encoded fps 50
+def _decode(path: Path) -> list[npt.NDArray[np.uint8]]:
+    capture = cv2.VideoCapture(str(path))
+    frames: list[npt.NDArray[np.uint8]] = []
+    try:
+        while True:
+            valid, bgr = capture.read()
+            if not valid:
+                return frames
+            frames.append(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+    finally:
+        capture.release()
+
+
+def _probe(path: Path) -> tuple[float, int]:
+    """(fps, frame count) of a video as a player sees it."""
+    capture = cv2.VideoCapture(str(path))
+    try:
+        return capture.get(cv2.CAP_PROP_FPS), int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    finally:
+        capture.release()
+
+
+def _run_mp4(
+    tmp_path: Path, n: int, dt: float = 0.02, cam: CameraSensorConfig | None = None, **cfg: Any
+) -> tuple[FrameWriterPlugin, _FakeSimulator]:
+    """Publish ``n`` distinct 32x32 frames stamped ``dt`` apart (render rate: 50 Hz control / decimation)."""
+    sim = _FakeSimulator({"head": cam or _cam()}, {("head", "rgb"): _rgb(h=32, w=32)})
+    plugin = _make(FrameWriterPluginConfig(output_dir=str(tmp_path), rgb_format="mp4", **cfg), sim)
+    for i in range(n):
+        sim._frames[("head", "rgb")] = np.full((1, 32, 32, 3), (10 * i) % 250, dtype=np.uint8)
+        sim._t = i * dt
         _step(sim, {"head"})
-    assert not list(tmp_path.glob("**/*.png"))  # buffered, nothing written per frame
-    assert len(plugin._video_frames[("head", "rgb", 0)]) == 5
+    return plugin, sim
+
+
+requires_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not available")
+
+
+@requires_ffmpeg
+def test_mp4_mode_streams_frames_and_publishes_at_stop(tmp_path: Path) -> None:
+    plugin, sim = _run_mp4(tmp_path, 5)
+    assert not list(tmp_path.glob("**/*.png"))  # nothing written per frame
+    # Encoding is under way while the episode runs; no finished-looking video exists until stop.
+    assert plugin._encoders[("head", "rgb", 0)].frames == 5
+    assert plugin._encoders[("head", "rgb", 0)]._proc.poll() is None
+    assert not (tmp_path / "head_rgb_env0.mp4").exists()
     sim.hooks.emit(Phase.CLOSE)
-    videos = list(tmp_path.glob("head_rgb_env0.mp4"))
-    assert len(videos) == 1 and videos[0].stat().st_size > 0
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["head_rgb_env0.mp4", "index.jsonl"]
+    assert _probe(tmp_path / "head_rgb_env0.mp4") == (pytest.approx(50.0, rel=1e-3), 5)
+    decoded = _decode(tmp_path / "head_rgb_env0.mp4")
+    assert [float(f.mean()) for f in decoded] == pytest.approx([0, 10, 20, 30, 40], abs=3)
     # index.jsonl records every frame against the video path
     records = [json.loads(line) for line in (tmp_path / "index.jsonl").read_text().splitlines()][1:]
     assert [r["frame"] for r in records] == list(range(5))
     assert all(r["path"] == "head_rgb_env0.mp4" for r in records)
+
+
+@requires_ffmpeg
+def test_mp4_fps_follows_camera_decimation(tmp_path: Path) -> None:
+    # update_decimation=2 at a 50 Hz control rate renders at 25 Hz: frames 0.04 s apart, no retiming.
+    cam = CameraSensorConfig(mount=_MOUNT, data_types=["rgb"], update_decimation=2)
+    plugin, sim = _run_mp4(tmp_path, 6, dt=0.04, cam=cam)
+    assert plugin._encoders[("head", "rgb", 0)].fps == pytest.approx(25.0)
+    sim.hooks.emit(Phase.CLOSE)
+    assert _probe(tmp_path / "head_rgb_env0.mp4") == (pytest.approx(25.0, rel=1e-3), 6)
+
+
+@requires_ffmpeg
+def test_mp4_retimed_when_sim_time_disagrees_with_render_rate(tmp_path: Path) -> None:
+    # Opened at the 50 Hz render rate, but the stamps say 20 Hz: the video must play at sim speed.
+    plugin, sim = _run_mp4(tmp_path, 6, dt=0.05)
+    assert plugin._encoders[("head", "rgb", 0)].fps == pytest.approx(50.0)
+    sim.hooks.emit(Phase.CLOSE)
+    fps, count = _probe(tmp_path / "head_rgb_env0.mp4")
+    assert count == 6
+    assert fps == pytest.approx(20.0, rel=1e-3)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["head_rgb_env0.mp4", "index.jsonl"]
+
+
+@requires_ffmpeg
+@pytest.mark.parametrize("n", [0, 1])
+def test_mp4_stream_under_two_frames_writes_nothing(tmp_path: Path, n: int) -> None:
+    _, sim = _run_mp4(tmp_path, n)
+    sim.hooks.emit(Phase.CLOSE)
+    assert not list(tmp_path.glob("*.mp4*"))
+
+
+@requires_ffmpeg
+def test_mp4_ram_stays_flat_over_a_long_episode(tmp_path: Path) -> None:
+    # 400 distinct 160x120 frames are 23 MB of pixels; a writer that buffers them shows it in the peak.
+    sim = _FakeSimulator({"head": _cam()}, {("head", "rgb"): _rgb(h=120, w=160)})
+    _make(FrameWriterPluginConfig(output_dir=str(tmp_path), rgb_format="mp4"), sim)
+
+    def publish(frames: range) -> None:
+        for i in frames:
+            sim._frames[("head", "rgb")] = np.full((1, 120, 160, 3), i % 250, dtype=np.uint8)
+            sim._t = i * 0.02
+            _step(sim, {"head"})
+
+    tracemalloc.start()
+    try:
+        publish(range(20))  # encoder open, index and caches warm
+        tracemalloc.reset_peak()
+        baseline = tracemalloc.get_traced_memory()[0]
+        publish(range(20, 400))
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    sim.hooks.emit(Phase.CLOSE)
+    assert peak - baseline < 2_000_000
+    assert _probe(tmp_path / "head_rgb_env0.mp4")[1] == 400
+
+
+@requires_ffmpeg
+@pytest.mark.parametrize("interrupt", [KeyboardInterrupt(), SystemExit(143), SystemExit(1)])
+def test_mp4_interrupted_teardown_leaves_detectable_partial(tmp_path: Path, interrupt: BaseException) -> None:
+    # CLOSE runs while the interrupt unwinds (run_sim's teardown is in __exit__/except), so the
+    # truncated episode must stay under its .partial name. SystemExit(143) is SIGTERM's (128 + 15).
+    _, sim = _run_mp4(tmp_path, 4)
+
+    def interrupted_run() -> None:
+        try:
+            raise interrupt
+        finally:
+            sim.hooks.emit(Phase.CLOSE)
+
+    with pytest.raises(type(interrupt)):
+        interrupted_run()
+    assert not (tmp_path / "head_rgb_env0.mp4").exists()
+    partial = tmp_path / "head_rgb_env0.mp4.partial"
+    assert len(_decode(partial)) == 4  # finalized by ffmpeg, so the frames are recoverable
+
+
+@requires_ffmpeg
+@pytest.mark.parametrize("code", [0, None])
+def test_mp4_clean_system_exit_teardown_publishes(tmp_path: Path, code: int | None) -> None:
+    # sys.exit(0) / sys.exit() ends a run that succeeded: its videos are complete and must publish.
+    _, sim = _run_mp4(tmp_path, 4)
+
+    def exiting_run() -> None:
+        try:
+            raise SystemExit(code)
+        finally:
+            sim.hooks.emit(Phase.CLOSE)
+
+    with pytest.raises(SystemExit):
+        exiting_run()
+    assert not (tmp_path / "head_rgb_env0.mp4.partial").exists()
+    assert len(_decode(tmp_path / "head_rgb_env0.mp4")) == 4
+
+
+@requires_ffmpeg
+def test_mp4_encoder_death_disables_stream_and_stop_raises(tmp_path: Path) -> None:
+    plugin, sim = _run_mp4(tmp_path, 3)
+    encoder = plugin._encoders[("head", "rgb", 0)]
+    encoder._proc.kill()
+    encoder._proc.wait()
+    _step(sim, {"head"})  # the write hits a dead pipe
+    _step(sim, {"head"})
+    assert ("head", "rgb", 0) in plugin._video_failed
+    with pytest.raises(RuntimeError, match="head_rgb_env0: ffmpeg"):
+        sim.hooks.emit(Phase.CLOSE)
+    assert not (tmp_path / "head_rgb_env0.mp4").exists()
+
+
+@requires_ffmpeg
+def test_mp4_nvenc_falls_back_to_libx264(tmp_path: Path) -> None:
+    # 32x32 is below NVENC's minimum frame size, so this falls back on every host, GPU or not.
+    plugin, sim = _run_mp4(tmp_path, 4, video_codec="h264_nvenc")
+    assert plugin._encoders[("head", "rgb", 0)].codec == "libx264"
+    sim.hooks.emit(Phase.CLOSE)
+    assert _probe(tmp_path / "head_rgb_env0.mp4")[1] == 4
+
+
+@requires_ffmpeg
+def test_mp4_encoder_options_reach_ffmpeg(tmp_path: Path) -> None:
+    # A keyframe every 2 frames: decode the stream's picture types to see -g applied.
+    _, sim = _run_mp4(tmp_path, 6, video_gop=2, video_crf=10, video_preset="ultrafast")
+    sim.hooks.emit(Phase.CLOSE)
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries", "frame=key_frame", "-of", "csv=p=0"]
+        + [str(tmp_path / "head_rgb_env0.mp4")],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert [line.split(",")[0] for line in out.stdout.split()] == ["1", "0", "1", "0", "1", "0"]
 
 
 def test_mp4_mode_depth_still_writes_files(tmp_path: Path) -> None:
