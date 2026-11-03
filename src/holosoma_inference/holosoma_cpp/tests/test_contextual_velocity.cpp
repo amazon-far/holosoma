@@ -196,6 +196,7 @@ TEST(ContextualVelocity, RefusesCallsThatOnlyAPrimitiveCommandHas) {
   EXPECT_THROW(policy->SetSpeed(1), std::invalid_argument);
   EXPECT_THROW(policy->SetDz(true), std::invalid_argument);
   EXPECT_NO_THROW(policy->SetDz(false));  // a controller's reset path
+  EXPECT_FALSE(policy->dz());
   EXPECT_NO_THROW(policy->SetClimbAtStandAllowed(true, true));
   EXPECT_FALSE(policy->UpdateTransition(100));
   EXPECT_EQ(policy->active_command(), contextual::kNoPrimitive);

@@ -118,6 +118,42 @@ TEST(ContextualApi, ClimbSecondPassDoesNotAdvanceDepthHistoryTwice) {
   EXPECT_FALSE(core(policy).climbing());
 }
 
+TEST(ContextualApi, DzLatchesThroughStepIsReadableAndClearsOnReset) {
+  // A controller that forwards navigation dz reads it back through dz() and relies on
+  // reset() to drop it; an unset dz leaves the latched value alone.
+  Policy policy(config());
+  ASSERT_TRUE(core(policy).has_climb_head());
+  EXPECT_FALSE(core(policy).dz());
+  ContextualInput input;
+  input.monotonic_time = 1;
+  input.dz = true;
+  policy.step(state(), input);
+  EXPECT_TRUE(core(policy).dz());
+  input.monotonic_time = 2;
+  input.dz.reset();
+  policy.step(state(), input);
+  EXPECT_TRUE(core(policy).dz());
+  input.monotonic_time = 3;
+  input.dz = false;
+  policy.step(state(), input);
+  EXPECT_FALSE(core(policy).dz());
+  input.monotonic_time = 4;
+  input.dz = true;
+  policy.step(state(), input);
+  ASSERT_TRUE(core(policy).dz());
+  policy.reset();
+  EXPECT_FALSE(core(policy).dz());
+
+  auto c = config("no-head.onnx");
+  c.contextual->require_climb_head = false;
+  Policy headless(c);
+  EXPECT_FALSE(core(headless).has_climb_head());
+  input.monotonic_time = 1;
+  input.dz = false;
+  EXPECT_NO_THROW(headless.step(state(), input));
+  EXPECT_FALSE(core(headless).dz());
+}
+
 TEST(ContextualApi, RequiresFreshTypedInputAndKeepsInstancesIndependent) {
   Policy first(config()), second(config());
   ContextualInput input;
