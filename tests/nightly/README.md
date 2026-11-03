@@ -22,10 +22,10 @@ Usage:
 The message also carries a performance trend for each configuration in `TREND_CELLS`,
 reported as its own block because the metric is not comparable across them. A
 configuration with too little history is skipped with a printed reason, so adding one
-before it has runs is harmless. Each block is a heading naming the metric and
-configuration, then one bullet per
-timescale comparing the mean of `TREND_METRIC_KEY`, each rendered as
-`<window>: <earlier> → <later>`:
+before it has runs is harmless. Each block opens with a heading naming the
+configuration, linked to its performance trends, then holds one section per metric in
+`TREND_METRICS` — a heading naming the metric, then one bullet per timescale comparing
+the metric's mean, each rendered as `<window>: <earlier> → <later>`:
 
 - `1d` — the two most recent runs
 - `7d` — the last 7 days against the 7 before
@@ -37,8 +37,8 @@ direction time runs.
 
 The trailing marker pairs a verdict colour with a diagonal arrow for the direction: 🟢
 better, 🔴 worse, ⚪ flat. Which direction counts as better comes from
-`TREND_LOWER_IS_BETTER`, which must be flipped if `TREND_METRIC_KEY` is pointed at a
-metric like throughput where higher is better. The colours are circles so they don't read
+`TREND_LOWER_IS_BETTER`, which must be flipped if `TREND_METRICS` is pointed at
+metrics like throughput where higher is better. The colours are circles so they don't read
 as the squares in the run-status legend lower down the same message.
 
 A change is only coloured when the two figures are more than `TREND_SIGMA` standard
@@ -58,7 +58,7 @@ deviations apart, so ordinary noise reads as flat:
 The `1d` pair is the two most recent runs rather than calendar days, so a skipped night
 compares against the previous run that exists instead of reporting a gap.
 
-Under the figures is a link to a saved workspace view of the same configuration, taken
+The heading links to a saved workspace view of the same configuration, taken
 from `PERF_TREND_VIEW_URL_<CELL>` (see [Environment Variables](#environment-variables)).
 With that variable unset the link falls back to the whole project, which shows every
 configuration at once.

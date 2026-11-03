@@ -79,8 +79,46 @@ class BasicSdk2Bridge(ABC):
         }
         self.joystick: Any = None
 
+        # The root state this exchange is reading; see transport_exchange.
+        self._root_state: torch.Tensor | None = None
+
         # Initialize SDK-specific components
         self._init_sdk_components()
+
+    def transport_exchange(self) -> None:
+        """Exchange one round of data with the SDK: robot state out, commands in.
+
+        The call order is the bridge's own: state first, then base odometry when configured, then
+        any joystick, and the incoming command last so it is the freshest thing the control step
+        will act on. A bridge whose transport can do better than one call per publish overrides
+        this to wrap the sequence.
+
+        ``robot_root_states`` is a backend-owned proxy, not a tensor: every index rebuilds the whole
+        ``[pos, quat, lin_vel, ang_vel]`` 13-vector and rotates the angular velocity into the world
+        frame. The publishes in one exchange read it at the same simulator state -- nothing steps
+        the simulator in here -- so it is read once for all of them.
+        """
+        self._root_state = self.simulator.robot_root_states[0]
+        try:
+            self.publish_low_state()
+            if self.bridge_config.publish_odom:
+                self.publish_odom()
+            if self.joystick:
+                self.publish_wireless_controller()
+            self.low_cmd_handler()
+        finally:
+            self._root_state = None
+
+    def _read_root_state(self) -> torch.Tensor:
+        """This exchange's root state, or a fresh read for a publish made outside one.
+
+        Env 0: one bridge drives one robot over one SDK connection, and the torque it writes back
+        goes through ``apply_torques_at_dof``, which takes no environment index at all.
+        """
+        if self._root_state is not None:
+            return self._root_state
+        root: torch.Tensor = self.simulator.robot_root_states[0]
+        return root
 
     def _resolve_dof_indices(self, simulator: BaseSimulator, robot_config: RobotConfig) -> list[int]:
         """Resolve which simulator DOFs this bridge controls, as indices into ``simulator.dof_names``.
@@ -356,9 +394,8 @@ class BasicSdk2Bridge(ABC):
         Returns:
             numpy.ndarray: Actuator forces
         """
-        # Bridge operates on env 0 by default
-        env_id = getattr(self, "env_id", 0)
-        forces = self.simulator.get_dof_forces(env_id)
+        # Env 0, like every other simulator read this bridge makes.
+        forces = self.simulator.get_dof_forces(0)
         # Force sensors may be disabled (enable_dof_force_sensors=False) -> empty tensor; a
         # fancy-index would raise, so pass the empty tensor through as the full-width path does.
         if forces.numel() == 0:
@@ -374,12 +411,13 @@ class BasicSdk2Bridge(ABC):
                 - gyro: angular velocity [wx, wy, wz] (3 elements)
                 - acceleration: linear acceleration [ax, ay, az] (3 elements)
         """
-        quat_holosoma = self.simulator.robot_root_states[0, 3:7]  # [x, y, z, w]
+        root = self._read_root_state()  # [13]
+        quat_holosoma = root[3:7]  # [x, y, z, w]
         # robot_root_states[:, 10:13] is WORLD-frame angular velocity on every backend (the
         # unified contract). A physical IMU gyro reports angular velocity in the BODY frame,
         # so rotate world -> body using the base orientation. This is backend-agnostic and
         # keeps the gyro body-frame on MuJoCo and IsaacSim alike.
-        ang_vel_world = self.simulator.robot_root_states[0, 10:13]
+        ang_vel_world = root[10:13]
         gyro = quat_rotate_inverse(quat_holosoma.unsqueeze(0), ang_vel_world.unsqueeze(0), w_last=True).squeeze(0)
 
         if not hasattr(self.simulator, "base_linear_acc"):
@@ -413,8 +451,7 @@ class BasicSdk2Bridge(ABC):
                 - lin_vel_body: [vx, vy, vz] body frame (3 floats)
                 - yaw_speed: body-frame yaw rate [rad/s] (float)
         """
-        env_id = getattr(self, "env_id", 0)
-        root = self.simulator.robot_root_states[env_id]  # [13]
+        root = self._read_root_state()  # [13]
         quat_xyzw = root[3:7]  # [x, y, z, w]
         lin_vel_world = root[7:10].unsqueeze(0)
         ang_vel_world = root[10:13].unsqueeze(0)

@@ -1,6 +1,6 @@
 # Sim-to-Sim Whole Body Tracking Workflow
 
-> **See also:** [Inference & Deployment Guide](../../README.md) for all deployment options
+> **See also:** [Inference & Deployment Guide](../../README.md) for all deployment options, and [Robot SDK Bridges](../../../holosoma/holosoma/bridge/README.md) for bridge selection and transport cost
 
 This guide provides a complete workflow for running whole body tracking (WBT) policies in MuJoCo simulation.
 

@@ -149,20 +149,9 @@ class SimulatorBridge:
         if not self.robot_bridge:
             return
 
-        # Publish robot state to SDK
-        self.robot_bridge.publish_low_state()
-
-        # Publish base odometry over the SDK (SportModeState on rt/odommodestate) when configured.
-        if self.bridge_config.publish_odom:
-            self.robot_bridge.publish_odom()
-
-        # Handle joystick input if available
-        if hasattr(self.robot_bridge, "joystick") and self.robot_bridge.joystick:
-            self.robot_bridge.publish_wireless_controller()
-            logger.debug("Wireless controller input published")
-
-        # Read incoming commands from DDS
-        self.robot_bridge.low_cmd_handler()
+        # Robot state out, commands in. The order, and how many calls the SDK transport takes to
+        # do it, belong to the bridge.
+        self.robot_bridge.transport_exchange()
 
         # Publish simulation clock for e.g, WBT policies
         sim_time = self.simulator.time()

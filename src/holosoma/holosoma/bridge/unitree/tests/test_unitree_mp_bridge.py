@@ -252,12 +252,12 @@ _XML = (
 )
 
 
-def _construct_bridge(bridge_config: Any) -> Any:
+def _construct_bridge(bridge_config: Any, num_motor: int = 1) -> Any:
     from holosoma.bridge import create_sdk2py_bridge
 
     return create_sdk2py_bridge(
-        cast("BaseSimulator", _FakeSim(1)),
-        cast("RobotConfig", _robot_full_config(1)),
+        cast("BaseSimulator", _FakeSim(num_motor)),
+        cast("RobotConfig", _robot_full_config(num_motor)),
         bridge_config,
     )
 
@@ -519,3 +519,122 @@ def test_safe_startup_reason_recognizes_released_native_initialization_wrapper()
         "Node        : private-fragment\n" + _XML
     )
     assert _safe_startup_reason(error) == "Failed to create domain explicitly."
+
+
+# ───────────── 4. one batched round trip per transport update ───────────
+
+
+def _counting_call(bridge: Any, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record the method of every round trip the bridge makes to its SDK child."""
+    round_trips: list[str] = []
+    original = bridge._call
+
+    def counting(method: str, *args: Any) -> Any:
+        round_trips.append(method)
+        return original(method, *args)
+
+    monkeypatch.setattr(bridge, "_call", counting)
+    return round_trips
+
+
+def test_transport_update_sends_one_batched_round_trip_in_queue_order(
+    fake_binding_on_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A whole transport update costs one round trip, and the child still runs it in order."""
+    num_motor = 2
+    monkeypatch.setenv("FAKE_UNITREE_NUM_MOTOR", str(num_motor))
+    record = fake_binding_on_path
+
+    from holosoma.bridge.unitree.unitree_sdk2py_bridge_mp import _BATCH
+
+    bridge = _construct_bridge(BridgeConfig(interface="lo"), num_motor=num_motor)
+    round_trips = _counting_call(bridge, monkeypatch)
+    try:
+        bridge.transport_exchange()
+
+        # The command read's payload still comes back from the batch.
+        assert list(bridge.low_cmd.tau_ff) == [1.0] * num_motor
+        assert list(bridge.low_cmd.q_target) == [4.0] * num_motor
+    finally:
+        bridge.close()
+
+    assert round_trips == [_BATCH], "three SDK calls in one update must cost one round trip"
+
+    kinds = [r["kind"] for r in _read_records(record)]
+    sdk_calls = [k for k in kinds if k.startswith(("publish_low_state", "publish_odom_state", "read_incoming"))]
+    assert sdk_calls == ["publish_low_state", "publish_odom_state", "read_incoming_command"]
+
+
+def test_update_that_raises_still_flushes_what_it_had_already_queued(
+    fake_binding_on_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Matches the unbatched behaviour, where an earlier publish had already been sent."""
+    num_motor = 2
+    monkeypatch.setenv("FAKE_UNITREE_NUM_MOTOR", str(num_motor))
+    record = fake_binding_on_path
+
+    bridge = _construct_bridge(BridgeConfig(interface="lo"), num_motor=num_motor)
+
+    def failing_odometry() -> tuple[list[float], list[float], list[float], float]:
+        raise RuntimeError("odometry failed")
+
+    monkeypatch.setattr(bridge, "_get_base_odometry", failing_odometry)
+    try:
+        with pytest.raises(RuntimeError, match="odometry failed"):
+            bridge.transport_exchange()
+    finally:
+        bridge.close()
+
+    kinds = [r["kind"] for r in _read_records(record)]
+    assert kinds.count("publish_low_state") == 1
+
+
+def test_unknown_method_in_a_batch_is_reported_as_an_error(
+    fake_binding_on_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The batch path raises the child's error the same way a single call does."""
+    monkeypatch.setenv("FAKE_UNITREE_NUM_MOTOR", "2")
+
+    from holosoma.bridge.unitree.unitree_sdk2py_bridge_mp import _BATCH
+
+    bridge = _construct_bridge(BridgeConfig(interface="lo"), num_motor=2)
+    try:
+        with pytest.raises(ValueError, match="Unknown method 'nope'"):
+            bridge._call(_BATCH, [("nope", ())])
+        with pytest.raises(ValueError, match="Unknown method 'nope'"):
+            bridge._call("nope")
+    finally:
+        bridge.close()
+
+
+def test_publishes_outside_a_transport_update_go_out_immediately(
+    fake_binding_on_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A caller driving the publishes directly keeps the old un-batched behaviour.
+
+    There is no update to batch with and nothing that would flush it, so a deferred write would
+    never reach DDS. Extension code and tests do call these methods on their own.
+    """
+    num_motor = 2
+    monkeypatch.setenv("FAKE_UNITREE_NUM_MOTOR", str(num_motor))
+    record = fake_binding_on_path
+
+    bridge = _construct_bridge(BridgeConfig(interface="lo"), num_motor=num_motor)
+    round_trips = _counting_call(bridge, monkeypatch)
+    try:
+        bridge.publish_low_state()
+        # Published before anything else is asked of the bridge, not held for a later flush, and
+        # not piggy-backed onto a command read that has not happened yet.
+        kinds_after_publish = [r["kind"] for r in _read_records(record)]
+        assert "publish_low_state" in kinds_after_publish
+        assert "read_incoming_command" not in kinds_after_publish
+        assert not bridge._pending
+
+        bridge.publish_odom()
+        bridge.low_cmd_handler()
+        assert list(bridge.low_cmd.tau_ff) == [1.0] * num_motor
+    finally:
+        bridge.close()
+
+    # One round trip per call, exactly as before batching existed.
+    assert round_trips == ["publish_low_state", "publish_odom_state", "read_incoming_command"]

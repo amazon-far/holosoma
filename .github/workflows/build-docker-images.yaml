@@ -121,6 +121,12 @@ jobs:
           target: ${{ matrix.dependency_target }}
           pull: true
           push: true
+          # The dependency image is an intermediate build context. Cache hits
+          # give it the same digest every run, while each provenance/SBOM
+          # attestation is unique, so attestations pile up against one subject
+          # until ECR rejects pushes at 100 referrers.
+          provenance: false
+          sbom: false
           no-cache: ${{ inputs.no_cache }}
           build-args: |
             ${{ matrix.build_args }}
