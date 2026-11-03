@@ -793,6 +793,8 @@ class MuJoCo(BaseSimulator):
         state.register("dof_acc", Columns(qacc, self.dof_qvel_addrs))
 
         qvel_addr = self.object_addrs["robot"]["qvel_addr"]
+        angular_vel_ids = range(qvel_addr + 3, qvel_addr + 6)
+        state.register("base_angular_vel", Columns(qvel, angular_vel_ids))
         linear_acc_ids = range(qvel_addr, qvel_addr + 3)
         state.register("base_linear_acc", Columns(qacc, linear_acc_ids))
         if b > 0:
@@ -803,13 +805,6 @@ class MuJoCo(BaseSimulator):
             "robot_root_states",
             lambda: self.get_actor_states(["robot"], env_ids),
             write=lambda rows, root: self._write_root_states(rows, root[rows]),
-        )
-        state.alias("base_quat", "robot_root_states", slice(3, 7))
-        state.derive("dof_state", lambda: torch.stack([self.dof_pos, self.dof_vel], dim=-1).reshape(-1, 2))
-        # Body-frame, as the freejoint's qvel stores it.
-        state.derive(
-            "base_angular_vel",
-            lambda: quat_rotate_inverse(self.base_quat, self.robot_root_states[:, 10:13], w_last=True),
         )
 
         body_names = ("_rigid_body_pos", "_rigid_body_rot", "_rigid_body_vel", "_rigid_body_ang_vel")

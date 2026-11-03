@@ -157,11 +157,6 @@ class BaseSimulator:
     robot_root_states = StateTensor(
         "Robot root state ``[num_envs, 13]``: position, orientation (xyzw), world-frame linear and angular velocity."
     )
-    dof_state = StateTensor(
-        "Robot DOF positions (``[..., 0]``) and velocities (``[..., 1]``), read-only: "
-        "``[num_envs, num_dof, 2]`` on IsaacSim, ``[num_envs * num_dof, 2]`` on MuJoCo."
-    )
-    base_quat = StateTensor("Robot root orientation (xyzw), ``[num_envs, 4]``.")
     base_angular_vel = StateTensor("Robot root angular velocity, ``[num_envs, 3]``.")
     base_linear_acc = StateTensor("Robot root linear acceleration, ``[num_envs, 3]``.")
     contact_forces = StateTensor("Net contact force per robot body, ``[num_envs, num_bodies, 3]``.")
@@ -640,6 +635,11 @@ class BaseSimulator:
         (after ``PRE_STEP`` hooks) so :meth:`apply_external_force` takes effect this substep.
         """
         raise NotImplementedError("The '_step_dynamics' method must be implemented in subclasses.")
+
+    @property
+    def base_quat(self) -> torch.Tensor:
+        """Robot root orientation (xyzw), ``[num_envs, 4]``: a view of ``robot_root_states``."""
+        return self.robot_root_states[:, 3:7]
 
     def forward_kinematics(self) -> None:
         """Write pending in-place state writes to the simulation and recompute body poses from them.

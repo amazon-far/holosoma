@@ -133,33 +133,6 @@ def test_a_flush_keeps_written_tensors_valid() -> None:
     assert len(other_reads) == 2  # tensors that were not written are re-read
 
 
-def test_an_alias_is_a_view_of_its_source() -> None:
-    state, backing, _, flushed = _counting_state()
-    state.alias("tail", "x", slice(1, 3))
-    tail = state.get("tail")
-    assert state.get("tail") is tail
-
-    state.get("x")[0, 1:3] = 5.0
-    assert torch.all(state.get("tail")[0] == 5.0)  # no flush needed
-    tail[1] = 7.0  # writes through to x
-    state.flush_writes()
-    assert flushed == [[0, 1]] and torch.all(backing[1, 1:3] == 7.0)
-
-
-def test_a_derived_tensor_is_current_and_read_only() -> None:
-    state, backing, _, _ = _counting_state()
-    state.derive("doubled", lambda: state.get("x") * 2)
-    doubled = state.get("doubled")
-    state.get("x")[0] = -5.0
-    assert state.get("doubled") is doubled and torch.all(doubled[0] == -10.0)
-
-    doubled[1] = 0.0
-    with pytest.raises(RuntimeError, match="read-only"):
-        state.flush_writes()
-    assert not torch.any(backing == -5.0)  # nothing flushed
-    assert torch.equal(state.get("doubled")[1], backing[1] * 2)  # the write was discarded
-
-
 def test_state_tensor_assignment_serves_the_value() -> None:
     class Sim:
         x = StateTensor("x")

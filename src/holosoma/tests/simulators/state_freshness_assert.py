@@ -138,7 +138,7 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
         fresh = _fresh(sim, simulator)
         for name, fresh_value in fresh.items():
             checks += 1
-            served = sim.state.get(name)[:]
+            served = getattr(sim, name)[:]
             if served.device != device or served.dtype != torch.float32:
                 worst[f"{name} served as {served.dtype} on {served.device}, not float32 on {device}"] = 0.0
             served = served.float()

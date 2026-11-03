@@ -704,8 +704,6 @@ class IsaacSim(BaseSimulator):
             lambda: fullstate_wxyz_to_xyzw(data.root_state_w),
             write=lambda rows, root: self._write_root_states(rows, root[rows]),
         )
-        self.state.alias("base_quat", "robot_root_states", slice(3, 7))
-        self.state.derive("dof_state", lambda: torch.stack([self.dof_pos, self.dof_vel], dim=-1))
         self.state.register(
             "dof_pos",
             Columns(lambda: data.joint_pos, self.dof_ids),
