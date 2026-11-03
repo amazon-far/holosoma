@@ -52,12 +52,21 @@ def test_a_flush_writes_only_changed_rows() -> None:
     assert flushed == [[1, 3]]
 
 
-def test_unflushable_writes_raise() -> None:
-    state, _, _, _ = _counting_state(writable=False)
+def test_a_read_only_write_raises_once_and_flushes_nothing() -> None:
+    state, backing, _, flushed = _counting_state()
+    read_only = torch.zeros(2, 3)
+    state.register("y", lambda: read_only)
     state.get("x")[0] = -1.0
+    state.get("y")[0] = -1.0
     with pytest.raises(RuntimeError, match="read-only"):
         state.flush_writes()
+    assert flushed == [] and not torch.any(backing == -1.0)
 
+    state.flush_writes()  # the read-only write is discarded; the writable one is still pending
+    assert flushed == [[0]] and torch.equal(state.get("y"), read_only)
+
+
+def test_writes_after_the_simulation_changed_raise() -> None:
     state, _, _, _ = _counting_state()
     served = state.get("x")
     state.mark_stale()
@@ -79,7 +88,7 @@ def test_one_read_serves_several_names() -> None:
     assert torch.equal(state.get("b"), values[1].float()) and state.get("b").dtype == torch.float32
     state.get("a")
     assert len(reads) == 1
-    assert torch.equal(state.read_fresh("a"), values[0])
+    assert torch.equal(state._read_fresh("a"), values[0])
 
     state.register("c", lambda: values)
     with pytest.raises(ValueError, match="returned 2 tensors"):
@@ -103,16 +112,38 @@ def test_columns_return_the_selection() -> None:
     assert torch.equal(state.get("callable"), source[:, 2:5])
 
 
-def test_a_read_sees_in_place_writes_to_other_tensors() -> None:
-    backing = torch.zeros(2, 13)
-    state = SimState()
-    state.register("root", lambda: backing, write=lambda rows, out: backing.__setitem__(rows, out[rows]))
-    state.register("quat", Columns(lambda: state.get("root"), range(3, 7)))
-    state.get("quat")
+def test_a_flush_keeps_written_tensors_valid() -> None:
+    state, backing, _, flushed = _counting_state()
+    other_reads: list[int] = []
 
-    state.get("root")[1, 3:7] = 5.0
-    assert torch.all(state.get("quat")[1] == 5.0)
-    assert torch.all(backing[1, 3:7] == 5.0)
+    def read_other() -> torch.Tensor:
+        other_reads.append(1)
+        return torch.zeros(2, 3)
+
+    state.register("y", read_other)
+    held = state.get("x")
+    state.get("y")
+
+    held[0] = -1.0
+    state.flush_writes()
+    held[1] = -2.0  # through the same reference, after a flush
+    state.flush_writes()
+    assert flushed == [[0], [1]] and torch.equal(backing, held)
+    state.get("y")
+    assert len(other_reads) == 2  # tensors that were not written are re-read
+
+
+def test_an_alias_is_a_view_of_its_source() -> None:
+    state, backing, _, flushed = _counting_state()
+    state.alias("tail", "x", slice(1, 3))
+    tail = state.get("tail")
+    assert state.get("tail") is tail
+
+    state.get("x")[0, 1:3] = 5.0
+    assert torch.all(state.get("tail")[0] == 5.0)  # no flush needed
+    tail[1] = 7.0  # writes through to x
+    state.flush_writes()
+    assert flushed == [[0, 1]] and torch.all(backing[1, 1:3] == 7.0)
 
 
 def test_state_tensor_assignment_serves_the_value() -> None:

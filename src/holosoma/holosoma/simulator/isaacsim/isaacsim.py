@@ -703,12 +703,13 @@ class IsaacSim(BaseSimulator):
         body link velocity makes PhysX copy body COMs to the host.
         """
         data = self._robot.data
+        self.state.device = self.sim_device
         self.state.register(
             "robot_root_states",
             lambda: fullstate_wxyz_to_xyzw(data.root_state_w),
             write=lambda rows, root: self._write_root_states(rows, root[rows]),
         )
-        self.state.register("base_quat", Columns(lambda: self.robot_root_states, range(3, 7)))
+        self.state.alias("base_quat", "robot_root_states", slice(3, 7))
         self.state.register(
             "dof_pos",
             Columns(lambda: data.joint_pos, self.dof_ids),
@@ -798,6 +799,9 @@ class IsaacSim(BaseSimulator):
         # Runs physics_sim_view.update_articulations_kinematic() and flushes fabric, so body/camera
         # prims match the written joint/root state without integrating.
         self.sim.forward()
+        # Isaac Lab resets its cached body velocities only on joint position writes.
+        self._robot.data._body_link_vel_w.timestamp = -1.0
+        self._robot.data._body_com_vel_w.timestamp = -1.0
 
     def _write_external_wrench_native(self, targets: list[WrenchTarget]) -> None:
         """Set world-frame wrenches on the robot articulation and object RigidObjects.

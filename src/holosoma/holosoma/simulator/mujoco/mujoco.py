@@ -773,6 +773,7 @@ class MuJoCo(BaseSimulator):
         n, b, device = self.num_envs, self.num_bodies, self.sim_device
         qpos, qvel, qacc = self._mj_arrays()
         state = self.state
+        state.device = device
 
         def current(source: Any) -> torch.Tensor:
             return source if isinstance(source, torch.Tensor) else source()
@@ -788,14 +789,12 @@ class MuJoCo(BaseSimulator):
             return write
 
         for name, source, ids in (("dof_pos", qpos, self.dof_qpos_addrs), ("dof_vel", qvel, self.dof_qvel_addrs)):
-            state.register(name, Columns(source, ids, device=device), write=write_columns(source, ids))
-        state.register("dof_acc", Columns(qacc, self.dof_qvel_addrs, device=device))
+            state.register(name, Columns(source, ids), write=write_columns(source, ids))
+        state.register("dof_acc", Columns(qacc, self.dof_qvel_addrs))
 
         qvel_addr = self.object_addrs["robot"]["qvel_addr"]
-        angular_vel_ids = range(qvel_addr + 3, qvel_addr + 6)
-        state.register("base_angular_vel", Columns(qvel, angular_vel_ids, device=device))
         linear_acc_ids = range(qvel_addr, qvel_addr + 3)
-        state.register("base_linear_acc", Columns(qacc, linear_acc_ids, device=device))
+        state.register("base_linear_acc", Columns(qacc, linear_acc_ids))
         if b > 0:
             state.register("contact_forces", lambda: self.backend.compute_contact_forces()[:, self._body_ids_t])
 
@@ -805,7 +804,12 @@ class MuJoCo(BaseSimulator):
             lambda: self.get_actor_states(["robot"], env_ids),
             write=lambda rows, root: self._write_root_states(rows, root[rows]),
         )
-        state.register("base_quat", Columns(lambda: self.robot_root_states, range(3, 7)))
+        state.alias("base_quat", "robot_root_states", slice(3, 7))
+        # Body-frame, as the freejoint's qvel stores it.
+        state.derive(
+            "base_angular_vel",
+            lambda: quat_rotate_inverse(self.base_quat, self.robot_root_states[:, 10:13], w_last=True),
+        )
 
         body_names = ("_rigid_body_pos", "_rigid_body_rot", "_rigid_body_vel", "_rigid_body_ang_vel")
         if b == 0:
