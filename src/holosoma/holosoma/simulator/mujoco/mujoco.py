@@ -799,9 +799,10 @@ class MuJoCo(BaseSimulator):
             state.register("contact_forces", lambda: self.backend.compute_contact_forces()[:, self._body_ids_t])
 
         env_ids = torch.arange(n, device=device)
+        robot_addrs = self._actor_freejoint_addrs("robot")
         state.register(
             "robot_root_states",
-            lambda: self.get_actor_states(["robot"], env_ids),
+            lambda: self._freejoint_angvel_to_world(self.backend.get_actor_state(env_ids, *robot_addrs)),
             write=lambda rows, root: self._write_root_states(rows, root[rows]),
         )
 
@@ -966,7 +967,6 @@ class MuJoCo(BaseSimulator):
         """
         assert self.root_model
         assert self.root_data
-        self.state.flush_writes()  # reads qpos/qvel directly, so in-place robot writes must land first
 
         if len(indices) == 0:
             # Empty input is a uniform no-op across backends (matches IsaacSim).
@@ -975,23 +975,24 @@ class MuJoCo(BaseSimulator):
         resolved_objects = self.object_registry.resolve_indices(indices)
         all_states: list[torch.Tensor] = []
         for obj_name, env_ids in resolved_objects:
-            if obj_name in self.static_object_body_ids:
+            if obj_name == "robot":
+                # The served root state, so in-place writes to it show without a flush.
+                states_for_envs = self.robot_root_states[env_ids]
+            elif obj_name in self.static_object_body_ids:
                 # Static body: no qpos slice, read its constant world pose from xpos.
                 states_for_envs = self._static_body_state(obj_name, env_ids)
             else:
-                # Free body / robot: read the live freejoint state, per-env (GPU for
-                # WarpBackend). Velocity is the freejoint qvel (body-local angular),
-                # matching the set path.
+                # Free body: the live freejoint state, per-env (GPU for WarpBackend), with its
+                # body-local angular velocity rotated to the world frame.
                 qpos_addr, qvel_addr = self._actor_freejoint_addrs(obj_name)
-                states_for_envs = self.backend.get_actor_state(env_ids, qpos_addr, qvel_addr)  # [num_envs, 13]
+                states_for_envs = self._freejoint_angvel_to_world(
+                    self.backend.get_actor_state(env_ids, qpos_addr, qvel_addr)
+                )
             all_states.append(states_for_envs)
 
         if not all_states:
             return torch.empty(0, 13, device=self.sim_device)
-        # Convert each freejoint's body-local angular velocity to the world-frame the unified
-        # actor-state representation uses (static bodies carry zero velocity, so this is a no-op
-        # for them). Linear velocity and pose are already world-frame.
-        return self._freejoint_angvel_to_world(torch.cat(all_states, dim=0))
+        return torch.cat(all_states, dim=0)
 
     def _static_body_state(self, obj_name: str, env_ids: torch.Tensor) -> torch.Tensor:
         """Read a static (jointless) body's world pose into a [len(env_ids), 13] state.
@@ -1157,10 +1158,6 @@ class MuJoCo(BaseSimulator):
 
     def _write_root_states(self, env_ids: EnvIds, root_states: torch.Tensor) -> None:
         """Write world-frame robot root states, one row per entry of ``env_ids``."""
-        if self.num_dof == 0:
-            logger.info("No robot DOFs available - skipping root state update")
-            return
-
         # Incoming angular velocity is world-frame (the robot_root_states / all_root_states
         # convention); MuJoCo's freejoint qvel wants it body-local. Convert before the backend
         # write (which scatters cols 10:13 raw into qvel), symmetric with the get_actor_states

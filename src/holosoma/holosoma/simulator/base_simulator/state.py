@@ -51,12 +51,14 @@ class _Registration:
         """Copy the read's values into the buffers, allocating them on ``device`` (the read's, if None) first."""
         values = self.values()
         if not self.buffers:
-            self.buffers = tuple(
-                torch.empty(value.shape, dtype=torch.float32, device=device or value.device) for value in values
-            )
-            # Writable registrations keep a copy of their buffers, to find changed rows.
-            if self.write is not None:
-                self.snapshots = tuple(torch.empty_like(buffer) for buffer in self.buffers)
+            # Normal tensors even when first read inside inference mode: they are written in place later.
+            with torch.inference_mode(False):
+                self.buffers = tuple(
+                    torch.empty(value.shape, dtype=torch.float32, device=device or value.device) for value in values
+                )
+                # Writable registrations keep a copy of their buffers, to find changed rows.
+                if self.write is not None:
+                    self.snapshots = tuple(torch.empty_like(buffer) for buffer in self.buffers)
         for buffer, value in zip(self.buffers, values, strict=True):
             buffer.copy_(value)
         self.mark_clean()
@@ -72,7 +74,8 @@ class _Registration:
         """Rows (environments) that differ from the last read or flush."""
         changed = torch.zeros(self.buffers[0].shape[0], dtype=torch.bool, device=self.buffers[0].device)
         for buffer, snapshot in zip(self.buffers, self.snapshots, strict=True):
-            changed |= (buffer != snapshot).reshape(buffer.shape[0], -1).any(dim=1)
+            differs = (buffer != snapshot) & ~(buffer.isnan() & snapshot.isnan())
+            changed |= differs.reshape(buffer.shape[0], -1).any(dim=1)
         return changed.nonzero().squeeze(1)
 
     def mark_clean(self) -> None:
@@ -210,6 +213,7 @@ class SimState:
                 raise AttributeError(f"Simulator state {name!r} is not bound") from None
         if not registration.valid:
             if registration.written():
+                registration.mark_clean()  # discard the write, so the next access re-reads
                 names = ", ".join(registration.names)
                 raise RuntimeError(f"Simulator state {names} was written in place after the simulation changed it")
             registration.refresh(self.device)

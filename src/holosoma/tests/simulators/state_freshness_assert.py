@@ -5,9 +5,9 @@ simulator's state registry serves with a fresh read at ``PRE_STEP`` and ``POST_S
 substep: joint state, root state, base orientation, body poses and contact forces through the
 backend's own buffers, and the rest by re-running their bound read. A tensor that is only refreshed
 at frame end would match at frame boundaries and fail mid-frame. Every served tensor must be float32 on
-the simulator's device. Mid-frame it writes state in place and checks body state after FK: on MuJoCo
-against an independent ``mj_forward``, and on every backend that the root body's angular velocity
-follows a velocity-only write.
+the simulator's device. Mid-frame it writes state in place and checks body state after FK against an
+independent reference (MuJoCo: a CPU ``mj_forward``; IsaacSim: PhysX link poses, bypassing Isaac Lab's
+caches), and on every backend that the root body's angular velocity follows a velocity-only write.
 
 Success is reported via an ``OK`` sentinel in ``--result-file`` followed by ``os._exit``
 (the _run_harness.py contract, as in contact_substep_assert.py).
@@ -90,6 +90,15 @@ def _fresh(sim, simulator: str):
     return fresh
 
 
+def _reference_bodies_isaacsim(sim):
+    """Env 0's body poses read from PhysX, bypassing Isaac Lab's cached articulation data."""
+    from isaacsim.core.simulation_manager import SimulationManager
+
+    SimulationManager.get_physics_sim_view().update_articulations_kinematic()
+    poses = sim._robot.root_physx_view.get_link_transforms()[0, sim.body_ids].cpu()  # xyzw quaternions
+    return {"_rigid_body_pos": poses[:, :3], "_rigid_body_rot": poses[:, 3:7]}
+
+
 def _reference_bodies_mujoco(sim):
     """Env 0's body pose and velocity from an independent CPU ``mj_forward`` of its qpos/qvel."""
     import mujoco
@@ -168,13 +177,13 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
         if not torch.allclose(reached, target, atol=ATOL):
             error = (reached - target).abs().max().item()
             failures.append(f"in-place dof_pos write did not reach the simulator (max error {error:.3e})")
-        if simulator != "isaacsim":
-            for name, reference in _reference_bodies_mujoco(sim).items():
-                expected = torch.as_tensor(reference, dtype=torch.float32)
-                served = sim.state.get(name)[0].float().cpu()
-                if name == "_rigid_body_rot":  # q and -q are the same rotation
-                    served = served * torch.sign((served * expected).sum(-1, keepdim=True))
-                check_close(f"{name} after FK differs from an independent mj_forward", served, expected)
+        references = _reference_bodies_isaacsim(sim) if simulator == "isaacsim" else _reference_bodies_mujoco(sim)
+        for name, reference in references.items():
+            expected = torch.as_tensor(reference, dtype=torch.float32)
+            served = sim.state.get(name)[0].float().cpu()
+            if name == "_rigid_body_rot":  # q and -q are the same rotation
+                served = served * torch.sign((served * expected).sum(-1, keepdim=True))
+            check_close(f"{name} after FK differs from an independent reference", served, expected)
         compare("FK after an in-place write")
 
     def write_velocity_only() -> None:

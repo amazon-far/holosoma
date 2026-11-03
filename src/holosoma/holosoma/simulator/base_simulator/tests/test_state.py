@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from holosoma.simulator.base_simulator.state import Columns, SimState, StateTensor
+from holosoma.simulator.base_simulator.state import Columns, SimState
 
 pytestmark = pytest.mark.no_sim
 
@@ -51,6 +51,12 @@ def test_a_flush_writes_only_changed_rows() -> None:
     state.flush_writes()
     assert flushed == [[1, 3]]
 
+    backing[0, 0] = float("nan")  # a diverged env: NaN rows are unchanged unless written
+    state.mark_stale()
+    state.get("x")[2] = -3.0
+    state.flush_writes()
+    assert flushed == [[1, 3], [2]]
+
 
 def test_a_read_only_write_raises_once_and_flushes_nothing() -> None:
     state, backing, _, flushed = _counting_state()
@@ -73,6 +79,16 @@ def test_writes_after_the_simulation_changed_raise() -> None:
     served[0] = -1.0
     with pytest.raises(RuntimeError, match="written in place after"):
         state.get("x")
+    assert not torch.any(state.get("x") == -1.0)  # the write was discarded; the tensor works again
+
+
+def test_a_first_read_inside_inference_mode_serves_a_normal_tensor() -> None:
+    state, backing, _, flushed = _counting_state()
+    with torch.inference_mode():
+        state.get("x")
+    state.get("x")[0] = -1.0
+    state.flush_writes()
+    assert flushed == [[0]] and torch.all(backing[0] == -1.0)
 
 
 def test_one_read_serves_several_names() -> None:
@@ -131,18 +147,6 @@ def test_a_flush_keeps_written_tensors_valid() -> None:
     assert flushed == [[0], [1]] and torch.equal(backing, held)
     state.get("y")
     assert len(other_reads) == 2  # tensors that were not written are re-read
-
-
-def test_state_tensor_assignment_serves_the_value() -> None:
-    class Sim:
-        x = StateTensor("x")
-
-    sim = Sim()
-    with pytest.raises(AttributeError):
-        _ = sim.x
-    value = torch.ones(3)
-    sim.x = value
-    assert sim.x is value
 
 
 def test_mutation_flushes_first_and_marks_stale_after_even_on_error() -> None:

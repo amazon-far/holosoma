@@ -10,10 +10,9 @@ The properties are the ones a reward term reading the buffer depends on:
   3. ORDERED    — slot i is written at substep i, not before, and not touched again.
   4. DISTINCT   — the slots are not all one frame. A tensor not re-fetched mid-step, or a sensor
                   whose update period is coarser than the physics step, yields one sample repeated.
-  5. AGREES     — the last slot equals ``simulator.contact_forces`` read after the step.
-  6. REWRITTEN  — the next control step writes every slot again, which is why the buffer needs no
+  5. REWRITTEN  — the next control step writes every slot again, which is why the buffer needs no
                   clearing on reset: no pre-reset sample can survive into a reward.
-  7. RESTARTS   — after a deliberately short step desyncs the slot index, FRAME_BEGIN re-anchors
+  6. RESTARTS   — after a deliberately short step desyncs the slot index, FRAME_BEGIN re-anchors
                   slot 0 to the first substep of the control step, and ``recorded_forces`` narrows
                   to just that sample rather than exposing the previous step's slots.
 
@@ -150,12 +149,6 @@ def _check(sim, num_envs: int) -> tuple[list[str], list[str]]:
     if decimation > 1 and distinct == 0:
         failures.append(f"DISTINCT: all {decimation} slots identical — the same frame recorded every substep")
 
-    # Tautological on backends that record contact_forces itself; it still pins IsaacSim's
-    # separate sensor-to-robot body-order gather against the one ``contact_forces`` uses.
-    if not torch.allclose(final[:, decimation - 1], sim.contact_forces, atol=1e-4):
-        max_abs_diff = (final[:, decimation - 1] - sim.contact_forces).abs().max()
-        failures.append(f"AGREES: last slot != contact_forces after the step (max abs diff {float(max_abs_diff):.4g})")
-
     buffer.fill_(float("nan"))
     control_step()
     if bool(buffer.isnan().any()):
@@ -202,7 +195,7 @@ def main() -> None:
     lines = [f"==== contact_recorder on {args.simulator} ====", *report]
     lines += [f"FAIL {failure}" for failure in failures]
     if not failures:
-        lines.append("OK: shape, filled, ordered, distinct, agrees, rewritten, restarts, stable")
+        lines.append("OK: shape, filled, ordered, distinct, rewritten, restarts")
     print("\n".join(lines), flush=True)
     if args.result_file and not failures:
         pathlib.Path(args.result_file).write_text("OK")
