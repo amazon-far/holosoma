@@ -4,13 +4,16 @@ Settles the robot onto flat ground, then for several control frames compares eve
 simulator's state registry serves with a fresh read at ``PRE_STEP`` and ``POST_STEP`` of every
 substep: joint state, root state, base orientation, body poses and contact forces through the
 backend's own buffers, and the rest by re-running their bound read. A tensor that is only refreshed
-at frame end would match at frame boundaries and fail mid-frame.
+at frame end would match at frame boundaries and fail mid-frame. Every served tensor must be float32 on
+the simulator's device. Mid-frame it writes state in place and checks body state after FK: on MuJoCo
+against an independent ``mj_forward``, and on every backend that the root body's angular velocity
+follows a velocity-only write.
 
 Success is reported via an ``OK`` sentinel in ``--result-file`` followed by ``os._exit``
 (the _run_harness.py contract, as in contact_substep_assert.py).
 
 Usage:
-  python state_freshness_assert.py --simulator mujoco|mjwarp|isaacsim [--num-envs N]
+  python state_freshness_assert.py --simulator mujoco|mjwarp|isaacsim [--num-envs N] [--device D]
 """
 
 from __future__ import annotations
@@ -33,6 +36,9 @@ ATOL = 1e-5
 # A substep must move some body by more than this, or a stale tensor could pass within ATOL.
 MIN_SUBSTEP_MOTION = 10 * ATOL
 JOINT_OFFSET = 0.02  # rad, written in place mid-frame
+JOINT_VEL_OFFSET = 0.1  # rad/s
+ROOT_ANG_VEL_OFFSET = 0.3  # rad/s
+BODY_ATOL = 1e-4  # independent reference after FK
 
 
 def _fresh_isaacsim(sim):
@@ -70,6 +76,7 @@ def _fresh_mujoco(sim):
         "dof_vel": qvel[:, sim.dof_qvel_addrs].clone(),
         "robot_root_states": root,
         "base_quat": root[:, 3:7],
+        "base_angular_vel": qvel[:, qv + 3 : qv + 6].clone(),
         "_rigid_body_pos": sim.backend.refresh_rigid_body_states()[0].clone(),
         "contact_forces": sim.backend.compute_contact_forces()[:, sim._body_ids_t].clone(),
     }
@@ -80,8 +87,36 @@ def _fresh(sim, simulator: str):
     fresh = _fresh_isaacsim(sim) if simulator == "isaacsim" else _fresh_mujoco(sim)
     for name in sim.state.names():
         if name not in fresh:
-            fresh[name] = sim.state.read_fresh(name)
+            fresh[name] = sim.state._read_fresh(name)
     return fresh
+
+
+def _reference_bodies_mujoco(sim):
+    """Env 0's body pose and velocity from an independent CPU ``mj_forward`` of its qpos/qvel."""
+    import mujoco
+    import numpy as np
+    import torch
+
+    from holosoma.simulator.mujoco.backends.warp_backend import WarpBackend
+
+    if isinstance(sim.backend, WarpBackend):
+        torch.cuda.synchronize()
+        qpos, qvel = sim.backend.qpos_t[0].double().cpu().numpy(), sim.backend.qvel_t[0].double().cpu().numpy()
+    else:
+        qpos, qvel = sim.root_data.qpos.copy(), sim.root_data.qvel.copy()
+    data = mujoco.MjData(sim.root_model)
+    data.qpos[:], data.qvel[:] = qpos, qvel
+    mujoco.mj_forward(sim.root_model, data)
+    ids = list(sim.body_ids)
+    velocity = np.zeros((len(ids), 6))
+    for i, body in enumerate(ids):
+        mujoco.mj_objectVelocity(sim.root_model, data, mujoco.mjtObj.mjOBJ_XBODY, body, velocity[i], 0)
+    return {
+        "_rigid_body_pos": data.xpos[ids],
+        "_rigid_body_rot": data.xquat[ids][:, [1, 2, 3, 0]],
+        "_rigid_body_vel": velocity[:, 3:],
+        "_rigid_body_ang_vel": velocity[:, :3],
+    }
 
 
 def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
@@ -96,12 +131,17 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
     checks = 0
     previous: list[torch.Tensor] = []
 
+    device = torch.device(sim.sim_device)
+
     def compare(phase: str) -> None:
         nonlocal checks
         fresh = _fresh(sim, simulator)
         for name, fresh_value in fresh.items():
             checks += 1
-            served = sim.state.get(name)[:].float()
+            served = sim.state.get(name)[:]
+            if served.device != device or served.dtype != torch.float32:
+                worst[f"{name} served as {served.dtype} on {served.device}, not float32 on {device}"] = 0.0
+            served = served.float()
             expected = fresh_value.to(served)
             if not torch.allclose(served, expected, atol=ATOL):
                 error = (served - expected).abs().max().item()
@@ -113,16 +153,43 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
                 motions.append((positions - previous[0]).abs().max().item())
             previous[:] = [positions.clone()]
 
+    def check_close(label: str, served: torch.Tensor, expected: torch.Tensor) -> None:
+        error = (served.float().cpu() - torch.as_tensor(expected, dtype=torch.float32)).abs().max().item()
+        if error > BODY_ATOL:
+            failures.append(f"{label} (max error {error:.3e})")
+
     def write_mid_frame() -> None:
-        """Write joint positions in place, never flushed by hand; the next FK pass must apply them."""
+        """Write joint and root state in place, never flushed by hand; the next FK pass must apply them."""
         target = sim.dof_pos[:].clone() + JOINT_OFFSET
         sim.dof_pos[:] = target
+        sim.dof_vel[:] += JOINT_VEL_OFFSET
+        sim.robot_root_states[:, 10:13] += ROOT_ANG_VEL_OFFSET
         sim.forward_kinematics()
         reached = _fresh(sim, simulator)["dof_pos"].to(target)
         if not torch.allclose(reached, target, atol=ATOL):
             error = (reached - target).abs().max().item()
             failures.append(f"in-place dof_pos write did not reach the simulator (max error {error:.3e})")
+        if simulator != "isaacsim":
+            for name, reference in _reference_bodies_mujoco(sim).items():
+                expected = torch.as_tensor(reference, dtype=torch.float32)
+                served = sim.state.get(name)[0].float().cpu()
+                if name == "_rigid_body_rot":  # q and -q are the same rotation
+                    served = served * torch.sign((served * expected).sum(-1, keepdim=True))
+                check_close(f"{name} after FK differs from an independent mj_forward", served, expected)
         compare("FK after an in-place write")
+
+    def write_velocity_only() -> None:
+        """A velocity-only write: FK must update body velocities, not only poses."""
+        root_ang_vel = sim.robot_root_states[:, 10:13] + ROOT_ANG_VEL_OFFSET
+        sim.robot_root_states[:, 10:13] = root_ang_vel
+        sim.forward_kinematics()
+        # The root link is the robot's first body.
+        check_close(
+            "root body angular velocity after a velocity-only write and FK",
+            sim._rigid_body_ang_vel[:, 0],
+            root_ang_vel.cpu(),
+        )
+        compare("FK after a velocity-only write")
 
     def control_step(checked: bool, write: bool = False) -> None:
         sim.hooks.emit(Phase.FRAME_BEGIN)
@@ -131,6 +198,8 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
                 compare("PRE_STEP")
             if write and substep == 1:
                 write_mid_frame()
+            if write and substep == 2:
+                write_velocity_only()
             sim.hooks.emit(Phase.PRE_STEP)
             sim.simulate_at_each_physics_step()
             sim.hooks.emit(Phase.POST_STEP)
@@ -154,11 +223,12 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
     parser.add_argument("--num-envs", type=int, default=1)
+    parser.add_argument("--device", default=None)
     parser.add_argument("--result-file", default=None)
     args, _ = parser.parse_known_args()
     sys.argv = [sys.argv[0]]  # AppLauncher re-parses argv
 
-    sim = _build(args.simulator, args.num_envs)
+    sim = _build(args.simulator, args.num_envs, args.device)
     failures, report = _check(sim, args.simulator)
 
     lines = [f"==== state freshness on {args.simulator} ====", *report]

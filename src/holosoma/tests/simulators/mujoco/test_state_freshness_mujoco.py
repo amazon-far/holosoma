@@ -29,6 +29,24 @@ def test_state_freshness_classic(tmp_path):
     )
 
 
+@pytest.mark.mujoco_classic
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test_state_freshness_classic_on_cuda(tmp_path):
+    result_file = tmp_path / "result.txt"
+    run_harness(
+        _HARNESS,
+        "--simulator",
+        "mujoco",
+        "--device",
+        "cuda:0",
+        "--result-file",
+        str(result_file),
+        label="mujoco/state-freshness (classic, cuda)",
+        timeout=600,
+        result_file=result_file,
+    )
+
+
 @pytest.mark.mujoco_warp
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="Warp requires a CUDA device")
 def test_state_freshness_warp(tmp_path):

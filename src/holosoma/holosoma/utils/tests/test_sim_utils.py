@@ -96,7 +96,7 @@ class _FakeSim:
         self.rendered_at: int | None = None
         self.control_steps = 0
         self.captured: list[object] = []
-        self.alignment: list[tuple[int | None, int | None]] = []
+        self.drawn_at_egress: list[int | None] = []
         self.phases: list[Phase | str] = []
         self.viewer_renders: list[int] = []
 
@@ -147,7 +147,7 @@ class _FakeSim:
     def _egress(self) -> None:
         self.phases.append(Phase.FRAME_END)
         self.captured.append(self._rendered)
-        self.alignment.append((self.substeps, self.rendered_at))
+        self.drawn_at_egress.append(self.rendered_at)
 
 
 def _run_sim_config(
@@ -279,7 +279,7 @@ def test_a_beating_render_cadence_misaligns_state_and_image(monkeypatch: pytest.
     """A render_interval that does not divide the decimation draws before the frame's last substep.
 
     Interval 3 against decimation 4 draws on substeps 3, 6, 9, 12 while frames close on 4, 8, 12, so
-    the skew between image and state changes frame to frame. Pinned here as the reason ``IsaacSim``
+    the skew between image and the state at egress changes frame to frame. Pinned here as the reason ``IsaacSim``
     rejects this pairing at construction when cameras are configured, rather than letting it ship
     frames a consumer cannot trust.
     """
@@ -287,17 +287,15 @@ def test_a_beating_render_cadence_misaligns_state_and_image(monkeypatch: pytest.
 
     _run(sim, monkeypatch)
 
-    assert sim.alignment == [(4, 3), (8, 6), (12, 12)]
+    assert sim.drawn_at_egress == [3, 6, 12]  # frames close on substeps 4, 8, 12
 
 
 # ----- the loop's other per-backend and viewer branches -----
 
 
 @pytest.mark.parametrize("render_interval", [1, 2, DECIMATION])
-def test_state_tensors_and_image_describe_the_same_substep(
-    monkeypatch: pytest.MonkeyPatch, render_interval: int
-) -> None:
-    """At egress the state tensors describe the substep the image was drawn in, not the one before.
+def test_frame_end_follows_the_frames_last_draw(monkeypatch: pytest.MonkeyPatch, render_interval: int) -> None:
+    """A frame egresses on the substep its image was last drawn, so the image matches the state at egress.
 
     A FRAME_END consumer may publish both — camera frames next to odometry, simulator state, or IMU —
     so a skew between them puts a stale pose beside a current image. Swept over the render intervals
@@ -308,7 +306,7 @@ def test_state_tensors_and_image_describe_the_same_substep(
     _run(sim, monkeypatch)
 
     # Frame g's last draw and its egress both land on substep (g + 1) * DECIMATION.
-    assert sim.alignment == [(4, 4), (8, 8), (12, 12)]
+    assert sim.drawn_at_egress == [4, 8, 12]
 
 
 def test_shutdown_asked_for_inside_a_frame_still_egresses_that_frame(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -54,14 +54,14 @@ ROBOT = "g1-29dof"
 TERRAIN = "terrain_locomotion_plane"
 
 
-def _build(simulator: str, num_envs: int):
-    """Build and prepare a sim with the robot dropped on flat ground."""
+def _build(simulator: str, num_envs: int, device: str | None = None):
+    """Build and prepare a sim with the robot dropped on flat ground (classic MuJoCo on CPU by default)."""
     import torch
 
     config = build_run_sim_config(simulator, "empty", ROBOT, TERRAIN)
     config = dataclasses.replace(
         config,
-        device=("cpu" if simulator == "mujoco" else "cuda:0"),
+        device=device or ("cpu" if simulator == "mujoco" else "cuda:0"),
         training=dataclasses.replace(config.training, num_envs=num_envs, headless=True),
     )
 
