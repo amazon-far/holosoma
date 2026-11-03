@@ -254,8 +254,9 @@ class HookRegistry:
         phase-scoped: a name registered only on another phase does not exist from here, and a handle
         for another phase is rejected outright. A name constraint is advisory — one that matches
         nothing is simply not applied, silently, since a plugin may name a hook belonging to another
-        plugin that this run does not select. Disabling a hook costs it its turn to run but not its
-        edges, so a chain survives one link switching off. Unconstrained hooks keep their order
+        plugin that this run does not select. A disabled hook matches nothing either, so ordering
+        always reflects the hooks that fire: declare the dependency you need rather than relying on
+        one inherited through a hook someone can switch off. Unconstrained hooks keep their order
         relative to each other.
         ``CLOSE`` resolves the same way and then runs it backwards, so a hook that declares ``after``
         tears down before the hook it follows.
@@ -477,13 +478,9 @@ class HookRegistry:
             self._resolved[Phase.CLOSE] = tuple(self._live(Phase.CLOSE))
             return self._resolved[Phase.CLOSE]
 
-    def _structural(self, phase: Phase) -> list[_HookRecord]:
-        """The phase's hooks that still exist, enabled or not, in registration order."""
-        return [record for record in self._records[phase] if not record.removed]
-
     def _live(self, phase: Phase) -> list[_HookRecord]:
         """The phase's hooks that would fire now, in registration order."""
-        return [record for record in self._structural(phase) if record.enabled]
+        return [record for record in self._records[phase] if record.enabled and not record.removed]
 
     def _resolve_order(self, phase: Phase) -> tuple[_HookRecord, ...]:
         """Topologically sort a phase's live hooks by their ``after``/``before`` constraints.
@@ -492,12 +489,14 @@ class HookRegistry:
         first, so an unconstrained phase emits exactly in registration order, and hooks a constraint
         displaces keep their order relative to each other.
 
-        A disabled hook stays in the graph and only loses its turn to run, so a chain outlives one
-        of its links being switched off: in ``a -> b -> c``, disabling ``b`` still emits ``a`` before
-        ``c``. A constraint naming a hook that is absent or removed matches nothing, contributes no
-        edge, and is otherwise ignored; it applies on its own if that hook shows up later.
+        A constraint that matches no hook firing on this phase — absent, disabled or removed —
+        contributes no edge and is otherwise ignored; it applies on its own if that hook shows up or
+        is re-enabled later. So a chain only holds while its links run: in ``a -> b -> c``, disabling
+        ``b`` leaves ``a`` and ``c`` unordered, and a hook that needs ``a`` first has to say so.
+        Keeping a disabled hook's edges instead would let a link nobody runs make a phase
+        unsatisfiable, so ordering only ever reflects hooks that fire.
         """
-        live = self._structural(phase)
+        live = self._live(phase)
         positions: dict[str, list[int]] = defaultdict(list)
         by_record: dict[_HookRecord, int] = {}
         for position, record in enumerate(live):
@@ -538,7 +537,7 @@ class HookRegistry:
                 f"Hook ordering cycle on phase {phase.value!r} among: {', '.join(cycle)}. "
                 f"Their 'after'/'before' constraints cannot all hold."
             )
-        return tuple(record for record in order if record.enabled)
+        return tuple(order)
 
     def _assert_mutable(self, phase: Phase) -> None:
         if phase in self._emitting:

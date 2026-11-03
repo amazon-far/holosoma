@@ -460,8 +460,9 @@ def test_dependency_on_another_phase_does_not_order_or_resolve() -> None:
     assert messages == []
 
 
-def test_disabling_a_link_keeps_the_rest_of_the_chain_ordered() -> None:
-    # Registered c, a, b so only b's edges put a ahead of c; disabling b must not let c overtake a.
+def test_disabling_a_link_drops_the_order_it_carried() -> None:
+    # Registered c, a, b, so only b's edges put a ahead of c. Disabling b takes those edges with it,
+    # which is what lets a cycle broken by a disabled hook stay satisfiable (see the test below).
     calls: list[str] = []
     hooks = HookRegistry()
     hooks.add(Phase.FRAME_END, recorder(calls, "c"), name="x.c")
@@ -473,10 +474,24 @@ def test_disabling_a_link_keeps_the_rest_of_the_chain_ordered() -> None:
     b.disable()
     hooks.emit(Phase.FRAME_END)
 
-    assert calls == ["a", "c"]
+    assert calls == ["c", "a"]
 
 
-def test_disabled_dependency_skips_its_turn_and_returns_on_enable() -> None:
+def test_a_cycle_broken_by_a_disabled_hook_still_resolves() -> None:
+    calls: list[str] = []
+    hooks = HookRegistry()
+    a = hooks.add(Phase.FRAME_END, recorder(calls, "a"), name="x.a")
+    b = hooks.add(Phase.FRAME_END, recorder(calls, "b"), name="x.b", after=[a])
+    c = hooks.add(Phase.FRAME_END, recorder(calls, "c"), name="x.c", after=[b])
+    hooks.add(Phase.FRAME_END, recorder(calls, "d"), name="x.d", after=[c], before=[a])
+
+    b.disable()
+    hooks.emit(Phase.FRAME_END)
+
+    assert calls == ["c", "d", "a"]
+
+
+def test_disabled_dependency_is_inert_and_returns_on_enable() -> None:
     calls: list[str] = []
     hooks = HookRegistry()
     render = hooks.add(Phase.FRAME_END, recorder(calls, "render"), name="render")
