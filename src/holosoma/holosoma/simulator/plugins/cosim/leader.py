@@ -5,11 +5,10 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Any
 
-import numpy as np
 from loguru import logger
 
 from holosoma.hooks import Phase
-from holosoma.simulator.plugins.cosim.protocol import CoSimError, Requester, env_facts
+from holosoma.simulator.plugins.cosim.protocol import Array, CoSimError, Requester, env_facts
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.simulator_config import SimulatorType
 
@@ -65,7 +64,7 @@ class CoSimLeaderPlugin:
         task.hooks.add(Phase.FRAME_END, self._on_frame_end, name="cosim.leader.render")
         task.hooks.add(Phase.CLOSE, self._on_close, name="cosim.leader.close")
 
-    def _state(self) -> dict[str, np.ndarray]:
+    def _state(self) -> dict[str, Array]:
         """Robot and object poses, positions relative to each env's origin."""
         sim = self.simulator
         origins = sim.scene.env_origins
@@ -78,7 +77,7 @@ class CoSimLeaderPlugin:
             objects = root.new_zeros((0, sim.num_envs, 7))
         return {name: _host(t) for name, t in (("root", root), ("dof_pos", sim.dof_pos[:]), ("objects", objects))}
 
-    def _request(self, cams: list[str], rows: list[int] | None) -> dict[str, np.ndarray]:
+    def _request(self, cams: list[str], rows: list[int] | None) -> dict[str, Array]:
         self.socket.send("step", {"cams": cams, "rows": rows}, self._state())
         self._awaiting_reply = True
         reply = self.socket.recv(self.cfg.step_timeout_s)
@@ -115,8 +114,9 @@ class CoSimLeaderPlugin:
         self._send_bye()
 
 
-def _host(tensor: torch.Tensor) -> np.ndarray:
-    return tensor.detach().to("cpu", torch.float32).numpy()
+def _host(tensor: torch.Tensor) -> Array:
+    array: Array = tensor.detach().to("cpu", torch.float32).numpy()
+    return array
 
 
 def _device(array: Any, like: torch.Tensor) -> torch.Tensor:

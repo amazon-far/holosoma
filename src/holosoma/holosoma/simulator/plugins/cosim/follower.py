@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import numpy as np
 from loguru import logger
 
 from holosoma.hooks import Phase
-from holosoma.simulator.plugins.cosim.protocol import Message, Replier, env_facts
+from holosoma.simulator.plugins.cosim.protocol import Array, Message, Replier, env_facts
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
@@ -102,7 +101,7 @@ class CoSimFollowerPlugin:
             return
         try:
             rows = msg.header["rows"]
-            images: dict[str, np.ndarray] = {}
+            images: dict[str, Array] = {}
             for cam in msg.header["cams"]:
                 for data_type in self.sensors.get(cam).config.data_types:
                     image = self.simulator.get_camera_data(cam, data_type, device="cpu")
@@ -118,5 +117,5 @@ class CoSimFollowerPlugin:
         self.socket.send("error", {"msg": f"{type(exc).__name__}: {exc}"})
 
 
-def _tensor(array: np.ndarray, device: str) -> torch.Tensor:
+def _tensor(array: Array, device: str) -> torch.Tensor:
     return torch.from_numpy(array).to(device=device, dtype=torch.float32)

@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 import numpy as np
+import numpy.typing as npt
 import zmq
 
 from holosoma.simulator.shared.object_registry import ObjectType
@@ -31,6 +32,8 @@ if TYPE_CHECKING:
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 
 PROTOCOL_VERSION = 1
+
+Array: TypeAlias = npt.NDArray[Any]
 
 
 class CoSimError(RuntimeError):
@@ -54,7 +57,7 @@ def env_facts(sim: BaseSimulator) -> dict[str, Any]:
 class Message:
     type: str
     header: dict[str, Any] = field(default_factory=dict)
-    arrays: dict[str, np.ndarray] = field(default_factory=dict)
+    arrays: dict[str, Array] = field(default_factory=dict)
 
 
 class _Socket:
@@ -69,14 +72,13 @@ class _Socket:
         self._poller = zmq.Poller()
         self._poller.register(self._socket, zmq.POLLIN)
 
-    def send(
-        self, msg_type: str, header: dict[str, Any] | None = None, arrays: dict[str, np.ndarray] | None = None
-    ) -> None:
+    def send(self, msg_type: str, header: dict[str, Any] | None = None, arrays: dict[str, Array] | None = None) -> None:
         """Send one message. Arrays are sent without copying and must stay unchanged until the reply."""
         buffers = [np.ascontiguousarray(a) for a in (arrays or {}).values()]
         specs = [[name, a.dtype.str, list(a.shape)] for name, a in zip(arrays or {}, buffers, strict=True)]
         head = {**(header or {}), "v": PROTOCOL_VERSION, "type": msg_type, "arrays": specs}
-        self._socket.send_multipart([json.dumps(head).encode(), *buffers], copy=False)
+        frames: list[Any] = [json.dumps(head).encode(), *buffers]
+        self._socket.send_multipart(frames, copy=False)
 
     def recv(self, timeout_s: float | None) -> Message:
         """Receive one message, as writable arrays.

@@ -13,6 +13,7 @@ import signal
 import subprocess
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -25,7 +26,7 @@ _ENV = {"mujoco": "mujoco", "mjwarp": "mujoco", "isaacsim": "isaacsim"}
 _TYPE = {"mujoco": "mujoco", "mjwarp": "mujoco", "isaacsim": "isaacsim"}
 
 
-def _pair(leader: str, follower: str) -> pytest.ParameterSet:
+def _pair(leader: str, follower: str) -> Any:
     marks: list[pytest.MarkDecorator]
     if _ENV[leader] != _ENV[follower]:
         marks = [pytest.mark.cross_sim]
