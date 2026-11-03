@@ -40,8 +40,6 @@ class LeggedRobotLocomotionManager(BaseTask):
         """Initialize torch tensors which will contain simulation states and processed quantities"""
         super()._init_buffers()
 
-        self.base_quat = self.simulator.base_quat.clone()
-
         # initialize some data used later on
         self._init_counters()
         # joint positions offsets
@@ -136,9 +134,11 @@ class LeggedRobotLocomotionManager(BaseTask):
         self.need_to_refresh_envs[env_ids] = False
         self._pre_compute_observations_callback()
 
+    @property
+    def base_quat(self) -> torch.Tensor:
+        return self.simulator.base_quat
+
     def _pre_compute_observations_callback(self) -> None:
-        # prepare quantities
-        self.base_quat[:] = self.simulator.base_quat[:]
         self.terrain_manager.update_heights()
 
     def _update_tasks_callback(self) -> None:
