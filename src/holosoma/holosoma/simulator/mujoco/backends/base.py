@@ -190,7 +190,7 @@ class IMujocoBackend(abc.ABC):
         """Read an actor's per-environment freejoint state from live backend storage.
 
         Reads each env's own value from the live qpos/qvel (GPU for WarpBackend). Velocity
-        is the freejoint qvel (body-local angular), matching the set path and robot_root_states.
+        is the freejoint qvel (body-local angular), matching the set path.
 
         ``qpos_addr`` / ``qvel_addr`` are the start of the actor's freejoint 7-dof pose and
         6-dof velocity slices. Returns ``[len(env_ids), 13]`` in holosoma format

@@ -697,10 +697,10 @@ class IsaacSim(BaseSimulator):
         return torch.cat([self.dof_pos[..., None], self.dof_vel[..., None]], dim=-1)
 
     def _register_state(self) -> None:
-        """Register the robot state tensors, read from the articulation and sensor buffers on first access.
+        """Register the robot state tensors as lazy reads of the articulation and contact sensor buffers.
 
-        Isaac Lab replaces these buffers on update, so every tensor is a lazy read. Body quantities are
-        separate reads because reading body link velocity makes PhysX copy body COMs to the host.
+        Isaac Lab replaces these buffers on update. Body quantities are separate reads because reading
+        body link velocity makes PhysX copy body COMs to the host.
         """
         data = self._robot.data
         self.state.register(
@@ -883,17 +883,13 @@ class IsaacSim(BaseSimulator):
 
         # The served tensor, or the unified view passed wholesale, is flushed as is.
         if root_states is not None and root_states is not self.all_root_states:
-            self._write_served_rows(self.robot_root_states, env_ids, self._rows_for(env_ids, root_states))
+            served = self.robot_root_states
+            rows = self._rows_for(env_ids, root_states)
+            if rows is not served:
+                if rows.untyped_storage().data_ptr() == served.untyped_storage().data_ptr():
+                    rows = rows.clone()  # a view of the served tensor
+                served[env_ids] = rows
         self.forward_kinematics()
-
-    @staticmethod
-    def _write_served_rows(served: torch.Tensor, env_ids: torch.Tensor, rows: torch.Tensor) -> None:
-        """Copy ``rows`` into ``served[env_ids]``, unless they are the served tensor itself."""
-        if rows is served:
-            return
-        if rows.untyped_storage().data_ptr() == served.untyped_storage().data_ptr():
-            rows = rows.clone()
-        served[env_ids] = rows
 
     def _rows_for(self, env_ids: torch.Tensor, states: torch.Tensor) -> torch.Tensor:
         """``states`` for ``env_ids``, given pre-sliced (one row per env id) or for every env."""
@@ -903,8 +899,8 @@ class IsaacSim(BaseSimulator):
             return states[env_ids]
         raise ValueError(f"states has {len(states)} rows; expected {len(env_ids)} (pre-sliced) or {self.num_envs}")
 
-    def _write_root_states(self, env_ids: torch.Tensor | None, root_states: torch.Tensor) -> None:
-        """Write xyzw robot root states, one row per entry of ``env_ids`` (``None``: every env)."""
+    def _write_root_states(self, env_ids: torch.Tensor, root_states: torch.Tensor) -> None:
+        """Write xyzw robot root states, one row per entry of ``env_ids``."""
         root_wxyz = fullstate_xyzw_to_wxyz(root_states)
         self._robot.write_root_pose_to_sim(root_wxyz[:, :7], env_ids)
         self._robot.write_root_velocity_to_sim(root_wxyz[:, 7:], env_ids)

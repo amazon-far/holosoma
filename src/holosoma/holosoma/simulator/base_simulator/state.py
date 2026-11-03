@@ -7,9 +7,9 @@ float32 buffer allocated on the first read, on the first access after the simula
 ``write`` flushes in-place changes back to the simulation, row by row.
 
 Every served tensor keeps its identity, so references to it stay valid. Reads see the current
-simulation state. In-place writes reach the simulation before its next physics step, FK pass, refresh
-or any state write that would replace them: the changed rows (environments) are flushed through the
-tensor's ``write``. A tensor bound without ``write`` is read-only.
+simulation state. In-place writes reach the simulation before its next physics step, FK pass or any
+state write that would replace them: the changed rows (environments) are flushed through the tensor's
+``write``. A tensor bound without ``write`` is read-only.
 
 Backends wrap every state mutation in :meth:`SimState.mutation`, which flushes pending writes first and
 marks every tensor stale after.

@@ -816,8 +816,7 @@ class MotionCommand(CommandTermBase):
             # Flush the mutated root/dof state into the simulator so that
             # rigid-body positions are up-to-date for downstream consumers
             # (termination checks, observations, rewards).
-            sim = self._env.simulator
-            sim.forward_kinematics()
+            self._env.simulator.forward_kinematics()
             # The teleport is an observation reset: drop history and re-render these envs.
             self._env.observation_manager.reset(ended_env_ids)
 

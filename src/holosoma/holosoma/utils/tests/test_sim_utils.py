@@ -455,21 +455,11 @@ class _PlaybackSim(_FakeSim):
         )
 
     @property
-    def dof_state(self) -> torch.Tensor:
-        return torch.cat([self.dof_pos[..., None], self.dof_vel[..., None]], dim=-1)
-
-    @property
     def shutdown_requested(self) -> bool:
         return self._shutdown
 
     def request_shutdown(self, reason: str = "") -> None:
         self._shutdown = True
-
-    def set_actor_root_state_tensor_robots(self, env_ids: torch.Tensor, root_states: torch.Tensor) -> None:
-        pass
-
-    def set_dof_state_tensor_robots(self, env_ids: torch.Tensor, dof_states: torch.Tensor) -> None:
-        pass
 
     def set_actor_states(self, names: list[str], env_ids: torch.Tensor, states: torch.Tensor) -> None:
         pass

@@ -769,7 +769,7 @@ class MuJoCo(BaseSimulator):
         )
 
     def _register_state(self) -> None:
-        """Register the robot state tensors as lazy reads of the MuJoCo data (Warp's GPU views or classic's arrays)."""
+        """Register the robot state tensors as lazy reads of the MuJoCo data."""
         n, b, device = self.num_envs, self.num_bodies, self.sim_device
         qpos, qvel, qacc = self._mj_arrays()
         state = self.state
@@ -1243,7 +1243,7 @@ class MuJoCo(BaseSimulator):
 
         # Incoming angular velocity is world-frame (the robot_root_states / all_root_states
         # convention); MuJoCo's freejoint qvel wants it body-local. Convert before the backend
-        # write (which scatters cols 10:13 raw into qvel), symmetric with the view __getitem__
+        # write (which scatters cols 10:13 raw into qvel), symmetric with the get_actor_states
         # read path and with set_actor_states_by_index.
         root_states = self._freejoint_angvel_to_local(root_states)
 
@@ -1303,17 +1303,12 @@ class MuJoCo(BaseSimulator):
                 f"Unsupported dof_states tensor shape {tuple(dof_states.shape)}: expected a 2D "
                 f"[N * num_dof, 2] tensor (flattened, [:, 0]=pos, [:, 1]=vel)."
             )
-        # The required first dimension is backend-specific: WarpBackend.set_dof_state
-        # indexes the FULL global tensor by env_ids ([num_envs * num_dof, 2]), whereas
-        # ClassicBackend.set_dof_state reshapes the whole tensor by len(env_ids)
-        # ([len(env_ids) * num_dof, 2]). Validate against the active backend so a
-        # partial-reset global tensor is not falsely rejected for the warp path.
-        if isinstance(self.backend, WarpBackend):
-            expected_rows = self.num_envs * self.num_dof
-        else:
-            expected_rows = len(env_ids) * self.num_dof
+        # The required first dimension is backend-specific: Warp takes the FULL global tensor,
+        # indexed by env_ids ([num_envs * num_dof, 2]); classic takes it pre-sliced
+        # ([len(env_ids) * num_dof, 2]).
+        is_warp = isinstance(self.backend, WarpBackend)
+        expected_rows = (self.num_envs if is_warp else len(env_ids)) * self.num_dof
         if dof_states.shape[0] != expected_rows:
-            is_warp = isinstance(self.backend, WarpBackend)
             rows_label = "num_envs" if is_warp else "len(env_ids)"
             raise ValueError(
                 f"Unsupported dof_states first dimension {dof_states.shape[0]}: "
@@ -1323,7 +1318,7 @@ class MuJoCo(BaseSimulator):
             )
 
         rows = dof_states.reshape(-1, self.num_dof, 2)
-        if isinstance(self.backend, WarpBackend):
+        if is_warp:
             rows = rows[torch.as_tensor(env_ids, device=rows.device, dtype=torch.long)]
         self.dof_pos[env_ids] = rows[..., 0]
         self.dof_vel[env_ids] = rows[..., 1]

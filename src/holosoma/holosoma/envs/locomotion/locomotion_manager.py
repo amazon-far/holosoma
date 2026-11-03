@@ -264,7 +264,6 @@ class LeggedRobotLocomotionManager(BaseTask):
         self.push_robot_vel_buf[env_ids] = rand * max_vel_tensor.unsqueeze(0)
         self.record_push_robot_vel_buf[env_ids] = self.push_robot_vel_buf[env_ids].clone()
         self.simulator.robot_root_states[env_ids, 7:9] = self.push_robot_vel_buf[env_ids]
-        # Push impulses only take effect in the simulator once we write the mutated root state tensor back.
         self._max_push_vel = max_vel_tensor.clone()
 
     ################ ENV CALLBACKS #################

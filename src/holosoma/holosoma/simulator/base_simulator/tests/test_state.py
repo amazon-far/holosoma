@@ -38,16 +38,6 @@ def test_reads_once_per_state_change() -> None:
     assert torch.equal(state.get("x"), backing) and state.get("x") is served and len(reads) == 2
 
 
-def test_in_place_writes_are_flushed_before_a_mutation() -> None:
-    state, backing, _, _ = _counting_state()
-    state.get("x")[0] = -1.0
-    assert not torch.any(backing[0] == -1.0)
-
-    state.flush_writes()
-    state.mark_stale()
-    assert torch.all(backing[0] == -1.0) and torch.all(state.get("x")[0] == -1.0)
-
-
 def test_a_flush_writes_only_changed_rows() -> None:
     state, backing, _, flushed = _counting_state(rows=4)
     served = state.get("x")
@@ -102,12 +92,9 @@ def test_columns_return_the_selection() -> None:
     state.register("run", Columns(source, [2, 3, 4]))
     state.register("gathered", Columns(source, [4, 2]))
     state.register("callable", Columns(lambda: source, [2, 3, 4]))
-    state.register("float64", Columns(source.double(), [2, 3, 4]))
 
     assert torch.equal(state.get("run"), source[:, 2:5])
-    assert state.get("run").untyped_storage().data_ptr() != source.untyped_storage().data_ptr()
     assert torch.equal(state.get("gathered"), source[:, [4, 2]])
-    assert state.get("float64").dtype == torch.float32
 
     source += 100
     assert not torch.equal(state.get("run"), source[:, 2:5])

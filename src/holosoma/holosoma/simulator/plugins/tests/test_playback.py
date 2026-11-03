@@ -265,10 +265,6 @@ class _FakeSimulator:
         self.shutdown_requested = False
         self.object_writes: list[tuple[list[str], torch.Tensor]] = []
 
-    @property
-    def dof_state(self) -> torch.Tensor:
-        return torch.cat([self.dof_pos[..., None], self.dof_vel[..., None]], dim=-1)
-
     def set_actor_states(self, names: list[str], env_ids: torch.Tensor, states: torch.Tensor) -> None:
         self.object_writes.append((names, states.clone()))
 

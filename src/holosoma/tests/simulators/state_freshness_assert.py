@@ -3,8 +3,8 @@
 Settles the robot onto flat ground, then for several control frames compares every tensor the
 simulator's state registry serves with a fresh read at ``PRE_STEP`` and ``POST_STEP`` of every
 substep: joint state, root state, base orientation, body poses and contact forces through the
-backend's own buffers, and the rest by re-running their bound read. A
-tensor that is only refreshed at frame end would match at frame boundaries and fail mid-frame.
+backend's own buffers, and the rest by re-running their bound read. A tensor that is only refreshed
+at frame end would match at frame boundaries and fail mid-frame.
 
 Success is reported via an ``OK`` sentinel in ``--result-file`` followed by ``os._exit``
 (the _run_harness.py contract, as in contact_substep_assert.py).
@@ -53,12 +53,12 @@ def _fresh_mujoco(sim):
     import torch
 
     from holosoma.simulator.mujoco.backends.warp_backend import WarpBackend
+    from holosoma.utils.rotations import quat_rotate
 
     if isinstance(sim.backend, WarpBackend):
         qpos, qvel = sim.backend.qpos_t, sim.backend.qvel_t
     else:
         qpos, qvel = torch.from_numpy(sim.root_data.qpos)[None], torch.from_numpy(sim.root_data.qvel)[None]
-    from holosoma.utils.rotations import quat_rotate
 
     qp, qv = sim.object_addrs["robot"]["qpos_addr"], sim.object_addrs["robot"]["qvel_addr"]
     quat = qpos[:, qp + 3 : qp + 7][:, [1, 2, 3, 0]].float()  # wxyz -> xyzw
@@ -143,7 +143,6 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
         control_step(checked=True, write=frame == 1)
 
     failures += [f"{key} (max error {error:.3e})" for key, error in sorted(worst.items())]
-    # Without motion between substeps a frame-end snapshot would pass, so require it.
     slowest = min(motions)
     if slowest <= MIN_SUBSTEP_MOTION:
         failures.append(f"VACUOUS: a substep moved no body by more than {MIN_SUBSTEP_MOTION:g} m ({slowest:.2e})")
