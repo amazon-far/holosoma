@@ -181,6 +181,7 @@ class IsaacSim(BaseSimulator):
             logger.info("Starting the simulation. This may take a few seconds. Please wait...")
             with Timer("[INFO]: Time taken for simulation start", "simulation_start"):
                 self.sim.reset()
+            sensor_setup.sync_camera_fabric_transforms(self)
 
         self.default_coms = self._robot.root_physx_view.get_coms().clone()
         self.base_com_bias = torch.zeros((self.training_config.num_envs, 3), dtype=torch.float, device="cpu")
