@@ -176,7 +176,6 @@ class LeggedRobotLocomotionManager(BaseTask):
         if target_buf is not None:
             self.simulator.dof_pos[env_ids] = target_buf["dof_pos"].to(self.simulator.dof_pos.dtype)
             self.simulator.dof_vel[env_ids] = target_buf["dof_vel"].to(self.simulator.dof_vel.dtype)
-            self.base_quat[env_ids] = target_buf["base_quat"].to(self.base_quat.dtype)
             self.episode_length_buf[env_ids] = target_buf["episode_length_buf"].to(self.episode_length_buf.dtype)
             self.reset_buf[env_ids] = target_buf["reset_buf"].to(self.reset_buf.dtype)
             self.time_out_buf[env_ids] = target_buf["time_out_buf"].to(self.time_out_buf.dtype)
