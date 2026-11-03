@@ -46,7 +46,6 @@ services:
       - -c
       - >-
         source scripts/source_${FOLLOWER_ENV:-isaacsim}_setup.sh &&
-        python -m pip install -q --no-deps -e src/holosoma &&
         exec python src/holosoma/holosoma/run_sim.py simulator:${FOLLOWER_SIM:-isaacsim}
         ${COSIM_ARGS:-robot:g1-29dof sensor.head:g1-head}
         plugin.cosim:cosim-follower --plugin.cosim.endpoint tcp://0.0.0.0:5556
@@ -64,7 +63,6 @@ services:
       - -c
       - >-
         source scripts/source_${LEADER_ENV:-mujoco}_setup.sh &&
-        python -m pip install -q --no-deps -e src/holosoma &&
         exec python src/holosoma/holosoma/run_sim.py simulator:${LEADER_SIM:-mujoco}
         ${COSIM_ARGS:-robot:g1-29dof sensor.head:g1-head}
         plugin.cosim:cosim-leader --plugin.cosim.endpoint tcp://follower:5556
