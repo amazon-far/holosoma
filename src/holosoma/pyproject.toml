@@ -126,4 +126,5 @@ markers = [
     "no_sim: pure test, no simulator backend (CPU-only)",
     "multi_gpu: needs multiple GPUs",
     "requires_inference: needs the inference environment",
+    "cross_sim: needs both the MuJoCo and Isaac Sim environments",
 ]

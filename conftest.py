@@ -6,6 +6,7 @@ Run-target markers (exactly one per test; mutually exclusive):
     isaacsim / mujoco             — needs that simulator backend
     no_sim                        — pure test, no simulator (CPU job)
     requires_inference            — needs the inference env (e2e job)
+    cross_sim                     — needs both simulator envs (no CI job; run manually)
 
 Sub-tags (not used to pick a job; for manual ``-m`` selection):
     mujoco_classic / mujoco_warp  — which MuJoCo backend a mujoco test uses
@@ -21,7 +22,7 @@ import os
 
 import pytest
 
-_RUN_TARGETS = ("isaacsim", "mujoco", "no_sim", "requires_inference")
+_RUN_TARGETS = ("isaacsim", "mujoco", "no_sim", "requires_inference", "cross_sim")
 _SIM_DIRS = ("isaacsim", "mujoco")
 
 _ALL_MARKERS = {
@@ -32,6 +33,7 @@ _ALL_MARKERS = {
     "multi_gpu": "multiple GPUs",
     "no_sim": "no simulator (pure / CPU-only)",
     "requires_inference": "the inference environment",
+    "cross_sim": "both the MuJoCo and Isaac Sim environments",
 }
 
 

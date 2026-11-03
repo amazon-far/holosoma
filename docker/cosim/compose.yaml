@@ -1,0 +1,71 @@
+# Docker Compose for co-simulation: physics in one simulator, cameras rendered by another.
+#
+# Two services, one simulator each, talking over ZeroMQ on the compose network:
+#   leader    — runs the task and its physics with --simulator.config.sim.remote_sensors True and
+#               the cosim-leader plugin; its camera buffers hold the follower's images
+#   follower  — run_sim with kinematic playback and the cosim-follower plugin; renders the
+#               leader's robot and object poses each frame and returns the images
+# Both mount this checkout, so they run the same holosoma code, and both must use the same robot,
+# terrain, scene and camera sensor.* tokens (COSIM_ARGS).
+#
+# Usage, from the repo root (MuJoCo physics, Isaac Sim rendering):
+#   docker compose -f docker/cosim/compose.yaml up --abort-on-container-exit --exit-code-from leader
+#
+# Any pair of mujoco / mjwarp / isaacsim works, e.g. Isaac Sim physics with MuJoCo-Warp rendering:
+#   LEADER_SIM=isaacsim LEADER_IMAGE=holosoma-isaacsim LEADER_ENV=isaacsim \
+#   FOLLOWER_SIM=mjwarp FOLLOWER_IMAGE=holosoma-mujoco FOLLOWER_ENV=mujoco \
+#   docker compose -f docker/cosim/compose.yaml up --abort-on-container-exit --exit-code-from leader
+#
+# Variables (default):
+#   LEADER_SIM, FOLLOWER_SIM       simulator preset: mujoco | mjwarp | isaacsim  (mujoco, isaacsim)
+#   LEADER_IMAGE, FOLLOWER_IMAGE   image holding that simulator               (holosoma-mujoco, holosoma-isaacsim)
+#   LEADER_ENV, FOLLOWER_ENV       scripts/source_<env>_setup.sh to activate  (mujoco, isaacsim)
+#   COSIM_ARGS                     tokens shared by both sides       (robot:g1-29dof sensor.head:g1-head)
+#   LEADER_ARGS                    extra leader tokens, e.g. a frame consumer:
+#                                  plugin.out:frame-writer --plugin.out.output_dir logs/cosim_frames
+# MuJoCo-Warp needs the holosoma-mujoco image built with WARP=true.
+
+x-sim: &sim
+  runtime: nvidia
+  shm_size: 12g
+  working_dir: /workspace/holosoma
+  volumes:
+    - ../..:/workspace/holosoma
+  environment:
+    - NVIDIA_VISIBLE_DEVICES=all
+    - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
+    - MUJOCO_GL=egl
+    - OMNI_KIT_ACCEPT_EULA=1
+
+services:
+  follower:
+    <<: *sim
+    image: ${FOLLOWER_IMAGE:-holosoma-isaacsim}
+    command:
+      - bash
+      - -c
+      - >-
+        source scripts/source_${FOLLOWER_ENV:-isaacsim}_setup.sh &&
+        python -m pip install -q --no-deps -e src/holosoma &&
+        exec python src/holosoma/holosoma/run_sim.py simulator:${FOLLOWER_SIM:-isaacsim}
+        ${COSIM_ARGS:-robot:g1-29dof sensor.head:g1-head}
+        plugin.cosim:cosim-follower --plugin.cosim.endpoint tcp://0.0.0.0:5556
+        --simulator.config.sim.kinematic_playback True --simulator.config.sim.fps 50
+        --simulator.config.sim.control_decimation 1 --simulator.config.sim.render_interval 1
+        --simulator.config.bridge.enabled False --time-scale 0 --training.headless True
+
+  leader:
+    <<: *sim
+    image: ${LEADER_IMAGE:-holosoma-mujoco}
+    depends_on:
+      - follower
+    command:
+      - bash
+      - -c
+      - >-
+        source scripts/source_${LEADER_ENV:-mujoco}_setup.sh &&
+        python -m pip install -q --no-deps -e src/holosoma &&
+        exec python src/holosoma/holosoma/run_sim.py simulator:${LEADER_SIM:-mujoco}
+        ${COSIM_ARGS:-robot:g1-29dof sensor.head:g1-head}
+        plugin.cosim:cosim-leader --plugin.cosim.endpoint tcp://follower:5556
+        --simulator.config.sim.remote_sensors True --training.headless True ${LEADER_ARGS:-}
