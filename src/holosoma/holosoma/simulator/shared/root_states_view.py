@@ -7,10 +7,7 @@ returns, and routes ``proxy[indices]`` reads and ``proxy[indices] = states``
 writes through the simulator's :meth:`get_actor_states_by_index` /
 :meth:`set_actor_states_by_index`.
 
-The instance is created once at ``prepare_sim``, so the identity check in
-``set_actor_root_state_tensor`` (``root_states is self.all_root_states``) holds
-for callers that pass ``sim.all_root_states`` wholesale; that call writes the
-robot only and does not index this proxy.
+The instance is created once at ``prepare_sim``.
 
 Each row is the 13-vector ``[x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz]``
 in the WORLD frame, quaternion xyzw, both velocities world-frame.

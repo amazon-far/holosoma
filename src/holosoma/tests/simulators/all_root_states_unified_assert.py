@@ -18,11 +18,9 @@ including BOTH ``"robot"`` and the free object, in EVERY env:
      the quaternion intact.
   5. CLONE / SHAPE — .clone() returns [total_actors, 13] matching .shape and equals a full-range
      gather.
-  6. WHOLESALE-PASS INVARIANCE — set_actor_root_state_tensor(env_ids, all_root_states) moves only
-     the robot (the object is untouched).
-  7. UNIFIED set_actor_states — set_actor_states(["robot", "freebox"], ...) (the method, not the
+  6. UNIFIED set_actor_states — set_actor_states(["robot", "freebox"], ...) (the method, not the
      proxy) writes robot AND object uniformly in WORLD frame; both move, no origin double-count.
-  8. WORLD-FRAME VELOCITY ROUND-TRIP — a known world-frame LINEAR and ANGULAR velocity written via
+  7. WORLD-FRAME VELOCITY ROUND-TRIP — a known world-frame LINEAR and ANGULAR velocity written via
      set_actor_states reads back (after a few free-flight cache-refresh steps; x/y conserved, z by
      gravity) through get_actor_states for robot AND object. Guards the freejoint
      body-local<->world angular conversion for the robot (not just objects) AND that linear
@@ -180,22 +178,7 @@ def main() -> int:
         print("FAIL: clone() did not match a full-range gather")
         return 1
 
-    # ---- 6. WHOLESALE-PASS INVARIANCE ------------------------------------------------------
-    # set_actor_root_state_tensor(env_ids, all_root_states) must move only the robot: raise the
-    # robot z via robot_root_states, push the wholesale tensor, confirm the object is untouched.
-    obj_idx = sim.get_actor_indices(["freebox"], env_ids)
-    obj_before = sim.all_root_states[obj_idx][:, :3].clone()
-    sim.robot_root_states[env_ids, 2] += 0.07
-    sim.set_actor_root_state_tensor(env_ids, sim.all_root_states)
-    sim.write_state_updates()
-    obj_after = sim.all_root_states[obj_idx][:, :3]
-    obj_untouched = torch.allclose(obj_after, obj_before, atol=POS_ATOL)
-    print(f"  WHOLESALE-PASS object_untouched={bool(obj_untouched)}")
-    if not obj_untouched:
-        print("FAIL: wholesale set_actor_root_state_tensor(all_root_states) disturbed the object")
-        return 1
-
-    # ---- 7. UNIFIED set_actor_states(robot + object) ---------------------------------------
+    # ---- 6. UNIFIED set_actor_states(robot + object) ---------------------------------------
     # The unified set_actor_states method (NOT the proxy) must accept the ROBOT alongside an
     # object in one name-major call and write both straight through in WORLD frame. This is the
     # the robot is just another actor here; it writes the robot's
@@ -222,7 +205,7 @@ def main() -> int:
         print("FAIL: set_actor_states(['robot','freebox'], ...) did not write robot+object uniformly in world frame")
         return 1
 
-    # ---- 8. WORLD-FRAME VELOCITY ROUND-TRIP (robot + object, BOTH linear and angular) ------
+    # ---- 7. WORLD-FRAME VELOCITY ROUND-TRIP (robot + object, BOTH linear and angular) ------
     # The unified 13-vector contract is WORLD-frame for BOTH linear AND angular velocity on every
     # backend. We assert BOTH and EXACTLY (the freejoint body-local<->world angular conversion is
     # the headline, but linear must round-trip too — do NOT silently drop it). MuJoCo stores

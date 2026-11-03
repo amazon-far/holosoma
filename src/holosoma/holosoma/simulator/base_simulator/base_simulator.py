@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import dataclasses
-import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -104,8 +103,7 @@ class BaseSimulator:
     Tensor-only methods (``.view``/``.reshape``/``.to``) and ``isinstance(_, torch.Tensor)`` are
     not supported.
 
-    Passing it wholesale to ``set_actor_root_state_tensor`` writes the robot only (that method
-    detects the proxy by identity). Use ``set_actor_states`` to write objects.
+    Use ``set_actor_states`` to write objects.
 
     **Anti-Pattern (Don't Do This)**:
     >>> # Never assume specific index values
@@ -1409,157 +1407,3 @@ class BaseSimulator:
             If not implemented by subclass
         """
         raise NotImplementedError("Must be implemented in subclasses.")
-
-    # ----- Robot-Specific Interface -----
-
-    def set_actor_root_state_tensor(self, set_env_ids: EnvIds, root_states: torch.Tensor) -> None:
-        """Set **robot** root states (position/orientation) - backwards compatibility interface.
-
-        This method provides backwards compatibility for existing code that expects
-        to set robot states using the legacy interface. Delegates to the standardized
-        robot-specific method.
-
-        Parameters
-        ----------
-        set_env_ids : EnvIds
-            Environment IDs to update (see EnvIds type)
-        root_states : torch.Tensor
-            Robot root states to set, shape [num_envs, 13], dtype torch.float32.
-            Format: [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz]
-            where quaternion is in xyzw format.
-
-        Note
-        ----
-        This method is kept for backwards compatibility. New code should use
-        `set_actor_root_state_tensor_robots` directly.
-        """
-        # Reset the robot, kept for backwards compatiblity
-        return self.set_actor_root_state_tensor_robots(set_env_ids, root_states)
-
-    def set_actor_root_state_tensor_robots(
-        self, env_ids: EnvIds | None = None, root_states: torch.Tensor | None = None
-    ) -> None:
-        """Set robot root states (position/orientation) - standardized interface.
-
-        This method provides a consistent interface across simulators for setting
-        robot root states including position, orientation, and velocities.
-
-        Parameters
-        ----------
-        env_ids : EnvIds | None, default=None
-            Environment IDs to query (see EnvIds type). If None, applies to all environments.
-        root_states : torch.Tensor | None, default=None
-            Robot states to set, shape [num_envs, 13], dtype torch.float32.
-            Format: [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz]
-            where quaternion is in xyzw format. If None, uses current robot_root_states.
-
-        Examples
-        --------
-        >>> # Reset specific environments to current states
-        >>> env_ids = torch.tensor([0, 1, 2], device=device)
-        >>> sim.set_actor_root_state_tensor_robots(env_ids)
-
-        >>> # Set specific robot states
-        >>> reset_states = torch.zeros(len(env_ids), 13, device=device)
-        >>> reset_states[:, :3] = initial_positions  # Set positions
-        >>> reset_states[:, 3:7] = initial_quaternions  # Set orientations (xyzw)
-        >>> reset_states[:, 7:] = 0.0  # Zero velocities
-        >>> sim.set_actor_root_state_tensor_robots(env_ids, reset_states)
-
-        Notes
-        -----
-        - Works consistently across every backend
-        - Environment origins are automatically handled by the framework
-        - Quaternion format is xyzw (standard format)
-
-        See Also
-        --------
-        set_dof_state_tensor_robots : Set robot joint states
-        set_actor_states : Unified interface for all objects
-
-        Raises
-        ------
-        NotImplementedError
-            If not implemented by subclass
-        """
-        raise NotImplementedError("Subclasses must implement set_actor_root_state_tensor_robots")
-
-    def set_dof_state_tensor(self, set_env_ids: EnvIds, dof_states: torch.Tensor | None = None) -> None:
-        """Set **robot** DOF states (joint positions/velocities) - backwards compatibility interface.
-
-        This method provides backwards compatibility for existing code that expects
-        to set robot DOF states using the legacy interface. Delegates to the standardized
-        robot-specific method.
-
-        Parameters
-        ----------
-        set_env_ids : EnvIds
-            Environment IDs to update (see EnvIds type)
-        dof_states : torch.Tensor | None, default=None
-            DOF states to set. If None, uses current dof_state.
-
-        Note
-        ----
-        This method is kept for backwards compatibility. New code should use
-        `set_dof_state_tensor_robots` directly.
-        """
-        # Kept for backwards compatiblity
-        robot_dof_states = dof_states  # non-robot articulations are not yet supported
-        return self.set_dof_state_tensor_robots(set_env_ids, robot_dof_states)
-
-    def set_dof_state_tensor_robots(
-        self, env_ids: EnvIds | None = None, dof_states: torch.Tensor | None = None
-    ) -> None:
-        """Set robot DOF states (joint positions/velocities) - standardized interface.
-
-        This method provides a consistent interface across simulators for setting
-        robot joint positions and velocities.
-
-        **IMPORTANT**: Tensor shapes differ between simulators. See simulator-specific
-        documentation for the exact format expected by each implementation.
-
-        Parameters
-        ----------
-        env_ids : EnvIds | None, default=None
-            Environment IDs to query (see EnvIds type)
-        dof_states : torch.Tensor | None, default=None
-            DOF states to set, dtype torch.float32. **Shape varies by simulator**:
-
-            - **IsaacSim**: [num_envs, num_dofs, 2] - 3D tensor
-
-            Format: positions and velocities (see simulator docs for indexing).
-            If None, uses current dof_state.
-
-        Examples
-        --------
-        See simulator-specific implementations for correct tensor format examples:
-        - IsaacSim: `holosoma.simulator.isaacsim.IsaacSim.set_dof_state_tensor_robots`
-
-        Notes
-        -----
-        - **Tensor shape inconsistency**: Different simulators expect different shapes
-        - Joint positions should be within DOF limits
-        - Joint velocities are typically set to zero for resets
-        - Always check simulator-specific documentation for correct tensor format
-
-        See Also
-        --------
-        set_actor_root_state_tensor_robots : Set robot root states
-        get_dof_limits_properties : Get joint limits for validation
-
-        Raises
-        ------
-        NotImplementedError
-            If not implemented by subclass
-        """
-        raise NotImplementedError("Subclasses must implement set_dof_state_tensor_robots")
-
-
-def warn_state_setter_deprecated(name: str) -> None:
-    """Warn that the robot state setter ``name`` is deprecated in favour of in-place writes."""
-    warnings.warn(
-        f"{name} is deprecated: write the simulator's state tensors in place, and call forward_kinematics() "
-        "when the write must be visible before the next physics step.",
-        DeprecationWarning,
-        stacklevel=3,
-    )

@@ -18,7 +18,7 @@ from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.sensor import CameraSensorConfig, LidarSensorConfig
 from holosoma.config_types.simulator import MujocoBackend
 from holosoma.managers.terrain.manager import TerrainManager
-from holosoma.simulator.base_simulator.base_simulator import BaseSimulator, warn_state_setter_deprecated
+from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.base_simulator.state import Columns
 from holosoma.simulator.mujoco import light_setup
@@ -1161,80 +1161,6 @@ class MuJoCo(BaseSimulator):
             assert self.root_data
             mujoco.mj_forward(self.root_model, self.root_data)
 
-    def set_actor_root_state_tensor(self, set_env_ids: torch.Tensor | None, root_states: torch.Tensor | None) -> None:
-        """Legacy compatibility method for LeggedRobotBase.
-
-        This method provides backward compatibility with the existing LeggedRobotBase code
-        that calls set_actor_root_state_tensor. It delegates to the robot-specific method.
-
-        Parameters
-        ----------
-        set_env_ids : Optional[torch.Tensor]
-            Which environments to update (None = all).
-        root_states : Optional[torch.Tensor]
-            Root states tensor (can be all_root_states or robot_root_states).
-        """
-        # Handle the case where all_root_states tensor is passed
-        if root_states is not None and root_states is self.all_root_states:
-            # Use robot states view directly
-            self.set_actor_root_state_tensor_robots(set_env_ids, self.robot_root_states[set_env_ids])
-        else:
-            # Otherwise, assume it's already robot states
-            self.set_actor_root_state_tensor_robots(set_env_ids, root_states)
-
-    def set_dof_state_tensor(self, env_ids: EnvIds | None = None, dof_states: torch.Tensor | None = None) -> None:
-        """Legacy compatibility method for LeggedRobotBase.
-
-        This method provides backward compatibility with the existing LeggedRobotBase code
-        that calls set_dof_state_tensor. It delegates to the robot-specific method.
-
-        Parameters
-        ----------
-        env_ids : Optional[EnvIds]
-            Which environments to update (None = all).
-        dof_states : Optional[torch.Tensor]
-            DOF states tensor (flattened format).
-        """
-        self.set_dof_state_tensor_robots(env_ids, dof_states)
-
-    def set_actor_root_state_tensor_robots(
-        self, env_ids: EnvIds | None = None, root_states: torch.Tensor | None = None
-    ) -> None:
-        """Deprecated: write ``robot_root_states`` in place, then :meth:`forward_kinematics` if needed now.
-
-        Parameters
-        ----------
-        env_ids : Optional[EnvIds]
-            Which environments to update (None = all).
-        root_states : Optional[torch.Tensor]
-            Robot states to set. Can be either:
-            - Pre-sliced tensor [len(env_ids), 13] matching env_ids
-            - Full global tensor [num_envs, 13] (will be sliced automatically)
-            Format: [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz].
-            If None, uses current robot_root_states.
-        """
-        warn_state_setter_deprecated("set_actor_root_state_tensor_robots")
-        if env_ids is None:
-            env_ids = torch.arange(self.num_envs, device=self.sim_device)
-        if len(env_ids) == 0:
-            logger.info("No environments to update")
-            return
-
-        served = self.robot_root_states
-        if root_states is not None and root_states is not served:
-            # Accept a pre-sliced tensor [len(env_ids), 13] or a global one [num_envs, 13].
-            if len(root_states) != len(env_ids):
-                if len(root_states) != self.num_envs:
-                    raise ValueError(
-                        f"root_states dimension mismatch: got {len(root_states)}, "
-                        f"expected either {len(env_ids)} (pre-sliced) or {self.num_envs} (global)"
-                    )
-                root_states = root_states[env_ids]
-            if root_states.untyped_storage().data_ptr() == served.untyped_storage().data_ptr():
-                root_states = root_states.clone()  # a view of the served tensor
-            served[env_ids] = root_states
-        self.forward_kinematics()
-
     def _write_root_states(self, env_ids: EnvIds, root_states: torch.Tensor) -> None:
         """Write world-frame robot root states, one row per entry of ``env_ids``."""
         if self.num_dof == 0:
@@ -1253,75 +1179,6 @@ class MuJoCo(BaseSimulator):
             "robot_qvel_addr": self.object_addrs["robot"]["qvel_addr"],
         }
         self.backend.set_root_state(env_ids, root_states, root_addrs)
-
-    def set_dof_state_tensor_robots(
-        self, env_ids: EnvIds | None = None, dof_states: torch.Tensor | None = None
-    ) -> None:
-        """Deprecated: write ``dof_pos``/``dof_vel`` in place, then :meth:`forward_kinematics` if needed now.
-
-        Parameters
-        ----------
-        env_ids : Optional[EnvIds]
-            Which environments to update (None = all).
-        dof_states : Optional[torch.Tensor]
-            DOF states in the flattened 2D format ``[N * num_dof, 2]`` where
-            ``[:, 0] = positions`` and ``[:, 1] = velocities``. The required first
-            dimension depends on the active backend:
-
-            - **WarpBackend**: the FULL global tensor ``[num_envs * num_dof, 2]``.
-              The backend selects rows for ``env_ids`` internally, so even a partial
-              reset must pass states for all environments (this is how ``self.dof_state``
-              is shaped).
-            - **ClassicBackend** (single environment): ``[len(env_ids) * num_dof, 2]``.
-              With ``num_envs == 1`` this is equivalent to the global shape above.
-
-            If None, flushes the served ``dof_pos``/``dof_vel``.
-
-            Note: a 3D ``[num_envs, num_dofs, 2]`` tensor is NOT accepted by either
-            MuJoCo backend (unlike the IsaacSim implementation of this method).
-        """
-        warn_state_setter_deprecated("set_dof_state_tensor_robots")
-        if env_ids is None:
-            env_ids = torch.arange(self.num_envs, device=self.sim_device)
-        if len(env_ids) == 0:
-            logger.info("No environments to update")
-            return
-        if self.num_dof == 0:
-            logger.info("No robot DOFs available - skipping DOF state update")
-            return
-
-        if dof_states is not None:
-            self._write_dof_rows(env_ids, dof_states)
-        self.forward_kinematics()
-
-    def _write_dof_rows(self, env_ids: EnvIds, dof_states: torch.Tensor) -> None:
-        """Copy flattened ``dof_states`` rows for ``env_ids`` into the served ``dof_pos``/``dof_vel``."""
-        # Both MuJoCo backends consume the flattened 2D format only; neither
-        # handles the 3D [num_envs, num_dofs, 2] form (that is IsaacSim-specific).
-        if dof_states.dim() != 2:
-            raise ValueError(
-                f"Unsupported dof_states tensor shape {tuple(dof_states.shape)}: expected a 2D "
-                f"[N * num_dof, 2] tensor (flattened, [:, 0]=pos, [:, 1]=vel)."
-            )
-        # The required first dimension is backend-specific: Warp takes the FULL global tensor,
-        # indexed by env_ids ([num_envs * num_dof, 2]); classic takes it pre-sliced
-        # ([len(env_ids) * num_dof, 2]).
-        is_warp = isinstance(self.backend, WarpBackend)
-        expected_rows = (self.num_envs if is_warp else len(env_ids)) * self.num_dof
-        if dof_states.shape[0] != expected_rows:
-            rows_label = "num_envs" if is_warp else "len(env_ids)"
-            raise ValueError(
-                f"Unsupported dof_states first dimension {dof_states.shape[0]}: "
-                f"expected {expected_rows} (= {rows_label}"
-                f" * num_dof) for the active "
-                f"{type(self.backend).__name__}."
-            )
-
-        rows = dof_states.reshape(-1, self.num_dof, 2)
-        if is_warp:
-            rows = rows[torch.as_tensor(env_ids, device=rows.device, dtype=torch.long)]
-        self.dof_pos[env_ids] = rows[..., 0]
-        self.dof_vel[env_ids] = rows[..., 1]
 
     def get_dof_limits_properties(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Get DOF limits properties from the robot config (shared builder).

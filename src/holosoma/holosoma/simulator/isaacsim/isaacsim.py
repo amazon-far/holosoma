@@ -33,7 +33,7 @@ from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.sensor import CameraSensorConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
-from holosoma.simulator.base_simulator.base_simulator import BaseSimulator, warn_state_setter_deprecated
+from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.isaacsim.event_cfg import EventCfg
 from holosoma.simulator.isaacsim.events import randomize_body_com, randomize_rigid_body_inertia
 from holosoma.simulator.isaacsim import light_setup, sensor_setup
@@ -872,56 +872,11 @@ class IsaacSim(BaseSimulator):
 
         draw_line(self, start_point, end_point, color, env_id)
 
-    def set_actor_root_state_tensor_robots(
-        self, env_ids: EnvIds | None = None, root_states: torch.Tensor | None = None
-    ) -> None:
-        """Deprecated: write ``robot_root_states`` in place, then :meth:`forward_kinematics` if needed now."""
-        warn_state_setter_deprecated("set_actor_root_state_tensor_robots")
-        if env_ids is None:
-            env_ids = torch.arange(getattr(self, "num_envs", self.training_config.num_envs), device=self.sim_device)
-        env_ids = torch.as_tensor(env_ids, device=self.sim_device, dtype=torch.long)
-
-        # The served tensor, or the unified view passed wholesale, is flushed as is.
-        if root_states is not None and root_states is not self.all_root_states:
-            served = self.robot_root_states
-            rows = self._rows_for(env_ids, root_states)
-            if rows is not served:
-                if rows.untyped_storage().data_ptr() == served.untyped_storage().data_ptr():
-                    rows = rows.clone()  # a view of the served tensor
-                served[env_ids] = rows
-        self.forward_kinematics()
-
-    def _rows_for(self, env_ids: torch.Tensor, states: torch.Tensor) -> torch.Tensor:
-        """``states`` for ``env_ids``, given pre-sliced (one row per env id) or for every env."""
-        if len(states) == len(env_ids):
-            return states
-        if len(states) == self.num_envs:
-            return states[env_ids]
-        raise ValueError(f"states has {len(states)} rows; expected {len(env_ids)} (pre-sliced) or {self.num_envs}")
-
     def _write_root_states(self, env_ids: torch.Tensor, root_states: torch.Tensor) -> None:
         """Write xyzw robot root states, one row per entry of ``env_ids``."""
         root_wxyz = fullstate_xyzw_to_wxyz(root_states)
         self._robot.write_root_pose_to_sim(root_wxyz[:, :7], env_ids)
         self._robot.write_root_velocity_to_sim(root_wxyz[:, 7:], env_ids)
-
-    def set_dof_state_tensor_robots(
-        self, env_ids: EnvIds | None = None, dof_states: torch.Tensor | None = None
-    ) -> None:
-        """Deprecated: write ``dof_pos``/``dof_vel`` in place, then :meth:`forward_kinematics` if needed now.
-
-        ``dof_states`` is ``[len(env_ids) or num_envs, num_dof, 2]`` (positions, velocities).
-        """
-        warn_state_setter_deprecated("set_dof_state_tensor_robots")
-        if env_ids is None:
-            env_ids = torch.arange(getattr(self, "num_envs", self.training_config.num_envs), device=self.sim_device)
-        env_ids = torch.as_tensor(env_ids, device=self.sim_device, dtype=torch.long)
-
-        if dof_states is not None:
-            rows = self._rows_for(env_ids, dof_states)
-            self.dof_pos[env_ids] = rows[..., 0]
-            self.dof_vel[env_ids] = rows[..., 1]
-        self.forward_kinematics()
 
     def get_actor_indices(self, names: str | ActorNames, env_ids: EnvIds | None = None) -> ActorIndices:
         """See base class."""
