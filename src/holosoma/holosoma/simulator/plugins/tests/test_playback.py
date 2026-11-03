@@ -263,19 +263,11 @@ class _FakeSimulator:
         self.dof_vel = torch.zeros(num_envs, NUM_DOF)
         self.robot_root_states = torch.zeros(num_envs, 13)
         self.shutdown_requested = False
-        self.root_writes: list[torch.Tensor] = []
-        self.dof_writes: list[torch.Tensor] = []
         self.object_writes: list[tuple[list[str], torch.Tensor]] = []
 
     @property
     def dof_state(self) -> torch.Tensor:
         return torch.cat([self.dof_pos[..., None], self.dof_vel[..., None]], dim=-1)
-
-    def set_actor_root_state_tensor_robots(self, env_ids: torch.Tensor, root_states: torch.Tensor) -> None:
-        self.root_writes.append(root_states.clone())
-
-    def set_dof_state_tensor_robots(self, env_ids: torch.Tensor, dof_states: torch.Tensor) -> None:
-        self.dof_writes.append(dof_states.clone())
 
     def set_actor_states(self, names: list[str], env_ids: torch.Tensor, states: torch.Tensor) -> None:
         self.object_writes.append((names, states.clone()))
@@ -307,8 +299,6 @@ def test_plugin_writes_state_each_substep(tmp_path: Path) -> None:
     sim = _FakeSimulator()
     _make(_cfg(tmp_path), sim)
     _frame(sim)
-    assert len(sim.root_writes) == 2  # once per PRE_STEP substep
-    assert len(sim.dof_writes) == 2
     assert sim.dof_pos.tolist() == [[10.0, 20.0], [10.0, 20.0]]  # frame 0 joints on every env
     assert sim.robot_root_states[0, 0].item() == 0.0
     assert torch.all(sim.dof_vel == 0)  # velocities zeroed in kinematic playback
@@ -431,9 +421,10 @@ def test_plugin_drives_multiple_objects_in_order(tmp_path: Path) -> None:
 def test_plugin_fixed_base_skips_root_write(tmp_path: Path) -> None:
     sim = _FakeSimulator()
     _make(_cfg(tmp_path, fixed=True), sim)
+    sim.robot_root_states.fill_(7.0)
     _frame(sim)
-    assert sim.dof_writes  # joints still written
-    assert not sim.root_writes  # no root state on a fixed-base clip
+    assert sim.dof_pos.tolist() == [[10.0, 20.0], [10.0, 20.0]]  # joints still written
+    assert torch.all(sim.robot_root_states == 7.0)  # no root state on a fixed-base clip
 
 
 def test_plugin_requires_clip() -> None:

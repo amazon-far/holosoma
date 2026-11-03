@@ -869,9 +869,12 @@ class MuJoCo(BaseSimulator):
     def _step_dynamics(self) -> None:
         """Advance simulation by one physics step."""
         with self.state.mutation():
-            # Must run before backend.step() consumes xfrc_applied.
-            self.flush_external_wrench()
-            self.backend.step()
+            if self.kinematic_playback:
+                self._forward_kinematics()
+            else:
+                # Must run before backend.step() consumes xfrc_applied.
+                self.flush_external_wrench()
+                self.backend.step()
 
     @property
     def dof_state(self) -> torch.Tensor:

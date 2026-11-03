@@ -617,23 +617,18 @@ class BaseSimulator:
         One physics integration step, or — with ``sim.kinematic_playback`` — one
         forward-kinematics pass over externally written state.
         """
+        self._step_dynamics()
         if self.kinematic_playback:
-            self._step_kinematics()
             self._kinematic_time += 1.0 / self.simulator_config.sim.fps
-        else:
-            self._step_dynamics()
 
     def _step_dynamics(self) -> None:
         """Advance the physics engine by one integration step.
 
-        Implementations must call ``self.flush_external_wrench()`` at the top (after ``PRE_STEP``
-        hooks, before the native step) so :meth:`apply_external_force` takes effect this substep.
+        With ``sim.kinematic_playback``, run :meth:`_forward_kinematics` in place of the native step.
+        Otherwise implementations must call ``self.flush_external_wrench()`` before the native step
+        (after ``PRE_STEP`` hooks) so :meth:`apply_external_force` takes effect this substep.
         """
         raise NotImplementedError("The '_step_dynamics' method must be implemented in subclasses.")
-
-    def _step_kinematics(self) -> None:
-        """Advance one kinematic-playback step over externally written state."""
-        self.forward_kinematics()
 
     def forward_kinematics(self) -> None:
         """Write pending in-place state writes to the simulation and recompute body poses from them.
