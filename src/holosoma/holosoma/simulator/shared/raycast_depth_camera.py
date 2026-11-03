@@ -36,7 +36,7 @@ _OPTICAL_TO_PINHOLE_XYZW = (1.0, 0.0, 0.0, 0.0)
 _NO_HIT = wp.constant(math.inf)
 
 
-@wp.kernel
+@wp.kernel(enable_backward=False)
 def _render_depth_kernel(
     env_ids: wp.array(dtype=wp.int32),  # type: ignore[valid-type]
     terrain_mesh: wp.uint64,
@@ -119,7 +119,7 @@ class RayCastDepthCamera:
     def __init__(self, sim: BaseSimulator, config: CameraSensorConfig) -> None:
         self.sim = sim
         self.config = config
-        self.device = str(sim.sim_device)
+        self.device = sim.sim_device
         self._ready = False
         self._position_offset: torch.Tensor | None = None
         self._euler_offset: torch.Tensor | None = None
@@ -169,7 +169,7 @@ class RayCastDepthCamera:
             )
         self._terrain_mesh = terrain_mesh
 
-        # Square pixels; the principal point is the image center, as in the PHP release camera.
+        # Square pixels; the principal point is the image center.
         focal = (cfg.height / 2) / math.tan(math.radians(cfg.vertical_fov) / 2)
         intrinsics = np.array(
             [[focal, 0.0, cfg.width / 2, 0.0], [0.0, focal, cfg.height / 2, 0.0], [0.0, 0.0, 1.0, 0.0], [0, 0, 0, 1]],
@@ -189,6 +189,13 @@ class RayCastDepthCamera:
         self._body_quat[..., 3] = 1.0
         self._image = torch.zeros(num_envs, cfg.height, cfg.width, device=dev)
         self._all_envs = torch.arange(num_envs, dtype=torch.int32, device=dev)
+        # Warp views sharing the buffers' memory; the buffers are only ever written in place.
+        self._wp_cam_pos = wp.from_torch(self._cam_pos, dtype=wp.vec3)
+        self._wp_cam_quat = wp.from_torch(self._cam_quat, dtype=wp.quat)
+        self._wp_body_pos = wp.from_torch(self._body_pos, dtype=wp.vec3)
+        self._wp_body_quat = wp.from_torch(self._body_quat, dtype=wp.quat)
+        self._wp_image = wp.from_torch(self._image, dtype=wp.float32)
+        self._wp_all_envs = wp.from_torch(self._all_envs, dtype=wp.int32)
         self._ready = True
 
     def _set_mount_pose(self) -> None:
@@ -230,9 +237,10 @@ class RayCastDepthCamera:
         if "depth" not in record.buffers:
             env_ids = None
         self._update_poses()
-        ids = self._all_envs if env_ids is None else env_ids.to(device=self.device, dtype=torch.int32)
+        ids = self._all_envs if env_ids is None else env_ids.to(device=self.device, dtype=torch.int32).contiguous()
         if ids.numel() == 0:
             return
+        wp_ids = self._wp_all_envs if env_ids is None else wp.from_torch(ids, dtype=wp.int32)
         cfg = self.config
         # On torch's current stream, so the launch is ordered after the pose updates above and
         # before the reads below without a host sync, whichever stream torch is using.
@@ -241,17 +249,17 @@ class RayCastDepthCamera:
             _render_depth_kernel,
             dim=(ids.numel(), cfg.height, cfg.width),
             inputs=[
-                wp.from_torch(ids.contiguous(), dtype=wp.int32),
+                wp_ids,
                 self._terrain_mesh.id,
                 self._body_mesh_ids,
-                wp.from_torch(self._body_pos, dtype=wp.vec3),
-                wp.from_torch(self._body_quat, dtype=wp.quat),
+                self._wp_body_pos,
+                self._wp_body_quat,
                 len(self._body_ids),
-                wp.from_torch(self._cam_pos, dtype=wp.vec3),
-                wp.from_torch(self._cam_quat, dtype=wp.quat),
+                self._wp_cam_pos,
+                self._wp_cam_quat,
                 self._k_inv,
                 float(cfg.far),
-                wp.from_torch(self._image, dtype=wp.float32),
+                self._wp_image,
             ],
             device=self._wp_device,
             stream=stream,
