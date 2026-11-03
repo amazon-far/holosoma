@@ -15,11 +15,11 @@ Extensions register further bridges under the `holosoma.bridge` entry-point grou
 
 ## Tuning transport cost
 
-The bridge is a common source of slowdown. It runs on the simulator's step thread, so everything it
-does is paid per step, and with light physics — one robot on a plane — it can easily cost more than
-the physics itself. If a run will not hold real time, check the bridge before you blame the scene.
+The bridge runs on the simulator's step thread, so everything it does is paid per physics step, and
+with light physics — one robot on a plane — it can cost more than the physics itself. It is a good
+place to look when you want more simulation speed.
 
-Two settings are worth reaching for, and both trade something:
+Two settings control it, and each trades something:
 
 - **`simulator.config.bridge.transport-decimation`** defaults to `1`, running the SDK exchange on
   every physics step — 200 Hz at `sim.fps 200`, usually well above what the consumer needs. An
@@ -40,7 +40,7 @@ To size either for a given configuration, run with `--time-scale 0` and compare 
 child process, at the cost of a blocking parent/child round trip on every transport update. It is
 required only when the simulator process also loads `rclpy` (a ROS2 egress plugin): the Unitree SDK
 and ROS2 each bundle CycloneDDS, and the two heap-corrupt in one address space. Prefer `unitree`
-whenever ROS2 is not in the picture.
+when ROS2 is not involved.
 
 `publish_odom` on these bridges writes `SportModeState` to `rt/odommodestate`, the channel the
 robot's onboard sport mode publishes, which keeps a downstream `read_odom_state` →
