@@ -76,7 +76,6 @@ def _fresh_mujoco(sim):
         "dof_vel": qvel[:, sim.dof_qvel_addrs].clone(),
         "robot_root_states": root,
         "base_quat": root[:, 3:7],
-        "base_angular_vel": qvel[:, qv + 3 : qv + 6].clone(),
         "_rigid_body_pos": sim.backend.refresh_rigid_body_states()[0].clone(),
         "contact_forces": sim.backend.compute_contact_forces()[:, sim._body_ids_t].clone(),
     }

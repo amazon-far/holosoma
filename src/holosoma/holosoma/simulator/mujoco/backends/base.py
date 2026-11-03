@@ -99,9 +99,9 @@ class IMujocoBackend(abc.ABC):
     def forward_kinematics(self) -> None:
         """Propagate written qpos/qvel to derived quantities (xpos/xquat/geom/cam poses), no dynamics.
 
-        The FK-only refresh for kinematic playback: after ``qpos``/``qvel`` or ``set_actor_state``
-        writes, this makes everything the renderers read consistent with the written state
-        without integrating (no gravity, no contacts, no time advance).
+        After ``qpos``/``qvel`` or ``set_actor_state`` writes, this makes body state and everything
+        the renderers read consistent with the written state without integrating (no gravity, no
+        contacts, no time advance).
         """
         ...
 

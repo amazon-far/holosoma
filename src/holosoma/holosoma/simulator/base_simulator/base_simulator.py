@@ -157,7 +157,6 @@ class BaseSimulator:
     robot_root_states = StateTensor(
         "Robot root state ``[num_envs, 13]``: position, orientation (xyzw), world-frame linear and angular velocity."
     )
-    base_angular_vel = StateTensor("Robot root angular velocity, ``[num_envs, 3]``.")
     base_linear_acc = StateTensor("Robot root linear acceleration, ``[num_envs, 3]``.")
     contact_forces = StateTensor("Net contact force per robot body, ``[num_envs, num_bodies, 3]``.")
     contact_recorder: ContactSubstepRecorder
@@ -529,11 +528,11 @@ class BaseSimulator:
             f"{type(self).__name__} must implement _write_external_wrench_native for apply_external_force()"
         )
 
-    # ----- Simulation Preparation and Refresh Methods -----
+    # ----- Simulation Preparation -----
 
     def prepare_sim(self) -> None:
         """
-        Prepares the simulation environment and refreshes any relevant tensors.
+        Prepares the simulation environment and registers the robot state tensors.
         """
         raise NotImplementedError("The 'prepare_sim' method must be implemented in subclasses.")
 
@@ -994,7 +993,7 @@ class BaseSimulator:
     def render_sensors(self) -> None:
         """Capture all due mounted sensors at control frequency into their cached buffers.
 
-        Called once per control step from the task loop (after sim tensors refresh, before
+        Called once per control step from the task loop (after the physics substeps, before
         observations compute), honoring each sensor's ``update_decimation``. Consumers then do
         cheap cached reads through the camera/LiDAR accessors."""
         raise NotImplementedError("The 'render_sensors' method must be implemented in subclasses.")

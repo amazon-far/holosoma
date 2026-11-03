@@ -7,8 +7,6 @@ returns, and routes ``proxy[indices]`` reads and ``proxy[indices] = states``
 writes through the simulator's :meth:`get_actor_states_by_index` /
 :meth:`set_actor_states_by_index`.
 
-The instance is created once at ``prepare_sim``.
-
 Each row is the 13-vector ``[x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz]``
 in the WORLD frame, quaternion xyzw, both velocities world-frame.
 """

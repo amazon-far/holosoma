@@ -1,43 +1,11 @@
-"""
-Test suite for PyTorch JIT compilation
-
-We have tests because we wrap @torch.jit.script to handle custom tensor views.
-
-We test torch_jit utility to ensure:
-1. JIT compilation is actually working (creating optimized graphs)
-2. MuJoCo-style tensor views integrate correctly with JIT
-3. Proxy object conversion is working efficiently
-"""
+"""Tests that torch_jit_script compiles functions, caches them, and supports nested JIT calls."""
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 import torch
 
-from holosoma.utils.torch_jit import _is_tensor_proxy, proxy_compatible, torch_jit_script
-
-
-class MockMujocoView:
-    """Mock MuJoCo view class for testing proxy integration."""
-
-    def __init__(self, data: np.ndarray | list, device: str = "cpu"):
-        """Initialize mock view with data."""
-        if isinstance(data, list):
-            data = np.array(data, dtype=np.float32)
-        self.data = torch.from_numpy(data).to(device, dtype=torch.float32)
-        self._is_tensor_proxy = True  # Required for proxy detection
-        self.conversion_count = 0  # Track how many times conversion is called
-
-    def __getitem__(self, key) -> torch.Tensor:
-        """Convert to tensor when accessed (simulates MuJoCo view behavior)."""
-        self.conversion_count += 1
-        return self.data[key]
-
-    @property
-    def shape(self):
-        """Return shape like real MuJoCo views."""
-        return self.data.shape
+from holosoma.utils.torch_jit import torch_jit_script
 
 
 class TestBasicJitCompilation:
@@ -51,8 +19,7 @@ class TestBasicJitCompilation:
             return x * 2 + 1
 
         # Verify the function has a graph (compilation succeeded)
-        assert hasattr(simple_function, "__wrapped__"), "JIT function should have __wrapped__ attribute"
-        wrapped_func = simple_function.__wrapped__
+        wrapped_func = simple_function
         assert hasattr(wrapped_func, "graph"), "JIT compilation should create a graph"
 
         # Verify the graph contains expected operations
@@ -89,79 +56,8 @@ class TestBasicJitCompilation:
         # Results should be identical
         assert torch.equal(result1, result2), "Cached function should produce identical results"
 
-        # The wrapped function should be the same object (cached)
-        assert cached_function.__wrapped__ is cached_function.__wrapped__, "Function should be cached"
-
-
-class TestProxyObjectIntegration:
-    """Test integration with proxy objects (MuJoCo views)."""
-
-    def test_proxy_detection(self):
-        """Test that proxy objects are correctly detected."""
-
-        # Regular tensor should not be detected as proxy
-        regular_tensor = torch.tensor([1.0, 2.0, 3.0])
-        assert not _is_tensor_proxy(regular_tensor), "Regular tensor should not be proxy"
-
-        # Mock view should be detected as proxy
-        mock_view = MockMujocoView([1.0, 2.0, 3.0])
-        assert _is_tensor_proxy(mock_view), "Mock view should be detected as proxy"
-
-    def test_jit_with_proxy_objects(self):
-        """Test that JIT functions work correctly with proxy objects."""
-
-        @torch_jit_script
-        def process_proxy(x: torch.Tensor) -> torch.Tensor:
-            return x * 3 + torch.cos(x)
-
-        # Create mock view
-        mock_view = MockMujocoView([1.0, 2.0, 3.0, 4.0])
-
-        # Function should work with proxy
-        result = process_proxy(mock_view)
-        expected = mock_view.data * 3 + torch.cos(mock_view.data)
-
-        assert torch.allclose(result, expected), "JIT function should work with proxy objects"
-        assert mock_view.conversion_count > 0, "Proxy should have been converted"
-
-    def test_mixed_tensor_and_proxy_arguments(self):
-        """Test JIT functions with mixed tensor and proxy arguments."""
-
-        @torch_jit_script
-        def mixed_function(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-            return x + y * 2
-
-        regular_tensor = torch.tensor([1.0, 2.0])
-        mock_view = MockMujocoView([3.0, 4.0])
-
-        result = mixed_function(regular_tensor, mock_view)
-        expected = regular_tensor + mock_view.data * 2
-
-        assert torch.allclose(result, expected), "Mixed arguments should work correctly"
-
-    def test_proxy_conversion_overhead(self):
-        """Test and measure proxy conversion overhead."""
-
-        @torch_jit_script
-        def simple_add(x: torch.Tensor) -> torch.Tensor:
-            return x + 1
-
-        # Create mock view
-        mock_view = MockMujocoView([1.0, 2.0, 3.0, 4.0])
-
-        # Reset conversion counter
-        mock_view.conversion_count = 0
-
-        # Call function multiple times
-        iterations = 10
-        for _ in range(iterations):
-            result = simple_add(mock_view)
-            assert torch.allclose(result, torch.tensor([2.0, 3.0, 4.0, 5.0]))
-
-        # Conversion should happen on every call (this is the overhead concern)
-        assert mock_view.conversion_count == iterations, (
-            f"Expected {iterations} conversions, got {mock_view.conversion_count}"
-        )
+        # Compiling the same function again returns the cached object
+        assert torch_jit_script(cached_function) is cached_function, "Function should be cached"
 
 
 class TestNestedJitFunctions:
@@ -196,8 +92,8 @@ class TestNestedJitFunctions:
             assert torch.allclose(result, expected), "Main function should work correctly"
 
             # Both functions should have graphs
-            assert hasattr(helper_function.__wrapped__, "graph"), "Helper function should be compiled"
-            assert hasattr(main_function.__wrapped__, "graph"), "Main function should be compiled"
+            assert hasattr(helper_function, "graph"), "Helper function should be compiled"
+            assert hasattr(main_function, "graph"), "Main function should be compiled"
 
         except Exception as e:
             # If nested JIT calls fail, that's a known limitation we can document
@@ -216,7 +112,7 @@ class TestJitGraphInspection:
             w = torch.matmul(z, z.T)
             return torch.relu(w)
 
-        wrapped_func = complex_function.__wrapped__
+        wrapped_func = complex_function
         graph_str = str(wrapped_func.graph)
 
         # Check for expected operations (matmul can be aten::matmul or aten::mm)
@@ -245,7 +141,7 @@ class TestJitGraphInspection:
             c = b - 1
             return c  # noqa: RET504 Should optimize to x * 2 + 1
 
-        wrapped_func = optimization_test.__wrapped__
+        wrapped_func = optimization_test
 
         # Test that we can inspect the graph
         graph = wrapped_func.graph
@@ -260,57 +156,6 @@ class TestJitGraphInspection:
         expected = input_tensor * 2 + 1
 
         assert torch.allclose(result, expected), "Optimized function should produce correct results"
-
-
-class TestProxyCompatibleDecorator:
-    """Test the proxy_compatible decorator in isolation."""
-
-    def test_proxy_compatible_with_regular_tensors(self):
-        """Test proxy_compatible decorator with regular tensors."""
-
-        @proxy_compatible
-        def simple_function(x: torch.Tensor) -> torch.Tensor:
-            return x * 2
-
-        regular_tensor = torch.tensor([1.0, 2.0, 3.0])
-        result = simple_function(regular_tensor)
-        expected = regular_tensor * 2
-
-        assert torch.allclose(result, expected), "Should work with regular tensors"
-
-    def test_proxy_compatible_with_mock_views(self):
-        """Test proxy_compatible decorator with mock views."""
-
-        @proxy_compatible
-        def process_function(x: torch.Tensor) -> torch.Tensor:
-            return x + 10
-
-        mock_view = MockMujocoView([1.0, 2.0, 3.0])
-        result = process_function(mock_view)
-        expected = mock_view.data + 10
-
-        assert torch.allclose(result, expected), "Should work with proxy objects"
-        assert mock_view.conversion_count > 0, "Should have converted proxy"
-
-    def test_proxy_compatible_error_handling(self):
-        """Test error handling in proxy_compatible decorator."""
-
-        class BadProxy:
-            def __init__(self):
-                self._is_tensor_proxy = True
-
-            def __getitem__(self, key):
-                # Return something that's not a tensor
-                return "not a tensor"
-
-        @proxy_compatible
-        def test_function(x: torch.Tensor) -> torch.Tensor:
-            return x
-
-        bad_proxy = BadProxy()
-
-        with pytest.raises(TypeError, match="appeared to be a proxy.*failed conversion"):
-            test_function(bad_proxy)
 
 
 if __name__ == "__main__":

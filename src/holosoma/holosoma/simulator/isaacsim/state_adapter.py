@@ -156,9 +156,7 @@ class IsaacSimStateAdapter:
         obj_type = self._object_registry.get_object_type(obj_name)
 
         if obj_type == "robot":
-            # Write the robot directly via write_root_pose/velocity_to_sim (xyzw->wxyz).
-            # NOTE: Intentionally does NOT apply env origins offsets for backwards compatibilty
-            #       with existing robot root state setters
+            # Robot states are world-frame with env origins included, as robot_root_states serves them.
             converted_states = fullstate_xyzw_to_wxyz(states)
             self._robot.write_root_pose_to_sim(converted_states[:, :7], env_ids)
             self._robot.write_root_velocity_to_sim(converted_states[:, 7:], env_ids)

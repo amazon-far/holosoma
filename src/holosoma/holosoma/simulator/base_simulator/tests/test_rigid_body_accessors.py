@@ -1,7 +1,7 @@
 """Unit tests for the public robot rigid-body kinematics accessors (pure, no simulator, CPU-only).
 
-Pins that the four ``rigid_body_*_w`` properties are zero-cost views onto the live ``_rigid_body_*``
-storage (identity, no copy) and track reassignment (IsaacSim rebinds them each refresh).
+Pins that the four ``rigid_body_*_w`` properties return the served ``_rigid_body_*`` tensors (identity,
+no copy).
 """
 
 from __future__ import annotations
@@ -43,14 +43,6 @@ def test_properties_alias_storage_no_copy() -> None:
     assert sim.rigid_body_quat_w is sim._rigid_body_rot
     assert sim.rigid_body_lin_vel_w is sim._rigid_body_vel
     assert sim.rigid_body_ang_vel_w is sim._rigid_body_ang_vel
-
-
-def test_properties_track_reassignment() -> None:
-    """IsaacSim reassigns _rigid_body_* each refresh; the property must reflect the latest."""
-    sim = _FakeSim()
-    new_pos = torch.full((2, 3, 3), 7.0)
-    sim._rigid_body_pos = new_pos
-    assert sim.rigid_body_pos_w is new_pos
 
 
 def test_property_shapes() -> None:

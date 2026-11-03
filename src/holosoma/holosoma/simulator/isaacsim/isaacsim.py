@@ -50,7 +50,7 @@ from holosoma.simulator.isaacsim.object_spawner import (
 )
 from holosoma.simulator.isaacsim.scene_fixtures import build_terrain_fixtures
 from holosoma.simulator.base_simulator.state import Columns
-from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw, fullstate_xyzw_to_wxyz
+from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw
 from holosoma.simulator.shared.dof_limits import build_dof_limits_from_config
 from holosoma.simulator.shared.external_wrench import WrenchTarget
 from holosoma.simulator.shared.root_states_view import UnifiedRootStatesView
@@ -702,7 +702,7 @@ class IsaacSim(BaseSimulator):
         self.state.register(
             "robot_root_states",
             lambda: fullstate_wxyz_to_xyzw(data.root_state_w),
-            write=lambda rows, root: self._write_root_states(rows, root[rows]),
+            write=lambda rows, root: self._state_adapter.write_object_states("robot", root[rows], rows),
         )
         self.state.register(
             "dof_pos",
@@ -869,12 +869,6 @@ class IsaacSim(BaseSimulator):
         from holosoma.utils.draw import draw_line
 
         draw_line(self, start_point, end_point, color, env_id)
-
-    def _write_root_states(self, env_ids: torch.Tensor, root_states: torch.Tensor) -> None:
-        """Write xyzw robot root states, one row per entry of ``env_ids``."""
-        root_wxyz = fullstate_xyzw_to_wxyz(root_states)
-        self._robot.write_root_pose_to_sim(root_wxyz[:, :7], env_ids)
-        self._robot.write_root_velocity_to_sim(root_wxyz[:, 7:], env_ids)
 
     def get_actor_indices(self, names: str | ActorNames, env_ids: EnvIds | None = None) -> ActorIndices:
         """See base class."""

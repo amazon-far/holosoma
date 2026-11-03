@@ -179,7 +179,6 @@ def _run(
     sim: _FakeSim,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    backend: SimulatorType = SimulatorType.ISAACSIM,
     headless: bool = True,
     viewer_dt: float = 1.0,
 ) -> None:
@@ -188,7 +187,7 @@ def _run(
     The backend is reported by patching the loader the module resolved, leaving the process-wide
     simulator-type singleton alone so ordering against other tests cannot matter.
     """
-    monkeypatch.setattr("holosoma.utils.sim_utils.get_simulator_type", lambda: backend)
+    monkeypatch.setattr("holosoma.utils.sim_utils.get_simulator_type", lambda: SimulatorType.ISAACSIM)
     config = _run_sim_config(
         decimation=sim.decimation, render_interval=sim.render_interval, headless=headless, viewer_dt=viewer_dt
     )

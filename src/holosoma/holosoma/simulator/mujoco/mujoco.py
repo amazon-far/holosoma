@@ -793,8 +793,6 @@ class MuJoCo(BaseSimulator):
         state.register("dof_acc", Columns(qacc, self.dof_qvel_addrs))
 
         qvel_addr = self.object_addrs["robot"]["qvel_addr"]
-        angular_vel_ids = range(qvel_addr + 3, qvel_addr + 6)
-        state.register("base_angular_vel", Columns(qvel, angular_vel_ids))
         linear_acc_ids = range(qvel_addr, qvel_addr + 3)
         state.register("base_linear_acc", Columns(qacc, linear_acc_ids))
         if b > 0:
@@ -983,7 +981,7 @@ class MuJoCo(BaseSimulator):
             else:
                 # Free body / robot: read the live freejoint state, per-env (GPU for
                 # WarpBackend). Velocity is the freejoint qvel (body-local angular),
-                # matching the set path and the robot's base_angular_vel.
+                # matching the set path.
                 qpos_addr, qvel_addr = self._actor_freejoint_addrs(obj_name)
                 states_for_envs = self.backend.get_actor_state(env_ids, qpos_addr, qvel_addr)  # [num_envs, 13]
             all_states.append(states_for_envs)
