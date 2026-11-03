@@ -4,7 +4,7 @@ A backend binds each state quantity once, in ``prepare_sim``, with :meth:`SimSta
 returns the current value: a function returning a tensor (or a tuple of tensors, one per name), or a
 :class:`Columns` spec, a column selection of a backend tensor. The registry copies each value into a
 float32 buffer allocated on the first read, on the first access after the simulation state changed, and
-``write`` (or ``Columns(..., write=True)``) flushes in-place changes back to the simulation, row by row.
+``write`` flushes in-place changes back to the simulation, row by row.
 
 Every served tensor keeps its identity, so references to it stay valid. Reads see the current
 simulation state. In-place writes reach the simulation before its next physics step, FK pass, refresh
@@ -86,27 +86,15 @@ class Columns:
 
     ``source`` may be a callable returning the current tensor, for backends that replace their storage.
     The value is moved to ``device`` when given. A contiguous ascending run of ids is returned as a slice,
-    without a gather. With ``write``, changed rows are written back into ``source``'s columns, so
-    ``source`` must be the simulation's own storage.
+    without a gather.
     """
 
     source: torch.Tensor | Callable[[], torch.Tensor]
     ids: Sequence[int]
     device: torch.device | str | None = None
-    write: bool = False
-
-    def _data(self) -> torch.Tensor:
-        return self.source if isinstance(self.source, torch.Tensor) else self.source()
-
-    def write_rows(self, rows: torch.Tensor, value: torch.Tensor) -> None:
-        """Write ``value``'s ``rows`` back into the columns ``ids`` of ``source``."""
-        target = self._data()
-        ids = torch.as_tensor(list(self.ids), dtype=torch.long, device=target.device)
-        target_rows = rows.to(target.device)
-        target[target_rows.unsqueeze(1), ids.unsqueeze(0)] = value[rows].to(target)
 
     def __call__(self) -> torch.Tensor:
-        data = self._data()
+        data = self.source if isinstance(self.source, torch.Tensor) else self.source()
         run = contiguous_run(self.ids)
         if run is not None:
             value = data.narrow(1, run[0], run[1])
@@ -150,13 +138,8 @@ class SimState:
     ) -> None:
         """Serve ``read``'s values as ``names``, re-read after a state change and flushed by ``write(rows, *buffers)``.
 
-        ``read`` returns one tensor per name. A ``Columns(..., write=True)`` read writes itself back.
-        Without either, the tensors are read-only.
+        ``read`` returns one tensor per name. Without ``write`` the tensors are read-only.
         """
-        if isinstance(read, Columns) and read.write:
-            if write is not None:
-                raise ValueError("Pass write= or Columns(write=True), not both")
-            write = read.write_rows
         names = (names,) if isinstance(names, str) else tuple(names)
         registration = _Registration(names, read, write)
         for name in names:

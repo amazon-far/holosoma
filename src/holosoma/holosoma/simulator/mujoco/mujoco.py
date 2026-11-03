@@ -774,9 +774,21 @@ class MuJoCo(BaseSimulator):
         qpos, qvel, qacc = self._mj_arrays()
         state = self.state
 
-        # The sources are views of the MuJoCo data (classic's MjData arrays, Warp's GPU arrays).
-        state.register("dof_pos", Columns(qpos, self.dof_qpos_addrs, device=device, write=True))
-        state.register("dof_vel", Columns(qvel, self.dof_qvel_addrs, device=device, write=True))
+        def current(source: Any) -> torch.Tensor:
+            return source if isinstance(source, torch.Tensor) else source()
+
+        def write_columns(source: Any, ids: list[int]) -> Any:
+            ids_t = torch.as_tensor(ids, dtype=torch.long, device=current(source).device)
+
+            def write(rows: torch.Tensor, out: torch.Tensor) -> None:
+                target = current(source)  # classic: a view of the MjData array
+                target_rows = rows.to(target.device)
+                target[target_rows.unsqueeze(1), ids_t.unsqueeze(0)] = out[rows].to(target)
+
+            return write
+
+        for name, source, ids in (("dof_pos", qpos, self.dof_qpos_addrs), ("dof_vel", qvel, self.dof_qvel_addrs)):
+            state.register(name, Columns(source, ids, device=device), write=write_columns(source, ids))
         state.register("dof_acc", Columns(qacc, self.dof_qvel_addrs, device=device))
 
         qvel_addr = self.object_addrs["robot"]["qvel_addr"]

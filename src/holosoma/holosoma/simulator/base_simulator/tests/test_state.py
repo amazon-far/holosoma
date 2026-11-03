@@ -116,22 +116,6 @@ def test_columns_return_the_selection() -> None:
     assert torch.equal(state.get("callable"), source[:, 2:5])
 
 
-@pytest.mark.parametrize("ids", [[2, 3, 4], [4, 2]])
-def test_writable_columns_write_changed_rows_back(ids: list[int]) -> None:
-    source = torch.arange(18, dtype=torch.float64).reshape(3, 6)
-    expected = source.clone()
-    state = SimState()
-    state.register("x", Columns(source, ids, write=True))
-
-    state.get("x")[1] = -1.0
-    expected[1, ids] = -1.0
-    state.flush_writes()
-    assert torch.equal(source, expected)
-
-    with pytest.raises(ValueError, match="not both"):
-        state.register("y", Columns(source, ids, write=True), write=lambda *_: None)
-
-
 def test_state_tensor_assignment_serves_the_value() -> None:
     class Sim:
         x = StateTensor("x")
