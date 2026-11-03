@@ -83,6 +83,9 @@ def _fresh_mujoco(sim):
 
 def _fresh(sim, simulator: str):
     """An independent read of the backend buffers per served name; other names re-run their bound read."""
+    if sim.state.pending_kinematics is not None:  # bring body kinematics current, as any body read does
+        update, sim.state.pending_kinematics = sim.state.pending_kinematics, None
+        update()
     fresh = _fresh_isaacsim(sim) if simulator == "isaacsim" else _fresh_mujoco(sim)
     for name in sim.state.names():
         if name not in fresh:
@@ -156,6 +159,13 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
                 key = f"{name} stale at {phase}"
                 worst[key] = max(worst.get(key, 0.0), error)
         if phase == "POST_STEP":
+            # The root link is the robot's first body: its pose must be the integrated root pose, not the
+            # pose the step started from.
+            lag = (sim.state.get("_rigid_body_pos")[:, 0] - sim.robot_root_states[:, :3]).abs().max().item()
+            if lag > ATOL:
+                worst["root body position differs from robot_root_states after a step"] = max(
+                    worst.get("root body position differs from robot_root_states after a step", 0.0), lag
+                )
             positions = fresh["_rigid_body_pos"].float()
             if previous:
                 motions.append((positions - previous[0]).abs().max().item())

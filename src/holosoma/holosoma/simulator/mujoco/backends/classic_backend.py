@@ -140,6 +140,12 @@ class ClassicBackend(IMujocoBackend):
         """FK-only refresh via mj_forward (no integration, data.time unchanged)."""
         mujoco.mj_forward(self.model, self.data)
 
+    def update_body_kinematics(self) -> None:
+        """Position and velocity stages only, leaving the step's accelerations and contacts."""
+        mujoco.mj_kinematics(self.model, self.data)
+        mujoco.mj_comPos(self.model, self.data)
+        mujoco.mj_comVel(self.model, self.data)
+
     def get_render_data(self, world_id: int = 0) -> mujoco.MjData:
         """Return data for rendering (already on CPU).
 

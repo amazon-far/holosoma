@@ -106,6 +106,11 @@ class IMujocoBackend(abc.ABC):
         ...
 
     @abc.abstractmethod
+    def update_body_kinematics(self) -> None:
+        """Recompute body poses and velocities from qpos/qvel; ``step`` leaves them one step behind."""
+        ...
+
+    @abc.abstractmethod
     def compute_contact_forces(self) -> torch.Tensor:
         """Return current-frame net contact forces for ALL model bodies.
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from holosoma.simulator.base_simulator.state import Columns, SimState
+from holosoma.simulator.base_simulator.state import Columns, SimState, StateTensor, sim_state
 
 pytestmark = pytest.mark.no_sim
 
@@ -147,6 +147,53 @@ def test_a_flush_keeps_written_tensors_valid() -> None:
     assert flushed == [[0], [1]] and torch.equal(backing, held)
     state.get("y")
     assert len(other_reads) == 2  # tensors that were not written are re-read
+
+
+def test_a_flush_keeps_other_writable_tensors_valid() -> None:
+    state, backing, _, flushed = _counting_state()
+    other = torch.zeros(2, 3)
+    state.register("z", lambda: other, write=lambda rows, out: other.__setitem__(rows, out[rows]))
+    held = state.get("z")
+    state.get("x")[0] = -1.0
+    state.flush_writes()
+    held[1] = 5.0  # a writable input is not changed by another's flush
+    state.flush_writes()
+    assert torch.all(other[1] == 5.0)
+
+
+def test_a_stale_write_raises_at_the_next_flush() -> None:
+    state, backing, _, flushed = _counting_state()
+    held = state.get("x")
+    state.mark_stale()  # a physics step
+    held[0] = -1.0
+    with pytest.raises(RuntimeError, match="written in place after"):
+        state.flush_writes()
+    assert flushed == [] and not torch.any(backing == -1.0)
+    state.flush_writes()  # discarded: raises once
+
+
+def test_assigning_a_registered_tensor_raises() -> None:
+    class Sim:
+        x = StateTensor("x")
+
+    sim = Sim()
+    sim.x = torch.zeros(2)  # a placeholder before registration
+    sim_state(sim).register("x", lambda: torch.ones(2))
+    with pytest.raises(AttributeError, match="in place"):
+        sim.x = torch.zeros(2)
+
+
+def test_pending_kinematics_run_once_before_a_kinematic_read() -> None:
+    state = SimState()
+    calls: list[int] = []
+    state.register("body", lambda: torch.zeros(2, 3), needs_kinematics=True)
+    state.register("q", lambda: torch.zeros(2, 3))
+    state.pending_kinematics = lambda: calls.append(1)
+    state.get("q")
+    assert calls == []
+    state.get("body")
+    state.get("body")
+    assert calls == [1]
 
 
 def test_mutation_flushes_first_and_marks_stale_after_even_on_error() -> None:

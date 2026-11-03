@@ -294,7 +294,7 @@ def _cfg(tmp_path: Path, **kw: Any) -> MotionPlaybackPluginConfig:
     return MotionPlaybackPluginConfig(motion_files=[_write(tmp_path, "clip.npy", mat)], **kw)
 
 
-def test_plugin_writes_state_each_substep(tmp_path: Path) -> None:
+def test_plugin_writes_the_clip_state(tmp_path: Path) -> None:
     sim = _FakeSimulator()
     _make(_cfg(tmp_path), sim)
     _frame(sim)

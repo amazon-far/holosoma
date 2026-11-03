@@ -28,12 +28,15 @@ Read = Callable[[], "torch.Tensor | tuple[torch.Tensor, ...]"]
 
 
 class _Registration:
-    __slots__ = ("buffers", "clean", "names", "read", "valid", "write")
+    __slots__ = ("buffers", "clean", "names", "needs_kinematics", "read", "valid", "write")
 
-    def __init__(self, names: tuple[str, ...], read: Read, write: Callable[..., None] | None) -> None:
+    def __init__(
+        self, names: tuple[str, ...], read: Read, write: Callable[..., None] | None, needs_kinematics: bool
+    ) -> None:
         self.names = names
         self.read = read
         self.write = write
+        self.needs_kinematics = needs_kinematics
         self.buffers: tuple[torch.Tensor, ...] = ()
         self.valid = False
         self.clean: tuple[int, ...] = ()
@@ -114,6 +117,8 @@ class SimState:
         self._tensors: dict[str, torch.Tensor] = {}
         self._by_name: dict[str, _Registration] = {}
         self._registrations: list[_Registration] = []
+        # Set by a backend whose step leaves body kinematics behind the integrated state.
+        self.pending_kinematics: Callable[[], None] | None = None
 
     @overload
     def register(
@@ -122,6 +127,7 @@ class SimState:
         read: Columns,
         *,
         write: Callable[[torch.Tensor, torch.Tensor], None] | None = None,
+        needs_kinematics: bool = False,
     ) -> None: ...
 
     @overload
@@ -131,6 +137,7 @@ class SimState:
         read: Read,
         *,
         write: Callable[..., None] | None = None,
+        needs_kinematics: bool = False,
     ) -> None: ...
 
     def register(
@@ -139,13 +146,15 @@ class SimState:
         read: Columns | Read,
         *,
         write: Callable[..., None] | None = None,
+        needs_kinematics: bool = False,
     ) -> None:
         """Serve ``read``'s values as ``names``, re-read after a state change and flushed by ``write(rows, *buffers)``.
 
-        ``read`` returns one tensor per name. Without ``write`` the tensors are read-only.
+        ``read`` returns one tensor per name. Without ``write`` the tensors are read-only. With
+        ``needs_kinematics``, a pending kinematics update (:attr:`pending_kinematics`) runs before the read.
         """
         names = (names,) if isinstance(names, str) else tuple(names)
-        registration = _Registration(names, read, write)
+        registration = _Registration(names, read, write, needs_kinematics)
         for name in names:
             self._unbind(name)
             self._by_name[name] = registration
@@ -153,6 +162,8 @@ class SimState:
 
     def _serve(self, name: str, tensor: Any) -> None:
         """Serve ``tensor`` as ``name`` as is, outside the registry's reads and writes."""
+        if name in self._by_name:
+            raise AttributeError(f"Simulator state {name!r} is served by the simulator; write into it in place instead")
         self._unbind(name)
         self._tensors[name] = tensor
 
@@ -166,10 +177,21 @@ class SimState:
             self.mark_stale()
 
     def flush_writes(self) -> None:
-        """Write the rows written in place to the simulation, then mark every other tensor stale if any were.
+        """Write the rows written in place to the simulation, then mark read-only tensors stale if any were.
 
-        A flushed tensor stays valid: its buffer already holds what the simulation now has.
+        Writable tensors stay valid: each is an independent input, so a write changes no other writable
+        tensor, and a flushed buffer already holds what the simulation now has.
         """
+        stale_written = [
+            registration
+            for registration in self._registrations
+            if not registration.valid and registration.buffers and registration.written()
+        ]
+        if stale_written:
+            for registration in stale_written:  # discard the write, so the next access re-reads
+                registration.mark_clean()
+            names = ", ".join(name for registration in stale_written for name in registration.names)
+            raise RuntimeError(f"Simulator state {names} was written in place after the simulation changed it")
         written = [
             registration for registration in self._registrations if registration.valid and registration.written()
         ]
@@ -190,7 +212,7 @@ class SimState:
             registration.mark_clean()
         if flushed:
             for registration in self._registrations:
-                if registration not in written:
+                if registration.write is None:
                     registration.valid = False
 
     def mark_stale(self) -> None:
@@ -205,6 +227,9 @@ class SimState:
                 return self._tensors[name]
             except KeyError:
                 raise AttributeError(f"Simulator state {name!r} is not bound") from None
+        if registration.needs_kinematics and self.pending_kinematics is not None:
+            update, self.pending_kinematics = self.pending_kinematics, None
+            update()
         if not registration.valid:
             if registration.written():
                 registration.mark_clean()  # discard the write, so the next access re-reads

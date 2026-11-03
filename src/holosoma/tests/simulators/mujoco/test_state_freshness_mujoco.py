@@ -12,54 +12,35 @@ pytest.importorskip("mujoco")
 from tests.simulators._run_harness import run_harness  # noqa: E402
 
 _HARNESS = Path(__file__).resolve().parents[1] / "state_freshness_assert.py"
+_NEEDS_CUDA = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
 
 
-@pytest.mark.mujoco_classic
-def test_state_freshness_classic(tmp_path):
+@pytest.mark.parametrize(
+    ("label", "args"),
+    [
+        pytest.param("classic", ["--simulator", "mujoco"], marks=pytest.mark.mujoco_classic, id="classic"),
+        pytest.param(
+            "classic, cuda",
+            ["--simulator", "mujoco", "--device", "cuda:0"],
+            marks=[pytest.mark.mujoco_classic, _NEEDS_CUDA],
+            id="classic-cuda",
+        ),
+        pytest.param(
+            "warp",
+            ["--simulator", "mjwarp", "--num-envs", "4"],
+            marks=[pytest.mark.mujoco_warp, _NEEDS_CUDA],
+            id="warp",
+        ),
+    ],
+)
+def test_state_freshness(tmp_path, label, args):
     result_file = tmp_path / "result.txt"
     run_harness(
         _HARNESS,
-        "--simulator",
-        "mujoco",
+        *args,
         "--result-file",
         str(result_file),
-        label="mujoco/state-freshness (classic)",
-        timeout=600,
-        result_file=result_file,
-    )
-
-
-@pytest.mark.mujoco_classic
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
-def test_state_freshness_classic_on_cuda(tmp_path):
-    result_file = tmp_path / "result.txt"
-    run_harness(
-        _HARNESS,
-        "--simulator",
-        "mujoco",
-        "--device",
-        "cuda:0",
-        "--result-file",
-        str(result_file),
-        label="mujoco/state-freshness (classic, cuda)",
-        timeout=600,
-        result_file=result_file,
-    )
-
-
-@pytest.mark.mujoco_warp
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="Warp requires a CUDA device")
-def test_state_freshness_warp(tmp_path):
-    result_file = tmp_path / "result.txt"
-    run_harness(
-        _HARNESS,
-        "--simulator",
-        "mjwarp",
-        "--num-envs",
-        "4",
-        "--result-file",
-        str(result_file),
-        label="mjwarp/state-freshness",
+        label=f"mujoco/state-freshness ({label})",
         timeout=600,
         result_file=result_file,
     )
