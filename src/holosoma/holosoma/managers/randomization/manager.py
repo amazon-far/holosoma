@@ -222,7 +222,7 @@ class RandomizationManager:
                     else:
                         raise
 
-        self.env.simulator.apply_state_writes()
+        self.env.simulator.forward_kinematics()
 
     def reset(self, env_ids: Any) -> None:
         """Run episodic hooks during environment reset.

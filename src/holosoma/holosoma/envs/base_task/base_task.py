@@ -240,7 +240,7 @@ class BaseTask:
         env_ids = torch.arange(self.num_envs, device=self.device)
         self.reset_envs_idx(env_ids)
 
-        self.simulator.apply_state_writes()
+        self.simulator.forward_kinematics()
 
         actions = torch.zeros(self.num_envs, self.dim_actions, device=self.device, requires_grad=False)
         actor_state = {}

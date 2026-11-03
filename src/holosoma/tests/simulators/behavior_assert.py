@@ -754,7 +754,7 @@ def assert_object_obs_under_pose(ctx):
     for e in range(ctx.n):
         root[e, 3:7] = t.tensor([0.0, 0.0, math.sin(0.5 * e / 2), math.cos(0.5 * e / 2)], device=root.device)
     sim.robot_root_states[:] = root
-    sim.apply_state_writes()
+    sim.forward_kinematics()
 
     shell = types.SimpleNamespace(simulator=sim, num_envs=ctx.n, device=sim.sim_device)
     rp = sim.robot_root_states[:][:, :3]

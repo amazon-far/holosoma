@@ -127,7 +127,7 @@ def _seed_motion(sim) -> None:
     root[0, 7:10] = torch.as_tensor(ROOT_LINEAR_VELOCITY_W, dtype=root.dtype, device=root.device)
     root[0, 10:13] = torch.as_tensor(ROOT_ANGULAR_VELOCITY_W, dtype=root.dtype, device=root.device)
     sim.robot_root_states[:] = root
-    sim.apply_state_writes()
+    sim.forward_kinematics()
 
 
 def _make_plugin(sim) -> ROS2OdometryPlugin:

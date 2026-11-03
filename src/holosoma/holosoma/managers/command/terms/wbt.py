@@ -817,7 +817,7 @@ class MotionCommand(CommandTermBase):
             # rigid-body positions are up-to-date for downstream consumers
             # (termination checks, observations, rewards).
             sim = self._env.simulator
-            sim.apply_state_writes()
+            sim.forward_kinematics()
             # The teleport is an observation reset: drop history and re-render these envs.
             self._env.observation_manager.reset(ended_env_ids)
 
@@ -1283,7 +1283,7 @@ class MotionCommand(CommandTermBase):
             simulator.robot_root_states[env_id, 10:13] = root_ang_vel
             simulator.dof_pos[env_id] = joint_pos
             simulator.dof_vel[env_id] = joint_vel
-            simulator.apply_state_writes()
+            simulator.forward_kinematics()
 
             body_pos = (simulator._rigid_body_pos[env_id] - env_origin).clone()
             body_quat = simulator._rigid_body_rot[env_id].clone()
@@ -1293,7 +1293,7 @@ class MotionCommand(CommandTermBase):
             simulator.robot_root_states[env_id] = root_backup
             simulator.dof_pos[env_id] = dof_pos_backup
             simulator.dof_vel[env_id] = dof_vel_backup
-            simulator.apply_state_writes()
+            simulator.forward_kinematics()
 
         return {
             "pos": body_pos,

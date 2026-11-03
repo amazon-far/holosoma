@@ -86,7 +86,7 @@ def _build(simulator: str, num_envs: int):
 
 
 def _body_positions(sim):
-    sim.apply_state_writes()
+    sim.forward_kinematics()
     return sim.rigid_body_pos_w.clone()
 
 

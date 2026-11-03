@@ -132,7 +132,7 @@ class LeggedRobotLocomotionManager(BaseTask):
         return self.need_to_refresh_envs.nonzero(as_tuple=False).flatten()
 
     def _refresh_envs_after_reset(self, env_ids: torch.Tensor) -> None:
-        self.simulator.apply_state_writes()
+        self.simulator.forward_kinematics()
         self.need_to_refresh_envs[env_ids] = False
         self._pre_compute_observations_callback()
 

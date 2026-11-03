@@ -532,10 +532,10 @@ class BaseSimulator:
         raise NotImplementedError("The 'prepare_sim' method must be implemented in subclasses.")
 
     def refresh_sim_tensors(self) -> None:
-        """Deprecated: state tensors are current at every read; use :meth:`apply_state_writes` to apply writes now."""
+        """Deprecated: state tensors are current at every read; use :meth:`forward_kinematics` to apply writes now."""
         warnings.warn(
             "refresh_sim_tensors is deprecated: state tensors are current at every read. Call "
-            "apply_state_writes() to apply in-place writes, or after changing simulation state directly.",
+            "forward_kinematics() to apply in-place writes, or after changing simulation state directly.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -608,7 +608,7 @@ class BaseSimulator:
         for target, values in ((self.dof_pos, positions), (self.dof_vel, velocities or {})):
             for col, value in zip(self.dof_indices(list(values)), values.values(), strict=True):
                 target[env_ids, col] = torch.as_tensor(value, dtype=target.dtype, device=target.device)
-        self.apply_state_writes()
+        self.forward_kinematics()
 
     def apply_torques_by_names(self, torques: Mapping[str, float | torch.Tensor]) -> None:
         """Apply torques to the named DOFs only (see :meth:`apply_torques_at_dof` with ``dof_indices``).
@@ -629,7 +629,7 @@ class BaseSimulator:
         forward-kinematics pass over externally written state.
         """
         if self.kinematic_playback:
-            self.forward_kinematics()
+            self._step_kinematics()
             self._kinematic_time += 1.0 / self.simulator_config.sim.fps
         else:
             self._step_dynamics()
@@ -642,26 +642,21 @@ class BaseSimulator:
         """
         raise NotImplementedError("The '_step_dynamics' method must be implemented in subclasses.")
 
-    def apply_state_writes(self) -> None:
-        """Write the state written in place to the simulation now, and update the body poses derived from it.
-
-        Without this, in-place writes land before the next physics step or FK pass, and body poses update
-        with it. Unlike :meth:`forward_kinematics`, it does not render or advance sensor clocks.
-        """
-        with self.state.mutation():
-            self._update_kinematics()
-
-    def _update_kinematics(self) -> None:
-        """Recompute body poses from the written joint/root state, with no dynamics, rendering or clocks."""
-        raise NotImplementedError("The '_update_kinematics' method must be implemented in subclasses.")
+    def _step_kinematics(self) -> None:
+        """Advance one kinematic-playback step over externally written state."""
+        self.forward_kinematics()
 
     def forward_kinematics(self) -> None:
-        """Propagate written joint/root state to derived body and camera poses, without dynamics.
+        """Write pending in-place state writes to the simulation and recompute body poses from them.
 
-        Makes everything renderers read consistent with state set via the ``set_*`` APIs.
-        No integration and no time advance.
+        In-place writes otherwise land at the next physics step. No dynamics, rendering or time advance.
         """
-        raise NotImplementedError("The 'forward_kinematics' method must be implemented in subclasses.")
+        with self.state.mutation():
+            self._forward_kinematics()
+
+    def _forward_kinematics(self) -> None:
+        """Recompute body poses from the simulation's joint/root state."""
+        raise NotImplementedError("The '_forward_kinematics' method must be implemented in subclasses.")
 
     # ----- Viewer Setup and Rendering Methods -----
 
@@ -1579,7 +1574,7 @@ class BaseSimulator:
 def warn_state_setter_deprecated(name: str) -> None:
     """Warn that the robot state setter ``name`` is deprecated in favour of in-place writes."""
     warnings.warn(
-        f"{name} is deprecated: write the simulator's state tensors in place, and call apply_state_writes() "
+        f"{name} is deprecated: write the simulator's state tensors in place, and call forward_kinematics() "
         "when the write must be visible before the next physics step.",
         DeprecationWarning,
         stacklevel=3,

@@ -790,23 +790,23 @@ class IsaacSim(BaseSimulator):
             self._base_linear_acc.copy_((current_base_vel - self.prev_base_lin_vel) / self.sim_dt)
             self.prev_base_lin_vel = current_base_vel.clone()
 
-    def _update_kinematics(self) -> None:
-        """Flush written state and update articulation kinematics, without scene.update() or rendering."""
+    def _forward_kinematics(self) -> None:
         self.scene.write_data_to_sim()
+        # Runs physics_sim_view.update_articulations_kinematic() and flushes fabric, so body/camera
+        # prims match the written joint/root state without integrating.
         self.sim.forward()
 
-    def forward_kinematics(self) -> None:
-        """Flush pending state writes and update articulation kinematics, fabric, and the render
-        products — without stepping physics. ``sim.current_time`` does not advance."""
+    def _step_kinematics(self) -> None:
+        """Forward kinematics, then render and update sensors as a physics step would.
+
+        ``sim.current_time`` does not advance.
+        """
         self._sim_step_counter += 1
         has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording
         is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors() or has_video_recording
 
         with self.state.mutation():
-            self.scene.write_data_to_sim()
-            # sim.forward() runs physics_sim_view.update_articulations_kinematic() and flushes
-            # fabric, so body/camera prims match the written joint/root state without integrating.
-            self.sim.forward()
+            self._forward_kinematics()
 
             # Same render gate as _step_dynamics: RTX sensors (TiledCameras) only track the new
             # poses after a render tick.
@@ -895,7 +895,7 @@ class IsaacSim(BaseSimulator):
     def set_actor_root_state_tensor_robots(
         self, env_ids: EnvIds | None = None, root_states: torch.Tensor | None = None
     ) -> None:
-        """Deprecated: write ``robot_root_states`` in place, then :meth:`apply_state_writes` if needed now."""
+        """Deprecated: write ``robot_root_states`` in place, then :meth:`forward_kinematics` if needed now."""
         warn_state_setter_deprecated("set_actor_root_state_tensor_robots")
         if env_ids is None:
             env_ids = torch.arange(getattr(self, "num_envs", self.training_config.num_envs), device=self.sim_device)
@@ -904,7 +904,7 @@ class IsaacSim(BaseSimulator):
         # The served tensor, or the unified view passed wholesale, is flushed as is.
         if root_states is not None and root_states is not self.all_root_states:
             self._write_served_rows(self.robot_root_states, env_ids, self._rows_for(env_ids, root_states))
-        self.apply_state_writes()
+        self.forward_kinematics()
 
     @staticmethod
     def _write_served_rows(served: torch.Tensor, env_ids: torch.Tensor, rows: torch.Tensor) -> None:
@@ -932,7 +932,7 @@ class IsaacSim(BaseSimulator):
     def set_dof_state_tensor_robots(
         self, env_ids: EnvIds | None = None, dof_states: torch.Tensor | None = None
     ) -> None:
-        """Deprecated: write ``dof_pos``/``dof_vel`` in place, then :meth:`apply_state_writes` if needed now.
+        """Deprecated: write ``dof_pos``/``dof_vel`` in place, then :meth:`forward_kinematics` if needed now.
 
         ``dof_states`` is ``[len(env_ids) or num_envs, num_dof, 2]`` (positions, velocities).
         """
@@ -945,7 +945,7 @@ class IsaacSim(BaseSimulator):
             rows = self._rows_for(env_ids, dof_states)
             self.dof_pos[env_ids] = rows[..., 0]
             self.dof_vel[env_ids] = rows[..., 1]
-        self.apply_state_writes()
+        self.forward_kinematics()
 
     def get_actor_indices(self, names: str | ActorNames, env_ids: EnvIds | None = None) -> ActorIndices:
         """See base class."""

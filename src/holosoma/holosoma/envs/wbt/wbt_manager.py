@@ -58,7 +58,7 @@ class WholeBodyTrackingManager(BaseTask):
         return self.need_to_refresh_envs.nonzero(as_tuple=False).flatten()
 
     def _refresh_envs_after_reset(self, env_ids: torch.Tensor) -> None:
-        self.simulator.apply_state_writes()
+        self.simulator.forward_kinematics()
         self.need_to_refresh_envs[env_ids] = False
         self._pre_compute_observations_callback()
 
@@ -211,7 +211,7 @@ class WholeBodyTrackingManager(BaseTask):
             object_name = motion_command.object_name  # type: ignore[has-type]
             self.simulator.set_actor_states([object_name], env_ids, object_states)
 
-        self.simulator.apply_state_writes()
+        self.simulator.forward_kinematics()
         self.simulator.sim.render()  # type: ignore[attr-defined]
 
         time.sleep(dt)

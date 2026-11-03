@@ -113,7 +113,7 @@ def main() -> int:
         if args.simulator == "isaacsim":
             sim.dof_pos[_all_ids] = _spawn_dof_pos
             sim.dof_vel[_all_ids] = 0.0
-            sim.apply_state_writes()
+            sim.forward_kinematics()
 
     import math
 

@@ -878,14 +878,9 @@ class MuJoCo(BaseSimulator):
         """Robot DOF states flattened to ``[num_envs * num_dof, 2]`` (``[:, 0]`` positions, ``[:, 1]`` velocities)."""
         return torch.stack([self.dof_pos, self.dof_vel], dim=-1).reshape(-1, 2)
 
-    def _update_kinematics(self) -> None:
+    def _forward_kinematics(self) -> None:
+        """Classic: ``mj_forward``; Warp: ``mjw.kinematics`` + ``camlight``."""
         self.backend.forward_kinematics()
-
-    def forward_kinematics(self) -> None:
-        """Recompute body/geom/camera poses from written state (classic: ``mj_forward``; warp:
-        ``mjw.kinematics`` + ``camlight``). No integration."""
-        with self.state.mutation():
-            self.backend.forward_kinematics()
 
     def _write_external_wrench_native(self, targets: list[WrenchTarget]) -> None:
         """Set world-frame wrenches into xfrc_applied (world frame at CoM).
@@ -1202,7 +1197,7 @@ class MuJoCo(BaseSimulator):
     def set_actor_root_state_tensor_robots(
         self, env_ids: EnvIds | None = None, root_states: torch.Tensor | None = None
     ) -> None:
-        """Deprecated: write ``robot_root_states`` in place, then :meth:`apply_state_writes` if needed now.
+        """Deprecated: write ``robot_root_states`` in place, then :meth:`forward_kinematics` if needed now.
 
         Parameters
         ----------
@@ -1235,7 +1230,7 @@ class MuJoCo(BaseSimulator):
             if root_states.untyped_storage().data_ptr() == served.untyped_storage().data_ptr():
                 root_states = root_states.clone()  # a view of the served tensor
             served[env_ids] = root_states
-        self.apply_state_writes()
+        self.forward_kinematics()
 
     def _write_root_states(self, env_ids: EnvIds, root_states: torch.Tensor) -> None:
         """Write world-frame robot root states, one row per entry of ``env_ids``."""
@@ -1259,7 +1254,7 @@ class MuJoCo(BaseSimulator):
     def set_dof_state_tensor_robots(
         self, env_ids: EnvIds | None = None, dof_states: torch.Tensor | None = None
     ) -> None:
-        """Deprecated: write ``dof_pos``/``dof_vel`` in place, then :meth:`apply_state_writes` if needed now.
+        """Deprecated: write ``dof_pos``/``dof_vel`` in place, then :meth:`forward_kinematics` if needed now.
 
         Parameters
         ----------
@@ -1294,7 +1289,7 @@ class MuJoCo(BaseSimulator):
 
         if dof_states is not None:
             self._write_dof_rows(env_ids, dof_states)
-        self.apply_state_writes()
+        self.forward_kinematics()
 
     def _write_dof_rows(self, env_ids: EnvIds, dof_states: torch.Tensor) -> None:
         """Copy flattened ``dof_states`` rows for ``env_ids`` into the served ``dof_pos``/``dof_vel``."""
