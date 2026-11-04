@@ -183,7 +183,7 @@ Select plugins as the dynamic-dict `plugin.<key>:<preset>` (per-key leaf overrid
 
 ### Phases
 
-A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=None, every=1, key=None, after=(), before=())`, which returns the `HookHandle` others order themselves against. `name` shows up in `names(phase)`, cycle reports and teardown failures, defaulting to the callback's qualname. Per control frame the loop emits, in order:
+A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=None, every=1, key=None, after=(), before=())`, which returns the `HookHandle` others order themselves against. `name` labels the hook in diagnostics and defaults to the callback's qualname. Per control frame the loop emits, in order:
 
 | Phase | When | Callback args | Cadence |
 |---|---|---|---|
@@ -196,9 +196,9 @@ A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=No
 
 ### Ordering
 
-Within a phase, hooks run in registration order — which for plugins means the order their slots were selected, so don't rely on it. Declare what you need instead with `after` / `before`. Hooks with no constraints keep their order relative to each other, though a constraint can move others past them.
+Within a phase, hooks run in registration order, which for plugins means the order their slots were selected — so declare what you need with `after` / `before`. Unconstrained hooks keep their order relative to each other.
 
-**Depend on the handle `add` returns.** The framework keeps the ones others follow: `simulator.sensor_render_hook` for the sensor refresh, the bridge's `transport_hook`, and `close_hook` on the shared ROS2 runtime.
+**Depend on the handle `add` returns.** The framework keeps the ones others follow: `simulator.sensor_render_hook`, the bridge's `transport_hook`, and `close_hook` on the shared ROS2 runtime. Keep your own on a public attribute if other code should be able to follow you.
 
 ```python
 simulator.hooks.add(
@@ -206,36 +206,24 @@ simulator.hooks.add(
 )
 ```
 
-Keep your own handles on a public attribute if other code should be able to follow you; a frozen dataclass reads well once there are several.
-
-**To depend on a provider you can't hold**, it publishes a member of its own `Enum` and you reference that plus the slot it's configured in. The reference resolves once every plugin is installed, so neither side has to be constructed first:
+**To follow a provider you can't hold**, it publishes a member of its own `Enum` from its constructor and you reference that plus the slot it runs in, which resolves once every plugin is installed:
 
 ```python
-class CameraHook(Enum):
-    PUBLISH = auto()
-
-
 simulator.hooks.add(Phase.FRAME_END, self._publish, name="my_camera.publish", key=CameraHook.PUBLISH)
 
-simulator.hooks.add(                                             # a separately constructed consumer
+simulator.hooks.add(                                         # a separately constructed consumer
     Phase.FRAME_END, self._inspect, name="my_inspector.read",
     after=[HookRef(self.cfg.follows, CameraHook.PUBLISH)],
 )
 ```
 
-Matching is by enum type and member identity, never the member's value or spelling, so two plugins can each define a `PUBLISH` without colliding. One instance publishes a key once; two instances may publish the same key, which is what lets a reference pick the `head` camera over the `wrist` one. Keys belong to the slot being constructed, so publish from your constructor. Take the slot through your own config (`follows` above) rather than hardcoding one — slot keys belong to whoever launches the run, the same convention sensor routes follow.
+Take the slot through your own config, as sensor routes do; slot keys belong to whoever launches the run.
 
-**Targets are required.** A target nothing has registered fails the run rather than quietly ordering nothing, so wrap the ones a run may legitimately lack:
+**Targets are required**, so wrap the ones a run may lack in `if_present(...)`. A disabled target satisfies the reference but contributes no edge, so ordering reflects only the hooks that fire.
 
-```python
-after=[simulator.sensor_render_hook, if_present(HookRef("wrist", CameraHook.PUBLISH))]
-```
+**`hooks.validate()` runs at the end of `install_plugins`**, resolving every phase without calling anything, so a cycle or an unresolved target stops the run before the first step. Hooks registered later are checked when their phase next resolves. `hooks.names(phase)` returns the resolved order.
 
-Presence is about registration, not execution: a target that exists but is disabled satisfies the reference and contributes no edge. So ordering always reflects the hooks that actually fire — disabling a link drops the order it was carrying, and a cycle broken by a disabled hook stays satisfiable. Ordering is phase-scoped throughout, and a handle or reference for another phase is rejected.
-
-**Failure is early and loud.** `install_plugins` calls `hooks.validate()` once everything a run configures has registered, resolving every phase without invoking a callback, so a cycle or an unresolved target stops the run before the first step rather than at the first emit of whichever phase carried it. Hooks registered later are validated when their phase next resolves, so registering late stays legal. For debugging, `hooks.names(phase)` returns the resolved order.
-
-**`CLOSE` reads like it runs.** It sorts under the same rules as every other phase and prefers the latest-registered hook among those ready, so teardown reverses construction without anyone declaring it, while `before`/`after` still mean what they say: a node's cleanup declares `before=[runtime.close_hook]` and runs before the context closes. Cleanup is one pass that stops at the first failing callback, leaving providers up for whatever a failed consumer may still need.
+**`CLOSE` sorts like every other phase** but breaks ties toward the latest registered, so teardown reverses construction while `before`/`after` still describe execution: a node's cleanup declares `before=[runtime.close_hook]`. It is one pass that stops at the first failing callback.
 
 ### Cadence
 
