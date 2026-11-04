@@ -3,7 +3,6 @@ from __future__ import annotations
 import functools
 import heapq
 import inspect
-from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
@@ -13,9 +12,9 @@ from typing_extensions import Literal, Self
 
 from holosoma.config_types.frequency import DecimationLike, is_frequency_string, resolve_decimation
 
-HookDependency = Union[str, "HookHandle", "HookRef", "_OptionalTarget"]
-"""What ``after``/``before`` accept: a hook name, a :class:`HookHandle`, a :class:`HookRef`, or
-:func:`if_present` of any of those."""
+HookDependency = Union["HookHandle", "HookRef", "_OptionalTarget"]
+"""What ``after``/``before`` accept: a :class:`HookHandle`, a :class:`HookRef`, or :func:`if_present`
+of either. Hook names are labels for diagnostics and never identify a dependency."""
 
 
 @dataclass(frozen=True)
@@ -113,10 +112,10 @@ class _HookRecord:
     """Plugin slot that registered this hook, or ``None`` for the framework's own."""
     key: Enum | None = None
     """Contract member this hook is published under, for :class:`HookRef` to resolve."""
-    after: tuple[str | _HookRecord | HookRef | _OptionalTarget, ...] = field(default=(), repr=False)
-    """Same-phase hooks this one must run after: a name matches all its holders, a record just one."""
-    before: tuple[str | _HookRecord | HookRef | _OptionalTarget, ...] = field(default=(), repr=False)
-    """Same-phase hooks this one must run before: a name matches all its holders, a record just one."""
+    after: tuple[_HookRecord | HookRef | _OptionalTarget, ...] = field(default=(), repr=False)
+    """Same-phase hooks this one must run after, as records or unresolved references."""
+    before: tuple[_HookRecord | HookRef | _OptionalTarget, ...] = field(default=(), repr=False)
+    """Same-phase hooks this one must run before, as records or unresolved references."""
     _counter: int = 0
     """Emissions counted toward the next fire; only advances while this hook is enabled."""
     enabled: bool = True
@@ -184,10 +183,10 @@ class _OptionalTarget:
     Holds a handle as given and the record it resolves to once :meth:`HookRegistry.add` has seen it.
     """
 
-    target: str | HookHandle | HookRef | _HookRecord
+    target: HookHandle | HookRef | _HookRecord
 
 
-def if_present(target: str | HookHandle | HookRef) -> _OptionalTarget:
+def if_present(target: HookHandle | HookRef) -> _OptionalTarget:
     """Mark an ``after``/``before`` target optional, so the run starts even if nothing provides it.
 
     Every other target is required: a reference nothing on the phase is registered under fails the
@@ -195,16 +194,6 @@ def if_present(target: str | HookHandle | HookRef) -> _OptionalTarget:
     required target that is disabled satisfies the reference and simply contributes no edge.
     """
     return _OptionalTarget(target)
-
-
-def _dep_positions(
-    dep: str | _HookRecord, positions: Mapping[str, list[int]], by_record: Mapping[_HookRecord, int]
-) -> Sequence[int]:
-    """Live positions a constraint refers to: every holder of a name, or the one hook a handle is for."""
-    if isinstance(dep, str):
-        return positions.get(dep, ())
-    position = by_record.get(dep)
-    return () if position is None else (position,)
 
 
 class HookRegistry:
@@ -297,11 +286,10 @@ class HookRegistry:
         depend on this hook by name rather than by handle.
 
         ``after`` / ``before`` order this hook against other hooks *on the same phase*. An entry is
-        either a name, which matches **every** hook registered under it — so one reference covers a
-        plugin selected in several slots — or a :class:`HookHandle`, which pins exactly the one hook
-        it came from, for ordering two instances of the same callback against each other. Lookup is
-        phase-scoped: a name registered only on another phase does not exist from here, and a handle
-        for another phase is rejected outright.
+        either a :class:`HookHandle`, which pins the one hook it came from, or a :class:`HookRef`
+        for a hook another plugin publishes under a key. Hook names never identify a target: they are
+        labels, so renaming one cannot change what anything orders against. Ordering is phase-scoped,
+        and a handle or reference for another phase is rejected.
 
         Targets are required: one that nothing on the phase is registered under fails the run rather
         than silently ordering nothing, so wrap it in :func:`if_present` when a run without it is
@@ -371,7 +359,7 @@ class HookRegistry:
 
     def _normalize_deps(
         self, deps: Sequence[HookDependency], field_name: str, name: str, phase: Phase
-    ) -> tuple[str | _HookRecord | HookRef | _OptionalTarget, ...]:
+    ) -> tuple[_HookRecord | HookRef | _OptionalTarget, ...]:
         """Freeze a constraint list, resolving each handle to the single hook it refers to.
 
         Every rejection here is something that would otherwise order against nothing at all, which an
@@ -380,23 +368,32 @@ class HookRegistry:
         another registry cannot be reached from this one. Whoever holds a handle already knows where
         it came from, so those are mistakes rather than a run configuring things differently.
         """
-        if isinstance(deps, str):
+        # Checked at runtime, not just by the overloads: plenty of callers are untyped.
+        entries: Sequence[Any] = deps
+        if isinstance(entries, str):
             raise HookRegistryError(
-                f"hook {name!r} on phase {phase.value!r}: {field_name}={deps!r} is a string; "
-                f"pass a sequence of hook names, e.g. {field_name}=[{deps!r}]."
+                f"hook {name!r} on phase {phase.value!r}: {field_name}={deps!r} is a string. Hook "
+                f"names are labels, not dependency targets; pass the HookHandle add() returned, or "
+                f"a HookRef for a hook another plugin publishes."
             )
-        resolved: list[str | _HookRecord | HookRef | _OptionalTarget] = []
-        for entry in deps:
+        resolved: list[_HookRecord | HookRef | _OptionalTarget] = []
+        for entry in entries:
             optional = isinstance(entry, _OptionalTarget)
             dep = entry.target if isinstance(entry, _OptionalTarget) else entry
-            if isinstance(dep, (str, HookRef)):
-                # A HookRef stays as written: its provider may not be constructed yet.
+            if isinstance(dep, HookRef):
+                # Stays as written: its provider may not be constructed yet.
                 resolved.append(_OptionalTarget(dep) if optional else dep)
                 continue
+            if isinstance(dep, str):
+                raise HookRegistryError(
+                    f"hook {name!r} on phase {phase.value!r}: {field_name} entry {dep!r} is a hook "
+                    f"name. Hook names are labels, not dependency targets; pass the HookHandle "
+                    f"add() returned, or a HookRef for a hook another plugin publishes."
+                )
             if not isinstance(dep, HookHandle):
                 raise HookRegistryError(
                     f"hook {name!r} on phase {phase.value!r}: {field_name} entry {dep!r} is a "
-                    f"{type(dep).__name__}; pass a hook name or the HookHandle that add() returned."
+                    f"{type(dep).__name__}; pass the HookHandle add() returned, or a HookRef."
                 )
             target = dep._record
             if dep._registry is not self:
@@ -588,12 +585,7 @@ class HookRegistry:
         :func:`if_present`, while a registered-but-disabled target satisfies the reference.
         """
         live = self._live(phase)
-        registered = {record.name for record in self._records[phase] if not record.removed}
-        positions: dict[str, list[int]] = defaultdict(list)
-        by_record: dict[_HookRecord, int] = {}
-        for position, record in enumerate(live):
-            positions[record.name].append(position)
-            by_record[record] = position
+        by_record = {record: position for position, record in enumerate(live)}
 
         successors: list[set[int]] = [set() for _ in live]
         blockers = [0] * len(live)
@@ -605,10 +597,10 @@ class HookRegistry:
 
         for position, record in enumerate(live):
             for dep in record.after:
-                for target in self._targets(phase, record, dep, positions, by_record, registered):
+                for target in self._targets(phase, record, dep, by_record):
                     link(target, position)
             for dep in record.before:
-                for target in self._targets(phase, record, dep, positions, by_record, registered):
+                for target in self._targets(phase, record, dep, by_record):
                     link(position, target)
 
         # CLOSE tears down in reverse, so it prefers the latest-registered hook among the ready ones.
@@ -637,19 +629,14 @@ class HookRegistry:
         self,
         phase: Phase,
         record: _HookRecord,
-        dep: str | _HookRecord | HookRef | _OptionalTarget,
-        positions: Mapping[str, list[int]],
+        dep: _HookRecord | HookRef | _OptionalTarget,
         by_record: Mapping[_HookRecord, int],
-        registered: set[str],
     ) -> Sequence[int]:
-        """Live positions a constraint points at, raising when a required target is not registered."""
+        """Live position a constraint points at, raising when a required target is not registered."""
         optional = isinstance(dep, _OptionalTarget)
         if isinstance(dep, _OptionalTarget):
             target = dep.target
-            if isinstance(target, HookHandle):  # add() stores the record; narrow for the type checker
-                dep = target._record
-            else:
-                dep = target
+            dep = target._record if isinstance(target, HookHandle) else target
 
         if isinstance(dep, HookRef):
             published = self._published.get((dep.instance, dep.key))
@@ -670,16 +657,13 @@ class HookRegistry:
                 )
             dep = published
 
-        if not optional:
-            present = dep in registered if isinstance(dep, str) else not dep.removed
-            if not present:
-                missing = dep if isinstance(dep, str) else dep.name
-                raise HookOrderError(
-                    f"Hook {record.name!r} on phase {phase.value!r} requires {missing!r}, which no "
-                    f"hook on that phase is registered under. Wrap it in if_present(...) if a run "
-                    f"without it is valid."
-                )
-        return _dep_positions(dep, positions, by_record)
+        if dep.removed and not optional:
+            raise HookOrderError(
+                f"Hook {record.name!r} on phase {phase.value!r} requires {dep.name!r}, which has "
+                f"been removed. Wrap it in if_present(...) if a run without it is valid."
+            )
+        position = by_record.get(dep)
+        return () if position is None else (position,)
 
     def _assert_mutable(self, phase: Phase) -> None:
         if phase in self._emitting:

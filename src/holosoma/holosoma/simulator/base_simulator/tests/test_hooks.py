@@ -366,8 +366,8 @@ def test_after_runs_hook_behind_its_dependency() -> None:
     calls: list[str] = []
     hooks = HookRegistry()
 
-    hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="consumer", after=["render"])
-    hooks.add(Phase.FRAME_END, recorder(calls, "render"), name="render")
+    render = hooks.add(Phase.FRAME_END, recorder(calls, "render"), name="x.render")
+    hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="x.consumer", after=[render])
 
     hooks.emit(Phase.FRAME_END)
 
@@ -378,8 +378,8 @@ def test_before_runs_hook_ahead_of_its_dependency() -> None:
     calls: list[str] = []
     hooks = HookRegistry()
 
-    hooks.add(Phase.FRAME_END, recorder(calls, "late"), name="late")
-    hooks.add(Phase.FRAME_END, recorder(calls, "early"), name="early", before=["late"])
+    late = hooks.add(Phase.FRAME_END, recorder(calls, "late"), name="x.late")
+    hooks.add(Phase.FRAME_END, recorder(calls, "early"), name="x.early", before=[late])
 
     hooks.emit(Phase.FRAME_END)
 
@@ -387,41 +387,26 @@ def test_before_runs_hook_ahead_of_its_dependency() -> None:
 
 
 def test_unconstrained_hooks_keep_their_relative_order() -> None:
-    # 'b' and 'c' stay in that order, but both overtake the blocked 'a' rather than holding its slot.
+    # 'other' and 'gate' stay in that order; the blocked hook loses its slot rather than holding it.
     calls: list[str] = []
     hooks = HookRegistry()
 
-    hooks.add(Phase.FRAME_END, recorder(calls, "a"), name="a", after=["c"])
-    hooks.add(Phase.FRAME_END, recorder(calls, "b"), name="b")
-    hooks.add(Phase.FRAME_END, recorder(calls, "c"), name="c")
+    blocked = hooks.add(Phase.FRAME_END, recorder(calls, "blocked"), name="x.blocked")
+    hooks.add(Phase.FRAME_END, recorder(calls, "other"), name="x.other")
+    hooks.add(Phase.FRAME_END, recorder(calls, "gate"), name="x.gate", before=[blocked])
 
     hooks.emit(Phase.FRAME_END)
 
-    assert calls == ["b", "c", "a"]
-
-
-def test_constraint_matches_every_hook_sharing_the_name() -> None:
-    # Two plugin slots of the same class register the same hook name; the constraint covers both.
-    calls: list[str] = []
-    hooks = HookRegistry()
-
-    hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="consumer", after=["publish"])
-    hooks.add(Phase.FRAME_END, recorder(calls, "publish_1"), name="publish")
-    hooks.add(Phase.FRAME_END, recorder(calls, "publish_2"), name="publish")
-
-    hooks.emit(Phase.FRAME_END)
-
-    assert calls == ["publish_1", "publish_2", "consumer"]
+    assert calls == ["other", "gate", "blocked"]
 
 
 def test_order_is_recomputed_after_a_later_registration() -> None:
     calls: list[str] = []
     hooks = HookRegistry()
-    hooks.add(Phase.FRAME_END, recorder(calls, "x.consumer"), name="x.consumer", after=["x.render"])
-    hooks.add(Phase.FRAME_END, recorder(calls, "x.render"), name="x.render").disable()
+    consumer = hooks.add(Phase.FRAME_END, recorder(calls, "x.consumer"), name="x.consumer")
 
     hooks.emit(Phase.FRAME_END)
-    hooks.add(Phase.FRAME_END, recorder(calls, "x.late"), name="x.late", before=["x.consumer"])
+    hooks.add(Phase.FRAME_END, recorder(calls, "x.late"), name="x.late", before=[consumer])
     hooks.emit(Phase.FRAME_END)
 
     assert calls == ["x.consumer", "x.late", "x.consumer"]
@@ -429,40 +414,10 @@ def test_order_is_recomputed_after_a_later_registration() -> None:
 
 def test_cycle_raises_on_emit() -> None:
     hooks = HookRegistry()
-    hooks.add(Phase.FRAME_END, lambda: None, name="a", after=["b"])
-    hooks.add(Phase.FRAME_END, lambda: None, name="b", after=["a"])
+    first = hooks.add(Phase.FRAME_END, lambda: None, name="x.a")
+    hooks.add(Phase.FRAME_END, lambda: None, name="x.b", after=[first], before=[first])
 
-    with pytest.raises(HookOrderError, match="cycle on phase 'frame_end' among: a, b"):
-        hooks.emit(Phase.FRAME_END)
-
-
-def test_missing_required_dependency_fails_the_phase() -> None:
-    hooks = HookRegistry()
-    hooks.add(Phase.FRAME_END, lambda: None, name="x.a", after=["x.nope"])
-
-    with pytest.raises(HookOrderError, match="requires 'x.nope'"):
-        hooks.emit(Phase.FRAME_END)
-
-
-def test_if_present_tolerates_a_dependency_no_run_configured() -> None:
-    calls: list[str] = []
-    hooks = HookRegistry()
-    hooks.add(Phase.FRAME_END, recorder(calls, "a"), name="x.a", after=[if_present("x.nope")])
-
-    with captured_logs("WARNING") as messages:
-        hooks.emit(Phase.FRAME_END)
-
-    assert calls == ["a"]
-    assert messages == []
-
-
-def test_dependency_on_another_phase_does_not_resolve() -> None:
-    # Names are looked up per phase, so a FRAME_BEGIN hook cannot satisfy a FRAME_END reference.
-    hooks = HookRegistry()
-    hooks.add(Phase.FRAME_BEGIN, lambda: None, name="x.elsewhere")
-    hooks.add(Phase.FRAME_END, lambda: None, name="x.a", after=["x.elsewhere"])
-
-    with pytest.raises(HookOrderError, match="requires 'x.elsewhere'"):
+    with pytest.raises(HookOrderError, match="cycle on phase 'frame_end' among: x.a, x.b"):
         hooks.emit(Phase.FRAME_END)
 
 
@@ -471,9 +426,9 @@ def test_disabling_a_link_drops_the_order_it_carried() -> None:
     # which is what lets a cycle broken by a disabled hook stay satisfiable (see the test below).
     calls: list[str] = []
     hooks = HookRegistry()
-    hooks.add(Phase.FRAME_END, recorder(calls, "c"), name="x.c")
+    c = hooks.add(Phase.FRAME_END, recorder(calls, "c"), name="x.c")
     a = hooks.add(Phase.FRAME_END, recorder(calls, "a"), name="x.a")
-    b = hooks.add(Phase.FRAME_END, recorder(calls, "b"), name="x.b", after=[a], before=["x.c"])
+    b = hooks.add(Phase.FRAME_END, recorder(calls, "b"), name="x.b", after=[a], before=[c])
 
     hooks.emit(Phase.FRAME_END)
     calls.clear()
@@ -500,8 +455,8 @@ def test_a_cycle_broken_by_a_disabled_hook_still_resolves() -> None:
 def test_disabled_dependency_is_inert_and_returns_on_enable() -> None:
     calls: list[str] = []
     hooks = HookRegistry()
-    render = hooks.add(Phase.FRAME_END, recorder(calls, "render"), name="render")
-    hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="consumer", after=["render"])
+    render = hooks.add(Phase.FRAME_END, recorder(calls, "render"), name="x.render")
+    hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="x.consumer", after=[render])
 
     render.disable()
     hooks.emit(Phase.FRAME_END)
@@ -515,7 +470,7 @@ def test_removing_a_required_dependency_fails_the_phase() -> None:
     calls: list[str] = []
     hooks = HookRegistry()
     render = hooks.add(Phase.FRAME_END, recorder(calls, "render"), name="x.render")
-    hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="x.consumer", after=["x.render"])
+    hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="x.consumer", after=[render])
 
     render.remove()
 
@@ -551,8 +506,8 @@ def test_close_tears_down_in_reverse_registration_order_by_default() -> None:
 def test_close_cycle_raises_like_any_other_phase() -> None:
     calls: list[str] = []
     hooks = HookRegistry()
-    hooks.add(Phase.CLOSE, recorder(calls, "a"), name="x.a", after=["x.b"])
-    hooks.add(Phase.CLOSE, recorder(calls, "b"), name="x.b", after=["x.a"])
+    first = hooks.add(Phase.CLOSE, recorder(calls, "a"), name="x.a")
+    hooks.add(Phase.CLOSE, recorder(calls, "b"), name="x.b", after=[first], before=[first])
 
     with pytest.raises(HookOrderError, match="cycle on phase 'close'"):
         hooks.emit(Phase.CLOSE)
@@ -614,28 +569,6 @@ def test_lambdas_on_different_lines_get_distinct_default_names() -> None:
     assert first.name != second.name
 
 
-def test_one_name_reference_covers_every_hook_sharing_the_default() -> None:
-    # The multi-slot case: one callback registered twice, one reference orders against both.
-    calls: list[str] = []
-    hooks = HookRegistry()
-
-    class Egress:
-        def __init__(self, label: str) -> None:
-            self.label = label
-
-        def publish(self) -> None:
-            calls.append(self.label)
-
-    head = hooks.add(Phase.FRAME_END, Egress("head").publish)
-    waist = hooks.add(Phase.FRAME_END, Egress("waist").publish)
-    assert head.name == waist.name  # one place in the source, so one name
-    hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="consumer", after=[head.name])
-
-    hooks.emit(Phase.FRAME_END)
-
-    assert calls == ["head", "waist", "consumer"]
-
-
 def test_handle_orders_against_one_instance_not_its_namesake() -> None:
     # A.foo(seed=1) -> B.foo -> A.foo(seed=2): same callback twice, ordered by handle.
     calls: list[str] = []
@@ -666,9 +599,9 @@ def test_dependency_that_is_neither_name_nor_handle_is_rejected() -> None:
     # since a callback or plugin object would match no hook and silence is for absent names only.
     hooks = HookRegistry()
     target = hooks.add(Phase.FRAME_END, lambda: None, name="target.tick")
-    deps: list[Any] = [target.name, object()]
+    deps: list[Any] = [target, object()]
 
-    with pytest.raises(HookRegistryError, match="pass a hook name or the HookHandle"):
+    with pytest.raises(HookRegistryError, match="pass the HookHandle add\\(\\) returned"):
         hooks.add(Phase.FRAME_END, lambda: None, name="dependent.tick", after=deps)
 
 
@@ -698,8 +631,8 @@ def test_handle_to_a_removed_hook_fails_unless_optional() -> None:
 
 def test_names_reports_resolved_order_per_phase() -> None:
     hooks = HookRegistry()
-    hooks.add(Phase.FRAME_END, lambda: None, name="x.consumer", after=["x.render"])
-    hooks.add(Phase.FRAME_END, lambda: None, name="x.render")
+    render = hooks.add(Phase.FRAME_END, lambda: None, name="x.render")
+    hooks.add(Phase.FRAME_END, lambda: None, name="x.consumer", after=[render])
     runtime = hooks.add(Phase.CLOSE, lambda: None, name="x.runtime")
     hooks.add(Phase.CLOSE, lambda: None, name="x.node", before=[runtime])
 
@@ -710,18 +643,27 @@ def test_names_reports_resolved_order_per_phase() -> None:
 
 def test_validate_reports_a_bad_graph_before_anything_emits() -> None:
     hooks = HookRegistry()
-    hooks.add(Phase.EPISODE_END, lambda _env_id: None, name="x.late", after=["x.absent"])
+    with hooks.installing("inspect"):
+        hooks.add(
+            Phase.EPISODE_END,
+            lambda _env_id: None,
+            name="x.late",
+            after=[HookRef("absent", _CameraHook.PUBLISH)],
+        )
 
-    with pytest.raises(HookOrderError, match="requires 'x.absent'"):
+    with pytest.raises(HookOrderError, match="published no such hook"):
         hooks.validate()
 
 
-def test_bare_string_dependency_is_rejected() -> None:
-    # A str satisfies Sequence[str], so the types allow this and only the runtime guard catches it.
+def test_a_name_is_not_a_dependency_target() -> None:
+    # Names label hooks; depending on one would make a rename change what runs when.
     hooks = HookRegistry()
+    target = hooks.add(Phase.FRAME_END, lambda: None, name="x.target")
 
-    with pytest.raises(HookRegistryError, match="pass a sequence of hook names"):
-        hooks.add(Phase.FRAME_END, lambda: None, name="a", after="render")
+    by_name: Any = [target.name]
+
+    with pytest.raises(HookRegistryError, match="names are labels, not dependency targets"):
+        hooks.add(Phase.FRAME_END, lambda: None, name="x.a", after=by_name)
 
 
 class _CameraHook(Enum):
