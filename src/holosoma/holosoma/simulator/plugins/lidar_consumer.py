@@ -1,21 +1,22 @@
 """Backend-neutral host snapshot path for LiDAR consumer plugins.
 
-The per-step ``FRAME_END`` callback follows ``simulator.sensor_render_hook``, so the registry runs
-it behind the sensor capture that fills the buffers it reads.
+The base registers the per-step ``FRAME_END`` callback following ``simulator.sensor_render_hook``,
+so it runs behind the sensor capture that fills the buffers it reads. Teardown is the subclass's to
+register: add ``_on_close`` on ``CLOSE`` and declare there what it must run before.
 """
 
 from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Sequence, Tuple
+from typing import TYPE_CHECKING, Tuple
 
 import numpy as np
 import numpy.typing as npt
 from loguru import logger
 
 from holosoma.config_types.sensor import LidarSensorConfig
-from holosoma.simulator.base_simulator.hooks import HookHandle, Phase
+from holosoma.simulator.base_simulator.hooks import Phase
 
 if TYPE_CHECKING:
     from holosoma.config_types.plugin import PluginConfig
@@ -41,9 +42,6 @@ class PointCloudPacket:
 class LidarConsumerPlugin:
     """Base plugin for consumers of fresh sensor-local LiDAR point clouds."""
 
-    close_before: Sequence[str | HookHandle] = ()
-    """Hooks this consumer's teardown must run before, e.g. a transport context it publishes through."""
-
     def __init__(self, config: PluginConfig, simulator: BaseSimulator) -> None:
         self.cfg = config
         self.config = config
@@ -58,7 +56,6 @@ class LidarConsumerPlugin:
             name=f"{type(self).__name__}.publish",
             after=[simulator.sensor_render_hook],
         )
-        simulator.hooks.add(Phase.CLOSE, self._on_close, name=f"{type(self).__name__}.stop", before=self.close_before)
 
     @abstractmethod
     def wanted_streams(self) -> set[LidarStreamKey]:

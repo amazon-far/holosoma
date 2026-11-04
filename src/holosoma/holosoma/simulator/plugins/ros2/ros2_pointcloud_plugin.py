@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
+from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.plugins.lidar_consumer import LidarConsumerPlugin
 from holosoma.simulator.plugins.ros2.pointcloud2 import EncodedPointCloud, encode_xyz_points, transform_xyz_points
 from holosoma.simulator.plugins.ros2.worker import PublishWorker
@@ -38,9 +39,6 @@ class ROS2PointCloudPlugin(LidarConsumerPlugin):
 
     config: ROS2PointCloudPluginConfig
 
-    close_before = ("ros2.runtime.close",)
-    """Node teardown precedes the shared context's shutdown."""
-
     def __init__(self, config: ROS2PointCloudPluginConfig, simulator: BaseSimulator) -> None:
         self._node: Any = None
         self._executor: Any = None
@@ -50,6 +48,13 @@ class ROS2PointCloudPlugin(LidarConsumerPlugin):
         self._workers: dict[str, PublishWorker[PointCloudPacket]] = {}
         self._ros2_runtime = get_ros2_runtime(simulator)
         super().__init__(config, simulator)
+        # Stop publishing before the shared context goes down.
+        simulator.hooks.add(
+            Phase.CLOSE,
+            self._on_close,
+            name=f"{type(self).__name__}.stop",
+            before=[self._ros2_runtime.close_hook],
+        )
 
     def wanted_streams(self) -> set[LidarStreamKey]:
         return {(route.lidar, self.config.env_id) for route in self.config.routes.values()}

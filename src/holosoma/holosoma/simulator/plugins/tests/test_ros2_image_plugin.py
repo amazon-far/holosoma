@@ -143,6 +143,16 @@ class _NoopThread:
         pass
 
 
+def _fake_ros2_runtime(simulator: Any) -> Any:
+    """Stand in for get_ros2_runtime: memoise per simulator and register the context's close hook."""
+    runtime = getattr(simulator, "_fake_runtime", None)
+    if runtime is None:
+        runtime = type("_Runtime", (), {"start": lambda _self: object()})()
+        runtime.close_hook = simulator.hooks.add(Phase.CLOSE, lambda: None, name="ros2.runtime.close")
+        simulator._fake_runtime = runtime
+    return runtime
+
+
 @pytest.fixture
 def fake_ros(monkeypatch: pytest.MonkeyPatch) -> dict[str, _FakeNode]:
     """Monkeypatch the rclpy pieces ``ROS2ImagePlugin.start`` uses so no real node/spin/DDS runs.
@@ -173,7 +183,7 @@ def fake_ros(monkeypatch: pytest.MonkeyPatch) -> dict[str, _FakeNode]:
     monkeypatch.setattr(
         image_plugin,
         "get_ros2_runtime",
-        lambda _simulator: type("_Runtime", (), {"start": lambda _self: object()})(),
+        _fake_ros2_runtime,
     )
     return holder
 

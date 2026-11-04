@@ -25,6 +25,7 @@ from loguru import logger
 
 from holosoma.config_types.frequency import is_frequency_string, resolve_decimation
 from holosoma.config_types.sensor import CameraSensorConfig
+from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.plugins.camera_consumer import CameraConsumerPlugin
 from holosoma.simulator.plugins.viz.image_grid import colorize_depth, tile_images
 from holosoma.utils.video_utils import create_video
@@ -76,6 +77,7 @@ class CameraVizPlugin(CameraConsumerPlugin):
         # Panels + env_ids are set, so wanted_streams() works: validate streams and register the
         # publish/close callbacks. Fields below use self.config / self.control_hz (set by super).
         super().__init__(config, simulator)
+        simulator.hooks.add(Phase.CLOSE, self._on_close, name=f"{type(self).__name__}.stop")
 
         self._frame_decimation = self._resolve_frame_decimation()
 

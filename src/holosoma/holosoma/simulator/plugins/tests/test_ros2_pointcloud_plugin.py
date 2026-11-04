@@ -168,6 +168,16 @@ def _module(name: str, **members: Any) -> ModuleType:
     return module
 
 
+def _fake_ros2_runtime(simulator: Any) -> Any:
+    """Stand in for get_ros2_runtime: memoise per simulator and register the context's close hook."""
+    runtime = getattr(simulator, "_fake_runtime", None)
+    if runtime is None:
+        runtime = type("_Runtime", (), {"start": lambda _self: object()})()
+        runtime.close_hook = simulator.hooks.add(Phase.CLOSE, lambda: None, name="ros2.runtime.close")
+        simulator._fake_runtime = runtime
+    return runtime
+
+
 @pytest.fixture
 def fake_ros(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     holder: dict[str, Any] = {}
@@ -217,8 +227,7 @@ def fake_ros(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     ):
         monkeypatch.setitem(sys.modules, module.__name__, module)
     monkeypatch.setattr(threading, "Thread", _NoopThread)
-    runtime = type("_Runtime", (), {"start": lambda _self: object()})()
-    monkeypatch.setattr(ros2_pointcloud_plugin, "get_ros2_runtime", lambda _simulator: runtime)
+    monkeypatch.setattr(ros2_pointcloud_plugin, "get_ros2_runtime", _fake_ros2_runtime)
     holder["PointCloud2"] = _PointCloud2
     return holder
 
@@ -237,6 +246,17 @@ def _start_plugin(
     plugin.start()
     publisher = cast("_FakeNode", fake_ros["node"]).publishers[0]
     return plugin, publisher
+
+
+def test_node_teardown_is_ordered_before_the_shared_context_shutdown(fake_ros: dict[str, Any]) -> None:
+    route = ROS2PointCloudRoute(lidar="lidar", topic="/scan", frame_id="lidar_link")
+    config = ROS2PointCloudPluginConfig(routes={"scan": route})
+    simulator = _FakeSimulator()
+    plugin = cast("ROS2PointCloudPlugin", config.get_cls()(config, simulator))
+
+    order = simulator.hooks.names(Phase.CLOSE)
+
+    assert order.index(f"{type(plugin).__name__}.stop") < order.index("ros2.runtime.close")
 
 
 def test_publishes_xyz_cloud_with_sim_stamp_and_field_metadata(fake_ros: dict[str, Any]) -> None:

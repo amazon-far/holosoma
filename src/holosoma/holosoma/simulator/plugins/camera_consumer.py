@@ -3,11 +3,11 @@
 Defines :class:`CameraConsumerPlugin`, the base for a plugin that consumes rendered camera frames
 (ROS2 publish, live window, mp4 recording), plus :class:`FramePacket` and :class:`CameraIntrinsics`.
 
-A consumer is a plugin (``cls(cfg, simulator)``, no base class required): it registers its per-step
-:meth:`~CameraConsumerPlugin.publish` on ``FRAME_END`` and its :meth:`~CameraConsumerPlugin.stop`
-on ``CLOSE`` in ``__init__``. That ``FRAME_END`` registration follows
-``simulator.sensor_render_hook``, so the registry runs it behind the sensor capture and its
-buffers are fresh. Each consumer declares the
+A consumer is a plugin (``cls(cfg, simulator)``, no base class required). The base registers the
+per-step :meth:`~CameraConsumerPlugin.publish` on ``FRAME_END``, following
+``simulator.sensor_render_hook`` so its buffers are fresh. Teardown is the subclass's to register:
+add ``_on_close`` on ``CLOSE`` and declare there what it must run before, such as a transport
+context that has to outlive it. Each consumer declares the
 streams it needs via :meth:`~CameraConsumerPlugin.wanted_streams`; the base validates them against
 the configured cameras at construction (fail-loud) and, each step, snapshots exactly those to host
 once — sharing the single ``get_camera_data(device="cpu")`` copy across every consumer of the same
@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, Tuple, Union
 
 import numpy as np
 import numpy.typing as npt
@@ -36,7 +36,7 @@ from holosoma.config_types.sensor import (
     IsaacSimCameraConfig,
     MujocoCameraConfig,
 )
-from holosoma.simulator.base_simulator.hooks import HookHandle, Phase
+from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.utils.simulator_config import SimulatorType
 
 if TYPE_CHECKING:
@@ -109,9 +109,6 @@ class CameraConsumerPlugin:
     frame-processing failure isolation. Teardown failures propagate through CLOSE so providers stay alive.
     """
 
-    close_before: Sequence[str | HookHandle] = ()
-    """Hooks this consumer's teardown must run before, e.g. a transport context it publishes through."""
-
     def __init__(self, config: PluginConfig, simulator: BaseSimulator) -> None:
         # A plugin is duck-typed (cls(cfg, simulator) registering on simulator.hooks); no base to call.
         # ``config`` is typed per subclass; ``cfg`` mirrors the plugin convention (ClockPublishPlugin etc).
@@ -128,7 +125,6 @@ class CameraConsumerPlugin:
             name=f"{self._label()}.publish",
             after=[simulator.sensor_render_hook],
         )
-        simulator.hooks.add(Phase.CLOSE, self._on_close, name=f"{self._label()}.stop", before=self.close_before)
 
     def _label(self) -> str:
         return type(self).__name__
