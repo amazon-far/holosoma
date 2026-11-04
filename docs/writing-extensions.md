@@ -210,6 +210,28 @@ Expose your own the same way if other code should be able to follow you — keep
 
 **Names still work**, and one matches *every* hook registered under it, so a single reference covers a plugin selected in several slots, or a base class registering on behalf of its subclasses. `name` defaults to where the callback is defined — `module.QualName`, with `partial` and decorators unwrapped — so it's unique per place in the source without anyone coordinating, and most hooks need no name at all. Pass one explicitly for a hook others depend on by name, or for a callback that moves: a method overridden per backend derives a different default in each subclass.
 
+**Depending on a plugin you can't hold.** When the provider is constructed after you, it publishes a member of its own `Enum` contract and you reference that, naming the slot it's configured in. The reference resolves once every plugin is installed, so neither side has to be built first:
+
+```python
+class CameraHook(Enum):
+    PUBLISH = auto()
+    CLOSE = auto()
+
+
+# provider
+simulator.hooks.add(Phase.FRAME_END, self._publish, name="my_camera.publish", key=CameraHook.PUBLISH)
+
+# consumer, constructed separately
+simulator.hooks.add(
+    Phase.FRAME_END, self._inspect, name="my_inspector.read",
+    after=[HookRef(self.cfg.follows, CameraHook.PUBLISH)],
+)
+```
+
+Matching uses the enum type and member identity, never the member's value or spelling, so two independently owned plugins can each define a `PUBLISH` without colliding, while plugins meant to share a contract import the same enum. One instance publishes a given key once, across all phases; two instances may publish the same key, which is what lets `HookRef` pick the `head` camera rather than the `wrist` one. Keys belong to the slot being constructed, so publish from your constructor — `install_plugins` scopes registration per slot.
+
+Take the slot name through your own config (`follows` above) rather than hardcoding it. Slot keys are chosen by whoever launches the run, so a plugin that spells one in code is guessing; this is the same convention sensor routes already use, where a route names `head_cam` as a config field and validation fails loudly if no such sensor is configured.
+
 **Targets are required.** A reference nothing on the phase is registered under fails the run rather than quietly ordering nothing. Wrap it when a run without it is valid:
 
 ```python

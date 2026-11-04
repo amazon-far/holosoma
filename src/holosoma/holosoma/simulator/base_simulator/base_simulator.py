@@ -774,7 +774,9 @@ class BaseSimulator:
         # simulator; the outer lifecycle owner will emit CLOSE for callbacks already registered.
         self._plugins_installed = True
         for key, cfg in self.plugin_config.items():
-            self.installed_plugins[key] = cfg.get_cls()(cfg, self)
+            # Scoped so the plugin's published keys belong to its slot, for HookRef to resolve.
+            with self.hooks.installing(key):
+                self.installed_plugins[key] = cfg.get_cls()(cfg, self)
         if self.installed_plugins:
             logger.info(f"Installed plugins: {sorted(self.installed_plugins)}")
         self.hooks.validate()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 from contextlib import contextmanager
+from enum import Enum, auto
 from types import SimpleNamespace
 from typing import Any, Callable, Iterator
 
@@ -13,6 +14,7 @@ from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.base_simulator.hooks import (
     HookCloseError,
     HookOrderError,
+    HookRef,
     HookRegistry,
     HookRegistryError,
     Phase,
@@ -720,3 +722,120 @@ def test_bare_string_dependency_is_rejected() -> None:
 
     with pytest.raises(HookRegistryError, match="pass a sequence of hook names"):
         hooks.add(Phase.FRAME_END, lambda: None, name="a", after="render")
+
+
+class _CameraHook(Enum):
+    PUBLISH = auto()
+    CLOSE = auto()
+
+
+class _OtherHook(Enum):
+    PUBLISH = auto()
+
+
+def test_hookref_resolves_a_publication_registered_after_the_reference() -> None:
+    # The consumer registers first: a HookRef does not require its provider to exist yet.
+    calls: list[str] = []
+    hooks = HookRegistry()
+
+    with hooks.installing("inspect"):
+        hooks.add(
+            Phase.FRAME_END,
+            recorder(calls, "consumer"),
+            name="inspector.read",
+            after=[HookRef("head", _CameraHook.PUBLISH)],
+        )
+    with hooks.installing("head"):
+        hooks.add(Phase.FRAME_END, recorder(calls, "head"), name="camera.publish", key=_CameraHook.PUBLISH)
+
+    hooks.emit(Phase.FRAME_END)
+
+    assert calls == ["head", "consumer"]
+
+
+def test_hookref_picks_the_named_instance_of_a_plugin_installed_twice() -> None:
+    calls: list[str] = []
+    hooks = HookRegistry()
+
+    for slot in ("head", "wrist"):
+        with hooks.installing(slot):
+            hooks.add(Phase.FRAME_END, recorder(calls, slot), name="camera.publish", key=_CameraHook.PUBLISH)
+    with hooks.installing("inspect"):
+        hooks.add(
+            Phase.FRAME_END,
+            recorder(calls, "consumer"),
+            name="inspector.read",
+            before=[HookRef("wrist", _CameraHook.PUBLISH)],
+        )
+
+    hooks.emit(Phase.FRAME_END)
+
+    assert calls == ["head", "consumer", "wrist"]
+
+
+def test_same_member_of_a_different_enum_is_a_different_key() -> None:
+    hooks = HookRegistry()
+    with hooks.installing("head"):
+        hooks.add(Phase.FRAME_END, lambda: None, name="camera.publish", key=_CameraHook.PUBLISH)
+        hooks.add(Phase.FRAME_END, lambda: None, name="other.publish", key=_OtherHook.PUBLISH)
+    with hooks.installing("inspect"):
+        hooks.add(Phase.FRAME_END, lambda: None, name="inspector.read", after=[HookRef("head", _OtherHook.PUBLISH)])
+
+    assert hooks.names(Phase.FRAME_END)[-1] == "inspector.read"
+
+
+def test_one_instance_cannot_publish_a_key_twice() -> None:
+    hooks = HookRegistry()
+
+    with hooks.installing("head"):
+        hooks.add(Phase.FRAME_END, lambda: None, name="camera.publish", key=_CameraHook.PUBLISH)
+
+        with pytest.raises(HookRegistryError, match="already published"):
+            hooks.add(Phase.CLOSE, lambda: None, name="camera.stop", key=_CameraHook.PUBLISH)
+
+
+def test_publishing_a_key_outside_an_install_scope_is_rejected() -> None:
+    hooks = HookRegistry()
+
+    with pytest.raises(HookRegistryError, match="no owning plugin instance"):
+        hooks.add(Phase.FRAME_END, lambda: None, name="camera.publish", key=_CameraHook.PUBLISH)
+
+
+def test_unresolved_hookref_fails_unless_optional() -> None:
+    calls: list[str] = []
+    hooks = HookRegistry()
+    with hooks.installing("inspect"):
+        hooks.add(
+            Phase.FRAME_END,
+            recorder(calls, "consumer"),
+            name="inspector.read",
+            after=[HookRef("head", _CameraHook.PUBLISH)],
+        )
+
+    with pytest.raises(HookOrderError, match="published no such hook"):
+        hooks.validate()
+
+    hooks = HookRegistry()
+    with hooks.installing("inspect"):
+        hooks.add(
+            Phase.FRAME_END,
+            recorder(calls, "lenient"),
+            name="inspector.read",
+            after=[if_present(HookRef("head", _CameraHook.PUBLISH))],
+        )
+    hooks.validate()
+    hooks.emit(Phase.FRAME_END)
+
+    assert calls == ["lenient"]
+
+
+def test_hookref_to_another_phase_is_rejected() -> None:
+    hooks = HookRegistry()
+    with hooks.installing("head"):
+        hooks.add(Phase.CLOSE, lambda: None, name="camera.stop", key=_CameraHook.CLOSE)
+    with hooks.installing("inspect"):
+        hooks.add(Phase.FRAME_END, lambda: None, name="inspector.read", after=[HookRef("head", _CameraHook.CLOSE)])
+
+    with pytest.raises(HookOrderError, match="published on phase 'close'"):
+        hooks.emit(Phase.FRAME_END)
+

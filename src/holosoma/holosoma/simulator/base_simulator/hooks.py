@@ -4,24 +4,43 @@ import functools
 import heapq
 import inspect
 from collections import defaultdict
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Mapping, Sequence, Union, overload
+from typing import Any, Callable, Iterator, Mapping, Sequence, Union, overload
 
 from typing_extensions import Literal, Self
 
 from holosoma.config_types.frequency import DecimationLike, is_frequency_string, resolve_decimation
 
 SENSOR_RENDER_HOOK = "sensors.render"
-"""Name of the hook that refreshes the mounted-sensor buffers, for egress hooks to run ``after``.
+"""Diagnostic name of the hook that refreshes the mounted-sensor buffers.
 
-Shared by both ends of that dependency because an unmatched name is dropped silently: renaming the
-hook has to break its dependents rather than quietly stop ordering them.
+Dependents follow ``simulator.sensor_render_hook`` rather than this name; it is shared so the label
+in logs and :meth:`HookRegistry.names` stays one spelling.
 """
 
 
-HookDependency = Union[str, "HookHandle", "_OptionalTarget"]
-"""What ``after``/``before`` accept: a hook name, a :class:`HookHandle`, or :func:`if_present` of either."""
+HookDependency = Union[str, "HookHandle", "HookRef", "_OptionalTarget"]
+"""What ``after``/``before`` accept: a hook name, a :class:`HookHandle`, a :class:`HookRef`, or
+:func:`if_present` of any of those."""
+
+
+@dataclass(frozen=True)
+class HookRef:
+    """Reference to a hook published by a configured plugin instance, resolved once all are installed.
+
+    Lets a consumer depend on a provider it cannot hold: the provider publishes a member of its own
+    ``Enum`` contract with ``add(..., key=...)``, and the consumer imports that enum and names the
+    plugin slot. Matching is by enum type and member identity, never by the member's value or
+    spelling, so two plugins can each define a ``PUBLISH`` without colliding.
+    """
+
+    instance: str
+    """Plugin slot the provider is configured in, i.e. the key in ``--plugin.<key>:<preset>``."""
+
+    key: Enum
+    """Member of the contract the provider publishes."""
 
 
 class Phase(str, Enum):
@@ -98,9 +117,13 @@ class _HookRecord:
     name: str
     every: int = 1
     """Resolved emission decimation: the callback runs once per ``every`` emissions of its phase."""
-    after: tuple[str | _HookRecord | _OptionalTarget, ...] = field(default=(), repr=False)
+    owner: str | None = None
+    """Plugin slot that registered this hook, or ``None`` for the framework's own."""
+    key: Enum | None = None
+    """Contract member this hook is published under, for :class:`HookRef` to resolve."""
+    after: tuple[str | _HookRecord | HookRef | _OptionalTarget, ...] = field(default=(), repr=False)
     """Same-phase hooks this one must run after: a name matches all its holders, a record just one."""
-    before: tuple[str | _HookRecord | _OptionalTarget, ...] = field(default=(), repr=False)
+    before: tuple[str | _HookRecord | HookRef | _OptionalTarget, ...] = field(default=(), repr=False)
     """Same-phase hooks this one must run before: a name matches all its holders, a record just one."""
     _counter: int = 0
     """Emissions counted toward the next fire; only advances while this hook is enabled."""
@@ -136,6 +159,11 @@ class HookHandle:
         return self._record.enabled and not self._record.removed
 
     @property
+    def key(self) -> Enum | None:
+        """Contract member this hook was published under, if any."""
+        return self._record.key
+
+    @property
     def every(self) -> int:
         """Current resolved emission decimation (see :meth:`set_every`)."""
         return self._record.every
@@ -164,10 +192,10 @@ class _OptionalTarget:
     Holds a handle as given and the record it resolves to once :meth:`HookRegistry.add` has seen it.
     """
 
-    target: str | HookHandle | _HookRecord
+    target: str | HookHandle | HookRef | _HookRecord
 
 
-def if_present(target: str | HookHandle) -> _OptionalTarget:
+def if_present(target: str | HookHandle | HookRef) -> _OptionalTarget:
     """Mark an ``after``/``before`` target optional, so the run starts even if nothing provides it.
 
     Every other target is required: a reference nothing on the phase is registered under fails the
@@ -199,6 +227,8 @@ class HookRegistry:
         self._records: dict[Phase, list[_HookRecord]] = {phase: [] for phase in Phase}
         self._resolved: dict[Phase, tuple[_HookRecord, ...]] = dict.fromkeys(Phase, ())
         self._stale: set[Phase] = set()
+        self._published: dict[tuple[str, Enum], _HookRecord] = {}
+        self._owner: str | None = None
         self._emitting: set[Phase] = set()
         self._closed = False
         self._base_rates: dict[Phase, float] = dict(base_rates or {})
@@ -211,6 +241,7 @@ class HookRegistry:
         *,
         name: str | None = None,
         every: DecimationLike = 1,
+        key: Enum | None = None,
         after: Sequence[HookDependency] = (),
         before: Sequence[HookDependency] = (),
     ) -> HookHandle: ...
@@ -223,6 +254,7 @@ class HookRegistry:
         *,
         name: str | None = None,
         every: DecimationLike = 1,
+        key: Enum | None = None,
         after: Sequence[HookDependency] = (),
         before: Sequence[HookDependency] = (),
     ) -> HookHandle: ...
@@ -235,6 +267,7 @@ class HookRegistry:
         *,
         name: str | None = None,
         every: DecimationLike = 1,
+        key: Enum | None = None,
         after: Sequence[HookDependency] = (),
         before: Sequence[HookDependency] = (),
     ) -> HookHandle: ...
@@ -246,6 +279,7 @@ class HookRegistry:
         *,
         name: str | None = None,
         every: DecimationLike = 1,
+        key: Enum | None = None,
         after: Sequence[HookDependency] = (),
         before: Sequence[HookDependency] = (),
     ) -> HookHandle:
@@ -288,22 +322,64 @@ class HookRegistry:
         """
         self._assert_mutable(phase)
         resolved_name = name or self._default_name(callback)
+        owner = self._owner
+        if key is not None:
+            self._claim_key(phase, resolved_name, owner, key)
         self._check_arity(phase, callback, resolved_name)
         record = _HookRecord(
             phase=phase,
             callback=callback,
             name=resolved_name,
             every=self._resolve_every(phase, every, name),
+            owner=owner,
+            key=key,
             after=self._normalize_deps(after, "after", resolved_name, phase),
             before=self._normalize_deps(before, "before", resolved_name, phase),
         )
+        if key is not None and owner is not None:
+            self._published[(owner, key)] = record
         self._records[phase].append(record)
         self._invalidate(phase)
         return HookHandle(self, record)
 
+    @contextmanager
+    def installing(self, instance: str) -> Iterator[None]:
+        """Scope registrations to the plugin slot being constructed, so its keys are published under it.
+
+        ``install_plugins`` wraps each plugin's construction in this. Publishing a key outside a scope
+        has no instance to attach to and is rejected, so a plugin that wants to be referenced by
+        :class:`HookRef` must register while it is being constructed.
+        """
+        if self._owner is not None:
+            raise HookRegistryError(
+                f"Cannot install plugin slot {instance!r} while slot {self._owner!r} is still being "
+                f"constructed; each instance owns its own registrations."
+            )
+        self._owner = instance
+        try:
+            yield
+        finally:
+            self._owner = None
+
+    def _claim_key(self, phase: Phase, name: str, owner: str | None, key: Enum) -> None:
+        """Reserve a contract member for one instance, so a reference to it cannot be ambiguous."""
+        if owner is None:
+            raise HookRegistryError(
+                f"hook {name!r} on phase {phase.value!r} publishes {key!r} with no owning plugin "
+                f"instance. Keys identify one instance's hook, so publish while the plugin is "
+                f"constructed, or depend on this hook by its handle instead."
+            )
+        claimed = self._published.get((owner, key))
+        if claimed is not None and not claimed.removed:
+            raise HookRegistryError(
+                f"hook {name!r} on phase {phase.value!r} publishes {key!r}, which plugin instance "
+                f"{owner!r} already published as {claimed.name!r} on phase "
+                f"{claimed.phase.value!r}. A key names one hook per instance."
+            )
+
     def _normalize_deps(
         self, deps: Sequence[HookDependency], field_name: str, name: str, phase: Phase
-    ) -> tuple[str | _HookRecord | _OptionalTarget, ...]:
+    ) -> tuple[str | _HookRecord | HookRef | _OptionalTarget, ...]:
         """Freeze a constraint list, resolving each handle to the single hook it refers to.
 
         Every rejection here is something that would otherwise order against nothing at all, which an
@@ -317,11 +393,12 @@ class HookRegistry:
                 f"hook {name!r} on phase {phase.value!r}: {field_name}={deps!r} is a string; "
                 f"pass a sequence of hook names, e.g. {field_name}=[{deps!r}]."
             )
-        resolved: list[str | _HookRecord | _OptionalTarget] = []
+        resolved: list[str | _HookRecord | HookRef | _OptionalTarget] = []
         for entry in deps:
             optional = isinstance(entry, _OptionalTarget)
             dep = entry.target if isinstance(entry, _OptionalTarget) else entry
-            if isinstance(dep, str):
+            if isinstance(dep, (str, HookRef)):
+                # A HookRef stays as written: its provider may not be constructed yet.
                 resolved.append(_OptionalTarget(dep) if optional else dep)
                 continue
             if not isinstance(dep, HookHandle):
@@ -568,26 +645,48 @@ class HookRegistry:
         self,
         phase: Phase,
         record: _HookRecord,
-        dep: str | _HookRecord | _OptionalTarget,
+        dep: str | _HookRecord | HookRef | _OptionalTarget,
         positions: Mapping[str, list[int]],
         by_record: Mapping[_HookRecord, int],
         registered: set[str],
     ) -> Sequence[int]:
         """Live positions a constraint points at, raising when a required target is not registered."""
+        optional = isinstance(dep, _OptionalTarget)
         if isinstance(dep, _OptionalTarget):
             target = dep.target
             if isinstance(target, HookHandle):  # add() stores the record; narrow for the type checker
-                target = target._record
-            return _dep_positions(target, positions, by_record)
+                dep = target._record
+            else:
+                dep = target
 
-        present = dep in registered if isinstance(dep, str) else not dep.removed
-        if not present:
-            missing = dep if isinstance(dep, str) else dep.name
-            raise HookOrderError(
-                f"Hook {record.name!r} on phase {phase.value!r} requires {missing!r}, which no hook "
-                f"on that phase is registered under. Wrap it in if_present(...) if a run without it "
-                f"is valid."
-            )
+        if isinstance(dep, HookRef):
+            published = self._published.get((dep.instance, dep.key))
+            if published is None or published.removed:
+                if optional:
+                    return ()
+                raise HookOrderError(
+                    f"Hook {record.name!r} on phase {phase.value!r} requires {dep.key!r} from plugin "
+                    f"instance {dep.instance!r}, which published no such hook. Configured "
+                    f"publications: {sorted((owner, str(k)) for owner, k in self._published)}. Wrap "
+                    f"it in if_present(...) if a run without it is valid."
+                )
+            if published.phase is not phase:
+                raise HookOrderError(
+                    f"Hook {record.name!r} on phase {phase.value!r} orders against {dep.key!r} from "
+                    f"{dep.instance!r}, which is published on phase {published.phase.value!r}. "
+                    f"Constraints apply within one phase."
+                )
+            dep = published
+
+        if not optional:
+            present = dep in registered if isinstance(dep, str) else not dep.removed
+            if not present:
+                missing = dep if isinstance(dep, str) else dep.name
+                raise HookOrderError(
+                    f"Hook {record.name!r} on phase {phase.value!r} requires {missing!r}, which no "
+                    f"hook on that phase is registered under. Wrap it in if_present(...) if a run "
+                    f"without it is valid."
+                )
         return _dep_positions(dep, positions, by_record)
 
     def _assert_mutable(self, phase: Phase) -> None:
