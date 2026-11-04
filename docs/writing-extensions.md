@@ -183,7 +183,7 @@ Select plugins as the dynamic-dict `plugin.<key>:<preset>` (per-key leaf overrid
 
 ### Phases
 
-A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=None, every=1, after=(), before=())`. Per control frame the loop emits, in order:
+A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name, every=1, key=None, after=(), before=())`, which returns the `HookHandle` others order themselves against. Per control frame the loop emits, in order:
 
 | Phase | When | Callback args | Cadence |
 |---|---|---|---|
@@ -208,7 +208,7 @@ simulator.hooks.add(
 
 Expose your own the same way if other code should be able to follow you — keep what `add` returns on a public attribute (a frozen dataclass bundling several reads well) rather than asking anyone to spell a name.
 
-**Names are labels, not targets.** `name` defaults to where the callback is defined — `module.QualName`, with `partial` and decorators unwrapped — and is what `names(phase)` and error messages show, so most hooks need no name at all. Pass one explicitly when that label would be unstable or unhelpful; a method overridden per backend derives a different default in each subclass. Nothing orders against a name, so renaming a hook cannot change what runs when.
+**Names are labels, not targets.** Every hook takes a `name`, which is what `names(phase)`, cycle reports and teardown failures show — so make it say which hook this is. Nothing orders against it, so renaming a hook cannot change what runs when.
 
 **Targets are required.** A reference nothing on the phase is registered under fails the run rather than quietly ordering nothing. Wrap it when a run without it is valid:
 

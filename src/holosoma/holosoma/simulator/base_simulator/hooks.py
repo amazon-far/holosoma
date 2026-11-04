@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import functools
 import heapq
 import inspect
 from contextlib import contextmanager
@@ -220,7 +219,7 @@ class HookRegistry:
         phase: Literal[Phase.FRAME_BEGIN, Phase.PRE_STEP, Phase.POST_STEP, Phase.FRAME_END],
         callback: FrameCallback,
         *,
-        name: str | None = None,
+        name: str,
         every: DecimationLike = 1,
         key: Enum | None = None,
         after: Sequence[HookDependency] = (),
@@ -233,7 +232,7 @@ class HookRegistry:
         phase: Literal[Phase.EPISODE_END, Phase.EPISODE_START],
         callback: EpisodeCallback,
         *,
-        name: str | None = None,
+        name: str,
         every: DecimationLike = 1,
         key: Enum | None = None,
         after: Sequence[HookDependency] = (),
@@ -246,7 +245,7 @@ class HookRegistry:
         phase: Literal[Phase.CLOSE],
         callback: CloseCallback,
         *,
-        name: str | None = None,
+        name: str,
         every: DecimationLike = 1,
         key: Enum | None = None,
         after: Sequence[HookDependency] = (),
@@ -258,7 +257,7 @@ class HookRegistry:
         phase: Phase,
         callback: Callable[..., Any],
         *,
-        name: str | None = None,
+        name: str,
         every: DecimationLike = 1,
         key: Enum | None = None,
         after: Sequence[HookDependency] = (),
@@ -279,11 +278,8 @@ class HookRegistry:
         known base rate; event phases (episode/close) accept only int decimations. Default ``1`` fires
         every emission.
 
-        ``name`` defaults to where the callback is defined (``module.QualName``; see
-        :meth:`_default_name`) and is the label diagnostics and :meth:`names` show. Pass one
-        explicitly when the derived label would be unstable or unhelpful — a method overridden per
-        backend derives a different default in each subclass — or when others should be able to
-        depend on this hook by name rather than by handle.
+        ``name`` labels the hook for :meth:`names`, cycle reports and teardown failures. Nothing
+        orders against it, so it only has to tell a reader which hook this is.
 
         ``after`` / ``before`` order this hook against other hooks *on the same phase*. An entry is
         either a :class:`HookHandle`, which pins the one hook it came from, or a :class:`HookRef`
@@ -301,20 +297,19 @@ class HookRegistry:
         order callbacks actually run in: a node's cleanup declares ``before=[runtime.close_hook]``.
         """
         self._assert_mutable(phase)
-        resolved_name = name or self._default_name(callback)
         owner = self._owner
         if key is not None:
-            self._claim_key(phase, resolved_name, owner, key)
-        self._check_arity(phase, callback, resolved_name)
+            self._claim_key(phase, name, owner, key)
+        self._check_arity(phase, callback, name)
         record = _HookRecord(
             phase=phase,
             callback=callback,
-            name=resolved_name,
+            name=name,
             every=self._resolve_every(phase, every, name),
             owner=owner,
             key=key,
-            after=self._normalize_deps(after, "after", resolved_name, phase),
-            before=self._normalize_deps(before, "before", resolved_name, phase),
+            after=self._normalize_deps(after, "after", name, phase),
+            before=self._normalize_deps(before, "before", name, phase),
         )
         if key is not None and owner is not None:
             self._published[(owner, key)] = record
@@ -668,26 +663,3 @@ class HookRegistry:
     def _assert_mutable(self, phase: Phase) -> None:
         if phase in self._emitting:
             raise HookRegistryError(f"Cannot mutate hooks while emitting phase {phase.value!r}")
-
-    @staticmethod
-    def _default_name(callback: Callable[..., Any]) -> str:
-        """Derive a name from where the callback is defined: ``module.QualName``.
-
-        ``partial`` and decorators are unwrapped and a bound method reduces to its function, so every
-        instance of a class derives the same name — one place in the source, however many hooks —
-        while a subclass that overrides the method derives its own. A lambda or a closure also gets
-        its definition line appended, because their qualnames don't identify them on their own.
-        """
-        target: Any = callback
-        while isinstance(target, functools.partial):
-            target = target.func
-        target = getattr(inspect.unwrap(target), "__func__", inspect.unwrap(target))
-        qualname = getattr(target, "__qualname__", None)
-        if qualname is None:
-            return repr(callback)
-        module = getattr(target, "__module__", None)
-        derived = f"{module}.{qualname}" if module else qualname
-        code = getattr(target, "__code__", None)
-        if "<" in qualname and code is not None:
-            derived = f"{derived}:{code.co_firstlineno}"
-        return derived

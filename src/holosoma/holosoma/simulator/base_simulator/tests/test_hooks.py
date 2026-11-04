@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import functools
 from contextlib import contextmanager
 from enum import Enum, auto
 from types import SimpleNamespace
@@ -513,60 +512,6 @@ def test_close_cycle_raises_like_any_other_phase() -> None:
         hooks.emit(Phase.CLOSE)
 
     assert calls == []
-
-
-class _Producer:
-    """Two instances register the same callback; a subclass override registers a different one."""
-
-    def tick(self) -> None: ...
-
-
-class _Subclass(_Producer):
-    def tick(self) -> None: ...
-
-
-def test_default_name_is_module_and_qualname() -> None:
-    hooks = HookRegistry()
-
-    handle = hooks.add(Phase.FRAME_END, _Producer().tick, name=None)
-
-    assert handle.name == f"{__name__}._Producer.tick"
-
-
-def test_instances_share_a_default_name_but_an_override_gets_its_own() -> None:
-    hooks = HookRegistry()
-
-    first = hooks.add(Phase.FRAME_END, _Producer().tick)
-    second = hooks.add(Phase.FRAME_END, _Producer().tick)
-    override = hooks.add(Phase.FRAME_END, _Subclass().tick)
-
-    assert first.name == second.name
-    assert override.name == f"{__name__}._Subclass.tick"
-
-
-def test_default_name_unwraps_partial_and_decorators() -> None:
-    def target(env_id: int) -> None: ...
-
-    @functools.wraps(target)
-    def decorated(env_id: int) -> None: ...
-
-    hooks = HookRegistry()
-
-    partial_handle = hooks.add(Phase.EPISODE_START, functools.partial(target))
-    decorated_handle = hooks.add(Phase.EPISODE_END, decorated)
-
-    expected = f"{__name__}.test_default_name_unwraps_partial_and_decorators.<locals>.target"
-    assert partial_handle.name.startswith(expected)
-    assert decorated_handle.name.startswith(expected)
-
-
-def test_lambdas_on_different_lines_get_distinct_default_names() -> None:
-    hooks = HookRegistry()
-
-    first = hooks.add(Phase.FRAME_END, lambda: None)
-    second = hooks.add(Phase.FRAME_END, lambda: None)
-
-    assert first.name != second.name
 
 
 def test_handle_orders_against_one_instance_not_its_namesake() -> None:
