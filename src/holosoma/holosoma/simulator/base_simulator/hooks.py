@@ -13,7 +13,7 @@ from holosoma.config_types.frequency import DecimationLike, is_frequency_string,
 
 HookDependency = Union["HookHandle", "HookRef", "_OptionalTarget"]
 """What ``after``/``before`` accept: a :class:`HookHandle`, a :class:`HookRef`, or :func:`if_present`
-of either. Hook names are labels for diagnostics and never identify a dependency."""
+of either."""
 
 
 @dataclass(frozen=True)
@@ -278,15 +278,13 @@ class HookRegistry:
         known base rate; event phases (episode/close) accept only int decimations. Default ``1`` fires
         every emission.
 
-        ``name`` labels the hook for :meth:`names`, cycle reports and teardown failures, defaulting
-        to the callback's qualname. Nothing orders against it, so it only has to tell a reader which
-        hook this is.
+        ``name`` labels the hook in :meth:`names`, cycle reports and teardown failures, defaulting
+        to the callback's qualname.
 
         ``after`` / ``before`` order this hook against other hooks *on the same phase*. An entry is
         either a :class:`HookHandle`, which pins the one hook it came from, or a :class:`HookRef`
-        for a hook another plugin publishes under a key. Hook names never identify a target: they are
-        labels, so renaming one cannot change what anything orders against. Ordering is phase-scoped,
-        and a handle or reference for another phase is rejected.
+        for a hook another plugin publishes under a key. Ordering is phase-scoped, and a handle or
+        reference for another phase is rejected.
 
         Targets are required: one that nothing on the phase is registered under fails the run rather
         than silently ordering nothing, so wrap it in :func:`if_present` when a run without it is

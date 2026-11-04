@@ -183,7 +183,7 @@ Select plugins as the dynamic-dict `plugin.<key>:<preset>` (per-key leaf overrid
 
 ### Phases
 
-A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=None, every=1, key=None, after=(), before=())`, which returns the `HookHandle` others order themselves against. Per control frame the loop emits, in order:
+A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=None, every=1, key=None, after=(), before=())`, which returns the `HookHandle` others order themselves against. `name` shows up in `names(phase)`, cycle reports and teardown failures, defaulting to the callback's qualname. Per control frame the loop emits, in order:
 
 | Phase | When | Callback args | Cadence |
 |---|---|---|---|
@@ -207,8 +207,6 @@ simulator.hooks.add(
 ```
 
 Keep your own handles on a public attribute if other code should be able to follow you; a frozen dataclass reads well once there are several.
-
-**Names are labels, not targets.** `name` is what `names(phase)`, cycle reports and teardown failures show, and defaults to the callback's qualname — so pass one whenever that wouldn't tell a reader which hook this is. Nothing orders against it, so renaming a hook cannot change what runs when.
 
 **To depend on a provider you can't hold**, it publishes a member of its own `Enum` and you reference that plus the slot it's configured in. The reference resolves once every plugin is installed, so neither side has to be constructed first:
 
