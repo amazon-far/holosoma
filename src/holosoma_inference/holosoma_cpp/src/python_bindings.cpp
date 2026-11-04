@@ -36,6 +36,9 @@ PYBIND11_MODULE(_native, m) {
       .def_readwrite("allow_climb_at_stand", &ContextualInput::allow_climb_at_stand)
       .def_readwrite("allow_climb_continuation", &ContextualInput::allow_climb_continuation)
       .def_readwrite("key", &ContextualInput::key);
+  m.def(
+      "backend_available", [](const std::string& name) { return backend_available(parse_backend(name)); },
+      py::arg("backend"), "Whether this build can execute the named inference backend.");
   py::class_<RobotState>(m, "RobotState")
       .def(py::init<>())
       .def_readwrite("base_pos", &RobotState::base_pos)
@@ -75,12 +78,13 @@ PYBIND11_MODULE(_native, m) {
           py::arg("config"), py::arg("autostart") = true)
       .def_static(
           "from_live_model",
-          [](const std::string& checkpoint, bool use_gpu, int threads, const std::string& history_initialization) {
-            auto config = live_policy_config(checkpoint, use_gpu, threads);
+          [](const std::string& checkpoint, const std::string& backend, int threads,
+             const std::string& history_initialization) {
+            auto config = live_policy_config(checkpoint, parse_backend(backend), threads);
             config.task.wbt_history_initialization = history_initialization;
             return std::make_unique<Policy>(config);
           },
-          py::arg("checkpoint"), py::arg("use_gpu") = false, py::arg("intra_op_threads") = 2,
+          py::arg("checkpoint"), py::arg("backend") = "cpu", py::arg("intra_op_threads") = 2,
           py::arg("history_initialization") = "repeat_first_valid_obs")
       .def(
           "set_reference",
@@ -203,18 +207,18 @@ PYBIND11_MODULE(_native, m) {
       .def_readwrite("current", &live::WbtReferenceSequence::current)
       .def_readwrite("lookahead", &live::WbtReferenceSequence::lookahead);
   py::class_<live::WbtPolicy>(m, "LiveWbtPolicy")
-      .def(py::init([](const std::string& path, bool use_gpu, const std::string& history_initialization) {
+      .def(py::init([](const std::string& path, const std::string& backend, const std::string& history_initialization) {
              auto policy = std::make_unique<live::WbtPolicy>();
              live::WbtHistoryInitialization history;
              if (!live::ParseWbtHistoryInitialization(history_initialization, history))
                throw py::value_error("history_initialization must be repeat_first_valid_obs or zero_pad, not '" +
                                      history_initialization + "'");
              policy->SetHistoryInitialization(history);
-             if (!policy->Initialize(path, use_gpu))
+             if (!policy->Initialize(path, parse_backend(backend)))
                throw py::value_error("Cannot initialize live WBT checkpoint: " + path);
              return policy;
            }),
-           py::arg("model_path"), py::arg("use_gpu") = false,
+           py::arg("model_path"), py::arg("backend") = "cpu",
            py::arg("history_initialization") = "repeat_first_valid_obs")
       .def_property_readonly(
           "history_initialization",

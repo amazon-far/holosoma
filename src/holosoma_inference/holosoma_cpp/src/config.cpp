@@ -282,7 +282,17 @@ RuntimeConfig parse_runtime(const YAML::Node& node, const std::string& path) {
   }
   MapReader r(node, path);
   r.optional("state_timeout_s", runtime.state_timeout_s);
-  r.optional("use_gpu", runtime.use_gpu);
+  bool use_gpu = false;
+  std::string backend;
+  r.optional("use_gpu", use_gpu);
+  r.optional("backend", backend);
+  if (!backend.empty()) {
+    runtime.backend = parse_backend(backend);
+    if (use_gpu && runtime.backend == Backend::kCpu)
+      throw std::runtime_error(path + ": use_gpu is true but backend is cpu; name one or the other");
+  } else if (use_gpu) {
+    runtime.backend = Backend::kCuda;
+  }
   r.optional("intra_op_threads", runtime.intra_op_threads);
   r.optional("profile_prefix", runtime.profile_prefix);
   r.optional("damping_kd", runtime.damping_kd);
@@ -432,6 +442,24 @@ void validate_one(const InferenceConfig& config, const std::string& path) {
 }
 
 }  // namespace
+
+const char* backend_name(Backend backend) {
+  switch (backend) {
+    case Backend::kCuda:
+      return "cuda";
+    case Backend::kTensorRt:
+      return "tensorrt";
+    default:
+      return "cpu";
+  }
+}
+
+Backend parse_backend(const std::string& name) {
+  if (name == "cpu") return Backend::kCpu;
+  if (name == "cuda") return Backend::kCuda;
+  if (name == "tensorrt" || name == "trt") return Backend::kTensorRt;
+  throw std::runtime_error("unknown inference backend '" + name + "'; expected cpu, cuda or tensorrt");
+}
 
 bool InferenceConfig::is_wbt() const {
   for (const auto& [group, terms] : observation.obs_dict) {
