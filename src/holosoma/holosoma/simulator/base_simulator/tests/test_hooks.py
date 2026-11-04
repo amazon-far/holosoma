@@ -838,4 +838,3 @@ def test_hookref_to_another_phase_is_rejected() -> None:
 
     with pytest.raises(HookOrderError, match="published on phase 'close'"):
         hooks.emit(Phase.FRAME_END)
-

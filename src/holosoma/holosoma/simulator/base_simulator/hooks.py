@@ -13,14 +13,6 @@ from typing_extensions import Literal, Self
 
 from holosoma.config_types.frequency import DecimationLike, is_frequency_string, resolve_decimation
 
-SENSOR_RENDER_HOOK = "sensors.render"
-"""Diagnostic name of the hook that refreshes the mounted-sensor buffers.
-
-Dependents follow ``simulator.sensor_render_hook`` rather than this name; it is shared so the label
-in logs and :meth:`HookRegistry.names` stays one spelling.
-"""
-
-
 HookDependency = Union[str, "HookHandle", "HookRef", "_OptionalTarget"]
 """What ``after``/``before`` accept: a hook name, a :class:`HookHandle`, a :class:`HookRef`, or
 :func:`if_present` of any of those."""

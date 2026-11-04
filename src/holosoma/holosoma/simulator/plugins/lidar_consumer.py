@@ -1,7 +1,7 @@
 """Backend-neutral host snapshot path for LiDAR consumer plugins.
 
-The per-step ``FRAME_END`` callback declares ``after=["sensors.render"]``, so the registry runs it
-behind the sensor capture that fills the buffers it reads.
+The per-step ``FRAME_END`` callback follows ``simulator.sensor_render_hook``, so the registry runs
+it behind the sensor capture that fills the buffers it reads.
 """
 
 from __future__ import annotations

@@ -5,8 +5,9 @@ Defines :class:`CameraConsumerPlugin`, the base for a plugin that consumes rende
 
 A consumer is a plugin (``cls(cfg, simulator)``, no base class required): it registers its per-step
 :meth:`~CameraConsumerPlugin.publish` on ``FRAME_END`` and its :meth:`~CameraConsumerPlugin.stop`
-on ``CLOSE`` in ``__init__``. That ``FRAME_END`` registration declares ``after=["sensors.render"]``, so
-the registry runs it behind the sensor capture and its buffers are fresh. Each consumer declares the
+on ``CLOSE`` in ``__init__``. That ``FRAME_END`` registration follows
+``simulator.sensor_render_hook``, so the registry runs it behind the sensor capture and its
+buffers are fresh. Each consumer declares the
 streams it needs via :meth:`~CameraConsumerPlugin.wanted_streams`; the base validates them against
 the configured cameras at construction (fail-loud) and, each step, snapshots exactly those to host
 once — sharing the single ``get_camera_data(device="cpu")`` copy across every consumer of the same
