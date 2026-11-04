@@ -285,15 +285,7 @@ class StateTensor:
     def __get__(self, sim: Any, owner: type | None = None) -> Any:
         if sim is None:
             return self
-        return sim_state(sim).get(self._name)
+        return sim.state.get(self._name)
 
     def __set__(self, sim: Any, value: Any) -> None:
-        sim_state(sim)._serve(self._name, value)
-
-
-def sim_state(sim: Any) -> SimState:
-    """Return ``sim``'s state registry, creating it for simulators built without ``__init__``."""
-    state: SimState | None = vars(sim).get("state")
-    if state is None:
-        state = vars(sim)["state"] = SimState()
-    return state
+        sim.state._serve(self._name, value)

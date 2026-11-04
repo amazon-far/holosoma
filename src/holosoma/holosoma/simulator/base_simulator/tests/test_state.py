@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from holosoma.simulator.base_simulator.state import Columns, SimState, StateTensor, sim_state
+from holosoma.simulator.base_simulator.state import Columns, SimState, StateTensor
 
 pytestmark = pytest.mark.no_sim
 
@@ -176,9 +176,12 @@ def test_assigning_a_registered_tensor_raises() -> None:
     class Sim:
         x = StateTensor("x")
 
+        def __init__(self) -> None:
+            self.state = SimState()
+
     sim = Sim()
     sim.x = torch.zeros(2)  # a placeholder before registration
-    sim_state(sim).register("x", lambda: torch.ones(2))
+    sim.state.register("x", lambda: torch.ones(2))
     with pytest.raises(AttributeError, match="in place"):
         sim.x = torch.zeros(2)
 

@@ -14,7 +14,7 @@ from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
-from holosoma.simulator.base_simulator.state import SimState, StateTensor, sim_state
+from holosoma.simulator.base_simulator.state import SimState, StateTensor
 from holosoma.simulator.shared.external_wrench import ExternalWrenchAccumulator, WrenchTarget
 from holosoma.simulator.shared.object_registry import ObjectRegistry, ObjectType
 from holosoma.simulator.shared.scene_types import SceneInterface
@@ -199,6 +199,7 @@ class BaseSimulator:
             Device type for simulation ('cpu' or 'cuda').
 
         """
+        self.state = SimState()
         self.viewer = None
         self.terrain_manager = terrain_manager
         self.training_config = tyro_config.training
@@ -221,7 +222,6 @@ class BaseSimulator:
         # Register sensor rendering before plugins so FRAME_END consumers read fresh outputs.
         # This no-ops until a backend builds its sensor manager during setup.
         self.hooks.add(Phase.FRAME_END, self.render_sensors, name="sensors.render")
-        self.state: SimState = sim_state(self)
         self.installed_plugins: dict[str, Any] = {}
         self._plugins_installed = False
         self._closed = False

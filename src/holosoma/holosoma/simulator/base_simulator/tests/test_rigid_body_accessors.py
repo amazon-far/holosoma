@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+from holosoma.simulator.base_simulator.state import SimState
 from holosoma.utils.safe_torch_import import torch
 
 pytestmark = pytest.mark.no_sim
@@ -21,6 +22,7 @@ class _FakeSim(BaseSimulator):
     """
 
     def __init__(self) -> None:
+        self.state = SimState()
         self.num_envs = 2
         self.num_bodies = 3
         self.body_names = ["pelvis", "torso_link", "left_ankle_roll_link"]
