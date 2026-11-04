@@ -749,7 +749,7 @@ class IsaacSim(BaseSimulator):
         if self.virtual_gantry:
             self.virtual_gantry.draw_debug()
 
-    def _step_dynamics(self) -> None:
+    def _advance_substep(self) -> None:
         self._sim_step_counter += 1
         # Only render if actively recording (not just if video recorder exists)
         has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording

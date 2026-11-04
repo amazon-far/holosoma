@@ -623,18 +623,18 @@ class BaseSimulator:
         One physics integration step, or — with ``sim.kinematic_playback`` — one
         forward-kinematics pass over externally written state.
         """
-        self._step_dynamics()
+        self._advance_substep()
         if self.kinematic_playback:
             self._kinematic_time += 1.0 / self.simulator_config.sim.fps
 
-    def _step_dynamics(self) -> None:
-        """Advance the physics engine by one integration step.
+    def _advance_substep(self) -> None:
+        """Advance the simulation by one substep: one integration step, or one kinematics pass.
 
         With ``sim.kinematic_playback``, run :meth:`_forward_kinematics` in place of the native step.
         Otherwise implementations must call ``self.flush_external_wrench()`` before the native step
         (after ``PRE_STEP`` hooks) so :meth:`apply_external_force` takes effect this substep.
         """
-        raise NotImplementedError("The '_step_dynamics' method must be implemented in subclasses.")
+        raise NotImplementedError("The '_advance_substep' method must be implemented in subclasses.")
 
     @property
     def base_quat(self) -> torch.Tensor:

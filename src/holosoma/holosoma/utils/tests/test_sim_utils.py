@@ -71,7 +71,7 @@ class _FakeSim:
     """Stand-in simulator that reproduces a backend's substep render gate.
 
     A backend draws once its own substep counter reaches ``render_interval`` (IsaacSim's
-    ``forward_kinematics``/``_step_dynamics``, whose counter runs over substeps and is never reset),
+    ``forward_kinematics``/``_advance_substep``, whose counter runs over substeps and is never reset),
     and a camera consumer on FRAME_END reads whatever that last draw left in the buffers. Carrying
     written/rendered/egressed state makes the loop's schedule observable without a real backend: a
     playback-style plugin samples on FRAME_BEGIN, writes on PRE_STEP, and egresses on FRAME_END.

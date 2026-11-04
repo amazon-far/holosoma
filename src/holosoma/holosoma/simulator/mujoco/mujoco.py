@@ -865,7 +865,7 @@ class MuJoCo(BaseSimulator):
         if self.virtual_gantry:
             self.virtual_gantry.draw_debug()
 
-    def _step_dynamics(self) -> None:
+    def _advance_substep(self) -> None:
         """Advance simulation by one physics step."""
         with self.state.mutation():
             if self.kinematic_playback:
