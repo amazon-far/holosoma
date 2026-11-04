@@ -208,7 +208,7 @@ simulator.hooks.add(
 
 Expose your own the same way if other code should be able to follow you — keep what `add` returns on a public attribute (a frozen dataclass bundling several reads well) rather than asking anyone to spell a name.
 
-**Names still work**, and one matches *every* hook registered under it, so a single reference covers a plugin selected in several slots, or a base class registering on behalf of its subclasses. `name` defaults to where the callback is defined — `module.QualName`, with `partial` and decorators unwrapped — so it's unique per place in the source without anyone coordinating, and most hooks need no name at all. Pass one explicitly for a hook others depend on by name, or for a callback that moves: a method overridden per backend derives a different default in each subclass.
+**Names still work**, and one matches *every* hook registered under it, so a single reference covers a plugin selected in several slots, or a base class registering on behalf of its subclasses. `name` defaults to where the callback is defined — `module.QualName`, with `partial` and decorators unwrapped — which is the label `names(phase)` and error messages show, so most hooks need no name at all. Pass one explicitly when that label would be unstable or unhelpful (a method overridden per backend derives a different default in each subclass), or when others should be able to depend on the hook by name rather than by handle.
 
 **Depending on a plugin you can't hold.** When the provider is constructed after you, it publishes a member of its own `Enum` contract and you reference that, naming the slot it's configured in. The reference resolves once every plugin is installed, so neither side has to be built first:
 

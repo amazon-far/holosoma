@@ -291,10 +291,10 @@ class HookRegistry:
         every emission.
 
         ``name`` defaults to where the callback is defined (``module.QualName``; see
-        :meth:`_default_name`), which is unique per place in the source without anyone coordinating.
-        Pass one explicitly to give a hook a short public handle for others to depend on
-        (``"sensors.render"``), which is also the only way to name a hook whose callback moves —
-        a backend override, for instance, derives a different default per subclass.
+        :meth:`_default_name`) and is the label diagnostics and :meth:`names` show. Pass one
+        explicitly when the derived label would be unstable or unhelpful — a method overridden per
+        backend derives a different default in each subclass — or when others should be able to
+        depend on this hook by name rather than by handle.
 
         ``after`` / ``before`` order this hook against other hooks *on the same phase*. An entry is
         either a name, which matches **every** hook registered under it — so one reference covers a
