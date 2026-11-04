@@ -1423,6 +1423,19 @@ class BaseSimulator:
 
     # ----- Deprecated: write state tensors in place and call forward_kinematics() instead -----
 
+    _DOF_STATE_REMOVED = (
+        "dof_state was removed: read and write sim.dof_pos and sim.dof_vel ([num_envs, num_dof]) in place, "
+        "and call sim.forward_kinematics() where a write must apply before the next step"
+    )
+
+    @property
+    def dof_state(self) -> torch.Tensor:
+        raise AttributeError(self._DOF_STATE_REMOVED)
+
+    @dof_state.setter
+    def dof_state(self, value: torch.Tensor) -> None:
+        raise AttributeError(self._DOF_STATE_REMOVED)
+
     def set_dof_state_tensor_robots(
         self, env_ids: torch.Tensor | None = None, dof_states: torch.Tensor | None = None
     ) -> None:
