@@ -21,6 +21,7 @@ from holosoma.config_types.sensor import (
     CameraSensorConfig,
     IsaacSimCameraConfig,
     IsaacSimFisheyeConfig,
+    IsaacSimRaycastMeshConfig,
     SensorMountConfig,
 )
 
@@ -321,7 +322,9 @@ raycast_cam = {
         height=64,
         vertical_fov=60.0,
         data_types=["depth"],
-        isaacsim=IsaacSimCameraConfig(renderer="raycast"),
+        isaacsim=IsaacSimCameraConfig(
+            renderer="raycast", raycast_meshes=IsaacSimRaycastMeshConfig(include_paths=["/World/ground"])
+        ),
     ),
 }
 

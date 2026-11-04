@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -15,6 +14,7 @@ import pytest
 
 from holosoma.config_types.sensor import CameraSensorConfig, IsaacSimCameraConfig, SensorMountConfig
 from holosoma.simulator.shared.raycast_depth_camera import RayCastDepthCamera
+from holosoma.simulator.shared.raycast_scene import RaycastSceneMeshes
 from holosoma.simulator.shared.sensor_manager import SensorManager
 from holosoma.utils.safe_torch_import import torch
 
@@ -33,6 +33,35 @@ def _ground(size: float = 50.0) -> Any:
     return convert_to_wp_mesh(vertices, np.array([[0, 1, 2], [0, 2, 3]]), "cpu")
 
 
+class _FakeScene:
+    """Already loaded geometry, independent of a terrain manager or asset file inventory."""
+
+    def __init__(self, sim: _FakeSim, occluders: list[Any] | None = None) -> None:
+        self.sim = sim
+        box = trimesh.creation.box(extents=[0.4, 0.4, 0.4])
+        self.meshes = [_ground()] + (
+            [convert_to_wp_mesh(box.vertices, box.faces, "cpu")] if occluders is None else occluders
+        )
+        self.positions = torch.zeros(NUM_ENVS, len(self.meshes), 3)
+        self.orientations = torch.zeros(NUM_ENVS, len(self.meshes), 4)
+        self.orientations[..., 3] = 1.0
+        self.data = RaycastSceneMeshes(
+            mesh_ids=wp.array([[mesh.id for mesh in self.meshes]] * NUM_ENVS, dtype=wp.uint64, device="cpu"),
+            positions=wp.from_torch(self.positions, dtype=wp.vec3),
+            orientations=wp.from_torch(self.orientations, dtype=wp.quat),
+            num_meshes=len(self.meshes),
+        )
+        self.initializations = 0
+
+    def prepare_meshes(self) -> RaycastSceneMeshes:
+        self.initializations += 1
+        return self.data
+
+    def update_mesh_poses(self) -> None:
+        self.positions[:, 1:] = self.sim.rigid_body_pos_w[:, 1:2]
+        self.orientations[:, 1:] = self.sim.rigid_body_quat_w[:, 1:2]
+
+
 class _FakeSim:
     """Robot links ``base`` (camera mount) and ``occluder``, over a ground plane at z = 0."""
 
@@ -45,19 +74,13 @@ class _FakeSim:
         self.rigid_body_pos_w[:, 1] = torch.tensor([0.0, 0.0, -100.0])  # out of view by default
         self.rigid_body_quat_w = torch.zeros(NUM_ENVS, len(LINKS), 4)
         self.rigid_body_quat_w[..., 3] = 1.0
-        ground = _ground()
-        self.terrain_manager = SimpleNamespace(get_state=lambda _name: SimpleNamespace(warp_mesh=ground))
+        self.scene = _FakeScene(self)
 
     def find_rigid_body_indice(self, name: str) -> int:
         return LINKS.index(name)
 
 
-def _camera(
-    tmp_path: Path, *, raycast_link_meshes: dict[str, Any] | None = None, **overrides: Any
-) -> CameraSensorConfig:
-    box = tmp_path / "box.stl"
-    if not box.exists():
-        trimesh.creation.box(extents=[0.4, 0.4, 0.4]).export(box)
+def _camera(tmp_path: Path, **overrides: Any) -> CameraSensorConfig:
     fields: dict[str, Any] = {
         # Identity mount on an identity link: optical -Z looks down world -Z, +Y is world +Y.
         "mount": SensorMountConfig(target_kind="robot_link", target="base"),
@@ -68,18 +91,16 @@ def _camera(
         "data_types": ["depth"],
     }
     fields.update(overrides)
-    occluders: dict[str, str | list[str]] = (
-        {"occluder": str(box)} if raycast_link_meshes is None else raycast_link_meshes
-    )
-    return CameraSensorConfig(
-        isaacsim=IsaacSimCameraConfig(renderer="raycast", raycast_link_meshes=occluders), **fields
-    )
+    return CameraSensorConfig(isaacsim=IsaacSimCameraConfig(renderer="raycast"), **fields)
 
 
 def _camera_and_record(sim: _FakeSim) -> tuple[RayCastDepthCamera, Any]:
     config = sim.sensor_config["depth"]
     record = SensorManager(device="cpu", control_hz=50.0).register_camera("depth", config)
-    return RayCastDepthCamera(sim, config), record  # type: ignore[arg-type]
+    camera = RayCastDepthCamera(sim, config, sim.scene)  # type: ignore[arg-type]
+    meshes = sim.scene.prepare_meshes()
+    camera.initialize(meshes)
+    return camera, record
 
 
 def _render(sim: _FakeSim) -> tuple[torch.Tensor, Any, Any]:
@@ -115,16 +136,16 @@ def test_link_mesh_is_cast_at_its_link_pose(tmp_path: Path) -> None:
     torch.testing.assert_close(depth[1:], torch.full_like(depth[1:], 2.0), atol=1e-4, rtol=0.0)
 
 
-def test_every_mesh_listed_for_a_link_is_cast_at_its_pose(tmp_path: Path) -> None:
-    left, right = tmp_path / "left.stl", tmp_path / "right.stl"
+def test_every_scene_mesh_owned_by_a_body_is_cast_at_its_pose(tmp_path: Path) -> None:
     # Two halves of one link, side by side along the link's x axis.
-    trimesh.creation.box(
+    left = trimesh.creation.box(
         extents=[0.2, 0.4, 0.4], transform=trimesh.transformations.translation_matrix([-0.1, 0, 0])
-    ).export(left)
-    trimesh.creation.box(
+    )
+    right = trimesh.creation.box(
         extents=[0.2, 0.4, 0.2], transform=trimesh.transformations.translation_matrix([0.1, 0, 0])
-    ).export(right)
-    sim = _FakeSim(_camera(tmp_path, raycast_link_meshes={"occluder": [str(left), str(right)]}), base_height=2.0)
+    )
+    sim = _FakeSim(_camera(tmp_path), base_height=2.0)
+    sim.scene = _FakeScene(sim, [convert_to_wp_mesh(mesh.vertices, mesh.faces, "cpu") for mesh in (left, right)])
     sim.rigid_body_pos_w[0, 1] = torch.tensor([0.0, 0.0, 1.0])
 
     depth, _, _ = _render(sim)
@@ -209,3 +230,71 @@ def test_mount_offsets_must_cover_every_env(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Mount offsets"):
         camera.set_mount_offset(torch.zeros(1, 3), torch.zeros(1, 3))
+
+
+def test_initialization_binds_scene_geometry_once(tmp_path: Path) -> None:
+    sim = _FakeSim(_camera(tmp_path))
+    camera, record = _camera_and_record(sim)
+    camera.initialize(sim.scene.data)
+    camera.render(record)
+    camera.render(record)
+    assert sim.scene.initializations == 1
+    assert camera._meshes is sim.scene.data
+
+
+def test_camera_does_not_prepare_its_mesh_provider(tmp_path: Path) -> None:
+    sim = _FakeSim(_camera(tmp_path))
+    camera = RayCastDepthCamera(sim, sim.sensor_config["depth"], sim.scene)  # type: ignore[arg-type]
+    camera.initialize(sim.scene.data)
+    assert sim.scene.initializations == 0
+    assert camera.mesh_provider is sim.scene
+
+
+def test_render_requires_scene_initialization(tmp_path: Path) -> None:
+    sim = _FakeSim(_camera(tmp_path))
+    config = sim.sensor_config["depth"]
+    record = SensorManager(device="cpu", control_hz=50.0).register_camera("depth", config)
+    camera = RayCastDepthCamera(sim, config, sim.scene)  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="initialized after scene loading"):
+        camera.render(record)
+
+
+def test_scene_mesh_pose_changes_are_used_without_reloading_geometry(tmp_path: Path) -> None:
+    sim = _FakeSim(_camera(tmp_path))
+    sim.rigid_body_pos_w[:, 1, 2] = 1.0
+    _, record, camera = _render(sim)
+    sim.rigid_body_pos_w[1, 1, 2] = 0.5
+    camera.render(record, torch.tensor([1]))
+    assert record.buffers["depth"][1, 6, 8, 0].item() == pytest.approx(1.3, abs=1e-4)
+    assert record.buffers["depth"][0, 6, 8, 0].item() == pytest.approx(0.8, abs=1e-4)
+    assert sim.scene.initializations == 1
+
+
+def test_scene_mesh_ids_can_differ_between_environments(tmp_path: Path) -> None:
+    sim = _FakeSim(_camera(tmp_path))
+    tall = trimesh.creation.box(extents=[0.4, 0.4, 0.8])
+    tall_mesh = convert_to_wp_mesh(tall.vertices, tall.faces, "cpu")
+    # Keep the mesh alive and replace only env 1's occluder ID.
+    ids = [[sim.scene.meshes[0].id, mesh.id] for mesh in (sim.scene.meshes[1], tall_mesh, sim.scene.meshes[1])]
+    sim.scene.data = RaycastSceneMeshes(
+        mesh_ids=wp.array(ids, dtype=wp.uint64, device="cpu"),
+        positions=sim.scene.data.positions,
+        orientations=sim.scene.data.orientations,
+        num_meshes=2,
+    )
+    sim.rigid_body_pos_w[:, 1, 2] = 1.0
+    depth, _, _ = _render(sim)
+    assert depth[0, 6, 8].item() == pytest.approx(0.8, abs=1e-4)
+    assert depth[1, 6, 8].item() == pytest.approx(0.6, abs=1e-4)
+
+
+def test_scene_mesh_rotation_is_used_in_its_local_frame(tmp_path: Path) -> None:
+    sim = _FakeSim(_camera(tmp_path, width=15, height=11))
+    box = trimesh.creation.box(extents=[0.8, 0.4, 0.2])
+    sim.scene = _FakeScene(sim, [convert_to_wp_mesh(box.vertices, box.faces, "cpu")])
+    sim.rigid_body_pos_w[:, 1, 2] = 1.0
+    # Rotating the long X axis onto Z raises the top surface from z=1.1 to z=1.4.
+    sim.rigid_body_quat_w[0, 1] = torch.tensor([0.0, math.sqrt(0.5), 0.0, math.sqrt(0.5)])
+    depth, _, _ = _render(sim)
+    assert depth[0, 5, 7].item() == pytest.approx(0.6, abs=1e-4)
+    assert depth[1, 5, 7].item() == pytest.approx(0.9, abs=1e-4)

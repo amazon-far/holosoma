@@ -48,7 +48,7 @@ from holosoma.simulator.isaacsim.object_spawner import (
     expand_scene_file,
     physics_material_cfg,
 )
-from holosoma.simulator.isaacsim.scene_fixtures import build_terrain_fixtures
+from holosoma.simulator.isaacsim.scene_fixtures import build_terrain_fixtures, register_terrain_mesh_cache
 from holosoma.simulator.isaacsim.proxy_utils import RootStatesProxy
 from holosoma.simulator.shared.dof_limits import build_dof_limits_from_config
 from holosoma.simulator.shared.external_wrench import WrenchTarget
@@ -324,6 +324,8 @@ class IsaacSim(BaseSimulator):
         # Author the light rig under env_0 before cloning so each environment gets its own lights; an
         # empty rig authors nothing, leaving only the scene asset's baked lights.
         light_setup.build_lights(self)
+
+        register_terrain_mesh_cache(self.terrain_manager, self.scene)
 
         # clone, filter, and replicate
         self.scene.clone_environments(copy_from_source=False)
@@ -631,6 +633,7 @@ class IsaacSim(BaseSimulator):
     def prepare_sim(self) -> None:
         # Wait until play so rigid object collections are initialized
         self._register_scene_assets()
+        sensor_setup.initialize_sensors(self)
 
         # Create before state adapter, needs a reference
         self.robot_root_states = RootStatesProxy(self._robot.data.root_state_w)  # (num_envs, 13)
