@@ -96,7 +96,9 @@ class ClassicBackend(IMujocoBackend):
         )
 
     def refresh_rigid_body_states(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Refresh reusable CPU views for robot rigid-body state."""
+        """Refresh reusable CPU views for robot rigid-body state, running pending kinematics first."""
+        if self._kinematics_pending:
+            self.forward_kinematics()
         np.take(self.data.xpos, self._rigid_body_ids, axis=0, out=self._rigid_body_positions)
         np.take(self.data.xquat, self._rigid_body_ids, axis=0, out=self._rigid_body_quaternions_mj)
         self._rigid_body_quaternions[:, :3] = self._rigid_body_quaternions_mj[:, 1:]
@@ -131,6 +133,7 @@ class ClassicBackend(IMujocoBackend):
     def step(self) -> None:
         """Advance simulation by one timestep using mj_step."""
         mujoco.mj_step(self.model, self.data)
+        self._kinematics_pending = True
 
     def physics_time(self) -> float:
         """Return MuJoCo's native simulation clock."""
@@ -142,6 +145,7 @@ class ClassicBackend(IMujocoBackend):
         mujoco.mj_comPos(self.model, self.data)
         mujoco.mj_camlight(self.model, self.data)
         mujoco.mj_comVel(self.model, self.data)
+        self._kinematics_pending = False
 
     def get_render_data(self, world_id: int = 0) -> mujoco.MjData:
         """Return data for rendering (already on CPU).

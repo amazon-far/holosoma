@@ -811,7 +811,7 @@ class MuJoCo(BaseSimulator):
             empty = tuple(torch.zeros(n, 0, width, device=device) for width in (3, 4, 3, 3))
             state.register(body_names, lambda: empty)
         else:
-            state.register(body_names, self.backend.refresh_rigid_body_states, needs_kinematics=True)
+            state.register(body_names, self.backend.refresh_rigid_body_states)
 
     def apply_torques_at_dof(self, torques: torch.Tensor, dof_indices: list[int] | None = None) -> None:
         """Apply torques with backend-specific optimization.
@@ -874,7 +874,6 @@ class MuJoCo(BaseSimulator):
                 # Must run before backend.step() consumes xfrc_applied.
                 self.flush_external_wrench()
                 self.backend.step()
-                self.state.pending_kinematics = self.backend.forward_kinematics
 
     def _forward_kinematics(self) -> None:
         """Kinematics, COM position, camera/light and COM velocity stages; no collision or dynamics."""

@@ -186,19 +186,6 @@ def test_assigning_a_registered_tensor_raises() -> None:
         sim.x = torch.zeros(2)
 
 
-def test_pending_kinematics_run_once_before_a_kinematic_read() -> None:
-    state = SimState()
-    calls: list[int] = []
-    state.register("body", lambda: torch.zeros(2, 3), needs_kinematics=True)
-    state.register("q", lambda: torch.zeros(2, 3))
-    state.pending_kinematics = lambda: calls.append(1)
-    state.get("q")
-    assert calls == []
-    state.get("body")
-    state.get("body")
-    assert calls == [1]
-
-
 def test_mutation_flushes_first_and_marks_stale_after_even_on_error() -> None:
     state, backing, reads, _ = _counting_state()
     state.get("x")[0] = -1.0

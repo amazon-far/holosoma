@@ -80,6 +80,8 @@ class IMujocoBackend(abc.ABC):
         self.config = config
         self.device = device
         self.num_envs = config.training.num_envs
+        # A step computes body kinematics before it integrates, leaving body state one step behind.
+        self._kinematics_pending = False
 
     @abc.abstractmethod
     def step(self) -> None:
@@ -269,9 +271,12 @@ class IMujocoBackend(abc.ABC):
     def refresh_rigid_body_states(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Return current robot-body state tensors in holosoma order.
 
-        The default gathers robot rows from full-model backend views. Backends
-        without full-model tensor views can override this with native extraction.
+        Runs :meth:`forward_kinematics` first if a step left body kinematics behind. The default
+        gathers robot rows from full-model backend views. Backends without full-model tensor views
+        can override this with native extraction.
         """
+        if self._kinematics_pending:
+            self.forward_kinematics()
         views = self.get_rigid_body_state_views()
         if views is None:
             raise NotImplementedError(f"{type(self).__name__} does not provide rigid-body state refresh")

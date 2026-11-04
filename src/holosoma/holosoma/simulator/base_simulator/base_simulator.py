@@ -646,7 +646,6 @@ class BaseSimulator:
 
         In-place writes otherwise land at the next physics step. No dynamics, rendering or time advance.
         """
-        self.state.pending_kinematics = None
         with self.state.mutation():
             self._forward_kinematics()
 

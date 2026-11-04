@@ -83,9 +83,6 @@ def _fresh_mujoco(sim):
 
 def _fresh(sim, simulator: str):
     """An independent read of the backend buffers per served name; other names re-run their bound read."""
-    if sim.state.pending_kinematics is not None:  # bring body kinematics current, as any body read does
-        update, sim.state.pending_kinematics = sim.state.pending_kinematics, None
-        update()
     fresh = _fresh_isaacsim(sim) if simulator == "isaacsim" else _fresh_mujoco(sim)
     for name in sim.state.names():
         if name not in fresh:

@@ -421,6 +421,7 @@ class WarpBackend(IMujocoBackend):
             mjw.com_pos(self.mjw_model, self.mjw_data)
             mjw.camlight(self.mjw_model, self.mjw_data)
             mjw.com_vel(self.mjw_model, self.mjw_data)
+        self._kinematics_pending = False
 
     def step(self) -> None:
         """Advance batched simulation by one timestep using CUDA graph.
@@ -439,6 +440,7 @@ class WarpBackend(IMujocoBackend):
             wp.capture_launch(self.step_graph)
             # No wp.synchronize() - let GPU work in parallel with CPU
         self._physics_time += float(self.model.opt.timestep)
+        self._kinematics_pending = True
 
     def physics_time(self) -> float:
         """Return the logical time of the simulation steps enqueued on the GPU."""
