@@ -628,3 +628,7 @@ class BaseTask:
     def _update_log_dict(self) -> None:
         """Hook for appending task-specific metrics to `self.log_dict` (no-op by default)."""
         return
+
+    def _refresh_sim_tensors(self) -> None:
+        """Deprecated no-op: simulator state tensors are current at every read."""
+        return

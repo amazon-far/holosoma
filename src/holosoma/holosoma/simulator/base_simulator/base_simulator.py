@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -1420,3 +1421,63 @@ class BaseSimulator:
             If not implemented by subclass
         """
         raise NotImplementedError("Must be implemented in subclasses.")
+
+    # ----- Deprecated: write state tensors in place and call forward_kinematics() instead -----
+
+    def set_dof_state_tensor_robots(
+        self, env_ids: torch.Tensor | None = None, dof_states: torch.Tensor | None = None
+    ) -> None:
+        """Deprecated: write ``dof_pos``/``dof_vel`` in place, then :meth:`forward_kinematics` if needed now.
+
+        ``dof_states`` is ``[len(env_ids) or num_envs, num_dof, 2]`` or flattened ``[... * num_dof, 2]``.
+        """
+        _warn_deprecated("set_dof_state_tensor_robots", "write dof_pos/dof_vel in place")
+        env_ids = self._deprecated_env_ids(env_ids)
+        if dof_states is not None:
+            rows = self._deprecated_rows(env_ids, dof_states.reshape(-1, self.num_dof, 2))
+            self.dof_pos[env_ids] = rows[..., 0]
+            self.dof_vel[env_ids] = rows[..., 1]
+        self.forward_kinematics()
+
+    def set_actor_root_state_tensor_robots(
+        self, env_ids: torch.Tensor | None = None, root_states: torch.Tensor | None = None
+    ) -> None:
+        """Deprecated: write ``robot_root_states`` in place, then :meth:`forward_kinematics` if needed now."""
+        _warn_deprecated("set_actor_root_state_tensor_robots", "write robot_root_states in place")
+        env_ids = self._deprecated_env_ids(env_ids)
+        if root_states is not None and root_states is not self.robot_root_states:
+            self.robot_root_states[env_ids] = self._deprecated_rows(env_ids, root_states).clone()
+        self.forward_kinematics()
+
+    def set_dof_state_tensor(self, env_ids: torch.Tensor | None = None, dof_states: torch.Tensor | None = None) -> None:
+        """Deprecated alias of :meth:`set_dof_state_tensor_robots`."""
+        self.set_dof_state_tensor_robots(env_ids, dof_states)
+
+    def set_actor_root_state_tensor(self, env_ids: torch.Tensor | None, root_states: torch.Tensor | None) -> None:
+        """Deprecated alias of :meth:`set_actor_root_state_tensor_robots` (robot rows only)."""
+        if root_states is self.all_root_states:  # the unified view passed wholesale: robot rows only
+            root_states = None
+        self.set_actor_root_state_tensor_robots(env_ids, root_states)
+
+    def refresh_sim_tensors(self) -> None:
+        """Deprecated: state tensors are current at every read."""
+        _warn_deprecated("refresh_sim_tensors", "drop the call; call forward_kinematics() to apply writes now")
+        self.state.flush_writes()
+        self.state.mark_stale()
+
+    def _deprecated_env_ids(self, env_ids: torch.Tensor | None) -> torch.Tensor:
+        if env_ids is None:
+            return torch.arange(self.num_envs, device=self.sim_device)
+        return torch.as_tensor(env_ids, device=self.sim_device, dtype=torch.long)
+
+    def _deprecated_rows(self, env_ids: torch.Tensor, states: torch.Tensor) -> torch.Tensor:
+        """``states`` for ``env_ids``, given pre-sliced (one row per env id) or for every env."""
+        if len(states) == len(env_ids):
+            return states
+        if len(states) == self.num_envs:
+            return states[env_ids]
+        raise ValueError(f"states has {len(states)} rows; expected {len(env_ids)} (pre-sliced) or {self.num_envs}")
+
+
+def _warn_deprecated(name: str, instead: str) -> None:
+    warnings.warn(f"{name} is deprecated and will be removed: {instead}.", FutureWarning, stacklevel=3)
