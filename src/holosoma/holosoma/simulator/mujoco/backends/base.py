@@ -101,13 +101,8 @@ class IMujocoBackend(abc.ABC):
 
         After ``qpos``/``qvel`` or ``set_actor_state`` writes, this makes body state and everything
         the renderers read consistent with the written state without integrating (no gravity, no
-        contacts, no time advance).
+        contacts, no time advance). Accelerations and contacts keep the last step's values.
         """
-        ...
-
-    @abc.abstractmethod
-    def update_body_kinematics(self) -> None:
-        """Recompute body poses and velocities from qpos/qvel; ``step`` leaves them one step behind."""
         ...
 
     @abc.abstractmethod

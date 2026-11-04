@@ -874,10 +874,10 @@ class MuJoCo(BaseSimulator):
                 # Must run before backend.step() consumes xfrc_applied.
                 self.flush_external_wrench()
                 self.backend.step()
-                self.state.pending_kinematics = self.backend.update_body_kinematics
+                self.state.pending_kinematics = self.backend.forward_kinematics
 
     def _forward_kinematics(self) -> None:
-        """Classic: ``mj_forward``; Warp: ``mjw.kinematics`` + ``com_pos`` + ``camlight`` + ``com_vel``."""
+        """Kinematics, COM position, camera/light and COM velocity stages; no collision or dynamics."""
         self.backend.forward_kinematics()
 
     def _write_external_wrench_native(self, targets: list[WrenchTarget]) -> None:
@@ -1045,7 +1045,7 @@ class MuJoCo(BaseSimulator):
         if len(indices) == 0:
             # Empty input is a uniform no-op across backends (matches IsaacSim);
             # short-circuit before resolve/convert so we skip the stray write_state_updates
-            # (mj_forward on ClassicBackend) at the tail.
+            # (forward kinematics on ClassicBackend) at the tail.
             return
 
         resolved_objects = self.object_registry.resolve_indices(indices)
@@ -1144,8 +1144,8 @@ class MuJoCo(BaseSimulator):
 
         Mirrors the cross-backend batch flush (IsaacSim:
         ``scene.write_data_to_sim()``). For MuJoCo:
-          - ClassicBackend: run ``mj_forward`` on the CPU data so xpos/xquat/cvel and
-            other derived quantities reflect the qpos/qvel just written.
+          - ClassicBackend: run the backend's forward kinematics so xpos/xquat/cvel
+            reflect the qpos/qvel just written.
           - WarpBackend: a no-op. The next ``step()`` (a captured CUDA graph that
             begins with forward kinematics) consumes the updated GPU qpos/qvel; no
             out-of-graph GPU forward runs here.
@@ -1153,9 +1153,7 @@ class MuJoCo(BaseSimulator):
         with self.state.mutation():
             if isinstance(self.backend, WarpBackend):
                 return
-            assert self.root_model
-            assert self.root_data
-            mujoco.mj_forward(self.root_model, self.root_data)
+            self.backend.forward_kinematics()
 
     def _write_root_states(self, env_ids: EnvIds, root_states: torch.Tensor) -> None:
         """Write world-frame robot root states, one row per entry of ``env_ids``."""

@@ -422,15 +422,6 @@ class WarpBackend(IMujocoBackend):
             mjw.camlight(self.mjw_model, self.mjw_data)
             mjw.com_vel(self.mjw_model, self.mjw_data)
 
-    def update_body_kinematics(self) -> None:
-        """Position and velocity stages only, leaving the step's accelerations and contacts."""
-        import warp as wp
-
-        with wp.ScopedDevice(self.mjw_device):
-            mjw.kinematics(self.mjw_model, self.mjw_data)
-            mjw.com_pos(self.mjw_model, self.mjw_data)
-            mjw.com_vel(self.mjw_model, self.mjw_data)
-
     def step(self) -> None:
         """Advance batched simulation by one timestep using CUDA graph.
 
