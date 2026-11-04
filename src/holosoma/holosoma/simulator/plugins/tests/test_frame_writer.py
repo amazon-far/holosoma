@@ -21,7 +21,7 @@ import torch
 
 from holosoma.config_types.plugin import FrameWriterPluginConfig
 from holosoma.config_types.sensor import CameraDataType, CameraSensorConfig, SensorMountConfig
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.simulator.base_simulator.hooks import SENSOR_RENDER_HOOK, HookRegistry, Phase
 from holosoma.simulator.plugins.frame_writer import FrameWriterPlugin
 from holosoma.utils.simulator_config import SimulatorType
 
@@ -64,6 +64,7 @@ class _FakeSimulator:
         num_envs: int = 1,
     ) -> None:
         self.hooks = HookRegistry()
+        self.sensor_render_hook = self.hooks.add(Phase.FRAME_END, lambda: None, name=SENSOR_RENDER_HOOK)
         self.sensor_config = sensors_config
         self.sensor_manager = _FakeSensorManager()
         self.training_config = _FakeTrainingConfig(num_envs)

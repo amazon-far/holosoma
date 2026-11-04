@@ -12,7 +12,12 @@ from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
-from holosoma.simulator.base_simulator.hooks import SENSOR_RENDER_HOOK, HookRegistry, Phase
+from holosoma.simulator.base_simulator.hooks import (
+    SENSOR_RENDER_HOOK,
+    HookHandle,
+    HookRegistry,
+    Phase,
+)
 from holosoma.simulator.shared.external_wrench import ExternalWrenchAccumulator, WrenchTarget
 from holosoma.simulator.shared.object_registry import ObjectRegistry, ObjectType
 from holosoma.simulator.shared.scene_types import SceneInterface
@@ -206,7 +211,9 @@ class BaseSimulator:
         self.hooks = HookRegistry(base_rates=self._hook_base_rates())
         # Egress consumers declare `after=[SENSOR_RENDER_HOOK]`, so this runs ahead of them
         # whatever order they register in. No-ops until a backend builds its sensor manager.
-        self.hooks.add(Phase.FRAME_END, self.render_sensors, name=SENSOR_RENDER_HOOK)
+        self.sensor_render_hook: HookHandle = self.hooks.add(
+            Phase.FRAME_END, self.render_sensors, name=SENSOR_RENDER_HOOK
+        )
         self.installed_plugins: dict[str, Any] = {}
         self._plugins_installed = False
         self._closed = False
@@ -770,6 +777,7 @@ class BaseSimulator:
             self.installed_plugins[key] = cfg.get_cls()(cfg, self)
         if self.installed_plugins:
             logger.info(f"Installed plugins: {sorted(self.installed_plugins)}")
+        self.hooks.validate()
 
     def close(self) -> None:
         """Emit the one-pass simulator teardown phase."""

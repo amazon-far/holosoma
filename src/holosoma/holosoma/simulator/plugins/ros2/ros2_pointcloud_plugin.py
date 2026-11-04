@@ -38,6 +38,9 @@ class ROS2PointCloudPlugin(LidarConsumerPlugin):
 
     config: ROS2PointCloudPluginConfig
 
+    close_before = ("ros2.runtime.close",)
+    """Node teardown precedes the shared context's shutdown."""
+
     def __init__(self, config: ROS2PointCloudPluginConfig, simulator: BaseSimulator) -> None:
         self._node: Any = None
         self._executor: Any = None

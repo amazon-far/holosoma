@@ -29,7 +29,7 @@ from holosoma.config_types.plugin import (
 from holosoma.config_types.sensor import CameraSensorConfig, LidarSensorConfig, SensorConfig, SensorMountConfig
 from holosoma.config_values.plugin import PLUGIN_REGISTRY
 from holosoma.config_values.wbt.g1 import sensor as g1_cameras
-from holosoma.simulator.base_simulator.hooks import HookRegistry
+from holosoma.simulator.base_simulator.hooks import SENSOR_RENDER_HOOK, HookRegistry, Phase
 from holosoma.simulator.plugins.camera_consumer import CameraIntrinsics, FramePacket
 
 pytestmark = pytest.mark.no_sim
@@ -76,6 +76,7 @@ class _FakeSimulator:
 
     def __init__(self, sensors_config: Mapping[str, SensorConfig] | Mapping[str, object], num_envs: int = 1) -> None:
         self.hooks = HookRegistry()
+        self.sensor_render_hook = self.hooks.add(Phase.FRAME_END, lambda: None, name=SENSOR_RENDER_HOOK)
         self.sensor_config: dict[str, Any] = dict(sensors_config)
         self.training_config = _FakeTrainingConfig(num_envs)
         self.headless = True

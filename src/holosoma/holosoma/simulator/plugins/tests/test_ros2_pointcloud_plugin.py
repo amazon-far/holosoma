@@ -31,6 +31,7 @@ class _TrainingConfig:
 class _FakeSimulator:
     def __init__(self, *, include_rear_lidar: bool = False) -> None:
         self.hooks = HookRegistry()
+        self.sensor_render_hook = self.hooks.add(Phase.FRAME_END, lambda: None, name=SENSOR_RENDER_HOOK)
         lidar = LidarSensorConfig(
             mount=SensorMountConfig(target_kind="robot_link", target="pelvis"),
             pattern=GridLidarRayPatternConfig(horizontal_angles=[0.0, 90.0]),

@@ -6,9 +6,8 @@ import inspect
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Mapping, Sequence, overload
+from typing import Any, Callable, Mapping, Sequence, Union, overload
 
-from loguru import logger
 from typing_extensions import Literal, Self
 
 from holosoma.config_types.frequency import DecimationLike, is_frequency_string, resolve_decimation
@@ -19,6 +18,10 @@ SENSOR_RENDER_HOOK = "sensors.render"
 Shared by both ends of that dependency because an unmatched name is dropped silently: renaming the
 hook has to break its dependents rather than quietly stop ordering them.
 """
+
+
+HookDependency = Union[str, "HookHandle", "_OptionalTarget"]
+"""What ``after``/``before`` accept: a hook name, a :class:`HookHandle`, or :func:`if_present` of either."""
 
 
 class Phase(str, Enum):
@@ -95,9 +98,9 @@ class _HookRecord:
     name: str
     every: int = 1
     """Resolved emission decimation: the callback runs once per ``every`` emissions of its phase."""
-    after: tuple[str | _HookRecord, ...] = field(default=(), repr=False)
+    after: tuple[str | _HookRecord | _OptionalTarget, ...] = field(default=(), repr=False)
     """Same-phase hooks this one must run after: a name matches all its holders, a record just one."""
-    before: tuple[str | _HookRecord, ...] = field(default=(), repr=False)
+    before: tuple[str | _HookRecord | _OptionalTarget, ...] = field(default=(), repr=False)
     """Same-phase hooks this one must run before: a name matches all its holders, a record just one."""
     _counter: int = 0
     """Emissions counted toward the next fire; only advances while this hook is enabled."""
@@ -154,6 +157,26 @@ class HookHandle:
         self._registry._remove(self._record)
 
 
+@dataclass(frozen=True)
+class _OptionalTarget:
+    """An ``after``/``before`` entry whose absence is acceptable; see :func:`if_present`.
+
+    Holds a handle as given and the record it resolves to once :meth:`HookRegistry.add` has seen it.
+    """
+
+    target: str | HookHandle | _HookRecord
+
+
+def if_present(target: str | HookHandle) -> _OptionalTarget:
+    """Mark an ``after``/``before`` target optional, so the run starts even if nothing provides it.
+
+    Every other target is required: a reference nothing on the phase is registered under fails the
+    run rather than silently ordering nothing. Presence is about registration, not execution — a
+    required target that is disabled satisfies the reference and simply contributes no edge.
+    """
+    return _OptionalTarget(target)
+
+
 def _dep_positions(
     dep: str | _HookRecord, positions: Mapping[str, list[int]], by_record: Mapping[_HookRecord, int]
 ) -> Sequence[int]:
@@ -188,8 +211,8 @@ class HookRegistry:
         *,
         name: str | None = None,
         every: DecimationLike = 1,
-        after: Sequence[str | HookHandle] = (),
-        before: Sequence[str | HookHandle] = (),
+        after: Sequence[HookDependency] = (),
+        before: Sequence[HookDependency] = (),
     ) -> HookHandle: ...
 
     @overload
@@ -200,8 +223,8 @@ class HookRegistry:
         *,
         name: str | None = None,
         every: DecimationLike = 1,
-        after: Sequence[str | HookHandle] = (),
-        before: Sequence[str | HookHandle] = (),
+        after: Sequence[HookDependency] = (),
+        before: Sequence[HookDependency] = (),
     ) -> HookHandle: ...
 
     @overload
@@ -212,8 +235,8 @@ class HookRegistry:
         *,
         name: str | None = None,
         every: DecimationLike = 1,
-        after: Sequence[str | HookHandle] = (),
-        before: Sequence[str | HookHandle] = (),
+        after: Sequence[HookDependency] = (),
+        before: Sequence[HookDependency] = (),
     ) -> HookHandle: ...
 
     def add(
@@ -223,8 +246,8 @@ class HookRegistry:
         *,
         name: str | None = None,
         every: DecimationLike = 1,
-        after: Sequence[str | HookHandle] = (),
-        before: Sequence[str | HookHandle] = (),
+        after: Sequence[HookDependency] = (),
+        before: Sequence[HookDependency] = (),
     ) -> HookHandle:
         """Register a hook callback for a lifecycle phase.
 
@@ -252,14 +275,16 @@ class HookRegistry:
         plugin selected in several slots — or a :class:`HookHandle`, which pins exactly the one hook
         it came from, for ordering two instances of the same callback against each other. Lookup is
         phase-scoped: a name registered only on another phase does not exist from here, and a handle
-        for another phase is rejected outright. A name constraint is advisory — one that matches
-        nothing is simply not applied, silently, since a plugin may name a hook belonging to another
-        plugin that this run does not select. A disabled hook matches nothing either, so ordering
-        always reflects the hooks that fire: declare the dependency you need rather than relying on
-        one inherited through a hook someone can switch off. Unconstrained hooks keep their order
-        relative to each other.
-        ``CLOSE`` resolves the same way and then runs it backwards, so a hook that declares ``after``
-        tears down before the hook it follows.
+        for another phase is rejected outright.
+
+        Targets are required: one that nothing on the phase is registered under fails the run rather
+        than silently ordering nothing, so wrap it in :func:`if_present` when a run without it is
+        valid. Presence is about registration, not execution — a disabled target satisfies the
+        reference but contributes no edge, so ordering always reflects the hooks that fire and a
+        chain holds only while its links run. Unconstrained hooks keep their order relative to each
+        other, and ``CLOSE`` prefers the latest-registered among them so teardown reverses
+        construction. In every phase, including ``CLOSE``, ``before`` and ``after`` describe the
+        order callbacks actually run in: a node's cleanup declares ``before=[runtime.close_hook]``.
         """
         self._assert_mutable(phase)
         resolved_name = name or self._default_name(callback)
@@ -277,8 +302,8 @@ class HookRegistry:
         return HookHandle(self, record)
 
     def _normalize_deps(
-        self, deps: Sequence[str | HookHandle], field_name: str, name: str, phase: Phase
-    ) -> tuple[str | _HookRecord, ...]:
+        self, deps: Sequence[HookDependency], field_name: str, name: str, phase: Phase
+    ) -> tuple[str | _HookRecord | _OptionalTarget, ...]:
         """Freeze a constraint list, resolving each handle to the single hook it refers to.
 
         Every rejection here is something that would otherwise order against nothing at all, which an
@@ -292,10 +317,12 @@ class HookRegistry:
                 f"hook {name!r} on phase {phase.value!r}: {field_name}={deps!r} is a string; "
                 f"pass a sequence of hook names, e.g. {field_name}=[{deps!r}]."
             )
-        resolved: list[str | _HookRecord] = []
-        for dep in deps:
+        resolved: list[str | _HookRecord | _OptionalTarget] = []
+        for entry in deps:
+            optional = isinstance(entry, _OptionalTarget)
+            dep = entry.target if isinstance(entry, _OptionalTarget) else entry
             if isinstance(dep, str):
-                resolved.append(dep)
+                resolved.append(_OptionalTarget(dep) if optional else dep)
                 continue
             if not isinstance(dep, HookHandle):
                 raise HookRegistryError(
@@ -314,7 +341,7 @@ class HookRegistry:
                     f"{target.name!r} on phase {target.phase.value!r}. Constraints apply within one "
                     f"phase; cross-phase order is the phase order itself."
                 )
-            resolved.append(target)
+            resolved.append(_OptionalTarget(target) if optional else target)
         return tuple(resolved)
 
     @staticmethod
@@ -370,7 +397,7 @@ class HookRegistry:
         return resolve_decimation(every, base_hz=1.0, field=field)
 
     def emit(self, phase: Phase, *args: Any) -> None:
-        """Run due hooks in resolved order; CLOSE runs once, backwards, and stops on failure."""
+        """Run due hooks in resolved order; CLOSE runs once and stops at the first failure."""
         self._validate_payload(phase, args)
 
         if phase is Phase.CLOSE:
@@ -383,7 +410,7 @@ class HookRegistry:
             self._closed = True
             self._emitting.add(phase)
             try:
-                for record in reversed(self._close_order()):
+                for record in self._order(phase):
                     try:
                         record.callback()
                     except Exception as exc:  # noqa: PERF203 - preserve the failing owner's name.
@@ -404,17 +431,24 @@ class HookRegistry:
         finally:
             self._emitting.remove(phase)
 
+    def validate(self) -> None:
+        """Resolve every phase now, without invoking a callback, so a bad graph fails at startup.
+
+        Raises :class:`HookOrderError` on a cycle or a required target nothing is registered under.
+        Hooks registered afterwards are validated when their phase next resolves, so calling this
+        early does not freeze the registry.
+        """
+        for phase in Phase:
+            self._order(phase)
+
     def names(self, phase: Phase) -> tuple[str, ...]:
         """Names of the hooks that would fire on ``phase`` now, in the order they would run.
 
-        Resolves the phase's constraints like :meth:`emit` does, so ``CLOSE`` reads back-to-front and
-        a phase whose constraints form a cycle raises :class:`HookOrderError` here too — the error
-        names the hooks in the cycle, which is what you were after. Decimated hooks are included
-        regardless of where their counter sits.
+        Resolves the phase's constraints like :meth:`emit` does, so a cycle or an unsatisfied
+        required target raises here too. Decimated hooks are included regardless of where their
+        counter sits.
         """
-        order = self._close_order() if phase is Phase.CLOSE else self._order(phase)
-        names = tuple(record.name for record in order)
-        return tuple(reversed(names)) if phase is Phase.CLOSE else names
+        return tuple(record.name for record in self._order(phase))
 
     @staticmethod
     def _validate_payload(phase: Phase, args: tuple[Any, ...]) -> None:
@@ -464,20 +498,6 @@ class HookRegistry:
             self._stale.discard(phase)
         return self._resolved[phase]
 
-    def _close_order(self) -> tuple[_HookRecord, ...]:
-        """CLOSE's order, falling back to registration order if its constraints don't resolve.
-
-        A cycle must not cost every hook its teardown (viewers, ROS nodes, open video files), and the
-        same cycle raises from any other phase's emit, so here it is logged and the constraints dropped.
-        """
-        try:
-            return self._order(Phase.CLOSE)
-        except HookOrderError as exc:
-            logger.error(f"{exc} Tearing down in registration order instead.")
-            self._stale.discard(Phase.CLOSE)
-            self._resolved[Phase.CLOSE] = tuple(self._live(Phase.CLOSE))
-            return self._resolved[Phase.CLOSE]
-
     def _live(self, phase: Phase) -> list[_HookRecord]:
         """The phase's hooks that would fire now, in registration order."""
         return [record for record in self._records[phase] if record.enabled and not record.removed]
@@ -489,14 +509,17 @@ class HookRegistry:
         first, so an unconstrained phase emits exactly in registration order, and hooks a constraint
         displaces keep their order relative to each other.
 
-        A constraint that matches no hook firing on this phase — absent, disabled or removed —
-        contributes no edge and is otherwise ignored; it applies on its own if that hook shows up or
-        is re-enabled later. So a chain only holds while its links run: in ``a -> b -> c``, disabling
-        ``b`` leaves ``a`` and ``c`` unordered, and a hook that needs ``a`` first has to say so.
-        Keeping a disabled hook's edges instead would let a link nobody runs make a phase
-        unsatisfiable, so ordering only ever reflects hooks that fire.
+        ``CLOSE`` breaks ties the other way, running the latest-registered ready hook first, so
+        teardown reverses construction without anyone declaring it.
+
+        Ordering only ever reflects hooks that fire: a target that is absent, disabled or removed
+        contributes no edge, so in ``a -> b -> c`` disabling ``b`` leaves ``a`` and ``c`` unordered
+        and a hook that needs ``a`` first has to say so. Requiredness is separate and about
+        registration — a target nothing is registered under raises unless it was wrapped in
+        :func:`if_present`, while a registered-but-disabled target satisfies the reference.
         """
         live = self._live(phase)
+        registered = {record.name for record in self._records[phase] if not record.removed}
         positions: dict[str, list[int]] = defaultdict(list)
         by_record: dict[_HookRecord, int] = {}
         for position, record in enumerate(live):
@@ -513,23 +536,25 @@ class HookRegistry:
 
         for position, record in enumerate(live):
             for dep in record.after:
-                for target in _dep_positions(dep, positions, by_record):
+                for target in self._targets(phase, record, dep, positions, by_record, registered):
                     link(target, position)
             for dep in record.before:
-                for target in _dep_positions(dep, positions, by_record):
+                for target in self._targets(phase, record, dep, positions, by_record, registered):
                     link(position, target)
 
-        ready = [position for position in range(len(live)) if blockers[position] == 0]
+        # CLOSE tears down in reverse, so it prefers the latest-registered hook among the ready ones.
+        sign = -1 if phase is Phase.CLOSE else 1
+        ready = [sign * position for position in range(len(live)) if blockers[position] == 0]
         heapq.heapify(ready)
         order: list[_HookRecord] = []
         while ready:
-            position = heapq.heappop(ready)
+            position = sign * heapq.heappop(ready)
             order.append(live[position])
             # Iteration order doesn't matter: the heap decides which of the unblocked runs next.
             for later in successors[position]:
                 blockers[later] -= 1
                 if blockers[later] == 0:
-                    heapq.heappush(ready, later)
+                    heapq.heappush(ready, sign * later)
 
         if len(order) != len(live):
             cycle = sorted({live[position].name for position in range(len(live)) if blockers[position] > 0})
@@ -538,6 +563,32 @@ class HookRegistry:
                 f"Their 'after'/'before' constraints cannot all hold."
             )
         return tuple(order)
+
+    def _targets(
+        self,
+        phase: Phase,
+        record: _HookRecord,
+        dep: str | _HookRecord | _OptionalTarget,
+        positions: Mapping[str, list[int]],
+        by_record: Mapping[_HookRecord, int],
+        registered: set[str],
+    ) -> Sequence[int]:
+        """Live positions a constraint points at, raising when a required target is not registered."""
+        if isinstance(dep, _OptionalTarget):
+            target = dep.target
+            if isinstance(target, HookHandle):  # add() stores the record; narrow for the type checker
+                target = target._record
+            return _dep_positions(target, positions, by_record)
+
+        present = dep in registered if isinstance(dep, str) else not dep.removed
+        if not present:
+            missing = dep if isinstance(dep, str) else dep.name
+            raise HookOrderError(
+                f"Hook {record.name!r} on phase {phase.value!r} requires {missing!r}, which no hook "
+                f"on that phase is registered under. Wrap it in if_present(...) if a run without it "
+                f"is valid."
+            )
+        return _dep_positions(dep, positions, by_record)
 
     def _assert_mutable(self, phase: Phase) -> None:
         if phase in self._emitting:

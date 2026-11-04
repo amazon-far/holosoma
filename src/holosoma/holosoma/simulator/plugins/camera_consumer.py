@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Tuple, Union
+from typing import TYPE_CHECKING, Sequence, Tuple, Union
 
 import numpy as np
 import numpy.typing as npt
@@ -35,7 +35,7 @@ from holosoma.config_types.sensor import (
     IsaacSimCameraConfig,
     MujocoCameraConfig,
 )
-from holosoma.simulator.base_simulator.hooks import SENSOR_RENDER_HOOK, Phase
+from holosoma.simulator.base_simulator.hooks import HookHandle, Phase
 from holosoma.utils.simulator_config import SimulatorType
 
 if TYPE_CHECKING:
@@ -108,6 +108,9 @@ class CameraConsumerPlugin:
     frame-processing failure isolation. Teardown failures propagate through CLOSE so providers stay alive.
     """
 
+    close_before: Sequence[str | HookHandle] = ()
+    """Hooks this consumer's teardown must run before, e.g. a transport context it publishes through."""
+
     def __init__(self, config: PluginConfig, simulator: BaseSimulator) -> None:
         # A plugin is duck-typed (cls(cfg, simulator) registering on simulator.hooks); no base to call.
         # ``config`` is typed per subclass; ``cfg`` mirrors the plugin convention (ClockPublishPlugin etc).
@@ -122,9 +125,9 @@ class CameraConsumerPlugin:
             Phase.FRAME_END,
             self._on_frame_end,
             name=f"{self._label()}.publish",
-            after=[SENSOR_RENDER_HOOK],
+            after=[simulator.sensor_render_hook],
         )
-        simulator.hooks.add(Phase.CLOSE, self._on_close, name=f"{self._label()}.stop")
+        simulator.hooks.add(Phase.CLOSE, self._on_close, name=f"{self._label()}.stop", before=self.close_before)
 
     def _label(self) -> str:
         return type(self).__name__

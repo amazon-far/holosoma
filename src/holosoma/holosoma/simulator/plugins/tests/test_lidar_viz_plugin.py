@@ -17,7 +17,7 @@ from mpl_toolkits.mplot3d.axes3d import Axes3D
 
 from holosoma.config_types.plugin import LidarVizPluginConfig
 from holosoma.config_types.sensor import CustomLidarRayPatternConfig, LidarSensorConfig, SensorMountConfig
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.simulator.base_simulator.hooks import SENSOR_RENDER_HOOK, HookRegistry, Phase
 from holosoma.simulator.plugins.viz.lidar_viz_plugin import LidarVizPlugin
 from holosoma.simulator.shared.sensor_manager import SensorManager
 from holosoma.utils.safe_torch_import import torch
@@ -47,6 +47,7 @@ class _FakeSimulator:
             ),
         )
         self.hooks = HookRegistry()
+        self.sensor_render_hook = self.hooks.add(Phase.FRAME_END, lambda: None, name=SENSOR_RENDER_HOOK)
         self.sensor_config = {"front/scan": lidar}
         self.training_config = _TrainingConfig()
         self.video_config = _VideoConfig()

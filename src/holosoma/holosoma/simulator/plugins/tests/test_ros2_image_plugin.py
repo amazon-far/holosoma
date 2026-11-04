@@ -32,7 +32,7 @@ from holosoma.config_types.sensor import (
     IsaacSimFisheyeConfig,
     SensorMountConfig,
 )
-from holosoma.simulator.base_simulator.hooks import HookRegistry
+from holosoma.simulator.base_simulator.hooks import SENSOR_RENDER_HOOK, HookRegistry, Phase
 from holosoma.simulator.plugins.camera_consumer import CameraIntrinsics, FramePacket
 from holosoma.utils.simulator_config import SimulatorType
 
@@ -64,6 +64,7 @@ class _FakeSimulator:
 
     def __init__(self, *cams: tuple[str, CameraSensorConfig]) -> None:
         self.hooks = HookRegistry()
+        self.sensor_render_hook = self.hooks.add(Phase.FRAME_END, lambda: None, name=SENSOR_RENDER_HOOK)
         self.sensor_config = dict(cams)
         self.training_config = _FakeTrainingConfig()
         self.num_envs = 1

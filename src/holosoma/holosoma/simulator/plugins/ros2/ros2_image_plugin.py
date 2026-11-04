@@ -54,6 +54,9 @@ class ROS2ImagePlugin(CameraConsumerPlugin):
 
     config: ROS2ImagePluginConfig
 
+    close_before = ("ros2.runtime.close",)
+    """Node teardown precedes the shared context's shutdown."""
+
     def __init__(self, config: ROS2ImagePluginConfig, simulator: BaseSimulator) -> None:
         # rclpy/sensor_msgs objects are typed Any: their stubs are absent in non-ROS envs (e.g. the
         # mujoco venv), and these are only populated in start() under a real ROS environment.

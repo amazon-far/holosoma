@@ -192,28 +192,35 @@ A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=No
 | `POST_STEP` | after each physics substep (freshest sim time) | — | physics `fps` |
 | `FRAME_END` | after the substeps + state-tensor refresh (read state here) | — | control rate |
 | `EPISODE_START` / `EPISODE_END` | on reset boundaries | `env_id` | per event |
-| `CLOSE` | teardown (release resources); runs the resolved order backwards | — | once |
+| `CLOSE` | teardown (release resources); `before`/`after` describe execution here too, and ties go to the latest registered | — | once |
 
 ### Ordering
 
-Within a phase, hooks run in registration order — which for plugins means the order their slots were selected, so don't rely on it. Declare what you actually need instead: `after` / `before` name the same-phase hooks you must follow or precede, and the registry orders you against them. Hooks with no constraints keep their order relative to each other, though a constraint can move others past them.
+Within a phase, hooks run in registration order — which for plugins means the order their slots were selected, so don't rely on it. Declare what you need instead: `after` / `before` take the same-phase hooks you must follow or precede. Hooks with no constraints keep their order relative to each other, though a constraint can move others past them.
+
+**Prefer the handle.** `add` returns a `HookHandle`, and the framework keeps the ones others depend on: `simulator.sensor_render_hook` for the sensor refresh, the bridge's `transport_hook`, and `close_hook` on the shared ROS2 runtime. A handle pins exactly one registration, so a rename can't silently unorder anything:
 
 ```python
 simulator.hooks.add(
-    Phase.FRAME_END, self.publish, name="my_plugin.publish", after=["sensors.render"],
+    Phase.FRAME_END, self.publish, name="my_plugin.publish", after=[simulator.sensor_render_hook],
 )
 ```
 
-**Naming.** `name` defaults to where the callback is defined — `module.QualName`, with `partial` and decorators unwrapped — so it is unique per place in the source without anyone coordinating, and most hooks need no name at all. Pass one explicitly to give a hook a short public handle others depend on (`"sensors.render"`), and for a callback that moves: a method overridden per backend derives a different default in each subclass, so a cross-backend dependency needs the explicit name.
+Expose your own the same way if other code should be able to follow you — keep what `add` returns on a public attribute (a frozen dataclass bundling several reads well) rather than asking anyone to spell a name.
 
-**What a reference means.** A name matches **every** hook registered under it, so one reference covers a plugin selected in several slots, and a base class registering on behalf of its subclasses is one name covering all of them. To pin one particular hook instead — ordering two instances of the same callback against each other — pass the `HookHandle` that `add` returned:
+**Names still work**, and one matches *every* hook registered under it, so a single reference covers a plugin selected in several slots, or a base class registering on behalf of its subclasses. `name` defaults to where the callback is defined — `module.QualName`, with `partial` and decorators unwrapped — so it's unique per place in the source without anyone coordinating, and most hooks need no name at all. Pass one explicitly for a hook others depend on by name, or for a callback that moves: a method overridden per backend derives a different default in each subclass.
+
+**Targets are required.** A reference nothing on the phase is registered under fails the run rather than quietly ordering nothing. Wrap it when a run without it is valid:
 
 ```python
-first = hooks.add(Phase.FRAME_END, seeded(1), name="dr.apply")
-hooks.add(Phase.FRAME_END, self.place, name="dr.place", after=[first])
+after=[simulator.sensor_render_hook, if_present("optional_plugin.publish")]
 ```
 
-Lookup is per phase: a name registered only on another phase doesn't exist from here, and a handle for another phase is rejected. A name constraint is advisory, so one that matches nothing is silently not applied — you can name a hook belonging to a plugin a given run doesn't select, and that's a constraint satisfied by absence rather than a problem to report. A disabled hook matches nothing either, so ordering always reflects the hooks that actually fire — disabling a link drops the order it was carrying, and a cycle broken by a disabled hook stays satisfiable. Declare the dependency you need rather than inheriting one through a hook someone can switch off. A set of constraints that can't all hold raises `HookOrderError` from the next `emit` of that phase, naming the hooks in the cycle. `CLOSE` resolves the same way and then runs backwards, so a hook that declares `after` tears down *before* the hook it follows — publishers close before the runtime they publish through. For debugging, `hooks.names(phase)` returns the resolved order.
+Presence is about registration, not execution: a target that exists but is disabled satisfies the reference and contributes no edge. So ordering always reflects the hooks that actually fire — disabling a link drops the order it was carrying, and a cycle broken by a disabled hook stays satisfiable. Declare what you need rather than inheriting it through a hook someone can switch off.
+
+**Failure is early and loud.** `install_plugins` calls `hooks.validate()` once everything a run configures has registered, which resolves every phase without invoking a callback, so a cycle or a missing required target stops the run before the first step instead of at the first emit of whichever phase carried it. Hooks registered later are validated when their phase next resolves, so registering late is still allowed. Lookup is per phase throughout: a name registered only on another phase doesn't exist from here, and a handle for another phase is rejected outright. For debugging, `hooks.names(phase)` returns the resolved order.
+
+**`CLOSE` reads like it runs.** It sorts under the same rules as every other phase and prefers the latest-registered hook among those ready, so teardown reverses construction without anyone declaring it, and `before`/`after` mean what they say: a node's cleanup declares `before=[runtime.close_hook]` and runs before the context closes. Cleanup is still one pass that stops at the first failing callback, leaving providers up for whatever a failed consumer may still need.
 
 ### Cadence
 

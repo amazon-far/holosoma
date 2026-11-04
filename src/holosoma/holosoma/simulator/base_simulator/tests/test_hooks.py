@@ -16,6 +16,7 @@ from holosoma.simulator.base_simulator.hooks import (
     HookRegistry,
     HookRegistryError,
     Phase,
+    if_present,
 )
 
 pytestmark = pytest.mark.no_sim
@@ -414,13 +415,14 @@ def test_constraint_matches_every_hook_sharing_the_name() -> None:
 def test_order_is_recomputed_after_a_later_registration() -> None:
     calls: list[str] = []
     hooks = HookRegistry()
-    hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="consumer", after=["render"])
+    hooks.add(Phase.FRAME_END, recorder(calls, "x.consumer"), name="x.consumer", after=["x.render"])
+    hooks.add(Phase.FRAME_END, recorder(calls, "x.render"), name="x.render").disable()
 
     hooks.emit(Phase.FRAME_END)
-    hooks.add(Phase.FRAME_END, recorder(calls, "render"), name="render")
+    hooks.add(Phase.FRAME_END, recorder(calls, "x.late"), name="x.late", before=["x.consumer"])
     hooks.emit(Phase.FRAME_END)
 
-    assert calls == ["consumer", "render", "consumer"]
+    assert calls == ["x.consumer", "x.late", "x.consumer"]
 
 
 def test_cycle_raises_on_emit() -> None:
@@ -432,32 +434,34 @@ def test_cycle_raises_on_emit() -> None:
         hooks.emit(Phase.FRAME_END)
 
 
-def test_missing_dependency_is_ignored_silently() -> None:
-    # A constraint on something this run didn't configure is satisfied by its absence, not a problem.
-    calls: list[str] = []
+def test_missing_required_dependency_fails_the_phase() -> None:
     hooks = HookRegistry()
-    hooks.add(Phase.FRAME_END, recorder(calls, "a"), name="a", after=["nope"])
-    hooks.add(Phase.FRAME_END, recorder(calls, "b"), name="b", after=["nope"])
+    hooks.add(Phase.FRAME_END, lambda: None, name="x.a", after=["x.nope"])
 
-    with captured_logs("WARNING") as messages:
+    with pytest.raises(HookOrderError, match="requires 'x.nope'"):
         hooks.emit(Phase.FRAME_END)
 
-    assert calls == ["a", "b"]
-    assert messages == []
 
-
-def test_dependency_on_another_phase_does_not_order_or_resolve() -> None:
-    # Names are looked up per phase: a FRAME_BEGIN hook is not a FRAME_END dependency.
+def test_if_present_tolerates_a_dependency_no_run_configured() -> None:
     calls: list[str] = []
     hooks = HookRegistry()
-    hooks.add(Phase.FRAME_BEGIN, recorder(calls, "elsewhere"), name="elsewhere")
-    hooks.add(Phase.FRAME_END, recorder(calls, "a"), name="a", after=["elsewhere"])
+    hooks.add(Phase.FRAME_END, recorder(calls, "a"), name="x.a", after=[if_present("x.nope")])
 
     with captured_logs("WARNING") as messages:
         hooks.emit(Phase.FRAME_END)
 
     assert calls == ["a"]
     assert messages == []
+
+
+def test_dependency_on_another_phase_does_not_resolve() -> None:
+    # Names are looked up per phase, so a FRAME_BEGIN hook cannot satisfy a FRAME_END reference.
+    hooks = HookRegistry()
+    hooks.add(Phase.FRAME_BEGIN, lambda: None, name="x.elsewhere")
+    hooks.add(Phase.FRAME_END, lambda: None, name="x.a", after=["x.elsewhere"])
+
+    with pytest.raises(HookOrderError, match="requires 'x.elsewhere'"):
+        hooks.emit(Phase.FRAME_END)
 
 
 def test_disabling_a_link_drops_the_order_it_carried() -> None:
@@ -505,45 +509,53 @@ def test_disabled_dependency_is_inert_and_returns_on_enable() -> None:
     assert calls == ["consumer", "render", "consumer"]
 
 
-def test_removed_dependency_stops_constraining() -> None:
+def test_removing_a_required_dependency_fails_the_phase() -> None:
     calls: list[str] = []
     hooks = HookRegistry()
-    render = hooks.add(Phase.FRAME_END, recorder(calls, "render"), name="render")
-    hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="consumer", after=["render"])
+    render = hooks.add(Phase.FRAME_END, recorder(calls, "render"), name="x.render")
+    hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="x.consumer", after=["x.render"])
 
     render.remove()
-    with captured_logs("WARNING") as messages:
+
+    with pytest.raises(HookOrderError, match="requires 'x.render'"):
         hooks.emit(Phase.FRAME_END)
 
-    assert calls == ["consumer"]
-    assert messages == []
 
-
-def test_close_runs_resolved_order_backwards() -> None:
-    # The consumer follows the runtime while running, so it tears down before the runtime does.
+def test_close_declares_teardown_order_directly() -> None:
+    # A node's cleanup says it runs before the context it publishes through, and that is the order.
     calls: list[str] = []
     hooks = HookRegistry()
 
-    hooks.add(Phase.CLOSE, recorder(calls, "consumer"), name="consumer", after=["runtime"])
-    hooks.add(Phase.CLOSE, recorder(calls, "runtime"), name="runtime")
+    runtime = hooks.add(Phase.CLOSE, recorder(calls, "runtime"), name="x.runtime")
+    hooks.add(Phase.CLOSE, recorder(calls, "node"), name="x.node", before=[runtime])
 
     hooks.emit(Phase.CLOSE)
 
-    assert calls == ["consumer", "runtime"]
+    assert calls == ["node", "runtime"]
 
 
-def test_close_cycle_falls_back_to_registration_order() -> None:
-    # A cycle must not cost every hook its teardown.
+def test_close_tears_down_in_reverse_registration_order_by_default() -> None:
     calls: list[str] = []
     hooks = HookRegistry()
-    hooks.add(Phase.CLOSE, recorder(calls, "a"), name="a", after=["b"])
-    hooks.add(Phase.CLOSE, recorder(calls, "b"), name="b", after=["a"])
+    hooks.add(Phase.CLOSE, recorder(calls, "first"), name="x.first")
+    hooks.add(Phase.CLOSE, recorder(calls, "second"), name="x.second")
+    hooks.add(Phase.CLOSE, recorder(calls, "third"), name="x.third")
 
-    with captured_logs("ERROR") as messages:
+    hooks.emit(Phase.CLOSE)
+
+    assert calls == ["third", "second", "first"]
+
+
+def test_close_cycle_raises_like_any_other_phase() -> None:
+    calls: list[str] = []
+    hooks = HookRegistry()
+    hooks.add(Phase.CLOSE, recorder(calls, "a"), name="x.a", after=["x.b"])
+    hooks.add(Phase.CLOSE, recorder(calls, "b"), name="x.b", after=["x.a"])
+
+    with pytest.raises(HookOrderError, match="cycle on phase 'close'"):
         hooks.emit(Phase.CLOSE)
 
-    assert calls == ["b", "a"]
-    assert any("cycle" in message for message in messages)
+    assert calls == []
 
 
 class _Producer:
@@ -667,28 +679,39 @@ def test_handle_from_another_registry_is_rejected() -> None:
         hooks.add(Phase.FRAME_END, lambda: None, name="here.tick", after=[elsewhere])
 
 
-def test_handle_to_a_removed_hook_stops_constraining() -> None:
+def test_handle_to_a_removed_hook_fails_unless_optional() -> None:
     calls: list[str] = []
     hooks = HookRegistry()
     render = hooks.add(Phase.FRAME_END, recorder(calls, "render"), name="render.one")
     hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="consumer.one", after=[render])
+    optional = hooks.add(Phase.FRAME_END, recorder(calls, "optional"), name="optional.one")
+    hooks.add(Phase.FRAME_END, recorder(calls, "lenient"), name="lenient.one", after=[if_present(optional)])
 
     render.remove()
-    hooks.emit(Phase.FRAME_END)
+    optional.remove()
 
-    assert calls == ["consumer"]
+    with pytest.raises(HookOrderError, match="requires 'render.one'"):
+        hooks.emit(Phase.FRAME_END)
 
 
 def test_names_reports_resolved_order_per_phase() -> None:
     hooks = HookRegistry()
-    hooks.add(Phase.FRAME_END, lambda: None, name="consumer", after=["render"])
-    hooks.add(Phase.FRAME_END, lambda: None, name="render")
-    hooks.add(Phase.CLOSE, lambda: None, name="consumer", after=["runtime"])
-    hooks.add(Phase.CLOSE, lambda: None, name="runtime")
+    hooks.add(Phase.FRAME_END, lambda: None, name="x.consumer", after=["x.render"])
+    hooks.add(Phase.FRAME_END, lambda: None, name="x.render")
+    runtime = hooks.add(Phase.CLOSE, lambda: None, name="x.runtime")
+    hooks.add(Phase.CLOSE, lambda: None, name="x.node", before=[runtime])
 
-    assert hooks.names(Phase.FRAME_END) == ("render", "consumer")
-    assert hooks.names(Phase.CLOSE) == ("consumer", "runtime")  # teardown order
+    assert hooks.names(Phase.FRAME_END) == ("x.render", "x.consumer")
+    assert hooks.names(Phase.CLOSE) == ("x.node", "x.runtime")
     assert hooks.names(Phase.PRE_STEP) == ()
+
+
+def test_validate_reports_a_bad_graph_before_anything_emits() -> None:
+    hooks = HookRegistry()
+    hooks.add(Phase.EPISODE_END, lambda _env_id: None, name="x.late", after=["x.absent"])
+
+    with pytest.raises(HookOrderError, match="requires 'x.absent'"):
+        hooks.validate()
 
 
 def test_bare_string_dependency_is_rejected() -> None:

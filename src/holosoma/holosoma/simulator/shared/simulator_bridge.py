@@ -70,13 +70,14 @@ class SimulatorBridge:
         if self._hooks_registered:
             return
         self._hooks_registered = True
-        hooks.add(
+        self.transport_hook = hooks.add(
             Phase.PRE_STEP,
             self.transport_step,
             name="bridge.transport",
             every=self.bridge_config.transport_decimation,
         )
-        hooks.add(Phase.PRE_STEP, self.control_step, name="bridge.control")
+        # Commands arrive on the transport hook and are applied here.
+        hooks.add(Phase.PRE_STEP, self.control_step, name="bridge.control", after=[self.transport_hook])
         hooks.add(Phase.CLOSE, self.close, name="bridge.close")
 
     def start(self) -> None:

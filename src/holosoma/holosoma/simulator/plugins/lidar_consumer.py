@@ -8,14 +8,14 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING, Sequence, Tuple
 
 import numpy as np
 import numpy.typing as npt
 from loguru import logger
 
 from holosoma.config_types.sensor import LidarSensorConfig
-from holosoma.simulator.base_simulator.hooks import SENSOR_RENDER_HOOK, Phase
+from holosoma.simulator.base_simulator.hooks import HookHandle, Phase
 
 if TYPE_CHECKING:
     from holosoma.config_types.plugin import PluginConfig
@@ -41,6 +41,9 @@ class PointCloudPacket:
 class LidarConsumerPlugin:
     """Base plugin for consumers of fresh sensor-local LiDAR point clouds."""
 
+    close_before: Sequence[str | HookHandle] = ()
+    """Hooks this consumer's teardown must run before, e.g. a transport context it publishes through."""
+
     def __init__(self, config: PluginConfig, simulator: BaseSimulator) -> None:
         self.cfg = config
         self.config = config
@@ -53,9 +56,9 @@ class LidarConsumerPlugin:
             Phase.FRAME_END,
             self._on_frame_end,
             name=f"{type(self).__name__}.publish",
-            after=[SENSOR_RENDER_HOOK],
+            after=[simulator.sensor_render_hook],
         )
-        simulator.hooks.add(Phase.CLOSE, self._on_close, name=f"{type(self).__name__}.stop")
+        simulator.hooks.add(Phase.CLOSE, self._on_close, name=f"{type(self).__name__}.stop", before=self.close_before)
 
     @abstractmethod
     def wanted_streams(self) -> set[LidarStreamKey]:

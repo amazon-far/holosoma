@@ -7,7 +7,7 @@ from typing import Any, Iterable, cast
 import pytest
 
 from holosoma.config_types.sensor import GridLidarRayPatternConfig, LidarSensorConfig, SensorMountConfig
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.simulator.base_simulator.hooks import SENSOR_RENDER_HOOK, HookRegistry, Phase
 from holosoma.simulator.plugins.lidar_consumer import LidarConsumerPlugin, LidarStreamKey, PointCloudPacket
 from holosoma.simulator.shared.sensor_manager import SensorManager
 from holosoma.utils.safe_torch_import import torch
@@ -28,6 +28,7 @@ class _FakeSimulator:
             update_decimation=update_decimation,
         )
         self.hooks = HookRegistry()
+        self.sensor_render_hook = self.hooks.add(Phase.FRAME_END, lambda: None, name=SENSOR_RENDER_HOOK)
         self.sensor_config = {"lidar": lidar}
         self.training_config = _TrainingConfig(num_envs)
         self.sensor_manager = SensorManager("cpu", control_hz=50.0)

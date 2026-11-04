@@ -24,7 +24,7 @@ from holosoma.config_types.sensor import (
     IsaacSimFisheyeConfig,
     SensorMountConfig,
 )
-from holosoma.simulator.base_simulator.hooks import HookCloseError, HookRegistry, Phase
+from holosoma.simulator.base_simulator.hooks import SENSOR_RENDER_HOOK, HookCloseError, HookRegistry, Phase
 from holosoma.simulator.plugins.camera_consumer import CameraConsumerPlugin, FramePacket, StreamKey
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.simulator_config import SimulatorType
@@ -108,6 +108,7 @@ class _FakeSimulator:
         num_envs: int = 1,
     ) -> None:
         self.hooks = HookRegistry()
+        self.sensor_render_hook = self.hooks.add(Phase.FRAME_END, lambda: None, name=SENSOR_RENDER_HOOK)
         self.sensor_config = sensors_config
         self.sensor_manager = _FakeSensorManager()
         self.training_config = _FakeTrainingConfig(num_envs)
@@ -160,8 +161,8 @@ def _step(sim: _FakeSimulator) -> None:
 def test_registers_publish_and_close_callbacks() -> None:
     sim = _FakeSimulator(_sensors("head"), {("head", "rgb"): _rgb()})
     FakeConsumer(None, sim, streams=[("head", "rgb", 0)])
-    # One FRAME_END hook (publish) and one CLOSE hook (stop) were registered.
-    assert sim.hooks.names(Phase.FRAME_END) == ("FakeConsumer.publish",)
+    # One FRAME_END hook (publish) and one CLOSE hook (stop), the publish behind the sensor render.
+    assert sim.hooks.names(Phase.FRAME_END) == (SENSOR_RENDER_HOOK, "FakeConsumer.publish")
     assert sim.hooks.names(Phase.CLOSE) == ("FakeConsumer.stop",)
 
 
