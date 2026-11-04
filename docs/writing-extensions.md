@@ -179,7 +179,7 @@ PLUGIN_REGISTRY.add("log_height", LogHeightPluginConfig())
 python -m holosoma.run_sim --import-file my_plugins.py plugin.h:log_height --plugin.h.every=5Hz
 ```
 
-Select plugins as the dynamic-dict `plugin.<key>:<preset>` (per-key leaf overrides via `--plugin.<key>.<field>=…`); each is constructed once in `BaseSimulator.__init__`. Ship them packaged via the `holosoma.config.plugin` entry-point group like any other preset.
+Select plugins as the dynamic-dict `plugin.<key>:<preset>` (per-key leaf overrides via `--plugin.<key>.<field>=…`); each is constructed once in `BaseSimulator.install_plugins`, after the backend is ready. Ship them packaged via the `holosoma.config.plugin` entry-point group like any other preset.
 
 ### Phases
 
@@ -196,9 +196,9 @@ A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=No
 
 ### Ordering
 
-Within a phase, hooks run in registration order — which for plugins means the order their slots were selected, so don't rely on it. Declare what you need instead: `after` / `before` take the same-phase hooks you must follow or precede. Hooks with no constraints keep their order relative to each other, though a constraint can move others past them.
+Within a phase, hooks run in registration order — which for plugins means the order their slots were selected, so don't rely on it. Declare what you need instead with `after` / `before`. Hooks with no constraints keep their order relative to each other, though a constraint can move others past them.
 
-**Prefer the handle.** `add` returns a `HookHandle`, and the framework keeps the ones others depend on: `simulator.sensor_render_hook` for the sensor refresh, the bridge's `transport_hook`, and `close_hook` on the shared ROS2 runtime. A handle pins exactly one registration, so a rename can't silently unorder anything:
+**Depend on the handle `add` returns.** The framework keeps the ones others follow: `simulator.sensor_render_hook` for the sensor refresh, the bridge's `transport_hook`, and `close_hook` on the shared ROS2 runtime.
 
 ```python
 simulator.hooks.add(
@@ -206,21 +206,38 @@ simulator.hooks.add(
 )
 ```
 
-Expose your own the same way if other code should be able to follow you — keep what `add` returns on a public attribute (a frozen dataclass bundling several reads well) rather than asking anyone to spell a name.
+Keep your own handles on a public attribute if other code should be able to follow you; a frozen dataclass reads well once there are several.
 
 **Names are labels, not targets.** `name` is what `names(phase)`, cycle reports and teardown failures show, and defaults to the callback's qualname — so pass one whenever that wouldn't tell a reader which hook this is. Nothing orders against it, so renaming a hook cannot change what runs when.
 
-**Targets are required.** A reference nothing on the phase is registered under fails the run rather than quietly ordering nothing. Wrap it when a run without it is valid:
+**To depend on a provider you can't hold**, it publishes a member of its own `Enum` and you reference that plus the slot it's configured in. The reference resolves once every plugin is installed, so neither side has to be constructed first:
 
 ```python
-after=[simulator.sensor_render_hook, if_present("optional_plugin.publish")]
+class CameraHook(Enum):
+    PUBLISH = auto()
+
+
+simulator.hooks.add(Phase.FRAME_END, self._publish, name="my_camera.publish", key=CameraHook.PUBLISH)
+
+simulator.hooks.add(                                             # a separately constructed consumer
+    Phase.FRAME_END, self._inspect, name="my_inspector.read",
+    after=[HookRef(self.cfg.follows, CameraHook.PUBLISH)],
+)
 ```
 
-Presence is about registration, not execution: a target that exists but is disabled satisfies the reference and contributes no edge. So ordering always reflects the hooks that actually fire — disabling a link drops the order it was carrying, and a cycle broken by a disabled hook stays satisfiable. Declare what you need rather than inheriting it through a hook someone can switch off.
+Matching is by enum type and member identity, never the member's value or spelling, so two plugins can each define a `PUBLISH` without colliding. One instance publishes a key once; two instances may publish the same key, which is what lets a reference pick the `head` camera over the `wrist` one. Keys belong to the slot being constructed, so publish from your constructor. Take the slot through your own config (`follows` above) rather than hardcoding one — slot keys belong to whoever launches the run, the same convention sensor routes follow.
 
-**Failure is early and loud.** `install_plugins` calls `hooks.validate()` once everything a run configures has registered, which resolves every phase without invoking a callback, so a cycle or a missing required target stops the run before the first step instead of at the first emit of whichever phase carried it. Hooks registered later are validated when their phase next resolves, so registering late is still allowed. Lookup is per phase throughout: a name registered only on another phase doesn't exist from here, and a handle for another phase is rejected outright. For debugging, `hooks.names(phase)` returns the resolved order.
+**Targets are required.** A target nothing has registered fails the run rather than quietly ordering nothing, so wrap the ones a run may legitimately lack:
 
-**`CLOSE` reads like it runs.** It sorts under the same rules as every other phase and prefers the latest-registered hook among those ready, so teardown reverses construction without anyone declaring it, and `before`/`after` mean what they say: a node's cleanup declares `before=[runtime.close_hook]` and runs before the context closes. Cleanup is still one pass that stops at the first failing callback, leaving providers up for whatever a failed consumer may still need.
+```python
+after=[simulator.sensor_render_hook, if_present(HookRef("wrist", CameraHook.PUBLISH))]
+```
+
+Presence is about registration, not execution: a target that exists but is disabled satisfies the reference and contributes no edge. So ordering always reflects the hooks that actually fire — disabling a link drops the order it was carrying, and a cycle broken by a disabled hook stays satisfiable. Ordering is phase-scoped throughout, and a handle or reference for another phase is rejected.
+
+**Failure is early and loud.** `install_plugins` calls `hooks.validate()` once everything a run configures has registered, resolving every phase without invoking a callback, so a cycle or an unresolved target stops the run before the first step rather than at the first emit of whichever phase carried it. Hooks registered later are validated when their phase next resolves, so registering late stays legal. For debugging, `hooks.names(phase)` returns the resolved order.
+
+**`CLOSE` reads like it runs.** It sorts under the same rules as every other phase and prefers the latest-registered hook among those ready, so teardown reverses construction without anyone declaring it, while `before`/`after` still mean what they say: a node's cleanup declares `before=[runtime.close_hook]` and runs before the context closes. Cleanup is one pass that stops at the first failing callback, leaving providers up for whatever a failed consumer may still need.
 
 ### Cadence
 
