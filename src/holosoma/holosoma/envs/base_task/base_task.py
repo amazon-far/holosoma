@@ -16,7 +16,7 @@ from holosoma.managers.reset_events.manager import ResetEventManager
 from holosoma.managers.reward import RewardManager
 from holosoma.managers.termination import TerminationManager
 from holosoma.managers.terrain import TerrainManager
-from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+from holosoma.simulator.base_simulator.base_simulator import BaseSimulator, _warn_deprecated
 from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.helpers import get_class
@@ -631,4 +631,4 @@ class BaseTask:
 
     def _refresh_sim_tensors(self) -> None:
         """Deprecated no-op: simulator state tensors are current at every read."""
-        return
+        _warn_deprecated("_refresh_sim_tensors", "drop the call; state is current at every read")
