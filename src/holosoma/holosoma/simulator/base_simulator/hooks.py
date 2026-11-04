@@ -219,7 +219,7 @@ class HookRegistry:
         phase: Literal[Phase.FRAME_BEGIN, Phase.PRE_STEP, Phase.POST_STEP, Phase.FRAME_END],
         callback: FrameCallback,
         *,
-        name: str,
+        name: str | None = None,
         every: DecimationLike = 1,
         key: Enum | None = None,
         after: Sequence[HookDependency] = (),
@@ -232,7 +232,7 @@ class HookRegistry:
         phase: Literal[Phase.EPISODE_END, Phase.EPISODE_START],
         callback: EpisodeCallback,
         *,
-        name: str,
+        name: str | None = None,
         every: DecimationLike = 1,
         key: Enum | None = None,
         after: Sequence[HookDependency] = (),
@@ -245,7 +245,7 @@ class HookRegistry:
         phase: Literal[Phase.CLOSE],
         callback: CloseCallback,
         *,
-        name: str,
+        name: str | None = None,
         every: DecimationLike = 1,
         key: Enum | None = None,
         after: Sequence[HookDependency] = (),
@@ -257,7 +257,7 @@ class HookRegistry:
         phase: Phase,
         callback: Callable[..., Any],
         *,
-        name: str,
+        name: str | None = None,
         every: DecimationLike = 1,
         key: Enum | None = None,
         after: Sequence[HookDependency] = (),
@@ -278,8 +278,9 @@ class HookRegistry:
         known base rate; event phases (episode/close) accept only int decimations. Default ``1`` fires
         every emission.
 
-        ``name`` labels the hook for :meth:`names`, cycle reports and teardown failures. Nothing
-        orders against it, so it only has to tell a reader which hook this is.
+        ``name`` labels the hook for :meth:`names`, cycle reports and teardown failures, defaulting
+        to the callback's qualname. Nothing orders against it, so it only has to tell a reader which
+        hook this is.
 
         ``after`` / ``before`` order this hook against other hooks *on the same phase*. An entry is
         either a :class:`HookHandle`, which pins the one hook it came from, or a :class:`HookRef`
@@ -297,6 +298,7 @@ class HookRegistry:
         order callbacks actually run in: a node's cleanup declares ``before=[runtime.close_hook]``.
         """
         self._assert_mutable(phase)
+        name = name or self._default_name(callback)
         owner = self._owner
         if key is not None:
             self._claim_key(phase, name, owner, key)
@@ -663,3 +665,7 @@ class HookRegistry:
     def _assert_mutable(self, phase: Phase) -> None:
         if phase in self._emitting:
             raise HookRegistryError(f"Cannot mutate hooks while emitting phase {phase.value!r}")
+
+    @staticmethod
+    def _default_name(callback: Callable[..., Any]) -> str:
+        return getattr(callback, "__qualname__", repr(callback))

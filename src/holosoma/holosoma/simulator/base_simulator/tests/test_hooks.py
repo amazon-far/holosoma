@@ -35,6 +35,17 @@ def test_emit_uses_registration_order() -> None:
     assert calls == ["a", "b"]
 
 
+def test_an_unnamed_hook_is_labelled_by_its_qualname() -> None:
+    hooks = HookRegistry()
+
+    class Producer:
+        def tick(self) -> None: ...
+
+    handle = hooks.add(Phase.FRAME_END, Producer().tick)
+
+    assert handle.name == "test_an_unnamed_hook_is_labelled_by_its_qualname.<locals>.Producer.tick"
+
+
 def test_handle_disable_enable_remove() -> None:
     calls: list[str] = []
     hooks = HookRegistry()
