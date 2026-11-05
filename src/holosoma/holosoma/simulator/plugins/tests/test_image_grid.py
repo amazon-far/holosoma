@@ -136,6 +136,81 @@ def test_colorize_depth_clamps_out_of_range() -> None:
     assert int(nearer.mean()) == 255 and int(farther.mean()) == 0
 
 
+@pytest.mark.parametrize(("depth_range", "allowed_differing"), [((0.1, 5.0), 0), ((0.5, 100.0), 1)])
+def test_colorize_depth_tracks_the_reference_ramp(depth_range: tuple[float, float], allowed_differing: int) -> None:
+    # Compared against the ROUNDED reference, i.e. what the previous implementation actually
+    # produced. An unrounded reference would carry 0.5 of quantization slack and let a systematic
+    # brightness bias or a switch from rounding to truncation pass unnoticed.
+    #
+    # cv2.convertScaleAbs evaluates the ramp in a different float32 order (255*(hi-d)/(hi-lo) rather
+    # than (1-(d-lo)/(hi-lo))*255), so a value within float32 epsilon of a half step can land on the
+    # neighbouring level. Both libraries round half to even, so this is evaluation order, not a
+    # rounding mode. ``allowed_differing`` records what was MEASURED here (0 and 1 of 20000); the
+    # +8 added below is a cross-architecture allowance, since which side of a half step a
+    # near-boundary sample lands on depends on SIMD dispatch (arm64 NEON vs x86 FMA).
+    lo, hi = depth_range
+    sweep: npt.NDArray[np.float32] = np.linspace(lo - 1.0, hi + 1.0, 20000, dtype=np.float32).reshape(100, 200)
+    reference = ((1.0 - (np.clip(sweep, lo, hi) - lo) / (hi - lo)) * 255.0).round().astype(np.uint8)
+    got = colorize_depth(sweep, depth_range, "gray")[..., 0]
+
+    deviation = np.abs(got.astype(np.int16) - reference.astype(np.int16))
+    assert deviation.max() <= 1, "the ramp may differ by at most one level"
+    # A handful of samples sit within a couple of float32 ULPs of a half step, and which side they
+    # land on depends on the SIMD dispatch (arm64 NEON vs x86 FMA), so this is a small budget
+    # rather than the count measured on one machine. It stays far below what a real defect costs:
+    # truncation instead of rounding, or a sub-level brightness bias, moves thousands of the 20000.
+    assert int(np.count_nonzero(deviation)) <= allowed_differing + 8
+    # Monotone and spanning the full range: near stays brightest, far darkest.
+    assert got[0, 0] == 255 and got[-1, -1] == 0
+    assert np.all(np.diff(got.ravel().astype(np.int16)) <= 0)
+
+
+@pytest.mark.parametrize("channel_axis", [False, True], ids=["hw", "hw1"])
+def test_colorize_depth_leaves_the_caller_array_untouched(channel_axis: bool) -> None:
+    # The input is the per-step host snapshot SHARED with every other consumer of this stream, so
+    # the normalization must stay on colorize_depth's own copy. It normalizes in place internally.
+    # Both shapes are covered because [H,W,1] is what get_camera_data actually hands out and it
+    # reaches the squeeze path; an [H,W] float32 input aliases the caller just as directly, since
+    # np.asarray returns it unchanged, so either shape catches an in-place step.
+    dep: npt.NDArray[np.float32] = np.array([[0.5, np.inf], [np.nan, 7.0]], np.float32)
+    if channel_axis:
+        dep = dep[..., None]
+    before = dep.copy()
+    colorize_depth(dep, (0.1, 5.0), "gray")
+    assert np.array_equal(dep, before, equal_nan=True)
+
+
+def test_colorize_depth_colormapped_output_is_the_ramp_byte_in_rgb() -> None:
+    # Every other case here uses "gray", which skips both the colormap lookup and the BGR->RGB
+    # reorder. This pins the colorized path end to end: the mid-range depth must produce exactly
+    # cv2's inferno entry for its ramp byte, in RGB order.
+    import cv2
+
+    lo, hi = 0.0, 4.0
+    depth: npt.NDArray[np.float32] = np.full((2, 3), 1.0, np.float32)
+    expected_gray = round((1.0 - (1.0 - lo) / (hi - lo)) * 255.0)  # 191
+    bgr = cv2.applyColorMap(np.full((1, 1), expected_gray, np.uint8), cv2.COLORMAP_INFERNO)
+    expected_rgb = bgr[0, 0][::-1]
+
+    out = colorize_depth(depth, (lo, hi), "inferno")
+    assert out.shape == (2, 3, 3) and out.dtype == np.uint8
+    assert np.array_equal(out, np.broadcast_to(expected_rgb, (2, 3, 3)))
+
+
+@pytest.mark.parametrize("value", [np.nan, -np.inf, np.inf], ids=["nan", "neg_inf", "pos_inf"])
+def test_colorize_depth_maps_every_non_finite_to_the_far_plane(value: float) -> None:
+    # Asserted against the literal far byte rather than colorize_depth(far), which would compare
+    # production against production. 0 is "far" because the ramp is inverted (near -> 255).
+    #
+    # Honest about what this pins: only [neg_inf] fails if the isfinite pass in depth_color is
+    # removed. [pos_inf] is absorbed by the far clamp either way, and [nan] reaches 0 only because
+    # cv2's saturate_cast of NaN happens to give 0 here -- float-to-uchar conversion of a
+    # non-finite value is unspecified, and was measured to depend on SIMD width on this arch. Those
+    # two are a contract record, not a guard; the isfinite pass is defensive for that same reason.
+    got = colorize_depth(np.full((4, 4), value, np.float32), (0.1, 5.0), "gray")
+    assert np.array_equal(got, np.zeros((4, 4, 3), np.uint8))
+
+
 def test_empty_raises() -> None:
     with pytest.raises(ValueError, match="at least one"):
         tile_images([])
