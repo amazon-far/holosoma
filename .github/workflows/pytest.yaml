@@ -38,7 +38,7 @@ jobs:
               .github/workflows/docker-build.yaml|\
               .github/workflows/promote-docker-images.yaml|\
               .github/workflows/pytest.yaml|\
-              .github/workflows/test-images.yaml|\
+              .github/workflows/test-*.yaml|\
               conftest.py|\
               pyproject.toml|\
               demo_scripts/*|\
@@ -54,7 +54,7 @@ jobs:
           echo "images=$images" >> "$GITHUB_OUTPUT"
           echo "Image build required: \`${images}\`." >> "$GITHUB_STEP_SUMMARY"
 
-  build-images:
+  build-isaacsim:
     name: Build PR Images
     needs: changes
     if: needs.changes.outputs.images == 'true'
@@ -62,27 +62,77 @@ jobs:
     with:
       image_sha: ${{ github.event.pull_request.head.sha }}
       candidate_tag: candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+      environments: '["isaacsim"]'
     secrets: inherit
 
-  test-images:
+  build-mujoco:
+    name: Build PR Images
+    needs: changes
+    if: needs.changes.outputs.images == 'true'
+    uses: ./.github/workflows/build-docker-images.yaml
+    with:
+      image_sha: ${{ github.event.pull_request.head.sha }}
+      candidate_tag: candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+      environments: '["mujoco"]'
+    secrets: inherit
+
+  build-combined:
+    name: Build PR Images
+    needs: changes
+    if: needs.changes.outputs.images == 'true'
+    uses: ./.github/workflows/build-docker-images.yaml
+    with:
+      image_sha: ${{ github.event.pull_request.head.sha }}
+      candidate_tag: candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+      environments: '["holosoma", "inference", "retargeting", "thor-inference", "thor-inference-ros"]'
+    secrets: inherit
+
+  test-isaacsim:
     name: Test Selected Images
     needs:
       - changes
-      - build-images
+      - build-isaacsim
     if: needs.changes.outputs.images == 'true'
-    uses: ./.github/workflows/test-images.yaml
+    uses: ./.github/workflows/test-simulator-image.yaml
     with:
-      combined_image: ${{ vars.ECR_REGISTRY }}/holosoma:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
-      isaacsim_image: ${{ vars.ECR_REGISTRY }}/holosoma-isaacsim:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
-      mujoco_image: ${{ vars.ECR_REGISTRY }}/holosoma-mujoco:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+      simulator: isaacsim
+      image: ${{ vars.ECR_REGISTRY }}/holosoma-isaacsim:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+      multigpu: '["False", "True"]'
+    secrets: inherit
+
+  test-mujoco:
+    name: Test Selected Images
+    needs:
+      - changes
+      - build-mujoco
+    if: needs.changes.outputs.images == 'true'
+    uses: ./.github/workflows/test-simulator-image.yaml
+    with:
+      simulator: mujoco
+      image: ${{ vars.ECR_REGISTRY }}/holosoma-mujoco:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+    secrets: inherit
+
+  test-combined:
+    name: Test Selected Images
+    needs:
+      - changes
+      - build-combined
+    if: needs.changes.outputs.images == 'true'
+    uses: ./.github/workflows/test-combined-image.yaml
+    with:
+      image: ${{ vars.ECR_REGISTRY }}/holosoma:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
     secrets: inherit
 
   pr-image-gate:
     name: PR Image Gate
     needs:
       - changes
-      - build-images
-      - test-images
+      - build-isaacsim
+      - build-mujoco
+      - build-combined
+      - test-isaacsim
+      - test-mujoco
+      - test-combined
     if: always() && !cancelled()
     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     env:
@@ -93,10 +143,15 @@ jobs:
       - name: Verify required jobs
         shell: bash
         env:
-          BUILD_RESULT: ${{ needs.build-images.result }}
           CHANGES_RESULT: ${{ needs.changes.result }}
           IMAGE_CHANGES: ${{ needs.changes.outputs.images }}
-          TEST_RESULT: ${{ needs.test-images.result }}
+          JOB_RESULTS: >-
+            build-isaacsim=${{ needs.build-isaacsim.result }}
+            build-mujoco=${{ needs.build-mujoco.result }}
+            build-combined=${{ needs.build-combined.result }}
+            test-isaacsim=${{ needs.test-isaacsim.result }}
+            test-mujoco=${{ needs.test-mujoco.result }}
+            test-combined=${{ needs.test-combined.result }}
         run: |
           set -euo pipefail
           if [[ "$CHANGES_RESULT" != "success" ]]; then
@@ -107,10 +162,14 @@ jobs:
             echo "No image-relevant changes." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          if [[ "$BUILD_RESULT" != "success" || "$TEST_RESULT" != "success" ]]; then
-            echo "Image build result: ${BUILD_RESULT}; test result: ${TEST_RESULT}." >&2
-            exit 1
-          fi
+          failed=false
+          for job_result in $JOB_RESULTS; do
+            if [[ "${job_result#*=}" != "success" ]]; then
+              echo "Image job ${job_result%%=*} result: ${job_result#*=}." >&2
+              failed=true
+            fi
+          done
+          [[ "$failed" == false ]]
       - name: Set up Docker Buildx
         if: needs.changes.outputs.images == 'true'
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
