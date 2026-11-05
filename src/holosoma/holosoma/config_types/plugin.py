@@ -596,11 +596,15 @@ class FrameWriterPluginConfig(PluginConfig):
     ``video_nvenc_max_sessions`` streams already hold a session."""
 
     video_crf: int = 23
-    """Constant-quality level for ``mp4``: libx264 ``-crf``, or NVENC ``-cq`` (0-51, lower is better)."""
+    """Constant-quality level for ``mp4``: libx264 ``-crf``, or NVENC ``-cq`` (0-51, lower is better).
+    ``0`` is lossless for libx264; NVENC treats ``-cq 0`` as "auto", so it gets ``1`` (its best)."""
 
     video_nvenc_max_sessions: int | None = 8
     """Most NVENC encoders this process keeps open at once (GeForce drivers cap concurrent sessions,
-    8 on current drivers); streams beyond it use libx264. ``None`` means no limit (datacenter GPUs)."""
+    8 on current drivers); streams beyond it use libx264. ``None`` means no limit (datacenter GPUs).
+    Sessions held by other processes on the same GPU are not counted, so several sim processes on one
+    card can together exceed the driver cap; a stream whose session then fails to open is marked
+    failed rather than falling back."""
 
     def get_cls(self) -> Callable[..., Any]:
         # Deferred import: keeps cv2 out of CLI-build import.

@@ -231,6 +231,15 @@ def test_stderr_file_failure_does_not_take_an_nvenc_session(tmp_path: Path, monk
     assert H264StreamEncoder._nvenc_open == before
 
 
+def test_nvenc_cq_zero_is_raised_to_one() -> None:
+    # NVENC reads -cq 0 as "auto", not best quality, so crf 0 must not reach it as 0.
+    def cq(crf: int) -> str:
+        args = video_utils._nvenc_quality_args(crf)
+        return args[args.index("-cq") + 1]
+
+    assert (cq(0), cq(1), cq(23)) == ("1", "1", "23")
+
+
 def test_unknown_codec_raises(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="unsupported H.264 encoder"):
         H264StreamEncoder(tmp_path / "x.mp4", 32, 32, 30.0, codec="mpeg4")

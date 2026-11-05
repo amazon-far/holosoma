@@ -256,8 +256,11 @@ def nvenc_available(width: int, height: int) -> bool:
 
 
 def _nvenc_quality_args(cq: int) -> list[str]:
-    """NVENC rate-control options, shared by the encoder and its availability probe."""
-    return ["-preset", "p4", "-tune", "hq", "-rc", "vbr", "-cq", str(cq), "-b:v", "0"]
+    """NVENC rate-control options, shared by the encoder and its availability probe.
+
+    ``-cq 0`` means "let the encoder choose" to NVENC, not best quality, so it is raised to 1.
+    """
+    return ["-preset", "p4", "-tune", "hq", "-rc", "vbr", "-cq", str(max(cq, 1)), "-b:v", "0"]
 
 
 class H264StreamEncoder:

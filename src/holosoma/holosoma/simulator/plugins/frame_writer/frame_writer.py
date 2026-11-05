@@ -35,6 +35,7 @@ from loguru import logger
 
 from holosoma.config_types.sensor import CameraSensorConfig
 from holosoma.simulator.plugins.camera_consumer import CameraConsumerPlugin
+from holosoma.utils.sim_utils import _simulation_exit_code
 from holosoma.utils.video_utils import H264StreamEncoder
 
 _VIDEOS_FILE = "videos.json"
@@ -140,15 +141,16 @@ class FrameWriterPlugin(CameraConsumerPlugin):
 
         Called during exception teardown (an interrupt, a crash, SIGTERM's ``SystemExit``), each mp4
         keeps its ``.partial`` name, so a truncated episode is never mistaken for a complete one. A
-        ``SystemExit`` with a success status (code ``0`` or ``None``) is a clean exit and publishes.
+        ``SystemExit`` with a success status (code ``0`` or ``None``) is a clean exit and publishes;
+        the run's exit status decides, by the same rule ``run_sim`` exits with. Only an exception still
+        being handled is seen: a caller that catches a failure and closes the simulator afterwards
+        publishes the truncated videos as complete.
 
         A stream whose encode failed does not make this raise: teardown still finishes, the failure is
         logged at error level, and ``videos.json`` marks the stream ``failed``. Raising here would stop
         the CLOSE chain and leave the simulator open, which is meant for a teardown that itself failed.
         """
-        active = sys.exc_info()[1]
-        clean_exit = isinstance(active, SystemExit) and active.code in (0, None)
-        interrupted = active is not None and not clean_exit
+        interrupted = _simulation_exit_code(sys.exc_info()[1]) != 0
         # Every wanted video stream gets an entry, so one that never produced a frame reads as empty.
         videos: dict[StreamKey, dict[str, Any]] = {}
         if self.config.rgb_format == "mp4":
