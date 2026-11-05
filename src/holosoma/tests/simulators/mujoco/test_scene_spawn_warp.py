@@ -5,8 +5,9 @@ so the full [x,y,z] cross-backend offset check and the per-env origin-spread che
 (The in-process test_actor_state_gpu.py covers per-env state + the multibody offset, but only with
 zero env_origins and on the x-axis.)
 
-  - num_envs=1: parity with the cross-backend single-env matrix (full 3-vector offset).
   - num_envs=4: each free object at its OWN env_origin, 1->N offset in EVERY env.
+  - num_envs=1: only the scenes not in the multi-env list. The harness asserts every check in every
+    env and env 0 sits at the origin, so a num_envs=4 cell covers its num_envs=1 counterpart.
 
 MuJoCo ClassicBackend (CPU) cannot do >1 env, so multi-env is mjwarp-only. CUDA-gated; one
 sim per subprocess (the harness builds + tears down a full sim per run).
@@ -45,10 +46,7 @@ def _run(scene, num_envs, steps=None):
     )
 
 
-@pytest.mark.parametrize(
-    "scene",
-    ["g1-largebox", "static-box", "velocity-box", "physics-box", "multibody", "multibody-override"],
-)
+@pytest.mark.parametrize("scene", ["static-box", "physics-box"])
 def test_scene_spawn(scene):
     # physics-box exercises the per-object physics override read-back (live body mass + geom
     # sliding friction vs. config). Both presets ship URDF (no XML); MuJoCo loads URDF when no XML
