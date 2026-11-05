@@ -309,15 +309,12 @@ class ClassicBackend(IMujocoBackend):
 
     def set_root_state(self, env_ids: torch.Tensor, root_states: torch.Tensor, root_addrs: dict[str, Any]) -> None:
         """Set robot root states. The robot root is an actor freejoint, so this
-        delegates to set_actor_state at the robot's qpos/qvel addresses, then runs
-        mj_forward to update derived quantities.
+        delegates to set_actor_state at the robot's qpos/qvel addresses.
 
         root_states is [num_selected_envs, 13] in holosoma format; root_addrs carries
         'robot_qpos_addr' and 'robot_qvel_addr'.
         """
         self.set_actor_state(env_ids, root_states, root_addrs["robot_qpos_addr"], root_addrs["robot_qvel_addr"])
-        if len(env_ids) > 0:
-            mujoco.mj_forward(self.model, self.data)
 
     def get_actor_state(self, env_ids: torch.Tensor, qpos_addr: int, qvel_addr: int) -> torch.Tensor:
         """Read an actor's freejoint state from CPU qpos/qvel (single environment)."""
