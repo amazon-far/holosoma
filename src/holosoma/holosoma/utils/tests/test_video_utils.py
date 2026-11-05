@@ -184,11 +184,51 @@ def test_nvenc_session_cap_zero_uses_libx264_without_probing(tmp_path: Path, mon
 
 def test_nvenc_unavailable_falls_back_to_libx264(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(video_utils, "nvenc_available", lambda *_size: False)
-    encoder = H264StreamEncoder(tmp_path / "x.mp4", 256, 256, 30.0, codec="h264_nvenc")
+    # The libx264 preset reaches the fallback stream, which must still encode.
+    encoder = H264StreamEncoder(tmp_path / "x.mp4", 256, 256, 30.0, codec="h264_nvenc", x264_preset="ultrafast")
     assert encoder.codec == "libx264"
     for _ in range(3):
         encoder.write(np.zeros((256, 256, 3), dtype=np.uint8))
     assert len(_decode(encoder.finish())[0]) == 3
+
+
+def test_nvenc_probe_uses_the_encoder_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An ffmpeg that opens bare h264_nvenc but rejects the real options must fail the probe, so the
+    # probe has to pass the same options the encoder will.
+    commands: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        commands.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(video_utils.subprocess, "run", fake_run)
+    assert video_utils.nvenc_available.__wrapped__(256, 256)
+    options = video_utils._nvenc_quality_args(23)
+    cmd = commands[0]
+    start = cmd.index("h264_nvenc") + 1
+    assert cmd[start : start + len(options)] == options
+
+
+def test_opening_removes_an_earlier_runs_video_and_partial(tmp_path: Path) -> None:
+    (tmp_path / "x.mp4").write_bytes(b"earlier run")
+    (tmp_path / "x.mp4.partial").write_bytes(b"earlier run")
+    encoder = H264StreamEncoder(tmp_path / "x.mp4", 32, 32, 30.0)
+    assert not (tmp_path / "x.mp4").exists()
+    encoder.discard()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_stderr_file_failure_does_not_take_an_nvenc_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(video_utils, "nvenc_available", lambda _width, _height: True)
+
+    def no_tempfile() -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(video_utils.tempfile, "TemporaryFile", no_tempfile)
+    before = H264StreamEncoder._nvenc_open
+    with pytest.raises(OSError, match="No space left"):
+        H264StreamEncoder(tmp_path / "x.mp4", 256, 256, 30.0, codec="h264_nvenc")
+    assert H264StreamEncoder._nvenc_open == before
 
 
 def test_unknown_codec_raises(tmp_path: Path) -> None:

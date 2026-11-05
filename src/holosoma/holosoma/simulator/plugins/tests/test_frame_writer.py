@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 import tracemalloc
 from collections.abc import Sequence
 from pathlib import Path
@@ -21,7 +20,9 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 import torch
+from loguru import logger
 
+from holosoma.config_types.frequency import resolve_decimation
 from holosoma.config_types.plugin import FrameWriterPluginConfig
 from holosoma.config_types.sensor import CameraDataType, CameraSensorConfig, SensorMountConfig
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
@@ -40,9 +41,21 @@ pytestmark = pytest.mark.no_sim
 _MOUNT = SensorMountConfig(target_kind="robot_link", target="pelvis")
 
 
+class _FakeCameraRecord:
+    def __init__(self, effective_decimation: int) -> None:
+        self.effective_decimation = effective_decimation
+
+
 class _FakeSensorManager:
-    def __init__(self) -> None:
+    def __init__(self, sensors_config: dict[str, CameraSensorConfig], control_hz: float) -> None:
         self.last_due: set[str] = set()
+        self._sensors_config = sensors_config
+        self._control_hz = control_hz
+
+    def get(self, name: str) -> _FakeCameraRecord:
+        # Resolved as the real SensorManager does at registration.
+        cfg = self._sensors_config[name]
+        return _FakeCameraRecord(resolve_decimation(cfg.update_decimation, self._control_hz, field=name))
 
 
 class _FakeSimEngineCfg:
@@ -68,7 +81,8 @@ class _FakeSimulator:
     ) -> None:
         self.hooks = HookRegistry()
         self.sensor_config = sensors_config
-        self.sensor_manager = _FakeSensorManager()
+        sim = _FakeSimEngineCfg
+        self.sensor_manager = _FakeSensorManager(sensors_config, sim.fps / sim.control_decimation_steps)
         self.training_config = _FakeTrainingConfig(num_envs)
         self.headless = True
         self.simulator_config = _FakeSimulatorConfig()
@@ -133,6 +147,17 @@ def _decode(path: Path) -> list[npt.NDArray[np.uint8]]:
         capture.release()
 
 
+def _rows(out: Path) -> list[dict[str, Any]]:
+    """The index's frame rows (every line after the header)."""
+    return [json.loads(line) for line in (out / "index.jsonl").read_text().splitlines()][1:]
+
+
+def _videos(out: Path) -> dict[str, Any]:
+    """``videos.json``: how each mp4 stream ended."""
+    result: dict[str, Any] = json.loads((out / "videos.json").read_text())
+    return result
+
+
 def _probe(path: Path) -> tuple[float, int]:
     """(fps, frame count) of a video as a player sees it."""
     capture = cv2.VideoCapture(str(path))
@@ -168,19 +193,46 @@ def test_mp4_mode_streams_frames_and_publishes_at_stop(tmp_path: Path) -> None:
     assert not (tmp_path / "head_rgb_env0.mp4").exists()
     sim.hooks.emit(Phase.CLOSE)
 
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["head_rgb_env0.mp4", "index.jsonl"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["head_rgb_env0.mp4", "index.jsonl", "videos.json"]
     assert _probe(tmp_path / "head_rgb_env0.mp4") == (pytest.approx(50.0, rel=1e-3), 5)
     decoded = _decode(tmp_path / "head_rgb_env0.mp4")
     assert [float(f.mean()) for f in decoded] == pytest.approx([0, 10, 20, 30, 40], abs=3)
-    # index.jsonl records every frame against the video path
-    records = [json.loads(line) for line in (tmp_path / "index.jsonl").read_text().splitlines()][1:]
+    # index.jsonl records every frame against the video path; videos.json says how the video ended
+    records = _rows(tmp_path)
     assert [r["frame"] for r in records] == list(range(5))
     assert all(r["path"] == "head_rgb_env0.mp4" for r in records)
+    assert _videos(tmp_path) == {"head_rgb_env0": {"status": "complete", "path": "head_rgb_env0.mp4", "frames": 5}}
+
+
+@requires_ffmpeg
+def test_mp4_stream_that_never_rendered_is_recorded_empty(tmp_path: Path) -> None:
+    # Only "head" renders, so the wanted wrist stream ends with no frames and no encoder.
+    sim = _FakeSimulator({"head": _cam(), "wrist": _cam()}, {("head", "rgb"): _rgb(h=32, w=32)})
+    _make(FrameWriterPluginConfig(output_dir=str(tmp_path), rgb_format="mp4"), sim)
+    for i in range(3):
+        sim._t = i * 0.02
+        _step(sim, {"head"})
+    sim.hooks.emit(Phase.CLOSE)
+    assert _videos(tmp_path)["wrist_rgb_env0"] == {"status": "empty", "path": None, "frames": 0}
+    assert _videos(tmp_path)["head_rgb_env0"]["status"] == "complete"
+
+
+@requires_ffmpeg
+def test_mp4_rerun_into_the_same_directory_drops_the_earlier_outputs(tmp_path: Path) -> None:
+    # A finished video and videos.json from an earlier run must not survive into a run that never
+    # finishes, where they would read as this run's output.
+    plugin, sim = _run_mp4(tmp_path, 3)
+    sim.hooks.emit(Phase.CLOSE)
+    assert (tmp_path / "head_rgb_env0.mp4").exists()
+    plugin, _ = _run_mp4(tmp_path, 2)  # still running: no stop yet
+    assert not (tmp_path / "head_rgb_env0.mp4").exists()
+    assert not (tmp_path / "videos.json").exists()
+    plugin._encoders[("head", "rgb", 0)].discard()
 
 
 @requires_ffmpeg
 def test_mp4_fps_follows_camera_decimation(tmp_path: Path) -> None:
-    # update_decimation=2 at a 50 Hz control rate renders at 25 Hz: frames 0.04 s apart, no retiming.
+    # update_decimation=2 at a 50 Hz control rate renders at 25 Hz: frames 0.04 s apart.
     cam = CameraSensorConfig(mount=_MOUNT, data_types=["rgb"], update_decimation=2)
     plugin, sim = _run_mp4(tmp_path, 6, dt=0.04, cam=cam)
     assert plugin._encoders[("head", "rgb", 0)].fps == pytest.approx(25.0)
@@ -189,15 +241,18 @@ def test_mp4_fps_follows_camera_decimation(tmp_path: Path) -> None:
 
 
 @requires_ffmpeg
-def test_mp4_retimed_when_sim_time_disagrees_with_render_rate(tmp_path: Path) -> None:
-    # Opened at the 50 Hz render rate, but the stamps say 20 Hz: the video must play at sim speed.
-    plugin, sim = _run_mp4(tmp_path, 6, dt=0.05)
-    assert plugin._encoders[("head", "rgb", 0)].fps == pytest.approx(50.0)
-    sim.hooks.emit(Phase.CLOSE)
-    fps, count = _probe(tmp_path / "head_rgb_env0.mp4")
-    assert count == 6
-    assert fps == pytest.approx(20.0, rel=1e-3)
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["head_rgb_env0.mp4", "index.jsonl"]
+def test_mp4_warns_when_sim_time_disagrees_with_render_rate(tmp_path: Path) -> None:
+    # Opened at the 50 Hz render rate, but the stamps say 20 Hz: the mismatch is flagged and the
+    # video keeps the render rate.
+    _, sim = _run_mp4(tmp_path, 6, dt=0.05)
+    warnings: list[str] = []
+    sink = logger.add(warnings.append, level="WARNING")
+    try:
+        sim.hooks.emit(Phase.CLOSE)
+    finally:
+        logger.remove(sink)
+    assert any("20 fps of sim time, not the 50 fps render rate" in w for w in warnings)
+    assert _probe(tmp_path / "head_rgb_env0.mp4") == (pytest.approx(50.0, rel=1e-3), 6)
 
 
 @requires_ffmpeg
@@ -206,6 +261,8 @@ def test_mp4_stream_under_two_frames_writes_nothing(tmp_path: Path, n: int) -> N
     _, sim = _run_mp4(tmp_path, n)
     sim.hooks.emit(Phase.CLOSE)
     assert not list(tmp_path.glob("*.mp4*"))
+    if n:  # with no frame at all, start never runs and nothing is written
+        assert _videos(tmp_path) == {"head_rgb_env0": {"status": "empty", "path": None, "frames": n}}
 
 
 @requires_ffmpeg
@@ -252,6 +309,9 @@ def test_mp4_interrupted_teardown_leaves_detectable_partial(tmp_path: Path, inte
     assert not (tmp_path / "head_rgb_env0.mp4").exists()
     partial = tmp_path / "head_rgb_env0.mp4.partial"
     assert len(_decode(partial)) == 4  # finalized by ffmpeg, so the frames are recoverable
+    assert _videos(tmp_path) == {
+        "head_rgb_env0": {"status": "partial", "path": "head_rgb_env0.mp4.partial", "frames": 4}
+    }
 
 
 @requires_ffmpeg
@@ -273,7 +333,7 @@ def test_mp4_clean_system_exit_teardown_publishes(tmp_path: Path, code: int | No
 
 
 @requires_ffmpeg
-def test_mp4_encoder_death_disables_stream_and_stop_raises(tmp_path: Path) -> None:
+def test_mp4_encoder_death_disables_stream_and_teardown_finishes(tmp_path: Path) -> None:
     plugin, sim = _run_mp4(tmp_path, 3)
     encoder = plugin._encoders[("head", "rgb", 0)]
     encoder._proc.kill()
@@ -281,9 +341,18 @@ def test_mp4_encoder_death_disables_stream_and_stop_raises(tmp_path: Path) -> No
     _step(sim, {"head"})  # the write hits a dead pipe
     _step(sim, {"head"})
     assert ("head", "rgb", 0) in plugin._video_failed
-    with pytest.raises(RuntimeError, match="head_rgb_env0: ffmpeg"):
-        sim.hooks.emit(Phase.CLOSE)
+    errors: list[str] = []
+    sink = logger.add(errors.append, level="ERROR")
+    try:
+        sim.hooks.emit(Phase.CLOSE)  # an encode failure must not stop the CLOSE chain
+    finally:
+        logger.remove(sink)
+    assert any("mp4 encoding failed for head_rgb_env0: ffmpeg" in e for e in errors)
     assert not (tmp_path / "head_rgb_env0.mp4").exists()
+    # The dropped frames get no index rows, and videos.json marks the stream failed.
+    assert [r["frame"] for r in _rows(tmp_path)] == [0, 1, 2]
+    assert _videos(tmp_path)["head_rgb_env0"]["status"] == "failed"
+    assert _videos(tmp_path)["head_rgb_env0"]["frames"] == 3
 
 
 @requires_ffmpeg
@@ -293,21 +362,6 @@ def test_mp4_nvenc_falls_back_to_libx264(tmp_path: Path) -> None:
     assert plugin._encoders[("head", "rgb", 0)].codec == "libx264"
     sim.hooks.emit(Phase.CLOSE)
     assert _probe(tmp_path / "head_rgb_env0.mp4")[1] == 4
-
-
-@requires_ffmpeg
-def test_mp4_encoder_options_reach_ffmpeg(tmp_path: Path) -> None:
-    # A keyframe every 2 frames: decode the stream's picture types to see -g applied.
-    _, sim = _run_mp4(tmp_path, 6, video_gop=2, video_crf=10, video_preset="ultrafast")
-    sim.hooks.emit(Phase.CLOSE)
-    out = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries", "frame=key_frame", "-of", "csv=p=0"]
-        + [str(tmp_path / "head_rgb_env0.mp4")],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert [line.split(",")[0] for line in out.stdout.split()] == ["1", "0", "1", "0", "1", "0"]
 
 
 def test_mp4_mode_depth_still_writes_files(tmp_path: Path) -> None:

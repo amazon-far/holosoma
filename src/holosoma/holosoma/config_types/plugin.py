@@ -579,7 +579,8 @@ class FrameWriterPluginConfig(PluginConfig):
     egress), or ``mp4`` for one H.264 video per stream. An mp4 is encoded as its frames arrive (one
     ffmpeg per stream, nothing buffered) into ``<stream>.mp4.partial``, renamed to ``<stream>.mp4``
     when the stream is finalized; an interrupted run leaves the ``.partial``. Its fps is the
-    camera's render rate, corrected at finalize to the frames' sim-time stamps if they disagree."""
+    camera's render rate (a warning is logged if the frames' sim-time stamps disagree), and a
+    ``videos.json`` written at teardown gives each video's final status and on-disk path."""
 
     jpeg_quality: int = 95
     """JPEG encode quality 1-100 for ``jpeg`` (ignored for ``png``). Same knob as the ROS2 egress;
@@ -596,12 +597,6 @@ class FrameWriterPluginConfig(PluginConfig):
 
     video_crf: int = 23
     """Constant-quality level for ``mp4``: libx264 ``-crf``, or NVENC ``-cq`` (0-51, lower is better)."""
-
-    video_preset: str | None = None
-    """Encoder speed/quality preset; ``None`` means ``medium`` for libx264 and ``p4`` for NVENC."""
-
-    video_gop: int | None = None
-    """Keyframe interval in frames (``-g``); ``None`` keeps the encoder default."""
 
     video_nvenc_max_sessions: int | None = 8
     """Most NVENC encoders this process keeps open at once (GeForce drivers cap concurrent sessions,
@@ -626,8 +621,6 @@ class FrameWriterPluginConfig(PluginConfig):
             raise ValueError(f"FrameWriterPluginConfig.jpeg_quality must be in [1, 100], got {self.jpeg_quality}.")
         if not 0 <= self.video_crf <= 51:
             raise ValueError(f"FrameWriterPluginConfig.video_crf must be in [0, 51], got {self.video_crf}.")
-        if self.video_gop is not None and self.video_gop < 1:
-            raise ValueError(f"FrameWriterPluginConfig.video_gop must be None or >= 1, got {self.video_gop}.")
         if self.video_nvenc_max_sessions is not None and self.video_nvenc_max_sessions < 0:
             raise ValueError(
                 f"FrameWriterPluginConfig.video_nvenc_max_sessions must be None or >= 0, "

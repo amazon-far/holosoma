@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fcntl
 import functools
 import subprocess
 import tempfile
@@ -228,7 +227,8 @@ def nvenc_available(width: int, height: int) -> bool:
     """Whether ffmpeg can open an ``h264_nvenc`` encoder at ``width x height`` here (probed once per size).
 
     Probed at the real size because NVENC has a minimum frame size (128x128 is rejected) on top of
-    needing an NVIDIA GPU, a driver, and an ffmpeg built with it.
+    needing an NVIDIA GPU, a driver, and an ffmpeg built with it; and with the encoder's real
+    options, because an older ffmpeg opens bare ``h264_nvenc`` but rejects the ``p1``-``p7`` presets.
     """
     cmd = [
         "ffmpeg",
@@ -244,6 +244,7 @@ def nvenc_available(width: int, height: int) -> bool:
         "1",
         "-c:v",
         "h264_nvenc",
+        *_nvenc_quality_args(23),
         "-f",
         "null",
         "-",
@@ -254,17 +255,25 @@ def nvenc_available(width: int, height: int) -> bool:
         return False
 
 
+def _nvenc_quality_args(cq: int) -> list[str]:
+    """NVENC rate-control options, shared by the encoder and its availability probe."""
+    return ["-preset", "p4", "-tune", "hq", "-rc", "vbr", "-cq", str(cq), "-b:v", "0"]
+
+
 class H264StreamEncoder:
     """One ffmpeg process encoding RGB uint8 ``[H, W, 3]`` frames to H.264 as they are written.
 
     Frames stream as raw rgb24 into ffmpeg's stdin, so nothing is buffered here and the encode runs
     alongside whatever produces the frames. The video is written to ``<path>.partial`` and renamed to
-    ``path`` only by :meth:`finish`, so a crash or interrupt never leaves a complete-looking file.
+    ``path`` only by :meth:`finish`, so a crash or interrupt never leaves a complete-looking file. Any
+    file already at ``path`` or ``<path>.partial`` (from an earlier run) is removed when the encoder
+    opens, so it cannot be mistaken for this one's output either.
 
     ``codec="h264_nvenc"`` falls back to ``libx264`` when NVENC cannot open at this size, or when
     ``nvenc_max_sessions`` encoders of this process already hold an NVENC session (consumer GPUs cap
     concurrent sessions; a streamed video holds its session until it finishes, so waiting for one
-    would stall the producer). :attr:`codec` is the encoder actually used.
+    would stall the producer). :attr:`codec` is the encoder actually used. ``x264_preset`` applies
+    only when libx264 runs, fallback streams included; NVENC always uses its ``p4`` preset.
     """
 
     _nvenc_lock: ClassVar[threading.Lock] = threading.Lock()
@@ -280,8 +289,7 @@ class H264StreamEncoder:
         *,
         codec: str = "libx264",
         crf: int = 23,
-        preset: str | None = None,
-        gop: int | None = None,
+        x264_preset: str = "medium",
         nvenc_max_sessions: int | None = 8,
     ) -> None:
         self.path = path
@@ -292,8 +300,16 @@ class H264StreamEncoder:
         self._holds_session = False
         if not 0 < fps < float("inf"):
             raise ValueError(f"fps must be positive and finite, got {fps}")
+        if codec not in ("libx264", "h264_nvenc"):
+            raise ValueError(f"unsupported H.264 encoder {codec!r}; expected 'libx264' or 'h264_nvenc'")
         rate = Fraction(fps).limit_denominator(1_000_000)
         self.fps = float(rate)
+        path.unlink(missing_ok=True)
+        self.partial.unlink(missing_ok=True)
+        # stderr goes to a file, not a pipe: an unread stderr pipe that fills up would block ffmpeg.
+        # Opened before an NVENC session is taken, so the only call that can fail while one is held
+        # is the Popen below, whose except releases it.
+        self._stderr = tempfile.TemporaryFile()  # noqa: SIM115 -- lives as long as ffmpeg; closed in _cleanup
         if codec == "h264_nvenc":
             with H264StreamEncoder._nvenc_lock:
                 if nvenc_max_sessions is not None and H264StreamEncoder._nvenc_open >= nvenc_max_sessions:
@@ -304,12 +320,10 @@ class H264StreamEncoder:
                     self.codec = "h264_nvenc"
                     self._holds_session = True
                     H264StreamEncoder._nvenc_open += 1
-        elif codec != "libx264":
-            raise ValueError(f"unsupported H.264 encoder {codec!r}; expected 'libx264' or 'h264_nvenc'")
         if self.codec == "h264_nvenc":
-            quality = ["-preset", preset or "p4", "-tune", "hq", "-rc", "vbr", "-cq", str(crf), "-b:v", "0"]
+            quality = _nvenc_quality_args(crf)
         else:
-            quality = ["-preset", preset or "medium", "-crf", str(crf)]
+            quality = ["-preset", x264_preset, "-crf", str(crf)]
         cmd = [
             "ffmpeg",
             "-y",
@@ -331,13 +345,10 @@ class H264StreamEncoder:
             "-pix_fmt",
             "yuv420p",
             *quality,
-            *(["-g", str(gop)] if gop is not None else []),
             "-f",
             "mp4",
             str(self.partial),
         ]
-        # stderr goes to a file, not a pipe: an unread stderr pipe that fills up would block ffmpeg.
-        self._stderr = tempfile.TemporaryFile()  # noqa: SIM115 -- lives as long as ffmpeg; closed in _cleanup
         try:
             # Unbuffered: each frame reaches ffmpeg when written, not when a Python buffer fills.
             # Own session: a terminal Ctrl-C (SIGINT to the whole process group) must not stop ffmpeg
@@ -357,16 +368,6 @@ class H264StreamEncoder:
             if isinstance(e, FileNotFoundError):
                 raise RuntimeError("Video creation failed: ffmpeg not found on PATH") from e
             raise RuntimeError(f"Video creation failed: could not start ffmpeg: {e}") from e
-        # A pipe that holds a whole frame lets write() return without waiting for ffmpeg to read it.
-        # Linux only, and an unprivileged process is capped at /proc/sys/fs/pipe-max-size (1 MiB by
-        # default), so this falls back to that cap and then to the default 64 KiB.
-        assert self._proc.stdin is not None
-        for size in (width * height * 3, 1 << 20):
-            try:
-                fcntl.fcntl(self._proc.stdin.fileno(), fcntl.F_SETPIPE_SZ, size)
-                break
-            except (AttributeError, OSError):
-                continue
 
     def write(self, frame: npt.NDArray[np.uint8]) -> None:
         """Hand one frame to the encoder; raises ``RuntimeError`` if ffmpeg has died."""
@@ -443,23 +444,6 @@ class H264StreamEncoder:
                 H264StreamEncoder._nvenc_open -= 1
 
 
-def retime_mp4(path: Path, scale: float) -> None:
-    """Scale every timestamp and frame duration of the mp4 at ``path`` by ``scale`` in place, without re-encoding.
-
-    ``setts`` rather than ``-itsscale``: the latter leaves packet durations unscaled, so the
-    container's average frame rate (what OpenCV reports as fps) stays wrong.
-    """
-    tmp = path.with_name(path.name + ".retime" + PARTIAL_SUFFIX)
-    k = f"{scale:.9f}"
-    cmd = ["ffmpeg", "-nostdin", "-y", "-hide_banner", "-loglevel", "error", "-i", str(path), "-c", "copy"]
-    cmd += ["-bsf:v", f"setts=pts=PTS*{k}:dts=DTS*{k}:duration=DURATION*{k}", "-f", "mp4", str(tmp)]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        tmp.unlink(missing_ok=True)
-        raise RuntimeError(f"ffmpeg failed retiming {path}: {result.stderr.strip()[-1000:]}")
-    tmp.replace(path)
-
-
 def encode_h264(
     frames: Sequence[npt.NDArray[np.uint8]] | npt.NDArray[np.uint8],
     fps: float,
@@ -474,7 +458,7 @@ def encode_h264(
     ``ValueError`` on a frame of the wrong shape or dtype; no output file is left behind on failure.
     """
     h, w = frames[0].shape[:2]
-    encoder = H264StreamEncoder(path, w, h, fps, crf=crf, preset=preset)
+    encoder = H264StreamEncoder(path, w, h, fps, crf=crf, x264_preset=preset)
     try:
         for frame in frames:
             encoder.write(frame)
