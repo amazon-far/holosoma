@@ -19,6 +19,13 @@ from holosoma.utils.s3_glob import _literal_prefix, list_s3_uris
 PKG = str(files("holosoma"))
 
 
+@pytest.fixture(autouse=True)
+def _clear_entrypoint_loader_cache():
+    path_utils._entrypoint_loaders.cache_clear()
+    yield
+    path_utils._entrypoint_loaders.cache_clear()
+
+
 # ----- core singular loader -----
 
 
