@@ -84,7 +84,18 @@ jobs:
     with:
       image_sha: ${{ github.event.pull_request.head.sha }}
       candidate_tag: candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
-      environments: '["holosoma", "inference", "retargeting", "thor-inference", "thor-inference-ros"]'
+      environments: '["holosoma"]'
+    secrets: inherit
+
+  build-promote-only:
+    name: Build PR Images
+    needs: changes
+    if: needs.changes.outputs.images == 'true'
+    uses: ./.github/workflows/build-docker-images.yaml
+    with:
+      image_sha: ${{ github.event.pull_request.head.sha }}
+      candidate_tag: candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+      environments: '["inference", "retargeting", "thor-inference", "thor-inference-ros"]'
     secrets: inherit
 
   test-isaacsim:
@@ -130,6 +141,7 @@ jobs:
       - build-isaacsim
       - build-mujoco
       - build-combined
+      - build-promote-only
       - test-isaacsim
       - test-mujoco
       - test-combined
@@ -149,6 +161,7 @@ jobs:
             build-isaacsim=${{ needs.build-isaacsim.result }}
             build-mujoco=${{ needs.build-mujoco.result }}
             build-combined=${{ needs.build-combined.result }}
+            build-promote-only=${{ needs.build-promote-only.result }}
             test-isaacsim=${{ needs.test-isaacsim.result }}
             test-mujoco=${{ needs.test-mujoco.result }}
             test-combined=${{ needs.test-combined.result }}
