@@ -61,7 +61,7 @@ class ClockPublishPlugin:
         self._node: Any = None
         self._pub: Any = None
         runtime = get_ros2_runtime(simulator)
-        self.simulator.hooks.add(Phase.CLOSE, self.close, name="clock_publish.close")
+        self.simulator.hooks.add(Phase.CLOSE, self.close, name="clock_publish.close", before=runtime.close_hook)
 
         import rclpy
         from rosgraph_msgs.msg import Clock
@@ -135,7 +135,7 @@ class GantryControlPlugin:
         self._spin_thread: threading.Thread | None = None
         self._spin_stop = threading.Event()
         runtime = get_ros2_runtime(simulator)
-        self.simulator.hooks.add(Phase.CLOSE, self.close, name="gantry_control.close")
+        self.simulator.hooks.add(Phase.CLOSE, self.close, name="gantry_control.close", before=runtime.close_hook)
 
         context = runtime.start()
         self._node = rclpy.create_node(cfg.node_name, context=context)
@@ -354,7 +354,7 @@ class ROS2OdometryPlugin:
         self._spin_thread: threading.Thread | None = None
         self._spin_stop = threading.Event()
         runtime = get_ros2_runtime(simulator)
-        self.simulator.hooks.add(Phase.CLOSE, self.close, name="odometry.close")
+        self.simulator.hooks.add(Phase.CLOSE, self.close, name="odometry.close", before=runtime.close_hook)
 
         import rclpy
         from nav_msgs.msg import Odometry
