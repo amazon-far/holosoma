@@ -897,10 +897,11 @@ def assert_per_env_relocation(ctx):
         return None
     # The pillar spawns UNDER the box (x=2.0) so every box starts resting on it. Settle, then
     # relocate the pillar AWAY to a PER-ENV-DISTINCT x (6.0 + env*0.5) in one write over the full
-    # contiguous env range. Two behavioral claims, both cross-backend:
+    # contiguous env range, with a 90deg yaw. Three behavioral claims, all cross-backend:
     #   (a) per-env relocation INDEXING: the pillar lands at each env's OWN distinct target (a
     #       transposition / subset-scramble bug would mis-assign these — see the subset-write bug),
-    #   (b) removing the support makes the box FALL in every env.
+    #   (b) the orientation part of the kinematic write takes (the pillar reports the applied yaw),
+    #   (c) removing the support makes the box FALL in every env.
     # Relocate AWAY (not "some rest, some fall"): a moved support genuinely disappears, so the box
     # must fall in every env, which reads identically on all four backends.
     _step(sim, steps_for_seconds(sim, 0.8))
@@ -914,20 +915,24 @@ def assert_per_env_relocation(ctx):
     poses[:, :3] = ctx.env_origins  # world = origin + local target (below)
     poses[:, 0] += target_x  # per-env-distinct x
     poses[:, 2] += 0.30  # lift off the floor
-    poses[:, 6] = 1.0  # identity quat (xyzw)
+    yaw_s, yaw_c = math.sin(math.pi / 4), math.cos(math.pi / 4)
+    poses[:, 5] = yaw_s  # 90deg yaw about z (xyzw)
+    poses[:, 6] = yaw_c
     sim.set_static_body_pose(["pillar"], ctx.env_ids, poses)
-    pillar_x = ctx.states("pillar")[:, 0]
+    pillar = ctx.states("pillar")
+    pillar_x = pillar[:, 0]
     # get_actor_states returns WORLD frame on every backend, so the expected x is the world target.
     want_x = target_x + ctx.env_origins[:, 0]
     indexed_ok = _all((pillar_x - want_x).abs() < 1e-2)  # each env's pillar at its OWN target
+    yaw_ok = _all(((pillar[:, 5] - yaw_s).abs() < 5e-2) & ((pillar[:, 6] - yaw_c).abs() < 5e-2))
     _step(sim, steps_for_seconds(sim, 1.5))
     box_z = ctx.states("freebox")[:, 2]
     fell_ok = _all(box_z < 0.10)  # support removed -> every box fell to the floor
-    ok = rested_ok and indexed_ok and fell_ok
+    ok = rested_ok and indexed_ok and yaw_ok and fell_ok
     print(
         f"  per-env-reloc: pillar_x {[round(float(v), 3) for v in pillar_x.tolist()]} "
         f"box_z {[round(float(v), 3) for v in box_z.tolist()]}  rested={rested_ok} "
-        f"per_env_indexed={indexed_ok} all_fell={fell_ok}"
+        f"per_env_indexed={indexed_ok} yaw={yaw_ok} all_fell={fell_ok}"
     )
     return ok
 
@@ -1274,8 +1279,9 @@ def assert_robot_combine_mode(ctx):
 #                          spawn at the right relative pose with independent dynamics. Video: one body
 #                          falls, the other stays put.
 #   per-env-relocation     A box rests on a pillar; the pillar is kinematically RELOCATED to a
-#                          per-env-distinct target, removing support, and every box falls — proves
-#                          per-env-indexed runtime relocation (set_static_body_pose) + support removal.
+#                          per-env-distinct target with a 90deg yaw, removing support, and every box
+#                          falls — proves per-env-indexed runtime relocation (set_static_body_pose),
+#                          that the orientation write takes, and support removal.
 #                          Video: pillar jumps away, box drops to the floor.
 #   actor-set-states-robot-object  ROBOT + two free objects written TOGETHER in one
 #                          set_actor_states call to per-env-distinct WORLD poses + a known WORLD
