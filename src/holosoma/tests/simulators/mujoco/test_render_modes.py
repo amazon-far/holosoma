@@ -10,9 +10,10 @@ None viewer would crash. One scenario, two modes, both MuJoCo backends:
 
 headless=true runs everywhere (CI included): render() must be a safe no-op (no viewer).
 headless=false opens a real window and drives the headful render, so it needs a display
-and is skipped when DISPLAY is unset (CI). Each scenario runs in its own subprocess.
-mjwarp headless is covered by test_scene_spawn_warp's g1-largebox cell, so only its headful
-mode runs here.
+and is skipped when DISPLAY is unset (CI). Headless cases share the harness worker; headful
+cases each get their own subprocess.
+mjwarp headless is covered by test_scene_spawn_warp's multi-env g1-largebox cell, so only
+its headful mode runs here.
 """
 
 from __future__ import annotations
