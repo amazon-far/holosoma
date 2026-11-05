@@ -112,20 +112,24 @@ class MotionConfig:
     Sampled independently each policy step; expected wait is roughly 1 / (1 - p) steps before unfreezing."""
 
     enable_default_pose_prepend: bool = False
-    """If True, pre-append interpolated frames from default pose to the motion's first pose.
-    This provides a smooth transition trajectory that the policy can track."""
+    """If True, prepend interpolated frames from the default pose into the motion's first frame,
+    giving the policy a trackable lead-in. Every clip gets its own.
+    IsaacSim only: the splice needs a backend whose state write runs forward kinematics."""
 
     default_pose_prepend_duration_s: float = 2.0
-    """Duration in seconds of the pre-appended interpolation phase.
-    Only used if enable_default_pose_prepend is True."""
+    """Duration in seconds of the prepended interpolation phase.
+    Only used if enable_default_pose_prepend is True. Rounded to a whole number of policy steps;
+    a value that is not a multiple of dt logs a warning and the rounded duration is used."""
 
     enable_default_pose_append: bool = False
-    """If True, post-append interpolated frames from the motion's last pose back to default pose.
-    This provides a smooth return trajectory that the policy can track."""
+    """If True, append interpolated frames from the motion's last frame back to the default pose,
+    giving the policy a trackable lead-out. Every clip gets its own.
+    IsaacSim only: the splice needs a backend whose state write runs forward kinematics."""
 
     default_pose_append_duration_s: float = 2.0
-    """Duration in seconds of the post-appended interpolation phase.
-    Only used if enable_default_pose_append is True."""
+    """Duration in seconds of the appended interpolation phase.
+    Only used if enable_default_pose_append is True. Rounded to a whole number of policy steps;
+    a value that is not a multiple of dt logs a warning and the rounded duration is used."""
 
     # noise related
     noise_to_initial_pose: NoiseToInitialPoseConfig = field(default_factory=NoiseToInitialPoseConfig)
