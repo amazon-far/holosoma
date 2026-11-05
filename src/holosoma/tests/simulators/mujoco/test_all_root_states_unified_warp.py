@@ -4,7 +4,7 @@ Routes the Warp backend through all_root_states_unified_assert.py: index/read/wr
 checks for names including BOTH "robot" and the free object, in every env.
 
 MuJoCo ClassicBackend (CPU) cannot do >1 env; the CPU/1-env variant is test_all_root_states_unified_classic.py.
-CUDA-gated; one sim per subprocess.
+CUDA-gated; each case builds its own sim in the shared harness worker.
 """
 
 from __future__ import annotations
@@ -36,4 +36,5 @@ def test_all_root_states_unified():
         "4",
         label="mjwarp/all-root-states-unified (num_envs=4)",
         timeout=600,
+        reuse_process=True,
     )

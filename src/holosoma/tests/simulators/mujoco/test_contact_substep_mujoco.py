@@ -33,6 +33,7 @@ def test_contact_substep_classic(tmp_path):
         str(result_file),
         label="mujoco/contact-substep (classic)",
         timeout=600,
+        reuse_process=True,
         result_file=result_file,
     )
 
@@ -52,5 +53,6 @@ def test_contact_substep_warp(num_envs, tmp_path):
         str(result_file),
         label=f"mjwarp/contact-substep (num_envs={num_envs})",
         timeout=600,
+        reuse_process=True,
         result_file=result_file,
     )

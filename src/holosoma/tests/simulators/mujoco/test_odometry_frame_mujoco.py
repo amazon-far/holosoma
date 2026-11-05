@@ -25,6 +25,7 @@ def test_odometry_frame_classic(tmp_path):
         str(result_file),
         label="mujoco-classic/arbitrary-frame-odometry",
         timeout=400,
+        reuse_process=True,
         result_file=result_file,
     )
 
@@ -41,5 +42,6 @@ def test_odometry_frame_warp(tmp_path):
         str(result_file),
         label="mjwarp/arbitrary-frame-odometry",
         timeout=400,
+        reuse_process=True,
         result_file=result_file,
     )

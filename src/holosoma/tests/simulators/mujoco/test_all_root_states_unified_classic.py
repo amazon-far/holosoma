@@ -33,4 +33,5 @@ def test_all_root_states_unified():
         "1",
         label="mujoco/all-root-states-unified (classic, num_envs=1)",
         timeout=600,
+        reuse_process=True,
     )
