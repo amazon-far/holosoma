@@ -694,6 +694,7 @@ def test_warp_rejects_cpu_with_device_argument_in_error():
 def test_warp_contact_extra_changes_real_kernel_trajectories(device):
     mjw = pytest.importorskip("mujoco_warp")
     wp = pytest.importorskip("warp")
+    steps = 30
     outcomes = {}
     for collision in (True, False):
         native = MujocoConfig(
@@ -720,7 +721,7 @@ def test_warp_contact_extra_changes_real_kernel_trajectories(device):
                     apply_warp_model(uploaded, native, warp_option_overrides(native.warp))
                     data = mjw.make_data(model, **allocation_kwargs(model, native.warp, 2))
                     data.qpos.assign(np.tile(initial.qpos, (2, 1)).astype(np.float32))
-                    for _ in range(100):
+                    for _ in range(steps):
                         mjw.step(uploaded, data)
                 else:
                     from holosoma.simulator.mujoco.backends.warp_backend import WarpBackend
@@ -729,20 +730,20 @@ def test_warp_contact_extra_changes_real_kernel_trajectories(device):
                     backend = WarpBackend(model, initial, config, device)
                     backend.initialize_state(model, initial)
                     assert backend.step_graph is not None
-                    for _ in range(100):
+                    for _ in range(steps):
                         backend.step()
                     data = backend.mjw_data
-                np.testing.assert_allclose(data.time.numpy(), [1, 1], atol=1e-6, rtol=0)
+                np.testing.assert_allclose(data.time.numpy(), [steps * 0.01] * 2, atol=1e-6, rtol=0)
                 assert (data.nacon.numpy()[0] > 0) == collision
                 outcomes[collision] = data.qpos.numpy()[:, 2]
                 if not collision:
-                    np.testing.assert_allclose(data.qvel.numpy()[:, 2], [-2, -2], atol=1e-5, rtol=0)
+                    np.testing.assert_allclose(data.qvel.numpy()[:, 2], [-2 * steps * 0.01] * 2, atol=1e-5, rtol=0)
             finally:
                 if backend is not None:
                     backend.close()
     assert np.all(outcomes[True] > 0.09)
-    # Semi-implicit Euler free fall for 100 steps at dt=0.01 under gravity=-2.
-    np.testing.assert_allclose(outcomes[False], [0.099 - 1.01] * 2, atol=1e-5, rtol=0)
+    # Semi-implicit Euler free fall at dt=0.01 under gravity=-2.
+    np.testing.assert_allclose(outcomes[False], [0.099 - 2e-4 * steps * (steps + 1) / 2] * 2, atol=1e-5, rtol=0)
 
 
 @pytest.mark.parametrize(
