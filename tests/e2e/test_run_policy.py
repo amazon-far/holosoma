@@ -39,6 +39,8 @@ def run_mini_training(workflow_name: str) -> str:
             # backend the preset happens to name and fail on a missing SDK. mjwarp (not classic
             # mujoco) keeps this on the GPU, which ClassicBackend cannot do -- it is single-env only.
             "simulator:mjwarp",
+            # A plane skips the heightfield collision kernels, the slowest Warp compile in this run.
+            "terrain:terrain-locomotion-plane",
             "--algo.config.num-learning-iterations=2",
             "--training.num-envs=4",
             "--logger.video.enabled=False",
