@@ -414,7 +414,7 @@ def test_startup_handshake_failure_cleans_partial_resources(monkeypatch: pytest.
     ],
 )
 def test_safe_startup_reason_preserves_distinct_known_diagnostics(reason: str) -> None:
-    from holosoma.bridge.unitree.unitree_sdk2py_bridge_mp import _safe_startup_reason
+    from holosoma.utils.unitree_mp_worker import _safe_startup_reason
 
     # Fixed SDK 0.1.8 / CycloneDDS messages, not invented substitutes for native validation.
     assert _safe_startup_reason(RuntimeError(reason)) == reason
@@ -435,7 +435,7 @@ def test_safe_startup_reason_preserves_distinct_known_diagnostics(reason: str) -
 )
 @pytest.mark.parametrize("reason", ["Failed to create domain explicitly.", "libddsc.so.0: file too short"])
 def test_safe_startup_reason_never_copies_appended_context(reason: str, context: str) -> None:
-    from holosoma.bridge.unitree.unitree_sdk2py_bridge_mp import _safe_startup_reason
+    from holosoma.utils.unitree_mp_worker import _safe_startup_reason
 
     # No separator is intentional: a deceptive known-prefix suffix must not be copied either.
     result = _safe_startup_reason(RuntimeError(reason + context))
@@ -456,20 +456,20 @@ def test_safe_startup_reason_never_copies_appended_context(reason: str, context:
     ],
 )
 def test_safe_startup_reason_withholds_unknown_or_uncertain_text(message: str) -> None:
-    from holosoma.bridge.unitree.unitree_sdk2py_bridge_mp import _safe_startup_reason
+    from holosoma.utils.unitree_mp_worker import _safe_startup_reason
 
     assert _safe_startup_reason(RuntimeError(message)) == "native reason withheld (unrecognized diagnostic)"
 
 
 def test_safe_startup_reason_loader_path_and_wheel_hash_are_not_returned() -> None:
-    from holosoma.bridge.unitree.unitree_sdk2py_bridge_mp import _safe_startup_reason
+    from holosoma.utils.unitree_mp_worker import _safe_startup_reason
 
     error = OSError("/private-fragment/libddsc-4038630c.so: cannot open shared object file: No such file or directory")
     assert _safe_startup_reason(error) == "libddsc.so: cannot open shared object file: No such file or directory"
 
 
 def test_safe_startup_reason_handles_unreadable_exception() -> None:
-    from holosoma.bridge.unitree.unitree_sdk2py_bridge_mp import _safe_startup_reason
+    from holosoma.utils.unitree_mp_worker import _safe_startup_reason
 
     class UnreadableError(Exception):
         def __str__(self) -> str:
@@ -479,7 +479,7 @@ def test_safe_startup_reason_handles_unreadable_exception() -> None:
 
 
 def test_safe_startup_reason_recognizes_released_native_initialization_wrapper() -> None:
-    from holosoma.bridge.unitree.unitree_sdk2py_bridge_mp import _safe_startup_reason
+    from holosoma.utils.unitree_mp_worker import _safe_startup_reason
 
     # Observed from SDK 0.1.8 in a network-none CPU container using a nonexistent NIC.
     error = RuntimeError(
