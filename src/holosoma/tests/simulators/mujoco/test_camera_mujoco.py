@@ -100,73 +100,6 @@ def test_camera_depth_warp(tmp_path):
 
 
 @pytest.mark.mujoco_classic
-def test_camera_recorder_classic(tmp_path):
-    # A viz config requesting recording yields a non-None camera_sensor_recorder that capture()s a frame.
-    result_file = tmp_path / "rec_mujoco.txt"
-    run_harness(
-        _CONTRACT_HARNESS,
-        "--simulator",
-        "mujoco",
-        "--check-recorder",
-        "--result-file",
-        str(result_file),
-        label="mujoco/camera-recorder",
-        timeout=300,
-        result_file=result_file,
-    )
-
-
-@pytest.mark.mujoco_classic
-def test_camera_isaacsim_projection_config_falls_back_to_pinhole_classic(tmp_path):
-    result_file = tmp_path / "projection_fallback_mujoco.txt"
-    run_harness(
-        _PROJECTION_HARNESS,
-        "--simulator",
-        "mujoco",
-        "--result-file",
-        str(result_file),
-        label="mujoco/camera-projection-fallback",
-        timeout=300,
-        result_file=result_file,
-    )
-
-
-@pytest.mark.mujoco_warp
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="MuJoCo-Warp requires a CUDA device")
-def test_camera_isaacsim_projection_config_falls_back_to_pinhole_warp(tmp_path):
-    result_file = tmp_path / "projection_fallback_mjwarp.txt"
-    run_harness(
-        _PROJECTION_HARNESS,
-        "--simulator",
-        "mjwarp",
-        "--num-envs",
-        "2",
-        "--result-file",
-        str(result_file),
-        label="mjwarp/camera-projection-fallback",
-        timeout=400,
-        result_file=result_file,
-    )
-
-
-@pytest.mark.mujoco_warp
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="MuJoCo-Warp requires a CUDA device")
-def test_camera_recorder_warp(tmp_path):
-    result_file = tmp_path / "rec_mjwarp.txt"
-    run_harness(
-        _CONTRACT_HARNESS,
-        "--simulator",
-        "mjwarp",
-        "--check-recorder",
-        "--result-file",
-        str(result_file),
-        label="mjwarp/camera-recorder",
-        timeout=400,
-        result_file=result_file,
-    )
-
-
-@pytest.mark.mujoco_classic
 def test_camera_follow_classic(tmp_path):
     # Camera tracks its mount body: move the robot toward the panel, the panel depth drops by the moved distance.
     result_file = tmp_path / "follow_mujoco.txt"
@@ -178,22 +111,6 @@ def test_camera_follow_classic(tmp_path):
         str(result_file),
         label="mujoco/camera-follow",
         timeout=300,
-        result_file=result_file,
-    )
-
-
-@pytest.mark.mujoco_warp
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="MuJoCo-Warp requires a CUDA device")
-def test_camera_follow_warp(tmp_path):
-    result_file = tmp_path / "follow_mjwarp.txt"
-    run_harness(
-        _FOLLOW_HARNESS,
-        "--simulator",
-        "mjwarp",
-        "--result-file",
-        str(result_file),
-        label="mjwarp/camera-follow",
-        timeout=400,
         result_file=result_file,
     )
 

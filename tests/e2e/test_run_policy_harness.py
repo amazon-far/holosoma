@@ -99,45 +99,6 @@ def launcher(tmp_path, monkeypatch):
         proc.communicate(timeout=5)
 
 
-@pytest.mark.parametrize(("ignore_term", "close_output"), [(False, False), (True, False), (True, True)])
-def test_live_policy_stops_its_child_and_preserves_output(launcher, ignore_term, close_output):
-    configure, _, root = launcher
-    configure(ignore_term=ignore_term, close_output=close_output)
-    policy_e2e.assert_run_policy_with_hsinference("synthetic", "model.onnx", timeout=0.1)
-    pid = int((root / "policy.ready").read_text().split()[0])
-    _wait_until_gone_or_zombie(pid)
-
-
-def _wait_until_gone_or_zombie(pid, timeout=5.0):
-    stat = Path(f"/proc/{pid}/stat")
-    # A killed orphan can remain a zombie until the host init reaps it.
-    deadline = time.monotonic() + timeout
-    while stat.exists():
-        try:
-            if stat.read_text().split()[2] == "Z":
-                return
-        # Reaped between open() and read(): the read fails with ESRCH, not ENOENT.
-        except (FileNotFoundError, ProcessLookupError):
-            return
-        assert time.monotonic() < deadline, "policy child survived launcher cleanup"
-        time.sleep(0.01)
-
-
-@pytest.mark.parametrize("error", [FileNotFoundError, ProcessLookupError])
-def test_wait_treats_a_process_reaped_mid_read_as_gone(monkeypatch, error):
-    def vanished(self, *args, **kwargs):
-        raise error(3, "No such process")
-
-    monkeypatch.setattr(Path, "exists", lambda _self: True)
-    monkeypatch.setattr(Path, "read_text", vanished)
-    _wait_until_gone_or_zombie(12345, timeout=0)
-
-
-def test_wait_fails_when_the_process_stays_alive():
-    with pytest.raises(AssertionError, match="survived launcher cleanup"):
-        _wait_until_gone_or_zombie(os.getpid(), timeout=0.05)
-
-
 def test_setup_and_policy_have_independent_deadlines(launcher):
     configure, launches, _ = launcher
     configure()

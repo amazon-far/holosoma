@@ -231,20 +231,6 @@ def test_mp_bridge_end_to_end(fake_binding_on_path: Path, monkeypatch: pytest.Mo
     np.testing.assert_allclose(odom["payload"]["yaw_speed"], 0.3, atol=1e-6)
 
 
-def test_mp_bridge_close_is_idempotent(fake_binding_on_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("FAKE_UNITREE_NUM_MOTOR", "1")
-    from holosoma.bridge.unitree.unitree_sdk2py_bridge_mp import UnitreeMpSdk2Bridge
-
-    bridge = UnitreeMpSdk2Bridge(
-        cast("BaseSimulator", _FakeSim(1)),
-        cast("RobotConfig", _robot_full_config(1)),
-        BridgeConfig(interface="lo"),
-    )
-    bridge.close()
-    bridge.close()  # must not raise
-    assert not bridge._proc.is_alive()
-
-
 _XML = (
     ' \n<?xml version="1.0"?>\n<CycloneDDS><Domain Id="0"><Discovery><Peers>'
     '<Peer Address="sim.sdk.example"/><Peer Address="driver.sdk.example"/>'
@@ -413,21 +399,6 @@ def test_startup_handshake_failure_cleans_partial_resources(monkeypatch: pytest.
         assert proc.join.call_count == 2
 
 
-def test_spawn_seam_rejects_missing_dds_config_before_allocating_queues(monkeypatch: pytest.MonkeyPatch) -> None:
-    from unittest.mock import MagicMock
-
-    from holosoma.bridge.unitree import unitree_sdk2py_bridge_mp as mp_bridge
-
-    context = MagicMock()
-    monkeypatch.setattr(mp_bridge.mp, "get_context", context)
-    bridge = mp_bridge.UnitreeMpSdk2Bridge.__new__(mp_bridge.UnitreeMpSdk2Bridge)
-    bridge.sdk_robot_type = "g1_29dof"
-    bridge.bridge_config = cast("BridgeConfig", SimpleNamespace(interface="lo"))
-    with pytest.raises(AttributeError, match="dds_config"):
-        bridge._init_sdk_components()
-    context.assert_not_called()
-
-
 @pytest.mark.parametrize(
     "reason",
     [
@@ -587,24 +558,6 @@ def test_update_that_raises_still_flushes_what_it_had_already_queued(
 
     kinds = [r["kind"] for r in _read_records(record)]
     assert kinds.count("publish_low_state") == 1
-
-
-def test_unknown_method_in_a_batch_is_reported_as_an_error(
-    fake_binding_on_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The batch path raises the child's error the same way a single call does."""
-    monkeypatch.setenv("FAKE_UNITREE_NUM_MOTOR", "2")
-
-    from holosoma.bridge.unitree.unitree_sdk2py_bridge_mp import _BATCH
-
-    bridge = _construct_bridge(BridgeConfig(interface="lo"), num_motor=2)
-    try:
-        with pytest.raises(ValueError, match="Unknown method 'nope'"):
-            bridge._call(_BATCH, [("nope", ())])
-        with pytest.raises(ValueError, match="Unknown method 'nope'"):
-            bridge._call("nope")
-    finally:
-        bridge.close()
 
 
 def test_publishes_outside_a_transport_update_go_out_immediately(

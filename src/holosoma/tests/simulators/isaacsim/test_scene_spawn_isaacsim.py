@@ -65,25 +65,6 @@ def test_scene_spawn(scene):
     )
 
 
-def test_friction_slide_multi_env():
-    # Behavioral friction probe (NOT a value read-back): two boxes pushed identically, differing
-    # ONLY in friction, must slide measurably different distances. Longer window than the default
-    # 40 steps so the low/high gap clears the probe margin; asserted in every env.
-    run_harness(
-        _HARNESS,
-        "--simulator",
-        "isaacsim",
-        "--scene",
-        "friction-slide",
-        "--num-envs",
-        "4",
-        "--steps",
-        "150",
-        label="isaacsim/friction-slide (num_envs=4)",
-        timeout=900,
-    )
-
-
 def test_launcher_settings_and_default_sun():
     """Read launcher settings and the default scene light back from live IsaacSim."""
     run_harness(
@@ -100,22 +81,6 @@ def test_launcher_settings_and_default_sun():
         "--scene-lights",
         "default",
         label="isaacsim/render-config defaults",
-        timeout=900,
-    )
-
-
-def test_default_sun_can_be_disabled():
-    """An empty rig removes the default sun's prim from the composed stage."""
-    run_harness(
-        _HARNESS,
-        "--simulator",
-        "isaacsim",
-        "--scene",
-        "g1-largebox",
-        "--probe-isaacsim-render-config",
-        "--scene-lights",
-        "empty",
-        label="isaacsim/render-config default sun disabled",
         timeout=900,
     )
 

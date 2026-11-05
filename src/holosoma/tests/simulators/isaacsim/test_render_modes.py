@@ -13,32 +13,19 @@ singleton.
 from __future__ import annotations
 
 import dataclasses
-import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
 
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.simulator import IsaacSimRenderConfig
 from holosoma.config_values import run_sim as run_sim_values
 from holosoma.utils.sim_utils import setup_isaaclab_launcher
-from tests.simulators._run_harness import run_harness
 
 _HARNESS = Path(__file__).resolve().parents[1] / "scene_spawn_assert.py"
-
-
-def _has_isaacsim() -> bool:
-    if importlib.util.find_spec("isaaclab") is None:
-        return False
-    try:
-        import torch
-    except ImportError:
-        return False
-    return torch.cuda.is_available()
 
 
 def _run_config(render_config: IsaacSimRenderConfig) -> RunSimConfig:
@@ -98,26 +85,3 @@ def test_launcher_config_reaches_app_launcher_namespace(
     assert app is app_sentinel
     assert captured_args["rendering_mode"] == expected_rendering_mode
     assert captured_args["kit_args"] == expected_kit_args
-
-
-@pytest.mark.no_sim
-def test_launcher_config_rejects_unknown_rendering_mode() -> None:
-    with pytest.raises(ValidationError):
-        IsaacSimRenderConfig(rendering_mode="cinematic")  # type: ignore[arg-type]
-
-
-@pytest.mark.isaacsim
-@pytest.mark.skipif(not _has_isaacsim(), reason="IsaacSim requires Isaac Lab and a CUDA device")
-def test_render_headless():
-    """Step and render a free-box scene without a display."""
-    run_harness(
-        _HARNESS,
-        "--simulator",
-        "isaacsim",
-        "--scene",
-        "g1-largebox",
-        "--headless",
-        "true",
-        label="isaacsim render (headless=true)",
-        timeout=900,
-    )

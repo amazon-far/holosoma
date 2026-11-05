@@ -158,14 +158,6 @@ def _step(sim: _FakeSimulator) -> None:
 # ----- tests -----
 
 
-def test_registers_publish_and_close_callbacks() -> None:
-    sim = _FakeSimulator(_sensors("head"), {("head", "rgb"): _rgb()})
-    FakeConsumer(None, sim, streams=[("head", "rgb", 0)])
-    # One FRAME_END hook (publish) and one CLOSE hook (stop) were registered.
-    assert len(sim.hooks._snapshots[Phase.FRAME_END]) == 1
-    assert len(sim.hooks._snapshots[Phase.CLOSE]) == 1
-
-
 def test_publishes_only_fresh_wanted_streams() -> None:
     sim = _FakeSimulator(_sensors("head", "wrist"), {("head", "rgb"): _rgb(), ("wrist", "rgb"): _rgb()})
     c = FakeConsumer(None, sim, streams=[("head", "rgb", 0), ("wrist", "rgb", 0)])

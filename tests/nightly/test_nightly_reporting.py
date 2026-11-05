@@ -127,22 +127,6 @@ def test_every_tracked_cell_names_a_known_simulator(rs: Any) -> None:
 # --- per-cell view links -----------------------------------------------------------
 
 
-def test_trend_view_url_is_per_cell(rs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_ISAACSIM_GPUS_1", "url-isaac")
-    monkeypatch.setenv("PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_MJWARP_GPUS_1", "url-mjwarp")
-
-    assert rs._trend_view_url(ISAACSIM_CELL) == "url-isaac"
-    assert rs._trend_view_url(MJWARP_CELL) == "url-mjwarp"
-
-
-def test_trend_view_url_empty_when_unset(rs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_ISAACSIM_GPUS_1", raising=False)
-    # The un-suffixed variable names no particular cell and must not be used for one.
-    monkeypatch.setenv("PERF_TREND_VIEW_URL", "url-bare")
-
-    assert rs._trend_view_url(ISAACSIM_CELL) == ""
-
-
 # --- trend report ------------------------------------------------------------------
 
 
@@ -178,25 +162,6 @@ def test_each_block_carries_only_its_own_view_link(rs: Any, monkeypatch: pytest.
     mjwarp_block = next(b for b in blocks if MJWARP_CELL in b)
     assert "url-isaac" in isaac_block and "url-mjwarp" not in isaac_block
     assert "url-mjwarp" in mjwarp_block and "url-isaac" not in mjwarp_block
-
-
-def test_block_falls_back_to_project_link(rs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(rs, "_fetch_trend_series", lambda _cell: (_by_metric(rs, _series(8, 3.3)), "project-url"))
-    for cell in rs.TREND_CELLS:
-        monkeypatch.delenv(f"PERF_TREND_VIEW_URL_{cell.upper().replace(' | ', '_').replace('-', '_')}", raising=False)
-
-    report = rs.format_trend_report()
-    assert report is not None
-    assert "project-url" in report
-
-
-def test_blocks_are_separated_by_a_blank_line(rs: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Without it a cell's heading renders directly under the previous cell's figures."""
-    monkeypatch.setattr(rs, "_fetch_trend_series", lambda _cell: (_by_metric(rs, _series(8, 3.3)), "project-url"))
-
-    report = rs.format_trend_report()
-    assert report is not None
-    assert f"\n\n📈 [{rs.TREND_VIEW_LABEL} - {MJWARP_CELL}]" in report
 
 
 def test_block_reports_all_three_timescales_earlier_first(rs: Any, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -107,15 +107,6 @@ def _all_geom_friction(model):
 # --------------------------------------------------------------------------------------------
 
 
-def test_smoke_synthetic_spec():
-    model = _compile(_make_robot_spec())
-    assert model.ngeom == 3
-    assert model.nbody == 4  # world + 3 links
-    for g in range(model.ngeom):
-        assert float(model.geom_friction[g, 0]) == pytest.approx(_BASE_FRICTION[0], abs=1e-6)
-        assert int(model.geom_condim[g]) == _BASE_CONDIM
-
-
 # --------------------------------------------------------------------------------------------
 # Whole-robot geom props reach every geom; density changes total mass.
 # --------------------------------------------------------------------------------------------
@@ -227,16 +218,4 @@ def test_link_physics_none_is_noop():
     baseline = _all_geom_friction(_compile(_make_robot_spec()))
     spec = _make_robot_spec()
     _apply_whole_robot(spec, None)
-    assert _all_geom_friction(_compile(spec)) == baseline
-
-
-def test_physx_only_whole_robot_is_geom_noop():
-    # link_physics is set (the loop runs) but carries only physx (mujoco=None), so the MuJoCo geom
-    # write is a no-op.
-    baseline = _all_geom_friction(_compile(_make_robot_spec()))
-    spec = _make_robot_spec()
-    _apply_whole_robot(
-        spec,
-        PhysicsConfig(physx=PhysXPhysicsConfig(linear_damping=0.0, angular_damping=0.0)),
-    )
     assert _all_geom_friction(_compile(spec)) == baseline

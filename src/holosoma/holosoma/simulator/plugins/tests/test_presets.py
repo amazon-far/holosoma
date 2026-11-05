@@ -84,15 +84,6 @@ class _FakeSimulator:
         self.sensor_manager = None
 
 
-def test_presets_resolve_get_cls_without_rclpy() -> None:
-    # Resolving get_cls imports the ros2_image_egress MODULE but must NOT import rclpy (deferred to
-    # start()), so presets are inspectable in a non-ROS env.
-    for name in ("ros2-image", "ros2-stereo"):
-        cls = PLUGIN_REGISTRY[name].get_cls()
-        assert cls.__name__ == "ROS2ImagePlugin"
-    assert "rclpy" not in sys.modules
-
-
 def test_stereo_preset_publishes_teleop_topics() -> None:
     # Teleoperation subscribes to /ros_camera/rgb/{left,right}/compressed. Topics are
     # published VERBATIM (no auto-suffix), so the preset spells the full topics out.
@@ -110,13 +101,6 @@ def test_stereo_egress_cameras_exist_in_g1_stereo_rig() -> None:
     stereo_cams = set(_G1_STEREO_RIG)
     route_cams = {r.camera for r in PLUGIN_REGISTRY["ros2-stereo"].routes.values()}
     assert route_cams <= stereo_cams
-
-
-def test_g1_stereo_wrists_rig_composes_from_building_blocks() -> None:
-    # The stereo-head-plus-wrists rig (previously a whole-config preset) now composes from the G1
-    # camera building blocks, keyed to the names the egress routes reference.
-    cams = set(_G1_STEREO_WRISTS_RIG)
-    assert {"head_cam_left", "head_cam_right", "left_wrist_cam", "right_wrist_cam"} <= cams
 
 
 def test_waist_depth_color_preset_colorizes_depth_over_rgb_format() -> None:

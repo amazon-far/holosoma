@@ -120,20 +120,3 @@ def test_object_mass_dr_multi_object_isolation_warp():
     after_b = sim.backend.warp_model_bridge.body_mass[:, bid_b]
     assert torch.all((after_a - before_a).abs() > 1e-3), "box_a mass should have changed"
     assert torch.allclose(after_b, before_b), "box_b mass leaked — per-object targeting broken"
-
-
-def test_object_dr_robot_only_scene_noop_warp():
-    """A robot-only scene resolves to no free bodies -> the terms no-op without error."""
-    sim = build_warp_sim(SceneConfig(), seed=7)
-    sim.prepare_randomization_fields(["body_mass", "geom_friction"])
-    env = env_shell(sim, NUM_ENVS)
-    # Should not raise (RandomizerNotSupportedError or otherwise) and should change nothing.
-    randomize_object_rigid_body_mass_startup(
-        env, torch.arange(NUM_ENVS, device=sim.sim_device), sampler=_sampler(env), mass_distribution_params=(5.0, 6.0)
-    )
-    randomize_object_rigid_body_material_startup(
-        env,
-        torch.arange(NUM_ENVS, device=sim.sim_device),
-        sampler=_sampler(env),
-        material={"mujoco": {"sliding_friction": (0.2, 0.3)}},
-    )

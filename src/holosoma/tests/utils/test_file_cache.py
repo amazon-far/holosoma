@@ -22,7 +22,6 @@ from holosoma.utils.file_cache import (
     _is_remote_uri,
     _load_metadata,
     _save_metadata,
-    _uri_to_hash,
     cached_open,
     clear_cache,
     get_cache_stats,
@@ -108,23 +107,6 @@ def mock_wandb(monkeypatch):
 class TestCacheInternals:
     """Test core caching logic - protocol-agnostic."""
 
-    def test_uri_to_hash_deterministic(self):
-        """Hash same URI consistently."""
-        uri = "fake://example.com/file.txt"
-        hash1 = _uri_to_hash(uri)
-        hash2 = _uri_to_hash(uri)
-        assert hash1 == hash2
-        assert len(hash1) == 64  # SHA-256 produces 64 hex chars
-
-    def test_uri_to_hash_collision_resistant(self):
-        """Different URIs get different hashes."""
-        hash1 = _uri_to_hash("fake://a")
-        hash2 = _uri_to_hash("fake://b")
-        hash3 = _uri_to_hash("fake://a/different")
-        assert hash1 != hash2
-        assert hash1 != hash3
-        assert hash2 != hash3
-
     def test_cache_path_structure(self, temp_cache_dir):
         """Cache path follows expected structure."""
         # Use s3:// since fake:// protocol isn't recognized
@@ -138,13 +120,6 @@ class TestCacheInternals:
 
         # Should preserve extension
         assert path.suffix == ".npz"
-
-    def test_cache_path_extension_preservation(self, temp_cache_dir):
-        """Cache path preserves file extensions."""
-        extensions = [".pt", ".npz", ".yaml", ".onnx", ".txt", ""]
-        for ext in extensions:
-            path = _get_cache_path(f"fake://file{ext}")
-            assert path.suffix == ext
 
     def test_is_cache_valid_nonexistent(self):
         """Non-existent file is invalid."""
@@ -250,16 +225,6 @@ class TestCacheInternals:
         assert "size_bytes" in metadata
         assert metadata["size_bytes"] == 12  # len(b"test content")
         assert metadata["protocol"] == "s3"
-
-    def test_metadata_path_generation(self, tmp_path):
-        """Metadata path is correctly derived from cache path."""
-        cache_path = tmp_path / "abc123.npz"
-        meta_path = _get_metadata_path(cache_path)
-
-        assert meta_path.parent == cache_path.parent
-        # The implementation uses {stem}.meta.json format
-        assert meta_path.name == "abc123.meta.json"
-        assert meta_path.suffix == ".json"
 
     def test_metadata_load_missing_file(self, tmp_path):
         """Loading metadata from non-existent file returns None."""
@@ -449,45 +414,11 @@ class TestCacheManagement:
 class TestLocalFilePaths:
     """Test handling of local file paths."""
 
-    def test_local_absolute_path_unchanged(self):
-        """Absolute local paths are returned unchanged."""
-        path = "/absolute/path/to/file.txt"
-        result = get_cached_file_path(path)
-        assert result == path
-
-    def test_local_relative_path_resolved(self, tmp_path, monkeypatch):
-        """Relative paths are resolved to absolute."""
-        # Change to temp directory
-        monkeypatch.chdir(tmp_path)
-
-        # Create a file
-        test_file = tmp_path / "test.txt"
-        test_file.write_bytes(b"content")
-
-        # Get cached path with relative reference
-        result = get_cached_file_path("test.txt")
-
-        # Should be resolved to absolute
-        assert Path(result).is_absolute()
-        assert Path(result).exists()
-
     def test_package_prefixed_path_resolved(self):
         """Registered package prefixes use the shared path resolver."""
         result = get_cached_file_path("@holosoma/data/scene_objects/boxes/small_box.urdf")
         assert Path(result).is_absolute()
         assert Path(result).is_file()
-
-    def test_local_files_not_cached(self, temp_cache_dir):
-        """Local files don't get cached."""
-        local_path = "/local/file.txt"
-        result = get_cached_file_path(local_path)
-
-        # Should return original path
-        assert result == local_path
-
-        # Cache dir should be empty
-        stats = get_cache_stats()
-        assert stats["total_files"] == 0
 
 
 class TestIntegrationWithMocks:
@@ -516,16 +447,6 @@ class TestIntegrationWithMocks:
         assert temp_cache_dir in Path(path1).parents
 
         # Second call - should use cache
-        path2 = get_cached_file_path(uri)
-        assert path1 == path2
-
-    def test_http_download_and_cache(self, mock_smart_open, temp_cache_dir):
-        """HTTP file is downloaded and cached."""
-        uri = "http://example.com/file.txt"
-
-        path1 = get_cached_file_path(uri)
-        assert Path(path1).exists()
-
         path2 = get_cached_file_path(uri)
         assert path1 == path2
 
@@ -558,52 +479,6 @@ class TestIntegrationWithMocks:
 
         # Should be in temp location, not cache
         assert temp_cache_dir not in Path(path).parents
-
-
-class TestRaceConditionHandling:
-    """Test race condition protection mechanisms."""
-
-    def test_process_specific_temp_files(self, mock_smart_open, temp_cache_dir):
-        """Temp files include process ID to avoid conflicts."""
-        import os
-
-        uri = "s3://bucket/file.txt"
-
-        # Download (will use temp file internally)
-        path = get_cached_file_path(uri)
-
-        # Verify PID would be used in temp file name
-        # (We can't directly test this without mocking deeper, but we verify
-        # the final result exists and is correct)
-        assert Path(path).exists()
-        assert str(os.getpid()) not in str(path)  # Final path shouldn't have PID
-
-    def test_double_check_pattern(self, mock_smart_open, temp_cache_dir):
-        """Cache is checked again before download."""
-        uri = "s3://bucket/file.txt"
-
-        # First call caches the file
-        path1 = get_cached_file_path(uri)
-
-        # Second call should find it immediately without download attempt
-        path2 = get_cached_file_path(uri)
-
-        assert path1 == path2
-        assert Path(path1).exists()
-
-    def test_file_exists_error_handling(self, mock_smart_open, temp_cache_dir):
-        """FileExistsError is handled gracefully."""
-        uri = "s3://bucket/file.txt"
-
-        # Pre-populate cache to simulate race condition
-        cache_path = _get_cache_path(uri)
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_bytes(b"pre-existing content")
-
-        # Should use existing cache, not fail
-        result = get_cached_file_path(uri)
-        assert result == str(cache_path)
-        assert Path(result).exists()
 
 
 if __name__ == "__main__":

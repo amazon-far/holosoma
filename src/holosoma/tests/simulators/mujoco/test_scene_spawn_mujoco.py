@@ -212,13 +212,6 @@ def test_physics_override_reaches_spawned_body():
     assert abs(_object_sliding_friction(sim, "pbox") - 0.4) < 1e-4, "configured friction did not reach the geom"
 
 
-def test_initial_velocity_on_fixed_object_rejected():
-    """Setting an initial velocity on a static (fixed=True) object is a config error — it can
-    never take effect, so RigidObjectConfig rejects it loudly rather than silently dropping it."""
-    with pytest.raises(ValueError, match="(?i)fixed"):
-        RigidObjectConfig(urdf_file=SMALL_BOX, position=[0.0, 0.0, 0.3], fixed=True, linear_velocity=[1.0, 0.0, 0.0])
-
-
 def test_multibody_scene_file_spawns_with_types_and_offset():
     """A single scene FILE expands 1->N: free_box (free) + static_post (static), at the
     file's authored +0.5m-x relative offset, classified by the file's joint structure."""

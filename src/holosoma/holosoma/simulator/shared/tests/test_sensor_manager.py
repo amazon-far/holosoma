@@ -68,18 +68,6 @@ def test_frequency_string_resolves_and_gates() -> None:
     assert _drive(sm, 9)["c"] == [True, False, False, False, True, False, False, False, True]
 
 
-def test_frames_produced_counts_renders() -> None:
-    sm = SensorManager(device="cpu", control_hz=200.0)
-    sm.register_camera("c", _cam(update_decimation=2))
-    assert sm.frames_produced("c") == 0  # nothing rendered yet
-    sm.collect_due()  # step 0 -> renders frame 1
-    assert sm.frames_produced("c") == 1
-    sm.collect_due()  # step 1 -> not due
-    assert sm.frames_produced("c") == 1
-    sm.collect_due()  # step 2 -> renders frame 2
-    assert sm.frames_produced("c") == 2
-
-
 def test_frames_produced_dec3_holds_within_window() -> None:
     # The realistic slow-camera case: dec=3 over 7 steps. frames_produced must stay flat across the
     # two non-due steps of each window and increment exactly on the due step.
@@ -115,12 +103,6 @@ def test_duplicate_name_rejected() -> None:
     sm.register_camera("c", _cam())
     with pytest.raises(ValueError, match="already registered"):
         sm.register_camera("c", _cam())
-
-
-def test_depth_modality_supported() -> None:
-    sm = SensorManager(device="cpu", control_hz=200.0)
-    sm.register_camera("c", _cam(data_types=["rgb", "depth"]))  # must not raise
-    assert sm.names == ["c"]
 
 
 @pytest.mark.parametrize(

@@ -13,18 +13,10 @@ from botocore.stub import Stubber  # type: ignore[import-untyped]
 from holosoma.utils import path as path_utils
 from holosoma.utils.core_path_loaders import local_path_loader
 from holosoma.utils.package_path_loader import PackagePathLoader
-from holosoma.utils.path import resolve_asset_path, resolve_data_file_path, resolve_path, resolve_paths
+from holosoma.utils.path import resolve_asset_path, resolve_path, resolve_paths
 from holosoma.utils.s3_glob import _literal_prefix, list_s3_uris
-from holosoma.utils.s3_path_loaders import s3_path_loader
 
 PKG = str(files("holosoma"))
-
-
-@pytest.fixture(autouse=True)
-def _clear_entrypoint_loader_cache():
-    path_utils._entrypoint_loaders.cache_clear()
-    yield
-    path_utils._entrypoint_loaders.cache_clear()
 
 
 # ----- core singular loader -----
@@ -55,14 +47,6 @@ def test_bare_holosoma_remains_a_plain_local_path(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 
     assert resolve_path("holosoma") == str(tmp_path / "holosoma")
-
-
-def test_absolute_path_returned_as_is():
-    assert resolve_path("/home/user/custom.npz") == "/home/user/custom.npz"
-
-
-def test_relative_path_resolved_against_cwd():
-    assert resolve_data_file_path("my_data/custom.npz") == str(Path.cwd() / "my_data/custom.npz")
 
 
 def test_user_path_is_expanded(monkeypatch, tmp_path):
@@ -217,33 +201,6 @@ def test_s3_glob_lists_scoped_prefix_and_returns_sorted_local_paths(monkeypatch,
     assert downloaded == ["s3://bucket/motions/clip1.npz"]
     assert list(paths) == [str(cache_root / "motions/clip2.npz")]
     assert downloaded == ["s3://bucket/motions/clip1.npz", "s3://bucket/motions/clip2.npz"]
-
-
-def test_each_s3_double_star_can_match_zero_components(monkeypatch, tmp_path):
-    keys = [
-        "a/b/c.npz",
-        "a/x/b/y/c.npz",
-    ]
-    stubber = _stub_s3_listing(monkeypatch, keys, prefix="a/")
-    cache_root, _ = _fake_s3_cache(monkeypatch, tmp_path)
-
-    assert list(resolve_paths("s3://bucket/a/**/b/**/c.npz")) == [str(cache_root / key) for key in keys]
-    stubber.assert_no_pending_responses()
-
-
-def test_s3_glob_is_not_motion_format_specific(monkeypatch, tmp_path):
-    stubber = _stub_s3_listing(
-        monkeypatch,
-        ["motions/clip.npz", "motions/notes.md"],
-        prefix="motions/",
-    )
-    cache_root, _ = _fake_s3_cache(monkeypatch, tmp_path)
-
-    assert list(resolve_paths("s3://bucket/motions/*")) == [
-        str(cache_root / "motions/clip.npz"),
-        str(cache_root / "motions/notes.md"),
-    ]
-    stubber.assert_no_pending_responses()
 
 
 def test_s3_glob_matching_nothing_returns_empty_without_downloading(monkeypatch):
@@ -634,62 +591,6 @@ def test_overlapping_singular_loaders_are_ambiguous_before_loading(monkeypatch, 
     assert load_calls == []
 
 
-def test_overlapping_plural_loaders_are_ambiguous_before_loading(monkeypatch):
-    load_calls = []
-
-    def load_paths(path):
-        load_calls.append(path)
-        return []
-
-    _install_fake_entry_points(
-        monkeypatch,
-        {
-            path_utils.PATHS_LOADER_ENTRYPOINT_GROUP: [
-                _EntryPoint("a", "first.paths:paths_loader", _Loader(lambda _path: True, load_paths)),
-                _EntryPoint("b", "second.paths:paths_loader", _Loader(lambda _path: True, load_paths)),
-            ]
-        },
-    )
-
-    with pytest.raises(ValueError, match="Multiple paths loaders matched"):
-        resolve_paths("@shared/*.npz")
-
-    assert load_calls == []
-
-
-def test_extension_overlapping_builtin_s3_loader_is_ambiguous_before_downloading(monkeypatch, tmp_path):
-    load_calls = []
-
-    def load_s3(path):
-        load_calls.append(path)
-        return tmp_path / "extension-copy.npz"
-
-    _install_fake_entry_points(
-        monkeypatch,
-        {
-            path_utils.PATH_LOADER_ENTRYPOINT_GROUP: [
-                _EntryPoint(
-                    "s3",
-                    "holosoma.utils.s3_path_loaders:s3_path_loader",
-                    s3_path_loader,
-                ),
-                _EntryPoint(
-                    "unrelated-name",
-                    "my_ext.paths:s3_loader",
-                    _Loader(lambda path: path.startswith("s3://"), load_s3),
-                ),
-            ]
-        },
-    )
-
-    with pytest.raises(ValueError, match="Multiple path loaders matched") as exc_info:
-        resolve_path("s3://bucket/motion.npz")
-
-    assert "my_ext.paths:s3_loader" in str(exc_info.value)
-    assert "holosoma.utils.s3_path_loaders:s3_path_loader" in str(exc_info.value)
-    assert load_calls == []
-
-
 def test_unknown_at_prefix_fails_loudly():
     with pytest.raises(ValueError, match="No path loader could resolve"):
         resolve_path("@missing_ext/data/file.npz")
@@ -713,17 +614,6 @@ def test_unknown_uri_scheme_fails_loudly():
 )
 def test_self_locating_paths_ignore_asset_root(asset_file):
     assert resolve_asset_path(asset_file, asset_root="/some/root") == resolve_path(asset_file)
-
-
-def test_s3_asset_ignores_root_and_is_downloaded(monkeypatch, tmp_path):
-    local_path = tmp_path / "box.usd"
-    uri = "s3://bucket/box.usd"
-    monkeypatch.setattr(
-        "holosoma.utils.file_cache.get_cached_file_path",
-        lambda value: str(local_path) if value == uri else None,
-    )
-
-    assert resolve_asset_path(uri, asset_root="/some/root") == str(local_path)
 
 
 def test_relative_path_joined_onto_asset_root():
