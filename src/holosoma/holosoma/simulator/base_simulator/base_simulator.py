@@ -1461,15 +1461,17 @@ class BaseSimulator:
             self.robot_root_states[env_ids] = self._deprecated_rows(env_ids, root_states).clone()
         self.forward_kinematics()
 
-    def set_dof_state_tensor(self, env_ids: torch.Tensor | None = None, dof_states: torch.Tensor | None = None) -> None:
+    def set_dof_state_tensor(
+        self, set_env_ids: torch.Tensor | None = None, dof_states: torch.Tensor | None = None
+    ) -> None:
         """Deprecated alias of :meth:`set_dof_state_tensor_robots`."""
-        self.set_dof_state_tensor_robots(env_ids, dof_states)
+        self.set_dof_state_tensor_robots(set_env_ids, dof_states)
 
-    def set_actor_root_state_tensor(self, env_ids: torch.Tensor | None, root_states: torch.Tensor | None) -> None:
+    def set_actor_root_state_tensor(self, set_env_ids: torch.Tensor | None, root_states: torch.Tensor | None) -> None:
         """Deprecated alias of :meth:`set_actor_root_state_tensor_robots` (robot rows only)."""
         if root_states is self.all_root_states:  # the unified view passed wholesale: robot rows only
             root_states = None
-        self.set_actor_root_state_tensor_robots(env_ids, root_states)
+        self.set_actor_root_state_tensor_robots(set_env_ids, root_states)
 
     def refresh_sim_tensors(self) -> None:
         """Deprecated: state tensors are current at every read."""
