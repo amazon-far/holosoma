@@ -28,12 +28,20 @@ def clip_sensor_ranges(
     A physical return is finite and lies in the inclusive ``[near, far]`` interval. Misses and
     out-of-range returns are reported as ``+inf`` (``"none"``), the far endpoint (``"max"``), or
     zero (``"zero"``). ``hit_mask`` remains false for synthetic endpoint and zero values.
+
+    ``near`` and ``far`` must be finite with ``near >= 0``, which every sensor config enforces. The
+    interval test relies on it to reject non-finite distances, so an infinite ``far`` would report a
+    ``+inf`` miss as a hit.
     """
-    hit_mask = torch.isfinite(distances) & (distances >= near) & (distances <= far)
+    # The interval test alone rejects every non-finite value, because the sensor configs validate
+    # near and far as finite with near >= 0: NaN fails both comparisons, +inf fails ``<= far`` and
+    # -inf fails ``>= near``. A separate isfinite pass would re-read the whole frame to agree.
+    hit_mask = (distances >= near) & (distances <= far)
     clip_values = {
         "none": float("inf"),
         "max": far,
         "zero": 0.0,
     }
-    ranges = torch.where(hit_mask, distances, torch.full_like(distances, clip_values[behavior]))
+    # Scalar ``other``, so no full-size fill tensor is allocated per frame.
+    ranges = torch.where(hit_mask, distances, clip_values[behavior])
     return RangeClippingResult(ranges=ranges.to(torch.float32), hit_mask=hit_mask)

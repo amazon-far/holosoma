@@ -21,6 +21,7 @@ _CHILD = textwrap.dedent(
     from types import SimpleNamespace
 
     import holosoma.run_sim as runner
+    from holosoma.config_values.simulator import SIMULATOR_REGISTRY
 
     class Env:
         sim = object()
@@ -48,7 +49,9 @@ _CHILD = textwrap.dedent(
     config = SimpleNamespace(
         device="cpu",
         robot=SimpleNamespace(asset=SimpleNamespace(robot_type="test")),
-        simulator=SimpleNamespace(_target_="test.Simulator"),
+        # A real preset, so the fields run_simulation reads (``_target_``, ``config.name``,
+        # ``config.mujoco_backend``) have the shapes they have in production.
+        simulator=SIMULATOR_REGISTRY.get("mujoco"),
         terrain=SimpleNamespace(terrain_term=SimpleNamespace(mesh_type="plane", func="test")),
     )
     runner.run_simulation(config)

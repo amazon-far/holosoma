@@ -117,7 +117,9 @@ def _encode_depth(array: npt.NDArray[Any], fmt: str) -> EncodedImage:
 
     # 16UC1: millimeters, uint16. +inf/no-hit -> 0 (the OpenNI/REP-118 "no measurement" value),
     # and clamp to the uint16 range so a far-but-finite hit does not wrap.
-    mm = arr.astype(np.float32) * 1000.0
+    # Scale in one pass into one new buffer: astype would copy the frame first even when it is
+    # already float32, which it is for every backend's depth output.
+    mm: npt.NDArray[np.float32] = np.multiply(arr, 1000.0, dtype=np.float32)
     mm[~np.isfinite(mm)] = 0.0
     mm = np.clip(mm, 0.0, 65535.0)
     depth_mm: npt.NDArray[np.uint16] = np.ascontiguousarray(mm, dtype=np.uint16)

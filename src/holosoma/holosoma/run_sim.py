@@ -9,6 +9,7 @@ or evaluation environments.
 from __future__ import annotations
 
 import dataclasses
+import os
 import sys
 import traceback
 
@@ -17,6 +18,35 @@ from loguru import logger
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.utils.eval_utils import init_eval_logging
 from holosoma.utils.sim_utils import DirectSimulation, graceful_simulation_signals, setup_simulation_environment
+
+_THREAD_LIMIT_VARIABLES = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
+
+
+def limit_cpu_math_threads(config: RunSimConfig) -> None:
+    """Serialize Torch's CPU intra-op pool for classic MuJoCo on cpu, unless the operator set a limit.
+
+    Classic MuJoCo runs one env on the host, where every tensor is small enough that a machine-sized
+    pool costs more per elementwise op in fork/join than the op itself. A no-op for Warp and
+    IsaacSim, which keep this work on the GPU, and for training, which does not route through here.
+    """
+    from holosoma.config_types.simulator import MujocoBackend
+    from holosoma.utils.safe_torch_import import torch
+
+    # Both halves are needed: ``mujoco_backend`` lives on the shared SimulatorInitConfig and
+    # defaults to CLASSIC, so every backend's preset reports CLASSIC unless it overrides it. The
+    # name is the same discriminator the device resolution above uses.
+    sim_config = config.simulator.config
+    is_classic = sim_config.name == "mujoco" and getattr(sim_config, "mujoco_backend", None) == MujocoBackend.CLASSIC
+    if not is_classic or config.device is None or not config.device.startswith("cpu"):
+        return
+    # Truthiness, not presence: OpenMP and MKL ignore an empty value, so an empty one is not an
+    # operator's choice and must not suppress the cap.
+    preset = [name for name in _THREAD_LIMIT_VARIABLES if os.environ.get(name)]
+    if preset:
+        logger.info(f"{', '.join(preset)} already set - leaving Torch at {torch.get_num_threads()} CPU thread(s)")
+        return
+    torch.set_num_threads(1)
+    logger.info("Classic MuJoCo on cpu - limiting Torch to 1 CPU thread")
 
 
 @graceful_simulation_signals
@@ -61,6 +91,9 @@ def run_simulation(config: RunSimConfig) -> None:
             logger.info(f"Auto-detected {sim_name} backend - setting device to cpu")
 
         config = dataclasses.replace(config, device=resolved_device)
+
+    # After resolution, so an explicit --device cpu is covered too.
+    limit_cpu_math_threads(config)
 
     logger.info("Starting Holosoma Direct Simulation...")
     logger.info(f"Robot: {config.robot.asset.robot_type}")
