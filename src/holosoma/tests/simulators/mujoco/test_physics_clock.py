@@ -16,9 +16,9 @@ def test_classic_clock_tracks_native_mujoco_time():
     timestep = float(sim.root_model.opt.timestep)
     assert sim.time() == pytest.approx(0.0)
 
-    sim._step_dynamics()
+    sim._advance_substep()
     assert sim.time() == pytest.approx(timestep)
-    sim._step_dynamics()
+    sim._advance_substep()
 
     assert sim.time() == pytest.approx(2 * timestep)
     assert sim.time() == pytest.approx(float(sim.root_data.time))
@@ -32,9 +32,9 @@ def test_headless_warp_clock_advances_without_render_sync():
     assert sim.time() == pytest.approx(0.0)
     assert sim.root_data.time == pytest.approx(0.0)
 
-    sim._step_dynamics()
+    sim._advance_substep()
     assert sim.time() == pytest.approx(timestep)
-    sim._step_dynamics()
+    sim._advance_substep()
 
     assert sim.time() == pytest.approx(2 * timestep)
     assert sim.root_data.time == pytest.approx(0.0)
@@ -42,6 +42,6 @@ def test_headless_warp_clock_advances_without_render_sync():
     sim.backend.initialize_state(sim.root_model, sim.root_data)
     assert sim.time() == pytest.approx(0.0)
 
-    sim._step_dynamics()
+    sim._advance_substep()
     assert sim.time() == pytest.approx(timestep)
     assert sim.backend.get_render_data().time == pytest.approx(timestep)

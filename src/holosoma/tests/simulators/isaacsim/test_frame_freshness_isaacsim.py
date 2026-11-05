@@ -105,9 +105,8 @@ def _main() -> int:
         states[:, 3:7] = torch.tensor(list(init.rot), device=device)
         states[:, 7:] = 0.0
         sim.set_actor_states(["robot"], env_ids, states)
-        dof_state = torch.zeros(1, sim.num_dof, 2, device=device)
-        dof_state[:, :, 0] = spawn_dof
-        sim.set_dof_state_tensor_robots(env_ids, dof_state)
+        sim.dof_pos[env_ids] = spawn_dof
+        sim.dof_vel[env_ids] = 0.0
 
     def frame(offset_y: float) -> float:
         """Drive one control step the way DirectSimulation.run does; return the egressed red fraction."""
@@ -117,7 +116,6 @@ def _main() -> int:
             sim.hooks.emit(Phase.PRE_STEP)
             sim.simulate_at_each_physics_step()
             sim.hooks.emit(Phase.POST_STEP)
-        sim.refresh_sim_tensors()
         sim.hooks.emit(Phase.FRAME_END)  # render_sensors runs here, as it does under the real loop
         return _red_fraction(sim.get_camera_data(camera, "rgb")[0])
 

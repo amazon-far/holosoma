@@ -22,19 +22,18 @@ import torch
 import torch.nn.functional as torch_nn_func
 from torch import Tensor
 
-from holosoma.utils.torch_jit import torch_jit_script
 from holosoma.utils.torch_utils import (
     copysign,
     normalize,
 )
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_unit(a: Tensor) -> Tensor:
     return normalize(a)
 
 
-@torch_jit_script
+@torch.jit.script
 def yaw_quat(quat: torch.Tensor, w_last: bool) -> torch.Tensor:
     shape = quat.shape
     quat_yaw = quat.view(-1, 4)
@@ -60,7 +59,7 @@ def yaw_quat(quat: torch.Tensor, w_last: bool) -> torch.Tensor:
     return quat_yaw.view(shape)
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_apply(a: Tensor, b: Tensor, w_last: bool) -> Tensor:
     shape = b.shape
     a = a.reshape(-1, 4)
@@ -75,20 +74,20 @@ def quat_apply(a: Tensor, b: Tensor, w_last: bool) -> Tensor:
     return (b + w * t + xyz.cross(t, dim=-1)).view(shape)
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_apply_yaw(quat: torch.Tensor, vec: torch.Tensor, w_last: bool) -> torch.Tensor:
     quat_yaw = yaw_quat(quat, w_last)
     return quat_apply(quat_yaw, vec, w_last)
 
 
-@torch_jit_script
+@torch.jit.script
 def wrap_to_pi(angles: Tensor) -> Tensor:
     angles %= 2 * np.pi
     angles -= 2 * np.pi * (angles > np.pi)
     return angles
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_conjugate(a: Tensor, w_last: bool) -> Tensor:
     shape = a.shape
     a = a.reshape(-1, 4)
@@ -97,7 +96,7 @@ def quat_conjugate(a: Tensor, w_last: bool) -> Tensor:
     return torch.cat((a[:, 0:1], -a[:, 1:]), dim=-1).view(shape)
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_rotate(q: Tensor, v: Tensor, w_last: bool) -> Tensor:
     shape = q.shape
     if w_last:
@@ -112,7 +111,7 @@ def quat_rotate(q: Tensor, v: Tensor, w_last: bool) -> Tensor:
     return a + b + c
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_rotate_inverse(q: Tensor, v: Tensor, w_last: bool) -> Tensor:
     shape = q.shape
     if w_last:
@@ -127,7 +126,7 @@ def quat_rotate_inverse(q: Tensor, v: Tensor, w_last: bool) -> Tensor:
     return a - b + c
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_angle_axis(x: Tensor, w_last: bool) -> tuple[Tensor, Tensor]:
     """
     The (angle, axis) representation of the rotation. The axis is normalized to unit length.
@@ -145,7 +144,7 @@ def quat_angle_axis(x: Tensor, w_last: bool) -> tuple[Tensor, Tensor]:
     return angle, axis
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_from_angle_axis(angle: Tensor, axis: Tensor, w_last: bool) -> Tensor:
     theta = (angle / 2).unsqueeze(-1)
     xyz = normalize(axis) * theta.sin()
@@ -155,12 +154,12 @@ def quat_from_angle_axis(angle: Tensor, axis: Tensor, w_last: bool) -> Tensor:
     return quat_unit(torch.cat([w, xyz], dim=-1))
 
 
-@torch_jit_script
+@torch.jit.script
 def vec_to_heading(h_vec: Tensor) -> Tensor:
     return torch.atan2(h_vec[..., 1], h_vec[..., 0])
 
 
-@torch_jit_script
+@torch.jit.script
 def heading_to_quat(h_theta: Tensor, w_last: bool) -> Tensor:
     axis = torch.zeros(
         h_theta.shape
@@ -173,24 +172,24 @@ def heading_to_quat(h_theta: Tensor, w_last: bool) -> Tensor:
     return quat_from_angle_axis(h_theta, axis, w_last=w_last)
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_axis(q: Tensor, axis: int, w_last: bool) -> Tensor:
     basis_vec = torch.zeros(q.shape[0], 3, device=q.device)
     basis_vec[:, axis] = 1
     return quat_rotate(q, basis_vec, w_last)
 
 
-@torch_jit_script
+@torch.jit.script
 def normalize_angle(x: Tensor) -> Tensor:
     return torch.atan2(torch.sin(x), torch.cos(x))
 
 
-@torch_jit_script
+@torch.jit.script
 def get_basis_vector(q: Tensor, v: Tensor, w_last: bool) -> Tensor:
     return quat_rotate(q, v, w_last)
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_to_angle_axis(quat: torch.Tensor, eps: float = 1.0e-8) -> tuple[torch.Tensor, torch.Tensor]:
     """Convert rotations given as quaternions to axis/angle.
 
@@ -225,7 +224,7 @@ def quat_to_angle_axis(quat: torch.Tensor, eps: float = 1.0e-8) -> tuple[torch.T
     return angle, quat[..., 0:3] / sin_half_angles_over_angles.unsqueeze(-1)
 
 
-@torch_jit_script
+@torch.jit.script
 def slerp(q0, q1, t):
     # type: (Tensor, Tensor, Tensor) -> Tensor
     cos_half_theta = torch.sum(q0 * q1, dim=-1)
@@ -264,7 +263,7 @@ def quat_slerp(q0: torch.Tensor, q1: torch.Tensor, alpha: float) -> torch.Tensor
     return out / out.norm(dim=-1, keepdim=True)
 
 
-@torch_jit_script
+@torch.jit.script
 def angle_axis_to_exp_map(angle, axis):
     # type: (Tensor, Tensor) -> Tensor
     # compute exponential map from axis-angle
@@ -272,7 +271,7 @@ def angle_axis_to_exp_map(angle, axis):
     return angle_expand * axis
 
 
-@torch_jit_script
+@torch.jit.script
 def my_quat_rotate(q: Tensor, v: Tensor) -> Tensor:
     shape = q.shape
     q_w = q[:, -1]
@@ -283,7 +282,7 @@ def my_quat_rotate(q: Tensor, v: Tensor) -> Tensor:
     return a + b + c
 
 
-@torch_jit_script
+@torch.jit.script
 def calc_heading(q):
     # type: (Tensor) -> Tensor
     # calculate heading direction from quaternion
@@ -297,7 +296,7 @@ def calc_heading(q):
     return torch.atan2(rot_dir[..., 1], rot_dir[..., 0])
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_to_exp_map(q):
     # type: (Tensor) -> Tensor
     # compute exponential map from quaternion
@@ -306,7 +305,7 @@ def quat_to_exp_map(q):
     return angle_axis_to_exp_map(angle, axis)
 
 
-@torch_jit_script
+@torch.jit.script
 def calc_heading_quat(q, w_last):
     # type: (Tensor, bool) -> Tensor
     # calculate heading rotation from quaternion
@@ -319,7 +318,7 @@ def calc_heading_quat(q, w_last):
     return quat_from_angle_axis(heading, axis, w_last=w_last)
 
 
-@torch_jit_script
+@torch.jit.script
 def calc_heading_quat_inv(q, w_last):
     # type: (Tensor, bool) -> Tensor
     # calculate heading rotation from quaternion
@@ -332,7 +331,7 @@ def calc_heading_quat_inv(q, w_last):
     return quat_from_angle_axis(-heading, axis, w_last=w_last)
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_inverse(x, w_last):
     # type: (Tensor, bool) -> Tensor
     """
@@ -341,7 +340,7 @@ def quat_inverse(x, w_last):
     return quat_conjugate(x, w_last=w_last)
 
 
-@torch_jit_script
+@torch.jit.script
 def get_euler_xyz(q: Tensor, w_last: bool) -> tuple[Tensor, Tensor, Tensor]:
     if w_last:
         qx, qy, qz, qw = 0, 1, 2, 3
@@ -364,7 +363,7 @@ def get_euler_xyz(q: Tensor, w_last: bool) -> tuple[Tensor, Tensor, Tensor]:
     return roll % (2 * np.pi), pitch % (2 * np.pi), yaw % (2 * np.pi)
 
 
-@torch_jit_script
+@torch.jit.script
 def get_euler_xyz_in_tensor(q: Tensor) -> Tensor:
     qx, qy, qz, qw = 0, 1, 2, 3
     # roll (x-axis rotation)
@@ -384,7 +383,7 @@ def get_euler_xyz_in_tensor(q: Tensor) -> Tensor:
     return torch.stack((roll, pitch, yaw), dim=-1)
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_pos(x: Tensor) -> Tensor:
     """
     make all the real part of the quaternion positive
@@ -394,13 +393,13 @@ def quat_pos(x: Tensor) -> Tensor:
     return (1 - 2 * z) * q
 
 
-@torch_jit_script
+@torch.jit.script
 def is_valid_quat(q: Tensor) -> bool:
     x, y, z, w = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
     return bool((w * w + x * x + y * y + z * z).allclose(torch.ones_like(w)))
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_normalize(q: Tensor) -> Tensor:
     """
     Construct 3D rotation from quaternion (the quaternion needs not to be normalized).
@@ -408,7 +407,7 @@ def quat_normalize(q: Tensor) -> Tensor:
     return quat_unit(quat_pos(q))  # normalized to positive and unit quaternion
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_mul(a: Tensor, b: Tensor, w_last: bool) -> Tensor:
     assert a.shape == b.shape
     shape = a.shape
@@ -439,7 +438,7 @@ def quat_mul(a: Tensor, b: Tensor, w_last: bool) -> Tensor:
     return quat
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_mul_norm(x, y, w_last):
     # type: (Tensor, Tensor, bool) -> Tensor
     r"""
@@ -449,7 +448,7 @@ def quat_mul_norm(x, y, w_last):
     return quat_normalize(quat_mul(x, y, w_last))
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_identity(shape: list[int]) -> Tensor:
     """
     Construct 3D identity rotation given shape
@@ -460,7 +459,7 @@ def quat_identity(shape: list[int]) -> Tensor:
     return quat_normalize(q)
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_identity_like(x: Tensor) -> Tensor:
     """
     Construct identity 3D rotation with the same shape
@@ -468,7 +467,7 @@ def quat_identity_like(x: Tensor) -> Tensor:
     return quat_identity(x.shape[:-1])
 
 
-@torch_jit_script
+@torch.jit.script
 def transform_from_rotation_translation(r: torch.Tensor | None = None, t: torch.Tensor | None = None) -> torch.Tensor:
     """
     Construct a transform from a quaternion and 3D translation. Only one of them can be None.
@@ -482,19 +481,19 @@ def transform_from_rotation_translation(r: torch.Tensor | None = None, t: torch.
     return torch.cat([r, t], dim=-1)
 
 
-@torch_jit_script
+@torch.jit.script
 def transform_rotation(x: Tensor) -> Tensor:
     """Get rotation from transform"""
     return x[..., :4]
 
 
-@torch_jit_script
+@torch.jit.script
 def transform_translation(x: Tensor) -> Tensor:
     """Get translation from transform"""
     return x[..., 4:]
 
 
-@torch_jit_script
+@torch.jit.script
 def transform_mul(x: Tensor, y: Tensor) -> Tensor:
     """
     Combine two transformation together
@@ -506,7 +505,7 @@ def transform_mul(x: Tensor, y: Tensor) -> Tensor:
 
 
 ##################################### FROM PHC rotation_conversions.py #####################################
-@torch_jit_script
+@torch.jit.script
 def quaternion_to_matrix(quaternions: torch.Tensor, w_last: bool = False) -> torch.Tensor:
     """
     Convert rotations given as quaternions to rotation matrices.
@@ -542,7 +541,7 @@ def quaternion_to_matrix(quaternions: torch.Tensor, w_last: bool = False) -> tor
     return o.reshape(quaternions.shape[:-1] + (3, 3))
 
 
-@torch_jit_script
+@torch.jit.script
 def axis_angle_to_quaternion(axis_angle: torch.Tensor) -> torch.Tensor:
     """
     Convert rotations given as axis/angle to quaternions.
@@ -569,7 +568,7 @@ def axis_angle_to_quaternion(axis_angle: torch.Tensor) -> torch.Tensor:
 
 
 # Keep '_sqrt_positive_part' before functions that depend on it for JIT
-@torch_jit_script
+@torch.jit.script
 def _sqrt_positive_part(x: torch.Tensor) -> torch.Tensor:
     """
     Returns torch.sqrt(torch.max(0, x))
@@ -581,7 +580,7 @@ def _sqrt_positive_part(x: torch.Tensor) -> torch.Tensor:
     return ret
 
 
-@torch_jit_script
+@torch.jit.script
 def matrix_to_quaternion(matrix: torch.Tensor) -> torch.Tensor:
     """
     w x y z
@@ -635,7 +634,7 @@ def matrix_to_quaternion(matrix: torch.Tensor) -> torch.Tensor:
     ].reshape(batch_dim + (4,))
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_from_euler_xyz(roll: Tensor, pitch: Tensor, yaw: Tensor) -> Tensor:
     cy = torch.cos(yaw * 0.5)
     sy = torch.sin(yaw * 0.5)
@@ -656,7 +655,7 @@ def quat_from_euler_xyz(roll: Tensor, pitch: Tensor, yaw: Tensor) -> Tensor:
 ## Math functions copied from IsaacLab for reproducing WholeBodyTracking,
 # modified for quaternion (x, y, z, w) instead of (w, x, y, z)
 #########################################################################################################
-@torch_jit_script
+@torch.jit.script
 def quat_error_magnitude(q1: torch.Tensor, q2: torch.Tensor, w_last: bool = True) -> torch.Tensor:
     """Computes the rotation difference between two quaternions.
 
@@ -671,7 +670,7 @@ def quat_error_magnitude(q1: torch.Tensor, q2: torch.Tensor, w_last: bool = True
     return quat_to_angle_axis(quat_diff)[0]
 
 
-@torch_jit_script
+@torch.jit.script
 def subtract_frame_transforms(
     t01: torch.Tensor,
     q01: torch.Tensor,
@@ -716,7 +715,7 @@ def subtract_frame_transforms(
 # ============================================================================
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_rotate_inverse_batched(q: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     """Apply inverse quaternion rotation with batched vector support.
 
@@ -746,7 +745,7 @@ def quat_rotate_inverse_batched(q: torch.Tensor, v: torch.Tensor) -> torch.Tenso
     return rotated_flat.view(N, M, 3)
 
 
-@torch_jit_script
+@torch.jit.script
 def quat_rotate_batched(q: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     """Apply quaternion rotation with batched vector support.
 

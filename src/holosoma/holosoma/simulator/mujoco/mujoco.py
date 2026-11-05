@@ -20,6 +20,7 @@ from holosoma.config_types.simulator import MujocoBackend
 from holosoma.managers.terrain.manager import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.simulator.base_simulator.state import Columns
 from holosoma.simulator.mujoco import light_setup
 from holosoma.simulator.mujoco.backends import WARP_AVAILABLE, ClassicBackend, IMujocoBackend, WarpBackend
 from holosoma.simulator.mujoco.backends.base import apply_sensor_scene_flags, mj_to_holosoma_quat
@@ -36,9 +37,6 @@ from holosoma.simulator.mujoco.robot_addressing import (
 )
 from holosoma.simulator.mujoco.scene_manager import MujocoSceneManager
 from holosoma.simulator.mujoco.sensor_setup import create_sensors, offset_world_cameras, render_sensors
-from holosoma.simulator.mujoco.tensor_views import (
-    create_base_linear_acceleration_view,
-)
 from holosoma.simulator.mujoco.video_recorder import MuJoCoVideoRecorder
 from holosoma.simulator.mujoco.viewer_input import ViewerInputController
 from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
@@ -383,8 +381,8 @@ class MuJoCo(BaseSimulator):
         ``body_names`` is the holosoma-facing, 0-based robot-body list (world body and
         all non-robot bodies excluded). ``body_ids`` is the matching list of raw
         MuJoCo body ids, used to gather robot rows out of the full, ``model.nbody``-wide
-        physics tensors (xpos/cfrc/...) in ``refresh_sim_tensors``, so physics-tensor
-        width stays independent of ``num_bodies``.
+        physics tensors (xpos/cfrc/...), so physics-tensor width stays independent of
+        ``num_bodies``.
         """
         assert self.root_model
         meta = self.scene_manager.robot_spec_meta
@@ -407,7 +405,7 @@ class MuJoCo(BaseSimulator):
         # (body_ids[holosoma_idx] -> backend body id; mirrors IsaacSim) used to
         # map a 0-based body_names index to the full-model xfrc/applied_forces layout
         # (e.g. virtual gantry). The tensor form gathers robot rows out of the
-        # full-model physics tensors in refresh_sim_tensors.
+        # full-model physics tensors.
         self.body_ids = resolve_robot_body_ids(self.root_model, self.body_names, self.clean_to_prefixed_names)
         self._body_ids_t = torch.tensor(self.body_ids, dtype=torch.long, device=self.sim_device)
         self.backend.configure_rigid_body_refresh(self.body_ids)
@@ -432,8 +430,6 @@ class MuJoCo(BaseSimulator):
         self.dof_qpos_addrs, self.dof_qvel_addrs = resolve_dof_addresses(
             self.root_model, self.dof_names, self.clean_to_prefixed_names
         )
-        self._dof_qpos_ids_t = torch.tensor(self.dof_qpos_addrs, dtype=torch.long, device=self.sim_device)
-        self._dof_qvel_ids_t = torch.tensor(self.dof_qvel_addrs, dtype=torch.long, device=self.sim_device)
         self._dof_actuator_ids = resolve_dof_actuator_ids(self.root_model, self.dof_names, self.clean_to_prefixed_names)
         self._dof_actuator_ids_t = torch.tensor(self._dof_actuator_ids, dtype=torch.long, device=self.sim_device)
         logger.info("=== Robot joint addressing setup completed ===")
@@ -620,11 +616,6 @@ class MuJoCo(BaseSimulator):
         # no world cameras or num_envs==1.
         self._offset_world_cameras()
 
-        # Initialize state tensors based on actual DOF count
-        self.dof_pos = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
-        self.dof_vel = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
-        self.dof_acc = torch.zeros(self.num_envs, self.num_dof, device=self.sim_device)
-
         # Initialize contact forces tensor with correct shape [num_envs, num_bodies, 3]
         # This matches the interface expected by holosoma (IsaacSim pattern)
         self.contact_forces = torch.zeros(self.num_envs, self.num_bodies, 3, device=self.sim_device)
@@ -692,67 +683,13 @@ class MuJoCo(BaseSimulator):
         # spawn hook is a no-op; this only does the registry bookkeeping + poses).
         self._register_scene_assets()
 
-        # Calculate indices for robot freejoint components
-        robot_qpos_addr = self.object_addrs["robot"]["qpos_addr"]
-        robot_qvel_addr = self.object_addrs["robot"]["qvel_addr"]
-        pos_indices = slice(robot_qpos_addr, robot_qpos_addr + 3)
-        quat_indices = slice(robot_qpos_addr + 3, robot_qpos_addr + 7)
-        vel_indices = slice(robot_qvel_addr, robot_qvel_addr + 3)
-        ang_vel_indices = slice(robot_qvel_addr + 3, robot_qvel_addr + 6)
-
-        # Create robot root states proxy via backend factory
-        root_addrs = {
-            "pos_indices": pos_indices,
-            "quat_indices": quat_indices,
-            "vel_indices": vel_indices,
-            "ang_vel_indices": ang_vel_indices,
-        }
-        self.robot_root_states = self.backend.create_root_view(root_addrs)
-
         # Unified all-actors view; indexing routes through get/set_actor_states_by_index,
         # which resolve each actor's freejoint slice (or static-body kinematics). MuJoCo has
-        # no contiguous all-actors root tensor. robot_root_states remains the robot-only view
-        # that set_actor_root_state_tensor uses (it detects this proxy by identity).
+        # no contiguous all-actors root tensor.
         self.all_root_states = UnifiedRootStatesView(self)
-
-        # contact_forces stays the robot-only, num_bodies-wide tensor allocated in create_envs;
-        # simulate_at_each_physics_step gathers robot rows into it each substep. It is
-        # intentionally not bound to the backend's full-model-width force view.
 
         # Create unified applied forces accessor for external force application (e.g., virtual gantry)
         self.applied_forces = self.backend.get_applied_forces_view()
-
-        # Create base_quat, base_angular_vel, base_linear_acc views via backend
-        self.base_quat = self.backend.create_quaternion_view(quat_indices)
-        self.base_angular_vel = self.backend.create_angular_velocity_view(ang_vel_indices)
-
-        # Base linear acceleration: backend-specific handling
-        base_lin_acc_indices = slice(0, 3)
-        if isinstance(self.backend, WarpBackend):
-            # WarpBackend: direct GPU tensor access
-            self.base_linear_acc = self.backend.qacc_t[:, base_lin_acc_indices]
-        else:
-            # ClassicBackend: use view system
-            self.base_linear_acc = create_base_linear_acceleration_view(
-                qacc_array=self.root_data.qacc,
-                indices=base_lin_acc_indices,
-                num_envs=self.num_envs,
-                device=self.sim_device,
-            )
-
-        # Initialize rigid body state tensors (required by BaseTask)
-        self._rigid_body_pos = torch.zeros(
-            self.num_envs, self.num_bodies, 3, device=self.sim_device, dtype=torch.float32
-        )
-        self._rigid_body_rot = torch.zeros(
-            self.num_envs, self.num_bodies, 4, device=self.sim_device, dtype=torch.float32
-        )
-        self._rigid_body_vel = torch.zeros(
-            self.num_envs, self.num_bodies, 3, device=self.sim_device, dtype=torch.float32
-        )
-        self._rigid_body_ang_vel = torch.zeros(
-            self.num_envs, self.num_bodies, 3, device=self.sim_device, dtype=torch.float32
-        )
 
         # The mj_resetData above zeroed the derived fields (xpos/xquat/cvel), and the
         # initial state was written only into qpos. Run a forward so get_actor_states
@@ -793,7 +730,7 @@ class MuJoCo(BaseSimulator):
             )
             self.backend.set_static_body_world_pose(body_ids, positions)  # position-only at spawn
 
-        self._refresh_dof_states()
+        self._register_state()
 
     def prepare_randomization_fields(self, field_names: list[str]) -> None:
         """Prepare model fields for per-environment randomization.
@@ -819,26 +756,62 @@ class MuJoCo(BaseSimulator):
         """
         prepare_manager_fields(self, **managers)
 
-    def refresh_sim_tensors(self) -> None:
-        """Refresh simulation tensors with actual robot data.
+    def _mj_arrays(self) -> tuple[Any, Any, Any]:
+        """``(qpos, qvel, qacc)`` as ``[num_envs, n]`` tensors: Warp's live GPU views, or classic's CPU data."""
+        if isinstance(self.backend, WarpBackend):
+            return self.backend.qpos_t, self.backend.qvel_t, self.backend.qacc_t
+        assert self.root_data
+        data = self.root_data
+        return (
+            lambda: torch.from_numpy(data.qpos)[None],
+            lambda: torch.from_numpy(data.qvel)[None],
+            lambda: torch.from_numpy(data.qacc)[None],
+        )
 
-        Updates rigid body state tensors from the current MuJoCo simulation state. Most state
-        tensors use proxy views that automatically reflect the current state. ``contact_forces``
-        is owned by ``simulate_at_each_physics_step``.
-        """
-        if self.num_bodies <= 0:
-            logger.info("No bodies to refresh (empty world)")
-            return
+    def _register_state(self) -> None:
+        """Register the robot state tensors as lazy reads of the MuJoCo data."""
+        n, b, device = self.num_envs, self.num_bodies, self.sim_device
+        qpos, qvel, qacc = self._mj_arrays()
+        state = self.state
+        state.device = device
 
-        # robot_root_states is a proxy view onto the live MuJoCo state; the DOF and rigid-body
-        # buffers are copies, refreshed here.
-        self._refresh_dof_states()
+        def current(source: Any) -> torch.Tensor:
+            return source if isinstance(source, torch.Tensor) else source()
 
-        positions, orientations, linear_vel, angular_vel = self.backend.refresh_rigid_body_states()
-        self._rigid_body_pos.copy_(positions)
-        self._rigid_body_rot.copy_(orientations)
-        self._rigid_body_vel.copy_(linear_vel)
-        self._rigid_body_ang_vel.copy_(angular_vel)
+        def write_columns(source: Any, ids: list[int]) -> Any:
+            ids_t = torch.as_tensor(ids, dtype=torch.long, device=current(source).device)
+
+            def write(rows: torch.Tensor, out: torch.Tensor) -> None:
+                target = current(source)  # classic: a view of the MjData array
+                target_rows = rows.to(target.device)
+                target[target_rows.unsqueeze(1), ids_t.unsqueeze(0)] = out[rows].to(target)
+
+            return write
+
+        for name, source, ids in (("dof_pos", qpos, self.dof_qpos_addrs), ("dof_vel", qvel, self.dof_qvel_addrs)):
+            state.register(name, Columns(source, ids), write=write_columns(source, ids))
+        state.register("dof_acc", Columns(qacc, self.dof_qvel_addrs))
+
+        qvel_addr = self.object_addrs["robot"]["qvel_addr"]
+        linear_acc_ids = range(qvel_addr, qvel_addr + 3)
+        state.register("base_linear_acc", Columns(qacc, linear_acc_ids))
+        if b > 0:
+            state.register("contact_forces", lambda: self.backend.compute_contact_forces()[:, self._body_ids_t])
+
+        env_ids = torch.arange(n, device=device)
+        robot_addrs = self._actor_freejoint_addrs("robot")
+        state.register(
+            "robot_root_states",
+            lambda: self._freejoint_angvel_to_world(self.backend.get_actor_state(env_ids, *robot_addrs)),
+            write=lambda rows, root: self._write_root_states(rows, root[rows]),
+        )
+
+        body_names = ("_rigid_body_pos", "_rigid_body_rot", "_rigid_body_vel", "_rigid_body_ang_vel")
+        if b == 0:
+            empty = tuple(torch.zeros(n, 0, width, device=device) for width in (3, 4, 3, 3))
+            state.register(body_names, lambda: empty)
+        else:
+            state.register(body_names, self.backend.refresh_rigid_body_states)
 
     def apply_torques_at_dof(self, torques: torch.Tensor, dof_indices: list[int] | None = None) -> None:
         """Apply torques with backend-specific optimization.
@@ -892,41 +865,18 @@ class MuJoCo(BaseSimulator):
         if self.virtual_gantry:
             self.virtual_gantry.draw_debug()
 
-    def _step_dynamics(self) -> None:
+    def _advance_substep(self) -> None:
         """Advance simulation by one physics step."""
-        # Must run before backend.step() consumes xfrc_applied.
-        self.flush_external_wrench()
-        self.backend.step()
-        self._refresh_dof_states()
+        with self.state.mutation():
+            if self.kinematic_playback:
+                self._forward_kinematics()
+            else:
+                # Must run before backend.step() consumes xfrc_applied.
+                self.flush_external_wrench()
+                self.backend.step()
 
-        # The recorder's POST_STEP hook reads contact_forces, so it must be fresh by the end of the
-        # substep. Empty world: no robot rows to gather.
-        if self.num_bodies > 0:
-            full_forces = self.backend.compute_contact_forces()
-            self.contact_forces[:] = full_forces[:, self._body_ids_t]
-
-    @property
-    def dof_state(self) -> torch.Tensor:
-        """Robot DOF states flattened to ``[num_envs * num_dof, 2]`` (``[:, 0]`` positions, ``[:, 1]`` velocities)."""
-        return torch.stack([self.dof_pos, self.dof_vel], dim=-1).reshape(-1, 2)
-
-    def _refresh_dof_states(self) -> None:
-        """Copy the backend's robot DOF state into ``dof_pos``/``dof_vel``/``dof_acc`` (robot_config order)."""
-        if self.num_dof == 0:
-            return
-        if isinstance(self.backend, WarpBackend):
-            self.dof_pos.copy_(self.backend.qpos_t[:, self._dof_qpos_ids_t])
-            self.dof_vel.copy_(self.backend.qvel_t[:, self._dof_qvel_ids_t])
-            self.dof_acc.copy_(self.backend.qacc_t[:, self._dof_qvel_ids_t])
-        else:
-            assert self.root_data
-            self.dof_pos.copy_(torch.from_numpy(self.root_data.qpos[self.dof_qpos_addrs]))
-            self.dof_vel.copy_(torch.from_numpy(self.root_data.qvel[self.dof_qvel_addrs]))
-            self.dof_acc.copy_(torch.from_numpy(self.root_data.qacc[self.dof_qvel_addrs]))
-
-    def forward_kinematics(self) -> None:
-        """Recompute body/geom/camera poses from written state (classic: ``mj_forward``; warp:
-        ``mjw.kinematics`` + ``camlight``). No integration."""
+    def _forward_kinematics(self) -> None:
+        """Kinematics, COM position, camera/light and COM velocity stages; no collision or dynamics."""
         self.backend.forward_kinematics()
 
     def _write_external_wrench_native(self, targets: list[WrenchTarget]) -> None:
@@ -1025,23 +975,24 @@ class MuJoCo(BaseSimulator):
         resolved_objects = self.object_registry.resolve_indices(indices)
         all_states: list[torch.Tensor] = []
         for obj_name, env_ids in resolved_objects:
-            if obj_name in self.static_object_body_ids:
+            if obj_name == "robot":
+                # The served root state, so in-place writes to it show without a flush.
+                states_for_envs = self.robot_root_states[env_ids]
+            elif obj_name in self.static_object_body_ids:
                 # Static body: no qpos slice, read its constant world pose from xpos.
                 states_for_envs = self._static_body_state(obj_name, env_ids)
             else:
-                # Free body / robot: read the live freejoint state, per-env (GPU for
-                # WarpBackend). Velocity is the freejoint qvel (body-local angular),
-                # matching the set path and the robot's base_angular_vel proxy.
+                # Free body: the live freejoint state, per-env (GPU for WarpBackend), with its
+                # body-local angular velocity rotated to the world frame.
                 qpos_addr, qvel_addr = self._actor_freejoint_addrs(obj_name)
-                states_for_envs = self.backend.get_actor_state(env_ids, qpos_addr, qvel_addr)  # [num_envs, 13]
+                states_for_envs = self._freejoint_angvel_to_world(
+                    self.backend.get_actor_state(env_ids, qpos_addr, qvel_addr)
+                )
             all_states.append(states_for_envs)
 
         if not all_states:
             return torch.empty(0, 13, device=self.sim_device)
-        # Convert each freejoint's body-local angular velocity to the world-frame the unified
-        # actor-state representation uses (static bodies carry zero velocity, so this is a no-op
-        # for them). Linear velocity and pose are already world-frame.
-        return self._freejoint_angvel_to_world(torch.cat(all_states, dim=0))
+        return torch.cat(all_states, dim=0)
 
     def _static_body_state(self, obj_name: str, env_ids: torch.Tensor) -> torch.Tensor:
         """Read a static (jointless) body's world pose into a [len(env_ids), 13] state.
@@ -1093,42 +1044,42 @@ class MuJoCo(BaseSimulator):
         if len(indices) == 0:
             # Empty input is a uniform no-op across backends (matches IsaacSim);
             # short-circuit before resolve/convert so we skip the stray write_state_updates
-            # (mj_forward on ClassicBackend) at the tail.
+            # (forward kinematics on ClassicBackend) at the tail.
             return
 
         resolved_objects = self.object_registry.resolve_indices(indices)
+        with self.state.mutation():
+            # Incoming angular velocity is world-frame (unified representation); MuJoCo's freejoint qvel
+            # wants it body-local. Convert up front using each row's world quat (cols 3:7) so the
+            # per-actor slices below write the correct local ang-vel, symmetric with the read path.
+            states = self._freejoint_angvel_to_local(states)
 
-        # Incoming angular velocity is world-frame (unified representation); MuJoCo's freejoint qvel
-        # wants it body-local. Convert up front using each row's world quat (cols 3:7) so the
-        # per-actor slices below write the correct local ang-vel, symmetric with the read path.
-        states = self._freejoint_angvel_to_local(states)
+            state_offset = 0
+            for obj_name, env_ids in resolved_objects:
+                num_states = len(env_ids)
+                obj_states = states[state_offset : state_offset + num_states]  # [num_envs, 13]
+                state_offset += num_states
 
-        state_offset = 0
-        for obj_name, env_ids in resolved_objects:
-            num_states = len(env_ids)
-            obj_states = states[state_offset : state_offset + num_states]  # [num_envs, 13]
-            state_offset += num_states
+                if obj_name in self.static_object_body_ids:
+                    # Static (welded, jointless) body: no qpos slice, so it moves via the model
+                    # body_pos/body_quat + forward-kinematics path rather than set_actor_state. This
+                    # is a kinematic teleport: the pose is honored (collisions recompute at the new
+                    # pose) but the velocity columns (7:13) are ignored (a welded body carries no
+                    # qvel). Pose is [pos(0:3), quat(3:7) xyzw]; shape to [len(env_ids), 1, 3/4].
+                    body_id = self.static_object_body_ids[obj_name]
+                    self.backend.set_static_body_world_pose(
+                        [body_id],
+                        obj_states[:, :3].unsqueeze(1),  # [N, 1, 3]
+                        obj_states[:, 3:7].unsqueeze(1),  # [N, 1, 4] xyzw
+                        env_ids=env_ids,
+                    )
+                    continue
 
-            if obj_name in self.static_object_body_ids:
-                # Static (welded, jointless) body: no qpos slice, so it moves via the model
-                # body_pos/body_quat + forward-kinematics path rather than set_actor_state. This
-                # is a kinematic teleport: the pose is honored (collisions recompute at the new
-                # pose) but the velocity columns (7:13) are ignored (a welded body carries no
-                # qvel). Pose is [pos(0:3), quat(3:7) xyzw]; shape to [len(env_ids), 1, 3/4].
-                body_id = self.static_object_body_ids[obj_name]
-                self.backend.set_static_body_world_pose(
-                    [body_id],
-                    obj_states[:, :3].unsqueeze(1),  # [N, 1, 3]
-                    obj_states[:, 3:7].unsqueeze(1),  # [N, 1, 4] xyzw
-                    env_ids=env_ids,
-                )
-                continue
-
-            # Write each requested env's state into this actor's freejoint slice on the
-            # live backend storage (GPU for WarpBackend), per-env. The CPU render
-            # snapshot does not sync back to the GPU, so writes must go to the backend.
-            qpos_addr, qvel_addr = self._actor_freejoint_addrs(obj_name)
-            self.backend.set_actor_state(env_ids, obj_states, qpos_addr, qvel_addr)
+                # Write each requested env's state into this actor's freejoint slice on the
+                # live backend storage (GPU for WarpBackend), per-env. The CPU render
+                # snapshot does not sync back to the GPU, so writes must go to the backend.
+                qpos_addr, qvel_addr = self._actor_freejoint_addrs(obj_name)
+                self.backend.set_actor_state(env_ids, obj_states, qpos_addr, qvel_addr)
 
         if write_updates:
             self.write_state_updates()
@@ -1192,99 +1143,22 @@ class MuJoCo(BaseSimulator):
 
         Mirrors the cross-backend batch flush (IsaacSim:
         ``scene.write_data_to_sim()``). For MuJoCo:
-          - ClassicBackend: run ``mj_forward`` on the CPU data so xpos/xquat/cvel and
-            other derived quantities reflect the qpos/qvel just written.
+          - ClassicBackend: run the backend's forward kinematics so xpos/xquat/cvel
+            reflect the qpos/qvel just written.
           - WarpBackend: a no-op. The next ``step()`` (a captured CUDA graph that
             begins with forward kinematics) consumes the updated GPU qpos/qvel; no
             out-of-graph GPU forward runs here.
         """
-        if isinstance(self.backend, WarpBackend):
-            return
-        assert self.root_model
-        assert self.root_data
-        mujoco.mj_forward(self.root_model, self.root_data)
+        with self.state.mutation():
+            if isinstance(self.backend, WarpBackend):
+                return
+            self.backend.forward_kinematics()
 
-    def set_actor_root_state_tensor(self, set_env_ids: torch.Tensor | None, root_states: torch.Tensor | None) -> None:
-        """Legacy compatibility method for LeggedRobotBase.
-
-        This method provides backward compatibility with the existing LeggedRobotBase code
-        that calls set_actor_root_state_tensor. It delegates to the robot-specific method.
-
-        Parameters
-        ----------
-        set_env_ids : Optional[torch.Tensor]
-            Which environments to update (None = all).
-        root_states : Optional[torch.Tensor]
-            Root states tensor (can be all_root_states or robot_root_states).
-        """
-        # Handle the case where all_root_states tensor is passed
-        if root_states is not None and root_states is self.all_root_states:
-            # Use robot states view directly
-            self.set_actor_root_state_tensor_robots(set_env_ids, self.robot_root_states[set_env_ids])
-        else:
-            # Otherwise, assume it's already robot states
-            self.set_actor_root_state_tensor_robots(set_env_ids, root_states)
-
-    def set_dof_state_tensor(self, env_ids: EnvIds | None = None, dof_states: torch.Tensor | None = None) -> None:
-        """Legacy compatibility method for LeggedRobotBase.
-
-        This method provides backward compatibility with the existing LeggedRobotBase code
-        that calls set_dof_state_tensor. It delegates to the robot-specific method.
-
-        Parameters
-        ----------
-        env_ids : Optional[EnvIds]
-            Which environments to update (None = all).
-        dof_states : Optional[torch.Tensor]
-            DOF states tensor (flattened format).
-        """
-        self.set_dof_state_tensor_robots(env_ids, dof_states)
-
-    def set_actor_root_state_tensor_robots(
-        self, env_ids: EnvIds | None = None, root_states: torch.Tensor | None = None
-    ) -> None:
-        """Set robot root states via backend delegation.
-
-        Parameters
-        ----------
-        env_ids : Optional[EnvIds]
-            Which environments to update (None = all).
-        root_states : Optional[torch.Tensor]
-            Robot states to set. Can be either:
-            - Pre-sliced tensor [len(env_ids), 13] matching env_ids
-            - Full global tensor [num_envs, 13] (will be sliced automatically)
-            Format: [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz].
-            If None, uses current robot_root_states.
-        """
-        if env_ids is None:
-            env_ids = torch.arange(self.num_envs, device=self.sim_device)
-
-        if root_states is None:
-            root_states = self.robot_root_states[env_ids]
-        # CRITICAL: Normalize calling convention - if caller passes full global tensor
-        # but only updating subset of envs, slice it to match env_ids dimension
-        elif len(root_states) != len(env_ids):
-            if len(root_states) == self.num_envs:
-                # Full global tensor provided, slice to match env_ids
-                root_states = root_states[env_ids]
-            else:
-                raise ValueError(
-                    f"root_states dimension mismatch: got {len(root_states)}, "
-                    f"expected either {len(env_ids)} (pre-sliced) or {self.num_envs} (global)"
-                )
-
-        # Validate inputs
-        if len(env_ids) == 0:
-            logger.info("No environments to update")
-            return
-
-        if self.num_dof == 0:
-            logger.info("No robot DOFs available - skipping root state update")
-            return
-
+    def _write_root_states(self, env_ids: EnvIds, root_states: torch.Tensor) -> None:
+        """Write world-frame robot root states, one row per entry of ``env_ids``."""
         # Incoming angular velocity is world-frame (the robot_root_states / all_root_states
         # convention); MuJoCo's freejoint qvel wants it body-local. Convert before the backend
-        # write (which scatters cols 10:13 raw into qvel), symmetric with the view __getitem__
+        # write (which scatters cols 10:13 raw into qvel), symmetric with the get_actor_states
         # read path and with set_actor_states_by_index.
         root_states = self._freejoint_angvel_to_local(root_states)
 
@@ -1294,79 +1168,6 @@ class MuJoCo(BaseSimulator):
             "robot_qvel_addr": self.object_addrs["robot"]["qvel_addr"],
         }
         self.backend.set_root_state(env_ids, root_states, root_addrs)
-
-    def set_dof_state_tensor_robots(
-        self, env_ids: EnvIds | None = None, dof_states: torch.Tensor | None = None
-    ) -> None:
-        """Set robot DOF states via backend delegation.
-
-        Parameters
-        ----------
-        env_ids : Optional[EnvIds]
-            Which environments to update (None = all).
-        dof_states : Optional[torch.Tensor]
-            DOF states in the flattened 2D format ``[N * num_dof, 2]`` where
-            ``[:, 0] = positions`` and ``[:, 1] = velocities``. The required first
-            dimension depends on the active backend:
-
-            - **WarpBackend**: the FULL global tensor ``[num_envs * num_dof, 2]``.
-              The backend selects rows for ``env_ids`` internally, so even a partial
-              reset must pass states for all environments (this is how ``self.dof_state``
-              is shaped).
-            - **ClassicBackend** (single environment): ``[len(env_ids) * num_dof, 2]``.
-              With ``num_envs == 1`` this is equivalent to the global shape above.
-
-            If None, uses ``self.dof_state`` (already in the correct global format).
-
-            Note: a 3D ``[num_envs, num_dofs, 2]`` tensor is NOT accepted by either
-            MuJoCo backend (unlike the IsaacSim implementation of this method).
-        """
-        if env_ids is None:
-            env_ids = torch.arange(self.num_envs, device=self.sim_device)
-
-        if dof_states is None:
-            dof_states = self.dof_state
-
-        # Validate inputs
-        if len(env_ids) == 0:
-            logger.info("No environments to update")
-            return
-
-        if self.num_dof == 0:
-            logger.info("No robot DOFs available - skipping DOF state update")
-            return
-
-        assert dof_states is not None
-        # Both MuJoCo backends consume the flattened 2D format only; neither
-        # handles the 3D [num_envs, num_dofs, 2] form (that is IsaacSim-specific).
-        if dof_states.dim() != 2:
-            raise ValueError(
-                f"Unsupported dof_states tensor shape {tuple(dof_states.shape)}: expected a 2D "
-                f"[N * num_dof, 2] tensor (flattened, [:, 0]=pos, [:, 1]=vel)."
-            )
-        # The required first dimension is backend-specific: WarpBackend.set_dof_state
-        # indexes the FULL global tensor by env_ids ([num_envs * num_dof, 2]), whereas
-        # ClassicBackend.set_dof_state reshapes the whole tensor by len(env_ids)
-        # ([len(env_ids) * num_dof, 2]). Validate against the active backend so a
-        # partial-reset global tensor is not falsely rejected for the warp path.
-        if isinstance(self.backend, WarpBackend):
-            expected_rows = self.num_envs * self.num_dof
-        else:
-            expected_rows = len(env_ids) * self.num_dof
-        if dof_states.shape[0] != expected_rows:
-            is_warp = isinstance(self.backend, WarpBackend)
-            rows_label = "num_envs" if is_warp else "len(env_ids)"
-            raise ValueError(
-                f"Unsupported dof_states first dimension {dof_states.shape[0]}: "
-                f"expected {expected_rows} (= {rows_label}"
-                f" * num_dof) for the active "
-                f"{type(self.backend).__name__}."
-            )
-
-        # Delegate to backend
-        dof_addrs = {"dof_qpos_addrs": self.dof_qpos_addrs, "dof_qvel_addrs": self.dof_qvel_addrs}
-        self.backend.set_dof_state(env_ids, dof_states, dof_addrs)
-        self._refresh_dof_states()
 
     def get_dof_limits_properties(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Get DOF limits properties from the robot config (shared builder).

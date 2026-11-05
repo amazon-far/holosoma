@@ -467,8 +467,6 @@ class MotionPlaybackPlugin:
             rs[:, :3] = state["root_pos"] + env_origins
             rs[:, 3:7] = state["root_quat"]
             rs[:, 7:13] = 0.0
-            sim.set_actor_root_state_tensor_robots(env_ids, rs)
-        sim.set_dof_state_tensor_robots(env_ids, sim.dof_state)  # type: ignore[attr-defined]
 
         if self.cfg.objects:
             # set_actor_states rows are name-major, env-minor: all envs of object 0, then object 1, ...

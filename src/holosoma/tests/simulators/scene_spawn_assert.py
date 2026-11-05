@@ -583,7 +583,6 @@ def main() -> int:
     # is what this multi-env scenario actually validates.
     z_min = {nm: z0[nm].clone() for nm in free_names}
     for _ in range(args.steps):
-        sim.refresh_sim_tensors()
         sim.simulate_at_each_physics_step()
         # Drive the render path every step, exactly as the run_sim loop does. Headless: this
         # must be a no-op that does not touch a None viewer. Headful: it draws to the window.
