@@ -52,4 +52,5 @@ def test_render_headless_and_headful(simulator, headless):
         headless,
         label=f"{simulator} render (headless={headless})",
         timeout=600,
+        reuse_process=headless == "true",
     )

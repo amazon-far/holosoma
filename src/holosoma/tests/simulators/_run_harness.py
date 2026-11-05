@@ -13,10 +13,15 @@ plain assertions inside a test.
 
 from __future__ import annotations
 
+import atexit
 import json
+import os
+import select
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -26,6 +31,51 @@ import pytest
 # pytest.skip. Chosen so it cannot collide with: 0 (pass), 1 (the harness's own FAIL), or a
 # crash (a process killed by signal N exits 128+N >= 129).
 SKIP_EXIT_CODE = 77
+
+_WORKER_SCRIPT = Path(__file__).with_name("_harness_worker.py")
+_worker: dict[str, Any] = {}  # "proc": the warm worker Popen, "reply": its reply pipe
+
+
+def _stop_worker() -> None:
+    proc = _worker.pop("proc", None)
+    _worker.pop("reply", None)
+    if proc is not None:
+        proc.kill()
+        proc.wait()
+
+
+atexit.register(_stop_worker)
+
+
+def _run_in_worker(cmd: list[str], timeout: float) -> subprocess.CompletedProcess:
+    """Run ``cmd`` (harness path + args) in the shared warm worker; same result shape as ``subprocess.run``.
+
+    A case that fails, crashes or times out also discards the worker, so the next case starts clean.
+    """
+    if "proc" not in _worker or _worker["proc"].poll() is not None:
+        read_fd, write_fd = os.pipe()
+        _worker["proc"] = subprocess.Popen(
+            [sys.executable, str(_WORKER_SCRIPT), str(write_fd)], stdin=subprocess.PIPE, pass_fds=(write_fd,), text=True
+        )
+        os.close(write_fd)
+        _worker["reply"] = os.fdopen(read_fd)
+    proc, reply = _worker["proc"], _worker["reply"]
+    with tempfile.NamedTemporaryFile(suffix=".log", delete=False) as log:
+        log_path = Path(log.name)
+    try:
+        proc.stdin.write(json.dumps({"harness": cmd[0], "args": cmd[1:], "log": str(log_path)}) + "\n")
+        proc.stdin.flush()
+        if not select.select([reply], [], [], timeout)[0]:
+            _stop_worker()
+            raise subprocess.TimeoutExpired(cmd, timeout)
+        line = reply.readline()
+        returncode = json.loads(line)["returncode"] if line else proc.wait()
+        if returncode != 0:
+            _stop_worker()
+        output = log_path.read_text(encoding="utf-8", errors="replace")
+    finally:
+        log_path.unlink()
+    return subprocess.CompletedProcess(cmd, returncode, output, "")
 
 
 def _fail_message(label: str, returncode: int, stdout: str, stderr: str, extra: str = "") -> str:
@@ -49,6 +99,7 @@ def run_harness(
     label: str,
     timeout: float,
     result_file: str | Path | None = None,
+    reuse_process: bool = False,
 ) -> subprocess.CompletedProcess:
     """Run ``harness`` (under the current interpreter) with ``args`` and assert it succeeded.
 
@@ -66,6 +117,10 @@ def run_harness(
         If given, the harness is expected to write ``"OK"`` to this path once all checks pass,
         and success is judged on that sentinel rather than the return code (robust against
         teardown that corrupts the exit code). If ``None``, success is ``returncode == 0``.
+    reuse_process:
+        Run the harness ``main()`` in a warm worker process shared with other ``reuse_process`` calls
+        instead of a fresh interpreter. Only for MuJoCo harnesses that return their exit code from
+        ``main()`` and build no viewer; stdout and stderr are merged into ``stdout``.
 
     A harness exit code of ``SKIP_EXIT_CODE`` (77) is translated into ``pytest.skip`` with the
     reason read from the harness's ``SKIP:`` stdout line — for runtime-only skip conditions the
@@ -74,18 +129,21 @@ def run_harness(
 
     Returns the ``CompletedProcess`` so callers can make further assertions if needed.
     """
-    result = subprocess.run(
-        [sys.executable, str(harness), *args],
-        capture_output=True,
-        text=True,
-        # Decode harness output as UTF-8 (it prints non-ASCII chars like ✓/—); otherwise text=True
-        # uses the locale codec, which is ASCII in the hsgym Py3.8 container and crashes on 0xe2.
-        # errors="replace" so stray bytes can never mask a real result.
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-        check=False,
-    )
+    if reuse_process:
+        result = _run_in_worker([str(harness), *args], timeout)
+    else:
+        result = subprocess.run(
+            [sys.executable, str(harness), *args],
+            capture_output=True,
+            text=True,
+            # Decode harness output as UTF-8 (it prints non-ASCII chars like ✓/—); otherwise text=True
+            # uses the locale codec, which is ASCII in the hsgym Py3.8 container and crashes on 0xe2.
+            # errors="replace" so stray bytes can never mask a real result.
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+        )
     # Runtime skip: the harness signalled (via the autotools-convention exit 77) that this cell is
     # unsupported in a way only knowable at runtime. Surface it as a real pytest skip with reason,
     # not a pass. Checked before the success assertions so a skip is never mistaken for a failure.

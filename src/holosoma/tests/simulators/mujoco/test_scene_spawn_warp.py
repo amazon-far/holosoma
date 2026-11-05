@@ -41,6 +41,7 @@ def _run(scene, num_envs, steps=None):
         *args,
         label=f"mjwarp/{scene} (num_envs={num_envs})",
         timeout=600,
+        reuse_process=True,
     )
 
 

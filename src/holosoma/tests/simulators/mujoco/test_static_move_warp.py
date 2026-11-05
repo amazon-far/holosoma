@@ -39,4 +39,5 @@ def test_static_move(num_envs):
         str(num_envs),
         label=f"mjwarp/static-move (num_envs={num_envs})",
         timeout=600,
+        reuse_process=True,
     )

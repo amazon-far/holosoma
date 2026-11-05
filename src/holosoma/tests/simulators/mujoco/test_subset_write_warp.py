@@ -40,4 +40,5 @@ def test_subset_write():
         "4",
         label="mjwarp/subset-write (num_envs=4)",
         timeout=600,
+        reuse_process=True,
     )

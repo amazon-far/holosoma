@@ -43,5 +43,6 @@ def test_dr_matrix_warp(tmp_path):
         str(result_file),
         label="mjwarp DR matrix",
         timeout=900,
+        reuse_process=True,
         result_file=result_file,
     )

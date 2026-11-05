@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import os
 import pathlib
 import sys
 
@@ -46,7 +45,7 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
     sys.path.pop(0)
 
 from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config
+from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit
 
 SETTLE_CONTROL_STEPS = 60
 ROBOT = "g1-29dof"
@@ -181,7 +180,7 @@ def _check(sim, num_envs: int) -> tuple[list[str], list[str]]:
     return failures, report
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
     parser.add_argument("--num-envs", type=int, default=1)
@@ -199,14 +198,10 @@ def main() -> None:
     print("\n".join(lines), flush=True)
     if args.result_file and not failures:
         pathlib.Path(args.result_file).write_text("OK")
-
-    # Hard-exit past teardown: IsaacLab's stop handler re-enters render() and wedges there, so a
-    # normal return (or SimulationApp.close()) never reaches process exit and the runner would
-    # time out on a passing run.
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(1 if failures else 0)
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
-    main()
+    # Hard-exit past teardown: IsaacLab's stop handler re-enters render() and wedges there, so a
+    # normal return (or SimulationApp.close()) never reaches process exit.
+    run_and_hard_exit(main)

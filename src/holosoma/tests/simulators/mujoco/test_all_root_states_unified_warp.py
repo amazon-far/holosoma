@@ -36,4 +36,5 @@ def test_all_root_states_unified():
         "4",
         label="mjwarp/all-root-states-unified (num_envs=4)",
         timeout=600,
+        reuse_process=True,
     )
