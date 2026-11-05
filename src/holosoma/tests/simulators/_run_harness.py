@@ -13,6 +13,7 @@ plain assertions inside a test.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -103,3 +104,65 @@ def run_harness(
     else:
         assert result.returncode == 0, _fail_message(label, result.returncode, result.stdout, result.stderr)
     return result
+
+
+_BATCH_RUNNER = Path(__file__).resolve().parent / "_batch_harness.py"
+_BATCHES: dict[str, tuple[dict, subprocess.CompletedProcess, Path]] = {}
+
+
+def _will_run(item: pytest.Item) -> bool:
+    """Whether pytest will run ``item``'s body: not skipped (``skip``/``skipif``) and not ``xfail(run=False)``."""
+    from _pytest.skipping import evaluate_skip_marks, evaluate_xfail_marks
+
+    if evaluate_skip_marks(item) is not None:
+        return False
+    xfail = evaluate_xfail_marks(item)
+    return xfail is None or xfail.run
+
+
+def run_batched(request: pytest.FixtureRequest, cell_of, *, label: str, timeout: float) -> None:
+    """Run this test's harness cell in a subprocess shared with every selected cell of its group.
+
+    ``cell_of(item)`` returns ``(group, cell_id, harness_stem, args)`` for a test item that runs a
+    batched cell, else ``None``. On the first call for a group, every selected item of that group that
+    pytest will run (see ``_will_run``) is run in one ``_batch_harness.py`` subprocess (``timeout`` covers the whole
+    batch); each test then asserts its own cell: exit 77 skips, otherwise the harness must have written
+    ``OK`` to the ``--result-file`` appended to its args.
+    """
+    group, cell_id, _, _ = cell_of(request.node)
+    if group not in _BATCHES:
+        out_dir = request.getfixturevalue("tmp_path_factory").mktemp("harness_batch")
+        cells = {}
+        for item in request.session.items:
+            cell = cell_of(item)
+            if cell is None or cell[0] != group or not _will_run(item):
+                continue
+            _, cid, stem, args = cell
+            cells[cid] = [stem, [*args, "--result-file", str(out_dir / f"{cid}.ok")]]
+        spec, out = out_dir / "spec.json", out_dir / "out.json"
+        spec.write_text(json.dumps(cells))
+        try:
+            proc = subprocess.run(
+                [sys.executable, str(_BATCH_RUNNER), str(spec), str(out)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as e:
+            proc = subprocess.CompletedProcess(e.cmd, -9, str(e.stdout or ""), str(e.stderr or ""))
+        results = json.loads(out.read_text()) if out.exists() else {}
+        _BATCHES[group] = (results, proc, out_dir)
+    results, proc, out_dir = _BATCHES[group]
+    cell = results.get(cell_id)
+    if cell is None:
+        extra = f" (batch {group} did not reach this cell)"
+        raise AssertionError(_fail_message(label, proc.returncode, proc.stdout, proc.stderr, extra=extra))
+    rc, stdout = cell["returncode"], cell["stdout"]
+    if rc == SKIP_EXIT_CODE:
+        pytest.skip(_skip_reason(stdout, label))
+    ok_file = out_dir / f"{cell_id}.ok"
+    verdict = ok_file.read_text().strip() if ok_file.exists() else "<no result file>"
+    assert verdict == "OK", _fail_message(label, rc, f"{stdout}\n--- result file ---\n{verdict}", proc.stderr)
