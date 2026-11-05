@@ -224,7 +224,7 @@ def _sync_worker(rank: int, init_file: str, results: Any) -> None:
 def test_multi_gpu_sync_matches_rank_zero(tmp_path: Path) -> None:
     with mp.Manager() as manager:
         results = manager.dict()
-        mp.start_processes(_sync_worker, args=(str(tmp_path / "pg"), results), nprocs=2, start_method="spawn")
+        mp.start_processes(_sync_worker, args=(str(tmp_path / "pg"), results), nprocs=2, start_method="fork")
         got = dict(results)
     for rank in (0, 1):
         scale, weight, avg = got[rank]
