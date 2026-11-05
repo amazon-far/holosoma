@@ -30,7 +30,6 @@ import numpy.typing as npt
 from loguru import logger
 
 from holosoma.config_types.sensor import CameraSensorConfig
-from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.plugins.camera_consumer import CameraConsumerPlugin
 from holosoma.utils.video_utils import create_video
 
@@ -72,7 +71,6 @@ class FrameWriterPlugin(CameraConsumerPlugin):
         self._video_frames: dict[StreamKey, list[npt.NDArray[np.uint8]]] = {}
         self._video_times: dict[StreamKey, list[float]] = {}
         super().__init__(config, simulator)
-        simulator.hooks.add(Phase.CLOSE, self._on_close, name=f"{type(self).__name__}.stop")
 
     def wanted_streams(self) -> set[StreamKey]:
         return self._streams

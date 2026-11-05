@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING, Any, Callable
 from loguru import logger
 
 from holosoma.config_types.sensor import IsaacSimCameraConfig
-from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.plugins.camera_consumer import CameraConsumerPlugin, CameraIntrinsics
 from holosoma.simulator.plugins.ros2.camera_info import camera_info_from_intrinsics
 from holosoma.simulator.plugins.ros2.encode import EncodedImage, encode_frame
@@ -67,14 +66,8 @@ class ROS2ImagePlugin(CameraConsumerPlugin):
         self._workers: dict[str, PublishWorker[FramePacket]] = {}  # topic -> worker (async only)
         self._ros2_runtime = get_ros2_runtime(simulator)
         # Validates routes against the configured cameras and registers the publish/close callbacks.
-        super().__init__(config, simulator)
         # Stop publishing before the shared context goes down.
-        simulator.hooks.add(
-            Phase.CLOSE,
-            self._on_close,
-            name=f"{type(self).__name__}.stop",
-            before=self._ros2_runtime.close_hook,
-        )
+        super().__init__(config, simulator, close_before=self._ros2_runtime.close_hook)
 
     def wanted_streams(self) -> set[StreamKey]:
         # One env per node (config.env_id; default 0 = the single real-time robot).

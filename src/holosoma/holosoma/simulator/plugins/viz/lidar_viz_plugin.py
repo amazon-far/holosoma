@@ -21,7 +21,6 @@ import numpy.typing as npt
 from loguru import logger
 
 from holosoma.config_types.sensor import LidarSensorConfig
-from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.plugins.lidar_consumer import LidarConsumerPlugin, LidarStreamKey, PointCloudPacket
 from holosoma.utils.video_utils import create_video
 
@@ -52,7 +51,6 @@ class LidarVizPlugin(LidarConsumerPlugin):
         self._video_times: defaultdict[LidarStreamKey, list[float]] = defaultdict(list)
 
         super().__init__(config, simulator)
-        simulator.hooks.add(Phase.CLOSE, self._on_close, name=f"{type(self).__name__}.stop")
 
     def wanted_streams(self) -> set[LidarStreamKey]:
         return {(lidar, env_id) for lidar in self._lidar_names for env_id in self._env_ids}

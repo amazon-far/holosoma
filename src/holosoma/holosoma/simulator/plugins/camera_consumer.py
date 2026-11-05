@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Tuple, Union
+from typing import TYPE_CHECKING, Sequence, Tuple, Union
 
 import numpy as np
 import numpy.typing as npt
@@ -36,7 +36,7 @@ from holosoma.config_types.sensor import (
     IsaacSimCameraConfig,
     MujocoCameraConfig,
 )
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.simulator.base_simulator.hooks import HookDependency, Phase
 from holosoma.utils.simulator_config import SimulatorType
 
 if TYPE_CHECKING:
@@ -99,10 +99,11 @@ class CameraConsumerPlugin:
 
     Subclass and, in ``__init__``, set any transport fields then call
     ``super().__init__(config, simulator)`` (which validates the streams and registers the per-step
-    publish; ``wanted_streams`` runs there, so fields it reads must be set first). Register
-    ``_on_close`` on ``CLOSE`` yourself, declaring there what your teardown must precede. Open the
-    live transport lazily in :meth:`start` — the base defers ``start`` to the first :meth:`publish`.
-    Implement :meth:`wanted_streams`, :meth:`start`, :meth:`publish`, and :meth:`stop`.
+    publish and the teardown; ``wanted_streams`` runs there, so fields it reads must be set first).
+    Pass ``close_before`` when teardown has to precede something, such as a transport context that
+    must outlive it. Open the live transport lazily in :meth:`start` — the base defers ``start`` to
+    the first :meth:`publish`. Implement :meth:`wanted_streams`, :meth:`start`, :meth:`publish`,
+    and :meth:`stop`.
 
     The base handles: fail-loud validation of the wanted streams against the configured cameras;
     the per-step snapshot (one shared ``get_camera_data(device="cpu")`` host copy per (camera,
@@ -110,7 +111,13 @@ class CameraConsumerPlugin:
     frame-processing failure isolation. Teardown failures propagate through CLOSE so providers stay alive.
     """
 
-    def __init__(self, config: PluginConfig, simulator: BaseSimulator) -> None:
+    def __init__(
+        self,
+        config: PluginConfig,
+        simulator: BaseSimulator,
+        *,
+        close_before: HookDependency | Sequence[HookDependency] = (),
+    ) -> None:
         # A plugin is duck-typed (cls(cfg, simulator) registering on simulator.hooks); no base to call.
         # ``config`` is typed per subclass; ``cfg`` mirrors the plugin convention (ClockPublishPlugin etc).
         self.cfg = config
@@ -126,6 +133,7 @@ class CameraConsumerPlugin:
             name=f"{self._label()}.publish",
             after=simulator.sensor_render_hook,
         )
+        simulator.hooks.add(Phase.CLOSE, self._on_close, name=f"{self._label()}.stop", before=close_before)
 
     def _label(self) -> str:
         return type(self).__name__

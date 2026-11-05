@@ -63,7 +63,6 @@ class _Consumer(LidarConsumerPlugin):
         self.stop_count = 0
         self.batches: list[dict[LidarStreamKey, PointCloudPacket]] = []
         super().__init__(cast("Any", None), cast("Any", simulator))
-        simulator.hooks.add(Phase.CLOSE, self._on_close, name=f"{type(self).__name__}.stop")
 
     def wanted_streams(self) -> set[LidarStreamKey]:
         return self._streams

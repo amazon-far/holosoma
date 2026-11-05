@@ -55,7 +55,6 @@ class FakeConsumer(CameraConsumerPlugin):
         self.stop_calls = 0
         self.batches: list[dict[StreamKey, FramePacket]] = []  # each control step's frames dict
         super().__init__(config, simulator)
-        simulator.hooks.add(Phase.CLOSE, self._on_close, name=f"{type(self).__name__}.stop")
 
     @property
     def received(self) -> list[FramePacket]:
