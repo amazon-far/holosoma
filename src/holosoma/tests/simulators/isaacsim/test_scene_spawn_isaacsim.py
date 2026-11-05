@@ -38,19 +38,9 @@ from tests.simulators._run_harness import run_harness  # noqa: E402
 _HARNESS = Path(__file__).resolve().parents[1] / "scene_spawn_assert.py"
 
 
-@pytest.mark.parametrize(
-    "scene",
-    [
-        "usd-box",
-        "g1-largebox",
-        "static-box-usd",
-        "static-box",
-        "velocity-box",
-        "physics-box",
-        "multibody",
-        "multibody-override",
-    ],
-)
+# Scenes also in test_scene_spawn_multi_env run only there: the harness asserts every check in every
+# env, and env 0 sits at the origin, so the num_envs=4 cell covers the num_envs=1 one.
+@pytest.mark.parametrize("scene", ["g1-largebox", "static-box-usd", "static-box", "physics-box"])
 def test_scene_spawn(scene):
     # physics-box exercises the per-object physics override read-back (live mass + bound-material
     # static friction vs. config). It ships USD + URDF, so it spawns on this backend.
