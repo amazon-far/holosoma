@@ -162,9 +162,11 @@ def test_camera_orientation(tmp_path):
     )
 
 
-def test_camera_obs_pipeline(tmp_path):
+def test_camera_obs_pipeline(tmp_path, monkeypatch):
     # Drives render_sensors -> camera obs term -> transform -> obs dict; asserts CHW float01 format
     # and that a decimation=3 camera holds while a decimation=1 camera updates.
+    # Boots the windowed Kit experience, the one path where the launcher must enable offscreen render.
+    monkeypatch.delenv("HEADLESS")
     result_file = tmp_path / "obs_isaacsim.txt"
     run_harness(
         _OBS_HARNESS,
