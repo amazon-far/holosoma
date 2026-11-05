@@ -162,7 +162,6 @@ def _step(sim: _FakeSimulator) -> None:
 def test_registers_publish_and_close_callbacks() -> None:
     sim = _FakeSimulator(_sensors("head"), {("head", "rgb"): _rgb()})
     FakeConsumer(None, sim, streams=[("head", "rgb", 0)])
-    # One FRAME_END hook (publish) and one CLOSE hook (stop), the publish behind the sensor render.
     assert sim.hooks.names(Phase.FRAME_END) == ("sensors.render", "FakeConsumer.publish")
     assert sim.hooks.names(Phase.CLOSE) == ("FakeConsumer.stop",)
 

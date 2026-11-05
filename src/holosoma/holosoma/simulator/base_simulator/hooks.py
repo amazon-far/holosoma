@@ -5,7 +5,7 @@ import inspect
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Iterator, Mapping, Sequence, Union, overload
+from typing import Any, Callable, Iterator, Mapping, Sequence, Tuple, Union, overload
 
 from typing_extensions import Literal, Self
 
@@ -14,6 +14,20 @@ from holosoma.config_types.frequency import DecimationLike, is_frequency_string,
 HookDependency = Union["HookHandle", "HookRef", "_OptionalTarget"]
 """What ``after``/``before`` accept: a :class:`HookHandle`, a :class:`HookRef`, or :func:`if_present`
 of either."""
+
+
+_PublicationId = Tuple[str, str, str]
+"""A publication's identity: plugin slot, contract type, member name."""
+
+
+def _publication_id(instance: str, key: Enum) -> _PublicationId:
+    """Identify a published key by its enum type and member name rather than by the member itself.
+
+    A mixin enum (``class Hook(str, Enum)``, the style :class:`Phase` uses) compares and hashes by
+    value, so two contracts that both define ``PUBLISH = "publish"`` would otherwise share one entry.
+    """
+    contract = type(key)
+    return (instance, f"{contract.__module__}.{contract.__qualname__}", key.name)
 
 
 @dataclass(frozen=True)
@@ -109,8 +123,6 @@ class _HookRecord:
     """Resolved emission decimation: the callback runs once per ``every`` emissions of its phase."""
     owner: str | None = None
     """Plugin slot that registered this hook, or ``None`` for the framework's own."""
-    key: Enum | None = None
-    """Contract member this hook is published under, for :class:`HookRef` to resolve."""
     after: tuple[_HookRecord | HookRef | _OptionalTarget, ...] = field(default=(), repr=False)
     """Same-phase hooks this one must run after, as records or unresolved references."""
     before: tuple[_HookRecord | HookRef | _OptionalTarget, ...] = field(default=(), repr=False)
@@ -147,11 +159,6 @@ class HookHandle:
     @property
     def enabled(self) -> bool:
         return self._record.enabled and not self._record.removed
-
-    @property
-    def key(self) -> Enum | None:
-        """Contract member this hook was published under, if any."""
-        return self._record.key
 
     @property
     def every(self) -> int:
@@ -207,7 +214,7 @@ class HookRegistry:
         self._records: dict[Phase, list[_HookRecord]] = {phase: [] for phase in Phase}
         self._resolved: dict[Phase, tuple[_HookRecord, ...]] = dict.fromkeys(Phase, ())
         self._stale: set[Phase] = set()
-        self._published: dict[tuple[str, Enum], _HookRecord] = {}
+        self._published: dict[_PublicationId, _HookRecord] = {}
         self._owner: str | None = None
         self._emitting: set[Phase] = set()
         self._closed = False
@@ -222,8 +229,8 @@ class HookRegistry:
         name: str | None = None,
         every: DecimationLike = 1,
         key: Enum | None = None,
-        after: Sequence[HookDependency] = (),
-        before: Sequence[HookDependency] = (),
+        after: HookDependency | Sequence[HookDependency] = (),
+        before: HookDependency | Sequence[HookDependency] = (),
     ) -> HookHandle: ...
 
     @overload
@@ -235,8 +242,8 @@ class HookRegistry:
         name: str | None = None,
         every: DecimationLike = 1,
         key: Enum | None = None,
-        after: Sequence[HookDependency] = (),
-        before: Sequence[HookDependency] = (),
+        after: HookDependency | Sequence[HookDependency] = (),
+        before: HookDependency | Sequence[HookDependency] = (),
     ) -> HookHandle: ...
 
     @overload
@@ -248,8 +255,8 @@ class HookRegistry:
         name: str | None = None,
         every: DecimationLike = 1,
         key: Enum | None = None,
-        after: Sequence[HookDependency] = (),
-        before: Sequence[HookDependency] = (),
+        after: HookDependency | Sequence[HookDependency] = (),
+        before: HookDependency | Sequence[HookDependency] = (),
     ) -> HookHandle: ...
 
     def add(
@@ -260,8 +267,8 @@ class HookRegistry:
         name: str | None = None,
         every: DecimationLike = 1,
         key: Enum | None = None,
-        after: Sequence[HookDependency] = (),
-        before: Sequence[HookDependency] = (),
+        after: HookDependency | Sequence[HookDependency] = (),
+        before: HookDependency | Sequence[HookDependency] = (),
     ) -> HookHandle:
         """Register a hook callback for a lifecycle phase.
 
@@ -281,7 +288,8 @@ class HookRegistry:
         ``name`` labels the hook in :meth:`names`, cycle reports and teardown failures, defaulting
         to the callback's qualname.
 
-        ``after`` / ``before`` order this hook against other hooks *on the same phase*. An entry is
+        ``after`` / ``before`` each take one dependency or a sequence of them, ordering this hook
+        against other hooks *on the same phase*. An entry is
         either a :class:`HookHandle`, which pins the one hook it came from, or a :class:`HookRef`
         for a hook another plugin publishes under a key. Ordering is phase-scoped, and a handle or
         reference for another phase is rejected.
@@ -307,12 +315,11 @@ class HookRegistry:
             name=name,
             every=self._resolve_every(phase, every, name),
             owner=owner,
-            key=key,
             after=self._normalize_deps(after, "after", name, phase),
             before=self._normalize_deps(before, "before", name, phase),
         )
         if key is not None and owner is not None:
-            self._published[(owner, key)] = record
+            self._published[_publication_id(owner, key)] = record
         self._records[phase].append(record)
         self._invalidate(phase)
         return HookHandle(self, record)
@@ -344,7 +351,7 @@ class HookRegistry:
                 f"instance. Keys identify one instance's hook, so publish while the plugin is "
                 f"constructed, or depend on this hook by its handle instead."
             )
-        claimed = self._published.get((owner, key))
+        claimed = self._published.get(_publication_id(owner, key))
         if claimed is not None and not claimed.removed:
             raise HookRegistryError(
                 f"hook {name!r} on phase {phase.value!r} publishes {key!r}, which plugin instance "
@@ -353,7 +360,11 @@ class HookRegistry:
             )
 
     def _normalize_deps(
-        self, deps: Sequence[HookDependency], field_name: str, name: str, phase: Phase
+        self,
+        deps: HookDependency | Sequence[HookDependency],
+        field_name: str,
+        name: str,
+        phase: Phase,
     ) -> tuple[_HookRecord | HookRef | _OptionalTarget, ...]:
         """Freeze a constraint list, resolving each handle to the single hook it refers to.
 
@@ -363,8 +374,10 @@ class HookRegistry:
         another registry cannot be reached from this one. Whoever holds a handle already knows where
         it came from, so those are mistakes rather than a run configuring things differently.
         """
-        # Checked at runtime, not just by the overloads: plenty of callers are untyped.
-        entries: Sequence[Any] = deps
+        if isinstance(deps, (HookHandle, HookRef, _OptionalTarget)):
+            entries: Sequence[Any] = [deps]
+        else:
+            entries = deps
         if isinstance(entries, str):
             raise HookRegistryError(
                 f"hook {name!r} on phase {phase.value!r}: {field_name}={deps!r} is a string. Hook "
@@ -376,7 +389,6 @@ class HookRegistry:
             optional = isinstance(entry, _OptionalTarget)
             dep = entry.target if isinstance(entry, _OptionalTarget) else entry
             if isinstance(dep, HookRef):
-                # Stays as written: its provider may not be constructed yet.
                 resolved.append(_OptionalTarget(dep) if optional else dep)
                 continue
             if isinstance(dep, str):
@@ -468,10 +480,11 @@ class HookRegistry:
             if phase in self._emitting:
                 raise HookRegistryError("Recursive close hook emission is not supported")
 
+            order = self._order(phase)
             self._closed = True
             self._emitting.add(phase)
             try:
-                for record in self._order(phase):
+                for record in order:
                     try:
                         record.callback()
                     except Exception as exc:  # noqa: PERF203 - preserve the failing owner's name.
@@ -598,7 +611,7 @@ class HookRegistry:
                 for target in self._targets(phase, record, dep, by_record):
                     link(position, target)
 
-        # CLOSE tears down in reverse, so it prefers the latest-registered hook among the ready ones.
+        # CLOSE tears down in reverse: among the ready hooks it prefers the latest registered.
         sign = -1 if phase is Phase.CLOSE else 1
         ready = [sign * position for position in range(len(live)) if blockers[position] == 0]
         heapq.heapify(ready)
@@ -613,10 +626,10 @@ class HookRegistry:
                     heapq.heappush(ready, sign * later)
 
         if len(order) != len(live):
-            cycle = sorted({live[position].name for position in range(len(live)) if blockers[position] > 0})
+            stuck = sorted({live[position].name for position in range(len(live)) if blockers[position] > 0})
             raise HookOrderError(
-                f"Hook ordering cycle on phase {phase.value!r} among: {', '.join(cycle)}. "
-                f"Their 'after'/'before' constraints cannot all hold."
+                f"Hook ordering cycle on phase {phase.value!r}. These could not be placed, either in "
+                f"the cycle or waiting on it: {', '.join(stuck)}."
             )
         return tuple(order)
 
@@ -634,15 +647,15 @@ class HookRegistry:
             dep = target._record if isinstance(target, HookHandle) else target
 
         if isinstance(dep, HookRef):
-            published = self._published.get((dep.instance, dep.key))
+            published = self._published.get(_publication_id(dep.instance, dep.key))
             if published is None or published.removed:
                 if optional:
                     return ()
                 raise HookOrderError(
                     f"Hook {record.name!r} on phase {phase.value!r} requires {dep.key!r} from plugin "
                     f"instance {dep.instance!r}, which published no such hook. Configured "
-                    f"publications: {sorted((owner, str(k)) for owner, k in self._published)}. Wrap "
-                    f"it in if_present(...) if a run without it is valid."
+                    f"publications: {sorted(f'{o}:{c}.{m}' for o, c, m in self._published)}. Wrap it "
+                    f"in if_present(...) if a run without it is valid."
                 )
             if published.phase is not phase:
                 raise HookOrderError(

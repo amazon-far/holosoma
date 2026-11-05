@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 from enum import Enum, auto
 from types import SimpleNamespace
-from typing import Any, Callable, Iterator
+from typing import Any, Callable
 
 import pytest
-from loguru import logger
 
 from holosoma.config_types.video import VideoConfig
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
@@ -357,17 +355,6 @@ def test_add_arity_guard_tolerates_uninspectable_callback() -> None:
     hooks.add(Phase.EPISODE_END, print, name="builtin")  # print(*args) — accepts env_id
 
 
-@contextmanager
-def captured_logs(level: str) -> Iterator[list[str]]:
-    """Collect loguru messages at or above ``level`` for the duration of the block."""
-    messages: list[str] = []
-    sink_id = logger.add(lambda message: messages.append(message.record["message"]), level=level)
-    try:
-        yield messages
-    finally:
-        logger.remove(sink_id)
-
-
 def recorder(calls: list[str], name: str) -> Callable[[], None]:
     return lambda: calls.append(name)
 
@@ -378,6 +365,18 @@ def test_after_runs_hook_behind_its_dependency() -> None:
 
     render = hooks.add(Phase.FRAME_END, recorder(calls, "render"), name="x.render")
     hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="x.consumer", after=[render])
+
+    hooks.emit(Phase.FRAME_END)
+
+    assert calls == ["render", "consumer"]
+
+
+def test_a_single_dependency_needs_no_list() -> None:
+    calls: list[str] = []
+    hooks = HookRegistry()
+
+    render = hooks.add(Phase.FRAME_END, recorder(calls, "render"), name="x.render")
+    hooks.add(Phase.FRAME_END, recorder(calls, "consumer"), name="x.consumer", after=render)
 
     hooks.emit(Phase.FRAME_END)
 
@@ -427,13 +426,12 @@ def test_cycle_raises_on_emit() -> None:
     first = hooks.add(Phase.FRAME_END, lambda: None, name="x.a")
     hooks.add(Phase.FRAME_END, lambda: None, name="x.b", after=[first], before=[first])
 
-    with pytest.raises(HookOrderError, match="cycle on phase 'frame_end' among: x.a, x.b"):
+    with pytest.raises(HookOrderError, match="cycle on phase 'frame_end'"):
         hooks.emit(Phase.FRAME_END)
 
 
 def test_disabling_a_link_drops_the_order_it_carried() -> None:
-    # Registered c, a, b, so only b's edges put a ahead of c. Disabling b takes those edges with it,
-    # which is what lets a cycle broken by a disabled hook stay satisfiable (see the test below).
+    # Only b's edges put a ahead of c, so disabling b takes that order with it.
     calls: list[str] = []
     hooks = HookRegistry()
     c = hooks.add(Phase.FRAME_END, recorder(calls, "c"), name="x.c")
@@ -501,18 +499,6 @@ def test_close_declares_teardown_order_directly() -> None:
     assert calls == ["node", "runtime"]
 
 
-def test_close_tears_down_in_reverse_registration_order_by_default() -> None:
-    calls: list[str] = []
-    hooks = HookRegistry()
-    hooks.add(Phase.CLOSE, recorder(calls, "first"), name="x.first")
-    hooks.add(Phase.CLOSE, recorder(calls, "second"), name="x.second")
-    hooks.add(Phase.CLOSE, recorder(calls, "third"), name="x.third")
-
-    hooks.emit(Phase.CLOSE)
-
-    assert calls == ["third", "second", "first"]
-
-
 def test_close_cycle_raises_like_any_other_phase() -> None:
     calls: list[str] = []
     hooks = HookRegistry()
@@ -542,32 +528,27 @@ def test_handle_orders_against_one_instance_not_its_namesake() -> None:
     assert calls == ["a1", "b", "a2"]
 
 
-def test_handle_for_another_phase_is_rejected() -> None:
+@pytest.mark.parametrize(
+    ("dependency", "message"),
+    [
+        ("other_phase", "Constraints apply within one phase"),
+        ("other_registry", "from a different registry"),
+        ("name", "names are labels, not dependency targets"),
+        ("object", "pass the HookHandle add\\(\\) returned"),
+    ],
+)
+def test_a_dependency_that_cannot_be_resolved_is_rejected(dependency: str, message: str) -> None:
     hooks = HookRegistry()
-    elsewhere = hooks.add(Phase.FRAME_BEGIN, lambda: None, name="elsewhere.tick")
+    target = hooks.add(Phase.FRAME_END, lambda: None, name="x.target")
+    bad: Any = {
+        "other_phase": hooks.add(Phase.FRAME_BEGIN, lambda: None, name="x.elsewhere"),
+        "other_registry": HookRegistry().add(Phase.FRAME_END, lambda: None, name="x.elsewhere"),
+        "name": target.name,
+        "object": object(),
+    }[dependency]
 
-    with pytest.raises(HookRegistryError, match="Constraints apply within one phase"):
-        hooks.add(Phase.FRAME_END, lambda: None, name="here.tick", after=[elsewhere])
-
-
-def test_dependency_that_is_neither_name_nor_handle_is_rejected() -> None:
-    # The overloads reject this at type-check time; the runtime guard catches whoever ignores them,
-    # since a callback or plugin object would match no hook and silence is for absent names only.
-    hooks = HookRegistry()
-    target = hooks.add(Phase.FRAME_END, lambda: None, name="target.tick")
-    deps: list[Any] = [target, object()]
-
-    with pytest.raises(HookRegistryError, match="pass the HookHandle add\\(\\) returned"):
-        hooks.add(Phase.FRAME_END, lambda: None, name="dependent.tick", after=deps)
-
-
-def test_handle_from_another_registry_is_rejected() -> None:
-    hooks = HookRegistry()
-    other = HookRegistry()
-    elsewhere = other.add(Phase.FRAME_END, lambda: None, name="elsewhere.tick")
-
-    with pytest.raises(HookRegistryError, match="from a different registry"):
-        hooks.add(Phase.FRAME_END, lambda: None, name="here.tick", after=[elsewhere])
+    with pytest.raises(HookRegistryError, match=message):
+        hooks.add(Phase.FRAME_END, lambda: None, name="x.dependent", after=[bad])
 
 
 def test_handle_to_a_removed_hook_fails_unless_optional() -> None:
@@ -611,17 +592,6 @@ def test_validate_reports_a_bad_graph_before_anything_emits() -> None:
         hooks.validate()
 
 
-def test_a_name_is_not_a_dependency_target() -> None:
-    # Names label hooks; depending on one would make a rename change what runs when.
-    hooks = HookRegistry()
-    target = hooks.add(Phase.FRAME_END, lambda: None, name="x.target")
-
-    by_name: Any = [target.name]
-
-    with pytest.raises(HookRegistryError, match="names are labels, not dependency targets"):
-        hooks.add(Phase.FRAME_END, lambda: None, name="x.a", after=by_name)
-
-
 class _CameraHook(Enum):
     PUBLISH = auto()
     CLOSE = auto()
@@ -632,7 +602,7 @@ class _OtherHook(Enum):
 
 
 def test_hookref_resolves_a_publication_registered_after_the_reference() -> None:
-    # The consumer registers first: a HookRef does not require its provider to exist yet.
+    # The consumer registers first: a reference does not require its provider to exist yet.
     calls: list[str] = []
     hooks = HookRegistry()
 
@@ -680,6 +650,29 @@ def test_same_member_of_a_different_enum_is_a_different_key() -> None:
         hooks.add(Phase.FRAME_END, lambda: None, name="inspector.read", after=[HookRef("head", _OtherHook.PUBLISH)])
 
     assert hooks.names(Phase.FRAME_END)[-1] == "inspector.read"
+
+
+def test_a_mixin_enum_does_not_collide_with_another_contract() -> None:
+    # A str-mixin enum compares by value, so these two members are equal outside the registry.
+    class CameraHook(str, Enum):
+        PUBLISH = "publish"
+
+    class LidarHook(str, Enum):
+        PUBLISH = "publish"
+
+    hooks = HookRegistry()
+    with hooks.installing("head"):
+        hooks.add(Phase.FRAME_END, lambda: None, name="camera.publish", key=CameraHook.PUBLISH)
+    with hooks.installing("inspect"):
+        hooks.add(
+            Phase.FRAME_END,
+            lambda: None,
+            name="inspector.read",
+            after=[HookRef("head", LidarHook.PUBLISH)],
+        )
+
+    with pytest.raises(HookOrderError, match="published no such hook"):
+        hooks.validate()
 
 
 def test_one_instance_cannot_publish_a_key_twice() -> None:

@@ -522,7 +522,9 @@ def test_frame_end_drives_lazy_start_publish_and_skips_non_due_scan(fake_ros: di
         if due:
             sim.sensor_manager.get_lidar("lidar").set_buffer("points", points)
 
-    sim.hooks.add(Phase.FRAME_END, _render_sensor, name="sensors.render")
+    # Publish follows this handle, so replace the fake's placeholder rather than adding a second.
+    sim.sensor_render_hook.remove()
+    sim.sensor_render_hook = sim.hooks.add(Phase.FRAME_END, _render_sensor, name="sensors.render")
     plugin = cast("ROS2PointCloudPlugin", config.get_cls()(config, sim))
     sim.hooks.emit(Phase.FRAME_END)
     publisher_node = cast("_FakeNode", fake_ros["node"])

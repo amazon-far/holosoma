@@ -53,7 +53,7 @@ class ROS2PointCloudPlugin(LidarConsumerPlugin):
             Phase.CLOSE,
             self._on_close,
             name=f"{type(self).__name__}.stop",
-            before=[self._ros2_runtime.close_hook],
+            before=self._ros2_runtime.close_hook,
         )
 
     def wanted_streams(self) -> set[LidarStreamKey]:

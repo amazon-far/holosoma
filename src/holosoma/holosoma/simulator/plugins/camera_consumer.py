@@ -98,10 +98,11 @@ class CameraConsumerPlugin:
     """Base for a plugin that consumes rendered camera frames each control step.
 
     Subclass and, in ``__init__``, set any transport fields then call
-    ``super().__init__(config, simulator)`` (which validates the streams and registers the callbacks;
-    ``wanted_streams`` runs there, so fields it reads must be set first). Open the live transport lazily
-    in :meth:`start` — the base defers ``start`` to the first :meth:`publish`. Implement
-    :meth:`wanted_streams`, :meth:`start`, :meth:`publish`, and :meth:`stop`.
+    ``super().__init__(config, simulator)`` (which validates the streams and registers the per-step
+    publish; ``wanted_streams`` runs there, so fields it reads must be set first). Register
+    ``_on_close`` on ``CLOSE`` yourself, declaring there what your teardown must precede. Open the
+    live transport lazily in :meth:`start` — the base defers ``start`` to the first :meth:`publish`.
+    Implement :meth:`wanted_streams`, :meth:`start`, :meth:`publish`, and :meth:`stop`.
 
     The base handles: fail-loud validation of the wanted streams against the configured cameras;
     the per-step snapshot (one shared ``get_camera_data(device="cpu")`` host copy per (camera,
@@ -123,7 +124,7 @@ class CameraConsumerPlugin:
             Phase.FRAME_END,
             self._on_frame_end,
             name=f"{self._label()}.publish",
-            after=[simulator.sensor_render_hook],
+            after=simulator.sensor_render_hook,
         )
 
     def _label(self) -> str:

@@ -54,7 +54,7 @@ class LidarConsumerPlugin:
             Phase.FRAME_END,
             self._on_frame_end,
             name=f"{type(self).__name__}.publish",
-            after=[simulator.sensor_render_hook],
+            after=simulator.sensor_render_hook,
         )
 
     @abstractmethod

@@ -77,7 +77,7 @@ class SimulatorBridge:
             every=self.bridge_config.transport_decimation,
         )
         # Commands arrive on the transport hook and are applied here.
-        hooks.add(Phase.PRE_STEP, self.control_step, name="bridge.control", after=[self.transport_hook])
+        hooks.add(Phase.PRE_STEP, self.control_step, name="bridge.control", after=self.transport_hook)
         hooks.add(Phase.CLOSE, self.close, name="bridge.close")
 
     def start(self) -> None:

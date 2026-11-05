@@ -202,7 +202,7 @@ Within a phase, hooks run in registration order, which for plugins means the ord
 
 ```python
 simulator.hooks.add(
-    Phase.FRAME_END, self.publish, name="my_plugin.publish", after=[simulator.sensor_render_hook],
+    Phase.FRAME_END, self.publish, name="my_plugin.publish", after=simulator.sensor_render_hook,
 )
 ```
 
@@ -219,7 +219,7 @@ simulator.hooks.add(                                         # a separately cons
 
 Take the slot through your own config, as sensor routes do; slot keys belong to whoever launches the run.
 
-**Targets are required**, so wrap the ones a run may lack in `if_present(...)`. A disabled target satisfies the reference but contributes no edge, so ordering reflects only the hooks that fire.
+`after` / `before` each take one dependency or a list of them. **Targets are required**, so wrap the ones a run may lack in `if_present(...)`. A disabled target satisfies the reference but contributes no edge, so ordering reflects only the hooks that fire.
 
 **`hooks.validate()` runs at the end of `install_plugins`**, resolving every phase without calling anything, so a cycle or an unresolved target stops the run before the first step. Hooks registered later are checked when their phase next resolves. `hooks.names(phase)` returns the resolved order.
 
