@@ -33,7 +33,7 @@ def launcher(tmp_path, monkeypatch):
         f'pip() {{ command {executable} {shlex.quote(str(install))}; }}\npython() {{ command {executable} "$@"; }}\n'
     )
     monkeypatch.setattr(policy_e2e, "REPO_ROOT", tmp_path)
-    monkeypatch.setattr(policy_e2e, "_STOP_TIMEOUT", 1, raising=False)
+    monkeypatch.setattr(policy_e2e, "_STOP_TIMEOUT", 0.2, raising=False)
     processes = []
     launches = []
     real_popen = subprocess.Popen
