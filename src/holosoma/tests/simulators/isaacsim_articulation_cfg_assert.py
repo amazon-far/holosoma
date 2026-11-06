@@ -9,6 +9,8 @@ import sys
 import traceback
 from pathlib import Path
 
+from tests.simulators._sim_harness import run_and_hard_exit
+
 if sys.path and sys.path[0].endswith("tests/simulators"):
     sys.path.pop(0)
 
@@ -210,4 +212,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    run_and_hard_exit(main)

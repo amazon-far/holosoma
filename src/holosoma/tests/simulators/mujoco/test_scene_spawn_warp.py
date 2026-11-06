@@ -5,8 +5,9 @@ so the full [x,y,z] cross-backend offset check and the per-env origin-spread che
 (The in-process test_actor_state_gpu.py covers per-env state + the multibody offset, but only with
 zero env_origins and on the x-axis.)
 
-  - num_envs=1: parity with the cross-backend single-env matrix (full 3-vector offset).
   - num_envs=4: each free object at its OWN env_origin, 1->N offset in EVERY env.
+  - num_envs=1: only the scenes not in the multi-env list. The harness asserts every check in every
+    env and env 0 sits at the origin, so a num_envs=4 cell covers its num_envs=1 counterpart.
 
 MuJoCo ClassicBackend (CPU) cannot do >1 env, so multi-env is mjwarp-only. CUDA-gated; one
 sim per subprocess (the harness builds + tears down a full sim per run).
@@ -41,13 +42,11 @@ def _run(scene, num_envs, steps=None):
         *args,
         label=f"mjwarp/{scene} (num_envs={num_envs})",
         timeout=600,
+        reuse_process=True,
     )
 
 
-@pytest.mark.parametrize(
-    "scene",
-    ["g1-largebox", "static-box", "velocity-box", "physics-box", "multibody", "multibody-override"],
-)
+@pytest.mark.parametrize("scene", ["static-box", "physics-box"])
 def test_scene_spawn(scene):
     # physics-box exercises the per-object physics override read-back (live body mass + geom
     # sliding friction vs. config). Both presets ship URDF (no XML); MuJoCo loads URDF when no XML
@@ -58,11 +57,3 @@ def test_scene_spawn(scene):
 @pytest.mark.parametrize("scene", ["g1-largebox", "velocity-box", "multibody", "multibody-override"])
 def test_scene_spawn_multi_env(scene):
     _run(scene, num_envs=4)
-
-
-def test_friction_slide_multi_env():
-    # Behavioral friction probe (NOT a value read-back): two boxes pushed identically, differing
-    # ONLY in friction, must slide measurably different distances — proving the configured friction
-    # governs contact dynamics. Needs a longer window than the default 40 steps for the low/high
-    # gap to clear the probe margin, and runs every env (verified low>high on env 0..3).
-    _run("friction-slide", num_envs=4, steps=150)

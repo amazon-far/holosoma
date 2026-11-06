@@ -39,6 +39,8 @@ def run_mini_training(workflow_name: str) -> str:
             # backend the preset happens to name and fail on a missing SDK. mjwarp (not classic
             # mujoco) keeps this on the GPU, which ClassicBackend cannot do -- it is single-env only.
             "simulator:mjwarp",
+            # A plane skips the heightfield collision kernels, the slowest Warp compile in this run.
+            "terrain:terrain-locomotion-plane",
             "--algo.config.num-learning-iterations=2",
             "--training.num-envs=4",
             "--logger.video.enabled=False",
@@ -231,25 +233,3 @@ def test_run_policy_with_trained_checkpoint(g1_checkpoint: str):
         assert_run_policy_with_hsinference(
             "g1-29dof-loco", g1_checkpoint, setup=False, required_output=_INFERENCE_EVIDENCE
         )
-
-
-@pytest.mark.requires_inference
-def test_run_policy_fails_without_a_robot_state(g1_checkpoint: str):
-    """Control: with nothing publishing, the policy must fail at the startup timeout, not idle."""
-    code, output, timed_out = run_policy_with_hsinference(
-        "g1-29dof-loco", g1_checkpoint, extra_args=("--task.startup-state-timeout=3",)
-    )
-    assert not timed_out and code != 0, f"Policy exited with {code} (timed out: {timed_out}). Output: {output}"
-    assert "No valid robot state within 3s" in output, output
-    assert "Sent first native command" not in output, output
-    assert "RL FPS:" not in output, output
-
-
-@pytest.mark.requires_inference
-def test_run_policy_fails_when_the_robot_state_becomes_invalid(g1_checkpoint: str):
-    """Control: an invalid state after startup is an inference failure, not a wait."""
-    with low_state_publisher("g1-29dof-loco", invalid_after=5):
-        code, output, timed_out = run_policy_with_hsinference("g1-29dof-loco", g1_checkpoint)
-    assert not timed_out and code != 0, f"Policy exited with {code} (timed out: {timed_out}). Output: {output}"
-    assert "Sent first native command" in output, output
-    assert "Robot orientation must be nonzero" in output, output

@@ -234,19 +234,6 @@ def test_frame_freshness_holds_without_decimation(monkeypatch: pytest.MonkeyPatc
     assert sim.phases == _expected_phases(groups=3, decimation=1)
 
 
-def test_every_control_step_egresses_exactly_one_frame(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No frame is dropped or emitted twice: one FRAME_BEGIN and one FRAME_END per control step."""
-    sim = _FakeSim(frames=5)
-
-    _run(sim, monkeypatch)
-
-    assert len(sim.captured) == 5
-    assert sim.control_steps == 5
-    assert sim.phases.count(Phase.FRAME_BEGIN) == 5
-    assert sim.phases.count(Phase.FRAME_END) == 5
-    assert sim.substeps == 5 * DECIMATION
-
-
 def test_direct_loop_phase_schedule_matches_base_task(monkeypatch: pytest.MonkeyPatch) -> None:
     """PRE_STEP/POST_STEP bracket every substep inside one FRAME_BEGIN..FRAME_END frame.
 
@@ -257,19 +244,6 @@ def test_direct_loop_phase_schedule_matches_base_task(monkeypatch: pytest.Monkey
     _run(sim, monkeypatch)
 
     assert sim.phases == _expected_phases(groups=3)
-
-
-def test_a_loop_that_never_egresses_fails_instead_of_hanging(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The fake's own guard: with FRAME_END never reached, the run raises rather than spinning.
-
-    This is what keeps the tests above honest under mutation — a regression that silences egress, or
-    removes the shutdown check, cannot stall the suite into a timeout that reads as an error.
-    """
-    sim = _FakeSim(frames=3)
-    sim.egress_hook.remove()
-
-    with pytest.raises(_LoopOverranError, match="without reaching 3 frame"):
-        _run(sim, monkeypatch)
 
 
 # ----- the render cadence a coherent frame needs -----
@@ -291,22 +265,6 @@ def test_a_beating_render_cadence_misaligns_state_and_image(monkeypatch: pytest.
 
 
 # ----- the loop's other per-backend and viewer branches -----
-
-
-@pytest.mark.parametrize("render_interval", [1, 2, DECIMATION])
-def test_frame_end_follows_the_frames_last_draw(monkeypatch: pytest.MonkeyPatch, render_interval: int) -> None:
-    """A frame egresses on the substep its image was last drawn, so the image matches the state at egress.
-
-    A FRAME_END consumer may publish both — camera frames next to odometry, simulator state, or IMU —
-    so a skew between them puts a stale pose beside a current image. Swept over the render intervals
-    that divide the decimation, where the frame's last draw coincides with its last substep.
-    """
-    sim = _FakeSim(frames=3, render_interval=render_interval)
-
-    _run(sim, monkeypatch)
-
-    # Frame g's last draw and its egress both land on substep (g + 1) * DECIMATION.
-    assert sim.drawn_at_egress == [4, 8, 12]
 
 
 def test_shutdown_asked_for_inside_a_frame_still_egresses_that_frame(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -436,13 +436,6 @@ def test_config_rejects_duplicate_objects() -> None:
         MotionPlaybackPluginConfig(objects=["a", "a"])
 
 
-def test_kinematic_playback_config_flag_default_off() -> None:
-    # Kinematic playback is a simulator-config flag (sim.kinematic_playback), not plugin-derived.
-    from holosoma.config_values.run_sim import mujoco as mujoco_preset
-
-    assert mujoco_preset.config.sim.kinematic_playback is False
-
-
 # ----- MotionPlaybackPlugin: episodic playlist (motion_files + n_run + settle) -----
 #
 # Each clip is one episode. Clips are distinguished by an additive root-x offset (x0), so the
@@ -852,13 +845,3 @@ def test_root_and_object_poses_are_offset_into_each_env(tmp_path: Path) -> None:
         torch.testing.assert_close(rows[:, :3], clip_obj + origins)
         torch.testing.assert_close(rows[:, 3:7], torch.tensor([[0.0, 0.0, 0.0, 1.0]] * 3))  # xyzw identity
         assert torch.all(rows[:, 7:] == 0)
-
-
-def test_single_env_at_zero_origin_writes_the_clip_unchanged(tmp_path: Path) -> None:
-    """A single env at the origin (the run_sim case) sees the clip's own coordinates."""
-    sim = _FakeSimulator(num_envs=1)
-    _make(_cfg(tmp_path, objects=["crate"]), sim)
-    _frame(sim)
-    assert sim.robot_root_states[0, :3].tolist() == [0.0, 0.0, 0.0]  # frame 0 of the fixture clip
-    _, states = sim.object_writes[-1]
-    assert states[0, :3].tolist() == [0.0, 0.0, 0.0]

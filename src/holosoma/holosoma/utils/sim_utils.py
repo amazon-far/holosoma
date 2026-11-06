@@ -17,7 +17,7 @@ import traceback
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from types import TracebackType
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from loguru import logger
 from typing_extensions import ParamSpec, Self
@@ -27,14 +27,12 @@ from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.sensor import CameraSensorConfig, validate_camera_dict
-from holosoma.managers.terrain.manager import TerrainManager
 from holosoma.simulator.base_simulator.hooks import Phase
-from holosoma.utils.common import seeding
-from holosoma.utils.helpers import get_class
 from holosoma.utils.rate import RateLimiter
-from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.simulator_config import SimulatorType, get_simulator_type, set_simulator_type
-from holosoma.utils.torch_utils import to_torch
+
+if TYPE_CHECKING:
+    import torch
 
 _PERFORMANCE_LOG_INTERVAL_STEPS = 1000
 
@@ -302,6 +300,8 @@ def setup_simulation_environment(
 
     # Device selection - must happen before IsaacSim launcher setup
     if device is None:
+        from holosoma.utils.safe_torch_import import torch
+
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
     logger.info(f"Device: {device}")
 
@@ -324,6 +324,10 @@ def setup_simulation_environment(
 
 def _create_simulation_environment(config: ExperimentConfig | RunSimConfig, device: str) -> Any:
     """Construct the configured environment after its provider app is available."""
+    from holosoma.managers.terrain.manager import TerrainManager
+    from holosoma.utils.common import seeding
+    from holosoma.utils.helpers import get_class
+
     # Set random seed if specified (only for ExperimentConfig)
     if isinstance(config, ExperimentConfig) and config.training.seed is not None:
         seeding(config.training.seed, torch_deterministic=config.training.torch_deterministic)
@@ -687,6 +691,8 @@ class DirectSimulation:
         logger.debug("simulator.load_assets() completed - bridge should now be initialized")
 
         # Step 4: Direct sim2sim controls one environment at the origin.
+        from holosoma.utils.safe_torch_import import torch
+
         env_origins = torch.zeros(1, 3, device=self.device)
 
         # Create base_init_state from robot config
@@ -854,6 +860,8 @@ class DirectSimulation:
             + self.config.robot.init_state.lin_vel
             + self.config.robot.init_state.ang_vel
         )
+        from holosoma.utils.torch_utils import to_torch
+
         return to_torch(base_init_state_list, device=self.device, requires_grad=False)
 
     def _calculate_viewer_steps(self) -> int:

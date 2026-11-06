@@ -23,4 +23,4 @@ _HARNESS = Path(__file__).resolve().parents[1] / "dof_order_assert.py"
 
 
 def test_dof_order():
-    run_harness(_HARNESS, "--simulator", "mjwarp", label="mjwarp/dof-order", timeout=600)
+    run_harness(_HARNESS, "--simulator", "mjwarp", label="mjwarp/dof-order", timeout=600, reuse_process=True)

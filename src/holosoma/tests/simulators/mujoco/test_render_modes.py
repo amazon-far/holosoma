@@ -11,6 +11,8 @@ None viewer would crash. One scenario, two modes, both MuJoCo backends:
 headless=true runs everywhere (CI included): render() must be a safe no-op (no viewer).
 headless=false opens a real window and drives the headful render, so it needs a display
 and is skipped when DISPLAY is unset (CI). Each scenario runs in its own subprocess.
+mjwarp headless is covered by test_scene_spawn_warp's multi-env g1-largebox cell, so only
+its headful mode runs here.
 """
 
 from __future__ import annotations
@@ -28,14 +30,14 @@ from tests.simulators._run_harness import run_harness  # noqa: E402
 _HARNESS = Path(__file__).resolve().parents[1] / "scene_spawn_assert.py"
 
 
-def _backends():
-    yield pytest.param("mujoco", marks=pytest.mark.mujoco_classic)
+def _cases():
+    for headless in ("true", "false"):
+        yield pytest.param("mujoco", headless, marks=pytest.mark.mujoco_classic, id=f"mujoco-{headless}")
     if torch.cuda.is_available():
-        yield pytest.param("mjwarp", marks=pytest.mark.mujoco_warp)
+        yield pytest.param("mjwarp", "false", marks=pytest.mark.mujoco_warp, id="mjwarp-false")
 
 
-@pytest.mark.parametrize("simulator", list(_backends()))
-@pytest.mark.parametrize("headless", ["true", "false"])
+@pytest.mark.parametrize(("simulator", "headless"), list(_cases()))
 def test_render_headless_and_headful(simulator, headless):
     """Step + render a free-box scene; headless must not crash, headful must draw."""
     if headless == "false" and not os.environ.get("DISPLAY"):
@@ -50,4 +52,5 @@ def test_render_headless_and_headful(simulator, headless):
         headless,
         label=f"{simulator} render (headless={headless})",
         timeout=600,
+        reuse_process=headless == "true",
     )

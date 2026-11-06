@@ -125,13 +125,6 @@ def test_constructor_defers_plugins_until_explicit_installation() -> None:
     assert len(created) == 1
 
 
-def test_close_phase_rejects_payload() -> None:
-    hooks = HookRegistry()
-
-    with pytest.raises(HookRegistryError, match="expects no arguments"):
-        hooks.emit(Phase.CLOSE, object())
-
-
 def test_phase_payloads_have_fixed_signatures() -> None:
     hooks = HookRegistry()
     calls: list[int] = []

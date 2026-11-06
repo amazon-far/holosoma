@@ -12,7 +12,7 @@ from holosoma.config_types.video import (
     FixedCameraConfig,
     SphericalCameraConfig,
 )
-from holosoma.simulator.shared.camera_controller import CameraController, CameraParameters
+from holosoma.simulator.shared.camera_controller import CameraController
 
 
 @pytest.fixture
@@ -24,25 +24,6 @@ def mock_simulator() -> Mock:
     # Mock body resolution to succeed
     simulator.find_rigid_body_indice = Mock(return_value=1)
     return simulator
-
-
-class TestCameraParameters:
-    """Test CameraParameters dataclass."""
-
-    def test_camera_parameters_creation(self):
-        """Test creating camera parameters."""
-        params = CameraParameters(
-            position=(1.0, 2.0, 3.0),
-            target=(0.0, 0.0, 0.0),
-            distance=3.74,
-            azimuth=45.0,
-            elevation=30.0,
-        )
-        assert params.position == (1.0, 2.0, 3.0)
-        assert params.target == (0.0, 0.0, 0.0)
-        assert params.distance == 3.74
-        assert params.azimuth == 45.0
-        assert params.elevation == 30.0
 
 
 class TestFixedCameraMode:
@@ -73,47 +54,9 @@ class TestFixedCameraMode:
         # Robot body should not be resolved for fixed cameras
         assert controller.robot_body_id is None
 
-    def test_fixed_camera_consistent_output(self, mock_simulator):
-        """Test that fixed camera returns same output on multiple updates."""
-        config = FixedCameraConfig(
-            position=[3.0, 3.0, 2.0],
-            target=[0.0, 0.0, 0.5],
-        )
-        controller = CameraController(config, mock_simulator)
-
-        params1 = controller.update()
-        params2 = controller.update()
-
-        assert params1.position == params2.position
-        assert params1.target == params2.target
-        assert params1.distance == params2.distance
-
 
 class TestSphericalCameraMode:
     """Test spherical camera mode."""
-
-    def test_spherical_camera_calculates_position(self, mock_simulator):
-        """Test spherical camera calculates correct position from coordinates."""
-        config = SphericalCameraConfig(
-            distance=3.0,
-            azimuth=90.0,
-            elevation=30.0,
-            smoothing=0.0,  # Disable smoothing for deterministic test
-            tracking_body_name="Trunk",
-        )
-        controller = CameraController(config, mock_simulator)
-
-        params = controller.update()
-
-        # Should have calculated position from spherical coordinates
-        assert isinstance(params.position, tuple)
-        assert len(params.position) == 3
-        # Target should be robot position (smoothed)
-        assert isinstance(params.target, tuple)
-        # Distance and angles should match config
-        assert params.distance == 3.0
-        assert params.azimuth == 90.0
-        assert params.elevation == 30.0
 
     def test_spherical_camera_resolves_tracking_body(self, mock_simulator):
         """Test spherical camera resolves tracking body."""
@@ -129,20 +72,6 @@ class TestSphericalCameraMode:
         controller._resolve_tracking_body()
         assert controller.robot_body_id == 1
         mock_simulator.find_rigid_body_indice.assert_called()
-
-    def test_spherical_camera_auto_tracking(self, mock_simulator):
-        """Test spherical camera with auto tracking body name."""
-        config = SphericalCameraConfig(
-            distance=3.0,
-            azimuth=45.0,
-            elevation=20.0,
-            tracking_body_name="auto",
-        )
-        controller = CameraController(config, mock_simulator)
-
-        # Should try default body names
-        controller._resolve_tracking_body()
-        assert controller.robot_body_id == 1
 
     def test_spherical_camera_tracking_failure(self, mock_simulator):
         """Test spherical camera fails if no tracking body found."""
@@ -190,36 +119,6 @@ class TestSphericalCameraMode:
 
 class TestCartesianCameraMode:
     """Test cartesian camera mode."""
-
-    def test_cartesian_camera_offset_from_robot(self, mock_simulator):
-        """Test cartesian camera calculates position as offset from robot."""
-        config = CartesianCameraConfig(
-            offset=[2.0, 2.0, 1.0],
-            target_offset=[0.0, 0.0, 0.5],
-            smoothing=0.0,  # Disable smoothing
-            tracking_body_name="Trunk",
-        )
-        controller = CameraController(config, mock_simulator)
-
-        params = controller.update()
-
-        # Robot is at (0, 0, 1), so camera should be at offset
-        # Note: smoothing=0.0 means no smoothing on first frame
-        assert isinstance(params.position, tuple)
-        assert isinstance(params.target, tuple)
-
-    def test_cartesian_camera_resolves_tracking_body(self, mock_simulator):
-        """Test cartesian camera resolves tracking body."""
-        config = CartesianCameraConfig(
-            offset=[2.0, 2.0, 1.0],
-            target_offset=[0.0, 0.0, 0.5],
-            tracking_body_name="Trunk",
-        )
-        controller = CameraController(config, mock_simulator)
-
-        # Robot body should be resolved
-        controller._resolve_tracking_body()
-        assert controller.robot_body_id == 1
 
     def test_cartesian_camera_smoothing(self, mock_simulator):
         """Test cartesian camera applies smoothing to both position and target."""

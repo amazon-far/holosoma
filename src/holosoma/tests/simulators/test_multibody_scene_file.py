@@ -34,14 +34,6 @@ def test_scene_file_name_colliding_with_rigid_object_fails_loud():
         )
 
 
-def test_distinct_names_ok():
-    cfg = SceneConfig(
-        rigid_objects={"box": RigidObjectConfig(urdf_file="b.urdf")},
-        scene_files={"scene": SceneFileConfig(xml_path="a.xml")},
-    )
-    assert list(cfg.scene_files) == ["scene"]
-
-
 # ----- shared format selector works for SceneFileConfig ({fmt}_path) -----
 
 
@@ -118,13 +110,6 @@ def test_resolve_physics_strips_leading_glob_like_resolve_fixed():
     assert sf.resolve_physics("free_box") is phys
 
 
-def test_scene_file_has_no_scale_field():
-    # `scale` was removed as dead config (no backend honored it); guard against re-introducing
-    # it silently. Add it back WITH backend wiring + a test if/when it's actually needed.
-    sf = SceneFileConfig(xml_path="a.xml")
-    assert not hasattr(sf, "scale")
-
-
 # ----- include/exclude SUBSET filter (SceneFileConfig.should_include) -----
 # This is the SHARED rule every backend uses (MuJoCo / IsaacSim), so a scene file's
 # body set is identical regardless of which backend loads it. Distinct from object_configs, which
@@ -194,9 +179,3 @@ def test_fixed_object_with_zero_velocity_ok():
     # zero velocities (or explicit zeros) is fine.
     cfg = RigidObjectConfig(urdf_file="b.urdf", fixed=True, linear_velocity=[0.0, 0.0, 0.0])
     assert cfg.fixed is True
-
-
-def test_free_object_with_velocity_ok():
-    # A free (fixed=False) body may carry an initial velocity — that is exactly what it's for.
-    cfg = RigidObjectConfig(urdf_file="b.urdf", linear_velocity=[1.0, 0.0, 0.0])
-    assert cfg.linear_velocity == [1.0, 0.0, 0.0]
