@@ -78,6 +78,18 @@ class IsaacLab3Backend(IsaacLabBackend):
         )
         return factory()
 
+    def world_lidar_mount(self, name: str, position: Any, orientation: Any) -> tuple[str, Any]:
+        if self.options.physics_backend != "newton":
+            return super().world_lidar_mount(name, position, orientation)
+        from isaaclab.sensors import MultiMeshRayCasterCfg
+
+        # Newton's supported env-root path registers a bodyless site per world.
+        # An arbitrary child Xform is interpreted as a physics body by its
+        # legacy mesh caster. Put the fixed mount in the ray offset instead.
+        return self.env_regex_ns, MultiMeshRayCasterCfg.OffsetCfg(
+            pos=tuple(position), rot=self.config_quat_to_native(orientation)
+        )
+
     @staticmethod
     def tensor(value: Any) -> Any:
         return value.torch
