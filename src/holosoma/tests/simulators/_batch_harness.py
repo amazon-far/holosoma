@@ -15,7 +15,6 @@ import gc
 import importlib
 import io
 import json
-import os
 import sys
 import traceback
 import weakref
@@ -23,6 +22,23 @@ from pathlib import Path
 
 if sys.path and sys.path[0].endswith("tests/simulators"):
     sys.path.pop(0)
+
+from tests.simulators._sim_harness import run_and_hard_exit
+
+_live_cameras: weakref.WeakSet = weakref.WeakSet()
+
+
+def _track_cameras() -> None:
+    """Record every isaaclab ``Camera`` (TiledCamera included) built from here on in ``_live_cameras``."""
+    from isaaclab.sensors import Camera
+
+    init = Camera.__init__
+
+    def tracked_init(self, *args, **kwargs):
+        init(self, *args, **kwargs)
+        _live_cameras.add(self)
+
+    Camera.__init__ = tracked_init
 
 
 def _launch_settings(config, device) -> tuple:
@@ -58,6 +74,7 @@ def _share_isaacsim_app() -> None:
             stdout = sys.stdout
             apps.append(launch(config, device))
             sys.stdout = stdout
+            _track_cameras()
         elif settings != first[0]:
             raise RuntimeError(
                 f"cell needs Kit launch settings {settings}, but the shared app was launched with {first[0]}"
@@ -97,6 +114,9 @@ def _reset_isaacsim_stage() -> None:
     # Ray casters share a class-level mesh cache that is only dropped when the last instance dies.
     if RayCaster._instance_count:
         raise RuntimeError(f"{RayCaster._instance_count} RayCaster(s) outlived their cell")
+    # A camera's annotators are detached only when the camera is collected.
+    if _live_cameras:
+        raise RuntimeError(f"{len(_live_cameras)} camera(s) outlived their cell")
     if context_ref is not None and context_ref() is not None:
         raise RuntimeError("SimulationContext outlived its cell")
 
@@ -120,17 +140,29 @@ def main() -> int:
                 traceback.print_exc(file=buf)
                 rc = 1
         gc.collect()
+        # State the cell leaves behind fails that cell, and later cells don't run on top of it.
+        leaked = False
+        try:
+            _reset_isaacsim_stage()
+        except Exception:
+            traceback.print_exc(file=buf)
+            _fail_result_file(args)
+            rc, leaked = 1, True
         results[cell_id] = {"returncode": rc, "stdout": buf.getvalue()}
         print(buf.getvalue(), end="", flush=True)
         tmp = Path(f"{out_path}.tmp")
         tmp.write_text(json.dumps(results))
         tmp.replace(out_path)
-        _reset_isaacsim_stage()
+        if leaked:
+            break
     return 0
 
 
+def _fail_result_file(args: list[str]) -> None:
+    """Overwrite the cell's ``--result-file`` so a cell that passed its checks still reads as failed."""
+    if "--result-file" in args:
+        Path(args[args.index("--result-file") + 1]).write_text("FAIL: cell left state behind")
+
+
 if __name__ == "__main__":
-    rc = main()
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(rc)
+    run_and_hard_exit(main)
