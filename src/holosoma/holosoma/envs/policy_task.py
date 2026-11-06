@@ -205,8 +205,6 @@ class PolicyTask(BaseTask):
         self._compute_reward()
         self._update_log_dict()
         if env_ids.numel() == 0:
-            # Keep per-frame extras current when no environment resets this frame.
-            self._reset_task_state(env_ids)
             return env_ids, {}
         # Only timed-out envs are bootstrapped from their terminal observation (time-outs are a subset of resets).
         timeout_ids = self.time_out_buf.nonzero(as_tuple=False).flatten()

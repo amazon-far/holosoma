@@ -144,7 +144,9 @@ class _LoopTask(SimulationTask):
         self._next_viewer_time = 0.0
         self._rate_limiter = None
         self._shutdown_requested = False
-        self.randomization_manager = cast("RandomizationManager", SimpleNamespace(step=lambda: None))
+        self.randomization_manager = cast(
+            "RandomizationManager", SimpleNamespace(step=lambda: None, reset=lambda _env_ids: None)
+        )
         self._episode_active = torch.zeros(self.num_envs, dtype=torch.bool)
         self._init_buffers()
 

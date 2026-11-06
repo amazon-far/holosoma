@@ -233,6 +233,10 @@ class BaseTask:
         """Reset selected environments without advancing physics."""
         env_ids = self._ensure_long_tensor(env_ids)
         if env_ids.numel() == 0:
+            # Managers' reset hooks run every control frame, resets or not; there is no state to apply.
+            self._reset_task_state(env_ids)
+            self.randomization_manager.reset(env_ids)
+            self._reset_task_managers(env_ids)
             return
 
         # Initial reset starts an episode without inventing a preceding episode end.

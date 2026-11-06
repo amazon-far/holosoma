@@ -79,7 +79,7 @@ class _Env(LeggedRobotLocomotionManager):
     """Just enough of a locomotion env for its curriculum manager and checkpoint methods."""
 
     def __init__(self, **cfg_kwargs: Any) -> None:
-        # Deliberately skips the task __init__, which needs a simulator.
+        # Deliberately skips BaseTask.__init__, which needs a simulator.
         self.num_envs = 4
         self.device = "cpu"
         self.log_dict: dict[str, Any] = {}
@@ -125,8 +125,8 @@ def test_checkpoint_round_trip_restores_all_terms() -> None:
     _assert_scale_applied(resumed, 0.8)
     assert resumed.average_episode_length == pytest.approx(900.0)
 
-    # The first step after a restore moves the curriculum from the restored scale, not from initial_scale.
-    resumed.penalty.step()
+    # The first reset after a restore steps the curriculum from the restored scale, not from initial_scale.
+    resumed.penalty.reset(None)
     _assert_scale_applied(resumed, 0.8 * 1.00025)
 
 
@@ -174,7 +174,7 @@ class _TrackerOnlyEnv(PolicyTask):
     """A PolicyTask env (like whole-body tracking) whose only curriculum term is the episode-length tracker."""
 
     def __init__(self) -> None:
-        # Deliberately skips the task __init__, which needs a simulator.
+        # Deliberately skips BaseTask.__init__, which needs a simulator.
         self.num_envs = 4
         self.device = "cpu"
         cfg = CurriculumManagerCfg(
