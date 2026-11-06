@@ -100,7 +100,9 @@ class IsaacLab3Backend(IsaacLabBackend):
         import numpy as np
         from isaaclab.utils.math import convert_quat
 
-        return tuple(convert_quat(np.asarray(quat), to="xyzw"))
+        # NumPy scalars make downstream torch.tensor infer float64, while
+        # native ray patterns use float32. Config values must be Python floats.
+        return tuple(convert_quat(np.asarray(quat), to="xyzw").tolist())
 
     @staticmethod
     def config_quat_from_native(quat: Any) -> tuple[float, float, float, float]:
@@ -108,7 +110,7 @@ class IsaacLab3Backend(IsaacLabBackend):
         import numpy as np
         from isaaclab.utils.math import convert_quat
 
-        return tuple(convert_quat(np.asarray(quat), to="wxyz"))
+        return tuple(convert_quat(np.asarray(quat), to="wxyz").tolist())
 
     @staticmethod
     def quat_from_native(quat: Any) -> Any:
