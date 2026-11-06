@@ -11,13 +11,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import isaaclab.sim as sim_utils
-import isaacsim.core.utils.stage as stage_utils
+from holosoma.simulator.isaacsim.runtime import stage_utils
 from isaaclab.sensors import RayCasterCfg, patterns
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.terrains.utils import create_prim_from_mesh
 from pxr import Usd, UsdGeom
 
 from holosoma.simulator.isaacsim.prim_utils import resolve_robot_link_prim_expression
+from holosoma.simulator.isaacsim.backends import current
 
 if TYPE_CHECKING:
     from isaaclab.scene import InteractiveScene
@@ -77,6 +78,7 @@ def build_terrain_fixtures(
         If the terrain mesh type is unsupported.
     """
     terrain_state = terrain_manager.get_state("locomotion_terrain")
+    current().validate_friction(terrain_state.static_friction, terrain_state.dynamic_friction)
 
     height_scanner_cfg: RayCasterCfg | None = None
     if terrain_state.mesh_type not in ["fake", None]:
@@ -85,7 +87,7 @@ def build_terrain_fixtures(
         height_scanner_cfg = RayCasterCfg(
             prim_path=resolve_robot_link_prim_expression(robot_base_body_name),
             offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
-            attach_yaw_only=True,
+            ray_alignment="yaw",
             # Apply a grid pattern that is smaller than the resolution to only return one height value.
             pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[0.05, 0.05]),
             debug_vis=False,

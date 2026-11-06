@@ -163,10 +163,89 @@ class _IsaacSimReader:
         return (float(row[0]), float(row[1]), float(row[2]))
 
 
+class _IsaacLab3Reader(_IsaacSimReader):
+    """Read the engine's property buffers directly, independently of Holosoma's writers."""
+
+    def __init__(self, sim):
+        super().__init__(sim)
+        self._physics = sim.simulator_config.isaacsim.physics
+
+    def _property(self, asset, field):
+        import warp as wp
+
+        view = asset.root_view
+        if self._physics == "isaacsim_physx":
+            method = {"mass": "get_masses", "inertia": "get_inertias", "com": "get_coms"}
+            return wp.to_torch(getattr(view, method[field])())
+        if self._physics == "newton":
+            from isaaclab_newton.physics import NewtonManager
+
+            name = {"mass": "body_mass", "inertia": "body_inertia", "com": "body_com"}[field]
+            return wp.to_torch(view.get_attribute(name, NewtonManager.get_model())[:, 0])
+        from isaaclab_ov import tensor_types
+
+        prefix = "BODY_" if hasattr(asset, "num_joints") else "RIGID_BODY_"
+        suffix = {"mass": "MASS", "inertia": "INERTIA", "com": "COM_POSE"}[field]
+        return wp.to_torch(view.get_attribute(getattr(tensor_types, prefix + suffix)))
+
+    @staticmethod
+    def _backend_body(asset, bidx):
+        return asset.map_body_ids_to_backend([bidx])[0] if hasattr(asset, "num_joints") else bidx
+
+    def _body_property(self, body_name, field):
+        asset, bidx = self._asset_and_body(body_name)
+        values = self._property(asset, field)
+        if self._physics == "newton" or hasattr(asset, "num_joints"):
+            return values[0, self._backend_body(asset, bidx)]
+        return values[0]
+
+    def body_mass(self, body_name):
+        return float(self._body_property(body_name, "mass"))
+
+    def body_inertia(self, body_name):
+        row = self._body_property(body_name, "inertia").reshape(-1)
+        return float(row[0]), float(row[4]), float(row[8])
+
+    def body_com(self, body_name):
+        row = self._body_property(body_name, "com")
+        return float(row[0]), float(row[1]), float(row[2])
+
+    def _material(self, body_name, column, env_id=0):
+        import warp as wp
+
+        asset, _ = self._asset_and_body(body_name)
+        view = asset.root_view
+        if self._physics == "isaacsim_physx":
+            return float(wp.to_torch(view.get_material_properties())[env_id, 0, column])
+        if self._physics == "newton":
+            from isaaclab_newton.physics import NewtonManager
+
+            name = "shape_material_restitution" if column == 2 else "shape_material_mu"
+            return float(wp.to_torch(view.get_attribute(name, NewtonManager.get_model())[:, 0])[env_id, 0])
+        from isaaclab_ov import tensor_types
+
+        name = "SHAPE_FRICTION_AND_RESTITUTION"
+        if not hasattr(asset, "num_joints"):
+            name = "RIGID_BODY_" + name
+        return float(wp.to_torch(view.get_attribute(getattr(tensor_types, name)))[env_id, 0, column])
+
+    def geom_friction_for_body(self, body_name):
+        return self._material(body_name, 0)
+
+    def dynamic_friction_for_body(self, body_name):
+        return self._material(body_name, 1)
+
+    def restitution_for_body(self, body_name):
+        return self._material(body_name, 2)
+
+
 _READERS = {
     "mujoco": _MujocoReader,
     "mjwarp": _MujocoReader,
     "isaacsim": _IsaacSimReader,
+    "isaacsim6": _IsaacLab3Reader,
+    "isaacsim6-newton": _IsaacLab3Reader,
+    "isaacsim6-ovphysx": _IsaacLab3Reader,
 }
 
 
@@ -179,7 +258,7 @@ def main() -> int:
 
     from holosoma.config_values import simulator as sim_values
 
-    sim_cfg = getattr(sim_values, args.simulator)
+    sim_cfg = getattr(sim_values, args.simulator.replace("-", "_"))
     num_envs = args.num_envs if args.num_envs is not None else (1 if args.simulator == "mujoco" else 4)
     device = "cpu" if args.simulator == "mujoco" else "cuda:0"
 

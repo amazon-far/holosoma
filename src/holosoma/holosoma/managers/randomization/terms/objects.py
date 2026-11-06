@@ -513,26 +513,33 @@ def _isaacsim_randomize_body_damping(
     leaf: DistributionLike,
     sampler: TermSampler,
 ) -> None:
-    """Set free-body linear/angular damping per (object, env) on IsaacSim via the live USD schema.
+    """Set free-body linear/angular damping per (object, env) through the active backend.
 
-    Writes ``PhysxRigidBodyAPI.{axis}Damping`` on each object's per-env rigid-body prim to a keyed
-    sample (one value per (env, object), keyed by the object index). The running PhysX sim reflects
-    the edit on the next step. ``axis`` is "linear" or "angular". Unlike the mass/com/inertia paths,
-    this writes the USD attr directly, drawing through the bound ``sampler`` AND reproducibly.
+    Draw one keyed sample per (env, object). Kit PhysX consumes live USD schema edits;
+    standalone OVPhysX uses its control stage. Newton rejects this unsupported operation.
+    ``axis`` is "linear" or "angular".
 
-    The stage is traversed ONCE into a list of API-bearing prims (rather than re-walking the full
-    stage for every (name, env) pair); the per-(name, env) work then scans only that list.
+    For Kit, traverse the stage once into a list of API-bearing prims rather than re-walking
+    the full stage for every (name, env) pair.
     """
-    import omni.usd
-    from pxr import PhysxSchema
-
-    stage = omni.usd.get_context().get_stage()
     env_id_list = idx.to(device="cpu", dtype=torch.long).tolist()
     # One keyed value per (env, object), keyed by object index (stable across the run); object indices
     # as a [1, n_names] coord -> [n_env, n_names].
     obj_ids = torch.arange(len(names))[None, :]
     damping = sampler.draw(leaf, env_ids=idx, coords=(obj_ids,), device="cpu")
 
+    if simulator.backend.modern and simulator.simulator_config.isaacsim.physics != "isaacsim_physx":
+        for name_off, name in enumerate(names):
+            simulator.backend.properties(simulator.scene.rigid_objects[name]).set_body_damping(
+                axis, damping[:, name_off], idx
+            )
+        return
+
+    from pxr import PhysxSchema
+
+    from holosoma.simulator.isaacsim.prim_utils import get_current_stage
+
+    stage = get_current_stage()
     # One pass over the stage: collect (path_str, prim) for every PhysxRigidBodyAPI prim.
     rigid_prims = [
         (str(prim.GetPath()), prim) for prim in stage.Traverse() if prim.HasAPI(PhysxSchema.PhysxRigidBodyAPI)

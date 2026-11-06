@@ -26,16 +26,11 @@ if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step, steps_for_seconds
+from tests.simulators._sim_harness import SIMULATORS, build_run_sim_config, run_and_hard_exit, step, steps_for_seconds
+from tests.simulators.camera_geometry_assert import _red_mask
 
 if TYPE_CHECKING:
     from holosoma.config_types.sensor import CameraSensorConfig
-
-
-def _red_mask(env_rgb):
-    """Boolean [H,W] mask of red-panel pixels (R clearly dominant), same rule as the RGB test."""
-    r, g, b = env_rgb[..., 0].to(int), env_rgb[..., 1].to(int), env_rgb[..., 2].to(int)
-    return (r > g + 40) & (r > b + 40)
 
 
 def _check_depth(rgb, depth, cam_to_panel, panel_half, fov_deg, label, *, expect_infinite_no_hit: bool):
@@ -94,7 +89,7 @@ def _check_depth(rgb, depth, cam_to_panel, panel_half, fov_deg, label, *, expect
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATORS)
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)

@@ -577,6 +577,19 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
     saved_simulator = copy.deepcopy(saved["simulator"])
     saved_simulator["config"].pop("contact_sensor_history_length")
     saved_warp = saved_simulator["config"].pop("mujoco_warp")
+    # New runtime fields must preserve the old Isaac 5.1/RTX behavior when absent
+    # from a saved checkpoint, including checkpoints for other simulators.
+    saved_simulator["config"]["isaacsim"].update(
+        runtime="5.1",
+        physics="isaacsim_physx",
+        solver=None,
+        renderer="isaacsim_rtx",
+        visualizers=None,
+        physics_options={},
+        solver_options={},
+        renderer_options={},
+        visualizer_options={},
+    )
     loaded_simulator = copy.deepcopy(loaded["simulator"])
     loaded_simulator["config"]["sim"].pop("mujoco")
     assert loaded_simulator == saved_simulator
@@ -585,7 +598,9 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
     assert loaded["robot"]["asset"]["link_physics"] == _without(saved["robot"]["asset"]["link_physics"])
     assert "apply_dof_armature_in_isaacgym" not in loaded["robot"]
     for name, sensor in saved["sensor"].items():
-        assert loaded["sensor"][name] == _without(sensor)
+        expected_sensor = copy.deepcopy(_without(sensor))
+        expected_sensor["isaacsim"]["renderer"] = {"backend": None, "options": {}}
+        assert loaded["sensor"][name] == expected_sensor
     saved_material_term = saved["randomization"]["setup_terms"].get(_MATERIAL_TERM)
     if saved_material_term is not None:
         loaded_material = loaded["randomization"]["setup_terms"][_MATERIAL_TERM]["params"]["material"]

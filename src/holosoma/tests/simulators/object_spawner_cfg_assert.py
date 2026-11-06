@@ -107,8 +107,10 @@ def _check_friction_symmetry(select_spawn_cfg) -> None:
     import tempfile
 
     from holosoma.config_types.scene import IsaacSimPhysicsConfig, PhysicsConfig
+    from holosoma.simulator.isaacsim.backends import current
 
-    fr = IsaacSimPhysicsConfig(static_friction=0.31, dynamic_friction=0.27, restitution=0.42)
+    dynamic_friction = 0.31 if current().single_friction else 0.27
+    fr = IsaacSimPhysicsConfig(static_friction=0.31, dynamic_friction=dynamic_friction, restitution=0.42)
     phys = PhysicsConfig(isaacsim=fr)
 
     tmp = Path(tempfile.mkdtemp(prefix="holosoma_urdf_fric_"))
@@ -124,7 +126,7 @@ def _check_friction_symmetry(select_spawn_cfg) -> None:
         mat = spawn.physics_material
         assert mat is not None, f"{fmt}+friction produced no physics_material (friction dropped!)"
         assert _approx(mat.static_friction, 0.31), f"{fmt}: static_friction {mat.static_friction} != 0.31"
-        assert _approx(mat.dynamic_friction, 0.27), f"{fmt}: dynamic_friction {mat.dynamic_friction} != 0.27"
+        assert _approx(mat.dynamic_friction, dynamic_friction), f"{fmt}: dynamic_friction changed"
         assert _approx(mat.restitution, 0.42), f"{fmt}: restitution {mat.restitution} != 0.42"
 
     # No isaacsim override => no physics_material attached (asset keeps its authored material).
@@ -147,6 +149,7 @@ def _check_robot_link_physics_cfg() -> None:
       - friction/restitution and both combine modes to physics_material_cfg (the bound-material channel).
     """
     from holosoma.config_types.scene import IsaacSimPhysicsConfig, PhysicsConfig, PhysXPhysicsConfig
+    from holosoma.simulator.isaacsim.backends import current
     from holosoma.simulator.isaacsim.converters import (
         physics_to_collision_props,
         physics_to_mass_props,
@@ -155,12 +158,13 @@ def _check_robot_link_physics_cfg() -> None:
     from holosoma.simulator.isaacsim.object_spawner import physics_material_cfg
 
     # A link_physics exercising every robot channel: physx, collision offsets, material with combines.
+    dynamic_friction = 0.6 if current().single_friction else 0.55
     lp = PhysicsConfig(
         density=250.0,
         physx=PhysXPhysicsConfig(linear_damping=0.4, angular_damping=0.5, max_linear_velocity=12.0),
         isaacsim=IsaacSimPhysicsConfig(
             static_friction=0.6,
-            dynamic_friction=0.55,
+            dynamic_friction=dynamic_friction,
             restitution=0.2,
             friction_combine_mode="max",
             restitution_combine_mode="min",
@@ -189,7 +193,7 @@ def _check_robot_link_physics_cfg() -> None:
 
     # friction/restitution and both combine modes to material (the channel a per-shape value write can't carry).
     mat = physics_material_cfg(lp)
-    assert mat is not None and _approx(mat.static_friction, 0.6) and _approx(mat.dynamic_friction, 0.55)
+    assert mat is not None and _approx(mat.static_friction, 0.6) and _approx(mat.dynamic_friction, dynamic_friction)
     assert _approx(mat.restitution, 0.2), "robot material restitution dropped"
     assert mat.friction_combine_mode == "max", "robot friction_combine_mode dropped"
     assert mat.restitution_combine_mode == "min", "robot restitution_combine_mode dropped"
@@ -274,11 +278,12 @@ def main() -> int:
     parser.add_argument("--result-file", default=None, help="write 'OK' here after all checks pass")
     args = parser.parse_args()
 
-    # Boot a minimal headless IsaacSim app so isaaclab.sim (carb) is importable.
-    from isaaclab.app import AppLauncher
+    from holosoma.utils.sim_utils import close_simulation_app, setup_isaaclab_launcher, setup_simulator_imports
+    from tests.simulators._sim_harness import build_run_sim_config
 
-    app_launcher = AppLauncher(headless=True)
-    simulation_app = app_launcher.app
+    config = build_run_sim_config("isaacsim", "empty", "g1-29dof", "terrain_locomotion_plane")
+    setup_simulator_imports(config)
+    simulation_app = setup_isaaclab_launcher(config)
 
     try:
         import isaaclab.sim as sim_utils
@@ -291,14 +296,14 @@ def main() -> int:
         _check_robot_link_physics_cfg()
     except BaseException:
         print("SPAWNER CFG ASSERT FAILED:\n" + traceback.format_exc(), flush=True)
-        simulation_app.close()
+        close_simulation_app(simulation_app)
         return 1
 
     print("SPAWNER CFG OK: all spawn-cfg invariants verified", flush=True)
     if args.result_file:
         with open(args.result_file, "w") as f:
             f.write("OK\n")
-    simulation_app.close()
+    close_simulation_app(simulation_app)
     return 0
 
 

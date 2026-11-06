@@ -50,6 +50,7 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 # Reuse static_move_assert's scene/build/step helpers so the scene (robot + freebox + pillar) is
 # identical to the passing static-move test.
 from holosoma.simulator.shared.object_registry import ObjectType
+from tests.simulators._sim_harness import SIMULATORS
 from tests.simulators.static_move_assert import (
     SETTLE_SECONDS,
     _build,
@@ -68,7 +69,7 @@ STEPS_AFTER_WRITE = 2
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Unified all_root_states (robot+object) probe.")
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATORS)
     parser.add_argument("--num-envs", type=int, default=None)
     args = parser.parse_args()
     num_envs = args.num_envs if args.num_envs is not None else (1 if args.simulator == "mujoco" else 4)
@@ -229,32 +230,40 @@ def main() -> int:
     # freejoint angular velocity body-local, so the angular check specifically guards that
     # conversion FOR THE ROBOT, not just objects.
     #
-    # Read-back timing (verified on-cluster, all 4 backends):
+    # Read-back timing:
     #   - MuJoCo (classic + warp) reflects a set_actor_states velocity write IMMEDIATELY
     #     (pre-step) for BOTH robot and object — so we read back with no step and compare EXACTLY,
     #     no dynamics/gravity drift to mask a frame bug. (Note: some backends have a one-step read
     #     latency where a free object's velocity transiently reads 0 at exactly step 1 then recovers
     #     from step 2 — irrelevant here since we read pre-step, but it's why we do NOT step on the
     #     immediate path.)
-    #   - IsaacSim refreshes its read cache (.data.root_state_w) from PhysX only on a sim step, so a
-    #     pre-step read is stale. For IsaacSim only, lift the actors clear of the ground (free
-    #     flight) and step a couple times. After a physics step the velocity is no longer the exact
-    #     written value (dynamics integrate), so for IsaacSim we verify the FRAME rather than an
+    #   - The Isaac PhysX paths refresh their read cache (.data.root_state_w) on a sim step, so a
+    #     pre-step read is stale. Lift the actors clear of the ground (free flight) and step a
+    #     couple times. After a physics step the velocity is no longer the exact written value
+    #     (dynamics integrate), so on those paths we verify the FRAME rather than an
     #     exact value: x/y are conserved (a body-local<->world frame bug WOULD corrupt the
     #     horizontal components, so this still catches a frame error) and z decreases under gravity
     #     (sign + lower-bounded magnitude), while angular is ~conserved for a torque-free rigid body.
     is_isaacsim = sim.get_simulator_type().value == "isaacsim"
+    # Native Newton runs FK at the write boundary without advancing time. Read
+    # its exact write here: a free articulation's root angular velocity need not
+    # stay constant while its joints evolve during subsequent physics steps.
+    needs_refresh_step = is_isaacsim and not (sim.backend.modern and sim.backend.config.physics == "newton")
     world_lin = torch.tensor([0.5, -0.3, 0.0], device=sim.sim_device)  # z=0 so gravity is the only z term
     world_ang = torch.tensor([0.4, 0.5, -0.6], device=sim.sim_device)
     vel_state = sim.get_actor_states(names, env_ids).clone()
-    if is_isaacsim:
+    if needs_refresh_step:
         vel_state[:, 2] += 1.5  # lift clear of the ground -> free flight over the refresh steps
     vel_state[:, 7:10] = world_lin
     vel_state[:, 10:13] = world_ang
     sim.set_actor_states(names, env_ids, vel_state)
     sim.write_state_updates()
+    if is_isaacsim and not needs_refresh_step:
+        # Refresh Holosoma's snapshot proxy from the native lazy buffer without
+        # integrating dynamics; the setter invalidates that native buffer.
+        sim.refresh_sim_tensors()
 
-    if is_isaacsim:
+    if needs_refresh_step:
         REFRESH_STEPS = 2  # clear IsaacSim's PhysX read-cache latency (introduces small dynamics drift)
         _step(sim, REFRESH_STEPS)
         LIN_ATOL, ANG_ATOL = 3e-2, 3e-2
@@ -265,7 +274,7 @@ def main() -> int:
         lin_z_ok = bool(((vel_back[:, 9] <= 1e-3) & (vel_back[:, 9] >= -max_z_drop)).all())
         robot_lin_ok = torch.allclose(vel_back[:num_envs, 7:9], world_lin[:2].expand(num_envs, 2), atol=LIN_ATOL)
     else:
-        # MuJoCo (classic + warp) reflects the velocity write IMMEDIATELY -> read back
+        # MuJoCo and native Newton reflect the velocity write IMMEDIATELY -> read back
         # with NO step and require the write to round-trip EXACTLY (no dynamics/gravity to mask a bug).
         LIN_ATOL, ANG_ATOL = 1e-3, 1e-3
         vel_back = sim.get_actor_states(names, env_ids)

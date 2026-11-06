@@ -29,6 +29,7 @@ src/holosoma/holosoma/data/robots/converted_rank*/
 # data/robots/<robot>/converted_rank<local_rank>/ (isaacsim_articulation_cfg.py).
 src/holosoma/holosoma/data/robots/*/converted/
 src/holosoma/holosoma/data/robots/*/converted_rank*/
+src/holosoma/holosoma/data/robots/*/converted_lab[23]_rank*/
 
 # Virtual environments
 .venv/

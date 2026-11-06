@@ -54,22 +54,31 @@ def _legacy_actuator_cfgs(robot):
 def _instantiate_actuator(cfg, joint_names):
     import torch
 
+    from holosoma.simulator.isaacsim.backends import current
+
     count = len(joint_names)
     defaults = torch.zeros((2, count), dtype=torch.float32)
+    kwargs = {
+        "joint_names": joint_names,
+        "joint_ids": slice(None),
+        "num_envs": 2,
+        "device": "cpu",
+        "stiffness": defaults,
+        "damping": defaults,
+        "effort_limit": torch.full_like(defaults, 1.0e6),
+        "velocity_limit": torch.full_like(defaults, 1.0e6),
+    }
+    if current().modern:
+        from isaaclab.utils import instantiate
+
+        return instantiate(copy.deepcopy(cfg), **kwargs)
     return cfg.class_type(
         cfg=copy.deepcopy(cfg),
-        joint_names=joint_names,
-        joint_ids=slice(None),
-        num_envs=2,
-        device="cpu",
-        stiffness=defaults,
-        damping=defaults,
         armature=defaults,
         friction=defaults,
         dynamic_friction=defaults,
         viscous_friction=defaults,
-        effort_limit=torch.full_like(defaults, 1.0e6),
-        velocity_limit=torch.full_like(defaults, 1.0e6),
+        **kwargs,
     )
 
 
@@ -78,13 +87,15 @@ def _check_grouped_actuator_config() -> None:
     from isaaclab.actuators import IdealPDActuator
     from isaaclab.utils.types import ArticulationActions
 
+    from holosoma.simulator.isaacsim.backends import current
     from holosoma.simulator.isaacsim.isaacsim_articulation_cfg import build_robot_articulation_cfg
 
     robot = _synthetic_robot_config()
     articulation_cfg = build_robot_articulation_cfg(robot)
     assert list(articulation_cfg.actuators) == ["all_dofs"]
     grouped_cfg = articulation_cfg.actuators["all_dofs"]
-    assert grouped_cfg.class_type is IdealPDActuator
+    if not current().modern:
+        assert grouped_cfg.class_type is IdealPDActuator
     assert grouped_cfg.joint_names_expr == robot.dof_names
 
     expected_properties = {
@@ -103,10 +114,19 @@ def _check_grouped_actuator_config() -> None:
     # every property follows its joint name rather than the source-list position.
     simulator_names = list(reversed(robot.dof_names))
     grouped = _instantiate_actuator(grouped_cfg, simulator_names)
+    assert isinstance(grouped, IdealPDActuator)
     for property_name, values in expected_properties.items():
         source_mapping = dict(zip(robot.dof_names, values, strict=False))
         expected = torch.tensor([[source_mapping[name] for name in simulator_names]] * 2)
-        assert torch.equal(getattr(grouped, property_name), expected), f"{property_name} resolved by source order"
+        if current().modern and property_name in ("armature", "friction"):
+            # Lab 3's ActuatorCollection owns joint properties. Use its public
+            # parameter resolver; the motor model owns gains and saturation.
+            from isaaclab.actuators.actuator_base import resolve_joint_parameter
+
+            resolved = resolve_joint_parameter(getattr(grouped_cfg, property_name), 0.0, simulator_names, 2, "cpu")
+        else:
+            resolved = getattr(grouped, property_name)
+        assert torch.equal(resolved, expected), f"{property_name} resolved by source order"
 
     # Compare the grouped model against the former one-model-per-joint implementation. Include
     # unsaturated commands and both signs of all-joint saturation.
@@ -166,6 +186,7 @@ def _check_dof_position_limits() -> None:
 def _check_contact_sensor_config() -> None:
     from isaaclab.sensors.contact_sensor.contact_sensor_data import ContactSensorData
 
+    from holosoma.simulator.isaacsim.backends import current
     from holosoma.simulator.isaacsim.isaacsim_articulation_cfg import build_contact_sensor_cfg
 
     cfg = build_contact_sensor_cfg(debug_vis=False)
@@ -179,6 +200,11 @@ def _check_contact_sensor_config() -> None:
     # net_forces_w is the only ContactSensorData field Holosoma reads. It remains available when
     # duration tracking is disabled; only the unused air/contact-time values stay unallocated.
     data = ContactSensorData()
+    if current().modern:
+        # Native data buffers are allocated by the sensor, not its data class.
+        # The live contact_substep_assert checks the disabled duration buffers.
+        assert isinstance(type(data).net_forces_w, property)
+        return
     assert hasattr(data, "net_forces_w")
     assert data.last_air_time is None
     assert data.current_air_time is None
@@ -191,21 +217,24 @@ def main() -> int:
     parser.add_argument("--result-file", default=None, help="write 'OK' here after all checks pass")
     args = parser.parse_args()
 
-    from isaaclab.app import AppLauncher
+    from holosoma.utils.sim_utils import close_simulation_app, setup_isaaclab_launcher, setup_simulator_imports
+    from tests.simulators._sim_harness import build_run_sim_config
 
-    simulation_app = AppLauncher(headless=True).app
+    config = build_run_sim_config("isaacsim", "empty", "g1-29dof", "terrain_locomotion_plane")
+    setup_simulator_imports(config)
+    simulation_app = setup_isaaclab_launcher(config)
     try:
         _check_grouped_actuator_config()
         _check_dof_position_limits()
         _check_contact_sensor_config()
     except BaseException:
         print("ISAACSIM ARTICULATION CFG ASSERT FAILED:\n" + traceback.format_exc(), flush=True)
-        simulation_app.close()
+        close_simulation_app(simulation_app)
         return 1
 
     if args.result_file:
         Path(args.result_file).write_text("OK\n")
-    simulation_app.close()
+    close_simulation_app(simulation_app)
     return 0
 
 

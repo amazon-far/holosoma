@@ -283,7 +283,14 @@ dual_cam = {
 # resolver. Identity mount looks down the panel's local -Z.
 actor_cam = {
     "panel_cam": CameraSensorConfig(
-        mount=SensorMountConfig(target_kind="actor", target="panel", position=[0.0, 0.0, 0.0]),
+        # Keep the optical center outside the opaque panel and look back at
+        # the robot, giving actor motion an observable geometric consequence.
+        mount=SensorMountConfig(
+            target_kind="actor",
+            target="panel",
+            position=[-0.1, 0.0, 0.0],
+            orientation=[_C, 0.0, -_S, 0.0],
+        ),
         width=64,
         height=64,
         vertical_fov=60.0,

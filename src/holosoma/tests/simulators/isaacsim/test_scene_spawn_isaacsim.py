@@ -84,8 +84,11 @@ def test_friction_slide_multi_env():
     )
 
 
-def test_launcher_settings_and_default_sun():
+@pytest.mark.parametrize("rendering_mode", ["performance", "balanced", "quality"])
+def test_launcher_settings_and_default_sun(request, rendering_mode):
     """Read launcher settings and the default scene light back from live IsaacSim."""
+    if request.config.getoption("--isaac-preset", default="isaacsim") == "isaacsim6-ovphysx":
+        pytest.skip("OVPhysX is standalone; Kit launch options are checked by the rejection test.")
     run_harness(
         _HARNESS,
         "--simulator",
@@ -94,7 +97,7 @@ def test_launcher_settings_and_default_sun():
         "g1-largebox",
         "--probe-isaacsim-render-config",
         "--rendering-mode",
-        "quality",
+        rendering_mode,
         "--kit-arg-sentinel",
         "pr22-audit",
         "--scene-lights",
@@ -116,6 +119,42 @@ def test_default_sun_can_be_disabled():
         "--scene-lights",
         "empty",
         label="isaacsim/render-config default sun disabled",
+        timeout=900,
+    )
+
+
+def test_asset_contracts_and_recording_nonzero_env(tmp_path):
+    """Check robot mass, rotated static USD, and video from environment 1."""
+    run_harness(
+        _HARNESS,
+        "--simulator",
+        "isaacsim",
+        "--scene",
+        "static-box-usd",
+        "--num-envs",
+        "2",
+        "--probe-asset-contracts",
+        "--record",
+        str(tmp_path),
+        "--record-env-id",
+        "1",
+        label="isaacsim/asset-contracts and recording env 1",
+        timeout=900,
+    )
+    assert list(tmp_path.rglob("*.mp4")), "No encoded video was saved"
+
+
+def test_overlapping_environments_are_collision_isolated():
+    run_harness(
+        _HARNESS,
+        "--simulator",
+        "isaacsim",
+        "--scene",
+        "usd-box",
+        "--num-envs",
+        "2",
+        "--probe-env-isolation",
+        label="isaacsim/overlapping environment collision isolation",
         timeout=900,
     )
 

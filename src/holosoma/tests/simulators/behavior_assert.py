@@ -39,7 +39,7 @@ from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.sampler import STAGE_RESET, STAGE_SETUP, TermSampler
 from holosoma.utils.sim_utils import setup_simulation_environment
 from tests.simulators import _scene_presets
-from tests.simulators._sim_harness import build_run_sim_config, step, steps_for_seconds
+from tests.simulators._sim_harness import SIMULATORS, build_run_sim_config, step, steps_for_seconds
 
 GRAVITY = 9.81
 
@@ -372,6 +372,8 @@ def assert_dr_damping_governs(ctx):
         f"  dr-damp: damped vx {float(vd0[0]):.3f}->{float(vd1[0]):.3f} (loss {float(damped_loss[0]):.3f}) "
         f"control loss {float(control_loss[0]):.3f}  damped>control_all={ok}"
     )
+    if not ok:
+        print(f"  per-env speed losses: damped={damped_loss.tolist()}, control={control_loss.tolist()}")
     return ok
 
 
@@ -1399,7 +1401,7 @@ def main() -> int:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenario", required=True, choices=sorted(SCENARIOS))
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATORS)
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)

@@ -51,20 +51,21 @@ schema handling. This is a temporary work-around until IsaacLab has these capabi
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
-import isaacsim.core.utils.prims as prim_utils
-import isaacsim.core.utils.stage as stage_utils
-import omni.kit.commands
-import omni.log
+from holosoma.simulator.isaacsim.runtime import prim_utils
+from holosoma.simulator.isaacsim.runtime import stage_utils
+from loguru import logger
 from isaaclab.sim import schemas
 from isaaclab.sim.utils import bind_physics_material, bind_visual_material, clone, select_usd_variants
-from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdPhysics, UsdShade
+from pxr import Gf, Usd, UsdGeom, UsdPhysics, UsdShade
 
-from holosoma.simulator.isaacsim.spawners import from_files_cfg
 from holosoma.simulator.isaacsim.spawners.schema_utils import ensure_api_and_modify
 from holosoma.simulator.isaacsim.prim_utils import set_instanceable
+from holosoma.simulator.isaacsim.backends import current
 
-import carb
+if TYPE_CHECKING:
+    from holosoma.simulator.isaacsim.spawners import from_files_cfg
 
 
 def create_prim(
@@ -88,7 +89,7 @@ def create_prim(
     translation : array-like, optional
         Translation [x, y, z] for the prim's local translate op.
     orientation : array-like, optional
-        Orientation quaternion [w, x, y, z] for the prim's local orient op.
+        Native Isaac Lab quaternion (WXYZ in Lab 2, XYZW in Lab 3).
     scale : array-like, optional
         Scale [x, y, z] for the prim's local scale op.
 
@@ -119,10 +120,10 @@ def create_prim(
 
     # Add reference with logging
     if source_path:
-        carb.log_info(f"Loading {source_path} from {usd_path}")
+        logger.info(f"Loading {source_path} from {usd_path}")
         success = prim.GetReferences().AddReference(assetPath=usd_path, primPath=source_path)
     else:
-        carb.log_info(f"Loading from {usd_path}")
+        logger.info(f"Loading from {usd_path}")
         success = prim.GetReferences().AddReference(usd_path)
 
     if not success:
@@ -139,8 +140,8 @@ def create_prim(
                 Gf.Vec3d(float(translation[0]), float(translation[1]), float(translation[2]))
             )
         if orientation is not None:
-            # orientation is (w, x, y, z); GfQuatd takes (real, imaginary-vec).
-            w, x, y, z = (float(c) for c in orientation)
+            # USD always takes (real, imaginary), independent of the Lab version.
+            w, x, y, z = current().quaternion_to_wxyz([float(c) for c in orientation])
             xformable.AddOrientOp(precision=double).Set(Gf.Quatd(w, Gf.Vec3d(x, y, z)))
         if scale is not None:
             xformable.AddScaleOp(precision=double).Set(Gf.Vec3d(float(scale[0]), float(scale[1]), float(scale[2])))
@@ -218,8 +219,8 @@ def _collapse_to_single_rigid_body(stage: "Usd.Stage", prim_path: str) -> None:
         if prim.GetPath() == root_prim.GetPath():
             continue
         prim.RemoveAPI(UsdPhysics.RigidBodyAPI)
-        if prim.HasAPI(PhysxSchema.PhysxRigidBodyAPI):
-            prim.RemoveAPI(PhysxSchema.PhysxRigidBodyAPI)
+        if "PhysxRigidBodyAPI" in prim.GetAppliedSchemas():
+            prim.RemoveAPI("PhysxRigidBodyAPI")
 
     remaining = [p for p in Usd.PrimRange(root_prim) if p.HasAPI(UsdPhysics.RigidBodyAPI)]
     if len(remaining) != 1:
@@ -320,7 +321,7 @@ def spawn_from_usd(
         The translation to apply to the prim w.r.t. its parent prim. Defaults to None, in which
         case the translation specified in the USD file is used.
     orientation : tuple[float, float, float, float], optional
-        The orientation in (w, x, y, z) to apply to the prim w.r.t. its parent prim. Defaults to None,
+        The native Isaac Lab quaternion to apply w.r.t. the parent prim. Defaults to None,
         in which case the orientation specified in the USD file is used.
 
     Returns
@@ -365,7 +366,7 @@ def _spawn_from_usd_file(
         The translation to apply to the prim w.r.t. its parent prim. Defaults to None, in which
         case the translation specified in the generated USD file is used.
     orientation : tuple[float, float, float, float], optional
-        The orientation in (w, x, y, z) to apply to the prim w.r.t. its parent prim. Defaults to None,
+        The native Isaac Lab quaternion to apply w.r.t. the parent prim. Defaults to None,
         in which case the orientation specified in the generated USD file is used.
 
     Returns
@@ -394,7 +395,7 @@ def _spawn_from_usd_file(
             scale=cfg.scale,
         )
     else:
-        omni.log.warn(f"A prim already exists at prim path: '{prim_path}'.")
+        logger.warning(f"A prim already exists at prim path: '{prim_path}'.")
         prim = prim_utils.get_prim_at_path(prim_path)
 
     # modify variants

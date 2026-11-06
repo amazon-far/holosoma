@@ -30,6 +30,8 @@ from isaaclab.assets import Articulation, RigidObject
 from isaaclab.envs import ManagerBasedEnv
 from isaaclab.managers import SceneEntityCfg
 
+from holosoma.simulator.isaacsim.backends import current
+
 from holosoma.utils.sampler import DistributionSpec, DistributionLike, TermSampler, quantiles
 
 
@@ -110,7 +112,7 @@ def randomize_rigid_body_mass(
     # setup-stage (run once), so onto-current == onto-default at startup; composing onto current is
     # what keeps "the same config means the same thing" across backends (a reset-to-default here made
     # a second call return ``draw - prior_draw`` instead of ``draw`` — a cross-backend divergence).
-    masses = asset.root_physx_view.get_masses()
+    masses = current().properties(asset).get_masses()
     mass_before = masses[env_ids[:, None], body_ids].clone()
 
     # ``axis`` int coord = stream; body_ids as a [1, n_body] coord -> [n_env, n_body] to match the index.
@@ -126,17 +128,20 @@ def randomize_rigid_body_mass(
         raise ValueError(f"Unknown operation: '{operation}'. Use 'add', 'abs' or 'scale'.")
 
     masses[env_ids[:, None], body_ids] = masses[env_ids[:, None], body_ids].clamp(min=min_mass)
-    asset.root_physx_view.set_masses(masses, env_ids)
+    current().properties(asset).set_masses(masses, env_ids)
 
     if recompute_inertia:
         # Scale inertia by the per-body mass ratio THIS call produced (commutes with inertia DR).
         ratios = masses[env_ids[:, None], body_ids] / mass_before.clamp(min=min_mass)
-        inertias = asset.root_physx_view.get_inertias()
-        if isinstance(asset, Articulation):
+        inertias = current().properties(asset).get_inertias()
+        # Lab 3's Articulation is a factory, not the runtime asset's base class.
+        # Both adapters expose [env, body, 9] for articulations and [env, 9]
+        # for single rigid objects.
+        if inertias.ndim == 3:
             inertias[env_ids[:, None], body_ids] *= ratios[..., None]
         else:
             inertias[env_ids] *= ratios
-        asset.root_physx_view.set_inertias(inertias, env_ids)
+        current().properties(asset).set_inertias(inertias, env_ids)
 
 
 def randomize_body_com(
@@ -171,7 +176,7 @@ def randomize_body_com(
         f"(asset_cfg.body_names={asset_cfg.body_names!r}); CoM DR targets one body (the torso)."
     )
 
-    coms = asset.root_physx_view.get_coms()
+    coms = current().properties(asset).get_coms()
     coms[env_ids[:, None], body_ids] = env.default_coms[env_ids[:, None], body_ids].clone()
 
     # One (x,y,z) sample per env (first resolved body's row); CoM DR targets the torso, a single body.
@@ -187,7 +192,7 @@ def randomize_body_com(
     else:
         raise ValueError(f"Unknown operation: '{operation}'. Use 'add', 'abs' or 'scale'.")
 
-    asset.root_physx_view.set_coms(coms, env_ids)
+    current().properties(asset).set_coms(coms, env_ids)
 
 
 def randomize_rigid_body_inertia(
@@ -216,7 +221,7 @@ def randomize_rigid_body_inertia(
 
     body_ids = _resolve_body_ids(asset, asset_cfg)
 
-    inertias_original = asset.root_physx_view.get_inertias()  # (num_envs, 9) or (num_envs, num_bodies, 9)
+    inertias_original = current().properties(asset).get_inertias()  # (num_envs, 9) or (num_envs, num_bodies, 9)
     if inertias_original.ndim == 2:
         inertias = inertias_original.unsqueeze(1).clone()  # (num_envs, 1, 9)
     else:
@@ -253,7 +258,7 @@ def randomize_rigid_body_inertia(
     if inertias_original.ndim == 2:
         inertias = inertias.squeeze(1)
 
-    asset.root_physx_view.set_inertias(inertias, env_ids)
+    current().properties(asset).set_inertias(inertias, env_ids)
 
 
 def randomize_rigid_body_material(
@@ -311,6 +316,21 @@ def randomize_rigid_body_material(
     if all(spec is None for spec in channel_specs):
         return
 
+    single_friction = current().single_friction
+    if single_friction:
+        if (
+            static_friction_spec is not None
+            and dynamic_friction_spec is not None
+            and static_friction_spec != dynamic_friction_spec
+        ):
+            raise ValueError(
+                "Newton has one friction coefficient. Set static and dynamic friction to the same distribution, "
+                "or specify only one; use PhysX for independent coefficients."
+            )
+        # One physical coefficient gets one keyed draw. Mirroring the same draw
+        # preserves the legacy material shape without discarding a sampled value.
+        channel_specs = (static_friction_spec or dynamic_friction_spec, None, restitution_spec)
+
     asset: RigidObject | Articulation = env.scene[asset_cfg.name]
 
     if env_ids is None:
@@ -318,8 +338,8 @@ def randomize_rigid_body_material(
     else:
         env_ids = env_ids.cpu()
 
-    materials = asset.root_physx_view.get_material_properties()
-    total_num_shapes = asset.root_physx_view.max_shapes
+    materials = current().properties(asset).get_material_properties()
+    total_num_shapes = current().properties(asset).max_shapes
     samples = materials[env_ids].clone()  # (n_env, n_shapes, 3); start from current, overwrite chosen cols
 
     # ``per_env`` picks the shape coordinate: absent -> one draw per env, broadcast across shapes;
@@ -345,8 +365,10 @@ def randomize_rigid_body_material(
             drawn = column[bucket_ids]
         samples[..., k] = drawn[:, None] if per_env else drawn  # broadcast per-env value over shapes
 
-    if make_consistent and (static_friction_spec is not None or dynamic_friction_spec is not None):
+    if single_friction:
+        samples[..., 1] = samples[..., 0]
+    elif make_consistent and (static_friction_spec is not None or dynamic_friction_spec is not None):
         samples[..., 1] = torch.min(samples[..., 0], samples[..., 1])  # dynamic <= static (PhysX)
 
     materials[env_ids] = samples.to(materials.dtype)
-    asset.root_physx_view.set_material_properties(materials, env_ids)
+    current().properties(asset).set_material_properties(materials, env_ids)

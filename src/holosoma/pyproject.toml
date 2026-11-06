@@ -33,7 +33,9 @@ dependencies = [
     "mypy==1.14.1",
     "notebook",
     "numpy-stl",
-    "numpy>=1.23.5,<2",
+    "numpy>=1.23.5,<2; python_version < '3.12'",
+    # Isaac Lab 3 requires Python 3.12 and NumPy 2; Sim 5.1 keeps Python 3.11/NumPy 1.
+    "numpy>=2; python_version >= '3.12'",
     "omegaconf",  # Used for config resolvers and DictConfig type hints
     "onnx",
     "onnxruntime",
@@ -120,6 +122,7 @@ source-include = [
 [tool.pytest.ini_options]
 markers = [
     "isaacsim: needs the Isaac Sim backend",
+    "isaacsim6: needs the Isaac Sim 6 / Isaac Lab 3 environment",
     "mujoco: needs the MuJoCo backend (either ClassicBackend or WarpBackend)",
     "mujoco_classic: needs the MuJoCo ClassicBackend (CPU)",
     "mujoco_warp: needs the MuJoCo WarpBackend (CUDA)",

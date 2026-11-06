@@ -29,7 +29,7 @@ if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step, steps_for_seconds
+from tests.simulators._sim_harness import SIMULATORS, build_run_sim_config, run_and_hard_exit, step, steps_for_seconds
 
 if TYPE_CHECKING:
     from holosoma.config_types.sensor import CameraSensorConfig
@@ -64,7 +64,7 @@ def _check_not_blank(img, label: str) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATORS)
     parser.add_argument("--scene", default="camera-target", help="scene preset (front-facing bright object)")
     parser.add_argument("--sensors", default="front-cam", help="sensors preset (one robot-base camera)")
     parser.add_argument("--robot", default="g1-29dof")
@@ -140,10 +140,19 @@ def main() -> int:
 
     # Step so the renderer warms up and body poses settle, then fire the control-post-refresh hooks
     # (cameras render, egress consumers publish) once — the same emission the task loop drives.
-    step(sim, max(args.steps, steps_for_seconds(sim, 0.05)))
+    start_time = sim.time()
+    physics_steps = max(args.steps, steps_for_seconds(sim, 0.05))
+    step(sim, physics_steps)
+    stepped_time = sim.time()
     sim.hooks.emit(Phase.FRAME_END)
 
     fails: list[str] = []
+    elapsed = stepped_time - start_time
+    expected = physics_steps * sim.sim_dt
+    if abs(elapsed - expected) > 1e-6:
+        fails.append(f"{args.simulator}: physics clock advanced {elapsed} s, expected {expected} s.")
+    if abs(sim.time() - stepped_time) > 1e-9:
+        fails.append(f"{args.simulator}: capturing a sensor frame advanced the physics clock.")
     cam_cfgs = cast("dict[str, CameraSensorConfig]", dict(config.sensor))
     for name in names:
         cam = cam_cfgs[name]

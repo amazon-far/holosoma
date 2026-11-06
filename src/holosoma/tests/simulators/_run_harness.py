@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.simulators._sim_harness import isaac_test_preset
+
 # Autotools-convention "skip" exit code. A harness that hits a genuinely-runtime skip condition
 # (one the wrapper cannot predict statically — a feature probe / library-availability check)
 # exits with this code and prints a ``SKIP: <reason>`` line; run_harness turns that into a real
@@ -73,8 +75,12 @@ def run_harness(
 
     Returns the ``CompletedProcess`` so callers can make further assertions if needed.
     """
+    selected_args = list(args)
+    if "--simulator" in selected_args:
+        index = selected_args.index("--simulator") + 1
+        selected_args[index] = isaac_test_preset(selected_args[index])
     result = subprocess.run(
-        [sys.executable, str(harness), *args],
+        [sys.executable, str(harness), *selected_args],
         capture_output=True,
         text=True,
         # Decode harness output as UTF-8 (it prints non-ASCII chars like ✓/—); otherwise text=True

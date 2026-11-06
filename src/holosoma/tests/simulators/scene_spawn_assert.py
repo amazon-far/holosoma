@@ -44,11 +44,10 @@ from holosoma.config_types.light import (
     SphereLightConfig,
 )
 from holosoma.config_types.run_sim import RunSimConfig
-from holosoma.config_types.simulator import IsaacSimRenderConfig
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.sim_utils import setup_simulation_environment
 from tests.simulators import _scene_presets
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit
+from tests.simulators._sim_harness import SIMULATORS, build_run_sim_config, run_and_hard_exit
 
 _KIT_ARG_SETTING = "/holosoma/tests/launcherKitArg"
 _DEFAULT_SUN_INTENSITY = 1000.0
@@ -70,6 +69,11 @@ def _object_total_mass(sim, name, env_id):
 
     sim_type = sim.get_simulator_type()
     if sim_type == SimulatorType.ISAACSIM:
+        if sim.backend.modern:
+            from tests.simulators.dr_matrix_assert import _IsaacLab3Reader
+
+            masses = _IsaacLab3Reader(sim)._property(sim.scene.rigid_objects[name], "mass")
+            return float(masses[env_id].sum())
         # IsaacLab RigidObject: per-body masses from the PhysX view, shape [num_envs, num_bodies].
         masses = sim.scene.rigid_objects[name].root_physx_view.get_masses()
         return float(masses[env_id].sum())
@@ -105,13 +109,16 @@ def _object_sliding_friction(sim, name, env_id):
 
     sim_type = sim.get_simulator_type()
     if sim_type == SimulatorType.ISAACSIM:
+        if sim.backend.modern:
+            from tests.simulators.dr_matrix_assert import _IsaacLab3Reader
+
+            return _IsaacLab3Reader(sim)._material(name, 0, env_id)
         # Friction is a physics material bound to the object's collider prim at spawn. Read the
         # bound material's static friction from the live composed stage. The behavioral
         # friction-slide preset is the independent confirmation that PhysX integrates it.
-        import omni.usd
         from pxr import UsdPhysics, UsdShade
 
-        stage = omni.usd.get_context().get_stage()
+        stage = sim.scene.stage
         prefix = f"/World/envs/env_{env_id}/{name}"
         for prim in stage.Traverse():
             if not str(prim.GetPath()).startswith(prefix) or not prim.HasAPI(UsdPhysics.CollisionAPI):
@@ -137,13 +144,48 @@ def _object_sliding_friction(sim, name, env_id):
     return None
 
 
+def _assert_environment_isolation(sim):
+    """Overlapping worlds must free-fall independently and still contact the shared ground."""
+    import torch
+
+    from tests.simulators._sim_harness import step, steps_for_seconds
+
+    ids = torch.arange(sim.num_envs, device=sim.sim_device)
+    state = torch.zeros((sim.num_envs, 13), device=sim.sim_device)
+    state[:, 0] = 5.0 + 0.05 * ids  # 0.1 m cubes overlap across worlds, far from the robots.
+    state[:, 2] = 3.0
+    state[:, 6] = 1.0
+    sim.set_actor_states(["box"], ids, state)
+    sim.write_state_updates()
+    step(sim, steps_for_seconds(sim, 0.1))
+    sim.refresh_sim_tensors()
+    actual = sim.get_actor_states(["box"], ids)
+    drift = (actual[:, :2] - state[:, :2]).abs().max().item()
+    speed = actual[:, 7:9].abs().max().item()
+    print(f"ENV ISOLATION: horizontal drift={drift:.6f} m, speed={speed:.6f} m/s")
+    if not (drift < 1e-3 and speed < 1e-3):
+        print("FAIL: bodies collided across independent environments")
+        return False
+    if not bool((actual[:, 2] < state[:, 2] - 0.01).all()):
+        print("FAIL: gravity did not advance the probe")
+        return False
+    step(sim, steps_for_seconds(sim, 1.0))
+    sim.refresh_sim_tensors()
+    height = sim.get_actor_states(["box"], ids)[:, 2]
+    print(f"ENV ISOLATION: resting heights={height.tolist()} m")
+    if not bool(((height > 0.04) & (height < 0.08)).all()):
+        print("FAIL: environment filtering disabled shared-ground contact")
+        return False
+    return True
+
+
 def main() -> int:
     # Register the test-only scene presets into scene.DEFAULTS so `scene:<testkey>` resolves through
     # the normal tyro path inside this (sub)process. Core never imports these; tests register them.
     _scene_presets.register()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATORS)
     parser.add_argument("--scene", default="g1-largebox")
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
@@ -170,14 +212,43 @@ def main() -> int:
     # Save a movie of the run to this directory (records every episode, headless or headful).
     # Uses the backend's own video recorder, so it works on every backend.
     parser.add_argument("--record", default=None, metavar="DIR", help="save a video of the run to DIR")
+    parser.add_argument("--record-env-id", type=int, default=0)
+    parser.add_argument("--probe-asset-contracts", action="store_true")
+    parser.add_argument("--probe-env-isolation", action="store_true")
     args = parser.parse_args()
     headless = args.headless == "true"
 
     config = _build_run_sim_config(args.simulator, args.scene, args.robot, args.terrain, args.record)
+    if args.probe_env_isolation:
+        assert args.num_envs == 2 and args.scene == "usd-box"
+        objects = {
+            name: dataclasses.replace(obj, position=[5.0, 0.0, 3.0]) for name, obj in config.scene.rigid_objects.items()
+        }
+        config = dataclasses.replace(
+            config, scene=dataclasses.replace(config.scene, env_spacing=0.0, rigid_objects=objects)
+        )
+    if args.record:
+        config = dataclasses.replace(
+            config,
+            logger=dataclasses.replace(
+                config.logger,
+                video=dataclasses.replace(config.logger.video, record_env_id=args.record_env_id),
+            ),
+        )
+    if args.probe_asset_contracts:
+        # Non-identity pose on a static USD object: later free-body resets cannot
+        # conceal a quaternion-order error at the custom spawner boundary.
+        objects = {
+            name: dataclasses.replace(obj, orientation=[2**-0.5, 0, 0, 2**-0.5])
+            for name, obj in config.scene.rigid_objects.items()
+        }
+        assert objects and all(obj.fixed for obj in objects.values())
+        config = dataclasses.replace(config, scene=dataclasses.replace(config.scene, rigid_objects=objects))
     if args.probe_isaacsim_render_config:
-        if args.simulator != "isaacsim":
+        if not args.simulator.startswith("isaacsim"):
             parser.error("--probe-isaacsim-render-config requires --simulator isaacsim")
-        render_config = IsaacSimRenderConfig(
+        render_config = dataclasses.replace(
+            config.simulator.config.isaacsim,
             rendering_mode=args.rendering_mode,
             kit_args=(f"--{_KIT_ARG_SETTING}={args.kit_arg_sentinel}" if args.kit_arg_sentinel is not None else ""),
         )
@@ -194,7 +265,7 @@ def main() -> int:
             scene = dataclasses.replace(scene, lights={DEFAULT_LIGHT_KEY: DefaultLightConfig()})
         config = dataclasses.replace(config, simulator=simulator, scene=scene)
     if args.probe_lights:
-        if args.simulator != "isaacsim":
+        if not args.simulator.startswith("isaacsim"):
             parser.error("--probe-lights requires --simulator isaacsim")
         # One light per type, each exercising a distinct field the probe then checks on the authored
         # prim: distant carries color-temperature + angle, dome an HDRI texture, sphere a radius, rect
@@ -221,21 +292,31 @@ def main() -> int:
     config = dataclasses.replace(
         config,
         device=device,
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        training=dataclasses.replace(config.training, num_envs=args.num_envs, headless=headless),
     )
 
     env, device, _app = setup_simulation_environment(config, device=device)
     sim = env.sim
     if args.probe_isaacsim_render_config:
-        import carb
-        import omni.usd
+        if args.rendering_mode is not None or args.kit_arg_sentinel is not None:
+            import carb
 
-        settings = carb.settings.get_settings()
+            settings = carb.settings.get_settings()
         if args.rendering_mode is not None:
             actual_mode = settings.get("/isaaclab/rendering/rendering_mode")
             if actual_mode != args.rendering_mode:
                 print(f"FAIL: rendering mode {actual_mode!r} != configured {args.rendering_mode!r}")
                 return 1
+            expected_settings = {
+                "/rtx/post/dlss/execMode": {"performance": 0, "balanced": 1, "quality": 2}[args.rendering_mode],
+                "/rtx/reflections/enabled": args.rendering_mode == "quality",
+                "/rtx-transient/dldenoiser/enabled": args.rendering_mode != "performance",
+            }
+            for path, expected in expected_settings.items():
+                actual = settings.get(path)
+                if actual != expected:
+                    print(f"FAIL: {path}={actual!r} != {expected!r} for {args.rendering_mode}")
+                    return 1
         if args.kit_arg_sentinel is not None:
             actual_sentinel = settings.get(_KIT_ARG_SETTING)
             if actual_sentinel != args.kit_arg_sentinel:
@@ -243,7 +324,7 @@ def main() -> int:
                 return 1
         from pxr import UsdLux
 
-        stage = omni.usd.get_context().get_stage()
+        stage = sim.scene.stage
         sun_path = f"/World/Lights/{DEFAULT_LIGHT_KEY}"
         sun_prim = stage.GetPrimAtPath(sun_path)
         has_default_sun = sun_prim.IsValid()
@@ -269,10 +350,9 @@ def main() -> int:
         return 0
 
     if args.probe_lights:
-        import omni.usd
         from pxr import Gf, UsdGeom, UsdLux
 
-        stage = omni.usd.get_context().get_stage()
+        stage = sim.scene.stage
 
         def _local_xf(prim):
             return UsdGeom.Xformable(prim).GetLocalTransformation()
@@ -425,6 +505,31 @@ def main() -> int:
     # sim.env_origins; MuJoCo exposes the origins requested above.
     actual_env_origins = sim.env_origins
     sim.prepare_sim()
+    if args.probe_env_isolation:
+        return 0 if _assert_environment_isolation(sim) else 1
+    if args.probe_asset_contracts:
+        import xml.etree.ElementTree as ET
+
+        from holosoma.utils.path import resolve_asset_path
+
+        asset = config.robot.asset
+        source = ET.parse(resolve_asset_path(asset.urdf_file, asset.asset_root)).getroot()  # noqa: S314
+        expected_mass = sum((float(m.attrib["value"]) for m in source.findall("link/inertial/mass")), 0.0)
+        masses = sim.backend.properties(sim._robot).get_masses()
+        assert torch.allclose(masses.sum(dim=1), torch.full((n,), expected_mass), atol=1e-4, rtol=1e-5), (
+            masses.sum(dim=1),
+            expected_mass,
+        )
+        assert not ({"imu_in_torso", "imu_in_pelvis", "mid360_link"} & set(sim._robot.body_names))
+        assert set(config.robot.body_names).issubset(set(sim._robot.body_names))
+        ids = torch.arange(n, device=sim.sim_device)
+        expected_quat = torch.tensor([0, 0, 2**-0.5, 2**-0.5], device=sim.sim_device)
+        for name in objects:
+            quat = sim.get_actor_states([name], ids)[:, 3:7]
+            assert torch.allclose(
+                torch.abs(quat @ expected_quat), torch.ones(n, device=sim.sim_device), atol=1e-5, rtol=0
+            ), (name, quat)
+        print(f"ASSET CONTRACTS: mass={masses.sum(dim=1).tolist()} kg; static yaw=90 deg; required bodies retained")
 
     # Mirror DirectSimulation: open the interactive viewer only when headful. When headless
     # this is skipped, so render() below must tolerate a None viewer.
@@ -432,9 +537,8 @@ def main() -> int:
         sim.setup_viewer()
     sim.install_plugins()
 
-    # Start recording if --record was given. Each backend captures a frame inside its own
-    # simulate_at_each_physics_step (gated on is_recording), so the existing step loop fills the
-    # movie; on_episode_end (after the loop) encodes and writes the file.
+    # Start recording if --record was given. The frame-end hook below captures
+    # the movie; on_episode_end encodes and writes it.
     if sim.video_recorder is not None:
         sim.video_recorder.setup_recording()
         sim.video_recorder.on_episode_start(env_id=sim.video_recorder.config.record_env_id)
@@ -582,12 +686,16 @@ def main() -> int:
     # (no policy drives the robot here), not a spawn defect. The per-env origin spread above
     # is what this multi-env scenario actually validates.
     z_min = {nm: z0[nm].clone() for nm in free_names}
-    for _ in range(args.steps):
+    for step_index in range(args.steps):
         sim.refresh_sim_tensors()
         sim.simulate_at_each_physics_step()
         # Drive the render path every step, exactly as the run_sim loop does. Headless: this
         # must be a no-op that does not touch a None viewer. Headful: it draws to the window.
         sim.render()
+        if sim.video_recorder is not None and (step_index + 1) % sim.simulator_config.sim.control_decimation_steps == 0:
+            from holosoma.simulator.base_simulator.hooks import Phase
+
+            sim.hooks.emit(Phase.FRAME_END)
         for nm in free_names:
             z_min[nm] = torch.minimum(z_min[nm], sim.get_actor_states([nm], env_ids)[:, 2])
 
@@ -656,6 +764,19 @@ def main() -> int:
 
     # Finalize the movie (encode + write) BEFORE any hard-exit below, which would skip it.
     if sim.video_recorder is not None:
+        if args.probe_asset_contracts:
+            assert sim.video_recorder.video_frames, "Recording produced no frames"
+            if sim.backend.modern:
+                from holosoma.simulator.isaacsim.backends import as_tensor
+
+                camera_pos = as_tensor(sim.recording_camera.data.pos_w)[args.record_env_id]
+                expected_pos = sim.video_recorder._get_camera_parameters().position
+                assert torch.allclose(
+                    camera_pos,
+                    torch.tensor(expected_pos, device=camera_pos.device),
+                    atol=0.1,
+                    rtol=0,
+                ), (camera_pos, expected_pos)
         sim.video_recorder.on_episode_end(env_id=sim.video_recorder.config.record_env_id)
         print(f"VIDEO saved under {args.record}")
 

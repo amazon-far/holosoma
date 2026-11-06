@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw, fullstate_xyzw_to_wxyz
+from holosoma.simulator.isaacsim.backends import current, as_tensor
 
 
 class RootStatesProxy:
@@ -29,11 +29,12 @@ class RootStatesProxy:
     """
 
     def __init__(self, tensor_wxyz: torch.Tensor) -> None:
+        self.backend = current()
         self.reset(tensor_wxyz)
 
     def reset(self, tensor_wxyz: torch.Tensor) -> None:
-        self.tensor_wxyz = tensor_wxyz
-        self.tensor_xyzw = fullstate_wxyz_to_xyzw(tensor_wxyz)
+        self.tensor_wxyz = as_tensor(tensor_wxyz)
+        self.tensor_xyzw = self.backend.read_state(self.tensor_wxyz).clone()
 
     def __getitem__(self, index: int | slice | torch.Tensor) -> torch.Tensor:
         """Get tensor values in xyzw quaternion format.
@@ -61,7 +62,7 @@ class RootStatesProxy:
             Values to set with quaternions in xyzw format.
         """
         self.tensor_xyzw[index] = value_xyzw
-        self.tensor_wxyz = fullstate_xyzw_to_wxyz(self.tensor_xyzw)
+        self.tensor_wxyz = self.backend.write_state(self.tensor_xyzw)
 
     def _get_wxyz(self, env_ids: torch.Tensor | None = None) -> torch.Tensor:
         """Get tensor in wxyz quaternion format for IsaacSim interfacing.

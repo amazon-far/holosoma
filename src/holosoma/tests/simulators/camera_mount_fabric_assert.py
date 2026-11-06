@@ -47,6 +47,9 @@ def _cameras() -> dict[str, CameraSensorConfig]:
 
 def _mount_errors(sim) -> list[tuple[str, float, float]]:
     """``(prim, position error m, rotation error deg)`` for every camera prim of every env."""
+    if sim.backend.modern:
+        return _native_mount_errors(sim)
+
     import isaaclab.sim as sim_utils
     import numpy as np
     import usdrt
@@ -59,7 +62,7 @@ def _mount_errors(sim) -> list[tuple[str, float, float]]:
         matrix = Rt.Xformable(fabric_stage.GetPrimAtPath(path)).GetFabricHierarchyWorldMatrixAttr().Get()
         return np.array([[matrix[r][c] for c in range(4)] for r in range(4)])
 
-    errors = []
+    errors: list[tuple[str, float, float]] = []
     for camera in sim.tiled_cameras.values():
         for prim in sim_utils.find_matching_prims(camera.cfg.prim_path):
             path = str(prim.GetPath())
@@ -70,6 +73,35 @@ def _mount_errors(sim) -> list[tuple[str, float, float]]:
             pos_err = float(np.linalg.norm(actual[3, :3] - expected[3, :3]))
             cos = (np.trace(actual[:3, :3].T @ expected[:3, :3]) - 1.0) / 2.0
             errors.append((path, pos_err, math.degrees(math.acos(min(1.0, max(-1.0, cos))))))
+    return errors
+
+
+def _native_mount_errors(sim) -> list[tuple[str, float, float]]:
+    """Compare native capture poses with live link poses, independently of Kit/Fabric."""
+    import torch
+    from isaaclab.utils.math import quat_apply, quat_error_magnitude, quat_mul
+
+    from holosoma.simulator.isaacsim.backends import as_tensor
+
+    errors: list[tuple[str, float, float]] = []
+    for name, camera in sim.tiled_cameras.items():
+        camera.update(0.0, force_recompute=True)
+        mount = sim.sensor_config[name].mount
+        body_id = sim._robot.body_names.index(mount.target)
+        body_pos = as_tensor(sim._robot.data.body_pos_w)[:, body_id]
+        body_quat = as_tensor(sim._robot.data.body_quat_w)[:, body_id]
+        offset_pos = torch.tensor(mount.position, device=body_pos.device).expand_as(body_pos)
+        offset_quat = torch.tensor(sim.backend.config_quaternion(mount.orientation), device=body_quat.device).expand_as(
+            body_quat
+        )
+        expected_pos = body_pos + quat_apply(body_quat, offset_pos)
+        expected_quat = quat_mul(body_quat, offset_quat)
+        position_error = torch.linalg.vector_norm(as_tensor(camera.data.pos_w) - expected_pos, dim=-1)
+        angle_error = torch.rad2deg(quat_error_magnitude(as_tensor(camera.data.quat_w_opengl), expected_quat))
+        errors.extend(
+            (f"{name}/env{env_id}", float(position_error[env_id]), float(angle_error[env_id]))
+            for env_id in range(sim.num_envs)
+        )
     return errors
 
 

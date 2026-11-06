@@ -21,6 +21,7 @@ from pydantic import ConfigDict, model_validator
 from pydantic.dataclasses import dataclass
 
 from holosoma.config_types.frequency import DecimationLike, validate_decimation_like
+from holosoma.config_types.isaac import IsaacCameraRendererConfig
 from holosoma.config_types.value_types import UnitQuaternionWXYZ
 
 if TYPE_CHECKING:
@@ -230,6 +231,9 @@ class IsaacSimCameraConfig:
 
     fisheye: IsaacSimFisheyeConfig = field(default_factory=IsaacSimFisheyeConfig)
     """F-theta calibration used by native fisheye projections and ignored for ``"pinhole"``."""
+
+    renderer: IsaacCameraRendererConfig = field(default_factory=IsaacCameraRendererConfig)
+    """Lab 3 camera renderer override; otherwise inherit the simulator's renderer."""
 
     @model_validator(mode="after")
     def validate_lens(self) -> IsaacSimCameraConfig:

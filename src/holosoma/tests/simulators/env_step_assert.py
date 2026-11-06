@@ -28,7 +28,7 @@ from holosoma.train_agent import get_tyro_env_config, training_context
 from holosoma.utils.common import seeding
 from holosoma.utils.helpers import get_class
 from holosoma.utils.safe_torch_import import torch
-from tests.simulators._sim_harness import run_and_hard_exit
+from tests.simulators._sim_harness import SIMULATORS, run_and_hard_exit
 
 NUM_ENVS = 16
 NUM_STEPS = 100
@@ -56,7 +56,7 @@ def _check_step(failures: list[str], step: int, obs_dict, rewards, dones, infos)
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Environment batch-shape and episode-bookkeeping regression.")
-    parser.add_argument("--simulator", required=True, choices=sorted(SIMULATOR_REGISTRY))
+    parser.add_argument("--simulator", required=True, choices=SIMULATORS)
     parser.add_argument("--result-file", type=Path)
     args = parser.parse_args()
 
@@ -64,7 +64,7 @@ def main() -> int:
     preset = experiment.g1_29dof
     tyro_config = dataclasses.replace(
         preset,
-        simulator=SIMULATOR_REGISTRY[args.simulator],
+        simulator=SIMULATOR_REGISTRY[args.simulator.replace("-", "_")],
         training=dataclasses.replace(preset.training, num_envs=NUM_ENVS, headless=True),
     )
 

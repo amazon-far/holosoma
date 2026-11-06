@@ -21,11 +21,12 @@ import os
 
 import pytest
 
-_RUN_TARGETS = ("isaacsim", "mujoco", "no_sim", "requires_inference")
+_RUN_TARGETS = ("isaacsim", "isaacsim6", "mujoco", "no_sim", "requires_inference")
 _SIM_DIRS = ("isaacsim", "mujoco")
 
 _ALL_MARKERS = {
     "isaacsim": "Isaac Sim",
+    "isaacsim6": "Isaac Sim 6 / Isaac Lab 3",
     "mujoco": "MuJoCo (either backend)",
     "mujoco_classic": "the MuJoCo ClassicBackend (CPU)",
     "mujoco_warp": "the MuJoCo WarpBackend (CUDA)",
@@ -35,7 +36,18 @@ _ALL_MARKERS = {
 }
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--isaac-preset",
+        choices=("isaacsim", "isaacsim6", "isaacsim6-newton", "isaacsim6-ovphysx"),
+        default="isaacsim",
+        help="Run the existing Isaac feature suite with this explicit simulator preset.",
+    )
+
+
 def pytest_configure(config):
+    # Harnesses and training run in child processes; propagate only the test selection.
+    os.environ["HOLOSOMA_TEST_ISAAC_PRESET"] = config.getoption("--isaac-preset")
     for marker, msg in _ALL_MARKERS.items():
         config.addinivalue_line("markers", f"{marker}: marks tests as requiring {msg}")
 

@@ -1,3 +1,6 @@
+import dataclasses
+
+from holosoma.config_types.isaac import IsaacSimRenderConfig
 from holosoma.config_types.simulator import (
     MujocoBackend,
     PhysxConfig,
@@ -29,6 +32,35 @@ isaacsim = SIMULATOR_REGISTRY.add(
                 render_mode="human",
                 render_interval=4,
             ),
+        ),
+    ),
+)
+
+
+isaacsim6 = SIMULATOR_REGISTRY.add(
+    "isaacsim6",
+    dataclasses.replace(
+        isaacsim,
+        config=dataclasses.replace(isaacsim.config, isaacsim=IsaacSimRenderConfig(runtime="6.x")),
+    ),
+)
+isaacsim6_newton = SIMULATOR_REGISTRY.add(
+    "isaacsim6_newton",
+    dataclasses.replace(
+        isaacsim6,
+        config=dataclasses.replace(
+            isaacsim6.config,
+            isaacsim=IsaacSimRenderConfig(runtime="6.x", physics="newton", solver="mjwarp", renderer="newton_renderer"),
+        ),
+    ),
+)
+isaacsim6_ovphysx = SIMULATOR_REGISTRY.add(
+    "isaacsim6_ovphysx",
+    dataclasses.replace(
+        isaacsim6,
+        config=dataclasses.replace(
+            isaacsim6.config,
+            isaacsim=IsaacSimRenderConfig(runtime="6.x", physics="ovphysx", renderer="ovrtx"),
         ),
     ),
 )

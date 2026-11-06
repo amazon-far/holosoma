@@ -22,6 +22,8 @@ import isaaclab.sim as sim_utils
 from isaaclab.sensors import TiledCamera, TiledCameraCfg, patterns
 from isaaclab.utils.math import quat_apply
 
+from holosoma.simulator.isaacsim.backends import current, as_tensor
+
 from holosoma.config_types.frequency import resolve_decimation
 from holosoma.config_types.sensor import CameraSensorConfig, IsaacSimLidarConfig, LidarSensorConfig
 from holosoma.simulator.isaacsim.camera_projection import camera_spawn_cfg_for
@@ -63,7 +65,7 @@ def build_cameras(sim: IsaacSim) -> None:
             prim_path=f"{parent}/{cam_name}",
             offset=TiledCameraCfg.OffsetCfg(
                 pos=tuple(cam.mount.position),
-                rot=tuple(cam.mount.orientation),  # (w, x, y, z)
+                rot=current().config_quaternion(cam.mount.orientation),  # (w, x, y, z)
                 convention="opengl",  # -Z forward / +Y up, the frame holosoma uses
             ),
             data_types=annotators,
@@ -72,6 +74,7 @@ def build_cameras(sim: IsaacSim) -> None:
             height=cam.height,
             # Keep raw +inf no-return data; CameraRecord applies Holosoma's common depth policy.
             depth_clipping_behavior="none",
+            **sim.backend.camera_options(cam),
         )
         sim.tiled_cameras[cam_name] = TiledCamera(cam_cfg)
         sim.scene.sensors[cam_name] = sim.tiled_cameras[cam_name]
@@ -84,7 +87,7 @@ def _camera_mount_prim_path(mount: SensorMountConfig) -> str:
     ``actor`` -> a spawned scene-object prim. The camera prim is created as a child of this
     path so the USD transform hierarchy makes it follow the body natively.
     """
-    ns = "/World/envs/env_.*"
+    ns = current().env_regex
     if mount.target_kind == "robot_link":
         return resolve_robot_link_prim_expression(mount.target)
     if mount.target_kind == "actor":
@@ -154,14 +157,14 @@ def render_cameras(sim: IsaacSim) -> None:
     for camera_record in sim.sensor_manager.collect_due():
         out = sim.tiled_cameras[camera_record.name].data.output
         if "rgb" in camera_record.config.data_types:
-            rgb = out["rgb"][..., :3]  # [N,H,W,3], drop alpha
+            rgb = as_tensor(out["rgb"])[..., :3]  # [N,H,W,3], drop alpha
             if rgb.dtype != torch.uint8:
                 rgb = rgb.clamp(0, 255).to(torch.uint8)
             camera_record.set_buffer("rgb", rgb)
         if "depth" in camera_record.config.data_types:
             # distance_to_image_plane is float32 meters, image-plane. Ensure a trailing channel
             # dim; CameraRecord applies the configured cross-backend no-return convention.
-            depth = out["distance_to_image_plane"].to(torch.float32)
+            depth = as_tensor(out["distance_to_image_plane"]).to(torch.float32)
             camera_record.set_buffer("depth", depth if depth.ndim == 4 else depth.unsqueeze(-1))
 
 
@@ -180,6 +183,10 @@ def _pattern(
 @lru_cache(maxsize=1)
 def _mutable_multi_mesh_ray_caster_cls() -> type[Any]:
     """Create the IsaacLab 2.3.2 LiDAR type only when a LiDAR is configured."""
+    if current().modern:
+        from .backends.rays import mutable_ray_caster
+
+        return mutable_ray_caster()
     from isaaclab.sensors import MultiMeshRayCaster
 
     class MutableMultiMeshRayCaster(MultiMeshRayCaster):
@@ -295,7 +302,7 @@ def _mutable_multi_mesh_ray_caster_cls() -> type[Any]:
 
 
 def _mount_parent_path(mount: SensorMountConfig) -> str:
-    namespace = "/World/envs/env_.*"
+    namespace = current().env_regex
     if mount.target_kind == "robot_link":
         return resolve_robot_link_prim_expression(mount.target)
     if mount.target_kind == "actor":
@@ -378,11 +385,13 @@ def _body_filter_target(lidar: LidarSensorConfig) -> tuple[str, str] | None:
 def _robot_mesh_prim_paths(excluded_link: str | None) -> list[str]:
     """Return robot visual-geometry expressions, omitting one native body owner."""
     source_root = "/World/envs/env_0/Robot"
-    expression_root = "/World/envs/env_.*/Robot"
+    expression_root = f"{current().env_regex}/Robot"
     excluded_body_path = (
         None
         if excluded_link is None
-        else resolve_robot_link_rigid_body_prim_expression(excluded_link).replace("env_.*", "env_0")
+        else resolve_robot_link_rigid_body_prim_expression(excluded_link).replace(
+            current().env_regex, "/World/envs/env_0"
+        )
     )
     return _visual_mesh_prim_paths(
         source_root,
@@ -407,6 +416,7 @@ def _default_mesh_prim_paths(sim: IsaacSim, lidar: LidarSensorConfig) -> list[st
         # body expanded from scene files, so this covers all Holosoma scene-object meshes.
         actor_names=sim.scene.rigid_objects,
         discover_mesh_prim_paths=_visual_mesh_prim_paths,
+        env_regex=current().env_regex,
     )
 
 
@@ -421,21 +431,22 @@ def build_lidars(sim: IsaacSim) -> None:
         from isaaclab.sensors import MultiMeshRayCasterCfg
 
         parent = _mount_parent_path(lidar.mount)
-        if lidar.mount.target_kind == "world":
+        native_world_mount = sim.simulator_config.isaacsim.physics == "newton" and lidar.mount.target_kind == "world"
+        if lidar.mount.target_kind == "world" and not native_world_mount:
             mount_path = f"{parent}/holosoma_lidar_{name}"
-            source_path = mount_path.replace("env_.*", "env_0")
+            source_path = mount_path.replace(current().env_regex, "/World/envs/env_0")
             sim_utils.create_prim(
                 source_path,
                 prim_type="Xform",
                 translation=tuple(lidar.mount.position),
-                orientation=tuple(lidar.mount.orientation),
+                orientation=current().config_quaternion(lidar.mount.orientation),
             )
             offset = MultiMeshRayCasterCfg.OffsetCfg()
         else:
             mount_path = parent
             offset = MultiMeshRayCasterCfg.OffsetCfg(
                 pos=tuple(lidar.mount.position),
-                rot=tuple(lidar.mount.orientation),
+                rot=current().config_quaternion(lidar.mount.orientation),
             )
         update_decimation = resolve_decimation(
             lidar.update_decimation,
@@ -472,6 +483,9 @@ def build_lidars(sim: IsaacSim) -> None:
             debug_vis=sim.debug_viz_enabled,
             mesh_prim_paths=mesh_targets,
             max_distance=lidar.far,
+            # Native Newton registers an environment-root site explicitly. An
+            # arbitrary free Xform is instead interpreted as a missing body.
+            **({"spawn": None} if native_world_mount else {}),
         )
         sensor = _mutable_multi_mesh_ray_caster_cls()(cfg)
         sim.scene.sensors[name] = sensor
@@ -493,7 +507,7 @@ def render_lidars(sim: IsaacSim) -> None:
             raise TypeError(f"LiDAR '{lidar_record.name}' has no mutable MultiMeshRayCaster.")
         sensor.set_ray_directions(pattern.directions)
         native = sensor.data
-        distances = torch.linalg.vector_norm(native.ray_hits_w - sensor.ray_starts_w, dim=-1)
+        distances = torch.linalg.vector_norm(as_tensor(native.ray_hits_w) - sensor.ray_starts_w, dim=-1)
         finalize_lidar_returns(lidar_record, pattern.directions, distances)
 
 

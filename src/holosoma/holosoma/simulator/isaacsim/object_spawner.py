@@ -34,6 +34,8 @@ material is attached and the asset keeps its authored material.
 
 from __future__ import annotations
 
+from holosoma.simulator.isaacsim.backends import current
+
 import os
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
@@ -133,7 +135,7 @@ def select_spawn_cfg(
         if physics_material is None:
             # No friction/restitution to apply — spawn the URDF directly (the converter authors
             # the geometry/joints; the shared rigid/mass/collision props land at spawn).
-            return urdf_cfg
+            return current().urdf_spawn_config(urdf_cfg)
         # Friction/restitution IS set. The URDF importer authors no physics material, so reach USD
         # via the same converter and let the USD spawner bind the material at spawn (below).
         resolved_path = _convert_urdf_to_usd(urdf_cfg)
@@ -162,6 +164,7 @@ def physics_material_cfg(physics_cfg: PhysicsConfig) -> "sim_utils.RigidBodyMate
     mat = physics_cfg.isaacsim
     if mat is None:
         return None
+    current().validate_friction(mat.static_friction, mat.dynamic_friction)
     return sim_utils.RigidBodyMaterialCfg(
         static_friction=mat.static_friction,
         dynamic_friction=mat.dynamic_friction,
@@ -180,10 +183,7 @@ def _convert_urdf_to_usd(urdf_cfg: "sim_utils.UrdfFileCfg") -> str:
     have done internally (same cfg, so same geometry/joints/fix_base) — we just intercept its USD
     output instead of letting the spawner reference it directly. Raises loud on converter failure.
     """
-    from isaaclab.sim import converters
-
-    loader = converters.UrdfConverter(urdf_cfg)
-    usd_path: str = loader.usd_path
+    usd_path = current().convert_urdf(urdf_cfg)
     if not usd_path or not os.path.exists(usd_path):
         raise RuntimeError(f"URDF->USD conversion produced no USD for '{urdf_cfg.asset_path}'.")
     return usd_path
@@ -383,11 +383,11 @@ def build_rigid_object(
     _assert_asset_exists(resolved_path, f"Object '{name}' ({fmt})")
     spawn = select_spawn_cfg(fmt, resolved_path, fixed=fixed, physics=physics, source_prim_path=source_prim_path)
     cfg = RigidObjectCfg(
-        prim_path=f"/World/envs/env_.*/{name}",
+        prim_path=f"{current().env_regex}/{name}",
         spawn=spawn,
-        init_state=RigidObjectCfg.InitialStateCfg(pos=tuple(pos), rot=tuple(rot_wxyz)),  # wxyz
+        init_state=RigidObjectCfg.InitialStateCfg(pos=tuple(pos), rot=current().config_quaternion(rot_wxyz)),  # wxyz
     )
-    return RigidObject(cfg)
+    return current().rigid_object(cfg)
 
 
 def build_standalone_rigid_object(

@@ -9,14 +9,13 @@ from typing import Any
 
 import numpy as np
 import numpy.typing as npt
-import omni
-import omni.log
-import omni.usd
+from loguru import logger
+from holosoma.simulator.isaacsim.backends import current
 from pxr import Gf, Usd, UsdGeom, UsdPhysics
 
 
 def get_current_stage() -> Usd.Stage:
-    return omni.usd.get_context().get_stage()
+    return current().stage_utils.get_current_stage()
 
 
 def is_rigid_body_enabled(prim: Usd.Prim) -> bool:
@@ -42,6 +41,13 @@ def _find_robot_link_prim(link_name: str, stage: Usd.Stage) -> Usd.Prim:
         for prim in Usd.PrimRange(robot_root, Usd.TraverseInstanceProxies())
         if prim.GetName() == link_name and UsdGeom.Xformable(prim)
     ]
+    # Lab 3's URDF importer nests same-named visual/mesh prims below the
+    # link frame. Keep the frame, while still rejecting ambiguous sibling links.
+    matches = [
+        prim
+        for prim in matches
+        if not any(prim != other and prim.GetPath().HasPrefix(other.GetPath()) for other in matches)
+    ]
     if len(matches) != 1:
         paths = [str(prim.GetPath()) for prim in matches]
         raise ValueError(
@@ -62,7 +68,7 @@ def resolve_robot_link_prim_expression(link_name: str, stage: Usd.Stage | None =
     stage = stage or get_current_stage()
     robot_root_path = "/World/envs/env_0/Robot"
     suffix = str(_find_robot_link_prim(link_name, stage).GetPath())[len(robot_root_path) :]
-    return f"/World/envs/env_.*/Robot{suffix}"
+    return f"{current().env_regex}/Robot{suffix}"
 
 
 def resolve_robot_link_rigid_body_prim_expression(link_name: str, stage: Usd.Stage | None = None) -> str:
@@ -73,7 +79,7 @@ def resolve_robot_link_rigid_body_prim_expression(link_name: str, stage: Usd.Sta
     while prim.IsValid() and str(prim.GetPath()).startswith(robot_root_path):
         if is_rigid_body_enabled(prim):
             suffix = str(prim.GetPath())[len(robot_root_path) :]
-            return f"/World/envs/env_.*/Robot{suffix}"
+            return f"{current().env_regex}/Robot{suffix}"
         prim = prim.GetParent()
     raise ValueError(f"Robot link '{link_name}' is not owned by a rigid body below '{robot_root_path}'.")
 
@@ -111,7 +117,7 @@ def print_prim_tree(
     """
     # Get stage if not provided
     if stage is None:
-        stage = omni.usd.get_context().get_stage()
+        stage = current().stage_utils.get_current_stage()
 
     # Get prim at path
     prim = stage.GetPrimAtPath(prim_path)
@@ -208,7 +214,6 @@ def log_robot_properties(robot_path: str, pattern: str = "*", stage: Usd.Stage |
     """
 
     from prettytable import PrettyTable
-    from pxr import PhysxSchema, UsdPhysics
 
     # Default to current stage
     stage = stage or get_current_stage()
@@ -272,29 +277,18 @@ def log_robot_properties(robot_path: str, pattern: str = "*", stage: Usd.Stage |
         max_angular_vel: Any = "-"
         max_joint_vel: Any = "-"
 
-        # Check PhysxRigidBodyAPI for linear/angular velocity limits
-        if prim.HasAPI(PhysxSchema.PhysxRigidBodyAPI):
-            physx_api = PhysxSchema.PhysxRigidBodyAPI(prim)
-
-            # Get max linear velocity
-            if physx_api.GetMaxLinearVelocityAttr():
-                max_linear_vel = physx_api.GetMaxLinearVelocityAttr().Get()
-                if isinstance(max_linear_vel, float):
-                    max_linear_vel = f"{max_linear_vel}"
-
-            # Get max angular velocity
-            if physx_api.GetMaxAngularVelocityAttr():
-                max_angular_vel = physx_api.GetMaxAngularVelocityAttr().Get()
-                if isinstance(max_angular_vel, float):
-                    max_angular_vel = f"{max_angular_vel}"
-
-        # Check PhysxJointAPI for joint velocity limit
-        if prim.HasAPI(PhysxSchema.PhysxJointAPI):
-            joint_api = PhysxSchema.PhysxJointAPI(prim)
-            if joint_api.GetMaxJointVelocityAttr():
-                max_joint_vel = joint_api.GetMaxJointVelocityAttr().Get()
-                if isinstance(max_joint_vel, float):
-                    max_joint_vel = f"{max_joint_vel}"
+        # Read authored/schema-default attributes directly. This also supports
+        # the codeless USD schemas used outside Kit.
+        limits = []
+        for attribute in (
+            "physxRigidBody:maxLinearVelocity",
+            "physxRigidBody:maxAngularVelocity",
+            "physxJoint:maxJointVelocity",
+        ):
+            attr = prim.GetAttribute(attribute)
+            value = attr.Get() if attr else None
+            limits.append("-" if value is None else str(value))
+        max_linear_vel, max_angular_vel, max_joint_vel = limits
 
         # Add velocity limits to table if any limits are defined
         if max_linear_vel != "-" or max_angular_vel != "-" or max_joint_vel != "-":
@@ -302,14 +296,14 @@ def log_robot_properties(robot_path: str, pattern: str = "*", stage: Usd.Stage |
 
     # Print tables
     if mass_table.rows:
-        omni.log.info("\n" + mass_table.get_string())
+        logger.info("\n" + mass_table.get_string())
     else:
-        omni.log.info(f"No prims with mass properties found matching pattern: {pattern}")
+        logger.info(f"No prims with mass properties found matching pattern: {pattern}")
 
     if velocity_table.rows:
-        omni.log.info("\n" + velocity_table.get_string())
+        logger.info("\n" + velocity_table.get_string())
     else:
-        omni.log.info(f"No prims with velocity limits found matching pattern: {pattern}")
+        logger.info(f"No prims with velocity limits found matching pattern: {pattern}")
 
 
 def list_prims(usd_path: str, path: str = "/", recurse: bool = True) -> list[str]:
@@ -341,7 +335,7 @@ def list_prims_in_stage(stage: Usd.Stage, path: str = "/", recurse: bool = True)
     root_prim = stage.GetPrimAtPath(path)
 
     if not root_prim.IsValid():
-        omni.log.warn(f"Path {path} not found")
+        logger.warning(f"Path {path} not found")
         return []
 
     # List direct children
@@ -366,7 +360,7 @@ def compute_world_transform(stage: Usd.Stage, prim_path: str) -> Gf.Matrix4d:
     """
     prim = stage.GetPrimAtPath(prim_path)
     if not prim.IsValid():
-        omni.log.warn(f"Invalid prim path for transform computation: {prim_path}")
+        logger.warning(f"Invalid prim path for transform computation: {prim_path}")
         return Gf.Matrix4d(1.0)  # Return identity matrix
 
     # UsdGeom.Xformable works for all transformable prims and handles hierarchy automatically

@@ -55,6 +55,12 @@ jobs:
             dependency_target: dependencies
             target: runtime
             runner_prefix: codebuild-holosoma-a10g-x1-gpu-build
+          - environment: isaacsim6
+            image: holosoma-isaacsim6
+            dockerfile: docker/isaacsim6.Dockerfile
+            dependency_target: dependencies
+            target: runtime
+            runner_prefix: codebuild-holosoma-a10g-x1-gpu-build
           - environment: mujoco
             image: holosoma-mujoco
             dockerfile: docker/mujoco.Dockerfile

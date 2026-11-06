@@ -20,6 +20,13 @@ import tyro
 
 from holosoma.config_types.run_sim import RunSimConfig
 
+SIMULATORS = ("mujoco", "mjwarp", "isaacsim", "isaacsim6", "isaacsim6-newton", "isaacsim6-ovphysx")
+
+
+def isaac_test_preset(simulator: str) -> str:
+    """Resolve the explicit pytest selection for unchanged Isaac feature scenarios."""
+    return os.environ.get("HOLOSOMA_TEST_ISAAC_PRESET", simulator) if simulator == "isaacsim" else simulator
+
 
 def run_and_hard_exit(main: Callable[[], int]) -> NoReturn:
     """Run a harness ``main`` and terminate the process immediately with its return code.
@@ -93,7 +100,7 @@ def build_run_sim_config(
     """
     from holosoma.config_types.simulator import BridgeConfig, VirtualGantryCfg
 
-    argv = [f"simulator:{simulator}", f"robot:{robot}", f"terrain:{terrain}", f"scene:{scene}"]
+    argv = [f"simulator:{isaac_test_preset(simulator)}", f"robot:{robot}", f"terrain:{terrain}", f"scene:{scene}"]
     config = tyro.cli(RunSimConfig, args=argv)
     if sensors is not None:
         config = dataclasses.replace(config, sensor=dict(sensors))
@@ -105,7 +112,9 @@ def build_run_sim_config(
             virtual_gantry=VirtualGantryCfg(enabled=False),
         ),
     )
-    config = dataclasses.replace(config, simulator=sim_cfg)
+    config = dataclasses.replace(
+        config, simulator=sim_cfg, training=dataclasses.replace(config.training, headless=True)
+    )
 
     if record_dir is not None:
         video_kwargs: dict[str, Any] = {

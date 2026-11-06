@@ -6,6 +6,7 @@ The goal is to test the training and evaluation commands as closely as possible 
 from __future__ import annotations
 
 import io
+import os
 import re
 import subprocess
 import sys
@@ -98,7 +99,10 @@ def assert_training_and_eval_workflow(
         "--training.num-envs=128",
         "--logger.video.enabled=False",
     ]
-    train_cmd.extend(extra_config or [])
+    isaac_preset = os.environ.get("HOLOSOMA_TEST_ISAAC_PRESET", "isaacsim")
+    train_cmd.extend(
+        f"simulator:{isaac_preset}" if arg == "simulator:isaacsim" else arg for arg in (extra_config or [])
+    )
 
     print("Train command: ", subprocess.list2cmdline(train_cmd))
 

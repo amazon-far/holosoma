@@ -82,8 +82,10 @@ def test_camera_recorder(tmp_path):
     )
 
 
-def test_camera_fisheye_projection(tmp_path):
+def test_camera_fisheye_projection(tmp_path, request):
     # The authored f-theta calibration produces observably wider projection geometry than pinhole.
+    if request.config.getoption("--isaac-preset", default="isaacsim") == "isaacsim6-newton":
+        pytest.skip("Newton Warp does not support F-theta; configuration rejection is tested separately.")
     result_file = tmp_path / "fisheye_isaacsim.txt"
     run_harness(
         _PROJECTION_HARNESS,

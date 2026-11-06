@@ -28,6 +28,7 @@ if sys.path and Path(sys.path[0]).resolve() == Path(__file__).parent.resolve():
     sys.path.pop(0)
 
 from holosoma.utils.safe_torch_import import torch
+from tests.simulators._sim_harness import SIMULATORS
 
 SKIP_EXIT_CODE = 77
 
@@ -107,7 +108,7 @@ def _frame(sim) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATORS)
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--result-file", default=None, help="write 'OK' here after PASS (teardown-robust)")
     args = parser.parse_args()

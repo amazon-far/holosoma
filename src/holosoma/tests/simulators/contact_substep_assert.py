@@ -51,7 +51,7 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
     sys.path.pop(0)
 
 from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config
+from tests.simulators._sim_harness import SIMULATORS, build_run_sim_config
 
 SETTLE_CONTROL_STEPS = 60
 ROBOT = "g1-29dof"
@@ -96,7 +96,14 @@ def _check(sim, num_envs: int) -> tuple[list[str], list[str]]:
     decimation = sim.simulator_config.sim.control_decimation_steps
     recorder = sim.contact_recorder
     buffer = recorder.buffer  # never reallocated, so one binding stays valid
-    failures = []
+    failures: list[str] = []
+    if hasattr(sim, "contact_sensor"):
+        data = sim.contact_sensor.data
+        failures.extend(
+            f"ALLOCATION: disabled contact duration buffer {field} is allocated"
+            for field in ("last_air_time", "current_air_time", "last_contact_time", "current_contact_time")
+            if getattr(data, field) is not None
+        )
 
     # The recorder records on POST_STEP, which the real loops (base_task, run_sim) emit right after
     # the physics step; this harness drives the simulator directly, so it emits the phase itself.
@@ -212,7 +219,7 @@ def _check(sim, num_envs: int) -> tuple[list[str], list[str]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATORS)
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--result-file", default=None)
     args, _ = parser.parse_known_args()

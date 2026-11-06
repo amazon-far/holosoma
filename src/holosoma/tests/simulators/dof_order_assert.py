@@ -34,7 +34,7 @@ from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.simulator import BridgeConfig, VirtualGantryCfg
 from holosoma.utils.sim_utils import setup_simulation_environment
 from tests.simulators import _robot_presets
-from tests.simulators._sim_harness import step
+from tests.simulators._sim_harness import SIMULATORS, step
 
 ROBOT = "g1-29dof-reordered"
 
@@ -93,7 +93,7 @@ def _body_positions(sim):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Cross-backend DOF-order assertion harness.")
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=SIMULATORS)
     parser.add_argument("--num-envs", type=int, default=None)
     args = parser.parse_args()
     num_envs = args.num_envs if args.num_envs is not None else (1 if args.simulator == "mujoco" else 2)

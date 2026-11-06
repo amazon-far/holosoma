@@ -33,6 +33,14 @@ isaacsim = RUN_SIM_REGISTRY.add(
     ),
 )
 
+# Keep the same direct-simulation defaults for every Isaac runtime selection.
+for _name in ("isaacsim6", "isaacsim6_newton", "isaacsim6_ovphysx"):
+    _base = getattr(holosoma.config_values.simulator, _name)
+    globals()[_name] = RUN_SIM_REGISTRY.add(
+        _name,
+        dataclasses.replace(isaacsim, config=dataclasses.replace(isaacsim.config, isaacsim=_base.config.isaacsim)),
+    )
+
 # MuJoCo with sim2sim optimizations
 mujoco = RUN_SIM_REGISTRY.add(
     "mujoco",

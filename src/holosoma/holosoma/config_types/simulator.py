@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from dataclasses import field
 from enum import Enum
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import field_validator, model_validator
 from pydantic.dataclasses import dataclass
 from pydantic_core import ArgsKwargs
 
 from holosoma.config_types.frequency import DecimationLike, resolve_decimation, validate_decimation_like
+from holosoma.config_types.isaac import IsaacSimRenderConfig
 from holosoma.config_types.mujoco import MujocoConfig
 from holosoma.config_types.viewer import ViewerConfig
 
@@ -78,27 +79,6 @@ class MujocoXMLFilterCfg:
 
     ground_names: list[str] = field(default_factory=lambda: ["floor", "ground", "plane"])
     """List of geometry names to identify and remove as ground elements."""
-
-
-@dataclass(frozen=True)
-class IsaacSimRenderConfig:
-    """Isaac Sim / Kit AppLauncher options applied at app startup."""
-
-    rendering_mode: Literal["performance", "balanced", "quality"] | None = None
-    """AppLauncher rendering-mode preset (e.g. ``quality`` or ``performance``)."""
-
-    kit_args: str = ""
-    """Space-separated Kit/carb settings forwarded to AppLauncher — the way to set RTX/render options,
-    e.g. ``--/rtx/rendermode=PathTracing --/rtx/pathtracing/spp=32``."""
-
-    def app_launcher_args(self) -> dict[str, Any]:
-        """The audited subset of settings accepted by Isaac Lab's AppLauncher."""
-        launcher_args: dict[str, Any] = {}
-        if self.rendering_mode is not None:
-            launcher_args["rendering_mode"] = self.rendering_mode
-        if self.kit_args:
-            launcher_args["kit_args"] = self.kit_args
-        return launcher_args
 
 
 @dataclass(frozen=True)

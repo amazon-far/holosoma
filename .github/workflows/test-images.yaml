@@ -9,6 +9,9 @@ on:
       isaacsim_image:
         required: true
         type: string
+      isaacsim6_image:
+        required: true
+        type: string
       mujoco_image:
         required: true
         type: string
@@ -55,6 +58,12 @@ jobs:
           - simulator: isaacsim
             multigpu: "True"
             image: ${{ inputs.isaacsim_image }}
+          - simulator: isaacsim6
+            multigpu: "False"
+            image: ${{ inputs.isaacsim6_image }}
+          - simulator: isaacsim6
+            multigpu: "True"
+            image: ${{ inputs.isaacsim6_image }}
     name: Test ${{ matrix.simulator }} (${{ matrix.multigpu == 'True' && 'multi-gpu' || 'single-gpu' }})
     runs-on:
       - codebuild-holosoma-a10g-${{ matrix.multigpu == 'True' && 'x4' || 'x1' }}-gpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true

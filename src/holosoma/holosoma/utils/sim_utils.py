@@ -147,6 +147,11 @@ def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str
     Any | None
         IsaacSim simulation app instance, or None for other simulators.
     """
+    if config.simulator.config.isaacsim.runtime == "6.x":
+        from holosoma.simulator.isaacsim.backends.lab3 import launch
+
+        return launch(config, device)
+
     from isaaclab.app import AppLauncher
 
     parser = argparse.ArgumentParser(description="Run simulation with IsaacSim.")
@@ -168,7 +173,8 @@ def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str
     args_cli.seed = config.training.seed
     args_cli.env_spacing = config.scene.env_spacing
     args_cli.output_dir = config.logger.base_dir
-    args_cli.headless = config.training.headless
+    isaacsim_config = config.simulator.config.isaacsim
+    args_cli.headless = not isaacsim_config.selected_visualizers(config.training.headless)
     if world_size > 1:
         # Distribute simulator across GPUs when using multi-gpu training
         args_cli.device = f"cuda:{int(os.environ.get('LOCAL_RANK', '0'))}"
@@ -183,10 +189,11 @@ def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str
     video_enabled = config.logger.video.enabled or config.logger.headless_recording
     cameras_enabled = any(isinstance(sensor, CameraSensorConfig) for sensor in getattr(config, "sensor", {}).values())
     needs_rendering = video_enabled or cameras_enabled
+    if needs_rendering and isaacsim_config.renderer == "none":
+        raise ValueError("Camera or video capture requires a renderer; renderer='none' disables capture.")
     if needs_rendering:
         args_cli.enable_cameras = True
 
-    isaacsim_config = config.simulator.config.isaacsim
     for name, value in isaacsim_config.app_launcher_args().items():
         setattr(args_cli, name, value)
 
@@ -466,6 +473,11 @@ def close_simulation_app(simulation_app: Any) -> None:
 
 def _close_simulation_app(simulation_app: Any, failure: BaseException | None) -> None:
     """Shut down the provider after its owner has reported any active failure."""
+    from holosoma.simulator.isaacsim.backends.lab3 import NativeSession
+
+    if isinstance(simulation_app, NativeSession):
+        simulation_app.close_with_failure(failure)
+        return
     if simulation_app is not None and get_simulator_type() == SimulatorType.ISAACSIM:
         # Kit can terminate the process inside close(), before Python reaches the
         # caller's exception handler. Set its exit status before closing the app.
