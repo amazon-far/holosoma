@@ -25,6 +25,7 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 
 # Reuse static_move_assert's scene/build/step helpers so the scene is identical to the passing test.
 from holosoma.simulator.shared.object_registry import ObjectType
+from tests.simulators._sim_harness import run_and_hard_exit
 from tests.simulators.static_move_assert import (
     PILLAR_Z,
     SETTLE_SECONDS,
@@ -105,4 +106,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    run_and_hard_exit(main)

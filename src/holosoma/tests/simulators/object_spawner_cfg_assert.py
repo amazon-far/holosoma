@@ -24,6 +24,8 @@ import sys
 import traceback
 from pathlib import Path
 
+from tests.simulators._sim_harness import run_and_hard_exit
+
 # tests/simulators/ has an ``isaacsim/`` subpackage that would shadow the real IsaacSim
 # ``isaacsim`` package when run as a script; drop sys.path[0] (mirrors the other harnesses).
 if sys.path and sys.path[0].endswith("tests/simulators"):
@@ -303,4 +305,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    run_and_hard_exit(main)

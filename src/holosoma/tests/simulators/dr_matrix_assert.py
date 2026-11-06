@@ -23,6 +23,8 @@ import argparse
 import sys
 from typing import TYPE_CHECKING, cast
 
+from tests.simulators._sim_harness import run_and_hard_exit
+
 if TYPE_CHECKING:
     from tests.simulators._dr_matrix import ModelReader
 
@@ -227,4 +229,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    run_and_hard_exit(main)
