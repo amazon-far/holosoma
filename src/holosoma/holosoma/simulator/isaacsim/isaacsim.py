@@ -1019,7 +1019,7 @@ class IsaacSim(BaseSimulator):
         logger.debug("Syncing object state changes to simulation")
 
         # Single call to sync all object state changes
-        self.scene.write_data_to_sim()
+        self.backend.write_scene_data(self.sim, self.scene)
 
         # Clear dirty flag via state adapter
         self._state_adapter.clear_dirty()

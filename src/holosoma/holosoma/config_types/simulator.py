@@ -119,8 +119,12 @@ class IsaacLab3NewtonConfig:
     use_cuda_graph: bool = True
     """Capture physics execution on CUDA rather than launching every kernel from Python."""
 
-    nconmax: int | None = None
-    """Maximum contacts per environment; None retains the upstream solver default."""
+    nconmax: int | None = 128
+    """Contact capacity per environment; None opts into the upstream automatic estimate.
+
+    The automatic estimate underallocates contacts in configured G1 scenes.
+    Larger scenes may need a higher explicit capacity.
+    """
 
     njmax: int | None = None
     """Maximum constraints per environment; None retains the upstream solver default."""

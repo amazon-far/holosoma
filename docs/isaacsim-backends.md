@@ -107,7 +107,7 @@ Newton solver options are under
 | Option | Default | Effect |
 | --- | --- | --- |
 | `use-cuda-graph` | `True` | Capture physics kernels on CUDA. |
-| `nconmax` | `None` | Contact capacity per environment; retain upstream default when omitted. |
+| `nconmax` | `128` | Contact capacity per environment; `None` opts into the upstream automatic estimate. |
 | `njmax` | `None` | Constraint capacity per environment; retain upstream default when omitted. |
 | `solver-iterations` | `None` | MJWarp solver iterations; retain upstream default when omitted. |
 | `default-shape-margin` | `0.01` | Default collision margin in meters, including mesh terrain; authored shape settings can override it. |
@@ -115,6 +115,8 @@ Newton solver options are under
 Configured capacities and iteration counts must be positive; the margin must
 be finite and nonnegative. `sim.substeps` controls Newton's solver substeps.
 PhysX uses the existing `sim.physx` solver settings.
+The Newton contact default avoids the automatic estimate's observed overflow
+in G1 scenes. More complex contact configurations can require a higher capacity.
 
 Lab 3 distinguishes actuator model limits from joint limits enforced by the
 solver. Holosoma maps the robot's DOF effort and velocity limits to
@@ -144,6 +146,8 @@ fixed-size ray-pattern updates. Newton's collision-BVH caster is a separate
 candidate because it senses different geometry.
 World-mounted Newton LiDAR uses a supported bodyless site per environment,
 with the fixed mounting pose applied as a ray offset.
+Explicit actor state flushing resolves Newton's pending FK before a sensor
+capture, so moved targets are visible without first advancing physics.
 
 The native backend restores the robot's Isaac Lab default pose, velocity,
 and joint state after physics startup, before domain randomization runs.
