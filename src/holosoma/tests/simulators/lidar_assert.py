@@ -963,12 +963,17 @@ def main() -> int:
             failures += _check_isaacsim_native_configs(sim, manager)
         manager.get_lidar("cyclic_target")  # registration assertion: raises if the preset omitted it
         first_target_direction = _expected_cyclic_directions(sim.time(), 1, device)[0]
+        time_before_flush = sim.time()
+        native_steps_before = sim.sim.get_physics_step_count() if args.simulator in ("isaacsim", "isaacsim3") else None
         first_target_range = _place_cyclic_target(
             sim,
             env_ids,
             first_target_direction,
             distance=2.0,
         )
+        assert sim.time() == time_before_flush, "explicit actor flushing must not advance physics time"
+        if native_steps_before is not None:
+            assert sim.sim.get_physics_step_count() == native_steps_before
         sim.hooks.emit(Phase.FRAME_END)
         figure_summaries = []
         plane_normal = torch.tensor(_lidar_presets.PLANE_NORMAL_SENSOR, dtype=torch.float32, device=device)

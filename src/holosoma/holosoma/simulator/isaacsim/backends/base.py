@@ -209,6 +209,10 @@ class IsaacLabBackend(ABC):
     def register_scene(self, sim: Any, scene: Any) -> None:
         """Publish a constructed scene to native renderer and visualizer consumers."""
 
+    def write_scene_data(self, sim: Any, scene: Any) -> None:
+        """Flush staged scene writes to the native simulation."""
+        scene.write_data_to_sim()
+
     def restore_initial_articulation_state(self, asset: Any, env_origins: Tensor) -> None:
         """Restore configured state when native physics initialization advances it."""
 
