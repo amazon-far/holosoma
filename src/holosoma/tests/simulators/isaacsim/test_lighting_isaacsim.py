@@ -15,8 +15,6 @@ from pathlib import Path
 
 import pytest
 
-from tests.simulators._run_harness import run_harness
-
 _HARNESS = Path(__file__).resolve().parents[1] / "scene_spawn_assert.py"
 
 
@@ -32,13 +30,11 @@ def _has_isaacsim() -> bool:
 
 @pytest.mark.isaacsim
 @pytest.mark.skipif(not _has_isaacsim(), reason="IsaacSim requires Isaac Lab and a CUDA device")
-def test_scene_lights_authored(tmp_path) -> None:
+def test_scene_lights_authored(tmp_path, run_isaacsim_harness) -> None:
     """Launch IsaacSim with a declarative light rig and assert the UsdLux prims were authored."""
     result_file = tmp_path / "scene_lights.txt"
-    run_harness(
+    run_isaacsim_harness(
         _HARNESS,
-        "--simulator",
-        "isaacsim",
         "--headless",
         "true",
         "--num-envs",

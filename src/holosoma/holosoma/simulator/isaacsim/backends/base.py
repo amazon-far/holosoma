@@ -22,8 +22,23 @@ class IsaacLabBackend(ABC):
     """
 
     major: int
-    is_isaaclab3: bool
     env_regex_ns: str
+
+    @property
+    def is_isaaclab3(self) -> bool:
+        """Whether this adapter implements the Lab 3 API."""
+        return self.major == 3
+
+    @abstractmethod
+    def mutable_ray_caster_class(self) -> type[Any]:
+        """Return this API family's ray caster with fixed-shape scan updates."""
+
+    @property
+    def material_channels(self) -> tuple[str, ...]:
+        return ("static_friction", "dynamic_friction", "restitution")
+
+    def camera_depth(self, value: Any) -> Tensor:
+        return self.tensor(value)
 
     @abstractmethod
     def tensor(self, value: Any) -> Tensor:
@@ -36,6 +51,10 @@ class IsaacLabBackend(ABC):
     @abstractmethod
     def config_quat_to_native(self, quat: Sequence[float]) -> tuple[float, float, float, float]:
         """Translate WXYZ scene or sensor configuration to the native convention."""
+
+    @abstractmethod
+    def config_quat_from_native(self, quat: Sequence[float]) -> tuple[float, float, float, float]:
+        """Translate a native scene quaternion to the scalar-first USD convention."""
 
     @abstractmethod
     def quat_from_native(self, quat: Tensor) -> Tensor:
@@ -55,7 +74,7 @@ class IsaacLabBackend(ABC):
         """Add the runtime's supported launcher arguments."""
 
     @abstractmethod
-    def launch_app(self, args: dict[str, Any] | Namespace) -> Any:
+    def launch_app(self, args: dict[str, Any] | Namespace, *, sim_config: Any = None) -> Any:
         """Launch and retain the native application's lifetime."""
 
     @abstractmethod

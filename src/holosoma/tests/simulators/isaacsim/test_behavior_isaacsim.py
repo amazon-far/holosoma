@@ -19,8 +19,6 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("IsaacSim requires a CUDA device", allow_module_level=True)
 
-from tests.simulators._run_harness import run_harness  # noqa: E402
-
 _HARNESS = Path(__file__).resolve().parents[1] / "behavior_assert.py"
 
 # The full behavioral catalog runs on IsaacSim at num_envs=4 — every scenario (including the
@@ -58,14 +56,12 @@ _SCENARIOS = [
 
 
 @pytest.mark.parametrize("scenario", _SCENARIOS)
-def test_behavior_isaacsim(scenario, tmp_path):
+def test_behavior_isaacsim(scenario, tmp_path, run_isaacsim_harness):
     result_file = tmp_path / f"behavior_{scenario}.txt"
-    run_harness(
+    run_isaacsim_harness(
         _HARNESS,
         "--scenario",
         scenario,
-        "--simulator",
-        "isaacsim",
         "--num-envs",
         "4",
         "--result-file",

@@ -171,8 +171,23 @@ ISAACSIM_ONLY_WORKFLOWS = [
     WORKFLOWS + ISAACSIM_ONLY_WORKFLOWS,
 )
 @pytest.mark.parametrize("multi_gpu", [False])
-def test_training_and_eval_workflow_isaacsim(workflow_name: str, multi_gpu: bool):
-    assert_training_and_eval_workflow(workflow_name, multi_gpu=multi_gpu, extra_config=["simulator:isaacsim"])
+def test_training_and_eval_workflow_isaacsim(workflow_name: str, multi_gpu: bool, isaacsim_simulator: str):
+    assert_training_and_eval_workflow(
+        workflow_name, multi_gpu=multi_gpu, extra_config=[f"simulator:{isaacsim_simulator}"]
+    )
+
+
+@pytest.mark.isaacsim
+def test_newton_training_and_eval_workflow_isaacsim(isaacsim_backend: str, isaacsim_simulator: str):
+    if isaacsim_backend != "isaaclab3":
+        pytest.skip("Newton training requires the explicit Isaac Lab 3 profile")
+    assert_training_and_eval_workflow(
+        "g1-29dof-fast-sac",
+        extra_config=[
+            f"simulator:{isaacsim_simulator}",
+            "--simulator.config.sim.isaaclab3.physics-backend=newton",
+        ],
+    )
 
 
 # Distributed smoke test for the PR gate: one PPO and one FastSAC workflow under torch.distributed.run
@@ -180,5 +195,5 @@ def test_training_and_eval_workflow_isaacsim(workflow_name: str, multi_gpu: bool
 @pytest.mark.isaacsim
 @pytest.mark.multi_gpu
 @pytest.mark.parametrize("workflow_name", ["g1-29dof", "g1-29dof-fast-sac"])
-def test_distributed_training_and_eval_workflow_isaacsim(workflow_name: str):
-    assert_training_and_eval_workflow(workflow_name, multi_gpu=True, extra_config=["simulator:isaacsim"])
+def test_distributed_training_and_eval_workflow_isaacsim(workflow_name: str, isaacsim_simulator: str):
+    assert_training_and_eval_workflow(workflow_name, multi_gpu=True, extra_config=[f"simulator:{isaacsim_simulator}"])

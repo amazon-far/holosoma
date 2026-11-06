@@ -13,14 +13,12 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("IsaacSim requires a CUDA device", allow_module_level=True)
 
-from tests.simulators._run_harness import run_harness  # noqa: E402
-
 _HARNESS = Path(__file__).resolve().parents[1] / "lidar_visual_discovery_assert.py"
 
 
-def test_lidar_visual_target_discovery(tmp_path):
+def test_lidar_visual_target_discovery(tmp_path, run_isaacsim_harness):
     result_file = tmp_path / "lidar_visual_discovery_isaacsim.txt"
-    run_harness(
+    run_isaacsim_harness(
         _HARNESS,
         "--num-envs",
         "3",

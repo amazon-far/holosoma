@@ -10,14 +10,12 @@ pytestmark = pytest.mark.isaacsim
 
 pytest.importorskip("isaaclab")
 
-from tests.simulators._run_harness import run_harness  # noqa: E402
-
 _HARNESS = Path(__file__).resolve().parents[1] / "isaacsim_articulation_cfg_assert.py"
 
 
-def test_articulation_cfg_invariants(tmp_path):
+def test_articulation_cfg_invariants(tmp_path, run_isaacsim_harness):
     result_file = tmp_path / "articulation_cfg_result.txt"
-    run_harness(
+    run_isaacsim_harness(
         _HARNESS,
         "--result-file",
         str(result_file),

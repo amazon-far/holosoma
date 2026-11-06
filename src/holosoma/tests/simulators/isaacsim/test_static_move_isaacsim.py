@@ -26,19 +26,15 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("IsaacSim requires a CUDA device", allow_module_level=True)
 
-from tests.simulators._run_harness import run_harness  # noqa: E402
-
 # The harness builds one sim and exits 0 on success; run it per scenario in its own process.
 _HARNESS = Path(__file__).resolve().parents[1] / "static_move_assert.py"
 
 
 @pytest.mark.parametrize("num_envs", ["1", "4"])
-def test_static_move(num_envs, tmp_path):
+def test_static_move(num_envs, tmp_path, run_isaacsim_harness):
     result_file = tmp_path / "static_move.txt"
-    run_harness(
+    run_isaacsim_harness(
         _HARNESS,
-        "--simulator",
-        "isaacsim",
         "--num-envs",
         num_envs,
         "--result-file",

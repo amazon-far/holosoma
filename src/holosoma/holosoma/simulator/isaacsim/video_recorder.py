@@ -18,12 +18,11 @@ from loguru import logger
 
 
 from holosoma.simulator.shared.video_recorder import VideoRecorderInterface
-from holosoma.simulator.isaacsim.backends import get_backend
 
 
-def _current_stage() -> Any:
-    if get_backend().is_isaaclab3:
-        return get_backend().stage_utils.get_current_stage()
+def _current_stage(backend: IsaacLabBackend) -> Any:
+    if backend.is_isaaclab3:
+        return backend.stage_utils.get_current_stage()
     import omni.usd
 
     return omni.usd.get_context().get_stage()
@@ -32,6 +31,7 @@ def _current_stage() -> Any:
 if TYPE_CHECKING:
     from holosoma.config_types.video import VideoConfig
     from holosoma.simulator.isaacsim.isaacsim import IsaacSim
+    from holosoma.simulator.isaacsim.backends.base import IsaacLabBackend
 
 
 class IsaacSimVideoRecorder(VideoRecorderInterface):
@@ -103,7 +103,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         self._camera_prim_path = f"/World/envs/env_{self.config.record_env_id}/VideoCamera"
 
         # Create camera prim directly in USD stage
-        stage = _current_stage()
+        stage = _current_stage(self.simulator.backend)
         self.camera_prim = UsdGeom.Camera.Define(stage, self._camera_prim_path)
 
         # Calculate camera parameters from config vertical FOV
@@ -125,7 +125,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         self.camera_prim.GetVerticalApertureAttr().Set(vertical_aperture)
 
         # Create a view for the sensor
-        if get_backend().is_isaaclab3:
+        if self.simulator.backend.is_isaaclab3:
             from isaaclab.sim.views import FrameView
 
             self._view = FrameView(self._camera_prim_path, device=self.simulator.device)
@@ -226,7 +226,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
 
             # The view contains the one camera already placed under record_env_id; environment
             # indices are not indices into this singleton view.
-            if get_backend().is_isaaclab3:
+            if self.simulator.backend.is_isaaclab3:
                 import warp as wp
 
                 self._view.set_world_poses(
@@ -280,7 +280,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
 
         if self._rgb_annotator is None and self._render_product is None and self._view is not None:
             try:
-                if get_backend().is_isaaclab3:
+                if self.simulator.backend.is_isaaclab3:
                     self._view.close()
             except Exception as exc:
                 failures.append(exc)
@@ -295,7 +295,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         ):
             camera_prim_path = self._camera_prim_path
             try:
-                removed = _current_stage().RemovePrim(camera_prim_path)
+                removed = _current_stage(self.simulator.backend).RemovePrim(camera_prim_path)
                 if removed is False:
                     raise RuntimeError(f"Failed to remove camera prim {camera_prim_path!r}")
             except Exception as exc:

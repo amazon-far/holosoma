@@ -23,24 +23,25 @@ from holosoma.simulator.isaacsim import backends
     ("metadata_version", "physx_package", "expected_family"),
     [("0.54.2", False, 2), ("28.0.0", True, 3)],
 )
-def test_source_extension_versions_select_the_native_api_family(
+def test_source_extension_versions_validate_the_explicit_api_family(
     monkeypatch: pytest.MonkeyPatch,
     metadata_version: str,
     physx_package: bool,
     expected_family: int,
 ) -> None:
     """Source-installed metadata numbers must not be interpreted as release tags."""
-    monkeypatch.delenv("HOLOSOMA_ISAACSIM_BACKEND", raising=False)
+    # A conflicting environment value must not affect declarative selection.
+    monkeypatch.setenv("HOLOSOMA_ISAACSIM_BACKEND", f"isaaclab{5 - expected_family}")
     monkeypatch.setattr(backends.importlib.metadata, "version", lambda _name: metadata_version)
     monkeypatch.setattr(
         backends.importlib.util,
         "find_spec",
         lambda _name: ModuleSpec("isaaclab_physx", loader=None) if physx_package else None,
     )
-    selected = backends.get_backend()
+    selected = backends.get_backend(f"isaaclab{expected_family}")
     assert selected.major == expected_family
     assert selected.is_isaaclab3 == (expected_family == 3)
-    assert backends.get_backend(f"isaaclab{expected_family}") is selected
+    assert type(backends.get_backend(f"isaaclab{expected_family}")) is type(selected)
     with pytest.raises(RuntimeError, match="requires Isaac Lab"):
         backends.get_backend(f"isaaclab{5 - expected_family}")
 
@@ -52,19 +53,28 @@ def test_optional_runtime_absent_leaves_explicit_selection_available(monkeypatch
 
     monkeypatch.setattr(backends.importlib.metadata, "version", missing)
     monkeypatch.setattr(backends.importlib.util, "find_spec", lambda _name: None)
-    monkeypatch.delenv("HOLOSOMA_ISAACSIM_BACKEND", raising=False)
-    assert backends.get_backend().major == 2
-    assert backends.get_backend("isaaclab3").major == 3
-    monkeypatch.setenv("HOLOSOMA_ISAACSIM_BACKEND", "isaaclab3")
-    assert backends.get_backend().major == 3
+    monkeypatch.setenv("HOLOSOMA_ISAACSIM_BACKEND", "unsupported-obsolete-value")
     assert backends.get_backend("isaaclab2").major == 2
+    assert backends.get_backend("isaaclab3").major == 3
+    with pytest.raises(TypeError, match="backend"):
+        backends.get_backend()  # type: ignore[call-arg]
 
 
 @pytest.mark.no_sim
-def test_unknown_selection_fails_with_the_supported_choices(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HOLOSOMA_ISAACSIM_BACKEND", "physx")
+def test_unknown_selection_fails_with_the_supported_choices() -> None:
     with pytest.raises(ValueError, match="'isaaclab2' or 'isaaclab3'"):
-        backends.get_backend()
+        backends.get_backend("physx")
+
+
+@pytest.mark.no_sim
+@pytest.mark.parametrize("family", [2, 3])
+def test_backend_selection_accepts_the_config_enum(monkeypatch: pytest.MonkeyPatch, family: int) -> None:
+    from holosoma.config_types.simulator import IsaacSimBackend
+
+    monkeypatch.setattr(backends, "_installed_major", lambda: None)
+    selection = IsaacSimBackend.ISAACLAB3 if family == 3 else IsaacSimBackend.ISAACLAB2
+    assert type(backends.get_backend(selection)) is type(backends.get_backend(selection.value))
+    assert backends.get_backend(selection).major == family
 
 
 @pytest.mark.no_sim
@@ -156,6 +166,8 @@ def test_native_launch_context_outlives_the_returned_app(
             "isaaclab.app",
             "isaaclab_physx",
             "isaaclab_physx.physics",
+            "isaaclab_physx.renderers",
+            "isaaclab_newton.renderers",
             "omni",
             "omni.kit",
             "omni.kit.app",
@@ -165,6 +177,8 @@ def test_native_launch_context_outlives_the_returned_app(
     setattr(modules["isaaclab.app"], "launch_simulation", launch_simulation)
     setattr(modules["isaaclab_physx"], "physics", modules["isaaclab_physx.physics"])
     setattr(modules["isaaclab_physx.physics"], "PhysxCfg", SimpleNamespace)
+    setattr(modules["isaaclab_physx.renderers"], "IsaacRtxRendererCfg", SimpleNamespace)
+    setattr(modules["isaaclab_newton.renderers"], "NewtonWarpRendererCfg", SimpleNamespace)
     setattr(modules["omni"], "kit", modules["omni.kit"])
     setattr(modules["omni.kit"], "app", modules["omni.kit.app"])
     setattr(modules["omni.kit.app"], "get_app", lambda: native_app)
@@ -179,7 +193,7 @@ def test_native_launch_context_outlives_the_returned_app(
         "kit_args": f"{telemetry_setting}=false --/custom/sentinel=23" if namespace_args else "--/custom/sentinel=23",
     }
     args = Namespace(**requested_args) if namespace_args else requested_args.copy()
-    app = isaaclab3.IsaacLab3Backend.launch_app(args)
+    app = isaaclab3.IsaacLab3Backend().launch_app(args)
     assert app.is_running()
     forwarded = vars(args) if isinstance(args, Namespace) else args
     assert forwarded["visualizer"] == "kit"
@@ -195,7 +209,7 @@ def test_native_launch_context_outlives_the_returned_app(
     assert events == [("enter", None)]
 
     # The adapter's explicit close entry point unwinds the retained context.
-    closer = isaaclab3._LaunchedApp(native_app)
+    closer = isaaclab3.IsaacLab3Runtime(native_app)
     closer.close(exit_code=exit_code)
     assert events == [("enter", None), ("exit", exit_code)]
     closer.close(exit_code=91)

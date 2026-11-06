@@ -67,7 +67,7 @@ STEPS_AFTER_WRITE = 2
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Unified all_root_states (robot+object) probe.")
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim3"])
     parser.add_argument("--num-envs", type=int, default=None)
     parser.add_argument("--result-file", default=None, help="write 'OK' after all checks pass")
     args = parser.parse_args()

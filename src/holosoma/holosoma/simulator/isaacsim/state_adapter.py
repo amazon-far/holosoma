@@ -6,8 +6,6 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 
-from .backends import get_backend
-
 if TYPE_CHECKING:
     from holosoma.simulator.base_simulator.state import SimState
     from holosoma.simulator.shared.object_registry import ObjectRegistry
@@ -42,14 +40,14 @@ class IsaacSimStateAdapter:
         scene: Any,
         robot: Any,
         state: SimState,
-        backend: IsaacLabBackend | None = None,
+        backend: IsaacLabBackend,
     ) -> None:
         self.device = device
         self._object_registry = object_registry
         self._scene = scene
         self._robot = robot
         self._state = state
-        self._backend = get_backend() if backend is None else backend
+        self._backend = backend
         self._objects_dirty = False
 
     def resolve_indices(self, indices: torch.Tensor) -> list[tuple[str, torch.Tensor]]:

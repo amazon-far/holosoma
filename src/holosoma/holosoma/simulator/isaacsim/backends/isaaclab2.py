@@ -10,8 +10,13 @@ from .base import IsaacLabBackend
 
 class IsaacLab2Backend(IsaacLabBackend):
     major = 2
-    is_isaaclab3 = False
     env_regex_ns = "/World/envs/env_.*"
+
+    @classmethod
+    def mutable_ray_caster_class(cls) -> type[Any]:
+        from .ray_casters import legacy_mutable_ray_caster_class
+
+        return legacy_mutable_ray_caster_class()
 
     @staticmethod
     def tensor(value: Any) -> Any:
@@ -23,12 +28,21 @@ class IsaacLab2Backend(IsaacLabBackend):
         return tuple(quat)
 
     @staticmethod
+    def config_quat_from_native(quat: Any) -> tuple[float, float, float, float]:
+        """Lab 2 scene quaternions already match USD's WXYZ convention."""
+        return tuple(quat)
+
+    @staticmethod
     def quat_from_native(quat: Any) -> Any:
-        return quat[..., [1, 2, 3, 0]]
+        from holosoma.simulator.isaacsim.state_utils import quat_wxyz_to_xyzw
+
+        return quat_wxyz_to_xyzw(quat)
 
     @staticmethod
     def quat_to_native(quat: Any) -> Any:
-        return quat[..., [3, 0, 1, 2]]
+        from holosoma.simulator.isaacsim.state_utils import quat_xyzw_to_wxyz
+
+        return quat_xyzw_to_wxyz(quat)
 
     @property
     def stage_utils(self) -> Any:
@@ -43,7 +57,7 @@ class IsaacLab2Backend(IsaacLabBackend):
         AppLauncher.add_app_launcher_args(parser)
 
     @staticmethod
-    def launch_app(args: dict[str, Any] | Namespace) -> Any:
+    def launch_app(args: dict[str, Any] | Namespace, *, sim_config: Any = None) -> Any:
         from isaaclab.app import AppLauncher
 
         return AppLauncher(args).app

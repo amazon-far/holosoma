@@ -75,9 +75,8 @@ def recorder_fixture(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyP
     from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Backend
 
     backend = IsaacLab3Backend() if request.param == 3 else IsaacLab2Backend()
-    monkeypatch.setattr(video_recorder, "get_backend", lambda: backend)
-
     recorder = object.__new__(video_recorder.IsaacSimVideoRecorder)
+    recorder.simulator = SimpleNamespace(backend=backend)  # type: ignore[assignment]
     recorder.config = SimpleNamespace(use_recording_thread=False)  # type: ignore[assignment]
     recorder._closed = False
     recorder._is_recording = False
@@ -145,7 +144,7 @@ def test_cleanup_keeps_camera_path_for_retry_if_stage_removal_fails(
     # Replace only the external stage operation; cleanup, stage selection, and
     # backend resource ownership all stay in production code.
     module = sys.modules[recorder.__class__.__module__]
-    original_stage = module._current_stage()
+    original_stage = module._current_stage(backend)
     attempts = 0
 
     def _remove(path: str) -> bool:

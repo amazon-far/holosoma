@@ -308,10 +308,9 @@ def _object_sliding_friction(sim, name, env_id):
         # Friction is a physics material bound to the object's collider prim at spawn. Read the
         # bound material's static friction from the live composed stage. The behavioral
         # friction-slide preset is the independent confirmation that PhysX integrates it.
-        import omni.usd
         from pxr import UsdPhysics, UsdShade
 
-        stage = omni.usd.get_context().get_stage()
+        stage = sim.backend.stage_utils.get_current_stage()
         prefix = f"/World/envs/env_{env_id}/{name}"
         for prim in stage.Traverse():
             if not str(prim.GetPath()).startswith(prefix) or not prim.HasAPI(UsdPhysics.CollisionAPI):
@@ -343,7 +342,7 @@ def main() -> int:
     _scene_presets.register()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim3"])
     parser.add_argument("--scene", default="g1-largebox")
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
@@ -377,8 +376,8 @@ def main() -> int:
     headless = args.headless == "true"
 
     if args.probe_video_freshness:
-        if args.simulator != "isaacsim" or args.record is None:
-            parser.error("--probe-video-freshness requires --simulator isaacsim and --record DIR")
+        if args.simulator not in ("isaacsim", "isaacsim3") or args.record is None:
+            parser.error("--probe-video-freshness requires an Isaac Sim preset and --record DIR")
         from tests.simulators import _camera_presets  # noqa: F401  # Registers the panel-target scene.
 
         args.scene = "panel-target"
@@ -407,8 +406,8 @@ def main() -> int:
         )
         config = dataclasses.replace(config, simulator=dataclasses.replace(config.simulator, config=simulator_config))
     if args.probe_isaacsim_render_config:
-        if args.simulator != "isaacsim":
-            parser.error("--probe-isaacsim-render-config requires --simulator isaacsim")
+        if args.simulator not in ("isaacsim", "isaacsim3"):
+            parser.error("--probe-isaacsim-render-config requires an Isaac Sim preset")
         render_config = IsaacSimRenderConfig(
             rendering_mode=args.rendering_mode,
             kit_args=(f"--{_KIT_ARG_SETTING}={args.kit_arg_sentinel}" if args.kit_arg_sentinel is not None else ""),
@@ -426,8 +425,8 @@ def main() -> int:
             scene = dataclasses.replace(scene, lights={DEFAULT_LIGHT_KEY: DefaultLightConfig()})
         config = dataclasses.replace(config, simulator=simulator, scene=scene)
     if args.probe_lights:
-        if args.simulator != "isaacsim":
-            parser.error("--probe-lights requires --simulator isaacsim")
+        if args.simulator not in ("isaacsim", "isaacsim3"):
+            parser.error("--probe-lights requires an Isaac Sim preset")
         # One light per type, each exercising a distinct field the probe then checks on the authored
         # prim: distant carries color-temperature + angle, dome an HDRI texture, sphere a radius, rect
         # an exposure. sun/panel also carry a 90°-about-X orientation and lamp/panel a position, so the
@@ -459,7 +458,6 @@ def main() -> int:
     sim, device, _app = launch_simulator(config, device=device)
     if args.probe_isaacsim_render_config:
         import carb
-        import omni.usd
 
         settings = carb.settings.get_settings()
         if args.rendering_mode is not None:
@@ -487,7 +485,7 @@ def main() -> int:
                 return 1
         from pxr import UsdLux
 
-        stage = omni.usd.get_context().get_stage()
+        stage = sim.backend.stage_utils.get_current_stage()
         sun_path = f"/World/Lights/{DEFAULT_LIGHT_KEY}"
         sun_prim = stage.GetPrimAtPath(sun_path)
         has_default_sun = sun_prim.IsValid()
@@ -515,10 +513,9 @@ def main() -> int:
         return 0
 
     if args.probe_lights:
-        import omni.usd
         from pxr import Gf, UsdGeom, UsdLux
 
-        stage = omni.usd.get_context().get_stage()
+        stage = sim.backend.stage_utils.get_current_stage()
 
         def _local_xf(prim):
             return UsdGeom.Xformable(prim).GetLocalTransformation()

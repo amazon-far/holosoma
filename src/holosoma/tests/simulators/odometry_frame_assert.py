@@ -169,7 +169,7 @@ def _norm(vector: np.ndarray) -> float:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Cross-backend arbitrary-frame odometry regression.")
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim3"])
     parser.add_argument("--result-file", type=Path)
     args = parser.parse_args()
 

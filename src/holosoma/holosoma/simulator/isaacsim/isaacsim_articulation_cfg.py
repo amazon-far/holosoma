@@ -10,7 +10,6 @@ import isaaclab.sim as sim_utils
 from isaaclab.actuators import IdealPDActuatorCfg, ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.sensors import ContactSensorCfg
-from holosoma.simulator.isaacsim.backends import get_backend
 
 from holosoma.simulator.isaacsim.converters import (
     physics_to_collision_props,
@@ -21,6 +20,7 @@ from holosoma.utils.path import resolve_asset_path
 
 if TYPE_CHECKING:
     from holosoma.config_types.robot import RobotConfig
+    from holosoma.simulator.isaacsim.backends.base import IsaacLabBackend
 
 ARTICULATION_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
@@ -127,7 +127,7 @@ def _per_joint_map(joint_names: Sequence[str], values: Sequence[float], property
     return {joint_name: float(values[index]) for index, joint_name in enumerate(joint_names)}
 
 
-def build_robot_articulation_cfg(robot_config: RobotConfig) -> ArticulationCfg:
+def build_robot_articulation_cfg(robot_config: RobotConfig, *, backend: IsaacLabBackend) -> ArticulationCfg:
     """Assemble the robot ``ArticulationCfg`` from ``robot_config``.
 
     Resolves the asset root, maps the shared ``link_physics`` onto IsaacLab rigid/collision/mass
@@ -177,7 +177,7 @@ def build_robot_articulation_cfg(robot_config: RobotConfig) -> ArticulationCfg:
         # convert from urdf dynamically
         full_urdf_path = resolve_asset_path(robot_asset_cfg.urdf_file, robot_asset_cfg.asset_root)
         merge_fixed_joints = robot_asset_cfg.collapse_fixed_joints
-        if merge_fixed_joints and get_backend().is_isaaclab3:
+        if merge_fixed_joints and backend.is_isaaclab3:
             # Sim 6.2 merges every fixed joint, ignoring the URDF dont_collapse
             # extension used by foot contact markers. Preserve those bodies by
             # retaining fixed joints for marked assets; unmarked assets still merge.
@@ -237,13 +237,11 @@ def build_robot_articulation_cfg(robot_config: RobotConfig) -> ArticulationCfg:
         zero_gains = {joint_name: 0.0 for joint_name in dof_names_list}
         effort_limits = _per_joint_map(dof_names_list, dof_effort_limit_list, "effort_limit")
         velocity_limits = _per_joint_map(dof_names_list, dof_vel_limit_list, "velocity_limit")
-        if get_backend().is_isaaclab3:
-            # Lab 3 preserves the authored solver effort cap for explicit models; Lab 2 raised
-            # it to 1e9. Keep model clipping authoritative, matching the existing torque path.
+        if backend.is_isaaclab3:
+            # Lab 3 keeps authored joint solver limits independently of model clipping.
             actuator_limits = {
                 "actuator_effort_limit": effort_limits,
                 "actuator_velocity_limit": velocity_limits,
-                "joint_effort_limit": 1.0e9,
             }
         else:
             actuator_limits = {"effort_limit": effort_limits, "velocity_limit": velocity_limits}
@@ -261,11 +259,11 @@ def build_robot_articulation_cfg(robot_config: RobotConfig) -> ArticulationCfg:
         actuators = {}
 
     return ARTICULATION_CFG.replace(
-        prim_path=f"{get_backend().env_regex_ns}/Robot", spawn=spawn, init_state=init_state, actuators=actuators
+        prim_path=f"{backend.env_regex_ns}/Robot", spawn=spawn, init_state=init_state, actuators=actuators
     )
 
 
-def build_contact_sensor_cfg(debug_vis: bool) -> ContactSensorCfg:
+def build_contact_sensor_cfg(debug_vis: bool, *, backend: IsaacLabBackend) -> ContactSensorCfg:
     """Build the robot ContactSensorCfg covering every robot body prim.
 
     ``debug_vis`` draws the red contact spheres; the caller passes ``SimulatorInitConfig.debug_viz``
@@ -275,7 +273,7 @@ def build_contact_sensor_cfg(debug_vis: bool) -> ContactSensorCfg:
     sweep after the first reset if you need to toggle the markers at runtime.
     """
     return ContactSensorCfg(
-        prim_path=f"{get_backend().env_regex_ns}/Robot/.*",
+        prim_path=f"{backend.env_regex_ns}/Robot/.*",
         # 0.0 refreshes on every scene.update(), i.e. once per physics step at any fps
         update_period=0.0,
         # Holosoma consumes net_forces_w only, sampled per substep by ContactSubstepRecorder; the

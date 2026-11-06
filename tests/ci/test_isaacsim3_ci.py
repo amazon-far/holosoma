@@ -7,6 +7,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -15,6 +16,46 @@ WORKFLOWS = ROOT / ".github/workflows"
 
 def _jobs(name: str) -> dict:
     return yaml.safe_load((WORKFLOWS / name).read_text())["jobs"]
+
+
+@pytest.mark.parametrize(
+    ("simulator", "backend", "expected"),
+    [
+        ("isaacsim", "isaaclab2", ["--backend", "isaaclab2"]),
+        ("isaacsim", "isaaclab3", ["--backend", "isaaclab3"]),
+        ("mujoco", "isaaclab2", []),
+    ],
+)
+def test_reusable_workflow_passes_explicit_version_only_to_isaac_suite(
+    tmp_path: Path, simulator: str, backend: str, expected: list[str]
+) -> None:
+    workflow = _jobs("test-simulator-image.yaml")["simulator-tests"]
+    assert "HOLOSOMA_ISAACSIM_BACKEND" not in workflow["container"]["env"]
+    command = workflow["steps"][0]["run"]
+    assert command.count("cd /workspace/holosoma") == 1
+    command = (
+        command.replace("cd /workspace/holosoma", 'cd "$WORKFLOW_CHECKOUT"')
+        .replace("${{ inputs.simulator }}", simulator)
+        .replace("${{ inputs.isaacsim_backend }}", backend)
+    )
+    scripts = tmp_path / "tests/ci"
+    scripts.mkdir(parents=True)
+    (scripts / f"{simulator}_ci_tests.sh").write_text('printf "%s\\n" "$@" > "$WORKFLOW_ARG_LOG"\n')
+    log = tmp_path / "args"
+    result = subprocess.run(
+        ["bash", "-e", "-c", command],
+        env={
+            **os.environ,
+            "WORKFLOW_CHECKOUT": str(tmp_path),
+            "WORKFLOW_ARG_LOG": str(log),
+            "HOLOSOMA_ISAACSIM_BACKEND": "isaaclab2" if backend == "isaaclab3" else "isaaclab3",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert [line for line in log.read_text().splitlines() if line] == expected
 
 
 def test_pr_runs_full_isaac_suite_on_both_new_runtime_gpu_shapes_before_tagging() -> None:

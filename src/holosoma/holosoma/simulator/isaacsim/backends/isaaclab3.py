@@ -10,6 +10,8 @@ from contextlib import ExitStack
 from argparse import Namespace
 from typing import Any
 
+from holosoma.config_types.simulator import IsaacLab3Config
+
 from .base import IsaacLabBackend
 
 
@@ -40,10 +42,14 @@ _RTX_PRESETS = {
 }
 
 
-class _LaunchedApp:
-    """Keep the canonical launch context alive for Holosoma's app lifecycle."""
+class IsaacLab3Runtime:
+    """Expose the Kit app while closing through Lab 3's supported launch context.
 
-    isaaclab_major = 3
+    ``launch_simulation`` owns the runtime and preserves failure status during
+    shutdown. Closing its yielded physics config or Kit app directly bypasses
+    that contract. The process ExitStack retains contexts when assertion
+    harnesses keep only the constructed simulator.
+    """
 
     def __init__(self, app: Any):
         self._app = app
@@ -57,8 +63,20 @@ class _LaunchedApp:
 
 class IsaacLab3Backend(IsaacLabBackend):
     major = 3
-    is_isaaclab3 = True
     env_regex_ns = "/World/envs/env_[^/]+"
+
+    def __init__(self, native: IsaacLab3Config | None = None):
+        self.options = native if native is not None else IsaacLab3Config()
+
+    def mutable_ray_caster_class(self) -> type[Any]:
+        from .ray_casters import newton_mutable_ray_caster_class, physx_mutable_ray_caster_class
+
+        factory = (
+            newton_mutable_ray_caster_class
+            if self.options.physics_backend == "newton"
+            else physx_mutable_ray_caster_class
+        )
+        return factory()
 
     @staticmethod
     def tensor(value: Any) -> Any:
@@ -67,7 +85,18 @@ class IsaacLab3Backend(IsaacLabBackend):
     @staticmethod
     def config_quat_to_native(quat: Any) -> tuple[float, float, float, float]:
         """Config sensor/scene quaternions are WXYZ; Lab 3 takes XYZW."""
-        return (quat[1], quat[2], quat[3], quat[0])
+        import numpy as np
+        from isaaclab.utils.math import convert_quat
+
+        return tuple(convert_quat(np.asarray(quat), to="xyzw"))
+
+    @staticmethod
+    def config_quat_from_native(quat: Any) -> tuple[float, float, float, float]:
+        """Convert Lab 3's XYZW scene quaternions to USD's WXYZ convention."""
+        import numpy as np
+        from isaaclab.utils.math import convert_quat
+
+        return tuple(convert_quat(np.asarray(quat), to="wxyz"))
 
     @staticmethod
     def quat_from_native(quat: Any) -> Any:
@@ -89,12 +118,23 @@ class IsaacLab3Backend(IsaacLabBackend):
 
         add_launcher_args(parser)
 
-    @staticmethod
-    def launch_app(args: dict[str, Any] | Namespace) -> Any:
+    def launch_app(self, args: dict[str, Any] | Namespace, *, sim_config: Any = None) -> Any:
         from isaaclab.app import launch_simulation
-        from isaaclab_physx.physics import PhysxCfg
 
         args = vars(args) if isinstance(args, Namespace) else args
+        # Holosoma still authors/imports USD assets and records through Kit.
+        # Newton physics and Warp cameras can run in that same process; OVRTX
+        # and OVPhysX require a separate kitless integration.
+        args["require_kit"] = True
+        # The declared Holosoma config owns physics selection, rather than an
+        # additional SDK CLI override changing only the launcher's prototype.
+        requested_physics = args.pop("physics", None)
+        expected_physics = "newton_mjwarp" if self.options.physics_backend == "newton" else "isaacsim_physx"
+        if requested_physics not in (None, expected_physics):
+            raise ValueError(
+                f"SDK --physics {requested_physics!r} conflicts with configured {expected_physics!r}; "
+                "select --simulator.config.sim.isaaclab3.physics-backend instead."
+            )
         # Holosoma's viewer contract predates Lab 3's independent --viz switch.
         # Select the native Kit visualizer for interactive launches.
         if not args.get("headless", False) and args.get("visualizer") is None:
@@ -119,10 +159,40 @@ class IsaacLab3Backend(IsaacLabBackend):
         if telemetry_setting not in kit_args:
             kit_args = f"{kit_args} --{telemetry_setting}=true".strip()
         args["kit_args"] = kit_args
-        _RUNTIME.enter_context(launch_simulation(PhysxCfg(), args))
+        launch_cfg = Namespace(physics=self.physics_config(sim_config), renderer=self.renderer_config())
+        _RUNTIME.enter_context(launch_simulation(launch_cfg, args))
         import omni.kit.app
 
-        return _LaunchedApp(omni.kit.app.get_app())
+        return IsaacLab3Runtime(omni.kit.app.get_app())
+
+    def physics_config(self, config: Any = None) -> Any:
+        """Build the explicitly selected physics engine's supported config."""
+        if self.options.physics_backend == "newton":
+            from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg, NewtonShapeCfg
+
+            options = self.options.newton
+            solver_kwargs = {}
+            for source, target in (("nconmax", "nconmax"), ("njmax", "njmax"), ("solver_iterations", "iterations")):
+                value = getattr(options, source)
+                if value is not None:
+                    solver_kwargs[target] = value
+            return NewtonCfg(
+                num_substeps=config.substeps if config is not None else 1,
+                use_cuda_graph=options.use_cuda_graph,
+                solver_cfg=MJWarpSolverCfg(**solver_kwargs),
+                default_shape_cfg=NewtonShapeCfg(margin=options.default_shape_margin),
+            )
+        from isaaclab_physx.physics import PhysxCfg
+
+        if config is None:
+            return PhysxCfg()
+        return PhysxCfg(
+            bounce_threshold_velocity=config.physx.bounce_threshold_velocity,
+            solver_type=config.physx.solver_type,
+            max_position_iteration_count=config.physx.num_position_iterations,
+            max_velocity_iteration_count=config.physx.num_velocity_iterations,
+            gpu_max_rigid_patch_count=10 * 2**15,
+        )
 
     @staticmethod
     def root_view(asset: Any) -> Any:
@@ -137,6 +207,10 @@ class IsaacLab3Backend(IsaacLabBackend):
 
     def physics_property(self, asset: Any, name: str) -> Any:
         data_names = {"masses": "body_mass", "coms": "body_com_pose_b", "inertias": "body_inertia"}
+        if self.options.physics_backend == "newton":
+            # Newton aligns the CoM frame with the body frame. Its pose accessor
+            # allocates dummy unit quaternions; DR only needs the actual XYZ view.
+            data_names["coms"] = "body_com_pos_b"
         if name in data_names:
             # The public data views carry user body ordering. The native view
             # is ordered by PhysX and should only be used for shape materials.
@@ -144,12 +218,24 @@ class IsaacLab3Backend(IsaacLabBackend):
             if name == "inertias" and asset.num_bodies == 1 and not hasattr(asset, "num_joints"):
                 return value[:, 0]
             return value
+        if self.options.physics_backend == "newton" and name == "material_properties":
+            from .newton_properties import read_materials
+
+            return read_materials(asset)
         return self.native_tensor(getattr(self.root_view(asset), f"get_{name}")())
 
     def write_physics_property(self, asset: Any, name: str, value: Any, env_ids: Any) -> None:
         import torch
         import warp as wp
 
+        if self.options.physics_backend == "newton":
+            from .newton_properties import write_body_property, write_materials
+
+            if name == "material_properties":
+                write_materials(asset, value, env_ids)
+            else:
+                write_body_property(asset, name, value, env_ids)
+            return
         if name in ("masses", "coms", "inertias"):
             if name == "inertias" and value.ndim == 2:
                 value = value.unsqueeze(1)
@@ -220,11 +306,9 @@ class IsaacLab3Backend(IsaacLabBackend):
             return sensor.data.net_forces_w.torch
         return sensor.data.net_normal_forces_w.torch
 
-    @staticmethod
-    def simulation_config(config: Any, device: str) -> Any:
+    def simulation_config(self, config: Any, device: str) -> Any:
         from isaaclab.sim import SimulationCfg
-        from isaaclab_physx.physics import PhysxCfg
-        from isaaclab_physx.sim.spawners.materials import PhysxRigidBodyMaterialCfg
+        from isaaclab.sim.spawners.materials import RigidBodyMaterialBaseCfg
 
         native = config.isaaclab3
         return SimulationCfg(
@@ -234,14 +318,8 @@ class IsaacLab3Backend(IsaacLabBackend):
             use_fabric=native.use_fabric,
             create_stage_in_memory=native.create_stage_in_memory,
             use_newton_actuators=native.use_newton_actuators,
-            physics=PhysxCfg(
-                bounce_threshold_velocity=config.physx.bounce_threshold_velocity,
-                solver_type=config.physx.solver_type,
-                max_position_iteration_count=config.physx.num_position_iterations,
-                max_velocity_iteration_count=config.physx.num_velocity_iterations,
-                gpu_max_rigid_patch_count=10 * 2**15,
-            ),
-            physics_material=PhysxRigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0, restitution=0.0),
+            physics=self.physics_config(config),
+            physics_material=RigidBodyMaterialBaseCfg(static_friction=1.0, dynamic_friction=1.0, restitution=0.0),
         )
 
     @staticmethod
@@ -254,19 +332,21 @@ class IsaacLab3Backend(IsaacLabBackend):
     def register_scene(sim: Any, scene: Any) -> None:
         sim.register_interactive_scene(scene)
 
-    @staticmethod
-    def prepare_scene(scene: Any) -> None:
+    def prepare_scene(self, scene: Any) -> None:
         from isaaclab import cloner
         from isaaclab.assets import AssetBaseCfg
         from isaaclab_physx.cloner import PhysxReplicateContext
+        from isaaclab_newton.cloner import NewtonReplicateContext
 
         # Holosoma owns a complete env subtree, including expanded scene-file
         # bodies, material bindings and lights. Declare that ownership before
         # authoring assets, so one native plan clones the whole subtree.
-        root = AssetBaseCfg(
-            prim_path=scene.env_regex_ns,
-            cloning_contexts=(cloner.UsdReplicateContext, PhysxReplicateContext),
-        )
+        physics_context = NewtonReplicateContext if self.options.physics_backend == "newton" else PhysxReplicateContext
+        contexts: tuple[Any, ...] = (cloner.UsdReplicateContext, physics_context)
+        if self.options.renderer == "newton_warp" and physics_context is not NewtonReplicateContext:
+            # Warp's render-only Newton model must include the same scene subtree.
+            contexts += (NewtonReplicateContext,)
+        root = AssetBaseCfg(prim_path=scene.env_regex_ns, cloning_contexts=contexts)
         cloner.clone_plan_from_env_0(scene.cfg.clone_cfg, (root,), scene.num_envs, scene.cfg.env_spacing)
 
     @staticmethod
@@ -309,15 +389,43 @@ class IsaacLab3Backend(IsaacLabBackend):
 
     def create_camera_cfg(self, *, offset_position: Any, offset_orientation: Any, **kwargs: Any) -> Any:
         from isaaclab.sensors import CameraCfg
-        from isaaclab_physx.renderers import IsaacRtxRendererCfg
 
+        projection = getattr(kwargs.get("spawn"), "projection_type", "pinhole")
+        if self.options.renderer == "newton_warp" and projection != "pinhole":
+            raise ValueError(
+                f"Warp cameras do not support Holosoma's USD {projection!r} projection. "
+                "Choose renderer='isaac_rtx' for these fisheye models."
+            )
         return CameraCfg(
             offset=CameraCfg.OffsetCfg(
                 pos=offset_position, rot=self.config_quat_to_native(offset_orientation), convention="opengl"
             ),
-            renderer_cfg=IsaacRtxRendererCfg(),
+            renderer_cfg=self.renderer_config(),
             **kwargs,
         )
+
+    def renderer_config(self) -> Any:
+        """Declare the camera renderer both at launch and at sensor construction."""
+        from isaaclab_physx.renderers import IsaacRtxRendererCfg
+        from isaaclab_newton.renderers import NewtonWarpRendererCfg
+
+        return NewtonWarpRendererCfg() if self.options.renderer == "newton_warp" else IsaacRtxRendererCfg()
+
+    @property
+    def material_channels(self) -> tuple[str, ...]:
+        """Actual engine channels; Newton has one Coulomb friction coefficient."""
+        if self.options.physics_backend == "newton":
+            return ("static_friction", "restitution")
+        return ("static_friction", "dynamic_friction", "restitution")
+
+    def camera_depth(self, value: Any) -> Any:
+        """Normalize native camera misses before Holosoma's shared depth policy."""
+        depth = self.tensor(value)
+        if self.options.renderer == "newton_warp":
+            import torch
+
+            return torch.where(depth == 0, torch.inf, depth)
+        return depth
 
     @staticmethod
     def create_camera(cfg: Any) -> Any:

@@ -51,12 +51,9 @@ from typing import Any, Callable
 import omni.log
 import omni.usd
 from pxr import Usd
-from holosoma.simulator.isaacsim.backends import get_backend
-
-stage_utils = get_backend().stage_utils
 
 
-def has_api_in_subtree(prim_path: str, api_class: type[Any], stage: Usd.Stage | None = None) -> bool:
+def has_api_in_subtree(prim_path: str, api_class: type[Any], stage: Usd.Stage) -> bool:
     """Check if a USD API exists anywhere in the subtree of a prim.
 
     Recursively searches through the prim hierarchy starting from the specified
@@ -68,15 +65,14 @@ def has_api_in_subtree(prim_path: str, api_class: type[Any], stage: Usd.Stage | 
         Path to the root prim to check.
     api_class : Type
         The USD API class to check for (e.g., UsdPhysics.RigidBodyAPI).
-    stage : Usd.Stage, optional
-        USD stage to use. Defaults to current stage if not provided.
+    stage : Usd.Stage
+        USD stage to inspect.
 
     Returns
     -------
     bool
         True if the API is found anywhere in the subtree, False otherwise.
     """
-    stage = stage or stage_utils.get_current_stage()
     root_prim = stage.GetPrimAtPath(prim_path)
 
     if not root_prim.IsValid():
@@ -105,7 +101,7 @@ def ensure_api_and_modify(
     cfg: Any,
     api_class: type[Any],
     modify_func: Callable[[str, Any, Usd.Stage], bool],
-    stage: Usd.Stage | None = None,
+    stage: Usd.Stage,
 ) -> bool:
     """Ensure a USD API exists before modifying its properties.
 
@@ -123,16 +119,14 @@ def ensure_api_and_modify(
         The USD API class to ensure exists (e.g., UsdPhysics.RigidBodyAPI).
     modify_func : Callable[[str, Any, Usd.Stage], bool]
         The function to call to modify properties (e.g., schemas.modify_rigid_body_properties).
-    stage : Usd.Stage, optional
-        USD stage to use. Defaults to current stage if not provided.
+    stage : Usd.Stage
+        USD stage to modify.
 
     Returns
     -------
     bool
         True if properties were successfully modified, False otherwise.
     """
-    stage = stage or stage_utils.get_current_stage()
-
     # Check if API exists anywhere in the subtree
     if not has_api_in_subtree(prim_path, api_class, stage):
         # Apply API to the root prim first

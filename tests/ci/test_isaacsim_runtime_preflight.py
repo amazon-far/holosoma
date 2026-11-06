@@ -58,7 +58,11 @@ def _runtime(
             requested_backend or backend,
             *(["--multigpu"] if multigpu else []),
         ],
-        env={**os.environ, "PYTHONPATH": str(tmp_path)},
+        env={
+            **os.environ,
+            "PYTHONPATH": str(tmp_path),
+            "HOLOSOMA_ISAACSIM_BACKEND": "isaaclab2" if backend == "isaaclab3" else "isaaclab3",
+        },
         check=False,
         capture_output=True,
         text=True,

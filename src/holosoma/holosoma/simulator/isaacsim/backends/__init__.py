@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import importlib.metadata
 import importlib.util
-import os
-from functools import lru_cache
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from holosoma.config_types.simulator import IsaacLab3Config
+
     from .base import IsaacLabBackend
 
 
@@ -33,31 +33,25 @@ def _installed_major() -> int | None:
     return 2
 
 
-@lru_cache(maxsize=2)
-def _backend_for(name: str) -> IsaacLabBackend:
+def get_backend(backend: str, *, native: IsaacLab3Config | None = None) -> IsaacLabBackend:
+    """Construct the explicit API family and validate the installed runtime.
+
+    Selection comes from the simulator config. Installed package capabilities
+    validate that choice; they never choose a backend. Each owner receives its
+    own adapter and native options, without process-shared mutable state.
+    """
+    major = _installed_major()
+    name = backend
     if name == "isaaclab2":
         from .isaaclab2 import IsaacLab2Backend
 
-        return IsaacLab2Backend()
-    if name == "isaaclab3":
+        selected: IsaacLabBackend = IsaacLab2Backend()
+    elif name == "isaaclab3":
         from .isaaclab3 import IsaacLab3Backend
 
-        return IsaacLab3Backend()
-    raise ValueError(f"Unknown Isaac Sim backend {name!r}; expected 'isaaclab2' or 'isaaclab3'.")
-
-
-def get_backend(backend: str | None = None) -> IsaacLabBackend:
-    """Resolve and validate a backend against the installed Isaac Lab version.
-
-    An explicit simulator config wins over the environment. Helpers without a
-    simulator use the setup script's environment selection, then the installed
-    major version. Lab 2 remains the fallback when the optional runtime is absent.
-    """
-    major = _installed_major()
-    name = backend or os.environ.get("HOLOSOMA_ISAACSIM_BACKEND")
-    if name is None:
-        name = f"isaaclab{major}" if major is not None else "isaaclab2"
-    selected = _backend_for(name)
+        selected = IsaacLab3Backend(native)
+    else:
+        raise ValueError(f"Unknown Isaac Sim backend {name!r}; expected 'isaaclab2' or 'isaaclab3'.")
     if major is not None and major != selected.major:
         raise RuntimeError(
             f"The {name} backend requires Isaac Lab {selected.major}.x; Isaac Lab {major}.x is installed. "

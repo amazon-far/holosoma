@@ -13,7 +13,7 @@ pytestmark = pytest.mark.no_sim
 
 
 @pytest.mark.parametrize("config_type", ["ExperimentConfig", "RunSimConfig"])
-@pytest.mark.parametrize("environment_backend", ["isaaclab2", "isaaclab3"])
+@pytest.mark.parametrize("environment_backend", ["isaaclab2", "isaaclab3", "unsupported-obsolete-value"])
 def test_explicit_lab3_preset_parses_in_a_fresh_process(config_type: str, environment_backend: str) -> None:
     module = "experiment" if config_type == "ExperimentConfig" else "run_sim"
     child = subprocess.run(
@@ -57,7 +57,7 @@ print(json.dumps({{
         "name": "isaacsim",
         "backend": "isaaclab3",
         "override_backend": "isaaclab3",
-        "legacy_backend": environment_backend,
+        "legacy_backend": "isaaclab2",
         "same_defaults": True,
         "same_target": True,
         "bridge": config_type == "RunSimConfig",

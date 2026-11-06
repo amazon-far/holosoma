@@ -22,17 +22,13 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("IsaacSim requires a CUDA device", allow_module_level=True)
 
-from tests.simulators._run_harness import run_harness  # noqa: E402
-
 _HARNESS = Path(__file__).resolve().parents[1] / "subset_write_assert.py"
 
 
-def test_subset_write(tmp_path):
+def test_subset_write(tmp_path, run_isaacsim_harness):
     result_file = tmp_path / "subset_write.txt"
-    run_harness(
+    run_isaacsim_harness(
         _HARNESS,
-        "--simulator",
-        "isaacsim",
         "--num-envs",
         "4",
         "--result-file",
