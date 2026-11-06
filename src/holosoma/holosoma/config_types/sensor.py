@@ -11,6 +11,7 @@ Every mounted sensor uses the OpenGL/USD/MuJoCo optical frame: ``-Z`` forward an
 from __future__ import annotations
 
 import math
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import field
@@ -210,6 +211,45 @@ class IsaacSimFisheyeConfig:
 
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)
+class IsaacSimRaycastMeshConfig:
+    """Select loaded scene geometry for ray-cast depth, without loading separate mesh files."""
+
+    include_paths: list[str] | None = None
+    """USD prim-path expressions using IsaacLab's per-component regex matching, as for LiDAR.
+
+    ``None`` selects visible default/render-purpose geometry from the ground, robot, and loaded
+    scene actors. Expressions use ``/World/envs/env_.*/...`` for cloned objects. Matching an
+    object selects its descendant meshes. An explicit list restricts this discovered scene
+    selection; every include must match geometry. Whole-link roots can include collision
+    geometry too: eligibility follows USD visibility/purpose, not a ``visuals``/``collisions``
+    path name or CollisionAPI. Use named visual subtrees for an explicit surface allowlist.
+    """
+
+    exclude_paths: list[str] = field(default_factory=list)
+    """Remove matching objects or meshes and their descendants after inclusion.
+
+    Exclusions take precedence. Hidden geometry and proxy/guide-purpose geometry are always
+    omitted, even when explicitly included; material opacity is not interpreted. An explicit
+    include list already omits other geometry; excluding everything would also remove those
+    includes. Meshes retain their authored scale and local transforms, and follow their scene
+    bodies without rebuilding the mesh.
+    """
+
+    @model_validator(mode="after")
+    def validate_paths(self) -> IsaacSimRaycastMeshConfig:
+        if self.include_paths is not None and not self.include_paths:
+            raise ValueError("IsaacSimRaycastMeshConfig.include_paths must be None or a non-empty list.")
+        for path in (self.include_paths or []) + self.exclude_paths:
+            if not path.startswith("/") or path != path.strip():
+                raise ValueError(f"Raycast mesh path must be an absolute USD prim-path expression, got {path!r}.")
+            try:
+                re.compile(path)
+            except re.error as exc:
+                raise ValueError(f"Invalid raycast mesh path expression {path!r}: {exc}") from exc
+        return self
+
+
+@dataclass(frozen=True, config=_FORBID_EXTRA)
 class IsaacSimCameraConfig:
     """Isaac Sim camera renderer, projection, and lens settings.
 
@@ -220,15 +260,13 @@ class IsaacSimCameraConfig:
 
     renderer: IsaacSimCameraRenderer = "rtx"
     """``"rtx"`` renders with an RTX ``TiledCamera``. ``"raycast"`` ray casts depth with Warp against
-    the terrain mesh and the :attr:`raycast_link_meshes` at their links' current poses: depth only,
+    loaded scene geometry selected by :attr:`raycast_meshes` at its current poses: depth only,
     pinhole only, robot-link mounts only, no RTX render pass, and envs reset or teleported in a
     control step are re-rendered at their new state. Other backends ignore it and render the camera
     natively. Defaults to ``"rtx"``."""
 
-    raycast_link_meshes: dict[str, str | list[str]] = field(default_factory=dict)
-    """For ``renderer="raycast"``: robot link name -> triangle mesh file, or list of files (STL/OBJ,
-    link frame), to ray cast against at the link's current pose in addition to the terrain. Paths are
-    resolved with ``resolve_data_file_path``; empty paths are skipped. Ignored by other renderers."""
+    raycast_meshes: IsaacSimRaycastMeshConfig = field(default_factory=IsaacSimRaycastMeshConfig)
+    """Loaded scene object/mesh inclusion and exclusion for ``renderer="raycast"``."""
 
     projection_type: IsaacSimCameraProjectionType = "pinhole"
     """Native USD/RTX camera projection. Defaults to ``"pinhole"``."""
@@ -263,6 +301,8 @@ class IsaacSimCameraConfig:
                 )
             if self.f_stop != 0.0:
                 raise ValueError("IsaacSimCameraConfig.renderer='raycast' has no depth of field; set f_stop=0.")
+        elif self.raycast_meshes != IsaacSimRaycastMeshConfig():
+            raise ValueError("IsaacSimCameraConfig.raycast_meshes requires renderer='raycast'.")
         return self
 
 

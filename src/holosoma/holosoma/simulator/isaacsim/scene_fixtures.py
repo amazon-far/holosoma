@@ -8,23 +8,24 @@ sensor and wire it into the scene.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import isaaclab.sim as sim_utils
 import isaacsim.core.utils.stage as stage_utils
-from isaaclab.sensors import RayCasterCfg, patterns
+import warp as wp
+from isaaclab.sensors import RayCaster, RayCasterCfg, patterns
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.terrains.utils import create_prim_from_mesh
 from pxr import Usd, UsdGeom
 
 from holosoma.simulator.isaacsim.prim_utils import resolve_robot_link_prim_expression
+from holosoma.simulator.isaacsim.terrain_mesh_cache import TERRAIN_PRIM_PATH, register_managed_terrain_mesh
 
 if TYPE_CHECKING:
     from isaaclab.scene import InteractiveScene
 
     from holosoma.managers.terrain import TerrainManager
-
-TERRAIN_PRIM_PATH = "/World/ground"
+    from holosoma.managers.terrain.terms.locomotion import TerrainLocomotion
 
 
 class TerrainFixtures(NamedTuple):
@@ -137,3 +138,17 @@ def build_terrain_fixtures(
         raise ValueError(f"Unsupported terrain mesh type: {terrain_state.mesh_type}")
 
     return TerrainFixtures(global_collision_prims, height_scanner_cfg, terrain)
+
+
+def register_terrain_mesh_cache(terrain_manager: TerrainManager, scene: InteractiveScene) -> None:
+    """Share the managed mesh after all native sensor configs have been validated.
+
+    IsaacLab's validator walks class attributes, including RayCaster.meshes.
+    Populating that cache before sensor construction makes it recurse into Warp's
+    runtime objects. Registration still precedes sensor initialization.
+    """
+    terrain_state = terrain_manager.get_state("locomotion_terrain")
+    if terrain_state.mesh_type in ["trimesh", "load_obj"]:
+        register_managed_terrain_mesh(
+            RayCaster.meshes, cast("TerrainLocomotion", terrain_state).warp_mesh, wp.get_device(scene.device)
+        )

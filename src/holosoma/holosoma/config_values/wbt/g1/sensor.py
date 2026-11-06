@@ -17,6 +17,7 @@ from __future__ import annotations
 from holosoma.config_types.sensor import (
     CameraSensorConfig,
     IsaacSimCameraConfig,
+    IsaacSimRaycastMeshConfig,
     SensorMountConfig,
 )
 
@@ -114,37 +115,11 @@ waist_back_camera = CameraSensorConfig(
 )
 
 
-_G1_MESHES = "holosoma/data/robots/g1/meshes"
-# Links that can occlude the head camera, with their link-frame meshes. The pelvis contour shell is
-# fixed to the pelvis frame; the wrists omit the rubber hands, which sit in a separate mesh.
-_G1_LINK_MESHES: dict[str, str | list[str]] = {
-    "pelvis": [f"{_G1_MESHES}/pelvis.STL", f"{_G1_MESHES}/pelvis_contour_link.STL"],
-    **{
-        f"{side}_{link}": f"{_G1_MESHES}/{side}_{link}.STL"
-        for side in ("left", "right")
-        for link in (
-            "hip_pitch_link",
-            "hip_roll_link",
-            "hip_yaw_link",
-            "knee_link",
-            "ankle_pitch_link",
-            "ankle_roll_link",
-            "shoulder_pitch_link",
-            "shoulder_roll_link",
-            "shoulder_yaw_link",
-            "elbow_link",
-            "wrist_roll_link",
-            "wrist_pitch_link",
-            "wrist_yaw_link",
-        )
-    },
-    "waist_yaw_link": f"{_G1_MESHES}/waist_yaw_link_rev_1_0.STL",
-    "waist_roll_link": f"{_G1_MESHES}/waist_roll_link_rev_1_0.STL",
-}
+_G1_ROBOT_PRIM = "/World/envs/env_.*/Robot"
 
 # RealSense D435i depth in the G1 head, as used for perceptive locomotion: 106x60 at 89.5deg
 # horizontal FOV (58.6deg vertical), 0.44 m above the torso_link origin, looking along body +X
-# pitched 27deg down. Isaac Sim ray casts it against the terrain and the robot links below; other
+# pitched 27deg down. Isaac Sim ray casts against terrain and the selected loaded robot visuals; other
 # backends render it natively. The opt-in ``g1_head_d435i_mount_setup_terms`` perturb its mount
 # per env.
 # ``near`` keeps returns closer than the D435i's 0.3 m working range so preprocessing can clamp
@@ -163,5 +138,41 @@ g1_head_d435i_depth = CameraSensorConfig(
     far=3.0,
     depth_clipping_behavior="max",
     data_types=["depth"],
-    isaacsim=IsaacSimCameraConfig(renderer="raycast", raycast_link_meshes=_G1_LINK_MESHES),
+    isaacsim=IsaacSimCameraConfig(
+        renderer="raycast",
+        raycast_meshes=IsaacSimRaycastMeshConfig(
+            # Explicitly include #281's 30 visual meshes plus terrain. Omitted geometry
+            # stays out, including colliders, torso housing, rubber hands, helper boxes
+            # and scene actors. Whole-link roots would also include eligible colliders.
+            # Fixed-joint merging places the pelvis contour visual under the pelvis.
+            # These are the G1 URDF import's named visual roots; override include_paths
+            # for another USD hierarchy. Every include must match; exclusions win.
+            include_paths=[
+                "/World/ground",
+                f"{_G1_ROBOT_PRIM}/pelvis/visuals/pelvis",
+                f"{_G1_ROBOT_PRIM}/pelvis/visuals/pelvis_contour_link",
+                *[
+                    f"{_G1_ROBOT_PRIM}/{side}_{link}/visuals/{side}_{link}"
+                    for side in ("left", "right")
+                    for link in (
+                        "hip_pitch_link",
+                        "hip_roll_link",
+                        "hip_yaw_link",
+                        "knee_link",
+                        "ankle_pitch_link",
+                        "ankle_roll_link",
+                        "shoulder_pitch_link",
+                        "shoulder_roll_link",
+                        "shoulder_yaw_link",
+                        "elbow_link",
+                        "wrist_roll_link",
+                        "wrist_pitch_link",
+                        "wrist_yaw_link",
+                    )
+                ],
+                f"{_G1_ROBOT_PRIM}/waist_yaw_link/visuals/waist_yaw_link_rev_1_0",
+                f"{_G1_ROBOT_PRIM}/waist_roll_link/visuals/waist_roll_link_rev_1_0",
+            ],
+        ),
+    ),
 )
