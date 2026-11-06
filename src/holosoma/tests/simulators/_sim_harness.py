@@ -56,14 +56,17 @@ def steps_for_seconds(sim: Any, seconds: float) -> int:
 
 
 def step(sim: Any, n: int, *, render: bool = False) -> None:
-    """Advance ``n`` physics steps, rendering each step when ``render`` is set or the backend needs it.
+    """Advance ``n`` physics steps, rendering each step when ``render`` is set.
 
     ``render`` is on for the recording harness (so a video captures the motion). Backends whose
-    offscreen sensors (e.g. IsaacSim RTX cameras) only update when rendered always render.
+    offscreen sensors (e.g. IsaacSim RTX cameras) only update when rendered render on the configured
+    render interval, as ``BaseTask`` does.
     """
+    interval = sim.simulator_config.sim.render_interval_steps
     for _ in range(n):
         sim.simulate_at_each_physics_step()
-        if render or sim.requires_step_render():
+        sim._harness_substeps = getattr(sim, "_harness_substeps", 0) + 1
+        if render or (sim.requires_step_render() and sim._harness_substeps % interval == 0):
             sim.render()
 
 
