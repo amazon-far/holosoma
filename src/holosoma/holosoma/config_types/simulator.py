@@ -26,6 +26,16 @@ class MujocoBackend(str, Enum):
     """GPU-accelerated multi-environment backend."""
 
 
+class IsaacSimBackend(str, Enum):
+    """Isaac Lab API used by the shared Isaac Sim simulator."""
+
+    ISAACLAB2 = "isaaclab2"
+    """Isaac Lab 2.3 / Isaac Sim 5.1 (existing backend)."""
+
+    ISAACLAB3 = "isaaclab3"
+    """Isaac Lab 3.0 / Isaac Sim 6.2."""
+
+
 @dataclass(frozen=True)
 class ResetManagerConfig:
     """Configuration for the reset event manager."""
@@ -82,23 +92,42 @@ class MujocoXMLFilterCfg:
 
 @dataclass(frozen=True)
 class IsaacSimRenderConfig:
-    """Isaac Sim / Kit AppLauncher options applied at app startup."""
+    """Isaac Sim / Kit launch options applied at app startup."""
 
     rendering_mode: Literal["performance", "balanced", "quality"] | None = None
-    """AppLauncher rendering-mode preset (e.g. ``quality`` or ``performance``)."""
+    """Kit rendering-mode preset (e.g. ``quality`` or ``performance``)."""
 
     kit_args: str = ""
-    """Space-separated Kit/carb settings forwarded to AppLauncher — the way to set RTX/render options,
+    """Space-separated Kit/carb settings forwarded to the launcher to set RTX/render options,
     e.g. ``--/rtx/rendermode=PathTracing --/rtx/pathtracing/spp=32``."""
 
     def app_launcher_args(self) -> dict[str, Any]:
-        """The audited subset of settings accepted by Isaac Lab's AppLauncher."""
+        """The shared settings accepted by both Isaac Lab launchers."""
         launcher_args: dict[str, Any] = {}
         if self.rendering_mode is not None:
             launcher_args["rendering_mode"] = self.rendering_mode
         if self.kit_args:
             launcher_args["kit_args"] = self.kit_args
         return launcher_args
+
+
+@dataclass(frozen=True)
+class IsaacLab3Config:
+    """Native Isaac Lab 3 options; used only by the ``isaaclab3`` backend."""
+
+    use_fabric: bool = True
+    """Read physics buffers through Fabric to avoid USD synchronization overhead."""
+
+    create_stage_in_memory: bool = False
+    """Create the USD stage in memory to reduce startup time."""
+
+    use_newton_actuators: bool = True
+    """Use Lab 3's native actuator execution and its PhysX host adapter."""
+
+    contact_force_mode: Literal["normal", "total"] = "normal"
+    """Contact-force observation. ``normal`` preserves the existing reward contract;
+    ``total`` includes the tangential forces available in Isaac Sim 6.2.
+    """
 
 
 @dataclass(frozen=True)
@@ -147,6 +176,9 @@ class SimEngineConfig:
 
     mujoco: MujocoConfig = field(default_factory=MujocoConfig)
     """Native MuJoCo settings. None preserves existing behavior; other simulators ignore this block."""
+
+    isaaclab3: IsaacLab3Config = field(default_factory=IsaacLab3Config)
+    """Native Isaac Lab 3 settings; ignored by other backends."""
 
     @model_validator(mode="after")
     def _validate_rates(self) -> SimEngineConfig:
@@ -317,7 +349,16 @@ class SimulatorInitConfig:
     """MuJoCo-specific XML filtering configuration for robot MJCF files."""
 
     isaacsim: IsaacSimRenderConfig = field(default_factory=IsaacSimRenderConfig)
-    """Isaac Sim AppLauncher options (rendering mode + Kit/carb args)."""
+    """Isaac Sim launch options (rendering mode + Kit/carb args)."""
+
+    isaacsim_backend: IsaacSimBackend = IsaacSimBackend.ISAACLAB2
+    """Isaac Lab API selection. Both backends share the ``isaacsim`` simulator.
+
+    Use ``simulator:isaacsim3`` for Isaac Lab 3.0 / Isaac Sim 6.2, or override
+    ``--simulator.config.isaacsim-backend=isaaclab3``. The environment setup selects
+    the matching default for ``simulator:isaacsim``; saved configurations retain
+    their explicit selection.
+    """
 
     mujoco_backend: MujocoBackend = MujocoBackend.CLASSIC
     """MuJoCo physics backend selection.

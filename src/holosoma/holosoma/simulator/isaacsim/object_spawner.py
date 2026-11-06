@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import RigidObject, RigidObjectCfg
+from holosoma.simulator.isaacsim.backends import get_backend
 from loguru import logger
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics
 
@@ -378,14 +379,14 @@ def build_rigid_object(
     """Build the IsaacLab ``RigidObject`` both formats and both shapes flow through.
 
     The leaf of ``prim_path`` MUST equal ``name`` (the ObjectRegistry key) so per-env
-    placement and state read/write stay aligned. ``rot_wxyz`` is wxyz (IsaacLab format).
+    placement and state read/write stay aligned. ``rot_wxyz`` uses the Holosoma config convention.
     """
     _assert_asset_exists(resolved_path, f"Object '{name}' ({fmt})")
     spawn = select_spawn_cfg(fmt, resolved_path, fixed=fixed, physics=physics, source_prim_path=source_prim_path)
     cfg = RigidObjectCfg(
-        prim_path=f"/World/envs/env_.*/{name}",
+        prim_path=f"{get_backend().env_regex_ns}/{name}",
         spawn=spawn,
-        init_state=RigidObjectCfg.InitialStateCfg(pos=tuple(pos), rot=tuple(rot_wxyz)),  # wxyz
+        init_state=RigidObjectCfg.InitialStateCfg(pos=tuple(pos), rot=get_backend().config_quat_to_native(rot_wxyz)),
     )
     return RigidObject(cfg)
 

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from holosoma.config_types.experiment import ExperimentConfig
-from holosoma.config_types.simulator import MujocoBackend
+from holosoma.config_types.simulator import IsaacSimBackend, MujocoBackend
 from holosoma.config_values.experiment import get_annotated_experiment_config
 from holosoma.train_agent import training_context
 from holosoma.utils.config_registry import parse_config
@@ -64,6 +64,8 @@ def simulator_tag(config: ExperimentConfig) -> str:
     name = config.simulator.config.name
     if name == "mujoco" and config.simulator.config.mujoco_backend == MujocoBackend.WARP:
         return "mjwarp"
+    if name == "isaacsim" and config.simulator.config.isaacsim_backend == IsaacSimBackend.ISAACLAB3:
+        return "isaacsim3"
     return name
 
 

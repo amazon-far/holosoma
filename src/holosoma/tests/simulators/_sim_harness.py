@@ -104,7 +104,9 @@ def build_run_sim_config(
             virtual_gantry=VirtualGantryCfg(enabled=False),
         ),
     )
-    config = dataclasses.replace(config, simulator=sim_cfg)
+    config = dataclasses.replace(
+        config, simulator=sim_cfg, training=dataclasses.replace(config.training, headless=True)
+    )
 
     if record_dir is not None:
         video_kwargs: dict[str, Any] = {

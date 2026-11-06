@@ -23,6 +23,7 @@ from holosoma.config_types.light import (
     SphereLightConfig,
 )
 from holosoma.utils.path import resolve_path
+from holosoma.simulator.isaacsim.backends import get_backend
 
 if TYPE_CHECKING:
     from holosoma.simulator.isaacsim.isaacsim import IsaacSim
@@ -55,15 +56,15 @@ def _author_light(prim_path: str, cfg: LightConfigBase) -> None:
     if isinstance(cfg, DefaultLightConfig):
         # The default rig's directional sun; Isaac Sim headless stages have no built-in light.
         spawn = sim_utils.DistantLightCfg(**_common(cfg), angle=_DEFAULT_SUN_ANGLE_DEG)
-        spawn.func(prim_path, spawn, orientation=cfg.orientation)
+        spawn.func(prim_path, spawn, orientation=get_backend().config_quat_to_native(cfg.orientation))
     elif isinstance(cfg, DomeLightConfig):
         texture_file = resolve_path(cfg.texture_file) if cfg.texture_file is not None else None
         spawn = sim_utils.DomeLightCfg(**_common(cfg), texture_file=texture_file, texture_format=cfg.texture_format)
-        spawn.func(prim_path, spawn, orientation=cfg.orientation)
+        spawn.func(prim_path, spawn, orientation=get_backend().config_quat_to_native(cfg.orientation))
     elif isinstance(cfg, DistantLightConfig):
         # UsdLux/Isaac Lab express the source angular diameter in degrees; the config is radians.
         spawn = sim_utils.DistantLightCfg(**_common(cfg), angle=math.degrees(cfg.angle))
-        spawn.func(prim_path, spawn, orientation=cfg.orientation)
+        spawn.func(prim_path, spawn, orientation=get_backend().config_quat_to_native(cfg.orientation))
     elif isinstance(cfg, SphereLightConfig):
         spawn = sim_utils.SphereLightCfg(**_common(cfg), radius=cfg.radius)
         spawn.func(prim_path, spawn, translation=cfg.position)
@@ -84,10 +85,9 @@ def _common(cfg: LightConfigBase) -> dict[str, Any]:
 
 def _author_rect_light(prim_path: str, cfg: RectLightConfig) -> None:
     """Author a rectangular area light via ``UsdLux`` (Isaac Lab has no rectangular-light spawner)."""
-    import isaacsim.core.utils.stage as stage_utils
     from pxr import Gf, UsdGeom, UsdLux
 
-    light = UsdLux.RectLight.Define(stage_utils.get_current_stage(), prim_path)
+    light = UsdLux.RectLight.Define(get_backend().stage_utils.get_current_stage(), prim_path)
     light.CreateWidthAttr().Set(float(cfg.width))
     light.CreateHeightAttr().Set(float(cfg.height))
     light.CreateNormalizeAttr().Set(bool(cfg.normalize))

@@ -17,12 +17,17 @@ import torch
 from loguru import logger
 
 
-from isaaclab.utils.math import (
-    create_rotation_matrix_from_view,
-    quat_from_matrix,
-)
-
 from holosoma.simulator.shared.video_recorder import VideoRecorderInterface
+from holosoma.simulator.isaacsim.backends import get_backend
+
+
+def _current_stage() -> Any:
+    if get_backend().is_isaaclab3:
+        return get_backend().stage_utils.get_current_stage()
+    import omni.usd
+
+    return omni.usd.get_context().get_stage()
+
 
 if TYPE_CHECKING:
     from holosoma.config_types.video import VideoConfig
@@ -70,6 +75,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         self._render_product: Any = None
         self._rgb_annotator: Any = None
         self._camera_prim_path: str | None = None
+        self._view: Any = None
 
         logger.info(
             f"IsaacSim video recorder initialized - {'threaded' if config.use_recording_thread else 'synchronous'} mode"
@@ -91,14 +97,13 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         super().setup_recording()
 
         import omni.replicator.core as rep
-        import omni.usd
         from pxr import UsdGeom
 
         # Create camera prim path for recording environment
         self._camera_prim_path = f"/World/envs/env_{self.config.record_env_id}/VideoCamera"
 
         # Create camera prim directly in USD stage
-        stage = omni.usd.get_context().get_stage()
+        stage = _current_stage()
         self.camera_prim = UsdGeom.Camera.Define(stage, self._camera_prim_path)
 
         # Calculate camera parameters from config vertical FOV
@@ -120,11 +125,15 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         self.camera_prim.GetVerticalApertureAttr().Set(vertical_aperture)
 
         # Create a view for the sensor
-        from isaacsim.core.prims import XFormPrim
+        if get_backend().is_isaaclab3:
+            from isaaclab.sim.views import FrameView
 
-        self._view = XFormPrim(self._camera_prim_path, reset_xform_properties=True)
+            self._view = FrameView(self._camera_prim_path, device=self.simulator.device)
+        else:
+            from isaacsim.core.prims import XFormPrim
 
-        self._view.initialize()
+            self._view = XFormPrim(self._camera_prim_path, reset_xform_properties=True)
+            self._view.initialize()
 
         # Create render product using replicator
         resolution = (self.config.width, self.config.height)
@@ -201,7 +210,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
             return
 
         try:
-            import omni.usd
+            from isaaclab.utils.math import create_rotation_matrix_from_view, quat_from_matrix
 
             # Use camera controller via shared helper method
             camera_params = self._get_camera_parameters()
@@ -215,11 +224,17 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
                 create_rotation_matrix_from_view(position, target, up_axis, device=self.simulator.device)
             )
 
-            self._view.set_world_poses(
-                position,
-                orientations,
-                torch.tensor([self.config.record_env_id], device=self.simulator.device, dtype=torch.int32),
-            )
+            # The view contains the one camera already placed under record_env_id; environment
+            # indices are not indices into this singleton view.
+            if get_backend().is_isaaclab3:
+                import warp as wp
+
+                self._view.set_world_poses(
+                    wp.from_torch(position.contiguous()),
+                    wp.from_torch(orientations.contiguous()),
+                )
+            else:
+                self._view.set_world_poses(position, orientations)
 
         except Exception as e:
             logger.warning(f"Failed to update camera position: {e}")
@@ -263,19 +278,30 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
             else:
                 self._render_product = None
 
-        if self._rgb_annotator is None and self._render_product is None and self._camera_prim_path is not None:
-            camera_prim_path = self._camera_prim_path
-            self.camera_prim = None
-            self._view = None
+        if self._rgb_annotator is None and self._render_product is None and self._view is not None:
             try:
-                import omni.usd
+                if get_backend().is_isaaclab3:
+                    self._view.close()
+            except Exception as exc:
+                failures.append(exc)
+            else:
+                self._view = None
 
-                removed = omni.usd.get_context().get_stage().RemovePrim(camera_prim_path)
+        if (
+            self._rgb_annotator is None
+            and self._render_product is None
+            and self._view is None
+            and self._camera_prim_path is not None
+        ):
+            camera_prim_path = self._camera_prim_path
+            try:
+                removed = _current_stage().RemovePrim(camera_prim_path)
                 if removed is False:
                     raise RuntimeError(f"Failed to remove camera prim {camera_prim_path!r}")
             except Exception as exc:
                 failures.append(exc)
             else:
+                self.camera_prim = None
                 self._camera_prim_path = None
 
         return failures

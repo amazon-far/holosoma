@@ -105,7 +105,8 @@ class ModelReader(Protocol):
     """Backend-specific read-back of physics-model fields for a single env (env 0).
 
     Implementations return the *current* live value the term should have mutated. For
-    multi-env backends, read env 0 (the terms are applied to all env_ids passed in).
+    multi-env backends, body properties read env 0. Complete material tables, where
+    available, cover every physical shape and environment.
 
     Capability flags tell the matrix which fields a backend can honestly read back from the
     LIVE solver state (vs a field the backend's API does not reflect or does not model). When a
@@ -117,6 +118,8 @@ class ModelReader(Protocol):
     COM_READBACK_TRUSTED: bool = True
     # Whether the backend models restitution and exposes it (only IsaacSim, see _IsaacSimReader).
     RESTITUTION_READBACK_TRUSTED: bool = False
+    # Whether complete per-environment, per-shape material tables are available.
+    MATERIAL_SHAPE_READBACK_TRUSTED: bool = False
 
     def body_mass(self, body_name: str) -> float: ...
     def geom_friction_for_body(self, body_name: str) -> float: ...
@@ -125,6 +128,42 @@ class ModelReader(Protocol):
     # Optional, IsaacSim-only (gated by RESTITUTION_READBACK_TRUSTED):
     def restitution_for_body(self, body_name: str) -> float: ...
     def dynamic_friction_for_body(self, body_name: str) -> float: ...
+    # Optional, gated by MATERIAL_SHAPE_READBACK_TRUSTED:
+    def material_properties_for_asset(self, body_name: str) -> torch.Tensor: ...
+
+
+def _assert_material_shapes(
+    reader: ModelReader,
+    body_name: str,
+    *,
+    static_friction: tuple[float, float],
+    dynamic_friction: tuple[float, float],
+    restitution: tuple[float, float] | None = None,
+    per_env: bool = False,
+) -> None:
+    """Constrain the full raw table when the backend exposes physical shape rows."""
+    if not getattr(reader, "MATERIAL_SHAPE_READBACK_TRUSTED", False):
+        return
+    materials = reader.material_properties_for_asset(body_name)
+    for channel, label, band in (
+        (0, "static friction", static_friction),
+        (1, "dynamic friction", dynamic_friction),
+        (2, "restitution", restitution),
+    ):
+        if band is None:
+            continue
+        values = materials[..., channel]
+        assert bool(((values >= band[0] - 1e-3) & (values <= band[1] + 1e-3)).all()), (
+            f"{body_name} {label} out of band in a physical shape/environment: "
+            f"{float(values.min())}..{float(values.max())}"
+        )
+        if per_env:
+            assert torch.equal(values, values[:, :1].expand_as(values)), (
+                f"{body_name} {label} was not shared across every shape of each environment"
+            )
+    assert bool((materials[..., 1] <= materials[..., 0] + 1e-6).all()), (
+        f"{body_name} dynamic friction exceeds static friction in a physical shape/environment"
+    )
 
 
 # --- exaggerated, disjoint-from-default ranges so any change is unambiguous -------------------
@@ -211,6 +250,9 @@ def run_robot_dr(env, reader: ModelReader) -> list[str]:
     after = reader.geom_friction_for_body(torso)
     assert ROBOT_FRICTION[0] - 1e-3 <= after <= ROBOT_FRICTION[1] + 1e-3, f"robot friction out of band: {after}"
     assert abs(after - before) > 1e-3, "robot friction unchanged"
+    _assert_material_shapes(
+        reader, torso, static_friction=ROBOT_FRICTION, dynamic_friction=ROBOT_FRICTION, per_env=True
+    )
 
     # --- base CoM (add to body_ipos) ------------------------------------------------------------
     # The setup preset already applied a base-CoM bias, and the backends differ in how a second
@@ -398,6 +440,13 @@ def run_object_dr(env, reader: ModelReader) -> None:
             f"object dynamic friction out of band: {dyn_after}"
         )
         assert abs(dyn_after - dyn_before) > 1e-3, "object dynamic friction unchanged"
+    _assert_material_shapes(
+        reader,
+        name,
+        static_friction=OBJ_FRICTION,
+        dynamic_friction=OBJ_FRICTION,
+        restitution=OBJ_RESTITUTION if restitution_trusted else None,
+    )
 
     # --- object inertia (scale Ixx only; Iyy/Izz + off-diagonals identity) ----------------------
     inertia_before = reader.body_inertia(name)
@@ -526,6 +575,9 @@ def run_distribution_dr(env, reader: ModelReader) -> list[str]:
     after = reader.geom_friction_for_body(torso)
     assert GAUSS_FRICTION[0] - 1e-3 <= after <= GAUSS_FRICTION[1] + 1e-3, f"gaussian friction out of band: {after}"
     assert abs(after - before) > 1e-3, "gaussian friction unchanged"
+    _assert_material_shapes(
+        reader, torso, static_friction=GAUSS_FRICTION, dynamic_friction=GAUSS_FRICTION, per_env=True
+    )
 
     # log_uniform friction on a SIGNED range must still RAISE (positivity guard) on every backend.
     try:
@@ -578,5 +630,12 @@ def run_distribution_dr(env, reader: ModelReader) -> list[str]:
             f"robot material friction out of band: {after}"
         )
         assert abs(after - before) > 1e-3, "robot material friction unchanged"
+        _assert_material_shapes(
+            reader,
+            torso,
+            static_friction=ROBOT_MATERIAL_FRICTION,
+            dynamic_friction=ROBOT_MATERIAL_FRICTION,
+            restitution=(0.0, 0.0),
+        )
 
     return skipped

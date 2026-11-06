@@ -27,13 +27,17 @@ from tests.simulators._run_harness import run_harness  # noqa: E402
 _HARNESS = Path(__file__).resolve().parents[1] / "subset_write_assert.py"
 
 
-def test_subset_write():
+def test_subset_write(tmp_path):
+    result_file = tmp_path / "subset_write.txt"
     run_harness(
         _HARNESS,
         "--simulator",
         "isaacsim",
         "--num-envs",
         "4",
+        "--result-file",
+        str(result_file),
         label="isaacsim/subset-write (num_envs=4)",
         timeout=900,
+        result_file=result_file,
     )

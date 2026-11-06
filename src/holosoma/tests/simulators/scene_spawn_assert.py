@@ -26,6 +26,7 @@ import argparse
 import dataclasses
 import math
 import sys
+from pathlib import Path
 
 # This file lives in tests/simulators/, which contains an ``isaacsim/`` subpackage.
 # Run as a script, that dir lands on sys.path[0] and shadows the real IsaacSim
@@ -60,6 +61,200 @@ def _build_run_sim_config(simulator: str, scene: str, robot: str, terrain: str, 
     return build_run_sim_config(simulator, scene, robot, terrain, record_dir=record_dir)
 
 
+def _video_panel_centroid(frame) -> tuple[float, float]:
+    import numpy as np
+
+    assert frame.shape == (96, 128, 3) and frame.dtype == np.uint8
+    channels = frame.astype(np.int16)
+    mask = (channels[..., 0] > channels[..., 1] + 40) & (channels[..., 0] > channels[..., 2] + 40)
+    rows, cols = np.nonzero(mask)
+    assert cols.size > 0.02 * mask.size, f"video panel is missing or black: {cols.size} red pixels"
+    assert abs(float(rows.mean()) - 47.5) < 10, "video camera vertical orientation is wrong"
+    return float(rows.mean()), float(cols.mean())
+
+
+def _check_saved_video(movie, snapshots, expected_frame_count: int) -> None:
+    """Check the delivered movie against independently retained capture observations."""
+    import cv2
+
+    decoder = cv2.VideoCapture(str(movie))
+    external_decoder = None
+    if not decoder.isOpened():
+        # Kit 6.2's OpenCV bundle cannot decode movies. Use the independently
+        # delivered artifact through the video extra's external FFmpeg.
+        import imageio_ffmpeg
+        import numpy as np
+
+        external_decoder = imageio_ffmpeg.read_frames(str(movie), pix_fmt="rgb24")
+        metadata = next(external_decoder)
+        width, height = metadata["size"]
+    frame_count = 0
+    try:
+        while True:
+            if external_decoder is None:
+                available, bgr = decoder.read()
+                if not available:
+                    break
+                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            else:
+                raw_frame = next(external_decoder, None)
+                if raw_frame is None:
+                    break
+                rgb = np.frombuffer(raw_frame, dtype=np.uint8).reshape(height, width, 3)
+            if frame_count in snapshots:
+                actual_row, actual_col = _video_panel_centroid(rgb)
+                expected_row, expected_col = _video_panel_centroid(snapshots[frame_count])
+                # Lossy encoding can move boundary pixels. A three-pixel tolerance
+                # still rejects a frozen or reordered phase (>20 pixels apart).
+                assert abs(actual_row - expected_row) < 3 and abs(actual_col - expected_col) < 3, (
+                    f"saved video frame {frame_count} lost panel motion: "
+                    f"({actual_row:.1f}, {actual_col:.1f}) != ({expected_row:.1f}, {expected_col:.1f})"
+                )
+            frame_count += 1
+    finally:
+        decoder.release()
+        if external_decoder is not None:
+            external_decoder.close()
+    assert frame_count == expected_frame_count, (
+        f"saved video contains {frame_count} frames, expected {expected_frame_count}"
+    )
+
+
+def _check_video_freshness(sim, *, memory_stage: bool = False) -> None:
+    """Move a red panel across a fixed video camera and check the recorded silhouette."""
+    from pathlib import Path
+
+    import numpy as np
+    import torch
+
+    from holosoma.config_types.video import CartesianCameraConfig, FixedCameraConfig
+    from holosoma.simulator.base_simulator.hooks import Phase
+
+    recorder = sim.video_recorder
+    assert recorder is not None and recorder.is_recording, "video recording did not start"
+    assert not sim.tiled_cameras, "video-only probe must not be pumped by a mounted RTX camera"
+    if sim.backend.is_isaaclab3:
+        assert not sim.backend.is_rendering(sim.sim), "video-only probe unexpectedly has continuous rendering"
+        assert sim.sim.get_setting("/isaaclab/video/enabled"), "native headless video intent was not enabled"
+        assert sim.sim.cfg.create_stage_in_memory is memory_stage, "requested native stage mode was not applied"
+        assert recorder.camera_prim.GetPrim().GetStage() == sim.sim.stage, (
+            "video camera was authored outside the active simulation stage"
+        )
+    env_id = recorder.config.record_env_id
+    env_ids = torch.tensor([env_id], device=sim.sim_device)
+    origin = sim.env_origins[env_id]
+    decimation = sim.simulator_config.sim.control_decimation_steps
+    snapshots = {}
+
+    def _assert_camera_pose(position, expected_quat=None):
+        native_positions, native_orientations = recorder._view.get_world_poses()
+        if sim.backend.is_isaaclab3:
+            positions, orientations = native_positions.torch, native_orientations.torch
+        else:
+            positions = native_positions
+            orientations = native_orientations[:, [1, 2, 3, 0]]
+        expected_position = torch.tensor([position], device=positions.device, dtype=positions.dtype)
+        assert positions.shape == (1, 3), "record_env_id was used as an index into a singleton camera view"
+        assert torch.allclose(positions, expected_position, atol=1e-5), "video camera pose did not update"
+        if expected_quat is not None:
+            expected = torch.tensor([expected_quat], device=orientations.device, dtype=orientations.dtype)
+            assert orientations.shape == (1, 4)
+            assert torch.allclose(
+                (orientations * expected).sum(-1).abs(), torch.ones(1, device=orientations.device), atol=1e-5
+            ), "video camera orientation does not follow the OpenGL look-at convention"
+
+    origin_xyz = origin.tolist()
+    forward_x_quat = [0.5, -0.5, -0.5, 0.5]
+    robot_state = sim.get_actor_states(["robot"], env_ids).clone()
+    camera_offset = [0.1, -0.2, 0.3]
+    recorder.camera_controller.config = CartesianCameraConfig(
+        offset=camera_offset,
+        target_offset=[1.1, -0.2, 0.3],
+        smoothing=0.0,
+        tracking_body_name=sim.robot_config.body_names[0],
+    )
+    for root_offset in [[0.4, -20.0, 3.0], [0.8, -19.0, 3.2]]:
+        moved_robot = robot_state.clone()
+        moved_robot[0, :3] = origin + torch.tensor(root_offset, device=sim.sim_device)
+        moved_robot[0, 7:] = 0.0
+        sim.set_actor_states(["robot"], env_ids, moved_robot)
+        recorder._update_camera_position()
+        expected_eye = [origin_xyz[axis] + root_offset[axis] + camera_offset[axis] for axis in range(3)]
+        _assert_camera_pose(expected_eye, forward_x_quat)
+    # Keep the uncontrolled robot clear of the panel after checking tracking.
+    # IsaacSim's scene spawn pose does not use create_envs' base_init_state.
+    parked_robot = robot_state.clone()
+    parked_robot[0, :3] = origin + torch.tensor([0.0, -20.0, 3.0], device=sim.sim_device)
+    parked_robot[0, 7:] = 0.0
+    sim.set_actor_states(["robot"], env_ids, parked_robot)
+    recorder.camera_controller.reset()
+
+    # Independent OpenGL solutions: local -Z looks along world +X or +Y, and local +Y stays +Z.
+    # A frozen view, WXYZ write into the native XYZW view, or transposed look-at rotation fails.
+    for forward, expected_quat in [
+        ([1.0, 0.0, 0.0], forward_x_quat),
+        ([0.0, 1.0, 0.0], [2**-0.5, 0.0, 0.0, 2**-0.5]),
+    ]:
+        position = [origin_xyz[0] + 0.1, origin_xyz[1] - 0.2, origin_xyz[2] + 0.79]
+        target = [position[axis] + forward[axis] for axis in range(3)]
+        recorder.camera_controller.config = FixedCameraConfig(position=position, target=target)
+        recorder._update_camera_position()
+        _assert_camera_pose(position, expected_quat)
+
+    def _capture_at_y(y, *, camera_y=0.0):
+        position = [origin_xyz[0], origin_xyz[1] + camera_y, origin_xyz[2] + 0.79]
+        recorder.camera_controller.config = FixedCameraConfig(
+            position=position,
+            target=[origin_xyz[0] + 1.0, origin_xyz[1] + camera_y, origin_xyz[2] + 0.79],
+        )
+        state = sim.get_actor_states(["panel"], env_ids).clone()
+        state[0, :3] = origin + torch.tensor([1.0, y, 0.79], device=sim.sim_device)
+        state[0, 7:] = 0.0
+        sim.set_actor_states(["panel"], env_ids, state)
+        # Use the same lifecycle/cadence as direct simulation. An explicit
+        # sim.render() here would conceal a broken headless video render path.
+        for _ in range(12):
+            sim.hooks.emit(Phase.FRAME_BEGIN)
+            for _ in range(decimation):
+                sim.hooks.emit(Phase.PRE_STEP)
+                sim.simulate_at_each_physics_step()
+                sim.hooks.emit(Phase.POST_STEP)
+            sim.hooks.emit(Phase.FRAME_END)
+        _assert_camera_pose(position, forward_x_quat)
+        frame = recorder.video_frames[-1].copy()
+        snapshots[len(recorder.video_frames) - 1] = frame
+        return _video_panel_centroid(frame)[1]
+
+    right = _capture_at_y(-0.25)
+    left = _capture_at_y(0.25)
+    returned = _capture_at_y(-0.25)
+    # Looking along +X with +Z up, +Y is image-left. A frozen frame, an empty
+    # annotator, mirrored camera, or wrong env camera cannot satisfy both moves.
+    assert right - left > 20, f"video did not track +Y panel movement: right={right:.1f}, left={left:.1f}"
+    assert abs(returned - right) < 4, f"video did not return to its original view: {returned:.1f} vs {right:.1f}"
+    camera_left = _capture_at_y(0.0, camera_y=-0.25)
+    camera_right = _capture_at_y(0.0, camera_y=0.25)
+    camera_returned = _capture_at_y(0.0, camera_y=-0.25)
+    assert camera_right - camera_left > 20, "moving the video camera did not change the rendered panel position"
+    assert abs(camera_returned - camera_left) < 4, "video did not return after the camera moved back"
+    assert len(recorder.video_frames) == 72, "FRAME_END did not capture one frame per control step"
+    for index, snapshot in snapshots.items():
+        np.testing.assert_array_equal(
+            recorder.video_frames[index], snapshot, err_msg=f"stored video frame {index} changed after capture"
+        )
+    recorder.on_episode_end(env_id=env_id)
+    movies = list(Path(recorder.config.save_dir).glob("**/*.mp4"))
+    assert movies and all(movie.stat().st_size > 0 for movie in movies), "video encoder did not save a movie"
+    for movie in movies:
+        _check_saved_video(movie, snapshots, expected_frame_count=72)
+    recorder.cleanup()
+    assert recorder._camera_prim_path is None and recorder._view is None, "video camera cleanup did not finish"
+    print(
+        f"PASS: video-only panel motion right={right:.1f} left={left:.1f} returned={returned:.1f}; "
+        f"camera motion left={camera_left:.1f} right={camera_right:.1f}; movie saved"
+    )
+
+
 def _object_total_mass(sim, name, env_id):
     """Total mass of object ``name`` in env ``env_id``, read from the live backend.
 
@@ -71,7 +266,13 @@ def _object_total_mass(sim, name, env_id):
     sim_type = sim.get_simulator_type()
     if sim_type == SimulatorType.ISAACSIM:
         # IsaacLab RigidObject: per-body masses from the PhysX view, shape [num_envs, num_bodies].
-        masses = sim.scene.rigid_objects[name].root_physx_view.get_masses()
+        asset = sim.scene.rigid_objects[name]
+        if sim.backend.is_isaaclab3:
+            import warp as wp
+
+            masses = wp.to_torch(asset.root_view.get_masses())
+        else:
+            masses = asset.root_physx_view.get_masses()
         return float(masses[env_id].sum())
     if sim_type == SimulatorType.MUJOCO:
         import mujoco
@@ -170,10 +371,42 @@ def main() -> int:
     # Save a movie of the run to this directory (records every episode, headless or headful).
     # Uses the backend's own video recorder, so it works on every backend.
     parser.add_argument("--record", default=None, metavar="DIR", help="save a video of the run to DIR")
+    parser.add_argument("--probe-video-freshness", action="store_true", help="check video-only headless motion")
+    parser.add_argument("--create-stage-in-memory", action="store_true", help="use the native Lab 3 memory stage")
+    parser.add_argument("--result-file", default=None, help="write 'OK' after all checks pass")
     args = parser.parse_args()
     headless = args.headless == "true"
 
+    if args.probe_video_freshness:
+        if args.simulator != "isaacsim" or args.record is None:
+            parser.error("--probe-video-freshness requires --simulator isaacsim and --record DIR")
+        from tests.simulators import _camera_presets  # noqa: F401  # Registers the panel-target scene.
+
+        args.scene = "panel-target"
     config = _build_run_sim_config(args.simulator, args.scene, args.robot, args.terrain, args.record)
+    if args.probe_video_freshness:
+        from holosoma.config_types.video import FixedCameraConfig
+
+        video = dataclasses.replace(
+            config.logger.video,
+            width=128,
+            height=96,
+            vertical_fov=60.0,
+            record_env_id=args.num_envs - 1,
+            show_command_overlay=False,
+            use_recording_thread=False,
+            camera=FixedCameraConfig(position=[0.0, 0.0, 0.79], target=[1.0, 0.0, 0.79]),
+        )
+        config = dataclasses.replace(config, logger=dataclasses.replace(config.logger, video=video))
+    if args.create_stage_in_memory:
+        simulator_config = dataclasses.replace(
+            config.simulator.config,
+            sim=dataclasses.replace(
+                config.simulator.config.sim,
+                isaaclab3=dataclasses.replace(config.simulator.config.sim.isaaclab3, create_stage_in_memory=True),
+            ),
+        )
+        config = dataclasses.replace(config, simulator=dataclasses.replace(config.simulator, config=simulator_config))
     if args.probe_isaacsim_render_config:
         if args.simulator != "isaacsim":
             parser.error("--probe-isaacsim-render-config requires --simulator isaacsim")
@@ -221,7 +454,7 @@ def main() -> int:
     config = dataclasses.replace(
         config,
         device=device,
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        training=dataclasses.replace(config.training, num_envs=args.num_envs, headless=headless),
     )
 
     env, device, _app = setup_simulation_environment(config, device=device)
@@ -232,10 +465,23 @@ def main() -> int:
 
         settings = carb.settings.get_settings()
         if args.rendering_mode is not None:
-            actual_mode = settings.get("/isaaclab/rendering/rendering_mode")
-            if actual_mode != args.rendering_mode:
-                print(f"FAIL: rendering mode {actual_mode!r} != configured {args.rendering_mode!r}")
-                return 1
+            if sim.backend.is_isaaclab3:
+                expected_dlss = {"performance": 0, "balanced": 1, "quality": 2}[args.rendering_mode]
+                quality = args.rendering_mode == "quality"
+                for path, expected in (
+                    ("/rtx/post/dlss/execMode", expected_dlss),
+                    ("/rtx/reflections/enabled", quality),
+                    ("/rtx/indirectDiffuse/enabled", quality),
+                ):
+                    actual = settings.get(path)
+                    if actual != expected:
+                        print(f"FAIL: rendering setting {path}={actual!r} != configured {expected!r}")
+                        return 1
+            else:
+                actual_mode = settings.get("/isaaclab/rendering/rendering_mode")
+                if actual_mode != args.rendering_mode:
+                    print(f"FAIL: rendering mode {actual_mode!r} != configured {args.rendering_mode!r}")
+                    return 1
         if args.kit_arg_sentinel is not None:
             actual_sentinel = settings.get(_KIT_ARG_SETTING)
             if actual_sentinel != args.kit_arg_sentinel:
@@ -266,6 +512,8 @@ def main() -> int:
                 print(f"FAIL: {sun_path} color={color} != {_DEFAULT_SUN_COLOR}")
                 return 1
         print("PASS: IsaacSim launcher settings and scene lighting match configuration")
+        if args.result_file:
+            Path(args.result_file).write_text("OK\n")
         return 0
 
     if args.probe_lights:
@@ -390,6 +638,8 @@ def main() -> int:
             print(f"FAIL: default '{DEFAULT_LIGHT_KEY}' sun present despite a configured lights rig")
             return 1
         print(f"PASS: SceneConfig.lights authored the expected UsdLux prims in each of {args.num_envs} envs")
+        if args.result_file:
+            Path(args.result_file).write_text("OK\n")
         return 0
 
     sim.set_headless(headless)
@@ -432,12 +682,25 @@ def main() -> int:
         sim.setup_viewer()
     sim.install_plugins()
 
-    # Start recording if --record was given. Each backend captures a frame inside its own
-    # simulate_at_each_physics_step (gated on is_recording), so the existing step loop fills the
-    # movie; on_episode_end (after the loop) encodes and writes the file.
+    # Backends set up their recorder during simulator preparation. FRAME_END
+    # captures recorded frames; on_episode_end encodes and writes the file.
     if sim.video_recorder is not None:
-        sim.video_recorder.setup_recording()
         sim.video_recorder.on_episode_start(env_id=sim.video_recorder.config.record_env_id)
+    if args.probe_video_freshness:
+        # Fixed-camera positions are world coordinates. Use the authoritative
+        # clone origin, recording env 1 to exercise the singleton camera view.
+        from holosoma.config_types.video import FixedCameraConfig
+
+        recorder = sim.video_recorder
+        offset = sim.env_origins[recorder.config.record_env_id].tolist()
+        recorder.camera_controller.config = FixedCameraConfig(
+            position=[offset[0], offset[1], offset[2] + 0.79],
+            target=[offset[0] + 1.0, offset[1], offset[2] + 0.79],
+        )
+        _check_video_freshness(sim, memory_stage=args.create_stage_in_memory)
+        if args.result_file:
+            Path(args.result_file).write_text("OK\n")
+        return 0
 
     free_names = sim.object_registry.get_names_by_type(ObjectType.INDIVIDUAL)
     static_names = sim.object_registry.get_names_by_type(ObjectType.SCENE)
@@ -587,6 +850,10 @@ def main() -> int:
         # Drive the render path every step, exactly as the run_sim loop does. Headless: this
         # must be a no-op that does not touch a None viewer. Headful: it draws to the window.
         sim.render()
+        if sim.video_recorder is not None:
+            from holosoma.simulator.base_simulator.hooks import Phase
+
+            sim.hooks.emit(Phase.FRAME_END)
         for nm in free_names:
             z_min[nm] = torch.minimum(z_min[nm], sim.get_actor_states([nm], env_ids)[:, 2])
 
@@ -658,6 +925,8 @@ def main() -> int:
         sim.video_recorder.on_episode_end(env_id=sim.video_recorder.config.record_env_id)
         print(f"VIDEO saved under {args.record}")
 
+    if code == 0 and args.result_file:
+        Path(args.result_file).write_text("OK\n")
     return code
 
 

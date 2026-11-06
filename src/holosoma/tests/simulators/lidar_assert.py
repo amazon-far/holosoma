@@ -145,6 +145,7 @@ def _check_isaacsim_prim_resolution_helpers() -> list[str]:
     """Exercise link and native-owner resolution against independent USD fixtures."""
     from pxr import Usd, UsdGeom, UsdPhysics
 
+    from holosoma.simulator.isaacsim.backends import get_backend
     from holosoma.simulator.isaacsim.prim_utils import (
         resolve_robot_link_prim_expression,
         resolve_robot_link_rigid_body_prim_expression,
@@ -152,6 +153,7 @@ def _check_isaacsim_prim_resolution_helpers() -> list[str]:
     )
 
     failures = []
+    env_ns = get_backend().env_regex_ns
     stage = Usd.Stage.CreateInMemory()
     robot_path = "/World/envs/env_0/Robot"
     UsdGeom.Xform.Define(stage, robot_path)
@@ -160,15 +162,103 @@ def _check_isaacsim_prim_resolution_helpers() -> list[str]:
     UsdPhysics.RigidBodyAPI.Apply(owner).CreateRigidBodyEnabledAttr(True)
     fixed_link = UsdGeom.Xform.Define(stage, f"{robot_path}/owner/fixed_link").GetPrim()
     UsdPhysics.RigidBodyAPI.Apply(fixed_link).CreateRigidBodyEnabledAttr(False)
-    expected_owner = "/World/envs/env_.*/Robot/owner"
+    # Disabled imported links can carry the same nested visual names as enabled bodies.
+    UsdGeom.Xform.Define(stage, f"{fixed_link.GetPath()}/fixed_link")
+    UsdGeom.Mesh.Define(stage, f"{fixed_link.GetPath()}/fixed_link/fixed_link")
+    expected_owner = f"{env_ns}/Robot/owner"
     if resolve_robot_link_rigid_body_prim_expression("fixed_link", stage) != expected_owner:
         failures.append("disabled RigidBodyAPI did not resolve to its nearest enabled owner")
+    # Lab 3's native mesh tracker identifies physics owners by API presence. Exercise the
+    # source normalization against real USD, preserving enabled owners and local transforms.
+    from holosoma.simulator.isaacsim.sensor_setup import _remove_disabled_rigid_body_markers
+
+    fixed_transform = UsdGeom.Xformable(fixed_link)
+    fixed_transform.AddTranslateOp().Set((0.2, -0.3, 0.4))
+    before = fixed_transform.GetLocalTransformation()
+    _remove_disabled_rigid_body_markers(stage)
+    _remove_disabled_rigid_body_markers(stage)  # repeated setup is harmless
+    if fixed_link.HasAPI(UsdPhysics.RigidBodyAPI):
+        failures.append("disabled rigid-body marker survived native LiDAR source normalization")
+    if not owner.HasAPI(UsdPhysics.RigidBodyAPI):
+        failures.append("native LiDAR source normalization removed an enabled physics owner")
+    if fixed_transform.GetLocalTransformation() != before:
+        failures.append("native LiDAR source normalization changed the fixed-link transform")
+    if resolve_robot_link_rigid_body_prim_expression("fixed_link", stage) != expected_owner:
+        failures.append("native LiDAR source normalization changed enabled-owner resolution")
+    if resolve_robot_link_prim_expression("fixed_link", stage) != f"{env_ns}/Robot/owner/fixed_link":
+        failures.append("native LiDAR source normalization lost the imported fixed-link identity")
+
+    # Normalized link identity must not hide unrelated visuals or another fixed link.
+    unrelated_path = f"{robot_path}/unrelated"
+    UsdGeom.Xform.Define(stage, f"{unrelated_path}/fixed_link")
+    try:
+        resolve_robot_link_prim_expression("fixed_link", stage)
+    except ValueError:
+        pass
+    else:
+        failures.append("normalized fixed-link identity incorrectly hid an unrelated same-name visual")
+    stage.RemovePrim(unrelated_path)
+
+    sibling_path = f"{robot_path}/sibling_owner"
+    sibling_owner = UsdGeom.Xform.Define(stage, sibling_path).GetPrim()
+    UsdPhysics.RigidBodyAPI.Apply(sibling_owner).CreateRigidBodyEnabledAttr(True)
+    sibling_link = UsdGeom.Xform.Define(stage, f"{sibling_path}/fixed_link").GetPrim()
+    UsdPhysics.RigidBodyAPI.Apply(sibling_link).CreateRigidBodyEnabledAttr(False)
+    _remove_disabled_rigid_body_markers(stage)
+    try:
+        resolve_robot_link_rigid_body_prim_expression("fixed_link", stage)
+    except ValueError:
+        pass
+    else:
+        failures.append("ambiguous normalized fixed links did not fail")
+    stage.RemovePrim(sibling_path)
 
     geometry_link = UsdGeom.Cube.Define(stage, f"{robot_path}/geometry_link").GetPrim()
     UsdPhysics.RigidBodyAPI.Apply(geometry_link).CreateRigidBodyEnabledAttr(True)
-    expected_geometry = "/World/envs/env_.*/Robot/geometry_link"
+    expected_geometry = f"{env_ns}/Robot/geometry_link"
     if resolve_robot_link_prim_expression("geometry_link", stage) != expected_geometry:
         failures.append("a rigid body authored directly on geometry was not accepted as a robot link")
+
+    # Sim 6.2 imports a body Xform, a visual Xform, and an instance-proxy Mesh
+    # with the same name. The body owns both visual descendants.
+    imported_path = f"{robot_path}/Geometry/imported_link"
+    imported_body = UsdGeom.Xform.Define(stage, imported_path).GetPrim()
+    UsdPhysics.RigidBodyAPI.Apply(imported_body).CreateRigidBodyEnabledAttr(True)
+    UsdGeom.Xform.Define(stage, "/ImportedVisualTemplate")
+    UsdGeom.Mesh.Define(stage, "/ImportedVisualTemplate/imported_link")
+    imported_visual = UsdGeom.Xform.Define(stage, f"{imported_path}/imported_link").GetPrim()
+    imported_visual.GetReferences().AddInternalReference("/ImportedVisualTemplate")
+    imported_visual.SetInstanceable(True)
+    imported_mesh = stage.GetPrimAtPath(f"{imported_path}/imported_link/imported_link")
+    if not imported_mesh.IsInstanceProxy():
+        failures.append("imported-link fixture did not create its instance-proxy visual Mesh")
+    expected_imported = f"{env_ns}/Robot/Geometry/imported_link"
+    if resolve_robot_link_prim_expression("imported_link", stage) != expected_imported:
+        failures.append("importer visual names shadowed their owning robot body")
+    if resolve_robot_link_rigid_body_prim_expression("imported_link", stage) != expected_imported:
+        failures.append("importer visual names prevented enabled robot-body resolution")
+
+    # A matching physics body does not disambiguate an unrelated same-name prim.
+    for branch in ("body", "unrelated_visual"):
+        prim = UsdGeom.Xform.Define(stage, f"{robot_path}/Geometry/{branch}/body_collision").GetPrim()
+        if branch == "body":
+            UsdPhysics.RigidBodyAPI.Apply(prim).CreateRigidBodyEnabledAttr(True)
+    try:
+        resolve_robot_link_prim_expression("body_collision", stage)
+    except ValueError:
+        pass
+    else:
+        failures.append("a physics body incorrectly hid an unrelated same-name prim")
+
+    for branch in ("first", "second"):
+        prim = UsdGeom.Xform.Define(stage, f"{robot_path}/Geometry/{branch}/body_duplicate").GetPrim()
+        UsdPhysics.RigidBodyAPI.Apply(prim).CreateRigidBodyEnabledAttr(True)
+    try:
+        resolve_robot_link_rigid_body_prim_expression("body_duplicate", stage)
+    except ValueError:
+        pass
+    else:
+        failures.append("ambiguous same-name physics bodies did not fail")
 
     UsdGeom.Xform.Define(stage, f"{robot_path}/owner/a/duplicate")
     UsdGeom.Xform.Define(stage, f"{robot_path}/owner/b/duplicate")
@@ -199,9 +289,83 @@ def _check_isaacsim_prim_resolution_helpers() -> list[str]:
         failures.append("robot deinstancing rejected a valid robot root")
     elif stage.GetPrimAtPath(proxy_path).IsInstanceProxy():
         failures.append("robot deinstancing left a nested instance proxy unresolved")
-    elif resolve_robot_link_prim_expression("proxy_link", stage) != "/World/envs/env_.*/Robot/instance/proxy_link":
+    elif resolve_robot_link_prim_expression("proxy_link", stage) != f"{env_ns}/Robot/instance/proxy_link":
         failures.append("a deinstanced nested robot link did not resolve to its environment expression")
 
+    return failures
+
+
+def _author_disabled_child_ray_target() -> None:
+    """Author an optical fixed-link fixture after object spawning and before sensor creation."""
+    from pxr import UsdGeom, UsdPhysics
+
+    from holosoma.simulator.isaacsim.prim_utils import get_current_stage, is_rigid_body_enabled
+
+    stage = get_current_stage()
+    owner = stage.GetPrimAtPath("/World/envs/env_0/scan_target")
+    assert is_rigid_body_enabled(owner), "disabled-child fixture requires its enabled parent body"
+    child = UsdGeom.Xform.Define(stage, f"{owner.GetPath()}/disabled_ray_target")
+    child.AddTranslateOp().Set((0.2, -0.3, 0.4))
+    child.AddRotateYOp().Set(30.0)
+    UsdPhysics.RigidBodyAPI.Apply(child.GetPrim()).CreateRigidBodyEnabledAttr(False)
+    cube = UsdGeom.Cube.Define(stage, f"{child.GetPath()}/geom")
+    cube.CreateSizeAttr(0.2)
+
+
+def IsaacSim(tyro_config, terrain_manager, device):  # noqa: N802 - target name identifies the simulator family
+    """Construct the live simulator with the fixed-link fixture before native sensor setup."""
+    from holosoma.simulator.isaacsim.isaacsim import IsaacSim as NativeSimulator
+
+    class DisabledChildFixtureSimulator(NativeSimulator):
+        def _load_scene_config(self):
+            super()._load_scene_config()
+            _author_disabled_child_ray_target()
+
+    return DisabledChildFixtureSimulator(tyro_config, terrain_manager, device)
+
+
+def _check_disabled_child_ray_target(sim, env_ids, physics_per_control: int) -> list[str]:
+    """Cast against a tilted disabled child, then move its enabled owner vertically and laterally."""
+    import torch
+
+    state = sim.get_actor_states(["scan_target"], env_ids).clone()
+    state[:, :3] = sim.env_origins + torch.tensor([7.0, 7.0, 0.8], device=sim.sim_device)
+    state[:, 3:7] = torch.tensor([0.0, 0.0, 0.0, 1.0], device=sim.sim_device)
+    state[:, 7:] = 0.0
+    failures = []
+    for label, height_offset, lateral_offset in [
+        ("initial", 0.0, 0.0),
+        ("raised", 0.2, 0.0),
+        ("moved off ray", 0.2, 1.0),
+    ]:
+        moved = state.clone()
+        moved[:, 0] += lateral_offset
+        moved[:, 2] += height_offset
+        sim.set_actor_states(["scan_target"], env_ids, moved)
+        step(sim, physics_per_control)
+        sim.hooks.emit(Phase.FRAME_END)
+        ranges = sim.get_lidar_data("disabled_child_target", "ranges")
+        points = sim.get_lidar_data("disabled_child_target", "points")
+        if ranges.shape != (sim.num_envs, 1) or points.shape != (sim.num_envs, 1, 3):
+            failures.append(f"disabled_child_target {label}: unexpected output shapes")
+            continue
+        if lateral_offset:
+            if not torch.isinf(ranges).all() or not torch.isnan(points).all():
+                failures.append("disabled_child_target: the disabled child did not follow its owner off the ray")
+            continue
+        # Ray passes through the child's XY center. Its tilted cube top is 0.1/cos(30deg)
+        # above that center, with child-local z=0.4. This also rejects dropped offsets/rotation.
+        expected_range = 2.0 - (0.8 + height_offset + 0.4 + 0.1 / math.cos(math.pi / 6))
+        expected_ranges = torch.full_like(ranges, expected_range)
+        expected_points = torch.zeros_like(points)
+        expected_points[..., 2] = -expected_range
+        if not torch.allclose(ranges, expected_ranges, atol=2e-3, rtol=2e-3):
+            failures.append(
+                f"disabled_child_target {label}: ranges {ranges.flatten().tolist()} != "
+                f"enabled-owner tilted-child solution {expected_range:.6f}"
+            )
+        if not torch.allclose(points, expected_points, atol=2e-3, rtol=2e-3):
+            failures.append(f"disabled_child_target {label}: sensor-frame XYZ does not match its radial return")
     return failures
 
 
@@ -217,6 +381,7 @@ def _check_isaacsim_native_configs(sim, manager) -> list[str]:
     from holosoma.simulator.isaacsim.sensor_setup import _is_visual_raycast_prim
 
     failures = []
+    env_ns = sim.backend.env_regex_ns
     for lidar_record in manager.lidars:
         native = sim.scene.sensors.get(lidar_record.name)
         if native is None:
@@ -247,7 +412,7 @@ def _check_isaacsim_native_configs(sim, manager) -> list[str]:
                 failures.append(f"{lidar_record.name}: auto-discovered targets omit the static ground")
             elif any(track for _path, track in ground_specs):
                 failures.append(f"{lidar_record.name}: auto-discovered static ground tracks transforms")
-            if "/World/envs/env_.*/.*" in target_paths:
+            if f"{env_ns}/.*" in target_paths:
                 failures.append(f"{lidar_record.name}: auto-discovery retained the unsafe environment catch-all")
             body_filter = lidar_record.config.body_filter
             exclude_robot = body_filter.target_kind == "robot"
@@ -264,7 +429,7 @@ def _check_isaacsim_native_configs(sim, manager) -> list[str]:
                 excluded_path = (
                     resolve_robot_link_rigid_body_prim_expression(target)
                     if kind == "robot_link"
-                    else f"/World/envs/env_.*/{target}"
+                    else f"{env_ns}/{target}"
                 )
             if excluded_path is not None:
                 if excluded_target is not None and excluded_target[0] == "actor":
@@ -272,11 +437,11 @@ def _check_isaacsim_native_configs(sim, manager) -> list[str]:
                         failures.append(f"{lidar_record.name}: auto-discovery includes filtered actor {excluded_path}")
                 else:
                     stage = get_current_stage()
-                    excluded_source = excluded_path.replace("env_.*", "env_0")
+                    excluded_source = excluded_path.replace(env_ns, "/World/envs/env_0", 1)
                     for path in target_paths:
-                        if not path.startswith("/World/envs/env_.*/Robot/"):
+                        if not path.startswith(f"{env_ns}/Robot/"):
                             continue
-                        owner = stage.GetPrimAtPath(path.replace("env_.*", "env_0"))
+                        owner = stage.GetPrimAtPath(path.replace(env_ns, "/World/envs/env_0", 1))
                         while owner.IsValid() and str(owner.GetPath()).startswith("/World/envs/env_0/Robot"):
                             if is_rigid_body_enabled(owner):
                                 break
@@ -289,7 +454,7 @@ def _check_isaacsim_native_configs(sim, manager) -> list[str]:
                             break
             stage = get_current_stage()
             source_root = "/World/envs/env_0/Robot"
-            expression_root = "/World/envs/env_.*/Robot"
+            expression_root = f"{env_ns}/Robot"
             expected_robot_targets = set()
             if not exclude_robot:
                 for mesh_prim in sim_utils.get_all_matching_child_prims(
@@ -301,11 +466,13 @@ def _check_isaacsim_native_configs(sim, manager) -> list[str]:
                         if is_rigid_body_enabled(owner):
                             break
                         owner = owner.GetParent()
-                    if excluded_path is not None and str(owner.GetPath()) == excluded_path.replace("env_.*", "env_0"):
+                    if excluded_path is not None and str(owner.GetPath()) == excluded_path.replace(
+                        env_ns, "/World/envs/env_0", 1
+                    ):
                         continue
                     mesh_path = str(mesh_prim.GetPath())
                     expected_robot_targets.add(f"{expression_root}{mesh_path[len(source_root) :]}")
-            actual_robot_targets = {path for path in target_paths if path.startswith("/World/envs/env_.*/Robot/")}
+            actual_robot_targets = {path for path in target_paths if path.startswith(f"{env_ns}/Robot/")}
             if actual_robot_targets != expected_robot_targets:
                 failures.append(
                     f"{lidar_record.name}: robot visual discovery differs from the eligible geometry "
@@ -318,7 +485,7 @@ def _check_isaacsim_native_configs(sim, manager) -> list[str]:
             if not exclude_robot and not actual_robot_targets:
                 failures.append(f"{lidar_record.name}: auto-discovery found no robot-link visual targets")
             expected_actors = {
-                f"/World/envs/env_.*/{actor_name}"
+                f"{env_ns}/{actor_name}"
                 for actor_name in sim.scene.rigid_objects
                 if excluded_target != ("actor", actor_name)
             }
@@ -674,12 +841,34 @@ def main() -> int:
     from tests.simulators import _camera_presets, _lidar_presets
 
     sim_arg = "mujoco" if args.simulator == "mjwarp" else args.simulator
+    native_disabled_child = False
+    if args.simulator == "isaacsim":
+        from holosoma.simulator.isaacsim.backends import get_backend
+
+        native_disabled_child = get_backend().is_isaaclab3
     sensors = dict(_lidar_presets.LIDAR_RIG)
     if args.simulator in {"mujoco", "mjwarp"}:
         sensors["downward_filtered"] = _lidar_presets.downward_filtered_lidar
         sensors["tracked_target_group_one"] = _lidar_presets.tracked_target_group_one_lidar
     sensors["tracked_target"] = _lidar_presets.tracked_target_lidar
     sensors["tracked_target_actor_filtered"] = _lidar_presets.tracked_target_actor_filtered_lidar
+    if native_disabled_child:
+        from holosoma.config_types.sensor import (
+            CustomLidarRayPatternConfig,
+            IsaacSimLidarConfig,
+            LidarSensorConfig,
+            SensorMountConfig,
+        )
+
+        sensors["disabled_child_target"] = LidarSensorConfig(
+            mount=SensorMountConfig(target_kind="world", position=[7.2, 6.7, 2.0]),
+            pattern=CustomLidarRayPatternConfig(ray_directions=[[0.0, 0.0, -1.0]]),
+            near=0.1,
+            far=5.0,
+            isaacsim=IsaacSimLidarConfig(
+                mesh_prim_paths=[f"{get_backend().env_regex_ns}/scan_target/disabled_ray_target/geom"]
+            ),
+        )
     config = build_run_sim_config(
         sim_arg,
         "camera-target",
@@ -695,6 +884,13 @@ def main() -> int:
         device=device,
         training=dataclasses.replace(config.training, num_envs=args.num_envs),
     )
+    if native_disabled_child:
+        # The launcher resolves this factory after Kit starts. Its native subclass authors the
+        # disabled child during construction, after spawners and before sensors and cloning.
+        config = dataclasses.replace(
+            config,
+            simulator=dataclasses.replace(config.simulator, _target_="tests.simulators.lidar_assert.IsaacSim"),
+        )
 
     if args.simulator == "isaacsim":
         isaaclab_spec = find_spec("isaaclab")
@@ -918,6 +1114,10 @@ def main() -> int:
             plane_normal=plane_normal,
             directions=static_directions,
         )
+        if native_disabled_child:
+            # This independent moving-owner fixture advances physics and sensor
+            # cadence. Run it after the initial-pose and cyclic-window oracles.
+            failures += _check_disabled_child_ray_target(sim, env_ids, physics_per_control)
     if args.result_file:
         with open(args.result_file, "w") as result:
             result.write("OK" if not failures else "FAIL\n" + "\n".join(failures))
