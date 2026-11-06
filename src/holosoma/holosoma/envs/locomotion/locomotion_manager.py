@@ -47,8 +47,6 @@ class LeggedRobotLocomotionManager(PolicyTask):
         self.default_dof_pos_base = self.default_dof_pos_base.unsqueeze(0)  # (1, num_dof)
         self.default_dof_pos = self.default_dof_pos_base.repeat(self.num_envs, 1).clone()  # (num_envs, num_dof)
 
-        self.need_to_refresh_envs = torch.ones(self.num_envs, dtype=torch.bool, device=self.device, requires_grad=False)
-
         self._init_domain_rand_buffers()
 
         self.lidar_height_offset = getattr(self.robot_config, "lidar_height_offset", 0.5)
@@ -117,13 +115,6 @@ class LeggedRobotLocomotionManager(PolicyTask):
     def _setup_simulator_control(self) -> None:
         self.simulator.commands = self.command_manager.commands  # type: ignore[attr-defined]
 
-    def _get_envs_to_refresh(self) -> torch.Tensor:
-        return self.need_to_refresh_envs.nonzero(as_tuple=False).flatten()
-
-    def _refresh_envs_after_reset(self, env_ids: torch.Tensor) -> None:
-        super()._refresh_envs_after_reset(env_ids)
-        self.need_to_refresh_envs[env_ids] = False
-
     @property
     def base_quat(self) -> torch.Tensor:
         return self.simulator.base_quat
@@ -160,9 +151,6 @@ class LeggedRobotLocomotionManager(PolicyTask):
     def _reset_buffers_callback(
         self, env_ids: torch.Tensor, target_buf: Mapping[str, torch.Tensor] | None = None
     ) -> None:
-        # Observation manager reset is now handled in base_task.py
-        self.need_to_refresh_envs[env_ids] = True
-
         if target_buf is not None:
             self.simulator.dof_pos[env_ids] = target_buf["dof_pos"].to(self.simulator.dof_pos.dtype)
             self.simulator.dof_vel[env_ids] = target_buf["dof_vel"].to(self.simulator.dof_vel.dtype)

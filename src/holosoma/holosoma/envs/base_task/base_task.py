@@ -253,8 +253,7 @@ class BaseTask:
         # Call manager-based reset events
         self.reset_manager.reset_scene(env_ids)
 
-        task_refresh_env_ids = self._ensure_long_tensor(self._get_envs_to_refresh())
-        self._refresh_envs_after_reset(torch.unique(torch.cat((env_ids, task_refresh_env_ids))))
+        self._refresh_envs_after_reset(env_ids)
         self._after_reset_synchronization(env_ids)
 
         self._start_episodes(env_ids)
@@ -520,9 +519,6 @@ class BaseTask:
         if isinstance(tensor_like, torch.Tensor):
             return tensor_like.to(device=self.device, dtype=torch.long)
         return torch.as_tensor(tensor_like, device=self.device, dtype=torch.long)
-
-    def _get_envs_to_refresh(self) -> torch.Tensor:
-        return torch.empty(0, device=self.device, dtype=torch.long)
 
     def _refresh_envs_after_reset(self, env_ids: torch.Tensor) -> None:
         """Apply reset and randomization state writes before observations read them."""

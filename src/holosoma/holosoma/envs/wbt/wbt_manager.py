@@ -21,7 +21,6 @@ class WholeBodyTrackingManager(PolicyTask):
         super()._init_buffers()
 
         # -------------------------------- terms same with locomotion_manager.py [start]--------------------------------
-        self.need_to_refresh_envs = torch.ones(self.num_envs, dtype=torch.bool, device=self.device, requires_grad=False)
         self._configure_default_dof_pos()
         self._init_domain_rand_buffers()
 
@@ -46,18 +45,10 @@ class WholeBodyTrackingManager(PolicyTask):
     def _reset_buffers_callback(
         self, env_ids: torch.Tensor, target_buf: Mapping[str, torch.Tensor] | None = None
     ) -> None:
-        self.need_to_refresh_envs[env_ids] = True
         self.episode_length_buf[env_ids] = 0
         self.reset_buf[env_ids] = 1
         # pending_episode_update_mask is only used in curriculum_term::AverageEpisodeLengthTracker.
         self._pending_episode_update_mask[env_ids] = True
-
-    def _get_envs_to_refresh(self) -> torch.Tensor:
-        return self.need_to_refresh_envs.nonzero(as_tuple=False).flatten()
-
-    def _refresh_envs_after_reset(self, env_ids: torch.Tensor) -> None:
-        super()._refresh_envs_after_reset(env_ids)
-        self.need_to_refresh_envs[env_ids] = False
 
     def _get_average_episode_tracker(self) -> AverageEpisodeLengthTracker:
         tracker = self.curriculum_manager.get_term("average_episode_tracker")
