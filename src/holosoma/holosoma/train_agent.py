@@ -107,44 +107,62 @@ def split_envs_across_ranks(tyro_config: ExperimentConfig) -> ExperimentConfig:
     return tyro_config
 
 
+@dataclasses.dataclass(frozen=True)
+class TrainingSetup:
+    """Process group, run timestamp and experiment directory of one training run."""
+
+    distributed_conf: MultGPUConfig | None
+    timestamp: str
+    experiment_dir: Path
+
+
+def setup_training(tyro_config: ExperimentConfig) -> TrainingSetup:
+    """Start the process group and route logs to the run's experiment directory."""
+    from holosoma.utils.experiment_paths import get_experiment_dir, get_timestamp
+
+    distributed_conf = configure_multi_gpu()
+    timestamp = get_timestamp()
+    experiment_dir = get_experiment_dir(tyro_config.logger, tyro_config.training, timestamp, task_name="locomotion")
+    configure_logging(distributed_conf=distributed_conf, log_dir=experiment_dir)
+    return TrainingSetup(distributed_conf, timestamp, experiment_dir)
+
+
 def train(tyro_config: ExperimentConfig) -> None:
     """Train an agent on the task built from ``tyro_config``."""
     tyro_config = split_envs_across_ranks(tyro_config)
     try:
+        # Before the task is built, so construction logs reach the run's log files.
+        setup = setup_training(tyro_config)
         with tyro_config.create_task() as env:
-            train_on_task(tyro_config, env)
+            train_on_task(tyro_config, env, setup)
     except Exception as e:
         tb_str = traceback.format_exc()
         logger.error(f"Exception occurred during training: {e}\n{tb_str}")
         sys.exit(1)  # manually set exit code, not possible via isaacsim app.close()
 
 
-def train_on_task(tyro_config: ExperimentConfig, env: PolicyTask) -> None:
-    """Train an agent on ``env``, a task built from ``tyro_config`` that the caller owns."""
+def train_on_task(tyro_config: ExperimentConfig, env: PolicyTask, setup: TrainingSetup | None = None) -> None:
+    """Train an agent on ``env``, a task built from ``tyro_config`` that the caller owns.
+
+    ``setup`` comes from :func:`setup_training`; it is created here when the caller has none.
+    """
     import torch
     import torch.distributed as dist
     import wandb
 
     from holosoma.agents.base_algo.base_algo import BaseAlgo
 
-    # Initialize process group
-    distributed_conf: MultGPUConfig | None = configure_multi_gpu()
+    if setup is None:
+        setup = setup_training(tyro_config)
+    distributed_conf = setup.distributed_conf
+    timestamp = setup.timestamp
+    experiment_dir = setup.experiment_dir
     device: str = env.device
     is_distributed = distributed_conf is not None
     is_main_process = distributed_conf is None or distributed_conf["global_rank"] == 0
 
-    # Configure logger
     logger_cfg = tyro_config.logger
     wandb_enabled = logger_cfg.type == "wandb"
-
-    # Compute experiment directory from logger and training config
-    from holosoma.utils.experiment_paths import get_experiment_dir, get_timestamp
-
-    timestamp = get_timestamp()
-    experiment_dir = get_experiment_dir(logger_cfg, tyro_config.training, timestamp, task_name="locomotion")
-
-    # Configure logging with experiment directory
-    configure_logging(distributed_conf=distributed_conf, log_dir=experiment_dir)
 
     wandb_run_path: str | None = None
 
