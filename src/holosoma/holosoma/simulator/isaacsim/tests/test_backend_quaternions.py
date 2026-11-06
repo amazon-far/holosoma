@@ -44,8 +44,14 @@ def test_config_quaternions_reuse_the_sdk_boundary_in_the_declared_direction(
     backend = IsaacLab3Backend() if family == 3 else IsaacLab2Backend()
     config = container([0.4, 0.1, -0.2, 0.3])
     expected_native = (0.1, -0.2, 0.3, 0.4) if family == 3 else (0.4, 0.1, -0.2, 0.3)
-    assert backend.config_quat_to_native(config) == expected_native
-    assert backend.config_quat_from_native(container(expected_native)) == (0.4, 0.1, -0.2, 0.3)
+    native = backend.config_quat_to_native(config)
+    restored = backend.config_quat_from_native(container(expected_native))
+    assert native == expected_native
+    assert restored == (0.4, 0.1, -0.2, 0.3)
+    # Native ray patterns use Torch's default float dtype. NumPy float64
+    # scalars here would make the SDK's quaternion rotation reject those rays.
+    assert torch.tensor(native).dtype == torch.get_default_dtype()
+    assert torch.tensor(restored).dtype == torch.get_default_dtype()
     assert sdk_math == (["xyzw", "wxyz"] if family == 3 else [])
     assert config == container([0.4, 0.1, -0.2, 0.3])
 
