@@ -583,6 +583,15 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
     # checkpoint, including in a Lab 3 environment.
     assert loaded_simulator["config"].pop("isaacsim_backend") == "isaaclab2"
     assert loaded_simulator["config"]["sim"].pop("isaaclab3") == {
+        "physics_backend": "physx",
+        "renderer": "isaac_rtx",
+        "newton": {
+            "use_cuda_graph": True,
+            "nconmax": 128,
+            "njmax": None,
+            "solver_iterations": None,
+            "default_shape_margin": 0.01,
+        },
         "use_fabric": True,
         "create_stage_in_memory": False,
         "use_newton_actuators": True,
