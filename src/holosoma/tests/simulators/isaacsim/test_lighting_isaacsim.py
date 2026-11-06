@@ -32,8 +32,9 @@ def _has_isaacsim() -> bool:
 
 @pytest.mark.isaacsim
 @pytest.mark.skipif(not _has_isaacsim(), reason="IsaacSim requires Isaac Lab and a CUDA device")
-def test_scene_lights_authored() -> None:
+def test_scene_lights_authored(tmp_path) -> None:
     """Launch IsaacSim with a declarative light rig and assert the UsdLux prims were authored."""
+    result_file = tmp_path / "scene_lights.txt"
     run_harness(
         _HARNESS,
         "--simulator",
@@ -43,6 +44,9 @@ def test_scene_lights_authored() -> None:
         "--num-envs",
         "2",
         "--probe-lights",
+        "--result-file",
+        str(result_file),
         label="isaacsim SceneConfig.lights authoring",
         timeout=900,
+        result_file=result_file,
     )

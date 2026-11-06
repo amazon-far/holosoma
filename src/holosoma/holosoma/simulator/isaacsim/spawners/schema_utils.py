@@ -48,10 +48,12 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-import isaacsim.core.utils.stage as stage_utils
 import omni.log
 import omni.usd
 from pxr import Usd
+from holosoma.simulator.isaacsim.backends import get_backend
+
+stage_utils = get_backend().stage_utils
 
 
 def has_api_in_subtree(prim_path: str, api_class: type[Any], stage: Usd.Stage | None = None) -> bool:
@@ -74,7 +76,7 @@ def has_api_in_subtree(prim_path: str, api_class: type[Any], stage: Usd.Stage | 
     bool
         True if the API is found anywhere in the subtree, False otherwise.
     """
-    stage = stage or omni.usd.get_context().get_stage()
+    stage = stage or stage_utils.get_current_stage()
     root_prim = stage.GetPrimAtPath(prim_path)
 
     if not root_prim.IsValid():

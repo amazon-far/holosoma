@@ -12,6 +12,7 @@ from holosoma.utils.simulator_config import SimulatorType
 if TYPE_CHECKING:
     from holosoma.managers.command.terms.wbt import MotionCommand
     from holosoma.managers.randomization.terms.locomotion import PushRandomizerState
+    from holosoma.simulator.isaacsim.isaacsim import IsaacSim
 
 
 class WholeBodyTrackingManager(PolicyTask):
@@ -80,16 +81,19 @@ class WholeBodyTrackingManager(PolicyTask):
 
     def _draw_debug_vis_isaacsim(self) -> None:
         motion_command = cast("MotionCommand", self.command_manager.get_state("motion_command"))
+        backend = cast("IsaacSim", self.simulator).backend
         # torso link
         real_robot_pos_xyz = motion_command.robot_ref_pos_w.clone()
         real_robot_quat_xyzw = motion_command.robot_ref_quat_w.clone()
-        real_robot_quat_wxyz = real_robot_quat_xyzw[:, [3, 0, 1, 2]]
-        motion_command.visualization_markers["real_robot"].visualize(real_robot_pos_xyz, real_robot_quat_wxyz)
+        motion_command.visualization_markers["real_robot"].visualize(
+            real_robot_pos_xyz, backend.quat_to_native(real_robot_quat_xyzw)
+        )
 
         motion_robot_pos_xyz = motion_command.ref_pos_w.clone()
         motion_robot_quat_xyzw = motion_command.ref_quat_w.clone()
-        motion_robot_quat_wxyz = motion_robot_quat_xyzw[:, [3, 0, 1, 2]]
-        motion_command.visualization_markers["motion_robot"].visualize(motion_robot_pos_xyz, motion_robot_quat_wxyz)
+        motion_command.visualization_markers["motion_robot"].visualize(
+            motion_robot_pos_xyz, backend.quat_to_native(motion_robot_quat_xyzw)
+        )
 
         for body_idx, body_names in enumerate(motion_command.motion_cfg.body_names_to_track):
             motion_robot_body_pos_xyz = motion_command.body_pos_w[0, body_idx].clone()
@@ -101,14 +105,14 @@ class WholeBodyTrackingManager(PolicyTask):
         if motion_command.motion.has_object:  # type: ignore[has-type]
             real_object_pos_xyz = motion_command.simulator_object_pos_w.clone()
             real_object_quat_xyzw = motion_command.simulator_object_quat_w.clone()
-            real_object_quat_wxyz = real_object_quat_xyzw[:, [3, 0, 1, 2]]
-            motion_command.visualization_markers["real_object"].visualize(real_object_pos_xyz, real_object_quat_wxyz)
+            motion_command.visualization_markers["real_object"].visualize(
+                real_object_pos_xyz, backend.quat_to_native(real_object_quat_xyzw)
+            )
 
             motion_object_pos_xyz = motion_command.object_pos_w.clone()
             motion_object_quat_xyzw = motion_command.object_quat_w.clone()
-            motion_object_quat_wxyz = motion_object_quat_xyzw[:, [3, 0, 1, 2]]
             motion_command.visualization_markers["motion_object"].visualize(
-                motion_object_pos_xyz, motion_object_quat_wxyz
+                motion_object_pos_xyz, backend.quat_to_native(motion_object_quat_xyzw)
             )
 
     def _draw_debug_vis(self) -> None:

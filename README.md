@@ -24,6 +24,7 @@ src/
 ## Documentation
 
 - **[Training Guide](src/holosoma/README.md)** - Train locomotion and whole-body tracking policies in IsaacSim/MJWarp
+- **[Isaac Sim backends](docs/isaacsim-backends.md)** - Choose Isaac Lab 2.3 / Sim 5.1 or Isaac Lab 3.0 / Sim 6.2
 - **[Inference & Deployment Guide](src/holosoma_inference/README.md)** - Deploy policies to real robots or evaluate in MuJoCo simulation
 - **[Retargeting Guide](src/holosoma_retargeting/holosoma_retargeting/README.md)** - Convert human motion capture data to robot motions
 - **[Robot SDK Bridges](src/holosoma/holosoma/bridge/README.md)** - Choose a bridge and tune sim-to-sim transport performance
@@ -35,9 +36,12 @@ src/
 Choose the appropriate setup script based on your use case:
 
 ```bash
-# For IsaacSim training
+# For Isaac Lab 2.3 / Isaac Sim 5.1 training
 # Requires Ubuntu 22.04 or later due to IsaacSim dependencies
 bash scripts/setup_isaacsim.sh
+
+# For Isaac Lab 3.0 / Isaac Sim 6.2 training (Python 3.12)
+bash scripts/setup_isaacsim3.sh
 
 # For MJWarp training and MuJoCo simulation (inference) — conda
 bash scripts/setup_mujoco.sh

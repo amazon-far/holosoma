@@ -275,10 +275,9 @@ def main() -> int:
     args = parser.parse_args()
 
     # Boot a minimal headless IsaacSim app so isaaclab.sim (carb) is importable.
-    from isaaclab.app import AppLauncher
+    from holosoma.simulator.isaacsim.backends import get_backend
 
-    app_launcher = AppLauncher(headless=True)
-    simulation_app = app_launcher.app
+    simulation_app = get_backend().launch_app({"headless": True})
 
     try:
         import isaaclab.sim as sim_utils
@@ -291,7 +290,10 @@ def main() -> int:
         _check_robot_link_physics_cfg()
     except BaseException:
         print("SPAWNER CFG ASSERT FAILED:\n" + traceback.format_exc(), flush=True)
-        simulation_app.close()
+        if get_backend().is_isaaclab3:
+            simulation_app.close(exit_code=1)
+        else:
+            simulation_app.close()
         return 1
 
     print("SPAWNER CFG OK: all spawn-cfg invariants verified", flush=True)

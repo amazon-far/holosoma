@@ -39,7 +39,7 @@ from holosoma.utils.safe_torch_import import torch
 pytestmark = pytest.mark.no_sim
 
 CLASSIC_PRESET = "mujoco"  # the only single-env CPU-physics backend
-OTHER_PRESETS = ["isaacsim", "mjwarp"]
+OTHER_PRESETS = ["isaacsim", "isaacsim3", "mjwarp"]
 THREAD_LIMIT_VARIABLES = ["OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"]
 
 

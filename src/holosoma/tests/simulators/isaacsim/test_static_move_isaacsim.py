@@ -33,13 +33,17 @@ _HARNESS = Path(__file__).resolve().parents[1] / "static_move_assert.py"
 
 
 @pytest.mark.parametrize("num_envs", ["1", "4"])
-def test_static_move(num_envs):
+def test_static_move(num_envs, tmp_path):
+    result_file = tmp_path / "static_move.txt"
     run_harness(
         _HARNESS,
         "--simulator",
         "isaacsim",
         "--num-envs",
         num_envs,
+        "--result-file",
+        str(result_file),
         label=f"isaacsim/static-move (num_envs={num_envs})",
         timeout=900,
+        result_file=result_file,
     )

@@ -15,6 +15,8 @@ from __future__ import annotations
 import dataclasses
 import importlib.util
 import sys
+from contextlib import contextmanager
+from importlib.machinery import ModuleSpec
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -24,7 +26,7 @@ from pydantic import ValidationError
 
 from holosoma.config_types.env import get_run_sim_env_config
 from holosoma.config_types.run_sim import RunSimConfig
-from holosoma.config_types.simulator import IsaacSimRenderConfig
+from holosoma.config_types.simulator import IsaacSimBackend, IsaacSimRenderConfig
 from holosoma.config_values import run_sim as run_sim_values
 from holosoma.utils.sim_utils import setup_isaaclab_launcher
 from tests.simulators._run_harness import run_harness
@@ -42,19 +44,24 @@ def _has_isaacsim() -> bool:
     return torch.cuda.is_available()
 
 
-def _run_config(render_config: IsaacSimRenderConfig) -> RunSimConfig:
+def _run_config(
+    render_config: IsaacSimRenderConfig, backend: IsaacSimBackend = IsaacSimBackend.ISAACLAB2
+) -> RunSimConfig:
     simulator = dataclasses.replace(
         run_sim_values.isaacsim,
-        config=dataclasses.replace(run_sim_values.isaacsim.config, isaacsim=render_config),
+        config=dataclasses.replace(run_sim_values.isaacsim.config, isaacsim=render_config, isaacsim_backend=backend),
     )
     return RunSimConfig(simulator=simulator)
 
 
 @pytest.mark.no_sim
+@pytest.mark.parametrize("backend", list(IsaacSimBackend))
 @pytest.mark.parametrize(
     ("render_config", "expected_rendering_mode", "expected_kit_args"),
     [
         (IsaacSimRenderConfig(), "upstream-render-default", "upstream-kit-default"),
+        (IsaacSimRenderConfig(rendering_mode="performance"), "performance", "upstream-kit-default"),
+        (IsaacSimRenderConfig(rendering_mode="balanced"), "balanced", "upstream-kit-default"),
         (
             IsaacSimRenderConfig(
                 rendering_mode="quality",
@@ -63,6 +70,11 @@ def _run_config(render_config: IsaacSimRenderConfig) -> RunSimConfig:
             "quality",
             "--/holosoma/tests/launcherKitArg=cpu-boundary",
         ),
+        (
+            IsaacSimRenderConfig(rendering_mode="quality", kit_args="--/rtx/post/dlss/execMode=0"),
+            "quality",
+            "--/rtx/post/dlss/execMode=0",
+        ),
     ],
 )
 def test_launcher_config_reaches_app_launcher_namespace(
@@ -70,15 +82,20 @@ def test_launcher_config_reaches_app_launcher_namespace(
     render_config: IsaacSimRenderConfig,
     expected_rendering_mode: str,
     expected_kit_args: str,
+    backend: IsaacSimBackend,
 ) -> None:
     """Exercise Holosoma's real launcher setup with Isaac Lab replaced only at its import boundary."""
+    monkeypatch.setenv(
+        "HOLOSOMA_ISAACSIM_BACKEND", "isaaclab2" if backend == IsaacSimBackend.ISAACLAB3 else "isaaclab3"
+    )
     captured_args: dict[str, Any] = {}
     app_sentinel = object()
 
     class FakeAppLauncher:
         @staticmethod
         def add_app_launcher_args(parser) -> None:
-            parser.add_argument("--rendering_mode", default="upstream-render-default")
+            if backend == IsaacSimBackend.ISAACLAB2:
+                parser.add_argument("--rendering_mode", default="upstream-render-default")
             parser.add_argument("--kit_args", default="upstream-kit-default")
 
         def __init__(self, args) -> None:
@@ -91,14 +108,72 @@ def test_launcher_config_reaches_app_launcher_namespace(
     isaaclab_module.__dict__["app"] = isaaclab_app_module
     monkeypatch.setitem(sys.modules, "isaaclab", isaaclab_module)
     monkeypatch.setitem(sys.modules, "isaaclab.app", isaaclab_app_module)
+    physx_module = ModuleType("isaaclab_physx")
+    monkeypatch.setitem(sys.modules, "isaaclab_physx", physx_module)
+    closed_statuses = []
+    if backend == IsaacSimBackend.ISAACLAB3:
+        physx_module.__spec__ = ModuleSpec("isaaclab_physx", loader=None)
+        physics_module = ModuleType("isaaclab_physx.physics")
+        physics_module.__dict__["PhysxCfg"] = object
+        monkeypatch.setitem(sys.modules, "isaaclab_physx.physics", physics_module)
+        isaaclab_app_module.__dict__["add_launcher_args"] = FakeAppLauncher.add_app_launcher_args
+
+        @contextmanager
+        def launch_simulation(cfg, args):
+            captured_args.update(args)
+            try:
+                yield cfg
+            except SystemExit as error:
+                closed_statuses.append(error.code)
+
+        isaaclab_app_module.__dict__["launch_simulation"] = launch_simulation
+        kit_app = ModuleType("omni.kit.app")
+        kit_app.__dict__["get_app"] = lambda: app_sentinel
+        kit_module = ModuleType("omni.kit")
+        kit_module.__dict__["app"] = kit_app
+        omni_module = ModuleType("omni")
+        omni_module.__dict__["kit"] = kit_module
+        monkeypatch.setitem(sys.modules, "omni", omni_module)
+        monkeypatch.setitem(sys.modules, "omni.kit", kit_module)
+        monkeypatch.setitem(sys.modules, "omni.kit.app", kit_app)
     monkeypatch.setattr(sys, "argv", ["test-render-modes"])
     monkeypatch.delenv("WORLD_SIZE", raising=False)
 
-    app = setup_isaaclab_launcher(get_run_sim_env_config(_run_config(render_config)), "cuda:0")
+    app = setup_isaaclab_launcher(get_run_sim_env_config(_run_config(render_config, backend)), "cuda:0")
+    assert app is not None
+    from holosoma.simulator.isaacsim.backends import get_backend
 
-    assert app is app_sentinel
-    assert captured_args["rendering_mode"] == expected_rendering_mode
-    assert captured_args["kit_args"] == expected_kit_args
+    assert get_backend().major == (3 if backend == IsaacSimBackend.ISAACLAB3 else 2)
+
+    if backend == IsaacSimBackend.ISAACLAB3:
+        assert app._app is app_sentinel
+        assert captured_args["visualizer"] == "kit"
+        app.close(exit_code=1)
+        assert closed_statuses == [1]
+        assert "rendering_mode" not in captured_args
+        native_kit_args = captured_args["kit_args"].split()
+        assert native_kit_args[-2:] == [
+            expected_kit_args,
+            "--/exts/omni.kit.telemetry/skipDeferredStartup=true",
+        ]
+        if render_config.rendering_mode is None:
+            assert len(native_kit_args) == 2
+        else:
+            expected_dlss, expected_quality = {
+                "performance": (0, "false"),
+                "balanced": (1, "false"),
+                "quality": (2, "true"),
+            }[render_config.rendering_mode]
+            assert f"--/rtx/post/dlss/execMode={expected_dlss}" in native_kit_args
+            assert f"--/rtx/reflections/enabled={expected_quality}" in native_kit_args
+            assert f"--/rtx/indirectDiffuse/enabled={expected_quality}" in native_kit_args
+            if expected_kit_args == "--/rtx/post/dlss/execMode=0":
+                dlss_args = [arg for arg in native_kit_args if arg.startswith("--/rtx/post/dlss/execMode=")]
+                assert dlss_args == ["--/rtx/post/dlss/execMode=2", "--/rtx/post/dlss/execMode=0"]
+    else:
+        assert app is app_sentinel
+        assert captured_args["rendering_mode"] == expected_rendering_mode
+        assert captured_args["kit_args"] == expected_kit_args
 
 
 @pytest.mark.no_sim
@@ -109,8 +184,9 @@ def test_launcher_config_rejects_unknown_rendering_mode() -> None:
 
 @pytest.mark.isaacsim
 @pytest.mark.skipif(not _has_isaacsim(), reason="IsaacSim requires Isaac Lab and a CUDA device")
-def test_render_headless():
+def test_render_headless(tmp_path):
     """Step and render a free-box scene without a display."""
+    result_file = tmp_path / "render_headless.txt"
     run_harness(
         _HARNESS,
         "--simulator",
@@ -119,6 +195,9 @@ def test_render_headless():
         "g1-largebox",
         "--headless",
         "true",
+        "--result-file",
+        str(result_file),
         label="isaacsim render (headless=true)",
         timeout=900,
+        result_file=result_file,
     )

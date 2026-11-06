@@ -6,7 +6,11 @@ set -ex
 
 cd /workspace/holosoma
 
-source scripts/source_isaacsim_setup.sh
+case "${HOLOSOMA_ISAACSIM_BACKEND:-isaaclab2}" in
+  isaaclab2) source scripts/source_isaacsim_setup.sh ;;
+  isaaclab3) source scripts/source_isaacsim3_setup.sh ;;
+  *) echo "Unknown Isaac Sim backend: $HOLOSOMA_ISAACSIM_BACKEND" >&2; exit 1 ;;
+esac
 python -m pip install -e 'src/holosoma[unitree,booster]'
 python -m pip install -e src/holosoma_inference
 

@@ -12,6 +12,7 @@ import threading
 import time
 import traceback
 from abc import ABC, abstractmethod
+from functools import partial
 from pathlib import Path
 from threading import Thread
 from typing import TYPE_CHECKING
@@ -103,7 +104,10 @@ class VideoRecorderInterface(ABC):
         hooks.add(Phase.EPISODE_START, self.on_episode_start, name="video.on_episode_start")
         hooks.add(Phase.EPISODE_END, self.on_episode_end, name="video.on_episode_end")
         hooks.add(
-            Phase.FRAME_END, self.capture_frame, name="video.capture_frame", after=self.simulator.sensor_render_hook
+            Phase.FRAME_END,
+            partial(self.capture_frame, env_id=self.config.record_env_id),
+            name="video.capture_frame",
+            after=self.simulator.sensor_render_hook,
         )
         hooks.add(Phase.CLOSE, self.cleanup, name="video.cleanup")
 

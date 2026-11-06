@@ -12,7 +12,6 @@ import trimesh
 from holosoma.config_types.full_sim import FullSimConfig
 import isaaclab.sim as sim_utils
 import isaaclab.terrains as terrain_gen
-import isaacsim.core.utils.stage as stage_utils
 import omni.log
 import torch
 from pxr import Usd
@@ -22,7 +21,7 @@ from isaaclab.managers import EventManager, SceneEntityCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.sensors import ContactSensor, RayCaster, TiledCamera
-from isaaclab.sim import PhysxCfg, SimulationCfg, SimulationContext
+from isaaclab.sim import SimulationContext
 from isaaclab.sim.utils import bind_physics_material
 from isaaclab.terrains import TerrainGeneratorCfg
 from isaaclab.utils.timer import Timer
@@ -35,6 +34,7 @@ from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.isaacsim.event_cfg import EventCfg
+from holosoma.simulator.isaacsim.backends import get_backend
 from holosoma.simulator.isaacsim.events import randomize_body_com, randomize_rigid_body_inertia
 from holosoma.simulator.isaacsim import light_setup, sensor_setup
 from holosoma.simulator.isaacsim.viewer_input import ViewerInputController
@@ -50,7 +50,6 @@ from holosoma.simulator.isaacsim.object_spawner import (
 )
 from holosoma.simulator.isaacsim.scene_fixtures import build_terrain_fixtures
 from holosoma.simulator.base_simulator.state import Columns
-from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw
 from holosoma.simulator.shared.dof_limits import build_dof_limits_from_config
 from holosoma.simulator.shared.external_wrench import WrenchTarget
 from holosoma.simulator.shared.root_states_view import UnifiedRootStatesView
@@ -72,6 +71,7 @@ from holosoma.simulator.types import ActorNames, ActorIndices, EnvIds, ActorStat
 class IsaacSim(BaseSimulator):
     def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str):
         super().__init__(tyro_config, terrain_manager, device)
+        self.backend = get_backend(self.simulator_config.isaacsim_backend)
 
         # Public interface attribute read across backends (video_recorder, virtual_gantry,
         # simulator_bridge). For IsaacSim it always equals self.sim_device; internal tensor
@@ -82,26 +82,8 @@ class IsaacSim(BaseSimulator):
         # populated by _load_scene_files; read in _collect_spawned_actors to classify.
         self.scene_file_static_names: set[str] = set()
 
-        sim_config: SimulationCfg = SimulationCfg(
-            dt=1.0 / self.simulator_config.sim.fps,
-            render_interval=self.simulator_config.sim.control_decimation_steps,
-            device=self.sim_device,
-            physx=PhysxCfg(
-                bounce_threshold_velocity=self.simulator_config.sim.physx.bounce_threshold_velocity,
-                solver_type=self.simulator_config.sim.physx.solver_type,
-                max_position_iteration_count=self.simulator_config.sim.physx.num_position_iterations,
-                max_velocity_iteration_count=self.simulator_config.sim.physx.num_velocity_iterations,
-                gpu_max_rigid_patch_count=10 * 2**15,
-            ),
-            # Global physics material, can be overridden by the individual articulation
-            # Can be inspected by:
-            # materials = self._robot.root_physx_view.get_material_properties()
-            physics_material=sim_utils.RigidBodyMaterialCfg(
-                static_friction=1.0,  # default is 0.5
-                dynamic_friction=1.0,  # default is 0.5
-                restitution=0.0,
-            ),
-        )
+        sim_config = self.backend.simulation_config(self.simulator_config.sim, self.sim_device)
+        sim_config.render_interval = self.simulator_config.sim.control_decimation_steps
 
         # create a simulation context to control the simulator
         if SimulationContext.instance() is None:
@@ -127,7 +109,7 @@ class IsaacSim(BaseSimulator):
             replicate_physics=self.scene_config.replicate_physics,
         )
         # generate scene
-        with Timer("[INFO]: Time taken for scene creation", "scene_creation"):
+        with Timer("[INFO]: Time taken for scene creation", "scene_creation"), self.backend.stage_context(self.sim):
             # Narrow the type from the base class's SceneInterface (which declares only
             # env_origins) to IsaacLab's InteractiveScene, what self.scene actually is on this
             # backend, so the rich .rigid_objects/.articulations/.sensors/... accesses below
@@ -138,6 +120,7 @@ class IsaacSim(BaseSimulator):
             # sensor_setup.build_cameras (called from _setup_scene, pre-clone), read at render.
             self.tiled_cameras: dict[str, TiledCamera] = {}
             self._setup_scene()
+            self.backend.register_scene(self.sim, self.scene)
         print("[INFO]: Scene manager: ", self.scene)
 
         viewer_config: ViewerCfg
@@ -146,23 +129,24 @@ class IsaacSim(BaseSimulator):
         else:
             viewer_config = ViewerCfg()
 
-        if self.sim.render_mode >= self.sim.RenderMode.PARTIAL_RENDERING:
-            self.viewport_camera_controller: ViewportCameraController | None = ViewportCameraController(
-                self, viewer_config
-            )
-        else:
-            self.viewport_camera_controller = None
+        self.viewport_camera_controller: ViewportCameraController | None = self.backend.create_viewport_controller(
+            self, viewer_config
+        )
 
         # play the simulator to activate physics handles
         # note: this activates the physics simulation view that exposes TensorAPIs
         # note: when started in extension mode, first call sim.reset_async() and then initialize the managers
-        if builtins.ISAAC_LAUNCHED_FROM_TERMINAL is False:  # type: ignore[attr-defined]
+        if getattr(builtins, "ISAAC_LAUNCHED_FROM_TERMINAL", False) is False:
             logger.info("Starting the simulation. This may take a few seconds. Please wait...")
-            with Timer("[INFO]: Time taken for simulation start", "simulation_start"):
+            with (
+                Timer("[INFO]: Time taken for simulation start", "simulation_start"),
+                self.backend.stage_context(self.sim),
+            ):
                 self.sim.reset()
+                self.backend.restore_initial_articulation_state(self._robot, self.scene.env_origins)
             sensor_setup.sync_camera_fabric_transforms(self)
 
-        self.default_coms = self._robot.root_physx_view.get_coms().clone()
+        self.default_coms = self.backend.physics_property(self._robot, "coms").clone()
         self.base_com_bias = torch.zeros((self.training_config.num_envs, 3), dtype=torch.float, device="cpu")
 
         self.events_cfg = EventCfg()
@@ -244,7 +228,7 @@ class IsaacSim(BaseSimulator):
         # real collider and PhysX keeps the default per-shape material (the failure objects avoid via
         # CustomUsdFileCfg.disable_instanceable). Clear instanceable across the robot subtree first so
         # the bind reaches the actual collider prims.
-        stage = stage_utils.get_current_stage()
+        stage = self.backend.stage_utils.get_current_stage()
         for prim in Usd.PrimRange(stage.GetPrimAtPath(robot_prim_path)):
             if prim.IsInstanceable():
                 prim.SetInstanceable(False)
@@ -260,6 +244,7 @@ class IsaacSim(BaseSimulator):
         )
 
     def _setup_scene(self) -> None:
+        self.backend.prepare_scene(self.scene)
         self._load_scene_config()
 
         robot_articulation_config = build_robot_articulation_cfg(self.robot_config)
@@ -299,7 +284,7 @@ class IsaacSim(BaseSimulator):
         light_setup.build_lights(self)
 
         # clone, filter, and replicate
-        self.scene.clone_environments(copy_from_source=False)
+        self.backend.clone_environments(self.scene)
 
         self.scene.filter_collisions(global_prim_paths=global_collision_prims)
 
@@ -614,6 +599,7 @@ class IsaacSim(BaseSimulator):
             scene=self.scene,
             robot=self._robot,
             state=self.state,
+            backend=self.backend,
         )
 
         # Unified all-actors view: routes [indices] reads/writes through
@@ -682,31 +668,26 @@ class IsaacSim(BaseSimulator):
         self.state.device = self.sim_device
         self.state.register(
             "robot_root_states",
-            lambda: fullstate_wxyz_to_xyzw(data.root_state_w),
+            lambda: self.backend.root_state(self._robot),
             write=lambda rows, root: self._state_adapter.write_object_states("robot", root[rows], rows),
         )
         self.state.register(
             "dof_pos",
-            Columns(lambda: data.joint_pos, self.dof_ids),
-            write=lambda rows, out: self._robot.write_joint_position_to_sim(
-                out[rows], joint_ids=self.dof_ids, env_ids=rows
-            ),
+            Columns(lambda: self.backend.tensor(data.joint_pos), self.dof_ids),
+            write=lambda rows, out: self.backend.write_joint_position(self._robot, out[rows], self.dof_ids, rows),
         )
         self.state.register(
             "dof_vel",
-            Columns(lambda: data.joint_vel, self.dof_ids),
-            write=lambda rows, out: self._robot.write_joint_velocity_to_sim(
-                out[rows], joint_ids=self.dof_ids, env_ids=rows
-            ),
+            Columns(lambda: self.backend.tensor(data.joint_vel), self.dof_ids),
+            write=lambda rows, out: self.backend.write_joint_velocity(self._robot, out[rows], self.dof_ids, rows),
         )
         self.state.register("contact_forces", self._robot_contact_forces)
         body_sources = {
-            "_rigid_body_pos": lambda: data.body_pos_w,
-            # Isaac Lab stores wxyz; holosoma uses xyzw.
-            "_rigid_body_rot": lambda: data.body_quat_w[..., [1, 2, 3, 0]],
+            "_rigid_body_pos": lambda: self.backend.body_positions(self._robot),
+            "_rigid_body_rot": lambda: self.backend.body_quat(self._robot),
             # Link-frame linear velocity, to match _rigid_body_pos: body_lin_vel_w is the COM velocity.
-            "_rigid_body_vel": lambda: data.body_link_lin_vel_w,
-            "_rigid_body_ang_vel": lambda: data.body_ang_vel_w,
+            "_rigid_body_vel": lambda: self.backend.body_linear_velocity(self._robot),
+            "_rigid_body_ang_vel": lambda: self.backend.body_angular_velocity(self._robot),
         }
         for name, source in body_sources.items():
             self.state.register(name, Columns(source, self.body_ids))
@@ -714,7 +695,9 @@ class IsaacSim(BaseSimulator):
     def _robot_contact_forces(self) -> torch.Tensor:
         """Sensor forces in robot body order, (num_envs, num_bodies, 3). The contact sensor's body
         ordering differs from the robot's, so every reader must go through this gather."""
-        return self.contact_sensor.data.net_forces_w[:, self._contact_to_robot_body_ids]
+        return self.backend.contact_forces(self.contact_sensor, self.simulator_config.sim)[
+            :, self._contact_to_robot_body_ids
+        ]
 
     def apply_torques_at_dof(self, torques: torch.Tensor, dof_indices: list[int] | None = None) -> None:
         # set_joint_effort_target writes only the given joint_ids without clobbering the rest, so a
@@ -723,7 +706,7 @@ class IsaacSim(BaseSimulator):
             joint_ids = self.dof_ids
         else:
             joint_ids = [self.dof_ids[i] for i in dof_indices]
-        self._robot.set_joint_effort_target(torques, joint_ids=joint_ids)
+        self.backend.set_joint_effort(self._robot, torques, joint_ids)
 
     def draw_debug_viz(self) -> None:
         if self.virtual_gantry:
@@ -760,22 +743,15 @@ class IsaacSim(BaseSimulator):
         self.scene.write_data_to_sim()
         # Runs physics_sim_view.update_articulations_kinematic() and flushes fabric, so body/camera
         # prims match the written joint/root state without integrating.
-        self.sim.forward()
-        # Isaac Lab resets its cached body velocities only on joint position writes.
-        self._robot.data._body_link_vel_w.timestamp = -1.0
-        self._robot.data._body_com_vel_w.timestamp = -1.0
+        self.backend.forward_kinematics(self.sim, self._robot)
 
     def _write_external_wrench_native(self, targets: list[WrenchTarget]) -> None:
         """Set world-frame wrenches on the robot articulation and object RigidObjects.
 
-        set_external_force_and_torque applies in the BODY-LOCAL frame (IsaacLab hardcodes/defaults
-        is_global=False), so world wrenches are rotated per body via quat_apply_inverse first.
-        Only write_cols is written: the composer SETs per body_id, so touching every body would
-        clobber forces another writer applied to bodies we don't own. scene.write_data_to_sim()
-        (in simulate_at_each_physics_step) flushes into PhysX.
+        The backend converts Lab 2's body-local buffers or submits world-frame inputs to Lab 3's
+        instantaneous composer. Only write_cols participates, preserving other writers' bodies.
+        scene.write_data_to_sim() flushes these inputs before the physics step.
         """
-        from isaaclab.utils.math import quat_apply_inverse
-
         dev = self.sim_device
         # Runs every physics substep with a stable body set: cache the resolved id lists/tensors.
         if not hasattr(self, "_wrench_id_cache"):
@@ -792,13 +768,7 @@ class IsaacSim(BaseSimulator):
                 self._wrench_id_cache[key] = (ids, torch.tensor(ids, device=dev))
             ids, ids_t = self._wrench_id_cache[key]
             wrench = target.wrench.to(device=dev, dtype=torch.float32)[:, cols, :]  # [num_envs, n_cols, 6]
-            body_quats = handle.data.body_quat_w[:, ids, :]  # wxyz, [num_envs, n_cols, 4]
-            handle.set_external_force_and_torque(
-                forces=quat_apply_inverse(body_quats, wrench[..., 0:3]),
-                torques=quat_apply_inverse(body_quats, wrench[..., 3:6]),
-                env_ids=self._wrench_env_ids_all,
-                body_ids=ids_t,
-            )
+            self.backend.write_external_wrench(handle, wrench, ids_t, self._wrench_env_ids_all)
 
     def setup_viewer(self) -> None:
         self.viewer = self.viewport_camera_controller
@@ -825,7 +795,7 @@ class IsaacSim(BaseSimulator):
             self._render_frame()
 
     def _render_frame(self) -> None:
-        self.sim.render()
+        self.backend.render(self.sim)
         if self.debug_viz_enabled:
             self.clear_lines()
             self.draw_debug_viz()
@@ -916,8 +886,7 @@ class IsaacSim(BaseSimulator):
             elif obj_name in self.scene.rigid_objects:
                 # Get object pose from its rigid object (scene-file bodies included).
                 rigid_object = self.scene.rigid_objects[obj_name]
-                default_state = rigid_object.data.default_root_state[0]  # [13]
-                pose = default_state[[0, 1, 2, 4, 5, 6, 3]]  # [x,y,z,qx,qy,qz,qw] reorder from wxyz to xyzw
+                pose = self.backend.default_root_pose(rigid_object)[0]
                 base_poses.append(pose)
 
             else:
@@ -975,7 +944,7 @@ class IsaacSim(BaseSimulator):
 
     def _physics_time(self) -> float:
         """The IsaacSim simulation clock in seconds (used by ``time()`` outside kinematic mode)."""
-        return float(self.sim.current_time)
+        return self.backend.physics_time(self.sim)
 
     def get_dof_forces(self, env_id: int = 0) -> torch.Tensor:
         """Get DOF forces for a specific environment.
@@ -998,7 +967,7 @@ class IsaacSim(BaseSimulator):
         # IsaacSim has no direct DOF force sensors
         # Return the applied torques (which are the commanded forces)
         # This matches the bridge's usage pattern where forces are used for feedback
-        if not hasattr(self._robot, "data") or not hasattr(self._robot.data, "applied_torque"):
+        if not hasattr(self._robot, "data"):
             logger.warning(
                 "DOF forces not directly available in IsaacSim. "
                 "Returning zeros. For force feedback, the bridge will use commanded torques."
@@ -1006,7 +975,7 @@ class IsaacSim(BaseSimulator):
             return torch.zeros(self.num_dof, device=self.sim_device)
 
         # Get applied torques which represent the forces being applied to joints
-        applied_torques = self._robot.data.applied_torque[env_id, self.dof_ids]
+        applied_torques = self.backend.applied_effort(self._robot)[env_id, self.dof_ids]
         return applied_torques
 
     def write_state_updates(self) -> None:

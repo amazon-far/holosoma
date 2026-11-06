@@ -39,6 +39,7 @@ import dataclasses
 import os
 import pathlib
 import sys
+from typing import Literal
 
 # tests/simulators/ has an isaacsim/ subpackage that would shadow the real IsaacSim package if it
 # lands on sys.path[0] when run as a script — drop it (mirrors static_move_assert.py).
@@ -52,7 +53,13 @@ ROBOT = "g1-29dof"
 TERRAIN = "terrain_locomotion_plane"
 
 
-def _build(simulator: str, num_envs: int, device: str | None = None):
+def _build(
+    simulator: str,
+    num_envs: int,
+    device: str | None = None,
+    *,
+    contact_force_mode: Literal["normal", "total"] = "normal",
+):
     """Build and prepare a sim with the robot dropped on flat ground (classic MuJoCo on CPU by default)."""
     import torch
 
@@ -61,6 +68,18 @@ def _build(simulator: str, num_envs: int, device: str | None = None):
         config,
         device=device or ("cpu" if simulator == "mujoco" else "cuda:0"),
         training=dataclasses.replace(config.training, num_envs=num_envs, headless=True),
+        simulator=dataclasses.replace(
+            config.simulator,
+            config=dataclasses.replace(
+                config.simulator.config,
+                sim=dataclasses.replace(
+                    config.simulator.config.sim,
+                    isaaclab3=dataclasses.replace(
+                        config.simulator.config.sim.isaaclab3, contact_force_mode=contact_force_mode
+                    ),
+                ),
+            ),
+        ),
     )
 
     sim, device, _ = launch_simulator(config, device=config.device)

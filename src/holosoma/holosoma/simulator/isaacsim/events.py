@@ -7,7 +7,7 @@ and sampling through the shared keyed :meth:`holosoma.utils.sampler.TermSampler.
 the same thing on IsaacSim as on MuJoCo — including gaussian and log_uniform.
 
 The mass/CoM/inertia writers take a list of per-component :class:`DistributionSpec` (validated at the
-term boundary) and write through ``asset.root_physx_view``; CoM/inertia reset to the asset's captured
+term boundary) and use the selected backend's property writers; CoM/inertia reset to the asset's captured
 defaults (``asset.data.default_*``) before applying, so repeated calls compose from the original.
 
 The MATERIAL writer (:func:`randomize_rigid_body_material`) is different in kind because PhysX caps
@@ -31,6 +31,7 @@ from isaaclab.envs import ManagerBasedEnv
 from isaaclab.managers import SceneEntityCfg
 
 from holosoma.utils.sampler import DistributionSpec, DistributionLike, TermSampler, quantiles
+from holosoma.simulator.isaacsim.backends import get_backend
 
 
 def _resolve_body_ids(asset: RigidObject | Articulation, asset_cfg: SceneEntityCfg) -> torch.Tensor:
@@ -110,7 +111,8 @@ def randomize_rigid_body_mass(
     # setup-stage (run once), so onto-current == onto-default at startup; composing onto current is
     # what keeps "the same config means the same thing" across backends (a reset-to-default here made
     # a second call return ``draw - prior_draw`` instead of ``draw`` — a cross-backend divergence).
-    masses = asset.root_physx_view.get_masses()
+    backend = get_backend()
+    masses = backend.physics_property(asset, "masses")
     mass_before = masses[env_ids[:, None], body_ids].clone()
 
     # ``axis`` int coord = stream; body_ids as a [1, n_body] coord -> [n_env, n_body] to match the index.
@@ -126,17 +128,17 @@ def randomize_rigid_body_mass(
         raise ValueError(f"Unknown operation: '{operation}'. Use 'add', 'abs' or 'scale'.")
 
     masses[env_ids[:, None], body_ids] = masses[env_ids[:, None], body_ids].clamp(min=min_mass)
-    asset.root_physx_view.set_masses(masses, env_ids)
+    backend.write_physics_property(asset, "masses", masses, env_ids)
 
     if recompute_inertia:
         # Scale inertia by the per-body mass ratio THIS call produced (commutes with inertia DR).
         ratios = masses[env_ids[:, None], body_ids] / mass_before.clamp(min=min_mass)
-        inertias = asset.root_physx_view.get_inertias()
-        if isinstance(asset, Articulation):
+        inertias = backend.physics_property(asset, "inertias")
+        if inertias.ndim == 3:
             inertias[env_ids[:, None], body_ids] *= ratios[..., None]
         else:
             inertias[env_ids] *= ratios
-        asset.root_physx_view.set_inertias(inertias, env_ids)
+        backend.write_physics_property(asset, "inertias", inertias, env_ids)
 
 
 def randomize_body_com(
@@ -171,7 +173,8 @@ def randomize_body_com(
         f"(asset_cfg.body_names={asset_cfg.body_names!r}); CoM DR targets one body (the torso)."
     )
 
-    coms = asset.root_physx_view.get_coms()
+    backend = get_backend()
+    coms = backend.physics_property(asset, "coms")
     coms[env_ids[:, None], body_ids] = env.default_coms[env_ids[:, None], body_ids].clone()
 
     # One (x,y,z) sample per env (first resolved body's row); CoM DR targets the torso, a single body.
@@ -187,7 +190,7 @@ def randomize_body_com(
     else:
         raise ValueError(f"Unknown operation: '{operation}'. Use 'add', 'abs' or 'scale'.")
 
-    asset.root_physx_view.set_coms(coms, env_ids)
+    backend.write_physics_property(asset, "coms", coms, env_ids)
 
 
 def randomize_rigid_body_inertia(
@@ -216,7 +219,8 @@ def randomize_rigid_body_inertia(
 
     body_ids = _resolve_body_ids(asset, asset_cfg)
 
-    inertias_original = asset.root_physx_view.get_inertias()  # (num_envs, 9) or (num_envs, num_bodies, 9)
+    backend = get_backend()
+    inertias_original = backend.physics_property(asset, "inertias")  # (num_envs, 9) or (num_envs, num_bodies, 9)
     if inertias_original.ndim == 2:
         inertias = inertias_original.unsqueeze(1).clone()  # (num_envs, 1, 9)
     else:
@@ -253,7 +257,7 @@ def randomize_rigid_body_inertia(
     if inertias_original.ndim == 2:
         inertias = inertias.squeeze(1)
 
-    asset.root_physx_view.set_inertias(inertias, env_ids)
+    backend.write_physics_property(asset, "inertias", inertias, env_ids)
 
 
 def randomize_rigid_body_material(
@@ -318,8 +322,9 @@ def randomize_rigid_body_material(
     else:
         env_ids = env_ids.cpu()
 
-    materials = asset.root_physx_view.get_material_properties()
-    total_num_shapes = asset.root_physx_view.max_shapes
+    backend = get_backend()
+    materials = backend.physics_property(asset, "material_properties")
+    total_num_shapes = backend.root_view(asset).max_shapes
     samples = materials[env_ids].clone()  # (n_env, n_shapes, 3); start from current, overwrite chosen cols
 
     # ``per_env`` picks the shape coordinate: absent -> one draw per env, broadcast across shapes;
@@ -349,4 +354,4 @@ def randomize_rigid_body_material(
         samples[..., 1] = torch.min(samples[..., 0], samples[..., 1])  # dynamic <= static (PhysX)
 
     materials[env_ids] = samples.to(materials.dtype)
-    asset.root_physx_view.set_material_properties(materials, env_ids)
+    backend.write_physics_property(asset, "material_properties", materials, env_ids)

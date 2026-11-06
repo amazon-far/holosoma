@@ -24,13 +24,17 @@ from tests.simulators._run_harness import run_harness  # noqa: E402
 _HARNESS = Path(__file__).resolve().parents[1] / "all_root_states_unified_assert.py"
 
 
-def test_all_root_states_unified():
+def test_all_root_states_unified(tmp_path):
+    result_file = tmp_path / "all_root_states_unified.txt"
     run_harness(
         _HARNESS,
         "--simulator",
         "isaacsim",
         "--num-envs",
         "4",
+        "--result-file",
+        str(result_file),
         label="isaacsim/all-root-states-unified (num_envs=4)",
         timeout=900,
+        result_file=result_file,
     )

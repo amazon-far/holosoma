@@ -83,17 +83,12 @@ def setup_simulator_imports(config: EnvConfig) -> None:
 
 
 def _ensure_render_pipeline_active() -> None:
-    """Force IsaacLab's offscreen render pipeline on when cameras are enabled.
+    """Enable offscreen rendering before constructing either native SimulationContext.
 
-    ``AppLauncher`` only sets ``/isaaclab/render/offscreen`` when ``enable_cameras AND headless``.
-    ``SimulationContext`` reads that flag at construction and, with no GUI and no offscreen render,
-    latches ``render_mode = NO_GUI_OR_RENDERING`` — a terminal state in which ``sim.render()`` is a
-    no-op, so camera sensors never receive a new frame. A non-headless run with cameras (the
-    ``RunSimConfig`` default) lands exactly there: cameras are enabled but nothing renders.
-
-    Setting the flag after the app exists but before ``SimulationContext`` is built puts the run in
-    ``PARTIAL_RENDERING`` instead, which is what the camera path needs. A real GUI run is unaffected:
-    ``_has_gui`` already selects ``FULL_RENDERING``.
+    Both launchers set this flag automatically only for headless runs with
+    cameras. Set it for interactive camera runs too, so sensors receive frames
+    even when a GUI is unavailable. Lab 2 otherwise latches its no-render mode;
+    Lab 3 uses this setting with its separate renderer and visualizer lifecycle.
     """
     import carb
 
@@ -117,14 +112,18 @@ def setup_isaaclab_launcher(config: EnvConfig, device: str) -> Any | None:
     Any | None
         IsaacSim simulation app instance, or None for other simulators.
     """
-    from isaaclab.app import AppLauncher
+    from holosoma.simulator.isaacsim.backends import get_backend
+
+    backend = get_backend(config.simulator.config.isaacsim_backend)
+    # Shared scene/sensor helpers must use the same validated explicit profile.
+    os.environ["HOLOSOMA_ISAACSIM_BACKEND"] = config.simulator.config.isaacsim_backend.value
 
     parser = argparse.ArgumentParser(description="Run simulation with IsaacSim.")
     parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
     parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
     parser.add_argument("--env_spacing", type=int, default=20, help="Distance between environments in simulator.")
     parser.add_argument("--output_dir", type=str, default="logs", help="Directory to store the output.")
-    AppLauncher.add_app_launcher_args(parser)
+    backend.add_launcher_args(parser)
 
     # Parse known arguments to get argparse params
     args_cli, unknown_args = parser.parse_known_args()
@@ -145,6 +144,10 @@ def setup_isaaclab_launcher(config: EnvConfig, device: str) -> Any | None:
     needs_rendering = video_enabled or cameras_enabled
     if needs_rendering:
         args_cli.enable_cameras = True
+    if backend.is_isaaclab3 and video_enabled:
+        # Lab 3's headless Kit hook pumps Replicator frames for video-only
+        # scenes, which do not otherwise have a native camera renderer.
+        args_cli.video = True
 
     isaacsim_config = config.simulator.config.isaacsim
     for name, value in isaacsim_config.app_launcher_args().items():
@@ -152,8 +155,7 @@ def setup_isaaclab_launcher(config: EnvConfig, device: str) -> Any | None:
 
     simulation_app: Any = None
     try:
-        app_launcher = AppLauncher(args_cli)
-        simulation_app = app_launcher.app
+        simulation_app = backend.launch_app(args_cli)
 
         if needs_rendering:
             _ensure_render_pipeline_active()
@@ -299,6 +301,10 @@ def _close_simulation_app(simulation_app: Any, failure: BaseException | None) ->
         # Kit can terminate the process inside close(), before Python reaches the
         # caller's exception handler. Set its exit status before closing the app.
         return_code = _simulation_exit_code(failure)
+        if getattr(simulation_app, "isaaclab_major", None) == 3:
+            _flush_simulation_logs()
+            simulation_app.close(exit_code=return_code)
+            return
         if return_code:
             try:
                 simulation_app.app.post_uncancellable_quit(return_code)
