@@ -32,13 +32,13 @@ BEATING_INTERVAL = 3
 """Does not divide the g1 preset's control decimation of 4, so the frame's last draw precedes it."""
 
 
-def _run_config(render_interval: int):
+def _run_config(render_interval: int, simulator: str):
     """A one-env headless IsaacSim config with one mounted camera and the given render interval."""
     from tests.simulators._camera_presets import front_cam
     from tests.simulators._sim_harness import build_run_sim_config
 
-    config = build_run_sim_config("isaacsim", "empty", "g1-29dof", "terrain_locomotion_plane", sensors=front_cam)
-    simulator = dataclasses.replace(
+    config = build_run_sim_config(simulator, "empty", "g1-29dof", "terrain_locomotion_plane", sensors=front_cam)
+    simulator_cfg = dataclasses.replace(
         config.simulator,
         config=dataclasses.replace(
             config.simulator.config,
@@ -47,7 +47,7 @@ def _run_config(render_interval: int):
     )
     return dataclasses.replace(
         config,
-        simulator=simulator,
+        simulator=simulator_cfg,
         device="cuda:0",
         training=dataclasses.replace(config.training, num_envs=1, headless=True),
     )
@@ -91,6 +91,7 @@ def _construct(config) -> None:
 def _main() -> int:
     """The harness: construct with a beating cadence and assert the constructor refuses it."""
     parser = argparse.ArgumentParser()
+    parser.add_argument("--simulator", choices=["isaacsim", "isaacsim3"], default="isaacsim")
     parser.add_argument("--result-file", default=None, help="write 'OK' here after PASS (teardown-robust)")
     args = parser.parse_args()
 
@@ -101,7 +102,7 @@ def _main() -> int:
         if not ok:
             failures.append(name)
 
-    config = _run_config(BEATING_INTERVAL)
+    config = _run_config(BEATING_INTERVAL, args.simulator)
     sim_config = config.simulator.config.sim
     assert sim_config.render_interval_steps == BEATING_INTERVAL
     decimation = sim_config.control_decimation_steps
@@ -148,17 +149,15 @@ import pytest  # noqa: E402  (the harness half above must not depend on pytest)
 pytestmark = pytest.mark.isaacsim
 
 
-def test_camera_run_refuses_a_beating_render_cadence(tmp_path):
+def test_camera_run_refuses_a_beating_render_cadence(tmp_path, run_isaacsim_harness):
     """Drive the harness above in its own process and require every check to pass."""
     pytest.importorskip("isaaclab")
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("IsaacSim requires a CUDA device")
 
-    from tests.simulators._run_harness import run_harness
-
     result_file = tmp_path / "render_cadence_isaacsim.txt"
-    run_harness(
+    run_isaacsim_harness(
         Path(__file__).resolve(),
         "--result-file",
         str(result_file),

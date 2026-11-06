@@ -5,7 +5,7 @@ Utility functions for working with USD prims in IsaacSim.
 from __future__ import annotations
 
 import fnmatch
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
@@ -13,14 +13,16 @@ import omni
 import omni.log
 import omni.usd
 from pxr import Gf, Usd, UsdGeom, UsdPhysics
-from holosoma.simulator.isaacsim.backends import get_backend
+
+if TYPE_CHECKING:
+    from holosoma.simulator.isaacsim.backends.base import IsaacLabBackend
 
 _DISABLED_RIGID_BODY_LINK_KEY = "holosoma:disabledRigidBodyLink"
 
 
-def get_current_stage() -> Usd.Stage:
-    if get_backend().is_isaaclab3:
-        return get_backend().stage_utils.get_current_stage()
+def get_current_stage(backend: IsaacLabBackend) -> Usd.Stage:
+    if backend.is_isaaclab3:
+        return backend.stage_utils.get_current_stage()
     return omni.usd.get_context().get_stage()
 
 
@@ -67,7 +69,9 @@ def _find_robot_link_prim(link_name: str, stage: Usd.Stage) -> Usd.Prim:
     return matches[0]
 
 
-def resolve_robot_link_prim_expression(link_name: str, stage: Usd.Stage | None = None) -> str:
+def resolve_robot_link_prim_expression(
+    link_name: str, stage: Usd.Stage | None = None, *, backend: IsaacLabBackend
+) -> str:
     """Resolve a configured body name to its per-environment Isaac prim expression.
 
     URDF importers may preserve an extra root link, placing robot bodies below paths such as
@@ -75,39 +79,39 @@ def resolve_robot_link_prim_expression(link_name: str, stage: Usd.Stage | None =
     remain plain link names across backends, so Isaac adapters resolve the imported hierarchy
     from env 0 and return the equivalent expression for every environment.
     """
-    stage = stage or get_current_stage()
+    stage = stage or get_current_stage(backend)
     robot_root_path = "/World/envs/env_0/Robot"
     suffix = str(_find_robot_link_prim(link_name, stage).GetPath())[len(robot_root_path) :]
-    return f"{get_backend().env_regex_ns}/Robot{suffix}"
+    return f"{backend.env_regex_ns}/Robot{suffix}"
 
 
-def resolve_robot_link_rigid_body_prim_expression(link_name: str, stage: Usd.Stage | None = None) -> str:
+def resolve_robot_link_rigid_body_prim_expression(
+    link_name: str, stage: Usd.Stage | None = None, *, backend: IsaacLabBackend
+) -> str:
     """Resolve a source robot link to the Isaac rigid body that owns its geometry."""
-    stage = stage or get_current_stage()
+    stage = stage or get_current_stage(backend)
     robot_root_path = "/World/envs/env_0/Robot"
     prim = _find_robot_link_prim(link_name, stage)
     while prim.IsValid() and str(prim.GetPath()).startswith(robot_root_path):
         if is_rigid_body_enabled(prim):
             suffix = str(prim.GetPath())[len(robot_root_path) :]
-            return f"{get_backend().env_regex_ns}/Robot{suffix}"
+            return f"{backend.env_regex_ns}/Robot{suffix}"
         prim = prim.GetParent()
     raise ValueError(f"Robot link '{link_name}' is not owned by a rigid body below '{robot_root_path}'.")
 
 
-def print_prim_tree(
-    prim_path: str, max_depth: int | None = None, indent: int = 0, stage: Usd.Stage | None = None
-) -> None:
+def print_prim_tree(prim_path: str, max_depth: int | None = None, indent: int = 0, *, stage: Usd.Stage) -> None:
     """Print a tree visualization of a prim and its descendants.
 
     Args:
         prim_path: Path to the root prim to start printing from
         max_depth: Maximum depth to traverse (None for unlimited)
         indent: Current indentation level (used recursively)
-        stage: Optional USD stage to use (defaults to current stage)
+        stage: USD stage to inspect
 
     Example:
         ```python
-        print_prim_tree("/World/envs/env_0/robot")
+        print_prim_tree("/World/envs/env_0/robot", stage=stage)
 
         # Output:
         /World/envs/env_0/robot
@@ -125,10 +129,6 @@ def print_prim_tree(
             │   └── CameraLeft
         ```
     """
-    # Get stage if not provided
-    if stage is None:
-        stage = get_current_stage()
-
     # Get prim at path
     prim = stage.GetPrimAtPath(prim_path)
     if not prim.IsValid():
@@ -151,11 +151,11 @@ def print_prim_tree(
         if is_last and indent > 0:
             print("│   " * (indent - 1) + "└── " + str(child.GetPath()))
         else:
-            print_prim_tree(str(child.GetPath()), max_depth, indent + 1, stage)
+            print_prim_tree(str(child.GetPath()), max_depth, indent + 1, stage=stage)
 
 
 def find_matching_prims(
-    root_path: str, pattern: str = "*", include_root: bool = False, stage: Usd.Stage | None = None
+    root_path: str, pattern: str = "*", include_root: bool = False, *, stage: Usd.Stage
 ) -> list[Usd.Prim]:
     """Find all prims under a root path that match a pattern.
 
@@ -168,8 +168,6 @@ def find_matching_prims(
     Returns:
         List of matching Usd.Prim objects
     """
-    stage = stage or get_current_stage()
-
     matching_prims: list[Usd.Prim] = []
     root_prim = stage.GetPrimAtPath(root_path)
     if not root_prim.IsValid():
@@ -214,7 +212,7 @@ def find_matching_prims(
     return matching_prims
 
 
-def log_robot_properties(robot_path: str, pattern: str = "*", stage: Usd.Stage | None = None) -> None:
+def log_robot_properties(robot_path: str, pattern: str = "*", *, stage: Usd.Stage) -> None:
     """Log mass properties and velocity limits of robot links matching a pattern.
 
     Args:
@@ -225,9 +223,6 @@ def log_robot_properties(robot_path: str, pattern: str = "*", stage: Usd.Stage |
 
     from prettytable import PrettyTable
     from pxr import PhysxSchema, UsdPhysics
-
-    # Default to current stage
-    stage = stage or get_current_stage()
 
     # Find all matching prims under the robot
     matching_prims = find_matching_prims(robot_path, pattern, stage=stage)

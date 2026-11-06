@@ -78,6 +78,7 @@ def _check_native_target_contract(sim) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--simulator", choices=["isaacsim", "isaacsim3"], default="isaacsim")
     parser.add_argument("--num-envs", type=int, default=3)
     parser.add_argument("--result-file", default=None)
     args = parser.parse_args()
@@ -97,7 +98,7 @@ def main() -> int:
         "robot_visual": _lidar_presets.isaacsim_robot_visual_lidar,
     }
     config = build_run_sim_config(
-        "isaacsim",
+        args.simulator,
         "camera-target",
         "g1-29dof",
         "terrain_locomotion_plane",

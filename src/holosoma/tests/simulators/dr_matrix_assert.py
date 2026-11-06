@@ -193,6 +193,7 @@ _READERS = {
     "mujoco": _MujocoReader,
     "mjwarp": _MujocoReader,
     "isaacsim": _IsaacSimReader,
+    "isaacsim3": _IsaacSimReader,
 }
 
 

@@ -1,5 +1,4 @@
 import dataclasses
-import os
 
 from holosoma.config_types.simulator import (
     IsaacSimBackend,
@@ -20,7 +19,7 @@ isaacsim = SIMULATOR_REGISTRY.add(
         _recursive_=False,
         config=SimulatorInitConfig(
             name="isaacsim",
-            isaacsim_backend=IsaacSimBackend(os.environ.get("HOLOSOMA_ISAACSIM_BACKEND", "isaaclab2")),
+            isaacsim_backend=IsaacSimBackend.ISAACLAB2,
             sim=SimEngineConfig(
                 fps=200,
                 control_decimation=4,

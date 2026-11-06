@@ -144,10 +144,7 @@ def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str
     """
     from holosoma.simulator.isaacsim.backends import get_backend
 
-    backend = get_backend(config.simulator.config.isaacsim_backend)
-    # Shared scene/sensor helpers must use the same validated explicit profile.
-    os.environ["HOLOSOMA_ISAACSIM_BACKEND"] = config.simulator.config.isaacsim_backend.value
-
+    backend = get_backend(config.simulator.config.isaacsim_backend, native=config.simulator.config.sim.isaaclab3)
     parser = argparse.ArgumentParser(description="Run simulation with IsaacSim.")
     parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
     parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
@@ -195,7 +192,7 @@ def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str
 
     simulation_app: Any = None
     try:
-        simulation_app = backend.launch_app(args_cli)
+        simulation_app = backend.launch_app(args_cli, sim_config=config.simulator.config.sim)
 
         if needs_rendering:
             _ensure_render_pipeline_active()
@@ -472,7 +469,9 @@ def _close_simulation_app(simulation_app: Any, failure: BaseException | None) ->
         # Kit can terminate the process inside close(), before Python reaches the
         # caller's exception handler. Set its exit status before closing the app.
         return_code = _simulation_exit_code(failure)
-        if getattr(simulation_app, "isaaclab_major", None) == 3:
+        from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Runtime
+
+        if isinstance(simulation_app, IsaacLab3Runtime):
             _flush_simulation_logs()
             simulation_app.close(exit_code=return_code)
             return

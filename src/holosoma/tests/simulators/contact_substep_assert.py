@@ -202,7 +202,7 @@ def _check(sim, num_envs: int) -> tuple[list[str], list[str]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim3"])
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--result-file", default=None)
     args, _ = parser.parse_known_args()

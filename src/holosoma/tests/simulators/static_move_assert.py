@@ -120,7 +120,7 @@ def _step(sim, n):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Cross-backend runtime static-move assertion harness.")
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim3"])
     parser.add_argument("--num-envs", type=int, default=None)
     parser.add_argument("--result-file", default=None, help="write 'OK' after all checks pass")
     args = parser.parse_args()

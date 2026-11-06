@@ -13,6 +13,7 @@ import dataclasses
 import math
 import os
 import sys
+import traceback
 from collections.abc import Callable
 from typing import Any, NoReturn
 
@@ -31,16 +32,36 @@ def run_and_hard_exit(main: Callable[[], int]) -> NoReturn:
     (verdict already written to ``--result-file``) into a spurious timeout failure. Flushing then
     ``os._exit`` skips the atexit teardown entirely; rendering itself is fine, only clean shutdown
     hangs. (behavior_assert / scene_spawn_assert use the same escape for the MuJoCo-viewer race.)
+    Exceptions also take this path so a launcher's atexit hook cannot turn a failed harness into
+    exit zero. Ordinary exceptions print their traceback and exit one; interrupts exit 130.
 
     Use in a harness entrypoint::
 
         if __name__ == "__main__":
             run_and_hard_exit(main)
     """
-    rc = main()
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(rc)
+    try:
+        rc = main()
+    except KeyboardInterrupt:
+        rc = 130
+    except SystemExit as error:
+        if error.code is None:
+            rc = 0
+        elif isinstance(error.code, int):
+            rc = error.code
+        else:
+            print(error.code, file=sys.stderr)
+            rc = 1
+    except Exception:
+        traceback.print_exc()
+        rc = 1
+    try:
+        sys.stdout.flush()
+    finally:
+        try:
+            sys.stderr.flush()
+        finally:
+            os._exit(rc)
 
 
 def steps_for_seconds(sim: Any, seconds: float) -> int:
