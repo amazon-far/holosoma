@@ -39,13 +39,13 @@ def _red_fraction(image) -> float:
     return float(mask.sum()) / float(mask.numel())
 
 
-def _config(device: str):
+def _config(device: str, simulator: str):
     """A one-env headless, unpaced IsaacSim task on the panel-target scene with the forward camera."""
     from tests.simulators import _camera_presets
     from tests.simulators._sim_harness import build_run_sim_config
 
     config = build_run_sim_config(
-        "isaacsim", "panel-target", "g1-29dof", "terrain_locomotion_plane", sensors=_camera_presets.front_cam
+        simulator, "panel-target", "g1-29dof", "terrain_locomotion_plane", sensors=_camera_presets.front_cam
     )
     return dataclasses.replace(
         config,
@@ -57,6 +57,7 @@ def _config(device: str):
 
 def _main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--simulator", choices=["isaacsim", "isaacsim3"], default="isaacsim")
     parser.add_argument("--result-file", default=None, help="write 'OK' here after PASS (teardown-robust)")
     args = parser.parse_args()
 
@@ -67,7 +68,7 @@ def _main() -> int:
         if not ok:
             failures.append(name)
 
-    config = _config("cuda:0")
+    config = _config("cuda:0", args.simulator)
     with config.create_task() as task:
         return _check_frames(task, config, check, failures, args.result_file)
 
@@ -162,17 +163,15 @@ import pytest  # noqa: E402  (the harness half above must not depend on pytest)
 pytestmark = pytest.mark.isaacsim
 
 
-def test_frame_carries_the_state_written_for_it(tmp_path):
+def test_frame_carries_the_state_written_for_it(tmp_path, run_isaacsim_harness):
     """Drive the harness above in its own process and require every check to pass."""
     pytest.importorskip("isaaclab")
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("IsaacSim requires a CUDA device")
 
-    from tests.simulators._run_harness import run_harness
-
     result_file = tmp_path / "frame_freshness_isaacsim.txt"
-    run_harness(
+    run_isaacsim_harness(
         Path(__file__).resolve(),
         "--result-file",
         str(result_file),

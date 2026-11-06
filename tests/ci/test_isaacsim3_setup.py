@@ -155,7 +155,10 @@ PY
     assert not (deps / ".env_setup_finished_hssim3_isaacsim-6.2.0_isaaclab-v3.0.0_video").exists()
 
 
-def test_activation_selects_lab3_and_prioritizes_venv_over_kit_packages(tmp_path: Path) -> None:
+@pytest.mark.parametrize("inherited_backend", [None, "isaaclab2", "isaaclab3", "unsupported"])
+def test_activation_only_activates_dependencies_and_prioritizes_venv_over_kit_packages(
+    tmp_path: Path, inherited_backend: str | None
+) -> None:
     env_root = tmp_path / "venv"
     venv.EnvBuilder(with_pip=False).create(env_root)
     runtime = tmp_path / "sim"
@@ -168,15 +171,18 @@ def test_activation_selects_lab3_and_prioritizes_venv_over_kit_packages(tmp_path
     ).strip()
     (Path(site) / "runtime_stack_probe.py").write_text('VERSION = "venv"\n')
     (runtime / "setup_python_env.sh").write_text('export PYTHONPATH="$ISAAC_PATH/pip_prebundle"\n')
+    backend_env = {"HOLOSOMA_ISAACSIM_BACKEND": inherited_backend} if inherited_backend is not None else {}
     result = _shell(
-        'source "$1"; python -c \'import json, os, runtime_stack_probe, sys; '
-        'print(json.dumps([runtime_stack_probe.VERSION, os.environ["HOLOSOMA_ISAACSIM_BACKEND"], sys.prefix]))\'',
+        ("unset HOLOSOMA_ISAACSIM_BACKEND; " if inherited_backend is None else "")
+        + 'source "$1"; python -c \'import json, os, runtime_stack_probe, sys; '
+        'print(json.dumps([runtime_stack_probe.VERSION, os.environ.get("HOLOSOMA_ISAACSIM_BACKEND"), sys.prefix]))\'',
         SOURCE,
         env={
             "HOLOSOMA_DEPS_DIR": str(tmp_path / "deps"),
             "ISAACSIM3_ENV_ROOT": str(env_root),
             "ISAACSIM_ROOT_PATH": str(runtime),
+            **backend_env,
         },
     )
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout.strip()) == ["venv", "isaaclab3", str(env_root)]
+    assert json.loads(result.stdout.strip()) == ["venv", inherited_backend, str(env_root)]

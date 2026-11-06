@@ -103,7 +103,7 @@ def _fresh_mujoco(sim):
 
 def _fresh(sim, simulator: str):
     """An independent read of the backend buffers per served name; other names re-run their bound read."""
-    fresh = _fresh_isaacsim(sim) if simulator == "isaacsim" else _fresh_mujoco(sim)
+    fresh = _fresh_isaacsim(sim) if simulator in ("isaacsim", "isaacsim3") else _fresh_mujoco(sim)
     for name in sim.state.names():
         if name not in fresh:
             fresh[name] = sim.state._read_fresh(name)
@@ -174,7 +174,7 @@ def _check(sim, simulator: str, *, contact_force_mode: str = "normal") -> tuple[
     motions: list[float] = []
     checks = 0
     previous: list[torch.Tensor] = []
-    native_contacts = simulator == "isaacsim" and sim.backend.is_isaaclab3
+    native_contacts = simulator in ("isaacsim", "isaacsim3") and sim.backend.is_isaaclab3
     contact_modes_distinct = False
     contact_mode_difference = 0.0
 
@@ -245,7 +245,9 @@ def _check(sim, simulator: str, *, contact_force_mode: str = "normal") -> tuple[
         if not torch.allclose(reached, target, atol=ATOL):
             error = (reached - target).abs().max().item()
             failures.append(f"in-place dof_pos write did not reach the simulator (max error {error:.3e})")
-        references = _reference_bodies_isaacsim(sim) if simulator == "isaacsim" else _reference_bodies_mujoco(sim)
+        references = (
+            _reference_bodies_isaacsim(sim) if simulator in ("isaacsim", "isaacsim3") else _reference_bodies_mujoco(sim)
+        )
         for name, reference in references.items():
             expected = torch.as_tensor(reference, dtype=torch.float32)
             served = sim.state.get(name)[0].float().cpu()
@@ -309,7 +311,7 @@ def _check(sim, simulator: str, *, contact_force_mode: str = "normal") -> tuple[
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim3"])
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--device", default=None)
     parser.add_argument("--contact-force-mode", choices=["normal", "total"], default="normal")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import warnings
+import math
 from dataclasses import field
 from enum import Enum
 from typing import Any, Literal
@@ -116,11 +117,52 @@ class IsaacSimRenderConfig:
 
 
 @dataclass(frozen=True)
+class IsaacLab3NewtonConfig:
+    """Newton's MJWarp solver settings for rigid humanoid simulation."""
+
+    use_cuda_graph: bool = True
+    """Capture physics execution on CUDA rather than launching every kernel from Python."""
+
+    nconmax: int | None = None
+    """Maximum contacts per environment; None retains the upstream solver default."""
+
+    njmax: int | None = None
+    """Maximum constraints per environment; None retains the upstream solver default."""
+
+    solver_iterations: int | None = None
+    """MuJoCo solver iterations; None retains the upstream solver default."""
+
+    default_shape_margin: float = 0.01
+    """Default collision margin in meters; individual shape settings can override it."""
+
+    @model_validator(mode="after")
+    def _validate_solver_limits(self) -> IsaacLab3NewtonConfig:
+        for name in ("nconmax", "njmax", "solver_iterations"):
+            value = getattr(self, name)
+            if value is not None and value < 1:
+                raise ValueError(f"{name} must be positive or None")
+        if not math.isfinite(self.default_shape_margin) or self.default_shape_margin < 0:
+            raise ValueError("default_shape_margin must be finite and nonnegative")
+        return self
+
+
+@dataclass(frozen=True)
 class IsaacLab3Config:
     """Native Isaac Lab 3 options; used only by the ``isaaclab3`` backend."""
 
+    physics_backend: Literal["physx", "newton"] = "physx"
+    """Select Isaac Sim PhysX or Newton with its MJWarp rigid-body solver."""
+
+    renderer: Literal["isaac_rtx", "newton_warp"] = "isaac_rtx"
+    """Camera renderer, independent of the physics engine. Warp favors throughput
+    over RTX lighting/material fidelity; both run with either physics engine.
+    """
+
+    newton: IsaacLab3NewtonConfig = field(default_factory=IsaacLab3NewtonConfig)
+    """Newton solver options; used only when ``physics_backend`` is ``newton``."""
+
     use_fabric: bool = True
-    """Read physics buffers through Fabric to avoid USD synchronization overhead."""
+    """Synchronize physics transforms through Fabric instead of the USD path."""
 
     create_stage_in_memory: bool = False
     """Create the USD stage in memory to reduce startup time."""
@@ -358,9 +400,9 @@ class SimulatorInitConfig:
     """Isaac Lab API selection. Both backends share the ``isaacsim`` simulator.
 
     Use ``simulator:isaacsim3`` for Isaac Lab 3.0 / Isaac Sim 6.2, or override
-    ``--simulator.config.isaacsim-backend=isaaclab3``. The environment setup selects
-    the matching default for ``simulator:isaacsim``; saved configurations retain
-    their explicit selection.
+    ``--simulator.config.isaacsim-backend=ISAACLAB3``. ``simulator:isaacsim``
+    selects Lab 2 regardless of the activated environment; saved configurations
+    retain their explicit selection.
     """
 
     mujoco_backend: MujocoBackend = MujocoBackend.CLASSIC

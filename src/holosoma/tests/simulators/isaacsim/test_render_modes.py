@@ -18,7 +18,7 @@ import sys
 from contextlib import contextmanager
 from importlib.machinery import ModuleSpec
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -29,7 +29,6 @@ from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.simulator import IsaacSimBackend, IsaacSimRenderConfig
 from holosoma.config_values import run_sim as run_sim_values
 from holosoma.utils.sim_utils import setup_isaaclab_launcher
-from tests.simulators._run_harness import run_harness
 
 _HARNESS = Path(__file__).resolve().parents[1] / "scene_spawn_assert.py"
 
@@ -89,7 +88,14 @@ def test_launcher_config_reaches_app_launcher_namespace(
         "HOLOSOMA_ISAACSIM_BACKEND", "isaaclab2" if backend == IsaacSimBackend.ISAACLAB3 else "isaaclab3"
     )
     captured_args: dict[str, Any] = {}
+    captured_config: list[Any] = []
     app_sentinel = object()
+
+    class FakeIsaacRtxRendererCfg(SimpleNamespace):
+        pass
+
+    class FakeNewtonWarpRendererCfg(SimpleNamespace):
+        pass
 
     class FakeAppLauncher:
         @staticmethod
@@ -114,13 +120,21 @@ def test_launcher_config_reaches_app_launcher_namespace(
     if backend == IsaacSimBackend.ISAACLAB3:
         physx_module.__spec__ = ModuleSpec("isaaclab_physx", loader=None)
         physics_module = ModuleType("isaaclab_physx.physics")
-        physics_module.__dict__["PhysxCfg"] = object
+        physics_module.__dict__["PhysxCfg"] = SimpleNamespace
         monkeypatch.setitem(sys.modules, "isaaclab_physx.physics", physics_module)
+        for module_name, class_name, cfg_type in [
+            ("isaaclab_physx.renderers", "IsaacRtxRendererCfg", FakeIsaacRtxRendererCfg),
+            ("isaaclab_newton.renderers", "NewtonWarpRendererCfg", FakeNewtonWarpRendererCfg),
+        ]:
+            module = ModuleType(module_name)
+            module.__dict__[class_name] = cfg_type
+            monkeypatch.setitem(sys.modules, module_name, module)
         isaaclab_app_module.__dict__["add_launcher_args"] = FakeAppLauncher.add_app_launcher_args
 
         @contextmanager
         def launch_simulation(cfg, args):
             captured_args.update(args)
+            captured_config.append(cfg)
             try:
                 yield cfg
             except SystemExit as error:
@@ -139,14 +153,25 @@ def test_launcher_config_reaches_app_launcher_namespace(
     monkeypatch.setattr(sys, "argv", ["test-render-modes"])
     monkeypatch.delenv("WORLD_SIZE", raising=False)
 
-    app = setup_isaaclab_launcher(get_run_sim_env_config(_run_config(render_config, backend)), "cuda:0")
+    config = _run_config(render_config, backend)
+    app = setup_isaaclab_launcher(get_run_sim_env_config(config), "cuda:0")
     assert app is not None
     from holosoma.simulator.isaacsim.backends import get_backend
 
-    assert get_backend().major == (3 if backend == IsaacSimBackend.ISAACLAB3 else 2)
+    assert get_backend(backend).major == (3 if backend == IsaacSimBackend.ISAACLAB3 else 2)
 
     if backend == IsaacSimBackend.ISAACLAB3:
         assert app._app is app_sentinel
+        assert len(captured_config) == 1
+        assert isinstance(captured_config[0].renderer, FakeIsaacRtxRendererCfg)
+        assert vars(captured_config[0].physics) == {
+            "bounce_threshold_velocity": config.simulator.config.sim.physx.bounce_threshold_velocity,
+            "solver_type": config.simulator.config.sim.physx.solver_type,
+            "max_position_iteration_count": config.simulator.config.sim.physx.num_position_iterations,
+            "max_velocity_iteration_count": config.simulator.config.sim.physx.num_velocity_iterations,
+            "gpu_max_rigid_patch_count": 10 * 2**15,
+        }
+        assert captured_args["require_kit"] is True
         assert captured_args["visualizer"] == "kit"
         app.close(exit_code=1)
         assert closed_statuses == [1]
@@ -184,10 +209,10 @@ def test_launcher_config_rejects_unknown_rendering_mode() -> None:
 
 @pytest.mark.isaacsim
 @pytest.mark.skipif(not _has_isaacsim(), reason="IsaacSim requires Isaac Lab and a CUDA device")
-def test_render_headless(tmp_path):
+def test_render_headless(tmp_path, run_isaacsim_harness):
     """Step and render a free-box scene without a display."""
     result_file = tmp_path / "render_headless.txt"
-    run_harness(
+    run_isaacsim_harness(
         _HARNESS,
         "--simulator",
         "isaacsim",

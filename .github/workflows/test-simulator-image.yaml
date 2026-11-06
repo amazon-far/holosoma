@@ -41,10 +41,13 @@ jobs:
       options: "--gpus all --runtime=nvidia --shm-size=12g"
       env:
         HOLOSOMA_MULTIGPU: ${{ matrix.multigpu }}
-        HOLOSOMA_ISAACSIM_BACKEND: ${{ inputs.isaacsim_backend }}
     steps:
       - name: Pytest
         shell: bash
         run: |
           cd /workspace/holosoma
-          bash tests/ci/${{ inputs.simulator }}_ci_tests.sh
+          test_args=()
+          if [[ "${{ inputs.simulator }}" == isaacsim ]]; then
+            test_args+=(--backend "${{ inputs.isaacsim_backend }}")
+          fi
+          bash tests/ci/${{ inputs.simulator }}_ci_tests.sh "${test_args[@]}"

@@ -71,7 +71,7 @@ from holosoma.simulator.types import ActorNames, ActorIndices, EnvIds, ActorStat
 class IsaacSim(BaseSimulator):
     def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str):
         super().__init__(tyro_config, terrain_manager, device)
-        self.backend = get_backend(self.simulator_config.isaacsim_backend)
+        self.backend = get_backend(self.simulator_config.isaacsim_backend, native=self.simulator_config.sim.isaaclab3)
 
         # Public interface attribute read across backends (video_recorder, virtual_gantry,
         # simulator_bridge). For IsaacSim it always equals self.sim_device; internal tensor
@@ -146,8 +146,10 @@ class IsaacSim(BaseSimulator):
                 self.backend.restore_initial_articulation_state(self._robot, self.scene.env_origins)
             sensor_setup.sync_camera_fabric_transforms(self)
 
-        self.default_coms = self.backend.physics_property(self._robot, "coms").clone()
-        self.base_com_bias = torch.zeros((self.training_config.num_envs, 3), dtype=torch.float, device="cpu")
+        self.default_coms: torch.Tensor = self.backend.physics_property(self._robot, "coms").clone()
+        self.base_com_bias: torch.Tensor = torch.zeros(
+            (self.training_config.num_envs, 3), dtype=torch.float, device="cpu"
+        )
 
         self.events_cfg = EventCfg()
 
@@ -247,15 +249,15 @@ class IsaacSim(BaseSimulator):
         self.backend.prepare_scene(self.scene)
         self._load_scene_config()
 
-        robot_articulation_config = build_robot_articulation_cfg(self.robot_config)
-        contact_sensor_config = build_contact_sensor_cfg(self.debug_viz_enabled)
+        robot_articulation_config = build_robot_articulation_cfg(self.robot_config, backend=self.backend)
+        contact_sensor_config = build_contact_sensor_cfg(self.debug_viz_enabled, backend=self.backend)
 
         self._robot = Articulation(robot_articulation_config)
 
         # The robot must be spawned before fixtures and mounted sensors resolve imported link prims.
         # URDF conversion may preserve a dummy root link between /Robot and the configured bodies.
         global_collision_prims, height_scanner_config, self.terrain = build_terrain_fixtures(
-            self.terrain_manager, self.scene, self.robot_config.body_names[0]
+            self.terrain_manager, self.scene, self.robot_config.body_names[0], backend=self.backend
         )
 
         # Bind the robot's link_physics friction/restitution material to every link, before clone so
@@ -263,8 +265,9 @@ class IsaacSim(BaseSimulator):
         # (see _bind_robot_link_material). No-op unless link_physics.isaacsim is set.
         self._bind_robot_link_material()
 
-        print_prim_tree("/World/envs/env_0/Robot")
-        log_robot_properties("/World/envs/env_0/Robot", "*")
+        stage = self.backend.stage_utils.get_current_stage()
+        print_prim_tree("/World/envs/env_0/Robot", stage=stage)
+        log_robot_properties("/World/envs/env_0/Robot", "*", stage=stage)
 
         self.scene.articulations["robot"] = self._robot
 
@@ -370,7 +373,11 @@ class IsaacSim(BaseSimulator):
         """
         for scene_file_name, scene_file in scene_config.scene_files.items():
             objects, static_names = expand_scene_file(
-                scene_file_name, scene_file, self.get_supported_scene_formats(), scene_config.asset_root
+                scene_file_name,
+                scene_file,
+                self.get_supported_scene_formats(),
+                scene_config.asset_root,
+                backend=self.backend,
             )
             self.scene.rigid_objects.update(objects)
             self.scene_file_static_names |= static_names
@@ -384,7 +391,7 @@ class IsaacSim(BaseSimulator):
         """
         for obj_name, obj in scene_config.rigid_objects.items():
             self.scene.rigid_objects[obj_name] = build_standalone_rigid_object(
-                obj_name, obj, self.get_supported_scene_formats(), scene_config.asset_root
+                obj_name, obj, self.get_supported_scene_formats(), scene_config.asset_root, backend=self.backend
             )
 
     def setup(self) -> None:

@@ -21,16 +21,14 @@ pytestmark = pytest.mark.isaacsim
 
 pytest.importorskip("isaaclab")
 
-from tests.simulators._run_harness import run_harness  # noqa: E402
-
 _HARNESS = Path(__file__).resolve().parents[1] / "object_spawner_cfg_assert.py"
 
 
-def test_object_spawner_cfg_invariants(tmp_path):
+def test_object_spawner_cfg_invariants(tmp_path, run_isaacsim_harness):
     # IsaacSim app teardown can mask the exit code, so trust the result-file the harness writes
     # AFTER all checks pass (same convention as test_dr_matrix_isaacsim.py).
     result_file = tmp_path / "spawner_cfg_result.txt"
-    run_harness(
+    run_isaacsim_harness(
         _HARNESS,
         "--result-file",
         str(result_file),

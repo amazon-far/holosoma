@@ -17,21 +17,17 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("IsaacSim requires a CUDA device", allow_module_level=True)
 
-from holosoma.simulator.isaacsim.backends import get_backend  # noqa: E402
-from tests.simulators._run_harness import run_harness  # noqa: E402
 
 _HARNESS = Path(__file__).resolve().parents[1] / "dof_order_assert.py"
 
 
 @pytest.mark.parametrize("use_newton_actuators", ["true", "false"], ids=["default", "fallback"])
-def test_dof_order(use_newton_actuators: str, tmp_path):
-    if use_newton_actuators == "false" and not get_backend().is_isaaclab3:
+def test_dof_order(use_newton_actuators: str, tmp_path, run_isaacsim_harness, isaacsim_backend):
+    if use_newton_actuators == "false" and isaacsim_backend != "isaaclab3":
         pytest.skip("The alternate actuator execution path is an Isaac Lab 3 option")
     result_file = tmp_path / "dof_order.txt"
-    run_harness(
+    run_isaacsim_harness(
         _HARNESS,
-        "--simulator",
-        "isaacsim",
         "--use-newton-actuators",
         use_newton_actuators,
         "--result-file",

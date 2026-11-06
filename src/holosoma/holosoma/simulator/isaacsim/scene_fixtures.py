@@ -17,14 +17,12 @@ from isaaclab.terrains.utils import create_prim_from_mesh
 from pxr import Usd, UsdGeom
 
 from holosoma.simulator.isaacsim.prim_utils import resolve_robot_link_prim_expression
-from holosoma.simulator.isaacsim.backends import get_backend
-
-stage_utils = get_backend().stage_utils
 
 if TYPE_CHECKING:
     from isaaclab.scene import InteractiveScene
 
     from holosoma.managers.terrain import TerrainManager
+    from holosoma.simulator.isaacsim.backends.base import IsaacLabBackend
 
 TERRAIN_PRIM_PATH = "/World/ground"
 
@@ -54,7 +52,7 @@ def _hide_prim_subtree(stage: Usd.Stage, prim_path: str) -> None:
 
 
 def build_terrain_fixtures(
-    terrain_manager: TerrainManager, scene: InteractiveScene, robot_base_body_name: str
+    terrain_manager: TerrainManager, scene: InteractiveScene, robot_base_body_name: str, *, backend: IsaacLabBackend
 ) -> TerrainFixtures:
     """Author the terrain ground prim + optional height scanner cfg.
 
@@ -85,10 +83,10 @@ def build_terrain_fixtures(
         # Add a height scanner to the torso to detect the height of the terrain mesh
         # TODO: Scene USD files need ground mapping
         alignment_kwargs: dict[str, str | bool] = (
-            {"ray_alignment": "yaw"} if get_backend().is_isaaclab3 else {"attach_yaw_only": True}
+            {"ray_alignment": "yaw"} if backend.is_isaaclab3 else {"attach_yaw_only": True}
         )
         height_scanner_cfg = RayCasterCfg(
-            prim_path=resolve_robot_link_prim_expression(robot_base_body_name),
+            prim_path=resolve_robot_link_prim_expression(robot_base_body_name, backend=backend),
             offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
             **alignment_kwargs,
             # Apply a grid pattern that is smaller than the resolution to only return one height value.
@@ -120,7 +118,7 @@ def build_terrain_fixtures(
         # Hide the ground plane's visual while keeping its collider; avoids z-fighting a scene
         # USD's own floor. Applied to the whole /World/ground subtree.
         if terrain_state.hide_visual:
-            _hide_prim_subtree(stage_utils.get_current_stage(), TERRAIN_PRIM_PATH)
+            _hide_prim_subtree(backend.stage_utils.get_current_stage(), TERRAIN_PRIM_PATH)
     elif terrain_state.mesh_type in ["trimesh", "load_obj"]:
         terrain = terrain_state.terrain
         visual_material = sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 0.0))
