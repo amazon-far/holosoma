@@ -108,7 +108,7 @@ class NativeApp:
 
 
 @dataclasses.dataclass(frozen=True)
-class _EnvConfig:
+class EnvConfigStub:
     """The EnvConfig fields task_session reads."""
 
     env_class: str
@@ -177,7 +177,7 @@ def run_task_session(
     monkeypatch.setattr(session, "get_simulator_type", lambda: SimulatorType.ISAACSIM)
     monkeypatch.setattr(session, "setup_isaaclab_launcher", lambda _config, _device: app)
     monkeypatch.setattr(session, "get_class", lambda _target: Task)
-    config = cast("Any", _EnvConfig(env_class="test.Task", training=SimpleNamespace(headless=True)))
+    config = cast("Any", EnvConfigStub(env_class="test.Task", training=SimpleNamespace(headless=True)))
     with session.task_session(config, SimulationTask) as task:
         if on_enter is not None:
             on_enter()

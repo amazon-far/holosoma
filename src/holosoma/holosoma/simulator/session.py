@@ -28,12 +28,6 @@ if TYPE_CHECKING:
 _TaskT = TypeVar("_TaskT", bound="BaseTask")
 
 
-def _is_policy_task(task_class: type) -> bool:
-    from holosoma.envs.policy_task import PolicyTask
-
-    return issubclass(task_class, PolicyTask)
-
-
 def get_local_rank() -> int | None:
     """Return this process's local distributed rank, or None when not distributed."""
     return int(os.environ.get("LOCAL_RANK", "0")) if int(os.environ.get("WORLD_SIZE", "1")) > 1 else None
@@ -110,8 +104,9 @@ def task_session(config: EnvConfig, required_class: type[_TaskT]) -> Iterator[_T
             # Pinned so the task allocates on the device the provider launched on.
             task = task_class(dataclasses.replace(config, device=device))
 
-            # The listener's keys drive policy-task controls; a simulation task has none.
-            if not config.training.headless and _is_policy_task(task_class):
+            from holosoma.envs.policy_task import PolicyTask
+
+            if not config.training.headless and issubclass(task_class, PolicyTask):
                 setup_keyboard_listener(task)
             yield task
         except BaseException:

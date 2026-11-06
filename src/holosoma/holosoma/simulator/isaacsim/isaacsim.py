@@ -82,10 +82,10 @@ class IsaacSim(BaseSimulator):
         # populated by _load_scene_files; read in _collect_spawned_actors to classify.
         self.scene_file_static_names: set[str] = set()
 
-        # Cameras here are read out of the periodic render pass, which draws when the substep counter
-        # reaches render_interval. A driving loop closes its frame on the control step's last substep,
-        # so only a render_interval dividing control_decimation puts the draw and the frame's state on
-        # the same substep; anything else pairs an image with a pose from a different one. Checked
+        # Cameras here are read out of the render the task schedules every render_interval substeps.
+        # A driving loop closes its frame on the control step's last substep, so only a
+        # render_interval dividing control_decimation puts the draw and the frame's state on the same
+        # substep; anything else pairs an image with a pose from a different one. Checked
         # before the SimulationContext exists, so a rejected config leaves no global context behind.
         decimation = self.simulator_config.sim.control_decimation_steps
         render_interval = self.simulator_config.sim.render_interval_steps

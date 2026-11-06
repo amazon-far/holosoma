@@ -18,6 +18,7 @@ def _algo(multi_gpu: bool) -> BaseAlgo:
 
 def test_a_rank_stops_when_another_rank_requested_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
     def all_reduce(tensor: torch.Tensor, op: Any) -> None:
+        assert op is torch.distributed.ReduceOp.MAX
         tensor.copy_(torch.maximum(tensor, torch.tensor(1.0)))  # the peer rank requested
 
     monkeypatch.setattr(torch.distributed, "all_reduce", all_reduce)

@@ -17,7 +17,6 @@ pytestmark = [
 
 _CHILD = textwrap.dedent(
     """
-    import dataclasses
     import time
     from types import SimpleNamespace
 
@@ -27,6 +26,7 @@ _CHILD = textwrap.dedent(
     from holosoma.envs.simulation_task import SimulationTask
     from holosoma.simulator import session
     from holosoma.utils.simulator_config import SimulatorType
+    from holosoma.utils.tests._simulation_error_child import EnvConfigStub
 
     class Task(SimulationTask):
         def __init__(self, _config):
@@ -47,13 +47,7 @@ _CHILD = textwrap.dedent(
     session.resolve_simulation_device = lambda *_args: "cpu"
     session.get_simulator_type = lambda: SimulatorType.MUJOCO
     session.get_class = lambda _target: Task
-    @dataclasses.dataclass(frozen=True)
-    class EnvConfig:
-        env_class: str
-        training: object
-        device: str | None = None
-
-    env_config = EnvConfig(env_class="test.Task", training=SimpleNamespace(headless=True))
+    env_config = EnvConfigStub(env_class="test.Task", training=SimpleNamespace(headless=True))
     env_types.get_run_sim_env_config = lambda _config: env_config
     config = SimpleNamespace(
         device="cpu",

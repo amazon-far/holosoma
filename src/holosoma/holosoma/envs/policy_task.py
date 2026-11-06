@@ -29,7 +29,6 @@ class PolicyTask(BaseTask):
         super().__init__(tyro_config)
 
     def _validate_task(self) -> None:
-        # Validate configs: manager workflow requires all manager configs to be provided
         for name in ("observation", "action", "reward", "termination", "command", "curriculum"):
             if getattr(self.config, name) is None:
                 raise ValueError(f"{name}_config must be provided for manager-based environments.")
@@ -192,6 +191,8 @@ class PolicyTask(BaseTask):
         self._pre_compute_observations_callback()
 
     def _step_managers(self) -> None:
+        # After resets, so WBT termination checks see the tracking error before the command
+        # manager advances the motion clip.
         self.command_manager.step()
         self.curriculum_manager.step()
         super()._step_managers()

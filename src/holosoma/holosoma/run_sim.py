@@ -33,7 +33,7 @@ def limit_cpu_math_threads(config: RunSimConfig, device: str | None = None) -> N
 
     # Both halves are needed: ``mujoco_backend`` lives on the shared SimulatorInitConfig and
     # defaults to CLASSIC, so every backend's preset reports CLASSIC unless it overrides it. The
-    # name is the same discriminator the device resolution above uses.
+    # name is the same discriminator ``resolve_simulation_device`` uses.
     sim_config = config.simulator.config
     is_classic = sim_config.name == "mujoco" and getattr(sim_config, "mujoco_backend", None) == MujocoBackend.CLASSIC
     if device is None:

@@ -490,14 +490,12 @@ class BaseTask:
         reset_state = self._before_control_frame_reset(env_ids)
         self.reset_envs_idx(env_ids)
 
-        # Managers step AFTER reset so that WBT termination checks see the actual tracking
-        # error before the command manager advances the motion clip.
         self._step_managers()
 
         return self._after_control_frame(env_ids, reset_state)
 
     def _after_physics_step(self) -> None:
-        """Update task-specific state after simulator tensors are refreshed."""
+        """Update task-specific state after the frame's substeps and FRAME_END."""
 
     def _step_managers(self) -> None:
         """Step managers once per control frame, after resets."""

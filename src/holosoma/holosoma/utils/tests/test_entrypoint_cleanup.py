@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import dataclasses
 import signal
 import sys
 import types
@@ -17,17 +16,9 @@ from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.simulator import session
 from holosoma.utils import experiment_paths
 from holosoma.utils.simulator_config import SimulatorType
+from holosoma.utils.tests._simulation_error_child import EnvConfigStub
 
 pytestmark = pytest.mark.no_sim
-
-
-@dataclasses.dataclass(frozen=True)
-class _EnvConfig:
-    """The EnvConfig fields task_session reads."""
-
-    env_class: str
-    training: object
-    device: str | None = None
 
 
 class _Environment:
@@ -35,7 +26,6 @@ class _Environment:
         self.events = events
         self.close_fails = close_fails
         self.device = "cpu"
-        self.observation_manager = object()
         self.simulator = SimpleNamespace(sim=SimpleNamespace(step=lambda: None))
 
     def close(self) -> None:
@@ -76,7 +66,7 @@ def _patch_session(monkeypatch: pytest.MonkeyPatch, env: _Environment, app: obje
     monkeypatch.setattr(session, "get_simulator_type", lambda: SimulatorType.ISAACSIM)
     monkeypatch.setattr(session, "setup_isaaclab_launcher", launch)
     monkeypatch.setattr(session, "get_class", lambda _target: _Task)
-    env_config = _EnvConfig(env_class="test.Task", training=SimpleNamespace(headless=True))
+    env_config = EnvConfigStub(env_class="test.Task", training=SimpleNamespace(headless=True))
     return SimpleNamespace(create_task=lambda: session.task_session(env_config, BaseTask))  # type: ignore[arg-type]
 
 
@@ -178,7 +168,6 @@ def test_training_interrupt_closes_environment_before_app(
     )
     config.robot = SimpleNamespace(asset=SimpleNamespace(robot_type="test"))
     config.algo = SimpleNamespace(_target_="test.Algo", config=object())
-    config.env_class = "test.Task"
     config.save_config = MagicMock()
     monkeypatch.setitem(sys.modules, "wandb", types.ModuleType("wandb"))
     monkeypatch.delenv("WORLD_SIZE", raising=False)

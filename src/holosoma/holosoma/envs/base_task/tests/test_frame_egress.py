@@ -46,7 +46,6 @@ class _FakeSim:
         self.decimation = decimation
         self.render_interval = render_interval
         self.frames = frames
-        self.sensor_config: dict[str, object] = {}
         self._budget = (frames + 2) * decimation
         self.substeps = 0
         self._shutdown = False
@@ -330,9 +329,6 @@ class _PlaybackSim(_FakeSim):
     @property
     def shutdown_requested(self) -> bool:
         return self._shutdown
-
-    def request_shutdown(self, reason: str = "") -> None:
-        self._shutdown = True
 
     def set_actor_states(self, names: list[str], env_ids: torch.Tensor, states: torch.Tensor) -> None:
         pass
