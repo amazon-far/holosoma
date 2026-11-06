@@ -170,7 +170,17 @@ def main() -> int:
     # Save a movie of the run to this directory (records every episode, headless or headful).
     # Uses the backend's own video recorder, so it works on every backend.
     parser.add_argument("--record", default=None, metavar="DIR", help="save a video of the run to DIR")
+    parser.add_argument("--result-file", default=None, help="write OK here once every check passes")
     args = parser.parse_args()
+    code = _check(args, parser)
+    if code == 0 and args.result_file:
+        with open(args.result_file, "w") as fh:
+            fh.write("OK")
+    return code
+
+
+def _check(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Build the sim for ``args`` and run its checks; returns 0 when all pass."""
     headless = args.headless == "true"
 
     config = _build_run_sim_config(args.simulator, args.scene, args.robot, args.terrain, args.record)
