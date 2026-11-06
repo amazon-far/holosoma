@@ -38,7 +38,13 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.sampler import STAGE_RESET, STAGE_SETUP, TermSampler
 from tests.simulators import _scene_presets
-from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, step, steps_for_seconds
+from tests.simulators._sim_harness import (
+    build_run_sim_config,
+    launch_simulator,
+    run_and_hard_exit,
+    step,
+    steps_for_seconds,
+)
 
 GRAVITY = 9.81
 
@@ -1557,4 +1563,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    run_and_hard_exit(main)

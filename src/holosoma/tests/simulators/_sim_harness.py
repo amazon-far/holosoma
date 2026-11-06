@@ -13,6 +13,7 @@ import dataclasses
 import math
 import os
 import sys
+import traceback
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, NoReturn
@@ -33,12 +34,22 @@ def run_and_hard_exit(main: Callable[[], int]) -> NoReturn:
     ``os._exit`` skips the atexit teardown entirely; rendering itself is fine, only clean shutdown
     hangs. (behavior_assert / scene_spawn_assert use the same escape for the MuJoCo-viewer race.)
 
+    The teardown also replaces the process exit status: once Kit is loaded, ``sys.exit(1)`` and an
+    uncaught exception both exit 0. So an exception or ``SystemExit`` from ``main`` is reported and
+    turned into a nonzero code here, never left to propagate.
+
     Use in a harness entrypoint::
 
         if __name__ == "__main__":
             run_and_hard_exit(main)
     """
-    rc = main()
+    try:
+        rc = main()
+    except SystemExit as exc:
+        rc = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+    except BaseException:
+        traceback.print_exc()
+        rc = 1
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(rc)

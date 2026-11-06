@@ -33,7 +33,7 @@ import tyro
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.simulator import BridgeConfig, VirtualGantryCfg
 from tests.simulators import _robot_presets
-from tests.simulators._sim_harness import launch_simulator, step
+from tests.simulators._sim_harness import launch_simulator, run_and_hard_exit, step
 
 ROBOT = "g1-29dof-reordered"
 
@@ -147,4 +147,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    run_and_hard_exit(main)
