@@ -13,9 +13,14 @@ import omni
 import omni.log
 import omni.usd
 from pxr import Gf, Usd, UsdGeom, UsdPhysics
+from holosoma.simulator.isaacsim.backends import get_backend
+
+_DISABLED_RIGID_BODY_LINK_KEY = "holosoma:disabledRigidBodyLink"
 
 
 def get_current_stage() -> Usd.Stage:
+    if get_backend().is_isaaclab3:
+        return get_backend().stage_utils.get_current_stage()
     return omni.usd.get_context().get_stage()
 
 
@@ -42,6 +47,17 @@ def _find_robot_link_prim(link_name: str, stage: Usd.Stage) -> Usd.Prim:
         for prim in Usd.PrimRange(robot_root, Usd.TraverseInstanceProxies())
         if prim.GetName() == link_name and UsdGeom.Xformable(prim)
     ]
+    if len(matches) > 1:
+        # Sim 6.2's URDF importer can give the body, visual Xform, and visual
+        # Mesh the same name. Accept the body's own descendants, while keeping
+        # unrelated names and multiple physics bodies ambiguous.
+        bodies = [
+            prim
+            for prim in matches
+            if prim.HasAPI(UsdPhysics.RigidBodyAPI) or prim.GetCustomDataByKey(_DISABLED_RIGID_BODY_LINK_KEY) is True
+        ]
+        if len(bodies) == 1 and all(prim.GetPath().HasPrefix(bodies[0].GetPath()) for prim in matches):
+            return bodies[0]
     if len(matches) != 1:
         paths = [str(prim.GetPath()) for prim in matches]
         raise ValueError(
@@ -62,7 +78,7 @@ def resolve_robot_link_prim_expression(link_name: str, stage: Usd.Stage | None =
     stage = stage or get_current_stage()
     robot_root_path = "/World/envs/env_0/Robot"
     suffix = str(_find_robot_link_prim(link_name, stage).GetPath())[len(robot_root_path) :]
-    return f"/World/envs/env_.*/Robot{suffix}"
+    return f"{get_backend().env_regex_ns}/Robot{suffix}"
 
 
 def resolve_robot_link_rigid_body_prim_expression(link_name: str, stage: Usd.Stage | None = None) -> str:
@@ -73,7 +89,7 @@ def resolve_robot_link_rigid_body_prim_expression(link_name: str, stage: Usd.Sta
     while prim.IsValid() and str(prim.GetPath()).startswith(robot_root_path):
         if is_rigid_body_enabled(prim):
             suffix = str(prim.GetPath())[len(robot_root_path) :]
-            return f"/World/envs/env_.*/Robot{suffix}"
+            return f"{get_backend().env_regex_ns}/Robot{suffix}"
         prim = prim.GetParent()
     raise ValueError(f"Robot link '{link_name}' is not owned by a rigid body below '{robot_root_path}'.")
 
@@ -111,7 +127,7 @@ def print_prim_tree(
     """
     # Get stage if not provided
     if stage is None:
-        stage = omni.usd.get_context().get_stage()
+        stage = get_current_stage()
 
     # Get prim at path
     prim = stage.GetPrimAtPath(prim_path)

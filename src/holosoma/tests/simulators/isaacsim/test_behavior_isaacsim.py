@@ -1,7 +1,7 @@
 """Behavioral physics tests on the IsaacSim backend via the behavior_assert.py harness.
 
-Each test runs one behavioral scenario in its own subprocess at num_envs=4 and asserts the
-harness exited 0 — the harness asserts a physical OUTCOME in EVERY env. Marked ``isaacsim`` so the
+Each test runs one behavioral scenario in its own subprocess at num_envs=4 and checks its
+completion file — the harness asserts a physical OUTCOME in EVERY env. Marked ``isaacsim`` so the
 IsaacSim CI job (``-m isaacsim``) collects it; importorskip
 ("isaaclab")/CUDA-gated for direct/unfiltered runs.
 """
@@ -58,7 +58,8 @@ _SCENARIOS = [
 
 
 @pytest.mark.parametrize("scenario", _SCENARIOS)
-def test_behavior_isaacsim(scenario):
+def test_behavior_isaacsim(scenario, tmp_path):
+    result_file = tmp_path / f"behavior_{scenario}.txt"
     run_harness(
         _HARNESS,
         "--scenario",
@@ -67,6 +68,9 @@ def test_behavior_isaacsim(scenario):
         "isaacsim",
         "--num-envs",
         "4",
+        "--result-file",
+        str(result_file),
         label=f"isaacsim/{scenario} (num_envs=4)",
         timeout=900,
+        result_file=result_file,
     )

@@ -8,29 +8,25 @@ sensor and wire it into the scene.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import isaaclab.sim as sim_utils
-import numpy as np
-import isaacsim.core.utils.stage as stage_utils
-from isaaclab.sensors import RayCaster, RayCasterCfg, patterns
+from isaaclab.sensors import RayCasterCfg, patterns
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.terrains.utils import create_prim_from_mesh
 from pxr import Usd, UsdGeom
 
 from holosoma.simulator.isaacsim.prim_utils import resolve_robot_link_prim_expression
-from holosoma.simulator.isaacsim.raycast_targets import TERRAIN_PRIM_PATH
-from holosoma.utils.warp_utils import convert_to_wp_mesh
+from holosoma.simulator.isaacsim.backends import get_backend
+
+stage_utils = get_backend().stage_utils
 
 if TYPE_CHECKING:
     from isaaclab.scene import InteractiveScene
 
     from holosoma.managers.terrain import TerrainManager
-    from holosoma.managers.terrain.terms.locomotion import TerrainLocomotion
 
-GROUND_PLANE_SIZE_M = 4.0e3
-"""Side length of the plane terrain's ray-cast mesh, in metres. Ray sensors hit it in float32, so it
-stays small enough for sub-millimetre hits; physics uses IsaacLab's infinite collider."""
+TERRAIN_PRIM_PATH = "/World/ground"
 
 
 class TerrainFixtures(NamedTuple):
@@ -88,10 +84,13 @@ def build_terrain_fixtures(
     if terrain_state.mesh_type not in ["fake", None]:
         # Add a height scanner to the torso to detect the height of the terrain mesh
         # TODO: Scene USD files need ground mapping
+        alignment_kwargs: dict[str, str | bool] = (
+            {"ray_alignment": "yaw"} if get_backend().is_isaaclab3 else {"attach_yaw_only": True}
+        )
         height_scanner_cfg = RayCasterCfg(
             prim_path=resolve_robot_link_prim_expression(robot_base_body_name),
             offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
-            attach_yaw_only=True,
+            **alignment_kwargs,
             # Apply a grid pattern that is smaller than the resolution to only return one height value.
             pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[0.05, 0.05]),
             debug_vis=False,
@@ -143,23 +142,3 @@ def build_terrain_fixtures(
         raise ValueError(f"Unsupported terrain mesh type: {terrain_state.mesh_type}")
 
     return TerrainFixtures(global_collision_prims, height_scanner_cfg, terrain)
-
-
-def register_terrain_mesh_cache(terrain_manager: TerrainManager, scene: InteractiveScene) -> None:
-    """Register the ground's ray-cast mesh at ``/World/ground`` in IsaacLab's ray-caster cache.
-
-    Trimesh/OBJ terrain shares the terrain manager's mesh; plane terrain gets a flat square
-    :data:`GROUND_PLANE_SIZE_M` across, centred on the world origin. Call after native sensors are
-    constructed, since IsaacLab's config validator would recurse into a populated
-    ``RayCaster.meshes``, and before they initialize.
-    """
-    terrain_state = terrain_manager.get_state("locomotion_terrain")
-    if terrain_state.mesh_type in ["trimesh", "load_obj"]:
-        mesh = cast("TerrainLocomotion", terrain_state).warp_mesh
-    elif terrain_state.mesh_type == "plane":
-        half = GROUND_PLANE_SIZE_M / 2.0
-        vertices = np.array([[-half, -half, 0.0], [half, -half, 0.0], [half, half, 0.0], [-half, half, 0.0]])
-        mesh = convert_to_wp_mesh(vertices, np.array([[0, 1, 2], [0, 2, 3]]), scene.device)
-    else:
-        return
-    RayCaster.meshes[TERRAIN_PRIM_PATH] = mesh

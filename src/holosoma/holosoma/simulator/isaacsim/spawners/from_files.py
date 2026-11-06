@@ -52,8 +52,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-import isaacsim.core.utils.prims as prim_utils
-import isaacsim.core.utils.stage as stage_utils
+import isaaclab.sim as sim_utils
 import omni.kit.commands
 import omni.log
 from isaaclab.sim import schemas
@@ -63,6 +62,15 @@ from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdPhysics, UsdShade
 from holosoma.simulator.isaacsim.spawners import from_files_cfg
 from holosoma.simulator.isaacsim.spawners.schema_utils import ensure_api_and_modify
 from holosoma.simulator.isaacsim.prim_utils import set_instanceable
+from holosoma.simulator.isaacsim.backends import get_backend
+
+stage_utils = get_backend().stage_utils
+if get_backend().is_isaaclab3:
+    prim_utils = sim_utils
+else:
+    import isaacsim.core.utils.prims as isaacsim_prim_utils
+
+    prim_utils = isaacsim_prim_utils
 
 import carb
 
@@ -139,8 +147,12 @@ def create_prim(
                 Gf.Vec3d(float(translation[0]), float(translation[1]), float(translation[2]))
             )
         if orientation is not None:
-            # orientation is (w, x, y, z); GfQuatd takes (real, imaginary-vec).
-            w, x, y, z = (float(c) for c in orientation)
+            # USD Gf quaternions stay scalar-first while Lab 3 spawners use XYZW.
+            components = tuple(float(c) for c in orientation)
+            if get_backend().is_isaaclab3:
+                x, y, z, w = components
+            else:
+                w, x, y, z = components
             xformable.AddOrientOp(precision=double).Set(Gf.Quatd(w, Gf.Vec3d(x, y, z)))
         if scale is not None:
             xformable.AddScaleOp(precision=double).Set(Gf.Vec3d(float(scale[0]), float(scale[1]), float(scale[2])))

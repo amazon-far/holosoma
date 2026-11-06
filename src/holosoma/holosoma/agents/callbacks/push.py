@@ -1,8 +1,7 @@
 """Eval callback that applies random force pulses to test policy robustness.
 
 Periodically pushes the robot at random body locations with configurable
-force magnitude, duration, and interval. Uses IsaacLab's
-set_external_force_and_torque API to apply forces in the physics simulation.
+force magnitude, duration, and interval through the simulator's world-force API.
 
 Push events are optionally recorded for visualization in viser by sharing
 buffer/metadata dicts with EvalRecordingCallback.
@@ -20,6 +19,7 @@ from loguru import logger
 
 from holosoma.agents.callbacks.base_callback import RLEvalCallback
 from holosoma.config_types.eval_callback import PushConfig
+from holosoma.simulator.base_simulator.hooks import HookHandle, Phase
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
@@ -29,9 +29,8 @@ if TYPE_CHECKING:
 class EvalPushCallback(RLEvalCallback):
     """Applies random force pulses during evaluation and optionally records them.
 
-    Forces are applied at the physics substep level by patching the env's
-    _apply_force_in_physics_step method, ensuring the force is active for the
-    full duration across all substeps (control decimation).
+    A PRE_STEP hook applies the force throughout every physics substep of an
+    active pulse, including all substeps of control decimation.
 
     Recorded arrays (per env step):
         push_active    [T]    1.0 when pushing, 0.0 otherwise
@@ -52,10 +51,10 @@ class EvalPushCallback(RLEvalCallback):
         self._record_metadata: dict[str, Any] | None = None
 
         # Resolved at on_pre_evaluate_policy
-        self._resolved_bodies: list[tuple[str, int, int]] = []
+        self._resolved_bodies: list[tuple[str, int]] = []
         self._dt: float = 0.0
         self._sim: Any = None
-        self._original_apply_force: Any = None
+        self._force_hook: HookHandle | None = None
 
         # Push state machine
         self._push_active: bool = False
@@ -63,7 +62,6 @@ class EvalPushCallback(RLEvalCallback):
         self._idle_steps_remaining: int = 0
         self._current_force_w: torch.Tensor | None = None
         self._current_body_names_idx: int = -1
-        self._current_isaac_body_id: int = -1
 
         self._step_count: int = 0
 
@@ -97,12 +95,11 @@ class EvalPushCallback(RLEvalCallback):
         for name in self.candidate_body_names:
             body_names_idx = self._sim.find_rigid_body_indice(name)
             if isinstance(body_names_idx, int) and body_names_idx >= 0:
-                isaac_body_id = self._sim.body_ids[body_names_idx]
-                self._resolved_bodies.append((name, body_names_idx, isaac_body_id))
+                self._resolved_bodies.append((name, body_names_idx))
             else:
                 raise ValueError(f"EvalPushCallback: body '{name}' not found. Available: {available}")
 
-        resolved_names = [name for name, _, _ in self._resolved_bodies]
+        resolved_names = [name for name, _ in self._resolved_bodies]
         logger.info(
             f"EvalPushCallback: {len(self._resolved_bodies)} push bodies: {resolved_names}, "
             f"force={self.config.force_range}N, duration={self.config.duration_s}s, interval={self.config.interval_s}s"
@@ -127,15 +124,7 @@ class EvalPushCallback(RLEvalCallback):
         self._idle_steps_remaining = self._sample_interval_steps()
         self._push_active = False
 
-        # Patch _apply_force_in_physics_step to inject push forces at every substep
-        self._original_apply_force = env._apply_force_in_physics_step
-
-        def _patched_apply_force() -> None:
-            self._original_apply_force()
-            if self._push_active:
-                self._apply_push_force()
-
-        env._apply_force_in_physics_step = _patched_apply_force
+        self._force_hook = self._sim.hooks.add(Phase.PRE_STEP, self._apply_push_force, name="eval_push")
 
     def on_post_eval_env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
         # Manage push schedule
@@ -155,7 +144,7 @@ class EvalPushCallback(RLEvalCallback):
         if self._push_active:
             assert self._current_force_w is not None
             force_w = self._current_force_w.detach().cpu().numpy().copy()
-            body_pos = self._sim._robot.data.body_pos_w[eid, self._current_isaac_body_id].detach().cpu().numpy().copy()
+            body_pos = self._sim.rigid_body_pos_w[eid, self._current_body_names_idx].detach().cpu().numpy().copy()
             body_idx = self._current_body_names_idx
             active = 1.0
         else:
@@ -176,7 +165,9 @@ class EvalPushCallback(RLEvalCallback):
     def on_post_evaluate_policy(self) -> None:
         if self._push_active:
             self._deactivate_push()
-        self._get_env()._apply_force_in_physics_step = self._original_apply_force
+        if self._force_hook is not None:
+            self._force_hook.remove()
+            self._force_hook = None
         logger.info(f"EvalPushCallback: completed {self._step_count} steps")
 
     # ------------------------------------------------------------------
@@ -184,9 +175,8 @@ class EvalPushCallback(RLEvalCallback):
     # ------------------------------------------------------------------
 
     def _activate_push(self) -> None:
-        name, body_names_idx, isaac_body_id = random.choice(self._resolved_bodies)
+        name, body_names_idx = random.choice(self._resolved_bodies)
         self._current_body_names_idx = body_names_idx
-        self._current_isaac_body_id = isaac_body_id
 
         # Random force magnitude
         mag = random.uniform(*self.config.force_range)
@@ -212,47 +202,23 @@ class EvalPushCallback(RLEvalCallback):
         )
 
     def _deactivate_push(self) -> None:
-        self._clear_push_force()
         self._push_active = False
         self._current_force_w = None
         self._current_body_names_idx = -1
-        self._current_isaac_body_id = -1
         logger.info("PUSH END")
 
     # ------------------------------------------------------------------
-    # Force application (called each physics substep via monkey-patch)
+    # Force application (called each physics substep by the simulator hook)
     # ------------------------------------------------------------------
 
     def _apply_push_force(self) -> None:
-        from isaaclab.utils.math import quat_apply_inverse
-
-        eid = self.env_id
-        isaac_body_id = self._current_isaac_body_id
-
-        # Transform world-frame force to body-local frame
-        # (IsaacLab 2.1 hardcodes is_global=False)
-        body_quat_w = self._sim._robot.data.body_quat_w[eid, isaac_body_id]
-        force_body = quat_apply_inverse(body_quat_w, self._current_force_w)
-
-        forces = force_body.unsqueeze(0).unsqueeze(0)  # [1, 1, 3]
-        torques = torch.zeros_like(forces)  # [1, 1, 3]
-
-        self._sim._robot.set_external_force_and_torque(
-            forces=forces,
-            torques=torques,
-            env_ids=torch.tensor([eid], device=self._sim.sim_device),
-            body_ids=torch.tensor([isaac_body_id], device=self._sim.sim_device),
-        )
-
-    def _clear_push_force(self) -> None:
-        if self._current_isaac_body_id < 0:
+        if not self._push_active:
             return
-        zero = torch.zeros(1, 1, 3, device=self._sim.sim_device)
-        self._sim._robot.set_external_force_and_torque(
-            forces=zero,
-            torques=zero,
-            env_ids=torch.tensor([self.env_id], device=self._sim.sim_device),
-            body_ids=torch.tensor([self._current_isaac_body_id], device=self._sim.sim_device),
+        self._sim.apply_external_force(
+            "robot",
+            forces=self._current_force_w,
+            body_names=[self._sim.body_names[self._current_body_names_idx]],
+            env_ids=[self.env_id],
         )
 
     # ------------------------------------------------------------------

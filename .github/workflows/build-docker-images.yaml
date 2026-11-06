@@ -54,6 +54,8 @@ jobs:
              "dependency_target": "dependencies", "target": "runtime", "runner_prefix": "codebuild-holosoma-a10g-x1-gpu-build"},
             {"environment": "isaacsim", "image": "holosoma-isaacsim", "dockerfile": "docker/isaacsim.Dockerfile",
              "dependency_target": "dependencies", "target": "runtime", "runner_prefix": "codebuild-holosoma-a10g-x1-gpu-build"},
+            {"environment": "isaacsim3", "image": "holosoma-isaacsim3", "dockerfile": "docker/isaacsim3.Dockerfile",
+             "dependency_target": "dependencies", "target": "runtime", "runner_prefix": "codebuild-holosoma-a10g-x1-gpu-build"},
             {"environment": "mujoco", "image": "holosoma-mujoco", "dockerfile": "docker/mujoco.Dockerfile",
              "dependency_target": "dependencies", "target": "runtime", "runner_prefix": "codebuild-holosoma-cpu-build",
              "build_args": "WARP=true"},

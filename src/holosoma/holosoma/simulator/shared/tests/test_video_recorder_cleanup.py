@@ -5,8 +5,11 @@ from __future__ import annotations
 import threading
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
+from holosoma.config_types.video import VideoConfig
+from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.shared.video_recorder import VideoRecorderInterface
 
 pytestmark = pytest.mark.no_sim
@@ -68,3 +71,28 @@ def test_stopped_worker_releases_shared_state_once() -> None:
     assert recorder.video_frames == []
     assert recorder.recording_thread is None
     assert not recorder.thread_active
+
+
+@pytest.mark.parametrize("record_env_id", [0, 1])
+def test_frame_end_captures_configured_environment_only_while_recording(record_env_id: int) -> None:
+    class _CapturingRecorder(VideoRecorderInterface):
+        def _capture_frame_impl(self) -> None:
+            self._add_frame(np.full((1, 1, 3), 127, dtype=np.uint8))
+
+    recorder = _CapturingRecorder(
+        VideoConfig(use_recording_thread=False, record_env_id=record_env_id),
+        SimpleNamespace(),  # type: ignore[arg-type]  # This test's capture provider needs no physics.
+    )
+    hooks = HookRegistry()
+    recorder.register_hooks(hooks)
+
+    hooks.emit(Phase.FRAME_END)
+    assert recorder.video_frames == []
+    recorder.start_recording(episode_id=0)
+    hooks.emit(Phase.FRAME_END)
+    assert len(recorder.video_frames) == 1
+    np.testing.assert_array_equal(recorder.video_frames[0], np.full((1, 1, 3), 127, dtype=np.uint8))
+
+    # A manually requested frame from another environment must still be filtered.
+    recorder.capture_frame(env_id=1 - record_env_id)
+    assert len(recorder.video_frames) == 1
