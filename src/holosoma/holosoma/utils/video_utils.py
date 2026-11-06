@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -186,11 +187,57 @@ def create_video(
         out = cv2.VideoWriter(str(temp_raw), fourcc, fps, (w, h))
         temp_files_to_cleanup.append(temp_raw)
 
-        for frame in video_frames:
-            # Convert RGB to BGR for OpenCV
-            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            out.write(frame_bgr)
-        out.release()
+        if out.isOpened():
+            try:
+                for frame in video_frames:
+                    # Convert RGB to BGR for OpenCV
+                    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                    out.write(frame_bgr)
+            finally:
+                out.release()
+        else:
+            out.release()
+            # Kit 6.2's supported OpenCV bundle has no FFmpeg backend.
+            # Keep MPEG-4 output and stream original RGB frames to the
+            # video extra's executable without resizing or copying the movie.
+            from imageio_ffmpeg import get_ffmpeg_exe
+
+            command = [
+                get_ffmpeg_exe(),
+                "-y",
+                "-loglevel",
+                "error",
+                "-f",
+                "rawvideo",
+                "-pixel_format",
+                "rgb24",
+                "-video_size",
+                f"{w}x{h}",
+                "-framerate",
+                str(fps),
+                "-i",
+                "pipe:0",
+                "-an",
+                "-c:v",
+                "mpeg4",
+                "-q:v",
+                "2",
+                str(temp_raw),
+            ]
+            with tempfile.TemporaryFile() as error_log:
+                with subprocess.Popen(command, stdin=subprocess.PIPE, stderr=error_log) as encoder:
+                    assert encoder.stdin is not None
+                    try:
+                        for frame in video_frames:
+                            encoder.stdin.write(np.ascontiguousarray(frame).tobytes())
+                    finally:
+                        encoder.stdin.close()
+                    returncode = encoder.wait()
+                if returncode:
+                    error_log.seek(0)
+                    raise RuntimeError(f"FFmpeg encoder failed ({returncode}): {error_log.read().decode()}")
+            if not temp_raw.is_file() or temp_raw.stat().st_size == 0:
+                raise RuntimeError("FFmpeg encoder produced no video")
 
         # Step 2: Apply output format
         if output_format == "h264":

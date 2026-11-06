@@ -1,9 +1,8 @@
 """Eval callback that applies constant downward forces on wrists to simulate a held payload.
 
 Applies F = mass * g / num_bodies on each resolved wrist/elbow link
-as a sustained downward (-Z) force throughout the evaluation episode. Uses the same
-IsaacLab set_external_force_and_torque API as the push callback, with substep-level
-force application via monkey-patching.
+as a sustained downward (-Z) force throughout the evaluation episode. Uses the
+simulator's world-force API at every physics substep.
 """
 
 from __future__ import annotations
@@ -16,6 +15,7 @@ from loguru import logger
 
 from holosoma.agents.callbacks.base_callback import RLEvalCallback
 from holosoma.config_types.eval_callback import PayloadConfig
+from holosoma.simulator.base_simulator.hooks import HookHandle, Phase
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
@@ -28,7 +28,7 @@ class EvalPayloadCallback(RLEvalCallback):
     """Applies constant downward forces on wrist links to simulate holding a payload.
 
     The total payload weight (mass * g) is split evenly across all resolved
-    wrist bodies. Forces are applied at every physics substep via monkey-patch.
+    wrist bodies. A PRE_STEP hook applies the forces at every physics substep.
 
     Recorded arrays (per env step):
         payload_force_per_body [T]     force magnitude per body in N
@@ -47,10 +47,10 @@ class EvalPayloadCallback(RLEvalCallback):
         self._record_metadata: dict[str, Any] | None = None
 
         # Resolved at on_pre_evaluate_policy
-        self._resolved_bodies: list[tuple[str, int, int]] = []
+        self._resolved_bodies: list[tuple[str, int]] = []
         self._force_per_body: float = 0.0
         self._sim: Any = None
-        self._original_apply_force: Any = None
+        self._force_hook: HookHandle | None = None
         self._step_count: int = 0
 
     def _get_env(self) -> Any:
@@ -82,15 +82,14 @@ class EvalPayloadCallback(RLEvalCallback):
         for name in self.candidate_body_names:
             body_names_idx = self._sim.find_rigid_body_indice(name)
             if isinstance(body_names_idx, int) and body_names_idx >= 0:
-                isaac_body_id = self._sim.body_ids[body_names_idx]
-                self._resolved_bodies.append((name, body_names_idx, isaac_body_id))
+                self._resolved_bodies.append((name, body_names_idx))
             else:
                 raise ValueError(f"EvalPayloadCallback: body '{name}' not found. Available: {available}")
 
         total_force = self.config.mass_kg * GRAVITY
         self._force_per_body = total_force / len(self._resolved_bodies)
 
-        resolved_names = [name for name, _, _ in self._resolved_bodies]
+        resolved_names = [name for name, _ in self._resolved_bodies]
         logger.info(
             f"EvalPayloadCallback: {len(self._resolved_bodies)} payload bodies: {resolved_names}, "
             f"mass={self.config.mass_kg}kg, total_force={total_force:.1f}N, "
@@ -112,22 +111,15 @@ class EvalPayloadCallback(RLEvalCallback):
             buffers["payload_force_per_body"] = []
             buffers["payload_body_pos_w"] = []
 
-        # Monkey-patch substep force application
-        self._original_apply_force = env._apply_force_in_physics_step
-
-        def _patched_apply_force() -> None:
-            self._original_apply_force()
-            self._apply_payload_forces()
-
-        env._apply_force_in_physics_step = _patched_apply_force
+        self._force_hook = self._sim.hooks.add(Phase.PRE_STEP, self._apply_payload_forces, name="eval_payload")
 
     def on_post_eval_env_step(self, actor_state: dict[str, Any]) -> dict[str, Any]:
         buffers = self._get_buffers()
         if buffers is not None:
             eid = self.env_id
             body_positions = []
-            for _name, _body_names_idx, isaac_body_id in self._resolved_bodies:
-                pos = self._sim._robot.data.body_pos_w[eid, isaac_body_id].detach().cpu().numpy().copy()
+            for _name, body_names_idx in self._resolved_bodies:
+                pos = self._sim.rigid_body_pos_w[eid, body_names_idx].detach().cpu().numpy().copy()
                 body_positions.append(pos)
 
             buffers["payload_force_per_body"].append(np.array(self._force_per_body, dtype=np.float32))
@@ -137,7 +129,9 @@ class EvalPayloadCallback(RLEvalCallback):
         return actor_state
 
     def on_post_evaluate_policy(self) -> None:
-        self._get_env()._apply_force_in_physics_step = self._original_apply_force
+        if self._force_hook is not None:
+            self._force_hook.remove()
+            self._force_hook = None
         logger.info(
             f"EvalPayloadCallback: completed {self._step_count} steps, "
             f"payload={self.config.mass_kg}kg on {len(self._resolved_bodies)} bodies"
@@ -145,32 +139,18 @@ class EvalPayloadCallback(RLEvalCallback):
 
     def _apply_payload_forces(self) -> None:
         """Apply downward force on all resolved wrist bodies (called each substep)."""
-        from isaaclab.utils.math import quat_apply_inverse
-
-        eid = self.env_id
-        device = self._sim.sim_device
-
         # Force in world frame: straight down (-Z)
         force_world = torch.tensor(
             [0.0, 0.0, -self._force_per_body],
             dtype=torch.float32,
-            device=device,
+            device=self._sim.sim_device,
         )
-
-        for _name, _body_names_idx, isaac_body_id in self._resolved_bodies:
-            # Transform world-frame force to body-local frame
-            body_quat_w = self._sim._robot.data.body_quat_w[eid, isaac_body_id]
-            force_body = quat_apply_inverse(body_quat_w, force_world)
-
-            forces = force_body.unsqueeze(0).unsqueeze(0)  # [1, 1, 3]
-            torques = torch.zeros_like(forces)
-
-            self._sim._robot.set_external_force_and_torque(
-                forces=forces,
-                torques=torques,
-                env_ids=torch.tensor([eid], device=device),
-                body_ids=torch.tensor([isaac_body_id], device=device),
-            )
+        self._sim.apply_external_force(
+            "robot",
+            forces=force_world,
+            body_names=[name for name, _ in self._resolved_bodies],
+            env_ids=[self.env_id],
+        )
 
     def _get_buffers(self) -> dict[str, list[npt.NDArray[Any]]] | None:
         return self._record_buffers

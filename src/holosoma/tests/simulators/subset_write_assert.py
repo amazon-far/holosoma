@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 if sys.path and sys.path[0].endswith("tests/simulators"):
     sys.path.pop(0)
@@ -36,8 +37,9 @@ from tests.simulators.static_move_assert import (
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Non-contiguous env_ids subset write probe.")
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim3"])
     parser.add_argument("--num-envs", type=int, default=4)
+    parser.add_argument("--result-file", default=None, help="write 'OK' after all checks pass")
     args = parser.parse_args()
     num_envs = args.num_envs
     if num_envs < 4:
@@ -101,6 +103,8 @@ def main() -> int:
         print("FAIL: subset write disturbed envs NOT in the subset (SCRAMBLE)")
         return 1
     print("PASS: non-contiguous subset write is correctly indexed (no scramble)")
+    if args.result_file:
+        Path(args.result_file).write_text("OK\n")
     return 0
 
 

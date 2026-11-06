@@ -34,6 +34,7 @@ import argparse
 import dataclasses
 import math
 import sys
+from pathlib import Path
 
 # tests/simulators/ has an isaacsim/ subpackage that would shadow the real IsaacSim package if it
 # lands on sys.path[0] when run as a script — drop it (mirrors scene_spawn_assert.py).
@@ -119,8 +120,9 @@ def _step(sim, n):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Cross-backend runtime static-move assertion harness.")
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim3"])
     parser.add_argument("--num-envs", type=int, default=None)
+    parser.add_argument("--result-file", default=None, help="write 'OK' after all checks pass")
     args = parser.parse_args()
     num_envs = args.num_envs if args.num_envs is not None else (1 if args.simulator == "mujoco" else 4)
 
@@ -195,6 +197,8 @@ def main() -> int:
         f"STATIC-MOVE OK: {args.simulator} ({num_envs} env(s)) — "
         f"box rested on the static, which moved AND stopped supporting it"
     )
+    if args.result_file:
+        Path(args.result_file).write_text("OK\n")
     return 0
 
 

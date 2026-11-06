@@ -1,4 +1,7 @@
+import dataclasses
+
 from holosoma.config_types.simulator import (
+    IsaacSimBackend,
     MujocoBackend,
     PhysxConfig,
     SimEngineConfig,
@@ -16,6 +19,7 @@ isaacsim = SIMULATOR_REGISTRY.add(
         _recursive_=False,
         config=SimulatorInitConfig(
             name="isaacsim",
+            isaacsim_backend=IsaacSimBackend.ISAACLAB2,
             sim=SimEngineConfig(
                 fps=200,
                 control_decimation=4,
@@ -30,6 +34,14 @@ isaacsim = SIMULATOR_REGISTRY.add(
                 render_interval=4,
             ),
         ),
+    ),
+)
+
+isaacsim3 = SIMULATOR_REGISTRY.add(
+    "isaacsim3",
+    dataclasses.replace(
+        isaacsim,
+        config=dataclasses.replace(isaacsim.config, isaacsim_backend=IsaacSimBackend.ISAACLAB3),
     ),
 )
 

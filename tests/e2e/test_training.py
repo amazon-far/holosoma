@@ -41,6 +41,24 @@ def extract_checkpoint_path(training_output: str) -> str | None:
     return None
 
 
+def assert_fast_sac_optimizer_updates(checkpoint_path: str) -> None:
+    """Read the saved artifact to verify actor and Q optimizers performed finite updates."""
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    for name in ("actor", "q"):
+        states = checkpoint[f"{name}_optimizer_state_dict"]["state"]
+        assert states, f"FastSAC {name} optimizer has no saved parameter state"
+        nonzero_first_moment = False
+        for state in states.values():
+            step = torch.as_tensor(state["step"])
+            assert bool(torch.isfinite(step).all() and (step > 0).all()), (
+                f"FastSAC {name} optimizer has no finite positive update count"
+            )
+            for moment in ("exp_avg", "exp_avg_sq"):
+                assert bool(torch.isfinite(state[moment]).all()), f"FastSAC {name} optimizer saved nonfinite {moment}"
+            nonzero_first_moment |= bool(torch.count_nonzero(state["exp_avg"]))
+        assert nonzero_first_moment, f"FastSAC {name} optimizer saved only zero first moments"
+
+
 def tee(infile, *files):
     """Print `infile` to `files` in a separate thread."""
 
@@ -98,6 +116,9 @@ def assert_training_and_eval_workflow(
         "--training.num-envs=128",
         "--logger.video.enabled=False",
     ]
+    fast_sac = "fast-sac" in workflow_name
+    if fast_sac:
+        train_cmd.append("--algo.config.learning-starts=0")
     train_cmd.extend(extra_config or [])
 
     print("Train command: ", subprocess.list2cmdline(train_cmd))
@@ -112,6 +133,8 @@ def assert_training_and_eval_workflow(
     # Extract checkpoint and run eval
     checkpoint_path = extract_checkpoint_path(train_stdout_content + train_stderr_content)
     assert checkpoint_path is not None, f"Could not extract checkpoint path for {workflow_name}"
+    if fast_sac:
+        assert_fast_sac_optimizer_updates(checkpoint_path)
 
     print(f"Using checkpoint for eval: {checkpoint_path}")
 
@@ -148,8 +171,23 @@ ISAACSIM_ONLY_WORKFLOWS = [
     WORKFLOWS + ISAACSIM_ONLY_WORKFLOWS,
 )
 @pytest.mark.parametrize("multi_gpu", [False])
-def test_training_and_eval_workflow_isaacsim(workflow_name: str, multi_gpu: bool):
-    assert_training_and_eval_workflow(workflow_name, multi_gpu=multi_gpu, extra_config=["simulator:isaacsim"])
+def test_training_and_eval_workflow_isaacsim(workflow_name: str, multi_gpu: bool, isaacsim_simulator: str):
+    assert_training_and_eval_workflow(
+        workflow_name, multi_gpu=multi_gpu, extra_config=[f"simulator:{isaacsim_simulator}"]
+    )
+
+
+@pytest.mark.isaacsim
+def test_newton_training_and_eval_workflow_isaacsim(isaacsim_backend: str, isaacsim_simulator: str):
+    if isaacsim_backend != "isaaclab3":
+        pytest.skip("Newton training requires the explicit Isaac Lab 3 profile")
+    assert_training_and_eval_workflow(
+        "g1-29dof-fast-sac",
+        extra_config=[
+            f"simulator:{isaacsim_simulator}",
+            "--simulator.config.sim.isaaclab3.physics-backend=newton",
+        ],
+    )
 
 
 # Distributed smoke test for the PR gate: one PPO and one FastSAC workflow under torch.distributed.run
@@ -157,5 +195,5 @@ def test_training_and_eval_workflow_isaacsim(workflow_name: str, multi_gpu: bool
 @pytest.mark.isaacsim
 @pytest.mark.multi_gpu
 @pytest.mark.parametrize("workflow_name", ["g1-29dof", "g1-29dof-fast-sac"])
-def test_distributed_training_and_eval_workflow_isaacsim(workflow_name: str):
-    assert_training_and_eval_workflow(workflow_name, multi_gpu=True, extra_config=["simulator:isaacsim"])
+def test_distributed_training_and_eval_workflow_isaacsim(workflow_name: str, isaacsim_simulator: str):
+    assert_training_and_eval_workflow(workflow_name, multi_gpu=True, extra_config=[f"simulator:{isaacsim_simulator}"])

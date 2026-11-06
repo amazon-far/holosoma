@@ -12,6 +12,7 @@ import threading
 import time
 import traceback
 from abc import ABC, abstractmethod
+from functools import partial
 from pathlib import Path
 from threading import Thread
 from typing import TYPE_CHECKING
@@ -102,7 +103,11 @@ class VideoRecorderInterface(ABC):
         """Register video lifecycle hooks with the simulator loop."""
         hooks.add(Phase.EPISODE_START, self.on_episode_start, name="video.on_episode_start")
         hooks.add(Phase.EPISODE_END, self.on_episode_end, name="video.on_episode_end")
-        hooks.add(Phase.FRAME_END, self.capture_frame, name="video.capture_frame")
+        hooks.add(
+            Phase.FRAME_END,
+            partial(self.capture_frame, env_id=self.config.record_env_id),
+            name="video.capture_frame",
+        )
         hooks.add(Phase.CLOSE, self.cleanup, name="video.cleanup")
 
     def _setup_threaded_recording(self) -> None:

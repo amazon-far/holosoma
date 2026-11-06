@@ -11,7 +11,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import isaaclab.sim as sim_utils
-import isaacsim.core.utils.stage as stage_utils
 from isaaclab.sensors import RayCasterCfg, patterns
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.terrains.utils import create_prim_from_mesh
@@ -23,6 +22,7 @@ if TYPE_CHECKING:
     from isaaclab.scene import InteractiveScene
 
     from holosoma.managers.terrain import TerrainManager
+    from holosoma.simulator.isaacsim.backends.base import IsaacLabBackend
 
 TERRAIN_PRIM_PATH = "/World/ground"
 
@@ -52,7 +52,7 @@ def _hide_prim_subtree(stage: Usd.Stage, prim_path: str) -> None:
 
 
 def build_terrain_fixtures(
-    terrain_manager: TerrainManager, scene: InteractiveScene, robot_base_body_name: str
+    terrain_manager: TerrainManager, scene: InteractiveScene, robot_base_body_name: str, *, backend: IsaacLabBackend
 ) -> TerrainFixtures:
     """Author the terrain ground prim + optional height scanner cfg.
 
@@ -82,10 +82,13 @@ def build_terrain_fixtures(
     if terrain_state.mesh_type not in ["fake", None]:
         # Add a height scanner to the torso to detect the height of the terrain mesh
         # TODO: Scene USD files need ground mapping
+        alignment_kwargs: dict[str, str | bool] = (
+            {"ray_alignment": "yaw"} if backend.is_isaaclab3 else {"attach_yaw_only": True}
+        )
         height_scanner_cfg = RayCasterCfg(
-            prim_path=resolve_robot_link_prim_expression(robot_base_body_name),
+            prim_path=resolve_robot_link_prim_expression(robot_base_body_name, backend=backend),
             offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
-            attach_yaw_only=True,
+            **alignment_kwargs,
             # Apply a grid pattern that is smaller than the resolution to only return one height value.
             pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[0.05, 0.05]),
             debug_vis=False,
@@ -115,7 +118,7 @@ def build_terrain_fixtures(
         # Hide the ground plane's visual while keeping its collider; avoids z-fighting a scene
         # USD's own floor. Applied to the whole /World/ground subtree.
         if terrain_state.hide_visual:
-            _hide_prim_subtree(stage_utils.get_current_stage(), TERRAIN_PRIM_PATH)
+            _hide_prim_subtree(backend.stage_utils.get_current_stage(), TERRAIN_PRIM_PATH)
     elif terrain_state.mesh_type in ["trimesh", "load_obj"]:
         terrain = terrain_state.terrain
         visual_material = sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 0.0))

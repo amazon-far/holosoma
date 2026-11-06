@@ -158,7 +158,9 @@ class ViewportCameraController:
         # set origin type to asset_root
         self.cfg.origin_type = "asset_root"
         # update the camera origins
-        self.viewer_origin = self._env.scene[self.cfg.asset_name].data.root_pos_w[self.cfg.env_index]
+        self.viewer_origin = self._env.backend.tensor(self._env.scene[self.cfg.asset_name].data.root_pos_w)[
+            self.cfg.env_index
+        ]
         # update the camera view
         self.update_view_location()
 
@@ -207,7 +209,7 @@ class ViewportCameraController:
         # Get the camera's transform
         from holosoma.simulator.isaacsim.prim_utils import get_current_stage
 
-        stage = get_current_stage()
+        stage = get_current_stage(self._env.backend)
         camera_prim = stage.GetPrimAtPath(camera_path)
 
         if not camera_prim.IsValid():

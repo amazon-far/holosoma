@@ -1393,7 +1393,7 @@ def main() -> int:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenario", required=True, choices=sorted(SCENARIOS))
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim3"])
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
@@ -1434,7 +1434,7 @@ def main() -> int:
     config = dataclasses.replace(
         config,
         device=device,
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        training=dataclasses.replace(config.training, num_envs=args.num_envs, headless=headless),
     )
 
     # Apply the scenario's link_physics onto the one-link robot's asset, so the robot link carries the

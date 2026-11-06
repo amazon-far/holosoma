@@ -1,7 +1,7 @@
 """Behavioral physics tests on the IsaacSim backend via the behavior_assert.py harness.
 
-Each test runs one behavioral scenario in its own subprocess at num_envs=4 and asserts the
-harness exited 0 — the harness asserts a physical OUTCOME in EVERY env. Marked ``isaacsim`` so the
+Each test runs one behavioral scenario in its own subprocess at num_envs=4 and checks its
+completion file — the harness asserts a physical OUTCOME in EVERY env. Marked ``isaacsim`` so the
 IsaacSim CI job (``-m isaacsim``) collects it; importorskip
 ("isaaclab")/CUDA-gated for direct/unfiltered runs.
 """
@@ -18,8 +18,6 @@ pytest.importorskip("isaaclab")
 torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("IsaacSim requires a CUDA device", allow_module_level=True)
-
-from tests.simulators._run_harness import run_harness  # noqa: E402
 
 _HARNESS = Path(__file__).resolve().parents[1] / "behavior_assert.py"
 
@@ -58,15 +56,17 @@ _SCENARIOS = [
 
 
 @pytest.mark.parametrize("scenario", _SCENARIOS)
-def test_behavior_isaacsim(scenario):
-    run_harness(
+def test_behavior_isaacsim(scenario, tmp_path, run_isaacsim_harness):
+    result_file = tmp_path / f"behavior_{scenario}.txt"
+    run_isaacsim_harness(
         _HARNESS,
         "--scenario",
         scenario,
-        "--simulator",
-        "isaacsim",
         "--num-envs",
         "4",
+        "--result-file",
+        str(result_file),
         label=f"isaacsim/{scenario} (num_envs=4)",
         timeout=900,
+        result_file=result_file,
     )

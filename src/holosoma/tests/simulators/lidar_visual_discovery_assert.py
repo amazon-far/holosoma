@@ -52,15 +52,15 @@ def _check_exact_downward_return(sim, name: str, expected_ranges) -> list[str]:
 def _check_native_target_contract(sim) -> list[str]:
     """Supplement the return oracles with exact public-config target selection checks."""
     failures = []
-    visual_path = "/World/envs/env_.*/visual_collision_target/Visuals/visible"
-    proxy_path = "/World/envs/env_.*/visual_collision_target/Collisions/proxy"
+    visual_path = f"{sim.backend.env_regex_ns}/visual_collision_target/Visuals/visible"
+    proxy_path = f"{sim.backend.env_regex_ns}/visual_collision_target/Collisions/proxy"
 
     default_targets = {target.prim_expr for target in sim.scene.sensors["visual_target"].cfg.mesh_prim_paths}
     if visual_path not in default_targets:
         failures.append("visual_target: default discovery omitted the visible scene-object surface")
     if proxy_path in default_targets:
         failures.append("visual_target: default discovery included the collision-only proxy")
-    if not any(path.startswith("/World/envs/env_.*/Robot/") for path in default_targets):
+    if not any(path.startswith(f"{sim.backend.env_regex_ns}/Robot/") for path in default_targets):
         failures.append("visual_target: default discovery omitted robot visual geometry")
     if not any(path == "/World/ground" or path.startswith("/World/ground/") for path in default_targets):
         failures.append("visual_target: default discovery omitted ground visual geometry")
@@ -68,7 +68,8 @@ def _check_native_target_contract(sim) -> list[str]:
     explicit_targets = {
         target.prim_expr for target in sim.scene.sensors["explicit_collision_target"].cfg.mesh_prim_paths
     }
-    if explicit_targets != {proxy_path}:
+    # Explicit caller-authored expressions retain their original spelling.
+    if explicit_targets != {"/World/envs/env_.*/visual_collision_target/Collisions/proxy"}:
         failures.append(
             f"explicit_collision_target: caller-provided mesh path was changed (actual={sorted(explicit_targets)})"
         )
@@ -77,6 +78,7 @@ def _check_native_target_contract(sim) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--simulator", choices=["isaacsim", "isaacsim3"], default="isaacsim")
     parser.add_argument("--num-envs", type=int, default=3)
     parser.add_argument("--result-file", default=None)
     args = parser.parse_args()
@@ -96,7 +98,7 @@ def main() -> int:
         "robot_visual": _lidar_presets.isaacsim_robot_visual_lidar,
     }
     config = build_run_sim_config(
-        "isaacsim",
+        args.simulator,
         "camera-target",
         "g1-29dof",
         "terrain_locomotion_plane",

@@ -120,7 +120,7 @@ def _check_pinhole_fallback(pinhole_img, configured_img, label: str) -> list[str
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim3"])
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
@@ -213,7 +213,7 @@ def main() -> int:
             _camera_presets._PANEL_HALF_SIZE,
             f"{args.simulator}/pinhole/env{env_id}",
         )
-        if args.simulator == "isaacsim":
+        if args.simulator in ("isaacsim", "isaacsim3"):
             fails += _check_fisheye_geometry(
                 pinhole_img,
                 fisheye_img,
@@ -233,7 +233,7 @@ def main() -> int:
                 f"{args.simulator}/fallback/env{env_id}",
             )
 
-    if args.simulator == "isaacsim":
+    if args.simulator in ("isaacsim", "isaacsim3"):
         fails += _check_isaacsim_authored_calibration(sim, fisheye_config.isaacsim)
 
     if args.result_file:

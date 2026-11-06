@@ -579,6 +579,24 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
     saved_warp = saved_simulator["config"].pop("mujoco_warp")
     loaded_simulator = copy.deepcopy(loaded["simulator"])
     loaded_simulator["config"]["sim"].pop("mujoco")
+    # New backend fields must default to the previous API when loading an old
+    # checkpoint, including in a Lab 3 environment.
+    assert loaded_simulator["config"].pop("isaacsim_backend") == "isaaclab2"
+    assert loaded_simulator["config"]["sim"].pop("isaaclab3") == {
+        "physics_backend": "physx",
+        "renderer": "isaac_rtx",
+        "newton": {
+            "use_cuda_graph": True,
+            "nconmax": 128,
+            "njmax": None,
+            "solver_iterations": None,
+            "default_shape_margin": 0.01,
+        },
+        "use_fabric": True,
+        "create_stage_in_memory": False,
+        "use_newton_actuators": True,
+        "contact_force_mode": "normal",
+    }
     assert loaded_simulator == saved_simulator
     assert loaded_cfg.simulator.config.sim.mujoco.warp.nconmax_per_env == saved_warp["nconmax_per_env"]
     assert loaded_cfg.simulator.config.sim.mujoco.warp.njmax_per_env == saved_warp["njmax_per_env"]

@@ -51,9 +51,9 @@ schema handling. This is a temporary work-around until IsaacLab has these capabi
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
-import isaacsim.core.utils.prims as prim_utils
-import isaacsim.core.utils.stage as stage_utils
+import isaaclab.sim as sim_utils
 import omni.kit.commands
 import omni.log
 from isaaclab.sim import schemas
@@ -66,6 +66,9 @@ from holosoma.simulator.isaacsim.prim_utils import set_instanceable
 
 import carb
 
+if TYPE_CHECKING:
+    from holosoma.simulator.isaacsim.backends.base import IsaacLabBackend
+
 
 def create_prim(
     target_path: str,
@@ -74,6 +77,8 @@ def create_prim(
     translation: Sequence[float] | None = None,
     orientation: Sequence[float] | None = None,
     scale: Sequence[float] | None = None,
+    *,
+    backend: IsaacLabBackend,
 ) -> Usd.Prim | None:
     """Create a prim at the target path by referencing a USD file.
 
@@ -110,7 +115,7 @@ def create_prim(
     unspecified component keeps the referenced asset's value.
     """
     # Check if prim exists
-    stage = stage_utils.get_current_stage()
+    stage = backend.stage_utils.get_current_stage()
     prim = stage.GetPrimAtPath(target_path)
     if not prim.IsValid():
         prim = stage.DefinePrim(target_path, "Xform")
@@ -139,8 +144,8 @@ def create_prim(
                 Gf.Vec3d(float(translation[0]), float(translation[1]), float(translation[2]))
             )
         if orientation is not None:
-            # orientation is (w, x, y, z); GfQuatd takes (real, imaginary-vec).
-            w, x, y, z = (float(c) for c in orientation)
+            # USD Gf quaternions stay scalar-first while Lab 3 spawners use XYZW.
+            w, x, y, z = (float(c) for c in backend.config_quat_from_native(orientation))
             xformable.AddOrientOp(precision=double).Set(Gf.Quatd(w, Gf.Vec3d(x, y, z)))
         if scale is not None:
             xformable.AddScaleOp(precision=double).Set(Gf.Vec3d(float(scale[0]), float(scale[1]), float(scale[2])))
@@ -294,6 +299,8 @@ def spawn_from_usd(
     cfg: from_files_cfg.CustomUsdFileCfg,
     translation: tuple[float, float, float] | None = None,
     orientation: tuple[float, float, float, float] | None = None,
+    *,
+    backend: IsaacLabBackend,
 ) -> Usd.Prim:
     """Spawn an asset from a USD file and override settings with the given config.
 
@@ -333,7 +340,9 @@ def spawn_from_usd(
     FileNotFoundError
         If the USD file does not exist at the given path.
     """
-    return _spawn_from_usd_file(prim_path, cfg.usd_path, cfg, cfg.source_path, translation, orientation)
+    return _spawn_from_usd_file(
+        prim_path, cfg.usd_path, cfg, cfg.source_path, translation, orientation, backend=backend
+    )
 
 
 def _spawn_from_usd_file(
@@ -343,6 +352,8 @@ def _spawn_from_usd_file(
     source_path: str | None = None,
     translation: tuple[float, float, float] | None = None,
     orientation: tuple[float, float, float, float] | None = None,
+    *,
+    backend: IsaacLabBackend,
 ) -> Usd.Prim:
     """Spawn an asset from a USD file and override settings with the given config.
 
@@ -379,11 +390,11 @@ def _spawn_from_usd_file(
         If the USD file does not exist at the given path.
     """
     # check file path exists
-    stage: Usd.Stage = stage_utils.get_current_stage()
+    stage: Usd.Stage = backend.stage_utils.get_current_stage()
     if not stage.ResolveIdentifierToEditTarget(usd_path):
         raise FileNotFoundError(f"USD file not found at path: '{usd_path}'.")
     # spawn asset if it doesn't exist.
-    if not prim_utils.is_prim_path_valid(prim_path):
+    if not stage.GetPrimAtPath(prim_path).IsValid():
         # add prim as reference to stage, replaces built-in create_prim to support source_path
         prim = create_prim(
             prim_path,
@@ -392,10 +403,11 @@ def _spawn_from_usd_file(
             translation=translation,
             orientation=orientation,
             scale=cfg.scale,
+            backend=backend,
         )
     else:
         omni.log.warn(f"A prim already exists at prim path: '{prim_path}'.")
-        prim = prim_utils.get_prim_at_path(prim_path)
+        prim = stage.GetPrimAtPath(prim_path)
 
     # modify variants
     if hasattr(cfg, "variants") and cfg.variants is not None:
@@ -469,4 +481,4 @@ def _spawn_from_usd_file(
         _assert_asset_composed(stage, prim_path, usd_path, source_path)
 
     # return the prim
-    return prim_utils.get_prim_at_path(prim_path)
+    return stage.GetPrimAtPath(prim_path)

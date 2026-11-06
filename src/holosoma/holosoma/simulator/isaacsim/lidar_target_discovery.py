@@ -16,6 +16,7 @@ def assemble_default_mesh_prim_paths(
     robot_mesh_prim_paths: Callable[[str | None], list[str]],
     actor_names: Iterable[str],
     discover_mesh_prim_paths: Callable[[str, str], Iterable[str]],
+    env_regex_ns: str = "/World/envs/env_.*",
 ) -> list[str]:
     """Combine visual robot, ground, and scene-object targets after applying the body filter."""
     exclude_robot = excluded_target is not None and excluded_target[0] == "robot"
@@ -27,7 +28,7 @@ def assemble_default_mesh_prim_paths(
     candidates.extend(
         (
             f"/World/envs/env_0/{actor_name}",
-            f"/World/envs/env_.*/{actor_name}",
+            f"{env_regex_ns}/{actor_name}",
         )
         for actor_name in actor_names
         if excluded_target != ("actor", actor_name)
