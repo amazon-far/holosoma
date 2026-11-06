@@ -172,25 +172,7 @@ class PenaltyCurriculum(CurriculumTermBase):
         self.env.reward_penalty_scale = self.current_scale
 
     def reset(self, env_ids: torch.Tensor | Sequence[int] | None) -> None:
-        """Update penalty scale based on average episode length."""
-        if not self.enabled or not hasattr(self.env, "reward_manager"):
-            return
-
-        if not self.penalty_reward_names or not self.original_weights:
-            return
-
-        average_length = float(self.env.average_episode_length)
-
-        # Update current scale based on episode length
-        if average_length < self.level_down_threshold:
-            self.current_scale *= 1.0 - self.degree
-        elif average_length > self.level_up_threshold:
-            self.current_scale *= 1.0 + self.degree
-
-        # Clamp scale
-        self.current_scale = float(np.clip(self.current_scale, self.min_scale, self.max_scale))
-
-        self._apply_scale()
+        """No per-reset work: the scale updates once per control frame in :meth:`step`."""
 
     def _apply_weights(self) -> None:
         """Set each tagged penalty weight to ``original_weight * current_scale``."""
@@ -229,18 +211,25 @@ class PenaltyCurriculum(CurriculumTermBase):
         self._apply_scale()
 
     def step(self) -> None:
-        """Clamp penalty scale within bounds each step."""
+        """Update penalty scale once per control frame based on average episode length."""
         if not self.enabled or not hasattr(self.env, "reward_manager"):
             return
 
         if not self.penalty_reward_names or not self.original_weights:
             return
 
-        # Clamp current_scale
+        average_length = float(self.env.average_episode_length)
+
+        # Update current scale based on episode length
+        if average_length < self.level_down_threshold:
+            self.current_scale *= 1.0 - self.degree
+        elif average_length > self.level_up_threshold:
+            self.current_scale *= 1.0 + self.degree
+
+        # Clamp scale
         self.current_scale = float(np.clip(self.current_scale, self.min_scale, self.max_scale))
 
-        # Re-apply clamped scale to weights
-        self._apply_weights()
+        self._apply_scale()
 
 
 # ================================================================================================

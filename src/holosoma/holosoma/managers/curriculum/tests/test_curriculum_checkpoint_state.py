@@ -125,8 +125,8 @@ def test_checkpoint_round_trip_restores_all_terms() -> None:
     _assert_scale_applied(resumed, 0.8)
     assert resumed.average_episode_length == pytest.approx(900.0)
 
-    # The first reset after a restore steps the curriculum from the restored scale, not from initial_scale.
-    resumed.penalty.reset(None)
+    # The first step after a restore moves the curriculum from the restored scale, not from initial_scale.
+    resumed.penalty.step()
     _assert_scale_applied(resumed, 0.8 * 1.00025)
 
 
