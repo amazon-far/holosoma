@@ -1,14 +1,14 @@
 """Behavioral physics tests on the IsaacSim backend via the behavior_assert.py harness.
 
-Each test runs one behavioral scenario in its own subprocess at num_envs=4 and asserts the
-harness exited 0 — the harness asserts a physical OUTCOME in EVERY env. Marked ``isaacsim`` so the
-IsaacSim CI job (``-m isaacsim``) collects it; importorskip
+Each test asserts one behavioral scenario at num_envs=4; all selected scenarios run in one shared
+subprocess and Kit app, each on a fresh stage. The harness asserts a physical OUTCOME in EVERY env.
+Marked ``isaacsim`` so the IsaacSim CI job (``-m isaacsim``) collects it; importorskip
 ("isaaclab")/CUDA-gated for direct/unfiltered runs.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+import sys
 
 import pytest
 
@@ -19,9 +19,7 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("IsaacSim requires a CUDA device", allow_module_level=True)
 
-from tests.simulators._run_harness import run_harness  # noqa: E402
-
-_HARNESS = Path(__file__).resolve().parents[1] / "behavior_assert.py"
+from tests.simulators._run_harness import run_batched  # noqa: E402
 
 # The full behavioral catalog runs on IsaacSim at num_envs=4 — every scenario (including the
 # multi-env ones) is supported here, so there are no static skips to mark. USD-backed; every
@@ -57,16 +55,15 @@ _SCENARIOS = [
 ]
 
 
+def _cell(item):
+    """Batch cell for a behavior test item: one subprocess runs every selected scenario."""
+    if getattr(item, "module", None) is not sys.modules[__name__] or item.originalname != "test_behavior_isaacsim":
+        return None
+    scenario = item.callspec.params["scenario"]
+    args = ["--scenario", scenario, "--simulator", "isaacsim", "--num-envs", "4"]
+    return "behavior/isaacsim", scenario, "behavior_assert", args
+
+
 @pytest.mark.parametrize("scenario", _SCENARIOS)
-def test_behavior_isaacsim(scenario):
-    run_harness(
-        _HARNESS,
-        "--scenario",
-        scenario,
-        "--simulator",
-        "isaacsim",
-        "--num-envs",
-        "4",
-        label=f"isaacsim/{scenario} (num_envs=4)",
-        timeout=900,
-    )
+def test_behavior_isaacsim(scenario, request):
+    run_batched(request, _cell, label=f"isaacsim/{scenario} (num_envs=4)", timeout=1800)
