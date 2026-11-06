@@ -33,6 +33,20 @@ class IsaacLabBackend(ABC):
     def mutable_ray_caster_class(self) -> type[Any]:
         """Return this API family's ray caster with fixed-shape scan updates."""
 
+    def world_lidar_mount(self, name: str, position: Any, orientation: Any) -> tuple[str, Any]:
+        """Author a fixed sensor frame under each environment."""
+        import isaaclab.sim as sim_utils
+        from isaaclab.sensors import MultiMeshRayCasterCfg
+
+        path = f"{self.env_regex_ns}/holosoma_lidar_{name}"
+        sim_utils.create_prim(
+            path.replace(self.env_regex_ns, "/World/envs/env_0", 1),
+            prim_type="Xform",
+            translation=tuple(position),
+            orientation=self.config_quat_to_native(orientation),
+        )
+        return path, MultiMeshRayCasterCfg.OffsetCfg()
+
     @property
     def material_channels(self) -> tuple[str, ...]:
         return ("static_friction", "dynamic_friction", "restitution")
