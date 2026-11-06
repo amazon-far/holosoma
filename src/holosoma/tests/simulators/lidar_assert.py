@@ -3,7 +3,7 @@
 """Cross-backend live LiDAR assertion harness.
 
 The harness checks the public output contract against a flat terrain and a moving cube. This
-exercises native ray queries in MuJoCo, the shared terrain caster in Isaac Gym, and mutable
+exercises native ray queries in MuJoCo, the shared terrain caster, and mutable
 MultiMeshRayCaster directions in Isaac Sim.
 """
 
@@ -68,63 +68,6 @@ def _quat_mul_xyzw(left, right):
         ),
         dim=-1,
     )
-
-
-def _check_robot_link_cloud(sim, name: str, sensor_positions, sensor_orientations) -> list[str]:
-    """Compare the mounted scan with the exact world-ground intersection."""
-    import torch
-
-    local_direction = torch.tensor([0.0, 0.0, -1.0], dtype=torch.float32, device=sensor_positions.device)
-    local_directions = local_direction.expand(sim.num_envs, -1)
-    world_directions = _quat_apply_xyzw(sensor_orientations, local_directions)
-    if torch.any(world_directions[:, 2] >= 0.0):
-        return [f"{name}: mounted ray does not point toward the world ground"]
-    expected_ranges = (sensor_positions[:, 2] / -world_directions[:, 2]).unsqueeze(1)
-    expected_points = expected_ranges.unsqueeze(-1) * local_direction.view(1, 1, 3)
-    ranges = sim.get_lidar_data(name, "ranges")
-    points = sim.get_lidar_data(name, "points")
-    failures = []
-    if not torch.allclose(ranges, expected_ranges, atol=2e-3, rtol=2e-3):
-        failures.append(
-            f"{name}: ranges do not match the current mounted-link pose and orientation "
-            f"(actual={ranges[:, 0].tolist()}, expected={expected_ranges[:, 0].tolist()})"
-        )
-    if not torch.allclose(points, expected_points, atol=2e-3, rtol=2e-3):
-        failures.append(f"{name}: sensor-frame XYZ does not match the exact ground intersection")
-    return failures
-
-
-def _isaacgym_robot_link_sensor_pose(sim, manager, name: str, device):
-    """Resolve one robot-link test sensor's current world pose through Isaac Gym's body cache."""
-    import torch
-
-    failures = []
-    record = manager.get_lidar(name)
-    cached_body_index = record.backend_cache["isaacgym_body_index"]
-    body_index = sim._body_list.index(record.config.mount.target)
-    if cached_body_index != body_index:
-        failures.append(
-            f"{name}: cached mount-body index does not identify the configured Isaac Gym link "
-            f"(cached={cached_body_index}, expected={body_index})"
-        )
-    mount_offset = torch.tensor(
-        record.config.mount.position,
-        dtype=sim.rigid_body_pos_w.dtype,
-        device=device,
-    ).expand(sim.num_envs, -1)
-    parent_orientations = sim.rigid_body_quat_w[:, body_index]
-    sensor_positions = sim.rigid_body_pos_w[:, body_index] + _quat_apply_xyzw(
-        parent_orientations,
-        mount_offset,
-    )
-    mount_orientation_wxyz = torch.tensor(
-        record.config.mount.orientation,
-        dtype=parent_orientations.dtype,
-        device=device,
-    )
-    mount_orientation_xyzw = mount_orientation_wxyz[[1, 2, 3, 0]].expand(sim.num_envs, -1)
-    sensor_orientations = _quat_mul_xyzw(parent_orientations, mount_orientation_xyzw)
-    return sensor_positions, sensor_orientations, failures
 
 
 def _check_cloud(sim, name: str, expected_rays: int, sensor_heights, plane_normal) -> list[str]:
@@ -718,7 +661,7 @@ def _check_cyclic_target_return(sim, direction, *, expected_range: float, snapsh
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacgym", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--result-file", default=None)
     parser.add_argument(
@@ -735,9 +678,8 @@ def main() -> int:
     if args.simulator in {"mujoco", "mjwarp"}:
         sensors["downward_filtered"] = _lidar_presets.downward_filtered_lidar
         sensors["tracked_target_group_one"] = _lidar_presets.tracked_target_group_one_lidar
-    if args.simulator != "isaacgym":
-        sensors["tracked_target"] = _lidar_presets.tracked_target_lidar
-        sensors["tracked_target_actor_filtered"] = _lidar_presets.tracked_target_actor_filtered_lidar
+    sensors["tracked_target"] = _lidar_presets.tracked_target_lidar
+    sensors["tracked_target_actor_filtered"] = _lidar_presets.tracked_target_actor_filtered_lidar
     config = build_run_sim_config(
         sim_arg,
         "camera-target",
@@ -800,18 +742,14 @@ def main() -> int:
         if args.simulator == "isaacsim":
             failures += _check_isaacsim_prim_resolution_helpers()
             failures += _check_isaacsim_native_configs(sim, manager)
-        target_record = None
-        first_target_direction = None
-        first_target_range = None
-        if args.simulator != "isaacgym":
-            target_record = manager.get_lidar("cyclic_target")
-            first_target_direction = _expected_cyclic_directions(sim.time(), 1, device)[0]
-            first_target_range = _place_cyclic_target(
-                sim,
-                env_ids,
-                first_target_direction,
-                distance=2.0,
-            )
+        manager.get_lidar("cyclic_target")  # registration assertion: raises if the preset omitted it
+        first_target_direction = _expected_cyclic_directions(sim.time(), 1, device)[0]
+        first_target_range = _place_cyclic_target(
+            sim,
+            env_ids,
+            first_target_direction,
+            distance=2.0,
+        )
         sim.hooks.emit(Phase.FRAME_END)
         figure_summaries = []
         plane_normal = torch.tensor(_lidar_presets.PLANE_NORMAL_SENSOR, dtype=torch.float32, device=device)
@@ -821,24 +759,8 @@ def main() -> int:
             device=device,
         )
         sensor_heights = actor_states[:, 2] + _lidar_presets.ACTOR_MOUNT_HEIGHT
-        if args.simulator == "isaacgym":
-            robot_link_pose = _isaacgym_robot_link_sensor_pose(
-                sim,
-                manager,
-                "robot_link",
-                device,
-            )
-            robot_filtered_pose = _isaacgym_robot_link_sensor_pose(
-                sim,
-                manager,
-                "robot_filtered",
-                device=device,
-            )
-            failures.extend(robot_link_pose[2])
-            failures.extend(robot_filtered_pose[2])
-        else:
-            robot_link_sensor_heights = sim.robot_root_states[:, 2] + _lidar_presets.ROBOT_LINK_MOUNT_HEIGHT
-            robot_filtered_sensor_heights = sim.robot_root_states[:, 2] + _lidar_presets.ROBOT_FILTERED_MOUNT_HEIGHT
+        robot_link_sensor_heights = sim.robot_root_states[:, 2] + _lidar_presets.ROBOT_LINK_MOUNT_HEIGHT
+        robot_filtered_sensor_heights = sim.robot_root_states[:, 2] + _lidar_presets.ROBOT_FILTERED_MOUNT_HEIGHT
         static_directions = torch.tensor(
             _lidar_presets.DOWNWARD_DIRECTIONS,
             dtype=torch.float32,
@@ -868,29 +790,20 @@ def main() -> int:
                 )
             )
         failures += _check_static_cloud(sim, sensor_heights, plane_normal, static_directions)
-        if args.simulator == "isaacgym":
-            failures += _check_robot_link_cloud(sim, "robot_link", robot_link_pose[0], robot_link_pose[1])
-            failures += _check_robot_link_cloud(
-                sim,
-                "robot_filtered",
-                robot_filtered_pose[0],
-                robot_filtered_pose[1],
-            )
-        else:
-            failures += _check_known_plane_cloud(
-                sim,
-                "robot_link",
-                robot_link_sensor_heights,
-                torch.tensor([0.0, 0.0, 1.0], dtype=torch.float32, device=device),
-                torch.tensor([[0.0, 0.0, -1.0]], dtype=torch.float32, device=device),
-            )
-            failures += _check_known_plane_cloud(
-                sim,
-                "robot_filtered",
-                robot_filtered_sensor_heights,
-                torch.tensor([0.0, 0.0, 1.0], dtype=torch.float32, device=device),
-                torch.tensor([[0.0, 0.0, -1.0]], dtype=torch.float32, device=device),
-            )
+        failures += _check_known_plane_cloud(
+            sim,
+            "robot_link",
+            robot_link_sensor_heights,
+            torch.tensor([0.0, 0.0, 1.0], dtype=torch.float32, device=device),
+            torch.tensor([[0.0, 0.0, -1.0]], dtype=torch.float32, device=device),
+        )
+        failures += _check_known_plane_cloud(
+            sim,
+            "robot_filtered",
+            robot_filtered_sensor_heights,
+            torch.tensor([0.0, 0.0, 1.0], dtype=torch.float32, device=device),
+            torch.tensor([[0.0, 0.0, -1.0]], dtype=torch.float32, device=device),
+        )
         failures += _check_known_plane_cloud(
             sim,
             "cyclic",
@@ -898,18 +811,16 @@ def main() -> int:
             cyclic_plane_normal,
             first_directions,
         )
-        if first_target_direction is not None and first_target_range is not None:
-            failures += _check_cyclic_target_return(
-                sim,
-                first_target_direction,
-                expected_range=first_target_range,
-                snapshot="initial",
-            )
+        failures += _check_cyclic_target_return(
+            sim,
+            first_target_direction,
+            expected_range=first_target_range,
+            snapshot="initial",
+        )
         if args.simulator in {"mujoco", "mjwarp"}:
             failures += _check_mujoco_geometry_ids(sim, sensor_heights, plane_normal, static_directions)
         physics_per_control = config.simulator.config.sim.control_decimation_steps
-        if args.simulator != "isaacgym":
-            failures += _check_tracked_target(sim, env_ids, actor_states, physics_per_control)
+        failures += _check_tracked_target(sim, env_ids, actor_states, physics_per_control)
         failures += _check_static_range_clipping(
             sim,
             "downward_max",
@@ -939,14 +850,13 @@ def main() -> int:
         captured_next_cyclic_window = False
         for _ in range(cyclic_record.effective_decimation):
             step(sim, physics_per_control)
-            if target_record is not None:
-                second_target_direction = _expected_cyclic_directions(sim.time(), 1, device)[0]
-                second_target_range = _place_cyclic_target(
-                    sim,
-                    env_ids,
-                    second_target_direction,
-                    distance=2.0,
-                )
+            second_target_direction = _expected_cyclic_directions(sim.time(), 1, device)[0]
+            second_target_range = _place_cyclic_target(
+                sim,
+                env_ids,
+                second_target_direction,
+                distance=2.0,
+            )
             sim.hooks.emit(Phase.FRAME_END)
             if cyclic_record.name in manager.last_lidar_due:
                 captured_next_cyclic_window = True

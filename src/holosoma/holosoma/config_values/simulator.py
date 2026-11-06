@@ -9,30 +9,6 @@ from holosoma.utils.config_registry import ConfigRegistry
 
 SIMULATOR_REGISTRY = ConfigRegistry(SimulatorConfig, group="holosoma.config.simulator")
 
-isaacgym = SIMULATOR_REGISTRY.add(
-    "isaacgym",
-    SimulatorConfig(
-        _target_="holosoma.simulator.isaacgym.isaacgym.IsaacGym",
-        _recursive_=False,
-        config=SimulatorInitConfig(
-            name="isaacgym",
-            sim=SimEngineConfig(
-                fps=200,
-                control_decimation=4,
-                substeps=1,
-                physx=PhysxConfig(
-                    solver_type=1,
-                    num_position_iterations=8,
-                    num_velocity_iterations=4,
-                    bounce_threshold_velocity=0.5,
-                ),
-            ),
-            contact_sensor_history_length=3,
-        ),
-    ),
-)
-
-
 isaacsim = SIMULATOR_REGISTRY.add(
     "isaacsim",
     SimulatorConfig(
@@ -53,7 +29,6 @@ isaacsim = SIMULATOR_REGISTRY.add(
                 render_mode="human",
                 render_interval=4,
             ),
-            contact_sensor_history_length=3,
         ),
     ),
 )

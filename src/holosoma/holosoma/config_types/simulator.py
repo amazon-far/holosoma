@@ -6,8 +6,10 @@ from typing import Any, Literal
 
 from pydantic import field_validator, model_validator
 from pydantic.dataclasses import dataclass
+from pydantic_core import ArgsKwargs
 
 from holosoma.config_types.frequency import DecimationLike, resolve_decimation, validate_decimation_like
+from holosoma.config_types.mujoco import MujocoConfig
 from holosoma.config_types.viewer import ViewerConfig
 
 
@@ -22,40 +24,6 @@ class MujocoBackend(str, Enum):
 
     WARP = "warp"
     """GPU-accelerated multi-environment backend."""
-
-
-@dataclass(frozen=True)
-class MujocoWarpConfig:
-    """Configuration for MuJoCo Warp backend memory allocation.
-
-    Controls GPU memory allocation for batched parallel simulation.
-    Increase these values if you encounter overflow warnings during training.
-    """
-
-    nconmax_per_env: int = 96
-    """Maximum contacts per environment (default: 96).
-
-    Increase for:
-    - Complex terrains with many contact points
-    - Robots with numerous collision geometries
-    - Multi-contact scenarios (manipulation, climbing)
-
-    Memory scales as: num_envs x nconmax_per_env
-    """
-
-    njmax_per_env: int | None = None
-    """Maximum constraints per environment (default: auto-calculated).
-
-    If None (default), automatically calculated as: max(nconmax * 6, nv * 4)
-    where nv is the model's velocity dimension.
-
-    Constraints include:
-    - Contact constraints (friction cones: ~6 per contact)
-    - Joint limits
-    - Equality constraints
-
-    Only override if you know you need more constraint capacity.
-    """
 
 
 @dataclass(frozen=True)
@@ -177,6 +145,9 @@ class SimEngineConfig:
     objects) is not supported; that would be a per-actor flag (e.g. IsaacLab's per-prim
     ``kinematic_enabled``), not this global one."""
 
+    mujoco: MujocoConfig = field(default_factory=MujocoConfig)
+    """Native MuJoCo settings. None preserves existing behavior; other simulators ignore this block."""
+
     @model_validator(mode="after")
     def _validate_rates(self) -> SimEngineConfig:
         """Validate (do NOT mutate) the rate fields: both must resolve to a valid step count against
@@ -265,7 +236,11 @@ class BridgeConfig:
     transport_decimation: DecimationLike = 1
     """SDK transport cadence. ``1`` exchanges data every physics step; an integer exchanges it every
     Nth step. Frequency strings such as ``"50Hz"`` are resolved against the physics rate. This
-    setting does not change the torque-control cadence."""
+    setting does not change the torque-control cadence.
+
+    The default exchanges on every physics step (200 Hz at ``sim.fps 200``). Raising it is the
+    bridge's largest performance setting, traded against state freshness. See
+    ``holosoma/bridge/README.md``."""
 
     # ROS settings
     use_ros: bool = False
@@ -276,7 +251,11 @@ class BridgeConfig:
 
     On by default so the sim feeds base odometry through the Unitree SDK bridge
     (so a downstream telemetry read_odom_state -> /telemetry/odom is identical to hardware). Only
-    SDKs with a base-state channel act on it; others (booster) treat publish_odom as a no-op."""
+    SDKs with a base-state channel act on it; others (booster) treat publish_odom as a no-op.
+
+    Set it False when nothing reads rt/odommodestate. The DDS write is the cheap part; the
+    simulator state read and world->body conversion in front of it are the cost. See
+    ``holosoma/bridge/README.md``."""
 
     dds_config: str | None = None
     """Complete inline CycloneDDS XML for unitree_mp on SDK domain 0 only.
@@ -304,7 +283,7 @@ class SimulatorInitConfig:
     """Top-level simulator initialisation configuration."""
 
     name: str
-    """Name of the simulator backend (e.g. ``isaacgym``)."""
+    """Name of the simulator backend (e.g. ``isaacsim``)."""
 
     sim: SimEngineConfig
     """Simulation engine configuration settings."""
@@ -334,9 +313,6 @@ class SimulatorInitConfig:
     reset_manager: ResetManagerConfig = field(default_factory=ResetManagerConfig)
     """Reset event manager configuration."""
 
-    contact_sensor_history_length: int = 3
-    """Number of frames of contact data retained for sensors."""
-
     robot_mjcf_filter: MujocoXMLFilterCfg = field(default_factory=MujocoXMLFilterCfg)
     """MuJoCo-specific XML filtering configuration for robot MJCF files."""
 
@@ -351,7 +327,7 @@ class SimulatorInitConfig:
     - 'warp': GPU-accelerated multi-environment with mujoco_warp
 
     This setting only applies when using the MuJoCo simulator (name='mujoco').
-    For other simulators (isaacgym, isaacsim), this field is ignored.
+    For other simulators (isaacsim), this field is ignored.
 
     Command line usage:
         --simulator.config.mujoco-backend=warp
@@ -362,23 +338,23 @@ class SimulatorInitConfig:
         simulator:mjwarp   (uses warp backend)
     """
 
-    mujoco_warp: MujocoWarpConfig = field(default_factory=MujocoWarpConfig)
-    """MuJoCo Warp backend memory allocation configuration.
-
-    Controls GPU memory allocation for the Warp backend. Only used when
-    mujoco_backend='warp'. Allows tuning contact and constraint capacity
-    for different scenarios.
-
-    Command line usage:
-        --simulator.config.mujoco-warp.nconmax-per-env=128
-        --simulator.config.mujoco-warp.njmax-per-env=1024
-    """
-
     bridge: BridgeConfig = field(default_factory=BridgeConfig)
     """Robot SDK bridge configuration."""
 
     virtual_gantry: VirtualGantryCfg = field(default_factory=VirtualGantryCfg)
     """Virtual gantry system configuration."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_legacy_warp(cls, value: Any) -> Any:
+        """Explain the relocated field rather than ignoring old YAML/constructor input."""
+        data = value.kwargs or {} if isinstance(value, ArgsKwargs) else value
+        if isinstance(data, dict) and "mujoco_warp" in data:
+            raise ValueError(
+                "simulator.config.mujoco_warp moved to simulator.config.sim.mujoco.warp. "
+                "Move its fields into that block; capacity field names and defaults are unchanged."
+            )
+        return value
 
 
 @dataclass(frozen=True)

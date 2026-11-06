@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, Union
+from typing import Annotated, Literal
 
 from pydantic import Field
-from typing_extensions import Annotated
 
 
 @dataclass(frozen=True)
@@ -76,9 +75,7 @@ class FixedCameraConfig:
 
 
 # Discriminated union for camera configurations
-CameraConfig = Annotated[
-    Union[SphericalCameraConfig, CartesianCameraConfig, FixedCameraConfig], Field(discriminator="type")
-]
+CameraConfig = Annotated[SphericalCameraConfig | CartesianCameraConfig | FixedCameraConfig, Field(discriminator="type")]
 
 
 @dataclass(frozen=True)
@@ -86,7 +83,7 @@ class VideoConfig:
     """Configures video recording across all holosoma simulators.
 
     Provides unified interface for video recording settings compatible with
-    IsaacGym, MuJoCo, and IsaacSim simulators.
+    MuJoCo and IsaacSim simulators.
     """
 
     enabled: bool = True

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, List
+from typing import TYPE_CHECKING, Any
 
 import torch
 from loguru import logger
@@ -153,8 +153,8 @@ class UndesiredContacts(RewardTermBase):
         self.threshold = cfg.params.get("threshold", 1.0)
 
     def __call__(self, env: WholeBodyTrackingManager, **kwargs: Any) -> torch.Tensor:
-        # (num_envs, history_length, num_bodies, 3)
-        net_contact_forces = self.env.simulator.contact_forces_history
+        # (num_envs, decimation, num_bodies, 3) — every substep of the control step just finished
+        net_contact_forces = self.env.simulator.contact_recorder.recorded_forces
         is_contact = (
             torch.max(torch.norm(net_contact_forces[:, :, self.undesired_contacts_body_indexes], dim=-1), dim=1)[0]
             > self.threshold
@@ -167,7 +167,7 @@ class UndesiredContacts(RewardTermBase):
     #########################################################################################################
     ## Internal Helper functions
     #########################################################################################################
-    def _get_index_of_a_in_b(self, a_names: List[str], b_names: List[str], device: str = "cpu") -> torch.Tensor:
+    def _get_index_of_a_in_b(self, a_names: list[str], b_names: list[str], device: str = "cpu") -> torch.Tensor:
         indexes = []
         for name in a_names:
             assert name in b_names, f"The specified name ({name}) doesn't exist: {b_names}"

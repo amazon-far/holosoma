@@ -6,14 +6,15 @@ and no-ops cleanly on a robot-only scene.
 
 - ``randomize_object_rigid_body_mass_startup`` / ``..._material_startup`` /
   ``..._inertia_startup`` — startup physics DR on free bodies, cross-backend (IsaacSim /
-  IsaacGym / MuJoCo), each branch addressing the object's own bodies/geoms (mirrors the robot
+  MuJoCo), each branch addressing the object's own bodies/geoms (mirrors the robot
   mass/friction DR in ``locomotion.py``).
 - ``jitter_object_pose_on_reset`` — opt-in reset-time pose jitter on free bodies.
 """
 
 from __future__ import annotations
 
-from typing import Any, Sequence, cast
+from collections.abc import Sequence
+from typing import Any, cast
 
 import torch
 from loguru import logger
@@ -28,7 +29,7 @@ from holosoma.simulator import mujoco_required_field
 from holosoma.simulator.shared.field_decorators import MUJOCO_FIELD_ATTR
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.rotations import quat_from_angle_axis, quat_mul
-from holosoma.utils.sampler import DistributionLike, DistributionSpec, TermSampler, quantiles
+from holosoma.utils.sampler import DistributionLike, DistributionSpec, TermSampler
 from holosoma.utils.simulator_config import SimulatorType
 
 
@@ -130,29 +131,6 @@ def _coerce_material_cfg(material: MaterialRandomizationConfig | dict[str, Any])
     return MaterialRandomizationConfig(**material)
 
 
-def _draw_material_channel(
-    sampler: TermSampler,
-    spec: DistributionLike,
-    env_ids: torch.Tensor,
-    obj_ids: torch.Tensor,
-    stream: int,
-    num_buckets: int | None,
-) -> torch.Tensor:
-    """Draw a per-(env, object) material value, continuous or quantized onto ``num_buckets``.
-
-    ``None``: one continuous keyed draw per (env, object) on stream ``stream`` -> [n_env, n_obj].
-    An int: fill ``num_buckets`` buckets with the spec's quantile values (keyed permute so the
-    staircase is reproducible-but-shuffled per seed), then pick a bucket per (env, object) via the
-    keyed selection — same quantization the IsaacSim material writer / robot friction term use, so a
-    bucketed object-material config reads consistently across backends.
-    """
-    if num_buckets is None:
-        return sampler.draw(spec, env_ids=env_ids, coords=(stream, obj_ids))
-    column = quantiles(DistributionSpec.parse(spec), num_buckets, "cpu")[sampler.permute(num_buckets, (stream,))]
-    bucket_ids = sampler.draw_int(0, num_buckets - 1, env_ids=env_ids, coords=(stream, obj_ids))
-    return column[bucket_ids]
-
-
 @mujoco_required_field("geom_friction")
 def randomize_object_rigid_body_material_startup(
     env: Any,
@@ -169,7 +147,6 @@ def randomize_object_rigid_body_material_startup(
 
     ``material`` is a :class:`MaterialRandomizationConfig` (or an equivalent nested dict) whose
     backend sub-blocks name ONLY the channels that backend honors — no silent cross-backend drop:
-    - **isaacgym** ``{friction, restitution}`` — single sliding friction + native restitution.
     - **isaacsim** ``{static_friction, dynamic_friction, restitution}`` — via a quantile bucket table
       (PhysX caps unique materials per scene).
     - **mujoco**   ``{sliding_friction, solref, solimp}`` — ``geom_friction`` tangential coefficient
@@ -184,9 +161,9 @@ def randomize_object_rigid_body_material_startup(
     ``num_buckets`` controls VALUE QUANTIZATION uniformly across backends (mirrors the robot friction
     term). An int (default 64) quantizes every channel's draw onto that many stratified quantile
     values — required on IsaacSim to respect PhysX's per-scene material cap, and applied identically on
-    IsaacGym/MuJoCo (which have no cap) so a bucketed config reads consistently everywhere. ``None``
+    MuJoCo (which has no cap) so a bucketed config reads consistently everywhere. ``None``
     draws continuously; use it when the per-object material count is safely under the cap. Granularity
-    is unchanged (per-object on IsaacGym, per-shape on IsaacSim, per-geom on MuJoCo) — objects keep
+    is unchanged (per-shape on IsaacSim, per-geom on MuJoCo) — objects keep
     their within-env material variety.
     """
     if not enabled:
@@ -203,44 +180,6 @@ def randomize_object_rigid_body_material_startup(
 
     simulator = env.simulator
     sim_type = simulator.get_simulator_type()
-
-    if sim_type == SimulatorType.ISAACGYM:
-        ig_cfg = material.isaacgym
-        if ig_cfg is None:
-            return
-        gym = simulator.gym
-        idx_cpu = idx.to(device="cpu", dtype=torch.long)
-        # One keyed value per (env, object) per requested channel (distinct int stream coord),
-        # written to the object's shapes — per-object like the mass/inertia branches, so objects
-        # within one env get independent materials (matching MuJoCo/IsaacSim's within-env variety).
-        # A None channel is left at the spawned value. friction -> single sliding coeff (stream 0);
-        # restitution -> native per-shape restitution (stream 1). num_buckets quantizes each draw the
-        # same way as the IsaacSim writer. -> [E, n_names].
-        obj_ids = torch.arange(len(names))[None, :]
-        fric = (
-            _draw_material_channel(sampler, ig_cfg.friction, idx_cpu, obj_ids, 0, num_buckets)
-            if ig_cfg.friction is not None
-            else None
-        )
-        rest = (
-            _draw_material_channel(sampler, ig_cfg.restitution, idx_cpu, obj_ids, 1, num_buckets)
-            if ig_cfg.restitution is not None
-            else None
-        )
-        if fric is None and rest is None:
-            return
-        for offset, env_id in enumerate(idx_cpu.tolist()):
-            env_ptr = simulator.envs[env_id]
-            for name_off, name in enumerate(names):
-                actor = simulator.object_handles[name][env_id]
-                shape_props = gym.get_actor_rigid_shape_properties(env_ptr, actor)
-                for prop in shape_props:
-                    if fric is not None:
-                        prop.friction = float(fric[offset, name_off])
-                    if rest is not None:
-                        prop.restitution = float(rest[offset, name_off])
-                gym.set_actor_rigid_shape_properties(env_ptr, actor, shape_props)
-        return
 
     if sim_type == SimulatorType.ISAACSIM:
         isim_cfg = material.isaacsim
@@ -326,7 +265,7 @@ def randomize_object_rigid_body_mass_startup(
 ) -> None:
     """Randomize free-body rigid-body mass (additive offset), one offset per object.
 
-    Cross-backend (IsaacSim / IsaacGym / MuJoCo Warp GPU + Classic CPU); the offset is sampled
+    Cross-backend (IsaacSim / MuJoCo Warp GPU + Classic CPU); the offset is sampled
     from ``mass_distribution_params`` and ADDED, identically on every backend. Scene objects are
     single rigid bodies (no articulated-object support), so "per (env, object)" and "per body" are
     the same draw. Targets every registered free body by default; pass ``object_names`` to narrow
@@ -339,7 +278,7 @@ def randomize_object_rigid_body_mass_startup(
 
     ``mass_distribution_params`` is a config range value — a ``[lo, hi]`` pair (uniform) or a
     ``{kind, low, high, mean, std}`` spec dict (gaussian / log_uniform) — honored identically on ALL
-    backends (IsaacGym per-actor loop, MuJoCo ``randomize_field``, project-owned IsaacSim
+    backends (MuJoCo ``randomize_field``, project-owned IsaacSim
     ``randomize_rigid_body_mass``), all via the shared keyed
     :meth:`holosoma.utils.sampler.TermSampler.draw`. gaussian is a truncated normal on ``[lo, hi]``;
     log_uniform requires positive bounds.
@@ -357,43 +296,6 @@ def randomize_object_rigid_body_mass_startup(
 
     simulator = env.simulator
     sim_type = simulator.get_simulator_type()
-
-    if sim_type == SimulatorType.ISAACGYM:
-        gym = simulator.gym
-        # One keyed offset per (env, object), added to all of that object's bodies — keyed by the
-        # object's index among ``names`` (stable) so the draw is reproducible per (term, env, episode).
-        # Object indices as a [1, n_names] coord -> [n_env, n_names].
-        obj_ids = torch.arange(len(names))[None, :]
-        offsets = sampler.draw(mass_distribution_params, env_ids=idx, coords=(obj_ids,), device="cpu")
-        for env_off, env_id in enumerate(idx.tolist()):
-            env_ptr = simulator.envs[env_id]
-            for name_off, name in enumerate(names):
-                actor = simulator.object_handles[name][env_id]
-                body_props = gym.get_actor_rigid_body_properties(env_ptr, actor)
-                delta = float(offsets[env_off, name_off])  # add operation, matches the other backends
-                for prop in body_props:
-                    m_before = prop.mass
-                    # Clamp like the IsaacSim helper (min_mass=1e-6): a signed band on a light body
-                    # must not produce a non-positive mass (which would also flip the inertia sign).
-                    prop.mass = max(m_before + delta, 1e-6)
-                    if recompute_inertia and m_before > 0.0:
-                        # Explicit per-body mass-ratio scale (NOT recomputeInertia=True, which would
-                        # recompute from geometry — a different result that also clobbers a prior
-                        # inertia-DR scale). Multiplicative => commutes with the inertia term.
-                        r = prop.mass / m_before
-                        inertia = prop.inertia  # gymapi.Mat33, symmetric
-                        inertia.x.x *= r
-                        inertia.y.y *= r
-                        inertia.z.z *= r
-                        inertia.x.y *= r
-                        inertia.y.x *= r
-                        inertia.y.z *= r
-                        inertia.z.y *= r
-                        inertia.x.z *= r
-                        inertia.z.x *= r
-                # recomputeInertia=False: we set inertia explicitly above (or leave it untouched).
-                gym.set_actor_rigid_body_properties(env_ptr, actor, body_props, recomputeInertia=False)
-        return
 
     if sim_type == SimulatorType.ISAACSIM:
         from isaaclab.managers import SceneEntityCfg
@@ -427,7 +329,7 @@ def randomize_object_rigid_body_mass_startup(
             body_ids = _mujoco_object_body_ids(simulator, name)
             body_ids_t = torch.tensor(body_ids, device=simulator.sim_device, dtype=torch.long)
             # Snapshot mass BEFORE so the inertia rescale uses the exact ratio this write produced
-            # (matches IsaacGym/IsaacSim's explicit m_after/m_before scale).
+            # (matches IsaacSim's explicit m_after/m_before scale).
             mass_before = _field_view(simulator, "body_mass")[:, body_ids_t].clone() if recompute_inertia else None
             randomize_field(
                 simulator,
@@ -438,8 +340,7 @@ def randomize_object_rigid_body_mass_startup(
                 # Resolve by ID (URDF descendant bodies are often unnamed) — mirrors the geom path.
                 entity_ids=body_ids_t,
                 operation="add",
-                # One offset per object, shared by all its bodies (matches the IsaacGym branch,
-                # which adds one delta to every body of the actor).
+                # One offset per object, shared by all its bodies.
                 shared_across_entities=True,
             )
             # Clamp like the Isaac paths (min_mass=1e-6): a signed band on a light body must not
@@ -515,7 +416,7 @@ def randomize_object_rigid_body_inertia_startup(
     possibly partial, dict) of per-component SCALE ranges keyed [Ixx, Iyy, Izz, Ixy, Iyz, Ixz]; each
     value is a ``[lo, hi]`` pair (uniform) or a spec dict, and an unnamed component defaults to the
     identity scale [1.0, 1.0]:
-    - **IsaacSim / IsaacGym** scale the full symmetric 3x3 (all 6 components).
+    - **IsaacSim** scale the full symmetric 3x3 (all 6 components).
     - **MuJoCo** (Warp GPU or Classic CPU) stores inertia as the 3 DIAGONAL principal moments
       in a principal frame (``body_inertia`` is [nbody, 3]; off-diagonals are 0 by construction),
       so it scales only Ixx/Iyy/Izz and logs a one-time warning if a non-identity off-diagonal
@@ -523,13 +424,13 @@ def randomize_object_rigid_body_inertia_startup(
       MuJoCo reproduces it faithfully.
 
     Order-independent w.r.t. the mass DR term: both scale inertia MULTIPLICATIVELY (this term by the
-    configured factors; mass DR by its mass ratio when ``recompute_inertia=True``), and the IsaacGym
+    configured factors; mass DR by its mass ratio when ``recompute_inertia=True``), and the IsaacSim
     write uses ``recomputeInertia=False``, so neither clobbers the other regardless of which runs
     first. Targets every registered free body by default; pass ``object_names`` to narrow. No-ops on a
     robot-only scene. MuJoCo classic-CPU is single-env (one sample); MuJoCo classic via the shared
     ``randomize_field`` path.
 
-    Each scale range is honored identically on ALL backends — IsaacGym per-component loop, MuJoCo
+    Each scale range is honored identically on ALL backends — MuJoCo
     ``randomize_field``, and the project-owned IsaacSim ``randomize_rigid_body_inertia`` — all via the
     shared keyed :meth:`holosoma.utils.sampler.TermSampler.draw`. A gaussian spec is a truncated normal
     on each ``[lo, hi]``; log_uniform requires positive bounds (satisfied by identity-and-up scales).
@@ -548,41 +449,6 @@ def randomize_object_rigid_body_inertia_startup(
     inertia_distribution_params_dict = _coerce_inertia_params(inertia_distribution_params_dict)
     simulator = env.simulator
     sim_type = simulator.get_simulator_type()
-
-    if sim_type == SimulatorType.ISAACGYM:
-        # Full 6-component scale via the per-actor RigidBodyProperties Mat33 inertia tensor, with
-        # recomputeInertia=False (we set the tensor explicitly). The mass DR term also uses
-        # recomputeInertia=False + a multiplicative mass-ratio scale, so the two inertia writes
-        # commute — no clobber, no ordering requirement.
-        gym = simulator.gym
-        # Pre-draw one scale per (env, object) for each of the 6 components, keyed by object index
-        # (stable, a [1, n_names] coord) and a distinct int stream coord per component, then apply to
-        # every body of that object. -> each entry [n_env, n_names].
-        obj_ids = torch.arange(len(names))[None, :]
-        comp_draws = {
-            k: sampler.draw(inertia_distribution_params_dict[k], env_ids=idx, coords=(axis, obj_ids), device="cpu")
-            for axis, k in enumerate(_INERTIA_ORDER)
-        }
-        for env_off, env_id in enumerate(idx.tolist()):
-            env_ptr = simulator.envs[env_id]
-            for name_off, name in enumerate(names):
-                actor = simulator.object_handles[name][env_id]
-                body_props = gym.get_actor_rigid_body_properties(env_ptr, actor)
-                fxx, fyy, fzz = (float(comp_draws[k][env_off, name_off]) for k in ("Ixx", "Iyy", "Izz"))
-                fxy, fyz, fxz = (float(comp_draws[k][env_off, name_off]) for k in ("Ixy", "Iyz", "Ixz"))
-                for prop in body_props:
-                    inertia = prop.inertia  # gymapi.Mat33, symmetric
-                    inertia.x.x *= fxx
-                    inertia.y.y *= fyy
-                    inertia.z.z *= fzz
-                    inertia.x.y *= fxy
-                    inertia.y.x *= fxy
-                    inertia.y.z *= fyz
-                    inertia.z.y *= fyz
-                    inertia.x.z *= fxz
-                    inertia.z.x *= fxz
-                gym.set_actor_rigid_body_properties(env_ptr, actor, body_props, recomputeInertia=False)
-        return
 
     if sim_type == SimulatorType.ISAACSIM:
         from isaaclab.managers import SceneEntityCfg
@@ -615,7 +481,7 @@ def randomize_object_rigid_body_inertia_startup(
                 # Resolve by ID (URDF descendant bodies are often unnamed) — mirrors the geom path.
                 entity_ids=torch.tensor(body_ids, device=simulator.sim_device, dtype=torch.long),
                 operation="scale",
-                # One scale per object, shared by all its bodies (matches the IsaacGym branch).
+                # One scale per object, shared by all its bodies.
                 shared_across_entities=True,
             )
         return
@@ -631,23 +497,13 @@ def randomize_object_rigid_body_inertia_startup(
 _FREEJOINT_LINEAR_DOFS = (0, 1, 2)
 _FREEJOINT_ANGULAR_DOFS = (3, 4, 5)
 
+
 # Body-damping randomization. Damping is expressed differently per engine but means the same
 # physically (a drag that bleeds linear/angular velocity), and is randomized as a single linear +
 # single angular scalar per body on every backend (PhysX's model), kept aligned:
 # - MuJoCo: ``dof_damping`` on the freejoint, one shared value across its 3 linear / 3 angular DOFs.
 # - IsaacSim: the USD ``PhysxRigidBodyAPI.linearDamping``/``angularDamping`` scalar, writable at
 #   runtime (the live PhysX sim picks up the edit on the next step).
-# - IsaacGym: NO runtime path. Source-verified the gym exposes damping only on ``AssetOptions`` at
-#   asset import; neither ``RigidBodyProperties`` (mass/inertia/com only) nor ``RigidShapeProperties``
-#   (friction/restitution/compliance/offsets only) carries damping, and the only runtime damping
-#   setter, ``set_actor_dof_properties``, is for articulation joints, not free-body drag. So
-#   IsaacGym raises (set damping via PhysXPhysicsConfig at spawn instead).
-_DAMPING_ISAACGYM_MSG = (
-    "Runtime body-damping randomization is unsupported on IsaacGym. "
-    "Set damping via PhysXPhysicsConfig at spawn instead."
-)
-
-
 def _isaacsim_randomize_body_damping(
     simulator: Any,
     names: Sequence[str],
@@ -707,7 +563,7 @@ def _randomize_object_freejoint_damping(
     object_names: Sequence[str] | None,
     field_attr: str,
 ) -> None:
-    """Shared core for linear/angular body-damping DR (MuJoCo + IsaacSim; IsaacGym unsupported).
+    """Shared core for linear/angular body-damping DR (MuJoCo + IsaacSim).
 
     ``axis`` is "linear" or "angular"; ``dofs`` are the freejoint-relative DOF offsets MuJoCo
     writes (linear 0:3 / angular 3:6). One value is sampled per env and applied to the whole axis
@@ -716,8 +572,7 @@ def _randomize_object_freejoint_damping(
     PhysxRigidBodyAPI scalar).
 
     ``damping_range`` is a config range value ([lo, hi] pair or spec dict), honored on BOTH MuJoCo (via
-    ``randomize_field``) and IsaacSim (the live-USD writer). IsaacGym has no runtime damping path and
-    raises regardless.
+    ``randomize_field``) and IsaacSim (the live-USD writer).
     """
     idx = _ensure_env_ids_tensor(env, env_ids)
     if idx.numel() == 0:
@@ -728,9 +583,6 @@ def _randomize_object_freejoint_damping(
 
     simulator = env.simulator
     sim_type = simulator.get_simulator_type()
-
-    if sim_type == SimulatorType.ISAACGYM:
-        raise RandomizerNotSupportedError(_DAMPING_ISAACGYM_MSG)
 
     if sim_type == SimulatorType.ISAACSIM:
         _isaacsim_randomize_body_damping(simulator, names, idx, axis=axis, leaf=damping_range, sampler=sampler)
@@ -773,8 +625,7 @@ def randomize_object_linear_damping_startup(
     """Randomize free-body LINEAR (translational) damping — drag on linear velocity.
 
     MuJoCo (Classic + Warp, via freejoint ``dof_damping``) and IsaacSim (via the live USD
-    ``PhysxRigidBodyAPI.linearDamping``); IsaacGym is unsupported and raises (it accepts body
-    damping only at asset import — see the error). One value per env is applied as the body's
+    ``PhysxRigidBodyAPI.linearDamping``). One value per env is applied as the body's
     single linear-damping scalar (on MuJoCo, shared across the 3 translational freejoint DOFs), so
     the concept matches PhysX on every backend. Targets every registered free body by default. On
     the WarpBackend keep ``damping_range`` <= ~0.05 (freejoint dof_damping diverges above that at
@@ -811,9 +662,8 @@ def randomize_object_angular_damping_startup(
 ) -> None:
     """Randomize free-body ANGULAR (rotational) damping — drag on angular velocity.
 
-    MuJoCo (Classic + Warp) and IsaacSim (via the live USD ``PhysxRigidBodyAPI.angularDamping``);
-    IsaacGym unsupported (see :func:`randomize_object_linear_damping_startup`). One value per env is
-    applied as the body's single angular-damping scalar (on MuJoCo, shared across the 3 rotational
+    MuJoCo (Classic + Warp) and IsaacSim (via the live USD ``PhysxRigidBodyAPI.angularDamping``).
+    One value per env is applied as the body's single angular-damping scalar (on MuJoCo, shared across the 3 rotational
     freejoint DOFs), matching PhysX on every backend. WarpBackend stable band <= ~0.05.
 
     ``damping_range`` is a config range value — a ``[lo, hi]`` pair (uniform) or a spec dict — honored on

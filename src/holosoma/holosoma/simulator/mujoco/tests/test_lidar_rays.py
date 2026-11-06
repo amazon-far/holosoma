@@ -18,6 +18,7 @@ from holosoma.config_types.sensor import (  # noqa: E402
     MujocoLidarConfig,
     SensorMountConfig,
 )
+from holosoma.config_values.simulator import mujoco as mujoco_config  # noqa: E402
 from holosoma.simulator.mujoco import sensor_setup  # noqa: E402
 from holosoma.simulator.mujoco.geom_groups import (  # noqa: E402
     ROBOT_COLLISION_GEOM_GROUP,
@@ -54,7 +55,7 @@ def _box_model(*, group: int = 0) -> tuple[mujoco.MjModel, mujoco.MjData]:
 
 
 def _robot_filter_model() -> tuple[mujoco.MjModel, mujoco.MjData]:
-    scene_manager = object.__new__(MujocoSceneManager)
+    scene_manager = MujocoSceneManager(mujoco_config.config)
     scene_manager.world_spec = mujoco.MjSpec.from_string(
         """
         <mujoco>
@@ -187,7 +188,7 @@ def test_scene_manager_compile_tags_robot_groups_after_inertia_compilation() -> 
         return spec
 
     baseline_model = build_spec().compile()
-    scene_manager = object.__new__(MujocoSceneManager)
+    scene_manager = MujocoSceneManager(mujoco_config.config)
     scene_manager.world_spec = build_spec()
     scene_manager.robot_spec_meta = ActorSpecMeta(prefix="unit_", root_body="torso_link")
 
@@ -206,7 +207,7 @@ def test_scene_manager_compile_tags_robot_groups_after_inertia_compilation() -> 
 
 
 def test_scene_manager_compile_rejects_nonrobot_reserved_geom_groups() -> None:
-    scene_manager = object.__new__(MujocoSceneManager)
+    scene_manager = MujocoSceneManager(mujoco_config.config)
     scene_manager.world_spec = mujoco.MjSpec()
     scene_manager.world_spec.worldbody.add_geom(
         name="scene_reserved",

@@ -8,8 +8,9 @@ ordered by whatever the subclass passes as ``close_before``.
 from __future__ import annotations
 
 from abc import abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Sequence, Tuple
+from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
     from holosoma.config_types.plugin import PluginConfig
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 
-LidarStreamKey = Tuple[str, int]
+LidarStreamKey = tuple[str, int]
 
 
 @dataclass

@@ -15,9 +15,19 @@ from os import getenv
 
 import wandb
 import wandb_workspaces.reports.v2 as wr
+from wandb_workspaces.expr import Summary
 
 WANDB_ENTITY = getenv("WANDB_ENTITY", "amazon-far")
 WANDB_PROJECT = "nightly-holosoma-runs"
+
+# Per-run performance values written into run summaries by backfill_perf_summary.py,
+# which the workflow runs before this script. Keep in sync with that script.
+PERF_CELL_KEY = "perf/cell"
+PERF_MEAN_METRICS = (
+    ("Throughput (fps)", "perf/total_fps_mean"),
+    ("Collection time (s)", "perf/collection_time_mean"),
+    ("Learning time (s)", "perf/learning_time_mean"),
+)
 
 # Github assigned variables
 GITHUB_SERVER_URL = getenv("GITHUB_SERVER_URL")
@@ -86,7 +96,20 @@ def get_nightly_run_ids(gh_run_id: str | None = None) -> dict[str, list[str]]:
         for tag in run.tags:
             if tag.startswith("nightly-"):
                 continue
-            if tag in ["isaacgym", "isaacsim", "singlegpu", "multigpu", "nightly_test_passed", "nightly_test_failed"]:
+            # Every simulator tag nightly.py can emit has to be listed, or it is taken for the
+            # experiment name: the first tag that survives these filters wins. "isaacgym" is kept
+            # for archived runs (retired backend); see run_summary.KNOWN_SIMULATORS.
+            if tag in [
+                "isaacgym",
+                "isaacsim",
+                "mujoco",
+                "mjwarp",
+                "singlegpu",
+                "multigpu",
+                "nightly_test_passed",
+                "nightly_test_failed",
+                "nightly_perf_warning",
+            ]:
                 continue
             if tag.startswith(("gha-run-id-", "gpus-")):
                 continue
@@ -99,6 +122,67 @@ def get_nightly_run_ids(gh_run_id: str | None = None) -> dict[str, list[str]]:
             grouped_runs[exp_name].append(f"{WANDB_ENTITY}/{WANDB_PROJECT}/{run.id}")
 
     return grouped_runs
+
+
+def get_nightly_cells(gh_run_id: str | None = None) -> list[str]:
+    """Matrix cell labels present in this build's runs.
+
+    Read from the build's own runs rather than the whole project, so the trend section
+    covers the combinations that currently run instead of every retired one. Returns an
+    empty list if no labels are found, which happens when the backfill step has not run.
+    """
+    api = wandb.Api(timeout=60)
+
+    filters = get_filters(gh_run_id)
+    assert isinstance(filters, dict)
+
+    cells: set[str] = set()
+    for run in api.runs(path=f"{WANDB_ENTITY}/{WANDB_PROJECT}", filters=filters, order="-created_at"):
+        cell = (run.summary or {}).get(PERF_CELL_KEY)
+        if isinstance(cell, str) and cell:
+            cells.add(cell)
+
+    return sorted(cells)
+
+
+def create_performance_trend_section(cells: list[str]) -> list:
+    """Mean throughput and timing per run, one grid per matrix cell.
+
+    Each grid carries its own runset, which is how a report shows several
+    independently-scoped panels; a workspace view allows only one runset. These panels
+    deliberately span every night rather than this build, because within a single night
+    a cell holds exactly one run and a trend needs the history.
+    """
+    blocks: list = [
+        wr.H1("Performance trends"),
+        wr.P(
+            "Mean throughput and per-iteration timing for every nightly run to date, one point "
+            "per run. Each subsection covers a single experiment, simulator and GPU-count "
+            "combination: throughput is not comparable across them, and multi-GPU figures are "
+            "aggregate across devices."
+        ),
+    ]
+
+    for cell in cells:
+        runset = wr.Runset(
+            entity=WANDB_ENTITY,
+            project=WANDB_PROJECT,
+            name=cell,
+            filters=[Summary(PERF_CELL_KEY) == cell],
+        )
+        panels = [
+            wr.ScatterPlot(
+                title=f"{title} mean per run",
+                x=wr.Metric("CreatedTimestamp"),
+                y=wr.SummaryMetric(key),
+                regression=True,
+            )
+            for title, key in PERF_MEAN_METRICS
+        ]
+        blocks.append(wr.H2(cell))
+        blocks.append(wr.PanelGrid(runsets=[runset], panels=panels))  # type: ignore[arg-type]
+
+    return blocks
 
 
 def create_metric_panel(metric_name: str, title: str | None = None) -> wr.LinePlot:
@@ -299,6 +383,14 @@ def create_nightly_report(gh_run_id: str, hours: int = 24, publish: bool = False
     for exp_name in sorted(grouped_runs.keys()):
         run_ids = grouped_runs[exp_name]
         report_blocks.extend(create_experiment_section(exp_name, run_ids, gh_run_id))
+
+    # Add per-cell performance trends across every night to date
+    cells = get_nightly_cells(gh_run_id=gh_run_id)
+    if cells:
+        print(f"\nFound {len(cells)} matrix cells for the performance trend section")
+        report_blocks.extend(create_performance_trend_section(cells))
+    else:
+        print(f"\nNo {PERF_CELL_KEY} labels on this build's runs; skipping performance trends")
 
     # Add footer
     report_blocks.append(wr.P("---"))

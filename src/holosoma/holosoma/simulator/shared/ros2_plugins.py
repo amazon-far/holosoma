@@ -334,7 +334,7 @@ class ROS2OdometryPlugin:
 
     Each control step it reads either ``simulator.robot_root_states`` or a configured robot body's
     state, composes the configured body-to-frame transform, and publishes one
-    ``nav_msgs/Odometry``. Fires on ``FRAME_END`` (body tensors fresh after the frame's refresh), so
+    ``nav_msgs/Odometry``. Fires on ``FRAME_END``, after the frame's last substep, so
     ``publish_every`` resolves against the control rate.
 
     Simulator body velocities are world-frame. The configured frame's linear velocity includes the

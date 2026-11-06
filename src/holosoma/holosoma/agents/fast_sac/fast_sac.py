@@ -210,6 +210,25 @@ class CNNActor(Actor):
         return torch.cat([encoder_x, state_x], -1)
 
 
+@torch.compiler.disable
+def _scatter_projection(
+    next_dist: torch.Tensor,
+    lower_indices: torch.Tensor,
+    lower_mass: torch.Tensor,
+    upper_indices: torch.Tensor,
+    upper_mass: torch.Tensor,
+) -> torch.Tensor:
+    """Scatter-add the projected probability mass onto the flattened support.
+
+    Runs eagerly: under torch.compile, Inductor can fuse the preceding softmax into the index_add_ scatter, and the
+    fused kernel has produced incorrect projections in multi-GPU training.
+    """
+    proj_dist = torch.zeros_like(next_dist)
+    proj_dist.view(-1).index_add_(0, lower_indices, lower_mass)
+    proj_dist.view(-1).index_add_(0, upper_indices, upper_mass)
+    return proj_dist
+
+
 class DistributionalQNetwork(nn.Module):
     def __init__(
         self,
@@ -271,7 +290,6 @@ class DistributionalQNetwork(nn.Module):
         upper = torch.where(upper_mask, upper + 1, upper)
 
         next_dist = F.softmax(self(obs, actions), dim=1)
-        proj_dist = torch.zeros_like(next_dist)
         offset = (
             torch.linspace(0, (batch_size - 1) * self.num_atoms, batch_size, device=device)
             .unsqueeze(1)
@@ -282,14 +300,18 @@ class DistributionalQNetwork(nn.Module):
         # Additional safety check for indices
         lower_indices = (lower + offset).view(-1)
         upper_indices = (upper + offset).view(-1)
-        max_index = proj_dist.numel() - 1
+        max_index = next_dist.numel() - 1
 
         lower_indices = torch.clamp(lower_indices, 0, max_index)
         upper_indices = torch.clamp(upper_indices, 0, max_index)
 
-        proj_dist.view(-1).index_add_(0, lower_indices, (next_dist * (upper.float() - b)).view(-1))
-        proj_dist.view(-1).index_add_(0, upper_indices, (next_dist * (b - lower.float())).view(-1))
-        return proj_dist
+        return _scatter_projection(
+            next_dist,
+            lower_indices,
+            (next_dist * (upper.float() - b)).view(-1),
+            upper_indices,
+            (next_dist * (b - lower.float())).view(-1),
+        )
 
 
 class Critic(nn.Module):

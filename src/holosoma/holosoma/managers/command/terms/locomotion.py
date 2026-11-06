@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Sequence, cast
+from collections.abc import Sequence
+from typing import Any, cast
 
 from holosoma.managers.command.base import CommandTermBase
 from holosoma.utils.safe_torch_import import torch

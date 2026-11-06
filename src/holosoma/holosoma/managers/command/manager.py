@@ -148,7 +148,7 @@ class CommandManager:
             if "setup" in entry["stages"]:
                 entry["instance"].setup()
 
-        for term_name, term_cfg in zip(self._setup_names, self._setup_cfgs):
+        for term_name, term_cfg in zip(self._setup_names, self._setup_cfgs, strict=False):
             if term_name in self._setup_funcs:
                 func = self._setup_funcs[term_name]
                 func(self.env, **term_cfg.params)
@@ -158,7 +158,7 @@ class CommandManager:
             if "reset" in entry["stages"]:
                 entry["instance"].reset(env_ids)
 
-        for term_name, term_cfg in zip(self._reset_names, self._reset_cfgs):
+        for term_name, term_cfg in zip(self._reset_names, self._reset_cfgs, strict=False):
             if term_name in self._reset_funcs:
                 func = self._reset_funcs[term_name]
                 func(self.env, env_ids, **term_cfg.params)
@@ -168,7 +168,7 @@ class CommandManager:
             if "step" in entry["stages"]:
                 entry["instance"].step()
 
-        for term_name, term_cfg in zip(self._step_names, self._step_cfgs):
+        for term_name, term_cfg in zip(self._step_names, self._step_cfgs, strict=False):
             if term_name in self._step_funcs:
                 func = self._step_funcs[term_name]
                 func(self.env, **term_cfg.params)

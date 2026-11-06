@@ -73,7 +73,8 @@ def test_object_obs_dim_measured_for_two_objects():
     # pos(3) + quat(4) + lin(3) + ang(3) = 13 per object, 2 objects.
     assert dims["object_obs"] == 13 * 2
 
-    obs = mgr.compute()["object_obs"]
+    mgr.new_frame()
+    obs = mgr.step()["object_obs"]
     assert obs.shape == (1, 26)
     assert torch.isfinite(obs).all()
 
@@ -85,7 +86,8 @@ def test_object_obs_empty_for_robot_only_scene():
 
     mgr = ObservationManager(_obs_cfg(), _TaskShell(sim), "cpu")
     assert mgr.get_obs_dims()["object_obs"] == 0
-    assert mgr.compute()["object_obs"].shape == (1, 0)
+    mgr.new_frame()
+    assert mgr.step()["object_obs"].shape == (1, 0)
 
 
 # ----- base-frame transform correctness -----
@@ -100,10 +102,9 @@ _ENV0 = None  # filled per test
 
 def _set_robot_pose(sim, pos, quat_xyzw):
     """Write the robot root pose (xyzw quat) on the live sim and flush to the backend."""
-    env_ids = torch.arange(sim.num_envs, device=sim.sim_device)
     sim.robot_root_states[:, :3] = torch.tensor(pos, device=sim.sim_device, dtype=torch.float32)
     sim.robot_root_states[:, 3:7] = torch.tensor(quat_xyzw, device=sim.sim_device, dtype=torch.float32)
-    sim.set_actor_root_state_tensor_robots(env_ids, sim.robot_root_states[env_ids])
+    sim.forward_kinematics()
 
 
 def _set_object_state(sim, name, pos, quat_xyzw=(0.0, 0.0, 0.0, 1.0), lin=(0, 0, 0), ang=(0, 0, 0)):

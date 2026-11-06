@@ -4,7 +4,7 @@ These deliberately do NOT route through IsaacLab's ``mdp.randomize_rigid_body_*`
 samplers read a gaussian's two parameters as ``(mean, std)``, which conflicts with the project's
 ``[lo, hi]`` BOUNDS convention and silently produces a wrong distribution. By owning the write here
 and sampling through the shared keyed :meth:`holosoma.utils.sampler.TermSampler.draw`, a config means exactly
-the same thing on IsaacSim as on MuJoCo and IsaacGym — including gaussian and log_uniform.
+the same thing on IsaacSim as on MuJoCo — including gaussian and log_uniform.
 
 The mass/CoM/inertia writers take a list of per-component :class:`DistributionSpec` (validated at the
 term boundary) and write through ``asset.root_physx_view``; CoM/inertia reset to the asset's captured
@@ -17,7 +17,7 @@ values (:func:`~holosoma.utils.sampler.quantiles`) and picks a bucket (matching 
 bounding unique materials at ``num_buckets`` — an ``n``-atom staircase matching the continuous
 backends APPROXIMATELY (raise to tighten); ``None`` draws continuously. ``per_env`` controls
 GRANULARITY: ``False`` (default) draws per shape (IsaacLab-native, for object/robot material terms),
-``True`` draws one value per env broadcast across its shapes — matching the IsaacGym per-env friction
+``True`` draws one value per env broadcast across its shapes — the per-env friction
 path and capping unique materials at ~``num_envs`` when continuous.
 """
 
@@ -83,12 +83,12 @@ def randomize_rigid_body_mass(
     (add/scale; see the comment below), clamps to ``min_mass``, and — when ``recompute_inertia`` —
     rescales each body's inertia by the SAME factor its mass changed by THIS call (``m_after /
     m_before``). Unlike IsaacLab's event it draws from the project ``TermSampler`` — so gaussian /
-    log_uniform mean the same thing here as on MuJoCo/IsaacGym and the draw is reproducible per
+    log_uniform mean the same thing here as on MuJoCo and the draw is reproducible per
     (term, env, episode).
 
     ``axis`` is the sampler STREAM coord (a plain int) so independent mass draws stay decorrelated — a
     link-mass SCALE and a base-mass ADD must use different stream coords, or a body in both lists (e.g.
-    the torso) would get perfectly-correlated scale and add. (IsaacGym/MuJoCo decorrelate these the
+    the torso) would get perfectly-correlated scale and add. (MuJoCo decorrelate these the
     same way; this matches them.)
 
     ``recompute_inertia`` uses an explicit MULTIPLICATIVE ratio (not PhysX recompute-from-geometry),
@@ -105,7 +105,7 @@ def randomize_rigid_body_mass(
 
     body_ids = _resolve_body_ids(asset, asset_cfg)
 
-    # Compose onto the CURRENT live mass (add/scale), matching IsaacGym (``mass += offset`` /
+    # Compose onto the CURRENT live mass (add/scale) (``mass += offset`` /
     # ``mass *= scale``) and MuJoCo (``current + random`` / ``current * random``). DR mass terms are
     # setup-stage (run once), so onto-current == onto-default at startup; composing onto current is
     # what keeps "the same config means the same thing" across backends (a reset-to-default here made
@@ -202,7 +202,7 @@ def randomize_rigid_body_inertia(
 
     ``specs`` holds 6 :class:`DistributionSpec` in the order [Ixx, Iyy, Izz, Ixy, Iyz, Ixz]. The 3x3
     inertia is symmetric; off-diagonals are mirrored. Draws through the bound keyed sampler, so a
-    gaussian or log_uniform scale config means the same thing as on MuJoCo/IsaacGym and is
+    gaussian or log_uniform scale config means the same thing as on MuJoCo and is
     reproducible per (term, env, episode).
 
     The inertia matrix is stored (PhysX) in the order Ixx, Iyx, Izx, Ixy, Iyy, Izy, Ixz, Iyz, Izz.
@@ -285,7 +285,7 @@ def randomize_rigid_body_material(
     ``per_env`` controls GRANULARITY (independent of quantization):
     - ``False`` (default): draw independently PER SHAPE — the IsaacLab-native behavior, kept for the
       object/robot material terms.
-    - ``True``: draw ONE value per env and broadcast it across that env's shapes, matching the IsaacGym
+    - ``True``: draw ONE value per env and broadcast it across that env's shapes, matching the
       per-env friction path (and MuJoCo's ``shared_across_entities``). The friction term uses this so
       one robot has a single contact-friction coefficient on every backend. Per-env also caps unique
       materials at ~``num_envs`` when continuous, keeping it under the PhysX limit.

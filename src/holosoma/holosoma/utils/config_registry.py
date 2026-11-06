@@ -12,8 +12,9 @@ import pkgutil
 import sys
 import typing
 import warnings
+from collections.abc import Callable
 from types import ModuleType
-from typing import Any, Callable, Dict, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 import tyro
 from loguru import logger
@@ -44,7 +45,7 @@ def deprecated_defaults_alias(module_name: str, registry: ConfigRegistry) -> Cal
 ALL_REGISTRIES: list[ConfigRegistry] = []
 
 
-class ConfigRegistry(Dict[str, Any]):
+class ConfigRegistry(dict[str, Any]):
     """Mapping of preset names to config values for one config family.
 
     Args:
@@ -234,6 +235,7 @@ def parse_config(
 
     use_sys_argv = args is None
     argv = sys.argv[1:] if args is None else list(args)
+    _reject_legacy_mujoco_cli(argv)
 
     import_paths, argv = split_import_file_args(argv)
     load_plugins(import_paths)
@@ -259,6 +261,20 @@ def parse_config(
     if use_sys_argv:
         sys.argv = [sys.argv[0]] + argv
     return tyro.cli(config_type, **kwargs)
+
+
+def _reject_legacy_mujoco_cli(argv: list[str]) -> None:
+    """Explain relocated CLI fields before Tyro reports an unknown argument."""
+    aliases = (
+        "--simulator.config.mujoco-warp.",
+        "--simulator.config.mujoco_warp.",
+    )
+    canonical = "--simulator.config.sim.mujoco.warp."
+    if any(token.startswith(aliases) for token in argv):
+        raise SystemExit(
+            f"--simulator.config.mujoco-warp.* moved to {canonical}*. "
+            "Move the flags to that path; capacity field names and defaults are unchanged."
+        )
 
 
 def _resolve_config(config: Any) -> Any:

@@ -4,13 +4,13 @@ Builds ONE real, fully-managed locomotion env for a chosen backend (real action_
 randomization_manager — NO shims), then runs the full matrix of robot + object DR terms against
 it and asserts each took effect, reading the mutated physics-model values back through that
 backend's native API. Exits 0 on success, non-zero with a message on failure — so it works as a
-live integration test under each backend's launcher (MuJoCo venv, IsaacGym setup, IsaacSim
+live integration test under each backend's launcher (MuJoCo venv, IsaacSim
 DISPLAY/EULA), the same way scene_spawn_assert.py does for spawning.
 
 Usage:
   python dr_matrix_assert.py --simulator mujoco                 # ClassicBackend, 1 env, cpu
   python dr_matrix_assert.py --simulator mjwarp   --num-envs 4  # WarpBackend, cuda
-  python dr_matrix_assert.py --simulator isaacgym --num-envs 4  # IsaacGym, cuda
+  python dr_matrix_assert.py --simulator isaacsim --num-envs 4  # IsaacSim, cuda
   python dr_matrix_assert.py --simulator isaacsim --num-envs 4  # IsaacSim, cuda
 
 The DR term calls are shared across backends (in _dr_matrix.py); only the read-back of the
@@ -33,13 +33,6 @@ if TYPE_CHECKING:
 # the caller's, which must not be mutated.
 if __name__ == "__main__" and sys.path and sys.path[0].endswith("tests/simulators"):
     sys.path.pop(0)
-
-# IsaacGym MUST be imported before torch. Importing it here (best-effort) guarantees the ordering
-# for the isaacgym backend before _dr_matrix (which imports torch) is pulled in below.
-try:
-    import isaacgym  # noqa: F401
-except ImportError:
-    pass
 
 
 # ---------------------------------------------------------------------------------------------
@@ -102,73 +95,6 @@ class _MujocoReader:
         bid = self._bid(body_name)
         src = self._warp.body_ipos[0, bid] if self._warp is not None else self._m.body_ipos[bid]
         return tuple(float(x) for x in src)
-
-
-class _IsaacGymReader:
-    """IsaacGym per-actor rigid-body / rigid-shape properties (env 0)."""
-
-    def __init__(self, sim):
-        self._sim = sim
-        self._gym = sim.gym
-        self._env = sim.envs[0]
-        self._robot = sim.robot_handles[0]
-        self._body_list = sim._body_list
-
-    def _is_robot_body(self, body_name: str) -> bool:
-        return body_name in self._body_list or ("robot_" + body_name) in self._body_list
-
-    def _object_actor(self, body_name: str):
-        # Object bodies are separate actors; map the object's root-body name to its handle.
-        # _dr_matrix passes the object's first body name (e.g. "free0_baseLink"); the registry
-        # key is the object name (e.g. "free0"). Match by prefix.
-        for name, handles in self._sim.object_handles.items():
-            if body_name == name or body_name.startswith(name):
-                return handles[0]
-        raise AssertionError(f"no object actor for body '{body_name}'")
-
-    def body_mass(self, body_name: str) -> float:
-        if self._is_robot_body(body_name):
-            idx = self._body_list.index(body_name if body_name in self._body_list else "robot_" + body_name)
-            props = self._gym.get_actor_rigid_body_properties(self._env, self._robot)
-            return float(props[idx].mass)
-        # Object: additive mass DR writes EACH body, so compare the per-body[0] value.
-        props = self._gym.get_actor_rigid_body_properties(self._env, self._object_actor(body_name))
-        return float(props[0].mass)
-
-    def geom_friction_for_body(self, body_name: str) -> float:
-        actor = self._robot if self._is_robot_body(body_name) else self._object_actor(body_name)
-        props = self._gym.get_actor_rigid_shape_properties(self._env, actor)
-        return float(props[0].friction)
-
-    def body_inertia(self, body_name: str):
-        actor = self._robot if self._is_robot_body(body_name) else self._object_actor(body_name)
-        props = self._gym.get_actor_rigid_body_properties(self._env, actor)
-        inertia = props[0].inertia
-        return (float(inertia.x.x), float(inertia.y.y), float(inertia.z.z))
-
-    # IsaacGym base-CoM read-back is NOT trusted by this harness — see ``COM_READBACK_TRUSTED``.
-    COM_READBACK_TRUSTED = False
-    # IsaacGym material DR sets friction only; restitution_range is ignored (logs a warning), so
-    # the restitution band assertion is gated off for this backend (see run_object_dr).
-    RESTITUTION_READBACK_TRUSTED = False
-
-    def body_com(self, body_name: str):
-        # Read the LIVE per-actor CoM straight off the gym property struct — NO add-back of the
-        # term's recorded ``_base_com_bias`` (that previous "reader" made after-minus-before equal
-        # the exact value the term sampled, a tautology that stayed green even if the write failed).
-        #
-        # Whether ``get_actor_rigid_body_properties`` reflects a prior ``set_..._properties`` CoM
-        # write is undocumented and version-fragile in IsaacGym Preview: the SAME struct's ``.mass``
-        # field DOES read back (mass DR + scene_spawn_assert.py rely on it), but the codebase has
-        # long asserted ``.com`` does not (it may return the asset-original, and recomputeInertia
-        # interacts with it). The rigid-body STATE tensor is [.,13] = pos/rot/vel/angvel (world
-        # frame) and carries no body-frame CoM offset, so it cannot expose CoM either. We therefore
-        # do NOT claim verification for this backend (see COM_READBACK_TRUSTED) and the caller skips
-        # the band assertion.
-        idx = self._body_list.index(body_name if body_name in self._body_list else "robot_" + body_name)
-        props = self._gym.get_actor_rigid_body_properties(self._env, self._robot)
-        c = props[idx].com
-        return (float(c.x), float(c.y), float(c.z))
 
 
 class _IsaacSimReader:
@@ -240,7 +166,6 @@ class _IsaacSimReader:
 _READERS = {
     "mujoco": _MujocoReader,
     "mjwarp": _MujocoReader,
-    "isaacgym": _IsaacGymReader,
     "isaacsim": _IsaacSimReader,
 }
 
@@ -258,7 +183,7 @@ def main() -> int:
     num_envs = args.num_envs if args.num_envs is not None else (1 if args.simulator == "mujoco" else 4)
     device = "cpu" if args.simulator == "mujoco" else "cuda:0"
 
-    # Imported here (not at top): for isaacgym/isaacsim, build_full_env's training_context must
+    # Imported here (not at top): for isaacsim, build_full_env's training_context must
     # initialize the launcher first; _dr_matrix imports torch, which must come after that init.
     import traceback
 
@@ -285,7 +210,7 @@ def main() -> int:
         # checks it, not the exit code.
         #
         # Scope the banner honestly: only claim "all verified" when nothing was skipped. Any check
-        # the backend cannot read back live (e.g. IsaacGym base CoM) is listed as NOT-verified so
+        # the backend cannot read back live (e.g. a base CoM) is listed as NOT-verified so
         # the banner never claims a field it did not actually integrate-check.
         if skipped:
             msg = (

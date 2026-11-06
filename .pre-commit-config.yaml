@@ -10,7 +10,8 @@ repos:
   hooks:
   - id: mypy
     pass_filenames: true
-    additional_dependencies: [pydantic]
+    # Match mypy.ini's Python 3.8 target even when the hook runs on a newer host.
+    additional_dependencies: [pydantic==2.10.6]
     # This hook runs mypy in an isolated env WITHOUT numpy/torch/warp/mujoco/etc. Those imports
     # then can't be resolved (import-not-found), and where they degrade to Any they make
     # load-bearing `# type: ignore`s look unused and typed returns look like Any. Scope these

@@ -5,7 +5,6 @@ from unittest.mock import Mock
 import pytest
 import torch
 
-from holosoma.simulator.isaacsim.proxy_utils import RootStatesProxy
 from holosoma.simulator.isaacsim.state_adapter import IsaacSimStateAdapter
 from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw
 from holosoma.simulator.shared.object_registry import ObjectRegistry, ObjectType
@@ -18,7 +17,7 @@ class TestStateAccessors:
     """Test state access patterns for IsaacSim objects.
 
     Covers the IsaacSimStateAdapter index path (``get_states_by_index`` /
-    ``write_states_by_index``), RootStatesProxy, and ObjectRegistry. End-to-end behavior of the
+    ``write_states_by_index``) and ObjectRegistry. End-to-end behavior of the
     unified view on a live sim is covered by ``all_root_states_unified_assert.py``.
     """
 
@@ -132,7 +131,7 @@ class TestStateAccessors:
         """Back the robot-states *read* path with the SAME tensor the *write* path mutates.
 
         The production robot read path (``IsaacSimStateAdapter.get_object_states``) returns
-        ``self._robot_states[env_ids]`` (already xyzw), while the write path mutates a separate
+        the served ``robot_root_states[env_ids]`` (already xyzw), while the write path mutates a separate
         ``self._robot`` handle's wxyz tensor via ``write_root_pose_to_sim`` /
         ``write_root_velocity_to_sim``. If the robot-states mock just returns a hand-injected
         constant, the read can never observe the write — so a regression in pose/velocity
@@ -149,7 +148,7 @@ class TestStateAccessors:
         def read_xyzw(env_ids):
             return fullstate_wxyz_to_xyzw(write_tensor_wxyz[env_ids])
 
-        adapter._robot_states.__getitem__ = Mock(side_effect=read_xyzw)
+        adapter._state.get("robot_root_states").__getitem__ = Mock(side_effect=read_xyzw)
 
     def _create_state_adapter(self, object_configs: list[tuple], default_robot_wxyz_state=None, num_envs=1):
         """Test helper to create a IsaacSimStateAdapter with mocks
@@ -242,7 +241,7 @@ class TestStateAccessors:
             object_registry=create_object_registry(),
             scene=mock_scene,
             robot=robot_mock,
-            robot_states=robot_states_mock,
+            state=Mock(get=Mock(return_value=robot_states_mock)),
         )
 
     def _assert_full_state_equal(self, actual: torch.Tensor, expected: torch.Tensor, msg: str = ""):
@@ -270,20 +269,6 @@ class TestStateAccessors:
         assert torch.allclose(actual[..., 10:13], expected[..., 10:13], atol=1e-6), (
             f"{msg} Angular velocity mismatch. Expected: {expected[..., 10:13]}, Got: {actual[..., 10:13]}"
         )
-
-    def test_robot_state_roundtrip_via_root_states_proxy(self):
-        """Test robot state read/write using RootStatesProxy."""
-
-        proxy = RootStatesProxy(self.robot_wxyz)
-
-        # Test read
-        actual_state = proxy[self.env_ids, :]
-        self._assert_full_state_equal(actual_state, self.robot_xyzw, "Read")
-
-        # Test write (via RootStatesProxy __setitem__ and __getitem__)
-        proxy[self.env_ids, :] = self.robot_new_xyzw[0]
-        actual_state = proxy[self.env_ids, :]
-        self._assert_full_state_equal(actual_state, self.robot_new_xyzw, "Write")
 
     def test_robot_state_roundtrip_via_index_path(self):
         """Robot state read/write through the adapter index path (get/write_states_by_index)."""

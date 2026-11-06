@@ -9,8 +9,7 @@ then falls below the pillar's old top (the move actually removed the support).
 
 Marked ``isaacsim`` so only the IsaacSim CI job (``-m isaacsim``) collects it.
 ``importorskip("isaaclab")``/CUDA-gated so direct/unfiltered
-runs skip cleanly where IsaacSim is absent. The IsaacGym analogue is in
-../isaacgym/test_static_move_isaacgym.py; the in-process Classic CPU analogue is in
+runs skip cleanly where IsaacSim is absent. The in-process Classic CPU analogue is in
 ../mujoco/test_static_body_move_classic.py.
 """
 

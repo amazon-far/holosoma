@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import dataclasses
+import warnings
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -12,11 +14,8 @@ from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
-from holosoma.simulator.base_simulator.hooks import (
-    HookHandle,
-    HookRegistry,
-    Phase,
-)
+from holosoma.simulator.base_simulator.hooks import HookHandle, HookRegistry, Phase
+from holosoma.simulator.base_simulator.state import SimState, StateTensor
 from holosoma.simulator.shared.external_wrench import ExternalWrenchAccumulator, WrenchTarget
 from holosoma.simulator.shared.object_registry import ObjectRegistry, ObjectType
 from holosoma.simulator.shared.scene_types import SceneInterface
@@ -27,6 +26,7 @@ from holosoma.utils.simulator_config import SimulatorType, get_simulator_type
 
 if TYPE_CHECKING:
     from holosoma.simulator.shared.camera_controller import CameraController
+    from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
     from holosoma.simulator.shared.sensor_manager import SensorManager
     from holosoma.simulator.shared.simulator_bridge import SimulatorBridge
     from holosoma.simulator.shared.video_recorder import VideoRecorderInterface
@@ -40,9 +40,18 @@ class BaseSimulator:
     over robotic assets and simulation properties. Includes unified state accessors
     for cross-simulator compatibility.
 
-    The unified interface abstracts differences between IsaacGym's flat tensor approach
+    The unified interface abstracts differences between the flat tensor approach
     and IsaacSim's object-based tensors, providing consistent APIs for object state
     management across both simulators.
+
+    Robot State
+    -----------
+    Robot state tensors (``dof_pos``, ``robot_root_states``, body state, ...) are served by
+    ``self.state`` (:class:`~holosoma.simulator.base_simulator.state.SimState`). They are current at
+    every read, and written by assigning into them in place; call :meth:`forward_kinematics` when a
+    write must be visible before the next physics step. Code that changes the simulation's state
+    through the backend instead must wrap the change in ``with sim.state.mutation():``, so the served
+    tensors are re-read afterwards.
 
     Actor Concept
     -------------
@@ -79,7 +88,7 @@ class BaseSimulator:
     index values in task/environment code.
 
     **State Synchronization**:
-    - IsaacGym: State changes applied immediately
+    - MuJoCo: State changes applied immediately
     - IsaacSim: State changes can be deferred for batching (see write_state_updates)
 
     Examples
@@ -104,8 +113,7 @@ class BaseSimulator:
     Tensor-only methods (``.view``/``.reshape``/``.to``) and ``isinstance(_, torch.Tensor)`` are
     not supported.
 
-    Passing it wholesale to ``set_actor_root_state_tensor`` writes the robot only (that method
-    detects the proxy by identity). Use ``set_actor_states`` to write objects.
+    Use ``set_actor_states`` to write objects.
 
     **Anti-Pattern (Don't Do This)**:
     >>> # Never assume specific index values
@@ -143,12 +151,16 @@ class BaseSimulator:
 
     sim_dt: float
     viewer: object | None
-    robot_root_states: torch.Tensor
-    base_quat: torch.Tensor
-    dof_pos: torch.Tensor
-    dof_vel: torch.Tensor
-    contact_forces: torch.Tensor
-    contact_forces_history: torch.Tensor
+    # Robot state, bound by each backend in prepare_sim (see holosoma.simulator.base_simulator.state).
+    dof_pos = StateTensor("Robot DOF positions, ``[num_envs, num_dof]`` in ``robot_config.dof_names`` order.")
+    dof_vel = StateTensor("Robot DOF velocities, ``[num_envs, num_dof]``.")
+    dof_acc = StateTensor("Robot DOF accelerations, ``[num_envs, num_dof]``.")
+    robot_root_states = StateTensor(
+        "Robot root state ``[num_envs, 13]``: position, orientation (xyzw), world-frame linear and angular velocity."
+    )
+    base_linear_acc = StateTensor("Robot root linear acceleration, ``[num_envs, 3]``.")
+    contact_forces = StateTensor("Net contact force per robot body, ``[num_envs, num_bodies, 3]``.")
+    contact_recorder: ContactSubstepRecorder
 
     # Robot properties, populated by each backend during setup (see _setup_robot_props_*).
     num_dof: int
@@ -167,13 +179,12 @@ class BaseSimulator:
 
     debug_viz_enabled: bool = False
 
-    # Raw robot per-body kinematics storage, refreshed by each backend every step; [num_envs,
-    # num_bodies, k] in holosoma body order, _rigid_body_rot xyzw. Read via the rigid_body_*_w
-    # properties below.
-    _rigid_body_pos: torch.Tensor
-    _rigid_body_rot: torch.Tensor
-    _rigid_body_vel: torch.Tensor
-    _rigid_body_ang_vel: torch.Tensor
+    # Robot per-body kinematics, [num_envs, num_bodies, k] in holosoma body order, _rigid_body_rot xyzw.
+    # Read via the rigid_body_*_w properties below.
+    _rigid_body_pos = StateTensor("Robot per-body world positions.")
+    _rigid_body_rot = StateTensor("Robot per-body world orientations (xyzw).")
+    _rigid_body_vel = StateTensor("Robot link-origin world linear velocities.")
+    _rigid_body_ang_vel = StateTensor("Robot per-body world angular velocities.")
 
     def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str):
         """
@@ -189,6 +200,7 @@ class BaseSimulator:
             Device type for simulation ('cpu' or 'cuda').
 
         """
+        self.state = SimState()
         self.viewer = None
         self.terrain_manager = terrain_manager
         self.training_config = tyro_config.training
@@ -259,20 +271,6 @@ class BaseSimulator:
             headless (bool): If True, runs the simulation without graphical display.
         """
         self.headless = headless
-
-    def set_startup_randomization_callback(self, callback: Callable[[], None]) -> None:
-        """Sets a callback to be invoked during environment startup for domain randomization.
-
-        This method allows the environment to inject domain randomization logic during
-        environment creation. The callback behavior and timing may vary by simulator.
-
-        Note: This is currently only used by IsaacGym. Other simulators may implement
-        this as a no-op if they don't support startup randomization callbacks.
-
-        Args:
-            callback: A callable to be invoked during environment startup.
-        """
-        # Default no-op implementation
 
     def setup(self) -> None:
         """
@@ -417,7 +415,7 @@ class BaseSimulator:
         """Get the simulator type for this simulator instance.
 
         Returns:
-            SimulatorType: The type of simulator (ISAACGYM, ISAACSIM, MUJOCO)
+            SimulatorType: The type of simulator (ISAACSIM, MUJOCO)
         """
         return get_simulator_type()
 
@@ -444,9 +442,9 @@ class BaseSimulator:
 
     # ----- Robot rigid-body kinematics (public, cross-backend) -----
     #
-    # Bare properties, not getters: each returns the backend's live _rigid_body_* storage so the hot
-    # path (reward/command/terrain terms indexing [:, body_idx, :] every step) pays nothing. Treat as
-    # read-only — mutate state via set_actor_states / apply_external_force, not through these tensors.
+    # Bare properties, not getters: each returns the served _rigid_body_* tensor, which keeps its
+    # identity across steps. Treat as read-only — mutate state via set_actor_states /
+    # apply_external_force, not through these tensors.
 
     @property
     def rigid_body_pos_w(self) -> torch.Tensor:
@@ -533,29 +531,13 @@ class BaseSimulator:
             f"{type(self).__name__} must implement _write_external_wrench_native for apply_external_force()"
         )
 
-    # ----- Simulation Preparation and Refresh Methods -----
+    # ----- Simulation Preparation -----
 
     def prepare_sim(self) -> None:
         """
-        Prepares the simulation environment and refreshes any relevant tensors.
+        Prepares the simulation environment and registers the robot state tensors.
         """
         raise NotImplementedError("The 'prepare_sim' method must be implemented in subclasses.")
-
-    def refresh_sim_tensors(self) -> None:
-        """
-        Refreshes the state tensors in the simulation to ensure they are up-to-date.
-        """
-        raise NotImplementedError("The 'refresh_sim_tensors' method must be implemented in subclasses.")
-
-    def clear_contact_forces_history(self, env_ids: torch.Tensor) -> None:
-        """Clear the contact-forces history for the specified environments.
-
-        Parameters
-        ----------
-        env_ids : torch.Tensor
-            1-D tensor of environment IDs whose contact-force history is zeroed (empty -> no-op).
-        """
-        raise NotImplementedError("The 'clear_contact_forces_history' method must be implemented in subclasses.")
 
     # ----- Control Application Methods -----
 
@@ -573,33 +555,105 @@ class BaseSimulator:
         """
         raise NotImplementedError("The 'apply_torques_at_dof' method must be implemented in subclasses.")
 
+    # ----- DOF access by joint name (public, cross-backend) -----
+    #
+    # ``dof_pos``/``dof_vel`` and torques are in ``robot_config.dof_names`` order on every backend;
+    # these address the same tensors by joint name.
+
+    def dof_indices(self, names: Sequence[str]) -> list[int]:
+        """Return each named DOF's index in ``dof_names``.
+
+        Raises:
+            ValueError: a name is not one of the robot's DOFs.
+        """
+        index = {name: i for i, name in enumerate(self.dof_names)}
+        unknown = [name for name in names if name not in index]
+        if unknown:
+            raise ValueError(f"Unknown DOF names {unknown}; the robot's DOFs are {self.dof_names}")
+        return [index[name] for name in names]
+
+    def get_dof_state_by_names(
+        self, names: Sequence[str] | None = None, env_ids: EnvIds | None = None
+    ) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
+        """Return ``{joint_name: (position, velocity)}``, each a ``[len(env_ids)]`` tensor.
+
+        Args:
+            names: DOFs to read; ``None`` => all, in ``dof_names`` order.
+            env_ids: Environments to read; ``None`` => all.
+        """
+        names = list(self.dof_names) if names is None else list(names)
+        cols = self.dof_indices(names)
+        rows = slice(None) if env_ids is None else env_ids
+        positions, velocities = self.dof_pos[rows][:, cols], self.dof_vel[rows][:, cols]
+        return {name: (positions[:, i], velocities[:, i]) for i, name in enumerate(names)}
+
+    def set_dof_state_by_names(
+        self,
+        env_ids: EnvIds | None,
+        positions: Mapping[str, float | torch.Tensor],
+        velocities: Mapping[str, float | torch.Tensor] | None = None,
+    ) -> None:
+        """Write the named DOFs' positions (and optionally velocities); other DOFs keep their state.
+
+        Args:
+            env_ids: Environments to write; ``None`` => all.
+            positions: ``{joint_name: value}``; each value a scalar or a ``[len(env_ids)]`` tensor.
+            velocities: Same form as ``positions``; ``None`` leaves velocities unchanged.
+        """
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.sim_device)
+        for target, values in ((self.dof_pos, positions), (self.dof_vel, velocities or {})):
+            for col, value in zip(self.dof_indices(list(values)), values.values(), strict=True):
+                target[env_ids, col] = torch.as_tensor(value, dtype=target.dtype, device=target.device)
+        self.forward_kinematics()
+
+    def apply_torques_by_names(self, torques: Mapping[str, float | torch.Tensor]) -> None:
+        """Apply torques to the named DOFs only (see :meth:`apply_torques_at_dof` with ``dof_indices``).
+
+        Args:
+            torques: ``{joint_name: value}``; each value a scalar or a ``[num_envs]`` tensor.
+        """
+        columns = [
+            torch.as_tensor(value, dtype=torch.float32, device=self.sim_device).expand(self.num_envs)
+            for value in torques.values()
+        ]
+        self.apply_torques_at_dof(torch.stack(columns, dim=-1), dof_indices=self.dof_indices(list(torques)))
+
     def simulate_at_each_physics_step(self) -> None:
         """Advance the simulation by a single step.
 
         One physics integration step, or — with ``sim.kinematic_playback`` — one
         forward-kinematics pass over externally written state.
         """
+        self._advance_substep()
         if self.kinematic_playback:
-            self.forward_kinematics()
             self._kinematic_time += 1.0 / self.simulator_config.sim.fps
-        else:
-            self._step_dynamics()
 
-    def _step_dynamics(self) -> None:
-        """Advance the physics engine by one integration step.
+    def _advance_substep(self) -> None:
+        """Advance the simulation by one substep: one integration step, or one kinematics pass.
 
-        Implementations must call ``self.flush_external_wrench()`` at the top (after ``PRE_STEP``
-        hooks, before the native step) so :meth:`apply_external_force` takes effect this substep.
+        With ``sim.kinematic_playback``, run :meth:`_forward_kinematics` in place of the native step.
+        Otherwise implementations must call ``self.flush_external_wrench()`` before the native step
+        (after ``PRE_STEP`` hooks) so :meth:`apply_external_force` takes effect this substep.
         """
-        raise NotImplementedError("The '_step_dynamics' method must be implemented in subclasses.")
+        raise NotImplementedError("The '_advance_substep' method must be implemented in subclasses.")
+
+    @property
+    def base_quat(self) -> torch.Tensor:
+        """Robot root orientation (xyzw), ``[num_envs, 4]``: a view of ``robot_root_states``."""
+        return self.robot_root_states[:, 3:7]
 
     def forward_kinematics(self) -> None:
-        """Propagate written joint/root state to derived body and camera poses, without dynamics.
+        """Write pending in-place state writes to the simulation and recompute body poses from them.
 
-        Makes everything renderers read consistent with state set via the ``set_*`` APIs.
-        No integration and no time advance.
+        In-place writes otherwise land at the next physics step. No dynamics, rendering or time advance.
         """
-        raise NotImplementedError("The 'forward_kinematics' method must be implemented in subclasses.")
+        with self.state.mutation():
+            self._forward_kinematics()
+
+    def _forward_kinematics(self) -> None:
+        """Recompute body poses from the simulation's joint/root state."""
+        raise NotImplementedError("The '_forward_kinematics' method must be implemented in subclasses.")
 
     # ----- Viewer Setup and Rendering Methods -----
 
@@ -826,7 +880,6 @@ class BaseSimulator:
 
         Implementation Notes
         --------------------
-        - **IsaacGym**: No-op, state changes are always applied immediately
         - **IsaacSim**: Flushes deferred updates via scene.write_data_to_sim()
 
         See Also
@@ -911,8 +964,8 @@ class BaseSimulator:
         Convenience over :meth:`set_actor_states` for the common "move a static obstacle" case:
         it zero-pads the 7-wide pose to a full 13-wide state (static/kinematic bodies ignore the
         velocity columns, moving by pose target, not commanded velocity) and forwards. Works
-        the same on every backend (MuJoCo via body_pos/body_quat + forward-kinematics; IsaacGym
-        via the fixed-base root-state teleport; IsaacSim via the kinematic rigid-body write).
+        the same on every backend (MuJoCo via body_pos/body_quat + forward-kinematics; IsaacSim
+        via the kinematic rigid-body write).
 
         Parameters
         ----------
@@ -946,10 +999,18 @@ class BaseSimulator:
     def render_sensors(self) -> None:
         """Capture all due mounted sensors at control frequency into their cached buffers.
 
-        Called once per control step from the task loop (after sim tensors refresh, before
+        Called once per control step from the task loop (after the physics substeps, before
         observations compute), honoring each sensor's ``update_decimation``. Consumers then do
         cheap cached reads through the camera/LiDAR accessors."""
         raise NotImplementedError("The 'render_sensors' method must be implemented in subclasses.")
+
+    def rerender_sensors(self, env_ids: torch.Tensor) -> None:
+        """Re-render ``env_ids`` for sensors that support partial rendering; other sensors keep their frame.
+
+        Body poses must already reflect the state written for those envs.
+        """
+        if self.sensor_manager is not None:
+            self.sensor_manager.rerender(env_ids)
 
     def get_camera_data(
         self,
@@ -1123,7 +1184,6 @@ class BaseSimulator:
           velocity are origin-invariant). For a name-major/env-minor tensor ``t`` over ``names`` x
           ``env_ids``: ``t[:, 0:3] -= self.env_origins[env_ids].repeat(len(names), 1)`` to go
           world->local, ``+=`` to go local->world. (No frame kwarg exists; poses are world-frame.)
-        - IsaacGym: write_updates parameter has no effect (always immediate)
         - IsaacSim: write_updates=False allows batching for performance
         - State ordering matches ObjectRegistry index calculation
 
@@ -1213,7 +1273,6 @@ class BaseSimulator:
         - Performance-optimized method for hot paths
         - No name lookup overhead
         - Indices must be pre-computed using get_actor_indices()
-        - IsaacGym: write_updates parameter has no effect (always immediate)
         - IsaacSim: write_updates=False allows batching for performance
 
         See Also
@@ -1367,148 +1426,77 @@ class BaseSimulator:
         """
         raise NotImplementedError("Must be implemented in subclasses.")
 
-    # ----- Robot-Specific Interface -----
+    # ----- Deprecated: write state tensors in place and call forward_kinematics() instead -----
 
-    def set_actor_root_state_tensor(self, set_env_ids: EnvIds, root_states: torch.Tensor) -> None:
-        """Set **robot** root states (position/orientation) - backwards compatibility interface.
+    _DOF_STATE_REMOVED = (
+        "dof_state was removed: read and write sim.dof_pos and sim.dof_vel ([num_envs, num_dof]) in place, "
+        "and call sim.forward_kinematics() where a write must apply before the next step"
+    )
 
-        This method provides backwards compatibility for existing code that expects
-        to set robot states using the legacy interface. Delegates to the standardized
-        robot-specific method.
+    @property
+    def dof_state(self) -> torch.Tensor:
+        raise AttributeError(self._DOF_STATE_REMOVED)
 
-        Parameters
-        ----------
-        set_env_ids : EnvIds
-            Environment IDs to update (see EnvIds type)
-        root_states : torch.Tensor
-            Robot root states to set, shape [num_envs, 13], dtype torch.float32.
-            Format: [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz]
-            where quaternion is in xyzw format.
-
-        Note
-        ----
-        This method is kept for backwards compatibility. New code should use
-        `set_actor_root_state_tensor_robots` directly.
-        """
-        # Reset the robot, kept for backwards compatiblity
-        return self.set_actor_root_state_tensor_robots(set_env_ids, root_states)
-
-    def set_actor_root_state_tensor_robots(
-        self, env_ids: EnvIds | None = None, root_states: torch.Tensor | None = None
-    ) -> None:
-        """Set robot root states (position/orientation) - standardized interface.
-
-        This method provides a consistent interface across simulators for setting
-        robot root states including position, orientation, and velocities.
-
-        Parameters
-        ----------
-        env_ids : EnvIds | None, default=None
-            Environment IDs to query (see EnvIds type). If None, applies to all environments.
-        root_states : torch.Tensor | None, default=None
-            Robot states to set, shape [num_envs, 13], dtype torch.float32.
-            Format: [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz]
-            where quaternion is in xyzw format. If None, uses current robot_root_states.
-
-        Examples
-        --------
-        >>> # Reset specific environments to current states
-        >>> env_ids = torch.tensor([0, 1, 2], device=device)
-        >>> sim.set_actor_root_state_tensor_robots(env_ids)
-
-        >>> # Set specific robot states
-        >>> reset_states = torch.zeros(len(env_ids), 13, device=device)
-        >>> reset_states[:, :3] = initial_positions  # Set positions
-        >>> reset_states[:, 3:7] = initial_quaternions  # Set orientations (xyzw)
-        >>> reset_states[:, 7:] = 0.0  # Zero velocities
-        >>> sim.set_actor_root_state_tensor_robots(env_ids, reset_states)
-
-        Notes
-        -----
-        - Works consistently across IsaacGym and IsaacSim
-        - Environment origins are automatically handled by the framework
-        - Quaternion format is xyzw (standard format)
-
-        See Also
-        --------
-        set_dof_state_tensor_robots : Set robot joint states
-        set_actor_states : Unified interface for all objects
-
-        Raises
-        ------
-        NotImplementedError
-            If not implemented by subclass
-        """
-        raise NotImplementedError("Subclasses must implement set_actor_root_state_tensor_robots")
-
-    def set_dof_state_tensor(self, set_env_ids: EnvIds, dof_states: torch.Tensor | None = None) -> None:
-        """Set **robot** DOF states (joint positions/velocities) - backwards compatibility interface.
-
-        This method provides backwards compatibility for existing code that expects
-        to set robot DOF states using the legacy interface. Delegates to the standardized
-        robot-specific method.
-
-        Parameters
-        ----------
-        set_env_ids : EnvIds
-            Environment IDs to update (see EnvIds type)
-        dof_states : torch.Tensor | None, default=None
-            DOF states to set. If None, uses current dof_state.
-
-        Note
-        ----
-        This method is kept for backwards compatibility. New code should use
-        `set_dof_state_tensor_robots` directly.
-        """
-        # Kept for backwards compatiblity
-        robot_dof_states = dof_states  # non-robot articulations are not yet supported
-        return self.set_dof_state_tensor_robots(set_env_ids, robot_dof_states)
+    @dof_state.setter
+    def dof_state(self, value: torch.Tensor) -> None:
+        raise AttributeError(self._DOF_STATE_REMOVED)
 
     def set_dof_state_tensor_robots(
-        self, env_ids: EnvIds | None = None, dof_states: torch.Tensor | None = None
+        self, env_ids: torch.Tensor | None = None, dof_states: torch.Tensor | None = None
     ) -> None:
-        """Set robot DOF states (joint positions/velocities) - standardized interface.
+        """Deprecated: write ``dof_pos``/``dof_vel`` in place, then :meth:`forward_kinematics` if needed now.
 
-        This method provides a consistent interface across simulators for setting
-        robot joint positions and velocities.
-
-        **IMPORTANT**: Tensor shapes differ between simulators. See simulator-specific
-        documentation for the exact format expected by each implementation.
-
-        Parameters
-        ----------
-        env_ids : EnvIds | None, default=None
-            Environment IDs to query (see EnvIds type)
-        dof_states : torch.Tensor | None, default=None
-            DOF states to set, dtype torch.float32. **Shape varies by simulator**:
-
-            - **IsaacSim**: [num_envs, num_dofs, 2] - 3D tensor
-            - **IsaacGym**: [num_envs * num_dofs, 2] - 2D flattened tensor
-
-            Format: positions and velocities (see simulator docs for indexing).
-            If None, uses current dof_state.
-
-        Examples
-        --------
-        See simulator-specific implementations for correct tensor format examples:
-        - IsaacSim: `holosoma.simulator.isaacsim.IsaacSim.set_dof_state_tensor_robots`
-        - IsaacGym: `holosoma.simulator.isaacgym.IsaacGym.set_dof_state_tensor_robots`
-
-        Notes
-        -----
-        - **Tensor shape inconsistency**: Different simulators expect different shapes
-        - Joint positions should be within DOF limits
-        - Joint velocities are typically set to zero for resets
-        - Always check simulator-specific documentation for correct tensor format
-
-        See Also
-        --------
-        set_actor_root_state_tensor_robots : Set robot root states
-        get_dof_limits_properties : Get joint limits for validation
-
-        Raises
-        ------
-        NotImplementedError
-            If not implemented by subclass
+        ``dof_states`` is ``[len(env_ids) or num_envs, num_dof, 2]`` or flattened ``[... * num_dof, 2]``.
         """
-        raise NotImplementedError("Subclasses must implement set_dof_state_tensor_robots")
+        _warn_deprecated("set_dof_state_tensor_robots", "write dof_pos/dof_vel in place")
+        env_ids = self._deprecated_env_ids(env_ids)
+        if dof_states is not None:
+            rows = self._deprecated_rows(env_ids, dof_states.reshape(-1, self.num_dof, 2))
+            self.dof_pos[env_ids] = rows[..., 0]
+            self.dof_vel[env_ids] = rows[..., 1]
+        self.forward_kinematics()
+
+    def set_actor_root_state_tensor_robots(
+        self, env_ids: torch.Tensor | None = None, root_states: torch.Tensor | None = None
+    ) -> None:
+        """Deprecated: write ``robot_root_states`` in place, then :meth:`forward_kinematics` if needed now."""
+        _warn_deprecated("set_actor_root_state_tensor_robots", "write robot_root_states in place")
+        env_ids = self._deprecated_env_ids(env_ids)
+        if root_states is not None and root_states is not self.robot_root_states:
+            self.robot_root_states[env_ids] = self._deprecated_rows(env_ids, root_states).clone()
+        self.forward_kinematics()
+
+    def set_dof_state_tensor(
+        self, set_env_ids: torch.Tensor | None = None, dof_states: torch.Tensor | None = None
+    ) -> None:
+        """Deprecated alias of :meth:`set_dof_state_tensor_robots`."""
+        self.set_dof_state_tensor_robots(set_env_ids, dof_states)
+
+    def set_actor_root_state_tensor(self, set_env_ids: torch.Tensor | None, root_states: torch.Tensor | None) -> None:
+        """Deprecated alias of :meth:`set_actor_root_state_tensor_robots` (robot rows only)."""
+        if root_states is self.all_root_states:  # the unified view passed wholesale: robot rows only
+            root_states = None
+        self.set_actor_root_state_tensor_robots(set_env_ids, root_states)
+
+    def refresh_sim_tensors(self) -> None:
+        """Deprecated: state tensors are current at every read."""
+        _warn_deprecated("refresh_sim_tensors", "drop the call; call forward_kinematics() to apply writes now")
+        self.state.flush_writes()
+        self.state.mark_stale()
+
+    def _deprecated_env_ids(self, env_ids: torch.Tensor | None) -> torch.Tensor:
+        if env_ids is None:
+            return torch.arange(self.num_envs, device=self.sim_device)
+        return torch.as_tensor(env_ids, device=self.sim_device, dtype=torch.long)
+
+    def _deprecated_rows(self, env_ids: torch.Tensor, states: torch.Tensor) -> torch.Tensor:
+        """``states`` for ``env_ids``, given pre-sliced (one row per env id) or for every env."""
+        if len(states) == len(env_ids):
+            return states
+        if len(states) == self.num_envs:
+            return states[env_ids]
+        raise ValueError(f"states has {len(states)} rows; expected {len(env_ids)} (pre-sliced) or {self.num_envs}")
+
+
+def _warn_deprecated(name: str, instead: str) -> None:
+    warnings.warn(f"{name} is deprecated and will be removed: {instead}.", FutureWarning, stacklevel=3)

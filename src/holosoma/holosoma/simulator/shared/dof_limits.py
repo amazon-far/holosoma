@@ -3,7 +3,7 @@
 The soft position limits are a symmetric contraction of the hard limits toward their
 midpoint by ``soft_dof_pos_limit``; several backends build the same four limit tensors from
 ``robot_config``. This module hosts that pure config->tensor math so MuJoCo and IsaacSim share
-one implementation, and IsaacGym (whose hard limits come from the URDF props array, not the
+one implementation, and backends whose hard limits come from the URDF props array, not the
 config) shares just the contraction formula.
 """
 

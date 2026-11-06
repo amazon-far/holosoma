@@ -16,7 +16,8 @@ inline (lossless/every-frame). Timestamps come from the frame's sim_time, not wa
 from __future__ import annotations
 
 import threading
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 

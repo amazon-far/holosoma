@@ -1,12 +1,12 @@
 # Sim-to-Sim Locomotion Workflow
 
-> **See also:** [Inference & Deployment Guide](../../README.md) for all deployment options
+> **See also:** [Inference & Deployment Guide](../../README.md) for all deployment options, and [Robot SDK Bridges](../../../holosoma/holosoma/bridge/README.md) for bridge selection and transport cost
 
 This guide provides a complete workflow for running locomotion policies in MuJoCo simulation.
 
 ## Overview
 
-The sim-to-sim workflow allows you to replay IsaacSim/IsaacGym-trained locomotion checkpoints inside MuJoCo for evaluation and testing.
+The sim-to-sim workflow allows you to replay IsaacSim-trained locomotion checkpoints inside MuJoCo for evaluation and testing.
 
 ## Prerequisites
 
@@ -42,6 +42,8 @@ python src/holosoma/holosoma/run_sim.py robot:g1-29dof \
 ```
 
 The robot will spawn in the simulator, hanging from a gantry.
+
+> Enabling the bridge makes the simulation slower: it adds work to every physics step. See [Tuning transport cost](../../../holosoma/holosoma/bridge/README.md#tuning-transport-cost) for how much, and the settings that reduce it.
 
 #### 2. Launch the Policy
 
@@ -107,6 +109,8 @@ python src/holosoma/holosoma/run_sim.py robot:t1-29dof-waist-wrist \
 ```
 
 The robot will spawn in the simulator, hanging from a gantry.
+
+> Enabling the bridge makes the simulation slower: it adds work to every physics step. See [Tuning transport cost](../../../holosoma/holosoma/bridge/README.md#tuning-transport-cost) for how much, and the settings that reduce it.
 
 #### 2. Launch the Policy
 

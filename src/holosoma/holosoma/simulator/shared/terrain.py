@@ -140,13 +140,15 @@ class Terrain(TerrainInterface):
         mesh.vertices[..., :2] -= self._border_size
         return mesh
 
-    def sample_env_origins(self) -> npt.NDArray[np.float64]:
-        origin_grid: npt.NDArray[np.floating[Any]]
+    @property
+    def env_origin_grid(self) -> npt.NDArray[np.floating[Any]]:
+        """Per-tile origins, [num_rows, num_cols, 3]. OBJ terrains have no ``_env_origins``."""
         if self._type == "load_obj":
-            origin_grid = self._get_load_obj_env_origin_grid()
-        else:
-            origin_grid = self._env_origins
+            return self._get_load_obj_env_origin_grid()
+        return self._env_origins
 
+    def sample_env_origins(self) -> npt.NDArray[np.float64]:
+        origin_grid = self.env_origin_grid
         terrain_levels = np.random.randint(0, self._num_rows, (self._num_robots,))
         terrain_types: npt.NDArray[np.int32] = np.floor_divide(
             np.arange(self._num_robots),

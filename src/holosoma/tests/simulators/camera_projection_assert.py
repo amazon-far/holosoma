@@ -1,7 +1,7 @@
 """Cross-backend camera projection-model assertions.
 
 Two co-located cameras view the same red panel. Isaac Sim must author the requested f-theta
-calibration and produce a visibly wider fisheye image. Isaac Gym and both MuJoCo backends must
+calibration and produce a visibly wider fisheye image. Both MuJoCo backends must
 ignore the Isaac-Sim-only channel and preserve the shared 60-degree pinhole fallback.
 """
 
@@ -120,7 +120,7 @@ def _check_pinhole_fallback(pinhole_img, configured_img, label: str) -> list[str
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacgym", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)

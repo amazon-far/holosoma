@@ -3,12 +3,10 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import json
-from datetime import timezone
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import yaml
 from pydantic.dataclasses import dataclass
-from typing_extensions import Annotated
 
 import holosoma.config_values.action
 import holosoma.config_values.algo
@@ -44,7 +42,7 @@ from holosoma.utils.config_registry import UseRegistry
 
 
 def now_timestamp() -> str:
-    return datetime.datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
 
 
 @dataclass(frozen=True)
@@ -77,6 +75,13 @@ class TrainingConfig:
     # Checkpoint settings
     checkpoint: str | None = None
     """Path to checkpoint for resuming training."""
+
+    teacher_checkpoint: str | None = None
+    """Optional path to a teacher-only checkpoint, loaded into the student-teacher
+    policy's teacher branch after env+algo setup. Orthogonal to ``checkpoint``:
+    ``checkpoint`` resumes full algo state (for distillation this includes student,
+    critic, optimizer, storage); ``teacher_checkpoint`` only populates the frozen
+    teacher MLP from a trained PPO-actor checkpoint."""
 
     # Logging settings
     project: str = "default_project"
@@ -116,7 +121,7 @@ class ExperimentConfig:
         holosoma.config_values.algo.ppo
     )
     simulator: Annotated[SimulatorConfig, UseRegistry(holosoma.config_values.simulator.SIMULATOR_REGISTRY)] = (
-        holosoma.config_values.simulator.isaacgym
+        holosoma.config_values.simulator.isaacsim
     )
     terrain: Annotated[TerrainManagerCfg, UseRegistry(holosoma.config_values.terrain.TERRAIN_REGISTRY)] = (
         holosoma.config_values.terrain.terrain_locomotion_plane

@@ -3,13 +3,8 @@
 from __future__ import annotations
 
 import glob
-import sys
 from collections.abc import Iterable
-
-if sys.version_info >= (3, 9):
-    from importlib.resources import files
-else:
-    from importlib_resources import files
+from importlib.resources import files
 
 
 def _prefix_suffix(value: str, prefix: str) -> str | None:

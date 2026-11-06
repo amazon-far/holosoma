@@ -59,7 +59,7 @@ def solve_argv_conflict(args_list: list[str]) -> None:
                     arguments_size.append(size_count)
                     break
 
-    for args, size in zip(arguments_to_be_removed, arguments_size):
+    for args, size in zip(arguments_to_be_removed, arguments_size, strict=False):
         args_index = args_list.index(args)
         for _ in range(size):
             args_list.pop(args_index)

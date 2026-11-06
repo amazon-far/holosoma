@@ -27,6 +27,14 @@ isaacsim_ensure_miniconda() {
     rm "$CONDA_ROOT/miniconda.sh"
   fi
 
+  # Isaac Sim's PYTHONPATH bundles packaging 23.0, which shadows base conda's packaging and breaks
+  # every conda command (conda >= 26.9 imports packaging.metadata) inside an activated hssim env.
+  # Run conda in isolated mode so it ignores PYTHONPATH. `conda update conda` rewrites this line,
+  # so re-apply it on every run.
+  if head -n 1 "$CONDA_ROOT/bin/conda" | grep -q '^#!.*/python[0-9.]*$'; then
+    sed -i '1s|$| -I|' "$CONDA_ROOT/bin/conda"
+  fi
+
   "$CONDA_ROOT/bin/conda" tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
   "$CONDA_ROOT/bin/conda" tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
 }

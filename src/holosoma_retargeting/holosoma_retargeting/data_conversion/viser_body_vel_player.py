@@ -216,7 +216,8 @@ def main(cfg: Config) -> None:
     vel_colors = np.zeros((nbody, 2, 3), dtype=np.float32)
     vel_colors[..., :] = np.array([255, 0, 0], dtype=np.float32)  # red
 
-    vel_lines = server.scene.add_line_segments(
+    # viser's add_line_segments overloads disagree across releases on the colors/width types.
+    vel_lines = server.scene.add_line_segments(  # type: ignore[call-overload]
         "/body_velocity_world",
         points=init_vel_points,
         colors=vel_colors,
@@ -289,8 +290,8 @@ def main(cfg: Config) -> None:
                     next_idx = 0
                 else:
                     next_idx = T - 1
-                    playing_cb.value = False
-            t_slider.value = next_idx  # triggers update_frame via callback
+                    playing_cb.value = False  # type: ignore[misc]  # viser stubs mark .value read-only
+            t_slider.value = next_idx  # type: ignore[misc]  # triggers update_frame via callback
 
         time.sleep(0.002)
 

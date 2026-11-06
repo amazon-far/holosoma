@@ -74,9 +74,8 @@ def mock_env_with_history() -> MagicMock:
         ),
     }
 
-    # Mock _compute_term to return tensors with expected dimensions
-    def mock_compute_term(group_name: str, term_name: str, term_cfg: MagicMock) -> torch.Tensor:
-        num_envs = 2
+    # Mock term_shape to return the expected per-env term dimensions
+    def mock_term_shape(group_name: str, term_name: str) -> tuple[int, ...]:
         dims = {
             "base_ang_vel": 3,
             "projected_gravity": 3,
@@ -84,9 +83,9 @@ def mock_env_with_history() -> MagicMock:
             "dof_vel": 10,
             "base_lin_vel": 3,
         }
-        return torch.randn(num_envs, dims[term_name])
+        return (dims[term_name],)
 
-    obs_manager._compute_term = mock_compute_term
+    obs_manager.term_shape = mock_term_shape
     env.observation_manager = obs_manager
 
     # Mock history_length dict
@@ -342,10 +341,10 @@ def test_different_history_lengths(history_length: int) -> None:
         "actor_obs": MagicMock(history_length=history_length, terms={"dof_pos": MagicMock()}),
     }
 
-    def mock_compute_term(group_name: str, term_name: str, term_cfg: MagicMock) -> torch.Tensor:
-        return torch.randn(2, 2)  # 2 dofs
+    def mock_term_shape(group_name: str, term_name: str) -> tuple[int, ...]:
+        return (2,)  # 2 dofs
 
-    obs_manager._compute_term = mock_compute_term
+    obs_manager.term_shape = mock_term_shape
     env.observation_manager = obs_manager
     env.history_length = {"actor_obs": history_length}
 
@@ -362,6 +361,38 @@ def test_different_history_lengths(history_length: int) -> None:
     mirrored = symmetry_utils.mirror_xz_plane(observation=observation, env=env, obs_list=["actor_obs"])
 
     assert mirrored.shape == observation.shape
+
+
+def test_mirror_obs_phase_exchanges_the_legs(mock_env_direct_config: MagicMock) -> None:
+    """Negating leg 0 instead of swapping collapsed the antiphase: both legs came out identical."""
+    symmetry_utils = SymmetryUtils(mock_env_direct_config)
+    phase = torch.tensor([[0.25, -0.75]])
+
+    assert symmetry_utils.mirror_obs_sin_phase(phase.clone()).tolist() == [[-0.75, 0.25]]
+    assert symmetry_utils.mirror_obs_cos_phase(phase.clone()).tolist() == [[-0.75, 0.25]]
+
+
+def test_mirror_obs_phase_is_an_involution(mock_env_direct_config: MagicMock) -> None:
+    symmetry_utils = SymmetryUtils(mock_env_direct_config)
+    phase = torch.tensor([[0.25, -0.75]])
+
+    once = symmetry_utils.mirror_obs_sin_phase(phase.clone())
+    assert symmetry_utils.mirror_obs_sin_phase(once).tolist() == phase.tolist()
+
+
+def test_mirror_obs_phase_leaves_a_standing_robot_standing(mock_env_direct_config: MagicMock) -> None:
+    """LocomotionGait drives both channels to stand_phase_value when the command is zero."""
+    symmetry_utils = SymmetryUtils(mock_env_direct_config)
+    phase = torch.tensor([[-1.0, -1.0]])
+
+    assert symmetry_utils.mirror_obs_sin_phase(phase.clone()).tolist() == phase.tolist()
+
+
+def test_mirror_obs_phase_rejects_a_width_that_is_not_two_legs(mock_env_direct_config: MagicMock) -> None:
+    symmetry_utils = SymmetryUtils(mock_env_direct_config)
+
+    with pytest.raises(ValueError, match="one channel per leg"):
+        symmetry_utils.mirror_obs_sin_phase(torch.zeros(1, 4))
 
 
 if __name__ == "__main__":

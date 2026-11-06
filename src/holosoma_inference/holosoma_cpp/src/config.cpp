@@ -3,6 +3,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <set>
 #include <sstream>
@@ -209,6 +210,7 @@ TaskConfig parse_task(const YAML::Node& node, const std::string& path, const std
   r.optional("state_input", task.state_input);
   r.optional("auto_walk_on_vel_cmd", task.auto_walk_on_vel_cmd);
   r.optional("use_sim_time", task.use_sim_time);
+  r.optional("wbt_history_initialization", task.wbt_history_initialization);
   r.optional("desired_base_height", task.desired_base_height);
   r.optional("print_observations", task.print_observations);
   r.optional("motion_start_timestep", task.motion_start_timestep);
@@ -266,7 +268,7 @@ TaskConfig parse_task(const YAML::Node& node, const std::string& path, const std
   }
 
   for (const char* key : {"joystick_type", "joystick_device", "ros_cmd_vel_topic", "ros_state_input_topic",
-                          "ros_vel_timeout", "residual_upper_body_action"}) {
+                          "ros_vel_timeout", "residual_upper_body_action", "startup_state_timeout"}) {
     r.ignore(key);
   }
   r.finish();
@@ -280,9 +282,48 @@ RuntimeConfig parse_runtime(const YAML::Node& node, const std::string& path) {
   }
   MapReader r(node, path);
   r.optional("state_timeout_s", runtime.state_timeout_s);
+  bool use_gpu = false;
+  std::string backend;
+  r.optional("use_gpu", use_gpu);
+  r.optional("backend", backend);
+  if (!backend.empty()) {
+    runtime.backend = parse_backend(backend);
+    if (use_gpu && runtime.backend == Backend::kCpu)
+      throw std::runtime_error(path + ": use_gpu is true but backend is cpu; name one or the other");
+  } else if (use_gpu) {
+    runtime.backend = Backend::kCuda;
+  }
+  r.optional("intra_op_threads", runtime.intra_op_threads);
+  r.optional("profile_prefix", runtime.profile_prefix);
   r.optional("damping_kd", runtime.damping_kd);
   r.finish();
   return runtime;
+}
+
+std::optional<ContextualConfig> parse_contextual(const YAML::Node& node, const std::string& path) {
+  if (!node || node.IsNull()) return std::nullopt;
+  ContextualConfig config;
+  MapReader r(node, path);
+  r.optional("command_dim", config.command_dim);
+  r.optional("depth_height", config.depth_height);
+  r.optional("depth_width", config.depth_width);
+  r.optional("require_climb_head", config.require_climb_head);
+  r.optional("force_manual_climbing", config.force_manual_climbing);
+  r.optional("climb_enter", config.climb_enter);
+  r.optional("climb_exit", config.climb_exit);
+  r.optional("discretizer", config.discretizer);
+  r.optional("yaw_request_gain", config.yaw_request_gain);
+  r.optional("switch_margin", config.switch_margin);
+  r.optional("velocity_primitives", config.velocity_primitives);
+  r.optional("forward_distance_scale", config.forward_distance_scale);
+  r.optional("yaw_distance_scale", config.yaw_distance_scale);
+  r.nullable("in_place_yaw_threshold", config.in_place_yaw_threshold);
+  r.optional("imu_to_obs_joint_chain", config.imu_to_obs_joint_chain);
+  r.optional("max_depth_age_s", config.max_depth_age_s);
+  if (!std::isfinite(config.max_depth_age_s) || config.max_depth_age_s <= 0)
+    throw ConfigError(r.field("max_depth_age_s") + ": must be finite and positive");
+  r.finish();
+  return config;
 }
 
 InferenceConfig parse_document(const YAML::Node& node, const std::string& base_dir, const std::string& path,
@@ -292,6 +333,7 @@ InferenceConfig parse_document(const YAML::Node& node, const std::string& base_d
   config.robot = parse_robot(r.child("robot"), path + ".robot");
   config.observation = parse_observation(r.child("observation"), path + ".observation");
   config.task = parse_task(r.child("task"), path + ".task", base_dir);
+  config.contextual = parse_contextual(r.child("contextual"), path + ".contextual");
   const YAML::Node runtime = r.child("runtime");
   if (inherited_runtime != nullptr) {
     if (runtime && !runtime.IsNull()) {
@@ -342,7 +384,7 @@ void validate_one(const InferenceConfig& config, const std::string& path) {
   }
   if (robot.motor_kp) check_size(robot.motor_kp->size(), motors, path + ".robot.motor_kp");
   if (robot.motor_kd) check_size(robot.motor_kd->size(), motors, path + ".robot.motor_kd");
-  if (robot.motor_kp.has_value() != robot.motor_kd.has_value()) {
+  if (!config.contextual && robot.motor_kp.has_value() != robot.motor_kd.has_value()) {
     throw ConfigError(path + ".robot: motor_kp and motor_kd must be overridden together");
   }
   if (robot.stiff_startup_pos) check_size(robot.stiff_startup_pos->size(), joints, path + ".robot.stiff_startup_pos");
@@ -370,6 +412,8 @@ void validate_one(const InferenceConfig& config, const std::string& path) {
   }
 
   const TaskConfig& task = config.task;
+  if (config.contextual && (task.use_phase || config.is_wbt()))
+    throw ConfigError(path + ".contextual: contextual inference owns no gait phase or WBT reference");
   if (task.model_path.empty()) {
     throw ConfigError(path + ".task.model_path: at least one model path is required");
   }
@@ -391,9 +435,31 @@ void validate_one(const InferenceConfig& config, const std::string& path) {
     }
   }
   if (task.motion_start_timestep < 0) throw ConfigError(path + ".task.motion_start_timestep: must be >= 0");
+  if (task.wbt_history_initialization != "repeat_first_valid_obs" && task.wbt_history_initialization != "zero_pad") {
+    throw ConfigError(path + ".task.wbt_history_initialization: '" + task.wbt_history_initialization +
+                      "' is not repeat_first_valid_obs or zero_pad");
+  }
 }
 
 }  // namespace
+
+const char* backend_name(Backend backend) {
+  switch (backend) {
+    case Backend::kCuda:
+      return "cuda";
+    case Backend::kTensorRt:
+      return "tensorrt";
+    default:
+      return "cpu";
+  }
+}
+
+Backend parse_backend(const std::string& name) {
+  if (name == "cpu") return Backend::kCpu;
+  if (name == "cuda") return Backend::kCuda;
+  if (name == "tensorrt" || name == "trt") return Backend::kTensorRt;
+  throw std::runtime_error("unknown inference backend '" + name + "'; expected cpu, cuda or tensorrt");
+}
 
 bool InferenceConfig::is_wbt() const {
   for (const auto& [group, terms] : observation.obs_dict) {
@@ -406,6 +472,10 @@ bool InferenceConfig::is_wbt() const {
 
 InferenceConfig parse_inference_config(const YAML::Node& node, const std::string& base_dir) {
   return parse_document(node, base_dir, "config", nullptr);
+}
+
+InferenceConfig config_from_yaml(const std::string& text, const std::string& base_dir) {
+  return parse_inference_config(YAML::Load(text), base_dir);
 }
 
 void validate_inference_config(const InferenceConfig& config) {

@@ -75,9 +75,12 @@ def test_layout_slices_the_concatenated_observation() -> None:
     groups = ["actor_obs", "gravity"]
     first, second = torch.full((_NUM_ENVS, 3), 1.0), torch.full((_NUM_ENVS, 3), 2.0)
     env.simulator.dof_pos = first
-    mgr.compute()
+    mgr.new_frame()
+    mgr.step()
     env.simulator.dof_pos = second
-    flat = torch.cat([mgr.compute()[g] for g in groups], dim=-1)
+    mgr.new_frame()
+    obs = mgr.step()
+    flat = torch.cat([obs[g] for g in groups], dim=-1)
 
     layout = mgr.get_observation_layout(groups)
     assert flat.shape[1] == sum(t["dim"] * t["history_length"] for t in layout)

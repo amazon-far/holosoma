@@ -108,6 +108,7 @@ FROM common-deps AS app-deps
 # independent linked layer in the final target.
 COPY src/holosoma_inference/pyproject.toml src/holosoma_inference/README.md \
     /opt/holosoma-src/src/holosoma_inference/
+COPY src/holosoma_inference/holosoma_cpp /opt/holosoma-src/src/holosoma_inference/holosoma_cpp
 RUN mkdir -p /opt/holosoma-src/src/holosoma_inference/holosoma_inference && \
     touch /opt/holosoma-src/src/holosoma_inference/holosoma_inference/__init__.py
 WORKDIR /opt/holosoma-src
@@ -210,6 +211,7 @@ FROM common-deps-ros AS app-deps-ros
 
 COPY src/holosoma_inference/pyproject.toml src/holosoma_inference/README.md \
     /opt/holosoma-src/src/holosoma_inference/
+COPY src/holosoma_inference/holosoma_cpp /opt/holosoma-src/src/holosoma_inference/holosoma_cpp
 RUN mkdir -p /opt/holosoma-src/src/holosoma_inference/holosoma_inference && \
     touch /opt/holosoma-src/src/holosoma_inference/holosoma_inference/__init__.py
 WORKDIR /opt/holosoma-src

@@ -4,7 +4,6 @@
     "hs-inference": "holosoma-inference:latest",
     "hs-retargeting": "holosoma-retargeting:latest",
     "hs-isaacsim": "holosoma-isaacsim:latest",
-    "hs-isaacgym": "holosoma-isaacgym:latest",
     "hs-mujoco": "holosoma-mujoco:latest"
   }
 }

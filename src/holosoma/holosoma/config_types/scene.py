@@ -8,14 +8,15 @@ from __future__ import annotations
 
 import fnmatch
 from dataclasses import field
+from typing import Annotated
 
 import tyro
 from pydantic import ConfigDict, model_validator
 from pydantic.dataclasses import dataclass
-from typing_extensions import Annotated
 
 import holosoma.config_values.light
 from holosoma.config_types.light import DEFAULT_LIGHT_KEY, DefaultLightConfig, LightConfig
+from holosoma.config_types.mujoco import MujocoGeomPhysicsConfig as MujocoPhysicsConfig
 from holosoma.config_types.value_types import UnitQuaternionWXYZ
 from holosoma.utils.config_registry import UseRegistry
 
@@ -26,10 +27,10 @@ _FORBID_EXTRA = ConfigDict(extra="forbid")
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)
 class PhysXPhysicsConfig:
-    """Rigid-body solver knobs that PhysX interprets identically under BOTH Isaac backends.
+    """Rigid-body solver knobs for the PhysX solver (IsaacSim).
 
-    IsaacGym and IsaacSim run the same PhysX solver and read these the same way, so they live
-    in ONE shared sub-config referenced by both.
+    They sit in their own sub-config, separate from IsaacSim's material settings, because they are
+    PhysX solver semantics rather than surface properties.
     """
 
     linear_damping: float = 0.1
@@ -46,35 +47,11 @@ class PhysXPhysicsConfig:
 
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)
-class IsaacGymPhysicsConfig:
-    """Rigid-shape material properties for the IsaacGym simulator.
-
-    Provides 1:1 mapping to IsaacGym RigidShapeProperties for physics simulation. Friction is
-    IsaacGym-specific (a single sliding coefficient, vs IsaacSim's static/dynamic split).
-    """
-
-    friction: float = 1.0
-    """Static friction coefficient. Defaults to 1.0."""
-
-    rolling_friction: float = 0.0
-    """Rolling resistance coefficient. Defaults to 0.0."""
-
-    torsion_friction: float = 0.0
-    """Torsion resistance coefficient. Defaults to 0.0."""
-
-    restitution: float = 0.0
-    """Bounce coefficient. Defaults to 0.0."""
-
-    compliance: float = 0.0
-    """Shape compliance. Defaults to 0.0."""
-
-
-@dataclass(frozen=True, config=_FORBID_EXTRA)
 class IsaacSimPhysicsConfig:
     """IsaacSim rigid-body physics: material (friction/restitution) and collision offsets.
 
     Friction/restitution map 1:1 to IsaacLab ``RigidBodyMaterialCfg`` (friction is a static/dynamic
-    pair with combine modes, vs IsaacGym's single coefficient). The collision offsets map to
+    pair with combine modes). The collision offsets map to
     ``CollisionPropertiesCfg`` (``physxCollision:contactOffset``/``restOffset``). All are applied at
     spawn, so PhysX reads them when the body is first initialized.
     """
@@ -124,28 +101,6 @@ class IsaacSimPhysicsConfig:
 
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)
-class MujocoPhysicsConfig:
-    """MuJoCo geom-level physics, set on an ``MjSpec`` before compile.
-
-    These are geom attributes (friction/solref/solimp/condim) that apply to any body's geoms,
-    whether a free scene object or a robot link, so this config is shared across both entity kinds.
-    ``None`` on any field keeps the asset's value.
-    """
-
-    friction: list[float] | None = None
-    """Geom friction ``[sliding, torsional, rolling]``. ``None`` keeps the asset's value."""
-
-    solref: list[float] | None = None
-    """Constraint solver reference ``[timeconst, dampratio]``. ``None`` keeps the asset's value."""
-
-    solimp: list[float] | None = None
-    """Constraint solver impedance ``[dmin, dmax, width, midpoint, power]``. ``None`` keeps it."""
-
-    condim: int | None = None
-    """Contact dimensionality (1/3/4/6). ``None`` keeps the asset's value."""
-
-
-@dataclass(frozen=True, config=_FORBID_EXTRA)
 class PhysicsConfig:
     """Unified physics configuration shared across simulators.
 
@@ -154,18 +109,17 @@ class PhysicsConfig:
     pushed into a backend-specific sub-config, so a field never silently means different things
     on different backends:
 
-    - :class:`PhysXPhysicsConfig` (``physx``): solver damping / velocity limits, shared by BOTH
-      Isaac backends (same PhysX semantics).
-    - :class:`IsaacGymPhysicsConfig` (``isaacgym``): IsaacGym rigid-shape friction.
+    - :class:`PhysXPhysicsConfig` (``physx``): solver damping / velocity limits, read by
+      IsaacSim (PhysX semantics).
     - :class:`IsaacSimPhysicsConfig` (``isaacsim``): IsaacSim rigid-body material.
     - :class:`MujocoPhysicsConfig` (``mujoco``): MuJoCo geom friction/solver props.
 
-    Friction is not a shared core field. Each engine models it differently (IsaacGym: a single
-    ``friction``; IsaacSim: ``static_friction``/``dynamic_friction``; MuJoCo: ``friction[0]`` of a
-    3-vector), so it lives in the per-backend sub-configs and there is no cross-check that the three
-    agree. For cross-backend friction parity, set all three (``isaacgym.friction``,
-    ``isaacsim.static_friction``/``dynamic_friction``, ``mujoco.friction``) to matching values;
-    setting only one leaves the other backends at their defaults.
+    Friction is not a shared core field. Each engine models it differently (IsaacSim: a
+    ``static_friction``/``dynamic_friction`` pair; MuJoCo: ``friction[0]`` of a 3-vector), so it
+    lives in the per-backend sub-configs and there is no cross-check that the two agree. For
+    cross-backend friction parity, set both (``isaacsim.static_friction``/``dynamic_friction`` and
+    ``mujoco.friction``) to matching values; setting only one leaves the other backend at its
+    defaults.
     """
 
     mass: float | None = None
@@ -175,10 +129,7 @@ class PhysicsConfig:
     """Density in kg/m³ for mass calculation (medium priority). Defaults to None."""
 
     physx: PhysXPhysicsConfig | None = None
-    """PhysX solver knobs (damping / velocity limits) shared by IsaacGym + IsaacSim. Defaults to None."""
-
-    isaacgym: IsaacGymPhysicsConfig | None = None
-    """IsaacGym-specific physics configuration. Defaults to None."""
+    """PhysX solver knobs (damping / velocity limits) used by IsaacSim. Defaults to None."""
 
     isaacsim: IsaacSimPhysicsConfig | None = None
     """IsaacSim-specific physics configuration. Defaults to None."""
@@ -267,7 +218,7 @@ class SceneFileConfig:
     def should_include(self, body_name: str) -> bool:
         """Whether a body of this file should load, per include/exclude patterns.
 
-        The single subset-selection rule, shared by every backend (MuJoCo / IsaacGym /
+        The single subset-selection rule, shared by every backend (MuJoCo /
         IsaacSim) so a scene file's body set is identical regardless of which backend
         loads it. Semantics:
 
@@ -298,7 +249,7 @@ class SceneFileConfig:
         The single normalization for include/exclude filtering AND ``object_configs`` matching,
         so one pattern string means the same thing in both places.
         """
-        return pattern[2:] if pattern.startswith("*/") else pattern
+        return pattern.removeprefix("*/")
 
     def resolve_fixed(self, body_name: str, structural_default: bool) -> bool:
         """Whether ``body_name`` is static, applying any per-object config override.
@@ -318,7 +269,7 @@ class SceneFileConfig:
 
         The first ``object_configs`` entry whose pattern matches ``body_name`` and carries a
         non-None ``physics`` wins. Shared by every backend so a scene file's per-body physics
-        (mass/damping/material) is resolved identically whether it loads under IsaacGym,
+        (mass/damping/material) is resolved identically whether it loads under
         IsaacSim, or MuJoCo — counterpart to :meth:`resolve_fixed` for the ``fixed`` field.
         """
         for pattern, obj_config in (self.object_configs or {}).items():
@@ -418,7 +369,7 @@ class SceneConfig:
 
     # Named lights for the scene, assembled by a scene preset. Three modes:
     #   {"default_light": DefaultLightConfig()} (default): each backend authors its own default lighting
-    #       — Isaac Sim a directional sun, IsaacGym its viewer directional light, MuJoCo its headlight.
+    #       — Isaac Sim a directional sun, MuJoCo its headlight.
     #   {} (empty): author no lights (MuJoCo headlight off too), leaving only the scene's baked lights.
     #   {name: DomeLightConfig(), ...} (populated): author exactly those lights.
     # Override a light's fields on the CLI with ``--scene.lights.<name>.<field>``; enabled=False omits it.

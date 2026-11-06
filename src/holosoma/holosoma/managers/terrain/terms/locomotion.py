@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Tuple
+from typing import TYPE_CHECKING, Any
 
 from holosoma.managers.terrain.base import TerrainTermBase
 from holosoma.simulator.shared.terrain import Terrain
@@ -124,7 +124,7 @@ class TerrainLocomotion(TerrainTermBase):
             self._env_origins[:] = torch.from_numpy(self.terrain.sample_env_origins()).to(self.device).to(torch.float)
         else:
             # Eval mode: all robots at tile (0,0) for deterministic evaluation
-            origin_0_0 = torch.from_numpy(self.terrain._env_origins[0, 0]).to(self.device).to(torch.float)
+            origin_0_0 = torch.from_numpy(self.terrain.env_origin_grid[0, 0]).to(self.device).to(torch.float)
             self._env_origins[:] = origin_0_0  # Broadcast to all robots
 
     def _init_base_height_points(self) -> tuple[torch.Tensor, torch.Tensor, int]:
@@ -170,7 +170,7 @@ class TerrainLocomotion(TerrainTermBase):
         ray_directions[..., :] = torch.tensor([0.0, 0.0, -1.0], device=self.device)
         return points, ray_directions, num_base_height_points
 
-    def _get_base_heights(self, env_ids: torch.Tensor | None = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _get_base_heights(self, env_ids: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
         """Get base heights from the terrain."""
         idx = env_ids if env_ids is not None else slice(None)
         base_positions = quat_apply_yaw(
@@ -184,7 +184,7 @@ class TerrainLocomotion(TerrainTermBase):
         base_heights = (base_positions - ray_hits_world)[..., 2]
         return interquartile_mean(base_heights, dim=1), ray_hits_world
 
-    def _get_feet_heights(self, env_ids: torch.Tensor | None = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _get_feet_heights(self, env_ids: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
         """Get feet heights from the terrain."""
         idx = env_ids if env_ids is not None else slice(None)
         foot_positions = self.env.simulator._rigid_body_pos[idx, self.env.feet_height_indices, :].clone()

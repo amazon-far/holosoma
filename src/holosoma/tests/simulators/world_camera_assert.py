@@ -13,7 +13,7 @@ camera sits at that env's origin). Exits 0 PASS, 1 FAIL, 77 SKIP.
 
   python world_camera_assert.py --simulator mujoco
   python world_camera_assert.py --simulator mjwarp   --num-envs 3
-  python world_camera_assert.py --simulator isaacgym --num-envs 3
+  python world_camera_assert.py --simulator isaacsim --num-envs 3
   python world_camera_assert.py --simulator isaacsim --num-envs 3
 """
 
@@ -56,7 +56,7 @@ def _panel_median_depth(rgb, depth):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacgym", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)

@@ -34,7 +34,7 @@ empty = SceneConfig()
 #   - standalone rigid bodies: a free box, a second free box with a configured initial
 #     velocity (so reset/jitter velocity-restore is observable), and a static pillar;
 #   - a 1->N scene FILE that expands to 'scene_free_box' (free) + 'scene_static_post' (static).
-# Tri-format on every asset (urdf for IsaacGym, usd for IsaacSim, urdf/xml for MuJoCo) so the
+# Tri-format on every asset (usd for IsaacSim, urdf/xml for MuJoCo) so the
 # same preset runs under all four backends. Names are the ObjectRegistry keys the managers
 # address: free bodies = {free_box, moving_box, scene_free_box}, static = {pillar, scene_static_post}.
 object_managers_demo = SceneConfig(

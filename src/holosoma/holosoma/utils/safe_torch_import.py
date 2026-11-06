@@ -1,9 +1,3 @@
-# Ensure that torch is imported after isaacgym, if isaacgym is installed.
-try:
-    import isaacgym  # noqa: F401
-except ImportError:
-    pass
-
 import torch
 import torch.nn.functional as F
 from tensordict import TensorDict

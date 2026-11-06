@@ -3,13 +3,8 @@
 from __future__ import annotations
 
 import glob
-import sys
+from importlib.resources import files
 from pathlib import Path
-
-if sys.version_info >= (3, 9):
-    from importlib.resources import files
-else:
-    from importlib_resources import files  # type: ignore[import-not-found]
 
 import boto3  # type: ignore[import-untyped]
 import pytest

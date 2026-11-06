@@ -30,7 +30,7 @@ class CameraParameters:
     """Standardized camera parameters for simulator APIs.
 
     This class provides a uniform interface for camera positioning that can be
-    used across different simulator backends (MuJoCo, IsaacGym, IsaacSim).
+    used across different simulator backends (MuJoCo, IsaacSim).
 
     Parameters
     ----------

@@ -28,14 +28,13 @@ import numpy as np
 import numpy.typing as npt
 
 from holosoma.utils.safe_torch_import import torch
-from holosoma.utils.torch_jit import torch_jit_script
 
 # ============================================================================
 # Math Utilities (from maths.py)
 # ============================================================================
 
 
-@torch_jit_script
+@torch.jit.script
 def normalize(x: torch.Tensor, eps: float = 1e-9) -> torch.Tensor:
     """Normalize a tensor along the last dimension.
 
@@ -49,7 +48,7 @@ def normalize(x: torch.Tensor, eps: float = 1e-9) -> torch.Tensor:
     return x / x.norm(p=2, dim=-1).clamp(min=eps, max=None).unsqueeze(-1)
 
 
-@torch_jit_script
+@torch.jit.script
 def copysign(a: float, b: torch.Tensor) -> torch.Tensor:
     """Copy the sign of tensor b to scalar a.
 
@@ -132,7 +131,7 @@ def to_torch(
     return torch.tensor(x, dtype=dtype, device=device, requires_grad=requires_grad)
 
 
-@torch_jit_script
+@torch.jit.script
 def torch_rand_float(lower: float, upper: float, shape: tuple[int, int], device: str) -> torch.Tensor:
     """Generate random float tensor.
 

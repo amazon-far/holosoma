@@ -19,12 +19,12 @@ regardless of its per-step ``sim_dt`` (every backend's ``simulate_at_each_physic
 ``backend.step()`` advances exactly one ``sim_dt`` physics step).
 
 Exits 0 on success, non-zero with a message on failure, so it runs as a live integration test
-under each backend's launcher (MuJoCo venv, IsaacGym, IsaacSim). Mirrors scene_spawn_assert.py.
+under each backend's launcher (MuJoCo venv, IsaacSim). Mirrors scene_spawn_assert.py.
 
 Usage:
   python static_move_assert.py --simulator mujoco                 # ClassicBackend, 1 env, cpu
   python static_move_assert.py --simulator mjwarp   --num-envs 4  # WarpBackend, cuda
-  python static_move_assert.py --simulator isaacgym --num-envs 4  # IsaacGym, cuda
+  python static_move_assert.py --simulator isaacsim --num-envs 4  # IsaacSim, cuda
   python static_move_assert.py --simulator isaacsim --num-envs 4  # IsaacSim, cuda
 """
 
@@ -119,7 +119,7 @@ def _step(sim, n):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Cross-backend runtime static-move assertion harness.")
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacgym", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
     parser.add_argument("--num-envs", type=int, default=None)
     args = parser.parse_args()
     num_envs = args.num_envs if args.num_envs is not None else (1 if args.simulator == "mujoco" else 4)

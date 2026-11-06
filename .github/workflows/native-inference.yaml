@@ -1,0 +1,43 @@
+name: Native Inference
+
+on:
+  pull_request:
+    paths:
+      - 'src/holosoma_inference/**'
+      - 'docker/Dockerfile'
+      - 'docker/thor/Dockerfile'
+      - '.github/workflows/native-inference.yaml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/holosoma_inference/**'
+      - '.github/workflows/native-inference.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          python-version: '3.12'
+      - name: Native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libeigen3-dev libyaml-cpp-dev libtinyxml2-dev
+      - name: Build and install the Python extension
+        run: |
+          uv venv .venv
+          uv pip install -e './src/holosoma_inference[dev]'
+      - name: Python API, configuration and transport tests
+        run: .venv/bin/python -m pytest --import-mode=importlib src/holosoma_inference/holosoma_inference src/holosoma_inference/tests -q
+      - name: Native library and independent replay tests
+        run: |
+          cmake -S src/holosoma_inference/holosoma_cpp -B build/native-tests \
+            -DHOLOSOMA_WITH_UNITREE_SDK=OFF -DHOLOSOMA_BUILD_TESTS=ON \
+            -DPython_EXECUTABLE="$PWD/.venv/bin/python"
+          cmake --build build/native-tests -j 4
+          ctest --test-dir build/native-tests --output-on-failure

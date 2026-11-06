@@ -21,7 +21,6 @@ Two ways the harnesses consume them:
 from __future__ import annotations
 
 from holosoma.config_types.scene import (
-    IsaacGymPhysicsConfig,
     IsaacSimPhysicsConfig,
     MujocoPhysicsConfig,
     ObjectPatternConfig,
@@ -78,7 +77,7 @@ usd_box = SceneConfig(rigid_objects={"box": RigidObjectConfig(usd_file=_SMALL_BO
 # A single free box given a known non-zero initial linear + angular velocity. Drives the
 # velocity wiring on every backend: the box should read its configured velocity back
 # immediately, translate along +x/+y (gravity-independent axes) and visibly spin about z.
-# Tri-format (urdf for IsaacGym, usd for IsaacSim, urdf->xml selected for MuJoCo) so the
+# Tri-format (usd for IsaacSim, urdf->xml selected for MuJoCo) so the
 # same preset runs under all backends. Initial orientation is identity so the world-frame
 # config velocity and each backend's body-local read-back frame coincide.
 #
@@ -109,7 +108,6 @@ physics_box = SceneConfig(
             position=[0.0, 1.5, 0.6],  # y=1.5 clears the origin robot's collapse footprint (see g1_largebox)
             physics=PhysicsConfig(
                 mass=3.0,
-                isaacgym=IsaacGymPhysicsConfig(friction=0.4),
                 isaacsim=IsaacSimPhysicsConfig(static_friction=0.4, dynamic_friction=0.4),
                 mujoco=MujocoPhysicsConfig(friction=[0.4, 0.01, 0.001]),
             ),
@@ -131,7 +129,6 @@ def _friction_box(y: float, friction: float) -> RigidObjectConfig:
         position=[0.0, y, 0.07],
         linear_velocity=[2.0, 0.0, 0.0],
         physics=PhysicsConfig(
-            isaacgym=IsaacGymPhysicsConfig(friction=friction),
             isaacsim=IsaacSimPhysicsConfig(static_friction=friction, dynamic_friction=friction),
             mujoco=MujocoPhysicsConfig(friction=[friction, 0.005, 0.001]),
         ),
@@ -155,7 +152,7 @@ friction_slide = SceneConfig(
 
 # A multi-body scene FILE (1->N): one file expands to a free box + a static post at a
 # known +0.5m-x relative offset. Tri-format so each backend loads its own (MuJoCo xml,
-# IsaacGym urdf, IsaacSim usd); registered bodies are 'scene_free_box' (free) and
+# IsaacSim usd); registered bodies are 'scene_free_box' (free) and
 # 'scene_static_post' (static). Placed at a non-trivial world pose to exercise composition.
 # y=1.5 clears the un-actuated harness robot at the origin (which collapses under gravity and
 # would strike the free body, contaminating the fall check — see g1_largebox); the +0.5m-x
@@ -292,7 +289,6 @@ collide_into_fixed = SceneConfig(
             position=[1.4, 0.0, 0.05],
             linear_velocity=[2.0, 0.0, 0.0],
             physics=PhysicsConfig(
-                isaacgym=IsaacGymPhysicsConfig(friction=0.05),
                 isaacsim=IsaacSimPhysicsConfig(static_friction=0.05, dynamic_friction=0.05),
                 mujoco=MujocoPhysicsConfig(friction=[0.05, 0.005, 0.001]),
             ),
@@ -312,7 +308,6 @@ momentum_transfer = SceneConfig(
             position=[1.4, 0.0, 0.05],
             linear_velocity=[2.0, 0.0, 0.0],
             physics=PhysicsConfig(
-                isaacgym=IsaacGymPhysicsConfig(friction=0.05),
                 isaacsim=IsaacSimPhysicsConfig(static_friction=0.05, dynamic_friction=0.05),
                 mujoco=MujocoPhysicsConfig(friction=[0.05, 0.005, 0.001]),
             ),
@@ -322,7 +317,6 @@ momentum_transfer = SceneConfig(
             usd_file=_SMALL_BOX_USD,
             position=[1.55, 0.0, 0.05],
             physics=PhysicsConfig(
-                isaacgym=IsaacGymPhysicsConfig(friction=0.05),
                 isaacsim=IsaacSimPhysicsConfig(static_friction=0.05, dynamic_friction=0.05),
                 mujoco=MujocoPhysicsConfig(friction=[0.05, 0.005, 0.001]),
             ),
@@ -476,7 +470,6 @@ restitution_bounce = SceneConfig(
             usd_file=_SMALL_BOX_USD,
             position=[1.5, 0.0, 0.5],
             physics=PhysicsConfig(
-                isaacgym=IsaacGymPhysicsConfig(friction=0.5, restitution=0.9),
                 isaacsim=IsaacSimPhysicsConfig(
                     static_friction=0.5, dynamic_friction=0.5, restitution=0.9, restitution_combine_mode="max"
                 ),
@@ -609,7 +602,7 @@ per_env_relocation = SceneConfig(
 # same physical outcome, confirming the robot link is driven by the shared config the same way the
 # object is, not merely that a field echoes back.
 #
-# The twin sits at y >= 2.0 to clear IsaacGym's +-1 m robot spawn jitter (the robot spawns near the
+# The twin sits at y >= 2.0 to clear the +-1 m robot spawn jitter (the robot spawns near the
 # origin); gravity outcomes are x/y-invariant, so the lateral offset is harmless. The robot's own
 # spawn pose comes from the onelink-box RobotConfig.init_state (z=0.6), set in _robot_presets.
 
@@ -661,7 +654,6 @@ restitution_twin = SceneConfig(
             # apex, matches; a different z would give a different apex and a false fail.
             position=[0.0, 2.0, 0.6],
             physics=PhysicsConfig(
-                isaacgym=IsaacGymPhysicsConfig(friction=0.5, restitution=0.9),
                 # "max" restitution combine so the box's 0.9 wins against the ground (matches the
                 # restitution-bounce scenario; multiplying against a <1 ground kills the bounce).
                 # The robot link carries the same max-combine material via the spawn material bind

@@ -55,7 +55,6 @@ def test_arbitrary_free_bodies_spawn_and_fall(n_free):
 
     z0 = {n: _z(sim, n) for n in names}
     for _ in range(STEPS):
-        sim.refresh_sim_tensors()
         sim.simulate_at_each_physics_step()
     for n in names:
         assert _z(sim, n) < z0[n] - 1e-3, f"{n} did not fall"
@@ -71,7 +70,6 @@ def test_static_body_holds_pose():
     z0 = _z(sim, "pillar")
     assert abs(z0 - 0.3) < 1e-3  # spawned at its configured height
     for _ in range(STEPS):
-        sim.refresh_sim_tensors()
         sim.simulate_at_each_physics_step()
     assert abs(_z(sim, "pillar") - z0) < 1e-3  # stayed put
 
@@ -83,7 +81,6 @@ def test_xml_format_object_spawns_and_falls():
     assert sim.object_registry.get_names_by_type(ObjectType.INDIVIDUAL) == ["xbox"]
     z0 = _z(sim, "xbox")
     for _ in range(STEPS):
-        sim.refresh_sim_tensors()
         sim.simulate_at_each_physics_step()
     assert _z(sim, "xbox") < z0 - 1e-3, "xml-format object did not fall"
 
@@ -96,7 +93,6 @@ def test_xml_static_body_holds_pose():
     assert "xpillar" not in sim.object_addrs  # static: no freejoint qpos slice
     z0 = _z(sim, "xpillar")
     for _ in range(STEPS):
-        sim.refresh_sim_tensors()
         sim.simulate_at_each_physics_step()
     assert abs(_z(sim, "xpillar") - z0) < 1e-3  # stayed put
 
@@ -121,7 +117,6 @@ def test_free_and_static_mix():
 
     z0 = {n: _z(sim, n) for n in ("free0", "free1", "pillar")}
     for _ in range(STEPS):
-        sim.refresh_sim_tensors()
         sim.simulate_at_each_physics_step()
     assert _z(sim, "free0") < z0["free0"] - 1e-3
     assert _z(sim, "free1") < z0["free1"] - 1e-3
@@ -162,7 +157,6 @@ def test_initial_velocity_takes_effect():
 
     p0, q0 = st0[:3].clone(), st0[3:7].clone()
     for _ in range(STEPS):
-        sim.refresh_sim_tensors()
         sim.simulate_at_each_physics_step()
 
     st1 = _state(sim, "vbox")
@@ -238,7 +232,6 @@ def test_multibody_scene_file_spawns_with_types_and_offset():
 
     z_free, z_static = _z(sim, "scene_free_box"), _z(sim, "scene_static_post")
     for _ in range(STEPS):
-        sim.refresh_sim_tensors()
         sim.simulate_at_each_physics_step()
     assert _z(sim, "scene_free_box") < z_free - 1e-3  # free body fell
     assert abs(_z(sim, "scene_static_post") - z_static) < 1e-3  # static body held
@@ -268,7 +261,6 @@ def test_multibody_object_config_overrides_static_dynamic():
 
     z_free, z_static = _z(sim, "scene_free_box"), _z(sim, "scene_static_post")
     for _ in range(STEPS):
-        sim.refresh_sim_tensors()
         sim.simulate_at_each_physics_step()
     assert abs(_z(sim, "scene_free_box") - z_free) < 1e-3  # forced static: held
     assert _z(sim, "scene_static_post") < z_static - 1e-3  # forced free: fell

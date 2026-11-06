@@ -1,0 +1,874 @@
+from __future__ import annotations
+
+import itertools
+import json
+import sys
+import time
+from collections import deque
+from dataclasses import replace
+from pathlib import Path
+
+import netifaces as ni
+import numpy as np
+import onnx
+import onnxruntime
+from loguru import logger
+from termcolor import colored
+
+from holosoma_inference.config.config_types.inference import InferenceConfig
+from holosoma_inference.config.config_types.robot import RobotConfig
+from holosoma_inference.inputs import create_input
+from holosoma_inference.inputs.api.base import StateCommandProvider, VelCmdProvider
+from holosoma_inference.inputs.api.commands import StateCommand, VelCmd
+from holosoma_inference.sdk import create_interface
+from holosoma_inference.utils.latency import LatencyTracker
+from holosoma_inference.utils.math.quat import quat_rotate_inverse
+from holosoma_inference.utils.rate import RateLimiter
+from holosoma_inference.utils.wandb import load_checkpoint
+
+# Maps SWITCH_POLICY_N commands to 0-based policy indices.
+STATE_COMMAND_TO_POLICY_INDEX: dict[StateCommand, int] = {
+    StateCommand[f"SWITCH_POLICY_{n}"]: n - 1 for n in range(1, 10)
+}
+
+
+class BasePolicy:
+    """
+    Base policy class for Holosoma deployment on humanoid robots.
+
+    Supports both simulation and real robot deployment with keyboard/joystick controls.
+    """
+
+    def __init__(self, config: InferenceConfig):
+        """Initialize the base policy with configuration and model."""
+        self.config = config
+        # Initialize robot config
+        self._init_robot_config(self.config.robot)
+        # Initialize SDK components
+        self._init_sdk_components()
+        # Initialize observation config
+        self._init_obs_config()
+        # Initialize communication components
+        self._init_communication_components()
+        # Initialize policy components
+        self._init_policy_components(
+            self.config.task.model_path, self.config.task.policy_action_scale, self.config.task.rl_rate
+        )
+        # Initialize command components
+        self._init_command_components()
+        # Initialize input handlers
+        self._init_input_handlers()
+        # Initialize phase components
+        self._init_phase_components()
+        # Initialize latency tracking
+        self._init_latency_tracking()
+
+    # ============================================================================
+    # Initialization Methods
+    # ============================================================================
+
+    def _init_robot_config(self, robot_config: RobotConfig):
+        """Initialize robot configuration and parameters."""
+        self.robot_config = robot_config
+        self.num_dofs = self.robot_config.num_joints
+        self.default_dof_angles = np.array(self.robot_config.default_dof_angles)
+        self.num_upper_dofs = robot_config.num_upper_body_joints
+
+        # Per-robot joint offsets (action-space calibration, does not affect observations)
+        offsets_deg = robot_config.joint_offsets_deg
+        self.joint_offsets = np.deg2rad(offsets_deg) if offsets_deg is not None else np.zeros(self.num_dofs)
+
+        # Setup dof names and indices
+        self._setup_dof_mappings()
+
+    def _setup_dof_mappings(self):
+        """Setup DOF names and their corresponding indices."""
+        self.dof_names = self.robot_config.dof_names
+        # TODO: Remove upper body mentions as it's not used anymore.
+        self.upper_dof_names = self.robot_config.dof_names_upper_body
+        self.lower_dof_names = self.robot_config.dof_names_lower_body
+
+        # These are used by derived classes, so keep them
+        if self.upper_dof_names:
+            self.upper_dof_indices = [self.dof_names.index(dof) for dof in self.upper_dof_names]
+        else:
+            self.upper_dof_indices = []
+
+        if self.lower_dof_names:
+            self.lower_dof_indices = [self.dof_names.index(dof) for dof in self.lower_dof_names]
+        else:
+            self.lower_dof_indices = []
+
+    def _init_sdk_components(self):
+        """Additional SDK components initialization based on robot type."""
+        if hasattr(self, "_shared_hardware_source"):
+            self.sdk_type = self._shared_hardware_source.sdk_type
+            return
+        self.sdk_type = self.robot_config.sdk_type
+        if self.sdk_type == "booster":
+            from booster_robotics_sdk import ChannelFactory
+
+            ip = ni.ifaddresses(self.config.task.interface)[ni.AF_INET][0]["addr"]
+            ChannelFactory.Instance().Init(self.config.task.domain_id, ip)
+        else:
+            pass  # No channel initialization needed for Unitree binding / other robots
+
+    def _init_obs_config(self):
+        """Initialize observation metadata and history buffers."""
+        self.obs_config = self.config.observation
+        self.obs_scales = self.obs_config.obs_scales
+        self.obs_dims = self.obs_config.obs_dims
+        self.obs_dict = self.obs_config.obs_dict
+        self.obs_dim_dict = self._calculate_obs_dim_dict()
+        self.history_length_dict = self.obs_config.history_length_dict
+
+        # Initialize per-term history buffers using deques
+        self._initialize_history_state()
+
+    def _initialize_history_state(self):
+        """Create per-term history deques and zero-initialized flattened buffers."""
+        self.obs_history_buffers: dict[str, dict[str, deque[np.ndarray]]] = {}
+        self.obs_terms_sorted: dict[str, list[str]] = {}
+        self.obs_buf_dict: dict[str, np.ndarray] = {}
+
+        for group, term_names in self.obs_dict.items():
+            self.obs_terms_sorted[group] = sorted(term_names)
+            history_len = self.history_length_dict.get(group, 1)
+            self.obs_history_buffers[group] = {}
+            flattened_terms: list[np.ndarray] = []
+
+            for term in self.obs_terms_sorted[group]:
+                term_dim = self.obs_dims[term]
+                self.obs_history_buffers[group][term] = deque(maxlen=history_len)
+                flattened_terms.append(np.zeros((1, term_dim * history_len), dtype=np.float32))
+
+            self.obs_buf_dict[group] = np.concatenate(flattened_terms, axis=1) if flattened_terms else np.zeros((1, 0))
+
+    def _init_communication_components(self):
+        """Initialize appropriate robot interface."""
+        if hasattr(self, "_shared_hardware_source"):
+            self.interface = self._shared_hardware_source.interface
+            return
+        # The SDK's own wireless-controller path is only needed when an
+        # "interface" channel is selected.  The "joystick" channel is read
+        # via host-side evdev (UsbJoystickInput) and does not touch the SDK.
+        vel = self.config.task.velocity_input
+        other = self.config.task.state_input
+        need_joystick = "interface" in {vel, other}
+        self.interface = create_interface(
+            self.robot_config,
+            self.config.task.domain_id,
+            self.config.task.interface,
+            need_joystick,
+        )
+
+    def _init_policy_components(self, model_path, policy_action_scale, rl_rate):
+        """Initialize policy-related components."""
+        self.policy_action_scale = policy_action_scale
+        self.rl_rate = rl_rate
+        self.model_paths = self._collect_model_paths(model_path)
+        self._policy_states: list[dict] = []
+        self.last_policy_action = np.zeros((1, self.num_dofs))
+        self.scaled_policy_action = np.zeros((1, self.num_dofs))
+        resolved_paths: list[str] = []
+
+        for path in self.model_paths:
+            local_path = self._resolve_model_path(str(path))
+            resolved_paths.append(local_path)
+            self.setup_policy(local_path)
+            self._policy_states.append(self._capture_policy_state())
+
+        self.model_paths = resolved_paths
+        self.active_policy_index = 0
+        self.active_model_path = None
+        self._activate_policy(0, announce=False)
+
+        # Determine KP/KD values: config override > ONNX metadata > error
+        self._resolve_control_gains()
+
+    def _collect_model_paths(self, model_path):
+        """Normalize model_path into a list of up to nine entries."""
+        if isinstance(model_path, (list, tuple)):
+            paths = list(model_path)
+        elif model_path is not None:
+            paths = [model_path]
+        else:
+            paths = []
+
+        paths = [str(path) for path in paths if path]
+        if not paths:
+            raise ValueError("At least one model_path must be provided for policy initialization.")
+        if len(paths) > 9:
+            # Error out instead of warning
+            raise ValueError("Received more than nine model paths. Only up to nine model paths are supported.")
+        return paths
+
+    def _resolve_model_path(self, model_path: str) -> str:
+        """Resolve model path, downloading from W&B if required."""
+        if model_path.startswith(("wandb://", "https://")):
+            logger.info(f"Downloading checkpoint from W&B: {model_path}")
+            checkpoint_path = load_checkpoint(None, model_path)
+            resolved_path = str(checkpoint_path)
+            logger.info("Checkpoint downloaded to: %s", resolved_path)
+            return resolved_path
+        return model_path
+
+    def _capture_policy_state(self) -> dict:
+        """Capture the current policy state for later reuse."""
+        return {
+            "onnx_policy_session": self.onnx_policy_session,
+            "onnx_input_names": self.onnx_input_names,
+            "onnx_output_names": self.onnx_output_names,
+            "policy_callable": self.policy,
+            "onnx_kp": self.onnx_kp,
+            "onnx_kd": self.onnx_kd,
+        }
+
+    def _restore_policy_state(self, state: dict):
+        """Restore a previously captured policy state."""
+        self.onnx_policy_session = state["onnx_policy_session"]
+        self.onnx_input_names = state["onnx_input_names"]
+        self.onnx_output_names = state["onnx_output_names"]
+        self.policy = state["policy_callable"]
+        self.onnx_kp = state["onnx_kp"]
+        self.onnx_kd = state["onnx_kd"]
+
+    def _activate_policy(self, index: int, announce: bool = True):
+        """Activate a preloaded policy."""
+        if not (0 <= index < len(self.model_paths)):
+            return
+
+        self._restore_policy_state(self._policy_states[index])
+        self.last_policy_action.fill(0.0)
+        self.scaled_policy_action.fill(0.0)
+        self.active_policy_index = index
+        self.active_model_path = self.model_paths[index]
+        self._on_policy_switched(self.active_model_path)
+
+        if announce and len(self.model_paths) > 1 and hasattr(self, "logger"):
+            name = Path(self.active_model_path).name
+            self.logger.info(colored(f"Switched to policy [{index + 1}]: {name}", "blue"))
+
+    def _on_policy_switched(self, model_path: str):
+        """Hook for derived classes to reset state after loading a new policy."""
+        _ = model_path
+
+    def _init_command_components(self):
+        """Initialize control-related components and commands."""
+        self.use_policy_action = False
+        self.init_count = 0
+        self.get_ready_state = False
+        self.desired_base_height = self.config.task.desired_base_height
+        self.gait_period = self.config.task.gait_period
+
+        # Initialize command arrays
+        self.lin_vel_command = np.array([[0.0, 0.0]])
+        self.ang_vel_command = np.array([[0.0]])
+        self.stand_command = np.array([[0]])
+        self.base_height_command = np.array([[self.desired_base_height]])
+
+        # These are used by derived classes, so keep them
+        self.waist_dofs_command = np.zeros((1, 3))
+        self.phase_time = np.zeros((1, 1))
+
+        # Upper body controller
+        self.upper_body_controller = None
+
+        # Pre-allocate command arrays for postprocessing
+        self.cmd_q = np.zeros(self.num_dofs)
+        self.cmd_dq = np.zeros(self.num_dofs)
+        self.cmd_tau = np.zeros(self.num_dofs)
+
+    def _init_phase_components(self):
+        """Initialize phase components."""
+        self.use_phase = self.config.task.use_phase
+        if self.use_phase:
+            self.phase = np.zeros((1, 2))
+            self.phase[:, 0] = 0.0  # left foot starts at 0
+            self.phase[:, 1] = np.pi  # right foot starts at pi
+            self.phase_dt = 2 * np.pi / (self.rl_rate * self.gait_period)
+
+    def _init_latency_tracking(self):
+        """Initialize latency tracking components."""
+        self.latency_tracker = LatencyTracker(window_size=int(self.rl_rate))
+
+    def _init_input_handlers(self):
+        """Initialize input handlers (ROS, joystick, keyboard)."""
+        if hasattr(self, "_shared_hardware_source"):
+            self.logger = self._shared_hardware_source.logger
+            self.rate = self._shared_hardware_source.rate
+            self.rl_rate = self._shared_hardware_source.rl_rate
+            self.use_joystick = self._shared_hardware_source.use_joystick
+            self.use_keyboard = self._shared_hardware_source.use_keyboard
+            # Share input providers — one queue, active policy drains it each cycle.
+            self._velocity_input: VelCmdProvider = self._shared_hardware_source._velocity_input
+            self._command_provider: StateCommandProvider = self._shared_hardware_source._command_provider
+            return
+        self._init_rate_handler()
+        self._init_input_device()
+
+    def _init_rate_handler(self):
+        """Initialize rate limiter and logger."""
+        self.rl_rate = self.config.task.rl_rate
+        self.logger = logger
+        self.rate = RateLimiter(self.rl_rate)
+
+    def _init_input_device(self):
+        """Initialize input hardware and create input providers.
+
+        Each channel independently selects from InputSource enum values.
+        Hardware is initialized based on the union of both channels' requirements,
+        then providers are created via factory methods (overridden by subclasses).
+        """
+        vel = self.config.task.velocity_input
+        other = self.config.task.state_input
+        sources = {vel, other}
+
+        # Joystick hardware (needed if either channel uses interface or joystick)
+        if {"interface", "joystick"} & sources:
+            self._init_joystick_handler()
+        else:
+            self.use_joystick = False
+
+        # use_keyboard is set by KeyboardListener when providers start
+        self.use_keyboard = False
+
+        self._create_input_providers()
+
+    def _init_joystick_handler(self):
+        """Initialize joystick handler."""
+        if sys.platform == "darwin":
+            self.logger.warning("Joystick is not supported on Windows or Mac.")
+            self.logger.warning("Falling back to keyboard for joystick channel")
+            self.use_joystick = False
+        else:
+            self.logger.info("Using joystick")
+            self.use_joystick = True
+
+    def _create_input_providers(self):
+        """Create and start input providers based on config.
+
+        When both channels use the same source, a single provider is shared
+        (important for KeyboardInput which pops from a shared queue).
+        """
+        self._setup_keyboard_listener()
+
+        self._velocity_input: VelCmdProvider = create_input(self, self.config.task.velocity_input, "velocity")
+
+        if self.config.task.velocity_input == self.config.task.state_input:
+            self._command_provider: StateCommandProvider = self._velocity_input
+        else:
+            self._command_provider: StateCommandProvider = create_input(self, self.config.task.state_input, "command")
+
+        self._velocity_input.start()
+        if self._command_provider is not self._velocity_input:
+            self._command_provider.start()
+
+    def _setup_keyboard_listener(self):
+        """Start the shared keyboard listener if any channel uses keyboard input."""
+        if hasattr(self, "_shared_hardware_source"):
+            return
+        sources = {self.config.task.velocity_input, self.config.task.state_input}
+        if "keyboard" not in sources:
+            return
+        from holosoma_inference.inputs.impl.keyboard import get_keyboard_listener
+
+        listener = get_keyboard_listener()
+        active = listener.start()
+        self.use_keyboard = active
+        if not active:
+            self.logger.warning("No TTY — keyboard input disabled")
+            self.use_policy_action = True
+
+    # ============================================================================
+    # Policy Methods
+    # ============================================================================
+
+    def setup_policy(self, model_path):
+        """Setup ONNX policy model and extract metadata."""
+        self.onnx_policy_session = onnxruntime.InferenceSession(model_path)
+        input_names = [inp.name for inp in self.onnx_policy_session.get_inputs()]
+        output_names = [out.name for out in self.onnx_policy_session.get_outputs()]
+
+        self.onnx_input_names = input_names
+        self.onnx_output_names = output_names
+
+        # Extract metadata from ONNX model (hard fault if fails)
+        onnx_model = onnx.load(model_path)
+        metadata = {}
+        for prop in onnx_model.metadata_props:
+            metadata[prop.key] = json.loads(prop.value)
+
+        # Extract KP/KD from metadata (will be None if not present)
+        self.onnx_kp = np.array(metadata["kp"]) if "kp" in metadata else None
+        self.onnx_kd = np.array(metadata["kd"]) if "kd" in metadata else None
+
+        if self.onnx_kp is not None:
+            logger.info(f"Loaded KP/KD from ONNX metadata: {Path(model_path).name}")
+
+        def policy_act(obs_dict):
+            # For example,obs_dict contains:
+            # {
+            #     'actor_obs_lower_body': np.array([...]),
+            #     'actor_obs_upper_body': np.array([...]),
+            #     'estimator_obs': np.array([...])
+            # }
+            input_feed = {name: obs_dict[name] for name in self.onnx_input_names}
+            outputs = self.onnx_policy_session.run(self.onnx_output_names, input_feed)
+            return outputs[0]  # just return outputs[0] as only "action" is needed
+
+        self.policy = policy_act
+
+    def _resolve_control_gains(self):
+        """Resolve KP/KD values with priority: config override > ONNX metadata > error.
+
+        Creates a new config instance with resolved values if needed.
+        """
+        # Check if config has explicit KP/KD values
+        config_has_kp = hasattr(self.robot_config, "motor_kp") and self.robot_config.motor_kp is not None
+        config_has_kd = hasattr(self.robot_config, "motor_kd") and self.robot_config.motor_kd is not None
+
+        if config_has_kp and config_has_kd:
+            # Config already has values (override) - nothing to do
+            logger.info(colored("Using KP/KD from config (override)", "yellow"))
+            kp_values = np.array(self.robot_config.motor_kp)
+            kd_values = np.array(self.robot_config.motor_kd)
+        elif self.onnx_kp is not None and self.onnx_kd is not None:
+            # Use ONNX metadata (default) - create new config with values
+            logger.info(colored("Using KP/KD from ONNX metadata", "green"))
+            kp_values = self.onnx_kp
+            kd_values = self.onnx_kd
+            # Create new config instance with ONNX values
+            self.robot_config = replace(
+                self.robot_config, motor_kp=tuple(kp_values.tolist()), motor_kd=tuple(kd_values.tolist())
+            )
+            # Update interface's robot_config and propagate to internal SDK components
+            self.interface.update_config(self.robot_config)
+        else:
+            # No values available - error
+            raise ValueError(
+                "No KP/KD values found. Either provide them in robot config "
+                "or ensure ONNX model has metadata attached during training."
+            )
+
+        # Validate dimensions
+        if len(kp_values) != self.robot_config.num_motors:
+            raise ValueError(
+                f"KP array length ({len(kp_values)}) does not match num_motors ({self.robot_config.num_motors})"
+            )
+        if len(kd_values) != self.robot_config.num_motors:
+            raise ValueError(
+                f"KD array length ({len(kd_values)}) does not match num_motors ({self.robot_config.num_motors})"
+            )
+
+    def _calculate_obs_dim_dict(self):
+        """Calculate observation dimensions for each observation type."""
+        obs_dim_dict = {}
+        for key in self.obs_dict:
+            obs_dim_dict[key] = 0
+            for obs_name in self.obs_dict[key]:
+                obs_dim_dict[key] += self.obs_dims[obs_name]
+        return obs_dim_dict
+
+    def _print_observations(self, obs: dict[str, np.ndarray]) -> None:
+        """Print observation vector with term naming for debugging.
+
+        Args:
+            obs: Dictionary mapping observation group names to their flattened arrays.
+        """
+        np.set_printoptions(suppress=True, precision=3)
+        print("\n========== Observation Vector ==========")
+        for group_name, group_obs in obs.items():
+            print(f"\n{group_name}:")
+            if group_name in self.obs_dict:
+                start_idx = 0
+                for term_name in self.obs_terms_sorted.get(group_name, []):
+                    term_dim = self.obs_dims[term_name]
+                    history_len = self.history_length_dict.get(group_name, 1)
+                    total_dim = term_dim * history_len
+                    term_values = group_obs[0, start_idx : start_idx + total_dim]
+                    print(f"  {term_name:20s} (dim={term_dim:2d}, hist={history_len}): {term_values}")
+                    start_idx += total_dim
+
+        # Joint table: dof_name | q (deg) | dq | action
+        self._print_joint_table(obs)
+        print("========================================\n")
+
+    def _print_joint_table(self, obs: dict[str, np.ndarray]) -> None:
+        """Print a compact per-joint table: name | q(°) | dq(°/s) | act(°)."""
+        # Walk obs_terms_sorted + obs_dims to locate dof_pos / dof_vel slices
+        q = dq = None
+        for grp, buf in obs.items():
+            col = 0
+            for term in self.obs_terms_sorted.get(grp, []):
+                dim = self.obs_dims[term] * self.history_length_dict.get(grp, 1)
+                if q is None and term == "dof_pos":
+                    q = buf[0, col : col + dim] / self.obs_scales.get("dof_pos", 1.0)
+                if dq is None and term == "dof_vel":
+                    dq = buf[0, col : col + dim] / self.obs_scales.get("dof_vel", 1.0)
+                col += dim
+        act = self.scaled_policy_action[0] if self.scaled_policy_action is not None else None
+        d = np.degrees
+        w = max(len(n) for n in self.dof_names)
+        print(f"\n  {'joint':<{w}}  {'q(°)':>7}  {'dq(°/s)':>8}  {'act(°)':>7}")
+        print(f"  {'─' * (w + 29)}")
+        for i, name in enumerate(self.dof_names):
+            qi = f"{d(q[i]):7.1f}" if q is not None and i < len(q) else "    n/a"
+            di = f"{d(dq[i]):8.1f}" if dq is not None and i < len(dq) else "     n/a"
+            ai = f"{d(act[i]):7.1f}" if act is not None and i < len(act) else "    n/a"
+            print(f"  {name:<{w}}  {qi}  {di}  {ai}")
+
+    def rl_inference(self, robot_state_data):
+        """Perform RL inference to get policy action."""
+        obs = self.prepare_obs_for_rl(robot_state_data)
+        if self.config.task.print_observations:
+            self._print_observations(obs)
+
+        policy_action = self.policy(obs)
+        policy_action = np.clip(policy_action, -100, 100)
+
+        self.last_policy_action = policy_action.copy()
+        self.scaled_policy_action = policy_action * self.policy_action_scale
+        if self.config.task.debug.force_zero_action:
+            self.scaled_policy_action = np.zeros_like(self.scaled_policy_action)
+
+        return self.scaled_policy_action
+
+    # ============================================================================
+    # Observation Processing Methods
+    # ============================================================================
+
+    def get_current_obs_buffer_dict(self, robot_state_data):
+        """Extract current observation data from robot state."""
+        current_obs_buffer_dict = {}
+
+        # Extract base and joint data
+        current_obs_buffer_dict["base_quat"] = robot_state_data[:, 3:7]
+        if self.config.task.debug.force_zero_angular_velocity:
+            current_obs_buffer_dict["base_ang_vel"] = np.zeros((1, 3))
+        else:
+            current_obs_buffer_dict["base_ang_vel"] = robot_state_data[:, 7 + self.num_dofs + 3 : 7 + self.num_dofs + 6]
+        current_obs_buffer_dict["dof_pos"] = robot_state_data[:, 7 : 7 + self.num_dofs] - self.default_dof_angles
+        current_obs_buffer_dict["dof_vel"] = robot_state_data[
+            :, 7 + self.num_dofs + 6 : 7 + self.num_dofs + 6 + self.num_dofs
+        ]
+
+        # Use pre-computed corrected gravity if available from interface, else compute
+        # This logic seems very brittle. TODO: Return a dataclass instead of just a numpy array.
+        expected_len = (
+            7 + self.num_dofs + 6 + self.num_dofs
+        )  # base_pos(3) + quat(4) + dof_pos + lin_vel(3) + ang_vel(3) + dof_vel
+        if self.config.task.debug.force_upright_imu:
+            current_obs_buffer_dict["projected_gravity"] = np.array([[0.0, 0.0, -1.0]])
+        elif robot_state_data.shape[1] == expected_len + 3:
+            current_obs_buffer_dict["projected_gravity"] = robot_state_data[:, expected_len : expected_len + 3]
+        else:
+            v = np.array([[0, 0, -1]])
+            current_obs_buffer_dict["projected_gravity"] = quat_rotate_inverse(current_obs_buffer_dict["base_quat"], v)
+
+        return current_obs_buffer_dict
+
+    def parse_current_obs_dict(self, current_obs_buffer_dict):
+        """Parse observation buffer into observation dictionary with per-term scaling."""
+        current_obs_dict: dict[str, dict[str, np.ndarray]] = {}
+        for group, term_names in self.obs_terms_sorted.items():
+            grouped_terms: dict[str, np.ndarray] = {}
+            for term in term_names:
+                if term not in current_obs_buffer_dict:
+                    raise KeyError(f"Observation term '{term}' missing from current observation buffer.")
+                term_obs = current_obs_buffer_dict[term]
+                if term_obs.ndim == 1:
+                    term_obs = term_obs.reshape(1, -1)
+                scale = self.obs_scales[term]
+                grouped_terms[term] = (term_obs * scale).astype(np.float32, copy=False)
+            current_obs_dict[group] = grouped_terms
+        return current_obs_dict
+
+    def _prepare_group_observations(self, robot_state_data):
+        """Return flattened observations per group with history applied per term."""
+        current_obs_buffer_dict = self.get_current_obs_buffer_dict(robot_state_data)
+        current_obs_dict = self.parse_current_obs_dict(current_obs_buffer_dict)
+
+        return self._update_obs_history(current_obs_dict)
+
+    def _update_obs_history(self, current_obs_dict: dict[str, dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
+        """Update observation history buffers and return flattened observations per group."""
+        group_outputs: dict[str, np.ndarray] = {}
+
+        for group, term_dict in current_obs_dict.items():
+            history_len = self.history_length_dict.get(group, 1)
+            flattened_terms: list[np.ndarray] = []
+
+            for term in self.obs_terms_sorted[group]:
+                obs = np.asarray(term_dict[term], dtype=np.float32, order="C")
+                if obs.ndim == 1:
+                    obs = obs.reshape(1, -1)
+
+                buffer = self.obs_history_buffers[group][term]
+                buffer.append(obs.copy())
+
+                history = list(buffer)
+                if len(history) < history_len:
+                    missing = history_len - len(history)
+                    history = [np.zeros_like(obs)] * missing + history
+
+                # Match training order: time dimension first, then flatten into [history_len * term_dim].
+                stacked = np.stack(history[-history_len:], axis=1)
+                flattened_terms.append(stacked.reshape(obs.shape[0], -1))
+
+            group_outputs[group] = (
+                np.concatenate(flattened_terms, axis=1).astype(np.float32, copy=False)
+                if flattened_terms
+                else np.zeros((1, 0), dtype=np.float32)
+            )
+
+        self.obs_buf_dict = {group: value.copy() for group, value in group_outputs.items()}
+        return group_outputs
+
+    def prepare_obs_for_rl(self, robot_state_data):
+        """Prepare observations for RL inference."""
+        group_outputs = self._prepare_group_observations(robot_state_data)
+        if "actor_obs" not in group_outputs:
+            raise KeyError("Observation group 'actor_obs' is not configured for this policy.")
+        return {"actor_obs": group_outputs["actor_obs"].astype(np.float32, copy=False)}
+
+    # ============================================================================
+    # Control/Command Methods
+    # ============================================================================
+
+    def get_init_target(self, robot_state_data):
+        """Get initialization target joint positions."""
+        dof_pos = robot_state_data[:, 7 : 7 + self.num_dofs]
+        if self.get_ready_state:
+            # Interpolate from current dof_pos to default angles
+            q_target = dof_pos + (self.default_dof_angles - dof_pos) * (self.init_count / 500)
+            self.init_count += 1
+            return q_target
+        return dof_pos
+
+    def policy_action(self):
+        """Execute policy action and send commands to robot."""
+
+        # Snapshot flags to prevent race with mode-switch handler thread
+        use_policy = self.use_policy_action
+        get_ready = self.get_ready_state
+
+        kp_override = None
+        kd_override = None
+
+        # Stage 1: Read State
+        with self.latency_tracker.measure("read_state"):
+            robot_state_data = self.interface.get_low_state()
+
+        # Stage 2: Pre-processing
+        with self.latency_tracker.measure("preprocessing"):
+            # Determine target joint positions
+            if get_ready:
+                q_target = self.get_init_target(robot_state_data)
+                self.init_count = min(self.init_count, 500)
+                # Interpolation phase: optionally command stiffer gains so the
+                # robot holds pose firmly while ramping to the start pose. Scale
+                # the policy gains by interp_gain_scale (1.0 => unchanged) and
+                # ride the existing kp_override/kd_override path; the policy phase
+                # below keeps its own gains. Composes with kp_level in the driver.
+                scale = getattr(self.robot_config, "interp_gain_scale", 1.0)
+                if scale != 1.0:
+                    if self.robot_config.motor_kp is not None:
+                        kp_override = np.asarray(self.robot_config.motor_kp, dtype=float) * scale
+                    if self.robot_config.motor_kd is not None:
+                        kd_override = np.asarray(self.robot_config.motor_kd, dtype=float) * scale
+            elif not use_policy:
+                manual_cmd = self._get_manual_command(robot_state_data)
+                if manual_cmd is not None:
+                    q_target = manual_cmd["q"]
+                    kp_override = manual_cmd.get("kp")
+                    kd_override = manual_cmd.get("kd")
+                else:
+                    q_target = robot_state_data[:, 7 : 7 + self.num_dofs]
+            else:
+                # Prepare for inference - any preprocessing before RL inference
+                pass
+
+        # Stage 3: Inference
+        if use_policy and not get_ready:
+            with self.latency_tracker.measure("inference"):
+                scaled_policy_action = self.rl_inference(robot_state_data)
+
+        # Stage 4: Post-processing
+        with self.latency_tracker.measure("postprocessing"):
+            if use_policy and not get_ready:
+                if scaled_policy_action.shape[1] != self.num_dofs:
+                    if not self.upper_body_controller:
+                        scaled_policy_action = np.concatenate(
+                            [np.zeros((1, self.num_dofs - scaled_policy_action.shape[1])), scaled_policy_action], axis=1
+                        )
+                    else:
+                        raise NotImplementedError("Upper body controller not implemented")
+                q_target = scaled_policy_action + self.default_dof_angles
+
+            # Prepare command (reuse pre-allocated arrays)
+            self.cmd_q[:] = q_target[0] + self.joint_offsets
+
+        # Stage 5: Action Pub
+        with self.latency_tracker.measure("action_pub"):
+            self.interface.send_low_command(
+                self.cmd_q,
+                self.cmd_dq,
+                self.cmd_tau,
+                robot_state_data[0, 7 : 7 + self.num_dofs],
+                kp_override=kp_override,
+                kd_override=kd_override,
+            )
+
+        # Telemetry hook: fires every control tick in every state (policy,
+        # stiff-hold, init ramp) with the final executed command. Default
+        # no-op; override to publish feedback (e.g. ROS topics) without
+        # touching the control loop.
+        self._on_command_sent(self.cmd_q, robot_state_data)
+
+    def _on_command_sent(self, cmd_q, robot_state_data) -> None:
+        """Hook called after each executed command is sent. Override to observe.
+
+        cmd_q: (num_dofs,) full-body joint command actually sent this tick.
+        robot_state_data: (1, state_dim) latest robot state used this tick.
+        """
+
+    def _get_manual_command(self, robot_state_data):
+        """Optional manual command when policy control is disabled."""
+        return
+
+    def _get_obs_phase_time(self):
+        """Calculate phase time for gait."""
+        cur_time = time.perf_counter() * self.stand_command[0, 0]
+        phase_time = cur_time % self.gait_period / self.gait_period
+        self.phase_time[:, 0] = phase_time
+        return self.phase_time
+
+    def update_phase_time(self):
+        """Update phase time."""
+        phase_tp1 = self.phase + self.phase_dt
+        self.phase = np.fmod(phase_tp1 + np.pi, 2 * np.pi) - np.pi
+
+    # ============================================================================
+    # Velocity Hook
+    # ============================================================================
+
+    def _apply_velocity(self, vc: VelCmd) -> None:
+        """Apply a velocity command to the policy state.
+
+        Called from the run loop when a provider returns a non-None VelCmd.
+        Subclasses can override to add gating (e.g. stand_command in locomotion).
+        """
+        self.lin_vel_command[0] = vc.lin_vel
+        self.ang_vel_command[0, 0] = vc.ang_vel
+
+    # ============================================================================
+    # Command Dispatch
+    # ============================================================================
+
+    def _dispatch_command(self, cmd):
+        """Dispatch a command enum to the appropriate handler.
+
+        Subclasses override this to handle policy-specific commands,
+        calling ``super()._dispatch_command(cmd)`` for unhandled ones.
+        """
+        if cmd == StateCommand.START:
+            self._handle_start_policy()
+        elif cmd == StateCommand.STOP:
+            self._handle_stop_policy()
+        elif cmd == StateCommand.INIT:
+            self._handle_init_state()
+        elif cmd == StateCommand.KILL:
+            self.logger.info(colored("Killing program via command", "red"))
+            sys.exit(0)
+        elif cmd == StateCommand.NEXT_POLICY:
+            next_index = (self.active_policy_index + 1) % len(self.model_paths)
+            self._activate_policy(next_index)
+        elif cmd in STATE_COMMAND_TO_POLICY_INDEX:
+            index = STATE_COMMAND_TO_POLICY_INDEX[cmd]
+            if index != self.active_policy_index and 0 <= index < len(self.model_paths):
+                self._activate_policy(index)
+        elif cmd == StateCommand.KP_UP:
+            self.interface.kp_level += 0.1
+        elif cmd == StateCommand.KP_DOWN:
+            self.interface.kp_level -= 0.1
+        elif cmd == StateCommand.KP_UP_FINE:
+            self.interface.kp_level += 0.01
+        elif cmd == StateCommand.KP_DOWN_FINE:
+            self.interface.kp_level -= 0.01
+        elif cmd == StateCommand.KP_RESET:
+            self.interface.kp_level = 1.0
+
+    # ============================================================================
+    # Control Action Methods
+    # ============================================================================
+
+    def _handle_start_policy(self):
+        """Handle start policy action."""
+        self.use_policy_action = True
+        self.get_ready_state = False
+        self.logger.info(colored("Using policy actions", "blue"))
+        self.phase = np.array([[0.0, np.pi]])
+        if hasattr(self.interface, "no_action"):
+            self.interface.no_action = 0
+
+    def _handle_stop_policy(self):
+        """Handle stop policy action."""
+        self.use_policy_action = False
+        self.get_ready_state = False
+        self.logger.info("Actions set to zero")
+        if hasattr(self.interface, "no_action"):
+            self.interface.no_action = 1
+
+    def _handle_init_state(self):
+        """Handle initialization state."""
+        self.get_ready_state = True
+        self.init_count = 0
+        self.logger.info("Setting to init state")
+        if hasattr(self.interface, "no_action"):
+            self.interface.no_action = 0
+
+    def _print_control_status(self):
+        """Print current control status."""
+        self.logger.info("------------ Control Status ------------")
+        if self.active_model_path:
+            total = len(self.model_paths)
+            name = Path(self.active_model_path).name
+            debug_str = (
+                f"Active policy [{self.active_policy_index + 1}/{total}]: {name} Kp level {self.interface.kp_level:.2f}"
+            )
+            self.logger.info(debug_str)
+
+    # ============================================================================
+    # Main Run Method
+    # ============================================================================
+
+    def run(self):
+        """Main run loop for the policy."""
+        try:
+            for it in itertools.count():
+                self.latency_tracker.start_cycle()
+
+                vc = self._velocity_input.poll_velocity()
+                if vc is not None:
+                    self._apply_velocity(vc)
+                commands = self._command_provider.poll_commands()
+                for cmd in commands:
+                    self._dispatch_command(cmd)
+                if commands:
+                    self._print_control_status()
+                if self.use_phase:
+                    self.update_phase_time()
+
+                self.policy_action()
+
+                self.latency_tracker.end_cycle()
+
+                if it % 50 == 0 and self.use_policy_action:
+                    debug_str = f"RL FPS: {self.latency_tracker.get_fps():.2f} | {self.latency_tracker.get_stats_str()}"
+                    self.logger.info(debug_str, flush=True)
+
+                self.rate.sleep()
+
+        except KeyboardInterrupt:
+            pass

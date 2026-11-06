@@ -42,7 +42,15 @@ import torch
 import warp as wp
 from loguru import logger
 
+from holosoma.simulator.mujoco.backends.native_config import (
+    allocation_kwargs,
+    apply_warp_model,
+    validate_warp_options,
+    warp_extra_inputs,
+    warp_option_overrides,
+)
 from holosoma.simulator.mujoco.geom_groups import DEFAULT_RENDER_GEOM_GROUPS
+from holosoma.simulator.mujoco.native_config import effective_options
 
 from .base import IMujocoBackend, holosoma_to_mj_quat, mj_to_holosoma_quat
 from .warp_bridge import WarpBridge
@@ -54,7 +62,6 @@ if TYPE_CHECKING:
     from warp.context import Graph
 
     from holosoma.config_types.full_sim import FullSimConfig
-    from holosoma.simulator.mujoco.tensor_views import BaseMujocoView
     from holosoma.simulator.shared.sensor_manager import CameraRecord
 
 
@@ -76,7 +83,7 @@ def _mul_quat(u: wp.quat, v: wp.quat) -> wp.quat:
 def _rot_vec_quat(vec: wp.vec3, quat: wp.quat) -> wp.vec3:
     s = quat[0]
     u = wp.vec3(quat[1], quat[2], quat[3])
-    return 2.0 * (wp.dot(u, vec) * u) + (s * s - wp.dot(u, u)) * vec + 2.0 * s * wp.cross(u, vec)  # type: ignore[no-any-return]
+    return 2.0 * (wp.dot(u, vec) * u) + (s * s - wp.dot(u, u)) * vec + 2.0 * s * wp.cross(u, vec)
 
 
 @wp.func
@@ -122,12 +129,12 @@ def _static_geom_local_to_global(
     The composition forward kinematics applies to a geom, restricted to the given geoms/worlds,
     using the local wxyz quaternion helpers above.
     """
-    # wp.tid() returns a 2-tuple for a 2D launch, but Warp's stub's first overload types a 0-arg
-    # call as scalar int, so mypy reports "int not iterable" on the unpack (misc) and cannot type
-    # wi/gi (has-type). Comment-only ignores keep this valid in the Warp DSL (which rejects cast()).
+    # wp.tid() returns a 2-tuple for a 2D launch, but Warp's stub types the 0-arg call as a union
+    # whose first member is a scalar int, so mypy reports "int not iterable" on the unpack. A
+    # comment-only ignore keeps this valid in the Warp DSL (which rejects cast()).
     wi, gi = wp.tid()  # type: ignore[misc]
-    worldid = worlds[wi]  # type: ignore[has-type]
-    geomid = geom_ids[gi]  # type: ignore[has-type]
+    worldid = worlds[wi]
+    geomid = geom_ids[gi]
     bodyid = geom_bodyid[geomid]
     bpos = xpos[worldid, bodyid]
     bquat = xquat[worldid, bodyid]
@@ -197,10 +204,18 @@ class WarpBackend(IMujocoBackend):
         ------
         ImportError
             If warp or mujoco_warp packages are not installed
+        ValueError
+            If native settings are invalid or unsupported, or device is not CUDA
         RuntimeError
             If GPU initialization fails
         """
         super().__init__(model, data, config, device)
+        warp_config = config.simulator.sim.mujoco
+        overrides = effective_options(config.simulator)
+        validate_warp_options(model, overrides)
+        option_inputs, allocation_inputs = warp_extra_inputs(warp_config.warp)
+        options = warp_option_overrides(warp_config.warp, inputs=option_inputs)
+        allocation = allocation_kwargs(model, warp_config.warp, self.num_envs, inputs=allocation_inputs)
 
         # Import warp packages (fail fast if not available)
         try:
@@ -215,24 +230,21 @@ class WarpBackend(IMujocoBackend):
         # Initialize Warp runtime
         wp.init()
         self.mjw_device = wp.get_device(device)
+        if not self.mjw_device.is_cuda:
+            raise ValueError(f"device={device!r}: WarpBackend requires a CUDA device")
 
         logger.info(f"Initializing WarpBackend: {self.num_envs} envs on {device}")
 
-        # Get memory allocation config
-        warp_config = config.simulator.mujoco_warp
-        nconmax_per_env = warp_config.nconmax_per_env
-        njmax_per_env = warp_config.njmax_per_env
-
-        # Auto-calculate njmax if not specified
-        if njmax_per_env is None:
-            njmax_per_env = max(nconmax_per_env * 6, model.nv * 4)
-
-        logger.info(f"GPU memory allocation: nconmax={nconmax_per_env} per env, njmax={njmax_per_env} per env")
+        logger.info(f"GPU memory allocation: {allocation}")
 
         # Create Warp model and batched data within GPU context
         with wp.ScopedDevice(self.mjw_device):
             # Upload model to GPU
-            self.mjw_model = mjw.put_model(model)
+            try:
+                self.mjw_model = mjw.put_model(model)
+            except (ValueError, NotImplementedError) as exc:
+                raise ValueError(f"simulator.config.sim.mujoco / model attributes: {exc}") from exc
+            apply_warp_model(self.mjw_model, warp_config, options)
             self._lidar_render_context: Any = None
             self._lidar_render_context_groups: tuple[int, ...] | None = None
             self._sensor_refit_graphs: dict[int, Graph] = {}
@@ -243,15 +255,13 @@ class WarpBackend(IMujocoBackend):
 
             # Allocate batched data for parallel environments
             # Memory allocation strategy (following mujoco_warp API):
-            # - nconmax: contacts per environment (not total across all environments)
-            # - njmax: constraints per environment
-            # - naconmax: total contacts across ALL environments (auto-calculated internally)
-            self.mjw_data = mjw.make_data(
-                model,
-                nworld=self.num_envs,
-                nconmax=nconmax_per_env,
-                njmax=njmax_per_env,
-            )
+            # - nconmax: average contacts per environment, pooled across all environments
+            # - njmax: hard constraint capacity per environment
+            # - naconmax: total contact pool, configured explicitly or defaulting to nconmax*num_envs
+            try:
+                self.mjw_data = mjw.make_data(model, **allocation)
+            except (ValueError, NotImplementedError) as exc:
+                raise ValueError(f"simulator.config.sim.mujoco.warp allocation: {exc}") from exc
 
             # Create zero-copy PyTorch tensors tethered to Warp arrays
             # These tensors share memory with the Warp arrays - no copying!
@@ -266,7 +276,7 @@ class WarpBackend(IMujocoBackend):
             self._body_contact_forces = wp.zeros((self.num_envs, model.nbody, 3), dtype=float)
             self._body_contact_forces_t = wp.to_torch(self._body_contact_forces)
 
-            # Rigid body state tensors (for zero-copy access during refresh_sim_tensors)
+            # Rigid body state tensors (zero-copy views of the Warp data)
             self.xpos_t = wp.to_torch(self.mjw_data.xpos)  # [num_envs, nbody, 3] - positions
             self.xquat_t = wp.to_torch(self.mjw_data.xquat)  # [num_envs, nbody, 4] - orientations [w,x,y,z]
             self.cvel_t = wp.to_torch(self.mjw_data.cvel)  # [num_envs, nbody, 6] - velocities [ang(3), lin(3)]
@@ -394,10 +404,11 @@ class WarpBackend(IMujocoBackend):
         logger.info("Initial state synced to GPU successfully")
 
     def forward_kinematics(self) -> None:
-        """FK-only refresh: recompute body/geom/camera poses from the written qpos, no dynamics.
+        """FK-only refresh: recompute body poses/velocities and geom/camera poses from qpos/qvel, no dynamics.
 
-        Runs ``mjw.kinematics`` + ``mjw.camlight`` (the position stage the batched renderer
-        reads: geom_xpos/geom_xmat, cam_xpos/cam_xmat) rather than full ``mjw.forward`` —
+        Runs ``mjw.kinematics`` + ``com_pos`` + ``camlight`` + ``com_vel`` (body poses, the
+        ``subtree_com``/``cvel`` the body-velocity read uses, and the renderer's geom/camera poses)
+        rather than full ``mjw.forward`` —
         forward's solver/collision stages allocate per call and are useless without a step.
         Out-of-graph launches into the same mjw_data the step graph uses are safe (same
         pattern as set_static_body_world_pose / offset_world_cameras); ``mjw_data.time`` is
@@ -407,7 +418,10 @@ class WarpBackend(IMujocoBackend):
 
         with wp.ScopedDevice(self.mjw_device):
             mjw.kinematics(self.mjw_model, self.mjw_data)
+            mjw.com_pos(self.mjw_model, self.mjw_data)
             mjw.camlight(self.mjw_model, self.mjw_data)
+            mjw.com_vel(self.mjw_model, self.mjw_data)
+        self._kinematics_pending = False
 
     def step(self) -> None:
         """Advance batched simulation by one timestep using CUDA graph.
@@ -426,6 +440,7 @@ class WarpBackend(IMujocoBackend):
             wp.capture_launch(self.step_graph)
             # No wp.synchronize() - let GPU work in parallel with CPU
         self._physics_time += float(self.model.opt.timestep)
+        self._kinematics_pending = True
 
     def physics_time(self) -> float:
         """Return the logical time of the simulation steps enqueued on the GPU."""
@@ -657,7 +672,7 @@ class WarpBackend(IMujocoBackend):
                         # remap to +inf (the no-hit sentinel).
                         mjw.get_depth(self._render_context, cam_id, self._depth_far, self._render_depth_out[cam_id])
                         dep = wp.to_torch(self._render_depth_out[cam_id]) * self._depth_far  # [N,H,W] meters
-                        dep = torch.where(dep <= 0, torch.full_like(dep, float("inf")), dep)
+                        dep = torch.where(dep <= 0, float("inf"), dep)
                         cam.set_buffer("depth", dep.unsqueeze(-1))  # [N,H,W,1]
         consumer_stream.wait_stream(self._torch_render_stream)
 
@@ -676,7 +691,7 @@ class WarpBackend(IMujocoBackend):
 
         The captured step graph extracts contacts through the public
         ``mujoco_warp.contact_force`` API and accumulates them by body. The
-        simulator gathers robot-only rows and rotates the history.
+        simulator gathers robot-only rows and records them per substep.
 
         Returns
         -------
@@ -684,123 +699,6 @@ class WarpBackend(IMujocoBackend):
             Contact forces [num_envs, model.nbody, 3].
         """
         return self._body_contact_forces_t
-
-    def create_root_view(self, addrs: dict[str, Any]) -> BaseMujocoView:
-        """Create root state view using zero-copy tensors.
-
-        Parameters
-        ----------
-        addrs : dict
-            Address dictionary with slices for pos, quat, vel, ang_vel
-
-        Returns
-        -------
-        MjwRootStateView
-            Root state view with quaternion conversion and zero-copy access
-        """
-        from holosoma.simulator.mujoco.mjw_views import MjwRootStateView
-
-        return MjwRootStateView(
-            qpos=self.qpos_t,
-            qvel=self.qvel_t,
-            pos_slice=addrs["pos_indices"],
-            quat_slice=addrs["quat_indices"],
-            vel_slice=addrs["vel_indices"],
-            ang_vel_slice=addrs["ang_vel_indices"],
-            num_envs=self.num_envs,
-        )
-
-    def create_dof_pos_view(self, indices: slice, num_dof: int) -> torch.Tensor:
-        """Return DOF position tensor directly (no wrapper needed).
-
-        wp.to_torch() already returns a native PyTorch tensor that:
-        - Shares memory with Warp array (zero-copy)
-        - Supports all PyTorch operations natively
-        - Works seamlessly on GPU
-
-        Parameters
-        ----------
-        indices : slice
-            Slice into qpos array
-        num_dof : int
-            Number of degrees of freedom (unused, for interface compatibility)
-
-        Returns
-        -------
-        torch.Tensor
-            DOF positions [num_envs, num_dof] - native PyTorch tensor
-        """
-        return self.qpos_t[:, indices]
-
-    def create_dof_vel_view(self, indices: slice, num_dof: int) -> torch.Tensor:
-        """Return DOF velocity tensor directly (no wrapper needed).
-
-        wp.to_torch() already returns a native PyTorch tensor that:
-        - Shares memory with Warp array (zero-copy)
-        - Supports all PyTorch operations natively
-        - Works seamlessly on GPU
-
-        Parameters
-        ----------
-        indices : slice
-            Slice into qvel array
-        num_dof : int
-            Number of degrees of freedom (unused, for interface compatibility)
-
-        Returns
-        -------
-        torch.Tensor
-            DOF velocities [num_envs, num_dof] - native PyTorch tensor
-        """
-        return self.qvel_t[:, indices]
-
-    def create_dof_acc_view(self, indices: slice, num_dof: int) -> torch.Tensor:
-        """Return DOF acceleration tensor directly (no wrapper needed).
-
-        wp.to_torch() already returns a native PyTorch tensor that:
-        - Shares memory with Warp array (zero-copy)
-        - Supports all PyTorch operations natively
-        - Works seamlessly on GPU
-
-        Parameters
-        ----------
-        indices : slice
-            Slice into qacc array
-        num_dof : int
-            Number of degrees of freedom (unused, for interface compatibility)
-
-        Returns
-        -------
-        torch.Tensor
-            DOF accelerations [num_envs, num_dof] - native PyTorch tensor
-        """
-        return self.qacc_t[:, indices]
-
-    def create_dof_state_view(self, dof_addrs: dict[str, Any], num_dof: int) -> BaseMujocoView:
-        """Create DOF state view using zero-copy GPU tensors.
-
-        Parameters
-        ----------
-        dof_addrs : dict
-            Dictionary with 'dof_pos_indices' and 'dof_vel_indices' slices
-        num_dof : int
-            Number of degrees of freedom
-
-        Returns
-        -------
-        MjwDofStateView
-            DOF state view with IsaacGym flattened format [num_envs * num_dof, 2]
-        """
-        from holosoma.simulator.mujoco.mjw_views import MjwDofStateView
-
-        return MjwDofStateView(
-            qpos=self.qpos_t,
-            qvel=self.qvel_t,
-            dof_pos_indices=dof_addrs["dof_pos_indices"],
-            dof_vel_indices=dof_addrs["dof_vel_indices"],
-            num_envs=self.num_envs,
-            num_dof=num_dof,
-        )
 
     def get_applied_forces_view(self) -> torch.Tensor:
         """Get writable view for external applied forces (GPU tensor).
@@ -817,46 +715,12 @@ class WarpBackend(IMujocoBackend):
         """
         return self.xfrc_applied_t
 
-    def create_quaternion_view(self, quat_slice: slice) -> BaseMujocoView:
-        """Create quaternion view with format conversion.
-
-        Parameters
-        ----------
-        quat_slice : slice
-            Slice for extracting quaternion from qpos
-
-        Returns
-        -------
-        MjwQuaternionView
-            Quaternion view with [w,x,y,z] -> [x,y,z,w] conversion
-        """
-        from holosoma.simulator.mujoco.mjw_views import MjwQuaternionView
-
-        return MjwQuaternionView(qpos=self.qpos_t, quat_slice=quat_slice, num_envs=self.num_envs)
-
-    def create_angular_velocity_view(self, ang_vel_slice: slice) -> BaseMujocoView:
-        """Create angular velocity view with proper reshaping.
-
-        Parameters
-        ----------
-        ang_vel_slice : slice
-            Slice for extracting angular velocity from qvel
-
-        Returns
-        -------
-        MjwAngularVelocityView
-            Angular velocity view with proper multi-env access
-        """
-        from holosoma.simulator.mujoco.mjw_views import MjwAngularVelocityView
-
-        return MjwAngularVelocityView(qvel=self.qvel_t, ang_vel_slice=ang_vel_slice, num_envs=self.num_envs)
-
     def get_rigid_body_state_views(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Get zero-copy views of rigid body states from GPU.
 
         Returns native PyTorch tensors that share memory with Warp arrays,
         eliminating the need for CPU↔GPU synchronization or tensor allocation
-        during refresh_sim_tensors().
+        when body state is read.
 
         Returns
         -------
@@ -890,57 +754,6 @@ class WarpBackend(IMujocoBackend):
         'robot_qpos_addr' and 'robot_qvel_addr'.
         """
         self.set_actor_state(env_ids, root_states, root_addrs["robot_qpos_addr"], root_addrs["robot_qvel_addr"])
-
-    def set_dof_state(self, env_ids: torch.Tensor, dof_states: torch.Tensor, dof_addrs: dict[str, Any]) -> None:
-        """Set DOF states via direct GPU tensor writes.
-
-        Writes DOF positions and velocities directly to GPU tensors
-        without CPU roundtrip. Supports batched updates efficiently.
-
-        Parameters
-        ----------
-        env_ids : torch.Tensor
-            Environment IDs to update [num_selected_envs]
-        dof_states : torch.Tensor
-            DOF states [num_all_envs * num_dofs, 2] in IsaacGym format
-            where [:, 0] = positions, [:, 1] = velocities
-            NOTE: Contains states for ALL environments, we select based on env_ids
-        dof_addrs : dict
-            Address dictionary with 'dof_qpos_addrs' and 'dof_qvel_addrs' lists
-        """
-        # Parse addresses
-        qpos_addrs = dof_addrs["dof_qpos_addrs"]
-        qvel_addrs = dof_addrs["dof_qvel_addrs"]
-        num_dof = len(qpos_addrs)
-
-        # Vectorized selection: extract only rows for specified env_ids
-        # dof_states is [num_all_envs * num_dof, 2], need [len(env_ids) * num_dof, 2]
-        offsets = env_ids.unsqueeze(1) * num_dof  # [len(env_ids), 1]
-        dof_offsets = torch.arange(num_dof, device=env_ids.device).unsqueeze(0)  # [1, num_dof]
-        indices = (offsets + dof_offsets).flatten()  # [len(env_ids) * num_dof]
-
-        selected_dof_states = dof_states[indices]  # [len(env_ids) * num_dof, 2]
-
-        # Reshape from flattened IsaacGym format
-        dof_pos = selected_dof_states[:, 0].view(len(env_ids), num_dof)  # [num_selected_envs, num_dof]
-        dof_vel = selected_dof_states[:, 1].view(len(env_ids), num_dof)  # [num_selected_envs, num_dof]
-
-        # Vectorized GPU tensor writes using explicit expand for shape matching
-        N = len(env_ids)
-
-        # Convert address lists to tensors
-        qpos_indices = torch.tensor(qpos_addrs, device=env_ids.device)  # [num_dof]
-        qvel_indices = torch.tensor(qvel_addrs, device=env_ids.device)  # [num_dof]
-
-        # Explicit expand to [N, num_dof] for both indices
-        env_idx = env_ids.unsqueeze(1).expand(N, num_dof)  # [N, num_dof]
-        qpos_idx = qpos_indices.unsqueeze(0).expand(N, num_dof)  # [N, num_dof]
-        qvel_idx = qvel_indices.unsqueeze(0).expand(N, num_dof)  # [N, num_dof]
-
-        self.qpos_t[env_idx, qpos_idx] = dof_pos
-        self.qvel_t[env_idx, qvel_idx] = dof_vel
-
-        # No mj_forward call - next step() will handle forward kinematics
 
     def _batched_slice(self, env_ids: torch.Tensor, addr: int, size: int) -> tuple[torch.Tensor, torch.Tensor]:
         """(row, col) advanced-index tensors selecting [env_ids, addr:addr+size] as [N, size]."""

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
-from typing import Any, Callable
+from collections.abc import Callable, Mapping
+from typing import Any
 
 import torch
 import torch.distributed as dist
@@ -361,7 +361,7 @@ def save_params(
     save_path: str,
     save_fn: Callable[..., Any] = torch.save,
     metadata: dict[str, Any] | None = None,
-    env_state: dict[str, torch.Tensor | float] | None = None,
+    env_state: dict[str, Any] | None = None,
 ) -> None:
     """Save model parameters and training configuration to disk."""
     os.makedirs(os.path.dirname(save_path), exist_ok=True)

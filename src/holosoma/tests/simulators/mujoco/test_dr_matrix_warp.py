@@ -4,7 +4,7 @@ Runs the dr_matrix_assert.py harness under the MuJoCo-Warp backend in its own pr
 ONE real, fully-managed locomotion env (real action_manager + randomization_manager, no shims)
 and asserts every robot + object DR term took effect, reading back the per-world
 ``warp_model_bridge``. The classic-CPU column runs the same harness in-process
-(test_dr_matrix_classic.py); the Isaac columns live under ../isaacgym/ and ../isaacsim/.
+(test_dr_matrix_classic.py); the Isaac column lives under ../isaacsim/.
 
 Skipped without CUDA / the MuJoCo-Warp stack.
 """

@@ -28,9 +28,28 @@ jobs:
         - g1-29dof-fast-sac
         - t1-29dof-fast-sac
         multigpu: ['True', 'False']
-        simulator: [isaacgym, isaacsim]
+        simulator: [isaacsim]
         extra_args: [""]
         include:
+        # MuJoCo cells live under include rather than the simulator list so they are
+        # not crossed with the multigpu dimension: the distributed path is not exercised
+        # for MuJoCo. `sim_preset` selects the MJWarp backend while `simulator` still
+        # names the environment to source -- training needs thousands of parallel
+        # environments, and the classic backend is single-env.
+        #
+        # PPO on MJWarp needs the halved terrain scale: at full scale on mixed terrain it
+        # diverges in its first rollouts. See src/holosoma/README.md, which also covers why
+        # there are no T1 cells here.
+        - experiment: g1-29dof
+          simulator: mujoco
+          sim_preset: mjwarp
+          multigpu: 'False'
+          extra_args: --terrain.terrain-term.scale-factor=0.5
+        - experiment: g1-29dof-fast-sac
+          simulator: mujoco
+          sim_preset: mjwarp
+          multigpu: 'False'
+          extra_args: --terrain.terrain-term.scale-factor=0.5
         - experiment: g1-29dof-wbt
           simulator: isaacsim
           multigpu: 'False'
@@ -40,7 +59,7 @@ jobs:
           multigpu: 'False'
           extra_args: --command.setup_terms.motion_command.params.motion_config.motion_file=s3://far-holosoma-assets/data/motions/g1_29dof/whole_body_tracking/motion_dance_v3.npz --algo.config.buffer_size=384
 
-    name: Train ${{ matrix.experiment }} on ${{ matrix.multigpu == 'True' && 'multi-gpu' || 'single-gpu' }} using ${{ matrix.simulator }}
+    name: Train ${{ matrix.experiment }} on ${{ matrix.multigpu == 'True' && 'multi-gpu' || 'single-gpu' }} using ${{ matrix.sim_preset || matrix.simulator }}
     timeout-minutes: 1000 # ~16 hours
 
     steps:
@@ -74,6 +93,13 @@ jobs:
             "$ECR_REGISTRY/holosoma:latest" \
             bash -e -o pipefail -c """
               source scripts/source_${{ matrix.simulator }}_setup.sh
+              # Every rank's Kit startup creates this directory, and when several do it
+              # at once the losers of the race die on it. A rank that dies during startup
+              # never joins the first collective, so the survivors wait there until the
+              # job's own timeout, burning a multi-GPU runner for sixteen hours and
+              # logging no training steps. Creating it up front removes the race.
+              # The version is part of the path, so this needs revisiting on an upgrade.
+              mkdir -p /isaac-sim/kit/data/Kit/Isaac-Sim/5.1/pip3-envs/default || true
               # The checkout is bind-mounted over the image, so refresh the
               # editable install metadata and its entry-point registrations.
               python -m pip install --force-reinstall --no-deps \
@@ -81,7 +107,7 @@ jobs:
               python -m wandb login
               python tests/nightly/nightly.py exp:${{ matrix.experiment }} \
                 logger:wandb --logger.video.enabled=False \
-                simulator:${{ matrix.simulator }} \
+                simulator:${{ matrix.sim_preset || matrix.simulator }} \
                 --training.multigpu=${{ matrix.multigpu }} ${{ matrix.extra_args }}
             """
 
@@ -97,6 +123,16 @@ jobs:
           ref: ${{ github.event.inputs.branch || 'main' }}
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      # Stores per-run performance aggregates in each run's summary, which is what the
+      # performance workspace view plots. Already-processed runs are skipped, so this
+      # only does work for the runs this build added.
+      - name: Backfill performance summaries
+        continue-on-error: true
+        env:
+          WANDB_ENTITY: ${{ vars.WANDB_ENTITY }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          WANDB_BASE_URL: ${{ vars.WANDB_BASE_URL }}
+        run: uv run --script ./tests/nightly/backfill_perf_summary.py
       - name: Generate wandb report
         env:
           WANDB_ENTITY: ${{ vars.WANDB_ENTITY }}
@@ -110,6 +146,13 @@ jobs:
           WANDB_BASE_URL: ${{ vars.WANDB_BASE_URL }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL: '#far-holosoma-nightly-tests'
+          # Saved workspace view each trend block links to, one repository variable per
+          # tracked configuration, named after it (see run_summary.py) -- so tracking
+          # another configuration adds a line here. A view identifier is specific to the
+          # wandb instance the view was created on, so it is configured rather than
+          # committed; left unset, that block links the project instead.
+          PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_ISAACSIM_GPUS_1: ${{ vars.PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_ISAACSIM_GPUS_1 }}
+          PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_MJWARP_GPUS_1: ${{ vars.PERF_TREND_VIEW_URL_G1_29DOF_MANAGER_MJWARP_GPUS_1 }}
         run: uv run --script ./tests/nightly/run_summary.py --slack
       - name: Check results
         run: |

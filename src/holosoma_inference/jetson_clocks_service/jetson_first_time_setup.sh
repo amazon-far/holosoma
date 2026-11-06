@@ -1,5 +1,5 @@
 #!/bin/bash
-# Install and enable jetson_clocks.service systemd serivce & set other perfomance
+# Install and enable jetson_clocks.service systemd service & set other performance
 
 # Show commands
 set -e
@@ -28,7 +28,7 @@ systemctl enable jetson_clocks.service
 echo "🚀 Starting jetson_clocks.service now..."
 systemctl start jetson_clocks.service
 
-echo "🧠 Checking status of the serivce"
+echo "🧠 Checking status of the service"
 systemctl status jetson_clocks.service --no-pager
 
 # Use all cores

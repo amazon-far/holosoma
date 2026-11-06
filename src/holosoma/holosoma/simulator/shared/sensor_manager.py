@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Sequence, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from holosoma.config_types.frequency import resolve_decimation
 from holosoma.config_types.sensor import CameraSensorConfig
@@ -29,10 +30,23 @@ class SensorRecord:
     buffers: dict[str, torch.Tensor] = field(default_factory=dict)
     step_counter: int = -1
     effective_decimation: int = 1
+    rerender: Callable[[torch.Tensor], None] | None = None
+    """Re-render only the given env ids into the existing buffers, or ``None`` if the backend
+    can only render every env. Called after resets/teleports (``SensorManager.rerender``)."""
     _device_cache: dict[tuple[str, str], torch.Tensor] = field(default_factory=dict)
 
     def set_buffer(self, output: str, tensor: torch.Tensor) -> None:
         self.buffers[output] = tensor
+        self._drop_device_cache(output)
+
+    def set_buffer_rows(self, output: str, env_ids: torch.Tensor, rows: torch.Tensor) -> None:
+        """Overwrite the ``env_ids`` rows of an existing output, e.g. after a partial re-render."""
+        buffer = self.buffers[output].clone()
+        buffer[env_ids] = rows
+        self.buffers[output] = buffer
+        self._drop_device_cache(output)
+
+    def _drop_device_cache(self, output: str) -> None:
         for key in [key for key in self._device_cache if key[0] == output]:
             del self._device_cache[key]
 
@@ -65,6 +79,17 @@ class CameraRecord(SensorRecord):
                 behavior=self.config.depth_clipping_behavior,
             ).ranges
         super().set_buffer(output, tensor)
+
+    def set_buffer_rows(self, output: str, env_ids: torch.Tensor, rows: torch.Tensor) -> None:
+        """Overwrite camera output rows, applying the same depth no-return semantics as :meth:`set_buffer`."""
+        if output == "depth" and isinstance(self.config, CameraSensorConfig):
+            rows = clip_sensor_ranges(
+                rows,
+                near=self.config.near,
+                far=self.config.far,
+                behavior=self.config.depth_clipping_behavior,
+            ).ranges
+        super().set_buffer_rows(output, env_ids, rows)
 
 
 @dataclass
@@ -188,6 +213,16 @@ class SensorManager:
         due = self._collect_due(self.lidars)
         self._last_lidar_due = {record.name for record in due}
         return due
+
+    def rerender(self, env_ids: torch.Tensor) -> None:
+        """Re-render ``env_ids`` for every sensor that supports partial rendering.
+
+        Sensors without a ``rerender`` callback keep their last frame, so for one control step
+        these envs observe the state from before their reset or teleport."""
+        records: list[SensorRecord] = [*self.cameras, *self.lidars]
+        for record in records:
+            if record.rerender is not None:
+                record.rerender(env_ids)
 
     @property
     def last_due(self) -> set[str]:

@@ -11,7 +11,8 @@ Quaternions are xyzw throughout, matching the actor-state API.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Sequence
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 import torch
 

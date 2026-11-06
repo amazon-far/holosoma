@@ -13,7 +13,6 @@ import holosoma.config_types.simulator
 class SimulatorType(Enum):
     """Enum for supported simulator types."""
 
-    ISAACGYM = "isaacgym"
     ISAACSIM = "isaacsim"
     MUJOCO = "mujoco"
 
@@ -61,6 +60,12 @@ class SimulatorConfig:
     @classmethod
     def _set_simulator_type_str(cls, simulator_type: str) -> None:
         """Set the simulator type to use throughout the codebase."""
+        if simulator_type == "isaacgym":
+            raise ValueError(
+                "The Isaac Gym simulator is no longer supported. Select simulator:isaacsim, "
+                "simulator:mujoco or simulator:mjwarp; configs saved with Isaac Gym can still be "
+                "evaluated by overriding the simulator on the command line."
+            )
         if simulator_type not in cls._supported_simulator_names:
             raise ValueError(f"Unsupported simulator type: {simulator_type}")
 

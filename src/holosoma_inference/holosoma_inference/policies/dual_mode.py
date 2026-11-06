@@ -8,13 +8,15 @@ from loguru import logger
 from termcolor import colored
 
 from holosoma_inference.config.config_types.inference import InferenceConfig
+from holosoma_inference.policies.native_runner import NativeContextualRunner
 
 
 def _select_policy_class(config: InferenceConfig):
-    """Determine policy class from an explicit ``policy_type`` or the obs/robot heuristic.
+    """Determine policy class from a contextual section, an explicit ``policy_type``, or the heuristic.
 
     Resolution order:
 
+    0. ``config.contextual`` selects the depth-conditioned policy, mirroring ``make_policy`` in C++.
     1. ``config.task.policy_type`` (when set) against the ``holosoma.policies.by_type``
        entry-point group. This lets extensions register custom policy classes keyed by an
        explicit type string -- the same mechanism the standalone ``run_policy`` path uses --
@@ -27,9 +29,12 @@ def _select_policy_class(config: InferenceConfig):
     All lookups are by string against entry-point groups, so core never imports or names
     extension-private policy classes.
     """
-    from holosoma_inference.policies.locomotion import LocomotionPolicy
-    from holosoma_inference.policies.wbt import WholeBodyTrackingPolicy
+    from holosoma_inference.policies.native_runner import NativeLocomotionRunner, NativeWbtRunner
     from holosoma_inference.pycompat import entry_points
+
+    # 0. A contextual section selects the depth-conditioned policy, as make_policy does in C++.
+    if getattr(config, "contextual", None) is not None:
+        return NativeContextualRunner
 
     # 1. Explicit policy_type -> by_type entry-point group.
     policy_type = getattr(config.task, "policy_type", None)
@@ -47,12 +52,12 @@ def _select_policy_class(config: InferenceConfig):
         for ep in entry_points(group="holosoma.policies.wbt"):
             if ep.name == robot_type:
                 return ep.load()
-        return WholeBodyTrackingPolicy
+        return NativeWbtRunner
 
     for ep in entry_points(group="holosoma.policies.locomotion"):
         if ep.name == robot_type:
             return ep.load()
-    return LocomotionPolicy
+    return NativeLocomotionRunner
 
 
 class DualModePolicy:
@@ -66,9 +71,10 @@ class DualModePolicy:
     The existing Select/1-9 multi-model switching still works within each policy.
     """
 
-    def __init__(self, primary_config: InferenceConfig, secondary_config: InferenceConfig):
-        primary_cls = _select_policy_class(primary_config)
-        secondary_cls = _select_policy_class(secondary_config)
+    def __init__(self, primary_config: InferenceConfig, secondary_config: InferenceConfig, *, policy_selector=None):
+        selector = policy_selector or _select_policy_class
+        primary_cls = selector(primary_config)
+        secondary_cls = selector(secondary_config)
 
         logger.info(
             colored(f"Dual-mode: primary={primary_cls.__name__}, secondary={secondary_cls.__name__}", "magenta")
@@ -79,9 +85,14 @@ class DualModePolicy:
 
         # Init secondary with shared hardware
         logger.info(colored("Initializing secondary policy (shared hardware)...", "magenta"))
-        secondary = object.__new__(secondary_cls)
-        secondary._shared_hardware_source = self.primary
-        secondary.__init__(config=secondary_config)
+        from holosoma_inference.policies.native_runner import NativeRunnerPolicy
+
+        if issubclass(secondary_cls, NativeRunnerPolicy):
+            secondary = secondary_cls(config=secondary_config, shared_hardware=self.primary)
+        else:
+            secondary = object.__new__(secondary_cls)
+            secondary._shared_hardware_source = self.primary
+            secondary.__init__(config=secondary_config)
         self.secondary = secondary
 
         self.active = self.primary
@@ -193,3 +204,8 @@ class DualModePolicy:
 
         except KeyboardInterrupt:
             pass
+        finally:
+            for policy in (self.secondary, self.primary):
+                close = getattr(policy, "close", None)
+                if callable(close):
+                    close()

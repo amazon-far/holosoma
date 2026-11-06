@@ -32,11 +32,11 @@ from __future__ import annotations
 import ast
 import dataclasses
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, Literal, Sequence, Union, get_args
+from typing import Annotated, Any, Literal, TypeAlias, Union, get_args
 
 import tyro.constructors
-from typing_extensions import Annotated, TypeAlias
 
 Distribution = Literal["uniform", "log_uniform", "gaussian"]
 """Sampling distributions a randomization term may request."""
@@ -95,7 +95,7 @@ _DISTRIBUTION_CLI_SPEC = tyro.constructors.PrimitiveConstructorSpec(
 # serialized as pairs/dicts, and a bare pair is the most common term input.
 # The Annotated CLI spec only affects tyro; pydantic and type checkers ignore it.
 DistributionLike: TypeAlias = Annotated[
-    Union["DistributionSpec", Sequence[float], Dict[str, Any]], _DISTRIBUTION_CLI_SPEC
+    Union["DistributionSpec", Sequence[float], dict[str, Any]], _DISTRIBUTION_CLI_SPEC
 ]
 
 

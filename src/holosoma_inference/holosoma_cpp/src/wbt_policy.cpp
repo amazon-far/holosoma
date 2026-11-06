@@ -252,9 +252,15 @@ std::vector<double> WholeBodyTrackingPolicy::rl_inference(const RobotState& stat
   }
   const std::vector<float>& obs = prepare_actor_obs(state);
   if (config_.task.print_observations) print_observations(obs);
+  return infer_observation(obs);
+}
 
+std::vector<double> WholeBodyTrackingPolicy::infer_observation(const std::vector<float>& obs) {
   OnnxModel& model = *active_slot().model;
   std::vector<float>& obs_input = model.input(kObsInput);
+  if (obs.size() != obs_input.size()) throw std::invalid_argument("Actor observation has the wrong width");
+  if (!std::all_of(obs.begin(), obs.end(), [](float v) { return std::isfinite(v); }))
+    throw std::invalid_argument("Actor observation must be finite");
   std::copy(obs.begin(), obs.end(), obs_input.begin());
   model.input(kTimeStepInput)[0] = static_cast<float>(curr_motion_timestep_);
   model.run();

@@ -25,6 +25,10 @@ logs_eval
 # Isaacsim Converted Files
 src/holosoma/holosoma/data/robots/converted/
 src/holosoma/holosoma/data/robots/converted_rank*/
+# The IsaacSim URDF->USD converter writes next to the URDF, i.e. one level deeper:
+# data/robots/<robot>/converted_rank<local_rank>/ (isaacsim_articulation_cfg.py).
+src/holosoma/holosoma/data/robots/*/converted/
+src/holosoma/holosoma/data/robots/*/converted_rank*/
 
 # Virtual environments
 .venv/

@@ -19,7 +19,6 @@ from holosoma.config_types.sensor import (
     CameraSensorConfig,
     CustomLidarRayPatternConfig,
     GridLidarRayPatternConfig,
-    IsaacGymCameraConfig,
     IsaacSimCameraConfig,
     IsaacSimFisheyeConfig,
     IsaacSimLidarConfig,
@@ -108,7 +107,6 @@ def test_none_warp_render_flag_imposes_no_constraint() -> None:
 def test_camera_backend_configs_default_to_concrete_structs() -> None:
     camera = _cam()
     assert isinstance(camera.isaacsim, IsaacSimCameraConfig)
-    assert isinstance(camera.isaacgym, IsaacGymCameraConfig)
     assert isinstance(camera.mujoco, MujocoCameraConfig)
 
 
@@ -129,8 +127,6 @@ def test_camera_backend_configs_reject_none() -> None:
     mount = SensorMountConfig(target_kind="robot_link", target="pelvis")
     with pytest.raises(ValueError, match="isaacsim"):
         CameraSensorConfig(mount=mount, isaacsim=None)  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="isaacgym"):
-        CameraSensorConfig(mount=mount, isaacgym=None)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="mujoco"):
         CameraSensorConfig(mount=mount, mujoco=None)  # type: ignore[arg-type]
 
@@ -245,6 +241,24 @@ def test_isaacsim_depth_clipping_must_use_backend_independent_field() -> None:
 def test_camera_range_bounds_must_be_finite_and_ordered(near: float, far: float) -> None:
     with pytest.raises(ValueError, match="near|far"):
         CameraSensorConfig(mount=SensorMountConfig(target_kind="robot_link", target="pelvis"), near=near, far=far)
+
+
+@pytest.mark.parametrize(
+    ("near", "far"),
+    [
+        (-0.1, 1.0),
+        (1.0, 1.0),
+        (2.0, 1.0),
+        (math.nan, 1.0),
+        (0.1, math.inf),
+    ],
+)
+def test_lidar_range_bounds_must_be_finite_and_ordered(near: float, far: float) -> None:
+    # Load-bearing for clip_sensor_ranges, which dropped its own isfinite pass on the grounds that
+    # these bounds are finite: with far=inf the bare interval test reports a +inf miss as a hit.
+    # The camera half of that guarantee is covered above; this is the LiDAR half.
+    with pytest.raises(ValueError, match="near|far"):
+        LidarSensorConfig(mount=SensorMountConfig(target_kind="robot_link", target="pelvis"), near=near, far=far)
 
 
 @pytest.mark.parametrize("vertical_fov", [0.0, 180.0, -1.0, math.nan, math.inf])

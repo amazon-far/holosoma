@@ -23,8 +23,9 @@ importable without those deps.
 from __future__ import annotations
 
 from abc import abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Sequence, Tuple, Union
+from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
@@ -32,7 +33,6 @@ from loguru import logger
 
 from holosoma.config_types.sensor import (
     CameraSensorConfig,
-    IsaacGymCameraConfig,
     IsaacSimCameraConfig,
     MujocoCameraConfig,
 )
@@ -44,10 +44,8 @@ if TYPE_CHECKING:
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 
 # (camera_name, modality, env_id). The unit of stream identity across the egress system.
-# ``typing.Tuple`` (not the builtin ``tuple[...]``) so this runtime alias is valid on the
-# mypy target (python_version = 3.8), where builtin generics aren't subscriptable at runtime.
-StreamKey = Tuple[str, str, int]
-CameraBackendConfig = Union[IsaacSimCameraConfig, IsaacGymCameraConfig, MujocoCameraConfig]
+StreamKey = tuple[str, str, int]
+CameraBackendConfig = IsaacSimCameraConfig | MujocoCameraConfig
 
 
 @dataclass(frozen=True)
@@ -212,8 +210,6 @@ class CameraConsumerPlugin:
         simulator_type = self.simulator.get_simulator_type()
         if simulator_type == SimulatorType.ISAACSIM:
             backend_config: CameraBackendConfig = c.isaacsim
-        elif simulator_type == SimulatorType.ISAACGYM:
-            backend_config = c.isaacgym
         else:
             backend_config = c.mujoco
         return CameraIntrinsics(

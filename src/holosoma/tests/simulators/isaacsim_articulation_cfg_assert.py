@@ -96,7 +96,7 @@ def _check_grouped_actuator_config() -> None:
         "damping": [0.0] * len(robot.dof_names),
     }
     for property_name, values in expected_properties.items():
-        expected = dict(zip(robot.dof_names, values))
+        expected = dict(zip(robot.dof_names, values, strict=False))
         assert getattr(grouped_cfg, property_name) == expected, f"{property_name} mapping changed"
 
     # Isaac Lab supplies articulation joints in simulator order. Reverse that order to prove
@@ -104,7 +104,7 @@ def _check_grouped_actuator_config() -> None:
     simulator_names = list(reversed(robot.dof_names))
     grouped = _instantiate_actuator(grouped_cfg, simulator_names)
     for property_name, values in expected_properties.items():
-        source_mapping = dict(zip(robot.dof_names, values))
+        source_mapping = dict(zip(robot.dof_names, values, strict=False))
         expected = torch.tensor([[source_mapping[name] for name in simulator_names]] * 2)
         assert torch.equal(getattr(grouped, property_name), expected), f"{property_name} resolved by source order"
 
@@ -121,7 +121,7 @@ def _check_grouped_actuator_config() -> None:
 
     legacy_applied = torch.empty_like(commanded)
     legacy_computed = torch.empty_like(commanded)
-    legacy_cfg_by_name = dict(zip(robot.dof_names, _legacy_actuator_cfgs(robot)))
+    legacy_cfg_by_name = dict(zip(robot.dof_names, _legacy_actuator_cfgs(robot), strict=False))
     for simulator_index, joint_name in enumerate(simulator_names):
         legacy = _instantiate_actuator(legacy_cfg_by_name[joint_name], [joint_name])
         joint_command = commanded[:, simulator_index : simulator_index + 1]
@@ -152,7 +152,7 @@ def _check_dof_position_limits() -> None:
     hard_limits, soft_limits, _, _ = build_dof_limits_from_config(robot, len(robot.dof_names), "cpu")
 
     expected_hard_limits = torch.tensor(
-        list(zip(robot.dof_pos_lower_limit_list, robot.dof_pos_upper_limit_list)),
+        list(zip(robot.dof_pos_lower_limit_list, robot.dof_pos_upper_limit_list, strict=False)),
         dtype=torch.float32,
     )
     expected_soft_limits = torch.tensor(
@@ -168,19 +168,18 @@ def _check_contact_sensor_config() -> None:
 
     from holosoma.simulator.isaacsim.isaacsim_articulation_cfg import build_contact_sensor_cfg
 
-    cfg = build_contact_sensor_cfg(history_length=3, debug_vis=False)
+    cfg = build_contact_sensor_cfg(debug_vis=False)
     assert cfg.track_air_time is False
-    assert cfg.history_length == 3
-    assert cfg.update_period == 0.005
+    # 0.005 would hold the sensor stale across substeps at any fps above 200.
+    assert cfg.update_period == 0.0
     assert cfg.force_threshold == 10.0
     assert cfg.debug_vis is False
-    assert build_contact_sensor_cfg(history_length=3, debug_vis=True).debug_vis is True
+    assert build_contact_sensor_cfg(debug_vis=True).debug_vis is True
 
-    # These are the only ContactSensorData fields Holosoma reads. They remain available when
+    # net_forces_w is the only ContactSensorData field Holosoma reads. It remains available when
     # duration tracking is disabled; only the unused air/contact-time values stay unallocated.
     data = ContactSensorData()
     assert hasattr(data, "net_forces_w")
-    assert hasattr(data, "net_forces_w_history")
     assert data.last_air_time is None
     assert data.current_air_time is None
     assert data.last_contact_time is None

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import heapq
 import inspect
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Iterator, Mapping, Sequence, Tuple, Union, overload
+from typing import Any, Literal, Union, overload
 
-from typing_extensions import Literal, Self
+from typing_extensions import Self
 
 from holosoma.config_types.frequency import DecimationLike, is_frequency_string, resolve_decimation
 
@@ -16,7 +17,7 @@ HookDependency = Union["HookHandle", "HookRef", "_OptionalTarget"]
 of either."""
 
 
-_PublicationId = Tuple[str, str, str]
+_PublicationId = tuple[str, str, str]
 """A publication's identity: plugin slot, contract type, member name."""
 
 

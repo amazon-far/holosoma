@@ -86,12 +86,20 @@ class BasicCommandSender(ABC):
             motor_cmd.dq = cmd_dq[joint_id]
             motor_cmd.tau = cmd_tau[joint_id]
 
-            kp_value = motor_kp[motor_id]
-            kd_value = motor_kd[motor_id]
-            if kp_override is not None and joint_id != -1:
+            # The native runner always supplies joint-ordered gains; motor_kp/kd may
+            # then be None (no config override), so only read them as a fallback.
+            if kp_override is not None:
                 kp_value = kp_override[joint_id]
-            if kd_override is not None and joint_id != -1:
+            elif motor_kp is not None:
+                kp_value = motor_kp[motor_id]
+            else:
+                raise ValueError("No KP gain: pass kp_override or set robot motor_kp")
+            if kd_override is not None:
                 kd_value = kd_override[joint_id]
+            elif motor_kd is not None:
+                kd_value = motor_kd[motor_id]
+            else:
+                raise ValueError("No KD gain: pass kd_override or set robot motor_kd")
 
             motor_cmd.kp = kp_value * self.kp_level
             motor_cmd.kd = kd_value * self.kd_level

@@ -13,7 +13,8 @@ import dataclasses
 import math
 import os
 import sys
-from typing import Any, Callable, NoReturn
+from collections.abc import Callable
+from typing import Any, NoReturn
 
 import tyro
 
@@ -60,7 +61,6 @@ def step(sim: Any, n: int, *, render: bool = False) -> None:
     harness (so a video captures the motion) and off for the headless physics-only checks.
     """
     for _ in range(n):
-        sim.refresh_sim_tensors()
         sim.simulate_at_each_physics_step()
         if render:
             sim.render()

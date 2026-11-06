@@ -1,23 +1,11 @@
-"""Python version compatibility shims.
+"""Re-export of ``importlib.metadata.entry_points`` behind a stable import path.
 
-``entry_points(group=...)`` keyword selection is only available on the stdlib
-``importlib.metadata`` from Python 3.10+. On 3.8/3.9 the call takes no arguments and
-returns a dict keyed by group, so we wrap it to present the same ``group=`` API.
+Kept as a seam so the two consumers (``utils/path.py``, ``utils/config_registry.py``) import one
+name; there is no version shim left now that the floor is Python 3.10.
 """
 
 from __future__ import annotations
 
-import sys
-from importlib.metadata import EntryPoint
-from importlib.metadata import entry_points as _entry_points
+from importlib.metadata import entry_points
 
 __all__ = ["entry_points"]
-
-
-if sys.version_info >= (3, 10):
-    entry_points = _entry_points
-else:
-
-    def entry_points(*, group: str) -> list[EntryPoint]:
-        """3.8/3.9 fallback: filter the group-keyed dict returned by argless entry_points()."""
-        return _entry_points().get(group, [])

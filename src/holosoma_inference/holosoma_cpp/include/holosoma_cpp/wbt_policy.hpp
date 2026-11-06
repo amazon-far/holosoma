@@ -20,11 +20,13 @@ class WholeBodyTrackingPolicy : public BasePolicy {
   void dispatch_command(StateCommand command) override;
   void handle_start_policy() override;
   void handle_stop_policy() override;
+  std::vector<double> infer_observation(const std::vector<float>& obs) override;
 
   bool motion_clip_progressing() const { return motion_clip_progressing_; }
   int motion_timestep() const { return curr_motion_timestep_; }
   double robot_yaw_offset() const { return robot_yaw_offset_; }
   double motion_yaw_offset() const { return motion_yaw_offset_; }
+  const std::vector<double>& initial_motion() const { return motion_slot().motion_command_0; }
 
  protected:
   void setup_policy(ModelSlot& slot) override;

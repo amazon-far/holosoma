@@ -142,23 +142,6 @@ ISAACSIM_ONLY_WORKFLOWS = [
 ]
 
 
-# Default workflows run on simulator.isaacgym (the experiment-preset default).
-@pytest.mark.isaacgym
-@pytest.mark.parametrize(
-    "workflow_name",
-    WORKFLOWS,
-)
-@pytest.mark.parametrize(
-    "multi_gpu",
-    [
-        pytest.param(False, id="single-gpu"),
-        pytest.param(True, marks=pytest.mark.multi_gpu, id="multi-gpu"),
-    ],
-)
-def test_training_and_eval_workflow(workflow_name: str, multi_gpu: bool):
-    assert_training_and_eval_workflow(workflow_name, multi_gpu=multi_gpu)
-
-
 @pytest.mark.isaacsim
 @pytest.mark.parametrize(
     "workflow_name",
@@ -167,3 +150,12 @@ def test_training_and_eval_workflow(workflow_name: str, multi_gpu: bool):
 @pytest.mark.parametrize("multi_gpu", [False])
 def test_training_and_eval_workflow_isaacsim(workflow_name: str, multi_gpu: bool):
     assert_training_and_eval_workflow(workflow_name, multi_gpu=multi_gpu, extra_config=["simulator:isaacsim"])
+
+
+# Distributed smoke test for the PR gate: one PPO and one FastSAC workflow under torch.distributed.run
+# on every visible GPU. Nightly training covers the full multi-GPU matrix.
+@pytest.mark.isaacsim
+@pytest.mark.multi_gpu
+@pytest.mark.parametrize("workflow_name", ["g1-29dof", "g1-29dof-fast-sac"])
+def test_distributed_training_and_eval_workflow_isaacsim(workflow_name: str):
+    assert_training_and_eval_workflow(workflow_name, multi_gpu=True, extra_config=["simulator:isaacsim"])

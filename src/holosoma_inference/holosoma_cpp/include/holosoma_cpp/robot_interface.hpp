@@ -20,6 +20,7 @@ struct RobotState {
   std::vector<double> base_lin_vel = std::vector<double>(3, 0.0);
   std::vector<double> base_ang_vel = std::vector<double>(3, 0.0);
   std::vector<double> dof_vel;
+  std::optional<std::vector<double>> projected_gravity;
 
   uint32_t tick_ms = 0;             // LowState.tick; the simulator bridge writes sim time here.
   uint64_t sequence = 0;            // Increments for every accepted LowState message.

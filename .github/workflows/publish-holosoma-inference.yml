@@ -24,6 +24,7 @@ jobs:
     uses: ./.github/workflows/_build-python-dist.yml
     with:
       package-dir: src/holosoma_inference
+      native: true
 
   publish:
     name: Publish to PyPI

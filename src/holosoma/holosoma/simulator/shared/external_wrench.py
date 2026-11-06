@@ -82,7 +82,7 @@ class ExternalWrenchAccumulator:
         if torque_block is None:
             torque_block = torch.zeros_like(force_block)
 
-        # .to(): input may be on a different device than the sim buffer (IsaacGym's CPU pipeline
+        # .to(): input may be on a different device than the sim buffer (a CPU physics pipeline
         # has device="cpu" but sim_device="cuda:0").
         wrench_block = torch.cat([force_block, torque_block], dim=-1).to(target.wrench.device)  # [N, B, 6]
 

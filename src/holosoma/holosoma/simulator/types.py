@@ -1,7 +1,7 @@
 """Type aliases for simulator interfaces.
 
 This module provides clear type aliases for simulator-related data structures,
-improving code readability and type safety across IsaacGym and IsaacSim implementations.
+improving code readability and type safety across the IsaacSim and MuJoCo implementations.
 
 The type aliases defined here are used throughout the simulator framework to provide
 consistent, self-documenting interfaces that work across different simulator backends.
@@ -23,12 +23,10 @@ Examples
 
 from __future__ import annotations
 
-from typing import List
-
 from holosoma.utils.safe_torch_import import torch
 
 # Core simulator types for actor/object management
-ActorNames = List[str]
+ActorNames = list[str]
 """List of actor names for identification.
 
 Examples: ["obj0", "table_pantene", "robot"]

@@ -302,10 +302,21 @@ def build_config(args: list[str], python_only: list[str]):
 
 
 def run_scenario(spec: dict) -> dict:
-    import holosoma_inference.policies.base as base_module
+    from python_reference import base as base_module
+    from python_reference.locomotion import LocomotionPolicy
+    from python_reference.wbt import WholeBodyTrackingPolicy
+
     from holosoma_inference.inputs.impl.interface import InterfaceInput
     from holosoma_inference.inputs.impl.keyboard import KEYBOARD_VELOCITY_LOCOMOTION, KeyboardInput
-    from holosoma_inference.policies.dual_mode import DualModePolicy, _select_policy_class
+    from holosoma_inference.policies.dual_mode import DualModePolicy
+
+    def _select_policy_class(config):
+        return (
+            WholeBodyTrackingPolicy
+            if "motion_command" in config.observation.obs_dict.get("actor_obs", [])
+            else LocomotionPolicy
+        )
+
     from holosoma_inference.sdk.unitree.unitree_interface import UnitreeInterface
 
     python_only = ["--task.velocity-input", "injected", "--task.state-input", "injected"]
@@ -333,7 +344,9 @@ def run_scenario(spec: dict) -> dict:
     apply_state(robot, states[0])
 
     if config.secondary is not None:
-        controller = DualModePolicy(primary_config=config, secondary_config=config.secondary)
+        controller = DualModePolicy(
+            primary_config=config, secondary_config=config.secondary, policy_selector=_select_policy_class
+        )
         policies = [controller.primary, controller.secondary]
     else:
         controller = _select_policy_class(config)(config=config)

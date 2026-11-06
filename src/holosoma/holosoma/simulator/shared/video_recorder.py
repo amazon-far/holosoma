@@ -1,7 +1,7 @@
 """Base video recording interface for holosoma simulators with threading support.
 
 This module provides the abstract base class for video recording functionality
-that can be implemented by different simulators (IsaacGym, MuJoCo, IsaacSim).
+that can be implemented by different simulators (MuJoCo, IsaacSim).
 The interface standardizes video recording operations while allowing for
 simulator-specific optimizations.
 """

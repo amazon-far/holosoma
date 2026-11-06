@@ -28,7 +28,7 @@ on:
       - '.github/workflows/docker-build.yaml'
       - '.github/workflows/promote-docker-images.yaml'
       - '.github/workflows/pytest.yaml'
-      - '.github/workflows/test-images.yaml'
+      - '.github/workflows/test-*.yaml'
       - 'conftest.py'
       - 'demo_scripts/**'
       - 'docker/**'
@@ -120,7 +120,6 @@ jobs:
             holosoma
             holosoma-inference
             holosoma-retargeting
-            holosoma-isaacgym
             holosoma-isaacsim
             holosoma-mujoco
             holosoma-thor-inference

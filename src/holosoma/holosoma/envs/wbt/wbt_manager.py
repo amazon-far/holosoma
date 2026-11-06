@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any, Mapping, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 
@@ -11,23 +12,17 @@ from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.utils.simulator_config import SimulatorType
 
 if TYPE_CHECKING:
-    from holosoma.config_types.env import EnvConfig
     from holosoma.managers.command.terms.wbt import MotionCommand
     from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker
     from holosoma.managers.randomization.terms.locomotion import PushRandomizerState
 
 
 class WholeBodyTrackingManager(BaseTask):
-    def __init__(self, tyro_config: EnvConfig, *, device: str) -> None:
-        super().__init__(tyro_config, device=device)
-        assert not hasattr(self.simulator, "gym"), "WBT requires IsaacSim — IsaacGym is not supported."
-
     def _init_buffers(self) -> None:
         """Initialize torch tensors which will contain simulation states and processed quantities"""
         super()._init_buffers()
 
         # -------------------------------- terms same with locomotion_manager.py [start]--------------------------------
-        self.base_quat = self.simulator.base_quat
         self.need_to_refresh_envs = torch.ones(self.num_envs, dtype=torch.bool, device=self.device, requires_grad=False)
         self._configure_default_dof_pos()
         self._init_domain_rand_buffers()
@@ -46,8 +41,9 @@ class WholeBodyTrackingManager(BaseTask):
         self.default_dof_pos_base = self.default_dof_pos_base.unsqueeze(0)  # (1, num_dof)
         self.default_dof_pos = self.default_dof_pos_base.repeat(self.num_envs, 1).clone()  # (num_envs, num_dof)
 
-    def _pre_compute_observations_callback(self) -> None:
-        self.base_quat[:] = self.simulator.base_quat[:]
+    @property
+    def base_quat(self) -> torch.Tensor:
+        return self.simulator.base_quat
 
     def _reset_buffers_callback(
         self, env_ids: torch.Tensor, target_buf: Mapping[str, torch.Tensor] | None = None
@@ -62,11 +58,8 @@ class WholeBodyTrackingManager(BaseTask):
         return self.need_to_refresh_envs.nonzero(as_tuple=False).flatten()
 
     def _refresh_envs_after_reset(self, env_ids: torch.Tensor) -> None:
-        self.simulator.set_actor_root_state_tensor(env_ids, self.simulator.all_root_states)
-        self.simulator.set_dof_state_tensor(env_ids, self.simulator.dof_state)  # type: ignore[attr-defined]
-        self.simulator.clear_contact_forces_history(env_ids)
+        self.simulator.forward_kinematics()
         self.need_to_refresh_envs[env_ids] = False
-        self.simulator.refresh_sim_tensors()
         self._pre_compute_observations_callback()
 
     def _get_average_episode_tracker(self) -> AverageEpisodeLengthTracker:
@@ -135,8 +128,6 @@ class WholeBodyTrackingManager(BaseTask):
         self.record_push_robot_vel_buf[env_ids] = self.push_robot_vel_buf[env_ids].clone()
         # Additive push to match BeyondMimic/IsaacLab's push_by_setting_velocity.
         self.simulator.robot_root_states[env_ids, 7:13] += self.push_robot_vel_buf[env_ids]
-        # Push impulses only take effect in the simulator once we write the mutated root state tensor back.
-        self.simulator.set_actor_root_state_tensor_robots(env_ids, self.simulator.robot_root_states)
         self._max_push_vel = max_vel_tensor.clone()
 
     #########################################################################################################
@@ -176,40 +167,9 @@ class WholeBodyTrackingManager(BaseTask):
                 motion_object_pos_xyz, motion_object_quat_wxyz
             )
 
-    def _draw_debug_vis_isaacgym(self) -> None:
-        self.simulator.clear_lines()  # type: ignore[attr-defined]
-        motion_command = cast("MotionCommand", self.motion_command)  # type: ignore[attr-defined]
-        n_bodies = len(motion_command.motion_cfg.body_names_to_track)
-        for env_id in range(self.num_envs):
-            for body_idx in range(n_bodies):
-                color = (0.0, 1.0, 0.0)
-                self.simulator.draw_sphere(  # type: ignore[attr-defined]
-                    motion_command.body_pos_relative_w[env_id, body_idx],  # type: ignore[has-type]
-                    0.03,
-                    color,
-                    env_id,
-                    body_idx,
-                )
-
-                color = (0.0, 0.0, 1.0)
-                self.simulator.draw_sphere(  # type: ignore[attr-defined]
-                    motion_command.robot_body_pos_w[env_id, body_idx], 0.03, color, env_id, n_bodies + body_idx
-                )
-
-            color = (0.0, 1.0, 0.0)
-            self.simulator.draw_sphere(  # type: ignore[attr-defined]
-                motion_command.ref_pos_w[env_id], 0.05, color, env_id, n_bodies * 2 + 0
-            )
-            color = (0.0, 0.0, 1.0)
-            self.simulator.draw_sphere(  # type: ignore[attr-defined]
-                motion_command.robot_ref_pos_w[env_id], 0.05, color, env_id, n_bodies * 2 + 1
-            )
-
     def _draw_debug_vis(self) -> None:
         if self.simulator.get_simulator_type() == SimulatorType.ISAACSIM:
             self._draw_debug_vis_isaacsim()
-        elif self.simulator.get_simulator_type() == SimulatorType.ISAACGYM:
-            self._draw_debug_vis_isaacgym()
 
     def step_visualize_motion(self, actions: torch.Tensor) -> bool:
         motion_command = cast("MotionCommand", self.command_manager.get_state("motion_command"))
@@ -236,9 +196,6 @@ class WholeBodyTrackingManager(BaseTask):
         self.simulator.robot_root_states[env_ids, 7:10] = root_lin_vel
         self.simulator.robot_root_states[env_ids, 10:13] = root_ang_vel
 
-        self.simulator.set_actor_root_state_tensor(env_ids, self.simulator.all_root_states)
-        self.simulator.set_dof_state_tensor(env_ids, self.simulator.dof_state)  # type: ignore[attr-defined]
-
         if motion_command.motion.has_object:  # type: ignore[has-type]
             # set object root_states from motion command
             object_pos = motion_command.object_pos_w.clone()
@@ -253,10 +210,8 @@ class WholeBodyTrackingManager(BaseTask):
             object_name = motion_command.object_name  # type: ignore[has-type]
             self.simulator.set_actor_states([object_name], env_ids, object_states)
 
-        self.simulator.scene.write_data_to_sim()  # type: ignore[attr-defined]
-        self.simulator.sim.forward()  # type: ignore[attr-defined]
+        self.simulator.forward_kinematics()
         self.simulator.sim.render()  # type: ignore[attr-defined]
-        self.simulator.refresh_sim_tensors()
 
         time.sleep(dt)
 

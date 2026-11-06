@@ -8,8 +8,9 @@ possibly-different ``robot_type`` to the SDK (``sdk_robot_type``), so a co-contr
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Sequence, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -17,12 +18,12 @@ import pytest
 
 from holosoma.bridge.base.basic_sdk2py_bridge import BasicSdk2Bridge
 from holosoma.config_types.robot import RobotBridgeConfig
+from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
     from holosoma.config_types.robot import RobotConfig
     from holosoma.config_types.simulator import BridgeConfig
-    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 
 pytestmark = pytest.mark.no_sim
 
@@ -54,6 +55,9 @@ class _FakeSim:
         self.dof_pos = torch.arange(n, dtype=torch.float32).reshape(1, n) * 0.1
         self.dof_vel = torch.zeros(1, n)
         self.dof_acc = torch.zeros(1, n)
+
+    def dof_indices(self, names: Sequence[str]) -> list[int]:
+        return BaseSimulator.dof_indices(cast("BaseSimulator", self), names)
 
 
 def _robot_config(

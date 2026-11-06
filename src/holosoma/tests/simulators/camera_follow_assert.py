@@ -1,6 +1,6 @@
 """Cross-backend camera-follow behavioral assertion harness.
 
-Asserts a mounted camera tracks its mount body (MuJoCo spec child, IsaacGym
+Asserts a mounted camera tracks its mount body (MuJoCo spec child,
 FOLLOW_TRANSFORM, IsaacSim child prim).
 
 A depth camera is mounted on the robot base looking forward at a red panel at a known
@@ -47,7 +47,7 @@ def _red_fraction(rgb):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacgym", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
@@ -109,17 +109,11 @@ def main() -> int:
     _spawn_dof_pos = sim.dof_pos.clone()
 
     def _hold_dof() -> None:
-        # Restore joints to the spawn pose with zero velocity; per-backend DOF-state tensor shapes
-        # (IsaacGym flat [n*ndof, 2], IsaacSim 3D [n, ndof, 2]). MuJoCo is unaffected by this flake.
-        ndof = sim.num_dof
-        if args.simulator == "isaacgym":
-            ds = torch.zeros(n * ndof, 2, device=device)
-            ds[:, 0] = _spawn_dof_pos.reshape(-1)
-            sim.set_dof_state_tensor_robots(_all_ids, ds)
-        elif args.simulator == "isaacsim":
-            ds = torch.zeros(n, ndof, 2, device=device)
-            ds[:, :, 0] = _spawn_dof_pos
-            sim.set_dof_state_tensor_robots(_all_ids, ds)
+        # Restore joints to the spawn pose with zero velocity. MuJoCo is unaffected by this flake.
+        if args.simulator == "isaacsim":
+            sim.dof_pos[_all_ids] = _spawn_dof_pos
+            sim.dof_vel[_all_ids] = 0.0
+            sim.forward_kinematics()
 
     import math
 

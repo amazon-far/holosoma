@@ -123,7 +123,7 @@ def test_file_preset_module_is_registered_during_execution(tmp_path):
 
 
 def test_registry_from_annotated_reads_marker():
-    from typing_extensions import Annotated
+    from typing import Annotated
 
     from holosoma_inference.utils.config_registry import UseRegistry, registry_from_annotated
 

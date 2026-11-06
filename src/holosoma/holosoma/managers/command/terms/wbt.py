@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from glob import has_magic
-from typing import Any, List
+from typing import Any
 
 import numpy as np
 import torch
@@ -50,7 +50,7 @@ class MotionLoader:
         self._body_indexes = body_indexes
         self.time_step_total = self._joint_pos.shape[0]
 
-    def _get_index_of_a_in_b(self, a_names: List[str], b_names: List[str], device: str = "cpu") -> torch.Tensor:
+    def _get_index_of_a_in_b(self, a_names: list[str], b_names: list[str], device: str = "cpu") -> torch.Tensor:
         indexes = []
         for name in a_names:
             assert name in b_names, f"The specified name ({name}) doesn't exist: {b_names}"
@@ -531,7 +531,7 @@ FAKE_BODY_NAME_ALIASES: dict[str, str] = {
 }
 
 
-def get_filtered_body_names(body_list: List[str], pattern: str) -> List[str]:
+def get_filtered_body_names(body_list: list[str], pattern: str) -> list[str]:
     return [body_name for body_name in body_list if re.match(pattern, body_name)]
 
 
@@ -816,10 +816,9 @@ class MotionCommand(CommandTermBase):
             # Flush the mutated root/dof state into the simulator so that
             # rigid-body positions are up-to-date for downstream consumers
             # (termination checks, observations, rewards).
-            sim = self._env.simulator
-            sim.set_actor_root_state_tensor_robots(ended_env_ids, sim.robot_root_states)
-            sim.set_dof_state_tensor_robots(ended_env_ids, sim.dof_state)  # type: ignore[attr-defined]
-            sim.refresh_sim_tensors()
+            self._env.simulator.forward_kinematics()
+            # The teleport is an observation reset: drop history and re-render these envs.
+            self._env.observation_manager.reset(ended_env_ids)
 
         # 1. update body_pos_relative_w and body_quat_relative_w
         # definition of body_pos/quat_relative_w:
@@ -829,14 +828,13 @@ class MotionCommand(CommandTermBase):
 
         ## 1.0 get the reference body poses
 
-        # Issue (This is a isaacgym only issue.):
+        # Issue:
         # ------------------------------------------------------------
-        # In isaacgym, immediately after reset (self._env.episode_length_buf == 0), calling
-        # simulator.set_actor_root_state_tensor and simulator.set_dof_state_tensor will reset
-        # the robot_root_pos_w and robot_root_quat_w successfully.
-        # However, the robot_body_pos_w and robot_body_quat_w are not updated successfully,
-        # (since kinematic forward has not been applied yet).
-        # Therefore, using robot_ref_pos_w and robot_ref_quat_w as reference body poses is not resetted correctly.
+        # Immediately after reset (self._env.episode_length_buf == 0), the root and DOF writes
+        # update robot_root_pos_w and robot_root_quat_w, but on a backend whose body poses lag
+        # until the next forward-kinematics pass, robot_body_pos_w and robot_body_quat_w still
+        # hold the pre-reset poses, so robot_ref_pos_w and robot_ref_quat_w would be stale.
+        # First observed on Isaac Gym; kept as a guard for any backend with that lag.
 
         # Solution:
         # ------------------------------------------------------------
@@ -1267,9 +1265,6 @@ class MotionCommand(CommandTermBase):
     ) -> dict[str, torch.Tensor]:
         """Capture body states by temporarily setting the robot state in the simulator."""
         simulator = self._env.simulator
-        assert simulator.get_simulator_type() == SimulatorType.ISAACSIM, (
-            "Default-pose interpolation only supports IsaacSim; IsaacGym write_state_updates does not run FK."
-        )
         env_id = 0
         env_origin = simulator.scene.env_origins[env_id].to(self.device)
 
@@ -1284,11 +1279,7 @@ class MotionCommand(CommandTermBase):
             simulator.robot_root_states[env_id, 10:13] = root_ang_vel
             simulator.dof_pos[env_id] = joint_pos
             simulator.dof_vel[env_id] = joint_vel
-
-            simulator.set_actor_root_state_tensor_robots()
-            simulator.set_dof_state_tensor_robots()
-            simulator.write_state_updates()
-            simulator.refresh_sim_tensors()
+            simulator.forward_kinematics()
 
             body_pos = (simulator._rigid_body_pos[env_id] - env_origin).clone()
             body_quat = simulator._rigid_body_rot[env_id].clone()
@@ -1298,10 +1289,7 @@ class MotionCommand(CommandTermBase):
             simulator.robot_root_states[env_id] = root_backup
             simulator.dof_pos[env_id] = dof_pos_backup
             simulator.dof_vel[env_id] = dof_vel_backup
-            simulator.set_actor_root_state_tensor_robots()
-            simulator.set_dof_state_tensor_robots()
-            simulator.write_state_updates()
-            simulator.refresh_sim_tensors()
+            simulator.forward_kinematics()
 
         return {
             "pos": body_pos,
@@ -1486,7 +1474,7 @@ class MotionCommand(CommandTermBase):
             return env_ids.to(device=self.device, dtype=torch.long)
         return torch.as_tensor(env_ids, device=self.device, dtype=torch.long)
 
-    def _get_index_of_a_in_b(self, a_names: List[str], b_names: List[str], device: str = "cpu") -> torch.Tensor:
+    def _get_index_of_a_in_b(self, a_names: list[str], b_names: list[str], device: str = "cpu") -> torch.Tensor:
         indexes = []
         for name in a_names:
             assert name in b_names, f"The specified name ({name}) doesn't exist: {b_names}"

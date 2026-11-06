@@ -91,7 +91,9 @@ class InteractionMeshRetargeter:
         self.activate_foot_sticking = activate_foot_sticking
         self.activate_obj_non_penetration = activate_obj_non_penetration
         self.activate_joint_limits = activate_joint_limits
-        self.foot_links = dict(zip(task_constants.FOOT_STICKING_LINKS, task_constants.FOOT_STICKING_LINKS))
+        self.foot_links = dict(
+            zip(task_constants.FOOT_STICKING_LINKS, task_constants.FOOT_STICKING_LINKS, strict=False)
+        )
         self.penetration_tolerance = penetration_tolerance
         self.step_size = step_size
         self.visualize = visualize

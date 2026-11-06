@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import abc
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from pydantic import ConfigDict, field_validator, model_validator
 from pydantic.dataclasses import dataclass as pydantic_dataclass
@@ -177,9 +178,9 @@ class ROS2OdometryPluginConfig(PluginConfig):
     """Which environment's robot frame to publish. Default 0 (the single real-time robot)."""
 
     publish_every: DecimationLike = 1
-    """How often to publish, on the CONTROL rate (body state is fresh after each frame's tensor
-    refresh). Either a decimation int (publish every Nth control step) or a frequency string
-    (``"50Hz"``, ``">50Hz"``, ``"<50Hz"``) resolved at install time against the control rate."""
+    """How often to publish, on the CONTROL rate. Either a decimation int (publish every Nth control step)
+    or a frequency string (``"50Hz"``, ``">50Hz"``, ``"<50Hz"``) resolved at install time against the
+    control rate."""
 
     @field_validator("publish_every", mode="before")
     @classmethod

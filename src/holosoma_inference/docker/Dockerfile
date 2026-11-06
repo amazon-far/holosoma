@@ -9,21 +9,19 @@ ENV LD_LIBRARY_PATH="/usr/lib/python3.10/dist-packages/lib/"
 WORKDIR /workspace/
 
 # Install development tooling.
-RUN apt-get update && apt-get install -y python3-pip vim \
+RUN apt-get update && apt-get install -y python3-pip python3-dev build-essential cmake vim \
     && rm -rf /var/lib/apt/lists/*
 
 # Install ohmybash + dev tooling
 RUN bash -c "$(curl -fsSL https://raw.githubusercontent.com/ohmybash/oh-my-bash/master/tools/install.sh)"
 
-# Install uv (the project's build backend). holosoma_inference declares
-# `build-backend = "uv_build"` in pyproject.toml, so the editable install below
-# is driven by uv's build backend rather than setuptools. Pinning to :latest —
-# bump explicitly here for a deterministic version.
+# uv resolves the CMake-backed Python package and its build dependencies.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Install editable metadata against a placeholder at the final source path.
 COPY src/holosoma_inference/pyproject.toml src/holosoma_inference/README.md \
     /workspace/holosoma/src/holosoma_inference/
+COPY src/holosoma_inference/holosoma_cpp /workspace/holosoma/src/holosoma_inference/holosoma_cpp
 RUN mkdir -p /workspace/holosoma/src/holosoma_inference/holosoma_inference && \
     touch /workspace/holosoma/src/holosoma_inference/holosoma_inference/__init__.py
 RUN uv pip install --system -e "/workspace/holosoma/src/holosoma_inference[unitree,booster]"

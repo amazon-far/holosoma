@@ -6,20 +6,29 @@
 #   docker run --rm holosoma-cpp-test
 FROM ubuntu:22.04
 
+COPY --from=ghcr.io/astral-sh/uv:0.8.15 /uv /usr/local/bin/uv
+
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
     cmake \
     ninja-build \
+    python3 \
     && rm -rf /var/lib/apt/lists/*
+
+# The native tests generate metadata-complete ONNX fixtures at build time.
+RUN uv pip install --system --python /usr/bin/python3 --no-cache \
+    numpy==2.2.6 onnx==1.19.1
 
 # The tests load the bundled ONNX models, so keep the repository layout.
 COPY src/holosoma_inference/holosoma_inference/models /ws/src/holosoma_inference/holosoma_inference/models
 COPY src/holosoma_inference/holosoma_cpp /ws/src/holosoma_inference/holosoma_cpp
 
 WORKDIR /ws/src/holosoma_inference/holosoma_cpp
+ARG BUILD_JOBS=4
 RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DHOLOSOMA_WITH_UNITREE_SDK=ON \
-    && cmake --build build -j"$(nproc)"
+    -DPython_EXECUTABLE=/usr/bin/python3 \
+    && cmake --build build -j"${BUILD_JOBS}"
 
 CMD ["ctest", "--test-dir", "build", "--output-on-failure"]

@@ -5,7 +5,7 @@ import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Tuple, cast
+from typing import Any, cast
 
 import mujoco  # type: ignore[import-not-found]
 import mujoco.viewer as mjv  # type: ignore[import-not-found]
@@ -21,7 +21,7 @@ from holosoma_retargeting.config_types.data_conversion import DataConversionConf
 from holosoma_retargeting.config_types.data_type import MotionDataConfig  # noqa: E402
 from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
 
-DynamicState = Tuple[
+DynamicState = tuple[
     torch.Tensor,
     torch.Tensor,
     torch.Tensor,
@@ -34,7 +34,7 @@ DynamicState = Tuple[
     torch.Tensor,
     bool,
 ]
-StaticState = Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, bool]
+StaticState = tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, bool]
 
 # Parse the arguments using the config structure
 

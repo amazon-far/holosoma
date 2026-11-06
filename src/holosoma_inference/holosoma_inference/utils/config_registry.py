@@ -12,7 +12,8 @@ import pkgutil
 import sys
 import typing
 import warnings
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 import tyro
 from loguru import logger

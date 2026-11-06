@@ -9,7 +9,7 @@ WarpBackend requires additional dependencies:
 - mujoco-warp: MuJoCo integration with Warp
 
 To install with GPU support:
-    bash scripts/setup_mujoco.sh --with-warp
+    bash scripts/setup_mujoco.sh
 
 Or install dependencies manually:
     pip install warp-lang mujoco-warp

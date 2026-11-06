@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import importlib
-from typing import Any, Type, cast
+from typing import Any, cast
 
 from holosoma.utils.safe_torch_import import torch
 
 
-def get_class(path: str) -> Type[Any]:
+def get_class(path: str) -> type[Any]:
     """Dynamically import and return a class from a module path.
 
     This is a replacement for hydra.utils.get_class that doesn't require Hydra.
@@ -28,7 +28,7 @@ def get_class(path: str) -> Type[Any]:
     """
     module_path, class_name = path.rsplit(".", 1)
     module = importlib.import_module(module_path)
-    return cast("Type[Any]", getattr(module, class_name))
+    return cast("type[Any]", getattr(module, class_name))
 
 
 def instantiate(config: Any, **kwargs: Any) -> Any:

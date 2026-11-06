@@ -1,6 +1,6 @@
 """Cross-backend camera observation-pipeline assertion harness.
 
-Each step runs render_sensors() then ObservationManager.compute(), the order
+Each step runs render_sensors() then ObservationManager.step(), the order
 BaseTask._post_physics_step uses.
 
 Checks:
@@ -45,7 +45,7 @@ class _TaskShell:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacgym", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
@@ -108,9 +108,13 @@ def main() -> int:
                 concatenate=False,
                 terms={
                     "fast_rgb": ObsTermCfg(
-                        func=f"{_TERMS}:camera_rgb", params={"sensor": "fast_cam", "transform": rgb_tf}
+                        func=f"{_TERMS}:camera_rgb",
+                        params={"sensor": "fast_cam", "transform": rgb_tf},
+                        global_clip=False,
                     ),
-                    "slow_rgb": ObsTermCfg(func=f"{_TERMS}:camera_rgb", params={"sensor": "slow_cam"}),
+                    "slow_rgb": ObsTermCfg(
+                        func=f"{_TERMS}:camera_rgb", params={"sensor": "slow_cam"}, global_clip=False
+                    ),
                 },
             )
         }
@@ -122,7 +126,8 @@ def main() -> int:
     def _obs():
         """Render the cameras, then compute and return the "image" obs group."""
         sim.render_sensors()
-        return mgr.compute()["image"]
+        mgr.new_frame()
+        return mgr.step()["image"]
 
     # 1. Format: the transformed rgb term is CHW float32 in [0,1] with the configured H,W.
     first = _obs()

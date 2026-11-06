@@ -55,12 +55,15 @@ def test_rgb_term_flows_through_dict_group_unaltered() -> None:
         groups={
             "image": ObsGroupCfg(
                 concatenate=False,
-                terms={"head_rgb": ObsTermCfg(func=f"{_TERMS}:camera_rgb", params={"sensor": "head"})},
+                terms={
+                    "head_rgb": ObsTermCfg(func=f"{_TERMS}:camera_rgb", params={"sensor": "head"}, global_clip=False)
+                },
             )
         }
     )
     mgr = ObservationManager(cfg, env, device="cpu")
-    obs = mgr.compute()["image"]
+    mgr.new_frame()
+    obs = mgr.step()["image"]
     assert isinstance(obs, dict) and set(obs) == {"head_rgb"}
     # uint8 preserved (scale=1.0 must not promote to float) and values unchanged.
     assert obs["head_rgb"].dtype == torch.uint8
@@ -73,12 +76,17 @@ def test_depth_term_dict_group_shape_and_dtype() -> None:
         groups={
             "image": ObsGroupCfg(
                 concatenate=False,
-                terms={"head_depth": ObsTermCfg(func=f"{_TERMS}:camera_depth", params={"sensor": "head"})},
+                terms={
+                    "head_depth": ObsTermCfg(
+                        func=f"{_TERMS}:camera_depth", params={"sensor": "head"}, global_clip=False
+                    )
+                },
             )
         }
     )
     mgr = ObservationManager(cfg, env, device="cpu")
-    obs = mgr.compute()["image"]
+    mgr.new_frame()
+    obs = mgr.step()["image"]
     assert obs["head_depth"].dtype == torch.float32
     assert tuple(obs["head_depth"].shape) == tuple(depth.shape)
 
@@ -90,8 +98,10 @@ def test_get_obs_dims_reports_image_shape_for_dict_group() -> None:
             "image": ObsGroupCfg(
                 concatenate=False,
                 terms={
-                    "head_rgb": ObsTermCfg(func=f"{_TERMS}:camera_rgb", params={"sensor": "head"}),
-                    "head_depth": ObsTermCfg(func=f"{_TERMS}:camera_depth", params={"sensor": "head"}),
+                    "head_rgb": ObsTermCfg(func=f"{_TERMS}:camera_rgb", params={"sensor": "head"}, global_clip=False),
+                    "head_depth": ObsTermCfg(
+                        func=f"{_TERMS}:camera_depth", params={"sensor": "head"}, global_clip=False
+                    ),
                 },
             )
         }
@@ -107,15 +117,18 @@ def test_image_term_in_concatenate_group_is_rejected() -> None:
         groups={
             "bad": ObsGroupCfg(
                 concatenate=True,
-                terms={"head_rgb": ObsTermCfg(func=f"{_TERMS}:camera_rgb", params={"sensor": "head"})},
+                terms={
+                    "head_rgb": ObsTermCfg(func=f"{_TERMS}:camera_rgb", params={"sensor": "head"}, global_clip=False)
+                },
             )
         }
     )
     mgr = ObservationManager(cfg, env, device="cpu")
     with pytest.raises(ValueError, match="concatenate=True group 'bad'"):
         mgr.get_obs_dims()
+    mgr.new_frame()
     with pytest.raises(ValueError, match="concatenate=True group 'bad'"):
-        mgr.compute()
+        mgr.step()
 
 
 def test_rgb_term_transform_to_chw_float_for_policy() -> None:
@@ -129,14 +142,17 @@ def test_rgb_term_transform_to_chw_float_for_policy() -> None:
                 concatenate=False,
                 terms={
                     "head_rgb": ObsTermCfg(
-                        func=f"{_TERMS}:camera_rgb", params={"sensor": "head", "transform": transform}
+                        func=f"{_TERMS}:camera_rgb",
+                        params={"sensor": "head", "transform": transform},
+                        global_clip=False,
                     )
                 },
             )
         }
     )
     mgr = ObservationManager(cfg, env, device="cpu")
-    out = mgr.compute()["image"]["head_rgb"]
+    mgr.new_frame()
+    out = mgr.step()["image"]["head_rgb"]
     assert tuple(out.shape) == (2, 3, 4, 4) and out.dtype == torch.float32
     assert float(out.min()) >= 0.0 and float(out.max()) <= 1.0
     image_dims = cast("dict[str, int | tuple[int, ...]]", mgr.get_obs_dims()["image"])

@@ -485,7 +485,6 @@ g1_29dof = RobotConfig(
         "right_wrist_roll_joint",
         "right_wrist_yaw_joint",
     ],
-    apply_dof_armature_in_isaacgym=True,
     contact_pairs_multiplier=16,
     control=RobotControlConfig(
         control_type="P",
@@ -1089,7 +1088,7 @@ t1_29dof_waist_wrist = RobotConfig(
         default_dof_drive_mode=3,
         fix_base_link=False,
         # PhysX solver knobs + density for all robot links. The explicit 0.0 damping is required:
-        # PhysXPhysicsConfig defaults damping to 0.1. density is an IsaacGym AssetOptions fallback
+        # PhysXPhysicsConfig defaults damping to 0.1. density is an asset-import fallback
         # for inertia-less bodies (no-op where the asset authors mass, which t1 does).
         link_physics=PhysicsConfig(
             density=0.001,

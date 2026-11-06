@@ -5,7 +5,7 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 ROOT_DIR=$(dirname "$SCRIPT_DIR")
 
 if ! command -v sudo &> /dev/null; then
-  # in docker build sudo isn't avaiable, but its ok
+  # in docker build sudo isn't available, but it's ok
   echo "Warning: sudo could not be found, you may need to run this script with sudo"
   function sudo { "$@"; }
   export -f sudo
@@ -15,9 +15,8 @@ source $CONDA_ROOT/etc/profile.d/conda.sh
 
 
 cd "$SCRIPT_DIR"
-chmod +x setup_isaacsim.sh setup_isaacgym.sh setup_mujoco.sh setup_inference.sh setup_retargeting.sh
+chmod +x setup_isaacsim.sh setup_mujoco.sh setup_inference.sh setup_retargeting.sh
 OMNI_KIT_ACCEPT_EULA=1 ./setup_isaacsim.sh
-./setup_isaacgym.sh
-./setup_mujoco.sh --no-warp
+./setup_mujoco.sh --skip-driver-check  # build hosts have no GPU; mjwarp needs one only at run time
 ./setup_inference.sh
 ./setup_retargeting.sh

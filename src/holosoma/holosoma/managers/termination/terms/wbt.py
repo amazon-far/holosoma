@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, List
+from typing import Any
 
 from holosoma.config_types.termination import TerminationTermCfg
 from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
@@ -121,7 +121,7 @@ class BadTracking(TerminationTermBase):
     #########################################################################################################
     ## Internal Helper functions
     #########################################################################################################
-    def _get_index_of_a_in_b(self, a_names: List[str], b_names: List[str], device: str = "cpu") -> torch.Tensor:
+    def _get_index_of_a_in_b(self, a_names: list[str], b_names: list[str], device: str = "cpu") -> torch.Tensor:
         indexes = []
         for name in a_names:
             assert name in b_names, f"The specified name ({name}) doesn't exist: {b_names}"
