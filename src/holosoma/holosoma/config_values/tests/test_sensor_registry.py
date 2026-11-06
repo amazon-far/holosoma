@@ -235,7 +235,7 @@ def test_g1_head_depth_preset_keeps_original_visuals_without_other_eligible_geom
         f"{robot}/left_foot_contact_point/mesh",
         "/World/envs/env_.*/box/visuals/mesh",
     ]
-    roots = set()
+    roots: set[str] = set()
     for path in discovered:
         components = path.replace("/World/envs/env_.*", "/World/envs/env_0").split("/")
         roots.update("/".join(components[:end]) for end in range(2, len(components) + 1))

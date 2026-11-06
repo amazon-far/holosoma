@@ -32,7 +32,7 @@ def test_offsets_duplicate_body_bindings_and_unbound_slots() -> None:
     orientations = torch.full((1, 5, 4), -9.0)
     position_storage, orientation_storage = positions.data_ptr(), orientations.data_ptr()
 
-    binding.update(sim, positions, orientations)
+    binding.update(sim, positions, orientations)  # type: ignore[arg-type]
 
     torch.testing.assert_close(
         positions[:, [1, 3, 4]], torch.tensor([[[0.0, 21.0, 0.0], [10.0, 2.0, 0.0], [-1.0, 20.0, 0.0]]])
@@ -48,7 +48,7 @@ def test_offsets_duplicate_body_bindings_and_unbound_slots() -> None:
 
     # refresh_sim_tensors replaces body tensors; cached bindings must reread them.
     sim.rigid_body_pos_w = sim.rigid_body_pos_w + 100.0
-    binding.update(sim, positions, orientations)
+    binding.update(sim, positions, orientations)  # type: ignore[arg-type]
     torch.testing.assert_close(positions[:, 1], torch.tensor([[100.0, 121.0, 100.0]]))
 
 
@@ -66,7 +66,7 @@ def test_each_environment_uses_its_own_offset_and_body_state() -> None:
     )
     positions, orientations = torch.zeros(2, 1, 3), torch.zeros(2, 1, 4)
 
-    binding.update(sim, positions, orientations)
+    binding.update(sim, positions, orientations)  # type: ignore[arg-type]
 
     torch.testing.assert_close(positions, torch.tensor([[[2.0, 2.0, 3.0]], [[9.0, 12.0, 13.0]]]))
     torch.testing.assert_close(orientations, torch.tensor([[[1.0, 0.0, 0.0, 0.0]], [[0.0, 0.0, 0.0, 1.0]]]))
