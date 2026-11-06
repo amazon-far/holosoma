@@ -291,10 +291,6 @@ class DistillationBase(BaseAlgo):
             with self.logging_helper.record_collection_time():
                 obs_dict = self._rollout_step(obs_dict)
 
-            if self._any_rank_requested_shutdown(self.env.shutdown_requested):
-                logger.info("Stopping distillation after a task shutdown request.")
-                break
-
             with self.logging_helper.record_learn_time():
                 loss_dict = self._training_step()
 
@@ -603,9 +599,6 @@ class DistillationBase(BaseAlgo):
             actor_state = self._pre_eval_env_step(actor_state)
             actor_state = self.env_step(actor_state)
             actor_state = self._post_eval_env_step(actor_state)
-            if self.env.shutdown_requested:
-                logger.info("Stopping distillation evaluation after a task shutdown request.")
-                break
 
         self._post_evaluate_policy()
 

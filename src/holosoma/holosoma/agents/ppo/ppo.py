@@ -378,10 +378,6 @@ class PPO(BaseAlgo):
             with self.logging_helper.record_collection_time():
                 obs_dict = self._rollout_step(obs_dict)
 
-            if self._any_rank_requested_shutdown(self.env.shutdown_requested):
-                logger.info("Stopping PPO after a task shutdown request.")
-                break
-
             with self.logging_helper.record_learn_time():
                 loss_dict = self._training_step()
 
@@ -444,10 +440,6 @@ class PPO(BaseAlgo):
                 if self.log_dir is not None:
                     # Update episode stats using logging helper
                     self.logging_helper.update_episode_stats(rewards, dones, infos)
-
-                # Multi-GPU ranks finish the rollout so they all reach the shared check in learn().
-                if self.env.shutdown_requested and not self.is_multi_gpu:
-                    return obs_dict
 
             # Return / Advantage computation
             last_critic_obs = torch.cat([obs_dict[k] for k in self.critic_obs_keys], dim=1)
@@ -860,9 +852,6 @@ class PPO(BaseAlgo):
             actor_state = self._pre_eval_env_step(actor_state)
             actor_state = self.env_step(actor_state)
             actor_state = self._post_eval_env_step(actor_state)
-            if self.env.shutdown_requested:
-                logger.info("Stopping PPO evaluation after a task shutdown request.")
-                break
 
         self._post_evaluate_policy()
 
