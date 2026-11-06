@@ -83,6 +83,12 @@ def main() -> int:
     assert camera.cfg.renderer_cfg.renderer_type == args.renderer, camera.cfg.renderer_cfg
     robot = sim._robot
     spawn_joints = sim.dof_pos.clone()
+    if args.physics == "newton":
+        model = manager.get_model()
+        ground_ids = [index for index, label in enumerate(model.shape_label) if label.startswith("/World/ground/")]
+        assert ground_ids, "Newton must import the shared ground independently of the environment subtree"
+        worlds = wp.to_torch(model.shape_world)
+        assert bool((worlds[ground_ids] == -1).all()), worlds[ground_ids]
 
     # Read the native engine directly. The production adapter never supplies the oracle.
     def masses():

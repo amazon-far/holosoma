@@ -338,6 +338,8 @@ class IsaacLab3Backend(IsaacLabBackend):
         from isaaclab_physx.cloner import PhysxReplicateContext
         from isaaclab_newton.cloner import NewtonReplicateContext
 
+        from ..scene_fixtures import TERRAIN_PRIM_PATH
+
         # Holosoma owns a complete env subtree, including expanded scene-file
         # bodies, material bindings and lights. Declare that ownership before
         # authoring assets, so one native plan clones the whole subtree.
@@ -347,7 +349,11 @@ class IsaacLab3Backend(IsaacLabBackend):
             # Warp's render-only Newton model must include the same scene subtree.
             contexts += (NewtonReplicateContext,)
         root = AssetBaseCfg(prim_path=scene.env_regex_ns, cloning_contexts=contexts)
-        cloner.clone_plan_from_env_0(scene.cfg.clone_cfg, (root,), scene.num_envs, scene.cfg.env_spacing)
+        # Newton imports only declared clone-plan sources. The shared terrain
+        # lives outside every env subtree and must be declared independently;
+        # collision filtering alone does not import its geometry into Newton.
+        ground = AssetBaseCfg(prim_path=TERRAIN_PRIM_PATH, cloning_contexts=contexts)
+        cloner.clone_plan_from_env_0(scene.cfg.clone_cfg, (root, ground), scene.num_envs, scene.cfg.env_spacing)
 
     @staticmethod
     def clone_environments(scene: Any) -> None:
