@@ -124,7 +124,7 @@ _G1_ROBOT_PRIM = "/World/envs/env_.*/Robot"
 # per env.
 # ``near`` keeps returns closer than the D435i's 0.3 m working range so preprocessing can clamp
 # them to it, as the hardware pipeline does.
-g1_head_d435i_depth = CameraSensorConfig(
+g1_head_d435i_raycast_depth = CameraSensorConfig(
     mount=SensorMountConfig(
         target_kind="robot_link",
         target="torso_link",

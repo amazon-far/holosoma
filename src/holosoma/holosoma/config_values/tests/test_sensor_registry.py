@@ -218,7 +218,7 @@ def _g1_original_mesh_paths() -> list[str]:
 
 
 def test_g1_head_depth_preset_keeps_original_visuals_without_other_eligible_geometry() -> None:
-    preset = SENSOR_REGISTRY["g1-head-d435i-depth"]
+    preset = SENSOR_REGISTRY["g1-head-d435i-raycast-depth"]
     assert isinstance(preset, CameraSensorConfig)
     assert preset.isaacsim.renderer == "raycast"
     robot = "/World/envs/env_.*/Robot"
@@ -248,7 +248,7 @@ def test_g1_head_depth_preset_keeps_original_visuals_without_other_eligible_geom
 
 
 def test_g1_head_depth_preset_fails_when_an_original_visual_is_missing() -> None:
-    preset = SENSOR_REGISTRY["g1-head-d435i-depth"]
+    preset = SENSOR_REGISTRY["g1-head-d435i-raycast-depth"]
     discovered = [path for path in _g1_original_mesh_paths() if "/waist_roll_link/" not in path]
     with pytest.raises(ValueError, match=r"waist_roll_link.*matched no"):
         select_mesh_prim_paths(
@@ -263,7 +263,7 @@ def test_cli_selects_raycast_scene_objects_and_excludes_mesh_subtrees() -> None:
         RunSimConfig,
         args=[
             "simulator:isaacsim",
-            "sensor.depth:g1-head-d435i-depth",
+            "sensor.depth:g1-head-d435i-raycast-depth",
             '--sensor.depth.isaacsim.raycast-meshes.include-paths=["/World/ground"]',
             '--sensor.depth.isaacsim.raycast-meshes.exclude-paths=["/World/envs/env_.*/Robot"]',
         ],
