@@ -109,6 +109,7 @@ class _FakeSimulator:
         num_envs: int = 1,
     ) -> None:
         self.hooks = HookRegistry()
+        self.sensor_render_hook = self.hooks.add(Phase.FRAME_END, lambda: None, name="sensors.render")
         self.sensor_config = sensors_config
         self.sensor_manager = _FakeSensorManager()
         self.training_config = _FakeTrainingConfig(num_envs)
@@ -161,9 +162,8 @@ def _step(sim: _FakeSimulator) -> None:
 def test_registers_publish_and_close_callbacks() -> None:
     sim = _FakeSimulator(_sensors("head"), {("head", "rgb"): _rgb()})
     FakeConsumer(None, sim, streams=[("head", "rgb", 0)])
-    # One FRAME_END hook (publish) and one CLOSE hook (stop) were registered.
-    assert len(sim.hooks._snapshots[Phase.FRAME_END]) == 1
-    assert len(sim.hooks._snapshots[Phase.CLOSE]) == 1
+    assert sim.hooks.names(Phase.FRAME_END) == ("sensors.render", "FakeConsumer.publish")
+    assert sim.hooks.names(Phase.CLOSE) == ("FakeConsumer.stop",)
 
 
 def test_publishes_only_fresh_wanted_streams() -> None:

@@ -14,7 +14,7 @@ from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.simulator.base_simulator.hooks import HookHandle, HookRegistry, Phase
 from holosoma.simulator.base_simulator.state import SimState, StateTensor
 from holosoma.simulator.shared.external_wrench import ExternalWrenchAccumulator, WrenchTarget
 from holosoma.simulator.shared.object_registry import ObjectRegistry, ObjectType
@@ -220,9 +220,11 @@ class BaseSimulator:
         self.kinematic_playback: bool = self.simulator_config.sim.kinematic_playback
         self._kinematic_time = 0.0
         self.hooks = HookRegistry(base_rates=self._hook_base_rates())
-        # Register sensor rendering before plugins so FRAME_END consumers read fresh outputs.
-        # This no-ops until a backend builds its sensor manager during setup.
-        self.hooks.add(Phase.FRAME_END, self.render_sensors, name="sensors.render")
+        # Egress consumers follow this handle, so it runs ahead of them whatever order they
+        # register in. No-ops until a backend builds its sensor manager.
+        self.sensor_render_hook: HookHandle = self.hooks.add(
+            Phase.FRAME_END, self.render_sensors, name="sensors.render"
+        )
         self.installed_plugins: dict[str, Any] = {}
         self._plugins_installed = False
         self._closed = False
@@ -825,9 +827,12 @@ class BaseSimulator:
         # simulator; the outer lifecycle owner will emit CLOSE for callbacks already registered.
         self._plugins_installed = True
         for key, cfg in self.plugin_config.items():
-            self.installed_plugins[key] = cfg.get_cls()(cfg, self)
+            # Scoped so the plugin's published keys belong to its slot, for HookRef to resolve.
+            with self.hooks.installing(key):
+                self.installed_plugins[key] = cfg.get_cls()(cfg, self)
         if self.installed_plugins:
             logger.info(f"Installed plugins: {sorted(self.installed_plugins)}")
+        self.hooks.validate()
 
     def close(self) -> None:
         """Emit the one-pass simulator teardown phase."""

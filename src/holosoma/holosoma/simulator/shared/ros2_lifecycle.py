@@ -18,6 +18,8 @@ class ROS2Runtime:
     def __init__(self) -> None:
         self._context: Any = None
         self._closed = False
+        self.close_hook: Any = None
+        """This runtime's CLOSE registration; node cleanup declares ``before`` it."""
 
     def start(self) -> Any:
         """Initialize the context without installing process signal handlers."""
@@ -66,7 +68,7 @@ def get_ros2_runtime(simulator: Any) -> ROS2Runtime:
 
     runtime = ROS2Runtime()
     setattr(simulator, _RUNTIME_ATTRIBUTE, runtime)
-    simulator.hooks.add(Phase.CLOSE, runtime.close, name="ros2.runtime.close")
+    runtime.close_hook = simulator.hooks.add(Phase.CLOSE, runtime.close, name="ros2.runtime.close")
     return runtime
 
 
