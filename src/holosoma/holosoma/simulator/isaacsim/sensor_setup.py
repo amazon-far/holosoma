@@ -314,15 +314,7 @@ def build_lidars(sim: IsaacSim) -> None:
 
         parent = _mount_parent_path(lidar.mount, backend=sim.backend)
         if lidar.mount.target_kind == "world":
-            mount_path = f"{parent}/holosoma_lidar_{name}"
-            source_path = mount_path.replace(sim.backend.env_regex_ns, "/World/envs/env_0", 1)
-            sim_utils.create_prim(
-                source_path,
-                prim_type="Xform",
-                translation=tuple(lidar.mount.position),
-                orientation=sim.backend.config_quat_to_native(lidar.mount.orientation),
-            )
-            offset = MultiMeshRayCasterCfg.OffsetCfg()
+            mount_path, offset = sim.backend.world_lidar_mount(name, lidar.mount.position, lidar.mount.orientation)
         else:
             mount_path = parent
             offset = MultiMeshRayCasterCfg.OffsetCfg(

@@ -142,6 +142,8 @@ Lab 3 LiDAR retains the configured visual mesh targets under either physics
 engine. Native mesh casters track their motion upstream; the adapter adds
 fixed-size ray-pattern updates. Newton's collision-BVH caster is a separate
 candidate because it senses different geometry.
+World-mounted Newton LiDAR uses a supported bodyless site per environment,
+with the fixed mounting pose applied as a ray offset.
 
 The native backend restores the robot's Isaac Lab default pose, velocity,
 and joint state after physics startup, before domain randomization runs.
