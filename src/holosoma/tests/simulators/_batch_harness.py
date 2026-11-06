@@ -73,11 +73,15 @@ def _reset_isaacsim_stage() -> None:
 
     stat_cache._stat_cache.clear()
     gc.collect()
-    from isaaclab.sensors import RayCaster
+    from isaaclab.sensors import Camera, RayCaster
 
     # Ray casters share a class-level mesh cache that is only dropped when the last instance dies.
     if RayCaster._instance_count:
         raise RuntimeError(f"{RayCaster._instance_count} RayCaster(s) outlived their cell")
+    # A camera's annotators are detached only when the camera is collected.
+    cameras = sum(isinstance(obj, Camera) for obj in gc.get_objects())
+    if cameras:
+        raise RuntimeError(f"{cameras} camera(s) outlived their cell")
     if context_ref is not None and context_ref() is not None:
         raise RuntimeError("SimulationContext outlived its cell")
 
