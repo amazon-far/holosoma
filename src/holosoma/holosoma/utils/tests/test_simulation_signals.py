@@ -17,6 +17,7 @@ pytestmark = [
 
 _CHILD = textwrap.dedent(
     """
+    import dataclasses
     import time
     from types import SimpleNamespace
 
@@ -46,7 +47,13 @@ _CHILD = textwrap.dedent(
     session.resolve_simulation_device = lambda *_args: "cpu"
     session.get_simulator_type = lambda: SimulatorType.MUJOCO
     session.get_class = lambda _target: Task
-    env_config = SimpleNamespace(env_class="test.Task", training=SimpleNamespace(headless=True))
+    @dataclasses.dataclass(frozen=True)
+    class EnvConfig:
+        env_class: str
+        training: object
+        device: str | None = None
+
+    env_config = EnvConfig(env_class="test.Task", training=SimpleNamespace(headless=True))
     env_types.get_run_sim_env_config = lambda _config: env_config
     config = SimpleNamespace(
         device="cpu",

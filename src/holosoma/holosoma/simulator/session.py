@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
@@ -25,6 +26,12 @@ if TYPE_CHECKING:
     from holosoma.envs.base_task.base_task import BaseTask
 
 _TaskT = TypeVar("_TaskT", bound="BaseTask")
+
+
+def _is_policy_task(task_class: type) -> bool:
+    from holosoma.envs.policy_task import PolicyTask
+
+    return issubclass(task_class, PolicyTask)
 
 
 def get_local_rank() -> int | None:
@@ -100,9 +107,11 @@ def task_session(config: EnvConfig, required_class: type[_TaskT]) -> Iterator[_T
             if not issubclass(task_class, required_class):
                 raise TypeError(f"env_class {config.env_class!r} is not a {required_class.__name__} subclass.")
             logger.info(f"Creating task: {config.env_class}")
-            task = task_class(config)
+            # Pinned so the task allocates on the device the provider launched on.
+            task = task_class(dataclasses.replace(config, device=device))
 
-            if not config.training.headless:
+            # The listener's keys drive policy-task controls; a simulation task has none.
+            if not config.training.headless and _is_policy_task(task_class):
                 setup_keyboard_listener(task)
             yield task
         except BaseException:

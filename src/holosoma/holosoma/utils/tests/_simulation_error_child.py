@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import os
 import signal
 import sys
@@ -106,6 +107,15 @@ class NativeApp:
         os._exit(self.quit_requests[-1] if self.quit_requests else 0)
 
 
+@dataclasses.dataclass(frozen=True)
+class _EnvConfig:
+    """The EnvConfig fields task_session reads."""
+
+    env_class: str
+    training: object
+    device: str | None = None
+
+
 class Environment:
     def __init__(self, ready_file: Path | None) -> None:
         self.ready_file = ready_file
@@ -167,7 +177,7 @@ def run_task_session(
     monkeypatch.setattr(session, "get_simulator_type", lambda: SimulatorType.ISAACSIM)
     monkeypatch.setattr(session, "setup_isaaclab_launcher", lambda _config, _device: app)
     monkeypatch.setattr(session, "get_class", lambda _target: Task)
-    config = cast("Any", SimpleNamespace(env_class="test.Task", training=SimpleNamespace(headless=True)))
+    config = cast("Any", _EnvConfig(env_class="test.Task", training=SimpleNamespace(headless=True)))
     with session.task_session(config, SimulationTask) as task:
         if on_enter is not None:
             on_enter()
