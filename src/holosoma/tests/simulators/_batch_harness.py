@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import traceback
+import weakref
 from pathlib import Path
 
 if sys.path and sys.path[0].endswith("tests/simulators"):
@@ -55,10 +56,15 @@ def _reset_isaacsim_stage() -> None:
     import omni.timeline
 
     context = sim_utils.SimulationContext.instance()
+    context_ref = None
     if context is not None:
         # clear_instance unsubscribes the stop handler, which would otherwise render until replay.
         context.clear_all_callbacks()
         context.clear_instance()
+        # clear_instance leaves this observer subscribed, and its bound method keeps the context alive.
+        context._on_post_physics_ready_callback = None
+        context_ref = weakref.ref(context)
+        del context
     omni.timeline.get_timeline_interface().stop()
     sim_utils.create_new_stage()
     # Kit's import stat cache keeps each failed stat's exception, whose traceback pins the frames
@@ -72,6 +78,8 @@ def _reset_isaacsim_stage() -> None:
     # Ray casters share a class-level mesh cache that is only dropped when the last instance dies.
     if RayCaster._instance_count:
         raise RuntimeError(f"{RayCaster._instance_count} RayCaster(s) outlived their cell")
+    if context_ref is not None and context_ref() is not None:
+        raise RuntimeError("SimulationContext outlived its cell")
 
 
 def main() -> int:
