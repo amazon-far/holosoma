@@ -1,8 +1,7 @@
 """Frame freshness through SimulationTask.run and the shared BaseTask control-frame schedule.
 
-Above all, a control step's FRAME_END falls after the substep the backend renders on, so a camera
-consumer egresses the frame drawn for the state written on that same control step rather than the
-previous one's.
+A control step's FRAME_END falls after the substep the backend renders on, so a camera consumer
+egresses the frame drawn for the state written on that same control step.
 """
 
 from __future__ import annotations
@@ -28,30 +27,18 @@ DECIMATION = 4
 """IsaacSim's registered defaults (holosoma.config_values.simulator): 200 Hz physics, 50 Hz control."""
 
 SUBSTEP = "physics_substep"
-"""Marker the fake records where the physics substep runs, so hooks are placed relative to it.
-
-Without it a phase log cannot tell PRE_STEP/POST_STEP bracketing the substep from both firing on
-the same side of it, and POST_STEP consumers are documented to read post-step state.
-"""
+"""Marker the fake records where the physics substep runs, so hooks are placed relative to it."""
 
 
 class _LoopOverranError(AssertionError):
-    """The loop outlived the fake's substep budget: a stalled run must fail, not spin forever."""
+    """The loop outlived the fake's substep budget."""
 
 
 class _FakeSim:
-    """Stand-in simulator that reproduces a backend's substep render gate.
+    """Stand-in simulator that draws every ``render_interval`` substeps and records the loop's phases.
 
-    A backend draws once its own substep counter reaches ``render_interval`` (IsaacSim's
-    ``_advance_substep``, whose counter runs over substeps and is never reset),
-    and a camera consumer on FRAME_END reads whatever that last draw left in the buffers. Carrying
-    written/rendered/egressed state makes the loop's schedule observable without a real backend: a
-    playback-style plugin samples on FRAME_BEGIN, writes on PRE_STEP, and egresses on FRAME_END.
-
-    The substep budget is enforced from ``simulate_at_each_physics_step`` rather than
-    ``shutdown_requested``, because that is the one call every iteration of the loop must make: a
-    regression that stops egress, or drops the shutdown check altogether, then fails an assertion
-    instead of hanging the suite.
+    A playback-style plugin samples on FRAME_BEGIN, writes on PRE_STEP and egresses the last draw on
+    FRAME_END. A substep budget makes a loop that never finishes fail instead of hanging.
     """
 
     def __init__(self, *, frames: int, render_interval: int = DECIMATION, decimation: int = DECIMATION) -> None:
@@ -77,11 +64,10 @@ class _FakeSim:
         self.hooks.add(Phase.FRAME_BEGIN, self._sample, name="fake.sample")
         self.hooks.add(Phase.PRE_STEP, self._write, name="fake.write")
         self.hooks.add(Phase.POST_STEP, self._post_step, name="fake.post_step")
-        self.egress_hook = self.hooks.add(Phase.FRAME_END, self._egress, name="fake.egress")
+        self.hooks.add(Phase.FRAME_END, self._egress, name="fake.egress")
 
     @property
     def shutdown_requested(self) -> bool:
-        """End on the wanted frame count, or when a hook asked — the behavior under test either way."""
         return self._shutdown or len(self.captured) >= self.frames
 
     def request_shutdown(self, reason: str = "") -> None:
@@ -106,7 +92,7 @@ class _FakeSim:
             self.rendered_at = self.substeps
 
     def _scene_state(self) -> object:
-        """What a draw would capture — here the value PRE_STEP wrote, as a subclass may redefine."""
+        """What a draw captures: the value PRE_STEP wrote."""
         return self._written
 
     def _sample(self) -> None:
@@ -168,7 +154,7 @@ class _LoopTask(SimulationTask):
 
 
 def _run(sim: _FakeSim, *, headless: bool = True, viewer_dt: float = 1.0) -> None:
-    """Drive the real SimulationTask loop over ``sim``: unthrottled, and headless unless a test says not."""
+    """Drive the real SimulationTask loop over ``sim``, unthrottled."""
     _LoopTask(sim, headless=headless, viewer_dt=viewer_dt).run()
 
 
@@ -178,39 +164,35 @@ def _expected_phases(groups: int, decimation: int = DECIMATION) -> list[Phase | 
     return [Phase.FRAME_BEGIN, *substeps, Phase.FRAME_END] * groups
 
 
-# ----- frame freshness: the invariant the control-frame schedule exists to preserve -----
+# ----- frame freshness -----
 
 
-@pytest.mark.parametrize("render_interval", [1, 2, 3, 4])
-def test_frame_end_egresses_the_frame_rendered_for_that_control_step(render_interval: int) -> None:
-    """Each egressed frame is the one drawn for the state written on its own control step.
-
-    Swept over every ``render_interval`` at or below the decimation, the range IsaacSim supports
-    (``isaacsim.py`` warns below it and asks for equality): the last draw of a control step always
-    happens after that step's PRE_STEP write, so the frame is never one step stale. The regression
-    this guards: FRAME_END used to fire on the FIRST substep of the control step while the draw
-    lands on the last, so every frame egressed was one control step behind and an episode
-    boundary's first frame showed the previous episode.
-    """
-    sim = _FakeSim(frames=4, render_interval=render_interval)
-
-    _run(sim)
-
-    assert sim.captured == [0, 1, 2, 3]
-
-
-def test_frame_freshness_holds_without_decimation() -> None:
-    """With one physics step per control step the frame opens and closes on the same substep."""
-    sim = _FakeSim(frames=3, render_interval=1, decimation=1)
+@pytest.mark.parametrize(
+    ("render_interval", "decimation", "drawn_at_egress"),
+    [
+        (1, DECIMATION, [4, 8, 12]),
+        (2, DECIMATION, [4, 8, 12]),
+        (DECIMATION, DECIMATION, [4, 8, 12]),
+        # An interval that does not divide the decimation draws before the frame's last substep.
+        (3, DECIMATION, [3, 6, 12]),
+        (1, 1, [1, 2, 3]),
+    ],
+)
+def test_each_frame_egresses_the_draw_of_its_own_control_step(
+    render_interval: int, decimation: int, drawn_at_egress: list[int]
+) -> None:
+    """FRAME_END egresses the last draw of the state written on the same control step."""
+    sim = _FakeSim(frames=3, render_interval=render_interval, decimation=decimation)
 
     _run(sim)
 
     assert sim.captured == [0, 1, 2]
-    assert sim.phases == _expected_phases(groups=3, decimation=1)
+    assert sim.drawn_at_egress == drawn_at_egress
+    assert sim.phases == _expected_phases(groups=3, decimation=decimation)
 
 
 def test_every_control_step_egresses_exactly_one_frame() -> None:
-    """No frame is dropped or emitted twice: one FRAME_BEGIN and one FRAME_END per control step."""
+    """One FRAME_BEGIN and one FRAME_END per control step."""
     sim = _FakeSim(frames=5)
 
     _run(sim)
@@ -222,75 +204,12 @@ def test_every_control_step_egresses_exactly_one_frame() -> None:
     assert sim.substeps == 5 * DECIMATION
 
 
-def test_simulation_task_phase_schedule() -> None:
-    """PRE_STEP/POST_STEP bracket every substep inside one FRAME_BEGIN..FRAME_END frame.
-
-    Asserted over the whole recorded sequence, so a stray or misplaced emission anywhere fails.
-    """
-    sim = _FakeSim(frames=3)
-
-    _run(sim)
-
-    assert sim.phases == _expected_phases(groups=3)
-
-
-def test_a_loop_that_never_egresses_fails_instead_of_hanging() -> None:
-    """The fake's own guard: with FRAME_END never reached, the run raises rather than spinning.
-
-    This is what keeps the tests above honest under mutation — a regression that silences egress, or
-    removes the shutdown check, cannot stall the suite into a timeout that reads as an error.
-    """
-    sim = _FakeSim(frames=3)
-    sim.egress_hook.remove()
-
-    with pytest.raises(_LoopOverranError, match="without reaching 3 frame"):
-        _run(sim)
-
-
-# ----- the render cadence a coherent frame needs -----
-
-
-def test_a_beating_render_cadence_misaligns_state_and_image() -> None:
-    """A render_interval that does not divide the decimation draws before the frame's last substep.
-
-    Interval 3 against decimation 4 draws on substeps 3, 6, 9, 12 while frames close on 4, 8, 12, so
-    the skew between image and the state at egress changes frame to frame. Pinned here as the reason ``IsaacSim``
-    rejects this pairing at construction when cameras are configured, rather than letting it ship
-    frames a consumer cannot trust.
-    """
-    sim = _FakeSim(frames=3, render_interval=3)
-
-    _run(sim)
-
-    assert sim.drawn_at_egress == [3, 6, 12]  # frames close on substeps 4, 8, 12
-
-
-# ----- the loop's state-sync and render branches -----
-
-
-@pytest.mark.parametrize("render_interval", [1, 2, DECIMATION])
-def test_frame_end_follows_the_frames_last_draw(render_interval: int) -> None:
-    """A frame egresses on the substep its image was last drawn, so the image matches the state at egress.
-
-    A FRAME_END consumer may publish both — camera frames next to odometry, simulator state, or IMU —
-    so a skew between them puts a stale pose beside a current image. Swept over the render intervals
-    that divide the decimation, where the frame's last draw coincides with its last substep.
-    """
-    sim = _FakeSim(frames=3, render_interval=render_interval)
-
-    _run(sim)
-
-    # Frame g's last draw and its egress both land on substep (g + 1) * DECIMATION.
-    assert sim.drawn_at_egress == [4, 8, 12]
+# ----- shutdown and the viewer -----
 
 
 def test_shutdown_asked_for_inside_a_frame_still_egresses_that_frame() -> None:
-    """request_shutdown stops the run after the current frame, so that frame keeps its egress.
-
-    A plugin asking from PRE_STEP or POST_STEP must not lose the frame's rendering, recording, and
-    telemetry to a mid-frame exit.
-    """
-    sim = _FakeSim(frames=99)  # the ask below ends the run, not the frame budget
+    """request_shutdown stops the run after the current frame, which still egresses."""
+    sim = _FakeSim(frames=99)
 
     def ask_mid_frame() -> None:
         if sim.substeps == DECIMATION + 1:  # first substep of the second frame
@@ -305,12 +224,7 @@ def test_shutdown_asked_for_inside_a_frame_still_egresses_that_frame() -> None:
 
 
 def test_a_frame_that_opens_always_closes() -> None:
-    """Shutdown asked for from FRAME_BEGIN still closes that frame: the phases stay paired.
-
-    Plugins pair per-frame work across FRAME_BEGIN and FRAME_END, so a frame the loop opened must
-    reach FRAME_END whatever a hook asks for meanwhile. A plugin that does not want its last frame
-    egressed asks from FRAME_END instead, which is how MotionPlaybackPlugin ends a finite run.
-    """
+    """Shutdown asked for from FRAME_BEGIN still closes that frame, so the phases stay paired."""
     sim = _FakeSim(frames=99)
 
     def ask_on_frame_begin() -> None:
@@ -327,13 +241,7 @@ def test_a_frame_that_opens_always_closes() -> None:
 
 
 def test_viewer_renders_on_its_own_schedule_when_not_headless() -> None:
-    """A windowed run draws the viewport every ``viewer_dt``, independent of the control rate.
-
-    ``viewer_dt=0.02`` against a 0.005 s physics step is every 4th step; ``render`` records the
-    substep counter as it stands after that step, so 1/5/9 are the run's 1st, 5th and 9th substeps.
-    The viewport is therefore drawn on the FIRST substep of each control step, unlike the camera
-    egress on FRAME_END — the two schedules are deliberately independent.
-    """
+    """A windowed run draws the viewport every ``viewer_dt``, here on each frame's first substep."""
     sim = _FakeSim(frames=3)
 
     _run(sim, headless=False, viewer_dt=DECIMATION / FPS)
@@ -359,12 +267,7 @@ class _OffscreenSim(_FakeSim):
 
 @pytest.mark.parametrize("render_interval", [1, 2, DECIMATION])
 def test_scheduled_renders_land_on_the_last_substep_of_each_interval(render_interval: int) -> None:
-    """BaseTask renders offscreen outputs after every ``render_interval``-th substep.
-
-    With ``render_interval == decimation`` that is each frame's last substep, so the image a
-    FRAME_END consumer reads was drawn for the same state as the tensors published beside it.
-    ``render`` records the substep counter after the step it follows (1-based).
-    """
+    """BaseTask renders offscreen outputs after every ``render_interval``-th substep (1-based)."""
     sim = _OffscreenSim(frames=3, render_interval=render_interval)
 
     _run(sim)
@@ -377,18 +280,12 @@ def test_scheduled_renders_land_on_the_last_substep_of_each_interval(render_inte
 
 CLIP_FRAMES = 5
 CLIP_JOINT0 = [10.0 + i for i in range(CLIP_FRAMES)]
-"""``joint0`` per clip frame — the value this section follows from the clip through to egress."""
+"""``joint0`` per clip frame."""
 
 
 @pytest.fixture
 def local_path_loaders(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Register the production local path loaders directly instead of through entry points.
-
-    Path resolution is not what this section constrains, and entry-point discovery depends on install
-    metadata rather than on the source under test, so a checkout whose metadata predates the loader
-    entry points would fail here for a reason unrelated to the loop. ``LocalPathLoader`` itself still
-    does the resolving.
-    """
+    """Register the production local path loaders directly instead of through entry points."""
     from holosoma.utils import core_path_loaders, path
 
     monkeypatch.setattr(
@@ -413,13 +310,7 @@ def _clip(tmp_path: Path, name: str) -> str:
 
 
 class _PlaybackSim(_FakeSim):
-    """``_FakeSim`` plus the surface MotionPlaybackPlugin writes through.
-
-    Frame identity is the clip's own ``joint0``: the plugin writes it into ``dof_pos`` on PRE_STEP,
-    the render gate latches whatever is there, and FRAME_END egresses that latch — so ``captured`` is
-    directly comparable to :data:`CLIP_JOINT0` with nothing of the fake's own invention in between.
-    Shutdown comes only from the plugin, which is what makes an extra terminal frame observable.
-    """
+    """``_FakeSim`` plus the surface MotionPlaybackPlugin writes through; a draw captures ``joint0``."""
 
     def __init__(self, *, decimation: int, budget_frames: int) -> None:
         super().__init__(frames=budget_frames, render_interval=decimation, decimation=decimation)
@@ -430,8 +321,6 @@ class _PlaybackSim(_FakeSim):
         self.dof_vel = torch.zeros(1, self.num_dof)
         self.robot_root_states = torch.zeros(1, 13)
         self.scene = EnvOriginsScene(torch.zeros(1, 3), self.sim_device)
-        # Derived from the base fake's own rates, so the plugin's view of the sim and the driving
-        # loop's (built by _LoopTask from the same fields) cannot drift apart.
         self.simulator_config = SimpleNamespace(
             sim=SimpleNamespace(
                 fps=FPS, control_decimation_steps=self.decimation, render_interval_steps=self.render_interval
@@ -449,7 +338,6 @@ class _PlaybackSim(_FakeSim):
         pass
 
     def _scene_state(self) -> object:
-        """A draw captures the joint the plugin pinned this substep."""
         return round(float(self.dof_pos[0, 0]), 4)
 
 
@@ -458,12 +346,7 @@ class _PlaybackSim(_FakeSim):
 def test_playback_egresses_every_clip_frame_exactly_once(
     tmp_path: Path, local_path_loaders: None, decimation: int, clips: int
 ) -> None:
-    """A finite playlist egresses each clip frame once: no stale first frame, no doubled last one.
-
-    The real :class:`MotionPlaybackPlugin` runs through the real loop at the clip's own rate, so one
-    control step is one clip frame. The plugin ends the run from its final frame's FRAME_END, so that
-    frame is the run's last and the loop opens no further one to repeat it — at any decimation.
-    """
+    """A finite playlist egresses each clip frame once: no stale first frame, no doubled last one."""
     sim = _PlaybackSim(decimation=decimation, budget_frames=(CLIP_FRAMES + 2) * clips)
     cfg = MotionPlaybackPluginConfig(
         motion_files=[_clip(tmp_path, f"clip{index}.npy") for index in range(clips)],
