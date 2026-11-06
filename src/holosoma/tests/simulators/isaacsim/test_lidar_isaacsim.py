@@ -34,7 +34,7 @@ def test_lidar_newton(tmp_path, run_isaacsim_harness, isaacsim_backend):
     if isaacsim_backend != "isaaclab3":
         pytest.skip("Newton LiDAR requires the explicit Isaac Lab 3 profile")
     result_file = tmp_path / "lidar_newton.txt"
-    run_isaacsim_harness(
+    result = run_isaacsim_harness(
         _HARNESS,
         "--physics-backend",
         "newton",
@@ -46,3 +46,4 @@ def test_lidar_newton(tmp_path, run_isaacsim_harness, isaacsim_backend):
         timeout=900,
         result_file=result_file,
     )
+    assert "narrowphase overflow" not in (result.stdout + result.stderr).lower(), result.stdout[-3000:]

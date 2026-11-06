@@ -346,6 +346,15 @@ class IsaacLab3Backend(IsaacLabBackend):
     def register_scene(sim: Any, scene: Any) -> None:
         sim.register_interactive_scene(scene)
 
+    def write_scene_data(self, sim: Any, scene: Any) -> None:
+        super().write_scene_data(sim, scene)
+        if self.options.physics_backend == "newton":
+            # Root writers invalidate FK. Native mesh casters read body_q
+            # directly, so an explicit flush must publish the authored pose
+            # before a capture that does not first step physics. Newton
+            # forward consumes only dirty articulations and advances no time.
+            sim.forward()
+
     def prepare_scene(self, scene: Any) -> None:
         from isaaclab import cloner
         from isaaclab.assets import AssetBaseCfg
