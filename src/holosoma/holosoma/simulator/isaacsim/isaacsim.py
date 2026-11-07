@@ -72,7 +72,16 @@ if TYPE_CHECKING:
 class IsaacSim(BaseSimulator):
     def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str):
         super().__init__(tyro_config, terrain_manager, device)
-        self.backend = get_backend(self.simulator_config.isaacsim_backend, native=self.simulator_config.sim.isaaclab3)
+        self.backend = get_backend(
+            self.simulator_config.isaacsim_backend,
+            native=self.simulator_config.sim.isaaclab3,
+            rendering=(
+                self.video_config.enabled
+                or any(isinstance(sensor, CameraSensorConfig) for sensor in self.sensor_config.values())
+                or not tyro_config.training.headless
+                or bool(self.simulator_config.isaacsim.app_launcher_args())
+            ),
+        )
 
         # Public interface attribute read across backends (video_recorder, virtual_gantry,
         # simulator_bridge). For IsaacSim it always equals self.sim_device; internal tensor

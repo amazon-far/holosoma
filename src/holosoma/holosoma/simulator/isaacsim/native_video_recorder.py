@@ -1,4 +1,4 @@
-"""Logger movies through Lab 3 cameras in the Kit-less OVRTX runtime."""
+"""Logger movies through Lab 3 cameras in the selected Kit-less runtime."""
 
 from __future__ import annotations
 

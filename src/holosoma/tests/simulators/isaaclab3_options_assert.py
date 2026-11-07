@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
 import sys
+import time
 from pathlib import Path
 
 if sys.path and sys.path[0].endswith("simulators"):
@@ -12,10 +14,12 @@ if sys.path and sys.path[0].endswith("simulators"):
 
 from holosoma.config_types.simulator import IsaacLab3Config
 from holosoma.utils.sim_utils import setup_simulation_environment
+from tests.simulators._native_runtime_assertions import assert_native_runtime
 from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step
 
 
 def main() -> int:
+    started = time.perf_counter()
     parser = argparse.ArgumentParser()
     parser.add_argument("--simulator", choices=["isaacsim3"], required=True)
     parser.add_argument("--physics", choices=["physx", "newton"], required=True)
@@ -47,6 +51,7 @@ def main() -> int:
         training=dataclasses.replace(config.training, num_envs=2),
     )
     env, device, _app = setup_simulation_environment(config, device="cuda:0")
+    launched = time.perf_counter()
     sim = env.sim
     sim.set_headless(True)
     sim.setup()
@@ -76,13 +81,14 @@ def main() -> int:
     )
     sim.create_envs(2, torch.zeros(2, 3, device=device), initial)
     sim.prepare_sim()
+    ready = time.perf_counter()
     sim.install_plugins()
     manager = string_to_callable(sim.sim.cfg.physics.class_type)
     assert ("newton" in manager.__module__) == (args.physics == "newton"), manager
-    if args.renderer == "ovrtx":
+    if args.renderer != "isaac_rtx":
         from isaaclab.utils.version import has_kit
 
-        assert not has_kit(), "OVRTX must run without the Kit runtime"
+        assert not has_kit(), "Native renderers must run without the Kit runtime"
         if args.physics == "physx":
             assert manager.__module__.startswith("isaaclab_ov."), manager
             scene_prim = sim.sim.stage.GetPrimAtPath(sim.sim.cfg.physics_prim_path)
@@ -106,7 +112,7 @@ def main() -> int:
     def masses():
         if args.physics == "newton":
             return wp.to_torch(robot.root_view.get_attribute("body_mass", manager.get_model())[:, 0]).clone()
-        if args.renderer == "ovrtx":
+        if args.renderer != "isaac_rtx":
             return wp.to_torch(robot.root_view.get_attribute("articulation_body_mass")).clone()
         return wp.to_torch(robot.root_view.get_masses()).clone()
 
@@ -122,7 +128,7 @@ def main() -> int:
             worlds = wp.to_torch(model.shape_world)
             # Labels/worlds are independent of the adapter's articulation ownership map.
             return torch.stack([native[robot_shapes & (worlds == row)] for row in range(2)]).clone()
-        if args.renderer == "ovrtx":
+        if args.renderer != "isaac_rtx":
             return wp.to_torch(robot.root_view.get_attribute("articulation_shape_friction_and_restitution")).clone()
         return wp.to_torch(robot.root_view.get_material_properties()).clone()
 
@@ -133,7 +139,7 @@ def main() -> int:
                     {"coms": "body_com", "inertias": "body_inertia"}[name], manager.get_model()
                 )[:, 0]
             ).clone()
-        if args.renderer == "ovrtx":
+        if args.renderer != "isaac_rtx":
             attribute = {"coms": "articulation_body_com_pose", "inertias": "articulation_body_inertia"}[name]
             return wp.to_torch(robot.root_view.get_attribute(attribute)).clone()
         return wp.to_torch(getattr(robot.root_view, f"get_{name}")()).clone()
@@ -345,7 +351,21 @@ def main() -> int:
         torch.testing.assert_close(sim.backend.contact_forces(sim.contact_sensor, total_config), total)
     assert bool((peak_normal > 1.0).all()), (peak_normal, sim.get_actor_states(["robot"], ids))
     assert bool((peak_tangential > 0.1).all()), peak_tangential
-    if args.renderer == "ovrtx":
+    dependencies = assert_native_runtime(physics=args.physics, uses_kit=args.renderer == "isaac_rtx")
+    Path(args.result_file).with_suffix(".startup.json").write_text(
+        json.dumps(
+            {
+                "physics": args.physics,
+                "renderer": args.renderer,
+                "launch_seconds": launched - started,
+                "ready_seconds": ready - started,
+                **dependencies,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    if args.renderer != "isaac_rtx":
         from isaaclab.sim import SimulationContext
 
         from holosoma.utils.sim_utils import close_simulation_resources
@@ -363,7 +383,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    if "ovrtx" in sys.argv:
+    if "ovrtx" in sys.argv or "newton_warp" in sys.argv:
         # Kit-less runs must support ordinary interpreter teardown.
         sys.exit(main())
     else:
