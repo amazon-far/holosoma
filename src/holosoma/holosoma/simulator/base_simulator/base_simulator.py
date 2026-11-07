@@ -1432,24 +1432,6 @@ class BaseSimulator:
         "and call sim.forward_kinematics() where a write must apply before the next step"
     )
 
-    def set_robot_state(self, env_ids: EnvIds, *, root_states: torch.Tensor, dof_states: torch.Tensor) -> None:
-        """Write robot states for ``env_ids`` in place; :meth:`forward_kinematics` applies them now.
-
-        Row ``i`` of ``root_states`` ``[len(env_ids), 13]`` and ``dof_states``
-        ``[len(env_ids), num_dof, 2]`` (position, velocity) belongs to ``env_ids[i]``.
-        """
-        env_ids = torch.as_tensor(env_ids, device=self.dof_pos.device, dtype=torch.long)
-        if root_states.shape != (len(env_ids), 13):
-            raise ValueError(f"Expected root states with shape {(len(env_ids), 13)}, got {tuple(root_states.shape)}.")
-        if dof_states.shape != (len(env_ids), self.num_dof, 2):
-            raise ValueError(
-                f"Expected DOF states with shape {(len(env_ids), self.num_dof, 2)}, got {tuple(dof_states.shape)}."
-            )
-
-        self.robot_root_states[env_ids] = root_states
-        self.dof_pos[env_ids] = dof_states[..., 0]
-        self.dof_vel[env_ids] = dof_states[..., 1]
-
     @property
     def dof_state(self) -> torch.Tensor:
         raise AttributeError(self._DOF_STATE_REMOVED)

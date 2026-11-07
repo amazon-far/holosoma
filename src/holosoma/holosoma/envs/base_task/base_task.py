@@ -388,7 +388,9 @@ class BaseTask:
         else:
             root_states = target_states["root_states"]
             dof_states = target_states["dof_states"]
-        self.simulator.set_robot_state(env_ids, root_states=root_states, dof_states=dof_states)
+        self.simulator.robot_root_states[env_ids] = root_states
+        self.simulator.dof_pos[env_ids] = dof_states[..., 0]
+        self.simulator.dof_vel[env_ids] = dof_states[..., 1]
 
     def _reset_objects_callback(self, env_ids: torch.Tensor) -> None:
         """Reset registered rigid objects to their initial pose and velocity.
