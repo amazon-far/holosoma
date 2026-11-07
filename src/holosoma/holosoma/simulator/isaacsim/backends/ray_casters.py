@@ -146,6 +146,17 @@ def physx_mutable_ray_caster_class() -> type[Any]:
 
 
 @lru_cache(maxsize=1)
+def ovphysx_mutable_ray_caster_class() -> type[Any]:
+    """Use the OVPhysX caster's native views without loading Kit physics."""
+    from isaaclab_ov.sensors.ray_caster import MultiMeshRayCaster
+
+    class MutableOvPhysxMultiMeshRayCaster(_MutableWarpRayDirections, MultiMeshRayCaster):
+        pass
+
+    return MutableOvPhysxMultiMeshRayCaster
+
+
+@lru_cache(maxsize=1)
 def newton_mutable_ray_caster_class() -> type[Any]:
     """Retain configured visual targets through Newton's concrete mesh caster."""
     from isaaclab_newton.sensors import LegacyMultiMeshRayCaster

@@ -91,13 +91,18 @@ class IsaacLab3Backend(IsaacLabBackend):
         return self.options.renderer != "ovrtx"
 
     def mutable_ray_caster_class(self) -> type[Any]:
-        from .ray_casters import newton_mutable_ray_caster_class, physx_mutable_ray_caster_class
-
-        factory = (
-            newton_mutable_ray_caster_class
-            if self.options.physics_backend == "newton"
-            else physx_mutable_ray_caster_class
+        from .ray_casters import (
+            newton_mutable_ray_caster_class,
+            ovphysx_mutable_ray_caster_class,
+            physx_mutable_ray_caster_class,
         )
+
+        if self.options.physics_backend == "newton":
+            factory = newton_mutable_ray_caster_class
+        elif self.uses_kit:
+            factory = physx_mutable_ray_caster_class
+        else:
+            factory = ovphysx_mutable_ray_caster_class
         return factory()
 
     def world_lidar_mount(self, name: str, position: Any, orientation: Any) -> tuple[str, Any]:
