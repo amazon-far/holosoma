@@ -124,6 +124,7 @@ class _LoopTask(SimulationTask):
             "EnvConfig",
             SimpleNamespace(
                 viewer_dt=viewer_dt,
+                time_scale=0.0,
                 robot=SimpleNamespace(asset=SimpleNamespace(robot_type="test")),
                 simulator=SimpleNamespace(
                     _target_="test.Simulator",
@@ -141,14 +142,13 @@ class _LoopTask(SimulationTask):
         self.num_envs = 1
         self.viewer = None if headless else object()
         self.sim_dt = 1 / FPS
-        self._physics_step_count = 0
-        self._next_viewer_time = 0.0
-        self._rate_limiter = None
+        self._rendered_this_substep = False
         self.randomization_manager = cast(
             "RandomizationManager", SimpleNamespace(step=lambda: None, reset=lambda _env_ids: None)
         )
         self._episode_active = torch.zeros(self.num_envs, dtype=torch.bool)
         self._init_buffers()
+        self._add_pacing_hooks()
 
     def reset_all(self) -> None:
         self._start_episodes(torch.arange(self.num_envs))
@@ -232,12 +232,12 @@ def test_a_frame_that_opens_always_closes() -> None:
 
 
 def test_viewer_renders_on_its_own_schedule_when_not_headless() -> None:
-    """A windowed run draws the viewport every ``viewer_dt``, here on each frame's first substep."""
+    """A windowed run draws the viewport every ``viewer_dt``, here after each frame's last substep."""
     sim = _FakeSim(frames=3, offscreen=False)
 
     _run(sim, headless=False, viewer_dt=DECIMATION / FPS)
 
-    assert sim.viewer_renders == [1, 5, 9]
+    assert sim.viewer_renders == [4, 8, 12]
 
 
 def test_headless_never_renders_the_viewport() -> None:

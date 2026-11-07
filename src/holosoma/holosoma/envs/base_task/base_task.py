@@ -131,10 +131,7 @@ class BaseTask:
         self.sim_dt = self.simulator.sim_dt
 
         self.dt = simulator_config.config.sim.control_decimation_steps * self.sim_dt
-        time_scale = tyro_config.time_scale
-        self._rate_limiter = RateLimiter(time_scale / self.sim_dt) if time_scale > 0 else None
-        self._next_viewer_time = 0.0
-        self._physics_step_count = 0
+        self._rendered_this_substep = False
 
         self.simulator.setup_terrain()
         # create envs, sim and viewer
@@ -188,6 +185,23 @@ class BaseTask:
 
         if not self.headless:
             self.viewer = self.simulator.viewer
+        self._add_pacing_hooks()
+
+    def _add_pacing_hooks(self) -> None:
+        """Draw the viewer every ``viewer_dt`` and pace physics to ``time_scale``.
+
+        Registered after every other hook, so pacing runs last in each substep.
+        """
+        if self.viewer is not None:
+            every = max(1, int(self.config.viewer_dt / self.sim_dt))
+            self.hooks.add(Phase.POST_STEP, self._render_viewer, name="task.viewer", every=every)
+        if self.config.time_scale > 0:
+            rate_limiter = RateLimiter(self.config.time_scale / self.sim_dt)
+            self.hooks.add(Phase.POST_STEP, rate_limiter.sleep, name="task.rate_limit")
+
+    def _render_viewer(self) -> None:
+        if not self._rendered_this_substep:
+            self.render()
 
     def _init_buffers(self) -> None:
         self.episode_length_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
@@ -438,36 +452,18 @@ class BaseTask:
         """Process task-specific state before advancing physics."""
 
     def _physics_step(self) -> None:
-        sim_config = self.config.simulator.config.sim
-        viewer_dt = self.config.viewer_dt
-
-        for substep in range(sim_config.control_decimation_steps):
-            physics_time = self._physics_step_count * self.sim_dt
-            next_viewer_time = self._next_viewer_time
-            viewer_due = physics_time + 1e-12 >= next_viewer_time
-            rendered_this_step = False
-
+        decimation = self.config.simulator.config.sim.control_decimation_steps
+        for substep in range(decimation):
             if substep == 0:
                 self.hooks.emit(Phase.FRAME_BEGIN)
             self._apply_force_in_physics_step()
             self.hooks.emit(Phase.PRE_STEP)
             self.simulator.simulate_at_each_physics_step()
             # Offscreen outputs are read at FRAME_END, so they draw on the frame's last substep.
-            is_last_substep = substep == sim_config.control_decimation_steps - 1
-            if is_last_substep and self.simulator.requires_step_render():
+            self._rendered_this_substep = substep == decimation - 1 and self.simulator.requires_step_render()
+            if self._rendered_this_substep:
                 self.simulator.render()
-                rendered_this_step = True
             self.hooks.emit(Phase.POST_STEP)
-
-            if viewer_due:
-                if self.viewer is not None and not rendered_this_step:
-                    self.render()
-                elapsed_intervals = int((physics_time - next_viewer_time) / viewer_dt) + 1
-                self._next_viewer_time = next_viewer_time + elapsed_intervals * viewer_dt
-
-            self._physics_step_count += 1
-            if self._rate_limiter is not None:
-                self._rate_limiter.sleep()
 
     def _apply_force_in_physics_step(self) -> None:
         """Apply task-specific controls during each physics substep."""
