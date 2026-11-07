@@ -19,7 +19,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--simulator", choices=["isaacsim3"], required=True)
     parser.add_argument("--physics", choices=["physx", "newton"], required=True)
-    parser.add_argument("--renderer", choices=["isaac_rtx", "newton_warp"], required=True)
+    parser.add_argument("--renderer", choices=["isaac_rtx", "newton_warp", "ovrtx"], required=True)
     parser.add_argument("--result-file", required=True)
     args = parser.parse_args()
 
@@ -79,6 +79,18 @@ def main() -> int:
     sim.install_plugins()
     manager = string_to_callable(sim.sim.cfg.physics.class_type)
     assert ("newton" in manager.__module__) == (args.physics == "newton"), manager
+    if args.renderer == "ovrtx":
+        from isaaclab.utils.version import has_kit
+
+        assert not has_kit(), "OVRTX must run without the Kit runtime"
+        if args.physics == "physx":
+            assert manager.__module__.startswith("isaaclab_ov."), manager
+            scene_prim = sim.sim.stage.GetPrimAtPath(sim.sim.cfg.physics_prim_path)
+            assert scene_prim.GetAttribute("physxScene:solverType").Get() == "TGS"
+            assert (
+                scene_prim.GetAttribute("physxScene:maxPositionIterationCount").Get()
+                == config.simulator.config.sim.physx.num_position_iterations
+            )
     camera = sim.tiled_cameras["front_cam"]
     assert camera.cfg.renderer_cfg.renderer_type == args.renderer, camera.cfg.renderer_cfg
     robot = sim._robot
@@ -94,6 +106,8 @@ def main() -> int:
     def masses():
         if args.physics == "newton":
             return wp.to_torch(robot.root_view.get_attribute("body_mass", manager.get_model())[:, 0]).clone()
+        if args.renderer == "ovrtx":
+            return wp.to_torch(robot.root_view.get_attribute("articulation_body_mass")).clone()
         return wp.to_torch(robot.root_view.get_masses()).clone()
 
     def materials():
@@ -108,6 +122,8 @@ def main() -> int:
             worlds = wp.to_torch(model.shape_world)
             # Labels/worlds are independent of the adapter's articulation ownership map.
             return torch.stack([native[robot_shapes & (worlds == row)] for row in range(2)]).clone()
+        if args.renderer == "ovrtx":
+            return wp.to_torch(robot.root_view.get_attribute("articulation_shape_friction_and_restitution")).clone()
         return wp.to_torch(robot.root_view.get_material_properties()).clone()
 
     def body_property(name):
@@ -117,6 +133,9 @@ def main() -> int:
                     {"coms": "body_com", "inertias": "body_inertia"}[name], manager.get_model()
                 )[:, 0]
             ).clone()
+        if args.renderer == "ovrtx":
+            attribute = {"coms": "articulation_body_com_pose", "inertias": "articulation_body_inertia"}[name]
+            return wp.to_torch(robot.root_view.get_attribute(attribute)).clone()
         return wp.to_torch(getattr(robot.root_view, f"get_{name}")()).clone()
 
     before_mass = masses()
@@ -326,6 +345,14 @@ def main() -> int:
         torch.testing.assert_close(sim.backend.contact_forces(sim.contact_sensor, total_config), total)
     assert bool((peak_normal > 1.0).all()), (peak_normal, sim.get_actor_states(["robot"], ids))
     assert bool((peak_tangential > 0.1).all()), peak_tangential
+    if args.renderer == "ovrtx":
+        from isaaclab.sim import SimulationContext
+
+        from holosoma.utils.sim_utils import close_simulation_resources
+
+        close_simulation_resources(env, _app)
+        assert SimulationContext.instance() is None, "Kit-less native resources remained open"
+        assert not _app.is_running(), "closed Kit-less runtime still reports running"
     Path(args.result_file).write_text("OK")
     print(
         f"PASS: {args.physics} / {args.renderer}: independent physics, sparse mass/COM/inertia/material DR, "
@@ -336,4 +363,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    run_and_hard_exit(main)
+    if "ovrtx" in sys.argv:
+        # Kit-less runs must support ordinary interpreter teardown.
+        sys.exit(main())
+    else:
+        run_and_hard_exit(main)

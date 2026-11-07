@@ -24,10 +24,13 @@ def recorder_fixture(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyP
 
     class _Annotator:
         @staticmethod
-        def detach(_products: list[object]) -> None:
+        def detach(products: list[str]) -> None:
+            assert products == ["/Render/VideoProduct"]
             events.append("detach")
 
     class _RenderProduct:
+        path = "/Render/VideoProduct"
+
         @staticmethod
         def destroy() -> None:
             events.append("destroy")

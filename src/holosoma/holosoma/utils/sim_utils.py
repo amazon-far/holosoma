@@ -112,7 +112,7 @@ def setup_simulator_imports(config: ExperimentConfig | RunSimConfig) -> None:
     # IsaacSim imports handled in setup_isaaclab_launcher
 
 
-def _ensure_render_pipeline_active() -> None:
+def _ensure_render_pipeline_active(*, isaaclab3: bool = False) -> None:
     """Enable offscreen rendering before constructing either native SimulationContext.
 
     Both launchers set this flag automatically only for headless runs with
@@ -120,11 +120,16 @@ def _ensure_render_pipeline_active() -> None:
     even when a GUI is unavailable. Lab 2 otherwise latches its no-render mode;
     Lab 3 uses this setting with its separate renderer and visualizer lifecycle.
     """
-    import carb
+    if isaaclab3:
+        from isaaclab.app import get_settings_manager
 
-    settings = carb.settings.get_settings()
-    if not settings.get("/isaaclab/render/offscreen"):
-        settings.set_bool("/isaaclab/render/offscreen", True)
+        get_settings_manager().set("/isaaclab/render/offscreen", True)
+    else:
+        import carb
+
+        settings = carb.settings.get_settings()
+        if not settings.get("/isaaclab/render/offscreen"):
+            settings.set_bool("/isaaclab/render/offscreen", True)
 
 
 def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str | None = None) -> Any | None:
@@ -195,7 +200,7 @@ def setup_isaaclab_launcher(config: ExperimentConfig | RunSimConfig, device: str
         simulation_app = backend.launch_app(args_cli, sim_config=config.simulator.config.sim)
 
         if needs_rendering:
-            _ensure_render_pipeline_active()
+            _ensure_render_pipeline_active(isaaclab3=backend.is_isaaclab3)
 
         logger.info(f"IsaacSim args_cli: {args_cli}")
         logger.info(f"IsaacSim unknown_args: {unknown_args}")

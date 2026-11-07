@@ -832,6 +832,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim3"])
     parser.add_argument("--physics-backend", choices=["physx", "newton"], default="physx")
+    parser.add_argument("--renderer", choices=["isaac_rtx", "newton_warp", "ovrtx"], default="isaac_rtx")
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--result-file", default=None)
     parser.add_argument(
@@ -882,7 +883,7 @@ def main() -> int:
         "terrain_locomotion_plane",
         sensors=sensors,
     )
-    if args.physics_backend == "newton":
+    if args.simulator == "isaacsim3":
         config = dataclasses.replace(
             config,
             simulator=dataclasses.replace(
@@ -891,7 +892,11 @@ def main() -> int:
                     config.simulator.config,
                     sim=dataclasses.replace(
                         config.simulator.config.sim,
-                        isaaclab3=dataclasses.replace(config.simulator.config.sim.isaaclab3, physics_backend="newton"),
+                        isaaclab3=dataclasses.replace(
+                            config.simulator.config.sim.isaaclab3,
+                            physics_backend=args.physics_backend,
+                            renderer=args.renderer,
+                        ),
                     ),
                 ),
             ),
@@ -961,7 +966,7 @@ def main() -> int:
         manager.get_lidar("cyclic_target")  # registration assertion: raises if the preset omitted it
         first_target_direction = _expected_cyclic_directions(sim.time(), 1, device)[0]
         time_before_flush = sim.time()
-        native_steps_before = sim.sim.get_physics_step_count() if args.simulator in ("isaacsim", "isaacsim3") else None
+        native_steps_before = sim.sim.get_physics_step_count() if args.simulator == "isaacsim3" else None
         first_target_range = _place_cyclic_target(
             sim,
             env_ids,

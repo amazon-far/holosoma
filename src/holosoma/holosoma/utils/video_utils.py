@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import subprocess
-import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -197,53 +196,40 @@ def create_video(
                 out.release()
         else:
             out.release()
-            # Kit 6.2's supported OpenCV bundle has no FFmpeg backend.
-            # Keep MPEG-4 output and stream original RGB frames to the
-            # video extra's executable without resizing or copying the movie.
-            from imageio_ffmpeg import get_ffmpeg_exe
+            # Kit's OpenCV bundle omits FFmpeg. Use the installed FFmpeg
+            # writer dependency with the same dimensions, frames and codec.
+            from imageio_ffmpeg import count_frames_and_secs, write_frames
 
-            command = [
-                get_ffmpeg_exe(),
-                "-y",
-                "-loglevel",
-                "error",
-                "-f",
-                "rawvideo",
-                "-pixel_format",
-                "rgb24",
-                "-video_size",
-                f"{w}x{h}",
-                "-framerate",
-                str(fps),
-                "-i",
-                "pipe:0",
-                "-an",
-                "-c:v",
-                "mpeg4",
-                "-q:v",
-                "2",
+            encoder = write_frames(
                 str(temp_raw),
-            ]
-            with tempfile.TemporaryFile() as error_log:
-                with subprocess.Popen(command, stdin=subprocess.PIPE, stderr=error_log) as encoder:
-                    assert encoder.stdin is not None
-                    try:
-                        for frame in video_frames:
-                            encoder.stdin.write(np.ascontiguousarray(frame).tobytes())
-                    finally:
-                        encoder.stdin.close()
-                    returncode = encoder.wait()
-                if returncode:
-                    error_log.seek(0)
-                    raise RuntimeError(f"FFmpeg encoder failed ({returncode}): {error_log.read().decode()}")
+                (w, h),
+                fps=fps,
+                codec="mpeg4",
+                quality=None,
+                macro_block_size=1,
+                output_params=["-q:v", "2"],
+            )
+            try:
+                encoder.send(None)
+                for frame in video_frames:
+                    encoder.send(np.ascontiguousarray(frame))
+            finally:
+                encoder.close()
             if not temp_raw.is_file() or temp_raw.stat().st_size == 0:
                 raise RuntimeError("FFmpeg encoder produced no video")
+            # The writer dependency does not expose the subprocess exit code.
+            # Reject a failed or truncated stream through its real decoder.
+            frame_count, _duration = count_frames_and_secs(str(temp_raw))
+            if frame_count != len(video_frames):
+                raise RuntimeError(f"FFmpeg encoded {frame_count} frames; expected {len(video_frames)}")
 
         # Step 2: Apply output format
         if output_format == "h264":
-            # Convert to H.264 using ffmpeg
+            from imageio_ffmpeg import get_ffmpeg_exe
+
+            # Use the dependency's executable on every supported host.
             ffmpeg_cmd = [
-                "ffmpeg",
+                get_ffmpeg_exe(),
                 "-y",
                 "-i",
                 str(temp_raw),

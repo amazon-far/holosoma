@@ -24,28 +24,46 @@ def _runtime(
     multigpu: bool = False,
     requested_backend: str | None = None,
     missing_video: str | None = None,
+    importer_version: str | None = "6.2.0.0",
 ) -> subprocess.CompletedProcess[str]:
     lab_version = "28.0.0" if backend == "isaaclab3" else "0.54.2"
     for name, version in [("isaaclab", lab_version), ("torch", torch_version), ("warp-lang", warp_version)]:
         metadata = tmp_path / f"{name.replace('-', '_')}-{version}.dist-info"
         metadata.mkdir()
         (metadata / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n")
+    if backend == "isaaclab3" and importer_version is not None:
+        metadata = tmp_path / f"isaacsim_asset_isolated-{importer_version}.dist-info"
+        metadata.mkdir()
+        (metadata / "METADATA").write_text(
+            f"Metadata-Version: 2.1\nName: isaacsim-asset-isolated\nVersion: {importer_version}\n"
+        )
     unavailable = []
     if backend == "isaaclab3":
         (tmp_path / "isaaclab_physx").mkdir()
         (tmp_path / "isaaclab_physx/__init__.py").write_text("")
     else:
         unavailable.append("isaaclab_physx")
-    for package in ("moviepy", "imageio_ffmpeg"):
+    for package in ("moviepy", "imageio_ffmpeg", "ovrtx", "ovphysx", "ovstage"):
         if backend == "isaaclab3" and package != missing_video:
             (tmp_path / f"{package}.py").write_text("")
         else:
             unavailable.append(package)
     # PYTHONPATH does not hide packages installed in the interpreter's own
     # site-packages. Model absence at the external module boundary.
-    (tmp_path / "sitecustomize.py").write_text(
-        "import sys\n" + "".join(f"sys.modules[{package!r}] = None\n" for package in unavailable)
-    )
+    sitecustomize = "import sys\n" + "".join(f"sys.modules[{package!r}] = None\n" for package in unavailable)
+    if importer_version is None:
+        # An actual Lab 3 environment has the importer installed. Model its
+        # absence at the metadata boundary as well as omitting the fixture.
+        sitecustomize += (
+            "import importlib.metadata as metadata\n"
+            "original_version = metadata.version\n"
+            "def version(name):\n"
+            "    if name == 'isaacsim-asset-isolated':\n"
+            "        raise metadata.PackageNotFoundError(name)\n"
+            "    return original_version(name)\n"
+            "metadata.version = version\n"
+        )
+    (tmp_path / "sitecustomize.py").write_text(sitecustomize)
     (tmp_path / "torch.py").write_text(
         f"from types import SimpleNamespace\ncuda = SimpleNamespace(is_available=lambda: {cuda}, "
         f"device_count=lambda: {devices})\n"
@@ -60,7 +78,9 @@ def _runtime(
         ],
         env={
             **os.environ,
-            "PYTHONPATH": str(tmp_path),
+            # Preserve the real production dependencies when CI's interpreter
+            # receives them through PYTHONPATH rather than its own site-packages.
+            "PYTHONPATH": os.pathsep.join([str(tmp_path), *sys.path]),
             "HOLOSOMA_ISAACSIM_BACKEND": "isaaclab2" if backend == "isaaclab3" else "isaaclab3",
         },
         check=False,
@@ -111,8 +131,13 @@ def test_preflight_accepts_matching_native_profiles(
         ({"devices": 1, "multigpu": True}, "requires 2 CUDA devices; found 1"),
         ({"torch_version": "2.7.0"}, "requires torch 2.11.0; found 2.7.0"),
         ({"warp_version": "1.16.0"}, "requires warp-lang 1.17.0; found 1.16.0"),
-        ({"missing_video": "moviepy"}, "Isaac Lab video extra is missing moviepy"),
-        ({"missing_video": "imageio_ffmpeg"}, "Isaac Lab video extra is missing imageio_ffmpeg"),
+        ({"missing_video": "moviepy"}, "video/OV extras are missing moviepy"),
+        ({"missing_video": "imageio_ffmpeg"}, "video/OV extras are missing imageio_ffmpeg"),
+        ({"missing_video": "ovrtx"}, "video/OV extras are missing ovrtx"),
+        ({"missing_video": "ovphysx"}, "video/OV extras are missing ovphysx"),
+        ({"missing_video": "ovstage"}, "video/OV extras are missing ovstage"),
+        ({"importer_version": None}, "importer extra is missing"),
+        ({"importer_version": "6.1.0.0"}, "requires standalone importers 6.2.0.0; found 6.1.0.0"),
     ],
 )
 def test_preflight_rejects_environments_that_could_hide_runtime_failures_as_skips(

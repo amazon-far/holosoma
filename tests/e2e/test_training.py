@@ -190,6 +190,21 @@ def test_newton_training_and_eval_workflow_isaacsim(isaacsim_backend: str, isaac
     )
 
 
+@pytest.mark.isaacsim
+@pytest.mark.parametrize("physics", ["physx", "newton"])
+def test_ovrtx_training_and_eval_workflow_isaacsim(physics, isaacsim_backend: str, isaacsim_simulator: str):
+    if isaacsim_backend != "isaaclab3":
+        pytest.skip("OVRTX training requires the explicit Isaac Lab 3 profile")
+    assert_training_and_eval_workflow(
+        "g1-29dof-fast-sac",
+        extra_config=[
+            f"simulator:{isaacsim_simulator}",
+            f"--simulator.config.sim.isaaclab3.physics-backend={physics}",
+            "--simulator.config.sim.isaaclab3.renderer=ovrtx",
+        ],
+    )
+
+
 # Distributed smoke test for the PR gate: one PPO and one FastSAC workflow under torch.distributed.run
 # on every visible GPU. Nightly training covers the full multi-GPU matrix.
 @pytest.mark.isaacsim
