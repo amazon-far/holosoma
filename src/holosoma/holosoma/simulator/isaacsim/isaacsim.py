@@ -30,7 +30,6 @@ from loguru import logger
 from omegaconf import DictConfig
 
 from holosoma.config_types.scene import SceneConfig
-from holosoma.config_types.sensor import CameraSensorConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
@@ -82,24 +81,9 @@ class IsaacSim(BaseSimulator):
         # populated by _load_scene_files; read in _collect_spawned_actors to classify.
         self.scene_file_static_names: set[str] = set()
 
-        # Cameras here are read out of the periodic render pass, which draws when the substep counter
-        # reaches render_interval. A driving loop closes its frame on the control step's last substep,
-        # so only a render_interval dividing control_decimation puts the draw and the frame's state on
-        # the same substep; anything else pairs an image with a pose from a different one. Checked
-        # before the SimulationContext exists, so a rejected config leaves no global context behind.
-        decimation = self.simulator_config.sim.control_decimation_steps
-        render_interval = self.simulator_config.sim.render_interval_steps
-        cameras = sorted(n for n, c in self.sensor_config.items() if isinstance(c, CameraSensorConfig))
-        if cameras and decimation % render_interval:
-            raise ValueError(
-                f"render_interval ({render_interval}) must divide control_decimation ({decimation}) "
-                f"when cameras are configured ({cameras}); set it to a divisor, or to "
-                f"control_decimation to render once per control step."
-            )
-
         sim_config: SimulationCfg = SimulationCfg(
             dt=1.0 / self.simulator_config.sim.fps,
-            render_interval=self.simulator_config.sim.render_interval_steps,
+            render_interval=self.simulator_config.sim.control_decimation_steps,
             device=self.sim_device,
             physx=PhysxCfg(
                 bounce_threshold_velocity=self.simulator_config.sim.physx.bounce_threshold_velocity,
@@ -132,16 +116,9 @@ class IsaacSim(BaseSimulator):
         logger.info(f"\tEnvironment device    : {self.sim_device}")
         logger.info(f"\tPhysics step-size     : {1.0 / self.simulator_config.sim.fps}")
         logger.info(
-            f"\tRendering step-size   : {1.0 / self.simulator_config.sim.fps * self.simulator_config.sim.substeps}"
+            "\tRendering step-size   : "
+            f"{self.simulator_config.sim.control_decimation_steps / self.simulator_config.sim.fps}"
         )
-
-        if self.simulator_config.sim.render_interval_steps < self.simulator_config.sim.control_decimation_steps:
-            msg = (
-                f"The render interval ({self.simulator_config.sim.render_interval_steps}) is smaller than the decimation "
-                f"({self.simulator_config.sim.control_decimation_steps}). Multiple render calls will happen for each "
-                "environment step. If this is not intended, set the render interval to be equal to the decimation."
-            )
-            logger.warning(msg)
 
         scene_config: InteractiveSceneCfg = InteractiveSceneCfg(
             num_envs=self.training_config.num_envs,
@@ -751,13 +728,7 @@ class IsaacSim(BaseSimulator):
 
     def _advance_substep(self) -> None:
         self._sim_step_counter += 1
-        # Only render if actively recording (not just if video recorder exists)
-        has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording
-        is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors() or has_video_recording
-
         with self.state.mutation():
-            render_now = is_rendering and self._sim_step_counter % self.simulator_config.sim.render_interval_steps == 0
-
             if self.kinematic_playback:
                 # sim.current_time does not advance.
                 self._forward_kinematics()
@@ -770,10 +741,6 @@ class IsaacSim(BaseSimulator):
                 # through to a bare app.update() in isaacsim.core, which also runs the physics engine
                 # on the app clock — sim time ran ~3x too fast whenever a camera/GUI was active.
                 self.sim.step(render=False)
-
-            # RTX sensors (TiledCameras) only track new poses after a render tick.
-            if render_now:
-                self.render()
 
             # update buffers at sim
             self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
@@ -797,6 +764,10 @@ class IsaacSim(BaseSimulator):
         # Isaac Lab resets its cached body velocities only on joint position writes.
         self._robot.data._body_link_vel_w.timestamp = -1.0
         self._robot.data._body_com_vel_w.timestamp = -1.0
+
+    def requires_step_render(self) -> bool:
+        has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording
+        return self.sim.has_rtx_sensors() or has_video_recording
 
     def _write_external_wrench_native(self, targets: list[WrenchTarget]) -> None:
         """Set world-frame wrenches on the robot articulation and object RigidObjects.

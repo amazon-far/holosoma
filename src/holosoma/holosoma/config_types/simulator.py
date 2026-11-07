@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import field
 from enum import Enum
 from typing import Any, Literal
@@ -129,11 +130,9 @@ class SimEngineConfig:
     render_mode: str = "human"
     """Rendering mode requested from the simulator."""
 
-    render_interval: DecimationLike = 1
-    """Physics steps per rendered frame: render rate = ``fps / render_interval`` Hz.
-    Decouples rendering from physics so the sim can step faster than it draws; 1 = render every
-    step. Int, or a frequency string vs ``fps``. Holds the value AS WRITTEN; read the resolved
-    integer step count via :attr:`render_interval_steps`."""
+    render_interval: DecimationLike | None = None
+    """Deprecated, no effect: offscreen outputs render once per control step, on its last physics
+    step, and the viewer renders every ``viewer_dt``."""
 
     max_episode_length_s: float = 20.0
     """Maximum episode length in seconds."""
@@ -155,7 +154,13 @@ class SimEngineConfig:
         ``*_steps`` properties below, computed against ``fps`` on access (always consistent if ``fps``
         changes, and the input config is never rewritten)."""
         resolve_decimation(self.control_decimation, self.fps, field="control_decimation", log=True)
-        resolve_decimation(self.render_interval, self.fps, field="render_interval", log=True)
+        if self.render_interval is not None:
+            warnings.warn(
+                "SimEngineConfig.render_interval is deprecated and has no effect: offscreen outputs "
+                "render once per control step and the viewer every viewer_dt.",
+                FutureWarning,
+                stacklevel=2,
+            )
         return self
 
     @property
@@ -163,12 +168,6 @@ class SimEngineConfig:
         """Resolved physics-steps-per-control-step (int >= 1) — ``control_decimation`` evaluated
         against ``fps`` (a frequency string becomes ``fps/target``; an int passes through)."""
         return resolve_decimation(self.control_decimation, self.fps, field="control_decimation")
-
-    @property
-    def render_interval_steps(self) -> int:
-        """Resolved physics-steps-per-rendered-frame (int >= 1) — ``render_interval`` evaluated
-        against ``fps`` (frequency string -> ``fps/target``; int passes through)."""
-        return resolve_decimation(self.render_interval, self.fps, field="render_interval")
 
 
 @dataclass(frozen=True)

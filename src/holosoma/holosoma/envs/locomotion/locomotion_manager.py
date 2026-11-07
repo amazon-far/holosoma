@@ -7,13 +7,12 @@ from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
-from holosoma.envs.base_task.base_task import BaseTask
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker, PenaltyCurriculum
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.torch_utils import torch_rand_float
 
 if TYPE_CHECKING:
-    from holosoma.config_types.env import EnvConfig
     from holosoma.managers.command.terms.locomotion import LocomotionGait
     from holosoma.managers.randomization.terms.locomotion import PushRandomizerState
     from holosoma.managers.terrain.terms.locomotion import TerrainLocomotion
@@ -22,21 +21,8 @@ if TYPE_CHECKING:
 _LEGACY_CHECKPOINT_REMOVAL_DATE = datetime.date(2027, 3, 1)
 
 
-class LeggedRobotLocomotionManager(BaseTask):
+class LeggedRobotLocomotionManager(PolicyTask):
     BASE_NUM_ENVS = 4096
-
-    def __init__(
-        self,
-        tyro_config: EnvConfig,
-        *,
-        device: str,
-    ) -> None:
-        self.init_done = False
-        super().__init__(
-            tyro_config,
-            device=device,
-        )
-        self.init_done = True
 
     def _get_task_name(self) -> str:
         return "locomotion"
@@ -60,8 +46,6 @@ class LeggedRobotLocomotionManager(BaseTask):
 
         self.default_dof_pos_base = self.default_dof_pos_base.unsqueeze(0)  # (1, num_dof)
         self.default_dof_pos = self.default_dof_pos_base.repeat(self.num_envs, 1).clone()  # (num_envs, num_dof)
-
-        self.need_to_refresh_envs = torch.ones(self.num_envs, dtype=torch.bool, device=self.device, requires_grad=False)
 
         self._init_domain_rand_buffers()
 
@@ -131,14 +115,6 @@ class LeggedRobotLocomotionManager(BaseTask):
     def _setup_simulator_control(self) -> None:
         self.simulator.commands = self.command_manager.commands  # type: ignore[attr-defined]
 
-    def _get_envs_to_refresh(self) -> torch.Tensor:
-        return self.need_to_refresh_envs.nonzero(as_tuple=False).flatten()
-
-    def _refresh_envs_after_reset(self, env_ids: torch.Tensor) -> None:
-        self.simulator.forward_kinematics()
-        self.need_to_refresh_envs[env_ids] = False
-        self._pre_compute_observations_callback()
-
     @property
     def base_quat(self) -> torch.Tensor:
         return self.simulator.base_quat
@@ -146,8 +122,8 @@ class LeggedRobotLocomotionManager(BaseTask):
     def _pre_compute_observations_callback(self) -> None:
         self.terrain_manager.update_heights()
 
-    def _update_tasks_callback(self) -> None:
-        super()._update_tasks_callback()
+    def _step_managers(self) -> None:
+        super()._step_managers()
 
         # Assign commands to simulator for headless recording
         if hasattr(self.simulator, "headless_recording") and self.simulator.headless_recording:
@@ -175,9 +151,6 @@ class LeggedRobotLocomotionManager(BaseTask):
     def _reset_buffers_callback(
         self, env_ids: torch.Tensor, target_buf: Mapping[str, torch.Tensor] | None = None
     ) -> None:
-        # Observation manager reset is now handled in base_task.py
-        self.need_to_refresh_envs[env_ids] = True
-
         if target_buf is not None:
             self.simulator.dof_pos[env_ids] = target_buf["dof_pos"].to(self.simulator.dof_pos.dtype)
             self.simulator.dof_vel[env_ids] = target_buf["dof_vel"].to(self.simulator.dof_vel.dtype)
@@ -248,7 +221,6 @@ class LeggedRobotLocomotionManager(BaseTask):
         """Random pushes the robots. Emulates an impulse by setting a randomized base velocity."""
         if len(env_ids) == 0:
             return
-        self.need_to_refresh_envs[env_ids] = True
         max_vel_tensor = self._max_push_vel
         if self.randomization_manager is not None:
             state = cast("PushRandomizerState | None", self.randomization_manager.get_state("push_randomizer_state"))

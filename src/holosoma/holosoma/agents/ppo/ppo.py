@@ -24,7 +24,7 @@ from holosoma.agents.modules.module_utils import (
     setup_ppo_critic_module,
 )
 from holosoma.config_types.algo import PPOConfig
-from holosoma.envs.base_task.base_task import BaseTask
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.utils.helpers import instantiate
 from holosoma.utils.inference_helpers import (
     attach_onnx_metadata,
@@ -187,7 +187,7 @@ class PPO(BaseAlgo):
 
     def __init__(
         self,
-        env: BaseTask,
+        env: PolicyTask,
         config: PPOConfig,
         log_dir: str,
         device: torch.device | str = "cpu",

@@ -12,6 +12,7 @@ from holosoma.config_types.plugin import PluginConfig
 from holosoma.config_types.randomization import RandomizationManagerCfg
 from holosoma.config_types.reward import RewardManagerCfg
 from holosoma.config_types.robot import RobotConfig
+from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.sensor import CameraSensorConfig, SensorConfig, validate_camera_dict
 from holosoma.config_types.simulator import SimulatorConfig
@@ -43,6 +44,19 @@ class EnvConfig:
     """Plugins to install on the simulator (key -> resolved PluginConfig), including the
     ROS2/viz/video egress sinks. Installed after the concrete simulator backend is ready."""
 
+    device: str | None = None
+    """Requested device. ``None`` resolves from the simulator backend and process rank."""
+
+    time_scale: float = 0.0
+    """Sim-time to real-time ratio for physics-step pacing. ``0`` disables pacing."""
+
+    viewer_dt: float = 1 / 60.0
+    """Sim-time period between viewer renders, in seconds."""
+
+
+def _validate_cameras(sensors: dict[str, SensorConfig]) -> None:
+    validate_camera_dict({name: sensor for name, sensor in sensors.items() if isinstance(sensor, CameraSensorConfig)})
+
 
 def get_tyro_env_config(tyro_config: ExperimentConfig) -> EnvConfig:
     """Convert ExperimentConfig to EnvConfig for environment construction.
@@ -57,9 +71,7 @@ def get_tyro_env_config(tyro_config: ExperimentConfig) -> EnvConfig:
     EnvConfig
         Environment configuration with extracted fields.
     """
-    validate_camera_dict(
-        {name: sensor for name, sensor in tyro_config.sensor.items() if isinstance(sensor, CameraSensorConfig)}
-    )
+    _validate_cameras(tyro_config.sensor)
     return EnvConfig(
         env_class=tyro_config.env_class,
         training=tyro_config.training,
@@ -78,4 +90,42 @@ def get_tyro_env_config(tyro_config: ExperimentConfig) -> EnvConfig:
         curriculum=tyro_config.curriculum,
         robot=tyro_config.robot,
         logger=tyro_config.logger,
+        device=tyro_config.device,
+    )
+
+
+def get_run_sim_env_config(config: RunSimConfig) -> EnvConfig:
+    """Convert RunSimConfig to EnvConfig for a manager-free simulation task.
+
+    Parameters
+    ----------
+    config : RunSimConfig
+        The simulation configuration.
+
+    Returns
+    -------
+    EnvConfig
+        Environment configuration with no policy managers.
+    """
+    _validate_cameras(config.sensor)
+    return EnvConfig(
+        env_class=config.env_class,
+        training=config.training,
+        simulator=config.simulator,
+        scene=config.scene,
+        sensors=dict(config.sensor),
+        plugin=dict(config.plugin),
+        terrain=config.terrain,
+        observation=None,
+        action=None,
+        reward=None,
+        termination=None,
+        randomization=None,
+        command=None,
+        curriculum=None,
+        robot=config.robot,
+        logger=config.logger,
+        device=config.device,
+        time_scale=config.time_scale,
+        viewer_dt=config.viewer_dt,
     )

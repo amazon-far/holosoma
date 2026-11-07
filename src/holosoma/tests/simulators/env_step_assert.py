@@ -1,6 +1,6 @@
 """Environment-contract regression: batch shapes and episode bookkeeping through ``env.step``.
 
-Builds the G1 locomotion training environment through ``training_context`` (which owns the
+Builds the G1 locomotion training environment through ``config.create_task()`` (which owns the
 simulator app, so it starts before any environment module imports the backend) and steps zero
 actions. It checks the public environment behavior every backend must keep:
 
@@ -16,6 +16,7 @@ import argparse
 import dataclasses
 import sys
 from pathlib import Path
+from typing import cast
 
 # Running this file directly puts tests/simulators first, where the isaacsim test package would
 # shadow NVIDIA's isaacsim package.
@@ -24,9 +25,8 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 
 from holosoma.config_values import experiment
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
-from holosoma.train_agent import get_tyro_env_config, training_context
+from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
 from holosoma.utils.common import seeding
-from holosoma.utils.helpers import get_class
 from holosoma.utils.safe_torch_import import torch
 from tests.simulators._sim_harness import run_and_hard_exit
 
@@ -69,11 +69,10 @@ def main() -> int:
     )
 
     failures: list[str] = []
-    tyro_env_config = get_tyro_env_config(tyro_config)
-    with (
-        training_context(tyro_config) as context,
-        context.simulation_session(get_class(tyro_config.env_class)(tyro_env_config, device=DEVICE)) as env,
-    ):
+    with tyro_config.create_task() as task:
+        env = cast("LeggedRobotLocomotionManager", task)
+        if env.device != DEVICE:
+            failures.append(f"task resolved device {env.device!r}, expected {DEVICE!r}")
         obs_dict = env.reset_all()
         failures.extend(
             f"reset_all: {name} has {len(obs_dict[name])} rows, expected {NUM_ENVS}"

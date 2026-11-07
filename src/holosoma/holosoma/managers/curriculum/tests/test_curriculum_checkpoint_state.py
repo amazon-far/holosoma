@@ -17,8 +17,8 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from holosoma.config_types.curriculum import CurriculumManagerCfg, CurriculumTermCfg
-from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.managers.curriculum.manager import CurriculumManager
 from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker, PenaltyCurriculum
 
@@ -170,8 +170,8 @@ def test_disabled_penalty_curriculum_saves_nothing() -> None:
     assert "penalty_curriculum" not in disabled.get_checkpoint_state()["curriculum"]
 
 
-class _TrackerOnlyEnv(BaseTask):
-    """A BaseTask env (like whole-body tracking) whose only curriculum term is the episode-length tracker."""
+class _TrackerOnlyEnv(PolicyTask):
+    """A PolicyTask env (like whole-body tracking) whose only curriculum term is the episode-length tracker."""
 
     def __init__(self) -> None:
         # Deliberately skips BaseTask.__init__, which needs a simulator.

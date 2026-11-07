@@ -8,7 +8,6 @@ or evaluation environments.
 
 from __future__ import annotations
 
-import dataclasses
 import os
 import sys
 import traceback
@@ -17,27 +16,29 @@ from loguru import logger
 
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.utils.eval_utils import init_eval_logging
-from holosoma.utils.sim_utils import DirectSimulation, graceful_simulation_signals, setup_simulation_environment
 
 _THREAD_LIMIT_VARIABLES = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
 
 
-def limit_cpu_math_threads(config: RunSimConfig) -> None:
+def limit_cpu_math_threads(config: RunSimConfig, device: str | None = None) -> None:
     """Serialize Torch's CPU intra-op pool for classic MuJoCo on cpu, unless the operator set a limit.
 
     Classic MuJoCo runs one env on the host, where every tensor is small enough that a machine-sized
     pool costs more per elementwise op in fork/join than the op itself. A no-op for Warp and
     IsaacSim, which keep this work on the GPU, and for training, which does not route through here.
+    ``device`` is the resolved simulation device; it defaults to ``config.device``.
     """
     from holosoma.config_types.simulator import MujocoBackend
     from holosoma.utils.safe_torch_import import torch
 
     # Both halves are needed: ``mujoco_backend`` lives on the shared SimulatorInitConfig and
     # defaults to CLASSIC, so every backend's preset reports CLASSIC unless it overrides it. The
-    # name is the same discriminator the device resolution above uses.
+    # name is the same discriminator ``resolve_simulation_device`` uses.
     sim_config = config.simulator.config
     is_classic = sim_config.name == "mujoco" and getattr(sim_config, "mujoco_backend", None) == MujocoBackend.CLASSIC
-    if not is_classic or config.device is None or not config.device.startswith("cpu"):
+    if device is None:
+        device = config.device
+    if not is_classic or device is None or not device.startswith("cpu"):
         return
     # Truthiness, not presence: OpenMP and MKL ignore an empty value, so an empty one is not an
     # operator's choice and must not suppress the cap.
@@ -49,65 +50,23 @@ def limit_cpu_math_threads(config: RunSimConfig) -> None:
     logger.info("Classic MuJoCo on cpu - limiting Torch to 1 CPU thread")
 
 
-@graceful_simulation_signals
 def run_simulation(config: RunSimConfig) -> None:
-    """Run simulation with direct simulator control.
-
-    This function provides direct access to the simulator for continuous simulation
-    with bridge support using the DirectSimulation class.
+    """Build the configured simulation task and run it until shutdown.
 
     Parameters
     ----------
     config : RunSimConfig
         Configuration containing all simulation settings.
     """
-    # Resolve the simulation device from the backend when the user did not set one (device=None).
-    # An explicit --device (including "cpu") is always honored.
-    if config.device is None:
-        from holosoma.config_types.simulator import MujocoBackend
-        from holosoma.utils.safe_torch_import import torch
+    from holosoma.config_types.env import get_run_sim_env_config
+    from holosoma.simulator.session import get_local_rank, resolve_simulation_device
 
-        sim_name = config.simulator.config.name
-        is_warp = (
-            hasattr(config.simulator.config, "mujoco_backend")
-            and config.simulator.config.mujoco_backend == MujocoBackend.WARP
-        )
-        if is_warp:
-            # MuJoCo Warp only runs on CUDA, so cpu is never a valid choice for it.
-            resolved_device = "cuda:0"
-            logger.info("Auto-detected MuJoCo Warp backend - setting device to cuda:0")
-        elif sim_name == "isaacsim":
-            # IsaacSim is GPU-first; prefer cuda:0 when it is actually available,
-            # otherwise fall back to cpu (IsaacSim can run PhysX on CPU).
-            if torch.cuda.is_available():
-                resolved_device = "cuda:0"
-                logger.info(f"Auto-detected {sim_name} backend with CUDA available - setting device to cuda:0")
-            else:
-                resolved_device = "cpu"
-                logger.warning(f"{sim_name} backend selected but CUDA is unavailable - defaulting to cpu")
-        else:
-            # Classic MuJoCo (CPU physics engine).
-            resolved_device = "cpu"
-            logger.info(f"Auto-detected {sim_name} backend - setting device to cpu")
-
-        config = dataclasses.replace(config, device=resolved_device)
-
-    # After resolution, so an explicit --device cpu is covered too.
-    limit_cpu_math_threads(config)
-
-    logger.info("Starting Holosoma Direct Simulation...")
-    logger.info(f"Robot: {config.robot.asset.robot_type}")
-    logger.info(f"Simulator: {config.simulator._target_}")
-    logger.info(f"Terrain: {config.terrain.terrain_term.mesh_type} ({config.terrain.terrain_term.func})")
+    # Resolved as the task session will, so the CPU thread cap applies before the task is built.
+    limit_cpu_math_threads(config, resolve_simulation_device(get_run_sim_env_config(config), get_local_rank()))
 
     try:
-        # Use shared utils for setup
-        env, device, simulation_app = setup_simulation_environment(config, device=config.device)
-
-        # Create and run direct simulation using context manager for automatic clean-up
-        with DirectSimulation(config, env, device, simulation_app) as sim:
-            sim.run()
-
+        with config.create_task() as task:
+            task.run()
     except Exception as e:
         logger.error(f"Error during simulation: {e}")
         traceback.print_exc()

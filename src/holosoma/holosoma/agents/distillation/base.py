@@ -39,7 +39,7 @@ from holosoma.agents.distillation.checkpoint import (
 from holosoma.agents.modules.logging_utils import LoggingHelper
 from holosoma.agents.modules.student_teacher_modules import StudentTeacher
 from holosoma.config_types.algo import DistillationConfig, DistillationPPOConfig
-from holosoma.envs.base_task.base_task import BaseTask
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.utils.inference_helpers import (
     attach_onnx_metadata,
     export_policy_as_onnx,
@@ -71,7 +71,7 @@ class DistillationBase(BaseAlgo):
 
     def __init__(
         self,
-        env: BaseTask,
+        env: PolicyTask,
         config: DistillationConfig | DistillationPPOConfig,
         log_dir: str | os.PathLike[str],
         device: str = "cpu",

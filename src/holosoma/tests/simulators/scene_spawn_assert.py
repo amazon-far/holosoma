@@ -46,9 +46,8 @@ from holosoma.config_types.light import (
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.simulator import IsaacSimRenderConfig
 from holosoma.simulator.shared.object_registry import ObjectType
-from holosoma.utils.sim_utils import setup_simulation_environment
 from tests.simulators import _scene_presets
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit
+from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit
 
 _KIT_ARG_SETTING = "/holosoma/tests/launcherKitArg"
 _DEFAULT_SUN_INTENSITY = 1000.0
@@ -224,8 +223,7 @@ def main() -> int:
         training=dataclasses.replace(config.training, num_envs=args.num_envs),
     )
 
-    env, device, _app = setup_simulation_environment(config, device=device)
-    sim = env.sim
+    sim, device, _app = launch_simulator(config, device=device)
     if args.probe_isaacsim_render_config:
         import carb
         import omni.usd
@@ -426,7 +424,7 @@ def main() -> int:
     actual_env_origins = sim.env_origins
     sim.prepare_sim()
 
-    # Mirror DirectSimulation: open the interactive viewer only when headful. When headless
+    # Mirror BaseTask: open the interactive viewer only when headful. When headless
     # this is skipped, so render() below must tolerate a None viewer.
     if not headless:
         sim.setup_viewer()

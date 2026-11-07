@@ -21,7 +21,7 @@ from holosoma.agents.fast_sac.fast_sac_utils import (
 from holosoma.agents.modules.augmentation_utils import SymmetryUtils
 from holosoma.agents.modules.logging_utils import LoggingHelper
 from holosoma.config_types.algo import FastSACConfig
-from holosoma.envs.base_task.base_task import BaseTask
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.utils.average_meters import TensorAverageMeterDict
 from holosoma.utils.inference_helpers import (
     attach_onnx_metadata,
@@ -57,7 +57,7 @@ def _clone_outputs(fn: Callable[..., Any]) -> Callable[..., Any]:
 class FastSACEnv:
     def __init__(
         self,
-        env: BaseTask,
+        env: PolicyTask,
         actor_obs_keys: Sequence[str],
         critic_obs_keys: Sequence[str],
     ):
@@ -167,7 +167,7 @@ class FastSACAgent(BaseAlgo):
 
     def __init__(
         self,
-        env: BaseTask,
+        env: PolicyTask,
         config: FastSACConfig,
         device: str,
         log_dir: str,

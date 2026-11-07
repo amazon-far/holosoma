@@ -18,8 +18,7 @@ if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from holosoma.config_types.sensor import CameraSensorConfig, SensorMountConfig
-from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step
+from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit, step
 
 _LINKS = ("pelvis", "left_elbow_link", "right_elbow_link", "left_wrist_yaw_link", "right_wrist_yaw_link")
 _MAX_POS_ERR_M = 1e-3
@@ -85,8 +84,7 @@ def main() -> int:
     config = dataclasses.replace(
         config, device="cuda:0", training=dataclasses.replace(config.training, num_envs=args.num_envs)
     )
-    env, device, _app = setup_simulation_environment(config, device="cuda:0")
-    sim = env.sim
+    sim, device, _app = launch_simulator(config, device="cuda:0")
     sim.set_headless(True)
     sim.setup()
     sim.setup_terrain()

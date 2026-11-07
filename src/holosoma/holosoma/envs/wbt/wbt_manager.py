@@ -6,9 +6,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import torch
 
-from holosoma.envs.base_task.base_task import BaseTask
-
-# from holosoma.envs.legged_base_task.legged_robot_base import LeggedRobotBase
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.utils.simulator_config import SimulatorType
 
 if TYPE_CHECKING:
@@ -17,13 +15,12 @@ if TYPE_CHECKING:
     from holosoma.managers.randomization.terms.locomotion import PushRandomizerState
 
 
-class WholeBodyTrackingManager(BaseTask):
+class WholeBodyTrackingManager(PolicyTask):
     def _init_buffers(self) -> None:
         """Initialize torch tensors which will contain simulation states and processed quantities"""
         super()._init_buffers()
 
         # -------------------------------- terms same with locomotion_manager.py [start]--------------------------------
-        self.need_to_refresh_envs = torch.ones(self.num_envs, dtype=torch.bool, device=self.device, requires_grad=False)
         self._configure_default_dof_pos()
         self._init_domain_rand_buffers()
 
@@ -48,19 +45,10 @@ class WholeBodyTrackingManager(BaseTask):
     def _reset_buffers_callback(
         self, env_ids: torch.Tensor, target_buf: Mapping[str, torch.Tensor] | None = None
     ) -> None:
-        self.need_to_refresh_envs[env_ids] = True
         self.episode_length_buf[env_ids] = 0
         self.reset_buf[env_ids] = 1
         # pending_episode_update_mask is only used in curriculum_term::AverageEpisodeLengthTracker.
         self._pending_episode_update_mask[env_ids] = True
-
-    def _get_envs_to_refresh(self) -> torch.Tensor:
-        return self.need_to_refresh_envs.nonzero(as_tuple=False).flatten()
-
-    def _refresh_envs_after_reset(self, env_ids: torch.Tensor) -> None:
-        self.simulator.forward_kinematics()
-        self.need_to_refresh_envs[env_ids] = False
-        self._pre_compute_observations_callback()
 
     def _get_average_episode_tracker(self) -> AverageEpisodeLengthTracker:
         tracker = self.curriculum_manager.get_term("average_episode_tracker")
@@ -86,6 +74,13 @@ class WholeBodyTrackingManager(BaseTask):
         motion_command = cast("MotionCommand", self.command_manager.get_state("motion_command"))
         motion_command.init_buffers()
         return super().reset_all()
+
+    def _finish_reset(self) -> dict[str, Any]:
+        # reset_all() does not step, so compute the targets init_buffers() cleared before the
+        # observations and the first termination check read them.
+        motion_command = cast("MotionCommand", self.command_manager.get_state("motion_command"))
+        motion_command.update_relative_body_targets()
+        return super()._finish_reset()
 
     def _reset_robot_states_callback(
         self, env_ids: torch.Tensor, target_states: Mapping[str, torch.Tensor] | None = None
@@ -113,7 +108,6 @@ class WholeBodyTrackingManager(BaseTask):
         """Random pushes the robots. Emulates an impulse by setting a randomized base velocity."""
         if len(env_ids) == 0:
             return
-        self.need_to_refresh_envs[env_ids] = True
         max_vel_tensor = self._max_push_vel
         if self.randomization_manager is not None:
             state = cast("PushRandomizerState | None", self.randomization_manager.get_state("push_randomizer_state"))
