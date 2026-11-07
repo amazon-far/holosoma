@@ -113,10 +113,21 @@ def _fresh(sim, simulator: str):
 def _reference_bodies_isaacsim(sim):
     """Env 0's body poses read from PhysX, bypassing Isaac Lab's cached articulation data."""
     if sim.backend.is_isaaclab3:
-        from isaaclab_physx.physics import PhysxManager
+        import warp as wp
 
-        PhysxManager.get_physics_sim_view().update_articulations_kinematic()
         view = sim._robot.root_view
+        if sim.backend.uses_kit:
+            from isaaclab_physx.physics import PhysxManager
+
+            PhysxManager.get_physics_sim_view().update_articulations_kinematic()
+            poses = view.get_link_transforms()
+        else:
+            from isaaclab_ov import tensor_types as TT
+
+            # forward_kinematics already flushed the write. Read the solver
+            # binding directly, without refreshing Isaac Lab's cached data.
+            poses = view.get_attribute(TT.LINK_POSE)
+        poses = wp.to_torch(poses)
         # Native find_bodies returns public-order IDs; the raw PhysX view uses its
         # own solver order. Resolve names independently rather than reuse those IDs.
         body_ids = [sim._robot.backend_body_names.index(name) for name in sim.body_names]
@@ -126,11 +137,7 @@ def _reference_bodies_isaacsim(sim):
         SimulationManager.get_physics_sim_view().update_articulations_kinematic()
         view = sim._robot.root_physx_view
         body_ids = sim.body_ids
-    poses = view.get_link_transforms()
-    if sim.backend.is_isaaclab3:
-        import warp as wp
-
-        poses = wp.to_torch(poses)
+        poses = view.get_link_transforms()
     poses = poses[0, body_ids].cpu()  # xyzw quaternions
     return {"_rigid_body_pos": poses[:, :3], "_rigid_body_rot": poses[:, 3:7]}
 
