@@ -116,7 +116,8 @@ class IsaacSim(BaseSimulator):
         logger.info(f"\tEnvironment device    : {self.sim_device}")
         logger.info(f"\tPhysics step-size     : {1.0 / self.simulator_config.sim.fps}")
         logger.info(
-            f"\tRendering step-size   : {1.0 / self.simulator_config.sim.fps * self.simulator_config.sim.substeps}"
+            "\tRendering step-size   : "
+            f"{self.simulator_config.sim.control_decimation_steps / self.simulator_config.sim.fps}"
         )
 
         scene_config: InteractiveSceneCfg = InteractiveSceneCfg(

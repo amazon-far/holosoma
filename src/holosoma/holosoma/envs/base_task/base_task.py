@@ -151,7 +151,6 @@ class BaseTask:
         # if running with a viewer, set up keyboard shortcuts and camera
         self.viewer = None
         if not self.headless:
-            self.debug_viz = False
             self.simulator.setup_viewer()
             self.viewer = self.simulator.viewer
 
@@ -183,8 +182,6 @@ class BaseTask:
             self.simulator.simulator_config.reset_manager, self.simulator, self.device
         )
 
-        if not self.headless:
-            self.viewer = self.simulator.viewer
         self._add_pacing_hooks()
 
     def _add_pacing_hooks(self) -> None:
