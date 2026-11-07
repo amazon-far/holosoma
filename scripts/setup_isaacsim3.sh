@@ -52,7 +52,7 @@ isaacsim3_setup_main() {
     # Downloaded Isaac Sim must use its bundled interpreter, including for a
     # venv. Standalone pip installations use a regular Python 3.12 environment.
     local python_exe=3.12
-    local extras=(--extra video)
+    local extras=(--extra video --extra ov --extra importers)
     if [[ -n ${ISAACSIM_ROOT_PATH:-} ]]; then
         python_exe=$ISAACSIM_ROOT_PATH/kit/python/bin/python3
         export UV_PYTHON_PREFERENCE=only-system
@@ -65,8 +65,8 @@ isaacsim3_setup_main() {
     (
         cd "$ISAACLAB3_DIR"
         # Honor Lab's dependency overrides (constraints alone cannot reconcile
-        # Isaac Sim's older exact torch/USD pins). Native headless rendering needs
-        # the video extra, including its imageio-ffmpeg backend.
+        # Isaac Sim's older exact torch/USD pins). Include video encoding,
+        # detached OV runtimes, and the standalone URDF/MJCF importers.
         uv sync --frozen --inexact "${extras[@]}"
     )
     source "$ISAACSIM3_SCRIPT_DIR/source_isaacsim3_setup.sh"

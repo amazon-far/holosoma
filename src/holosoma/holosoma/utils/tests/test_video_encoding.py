@@ -5,12 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import imageio_ffmpeg
 import numpy as np
 import pytest
 
 from holosoma.utils import video_utils
 
-imageio_ffmpeg = pytest.importorskip("imageio_ffmpeg")
 pytestmark = pytest.mark.no_sim
 
 
@@ -56,12 +56,19 @@ def test_video_without_opencv_codec_preserves_frames_and_dimensions(
     assert list(tmp_path.glob("*temp_raw*")) == []
 
 
+@pytest.mark.parametrize("invalid_output", [False, True], ids=["no-output", "invalid-output"])
 def test_video_without_opencv_codec_rejects_failed_encoder(
-    tmp_path: Path, no_opencv_encoder: None, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, no_opencv_encoder: None, monkeypatch: pytest.MonkeyPatch, invalid_output: bool
 ) -> None:
-    # A real process consumes every frame and then fails without an artifact.
+    # A real process consumes every frame and fails, optionally leaving a
+    # nonempty corrupt artifact. File existence cannot stand in for encoding.
     executable = tmp_path / "failed-encoder"
-    executable.write_text("#!/bin/sh\ncat >/dev/null\nexit 1\n")
+    executable.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" != "-y" ]; then exit 1; fi\n'
+        "for output do :; done\n"
+        "cat >/dev/null\n" + ('printf "invalid video" > "$output"\n' if invalid_output else "") + "exit 1\n"
+    )
     executable.chmod(0o755)
     monkeypatch.setenv("IMAGEIO_FFMPEG_EXE", str(executable))
     with pytest.raises(RuntimeError, match="Video creation failed"):

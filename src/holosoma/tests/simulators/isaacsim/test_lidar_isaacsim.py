@@ -47,3 +47,24 @@ def test_lidar_newton(tmp_path, run_isaacsim_harness, isaacsim_backend):
         result_file=result_file,
     )
     assert "narrowphase overflow" not in (result.stdout + result.stderr).lower(), result.stdout[-3000:]
+
+
+@pytest.mark.parametrize("physics", ["physx", "newton"])
+def test_lidar_ovrtx_runtime(physics, tmp_path, run_isaacsim_harness, isaacsim_backend):
+    if isaacsim_backend != "isaaclab3":
+        pytest.skip("OVRTX LiDAR requires the explicit Isaac Lab 3 profile")
+    result_file = tmp_path / "lidar-ovrtx.txt"
+    run_isaacsim_harness(
+        _HARNESS,
+        "--physics-backend",
+        physics,
+        "--renderer",
+        "ovrtx",
+        "--num-envs",
+        "3",
+        "--result-file",
+        str(result_file),
+        label=f"isaacsim3/{physics}/ovrtx-lidar",
+        timeout=900,
+        result_file=result_file,
+    )

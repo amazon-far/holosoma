@@ -264,7 +264,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         if self._rgb_annotator is not None:
             try:
                 if self._render_product is not None:
-                    self._rgb_annotator.detach([self._render_product])
+                    self._rgb_annotator.detach([self._render_product.path])
             except Exception as exc:
                 failures.append(exc)
             else:

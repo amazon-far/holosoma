@@ -155,11 +155,12 @@ class IsaacLab3Config:
     """Native Isaac Lab 3 options; used only by the ``isaaclab3`` backend."""
 
     physics_backend: Literal["physx", "newton"] = "physx"
-    """Select Isaac Sim PhysX or Newton with its MJWarp rigid-body solver."""
+    """Select PhysX or Newton MJWarp. OVRTX uses the Kit-less OVPhysX runtime."""
 
-    renderer: Literal["isaac_rtx", "newton_warp"] = "isaac_rtx"
+    renderer: Literal["isaac_rtx", "newton_warp", "ovrtx"] = "isaac_rtx"
     """Camera renderer, independent of the physics engine. Warp favors throughput
-    over RTX lighting/material fidelity; both run with either physics engine.
+    over RTX lighting/material fidelity. OVRTX runs without Kit, with either
+    Newton or OVPhysX, and also renders logger movies.
     """
 
     newton: IsaacLab3NewtonConfig = field(default_factory=IsaacLab3NewtonConfig)

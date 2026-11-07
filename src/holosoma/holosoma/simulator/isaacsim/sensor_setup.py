@@ -19,7 +19,6 @@ from contextlib import contextmanager
 from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
-import carb
 import torch
 import isaaclab.sim as sim_utils
 from isaaclab.sensors import patterns
@@ -118,6 +117,10 @@ def sync_camera_fabric_transforms(sim: IsaacSim) -> None:
     wrist camera); which cameras are hit is not explained. The USD offset stays correct, so it is
     copied back into Fabric for every camera.
     """
+    # Lab 3's native FrameView initializes transforms for every backend.
+    # The Kit-less path must not import Fabric's Kit runtime.
+    if sim.backend.is_isaaclab3:
+        return
     import carb
     import usdrt
     from pxr import Usd, UsdGeom
@@ -133,8 +136,6 @@ def sync_camera_fabric_transforms(sim: IsaacSim) -> None:
         return
     # Lab 3's Camera uses a backend FrameView and initializes Fabric poses directly. The Lab 2
     # workaround below repairs the old TiledCamera initialization path only.
-    if sim.backend.is_isaaclab3:
-        return
     fabric_stage = usdrt.Usd.Stage.Attach(sim_utils.get_current_stage_id())
     for camera in sim.tiled_cameras.values():
         for prim in sim_utils.find_matching_prims(camera.cfg.prim_path):
@@ -364,12 +365,17 @@ def register_lidars(sim: IsaacSim, manager: SensorManager) -> None:
 
 
 @contextmanager
-def _app_updates_without_physics() -> Iterator[None]:
+def _app_updates_without_physics(*, uses_kit: bool = True) -> Iterator[None]:
     """Keep Kit app updates from stepping physics, as ``SimulationContext.play``/``pause`` do.
 
     Isaac Lab's ``XformPrimView`` syncs Fabric from USD on its first read through an app update
     (``isaaclab.sim.utils.update_stage``), which would otherwise step physics while the timeline plays.
     """
+    if not uses_kit:
+        yield
+        return
+    import carb
+
     settings = carb.settings.get_settings()
     previous = settings.get_as_bool("/app/player/playSimulations")
     settings.set_bool("/app/player/playSimulations", False)
@@ -388,7 +394,7 @@ def render_lidars(sim: IsaacSim) -> None:
         if not isinstance(sensor, sim.backend.mutable_ray_caster_class()):
             raise TypeError(f"LiDAR '{lidar_record.name}' has no mutable MultiMeshRayCaster.")
         sensor.set_ray_directions(pattern.directions)
-        with _app_updates_without_physics():
+        with _app_updates_without_physics(uses_kit=sim.backend.uses_kit):
             native = sensor.data
         distances = torch.linalg.vector_norm(sim.backend.tensor(native.ray_hits_w) - sensor.ray_starts_w, dim=-1)
         finalize_lidar_returns(lidar_record, pattern.directions, distances)

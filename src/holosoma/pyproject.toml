@@ -23,6 +23,7 @@ dependencies = [
     "astor",
     "boto3",
     "easydict",
+    "imageio-ffmpeg>=0.6.0",
     "ipdb",
     "joblib",
     "loguru",

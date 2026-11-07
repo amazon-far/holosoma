@@ -132,7 +132,7 @@ def _check_video_freshness(sim, *, memory_stage: bool = False) -> None:
     recorder = sim.video_recorder
     assert recorder is not None and recorder.is_recording, "video recording did not start"
     assert not sim.tiled_cameras, "video-only probe must not be pumped by a mounted RTX camera"
-    if sim.backend.is_isaaclab3:
+    if sim.backend.is_isaaclab3 and sim.backend.uses_kit:
         assert not sim.backend.is_rendering(sim.sim), "video-only probe unexpectedly has continuous rendering"
         assert sim.sim.get_setting("/isaaclab/video/enabled"), "native headless video intent was not enabled"
         assert sim.sim.cfg.create_stage_in_memory is memory_stage, "requested native stage mode was not applied"
@@ -146,10 +146,15 @@ def _check_video_freshness(sim, *, memory_stage: bool = False) -> None:
     snapshots = {}
 
     def _assert_camera_pose(position, expected_quat=None):
-        native_positions, native_orientations = recorder._view.get_world_poses()
-        if sim.backend.is_isaaclab3:
-            positions, orientations = native_positions.torch, native_orientations.torch
+        if not sim.backend.uses_kit:
+            data = recorder._camera.data
+            positions = data.pos_w.torch[env_id : env_id + 1]
+            orientations = data.quat_w_opengl.torch[env_id : env_id + 1]
         else:
+            native_positions, native_orientations = recorder._view.get_world_poses()
+        if sim.backend.uses_kit and sim.backend.is_isaaclab3:
+            positions, orientations = native_positions.torch, native_orientations.torch
+        elif sim.backend.uses_kit:
             positions = native_positions
             orientations = native_orientations[:, [1, 2, 3, 0]]
         expected_position = torch.tensor([position], device=positions.device, dtype=positions.dtype)
@@ -247,7 +252,10 @@ def _check_video_freshness(sim, *, memory_stage: bool = False) -> None:
     for movie in movies:
         _check_saved_video(movie, snapshots, expected_frame_count=72)
     recorder.cleanup()
-    assert recorder._camera_prim_path is None and recorder._view is None, "video camera cleanup did not finish"
+    if sim.backend.uses_kit:
+        assert recorder._camera_prim_path is None and recorder._view is None, "video camera cleanup did not finish"
+    else:
+        assert recorder._camera is None and recorder.worker_stopped, "native movie recorder did not close"
     print(
         f"PASS: video-only panel motion right={right:.1f} left={left:.1f} returned={returned:.1f}; "
         f"camera motion left={camera_left:.1f} right={camera_right:.1f}; movie saved"
@@ -371,6 +379,8 @@ def main() -> int:
     parser.add_argument("--record", default=None, metavar="DIR", help="save a video of the run to DIR")
     parser.add_argument("--probe-video-freshness", action="store_true", help="check video-only headless motion")
     parser.add_argument("--create-stage-in-memory", action="store_true", help="use the native Lab 3 memory stage")
+    parser.add_argument("--physics-backend", choices=["physx", "newton"], default="physx")
+    parser.add_argument("--renderer", choices=["isaac_rtx", "newton_warp", "ovrtx"], default="isaac_rtx")
     parser.add_argument("--result-file", default=None, help="write 'OK' after all checks pass")
     args = parser.parse_args()
     headless = args.headless == "true"
@@ -382,6 +392,16 @@ def main() -> int:
 
         args.scene = "panel-target"
     config = _build_run_sim_config(args.simulator, args.scene, args.robot, args.terrain, args.record)
+    if args.simulator == "isaacsim3":
+        native = dataclasses.replace(
+            config.simulator.config.sim.isaaclab3,
+            physics_backend=args.physics_backend,
+            renderer=args.renderer,
+        )
+        simulator_config = dataclasses.replace(
+            config.simulator.config, sim=dataclasses.replace(config.simulator.config.sim, isaaclab3=native)
+        )
+        config = dataclasses.replace(config, simulator=dataclasses.replace(config.simulator, config=simulator_config))
     if args.probe_video_freshness:
         from holosoma.config_types.video import FixedCameraConfig
 

@@ -523,6 +523,11 @@ def _isaacsim_randomize_body_damping(
     The stage is traversed ONCE into a list of API-bearing prims (rather than re-walking the full
     stage for every (name, env) pair); the per-(name, env) work then scans only that list.
     """
+    if not simulator.backend.uses_kit:
+        raise RandomizerNotSupportedError(
+            "Live USD body-damping randomization requires the Kit PhysX runtime; "
+            "detached OVRTX physics does not consume these USD edits."
+        )
     import omni.usd
     from pxr import PhysxSchema
 

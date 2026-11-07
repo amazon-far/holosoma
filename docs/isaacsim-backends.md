@@ -14,8 +14,12 @@ The Lab 3 profile uses Python 3.12, PyTorch 2.11 with CUDA 13.0,
 Warp 1.17, and NumPy 2. The old profile retains its dependency constraints.
 The new image uses Isaac Sim's bundled Python to create its virtual environment;
 the standalone installer uses Lab's pinned Isaac Sim extra.
-Lab 3 setup includes the locked video extra required for native headless rendering
-and recording.
+Lab 3 setup includes the locked `video`, `ov` and `importers` extras for rendering and
+recording, including OVRTX 0.5.1.385782, OVPhysX 0.6.4.72118723 and
+OVStage 0.2.1.385922.
+Kit-less URDF conversion uses the genuine `isaacsim-asset-isolated` 6.2.0.0
+wheel. Its `isaacsim.asset` namespace is selected before imports, avoiding
+the full Isaac Sim package's Kit bootstrap in the same environment.
 
 ## Select a profile
 
@@ -60,15 +64,31 @@ python src/holosoma/holosoma/train_agent.py \
     --simulator.config.sim.isaaclab3.renderer=newton_warp
 ```
 
+For OVRTX cameras and movies with Newton, use the same command with
+`--simulator.config.sim.isaaclab3.renderer=ovrtx`. With
+`--simulator.config.sim.isaaclab3.physics-backend=physx`, OVRTX uses OVPhysX.
+
 | `physics-backend` | `renderer` | Configuration |
 | --- | --- | --- |
 | `physx` | `isaac_rtx` | Default: Isaac Sim PhysX and Isaac RTX cameras. |
 | `physx` | `newton_warp` | PhysX dynamics and Newton Warp cameras. |
 | `newton` | `isaac_rtx` | Newton MJWarp dynamics and Isaac RTX cameras. |
 | `newton` | `newton_warp` | Newton MJWarp dynamics and Newton Warp cameras. |
+| `physx` | `ovrtx` | Kit-less OVPhysX dynamics and OVRTX cameras and movies. |
+| `newton` | `ovrtx` | Kit-less Newton MJWarp dynamics and OVRTX cameras and movies. |
 
-These combinations retain Kit for Holosoma's USD authoring, viewer and recording.
-Selecting Newton or Warp cameras does not make this integration Kit-less.
+`isaac_rtx` and `newton_warp` retain Kit for the viewer and recording.
+`ovrtx` uses the SDK's Kit-less launch, USD asset import and native camera
+lifecycle. The `physx` physics choice selects OVPhysX for that runtime; existing
+PhysX scene settings are authored into USD before the engine loads it.
+Interactive OVRTX launches select the SDK's `newton_rtx` visualizer unless
+`--visualizer` explicitly selects another compatible visualizer. Kit
+experiences, Kit visualizers and Kit livestreaming cannot share an OVRTX
+process and are rejected by Isaac Lab's launch validation. Kit rendering-mode
+presets and `kit_args` must be unset with OVRTX. The native visualizer owns
+its camera controls; Holosoma's Kit keyboard bindings apply to Kit viewers.
+Live USD body-damping randomization also requires the Kit PhysX runtime;
+detached physics does not consume those edits, so that event is rejected.
 The renderer setting controls configured sensors exposed as `CameraRecord`.
 Warp cameras trade RTX lighting and material fidelity for a simpler rendering
 path; the adapter maps their zero-valued depth misses to infinity before applying
@@ -77,12 +97,13 @@ Current Warp camera integration supports pinhole projection. Use `isaac_rtx`
 for Holosoma's fisheye configurations; selecting Warp with those configurations
 is rejected rather than rendering a pinhole approximation.
 
-Logger movies use a separate USD camera and Replicator render product, so they
-remain **RTX movies** even with `renderer=newton_warp`. The Kit viewport is also
-separate from the camera sensor renderer. Disable logger video when comparing
-camera renderer throughput.
+Logger movies use Kit/Replicator RTX with the Kit profiles and native OVRTX
+cameras with `ovrtx`. Movie cameras are declared before cloning, track the
+selected `record_env_id`, and use the shared encoding, overlays and recording
+lifecycle. Camera capture does not integrate physics. Disable logger video
+when comparing camera renderer throughput.
 
-The native integration matrix checks all four combinations with two G1
+The native integration matrix checks all six combinations with two G1
 environments, sparse property randomization, dynamics, actuation, contact forces,
 and independent RGB/depth geometry. Separate Newton cases cover visual-mesh
 LiDAR and the training/checkpoint/evaluation workflow. These bounded checks do
@@ -94,8 +115,8 @@ These settings are under `--simulator.config.sim.isaaclab3.*`:
 
 | Option | Default | Effect |
 | --- | --- | --- |
-| `physics-backend` | `physx` | Select Isaac Sim PhysX or Newton's MJWarp solver. |
-| `renderer` | `isaac_rtx` | Select Isaac RTX or Newton Warp for configured camera sensors. |
+| `physics-backend` | `physx` | Select PhysX (OVPhysX with OVRTX) or Newton's MJWarp solver. |
+| `renderer` | `isaac_rtx` | Select Isaac RTX, Newton Warp or Kit-less OVRTX. |
 | `use-fabric` | `True` | Use native Fabric synchronization. |
 | `create-stage-in-memory` | `False` | Author assets into the simulation's in-memory stage. |
 | `use-newton-actuators` | `True` | Use native actuator evaluation, including the PhysX host adapter; this does not select Newton physics. |
@@ -151,6 +172,12 @@ capture, so moved targets are visible without first advancing physics.
 
 The native backend restores the robot's Isaac Lab default pose, velocity,
 and joint state after physics startup, before domain randomization runs.
+Kit PhysX performs a warmup integration while creating its tensor views:
+`PhysxManager._warmup_and_create_views()` calls
+`update_simulation(get_physics_dt(), 0.0)` directly before and after view creation.
+These calls do not increment
+Holosoma's experiment clock. Setting the configured defaults after reset
+prevents warmup gravity and motion from changing the first observation.
 
 Lab 3 matches prim expressions against the whole path. Generated environment
 segments use `env_[^/]+`, which excludes descendants from asset spawn parents.

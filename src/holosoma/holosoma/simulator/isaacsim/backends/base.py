@@ -29,6 +29,14 @@ class IsaacLabBackend(ABC):
         """Whether this adapter implements the Lab 3 API."""
         return self.major == 3
 
+    @property
+    def uses_kit(self) -> bool:
+        """Whether scene and viewer operations run inside Isaac Sim Kit."""
+        return True
+
+    def configure_physics_scene(self, sim: Any, config: Any) -> None:
+        """Apply engine scene settings before assets are authored."""
+
     @abstractmethod
     def mutable_ray_caster_class(self) -> type[Any]:
         """Return this API family's ray caster with fixed-shape scan updates."""

@@ -54,3 +54,15 @@ def test_depth_misses_preserve_shared_clipping_semantics(
     expected = torch.tensor([float("inf") if renderer == "newton_warp" else 0.0, 0.89, 2.5, float("inf")])
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
     torch.testing.assert_close(source, torch.tensor([0.0, 0.89, 2.5, float("inf")]), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("options", [{"rendering_mode": "quality"}, {"kit_args": "--/rtx/shadows/enabled=false"}])
+def test_ovrtx_rejects_kit_options_before_starting_runtime(
+    monkeypatch: pytest.MonkeyPatch, options: dict[str, Any]
+) -> None:
+    app = ModuleType("isaaclab.app")
+    app.launch_simulation = lambda *_args: pytest.fail("invalid OVRTX config started a runtime")  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "isaaclab.app", app)
+    backend = IsaacLab3Backend(IsaacLab3Config(renderer="ovrtx"))
+    with pytest.raises(ValueError, match="OVRTX is Kit-less"):
+        backend.launch_app({"headless": True, **options})

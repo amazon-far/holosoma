@@ -25,10 +25,16 @@ def validate_runtime(backend_name: str, *, multigpu: bool = False) -> dict[str, 
         raise RuntimeError(f"{backend_name} requires warp-lang {expected_warp}; found {warp_version}.")
 
     if backend.is_isaaclab3:
-        for package in ("moviepy", "imageio_ffmpeg"):
+        try:
+            importer_version = importlib.metadata.version("isaacsim-asset-isolated")
+        except importlib.metadata.PackageNotFoundError as exc:
+            raise RuntimeError("Isaac Lab importer extra is missing; rerun scripts/setup_isaacsim3.sh.") from exc
+        if importer_version != "6.2.0.0":
+            raise RuntimeError(f"Isaac Lab requires standalone importers 6.2.0.0; found {importer_version}.")
+        for package in ("moviepy", "imageio_ffmpeg", "ovrtx", "ovphysx", "ovstage"):
             if importlib.util.find_spec(package) is None:
                 raise RuntimeError(
-                    f"Isaac Lab video extra is missing {package}; native headless rendering requires it."
+                    f"Isaac Lab video/OV extras are missing {package}; install the complete Lab 3 profile."
                 )
 
     import torch

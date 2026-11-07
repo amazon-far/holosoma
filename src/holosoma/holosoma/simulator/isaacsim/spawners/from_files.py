@@ -54,17 +54,14 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import isaaclab.sim as sim_utils
-import omni.kit.commands
-import omni.log
+from loguru import logger
 from isaaclab.sim import schemas
 from isaaclab.sim.utils import bind_physics_material, bind_visual_material, clone, select_usd_variants
-from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdPhysics, UsdShade
+from pxr import Gf, Usd, UsdGeom, UsdPhysics, UsdShade
 
 from holosoma.simulator.isaacsim.spawners import from_files_cfg
 from holosoma.simulator.isaacsim.spawners.schema_utils import ensure_api_and_modify
 from holosoma.simulator.isaacsim.prim_utils import set_instanceable
-
-import carb
 
 if TYPE_CHECKING:
     from holosoma.simulator.isaacsim.backends.base import IsaacLabBackend
@@ -124,10 +121,10 @@ def create_prim(
 
     # Add reference with logging
     if source_path:
-        carb.log_info(f"Loading {source_path} from {usd_path}")
+        logger.info(f"Loading {source_path} from {usd_path}")
         success = prim.GetReferences().AddReference(assetPath=usd_path, primPath=source_path)
     else:
-        carb.log_info(f"Loading from {usd_path}")
+        logger.info(f"Loading from {usd_path}")
         success = prim.GetReferences().AddReference(usd_path)
 
     if not success:
@@ -223,8 +220,8 @@ def _collapse_to_single_rigid_body(stage: "Usd.Stage", prim_path: str) -> None:
         if prim.GetPath() == root_prim.GetPath():
             continue
         prim.RemoveAPI(UsdPhysics.RigidBodyAPI)
-        if prim.HasAPI(PhysxSchema.PhysxRigidBodyAPI):
-            prim.RemoveAPI(PhysxSchema.PhysxRigidBodyAPI)
+        if "PhysxRigidBodyAPI" in prim.GetAppliedSchemas():
+            prim.RemoveAppliedSchema("PhysxRigidBodyAPI")
 
     remaining = [p for p in Usd.PrimRange(root_prim) if p.HasAPI(UsdPhysics.RigidBodyAPI)]
     if len(remaining) != 1:
@@ -406,7 +403,7 @@ def _spawn_from_usd_file(
             backend=backend,
         )
     else:
-        omni.log.warn(f"A prim already exists at prim path: '{prim_path}'.")
+        logger.warning(f"A prim already exists at prim path: '{prim_path}'.")
         prim = stage.GetPrimAtPath(prim_path)
 
     # modify variants
