@@ -226,7 +226,7 @@ class BaseSimulator:
         self.installed_plugins: dict[str, Any] = {}
         self._plugins_installed = False
         self._closed = False
-        # Cooperative shutdown flag: set via request_shutdown(), polled through the owning task.
+        # Cooperative shutdown flag: set via request_shutdown(), polled by the SimulationTask run loop.
         self.shutdown_requested = False
         self._shutdown_reason = ""
 
@@ -843,10 +843,10 @@ class BaseSimulator:
     def request_shutdown(self, reason: str = "") -> None:
         """Ask the driving loop to end the run gracefully after the current frame.
 
-        Cooperative: sets :attr:`shutdown_requested`, which the owning task reports through
-        ``BaseTask.shutdown_requested``; its run loop exits at the next frame boundary and runs the
-        normal CLOSE teardown. Lets a plugin end a finite run (e.g. motion playback reaching the
-        end of its clip). Idempotent; the first reason is kept.
+        Cooperative: sets :attr:`shutdown_requested`; ``SimulationTask.run`` checks it once per
+        control frame and exits its loop, running the normal CLOSE teardown. Lets a plugin end a
+        finite run (e.g. motion playback reaching the end of its clip). Idempotent; the first
+        reason is kept.
         """
         if not self.shutdown_requested:
             self.shutdown_requested = True

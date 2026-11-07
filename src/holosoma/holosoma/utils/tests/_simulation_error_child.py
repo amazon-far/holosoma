@@ -144,12 +144,10 @@ def run_task_session(
     from holosoma.simulator import session
 
     class Task(SimulationTask):
-        shutdown_requested = False
-
         def __init__(self, _config: object) -> None:
             if scenario == "construct":
                 fail()
-            self.simulator = cast("Any", SimpleNamespace(video_recorder=None))
+            self.simulator = cast("Any", SimpleNamespace(video_recorder=None, shutdown_requested=False))
             self.config = cast(
                 "Any",
                 SimpleNamespace(

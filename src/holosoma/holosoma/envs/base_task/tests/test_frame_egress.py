@@ -143,7 +143,6 @@ class _LoopTask(SimulationTask):
         self._physics_step_count = 0
         self._next_viewer_time = 0.0
         self._rate_limiter = None
-        self._shutdown_requested = False
         self.randomization_manager = cast(
             "RandomizationManager", SimpleNamespace(step=lambda: None, reset=lambda _env_ids: None)
         )

@@ -14,7 +14,7 @@ _PERFORMANCE_LOG_INTERVAL_STEPS = 1000
 
 
 class SimulationTask(BaseTask):
-    """BaseTask specialization that advances the simulation until shutdown is requested.
+    """BaseTask specialization that advances the simulation until the simulator requests shutdown.
 
     It uses the ordinary task lifecycle, including the default robot reset, reset events,
     and setup/reset/step randomization terms, but owns no policy managers.
@@ -30,7 +30,7 @@ class SimulationTask(BaseTask):
         return super()._get_env_origins()
 
     def run(self) -> None:
-        """Start episodes and advance control frames until the task requests shutdown."""
+        """Start episodes and advance control frames until the simulator requests shutdown."""
         logger.info("Starting Holosoma simulation task...")
         logger.info(f"Robot: {self.config.robot.asset.robot_type}")
         logger.info(f"Simulator: {self.config.simulator._target_}")
@@ -53,7 +53,7 @@ class SimulationTask(BaseTask):
         window_control_steps = 0
         window_start = time.perf_counter()
         start_time = window_start
-        while not self.shutdown_requested:
+        while not self.simulator.shutdown_requested:
             self.step()
             control_steps += 1
             window_control_steps += 1

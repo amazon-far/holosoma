@@ -26,7 +26,6 @@ from holosoma.utils.torch_utils import to_torch
 class BaseTask:
     def __init__(self, tyro_config: EnvConfig) -> None:
         self._closed = False
-        self._shutdown_requested = False
         try:
             self._initialize_base_task(tyro_config)
         except BaseException:
@@ -41,17 +40,6 @@ class BaseTask:
     def run(self) -> None:
         """Run this task's outer execution loop."""
         raise NotImplementedError(f"{type(self).__name__} must implement run().")
-
-    @property
-    def shutdown_requested(self) -> bool:
-        """Whether the task or its simulator has asked the outer run loop to stop."""
-        return self._shutdown_requested or self.simulator.shutdown_requested
-
-    def request_shutdown(self, reason: str = "") -> None:
-        """Ask the task's outer run loop to stop after the current control frame."""
-        if not self._shutdown_requested:
-            self._shutdown_requested = True
-            logger.info(f"Task shutdown requested{f': {reason}' if reason else ''}")
 
     def close(self) -> None:
         """End active episodes and close the simulator exactly once."""
