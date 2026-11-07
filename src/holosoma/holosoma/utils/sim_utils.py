@@ -119,7 +119,20 @@ def setup_isaaclab_launcher(config: EnvConfig, device: str) -> Any | None:
     """
     from holosoma.simulator.isaacsim.backends import get_backend
 
-    backend = get_backend(config.simulator.config.isaacsim_backend, native=config.simulator.config.sim.isaaclab3)
+    # Decide runtime requirements before SDK argument registration can import
+    # Kit. A renderer preference alone does not activate cameras or a viewer.
+    video_enabled = config.logger.video.enabled or config.logger.headless_recording
+    cameras_enabled = any(isinstance(sensor, CameraSensorConfig) for sensor in getattr(config, "sensor", {}).values())
+    needs_rendering = video_enabled or cameras_enabled
+    backend = get_backend(
+        config.simulator.config.isaacsim_backend,
+        native=config.simulator.config.sim.isaaclab3,
+        rendering=(
+            needs_rendering
+            or not config.training.headless
+            or bool(config.simulator.config.isaacsim.app_launcher_args())
+        ),
+    )
     parser = argparse.ArgumentParser(description="Run simulation with IsaacSim.")
     parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
     parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
@@ -141,9 +154,6 @@ def setup_isaaclab_launcher(config: EnvConfig, device: str) -> Any | None:
         args_cli.distributed = True
 
     # LiDAR ray queries do not need RTX; only video and TiledCamera sensors enable the renderer.
-    video_enabled = config.logger.video.enabled or config.logger.headless_recording
-    cameras_enabled = any(isinstance(sensor, CameraSensorConfig) for sensor in config.sensors.values())
-    needs_rendering = video_enabled or cameras_enabled
     if needs_rendering:
         args_cli.enable_cameras = True
     if backend.is_isaaclab3 and video_enabled:

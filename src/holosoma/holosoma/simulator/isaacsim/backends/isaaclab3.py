@@ -83,12 +83,15 @@ class IsaacLab3Backend(IsaacLabBackend):
     major = 3
     env_regex_ns = "/World/envs/env_[^/]+"
 
-    def __init__(self, native: IsaacLab3Config | None = None):
+    def __init__(self, native: IsaacLab3Config | None = None, *, rendering: bool = True):
         self.options = native if native is not None else IsaacLab3Config()
+        self._rendering = rendering
 
     @property
     def uses_kit(self) -> bool:
-        return self.options.renderer != "ovrtx"
+        # A renderer preference does not require its runtime when no camera,
+        # movie or viewer uses it. Warp and OVRTX are both native renderers.
+        return self._rendering and self.options.renderer == "isaac_rtx"
 
     def mutable_ray_caster_class(self) -> type[Any]:
         from .ray_casters import (
@@ -165,6 +168,11 @@ class IsaacLab3Backend(IsaacLabBackend):
         add_launcher_args(parser)
 
     def launch_app(self, args: dict[str, Any] | Namespace, *, sim_config: Any = None) -> Any:
+        if not self.uses_kit:
+            from .kitless_importers import select_standalone_importers
+
+            # Also cover callers that do not register CLI arguments first.
+            select_standalone_importers()
         from isaaclab.app import launch_simulation
 
         args = vars(args) if isinstance(args, Namespace) else args
@@ -181,25 +189,35 @@ class IsaacLab3Backend(IsaacLabBackend):
                 "select --simulator.config.sim.isaaclab3.physics-backend instead."
             )
         # Holosoma's viewer contract predates Lab 3's independent --viz switch.
-        # OVRTX cannot share a process with the Kit visualizer.
+        # Native visualizers preserve the standalone runtime for Warp/OVRTX.
         if not args.get("headless", False) and args.get("visualizer") is None:
-            args["visualizer"] = "kit" if self.uses_kit else "newton_rtx"
+            args["visualizer"] = (
+                "kit" if self.uses_kit else "newton_rtx" if self.options.renderer == "ovrtx" else "newton_gl"
+            )
+        # Only cameras/movies need a camera renderer. A physics-only run must
+        # not initialize OVRTX (or any other unused renderer) at launch.
+        renderer = self.renderer_config() if args.get("enable_cameras") or args.get("video") else None
         if not self.uses_kit:
             if args.get("rendering_mode") is not None or args.get("kit_args"):
                 raise ValueError(
-                    "OVRTX is Kit-less; rendering_mode and kit_args configure the Kit renderer. "
-                    "Leave these options unset when selecting renderer='ovrtx'."
+                    "This run is Kit-less; rendering_mode and kit_args configure the Kit renderer. "
+                    "Leave them unset, or enable an Isaac RTX camera, movie or viewer."
                 )
             # Movie capture uses native Camera sensors, avoiding the SDK's
             # video-only hook which would automatically start Kit.
             args["video"] = False
-            launch_cfg = Namespace(physics=self.physics_config(sim_config), renderer=self.renderer_config())
+            launch_cfg = Namespace(physics=self.physics_config(sim_config), renderer=renderer)
             from isaaclab.app import validate_launch
 
-            from .kitless_importers import select_standalone_importers
+            from .kitless_importers import register_standalone_schemas
 
-            validate_launch(launch_cfg, args)
-            select_standalone_importers()
+            _scan, kit_sources = validate_launch(launch_cfg, args)
+            if kit_sources:
+                raise ValueError(
+                    f"This run is Kit-less; remove Kit launch requirements: {', '.join(kit_sources)}. "
+                    "Use renderer='isaac_rtx' with cameras, movies or a viewer when Kit is needed."
+                )
+            register_standalone_schemas()
             _RUNTIME.enter_context(launch_simulation(launch_cfg, args))
             return IsaacLab3Runtime()
         # Sim 6.2's deferred telemetry CPU-info startup can race native
@@ -222,7 +240,7 @@ class IsaacLab3Backend(IsaacLabBackend):
         if telemetry_setting not in kit_args:
             kit_args = f"{kit_args} --{telemetry_setting}=true".strip()
         args["kit_args"] = kit_args
-        launch_cfg = Namespace(physics=self.physics_config(sim_config), renderer=self.renderer_config())
+        launch_cfg = Namespace(physics=self.physics_config(sim_config), renderer=renderer)
         _RUNTIME.enter_context(launch_simulation(launch_cfg, args))
         import omni.kit.app
 
@@ -245,12 +263,12 @@ class IsaacLab3Backend(IsaacLabBackend):
                 solver_cfg=MJWarpSolverCfg(**solver_kwargs),
                 default_shape_cfg=NewtonShapeCfg(margin=options.default_shape_margin),
             )
-        from isaaclab_physx.physics import PhysxCfg
-
         if not self.uses_kit:
             from isaaclab_ov.physics import OvPhysxCfg
 
             return OvPhysxCfg(gpu_max_rigid_patch_count=10 * 2**15)
+        from isaaclab_physx.physics import PhysxCfg
+
         if config is None:
             return PhysxCfg()
         return PhysxCfg(
@@ -458,14 +476,14 @@ class IsaacLab3Backend(IsaacLabBackend):
     def prepare_scene(self, scene: Any) -> None:
         from isaaclab import cloner
         from isaaclab.assets import AssetBaseCfg
-        from isaaclab_newton.cloner import NewtonReplicateContext
-
         from ..scene_fixtures import TERRAIN_PRIM_PATH
 
         # Holosoma owns a complete env subtree, including expanded scene-file
         # bodies, material bindings and lights. Declare that ownership before
         # authoring assets, so one native plan clones the whole subtree.
         if self.options.physics_backend == "newton":
+            from isaaclab_newton.cloner import NewtonReplicateContext
+
             physics_context = NewtonReplicateContext
         elif self.uses_kit:
             from isaaclab_physx.cloner import PhysxReplicateContext
@@ -476,7 +494,9 @@ class IsaacLab3Backend(IsaacLabBackend):
 
             physics_context = OvPhysxReplicateContext
         contexts: tuple[Any, ...] = (cloner.UsdReplicateContext, physics_context)
-        if self.options.renderer == "newton_warp" and physics_context is not NewtonReplicateContext:
+        if self._rendering and self.options.renderer == "newton_warp" and self.options.physics_backend != "newton":
+            from isaaclab_newton.cloner import NewtonReplicateContext
+
             # Warp's render-only Newton model must include the same scene subtree.
             contexts += (NewtonReplicateContext,)
         root = AssetBaseCfg(prim_path=scene.env_regex_ns, cloning_contexts=contexts)
@@ -547,10 +567,13 @@ class IsaacLab3Backend(IsaacLabBackend):
             from isaaclab_ov.renderers import OVRTXRendererCfg
 
             return OVRTXRendererCfg()
-        from isaaclab_physx.renderers import IsaacRtxRendererCfg
-        from isaaclab_newton.renderers import NewtonWarpRendererCfg
+        if self.options.renderer == "newton_warp":
+            from isaaclab_newton.renderers import NewtonWarpRendererCfg
 
-        return NewtonWarpRendererCfg() if self.options.renderer == "newton_warp" else IsaacRtxRendererCfg()
+            return NewtonWarpRendererCfg()
+        from isaaclab_physx.renderers import IsaacRtxRendererCfg
+
+        return IsaacRtxRendererCfg()
 
     def has_viewport(self, sim: Any) -> bool:
         # The native OVRTX visualizer owns its view; Kit's post-update camera
