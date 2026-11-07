@@ -150,7 +150,18 @@ PY
             str(runtime / "kit/python/bin/python3") if native else "3.12",
             str(env_root),
         ],
-        ["sync", "--frozen", "--inexact", "--extra", "video", *([] if native else ["--extra", "isaacsim"])],
+        [
+            "sync",
+            "--frozen",
+            "--inexact",
+            "--extra",
+            "video",
+            "--extra",
+            "ov",
+            "--extra",
+            "importers",
+            *([] if native else ["--extra", "isaacsim"]),
+        ],
     ]
     assert not (deps / ".env_setup_finished_hssim3_isaacsim-6.2.0_isaaclab-v3.0.0_video").exists()
 

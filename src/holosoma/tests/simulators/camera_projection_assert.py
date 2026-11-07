@@ -130,6 +130,8 @@ def main() -> int:
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--headless", choices=["true", "false"], default="true")
+    parser.add_argument("--physics-backend", choices=["physx", "newton"], default="physx")
+    parser.add_argument("--renderer", choices=["isaac_rtx", "ovrtx"], default="isaac_rtx")
     parser.add_argument("--result-file", default=None, help="write OK/FAIL here before teardown")
     args = parser.parse_args()
 
@@ -145,6 +147,16 @@ def main() -> int:
     )
     if args.simulator == "mjwarp":
         config = _camera_presets.as_mjwarp(config)
+    if args.simulator == "isaacsim3":
+        native = dataclasses.replace(
+            config.simulator.config.sim.isaaclab3,
+            physics_backend=args.physics_backend,
+            renderer=args.renderer,
+        )
+        simulator_config = dataclasses.replace(
+            config.simulator.config, sim=dataclasses.replace(config.simulator.config.sim, isaaclab3=native)
+        )
+        config = dataclasses.replace(config, simulator=dataclasses.replace(config.simulator, config=simulator_config))
 
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
     config = dataclasses.replace(

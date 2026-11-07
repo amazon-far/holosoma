@@ -4,7 +4,7 @@ import builtins
 import copy
 import dataclasses
 import xml.etree.ElementTree as ET
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pathlib
 import trimesh
@@ -12,7 +12,6 @@ import trimesh
 from holosoma.config_types.full_sim import FullSimConfig
 import isaaclab.sim as sim_utils
 import isaaclab.terrains as terrain_gen
-import omni.log
 import torch
 from pxr import Usd
 from isaaclab.assets import Articulation
@@ -38,7 +37,6 @@ from holosoma.simulator.isaacsim.backends import get_backend
 from holosoma.simulator.isaacsim.events import randomize_body_com, randomize_rigid_body_inertia
 from holosoma.simulator.isaacsim import light_setup, sensor_setup
 from holosoma.simulator.isaacsim.viewer_input import ViewerInputController
-from holosoma.simulator.isaacsim.isaaclab_viewpoint_camera_controller import ViewportCameraController
 from holosoma.simulator.isaacsim.isaacsim_articulation_cfg import (
     build_contact_sensor_cfg,
     build_robot_articulation_cfg,
@@ -67,6 +65,9 @@ from holosoma.simulator.shared.virtual_gantry import (
 
 from holosoma.simulator.types import ActorNames, ActorIndices, EnvIds, ActorStates, ActorPoses
 
+if TYPE_CHECKING:
+    from holosoma.simulator.isaacsim.isaaclab_viewpoint_camera_controller import ViewportCameraController
+
 
 class IsaacSim(BaseSimulator):
     def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str):
@@ -91,6 +92,7 @@ class IsaacSim(BaseSimulator):
         else:
             raise RuntimeError("Simulation context already exists. Cannot create a new one.")
 
+        self.backend.configure_physics_scene(self.sim, self.simulator_config.sim)
         self.sim.set_camera_view([2.0, 0.0, 2.5], [-0.5, 0.0, 0.5])
 
         logger.info("IsaacSim initialized.")
@@ -192,7 +194,12 @@ class IsaacSim(BaseSimulator):
         self.push_requested: bool = False
 
         if self.video_config.enabled:
-            self.video_recorder = IsaacSimVideoRecorder(self.video_config, self)
+            if self.backend.uses_kit:
+                self.video_recorder = IsaacSimVideoRecorder(self.video_config, self)
+            else:
+                from holosoma.simulator.isaacsim.native_video_recorder import NativeVideoRecorder
+
+                self.video_recorder = NativeVideoRecorder(self.video_config, self)
 
         # debug visualization
         # self.draw = _debug_draw.acquire_debug_draw_interface()
@@ -281,6 +288,10 @@ class IsaacSim(BaseSimulator):
         # Perception cameras: one TiledCamera per configured camera, as a child prim of its
         # mount body so it follows that body, created before clone so it replicates per env.
         sensor_setup.build_sensors(self)
+        if self.video_config.enabled and not self.backend.uses_kit:
+            from holosoma.simulator.isaacsim.native_video_recorder import build_video_camera
+
+            build_video_camera(self)
 
         # Author the light rig under env_0 before cloning so each environment gets its own lights; an
         # empty rig authors nothing, leaving only the scene asset's baked lights.

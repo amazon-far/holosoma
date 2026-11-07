@@ -43,7 +43,7 @@ _RTX_PRESETS = {
 
 
 class IsaacLab3Runtime:
-    """Expose the Kit app while closing through Lab 3's supported launch context.
+    """Retain either runtime through Lab 3's supported launch context.
 
     ``launch_simulation`` owns the runtime and preserves failure status during
     shutdown. Closing its yielded physics config or Kit app directly bypasses
@@ -51,11 +51,29 @@ class IsaacLab3Runtime:
     harnesses keep only the constructed simulator.
     """
 
-    def __init__(self, app: Any):
+    def __init__(self, app: Any = None):
         self._app = app
+        self._closed = False
 
     def close(self, *, exit_code: int = 0, **kwargs: Any) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._app is None:
+            from isaaclab.sim import SimulationContext
+
+            SimulationContext.clear_instance()
         _RUNTIME.__exit__(SystemExit, SystemExit(exit_code), None)
+
+    def is_running(self) -> bool:
+        if self._closed:
+            return False
+        if self._app is not None:
+            return bool(self._app.is_running())
+        from isaaclab.sim import SimulationContext
+
+        sim = SimulationContext.instance()
+        return sim is None or bool(sim.is_running())
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._app, name)
@@ -67,6 +85,10 @@ class IsaacLab3Backend(IsaacLabBackend):
 
     def __init__(self, native: IsaacLab3Config | None = None):
         self.options = native if native is not None else IsaacLab3Config()
+
+    @property
+    def uses_kit(self) -> bool:
+        return self.options.renderer != "ovrtx"
 
     def mutable_ray_caster_class(self) -> type[Any]:
         from .ray_casters import newton_mutable_ray_caster_class, physx_mutable_ray_caster_class
@@ -126,8 +148,13 @@ class IsaacLab3Backend(IsaacLabBackend):
 
         return stage_utils
 
-    @staticmethod
-    def add_launcher_args(parser: Any) -> None:
+    def add_launcher_args(self, parser: Any) -> None:
+        if not self.uses_kit:
+            from .kitless_importers import select_standalone_importers
+
+            # The SDK's argument definitions import KitLauncher, which imports
+            # the isaacsim root even when no Kit runtime will be launched.
+            select_standalone_importers()
         from isaaclab.app import add_launcher_args
 
         add_launcher_args(parser)
@@ -136,23 +163,40 @@ class IsaacLab3Backend(IsaacLabBackend):
         from isaaclab.app import launch_simulation
 
         args = vars(args) if isinstance(args, Namespace) else args
-        # Holosoma still authors/imports USD assets and records through Kit.
-        # Newton physics and Warp cameras can run in that same process; OVRTX
-        # and OVPhysX require a separate kitless integration.
-        args["require_kit"] = True
+        args["require_kit"] = self.uses_kit
         # The declared Holosoma config owns physics selection, rather than an
         # additional SDK CLI override changing only the launcher's prototype.
         requested_physics = args.pop("physics", None)
         expected_physics = "newton_mjwarp" if self.options.physics_backend == "newton" else "isaacsim_physx"
+        if self.options.physics_backend == "physx" and not self.uses_kit:
+            expected_physics = "ovphysx"
         if requested_physics not in (None, expected_physics):
             raise ValueError(
                 f"SDK --physics {requested_physics!r} conflicts with configured {expected_physics!r}; "
                 "select --simulator.config.sim.isaaclab3.physics-backend instead."
             )
         # Holosoma's viewer contract predates Lab 3's independent --viz switch.
-        # Select the native Kit visualizer for interactive launches.
+        # OVRTX cannot share a process with the Kit visualizer.
         if not args.get("headless", False) and args.get("visualizer") is None:
-            args["visualizer"] = "kit"
+            args["visualizer"] = "kit" if self.uses_kit else "newton_rtx"
+        if not self.uses_kit:
+            if args.get("rendering_mode") is not None or args.get("kit_args"):
+                raise ValueError(
+                    "OVRTX is Kit-less; rendering_mode and kit_args configure the Kit renderer. "
+                    "Leave these options unset when selecting renderer='ovrtx'."
+                )
+            # Movie capture uses native Camera sensors, avoiding the SDK's
+            # video-only hook which would automatically start Kit.
+            args["video"] = False
+            launch_cfg = Namespace(physics=self.physics_config(sim_config), renderer=self.renderer_config())
+            from isaaclab.app import validate_launch
+
+            from .kitless_importers import select_standalone_importers
+
+            validate_launch(launch_cfg, args)
+            select_standalone_importers()
+            _RUNTIME.enter_context(launch_simulation(launch_cfg, args))
+            return IsaacLab3Runtime()
         # Sim 6.2's deferred telemetry CPU-info startup can race native
         # interface initialization. Use Kit's supported serial startup mode.
         telemetry_setting = "/exts/omni.kit.telemetry/skipDeferredStartup"
@@ -198,6 +242,10 @@ class IsaacLab3Backend(IsaacLabBackend):
             )
         from isaaclab_physx.physics import PhysxCfg
 
+        if not self.uses_kit:
+            from isaaclab_ov.physics import OvPhysxCfg
+
+            return OvPhysxCfg(gpu_max_rigid_patch_count=10 * 2**15)
         if config is None:
             return PhysxCfg()
         return PhysxCfg(
@@ -207,6 +255,23 @@ class IsaacLab3Backend(IsaacLabBackend):
             max_velocity_iteration_count=config.physx.num_velocity_iterations,
             gpu_max_rigid_patch_count=10 * 2**15,
         )
+
+    def configure_physics_scene(self, sim: Any, config: Any) -> None:
+        if self.uses_kit or self.options.physics_backend != "physx":
+            return
+        from pxr import Sdf
+
+        # OVPhysX consumes PhysX scene policy from USD; its config owns the
+        # detached runtime and buffer capacities, rather than these attributes.
+        prim = sim.stage.GetPrimAtPath(sim.cfg.physics_prim_path)
+        fields = (
+            ("bounceThreshold", Sdf.ValueTypeNames.Float, config.physx.bounce_threshold_velocity),
+            ("solverType", Sdf.ValueTypeNames.Token, "TGS" if config.physx.solver_type == 1 else "PGS"),
+            ("maxPositionIterationCount", Sdf.ValueTypeNames.Int, config.physx.num_position_iterations),
+            ("maxVelocityIterationCount", Sdf.ValueTypeNames.Int, config.physx.num_velocity_iterations),
+        )
+        for name, value_type, value in fields:
+            prim.CreateAttribute(f"physxScene:{name}", value_type).Set(value)
 
     @staticmethod
     def root_view(asset: Any) -> Any:
@@ -236,7 +301,17 @@ class IsaacLab3Backend(IsaacLabBackend):
             from .newton_properties import read_materials
 
             return read_materials(asset)
+        if not self.uses_kit and name == "material_properties":
+            return self.native_tensor(self.root_view(asset).get_attribute(self._ov_material_attribute(asset)))
         return self.native_tensor(getattr(self.root_view(asset), f"get_{name}")())
+
+    @staticmethod
+    def _ov_material_attribute(asset: Any) -> Any:
+        from isaaclab_ov import tensor_types
+
+        if hasattr(asset, "num_joints"):
+            return tensor_types.SHAPE_FRICTION_AND_RESTITUTION
+        return tensor_types.RIGID_BODY_SHAPE_FRICTION_AND_RESTITUTION
 
     def write_physics_property(self, asset: Any, name: str, value: Any, env_ids: Any) -> None:
         import torch
@@ -257,15 +332,35 @@ class IsaacLab3Backend(IsaacLabBackend):
             # staging indices for PhysX. CPU Torch selectors cannot cross that
             # kernel boundary, unlike the raw material setter below.
             native_ids = wp.from_torch(env_ids.to(device=asset.device, dtype=torch.int64).contiguous(), dtype=wp.int64)
-            getattr(asset, f"set_{name}_index")(**{name: value.to(asset.device)}, env_ids=native_ids, full_data=True)
+            if self.uses_kit:
+                getattr(asset, f"set_{name}_index")(
+                    **{name: value.to(asset.device)}, env_ids=native_ids, full_data=True
+                )
+            else:
+                # OVPhysX's indexed asset setters consume selected rows, while
+                # its raw material binding below requires the complete buffer.
+                selected = value[env_ids.to(value.device)].to(asset.device)
+                getattr(asset, f"set_{name}_index")(**{name: selected}, env_ids=native_ids)
         else:
             native_value = wp.from_torch(value.contiguous(), dtype=wp.float32)
             native_ids = wp.from_torch(env_ids.to(device="cpu", dtype=torch.int32).contiguous())
-            getattr(self.root_view(asset), f"set_{name}")(native_value, native_ids)
+            if not self.uses_kit and name == "material_properties":
+                self.root_view(asset).set_attribute(
+                    self._ov_material_attribute(asset), native_value, indices=native_ids
+                )
+            else:
+                getattr(self.root_view(asset), f"set_{name}")(native_value, native_ids)
 
     @staticmethod
     def restore_initial_articulation_state(asset: Any, env_origins: Any) -> None:
-        """Restore configured state after PhysX startup integration."""
+        """Set the experiment's initial state after native views are initialized.
+
+        Kit PhysX's ``PhysxManager._warmup_and_create_views`` calls
+        ``update_simulation(dt, 0.0)`` before and after creating tensor views.
+        Those advance dynamics without incrementing SimulationContext's counter. Set
+        defaults after reset and before startup randomization, as native
+        examples do, so the first observation belongs to experiment time zero.
+        """
         root_pose = asset.data.default_root_pose.torch.clone()
         root_pose[:, :3] += env_origins
         asset.write_root_pose_to_sim_index(root_pose=root_pose)
@@ -358,7 +453,6 @@ class IsaacLab3Backend(IsaacLabBackend):
     def prepare_scene(self, scene: Any) -> None:
         from isaaclab import cloner
         from isaaclab.assets import AssetBaseCfg
-        from isaaclab_physx.cloner import PhysxReplicateContext
         from isaaclab_newton.cloner import NewtonReplicateContext
 
         from ..scene_fixtures import TERRAIN_PRIM_PATH
@@ -366,7 +460,16 @@ class IsaacLab3Backend(IsaacLabBackend):
         # Holosoma owns a complete env subtree, including expanded scene-file
         # bodies, material bindings and lights. Declare that ownership before
         # authoring assets, so one native plan clones the whole subtree.
-        physics_context = NewtonReplicateContext if self.options.physics_backend == "newton" else PhysxReplicateContext
+        if self.options.physics_backend == "newton":
+            physics_context = NewtonReplicateContext
+        elif self.uses_kit:
+            from isaaclab_physx.cloner import PhysxReplicateContext
+
+            physics_context = PhysxReplicateContext
+        else:
+            from isaaclab_ov.cloner import OvPhysxReplicateContext
+
+            physics_context = OvPhysxReplicateContext
         contexts: tuple[Any, ...] = (cloner.UsdReplicateContext, physics_context)
         if self.options.renderer == "newton_warp" and physics_context is not NewtonReplicateContext:
             # Warp's render-only Newton model must include the same scene subtree.
@@ -435,10 +538,19 @@ class IsaacLab3Backend(IsaacLabBackend):
 
     def renderer_config(self) -> Any:
         """Declare the camera renderer both at launch and at sensor construction."""
+        if self.options.renderer == "ovrtx":
+            from isaaclab_ov.renderers import OVRTXRendererCfg
+
+            return OVRTXRendererCfg()
         from isaaclab_physx.renderers import IsaacRtxRendererCfg
         from isaaclab_newton.renderers import NewtonWarpRendererCfg
 
         return NewtonWarpRendererCfg() if self.options.renderer == "newton_warp" else IsaacRtxRendererCfg()
+
+    def has_viewport(self, sim: Any) -> bool:
+        # The native OVRTX visualizer owns its view; Kit's post-update camera
+        # controller and keyboard subscriptions apply only to the Kit viewport.
+        return self.uses_kit and super().has_viewport(sim)
 
     @property
     def material_channels(self) -> tuple[str, ...]:

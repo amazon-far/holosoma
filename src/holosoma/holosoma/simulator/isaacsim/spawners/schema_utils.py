@@ -48,8 +48,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-import omni.log
-import omni.usd
+from loguru import logger
 from pxr import Usd
 
 
@@ -80,14 +79,14 @@ def has_api_in_subtree(prim_path: str, api_class: type[Any], stage: Usd.Stage) -
 
     # Check the root prim itself
     if root_prim.HasAPI(api_class):
-        omni.log.verbose(f"Found {api_class.__name__} on root prim: {prim_path}")
+        logger.debug(f"Found {api_class.__name__} on root prim: {prim_path}")
         return True
 
     # Recursively check all descendants
     def _check_descendants(prim: Any) -> bool:
         for child in prim.GetChildren():
             if child.HasAPI(api_class):
-                omni.log.verbose(f"Found {api_class.__name__} on descendant prim: {child.GetPath()}")
+                logger.debug(f"Found {api_class.__name__} on descendant prim: {child.GetPath()}")
                 return True
             if _check_descendants(child):
                 return True
@@ -133,12 +132,12 @@ def ensure_api_and_modify(
         prim = stage.GetPrimAtPath(prim_path)
         if prim and prim.IsValid():
             api_class.Apply(prim)
-            omni.log.info(f"Applied {api_class.__name__} to prim '{prim_path}' before setting properties")
+            logger.info(f"Applied {api_class.__name__} to prim '{prim_path}' before setting properties")
         else:
-            omni.log.error(f"Invalid prim at path '{prim_path}', cannot apply {api_class.__name__}")
+            logger.error(f"Invalid prim at path '{prim_path}', cannot apply {api_class.__name__}")
             return False
     else:
-        omni.log.verbose(f"{api_class.__name__} already exists in subtree of {prim_path}")
+        logger.debug(f"{api_class.__name__} already exists in subtree of {prim_path}")
 
     # Now call the modify function
     return modify_func(prim_path, cfg, stage)
