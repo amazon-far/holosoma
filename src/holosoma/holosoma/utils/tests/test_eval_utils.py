@@ -585,6 +585,7 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
     assert loaded_simulator["config"]["sim"].pop("isaaclab3") == {
         "physics_backend": "physx",
         "renderer": "isaac_rtx",
+        "require_kit": False,
         "newton": {
             "use_cuda_graph": True,
             "nconmax": 128,
