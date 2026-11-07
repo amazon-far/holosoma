@@ -55,6 +55,7 @@ def _run_config(
 
 @pytest.mark.no_sim
 @pytest.mark.parametrize("backend", list(IsaacSimBackend))
+@pytest.mark.parametrize("headless_requires_kit", [False, True], ids=["viewer", "explicit-kit"])
 @pytest.mark.parametrize(
     ("render_config", "expected_rendering_mode", "expected_kit_args"),
     [
@@ -82,6 +83,7 @@ def test_launcher_config_reaches_app_launcher_namespace(
     expected_rendering_mode: str,
     expected_kit_args: str,
     backend: IsaacSimBackend,
+    headless_requires_kit: bool,
 ) -> None:
     """Exercise Holosoma's real launcher setup with Isaac Lab replaced only at its import boundary."""
     monkeypatch.setenv(
@@ -154,6 +156,20 @@ def test_launcher_config_reaches_app_launcher_namespace(
     monkeypatch.delenv("WORLD_SIZE", raising=False)
 
     config = _run_config(render_config, backend)
+    sim_cfg = config.simulator.config
+    config = dataclasses.replace(
+        config,
+        training=dataclasses.replace(config.training, headless=headless_requires_kit),
+        simulator=dataclasses.replace(
+            config.simulator,
+            config=dataclasses.replace(
+                sim_cfg,
+                sim=dataclasses.replace(
+                    sim_cfg.sim, isaaclab3=dataclasses.replace(sim_cfg.sim.isaaclab3, require_kit=headless_requires_kit)
+                ),
+            ),
+        ),
+    )
     app = setup_isaaclab_launcher(get_run_sim_env_config(config), "cuda:0")
     assert app is not None
     from holosoma.simulator.isaacsim.backends import get_backend
@@ -163,8 +179,8 @@ def test_launcher_config_reaches_app_launcher_namespace(
     if backend == IsaacSimBackend.ISAACLAB3:
         assert app._app is app_sentinel
         assert len(captured_config) == 1
-        # This case exercises a viewer without cameras. The Kit visualizer
-        # requires Kit, but no camera renderer needs to be initialized.
+        # A viewer or explicit integration requirement needs Kit without
+        # initializing an unused camera renderer.
         assert captured_config[0].renderer is None
         assert vars(captured_config[0].physics) == {
             "bounce_threshold_velocity": config.simulator.config.sim.physx.bounce_threshold_velocity,
@@ -174,7 +190,7 @@ def test_launcher_config_reaches_app_launcher_namespace(
             "gpu_max_rigid_patch_count": 10 * 2**15,
         }
         assert captured_args["require_kit"] is True
-        assert captured_args["visualizer"] == "kit"
+        assert captured_args.get("visualizer") == (None if headless_requires_kit else "kit")
         app.close(exit_code=1)
         assert closed_statuses == [1]
         assert "rendering_mode" not in captured_args

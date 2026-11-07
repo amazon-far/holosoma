@@ -142,6 +142,21 @@ class _IsaacSimReader:
         if self._sim.backend.is_isaaclab3:
             import warp as wp
 
+            if not self._sim.backend.uses_kit:
+                from isaaclab_ov import tensor_types as TT
+
+                articulation = hasattr(asset, "num_joints")
+                attributes = {
+                    "masses": TT.BODY_MASS if articulation else TT.RIGID_BODY_MASS,
+                    "coms": TT.BODY_COM_POSE if articulation else TT.RIGID_BODY_COM_POSE,
+                    "inertias": TT.BODY_INERTIA if articulation else TT.RIGID_BODY_INERTIA,
+                    "material_properties": (
+                        TT.SHAPE_FRICTION_AND_RESTITUTION
+                        if articulation
+                        else TT.RIGID_BODY_SHAPE_FRICTION_AND_RESTITUTION
+                    ),
+                }
+                return wp.to_torch(asset.root_view.get_attribute(attributes[name]))
             return wp.to_torch(getattr(asset.root_view, f"get_{name}")())
         return getattr(asset.root_physx_view, f"get_{name}")()
 
@@ -173,7 +188,18 @@ class _IsaacSimReader:
         asset, _bidx = self._asset_and_body(body_name)
         view = asset.root_view if self._sim.backend.is_isaaclab3 else asset.root_physx_view
         mats = self._property(asset, "material_properties")
-        assert mats.shape == (view.count, view.max_shapes, 3) and view.max_shapes > 0, (
+        if self._sim.backend.is_isaaclab3 and not self._sim.backend.uses_kit:
+            from isaaclab_ov import tensor_types as TT
+
+            attribute = (
+                TT.SHAPE_FRICTION_AND_RESTITUTION
+                if hasattr(asset, "num_joints")
+                else TT.RIGID_BODY_SHAPE_FRICTION_AND_RESTITUTION
+            )
+            shape = tuple(view.binding_for(attribute).shape)
+        else:
+            shape = (view.count, view.max_shapes, 3)
+        assert tuple(mats.shape) == shape and shape[1] > 0, (
             f"material readback shape {tuple(mats.shape)} does not match the physical shape view"
         )
         return mats

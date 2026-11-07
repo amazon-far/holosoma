@@ -95,7 +95,10 @@ process and are rejected by Isaac Lab's launch validation. Kit rendering-mode
 presets and `kit_args` must be unset in standalone runs. The native visualizer owns
 its camera controls; Holosoma's Kit keyboard bindings apply to Kit viewers.
 Live USD body-damping randomization also requires the Kit PhysX runtime;
-detached physics does not consume those edits, so that event is rejected.
+set `simulator.config.sim.isaaclab3.require_kit=True` before launch when that
+integration is needed. Detached physics does not consume those USD edits on
+runtime clones, so that event is rejected. This explicit requirement also
+supports other Kit APIs without enabling an unused camera renderer.
 The renderer setting controls configured sensors exposed as `CameraRecord`.
 Warp cameras trade RTX lighting and material fidelity for a simpler rendering
 path; the adapter maps their zero-valued depth misses to infinity before applying
