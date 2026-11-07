@@ -160,6 +160,12 @@ class IsaacLab3Config:
     leave this renderer preference inactive.
     """
 
+    require_kit: bool = False
+    """Request Kit for integrations that require its APIs, such as live USD
+    body-damping randomization. False allows standalone physics and renderers.
+    OVRTX cameras cannot share a process with Kit.
+    """
+
     newton: IsaacLab3NewtonConfig = field(default_factory=IsaacLab3NewtonConfig)
     """Newton solver options; used only when ``physics_backend`` is ``newton``."""
 

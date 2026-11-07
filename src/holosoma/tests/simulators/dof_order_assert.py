@@ -122,8 +122,14 @@ def _check_isaac_joint_properties(sim, robot) -> None:
     asset = sim._robot
     view = asset.root_view if native else asset.root_physx_view
     names = list(asset.backend_joint_names if native else asset.joint_names)
-    armatures = view.get_dof_armatures()
-    friction = view.get_dof_friction_properties()
+    if native and not sim.backend.uses_kit:
+        from isaaclab_ov import tensor_types as TT
+
+        armatures = view.get_attribute(TT.DOF_ARMATURE)
+        friction = view.get_attribute(TT.DOF_FRICTION_PROPERTIES)
+    else:
+        armatures = view.get_dof_armatures()
+        friction = view.get_dof_friction_properties()
     if native:
         import warp as wp
 
@@ -159,7 +165,8 @@ def _check_isaac_joint_properties(sim, robot) -> None:
         }
         assert authored_effort[LOWER_MODEL_LIMIT_JOINT] == 25.0
         assert robot.dof_effort_limit_list[robot.dof_names.index(LOWER_MODEL_LIMIT_JOINT)] == LOWER_MODEL_LIMIT
-        solver_limits = wp.to_torch(view.get_dof_max_forces()).cpu()
+        raw_limits = view.get_dof_max_forces() if sim.backend.uses_kit else view.get_attribute(TT.DOF_MAX_FORCE)
+        solver_limits = wp.to_torch(raw_limits).cpu()
         expected_limits = torch.tensor([authored_effort[name] for name in names], dtype=solver_limits.dtype).expand(
             sim.num_envs, -1
         )
@@ -268,7 +275,13 @@ def main() -> int:
                 if not torch.equal(applied, expected):
                     failures.append(f"command {command} on {joint} did not clip to {clipped} N·m in every environment")
                 # Read submitted solver commands independently of actuator telemetry.
-                raw_effort = wp.to_torch(sim._robot.root_view.get_dof_actuation_forces())
+                if sim.backend.uses_kit:
+                    raw_command = sim._robot.root_view.get_dof_actuation_forces()
+                else:
+                    from isaaclab_ov import tensor_types as TT
+
+                    raw_command = sim._robot.root_view.get_attribute(TT.DOF_ACTUATION_FORCE)
+                raw_effort = wp.to_torch(raw_command)
                 raw_joint_ids = [sim._robot.backend_joint_names.index(name) for name in sim.dof_names]
                 submitted = raw_effort[:, raw_joint_ids].to(expected.device)
                 if not torch.equal(submitted, expected):
