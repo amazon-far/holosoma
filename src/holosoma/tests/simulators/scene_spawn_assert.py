@@ -278,7 +278,16 @@ def _object_total_mass(sim, name, env_id):
         if sim.backend.is_isaaclab3:
             import warp as wp
 
-            masses = wp.to_torch(asset.root_view.get_masses())
+            if sim.simulator_config.sim.isaaclab3.physics_backend == "newton":
+                from isaaclab_newton.physics import NewtonManager
+
+                masses = wp.to_torch(asset.root_view.get_attribute("body_mass", NewtonManager.get_model())[:, 0])
+            elif not sim.backend.uses_kit:
+                from isaaclab_ov import tensor_types as TT
+
+                masses = wp.to_torch(asset.root_view.get_attribute(TT.RIGID_BODY_MASS))
+            else:
+                masses = wp.to_torch(asset.root_view.get_masses())
         else:
             masses = asset.root_physx_view.get_masses()
         return float(masses[env_id].sum())
@@ -479,9 +488,10 @@ def main() -> int:
     env, device, _app = setup_simulation_environment(config, device=device)
     sim = env.sim
     if args.probe_isaacsim_render_config:
-        import carb
+        if args.rendering_mode is not None or args.kit_arg_sentinel is not None:
+            import carb
 
-        settings = carb.settings.get_settings()
+            settings = carb.settings.get_settings()
         if args.rendering_mode is not None:
             if sim.backend.is_isaaclab3:
                 expected_dlss = {"performance": 0, "balanced": 1, "quality": 2}[args.rendering_mode]
