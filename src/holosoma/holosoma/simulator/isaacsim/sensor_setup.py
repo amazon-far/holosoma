@@ -45,6 +45,7 @@ from holosoma.simulator.isaacsim.prim_utils import (
     resolve_robot_link_rigid_body_prim_expression,
     set_instanceable,
 )
+from holosoma.simulator.isaacsim.terrain_mesh_cache import TERRAIN_PRIM_PATH
 from holosoma.simulator.shared.lidar_range import finalize_lidar_returns
 from holosoma.simulator.shared.raycast_scene import RaycastScene, RaycastSceneMeshes
 from holosoma.simulator.shared.sensor_manager import SensorManager
@@ -184,8 +185,7 @@ def _mesh_targets(paths: list[str]) -> list[Any]:
     return [
         MultiMeshRayCasterCfg.RaycastTargetCfg(
             prim_expr=path,
-            # Holosoma clones geometry from env_0. Publish cache entries for every clone, rather
-            # than only deduplicating vertices inside one sensor's initialization pass.
+            # Holosoma clones geometry from env_0, so every env shares env_0's cached mesh.
             is_shared=True,
             track_mesh_transforms=not _is_path_at_or_below(path, "/World/ground"),
         )
@@ -328,8 +328,8 @@ def _raycast_sensor_classes() -> tuple[type[Any], type[Any]]:
             super().__init__(cfg)
 
         def _initialize_warp_meshes(self) -> None:
-            # Physics starts after all Holosoma assets have loaded and environments have cloned.
-            # Resolve selection here, rather than maintaining another mesh-file inventory.
+            # Physics starts after all Holosoma assets have loaded and environments have cloned,
+            # so selection resolves against the complete scene here.
             targets = _mesh_targets(self._resolve_paths())
             self.cfg.mesh_prim_paths = targets
             self._raycast_targets_cfg = targets
@@ -356,9 +356,9 @@ def _raycast_sensor_classes() -> tuple[type[Any], type[Any]]:
                     ):
                         raise ValueError(f"Robot mesh '{target.prim_expr}' has no enabled robot physics owner.")
                     if owner.GetName() not in self._sim.body_names:
-                        raise ValueError(
-                            f"Robot mesh '{target.prim_expr}' belongs to unconfigured body '{owner.GetName()}'."
-                        )
+                        # Bodies outside the robot config (e.g. kept fixed-joint links) stay on their native view.
+                        cursor += count
+                        continue
                     indices.append(self._sim.find_rigid_body_indice(owner.GetName()))
                     slots.append(cursor)
                     position, orientation = self.mesh_offsets[target.prim_expr]
@@ -450,7 +450,9 @@ def _is_visual_raycast_prim(prim: Any) -> bool:
     imageable = UsdGeom.Imageable(prim)
     if not imageable:
         return False
-    if imageable.ComputeVisibility() == UsdGeom.Tokens.invisible:
+    # A hidden ground (terrain ``hide_visual``) still collides, so ray sensors keep hitting it.
+    hidden = imageable.ComputeVisibility() == UsdGeom.Tokens.invisible
+    if hidden and not _is_path_at_or_below(str(prim.GetPath()), TERRAIN_PRIM_PATH):
         return False
 
     return imageable.ComputePurpose() in (UsdGeom.Tokens.default_, UsdGeom.Tokens.render)
@@ -539,9 +541,16 @@ def _default_mesh_prim_paths(sim: IsaacSim, lidar: LidarSensorConfig) -> list[st
 
 
 def _camera_mesh_prim_paths(sim: IsaacSim, camera: CameraSensorConfig) -> list[str]:
-    """Query the loaded Holosoma scene, then apply the camera's object/mesh path rules."""
+    """Query the loaded Holosoma scene, then apply the camera's object/mesh path rules.
+
+    Without explicit includes, the camera's mount body is left out: a camera usually sits inside it.
+    """
+    mount = camera.mount
+    excluded_target = (
+        (mount.target_kind, mount.target) if camera.isaacsim.raycast_meshes.include_paths is None else None
+    )
     paths = assemble_default_mesh_prim_paths(
-        excluded_target=None,
+        excluded_target=excluded_target,
         robot_mesh_prim_paths=_robot_mesh_prim_paths,
         actor_names=sim.scene.rigid_objects,
         discover_mesh_prim_paths=_visual_mesh_prim_paths,
@@ -665,8 +674,7 @@ def create_sensors(sim: IsaacSim) -> None:
 def initialize_sensors(sim: IsaacSim) -> None:
     """Bind depth renderers once scene assets, body indices and native sensors are initialized."""
     for camera in sim.raycast_cameras.values():
-        meshes = camera.mesh_provider.prepare_meshes()
-        camera.initialize(meshes)
+        camera.initialize()
 
 
 def render_sensors(sim: IsaacSim) -> None:

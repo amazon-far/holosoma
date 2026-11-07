@@ -218,7 +218,8 @@ class IsaacSimRaycastMeshConfig:
     """USD prim-path expressions using IsaacLab's per-component regex matching, as for LiDAR.
 
     ``None`` selects visible default/render-purpose geometry from the ground, robot, and loaded
-    scene actors. Expressions use ``/World/envs/env_.*/...`` for cloned objects. Matching an
+    scene actors, except the camera's mount body. Environment paths must use
+    ``/World/envs/env_.*/...``; selection applies to every environment. Matching an
     object selects its descendant meshes. An explicit list restricts this discovered scene
     selection; every include must match geometry. Whole-link roots can include collision
     geometry too: eligibility follows USD visibility/purpose, not a ``visuals``/``collisions``
@@ -228,8 +229,9 @@ class IsaacSimRaycastMeshConfig:
     exclude_paths: list[str] = field(default_factory=list)
     """Remove matching objects or meshes and their descendants after inclusion.
 
-    Exclusions take precedence. Hidden geometry and proxy/guide-purpose geometry are always
-    omitted, even when explicitly included; material opacity is not interpreted. An explicit
+    Exclusions take precedence. Hidden geometry (other than the ground) and proxy/guide-purpose
+    geometry are always omitted, even when explicitly included; material opacity is not
+    interpreted. An explicit
     include list already omits other geometry; excluding everything would also remove those
     includes. Meshes retain their authored scale and local transforms, and follow their scene
     bodies without rebuilding the mesh.
@@ -242,10 +244,20 @@ class IsaacSimRaycastMeshConfig:
         for path in (self.include_paths or []) + self.exclude_paths:
             if not path.startswith("/") or path != path.strip():
                 raise ValueError(f"Raycast mesh path must be an absolute USD prim-path expression, got {path!r}.")
-            try:
-                re.compile(path)
-            except re.error as exc:
-                raise ValueError(f"Invalid raycast mesh path expression {path!r}: {exc}") from exc
+            # IsaacLab matches each "/"-separated component as its own anchored regex.
+            components = path.split("/")[1:]
+            for component in components:
+                try:
+                    re.compile(f"^{component}$")
+                except re.error as exc:
+                    raise ValueError(f"Invalid raycast mesh path expression {path!r}: {exc}") from exc
+                if not component:
+                    raise ValueError(f"Raycast mesh path {path!r} has an empty component.")
+            if components[:2] == ["World", "envs"] and components[2:3] != ["env_.*"]:
+                raise ValueError(
+                    f"Raycast mesh path {path!r} must address environments as '/World/envs/env_.*/...'; "
+                    "selection applies to every environment."
+                )
         return self
 
 

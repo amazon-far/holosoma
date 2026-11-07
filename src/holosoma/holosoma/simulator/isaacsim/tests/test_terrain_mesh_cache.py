@@ -39,13 +39,12 @@ def test_cache_borrows_one_mesh_without_building_another(
         pytest.fail("Registering managed terrain must not allocate another Warp mesh/BVH.")
 
     monkeypatch.setattr(wp, "Mesh", reject_new_mesh)
-    cache = {"/World/unrelated": terrain_mesh}
+    cache: dict[str, wp.Mesh] = {}
     register_managed_terrain_mesh(cache, terrain_mesh, wp.get_device("cpu"))
     register_managed_terrain_mesh(cache, terrain_mesh, wp.get_device("cpu"))
 
     assert cache[TERRAIN_PRIM_PATH] is terrain_mesh
     assert cache[TERRAIN_MESH_PRIM_PATH] is terrain_mesh
-    assert cache["/World/unrelated"] is terrain_mesh
 
 
 @pytest.mark.parametrize("conflict_path", [TERRAIN_PRIM_PATH, TERRAIN_MESH_PRIM_PATH])

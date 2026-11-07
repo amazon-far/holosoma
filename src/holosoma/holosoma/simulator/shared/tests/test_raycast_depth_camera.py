@@ -98,8 +98,7 @@ def _camera_and_record(sim: _FakeSim) -> tuple[RayCastDepthCamera, Any]:
     config = sim.sensor_config["depth"]
     record = SensorManager(device="cpu", control_hz=50.0).register_camera("depth", config)
     camera = RayCastDepthCamera(sim, config, sim.scene)  # type: ignore[arg-type]
-    meshes = sim.scene.prepare_meshes()
-    camera.initialize(meshes)
+    camera.initialize()
     return camera, record
 
 
@@ -235,19 +234,10 @@ def test_mount_offsets_must_cover_every_env(tmp_path: Path) -> None:
 def test_initialization_binds_scene_geometry_once(tmp_path: Path) -> None:
     sim = _FakeSim(_camera(tmp_path))
     camera, record = _camera_and_record(sim)
-    camera.initialize(sim.scene.data)
+    camera.initialize()
     camera.render(record)
     camera.render(record)
     assert sim.scene.initializations == 1
-    assert camera._meshes is sim.scene.data
-
-
-def test_camera_does_not_prepare_its_mesh_provider(tmp_path: Path) -> None:
-    sim = _FakeSim(_camera(tmp_path))
-    camera = RayCastDepthCamera(sim, sim.sensor_config["depth"], sim.scene)  # type: ignore[arg-type]
-    camera.initialize(sim.scene.data)
-    assert sim.scene.initializations == 0
-    assert camera.mesh_provider is sim.scene
 
 
 def test_render_requires_scene_initialization(tmp_path: Path) -> None:

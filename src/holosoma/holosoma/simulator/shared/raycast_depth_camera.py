@@ -18,7 +18,7 @@ import numpy as np
 import warp as wp
 
 from holosoma.config_types.sensor import CameraSensorConfig
-from holosoma.simulator.shared.raycast_scene import RaycastScene, RaycastSceneMeshes
+from holosoma.simulator.shared.raycast_scene import RaycastScene
 from holosoma.utils.rotations import quat_apply, quat_from_euler_xyz, quat_mul
 from holosoma.utils.safe_torch_import import torch
 
@@ -124,8 +124,8 @@ class RayCastDepthCamera:
 
     # ------------------------------------------------------------------ setup
 
-    def initialize(self, meshes: RaycastSceneMeshes) -> None:
-        """Bind prepared scene meshes and allocate persistent rendering buffers once."""
+    def initialize(self) -> None:
+        """Bind the provider's scene meshes and allocate persistent rendering buffers once."""
         if self._ready:
             return
         sim, cfg = self.sim, self.config
@@ -134,7 +134,7 @@ class RayCastDepthCamera:
         self._wp_device = wp.get_device(self.device)
 
         self._mount_body = sim.find_rigid_body_indice(cfg.mount.target)
-        self._meshes = meshes
+        self._meshes = self.mesh_provider.prepare_meshes()
 
         # Square pixels; the principal point is the image center.
         focal = (cfg.height / 2) / math.tan(math.radians(cfg.vertical_fov) / 2)

@@ -92,7 +92,17 @@ def test_existing_root_without_supported_geometry_is_not_a_valid_include() -> No
 
 
 @pytest.mark.parametrize(
-    "path", ["", "box", "/World/[", " /World/ground", "/World/ground ", "{ENV_REGEX_NS}/Robot"]
+    "path",
+    [
+        "",
+        "box",
+        "/World/[",
+        " /World/ground",
+        "/World/ground ",
+        "{ENV_REGEX_NS}/Robot",
+        "/World/(a/b)",
+        "/World/envs/env_1/obstacle",
+    ],
 )
 def test_invalid_path_rules_fail_at_config_construction(path: str) -> None:
     with pytest.raises(ValueError, match="path"):

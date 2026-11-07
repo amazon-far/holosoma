@@ -141,7 +141,7 @@ g1_head_d435i_raycast_depth = CameraSensorConfig(
     isaacsim=IsaacSimCameraConfig(
         renderer="raycast",
         raycast_meshes=IsaacSimRaycastMeshConfig(
-            # Explicitly include #281's 30 visual meshes plus terrain. Omitted geometry
+            # Terrain plus the 30 leg, waist and arm visuals that can occlude the camera. Omitted geometry
             # stays out, including colliders, torso housing, rubber hands, helper boxes
             # and scene actors. Whole-link roots would also include eligible colliders.
             # Fixed-joint merging places the pelvis contour visual under the pelvis.

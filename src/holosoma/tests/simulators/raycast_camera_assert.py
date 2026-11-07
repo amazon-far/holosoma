@@ -11,6 +11,9 @@ without stepping, and checks that both cameras and LiDAR reuse the native scene 
 ``--check dynamic-scene`` translates and rotates a free rigid object through physics steps, checks
 depth against an analytic box intersection, and verifies exclusions and partial-frame isolation.
 
+``--check default-selection`` hides the plane terrain's visual and uses the default mesh selection on
+the pelvis-mounted camera: the ground stays selected and visible, and the pelvis is left out.
+
 Exits 0 PASS / 1 FAIL / 77 SKIP.
 """
 
@@ -25,7 +28,6 @@ if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from holosoma.utils.sim_utils import setup_simulation_environment
-
 from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step, steps_for_seconds
 
 _NUM_ENVS = 3
@@ -208,9 +210,31 @@ def _check_dynamic_scene(sim):
     return fails
 
 
+def _check_default_selection(sim):
+    import torch
+
+    fails = []
+    paths = [target.prim_expr for target in sim.raycast_cameras["raycast"].mesh_provider.cfg.mesh_prim_paths]
+    if not any(path.startswith("/World/ground") for path in paths):
+        fails.append("the hidden ground was not selected")
+    if any("/Robot/pelvis/" in path for path in paths):
+        fails.append("the default selection includes the camera's pelvis mount body")
+    if not any("/Robot/" in path for path in paths):
+        fails.append("the default selection dropped the rest of the robot")
+    depth = sim.get_camera_data("raycast", "depth")[..., 0]
+    fails.extend(
+        f"env{e}: the camera sees almost no ground with the terrain visual hidden"
+        for e in range(_NUM_ENVS)
+        if float(torch.isfinite(depth[e]).float().mean()) < 0.2
+    )
+    return fails
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--check", required=True, choices=["frame", "rerender", "scene", "dynamic-scene"])
+    parser.add_argument(
+        "--check", required=True, choices=["frame", "rerender", "scene", "dynamic-scene", "default-selection"]
+    )
     parser.add_argument("--result-file", default=None, help="write OK/FAIL here before teardown")
     args = parser.parse_args()
 
@@ -255,7 +279,17 @@ def main() -> int:
             ),
         }
 
+    if args.check == "default-selection":
+        from holosoma.config_types.sensor import IsaacSimCameraConfig
+
+        sensors = {
+            "raycast": dataclasses.replace(sensors["raycast"], isaacsim=IsaacSimCameraConfig(renderer="raycast"))
+        }
+
     config = build_run_sim_config("isaacsim", scene_name, "g1-29dof", "terrain_locomotion_plane", sensors=sensors)
+    if args.check == "default-selection":
+        terrain = dataclasses.replace(config.terrain.terrain_term, hide_visual=True)
+        config = dataclasses.replace(config, terrain=dataclasses.replace(config.terrain, terrain_term=terrain))
     if args.check == "dynamic-scene":
         objects = dict(config.scene.rigid_objects)
         objects["target"] = dataclasses.replace(objects["target"], fixed=False)
@@ -296,6 +330,7 @@ def main() -> int:
         "rerender": _check_rerender,
         "scene": _check_scene,
         "dynamic-scene": _check_dynamic_scene,
+        "default-selection": _check_default_selection,
     }
     fails = checks[args.check](sim)
     for failure in fails:

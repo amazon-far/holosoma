@@ -174,8 +174,8 @@ def test_cli_configures_lidar_viz_saved_scan_selection() -> None:
     assert plugin.save_dir == "logs/debug-scans"
 
 
-# Named visual roots from #281's STL inventory, with fixed-joint merging reflected in the owner.
-_G1_ORIGINAL_VISUALS = [
+# The G1 preset's occluder visual roots, with fixed-joint merging reflected in the owner.
+_G1_OCCLUDER_VISUALS = [
     "pelvis/pelvis",
     "pelvis/pelvis_contour_link",
     "left_hip_pitch_link/left_hip_pitch_link",
@@ -209,20 +209,20 @@ _G1_ORIGINAL_VISUALS = [
 ]
 
 
-def _g1_original_mesh_paths() -> list[str]:
+def _g1_occluder_mesh_paths() -> list[str]:
     paths = ["/World/ground/mesh"]
-    for visual in _G1_ORIGINAL_VISUALS:
+    for visual in _G1_OCCLUDER_VISUALS:
         owner, name = visual.split("/")
         paths.append(f"/World/envs/env_.*/Robot/{owner}/visuals/{name}/node_STL_BINARY_/mesh")
     return paths
 
 
-def test_g1_head_depth_preset_keeps_original_visuals_without_other_eligible_geometry() -> None:
+def test_g1_head_depth_preset_keeps_occluder_visuals_without_other_eligible_geometry() -> None:
     preset = SENSOR_REGISTRY["g1-head-d435i-raycast-depth"]
     assert isinstance(preset, CameraSensorConfig)
     assert preset.isaacsim.renderer == "raycast"
     robot = "/World/envs/env_.*/Robot"
-    expected = _g1_original_mesh_paths()
+    expected = _g1_occluder_mesh_paths()
     # These are eligible discovery results, including visible collision geometry.
     discovered = expected + [
         f"{robot}/left_ankle_roll_link/collisions/mesh",
@@ -247,9 +247,9 @@ def test_g1_head_depth_preset_keeps_original_visuals_without_other_eligible_geom
     assert selected == sorted(expected)
 
 
-def test_g1_head_depth_preset_fails_when_an_original_visual_is_missing() -> None:
+def test_g1_head_depth_preset_fails_when_an_occluder_visual_is_missing() -> None:
     preset = SENSOR_REGISTRY["g1-head-d435i-raycast-depth"]
-    discovered = [path for path in _g1_original_mesh_paths() if "/waist_roll_link/" not in path]
+    discovered = [path for path in _g1_occluder_mesh_paths() if "/waist_roll_link/" not in path]
     with pytest.raises(ValueError, match=r"waist_roll_link.*matched no"):
         select_mesh_prim_paths(
             discovered,
