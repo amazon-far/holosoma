@@ -91,7 +91,7 @@ class IsaacLab3Backend(IsaacLabBackend):
     def uses_kit(self) -> bool:
         # A renderer preference does not require its runtime when no camera,
         # movie or viewer uses it. Warp and OVRTX are both native renderers.
-        return self._rendering and self.options.renderer == "isaac_rtx"
+        return self.options.require_kit or (self._rendering and self.options.renderer == "isaac_rtx")
 
     def mutable_ray_caster_class(self) -> type[Any]:
         from .ray_casters import (
