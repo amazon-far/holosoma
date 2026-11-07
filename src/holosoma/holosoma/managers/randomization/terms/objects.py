@@ -526,7 +526,7 @@ def _isaacsim_randomize_body_damping(
     if not simulator.backend.uses_kit:
         raise RandomizerNotSupportedError(
             "Live USD body-damping randomization requires the Kit PhysX runtime; "
-            "detached OVRTX physics does not consume these USD edits."
+            "standalone physics does not consume these USD edits."
         )
     import omni.usd
     from pxr import PhysxSchema

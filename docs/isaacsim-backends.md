@@ -19,7 +19,9 @@ recording, including OVRTX 0.5.1.385782, OVPhysX 0.6.4.72118723 and
 OVStage 0.2.1.385922.
 Kit-less URDF conversion uses the genuine `isaacsim-asset-isolated` 6.2.0.0
 wheel. Its `isaacsim.asset` namespace is selected before imports, avoiding
-the full Isaac Sim package's Kit bootstrap in the same environment.
+the full Isaac Sim package's Kit bootstrap in the same environment. PhysX USD
+schemas needed by URDF conversion are registered from data-only wheel resources;
+this does not import or load the PhysX engine for Newton.
 
 ## Select a profile
 
@@ -71,21 +73,26 @@ For OVRTX cameras and movies with Newton, use the same command with
 | `physics-backend` | `renderer` | Configuration |
 | --- | --- | --- |
 | `physx` | `isaac_rtx` | Default: Isaac Sim PhysX and Isaac RTX cameras. |
-| `physx` | `newton_warp` | PhysX dynamics and Newton Warp cameras. |
+| `physx` | `newton_warp` | Kit-less OVPhysX dynamics and Newton Warp cameras and movies. |
 | `newton` | `isaac_rtx` | Newton MJWarp dynamics and Isaac RTX cameras. |
-| `newton` | `newton_warp` | Newton MJWarp dynamics and Newton Warp cameras. |
+| `newton` | `newton_warp` | Kit-less Newton MJWarp dynamics and Newton Warp cameras and movies. |
 | `physx` | `ovrtx` | Kit-less OVPhysX dynamics and OVRTX cameras and movies. |
 | `newton` | `ovrtx` | Kit-less Newton MJWarp dynamics and OVRTX cameras and movies. |
 
-`isaac_rtx` and `newton_warp` retain Kit for the viewer and recording.
-`ovrtx` uses the SDK's Kit-less launch, USD asset import and native camera
-lifecycle. The `physx` physics choice selects OVPhysX for that runtime; existing
+Kit starts when active Isaac RTX cameras, movies, the default Isaac RTX viewer
+or explicit Kit launch settings need it. Headless runs without those requirements leave the renderer
+preference inactive, including `isaac_rtx`, and use the standalone physics
+runtime. LiDAR alone does not activate a camera renderer.
+
+`newton_warp` and `ovrtx` use the SDK's Kit-less launch, USD asset import and native
+camera lifecycle. The `physx` physics choice selects OVPhysX for those runtimes; existing
 PhysX scene settings are authored into USD before the engine loads it.
 Interactive OVRTX launches select the SDK's `newton_rtx` visualizer unless
-`--visualizer` explicitly selects another compatible visualizer. Kit
+`--visualizer` explicitly selects another compatible visualizer; Warp defaults
+to `newton_gl`. These interactive visualizers have not been validated here. Kit
 experiences, Kit visualizers and Kit livestreaming cannot share an OVRTX
 process and are rejected by Isaac Lab's launch validation. Kit rendering-mode
-presets and `kit_args` must be unset with OVRTX. The native visualizer owns
+presets and `kit_args` must be unset in standalone runs. The native visualizer owns
 its camera controls; Holosoma's Kit keyboard bindings apply to Kit viewers.
 Live USD body-damping randomization also requires the Kit PhysX runtime;
 detached physics does not consume those edits, so that event is rejected.
@@ -97,8 +104,8 @@ Current Warp camera integration supports pinhole projection. Use `isaac_rtx`
 or `ovrtx` for Holosoma's fisheye configurations; selecting Warp with those configurations
 is rejected rather than rendering a pinhole approximation.
 
-Logger movies use Kit/Replicator RTX with the Kit profiles and native OVRTX
-cameras with `ovrtx`. Movie cameras are declared before cloning, track the
+Logger movies use Kit/Replicator RTX with `isaac_rtx` and native cameras with
+`newton_warp` or `ovrtx`. Movie cameras are declared before cloning, track the
 selected `record_env_id`, and use the shared encoding, overlays and recording
 lifecycle. Camera capture does not integrate physics. Disable logger video
 when comparing camera renderer throughput.
@@ -107,7 +114,13 @@ The native integration matrix checks all six combinations with two G1
 environments, sparse property randomization, dynamics, actuation, contact forces,
 and independent RGB/depth geometry. Separate OVRTX cases cover movies, fisheye,
 visual-mesh LiDAR and training/checkpoint/evaluation with both physics choices.
-Newton LiDAR and training also run with the default Kit renderer. These bounded checks do
+The matrix inspects loaded shared libraries: standalone cases must have no Kit,
+and standalone Newton must have no PhysX native bindings or libraries.
+Physics-only startup cases also assert that no unused renderer is loaded and
+record launch/scene-ready timing alongside the library inventory. Native movie
+checks cover Warp as well as OVRTX. Timing is diagnostic, not a performance gate.
+Newton LiDAR and training also exercise the default renderer preference with no
+active cameras or movies, so they use standalone physics. These bounded checks do
 not establish equal policy performance or throughput across engines.
 
 ## Lab 3 options
@@ -116,8 +129,8 @@ These settings are under `--simulator.config.sim.isaaclab3.*`:
 
 | Option | Default | Effect |
 | --- | --- | --- |
-| `physics-backend` | `physx` | Select PhysX (OVPhysX with OVRTX) or Newton's MJWarp solver. |
-| `renderer` | `isaac_rtx` | Select Isaac RTX, Newton Warp or Kit-less OVRTX. |
+| `physics-backend` | `physx` | Select PhysX (OVPhysX without Kit) or Newton's MJWarp solver. |
+| `renderer` | `isaac_rtx` | Select Isaac RTX, Kit-less Newton Warp or Kit-less OVRTX; unused in physics-only runs. |
 | `use-fabric` | `True` | Use native Fabric synchronization. |
 | `create-stage-in-memory` | `False` | Author assets into the simulation's in-memory stage. |
 | `use-newton-actuators` | `True` | Use native actuator evaluation, including the PhysX host adapter; this does not select Newton physics. |

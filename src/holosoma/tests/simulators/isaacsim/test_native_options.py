@@ -30,16 +30,17 @@ def test_physics_and_camera_renderer_matrix(physics, renderer, isaacsim_backend,
 
 
 @pytest.mark.parametrize("physics", ["physx", "newton"])
-def test_ovrtx_logger_movie(physics, isaacsim_backend, run_isaacsim_harness, tmp_path):
+@pytest.mark.parametrize("renderer", ["newton_warp", "ovrtx"])
+def test_native_logger_movie(physics, renderer, isaacsim_backend, run_isaacsim_harness, tmp_path):
     if isaacsim_backend != "isaaclab3":
         pytest.skip("OVRTX requires the explicit Isaac Lab 3 profile")
-    result_file = tmp_path / "ovrtx-movie.txt"
+    result_file = tmp_path / "native-movie.txt"
     run_isaacsim_harness(
         Path(__file__).resolve().parents[1] / "scene_spawn_assert.py",
         "--physics-backend",
         physics,
         "--renderer",
-        "ovrtx",
+        renderer,
         "--num-envs",
         "2",
         "--record",
@@ -47,7 +48,27 @@ def test_ovrtx_logger_movie(physics, isaacsim_backend, run_isaacsim_harness, tmp
         "--probe-video-freshness",
         "--result-file",
         str(result_file),
-        label=f"isaaclab3/{physics}/ovrtx-movie",
+        label=f"isaaclab3/{physics}/{renderer}-movie",
+        timeout=900,
+        result_file=result_file,
+    )
+
+
+@pytest.mark.parametrize("physics", ["physx", "newton"])
+@pytest.mark.parametrize("renderer", ["isaac_rtx", "newton_warp", "ovrtx"])
+def test_physics_only_startup(physics, renderer, isaacsim_backend, run_isaacsim_harness, tmp_path):
+    if isaacsim_backend != "isaaclab3":
+        pytest.skip("standalone startup requires the explicit Isaac Lab 3 profile")
+    result_file = tmp_path / "physics-only.txt"
+    run_isaacsim_harness(
+        Path(__file__).resolve().parents[1] / "isaaclab3_startup_assert.py",
+        "--physics",
+        physics,
+        "--renderer",
+        renderer,
+        "--result-file",
+        str(result_file),
+        label=f"isaaclab3/{physics}/{renderer}/physics-only",
         timeout=900,
         result_file=result_file,
     )

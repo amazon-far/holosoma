@@ -163,7 +163,9 @@ def test_launcher_config_reaches_app_launcher_namespace(
     if backend == IsaacSimBackend.ISAACLAB3:
         assert app._app is app_sentinel
         assert len(captured_config) == 1
-        assert isinstance(captured_config[0].renderer, FakeIsaacRtxRendererCfg)
+        # This case exercises a viewer without cameras. The Kit visualizer
+        # requires Kit, but no camera renderer needs to be initialized.
+        assert captured_config[0].renderer is None
         assert vars(captured_config[0].physics) == {
             "bounce_threshold_velocity": config.simulator.config.sim.physx.bounce_threshold_velocity,
             "solver_type": config.simulator.config.sim.physx.solver_type,

@@ -6,8 +6,9 @@ upstream features proposed for later review. It follows the final
 and [2.x migration guide](https://isaac-sim.github.io/IsaacLab/v3.0.0/source/isaaclab/migrating.html),
 rather than beta dependency pins or limitations.
 The integration tests exercise all six declared physics/camera combinations,
-OVRTX movies, fisheye, visual-mesh LiDAR and training/checkpoint/evaluation
-with both physics choices, plus Newton LiDAR and training with Kit. They do not
+Warp and OVRTX movies, OVRTX fisheye, visual-mesh LiDAR and training/checkpoint/evaluation
+with both physics choices, plus physics-only startup with all renderer preferences
+and standalone Newton LiDAR and training. They do not
 establish equivalent trajectories, policy quality or throughput.
 
 ## Included in this integration
@@ -15,8 +16,9 @@ establish equivalent trajectories, policy quality or throughput.
 | Change | Holosoma behavior | Official source |
 | --- | --- | --- |
 | Explicit version selection | `simulator:isaacsim` selects Lab 2; `simulator:isaacsim3` selects Lab 3. Activation loads dependencies. CI and child harnesses receive explicit version arguments. | [Migration: backend configuration](https://isaac-sim.github.io/IsaacLab/v3.0.0/source/isaaclab/migrating.html) |
-| Physics selection | `physics_backend=physx\|newton` selects PhysX or Newton MJWarp. OVRTX selects the Kit-less OVPhysX implementation of PhysX. Other Newton solvers are outside this selection. | [Physics backends](https://isaac-sim.github.io/IsaacLab/v3.0.0/source/concepts/physics_backends.html) |
-| Camera renderer selection | `renderer=isaac_rtx\|newton_warp\|ovrtx` selects configured camera sensors independently of physics. Warp accepts pinhole projection. OVRTX uses the Kit-less launcher and native sensors for both cameras and logger movies. | [Renderers](https://isaac-sim.github.io/IsaacLab/v3.0.0/source/concepts/renderers.html) |
+| Physics selection | `physics_backend=physx\|newton` selects PhysX or Newton MJWarp. Standalone runs select the OVPhysX implementation of PhysX. Other Newton solvers are outside this selection. | [Physics backends](https://isaac-sim.github.io/IsaacLab/v3.0.0/source/concepts/physics_backends.html) |
+| Camera renderer selection | `renderer=isaac_rtx\|newton_warp\|ovrtx` selects configured camera sensors independently of physics. Warp accepts pinhole projection. Warp and OVRTX use the Kit-less launcher and native sensors for both cameras and logger movies. Physics-only runs leave the renderer inactive. | [Renderers](https://isaac-sim.github.io/IsaacLab/v3.0.0/source/concepts/renderers.html) |
+| Runtime dependencies | Runtime selection precedes SDK launcher imports. Newton standalone cases check actual loaded libraries for accidental Kit/PhysX loading; URDF conversion registers only codeless PhysX schema resources. Physics-only cases check all renderer preferences and record startup timing. | [Launch ownership](https://github.com/isaac-sim/IsaacLab/blob/v3.0.0/source/isaaclab/isaaclab/app/sim_launcher.py) |
 | Warp-native data | The adapter reads explicit `.torch` views of `ProxyArray`, preserving shared accessors and cloning only where ownership requires it. | [Proxy arrays](https://github.com/isaac-sim/IsaacLab/blob/v3.0.0/docs/source/how-to/proxy_array.rst) |
 | Quaternions and partial writes | Holosoma state stays XYZW; configuration WXYZ is converted at the native boundary. Indexed writers preserve partial reset/write semantics. | [Migration](https://isaac-sim.github.io/IsaacLab/v3.0.0/source/isaaclab/migrating.html) |
 | Native actuators | `ActuatorCollection` owns commands and telemetry. Model limits remain separate from authored solver limits. The native actuator option does not choose Newton physics. | [Final release: actuator ownership](https://github.com/isaac-sim/IsaacLab/releases/tag/v3.0.0) |

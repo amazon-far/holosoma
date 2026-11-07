@@ -33,12 +33,14 @@ def _installed_major() -> int | None:
     return 2
 
 
-def get_backend(backend: str, *, native: IsaacLab3Config | None = None) -> IsaacLabBackend:
+def get_backend(backend: str, *, native: IsaacLab3Config | None = None, rendering: bool = True) -> IsaacLabBackend:
     """Construct the explicit API family and validate the installed runtime.
 
     Selection comes from the simulator config. Installed package capabilities
     validate that choice; they never choose a backend. Each owner receives its
     own adapter and native options, without process-shared mutable state.
+    ``rendering`` includes cameras, movies, viewers and explicit Kit settings;
+    physics-only Lab 3 runs do not load their configured renderer preference.
     """
     major = _installed_major()
     name = backend
@@ -49,7 +51,7 @@ def get_backend(backend: str, *, native: IsaacLab3Config | None = None) -> Isaac
     elif name == "isaaclab3":
         from .isaaclab3 import IsaacLab3Backend
 
-        selected = IsaacLab3Backend(native)
+        selected = IsaacLab3Backend(native, rendering=rendering)
     else:
         raise ValueError(f"Unknown Isaac Sim backend {name!r}; expected 'isaaclab2' or 'isaaclab3'.")
     if major is not None and major != selected.major:
