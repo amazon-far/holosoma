@@ -30,7 +30,6 @@ from loguru import logger
 from omegaconf import DictConfig
 
 from holosoma.config_types.scene import SceneConfig
-from holosoma.config_types.sensor import CameraSensorConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
@@ -82,24 +81,9 @@ class IsaacSim(BaseSimulator):
         # populated by _load_scene_files; read in _collect_spawned_actors to classify.
         self.scene_file_static_names: set[str] = set()
 
-        # Cameras here are read out of the render the task schedules every render_interval substeps.
-        # A driving loop closes its frame on the control step's last substep, so only a
-        # render_interval dividing control_decimation puts the draw and the frame's state on the same
-        # substep; anything else pairs an image with a pose from a different one. Checked
-        # before the SimulationContext exists, so a rejected config leaves no global context behind.
-        decimation = self.simulator_config.sim.control_decimation_steps
-        render_interval = self.simulator_config.sim.render_interval_steps
-        cameras = sorted(n for n, c in self.sensor_config.items() if isinstance(c, CameraSensorConfig))
-        if cameras and decimation % render_interval:
-            raise ValueError(
-                f"render_interval ({render_interval}) must divide control_decimation ({decimation}) "
-                f"when cameras are configured ({cameras}); set it to a divisor, or to "
-                f"control_decimation to render once per control step."
-            )
-
         sim_config: SimulationCfg = SimulationCfg(
             dt=1.0 / self.simulator_config.sim.fps,
-            render_interval=self.simulator_config.sim.render_interval_steps,
+            render_interval=self.simulator_config.sim.control_decimation_steps,
             device=self.sim_device,
             physx=PhysxCfg(
                 bounce_threshold_velocity=self.simulator_config.sim.physx.bounce_threshold_velocity,
@@ -134,14 +118,6 @@ class IsaacSim(BaseSimulator):
         logger.info(
             f"\tRendering step-size   : {1.0 / self.simulator_config.sim.fps * self.simulator_config.sim.substeps}"
         )
-
-        if self.simulator_config.sim.render_interval_steps < self.simulator_config.sim.control_decimation_steps:
-            msg = (
-                f"The render interval ({self.simulator_config.sim.render_interval_steps}) is smaller than the decimation "
-                f"({self.simulator_config.sim.control_decimation_steps}). Multiple render calls will happen for each "
-                "environment step. If this is not intended, set the render interval to be equal to the decimation."
-            )
-            logger.warning(msg)
 
         scene_config: InteractiveSceneCfg = InteractiveSceneCfg(
             num_envs=self.training_config.num_envs,

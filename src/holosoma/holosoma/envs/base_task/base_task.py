@@ -452,10 +452,9 @@ class BaseTask:
             self._apply_force_in_physics_step()
             self.hooks.emit(Phase.PRE_STEP)
             self.simulator.simulate_at_each_physics_step()
-            # Count the step just taken, so with render_interval == decimation the render lands on
-            # the frame's last substep and FRAME_END consumers see the image for the published state.
-            render_due = (self._physics_step_count + 1) % sim_config.render_interval_steps == 0
-            if self.simulator.requires_step_render() and render_due:
+            # Offscreen outputs are read at FRAME_END, so they draw on the frame's last substep.
+            is_last_substep = substep == sim_config.control_decimation_steps - 1
+            if is_last_substep and self.simulator.requires_step_render():
                 self.simulator.render()
                 rendered_this_step = True
             self.hooks.emit(Phase.POST_STEP)

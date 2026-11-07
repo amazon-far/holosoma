@@ -35,16 +35,19 @@ class _LoopOverranError(AssertionError):
 
 
 class _FakeSim:
-    """Stand-in simulator that draws every ``render_interval`` substeps and records the loop's phases.
+    """Stand-in simulator that draws when rendered and records the loop's phases.
+
+    ``offscreen`` marks a backend with offscreen outputs (RTX cameras, video), so BaseTask schedules
+    its renders.
 
     A playback-style plugin samples on FRAME_BEGIN, writes on PRE_STEP and egresses the last draw on
     FRAME_END. A substep budget makes a loop that never finishes fail instead of hanging.
     """
 
-    def __init__(self, *, frames: int, render_interval: int = DECIMATION, decimation: int = DECIMATION) -> None:
+    def __init__(self, *, frames: int, decimation: int = DECIMATION, offscreen: bool = True) -> None:
         self.hooks = HookRegistry()
         self.decimation = decimation
-        self.render_interval = render_interval
+        self.offscreen = offscreen
         self.frames = frames
         self._budget = (frames + 2) * decimation
         self.substeps = 0
@@ -73,10 +76,12 @@ class _FakeSim:
         self._shutdown = True
 
     def requires_step_render(self) -> bool:
-        return False
+        return self.offscreen
 
     def render(self, sync_frame_time: bool = True) -> None:
         self.viewer_renders.append(self.substeps)
+        self._rendered = self._scene_state()
+        self.rendered_at = self.substeps
 
     def simulate_at_each_physics_step(self) -> None:
         self.substeps += 1
@@ -86,9 +91,6 @@ class _FakeSim:
                 f"(budget {self._budget}); egressed {len(self.captured)}"
             )
         self.phases.append(SUBSTEP)
-        if self.substeps % self.render_interval == 0:
-            self._rendered = self._scene_state()
-            self.rendered_at = self.substeps
 
     def _scene_state(self) -> object:
         """What a draw captures: the value PRE_STEP wrote."""
@@ -129,7 +131,6 @@ class _LoopTask(SimulationTask):
                         sim=SimpleNamespace(
                             fps=FPS,
                             control_decimation_steps=sim.decimation,
-                            render_interval_steps=sim.render_interval,
                         )
                     ),
                 ),
@@ -167,27 +168,17 @@ def _expected_phases(groups: int, decimation: int = DECIMATION) -> list[Phase | 
 # ----- frame freshness -----
 
 
-@pytest.mark.parametrize(
-    ("render_interval", "decimation", "drawn_at_egress"),
-    [
-        (1, DECIMATION, [4, 8, 12]),
-        (2, DECIMATION, [4, 8, 12]),
-        (DECIMATION, DECIMATION, [4, 8, 12]),
-        # An interval that does not divide the decimation draws before the frame's last substep.
-        (3, DECIMATION, [3, 6, 12]),
-        (1, 1, [1, 2, 3]),
-    ],
-)
-def test_each_frame_egresses_the_draw_of_its_own_control_step(
-    render_interval: int, decimation: int, drawn_at_egress: list[int]
-) -> None:
-    """FRAME_END egresses the last draw of the state written on the same control step."""
-    sim = _FakeSim(frames=3, render_interval=render_interval, decimation=decimation)
+@pytest.mark.parametrize("decimation", [DECIMATION, 1])
+def test_each_frame_egresses_the_draw_of_its_own_control_step(decimation: int) -> None:
+    """Offscreen outputs draw once per frame, on its last substep, so FRAME_END egresses that state."""
+    sim = _FakeSim(frames=3, decimation=decimation)
 
     _run(sim)
 
+    last_substeps = [decimation, 2 * decimation, 3 * decimation]
     assert sim.captured == [0, 1, 2]
-    assert sim.drawn_at_egress == drawn_at_egress
+    assert sim.viewer_renders == last_substeps
+    assert sim.drawn_at_egress == last_substeps
     assert sim.phases == _expected_phases(groups=3, decimation=decimation)
 
 
@@ -242,7 +233,7 @@ def test_a_frame_that_opens_always_closes() -> None:
 
 def test_viewer_renders_on_its_own_schedule_when_not_headless() -> None:
     """A windowed run draws the viewport every ``viewer_dt``, here on each frame's first substep."""
-    sim = _FakeSim(frames=3)
+    sim = _FakeSim(frames=3, offscreen=False)
 
     _run(sim, headless=False, viewer_dt=DECIMATION / FPS)
 
@@ -251,28 +242,11 @@ def test_viewer_renders_on_its_own_schedule_when_not_headless() -> None:
 
 def test_headless_never_renders_the_viewport() -> None:
     """Headless leaves the viewport alone even at a viewer_dt that would draw every step."""
-    sim = _FakeSim(frames=3)
+    sim = _FakeSim(frames=3, offscreen=False)
 
     _run(sim, headless=True, viewer_dt=1.0 / FPS)
 
     assert sim.viewer_renders == []
-
-
-class _OffscreenSim(_FakeSim):
-    """A backend with offscreen outputs (RTX cameras, video), so BaseTask schedules its renders."""
-
-    def requires_step_render(self) -> bool:
-        return True
-
-
-@pytest.mark.parametrize("render_interval", [1, 2, DECIMATION])
-def test_scheduled_renders_land_on_the_last_substep_of_each_interval(render_interval: int) -> None:
-    """BaseTask renders offscreen outputs after every ``render_interval``-th substep (1-based)."""
-    sim = _OffscreenSim(frames=3, render_interval=render_interval)
-
-    _run(sim)
-
-    assert sim.viewer_renders == list(range(render_interval, 3 * DECIMATION + 1, render_interval))
 
 
 # ----- integration: the real playback plugin driven by the real loop -----
@@ -313,7 +287,7 @@ class _PlaybackSim(_FakeSim):
     """``_FakeSim`` plus the surface MotionPlaybackPlugin writes through; a draw captures ``joint0``."""
 
     def __init__(self, *, decimation: int, budget_frames: int) -> None:
-        super().__init__(frames=budget_frames, render_interval=decimation, decimation=decimation)
+        super().__init__(frames=budget_frames, decimation=decimation)
         self.num_envs = 1
         self.num_dof = 2
         self.sim_device = "cpu"
@@ -321,11 +295,7 @@ class _PlaybackSim(_FakeSim):
         self.dof_vel = torch.zeros(1, self.num_dof)
         self.robot_root_states = torch.zeros(1, 13)
         self.scene = EnvOriginsScene(torch.zeros(1, 3), self.sim_device)
-        self.simulator_config = SimpleNamespace(
-            sim=SimpleNamespace(
-                fps=FPS, control_decimation_steps=self.decimation, render_interval_steps=self.render_interval
-            )
-        )
+        self.simulator_config = SimpleNamespace(sim=SimpleNamespace(fps=FPS, control_decimation_steps=self.decimation))
 
     @property
     def shutdown_requested(self) -> bool:
