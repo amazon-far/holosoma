@@ -94,7 +94,7 @@ Warp cameras trade RTX lighting and material fidelity for a simpler rendering
 path; the adapter maps their zero-valued depth misses to infinity before applying
 Holosoma's shared depth policy.
 Current Warp camera integration supports pinhole projection. Use `isaac_rtx`
-for Holosoma's fisheye configurations; selecting Warp with those configurations
+or `ovrtx` for Holosoma's fisheye configurations; selecting Warp with those configurations
 is rejected rather than rendering a pinhole approximation.
 
 Logger movies use Kit/Replicator RTX with the Kit profiles and native OVRTX
@@ -105,8 +105,9 @@ when comparing camera renderer throughput.
 
 The native integration matrix checks all six combinations with two G1
 environments, sparse property randomization, dynamics, actuation, contact forces,
-and independent RGB/depth geometry. Separate Newton cases cover visual-mesh
-LiDAR and the training/checkpoint/evaluation workflow. These bounded checks do
+and independent RGB/depth geometry. Separate OVRTX cases cover movies, fisheye,
+visual-mesh LiDAR and training/checkpoint/evaluation with both physics choices.
+Newton LiDAR and training also run with the default Kit renderer. These bounded checks do
 not establish equal policy performance or throughput across engines.
 
 ## Lab 3 options

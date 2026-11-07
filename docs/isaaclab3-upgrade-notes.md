@@ -6,7 +6,8 @@ upstream features proposed for later review. It follows the final
 and [2.x migration guide](https://isaac-sim.github.io/IsaacLab/v3.0.0/source/isaaclab/migrating.html),
 rather than beta dependency pins or limitations.
 The integration tests exercise all six declared physics/camera combinations,
-plus Newton visual-mesh LiDAR and training/checkpoint/evaluation. They do not
+OVRTX movies, fisheye, visual-mesh LiDAR and training/checkpoint/evaluation
+with both physics choices, plus Newton LiDAR and training with Kit. They do not
 establish equivalent trajectories, policy quality or throughput.
 
 ## Included in this integration
@@ -45,7 +46,7 @@ addresses ordering and tuning differences.
 | Batched image processing, frame history and PPISP | Fused layout/normalization, explicit frame stacks and HDR camera modeling. | Lab manager observation terms are not Holosoma's pipeline. Preserve shapes, channel order and ownership; ISP modeling adds a new fidelity/dependency surface. | [GA camera migration](https://github.com/isaac-sim/IsaacLab/releases/tag/v3.0.0), [PPISP package](https://github.com/isaac-sim/IsaacLab/tree/v3.0.0/source/isaaclab_ppisp) |
 | Warp fisheye mapping | Extend cheaper camera rendering to supported distorted projections. | Upstream supports OpenCV fisheye, while Holosoma currently authors USD polynomial fisheye settings. Those require an explicit distortion mapping; the current Warp path rejects them. | [Newton Warp renderer](https://github.com/isaac-sim/IsaacLab/blob/v3.0.0/source/isaaclab_newton/isaaclab_newton/renderers/newton_warp_renderer.py) |
 | Additional Newton solvers and deformables | VBD/MPM, particles, cables, coupled solvers, XPBD/Featherstone and experimental Kamino. | Not drop-in rigid humanoid solver modes. Require new asset/contact/material/task contracts and solver-specific capability tests. Stricter determinism is supported only for specific configurations. | [Newton physics configuration](https://github.com/isaac-sim/IsaacLab/blob/v3.0.0/source/isaaclab_newton/isaaclab_newton/physics/newton_manager_cfg.py) |
-| Standalone visualizers and recording | Newton GL/RTX, Viser and Rerun for lighter inspection and tooling. | Visualizer selection is independent of camera rendering. Replacing Holosoma's Kit viewer or movie path requires camera controls, capture and shutdown coverage. | [GA release](https://github.com/isaac-sim/IsaacLab/releases/tag/v3.0.0) |
+| Additional visualizers and recording tools | Newton GL, Viser and Rerun for lighter inspection and tooling. | OVRTX already uses native cameras for logger movies and defaults to Newton RTX for interactive viewing. Other visualizers need their own camera controls, capture and shutdown coverage. | [GA release](https://github.com/isaac-sim/IsaacLab/releases/tag/v3.0.0) |
 | New robot assets / lighter collision variants | Multiphysics assets and fewer collision primitives can reduce solver work. | Asset dynamics, self-collision, body order and checkpoint behavior can change. Do not silently substitute these for configured G1/T1 assets. | [Assets changelog](https://github.com/isaac-sim/IsaacLab/blob/v3.0.0/source/isaaclab_assets/docs/CHANGELOG.rst) |
 | Teleop, system identification, ROS2 Control and deployment tools | MCAP/CloudXR workflows, tuning, external control and LEAPP/ONNX export. | New products and runtime dependencies rather than requirements of this migration. ROS/streaming availability needs its own validation. Holosoma retains its trainers and inference path. | [Sim 6.1](https://docs.isaacsim.omniverse.nvidia.com/6.1.0/overview/release_notes.html), [Sim 6.2](https://docs.isaacsim.omniverse.nvidia.com/6.2.0/overview/release_notes.html), [Lab GA](https://github.com/isaac-sim/IsaacLab/releases/tag/v3.0.0) |
 
