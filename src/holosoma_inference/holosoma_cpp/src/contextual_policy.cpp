@@ -31,13 +31,16 @@ void ContextualPolicy::resolve_gains(ModelSlot& slot) const {
   // and keeps explicit runtime gains authoritative.
   slot.kp = cores_.back()->kp();
   slot.kd = cores_.back()->kd();
-  slot.gain_source = config_.robot.motor_kp ? "config (override)" : "ONNX metadata";
+  slot.gain_source = cores_.back()->gains_from_model() ? "ONNX metadata" : "config (override)";
 }
 
 contextual::Policy& ContextualPolicy::core() { return *cores_.at(static_cast<size_t>(active_index_)); }
 const contextual::Policy& ContextualPolicy::core() const { return *cores_.at(static_cast<size_t>(active_index_)); }
 
 void ContextualPolicy::on_policy_switched() {
+  // The stance targets are offsets from: the robot's for a primitive policy,
+  // the model's own for one that declares it.
+  default_dof_angles_ = core().default_dof_pos();
   core().Reset();
   input_.reset();
   allow_climb_at_stand_ = allow_climb_continuation_ = false;

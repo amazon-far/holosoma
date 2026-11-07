@@ -13,6 +13,7 @@ latency by delaying what it publishes.
 
 from __future__ import annotations
 
+import math
 import time
 
 import numpy as np
@@ -23,10 +24,19 @@ HEIGHT, WIDTH = 58, 87
 # The range the policy was trained against; outside it the encoder has seen nothing.
 NEAR_M, FAR_M = 0.3, 2.0
 DEPTH_TOPIC = "depth/depth_registered"
+# The plane a pixel with no reading takes. "far" is what the primitive models were trained on; a
+# continuous-velocity export declares its own in its ONNX metadata.
+INVALID_FILL = "far"
+INVALID_FILLS = ("far", "near")
+CONTRACT_MISMATCH = "depth preprocessor does not match the model's depth contract"
 
 
-def preprocess(depth_m, near_m: float = NEAR_M, far_m: float = FAR_M) -> np.ndarray:
-    """Resize a metric depth frame to 58x87 and normalise it to [-0.5, +0.5]."""
+def preprocess(depth_m, near_m: float = NEAR_M, far_m: float = FAR_M, invalid_fill: str = INVALID_FILL) -> np.ndarray:
+    """Resize a metric depth frame to 58x87 and normalise it to [-0.5, +0.5].
+
+    Pixels with no reading (NaN, or zero or negative depth) take the ``invalid_fill`` plane;
+    ``-inf`` (too close) reads as near and ``+inf`` (too far) as far whatever the fill.
+    """
     frame = np.asarray(depth_m, dtype=np.float32)
     if frame.ndim == 3 and frame.shape[-1] == 1:
         frame = frame[..., 0]
@@ -34,14 +44,19 @@ def preprocess(depth_m, near_m: float = NEAR_M, far_m: float = FAR_M) -> np.ndar
         raise ValueError(f"expected a 2-D depth frame, got shape {frame.shape}")
     if not far_m > near_m:
         raise ValueError(f"far_m must exceed near_m, got {near_m} and {far_m}")
+    if invalid_fill not in INVALID_FILLS:
+        raise ValueError(f"invalid_fill must be one of {INVALID_FILLS}, got {invalid_fill!r}")
     frame = frame.astype(np.float32, copy=True)
-    # Invalid pixels mean "no return", which is far, not near. The ZED reports them as non-finite
-    # *and* as zero or negative, and clipping a zero would read as an obstacle at the near plane.
-    # Training never saw either: a missed ray is written as 1000 m and clamps to far.
+    # The ZED reports a pixel with no reading as NaN *and* as zero or negative, and clipping a
+    # zero would read as an obstacle at the near plane whatever the model was trained on, so both
+    # take the fill. For the primitive models that is far: a missed ray was written as 1000 m in
+    # training and clamps to far. A continuous-velocity export trained with invalid pixels at near
+    # declares so, and the runner refuses a preprocessor that disagrees (check_depth_contract).
+    fill = far_m if invalid_fill == "far" else near_m
     frame[np.isneginf(frame)] = near_m
     frame[np.isposinf(frame)] = far_m
-    frame[np.isnan(frame)] = far_m
-    frame[frame <= 0.0] = far_m
+    frame[np.isnan(frame)] = fill
+    frame[frame <= 0.0] = fill
     # Clip before resizing as well as after, so out-of-range pixels cannot bleed into their
     # neighbours through the interpolation kernel.
     frame = np.clip(frame, near_m, far_m)
@@ -51,6 +66,26 @@ def preprocess(depth_m, near_m: float = NEAR_M, far_m: float = FAR_M) -> np.ndar
         # depth this smooth, and scipy is a declared dependency where OpenCV is not.
         frame = ndimage.zoom(frame, zoom, order=3, mode="nearest")
     return (np.clip(frame, near_m, far_m) - near_m) / (far_m - near_m) - 0.5
+
+
+def check_depth_contract(contract, *, near_m: float, far_m: float, invalid_fill: str) -> None:
+    """Refuse a preprocessor whose clip range or invalid fill differs from the model's contract.
+
+    ``contract`` is the loaded model's declared depth preprocessing (``near_m``, ``far_m``,
+    ``invalid_fill``), or None for a model that declares none, such as the primitive exports;
+    with None the preprocessor's own settings stand.
+    """
+    if contract is None:
+        return
+    mismatches = []
+    for name, ours in (("near_m", near_m), ("far_m", far_m)):
+        theirs = float(contract[name])
+        if not math.isclose(ours, theirs, rel_tol=0.0, abs_tol=1e-9):
+            mismatches.append(f"{name} is {ours:g} but the model declares {theirs:g}")
+    if invalid_fill != contract["invalid_fill"]:
+        mismatches.append(f"invalid_fill is {invalid_fill!r} but the model declares {contract['invalid_fill']!r}")
+    if mismatches:
+        raise ValueError(f"{CONTRACT_MISMATCH}: " + "; ".join(mismatches))
 
 
 def frame_from_image(msg) -> np.ndarray:
@@ -73,7 +108,15 @@ class DepthConsumer:
     extra, and ``preprocess`` is useful without it.
     """
 
-    def __init__(self, policy, topic: str = DEPTH_TOPIC, *, near_m: float = NEAR_M, far_m: float = FAR_M):
+    def __init__(
+        self,
+        policy,
+        topic: str = DEPTH_TOPIC,
+        *,
+        near_m: float = NEAR_M,
+        far_m: float = FAR_M,
+        invalid_fill: str = INVALID_FILL,
+    ):
         import rclpy
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.node import Node
@@ -81,7 +124,9 @@ class DepthConsumer:
         from sensor_msgs.msg import Image
 
         self._policy = policy
-        self._near_m, self._far_m = near_m, far_m
+        if invalid_fill not in INVALID_FILLS:
+            raise ValueError(f"invalid_fill must be one of {INVALID_FILLS}, got {invalid_fill!r}")
+        self._near_m, self._far_m, self._invalid_fill = near_m, far_m, invalid_fill
         self.frames = 0
         self.rejected = 0
         if not rclpy.ok():
@@ -101,7 +146,7 @@ class DepthConsumer:
         self._topic = topic
 
     def _on_depth(self, msg) -> None:
-        frame = preprocess(frame_from_image(msg), self._near_m, self._far_m)
+        frame = preprocess(frame_from_image(msg), self._near_m, self._far_m, self._invalid_fill)
         if self._policy.set_depth(frame, stamp_seconds(msg)):
             self.frames += 1
         else:

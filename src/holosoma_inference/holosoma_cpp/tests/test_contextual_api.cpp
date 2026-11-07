@@ -13,6 +13,7 @@
 namespace {
 using namespace holosoma;
 const std::filesystem::path fixtures(HOLOSOMA_CONTEXTUAL_FIXTURE_DIR);
+using Chain = std::vector<std::pair<std::string, std::string>>;
 
 InferenceConfig config(const char* model = "contextual.onnx") {
   InferenceConfig c;
@@ -27,7 +28,7 @@ InferenceConfig config(const char* model = "contextual.onnx") {
   c.contextual->depth_height = 2;
   c.contextual->depth_width = 3;
   // The fixture robot has no waist; gravity-frame tests set their own chain.
-  c.contextual->imu_to_obs_joint_chain = {};
+  c.contextual->imu_to_obs_joint_chain = Chain{};
   c.runtime.intra_op_threads = 2;
   return c;
 }
@@ -46,6 +47,12 @@ TEST(ContextualApi, DepthFrameSizingDoesNotOverflowSignedInt) {
   spec.height = spec.width = 50000;
   ASSERT_GT(2500000000ull, std::numeric_limits<int>::max());
   EXPECT_EQ(spec.depth_frame_size(), 2500000000ull);
+}
+
+TEST(ContextualApi, APrimitiveExportDeclaresNoDepthContract) {
+  // The transport's own preprocessing (FAR-plane invalid fill) stays in charge.
+  Policy policy(config());
+  EXPECT_FALSE(core(policy).depth_contract().has_value());
 }
 
 TEST(ContextualApi, DepthFramesAreSizedAndValidatedThroughPublicStep) {
@@ -109,6 +116,42 @@ TEST(ContextualApi, ClimbSecondPassDoesNotAdvanceDepthHistoryTwice) {
   policy.step(state(), input);
   EXPECT_EQ(core(policy).effective_command(), 0);
   EXPECT_FALSE(core(policy).climbing());
+}
+
+TEST(ContextualApi, DzLatchesThroughStepIsReadableAndClearsOnReset) {
+  // A controller that forwards navigation dz reads it back through dz() and relies on
+  // reset() to drop it; an unset dz leaves the latched value alone.
+  Policy policy(config());
+  ASSERT_TRUE(core(policy).has_climb_head());
+  EXPECT_FALSE(core(policy).dz());
+  ContextualInput input;
+  input.monotonic_time = 1;
+  input.dz = true;
+  policy.step(state(), input);
+  EXPECT_TRUE(core(policy).dz());
+  input.monotonic_time = 2;
+  input.dz.reset();
+  policy.step(state(), input);
+  EXPECT_TRUE(core(policy).dz());
+  input.monotonic_time = 3;
+  input.dz = false;
+  policy.step(state(), input);
+  EXPECT_FALSE(core(policy).dz());
+  input.monotonic_time = 4;
+  input.dz = true;
+  policy.step(state(), input);
+  ASSERT_TRUE(core(policy).dz());
+  policy.reset();
+  EXPECT_FALSE(core(policy).dz());
+
+  auto c = config("no-head.onnx");
+  c.contextual->require_climb_head = false;
+  Policy headless(c);
+  EXPECT_FALSE(core(headless).has_climb_head());
+  input.monotonic_time = 1;
+  input.dz = false;
+  EXPECT_NO_THROW(headless.step(state(), input));
+  EXPECT_FALSE(core(headless).dz());
 }
 
 TEST(ContextualApi, RequiresFreshTypedInputAndKeepsInstancesIndependent) {
@@ -221,7 +264,7 @@ std::array<double, 4> mul(const std::array<double, 4>& a, const std::array<doubl
 
 TEST(ContextualApi, OrientationAndCorrectedGravityReachTheModelInOneFrame) {
   auto c = config();
-  c.contextual->imu_to_obs_joint_chain = {{"hip", "z"}, {"knee", "x"}, {"ankle", "y"}};
+  c.contextual->imu_to_obs_joint_chain = Chain{{"hip", "z"}, {"knee", "x"}, {"ankle", "y"}};
   Policy policy(c);
   auto s = state();
   s.dof_pos = {.4, -.3, .25};
@@ -254,7 +297,7 @@ TEST(ContextualApi, OrientationAndCorrectedGravityReachTheModelInOneFrame) {
   }
 
   // An empty chain keeps IMU-frame gravity for both sources.
-  c.contextual->imu_to_obs_joint_chain = {};
+  c.contextual->imu_to_obs_joint_chain = Chain{};
   Policy imu_frame(c);
   imu_frame.step(s, ContextualInput{});
   for (int i = 0; i < 3; ++i) EXPECT_NEAR(core(imu_frame).observation()[i], imu[i], 1e-6) << i;
@@ -266,9 +309,9 @@ TEST(ContextualApi, ImuToObsJointChainMustNameRuntimeJoints) {
   c.contextual->depth_height = 2;
   c.contextual->depth_width = 3;
   EXPECT_THROW(Policy{c}, std::invalid_argument);
-  c.contextual->imu_to_obs_joint_chain = {{"hip", "w"}};
+  c.contextual->imu_to_obs_joint_chain = Chain{{"hip", "w"}};
   EXPECT_THROW(Policy{c}, std::invalid_argument);
-  c.contextual->imu_to_obs_joint_chain = {{"hip", "z"}};
+  c.contextual->imu_to_obs_joint_chain = Chain{{"hip", "z"}};
   EXPECT_NO_THROW(Policy{c});
 }
 

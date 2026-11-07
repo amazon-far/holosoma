@@ -6,10 +6,12 @@ import numpy as np
 import pytest
 
 from holosoma_inference.depth import (
+    CONTRACT_MISMATCH,
     FAR_M,
     HEIGHT,
     NEAR_M,
     WIDTH,
+    check_depth_contract,
     frame_from_image,
     preprocess,
     stamp_seconds,
@@ -110,3 +112,49 @@ def test_zero_and_negative_read_as_far_not_near():
 def test_accepts_a_trailing_singleton_channel():
     out = preprocess(np.full((63, 112, 1), 1.0, np.float32))
     assert out.shape == (HEIGHT, WIDTH)
+
+
+@pytest.mark.parametrize(("fill", "expected"), [("far", +0.5), ("near", -0.5)])
+def test_pixels_with_no_reading_take_the_configured_fill(fill, expected):
+    """NaN and non-positive depth take the fill plane; -inf/+inf stay near/far under either fill."""
+    frame = np.full((HEIGHT, WIDTH), 1.0, np.float32)
+    frame[0, 0], frame[0, 1], frame[0, 2] = np.nan, 0.0, -3.0
+    frame[1, 0], frame[1, 1] = -np.inf, np.inf
+    out = preprocess(frame, invalid_fill=fill)
+    assert out[0, :3] == pytest.approx([expected] * 3)
+    assert out[1, 0] == pytest.approx(-0.5)
+    assert out[1, 1] == pytest.approx(+0.5)
+
+
+def test_the_default_fill_is_the_far_plane_the_primitive_models_trained_on():
+    frame = np.full((HEIGHT, WIDTH), 1.0, np.float32)
+    frame[0, 0] = np.nan
+    np.testing.assert_array_equal(preprocess(frame), preprocess(frame, invalid_fill="far"))
+    assert preprocess(frame)[0, 0] == pytest.approx(+0.5)
+
+
+def test_rejects_an_unknown_fill():
+    with pytest.raises(ValueError, match="invalid_fill"):
+        preprocess(np.ones((HEIGHT, WIDTH), np.float32), invalid_fill="zero")
+
+
+def test_a_model_without_a_depth_contract_accepts_any_preprocessor():
+    check_depth_contract(None, near_m=NEAR_M, far_m=FAR_M, invalid_fill="far")
+    check_depth_contract(None, near_m=0.1, far_m=5.0, invalid_fill="near")
+
+
+@pytest.mark.parametrize(
+    ("ours", "message"),
+    [
+        ({"invalid_fill": "far"}, "invalid_fill is 'far' but the model declares 'near'"),
+        ({"near_m": 0.1}, "near_m is 0.1 but the model declares 0.3"),
+        ({"far_m": 3.0}, "far_m is 3 but the model declares 2"),
+    ],
+)
+def test_a_declared_contract_refuses_each_mismatched_setting(ours, message):
+    contract = {"near_m": 0.3, "far_m": 2.0, "invalid_fill": "near"}
+    settings = {"near_m": 0.3, "far_m": 2.0, "invalid_fill": "near"}
+    check_depth_contract(contract, **settings)
+    with pytest.raises(ValueError, match=CONTRACT_MISMATCH) as refused:
+        check_depth_contract(contract, **{**settings, **ours})
+    assert message in str(refused.value)

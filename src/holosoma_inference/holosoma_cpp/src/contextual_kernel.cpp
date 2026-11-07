@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <deque>
 #include <map>
 #include <nlohmann/json.hpp>
 #include <numeric>
@@ -9,11 +10,56 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "contextual_family.hpp"
 #include "holosoma_cpp/action_clip.hpp"
 
 namespace holosoma::contextual {
+namespace detail {
+Json Metadata(const OnnxModel &model) {
+  Json metadata = Json::object();
+  for (const auto &[key, value] : model.metadata()) {
+    auto parsed = Json::parse(value, nullptr, false);
+    metadata[key] = parsed.is_discarded() ? Json(value) : parsed;
+  }
+  return metadata;
+}
+std::vector<double> Numbers(const Json &v) {
+  if (!v.is_array()) return {v.get<double>()};
+  std::vector<double> values;
+  for (const auto &item : v) {
+    auto flattened = Numbers(item);
+    values.insert(values.end(), flattened.begin(), flattened.end());
+  }
+  return values;
+}
+std::vector<std::string> JointNames(const Json &value) {
+  if (!value.is_string()) return value.get<std::vector<std::string>>();
+  std::vector<std::string> names;
+  std::stringstream stream(value.get<std::string>());
+  std::string item;
+  while (std::getline(stream, item, ','))
+    if (!item.empty()) names.push_back(item);
+  return names;
+}
+void JointPermutation(const std::vector<std::string> &names, const std::vector<std::string> &runtime,
+                      std::vector<int> &real_to_model, std::vector<int> &model_to_real) {
+  const size_t n = runtime.size();
+  const std::set<std::string> unique(names.begin(), names.end());
+  if (names.size() != n || unique.size() != n || unique != std::set<std::string>(runtime.begin(), runtime.end()))
+    throw std::runtime_error("must name every runtime joint exactly once");
+  real_to_model.clear();
+  model_to_real.assign(n, 0);
+  for (size_t i = 0; i < n; ++i) {
+    const int real = static_cast<int>(std::find(runtime.begin(), runtime.end(), names[i]) - runtime.begin());
+    real_to_model.push_back(real);
+    model_to_real[static_cast<size_t>(real)] = static_cast<int>(i);
+  }
+}
+}  // namespace detail
+
 namespace {
-using Json = nlohmann::json;
+using detail::Finite;
+using detail::Json;
 const std::array<std::map<std::string, int>, 3> kCodes{{
     {{"stand", 0},
      {"forward", 1},
@@ -27,11 +73,6 @@ const std::array<std::map<std::string, int>, 3> kCodes{{
     {{"stand", 0}, {"forward", 6}, {"left_45", 7}, {"left_90", 8}, {"right_45", 9}, {"right_90", 10}, {"back", 11}},
     {{"stand", 0}, {"forward", 12}, {"left_45", 13}, {"left_90", 13}, {"right_45", 14}, {"right_90", 14}, {"back", 11}},
 }};
-template <class T>
-void Finite(const T &values, const char *name) {
-  if (!std::all_of(values.begin(), values.end(), [](auto x) { return std::isfinite(x); }))
-    throw std::runtime_error(std::string(name) + " contains non-finite values");
-}
 std::string Simple(double forward, double strafe, double turn) {
   if (strafe == 0 && forward == 0) return turn < 0 ? "turn_left" : turn > 0 ? "turn_right" : "stand";
   if (std::abs(forward) >= std::abs(strafe)) {
@@ -49,25 +90,148 @@ std::array<double, 3> RotateInverse(const std::array<double, 4> &q, const std::a
   const auto r = Multiply(Multiply({q[0], -q[1], -q[2], -q[3]}, {0, v[0], v[1], v[2]}), q);
   return {r[1], r[2], r[3]};
 }
-std::vector<double> Vector(const Json &v) {
-  if (!v.is_array()) return {v.get<double>()};
-  std::vector<double> values;
-  for (const auto &item : v) {
-    auto flattened = Vector(item);
-    values.insert(values.end(), flattened.begin(), flattened.end());
-  }
-  return values;
-}
+const std::vector<std::pair<std::string, std::string>> kG1WaistChain{
+    {"waist_yaw_joint", "z"}, {"waist_roll_joint", "x"}, {"waist_pitch_joint", "y"}};
 }  // namespace
 
-Policy::Policy(std::shared_ptr<OnnxModel> model, Spec spec, Options options)
-    : spec_(std::move(spec)), options_(std::move(options)), model_(std::move(model)) {
-  if (!model_) throw std::invalid_argument("contextual model is required");
+namespace detail {
+Chain ResolveChain(const std::vector<std::pair<std::string, std::string>> &chain,
+                   const std::vector<std::string> &joints) {
+  Chain resolved;
+  for (const auto &[name, axis] : chain) {
+    const auto found = std::find(joints.begin(), joints.end(), name);
+    if (found == joints.end())
+      throw std::invalid_argument("imu_to_obs_joint_chain names " + name +
+                                  ", which is not a runtime joint; set the chain for this robot, or [] for IMU-frame "
+                                  "gravity");
+    const int component = axis == "x" ? 1 : axis == "y" ? 2 : axis == "z" ? 3 : 0;
+    if (!component) throw std::invalid_argument("imu_to_obs_joint_chain axis for " + name + " must be x, y or z");
+    resolved.emplace_back(static_cast<size_t>(found - joints.begin()), component);
+  }
+  return resolved;
+}
+void CheckState(const State &state, size_t n) {
+  if (state.q.size() != n || state.dq.size() != n) throw std::invalid_argument("state joint count mismatch");
+  Finite(state.q, "q");
+  Finite(state.dq, "dq");
+  Finite(state.omega, "omega");
+  Finite(state.quat, "orientation");
+  if (state.gravity) Finite(*state.gravity, "gravity");
+  // An IMU that reports no orientation is a fault, never "upright".
+  const double norm = std::sqrt(std::inner_product(state.quat.begin(), state.quat.end(), state.quat.begin(), 0.0));
+  if (!(norm >= 1e-8)) throw std::invalid_argument("orientation must be nonzero");
+}
+std::array<double, 3> ObservationGravity(const State &state, bool upright, const Chain &chain_joints) {
+  std::array<double, 3> gravity{0, 0, -1};
+  if (upright) return gravity;
+  // Gravity in the IMU body frame, from the caller or from the orientation.
+  if (state.gravity)
+    gravity = *state.gravity;
+  else {
+    const double norm = std::sqrt(std::inner_product(state.quat.begin(), state.quat.end(), state.quat.begin(), 0.0));
+    auto quat = state.quat;
+    for (auto &v : quat) v /= norm;
+    gravity = RotateInverse(quat, {0, 0, -1});
+  }
+  // Then from the IMU frame into the observation frame through imu_to_obs_joint_chain.
+  std::array<double, 4> chain{1, 0, 0, 0};
+  for (const auto &[joint, component] : chain_joints) {
+    const double half = state.q[joint] * .5;
+    std::array<double, 4> rotation{std::cos(half), 0, 0, 0};
+    rotation[component] = std::sin(half);
+    chain = Multiply(chain, rotation);
+  }
+  return RotateInverse(chain, gravity);
+}
+}  // namespace detail
+
+namespace {
+using detail::Chain;
+
+// A policy trained on the 15 one-hot primitive commands, reached from a
+// velocity through a discretizer, with an optional climb head.
+class PrimitiveFamily final : public Family {
+ public:
+  PrimitiveFamily(std::shared_ptr<OnnxModel> model, Spec spec, Options options);
+  void Reset() override;
+  void SetSpeed(int speed) override;
+  void SetCommand(int index) override;
+  void SetFixedArm(int side) override;
+  void SetDz(bool enabled) override;
+  void SetClimbAtStandAllowed(bool allowed, bool continuation) override;
+  int SetVelocity(double vx, double vy, double wz, double deadzone) override;
+  void RequestKey(const std::string &key, double now) override;
+  bool UpdateTransition(double now) override;
+  void CancelTransition() override;
+  std::vector<float> Observation(const State &state) const override;
+  std::vector<double> Target(const State &state, const std::optional<std::vector<float>> &depth, double now) override;
+
+  const std::vector<double> &default_dof_pos() const override { return spec_.defaults; }
+  const std::vector<double> &kp() const override { return kp_; }
+  const std::vector<double> &kd() const override { return kd_; }
+  bool gains_from_model() const override { return !spec_.kp; }
+  const std::vector<int> &real_to_model() const override { return real_to_model_; }
+  const std::vector<int> &model_to_real() const override { return model_to_real_; }
+  const std::vector<float> &observation() const override { return obs_; }
+  const std::vector<float> &depth() const override { return depth_; }
+  const std::vector<int64_t> &depth_shape() const override { return depth_shape_; }
+  // Primitive exports declare no depth preprocessing; the transport's own applies.
+  std::optional<DepthContract> depth_contract() const override { return std::nullopt; }
+  const std::vector<float> &action() const override { return action_; }
+  const std::vector<float> &scaled() const override { return scaled_; }
+  bool has_climb_head() const override { return climb_output_.has_value(); }
+  bool dz() const override { return dz_; }
+  bool climbing() const override { return climbing_; }
+  float climb_pred() const override { return climb_pred_; }
+  int active_command() const override { return command_; }
+  int effective_command() const override { return climbing_ ? 14 : command_; }
+  int fixed_arm() const override { return fixed_arm_; }
+  int speed() const override { return speed_; }
+  int calls() const override { return calls_; }
+  const std::string &key() const override { return key_; }
+  std::optional<int> pending() const override { return pending_; }
+  double release_time() const override { return release_time_; }
+
+ private:
+  void ResolveClimb();
+  bool StandBlocked() const;
+  bool StandHeld() const;
+  bool ProbeClimb() const;
+  void ApplyFixedArm();
+  int CommandCode(const std::string &name) const;
+  std::string VelocityName(double vx, double vy, double wz, double deadzone) const;
+  void Run();
+  Spec spec_;
+  Options options_;
+  std::string discretizer_;
+  std::shared_ptr<OnnxModel> model_;
+  std::vector<int64_t> depth_shape_;
+  std::optional<size_t> climb_output_;
+  std::vector<int> real_to_model_, model_to_real_;
+  std::vector<double> kp_, kd_, scale_;
+  std::vector<float> command_vector_, obs_, depth_, action_, scaled_;
+  std::deque<std::vector<float>> frames_;
+  int history_ = 0, command_ = 0, speed_ = 0, fixed_arm_ = 0, calls_ = 0;
+  bool dz_ = false, climbing_ = false;
+  bool climb_at_stand_allowed_ = false, climb_continuation_ = false;
+  float climb_pred_ = 0;
+  // Whether climb_pred_ was read with column 14 set (gated entry needs it).
+  bool pred_under_climb_ = false;
+  std::string key_ = "z";
+  std::optional<int> pending_;
+  double release_time_ = 0;
+  // Resolved imu_to_obs_joint_chain: (runtime joint index, quaternion component 1..3).
+  Chain imu_to_obs_chain_;
+};
+
+PrimitiveFamily::PrimitiveFamily(std::shared_ptr<OnnxModel> model, Spec spec, Options options)
+    : spec_(std::move(spec)),
+      options_(std::move(options)),
+      discretizer_(*options_.discretizer),
+      model_(std::move(model)) {
   const size_t n = spec_.joints.size();
-  if (!n || spec_.defaults.size() != n || spec_.command_dim < 15 || spec_.height <= 0 || spec_.width <= 0)
-    throw std::invalid_argument("invalid contextual policy spec");
-  Finite(spec_.defaults, "default positions");
-  if (options_.discretizer != "simple" && options_.discretizer != "nearest_primitive")
+  if (spec_.command_dim < 15) throw std::invalid_argument("invalid contextual policy spec");
+  if (discretizer_ != "simple" && discretizer_ != "nearest_primitive")
     throw std::invalid_argument("unknown velocity discretizer");
   if (options_.climb_enter != "dz_or_pred" && options_.climb_enter != "dz_and_pred" &&
       options_.climb_enter != "dz_only")
@@ -77,11 +241,10 @@ Policy::Policy(std::shared_ptr<OnnxModel> model, Spec spec, Options options)
   // Entering must satisfy staying, or the gait flips on every resolve.
   if (options_.climb_enter != "dz_and_pred" && options_.climb_exit != "both_off")
     throw std::invalid_argument("climb_enter " + options_.climb_enter + " needs climb_exit both_off");
-  if (options_.discretizer != "simple" &&
-      (!std::isfinite(options_.yaw_request_gain) || options_.yaw_request_gain <= 0 ||
-       !std::isfinite(options_.switch_margin) || options_.switch_margin < 0))
+  if (discretizer_ != "simple" && (!std::isfinite(options_.yaw_request_gain) || options_.yaw_request_gain <= 0 ||
+                                   !std::isfinite(options_.switch_margin) || options_.switch_margin < 0))
     throw std::invalid_argument("invalid nearest-primitive parameters");
-  if (options_.discretizer == "nearest_primitive") {
+  if (discretizer_ == "nearest_primitive") {
     for (const auto *name : {"stand", "forward", "left_45", "right_45", "turn_left", "turn_right"}) {
       const auto found = options_.velocity_primitives.find(name);
       if (found == options_.velocity_primitives.end() || found->second.size() != 2)
@@ -94,16 +257,11 @@ Policy::Policy(std::shared_ptr<OnnxModel> model, Spec spec, Options options)
         (!std::isfinite(*options_.in_place_yaw_threshold) || *options_.in_place_yaw_threshold < 0))
       throw std::invalid_argument("invalid in-place yaw threshold");
   }
-  for (const auto &[name, axis] : options_.imu_to_obs_joint_chain) {
-    const auto found = std::find(spec_.joints.begin(), spec_.joints.end(), name);
-    if (found == spec_.joints.end())
-      throw std::invalid_argument("imu_to_obs_joint_chain names " + name +
-                                  ", which is not a runtime joint; set the chain for this robot, or [] for IMU-frame "
-                                  "gravity");
-    const int component = axis == "x" ? 1 : axis == "y" ? 2 : axis == "z" ? 3 : 0;
-    if (!component) throw std::invalid_argument("imu_to_obs_joint_chain axis for " + name + " must be x, y or z");
-    imu_to_obs_chain_.emplace_back(static_cast<size_t>(found - spec_.joints.begin()), component);
-  }
+  imu_to_obs_chain_ = detail::ResolveChain(options_.imu_to_obs_joint_chain.value_or(kG1WaistChain), spec_.joints);
+  Json metadata = detail::Metadata(*model_);
+  if (metadata.contains("policy_kind") && metadata["policy_kind"] == "hybrid_velocity")
+    throw std::runtime_error(model_->path() +
+                             ": a model trained on a continuous velocity command needs discretizer: null");
   std::map<std::string, std::vector<int64_t>> shapes;
   for (const auto &input : model_->inputs()) {
     const auto &name = input.name;
@@ -147,11 +305,6 @@ Policy::Policy(std::shared_ptr<OnnxModel> model, Spec spec, Options options)
     throw std::runtime_error("actions must match joint count");
   if (climb_output_ && model_->find_output("climb_pred")->element_count() != 1)
     throw std::runtime_error("climb_pred must contain one float");
-  Json metadata = Json::object();
-  for (const auto &[key, value] : model_->metadata()) {
-    auto parsed = Json::parse(value, nullptr, false);
-    metadata[key] = parsed.is_discarded() ? Json(value) : parsed;
-  }
   std::vector<std::string> names = spec_.joints;
   if (metadata.contains("joint_names") && !metadata["joint_names"].is_null()) {
     auto value = metadata["joint_names"];
@@ -176,7 +329,7 @@ Policy::Policy(std::shared_ptr<OnnxModel> model, Spec spec, Options options)
   auto gains = [&](const char *name, const std::optional<std::vector<double>> &configured) {
     if (!configured && (!metadata.contains(name) || metadata[name].is_null()))
       throw std::runtime_error(std::string(name) + ": model provides no metadata and no gains were configured");
-    auto values = configured ? *configured : Vector(metadata.at(name));
+    auto values = configured ? *configured : detail::Numbers(metadata.at(name));
     if (values.size() != n) throw std::runtime_error(std::string(name) + " must match joint count");
     Finite(values, name);
     if (!configured) {
@@ -187,8 +340,8 @@ Policy::Policy(std::shared_ptr<OnnxModel> model, Spec spec, Options options)
   };
   kp_ = gains("kp", spec_.kp);
   kd_ = gains("kd", spec_.kd);
-  scale_ =
-      metadata.contains("action_scale") ? Vector(metadata["action_scale"]) : std::vector<double>{spec_.action_scale};
+  scale_ = metadata.contains("action_scale") ? detail::Numbers(metadata["action_scale"])
+                                             : std::vector<double>{spec_.action_scale};
   if (scale_.size() != 1 && scale_.size() != n)
     throw std::runtime_error("action_scale must have one or joint-count values");
   Finite(scale_, "action scale");
@@ -199,7 +352,7 @@ Policy::Policy(std::shared_ptr<OnnxModel> model, Spec spec, Options options)
   Reset();
 }
 
-void Policy::Reset() {
+void PrimitiveFamily::Reset() {
   frames_.clear();
   obs_.clear();
   depth_.clear();
@@ -214,38 +367,38 @@ void Policy::Reset() {
   pred_under_climb_ = false;
   SetCommand(0);
 }
-void Policy::SetSpeed(int speed) {
+void PrimitiveFamily::SetSpeed(int speed) {
   if (speed < 0 || speed > 2 || (has_climb_head() && speed == 2))
     throw std::invalid_argument("invalid speed mode or climb-column alias");
   speed_ = speed;
 }
-void Policy::SetCommand(int index) {
+void PrimitiveFamily::SetCommand(int index) {
   if (index < 0 || index >= spec_.command_dim) throw std::invalid_argument("invalid command index");
   command_ = index;
   ResolveClimb();
 }
-void Policy::SetFixedArm(int side) {
+void PrimitiveFamily::SetFixedArm(int side) {
   if (side < 0 || side > 2) throw std::invalid_argument("invalid fixed-arm side");
   fixed_arm_ = side;
   ApplyFixedArm();
 }
-void Policy::SetDz(bool enabled) {
+void PrimitiveFamily::SetDz(bool enabled) {
   if (enabled && !has_climb_head()) throw std::invalid_argument("dz requires climb_pred");
   dz_ = enabled;
   ResolveClimb();
 }
-void Policy::SetClimbAtStandAllowed(bool allowed, bool continuation) {
+void PrimitiveFamily::SetClimbAtStandAllowed(bool allowed, bool continuation) {
   climb_at_stand_allowed_ = allowed;
   climb_continuation_ = continuation;
   ResolveClimb();
 }
-bool Policy::StandBlocked() const {
+bool PrimitiveFamily::StandBlocked() const {
   return command_ == 0 && (options_.force_manual_climbing || !climb_at_stand_allowed_);
 }
-bool Policy::StandHeld() const {
+bool PrimitiveFamily::StandHeld() const {
   return StandBlocked() && climbing_ && climb_continuation_ && !options_.force_manual_climbing;
 }
-void Policy::ResolveClimb() {
+void PrimitiveFamily::ResolveClimb() {
   // Only an explicitly permitted, live navigation pause may climb from stand.
   // Stops/watchdogs revoke permission; new predictions cannot undo that gate.
   // Forced-forward climbing always preserves stand.
@@ -269,7 +422,7 @@ void Policy::ResolveClimb() {
   command_vector_[effective_command()] = 1;
   ApplyFixedArm();
 }
-bool Policy::ProbeClimb() const {
+bool PrimitiveFamily::ProbeClimb() const {
   const bool gated = options_.climb_enter != "dz_or_pred" || options_.climb_exit != "both_off";
   const bool manual = command_ == 14 || (options_.force_manual_climbing && command_ == kCodes[speed_].at("forward"));
   if (!gated || !climb_output_ || manual || (StandBlocked() && !StandHeld())) return false;
@@ -277,19 +430,19 @@ bool Policy::ProbeClimb() const {
   if (climbing_) return options_.climb_exit == "pred_off" || (options_.climb_exit == "both_off" ? !dz_ : dz_);
   return options_.climb_enter == "dz_or_pred" ? !dz_ : options_.climb_enter == "dz_and_pred" ? dz_ : false;
 }
-void Policy::ApplyFixedArm() {
+void PrimitiveFamily::ApplyFixedArm() {
   if (command_ == 6 || command_ == 7) return;
   command_vector_[6] = command_vector_[7] = 0;
   if (fixed_arm_) command_vector_[fixed_arm_ + 5] = 1;
 }
-int Policy::CommandCode(const std::string &name) const {
+int PrimitiveFamily::CommandCode(const std::string &name) const {
   auto found = kCodes[speed_].find(name);
   if (found != kCodes[speed_].end()) return found->second;
   found = kCodes[0].find(name);
   return found == kCodes[0].end() ? 0 : found->second;
 }
-std::string Policy::VelocityName(double vx, double vy, double wz, double deadzone) const {
-  if (options_.discretizer == "simple" || speed_ != 0)
+std::string PrimitiveFamily::VelocityName(double vx, double vy, double wz, double deadzone) const {
+  if (discretizer_ == "simple" || speed_ != 0)
     return Simple(std::abs(vx) > deadzone ? vx : 0, std::abs(vy) > deadzone ? -vy : 0,
                   std::abs(wz) > deadzone ? -wz : 0);
   if (std::abs(vy) > deadzone && std::abs(vy) > std::abs(vx)) return vy > 0 ? "leftward" : "rightward";
@@ -313,13 +466,13 @@ std::string Policy::VelocityName(double vx, double vy, double wz, double deadzon
       return name;
   return best;
 }
-int Policy::SetVelocity(double vx, double vy, double wz, double deadzone) {
+int PrimitiveFamily::SetVelocity(double vx, double vy, double wz, double deadzone) {
   Finite(std::array<double, 3>{vx, vy, wz}, "velocity");
   int index = CommandCode(VelocityName(vx, vy, wz, deadzone));
   if (index != command_) SetCommand(index);
   return index;
 }
-void Policy::RequestKey(const std::string &key, double now) {
+void PrimitiveFamily::RequestKey(const std::string &key, double now) {
   const std::map<std::string, std::string> names{{"w", "forward"},  {"s", "back"},    {"a", "left_45"},
                                                  {"d", "right_45"}, {"q", "left_90"}, {"e", "right_90"},
                                                  {"z", "stand"}};
@@ -354,51 +507,22 @@ void Policy::RequestKey(const std::string &key, double now) {
     release_time_ = now + delay;
   }
 }
-bool Policy::UpdateTransition(double now) {
+bool PrimitiveFamily::UpdateTransition(double now) {
   if (!pending_ || now < release_time_) return false;
   SetCommand(*pending_);
   pending_.reset();
   return true;
 }
-void Policy::CancelTransition() {
+void PrimitiveFamily::CancelTransition() {
   key_ = "z";
   pending_.reset();
   release_time_ = 0;
 }
 
-std::string Policy::FinishProfile() { return model_->finish_profile(); }
-
-std::vector<float> Policy::Observation(const State &state) const {
+std::vector<float> PrimitiveFamily::Observation(const State &state) const {
   const auto n = spec_.joints.size();
-  if (state.q.size() != n || state.dq.size() != n) throw std::invalid_argument("state joint count mismatch");
-  Finite(state.q, "q");
-  Finite(state.dq, "dq");
-  Finite(state.omega, "omega");
-  Finite(state.quat, "orientation");
-  if (state.gravity) Finite(*state.gravity, "gravity");
-  // An IMU that reports no orientation is a fault, never "upright".
-  const double norm = std::sqrt(std::inner_product(state.quat.begin(), state.quat.end(), state.quat.begin(), 0.0));
-  if (!(norm >= 1e-8)) throw std::invalid_argument("orientation must be nonzero");
-  std::array<double, 3> gravity{0, 0, -1};
-  if (!spec_.upright) {
-    // Gravity in the IMU body frame, from the caller or from the orientation.
-    if (state.gravity)
-      gravity = *state.gravity;
-    else {
-      auto quat = state.quat;
-      for (auto &v : quat) v /= norm;
-      gravity = RotateInverse(quat, {0, 0, -1});
-    }
-    // Then from the IMU frame into the observation frame through imu_to_obs_joint_chain.
-    std::array<double, 4> chain{1, 0, 0, 0};
-    for (const auto &[joint, component] : imu_to_obs_chain_) {
-      const double half = state.q[joint] * .5;
-      std::array<double, 4> rotation{std::cos(half), 0, 0, 0};
-      rotation[component] = std::sin(half);
-      chain = Multiply(chain, rotation);
-    }
-    gravity = RotateInverse(chain, gravity);
-  }
+  detail::CheckState(state, n);
+  const auto gravity = detail::ObservationGravity(state, spec_.upright, imu_to_obs_chain_);
   std::vector<float> obs;
   obs.reserve(6 + n * 3 + spec_.command_dim);
   for (auto v : gravity) obs.push_back(v);
@@ -410,7 +534,7 @@ std::vector<float> Policy::Observation(const State &state) const {
   return obs;
 }
 
-void Policy::Run() {
+void PrimitiveFamily::Run() {
   auto &obs = model_->input("obs");
   auto &depth = model_->input("depth_image");
   std::copy(obs_.begin(), obs_.end(), obs.begin());
@@ -419,7 +543,8 @@ void Policy::Run() {
   ++calls_;
   model_->run();
 }
-std::vector<double> Policy::Target(const State &state, const std::optional<std::vector<float>> &depth, double now) {
+std::vector<double> PrimitiveFamily::Target(const State &state, const std::optional<std::vector<float>> &depth,
+                                            double now) {
   UpdateTransition(now);
   obs_ = Observation(state);
   // Branch rather than value_or: value_or evaluates its argument every call,
@@ -474,5 +599,24 @@ std::vector<double> Policy::Target(const State &state, const std::optional<std::
     target[real] = spec_.defaults[real] + scaled_[real];
   }
   return target;
+}
+}  // namespace
+
+namespace detail {
+std::unique_ptr<Family> MakePrimitiveFamily(std::shared_ptr<OnnxModel> model, const Spec &spec,
+                                            const Options &options) {
+  return std::make_unique<PrimitiveFamily>(std::move(model), spec, options);
+}
+}  // namespace detail
+
+Policy::Policy(std::shared_ptr<OnnxModel> model, Spec spec, Options options)
+    : spec_(std::move(spec)), options_(std::move(options)), model_(std::move(model)) {
+  if (!model_) throw std::invalid_argument("contextual model is required");
+  const size_t n = spec_.joints.size();
+  if (!n || spec_.defaults.size() != n || spec_.height <= 0 || spec_.width <= 0)
+    throw std::invalid_argument("invalid contextual policy spec");
+  Finite(spec_.defaults, "default positions");
+  family_ = options_.discretizer ? detail::MakePrimitiveFamily(model_, spec_, options_)
+                                 : detail::MakeVelocityFamily(model_, spec_, options_);
 }
 }  // namespace holosoma::contextual

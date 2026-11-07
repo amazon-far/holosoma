@@ -104,23 +104,40 @@ def _print_control_guide(policy_class, use_joystick: bool, dual_mode: bool = Fal
 
 
 def _start_depth_source(
-    policy, config: InferenceConfig, depth_shm: str | None, depth_topic: str | None, depth_heartbeat: bool = True
+    policy,
+    config: InferenceConfig,
+    depth_shm: str | None,
+    depth_topic: str | None,
+    depth_heartbeat: bool = True,
+    depth_invalid_fill: str | None = None,
 ):
-    """Attach the requested depth source to a contextual policy; returns it, or None."""
+    """Attach the requested depth source to a contextual policy; returns it, or None.
+
+    A depth topic is preprocessed here, so it is refused when its clip range or invalid fill
+    differs from the depth contract the model declares. A shared-memory producer preprocesses
+    frames itself and is not checked; the declared contract is logged for its operator.
+    """
     if depth_shm is None and depth_topic is None:
         return None
     if depth_shm is not None and depth_topic is not None:
         raise ValueError("Pass either --depth-shm or --depth-topic, not both")
     if config.contextual is None or not hasattr(policy, "set_depth"):
         raise ValueError("A depth source needs a contextual (depth-conditioned) preset")
-    from holosoma_inference.depth import DepthConsumer, DepthShmConsumer
+    from holosoma_inference import depth
 
+    contract = getattr(policy, "depth_contract", None)
     if depth_shm is not None:
+        if depth_invalid_fill is not None:
+            raise ValueError("--depth-invalid-fill applies to --depth-topic; a shared-memory producer preprocesses")
+        if contract is not None:
+            logger.info(f"Model depth contract (the shared-memory producer must match it): {contract}")
         shape = (1, 1, config.contextual.depth_height, config.contextual.depth_width)
-        source = DepthShmConsumer(policy, shape=shape, name=depth_shm, heartbeat=depth_heartbeat)
+        source = depth.DepthShmConsumer(policy, shape=shape, name=depth_shm, heartbeat=depth_heartbeat)
         logger.info(f"Contextual depth from shared memory '{depth_shm}'")
     else:
-        source = DepthConsumer(policy, depth_topic)
+        fill = depth_invalid_fill or depth.INVALID_FILL
+        depth.check_depth_contract(contract, near_m=depth.NEAR_M, far_m=depth.FAR_M, invalid_fill=fill)
+        source = depth.DepthConsumer(policy, depth_topic, invalid_fill=fill)
     source.start()
     return source
 
@@ -131,12 +148,14 @@ def run_policy(
     depth_shm: str | None = None,
     depth_topic: str | None = None,
     depth_heartbeat: bool = True,
+    depth_invalid_fill: str | None = None,
 ):
     """Run policy with Tyro configuration.
 
     ``depth_shm`` / ``depth_topic`` feed a contextual policy from a depth shared-memory block or a
     ROS2 depth topic (see ``holosoma_inference.depth``). ``depth_heartbeat=False`` reads the block
-    without its producer's heartbeat.
+    without its producer's heartbeat. ``depth_invalid_fill`` sets the plane a depth-topic pixel
+    with no reading takes (default ``"far"``); it must match the model's declared depth contract.
     """
     logger.info("🚀 Starting Policy with Tyro configuration...")
     logger.info(f"🤖 Robot: {config.robot.robot_type}")
@@ -158,7 +177,7 @@ def run_policy(
             policy = policy_class(config=config)
 
         logger.info("✅ Policy initialized successfully!")
-        depth_source = _start_depth_source(policy, config, depth_shm, depth_topic, depth_heartbeat)
+        depth_source = _start_depth_source(policy, config, depth_shm, depth_topic, depth_heartbeat, depth_invalid_fill)
         use_joystick = bool({"joystick", "interface"} & {config.task.velocity_input, config.task.state_input})
         _print_control_guide(policy_class, use_joystick, dual_mode=dual_mode)
         # Optional per-session rosbag: records ros2 bag record --all for this run
@@ -241,6 +260,13 @@ def main(annotated_config=None):
         default=None,
         help="With --depth-shm: read frames without the producer's heartbeat (unstamped, stalls undetected).",
     )
+    pre.add_argument(
+        "--depth-invalid-fill",
+        choices=("far", "near"),
+        default=None,
+        help="With --depth-topic: the plane a pixel with no reading takes (default far). It must match the "
+        "depth contract a continuous-velocity export declares, or the run is refused.",
+    )
     known, remaining = pre.parse_known_args()
 
     disable_secondary = known.secondary is not None and known.secondary.lower() == "none"
@@ -283,7 +309,7 @@ def main(annotated_config=None):
     # Only when given: run_policy(config) stays the call for policies without a depth source.
     depth = {
         key: getattr(known, key)
-        for key in ("depth_shm", "depth_topic", "depth_heartbeat")
+        for key in ("depth_shm", "depth_topic", "depth_heartbeat", "depth_invalid_fill")
         if getattr(known, key) is not None
     }
     run_policy(config, **depth)

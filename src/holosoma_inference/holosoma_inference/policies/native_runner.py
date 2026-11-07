@@ -346,6 +346,11 @@ class NativeContextualRunner(NativeRunnerPolicy):
         self._monotonic_base = self._monotonic()
         super().__init__(config, **kwargs)
 
+    @property
+    def depth_contract(self):
+        """The model's declared depth preprocessing, or None (see ``NativePolicy.depth_contract``)."""
+        return self.native.depth_contract
+
     def set_depth(self, frame, stamp_s=None):
         """Store the newest depth frame; returns False for a repeated or out-of-order stamp."""
         frame = np.asarray(frame, dtype=np.float32)
