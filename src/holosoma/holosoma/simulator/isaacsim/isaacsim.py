@@ -33,6 +33,7 @@ from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.isaacsim.event_cfg import EventCfg
 from holosoma.simulator.isaacsim.events import randomize_body_com, randomize_rigid_body_inertia
 from holosoma.simulator.isaacsim import light_setup, sensor_setup
@@ -656,6 +657,7 @@ class IsaacSim(BaseSimulator):
             self.prev_base_lin_vel = torch.zeros(self.num_envs, 3, device=self.sim_device)
             self.state.register("dof_acc", lambda: self._dof_acc)
             self.state.register("base_linear_acc", lambda: self._base_linear_acc)
+            self.hooks.add(Phase.POST_STEP, self._update_bridge_accelerations, name="isaacsim.bridge_accelerations")
         else:
             logger.debug("Bridge disabled: skipping acceleration computation tensors")
 
@@ -745,16 +747,13 @@ class IsaacSim(BaseSimulator):
             # update buffers at sim
             self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
 
-        # Update accelerations ONLY if bridge is enabled
-        if self.simulator_config.bridge.enabled:
-            # Update DOF acceleration using numerical differentiation
-            self._dof_acc.copy_((self.dof_vel - self.prev_dof_vel) / self.sim_dt)
-            self.prev_dof_vel = self.dof_vel.clone()
-
-            # Update base linear acceleration using numerical differentiation
-            current_base_vel = self.robot_root_states[:, 7:10]
-            self._base_linear_acc.copy_((current_base_vel - self.prev_base_lin_vel) / self.sim_dt)
-            self.prev_base_lin_vel = current_base_vel.clone()
+    def _update_bridge_accelerations(self) -> None:
+        """Finite-difference joint and base linear accelerations for the bridge, once per physics step."""
+        self._dof_acc.copy_((self.dof_vel - self.prev_dof_vel) / self.sim_dt)
+        self.prev_dof_vel = self.dof_vel.clone()
+        current_base_vel = self.robot_root_states[:, 7:10]
+        self._base_linear_acc.copy_((current_base_vel - self.prev_base_lin_vel) / self.sim_dt)
+        self.prev_base_lin_vel = current_base_vel.clone()
 
     def _forward_kinematics(self) -> None:
         self.scene.write_data_to_sim()

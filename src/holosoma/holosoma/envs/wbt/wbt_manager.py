@@ -11,7 +11,6 @@ from holosoma.utils.simulator_config import SimulatorType
 
 if TYPE_CHECKING:
     from holosoma.managers.command.terms.wbt import MotionCommand
-    from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker
     from holosoma.managers.randomization.terms.locomotion import PushRandomizerState
 
 
@@ -20,36 +19,14 @@ class WholeBodyTrackingManager(PolicyTask):
         """Initialize torch tensors which will contain simulation states and processed quantities"""
         super()._init_buffers()
 
-        # -------------------------------- terms same with locomotion_manager.py [start]--------------------------------
         self._init_domain_rand_buffers()
 
     @property
     def base_quat(self) -> torch.Tensor:
         return self.simulator.base_quat
 
-    def _reset_buffers_callback(
-        self, env_ids: torch.Tensor, target_buf: Mapping[str, torch.Tensor] | None = None
-    ) -> None:
-        self.episode_length_buf[env_ids] = 0
-        self.reset_buf[env_ids] = 1
-        # pending_episode_update_mask is only used in curriculum_term::AverageEpisodeLengthTracker.
-        self._pending_episode_update_mask[env_ids] = True
-
-    def _get_average_episode_tracker(self) -> AverageEpisodeLengthTracker:
-        tracker = self.curriculum_manager.get_term("average_episode_tracker")
-        if tracker is None:
-            raise RuntimeError("AverageEpisodeLengthTracker is not registered with the curriculum manager.")
-        return cast("AverageEpisodeLengthTracker", tracker)
-
-    # -------------------------------- terms same with locomotion_manager.py [end]--------------------------------
-
     def _update_log_dict(self) -> None:
-        # _update_log_dict happens before reset_envs_idx
-        # -------------------------------- terms same with locomotion_manager.py [start]--------------------------------
-        avg = self._get_average_episode_tracker().get_average()
-        self.log_dict["average_episode_length"] = avg.detach().cpu()
-        # -------------------------------- terms same with locomotion_manager.py [end]--------------------------------
-        # Add tracking metrics to log_dict
+        super()._update_log_dict()
         motion_command = cast("MotionCommand", self.command_manager.get_state("motion_command"))
         motion_command.update_metrics()
         self.log_dict.update(motion_command.metrics)
@@ -76,10 +53,6 @@ class WholeBodyTrackingManager(PolicyTask):
         self.push_robot_vel_buf = torch.zeros(
             self.num_envs, 6, dtype=torch.float, device=self.device, requires_grad=False
         )
-        self.record_push_robot_vel_buf = torch.zeros(
-            self.num_envs, 6, dtype=torch.float, device=self.device, requires_grad=False
-        )
-        self._randomize_push_robots = False
         self._max_push_vel = torch.zeros(6, dtype=torch.float32, device=self.device)
 
     def _push_robots(self, env_ids: torch.Tensor) -> None:
@@ -97,7 +70,6 @@ class WholeBodyTrackingManager(PolicyTask):
 
         rand = torch.rand(len(env_ids), 6, device=self.device) * 2 - 1
         self.push_robot_vel_buf[env_ids] = rand * max_vel_tensor.unsqueeze(0)
-        self.record_push_robot_vel_buf[env_ids] = self.push_robot_vel_buf[env_ids].clone()
         # Additive push to match BeyondMimic/IsaacLab's push_by_setting_velocity.
         self.simulator.robot_root_states[env_ids, 7:13] += self.push_robot_vel_buf[env_ids]
         self._max_push_vel = max_vel_tensor.clone()

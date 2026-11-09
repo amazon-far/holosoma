@@ -76,7 +76,6 @@ class BaseTask:
             Environment configuration
         """
         self.config = tyro_config
-        self._manager_domain_rand_cfg = None
 
         simulator_config = tyro_config.simulator
         terrain_config = tyro_config.terrain
@@ -239,7 +238,6 @@ class BaseTask:
             env_ids = self._ensure_long_tensor(env_ids)
         if env_ids.numel() == 0:
             # Managers' reset hooks run every control frame, resets or not; there is no state to apply.
-            self._reset_task_state(env_ids)
             self._reset_task_managers(env_ids)
             return
 
@@ -248,7 +246,6 @@ class BaseTask:
 
         self._prepare_reset(env_ids)
 
-        # Call the actual reset implementation (to be overridden by subclasses)
         self._reset_envs_idx_impl(env_ids, target_states, target_buf)
 
         # Reset all managers AFTER state changes
@@ -271,9 +268,7 @@ class BaseTask:
         target_states: dict[str, Any] | None = None,
         target_buf: dict[str, Any] | None = None,
     ) -> None:
-        """Template implementation of environment reset.
-
-        Subclasses can override the helper hooks below to customize the reset behaviour.
+        """Write the reset state of ``env_ids``: buffers, robot and objects.
 
         Args
         ----
@@ -285,10 +280,8 @@ class BaseTask:
             Optional dictionary of buffered tensors to restore (e.g., for replay).
         """
         self._reset_buffers_callback(env_ids, target_buf)
-        self._reset_tasks_callback(env_ids)
         self._reset_robot_states_callback(env_ids, target_states)
         self._reset_objects_callback(env_ids)
-        self._reset_task_state(env_ids)
 
     def render(self, sync_frame_time: bool = True) -> None:
         if self.viewer:
@@ -296,11 +289,6 @@ class BaseTask:
 
     ###########################################################################
     #### Helper functions
-
-    @property
-    def domain_rand_cfg(self) -> Any:
-        """Return the active domain randomization configuration."""
-        return self._manager_domain_rand_cfg
 
     ###########################################################################
     def _load_assets(self) -> None:
@@ -324,14 +312,7 @@ class BaseTask:
         self.base_init_state = to_torch(base_init_state_list, device=self.device, requires_grad=False)
 
     def _create_envs(self) -> None:
-        """Creates environments:
-        1. loads the robot URDF/MJCF asset,
-        2. For each environment
-           2.1 creates the environment,
-           2.2 calls DOF and Rigid shape properties callbacks,
-           2.3 create actor with these properties and add them to the env
-        3. Store indices of different bodies of the robot
-        """
+        """Create the environments at their origins with the robot's base initial state."""
         self.simulator.create_envs(self.num_envs, self._get_env_origins(), self.base_init_state)  # type: ignore[call-arg]
 
     def _setup_robot_body_indices(self) -> None:
@@ -371,9 +352,6 @@ class BaseTask:
 
     def _get_task_name(self) -> str:
         """Return a task identifier for logging/experiment directory naming."""
-        training_task_name = getattr(self.training_config, "task_name", None)
-        if isinstance(training_task_name, str) and training_task_name:
-            return training_task_name
         return self.__class__.__name__.lower()
 
     def _get_env_origins(self) -> torch.Tensor:
@@ -396,9 +374,6 @@ class BaseTask:
         zero custom tensors or restore from a buffered state.
         """
         self.episode_length_buf[env_ids] = 0
-
-    def _reset_tasks_callback(self, env_ids: torch.Tensor) -> None:
-        """Hook for subclasses to extend reset-time logic."""
 
     def _reset_robot_states_callback(self, env_ids: torch.Tensor, target_states: dict[str, Any] | None = None) -> None:
         """Reset simulator DOF/root states for the specified environments.
@@ -438,9 +413,6 @@ class BaseTask:
         states[:, :7] = init_poses  # pose
         states[:, 7:] = init_vels  # configured initial velocity
         self.simulator.set_actor_states(object_names, env_ids, states)
-
-    def _reset_task_state(self, env_ids: torch.Tensor) -> None:
-        """Reset task-specific state after simulator state callbacks."""
 
     def _reset_task_managers(self, env_ids: torch.Tensor) -> None:
         """Reset the task's managers; specializations extend it to reset their own."""

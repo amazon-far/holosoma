@@ -32,8 +32,6 @@ class LeggedRobotLocomotionManager(PolicyTask):
         super()._init_buffers()
         self._init_domain_rand_buffers()
 
-        self.lidar_height_offset = getattr(self.robot_config, "lidar_height_offset", 0.5)
-
     def _init_domain_rand_buffers(self) -> None:
         ######################################### DR related tensors #########################################
         # Action delay buffers are now initialized by randomization manager's setup_action_delay_buffers term
@@ -41,10 +39,6 @@ class LeggedRobotLocomotionManager(PolicyTask):
         self.push_robot_vel_buf = torch.zeros(
             self.num_envs, 2, dtype=torch.float, device=self.device, requires_grad=False
         )
-        self.record_push_robot_vel_buf = torch.zeros(
-            self.num_envs, 2, dtype=torch.float, device=self.device, requires_grad=False
-        )
-        self._randomize_push_robots = False
         self._max_push_vel = torch.zeros(2, dtype=torch.float32, device=self.device)
 
     def _setup_robot_body_indices(self) -> None:
@@ -61,10 +55,6 @@ class LeggedRobotLocomotionManager(PolicyTask):
         )
         for i, name in enumerate(foot_height_names):
             self.feet_height_indices[i] = self.simulator.find_rigid_body_indice(name)
-
-        if self.robot_config.has_torso:
-            self.torso_name = self.robot_config.torso_name
-            self.torso_index = self.simulator.find_rigid_body_indice(self.torso_name)
 
     def set_is_evaluating(self, command: Any = None) -> None:
         logger.info("Setting Env is evaluating")
@@ -84,17 +74,6 @@ class LeggedRobotLocomotionManager(PolicyTask):
     def _pre_compute_observations_callback(self) -> None:
         self.terrain_manager.update_heights()
 
-    def _step_managers(self) -> None:
-        super()._step_managers()
-
-        # Assign commands to simulator for headless recording
-        if hasattr(self.simulator, "headless_recording") and self.simulator.headless_recording:
-            if hasattr(self.command_manager, "commands"):
-                self.simulator.commands = self.command_manager.commands  # type: ignore[attr-defined]
-
-    def _post_compute_observations_callback(self) -> None:
-        return
-
     def _reset_robot_states_callback(
         self, env_ids: torch.Tensor, target_states: Mapping[str, torch.Tensor] | None = None
     ) -> None:
@@ -112,6 +91,7 @@ class LeggedRobotLocomotionManager(PolicyTask):
     def _reset_buffers_callback(
         self, env_ids: torch.Tensor, target_buf: Mapping[str, torch.Tensor] | None = None
     ) -> None:
+        super()._reset_buffers_callback(env_ids)
         if target_buf is not None:
             self.simulator.dof_pos[env_ids] = target_buf["dof_pos"].to(self.simulator.dof_pos.dtype)
             self.simulator.dof_vel[env_ids] = target_buf["dof_vel"].to(self.simulator.dof_vel.dtype)
@@ -120,22 +100,8 @@ class LeggedRobotLocomotionManager(PolicyTask):
             self.time_out_buf[env_ids] = target_buf["time_out_buf"].to(self.time_out_buf.dtype)
             self._pending_episode_update_mask[env_ids] = False
             self._pending_episode_lengths[env_ids] = 0
-        else:
-            self.episode_length_buf[env_ids] = 0
-            self.reset_buf[env_ids] = 1
-            self._pending_episode_update_mask[env_ids] = True
-
-    def _update_log_dict(self) -> None:
-        avg = self._get_average_episode_tracker().get_average()
-        self.log_dict["average_episode_length"] = avg.detach().cpu()
 
     ################ Curriculum #################
-
-    def _get_average_episode_tracker(self) -> AverageEpisodeLengthTracker:
-        tracker = self.curriculum_manager.get_term("average_episode_tracker")
-        if tracker is None:
-            raise RuntimeError("AverageEpisodeLengthTracker is not registered with the curriculum manager.")
-        return cast("AverageEpisodeLengthTracker", tracker)
 
     @property
     def average_episode_length(self) -> float:
@@ -193,7 +159,6 @@ class LeggedRobotLocomotionManager(PolicyTask):
 
         rand = torch.rand(len(env_ids), 2, device=self.device) * 2 - 1
         self.push_robot_vel_buf[env_ids] = rand * max_vel_tensor.unsqueeze(0)
-        self.record_push_robot_vel_buf[env_ids] = self.push_robot_vel_buf[env_ids].clone()
         self.simulator.robot_root_states[env_ids, 7:9] = self.push_robot_vel_buf[env_ids]
         self._max_push_vel = max_vel_tensor.clone()
 

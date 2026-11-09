@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
@@ -16,6 +16,9 @@ from holosoma.managers.reward import RewardManager
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.sim_utils import setup_keyboard_listener
 
+if TYPE_CHECKING:
+    from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker
+
 
 class PolicyTask(BaseTask):
     """BaseTask specialization for policy training and evaluation."""
@@ -23,8 +26,6 @@ class PolicyTask(BaseTask):
     def __init__(self, tyro_config: EnvConfig) -> None:
         self.is_evaluating = False
         self.dim_obs = tyro_config.robot.policy_obs_dim
-        self.dim_critic_obs = tyro_config.robot.critic_obs_dim
-        self.dim_actions = tyro_config.robot.actions_dim
         super().__init__(tyro_config)
         if not self.headless:
             setup_keyboard_listener(self)
@@ -131,10 +132,9 @@ class PolicyTask(BaseTask):
         # Reset observation history BEFORE state changes (must happen first to clear history buffers)
         self.observation_manager.reset(env_ids)
         self._pending_episode_lengths[env_ids] = self.episode_length_buf[env_ids]
-        self._pending_episode_update_mask[env_ids] = False
+        self._pending_episode_update_mask[env_ids] = True
 
-    def _reset_task_state(self, env_ids: torch.Tensor) -> None:
-        """Populate per-episode extras after a reset."""
+    def _reset_task_managers(self, env_ids: torch.Tensor) -> None:
         reward_extras = self.reward_manager.reset(env_ids)
 
         # Normalise extras dictionary to contain (possibly empty) sub-sections.
@@ -145,7 +145,6 @@ class PolicyTask(BaseTask):
 
         self.extras["time_outs"] = self.time_out_buf
 
-    def _reset_task_managers(self, env_ids: torch.Tensor) -> None:
         super()._reset_task_managers(env_ids)
         self.action_manager.reset(env_ids)
         self.command_manager.reset(env_ids)
@@ -162,7 +161,6 @@ class PolicyTask(BaseTask):
         """Compute observations of the current state after a reset, without advancing physics."""
         self.observation_manager.new_frame()
         self.obs_buf_dict = self.observation_manager.step()
-        self._post_compute_observations_callback()
         return self.obs_buf_dict
 
     # ------------------------------------------------------------------
@@ -194,7 +192,6 @@ class PolicyTask(BaseTask):
     def _post_physics_step(self) -> tuple[dict[str, Any], torch.Tensor, torch.Tensor, dict[str, Any]]:
         super()._post_physics_step()
         self.obs_buf_dict = self.observation_manager.step()
-        self._post_compute_observations_callback()
         self.extras["to_log"] = self.log_dict
         return self.obs_buf_dict, self.rew_buf, self.reset_buf, self.extras
 
@@ -227,8 +224,6 @@ class PolicyTask(BaseTask):
 
     def _compute_reward(self) -> None:
         self.rew_buf[:] = self.reward_manager.compute(self.dt)
-        self.episode_sums = getattr(self.reward_manager, "episode_sums", {})
-        self.episode_sums_raw = getattr(self.reward_manager, "episode_sums_raw", {})
 
     # ------------------------------------------------------------------
     # Hooks for subclasses
@@ -237,10 +232,15 @@ class PolicyTask(BaseTask):
         """Hook invoked after physics but before observation terms compute (no-op by default)."""
         return
 
-    def _post_compute_observations_callback(self) -> None:
-        """Hook invoked after observation buffers are produced (no-op by default)."""
-        return
-
     def _update_log_dict(self) -> None:
-        """Hook for appending task-specific metrics to `self.log_dict` (no-op by default)."""
-        return
+        """Append per-frame metrics to ``log_dict``: the average episode length when it is tracked."""
+        tracker = self.curriculum_manager.get_term("average_episode_tracker")
+        if tracker is not None:
+            avg = cast("AverageEpisodeLengthTracker", tracker).get_average()
+            self.log_dict["average_episode_length"] = avg.detach().cpu()
+
+    def _get_average_episode_tracker(self) -> AverageEpisodeLengthTracker:
+        tracker = self.curriculum_manager.get_term("average_episode_tracker")
+        if tracker is None:
+            raise RuntimeError("AverageEpisodeLengthTracker is not registered with the curriculum manager.")
+        return cast("AverageEpisodeLengthTracker", tracker)
