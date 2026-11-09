@@ -120,7 +120,7 @@ def get_run_sim_env_config(config: RunSimConfig) -> EnvConfig:
         action=None,
         reward=None,
         termination=config.termination,
-        randomization=None,
+        randomization=config.randomization,
         command=None,
         curriculum=None,
         robot=config.robot,

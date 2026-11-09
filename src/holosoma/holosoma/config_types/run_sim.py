@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated
 
 import holosoma.config_values.plugin
+import holosoma.config_values.randomization
 import holosoma.config_values.robot
 import holosoma.config_values.run_sim
 import holosoma.config_values.scene
@@ -22,6 +23,7 @@ import holosoma.config_values.terrain
 from holosoma.config_types.experiment import TrainingConfig
 from holosoma.config_types.logger import DisabledLoggerConfig, LoggerConfig
 from holosoma.config_types.plugin import PluginConfig
+from holosoma.config_types.randomization import RandomizationManagerCfg
 from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.sensor import SensorConfig
@@ -78,6 +80,12 @@ class RunSimConfig:
         TerminationManagerCfg | None, UseRegistry(holosoma.config_values.termination.TERMINATION_REGISTRY)
     ] = holosoma.config_values.termination.none
     """Termination terms that end an episode and reset its environment. The default ends none."""
+
+    randomization: Annotated[
+        RandomizationManagerCfg | None, UseRegistry(holosoma.config_values.randomization.RANDOMIZATION_REGISTRY)
+    ] = holosoma.config_values.randomization.none
+    """Randomization terms run at setup, on reset and every step. Terms that act on policy actions or
+    policy-task state (actuator gains, action delay, pushes) need a policy task."""
 
     # Plugins: declare on the CLI as ``plugin.<key>:<variant>`` (resolved from
     # PLUGIN_REGISTRY), optionally with per-key leaf overrides
