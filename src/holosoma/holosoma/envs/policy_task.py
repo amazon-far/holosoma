@@ -16,6 +16,7 @@ from holosoma.managers.observation import ObservationManager
 from holosoma.managers.reward import RewardManager
 from holosoma.managers.termination import TerminationManager
 from holosoma.utils.safe_torch_import import torch
+from holosoma.utils.sim_utils import setup_keyboard_listener
 
 
 class PolicyTask(BaseTask):
@@ -27,6 +28,8 @@ class PolicyTask(BaseTask):
         self.dim_critic_obs = tyro_config.robot.critic_obs_dim
         self.dim_actions = tyro_config.robot.actions_dim
         super().__init__(tyro_config)
+        if not self.headless:
+            setup_keyboard_listener(self)
 
     def _validate_task(self) -> None:
         for name in ("observation", "action", "reward", "termination", "command", "curriculum"):

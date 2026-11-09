@@ -17,7 +17,6 @@ from holosoma.utils.sim_utils import (
     close_simulation_resources,
     exit_on_sigterm,
     setup_isaaclab_launcher,
-    setup_keyboard_listener,
     setup_simulator_imports,
 )
 from holosoma.utils.simulator_config import SimulatorType, get_simulator_type
@@ -103,11 +102,6 @@ def task_session(config: EnvConfig, required_class: type[_TaskT]) -> Iterator[_T
             logger.info(f"Creating task: {config.env_class}")
             # Pinned so the task allocates on the device the provider launched on.
             task = task_class(dataclasses.replace(config, device=device))
-
-            from holosoma.envs.policy_task import PolicyTask
-
-            if not config.training.headless and issubclass(task_class, PolicyTask):
-                setup_keyboard_listener(task)
             yield task
         except BaseException:
             try:
