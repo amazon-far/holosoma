@@ -12,7 +12,13 @@ from pydantic import ValidationError
 
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.scene import PhysicsConfig
-from holosoma.config_types.simulator import IsaacLab3Config
+from holosoma.config_types.simulator import (
+    IsaacLab3Config,
+    IsaacLab3NewtonConfig,
+    IsaacSimBackend,
+    MujocoBackend,
+    SimulatorInitConfig,
+)
 from holosoma.simulator.isaacsim.backends.native_config import build_config
 from holosoma.simulator.isaacsim.backends.native_properties import schema_rules
 from holosoma.utils.config_registry import parse_config
@@ -96,7 +102,7 @@ def test_nested_native_overrides_merge_and_do_not_mutate_defaults() -> None:
         build_config(Physics, {"solver_cfg": {"iterations_typo": 7}}, location="physics")
 
 
-def test_historical_newton_settings_migrate_without_duplicate_user_options() -> None:
+def test_historical_newton_settings_load_without_rewriting_user_inputs() -> None:
     saved = ExperimentConfig().to_serializable_dict()
     lab3 = saved["simulator"]["config"]["sim"]["isaaclab3"]
     lab3["physics_backend"] = "newton"
@@ -112,9 +118,12 @@ def test_historical_newton_settings_migrate_without_duplicate_user_options() -> 
         "solver_cfg": {"nconmax": None, "njmax": 512, "iterations": 17},
         "default_shape_cfg": {"margin": 0.003},
     }
-    assert _experiment_config_from_saved(saved).simulator.config.sim.isaaclab3.physics == expected
+    restored = _experiment_config_from_saved(saved)
+    assert restored.simulator.config.sim.isaaclab3.physics_settings == expected
+    assert restored.simulator.config.sim.isaaclab3.newton.solver_iterations == 17
+    assert restored.to_serializable_dict() == saved
     lab3["physics"] = {"solver_cfg": {"iterations": 9}}
-    with pytest.raises(ValueError, match="conflicting"):
+    with pytest.raises(ValueError, match="Conflicting"):
         _experiment_config_from_saved(saved)
 
 
@@ -131,3 +140,95 @@ def test_inactive_historical_newton_defaults_do_not_become_physx_kwargs() -> Non
     restored = _experiment_config_from_saved(saved).simulator.config.sim.isaaclab3
     assert restored.physics_backend == "physx"
     assert restored.physics == {}
+
+
+def test_legacy_python_constructor_and_repeated_replace_preserve_settings() -> None:
+    before = set(sys.modules)
+    legacy = IsaacLab3NewtonConfig(use_cuda_graph=False, nconmax=None, solver_iterations=17)
+    # Preserve the pre-existing positional constructor as well as keyword input.
+    config = IsaacLab3Config("newton", "newton_warp", False, legacy, False, True, False, "total")
+    assert config.newton == legacy
+    assert (config.use_fabric, config.create_stage_in_memory, config.use_newton_actuators) == (False, True, False)
+    config = dataclasses.replace(config, newton=dataclasses.replace(config.newton, solver_iterations=23))
+    config = dataclasses.replace(config, newton=dataclasses.replace(config.newton, njmax=512))
+    assert config.physics_settings == {
+        "use_cuda_graph": False,
+        "solver_cfg": {"nconmax": None, "iterations": 23, "njmax": 512},
+    }
+    assert not any(name.startswith(("isaaclab.", "isaaclab_newton.")) for name in set(sys.modules) - before)
+
+
+@pytest.mark.parametrize("style", ["separate", "equals"])
+def test_legacy_cli_flags_remain_accepted(style: str) -> None:
+    values = {
+        "use-cuda-graph": "False",
+        "nconmax": "None",
+        "njmax": "512",
+        "solver-iterations": "17",
+        "default-shape-margin": "0.003",
+    }
+    args = ["simulator:isaacsim3", "--simulator.config.sim.isaaclab3.physics-backend=newton"]
+    for name, value in values.items():
+        flag = f"--simulator.config.sim.isaaclab3.newton.{name}"
+        args.extend([f"{flag}={value}"] if style == "equals" else [flag, value])
+    config = parse_config(ExperimentConfig, args=args)
+    assert config.simulator.config.sim.isaaclab3.physics_settings == {
+        "use_cuda_graph": False,
+        "solver_cfg": {"nconmax": None, "njmax": 512, "iterations": 17},
+        "default_shape_cfg": {"margin": 0.003},
+    }
+    assert config.simulator.config.sim.isaaclab3.newton.solver_iterations == 17
+    restored = _experiment_config_from_saved(config.to_serializable_dict())
+    assert restored.simulator.config.sim.isaaclab3 == config.simulator.config.sim.isaaclab3
+
+
+def test_native_settings_coexist_with_untouched_legacy_defaults() -> None:
+    settings = {"use_cuda_graph": False, "solver_cfg": {"nconmax": 256, "iterations": 17}}
+    config = IsaacLab3Config(physics_backend="newton", physics=settings)
+    assert config.physics_settings == settings
+    config.physics_settings["solver_cfg"]["iterations"] = 99
+    assert config.physics == settings
+    combined = dataclasses.replace(config, newton=IsaacLab3NewtonConfig(default_shape_margin=0.003))
+    assert combined.physics_settings == {**settings, "default_shape_cfg": {"margin": 0.003}}
+    with pytest.raises(ValidationError, match="Conflicting.*solver_iterations"):
+        dataclasses.replace(config, newton=IsaacLab3NewtonConfig(solver_iterations=9))
+    with pytest.raises(ValidationError, match="cannot merge"):
+        IsaacLab3Config(
+            physics_backend="newton",
+            newton=IsaacLab3NewtonConfig(solver_iterations=9),
+            physics={"solver_cfg": None},
+        )
+
+
+def test_inactive_legacy_customization_survives_save_and_backend_switch() -> None:
+    saved = ExperimentConfig().to_serializable_dict()
+    lab3 = saved["simulator"]["config"]["sim"]["isaaclab3"]
+    lab3["newton"] = {"solver_iterations": 17}
+    config = _experiment_config_from_saved(saved)
+    inactive = config.simulator.config.sim.isaaclab3
+    assert inactive.physics_settings == {}
+    restored = _experiment_config_from_saved(config.to_serializable_dict()).simulator.config.sim.isaaclab3
+    assert restored.newton.solver_iterations == 17
+    assert dataclasses.replace(restored, physics_backend="newton").physics_settings == {
+        "solver_cfg": {"iterations": 17}
+    }
+
+
+def test_pre_lab3_simulator_constructor_keeps_positional_field_order() -> None:
+    preset = ExperimentConfig().simulator.config
+    config = SimulatorInitConfig(
+        preset.name,
+        preset.sim,
+        preset.debug_viz,
+        preset.viewer,
+        preset.reset_manager,
+        preset.robot_mjcf_filter,
+        preset.isaacsim,
+        MujocoBackend.WARP,
+        preset.bridge,
+        preset.virtual_gantry,
+    )
+    assert config.mujoco_backend == MujocoBackend.WARP
+    assert config.bridge == preset.bridge
+    assert config.virtual_gantry == preset.virtual_gantry
+    assert config.isaacsim_backend == IsaacSimBackend.ISAACLAB2

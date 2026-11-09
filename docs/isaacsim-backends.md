@@ -153,8 +153,13 @@ Use the native SDK names rather than a second Holosoma solver schema:
 Newton retains the previous defaults: MJWarp, CUDA graphs, `nconmax=128`
 and default shape margin `0.01`. Unspecified nested fields retain their native
 defaults. Set `solver_cfg.nconmax` to `null` to request upstream automatic
-allocation. Historical saved `newton` blocks migrate to `physics` on Newton runs;
-inactive historical Newton settings are removed when loading PhysX runs.
+allocation. Existing Python `newton=IsaacLab3NewtonConfig(...)`, `newton.*` CLI
+flags and saved `newton` blocks remain supported, including repeated
+`dataclasses.replace` calls. Their nondefault values merge into native kwargs
+on Newton runs; conflicting native values are rejected. Untouched compatibility
+defaults never override `physics` and are omitted from new saved experiments.
+Custom legacy settings survive saving even when Newton is inactive.
+Use `physics` for new controls; there is no need to configure both blocks.
 `sim.substeps` owns Newton substeps; PhysX solver settings stay in `sim.physx`.
 Duplicate native overrides for these shared settings are rejected.
 The Newton contact default avoids the automatic estimate's observed overflow

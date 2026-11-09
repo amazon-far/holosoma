@@ -249,14 +249,15 @@ class IsaacLab3Backend(IsaacLabBackend):
 
     def physics_config(self, config: Any = None) -> Any:
         """Build the explicitly selected physics engine's supported config."""
+        settings = self.options.physics_settings
         if self.options.physics_backend == "newton":
-            if "num_substeps" in self.options.physics:
+            if "num_substeps" in settings:
                 raise ValueError("isaaclab3.physics.num_substeps: sim.substeps owns this setting")
             from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg, NewtonShapeCfg
 
             return build_config(
                 NewtonCfg,
-                self.options.physics,
+                settings,
                 location="isaaclab3.physics",
                 defaults={
                     "num_substeps": config.substeps if config is not None else 1,
@@ -271,14 +272,14 @@ class IsaacLab3Backend(IsaacLabBackend):
             "max_velocity_iteration_count": "num_velocity_iterations",
         }
         for name, owner in shared_fields.items():
-            if name in self.options.physics:
+            if name in settings:
                 raise ValueError(f"isaaclab3.physics.{name}: sim.physx.{owner} owns this setting")
         if not self.uses_kit:
             from isaaclab_ov.physics import OvPhysxCfg
 
             return build_config(
                 OvPhysxCfg,
-                self.options.physics,
+                settings,
                 location="isaaclab3.physics",
                 defaults={"gpu_max_rigid_patch_count": 10 * 2**15},
             )
@@ -293,7 +294,7 @@ class IsaacLab3Backend(IsaacLabBackend):
                 "max_velocity_iteration_count": config.physx.num_velocity_iterations,
                 "gpu_max_rigid_patch_count": 10 * 2**15,
             }
-        return build_config(PhysxCfg, self.options.physics, location="isaaclab3.physics", defaults=defaults)
+        return build_config(PhysxCfg, settings, location="isaaclab3.physics", defaults=defaults)
 
     def configure_physics_scene(self, sim: Any, config: Any) -> None:
         if self.uses_kit or self.options.physics_backend != "physx":

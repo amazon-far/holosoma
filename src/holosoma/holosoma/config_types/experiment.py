@@ -36,7 +36,7 @@ from holosoma.config_types.reward import RewardManagerCfg
 from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.sensor import SensorConfig
-from holosoma.config_types.simulator import SimulatorConfig
+from holosoma.config_types.simulator import IsaacLab3NewtonConfig, SimulatorConfig
 from holosoma.config_types.termination import TerminationManagerCfg
 from holosoma.config_types.terrain import TerrainManagerCfg
 from holosoma.utils.config_registry import UseRegistry
@@ -244,6 +244,11 @@ class ExperimentConfig:
 
     def to_serializable_dict(self) -> dict[str, Any]:
         """Return a JSON-friendly representation of the config."""
+        data = dataclasses.asdict(self)
+        # Keep authored legacy inputs round-trippable, but do not repeat their
+        # untouched defaults in new experiments that use native physics kwargs.
+        if self.simulator.config.sim.isaaclab3.newton == IsaacLab3NewtonConfig():
+            data["simulator"]["config"]["sim"]["isaaclab3"].pop("newton")
         # Directly using yaml.safe_dump does not handle string enums properly,
         # so round-trip through JSON to coerce typing objects into primitives.
-        return cast("dict[str, Any]", json.loads(json.dumps(dataclasses.asdict(self))))
+        return cast("dict[str, Any]", json.loads(json.dumps(data)))

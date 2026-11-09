@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import warnings
+import copy
 import math
 from dataclasses import field
 from enum import Enum
@@ -119,7 +120,7 @@ class IsaacSimRenderConfig:
 
 @dataclass(frozen=True)
 class IsaacLab3NewtonConfig:
-    """Historical saved Newton settings; new experiments use native physics kwargs."""
+    """Compatibility Newton settings; new experiments can use native physics kwargs."""
 
     use_cuda_graph: bool = True
     """Capture physics execution on CUDA rather than launching every kernel from Python."""
@@ -171,15 +172,9 @@ class IsaacLab3Config:
     OVRTX cameras cannot share a process with Kit.
     """
 
-    physics: NativeSettings = field(default_factory=dict)
-    """Native kwargs for the selected physics backend. Nested existing configs merge;
-    use ``_type_='module:ConfigClass'`` to construct an optional/different native config.
-    Example: ``{"solver_cfg": {"cone": "elliptic", "impratio": 5.0}}`` for Newton.
-    """
-
-    renderer_options: NativeSettings = field(default_factory=dict)
-    """Native kwargs for the selected camera renderer; no additional renderer selection.
-    Asynchronous captures require a timestamp/history contract and are currently rejected.
+    newton: IsaacLab3NewtonConfig = field(default_factory=IsaacLab3NewtonConfig)
+    """Compatibility input for existing Python configs and ``newton.*`` CLI flags.
+    New controls use ``physics``; conflicting nondefault settings are rejected.
     """
 
     use_fabric: bool = True
@@ -195,6 +190,53 @@ class IsaacLab3Config:
     """Contact-force observation. ``normal`` preserves the existing reward contract;
     ``total`` includes the tangential forces available in Isaac Sim 6.2.
     """
+
+    physics: NativeSettings = field(default_factory=dict)
+    """Native kwargs for the selected physics backend. Nested existing configs merge;
+    use ``_type_='module:ConfigClass'`` to construct an optional/different native config.
+    Example: ``{"solver_cfg": {"cone": "elliptic", "impratio": 5.0}}`` for Newton.
+    """
+
+    renderer_options: NativeSettings = field(default_factory=dict)
+    """Native kwargs for the selected camera renderer; no additional renderer selection.
+    Asynchronous captures require a timestamp/history contract and are currently rejected.
+    """
+
+    @property
+    def physics_settings(self) -> dict[str, Any]:
+        """Resolve compatibility inputs without adding duplicate settings to new configs."""
+        settings = copy.deepcopy(self.physics)
+        if self.physics_backend != "newton":
+            return settings
+        defaults = IsaacLab3NewtonConfig()
+        for old_name, target in (
+            ("use_cuda_graph", ("use_cuda_graph",)),
+            ("nconmax", ("solver_cfg", "nconmax")),
+            ("njmax", ("solver_cfg", "njmax")),
+            ("solver_iterations", ("solver_cfg", "iterations")),
+            ("default_shape_margin", ("default_shape_cfg", "margin")),
+        ):
+            value = getattr(self.newton, old_name)
+            # Defaults stay inactive, so an untouched compatibility block cannot
+            # override native kwargs. The backend retains the historical defaults.
+            if value == getattr(defaults, old_name):
+                continue
+            destination = settings
+            for component in target[:-1]:
+                nested = destination.setdefault(component, {})
+                if not isinstance(nested, dict):
+                    raise ValueError(f"isaaclab3.newton.{old_name} cannot merge into physics.{'.'.join(target[:-1])}")
+                destination = nested
+            key = target[-1]
+            if key in destination and destination[key] != value:
+                raise ValueError(f"Conflicting isaaclab3.newton.{old_name} and physics.{'.'.join(target)}")
+            destination[key] = value
+        return settings
+
+    @model_validator(mode="after")
+    def _validate_physics_aliases(self) -> IsaacLab3Config:
+        _ = self.physics_settings
+        return self
 
 
 @dataclass(frozen=True)
@@ -417,15 +459,6 @@ class SimulatorInitConfig:
     isaacsim: IsaacSimRenderConfig = field(default_factory=IsaacSimRenderConfig)
     """Isaac Sim launch options (rendering mode + Kit/carb args)."""
 
-    isaacsim_backend: IsaacSimBackend = IsaacSimBackend.ISAACLAB2
-    """Isaac Lab API selection. Both backends share the ``isaacsim`` simulator.
-
-    Use ``simulator:isaacsim3`` for Isaac Lab 3.0 / Isaac Sim 6.2, or override
-    ``--simulator.config.isaacsim-backend=ISAACLAB3``. ``simulator:isaacsim``
-    selects Lab 2 regardless of the activated environment; saved configurations
-    retain their explicit selection.
-    """
-
     mujoco_backend: MujocoBackend = MujocoBackend.CLASSIC
     """MuJoCo physics backend selection.
 
@@ -450,6 +483,15 @@ class SimulatorInitConfig:
 
     virtual_gantry: VirtualGantryCfg = field(default_factory=VirtualGantryCfg)
     """Virtual gantry system configuration."""
+
+    isaacsim_backend: IsaacSimBackend = IsaacSimBackend.ISAACLAB2
+    """Isaac Lab API selection. Both backends share the ``isaacsim`` simulator.
+
+    Use ``simulator:isaacsim3`` for Isaac Lab 3.0 / Isaac Sim 6.2, or override
+    ``--simulator.config.isaacsim-backend=ISAACLAB3``. ``simulator:isaacsim``
+    selects Lab 2 regardless of the activated environment; saved configurations
+    retain their explicit selection.
+    """
 
     @model_validator(mode="before")
     @classmethod
