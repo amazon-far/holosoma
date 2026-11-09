@@ -1,4 +1,4 @@
-"""SDK adapter, imported only after Newton physics has been selected.
+"""SDK adapter, imported after the selected runtime has been launched.
 
 The SDK's manager hook applies options before its first step and CUDA capture.
 Its public solver config omits jacobian and ls_tolerance even though the pinned
@@ -12,8 +12,6 @@ from typing import Any
 
 import mujoco
 from newton.solvers import SolverMuJoCo
-from isaaclab.utils import configclass
-from isaaclab_newton.physics import MJWarpSolverCfg
 from isaaclab_newton.physics.mjwarp_manager import NewtonMJWarpManager
 
 from holosoma.config_types.mujoco import MujocoConfig
@@ -24,18 +22,7 @@ from holosoma.simulator.shared.mujoco_warp_options import (
     warp_option_overrides,
 )
 from holosoma.simulator.shared.mujoco_options import native_value
-
-
-@configclass
-class HolosomaMJWarpSolverCfg(MJWarpSolverCfg):
-    """Private native config carrying Holosoma's already typed common options."""
-
-    class_type: str = "holosoma.simulator.isaacsim.backends.newton_mjwarp:NewtonMJWarpManagerAdapter"
-    jacobian: str | None = None
-    ls_tolerance: float | None = None
-    # SDK configclass rewrites nested objects in place. Keep a private plain
-    # mapping here so it cannot attempt to mutate Holosoma's frozen dataclasses.
-    shared_config: dict[str, Any] = {}
+from .newton_mjwarp_cfg import HolosomaMJWarpSolverCfg
 
 
 class _ConfiguredSolver(SolverMuJoCo):
