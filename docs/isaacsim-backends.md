@@ -201,7 +201,8 @@ link_physics = PhysicsConfig(
 Put robot settings in `robot.asset.link_physics` and object settings in
 `object.physics`. Fragments without rules target eligible prims in the whole
 asset; rules use regex suffixes relative to its spawn prim. Later rules win,
-and list order survives YAML/checkpoint reload. Native overrides apply after
+and list order survives YAML/checkpoint reload. Alternatives are scoped to the
+owning asset; rules cannot reach sibling assets. Native overrides apply after
 portable defaults. `None` and empty lists leave the corresponding native
 properties unchanged. Missing targets report an error.
 
