@@ -158,6 +158,7 @@ class PolicyTask(BaseTask):
         self.extras["time_outs"] = self.time_out_buf
 
     def _reset_task_managers(self, env_ids: torch.Tensor) -> None:
+        super()._reset_task_managers(env_ids)
         self.action_manager.reset(env_ids)
         self.command_manager.reset(env_ids)
         self.curriculum_manager.reset(env_ids)

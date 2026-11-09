@@ -237,7 +237,6 @@ class BaseTask:
         if env_ids.numel() == 0:
             # Managers' reset hooks run every control frame, resets or not; there is no state to apply.
             self._reset_task_state(env_ids)
-            self.randomization_manager.reset(env_ids)
             self._reset_task_managers(env_ids)
             return
 
@@ -253,7 +252,6 @@ class BaseTask:
         # Advance the per-env episode counter BEFORE reset DR draws, so each env's k-th reset is
         # keyed by episode == k (independent of when, or alongside whom, it reset).
         self.episode_count[env_ids.to("cpu")] += 1
-        self.randomization_manager.reset(env_ids)
         self._reset_task_managers(env_ids)
 
         # Call manager-based reset events
@@ -434,7 +432,8 @@ class BaseTask:
         """Reset task-specific state after simulator state callbacks."""
 
     def _reset_task_managers(self, env_ids: torch.Tensor) -> None:
-        """Reset managers owned by the task specialization."""
+        """Reset the task's managers; specializations extend it to reset their own."""
+        self.randomization_manager.reset(env_ids)
 
     def _after_reset_synchronization(self, env_ids: torch.Tensor) -> None:
         """Update task state after reset writes have been synchronized."""
