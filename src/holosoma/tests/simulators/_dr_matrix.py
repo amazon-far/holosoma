@@ -39,7 +39,7 @@ def _sampler(env, term: str = "dr_matrix_test") -> TermSampler:
     (no global-RNG fallback), so fall back to a fixed test seed when the env has none.
     """
     base_seed = getattr(env, "dr_base_seed", None) or 0
-    episode = getattr(env, "dr_episode_count", None)
+    episode = getattr(env, "episode_count", None)
     return TermSampler.bind(base_seed, term, STAGE_RESET, episode)
 
 

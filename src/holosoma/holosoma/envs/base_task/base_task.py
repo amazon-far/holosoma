@@ -111,12 +111,11 @@ class BaseTask:
         self.num_envs = training_config.num_envs
         self.device = resolve_simulation_device(tyro_config, get_local_rank())
 
-        # Domain-randomization keying state (read by the randomization manager to bind TermSamplers).
-        # base_seed makes every DR draw value = f(seed, term, env, episode); the per-env episode
-        # counter (incremented on reset, BEFORE the reset DR runs) keys async per-env resets. Set here
-        # (before any manager is constructed) so setup-stage DR already sees them.
+        # Episodes each environment has started, incremented on reset before the reset DR runs. With
+        # dr_base_seed it keys every DR draw as f(seed, term, env, episode), so async per-env resets
+        # reproduce. Set before any manager is constructed so setup-stage DR already sees them.
         self.dr_base_seed = training_config.seed
-        self.dr_episode_count = torch.zeros(self.num_envs, dtype=torch.long, device="cpu")
+        self.episode_count = torch.zeros(self.num_envs, dtype=torch.long, device="cpu")
 
         self.terrain_manager = TerrainManager(terrain_config, self, self.device)
         self.simulator: BaseSimulator = SimulatorClass(
@@ -200,6 +199,12 @@ class BaseTask:
         if not self._rendered_this_substep:
             self.render()
 
+    @property
+    def dr_episode_count(self) -> torch.Tensor:
+        """Deprecated alias of :attr:`episode_count`."""
+        _warn_deprecated("dr_episode_count", "use episode_count")
+        return self.episode_count
+
     def _init_buffers(self) -> None:
         self.episode_length_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
 
@@ -250,7 +255,7 @@ class BaseTask:
         # Reset all managers AFTER state changes
         # Advance the per-env episode counter BEFORE reset DR draws, so each env's k-th reset is
         # keyed by episode == k (independent of when, or alongside whom, it reset).
-        self.dr_episode_count[env_ids.to("cpu")] += 1
+        self.episode_count[env_ids.to("cpu")] += 1
         self.randomization_manager.reset(env_ids)
         self._reset_task_managers(env_ids)
 
