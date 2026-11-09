@@ -41,9 +41,20 @@ class HolosomaMJWarpSolverCfg(MJWarpSolverCfg):
 class _ConfiguredSolver(SolverMuJoCo):
     def __init__(self, model: Any, *, shared_config: MujocoConfig, **kwargs: Any):
         self._holosoma_config = shared_config
+        if shared_config.disableflags is not None:
+            mask = native_value("disableflags", shared_config.disableflags, "sim.mujoco.disableflags")
+            sensor_disabled = bool(mask & int(mujoco.mjtDisableBit.mjDSBL_SENSOR))
+            if kwargs.get("disable_sensors") and not sensor_disabled:
+                raise ValueError("sim.mujoco.disableflags must include sensor when Newton determinism is requested")
+            # These flags also control Newton's conversion/allocation policy.
+            # Resolve them before the constructor computes its CCD margin and
+            # contact workarounds; changing only MjOption would leave those stale.
+            kwargs["enable_multiccd"] = not bool(mask & int(mujoco.mjtDisableBit.mjDSBL_MULTICCD))
+            kwargs["disable_contacts"] = bool(mask & int(mujoco.mjtDisableBit.mjDSBL_CONTACT))
+            kwargs["disable_sensors"] = sensor_disabled
         super().__init__(model, **kwargs)
 
-    def _convert_to_mjc(self, model: Any, **kwargs: Any) -> None:
+    def _convert_to_mjc(self, model: Any, state: Any = None, **kwargs: Any) -> Any:
         # Flags must reach compilation/upload, rather than merely mutate the
         # CPU model after MJWarp has specialized kernels and allocated buffers.
         cfg = self._holosoma_config
@@ -56,7 +67,7 @@ class _ConfiguredSolver(SolverMuJoCo):
                 if name == "enableflags" and mask & int(mujoco.mjtEnableBit.mjENBL_SLEEP):
                     raise ValueError("sim.mujoco.enableflags: Holosoma's state resets do not support sleeping")
                 kwargs[name] = mask
-        super()._convert_to_mjc(model, **kwargs)
+        return super()._convert_to_mjc(model, state, **kwargs)
 
 
 class NewtonMJWarpManagerAdapter(NewtonMJWarpManager):
