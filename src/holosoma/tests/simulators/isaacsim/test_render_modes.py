@@ -18,7 +18,7 @@ import sys
 from contextlib import contextmanager
 from importlib.machinery import ModuleSpec
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -93,11 +93,21 @@ def test_launcher_config_reaches_app_launcher_namespace(
     captured_config: list[Any] = []
     app_sentinel = object()
 
-    class FakeIsaacRtxRendererCfg(SimpleNamespace):
+    @dataclasses.dataclass
+    class FakeIsaacRtxRendererCfg:
         pass
 
-    class FakeNewtonWarpRendererCfg(SimpleNamespace):
+    @dataclasses.dataclass
+    class FakeNewtonWarpRendererCfg:
         pass
+
+    @dataclasses.dataclass
+    class FakePhysxCfg:
+        bounce_threshold_velocity: float = 0.5
+        solver_type: int = 1
+        max_position_iteration_count: int = 255
+        max_velocity_iteration_count: int = 255
+        gpu_max_rigid_patch_count: int = 10 * 2**15
 
     class FakeAppLauncher:
         @staticmethod
@@ -122,7 +132,7 @@ def test_launcher_config_reaches_app_launcher_namespace(
     if backend == IsaacSimBackend.ISAACLAB3:
         physx_module.__spec__ = ModuleSpec("isaaclab_physx", loader=None)
         physics_module = ModuleType("isaaclab_physx.physics")
-        physics_module.__dict__["PhysxCfg"] = SimpleNamespace
+        physics_module.__dict__["PhysxCfg"] = FakePhysxCfg
         monkeypatch.setitem(sys.modules, "isaaclab_physx.physics", physics_module)
         for module_name, class_name, cfg_type in [
             ("isaaclab_physx.renderers", "IsaacRtxRendererCfg", FakeIsaacRtxRendererCfg),

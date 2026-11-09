@@ -148,6 +148,26 @@ def main() -> int:
     author_properties("/Asset", {"mass_props": [("/body", [MassCfg(mass=2.0)])]}, flags={}, stage=fixture)
     assert UsdPhysics.MassAPI(body).GetMassAttr().Get() == 2.0
     assert visual.IsInstanceable(), "A mass override deinstanced unrelated visuals"
+    other_body = fixture.DefinePrim("/Asset/other_body", "Xform")
+    outside = fixture.DefinePrim("/other_body", "Xform")
+    sibling = fixture.DefinePrim("/AssetOther/body", "Xform")
+    for prim, mass in ((other_body, 3.0), (outside, 77.0), (sibling, 88.0)):
+        UsdPhysics.RigidBodyAPI.Apply(prim)
+        UsdPhysics.MassAPI.Apply(prim).CreateMassAttr(mass)
+    author_properties(
+        "/Asset",
+        {"mass_props": [("/body|/other_body", [MassCfg(mass=4.0)])]},
+        flags={},
+        stage=fixture,
+    )
+    assert UsdPhysics.MassAPI(body).GetMassAttr().Get() == 4.0
+    assert UsdPhysics.MassAPI(other_body).GetMassAttr().Get() == 4.0
+    author_properties("/Asset", {"mass_props": [("(.*)", [MassCfg(mass=5.0)])]}, flags={}, stage=fixture)
+    assert UsdPhysics.MassAPI(body).GetMassAttr().Get() == 5.0
+    assert UsdPhysics.MassAPI(other_body).GetMassAttr().Get() == 5.0
+    assert UsdPhysics.MassAPI(outside).GetMassAttr().Get() == 77.0
+    assert UsdPhysics.MassAPI(sibling).GetMassAttr().Get() == 88.0
+    assert visual.IsInstanceable(), "A broad mass rule deinstanced unrelated visuals"
 
     init = config.robot.init_state
     initial = torch.tensor(

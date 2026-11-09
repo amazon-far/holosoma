@@ -29,6 +29,11 @@ _FLAGS = {
 }
 
 
+def _target_expression(anchor: str, pattern: str) -> str:
+    """Keep every alternative within the owning asset, including grouped suffixes."""
+    return re.escape(anchor) + f"(?=/|$)(?:{pattern})"
+
+
 def schema_rules(value: Any, *, location: str) -> list[tuple[str, list[Any]]]:
     """A fragment/list is shorthand for all descendants; targeted rules retain order."""
     if value is None or value == []:
@@ -156,7 +161,7 @@ def author_properties(
         for pattern, fragments in rules:
             if not fragments:
                 continue
-            for prim in find_matching_prims(re.escape(anchor) + pattern, stage=stage):
+            for prim in find_matching_prims(_target_expression(anchor, pattern), stage=stage):
                 if api is not None and not create and not prim.HasAPI(api):
                     continue
                 if family == "mesh_collision_props" and not prim.IsA(UsdGeom.Mesh):
@@ -178,7 +183,7 @@ def author_properties(
         for index, (pattern, fragments) in enumerate(rules):
             if not fragments:
                 continue
-            expression = re.escape(anchor) + pattern
+            expression = _target_expression(anchor, pattern)
             if family == "physics_material":
                 _bind_materials(
                     anchor, expression, fragments, stage=stage, defaults=material_defaults, rule_index=index
