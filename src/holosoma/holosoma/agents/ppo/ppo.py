@@ -210,7 +210,8 @@ class PPO(BaseAlgo):
         self._init_config()
 
         self.current_learning_iteration = 0
-        _ = self.env.reset_all()
+        self.env.reset_envs_idx()
+        self.env.compute_reset_observations()
 
     def _init_config(self) -> None:
         self.algo_obs_dim_dict = self.env.observation_manager.get_obs_dims()
@@ -354,10 +355,11 @@ class PPO(BaseAlgo):
     def learn(self) -> None:  # type: ignore[override]
         self._train_mode()
 
-        obs_dict = self.env.reset_all()
+        self.env.reset_envs_idx()
+        obs_dict = self.env.compute_reset_observations()
 
         # Initialize environments with different episode length buffers
-        # Must happen AFTER reset_all() to avoid being overwritten by reset
+        # Must happen AFTER the reset to avoid being overwritten by it
         if self.config.init_at_random_ep_len:
             self.env.episode_length_buf = torch.randint_like(
                 self.env.episode_length_buf, high=int(self.env.max_episode_length)
@@ -827,7 +829,8 @@ class PPO(BaseAlgo):
     @torch.no_grad()
     def get_example_obs(self) -> dict[str, torch.Tensor]:
         """Used for exporting policy as onnx."""
-        obs_dict = self.env.reset_all()
+        self.env.reset_envs_idx()
+        obs_dict = self.env.compute_reset_observations()
         return {
             "actor_obs": torch.cat([obs_dict[k] for k in self.actor_obs_keys], dim=1),
             "critic_obs": torch.cat([obs_dict[k] for k in self.critic_obs_keys], dim=1),
@@ -840,7 +843,8 @@ class PPO(BaseAlgo):
         actor_state: dict[str, Any] = {}
         self.eval_policy = self.get_inference_policy()
 
-        obs_dict = self.env.reset_all()
+        self.env.reset_envs_idx()
+        obs_dict = self.env.compute_reset_observations()
         init_actions = torch.zeros(self.env.num_envs, self.num_act, device=self.device)
         actor_state.update({"obs": obs_dict, "actions": init_actions})
 

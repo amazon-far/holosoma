@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -150,7 +150,12 @@ class _LoopTask(SimulationTask):
         self._init_buffers()
         self._add_pacing_hooks()
 
-    def reset_all(self) -> None:
+    def reset_envs_idx(
+        self,
+        env_ids: torch.Tensor | None = None,
+        target_states: dict[str, Any] | None = None,
+        target_buf: dict[str, Any] | None = None,
+    ) -> None:
         self._start_episodes(torch.arange(self.num_envs))
 
 

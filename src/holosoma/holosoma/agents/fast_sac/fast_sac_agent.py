@@ -73,11 +73,13 @@ class FastSACEnv:
         return getattr(self._env, name)
 
     def reset(self) -> torch.Tensor:
-        obs_dict = self._env.reset_all()
+        self._env.reset_envs_idx()
+        obs_dict = self._env.compute_reset_observations()
         return torch.cat([obs_dict[k] for k in self._actor_obs_keys], dim=1)
 
     def reset_with_critic_obs(self) -> tuple[torch.Tensor, torch.Tensor]:
-        obs_dict = self._env.reset_all()
+        self._env.reset_envs_idx()
+        obs_dict = self._env.compute_reset_observations()
         actor_obs = torch.cat([obs_dict[k] for k in self._actor_obs_keys], dim=1)
         critic_obs = torch.cat([obs_dict[k] for k in self._critic_obs_keys], dim=1)
         return actor_obs, critic_obs
@@ -877,7 +879,8 @@ class FastSACAgent(BaseAlgo):
     @torch.no_grad()
     def get_example_obs(self) -> dict[str, torch.Tensor]:
         """Used for exporting policy as onnx."""
-        obs_dict = self.unwrapped_env.reset_all()
+        self.unwrapped_env.reset_envs_idx()
+        obs_dict = self.unwrapped_env.compute_reset_observations()
         for k in obs_dict:
             obs_dict[k] = obs_dict[k].cpu()
         return {

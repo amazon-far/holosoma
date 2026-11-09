@@ -1,8 +1,8 @@
-"""WBT reset regression: reset_all() leaves valid motion targets, so step 1 ends no episode.
+"""WBT reset regression: a reset leaves valid motion targets, so step 1 ends no episode.
 
 Builds the G1 whole-body-tracking task, resets it, and takes one zero-action step. Each env
 starts on its sampled motion frame, so tracking error is small and no termination should fire.
-If reset_all() left the tracked-body targets at their zero-initialized values, the bad-tracking
+If the reset left the tracked-body targets at their zero-initialized values, the bad-tracking
 terminations would end almost every episode on that first step.
 """
 
@@ -46,9 +46,9 @@ def main() -> int:
     with tyro_config.create_task() as task:
         env = cast("WholeBodyTrackingManager", task)
         motion = cast("MotionCommand", env.command_manager.get_state("motion_command"))
-        env.reset_all()
+        env.reset_envs_idx()
         if not bool(motion.body_pos_relative_w.abs().amax() > 0.0):
-            failures.append("reset_all() left the tracked-body targets at zero")
+            failures.append("the reset left the tracked-body targets at zero")
 
         actions = torch.zeros(NUM_ENVS, tyro_config.robot.actions_dim, device=env.device)
         _, _, dones, _ = env.step({"actions": actions})

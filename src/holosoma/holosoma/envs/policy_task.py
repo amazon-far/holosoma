@@ -166,11 +166,11 @@ class PolicyTask(BaseTask):
         self._pre_compute_observations_callback()
 
     def reset_all(self) -> dict[str, Any]:
-        obs_dict: dict[str, Any] = super().reset_all()
-        return obs_dict
+        super().reset_all()
+        return self.compute_reset_observations()
 
-    def _finish_reset(self) -> dict[str, Any]:
-        # reset_all() does not step physics, so it opens its own observation frame.
+    def compute_reset_observations(self) -> dict[str, Any]:
+        """Compute observations of the current state after a reset, without advancing physics."""
         self.observation_manager.new_frame()
         self.obs_buf_dict = self.observation_manager.step()
         self._post_compute_observations_callback()

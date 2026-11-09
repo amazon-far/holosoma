@@ -200,7 +200,7 @@ def test_first_reset_after_restore_keeps_tracker_average(env_cls: type) -> None:
     state = saved.get_checkpoint_state()
 
     resumed = env_cls()
-    # As after reset_all(): every env flagged for an update with zero-length episodes.
+    # As after a full reset: every env flagged for an update with zero-length episodes.
     resumed._pending_episode_lengths = torch.zeros(resumed.num_envs, dtype=torch.long)
     resumed._pending_episode_update_mask = torch.ones(resumed.num_envs, dtype=torch.bool)
     resumed.load_checkpoint_state(state)

@@ -1,4 +1,4 @@
-"""WBT reset_all() target regression on Isaac Sim."""
+"""WBT reset target regression on Isaac Sim."""
 
 from __future__ import annotations
 

@@ -163,7 +163,6 @@ class BaseTask:
         self.randomization_manager = RandomizationManager(randomization_config, self, self.device)
         self._initialize_post_randomization_task_managers()
 
-        # Episode state survives _init_buffers(), which some tasks re-run on reset_all().
         self._episode_active = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self._init_buffers()
 
@@ -209,13 +208,9 @@ class BaseTask:
         self.episode_length_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
 
     def reset_all(self) -> Any:
-        """Reset every environment without advancing physics."""
+        """Deprecated: reset every environment with :meth:`reset_envs_idx`."""
+        _warn_deprecated("reset_all", "call reset_envs_idx(), then compute_reset_observations() on a PolicyTask")
         self.reset_envs_idx()
-        return self._finish_reset()
-
-    def _finish_reset(self) -> Any:
-        """Finish reset work owned by a task specialization."""
-        return None
 
     def _end_episodes(self, env_ids: torch.Tensor) -> None:
         self._episode_active[env_ids] = False
@@ -234,9 +229,13 @@ class BaseTask:
         target_buf: dict[str, Any] | None = None,
     ) -> None:
         """Reset selected environments, or all of them when ``env_ids`` is None, without advancing physics."""
-        env_ids = (
-            torch.arange(self.num_envs, device=self.device) if env_ids is None else self._ensure_long_tensor(env_ids)
-        )
+        if env_ids is None:
+            # Back-compat with reset_all(): in-progress episodes are recorded as zero-length, which
+            # restarts episode-length statistics. Not recording them as finished would be more correct.
+            self.episode_length_buf.zero_()
+            env_ids = torch.arange(self.num_envs, device=self.device)
+        else:
+            env_ids = self._ensure_long_tensor(env_ids)
         if env_ids.numel() == 0:
             # Managers' reset hooks run every control frame, resets or not; there is no state to apply.
             self._reset_task_state(env_ids)

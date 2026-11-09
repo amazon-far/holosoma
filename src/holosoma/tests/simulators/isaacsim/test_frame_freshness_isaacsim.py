@@ -121,7 +121,7 @@ def _check_frames(task, config, check, failures: list[str], result_file: str | N
         task.step({})
         return _red_fraction(sim.get_camera_data(camera, "rgb")[0])
 
-    task.reset_all()
+    task.reset_envs_idx()
 
     # Settle so the first measured frame is not competing with spawn transients.
     for _ in range(6):

@@ -6,8 +6,8 @@ actions. It checks the public environment behavior every backend must keep:
 
 1. Actor and critic observations, rewards and dones all have ``num_envs`` rows.
 2. Completed-episode metrics have one entry per done; all-environment metrics keep the full batch.
-3. The logged average episode length is never NaN, some episodes finish, and ``reset_all()``
-   returns the average episode length to zero.
+3. The logged average episode length is never NaN, some episodes finish, and resetting every
+   environment returns the average episode length to zero.
 """
 
 from __future__ import annotations
@@ -73,9 +73,10 @@ def main() -> int:
         env = cast("LeggedRobotLocomotionManager", task)
         if env.device != DEVICE:
             failures.append(f"task resolved device {env.device!r}, expected {DEVICE!r}")
-        obs_dict = env.reset_all()
+        env.reset_envs_idx()
+        obs_dict = env.compute_reset_observations()
         failures.extend(
-            f"reset_all: {name} has {len(obs_dict[name])} rows, expected {NUM_ENVS}"
+            f"reset: {name} has {len(obs_dict[name])} rows, expected {NUM_ENVS}"
             for name in ("actor_obs", "critic_obs")
             if len(obs_dict[name]) != NUM_ENVS
         )
@@ -89,9 +90,9 @@ def main() -> int:
         if n_dones == 0:
             failures.append(f"no episode finished in {NUM_STEPS} zero-action steps")
 
-        env.reset_all()
+        env.reset_envs_idx()
         if env.average_episode_length != 0.0:
-            failures.append(f"average_episode_length is {env.average_episode_length} after reset_all, expected 0.0")
+            failures.append(f"average_episode_length is {env.average_episode_length} after a reset, expected 0.0")
 
         # Report before leaving the session: closing the Isaac Sim app ends the process.
         return _report(args, failures, n_dones)

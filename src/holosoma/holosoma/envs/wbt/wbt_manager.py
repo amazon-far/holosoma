@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 import torch
 
@@ -69,18 +69,11 @@ class WholeBodyTrackingManager(PolicyTask):
         motion_command.update_metrics()
         self.log_dict.update(motion_command.metrics)
 
-    def reset_all(self) -> dict[str, Any]:
-        # If reset_all is called several times, clear buffer in motion_command
-        motion_command = cast("MotionCommand", self.command_manager.get_state("motion_command"))
-        motion_command.init_buffers()
-        return super().reset_all()
-
-    def _finish_reset(self) -> dict[str, Any]:
-        # reset_all() does not step, so compute the targets init_buffers() cleared before the
-        # observations and the first termination check read them.
+    def _after_reset_synchronization(self, env_ids: torch.Tensor) -> None:
+        # A reset does not step, so refresh the targets the observations and terminations read.
         motion_command = cast("MotionCommand", self.command_manager.get_state("motion_command"))
         motion_command.update_relative_body_targets()
-        return super()._finish_reset()
+        super()._after_reset_synchronization(env_ids)
 
     def _reset_robot_states_callback(
         self, env_ids: torch.Tensor, target_states: Mapping[str, torch.Tensor] | None = None

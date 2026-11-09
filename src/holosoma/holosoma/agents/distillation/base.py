@@ -118,7 +118,8 @@ class DistillationBase(BaseAlgo):
         else:
             raise ValueError(f"Unknown distill_loss_type: {self.config.distill_loss_type!r}")
 
-        _ = self.env.reset_all()
+        self.env.reset_envs_idx()
+        self.env.compute_reset_observations()
 
     # ------------------------------------------------------------------ setup
 
@@ -271,7 +272,8 @@ class DistillationBase(BaseAlgo):
         self._train_mode()
         self.policy.require_loaded_teachers()
 
-        obs_dict = self._obs_to_device(self.env.reset_all())
+        self.env.reset_envs_idx()
+        obs_dict = self._obs_to_device(self.env.compute_reset_observations())
 
         total_iters = (
             num_learning_iterations if num_learning_iterations is not None else self.config.num_learning_iterations
@@ -589,7 +591,8 @@ class DistillationBase(BaseAlgo):
         actor_state: dict[str, Any] = {}
         self.eval_policy = self.get_inference_policy()
 
-        obs_dict = self.env.reset_all()
+        self.env.reset_envs_idx()
+        obs_dict = self.env.compute_reset_observations()
         init_actions = torch.zeros(self.env.num_envs, self.num_act, device=self.device)
         actor_state.update({"obs": obs_dict, "actions": init_actions})
         actor_state["obs"].update(self._extract_student_obs(obs_dict))

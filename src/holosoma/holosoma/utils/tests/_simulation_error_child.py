@@ -160,7 +160,12 @@ def run_task_session(
                 ),
             )
 
-        def reset_all(self) -> None:
+        def reset_envs_idx(
+            self,
+            env_ids: Any = None,
+            target_states: dict[str, Any] | None = None,
+            target_buf: dict[str, Any] | None = None,
+        ) -> None:
             if scenario == "run_reset":
                 fail()
 

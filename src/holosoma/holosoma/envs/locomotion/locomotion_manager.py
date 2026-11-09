@@ -133,10 +133,6 @@ class LeggedRobotLocomotionManager(PolicyTask):
     def _post_compute_observations_callback(self) -> None:
         return
 
-    def reset_all(self) -> dict[str, Any]:
-        self._init_buffers()
-        return super().reset_all()
-
     def _reset_robot_states_callback(
         self, env_ids: torch.Tensor, target_states: Mapping[str, torch.Tensor] | None = None
     ) -> None:

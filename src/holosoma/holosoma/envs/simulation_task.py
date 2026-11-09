@@ -35,7 +35,7 @@ class SimulationTask(BaseTask):
         logger.info(f"Robot: {self.config.robot.asset.robot_type}")
         logger.info(f"Simulator: {self.config.simulator._target_}")
         logger.info(f"Terrain: {self.config.terrain.terrain_term.mesh_type} ({self.config.terrain.terrain_term.func})")
-        self.reset_all()
+        self.reset_envs_idx()
 
         # A simulation run is one open-ended episode; record it regardless of the episode interval.
         video_recorder = self.simulator.video_recorder
