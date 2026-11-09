@@ -18,6 +18,7 @@ from holosoma.config_types.env import EnvConfig
 from holosoma.config_types.plugin import MotionPlaybackPluginConfig
 from holosoma.envs.simulation_task import SimulationTask
 from holosoma.managers.randomization import RandomizationManager
+from holosoma.managers.termination import TerminationManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.shared.scene_types import EnvOriginsScene
@@ -145,6 +146,10 @@ class _LoopTask(SimulationTask):
         self._rendered_this_substep = False
         self.randomization_manager = cast(
             "RandomizationManager", SimpleNamespace(step=lambda: None, reset=lambda _env_ids: None)
+        )
+        no_ends = torch.zeros(self.num_envs, dtype=torch.bool)
+        self.termination_manager = cast(
+            "TerminationManager", SimpleNamespace(check=lambda: (no_ends, no_ends), reset=lambda _env_ids: None)
         )
         self._episode_active = torch.zeros(self.num_envs, dtype=torch.bool)
         self._init_buffers()

@@ -95,7 +95,7 @@ def get_tyro_env_config(tyro_config: ExperimentConfig) -> EnvConfig:
 
 
 def get_run_sim_env_config(config: RunSimConfig) -> EnvConfig:
-    """Convert RunSimConfig to EnvConfig for a manager-free simulation task.
+    """Convert RunSimConfig to EnvConfig for a simulation task without policy managers.
 
     Parameters
     ----------
@@ -119,7 +119,7 @@ def get_run_sim_env_config(config: RunSimConfig) -> EnvConfig:
         observation=None,
         action=None,
         reward=None,
-        termination=None,
+        termination=config.termination,
         randomization=None,
         command=None,
         curriculum=None,

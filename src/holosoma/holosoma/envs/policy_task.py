@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import numpy as np
 from loguru import logger
 
 from holosoma.config_types.env import EnvConfig
@@ -14,7 +13,6 @@ from holosoma.managers.command import CommandManager
 from holosoma.managers.curriculum import CurriculumManager
 from holosoma.managers.observation import ObservationManager
 from holosoma.managers.reward import RewardManager
-from holosoma.managers.termination import TerminationManager
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.sim_utils import setup_keyboard_listener
 
@@ -42,17 +40,12 @@ class PolicyTask(BaseTask):
         assert config.observation is not None
         assert config.action is not None
         assert config.reward is not None
-        assert config.termination is not None
         assert config.command is not None
         assert config.curriculum is not None
-
-        self.max_episode_length_s = config.simulator.config.sim.max_episode_length_s
-        self.max_episode_length = np.ceil(self.max_episode_length_s / self.dt)
 
         self.observation_manager = ObservationManager(config.observation, self, self.device)
         self.action_manager = ActionManager(config.action, self, self.device)
         self.reward_manager = RewardManager(config.reward, self, self.device)
-        self.termination_manager = TerminationManager(config.termination, self, self.device)
         self.command_manager = CommandManager(config.command, self, self.device)
         self.curriculum_manager = CurriculumManager(config.curriculum, self, self.device)
 
@@ -79,8 +72,6 @@ class PolicyTask(BaseTask):
 
         self.obs_buf_dict: dict[str, Any] = {}
         self.rew_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.float)
-        self.reset_buf = torch.ones(self.num_envs, device=self.device, dtype=torch.long)
-        self.time_out_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self.extras: dict[str, Any] = {}
         self.log_dict: dict[str, Any] = {}
         self._pending_episode_lengths = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
@@ -159,7 +150,6 @@ class PolicyTask(BaseTask):
         self.action_manager.reset(env_ids)
         self.command_manager.reset(env_ids)
         self.curriculum_manager.reset(env_ids)
-        self.termination_manager.reset(env_ids)
 
     def _after_reset_synchronization(self, env_ids: torch.Tensor) -> None:
         self._pre_compute_observations_callback()
@@ -202,10 +192,6 @@ class PolicyTask(BaseTask):
         self.command_manager.step()
         self.curriculum_manager.step()
         super()._step_managers()
-
-    def _get_control_frame_reset_env_ids(self) -> torch.Tensor:
-        self._check_termination()
-        return self.reset_buf.nonzero(as_tuple=False).flatten()
 
     def _before_control_frame_reset(self, env_ids: torch.Tensor) -> tuple[torch.Tensor, dict[str, Any]]:
         self._compute_reward()
@@ -258,15 +244,6 @@ class PolicyTask(BaseTask):
         self.rew_buf[:] = self.reward_manager.compute(self.dt)
         self.episode_sums = getattr(self.reward_manager, "episode_sums", {})
         self.episode_sums_raw = getattr(self.reward_manager, "episode_sums_raw", {})
-
-    def _check_termination(self) -> None:
-        self.reset_buf[:] = 0
-        self.time_out_buf[:] = 0
-
-        reset_flags, timeout_flags = self.termination_manager.check()
-        self.reset_buf |= reset_flags.to(dtype=self.reset_buf.dtype)
-        self.time_out_buf |= timeout_flags
-        self.reset_buf |= self.time_out_buf
 
     # ------------------------------------------------------------------
     # Hooks for subclasses

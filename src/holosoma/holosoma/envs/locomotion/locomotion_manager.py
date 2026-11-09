@@ -71,12 +71,9 @@ class LeggedRobotLocomotionManager(PolicyTask):
         self._max_push_vel = torch.zeros(2, dtype=torch.float32, device=self.device)
 
     def _setup_robot_body_indices(self) -> None:
+        super()._setup_robot_body_indices()
         foot_body_names = [s for s in self.body_names if self.robot_config.foot_body_name in s]
         foot_height_names = [s for s in self.body_names if self.robot_config.foot_height_name in s]
-
-        termination_contact_names = []
-        for name in self.robot_config.terminate_after_contacts_on:
-            termination_contact_names.extend([s for s in self.body_names if name in s])
 
         self.feet_indices = torch.zeros(len(foot_body_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i, name in enumerate(foot_body_names):
@@ -87,12 +84,6 @@ class LeggedRobotLocomotionManager(PolicyTask):
         )
         for i, name in enumerate(foot_height_names):
             self.feet_height_indices[i] = self.simulator.find_rigid_body_indice(name)
-
-        self.termination_contact_indices = torch.zeros(
-            len(termination_contact_names), dtype=torch.long, device=self.device, requires_grad=False
-        )
-        for i in range(len(termination_contact_names)):
-            self.termination_contact_indices[i] = self.simulator.find_rigid_body_indice(termination_contact_names[i])
 
         if self.robot_config.has_torso:
             self.torso_name = self.robot_config.torso_name

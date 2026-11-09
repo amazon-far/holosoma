@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
 from loguru import logger
 
 from holosoma.config_types.env import EnvConfig
 from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.randomization import RandomizationManagerCfg
+from holosoma.config_types.termination import TerminationManagerCfg
 from holosoma.managers.randomization import RandomizationManager
 from holosoma.managers.reset_events.manager import ResetEventManager
+from holosoma.managers.termination import TerminationManager
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator, _warn_deprecated
 from holosoma.simulator.base_simulator.hooks import Phase
@@ -198,6 +201,8 @@ class BaseTask:
 
     def _init_buffers(self) -> None:
         self.episode_length_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+        self.reset_buf = torch.ones(self.num_envs, device=self.device, dtype=torch.long)
+        self.time_out_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
 
     def reset_all(self) -> Any:
         """Deprecated: reset every environment with :meth:`reset_envs_idx`."""
@@ -326,7 +331,15 @@ class BaseTask:
         self.simulator.create_envs(self.num_envs, self._get_env_origins(), self.base_init_state)  # type: ignore[call-arg]
 
     def _setup_robot_body_indices(self) -> None:
-        """Hook for subclasses to prepare body index caches (default no-op)."""
+        """Cache body indices; specializations extend it with their own."""
+        termination_contact_names = [
+            body for name in self.robot_config.terminate_after_contacts_on for body in self.body_names if name in body
+        ]
+        self.termination_contact_indices = torch.tensor(
+            [self.simulator.find_rigid_body_indice(name) for name in termination_contact_names],
+            dtype=torch.long,
+            device=self.device,
+        )
 
     # ------------------------------------------------------------------
     # Hooks for subclasses
@@ -336,8 +349,12 @@ class BaseTask:
 
     def _initialize_task_managers(self) -> None:
         """Build the task's managers; specializations extend it to build their own."""
+        self.max_episode_length_s = self.config.simulator.config.sim.max_episode_length_s
+        self.max_episode_length = np.ceil(self.max_episode_length_s / self.dt)
         randomization_config = self.config.randomization or RandomizationManagerCfg()
         self.randomization_manager = RandomizationManager(randomization_config, self, self.device)
+        termination_config = self.config.termination or TerminationManagerCfg()
+        self.termination_manager = TerminationManager(termination_config, self, self.device)
 
     def _prepare_manager_fields(self) -> None:
         """Prepare simulator fields required by BaseTask-owned managers."""
@@ -424,6 +441,7 @@ class BaseTask:
     def _reset_task_managers(self, env_ids: torch.Tensor) -> None:
         """Reset the task's managers; specializations extend it to reset their own."""
         self.randomization_manager.reset(env_ids)
+        self.termination_manager.reset(env_ids)
 
     def _after_reset_synchronization(self, env_ids: torch.Tensor) -> None:
         """Update task state after reset writes have been synchronized."""
@@ -476,7 +494,17 @@ class BaseTask:
 
     def _get_control_frame_reset_env_ids(self) -> torch.Tensor:
         """Return environments whose active episodes should end this control frame."""
-        return torch.empty(0, device=self.device, dtype=torch.long)
+        self._check_termination()
+        return self.reset_buf.nonzero(as_tuple=False).flatten()
+
+    def _check_termination(self) -> None:
+        self.reset_buf[:] = 0
+        self.time_out_buf[:] = 0
+
+        reset_flags, timeout_flags = self.termination_manager.check()
+        self.reset_buf |= reset_flags.to(dtype=self.reset_buf.dtype)
+        self.time_out_buf |= timeout_flags
+        self.reset_buf |= self.time_out_buf
 
     def _before_control_frame_reset(self, env_ids: torch.Tensor) -> Any:
         """Capture task state immediately before selected environments reset."""

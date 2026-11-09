@@ -17,6 +17,7 @@ import holosoma.config_values.robot
 import holosoma.config_values.run_sim
 import holosoma.config_values.scene
 import holosoma.config_values.sensor
+import holosoma.config_values.termination
 import holosoma.config_values.terrain
 from holosoma.config_types.experiment import TrainingConfig
 from holosoma.config_types.logger import DisabledLoggerConfig, LoggerConfig
@@ -25,6 +26,7 @@ from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.sensor import SensorConfig
 from holosoma.config_types.simulator import SimulatorConfig
+from holosoma.config_types.termination import TerminationManagerCfg
 from holosoma.config_types.terrain import TerrainManagerCfg
 from holosoma.config_types.video import VideoConfig
 from holosoma.utils.config_registry import UseRegistry
@@ -71,6 +73,11 @@ class RunSimConfig:
     scene: Annotated[SceneConfig, UseRegistry(holosoma.config_values.scene.SCENE_REGISTRY)] = (
         holosoma.config_values.scene.empty
     )
+
+    termination: Annotated[
+        TerminationManagerCfg | None, UseRegistry(holosoma.config_values.termination.TERMINATION_REGISTRY)
+    ] = holosoma.config_values.termination.none
+    """Termination terms that end an episode and reset its environment. The default ends none."""
 
     # Plugins: declare on the CLI as ``plugin.<key>:<variant>`` (resolved from
     # PLUGIN_REGISTRY), optionally with per-key leaf overrides
