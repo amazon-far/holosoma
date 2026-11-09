@@ -13,6 +13,7 @@ from pydantic_core import ArgsKwargs
 
 from holosoma.config_types.frequency import DecimationLike, resolve_decimation, validate_decimation_like
 from holosoma.config_types.mujoco import MujocoConfig
+from holosoma.config_types.native import NativeSettings
 from holosoma.config_types.viewer import ViewerConfig
 
 _RENDER_INTERVAL_REMOVAL_DATE = datetime.date(2027, 3, 1)
@@ -118,7 +119,7 @@ class IsaacSimRenderConfig:
 
 @dataclass(frozen=True)
 class IsaacLab3NewtonConfig:
-    """Newton's MJWarp solver settings for rigid humanoid simulation."""
+    """Historical saved Newton settings; new experiments use native physics kwargs."""
 
     use_cuda_graph: bool = True
     """Capture physics execution on CUDA rather than launching every kernel from Python."""
@@ -170,8 +171,16 @@ class IsaacLab3Config:
     OVRTX cameras cannot share a process with Kit.
     """
 
-    newton: IsaacLab3NewtonConfig = field(default_factory=IsaacLab3NewtonConfig)
-    """Newton solver options; used only when ``physics_backend`` is ``newton``."""
+    physics: NativeSettings = field(default_factory=dict)
+    """Native kwargs for the selected physics backend. Nested existing configs merge;
+    use ``_type_='module:ConfigClass'`` to construct an optional/different native config.
+    Example: ``{"solver_cfg": {"cone": "elliptic", "impratio": 5.0}}`` for Newton.
+    """
+
+    renderer_options: NativeSettings = field(default_factory=dict)
+    """Native kwargs for the selected camera renderer; no additional renderer selection.
+    Asynchronous captures require a timestamp/history contract and are currently rejected.
+    """
 
     use_fabric: bool = True
     """Synchronize physics transforms through Fabric instead of the USD path."""

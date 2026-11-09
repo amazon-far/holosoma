@@ -38,6 +38,12 @@ addresses ordering and tuning differences.
 
 ## Upstream opportunities requiring separate review
 
+The [capability audit and implementation proposal](isaaclab3-capability-audit.md)
+examines configuration and runtime gaps in more detail, including native physics
+fragments, per-prim rules, solver tuning, importer caching, actuators and sensors.
+It distinguishes the native configuration/schema additions from the remaining
+proposals.
+
 | Proposal | Benefit | Limits and deployment requirements | Official source |
 | --- | --- | --- | --- |
 | Newton collision-BVH raycasting | Query all live collision shapes, including moving bodies, without maintaining target meshes. | `NewtonRaycastSensorCfg` ignores mesh target paths. Collision geometry, own-body hits and target filtering differ from current visual-mesh observations. Requires Newton physics and contract comparison. | [Configuration](https://github.com/isaac-sim/IsaacLab/blob/v3.0.0/source/isaaclab_newton/isaaclab_newton/sensors/ray_caster/newton_raycast_sensor_cfg.py) |

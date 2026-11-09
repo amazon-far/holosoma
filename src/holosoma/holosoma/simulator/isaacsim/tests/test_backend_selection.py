@@ -10,6 +10,7 @@ import re
 from argparse import Namespace
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
+from dataclasses import make_dataclass
 from importlib.machinery import ModuleSpec
 from types import ModuleType, SimpleNamespace
 
@@ -176,9 +177,9 @@ def test_native_launch_context_outlives_the_returned_app(
     setattr(modules["isaaclab"], "app", modules["isaaclab.app"])
     setattr(modules["isaaclab.app"], "launch_simulation", launch_simulation)
     setattr(modules["isaaclab_physx"], "physics", modules["isaaclab_physx.physics"])
-    setattr(modules["isaaclab_physx.physics"], "PhysxCfg", SimpleNamespace)
-    setattr(modules["isaaclab_physx.renderers"], "IsaacRtxRendererCfg", SimpleNamespace)
-    setattr(modules["isaaclab_newton.renderers"], "NewtonWarpRendererCfg", SimpleNamespace)
+    setattr(modules["isaaclab_physx.physics"], "PhysxCfg", make_dataclass("PhysxCfg", []))
+    setattr(modules["isaaclab_physx.renderers"], "IsaacRtxRendererCfg", make_dataclass("IsaacRtxRendererCfg", []))
+    setattr(modules["isaaclab_newton.renderers"], "NewtonWarpRendererCfg", make_dataclass("NewtonWarpRendererCfg", []))
     setattr(modules["omni"], "kit", modules["omni.kit"])
     setattr(modules["omni.kit"], "app", modules["omni.kit.app"])
     setattr(modules["omni.kit.app"], "get_app", lambda: native_app)

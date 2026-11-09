@@ -101,10 +101,9 @@ class RobotAssetConfig:
     ``None`` (default) keeps the asset's authored physics.
 
     ``mass`` is rejected here (see :meth:`_validate_link_physics`): one mass applied to every link is
-    not meaningful for an articulation. Per-link physics (the only place per-link ``mass`` would
-    apply) is not exposed here yet: it cannot be made cross-backend cleanly (a per-link
-    collision-offset/damping override is whole-subtree, not per-link, on IsaacSim), and a one-backend
-    knob would violate the shared-config invariant."""
+    not meaningful for an articulation. Lab 3 supports per-link mass and other native physics through
+    ``link_physics.isaaclab3`` schema fragments and ordered USD-path rules. These native overrides are
+    applied after portable defaults and are ignored by other simulators."""
 
     @model_validator(mode="after")
     def _validate_link_physics(self) -> RobotAssetConfig:
@@ -116,8 +115,8 @@ class RobotAssetConfig:
         if self.link_physics is not None and self.link_physics.mass is not None:
             raise ValueError(
                 "RobotAssetConfig.link_physics carries mass, but it applies to all links "
-                "(body_names='.*'), which would give every link the same mass. Per-link mass is not "
-                "supported (no cross-backend apply); leave mass unset."
+                "(body_names='.*'), which would give every link the same mass. Leave the shared mass "
+                "unset; use isaaclab3.mass_props target rules for native Lab 3 per-link mass."
             )
         return self
 
