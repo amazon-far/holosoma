@@ -8,7 +8,7 @@ from dataclasses import field
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import field_validator, model_validator
+from pydantic import SerializerFunctionWrapHandler, field_validator, model_serializer, model_validator
 from pydantic.dataclasses import dataclass
 from pydantic_core import ArgsKwargs
 
@@ -237,6 +237,14 @@ class IsaacLab3Config:
     def _validate_physics_aliases(self) -> IsaacLab3Config:
         _ = self.physics_settings
         return self
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """Keep Pydantic exports consistent with saved experiment configs."""
+        data: dict[str, Any] = handler(self)
+        if self.newton == IsaacLab3NewtonConfig():
+            data.pop("newton", None)
+        return data
 
 
 @dataclass(frozen=True)
