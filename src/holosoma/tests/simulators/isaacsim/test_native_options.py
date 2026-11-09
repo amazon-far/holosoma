@@ -7,6 +7,32 @@ import pytest
 pytestmark = pytest.mark.isaacsim
 
 
+@pytest.mark.parametrize(
+    ("physics", "renderer", "collision_source"),
+    [("newton", "newton_warp", "mujoco"), ("newton", "ovrtx", "newton"), ("physx", "ovrtx", "mujoco")],
+)
+def test_native_schema_solver_and_renderer_overrides(
+    physics, renderer, collision_source, isaacsim_backend, run_isaacsim_harness, tmp_path
+):
+    if isaacsim_backend != "isaaclab3":
+        pytest.skip("native schema fragments require Isaac Lab 3")
+    result_file = tmp_path / "native-schema.txt"
+    run_isaacsim_harness(
+        Path(__file__).resolve().parents[1] / "isaaclab3_schema_assert.py",
+        "--physics",
+        physics,
+        "--renderer",
+        renderer,
+        "--collision-source",
+        collision_source,
+        "--result-file",
+        str(result_file),
+        label=f"isaaclab3/{physics}/{renderer}/{collision_source}/schema",
+        timeout=900,
+        result_file=result_file,
+    )
+
+
 @pytest.mark.parametrize("physics", ["physx", "newton"])
 @pytest.mark.parametrize("renderer", ["isaac_rtx", "newton_warp", "ovrtx"])
 def test_physics_and_camera_renderer_matrix(physics, renderer, isaacsim_backend, run_isaacsim_harness, tmp_path):

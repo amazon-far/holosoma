@@ -220,6 +220,17 @@ def build_robot_articulation_cfg(robot_config: RobotConfig, *, backend: IsaacLab
             articulation_props=robot_articulation_props,
         )
 
+    if backend.is_isaaclab3 and robot_link_physics is not None and robot_link_physics.isaaclab3:
+        from holosoma.simulator.isaacsim.backends.native_properties import wrap_spawn
+        from holosoma.simulator.isaacsim.object_spawner import physics_material_cfg
+
+        spawn = wrap_spawn(
+            spawn,
+            {name: value for name, value in robot_link_physics.isaaclab3.items() if name != "physics_material"},
+            backend=backend,
+            material_defaults=physics_material_cfg(robot_link_physics),
+        )
+
     default_joint_angles = copy.deepcopy(robot_config.init_state.default_joint_angles)
     init_state = ArticulationCfg.InitialStateCfg(
         pos=tuple(robot_config.init_state.pos),

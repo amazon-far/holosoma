@@ -134,27 +134,93 @@ These settings are under `--simulator.config.sim.isaaclab3.*`:
 | --- | --- | --- |
 | `physics-backend` | `physx` | Select PhysX (OVPhysX without Kit) or Newton's MJWarp solver. |
 | `renderer` | `isaac_rtx` | Select Isaac RTX, Kit-less Newton Warp or Kit-less OVRTX; unused in physics-only runs. |
+| `physics` | `{}` | Native kwargs for the selected physics configuration; nested existing configs merge. |
+| `renderer-options` | `{}` | Native kwargs for the selected camera renderer. |
 | `use-fabric` | `True` | Use native Fabric synchronization. |
 | `create-stage-in-memory` | `False` | Author assets into the simulation's in-memory stage. |
 | `use-newton-actuators` | `True` | Use native actuator evaluation, including the PhysX host adapter; this does not select Newton physics. |
 | `contact-force-mode` | `normal` | Preserve the prior normal-force reward input; `total` includes friction. |
 
-Newton solver options are under
-`--simulator.config.sim.isaaclab3.newton.*`:
+Use the native SDK names rather than a second Holosoma solver schema:
 
-| Option | Default | Effect |
-| --- | --- | --- |
-| `use-cuda-graph` | `True` | Capture physics kernels on CUDA. |
-| `nconmax` | `128` | Contact capacity per environment; `None` opts into the upstream automatic estimate. |
-| `njmax` | `None` | Constraint capacity per environment; retain upstream default when omitted. |
-| `solver-iterations` | `None` | MJWarp solver iterations; retain upstream default when omitted. |
-| `default-shape-margin` | `0.01` | Default collision margin in meters, including mesh terrain; authored shape settings can override it. |
+```bash
+--simulator.config.sim.isaaclab3.physics \
+  '{"solver_cfg": {"nconmax": 256, "iterations": 50, "cone": "elliptic", "impratio": 3.0}}'
+--simulator.config.sim.isaaclab3.renderer-options \
+  '{"enable_shadows": false}'
+```
 
-Configured capacities and iteration counts must be positive; the margin must
-be finite and nonnegative. `sim.substeps` controls Newton's solver substeps.
-PhysX uses the existing `sim.physx` solver settings.
+Newton retains the previous defaults: MJWarp, CUDA graphs, `nconmax=128`
+and default shape margin `0.01`. Unspecified nested fields retain their native
+defaults. Set `solver_cfg.nconmax` to `null` to request upstream automatic
+allocation. Historical saved `newton` blocks migrate to `physics` on Newton runs;
+inactive historical Newton settings are removed when loading PhysX runs.
+`sim.substeps` owns Newton substeps; PhysX solver settings stay in `sim.physx`.
+Duplicate native overrides for these shared settings are rejected.
 The Newton contact default avoids the automatic estimate's observed overflow
 in G1 scenes. More complex contact configurations can require a higher capacity.
+
+For a native optional configuration, use `_type_` with its SDK class path:
+
+```python
+physics = {
+    "solver_cfg": {"use_mujoco_contacts": False},
+    "collision_cfg": {
+        "_type_": "isaaclab_newton.physics:NewtonCollisionPipelineCfg",
+        "broad_phase": "sap",
+    },
+}
+```
+
+Native configs remain serializable data until runtime selection. Unknown fields,
+wrong schema families and conflicting runtime selectors fail with their config
+location. OVRTX async capture is rejected until observation timestamps/history
+are integrated. Constructible configs do not establish validated support for
+every solver or asset type.
+
+Robot links and scene objects can set `PhysicsConfig.isaaclab3` to schema
+families using fragments or ordered target rules:
+
+```python
+link_physics = PhysicsConfig(
+    isaaclab3={
+        "collision_props": [
+            {"_type_": "isaaclab_newton.sim.schemas:NewtonCollisionCfg", "contact_gap": 0.002},
+            {"_type_": "isaaclab_newton.sim.schemas:MujocoCollisionCfg", "condim": 6},
+        ],
+        "mass_props": [
+            {
+                "match": "/.*pelvis",
+                "fragments": [{"_type_": "isaaclab.sim.schemas:MassCfg", "mass": 5.2}],
+            },
+        ],
+    },
+)
+```
+
+Put robot settings in `robot.asset.link_physics` and object settings in
+`object.physics`. Fragments without rules target eligible prims in the whole
+asset; rules use regex suffixes relative to its spawn prim. Later rules win,
+and list order survives YAML/checkpoint reload. Native overrides apply after
+portable defaults. `None` and empty lists leave the corresponding native
+properties unchanged. Missing targets report an error.
+
+Supported families are `rigid_props`, `mass_props`, `collision_props`,
+`articulation_props`, `joint_drive_props`, `mesh_collision_props`,
+`fixed_tendons_props`, `spatial_tendons_props` and `physics_material`.
+Materials accept the same targeting rules, allowing different feet/colliders
+to have different native friction settings while preserving their other
+authored properties. API-creation/drive flags retain the corresponding SDK
+names. Native per-link mass rules do not change the portable prohibition on
+one `link_physics.mass` value for every link.
+
+`condim=6` enables sliding, torsional and rolling contact dimensions, with
+appropriate material coefficients and solver support still required.
+Runtime randomization must use native setters rather than editing the
+finalized Newton model's source USD.
+The existing controller and actuator group still own joint gains, armature and
+friction; native drive fragments do not replace that controller. Native actuator
+groups and target-based actions are a separate planned change.
 
 Lab 3 distinguishes actuator model limits from joint limits enforced by the
 solver. Holosoma maps the robot's DOF effort and velocity limits to

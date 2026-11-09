@@ -137,7 +137,7 @@ def select_spawn_cfg(
         if physics_material is None:
             # No friction/restitution to apply — spawn the URDF directly (the converter authors
             # the geometry/joints; the shared rigid/mass/collision props land at spawn).
-            return urdf_cfg
+            return _native_spawn(urdf_cfg, physics_cfg, backend)
         # Friction/restitution IS set. The URDF importer authors no physics material, so reach USD
         # via the same converter and let the USD spawner bind the material at spawn (below).
         resolved_path = _convert_urdf_to_usd(urdf_cfg)
@@ -148,7 +148,7 @@ def select_spawn_cfg(
     # it first initializes the body (no post-init writes). disable_instanceable=True is required:
     # physics edits on descendants (collapse, RemoveAPI, stamp) no-op on instance proxies if the
     # asset is instanceable.
-    return CustomUsdFileCfg(
+    cfg = CustomUsdFileCfg(
         func=partial(spawn_from_usd, backend=backend),
         usd_path=resolved_path,
         source_path=source_prim_path,
@@ -156,6 +156,15 @@ def select_spawn_cfg(
         disable_instanceable=True,
         **shared,
     )
+    return _native_spawn(cfg, physics_cfg, backend)
+
+
+def _native_spawn(cfg: Any, physics: PhysicsConfig, backend: IsaacLabBackend) -> Any:
+    if backend.is_isaaclab3 and physics.isaaclab3:
+        from holosoma.simulator.isaacsim.backends.native_properties import wrap_spawn
+
+        return wrap_spawn(cfg, physics.isaaclab3, backend=backend, material_defaults=physics_material_cfg(physics))
+    return cfg
 
 
 def physics_material_cfg(physics_cfg: PhysicsConfig) -> "sim_utils.RigidBodyMaterialCfg | None":

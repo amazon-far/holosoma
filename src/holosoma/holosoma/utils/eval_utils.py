@@ -18,6 +18,7 @@ from tqdm import tqdm
 # CONFIG_NAME is "holosoma_config.yaml" - the primary configuration file for Holosoma
 # This file contains all settings for training and evaluation of models
 from holosoma.config_types.experiment import ExperimentConfig
+from holosoma.config_types.simulator import IsaacLab3NewtonConfig
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
 from holosoma.utils.config_utils import CONFIG_NAME
 from holosoma.utils.file_cache import get_cached_file_path
@@ -111,6 +112,32 @@ def _experiment_config_from_saved(config_data: dict[str, Any]) -> ExperimentConf
     """Transition historical saved fields; CLI/YAML inputs keep the current schema."""
     data = _drop_retired_isaacgym_fields(config_data)
     simulator = data.get("simulator", {}).get("config", {})
+    lab3 = simulator.get("sim", {}).get("isaaclab3", {})
+    old_newton = lab3.pop("newton", None)
+    if old_newton is not None and lab3.get("physics_backend", "physx") == "newton":
+        IsaacLab3NewtonConfig(**old_newton)
+        native_physics = lab3.setdefault("physics", {})
+        for old_name, target, default in (
+            ("use_cuda_graph", ("use_cuda_graph",), True),
+            ("nconmax", ("solver_cfg", "nconmax"), 128),
+            ("njmax", ("solver_cfg", "njmax"), None),
+            ("solver_iterations", ("solver_cfg", "iterations"), None),
+            ("default_shape_margin", ("default_shape_cfg", "margin"), 0.01),
+        ):
+            value = old_newton.get(old_name, default)
+            # None used to retain the SDK default, except nconmax=None explicitly
+            # opted out of Holosoma's contact capacity.
+            if value is None and old_name != "nconmax":
+                continue
+            destination = native_physics
+            for component in target[:-1]:
+                destination = destination.setdefault(component, {})
+            key = target[-1]
+            if key in destination and destination[key] != value:
+                raise ValueError(
+                    f"Saved config has conflicting isaaclab3.newton.{old_name} and physics.{'.'.join(target)}"
+                )
+            destination[key] = value
     if "mujoco_warp" in simulator:
         native = simulator["sim"].setdefault("mujoco", {})
         warp = native.setdefault("warp", {})
