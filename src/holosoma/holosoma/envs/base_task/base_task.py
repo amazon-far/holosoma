@@ -174,8 +174,8 @@ class BaseTask:
 
         # Call setup for managers that need it
         self.randomization_manager.setup()
-        self._setup_task_managers()
         self.terrain_manager.setup()
+        self._setup_task_managers()
 
         # Initialize reset manager from simulator config
         self.reset_manager = ResetEventManager(
