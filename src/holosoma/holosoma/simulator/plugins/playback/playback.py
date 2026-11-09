@@ -111,7 +111,7 @@ class PlaybackClip:
     def __init__(self, motion_file: str, num_dof: int, num_objects: int, fps: float, quat_order: str, device: str):
         mat = _load_matrix(motion_file)
         self.fps = fps
-        self.num_frames = mat.shape[0]
+        self.num_frames: int = mat.shape[0]
 
         # Robot block is root(7)+joints or just joints; infer from the column count once the
         # object blocks (7 each) are removed.
