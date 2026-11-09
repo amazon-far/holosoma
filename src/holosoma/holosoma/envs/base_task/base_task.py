@@ -477,7 +477,8 @@ class BaseTask:
         self.episode_length_buf += 1
         self._after_physics_step()
 
-        env_ids = self._get_control_frame_reset_env_ids()
+        self._check_termination()
+        env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
         reset_state = self._before_control_frame_reset(env_ids)
         self.reset_envs_idx(env_ids)
 
@@ -491,11 +492,6 @@ class BaseTask:
     def _step_managers(self) -> None:
         """Step managers once per control frame, after resets."""
         self.randomization_manager.step()
-
-    def _get_control_frame_reset_env_ids(self) -> torch.Tensor:
-        """Return environments whose active episodes should end this control frame."""
-        self._check_termination()
-        return self.reset_buf.nonzero(as_tuple=False).flatten()
 
     def _check_termination(self) -> None:
         self.reset_buf[:] = 0
