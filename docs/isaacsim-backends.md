@@ -134,99 +134,98 @@ These settings are under `--simulator.config.sim.isaaclab3.*`:
 | --- | --- | --- |
 | `physics-backend` | `physx` | Select PhysX (OVPhysX without Kit) or Newton's MJWarp solver. |
 | `renderer` | `isaac_rtx` | Select Isaac RTX, Kit-less Newton Warp or Kit-less OVRTX; unused in physics-only runs. |
-| `physics` | `{}` | Native kwargs for the selected physics configuration; nested existing configs merge. |
-| `renderer-options` | `{}` | Native kwargs for the selected camera renderer. |
+| `renderer-options` | Typed defaults | Camera settings for the selected renderer; None retains SDK defaults. |
 | `use-fabric` | `True` | Use native Fabric synchronization. |
 | `create-stage-in-memory` | `False` | Author assets into the simulation's in-memory stage. |
-| `use-newton-actuators` | `True` | Use native actuator evaluation, including the PhysX host adapter; this does not select Newton physics. |
+| `use-newton-actuators` | `True` | Use native actuator evaluation, including the PhysX host adapter. |
 | `contact-force-mode` | `normal` | Preserve the prior normal-force reward input; `total` includes friction. |
 
-Use the native SDK names rather than a second Holosoma solver schema:
+Newton MJWarp reads the **existing MuJoCo configuration**, so the same experiment
+can carry its solver and contact settings across direct MJWarp and Isaac Lab 3:
 
 ```bash
---simulator.config.sim.isaaclab3.physics \
-  '{"solver_cfg": {"nconmax": 256, "iterations": 50, "cone": "elliptic", "impratio": 3.0}}'
---simulator.config.sim.isaaclab3.renderer-options \
-  '{"enable_shadows": false}'
+--simulator.config.sim.isaaclab3.physics-backend newton
+--simulator.config.sim.mujoco.iterations 50
+--simulator.config.sim.mujoco.cone elliptic
+--simulator.config.sim.mujoco.impratio 3.0
+--simulator.config.sim.mujoco.warp.nconmax-per-env 256
+--simulator.config.sim.isaaclab3.renderer-options.enable-shadows False
 ```
 
-Newton retains the previous defaults: MJWarp, CUDA graphs, `nconmax=128`
-and default shape margin `0.01`. Unspecified nested fields retain their native
-defaults. Set `solver_cfg.nconmax` to `null` to request upstream automatic
-allocation. Existing Python `newton=IsaacLab3NewtonConfig(...)`, `newton.*` CLI
-flags and saved `newton` blocks remain supported, including repeated
-`dataclasses.replace` calls. Their nondefault values merge into native kwargs
-on Newton runs; conflicting native values are rejected. Untouched compatibility
-defaults never override `physics` and are omitted from new saved experiments.
-Custom legacy settings survive saving even when Newton is inactive.
-Use `physics` for new controls; there is no need to configure both blocks.
-`sim.substeps` owns Newton substeps; PhysX solver settings stay in `sim.physx`.
-Duplicate native overrides for these shared settings are rejected.
-The Newton contact default avoids the automatic estimate's observed overflow
-in G1 scenes. More complex contact configurations can require a higher capacity.
+Supported shared solver fields are `integrator`, `solver`, `cone`, `jacobian`,
+`impratio`, `iterations`, `tolerance`, `ls_iterations` and `ls_tolerance`.
+`mujoco.warp.nconmax_per_env`, `njmax_per_env`, `graph_conditional` and scalar
+execution `extras` reach Newton before CUDA capture. Flags reach model compilation;
+no-slip iterations must be zero. Newton supports CG/Newton solvers and Euler,
+RK4 or implicitfast integration. Unsupported explicit inputs fail with their
+config path. Newton does not expose `warp.naconmax` or generic allocation extras;
+use the per-environment capacities. `mujoco.extra` supports writable MuJoCo
+options accepted by Newton's solver constructor, rather than arbitrary SDK kwargs.
 
-For a native optional configuration, use `_type_` with its SDK class path:
+Unset values preserve each backend's existing defaults: direct MJWarp retains
+96 contacts per environment; Newton retains 128 contacts, 300 constraint rows,
+CUDA graphs and shape margin `0.01`. These different defaults are deliberately
+preserved. Existing `newton.nconmax`, `njmax` and `solver_iterations` constructors,
+CLI flags and saved inputs remain accepted. Nondefault legacy values must agree
+with explicit shared options; an untouched legacy block never overrides them.
+Use `sim.mujoco` for new solver settings. `sim.substeps` and `sim.physx` retain
+ownership of Newton substeps and PhysX solver policy respectively.
 
-```python
-physics = {
-    "solver_cfg": {"use_mujoco_contacts": False},
-    "collision_cfg": {
-        "_type_": "isaaclab_newton.physics:NewtonCollisionPipelineCfg",
-        "broad_phase": "sap",
-    },
-}
-```
-
-Native configs remain serializable data until runtime selection. Unknown fields,
-wrong schema families and conflicting runtime selectors fail with their config
-location. OVRTX async capture is rejected until observation timestamps/history
-are integrated. Constructible configs do not establish validated support for
-every solver or asset type.
-
-Robot links and scene objects can set `PhysicsConfig.isaaclab3` to schema
-families using fragments or ordered target rules:
+Newton-only execution and collision controls are typed:
 
 ```python
-link_physics = PhysicsConfig(
-    isaaclab3={
-        "collision_props": [
-            {"_type_": "isaaclab_newton.sim.schemas:NewtonCollisionCfg", "contact_gap": 0.002},
-            {"_type_": "isaaclab_newton.sim.schemas:MujocoCollisionCfg", "condim": 6},
-        ],
-        "mass_props": [
-            {
-                "match": "/.*pelvis",
-                "fragments": [{"_type_": "isaaclab.sim.schemas:MassCfg", "mass": 5.2}],
-            },
-        ],
-    },
+IsaacLab3NewtonConfig(
+    collision_source="newton",
+    collision=NewtonCollisionConfig(broad_phase="sap", rigid_contact_max=8192),
+    use_cuda_graph=True,
+    deterministic_mode="run_to_run",
 )
 ```
 
-Put robot settings in `robot.asset.link_physics` and object settings in
-`object.physics`. Fragments without rules target eligible prims in the whole
-asset; rules use regex suffixes relative to its spawn prim. Later rules win,
-and list order survives YAML/checkpoint reload. Alternatives are scoped to the
-owning asset; rules cannot reach sibling assets. Native overrides apply after
-portable defaults. `None` and empty lists leave the corresponding native
-properties unchanged. Missing targets report an error.
+MuJoCo collision detection remains the default. `collision` requires the Newton
+pipeline selector. Deterministic runs disable MuJoCo's internal solver sensors;
+Isaac Lab sensors continue to use Newton state. Camera options have normal typed
+CLI fields. Explicit options unsupported by the selected renderer fail at startup.
+Asynchronous OVRTX observations still need a timestamp/history contract.
 
-Supported families are `rigid_props`, `mass_props`, `collision_props`,
-`articulation_props`, `joint_drive_props`, `mesh_collision_props`,
-`fixed_tendons_props`, `spatial_tendons_props` and `physics_material`.
-Materials accept the same targeting rules, allowing different feet/colliders
-to have different native friction settings while preserving their other
-authored properties. API-creation/drive flags retain the corresponding SDK
-names. Native per-link mass rules do not change the portable prohibition on
-one `link_physics.mass` value for every link.
+Robot links and scene objects use the existing `PhysicsConfig`:
 
-`condim=6` enables sliding, torsional and rolling contact dimensions, with
-appropriate material coefficients and solver support still required.
-Runtime randomization must use native setters rather than editing the
-finalized Newton model's source USD.
-The existing controller and actuator group still own joint gains, armature and
-friction; native drive fragments do not replace that controller. Native actuator
-groups and target-based actions are a separate planned change.
+```python
+link_physics = PhysicsConfig(
+    mujoco=MujocoPhysicsConfig(
+        friction=[0.7, 0.01, 0.002], condim=6, gravity_compensation=0.1,
+    ),
+)
+link_physics_overrides = {
+    "pelvis": PhysicsConfig(mass=5.2),
+    "*ankle_roll_link": PhysicsConfig(
+        mujoco=MujocoPhysicsConfig(friction=[0.45, 0.07, 0.03]),
+    ),
+}
+```
+
+Set these on `robot.asset`; objects use `object.physics` and scene files use
+`object_configs`. Body-name globs follow the existing scene pattern: defaults
+apply first, then the first matching override supplies its configured fields.
+Set mappings in Python presets; YAML saving preserves their order. MuJoCo and
+Isaac Lab 3 support robot overrides; Lab 2 reports an error if they are requested.
+A whole-robot `link_physics.mass` remains prohibited; targeted mass is allowed.
+
+Newton MJWarp reuses `mujoco.friction`, `solref`, `solimp`, `condim`, `priority`,
+`solmix`, `margin`, `gap` and `gravity_compensation`. Sliding/torsional/rolling
+friction map to Newton material channels; MuJoCo settings take precedence over
+IsaacSim material defaults on Newton. The SDK importer does not expose MuJoCo
+collision masks or arbitrary geom extras, so explicit requests fail.
+`PhysicsConfig.newton` adds typed contact spring/adhesion, convex-hull and
+SDF/hydroelastic properties. These are authored before cloning and compilation;
+other physics engines leave the Newton block inactive. Per-link overrides retain
+unmodified authored/default properties and cannot reach sibling assets.
+
+`condim=6` enables sliding, torsional and rolling contact dimensions; coefficients
+and solver support are still required. Joint gains, armature and friction remain
+owned by the existing controller/actuator configuration. Additional joint/tendon
+schemas and actuator command modes require their own typed controls and runtime
+contracts; this configuration does not imply universal SDK asset support.
 
 Lab 3 distinguishes actuator model limits from joint limits enforced by the
 solver. Holosoma maps the robot's DOF effort and velocity limits to

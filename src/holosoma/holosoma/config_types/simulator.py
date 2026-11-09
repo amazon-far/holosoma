@@ -2,19 +2,18 @@ from __future__ import annotations
 
 import datetime
 import warnings
-import copy
 import math
 from dataclasses import field
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import SerializerFunctionWrapHandler, field_validator, model_serializer, model_validator
+from pydantic import ConfigDict, SerializerFunctionWrapHandler, field_validator, model_serializer, model_validator
 from pydantic.dataclasses import dataclass
 from pydantic_core import ArgsKwargs
 
 from holosoma.config_types.frequency import DecimationLike, resolve_decimation, validate_decimation_like
 from holosoma.config_types.mujoco import MujocoConfig
-from holosoma.config_types.native import NativeSettings
+from holosoma.config_types.newton import IsaacLab3RendererConfig, NewtonCollisionConfig
 from holosoma.config_types.viewer import ViewerConfig
 
 _RENDER_INTERVAL_REMOVAL_DATE = datetime.date(2027, 3, 1)
@@ -120,7 +119,7 @@ class IsaacSimRenderConfig:
 
 @dataclass(frozen=True)
 class IsaacLab3NewtonConfig:
-    """Compatibility Newton settings; new experiments can use native physics kwargs."""
+    """Newton execution and collision controls; solver options use ``sim.mujoco``."""
 
     use_cuda_graph: bool = True
     """Capture physics execution on CUDA rather than launching every kernel from Python."""
@@ -141,6 +140,17 @@ class IsaacLab3NewtonConfig:
     default_shape_margin: float = 0.01
     """Default collision margin in meters; individual shape settings can override it."""
 
+    collision_source: Literal["mujoco", "newton"] = "mujoco"
+    """Select MuJoCo collision detection or Newton's independent pipeline."""
+    collision: NewtonCollisionConfig = field(default_factory=NewtonCollisionConfig)
+    """Newton collision-pipeline controls, active only with collision_source='newton'."""
+    deterministic_mode: Literal["not_guaranteed", "run_to_run", "gpu_to_gpu"] = "not_guaranteed"
+    """Newton determinism policy. Deterministic MJWarp runs disable solver sensors."""
+    debug_mode: bool = False
+    """Log Newton solver convergence diagnostics."""
+    collision_decimation: int = 0
+    """Newton collision update interval; zero uses one update per simulation step."""
+
     @model_validator(mode="after")
     def _validate_solver_limits(self) -> IsaacLab3NewtonConfig:
         for name in ("nconmax", "njmax", "solver_iterations"):
@@ -149,10 +159,14 @@ class IsaacLab3NewtonConfig:
                 raise ValueError(f"{name} must be positive or None")
         if not math.isfinite(self.default_shape_margin) or self.default_shape_margin < 0:
             raise ValueError("default_shape_margin must be finite and nonnegative")
+        if self.collision_decimation < 0:
+            raise ValueError("collision_decimation must be nonnegative")
+        if self.collision_source == "mujoco" and self.collision != NewtonCollisionConfig():
+            raise ValueError("newton.collision requires collision_source='newton'")
         return self
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class IsaacLab3Config:
     """Native Isaac Lab 3 options; used only by the ``isaaclab3`` backend."""
 
@@ -173,8 +187,9 @@ class IsaacLab3Config:
     """
 
     newton: IsaacLab3NewtonConfig = field(default_factory=IsaacLab3NewtonConfig)
-    """Compatibility input for existing Python configs and ``newton.*`` CLI flags.
-    New controls use ``physics``; conflicting nondefault settings are rejected.
+    """Newton execution controls. Existing nconmax/njmax/solver_iterations inputs
+    remain supported; new configs use sim.mujoco and sim.mujoco.warp for the solver.
+    Conflicting nondefault compatibility inputs are rejected.
     """
 
     use_fabric: bool = True
@@ -191,52 +206,8 @@ class IsaacLab3Config:
     ``total`` includes the tangential forces available in Isaac Sim 6.2.
     """
 
-    physics: NativeSettings = field(default_factory=dict)
-    """Native kwargs for the selected physics backend. Nested existing configs merge;
-    use ``_type_='module:ConfigClass'`` to construct an optional/different native config.
-    Example: ``{"solver_cfg": {"cone": "elliptic", "impratio": 5.0}}`` for Newton.
-    """
-
-    renderer_options: NativeSettings = field(default_factory=dict)
-    """Native kwargs for the selected camera renderer; no additional renderer selection.
-    Asynchronous captures require a timestamp/history contract and are currently rejected.
-    """
-
-    @property
-    def physics_settings(self) -> dict[str, Any]:
-        """Resolve compatibility inputs without adding duplicate settings to new configs."""
-        settings = copy.deepcopy(self.physics)
-        if self.physics_backend != "newton":
-            return settings
-        defaults = IsaacLab3NewtonConfig()
-        for old_name, target in (
-            ("use_cuda_graph", ("use_cuda_graph",)),
-            ("nconmax", ("solver_cfg", "nconmax")),
-            ("njmax", ("solver_cfg", "njmax")),
-            ("solver_iterations", ("solver_cfg", "iterations")),
-            ("default_shape_margin", ("default_shape_cfg", "margin")),
-        ):
-            value = getattr(self.newton, old_name)
-            # Defaults stay inactive, so an untouched compatibility block cannot
-            # override native kwargs. The backend retains the historical defaults.
-            if value == getattr(defaults, old_name):
-                continue
-            destination = settings
-            for component in target[:-1]:
-                nested = destination.setdefault(component, {})
-                if not isinstance(nested, dict):
-                    raise ValueError(f"isaaclab3.newton.{old_name} cannot merge into physics.{'.'.join(target[:-1])}")
-                destination = nested
-            key = target[-1]
-            if key in destination and destination[key] != value:
-                raise ValueError(f"Conflicting isaaclab3.newton.{old_name} and physics.{'.'.join(target)}")
-            destination[key] = value
-        return settings
-
-    @model_validator(mode="after")
-    def _validate_physics_aliases(self) -> IsaacLab3Config:
-        _ = self.physics_settings
-        return self
+    renderer_options: IsaacLab3RendererConfig = field(default_factory=IsaacLab3RendererConfig)
+    """Typed camera options for the selected renderer."""
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:

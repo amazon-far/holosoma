@@ -7,13 +7,16 @@ Lab 3 already uses Holosoma's XYZW convention and cached zero-copy Torch views.
 from __future__ import annotations
 
 from contextlib import ExitStack
+from dataclasses import asdict
 from argparse import Namespace
 from typing import Any
 
 from holosoma.config_types.simulator import IsaacLab3Config
+from holosoma.config_types.mujoco import MujocoConfig
 
 from .base import IsaacLabBackend
 from .native_config import build_config
+from .newton_config import configured, solver_settings
 
 
 _RUNTIME = ExitStack()
@@ -249,37 +252,32 @@ class IsaacLab3Backend(IsaacLabBackend):
 
     def physics_config(self, config: Any = None) -> Any:
         """Build the explicitly selected physics engine's supported config."""
-        settings = self.options.physics_settings
         if self.options.physics_backend == "newton":
-            if "num_substeps" in settings:
-                raise ValueError("isaaclab3.physics.num_substeps: sim.substeps owns this setting")
-            from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg, NewtonShapeCfg
+            from isaaclab_newton.physics import NewtonCfg, NewtonShapeCfg, NewtonCollisionPipelineCfg
+            from .newton_mjwarp import HolosomaMJWarpSolverCfg
 
-            return build_config(
-                NewtonCfg,
-                settings,
-                location="isaaclab3.physics",
-                defaults={
-                    "num_substeps": config.substeps if config is not None else 1,
-                    "solver_cfg": MJWarpSolverCfg(nconmax=128),
-                    "default_shape_cfg": NewtonShapeCfg(margin=0.01),
-                },
+            newton = self.options.newton
+            shared = config.mujoco if config is not None else MujocoConfig()
+            return NewtonCfg(
+                num_substeps=config.substeps if config is not None else 1,
+                use_cuda_graph=newton.use_cuda_graph,
+                debug_mode=newton.debug_mode,
+                deterministic_mode=newton.deterministic_mode,
+                collision_decimation=newton.collision_decimation,
+                solver_cfg=HolosomaMJWarpSolverCfg(shared_config=asdict(shared), **solver_settings(shared, newton)),
+                collision_cfg=(
+                    NewtonCollisionPipelineCfg(**configured(newton.collision))
+                    if newton.collision_source == "newton"
+                    else None
+                ),
+                default_shape_cfg=NewtonShapeCfg(margin=newton.default_shape_margin),
             )
-        shared_fields = {
-            "bounce_threshold_velocity": "bounce_threshold_velocity",
-            "solver_type": "solver_type",
-            "max_position_iteration_count": "num_position_iterations",
-            "max_velocity_iteration_count": "num_velocity_iterations",
-        }
-        for name, owner in shared_fields.items():
-            if name in settings:
-                raise ValueError(f"isaaclab3.physics.{name}: sim.physx.{owner} owns this setting")
         if not self.uses_kit:
             from isaaclab_ov.physics import OvPhysxCfg
 
             return build_config(
                 OvPhysxCfg,
-                settings,
+                {},
                 location="isaaclab3.physics",
                 defaults={"gpu_max_rigid_patch_count": 10 * 2**15},
             )
@@ -294,7 +292,7 @@ class IsaacLab3Backend(IsaacLabBackend):
                 "max_velocity_iteration_count": config.physx.num_velocity_iterations,
                 "gpu_max_rigid_patch_count": 10 * 2**15,
             }
-        return build_config(PhysxCfg, settings, location="isaaclab3.physics", defaults=defaults)
+        return build_config(PhysxCfg, {}, location="isaaclab3.physics", defaults=defaults)
 
     def configure_physics_scene(self, sim: Any, config: Any) -> None:
         if self.uses_kit or self.options.physics_backend != "physx":
@@ -583,8 +581,6 @@ class IsaacLab3Backend(IsaacLabBackend):
         if self.options.renderer == "ovrtx":
             from isaaclab_ov.renderers import OVRTXRendererCfg
 
-            if self.options.renderer_options.get("async_rendering"):
-                raise ValueError("isaaclab3.renderer_options.async_rendering requires observation timestamps/history")
             cls = OVRTXRendererCfg
         elif self.options.renderer == "newton_warp":
             from isaaclab_newton.renderers import NewtonWarpRendererCfg
@@ -594,7 +590,7 @@ class IsaacLab3Backend(IsaacLabBackend):
             from isaaclab_physx.renderers import IsaacRtxRendererCfg
 
             cls = IsaacRtxRendererCfg
-        return build_config(cls, self.options.renderer_options, location="isaaclab3.renderer_options")
+        return build_config(cls, configured(self.options.renderer_options), location="isaaclab3.renderer_options")
 
     def has_viewport(self, sim: Any) -> bool:
         # The native OVRTX visualizer owns its view; Kit's post-update camera

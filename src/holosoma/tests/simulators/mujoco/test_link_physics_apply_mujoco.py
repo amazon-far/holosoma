@@ -5,8 +5,7 @@ Exercise the spawn-time seam ``MujocoSceneManager._apply_link_physics_to_robot``
 the compiled ``MjModel``. Checks that configured values land on robot link geoms, that the
 whole-robot path does not write mass, and that foreign-backend sub-configs are ignored on MuJoCo.
 
-The seam applies the whole-robot ``link_physics`` uniformly with ``apply_mass=False`` (no per-link
-override).
+The seam applies whole-robot defaults, then the first matching per-link override.
 """
 
 from __future__ import annotations
@@ -96,6 +95,29 @@ def _apply_whole_robot(spec, link_physics):
 
 def _compile(spec):
     return spec.compile()
+
+
+def test_per_link_overrides_reach_compiled_model_with_first_match_precedence():
+    spec = _make_robot_spec(link_masses=[1.0, 2.0, 3.0])
+    robot = replace(
+        g1_29dof,
+        asset=replace(
+            g1_29dof.asset,
+            link_physics=PhysicsConfig(
+                mujoco=MujocoPhysicsConfig(friction=[0.8, 0.01, 0.002], gravity_compensation=0.1)
+            ),
+            link_physics_overrides={
+                "link_a": PhysicsConfig(mass=7.5, mujoco=MujocoPhysicsConfig(friction=[0.45, 0.07, 0.03])),
+                "link_*": PhysicsConfig(mujoco=MujocoPhysicsConfig(gravity_compensation=0.25)),
+            },
+        ),
+    )
+    MujocoSceneManager(preset.config)._apply_link_physics_to_robot(spec, robot)
+    model = spec.compile()
+    assert list(model.body_mass[1:]) == pytest.approx([1.0, 7.5, 3.0])
+    assert list(model.body_gravcomp[1:]) == pytest.approx([0.1, 0.1, 0.25])
+    assert list(model.geom_friction[1]) == pytest.approx([0.45, 0.07, 0.03])
+    assert list(model.geom_friction[2]) == pytest.approx([0.8, 0.01, 0.002])
 
 
 def _all_geom_friction(model):

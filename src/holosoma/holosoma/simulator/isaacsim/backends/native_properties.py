@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import re
 import copy
+import fnmatch
 from functools import partial, update_wrapper
 from typing import Any
 
-from .native_config import resolve_value
+from .newton_config import configured
+from holosoma.config_types.scene import PhysicsConfig
 
 
 _FAMILIES = {
@@ -29,6 +31,133 @@ _FLAGS = {
 }
 
 
+def physics_settings(physics: PhysicsConfig | None, backend: Any, *, portable: bool = False) -> dict[str, Any]:
+    """Create SDK fragments from first-class Holosoma properties."""
+    if physics is None:
+        return {}
+    from isaaclab.sim import schemas
+    from isaaclab.sim.spawners.materials import UsdPhysicsRigidBodyMaterialCfg
+
+    result: dict[str, Any] = {}
+    if portable:
+        if physics.mass is not None or physics.density is not None:
+            result["mass_props"] = [schemas.MassCfg(mass=physics.mass, density=physics.density)]
+        if physics.isaacsim is not None:
+            material = physics.isaacsim
+            result["physics_material"] = [
+                UsdPhysicsRigidBodyMaterialCfg(
+                    static_friction=material.static_friction,
+                    dynamic_friction=material.dynamic_friction,
+                    restitution=material.restitution,
+                )
+            ]
+        if backend.options.physics_backend == "physx":
+            from isaaclab_physx.sim.schemas import PhysxCollisionCfg, PhysxRigidBodyCfg
+            from isaaclab_physx.sim.spawners.materials import PhysxMaterialCfg
+
+            if physics.physx is not None:
+                result["rigid_props"] = [PhysxRigidBodyCfg(**configured(physics.physx))]
+            if physics.isaacsim is not None:
+                result["physics_material"].append(
+                    PhysxMaterialCfg(
+                        friction_combine_mode=physics.isaacsim.friction_combine_mode,
+                        restitution_combine_mode=physics.isaacsim.restitution_combine_mode,
+                    )
+                )
+                result["collision_props"] = [
+                    PhysxCollisionCfg(
+                        **{
+                            name: value
+                            for name in ("contact_offset", "rest_offset", "torsional_patch_radius")
+                            if (value := getattr(physics.isaacsim, name)) is not None
+                        }
+                    )
+                ]
+    if backend.options.physics_backend != "newton":
+        return result
+    from isaaclab_newton.sim.schemas import (
+        MujocoCollisionCfg,
+        MujocoRigidBodyCfg,
+        NewtonCollisionCfg,
+        NewtonMeshCollisionCfg,
+        NewtonSDFCollisionCfg,
+    )
+    from isaaclab_newton.sim.spawners.materials import NewtonMaterialCfg
+
+    mj = physics.mujoco
+    if mj is not None:
+        unsupported = {name for name in ("contype", "conaffinity") if getattr(mj, name) is not None} | set(mj.extra)
+        if unsupported:
+            raise ValueError("physics.mujoco: Newton USD importer does not expose: " + ", ".join(sorted(unsupported)))
+        collision = {
+            name: tuple(value) if isinstance(value, list) else value
+            for name in ("condim", "priority", "solimp", "solmix", "solref")
+            if (value := getattr(mj, name)) is not None
+        }
+        if collision:
+            result.setdefault("collision_props", []).append(MujocoCollisionCfg(**collision))
+        if mj.margin is not None or mj.gap is not None:
+            result.setdefault("collision_props", []).append(
+                NewtonCollisionCfg(contact_margin=mj.margin, contact_gap=mj.gap)
+            )
+        if mj.gravity_compensation is not None:
+            result.setdefault("rigid_props", []).append(MujocoRigidBodyCfg(gravcomp=mj.gravity_compensation))
+        if mj.friction is not None:
+            sliding, torsional, rolling = mj.friction
+            result.setdefault("physics_material", []).extend(
+                [
+                    UsdPhysicsRigidBodyMaterialCfg(static_friction=sliding, dynamic_friction=sliding),
+                    NewtonMaterialCfg(torsional_friction=torsional, rolling_friction=rolling),
+                ]
+            )
+    if physics.newton is not None:
+        values = configured(physics.newton)
+        contacts = {name: value for name, value in values.items() if name.startswith("contact_")}
+        if contacts:
+            result.setdefault("physics_material", []).append(NewtonMaterialCfg(**contacts))
+        if "max_hull_vertices" in values:
+            result["mesh_collision_props"] = [NewtonMeshCollisionCfg(max_hull_vertices=values["max_hull_vertices"])]
+        sdf = {name: value for name, value in values.items() if name.startswith(("sdf_", "hydroelastic_"))}
+        if sdf:
+            result.setdefault("mesh_collision_props", []).append(NewtonSDFCollisionCfg(**sdf))
+    return result
+
+
+def author_robot_physics(anchor: str, asset: Any, backend: Any, *, stage: Any, material_defaults: Any) -> None:
+    """Apply common defaults, then one matching per-link override before cloning."""
+    from pxr import Usd, UsdPhysics
+
+    settings = physics_settings(asset.link_physics, backend)
+    author_properties(anchor, compile_properties(settings), flags={}, stage=stage, material_defaults=material_defaults)
+    overrides = asset.link_physics_overrides or {}
+    matched: set[str] = set()
+    bodies = [prim for prim in Usd.PrimRange(stage.GetPrimAtPath(anchor)) if prim.HasAPI(UsdPhysics.RigidBodyAPI)]
+    for prim in bodies:
+        if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            continue
+        for pattern, physics in overrides.items():
+            if fnmatch.fnmatchcase(prim.GetName(), pattern):
+                settings = physics_settings(physics, backend, portable=True)
+                # A mass API may be created only on the selected body. Colliders
+                # keep their own authored mass/inertia and any nested bodies.
+                compiled = compile_properties(settings)
+                for family in ("mass_props", "rigid_props"):
+                    if family in compiled:
+                        compiled[family] = [("", fragments) for _pattern, fragments in compiled[family]]
+                author_properties(
+                    str(prim.GetPath()),
+                    compiled,
+                    flags={"mass_props_create_if_missing": True},
+                    stage=stage,
+                    material_defaults=material_defaults,
+                )
+                matched.add(pattern)
+                break
+    unmatched = overrides.keys() - matched
+    if unmatched:
+        raise ValueError("robot.asset.link_physics_overrides: no selected body for " + ", ".join(sorted(unmatched)))
+
+
 def _target_expression(anchor: str, pattern: str) -> str:
     """Keep every alternative within the owning asset, including grouped suffixes."""
     return re.escape(anchor) + f"(?=/|$)(?:{pattern})"
@@ -41,7 +170,7 @@ def schema_rules(value: Any, *, location: str) -> list[tuple[str, list[Any]]]:
     entries = value if isinstance(value, list) else [value]
     targeted = any(isinstance(entry, dict) and "match" in entry for entry in entries)
     if not targeted:
-        return [("(/.*)?", [resolve_value(entry, location=location) for entry in entries])]
+        return [("(/.*)?", entries)]
     result = []
     for index, entry in enumerate(entries):
         path = f"{location}[{index}]"
@@ -57,7 +186,7 @@ def schema_rules(value: Any, *, location: str) -> list[tuple[str, list[Any]]]:
         fragments = entry["fragments"]
         if not isinstance(fragments, list):
             raise ValueError(f"{path}.fragments: expected a fragment list")
-        result.append((pattern, [resolve_value(fragment, location=f"{path}.fragments") for fragment in fragments]))
+        result.append((pattern, fragments))
     return result
 
 
@@ -86,10 +215,10 @@ def compile_properties(settings: dict[str, Any]) -> dict[str, list[tuple[str, li
     """Validate schema families and compile fragments without editing a stage."""
     unknown = settings.keys() - (_FAMILIES.keys() | _FLAGS)
     if unknown:
-        raise ValueError(f"physics.isaaclab3: unknown schema settings: {', '.join(sorted(unknown))}")
+        raise ValueError(f"physics: unknown schema settings: {', '.join(sorted(unknown))}")
     for flag in _FLAGS & settings.keys():
         if not isinstance(settings[flag], bool):
-            raise ValueError(f"physics.isaaclab3.{flag}: expected a boolean")
+            raise ValueError(f"physics.{flag}: expected a boolean")
 
     from isaaclab.sim import schemas
     from isaaclab.sim.spawners import materials
@@ -98,12 +227,12 @@ def compile_properties(settings: dict[str, Any]) -> dict[str, list[tuple[str, li
     for family in _FAMILIES:
         if family not in settings:
             continue
-        rules = schema_rules(settings[family], location=f"physics.isaaclab3.{family}")
+        rules = schema_rules(settings[family], location=f"physics.{family}")
         marker, _writer = _FAMILIES[family]
         expected = getattr(materials if family == "physics_material" else schemas, marker)
         for _pattern, fragments in rules:
             if any(not isinstance(fragment, expected) for fragment in fragments):
-                raise ValueError(f"physics.isaaclab3.{family}: expected {marker} configurations")
+                raise ValueError(f"physics.{family}: expected {marker} configurations")
         compiled[family] = rules
     return compiled
 
@@ -208,7 +337,7 @@ def author_properties(
                     options["ensure_drives_exist"] = flags.get("ensure_drives_exist", False)
                 success = writer(expression, fragments, **options)
             if not success:
-                raise ValueError(f"physics.isaaclab3.{family}: no editable targets or failed writer for {expression!r}")
+                raise ValueError(f"physics.{family}: no editable targets or failed writer for {expression!r}")
 
 
 def _bind_materials(
@@ -226,7 +355,7 @@ def _bind_materials(
 
     targets = [prim for prim in find_matching_prims(expression, stage=stage) if prim.HasAPI(UsdPhysics.CollisionAPI)]
     if not targets:
-        raise ValueError(f"physics.isaaclab3.physics_material: no colliders for {expression!r}")
+        raise ValueError(f"physics.physics_material: no colliders for {expression!r}")
     for index, prim in enumerate(targets):
         material_path = f"{anchor}/holosoma_native_material_{rule_index}_{index}"
         # Preserve each collider's authored material through composition, then

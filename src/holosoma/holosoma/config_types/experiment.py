@@ -240,7 +240,8 @@ class ExperimentConfig:
 
     def save_config(self, path: str) -> None:
         with open(path, "w") as file:
-            yaml.safe_dump(self.to_serializable_dict(), file)
+            # Pattern mappings use first-match precedence, so preserve their order.
+            yaml.safe_dump(self.to_serializable_dict(), file, sort_keys=False)
 
     def to_serializable_dict(self) -> dict[str, Any]:
         """Return a JSON-friendly representation of the config."""
