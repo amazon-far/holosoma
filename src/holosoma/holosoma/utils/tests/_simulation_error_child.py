@@ -142,12 +142,15 @@ def run_task_session(
     """
     from holosoma.envs.simulation_task import SimulationTask
     from holosoma.simulator import session
+    from holosoma.simulator.base_simulator.hooks import HookRegistry
 
     class Task(SimulationTask):
         def __init__(self, _config: object) -> None:
             if scenario == "construct":
                 fail()
             self.simulator = cast("Any", SimpleNamespace(video_recorder=None, shutdown_requested=False))
+            self.hooks = HookRegistry()
+            self.sim_dt = 0.01
             self.config = cast(
                 "Any",
                 SimpleNamespace(

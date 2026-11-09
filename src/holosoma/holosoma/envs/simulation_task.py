@@ -8,9 +8,43 @@ import torch
 from loguru import logger
 
 from holosoma.envs.base_task.base_task import BaseTask
+from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.utils.sim_utils import format_simulation_performance
 
 _PERFORMANCE_LOG_INTERVAL_STEPS = 1000
+
+
+class _PerformanceLog:
+    """Log real-time performance every ``_PERFORMANCE_LOG_INTERVAL_STEPS`` physics steps, and the
+    run's average on close."""
+
+    def __init__(self, hooks: HookRegistry, sim_dt: float, control_decimation: int) -> None:
+        self._sim_dt = sim_dt
+        self._decimation = control_decimation
+        self._control_steps = 0
+        self._window_control_steps = 0
+        self._start = self._window_start = time.perf_counter()
+        hooks.add(Phase.FRAME_END, self._on_frame_end, name="simulation.performance")
+        hooks.add(Phase.CLOSE, self._on_close, name="simulation.average_performance")
+
+    def _on_frame_end(self) -> None:
+        self._control_steps += 1
+        self._window_control_steps += 1
+        if self._window_control_steps * self._decimation < _PERFORMANCE_LOG_INTERVAL_STEPS:
+            return
+        now = time.perf_counter()
+        logger.info(self._format(self._window_control_steps, now - self._window_start))
+        self._window_start = now
+        self._window_control_steps = 0
+
+    def _on_close(self) -> None:
+        elapsed = time.perf_counter() - self._start
+        logger.info(self._format(self._control_steps, elapsed, "Average simulation performance"))
+
+    def _format(self, control_steps: int, elapsed: float, prefix: str = "Simulation performance") -> str:
+        return format_simulation_performance(
+            control_steps * self._decimation, control_steps, self._sim_dt, elapsed, prefix=prefix
+        )
 
 
 class SimulationTask(BaseTask):
@@ -49,35 +83,7 @@ class SimulationTask(BaseTask):
         )
         logger.info("Press Ctrl+C to stop simulation")
 
-        control_steps = 0
-        window_control_steps = 0
-        window_start = time.perf_counter()
-        start_time = window_start
+        _PerformanceLog(self.hooks, self.sim_dt, control_decimation)
         while not self.simulator.shutdown_requested:
             self.step()
-            control_steps += 1
-            window_control_steps += 1
-
-            if window_control_steps * control_decimation >= _PERFORMANCE_LOG_INTERVAL_STEPS:
-                now = time.perf_counter()
-                logger.info(
-                    format_simulation_performance(
-                        window_control_steps * control_decimation,
-                        window_control_steps,
-                        1.0 / sim_frequency,
-                        now - window_start,
-                    )
-                )
-                window_start = now
-                window_control_steps = 0
-
         logger.info("Simulation loop exiting: shutdown requested.")
-        logger.info(
-            format_simulation_performance(
-                control_steps * control_decimation,
-                control_steps,
-                1.0 / sim_frequency,
-                time.perf_counter() - start_time,
-                prefix="Average simulation performance",
-            )
-        )
