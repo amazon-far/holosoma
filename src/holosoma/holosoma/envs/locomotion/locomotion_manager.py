@@ -30,21 +30,6 @@ class LeggedRobotLocomotionManager(PolicyTask):
     def _init_buffers(self) -> None:
         """Initialize torch tensors which will contain simulation states and processed quantities"""
         super()._init_buffers()
-
-        # joint positions offsets
-        self.default_dof_pos_base = torch.zeros(
-            self.num_dof, dtype=torch.float, device=self.device, requires_grad=False
-        )
-        for i in range(self.num_dofs):
-            name = self.dof_names[i]
-            if name not in self.robot_config.init_state.default_joint_angles:
-                raise ValueError(f"Missing default joint angle for DOF '{name}' in robot configuration.")
-            angle = self.robot_config.init_state.default_joint_angles[name]
-            self.default_dof_pos_base[i] = angle
-
-        self.default_dof_pos_base = self.default_dof_pos_base.unsqueeze(0)  # (1, num_dof)
-        self.default_dof_pos = self.default_dof_pos_base.repeat(self.num_envs, 1).clone()  # (num_envs, num_dof)
-
         self._init_domain_rand_buffers()
 
         self.lidar_height_offset = getattr(self.robot_config, "lidar_height_offset", 0.5)
@@ -113,13 +98,16 @@ class LeggedRobotLocomotionManager(PolicyTask):
     def _reset_robot_states_callback(
         self, env_ids: torch.Tensor, target_states: Mapping[str, torch.Tensor] | None = None
     ) -> None:
-        # if target_states is not None, reset to target states
         if target_states is not None:
-            self._reset_dofs(env_ids, target_states["dof_states"])
-            self._reset_root_states(env_ids, target_states["root_states"])
-        else:
-            self._reset_dofs(env_ids)
-            self._reset_root_states(env_ids)
+            # Target root positions are relative to each environment's origin.
+            root_states = target_states["root_states"].clone()
+            root_states[:, :3] += self._get_env_origins()[env_ids]
+            super()._reset_robot_states_callback(
+                env_ids, {"root_states": root_states, "dof_states": target_states["dof_states"]}
+            )
+            return
+        super()._reset_robot_states_callback(env_ids)
+        self._randomize_spawn(env_ids)
 
     def _reset_buffers_callback(
         self, env_ids: torch.Tensor, target_buf: Mapping[str, torch.Tensor] | None = None
@@ -211,78 +199,41 @@ class LeggedRobotLocomotionManager(PolicyTask):
 
     ################ ENV CALLBACKS #################
 
-    def _reset_dofs(self, env_ids: torch.Tensor, target_state: torch.Tensor | None = None) -> None:
-        """Resets DOF position and velocities of selected environmments
-        Positions are randomly selected within 0.5:1.5 x default positions.
-        Velocities are set to zero.
-        If target_state is not None, reset to target_state
+    def _randomize_spawn(self, env_ids: torch.Tensor) -> None:
+        """Offset the default spawn on custom-origin terrains and randomize the base velocity."""
+        # Apply randomized XY offset if custom_origins
+        if self.terrain_manager.get_state("locomotion_terrain").custom_origins:
+            # Get spawn config from terrain term
+            spawn_cfg = self.terrain_manager.cfg.terrain_term.spawn
 
-        Args:
-            env_ids (List[int]): Environemnt ids
-            target_state (Tensor): Target state
-        """
-        if target_state is not None:
-            self.simulator.dof_pos[env_ids] = target_state[..., 0]
-            self.simulator.dof_vel[env_ids] = target_state[..., 1]
-        else:
-            self.simulator.dof_pos[env_ids] = self.default_dof_pos[env_ids] * torch_rand_float(
-                0.5, 1.5, (len(env_ids), self.num_dof), device=str(self.device)
+            # Generate random XY offsets
+            xy_offsets = torch_rand_float(
+                -spawn_cfg.xy_offset_range, spawn_cfg.xy_offset_range, (len(env_ids), 2), device=str(self.device)
             )
-            self.simulator.dof_vel[env_ids] = 0.0
 
-    def _reset_root_states(self, env_ids: torch.Tensor, target_root_states: torch.Tensor | None = None) -> None:
-        """Resets ROOT states position and velocities of selected environmments
-            if target_root_states is not None, reset to target_root_states
-        Args:
-            env_ids (List[int]): Environemnt ids
-            target_root_states (Tensor): Target root states
-        """
-        if target_root_states is not None:
-            self.simulator.robot_root_states[env_ids] = target_root_states
-            self.simulator.robot_root_states[env_ids, :3] += self.terrain_manager.get_state(
-                "locomotion_terrain"
-            ).env_origins[env_ids]
+            if spawn_cfg.query_terrain_height:
+                # ACCURATE: Query terrain height at new XY position (slower, for rough terrain)
+                current_xy = self.simulator.robot_root_states[env_ids, :2]
+                new_xy = current_xy + xy_offsets
 
-        else:
-            # base position
-            self.simulator.robot_root_states[env_ids] = self.base_init_state
-            self.simulator.robot_root_states[env_ids, :3] += self.terrain_manager.get_state(
-                "locomotion_terrain"
-            ).env_origins[env_ids]
-
-            # Apply randomized XY offset if custom_origins
-            if self.terrain_manager.get_state("locomotion_terrain").custom_origins:
-                # Get spawn config from terrain term
-                spawn_cfg = self.terrain_manager.cfg.terrain_term.spawn
-
-                # Generate random XY offsets
-                xy_offsets = torch_rand_float(
-                    -spawn_cfg.xy_offset_range, spawn_cfg.xy_offset_range, (len(env_ids), 2), device=str(self.device)
+                terrain_state = cast("TerrainLocomotion", self.terrain_manager.get_state("locomotion_terrain"))
+                terrain_heights = terrain_state.query_terrain_heights(
+                    new_xy,
+                    use_grid_sampling=spawn_cfg.use_grid_sampling,
+                    grid_size=spawn_cfg.grid_size,
+                    grid_spacing=spawn_cfg.grid_spacing,
                 )
+                robot_base_height = self.robot_config.init_state.pos[2]  # Robot base height above ground
+                new_z = terrain_heights + robot_base_height
 
-                if spawn_cfg.query_terrain_height:
-                    # ACCURATE: Query terrain height at new XY position (slower, for rough terrain)
-                    current_xy = self.simulator.robot_root_states[env_ids, :2]
-                    new_xy = current_xy + xy_offsets
+                # Write new XYZ position all at once
+                new_xyz = torch.cat([new_xy, new_z.unsqueeze(1)], dim=1)
+                self.simulator.robot_root_states[env_ids, :3] = new_xyz
+            else:
+                # FAST: Original simple spawning - just apply XY offset, keep original Z (faster, for flat terrain)
+                self.simulator.robot_root_states[env_ids, :2] += xy_offsets
 
-                    terrain_state = cast("TerrainLocomotion", self.terrain_manager.get_state("locomotion_terrain"))
-                    terrain_heights = terrain_state.query_terrain_heights(
-                        new_xy,
-                        use_grid_sampling=spawn_cfg.use_grid_sampling,
-                        grid_size=spawn_cfg.grid_size,
-                        grid_spacing=spawn_cfg.grid_spacing,
-                    )
-                    robot_base_height = self.robot_config.init_state.pos[2]  # Robot base height above ground
-                    new_z = terrain_heights + robot_base_height
-
-                    # Write new XYZ position all at once
-                    new_xyz = torch.cat([new_xy, new_z.unsqueeze(1)], dim=1)
-                    self.simulator.robot_root_states[env_ids, :3] = new_xyz
-                else:
-                    # FAST: Original simple spawning - just apply XY offset, keep original Z (faster, for flat terrain)
-                    self.simulator.robot_root_states[env_ids, :2] += xy_offsets
-
-            # base velocities
-            self.simulator.robot_root_states[env_ids, 7:13] = torch_rand_float(
-                -0.5, 0.5, (len(env_ids), 6), device=str(self.device)
-            )  # [7:10]: lin vel, [10:13]: ang vel
+        # base velocities
+        self.simulator.robot_root_states[env_ids, 7:13] = torch_rand_float(
+            -0.5, 0.5, (len(env_ids), 6), device=str(self.device)
+        )  # [7:10]: lin vel, [10:13]: ang vel

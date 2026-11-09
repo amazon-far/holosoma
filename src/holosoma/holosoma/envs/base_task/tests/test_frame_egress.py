@@ -16,6 +16,7 @@ import torch
 
 from holosoma.config_types.env import EnvConfig
 from holosoma.config_types.plugin import MotionPlaybackPluginConfig
+from holosoma.config_types.robot import RobotConfig
 from holosoma.envs.simulation_task import SimulationTask
 from holosoma.managers.randomization import RandomizationManager
 from holosoma.managers.termination import TerminationManager
@@ -151,6 +152,8 @@ class _LoopTask(SimulationTask):
         self.termination_manager = cast(
             "TerminationManager", SimpleNamespace(check=lambda: (no_ends, no_ends), reset=lambda _env_ids: None)
         )
+        self.robot_config = cast("RobotConfig", SimpleNamespace(init_state=SimpleNamespace(default_joint_angles={})))
+        self.dof_names: list[str] = []
         self._episode_active = torch.zeros(self.num_envs, dtype=torch.bool)
         self._init_buffers()
         self._add_pacing_hooks()

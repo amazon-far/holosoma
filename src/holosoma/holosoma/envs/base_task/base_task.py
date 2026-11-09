@@ -142,11 +142,6 @@ class BaseTask:
         self.dof_pos_limits, self.dof_vel_limits, self.torque_limits = self.simulator.get_dof_limits_properties()
         self._setup_robot_body_indices()
         self.simulator.prepare_sim()
-        self._initial_robot_root_states = self.simulator.robot_root_states[:].clone()
-        self._initial_robot_dof_states = torch.stack(
-            (self.simulator.dof_pos.clone(), self.simulator.dof_vel.clone()),
-            dim=-1,
-        )
 
         # if running with a viewer, set up keyboard shortcuts and camera
         self.viewer = None
@@ -203,6 +198,15 @@ class BaseTask:
         self.episode_length_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self.reset_buf = torch.ones(self.num_envs, device=self.device, dtype=torch.long)
         self.time_out_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+
+        default_joint_angles = self.robot_config.init_state.default_joint_angles
+        missing = [name for name in self.dof_names if name not in default_joint_angles]
+        if missing:
+            raise ValueError(f"Missing default joint angles for DOFs {missing} in robot configuration.")
+        self.default_dof_pos_base = torch.tensor(
+            [[float(default_joint_angles[name]) for name in self.dof_names]], dtype=torch.float, device=self.device
+        )
+        self.default_dof_pos = self.default_dof_pos_base.repeat(self.num_envs, 1)
 
     def reset_all(self) -> Any:
         """Deprecated: reset every environment with :meth:`reset_envs_idx`."""
@@ -399,19 +403,19 @@ class BaseTask:
     def _reset_robot_states_callback(self, env_ids: torch.Tensor, target_states: dict[str, Any] | None = None) -> None:
         """Reset simulator DOF/root states for the specified environments.
 
-        The default restores the state captured after simulator preparation, or the
-        ``root_states``/``dof_states`` in ``target_states`` when given, one row per entry of
-        ``env_ids``. Subclasses may override this to add task-specific state sampling.
+        The default places the robot at its configured pose (``robot.init_state``) on each
+        environment's origin, with zero joint velocities, or writes the ``root_states``/
+        ``dof_states`` in ``target_states`` when given, one row per entry of ``env_ids``.
         """
-        if target_states is None:
-            root_states = self._initial_robot_root_states[env_ids]
-            dof_states = self._initial_robot_dof_states[env_ids]
-        else:
-            root_states = target_states["root_states"]
-            dof_states = target_states["dof_states"]
-        self.simulator.robot_root_states[env_ids] = root_states
-        self.simulator.dof_pos[env_ids] = dof_states[..., 0]
-        self.simulator.dof_vel[env_ids] = dof_states[..., 1]
+        if target_states is not None:
+            self.simulator.robot_root_states[env_ids] = target_states["root_states"]
+            self.simulator.dof_pos[env_ids] = target_states["dof_states"][..., 0]
+            self.simulator.dof_vel[env_ids] = target_states["dof_states"][..., 1]
+            return
+        self.simulator.robot_root_states[env_ids] = self.base_init_state
+        self.simulator.robot_root_states[env_ids, :3] += self._get_env_origins()[env_ids]
+        self.simulator.dof_pos[env_ids] = self.default_dof_pos[env_ids]
+        self.simulator.dof_vel[env_ids] = 0.0
 
     def _reset_objects_callback(self, env_ids: torch.Tensor) -> None:
         """Reset registered rigid objects to their initial pose and velocity.
