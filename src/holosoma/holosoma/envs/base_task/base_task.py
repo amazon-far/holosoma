@@ -444,9 +444,8 @@ class BaseTask:
 
     def _physics_step(self) -> None:
         decimation = self.config.simulator.config.sim.control_decimation_steps
+        self.hooks.emit(Phase.FRAME_BEGIN)
         for substep in range(decimation):
-            if substep == 0:
-                self.hooks.emit(Phase.FRAME_BEGIN)
             self._apply_force_in_physics_step()
             self.hooks.emit(Phase.PRE_STEP)
             self.simulator.simulate_at_each_physics_step()
