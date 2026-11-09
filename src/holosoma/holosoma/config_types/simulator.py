@@ -215,9 +215,10 @@ class IsaacLab3Config:
         data: dict[str, Any] = handler(self)
         if self.newton == IsaacLab3NewtonConfig():
             data.pop("newton", None)
-        data["renderer_options"] = {
-            name: value for name, value in data["renderer_options"].items() if value is not None
-        }
+        if "renderer_options" in data:
+            data["renderer_options"] = {
+                name: value for name, value in data["renderer_options"].items() if value is not None
+            }
         return data
 
 
