@@ -5,7 +5,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from holosoma.envs import policy_task as policy_task_module
 from holosoma.envs.base_task import base_task as base_task_module
 from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.envs.policy_task import PolicyTask
@@ -98,7 +97,7 @@ def test_task_installs_plugins_only_after_provider_setup(monkeypatch: pytest.Mon
     def create_envs(_task: BaseTask) -> None:
         events.append("envs")
 
-    def create_observation_manager(*_args: object, **_kwargs: object) -> None:
+    def create_first_manager(*_args: object, **_kwargs: object) -> None:
         events.append("manager")
         raise _StopAfterInstallError
 
@@ -133,7 +132,7 @@ def test_task_installs_plugins_only_after_provider_setup(monkeypatch: pytest.Mon
     monkeypatch.setattr(base_task_module, "get_class", lambda _target: _Simulator)
     monkeypatch.setattr(base_task_module, "FullSimConfig", lambda **kwargs: SimpleNamespace(**kwargs))
     monkeypatch.setattr(base_task_module, "TerrainManager", lambda *_args: SimpleNamespace())
-    monkeypatch.setattr(policy_task_module, "ObservationManager", create_observation_manager)
+    monkeypatch.setattr(base_task_module, "RandomizationManager", create_first_manager)
     monkeypatch.setattr(BaseTask, "_load_assets", load_assets)
     monkeypatch.setattr(BaseTask, "_create_envs", create_envs)
     monkeypatch.setattr(BaseTask, "_setup_robot_body_indices", lambda _task: events.append("body_indices"))

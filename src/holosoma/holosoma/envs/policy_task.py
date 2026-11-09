@@ -37,11 +37,14 @@ class PolicyTask(BaseTask):
                 raise ValueError(f"{name}_config must be provided for manager-based environments.")
 
     def _initialize_task_managers(self) -> None:
+        super()._initialize_task_managers()
         config = self.config
         assert config.observation is not None
         assert config.action is not None
         assert config.reward is not None
         assert config.termination is not None
+        assert config.command is not None
+        assert config.curriculum is not None
 
         self.max_episode_length_s = config.simulator.config.sim.max_episode_length_s
         self.max_episode_length = np.ceil(self.max_episode_length_s / self.dt)
@@ -50,12 +53,8 @@ class PolicyTask(BaseTask):
         self.action_manager = ActionManager(config.action, self, self.device)
         self.reward_manager = RewardManager(config.reward, self, self.device)
         self.termination_manager = TerminationManager(config.termination, self, self.device)
-
-    def _initialize_post_randomization_task_managers(self) -> None:
-        assert self.config.command is not None
-        assert self.config.curriculum is not None
-        self.command_manager = CommandManager(self.config.command, self, self.device)
-        self.curriculum_manager = CurriculumManager(self.config.curriculum, self, self.device)
+        self.command_manager = CommandManager(config.command, self, self.device)
+        self.curriculum_manager = CurriculumManager(config.curriculum, self, self.device)
 
     def _prepare_manager_fields(self) -> None:
         self.simulator.prepare_manager_fields(

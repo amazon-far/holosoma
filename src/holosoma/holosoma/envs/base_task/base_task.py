@@ -79,7 +79,6 @@ class BaseTask:
         terrain_config = tyro_config.terrain
         robot_config = tyro_config.robot
         training_config = tyro_config.training
-        randomization_config = tyro_config.randomization or RandomizationManagerCfg()
 
         self.training_config = training_config
         self.robot_config = robot_config
@@ -156,11 +155,7 @@ class BaseTask:
         # registered last and therefore run first during reverse-order teardown.
         self.simulator.install_plugins()
 
-        # Randomization is built between the task's managers because some terms bind to one another
-        # during construction.
         self._initialize_task_managers()
-        self.randomization_manager = RandomizationManager(randomization_config, self, self.device)
-        self._initialize_post_randomization_task_managers()
 
         self._episode_active = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self._init_buffers()
@@ -340,10 +335,9 @@ class BaseTask:
         """Validate subclass-specific requirements after the simulator is constructed."""
 
     def _initialize_task_managers(self) -> None:
-        """Construct managers owned by the task specialization."""
-
-    def _initialize_post_randomization_task_managers(self) -> None:
-        """Finish task-manager construction after randomization is available."""
+        """Build the task's managers; specializations extend it to build their own."""
+        randomization_config = self.config.randomization or RandomizationManagerCfg()
+        self.randomization_manager = RandomizationManager(randomization_config, self, self.device)
 
     def _prepare_manager_fields(self) -> None:
         """Prepare simulator fields required by BaseTask-owned managers."""
