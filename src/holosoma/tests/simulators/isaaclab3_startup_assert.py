@@ -70,7 +70,12 @@ def main() -> int:
         sim.prepare_sim()
         ready = time.perf_counter()
         manager = string_to_callable(sim.sim.cfg.physics.class_type)
-        assert manager.__module__.startswith("isaaclab_newton." if args.physics == "newton" else "isaaclab_ov.")
+        if args.physics == "newton":
+            from isaaclab_newton.physics import NewtonMJWarpManager
+
+            assert issubclass(manager, NewtonMJWarpManager)
+        else:
+            assert manager.__module__.startswith("isaaclab_ov.")
         step(sim, 20)
         assert torch.isfinite(sim.dof_pos).all()
         dependencies = assert_native_runtime(physics=args.physics, uses_kit=False)
