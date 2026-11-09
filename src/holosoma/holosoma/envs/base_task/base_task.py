@@ -205,8 +205,7 @@ class BaseTask:
 
     def reset_all(self) -> Any:
         """Reset every environment without advancing physics."""
-        env_ids = torch.arange(self.num_envs, device=self.device)
-        self.reset_envs_idx(env_ids)
+        self.reset_envs_idx()
         return self._finish_reset()
 
     def _finish_reset(self) -> Any:
@@ -225,12 +224,14 @@ class BaseTask:
 
     def reset_envs_idx(
         self,
-        env_ids: torch.Tensor,
+        env_ids: torch.Tensor | None = None,
         target_states: dict[str, Any] | None = None,
         target_buf: dict[str, Any] | None = None,
     ) -> None:
-        """Reset selected environments without advancing physics."""
-        env_ids = self._ensure_long_tensor(env_ids)
+        """Reset selected environments, or all of them when ``env_ids`` is None, without advancing physics."""
+        env_ids = (
+            torch.arange(self.num_envs, device=self.device) if env_ids is None else self._ensure_long_tensor(env_ids)
+        )
         if env_ids.numel() == 0:
             # Managers' reset hooks run every control frame, resets or not; there is no state to apply.
             self._reset_task_state(env_ids)
