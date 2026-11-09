@@ -254,7 +254,7 @@ class IsaacLab3Backend(IsaacLabBackend):
         """Build the explicitly selected physics engine's supported config."""
         if self.options.physics_backend == "newton":
             from isaaclab_newton.physics import NewtonCfg, NewtonShapeCfg, NewtonCollisionPipelineCfg
-            from .newton_mjwarp import HolosomaMJWarpSolverCfg
+            from .newton_mjwarp_cfg import HolosomaMJWarpSolverCfg
 
             newton = self.options.newton
             shared = config.mujoco if config is not None else MujocoConfig()
