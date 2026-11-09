@@ -26,14 +26,15 @@ Clip poses are relative to the origin of the env they were recorded in. Set-stat
 world-frame, so the plugin adds ``sim.scene.env_origins`` to the root and object positions:
 ``world = clip + env_origins``. Quaternions are origin-invariant and velocities are zeroed.
 
-Replay is single-trajectory: the same clip state is written to every env, so a vectorized run
-renders N copies of one motion, each offset into its own env. Per-env clip assignment is out of
-scope.
+``env_assignment`` picks how envs share the playlist: ``shared`` (default) writes the same clip state
+to every env, so a vectorized run renders N copies of one motion, each offset into its own env;
+``queue`` gives each env its own clip, handing the next unplayed clip to whichever env finishes first.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import dataclass
 from glob import has_magic
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -195,6 +196,45 @@ class PlaybackClip:
         return frame
 
 
+_UNRESOLVED = -1
+"""``_Slot.next_episode`` while the look-ahead failed: neither "nothing follows" nor a claimed episode."""
+
+
+@dataclass
+class _Slot:
+    """One playback timeline and the envs it drives.
+
+    ``shared`` assignment has a single slot driving every env; ``queue`` has one slot per env.
+    """
+
+    env_ids: list[int]
+    episode: int | None = None
+    """Global episode index being played; ``None`` before one is assigned (``queue`` with fewer clips than envs)."""
+    tick: int = 0
+    """Control frames played into the clip; playback time is ``start_time + tick * step`` (no float drift)."""
+    settle_left: int = 0
+    final_rendered: bool = False
+    next_episode: int | None = None
+    """Claimed when the clip's final frame is chosen: the episode that follows, ``None`` when none does."""
+    idle: bool = False
+    """``queue`` only: finished its last episode while other slots still play; holds its last frame."""
+    settling: bool = False
+    """The frame chosen this tick is a ``settle_frames`` hold after a clip switch."""
+    state: dict[str, torch.Tensor] | None = None
+    _ids: torch.Tensor | None = None
+
+    def ids(self, device: str) -> torch.Tensor:
+        """``env_ids`` as a tensor on ``device`` (built once)."""
+        if self._ids is None:
+            self._ids = torch.tensor(self.env_ids, dtype=torch.long, device=device)
+        return self._ids
+
+    @property
+    def done(self) -> bool:
+        """Contributes nothing more: never assigned, idle, or showing its last frame with nothing to follow."""
+        return self.episode is None or self.idle or (self.final_rendered and self.next_episode is None)
+
+
 class MotionPlaybackPlugin:
     """Pin the sim to a playlist of recorded clips, one episode per clip.
 
@@ -204,18 +244,28 @@ class MotionPlaybackPlugin:
     Each episode is one full clip playthrough (its final frame is always rendered before the
     boundary). Between episodes the plugin rewinds to the next clip's first frame (a hard reset —
     the ``PRE_STEP`` write re-pins robot+objects to frame 0 with zero velocity) and emits
-    ``EPISODE_END`` then ``EPISODE_START`` per env, so downstream plugins re-roll per-episode
-    settings. The playlist repeats ``n_run`` times in order; after ``len(playlist) * n_run``
+    ``EPISODE_END`` then ``EPISODE_START`` for the envs that switch, so downstream plugins re-roll
+    per-episode settings. The playlist repeats ``n_run`` times in order; after ``len(playlist) * n_run``
     episodes the run shuts down, or forever when ``n_run == 0``. Shutdown is requested from the last
     episode's final ``FRAME_END``, so that frame is egressed exactly once and no tick repeats it; a
     single clip played once therefore ends without emitting a boundary. ``settle_frames`` optionally
     holds each episode at frame 0 for a few frames so per-episode changes materialize (and RTX
     reconverges) before the clip advances.
 
+    ``env_assignment`` decides how envs share the playlist:
+
+    - ``shared``: one timeline; every env plays the same episode and all envs switch together.
+    - ``queue``: one timeline per env. Env ``e`` starts on episode ``e``; an env that finishes its clip
+      takes the next unplayed episode. Envs advance in lockstep and are served in env-id order, so the
+      env each episode lands on is fixed by the playlist and the env count. An env left with nothing to
+      play emits ``EPISODE_END`` and holds its last frame (no ``EPISODE_START`` follows); an env that
+      never received an episode is not written. The run ends once every env is done.
+
     Each ``motion_files`` entry creates its :func:`holosoma.utils.path.resolve_paths` iterator at
     construction, but paths are appended to ``playlist`` only as episodes reach them. Remote
     listings can therefore happen during construction while downloads remain lazy. Clip matrix
-    parsing and tensor conversion likewise happen only when each episode is reached.
+    parsing and tensor conversion likewise happen only when each episode is reached; with ``queue``
+    a clip no env still plays is released.
     """
 
     cfg: MotionPlaybackPluginConfig
@@ -236,14 +286,13 @@ class MotionPlaybackPlugin:
         self._clips: list[PlaybackClip | None] = []
         sim_cfg = simulator.simulator_config.sim
         self._control_dt = sim_cfg.control_decimation_steps / sim_cfg.fps
-        self._t = cfg.start_time
-        self._state: dict[str, torch.Tensor] | None = None
+        self._step = self._control_dt * cfg.speed  # playback seconds per control frame
+        self._queue = cfg.env_assignment == "queue"
+        # Built on first use: IsaacSim constructs plugins before ``num_envs`` is populated.
+        self._slot_list: list[_Slot] | None = None
+        self._next_episode = 0
         self._done_logged = False
-        self._episode_idx = 0
         self._infinite = cfg.n_run == 0
-        self._settle_left = 0
-        self._final_frame_rendered = False
-        self._final_episode = False
         self._lookahead_error: Exception | None = None
 
         simulator.hooks.add(Phase.FRAME_BEGIN, self.advance, name="motion_playback.advance")
@@ -295,7 +344,7 @@ class MotionPlaybackPlugin:
 
     @property
     def clips(self) -> list[PlaybackClip]:
-        """Load and return every clip; normal playback loads only the current clip."""
+        """Load and return every clip; normal playback loads only the clips being played."""
         while self._append_next_playlist_path():
             pass
         return [self._load_clip(index) for index in range(len(self.playlist))]
@@ -331,43 +380,135 @@ class MotionPlaybackPlugin:
             self._clips[index] = clip
         return clip
 
-    @property
-    def clip(self) -> PlaybackClip:
-        """The current episode's clip (playlist wraps by episode index)."""
-        index = self._playlist_index(self._episode_idx)
+    def _episode_clip(self, episode: int) -> PlaybackClip:
+        index = self._playlist_index(episode)
         if index is None:
-            raise IndexError(f"Motion playback episode {self._episode_idx} is past the end of the playlist.")
+            raise IndexError(f"Motion playback episode {episode} is past the end of the playlist.")
         return self._load_clip(index)
 
+    # ----- slots -----
+
+    def _slots(self) -> list[_Slot]:
+        """The playback timelines, assigning the first episode(s) on first use."""
+        if self._slot_list is None:
+            num_envs = self.simulator.num_envs
+            groups = [[e] for e in range(num_envs)] if self._queue else [list(range(num_envs))]
+            self._slot_list = [_Slot(env_ids=group) for group in groups]
+            for slot in self._slot_list:
+                if self._playlist_index(self._next_episode) is None:
+                    break  # fewer episodes than envs: the rest stay unassigned
+                slot.episode = self._next_episode
+                self._next_episode += 1
+            if self._queue and num_envs > 1:
+                assigned = sum(slot.episode is not None for slot in self._slot_list)
+                logger.info(f"MotionPlaybackPlugin: queue playback over {num_envs} env(s), {assigned} started")
+        return self._slot_list
+
+    def _slot_of(self, env_id: int) -> _Slot:
+        slots = self._slots()
+        return slots[env_id] if self._queue else slots[0]
+
+    def episode_of(self, env_id: int) -> int | None:
+        """Global episode index ``env_id`` is playing, or ``None`` when it plays nothing (unassigned or idle)."""
+        slot = self._slot_of(env_id)
+        return None if slot.idle else slot.episode
+
+    def clip_of(self, env_id: int) -> PlaybackClip:
+        """The clip ``env_id`` is playing (its last one once idle)."""
+        slot = self._slot_of(env_id)
+        if slot.episode is None:
+            raise IndexError(f"Motion playback env {env_id} has no episode.")
+        return self._episode_clip(slot.episode)
+
+    def episode_name(self, env_id: int) -> str | None:
+        """Name of the episode ``env_id`` is playing: its playlist entry's file stem, ``_run<k>`` on repeats.
+
+        ``None`` when the env plays nothing. A playlist played more than once (``n_run``) comes round to
+        the same entry again, so every pass after the first carries its repeat number.
+        """
+        episode = self.episode_of(env_id)
+        if episode is None:
+            return None
+        index = self._playlist_index(episode)
+        assert index is not None
+        stem = Path(self.playlist[index]).stem
+        repeat = episode // len(self.playlist)
+        return stem if repeat == 0 else f"{stem}_run{repeat + 1}"
+
+    def settling(self, env_id: int) -> bool:
+        """Whether ``env_id``'s current frame is a ``settle_frames`` hold after a clip switch.
+
+        Writers that want only the clip's own frames skip these (``FrameWriterPlugin.skip_settle_frames``).
+        """
+        return self._slot_of(env_id).settling
+
+    @property
+    def clip(self) -> PlaybackClip:
+        """The clip env 0 is playing (with ``shared`` assignment, every env's clip)."""
+        return self.clip_of(0)
+
+    # ----- per-frame -----
+
+    def _time(self, slot: _Slot) -> float:
+        return self.cfg.start_time + slot.tick * self._step
+
+    def _claim_next(self) -> int | None:
+        """Take the next unplayed episode for a slot whose clip just ended, or ``None`` when none is left."""
+        if self._playlist_index(self._next_episode) is None:
+            return None
+        episode = self._next_episode
+        self._next_episode += 1
+        return episode
+
     def advance(self) -> None:
-        """FRAME_BEGIN: choose the frame to render this tick and advance the clock/episode."""
+        """FRAME_BEGIN: choose the frame each timeline renders this tick and advance its clock/episode."""
         # A playlist error held back from the previous frame (see the clip-end branch below) surfaces
         # here, once that frame has been written and egressed and before any episode boundary.
         if self._lookahead_error is not None:
             raise self._lookahead_error
 
+        slots = self._slots()
         if self._done_logged:
-            self._state = self.clip.sample(self.clip.duration, self.cfg.interpolate)
+            for slot in slots:
+                if slot.episode is not None:
+                    clip = self._episode_clip(slot.episode)
+                    slot.state = clip.sample(clip.duration, self.cfg.interpolate)
             return
+
+        for slot in slots:
+            self._advance_slot(slot)
+        # A driver that never emits FRAME_END lands here with every timeline past its last frame.
+        if self._queue and all(slot.episode is None or slot.idle for slot in slots):
+            self._finish("motion playback finished (driver emitted no FRAME_END)")
+
+    def _advance_slot(self, slot: _Slot) -> None:
+        slot.settling = False
+        if slot.episode is None or slot.idle:
+            return  # unassigned or idle: keep the state it has
+        clip = self._episode_clip(slot.episode)
 
         # Settle window: hold the current clip's first frame, do not advance the clock, so the
         # extension's EPISODE_START changes materialize (and RTX reconverges) before playback.
-        if self._settle_left > 0:
-            self._settle_left -= 1
-            self._state = self.clip.sample(self.cfg.start_time, self.cfg.interpolate)
+        if slot.settle_left > 0:
+            slot.settle_left -= 1
+            slot.settling = True
+            slot.state = clip.sample(self.cfg.start_time, self.cfg.interpolate)
             return
 
-        # Within the clip: sample the current time and advance the clock.
-        if self._t < self.clip.duration:
-            self._state = self.clip.sample(self._t, self.cfg.interpolate)
-            self._t += self._control_dt * self.cfg.speed
+        # Within the clip: sample the current time and advance the clock. The comparison tolerates
+        # rounding (1e-6 of a step), so a clip whose duration is a whole number of steps ends on its last
+        # row instead of rendering it twice.
+        t = self._time(slot)
+        if t < clip.duration - 1e-6 * self._step:
+            slot.state = clip.sample(t, self.cfg.interpolate)
+            slot.tick += 1
             return
 
         # Reached the clip end: render the clip's final frame once (never dropped), then close the
         # episode on the following tick.
-        if not self._final_frame_rendered:
-            self._final_frame_rendered = True
-            self._state = self.clip.sample(self.clip.duration, self.cfg.interpolate)
+        if not slot.final_rendered:
+            slot.final_rendered = True
+            slot.state = clip.sample(clip.duration, self.cfg.interpolate)
             # Whether an episode follows decides whether :meth:`finish_when_egressed` ends the run
             # from this frame's FRAME_END, and answering it resolves one playlist entry ahead.
             #
@@ -376,32 +517,55 @@ class MotionPlaybackPlugin:
             # last frame. The exception is held rather than re-resolved: a generator that raised is
             # closed, so a second attempt reports no further entries and would end the run silently.
             try:
-                self._final_episode = self._playlist_index(self._episode_idx + 1) is None
+                slot.next_episode = self._claim_next()
             except Exception as error:
                 self._lookahead_error = error
-                self._final_episode = False  # do not end the run on a question that went unanswered
+                slot.next_episode = _UNRESOLVED  # do not end the run on a question that went unanswered
             return
 
-        # The final episode ends the run from its FRAME_END, and a loop that honours the shutdown flag
-        # stops at the next frame boundary, so reaching here means another frame was opened after it.
-        # A driver that never emits FRAME_END lands here with the run still unfinished: end it now, so
-        # a finite playlist always terminates even though the frame count is then one too many.
-        if self._final_episode:
+        if slot.next_episode is None:
+            if self._queue and not all(other.done for other in self._slots() if other is not slot):
+                # Nothing left for this env while others still play: close its episode and hold.
+                slot.idle = True
+                for env_id in slot.env_ids:
+                    self.simulator.hooks.emit(Phase.EPISODE_END, env_id)
+                self._release_unused_clips()
+                return
+            # The final episode ends the run from its FRAME_END, and a loop that honours the shutdown
+            # flag stops at the next frame boundary, so reaching here means another frame was opened
+            # after it. A driver that never emits FRAME_END lands here with the run still unfinished:
+            # end it now, so a finite playlist always terminates even though the frame count is then one
+            # too many.
             self._finish("motion playback finished (driver emitted no FRAME_END)")
-            self._state = self.clip.sample(self.clip.duration, self.cfg.interpolate)
+            slot.state = clip.sample(clip.duration, self.cfg.interpolate)
             return
 
         # Episode finished — roll to the next episode.
-        self._episode_idx += 1
-        self._final_frame_rendered = False
-        self._begin_episode()
-        if self._settle_left > 0:  # boundary frame is the first of the settle window
-            self._settle_left -= 1
-            self._state = self.clip.sample(self.cfg.start_time, self.cfg.interpolate)
+        slot.episode = slot.next_episode
+        slot.next_episode = None
+        slot.final_rendered = False
+        self._begin_episode(slot)
+        clip = self._episode_clip(slot.episode)
+        if slot.settle_left > 0:  # boundary frame is the first of the settle window
+            slot.settle_left -= 1
+            slot.settling = True
+            slot.state = clip.sample(self.cfg.start_time, self.cfg.interpolate)
             return
         # No settle window: render the next clip's first frame now.
-        self._state = self.clip.sample(self._t, self.cfg.interpolate)
-        self._t += self._control_dt * self.cfg.speed
+        slot.state = clip.sample(self._time(slot), self.cfg.interpolate)
+        slot.tick += 1
+
+    def _release_unused_clips(self) -> None:
+        """``queue``: drop loaded clips no slot holds, so a long playlist keeps at most one clip per env.
+
+        An idle slot still holds its last clip: it keeps writing that clip's final frame.
+        """
+        if not self._queue or self._slot_list is None:
+            return
+        held = {self._playlist_index(slot.episode) for slot in self._slot_list if slot.episode is not None}
+        for index, clip in enumerate(self._clips):
+            if clip is not None and index not in held:
+                self._clips[index] = None
 
     def finish_when_egressed(self) -> None:
         """FRAME_END: end a finite run once its final frame has been egressed.
@@ -411,7 +575,7 @@ class MotionPlaybackPlugin:
         another, so no tick repeats that frame and every FRAME_BEGIN keeps its FRAME_END. A driver
         that emits no FRAME_END still terminates, from :meth:`advance` — one frame later.
         """
-        if self._final_episode:
+        if self._slot_list is not None and all(slot.done for slot in self._slot_list):
             self._finish("motion playback finished")
 
     def _finish(self, reason: str) -> None:
@@ -419,19 +583,21 @@ class MotionPlaybackPlugin:
         if self._done_logged:
             return
         self._done_logged = True
-        logger.info(f"MotionPlaybackPlugin: all {self._episode_idx + 1} episode(s) finished.")
+        logger.info(f"MotionPlaybackPlugin: all {self._next_episode} episode(s) finished.")
         self.simulator.request_shutdown(reason)
 
-    def _begin_episode(self) -> None:
-        """Close the previous episode and open the next: emit boundaries, rewind clock, arm settle."""
+    def _begin_episode(self, slot: _Slot) -> None:
+        """Close the slot's previous episode and open the next: emit boundaries, rewind clock, arm settle."""
         sim = self.simulator
-        for env_id in range(sim.num_envs):
+        for env_id in slot.env_ids:
             sim.hooks.emit(Phase.EPISODE_END, env_id)
-        self._t = self.cfg.start_time
-        self._settle_left = self.cfg.settle_frames
-        for env_id in range(sim.num_envs):
+        slot.tick = 0
+        slot.settle_left = self.cfg.settle_frames
+        self._release_unused_clips()
+        for env_id in slot.env_ids:
             sim.hooks.emit(Phase.EPISODE_START, env_id)
-        playlist_index = self._playlist_index(self._episode_idx)
+        assert slot.episode is not None
+        playlist_index = self._playlist_index(slot.episode)
         assert playlist_index is not None
         local_path = self.playlist[playlist_index]
         source = self._playlist_sources[playlist_index]
@@ -442,37 +608,52 @@ class MotionPlaybackPlugin:
             last = len(self.playlist) * self.cfg.n_run - 1
         else:
             last = "?"
+        where = f" env={slot.env_ids[0]}" if self._queue else ""
         logger.info(
-            f"MotionPlaybackPlugin: episode {self._episode_idx}/{last} "
+            f"MotionPlaybackPlugin: episode {slot.episode}/{last}{where} "
             f"clip={clip_name} settle_frames={self.cfg.settle_frames}"
         )
 
     def write_state(self) -> None:
-        """PRE_STEP: write the sampled robot (and object) state into the simulator.
+        """PRE_STEP: write each timeline's sampled robot (and object) state into its envs.
 
         Clip positions are env-local, so each env's root and object positions are offset by that
-        env's ``sim.scene.env_origins`` row before the world-frame write.
+        env's ``sim.scene.env_origins`` row before the world-frame write. Envs without an episode are
+        left as they are.
         """
-        if self._state is None:  # PRE_STEP before the first FRAME_BEGIN (BaseTask emits them together)
-            self._state = self.clip.sample(self._t, self.cfg.interpolate)
-        state = self._state
         sim = self.simulator
-        env_ids = torch.arange(sim.num_envs, device=sim.sim_device)
+        # (env ids, sampled state, clip) for every timeline that has an episode.
+        writes: list[tuple[torch.Tensor, dict[str, torch.Tensor], PlaybackClip]] = []
+        for slot in self._slots():
+            if slot.episode is None:
+                continue
+            clip = self._episode_clip(slot.episode)
+            if slot.state is None:  # PRE_STEP before the first FRAME_BEGIN (BaseTask emits them together)
+                slot.state = clip.sample(self._time(slot), self.cfg.interpolate)
+            writes.append((slot.ids(sim.sim_device), slot.state, clip))
         env_origins = sim.scene.env_origins  # [num_envs, 3]
 
-        sim.dof_pos[:] = state["joint_pos"]
         sim.dof_vel[:] = 0.0
-        if self.clip.has_root:
+        for ids, state, _ in writes:
+            sim.dof_pos[ids] = state["joint_pos"]
+        root_writes = [(ids, state) for ids, state, clip in writes if clip.has_root]
+        if root_writes:
             rs = sim.robot_root_states
-            rs[:, :3] = state["root_pos"] + env_origins
-            rs[:, 3:7] = state["root_quat"]
-            rs[:, 7:13] = 0.0
+            for ids, state in root_writes:
+                rs[ids, :3] = state["root_pos"] + env_origins[ids]
+                rs[ids, 3:7] = state["root_quat"]
+                rs[ids, 7:13] = 0.0
 
-        if self.cfg.objects:
-            # set_actor_states rows are name-major, env-minor: all envs of object 0, then object 1, ...
-            obj = torch.zeros(len(self.cfg.objects) * sim.num_envs, 13, device=sim.sim_device)
-            for k in range(len(self.cfg.objects)):
-                rows = obj[k * sim.num_envs : (k + 1) * sim.num_envs]
-                rows[:, :3] = state["object_pos"][k] + env_origins
-                rows[:, 3:7] = state["object_quat"][k]
+        if self.cfg.objects and writes:
+            # set_actor_states rows are name-major, env-minor: all written envs of object 0, then object 1, ...
+            num_objects = len(self.cfg.objects)
+            pos = torch.zeros(sim.num_envs, num_objects, 3, device=sim.sim_device)
+            quat = torch.zeros(sim.num_envs, num_objects, 4, device=sim.sim_device)
+            for ids, state, _ in writes:
+                pos[ids] = state["object_pos"]
+                quat[ids] = state["object_quat"]
+            env_ids = torch.sort(torch.cat([ids for ids, _, _ in writes])).values if len(writes) > 1 else writes[0][0]
+            obj = torch.zeros(num_objects * len(env_ids), 13, device=sim.sim_device)
+            obj[:, :3] = (pos[env_ids] + env_origins[env_ids][:, None, :]).transpose(0, 1).reshape(-1, 3)
+            obj[:, 3:7] = quat[env_ids].transpose(0, 1).reshape(-1, 4)
             sim.set_actor_states(list(self.cfg.objects), env_ids, obj)

@@ -234,3 +234,18 @@ def test_sensor_names_must_be_unique_across_types() -> None:
     sm.register_camera("sensor", _cam())
     with pytest.raises(ValueError, match="already registered"):
         sm.register_lidar("sensor", LidarSensorConfig(mount=_MOUNT))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test_gpu_buffer_read_on_cpu_is_an_exact_pinned_copy_not_reused_across_frames() -> None:
+    from holosoma.simulator.shared.sensor_manager import SensorRecord
+
+    record = SensorRecord(name="cam", config=None)  # type: ignore[arg-type]
+    first = torch.randint(0, 255, (2, 6, 8, 3), dtype=torch.uint8, device="cuda")
+    record.set_buffer("rgb", first)
+    held = record.buffer_on("rgb", "cpu")
+    assert held.is_pinned()
+    assert torch.equal(held, first.cpu())
+    record.set_buffer("rgb", first + 1)  # next frame
+    assert torch.equal(record.buffer_on("rgb", "cpu"), (first + 1).cpu())
+    assert torch.equal(held, first.cpu())  # a frame a consumer still holds is not overwritten

@@ -439,3 +439,142 @@ def test_empty_stream_selection_fails_loud(tmp_path: Path) -> None:
     sim = _FakeSimulator({"head": _cam()}, {("head", "rgb"): _rgb()})
     with pytest.raises(ValueError, match="no streams"):
         _make(FrameWriterPluginConfig(output_dir=str(tmp_path), modalities=["depth"]), sim)
+
+
+# ----- episodic mode, driven by real queue playback -----
+
+
+class _PlaybackWriterSim(_FakeSimulator):
+    """A fake that both plugins can drive: playback writes root states, each env's camera shows its root x."""
+
+    def __init__(self, num_envs: int, h: int = 32, w: int = 32) -> None:
+        super().__init__({"head": _cam()}, {}, num_envs=num_envs)
+        from holosoma.simulator.shared.scene_types import EnvOriginsScene
+
+        self.num_envs = num_envs
+        self.num_dof = 2
+        self.sim_device = "cpu"
+        self.dof_pos = torch.zeros(num_envs, 2)
+        self.dof_vel = torch.zeros(num_envs, 2)
+        self.robot_root_states = torch.zeros(num_envs, 13)
+        self.scene = EnvOriginsScene(torch.zeros(num_envs, 3), "cpu")
+        self.shutdown_requested = False
+        self.installed_plugins: dict[str, Any] = {}
+        self._shape = (h, w)
+
+    def request_shutdown(self, reason: str = "") -> None:
+        self.shutdown_requested = True
+
+    def get_camera_data(self, name: str, data_type: str = "rgb", env_ids: Any = None, device: Any = None) -> Any:
+        x = self.robot_root_states[:, 0].round().to(torch.uint8)  # each env's frame encodes its root x
+        return x[:, None, None, None].expand(self.num_envs, *self._shape, 3).clone()
+
+
+def _clip_files(tmp_path: Path, lengths: list[int]) -> list[str]:
+    """Clip i: ``lengths[i]`` rows, root x = 50 * i + row (wxyz identity quat), 2 joints."""
+    files = []
+    for i, rows in enumerate(lengths):
+        mat = np.zeros((rows, 9), dtype=np.float32)
+        mat[:, 0] = 50 * i + np.arange(rows)
+        mat[:, 3] = 1.0
+        path = tmp_path / f"clip{i}.npy"
+        np.save(path, mat)
+        files.append(str(path))
+    return files
+
+
+def _run_episodic(
+    tmp_path: Path, lengths: list[int], num_envs: int, assignment: str = "queue", settle: int = 0, **writer: Any
+) -> Path:
+    from holosoma.config_types.plugin import MotionPlaybackPluginConfig
+
+    out = tmp_path / "out"
+    sim = _PlaybackWriterSim(num_envs)
+    play_cfg = MotionPlaybackPluginConfig(
+        motion_files=_clip_files(tmp_path, lengths),
+        fps=50.0,
+        env_assignment=assignment,  # type: ignore[arg-type]
+        settle_frames=settle,
+    )
+    sim.installed_plugins["play"] = play_cfg.get_cls()(play_cfg, sim)
+    sim.installed_plugins["out"] = _make(FrameWriterPluginConfig(output_dir=str(out), episodic=True, **writer), sim)
+    for env in range(num_envs):  # run_sim's startup boundary
+        sim.hooks.emit(Phase.EPISODE_START, env)
+    frame = 0
+    while not sim.shutdown_requested and frame < 100:
+        sim.hooks.emit(Phase.FRAME_BEGIN)
+        sim.hooks.emit(Phase.PRE_STEP)
+        sim._t = frame * 0.02
+        _step(sim, {"head"})
+        frame += 1
+    sim.hooks.emit(Phase.CLOSE)
+    return out
+
+
+def _episode_values(out: Path, name: str) -> list[int]:
+    stream = out / name / "head_rgb"
+    return [int(cv2.imread(str(p))[0, 0, 0]) for p in sorted(stream.iterdir())]
+
+
+def test_episodic_writes_one_dir_per_episode_with_its_own_frames(tmp_path: Path) -> None:
+    out = _run_episodic(tmp_path, [3, 5, 2, 4], num_envs=2)
+    assert sorted(p.name for p in out.iterdir()) == ["clip0", "clip1", "clip2", "clip3"]
+    for i, rows in enumerate([3, 5, 2, 4]):
+        # Every row of the clip, once, in order; nothing from another clip or from an idle env's hold.
+        assert _episode_values(out, f"clip{i}") == [50 * i + r for r in range(rows)]
+        lines = [json.loads(line) for line in (out / f"clip{i}" / "index.jsonl").read_text().splitlines()]
+        assert lines[0]["episode"] == f"clip{i}"
+        assert [r["frame"] for r in lines[1:]] == list(range(rows))
+        assert all(r["path"].startswith("head_rgb/") for r in lines[1:])
+    # clip0 (env 0) frees first and env 0 takes clip2; clip1 stays on env 1; clip3 goes to env 0.
+    envs = {i: json.loads((out / f"clip{i}" / "index.jsonl").read_text().splitlines()[0])["env_id"] for i in range(4)}
+    assert envs == {0: 0, 1: 1, 2: 0, 3: 0}
+
+
+def test_episodic_env_without_a_clip_writes_nothing(tmp_path: Path) -> None:
+    out = _run_episodic(tmp_path, [3], num_envs=3)
+    assert [p.name for p in out.iterdir()] == ["clip0"]
+
+
+def test_episodic_shared_playback_qualifies_repeated_names_by_env(tmp_path: Path) -> None:
+    out = _run_episodic(tmp_path, [3], num_envs=2, assignment="shared")
+    assert sorted(p.name for p in out.iterdir()) == ["clip0", "clip0_env1"]
+    assert _episode_values(out, "clip0") == _episode_values(out, "clip0_env1") == [0, 1, 2]
+
+
+def test_episodic_without_playback_numbers_episodes(tmp_path: Path) -> None:
+    sim = _FakeSimulator({"head": _cam()}, {("head", "rgb"): _rgb(n=2)}, num_envs=2)
+    _make(FrameWriterPluginConfig(output_dir=str(tmp_path), episodic=True), sim)
+    for env in (0, 1):
+        sim.hooks.emit(Phase.EPISODE_START, env)
+    _step(sim, {"head"})
+    sim.hooks.emit(Phase.EPISODE_END, 0)
+    sim.hooks.emit(Phase.EPISODE_START, 0)
+    _step(sim, {"head"})
+    sim.hooks.emit(Phase.CLOSE)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["episode_00000", "episode_00001", "episode_00002"]
+    assert (tmp_path / "episode_00002" / "head_rgb" / "000000.png").exists()  # env 0's second episode
+
+
+def test_episodic_mp4_finalizes_each_episode_at_its_end(tmp_path: Path) -> None:
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not available (create_video h264 shells out to it)")
+    out = _run_episodic(tmp_path, [6, 9, 5], num_envs=2, rgb_format="mp4")
+    for i, rows in enumerate([6, 9, 5]):
+        video = out / f"clip{i}" / "head_rgb.mp4"
+        assert video.exists()
+        assert not (out / f"clip{i}" / "head_rgb.mp4.partial").exists()
+        videos = json.loads((out / f"clip{i}" / "videos.json").read_text())
+        assert videos == {"head_rgb": {"status": "complete", "path": "head_rgb.mp4", "frames": rows}}
+        capture = cv2.VideoCapture(str(video))
+        assert (capture.get(cv2.CAP_PROP_FPS), int(capture.get(cv2.CAP_PROP_FRAME_COUNT))) == (50.0, rows)
+        capture.release()
+
+
+def test_episodic_skips_playback_settle_frames(tmp_path: Path) -> None:
+    # settle_frames holds each new clip's first frame after a switch; the first of those is the frame a
+    # renderer can still show the previous clip in. Skipped, every episode keeps exactly its rows.
+    out = _run_episodic(tmp_path, [3, 4, 3], num_envs=2, settle=2)
+    assert _episode_values(out, "clip0") == [0, 1, 2]
+    assert _episode_values(out, "clip1") == [50, 51, 52, 53]
+    assert _episode_values(out, "clip2") == [100, 101, 102]
