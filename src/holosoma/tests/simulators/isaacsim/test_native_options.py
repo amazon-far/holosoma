@@ -7,6 +7,25 @@ import pytest
 pytestmark = pytest.mark.isaacsim
 
 
+def test_legacy_newton_config_reaches_native_solver(isaacsim_backend, run_isaacsim_harness, tmp_path):
+    if isaacsim_backend != "isaaclab3":
+        pytest.skip("Newton requires Isaac Lab 3")
+    result_file = tmp_path / "legacy-newton.txt"
+    run_isaacsim_harness(
+        Path(__file__).resolve().parents[1] / "isaaclab3_schema_assert.py",
+        "--physics",
+        "newton",
+        "--renderer",
+        "newton_warp",
+        "--legacy-newton",
+        "--result-file",
+        str(result_file),
+        label="isaaclab3/newton/newton_warp/legacy",
+        timeout=900,
+        result_file=result_file,
+    )
+
+
 @pytest.mark.parametrize(
     ("physics", "renderer", "collision_source"),
     [("newton", "newton_warp", "mujoco"), ("newton", "ovrtx", "newton"), ("physx", "ovrtx", "mujoco")],

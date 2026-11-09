@@ -13,7 +13,7 @@ if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from holosoma.config_types.scene import IsaacSimPhysicsConfig, PhysicsConfig
-from holosoma.config_types.simulator import IsaacLab3Config
+from holosoma.config_types.simulator import IsaacLab3Config, IsaacLab3NewtonConfig
 from holosoma.utils.sim_utils import setup_simulation_environment
 from tests.simulators._native_runtime_assertions import assert_native_runtime
 from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step
@@ -25,6 +25,7 @@ def main() -> int:
     parser.add_argument("--physics", choices=["newton", "physx"], required=True)
     parser.add_argument("--renderer", choices=["newton_warp", "ovrtx"], required=True)
     parser.add_argument("--collision-source", choices=["mujoco", "newton"], default="mujoco")
+    parser.add_argument("--legacy-newton", action="store_true")
     parser.add_argument("--result-file", required=True)
     args = parser.parse_args()
 
@@ -52,6 +53,14 @@ def main() -> int:
         physics=physics,
         renderer_options={"enable_shadows": False},
     )
+    if args.legacy_newton:
+        assert args.physics == "newton"
+        physics["solver_cfg"].pop("iterations")
+        native = dataclasses.replace(
+            native,
+            physics=physics,
+            newton=IsaacLab3NewtonConfig(solver_iterations=17, use_cuda_graph=False),
+        )
     settings: dict[str, Any] = {
         "mass_props": [
             {
@@ -231,6 +240,8 @@ def main() -> int:
         assert solver.mj_model.opt.impratio == 3.0
         assert (solver.mj_model.geom_condim == 6).any()
         assert abs(solver.mj_model.body_gravcomp.max() - 0.25) < 1e-6
+        if args.legacy_newton:
+            assert sim.sim.cfg.physics.use_cuda_graph is False
     else:
         native_mass = wp.to_torch(robot.root_view.get_attribute("articulation_body_mass"))
         index = robot.backend_body_names.index("pelvis")

@@ -6,9 +6,10 @@ the linked upstream documentation was also checked. The inventory below describe
 that baseline; the implementation status is tracked here as the work proceeds.
 
 The current change implements native `physics` and `renderer_options` kwargs,
-schema fragments with ordered per-prim rules, per-collider materials and saved
-configuration migration. It consolidates the former five-field Newton block
-into the native physics configuration. Actual syntax and bounds are in
+schema fragments with ordered per-prim rules and per-collider materials.
+The former five-field Newton block remains a compatibility input for Python,
+CLI and saved configurations; new controls use the native physics configuration.
+Actual syntax and bounds are in
 [the backend reference](isaacsim-backends.md). The remaining architecture and
 feature proposals below, including the illustrative YAML, are future work.
 
