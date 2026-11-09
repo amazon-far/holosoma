@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import warnings
 from dataclasses import field
 from enum import Enum
@@ -12,6 +13,8 @@ from pydantic_core import ArgsKwargs
 from holosoma.config_types.frequency import DecimationLike, resolve_decimation, validate_decimation_like
 from holosoma.config_types.mujoco import MujocoConfig
 from holosoma.config_types.viewer import ViewerConfig
+
+_RENDER_INTERVAL_REMOVAL_DATE = datetime.date(2027, 3, 1)
 
 
 class MujocoBackend(str, Enum):
@@ -131,8 +134,8 @@ class SimEngineConfig:
     """Rendering mode requested from the simulator."""
 
     render_interval: DecimationLike | None = None
-    """Deprecated, no effect: offscreen outputs render once per control step, on its last physics
-    step, and the viewer renders every ``viewer_dt``."""
+    """Deprecated, no effect, removed after 2027-03-01: offscreen outputs render once per control
+    step, on its last physics step, and the viewer renders every ``viewer_dt``."""
 
     max_episode_length_s: float = 20.0
     """Maximum episode length in seconds."""
@@ -156,7 +159,8 @@ class SimEngineConfig:
         if self.render_interval is not None:
             warnings.warn(
                 "SimEngineConfig.render_interval is deprecated and has no effect: offscreen outputs "
-                "render once per control step and the viewer every viewer_dt.",
+                "render once per control step and the viewer every viewer_dt. It will be removed after "
+                f"{_RENDER_INTERVAL_REMOVAL_DATE}.",
                 FutureWarning,
                 stacklevel=2,
             )
