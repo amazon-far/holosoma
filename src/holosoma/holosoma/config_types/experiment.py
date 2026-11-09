@@ -247,9 +247,13 @@ class ExperimentConfig:
         """Return a JSON-friendly representation of the config."""
         data = dataclasses.asdict(self)
         # Keep authored legacy inputs round-trippable, but do not repeat their
-        # untouched defaults in new experiments that use native physics kwargs.
+        # untouched defaults in new experiments that use shared MuJoCo options.
+        native = data["simulator"]["config"]["sim"]["isaaclab3"]
         if self.simulator.config.sim.isaaclab3.newton == IsaacLab3NewtonConfig():
-            data["simulator"]["config"]["sim"]["isaaclab3"].pop("newton")
+            native.pop("newton")
+        native["renderer_options"] = {
+            name: value for name, value in native["renderer_options"].items() if value is not None
+        }
         # Directly using yaml.safe_dump does not handle string enums properly,
         # so round-trip through JSON to coerce typing objects into primitives.
         return cast("dict[str, Any]", json.loads(json.dumps(data)))
