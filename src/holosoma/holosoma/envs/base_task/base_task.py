@@ -171,8 +171,6 @@ class BaseTask:
         self._prepare_manager_fields()
 
         # Call setup for managers that need it
-        self.randomization_manager.setup()
-        self.terrain_manager.setup()
         self._setup_task_managers()
 
         # Initialize reset manager from simulator config
@@ -358,7 +356,9 @@ class BaseTask:
         self.simulator.prepare_manager_fields(randomization_manager=self.randomization_manager)
 
     def _setup_task_managers(self) -> None:
-        """Set up managers owned by the task specialization."""
+        """Set up the task's managers; specializations extend it to set up their own."""
+        self.randomization_manager.setup()
+        self.terrain_manager.setup()
 
     def _get_task_name(self) -> str:
         """Return a task identifier for logging/experiment directory naming."""

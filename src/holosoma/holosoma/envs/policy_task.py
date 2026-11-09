@@ -67,6 +67,7 @@ class PolicyTask(BaseTask):
         )
 
     def _setup_task_managers(self) -> None:
+        super()._setup_task_managers()
         self.action_manager.setup()
         self.command_manager.setup()
         self.curriculum_manager.setup()
