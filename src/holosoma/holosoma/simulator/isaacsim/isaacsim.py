@@ -236,12 +236,7 @@ class IsaacSim(BaseSimulator):
         """
         link_physics = self.robot_config.asset.link_physics
         mat_cfg = physics_material_cfg(link_physics) if link_physics is not None else None
-        native_material = (
-            link_physics.isaaclab3.get("physics_material")
-            if self.backend.is_isaaclab3 and link_physics is not None
-            else None
-        )
-        if mat_cfg is None and not native_material:
+        if mat_cfg is None and not self.backend.is_isaaclab3:
             return
         robot_prim_path = "/World/envs/env_0/Robot"
         material_path = f"{robot_prim_path}/linkPhysicsMaterial"
@@ -252,9 +247,10 @@ class IsaacSim(BaseSimulator):
         # CustomUsdFileCfg.disable_instanceable). Clear instanceable across the robot subtree first so
         # the bind reaches the actual collider prims.
         stage = self.backend.stage_utils.get_current_stage()
-        for prim in Usd.PrimRange(stage.GetPrimAtPath(robot_prim_path)):
-            if prim.IsInstanceable():
-                prim.SetInstanceable(False)
+        if mat_cfg is not None:
+            for prim in Usd.PrimRange(stage.GetPrimAtPath(robot_prim_path)):
+                if prim.IsInstanceable():
+                    prim.SetInstanceable(False)
 
         if mat_cfg is not None:
             mat_cfg.func(material_path, mat_cfg)
@@ -264,11 +260,16 @@ class IsaacSim(BaseSimulator):
                 f"dynamic_friction={mat_cfg.dynamic_friction} restitution={mat_cfg.restitution} "
                 f"friction_combine={mat_cfg.friction_combine_mode} restitution_combine={mat_cfg.restitution_combine_mode}"
             )
-        if native_material:
-            from holosoma.simulator.isaacsim.backends.native_properties import author_properties, compile_properties
+        if self.backend.is_isaaclab3:
+            from holosoma.simulator.isaacsim.backends.native_properties import author_robot_physics
 
-            compiled = compile_properties({"physics_material": native_material})
-            author_properties(robot_prim_path, compiled, flags={}, stage=stage, material_defaults=mat_cfg)
+            author_robot_physics(
+                robot_prim_path,
+                self.robot_config.asset,
+                self.backend,
+                stage=stage,
+                material_defaults=mat_cfg,
+            )
 
     def _setup_scene(self) -> None:
         self.backend.prepare_scene(self.scene)

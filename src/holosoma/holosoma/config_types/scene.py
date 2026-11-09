@@ -17,7 +17,7 @@ from pydantic.dataclasses import dataclass
 import holosoma.config_values.light
 from holosoma.config_types.light import DEFAULT_LIGHT_KEY, DefaultLightConfig, LightConfig
 from holosoma.config_types.mujoco import MujocoGeomPhysicsConfig as MujocoPhysicsConfig
-from holosoma.config_types.native import NativeSettings
+from holosoma.config_types.newton import NewtonPhysicsConfig
 from holosoma.config_types.value_types import UnitQuaternionWXYZ
 from holosoma.utils.config_registry import UseRegistry
 
@@ -138,12 +138,8 @@ class PhysicsConfig:
     mujoco: MujocoPhysicsConfig | None = None
     """MuJoCo-specific physics configuration. Defaults to None."""
 
-    isaaclab3: NativeSettings = field(default_factory=dict)
-    """Native Lab 3 schema families, applied after portable physics.
-    Values are ``_type_`` fragments/lists, or ordered lists of
-    ``{"match": "/regex", "fragments": [...]}`` rules relative to the spawn prim.
-    Other simulators ignore this block.
-    """
+    newton: NewtonPhysicsConfig | None = None
+    """Newton contact and mesh settings. Newton MJWarp also reads ``mujoco``."""
 
 
 @dataclass(frozen=True)

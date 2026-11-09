@@ -7,12 +7,13 @@ import dataclasses
 import json
 import sys
 from pathlib import Path
-from typing import Any
 
 if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
-from holosoma.config_types.scene import IsaacSimPhysicsConfig, PhysicsConfig
+from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
+from holosoma.config_types.newton import IsaacLab3RendererConfig, NewtonCollisionConfig
+from holosoma.config_types.scene import IsaacSimPhysicsConfig, MujocoPhysicsConfig, PhysicsConfig
 from holosoma.config_types.simulator import IsaacLab3Config, IsaacLab3NewtonConfig
 from holosoma.utils.sim_utils import setup_simulation_environment
 from tests.simulators._native_runtime_assertions import assert_native_runtime
@@ -38,89 +39,64 @@ def main() -> int:
         "terrain_locomotion_plane",
         sensors=_camera_presets.front_cam_depth,
     )
-    physics: dict[str, Any] = {}
+    shared = MujocoConfig()
+    newton = IsaacLab3NewtonConfig()
     if args.physics == "newton":
-        physics = {"solver_cfg": {"iterations": 17, "ls_iterations": 9, "cone": "elliptic", "impratio": 3.0}}
-        if args.collision_source == "newton":
-            physics["solver_cfg"]["use_mujoco_contacts"] = False
-            physics["collision_cfg"] = {
-                "_type_": "isaaclab_newton.physics:NewtonCollisionPipelineCfg",
-                "broad_phase": "sap",
-            }
+        shared = MujocoConfig(
+            iterations=None if args.legacy_newton else 17,
+            ls_iterations=9,
+            cone="elliptic",
+            impratio=3.0,
+            jacobian="dense",
+            ls_tolerance=0.02,
+            disableflags=("warmstart",),
+            enableflags=(),
+            extra={"ccd_iterations": 7},
+            warp=MujocoWarpConfig(nconmax_per_env=256, njmax_per_env=512, graph_conditional=False),
+        )
+        newton = IsaacLab3NewtonConfig(
+            collision_source=args.collision_source,
+            collision=NewtonCollisionConfig(broad_phase="sap")
+            if args.collision_source == "newton"
+            else NewtonCollisionConfig(),
+            solver_iterations=17 if args.legacy_newton else None,
+            use_cuda_graph=not args.legacy_newton,
+        )
     native = IsaacLab3Config(
         physics_backend=args.physics,
         renderer=args.renderer,
-        physics=physics,
-        renderer_options={"enable_shadows": False},
+        newton=newton,
+        renderer_options=IsaacLab3RendererConfig(enable_shadows=False),
     )
-    if args.legacy_newton:
-        assert args.physics == "newton"
-        physics["solver_cfg"].pop("iterations")
-        native = dataclasses.replace(
-            native,
-            physics=physics,
-            newton=IsaacLab3NewtonConfig(solver_iterations=17, use_cuda_graph=False),
-        )
-    settings: dict[str, Any] = {
-        "mass_props": [
-            {
-                "match": "/.*pelvis",
-                "fragments": [{"_type_": "isaaclab.sim.schemas:MassCfg", "mass": 42.0}],
-            }
-        ],
-        "physics_material": [
-            {
-                "match": "/.*left_ankle_roll_link(/.*)?",
-                "fragments": [
-                    {
-                        "_type_": "isaaclab.sim.spawners.materials:UsdPhysicsRigidBodyMaterialCfg",
-                        "static_friction": 0.45,
-                        "dynamic_friction": 0.45,
-                    },
-                ],
-            },
-            {
-                "match": "/.*left_ankle_roll_link(/.*)?",
-                "fragments": [
-                    {
-                        "_type_": "isaaclab_newton.sim.spawners.materials:NewtonMaterialCfg",
-                        "torsional_friction": 0.07,
-                        "rolling_friction": 0.03,
-                    },
-                ],
-            },
-        ],
+    overrides = {
+        "pelvis": PhysicsConfig(
+            mass=42.0,
+            mujoco=MujocoPhysicsConfig(gravity_compensation=0.25) if args.physics == "newton" else None,
+        ),
+        "left_ankle_roll_link": PhysicsConfig(
+            isaacsim=IsaacSimPhysicsConfig(static_friction=0.45, dynamic_friction=0.45),
+            mujoco=MujocoPhysicsConfig(friction=[0.45, 0.07, 0.03]) if args.physics == "newton" else None,
+        ),
     }
-    if args.physics == "newton":
-        settings["collision_props"] = [
-            {"_type_": "isaaclab_newton.sim.schemas:MujocoCollisionCfg", "condim": 6},
-        ]
-        settings["rigid_props"] = [
-            {
-                "match": "/.*",
-                "fragments": [{"_type_": "isaaclab_newton.sim.schemas:MujocoRigidBodyCfg", "gravcomp": 0.1}],
-            },
-            {
-                "match": "/.*pelvis",
-                "fragments": [{"_type_": "isaaclab_newton.sim.schemas:MujocoRigidBodyCfg", "gravcomp": 0.25}],
-            },
-        ]
     config = dataclasses.replace(
         config,
         simulator=dataclasses.replace(
             config.simulator,
             config=dataclasses.replace(
                 config.simulator.config,
-                sim=dataclasses.replace(config.simulator.config.sim, isaaclab3=native),
+                sim=dataclasses.replace(config.simulator.config.sim, isaaclab3=native, mujoco=shared),
             ),
         ),
         robot=dataclasses.replace(
             config.robot,
             asset=dataclasses.replace(
                 config.robot.asset,
+                link_physics_overrides=overrides,
                 link_physics=PhysicsConfig(
                     isaacsim=IsaacSimPhysicsConfig(static_friction=0.7, dynamic_friction=0.7),
-                    isaaclab3=settings,
+                    mujoco=MujocoPhysicsConfig(condim=6, gravity_compensation=0.1)
+                    if args.physics == "newton"
+                    else None,
                 ),
             ),
         ),
@@ -235,9 +211,19 @@ def main() -> int:
                 np.testing.assert_allclose(model.shape_material_mu_rolling.numpy()[ids], 0.03, atol=1e-6)
         # The compiled solver is the oracle, not the Holosoma config or accessors.
         solver = manager._solver
+        import mujoco
+
         assert solver.mj_model.opt.iterations == 17
         assert solver.mj_model.opt.ls_iterations == 9
         assert solver.mj_model.opt.impratio == 3.0
+        assert abs(solver.mj_model.opt.ls_tolerance - 0.02) < 1e-6
+        assert solver.mjw_model.opt.graph_conditional is False
+        assert solver.mjw_data.naconmax >= 256 * 2
+        assert solver.mjw_data.njmax >= 512
+        assert solver.mj_model.opt.disableflags == int(mujoco.mjtDisableBit.mjDSBL_WARMSTART)
+        assert solver.mj_model.opt.enableflags == 0
+        assert solver.mj_model.opt.ccd_iterations == 7
+        assert "holosoma.simulator.mujoco.mujoco" not in sys.modules
         assert (solver.mj_model.geom_condim == 6).any()
         assert abs(solver.mj_model.body_gravcomp.max() - 0.25) < 1e-6
         if args.legacy_newton:

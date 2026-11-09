@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import field
+from typing import Annotated
 
+import tyro
 from pydantic import model_validator
 from pydantic.dataclasses import dataclass
 
@@ -101,9 +103,12 @@ class RobotAssetConfig:
     ``None`` (default) keeps the asset's authored physics.
 
     ``mass`` is rejected here (see :meth:`_validate_link_physics`): one mass applied to every link is
-    not meaningful for an articulation. Lab 3 supports per-link mass and other native physics through
-    ``link_physics.isaaclab3`` schema fragments and ordered USD-path rules. These native overrides are
-    applied after portable defaults and are ignored by other simulators."""
+    not meaningful for an articulation. Use ``link_physics_overrides`` for individual links."""
+
+    link_physics_overrides: Annotated[dict[str, PhysicsConfig] | None, tyro.conf.Suppress] = None
+    """Per-link PhysicsConfig overrides keyed by body-name glob, set in Python presets.
+    Applied after link_physics; the first matching pattern wins, as with scene
+    object_configs. Supported by MuJoCo and Isaac Lab 3. Per-link mass is allowed."""
 
     @model_validator(mode="after")
     def _validate_link_physics(self) -> RobotAssetConfig:
@@ -116,7 +121,7 @@ class RobotAssetConfig:
             raise ValueError(
                 "RobotAssetConfig.link_physics carries mass, but it applies to all links "
                 "(body_names='.*'), which would give every link the same mass. Leave the shared mass "
-                "unset; use isaaclab3.mass_props target rules for native Lab 3 per-link mass."
+                "unset; use link_physics_overrides for per-link mass."
             )
         return self
 

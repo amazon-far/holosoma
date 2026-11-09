@@ -1,17 +1,19 @@
-# Isaac Lab 3 capability audit and implementation proposal
+# Isaac Lab 3 capability audit and implementation status
 
 Source audit on November 9, 2026, against Holosoma `53dd7f4`, Isaac Lab
 `v3.0.0`, and Newton `v1.6.1`. The APIs below were checked in the pinned source;
 the linked upstream documentation was also checked. The inventory below describes
 that baseline; the implementation status is tracked here as the work proceeds.
 
-The current change implements native `physics` and `renderer_options` kwargs,
-schema fragments with ordered per-prim rules and per-collider materials.
-The former five-field Newton block remains a compatibility input for Python,
-CLI and saved configurations; new controls use the native physics configuration.
-Actual syntax and bounds are in
-[the backend reference](isaacsim-backends.md). The remaining architecture and
-feature proposals below, including the illustrative YAML, are future work.
+The current change exposes typed Holosoma settings and backend adapters. Newton
+MJWarp reuses `sim.mujoco` and `sim.mujoco.warp`, plus the existing per-asset
+`PhysicsConfig.mujoco` contact settings. Newton-specific collision/execution,
+contact spring and mesh options have typed fields; renderer options are typed.
+Per-link body-name overrides reuse `PhysicsConfig` and the scene configuration's
+first-match pattern convention. Existing Newton constructors, CLI and saved
+inputs remain supported. See [the backend reference](isaacsim-backends.md) for
+current syntax and explicit limitations. The baseline capability inventory below
+also identifies future work; it is not a claim that every SDK feature is supported.
 
 Holosoma currently exposes a useful rigid-robot subset of Lab 3. Physics and
 camera renderer selection, native actuator execution, aggregate contact forces,
@@ -46,7 +48,7 @@ Lab 3 supports schema **fragments** grouped by property family. For example,
 namespace. File spawners also accept ordered regex rules targeting different
 parts of an imported asset.
 
-Useful controls currently missing from Holosoma's configuration include:
+Controls missing at the audited baseline included:
 
 - `NewtonCollisionCfg.contact_margin` and `contact_gap`.
 - `MujocoCollisionCfg.condim`, `priority`, `solref`, `solimp` and `solmix`.
@@ -59,47 +61,30 @@ Useful controls currently missing from Holosoma's configuration include:
 - Per-link `MassCfg`, rather than assigning the same mass to every robot link.
   `MassCfg` exposes mass/density; it does not expose a full COM/inertia override.
 
-Holosoma's `PhysicsConfig.mujoco` is for the separate MuJoCo simulator. It is not
-currently forwarded to Newton's MJWarp solver.
+The current adapters forward `PhysicsConfig.mujoco` to Newton's USD importer,
+including friction vectors, contact parameters and body gravity compensation.
+Shared mass/density remain first-class fields. Contact springs and mesh/SDF
+controls use typed `NewtonPhysicsConfig`; no SDK fragment/class names appear in
+user configuration. Additional joint/tendon and deformable controls remain future
+work. Existing self-collision controls still own robot self-collision policy.
 
-The changes belong in
-[scene physics types](../src/holosoma/holosoma/config_types/scene.py),
-[robot asset types](../src/holosoma/holosoma/config_types/robot.py),
-[property converters](../src/holosoma/holosoma/simulator/isaacsim/converters.py),
-[robot configuration](../src/holosoma/holosoma/simulator/isaacsim/isaacsim_articulation_cfg.py),
-and the
-[custom file spawner](../src/holosoma/holosoma/simulator/isaacsim/spawners/from_files.py).
-The custom spawner currently calls the legacy `modify_*` writers; its
-configuration narrows material input to a legacy scalar config, and material
-binding calls `cfg.func`. Adding native fields without changing these paths
-would leave lists and targeting rules unusable.
+Robot body-name overrides and scene object patterns reuse `PhysicsConfig`.
+Adapters build the appropriate SDK fragments after selecting physics. Global
+defaults apply first, followed by one matching per-link override. An explicit
+mass override targets only its selected rigid body; it does not stamp mass on
+all descendant geometry. Per-collider material overrides preserve unmodified
+bound material properties. Only ancestors of eligible targets are deinstanced.
 
-For Lab 3, prefer upstream spawners where Holosoma does not need custom behavior.
-Where source-prim extraction or rigid-body normalization requires the custom
-spawner, use the public `apply_*_properties` family writers and
-`spawn_physics_material`. Keep the Lab 2 path separate. Retain normalization for
-rigid compound objects, but do not apply it to native articulations or deformables.
-Native per-collider materials also need ordered material creation/binding rules;
-upstream `physics_material` fragment lists alone do not select individual feet.
+`None` leaves authored values unchanged. Missing/unsupported targets produce an
+error. Body-name globs are a Holosoma interface; SDK USD path expressions remain
+private to the adapter. Experiment YAML now preserves mapping order, retaining
+first-match precedence across saving and loading.
 
-Preserve these upstream semantics:
-
-- `None` keeps authored attributes; an empty fragment requests its schema;
-  an empty fragment list makes no changes.
-- Rules match regex suffixes relative to the spawn prim. These are not the bare
-  body-name globs used by Holosoma's scene-file selection.
-- Later rules win on overlapping attributes. Only eligible schema carriers
-  should receive a property.
-- API creation flags, fixed-root topology and drive creation are explicit.
-  Narrow the targets when creating missing APIs.
-- Instance proxies need an explicit edit strategy. Report requests that reach
-  no editable target instead of silently accepting them.
-
-Use ordered rule **lists** in saved Holosoma configs, converting them to the
-upstream ordered mappings at the adapter boundary. `ExperimentConfig.save_config`
-currently calls `yaml.safe_dump` with its default key sorting. Storing native
-rule precedence only in dictionary insertion order would change behavior on
-save/reload.
+The custom spawner retains source-prim extraction and rigid-body normalization.
+Lab 3 property adapters use public `apply_*_properties` writers and material
+spawning; Lab 2 continues through its existing converters and material binding.
+Native articulation/deformable topology should not be normalized into a rigid
+compound object when those asset types are added.
 
 Sources:
 [Physics schemas](https://isaac-sim.github.io/IsaacLab/v3.0.0/source/concepts/schema_cfgs.html),
@@ -110,12 +95,13 @@ Sources:
 ## 2. Solver configuration and effective physics
 
 [IsaacLab3NewtonConfig](../src/holosoma/holosoma/config_types/simulator.py)
-currently exposes CUDA graphs, contact/constraint capacities, solver iterations
-and default shape margin. The
+at the audited baseline exposed CUDA graphs, contact/constraint capacities,
+solver iterations and default shape margin. Shared MuJoCo/MJWarp controls now
+provide solver options; Newton-only execution/collision settings remain typed. The
 [backend](../src/holosoma/holosoma/simulator/isaacsim/backends/isaaclab3.py)
 constructs `NewtonCfg(solver_cfg=MJWarpSolverCfg(...))` internally.
 
-Expose native `NewtonCfg`, nested solver config, `NewtonShapeCfg`,
+Adapt typed Holosoma fields to `NewtonCfg`, its solver config, `NewtonShapeCfg`,
 `NewtonSoftContactCfg` and `NewtonCollisionPipelineCfg`. Important additions are
 MJWarp integrator/solver selection, line-search settings, friction cone,
 `impratio`, tolerance, actuator gears, collision detection source and MJCF
@@ -140,7 +126,7 @@ Configuration must reach the solver that actually runs:
   setters/update notifications, and structural changes may require rebuilding.
 
 Keep the existing five options as compatibility inputs. Reject conflicting
-explicit native settings rather than choosing an undocumented winner. Resolve
+explicit shared settings rather than choosing an undocumented winner. Resolve
 physics once and use that configuration for launch validation and
 `SimulationContext`, with the derived effective configuration recorded for review.
 
@@ -186,7 +172,7 @@ Sources:
 ## 4. Renderers, cameras and visualizers
 
 OVRTX is supported already, including camera/movie rendering. What is missing is
-native configuration: `renderer_config()` constructs default OVRTX, Warp or
+configuration at the audited baseline: `renderer_config()` constructed default OVRTX, Warp or
 Isaac RTX configs, and camera data is restricted to RGB/depth.
 
 Expose global renderer configs, per-camera overrides and `isp_cfg`. OVRTX has
@@ -276,72 +262,45 @@ Sources:
 [Newton backend](https://isaac-sim.github.io/IsaacLab/v3.0.0/source/concepts/physics-backends/newton.html),
 [asset implementations](https://github.com/isaac-sim/IsaacLab/tree/v3.0.0/source/isaaclab/isaaclab/assets).
 
-## Proposed configuration architecture
+## Configuration architecture
 
-Add a data-only `NativeConfigSpec` containing a class path and recursively
-serializable constructor arguments. Nested native configs have an explicit
-discriminator, so ordinary dictionaries are not mistaken for constructors.
-Resolve specs only after selecting the active runtime. Validate the expected
-config/fragment family and unknown constructor fields, and include the full
-Holosoma config path in errors.
+Keep user configuration in typed Holosoma dataclasses. Reuse existing controls
+where semantics agree, and construct SDK configs/fragments inside the selected
+backend. Users do not specify SDK class paths, schema family names or nested
+constructor dictionaries. Shared config parsing, CLI help and saved experiment
+inspection must work without Isaac Lab, Kit or PhysX installed.
 
-This avoids maintaining a second copy of every SDK config class. Common presets
-can still expose typed convenience fields. Saved configs must load for
-inspection/evaluation overrides on machines without Isaac Lab, Kit or PhysX.
+For Newton MJWarp, `sim.mujoco` owns solver controls and `sim.mujoco.warp` owns
+per-world resources/execution options. `isaaclab3.newton` contains genuinely
+Newton-specific execution and collision-pipeline controls. Its older solver
+fields remain compatibility inputs with conflict checks. None retains each
+backend's historical defaults rather than imposing one engine's defaults on
+another. The internal Newton manager adapter fills the SDK's missing Jacobian
+and line-search tolerance fields before allocation/capture.
 
-Illustrative proposed YAML, **not current Holosoma syntax**:
+Physics properties use the existing mass/density and engine-specific subconfigs.
+Newton reads MuJoCo friction/contact settings through schema adapters. The typed
+`newton` subconfig adds contact springs and mesh/SDF controls. Robot per-link
+physics uses a mapping from body-name globs to `PhysicsConfig`, matching scene
+`object_configs`; the first matching override is applied after global defaults.
+YAML must preserve mapping order. SDK fragment composition remains an internal
+implementation detail. Additional joint/tendon controls should extend the
+existing controller or asset configs with typed options as they are implemented.
 
-```yaml
-robot:
-  asset:
-    isaaclab3:
-      schemas:
-        collision_props:
-          rules:
-            - match: "/.*"
-              fragments:
-                - class_path: isaaclab_newton.sim.schemas:NewtonCollisionCfg
-                  kwargs: {contact_gap: 0.002}
-            - match: "/.*foot[^/]*(/.*)?"
-              fragments:
-                - class_path: isaaclab_newton.sim.schemas:MujocoCollisionCfg
-                  kwargs: {condim: 6}
-        rigid_props:
-          rules:
-            - match: "/.*"
-              fragments:
-                - class_path: isaaclab_newton.sim.schemas:MujocoRigidBodyCfg
-                  kwargs: {gravcomp: 0.0}
-```
-
-These are USD path rules, so the foot pattern must be checked against the chosen
-importer's hierarchy. `condim=6` permits sliding, torsional and rolling contact
-dimensions; appropriate material coefficients and a supporting solver are also
-needed to produce the intended behavior.
-
-Recommended precedence is authored asset values, current portable/legacy
-defaults, native general rules, then native specific rules in declared order.
-Apply this to robot assets, standalone objects and scene-file overrides.
-Preserve explicit `None` and empty values.
-
-Declare runtime requirements before resolving classes that could import heavy
-modules, then pass the resolved prototypes through Lab launch validation.
-Advanced extension factories should declare requirements too. Shared USD and
-PhysX schema authoring can still be needed by a Newton importer; this does not
-require launching the PhysX engine.
-
-Record SDK versions, requested specs and effective native settings alongside
-the experiment. Protect shared timing, device and state-ordering ownership
-against competing native overrides. A requested property must either be
-supported, produce an actionable error, or be explicitly documented as authoring
-for an inactive backend.
+Resolve runtime requirements before SDK imports. Shared timing, device and
+state-ordering ownership remain in existing Holosoma controls. An explicit active
+setting must apply or fail with its config path; inactive backend blocks remain
+portable saved data. Newton's unsupported total contact-pool allocation,
+generic allocation extras and MuJoCo collision masks are documented limitations.
+Richer actuator modes, sensor outputs and asset types require runtime contracts
+in addition to configuration.
 
 ## Suggested implementation sequence and acceptance evidence
 
-1. **Native config and schemas.** Add serializable specs and ordered rules;
+1. **Typed physics properties.** Reuse common properties and body-name overrides;
    update Lab 3 robot/object spawners and material binding. Verify save/reload
    precedence, partial overrides, instance handling and unchanged legacy defaults.
-2. **Physics settings.** Expose native solver, collision and PhysX configs.
+2. **Physics settings.** Reuse MuJoCo/MJWarp options and add typed Newton collision controls.
    Validate supported combinations and provide effective-model diagnostics.
 3. **Asset loading.** Add explicit formats/importer options and conversion cache.
    Verify cache invalidation, concurrent loading and stable body/joint mapping.

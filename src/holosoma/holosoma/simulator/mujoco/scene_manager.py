@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 from dataclasses import dataclass, field
 from itertools import combinations
 
@@ -711,6 +712,8 @@ class MujocoSceneManager:
             logger.debug(f"Set explicit mass={physics.mass} on '{name}'")
 
         mj = physics.mujoco
+        if mj is not None and mj.gravity_compensation is not None:
+            body.gravcomp = mj.gravity_compensation
         for geom in body.geoms:
             if physics.density is not None:
                 geom.density = physics.density
@@ -733,21 +736,30 @@ class MujocoSceneManager:
         the captured CUDA step graph, avoiding the graph-orphan concern that affects runtime DR.
         """
         asset = robot_config.asset
-        if asset.link_physics is None:
+        if asset.link_physics is None and not asset.link_physics_overrides:
             return
         worldbody_name = robot_spec.worldbody.name
         for body in robot_spec.bodies:
             if not body.name or body.name == worldbody_name:
                 continue
             self._apply_physics_to_body(body, asset.link_physics, f"{asset.robot_type}/{body.name}", apply_mass=False)
+            for pattern, override in (asset.link_physics_overrides or {}).items():
+                if fnmatch.fnmatchcase(body.name, pattern):
+                    self._apply_physics_to_body(body, override, f"{asset.robot_type}/{body.name}")
+                    break
 
     def _validate_robot_collision_masks(self, model: mujoco.MjModel, root_body_id: int) -> None:
         """Reject mask overrides that permit self-contact after native body filtering."""
         if self.robot_config is None:
             return
         asset = self.robot_config.asset
-        native = asset.link_physics.mujoco if asset.link_physics is not None else None
-        if asset.enable_self_collisions or native is None or (native.contype is None and native.conaffinity is None):
+        configs = [asset.link_physics, *(asset.link_physics_overrides or {}).values()]
+        if asset.enable_self_collisions or not any(
+            physics is not None
+            and physics.mujoco is not None
+            and (physics.mujoco.contype is not None or physics.mujoco.conaffinity is not None)
+            for physics in configs
+        ):
             return
         # Compiled body IDs follow tree order; retained worldbody geoms are environment.
         bodies = {root_body_id}

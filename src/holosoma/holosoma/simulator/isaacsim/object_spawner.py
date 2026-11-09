@@ -160,10 +160,15 @@ def select_spawn_cfg(
 
 
 def _native_spawn(cfg: Any, physics: PhysicsConfig, backend: IsaacLabBackend) -> Any:
-    if backend.is_isaaclab3 and physics.isaaclab3:
-        from holosoma.simulator.isaacsim.backends.native_properties import wrap_spawn
+    if backend.is_isaaclab3:
+        from holosoma.simulator.isaacsim.backends.native_properties import physics_settings, wrap_spawn
 
-        return wrap_spawn(cfg, physics.isaaclab3, backend=backend, material_defaults=physics_material_cfg(physics))
+        return wrap_spawn(
+            cfg,
+            physics_settings(physics, backend),
+            backend=backend,
+            material_defaults=physics_material_cfg(physics),
+        )
     return cfg
 
 
