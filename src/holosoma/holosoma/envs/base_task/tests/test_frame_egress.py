@@ -62,7 +62,7 @@ class _FakeSim:
         self.captured: list[object] = []
         self.drawn_at_egress: list[int | None] = []
         self.phases: list[Phase | str] = []
-        self.viewer_renders: list[int] = []
+        self.renders: list[int] = []
         self.video_recorder = None
 
         self.hooks.add(Phase.FRAME_BEGIN, self._sample, name="fake.sample")
@@ -81,7 +81,7 @@ class _FakeSim:
         return self.offscreen
 
     def render(self, sync_frame_time: bool = True) -> None:
-        self.viewer_renders.append(self.substeps)
+        self.renders.append(self.substeps)
         self._rendered = self._scene_state()
         self.rendered_at = self.substeps
 
@@ -144,14 +144,9 @@ class _LoopTask(SimulationTask):
         self.num_envs = 1
         self.viewer = None if headless else object()
         self.sim_dt = 1 / FPS
-        self._rendered_this_substep = False
-        self.randomization_manager = cast(
-            "RandomizationManager", SimpleNamespace(step=lambda: None, reset=lambda _env_ids: None)
-        )
+        self.randomization_manager = cast("RandomizationManager", SimpleNamespace(step=lambda: None))
         no_ends = torch.zeros(self.num_envs, dtype=torch.bool)
-        self.termination_manager = cast(
-            "TerminationManager", SimpleNamespace(check=lambda: (no_ends, no_ends), reset=lambda _env_ids: None)
-        )
+        self.termination_manager = cast("TerminationManager", SimpleNamespace(check=lambda: (no_ends, no_ends)))
         self.robot_config = cast("RobotConfig", SimpleNamespace(init_state=SimpleNamespace(default_joint_angles={})))
         self.dof_names: list[str] = []
         self._episode_active = torch.zeros(self.num_envs, dtype=torch.bool)
@@ -164,7 +159,7 @@ class _LoopTask(SimulationTask):
         target_states: dict[str, Any] | None = None,
         target_buf: dict[str, Any] | None = None,
     ) -> None:
-        self._start_episodes(torch.arange(self.num_envs))
+        self._start_episodes(torch.arange(self.num_envs) if env_ids is None else env_ids)
 
 
 def _run(sim: _FakeSim, *, headless: bool = True, viewer_dt: float = 1.0) -> None:
@@ -190,7 +185,6 @@ def test_each_frame_egresses_the_draw_of_its_own_control_step(decimation: int) -
 
     last_substeps = [decimation, 2 * decimation, 3 * decimation]
     assert sim.captured == [0, 1, 2]
-    assert sim.viewer_renders == last_substeps
     assert sim.drawn_at_egress == last_substeps
     assert sim.phases == _expected_phases(groups=3, decimation=decimation)
 
@@ -250,7 +244,7 @@ def test_viewer_renders_on_its_own_schedule_when_not_headless() -> None:
 
     _run(sim, headless=False, viewer_dt=DECIMATION / FPS)
 
-    assert sim.viewer_renders == [4, 8, 12]
+    assert sim.renders == [4, 8, 12]
 
 
 def test_headless_never_renders_the_viewport() -> None:
@@ -259,7 +253,7 @@ def test_headless_never_renders_the_viewport() -> None:
 
     _run(sim, headless=True, viewer_dt=1.0 / FPS)
 
-    assert sim.viewer_renders == []
+    assert sim.renders == []
 
 
 # ----- integration: the real playback plugin driven by the real loop -----

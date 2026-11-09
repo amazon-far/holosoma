@@ -51,12 +51,9 @@ def build_full_env(simulator_cfg, *, num_envs: int, device: str, scene_cfg=None,
     constructs the env through the production path (``cfg.create_task()``), so it has a real
     action_manager (with the ``joint_control`` term) and randomization_manager (push/actuator
     states) wired exactly as training does. The ``g1_29dof`` randomization preset already runs the
-    setup DR terms during construction; this yields the built env (NO reset) so the
-    per-term checks can re-run each term with known ranges and read the result straight off the
-    model.
-
-    No reset is deliberately run: after a reset, ``_pre_compute_observations_callback``
-    runs the locomotion terrain height-scan (warp ray-cast), unrelated to DR and version-fragile.
+    setup DR terms during construction; this yields the built env so the per-term checks can
+    re-run each term with known ranges and read the result straight off the model. The env is not
+    reset, because a reset runs the terrain height-scan (Warp ray-cast), which is version-fragile.
 
     A context manager (not a plain return) so the task context stays open for the whole test —
     its exit closes the IsaacSim app.

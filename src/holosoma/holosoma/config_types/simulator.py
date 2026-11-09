@@ -149,10 +149,9 @@ class SimEngineConfig:
 
     @model_validator(mode="after")
     def _validate_rates(self) -> SimEngineConfig:
-        """Validate (do NOT mutate) the rate fields: both must resolve to a valid step count against
-        ``fps``. The fields keep what the user wrote; the resolved ints are exposed as the
-        ``*_steps`` properties below, computed against ``fps`` on access (always consistent if ``fps``
-        changes, and the input config is never rewritten)."""
+        """Validate, without mutating, that ``control_decimation`` resolves to a step count against
+        ``fps``. The field keeps what the user wrote; :attr:`control_decimation_steps` resolves it
+        against ``fps`` on access."""
         resolve_decimation(self.control_decimation, self.fps, field="control_decimation", log=True)
         if self.render_interval is not None:
             warnings.warn(

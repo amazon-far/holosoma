@@ -822,7 +822,7 @@ class MotionCommand(CommandTermBase):
 
         self.update_relative_body_targets()
 
-        ### 1.3 update the adaptive timesteps sampler (training only — eval episodes
+        ### update the adaptive timesteps sampler (training only — eval episodes
         ### must not decay/fold failure stats into the training sampler).
         if self.motion_cfg.use_adaptive_timesteps_sampler and not self._env.is_evaluating:
             self.adaptive_timesteps_sampler.update_bin_failed_count()

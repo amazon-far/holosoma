@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from holosoma.config_types.experiment import ExperimentConfig
-from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
+
+if TYPE_CHECKING:
+    from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
 
 
 def replay(tyro_config: ExperimentConfig) -> None:

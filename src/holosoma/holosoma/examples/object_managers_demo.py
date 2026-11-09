@@ -4,9 +4,9 @@ This is a runnable, self-documenting tour of the scene-asset + object-manager fe
 builds a REAL, fully-managed locomotion environment (the same production path training uses —
 ``cfg.create_task()``, NO shims) on a scene that mixes every asset kind, then drives each
 manager-layer feature in turn and narrates what happened. Reading the printed output (or this
-source) shows how the pieces compose in a real setup. It is
-backend-switchable: sections 1-4 are identical code on all four backends (only ``--backend``
-changes); section 5 (physics DR) dispatches per backend and reads the result back on MuJoCo.
+source) shows how the pieces compose in a real setup. It is backend-switchable: sections 1-4 are
+identical code on all four backends (only ``--backend`` changes); section 5 (physics DR)
+dispatches per backend and reads the result back on MuJoCo.
 
 What it demonstrates, in order:
 

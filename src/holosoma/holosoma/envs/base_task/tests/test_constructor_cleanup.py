@@ -9,7 +9,6 @@ from holosoma.envs.base_task import base_task as base_task_module
 from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.envs.policy_task import PolicyTask
 from holosoma.simulator.base_simulator.hooks import HookRegistry
-from holosoma.utils.safe_torch_import import torch
 
 pytestmark = pytest.mark.no_sim
 
@@ -55,9 +54,6 @@ def test_task_installs_plugins_only_after_provider_setup(monkeypatch: pytest.Mon
             self.sim_dt = 0.005
             self.simulator_config = SimpleNamespace(reset_manager=object())
             self.hooks = HookRegistry()
-            self.robot_root_states = torch.zeros(1, 13)
-            self.dof_pos = torch.zeros(1, 1)
-            self.dof_vel = torch.zeros(1, 1)
             self.prepared = False
             events.append("simulator")
 
@@ -125,8 +121,6 @@ def test_task_installs_plugins_only_after_provider_setup(monkeypatch: pytest.Mon
         sensors={},
         plugin={},
         device="cpu",
-        time_scale=0.0,
-        viewer_dt=1 / 60,
     )
 
     monkeypatch.setattr(base_task_module, "get_class", lambda _target: _Simulator)
