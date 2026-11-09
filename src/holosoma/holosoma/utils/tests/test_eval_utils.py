@@ -586,7 +586,6 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
         "physics_backend": "physx",
         "renderer": "isaac_rtx",
         "require_kit": False,
-        "physics": {},
         "renderer_options": {},
         "use_fabric": True,
         "create_stage_in_memory": False,
@@ -596,9 +595,12 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
     assert loaded_simulator == saved_simulator
     assert loaded_cfg.simulator.config.sim.mujoco.warp.nconmax_per_env == saved_warp["nconmax_per_env"]
     assert loaded_cfg.simulator.config.sim.mujoco.warp.njmax_per_env == saved_warp["njmax_per_env"]
+    assert loaded["robot"]["asset"]["link_physics_overrides"] is None
     loaded_link_physics = copy.deepcopy(loaded["robot"]["asset"]["link_physics"])
     if loaded_link_physics is not None:
-        assert loaded_link_physics.pop("isaaclab3") == {}
+        assert loaded_link_physics.pop("newton") is None
+        if loaded_link_physics["mujoco"] is not None:
+            assert loaded_link_physics["mujoco"].pop("gravity_compensation") is None
     assert loaded_link_physics == _without(saved["robot"]["asset"]["link_physics"])
     assert "apply_dof_armature_in_isaacgym" not in loaded["robot"]
     for name, sensor in saved["sensor"].items():
