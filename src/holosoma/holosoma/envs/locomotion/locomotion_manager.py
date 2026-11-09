@@ -31,8 +31,6 @@ class LeggedRobotLocomotionManager(PolicyTask):
         """Initialize torch tensors which will contain simulation states and processed quantities"""
         super()._init_buffers()
 
-        # initialize some data used later on
-        self._init_counters()
         # joint positions offsets
         self.default_dof_pos_base = torch.zeros(
             self.num_dof, dtype=torch.float, device=self.device, requires_grad=False
@@ -50,12 +48,6 @@ class LeggedRobotLocomotionManager(PolicyTask):
         self._init_domain_rand_buffers()
 
         self.lidar_height_offset = getattr(self.robot_config, "lidar_height_offset", 0.5)
-
-    def _init_counters(self) -> None:
-        self.common_step_counter = 0
-
-    def _update_counters_each_step(self) -> None:
-        self.common_step_counter += 1
 
     def _init_domain_rand_buffers(self) -> None:
         ######################################### DR related tensors #########################################
@@ -99,12 +91,6 @@ class LeggedRobotLocomotionManager(PolicyTask):
             commands[:] = command_tensor.view(1, -1).expand_as(commands)
         gait_state = cast("LocomotionGait", self.command_manager.get_state("locomotion_gait"))
         gait_state.set_eval_mode(True)
-
-    def _setup_simulator_next_task(self) -> None:
-        pass
-
-    def _setup_simulator_control(self) -> None:
-        self.simulator.commands = self.command_manager.commands  # type: ignore[attr-defined]
 
     @property
     def base_quat(self) -> torch.Tensor:

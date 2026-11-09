@@ -181,10 +181,22 @@ class PolicyTask(BaseTask):
     def _apply_force_in_physics_step(self) -> None:
         self.action_manager.apply_actions()
 
-    def _after_physics_step(self) -> None:
+    def _evaluate_frame(self, env_ids: torch.Tensor) -> None:
         self.observation_manager.new_frame()
-        self._update_counters_each_step()
         self._pre_compute_observations_callback()
+        self._compute_reward()
+        self._update_log_dict()
+        # Time-outs are a subset of resets; only they are bootstrapped from a terminal observation.
+        timeout_ids = self.time_out_buf.nonzero(as_tuple=False).flatten()
+        if timeout_ids.numel() > 0:
+            self._store_final_observations(timeout_ids, self.observation_manager.step_terminal(timeout_ids))
+
+    def _post_physics_step(self) -> tuple[dict[str, Any], torch.Tensor, torch.Tensor, dict[str, Any]]:
+        super()._post_physics_step()
+        self.obs_buf_dict = self.observation_manager.step()
+        self._post_compute_observations_callback()
+        self.extras["to_log"] = self.log_dict
+        return self.obs_buf_dict, self.rew_buf, self.reset_buf, self.extras
 
     def _step_managers(self) -> None:
         # After resets, so WBT termination checks see the tracking error before the command
@@ -192,33 +204,6 @@ class PolicyTask(BaseTask):
         self.command_manager.step()
         self.curriculum_manager.step()
         super()._step_managers()
-
-    def _before_control_frame_reset(self, env_ids: torch.Tensor) -> tuple[torch.Tensor, dict[str, Any]]:
-        self._compute_reward()
-        self._update_log_dict()
-        if env_ids.numel() == 0:
-            return env_ids, {}
-        # Only timed-out envs are bootstrapped from their terminal observation (time-outs are a subset of resets).
-        timeout_ids = self.time_out_buf.nonzero(as_tuple=False).flatten()
-        if timeout_ids.numel() == 0:
-            return timeout_ids, {}
-        return timeout_ids, self.observation_manager.step_terminal(timeout_ids)
-
-    def _after_control_frame(
-        self, env_ids: torch.Tensor, reset_state: tuple[torch.Tensor, dict[str, Any]]
-    ) -> tuple[dict[str, Any], torch.Tensor, torch.Tensor, dict[str, Any]]:
-        timeout_ids, final_obs_dict = reset_state
-        self.obs_buf_dict = self.observation_manager.step()
-        if final_obs_dict:
-            self._store_final_observations(timeout_ids, final_obs_dict)
-
-        self._post_compute_observations_callback()
-
-        self.extras["to_log"] = self.log_dict
-        if self.viewer:
-            self._setup_simulator_control()
-            self._setup_simulator_next_task()
-        return self.obs_buf_dict, self.rew_buf, self.reset_buf, self.extras
 
     def _store_final_observations(self, env_ids: torch.Tensor, final_obs_dict: dict[str, Any]) -> None:
         if not final_obs_dict:
@@ -248,26 +233,12 @@ class PolicyTask(BaseTask):
     # ------------------------------------------------------------------
     # Hooks for subclasses
 
-    def _init_counters(self) -> None:
-        return
-
-    def _update_counters_each_step(self) -> None:
-        return
-
     def _pre_compute_observations_callback(self) -> None:
         """Hook invoked after physics but before observation terms compute (no-op by default)."""
         return
 
     def _post_compute_observations_callback(self) -> None:
         """Hook invoked after observation buffers are produced (no-op by default)."""
-        return
-
-    def _setup_simulator_control(self) -> None:
-        """Hook for pushing controller state back to the simulator/viewer (no-op by default)."""
-        return
-
-    def _setup_simulator_next_task(self) -> None:
-        """Hook for interactive viewer task selection (no-op by default)."""
         return
 
     def _update_log_dict(self) -> None:

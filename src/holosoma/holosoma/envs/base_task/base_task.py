@@ -475,19 +475,14 @@ class BaseTask:
         # render_sensors is registered before any consumer, so buffers are fresh on read).
         self.hooks.emit(Phase.FRAME_END)
         self.episode_length_buf += 1
-        self._after_physics_step()
-
         self._check_termination()
         env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
-        reset_state = self._before_control_frame_reset(env_ids)
+        self._evaluate_frame(env_ids)
         self.reset_envs_idx(env_ids)
-
         self._step_managers()
 
-        return self._after_control_frame(env_ids, reset_state)
-
-    def _after_physics_step(self) -> None:
-        """Update task-specific state after the frame's substeps and FRAME_END."""
+    def _evaluate_frame(self, env_ids: torch.Tensor) -> None:
+        """Evaluate the frame on the state ``env_ids``' episodes ended in, before they reset."""
 
     def _step_managers(self) -> None:
         """Step managers once per control frame, after resets."""
@@ -501,14 +496,6 @@ class BaseTask:
         self.reset_buf |= reset_flags.to(dtype=self.reset_buf.dtype)
         self.time_out_buf |= timeout_flags
         self.reset_buf |= self.time_out_buf
-
-    def _before_control_frame_reset(self, env_ids: torch.Tensor) -> Any:
-        """Capture task state immediately before selected environments reset."""
-        return None
-
-    def _after_control_frame(self, env_ids: torch.Tensor, reset_state: Any) -> Any:
-        """Finish task-specific work after control-frame resets."""
-        return None
 
     def _ensure_long_tensor(self, tensor_like: Any) -> torch.Tensor:
         if isinstance(tensor_like, torch.Tensor):
