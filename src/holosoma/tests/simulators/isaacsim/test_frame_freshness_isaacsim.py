@@ -118,7 +118,7 @@ def _check_frames(task, config, check, failures: list[str], result_file: str | N
     def frame(offset_y: float) -> float:
         """Drive one real task control frame; return the red fraction egressed at its FRAME_END."""
         offset[0] = offset_y
-        task.step({})
+        task.step()
         return _red_fraction(sim.get_camera_data(camera, "rgb")[0])
 
     task.reset_envs_idx()

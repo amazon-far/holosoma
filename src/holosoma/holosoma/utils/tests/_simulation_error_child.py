@@ -172,7 +172,7 @@ def run_task_session(
             if scenario == "run_reset":
                 fail()
 
-        def step(self, actor_state: dict[str, Any] | None = None) -> None:
+        def step(self) -> None:
             fail()
 
         def close(self) -> None:

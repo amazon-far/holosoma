@@ -437,16 +437,10 @@ class BaseTask:
     ###########################################################################
     # Simulation loop helpers
 
-    def step(self, actor_state: dict[str, Any] | None = None) -> Any:
-        """Advance one control frame using an extensible per-step state dictionary."""
-        if actor_state is None:
-            actor_state = {}
-        self._pre_physics_step(actor_state)
+    def step(self) -> Any:
+        """Advance one control frame."""
         self._physics_step()
         return self._post_physics_step()
-
-    def _pre_physics_step(self, actor_state: dict[str, Any]) -> None:
-        """Process task-specific state before advancing physics."""
 
     def _physics_step(self) -> None:
         decimation = self.config.simulator.config.sim.control_decimation_steps

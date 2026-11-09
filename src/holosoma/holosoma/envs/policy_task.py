@@ -179,6 +179,13 @@ class PolicyTask(BaseTask):
     # ------------------------------------------------------------------
     # Control frame
 
+    def step(self, actor_state: dict[str, Any] | None = None) -> Any:
+        """Apply ``actor_state["actions"]`` and advance one control frame."""
+        if actor_state is None:
+            raise TypeError("PolicyTask.step() requires an actor_state with 'actions'.")
+        self._pre_physics_step(actor_state)
+        return super().step()
+
     def _pre_physics_step(self, actor_state: dict[str, Any]) -> None:
         self.action_manager.process_actions(actor_state["actions"])
 
