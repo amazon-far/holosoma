@@ -36,11 +36,6 @@ class PolicyTask(BaseTask):
             if getattr(self.config, name) is None:
                 raise ValueError(f"{name}_config must be provided for manager-based environments.")
 
-    def _validate_loaded_assets(self) -> None:
-        assert self.num_dof == self.dim_actions, (
-            f"Number of DOFs ({self.num_dof}) must be equal to number of actions ({self.dim_actions})"
-        )
-
     def _initialize_task_managers(self) -> None:
         config = self.config
         assert config.observation is not None

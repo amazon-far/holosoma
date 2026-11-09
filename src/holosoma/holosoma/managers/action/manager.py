@@ -53,6 +53,11 @@ class ActionManager:
 
         # Total action dimension
         self._total_action_dim = sum(self._term_dims)
+        expected_dim = self.env.robot_config.actions_dim
+        if self._total_action_dim != expected_dim:
+            raise ValueError(
+                f"Action terms total {self._total_action_dim} dimensions, but robot.actions_dim is {expected_dim}."
+            )
 
         # Buffers for actions
         self._action = torch.zeros((self.env.num_envs, self._total_action_dim), device=self.device)

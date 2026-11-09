@@ -134,7 +134,6 @@ def test_task_installs_plugins_only_after_provider_setup(monkeypatch: pytest.Mon
     monkeypatch.setattr(base_task_module, "FullSimConfig", lambda **kwargs: SimpleNamespace(**kwargs))
     monkeypatch.setattr(base_task_module, "TerrainManager", lambda *_args: SimpleNamespace())
     monkeypatch.setattr(policy_task_module, "ObservationManager", create_observation_manager)
-    monkeypatch.setattr(PolicyTask, "_validate_loaded_assets", lambda _task: None)
     monkeypatch.setattr(BaseTask, "_load_assets", load_assets)
     monkeypatch.setattr(BaseTask, "_create_envs", create_envs)
     monkeypatch.setattr(BaseTask, "_setup_robot_body_indices", lambda _task: events.append("body_indices"))

@@ -135,7 +135,6 @@ class BaseTask:
         self.simulator.setup_terrain()
         # create envs, sim and viewer
         self._load_assets()
-        self._validate_loaded_assets()
 
         self._create_envs()
         self.dof_pos_limits, self.dof_vel_limits, self.torque_limits = self.simulator.get_dof_limits_properties()
@@ -339,9 +338,6 @@ class BaseTask:
 
     def _validate_task(self) -> None:
         """Validate subclass-specific requirements after the simulator is constructed."""
-
-    def _validate_loaded_assets(self) -> None:
-        """Validate task-specific requirements after simulator assets load."""
 
     def _initialize_task_managers(self) -> None:
         """Construct managers owned by the task specialization."""
