@@ -107,7 +107,7 @@ jobs:
     uses: ./.github/workflows/test-simulator-image.yaml
     with:
       simulator: isaacsim
-      image: ${{ vars.ECR_REGISTRY }}/holosoma-isaacsim:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+      image: ${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}/holosoma-isaacsim:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
       multigpu: '["False", "True"]'
     secrets: inherit
 
@@ -120,7 +120,7 @@ jobs:
     uses: ./.github/workflows/test-simulator-image.yaml
     with:
       simulator: mujoco
-      image: ${{ vars.ECR_REGISTRY }}/holosoma-mujoco:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+      image: ${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}/holosoma-mujoco:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
     secrets: inherit
 
   test-combined:
@@ -131,7 +131,7 @@ jobs:
     if: needs.changes.outputs.images == 'true'
     uses: ./.github/workflows/test-combined-image.yaml
     with:
-      image: ${{ vars.ECR_REGISTRY }}/holosoma:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+      image: ${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}/holosoma:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
     secrets: inherit
 
   pr-image-gate:
@@ -148,7 +148,7 @@ jobs:
     if: always() && !cancelled()
     runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     env:
-      ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
+      ECR_REGISTRY: ${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}
       HOLOSOMA_COMMIT: ${{ github.event.pull_request.head.sha }}
       CANDIDATE_TAG: candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
     steps:
