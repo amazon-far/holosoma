@@ -579,7 +579,7 @@ class PPO(BaseAlgo):
         value_loss = torch.max(value_losses, value_losses_clipped).mean()
 
         if self.use_symmetry and (self.config.symmetry_actor_coef > 0.0 or self.config.symmetry_critic_coef > 0.0):
-            mean_actions_batch = self.actor.act_inference({"actor_obs": actor_obs.detach().clone()})
+            mean_actions_batch = self.actor.action_mean
             mean_actions_for_original_batch, mean_actions_for_symmetry_batch = (
                 mean_actions_batch[:original_batch_size],
                 mean_actions_batch[original_batch_size:],
