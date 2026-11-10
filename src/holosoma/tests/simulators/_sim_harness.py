@@ -58,15 +58,12 @@ def steps_for_seconds(sim: Any, seconds: float) -> int:
 def step(sim: Any, n: int, *, render: bool = False) -> None:
     """Advance ``n`` physics steps, rendering each step when ``render`` is set.
 
-    ``render`` is on for the recording harness (so a video captures the motion). Backends whose
-    offscreen sensors (e.g. IsaacSim RTX cameras) only update when rendered render once per control
-    step, on its last physics step, as ``BaseTask`` does.
+    ``render`` is on for the recording harness (so a video captures the motion). Camera reads go
+    through ``sim.render_sensors()``, which renders whatever the backend's sensors need.
     """
-    decimation = sim.simulator_config.sim.control_decimation_steps
     for _ in range(n):
         sim.simulate_at_each_physics_step()
-        sim._harness_substeps = getattr(sim, "_harness_substeps", 0) + 1
-        if render or (sim.requires_step_render() and sim._harness_substeps % decimation == 0):
+        if render:
             sim.render()
 
 

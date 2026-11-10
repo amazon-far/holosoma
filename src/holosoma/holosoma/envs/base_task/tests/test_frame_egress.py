@@ -1,7 +1,7 @@
 """Frame freshness through SimulationTask.run and the shared BaseTask control-frame schedule.
 
-A control step's FRAME_END falls after the substep the backend renders on, so a camera consumer
-egresses the frame drawn for the state written on that same control step.
+A backend renders its offscreen outputs at the start of FRAME_END, after the control step's last
+substep, so a camera consumer egresses the frame drawn for the state written on that same step.
 """
 
 from __future__ import annotations
@@ -39,8 +39,8 @@ class _LoopOverranError(AssertionError):
 class _FakeSim:
     """Stand-in simulator that draws when rendered and records the loop's phases.
 
-    ``offscreen`` marks a backend with offscreen outputs (RTX cameras, video), so BaseTask schedules
-    its renders.
+    ``offscreen`` marks a backend with offscreen outputs (RTX cameras, video), which renders them
+    from its own FRAME_END ``sensors.render`` hook, ahead of every consumer, as IsaacSim does.
 
     A playback-style plugin samples on FRAME_BEGIN, writes on PRE_STEP and egresses the last draw on
     FRAME_END. A substep budget makes a loop that never finishes fail instead of hanging.
@@ -65,6 +65,7 @@ class _FakeSim:
         self.renders: list[int] = []
         self.video_recorder = None
 
+        self.hooks.add(Phase.FRAME_END, self._render_sensors, name="sensors.render")
         self.hooks.add(Phase.FRAME_BEGIN, self._sample, name="fake.sample")
         self.hooks.add(Phase.PRE_STEP, self._write, name="fake.write")
         self.hooks.add(Phase.POST_STEP, self._post_step, name="fake.post_step")
@@ -77,8 +78,9 @@ class _FakeSim:
     def request_shutdown(self, reason: str = "") -> None:
         self._shutdown = True
 
-    def requires_step_render(self) -> bool:
-        return self.offscreen
+    def _render_sensors(self) -> None:
+        if self.offscreen:
+            self.render()
 
     def render(self, sync_frame_time: bool = True) -> None:
         self.renders.append(self.substeps)
@@ -178,7 +180,7 @@ def _expected_phases(groups: int, decimation: int = DECIMATION) -> list[Phase | 
 
 @pytest.mark.parametrize("decimation", [DECIMATION, 1])
 def test_each_frame_egresses_the_draw_of_its_own_control_step(decimation: int) -> None:
-    """Offscreen outputs draw once per frame, on its last substep, so FRAME_END egresses that state."""
+    """Offscreen outputs draw once per frame, at FRAME_END, so it egresses that frame's state."""
     sim = _FakeSim(frames=3, decimation=decimation)
 
     _run(sim)

@@ -764,10 +764,6 @@ class IsaacSim(BaseSimulator):
         self._robot.data._body_link_vel_w.timestamp = -1.0
         self._robot.data._body_com_vel_w.timestamp = -1.0
 
-    def requires_step_render(self) -> bool:
-        has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording
-        return self.sim.has_rtx_sensors() or has_video_recording
-
     def _write_external_wrench_native(self, targets: list[WrenchTarget]) -> None:
         """Set world-frame wrenches on the robot articulation and object RigidObjects.
 

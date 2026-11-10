@@ -131,7 +131,6 @@ class BaseTask:
         self.sim_dt = self.simulator.sim_dt
 
         self.dt = simulator_config.config.sim.control_decimation_steps * self.sim_dt
-        self._rendered_this_substep = False
 
         self.simulator.setup_terrain()
         # create envs, sim and viewer
@@ -178,14 +177,10 @@ class BaseTask:
         """
         if self.viewer is not None:
             every = max(1, int(self.config.viewer_dt / self.sim_dt))
-            self.hooks.add(Phase.POST_STEP, self._render_viewer, name="task.viewer", every=every)
+            self.hooks.add(Phase.POST_STEP, self.render, name="task.viewer", every=every)
         if self.config.time_scale > 0:
             rate_limiter = RateLimiter(self.config.time_scale / self.sim_dt)
             self.hooks.add(Phase.POST_STEP, rate_limiter.sleep, name="task.rate_limit")
-
-    def _render_viewer(self) -> None:
-        if not self._rendered_this_substep:
-            self.render()
 
     @property
     def dr_episode_count(self) -> torch.Tensor:
@@ -433,14 +428,10 @@ class BaseTask:
     def _physics_step(self) -> None:
         decimation = self.config.simulator.config.sim.control_decimation_steps
         self.hooks.emit(Phase.FRAME_BEGIN)
-        for substep in range(decimation):
+        for _ in range(decimation):
             self._apply_force_in_physics_step()
             self.hooks.emit(Phase.PRE_STEP)
             self.simulator.simulate_at_each_physics_step()
-            # Offscreen outputs are read at FRAME_END, so they draw on the frame's last substep.
-            self._rendered_this_substep = substep == decimation - 1 and self.simulator.requires_step_render()
-            if self._rendered_this_substep:
-                self.simulator.render()
             self.hooks.emit(Phase.POST_STEP)
 
     def _apply_force_in_physics_step(self) -> None:

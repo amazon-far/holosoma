@@ -670,10 +670,6 @@ class BaseSimulator:
         """
         raise NotImplementedError("The 'render' method must be implemented in subclasses.")
 
-    def requires_step_render(self) -> bool:
-        """Return whether this backend needs scheduled renders for offscreen outputs."""
-        return False
-
     def time(self) -> float:
         """Get current simulation time in seconds.
 
