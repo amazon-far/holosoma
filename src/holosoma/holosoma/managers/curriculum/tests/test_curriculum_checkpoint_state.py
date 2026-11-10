@@ -17,8 +17,8 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from holosoma.config_types.curriculum import CurriculumManagerCfg, CurriculumTermCfg
-from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.managers.curriculum.manager import CurriculumManager
 from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker, PenaltyCurriculum
 
@@ -170,8 +170,8 @@ def test_disabled_penalty_curriculum_saves_nothing() -> None:
     assert "penalty_curriculum" not in disabled.get_checkpoint_state()["curriculum"]
 
 
-class _TrackerOnlyEnv(BaseTask):
-    """A BaseTask env (like whole-body tracking) whose only curriculum term is the episode-length tracker."""
+class _TrackerOnlyEnv(PolicyTask):
+    """A PolicyTask env (like whole-body tracking) whose only curriculum term is the episode-length tracker."""
 
     def __init__(self) -> None:
         # Deliberately skips BaseTask.__init__, which needs a simulator.
@@ -200,7 +200,7 @@ def test_first_reset_after_restore_keeps_tracker_average(env_cls: type) -> None:
     state = saved.get_checkpoint_state()
 
     resumed = env_cls()
-    # As after reset_all(): every env flagged for an update with zero-length episodes.
+    # As after a full reset: every env flagged for an update with zero-length episodes.
     resumed._pending_episode_lengths = torch.zeros(resumed.num_envs, dtype=torch.long)
     resumed._pending_episode_update_mask = torch.ones(resumed.num_envs, dtype=torch.bool)
     resumed.load_checkpoint_state(state)

@@ -28,8 +28,7 @@ import numpy as np
 
 from holosoma.config_types.plugin import ROS2OdometryPluginConfig
 from holosoma.simulator.shared.ros2_plugins import ROS2OdometryPlugin
-from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit
+from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit
 
 BODY_NAME = "pelvis"
 FRAME_POSITION_B = np.array([0.31, -0.17, 0.23], dtype=np.float64)
@@ -100,8 +99,7 @@ def _build(simulator: str):
 
     import torch
 
-    env, resolved_device, _ = setup_simulation_environment(config, device=device)
-    sim = env.sim
+    sim, resolved_device, _ = launch_simulator(config, device=device)
     sim.set_headless(True)
     sim.setup()
     sim.setup_terrain()

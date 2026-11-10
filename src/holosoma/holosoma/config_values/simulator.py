@@ -27,7 +27,6 @@ isaacsim = SIMULATOR_REGISTRY.add(
                     bounce_threshold_velocity=0.5,
                 ),
                 render_mode="human",
-                render_interval=4,
             ),
         ),
     ),
@@ -52,7 +51,6 @@ mujoco = SIMULATOR_REGISTRY.add(
                     bounce_threshold_velocity=0.5,
                 ),
                 render_mode="fake",
-                render_interval=1,
             ),
             mujoco_backend=MujocoBackend.CLASSIC,  # Explicit for clarity
         ),
@@ -78,7 +76,6 @@ mjwarp = SIMULATOR_REGISTRY.add(
                     bounce_threshold_velocity=0.5,
                 ),
                 render_mode="fake",
-                render_interval=1,
             ),
             mujoco_backend=MujocoBackend.WARP,  # GPU-accelerated backend
         ),

@@ -343,7 +343,6 @@ def randomize_push_schedule(
         raise AttributeError("PushRandomizerState is not registered with the randomization manager.")
 
     state.configure(enabled=enabled, push_interval_s=push_interval_s, max_push_vel=max_push_vel)
-    env._randomize_push_robots = state.enabled
     env._max_push_vel = state.max_push_vel.clone()
 
     if not state.enabled:

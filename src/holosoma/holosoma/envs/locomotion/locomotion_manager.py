@@ -7,13 +7,12 @@ from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
-from holosoma.envs.base_task.base_task import BaseTask
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker, PenaltyCurriculum
 from holosoma.utils.safe_torch_import import torch
 from holosoma.utils.torch_utils import torch_rand_float
 
 if TYPE_CHECKING:
-    from holosoma.config_types.env import EnvConfig
     from holosoma.managers.command.terms.locomotion import LocomotionGait
     from holosoma.managers.randomization.terms.locomotion import PushRandomizerState
     from holosoma.managers.terrain.terms.locomotion import TerrainLocomotion
@@ -22,21 +21,8 @@ if TYPE_CHECKING:
 _LEGACY_CHECKPOINT_REMOVAL_DATE = datetime.date(2027, 3, 1)
 
 
-class LeggedRobotLocomotionManager(BaseTask):
+class LeggedRobotLocomotionManager(PolicyTask):
     BASE_NUM_ENVS = 4096
-
-    def __init__(
-        self,
-        tyro_config: EnvConfig,
-        *,
-        device: str,
-    ) -> None:
-        self.init_done = False
-        super().__init__(
-            tyro_config,
-            device=device,
-        )
-        self.init_done = True
 
     def _get_task_name(self) -> str:
         return "locomotion"
@@ -44,34 +30,7 @@ class LeggedRobotLocomotionManager(BaseTask):
     def _init_buffers(self) -> None:
         """Initialize torch tensors which will contain simulation states and processed quantities"""
         super()._init_buffers()
-
-        # initialize some data used later on
-        self._init_counters()
-        # joint positions offsets
-        self.default_dof_pos_base = torch.zeros(
-            self.num_dof, dtype=torch.float, device=self.device, requires_grad=False
-        )
-        for i in range(self.num_dofs):
-            name = self.dof_names[i]
-            if name not in self.robot_config.init_state.default_joint_angles:
-                raise ValueError(f"Missing default joint angle for DOF '{name}' in robot configuration.")
-            angle = self.robot_config.init_state.default_joint_angles[name]
-            self.default_dof_pos_base[i] = angle
-
-        self.default_dof_pos_base = self.default_dof_pos_base.unsqueeze(0)  # (1, num_dof)
-        self.default_dof_pos = self.default_dof_pos_base.repeat(self.num_envs, 1).clone()  # (num_envs, num_dof)
-
-        self.need_to_refresh_envs = torch.ones(self.num_envs, dtype=torch.bool, device=self.device, requires_grad=False)
-
         self._init_domain_rand_buffers()
-
-        self.lidar_height_offset = getattr(self.robot_config, "lidar_height_offset", 0.5)
-
-    def _init_counters(self) -> None:
-        self.common_step_counter = 0
-
-    def _update_counters_each_step(self) -> None:
-        self.common_step_counter += 1
 
     def _init_domain_rand_buffers(self) -> None:
         ######################################### DR related tensors #########################################
@@ -80,19 +39,12 @@ class LeggedRobotLocomotionManager(BaseTask):
         self.push_robot_vel_buf = torch.zeros(
             self.num_envs, 2, dtype=torch.float, device=self.device, requires_grad=False
         )
-        self.record_push_robot_vel_buf = torch.zeros(
-            self.num_envs, 2, dtype=torch.float, device=self.device, requires_grad=False
-        )
-        self._randomize_push_robots = False
         self._max_push_vel = torch.zeros(2, dtype=torch.float32, device=self.device)
 
     def _setup_robot_body_indices(self) -> None:
+        super()._setup_robot_body_indices()
         foot_body_names = [s for s in self.body_names if self.robot_config.foot_body_name in s]
         foot_height_names = [s for s in self.body_names if self.robot_config.foot_height_name in s]
-
-        termination_contact_names = []
-        for name in self.robot_config.terminate_after_contacts_on:
-            termination_contact_names.extend([s for s in self.body_names if name in s])
 
         self.feet_indices = torch.zeros(len(foot_body_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i, name in enumerate(foot_body_names):
@@ -103,16 +55,6 @@ class LeggedRobotLocomotionManager(BaseTask):
         )
         for i, name in enumerate(foot_height_names):
             self.feet_height_indices[i] = self.simulator.find_rigid_body_indice(name)
-
-        self.termination_contact_indices = torch.zeros(
-            len(termination_contact_names), dtype=torch.long, device=self.device, requires_grad=False
-        )
-        for i in range(len(termination_contact_names)):
-            self.termination_contact_indices[i] = self.simulator.find_rigid_body_indice(termination_contact_names[i])
-
-        if self.robot_config.has_torso:
-            self.torso_name = self.robot_config.torso_name
-            self.torso_index = self.simulator.find_rigid_body_indice(self.torso_name)
 
     def set_is_evaluating(self, command: Any = None) -> None:
         logger.info("Setting Env is evaluating")
@@ -125,20 +67,6 @@ class LeggedRobotLocomotionManager(BaseTask):
         gait_state = cast("LocomotionGait", self.command_manager.get_state("locomotion_gait"))
         gait_state.set_eval_mode(True)
 
-    def _setup_simulator_next_task(self) -> None:
-        pass
-
-    def _setup_simulator_control(self) -> None:
-        self.simulator.commands = self.command_manager.commands  # type: ignore[attr-defined]
-
-    def _get_envs_to_refresh(self) -> torch.Tensor:
-        return self.need_to_refresh_envs.nonzero(as_tuple=False).flatten()
-
-    def _refresh_envs_after_reset(self, env_ids: torch.Tensor) -> None:
-        self.simulator.forward_kinematics()
-        self.need_to_refresh_envs[env_ids] = False
-        self._pre_compute_observations_callback()
-
     @property
     def base_quat(self) -> torch.Tensor:
         return self.simulator.base_quat
@@ -146,38 +74,24 @@ class LeggedRobotLocomotionManager(BaseTask):
     def _pre_compute_observations_callback(self) -> None:
         self.terrain_manager.update_heights()
 
-    def _update_tasks_callback(self) -> None:
-        super()._update_tasks_callback()
-
-        # Assign commands to simulator for headless recording
-        if hasattr(self.simulator, "headless_recording") and self.simulator.headless_recording:
-            if hasattr(self.command_manager, "commands"):
-                self.simulator.commands = self.command_manager.commands  # type: ignore[attr-defined]
-
-    def _post_compute_observations_callback(self) -> None:
-        return
-
-    def reset_all(self) -> dict[str, Any]:
-        self._init_buffers()
-        return super().reset_all()
-
     def _reset_robot_states_callback(
         self, env_ids: torch.Tensor, target_states: Mapping[str, torch.Tensor] | None = None
     ) -> None:
-        # if target_states is not None, reset to target states
         if target_states is not None:
-            self._reset_dofs(env_ids, target_states["dof_states"])
-            self._reset_root_states(env_ids, target_states["root_states"])
-        else:
-            self._reset_dofs(env_ids)
-            self._reset_root_states(env_ids)
+            # Target root positions are relative to each environment's origin.
+            root_states = target_states["root_states"].clone()
+            root_states[:, :3] += self._get_env_origins()[env_ids]
+            super()._reset_robot_states_callback(
+                env_ids, {"root_states": root_states, "dof_states": target_states["dof_states"]}
+            )
+            return
+        super()._reset_robot_states_callback(env_ids)
+        self._randomize_spawn(env_ids)
 
     def _reset_buffers_callback(
         self, env_ids: torch.Tensor, target_buf: Mapping[str, torch.Tensor] | None = None
     ) -> None:
-        # Observation manager reset is now handled in base_task.py
-        self.need_to_refresh_envs[env_ids] = True
-
+        super()._reset_buffers_callback(env_ids)
         if target_buf is not None:
             self.simulator.dof_pos[env_ids] = target_buf["dof_pos"].to(self.simulator.dof_pos.dtype)
             self.simulator.dof_vel[env_ids] = target_buf["dof_vel"].to(self.simulator.dof_vel.dtype)
@@ -186,22 +100,8 @@ class LeggedRobotLocomotionManager(BaseTask):
             self.time_out_buf[env_ids] = target_buf["time_out_buf"].to(self.time_out_buf.dtype)
             self._pending_episode_update_mask[env_ids] = False
             self._pending_episode_lengths[env_ids] = 0
-        else:
-            self.episode_length_buf[env_ids] = 0
-            self.reset_buf[env_ids] = 1
-            self._pending_episode_update_mask[env_ids] = True
-
-    def _update_log_dict(self) -> None:
-        avg = self._get_average_episode_tracker().get_average()
-        self.log_dict["average_episode_length"] = avg.detach().cpu()
 
     ################ Curriculum #################
-
-    def _get_average_episode_tracker(self) -> AverageEpisodeLengthTracker:
-        tracker = self.curriculum_manager.get_term("average_episode_tracker")
-        if tracker is None:
-            raise RuntimeError("AverageEpisodeLengthTracker is not registered with the curriculum manager.")
-        return cast("AverageEpisodeLengthTracker", tracker)
 
     @property
     def average_episode_length(self) -> float:
@@ -248,7 +148,6 @@ class LeggedRobotLocomotionManager(BaseTask):
         """Random pushes the robots. Emulates an impulse by setting a randomized base velocity."""
         if len(env_ids) == 0:
             return
-        self.need_to_refresh_envs[env_ids] = True
         max_vel_tensor = self._max_push_vel
         if self.randomization_manager is not None:
             state = cast("PushRandomizerState | None", self.randomization_manager.get_state("push_randomizer_state"))
@@ -260,84 +159,46 @@ class LeggedRobotLocomotionManager(BaseTask):
 
         rand = torch.rand(len(env_ids), 2, device=self.device) * 2 - 1
         self.push_robot_vel_buf[env_ids] = rand * max_vel_tensor.unsqueeze(0)
-        self.record_push_robot_vel_buf[env_ids] = self.push_robot_vel_buf[env_ids].clone()
         self.simulator.robot_root_states[env_ids, 7:9] = self.push_robot_vel_buf[env_ids]
         self._max_push_vel = max_vel_tensor.clone()
 
     ################ ENV CALLBACKS #################
 
-    def _reset_dofs(self, env_ids: torch.Tensor, target_state: torch.Tensor | None = None) -> None:
-        """Resets DOF position and velocities of selected environmments
-        Positions are randomly selected within 0.5:1.5 x default positions.
-        Velocities are set to zero.
-        If target_state is not None, reset to target_state
+    def _randomize_spawn(self, env_ids: torch.Tensor) -> None:
+        """Offset the default spawn on custom-origin terrains and randomize the base velocity."""
+        # Apply randomized XY offset if custom_origins
+        if self.terrain_manager.get_state("locomotion_terrain").custom_origins:
+            # Get spawn config from terrain term
+            spawn_cfg = self.terrain_manager.cfg.terrain_term.spawn
 
-        Args:
-            env_ids (List[int]): Environemnt ids
-            target_state (Tensor): Target state
-        """
-        if target_state is not None:
-            self.simulator.dof_pos[env_ids] = target_state[..., 0]
-            self.simulator.dof_vel[env_ids] = target_state[..., 1]
-        else:
-            self.simulator.dof_pos[env_ids] = self.default_dof_pos[env_ids] * torch_rand_float(
-                0.5, 1.5, (len(env_ids), self.num_dof), device=str(self.device)
+            # Generate random XY offsets
+            xy_offsets = torch_rand_float(
+                -spawn_cfg.xy_offset_range, spawn_cfg.xy_offset_range, (len(env_ids), 2), device=str(self.device)
             )
-            self.simulator.dof_vel[env_ids] = 0.0
 
-    def _reset_root_states(self, env_ids: torch.Tensor, target_root_states: torch.Tensor | None = None) -> None:
-        """Resets ROOT states position and velocities of selected environmments
-            if target_root_states is not None, reset to target_root_states
-        Args:
-            env_ids (List[int]): Environemnt ids
-            target_root_states (Tensor): Target root states
-        """
-        if target_root_states is not None:
-            self.simulator.robot_root_states[env_ids] = target_root_states
-            self.simulator.robot_root_states[env_ids, :3] += self.terrain_manager.get_state(
-                "locomotion_terrain"
-            ).env_origins[env_ids]
+            if spawn_cfg.query_terrain_height:
+                # ACCURATE: Query terrain height at new XY position (slower, for rough terrain)
+                current_xy = self.simulator.robot_root_states[env_ids, :2]
+                new_xy = current_xy + xy_offsets
 
-        else:
-            # base position
-            self.simulator.robot_root_states[env_ids] = self.base_init_state
-            self.simulator.robot_root_states[env_ids, :3] += self.terrain_manager.get_state(
-                "locomotion_terrain"
-            ).env_origins[env_ids]
-
-            # Apply randomized XY offset if custom_origins
-            if self.terrain_manager.get_state("locomotion_terrain").custom_origins:
-                # Get spawn config from terrain term
-                spawn_cfg = self.terrain_manager.cfg.terrain_term.spawn
-
-                # Generate random XY offsets
-                xy_offsets = torch_rand_float(
-                    -spawn_cfg.xy_offset_range, spawn_cfg.xy_offset_range, (len(env_ids), 2), device=str(self.device)
+                terrain_state = cast("TerrainLocomotion", self.terrain_manager.get_state("locomotion_terrain"))
+                terrain_heights = terrain_state.query_terrain_heights(
+                    new_xy,
+                    use_grid_sampling=spawn_cfg.use_grid_sampling,
+                    grid_size=spawn_cfg.grid_size,
+                    grid_spacing=spawn_cfg.grid_spacing,
                 )
+                robot_base_height = self.robot_config.init_state.pos[2]  # Robot base height above ground
+                new_z = terrain_heights + robot_base_height
 
-                if spawn_cfg.query_terrain_height:
-                    # ACCURATE: Query terrain height at new XY position (slower, for rough terrain)
-                    current_xy = self.simulator.robot_root_states[env_ids, :2]
-                    new_xy = current_xy + xy_offsets
+                # Write new XYZ position all at once
+                new_xyz = torch.cat([new_xy, new_z.unsqueeze(1)], dim=1)
+                self.simulator.robot_root_states[env_ids, :3] = new_xyz
+            else:
+                # FAST: Original simple spawning - just apply XY offset, keep original Z (faster, for flat terrain)
+                self.simulator.robot_root_states[env_ids, :2] += xy_offsets
 
-                    terrain_state = cast("TerrainLocomotion", self.terrain_manager.get_state("locomotion_terrain"))
-                    terrain_heights = terrain_state.query_terrain_heights(
-                        new_xy,
-                        use_grid_sampling=spawn_cfg.use_grid_sampling,
-                        grid_size=spawn_cfg.grid_size,
-                        grid_spacing=spawn_cfg.grid_spacing,
-                    )
-                    robot_base_height = self.robot_config.init_state.pos[2]  # Robot base height above ground
-                    new_z = terrain_heights + robot_base_height
-
-                    # Write new XYZ position all at once
-                    new_xyz = torch.cat([new_xy, new_z.unsqueeze(1)], dim=1)
-                    self.simulator.robot_root_states[env_ids, :3] = new_xyz
-                else:
-                    # FAST: Original simple spawning - just apply XY offset, keep original Z (faster, for flat terrain)
-                    self.simulator.robot_root_states[env_ids, :2] += xy_offsets
-
-            # base velocities
-            self.simulator.robot_root_states[env_ids, 7:13] = torch_rand_float(
-                -0.5, 0.5, (len(env_ids), 6), device=str(self.device)
-            )  # [7:10]: lin vel, [10:13]: ang vel
+        # base velocities
+        self.simulator.robot_root_states[env_ids, 7:13] = torch_rand_float(
+            -0.5, 0.5, (len(env_ids), 6), device=str(self.device)
+        )  # [7:10]: lin vel, [10:13]: ang vel

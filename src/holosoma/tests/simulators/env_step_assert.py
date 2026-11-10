@@ -1,13 +1,13 @@
 """Environment-contract regression: batch shapes and episode bookkeeping through ``env.step``.
 
-Builds the G1 locomotion training environment through ``training_context`` (which owns the
+Builds the G1 locomotion training environment through ``config.create_task()`` (which owns the
 simulator app, so it starts before any environment module imports the backend) and steps zero
 actions. It checks the public environment behavior every backend must keep:
 
 1. Actor and critic observations, rewards and dones all have ``num_envs`` rows.
 2. Completed-episode metrics have one entry per done; all-environment metrics keep the full batch.
-3. The logged average episode length is never NaN, some episodes finish, and ``reset_all()``
-   returns the average episode length to zero.
+3. The logged average episode length is never NaN, some episodes finish, and resetting every
+   environment returns the average episode length to zero.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import argparse
 import dataclasses
 import sys
 from pathlib import Path
+from typing import cast
 
 # Running this file directly puts tests/simulators first, where the isaacsim test package would
 # shadow NVIDIA's isaacsim package.
@@ -24,9 +25,8 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 
 from holosoma.config_values import experiment
 from holosoma.config_values.simulator import SIMULATOR_REGISTRY
-from holosoma.train_agent import get_tyro_env_config, training_context
+from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
 from holosoma.utils.common import seeding
-from holosoma.utils.helpers import get_class
 from holosoma.utils.safe_torch_import import torch
 from tests.simulators._sim_harness import run_and_hard_exit
 
@@ -69,14 +69,14 @@ def main() -> int:
     )
 
     failures: list[str] = []
-    tyro_env_config = get_tyro_env_config(tyro_config)
-    with (
-        training_context(tyro_config) as context,
-        context.simulation_session(get_class(tyro_config.env_class)(tyro_env_config, device=DEVICE)) as env,
-    ):
-        obs_dict = env.reset_all()
+    with tyro_config.create_task() as task:
+        env = cast("LeggedRobotLocomotionManager", task)
+        if env.device != DEVICE:
+            failures.append(f"task resolved device {env.device!r}, expected {DEVICE!r}")
+        env.reset_envs_idx()
+        obs_dict = env.compute_reset_observations()
         failures.extend(
-            f"reset_all: {name} has {len(obs_dict[name])} rows, expected {NUM_ENVS}"
+            f"reset: {name} has {len(obs_dict[name])} rows, expected {NUM_ENVS}"
             for name in ("actor_obs", "critic_obs")
             if len(obs_dict[name]) != NUM_ENVS
         )
@@ -90,9 +90,9 @@ def main() -> int:
         if n_dones == 0:
             failures.append(f"no episode finished in {NUM_STEPS} zero-action steps")
 
-        env.reset_all()
+        env.reset_envs_idx()
         if env.average_episode_length != 0.0:
-            failures.append(f"average_episode_length is {env.average_episode_length} after reset_all, expected 0.0")
+            failures.append(f"average_episode_length is {env.average_episode_length} after a reset, expected 0.0")
 
         # Report before leaving the session: closing the Isaac Sim app ends the process.
         return _report(args, failures, n_dones)
