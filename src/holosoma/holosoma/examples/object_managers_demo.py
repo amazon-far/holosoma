@@ -185,6 +185,7 @@ def _experiment_config(backend: str, num_envs: int, headless: bool) -> Experimen
         training=dataclasses.replace(
             base.training, num_envs=num_envs, headless=headless, seed=0, torch_deterministic=False
         ),
+        device=_BACKENDS[backend][1],
     )
 
 

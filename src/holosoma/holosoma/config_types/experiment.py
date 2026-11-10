@@ -120,6 +120,10 @@ class ExperimentConfig:
 
     env_class: str = "holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager"
 
+    device: str | None = None
+    """Device for the task. None (the default) resolves from the simulator backend and process
+    rank, as ``RunSimConfig.device`` does; pass e.g. "cuda:0" to override. Not carried into eval."""
+
     training: TrainingConfig = TrainingConfig()
     algo: Annotated[AlgoConfig, UseRegistry(holosoma.config_values.algo.ALGO_REGISTRY)] = (
         holosoma.config_values.algo.ppo
@@ -200,6 +204,7 @@ class ExperimentConfig:
 
         return dataclasses.replace(
             self,
+            device=None,
             terrain=dataclasses.replace(
                 self.terrain,
                 terrain_term=dataclasses.replace(
