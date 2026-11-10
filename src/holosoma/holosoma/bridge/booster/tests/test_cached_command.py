@@ -42,6 +42,7 @@ def test_compute_torques_reuses_cached_command_with_fresh_simulator_state() -> N
     bridge.simulator = cast("BaseSimulator", simulator)
     bridge.num_motor = 1
     bridge.dof_indices = [0]
+    bridge._dof_index = None
     bridge.torque_limit = np.array([100.0])
     bridge.torques = np.zeros(1)
     bridge.low_cmd = cached_command

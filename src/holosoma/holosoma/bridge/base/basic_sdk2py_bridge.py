@@ -10,7 +10,6 @@ import pygame
 from loguru import logger
 
 from holosoma.config_types.robot import RobotConfig
-from holosoma.utils.rotations import quat_rotate_inverse
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
@@ -47,6 +46,9 @@ class BasicSdk2Bridge(ABC):
         self._apply_indices: list[int] | None = (
             None if self.dof_indices == list(range(simulator.num_dof)) else self.dof_indices
         )
+        self._dof_index: npt.NDArray[np.intp] | None = (
+            None if self._apply_indices is None else np.asarray(self.dof_indices, dtype=np.intp)
+        )
 
         # SDK motor count is the size of the controlled subset (was: simulator.num_dof).
         self.num_motor = len(self.dof_indices)
@@ -80,7 +82,7 @@ class BasicSdk2Bridge(ABC):
         self.joystick: Any = None
 
         # The root state this exchange is reading; see transport_exchange.
-        self._root_state: torch.Tensor | None = None
+        self._root_state: _RootState | None = None
 
         # Initialize SDK-specific components
         self._init_sdk_components()
@@ -98,7 +100,7 @@ class BasicSdk2Bridge(ABC):
         frame. The publishes in one exchange read it at the same simulator state -- nothing steps
         the simulator in here -- so it is read once for all of them.
         """
-        self._root_state = self.simulator.robot_root_states[0]
+        self._root_state = self._fresh_root_state()
         try:
             self.publish_low_state()
             if self.bridge_config.publish_odom:
@@ -109,16 +111,24 @@ class BasicSdk2Bridge(ABC):
         finally:
             self._root_state = None
 
-    def _read_root_state(self) -> torch.Tensor:
-        """This exchange's root state, or a fresh read for a publish made outside one.
+    def _read_root_state(self) -> _RootState:
+        """This exchange's root state, or a fresh read for a publish made outside one."""
+        if self._root_state is not None:
+            return self._root_state
+        return self._fresh_root_state()
+
+    def _fresh_root_state(self) -> _RootState:
+        """Read env 0's root state.
 
         Env 0: one bridge drives one robot over one SDK connection, and the torque it writes back
         goes through ``apply_torques_at_dof``, which takes no environment index at all.
         """
-        if self._root_state is not None:
-            return self._root_state
-        root: torch.Tensor = self.simulator.robot_root_states[0]
-        return root
+        return _RootState(self.simulator.robot_root_states[0].detach().cpu().numpy())
+
+    def _controlled(self, values: torch.Tensor) -> npt.NDArray[np.floating[Any]]:
+        """Env 0's row of a ``[num_envs, num_dof]`` tensor, narrowed to the controlled DOFs, as numpy."""
+        row = cast("npt.NDArray[np.floating[Any]]", values[0].detach().cpu().numpy())
+        return row.copy() if self._dof_index is None else row[self._dof_index]
 
     def _resolve_dof_indices(self, simulator: BaseSimulator, robot_config: RobotConfig) -> list[int]:
         """Resolve which simulator DOFs this bridge controls, as indices into ``simulator.dof_names``.
@@ -203,22 +213,19 @@ class BasicSdk2Bridge(ABC):
         """
         # Get actual state from simulator, narrowed to the DOFs this bridge controls (so the SDK's
         # num_motor-length kp/q_target broadcast against a matching-length state vector).
-        q_actual = self.simulator.dof_pos[0][self.dof_indices]
-        dq_actual = self.simulator.dof_vel[0][self.dof_indices]
+        q_actual = self._controlled(self.simulator.dof_pos)
+        dq_actual = self._controlled(self.simulator.dof_vel)
 
-        # Convert inputs to torch tensors if needed
-        device = q_actual.device
-        tau = torch.as_tensor(tau_ff, device=device, dtype=q_actual.dtype)
-        kp_t = torch.as_tensor(kp, device=device, dtype=q_actual.dtype)
-        kd_t = torch.as_tensor(kd, device=device, dtype=q_actual.dtype)
-        q_des = torch.as_tensor(q_target, device=device, dtype=q_actual.dtype)
-        dq_des = torch.as_tensor(dq_target, device=device, dtype=q_actual.dtype)
+        dtype = q_actual.dtype
+        tau = _as_array(tau_ff, dtype)
+        kp_a = _as_array(kp, dtype)
+        kd_a = _as_array(kd, dtype)
+        q_des = _as_array(q_target, dtype)
+        dq_des = _as_array(dq_target, dtype)
 
-        # PD control computation
-        torques = tau + kp_t * (q_des - q_actual) + kd_t * (dq_des - dq_actual)
-        # Convert to numpy and apply limits
-        torques_np = torques.detach().cpu().numpy()
-        self.torques = np.clip(torques_np, -self.torque_limit, self.torque_limit)
+        # PD control computation, then limits
+        torques = tau + kp_a * (q_des - q_actual) + kd_a * (dq_des - dq_actual)
+        self.torques = np.clip(torques, -self.torque_limit, self.torque_limit)
         return self.torques
 
     def publish_wireless_controller(self) -> None:
@@ -373,13 +380,13 @@ class BasicSdk2Bridge(ABC):
         """
         # Use generic simulator interface - works for all simulators. Narrowed to the controlled
         # DOFs so publish_low_state reports exactly the SDK's num_motor joints.
-        positions = self.simulator.dof_pos[0][self.dof_indices].detach().cpu().numpy()
-        velocities = self.simulator.dof_vel[0][self.dof_indices].detach().cpu().numpy()
+        positions = self._controlled(self.simulator.dof_pos)
+        velocities = self._controlled(self.simulator.dof_vel)
 
         if not hasattr(self.simulator, "dof_acc"):
             raise RuntimeError("DOF acceleration not available (is the bridge enabled?)")
 
-        accelerations = self.simulator.dof_acc[0][self.dof_indices].detach().cpu().numpy()
+        accelerations = self._controlled(self.simulator.dof_acc)
 
         return positions, velocities, accelerations
 
@@ -395,44 +402,36 @@ class BasicSdk2Bridge(ABC):
             numpy.ndarray: Actuator forces
         """
         # Env 0, like every other simulator read this bridge makes.
-        forces = self.simulator.get_dof_forces(0)
+        forces = cast("npt.NDArray[np.floating[Any]]", self.simulator.get_dof_forces(0).detach().cpu().numpy())
         # Force sensors may be disabled (enable_dof_force_sensors=False) -> empty tensor; a
         # fancy-index would raise, so pass the empty tensor through as the full-width path does.
-        if forces.numel() == 0:
-            return cast("npt.NDArray[np.floating[Any]]", forces.detach().cpu().numpy())
-        return cast("npt.NDArray[np.floating[Any]]", forces[self.dof_indices].detach().cpu().numpy())
+        if forces.size == 0 or self._dof_index is None:
+            return forces.copy()
+        return forces[self._dof_index]
 
-    def _get_base_imu_data(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _get_base_imu_data(
+        self,
+    ) -> tuple[npt.NDArray[np.floating[Any]], npt.NDArray[np.floating[Any]], npt.NDArray[np.floating[Any]]]:
         """Get base IMU data: quaternion, angular velocity, linear acceleration (simulator-agnostic).
 
         Returns:
-            tuple: (quaternion, gyro, acceleration) as torch tensors
+            tuple: (quaternion, gyro, acceleration) as numpy arrays
                 - quaternion: [w, x, y, z] format (4 elements) - bridge SDK format
-                - gyro: angular velocity [wx, wy, wz] (3 elements)
+                - gyro: body-frame angular velocity [wx, wy, wz] (3 elements)
                 - acceleration: linear acceleration [ax, ay, az] (3 elements)
         """
-        root = self._read_root_state()  # [13]
-        quat_holosoma = root[3:7]  # [x, y, z, w]
-        # robot_root_states[:, 10:13] is WORLD-frame angular velocity on every backend (the
-        # unified contract). A physical IMU gyro reports angular velocity in the BODY frame,
-        # so rotate world -> body using the base orientation. This is backend-agnostic and
-        # keeps the gyro body-frame on MuJoCo and IsaacSim alike.
-        ang_vel_world = root[10:13]
-        gyro = quat_rotate_inverse(quat_holosoma.unsqueeze(0), ang_vel_world.unsqueeze(0), w_last=True).squeeze(0)
+        root = self._read_root_state()
 
         if not hasattr(self.simulator, "base_linear_acc"):
             logger.warning(
                 "Base linear acceleration not available (bridge may be disabled in config). "
                 "Returning zero acceleration."
             )
-            acceleration = torch.zeros(3, device=quat_holosoma.device)
+            acceleration = np.zeros(3, dtype=root.quat_wxyz.dtype)
         else:
-            acceleration = self.simulator.base_linear_acc[0]
+            acceleration = self.simulator.base_linear_acc[0].detach().cpu().numpy()
 
-        # Convert quaternion: holosoma [x, y, z, w] -> bridge SDK [w, x, y, z]
-        quaternion = torch.stack([quat_holosoma[3], quat_holosoma[0], quat_holosoma[1], quat_holosoma[2]])
-
-        return quaternion, gyro, acceleration
+        return root.quat_wxyz.copy(), root.ang_vel_body.copy(), acceleration
 
     def _get_base_odometry(self) -> tuple[list[float], list[float], list[float], float]:
         """Get base odometry: position, orientation, body-frame linear velocity, yaw rate.
@@ -440,9 +439,8 @@ class BasicSdk2Bridge(ABC):
         Simulator-agnostic — reads the unified ``robot_root_states`` 13-vector
         ``[pos(3), quat_xyzw(4), lin_vel_world(3), ang_vel_world(3)]``, the sim analog of the
         robot's onboard sport/odom estimate. World-frame velocities are rotated into the base
-        (body) frame via the same ``quat_rotate_inverse`` helper the IMU gyro uses, matching the
-        real robot's ``SportModeState`` (``rt/odommodestate``) whose ``velocity`` twist is
-        body-frame.
+        (body) frame, as for the IMU gyro, matching the real robot's ``SportModeState``
+        (``rt/odommodestate``) whose ``velocity`` twist is body-frame.
 
         Returns:
             tuple: (position, quat_wxyz, lin_vel_body, yaw_speed)
@@ -451,20 +449,8 @@ class BasicSdk2Bridge(ABC):
                 - lin_vel_body: [vx, vy, vz] body frame (3 floats)
                 - yaw_speed: body-frame yaw rate [rad/s] (float)
         """
-        root = self._read_root_state()  # [13]
-        quat_xyzw = root[3:7]  # [x, y, z, w]
-        lin_vel_world = root[7:10].unsqueeze(0)
-        ang_vel_world = root[10:13].unsqueeze(0)
-        lin_vel_body = quat_rotate_inverse(quat_xyzw.unsqueeze(0), lin_vel_world, w_last=True).squeeze(0)
-        ang_vel_body = quat_rotate_inverse(quat_xyzw.unsqueeze(0), ang_vel_world, w_last=True).squeeze(0)
-
-        position = root[0:3].detach().cpu().tolist()
-        # robot_root_states quaternion is [x, y, z, w]; the SDK OdomState wants [w, x, y, z].
-        q = quat_xyzw.detach().cpu().tolist()
-        quat_wxyz = [q[3], q[0], q[1], q[2]]
-        lin = lin_vel_body.detach().cpu().tolist()
-        yaw_speed = float(ang_vel_body[2].item())
-        return position, quat_wxyz, lin, yaw_speed
+        root = self._read_root_state()
+        return root.position.tolist(), root.quat_wxyz.tolist(), root.lin_vel_body.tolist(), float(root.ang_vel_body[2])
 
     def publish_odom(self) -> None:  # noqa: B027 -- deliberate concrete no-op default; SDKs without an odometry channel (e.g. booster) inherit it
         """Publish base odometry over the SDK. Default no-op.
@@ -485,3 +471,33 @@ class BasicSdk2Bridge(ABC):
             raise NotImplementedError(f"Sensor data access not implemented for {type(self.simulator).__name__}")
 
         return cast("npt.NDArray[np.floating[Any]]", self.simulator.root_data.sensordata)
+
+
+def _as_array(values: Any, dtype: np.dtype[Any]) -> npt.NDArray[Any]:
+    if isinstance(values, torch.Tensor):
+        values = values.detach().cpu().numpy()
+    return np.asarray(values, dtype=dtype)
+
+
+class _RootState:
+    """Env 0's root state ``[pos, quat_xyzw, lin_vel_world, ang_vel_world]``, with base-frame velocities.
+
+    ``robot_root_states`` velocities are world-frame on every backend; an IMU gyro and the odometry
+    twist report them in the base (body) frame.
+    """
+
+    __slots__ = ("ang_vel_body", "lin_vel_body", "position", "quat_wxyz")
+
+    def __init__(self, root: npt.NDArray[np.floating[Any]]) -> None:
+        self.position = root[0:3].copy()
+        x, y, z, w = root[3:7].tolist()
+        self.quat_wxyz = np.array([w, x, y, z], dtype=root.dtype)
+        # Body-to-world rotation of the unit quaternion; v_world @ R is R^T v_world.
+        rotation = np.array(
+            [
+                [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)],
+                [2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)],
+                [2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)],
+            ]
+        )
+        self.lin_vel_body, self.ang_vel_body = root[7:13].reshape(2, 3) @ rotation
