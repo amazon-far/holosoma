@@ -170,22 +170,23 @@ def test_nested_native_overrides_merge_and_do_not_mutate_defaults() -> None:
         build_config(Physics, {"solver_cfg": {"iterations_typo": 7}}, location="physics")
 
 
-def test_historical_newton_settings_load_without_rewriting_user_inputs() -> None:
+def test_shared_solver_and_newton_controls_round_trip_saved_config() -> None:
     saved = ExperimentConfig().to_serializable_dict()
     lab3 = saved["simulator"]["config"]["sim"]["isaaclab3"]
     lab3["physics_backend"] = "newton"
     lab3["newton"] = {
         "use_cuda_graph": False,
-        "nconmax": None,
-        "njmax": 512,
-        "solver_iterations": 17,
         "default_shape_margin": 0.003,
     }
+    shared = saved["simulator"]["config"]["sim"]["mujoco"]
+    shared["iterations"] = 17
+    shared["warp"]["nconmax_per_env"] = 256
+    shared["warp"]["njmax_per_env"] = 512
     restored = _experiment_config_from_saved(saved)
     newton = restored.simulator.config.sim.isaaclab3.newton
-    resolved = solver_settings(MujocoConfig(), newton)
+    resolved = solver_settings(restored.simulator.config.sim.mujoco, newton)
     assert {name: resolved[name] for name in ("nconmax", "njmax", "iterations")} == {
-        "nconmax": None,
+        "nconmax": 256,
         "njmax": 512,
         "iterations": 17,
     }
@@ -195,18 +196,13 @@ def test_historical_newton_settings_load_without_rewriting_user_inputs() -> None
     for name, value in lab3["newton"].items():
         assert serialized["simulator"]["config"]["sim"]["isaaclab3"]["newton"][name] == value
     assert _experiment_config_from_saved(serialized) == restored
-    with pytest.raises(ValueError, match="Conflicting"):
-        solver_settings(MujocoConfig(iterations=9), restored.simulator.config.sim.isaaclab3.newton)
 
 
-def test_inactive_historical_newton_defaults_do_not_become_physx_kwargs() -> None:
+def test_inactive_newton_defaults_do_not_become_physx_kwargs() -> None:
     saved = ExperimentConfig().to_serializable_dict()
     lab3 = saved["simulator"]["config"]["sim"]["isaaclab3"]
     lab3["newton"] = {
         "use_cuda_graph": True,
-        "nconmax": 128,
-        "njmax": None,
-        "solver_iterations": None,
         "default_shape_margin": 0.01,
     }
     restored = _experiment_config_from_saved(saved).simulator.config.sim.isaaclab3
@@ -214,70 +210,78 @@ def test_inactive_historical_newton_defaults_do_not_become_physx_kwargs() -> Non
     assert restored.newton == IsaacLab3NewtonConfig()
 
 
-def test_legacy_python_constructor_and_repeated_replace_preserve_settings() -> None:
+def test_newton_construction_and_replace_do_not_import_sdk() -> None:
     before = set(sys.modules)
-    legacy = IsaacLab3NewtonConfig(use_cuda_graph=False, nconmax=None, solver_iterations=17)
-    # Preserve the pre-existing positional constructor as well as keyword input.
-    config = IsaacLab3Config("newton", "newton_warp", False, legacy, False, True, False, "total")
-    assert config.newton == legacy
+    newton = IsaacLab3NewtonConfig(use_cuda_graph=False)
+    config = IsaacLab3Config(
+        physics_backend="newton",
+        renderer="newton_warp",
+        newton=newton,
+        use_fabric=False,
+        create_stage_in_memory=True,
+        use_newton_actuators=False,
+        contact_force_mode="total",
+    )
+    assert config.newton == newton
     assert (config.use_fabric, config.create_stage_in_memory, config.use_newton_actuators) == (False, True, False)
-    config = dataclasses.replace(config, newton=dataclasses.replace(config.newton, solver_iterations=23))
-    config = dataclasses.replace(config, newton=dataclasses.replace(config.newton, njmax=512))
-    resolved = solver_settings(MujocoConfig(), config.newton)
-    assert (resolved["nconmax"], resolved["iterations"], resolved["njmax"]) == (None, 23, 512)
+    config = dataclasses.replace(config, newton=dataclasses.replace(config.newton, default_shape_margin=0.003))
+    config = dataclasses.replace(config, newton=dataclasses.replace(config.newton, debug_mode=True))
+    shared = MujocoConfig(iterations=23, warp=MujocoWarpConfig(nconmax_per_env=256, njmax_per_env=512))
+    resolved = solver_settings(shared, config.newton)
+    assert (resolved["nconmax"], resolved["iterations"], resolved["njmax"]) == (256, 23, 512)
     assert config.newton.use_cuda_graph is False
     assert not any(name.startswith(("isaaclab.", "isaaclab_newton.")) for name in set(sys.modules) - before)
 
 
 @pytest.mark.parametrize("style", ["separate", "equals"])
-def test_legacy_cli_flags_remain_accepted(style: str) -> None:
+def test_shared_solver_and_newton_cli_options_round_trip(style: str) -> None:
     values = {
-        "use-cuda-graph": "False",
-        "nconmax": "None",
-        "njmax": "512",
-        "solver-iterations": "17",
-        "default-shape-margin": "0.003",
+        "isaaclab3.newton.use-cuda-graph": "False",
+        "mujoco.warp.nconmax-per-env": "256",
+        "mujoco.warp.njmax-per-env": "512",
+        "mujoco.iterations": "17",
+        "isaaclab3.newton.default-shape-margin": "0.003",
     }
     args = ["simulator:isaacsim3", "--simulator.config.sim.isaaclab3.physics-backend=newton"]
     for name, value in values.items():
-        flag = f"--simulator.config.sim.isaaclab3.newton.{name}"
+        flag = f"--simulator.config.sim.{name}"
         args.extend([f"{flag}={value}"] if style == "equals" else [flag, value])
     config = parse_config(ExperimentConfig, args=args)
     assert config.simulator.config.sim.isaaclab3.newton == IsaacLab3NewtonConfig(
         use_cuda_graph=False,
-        nconmax=None,
-        njmax=512,
-        solver_iterations=17,
         default_shape_margin=0.003,
     )
+    shared = config.simulator.config.sim.mujoco
+    assert shared.iterations == 17
+    assert (shared.warp.nconmax_per_env, shared.warp.njmax_per_env) == (256, 512)
     restored = _experiment_config_from_saved(config.to_serializable_dict())
     assert restored.simulator.config.sim.isaaclab3 == config.simulator.config.sim.isaaclab3
 
 
-def test_shared_settings_coexist_with_untouched_legacy_defaults() -> None:
+def test_shared_solver_settings_have_one_owner_and_are_not_mutated() -> None:
     shared = MujocoConfig(iterations=17, warp=MujocoWarpConfig(nconmax_per_env=256))
     settings = solver_settings(shared, IsaacLab3NewtonConfig())
     assert (settings["iterations"], settings["nconmax"]) == (17, 256)
     settings["iterations"] = 99
     assert shared.iterations == 17
-    with pytest.raises(ValueError, match="Conflicting.*solver_iterations"):
-        solver_settings(shared, IsaacLab3NewtonConfig(solver_iterations=9))
-    with pytest.raises(ValueError, match="Conflicting.*nconmax"):
-        solver_settings(shared, IsaacLab3NewtonConfig(nconmax=512))
-    assert solver_settings(shared, IsaacLab3NewtonConfig(solver_iterations=17))["iterations"] == 17
+    assert not {"solver_iterations", "nconmax", "njmax"} & {
+        field.name for field in dataclasses.fields(IsaacLab3NewtonConfig)
+    }
 
 
-def test_inactive_legacy_customization_survives_save_and_backend_switch() -> None:
+def test_inactive_newton_customization_survives_save_and_backend_switch() -> None:
     saved = ExperimentConfig().to_serializable_dict()
     lab3 = saved["simulator"]["config"]["sim"]["isaaclab3"]
-    lab3["newton"] = {"solver_iterations": 17}
+    lab3["newton"] = {"use_cuda_graph": False}
+    saved["simulator"]["config"]["sim"]["mujoco"]["iterations"] = 17
     config = _experiment_config_from_saved(saved)
     inactive = config.simulator.config.sim.isaaclab3
     assert inactive.physics_backend == "physx"
-    restored = _experiment_config_from_saved(config.to_serializable_dict()).simulator.config.sim.isaaclab3
-    assert restored.newton.solver_iterations == 17
+    restored_config = _experiment_config_from_saved(config.to_serializable_dict())
+    restored = restored_config.simulator.config.sim.isaaclab3
+    assert restored.newton.use_cuda_graph is False
     switched = dataclasses.replace(restored, physics_backend="newton")
-    assert solver_settings(MujocoConfig(), switched.newton)["iterations"] == 17
+    assert solver_settings(restored_config.simulator.config.sim.mujoco, switched.newton)["iterations"] == 17
 
 
 def test_pre_lab3_simulator_constructor_keeps_positional_field_order() -> None:

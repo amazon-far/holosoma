@@ -162,14 +162,11 @@ config path. Newton does not expose `warp.naconmax` or generic allocation extras
 use the per-environment capacities. `mujoco.extra` supports writable MuJoCo
 options accepted by Newton's solver constructor, rather than arbitrary SDK kwargs.
 
-Unset values preserve each backend's existing defaults: direct MJWarp retains
-96 contacts per environment; Newton retains 128 contacts, 300 constraint rows,
-CUDA graphs and shape margin `0.01`. These different defaults are deliberately
-preserved. Existing `newton.nconmax`, `njmax` and `solver_iterations` constructors,
-CLI flags and saved inputs remain accepted. Nondefault legacy values must agree
-with explicit shared options; an untouched legacy block never overrides them.
-Use `sim.mujoco` for new solver settings. `sim.substeps` and `sim.physx` retain
-ownership of Newton substeps and PhysX solver policy respectively.
+Unset values keep direct MJWarp's existing 96 contacts per environment.
+Newton uses 128 contacts, the SDK's default of 300 constraint rows,
+CUDA graphs and shape margin `0.01`. Solver settings have one configuration
+path: `sim.mujoco` and `sim.mujoco.warp`, with no duplicate Newton fields.
+`sim.substeps` and `sim.physx` own Newton substeps and PhysX solver policy respectively.
 
 Newton-only execution and collision controls are typed:
 

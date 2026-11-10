@@ -7,20 +7,20 @@ import pytest
 pytestmark = pytest.mark.isaacsim
 
 
-def test_legacy_newton_config_reaches_native_solver(isaacsim_backend, run_isaacsim_harness, tmp_path):
+def test_newton_without_cuda_graph_uses_shared_solver_settings(isaacsim_backend, run_isaacsim_harness, tmp_path):
     if isaacsim_backend != "isaaclab3":
         pytest.skip("Newton requires Isaac Lab 3")
-    result_file = tmp_path / "legacy-newton.txt"
+    result_file = tmp_path / "newton-without-cuda-graph.txt"
     run_isaacsim_harness(
         Path(__file__).resolve().parents[1] / "isaaclab3_schema_assert.py",
         "--physics",
         "newton",
         "--renderer",
         "newton_warp",
-        "--legacy-newton",
+        "--disable-cuda-graph",
         "--result-file",
         str(result_file),
-        label="isaaclab3/newton/newton_warp/legacy",
+        label="isaaclab3/newton/newton_warp/no-cuda-graph",
         timeout=900,
         result_file=result_file,
     )
