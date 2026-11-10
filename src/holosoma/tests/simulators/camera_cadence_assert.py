@@ -100,6 +100,18 @@ def main() -> int:
         device="cuda:0",
         training=dataclasses.replace(config.training, num_envs=args.num_envs),
     )
+    # Keep the simulated robot behind the camera. Its falling limbs can
+    # otherwise occlude the panel and shift the measured red centroid.
+    initial_pos = config.robot.init_state.pos
+    config = dataclasses.replace(
+        config,
+        robot=dataclasses.replace(
+            config.robot,
+            init_state=dataclasses.replace(
+                config.robot.init_state, pos=[initial_pos[0] - 5, initial_pos[1], initial_pos[2]]
+            ),
+        ),
+    )
     if args.all_camera_renders:
         from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Backend
 
