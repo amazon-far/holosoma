@@ -307,10 +307,6 @@ class IsaacSim(BaseSimulator):
         # Perception cameras: one TiledCamera per configured camera, as a child prim of its
         # mount body so it follows that body, created before clone so it replicates per env.
         sensor_setup.build_sensors(self)
-        if self.video_config.enabled and self.backend.is_isaaclab3 and self.backend.uses_kit:
-            from holosoma.simulator.isaacsim.video_recorder import build_video_camera as build_kit_video_camera
-
-            build_kit_video_camera(self)
         if self.video_config.enabled and not self.backend.uses_kit:
             from holosoma.simulator.isaacsim.native_video_recorder import build_video_camera
 

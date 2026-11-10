@@ -8,8 +8,7 @@ and asynchronous recording modes with full feature parity to MuJoCo.
 from __future__ import annotations
 
 import threading
-import math
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
@@ -33,23 +32,6 @@ if TYPE_CHECKING:
     from holosoma.config_types.video import VideoConfig
     from holosoma.simulator.isaacsim.isaacsim import IsaacSim
     from holosoma.simulator.isaacsim.backends.base import IsaacLabBackend
-    from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Backend
-
-
-def build_video_camera(simulator: IsaacSim) -> None:
-    """Declare the Kit movie camera before native stage preparation and cloning."""
-    from isaaclab.sim import PinholeCameraCfg
-
-    config = simulator.video_config
-    aperture = 24.0
-    cfg = PinholeCameraCfg(
-        focal_length=aperture / (2.0 * math.tan(math.radians(config.vertical_fov) / 2.0)),
-        vertical_aperture=aperture,
-        horizontal_aperture=aperture * config.get_aspect_ratio(),
-        clipping_range=(0.1, 1000.0),
-    )
-    # Only the selected recording environment gets a render product at setup.
-    cfg.func("/World/envs/env_0/VideoCamera", cfg)
 
 
 class IsaacSimVideoRecorder(VideoRecorderInterface):
@@ -124,16 +106,6 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         # Create camera prim directly in USD stage
         stage = _current_stage(self.simulator.backend)
         self.camera_prim = UsdGeom.Camera.Define(stage, self._camera_prim_path)
-        if self.simulator.backend.is_isaaclab3 and getattr(
-            cast("IsaacLab3Backend", self.simulator.backend).renderer_config(), "enable_scene_partitioning", False
-        ):
-            from pxr import Sdf
-
-            # SDK stage preparation already partitioned the environment's
-            # geometry. This late, singleton movie camera needs its token too.
-            self.camera_prim.GetPrim().CreateAttribute(
-                "omni:scenePartition", Sdf.ValueTypeNames.Token, variability=Sdf.VariabilityUniform
-            ).Set(f"env_{self.config.record_env_id}")
 
         # Calculate camera parameters from config vertical FOV
         # For now, given different camera APIs, this is approximately similar across simulators...
