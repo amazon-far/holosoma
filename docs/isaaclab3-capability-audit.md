@@ -174,8 +174,13 @@ configuration at the audited baseline: `renderer_config()` constructed default O
 Isaac RTX configs, and camera data is restricted to RGB/depth.
 
 Independent camera capture cadence already uses `CameraSensorConfig.update_decimation`.
-OVRTX/Warp render lazily when a due camera is read. Isaac RTX still renders
-enabled tiled products at every global render pass, even when Holosoma publishes
+Warp renders only the requested camera. OVRTX's SDK submits all registered
+products whenever any camera requests a capture, while publishing only the
+requested outputs. Batch due cameras to avoid repeated submissions within
+one control frame; independent GPU rates need stable cadence groups or native
+per-product scheduling, with performance checks because the SDK deliberately
+avoids the cost of products repeatedly leaving and re-entering a batch.
+Isaac RTX still renders enabled tiled products at every global render pass, even when Holosoma publishes
 one camera less often. Its native multi-tick scheduling remains a gap.
 
 Reuse the existing per-camera rate when implementing RTX scheduling, keeping
