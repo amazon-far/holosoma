@@ -36,7 +36,7 @@ def _letterbox(img: npt.NDArray[np.uint8], cell_h: int, cell_w: int, pad_value: 
     h, w = img.shape[:2]
     scale = min(cell_w / w, cell_h / h)
     new_w, new_h = max(1, round(w * scale)), max(1, round(h * scale))
-    resized = cv2.resize(img, (new_w, new_h)).astype(np.uint8)  # cv2 takes (width, height)
+    resized = cv2.resize(img, (new_w, new_h))  # cv2 takes (width, height), and keeps uint8 in
     canvas: npt.NDArray[np.uint8] = np.full((cell_h, cell_w, 3), pad_value, dtype=np.uint8)
     y0, x0 = (cell_h - new_h) // 2, (cell_w - new_w) // 2
     canvas[y0 : y0 + new_h, x0 : x0 + new_w] = resized

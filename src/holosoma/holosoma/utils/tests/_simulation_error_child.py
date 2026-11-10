@@ -148,7 +148,6 @@ def run_entrypoint(
         )
         env.sim = SimpleNamespace(
             shutdown_requested=False,
-            refresh_sim_tensors=lambda: None,
             hooks=SimpleNamespace(emit=lambda *_args: None),
             simulate_at_each_physics_step=fail,
         )

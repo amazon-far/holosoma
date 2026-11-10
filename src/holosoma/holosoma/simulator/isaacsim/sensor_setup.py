@@ -15,10 +15,13 @@ the scene is built.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from functools import lru_cache, partial
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
+import carb
 import torch
 import isaaclab.sim as sim_utils
 from isaaclab.sensors import TiledCamera, TiledCameraCfg, patterns
@@ -132,6 +135,44 @@ def register_cameras(sim: IsaacSim, manager: SensorManager) -> None:
             scene = cast(RaycastScene, sim.scene.sensors[name])
             sim.raycast_cameras[name] = RayCastDepthCamera(sim, config, scene)
             record.rerender = partial(sim.raycast_cameras[name].render, record)
+
+
+def sync_camera_fabric_transforms(sim: IsaacSim) -> None:
+    """Reset each camera's Fabric local transform to its authored mount offset.
+
+    Call once after ``sim.reset()``. The renderer places cameras from Fabric. Isaac Lab initializes
+    each TiledCamera during the reset; its first pose read syncs the camera into Fabric through an
+    app update that also steps physics. The camera's world pose comes from USD, where the mount body
+    has not moved, so a camera synced after its mount body moved gets a local offset derived against
+    the moved body, and renders off its mount for the whole run by an amount that depends on the
+    physics dt. This was measured on one of four cameras (the last created; 4-8 cm and 5-8 deg on a
+    wrist camera); which cameras are hit is not explained. The USD offset stays correct, so it is
+    copied back into Fabric for every camera.
+    """
+    import carb
+    import usdrt
+    from pxr import Usd, UsdGeom
+    from usdrt import Rt
+
+    # Isaac Lab's views keep camera poses in USD without Fabric or on a CPU device; the USD offset is
+    # then what renders, and there is no Fabric transform to correct.
+    if (
+        not sim.tiled_cameras
+        or sim.sim_device == "cpu"
+        or not carb.settings.get_settings().get("/physics/fabricEnabled")
+    ):
+        return
+    fabric_stage = usdrt.Usd.Stage.Attach(sim_utils.get_current_stage_id())
+    for camera in sim.tiled_cameras.values():
+        for prim in sim_utils.find_matching_prims(camera.cfg.prim_path):
+            local = UsdGeom.Xformable(prim).GetLocalTransformation(Usd.TimeCode.Default())
+            fabric_prim = Rt.Xformable(fabric_stage.GetPrimAtPath(str(prim.GetPath())))
+            fabric_prim.GetFabricHierarchyLocalMatrixAttr().Set(
+                usdrt.Gf.Matrix4d(*(local[row][col] for row in range(4) for col in range(4)))
+            )
+    usdrt.hierarchy.IFabricHierarchy().get_fabric_hierarchy(
+        fabric_stage.GetFabricId(), fabric_stage.GetStageIdAsStageId()
+    ).update_world_xforms()
 
 
 def render_cameras(sim: IsaacSim) -> None:
@@ -629,6 +670,22 @@ def register_lidars(sim: IsaacSim, manager: SensorManager) -> None:
             manager.register_lidar(name, config)
 
 
+@contextmanager
+def _app_updates_without_physics() -> Iterator[None]:
+    """Keep Kit app updates from stepping physics, as ``SimulationContext.play``/``pause`` do.
+
+    Isaac Lab's ``XformPrimView`` syncs Fabric from USD on its first read through an app update
+    (``isaaclab.sim.utils.update_stage``), which would otherwise step physics while the timeline plays.
+    """
+    settings = carb.settings.get_settings()
+    previous = settings.get_as_bool("/app/player/playSimulations")
+    settings.set_bool("/app/player/playSimulations", False)
+    try:
+        yield
+    finally:
+        settings.set_bool("/app/player/playSimulations", previous)
+
+
 def render_lidars(sim: IsaacSim) -> None:
     if sim.sensor_manager is None:
         return
@@ -638,7 +695,8 @@ def render_lidars(sim: IsaacSim) -> None:
         if not isinstance(sensor, _mutable_multi_mesh_ray_caster_cls()):
             raise TypeError(f"LiDAR '{lidar_record.name}' has no mutable MultiMeshRayCaster.")
         sensor.set_ray_directions(pattern.directions)
-        native = sensor.data
+        with _app_updates_without_physics():
+            native = sensor.data
         distances = torch.linalg.vector_norm(native.ray_hits_w - sensor.ray_starts_w, dim=-1)
         finalize_lidar_returns(lidar_record, pattern.directions, distances)
 

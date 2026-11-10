@@ -109,13 +109,11 @@ def main() -> int:
     _spawn_dof_pos = sim.dof_pos.clone()
 
     def _hold_dof() -> None:
-        # Restore joints to the spawn pose with zero velocity; per-backend DOF-state tensor shapes
-        # (IsaacSim 3D [n, ndof, 2]). MuJoCo is unaffected by this flake.
-        ndof = sim.num_dof
+        # Restore joints to the spawn pose with zero velocity. MuJoCo is unaffected by this flake.
         if args.simulator == "isaacsim":
-            ds = torch.zeros(n, ndof, 2, device=device)
-            ds[:, :, 0] = _spawn_dof_pos
-            sim.set_dof_state_tensor_robots(_all_ids, ds)
+            sim.dof_pos[_all_ids] = _spawn_dof_pos
+            sim.dof_vel[_all_ids] = 0.0
+            sim.forward_kinematics()
 
     import math
 

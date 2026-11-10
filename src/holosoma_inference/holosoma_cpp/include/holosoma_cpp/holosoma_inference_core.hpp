@@ -44,7 +44,8 @@ class WbtPolicy {
   // The effective raw-action bound: kWbtActionCeiling or a tighter declared clip.
   float ActionClip() const { return action_clip_; }
 
-  bool Initialize(const std::string &model_path, bool use_gpu = false, int intra_op_threads = 2);
+  bool Initialize(const std::string &model_path, holosoma::Backend backend = holosoma::Backend::kCpu,
+                  int intra_op_threads = 2);
   // Share the already-loaded session with a library policy slot; never load a second graph.
   bool Initialize(std::shared_ptr<holosoma::OnnxModel> session);
   bool ComputeAction(const RobotObservation &obs, const WbtReferenceSequence &reference, float *action_out);

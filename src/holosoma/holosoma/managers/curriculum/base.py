@@ -66,3 +66,18 @@ class CurriculumTermBase(ABC):
         - Monitoring progress
         - Triggering adaptive changes
         """
+
+    def state_dict(self) -> dict[str, Any]:
+        """Return state to persist in checkpoints; empty for stateless terms.
+
+        Values should be CPU tensors or Python scalars so checkpoints load on any device. In multi-GPU
+        training this is broadcast from rank 0 every iteration, so it should hold only state shared
+        across ranks.
+        """
+        return {}
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:  # noqa: B027 - stateless terms have nothing to restore.
+        """Restore state returned by :meth:`state_dict`."""
+
+    def after_checkpoint_load(self) -> None:  # noqa: B027 - most terms need nothing here.
+        """Called once after this term's state is restored from a checkpoint (not on multi-GPU sync)."""

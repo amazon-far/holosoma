@@ -7,7 +7,7 @@ ROOT_DIR=$(dirname "$SCRIPT_DIR")
 source "${SCRIPT_DIR}/versions.sh"
 
 if ! command -v sudo &> /dev/null; then
-  # in docker build sudo isn't avaiable, but its ok
+  # in docker build sudo isn't available, but it's ok
   echo "Warning: sudo could not be found, you may need to run this script with sudo"
   function sudo { "$@"; }
   export -f sudo

@@ -196,11 +196,6 @@ class FastSACAgent(BaseAlgo):
     def setup(self) -> None:  # type: ignore[override]
         logger.info("Setting up FastSAC")
 
-        # Log curriculum synchronization status for multi-GPU training
-        if self.is_multi_gpu:
-            if self.has_curricula_enabled():
-                logger.info(f"Multi-GPU curriculum synchronization enabled across {self.gpu_world_size} GPUs")
-
         args = self.config
         device = self.device
         env = self.env

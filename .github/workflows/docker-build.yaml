@@ -28,7 +28,7 @@ on:
       - '.github/workflows/docker-build.yaml'
       - '.github/workflows/promote-docker-images.yaml'
       - '.github/workflows/pytest.yaml'
-      - '.github/workflows/test-images.yaml'
+      - '.github/workflows/test-*.yaml'
       - 'conftest.py'
       - 'demo_scripts/**'
       - 'docker/**'
@@ -47,7 +47,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
+  ECR_REGISTRY: ${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}
 
 jobs:
   find-tested-images:

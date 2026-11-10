@@ -127,7 +127,7 @@ holosoma::RobotState state;  // fill joint positions, velocities and base orient
 const holosoma::JointCommand& command = policy.step(state);
 ```
 
-Relative model paths inside a preset resolve against its directory. An explicit checkpoint argument resolves against the caller's working directory. For metadata-complete live models, construct `Policy(live_policy_config(path, use_gpu, threads))`; supply a borrowed `ReferenceWindow` before stepping and keep it alive until replaced. `num_dofs()`, `dof_names()`, `config()` and the `policy()` escape hatch follow the same API for all three policy families. `OfflineInterface` is also exported for shadow-mode integrations.
+Relative model paths inside a preset resolve against its directory. An explicit checkpoint argument resolves against the caller's working directory. For metadata-complete live models, construct `Policy(live_policy_config(path, backend, threads))`; supply a borrowed `ReferenceWindow` before stepping and keep it alive until replaced. `num_dofs()`, `dof_names()`, `config()` and the `policy()` escape hatch follow the same API for all three policy families. `OfflineInterface` is also exported for shadow-mode integrations.
 
 `GeneralWBTPolicy` adapts the metadata-driven core rather than maintaining another observation implementation. It shares the policy slot's ONNX session, including CUDA/thread options. `InferenceEngine` is a compatibility alias. Configuration factories, packed observations and explicit engagement remain available as composition extensions. Each instance has one owner; serialize calls, including reference mutation. The high-level Python preset facade provides a lock; direct `Policy` bindings release the GIL during inference and require caller serialization.
 

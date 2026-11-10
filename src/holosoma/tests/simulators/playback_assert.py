@@ -101,7 +101,6 @@ def _frame(sim) -> None:
         if substep == control_decimation - 1:
             # The frame closes on the LAST substep, as run_sim's loop does: a periodic-render backend
             # has drawn by then, so a FRAME_END consumer sees this frame's image, not the last one's.
-            sim.refresh_sim_tensors()
             sim.hooks.emit(Phase.FRAME_END)
 
 

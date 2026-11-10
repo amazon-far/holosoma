@@ -16,7 +16,7 @@ from holosoma.managers.reset_events.manager import ResetEventManager
 from holosoma.managers.reward import RewardManager
 from holosoma.managers.termination import TerminationManager
 from holosoma.managers.terrain import TerrainManager
-from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+from holosoma.simulator.base_simulator.base_simulator import BaseSimulator, _warn_deprecated
 from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.helpers import get_class
@@ -222,29 +222,52 @@ class BaseTask:
         self._pending_episode_update_mask = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self._pending_torque_rfi: tuple[bool, float] = (False, 0.0)
 
-    def _refresh_sim_tensors(self) -> None:
-        self.simulator.refresh_sim_tensors()
-
-    def get_checkpoint_state(self) -> dict[str, torch.Tensor | float]:
+    def get_checkpoint_state(self) -> dict[str, Any]:
         """Return environment-specific state to persist in checkpoints."""
-        return {}
+        state: dict[str, Any] = {}
+        curriculum_state = self.curriculum_manager.state_dict()
+        if curriculum_state:
+            state["curriculum"] = curriculum_state
+        return state
 
-    def load_checkpoint_state(self, state: dict[str, torch.Tensor | float] | None) -> None:
+    def load_checkpoint_state(self, state: dict[str, Any] | None) -> None:
         """Restore environment-specific state from a checkpoint."""
         if not state:
             return
+        curriculum_state = state.get("curriculum")
+        if not curriculum_state:
+            return
+        self.curriculum_manager.load_state_dict(curriculum_state)
+        for name in curriculum_state:
+            term = self.curriculum_manager.get_term(name)
+            if term is not None:
+                term.after_checkpoint_load()
 
     def synchronize_curriculum_state(self, *, device: str, world_size: int) -> None:
-        """Synchronize curriculum-related state across distributed processes."""
-        return
+        """Broadcast rank 0's curriculum state to every rank."""
+        if world_size <= 1:
+            return
+        if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+            return
+        # Every rank builds the same terms from the same config, so all ranks agree on skipping. A term
+        # whose state is empty depending on runtime data would deadlock here.
+        state = self.curriculum_manager.state_dict()
+        if not state:
+            return
+        if not getattr(self, "_logged_curriculum_sync", False):
+            logger.info(f"Multi-GPU curriculum synchronization enabled for terms: {sorted(state)}")
+            self._logged_curriculum_sync = True
+        payload = [state]
+        torch.distributed.broadcast_object_list(payload, src=0, device=torch.device(device))
+        if torch.distributed.get_rank() != 0:
+            self.curriculum_manager.load_state_dict(payload[0])
 
     def reset_all(self) -> dict[str, Any]:
         """Reset all robots"""
         env_ids = torch.arange(self.num_envs, device=self.device)
         self.reset_envs_idx(env_ids)
 
-        self.simulator.set_actor_root_state_tensor_robots(env_ids, self.simulator.robot_root_states)
-        self.simulator.set_dof_state_tensor_robots(env_ids, self.simulator.dof_state)  # type: ignore[attr-defined]
+        self.simulator.forward_kinematics()
 
         actions = torch.zeros(self.num_envs, self.dim_actions, device=self.device, requires_grad=False)
         actor_state = {}
@@ -485,7 +508,6 @@ class BaseTask:
             self.action_manager.apply_actions()
 
     def _post_physics_step(self) -> None:
-        self._refresh_sim_tensors()
         # Cameras render and egress consumers publish here, as FRAME_END plugins (the cameras'
         # render_sensors is registered before any consumer, so buffers are fresh on read).
         self.simulator.hooks.emit(Phase.FRAME_END)
@@ -606,3 +628,7 @@ class BaseTask:
     def _update_log_dict(self) -> None:
         """Hook for appending task-specific metrics to `self.log_dict` (no-op by default)."""
         return
+
+    def _refresh_sim_tensors(self) -> None:
+        """Deprecated no-op: simulator state tensors are current at every read."""
+        _warn_deprecated("_refresh_sim_tensors", "drop the call; state is current at every read")

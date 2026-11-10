@@ -26,7 +26,7 @@ permissions:
   contents: read
 
 env:
-  ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
+  ECR_REGISTRY: ${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}
   HOLOSOMA_COMMIT: ${{ inputs.commit_sha }}
   SOURCE_TAG: ${{ inputs.source_tag || format('sha-{0}', inputs.commit_sha) }}
 
@@ -120,9 +120,9 @@ jobs:
     if: ${{ !inputs.tests_already_passed }}
     uses: ./.github/workflows/test-images.yaml
     with:
-      combined_image: ${{ vars.ECR_REGISTRY }}/holosoma@${{ needs.verify-images.outputs.holosoma_digest }}
-      isaacsim_image: ${{ vars.ECR_REGISTRY }}/holosoma-isaacsim@${{ needs.verify-images.outputs.holosoma_isaacsim_digest }}
-      mujoco_image: ${{ vars.ECR_REGISTRY }}/holosoma-mujoco@${{ needs.verify-images.outputs.holosoma_mujoco_digest }}
+      combined_image: ${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}/holosoma@${{ needs.verify-images.outputs.holosoma_digest }}
+      isaacsim_image: ${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}/holosoma-isaacsim@${{ needs.verify-images.outputs.holosoma_isaacsim_digest }}
+      mujoco_image: ${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}/holosoma-mujoco@${{ needs.verify-images.outputs.holosoma_mujoco_digest }}
       run_mypy: true
     secrets: inherit
 

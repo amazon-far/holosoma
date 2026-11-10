@@ -35,6 +35,7 @@ _ORIENT_HARNESS = Path(__file__).resolve().parents[1] / "camera_orientation_asse
 _OBS_HARNESS = Path(__file__).resolve().parents[1] / "camera_obs_assert.py"
 _PROJECTION_HARNESS = Path(__file__).resolve().parents[1] / "camera_projection_assert.py"
 _RAYCAST_HARNESS = Path(__file__).resolve().parents[1] / "raycast_camera_assert.py"
+_MOUNT_FABRIC_HARNESS = Path(__file__).resolve().parents[1] / "camera_mount_fabric_assert.py"
 
 
 def test_camera_geometry(tmp_path):
@@ -222,5 +223,22 @@ def test_raycast_camera(tmp_path, check):
         str(result_file),
         label=f"isaacsim/raycast-camera-{check}",
         timeout=900,
+        result_file=result_file,
+    )
+
+
+@pytest.mark.parametrize("num_envs", [1, 2])
+def test_camera_renders_at_its_mount_offset(tmp_path, num_envs):
+    # Cameras on links that move while Isaac Lab initializes sensors must still render from their
+    # authored offset: Fabric camera world == mount body world x USD local, after startup and later.
+    result_file = tmp_path / f"mount_fabric_isaacsim_{num_envs}.txt"
+    run_harness(
+        _MOUNT_FABRIC_HARNESS,
+        "--num-envs",
+        str(num_envs),
+        "--result-file",
+        str(result_file),
+        label=f"isaacsim/camera-mount-fabric (num_envs={num_envs})",
+        timeout=700,
         result_file=result_file,
     )
