@@ -1,7 +1,8 @@
 """Isaac Sim ray-cast depth camera assertion harness (``isaacsim.renderer="raycast"``).
 
 Uses the ``raycast_cam`` camera, which casts against the terrain only. ``--check frame`` asserts the
-camera produces a depth frame without an RTX ``TiledCamera`` or any RTX sensor. ``--check rerender``
+camera produces a depth frame without an RTX ``TiledCamera`` or any RTX sensor, and that the flat
+ground is smooth row by row. ``--check rerender``
 raises the robot in two envs without stepping, re-renders those envs, and asserts their ground depth
 grows while the third env's frame is unchanged.
 
@@ -49,6 +50,19 @@ def _check_frame(sim):
         for e in range(_NUM_ENVS)
         if float(torch.isfinite(depth[e]).float().mean()) < 0.2
     )
+    # Flat ground: a pinhole camera's 1/depth over a plane is affine in pixel coordinates, so within a
+    # depth camera's working range (3 m) the affine fit must leave only sub-millimetre residuals.
+    for e in range(_NUM_ENVS):
+        image = depth[e, ..., 0].double().cpu()
+        rows, cols = torch.nonzero(torch.isfinite(image) & (image < 3.0), as_tuple=True)
+        if rows.numel() < 100:
+            fails.append(f"env{e}: only {rows.numel()} ground pixels within 3 m")
+            continue
+        design = torch.stack([rows.double(), cols.double(), torch.ones_like(rows, dtype=torch.double)], dim=1)
+        coeffs = torch.linalg.lstsq(design, (1.0 / image[rows, cols]).unsqueeze(1)).solution
+        error = (image[rows, cols] - 1.0 / (design @ coeffs).flatten()).abs().max()
+        if float(error) > 1e-3:
+            fails.append(f"env{e}: flat ground is not flat in depth (off by up to {1e3 * float(error):.1f} mm)")
     return fails
 
 

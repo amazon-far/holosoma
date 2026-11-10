@@ -27,6 +27,9 @@ if TYPE_CHECKING:
     from holosoma.managers.terrain import TerrainManager
     from holosoma.managers.terrain.terms.locomotion import TerrainLocomotion
 
+GROUND_PLANE_SIZE_M = 4.0e3
+"""Side length of the plane terrain's visual mesh, in metres; ray hits on it are sub-millimetre."""
+
 
 class TerrainFixtures(NamedTuple):
     """Result of :func:`build_terrain_fixtures`."""
@@ -112,6 +115,13 @@ def build_terrain_fixtures(
         terrain_config.num_envs = scene.cfg.num_envs
         terrain_config.env_spacing = scene.cfg.env_spacing
         terrain_config.class_type(terrain_config)
+        # Ray sensors cast against the plane's visual mesh in float32. IsaacLab spawns it 2e6 m
+        # across, where hits are centimetres off, so shrink it; the physics collider is a separate,
+        # infinite Plane prim. The asset is a 100 m grid, scaled the way IsaacLab sizes it.
+        environment = stage_utils.get_current_stage().GetPrimAtPath(f"{TERRAIN_PRIM_PATH}/terrain/Environment")
+        if not environment.IsValid():
+            raise RuntimeError(f"Ground plane visual '{TERRAIN_PRIM_PATH}/terrain/Environment' not found.")
+        environment.GetAttribute("xformOp:scale").Set((GROUND_PLANE_SIZE_M / 100.0, GROUND_PLANE_SIZE_M / 100.0, 1.0))
         global_collision_prims.append(terrain_config.prim_path)
         # Hide the ground plane's visual while keeping its collider; avoids z-fighting a scene
         # USD's own floor. Applied to the whole /World/ground subtree.

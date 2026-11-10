@@ -65,7 +65,9 @@ terrain manager's existing Warp mesh under both `/World/ground` and
 depth share that mesh's vertex/index buffers and BVH. Ground still passes
 through path selection. Flat planes retain
 native conversion because the loaded plane differs from the terrain
-manager's finite grid.
+manager's finite grid. Holosoma spawns that plane's visual mesh 4 km across
+(IsaacLab's default is 2,000 km), so float32 ray hits on it stay sub-millimetre;
+its physics collider is a separate infinite plane.
 
 `prepare_sim()` initializes each depth renderer once body indices and scene
 sensors are ready; the renderer prepares its mesh provider's views then. Robot
