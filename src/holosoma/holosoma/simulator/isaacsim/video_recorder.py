@@ -76,6 +76,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         self._rgb_annotator: Any = None
         self._camera_prim_path: str | None = None
         self._view: Any = None
+        self._rtx_capture: Any = None
 
         logger.info(
             f"IsaacSim video recorder initialized - {'threaded' if config.use_recording_thread else 'synchronous'} mode"
@@ -144,6 +145,10 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
             "rgb", device=self.simulator.device, do_array_copy=False
         )
         self._rgb_annotator.attach([self._render_product])
+        if self.simulator.backend.is_isaaclab3:
+            from .backends.camera_renderers import IsaacRtxCapture
+
+            self._rtx_capture = IsaacRtxCapture(self._render_product.hydra_texture, name=self._render_product.path)
 
         logger.debug(f"Created replicator camera at: {self._camera_prim_path}")
         logger.debug(f"Render product resolution: {resolution}")
@@ -169,6 +174,16 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         try:
             # Update camera position to track robot using shared logic
             self._update_camera_position()
+            if self.simulator.backend.is_isaaclab3:
+                from isaaclab_physx.renderers.fabric import FabricBackendCfg
+                from .backends.camera_renderers import capture_isaac_rtx_products
+
+                sim = self.simulator.sim
+                fabric = sim.get_or_create_backend(FabricBackendCfg(stage=sim.stage, device=sim.device))
+                fabric.bind_transforms(sim.get_scene_data_provider())
+                fabric.update_transforms(sim.get_scene_data_provider())
+                fabric.update_geometries(sim.get_scene_data_provider(), sim.render_generation)
+                capture_isaac_rtx_products([self._rtx_capture])
 
             # Get RGB data from replicator annotator
             rgb_data = self._rgb_annotator.get_data()
@@ -230,8 +245,8 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
                 import warp as wp
 
                 self._view.set_world_poses(
-                    wp.from_torch(position.contiguous()),
-                    wp.from_torch(orientations.contiguous()),
+                    wp.from_torch(position.contiguous(), dtype=wp.vec3f),
+                    wp.from_torch(orientations.contiguous(), dtype=wp.vec4f),
                 )
             else:
                 self._view.set_world_poses(position, orientations)
@@ -251,6 +266,9 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
             failures.append(exc)
 
         if self.worker_stopped:
+            if self._rtx_capture is not None:
+                self._rtx_capture.close()
+                self._rtx_capture = None
             failures.extend(self._cleanup_backend_resources())
 
         if failures:
