@@ -253,14 +253,35 @@ def main() -> int:
                 assert red.any(), f"{name}: the panel was not rendered at frame {frame}."
                 index = int(name.removeprefix("camera_"))
                 axis = 1 if index % 2 else 0
-                center = red.nonzero().float().mean(dim=0)[axis].item()
                 expected = (args.resolution - 1) / 2 - panel_y * args.resolution / (
                     2 * math.tan(math.radians(camera.vertical_fov) / 2) * 0.89
                 )
-                assert abs(center - expected) < max(1.2, args.resolution * 0.02), (
+                tolerance = max(1.2, args.resolution * 0.02)
+                # Color trails can extend beyond today's panel silhouette.
+                # Check geometry independently, then its current red pixels.
+                panel = (depth[0, ..., 0] - 0.89).abs() < 0.02
+                assert panel.any(), f"{name}: no panel depth at frame {frame}."
+                depth_center = panel.nonzero().float().mean(dim=0)[axis].item()
+                assert abs(depth_center - expected) < tolerance, (
+                    f"{name}: stale panel depth at frame {frame}: {depth_center}, expected {expected}."
+                )
+                current_red = red & panel
+                assert current_red.any(), f"{name}: no red pixels on the current panel at frame {frame}."
+                center = current_red.nonzero().float().mean(dim=0)[axis].item()
+                assert abs(center - expected) < tolerance, (
                     f"{name}: stale panel image at frame {frame}: axis {axis} coordinate {center}, expected {expected}."
                 )
-                panel_depth = depth[0, ..., 0][red].median().item()
+                if frame == decimation:
+                    # Fault control: the previous real RGB image paired with
+                    # fresh depth must still fail this freshness criterion.
+                    old_rgb = previous[name][0][0]
+                    stale_red = (old_rgb[..., 0].short() > old_rgb[..., 1].short() + 30) & panel
+                    if stale_red.any():
+                        stale_center = stale_red.nonzero().float().mean(dim=0)[axis].item()
+                        assert abs(stale_center - expected) >= tolerance, (
+                            f"{name}: freshness criterion accepted the previous RGB image."
+                        )
+                panel_depth = depth[0, ..., 0][current_red].median().item()
                 assert abs(panel_depth - 0.89) < 0.03, (name, panel_depth)
             else:
                 assert torch.equal(rgb, previous[name][0]), f"{name}: RGB changed between captures."
