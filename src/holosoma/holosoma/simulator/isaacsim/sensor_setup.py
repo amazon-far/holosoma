@@ -75,8 +75,17 @@ def build_cameras(sim: IsaacSim) -> None:
             # Keep raw +inf no-return data; CameraRecord applies Holosoma's common depth policy.
             depth_clipping_behavior="none",
         )
-        sim.tiled_cameras[cam_name] = backend.create_camera(cam_cfg)
-        sim.scene.sensors[cam_name] = sim.tiled_cameras[cam_name]
+        camera = backend.create_camera(cam_cfg)
+        control_hz = sim.simulator_config.sim.fps / sim.simulator_config.sim.control_decimation_steps
+        backend.configure_camera_cadence(
+            camera,
+            control_hz=control_hz,
+            decimation=resolve_decimation(
+                cam.update_decimation, control_hz, field=f"camera '{cam_name}' update_decimation"
+            ),
+        )
+        sim.tiled_cameras[cam_name] = camera
+        sim.scene.sensors[cam_name] = camera
 
 
 def _camera_mount_prim_path(mount: SensorMountConfig, *, backend: IsaacLabBackend) -> str:
@@ -152,8 +161,13 @@ def sync_camera_fabric_transforms(sim: IsaacSim) -> None:
 def render_cameras(sim: IsaacSim, due: list[CameraRecord]) -> None:
     """Cache each due TiledCamera's RGB/depth as an env-first frame into its buffer.
 
-    Reads the output of the render ``render_sensors`` just ran, drops alpha, and writes a
-    ``[N,H,W,3]`` uint8 (rgb) / ``[N,H,W,1]`` float32 (depth) frame."""
+    Lab 3 prepares all due poses before a shared renderer submission. Lab 2 reads
+    the frame-end RTX pass. Drop alpha and cache ``[N,H,W,3]`` uint8 (rgb) /
+    ``[N,H,W,1]`` float32 (depth) outputs at each camera's configured cadence."""
+    sim.backend.refresh_cameras(
+        [sim.tiled_cameras[record.name] for record in due],
+        capture_step=sim.sensor_manager.cameras[0].step_counter if sim.sensor_manager.cameras else 0,
+    )
     for camera_record in due:
         out = sim.tiled_cameras[camera_record.name].data.output
         if "rgb" in camera_record.config.data_types:

@@ -174,21 +174,22 @@ configuration at the audited baseline: `renderer_config()` constructed default O
 Isaac RTX configs, and camera data is restricted to RGB/depth.
 
 Independent camera capture cadence already uses `CameraSensorConfig.update_decimation`.
-Warp renders only the requested camera. OVRTX's SDK submits all registered
-products whenever any camera requests a capture, while publishing only the
-requested outputs. Batch due cameras to avoid repeated submissions within
-one control frame; independent GPU rates need stable cadence groups or native
-per-product scheduling, with performance checks because the SDK deliberately
-avoids the cost of products repeatedly leaving and re-entering a batch.
-Isaac RTX still renders enabled tiled products at every global render pass, even when Holosoma publishes
-one camera less often. Its native multi-tick scheduling remains a gap.
+The current integration also schedules actual GPU captures with that setting.
+Warp renders only the requested camera. OVRTX batches due cameras, retains the
+SDK's stable set of registered products, and aligns native `frameRate`/`startTime`
+capture windows with the shared control-step cadence. This avoids the cost of
+products repeatedly leaving and re-entering a batch. The SDK continues to own
+both its legacy and OVStage submission paths and resource lifetimes.
 
-Reuse the existing per-camera rate when implementing RTX scheduling, keeping
-different rates in separate tiled products. Integrate the renderer's simulation
-clock and verify actual completed renders, current-frame pixels, held observations,
-startup/reset behavior and unchanged physics advancement. Native `tickRate`
-authoring alone did not throttle products in the bounded pinned-runtime probe;
-texture enablement also invalidated buffers and was not accepted as a solution.
+Isaac RTX keeps each tiled product paused until its camera is due. It publishes
+prepared poses through the SDK's Fabric bridge, activates due products, and
+pauses each on the native drawable completion event before reading SDK-owned
+output buffers. Pausing before completion cancels work; waiting a fixed number
+of app updates can return an old image or submit extra draws. This integration
+uses completed events rather than a second global simulation clock or timer.
+Native checks count completed renders, verify current-frame RGB/depth geometry,
+held observations, startup and partial reset, and unchanged physics advancement.
+Viewer and movie work must leave idle perception products paused.
 Rates above the control clock and asynchronous sampling need timestamps/history.
 
 Expose global renderer configs, per-camera overrides and `isp_cfg`. OVRTX has

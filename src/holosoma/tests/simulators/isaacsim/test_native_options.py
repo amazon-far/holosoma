@@ -7,6 +7,54 @@ import pytest
 pytestmark = pytest.mark.isaacsim
 
 
+@pytest.mark.parametrize("physics", ["physx", "newton"])
+@pytest.mark.parametrize("renderer", ["isaac_rtx", "ovrtx"])
+@pytest.mark.parametrize("decimations", ["1,5", "2,3"])
+def test_independent_native_camera_renders(
+    physics, renderer, decimations, isaacsim_backend, run_isaacsim_harness, tmp_path
+):
+    if isaacsim_backend != "isaaclab3":
+        pytest.skip("Independent native rendering requires Isaac Lab 3.")
+    result_file = tmp_path / "camera-cadence.txt"
+    result = run_isaacsim_harness(
+        Path(__file__).resolve().parents[1] / "camera_cadence_assert.py",
+        "--physics",
+        physics,
+        "--renderer",
+        renderer,
+        "--decimations",
+        decimations,
+        "--result-file",
+        str(result_file),
+        label=f"isaaclab3/{physics}/{renderer}/camera-cadence-{decimations}",
+        timeout=900,
+        result_file=result_file,
+    )
+    assert result.returncode == 0, result.stderr[-3000:]
+
+
+@pytest.mark.parametrize("renderer", ["isaac_rtx", "ovrtx"])
+def test_camera_cadence_with_movie(renderer, isaacsim_backend, run_isaacsim_harness, tmp_path):
+    if isaacsim_backend != "isaaclab3":
+        pytest.skip("Independent native rendering requires Isaac Lab 3.")
+    result_file = tmp_path / "camera-cadence-movie.txt"
+    result = run_isaacsim_harness(
+        Path(__file__).resolve().parents[1] / "camera_cadence_assert.py",
+        "--physics",
+        "newton",
+        "--renderer",
+        renderer,
+        "--record",
+        str(tmp_path / "movies"),
+        "--result-file",
+        str(result_file),
+        label=f"isaaclab3/newton/{renderer}/camera-cadence-movie",
+        timeout=900,
+        result_file=result_file,
+    )
+    assert result.returncode == 0, result.stderr[-3000:]
+
+
 def test_newton_without_cuda_graph_uses_shared_solver_settings(isaacsim_backend, run_isaacsim_harness, tmp_path):
     if isaacsim_backend != "isaaclab3":
         pytest.skip("Newton requires Isaac Lab 3")
