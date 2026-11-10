@@ -227,10 +227,7 @@ def scheduled_ovrtx_renderer_class() -> type[Any]:
                     # Standalone OpenUSD does not register OmniSensorAPI.
                     # Preserve existing schemas; OVRTX resolves this API when
                     # it imports the exported stage with its native plugins.
-                    schemas = list(prim.GetAppliedSchemas())
-                    if "OmniSensorAPI" not in schemas:
-                        schemas.append("OmniSensorAPI")
-                    prim.SetMetadata("apiSchemas", Sdf.TokenListOp.Create(prependedItems=schemas))
+                    prim.AddAppliedSchema("OmniSensorAPI")
                     prim.CreateAttribute("omni:sensor:frameRate", Sdf.ValueTypeNames.Double2).Set(
                         Gf.Vec2d(schedule.control_hz, decimation)
                     )
