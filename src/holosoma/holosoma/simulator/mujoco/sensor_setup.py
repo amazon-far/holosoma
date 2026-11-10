@@ -26,7 +26,7 @@ from holosoma.simulator.mujoco.scene_manager import (
     LIDAR_MOUNT_SITE_PREFIX,
 )
 from holosoma.simulator.shared.lidar_range import finalize_lidar_returns
-from holosoma.simulator.shared.sensor_manager import LidarRecord, SensorManager, SensorRecord
+from holosoma.simulator.shared.sensor_manager import CameraRecord, LidarRecord, SensorManager
 from holosoma.utils.rotations import quat_apply, quat_conjugate, quat_mul
 from holosoma.utils.warp_interop import from_torch_vec3
 
@@ -55,31 +55,29 @@ class _WarpRayWorkspace:
     graph: Any | None = None
 
 
-def _register_mount_writer(sim: MuJoCo, record: SensorRecord, kind: str, native_id: int) -> None:
+def _register_mount_writer(sim: MuJoCo, record: CameraRecord | LidarRecord, native_id: int) -> None:
     """Preserve the configured mount frame even when MuJoCo fuses its body into an ancestor."""
     assert sim.root_model is not None
     mount = record.config.mount
-    reference_kind, reference_id = kind, native_id
-    if kind == "cam":
-        reference_kind = "site"
+    reference_id = native_id
+    if isinstance(record, CameraRecord):
         reference_id = mujoco.mj_name2id(
             sim.root_model, mujoco.mjtObj.mjOBJ_SITE, f"{CAMERA_MOUNT_SITE_PREFIX}{record.name}"
         )
         if reference_id < 0:
             raise RuntimeError(f"Camera '{record.name}' has no compiled mount-frame marker.")
-    native_pos = torch.tensor(getattr(sim.root_model, f"{reference_kind}_pos")[reference_id], device=sim.sim_device)
-    native_quat = torch.tensor(getattr(sim.root_model, f"{reference_kind}_quat")[reference_id], device=sim.sim_device)
+    native_pos = torch.tensor(sim.root_model.site_pos[reference_id], device=sim.sim_device)
+    native_quat = torch.tensor(sim.root_model.site_quat[reference_id], device=sim.sim_device)
     config_pos = torch.tensor(mount.position, dtype=native_pos.dtype, device=sim.sim_device)
     config_quat = torch.tensor(mount.orientation, dtype=native_quat.dtype, device=sim.sim_device)
     mount_quat = quat_mul(native_quat, quat_conjugate(config_quat, w_last=False), w_last=False)
     mount_pos = native_pos - quat_apply(mount_quat, config_pos, w_last=False)
-    record.write_mount_pose = partial(_write_mount_pose, sim, record, kind, native_id, mount_pos, mount_quat)
+    record.write_mount_pose = partial(_write_mount_pose, sim, record, native_id, mount_pos, mount_quat)
 
 
 def _write_mount_pose(
     sim: MuJoCo,
-    record: SensorRecord,
-    kind: str,
+    record: CameraRecord | LidarRecord,
     native_id: int,
     mount_pos: torch.Tensor,
     mount_quat: torch.Tensor,
@@ -90,9 +88,9 @@ def _write_mount_pose(
     rotations = mount_quat.expand(len(env_ids), -1)
     positions = mount_pos + quat_apply(rotations, poses[:, :3].to(mount_pos.dtype), w_last=False)
     orientations = quat_mul(rotations, orientations, w_last=False)
-    if kind == "cam" and record.config.mount.target_kind == "world":
+    if isinstance(record, CameraRecord) and record.config.mount.target_kind == "world":
         positions = positions + sim.env_origins[env_ids].to(positions)
-    sim.backend.set_sensor_mount_pose(kind, native_id, env_ids, positions, orientations)
+    sim.backend.set_sensor_mount_pose(record, native_id, env_ids, positions, orientations)
 
 
 def register_cameras(sim: MuJoCo, manager: SensorManager) -> None:
@@ -114,13 +112,13 @@ def register_cameras(sim: MuJoCo, manager: SensorManager) -> None:
             native_id = mujoco.mj_name2id(sim.root_model, mujoco.mjtObj.mjOBJ_CAMERA, name)
             if native_id < 0:
                 raise RuntimeError(f"Camera '{name}' is missing from the compiled MuJoCo model.")
-            _register_mount_writer(sim, record, "cam", native_id)
+            _register_mount_writer(sim, record, native_id)
         sim.backend.create_renderers(manager.cameras)
 
 
 def offset_world_cameras(sim: MuJoCo) -> None:
     """Place each environment's world-mount cameras at its own origin for MJWarp."""
-    if sim.sensor_manager is None or not hasattr(sim.backend, "offset_world_cameras"):
+    if not hasattr(sim.backend, "offset_world_cameras"):
         return
     camera_ids = getattr(sim.backend, "_cam_ids", {})
     world_camera_ids = [
@@ -134,8 +132,6 @@ def offset_world_cameras(sim: MuJoCo) -> None:
 
 def render_cameras(sim: MuJoCo) -> None:
     """Render due cameras into their cached output buffers."""
-    if sim.sensor_manager is None:
-        return
     due = sim.sensor_manager.collect_due()
     if due:
         sim.backend.render_cameras(due)
@@ -154,7 +150,7 @@ def register_lidars(sim: MuJoCo, manager: SensorManager) -> None:
             raise RuntimeError(f"LiDAR mount site '{site_name}' is missing from the compiled MuJoCo model.")
         sensor_record.backend_cache["mujoco_site_id"] = site_id
         sensor_record.backend_cache["mujoco_body_exclude_id"] = _resolve_body_exclude(sim, name, lidar, site_id)
-        _register_mount_writer(sim, sensor_record, "site", site_id)
+        _register_mount_writer(sim, sensor_record, site_id)
 
 
 def _resolve_body_exclude(sim: MuJoCo, name: str, lidar: LidarSensorConfig, site_id: int) -> int:
@@ -383,8 +379,6 @@ def _render_warp(
 
 
 def render_lidars(sim: MuJoCo) -> None:
-    if sim.sensor_manager is None:
-        return
     due = sim.sensor_manager.collect_lidars_due()
     if isinstance(sim.backend, WarpBackend):
         if not due:
@@ -407,18 +401,19 @@ def render_lidars(sim: MuJoCo) -> None:
 
 
 def create_sensors(sim: MuJoCo) -> None:
-    """Create one shared manager and register every configured sensor."""
+    """Register native sensors with the simulator's shared manager."""
     if not sim.sensor_config:
         return
-    cfg = sim.simulator_config.sim
-    manager = SensorManager(sim.sim_device, cfg.fps / cfg.control_decimation_steps, num_envs=sim.num_envs)
-    sim.sensor_manager = manager
+    manager = sim.sensor_manager
+    manager.num_envs = sim.num_envs
     register_cameras(sim, manager)
     register_lidars(sim, manager)
 
 
 def render_sensors(sim: MuJoCo) -> None:
     """Capture all camera and LiDAR sensors due this control step."""
+    if not sim.sensor_config:
+        return
     if isinstance(sim.backend, WarpBackend):
         sim.backend.begin_sensor_render()
     render_cameras(sim)

@@ -15,12 +15,14 @@ import numpy.typing as npt
 import torch
 from loguru import logger
 
+from holosoma.simulator.shared.sensor_manager import CameraRecord
+
 from .base import IMujocoBackend, apply_sensor_scene_flags, holosoma_to_mj_quat, mj_to_holosoma_quat
 
 if TYPE_CHECKING:
     from holosoma.config_types.full_sim import FullSimConfig
     from holosoma.config_types.sensor import CameraDataType
-    from holosoma.simulator.shared.sensor_manager import CameraRecord
+    from holosoma.simulator.shared.sensor_manager import LidarRecord
 
 
 class ClassicBackend(IMujocoBackend):
@@ -164,19 +166,24 @@ class ClassicBackend(IMujocoBackend):
 
     def set_sensor_mount_pose(
         self,
-        kind: str,
+        record: CameraRecord | LidarRecord,
         native_id: int,
         env_ids: torch.Tensor,
         positions: torch.Tensor,
         orientations: torch.Tensor,
     ) -> None:
-        getattr(self.model, f"{kind}_pos")[native_id] = positions[0].detach().cpu().numpy()
-        getattr(self.model, f"{kind}_quat")[native_id] = orientations[0].detach().cpu().numpy()
-        if kind == "site":
+        if isinstance(record, CameraRecord):
+            pos, quat = self.model.cam_pos, self.model.cam_quat
+        else:
+            pos, quat = self.model.site_pos, self.model.site_quat
             # Compiled identity/aligned sites skip some transforms in mj_kinematics. The
             # optimization is no longer valid once their local position or orientation changes.
             self.model.site_sameframe[native_id] = 0
-        self.forward_kinematics()
+        pos[native_id] = positions[0].detach().cpu().numpy()
+        quat[native_id] = orientations[0].detach().cpu().numpy()
+        # Refresh body/site/camera poses from the current qpos, without velocity or solver work.
+        mujoco.mj_kinematics(self.model, self.data)
+        mujoco.mj_camlight(self.model, self.data)
 
     def create_renderers(self, cameras: list[CameraRecord]) -> None:
         # Per-camera renderer (classic only), keyed by camera NAME:

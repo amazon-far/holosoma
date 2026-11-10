@@ -102,25 +102,30 @@ def _camera_mount_prim_path(mount: SensorMountConfig) -> str:
 
 def register_cameras(sim: IsaacSim, manager: SensorManager) -> None:
     """Register TiledCameras built before environment cloning."""
+    from pxr import Sdf
+
     for name, config in sim.sensor_config.items():
         if isinstance(config, CameraSensorConfig):
             record = manager.register_camera(name, config)
             record.write_mount_pose = partial(_write_camera_mount_pose, sim, name)
-            # Environments inherit env_0's USD opinions. Author each camera's existing local
-            # pose in its own env before any runtime write, so changing env_0 cannot move the
-            # other cameras through USD inheritance.
+            # clone_environments(copy_from_source=False) inherits env_0's USD opinions. Author
+            # only each camera's two local-pose opinions so a later env_0 write cannot move
+            # untouched clones. This is startup-only, before Camera._view exists; copying entire
+            # environments would duplicate their assets. Batch USD notices in one ChangeBlock.
             camera = sim.tiled_cameras[name]
-            for prim in sim_utils.find_matching_prims(camera.cfg.prim_path):
-                for attr_name in ("xformOp:translate", "xformOp:orient"):
-                    attribute = prim.GetAttribute(attr_name)
-                    attribute.Set(attribute.Get())
+            with Sdf.ChangeBlock():
+                for prim in sim_utils.find_matching_prims(camera.cfg.prim_path):
+                    for attr_name in ("xformOp:translate", "xformOp:orient"):
+                        attribute = prim.GetAttribute(attr_name)
+                        attribute.Set(attribute.Get())
 
 
 def _write_camera_mount_pose(sim: IsaacSim, name: str, env_ids: torch.Tensor, poses: torch.Tensor) -> None:
     camera = sim.tiled_cameras[name]
     camera._view.set_local_poses(poses[:, :3], poses[:, [6, 3, 4, 5]], env_ids)
-    # Isaac Lab's local-pose setter authors USD even with Fabric enabled. Copy the new local
-    # transform into Fabric so the renderer follows the live parent at this offset.
+    # Isaac Lab 2.3.2's supported local-pose API writes USD even in Fabric mode. A world-pose
+    # write would lose the mounting offset when the parent moves. Sync the local hierarchy
+    # matrix too, so Fabric rendering follows that parent at the newly authored offset.
     sync_camera_fabric_transforms(sim, camera_name=name, env_ids=env_ids)
     camera._is_outdated[env_ids] = True
 
@@ -155,7 +160,8 @@ def sync_camera_fabric_transforms(
     fabric_stage = usdrt.Usd.Stage.Attach(sim_utils.get_current_stage_id())
     cameras = sim.tiled_cameras.values() if camera_name is None else [sim.tiled_cameras[camera_name]]
     for camera in cameras:
-        prims = sim_utils.find_matching_prims(camera.cfg.prim_path)
+        # Use the initialized view's cached ordering, matching set_local_poses' env indices.
+        prims = camera._view._prims
         if env_ids is not None:
             prims = [prims[i] for i in env_ids.tolist()]
         for prim in prims:
@@ -536,8 +542,6 @@ def _app_updates_without_physics() -> Iterator[None]:
 
 
 def render_lidars(sim: IsaacSim) -> None:
-    if sim.sensor_manager is None:
-        return
     for lidar_record in sim.sensor_manager.collect_lidars_due():
         pattern = lidar_record.pattern_at(sim.time())
         sensor = sim.scene.sensors.get(lidar_record.name)
@@ -564,19 +568,18 @@ def build_sensors(sim: IsaacSim) -> None:
 
 
 def create_sensors(sim: IsaacSim) -> None:
-    """Create one shared manager and register every configured sensor."""
+    """Register native sensors with the simulator's shared manager."""
     if not sim.sensor_config:
         return
-    cfg = sim.simulator_config.sim
-    manager = SensorManager(sim.sim_device, cfg.fps / cfg.control_decimation_steps, num_envs=sim.num_envs)
-    sim.sensor_manager = manager
+    manager = sim.sensor_manager
+    manager.num_envs = sim.num_envs
     register_cameras(sim, manager)
     register_lidars(sim, manager)
 
 
 def render_sensors(sim: IsaacSim) -> None:
     """Render if a camera is due or video is recording, then capture the sensors due this control step."""
-    due = sim.sensor_manager.collect_due() if sim.sensor_manager is not None else []
+    due = sim.sensor_manager.collect_due()
     recording = sim.video_recorder is not None and sim.video_recorder.is_recording
     if due or recording:
         sim.render_for_sensors()

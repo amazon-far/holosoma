@@ -76,7 +76,7 @@ def _check(sim, offsets, label: str) -> None:
             torch.testing.assert_close(points[:, 2], -actual)
         print(f"{label}/{name}: actual={actual.tolist()} expected={expected.tolist()}")
         torch.testing.assert_close(actual, expected, atol=0.035, rtol=0.015, msg=f"{label}/{name}")
-        torch.testing.assert_close(sim.get_sensor_mount_pose(name), pose)
+        torch.testing.assert_close(sim.sensor_manager.get_mount_pose(name), pose)
 
 
 def main() -> int:
@@ -103,6 +103,7 @@ def main() -> int:
     )
     env, device, _app = setup_simulation_environment(config, device=device)
     sim = env.sim
+    manager = sim.sensor_manager
     sim.set_headless(True)
     sim.setup()
     sim.setup_terrain()
@@ -120,11 +121,22 @@ def main() -> int:
     )
     sim.create_envs(args.num_envs, origins, base_init)
     sim.prepare_sim()
-    initial = {name: sim.get_sensor_mount_pose(name) for name in sim.get_sensor_names()}
+    assert sim.sensor_manager is manager, "native setup replaced the public registry"
+    initial = {name: sim.sensor_manager.get_mount_pose(name) for name in sim.get_sensor_names()}
     offsets = {name: pose.clone() for name, pose in initial.items()}
     root_states = sim.get_actor_states(["robot"], ids).clone()
     joints = sim.dof_pos.clone()
     failures = []
+    if args.simulator == "mjwarp":
+        graph = sim.backend.step_graph
+        arrays = [
+            sim.backend.mjw_model.cam_pos,
+            sim.backend.mjw_model.cam_quat,
+            sim.backend.mjw_model.site_pos,
+            sim.backend.mjw_model.site_quat,
+        ]
+        pointers = [array.ptr for array in arrays]
+        write_stream = torch.cuda.Stream(device=device)
 
     def capture(label: str) -> None:
         # Hold the robot at a known pose while running the actual physics graph. An unactuated
@@ -137,6 +149,14 @@ def main() -> int:
             step(sim, 1)
         sim.render_sensors()
         _check(sim, offsets, label)
+        if args.simulator == "mjwarp":
+            assert sim.backend.step_graph is graph, "mount updates recaptured the physics graph"
+            assert [
+                sim.backend.mjw_model.cam_pos.ptr,
+                sim.backend.mjw_model.cam_quat.ptr,
+                sim.backend.mjw_model.site_pos.ptr,
+                sim.backend.mjw_model.site_quat.ptr,
+            ] == pointers, "mount updates replaced arrays referenced by captured graphs"
 
     try:
         capture("initial")
@@ -147,7 +167,7 @@ def main() -> int:
             selected = ids[:1]
             pose[selected, 2] += 0.4
             clock_before = sim.time()
-            sim.set_sensor_mount_pose(name, pose[selected], selected)
+            sim.sensor_manager.set_mount_pose(name, pose[selected], selected)
             assert sim.time() == clock_before, "mount updates advanced simulation time"
             cached = (
                 sim.get_camera_data(name, "depth") if name.endswith("camera") else sim.get_lidar_data(name, "ranges")
@@ -160,7 +180,15 @@ def main() -> int:
         rotation = torch.tensor([0.0, math.sin(angle / 2), 0.0, math.cos(angle / 2)], device=device)
         for name, pose in offsets.items():
             pose[selected, 3:] = rotation
-            sim.set_sensor_mount_pose(name, pose[selected], selected)
+            if args.simulator == "mjwarp":
+                # Produce pose rows and call the writer on a non-default Torch stream. The
+                # subsequent native graph/render must wait for the correct stream handoff.
+                write_stream.wait_stream(torch.cuda.current_stream(device))
+                with torch.cuda.stream(write_stream):
+                    sim.sensor_manager.set_mount_pose(name, pose[selected].clone(), selected)
+                torch.cuda.current_stream(device).wait_stream(write_stream)
+            else:
+                sim.sensor_manager.set_mount_pose(name, pose[selected], selected)
         capture("rotated subset")
         root_states[:, 2] += 0.2
         parent_angle = math.radians(10.0)
@@ -175,7 +203,7 @@ def main() -> int:
         capture("moved parents")
         # Repeated writes followed by captured steps must keep reading the same model arrays.
         for name, pose in initial.items():
-            sim.set_sensor_mount_pose(name, pose)
+            sim.sensor_manager.set_mount_pose(name, pose)
             offsets[name] = pose.clone()
         capture("restored offsets")
     except AssertionError as exc:

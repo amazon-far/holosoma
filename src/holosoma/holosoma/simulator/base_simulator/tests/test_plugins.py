@@ -115,6 +115,18 @@ def test_base_simulator_renders_sensors_before_constructed_consumer_plugin() -> 
     assert sim.events == ["render", "publish:fresh"]
 
 
+def test_empty_sensor_registry_is_available_from_real_base_initialization() -> None:
+    sim = _InitializedFakeSim()
+    assert sim.get_sensor_names() == []
+    assert sim.sensor_manager.num_envs == sim.training_config.num_envs
+    with pytest.raises(KeyError, match="No sensor named 'missing'"):
+        sim.sensor_manager.get_mount_pose("missing")
+    with pytest.raises(NotImplementedError, match="no camera 'missing'"):
+        sim.get_camera_data("missing")
+    with pytest.raises(NotImplementedError, match="no LiDAR 'missing'"):
+        sim.get_lidar_data("missing")
+
+
 def test_build_plugins_constructs_and_wires_hooks() -> None:
     sim = _FakeSimulator()
     installed = _build_plugins(sim, {"apply_force": _ApplyForcePluginConfig(force_value=(10.0, 0.0, 0.0))})

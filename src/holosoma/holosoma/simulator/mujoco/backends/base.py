@@ -18,7 +18,7 @@ from holosoma.simulator.mujoco.geom_groups import DEFAULT_RENDER_GEOM_GROUPS
 
 if TYPE_CHECKING:
     from holosoma.config_types.full_sim import FullSimConfig
-    from holosoma.simulator.shared.sensor_manager import CameraRecord
+    from holosoma.simulator.shared.sensor_manager import CameraRecord, LidarRecord
 
 
 def mj_to_holosoma_quat(quat_wxyz: npt.NDArray[Any] | torch.Tensor) -> npt.NDArray[Any] | torch.Tensor:
@@ -312,7 +312,7 @@ class IMujocoBackend(abc.ABC):
     # Camera rendering
     def set_sensor_mount_pose(
         self,
-        kind: str,
+        record: CameraRecord | LidarRecord,
         native_id: int,
         env_ids: torch.Tensor,
         positions: torch.Tensor,

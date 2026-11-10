@@ -102,8 +102,6 @@ class LidarConsumerPlugin:
 
     def _snapshot(self) -> dict[LidarStreamKey, PointCloudPacket]:
         manager = self.simulator.sensor_manager
-        if manager is None:
-            return {}
         fresh = manager.last_lidar_due
         sim_time = self.simulator.time()
         packets = {}

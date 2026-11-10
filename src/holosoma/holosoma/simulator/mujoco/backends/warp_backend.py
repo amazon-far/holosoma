@@ -51,6 +51,7 @@ from holosoma.simulator.mujoco.backends.native_config import (
 )
 from holosoma.simulator.mujoco.geom_groups import DEFAULT_RENDER_GEOM_GROUPS
 from holosoma.simulator.mujoco.native_config import effective_options
+from holosoma.simulator.shared.sensor_manager import CameraRecord
 
 from .base import IMujocoBackend, holosoma_to_mj_quat, mj_to_holosoma_quat
 from .warp_bridge import WarpBridge
@@ -62,7 +63,7 @@ if TYPE_CHECKING:
     from warp.context import Graph
 
     from holosoma.config_types.full_sim import FullSimConfig
-    from holosoma.simulator.shared.sensor_manager import CameraRecord
+    from holosoma.simulator.shared.sensor_manager import LidarRecord
 
 
 # Quaternion helpers on MuJoCo-convention (wxyz, scalar-first) quaternions, reimplemented locally so
@@ -333,6 +334,15 @@ class WarpBackend(IMujocoBackend):
             with wp.ScopedDevice(self.mjw_device):
                 expand_model_fields(self.mjw_model, nworld=self.num_envs, fields_to_expand=_PER_WORLD_FIELDS)
             self.warp_model_bridge.clear_cache()
+
+        # Cache zero-copy views only after expansion. Runtime writes keep these array addresses
+        # stable for both the physics and render graphs and reuse the native stream.
+        self._camera_mount_arrays = (wp.to_torch(self.mjw_model.cam_pos), wp.to_torch(self.mjw_model.cam_quat))
+        self._lidar_mount_arrays = (wp.to_torch(self.mjw_model.site_pos), wp.to_torch(self.mjw_model.site_quat))
+        self._sensor_mount_wp_stream = wp.get_stream(self.mjw_device)
+        self._sensor_mount_stream = torch.cuda.ExternalStream(
+            self._sensor_mount_wp_stream.cuda_stream, device=self.device
+        )
 
         # Capture simulation step as CUDA graph for optimal performance
         # This eliminates per-kernel launch overhead (~20-30 kernels per step)
@@ -859,24 +869,29 @@ class WarpBackend(IMujocoBackend):
 
     def set_sensor_mount_pose(
         self,
-        kind: str,
+        record: CameraRecord | LidarRecord,
         native_id: int,
         env_ids: torch.Tensor,
         positions: torch.Tensor,
         orientations: torch.Tensor,
     ) -> None:
-        """Write the same per-world arrays used by the captured physics graph, then refresh FK."""
-        import warp as wp
+        """Write captured model arrays in place, with stream ordering and only the required FK.
 
-        stream = torch.cuda.ExternalStream(wp.get_stream(self.mjw_device).cuda_stream)
+        No array expansion/rebinding, graph recapture or device-wide synchronization. The caller
+        stream waits for the native pose update so immediate rendering sees it. This is a runtime
+        update outside capture; shared validation performs host checks before reaching this writer.
+        """
+        stream = self._sensor_mount_stream
         consumer = torch.cuda.current_stream(self.device)
         stream.wait_stream(consumer)
-        with torch.cuda.stream(stream), wp.ScopedDevice(self.mjw_device):
-            pos = wp.to_torch(getattr(self.mjw_model, f"{kind}_pos"))
-            quat = wp.to_torch(getattr(self.mjw_model, f"{kind}_quat"))
+        with torch.cuda.stream(stream), wp.ScopedStream(self._sensor_mount_wp_stream):
+            pos, quat = self._camera_mount_arrays if isinstance(record, CameraRecord) else self._lidar_mount_arrays
             pos[env_ids, native_id] = positions.to(pos)
             quat[env_ids, native_id] = orientations.to(quat)
-            self.forward_kinematics()
+            # A caller may have just changed qpos, or stepped the integrator. Refresh all poses
+            # consistently before immediate rendering, without com_pos/com_vel or solver work.
+            mjw.kinematics(self.mjw_model, self.mjw_data)
+            mjw.camlight(self.mjw_model, self.mjw_data)
         consumer.wait_stream(stream)
 
     def _sync_static_geom_xpos(self, body_ids: list[int], env_ids: torch.Tensor | None) -> None:
