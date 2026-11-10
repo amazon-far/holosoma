@@ -166,61 +166,77 @@ _CHILD = textwrap.dedent(
 
     RunSimConfig.create_task = create_task
 
-    config = parse_config(RunSimConfig, args=[f"simulator:{PRESET}"])
-    if DEVICE is not None:
-        config = dataclasses.replace(config, device=DEVICE)
-    runner.run_simulation(config)
+    # Every case starts from the untouched pool, whatever the previous case set.
+    POOL = torch.get_num_threads()
+    print(f"POOL={POOL}", flush=True)
+    for PRESET, DEVICE in CASES:
+        torch.set_num_threads(POOL)
+        print(f"CASE={PRESET}/{DEVICE}", flush=True)
+        config = parse_config(RunSimConfig, args=[f"simulator:{PRESET}"])
+        if DEVICE is not None:
+            config = dataclasses.replace(config, device=DEVICE)
+        runner.run_simulation(config)
     """
 )
 
+# ``None`` is the default invocation: run_simulation resolves it to cpu for the classic backend.
+# MuJoCo Warp on cpu is rejected at device resolution, before any task exists.
+_OTHER_CASES = [("isaacsim", "cpu"), ("isaacsim", None), ("mjwarp", None)]
+_CASES = [(CLASSIC_PRESET, "cpu"), (CLASSIC_PRESET, None), *_OTHER_CASES]
 
-def _child(source: str) -> dict[str, int]:
-    """Run ``source`` in a child with every math-thread variable scrubbed, and parse its KEY=int lines.
+
+@pytest.fixture(scope="module")
+def child_pools() -> dict[str, dict[str, int]]:
+    """Run the real ``run_simulation`` for every case in one child; return per-case pools and ``POOL``.
 
     The environment is built here rather than inherited so that an operator's exported
-    OMP_NUM_THREADS cannot shift one child's baseline relative to another's.
+    OMP_NUM_THREADS cannot shift the child's baseline.
     """
     env = {k: v for k, v in os.environ.items() if k not in THREAD_LIMIT_VARIABLES}
+    source = f"CASES = {_CASES!r}\n{_CHILD}"
     done = subprocess.run([sys.executable, "-c", source], capture_output=True, text=True, check=False, env=env)
     assert done.returncode == 0, f"child failed: {done.stderr[-2000:]}"
-    reported = dict(
-        line.split("=", 1) for line in done.stdout.splitlines() if line.partition("=")[0].isupper() and "=" in line
-    )
-    return {key: int(value) for key, value in reported.items()}
+    pools: dict[str, dict[str, int]] = {}
+    case = "POOL"
+    for line in done.stdout.splitlines():
+        key, sep, value = line.partition("=")
+        if not sep or not key.isupper():
+            continue
+        if key == "CASE":
+            case = value
+            pools[case] = {}
+        else:
+            pools.setdefault(case, {})[key] = int(value)
+    return pools
 
 
-def _pools_after_run_simulation(preset: str, device: str | None) -> dict[str, int]:
+def _pools_after_run_simulation(pools: dict[str, dict[str, int]], preset: str, device: str | None) -> dict[str, int]:
     """The real ``run_simulation``, reporting the pool at env construction and at loop start."""
-    observed = _child(f"PRESET = {preset!r}\nDEVICE = {device!r}\n{_CHILD}")
+    observed = pools[f"{preset}/{device}"]
     assert set(observed) == {"AT_SETUP", "AT_RUN"}, observed
     return observed
 
 
-@pytest.fixture(scope="session")
-def untouched_pool() -> int:
-    """Torch's own default pool in a fresh child, so the comparison holds on any core count."""
-    return _child("from holosoma.utils.safe_torch_import import torch\nprint(f'POOL={torch.get_num_threads()}')")[
-        "POOL"
-    ]
-
-
-# ``None`` is the default invocation: run_simulation resolves it to cpu for the classic backend.
 @pytest.mark.parametrize("device", ["cpu", None])
-def test_run_simulation_applies_the_limit_before_building_the_env(device: str | None) -> None:
-    assert _pools_after_run_simulation(CLASSIC_PRESET, device) == {"AT_SETUP": 1, "AT_RUN": 1}
+def test_run_simulation_applies_the_limit_before_building_the_env(
+    child_pools: dict[str, dict[str, int]], device: str | None
+) -> None:
+    assert _pools_after_run_simulation(child_pools, CLASSIC_PRESET, device) == {"AT_SETUP": 1, "AT_RUN": 1}
 
 
-# MuJoCo Warp on cpu is rejected at device resolution, before any task exists.
-@pytest.mark.parametrize(("preset", "device"), [("isaacsim", "cpu"), ("isaacsim", None), ("mjwarp", None)])
-def test_run_simulation_leaves_other_backends_alone(preset: str, device: str | None, untouched_pool: int) -> None:
+@pytest.mark.parametrize(("preset", "device"), _OTHER_CASES)
+def test_run_simulation_leaves_other_backends_alone(
+    child_pools: dict[str, dict[str, int]], preset: str, device: str | None
+) -> None:
     # Guards the wiring from the other side: a cap applied unconditionally would show up here.
     # Comparing against Torch's own default rather than the literal 1 avoids a spurious failure on
     # a machine with a different core count -- but it only discriminates while that default is
     # above 1, so require it explicitly rather than let a cgroup-restricted runner pass everything.
     # With device=None and no CUDA present, IsaacSim resolves to cpu, which is precisely the
     # configuration that must stay uncapped.
+    untouched_pool = child_pools["POOL"]["POOL"]
     assert untouched_pool > 1, "cannot distinguish capped from uncapped when Torch defaults to 1"
-    assert _pools_after_run_simulation(preset, device) == {
+    assert _pools_after_run_simulation(child_pools, preset, device) == {
         "AT_SETUP": untouched_pool,
         "AT_RUN": untouched_pool,
     }
