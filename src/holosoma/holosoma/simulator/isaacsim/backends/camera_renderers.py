@@ -67,68 +67,23 @@ def capture_isaac_rtx_products(captures: list[IsaacRtxCapture]) -> None:
         settings.set("/app/player/playSimulations", previous)
 
 
-class _CaptureSchedule:
-    """Align native capture windows with the existing shared control-step cadence."""
+class _RequestedOvrtxEngine:
+    """Forward SDK operations while selecting one independently captured product."""
 
-    def __init__(self) -> None:
-        self.decimations: dict[str, int] = {}
-        self.control_hz = 1.0
-        self.step = 0
-        self._last_time = 0.0
-        self._started = False
-
-    def configure(self, path: str, *, control_hz: float, decimation: int) -> None:
-        if self._started:
-            raise RuntimeError("Camera cadence must be configured before rendering.")
-        if self.decimations and self.control_hz != control_hz:
-            raise ValueError("Cameras sharing a renderer must use the same control frequency.")
-        self.control_hz = control_hz
-        self.decimations[path] = decimation
-
-    @property
-    def epoch(self) -> float:
-        return max(self.decimations.values(), default=0) / self.control_hz
-
-    def delta_time(self) -> float:
-        # A positive first window gives every sensor one initial frame. Native
-        # startTime offsets put the ends of their first exposures at this epoch.
-        # Use absolute cycle time to avoid accumulated floating-point drift.
-        time = self.epoch + self.step / self.control_hz + 1e-7 / self.control_hz
-        delta = time - self._last_time
-        if delta < 0:
-            raise RuntimeError("Camera capture steps must be monotonic.")
-        self._last_time = time
-        self._started = True
-        return delta
-
-
-class _ScheduledOvrtxEngine:
-    """Forward native operations while supplying the current capture interval."""
-
-    def __init__(self, engine: Any, schedule: _CaptureSchedule) -> None:
+    def __init__(self, engine: Any) -> None:
         self._engine = engine
-        self._schedule = schedule
-        self.scheduled_request = False
+        self.requested_product: str | None = None
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._engine, name)
 
-    def _delta_time(self, default: float) -> float:
-        if not self._schedule.decimations:
-            return default  # A movie-only renderer retains the SDK's behavior.
-        if self.scheduled_request:
-            return self._schedule.delta_time()
-        # Auto-triggered movie captures render at the current scene state,
-        # without consuming a future scheduled perception-camera exposure.
-        return 0.0
+    def step(self, *, render_products: set[str], **kwargs: Any) -> Any:
+        products = {self.requested_product} if self.requested_product is not None else render_products
+        return self._engine.step(render_products=products, **kwargs)
 
-    def step(self, *, render_products: set[str], delta_time: float, **kwargs: Any) -> Any:
-        return self._engine.step(render_products=render_products, delta_time=self._delta_time(delta_time), **kwargs)
-
-    def step_async(self, *, render_products: set[str], delta_time: float, **kwargs: Any) -> Any:
-        return self._engine.step_async(
-            render_products=render_products, delta_time=self._delta_time(delta_time), **kwargs
-        )
+    def step_async(self, *, render_products: set[str], **kwargs: Any) -> Any:
+        products = {self.requested_product} if self.requested_product is not None else render_products
+        return self._engine.step_async(render_products=products, **kwargs)
 
 
 def create_scheduled_ovrtx_renderer(cfg: Any) -> Any:
@@ -202,61 +157,51 @@ def scheduled_isaac_rtx_renderer_class() -> type[Any]:
 
 @lru_cache(maxsize=1)
 def scheduled_ovrtx_renderer_class() -> type[Any]:
-    """Keep OVRTX's product set stable while its native scheduler skips idle cameras."""
+    """Capture due products without OVRTX 0.5's changing multiview-batch defect."""
     from isaaclab_ov.renderers.ovrtx_renderer import OVRTXRenderer
 
     class ScheduledOVRTXRenderer(OVRTXRenderer):
         def __init__(self, cfg: Any) -> None:
             super().__init__(cfg)
-            self._capture_schedule = _CaptureSchedule()
-            self._scheduled_products: set[str] = set()
+            self._decimations: dict[str, int] = {}
+            self._products: dict[str, str] = {}
 
         def configure_cadence(self, path: str, *, control_hz: float, decimation: int) -> None:
-            self._capture_schedule.configure(path, control_hz=control_hz, decimation=decimation)
-
-        def set_capture_step(self, step: int) -> None:
-            self._capture_schedule.step = step
-
-        def prepare_stage(self, stage: Any, num_envs: int) -> None:
-            from isaaclab.sim import find_matching_prims
-            from pxr import Gf, Sdf
-
-            schedule = self._capture_schedule
-            for path, decimation in schedule.decimations.items():
-                for prim in find_matching_prims(path):
-                    # Standalone OpenUSD does not register OmniSensorAPI.
-                    # Preserve existing schemas; OVRTX resolves this API when
-                    # it imports the exported stage with its native plugins.
-                    prim.AddAppliedSchema("OmniSensorAPI")
-                    prim.CreateAttribute("omni:sensor:frameRate", Sdf.ValueTypeNames.Double2).Set(
-                        Gf.Vec2d(schedule.control_hz, decimation)
-                    )
-                    prim.CreateAttribute("omni:sensor:startTime", Sdf.ValueTypeNames.Double2).Set(
-                        Gf.Vec2d(max(schedule.decimations.values()) - decimation, schedule.control_hz)
-                    )
-            super().prepare_stage(stage, num_envs)
+            self._decimations[path] = decimation
 
         def create_render_data(self, spec: Any) -> Any:
             data = super().create_render_data(spec)
-            if spec.cfg.prim_path in self._capture_schedule.decimations:
-                self._scheduled_products.add(data.render_product_path)
-            if not isinstance(self.backend.renderer, _ScheduledOvrtxEngine):
-                self.backend.renderer = _ScheduledOvrtxEngine(self.backend.renderer, self._capture_schedule)
+            self._products[data.render_product_path] = spec.cfg.prim_path
+            if not isinstance(self.backend.renderer, _RequestedOvrtxEngine):
+                self.backend.renderer = _RequestedOvrtxEngine(self.backend.renderer)
             return data
 
         def render_batch(self, render_data: Any) -> None:
             if not render_data:
                 return
-            self.backend.renderer.scheduled_request = any(
-                data.render_product_path in self._scheduled_products for data in render_data
-            )
-            # The SDK submits a stable set of all products and handles both
-            # native paths. frameRate/startTime decide which products draw.
-            super().render_batch(render_data)
+            shared_rate = len(set(self._decimations.values())) <= 1
+            scheduled_only = all(path in self._decimations for path in self._products.values())
+            if not self._decimations or (shared_rate and scheduled_only):
+                # With one shared cadence every product is due together. Keep
+                # the SDK's efficient stable batch, including movie-only runs.
+                super().render_batch(render_data)
+                return
+            # OVRTX 0.5 can use another camera's pose when multiview products
+            # enter/leave an active batch, including native frameRate gating.
+            # Submit each due product alone and finish its SDK readback before
+            # the next submission invalidates native output handles. This
+            # avoids extra draws, but product re-entry has substantial overhead.
+            engine = self.backend.renderer
+            try:
+                for data in render_data:
+                    engine.requested_product = data.render_product_path
+                    super().render_batch((data,))
+            finally:
+                engine.requested_product = None
 
         def cleanup(self, render_data: Any) -> None:
             if render_data is not None:
-                self._scheduled_products.discard(render_data.render_product_path)
+                self._products.pop(render_data.render_product_path, None)
             super().cleanup(render_data)
 
     return ScheduledOVRTXRenderer

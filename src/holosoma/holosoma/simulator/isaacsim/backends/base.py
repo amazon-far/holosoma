@@ -190,7 +190,7 @@ class IsaacLabBackend(ABC):
     def configure_camera_cadence(self, camera: Any, *, control_hz: float, decimation: int) -> None:
         """Translate the shared camera cadence when a native renderer needs it."""
 
-    def refresh_cameras(self, cameras: list[Any], *, capture_step: int = 0) -> None:
+    def refresh_cameras(self, cameras: list[Any]) -> None:
         """Prepare due cameras for readout; Lab 2 reads its existing render pass."""
 
     def body_positions(self, asset: Any) -> Tensor:

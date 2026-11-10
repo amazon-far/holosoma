@@ -45,7 +45,14 @@ def main() -> int:
         ),
     )
     sensors = {
-        f"camera_{index}": dataclasses.replace(camera, update_decimation=value)
+        f"camera_{index}": dataclasses.replace(
+            camera,
+            update_decimation=value,
+            mount=dataclasses.replace(
+                camera.mount,
+                orientation=[0.5, 0.5, -0.5, -0.5] if index % 2 else camera.mount.orientation,
+            ),
+        )
         for index, value in enumerate(decimations)
     }
     from holosoma.config_types.video import FixedCameraConfig
@@ -232,12 +239,14 @@ def main() -> int:
             if due:
                 red = rgb[0, ..., 0].short() > rgb[0, ..., 1].short() + 30
                 assert red.any(), f"{name}: the panel was not rendered at frame {frame}."
-                center = red.nonzero().float().mean(dim=0)[0].item()
+                index = int(name.removeprefix("camera_"))
+                axis = 1 if index % 2 else 0
+                center = red.nonzero().float().mean(dim=0)[axis].item()
                 expected = (args.resolution - 1) / 2 - panel_y * args.resolution / (
                     2 * math.tan(math.radians(camera.vertical_fov) / 2) * 0.89
                 )
                 assert abs(center - expected) < max(1.2, args.resolution * 0.02), (
-                    f"{name}: stale panel image at frame {frame}: row {center}, expected {expected}."
+                    f"{name}: stale panel image at frame {frame}: axis {axis} coordinate {center}, expected {expected}."
                 )
                 panel_depth = depth[0, ..., 0][red].median().item()
                 assert abs(panel_depth - 0.89) < 0.03, (name, panel_depth)
