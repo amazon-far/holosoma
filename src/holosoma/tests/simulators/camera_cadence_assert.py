@@ -203,6 +203,19 @@ def main() -> int:
             )
             if frame in (0, args.frames - 1):
                 snapshots[frame] = movie_frame.copy()
+        if args.renderer == "isaac_rtx":
+            import omni.kit.app
+            from carb.settings import get_settings
+
+            # Headless Kit viewers need not pump the app. Exercise an unrelated
+            # app update too: it must leave every perception product paused.
+            settings = get_settings()
+            playing = settings.get("/app/player/playSimulations")
+            try:
+                settings.set("/app/player/playSimulations", False)
+                omni.kit.app.get_app().update()
+            finally:
+                settings.set("/app/player/playSimulations", playing)
         assert sim.sim.get_physics_step_count() == count, "Capture integrated physics."
         for name, decimation in zip(cameras, decimations, strict=True):
             due = frame % decimation == 0

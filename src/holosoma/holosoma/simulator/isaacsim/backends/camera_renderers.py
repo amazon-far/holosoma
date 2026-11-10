@@ -58,9 +58,9 @@ def capture_isaac_rtx_products(captures: list[IsaacRtxCapture]) -> None:
         # A fixed number of app updates can read an older image. Wait for the
         # actual drawable events, which also pause each completed product.
         while any(capture.completed == count for capture, count in zip(captures, before, strict=True)):
-            omni.kit.app.get_app().update()
             if time.monotonic() > deadline:
                 raise RuntimeError("Timed out waiting for Isaac RTX camera products.")
+            omni.kit.app.get_app().update()
     finally:
         for capture in captures:
             capture.texture.set_updates_enabled(False)
