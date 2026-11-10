@@ -152,9 +152,10 @@ def test_non_finite_action_std_is_rejected() -> None:
 
     module = _module()
     with torch.no_grad():
-        module.std.fill_(math.inf)
+        module.std.fill_(-math.inf)
+    module.update_distribution(torch.zeros(1, 2))
     with pytest.raises(FloatingPointError, match="non-finite"):
-        module.update_distribution(torch.zeros(1, 2))
+        module.check_action_std()
 
 
 def _legacy_state(*, single: bool = False, normalizers: bool = True) -> dict[str, torch.Tensor]:
