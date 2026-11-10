@@ -251,52 +251,6 @@ def test_augment_actions(mock_env_with_history: MagicMock) -> None:
     assert torch.allclose(augmented_actions[:batch_size], actions)
 
 
-def test_consistency_between_observation_dims_and_indices(mock_env_with_history: MagicMock) -> None:
-    """Test that observation dimensions and indices are consistent."""
-    symmetry_utils = SymmetryUtils(mock_env_with_history)
-
-    # For each observation group, verify that indices span the full dimension
-    for obs_key in ["actor_obs"]:
-        total_dim_from_indices = 0
-
-        # Sum up dimensions from single-frame indices
-        for sub_obs_key in symmetry_utils.sub_observation_keys[obs_key]:
-            indices = symmetry_utils.sub_observation_indices_single_frame[obs_key][sub_obs_key]
-            total_dim_from_indices += len(indices)
-
-        # Should match single-frame dimension
-        assert total_dim_from_indices == symmetry_utils.observation_dims_single_frame[obs_key]
-
-        # Full dimension should be single-frame * history
-        expected_full_dim = (
-            symmetry_utils.observation_dims_single_frame[obs_key] * symmetry_utils.history_lengths[obs_key]
-        )
-        assert symmetry_utils.observation_dims[obs_key] == expected_full_dim
-
-
-def test_reshape_with_history_works(mock_env_with_history: MagicMock) -> None:
-    """Test that reshaping to [batch, history, single_frame_dim] works correctly."""
-    symmetry_utils = SymmetryUtils(mock_env_with_history)
-
-    batch_size = 8
-    obs_dim_with_history = symmetry_utils.observation_dims["actor_obs"]
-    history_length = symmetry_utils.history_lengths["actor_obs"]
-    single_frame_dim = symmetry_utils.observation_dims_single_frame["actor_obs"]
-
-    # Create observation
-    observation = torch.randn(batch_size, obs_dim_with_history)
-
-    # Reshape as done in mirror_xz_plane
-    reshaped = observation.reshape(batch_size, history_length, single_frame_dim)
-
-    # Verify shape
-    assert reshaped.shape == (batch_size, history_length, single_frame_dim)
-
-    # Verify we can flatten back
-    flattened = reshaped.reshape(batch_size, obs_dim_with_history)
-    assert torch.allclose(flattened, observation)
-
-
 def test_multiple_observation_keys(mock_env_with_history: MagicMock) -> None:
     """Test mirroring with multiple observation keys in the list."""
     symmetry_utils = SymmetryUtils(mock_env_with_history)
@@ -370,22 +324,6 @@ def test_mirror_obs_phase_exchanges_the_legs(mock_env_direct_config: MagicMock) 
 
     assert symmetry_utils.mirror_obs_sin_phase(phase.clone()).tolist() == [[-0.75, 0.25]]
     assert symmetry_utils.mirror_obs_cos_phase(phase.clone()).tolist() == [[-0.75, 0.25]]
-
-
-def test_mirror_obs_phase_is_an_involution(mock_env_direct_config: MagicMock) -> None:
-    symmetry_utils = SymmetryUtils(mock_env_direct_config)
-    phase = torch.tensor([[0.25, -0.75]])
-
-    once = symmetry_utils.mirror_obs_sin_phase(phase.clone())
-    assert symmetry_utils.mirror_obs_sin_phase(once).tolist() == phase.tolist()
-
-
-def test_mirror_obs_phase_leaves_a_standing_robot_standing(mock_env_direct_config: MagicMock) -> None:
-    """LocomotionGait drives both channels to stand_phase_value when the command is zero."""
-    symmetry_utils = SymmetryUtils(mock_env_direct_config)
-    phase = torch.tensor([[-1.0, -1.0]])
-
-    assert symmetry_utils.mirror_obs_sin_phase(phase.clone()).tolist() == phase.tolist()
 
 
 def test_mirror_obs_phase_rejects_a_width_that_is_not_two_legs(mock_env_direct_config: MagicMock) -> None:

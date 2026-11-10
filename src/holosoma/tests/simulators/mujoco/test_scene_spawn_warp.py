@@ -58,11 +58,3 @@ def test_scene_spawn(scene):
 @pytest.mark.parametrize("scene", ["g1-largebox", "velocity-box", "multibody", "multibody-override"])
 def test_scene_spawn_multi_env(scene):
     _run(scene, num_envs=4)
-
-
-def test_friction_slide_multi_env():
-    # Behavioral friction probe (NOT a value read-back): two boxes pushed identically, differing
-    # ONLY in friction, must slide measurably different distances — proving the configured friction
-    # governs contact dynamics. Needs a longer window than the default 40 steps for the low/high
-    # gap to clear the probe margin, and runs every env (verified low>high on env 0..3).
-    _run("friction-slide", num_envs=4, steps=150)

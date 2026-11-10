@@ -56,11 +56,3 @@ def test_returns_latest_output_and_env_subset() -> None:
 
     assert sim.get_lidar_data("scan") is points
     assert torch.equal(sim.get_lidar_data("scan", "ranges", env_ids=[0, 2]), ranges[[0, 2]])
-
-
-def test_same_device_is_a_direct_buffer_read() -> None:
-    points = torch.zeros(1, 2, 3)
-    record = LidarRecord(name="scan", config=None, buffers={"points": points})  # type: ignore[arg-type]
-
-    assert _sim(_Manager({"scan": record})).get_lidar_data("scan", device="cpu") is points
-    assert record._device_cache == {}

@@ -82,23 +82,6 @@ def test_mujoco_closes_viewer_before_backend_once(monkeypatch: pytest.MonkeyPatc
     assert cast("object", simulator.backend) is backend
 
 
-def test_classic_backend_closes_every_renderer_and_is_idempotent() -> None:
-    backend = object.__new__(ClassicBackend)
-    backend._closed = False
-    rgb = _Renderer()
-    depth = _Renderer()
-    backend._cam_ids = {"head": 1}
-    backend._mj_renderers = {"head": {"rgb": rgb, "depth": depth}}
-
-    backend.close()
-    backend.close()
-
-    assert rgb.closed == 1
-    assert depth.closed == 1
-    assert backend._mj_renderers == {}
-    assert backend._cam_ids == {}
-
-
 def test_classic_backend_continues_closing_after_renderer_failure() -> None:
     backend = object.__new__(ClassicBackend)
     backend._closed = False

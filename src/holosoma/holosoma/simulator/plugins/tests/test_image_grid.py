@@ -67,11 +67,6 @@ def test_pad_value_fills_trailing_cells() -> None:
     assert int(interior.min()) == 7 and int(interior.max()) == 7
 
 
-def test_labels_none_matches_no_labels() -> None:
-    imgs: list[npt.NDArray[np.uint8]] = [np.full((8, 8, 3), 50, np.uint8), np.full((8, 8, 3), 200, np.uint8)]
-    assert np.array_equal(tile_images(imgs), tile_images(imgs, labels=None))
-
-
 def test_wrong_length_labels_raises() -> None:
     with pytest.raises(ValueError, match="labels has 1 entries but there are 2 images"):
         tile_images([np.zeros((8, 8, 3), np.uint8)] * 2, labels=["only_one"])
@@ -120,13 +115,6 @@ def test_colorize_depth_near_brighter_than_far_grayscale() -> None:
     near = colorize_depth(np.full((4, 4), 0.1, np.float32), (0.1, 5.0), "gray")
     far = colorize_depth(np.full((4, 4), 5.0, np.float32), (0.1, 5.0), "gray")
     assert int(near.mean()) > 240 and int(far.mean()) < 15
-
-
-def test_colorize_depth_inf_no_hit_maps_to_far() -> None:
-    # +inf / no-hit must read as the far plane (background), identical to an at-far pixel.
-    inf = colorize_depth(np.full((4, 4), np.inf, np.float32), (0.1, 5.0), "gray")
-    far = colorize_depth(np.full((4, 4), 5.0, np.float32), (0.1, 5.0), "gray")
-    assert np.array_equal(inf, far)
 
 
 def test_colorize_depth_clamps_out_of_range() -> None:

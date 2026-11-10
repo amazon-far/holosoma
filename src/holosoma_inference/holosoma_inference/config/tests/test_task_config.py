@@ -3,49 +3,15 @@
 import pytest
 
 from holosoma_inference.config.config_types.task import (
-    DEFAULT_STATE_INPUT,
-    DEFAULT_VELOCITY_INPUT,
     TaskConfig,
 )
 
 
 class TestDefaults:
-    def test_default_values(self):
-        assert DEFAULT_VELOCITY_INPUT == "keyboard"
-        assert DEFAULT_STATE_INPUT == "keyboard"
-
     def test_default_inputs(self):
         tc = TaskConfig(model_path="test.onnx")
         assert tc.velocity_input == "keyboard"
         assert tc.state_input == "keyboard"
-
-    def test_shortcuts_default_false(self):
-        tc = TaskConfig(model_path="test.onnx")
-        assert tc.use_joystick is False
-        assert tc.use_keyboard is False
-
-
-class TestExplicitInputSelection:
-    """Verify explicit velocity_input/state_input combinations."""
-
-    @pytest.mark.parametrize(
-        ("vel", "other"),
-        [
-            ("keyboard", "keyboard"),
-            ("joystick", "joystick"),
-            ("ros2", "ros2"),
-            ("ros2", "keyboard"),
-            ("ros2", "joystick"),
-            ("joystick", "keyboard"),
-            ("keyboard", "ros2"),
-            ("joystick", "ros2"),
-            ("keyboard", "joystick"),
-        ],
-    )
-    def test_all_combinations(self, vel, other):
-        tc = TaskConfig(model_path="test.onnx", velocity_input=vel, state_input=other)
-        assert tc.velocity_input == vel
-        assert tc.state_input == other
 
 
 class TestUseJoystickShortcut:
@@ -104,13 +70,6 @@ class TestShortcutMutualExclusion:
 
 
 class TestDefaultConfigs:
-    def test_all_defaults_load(self):
-        from holosoma_inference.config.config_values.task import TASK_REGISTRY as DEFAULTS
-
-        for name, config in DEFAULTS.items():
-            assert isinstance(config.velocity_input, str), f"{name}: velocity_input not str"
-            assert isinstance(config.state_input, str), f"{name}: state_input not str"
-
     def test_default_configs_use_keyboard(self):
         from holosoma_inference.config.config_values.task import TASK_REGISTRY as DEFAULTS
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, field, replace
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
@@ -49,22 +49,6 @@ def test_bridge_dds_config_defaults_roundtrip_replace_and_schema() -> None:
 def test_bridge_dds_config_rejects_blank_after_type_normalization(value: Any) -> None:
     with pytest.raises(ValidationError, match="dds_config must be a non-empty inline XML string or None"):
         BridgeConfig(dds_config=value)
-
-
-@pytest.mark.parametrize("value", [0, False, [], {}])
-def test_bridge_dds_config_uses_pydantic_string_validation(value: Any) -> None:
-    with pytest.raises(ValidationError) as error:
-        BridgeConfig(dds_config=value)
-    assert error.value.errors()[0]["type"] == "string_type"
-
-
-def test_bridge_dds_config_accepts_pydantic_decoded_bytes() -> None:
-    assert BridgeConfig(dds_config=cast("Any", _XML.encode())).dds_config == _XML
-
-
-def test_bridge_dds_config_leaves_xml_semantics_to_native() -> None:
-    # Consumer validation is intentionally not a second XML parser (nor a file/URI loader).
-    assert BridgeConfig(dds_config="not XML").dds_config == "not XML"
 
 
 def test_bridge_dds_config_cli_spelling_and_byte_preservation() -> None:

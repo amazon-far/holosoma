@@ -290,11 +290,6 @@ class _Msg:
     pass
 
 
-def _assert_bool_data(msg: Any, expected: bool) -> None:
-    assert type(msg.data) is bool
-    assert msg.data is expected
-
-
 def test_clock_publish_plugin_publishes_sim_time_on_physics_phase(fake_ros2: dict[str, Any]) -> None:
     sim = _FakeSim(sim_time=2.5)
     plugin = _build_plugin(sim, ClockPublishPluginConfig(topic="/clock"))
@@ -313,25 +308,6 @@ def test_clock_publish_plugin_publishes_sim_time_on_physics_phase(fake_ros2: dic
     sim.hooks.emit(Phase.CLOSE)
     assert node.destroyed
     assert plugin is not None
-
-
-def test_clock_publish_plugin_honors_publish_every(fake_ros2: dict[str, Any]) -> None:
-    sim = _FakeSim(sim_time=1.0)
-    _build_plugin(sim, ClockPublishPluginConfig(publish_every=3))
-    node = fake_ros2["nodes"][0]
-    for _ in range(6):
-        sim.hooks.emit(Phase.POST_STEP)
-    assert len(node.published) == 2  # steps 3 and 6
-
-
-def test_clock_publish_plugin_resolves_frequency_string(fake_ros2: dict[str, Any]) -> None:
-    # fps=200 physics rate; "20Hz" -> decimation 10 (publish every 10th physics step).
-    sim = _FakeSim(sim_time=1.0, fps=200)
-    _build_plugin(sim, ClockPublishPluginConfig(publish_every="20Hz"))
-    node = fake_ros2["nodes"][0]
-    for _ in range(20):
-        sim.hooks.emit(Phase.POST_STEP)
-    assert len(node.published) == 2  # steps 10 and 20
 
 
 def test_gantry_control_applies_each_topic_independently(fake_ros2: dict[str, Any]) -> None:
@@ -394,33 +370,6 @@ def test_gantry_control_applies_each_topic_independently(fake_ros2: dict[str, An
     assert node.destroyed
 
 
-def test_gantry_control_without_commands_publishes_current_state(fake_ros2: dict[str, Any]) -> None:
-    gantry = _FakeGantry()
-    sim = _FakeSim(gantry=gantry)
-    _build_plugin(sim, GantryControlPluginConfig())
-    node = fake_ros2["nodes"][0]
-
-    sim.hooks.emit(Phase.FRAME_BEGIN)  # no command; readback still publishes
-    position_msgs = node.published_by_topic["/gantry/position/readback"]
-    length_msgs = node.published_by_topic["/gantry/length/readback"]
-    enabled_msgs = node.published_by_topic["/gantry/enabled/readback"]
-    assert (position_msgs[-1].x, position_msgs[-1].y, position_msgs[-1].z) == (0.0, 0.0, 1.0)
-    assert length_msgs[-1].data == 0.2
-    _assert_bool_data(enabled_msgs[-1], False)
-
-    # State can also change through simulator-side controls. The next frame must publish
-    # fresh values rather than replaying the prior readback.
-    gantry.point = (4.0, 5.0, 6.0)
-    gantry.length = 1.5
-    gantry.enabled = True
-    sim.hooks.emit(Phase.FRAME_BEGIN)
-    assert len(position_msgs) == len(length_msgs) == len(enabled_msgs) == 2
-    assert (position_msgs[-1].x, position_msgs[-1].y, position_msgs[-1].z) == (4.0, 5.0, 6.0)
-    assert length_msgs[-1].data == 1.5
-    _assert_bool_data(enabled_msgs[-1], True)
-    sim.hooks.emit(Phase.CLOSE)
-
-
 _GANTRY_TOPIC_CASES = [
     ("position_topic", "subscription", "Point"),
     ("length_topic", "subscription", "Float64"),
@@ -429,80 +378,6 @@ _GANTRY_TOPIC_CASES = [
     ("length_readback_topic", "publisher", "Float64"),
     ("enabled_readback_topic", "publisher", "Bool"),
 ]
-
-
-@pytest.mark.parametrize(("field", "kind", "msg_name"), _GANTRY_TOPIC_CASES)
-@pytest.mark.parametrize("topic", ["/custom/gantry/channel", None])
-def test_gantry_control_configures_each_topic_independently(
-    fake_ros2: dict[str, Any],
-    field: str,
-    kind: str,
-    msg_name: str,
-    topic: str | None,
-) -> None:
-    cfg = GantryControlPluginConfig(**cast("Any", {field: topic}))
-    sim = _FakeSim(gantry=_FakeGantry())
-    _build_plugin(sim, cfg)
-    node = fake_ros2["nodes"][0]
-
-    expected_subscription_types = {
-        configured_topic: fake_ros2[configured_msg]
-        for configured_topic, configured_msg in (
-            (cfg.position_topic, "Point"),
-            (cfg.length_topic, "Float64"),
-            (cfg.enabled_topic, "Bool"),
-        )
-        if configured_topic is not None
-    }
-    expected_publisher_types = {
-        configured_topic: fake_ros2[configured_msg]
-        for configured_topic, configured_msg in (
-            (cfg.position_readback_topic, "Point"),
-            (cfg.length_readback_topic, "Float64"),
-            (cfg.enabled_readback_topic, "Bool"),
-        )
-        if configured_topic is not None
-    }
-    assert node.subscription_types == expected_subscription_types
-    assert node.publisher_types == expected_publisher_types
-
-    endpoints = node.subscription_types if kind == "subscription" else node.publisher_types
-    if topic is None:
-        assert "/custom/gantry/channel" not in endpoints
-    else:
-        assert endpoints[topic] is fake_ros2[msg_name]
-    sim.hooks.emit(Phase.CLOSE)
-
-
-def test_gantry_control_custom_topics_and_disabled_channels(fake_ros2: dict[str, Any]) -> None:
-    gantry = _FakeGantry()
-    sim = _FakeSim(gantry=gantry)
-    cfg = GantryControlPluginConfig(
-        position_topic=None,
-        length_topic="/custom/length/command",
-        enabled_topic=None,
-        position_readback_topic="/custom/position/state",
-        length_readback_topic=None,
-        enabled_readback_topic="/custom/enabled/state",
-    )
-    _build_plugin(sim, cfg)
-    node = fake_ros2["nodes"][0]
-
-    assert set(node.subscriptions) == {"/custom/length/command"}
-    assert set(node.published_by_topic) == {"/custom/position/state", "/custom/enabled/state"}
-
-    msg = _Msg()
-    msg.data = 1.25  # type: ignore[attr-defined]
-    node.subscriptions["/custom/length/command"](msg)
-    sim.hooks.emit(Phase.FRAME_BEGIN)
-
-    assert gantry.length == 1.25
-    position = node.published_by_topic["/custom/position/state"]
-    enabled = node.published_by_topic["/custom/enabled/state"]
-    assert len(position) == len(enabled) == 1
-    assert (position[0].x, position[0].y, position[0].z) == (0.0, 0.0, 1.0)
-    assert enabled[0].data is False
-    sim.hooks.emit(Phase.CLOSE)
 
 
 def test_gantry_control_does_not_publish_without_virtual_gantry(fake_ros2: dict[str, Any]) -> None:

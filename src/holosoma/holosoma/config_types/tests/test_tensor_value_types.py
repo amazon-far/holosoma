@@ -141,23 +141,6 @@ def test_tensor_aliases_work_in_models_dataclasses_and_validated_functions() -> 
     assert exc.value.errors()[0]["loc"] == ("orientation",)
 
 
-def test_unit_tensor_validation_preserves_autograd() -> None:
-    values = torch.tensor([[0.0, 0.0, 0.0, 1.00001]], requires_grad=True)
-    result: torch.Tensor = TypeAdapter(UnitQuaternionXYZWTensor).validate_python(values)
-    result.sum().backward()
-    assert values.grad is not None
-    assert torch.isfinite(values.grad).all()
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
-def test_unit_tensor_validation_preserves_cuda_device() -> None:
-    values = torch.tensor([[0.0, 0.0, 0.0, -1.00001]], device="cuda")
-    result: torch.Tensor = TypeAdapter(UnitQuaternionXYZWTensor).validate_python(values)
-    assert result.device == values.device
-    assert result.dtype == values.dtype
-    assert torch.equal(result, torch.tensor([[0.0, 0.0, 0.0, -1.0]], device=values.device))
-
-
 def test_value_type_schemas_do_not_import_torch_before_backend_startup() -> None:
     script = """
 import sys

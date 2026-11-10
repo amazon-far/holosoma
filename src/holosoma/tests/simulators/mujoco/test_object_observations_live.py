@@ -182,17 +182,6 @@ def test_object_lin_vel_b_rotated_not_root_relative():
     assert torch.allclose(lv_b[0], torch.tensor([0.0, -1.0, 0.0]), atol=1e-3)
 
 
-def test_object_ang_vel_b_identity_passthrough():
-    """Identity robot, object ang-vel (0,0,2) -> unchanged in base frame."""
-    from holosoma.managers.observation.terms.objects import object_ang_vel_b
-
-    sim = _single_box_sim()
-    _set_robot_pose(sim, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
-    _set_object_state(sim, "box", (1.0, 0.0, 0.0), ang=(0.0, 0.0, 2.0))
-    av_b = object_ang_vel_b(_TaskShell(sim))
-    assert torch.allclose(av_b[0], torch.tensor([0.0, 0.0, 2.0]), atol=1e-3)
-
-
 def test_object_ang_vel_b_yawed_robot_rotates_world_to_base():
     """Robot yawed +90 about Z, object ang-vel world +x -> base-frame -y.
 

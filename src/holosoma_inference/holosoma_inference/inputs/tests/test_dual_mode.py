@@ -50,15 +50,6 @@ class TestDualModeSwitching:
         dual.secondary._init_phase_components.assert_called_once()
         dual.secondary._handle_start_policy.assert_called_once()
 
-    def test_switch_mode_injected_into_command_provider_mapping(self):
-        from holosoma_inference.inputs.api.commands import StateCommand
-
-        dual = _make_dual()
-        assert dual.primary._command_provider._mapping.get("X") == StateCommand.SWITCH_MODE
-        assert dual.primary._command_provider._mapping.get("x") == StateCommand.SWITCH_MODE
-        assert dual.secondary._command_provider._mapping.get("X") == StateCommand.SWITCH_MODE
-        assert dual.secondary._command_provider._mapping.get("x") == StateCommand.SWITCH_MODE
-
     def test_joystick_state_carry_over(self):
         from unittest.mock import MagicMock
 

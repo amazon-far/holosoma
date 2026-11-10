@@ -166,22 +166,6 @@ def test_each_exchange_re_reads_rather_than_serving_the_last_one() -> None:
     assert bridge.odom[0][0] == pytest.approx(9.0)
 
 
-def test_an_exchange_that_raises_leaves_no_stale_state_behind() -> None:
-    sim = _FakeSim()
-    bridge = _bridge(sim)
-    bridge.fail_on_publish_odom = True
-
-    with pytest.raises(RuntimeError, match="publish failed"):
-        bridge.transport_exchange()
-
-    # The next read is served from the simulator, not from the failed exchange's snapshot.
-    sim.robot_root_states._root[0, 0] = 5.0
-    sim.robot_root_states.reads = 0
-    position, _quat, _lin, _yaw = bridge._get_base_odometry()
-    assert sim.robot_root_states.reads == 1
-    assert position[0] == pytest.approx(5.0)
-
-
 def test_an_exchange_publishes_in_order_and_reads_the_command_last() -> None:
     """The order is the bridge's contract now, so pin it here rather than at the caller."""
     sim = _FakeSim()

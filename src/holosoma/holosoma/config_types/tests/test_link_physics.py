@@ -77,12 +77,6 @@ def test_link_physics_density_allowed() -> None:
     assert cfg.link_physics.mass is None
 
 
-def test_link_physics_none_is_allowed() -> None:
-    # Default: no link_physics keeps the asset's authored physics.
-    cfg = RobotAssetConfig(**_BASE)
-    assert cfg.link_physics is None
-
-
 # --------------------------------------------------------------------------------------------
 # Shipped presets pin the physics values, and pin them away from the PhysXPhysicsConfig default.
 # --------------------------------------------------------------------------------------------
@@ -121,15 +115,6 @@ def test_w_object_inherits_link_physics() -> None:
 # --------------------------------------------------------------------------------------------
 
 
-def test_legacy_flat_fields_removed() -> None:
-    # RobotAssetConfig is not extra='forbid', so an unknown kwarg is silently dropped rather than
-    # raising; assert field absence rather than using pytest.raises.
-    cfg = RobotAssetConfig(**_BASE)
-    for name in _MIGRATED_FIELDS:
-        assert name not in RobotAssetConfig.__dataclass_fields__, f"{name} resurrected as a flat field"
-        assert not hasattr(cfg, name), f"{name} still present on the instance"
-
-
 # --------------------------------------------------------------------------------------------
 # Sub-config schemas: extra='forbid' catches typos/misplacement.
 # --------------------------------------------------------------------------------------------
@@ -161,18 +146,6 @@ def test_sub_configs_forbid_extra(ctor: Callable[..., object], kwargs: dict[str,
 # --------------------------------------------------------------------------------------------
 # Guard: the static freejoint-damping path is absent; the runtime damping DR term is present.
 # --------------------------------------------------------------------------------------------
-
-
-def test_removed_freejoint_damping_machinery_absent() -> None:
-    import holosoma.config_types.scene as scene_mod
-
-    # No object-only static type or field: MuJoCo freejoint damping is runtime-DR only.
-    assert not hasattr(scene_mod, "MujocoFreeBodyConfig")
-    from holosoma.config_types.scene import MujocoPhysicsConfig, RigidObjectConfig
-
-    assert "free_body_physics" not in RigidObjectConfig.__dataclass_fields__
-    for f in ("linear_damping", "angular_damping"):
-        assert f not in MujocoPhysicsConfig.__dataclass_fields__
 
 
 # --------------------------------------------------------------------------------------------

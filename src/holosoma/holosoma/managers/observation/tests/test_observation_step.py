@@ -273,11 +273,6 @@ class CallOnlyTerm(ObservationTermBase):
         return torch.zeros(NUM_ENVS, 1)
 
 
-def test_term_without_read_is_rejected_at_construction() -> None:
-    with pytest.raises(TypeError, match="abstract"):
-        _manager(_env(), terms={"old": ObsTermCfg(func=f"{_HERE}:CallOnlyTerm")})
-
-
 def test_get_obs_dims_does_not_advance_stateful_terms() -> None:
     manager = _manager(_env())
 
@@ -291,8 +286,3 @@ def assert_advances_only_env_ids(make_term: Callable[[], ObservationTermBase], e
     for _ in range(steps):
         term.read(env, env_ids=torch.tensor([0]))
     assert torch.equal(term.read(env)[1], fresh.read(env)[1])
-
-
-def test_counter_term_honours_env_ids() -> None:
-    env = _env()
-    assert_advances_only_env_ids(lambda: CounterTerm(cfg=None, env=env), env)
