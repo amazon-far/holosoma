@@ -590,7 +590,16 @@ class IsaacLab3Backend(IsaacLabBackend):
             from isaaclab_physx.renderers import IsaacRtxRendererCfg
 
             cls = IsaacRtxRendererCfg
-        return build_config(cls, configured(self.options.renderer_options), location="isaaclab3.renderer_options")
+        cfg = build_config(cls, configured(self.options.renderer_options), location="isaaclab3.renderer_options")
+        if self.options.renderer == "ovrtx":
+            from .camera_renderers import create_scheduled_ovrtx_renderer
+
+            cfg.class_type = create_scheduled_ovrtx_renderer
+        elif self.options.renderer == "isaac_rtx":
+            from .camera_renderers import create_scheduled_isaac_rtx_renderer
+
+            cfg.class_type = create_scheduled_isaac_rtx_renderer
+        return cfg
 
     def has_viewport(self, sim: Any) -> bool:
         # The native OVRTX visualizer owns its view; Kit's post-update camera
@@ -618,3 +627,19 @@ class IsaacLab3Backend(IsaacLabBackend):
         from isaaclab.sensors import Camera
 
         return Camera(cfg)
+
+    def configure_camera_cadence(self, camera: Any, *, control_hz: float, decimation: int) -> None:
+        if self.options.renderer in ("ovrtx", "isaac_rtx"):
+            camera._renderer.configure_cadence(camera.cfg.prim_path, control_hz=control_hz, decimation=decimation)
+
+    def refresh_cameras(self, cameras: list[Any], *, capture_step: int = 0) -> None:
+        if not cameras:
+            return
+        from isaaclab.sensors import SensorBase
+
+        if self.options.renderer == "ovrtx":
+            for camera in cameras:
+                camera._renderer.set_capture_step(capture_step)
+        # Scene.update already advanced the sensor timestamps. Refresh with
+        # zero elapsed time so all due poses precede one renderer submission.
+        SensorBase.update_batch(cameras, dt=0.0)

@@ -110,15 +110,15 @@ is rejected rather than rendering a pinhole approximation.
 Mounted cameras have independent capture rates through the existing
 `update_decimation` field. At a 50 Hz control rate, `1` captures at 50 Hz and
 `"10Hz"` captures at 10 Hz; consumers keep its last frame between captures.
-Warp renders only the requested camera. OVRTX reads due cameras lazily, but
-its SDK renders all registered products together on each submission. Mixed
-camera rates therefore do not independently reduce OVRTX's per-camera GPU work.
-
-Isaac RTX currently applies that cadence to capture/readout, while its tiled
-render products still draw at every global render pass. Isaac Sim's native
-multi-tick scheduling is not integrated yet, so lower camera rates do not
-currently provide the same rendering savings on this path. Keep
-`update_decimation` as the single camera-rate setting when closing this gap.
+Lab 3 uses this same setting to reduce actual camera rendering with Warp,
+OVRTX and Isaac RTX. All due camera poses are prepared before one batch.
+OVRTX keeps the SDK's stable product set and authors native capture windows
+aligned with the control clock, so idle products skip their GPU work.
+Isaac RTX activates only due tiled products and pauses each on its native
+completion event, then reads the SDK-owned output buffers. Viewer renders
+and logger movie captures do not activate idle perception products.
+Lab 3's camera captures are independent of the viewer's `render_interval`.
+Lab 2 retains its periodic render behavior and interval divisibility check.
 Rates resolve against the control clock; asynchronous sampling and rates above
 that clock require an additional observation contract.
 
