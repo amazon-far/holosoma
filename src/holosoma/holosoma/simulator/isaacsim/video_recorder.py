@@ -127,9 +127,16 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
 
         # Create a view for the sensor
         if self.simulator.backend.is_isaaclab3:
-            from isaaclab.sim.views import FrameView
+            if self.simulator.simulator_config.sim.isaaclab3.physics_backend == "physx":
+                from isaaclab.sim.views.usd_frame_view import UsdFrameView
 
-            self._view = FrameView(self._camera_prim_path, device=self.simulator.device)
+                # This late-created Replicator camera reads USD transforms.
+                # PhysX's FrameView writes only Fabric and leaves USD stale.
+                self._view = UsdFrameView(self._camera_prim_path, device=self.simulator.device)
+            else:
+                from isaaclab.sim.views import FrameView
+
+                self._view = FrameView(self._camera_prim_path, device=self.simulator.device)
         else:
             from isaacsim.core.prims import XFormPrim
 
