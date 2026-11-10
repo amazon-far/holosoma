@@ -17,6 +17,23 @@ from holosoma.utils.warp_interop import from_torch_vec3
 wp.init()
 
 
+def _order_before_torch(device: Any) -> None:
+    """Make torch's current stream see the Warp work just launched on ``device``.
+
+    Warp's own streams are blocking streams, which the CUDA legacy default stream (torch's default)
+    is implicitly ordered with in both directions. Any other pair of streams is synchronized.
+    """
+    if not device.is_cuda:
+        return
+    torch_stream = torch.cuda.current_stream(wp.device_to_torch(device))
+    warp_stream = wp.get_stream(device)
+    if warp_stream.cuda_stream == torch_stream.cuda_stream:
+        return
+    if warp_stream.owner and torch_stream.cuda_stream == 0:
+        return
+    wp.synchronize()
+
+
 @wp.kernel
 def raycast_kernel(
     mesh: wp.uint64,
@@ -82,7 +99,7 @@ def ray_cast(ray_starts_world: torch.Tensor, ray_directions_world: torch.Tensor,
         ],
         device=wp_mesh.device,
     )
-    wp.synchronize()
+    _order_before_torch(wp_mesh.device)
     return ray_hits_world.view(shape)
 
 
@@ -130,7 +147,7 @@ def nearest_point(points: torch.Tensor, wp_mesh: wp.Mesh) -> torch.Tensor:
         inputs=[wp_mesh.id, points_wp, mesh_points_wp],
         device=wp_mesh.device,
     )
-    wp.synchronize()
+    _order_before_torch(wp_mesh.device)
     return mesh_points.view(shape)
 
 
