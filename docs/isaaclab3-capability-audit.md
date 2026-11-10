@@ -173,6 +173,19 @@ OVRTX is supported already, including camera/movie rendering. What is missing is
 configuration at the audited baseline: `renderer_config()` constructed default OVRTX, Warp or
 Isaac RTX configs, and camera data is restricted to RGB/depth.
 
+Independent camera capture cadence already uses `CameraSensorConfig.update_decimation`.
+OVRTX/Warp render lazily when a due camera is read. Isaac RTX still renders
+enabled tiled products at every global render pass, even when Holosoma publishes
+one camera less often. Its native multi-tick scheduling remains a gap.
+
+Reuse the existing per-camera rate when implementing RTX scheduling, keeping
+different rates in separate tiled products. Integrate the renderer's simulation
+clock and verify actual completed renders, current-frame pixels, held observations,
+startup/reset behavior and unchanged physics advancement. Native `tickRate`
+authoring alone did not throttle products in the bounded pinned-runtime probe;
+texture enablement also invalidated buffers and was not accepted as a solution.
+Rates above the control clock and asynchronous sampling need timestamps/history.
+
 Expose global renderer configs, per-camera overrides and `isp_cfg`. OVRTX has
 async capture, shadow, segmentation colorization and logging/temp-stage options.
 Warp adds textures, shadows, ambient lighting, semantic filtering, clipping,

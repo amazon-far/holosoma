@@ -107,6 +107,19 @@ Current Warp camera integration supports pinhole projection. Use `isaac_rtx`
 or `ovrtx` for Holosoma's fisheye configurations; selecting Warp with those configurations
 is rejected rather than rendering a pinhole approximation.
 
+Mounted cameras have independent capture rates through the existing
+`update_decimation` field. At a 50 Hz control rate, `1` captures at 50 Hz and
+`"10Hz"` captures at 10 Hz. OVRTX and Warp capture lazily when each camera is
+due; consumers keep its last frame between captures.
+
+Isaac RTX currently applies that cadence to capture/readout, while its tiled
+render products still draw at every global render pass. Isaac Sim's native
+multi-tick scheduling is not integrated yet, so lower camera rates do not
+currently provide the same rendering savings on this path. Keep
+`update_decimation` as the single camera-rate setting when closing this gap.
+Rates resolve against the control clock; asynchronous sampling and rates above
+that clock require an additional observation contract.
+
 Logger movies use Kit/Replicator RTX with `isaac_rtx` and native cameras with
 `newton_warp` or `ovrtx`. Movie cameras are declared before cloning, track the
 selected `record_env_id`, and use the shared encoding, overlays and recording
