@@ -592,6 +592,10 @@ class MotionCommand(CommandTermBase):
         self.tracked_body_indexes = self._get_index_of_a_in_b(
             self.motion_cfg.body_names_to_track, robot_body_names, self.device
         )
+        # Same bodies, indexed into the loader's raw (motion-file) body axis.
+        self._motion_tracked_body_indexes = self._body_indexes_in_motion[self.tracked_body_indexes]
+        self._motion_ref_body_index = int(self._body_indexes_in_motion[self.ref_body_index])
+        self._motion_root_body_index = int(self._body_indexes_in_motion[0])
 
         # 3. get the name of the object, or indices of the object
         if self.motion.has_object:
@@ -610,6 +614,13 @@ class MotionCommand(CommandTermBase):
 
         # 5. metrics
         self.metrics: dict[str, torch.Tensor] = {}
+
+        noise_scale = self.init_pose_cfg.overall_noise_scale
+        self._root_pos_noise = torch.tensor(self.init_pose_cfg.root_pos, device=self.device) * noise_scale
+        self._root_rot_noise_rpy = torch.tensor(self.init_pose_cfg.root_rot, device=self.device) * noise_scale
+        self._root_vel_noise = torch.tensor(self.init_pose_cfg.root_lin_vel, device=self.device) * noise_scale
+        self._root_ang_vel_noise_rpy = torch.tensor(self.init_pose_cfg.root_ang_vel, device=self.device) * noise_scale
+        self._obj_pos_noise = torch.tensor([self.init_pose_cfg.object_pos], device=self.device) * noise_scale
 
         self.init_buffers()
 
@@ -689,45 +700,23 @@ class MotionCommand(CommandTermBase):
         self.time_steps[env_ids] = torch.where(already_last_timestep_mask, end_idx - 2, self.time_steps[env_ids])
 
         # 1. Get the root/body poses from the motion data
-        root_pos = self.root_pos_w[env_ids].clone()
-        root_rot = self.root_quat_w[env_ids].clone()
-        root_lin_vel = self.root_lin_vel_w[env_ids].clone()
-        root_ang_vel = self.root_ang_vel_w[env_ids].clone()
+        time_steps = self.time_steps[env_ids]
+        root = self._motion_root_body_index
+        root_pos = self.motion._body_pos_w[time_steps, root] + self._env.simulator.scene.env_origins[env_ids]
+        root_rot = self.motion._body_quat_w[time_steps, root]
+        root_lin_vel = self.motion._body_lin_vel_w[time_steps, root]
+        root_ang_vel = self.motion._body_ang_vel_w[time_steps, root]
 
-        dof_pos = self.joint_pos[env_ids].clone()
-        dof_vel = self.joint_vel[env_ids].clone()
+        dof_pos = self.motion._joint_pos[time_steps[:, None], self._joint_indexes_in_motion]
+        dof_vel = self.motion._joint_vel[time_steps[:, None], self._joint_indexes_in_motion]
 
         # 2. Adding noise
         # 2.1 prepare the noise scale
         dof_pos_noise = self.init_pose_cfg.dof_pos * self.init_pose_cfg.overall_noise_scale  # float
-        root_pos_noise = (
-            torch.tensor(
-                self.init_pose_cfg.root_pos,
-                device=self.device,
-            )
-            * self.init_pose_cfg.overall_noise_scale
-        )  # (3,)
-        root_rot_noise_rpy = (
-            torch.tensor(
-                self.init_pose_cfg.root_rot,
-                device=self.device,
-            )
-            * self.init_pose_cfg.overall_noise_scale
-        )  # (3,)
-        root_vel_noise = (
-            torch.tensor(
-                self.init_pose_cfg.root_lin_vel,
-                device=self.device,
-            )
-            * self.init_pose_cfg.overall_noise_scale
-        )  # (3,)
-        root_ang_vel_noise_rpy = (
-            torch.tensor(
-                self.init_pose_cfg.root_ang_vel,
-                device=self.device,
-            )
-            * self.init_pose_cfg.overall_noise_scale
-        )  # (3,)
+        root_pos_noise = self._root_pos_noise  # (3,)
+        root_rot_noise_rpy = self._root_rot_noise_rpy  # (3,)
+        root_vel_noise = self._root_vel_noise  # (3,)
+        root_ang_vel_noise_rpy = self._root_ang_vel_noise_rpy  # (3,)
 
         # 2.2 Adding noise to dof_pos, root_pos, root_vel, root_ang_vel, root_rot
         # 1.2.1 dof_pos
@@ -773,16 +762,12 @@ class MotionCommand(CommandTermBase):
 
         # 4. Set the object states in simulator
         if self.motion.has_object:
-            obj_pos = self.object_pos_w[env_ids]
-            obj_ori = self.object_quat_w[env_ids]
-            obj_lin_vel = self.object_lin_vel_w[env_ids]
+            obj_pos = self.motion._object_pos_w[time_steps] + self._env.simulator.scene.env_origins[env_ids]
+            obj_ori = self.motion._object_quat_w[time_steps]
+            obj_lin_vel = self.motion._object_lin_vel_w[time_steps]
 
             # 4.2 add noise to the object states
-            obj_pos_noise = torch.tensor(
-                [self.init_pose_cfg.object_pos],
-                device=self.device,
-            )
-            obj_pos_noise = obj_pos_noise * self.init_pose_cfg.overall_noise_scale  # (3,)
+            obj_pos_noise = self._obj_pos_noise  # (1, 3)
             target_obj_pos = obj_pos + (torch.rand(obj_pos.shape, device=self.device) - 0.5) * 2 * obj_pos_noise
 
             object_states = torch.cat(
@@ -888,62 +873,68 @@ class MotionCommand(CommandTermBase):
     #########################################################################################
     @property
     def joint_pos(self) -> torch.Tensor:
-        return self.motion.joint_pos[self.time_steps]
+        return self.motion._joint_pos[self.time_steps[:, None], self._joint_indexes_in_motion]
 
     @property
     def joint_vel(self) -> torch.Tensor:
-        return self.motion.joint_vel[self.time_steps]
+        return self.motion._joint_vel[self.time_steps[:, None], self._joint_indexes_in_motion]
 
     @property
     def body_pos_w(self) -> torch.Tensor:
         return (
-            self.motion.body_pos_w[self.time_steps][:, self.tracked_body_indexes]
+            self.motion._body_pos_w[self.time_steps[:, None], self._motion_tracked_body_indexes]
             + self._env.simulator.scene.env_origins[:, None, :]
         )
 
     @property
     def body_quat_w(self) -> torch.Tensor:
-        return self.motion.body_quat_w[self.time_steps][:, self.tracked_body_indexes]
+        return self.motion._body_quat_w[self.time_steps[:, None], self._motion_tracked_body_indexes]
 
     @property
     def body_lin_vel_w(self) -> torch.Tensor:
-        return self.motion.body_lin_vel_w[self.time_steps][:, self.tracked_body_indexes]
+        return self.motion._body_lin_vel_w[self.time_steps[:, None], self._motion_tracked_body_indexes]
 
     @property
     def body_ang_vel_w(self) -> torch.Tensor:
-        return self.motion.body_ang_vel_w[self.time_steps][:, self.tracked_body_indexes]
+        return self.motion._body_ang_vel_w[self.time_steps[:, None], self._motion_tracked_body_indexes]
 
     @property
     def ref_pos_w(self) -> torch.Tensor:
-        return self.motion.body_pos_w[self.time_steps, self.ref_body_index] + self._env.simulator.scene.env_origins
+        return (
+            self.motion._body_pos_w[self.time_steps, self._motion_ref_body_index]
+            + self._env.simulator.scene.env_origins
+        )
 
     @property
     def ref_quat_w(self) -> torch.Tensor:
-        return self.motion.body_quat_w[self.time_steps, self.ref_body_index]
+        return self.motion._body_quat_w[self.time_steps, self._motion_ref_body_index]
 
     @property
     def ref_lin_vel_w(self) -> torch.Tensor:
-        return self.motion.body_lin_vel_w[self.time_steps, self.ref_body_index]
+        return self.motion._body_lin_vel_w[self.time_steps, self._motion_ref_body_index]
 
     @property
     def ref_ang_vel_w(self) -> torch.Tensor:
-        return self.motion.body_ang_vel_w[self.time_steps, self.ref_body_index]
+        return self.motion._body_ang_vel_w[self.time_steps, self._motion_ref_body_index]
 
     @property
     def root_pos_w(self) -> torch.Tensor:
-        return self.motion.body_pos_w[self.time_steps, 0] + self._env.simulator.scene.env_origins
+        return (
+            self.motion._body_pos_w[self.time_steps, self._motion_root_body_index]
+            + self._env.simulator.scene.env_origins
+        )
 
     @property
     def root_quat_w(self) -> torch.Tensor:
-        return self.motion.body_quat_w[self.time_steps, 0]
+        return self.motion._body_quat_w[self.time_steps, self._motion_root_body_index]
 
     @property
     def root_lin_vel_w(self) -> torch.Tensor:
-        return self.motion.body_lin_vel_w[self.time_steps, 0]
+        return self.motion._body_lin_vel_w[self.time_steps, self._motion_root_body_index]
 
     @property
     def root_ang_vel_w(self) -> torch.Tensor:
-        return self.motion.body_ang_vel_w[self.time_steps, 0]
+        return self.motion._body_ang_vel_w[self.time_steps, self._motion_root_body_index]
 
     #########################################################################################
     ## Robot from simulator
