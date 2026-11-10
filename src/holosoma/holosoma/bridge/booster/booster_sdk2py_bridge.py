@@ -104,11 +104,11 @@ class BoosterSdk2Bridge(BasicSdk2Bridge):
             m.tau_est = actuator_forces[i]
 
         quaternion, gyro, acceleration = self._get_base_imu_data()
-        roll, pitch, yaw = get_euler_xyz(quaternion.unsqueeze(0), w_last=False)  # w_last=False for [w,x,y,z]
-        rpy = torch.stack([roll, pitch, yaw], dim=-1).squeeze(0).detach().cpu().numpy()
+        roll, pitch, yaw = get_euler_xyz(torch.from_numpy(quaternion).unsqueeze(0), w_last=False)  # [w,x,y,z]
+        rpy = torch.stack([roll, pitch, yaw], dim=-1).squeeze(0).numpy()
         imu.rpy = rpy
-        imu.gyro = gyro.detach().cpu().numpy()
-        imu.acc = acceleration.detach().cpu().numpy()
+        imu.gyro = gyro
+        imu.acc = acceleration
 
         self.low_state_puber.Write(self.low_state)
 
