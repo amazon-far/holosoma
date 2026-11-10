@@ -22,7 +22,6 @@ from holosoma.config_types.sensor import (
     IsaacSimCameraConfig,
     IsaacSimFisheyeConfig,
     IsaacSimLidarConfig,
-    IsaacSimRaycastMeshConfig,
     LidarBodyFilterConfig,
     LidarRayPatternConfig,
     LidarSensorConfig,
@@ -369,11 +368,6 @@ def test_isaacsim_raycast_camera_rejects_unsupported_settings(
     }
     with pytest.raises(ValueError, match=match):
         CameraSensorConfig(isaacsim=IsaacSimCameraConfig(**isaacsim_kwargs), **fields)
-
-
-def test_mesh_selection_requires_the_raycast_renderer() -> None:
-    with pytest.raises(ValueError, match="requires renderer='raycast'"):
-        IsaacSimCameraConfig(raycast_meshes=IsaacSimRaycastMeshConfig(exclude_paths=["/World/envs/env_.*/Robot"]))
 
 
 # The camera-frame sink fields (cameras/modalities/record_video/...) live on CameraVizPluginConfig;

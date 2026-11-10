@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 
+from loguru import logger
+
 from holosoma.config_types.sensor import IsaacSimRaycastMeshConfig
 
 
@@ -75,7 +77,11 @@ def select_mesh_prim_paths(
                 raise ValueError(f"Raycast mesh include {expression!r} matched no supported visual scene geometry.")
             included.update(matched)
     for expression in config.exclude_paths:
-        included.difference_update(matches(expression))
+        matched = matches(expression)
+        if not matched:
+            # Allowed, so one config can exclude objects some scenes lack; a typo surfaces here.
+            logger.warning(f"Raycast mesh exclude {expression!r} matched no supported visual scene geometry.")
+        included.difference_update(matched)
     selected = sorted(included)
     if not selected:
         raise ValueError("Raycast mesh inclusion/exclusion selected no supported visual scene geometry.")

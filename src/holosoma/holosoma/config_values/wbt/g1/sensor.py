@@ -119,9 +119,9 @@ _G1_ROBOT_PRIM = "/World/envs/env_.*/Robot"
 
 # RealSense D435i depth in the G1 head, as used for perceptive locomotion: 106x60 at 89.5deg
 # horizontal FOV (58.6deg vertical), 0.44 m above the torso_link origin, looking along body +X
-# pitched 27deg down. Isaac Sim ray casts against terrain and the selected loaded robot visuals; other
-# backends render it natively. The opt-in ``g1_head_d435i_mount_setup_terms`` perturb its mount
-# per env.
+# pitched 27deg down, with about 1deg each of yaw and roll. Isaac Sim ray casts against terrain and
+# the selected loaded robot visuals; other backends render it natively. The opt-in
+# ``g1_head_d435i_mount_setup_terms`` perturb its mount per env.
 # ``near`` keeps returns closer than the D435i's 0.3 m working range so preprocessing can clamp
 # them to it, as the hardware pipeline does.
 g1_head_d435i_raycast_depth = CameraSensorConfig(

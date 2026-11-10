@@ -258,17 +258,11 @@ def test_g1_head_depth_preset_fails_when_an_occluder_visual_is_missing() -> None
         )
 
 
-def test_cli_selects_raycast_scene_objects_and_excludes_mesh_subtrees() -> None:
+def test_cli_switches_the_raycast_preset_to_rtx_with_one_override() -> None:
     config = parse_config(
         RunSimConfig,
-        args=[
-            "simulator:isaacsim",
-            "sensor.depth:g1-head-d435i-raycast-depth",
-            '--sensor.depth.isaacsim.raycast-meshes.include-paths=["/World/ground"]',
-            '--sensor.depth.isaacsim.raycast-meshes.exclude-paths=["/World/envs/env_.*/Robot"]',
-        ],
+        args=["simulator:isaacsim", "sensor.depth:g1-head-d435i-raycast-depth", "--sensor.depth.isaacsim.renderer=rtx"],
     )
     camera = config.sensor["depth"]
     assert isinstance(camera, CameraSensorConfig)
-    assert camera.isaacsim.raycast_meshes.include_paths == ["/World/ground"]
-    assert camera.isaacsim.raycast_meshes.exclude_paths == ["/World/envs/env_.*/Robot"]
+    assert camera.isaacsim.renderer == "rtx"

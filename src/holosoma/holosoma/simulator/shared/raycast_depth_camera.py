@@ -84,10 +84,9 @@ def _render_depth_kernel(
             normal,
             face,
         ):
-            hit = cosine * distance
-            if best == _NO_HIT or hit < best:
-                best = hit
-                bound = hit
+            # The query is bounded by the nearest hit so far, so any hit is nearer.
+            best = cosine * distance
+            bound = best
     depth[env, y, x] = best
 
 
@@ -133,6 +132,11 @@ class RayCastDepthCamera:
         wp.init()
         self._wp_device = wp.get_device(self.device)
 
+        if cfg.mount.target not in sim.body_names:
+            raise ValueError(
+                f"Ray-cast camera mount link '{cfg.mount.target}' is not in the robot config's body_names "
+                f"{sorted(sim.body_names)}; ray-cast cameras follow a configured robot body."
+            )
         self._mount_body = sim.find_rigid_body_indice(cfg.mount.target)
         self._meshes = self.mesh_provider.prepare_meshes()
 
@@ -189,10 +193,10 @@ class RayCastDepthCamera:
             raise RuntimeError("RayCastDepthCamera must be initialized after scene loading and before rendering.")
         if "depth" not in record.buffers:
             env_ids = None
-        self._update_poses()
         ids = self._all_envs if env_ids is None else env_ids.to(device=self.device, dtype=torch.int32).contiguous()
         if ids.numel() == 0:
             return
+        self._update_poses()
         wp_ids = self._wp_all_envs if env_ids is None else wp.from_torch(ids, dtype=wp.int32)
         cfg = self.config
         # On torch's current stream, so the launch is ordered after the pose updates above and

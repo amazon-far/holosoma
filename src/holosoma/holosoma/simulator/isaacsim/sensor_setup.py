@@ -228,7 +228,7 @@ def _mesh_targets(paths: list[str]) -> list[Any]:
             prim_expr=path,
             # Holosoma clones geometry from env_0, so every env shares env_0's cached mesh.
             is_shared=True,
-            track_mesh_transforms=not _is_path_at_or_below(path, "/World/ground"),
+            track_mesh_transforms=not _is_path_at_or_below(path, TERRAIN_PRIM_PATH),
         )
         for path in paths
     ]

@@ -2,7 +2,8 @@
 
 `IsaacSimCameraConfig(renderer="raycast")` uses the bespoke Warp depth kernel
 with geometry from the scene Holosoma has already loaded. It supports depth
-images, pinhole projection, and robot-link mounts. Scene objects contribute
+images, pinhole projection, and mounts on a robot link listed in the robot
+config's `body_names`. Scene objects contribute
 depth along with the ground and robot.
 
 Select geometry with `raycast_meshes`:
@@ -28,7 +29,8 @@ selection applies to every environment and resolves against the representative
 ground, robot, and registered scene-actor geometry except the camera's mount body,
 which usually encloses the camera. Every explicit include must match eligible geometry,
 and the final selection must contain at least one mesh. Exclusions may match
-nothing, allowing optional objects to be omitted across different scenes.
+nothing, allowing optional objects to be omitted across different scenes; each
+unmatched exclusion is logged as a warning.
 
 Discovery follows the same optical-surface rules as Holosoma's LiDAR: geometry
 must be supported by IsaacLab and visible, with USD purpose `default` or

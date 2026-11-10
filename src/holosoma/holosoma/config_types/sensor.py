@@ -273,12 +273,14 @@ class IsaacSimCameraConfig:
     renderer: IsaacSimCameraRenderer = "rtx"
     """``"rtx"`` renders with an RTX ``TiledCamera``. ``"raycast"`` ray casts depth with Warp against
     loaded scene geometry selected by :attr:`raycast_meshes` at its current poses: depth only,
-    pinhole only, robot-link mounts only, no RTX render pass, and envs reset or teleported in a
+    pinhole only, mounted on a link in the robot config's ``body_names``, no RTX render pass, and
+    envs reset or teleported in a
     control step are re-rendered at their new state. Other backends ignore it and render the camera
     natively. Defaults to ``"rtx"``."""
 
     raycast_meshes: IsaacSimRaycastMeshConfig = field(default_factory=IsaacSimRaycastMeshConfig)
-    """Loaded scene object/mesh inclusion and exclusion for ``renderer="raycast"``."""
+    """Loaded scene object/mesh inclusion and exclusion for ``renderer="raycast"``; ignored by other
+    renderers."""
 
     projection_type: IsaacSimCameraProjectionType = "pinhole"
     """Native USD/RTX camera projection. Defaults to ``"pinhole"``."""
@@ -313,8 +315,6 @@ class IsaacSimCameraConfig:
                 )
             if self.f_stop != 0.0:
                 raise ValueError("IsaacSimCameraConfig.renderer='raycast' has no depth of field; set f_stop=0.")
-        elif self.raycast_meshes != IsaacSimRaycastMeshConfig():
-            raise ValueError("IsaacSimCameraConfig.raycast_meshes requires renderer='raycast'.")
         return self
 
 

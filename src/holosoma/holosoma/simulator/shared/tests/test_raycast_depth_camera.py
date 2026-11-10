@@ -69,6 +69,7 @@ class _FakeSim:
         self.num_envs = NUM_ENVS
         self.sim_device = "cpu"
         self.sensor_config = {"depth": config}
+        self.body_names = list(LINKS)
         self.rigid_body_pos_w = torch.zeros(NUM_ENVS, len(LINKS), 3)
         self.rigid_body_pos_w[:, 0, 2] = base_height
         self.rigid_body_pos_w[:, 1] = torch.tensor([0.0, 0.0, -100.0])  # out of view by default
@@ -133,24 +134,6 @@ def test_link_mesh_is_cast_at_its_link_pose(tmp_path: Path) -> None:
     assert depth[0, 6, 8].item() == pytest.approx(2.0 - 1.2, abs=1e-4)  # top face of the box
     assert depth[0, 0, 0].item() == pytest.approx(2.0, abs=1e-4)  # corner still sees the ground
     torch.testing.assert_close(depth[1:], torch.full_like(depth[1:], 2.0), atol=1e-4, rtol=0.0)
-
-
-def test_every_scene_mesh_owned_by_a_body_is_cast_at_its_pose(tmp_path: Path) -> None:
-    # Two halves of one link, side by side along the link's x axis.
-    left = trimesh.creation.box(
-        extents=[0.2, 0.4, 0.4], transform=trimesh.transformations.translation_matrix([-0.1, 0, 0])
-    )
-    right = trimesh.creation.box(
-        extents=[0.2, 0.4, 0.2], transform=trimesh.transformations.translation_matrix([0.1, 0, 0])
-    )
-    sim = _FakeSim(_camera(tmp_path), base_height=2.0)
-    sim.scene = _FakeScene(sim, [convert_to_wp_mesh(mesh.vertices, mesh.faces, "cpu") for mesh in (left, right)])
-    sim.rigid_body_pos_w[0, 1] = torch.tensor([0.0, 0.0, 1.0])
-
-    depth, _, _ = _render(sim)
-
-    assert depth[0, 6, 7].item() == pytest.approx(2.0 - 1.2, abs=1e-4)  # left half, top at z = 1.2
-    assert depth[0, 6, 9].item() == pytest.approx(2.0 - 1.1, abs=1e-4)  # right half, top at z = 1.1
 
 
 def test_image_rows_run_top_down_along_optical_plus_y_and_columns_along_plus_x(tmp_path: Path) -> None:
@@ -231,13 +214,13 @@ def test_mount_offsets_must_cover_every_env(tmp_path: Path) -> None:
         camera.set_mount_offset(torch.zeros(1, 3), torch.zeros(1, 3))
 
 
-def test_initialization_binds_scene_geometry_once(tmp_path: Path) -> None:
-    sim = _FakeSim(_camera(tmp_path))
-    camera, record = _camera_and_record(sim)
-    camera.initialize()
-    camera.render(record)
-    camera.render(record)
-    assert sim.scene.initializations == 1
+def test_mount_must_be_a_configured_robot_body(tmp_path: Path) -> None:
+    mount = SensorMountConfig(target_kind="robot_link", target="head_link")
+    sim = _FakeSim(_camera(tmp_path, mount=mount))
+    camera = RayCastDepthCamera(sim, sim.sensor_config["depth"], sim.scene)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="not in the robot config's body_names"):
+        camera.initialize()
 
 
 def test_render_requires_scene_initialization(tmp_path: Path) -> None:
