@@ -69,7 +69,7 @@ jobs:
           ref: ${{ github.event.inputs.branch || 'main' }}
       - name: Run training
         env:
-          ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
+          ECR_REGISTRY: ${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           WANDB_BASE_URL: ${{ vars.WANDB_BASE_URL }}
           WANDB_ENTITY: ${{ vars.WANDB_ENTITY }}

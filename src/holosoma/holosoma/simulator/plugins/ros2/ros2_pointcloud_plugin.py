@@ -47,7 +47,8 @@ class ROS2PointCloudPlugin(LidarConsumerPlugin):
         self._publishers: dict[str, Any] = {}
         self._workers: dict[str, PublishWorker[PointCloudPacket]] = {}
         self._ros2_runtime = get_ros2_runtime(simulator)
-        super().__init__(config, simulator)
+        # Stop publishing before the shared context goes down.
+        super().__init__(config, simulator, close_before=self._ros2_runtime.close_hook)
 
     def wanted_streams(self) -> set[LidarStreamKey]:
         return {(route.lidar, self.config.env_id) for route in self.config.routes.values()}

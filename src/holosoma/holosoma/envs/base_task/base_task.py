@@ -438,8 +438,8 @@ class BaseTask:
         """Apply task-specific controls during each physics substep."""
 
     def _post_physics_step(self) -> Any:
-        # Cameras render and egress consumers publish here, as FRAME_END plugins (the cameras'
-        # render_sensors is registered before any consumer, so buffers are fresh on read).
+        # Cameras render and egress consumers publish here, as FRAME_END plugins (consumers
+        # declare `after` the sensor render hook, so buffers are fresh on read).
         self.hooks.emit(Phase.FRAME_END)
         self.episode_length_buf += 1
         self._check_termination()

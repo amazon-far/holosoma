@@ -27,7 +27,7 @@ jobs:
         id: select
         shell: bash
         env:
-          ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
+          ECR_REGISTRY: ${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}
           HOLOSOMA_COMMIT: ${{ github.event.pull_request.head.sha }}
         run: |
           exact="${ECR_REGISTRY}/holosoma:sha-${HOLOSOMA_COMMIT}"
