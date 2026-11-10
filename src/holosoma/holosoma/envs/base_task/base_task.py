@@ -45,14 +45,14 @@ class BaseTask:
         raise NotImplementedError(f"{type(self).__name__} must implement run().")
 
     def close(self) -> None:
-        """End active episodes and close the simulator exactly once."""
+        """End open episodes and close the simulator exactly once."""
         if self._closed:
             return
         self._closed = True
 
         primary_error: BaseException | None = None
         try:
-            self._end_episodes(self._episode_active.nonzero(as_tuple=False).flatten())
+            self._end_episodes(self._episode_open.nonzero(as_tuple=False).flatten())
         except BaseException as exc:
             primary_error = exc
 
@@ -152,7 +152,7 @@ class BaseTask:
 
         self._initialize_task_managers()
 
-        self._episode_active = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self._episode_open = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self._init_buffers()
 
         # Prepare fields required by managers (BEFORE setup calls)
@@ -206,12 +206,12 @@ class BaseTask:
         self.reset_envs_idx()
 
     def _end_episodes(self, env_ids: torch.Tensor) -> None:
-        self._episode_active[env_ids] = False
+        self._episode_open[env_ids] = False
         for env_id in env_ids.tolist():
             self.hooks.emit(Phase.EPISODE_END, env_id)
 
     def _start_episodes(self, env_ids: torch.Tensor) -> None:
-        self._episode_active[env_ids] = True
+        self._episode_open[env_ids] = True
         for env_id in env_ids.tolist():
             self.hooks.emit(Phase.EPISODE_START, env_id)
 
@@ -235,7 +235,7 @@ class BaseTask:
             return
 
         # Initial reset starts an episode without inventing a preceding episode end.
-        self._end_episodes(env_ids[self._episode_active[env_ids]])
+        self._end_episodes(env_ids[self._episode_open[env_ids]])
 
         self._prepare_reset(env_ids)
 

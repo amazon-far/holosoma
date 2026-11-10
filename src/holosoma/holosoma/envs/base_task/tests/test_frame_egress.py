@@ -151,7 +151,7 @@ class _LoopTask(SimulationTask):
         self.termination_manager = cast("TerminationManager", SimpleNamespace(check=lambda: (no_ends, no_ends)))
         self.robot_config = cast("RobotConfig", SimpleNamespace(init_state=SimpleNamespace(default_joint_angles={})))
         self.dof_names: list[str] = []
-        self._episode_active = torch.zeros(self.num_envs, dtype=torch.bool)
+        self._episode_open = torch.zeros(self.num_envs, dtype=torch.bool)
         self._init_buffers()
         self._add_pacing_hooks()
 
