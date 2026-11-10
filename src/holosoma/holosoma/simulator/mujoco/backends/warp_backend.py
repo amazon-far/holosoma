@@ -359,6 +359,10 @@ class WarpBackend(IMujocoBackend):
                     outputs=[self._body_contact_forces],
                 )
             self.step_graph = capture.graph
+            # Captured after the model-field expansion above, for the same reason as the step graph.
+            with wp.ScopedCapture() as capture:
+                self._launch_forward_kinematics()
+            self.fk_graph: Graph | None = capture.graph
         logger.info("CUDA graph captured successfully")
 
         logger.info(
@@ -410,18 +414,23 @@ class WarpBackend(IMujocoBackend):
         ``subtree_com``/``cvel`` the body-velocity read uses, and the renderer's geom/camera poses)
         rather than full ``mjw.forward`` —
         forward's solver/collision stages allocate per call and are useless without a step.
-        Out-of-graph launches into the same mjw_data the step graph uses are safe (same
-        pattern as set_static_body_world_pose / offset_world_cameras); ``mjw_data.time`` is
-        untouched (only integrators advance it).
+        Launched as a CUDA graph captured next to the step graph, into the same mjw_data;
+        ``mjw_data.time`` is untouched (only integrators advance it).
         """
         import warp as wp
 
         with wp.ScopedDevice(self.mjw_device):
-            mjw.kinematics(self.mjw_model, self.mjw_data)
-            mjw.com_pos(self.mjw_model, self.mjw_data)
-            mjw.camlight(self.mjw_model, self.mjw_data)
-            mjw.com_vel(self.mjw_model, self.mjw_data)
+            if self.fk_graph is None:
+                self._launch_forward_kinematics()
+            else:
+                wp.capture_launch(self.fk_graph)
         self._kinematics_pending = False
+
+    def _launch_forward_kinematics(self) -> None:
+        mjw.kinematics(self.mjw_model, self.mjw_data)
+        mjw.com_pos(self.mjw_model, self.mjw_data)
+        mjw.camlight(self.mjw_model, self.mjw_data)
+        mjw.com_vel(self.mjw_model, self.mjw_data)
 
     def step(self) -> None:
         """Advance batched simulation by one timestep using CUDA graph.
@@ -606,6 +615,7 @@ class WarpBackend(IMujocoBackend):
             wp.synchronize()
 
         self.step_graph = None
+        self.fk_graph = None
         self._render_graph = None
         self._render_rgb_out.clear()
         self._render_depth_out.clear()
