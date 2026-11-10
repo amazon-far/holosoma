@@ -330,6 +330,25 @@ class ClassicBackend(IMujocoBackend):
         state = torch.tensor([*pos, *quat_holo, *lin_vel, *ang_vel], dtype=torch.float32, device=self.device)
         return state.unsqueeze(0)  # [1, 13]
 
+    def get_actor_world_state(self, env_ids: torch.Tensor, qpos_addr: int, qvel_addr: int) -> torch.Tensor:
+        """:meth:`get_actor_state` with the angular velocity rotated from body-local to world frame.
+
+        Rotated in float64 before the float32 conversion.
+        """
+        assert len(env_ids) <= 1, f"ClassicBackend only supports single environment, got {len(env_ids)}"
+        if len(env_ids) == 0:
+            return torch.empty(0, 13, device=self.device)
+
+        qpos, qvel = self.data.qpos, self.data.qvel
+        quat_mj = qpos[qpos_addr + 3 : qpos_addr + 7]  # [qw, qx, qy, qz]
+        state = np.empty(13)
+        state[0:3] = qpos[qpos_addr : qpos_addr + 3]
+        state[3:6] = quat_mj[1:]
+        state[6] = quat_mj[0]
+        state[7:10] = qvel[qvel_addr : qvel_addr + 3]
+        mujoco.mju_rotVecQuat(state[10:13], qvel[qvel_addr + 3 : qvel_addr + 6], quat_mj)
+        return torch.from_numpy(state.astype(np.float32)).to(self.device).unsqueeze(0)  # [1, 13]
+
     def set_actor_state(self, env_ids: torch.Tensor, states: torch.Tensor, qpos_addr: int, qvel_addr: int) -> None:
         """Write an actor's freejoint state into CPU qpos/qvel (single environment)."""
         assert len(env_ids) <= 1, f"ClassicBackend only supports single environment, got {len(env_ids)}"

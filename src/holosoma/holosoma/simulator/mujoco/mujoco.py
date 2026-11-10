@@ -802,7 +802,7 @@ class MuJoCo(BaseSimulator):
         robot_addrs = self._actor_freejoint_addrs("robot")
         state.register(
             "robot_root_states",
-            lambda: self._freejoint_angvel_to_world(self.backend.get_actor_state(env_ids, *robot_addrs)),
+            lambda: self._actor_world_state(env_ids, *robot_addrs),
             write=lambda rows, root: self._write_root_states(rows, root[rows]),
         )
 
@@ -919,6 +919,12 @@ class MuJoCo(BaseSimulator):
         addrs = self.object_addrs[obj_name]
         return addrs["qpos_addr"], addrs["qvel_addr"]
 
+    def _actor_world_state(self, env_ids: torch.Tensor, qpos_addr: int, qvel_addr: int) -> torch.Tensor:
+        """An actor's live freejoint state, with its angular velocity in the world frame."""
+        if isinstance(self.backend, ClassicBackend):
+            return self.backend.get_actor_world_state(env_ids, qpos_addr, qvel_addr)
+        return self._freejoint_angvel_to_world(self.backend.get_actor_state(env_ids, qpos_addr, qvel_addr))
+
     @staticmethod
     def _freejoint_angvel_to_world(states: torch.Tensor) -> torch.Tensor:
         """Rotate a state tensor's angular-velocity (cols 10:13) from body-local to world frame.
@@ -985,9 +991,7 @@ class MuJoCo(BaseSimulator):
                 # Free body: the live freejoint state, per-env (GPU for WarpBackend), with its
                 # body-local angular velocity rotated to the world frame.
                 qpos_addr, qvel_addr = self._actor_freejoint_addrs(obj_name)
-                states_for_envs = self._freejoint_angvel_to_world(
-                    self.backend.get_actor_state(env_ids, qpos_addr, qvel_addr)
-                )
+                states_for_envs = self._actor_world_state(env_ids, qpos_addr, qvel_addr)
             all_states.append(states_for_envs)
 
         if not all_states:
