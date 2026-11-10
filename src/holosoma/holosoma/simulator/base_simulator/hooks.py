@@ -323,6 +323,8 @@ class HookRegistry:
         )
         if key is not None and owner is not None:
             self._published[_publication_id(owner, key)] = record
+            # A reference on any phase may have resolved against this key's absence.
+            self._stale.update(Phase)
         self._records[phase].append(record)
         self._invalidate(phase)
         return HookHandle(self, record)
@@ -685,6 +687,11 @@ class HookRegistry:
                     f"Hook {record.name!r} on phase {phase.value!r} orders against {dep.key!r} from "
                     f"{dep.instance!r}, which is published on phase {published.phase.value!r}. "
                     f"Constraints apply within one phase."
+                )
+            if published is record:
+                raise HookOrderError(
+                    f"Hook {record.name!r} on phase {phase.value!r} orders against {dep.key!r} from "
+                    f"{dep.instance!r}, which is itself. A hook cannot run before or after itself."
                 )
             dep = published
 

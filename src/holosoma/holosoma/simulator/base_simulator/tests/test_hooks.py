@@ -774,3 +774,38 @@ def test_hookref_to_another_phase_is_rejected() -> None:
 
     with pytest.raises(HookOrderError, match="published on phase 'close'"):
         hooks.emit(Phase.FRAME_END)
+
+
+def test_publishing_a_key_re_resolves_phases_that_reference_it() -> None:
+    # The reference resolves while the key is absent, so the phase it is on has to be re-resolved
+    # when the key appears -- on any phase, since whether it matches is only knowable then.
+    hooks = HookRegistry()
+    with hooks.installing("inspect"):
+        hooks.add(
+            Phase.FRAME_END,
+            lambda: None,
+            name="inspector.read",
+            after=if_present(HookRef("head", _CameraHook.CLOSE)),
+        )
+    hooks.validate()
+
+    with hooks.installing("head"):
+        hooks.add(Phase.CLOSE, lambda: None, name="camera.stop", key=_CameraHook.CLOSE)
+
+    with pytest.raises(HookOrderError, match="published on phase 'close'"):
+        hooks.validate()
+
+
+def test_a_hook_cannot_order_against_itself() -> None:
+    hooks = HookRegistry()
+    with hooks.installing("head"):
+        hooks.add(
+            Phase.FRAME_END,
+            lambda: None,
+            name="camera.publish",
+            key=_CameraHook.PUBLISH,
+            after=HookRef("head", _CameraHook.PUBLISH),
+        )
+
+    with pytest.raises(HookOrderError, match="which is itself"):
+        hooks.validate()
