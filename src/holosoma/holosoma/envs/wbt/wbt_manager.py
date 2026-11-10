@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 
@@ -15,6 +15,8 @@ if TYPE_CHECKING:
 
 
 class WholeBodyTrackingManager(PolicyTask):
+    _in_post_physics_step: bool = False
+
     def _init_buffers(self) -> None:
         """Initialize torch tensors which will contain simulation states and processed quantities"""
         super()._init_buffers()
@@ -31,10 +33,20 @@ class WholeBodyTrackingManager(PolicyTask):
         motion_command.update_metrics()
         self.log_dict.update(motion_command.metrics)
 
+    def _post_physics_step(self) -> tuple[dict[str, Any], torch.Tensor, torch.Tensor, dict[str, Any]]:
+        # MotionCommand.step() refreshes the targets after this frame's resets, before anything reads them.
+        self._in_post_physics_step = True
+        try:
+            return super()._post_physics_step()
+        finally:
+            self._in_post_physics_step = False
+
     def _after_reset_synchronization(self, env_ids: torch.Tensor) -> None:
-        # A reset does not step, so refresh the targets the observations and terminations read.
-        motion_command = cast("MotionCommand", self.command_manager.get_state("motion_command"))
-        motion_command.update_relative_body_targets()
+        # A reset outside step() is not followed by MotionCommand.step(), so refresh the targets
+        # the observations and terminations read.
+        if not self._in_post_physics_step:
+            motion_command = cast("MotionCommand", self.command_manager.get_state("motion_command"))
+            motion_command.update_relative_body_targets()
         super()._after_reset_synchronization(env_ids)
 
     def _reset_robot_states_callback(
