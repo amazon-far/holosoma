@@ -134,8 +134,9 @@ class SimEngineConfig:
     """Rendering mode requested from the simulator."""
 
     render_interval: DecimationLike | None = None
-    """Deprecated, no effect, removed after 2027-03-01: offscreen outputs render once per control
-    step, on its last physics step, and the viewer renders every ``viewer_update_decimation``."""
+    """Deprecated, no effect, removed after 2027-03-01: cameras render at their own
+    ``update_decimation``, video captures every control step, and the viewer renders every
+    ``viewer_update_decimation``."""
 
     max_episode_length_s: float = 20.0
     """Maximum episode length in seconds."""
@@ -158,9 +159,9 @@ class SimEngineConfig:
         resolve_decimation(self.control_decimation, self.fps, field="control_decimation", log=True)
         if self.render_interval is not None:
             warnings.warn(
-                "SimEngineConfig.render_interval is deprecated and has no effect: offscreen outputs "
-                "render once per control step and the viewer every viewer_update_decimation. It will be "
-                f"removed after {_RENDER_INTERVAL_REMOVAL_DATE}.",
+                "SimEngineConfig.render_interval is deprecated and has no effect: cameras render at their "
+                "own update_decimation, video captures every control step, and the viewer renders every "
+                f"viewer_update_decimation. It will be removed after {_RENDER_INTERVAL_REMOVAL_DATE}.",
                 FutureWarning,
                 stacklevel=2,
             )
