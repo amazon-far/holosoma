@@ -125,10 +125,11 @@ Rates resolve against the control clock; asynchronous sampling and rates above
 that clock require an additional observation contract.
 
 Logger movies use Kit/Replicator RTX with `isaac_rtx` and native cameras with
-`newton_warp` or `ovrtx`. Movie cameras are declared before cloning, track the
-selected `record_env_id`, and use the shared encoding, overlays and recording
-lifecycle. Camera capture does not integrate physics. Disable logger video
-when comparing camera renderer throughput.
+`newton_warp` or `ovrtx`. Native movie cameras are declared before cloning;
+Isaac RTX creates one movie camera and render product under the recording
+environment. Both paths track the selected `record_env_id` and use the shared
+encoding, overlays and recording lifecycle. Camera capture does not integrate
+physics. Disable logger video when comparing camera renderer throughput.
 
 The native integration matrix checks all six combinations with two G1
 environments, sparse property randomization, dynamics, actuation, contact forces,

@@ -35,7 +35,8 @@ Controls on the same host:
 | `serial` | 2 | Pass: individual due-product submissions and immediate readback, 40/8/20 |
 
 Use `--decimations 2,3` to check two camera groups; the two-view native-rate case
-also fails while returning the expected 20/14 frames. `--shader-cache PATH`
+also fails while returning the expected 20/14 frames. Disabling SPG with
+`--disable-spg` does not fix the two-view native-rate case. `--shader-cache PATH`
 optionally reuses an existing shader cache through OVRTX's settings extension;
 it does not import an SDK or change the cameras.
 
