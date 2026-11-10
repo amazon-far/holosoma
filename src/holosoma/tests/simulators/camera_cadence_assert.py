@@ -118,6 +118,11 @@ def main() -> int:
     snapshots = {}
     if args.record:
         assert recorder is not None
+        origin = sim.env_origins[recorder.config.record_env_id].cpu().tolist()
+        recorder.camera_controller.config = FixedCameraConfig(
+            position=[origin[0] + 0.1, origin[1], origin[2] + 0.79],
+            target=[origin[0] + 1.0, origin[1], origin[2] + 0.79],
+        )
         recorder.on_episode_start(env_id=0)
     cameras = sim.tiled_cameras
     completed = dict.fromkeys(cameras, 0)
