@@ -98,7 +98,8 @@ class Actor(nn.Module):
 
         return action, mean, log_std
 
-    def get_actions_and_log_probs(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def get_actions_and_log_probs(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Sample squashed actions; return them with their log probabilities and the policy's ``log_std``."""
         _, mean, log_std = self(obs)
         std = log_std.exp()
         dist = torch.distributions.Normal(mean, std)
@@ -122,7 +123,7 @@ class Actor(nn.Module):
             log_prob = dist.log_prob(raw_action)
 
         log_prob = log_prob.sum(1)
-        return action, log_prob
+        return action, log_prob, log_std
 
     @torch.no_grad()
     def explore(
