@@ -94,10 +94,9 @@ Sources:
 
 ## 2. Solver configuration and effective physics
 
+Shared MuJoCo/MJWarp controls provide solver options and capacities.
 [IsaacLab3NewtonConfig](../src/holosoma/holosoma/config_types/simulator.py)
-at the audited baseline exposed CUDA graphs, contact/constraint capacities,
-solver iterations and default shape margin. Shared MuJoCo/MJWarp controls now
-provide solver options; Newton-only execution/collision settings remain typed. The
+contains Newton-only execution/collision settings and default shape margin. The
 [backend](../src/holosoma/holosoma/simulator/isaacsim/backends/isaaclab3.py)
 constructs `NewtonCfg(solver_cfg=MJWarpSolverCfg(...))` internally.
 
@@ -125,9 +124,8 @@ Configuration must reach the solver that actually runs:
   automatically update the finalized Newton model; randomization needs native
   setters/update notifications, and structural changes may require rebuilding.
 
-Keep the existing five options as compatibility inputs. Reject conflicting
-explicit shared settings rather than choosing an undocumented winner. Resolve
-physics once and use that configuration for launch validation and
+Resolve physics once through the shared controls and use that configuration for
+launch validation and
 `SimulationContext`, with the derived effective configuration recorded for review.
 
 Sources:
@@ -272,10 +270,10 @@ inspection must work without Isaac Lab, Kit or PhysX installed.
 
 For Newton MJWarp, `sim.mujoco` owns solver controls and `sim.mujoco.warp` owns
 per-world resources/execution options. `isaaclab3.newton` contains genuinely
-Newton-specific execution and collision-pipeline controls. Its older solver
-fields remain compatibility inputs with conflict checks. None retains each
-backend's historical defaults rather than imposing one engine's defaults on
-another. The internal Newton manager adapter fills the SDK's missing Jacobian
+Newton-specific execution and collision-pipeline controls. There are no duplicate
+solver fields or alias precedence rules. None leaves the direct MuJoCo defaults
+unchanged and selects Newton's configured defaults. The internal Newton manager
+adapter fills the SDK's missing Jacobian
 and line-search tolerance fields before allocation/capture.
 
 Physics properties use the existing mass/density and engine-specific subconfigs.
@@ -299,7 +297,7 @@ in addition to configuration.
 
 1. **Typed physics properties.** Reuse common properties and body-name overrides;
    update Lab 3 robot/object spawners and material binding. Verify save/reload
-   precedence, partial overrides, instance handling and unchanged legacy defaults.
+   precedence, partial overrides, instance handling and unchanged MuJoCo/PhysX defaults.
 2. **Physics settings.** Reuse MuJoCo/MJWarp options and add typed Newton collision controls.
    Validate supported combinations and provide effective-model diagnostics.
 3. **Asset loading.** Add explicit formats/importer options and conversion cache.

@@ -16,10 +16,9 @@ pytestmark = pytest.mark.no_sim
 
 
 @pytest.mark.parametrize("field", ["nconmax", "njmax", "solver_iterations"])
-@pytest.mark.parametrize("value", [0, -1])
-def test_newton_rejects_nonpositive_solver_capacity(field: str, value: int) -> None:
-    kwargs: dict[str, Any] = {field: value}
-    with pytest.raises(ValidationError, match=f"{field} must be positive"):
+def test_newton_rejects_duplicate_shared_solver_options(field: str) -> None:
+    kwargs: dict[str, Any] = {field: 128}
+    with pytest.raises(ValidationError, match="Unexpected keyword argument"):
         IsaacLab3NewtonConfig(**kwargs)
 
 

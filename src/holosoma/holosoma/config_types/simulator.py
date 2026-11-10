@@ -117,25 +117,12 @@ class IsaacSimRenderConfig:
         return launcher_args
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class IsaacLab3NewtonConfig:
     """Newton execution and collision controls; solver options use ``sim.mujoco``."""
 
     use_cuda_graph: bool = True
     """Capture physics execution on CUDA rather than launching every kernel from Python."""
-
-    nconmax: int | None = 128
-    """Contact capacity per environment; None opts into the upstream automatic estimate.
-
-    The automatic estimate underallocates contacts in configured G1 scenes.
-    Larger scenes may need a higher explicit capacity.
-    """
-
-    njmax: int | None = None
-    """Maximum constraints per environment; None retains the upstream solver default."""
-
-    solver_iterations: int | None = None
-    """MuJoCo solver iterations; None retains the upstream solver default."""
 
     default_shape_margin: float = 0.01
     """Default collision margin in meters; individual shape settings can override it."""
@@ -152,11 +139,7 @@ class IsaacLab3NewtonConfig:
     """Newton collision update interval; zero uses one update per simulation step."""
 
     @model_validator(mode="after")
-    def _validate_solver_limits(self) -> IsaacLab3NewtonConfig:
-        for name in ("nconmax", "njmax", "solver_iterations"):
-            value = getattr(self, name)
-            if value is not None and value < 1:
-                raise ValueError(f"{name} must be positive or None")
+    def _validate_newton_options(self) -> IsaacLab3NewtonConfig:
         if not math.isfinite(self.default_shape_margin) or self.default_shape_margin < 0:
             raise ValueError("default_shape_margin must be finite and nonnegative")
         if self.collision_decimation < 0:
@@ -187,10 +170,8 @@ class IsaacLab3Config:
     """
 
     newton: IsaacLab3NewtonConfig = field(default_factory=IsaacLab3NewtonConfig)
-    """Newton execution controls. Existing nconmax/njmax/solver_iterations inputs
-    remain supported; new configs use sim.mujoco and sim.mujoco.warp for the solver.
-    Conflicting nondefault compatibility inputs are rejected.
-    """
+    """Newton execution and collision controls; solver settings use sim.mujoco
+    and per-environment capacities use sim.mujoco.warp."""
 
     use_fabric: bool = True
     """Synchronize physics transforms through Fabric instead of the USD path."""

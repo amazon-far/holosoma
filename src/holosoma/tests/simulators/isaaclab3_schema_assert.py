@@ -26,7 +26,7 @@ def main() -> int:
     parser.add_argument("--physics", choices=["newton", "physx"], required=True)
     parser.add_argument("--renderer", choices=["newton_warp", "ovrtx"], required=True)
     parser.add_argument("--collision-source", choices=["mujoco", "newton"], default="mujoco")
-    parser.add_argument("--legacy-newton", action="store_true")
+    parser.add_argument("--disable-cuda-graph", action="store_true")
     parser.add_argument("--result-file", required=True)
     args = parser.parse_args()
 
@@ -43,7 +43,7 @@ def main() -> int:
     newton = IsaacLab3NewtonConfig()
     if args.physics == "newton":
         shared = MujocoConfig(
-            iterations=None if args.legacy_newton else 17,
+            iterations=17,
             ls_iterations=9,
             cone="elliptic",
             impratio=3.0,
@@ -59,8 +59,7 @@ def main() -> int:
             collision=NewtonCollisionConfig(broad_phase="sap")
             if args.collision_source == "newton"
             else NewtonCollisionConfig(),
-            solver_iterations=17 if args.legacy_newton else None,
-            use_cuda_graph=not args.legacy_newton,
+            use_cuda_graph=not args.disable_cuda_graph,
         )
     native = IsaacLab3Config(
         physics_backend=args.physics,
@@ -226,8 +225,7 @@ def main() -> int:
         assert "holosoma.simulator.mujoco.mujoco" not in sys.modules
         assert (solver.mj_model.geom_condim == 6).any()
         assert abs(solver.mj_model.body_gravcomp.max() - 0.25) < 1e-6
-        if args.legacy_newton:
-            assert sim.sim.cfg.physics.use_cuda_graph is False
+        assert sim.sim.cfg.physics.use_cuda_graph == (not args.disable_cuda_graph)
     else:
         native_mass = wp.to_torch(robot.root_view.get_attribute("articulation_body_mass"))
         index = robot.backend_body_names.index("pelvis")

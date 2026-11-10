@@ -246,8 +246,7 @@ class ExperimentConfig:
     def to_serializable_dict(self) -> dict[str, Any]:
         """Return a JSON-friendly representation of the config."""
         data = dataclasses.asdict(self)
-        # Keep authored legacy inputs round-trippable, but do not repeat their
-        # untouched defaults in new experiments that use shared MuJoCo options.
+        # Keep inactive Newton defaults out of saved experiments.
         native = data["simulator"]["config"]["sim"]["isaaclab3"]
         if self.simulator.config.sim.isaaclab3.newton == IsaacLab3NewtonConfig():
             native.pop("newton")
