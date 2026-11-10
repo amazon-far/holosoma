@@ -326,6 +326,9 @@ class WarpBackend(IMujocoBackend):
                 # offset_world_cameras() then writes each env's origin post-capture (same pre-expand /
                 # post-write pattern as body_pos + set_static_body_world_pose).
                 "cam_pos",
+                "cam_quat",
+                "site_pos",
+                "site_quat",  # runtime sensor mounting offsets; expand before graph capture
             ]
             with wp.ScopedDevice(self.mjw_device):
                 expand_model_fields(self.mjw_model, nworld=self.num_envs, fields_to_expand=_PER_WORLD_FIELDS)
@@ -853,6 +856,28 @@ class WarpBackend(IMujocoBackend):
             import mujoco_warp as mjw
 
             mjw.forward(self.mjw_model, self.mjw_data)  # recompute cam_xpos from the shifted cam_pos
+
+    def set_sensor_mount_pose(
+        self,
+        kind: str,
+        native_id: int,
+        env_ids: torch.Tensor,
+        positions: torch.Tensor,
+        orientations: torch.Tensor,
+    ) -> None:
+        """Write the same per-world arrays used by the captured physics graph, then refresh FK."""
+        import warp as wp
+
+        stream = torch.cuda.ExternalStream(wp.get_stream(self.mjw_device).cuda_stream)
+        consumer = torch.cuda.current_stream(self.device)
+        stream.wait_stream(consumer)
+        with torch.cuda.stream(stream), wp.ScopedDevice(self.mjw_device):
+            pos = wp.to_torch(getattr(self.mjw_model, f"{kind}_pos"))
+            quat = wp.to_torch(getattr(self.mjw_model, f"{kind}_quat"))
+            pos[env_ids, native_id] = positions.to(pos)
+            quat[env_ids, native_id] = orientations.to(quat)
+            self.forward_kinematics()
+        consumer.wait_stream(stream)
 
     def _sync_static_geom_xpos(self, body_ids: list[int], env_ids: torch.Tensor | None) -> None:
         """Refresh ``geom_xpos``/``geom_xmat`` for the geoms of welded ``body_ids``, per world.

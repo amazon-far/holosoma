@@ -1000,6 +1000,25 @@ class BaseSimulator:
 
     # ----- Mounted sensor interface -----
 
+    def get_sensor_mount_pose(self, name: str, env_ids: EnvIds | None = None) -> torch.Tensor:
+        """Return a copy of camera/LiDAR mounting offsets as ``[N, 7]`` XYZ + XYZW.
+
+        Offsets are relative to the configured link/actor, or the environment frame for world mounts.
+        """
+        if self.sensor_manager is None:
+            raise KeyError(f"No sensor named '{name}'. No sensors have been created.")
+        return self.sensor_manager.get_mount_pose(name, env_ids)
+
+    def set_sensor_mount_pose(self, name: str, poses: torch.Tensor, env_ids: EnvIds | None = None) -> None:
+        """Set camera/LiDAR offsets on their existing mount using XYZ + XYZW poses.
+
+        Accepts ``[N, 7]`` or a broadcast ``[7]`` pose; ``env_ids=None`` selects all environments.
+        Changes persist across resets and appear at the next normal sensor capture.
+        """
+        if self.sensor_manager is None:
+            raise KeyError(f"No sensor named '{name}'. No sensors have been created.")
+        self.sensor_manager.set_mount_pose(name, poses, env_ids)
+
     def render_sensors(self) -> None:
         """Capture all due mounted sensors at control frequency into their cached buffers.
 

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from holosoma.config_types.frequency import resolve_decimation
 from holosoma.config_types.sensor import CameraSensorConfig
+from holosoma.config_types.value_types import UNIT_QUATERNION_NORM_TOLERANCE
 from holosoma.simulator.shared.lidar_sensor import (
     LidarPatternProvider,
     ResolvedRayPattern,
@@ -33,6 +34,10 @@ class SensorRecord:
     rerender: Callable[[torch.Tensor], None] | None = None
     """Re-render only the given env ids into the existing buffers, or ``None`` if the backend
     can only render every env. Called after resets/teleports (``SensorManager.rerender``)."""
+    mount_poses: torch.Tensor | None = None
+    """Runtime offsets ``[N, 7]`` in XYZ + XYZW order, independent of the immutable config."""
+    write_mount_pose: Callable[[torch.Tensor, torch.Tensor], None] | None = None
+    """Backend writer taking environment ids and validated XYZ + XYZW offsets."""
     _device_cache: dict[tuple[str, str], torch.Tensor] = field(default_factory=dict)
 
     def set_buffer(self, output: str, tensor: torch.Tensor) -> None:
@@ -114,14 +119,21 @@ class LidarRecord(SensorRecord):
 class SensorManager:
     """Registry and independent update cadence for cameras and LiDARs."""
 
-    def __init__(self, device: str, control_hz: float) -> None:
+    def __init__(self, device: str, control_hz: float, *, num_envs: int = 1) -> None:
         self.device = device
         self.control_hz = control_hz
+        self.num_envs = num_envs
         self._cameras: dict[str, CameraRecord] = {}
         self._lidars: dict[str, LidarRecord] = {}
         self._order: list[str] = []
         self._last_camera_due: set[str] = set()
         self._last_lidar_due: set[str] = set()
+
+    def _initial_mount_poses(self, config: SensorConfig) -> torch.Tensor:
+        mount = config.mount
+        w, x, y, z = mount.orientation
+        pose = torch.tensor([*mount.position, x, y, z, w], dtype=torch.float32, device=self.device)
+        return pose.repeat(self.num_envs, 1)
 
     def _assert_name_available(self, name: str) -> None:
         if name in self._cameras or name in self._lidars:
@@ -132,7 +144,12 @@ class SensorManager:
         effective = resolve_decimation(
             config.update_decimation, self.control_hz, field=f"camera '{name}' update_decimation"
         )
-        record = CameraRecord(name=name, config=config, effective_decimation=effective)
+        record = CameraRecord(
+            name=name,
+            config=config,
+            effective_decimation=effective,
+            mount_poses=self._initial_mount_poses(config),
+        )
         self._cameras[name] = record
         self._order.append(name)
         return record
@@ -153,6 +170,7 @@ class SensorManager:
             config=config,
             effective_decimation=effective,
             pattern_provider=pattern_provider,
+            mount_poses=self._initial_mount_poses(config),
         )
         self._lidars[name] = record
         self._order.append(name)
@@ -173,6 +191,53 @@ class SensorManager:
         if name not in self._lidars:
             raise KeyError(f"No LiDAR named '{name}'. Registered LiDARs: {sorted(self._lidars)}.")
         return self._lidars[name]
+
+    def get_sensor(self, name: str) -> SensorRecord:
+        if name in self._cameras:
+            return self._cameras[name]
+        if name in self._lidars:
+            return self._lidars[name]
+        raise KeyError(f"No sensor named '{name}'. Registered sensors: {self._order}.")
+
+    def _mount_env_ids(self, env_ids: torch.Tensor | None) -> torch.Tensor:
+        if env_ids is None:
+            return torch.arange(self.num_envs, device=self.device)
+        ids = torch.as_tensor(env_ids, device=self.device)
+        if ids.ndim != 1 or ids.dtype not in (torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8):
+            raise ValueError("env_ids must be a one-dimensional integer tensor.")
+        ids = ids.to(torch.long)
+        if torch.any((ids < 0) | (ids >= self.num_envs)):
+            raise ValueError(f"env_ids must be in [0, {self.num_envs}).")
+        return ids
+
+    def get_mount_pose(self, name: str, env_ids: torch.Tensor | None = None) -> torch.Tensor:
+        record = self.get_sensor(name)
+        if record.mount_poses is None:
+            raise RuntimeError(f"Sensor '{name}' has no runtime mount state.")
+        return record.mount_poses[self._mount_env_ids(env_ids)].clone()
+
+    def set_mount_pose(self, name: str, poses: torch.Tensor, env_ids: torch.Tensor | None = None) -> None:
+        record = self.get_sensor(name)
+        ids = self._mount_env_ids(env_ids)
+        if ids.unique().numel() != ids.numel():
+            raise ValueError("env_ids must not contain duplicates when setting sensor mount poses.")
+        if record.mount_poses is None or record.write_mount_pose is None:
+            raise NotImplementedError(f"Sensor '{name}' has no runtime mount-pose writer.")
+        offsets = torch.as_tensor(poses, dtype=torch.float32, device=self.device).detach().clone()
+        if offsets.shape == (7,):
+            offsets = offsets.expand(len(ids), -1).clone()
+        if offsets.shape != (len(ids), 7):
+            raise ValueError(f"Sensor mount poses must have shape (7,) or ({len(ids)}, 7), got {offsets.shape}.")
+        if not torch.isfinite(offsets).all():
+            raise ValueError("Sensor mount poses must contain only finite values.")
+        norms = torch.linalg.vector_norm(offsets[:, 3:], dim=-1, keepdim=True)
+        if torch.any(torch.abs(norms - 1.0) > UNIT_QUATERNION_NORM_TOLERANCE):
+            raise ValueError("Sensor mount orientation must be a unit quaternion in XYZW order.")
+        offsets[:, 3:] /= norms
+        if len(ids) == 0:
+            return
+        record.write_mount_pose(ids, offsets)
+        record.mount_poses[ids] = offsets
 
     @property
     def names(self) -> list[str]:

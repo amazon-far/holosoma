@@ -322,7 +322,11 @@ class MujocoLidarConfig:
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)
 class SensorMountConfig:
-    """Where a sensor is mounted and its fixed offset (on that body, or in the per-env frame)."""
+    """A sensor's parent and initial offset (on that body, or in the per-env frame).
+
+    Change the runtime offset through ``sim.set_sensor_mount_pose``. Runtime poses use XYZ +
+    XYZW, while this configuration's ``orientation`` uses WXYZ.
+    """
 
     target_kind: MountKind = "robot_link"
     """Which namespace ``target`` is resolved in (see :data:`MountKind`)."""

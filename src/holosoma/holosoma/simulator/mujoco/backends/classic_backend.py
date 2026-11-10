@@ -162,6 +162,22 @@ class ClassicBackend(IMujocoBackend):
         """
         return self.data
 
+    def set_sensor_mount_pose(
+        self,
+        kind: str,
+        native_id: int,
+        env_ids: torch.Tensor,
+        positions: torch.Tensor,
+        orientations: torch.Tensor,
+    ) -> None:
+        getattr(self.model, f"{kind}_pos")[native_id] = positions[0].detach().cpu().numpy()
+        getattr(self.model, f"{kind}_quat")[native_id] = orientations[0].detach().cpu().numpy()
+        if kind == "site":
+            # Compiled identity/aligned sites skip some transforms in mj_kinematics. The
+            # optimization is no longer valid once their local position or orientation changes.
+            self.model.site_sameframe[native_id] = 0
+        self.forward_kinematics()
+
     def create_renderers(self, cameras: list[CameraRecord]) -> None:
         # Per-camera renderer (classic only), keyed by camera NAME:
         # mujoco.Renderer is RGB XOR depth, so depth cameras get a SEPARATE depth-enabled renderer

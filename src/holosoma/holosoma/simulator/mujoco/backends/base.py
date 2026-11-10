@@ -310,6 +310,17 @@ class IMujocoBackend(abc.ABC):
         """Release backend-owned rendering resources. Must be idempotent."""
 
     # Camera rendering
+    def set_sensor_mount_pose(
+        self,
+        kind: str,
+        native_id: int,
+        env_ids: torch.Tensor,
+        positions: torch.Tensor,
+        orientations: torch.Tensor,
+    ) -> None:
+        """Write compiled camera/site offsets; orientations are native WXYZ."""
+        raise NotImplementedError
+
     @abc.abstractmethod
     def create_renderers(self, cameras: list[CameraRecord]) -> None:
         """Allocate per-backend rendering resources for the mounted cameras (called once at setup).

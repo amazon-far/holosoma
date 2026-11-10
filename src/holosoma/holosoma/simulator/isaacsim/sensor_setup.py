@@ -104,10 +104,30 @@ def register_cameras(sim: IsaacSim, manager: SensorManager) -> None:
     """Register TiledCameras built before environment cloning."""
     for name, config in sim.sensor_config.items():
         if isinstance(config, CameraSensorConfig):
-            manager.register_camera(name, config)
+            record = manager.register_camera(name, config)
+            record.write_mount_pose = partial(_write_camera_mount_pose, sim, name)
+            # Environments inherit env_0's USD opinions. Author each camera's existing local
+            # pose in its own env before any runtime write, so changing env_0 cannot move the
+            # other cameras through USD inheritance.
+            camera = sim.tiled_cameras[name]
+            for prim in sim_utils.find_matching_prims(camera.cfg.prim_path):
+                for attr_name in ("xformOp:translate", "xformOp:orient"):
+                    attribute = prim.GetAttribute(attr_name)
+                    attribute.Set(attribute.Get())
 
 
-def sync_camera_fabric_transforms(sim: IsaacSim) -> None:
+def _write_camera_mount_pose(sim: IsaacSim, name: str, env_ids: torch.Tensor, poses: torch.Tensor) -> None:
+    camera = sim.tiled_cameras[name]
+    camera._view.set_local_poses(poses[:, :3], poses[:, [6, 3, 4, 5]], env_ids)
+    # Isaac Lab's local-pose setter authors USD even with Fabric enabled. Copy the new local
+    # transform into Fabric so the renderer follows the live parent at this offset.
+    sync_camera_fabric_transforms(sim, camera_name=name, env_ids=env_ids)
+    camera._is_outdated[env_ids] = True
+
+
+def sync_camera_fabric_transforms(
+    sim: IsaacSim, *, camera_name: str | None = None, env_ids: torch.Tensor | None = None
+) -> None:
     """Reset each camera's Fabric local transform to its authored mount offset.
 
     Call once after ``sim.reset()``. The renderer places cameras from Fabric. Isaac Lab initializes
@@ -133,8 +153,12 @@ def sync_camera_fabric_transforms(sim: IsaacSim) -> None:
     ):
         return
     fabric_stage = usdrt.Usd.Stage.Attach(sim_utils.get_current_stage_id())
-    for camera in sim.tiled_cameras.values():
-        for prim in sim_utils.find_matching_prims(camera.cfg.prim_path):
+    cameras = sim.tiled_cameras.values() if camera_name is None else [sim.tiled_cameras[camera_name]]
+    for camera in cameras:
+        prims = sim_utils.find_matching_prims(camera.cfg.prim_path)
+        if env_ids is not None:
+            prims = [prims[i] for i in env_ids.tolist()]
+        for prim in prims:
             local = UsdGeom.Xformable(prim).GetLocalTransformation(Usd.TimeCode.Default())
             fabric_prim = Rt.Xformable(fabric_stage.GetPrimAtPath(str(prim.GetPath())))
             fabric_prim.GetFabricHierarchyLocalMatrixAttr().Set(
@@ -182,7 +206,18 @@ def _mutable_multi_mesh_ray_caster_cls() -> type[Any]:
     from isaaclab.sensors import MultiMeshRayCaster
 
     class MutableMultiMeshRayCaster(MultiMeshRayCaster):
-        """Multi-mesh ray caster with fixed-shape direction updates."""
+        """Multi-mesh ray caster with fixed-shape directions and per-environment mount offsets."""
+
+        def _initialize_rays_impl(self) -> None:
+            super()._initialize_rays_impl()
+            self._mount_orientations = torch.tensor(
+                self.cfg.offset.rot, device=self.device, dtype=self.ray_directions.dtype
+            ).repeat(self.ray_directions.shape[0], 1)
+
+        def set_mount_pose(self, env_ids: torch.Tensor, poses: torch.Tensor) -> None:
+            self.ray_starts[env_ids] = poses[:, None, :3]
+            self._mount_orientations[env_ids] = poses[:, [6, 3, 4, 5]]
+            self.mark_outdated()
 
         @property
         def ray_starts_w(self) -> torch.Tensor:
@@ -194,13 +229,8 @@ def _mutable_multi_mesh_ray_caster_cls() -> type[Any]:
             if directions.shape != expected:
                 raise ValueError(f"RayCaster directions must keep shape {expected}, got {directions.shape}.")
             local = directions.to(device=self.ray_directions.device, dtype=self.ray_directions.dtype)
-            offset_quat = torch.tensor(
-                self.cfg.offset.rot,
-                device=self.ray_directions.device,
-                dtype=self.ray_directions.dtype,
-            ).expand(self.num_rays, -1)
-            local = quat_apply(offset_quat, local)
-            self.ray_directions.copy_(local.unsqueeze(0).expand_as(self.ray_directions))
+            offset_quat = self._mount_orientations[:, None, :].expand(-1, self.num_rays, -1)
+            self.ray_directions.copy_(quat_apply(offset_quat, local.unsqueeze(0).expand_as(self.ray_directions)))
             self.mark_outdated()
 
         def mark_outdated(self) -> None:
@@ -426,16 +456,15 @@ def build_lidars(sim: IsaacSim) -> None:
             sim_utils.create_prim(
                 source_path,
                 prim_type="Xform",
-                translation=tuple(lidar.mount.position),
-                orientation=tuple(lidar.mount.orientation),
             )
-            offset = MultiMeshRayCasterCfg.OffsetCfg()
         else:
             mount_path = parent
-            offset = MultiMeshRayCasterCfg.OffsetCfg(
-                pos=tuple(lidar.mount.position),
-                rot=tuple(lidar.mount.orientation),
-            )
+        # The world mount prim is an identity anchor in the env frame. Every mount kind uses
+        # the mutable ray offsets, so world offsets can change independently in each env too.
+        offset = MultiMeshRayCasterCfg.OffsetCfg(
+            pos=tuple(lidar.mount.position),
+            rot=tuple(lidar.mount.orientation),
+        )
         update_decimation = resolve_decimation(
             lidar.update_decimation,
             control_hz,
@@ -479,7 +508,15 @@ def build_lidars(sim: IsaacSim) -> None:
 def register_lidars(sim: IsaacSim, manager: SensorManager) -> None:
     for name, config in sim.sensor_config.items():
         if isinstance(config, LidarSensorConfig):
-            manager.register_lidar(name, config)
+            record = manager.register_lidar(name, config)
+            record.write_mount_pose = partial(_write_lidar_mount_pose, sim, name)
+
+
+def _write_lidar_mount_pose(sim: IsaacSim, name: str, env_ids: torch.Tensor, poses: torch.Tensor) -> None:
+    sensor = sim.scene.sensors[name]
+    if not isinstance(sensor, _mutable_multi_mesh_ray_caster_cls()):
+        raise TypeError(f"LiDAR '{name}' has no mutable MultiMeshRayCaster.")
+    sensor.set_mount_pose(env_ids, poses)
 
 
 @contextmanager
@@ -531,7 +568,7 @@ def create_sensors(sim: IsaacSim) -> None:
     if not sim.sensor_config:
         return
     cfg = sim.simulator_config.sim
-    manager = SensorManager(sim.sim_device, cfg.fps / cfg.control_decimation_steps)
+    manager = SensorManager(sim.sim_device, cfg.fps / cfg.control_decimation_steps, num_envs=sim.num_envs)
     sim.sensor_manager = manager
     register_cameras(sim, manager)
     register_lidars(sim, manager)
