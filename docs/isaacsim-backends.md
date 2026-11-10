@@ -111,9 +111,11 @@ Mounted cameras have independent capture rates through the existing
 `update_decimation` field. At a 50 Hz control rate, `1` captures at 50 Hz and
 `"10Hz"` captures at 10 Hz; consumers keep its last frame between captures.
 Lab 3 uses this same setting to reduce actual camera rendering with Warp,
-OVRTX and Isaac RTX. All due camera poses are prepared before one batch.
-OVRTX keeps the SDK's stable product set and authors native capture windows
-aligned with the control clock, so idle products skip their GPU work.
+OVRTX and Isaac RTX. All due camera poses are prepared together.
+OVRTX batches cameras sharing a rate; mixed rates and movie coexistence capture
+each due product separately. This avoids the pinned OVRTX package's
+[multiview batch defect](ovrtx-camera-cadence-repro.md), but product re-entry adds
+substantial overhead, so fewer GPU captures do not establish a throughput gain.
 Isaac RTX activates only due tiled products and pauses each on its native
 completion event, then reads the SDK-owned output buffers. Viewer renders
 and logger movie captures do not activate idle perception products.
