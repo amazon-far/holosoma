@@ -63,12 +63,14 @@ def _build_run_sim_config(simulator: str, scene: str, robot: str, terrain: str, 
 def _video_panel_centroid(frame) -> tuple[float, float]:
     import numpy as np
 
-    assert frame.shape == (96, 128, 3) and frame.dtype == np.uint8
+    assert frame.ndim == 3 and frame.shape[-1] == 3 and frame.dtype == np.uint8
     channels = frame.astype(np.int16)
     mask = (channels[..., 0] > channels[..., 1] + 40) & (channels[..., 0] > channels[..., 2] + 40)
     rows, cols = np.nonzero(mask)
     assert cols.size > 0.02 * mask.size, f"video panel is missing or black: {cols.size} red pixels"
-    assert abs(float(rows.mean()) - 47.5) < 10, "video camera vertical orientation is wrong"
+    assert abs(float(rows.mean()) - (frame.shape[0] - 1) / 2) < frame.shape[0] / 10, (
+        "video camera vertical orientation is wrong"
+    )
     return float(rows.mean()), float(cols.mean())
 
 

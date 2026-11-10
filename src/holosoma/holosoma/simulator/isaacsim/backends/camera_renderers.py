@@ -11,6 +11,62 @@ from functools import lru_cache
 from typing import Any
 
 
+class IsaacRtxCapture:
+    """Own one product's completion subscription and pause it between captures."""
+
+    def __init__(self, texture: Any, *, name: str) -> None:
+        from carb.eventdispatcher import get_eventdispatcher
+        import omni.hydratexture
+
+        self.texture = texture
+        self.completed = 0
+        texture.set_async(False)
+        texture.set_updates_enabled(False)
+        self._subscription = get_eventdispatcher().observe_event(
+            observer_name=f"holosoma_camera_{name}",
+            event_name=omni.hydratexture.GLOBAL_EVENT_DRAWABLE_CHANGED,
+            on_event=self._complete,
+            filter=texture.get_event_key(),
+        )
+
+    def _complete(self, event: Any) -> None:
+        # Pausing before completion cancels pending work. Pausing here prevents
+        # an extra draw while Kit finishes the annotator readback.
+        self.texture.set_updates_enabled(False)
+        self.completed += 1
+
+    def close(self) -> None:
+        self._subscription = None
+
+
+def capture_isaac_rtx_products(captures: list[IsaacRtxCapture]) -> None:
+    """Complete the requested products without stepping physics or drawing idle ones."""
+    if not captures:
+        return
+    import time
+    import omni.kit.app
+    from carb.settings import get_settings
+
+    before = [capture.completed for capture in captures]
+    settings = get_settings()
+    previous = settings.get("/app/player/playSimulations")
+    try:
+        settings.set("/app/player/playSimulations", False)
+        for capture in captures:
+            capture.texture.set_updates_enabled(True)
+        deadline = time.monotonic() + 30.0
+        # A fixed number of app updates can read an older image. Wait for the
+        # actual drawable events, which also pause each completed product.
+        while any(capture.completed == count for capture, count in zip(captures, before, strict=True)):
+            omni.kit.app.get_app().update()
+            if time.monotonic() > deadline:
+                raise RuntimeError("Timed out waiting for Isaac RTX camera products.")
+    finally:
+        for capture in captures:
+            capture.texture.set_updates_enabled(False)
+        settings.set("/app/player/playSimulations", previous)
+
+
 class _CaptureSchedule:
     """Align native capture windows with the existing shared control-step cadence."""
 
@@ -94,8 +150,7 @@ def scheduled_isaac_rtx_renderer_class() -> type[Any]:
         def __init__(self, cfg: Any) -> None:
             super().__init__(cfg)
             self._products: dict[str, Any] = {}
-            self._completed: dict[str, int] = {}
-            self._subscriptions: dict[str, Any] = {}
+            self._captures: dict[str, IsaacRtxCapture] = {}
             self._configured_cameras: set[str] = set()
 
         def configure_cadence(self, path: str, *, control_hz: float, decimation: int) -> None:
@@ -104,37 +159,15 @@ def scheduled_isaac_rtx_renderer_class() -> type[Any]:
             self._configured_cameras.add(path)
 
         def create_render_data(self, spec: Any) -> Any:
-            from carb.eventdispatcher import get_eventdispatcher
-            import omni.hydratexture
-
             data = super().create_render_data(spec)
             path = data.render_product.path
-            texture = data.render_product.hydra_texture
-            texture.set_async(False)
-            texture.set_updates_enabled(False)
             self._products[path] = data
-            self._completed[path] = 0
-
-            def complete(event: Any) -> None:
-                # Disabling before completion cancels pending work. Disabling
-                # here prevents an extra draw while Kit finishes the readback.
-                texture.set_updates_enabled(False)
-                self._completed[path] += 1
-
-            self._subscriptions[path] = get_eventdispatcher().observe_event(
-                observer_name=f"holosoma_camera_{path}",
-                event_name=omni.hydratexture.GLOBAL_EVENT_DRAWABLE_CHANGED,
-                on_event=complete,
-                filter=texture.get_event_key(),
-            )
+            self._captures[path] = IsaacRtxCapture(data.render_product.hydra_texture, name=path)
             return data
 
         def render_batch(self, render_data: Any) -> None:
             if not render_data:
                 return
-            import time
-            import omni.kit.app
-            from carb.settings import get_settings
             from isaaclab.sim import SimulationContext
 
             sim = SimulationContext.instance()
@@ -144,34 +177,15 @@ def scheduled_isaac_rtx_renderer_class() -> type[Any]:
             self._fabric.update_transforms(sim.get_scene_data_provider())
             self._fabric.update_geometries(sim.get_scene_data_provider(), sim.render_generation)
             products = render_data if self._configured_cameras else list(self._products.values())
-            before = {data.render_product.path: self._completed[data.render_product.path] for data in products}
-            settings = get_settings()
-            previous = settings.get("/app/player/playSimulations")
-            try:
-                settings.set("/app/player/playSimulations", False)
-                for data in products:
-                    data.render_product.hydra_texture.set_updates_enabled(True)
-                deadline = time.monotonic() + 30.0
-                # App updates submit work and deliver completed drawable and
-                # annotator events. Wait for the actual requested products;
-                # a fixed number of updates can read an older image.
-                while any(self._completed[path] == count for path, count in before.items()):
-                    omni.kit.app.get_app().update()
-                    if time.monotonic() > deadline:
-                        raise RuntimeError(f"Timed out waiting for Isaac RTX camera products: {list(before)}")
-                for data in render_data:
-                    self._read_annotator_output(data)
-            finally:
-                for data in products:
-                    data.render_product.hydra_texture.set_updates_enabled(False)
-                settings.set("/app/player/playSimulations", previous)
+            capture_isaac_rtx_products([self._captures[data.render_product.path] for data in products])
+            for data in render_data:
+                self._read_annotator_output(data)
 
         def cleanup(self, render_data: Any) -> None:
             if render_data is None or render_data.render_product is None:
                 return
             path = render_data.render_product.path
-            self._subscriptions.pop(path, None)
-            self._completed.pop(path, None)
+            self._captures.pop(path).close()
             self._products.pop(path, None)
             super().cleanup(render_data)
 

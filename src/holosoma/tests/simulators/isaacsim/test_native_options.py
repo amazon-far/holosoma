@@ -33,22 +33,23 @@ def test_independent_native_camera_renders(
     assert result.returncode == 0, result.stderr[-3000:]
 
 
+@pytest.mark.parametrize("physics", ["physx", "newton"])
 @pytest.mark.parametrize("renderer", ["isaac_rtx", "ovrtx"])
-def test_camera_cadence_with_movie(renderer, isaacsim_backend, run_isaacsim_harness, tmp_path):
+def test_camera_cadence_with_movie(physics, renderer, isaacsim_backend, run_isaacsim_harness, tmp_path):
     if isaacsim_backend != "isaaclab3":
         pytest.skip("Independent native rendering requires Isaac Lab 3.")
     result_file = tmp_path / "camera-cadence-movie.txt"
     result = run_isaacsim_harness(
         Path(__file__).resolve().parents[1] / "camera_cadence_assert.py",
         "--physics",
-        "newton",
+        physics,
         "--renderer",
         renderer,
         "--record",
         str(tmp_path / "movies"),
         "--result-file",
         str(result_file),
-        label=f"isaaclab3/newton/{renderer}/camera-cadence-movie",
+        label=f"isaaclab3/{physics}/{renderer}/camera-cadence-movie",
         timeout=900,
         result_file=result_file,
     )
@@ -123,7 +124,7 @@ def test_physics_and_camera_renderer_matrix(physics, renderer, isaacsim_backend,
 
 
 @pytest.mark.parametrize("physics", ["physx", "newton"])
-@pytest.mark.parametrize("renderer", ["newton_warp", "ovrtx"])
+@pytest.mark.parametrize("renderer", ["isaac_rtx", "newton_warp", "ovrtx"])
 def test_native_logger_movie(physics, renderer, isaacsim_backend, run_isaacsim_harness, tmp_path):
     if isaacsim_backend != "isaaclab3":
         pytest.skip("OVRTX requires the explicit Isaac Lab 3 profile")

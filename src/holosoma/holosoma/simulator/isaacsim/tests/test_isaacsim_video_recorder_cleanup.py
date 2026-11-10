@@ -90,6 +90,7 @@ def recorder_fixture(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyP
     recorder._camera_prim_path = "/World/VideoCamera"
     recorder.camera_prim = object()
     recorder._view = _View()
+    recorder._rtx_capture = None
     return recorder, events, backend
 
 
