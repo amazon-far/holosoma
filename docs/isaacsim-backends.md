@@ -109,8 +109,10 @@ is rejected rather than rendering a pinhole approximation.
 
 Mounted cameras have independent capture rates through the existing
 `update_decimation` field. At a 50 Hz control rate, `1` captures at 50 Hz and
-`"10Hz"` captures at 10 Hz. OVRTX and Warp capture lazily when each camera is
-due; consumers keep its last frame between captures.
+`"10Hz"` captures at 10 Hz; consumers keep its last frame between captures.
+Warp renders only the requested camera. OVRTX reads due cameras lazily, but
+its SDK renders all registered products together on each submission. Mixed
+camera rates therefore do not independently reduce OVRTX's per-camera GPU work.
 
 Isaac RTX currently applies that cadence to capture/readout, while its tiled
 render products still draw at every global render pass. Isaac Sim's native
