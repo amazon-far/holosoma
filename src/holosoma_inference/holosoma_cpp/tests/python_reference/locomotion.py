@@ -10,6 +10,16 @@ class LocomotionPolicy(BasePolicy):
     def __init__(self, config):
         super().__init__(config)
         self.is_standing = False
+        self._arm_restart()
+
+    def _arm_restart(self):
+        # With a lead foot set, a (re)start re-arms the gait restart so a held command still gets the choice.
+        if self.config.task.restart_lead_foot:
+            self.is_standing = True
+
+    def _handle_start_policy(self):
+        super()._handle_start_policy()
+        self._arm_restart()
 
     def _apply_velocity(self, vc: VelCmd) -> None:
         """Gate velocity by stand_command — zero when standing."""
@@ -62,8 +72,12 @@ class LocomotionPolicy(BasePolicy):
             self.phase[0, :] = np.pi * np.ones(2)
             self.is_standing = True
         elif self.is_standing:
-            # When the robot starts to move, reset the phase to initial state
-            self.phase = np.array([[0.0, np.pi]])
+            # When the robot starts to move, reset the phase to initial state. With a known lead foot, a
+            # lateral command swaps the restart so the foot on the commanded side (+y = left) lifts first.
+            vy = float(self.lin_vel_command[0, 1])
+            lead = self.config.task.restart_lead_foot
+            swap = bool(lead) and abs(vy) >= 0.01 and ((vy > 0.0) != (lead == "left"))
+            self.phase = np.array([[np.pi, 0.0]]) if swap else np.array([[0.0, np.pi]])
             self.is_standing = False
 
     def _dispatch_command(self, cmd):

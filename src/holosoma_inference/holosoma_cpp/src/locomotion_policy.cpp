@@ -11,6 +11,16 @@ namespace holosoma {
 LocomotionPolicy::LocomotionPolicy(InferenceConfig config, PolicyContext& context)
     : BasePolicy(std::move(config), context) {
   kind_ = "LocomotionPolicy";
+  arm_restart();
+}
+
+void LocomotionPolicy::arm_restart() {
+  if (!config_.task.restart_lead_foot.empty()) is_standing_ = true;
+}
+
+void LocomotionPolicy::handle_start_policy() {
+  BasePolicy::handle_start_policy();
+  arm_restart();
 }
 
 std::set<std::string> LocomotionPolicy::available_terms() const {
@@ -54,9 +64,14 @@ void LocomotionPolicy::update_phase_time() {
     phase_[0] = phase_[1] = math::kPi;
     is_standing_ = true;
   } else if (is_standing_) {
-    // Starting to move again: restart the gait cycle.
-    phase_[0] = 0.0;
-    phase_[1] = math::kPi;
+    // Starting to move again: restart the gait cycle. By default foot 0 starts at phase 0 and foot 1
+    // at pi. If the policy's lead foot is known, a lateral command swaps the two when needed so the
+    // foot on the commanded side (+y = left) lifts first; otherwise the first step goes the wrong way.
+    const double vy = lin_vel_command_[1];
+    const std::string& lead = config_.task.restart_lead_foot;
+    const bool swap = !lead.empty() && std::abs(vy) >= 0.01 && ((vy > 0.0) != (lead == "left"));
+    phase_[0] = swap ? math::kPi : 0.0;
+    phase_[1] = swap ? 0.0 : math::kPi;
     is_standing_ = false;
   }
 }

@@ -78,6 +78,10 @@ struct TaskConfig {
   std::string velocity_input = "keyboard";
   std::string state_input = "keyboard";
   bool auto_walk_on_vel_cmd = false;
+  // Foot this policy lifts first after the default (0, pi) gait restart: "left", "right", or "" (off).
+  // When set, a lateral start from standing restarts at (pi, 0) instead if that puts the foot on the
+  // commanded side first, so the first step does not go the wrong way. "" keeps the fixed restart.
+  std::string restart_lead_foot;
   bool use_sim_time = false;
   // WBT: "repeat_first_valid_obs" (default) or "zero_pad"; overrides checkpoint metadata.
   std::string wbt_history_initialization = "repeat_first_valid_obs";

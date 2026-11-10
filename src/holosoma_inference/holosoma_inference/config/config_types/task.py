@@ -164,6 +164,16 @@ class TaskConfig:
     auto_walk_on_vel_cmd: bool = False
     """Automatically enter walking mode when a non-zero velocity command is received."""
 
+    restart_lead_foot: Literal["", "left", "right"] = ""
+    """Foot this policy lifts first after the default (0, pi) gait restart; "" disables the option.
+
+    When set, a start from standing with a lateral command (|vy| >= 0.01) restarts the gait at
+    (pi, 0) instead when that makes the foot on the commanded side (+y = left) lift first. This
+    avoids a wrong-way first step. Which foot leads depends on how the training env ordered the feet,
+    so it is per checkpoint; all ``model_path`` entries of one task share this value. The choice is made
+    once per start, on the first tick with a non-zero command.
+    """
+
     use_sim_time: bool = False
     """Use synchronized simulation time for WBT policies."""
 

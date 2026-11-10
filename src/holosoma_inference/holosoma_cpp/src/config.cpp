@@ -209,6 +209,7 @@ TaskConfig parse_task(const YAML::Node& node, const std::string& path, const std
   r.optional("velocity_input", task.velocity_input);
   r.optional("state_input", task.state_input);
   r.optional("auto_walk_on_vel_cmd", task.auto_walk_on_vel_cmd);
+  r.optional("restart_lead_foot", task.restart_lead_foot);
   r.optional("use_sim_time", task.use_sim_time);
   r.optional("wbt_history_initialization", task.wbt_history_initialization);
   r.optional("desired_base_height", task.desired_base_height);
@@ -435,6 +436,9 @@ void validate_one(const InferenceConfig& config, const std::string& path) {
     }
   }
   if (task.motion_start_timestep < 0) throw ConfigError(path + ".task.motion_start_timestep: must be >= 0");
+  if (!task.restart_lead_foot.empty() && task.restart_lead_foot != "left" && task.restart_lead_foot != "right") {
+    throw ConfigError(path + ".task.restart_lead_foot: '" + task.restart_lead_foot + "' is not left, right, or empty");
+  }
   if (task.wbt_history_initialization != "repeat_first_valid_obs" && task.wbt_history_initialization != "zero_pad") {
     throw ConfigError(path + ".task.wbt_history_initialization: '" + task.wbt_history_initialization +
                       "' is not repeat_first_valid_obs or zero_pad");

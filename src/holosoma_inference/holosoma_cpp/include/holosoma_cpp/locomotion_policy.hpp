@@ -12,6 +12,7 @@ class LocomotionPolicy : public BasePolicy {
   void apply_velocity(const VelCmd& vc) override;
   void dispatch_command(StateCommand command) override;
   void update_phase_time() override;
+  void handle_start_policy() override;
   void print_control_status() const override;
 
   bool walking() const { return stand_command_ == 1.0; }
@@ -24,6 +25,10 @@ class LocomotionPolicy : public BasePolicy {
   void maybe_switch_to_walk_mode(const VelCmd& vc);
   void handle_stand_command();
   void handle_zero_velocity();
+
+  // Re-arms the gait restart when the policy (re)starts, so a command already held at start still gets the
+  // lead-foot choice. Only with restart_lead_foot set, so the default keeps the free-running (0, pi) start.
+  void arm_restart();
 
   bool is_standing_ = false;
 };

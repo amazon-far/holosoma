@@ -138,6 +138,7 @@ task:
   ros_state_input_topic: holosoma/state_input
   ros_vel_timeout: 1.0
   auto_walk_on_vel_cmd: false
+  restart_lead_foot: ''
   use_sim_time: false
   wbt_history_initialization: repeat_first_valid_obs
   startup_state_timeout: 30.0
@@ -292,6 +293,7 @@ secondary:
     ros_state_input_topic: holosoma/state_input
     ros_vel_timeout: 1.0
     auto_walk_on_vel_cmd: false
+    restart_lead_foot: ''
     use_sim_time: false
     wbt_history_initialization: repeat_first_valid_obs
     startup_state_timeout: 30.0

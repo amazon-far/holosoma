@@ -36,6 +36,13 @@ TEST(Config, PresetsLoad) {
   EXPECT_FALSE(wbt.secondary->is_wbt());
 }
 
+TEST(Config, RestartLeadFootAcceptsOnlyLeftRightOrEmpty) {
+  EXPECT_EQ(parse({"inference:g1-29dof-loco"}).config.task.restart_lead_foot, "");
+  EXPECT_EQ(parse({"inference:g1-29dof-loco", "--task.restart-lead-foot", "left"}).config.task.restart_lead_foot,
+            "left");
+  EXPECT_THROW(parse({"inference:g1-29dof-loco", "--task.restart-lead-foot", "up"}), ConfigError);
+}
+
 TEST(Config, BackendComesFromOneField) {
   EXPECT_EQ(parse({"inference:g1-29dof-loco"}).config.runtime.backend, Backend::kCpu);
   EXPECT_EQ(parse({"inference:g1-29dof-loco", "--runtime.backend", "tensorrt"}).config.runtime.backend,

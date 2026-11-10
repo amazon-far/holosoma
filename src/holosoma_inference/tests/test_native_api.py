@@ -235,6 +235,98 @@ def test_state_api_advances_locomotion_phase_once_per_tick(native_config):
     np.testing.assert_allclose(second[start : start + 2], [np.sin(2 * dt), -np.sin(2 * dt)], atol=1e-6)
 
 
+def _phase_cos_after_start(native_config, lead, vx, vy, wz):
+    """cos(phase) of both feet on the first tick after a start from standing."""
+    config, _ = native_config
+    task = replace(config.task, auto_walk_on_vel_cmd=True, use_phase=True, restart_lead_foot=lead)
+    config = replace(config, task=task)
+    policy = inference.get_policy_from_preset(config)
+    state = np.zeros((1, 71))
+    state[0, 3] = 1
+    policy.velocity(0.0, 0.0, 0.0)
+    policy.step_state(state)
+    policy.step_state(state)
+    terms = sorted(config.observation.obs_dict["actor_obs"])
+    start = sum(config.observation.obs_dims[t] for t in terms[: terms.index("cos_phase")])
+    np.testing.assert_allclose(policy.last_observation[start : start + 2], [-1.0, -1.0], atol=1e-6)  # standing
+    policy.velocity(vx, vy, wz)
+    policy.step_state(state)
+    return policy.last_observation[start : start + 2].copy()
+
+
+STOCK, SWAPPED = [1.0, -1.0], [-1.0, 1.0]  # sign of cos(phase): restart at (0, pi) or (pi, 0)
+
+
+@pytest.mark.parametrize(
+    ("lead", "vy", "expected"),
+    [
+        ("left", 0.2, STOCK),  # left already leads and the command is to the left
+        ("left", -0.2, SWAPPED),
+        ("right", -0.2, STOCK),
+        ("right", 0.2, SWAPPED),
+    ],
+)
+def test_lateral_start_lifts_the_foot_on_the_commanded_side_first(native_config, lead, vy, expected):
+    cos = _phase_cos_after_start(native_config, lead, 0.0, vy, 0.0)
+    np.testing.assert_array_equal(np.sign(cos), expected)
+
+
+@pytest.mark.parametrize(
+    ("lead", "vx", "vy", "wz"),
+    [
+        ("", 0.0, 0.2, 0.0),  # option off: fixed restart in both lateral directions
+        ("", 0.0, -0.2, 0.0),
+        ("left", 0.3, 0.0, 0.0),  # forward and turn starts keep the fixed restart
+        ("right", 0.0, 0.0, -0.5),
+        ("right", 0.3, 0.005, 0.0),  # lateral component below the 0.01 threshold
+    ],
+)
+def test_non_lateral_or_disabled_start_keeps_the_fixed_restart(native_config, lead, vx, vy, wz):
+    cos = _phase_cos_after_start(native_config, lead, vx, vy, wz)
+    np.testing.assert_array_equal(np.sign(cos), STOCK)
+
+
+def _lead_policy(native_config, lead):
+    config, _ = native_config
+    config = replace(
+        config, task=replace(config.task, auto_walk_on_vel_cmd=True, use_phase=True, restart_lead_foot=lead)
+    )
+    terms = sorted(config.observation.obs_dict["actor_obs"])
+    start = sum(config.observation.obs_dims[t] for t in terms[: terms.index("cos_phase")])
+    state = np.zeros((1, 71))
+    state[0, 3] = 1
+
+    def cos_after(policy):
+        policy.step_state(state)
+        return np.sign(policy.last_observation[start : start + 2])
+
+    return inference.get_policy_from_preset(config), cos_after
+
+
+def test_lateral_command_held_at_start_still_gets_the_lead_foot_choice(native_config):
+    policy, cos_after = _lead_policy(native_config, "left")
+    policy.velocity(0.0, -0.2, 0.0)  # held before the first tick: never seen standing
+    np.testing.assert_array_equal(cos_after(policy), SWAPPED)
+
+
+def test_each_start_from_standing_decides_the_lead_foot_again(native_config):
+    policy, cos_after = _lead_policy(native_config, "left")
+    policy.velocity(0.0, 0.0, 0.0)
+    cos_after(policy)
+    policy.velocity(0.0, 0.2, 0.0)
+    np.testing.assert_array_equal(cos_after(policy), STOCK)
+    policy.velocity(0.0, 0.0, 0.0)
+    cos_after(policy)
+    policy.velocity(0.0, -0.2, 0.0)
+    np.testing.assert_array_equal(cos_after(policy), SWAPPED)
+
+
+def test_restart_lead_foot_rejects_unknown_values(native_config):
+    config, _ = native_config
+    with pytest.raises(Exception, match="restart_lead_foot|literal"):
+        replace(config.task, restart_lead_foot="up")
+
+
 def test_preset_lookup_does_not_share_mutable_observation_maps():
     config = inference.get_config("g1-29dof-loco")
     config.observation.obs_dims["native_test_only"] = 9
