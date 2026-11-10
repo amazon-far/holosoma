@@ -57,6 +57,7 @@ from holosoma.simulator.shared.raycast_depth_camera import RayCastDepthCamera
 if TYPE_CHECKING:
     from holosoma.config_types.sensor import LidarRayPatternConfig, SensorMountConfig
     from holosoma.simulator.isaacsim.isaacsim import IsaacSim
+    from holosoma.simulator.shared.sensor_manager import CameraRecord
 
 
 def build_cameras(sim: IsaacSim) -> None:
@@ -175,17 +176,12 @@ def sync_camera_fabric_transforms(sim: IsaacSim) -> None:
     ).update_world_xforms()
 
 
-def render_cameras(sim: IsaacSim) -> None:
+def render_cameras(sim: IsaacSim, due: list[CameraRecord]) -> None:
     """Cache each due camera's frame into its buffer: ray-cast cameras cast here, TiledCameras are read out.
 
-    TiledCameras are RTX sensors the sim already updates in its own render pass
-    (``scene.update`` in ``simulate_at_each_physics_step``); this reads that output, drops
-    alpha, and writes a ``[N,H,W,3]`` uint8 (rgb) / ``[N,H,W,1]`` float32 (depth) frame once
-    per control step (honoring ``update_decimation``), mirroring the other backends' render ->
-    buffer -> read flow."""
-    if sim.sensor_manager is None:
-        return
-    for camera_record in sim.sensor_manager.collect_due():
+    TiledCamera output comes from the render ``render_sensors`` just ran; drops alpha, and writes a
+    ``[N,H,W,3]`` uint8 (rgb) / ``[N,H,W,1]`` float32 (depth) frame."""
+    for camera_record in due:
         if camera_record.name in sim.raycast_cameras:
             sim.raycast_cameras[camera_record.name].render(camera_record)
             continue
@@ -736,6 +732,10 @@ def initialize_sensors(sim: IsaacSim) -> None:
 
 
 def render_sensors(sim: IsaacSim) -> None:
-    """Capture all camera and LiDAR sensors due this control step."""
-    render_cameras(sim)
+    """Render if an RTX camera is due or video is recording, then capture the sensors due this control step."""
+    due = sim.sensor_manager.collect_due() if sim.sensor_manager is not None else []
+    recording = sim.video_recorder is not None and sim.video_recorder.is_recording
+    if any(record.name in sim.tiled_cameras for record in due) or recording:
+        sim.render_for_sensors()
+    render_cameras(sim, due)
     render_lidars(sim)

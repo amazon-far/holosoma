@@ -45,10 +45,9 @@ import tyro
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.scene import RigidObjectConfig, SceneConfig
 from holosoma.simulator.shared.object_registry import ObjectType
-from holosoma.utils.sim_utils import setup_simulation_environment
 
 # steps_for_seconds re-exported (subset_write_assert imports it from here).
-from tests.simulators._sim_harness import step, steps_for_seconds
+from tests.simulators._sim_harness import launch_simulator, step, steps_for_seconds
 
 SMALL_BOX = "holosoma/data/scene_objects/boxes/small_box.urdf"
 BOX_HALF = 0.05  # small_box is a 0.1 m cube.
@@ -95,8 +94,7 @@ def _build(simulator: str, num_envs: int):
     )
     import torch
 
-    env, device, _ = setup_simulation_environment(config, device=config.device)
-    s = env.sim
+    s, device, _ = launch_simulator(config, device=config.device)
     s.set_headless(True)
     s.setup()
     s.setup_terrain()

@@ -52,8 +52,8 @@ class _ApplyForcePlugin:
     def __init__(self, cfg: _ApplyForcePluginConfig, simulator: BaseSimulator) -> None:
         self.cfg = cfg
         self.sim = cast("_FakeSimulator", simulator)
-        self.sim.hooks.add(Phase.PRE_STEP, self.set_forces)
-        self.sim.hooks.add(Phase.FRAME_END, self.log)
+        self.sim.hooks.add(Phase.PRE_STEP, self.set_forces, name="wrench.set_forces")
+        self.sim.hooks.add(Phase.FRAME_END, self.log, name="wrench.log")
 
     def set_forces(self) -> None:
         self.sim.apply_forces("robot", list(self.cfg.force_value))

@@ -94,32 +94,23 @@ def test_zero_frequency_rejected() -> None:
 # ----- SimEngineConfig integration -----
 
 
-def _sim(
-    control_decimation: DecimationLike,
-    render_interval: DecimationLike = 1,
-    fps: int = 200,
-) -> SimEngineConfig:
+def _sim(control_decimation: DecimationLike, fps: int = 200) -> SimEngineConfig:
     return SimEngineConfig(
         fps=fps,
         control_decimation=control_decimation,
         substeps=1,
         physx=PhysxConfig(solver_type=1, num_position_iterations=4, num_velocity_iterations=0),
-        render_interval=render_interval,
     )
 
 
 def test_sim_config_keeps_value_as_written_and_resolves_steps() -> None:
-    cfg = _sim("50Hz", render_interval="100Hz")
+    cfg = _sim("50Hz")
     assert cfg.control_decimation == "50Hz"  # field holds what the user wrote
     assert cfg.control_decimation_steps == 4
-    assert cfg.render_interval == "100Hz"
-    assert cfg.render_interval_steps == 2
 
 
 def test_sim_config_int_fields_resolve_identity() -> None:
-    cfg = _sim(4, render_interval=2)
-    assert cfg.control_decimation_steps == 4
-    assert cfg.render_interval_steps == 2
+    assert _sim(4).control_decimation_steps == 4
 
 
 def test_sim_config_rejects_bad_rate_at_construction() -> None:

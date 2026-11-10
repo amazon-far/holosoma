@@ -30,10 +30,10 @@ from loguru import logger
 from omegaconf import DictConfig
 
 from holosoma.config_types.scene import SceneConfig
-from holosoma.config_types.sensor import CameraSensorConfig, is_isaacsim_raycast_camera
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.isaacsim.event_cfg import EventCfg
 from holosoma.simulator.isaacsim.events import randomize_body_com, randomize_rigid_body_inertia
 from holosoma.simulator.isaacsim import light_setup, sensor_setup
@@ -83,28 +83,9 @@ class IsaacSim(BaseSimulator):
         # populated by _load_scene_files; read in _collect_spawned_actors to classify.
         self.scene_file_static_names: set[str] = set()
 
-        # RTX cameras are read out of the periodic render pass, which draws when the substep counter
-        # reaches render_interval. A driving loop closes its frame on the control step's last substep,
-        # so only a render_interval dividing control_decimation puts the draw and the frame's state on
-        # the same substep; anything else pairs an image with a pose from a different one. Checked
-        # before the SimulationContext exists, so a rejected config leaves no global context behind.
-        decimation = self.simulator_config.sim.control_decimation_steps
-        render_interval = self.simulator_config.sim.render_interval_steps
-        cameras = sorted(
-            n
-            for n, c in self.sensor_config.items()
-            if isinstance(c, CameraSensorConfig) and not is_isaacsim_raycast_camera(c)
-        )
-        if cameras and decimation % render_interval:
-            raise ValueError(
-                f"render_interval ({render_interval}) must divide control_decimation ({decimation}) "
-                f"when cameras are configured ({cameras}); set it to a divisor, or to "
-                f"control_decimation to render once per control step."
-            )
-
         sim_config: SimulationCfg = SimulationCfg(
             dt=1.0 / self.simulator_config.sim.fps,
-            render_interval=self.simulator_config.sim.render_interval_steps,
+            render_interval=self.simulator_config.sim.control_decimation_steps,
             device=self.sim_device,
             physx=PhysxCfg(
                 bounce_threshold_velocity=self.simulator_config.sim.physx.bounce_threshold_velocity,
@@ -137,16 +118,9 @@ class IsaacSim(BaseSimulator):
         logger.info(f"\tEnvironment device    : {self.sim_device}")
         logger.info(f"\tPhysics step-size     : {1.0 / self.simulator_config.sim.fps}")
         logger.info(
-            f"\tRendering step-size   : {1.0 / self.simulator_config.sim.fps * self.simulator_config.sim.substeps}"
+            "\tRendering step-size   : "
+            f"{self.simulator_config.sim.control_decimation_steps / self.simulator_config.sim.fps}"
         )
-
-        if self.simulator_config.sim.render_interval_steps < self.simulator_config.sim.control_decimation_steps:
-            msg = (
-                f"The render interval ({self.simulator_config.sim.render_interval_steps}) is smaller than the decimation "
-                f"({self.simulator_config.sim.control_decimation_steps}). Multiple render calls will happen for each "
-                "environment step. If this is not intended, set the render interval to be equal to the decimation."
-            )
-            logger.warning(msg)
 
         scene_config: InteractiveSceneCfg = InteractiveSceneCfg(
             num_envs=self.training_config.num_envs,
@@ -230,6 +204,7 @@ class IsaacSim(BaseSimulator):
         # self.metadata["render_fps"] = 1. / self.config.sim.fps * self.config.sim.control_decimation
 
         self._sim_step_counter = 0
+        self._viewer_render_step: int | None = None
 
         # Set True by the keyboard controller's push-robots key; polled by external tooling.
         self.push_requested: bool = False
@@ -690,6 +665,7 @@ class IsaacSim(BaseSimulator):
             self.prev_base_lin_vel = torch.zeros(self.num_envs, 3, device=self.sim_device)
             self.state.register("dof_acc", lambda: self._dof_acc)
             self.state.register("base_linear_acc", lambda: self._base_linear_acc)
+            self.hooks.add(Phase.POST_STEP, self._update_bridge_accelerations, name="isaacsim.bridge_accelerations")
         else:
             logger.debug("Bridge disabled: skipping acceleration computation tensors")
 
@@ -762,13 +738,7 @@ class IsaacSim(BaseSimulator):
 
     def _advance_substep(self) -> None:
         self._sim_step_counter += 1
-        # Only render if actively recording (not just if video recorder exists)
-        has_video_recording = self.video_recorder is not None and self.video_recorder.is_recording
-        is_rendering = self.sim.has_gui() or self.sim.has_rtx_sensors() or has_video_recording
-
         with self.state.mutation():
-            render_now = is_rendering and self._sim_step_counter % self.simulator_config.sim.render_interval_steps == 0
-
             if self.kinematic_playback:
                 # sim.current_time does not advance.
                 self._forward_kinematics()
@@ -782,23 +752,16 @@ class IsaacSim(BaseSimulator):
                 # on the app clock — sim time ran ~3x too fast whenever a camera/GUI was active.
                 self.sim.step(render=False)
 
-            # RTX sensors (TiledCameras) only track new poses after a render tick.
-            if render_now:
-                self.render()
-
             # update buffers at sim
             self.scene.update(dt=1.0 / self.simulator_config.sim.fps)
 
-        # Update accelerations ONLY if bridge is enabled
-        if self.simulator_config.bridge.enabled:
-            # Update DOF acceleration using numerical differentiation
-            self._dof_acc.copy_((self.dof_vel - self.prev_dof_vel) / self.sim_dt)
-            self.prev_dof_vel = self.dof_vel.clone()
-
-            # Update base linear acceleration using numerical differentiation
-            current_base_vel = self.robot_root_states[:, 7:10]
-            self._base_linear_acc.copy_((current_base_vel - self.prev_base_lin_vel) / self.sim_dt)
-            self.prev_base_lin_vel = current_base_vel.clone()
+    def _update_bridge_accelerations(self) -> None:
+        """Finite-difference joint and base linear accelerations for the bridge, once per physics step."""
+        self._dof_acc.copy_((self.dof_vel - self.prev_dof_vel) / self.sim_dt)
+        self.prev_dof_vel = self.dof_vel.clone()
+        current_base_vel = self.robot_root_states[:, 7:10]
+        self._base_linear_acc.copy_((current_base_vel - self.prev_base_lin_vel) / self.sim_dt)
+        self.prev_base_lin_vel = current_base_vel.clone()
 
     def _forward_kinematics(self) -> None:
         self.scene.write_data_to_sim()
@@ -856,6 +819,19 @@ class IsaacSim(BaseSimulator):
             self.viewer_input = ViewerInputController(self)
 
     def render(self, sync_frame_time: bool = True) -> None:
+        self._render_frame()
+        self._viewer_render_step = self._sim_step_counter
+
+    def render_for_sensors(self) -> None:
+        """Render for cameras and video, unless :meth:`render` already did this physics step.
+
+        The skip keys on the physics step only: state written after that render without a physics
+        step (pose writes, ``forward_kinematics``) does not show until the next render.
+        """
+        if self._viewer_render_step != self._sim_step_counter:
+            self._render_frame()
+
+    def _render_frame(self) -> None:
         self.sim.render()
         if self.debug_viz_enabled:
             self.clear_lines()

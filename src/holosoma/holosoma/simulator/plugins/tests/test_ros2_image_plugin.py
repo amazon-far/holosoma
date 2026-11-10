@@ -32,7 +32,7 @@ from holosoma.config_types.sensor import (
     IsaacSimFisheyeConfig,
     SensorMountConfig,
 )
-from holosoma.simulator.base_simulator.hooks import HookRegistry
+from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.plugins.camera_consumer import CameraIntrinsics, FramePacket
 from holosoma.utils.simulator_config import SimulatorType
 
@@ -64,6 +64,7 @@ class _FakeSimulator:
 
     def __init__(self, *cams: tuple[str, CameraSensorConfig]) -> None:
         self.hooks = HookRegistry()
+        self.sensor_render_hook = self.hooks.add(Phase.FRAME_END, lambda: None, name="sensors.render")
         self.sensor_config = dict(cams)
         self.training_config = _FakeTrainingConfig()
         self.num_envs = 1
@@ -142,6 +143,16 @@ class _NoopThread:
         pass
 
 
+def _fake_ros2_runtime(simulator: Any) -> Any:
+    """Stand in for get_ros2_runtime: memoise per simulator and register the context's close hook."""
+    runtime = getattr(simulator, "_fake_runtime", None)
+    if runtime is None:
+        runtime = type("_Runtime", (), {"start": lambda _self: object()})()
+        runtime.close_hook = simulator.hooks.add(Phase.CLOSE, lambda: None, name="ros2.runtime.close")
+        simulator._fake_runtime = runtime
+    return runtime
+
+
 @pytest.fixture
 def fake_ros(monkeypatch: pytest.MonkeyPatch) -> dict[str, _FakeNode]:
     """Monkeypatch the rclpy pieces ``ROS2ImagePlugin.start`` uses so no real node/spin/DDS runs.
@@ -172,7 +183,7 @@ def fake_ros(monkeypatch: pytest.MonkeyPatch) -> dict[str, _FakeNode]:
     monkeypatch.setattr(
         image_plugin,
         "get_ros2_runtime",
-        lambda _simulator: type("_Runtime", (), {"start": lambda _self: object()})(),
+        _fake_ros2_runtime,
     )
     return holder
 

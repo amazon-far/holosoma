@@ -28,8 +28,13 @@ from typing import Any
 if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
-from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step, steps_for_seconds
+from tests.simulators._sim_harness import (
+    build_run_sim_config,
+    launch_simulator,
+    run_and_hard_exit,
+    step,
+    steps_for_seconds,
+)
 
 _NUM_ENVS = 3
 
@@ -319,8 +324,7 @@ def main() -> int:
     config = dataclasses.replace(
         config, device="cuda:0", training=dataclasses.replace(config.training, num_envs=_NUM_ENVS)
     )
-    env, device, _app = setup_simulation_environment(config, device="cuda:0")
-    sim = env.sim
+    sim, device, _app = launch_simulator(config, device="cuda:0")
     sim.set_headless(True)
     sim.setup()
     sim.setup_terrain()
