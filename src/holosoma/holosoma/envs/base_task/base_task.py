@@ -124,7 +124,6 @@ class BaseTask:
         )
         self.hooks = self.simulator.hooks
 
-        self._validate_task()
         self.headless = training_config.headless
         self.simulator.set_headless(self.headless)
         self.simulator.setup()
@@ -322,9 +321,6 @@ class BaseTask:
 
     # ------------------------------------------------------------------
     # Hooks for subclasses
-
-    def _validate_task(self) -> None:
-        """Validate subclass-specific requirements after the simulator is constructed."""
 
     def _initialize_task_managers(self) -> None:
         """Build the task's managers; specializations extend it to build their own."""

@@ -24,16 +24,14 @@ class PolicyTask(BaseTask):
     """BaseTask specialization for policy training and evaluation."""
 
     def __init__(self, tyro_config: EnvConfig) -> None:
+        for name in ("observation", "action", "reward", "termination", "command", "curriculum"):
+            if getattr(tyro_config, name) is None:
+                raise ValueError(f"{name}_config must be provided for manager-based environments.")
         self.is_evaluating = False
         self.dim_obs = tyro_config.robot.policy_obs_dim
         super().__init__(tyro_config)
         if not self.headless:
             setup_keyboard_listener(self)
-
-    def _validate_task(self) -> None:
-        for name in ("observation", "action", "reward", "termination", "command", "curriculum"):
-            if getattr(self.config, name) is None:
-                raise ValueError(f"{name}_config must be provided for manager-based environments.")
 
     def _initialize_task_managers(self) -> None:
         super()._initialize_task_managers()
