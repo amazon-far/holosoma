@@ -508,8 +508,8 @@ class BaseTask:
             self.action_manager.apply_actions()
 
     def _post_physics_step(self) -> None:
-        # Cameras render and egress consumers publish here, as FRAME_END plugins (the cameras'
-        # render_sensors is registered before any consumer, so buffers are fresh on read).
+        # Cameras render and egress consumers publish here, as FRAME_END plugins (consumers
+        # declare `after` the sensor render hook, so buffers are fresh on read).
         self.simulator.hooks.emit(Phase.FRAME_END)
         self.observation_manager.new_frame()
         self.episode_length_buf += 1
