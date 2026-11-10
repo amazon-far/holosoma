@@ -200,6 +200,7 @@ class IsaacSim(BaseSimulator):
         # self.metadata["render_fps"] = 1. / self.config.sim.fps * self.config.sim.control_decimation
 
         self._sim_step_counter = 0
+        self._viewer_render_step: int | None = None
 
         # Set True by the keyboard controller's push-robots key; polled by external tooling.
         self.push_requested: bool = False
@@ -811,6 +812,19 @@ class IsaacSim(BaseSimulator):
             self.viewer_input = ViewerInputController(self)
 
     def render(self, sync_frame_time: bool = True) -> None:
+        self._render_frame()
+        self._viewer_render_step = self._sim_step_counter
+
+    def render_for_sensors(self) -> None:
+        """Render for cameras and video, unless :meth:`render` already did this physics step.
+
+        The skip keys on the physics step only: state written after that render without a physics
+        step (pose writes, ``forward_kinematics``) does not show until the next render.
+        """
+        if self._viewer_render_step != self._sim_step_counter:
+            self._render_frame()
+
+    def _render_frame(self) -> None:
         self.sim.render()
         if self.debug_viz_enabled:
             self.clear_lines()
