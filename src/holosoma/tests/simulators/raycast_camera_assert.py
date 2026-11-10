@@ -50,8 +50,16 @@ def _check_frame(sim):
         for e in range(_NUM_ENVS)
         if float(torch.isfinite(depth[e]).float().mean()) < 0.2
     )
-    # Flat ground: a pinhole camera's 1/depth over a plane is affine in pixel coordinates, so within a
-    # depth camera's working range (3 m) the affine fit must leave only sub-millimetre residuals.
+    return fails
+
+
+def _check_flat_ground(sim):
+    """With only the plane in view, depth must be planar: a pinhole camera's 1/depth over a plane is
+    affine in pixel coordinates, so within a depth camera's working range (3 m) the fit is exact."""
+    import torch
+
+    fails = []
+    depth = sim.get_camera_data("raycast", "depth")
     for e in range(_NUM_ENVS):
         image = depth[e, ..., 0].double().cpu()
         rows, cols = torch.nonzero(torch.isfinite(image) & (image < 3.0), as_tuple=True)
@@ -340,7 +348,7 @@ def main() -> int:
     sim.render_sensors()
 
     checks = {
-        "frame": _check_frame,
+        "frame": lambda sim: _check_frame(sim) + _check_flat_ground(sim),
         "rerender": _check_rerender,
         "scene": _check_scene,
         "dynamic-scene": _check_dynamic_scene,
