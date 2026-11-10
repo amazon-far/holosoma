@@ -297,9 +297,11 @@ class HookRegistry:
 
         Targets are required: one that nothing on the phase is registered under fails the run rather
         than silently ordering nothing, so wrap it in :func:`if_present` when a run without it is
-        valid. Presence is about registration, not execution — a disabled target satisfies the
-        reference but contributes no edge, so ordering always reflects the hooks that fire and a
-        chain holds only while its links run. Unconstrained hooks keep their order relative to each
+        valid. On ``CLOSE`` a required :class:`HookRef` must resolve when it is declared, since a run
+        that fails midway through starting still has to tear down. Presence is about registration,
+        not execution — a disabled target satisfies the reference but contributes no edge, so
+        ordering always reflects the hooks that fire and a chain holds only while its links run.
+        Unconstrained hooks keep their order relative to each
         other, and ``CLOSE`` prefers the latest-registered among them so teardown reverses
         construction. In every phase, including ``CLOSE``, ``before`` and ``after`` describe the
         order callbacks actually run in: a node's cleanup declares ``before=[runtime.close_hook]``.
@@ -343,6 +345,24 @@ class HookRegistry:
             yield
         finally:
             self._owner = None
+
+    def _require_published(self, ref: HookRef, name: str) -> None:
+        """Reject a required CLOSE reference whose provider has not published yet.
+
+        A partly built run still has to tear down, so the CLOSE graph has to resolve from the moment
+        an edge is declared: a provider whose constructor fails after a consumer referenced it would
+        otherwise leave teardown unresolvable, and teardown is what releases the resources the failed
+        startup already acquired.
+        """
+        published = self._published.get(_publication_id(ref.instance, ref.key))
+        if published is None or published.removed:
+            raise HookRegistryError(
+                f"hook {name!r} on phase {Phase.CLOSE.value!r} requires {ref.key!r} from plugin "
+                f"instance {ref.instance!r}, which has not published it. A CLOSE reference must "
+                f"resolve when declared, so that a run that fails to finish starting can still tear "
+                f"down: register after that plugin, declare the edge from its side, or wrap this in "
+                f"if_present(...)."
+            )
 
     def _claim_key(self, phase: Phase, name: str, owner: str | None, key: Enum) -> None:
         """Reserve a contract member for one instance, so a reference to it cannot be ambiguous."""
@@ -390,6 +410,8 @@ class HookRegistry:
             optional = isinstance(entry, _OptionalTarget)
             dep = entry.target if isinstance(entry, _OptionalTarget) else entry
             if isinstance(dep, HookRef):
+                if not optional and phase is Phase.CLOSE:
+                    self._require_published(dep, name)
                 resolved.append(_OptionalTarget(dep) if optional else dep)
                 continue
             if isinstance(dep, str):

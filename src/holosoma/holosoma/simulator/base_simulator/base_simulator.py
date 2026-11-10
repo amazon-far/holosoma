@@ -835,11 +835,15 @@ class BaseSimulator:
         self.hooks.validate()
 
     def close(self) -> None:
-        """Emit the one-pass simulator teardown phase."""
+        """Emit the one-pass simulator teardown phase.
+
+        Marked closed only once the emission returns, so a teardown that fails before running any
+        callback -- an unresolvable CLOSE graph -- can be retried rather than silently skipped.
+        """
         if self._closed:
             return
-        self._closed = True
         self.hooks.emit(Phase.CLOSE)
+        self._closed = True
 
     def request_shutdown(self, reason: str = "") -> None:
         """Ask the driving loop to end the run gracefully after the current frame.

@@ -721,6 +721,50 @@ def test_unresolved_hookref_fails_unless_optional() -> None:
     assert calls == ["lenient"]
 
 
+def test_a_required_close_reference_must_resolve_when_declared() -> None:
+    # A run that fails to finish starting still has to tear down, so CLOSE cannot carry an edge
+    # whose provider may never appear.
+    hooks = HookRegistry()
+
+    with hooks.installing("inspect"):
+        with pytest.raises(HookRegistryError, match="must resolve when declared"):
+            hooks.add(
+                Phase.CLOSE,
+                lambda: None,
+                name="inspector.stop",
+                before=HookRef("head", _CameraHook.CLOSE),
+            )
+
+        # Optional is still allowed: it declares that absence is acceptable.
+        hooks.add(
+            Phase.CLOSE,
+            lambda: None,
+            name="inspector.stop",
+            before=if_present(HookRef("head", _CameraHook.CLOSE)),
+        )
+
+    hooks.validate()
+
+
+def test_a_close_reference_resolves_once_its_provider_has_published() -> None:
+    calls: list[str] = []
+    hooks = HookRegistry()
+
+    with hooks.installing("head"):
+        hooks.add(Phase.CLOSE, recorder(calls, "camera"), name="camera.stop", key=_CameraHook.CLOSE)
+    with hooks.installing("inspect"):
+        hooks.add(
+            Phase.CLOSE,
+            recorder(calls, "inspector"),
+            name="inspector.stop",
+            before=HookRef("head", _CameraHook.CLOSE),
+        )
+
+    hooks.emit(Phase.CLOSE)
+
+    assert calls == ["inspector", "camera"]
+
+
 def test_hookref_to_another_phase_is_rejected() -> None:
     hooks = HookRegistry()
     with hooks.installing("head"):
