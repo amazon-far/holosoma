@@ -341,8 +341,7 @@ class EmpiricalNormalization(nn.Module):
 
 
 def cpu_state(sd: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    # detach & move to host without locking the compute stream
-    return {k: v.detach().to("cpu", non_blocking=True) for k, v in sd.items()}
+    return {k: v.detach().to("cpu") for k, v in sd.items()}
 
 
 def save_params(
