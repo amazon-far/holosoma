@@ -93,9 +93,11 @@ class StudentTeacher(nn.Module):
         self.teachers = nn.ModuleList([_UnsetTeacher(num_teacher_obs, num_actions) for _ in range(num_teachers)])
 
         self.std = nn.Parameter(init_noise_std * torch.ones(num_actions))
+        self.register_buffer("_std_was_non_finite", torch.zeros((), dtype=torch.bool), persistent=False)
         self.distribution: Normal | None = None
         Normal.set_default_validate_args(False)
         self.project_action_std()
+        self.check_action_std()
 
         self._loaded_teacher = [False] * num_teachers
 
@@ -201,10 +203,17 @@ class StudentTeacher(nn.Module):
 
     @torch.no_grad()
     def project_action_std(self) -> None:
-        """Keep the directly optimized Gaussian scale finite and positive."""
-        if not torch.isfinite(self.std).all():
-            raise FloatingPointError("Student action standard deviation became non-finite.")
+        """Keep the directly optimized Gaussian scale positive.
+
+        Records, without a host sync, whether the scale was non-finite; :meth:`check_action_std` raises on it.
+        """
+        self._std_was_non_finite |= ~torch.isfinite(self.std).all()
         self.std.clamp_(min=MIN_ACTION_STD)
+
+    def check_action_std(self) -> None:
+        """Raise if the action std has been non-finite at any :meth:`project_action_std` call."""
+        if self._std_was_non_finite.item():
+            raise FloatingPointError("Student action standard deviation became non-finite.")
 
     def act(self, policy_state_dict: dict[str, torch.Tensor]) -> torch.Tensor:
         self.update_distribution(
