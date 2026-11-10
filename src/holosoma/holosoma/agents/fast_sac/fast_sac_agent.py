@@ -433,7 +433,7 @@ class FastSACAgent(BaseAlgo):
             bootstrap = (truncations | ~dones).float()
 
             with torch.no_grad():
-                next_state_actions, next_state_log_probs = actor.get_actions_and_log_probs(next_observations)
+                next_state_actions, next_state_log_probs, _ = actor.get_actions_and_log_probs(next_observations)
                 discount = args.gamma ** data["next"]["effective_n_steps"]
 
                 target_distributions = qnet_target.projection(
@@ -505,15 +505,15 @@ class FastSACAgent(BaseAlgo):
         with self._maybe_amp():
             critic_observations = data["critic_observations"]
 
-            actions, log_probs = actor.get_actions_and_log_probs(data["observations"])
-            # For logging, this is a bit wasteful though, but could be useful
+            actions, log_probs, log_std = actor.get_actions_and_log_probs(data["observations"])
             with torch.no_grad():
-                _, _, log_std = actor(data["observations"])
                 action_std = log_std.exp().mean()
                 # Compute policy entropy (negative log probability)
                 policy_entropy = -log_probs.mean()
 
-            q_outputs = qnet(critic_observations, actions)
+            # Detached critic weights: the actor loss differentiates only through the actions.
+            qnet_params = {name: param.detach() for name, param in qnet.named_parameters()}
+            q_outputs = torch.func.functional_call(qnet, qnet_params, (critic_observations, actions))
             q_probs = F.softmax(q_outputs, dim=-1)
             q_values = qnet.get_value(q_probs)
             qf_value = q_values.mean(dim=0)
