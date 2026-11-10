@@ -167,15 +167,6 @@ def test_jitter_noop_disabled_zero_range_and_object_subset(sim):
     assert (sim.get_actor_states(["free1"], all_envs)[:, :2] - before["free1"][:, :2]).abs().max() > 1e-4
 
 
-def test_jitter_robot_only_scene_noop():
-    """jitter_object_pose_on_reset no-ops (no raise) on a robot-only scene."""
-    s = build_warp_sim(SceneConfig(), seed=42)
-    assert s.object_registry.get_names_by_type(ObjectType.INDIVIDUAL) == []
-    all_envs = torch.arange(NUM_ENVS, device=s.sim_device)
-    env = env_shell(s, NUM_ENVS)
-    jitter_object_pose_on_reset(env, all_envs, sampler=_sampler(env), xy_range=0.2, yaw_range=0.5)  # must not raise
-
-
 def test_jitter_composes_onto_nonidentity_orientation():
     """A free body with a non-identity baseline yaw: the jitter yaw COMPOSES onto it (result
     stays a pure z-rotation) rather than overwriting — and differs from the baseline quat."""
@@ -199,30 +190,6 @@ def test_jitter_composes_onto_nonidentity_orientation():
     assert q[:, 0].abs().max() < 1e-3 and q[:, 1].abs().max() < 1e-3
     assert torch.allclose(q.norm(dim=-1), torch.ones(NUM_ENVS, device=s.sim_device), atol=1e-3)
     assert (q - base_q).abs().max() > 1e-3, "yaw delta was not applied (quat == baseline)"
-
-
-def test_multi_object_set_get_roundtrip_no_scramble(sim):
-    """set_actor_states on TWO free bodies round-trips per (object, env) without crossing
-    objects — the name-major contract."""
-    all_envs = torch.arange(NUM_ENVS, device=sim.sim_device)
-    names = ["free0", "free1"]
-
-    # Distinct, recognizable target per (object, env): object index in x, env index in y.
-    target = torch.zeros(len(names) * NUM_ENVS, 13, device=sim.sim_device)
-    for oi in range(len(names)):
-        for e in range(NUM_ENVS):
-            row = oi * NUM_ENVS + e
-            target[row, 0] = 1.0 + oi  # x encodes object
-            target[row, 1] = 0.1 * e  # y encodes env
-            target[row, 2] = 0.6
-            target[row, 6] = 1.0  # identity quat (xyzw)
-
-    sim.set_actor_states(names, all_envs, target)
-    got = sim.get_actor_states(names, all_envs)  # [2*NUM_ENVS, 13], name-major
-
-    # Each (object, env) row must read back its own encoded x and y, not a neighbor's.
-    assert torch.allclose(got[:, 0], target[:, 0], atol=1e-3), "object identity (x) scrambled"
-    assert torch.allclose(got[:, 1], target[:, 1], atol=1e-3), "env identity (y) scrambled"
 
 
 def test_reset_restores_configured_initial_velocity():

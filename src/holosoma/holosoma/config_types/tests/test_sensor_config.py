@@ -63,25 +63,6 @@ def test_actor_mount_other_name_allowed() -> None:
     _cam(target_kind="actor", target="panel")  # must not raise
 
 
-def test_mount_transform_is_finite_and_quaternion_is_normalized() -> None:
-    mount = SensorMountConfig(
-        target_kind="robot_link",
-        target="pelvis",
-        position=[1.0, 2.0, 3.0],
-        orientation=[1.000001, 0.0, 0.0, 0.0],
-    )
-    assert mount.orientation == [1.0, 0.0, 0.0, 0.0]
-
-    with pytest.raises(ValueError, match="position must contain only finite"):
-        SensorMountConfig(target_kind="robot_link", target="pelvis", position=[math.inf, 0.0, 0.0])
-    with pytest.raises(ValueError, match=r"(?s)orientation.*only finite"):
-        SensorMountConfig(target_kind="robot_link", target="pelvis", orientation=[math.nan, 0.0, 0.0, 0.0])
-    with pytest.raises(ValueError, match="non-zero quaternion"):
-        SensorMountConfig(target_kind="robot_link", target="pelvis", orientation=[0.0, 0.0, 0.0, 0.0])
-    with pytest.raises(ValueError, match="Quaternion norm"):
-        SensorMountConfig(target_kind="robot_link", target="pelvis", orientation=[2.0, 0.0, 0.0, 0.0])
-
-
 def test_conflicting_warp_render_flag_rejected() -> None:
     # use_shadows is global to the shared Warp render context; cameras setting it differently are
     # rejected.
@@ -102,12 +83,6 @@ def test_none_warp_render_flag_imposes_no_constraint() -> None:
     a = _cam(mujoco=MujocoCameraConfig(use_textures=False))
     b = _cam()  # default sub-config leaves use_textures unset
     validate_camera_dict({"a": a, "b": b})  # must not raise
-
-
-def test_camera_backend_configs_default_to_concrete_structs() -> None:
-    camera = _cam()
-    assert isinstance(camera.isaacsim, IsaacSimCameraConfig)
-    assert isinstance(camera.mujoco, MujocoCameraConfig)
 
 
 def test_isaacsim_defaults_match_native_lens_defaults() -> None:

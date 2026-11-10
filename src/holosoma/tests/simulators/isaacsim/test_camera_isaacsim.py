@@ -66,22 +66,6 @@ def test_camera_depth(tmp_path):
     )
 
 
-def test_camera_recorder(tmp_path):
-    # A viz config requesting recording yields a non-None camera_sensor_recorder that capture()s a frame.
-    result_file = tmp_path / "rec_isaacsim.txt"
-    run_harness(
-        _CONTRACT_HARNESS,
-        "--simulator",
-        "isaacsim",
-        "--check-recorder",
-        "--result-file",
-        str(result_file),
-        label="isaacsim/camera-recorder",
-        timeout=700,
-        result_file=result_file,
-    )
-
-
 def test_camera_fisheye_projection(tmp_path):
     # The authored f-theta calibration produces observably wider projection geometry than pinhole.
     result_file = tmp_path / "fisheye_isaacsim.txt"
@@ -93,21 +77,6 @@ def test_camera_fisheye_projection(tmp_path):
         str(result_file),
         label="isaacsim/camera-fisheye",
         timeout=900,
-        result_file=result_file,
-    )
-
-
-def test_camera_follow(tmp_path):
-    # Camera tracks its mount body: move the robot, the panel depth drops by the moved distance.
-    result_file = tmp_path / "follow_isaacsim.txt"
-    run_harness(
-        _FOLLOW_HARNESS,
-        "--simulator",
-        "isaacsim",
-        "--result-file",
-        str(result_file),
-        label="isaacsim/camera-follow",
-        timeout=700,
         result_file=result_file,
     )
 

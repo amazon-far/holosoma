@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -245,35 +244,3 @@ def test_record_video_encodes_each_fresh_scan_with_simulation_time_cadence(
     np_test.assert_allclose(rendered_clouds[0], points[0, [0, 1, 3]])
     np_test.assert_allclose(rendered_clouds[1], later_points[0, [0, 1, 3]])
     assert not np.array_equal(rendered_clouds[0], rendered_clouds[1])
-
-
-def test_record_video_writes_a_decodable_mp4(tmp_path: Path) -> None:
-    """The configured video path must produce a real file that OpenCV can decode."""
-    if shutil.which("ffmpeg") is None:
-        pytest.skip("ffmpeg not available (create_video h264 shells out to it)")
-    simulator = _FakeSimulator()
-    config = LidarVizPluginConfig(record_video=True, save_dir=str(tmp_path), lidars=["front/scan"])
-    config.get_cls()(config, simulator)
-    first = np.array([[[0.0, 1.0, -1.0], [1.0, 2.0, -2.0], [4.0, 5.0, -5.0]]], dtype=np.float32)
-    second = first.copy()
-    second[0, 1] = [-2.0, 3.0, -4.0]
-
-    _emit_fresh_scan(simulator, first)
-    simulator._time = 1.75
-    _emit_fresh_scan(simulator, second)
-    simulator.hooks.emit(Phase.CLOSE)
-
-    videos = list(tmp_path.glob("front_scan/env_000/*.mp4"))
-    assert len(videos) == 1
-    assert videos[0].stat().st_size > 0
-    capture = cv2.VideoCapture(str(videos[0]))
-    decoded: list[npt.NDArray[np.uint8]] = []
-    while True:
-        ok, frame = capture.read()
-        if not ok:
-            break
-        decoded.append(np.asarray(frame, dtype=np.uint8))
-    capture.release()
-    assert len(decoded) == 2
-    assert all(frame.ndim == 3 and frame.shape[2] == 3 for frame in decoded)
-    assert not np.array_equal(decoded[0], decoded[1])

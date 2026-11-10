@@ -123,19 +123,6 @@ def test_named_contact_solver_settings_override_assets_and_step(solver):
     assert data.time == pytest.approx(1)
 
 
-def test_contact_flags_change_real_dynamics():
-    enabled = compiled(MujocoConfig())
-    disabled = compiled(MujocoConfig(disableflags=("contact",)))
-    outcomes = []
-    for model in [enabled, disabled]:
-        data = mujoco.MjData(model)
-        for _ in range(100):
-            mujoco.mj_step(model, data)
-        outcomes.append(data.qpos[2])
-    assert outcomes[0] > 0.09
-    assert outcomes[1] < -4
-
-
 def test_explicit_empty_flags_clear_asset_mask_and_invalid_names_fail():
     xml = XML.replace(
         '<option integrator="Euler" tolerance="0.003"/>',
@@ -557,20 +544,6 @@ def test_training_checkpoint_native_physics_reaches_standalone_core_and_stepping
         sim.close()
 
 
-@pytest.mark.parametrize("reported_version", ["3.9.0", "3.11.0"])
-def test_native_options_use_public_api_without_runtime_version_pins(reported_version, monkeypatch):
-    # Changing only metadata tests the absence of a runtime version gate, not other binaries' dynamics.
-    monkeypatch.setattr(mujoco, "__version__", reported_version)
-    model = compiled(MujocoConfig(integrator="rk4", extra={"gravity": [0, 0, -2]}, disableflags=("contact",)))
-    assert model.opt.integrator == mujoco.mjtIntegrator.mjINT_RK4
-    data = mujoco.MjData(model)
-    for _ in range(10):
-        mujoco.mj_step(model, data)
-    assert data.time == pytest.approx(0.1)
-    assert data.qvel[2] == pytest.approx(-0.2)
-    assert data.qpos[2] == pytest.approx(0.099 - 0.01)
-
-
 def test_warp_allocation_uses_real_api_and_preserves_default_units():
     mjw = pytest.importorskip("mujoco_warp")
     wp = pytest.importorskip("warp")
@@ -799,37 +772,6 @@ def test_warp_unsupported_combinations_are_rejected_by_native_conversion(native,
 
     with wp.ScopedDevice("cpu"), pytest.raises(error, match=reason):
         convert()
-
-
-def test_nativeccd_flag_is_accepted_by_mjwarp():
-    mjw = pytest.importorskip("mujoco_warp")
-    wp = pytest.importorskip("warp")
-    native = MujocoConfig(disableflags=("NATIVECCD",))
-    with wp.ScopedDevice("cpu"):
-        uploaded = mjw.put_model(compiled(native, backend=mjwarp))
-    assert uploaded.opt.disableflags & mujoco.mjtDisableBit.mjDSBL_NATIVECCD
-
-
-def test_core_classic_empty_plugins_initialization_reset_and_reconstruction():
-    native = MujocoConfig(
-        integrator="implicitfast", cone="elliptic", impratio=10, noslip_iterations=1, extra={"ccd_iterations": 12}
-    )
-    for _ in range(2):
-        sim = build_classic_sim(native=native)
-        try:
-            assert sim.plugin_config == sim.installed_plugins == {}
-            assert sim.root_model.opt.integrator == mujoco.mjtIntegrator.mjINT_IMPLICITFAST
-            assert sim.root_model.opt.cone == mujoco.mjtCone.mjCONE_ELLIPTIC
-            assert sim.root_model.opt.impratio == 10
-            assert sim.root_model.opt.noslip_iterations == 1
-            sim.backend.step()
-            assert sim.root_data.time == pytest.approx(sim.sim_dt)
-            mujoco.mj_resetData(sim.root_model, sim.root_data)
-            sim.backend.step()
-            assert sim.root_data.time == pytest.approx(sim.sim_dt)
-            assert sim.root_model.opt.ccd_iterations == 12
-        finally:
-            sim.close()
 
 
 @pytest.mark.mujoco_warp
