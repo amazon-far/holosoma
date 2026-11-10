@@ -632,14 +632,11 @@ class IsaacLab3Backend(IsaacLabBackend):
         if self.options.renderer in ("ovrtx", "isaac_rtx"):
             camera._renderer.configure_cadence(camera.cfg.prim_path, control_hz=control_hz, decimation=decimation)
 
-    def refresh_cameras(self, cameras: list[Any], *, capture_step: int = 0) -> None:
+    def refresh_cameras(self, cameras: list[Any]) -> None:
         if not cameras:
             return
         from isaaclab.sensors import SensorBase
 
-        if self.options.renderer == "ovrtx":
-            for camera in cameras:
-                camera._renderer.set_capture_step(capture_step)
         # Scene.update already advanced the sensor timestamps. Refresh with
-        # zero elapsed time so all due poses precede one renderer submission.
+        # zero elapsed time so all due poses are prepared before capture.
         SensorBase.update_batch(cameras, dt=0.0)

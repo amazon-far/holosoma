@@ -9,7 +9,7 @@ pytestmark = pytest.mark.isaacsim
 
 @pytest.mark.parametrize("physics", ["physx", "newton"])
 @pytest.mark.parametrize("renderer", ["isaac_rtx", "ovrtx"])
-@pytest.mark.parametrize("decimations", ["1,5", "2,3"])
+@pytest.mark.parametrize("decimations", ["1,5", "2,3", "1,5,2", "3,3"])
 def test_independent_native_camera_renders(
     physics, renderer, decimations, isaacsim_backend, run_isaacsim_harness, tmp_path
 ):

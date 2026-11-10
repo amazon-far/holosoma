@@ -175,11 +175,16 @@ Isaac RTX configs, and camera data is restricted to RGB/depth.
 
 Independent camera capture cadence already uses `CameraSensorConfig.update_decimation`.
 The current integration also schedules actual GPU captures with that setting.
-Warp renders only the requested camera. OVRTX batches due cameras, retains the
-SDK's stable set of registered products, and aligns native `frameRate`/`startTime`
-capture windows with the shared control-step cadence. This avoids the cost of
-products repeatedly leaving and re-entering a batch. The SDK continues to own
-both its legacy and OVStage submission paths and resource lifetimes.
+Warp renders only the requested camera. OVRTX retains the SDK's efficient batch
+when cameras share a cadence. Mixed rates and movie coexistence submit each due
+product separately, completing its SDK readback before the next submission.
+OVRTX 0.5.1.385782 can return another camera's orientation when the active set of
+multiview products changes, including with native `frameRate`/`startTime` gating.
+The standalone [reproducer](ovrtx-camera-cadence-repro.md) requires neither
+Holosoma nor Isaac Lab. Individual submissions skip idle GPU captures but incur
+substantial product re-entry overhead; a wall-clock speedup is not established
+for this OVRTX workaround. The SDK continues to own scene setup, both legacy
+and OVStage submissions, output processing, and resource lifetimes.
 
 Isaac RTX keeps each tiled product paused until its camera is due. It publishes
 prepared poses through the SDK's Fabric bridge, activates due products, and

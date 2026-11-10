@@ -161,13 +161,10 @@ def sync_camera_fabric_transforms(sim: IsaacSim) -> None:
 def render_cameras(sim: IsaacSim, due: list[CameraRecord]) -> None:
     """Cache each due TiledCamera's RGB/depth as an env-first frame into its buffer.
 
-    Lab 3 prepares all due poses before a shared renderer submission. Lab 2 reads
+    Lab 3 prepares all due poses before capturing their outputs. Lab 2 reads
     the frame-end RTX pass. Drop alpha and cache ``[N,H,W,3]`` uint8 (rgb) /
     ``[N,H,W,1]`` float32 (depth) outputs at each camera's configured cadence."""
-    sim.backend.refresh_cameras(
-        [sim.tiled_cameras[record.name] for record in due],
-        capture_step=sim.sensor_manager.cameras[0].step_counter if sim.sensor_manager.cameras else 0,
-    )
+    sim.backend.refresh_cameras([sim.tiled_cameras[record.name] for record in due])
     for camera_record in due:
         out = sim.tiled_cameras[camera_record.name].data.output
         if "rgb" in camera_record.config.data_types:
