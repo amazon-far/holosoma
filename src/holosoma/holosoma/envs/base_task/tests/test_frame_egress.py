@@ -121,13 +121,13 @@ class _FakeSim:
 class _LoopTask(SimulationTask):
     """The production scheduler and run loop over a fake simulator, without backend construction."""
 
-    def __init__(self, sim: _FakeSim, *, headless: bool = True, viewer_dt: float = 1.0) -> None:
+    def __init__(self, sim: _FakeSim, *, headless: bool = True, viewer_update_decimation: int = 1) -> None:
         self.simulator = cast("BaseSimulator", sim)
         self.hooks = sim.hooks
         self.config = cast(
             "EnvConfig",
             SimpleNamespace(
-                viewer_dt=viewer_dt,
+                viewer_update_decimation=viewer_update_decimation,
                 time_scale=0.0,
                 robot=SimpleNamespace(asset=SimpleNamespace(robot_type="test")),
                 simulator=SimpleNamespace(
@@ -164,9 +164,9 @@ class _LoopTask(SimulationTask):
         self._start_episodes(torch.arange(self.num_envs) if env_ids is None else env_ids)
 
 
-def _run(sim: _FakeSim, *, headless: bool = True, viewer_dt: float = 1.0) -> None:
+def _run(sim: _FakeSim, *, headless: bool = True, viewer_update_decimation: int = 1) -> None:
     """Drive the real SimulationTask loop over ``sim``, unthrottled."""
-    _LoopTask(sim, headless=headless, viewer_dt=viewer_dt).run()
+    _LoopTask(sim, headless=headless, viewer_update_decimation=viewer_update_decimation).run()
 
 
 def _expected_phases(groups: int, decimation: int = DECIMATION) -> list[Phase | str]:
@@ -241,19 +241,19 @@ def test_a_frame_that_opens_always_closes() -> None:
 
 
 def test_viewer_renders_on_its_own_schedule_when_not_headless() -> None:
-    """A windowed run draws the viewport every ``viewer_dt``, here after each frame's last substep."""
+    """A windowed run draws the viewport every ``viewer_update_decimation``, here after each frame's last substep."""
     sim = _FakeSim(frames=3, offscreen=False)
 
-    _run(sim, headless=False, viewer_dt=DECIMATION / FPS)
+    _run(sim, headless=False, viewer_update_decimation=DECIMATION)
 
     assert sim.renders == [4, 8, 12]
 
 
 def test_headless_never_renders_the_viewport() -> None:
-    """Headless leaves the viewport alone even at a viewer_dt that would draw every step."""
+    """Headless leaves the viewport alone even at a decimation that would draw every step."""
     sim = _FakeSim(frames=3, offscreen=False)
 
-    _run(sim, headless=True, viewer_dt=1.0 / FPS)
+    _run(sim, headless=True, viewer_update_decimation=1)
 
     assert sim.renders == []
 

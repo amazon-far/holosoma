@@ -135,7 +135,7 @@ class SimEngineConfig:
 
     render_interval: DecimationLike | None = None
     """Deprecated, no effect, removed after 2027-03-01: offscreen outputs render once per control
-    step, on its last physics step, and the viewer renders every ``viewer_dt``."""
+    step, on its last physics step, and the viewer renders every ``viewer_update_decimation``."""
 
     max_episode_length_s: float = 20.0
     """Maximum episode length in seconds."""
@@ -159,8 +159,8 @@ class SimEngineConfig:
         if self.render_interval is not None:
             warnings.warn(
                 "SimEngineConfig.render_interval is deprecated and has no effect: offscreen outputs "
-                "render once per control step and the viewer every viewer_dt. It will be removed after "
-                f"{_RENDER_INTERVAL_REMOVAL_DATE}.",
+                "render once per control step and the viewer every viewer_update_decimation. It will be "
+                f"removed after {_RENDER_INTERVAL_REMOVAL_DATE}.",
                 FutureWarning,
                 stacklevel=2,
             )

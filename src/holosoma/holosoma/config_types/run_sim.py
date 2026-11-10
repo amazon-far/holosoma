@@ -8,6 +8,8 @@ development and running sim2sim inference.
 
 from __future__ import annotations
 
+import datetime
+import warnings
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated
@@ -21,6 +23,7 @@ import holosoma.config_values.sensor
 import holosoma.config_values.termination
 import holosoma.config_values.terrain
 from holosoma.config_types.experiment import TrainingConfig
+from holosoma.config_types.frequency import DecimationLike, validate_decimation_like
 from holosoma.config_types.logger import DisabledLoggerConfig, LoggerConfig
 from holosoma.config_types.plugin import PluginConfig
 from holosoma.config_types.randomization import RandomizationManagerCfg
@@ -35,6 +38,8 @@ from holosoma.utils.config_registry import UseRegistry
 
 if TYPE_CHECKING:
     from holosoma.envs.simulation_task import SimulationTask
+
+_VIEWER_DT_REMOVAL_DATE = datetime.date(2027, 3, 1)
 
 
 def default_training_config() -> TrainingConfig:
@@ -109,8 +114,13 @@ class RunSimConfig:
     """Task class to construct. Must be a ``SimulationTask`` subclass."""
 
     # Direct simulation timing control
-    viewer_dt: float = 1 / 60.0
-    """Sim-time period between viewer renders, in seconds (60 FPS default)."""
+    viewer_update_decimation: DecimationLike = "<60Hz"
+    """Viewer render rate: a physics-step decimation, or a frequency string resolved against the
+    physics rate."""
+
+    viewer_dt: float | None = None
+    """Deprecated, removed after 2027-03-01: use ``viewer_update_decimation``. Converted to
+    ``">{1 / viewer_dt}Hz"``, the same decimation it gave before."""
 
     time_scale: float = 1.0
     """Sim-time to real-time ratio for the simulation loop: 1 paces sim time to match real
@@ -125,8 +135,18 @@ class RunSimConfig:
     def __post_init__(self) -> None:
         if self.time_scale < 0:
             raise ValueError(f"RunSimConfig.time_scale must be >= 0, got {self.time_scale}.")
-        if self.viewer_dt <= 0:
-            raise ValueError(f"RunSimConfig.viewer_dt must be > 0, got {self.viewer_dt}.")
+        if self.viewer_dt is not None:
+            if self.viewer_dt <= 0:
+                raise ValueError(f"RunSimConfig.viewer_dt must be > 0, got {self.viewer_dt}.")
+            warnings.warn(
+                "RunSimConfig.viewer_dt is deprecated; use viewer_update_decimation. It will be removed "
+                f"after {_VIEWER_DT_REMOVAL_DATE}.",
+                FutureWarning,
+                stacklevel=3,
+            )
+            object.__setattr__(self, "viewer_update_decimation", f">{1 / self.viewer_dt!r}Hz")
+            object.__setattr__(self, "viewer_dt", None)
+        validate_decimation_like(self.viewer_update_decimation, field="RunSimConfig.viewer_update_decimation")
 
     def create_task(self) -> AbstractContextManager[SimulationTask]:
         """Return a context that builds the configured simulation task and owns its resources."""

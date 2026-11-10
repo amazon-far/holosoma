@@ -171,13 +171,12 @@ class BaseTask:
         self._add_pacing_hooks()
 
     def _add_pacing_hooks(self) -> None:
-        """Draw the viewer every ``viewer_dt`` and pace physics to ``time_scale``.
+        """Draw the viewer every ``viewer_update_decimation`` and pace physics to ``time_scale``.
 
         Registered after every other hook, so pacing runs last in each substep.
         """
         if self.viewer is not None:
-            every = max(1, int(self.config.viewer_dt / self.sim_dt))
-            self.hooks.add(Phase.POST_STEP, self.render, name="task.viewer", every=every)
+            self.hooks.add(Phase.POST_STEP, self.render, name="task.viewer", every=self.config.viewer_update_decimation)
         if self.config.time_scale > 0:
             rate_limiter = RateLimiter(self.config.time_scale / self.sim_dt)
             self.hooks.add(Phase.POST_STEP, rate_limiter.sleep, name="task.rate_limit")
