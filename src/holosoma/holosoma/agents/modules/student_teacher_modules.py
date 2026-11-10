@@ -272,7 +272,10 @@ class StudentTeacher(nn.Module):
 
         idx = teacher_idx.to(dtype=torch.long)
         invalid = (idx < -1) | (idx >= self.num_teachers)
-        if invalid.any():
+        # Row counts for -1, each teacher, then invalid values, read in a single host sync.
+        counts = torch.bincount(torch.where(invalid, self.num_teachers + 1, idx + 1), minlength=self.num_teachers + 2)
+        num_rows = counts.tolist()
+        if num_rows[-1]:
             invalid_values = torch.unique(idx[invalid]).tolist()
             raise IndexError(
                 f"teacher_idx contains invalid values {invalid_values}; expected -1 or "
@@ -280,10 +283,12 @@ class StudentTeacher(nn.Module):
             )
 
         out = teacher_obs.new_zeros((teacher_obs.shape[0], self.num_actions))
+        # A stable sort groups each teacher's rows in ascending order, as a boolean mask would.
+        rows_per_slot = torch.argsort(idx, stable=True).split(num_rows[:-1])
         for i in range(self.num_teachers):
-            mask = idx == i
-            if mask.any():
-                out[mask] = self.teachers[i](teacher_obs[mask])
+            if num_rows[i + 1]:
+                rows = rows_per_slot[i + 1]
+                out[rows] = self.teachers[i](teacher_obs[rows])
         return TeacherActions(out, idx >= 0)
 
     def reset(self, dones: torch.Tensor | None = None) -> None:
