@@ -10,16 +10,11 @@ The properties are the ones a reward term reading the buffer depends on:
   3. ORDERED    — slot i is written at substep i, not before, and not touched again.
   4. DISTINCT   — the slots are not all one frame. A tensor not re-fetched mid-step, or a sensor
                   whose update period is coarser than the physics step, yields one sample repeated.
-  5. AGREES     — the last slot equals ``simulator.contact_forces`` at the following refresh.
-  6. REWRITTEN  — the next control step writes every slot again, which is why the buffer needs no
+  5. REWRITTEN  — the next control step writes every slot again, which is why the buffer needs no
                   clearing on reset: no pre-reset sample can survive into a reward.
-  7. RESTARTS   — after a deliberately short step desyncs the slot index, FRAME_BEGIN re-anchors
+  6. RESTARTS   — after a deliberately short step desyncs the slot index, FRAME_BEGIN re-anchors
                   slot 0 to the first substep of the control step, and ``recorded_forces`` narrows
                   to just that sample rather than exposing the previous step's slots.
-  8. STABLE     — ``refresh_sim_tensors`` does not touch the buffer, mid-step or once the step is
-                  complete, however many times it is called. It runs a variable number of times per
-                  control step (the task reset path calls it a second time; run_sim calls it per
-                  physics step on the Isaac backends), which is why recording cannot live there.
 
 "Written" is checked by poisoning the buffer with NaN first, rather than by looking for non-zero
 forces: a slot is legitimately zero whenever the body is airborne at that substep.
@@ -58,14 +53,14 @@ ROBOT = "g1-29dof"
 TERRAIN = "terrain_locomotion_plane"
 
 
-def _build(simulator: str, num_envs: int):
-    """Build and prepare a sim with the robot dropped on flat ground."""
+def _build(simulator: str, num_envs: int, device: str | None = None):
+    """Build and prepare a sim with the robot dropped on flat ground (classic MuJoCo on CPU by default)."""
     import torch
 
     config = build_run_sim_config(simulator, "empty", ROBOT, TERRAIN)
     config = dataclasses.replace(
         config,
-        device=("cpu" if simulator == "mujoco" else "cuda:0"),
+        device=device or ("cpu" if simulator == "mujoco" else "cuda:0"),
         training=dataclasses.replace(config.training, num_envs=num_envs, headless=True),
     )
 
@@ -108,7 +103,6 @@ def _check(sim, num_envs: int) -> tuple[list[str], list[str]]:
         sim.hooks.emit(Phase.FRAME_BEGIN)
         for _ in range(decimation):
             physics_step()
-        sim.refresh_sim_tensors()
 
     want = (num_envs, decimation, sim.num_bodies, 3)
     if tuple(buffer.shape) != want:
@@ -125,29 +119,12 @@ def _check(sim, num_envs: int) -> tuple[list[str], list[str]]:
     # zero/no-data conflation this buffer exists to avoid.
     buffer.fill_(float("nan"))
 
-    def refresh_is_stable(when: str) -> None:
-        """Clone the live buffer across one refresh. Must read `buffer`, not a snapshot: comparing
-        two clones (as AGREES does) cannot see a refresh that mutates the buffer in place."""
-        before = buffer.clone()
-        sim.refresh_sim_tensors()
-        # Compare the poison mask and the written values separately: nan_to_num would map a refresh
-        # that ZEROED an unwritten slot onto the NaN it replaced, hiding the mutation.
-        poisoned = before.isnan()
-        if not torch.equal(poisoned, buffer.isnan()) or not torch.equal(before[~poisoned], buffer[~poisoned]):
-            failures.append(f"STABLE: refresh_sim_tensors mutated the buffer ({when})")
-
     # One control step, snapshotting after every substep, so ORDERED can see when each slot moves.
     sim.hooks.emit(Phase.FRAME_BEGIN)
     snapshots = []
-    for substep in range(decimation):
+    for _ in range(decimation):
         physics_step()
-        if substep == 0:
-            refresh_is_stable("mid-step, most slots still unwritten")
         snapshots.append(buffer.clone())
-    # The completed buffer is what a reward term reads, and the task reset path refreshes a second
-    # time in the same control step (locomotion_manager, wbt_manager) — so check both calls.
-    refresh_is_stable("step complete")
-    refresh_is_stable("step complete, second refresh")
 
     for i in range(decimation):
         written_at_i = not snapshots[i][:, i].isnan().any()
@@ -171,12 +148,6 @@ def _check(sim, num_envs: int) -> tuple[list[str], list[str]]:
     distinct = sum(1 for i in range(decimation - 1) if not torch.equal(final[:, i], final[:, i + 1]))
     if decimation > 1 and distinct == 0:
         failures.append(f"DISTINCT: all {decimation} slots identical — the same frame recorded every substep")
-
-    # Tautological on backends that record contact_forces itself; it still pins IsaacSim's
-    # separate sensor-to-robot body-order gather against the one refresh_sim_tensors uses.
-    if not torch.allclose(final[:, decimation - 1], sim.contact_forces, atol=1e-4):
-        max_abs_diff = (final[:, decimation - 1] - sim.contact_forces).abs().max()
-        failures.append(f"AGREES: last slot != contact_forces at refresh (max abs diff {float(max_abs_diff):.4g})")
 
     buffer.fill_(float("nan"))
     control_step()
@@ -224,7 +195,7 @@ def main() -> None:
     lines = [f"==== contact_recorder on {args.simulator} ====", *report]
     lines += [f"FAIL {failure}" for failure in failures]
     if not failures:
-        lines.append("OK: shape, filled, ordered, distinct, agrees, rewritten, restarts, stable")
+        lines.append("OK: shape, filled, ordered, distinct, rewritten, restarts")
     print("\n".join(lines), flush=True)
     if args.result_file and not failures:
         pathlib.Path(args.result_file).write_text("OK")

@@ -102,10 +102,9 @@ _ENV0 = None  # filled per test
 
 def _set_robot_pose(sim, pos, quat_xyzw):
     """Write the robot root pose (xyzw quat) on the live sim and flush to the backend."""
-    env_ids = torch.arange(sim.num_envs, device=sim.sim_device)
     sim.robot_root_states[:, :3] = torch.tensor(pos, device=sim.sim_device, dtype=torch.float32)
     sim.robot_root_states[:, 3:7] = torch.tensor(quat_xyzw, device=sim.sim_device, dtype=torch.float32)
-    sim.set_actor_root_state_tensor_robots(env_ids, sim.robot_root_states[env_ids])
+    sim.forward_kinematics()
 
 
 def _set_object_state(sim, name, pos, quat_xyzw=(0.0, 0.0, 0.0, 1.0), lin=(0, 0, 0), ang=(0, 0, 0)):

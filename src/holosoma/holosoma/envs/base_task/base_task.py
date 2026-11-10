@@ -16,7 +16,7 @@ from holosoma.managers.reset_events.manager import ResetEventManager
 from holosoma.managers.reward import RewardManager
 from holosoma.managers.termination import TerminationManager
 from holosoma.managers.terrain import TerrainManager
-from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+from holosoma.simulator.base_simulator.base_simulator import BaseSimulator, _warn_deprecated
 from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.helpers import get_class
@@ -222,9 +222,6 @@ class BaseTask:
         self._pending_episode_update_mask = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self._pending_torque_rfi: tuple[bool, float] = (False, 0.0)
 
-    def _refresh_sim_tensors(self) -> None:
-        self.simulator.refresh_sim_tensors()
-
     def get_checkpoint_state(self) -> dict[str, Any]:
         """Return environment-specific state to persist in checkpoints."""
         state: dict[str, Any] = {}
@@ -270,8 +267,7 @@ class BaseTask:
         env_ids = torch.arange(self.num_envs, device=self.device)
         self.reset_envs_idx(env_ids)
 
-        self.simulator.set_actor_root_state_tensor_robots(env_ids, self.simulator.robot_root_states)
-        self.simulator.set_dof_state_tensor_robots(env_ids, self.simulator.dof_state)  # type: ignore[attr-defined]
+        self.simulator.forward_kinematics()
 
         actions = torch.zeros(self.num_envs, self.dim_actions, device=self.device, requires_grad=False)
         actor_state = {}
@@ -512,7 +508,6 @@ class BaseTask:
             self.action_manager.apply_actions()
 
     def _post_physics_step(self) -> None:
-        self._refresh_sim_tensors()
         # Cameras render and egress consumers publish here, as FRAME_END plugins (the cameras'
         # render_sensors is registered before any consumer, so buffers are fresh on read).
         self.simulator.hooks.emit(Phase.FRAME_END)
@@ -633,3 +628,7 @@ class BaseTask:
     def _update_log_dict(self) -> None:
         """Hook for appending task-specific metrics to `self.log_dict` (no-op by default)."""
         return
+
+    def _refresh_sim_tensors(self) -> None:
+        """Deprecated no-op: simulator state tensors are current at every read."""
+        _warn_deprecated("_refresh_sim_tensors", "drop the call; state is current at every read")

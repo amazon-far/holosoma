@@ -16,64 +16,72 @@ on:
         required: false
         default: false
         type: boolean
+      environments:
+        description: JSON array of image environments to build; empty builds all
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
 
 env:
-  ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
+  ECR_REGISTRY: ${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}
   IMAGE_SHA: ${{ inputs.image_sha }}
   CANDIDATE_TAG: ${{ inputs.candidate_tag }}
 
 jobs:
+  select:
+    name: Select Images
+    runs-on: ubuntu-24.04
+    outputs:
+      include: ${{ steps.select.outputs.include }}
+    steps:
+      - name: Select images to build
+        id: select
+        shell: bash
+        env:
+          ENVIRONMENTS: ${{ inputs.environments }}
+        run: |
+          set -euo pipefail
+          images=$(cat <<'JSON'
+          [
+            {"environment": "inference", "image": "holosoma-inference", "dockerfile": "src/holosoma_inference/docker/Dockerfile",
+             "dependency_target": "dependencies", "target": "runtime", "runner_prefix": "codebuild-holosoma-cpu-build"},
+            {"environment": "retargeting", "image": "holosoma-retargeting", "dockerfile": "src/holosoma_retargeting/docker/Dockerfile",
+             "dependency_target": "dependencies", "target": "runtime", "runner_prefix": "codebuild-holosoma-cpu-build"},
+            {"environment": "holosoma", "image": "holosoma", "dockerfile": "docker/Dockerfile",
+             "dependency_target": "dependencies", "target": "runtime", "runner_prefix": "codebuild-holosoma-a10g-x1-gpu-build"},
+            {"environment": "isaacsim", "image": "holosoma-isaacsim", "dockerfile": "docker/isaacsim.Dockerfile",
+             "dependency_target": "dependencies", "target": "runtime", "runner_prefix": "codebuild-holosoma-a10g-x1-gpu-build"},
+            {"environment": "mujoco", "image": "holosoma-mujoco", "dockerfile": "docker/mujoco.Dockerfile",
+             "dependency_target": "dependencies", "target": "runtime", "runner_prefix": "codebuild-holosoma-cpu-build",
+             "build_args": "WARP=true"},
+            {"environment": "thor-inference", "image": "holosoma-thor-inference", "dockerfile": "docker/thor/Dockerfile",
+             "dependency_target": "app-deps", "target": "inference", "runner_prefix": "codebuild-holosoma-arm-build"},
+            {"environment": "thor-inference-ros", "image": "holosoma-thor-inference-ros", "dockerfile": "docker/thor/Dockerfile",
+             "dependency_target": "app-deps-ros", "target": "inference-ros", "runner_prefix": "codebuild-holosoma-arm-build"}
+          ]
+          JSON
+          )
+          include=$(jq -c --argjson want "${ENVIRONMENTS:-null}" '
+            if $want == null then . else
+              ($want - map(.environment)) as $unknown
+              | if ($unknown | length) > 0 then error("unknown environments: \($unknown)") else . end
+              | map(select(.environment as $e | $want | index($e)))
+            end' <<< "$images")
+          [[ "$include" != "[]" ]] || {
+            echo "environments selected no images" >&2
+            exit 1
+          }
+          echo "include=$include" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: select
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - environment: inference
-            image: holosoma-inference
-            dockerfile: src/holosoma_inference/docker/Dockerfile
-            dependency_target: dependencies
-            target: runtime
-            runner_prefix: codebuild-holosoma-cpu-build
-          - environment: retargeting
-            image: holosoma-retargeting
-            dockerfile: src/holosoma_retargeting/docker/Dockerfile
-            dependency_target: dependencies
-            target: runtime
-            runner_prefix: codebuild-holosoma-cpu-build
-          - environment: holosoma
-            image: holosoma
-            dockerfile: docker/Dockerfile
-            dependency_target: dependencies
-            target: runtime
-            runner_prefix: codebuild-holosoma-a10g-x1-gpu-build
-          - environment: isaacsim
-            image: holosoma-isaacsim
-            dockerfile: docker/isaacsim.Dockerfile
-            dependency_target: dependencies
-            target: runtime
-            runner_prefix: codebuild-holosoma-a10g-x1-gpu-build
-          - environment: mujoco
-            image: holosoma-mujoco
-            dockerfile: docker/mujoco.Dockerfile
-            dependency_target: dependencies
-            target: runtime
-            runner_prefix: codebuild-holosoma-cpu-build
-            build_args: WARP=true
-          - environment: thor-inference
-            image: holosoma-thor-inference
-            dockerfile: docker/thor/Dockerfile
-            dependency_target: app-deps
-            target: inference
-            runner_prefix: codebuild-holosoma-arm-build
-          - environment: thor-inference-ros
-            image: holosoma-thor-inference-ros
-            dockerfile: docker/thor/Dockerfile
-            dependency_target: app-deps-ros
-            target: inference-ros
-            runner_prefix: codebuild-holosoma-arm-build
+        include: ${{ fromJSON(needs.select.outputs.include) }}
     name: Build ${{ matrix.environment }} Docker Image
     runs-on: ${{ matrix.runner_prefix }}-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     steps:

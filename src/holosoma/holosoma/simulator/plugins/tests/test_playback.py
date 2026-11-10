@@ -266,19 +266,7 @@ class _FakeSimulator:
         # Zero origins by default, so the other tests read the clip's own coordinates.
         self.scene = EnvOriginsScene(torch.zeros(num_envs, 3) if env_origins is None else env_origins, "cpu")
         self.shutdown_requested = False
-        self.root_writes: list[torch.Tensor] = []
-        self.dof_writes: list[torch.Tensor] = []
         self.object_writes: list[tuple[list[str], torch.Tensor]] = []
-
-    @property
-    def dof_state(self) -> torch.Tensor:
-        return torch.cat([self.dof_pos[..., None], self.dof_vel[..., None]], dim=-1)
-
-    def set_actor_root_state_tensor_robots(self, env_ids: torch.Tensor, root_states: torch.Tensor) -> None:
-        self.root_writes.append(root_states.clone())
-
-    def set_dof_state_tensor_robots(self, env_ids: torch.Tensor, dof_states: torch.Tensor) -> None:
-        self.dof_writes.append(dof_states.clone())
 
     def set_actor_states(self, names: list[str], env_ids: torch.Tensor, states: torch.Tensor) -> None:
         self.object_writes.append((names, states.clone()))
@@ -306,12 +294,10 @@ def _cfg(tmp_path: Path, **kw: Any) -> MotionPlaybackPluginConfig:
     return MotionPlaybackPluginConfig(motion_files=[_write(tmp_path, "clip.npy", mat)], **kw)
 
 
-def test_plugin_writes_state_each_substep(tmp_path: Path) -> None:
+def test_plugin_writes_the_clip_state(tmp_path: Path) -> None:
     sim = _FakeSimulator()
     _make(_cfg(tmp_path), sim)
     _frame(sim)
-    assert len(sim.root_writes) == 2  # once per PRE_STEP substep
-    assert len(sim.dof_writes) == 2
     assert sim.dof_pos.tolist() == [[10.0, 20.0], [10.0, 20.0]]  # frame 0 joints on every env
     assert sim.robot_root_states[0, 0].item() == 0.0
     assert torch.all(sim.dof_vel == 0)  # velocities zeroed in kinematic playback
@@ -434,9 +420,10 @@ def test_plugin_drives_multiple_objects_in_order(tmp_path: Path) -> None:
 def test_plugin_fixed_base_skips_root_write(tmp_path: Path) -> None:
     sim = _FakeSimulator()
     _make(_cfg(tmp_path, fixed=True), sim)
+    sim.robot_root_states.fill_(7.0)
     _frame(sim)
-    assert sim.dof_writes  # joints still written
-    assert not sim.root_writes  # no root state on a fixed-base clip
+    assert sim.dof_pos.tolist() == [[10.0, 20.0], [10.0, 20.0]]  # joints still written
+    assert torch.all(sim.robot_root_states == 7.0)  # no root state on a fixed-base clip
 
 
 def test_plugin_requires_clip() -> None:
@@ -850,7 +837,7 @@ def test_root_and_object_poses_are_offset_into_each_env(tmp_path: Path) -> None:
     for _ in range(3):
         _frame(sim)
 
-    root = sim.root_writes[-1]
+    root = sim.robot_root_states
     clip_root = torch.tensor([root[0, 0].item(), 0.0, 0.0])  # env 0 has a zero origin
     assert clip_root[0].item() > 0  # the clip has moved off frame 0, so the offset is not masked
     torch.testing.assert_close(root[:, :3], clip_root + origins)
@@ -872,6 +859,6 @@ def test_single_env_at_zero_origin_writes_the_clip_unchanged(tmp_path: Path) -> 
     sim = _FakeSimulator(num_envs=1)
     _make(_cfg(tmp_path, objects=["crate"]), sim)
     _frame(sim)
-    assert sim.root_writes[-1][0, :3].tolist() == [0.0, 0.0, 0.0]  # frame 0 of the fixture clip
+    assert sim.robot_root_states[0, :3].tolist() == [0.0, 0.0, 0.0]  # frame 0 of the fixture clip
     _, states = sim.object_writes[-1]
     assert states[0, :3].tolist() == [0.0, 0.0, 0.0]

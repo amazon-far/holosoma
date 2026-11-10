@@ -320,7 +320,8 @@ std::string cli_usage(const std::string& program, const std::string& preset_dir)
      << "  --task.motion-start-timestep N    WBT clip start frame (and --task.motion-end-timestep N)\n"
      << "  --secondary none                  Disable the dual-mode safety policy\n"
      << "  --secondary.task.model-path PATH  Override the secondary policy model\n"
-     << "  --runtime.state-timeout-s S       Damp if robot state is older than S seconds (0 disables)\n";
+     << "  --runtime.state-timeout-s S       Damp if robot state is older than S seconds (0 disables)\n"
+     << "  --runtime.backend NAME            Run inference on cpu, cuda or tensorrt\n";
   return os.str();
 }
 

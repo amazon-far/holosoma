@@ -1,0 +1,44 @@
+name: Test Simulator Image
+
+on:
+  workflow_call:
+    inputs:
+      simulator:
+        description: Simulator whose tests/ci/<simulator>_ci_tests.sh suite runs
+        required: true
+        type: string
+      image:
+        required: true
+        type: string
+      multigpu:
+        description: JSON array of HOLOSOMA_MULTIGPU values to test
+        required: false
+        type: string
+        default: '["False"]'
+
+permissions:
+  contents: read
+
+env:
+  HOLOSOMA_DEPS_DIR: /root/.holosoma_deps
+
+jobs:
+  simulator-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        multigpu: ${{ fromJSON(inputs.multigpu) }}
+    name: Test ${{ inputs.simulator }} (${{ matrix.multigpu == 'True' && 'multi-gpu' || 'single-gpu' }})
+    runs-on:
+      - codebuild-holosoma-a10g-${{ matrix.multigpu == 'True' && 'x4' || 'x1' }}-gpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
+    container:
+      image: ${{ inputs.image }}
+      options: "--gpus all --runtime=nvidia --shm-size=12g"
+      env:
+        HOLOSOMA_MULTIGPU: ${{ matrix.multigpu }}
+    steps:
+      - name: Pytest
+        shell: bash
+        run: |
+          cd /workspace/holosoma
+          bash tests/ci/${{ inputs.simulator }}_ci_tests.sh

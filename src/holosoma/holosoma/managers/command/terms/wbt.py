@@ -816,10 +816,7 @@ class MotionCommand(CommandTermBase):
             # Flush the mutated root/dof state into the simulator so that
             # rigid-body positions are up-to-date for downstream consumers
             # (termination checks, observations, rewards).
-            sim = self._env.simulator
-            sim.set_actor_root_state_tensor_robots(ended_env_ids, sim.robot_root_states)
-            sim.set_dof_state_tensor_robots(ended_env_ids, sim.dof_state)  # type: ignore[attr-defined]
-            sim.refresh_sim_tensors()
+            self._env.simulator.forward_kinematics()
             # The teleport is an observation reset: drop history and re-render these envs.
             self._env.observation_manager.reset(ended_env_ids)
 
@@ -1268,9 +1265,6 @@ class MotionCommand(CommandTermBase):
     ) -> dict[str, torch.Tensor]:
         """Capture body states by temporarily setting the robot state in the simulator."""
         simulator = self._env.simulator
-        assert simulator.get_simulator_type() == SimulatorType.ISAACSIM, (
-            "Default-pose interpolation only supports IsaacSim (it requires FK on state writes)."
-        )
         env_id = 0
         env_origin = simulator.scene.env_origins[env_id].to(self.device)
 
@@ -1285,11 +1279,7 @@ class MotionCommand(CommandTermBase):
             simulator.robot_root_states[env_id, 10:13] = root_ang_vel
             simulator.dof_pos[env_id] = joint_pos
             simulator.dof_vel[env_id] = joint_vel
-
-            simulator.set_actor_root_state_tensor_robots()
-            simulator.set_dof_state_tensor_robots()
-            simulator.write_state_updates()
-            simulator.refresh_sim_tensors()
+            simulator.forward_kinematics()
 
             body_pos = (simulator._rigid_body_pos[env_id] - env_origin).clone()
             body_quat = simulator._rigid_body_rot[env_id].clone()
@@ -1299,10 +1289,7 @@ class MotionCommand(CommandTermBase):
             simulator.robot_root_states[env_id] = root_backup
             simulator.dof_pos[env_id] = dof_pos_backup
             simulator.dof_vel[env_id] = dof_vel_backup
-            simulator.set_actor_root_state_tensor_robots()
-            simulator.set_dof_state_tensor_robots()
-            simulator.write_state_updates()
-            simulator.refresh_sim_tensors()
+            simulator.forward_kinematics()
 
         return {
             "pos": body_pos,

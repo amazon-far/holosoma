@@ -222,12 +222,7 @@ class RandomizationManager:
                     else:
                         raise
 
-        # IsaacSim needs the startup writes pushed to the sim and its tensors refreshed. MuJoCo
-        # acquires nothing up front, so there is nothing to refresh. The name check avoids importing
-        # the isaacsim module here.
-        if type(self.env.simulator).__name__ == "IsaacSim":
-            self.env.simulator.scene.write_data_to_sim()
-            self.env.simulator.refresh_sim_tensors()
+        self.env.simulator.forward_kinematics()
 
     def reset(self, env_ids: Any) -> None:
         """Run episodic hooks during environment reset.

@@ -23,7 +23,6 @@ class WholeBodyTrackingManager(BaseTask):
         super()._init_buffers()
 
         # -------------------------------- terms same with locomotion_manager.py [start]--------------------------------
-        self.base_quat = self.simulator.base_quat
         self.need_to_refresh_envs = torch.ones(self.num_envs, dtype=torch.bool, device=self.device, requires_grad=False)
         self._configure_default_dof_pos()
         self._init_domain_rand_buffers()
@@ -42,8 +41,9 @@ class WholeBodyTrackingManager(BaseTask):
         self.default_dof_pos_base = self.default_dof_pos_base.unsqueeze(0)  # (1, num_dof)
         self.default_dof_pos = self.default_dof_pos_base.repeat(self.num_envs, 1).clone()  # (num_envs, num_dof)
 
-    def _pre_compute_observations_callback(self) -> None:
-        self.base_quat[:] = self.simulator.base_quat[:]
+    @property
+    def base_quat(self) -> torch.Tensor:
+        return self.simulator.base_quat
 
     def _reset_buffers_callback(
         self, env_ids: torch.Tensor, target_buf: Mapping[str, torch.Tensor] | None = None
@@ -58,10 +58,8 @@ class WholeBodyTrackingManager(BaseTask):
         return self.need_to_refresh_envs.nonzero(as_tuple=False).flatten()
 
     def _refresh_envs_after_reset(self, env_ids: torch.Tensor) -> None:
-        self.simulator.set_actor_root_state_tensor(env_ids, self.simulator.all_root_states)
-        self.simulator.set_dof_state_tensor(env_ids, self.simulator.dof_state)  # type: ignore[attr-defined]
+        self.simulator.forward_kinematics()
         self.need_to_refresh_envs[env_ids] = False
-        self.simulator.refresh_sim_tensors()
         self._pre_compute_observations_callback()
 
     def _get_average_episode_tracker(self) -> AverageEpisodeLengthTracker:
@@ -130,8 +128,6 @@ class WholeBodyTrackingManager(BaseTask):
         self.record_push_robot_vel_buf[env_ids] = self.push_robot_vel_buf[env_ids].clone()
         # Additive push to match BeyondMimic/IsaacLab's push_by_setting_velocity.
         self.simulator.robot_root_states[env_ids, 7:13] += self.push_robot_vel_buf[env_ids]
-        # Push impulses only take effect in the simulator once we write the mutated root state tensor back.
-        self.simulator.set_actor_root_state_tensor_robots(env_ids, self.simulator.robot_root_states)
         self._max_push_vel = max_vel_tensor.clone()
 
     #########################################################################################################
@@ -200,9 +196,6 @@ class WholeBodyTrackingManager(BaseTask):
         self.simulator.robot_root_states[env_ids, 7:10] = root_lin_vel
         self.simulator.robot_root_states[env_ids, 10:13] = root_ang_vel
 
-        self.simulator.set_actor_root_state_tensor(env_ids, self.simulator.all_root_states)
-        self.simulator.set_dof_state_tensor(env_ids, self.simulator.dof_state)  # type: ignore[attr-defined]
-
         if motion_command.motion.has_object:  # type: ignore[has-type]
             # set object root_states from motion command
             object_pos = motion_command.object_pos_w.clone()
@@ -217,10 +210,8 @@ class WholeBodyTrackingManager(BaseTask):
             object_name = motion_command.object_name  # type: ignore[has-type]
             self.simulator.set_actor_states([object_name], env_ids, object_states)
 
-        self.simulator.scene.write_data_to_sim()  # type: ignore[attr-defined]
-        self.simulator.sim.forward()  # type: ignore[attr-defined]
+        self.simulator.forward_kinematics()
         self.simulator.sim.render()  # type: ignore[attr-defined]
-        self.simulator.refresh_sim_tensors()
 
         time.sleep(dt)
 

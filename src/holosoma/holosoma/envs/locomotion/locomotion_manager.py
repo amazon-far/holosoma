@@ -45,8 +45,6 @@ class LeggedRobotLocomotionManager(BaseTask):
         """Initialize torch tensors which will contain simulation states and processed quantities"""
         super()._init_buffers()
 
-        self.base_quat = self.simulator.base_quat
-
         # initialize some data used later on
         self._init_counters()
         # joint positions offsets
@@ -137,15 +135,15 @@ class LeggedRobotLocomotionManager(BaseTask):
         return self.need_to_refresh_envs.nonzero(as_tuple=False).flatten()
 
     def _refresh_envs_after_reset(self, env_ids: torch.Tensor) -> None:
-        self.simulator.set_actor_root_state_tensor(env_ids, self.simulator.all_root_states)
-        self.simulator.set_dof_state_tensor(env_ids, self.simulator.dof_state)  # type: ignore[attr-defined]
+        self.simulator.forward_kinematics()
         self.need_to_refresh_envs[env_ids] = False
-        self.simulator.refresh_sim_tensors()
         self._pre_compute_observations_callback()
 
+    @property
+    def base_quat(self) -> torch.Tensor:
+        return self.simulator.base_quat
+
     def _pre_compute_observations_callback(self) -> None:
-        # prepare quantities
-        self.base_quat[:] = self.simulator.base_quat[:]
         self.terrain_manager.update_heights()
 
     def _update_tasks_callback(self) -> None:
@@ -183,7 +181,6 @@ class LeggedRobotLocomotionManager(BaseTask):
         if target_buf is not None:
             self.simulator.dof_pos[env_ids] = target_buf["dof_pos"].to(self.simulator.dof_pos.dtype)
             self.simulator.dof_vel[env_ids] = target_buf["dof_vel"].to(self.simulator.dof_vel.dtype)
-            self.base_quat[env_ids] = target_buf["base_quat"].to(self.base_quat.dtype)
             self.episode_length_buf[env_ids] = target_buf["episode_length_buf"].to(self.episode_length_buf.dtype)
             self.reset_buf[env_ids] = target_buf["reset_buf"].to(self.reset_buf.dtype)
             self.time_out_buf[env_ids] = target_buf["time_out_buf"].to(self.time_out_buf.dtype)
@@ -265,8 +262,6 @@ class LeggedRobotLocomotionManager(BaseTask):
         self.push_robot_vel_buf[env_ids] = rand * max_vel_tensor.unsqueeze(0)
         self.record_push_robot_vel_buf[env_ids] = self.push_robot_vel_buf[env_ids].clone()
         self.simulator.robot_root_states[env_ids, 7:9] = self.push_robot_vel_buf[env_ids]
-        # Push impulses only take effect in the simulator once we write the mutated root state tensor back.
-        self.simulator.set_actor_root_state_tensor_robots(env_ids, self.simulator.robot_root_states)
         self._max_push_vel = max_vel_tensor.clone()
 
     ################ ENV CALLBACKS #################

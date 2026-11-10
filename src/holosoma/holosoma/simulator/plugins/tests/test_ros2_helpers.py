@@ -90,6 +90,33 @@ def test_depth_16uc1_millimeters_and_nohit_zero() -> None:
     assert out[1, 1] == 65535  # 100 m = 100000 mm clamped to uint16 max
 
 
+def test_depth_16uc1_nan_and_negative_also_read_as_no_measurement() -> None:
+    # What this pins is the lower clamp: without it a negative range wraps to a large positive
+    # millimetre count (-1 m -> 64536). The NaN and -inf columns document the REP-118 "no
+    # measurement" convention; they do not constrain it, because with the non-finite mask removed a
+    # clamp-then-cast still lands on 0 for both on this platform -- and for NaN only because a
+    # float-to-unsigned cast of NaN is implementation-defined, not because anything guarantees 0.
+    # Only +inf needs the explicit mask, and test_depth_16uc1_millimeters_and_nohit_zero covers it.
+    depth: npt.NDArray[np.float32] = np.array([[np.nan, -np.inf], [-1.0, 2.0]], dtype=np.float32)
+    out: npt.NDArray[np.uint16] = np.frombuffer(encode_frame(depth, "16UC1").data, dtype=np.uint16).reshape(2, 2)
+    assert out[0, 0] == 0 and out[0, 1] == 0 and out[1, 0] == 0
+    assert out[1, 1] == 2000
+
+
+@pytest.mark.parametrize("channel_axis", [False, True], ids=["hw", "hw1"])
+def test_depth_encoding_does_not_mutate_the_caller_array(channel_axis: bool) -> None:
+    # The frame array is the shared per-step host snapshot; 16UC1 scales on its own buffer. The
+    # [H,W,1] case is the one production actually passes (get_camera_data's shape) and it reaches the
+    # squeeze path; [H,W] aliases the caller just as directly, so either shape catches an in-place
+    # scale.
+    depth: npt.NDArray[np.float32] = np.array([[1.5, np.inf], [np.nan, 3.0]], dtype=np.float32)
+    if channel_axis:
+        depth = depth[..., None]
+    before = depth.copy()
+    encode_frame(depth, "16UC1")
+    assert np.array_equal(depth, before, equal_nan=True)
+
+
 def test_format_array_mismatch_raises() -> None:
     with pytest.raises(ValueError, match="needs an"):
         encode_frame(np.zeros((4, 4), np.uint8), "rgb8")  # 2-D into an rgb format

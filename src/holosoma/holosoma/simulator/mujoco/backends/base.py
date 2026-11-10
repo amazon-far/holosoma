@@ -18,7 +18,6 @@ from holosoma.simulator.mujoco.geom_groups import DEFAULT_RENDER_GEOM_GROUPS
 
 if TYPE_CHECKING:
     from holosoma.config_types.full_sim import FullSimConfig
-    from holosoma.simulator.mujoco.tensor_views import BaseMujocoView
     from holosoma.simulator.shared.sensor_manager import CameraRecord
 
 
@@ -81,6 +80,8 @@ class IMujocoBackend(abc.ABC):
         self.config = config
         self.device = device
         self.num_envs = config.training.num_envs
+        # A step computes body kinematics before it integrates, leaving body state one step behind.
+        self._kinematics_pending = False
 
     @abc.abstractmethod
     def step(self) -> None:
@@ -100,9 +101,9 @@ class IMujocoBackend(abc.ABC):
     def forward_kinematics(self) -> None:
         """Propagate written qpos/qvel to derived quantities (xpos/xquat/geom/cam poses), no dynamics.
 
-        The FK-only refresh for kinematic playback: after ``set_dof_state``/``set_actor_state``
-        writes, this makes everything the renderers read consistent with the written state
-        without integrating (no gravity, no contacts, no time advance).
+        After ``qpos``/``qvel`` or ``set_actor_state`` writes, this makes body state and everything
+        the renderers read consistent with the written state without integrating (no gravity, no
+        contacts, no time advance). Accelerations and contacts keep the last step's values.
         """
         ...
 
@@ -155,22 +156,6 @@ class IMujocoBackend(abc.ABC):
 
     # View factory methods
     @abc.abstractmethod
-    def create_root_view(self, addrs: dict[str, Any]) -> BaseMujocoView:
-        """Create view for robot root states.
-
-        Parameters
-        ----------
-        addrs : dict
-            Dictionary with keys: pos_indices, quat_indices, vel_indices, ang_vel_indices
-
-        Returns
-        -------
-        BaseMujocoView
-            View for 13-element root state [pos, quat, lin_vel, ang_vel]
-        """
-        ...
-
-    @abc.abstractmethod
     def get_applied_forces_view(self) -> npt.NDArray[Any] | torch.Tensor:
         """Get writable view for external applied forces.
 
@@ -203,26 +188,11 @@ class IMujocoBackend(abc.ABC):
         ...
 
     @abc.abstractmethod
-    def set_dof_state(self, env_ids: torch.Tensor, dof_states: torch.Tensor, dof_addrs: dict[str, Any]) -> None:
-        """Set DOF states for specified environments.
-
-        Parameters
-        ----------
-        env_ids : torch.Tensor
-            Environment IDs to update
-        dof_states : torch.Tensor
-            DOF states [num_selected_envs * num_dofs, 2] in the flattened format
-        dof_addrs : dict
-            Address dictionary with 'dof_qpos_addrs' and 'dof_qvel_addrs'
-        """
-        ...
-
-    @abc.abstractmethod
     def get_actor_state(self, env_ids: torch.Tensor, qpos_addr: int, qvel_addr: int) -> torch.Tensor:
         """Read an actor's per-environment freejoint state from live backend storage.
 
         Reads each env's own value from the live qpos/qvel (GPU for WarpBackend). Velocity
-        is the freejoint qvel (body-local angular), matching the set path and robot proxy.
+        is the freejoint qvel (body-local angular), matching the set path.
 
         ``qpos_addr`` / ``qvel_addr`` are the start of the actor's freejoint 7-dof pose and
         6-dof velocity slices. Returns ``[len(env_ids), 13]`` in holosoma format
@@ -277,7 +247,7 @@ class IMujocoBackend(abc.ABC):
 
         This method provides efficient access to rigid body states without
         CPU↔GPU synchronization or tensor allocation overhead. Backends should
-        implement this for optimal performance during refresh_sim_tensors().
+        implement this for optimal performance when body state is read.
 
         Returns
         -------
@@ -301,9 +271,12 @@ class IMujocoBackend(abc.ABC):
     def refresh_rigid_body_states(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Return current robot-body state tensors in holosoma order.
 
-        The default gathers robot rows from full-model backend views. Backends
-        without full-model tensor views can override this with native extraction.
+        Runs :meth:`forward_kinematics` first if a step left body kinematics behind. The default
+        gathers robot rows from full-model backend views. Backends without full-model tensor views
+        can override this with native extraction.
         """
+        if self._kinematics_pending:
+            self.forward_kinematics()
         views = self.get_rigid_body_state_views()
         if views is None:
             raise NotImplementedError(f"{type(self).__name__} does not provide rigid-body state refresh")
@@ -332,40 +305,6 @@ class IMujocoBackend(abc.ABC):
             CPU MjData with initial state to copy to backend storage
         """
         return  # Default implementation - backends can override
-
-    @abc.abstractmethod
-    def create_quaternion_view(self, quat_slice: slice) -> BaseMujocoView:
-        """Create quaternion view with format conversion.
-
-        Converts between MuJoCo [w,x,y,z] and holosoma [x,y,z,w] quaternion formats.
-
-        Parameters
-        ----------
-        quat_slice : slice
-            Slice for extracting quaternion from qpos
-
-        Returns
-        -------
-        BaseMujocoView
-            View for quaternion [num_envs, 4] with format conversion
-        """
-        ...
-
-    @abc.abstractmethod
-    def create_angular_velocity_view(self, ang_vel_slice: slice) -> BaseMujocoView:
-        """Create angular velocity view with proper reshaping.
-
-        Parameters
-        ----------
-        ang_vel_slice : slice
-            Slice for extracting angular velocity from qvel
-
-        Returns
-        -------
-        BaseMujocoView
-            View for angular velocity [num_envs, 3]
-        """
-        ...
 
     def close(self) -> None:  # noqa: B027 - backends without native resources need no teardown.
         """Release backend-owned rendering resources. Must be idempotent."""

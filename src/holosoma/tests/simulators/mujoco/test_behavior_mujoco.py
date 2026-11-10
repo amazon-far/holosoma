@@ -185,9 +185,6 @@ class _MinimalCollisionContext:
             self.wall_contacts[env_id] += any(model.geom("wall").id in data.contact[i].geom for i in range(data.ncon))
         self.steps += 1
 
-    def refresh_sim_tensors(self):
-        pass  # states() reads live native arrays.
-
     def render(self):
         pass  # These assertion regressions do not need a renderer.
 

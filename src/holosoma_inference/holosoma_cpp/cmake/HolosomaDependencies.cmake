@@ -142,6 +142,18 @@ if(_want_unitree)
   set(HOLOSOMA_UNITREE_SDK2_ENABLED ON)
 endif()
 
+# --- TensorRT (optional inference backend) -------------------------------------
+# Never fetched: TensorRT ships with the device's CUDA stack and is not redistributable.
+if(HOLOSOMA_WITH_TENSORRT STREQUAL "AUTO")
+  find_package(TensorRT QUIET)
+elseif(HOLOSOMA_WITH_TENSORRT)
+  find_package(TensorRT REQUIRED)
+endif()
+if(TensorRT_FOUND)
+  set(HOLOSOMA_TENSORRT_ENABLED ON)
+  message(STATUS "holosoma: TensorRT ${TensorRT_VERSION} backend enabled")
+endif()
+
 # --- GoogleTest ----------------------------------------------------------------
 if(HOLOSOMA_BUILD_TESTS)
   find_package(GTest 1.10 CONFIG QUIET)

@@ -71,7 +71,7 @@ class _FakeSim:
     """Stand-in simulator that reproduces a backend's substep render gate.
 
     A backend draws once its own substep counter reaches ``render_interval`` (IsaacSim's
-    ``forward_kinematics``/``_step_dynamics``, whose counter runs over substeps and is never reset),
+    ``forward_kinematics``/``_advance_substep``, whose counter runs over substeps and is never reset),
     and a camera consumer on FRAME_END reads whatever that last draw left in the buffers. Carrying
     written/rendered/egressed state makes the loop's schedule observable without a real backend: a
     playback-style plugin samples on FRAME_BEGIN, writes on PRE_STEP, and egresses on FRAME_END.
@@ -90,16 +90,14 @@ class _FakeSim:
         self.sensor_config: dict[str, object] = {}
         self._budget = (frames + 2) * decimation
         self.substeps = 0
-        self.refreshes = 0
         self._shutdown = False
         self._sampled: int | None = None
         self._written: int | None = None
         self._rendered: object = None
         self.rendered_at: int | None = None
-        self.tensors_at: int | None = None
         self.control_steps = 0
         self.captured: list[object] = []
-        self.alignment: list[tuple[int | None, int | None]] = []
+        self.drawn_at_egress: list[int | None] = []
         self.phases: list[Phase | str] = []
         self.viewer_renders: list[int] = []
 
@@ -115,11 +113,6 @@ class _FakeSim:
 
     def request_shutdown(self, reason: str = "") -> None:
         self._shutdown = True
-
-    def refresh_sim_tensors(self) -> None:
-        """Stand in for resyncing the state tensors: record which substep they now describe."""
-        self.refreshes += 1
-        self.tensors_at = self.substeps
 
     def render(self) -> None:
         self.viewer_renders.append(self.substeps)
@@ -155,7 +148,7 @@ class _FakeSim:
     def _egress(self) -> None:
         self.phases.append(Phase.FRAME_END)
         self.captured.append(self._rendered)
-        self.alignment.append((self.tensors_at, self.rendered_at))
+        self.drawn_at_egress.append(self.rendered_at)
 
 
 def _run_sim_config(
@@ -187,7 +180,6 @@ def _run(
     sim: _FakeSim,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    backend: SimulatorType = SimulatorType.ISAACSIM,
     headless: bool = True,
     viewer_dt: float = 1.0,
 ) -> None:
@@ -196,7 +188,7 @@ def _run(
     The backend is reported by patching the loader the module resolved, leaving the process-wide
     simulator-type singleton alone so ordering against other tests cannot matter.
     """
-    monkeypatch.setattr("holosoma.utils.sim_utils.get_simulator_type", lambda: backend)
+    monkeypatch.setattr("holosoma.utils.sim_utils.get_simulator_type", lambda: SimulatorType.ISAACSIM)
     config = _run_sim_config(
         decimation=sim.decimation, render_interval=sim.render_interval, headless=headless, viewer_dt=viewer_dt
     )
@@ -287,7 +279,7 @@ def test_a_beating_render_cadence_misaligns_state_and_image(monkeypatch: pytest.
     """A render_interval that does not divide the decimation draws before the frame's last substep.
 
     Interval 3 against decimation 4 draws on substeps 3, 6, 9, 12 while frames close on 4, 8, 12, so
-    the skew between image and state changes frame to frame. Pinned here as the reason ``IsaacSim``
+    the skew between image and the state at egress changes frame to frame. Pinned here as the reason ``IsaacSim``
     rejects this pairing at construction when cameras are configured, rather than letting it ship
     frames a consumer cannot trust.
     """
@@ -295,43 +287,15 @@ def test_a_beating_render_cadence_misaligns_state_and_image(monkeypatch: pytest.
 
     _run(sim, monkeypatch)
 
-    assert sim.alignment == [(4, 3), (8, 6), (12, 12)]
+    assert sim.drawn_at_egress == [3, 6, 12]  # frames close on substeps 4, 8, 12
 
 
 # ----- the loop's other per-backend and viewer branches -----
 
 
-@pytest.mark.parametrize("backend", [SimulatorType.ISAACSIM])
-def test_tensor_backends_refresh_every_substep_and_again_before_egress(
-    monkeypatch: pytest.MonkeyPatch, backend: SimulatorType
-) -> None:
-    """IsaacSim resyncs before every substep, plus once more before each frame egresses.
-
-    The count is the observable here, not an implementation detail: it is what distinguishes a refresh
-    per substep (PRE_STEP writers see current state) from one per control step, which the alignment
-    assertion above cannot see because it only reads the last refresh before FRAME_END.
-    """
-    sim = _FakeSim(frames=3)
-
-    _run(sim, monkeypatch, backend=backend)
-
-    assert sim.refreshes == sim.substeps + len(sim.captured)
-
-
-def test_mujoco_never_refreshes_tensors(monkeypatch: pytest.MonkeyPatch) -> None:
-    """MuJoCo runs no env/task needing those tensors, so the direct loop leaves them alone."""
-    sim = _FakeSim(frames=3)
-
-    _run(sim, monkeypatch, backend=SimulatorType.MUJOCO)
-
-    assert sim.refreshes == 0
-
-
 @pytest.mark.parametrize("render_interval", [1, 2, DECIMATION])
-def test_state_tensors_and_image_describe_the_same_substep(
-    monkeypatch: pytest.MonkeyPatch, render_interval: int
-) -> None:
-    """At egress the state tensors describe the substep the image was drawn in, not the one before.
+def test_frame_end_follows_the_frames_last_draw(monkeypatch: pytest.MonkeyPatch, render_interval: int) -> None:
+    """A frame egresses on the substep its image was last drawn, so the image matches the state at egress.
 
     A FRAME_END consumer may publish both — camera frames next to odometry, simulator state, or IMU —
     so a skew between them puts a stale pose beside a current image. Swept over the render intervals
@@ -341,8 +305,8 @@ def test_state_tensors_and_image_describe_the_same_substep(
 
     _run(sim, monkeypatch)
 
-    # Frame g's last draw and its pre-egress refresh both land on substep (g + 1) * DECIMATION.
-    assert sim.alignment == [(4, 4), (8, 8), (12, 12)]
+    # Frame g's last draw and its egress both land on substep (g + 1) * DECIMATION.
+    assert sim.drawn_at_egress == [4, 8, 12]
 
 
 def test_shutdown_asked_for_inside_a_frame_still_egresses_that_frame(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -490,21 +454,11 @@ class _PlaybackSim(_FakeSim):
         )
 
     @property
-    def dof_state(self) -> torch.Tensor:
-        return torch.cat([self.dof_pos[..., None], self.dof_vel[..., None]], dim=-1)
-
-    @property
     def shutdown_requested(self) -> bool:
         return self._shutdown
 
     def request_shutdown(self, reason: str = "") -> None:
         self._shutdown = True
-
-    def set_actor_root_state_tensor_robots(self, env_ids: torch.Tensor, root_states: torch.Tensor) -> None:
-        pass
-
-    def set_dof_state_tensor_robots(self, env_ids: torch.Tensor, dof_states: torch.Tensor) -> None:
-        pass
 
     def set_actor_states(self, names: list[str], env_ids: torch.Tensor, states: torch.Tensor) -> None:
         pass
