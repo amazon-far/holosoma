@@ -77,6 +77,8 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         self._camera_prim_path: str | None = None
         self._view: Any = None
         self._rtx_capture: Any = None
+        self._view_tile_limit: Any = None
+        self._view_tile_resolution: Any = None
 
         logger.info(
             f"IsaacSim video recorder initialized - {'threaded' if config.use_recording_thread else 'synchronous'} mode"
@@ -149,9 +151,18 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         )
         self._rgb_annotator.attach([self._render_product])
         if self.simulator.backend.is_isaaclab3:
+            from pxr import Sdf
             from .backends.camera_renderers import IsaacRtxCapture
 
             self._rtx_capture = IsaacRtxCapture(self._render_product.hydra_texture, name=self._render_product.path)
+            # Auto layout can retain a preceding tiled perception product's
+            # views. This product always renders one recording environment.
+            product = stage.GetPrimAtPath(self._render_product.path)
+            product.ApplyAPI("OmniRtxPostDebugSettingsAPI_1")
+            self._view_tile_limit = product.CreateAttribute("omni:rtx:viewTile:limit", Sdf.ValueTypeNames.UInt)
+            self._view_tile_resolution = product.CreateAttribute(
+                "omni:rtx:viewTile:resolution", Sdf.ValueTypeNames.Int2
+            )
 
         logger.debug(f"Created replicator camera at: {self._camera_prim_path}")
         logger.debug(f"Render product resolution: {resolution}")
@@ -186,6 +197,10 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
                 fabric.bind_transforms(sim.get_scene_data_provider())
                 fabric.update_transforms(sim.get_scene_data_provider())
                 fabric.update_geometries(sim.get_scene_data_provider(), sim.render_generation)
+                # Annotator attachment can resync global RTX settings; publish
+                # this product's own layout immediately before requesting a draw.
+                self._view_tile_limit.Set(1)
+                self._view_tile_resolution.Set((self.config.width, self.config.height))
                 capture_isaac_rtx_products([self._rtx_capture])
 
             # Get RGB data from replicator annotator
