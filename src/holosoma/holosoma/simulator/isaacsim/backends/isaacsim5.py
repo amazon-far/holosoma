@@ -128,7 +128,7 @@ class IsaacSim5Backend(IsaacSimBackendAdapter):
 
         return sim_utils.SimulationCfg(
             dt=1.0 / config.fps,
-            render_interval=config.render_interval_steps,
+            render_interval=config.control_decimation_steps,
             device=device,
             physx=sim_utils.PhysxCfg(
                 bounce_threshold_velocity=config.physx.bounce_threshold_velocity,

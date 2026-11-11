@@ -466,7 +466,7 @@ class IsaacSim6Backend(IsaacSimBackendAdapter):
         native = config.isaacsim6
         return SimulationCfg(
             dt=1.0 / config.fps,
-            render_interval=config.render_interval_steps,
+            render_interval=config.control_decimation_steps,
             device=device,
             use_fabric=native.use_fabric,
             create_stage_in_memory=native.create_stage_in_memory,

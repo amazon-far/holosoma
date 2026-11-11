@@ -58,7 +58,8 @@ Isaac Sim 5 uses `setup_isaacsim.sh` / `source_isaacsim_setup.sh`. Docker builds
   controller/asset config.
 - **Cameras:** use `update_decimation`. At a 50 Hz control rate, `1` captures at
   50 Hz and `"10Hz"` at 10 Hz. Renderers skip idle cameras and hold observations
-  without advancing physics; `render_interval` controls viewer rendering.
+  without advancing physics. `viewer_update_decimation` controls viewer rendering
+  in simulation workflows; `render_interval` is deprecated.
   Rates above the control clock and asynchronous observations are unsupported.
 
 See typed fields/defaults in

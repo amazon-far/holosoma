@@ -20,6 +20,32 @@ from holosoma.simulator.isaacsim import backends
 
 
 @pytest.mark.no_sim
+@pytest.mark.parametrize("backend_name", ["isaacsim5", "isaacsim6"])
+def test_simulation_config_uses_control_cadence(monkeypatch: pytest.MonkeyPatch, backend_name: str) -> None:
+    """Translate the current engine config at the SDK boundary for either version."""
+    from holosoma.config_values.simulator import isaacsim
+    from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Backend
+
+    sim = ModuleType("isaaclab.sim")
+    lab = ModuleType("isaaclab")
+    setattr(lab, "sim", sim)
+    for name in ("SimulationCfg", "PhysxCfg", "RigidBodyMaterialCfg"):
+        setattr(sim, name, SimpleNamespace)
+    materials = ModuleType("isaaclab.sim.spawners.materials")
+    setattr(materials, "RigidBodyMaterialBaseCfg", SimpleNamespace)
+    monkeypatch.setitem(sys.modules, "isaaclab", lab)
+    monkeypatch.setitem(sys.modules, "isaaclab.sim", sim)
+    monkeypatch.setitem(sys.modules, "isaaclab.sim.spawners.materials", materials)
+    monkeypatch.setattr(backends, "_installed_isaaclab_major", lambda: None)
+    monkeypatch.setattr(IsaacSim6Backend, "physics_config", lambda *_args: object())
+    engine = isaacsim.config.sim
+    translated = backends.get_backend(backend_name).simulation_config(engine, "cuda:1")
+    assert translated.dt == 0.005
+    assert translated.render_interval == 4
+    assert translated.device == "cuda:1"
+
+
+@pytest.mark.no_sim
 @pytest.mark.parametrize(
     ("metadata_version", "physx_package", "expected_family", "expected_backend"),
     [("0.54.2", False, 2, "isaacsim5"), ("28.0.0", True, 3, "isaacsim6")],

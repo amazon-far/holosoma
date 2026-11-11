@@ -18,9 +18,8 @@ if sys.path and sys.path[0].endswith("simulators"):
 
 from holosoma.config_types.sensor import SensorMountConfig
 from holosoma.config_types.simulator import IsaacSim6Config
-from holosoma.utils.sim_utils import setup_simulation_environment
 from tests.simulators import _camera_presets
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step
+from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit, step
 
 
 def gpu_process_memory() -> dict[str, int]:
@@ -168,8 +167,7 @@ def main() -> int:
 
     memory_before = gpu_process_memory()
     startup_start = time.perf_counter()
-    env, device, _app = setup_simulation_environment(config, device=config.device)
-    sim = env.sim
+    sim, device, _app = launch_simulator(config, device=config.device)
     sim.set_headless(True)
     sim.setup()
     sim.setup_terrain()

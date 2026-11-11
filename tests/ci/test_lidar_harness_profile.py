@@ -55,7 +55,7 @@ def test_lidar_profile_reaches_launch_as_typed_config(
         captured.append((config, device))
         raise LaunchBoundaryError
 
-    monkeypatch.setattr(lidar_assert, "setup_simulation_environment", capture_launch)
+    monkeypatch.setattr(lidar_assert, "launch_simulator", capture_launch)
     with pytest.raises(LaunchBoundaryError):
         lidar_assert.main()
     assert len(captured) == 1

@@ -13,10 +13,10 @@ if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from holosoma.config_types.simulator import IsaacSim6Config
-from holosoma.utils.sim_utils import close_simulation_resources, setup_simulation_environment
+from holosoma.utils.sim_utils import close_simulation_resources
 from tests.simulators import _camera_presets
 from tests.simulators._native_runtime_assertions import assert_native_runtime
-from tests.simulators._sim_harness import build_run_sim_config, step
+from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, step
 
 
 def main() -> int:
@@ -46,11 +46,10 @@ def main() -> int:
         ),
     )
     assert not config.sensor
-    env = app = None
+    sim = app = None
     try:
-        env, _device, app = setup_simulation_environment(config, device="cuda:0")
+        sim, _device, app = launch_simulator(config, device="cuda:0")
         launched = time.perf_counter()
-        sim = env.sim
         sim.set_headless(True)
         sim.setup()
         sim.setup_terrain()
@@ -96,7 +95,7 @@ def main() -> int:
             flush=True,
         )
     finally:
-        close_simulation_resources(env, app)
+        close_simulation_resources(sim, app)
     from isaaclab.sim import SimulationContext
 
     assert SimulationContext.instance() is None

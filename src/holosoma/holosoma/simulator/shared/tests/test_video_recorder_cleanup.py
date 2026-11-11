@@ -79,11 +79,12 @@ def test_frame_end_captures_configured_environment_only_while_recording(record_e
         def _capture_frame_impl(self) -> None:
             self._add_frame(np.full((1, 1, 3), 127, dtype=np.uint8))
 
+    hooks = HookRegistry()
+    sensor_render_hook = hooks.add(Phase.FRAME_END, lambda: None, name="sensors.render")
     recorder = _CapturingRecorder(
         VideoConfig(use_recording_thread=False, record_env_id=record_env_id),
-        SimpleNamespace(),  # type: ignore[arg-type]  # This test's capture provider needs no physics.
+        SimpleNamespace(sensor_render_hook=sensor_render_hook),  # type: ignore[arg-type]
     )
-    hooks = HookRegistry()
     recorder.register_hooks(hooks)
 
     hooks.emit(Phase.FRAME_END)
