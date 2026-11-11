@@ -148,6 +148,22 @@ std::array<double, 3> ObservationGravity(const State &state, bool upright, const
 namespace {
 using detail::Chain;
 
+enum class ClimbEnter { kDzOrPred, kDzAndPred, kDzOnly };
+enum class ClimbExit { kBothOff, kEitherOff, kPredOff };
+
+ClimbEnter ParseClimbEnter(const std::string &name) {
+  if (name == "dz_or_pred") return ClimbEnter::kDzOrPred;
+  if (name == "dz_and_pred") return ClimbEnter::kDzAndPred;
+  if (name == "dz_only") return ClimbEnter::kDzOnly;
+  throw std::invalid_argument("unknown climb_enter");
+}
+ClimbExit ParseClimbExit(const std::string &name) {
+  if (name == "both_off") return ClimbExit::kBothOff;
+  if (name == "either_off") return ClimbExit::kEitherOff;
+  if (name == "pred_off") return ClimbExit::kPredOff;
+  throw std::invalid_argument("unknown climb_exit");
+}
+
 // A policy trained on the 15 one-hot primitive commands, reached from a
 // velocity through a discretizer, with an optional climb head.
 class PrimitiveFamily final : public Family {
@@ -197,6 +213,7 @@ class PrimitiveFamily final : public Family {
   bool StandBlocked() const;
   bool StandHeld() const;
   bool ProbeClimb() const;
+  bool Gated() const { return climb_enter_ != ClimbEnter::kDzOrPred || climb_exit_ != ClimbExit::kBothOff; }
   void ApplyFixedArm();
   int CommandCode(const std::string &name) const;
   std::string VelocityName(double vx, double vy, double wz, double deadzone) const;
@@ -204,6 +221,8 @@ class PrimitiveFamily final : public Family {
   Spec spec_;
   Options options_;
   std::string discretizer_;
+  ClimbEnter climb_enter_ = ClimbEnter::kDzOrPred;
+  ClimbExit climb_exit_ = ClimbExit::kBothOff;
   std::shared_ptr<OnnxModel> model_;
   std::vector<int64_t> depth_shape_;
   std::optional<size_t> climb_output_;
@@ -233,13 +252,10 @@ PrimitiveFamily::PrimitiveFamily(std::shared_ptr<OnnxModel> model, Spec spec, Op
   if (spec_.command_dim < 15) throw std::invalid_argument("invalid contextual policy spec");
   if (discretizer_ != "simple" && discretizer_ != "nearest_primitive")
     throw std::invalid_argument("unknown velocity discretizer");
-  if (options_.climb_enter != "dz_or_pred" && options_.climb_enter != "dz_and_pred" &&
-      options_.climb_enter != "dz_only")
-    throw std::invalid_argument("unknown climb_enter");
-  if (options_.climb_exit != "both_off" && options_.climb_exit != "either_off" && options_.climb_exit != "pred_off")
-    throw std::invalid_argument("unknown climb_exit");
+  climb_enter_ = ParseClimbEnter(options_.climb_enter);
+  climb_exit_ = ParseClimbExit(options_.climb_exit);
   // Entering must satisfy staying, or the gait flips on every resolve.
-  if (options_.climb_enter != "dz_and_pred" && options_.climb_exit != "both_off")
+  if (climb_enter_ != ClimbEnter::kDzAndPred && climb_exit_ != ClimbExit::kBothOff)
     throw std::invalid_argument("climb_enter " + options_.climb_enter + " needs climb_exit both_off");
   if (discretizer_ != "simple" && (!std::isfinite(options_.yaw_request_gain) || options_.yaw_request_gain <= 0 ||
                                    !std::isfinite(options_.switch_margin) || options_.switch_margin < 0))
@@ -297,9 +313,7 @@ PrimitiveFamily::PrimitiveFamily(std::shared_ptr<OnnxModel> model, Spec spec, Op
     }
     if (name == "climb_pred") climb_output_ = i;
   }
-  if (!actions_found || ((options_.require_climb_head || options_.force_manual_climbing ||
-                          options_.climb_enter != "dz_or_pred" || options_.climb_exit != "both_off") &&
-                         !climb_output_))
+  if (!actions_found || ((options_.require_climb_head || options_.force_manual_climbing || Gated()) && !climb_output_))
     throw std::runtime_error("missing actions or required climb_pred output");
   if (model_->find_output("actions")->element_count() != static_cast<int64_t>(n))
     throw std::runtime_error("actions must match joint count");
@@ -402,17 +416,34 @@ void PrimitiveFamily::ResolveClimb() {
   // Only an explicitly permitted, live navigation pause may climb from stand.
   // Stops/watchdogs revoke permission; new predictions cannot undo that gate.
   // Forced-forward climbing always preserves stand.
-  const bool gated = options_.climb_enter != "dz_or_pred" || options_.climb_exit != "both_off";
   const bool pred = climb_pred_ >= .1;
   // A gated entry never trusts a prediction read under the flat-gait command;
   // the next tick reads it under column 14.
-  const bool entry_pred = pred && (!gated || pred_under_climb_);
-  const bool enter = options_.climb_enter == "dz_only"       ? dz_
-                     : options_.climb_enter == "dz_and_pred" ? dz_ && entry_pred
-                                                             : dz_ || entry_pred;
-  const bool stay = options_.climb_exit == "pred_off"     ? pred
-                    : options_.climb_exit == "either_off" ? dz_ && pred
-                                                          : dz_ || pred;
+  const bool entry_pred = pred && (!Gated() || pred_under_climb_);
+  bool enter = false;
+  switch (climb_enter_) {
+    case ClimbEnter::kDzOrPred:
+      enter = dz_ || entry_pred;
+      break;
+    case ClimbEnter::kDzAndPred:
+      enter = dz_ && entry_pred;
+      break;
+    case ClimbEnter::kDzOnly:
+      enter = dz_;
+      break;
+  }
+  bool stay = false;
+  switch (climb_exit_) {
+    case ClimbExit::kBothOff:
+      stay = dz_ || pred;
+      break;
+    case ClimbExit::kEitherOff:
+      stay = dz_ && pred;
+      break;
+    case ClimbExit::kPredOff:
+      stay = pred;
+      break;
+  }
   climbing_ = StandHeld()
                   ? stay
                   : !StandBlocked() && (command_ == 14 ||
@@ -423,12 +454,28 @@ void PrimitiveFamily::ResolveClimb() {
   ApplyFixedArm();
 }
 bool PrimitiveFamily::ProbeClimb() const {
-  const bool gated = options_.climb_enter != "dz_or_pred" || options_.climb_exit != "both_off";
   const bool manual = command_ == 14 || (options_.force_manual_climbing && command_ == kCodes[speed_].at("forward"));
-  if (!gated || !climb_output_ || manual || (StandBlocked() && !StandHeld())) return false;
+  if (!Gated() || !climb_output_ || manual || (StandBlocked() && !StandHeld())) return false;
   // Only when this tick's decision depends on climb_pred.
-  if (climbing_) return options_.climb_exit == "pred_off" || (options_.climb_exit == "both_off" ? !dz_ : dz_);
-  return options_.climb_enter == "dz_or_pred" ? !dz_ : options_.climb_enter == "dz_and_pred" ? dz_ : false;
+  if (climbing_) {
+    switch (climb_exit_) {
+      case ClimbExit::kBothOff:
+        return !dz_;
+      case ClimbExit::kEitherOff:
+        return dz_;
+      case ClimbExit::kPredOff:
+        return true;
+    }
+  }
+  switch (climb_enter_) {
+    case ClimbEnter::kDzOrPred:
+      return !dz_;
+    case ClimbEnter::kDzAndPred:
+      return dz_;
+    case ClimbEnter::kDzOnly:
+      return false;
+  }
+  return false;
 }
 void PrimitiveFamily::ApplyFixedArm() {
   if (command_ == 6 || command_ == 7) return;

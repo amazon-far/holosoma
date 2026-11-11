@@ -193,6 +193,65 @@ TEST(ContextualApi, InactiveTicksCannotSupplyAnOldDepthFrameToLaterEngagement) {
   EXPECT_NO_THROW(policy.step(state(), input));
 }
 
+TEST(ContextualApi, ClimbEnterAndExitModesGateOnDzAndThePrediction) {
+  // The fixture's climb_pred is the mean of the two-frame depth history, so a
+  // depth value of 1 reads as "stairs" and two frames of 0 read as "flat".
+  auto make = [](const char* enter, const char* exit) {
+    auto c = config();
+    c.contextual->climb_enter = enter;
+    c.contextual->climb_exit = exit;
+    return std::make_unique<Policy>(c);
+  };
+  double now = 0;
+  auto step = [&](Policy& policy, bool dz, float depth) {
+    ContextualInput input;
+    input.monotonic_time = ++now;
+    input.command_index = 1;
+    input.dz = dz;
+    input.depth = std::vector<float>(6, depth);
+    policy.step(state(), input);
+    return core(policy).climbing();
+  };
+
+  // Entry from a fresh walk: the prediction alone, dz alone, both.
+  struct Entry {
+    const char* enter;
+    bool pred_only, dz_only, both;
+  };
+  for (const auto& e : {Entry{"dz_or_pred", true, true, true}, Entry{"dz_only", false, true, true},
+                        Entry{"dz_and_pred", false, false, true}}) {
+    SCOPED_TRACE(e.enter);
+    EXPECT_EQ(step(*make(e.enter, "both_off"), false, 1), e.pred_only);
+    EXPECT_EQ(step(*make(e.enter, "both_off"), true, 0), e.dz_only);
+    EXPECT_EQ(step(*make(e.enter, "both_off"), true, 1), e.both);
+  }
+
+  // Exit once climbing: dz drops with stairs still seen, or the stairs end with dz held.
+  struct Exit {
+    const char* exit;
+    bool dz_off, pred_off;
+  };
+  for (const auto& x :
+       {Exit{"both_off", true, true}, Exit{"either_off", false, false}, Exit{"pred_off", true, false}}) {
+    SCOPED_TRACE(x.exit);
+    auto climbing = [&] {
+      auto policy = make("dz_and_pred", x.exit);
+      EXPECT_TRUE(step(*policy, true, 1));
+      EXPECT_TRUE(step(*policy, true, 1));
+      return policy;
+    };
+    EXPECT_EQ(step(*climbing(), false, 1), x.dz_off);
+    auto policy = climbing();
+    step(*policy, true, 0);
+    EXPECT_EQ(step(*policy, true, 0), x.pred_off);
+  }
+
+  EXPECT_THROW(make("dz_or_pred", "never"), std::invalid_argument);
+  EXPECT_THROW(make("always", "both_off"), std::invalid_argument);
+  EXPECT_THROW(make("dz_only", "pred_off"), std::invalid_argument);
+  EXPECT_NO_THROW(make("dz_and_pred", "pred_off"));
+}
+
 TEST(ContextualApi, ValidatesGraphAndOptionalClimbHeadThroughPublicFactory) {
   EXPECT_THROW(Policy(config("wrong-width.onnx")), std::runtime_error);
   EXPECT_THROW(Policy(config("wrong-actions.onnx")), std::runtime_error);
