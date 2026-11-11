@@ -1,6 +1,7 @@
-# Isaac Lab 3 capability audit and implementation status
+# Isaac Sim 6 capability audit and implementation status
 
-Source audit on November 9, 2026, against Holosoma `53dd7f4`, Isaac Lab
+Isaac Sim 6 uses Isaac Lab 3. Source audit on November 9, 2026, against Holosoma
+`53dd7f4`, Isaac Lab
 `v3.0.0`, and Newton `v1.6.1`. The APIs below were checked in the pinned source;
 the linked upstream documentation was also checked. The inventory below describes
 that baseline; the implementation status is tracked here as the work proceeds.
@@ -95,9 +96,9 @@ Sources:
 ## 2. Solver configuration and effective physics
 
 Shared MuJoCo/MJWarp controls provide solver options and capacities.
-[IsaacLab3NewtonConfig](../src/holosoma/holosoma/config_types/simulator.py)
+[IsaacSim6NewtonConfig](../src/holosoma/holosoma/config_types/simulator.py)
 contains Newton-only execution/collision settings and default shape margin. The
-[backend](../src/holosoma/holosoma/simulator/isaacsim/backends/isaaclab3.py)
+[backend](../src/holosoma/holosoma/simulator/isaacsim/backends/isaacsim6.py)
 constructs `NewtonCfg(solver_cfg=MJWarpSolverCfg(...))` internally.
 
 Adapt typed Holosoma fields to `NewtonCfg`, its solver config, `NewtonShapeCfg`,
@@ -299,7 +300,7 @@ constructor dictionaries. Shared config parsing, CLI help and saved experiment
 inspection must work without Isaac Lab, Kit or PhysX installed.
 
 For Newton MJWarp, `sim.mujoco` owns solver controls and `sim.mujoco.warp` owns
-per-world resources/execution options. `isaaclab3.newton` contains genuinely
+per-world resources/execution options. `isaacsim6.newton` contains genuinely
 Newton-specific execution and collision-pipeline controls. There are no duplicate
 solver fields or alias precedence rules. None leaves the direct MuJoCo defaults
 unchanged and selects Newton's configured defaults. The internal Newton manager

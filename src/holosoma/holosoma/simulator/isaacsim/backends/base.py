@@ -1,4 +1,4 @@
-"""Small API boundary shared by the Isaac Lab 2 and 3 backends."""
+"""Small native API boundary shared by the Isaac Sim 5 and 6 backends."""
 
 from __future__ import annotations
 
@@ -14,20 +14,20 @@ if TYPE_CHECKING:
     from holosoma.config_types.simulator import SimEngineConfig
 
 
-class IsaacLabBackend(ABC):
+class IsaacSimBackendAdapter(ABC):
     """Native operations that changed between Isaac Lab releases.
 
     The frontend owns scene authoring, state registration, scheduling, and
     Holosoma conventions. The backend only translates the native API boundary.
     """
 
-    major: int
+    isaaclab_major: int
     env_regex_ns: str
 
     @property
-    def is_isaaclab3(self) -> bool:
-        """Whether this adapter implements the Lab 3 API."""
-        return self.major == 3
+    def is_isaacsim6(self) -> bool:
+        """Whether this adapter implements Isaac Sim 6's Isaac Lab 3 API."""
+        return self.isaaclab_major == 3
 
     @property
     def uses_kit(self) -> bool:

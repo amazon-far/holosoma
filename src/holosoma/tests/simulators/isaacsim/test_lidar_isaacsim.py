@@ -31,7 +31,7 @@ def test_lidar(tmp_path, run_isaacsim_harness):
 
 
 def test_lidar_newton(tmp_path, run_isaacsim_harness, isaacsim_backend):
-    if isaacsim_backend != "isaaclab3":
+    if isaacsim_backend != "isaacsim6":
         pytest.skip("Newton LiDAR requires the explicit Isaac Lab 3 profile")
     result_file = tmp_path / "lidar_newton.txt"
     result = run_isaacsim_harness(
@@ -42,7 +42,7 @@ def test_lidar_newton(tmp_path, run_isaacsim_harness, isaacsim_backend):
         "3",
         "--result-file",
         str(result_file),
-        label="isaacsim3/newton-lidar",
+        label="isaacsim6/newton-lidar",
         timeout=900,
         result_file=result_file,
     )
@@ -51,7 +51,7 @@ def test_lidar_newton(tmp_path, run_isaacsim_harness, isaacsim_backend):
 
 @pytest.mark.parametrize("physics", ["physx", "newton"])
 def test_lidar_ovrtx_runtime(physics, tmp_path, run_isaacsim_harness, isaacsim_backend):
-    if isaacsim_backend != "isaaclab3":
+    if isaacsim_backend != "isaacsim6":
         pytest.skip("OVRTX LiDAR requires the explicit Isaac Lab 3 profile")
     result_file = tmp_path / "lidar-ovrtx.txt"
     run_isaacsim_harness(
@@ -64,7 +64,7 @@ def test_lidar_ovrtx_runtime(physics, tmp_path, run_isaacsim_harness, isaacsim_b
         "3",
         "--result-file",
         str(result_file),
-        label=f"isaacsim3/{physics}/ovrtx-lidar",
+        label=f"isaacsim6/{physics}/ovrtx-lidar",
         timeout=900,
         result_file=result_file,
     )

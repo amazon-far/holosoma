@@ -71,7 +71,7 @@ def test_gpus_from_tags(rs: Any, tags: list[str], expected: str) -> None:
     ("tags", "expected"),
     [
         (["g1_29dof_manager", "isaacsim", "gpus-1"], "isaacsim"),
-        (["g1_29dof_manager", "isaacsim3", "gpus-1"], "isaacsim3"),
+        (["g1_29dof_manager", "isaacsim6", "gpus-1"], "isaacsim6"),
         (["g1_29dof_manager", "mjwarp", "gpus-1"], "mjwarp"),
         (["g1_29dof_manager", "mujoco", "gpus-1"], "mujoco"),
         (["g1_29dof_manager", "isaacgym", "gpus-1"], "isaacgym"),  # archived runs only

@@ -19,7 +19,7 @@ _HARNESS = Path(__file__).resolve().parents[1] / "state_freshness_assert.py"
 
 @pytest.mark.parametrize("contact_force_mode", ["normal", "total"])
 def test_state_freshness_isaacsim(tmp_path, contact_force_mode, run_isaacsim_harness, isaacsim_backend):
-    if contact_force_mode == "total" and isaacsim_backend != "isaaclab3":
+    if contact_force_mode == "total" and isaacsim_backend != "isaacsim6":
         pytest.skip("total contact forces require Isaac Lab 3 / Isaac Sim 6.2")
     result_file = tmp_path / "result.txt"
     run_isaacsim_harness(

@@ -65,7 +65,7 @@ jobs:
       environments: '["isaacsim"]'
     secrets: inherit
 
-  build-isaacsim3:
+  build-isaacsim6:
     name: Build PR Images
     needs: changes
     if: needs.changes.outputs.images == 'true'
@@ -73,7 +73,7 @@ jobs:
     with:
       image_sha: ${{ github.event.pull_request.head.sha }}
       candidate_tag: candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
-      environments: '["isaacsim3"]'
+      environments: '["isaacsim6"]'
     secrets: inherit
 
   build-mujoco:
@@ -122,17 +122,17 @@ jobs:
       multigpu: '["False", "True"]'
     secrets: inherit
 
-  test-isaacsim3:
+  test-isaacsim6:
     name: Test Selected Images
     needs:
       - changes
-      - build-isaacsim3
+      - build-isaacsim6
     if: needs.changes.outputs.images == 'true'
     uses: ./.github/workflows/test-simulator-image.yaml
     with:
       simulator: isaacsim
-      isaacsim_backend: isaaclab3
-      image: ${{ vars.ECR_REGISTRY }}/holosoma-isaacsim3:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+      isaacsim_backend: isaacsim6
+      image: ${{ vars.ECR_REGISTRY }}/holosoma-isaacsim6:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
       multigpu: '["False", "True"]'
     secrets: inherit
 
@@ -164,12 +164,12 @@ jobs:
     needs:
       - changes
       - build-isaacsim
-      - build-isaacsim3
+      - build-isaacsim6
       - build-mujoco
       - build-combined
       - build-promote-only
       - test-isaacsim
-      - test-isaacsim3
+      - test-isaacsim6
       - test-mujoco
       - test-combined
     if: always() && !cancelled()
@@ -186,12 +186,12 @@ jobs:
           IMAGE_CHANGES: ${{ needs.changes.outputs.images }}
           JOB_RESULTS: >-
             build-isaacsim=${{ needs.build-isaacsim.result }}
-            build-isaacsim3=${{ needs.build-isaacsim3.result }}
+            build-isaacsim6=${{ needs.build-isaacsim6.result }}
             build-mujoco=${{ needs.build-mujoco.result }}
             build-combined=${{ needs.build-combined.result }}
             build-promote-only=${{ needs.build-promote-only.result }}
             test-isaacsim=${{ needs.test-isaacsim.result }}
-            test-isaacsim3=${{ needs.test-isaacsim3.result }}
+            test-isaacsim6=${{ needs.test-isaacsim6.result }}
             test-mujoco=${{ needs.test-mujoco.result }}
             test-combined=${{ needs.test-combined.result }}
         run: |
@@ -225,7 +225,7 @@ jobs:
             holosoma-inference
             holosoma-retargeting
             holosoma-isaacsim
-            holosoma-isaacsim3
+            holosoma-isaacsim6
             holosoma-mujoco
             holosoma-thor-inference
             holosoma-thor-inference-ros

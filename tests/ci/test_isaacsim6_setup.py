@@ -12,8 +12,8 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-SETUP = ROOT / "scripts/setup_isaacsim3.sh"
-SOURCE = ROOT / "scripts/source_isaacsim3_setup.sh"
+SETUP = ROOT / "scripts/setup_isaacsim6.sh"
+SOURCE = ROOT / "scripts/source_isaacsim6_setup.sh"
 
 
 def _shell(script: str, *args: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -33,7 +33,7 @@ def test_setup_rejects_wrong_image_runtime_before_installing(tmp_path: Path, ver
     (runtime / "VERSION").write_text(version)
     (runtime / "setup_python_env.sh").write_text("")
     result = _shell(
-        'source "$1"; isaacsim3_validate_runtime',
+        'source "$1"; isaacsim6_validate_runtime',
         SETUP,
         env={"HOLOSOMA_DEPS_DIR": str(tmp_path / "deps"), "ISAACSIM_ROOT_PATH": str(runtime)},
     )
@@ -48,7 +48,7 @@ def test_setup_accepts_supported_runtime_build_suffix(tmp_path: Path) -> None:
     (runtime / "VERSION").write_text("6.2.0-rc.1+release\n")
     (runtime / "setup_python_env.sh").write_text("")
     result = _shell(
-        'source "$1"; isaacsim3_validate_runtime',
+        'source "$1"; isaacsim6_validate_runtime',
         SETUP,
         env={"HOLOSOMA_DEPS_DIR": str(tmp_path / "deps"), "ISAACSIM_ROOT_PATH": str(runtime)},
     )
@@ -60,7 +60,7 @@ def test_setup_rejects_missing_native_activation(tmp_path: Path) -> None:
     runtime.mkdir()
     (runtime / "VERSION").write_text("6.2.0")
     result = _shell(
-        'source "$1"; isaacsim3_validate_runtime',
+        'source "$1"; isaacsim6_validate_runtime',
         SETUP,
         env={"HOLOSOMA_DEPS_DIR": str(tmp_path / "deps"), "ISAACSIM_ROOT_PATH": str(runtime)},
     )
@@ -82,17 +82,17 @@ def test_setup_rejects_changed_isaaclab_checkout(tmp_path: Path, already_install
     before = subprocess.check_output(["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True)
     result = _shell(
         'source "$1"; '
-        + ('mkdir -p "$WORKSPACE_DIR"; touch "$ISAACSIM3_SENTINEL"; ' if already_installed else "")
-        + "isaacsim3_setup_main",
+        + ('mkdir -p "$WORKSPACE_DIR"; touch "$ISAACSIM6_SENTINEL"; ' if already_installed else "")
+        + "isaacsim6_setup_main",
         SETUP,
         env={
             "HOLOSOMA_DEPS_DIR": str(tmp_path / "deps"),
-            "ISAACLAB3_DIR": str(checkout),
+            "ISAACSIM6_ISAACLAB_DIR": str(checkout),
             "ISAACSIM_ROOT_PATH": "",
         },
     )
     assert result.returncode != 0
-    assert "IsaacLab3 is not at v3.0.0" in result.stderr
+    assert "Isaac Lab checkout for isaacsim6 is not at v3.0.0" in result.stderr
     assert subprocess.check_output(["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True) == before
 
 
@@ -109,7 +109,7 @@ def test_setup_syncs_locked_video_extra_after_previous_setup(tmp_path: Path, nat
         subprocess.run(["git", "-C", str(checkout), *args], check=True, capture_output=True)
     deps = tmp_path / "deps"
     deps.mkdir()
-    stamp = ".env_setup_finished_hssim3_isaacsim-6.2.0_isaaclab-v3.0.0"
+    stamp = ".env_setup_finished_hssim6_isaacsim-6.2.0_isaaclab-v3.0.0"
     if current_stamp:
         stamp += "_video_ov_importers"
     (deps / stamp).touch()
@@ -135,14 +135,14 @@ PY
     log = tmp_path / "invocations.jsonl"
     env_root = deps / "env"
     result = _shell(
-        'source "$1"; isaacsim3_setup_main',
+        'source "$1"; isaacsim6_setup_main',
         SETUP,
         env={
             "PATH": f"{binaries}:{os.environ['PATH']}",
             "HOLOSOMA_DEPS_DIR": str(deps),
-            "ISAACLAB3_DIR": str(checkout),
+            "ISAACSIM6_ISAACLAB_DIR": str(checkout),
             "ISAACSIM_ROOT_PATH": str(runtime) if native else "",
-            "ISAACSIM3_ENV_ROOT": str(env_root),
+            "ISAACSIM6_ENV_ROOT": str(env_root),
             "INSTALLER_TEST_PYTHON": sys.executable,
             "INSTALLER_TEST_LOG": str(log),
         },
@@ -170,10 +170,10 @@ PY
             *([] if native else ["--extra", "isaacsim"]),
         ],
     ]
-    assert not (deps / ".env_setup_finished_hssim3_isaacsim-6.2.0_isaaclab-v3.0.0_video_ov_importers").exists()
+    assert not (deps / ".env_setup_finished_hssim6_isaacsim-6.2.0_isaaclab-v3.0.0_video_ov_importers").exists()
 
 
-@pytest.mark.parametrize("inherited_backend", [None, "isaaclab2", "isaaclab3", "unsupported"])
+@pytest.mark.parametrize("inherited_backend", [None, "isaacsim5", "isaacsim6", "unsupported"])
 def test_activation_only_activates_dependencies_and_prioritizes_venv_over_kit_packages(
     tmp_path: Path, inherited_backend: str | None
 ) -> None:
@@ -197,7 +197,7 @@ def test_activation_only_activates_dependencies_and_prioritizes_venv_over_kit_pa
         SOURCE,
         env={
             "HOLOSOMA_DEPS_DIR": str(tmp_path / "deps"),
-            "ISAACSIM3_ENV_ROOT": str(env_root),
+            "ISAACSIM6_ENV_ROOT": str(env_root),
             "ISAACSIM_ROOT_PATH": str(runtime),
             **backend_env,
         },

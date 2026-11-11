@@ -64,8 +64,8 @@ def simulator_tag(config: ExperimentConfig) -> str:
     name = config.simulator.config.name
     if name == "mujoco" and config.simulator.config.mujoco_backend == MujocoBackend.WARP:
         return "mjwarp"
-    if name == "isaacsim" and config.simulator.config.isaacsim_backend == IsaacSimBackend.ISAACLAB3:
-        return "isaacsim3"
+    if name == "isaacsim" and config.simulator.config.isaacsim_backend == IsaacSimBackend.ISAACSIM6:
+        return "isaacsim6"
     return name
 
 

@@ -13,13 +13,13 @@ from loguru import logger
 from pxr import Gf, Usd, UsdGeom, UsdPhysics
 
 if TYPE_CHECKING:
-    from holosoma.simulator.isaacsim.backends.base import IsaacLabBackend
+    from holosoma.simulator.isaacsim.backends.base import IsaacSimBackendAdapter
 
 _DISABLED_RIGID_BODY_LINK_KEY = "holosoma:disabledRigidBodyLink"
 
 
-def get_current_stage(backend: IsaacLabBackend) -> Usd.Stage:
-    if backend.is_isaaclab3:
+def get_current_stage(backend: IsaacSimBackendAdapter) -> Usd.Stage:
+    if backend.is_isaacsim6:
         return backend.stage_utils.get_current_stage()
     import omni.usd
 
@@ -70,7 +70,7 @@ def _find_robot_link_prim(link_name: str, stage: Usd.Stage) -> Usd.Prim:
 
 
 def resolve_robot_link_prim_expression(
-    link_name: str, stage: Usd.Stage | None = None, *, backend: IsaacLabBackend
+    link_name: str, stage: Usd.Stage | None = None, *, backend: IsaacSimBackendAdapter
 ) -> str:
     """Resolve a configured body name to its per-environment Isaac prim expression.
 
@@ -86,7 +86,7 @@ def resolve_robot_link_prim_expression(
 
 
 def resolve_robot_link_rigid_body_prim_expression(
-    link_name: str, stage: Usd.Stage | None = None, *, backend: IsaacLabBackend
+    link_name: str, stage: Usd.Stage | None = None, *, backend: IsaacSimBackendAdapter
 ) -> str:
     """Resolve a source robot link to the Isaac rigid body that owns its geometry."""
     stage = stage or get_current_stage(backend)

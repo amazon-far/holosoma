@@ -20,7 +20,7 @@ from holosoma.utils.path import resolve_asset_path
 
 if TYPE_CHECKING:
     from holosoma.config_types.robot import RobotConfig
-    from holosoma.simulator.isaacsim.backends.base import IsaacLabBackend
+    from holosoma.simulator.isaacsim.backends.base import IsaacSimBackendAdapter
 
 ARTICULATION_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
@@ -127,7 +127,7 @@ def _per_joint_map(joint_names: Sequence[str], values: Sequence[float], property
     return {joint_name: float(values[index]) for index, joint_name in enumerate(joint_names)}
 
 
-def build_robot_articulation_cfg(robot_config: RobotConfig, *, backend: IsaacLabBackend) -> ArticulationCfg:
+def build_robot_articulation_cfg(robot_config: RobotConfig, *, backend: IsaacSimBackendAdapter) -> ArticulationCfg:
     """Assemble the robot ``ArticulationCfg`` from ``robot_config``.
 
     Resolves the asset root, maps the shared ``link_physics`` onto IsaacLab rigid/collision/mass
@@ -177,7 +177,7 @@ def build_robot_articulation_cfg(robot_config: RobotConfig, *, backend: IsaacLab
         # convert from urdf dynamically
         full_urdf_path = resolve_asset_path(robot_asset_cfg.urdf_file, robot_asset_cfg.asset_root)
         merge_fixed_joints = robot_asset_cfg.collapse_fixed_joints
-        if merge_fixed_joints and backend.is_isaaclab3:
+        if merge_fixed_joints and backend.is_isaacsim6:
             # Sim 6.2 merges every fixed joint, ignoring the URDF dont_collapse
             # extension used by foot contact markers. Preserve those bodies by
             # retaining fixed joints for marked assets; unmarked assets still merge.
@@ -220,7 +220,7 @@ def build_robot_articulation_cfg(robot_config: RobotConfig, *, backend: IsaacLab
             articulation_props=robot_articulation_props,
         )
 
-    if not backend.is_isaaclab3 and robot_asset_cfg.link_physics_overrides:
+    if not backend.is_isaacsim6 and robot_asset_cfg.link_physics_overrides:
         raise ValueError("robot.asset.link_physics_overrides requires Isaac Lab 3 or MuJoCo")
 
     default_joint_angles = copy.deepcopy(robot_config.init_state.default_joint_angles)
@@ -240,7 +240,7 @@ def build_robot_articulation_cfg(robot_config: RobotConfig, *, backend: IsaacLab
         zero_gains = {joint_name: 0.0 for joint_name in dof_names_list}
         effort_limits = _per_joint_map(dof_names_list, dof_effort_limit_list, "effort_limit")
         velocity_limits = _per_joint_map(dof_names_list, dof_vel_limit_list, "velocity_limit")
-        if backend.is_isaaclab3:
+        if backend.is_isaacsim6:
             # Lab 3 keeps authored joint solver limits independently of model clipping.
             actuator_limits = {
                 "actuator_effort_limit": effort_limits,
@@ -266,7 +266,7 @@ def build_robot_articulation_cfg(robot_config: RobotConfig, *, backend: IsaacLab
     )
 
 
-def build_contact_sensor_cfg(debug_vis: bool, *, backend: IsaacLabBackend) -> ContactSensorCfg:
+def build_contact_sensor_cfg(debug_vis: bool, *, backend: IsaacSimBackendAdapter) -> ContactSensorCfg:
     """Build the robot ContactSensorCfg covering every robot body prim.
 
     ``debug_vis`` draws the red contact spheres; the caller passes ``SimulatorInitConfig.debug_viz``

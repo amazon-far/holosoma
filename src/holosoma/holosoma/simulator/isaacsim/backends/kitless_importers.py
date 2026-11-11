@@ -27,7 +27,7 @@ def select_standalone_importers() -> None:
         distribution = importlib.metadata.distribution("isaacsim-asset-isolated")
         namespace_path = Path(str(distribution.locate_file("isaacsim")))
         if not (namespace_path / "asset/importer/urdf/__init__.py").is_file():
-            raise RuntimeError("Standalone Isaac Sim importers are missing; rerun scripts/setup_isaacsim3.sh.")
+            raise RuntimeError("Standalone Isaac Sim importers are missing; rerun scripts/setup_isaacsim6.sh.")
         spec = ModuleSpec("isaacsim", loader=None, is_package=True)
         spec.submodule_search_locations = [str(namespace_path)]
         sys.modules["isaacsim"] = importlib.util.module_from_spec(spec)
@@ -62,7 +62,7 @@ def register_standalone_schemas() -> None:
     schema_root = Path(str(distribution.locate_file("ovphysx/schemas/physx")))
     resources = sorted(schema_root.glob("*/resources/plugInfo.json"))
     if not resources:
-        raise RuntimeError("Standalone PhysX USD schemas are missing; rerun scripts/setup_isaacsim3.sh.")
+        raise RuntimeError("Standalone PhysX USD schemas are missing; rerun scripts/setup_isaacsim6.sh.")
     registry = Plug.Registry()
     registered = {plugin.name.casefold() for plugin in registry.GetAllPlugins()}
     paths = [str(path.parent) for path in resources if path.parent.parent.name.casefold() not in registered]

@@ -9,9 +9,9 @@ from typing import Any, Literal
 import pytest
 from pydantic import ValidationError
 
-from holosoma.config_types.newton import IsaacLab3RendererConfig
-from holosoma.config_types.simulator import IsaacLab3Config, IsaacLab3NewtonConfig
-from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Backend
+from holosoma.config_types.newton import IsaacSim6RendererConfig
+from holosoma.config_types.simulator import IsaacSim6Config, IsaacSim6NewtonConfig
+from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Backend
 
 pytestmark = pytest.mark.no_sim
 
@@ -19,8 +19,8 @@ pytestmark = pytest.mark.no_sim
 @pytest.mark.parametrize("enabled", [False, True])
 def test_ovrtx_rejects_ineffective_shadow_control_before_importing_sdk(enabled: bool) -> None:
     before = set(sys.modules)
-    backend = IsaacLab3Backend(
-        IsaacLab3Config(renderer="ovrtx", renderer_options=IsaacLab3RendererConfig(enable_shadows=enabled))
+    backend = IsaacSim6Backend(
+        IsaacSim6Config(renderer="ovrtx", renderer_options=IsaacSim6RendererConfig(enable_shadows=enabled))
     )
     with pytest.raises(ValueError, match="renderer_options.enable_shadows is Warp-only"):
         backend.renderer_config()
@@ -31,20 +31,20 @@ def test_ovrtx_rejects_ineffective_shadow_control_before_importing_sdk(enabled: 
 def test_newton_rejects_duplicate_shared_solver_options(field: str) -> None:
     kwargs: dict[str, Any] = {field: 128}
     with pytest.raises(ValidationError, match="Unexpected keyword argument"):
-        IsaacLab3NewtonConfig(**kwargs)
+        IsaacSim6NewtonConfig(**kwargs)
 
 
 @pytest.mark.parametrize("value", [-0.01, float("inf"), float("nan")])
 def test_newton_rejects_invalid_default_shape_margin(value: float) -> None:
     with pytest.raises(ValidationError, match="default_shape_margin must be finite and nonnegative"):
-        IsaacLab3NewtonConfig(default_shape_margin=value)
+        IsaacSim6NewtonConfig(default_shape_margin=value)
 
 
 def test_warp_rejects_usd_fisheye_before_constructing_camera(monkeypatch: pytest.MonkeyPatch) -> None:
     sensors = ModuleType("isaaclab.sensors")
     sensors.CameraCfg = SimpleNamespace  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "isaaclab.sensors", sensors)
-    backend = IsaacLab3Backend(IsaacLab3Config(renderer="newton_warp"))
+    backend = IsaacSim6Backend(IsaacSim6Config(renderer="newton_warp"))
     with pytest.raises(ValueError, match="USD 'fisheyePolynomial'"):
         backend.create_camera_cfg(
             offset_position=(0.0, 0.0, 0.0),
@@ -59,7 +59,7 @@ def test_depth_misses_preserve_shared_clipping_semantics(
 ) -> None:
     import torch
 
-    backend = IsaacLab3Backend(IsaacLab3Config(renderer=renderer))
+    backend = IsaacSim6Backend(IsaacSim6Config(renderer=renderer))
     source = torch.tensor([0.0, 0.89, 2.5, float("inf")])
     actual = backend.camera_depth(SimpleNamespace(torch=source))
     expected = torch.tensor([float("inf") if renderer == "newton_warp" else 0.0, 0.89, 2.5, float("inf")])
@@ -74,7 +74,7 @@ def test_ovrtx_rejects_kit_options_before_starting_runtime(
     app = ModuleType("isaaclab.app")
     app.launch_simulation = lambda *_args: pytest.fail("invalid OVRTX config started a runtime")  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "isaaclab.app", app)
-    backend = IsaacLab3Backend(IsaacLab3Config(renderer="ovrtx"))
+    backend = IsaacSim6Backend(IsaacSim6Config(renderer="ovrtx"))
     monkeypatch.setattr(
         "holosoma.simulator.isaacsim.backends.kitless_importers.select_standalone_importers", lambda: None
     )

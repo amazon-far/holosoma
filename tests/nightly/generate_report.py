@@ -102,7 +102,7 @@ def get_nightly_run_ids(gh_run_id: str | None = None) -> dict[str, list[str]]:
             if tag in [
                 "isaacgym",
                 "isaacsim",
-                "isaacsim3",
+                "isaacsim6",
                 "mujoco",
                 "mjwarp",
                 "singlegpu",

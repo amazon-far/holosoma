@@ -834,7 +834,7 @@ def _check_cyclic_target_return(sim, direction, *, expected_range: float, snapsh
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim3"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim6"])
     parser.add_argument("--physics-backend", choices=["physx", "newton"], default="physx")
     parser.add_argument("--renderer", choices=["isaac_rtx", "newton_warp", "ovrtx"], default="isaac_rtx")
     parser.add_argument("--num-envs", type=int, default=1)
@@ -845,18 +845,18 @@ def main() -> int:
         help="optionally save successive environment-0 LiDAR snapshots as 3D and top-down X/-Z PNG figures",
     )
     args = parser.parse_args()
-    if args.physics_backend == "newton" and args.simulator != "isaacsim3":
-        parser.error("--physics-backend newton requires --simulator isaacsim3")
+    if args.physics_backend == "newton" and args.simulator != "isaacsim6":
+        parser.error("--physics-backend newton requires --simulator isaacsim6")
 
     from tests.simulators import _camera_presets, _lidar_presets
 
     sim_arg = "mujoco" if args.simulator == "mjwarp" else args.simulator
     native_disabled_child = False
-    if args.simulator in ("isaacsim", "isaacsim3"):
+    if args.simulator in ("isaacsim", "isaacsim6"):
         from holosoma.simulator.isaacsim.backends import get_backend
 
-        backend = get_backend("isaaclab3" if args.simulator == "isaacsim3" else "isaaclab2")
-        native_disabled_child = backend.is_isaaclab3
+        backend = get_backend("isaacsim6" if args.simulator == "isaacsim6" else "isaacsim5")
+        native_disabled_child = backend.is_isaacsim6
     sensors = dict(_lidar_presets.LIDAR_RIG)
     if args.simulator in {"mujoco", "mjwarp"}:
         sensors["downward_filtered"] = _lidar_presets.downward_filtered_lidar
@@ -887,7 +887,7 @@ def main() -> int:
         "terrain_locomotion_plane",
         sensors=sensors,
     )
-    if args.simulator == "isaacsim3":
+    if args.simulator == "isaacsim6":
         config = dataclasses.replace(
             config,
             simulator=dataclasses.replace(
@@ -896,8 +896,8 @@ def main() -> int:
                     config.simulator.config,
                     sim=dataclasses.replace(
                         config.simulator.config.sim,
-                        isaaclab3=dataclasses.replace(
-                            config.simulator.config.sim.isaaclab3,
+                        isaacsim6=dataclasses.replace(
+                            config.simulator.config.sim.isaacsim6,
                             physics_backend=args.physics_backend,
                             renderer=args.renderer,
                         ),
@@ -921,7 +921,7 @@ def main() -> int:
             simulator=dataclasses.replace(config.simulator, _target_="tests.simulators.lidar_assert.IsaacSim"),
         )
 
-    if args.simulator in ("isaacsim", "isaacsim3"):
+    if args.simulator in ("isaacsim", "isaacsim6"):
         isaaclab_spec = find_spec("isaaclab")
         isaaclab_roots = () if isaaclab_spec is None else (isaaclab_spec.submodule_search_locations or ())
         has_multi_mesh_ray_caster = any(
@@ -963,13 +963,13 @@ def main() -> int:
     if manager is None:
         failures.append("sensor manager was not created")
     else:
-        if args.simulator in ("isaacsim", "isaacsim3"):
+        if args.simulator in ("isaacsim", "isaacsim6"):
             failures += _check_isaacsim_prim_resolution_helpers(sim.backend)
             failures += _check_isaacsim_native_configs(sim, manager)
         manager.get_lidar("cyclic_target")  # registration assertion: raises if the preset omitted it
         first_target_direction = _expected_cyclic_directions(sim.time(), 1, device)[0]
         time_before_flush = sim.time()
-        native_steps_before = sim.sim.get_physics_step_count() if args.simulator == "isaacsim3" else None
+        native_steps_before = sim.sim.get_physics_step_count() if args.simulator == "isaacsim6" else None
         first_target_range = _place_cyclic_target(
             sim,
             env_ids,

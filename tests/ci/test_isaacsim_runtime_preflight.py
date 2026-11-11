@@ -16,7 +16,7 @@ PREFLIGHT = Path(__file__).resolve().parents[2] / "scripts/validate_isaacsim_run
 def _runtime(
     tmp_path: Path,
     *,
-    backend: str = "isaaclab3",
+    backend: str = "isaacsim6",
     torch_version: str = "2.11.0+cu130",
     warp_version: str = "1.17.0",
     cuda: bool = True,
@@ -26,25 +26,25 @@ def _runtime(
     missing_video: str | None = None,
     importer_version: str | None = "6.2.0.0",
 ) -> subprocess.CompletedProcess[str]:
-    lab_version = "28.0.0" if backend == "isaaclab3" else "0.54.2"
+    lab_version = "28.0.0" if backend == "isaacsim6" else "0.54.2"
     for name, version in [("isaaclab", lab_version), ("torch", torch_version), ("warp-lang", warp_version)]:
         metadata = tmp_path / f"{name.replace('-', '_')}-{version}.dist-info"
         metadata.mkdir()
         (metadata / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n")
-    if backend == "isaaclab3" and importer_version is not None:
+    if backend == "isaacsim6" and importer_version is not None:
         metadata = tmp_path / f"isaacsim_asset_isolated-{importer_version}.dist-info"
         metadata.mkdir()
         (metadata / "METADATA").write_text(
             f"Metadata-Version: 2.1\nName: isaacsim-asset-isolated\nVersion: {importer_version}\n"
         )
     unavailable = []
-    if backend == "isaaclab3":
+    if backend == "isaacsim6":
         (tmp_path / "isaaclab_physx").mkdir()
         (tmp_path / "isaaclab_physx/__init__.py").write_text("")
     else:
         unavailable.append("isaaclab_physx")
     for package in ("moviepy", "imageio_ffmpeg", "ovrtx", "ovphysx", "ovstage"):
-        if backend == "isaaclab3" and package != missing_video:
+        if backend == "isaacsim6" and package != missing_video:
             (tmp_path / f"{package}.py").write_text("")
         else:
             unavailable.append(package)
@@ -81,7 +81,7 @@ def _runtime(
             # Preserve the real production dependencies when CI's interpreter
             # receives them through PYTHONPATH rather than its own site-packages.
             "PYTHONPATH": os.pathsep.join([str(tmp_path), *sys.path]),
-            "HOLOSOMA_ISAACSIM_BACKEND": "isaaclab2" if backend == "isaaclab3" else "isaaclab3",
+            "HOLOSOMA_ISAACSIM_BACKEND": "isaacsim5" if backend == "isaacsim6" else "isaacsim6",
         },
         check=False,
         capture_output=True,
@@ -92,9 +92,9 @@ def _runtime(
 @pytest.mark.parametrize(
     ("backend", "torch_version", "warp_version", "devices", "multigpu"),
     [
-        ("isaaclab2", "2.7.0+cu128", "1.16.0", 1, False),
-        ("isaaclab3", "2.11.0+cu130", "1.17.0", 1, False),
-        ("isaaclab3", "2.11.0+cu130", "1.17.0", 2, True),
+        ("isaacsim5", "2.7.0+cu128", "1.16.0", 1, False),
+        ("isaacsim6", "2.11.0+cu130", "1.17.0", 1, False),
+        ("isaacsim6", "2.11.0+cu130", "1.17.0", 2, True),
     ],
 )
 def test_preflight_accepts_matching_native_profiles(
@@ -116,7 +116,7 @@ def test_preflight_accepts_matching_native_profiles(
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
         "backend": backend,
-        "isaaclab_package": "28.0.0" if backend == "isaaclab3" else "0.54.2",
+        "isaaclab_package": "28.0.0" if backend == "isaacsim6" else "0.54.2",
         "torch": torch_version,
         "warp": warp_version,
         "cuda_devices": devices,
@@ -152,7 +152,7 @@ def test_preflight_rejects_environments_that_could_hide_runtime_failures_as_skip
 
 
 def test_preflight_rejects_wrong_isaac_api_family(tmp_path: Path) -> None:
-    result = _runtime(tmp_path, requested_backend="isaaclab2")
+    result = _runtime(tmp_path, requested_backend="isaacsim5")
     assert result.returncode != 0
     assert "requires Isaac Lab 2.x" in result.stderr
     assert "Isaac Lab 3.x is installed" in result.stderr

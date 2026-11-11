@@ -69,7 +69,7 @@ def _check_not_blank(img, label: str) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim3"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim6"])
     parser.add_argument("--scene", default="camera-target", help="scene preset (front-facing bright object)")
     parser.add_argument("--sensors", default="front-cam", help="sensors preset (one robot-base camera)")
     parser.add_argument("--robot", default="g1-29dof")

@@ -1,6 +1,7 @@
-# Isaac Lab 3 upgrade notes
+# Isaac Sim 6 upgrade notes
 
-This inventory separates changes included in Holosoma's Lab 3 integration from
+This inventory separates changes included in Holosoma's Isaac Sim 6 / Isaac Lab 3
+integration from
 upstream features proposed for later review. It follows the final
 [Lab 3.0 release](https://github.com/isaac-sim/IsaacLab/releases/tag/v3.0.0)
 and [2.x migration guide](https://isaac-sim.github.io/IsaacLab/v3.0.0/source/isaaclab/migrating.html),
@@ -15,7 +16,7 @@ establish equivalent trajectories, policy quality or throughput.
 
 | Change | Holosoma behavior | Official source |
 | --- | --- | --- |
-| Explicit version selection | `simulator:isaacsim` selects Lab 2; `simulator:isaacsim3` selects Lab 3. Activation loads dependencies. CI and child harnesses receive explicit version arguments. | [Migration: backend configuration](https://isaac-sim.github.io/IsaacLab/v3.0.0/source/isaaclab/migrating.html) |
+| Explicit version selection | `simulator:isaacsim` selects Isaac Sim 5.1 / Isaac Lab 2; `simulator:isaacsim6` selects Isaac Sim 6.2 / Isaac Lab 3. Backend IDs follow the Isaac Sim major version. Activation loads dependencies. CI and child harnesses receive explicit version arguments. | [Migration: backend configuration](https://isaac-sim.github.io/IsaacLab/v3.0.0/source/isaaclab/migrating.html) |
 | Physics selection | `physics_backend=physx\|newton` selects PhysX or Newton MJWarp. Standalone runs select the OVPhysX implementation of PhysX. Other Newton solvers are outside this selection. | [Physics backends](https://isaac-sim.github.io/IsaacLab/v3.0.0/source/concepts/physics_backends.html) |
 | Camera renderer selection | `renderer=isaac_rtx\|newton_warp\|ovrtx` selects configured camera sensors independently of physics. Warp accepts pinhole projection. Warp and OVRTX use the Kit-less launcher and native sensors for both cameras and logger movies. Physics-only runs leave the renderer inactive. | [Renderers](https://isaac-sim.github.io/IsaacLab/v3.0.0/source/concepts/renderers.html) |
 | Runtime dependencies | Runtime selection precedes SDK launcher imports. Newton standalone cases check actual loaded libraries for accidental Kit/PhysX loading; URDF conversion registers only codeless PhysX schema resources. Physics-only cases check all renderer preferences and record startup timing. | [Launch ownership](https://github.com/isaac-sim/IsaacLab/blob/v3.0.0/source/isaaclab/isaaclab/app/sim_launcher.py) |
@@ -38,7 +39,7 @@ addresses ordering and tuning differences.
 
 ## Upstream opportunities requiring separate review
 
-The [capability audit and implementation proposal](isaaclab3-capability-audit.md)
+The [capability audit and implementation proposal](isaacsim6-capability-audit.md)
 examines configuration and runtime gaps in more detail, including native physics
 fragments, per-prim rules, solver tuning, importer caching, actuators and sensors.
 It distinguishes the native configuration/schema additions from the remaining

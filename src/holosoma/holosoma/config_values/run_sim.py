@@ -33,11 +33,11 @@ isaacsim = RUN_SIM_REGISTRY.add(
     ),
 )
 
-isaacsim3 = RUN_SIM_REGISTRY.add(
-    "isaacsim3",
+isaacsim6 = RUN_SIM_REGISTRY.add(
+    "isaacsim6",
     dataclasses.replace(
         isaacsim,
-        config=dataclasses.replace(isaacsim.config, isaacsim_backend=IsaacSimBackend.ISAACLAB3),
+        config=dataclasses.replace(isaacsim.config, isaacsim_backend=IsaacSimBackend.ISAACSIM6),
     ),
 )
 

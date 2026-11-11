@@ -5,12 +5,12 @@ state accessors, sensors, domain randomization, and hooks. Configuration selects
 the version; installed packages validate that selection. Native API differences
 live in `holosoma/simulator/isaacsim/backends`.
 
-| Preset / API family | Isaac Lab | Isaac Sim | Setup / activation | Dockerfile |
+| Preset / backend ID | Isaac Lab | Isaac Sim | Setup / activation | Dockerfile |
 | --- | --- | --- | --- | --- |
-| `simulator:isaacsim` / `isaaclab2` | 2.3.2 | 5.1 | `setup_isaacsim.sh` / `source_isaacsim_setup.sh` | `docker/isaacsim.Dockerfile` |
-| `simulator:isaacsim3` / `isaaclab3` | 3.0.0 | 6.2 | `setup_isaacsim3.sh` / `source_isaacsim3_setup.sh` | `docker/isaacsim3.Dockerfile` |
+| `simulator:isaacsim` / `isaacsim5` | 2.3.2 | 5.1 | `setup_isaacsim.sh` / `source_isaacsim_setup.sh` | `docker/isaacsim.Dockerfile` |
+| `simulator:isaacsim6` / `isaacsim6` | 3.0.0 | 6.2 | `setup_isaacsim6.sh` / `source_isaacsim6_setup.sh` | `docker/isaacsim6.Dockerfile` |
 
-The Lab 3 profile uses Python 3.12, PyTorch 2.11 with CUDA 13.0,
+The `isaacsim6` backend uses Isaac Lab 3, Python 3.12, PyTorch 2.11 with CUDA 13.0,
 Warp 1.17, and NumPy 2. The old profile retains its dependency constraints.
 The new image uses Isaac Sim's bundled Python to create its virtual environment;
 the standalone installer uses Lab's pinned Isaac Sim extra.
@@ -26,49 +26,51 @@ this does not import or load the PhysX engine for Newton.
 ## Select a profile
 
 ```bash
-bash scripts/setup_isaacsim3.sh
-source scripts/source_isaacsim3_setup.sh
+bash scripts/setup_isaacsim6.sh
+source scripts/source_isaacsim6_setup.sh
 python src/holosoma/holosoma/train_agent.py \
-    exp:g1-29dof-fast-sac simulator:isaacsim3 logger:disabled
+    exp:g1-29dof-fast-sac simulator:isaacsim6 logger:disabled
 ```
 
-Activation only loads dependencies. `simulator:isaacsim` always selects Lab 2;
-`simulator:isaacsim3` selects Lab 3 for both training and
+Backend names follow the Isaac Sim major version, independently of Isaac Lab's
+version. Activation only loads dependencies. `simulator:isaacsim` always selects
+Isaac Sim 5.1 / Isaac Lab 2; `simulator:isaacsim6` selects Isaac Sim 6.2 / Isaac Lab 3
+for both training and
 `python -m holosoma.run_sim`. Saved configurations lacking `isaacsim_backend`
-retain `isaaclab2`. To migrate a saved configuration, override
-`--simulator.config.isaacsim-backend=ISAACLAB3`. A selection that conflicts with
+retain `isaacsim5`. To migrate a saved configuration, override
+`--simulator.config.isaacsim-backend=ISAACSIM6`. A selection that conflicts with
 the installed runtime fails at launch.
 
 ```bash
-docker build -f docker/isaacsim3.Dockerfile -t holosoma-isaacsim3 .
+docker build -f docker/isaacsim6.Dockerfile -t holosoma-isaacsim6 .
 docker run --rm --gpus all --ipc=host \
-    -e HOLOSOMA_MULTIGPU=False holosoma-isaacsim3 \
-    bash tests/ci/isaacsim_ci_tests.sh --backend isaaclab3
+    -e HOLOSOMA_MULTIGPU=False holosoma-isaacsim6 \
+    bash tests/ci/isaacsim_ci_tests.sh --backend isaacsim6
 ```
 
 This CI command checks the runtime and GPU before running the existing Isaac Sim
 tests, then hands the same explicit version to the pure Python suite.
 For direct pytest invocation, use
-`python -m pytest -c pyproject.toml --isaacsim-backend isaaclab3 ...` from the
+`python -m pytest -c pyproject.toml --isaacsim-backend isaacsim6 ...` from the
 repository root; simulator wrappers forward that selection to their child harnesses. The pure script also
-accepts `--backend isaaclab3` and defaults to `isaaclab2` when omitted.
+accepts `--backend isaacsim6` and defaults to `isaacsim5` when omitted.
 The workflows build, test, and promote each image separately and include both
 presets in nightly training. Multi-GPU tests require at least two visible devices.
 
-## Lab 3 physics and camera rendering
+## Isaac Sim 6 physics and camera rendering
 
-Lab 3 selects physics and camera rendering independently:
+Isaac Sim 6 selects physics and camera rendering independently through Isaac Lab 3:
 
 ```bash
 python src/holosoma/holosoma/train_agent.py \
-    exp:g1-29dof-fast-sac simulator:isaacsim3 logger:disabled \
-    --simulator.config.sim.isaaclab3.physics-backend=newton \
-    --simulator.config.sim.isaaclab3.renderer=newton_warp
+    exp:g1-29dof-fast-sac simulator:isaacsim6 logger:disabled \
+    --simulator.config.sim.isaacsim6.physics-backend=newton \
+    --simulator.config.sim.isaacsim6.renderer=newton_warp
 ```
 
 For OVRTX cameras and movies with Newton, use the same command with
-`--simulator.config.sim.isaaclab3.renderer=ovrtx`. With
-`--simulator.config.sim.isaaclab3.physics-backend=physx`, OVRTX uses OVPhysX.
+`--simulator.config.sim.isaacsim6.renderer=ovrtx`. With
+`--simulator.config.sim.isaacsim6.physics-backend=physx`, OVRTX uses OVPhysX.
 
 | `physics-backend` | `renderer` | Configuration |
 | --- | --- | --- |
@@ -95,7 +97,7 @@ process and are rejected by Isaac Lab's launch validation. Kit rendering-mode
 presets and `kit_args` must be unset in standalone runs. The native visualizer owns
 its camera controls; Holosoma's Kit keyboard bindings apply to Kit viewers.
 Live USD body-damping randomization also requires the Kit PhysX runtime;
-set `simulator.config.sim.isaaclab3.require_kit=True` before launch when that
+set `simulator.config.sim.isaacsim6.require_kit=True` before launch when that
 integration is needed. Detached physics does not consume those USD edits on
 runtime clones, so that event is rejected. This explicit requirement also
 supports other Kit APIs without enabling an unused camera renderer.
@@ -160,7 +162,7 @@ not establish equal policy performance or throughput across engines.
 
 ## Lab 3 options
 
-These settings are under `--simulator.config.sim.isaaclab3.*`:
+These settings are under `--simulator.config.sim.isaacsim6.*`:
 
 | Option | Default | Effect |
 | --- | --- | --- |
@@ -176,13 +178,13 @@ Newton MJWarp reads the **existing MuJoCo configuration**, so the same experimen
 can carry its solver and contact settings across direct MJWarp and Isaac Lab 3:
 
 ```bash
---simulator.config.sim.isaaclab3.physics-backend newton
---simulator.config.sim.isaaclab3.renderer newton_warp
+--simulator.config.sim.isaacsim6.physics-backend newton
+--simulator.config.sim.isaacsim6.renderer newton_warp
 --simulator.config.sim.mujoco.iterations 50
 --simulator.config.sim.mujoco.cone elliptic
 --simulator.config.sim.mujoco.impratio 3.0
 --simulator.config.sim.mujoco.warp.nconmax-per-env 256
---simulator.config.sim.isaaclab3.renderer-options.enable-shadows False
+--simulator.config.sim.isaacsim6.renderer-options.enable-shadows False
 ```
 
 Renderer options currently expose Warp shadows, textures, ambient lighting,
@@ -210,7 +212,7 @@ path: `sim.mujoco` and `sim.mujoco.warp`, with no duplicate Newton fields.
 Newton-only execution and collision controls are typed:
 
 ```python
-IsaacLab3NewtonConfig(
+IsaacSim6NewtonConfig(
     collision_source="newton",
     collision=NewtonCollisionConfig(broad_phase="sap", rigid_contact_max=8192),
     use_cuda_graph=True,
@@ -334,4 +336,4 @@ configured order.
 - [Isaac Sim 6.2 source](https://github.com/isaac-sim/IsaacSim/tree/v6.2.0)
 - [Physics backends](https://isaac-sim.github.io/IsaacLab/v3.0.0/source/concepts/physics_backends.html)
 - [Camera renderers and supported pairings](https://isaac-sim.github.io/IsaacLab/v3.0.0/source/concepts/renderers.html)
-- [Upgrade feature inventory and follow-up proposals](isaaclab3-upgrade-notes.md)
+- [Upgrade feature inventory and follow-up proposals](isaacsim6-upgrade-notes.md)

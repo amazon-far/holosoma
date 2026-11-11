@@ -18,17 +18,17 @@ def validate_runtime(backend_name: str, *, multigpu: bool = False) -> dict[str, 
     backend = get_backend(backend_name)
     torch_version = importlib.metadata.version("torch")
     warp_version = importlib.metadata.version("warp-lang")
-    expected_torch, expected_warp = ("2.11.0", "1.17.0") if backend.is_isaaclab3 else ("2.7.0", "1.16.0")
+    expected_torch, expected_warp = ("2.11.0", "1.17.0") if backend.is_isaacsim6 else ("2.7.0", "1.16.0")
     if torch_version.split("+", 1)[0] != expected_torch:
         raise RuntimeError(f"{backend_name} requires torch {expected_torch}; found {torch_version}.")
     if warp_version != expected_warp:
         raise RuntimeError(f"{backend_name} requires warp-lang {expected_warp}; found {warp_version}.")
 
-    if backend.is_isaaclab3:
+    if backend.is_isaacsim6:
         try:
             importer_version = importlib.metadata.version("isaacsim-asset-isolated")
         except importlib.metadata.PackageNotFoundError as exc:
-            raise RuntimeError("Isaac Lab importer extra is missing; rerun scripts/setup_isaacsim3.sh.") from exc
+            raise RuntimeError("Isaac Lab importer extra is missing; rerun scripts/setup_isaacsim6.sh.") from exc
         if importer_version != "6.2.0.0":
             raise RuntimeError(f"Isaac Lab requires standalone importers 6.2.0.0; found {importer_version}.")
         for package in ("moviepy", "imageio_ffmpeg", "ovrtx", "ovphysx", "ovstage"):
@@ -56,7 +56,7 @@ def validate_runtime(backend_name: str, *, multigpu: bool = False) -> dict[str, 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--backend", choices=["isaaclab2", "isaaclab3"], required=True)
+    parser.add_argument("--backend", choices=["isaacsim5", "isaacsim6"], required=True)
     parser.add_argument("--multigpu", action="store_true")
     args = parser.parse_args()
     try:

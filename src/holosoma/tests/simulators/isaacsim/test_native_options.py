@@ -13,7 +13,7 @@ pytestmark = pytest.mark.isaacsim
 def test_independent_native_camera_renders(
     physics, renderer, decimations, isaacsim_backend, run_isaacsim_harness, tmp_path
 ):
-    if isaacsim_backend != "isaaclab3":
+    if isaacsim_backend != "isaacsim6":
         pytest.skip("Independent native rendering requires Isaac Lab 3.")
     result_file = tmp_path / "camera-cadence.txt"
     result = run_isaacsim_harness(
@@ -26,7 +26,7 @@ def test_independent_native_camera_renders(
         decimations,
         "--result-file",
         str(result_file),
-        label=f"isaaclab3/{physics}/{renderer}/camera-cadence-{decimations}",
+        label=f"isaacsim6/{physics}/{renderer}/camera-cadence-{decimations}",
         timeout=900,
         result_file=result_file,
     )
@@ -36,7 +36,7 @@ def test_independent_native_camera_renders(
 @pytest.mark.parametrize("physics", ["physx", "newton"])
 @pytest.mark.parametrize("renderer", ["isaac_rtx", "ovrtx"])
 def test_camera_cadence_with_movie(physics, renderer, isaacsim_backend, run_isaacsim_harness, tmp_path):
-    if isaacsim_backend != "isaaclab3":
+    if isaacsim_backend != "isaacsim6":
         pytest.skip("Independent native rendering requires Isaac Lab 3.")
     result_file = tmp_path / "camera-cadence-movie.txt"
     result = run_isaacsim_harness(
@@ -49,7 +49,7 @@ def test_camera_cadence_with_movie(physics, renderer, isaacsim_backend, run_isaa
         str(tmp_path / "movies"),
         "--result-file",
         str(result_file),
-        label=f"isaaclab3/{physics}/{renderer}/camera-cadence-movie",
+        label=f"isaacsim6/{physics}/{renderer}/camera-cadence-movie",
         timeout=900,
         result_file=result_file,
     )
@@ -57,11 +57,11 @@ def test_camera_cadence_with_movie(physics, renderer, isaacsim_backend, run_isaa
 
 
 def test_newton_without_cuda_graph_uses_shared_solver_settings(isaacsim_backend, run_isaacsim_harness, tmp_path):
-    if isaacsim_backend != "isaaclab3":
+    if isaacsim_backend != "isaacsim6":
         pytest.skip("Newton requires Isaac Lab 3")
     result_file = tmp_path / "newton-without-cuda-graph.txt"
     run_isaacsim_harness(
-        Path(__file__).resolve().parents[1] / "isaaclab3_schema_assert.py",
+        Path(__file__).resolve().parents[1] / "isaacsim6_schema_assert.py",
         "--physics",
         "newton",
         "--renderer",
@@ -69,7 +69,7 @@ def test_newton_without_cuda_graph_uses_shared_solver_settings(isaacsim_backend,
         "--disable-cuda-graph",
         "--result-file",
         str(result_file),
-        label="isaaclab3/newton/newton_warp/no-cuda-graph",
+        label="isaacsim6/newton/newton_warp/no-cuda-graph",
         timeout=900,
         result_file=result_file,
     )
@@ -82,11 +82,11 @@ def test_newton_without_cuda_graph_uses_shared_solver_settings(isaacsim_backend,
 def test_native_schema_solver_and_renderer_overrides(
     physics, renderer, collision_source, isaacsim_backend, run_isaacsim_harness, tmp_path
 ):
-    if isaacsim_backend != "isaaclab3":
+    if isaacsim_backend != "isaacsim6":
         pytest.skip("native schema fragments require Isaac Lab 3")
     result_file = tmp_path / "native-schema.txt"
     run_isaacsim_harness(
-        Path(__file__).resolve().parents[1] / "isaaclab3_schema_assert.py",
+        Path(__file__).resolve().parents[1] / "isaacsim6_schema_assert.py",
         "--physics",
         physics,
         "--renderer",
@@ -95,7 +95,7 @@ def test_native_schema_solver_and_renderer_overrides(
         collision_source,
         "--result-file",
         str(result_file),
-        label=f"isaaclab3/{physics}/{renderer}/{collision_source}/schema",
+        label=f"isaacsim6/{physics}/{renderer}/{collision_source}/schema",
         timeout=900,
         result_file=result_file,
     )
@@ -104,18 +104,18 @@ def test_native_schema_solver_and_renderer_overrides(
 @pytest.mark.parametrize("physics", ["physx", "newton"])
 @pytest.mark.parametrize("renderer", ["isaac_rtx", "newton_warp", "ovrtx"])
 def test_physics_and_camera_renderer_matrix(physics, renderer, isaacsim_backend, run_isaacsim_harness, tmp_path):
-    if isaacsim_backend != "isaaclab3":
+    if isaacsim_backend != "isaacsim6":
         pytest.skip("physics/renderer selection requires the explicit Isaac Lab 3 profile")
     result_file = tmp_path / "native-options.txt"
     result = run_isaacsim_harness(
-        Path(__file__).resolve().parents[1] / "isaaclab3_options_assert.py",
+        Path(__file__).resolve().parents[1] / "isaacsim6_options_assert.py",
         "--physics",
         physics,
         "--renderer",
         renderer,
         "--result-file",
         str(result_file),
-        label=f"isaaclab3/{physics}/{renderer}",
+        label=f"isaacsim6/{physics}/{renderer}",
         timeout=900,
         result_file=result_file,
     )
@@ -129,7 +129,7 @@ def test_physics_and_camera_renderer_matrix(physics, renderer, isaacsim_backend,
 @pytest.mark.parametrize("physics", ["physx", "newton"])
 @pytest.mark.parametrize("renderer", ["isaac_rtx", "newton_warp", "ovrtx"])
 def test_native_logger_movie(physics, renderer, isaacsim_backend, run_isaacsim_harness, tmp_path):
-    if isaacsim_backend != "isaaclab3":
+    if isaacsim_backend != "isaacsim6":
         pytest.skip("OVRTX requires the explicit Isaac Lab 3 profile")
     result_file = tmp_path / "native-movie.txt"
     run_isaacsim_harness(
@@ -145,7 +145,7 @@ def test_native_logger_movie(physics, renderer, isaacsim_backend, run_isaacsim_h
         "--probe-video-freshness",
         "--result-file",
         str(result_file),
-        label=f"isaaclab3/{physics}/{renderer}-movie",
+        label=f"isaacsim6/{physics}/{renderer}-movie",
         timeout=900,
         result_file=result_file,
     )
@@ -154,18 +154,18 @@ def test_native_logger_movie(physics, renderer, isaacsim_backend, run_isaacsim_h
 @pytest.mark.parametrize("physics", ["physx", "newton"])
 @pytest.mark.parametrize("renderer", ["isaac_rtx", "newton_warp", "ovrtx"])
 def test_physics_only_startup(physics, renderer, isaacsim_backend, run_isaacsim_harness, tmp_path):
-    if isaacsim_backend != "isaaclab3":
+    if isaacsim_backend != "isaacsim6":
         pytest.skip("standalone startup requires the explicit Isaac Lab 3 profile")
     result_file = tmp_path / "physics-only.txt"
     result = run_isaacsim_harness(
-        Path(__file__).resolve().parents[1] / "isaaclab3_startup_assert.py",
+        Path(__file__).resolve().parents[1] / "isaacsim6_startup_assert.py",
         "--physics",
         physics,
         "--renderer",
         renderer,
         "--result-file",
         str(result_file),
-        label=f"isaaclab3/{physics}/{renderer}/physics-only",
+        label=f"isaacsim6/{physics}/{renderer}/physics-only",
         timeout=900,
         result_file=result_file,
     )
@@ -174,7 +174,7 @@ def test_physics_only_startup(physics, renderer, isaacsim_backend, run_isaacsim_
 
 @pytest.mark.parametrize("physics", ["physx", "newton"])
 def test_ovrtx_fisheye_projection(physics, isaacsim_backend, run_isaacsim_harness, tmp_path):
-    if isaacsim_backend != "isaaclab3":
+    if isaacsim_backend != "isaacsim6":
         pytest.skip("OVRTX requires the explicit Isaac Lab 3 profile")
     result_file = tmp_path / "ovrtx-fisheye.txt"
     run_isaacsim_harness(
@@ -187,7 +187,7 @@ def test_ovrtx_fisheye_projection(physics, isaacsim_backend, run_isaacsim_harnes
         "2",
         "--result-file",
         str(result_file),
-        label=f"isaaclab3/{physics}/ovrtx-fisheye",
+        label=f"isaacsim6/{physics}/ovrtx-fisheye",
         timeout=900,
         result_file=result_file,
     )

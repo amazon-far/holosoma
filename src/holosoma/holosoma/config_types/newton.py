@@ -60,7 +60,7 @@ class NewtonPhysicsConfig:
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
-class IsaacLab3RendererConfig:
+class IsaacSim6RendererConfig:
     """Camera options, interpreted by the selected renderer.
 
     None retains the selected SDK renderer's default. Explicit unsupported

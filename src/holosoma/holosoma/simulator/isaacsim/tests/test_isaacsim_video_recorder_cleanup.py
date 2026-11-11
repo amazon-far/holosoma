@@ -10,15 +10,15 @@ from typing import TYPE_CHECKING, TypeAlias
 import pytest
 
 if TYPE_CHECKING:
-    from holosoma.simulator.isaacsim.backends.base import IsaacLabBackend
+    from holosoma.simulator.isaacsim.backends.base import IsaacSimBackendAdapter
     from holosoma.simulator.isaacsim.video_recorder import IsaacSimVideoRecorder
 
-_RecorderFixture: TypeAlias = tuple["IsaacSimVideoRecorder", list[str], "IsaacLabBackend"]
+_RecorderFixture: TypeAlias = tuple["IsaacSimVideoRecorder", list[str], "IsaacSimBackendAdapter"]
 
 pytestmark = pytest.mark.no_sim
 
 
-@pytest.fixture(params=[2, 3], ids=["isaaclab2", "isaaclab3"])
+@pytest.fixture(params=[2, 3], ids=["isaacsim5", "isaacsim6"])
 def recorder_fixture(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> _RecorderFixture:
     events: list[str] = []
 
@@ -74,10 +74,10 @@ def recorder_fixture(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyP
     monkeypatch.setitem(sys.modules, "isaaclab.sim.utils.stage", lab_stage)
 
     from holosoma.simulator.isaacsim import video_recorder
-    from holosoma.simulator.isaacsim.backends.isaaclab2 import IsaacLab2Backend
-    from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Backend
+    from holosoma.simulator.isaacsim.backends.isaacsim5 import IsaacSim5Backend
+    from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Backend
 
-    backend = IsaacLab3Backend() if request.param == 3 else IsaacLab2Backend()
+    backend = IsaacSim6Backend() if request.param == 3 else IsaacSim5Backend()
     recorder = object.__new__(video_recorder.IsaacSimVideoRecorder)
     recorder.simulator = SimpleNamespace(backend=backend)  # type: ignore[assignment]
     recorder.config = SimpleNamespace(use_recording_thread=False)  # type: ignore[assignment]
@@ -102,7 +102,7 @@ def test_cleanup_releases_view_before_removing_camera_and_is_idempotent(
     recorder.cleanup()
     recorder.cleanup()
 
-    expected = ["detach", "destroy", "close", "remove"] if backend.is_isaaclab3 else ["detach", "destroy", "remove"]
+    expected = ["detach", "destroy", "close", "remove"] if backend.is_isaacsim6 else ["detach", "destroy", "remove"]
     assert events == expected
     assert recorder._rgb_annotator is None
     assert recorder._render_product is None
@@ -112,7 +112,7 @@ def test_cleanup_releases_view_before_removing_camera_and_is_idempotent(
     assert recorder.video_frames == []
 
 
-@pytest.mark.parametrize("recorder_fixture", [3], indirect=True, ids=["isaaclab3"])
+@pytest.mark.parametrize("recorder_fixture", [3], indirect=True, ids=["isaacsim6"])
 def test_cleanup_keeps_camera_for_retry_if_view_close_fails(recorder_fixture: _RecorderFixture) -> None:
     recorder, events, _backend = recorder_fixture
 
@@ -167,6 +167,6 @@ def test_cleanup_keeps_camera_path_for_retry_if_stage_removal_fails(
     assert recorder.camera_prim is not None
     assert recorder._view is None
     recorder.cleanup()
-    prefix = ["detach", "destroy", "close"] if backend.is_isaaclab3 else ["detach", "destroy"]
+    prefix = ["detach", "destroy", "close"] if backend.is_isaacsim6 else ["detach", "destroy"]
     assert events == prefix + ["remove", "remove"]
     assert recorder._camera_prim_path is None

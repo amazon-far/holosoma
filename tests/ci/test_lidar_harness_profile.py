@@ -19,15 +19,15 @@ def test_lidar_newton_rejects_other_presets(monkeypatch, capsys, simulator):
     with pytest.raises(SystemExit) as error:
         lidar_assert.main()
     assert error.value.code == 2
-    assert "--physics-backend newton requires --simulator isaacsim3" in capsys.readouterr().err
+    assert "--physics-backend newton requires --simulator isaacsim6" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
     ("simulator", "physics_option", "expected_backend", "expected_physics"),
     [
-        ("isaacsim", None, "isaaclab2", "physx"),
-        ("isaacsim3", None, "isaaclab3", "physx"),
-        ("isaacsim3", "newton", "isaaclab3", "newton"),
+        ("isaacsim", None, "isaacsim5", "physx"),
+        ("isaacsim6", None, "isaacsim6", "physx"),
+        ("isaacsim6", "newton", "isaacsim6", "newton"),
     ],
 )
 def test_lidar_profile_reaches_launch_as_typed_config(
@@ -39,7 +39,7 @@ def test_lidar_profile_reaches_launch_as_typed_config(
     monkeypatch.setattr(sys, "argv", argv)
     # These are runtime availability boundaries; the real config builders and backend selection
     # remain in use. No native simulation is launched by this CPU test.
-    monkeypatch.setattr(backends, "_installed_major", lambda: None)
+    monkeypatch.setattr(backends, "_installed_isaaclab_major", lambda: None)
     ray_module = tmp_path / "sensors" / "ray_caster" / "multi_mesh_ray_caster.py"
     ray_module.parent.mkdir(parents=True)
     ray_module.touch()
@@ -61,9 +61,9 @@ def test_lidar_profile_reaches_launch_as_typed_config(
     assert len(captured) == 1
     config, device = captured[0]
     assert config.simulator.config.isaacsim_backend.value == expected_backend
-    assert config.simulator.config.sim.isaaclab3.physics_backend == expected_physics
-    assert config.simulator.config.sim.isaaclab3.renderer == "isaac_rtx"
+    assert config.simulator.config.sim.isaacsim6.physics_backend == expected_physics
+    assert config.simulator.config.sim.isaacsim6.renderer == "isaac_rtx"
     assert config.training.num_envs == 3
     assert device == "cuda:0"
     assert {"downward", "cyclic", "cyclic_target", "tracked_target"} <= config.sensor.keys()
-    assert ("disabled_child_target" in config.sensor) == (simulator == "isaacsim3")
+    assert ("disabled_child_target" in config.sensor) == (simulator == "isaacsim6")

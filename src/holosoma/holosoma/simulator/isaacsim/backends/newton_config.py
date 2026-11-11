@@ -6,7 +6,7 @@ from dataclasses import fields
 from typing import Any
 
 from holosoma.config_types.mujoco import MujocoConfig
-from holosoma.config_types.simulator import IsaacLab3NewtonConfig
+from holosoma.config_types.simulator import IsaacSim6NewtonConfig
 
 
 def configured(config: Any) -> dict[str, Any]:
@@ -14,7 +14,7 @@ def configured(config: Any) -> dict[str, Any]:
     return {f.name: value for f in fields(config) if (value := getattr(config, f.name)) is not None}
 
 
-def solver_settings(shared: MujocoConfig, newton: IsaacLab3NewtonConfig) -> dict[str, Any]:
+def solver_settings(shared: MujocoConfig, newton: IsaacSim6NewtonConfig) -> dict[str, Any]:
     """Map shared solver controls and reject unsupported explicit settings."""
     if shared.solver == "pgs":
         raise ValueError("sim.mujoco.solver='pgs' is unsupported by Newton MJWarp; use cg or newton")

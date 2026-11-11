@@ -64,7 +64,7 @@ from holosoma.simulator.isaacsim.spawners.schema_utils import ensure_api_and_mod
 from holosoma.simulator.isaacsim.prim_utils import set_instanceable
 
 if TYPE_CHECKING:
-    from holosoma.simulator.isaacsim.backends.base import IsaacLabBackend
+    from holosoma.simulator.isaacsim.backends.base import IsaacSimBackendAdapter
 
 
 def create_prim(
@@ -75,7 +75,7 @@ def create_prim(
     orientation: Sequence[float] | None = None,
     scale: Sequence[float] | None = None,
     *,
-    backend: IsaacLabBackend,
+    backend: IsaacSimBackendAdapter,
 ) -> Usd.Prim | None:
     """Create a prim at the target path by referencing a USD file.
 
@@ -297,7 +297,7 @@ def spawn_from_usd(
     translation: tuple[float, float, float] | None = None,
     orientation: tuple[float, float, float, float] | None = None,
     *,
-    backend: IsaacLabBackend,
+    backend: IsaacSimBackendAdapter,
 ) -> Usd.Prim:
     """Spawn an asset from a USD file and override settings with the given config.
 
@@ -350,7 +350,7 @@ def _spawn_from_usd_file(
     translation: tuple[float, float, float] | None = None,
     orientation: tuple[float, float, float, float] | None = None,
     *,
-    backend: IsaacLabBackend,
+    backend: IsaacSimBackendAdapter,
 ) -> Usd.Prim:
     """Spawn an asset from a USD file and override settings with the given config.
 

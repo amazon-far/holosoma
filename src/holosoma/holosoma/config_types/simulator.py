@@ -13,7 +13,7 @@ from pydantic_core import ArgsKwargs
 
 from holosoma.config_types.frequency import DecimationLike, resolve_decimation, validate_decimation_like
 from holosoma.config_types.mujoco import MujocoConfig
-from holosoma.config_types.newton import IsaacLab3RendererConfig, NewtonCollisionConfig
+from holosoma.config_types.newton import IsaacSim6RendererConfig, NewtonCollisionConfig
 from holosoma.config_types.viewer import ViewerConfig
 
 _RENDER_INTERVAL_REMOVAL_DATE = datetime.date(2027, 3, 1)
@@ -33,13 +33,13 @@ class MujocoBackend(str, Enum):
 
 
 class IsaacSimBackend(str, Enum):
-    """Isaac Lab API used by the shared Isaac Sim simulator."""
+    """Isaac Sim version used by the shared simulator frontend."""
 
-    ISAACLAB2 = "isaaclab2"
-    """Isaac Lab 2.3 / Isaac Sim 5.1 (existing backend)."""
+    ISAACSIM5 = "isaacsim5"
+    """Isaac Sim 5.1 / Isaac Lab 2.3 (existing backend)."""
 
-    ISAACLAB3 = "isaaclab3"
-    """Isaac Lab 3.0 / Isaac Sim 6.2."""
+    ISAACSIM6 = "isaacsim6"
+    """Isaac Sim 6.2 / Isaac Lab 3.0."""
 
 
 @dataclass(frozen=True)
@@ -118,7 +118,7 @@ class IsaacSimRenderConfig:
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
-class IsaacLab3NewtonConfig:
+class IsaacSim6NewtonConfig:
     """Newton execution and collision controls; solver options use ``sim.mujoco``."""
 
     use_cuda_graph: bool = True
@@ -143,7 +143,7 @@ class IsaacLab3NewtonConfig:
     """
 
     @model_validator(mode="after")
-    def _validate_newton_options(self) -> IsaacLab3NewtonConfig:
+    def _validate_newton_options(self) -> IsaacSim6NewtonConfig:
         if not math.isfinite(self.default_shape_margin) or self.default_shape_margin < 0:
             raise ValueError("default_shape_margin must be finite and nonnegative")
         if self.collision_decimation < 0:
@@ -154,8 +154,8 @@ class IsaacLab3NewtonConfig:
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
-class IsaacLab3Config:
-    """Native Isaac Lab 3 options; used only by the ``isaaclab3`` backend."""
+class IsaacSim6Config:
+    """Isaac Sim 6 options, implemented through Isaac Lab 3."""
 
     physics_backend: Literal["physx", "newton"] = "physx"
     """Select PhysX or Newton MJWarp. Runs without Kit use OVPhysX for PhysX."""
@@ -173,7 +173,7 @@ class IsaacLab3Config:
     OVRTX cameras cannot share a process with Kit.
     """
 
-    newton: IsaacLab3NewtonConfig = field(default_factory=IsaacLab3NewtonConfig)
+    newton: IsaacSim6NewtonConfig = field(default_factory=IsaacSim6NewtonConfig)
     """Newton execution and collision controls; solver settings use sim.mujoco
     and per-environment capacities use sim.mujoco.warp."""
 
@@ -191,14 +191,14 @@ class IsaacLab3Config:
     ``total`` includes the tangential forces available in Isaac Sim 6.2.
     """
 
-    renderer_options: IsaacLab3RendererConfig = field(default_factory=IsaacLab3RendererConfig)
+    renderer_options: IsaacSim6RendererConfig = field(default_factory=IsaacSim6RendererConfig)
     """Typed camera options for the selected renderer."""
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         """Keep Pydantic exports consistent with saved experiment configs."""
         data: dict[str, Any] = handler(self)
-        if self.newton == IsaacLab3NewtonConfig():
+        if self.newton == IsaacSim6NewtonConfig():
             data.pop("newton", None)
         if "renderer_options" in data:
             data["renderer_options"] = {
@@ -253,8 +253,8 @@ class SimEngineConfig:
     mujoco: MujocoConfig = field(default_factory=MujocoConfig)
     """Native MuJoCo settings. None preserves existing behavior; other simulators ignore this block."""
 
-    isaaclab3: IsaacLab3Config = field(default_factory=IsaacLab3Config)
-    """Native Isaac Lab 3 settings; ignored by other backends."""
+    isaacsim6: IsaacSim6Config = field(default_factory=IsaacSim6Config)
+    """Isaac Sim 6 settings; ignored by other backends."""
 
     @model_validator(mode="after")
     def _validate_rates(self) -> SimEngineConfig:
@@ -452,12 +452,12 @@ class SimulatorInitConfig:
     virtual_gantry: VirtualGantryCfg = field(default_factory=VirtualGantryCfg)
     """Virtual gantry system configuration."""
 
-    isaacsim_backend: IsaacSimBackend = IsaacSimBackend.ISAACLAB2
-    """Isaac Lab API selection. Both backends share the ``isaacsim`` simulator.
+    isaacsim_backend: IsaacSimBackend = IsaacSimBackend.ISAACSIM5
+    """Isaac Sim version selection. Both backends share the ``IsaacSim`` frontend.
 
-    Use ``simulator:isaacsim3`` for Isaac Lab 3.0 / Isaac Sim 6.2, or override
-    ``--simulator.config.isaacsim-backend=ISAACLAB3``. ``simulator:isaacsim``
-    selects Lab 2 regardless of the activated environment; saved configurations
+    Use ``simulator:isaacsim6`` for Isaac Sim 6.2 / Isaac Lab 3.0, or override
+    ``--simulator.config.isaacsim-backend=ISAACSIM6``. ``simulator:isaacsim``
+    selects Isaac Sim 5 regardless of the activated environment; saved configurations
     retain their explicit selection.
     """
 

@@ -36,7 +36,7 @@ from holosoma.config_types.reward import RewardManagerCfg
 from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.sensor import SensorConfig
-from holosoma.config_types.simulator import IsaacLab3NewtonConfig, SimulatorConfig
+from holosoma.config_types.simulator import IsaacSim6NewtonConfig, SimulatorConfig
 from holosoma.config_types.termination import TerminationManagerCfg
 from holosoma.config_types.terrain import TerrainManagerCfg
 from holosoma.utils.config_registry import UseRegistry
@@ -247,8 +247,8 @@ class ExperimentConfig:
         """Return a JSON-friendly representation of the config."""
         data = dataclasses.asdict(self)
         # Keep inactive Newton defaults out of saved experiments.
-        native = data["simulator"]["config"]["sim"]["isaaclab3"]
-        if self.simulator.config.sim.isaaclab3.newton == IsaacLab3NewtonConfig():
+        native = data["simulator"]["config"]["sim"]["isaacsim6"]
+        if self.simulator.config.sim.isaacsim6.newton == IsaacSim6NewtonConfig():
             native.pop("newton")
         native["renderer_options"] = {
             name: value for name, value in native["renderer_options"].items() if value is not None
