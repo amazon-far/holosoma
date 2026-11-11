@@ -236,28 +236,69 @@ Use `--strategy normal` for the stable batching control and `--strategy serial
 The script writes every-tile measurements, held-buffer checks, captures, startup,
 VRAM and CPU RSS to `result.json`. Failures produce exit status 1.
 
-The integrated G1 workload requires a separate comparison; it includes physics,
-USD import/cloning, GPU bindings and SDK extraction. The pre-integration prototype
-passed all three matched controls at eight environments, 512×512, two cameras at
-50/10 Hz, 60 cycles and 10 excluded warmup cycles:
+### Immutable production-image comparison
 
-| Policy | Capture ms/control cycle | Actual full-run captures | Startup s | Process VRAM MiB | Result |
-| --- | ---: | --- | ---: | ---: | --- |
-| Normal batching | 15.475 | 60/60 | 8.603 | 4853 | Pass |
-| Serialized fallback | 114.179 | 60/12 | 7.971 | 5167 | Pass |
-| Persistent renderers | 10.211 | 60/12 | 8.155 | 5294 | Pass |
+The integrated G1 workload includes physics, URDF/USD import and cloning, GPU
+bindings and SDK extraction. The final runtime commit is `de686a13`, built into
+image `sha256:135898fa5addf50f359227041141f40c58086f84075c16ea3f3aadff6ea5e418`
+with source-tree digest
+`c30c1cee94c918077792fd6fc64860c5e009ce1fc20f6053bed1fea8900a3386`.
+The final documentation commit changes no runtime bytes.
 
-Unlike the diagnostic standalone copies, integrated capture time includes only
-SDK-requested due observation extraction. All controls use the same motion,
-partial reset, caches and dependencies and check every environment's independently
-changing RGB/depth geometry, held observations and exact physics step/time deltas.
+The matched production cohort used eight environments, 512×512 RGB/depth,
+two cameras at 50/10 Hz, 60 control cycles and 10 excluded warmup cycles.
+All five controls ran sequentially in the same immutable image/container, with
+the same motion, partial reset, observation cadence, dependencies and shared
+shader/Warp/Kit caches. Other active GPU work finished first; preview processes
+were paused and a GPU-process monitor found no unexpected activity throughout
+the cohort. Those preview containers were removed externally during the run;
+no surviving preview was left paused. Capture timings include only the requested
+SDK observation extraction, rather than the diagnostic standalone all-frame
+CPU copies. The serialized control swaps only the renderer factory for the
+fallback from commit `952bc0f8` and runs the current tracked correctness fixture.
+
+| Policy | Capture ms/control cycle | p50 / p95 ms | Captures in 60 cycles | Startup s | Process VRAM MiB | Result |
+| --- | ---: | --- | --- | ---: | ---: | --- |
+| OVRTX normal batching | 12.526 | 12.44 / 13.45 | 60/60 | 26.430 | 4853 | Pass |
+| OVRTX serialized fallback | 113.416 | 8.31 / 280.94 | 60/12 | 7.722 | 5359 | Pass |
+| OVRTX persistent owners | 9.712 | 7.67 / 18.55 | 60/12 | 8.192 | 5246 | Pass |
+| Isaac RTX normal batching | 99.079 | 98.80 / 102.48 | 60/60 | 12.107 | 5891 | Pass |
+| Isaac RTX scheduled | 73.015 | 65.80 / 101.63 | 60/12 | 10.776 | 5390 | Pass |
+
+All rows pass every environment's independently moving RGB/depth geometry,
+distinct camera orientations, held observations, partial reset, output ownership
+and exact physics step/time deltas. Each camera-product capture includes eight
+views. The measured 50-cycle window contains 50/50 captures for normal batching
+and 50/10 for scheduled strategies; startup captures are outside this count.
+Persistent owners reduce capture time by 91.4% relative to serialization and
+22.5% relative to normal batching, with 393 MiB more process VRAM than normal
+batching in this workload. Isaac RTX scheduling reduces capture time by 26.3%.
+These are capture costs per control cycle, not total training throughput.
+
+Startup samples include import/conversion and first completed output. The first
+normal control runs before the other controls have warmed container-local state;
+its 26.43-second startup is order-confounded. These single samples do not establish
+a startup speedup or general cold-start cost. The renderer-only standalone cohort
+above separately measures persistent instances' additional CPU memory and startup
+work. Earlier prototype and production cohorts remain in the retained experiment
+artifacts; their absolute timings are not combined with this final-image cohort.
+
 The default DLSS reconstruction can leave color trails outside the current target
 surface. Tests verify moving depth independently, then RGB on that surface, and
 reject a real previous RGB frame paired with fresh depth. Movies additionally
-check current geometry and decode saved MP4 frames. Rendering quality defaults
-remain unchanged. Startup measurements are single warm-cache samples, not a
-general startup benchmark. These prototype numbers are retained as a separate
-cohort; the immutable production-image results are recorded in the PR.
+check current geometry from a distinct camera pose and decode saved MP4 frames.
+Rendering quality defaults remain unchanged.
+
+The final image passed all 44 native-options tests and all 14 existing camera
+regressions. Its CPU-only CI suite passed 1,916 tests with 27 CUDA/ROS dependency
+skips; the Python 3.10-target type check passed across 592 source files. The CPU
+suite uses its normal inference dependency installation (NumPy 2.3.5); native
+GPU checks and benchmarks retain NumPy 2.5.1. The final tracked standalone
+reproducer passed all four rate patterns with identical prim paths in independently
+created scenes, held-buffer and partial-pose/target reset checks. Separate final-image
+preflights passed three-camera 1/5/2 movies for both OVRTX and Isaac RTX and 2/3
+captures through OVStage with both Newton and PhysX. Pre-commit checks passed with
+Python 3.12. Multi-GPU validation is excluded as requested.
 
 ### OVRTX API and alternate-build investigation
 
@@ -312,6 +353,45 @@ of a stale capture. The pinned native schema defaults `omni:rtx:post:aa:op` to
 `"dlss"`; [RTPT uses denoising][render-modes]. Production anti-aliasing defaults
 remain unchanged. These checks establish current-surface freshness, without
 claiming that temporal trails were eliminated.
+
+### Material updates and movie coexistence
+
+The real SDK material probe uses `VisualMaterial.write_channels` to change one
+environment's PreviewSurface color at a time, while three cameras capture at
+1/5/2. Both the persistent owners and untouched SDK renderer pass 68 tile
+checks, 31 actual previous-image negative controls, 19 partial-environment
+material writes, held observations, partial camera reset, exact physics advancement
+and repeated writer/renderer/backend cleanup. The tested adapter bytes are
+identical in production commits `ad19b59b` and `de686a13`.
+
+Default temporal reconstruction blends old and new material colors. Pure-color
+dominance and a single-channel increase threshold failed in diagnostic runs;
+the latter also failed on the untouched SDK reference. The final check requires
+visible requested-color signal and RGB-vector progress toward that color,
+rejecting the real previous frame. Minimum progress was 50.35/255 for persistent
+owners and 49.38/255 for the SDK, against a threshold of 25/255. Those earlier
+failed controls remain recorded. On a slower camera, fresh green appears with
+retained blue, whereas ordinary batching has five intervening renders to converge.
+Scheduling therefore changes temporal-history convergence per control cycle;
+it does not change the rendering quality defaults.
+
+The pinned native runtime warns:
+`Multiple Hydra Engines detected. Video Textures are temporarily disabled with multiple Hydra Engines.`
+This limits video textures on scene materials in the persistent multi-engine
+path. It does not disable camera movie encoding, which passes the separate
+RGB/depth/MP4 checks. Single-camera and uniform-rate setups without movie
+coexistence keep the efficient one-engine path. Large camera counts and general
+cold-start costs have not been benchmarked.
+
+The movie freshness fixture uses a recording pose distinct from every perception
+camera, independently moving RGB/depth geometry and decoded MP4 frames. It exposed
+a separate Isaac RTX layout problem: after the first frame, a singleton movie
+product could contain the two tiled perception views. The movie product now
+applies `OmniRtxPostDebugSettingsAPI_1` and publishes `omni:rtx:viewTile:limit=1`
+and `omni:rtx:viewTile:resolution` as an integer `Gf.Vec2i` before capture.
+The installed schema is `omni.usd.schema.render_settings.rtx`
+`1.0.3+187cf21b`. Distinct-pose three-camera 1/5/2 movie checks pass for OVRTX
+and Isaac RTX with unchanged quality settings. Lab 2 movie behavior is unchanged.
 
 [rates]: https://github.com/NVIDIA-Omniverse/ovrtx/blob/b9ae5f0913847502ff5ed29ab45a6e9f28bec8f1/docs/sensors/multi_rate.rst
 [ownership]: https://github.com/NVIDIA-Omniverse/ovrtx/blob/b9ae5f0913847502ff5ed29ab45a6e9f28bec8f1/docs/core/ovstage_integration.rst
