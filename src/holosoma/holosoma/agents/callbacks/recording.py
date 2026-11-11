@@ -60,7 +60,10 @@ class EvalRecordingCallback(RLEvalCallback):
 
         path = Path(self.output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(str(path), **arrays)
+        # Named array kwargs must also work with NumPy versions that add
+        # explicit keyword parameters to this archive API.
+        archive_kwargs: dict[str, Any] = arrays
+        np.savez_compressed(str(path), **archive_kwargs)
 
         channel_summary = ", ".join(
             f"{name}{list(arr.shape)}" for name, arr in arrays.items() if name != "_metadata_json"
@@ -120,7 +123,8 @@ class EvalRecordingCallback(RLEvalCallback):
 
         def _to_np(t: torch.Tensor) -> npt.NDArray[Any]:
             arr: npt.NDArray[Any] = t.detach().cpu().numpy()
-            return arr.copy()
+            copied: npt.NDArray[Any] = arr.copy()
+            return copied
 
         self._buffers["dof_pos"].append(_to_np(sim.dof_pos[eid]))  # post_eval_env_step, so after 4 decimation
         self._buffers["dof_vel"].append(_to_np(sim.dof_vel[eid]))

@@ -73,9 +73,11 @@ class MujocoWarpConfig:
     """
 
     nconmax_per_env: Count | None = None
-    """Average contacts per world in the shared pool; None uses 96. A world may exceed this average."""
+    """Average contacts per world in the shared pool. None retains 96 on direct MJWarp,
+    128 on Newton. A world may exceed this average."""
     njmax_per_env: Count | None = None
-    """Hard constraint-row capacity per world; None uses max(6*nconmax_per_env, 4*model.nv)."""
+    """Hard constraint-row capacity per world. None retains direct MJWarp's
+    max(6*nconmax_per_env, 4*model.nv), or Newton's SDK default of 300."""
     naconmax: Count | None = None
     """Total contact-pool capacity across all worlds; None uses nconmax_per_env*training.num_envs."""
     graph_conditional: Annotated[bool, Field(strict=True)] | None = None
@@ -107,11 +109,13 @@ class MujocoConfig:
     """Native physics options, applied by core setup before compilation and upload.
 
     None preserves asset/current Holosoma behavior; sim.fps owns timestep.
-    Other simulators ignore this block. Reconstruct the simulator to change it.
+    Isaac Lab 3's Newton MJWarp backend also reads this block. Reconstruct the
+    simulator to change it; unsupported explicit options fail during setup.
     """
 
     integrator: Literal["euler", "rk4", "implicit", "implicitfast"] | None = None
-    """Native time integration method; None preserves the world setting. Both backends support all four."""
+    """Native time integration method; None preserves backend behavior.
+    Newton supports euler/rk4/implicitfast; direct MuJoCo backends support all four."""
     solver: Literal["pgs", "cg", "newton"] | None = None
     """Constraint solver algorithm; MJWarp supports cg/newton. None preserves the world setting."""
     cone: Literal["pyramidal", "elliptic"] | None = None
@@ -155,7 +159,7 @@ class MujocoConfig:
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))
 class MujocoGeomPhysicsConfig:
-    """Contact overrides for scene objects and robot links, applied to each geom before compilation.
+    """MuJoCo contact and body overrides for scene objects and robot links.
 
     None preserves the asset's authored values. Named fields and ``extra`` share the
     same application path in the core scene manager.
@@ -188,6 +192,9 @@ class MujocoGeomPhysicsConfig:
     None preserves each geom's value."""
     extra: ExtraSettings = field(default_factory=dict)
     """Other native geom physics properties, using bare names; asset authoring and shared mass/density are excluded."""
+    gravity_compensation: Finite | None = None
+    """Fraction of body gravity compensated, including Newton MJWarp's gravcomp.
+    Zero applies full gravity; one cancels it. None preserves the asset."""
 
     @model_validator(mode="after")
     def validate_contact(self) -> MujocoGeomPhysicsConfig:

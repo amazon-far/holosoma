@@ -1,0 +1,317 @@
+"""Read authored USD and native physics models independently of adapter accessors."""
+
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import json
+import sys
+from pathlib import Path
+
+if sys.path and sys.path[0].endswith("simulators"):
+    sys.path.pop(0)
+
+from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
+from holosoma.config_types.newton import IsaacSim6RendererConfig, NewtonCollisionConfig, NewtonPhysicsConfig
+from holosoma.config_types.scene import IsaacSimPhysicsConfig, MujocoPhysicsConfig, PhysicsConfig
+from holosoma.config_types.simulator import IsaacSim6Config, IsaacSim6NewtonConfig
+from tests.simulators._native_runtime_assertions import assert_native_runtime
+from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit, step
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--simulator", choices=["isaacsim6"], required=True)
+    parser.add_argument("--physics", choices=["newton", "physx"], required=True)
+    parser.add_argument("--renderer", choices=["newton_warp", "ovrtx"], required=True)
+    parser.add_argument("--collision-source", choices=["mujoco", "newton"], default="mujoco")
+    parser.add_argument("--disable-cuda-graph", action="store_true")
+    parser.add_argument("--result-file", required=True)
+    args = parser.parse_args()
+
+    from tests.simulators import _camera_presets
+
+    config = build_run_sim_config(
+        "isaacsim6",
+        "panel-target",
+        "g1-29dof",
+        "terrain_locomotion_plane",
+        sensors=_camera_presets.front_cam_depth,
+    )
+    shared = MujocoConfig()
+    newton = IsaacSim6NewtonConfig()
+    if args.physics == "newton":
+        shared = MujocoConfig(
+            iterations=17,
+            ls_iterations=9,
+            cone="elliptic",
+            impratio=3.0,
+            jacobian="dense",
+            ls_tolerance=0.02,
+            disableflags=("warmstart",),
+            enableflags=(),
+            extra={"ccd_iterations": 7},
+            warp=MujocoWarpConfig(nconmax_per_env=256, njmax_per_env=512, graph_conditional=False),
+        )
+        newton = IsaacSim6NewtonConfig(
+            collision_source=args.collision_source,
+            collision=NewtonCollisionConfig(broad_phase="sap")
+            if args.collision_source == "newton"
+            else NewtonCollisionConfig(),
+            use_cuda_graph=not args.disable_cuda_graph,
+        )
+    native = IsaacSim6Config(
+        physics_backend=args.physics,
+        renderer=args.renderer,
+        newton=newton,
+        renderer_options=IsaacSim6RendererConfig(enable_shadows=False)
+        if args.renderer == "newton_warp"
+        else IsaacSim6RendererConfig(),
+    )
+    overrides = {
+        "pelvis": PhysicsConfig(
+            mass=42.0,
+            mujoco=MujocoPhysicsConfig(gravity_compensation=0.25) if args.physics == "newton" else None,
+        ),
+        "left_ankle_roll_link": PhysicsConfig(
+            isaacsim=IsaacSimPhysicsConfig(static_friction=0.45, dynamic_friction=0.45),
+            mujoco=MujocoPhysicsConfig(friction=[0.45, 0.07, 0.03]) if args.physics == "newton" else None,
+        ),
+    }
+    config = dataclasses.replace(
+        config,
+        simulator=dataclasses.replace(
+            config.simulator,
+            config=dataclasses.replace(
+                config.simulator.config,
+                sim=dataclasses.replace(config.simulator.config.sim, isaacsim6=native, mujoco=shared),
+            ),
+        ),
+        robot=dataclasses.replace(
+            config.robot,
+            asset=dataclasses.replace(
+                config.robot.asset,
+                link_physics_overrides=overrides,
+                link_physics=PhysicsConfig(
+                    isaacsim=IsaacSimPhysicsConfig(static_friction=0.7, dynamic_friction=0.7),
+                    mujoco=MujocoPhysicsConfig(condim=6, gravity_compensation=0.1)
+                    if args.physics == "newton"
+                    else None,
+                ),
+            ),
+        ),
+        device="cuda:0",
+        training=dataclasses.replace(config.training, num_envs=2),
+    )
+    sim, device, app = launch_simulator(config, device="cuda:0")
+    sim.set_headless(True)
+    sim.setup()
+    sim.setup_terrain()
+    sim.load_assets()
+
+    import numpy as np
+    import torch
+    import warp as wp
+    from isaaclab.sim.schemas import MassCfg
+    from isaaclab.utils.string import string_to_callable
+    from pxr import Sdf, Usd, UsdPhysics, UsdShade
+
+    from holosoma.simulator.isaacsim.backends.native_properties import author_properties, author_robot_physics
+
+    nested = Usd.Stage.CreateInMemory()
+    nested.DefinePrim("/Nested", "Xform")
+    parent = nested.DefinePrim("/Nested/parent", "Xform")
+    child = nested.DefinePrim("/Nested/parent/child", "Xform")
+    disabled = nested.DefinePrim("/Nested/parent/fixed", "Xform")
+    for prim, mass in ((parent, 1.0), (child, 2.0)):
+        UsdPhysics.RigidBodyAPI.Apply(prim)
+        UsdPhysics.MassAPI.Apply(prim).CreateMassAttr(mass)
+    UsdPhysics.RigidBodyAPI.Apply(disabled).CreateRigidBodyEnabledAttr(False)
+    original = UsdShade.Material.Define(nested, "/Nested/material")
+    UsdPhysics.MaterialAPI.Apply(original.GetPrim()).CreateStaticFrictionAttr(0.4)
+    contact_attribute = "newton:contactMargin" if args.physics == "newton" else "physxCollision:contactOffset"
+    colliders = []
+    for prim in (parent, child, disabled):
+        collider = nested.DefinePrim(str(prim.GetPath()) + "/collision", "Mesh")
+        UsdPhysics.CollisionAPI.Apply(collider)
+        collider.CreateAttribute(contact_attribute, Sdf.ValueTypeNames.Float).Set(0.11)
+        collider.CreateAttribute("newton:maxHullVertices", Sdf.ValueTypeNames.Int).Set(32)
+        UsdShade.MaterialBindingAPI.Apply(collider).Bind(original, materialPurpose="physics")
+        colliders.append(collider)
+    nested_physics = PhysicsConfig(
+        mass=4.0,
+        isaacsim=IsaacSimPhysicsConfig(static_friction=0.23, dynamic_friction=0.23, contact_offset=0.07),
+        mujoco=MujocoPhysicsConfig(margin=0.07) if args.physics == "newton" else None,
+        newton=NewtonPhysicsConfig(max_hull_vertices=64) if args.physics == "newton" else None,
+    )
+    asset = dataclasses.replace(
+        config.robot.asset,
+        link_physics=None,
+        link_physics_overrides={"parent": nested_physics},
+    )
+    author_robot_physics("/Nested", asset, sim.backend, stage=nested, material_defaults=None)
+    assert UsdPhysics.MassAPI(parent).GetMassAttr().Get() == 4.0
+    assert UsdPhysics.MassAPI(child).GetMassAttr().Get() == 2.0
+    for index, collider in enumerate(colliders):
+        selected = index != 1
+        material, _ = UsdShade.MaterialBindingAPI(collider).ComputeBoundMaterial(materialPurpose="physics")
+        assert (
+            abs(UsdPhysics.MaterialAPI(material.GetPrim()).GetStaticFrictionAttr().Get() - (0.23 if selected else 0.4))
+            < 1e-6
+        )
+        assert abs(collider.GetAttribute(contact_attribute).Get() - (0.07 if selected else 0.11)) < 1e-6
+        if args.physics == "newton":
+            assert collider.GetAttribute("newton:maxHullVertices").Get() == (64 if selected else 32)
+    # Wildcards select physical bodies; disabled fixed-link markers retain
+    # their outer owner's collider settings without becoming override targets.
+    wildcard_asset = dataclasses.replace(asset, link_physics_overrides={"*": nested_physics})
+    author_robot_physics("/Nested", wildcard_asset, sim.backend, stage=nested, material_defaults=None)
+    assert UsdPhysics.MassAPI(child).GetMassAttr().Get() == 4.0
+    assert not disabled.HasAPI(UsdPhysics.MassAPI)
+    for collider in colliders:
+        material, _ = UsdShade.MaterialBindingAPI(collider).ComputeBoundMaterial(materialPurpose="physics")
+        assert abs(UsdPhysics.MaterialAPI(material.GetPrim()).GetStaticFrictionAttr().Get() - 0.23) < 1e-6
+
+    fixture = Usd.Stage.CreateInMemory()
+    fixture.DefinePrim("/Library", "Xform")
+    fixture.DefinePrim("/Library/Geometry", "Xform")
+    fixture.DefinePrim("/Library/Geometry/mesh", "Mesh")
+    fixture.DefinePrim("/Asset", "Xform")
+    body = fixture.DefinePrim("/Asset/body", "Xform")
+    UsdPhysics.RigidBodyAPI.Apply(body)
+    UsdPhysics.MassAPI.Apply(body)
+    visual = fixture.DefinePrim("/Asset/visual", "Xform")
+    visual.GetReferences().AddInternalReference("/Library/Geometry")
+    visual.SetInstanceable(True)
+    author_properties("/Asset", {"mass_props": [("/body", [MassCfg(mass=2.0)])]}, flags={}, stage=fixture)
+    assert UsdPhysics.MassAPI(body).GetMassAttr().Get() == 2.0
+    assert visual.IsInstanceable(), "A mass override deinstanced unrelated visuals"
+    other_body = fixture.DefinePrim("/Asset/other_body", "Xform")
+    outside = fixture.DefinePrim("/other_body", "Xform")
+    sibling = fixture.DefinePrim("/AssetOther/body", "Xform")
+    for prim, mass in ((other_body, 3.0), (outside, 77.0), (sibling, 88.0)):
+        UsdPhysics.RigidBodyAPI.Apply(prim)
+        UsdPhysics.MassAPI.Apply(prim).CreateMassAttr(mass)
+    author_properties(
+        "/Asset",
+        {"mass_props": [("/body|/other_body", [MassCfg(mass=4.0)])]},
+        flags={},
+        stage=fixture,
+    )
+    assert UsdPhysics.MassAPI(body).GetMassAttr().Get() == 4.0
+    assert UsdPhysics.MassAPI(other_body).GetMassAttr().Get() == 4.0
+    author_properties("/Asset", {"mass_props": [("(.*)", [MassCfg(mass=5.0)])]}, flags={}, stage=fixture)
+    assert UsdPhysics.MassAPI(body).GetMassAttr().Get() == 5.0
+    assert UsdPhysics.MassAPI(other_body).GetMassAttr().Get() == 5.0
+    assert UsdPhysics.MassAPI(outside).GetMassAttr().Get() == 77.0
+    assert UsdPhysics.MassAPI(sibling).GetMassAttr().Get() == 88.0
+    assert visual.IsInstanceable(), "A broad mass rule deinstanced unrelated visuals"
+
+    init = config.robot.init_state
+    initial = torch.tensor(
+        list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel),
+        device=device,
+        dtype=torch.float32,
+    )
+    sim.create_envs(2, torch.zeros(2, 3, device=device), initial)
+    sim.prepare_sim()
+    manager = string_to_callable(sim.sim.cfg.physics.class_type)
+    stage = sim.sim.stage
+    for row in range(2):
+        root = stage.GetPrimAtPath(f"/World/envs/env_{row}/Robot")
+        bodies = [prim for prim in Usd.PrimRange(root) if prim.HasAPI(UsdPhysics.RigidBodyAPI)]
+        pelvis = next(prim for prim in bodies if prim.GetName() == "pelvis")
+        assert UsdPhysics.MassAPI(pelvis).GetMassAttr().Get() == 42.0
+        if args.physics == "newton":
+            assert abs(pelvis.GetAttribute("mjc:gravcomp").Get() - 0.25) < 1e-6
+            other = next(prim for prim in bodies if prim.GetName() != "pelvis")
+            assert abs(other.GetAttribute("mjc:gravcomp").Get() - 0.1) < 1e-6
+        for side, expected in [("left", 0.45), ("right", 0.7)]:
+            colliders = [
+                prim
+                for prim in Usd.PrimRange(root)
+                if f"{side}_ankle_roll_link/" in str(prim.GetPath()) and prim.HasAPI(UsdPhysics.CollisionAPI)
+            ]
+            assert colliders, side
+            for collider in colliders:
+                bound, _ = UsdShade.MaterialBindingAPI(collider).ComputeBoundMaterial(materialPurpose="physics")
+                assert bound, collider.GetPath()
+                value = UsdPhysics.MaterialAPI(bound.GetPrim()).GetDynamicFrictionAttr().Get()
+                assert abs(value - expected) < 1e-6, (collider.GetPath(), value, expected)
+
+    robot = sim._robot
+    if args.physics == "newton":
+        from newton import ShapeFlags
+
+        model = manager.get_model()
+        masses = model.body_mass.numpy()
+        labels = model.body_label
+        pelvis_ids = [index for index, label in enumerate(labels) if label.endswith("/pelvis")]
+        assert len(pelvis_ids) == 2, labels
+        np.testing.assert_allclose(masses[pelvis_ids], 42.0)
+        shapes = model.shape_label
+        flags = model.shape_flags.numpy()
+        for side, expected in [("left", 0.45), ("right", 0.7)]:
+            ids = [
+                index
+                for index, label in enumerate(shapes)
+                if f"{side}_ankle_roll_link/" in label and flags[index] & int(ShapeFlags.COLLIDE_SHAPES)
+            ]
+            assert ids, shapes
+            np.testing.assert_allclose(model.shape_material_mu.numpy()[ids], expected, atol=1e-6)
+            if side == "left":
+                np.testing.assert_allclose(model.shape_material_mu_torsional.numpy()[ids], 0.07, atol=1e-6)
+                np.testing.assert_allclose(model.shape_material_mu_rolling.numpy()[ids], 0.03, atol=1e-6)
+        # The compiled solver is the oracle, not the Holosoma config or accessors.
+        solver = manager._solver
+        import mujoco
+
+        assert solver.mj_model.opt.iterations == 17
+        assert solver.mj_model.opt.ls_iterations == 9
+        assert solver.mj_model.opt.impratio == 3.0
+        assert abs(solver.mj_model.opt.ls_tolerance - 0.02) < 1e-6
+        assert solver.mjw_model.opt.graph_conditional is False
+        assert solver.mjw_data.naconmax >= 256 * 2
+        assert solver.mjw_data.njmax >= 512
+        assert solver.mj_model.opt.disableflags == int(mujoco.mjtDisableBit.mjDSBL_WARMSTART)
+        assert solver.mj_model.opt.enableflags == 0
+        assert solver.mj_model.opt.ccd_iterations == 7
+        assert "holosoma.simulator.mujoco.mujoco" not in sys.modules
+        assert (solver.mj_model.geom_condim == 6).any()
+        assert abs(solver.mj_model.body_gravcomp.max() - 0.25) < 1e-6
+        assert sim.sim.cfg.physics.use_cuda_graph == (not args.disable_cuda_graph)
+    else:
+        native_mass = wp.to_torch(robot.root_view.get_attribute("articulation_body_mass"))
+        index = robot.backend_body_names.index("pelvis")
+        torch.testing.assert_close(native_mass[:, index], torch.full((2,), 42.0, device=native_mass.device))
+
+    camera = sim.tiled_cameras["front_cam"]
+    if args.renderer == "newton_warp":
+        assert camera.cfg.renderer_cfg.enable_shadows is False
+    before = sim.robot_root_states.clone()
+    step(sim, 20, render=True)
+    assert torch.isfinite(sim.robot_root_states).all()
+    assert not torch.equal(before, sim.robot_root_states)
+    assert camera.data.output["rgb"].torch.numel() > 0
+    assert_native_runtime(physics=args.physics, uses_kit=False)
+    Path(args.result_file).write_text("OK\n")
+    Path(args.result_file).with_suffix(".json").write_text(
+        json.dumps(
+            {
+                "physics": args.physics,
+                "renderer": args.renderer,
+                "collision_source": args.collision_source,
+                "mass": 42.0,
+                "left_friction": 0.45,
+                "right_friction": 0.7,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    app.close()
+    return 0
+
+
+if __name__ == "__main__":
+    run_and_hard_exit(main)

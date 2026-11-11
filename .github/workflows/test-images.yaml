@@ -9,6 +9,9 @@ on:
       isaacsim_image:
         required: true
         type: string
+      isaacsim6_image:
+        required: true
+        type: string
       mujoco_image:
         required: true
         type: string
@@ -27,6 +30,16 @@ jobs:
     with:
       simulator: isaacsim
       image: ${{ inputs.isaacsim_image }}
+      multigpu: '["False", "True"]'
+    secrets: inherit
+
+  isaacsim6:
+    name: Isaac Sim 6.2 / Isaac Lab 3
+    uses: ./.github/workflows/test-simulator-image.yaml
+    with:
+      simulator: isaacsim
+      isaacsim_backend: isaacsim6
+      image: ${{ inputs.isaacsim6_image }}
       multigpu: '["False", "True"]'
     secrets: inherit
 

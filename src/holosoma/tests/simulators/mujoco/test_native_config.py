@@ -661,14 +661,18 @@ def test_warp_device_array_conversion_on_cpu_does_not_claim_gpu_execution():
         warp=MujocoWarpConfig(graph_conditional=False, extras={"broadphase_filter": "sphere|sphere|plane"}),
     )
     model = compiled(native, backend=mjwarp)
+    assert model.opt.disableflags == 0
     with wp.ScopedDevice("cpu"):
         uploaded = mjw.put_model(model)
+        # MJWarp versions differ in their island flags. Holosoma must preserve
+        # the installed converter's policy when applying execution options.
+        converted_disableflags = uploaded.opt.disableflags
         assert uploaded.opt.tolerance.numpy()[0] == pytest.approx(1e-6)
         apply_warp_model(uploaded, native, warp_option_overrides(native.warp))
     np.testing.assert_allclose(uploaded.opt.tolerance.numpy(), [1e-8])
     np.testing.assert_allclose(uploaded.opt.gravity.numpy(), [[0, 0, -2]])
     np.testing.assert_allclose(uploaded.opt.impratio_invsqrt.numpy(), [1 / np.sqrt(10)])
-    assert uploaded.opt.disableflags == int(mjw.DisableBit.ISLAND)
+    assert uploaded.opt.disableflags == converted_disableflags
     assert uploaded.opt.graph_conditional is False
     assert uploaded.opt.broadphase_filter == int(mjw.BroadphaseFilter.SPHERE | mjw.BroadphaseFilter.PLANE)
     with wp.ScopedDevice("cpu"):

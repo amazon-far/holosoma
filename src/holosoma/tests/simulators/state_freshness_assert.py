@@ -39,10 +39,30 @@ JOINT_OFFSET = 0.02  # rad, written in place mid-frame
 JOINT_VEL_OFFSET = 0.1  # rad/s
 ROOT_ANG_VEL_OFFSET = 0.3  # rad/s
 BODY_ATOL = 1e-4  # independent reference after FK
+CONTACT_SLIDE_VELOCITY = 0.5  # m/s; forces ground contacts to produce friction on the native backend
 
 
 def _fresh_isaacsim(sim):
     data = sim._robot.data
+    if sim.backend.is_isaacsim6:
+        import torch
+
+        # Read the native data directly, independently of Holosoma's state adapter.
+        root = torch.cat((data.root_link_pose_w.torch, data.root_com_vel_w.torch), dim=-1)
+        contact_data = sim.contact_sensor.data
+        forces = (
+            contact_data.net_forces_w.torch
+            if sim.simulator_config.sim.isaacsim6.contact_force_mode == "total"
+            else contact_data.net_normal_forces_w.torch
+        )
+        return {
+            "dof_pos": data.joint_pos.torch[:, sim.dof_ids],
+            "dof_vel": data.joint_vel.torch[:, sim.dof_ids],
+            "robot_root_states": root,
+            "base_quat": root[:, 3:7],
+            "_rigid_body_pos": data.body_link_pos_w.torch[:, sim.body_ids, :],
+            "contact_forces": forces[:, sim._contact_to_robot_body_ids],
+        }
     root = data.root_state_w.clone()
     root[:, 3:7] = root[:, [4, 5, 6, 3]]  # wxyz -> xyzw
     return {
@@ -83,7 +103,7 @@ def _fresh_mujoco(sim):
 
 def _fresh(sim, simulator: str):
     """An independent read of the backend buffers per served name; other names re-run their bound read."""
-    fresh = _fresh_isaacsim(sim) if simulator == "isaacsim" else _fresh_mujoco(sim)
+    fresh = _fresh_isaacsim(sim) if simulator in ("isaacsim", "isaacsim6") else _fresh_mujoco(sim)
     for name in sim.state.names():
         if name not in fresh:
             fresh[name] = sim.state._read_fresh(name)
@@ -92,10 +112,33 @@ def _fresh(sim, simulator: str):
 
 def _reference_bodies_isaacsim(sim):
     """Env 0's body poses read from PhysX, bypassing Isaac Lab's cached articulation data."""
-    from isaacsim.core.simulation_manager import SimulationManager
+    if sim.backend.is_isaacsim6:
+        import warp as wp
 
-    SimulationManager.get_physics_sim_view().update_articulations_kinematic()
-    poses = sim._robot.root_physx_view.get_link_transforms()[0, sim.body_ids].cpu()  # xyzw quaternions
+        view = sim._robot.root_view
+        if sim.backend.uses_kit:
+            from isaaclab_physx.physics import PhysxManager
+
+            PhysxManager.get_physics_sim_view().update_articulations_kinematic()
+            poses = view.get_link_transforms()
+        else:
+            from isaaclab_ov import tensor_types as TT
+
+            # forward_kinematics already flushed the write. Read the solver
+            # binding directly, without refreshing Isaac Lab's cached data.
+            poses = view.get_attribute(TT.LINK_POSE)
+        poses = wp.to_torch(poses)
+        # Native find_bodies returns public-order IDs; the raw PhysX view uses its
+        # own solver order. Resolve names independently rather than reuse those IDs.
+        body_ids = [sim._robot.backend_body_names.index(name) for name in sim.body_names]
+    else:
+        from isaacsim.core.simulation_manager import SimulationManager
+
+        SimulationManager.get_physics_sim_view().update_articulations_kinematic()
+        view = sim._robot.root_physx_view
+        body_ids = sim.body_ids
+        poses = view.get_link_transforms()
+    poses = poses[0, body_ids].cpu()  # xyzw quaternions
     return {"_rigid_body_pos": poses[:, :3], "_rigid_body_rot": poses[:, 3:7]}
 
 
@@ -127,7 +170,7 @@ def _reference_bodies_mujoco(sim):
     }
 
 
-def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
+def _check(sim, simulator: str, *, contact_force_mode: str = "normal") -> tuple[list[str], list[str]]:
     import torch
 
     from holosoma.simulator.base_simulator.hooks import Phase
@@ -138,11 +181,28 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
     motions: list[float] = []
     checks = 0
     previous: list[torch.Tensor] = []
+    native_contacts = simulator in ("isaacsim", "isaacsim6") and sim.backend.is_isaacsim6
+    contact_modes_distinct = False
+    contact_mode_difference = 0.0
 
     device = torch.device(sim.sim_device)
+    if native_contacts:
+        configured_mode = sim.simulator_config.sim.isaacsim6.contact_force_mode
+        if configured_mode != contact_force_mode:
+            failures.append(f"requested contact_force_mode={contact_force_mode}, configured {configured_mode}")
+        for field in ("joint_pos", "joint_vel", "body_link_pos_w", "body_link_quat_w"):
+            proxy = getattr(sim._robot.data, field)
+            native = proxy.torch
+            exposed = sim.backend.tensor(proxy)
+            if (
+                exposed.data_ptr() != native.data_ptr()
+                or exposed.shape != native.shape
+                or exposed.stride() != native.stride()
+            ):
+                failures.append(f"{field} adapter copied or reshaped the native Torch view")
 
     def compare(phase: str) -> None:
-        nonlocal checks
+        nonlocal checks, contact_modes_distinct, contact_mode_difference
         fresh = _fresh(sim, simulator)
         for name, fresh_value in fresh.items():
             checks += 1
@@ -156,6 +216,14 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
                 key = f"{name} stale at {phase}"
                 worst[key] = max(worst.get(key, 0.0), error)
         if phase == "POST_STEP":
+            if native_contacts:
+                # A wrong selector could pass the direct-buffer comparison while both arrays
+                # contain zero. Require actual friction evidence after the lateral velocity write.
+                contact_data = sim.contact_sensor.data
+                normal = contact_data.net_normal_forces_w.torch
+                total = contact_data.net_forces_w.torch
+                contact_modes_distinct |= not torch.allclose(normal, total, atol=ATOL)
+                contact_mode_difference = max(contact_mode_difference, (total - normal).abs().max().item())
             # The root link is the robot's first body: its pose must be the integrated root pose, not the
             # pose the step started from.
             lag = (sim.state.get("_rigid_body_pos")[:, 0] - sim.robot_root_states[:, :3]).abs().max().item()
@@ -184,7 +252,9 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
         if not torch.allclose(reached, target, atol=ATOL):
             error = (reached - target).abs().max().item()
             failures.append(f"in-place dof_pos write did not reach the simulator (max error {error:.3e})")
-        references = _reference_bodies_isaacsim(sim) if simulator == "isaacsim" else _reference_bodies_mujoco(sim)
+        references = (
+            _reference_bodies_isaacsim(sim) if simulator in ("isaacsim", "isaacsim6") else _reference_bodies_mujoco(sim)
+        )
         for name, reference in references.items():
             expected = torch.as_tensor(reference, dtype=torch.float32)
             served = sim.state.get(name)[0].float().cpu()
@@ -223,6 +293,11 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
 
     for _ in range(SETTLE_CONTROL_STEPS):
         control_step(checked=False)
+    if native_contacts:
+        # Sliding a settled robot produces tangential contact forces. Both mode cells retain
+        # the same physical stimulus, so their direct SDK oracles distinguish the selected buffer.
+        sim.robot_root_states[:, 7] = CONTACT_SLIDE_VELOCITY
+        sim.forward_kinematics()
     for frame in range(CHECKED_CONTROL_STEPS):
         control_step(checked=True, write=frame == 1)
 
@@ -231,20 +306,28 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
     if slowest <= MIN_SUBSTEP_MOTION:
         failures.append(f"VACUOUS: a substep moved no body by more than {MIN_SUBSTEP_MOTION:g} m ({slowest:.2e})")
     report = [f"decimation={decimation} checks={checks} slowest substep body motion={slowest:.2e} m"]
+    if native_contacts:
+        if not contact_modes_distinct:
+            failures.append("VACUOUS: native normal and total contact forces never differed during the sliding probe")
+        report.append(
+            f"contact_force_mode={sim.simulator_config.sim.isaacsim6.contact_force_mode} "
+            f"maximum total-minus-normal force={contact_mode_difference:.3e} N"
+        )
     return failures, report
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim6"])
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--device", default=None)
+    parser.add_argument("--contact-force-mode", choices=["normal", "total"], default="normal")
     parser.add_argument("--result-file", default=None)
     args, _ = parser.parse_known_args()
     sys.argv = [sys.argv[0]]  # AppLauncher re-parses argv
 
-    sim = _build(args.simulator, args.num_envs, args.device)
-    failures, report = _check(sim, args.simulator)
+    sim = _build(args.simulator, args.num_envs, args.device, contact_force_mode=args.contact_force_mode)
+    failures, report = _check(sim, args.simulator, contact_force_mode=args.contact_force_mode)
 
     lines = [f"==== state freshness on {args.simulator} ====", *report]
     lines += [f"FAIL {failure}" for failure in failures]

@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import datetime
+import math
 import warnings
 from dataclasses import field
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import field_validator, model_validator
+from pydantic import ConfigDict, field_validator, model_validator
 from pydantic.dataclasses import dataclass
 from pydantic_core import ArgsKwargs
 
 from holosoma.config_types.frequency import DecimationLike, resolve_decimation, validate_decimation_like
 from holosoma.config_types.mujoco import MujocoConfig
+from holosoma.config_types.newton import IsaacSim6RendererConfig, NewtonCollisionConfig
 from holosoma.config_types.viewer import ViewerConfig
 
 _RENDER_INTERVAL_REMOVAL_DATE = datetime.date(2027, 3, 1)
@@ -28,6 +30,16 @@ class MujocoBackend(str, Enum):
 
     WARP = "warp"
     """GPU-accelerated multi-environment backend."""
+
+
+class IsaacSimBackend(str, Enum):
+    """Isaac Sim version used by the shared simulator frontend."""
+
+    ISAACSIM5 = "isaacsim5"
+    """Isaac Sim 5.1 / Isaac Lab 2.3 (existing backend)."""
+
+    ISAACSIM6 = "isaacsim6"
+    """Isaac Sim 6.2 / Isaac Lab 3.0."""
 
 
 @dataclass(frozen=True)
@@ -86,23 +98,101 @@ class MujocoXMLFilterCfg:
 
 @dataclass(frozen=True)
 class IsaacSimRenderConfig:
-    """Isaac Sim / Kit AppLauncher options applied at app startup."""
+    """Isaac Sim / Kit launch options applied at app startup."""
 
     rendering_mode: Literal["performance", "balanced", "quality"] | None = None
-    """AppLauncher rendering-mode preset (e.g. ``quality`` or ``performance``)."""
+    """Kit rendering-mode preset (e.g. ``quality`` or ``performance``)."""
 
     kit_args: str = ""
-    """Space-separated Kit/carb settings forwarded to AppLauncher — the way to set RTX/render options,
+    """Space-separated Kit/carb settings forwarded to the launcher to set RTX/render options,
     e.g. ``--/rtx/rendermode=PathTracing --/rtx/pathtracing/spp=32``."""
 
     def app_launcher_args(self) -> dict[str, Any]:
-        """The audited subset of settings accepted by Isaac Lab's AppLauncher."""
+        """The shared settings accepted by both Isaac Lab launchers."""
         launcher_args: dict[str, Any] = {}
         if self.rendering_mode is not None:
             launcher_args["rendering_mode"] = self.rendering_mode
         if self.kit_args:
             launcher_args["kit_args"] = self.kit_args
         return launcher_args
+
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class IsaacSim6NewtonConfig:
+    """Newton execution and collision controls; solver options use ``sim.mujoco``."""
+
+    use_cuda_graph: bool = True
+    """Capture physics execution on CUDA rather than launching every kernel from Python."""
+
+    default_shape_margin: float = 0.01
+    """Default collision margin in meters; individual shape settings can override it."""
+
+    collision_source: Literal["mujoco", "newton"] = "mujoco"
+    """Select MuJoCo collision detection or Newton's independent pipeline."""
+    collision: NewtonCollisionConfig = field(default_factory=NewtonCollisionConfig)
+    """Newton collision-pipeline controls, active only with collision_source='newton'."""
+    deterministic_mode: Literal["not_guaranteed", "run_to_run", "gpu_to_gpu"] = "not_guaranteed"
+    """Newton determinism policy. Deterministic MJWarp runs disable solver sensors."""
+    debug_mode: bool = False
+    """Log Newton solver convergence diagnostics."""
+    collision_decimation: int = 0
+    """Recompute collisions every N solver substeps within a physics tick.
+
+    Zero computes once per tick. Positive values require
+    ``collision_decimation < sim.substeps`` to enable mid-tick updates.
+    """
+
+    @model_validator(mode="after")
+    def _validate_newton_options(self) -> IsaacSim6NewtonConfig:
+        if not math.isfinite(self.default_shape_margin) or self.default_shape_margin < 0:
+            raise ValueError("default_shape_margin must be finite and nonnegative")
+        if self.collision_decimation < 0:
+            raise ValueError("collision_decimation must be nonnegative")
+        if self.collision_source == "mujoco" and self.collision != NewtonCollisionConfig():
+            raise ValueError("newton.collision requires collision_source='newton'")
+        return self
+
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class IsaacSim6Config:
+    """Isaac Sim 6 options, implemented through Isaac Lab 3."""
+
+    physics_backend: Literal["physx", "newton"] = "physx"
+    """Select PhysX or Newton MJWarp. Runs without Kit use OVPhysX for PhysX."""
+
+    renderer: Literal["isaac_rtx", "newton_warp", "ovrtx"] = "isaac_rtx"
+    """Camera renderer, independent of the physics engine. Warp favors throughput
+    over RTX lighting/material fidelity. Warp and OVRTX run without Kit, with
+    either Newton or OVPhysX, and also render logger movies. Physics-only runs
+    leave this renderer preference inactive.
+    """
+
+    require_kit: bool = False
+    """Request Kit for integrations that require its APIs, such as live USD
+    body-damping randomization. False allows standalone physics and renderers.
+    OVRTX cameras cannot share a process with Kit.
+    """
+
+    newton: IsaacSim6NewtonConfig = field(default_factory=IsaacSim6NewtonConfig)
+    """Newton execution and collision controls; solver settings use sim.mujoco
+    and per-environment capacities use sim.mujoco.warp."""
+
+    use_fabric: bool = True
+    """Synchronize physics transforms through Fabric instead of the USD path."""
+
+    create_stage_in_memory: bool = False
+    """Create the USD stage in memory to reduce startup time."""
+
+    use_newton_actuators: bool = True
+    """Use Lab 3's native actuator execution and its PhysX host adapter."""
+
+    contact_force_mode: Literal["normal", "total"] = "normal"
+    """Contact-force observation. ``normal`` preserves the existing reward contract;
+    ``total`` includes the tangential forces available in Isaac Sim 6.2.
+    """
+
+    renderer_options: IsaacSim6RendererConfig = field(default_factory=IsaacSim6RendererConfig)
+    """Typed camera options for the selected renderer."""
 
 
 @dataclass(frozen=True)
@@ -150,6 +240,9 @@ class SimEngineConfig:
 
     mujoco: MujocoConfig = field(default_factory=MujocoConfig)
     """Native MuJoCo settings. None preserves existing behavior; other simulators ignore this block."""
+
+    isaacsim6: IsaacSim6Config = field(default_factory=IsaacSim6Config)
+    """Isaac Sim 6 settings; ignored by other backends."""
 
     @model_validator(mode="after")
     def _validate_rates(self) -> SimEngineConfig:
@@ -320,7 +413,7 @@ class SimulatorInitConfig:
     """MuJoCo-specific XML filtering configuration for robot MJCF files."""
 
     isaacsim: IsaacSimRenderConfig = field(default_factory=IsaacSimRenderConfig)
-    """Isaac Sim AppLauncher options (rendering mode + Kit/carb args)."""
+    """Isaac Sim launch options (rendering mode + Kit/carb args)."""
 
     mujoco_backend: MujocoBackend = MujocoBackend.CLASSIC
     """MuJoCo physics backend selection.
@@ -346,6 +439,15 @@ class SimulatorInitConfig:
 
     virtual_gantry: VirtualGantryCfg = field(default_factory=VirtualGantryCfg)
     """Virtual gantry system configuration."""
+
+    isaacsim_backend: IsaacSimBackend = IsaacSimBackend.ISAACSIM5
+    """Isaac Sim version selection. Both backends share the ``IsaacSim`` frontend.
+
+    Use ``simulator:isaacsim6`` for Isaac Sim 6.2 / Isaac Lab 3.0, or override
+    ``--simulator.config.isaacsim-backend=ISAACSIM6``. ``simulator:isaacsim``
+    selects Isaac Sim 5 regardless of the activated environment; saved configurations
+    retain their explicit selection.
+    """
 
     @model_validator(mode="before")
     @classmethod

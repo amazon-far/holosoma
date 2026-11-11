@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import sys
 import traceback
+from functools import partial
 from pathlib import Path
 
 # tests/simulators/ has an ``isaacsim/`` subpackage that would shadow the real IsaacSim
@@ -271,27 +272,32 @@ def _check_scene_body_discovery() -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="IsaacSim spawn-cfg assertion harness.")
+    parser.add_argument("--simulator", choices=["isaacsim", "isaacsim6"], default="isaacsim")
     parser.add_argument("--result-file", default=None, help="write 'OK' here after all checks pass")
     args = parser.parse_args()
 
     # Boot a minimal headless IsaacSim app so isaaclab.sim (carb) is importable.
-    from isaaclab.app import AppLauncher
+    from holosoma.simulator.isaacsim.backends import get_backend
 
-    app_launcher = AppLauncher(headless=True)
-    simulation_app = app_launcher.app
+    backend = get_backend("isaacsim6" if args.simulator == "isaacsim6" else "isaacsim5")
+    simulation_app = backend.launch_app({"headless": True})
 
     try:
         import isaaclab.sim as sim_utils
 
         from holosoma.simulator.isaacsim.object_spawner import select_spawn_cfg
 
-        _check_format_symmetry(select_spawn_cfg, sim_utils)
-        _check_friction_symmetry(select_spawn_cfg)
+        explicit_spawn_cfg = partial(select_spawn_cfg, backend=backend)
+        _check_format_symmetry(explicit_spawn_cfg, sim_utils)
+        _check_friction_symmetry(explicit_spawn_cfg)
         _check_scene_body_discovery()
         _check_robot_link_physics_cfg()
     except BaseException:
         print("SPAWNER CFG ASSERT FAILED:\n" + traceback.format_exc(), flush=True)
-        simulation_app.close()
+        if backend.is_isaacsim6:
+            simulation_app.close(exit_code=1)
+        else:
+            simulation_app.close()
         return 1
 
     print("SPAWNER CFG OK: all spawn-cfg invariants verified", flush=True)

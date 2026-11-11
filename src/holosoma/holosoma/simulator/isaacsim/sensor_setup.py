@@ -1,29 +1,22 @@
 """Isaac Sim mounted camera and LiDAR sensor setup.
 
-Each configured camera is a ``TiledCamera`` created before ``clone_environments`` as a child prim
-of its mount body, so the USD transform hierarchy makes it follow that body natively across all
-cloned envs. These module-level functions take the simulator (the ``fields.py`` / MuJoCo
-shared sensor setup convention) and drive that pipeline — prim-path resolution, the FOV->aperture
-pinhole cfg, per-env creation, ``SensorManager`` registration, and the per-control-step render
-read-out. The per-camera ``TiledCamera`` map lives on the simulator as ``sim.tiled_cameras``,
-written before clone and read at render.
-
-Native sensors are built before cloning, then registered with the shared sensor manager after
-the scene is built.
+The selected backend creates a Lab 2 ``TiledCamera`` or Lab 3 ``Camera`` before
+environment cloning. Camera prims follow their mount bodies through the USD
+transform hierarchy. ``sim.tiled_cameras`` retains the native camera map for both
+versions; the shared sensor manager owns cadence, held observations and depth
+clipping. Native LiDAR sensors follow the same build-before-clone lifecycle.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from functools import lru_cache, partial
+from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
-import carb
 import torch
 import isaaclab.sim as sim_utils
-from isaaclab.sensors import TiledCamera, TiledCameraCfg, patterns
-from isaaclab.utils.math import quat_apply
+from isaaclab.sensors import patterns
 
 from holosoma.config_types.frequency import resolve_decimation
 from holosoma.config_types.sensor import CameraSensorConfig, IsaacSimLidarConfig, LidarSensorConfig
@@ -33,6 +26,7 @@ from holosoma.simulator.isaacsim.lidar_target_discovery import (
     assemble_default_mesh_prim_paths,
 )
 from holosoma.simulator.isaacsim.prim_utils import (
+    _DISABLED_RIGID_BODY_LINK_KEY,
     get_current_stage,
     is_rigid_body_enabled,
     resolve_robot_link_prim_expression,
@@ -46,30 +40,29 @@ if TYPE_CHECKING:
     from holosoma.config_types.sensor import LidarRayPatternConfig, SensorMountConfig
     from holosoma.simulator.isaacsim.isaacsim import IsaacSim
     from holosoma.simulator.shared.sensor_manager import CameraRecord
+    from holosoma.simulator.isaacsim.backends.base import IsaacSimBackendAdapter
 
 
 def build_cameras(sim: IsaacSim) -> None:
-    """Build a TiledCamera per configured camera (before clone, so each replicates per env).
+    """Build each backend's native camera before cloning it across environments.
 
     The camera optical convention is OpenGL (-Z forward, +Y up), the same frame holosoma uses,
     so the mount offset passes through with ``convention="opengl"`` and no extra rotation.
-    Mount quat is the config-layer ``[w,x,y,z]`` (IsaacLab OffsetCfg.rot is also w-first). Populates
+    Mount quat is the config-layer ``[w,x,y,z]``; the backend converts it to the native order. Populates
     ``sim.tiled_cameras`` and registers each camera prim into ``sim.scene.sensors``.
     """
     sim.tiled_cameras = {}
+    backend = sim.backend
     for cam_name, cam in sim.sensor_config.items():
         if not isinstance(cam, CameraSensorConfig):
             continue
-        parent = _camera_mount_prim_path(cam.mount)
+        parent = _camera_mount_prim_path(cam.mount, backend=backend)
         # Map holosoma data_types -> IsaacLab annotators.
         annotators = [{"rgb": "rgb", "depth": "distance_to_image_plane"}[d] for d in cam.data_types]
-        cam_cfg = TiledCameraCfg(
+        cam_cfg = backend.create_camera_cfg(
             prim_path=f"{parent}/{cam_name}",
-            offset=TiledCameraCfg.OffsetCfg(
-                pos=tuple(cam.mount.position),
-                rot=tuple(cam.mount.orientation),  # (w, x, y, z)
-                convention="opengl",  # -Z forward / +Y up, the frame holosoma uses
-            ),
+            offset_position=tuple(cam.mount.position),
+            offset_orientation=tuple(cam.mount.orientation),
             data_types=annotators,
             spawn=camera_spawn_cfg_for(cam, sim_utils),
             width=cam.width,
@@ -77,20 +70,29 @@ def build_cameras(sim: IsaacSim) -> None:
             # Keep raw +inf no-return data; CameraRecord applies Holosoma's common depth policy.
             depth_clipping_behavior="none",
         )
-        sim.tiled_cameras[cam_name] = TiledCamera(cam_cfg)
-        sim.scene.sensors[cam_name] = sim.tiled_cameras[cam_name]
+        camera = backend.create_camera(cam_cfg)
+        control_hz = sim.simulator_config.sim.fps / sim.simulator_config.sim.control_decimation_steps
+        backend.configure_camera_cadence(
+            camera,
+            control_hz=control_hz,
+            decimation=resolve_decimation(
+                cam.update_decimation, control_hz, field=f"camera '{cam_name}' update_decimation"
+            ),
+        )
+        sim.tiled_cameras[cam_name] = camera
+        sim.scene.sensors[cam_name] = camera
 
 
-def _camera_mount_prim_path(mount: SensorMountConfig) -> str:
+def _camera_mount_prim_path(mount: SensorMountConfig, *, backend: IsaacSimBackendAdapter) -> str:
     """Resolve a sensor mount to a per-env camera prim path (parent = the mount body prim).
 
     ``robot_link`` -> a robot link prim (name the root link to mount on the base);
     ``actor`` -> a spawned scene-object prim. The camera prim is created as a child of this
     path so the USD transform hierarchy makes it follow the body natively.
     """
-    ns = "/World/envs/env_.*"
+    ns = backend.env_regex_ns
     if mount.target_kind == "robot_link":
-        return resolve_robot_link_prim_expression(mount.target)
+        return resolve_robot_link_prim_expression(mount.target, backend=backend)
     if mount.target_kind == "actor":
         return f"{ns}/{mount.target}"
     if mount.target_kind == "world":
@@ -101,14 +103,14 @@ def _camera_mount_prim_path(mount: SensorMountConfig) -> str:
 
 
 def register_cameras(sim: IsaacSim, manager: SensorManager) -> None:
-    """Register TiledCameras built before environment cloning."""
+    """Register the cameras built before environment cloning with the shared manager."""
     for name, config in sim.sensor_config.items():
         if isinstance(config, CameraSensorConfig):
             manager.register_camera(name, config)
 
 
 def sync_camera_fabric_transforms(sim: IsaacSim) -> None:
-    """Reset each camera's Fabric local transform to its authored mount offset.
+    """Repair Lab 2 camera Fabric transforms to match their authored mount offsets.
 
     Call once after ``sim.reset()``. The renderer places cameras from Fabric. Isaac Lab initializes
     each TiledCamera during the reset; its first pose read syncs the camera into Fabric through an
@@ -119,6 +121,10 @@ def sync_camera_fabric_transforms(sim: IsaacSim) -> None:
     wrist camera); which cameras are hit is not explained. The USD offset stays correct, so it is
     copied back into Fabric for every camera.
     """
+    # Lab 3's native FrameView initializes transforms for every backend.
+    # The Kit-less path must not import Fabric's Kit runtime.
+    if sim.backend.is_isaacsim6:
+        return
     import carb
     import usdrt
     from pxr import Usd, UsdGeom
@@ -146,21 +152,23 @@ def sync_camera_fabric_transforms(sim: IsaacSim) -> None:
 
 
 def render_cameras(sim: IsaacSim, due: list[CameraRecord]) -> None:
-    """Cache each due TiledCamera's RGB/depth as an env-first frame into its buffer.
+    """Capture each due native camera's RGB/depth into its shared observation buffers.
 
-    Reads the output of the render ``render_sensors`` just ran, drops alpha, and writes a
-    ``[N,H,W,3]`` uint8 (rgb) / ``[N,H,W,1]`` float32 (depth) frame."""
+    Lab 3 prepares all due poses before capturing their outputs. Lab 2 reads
+    the frame-end RTX pass. Drop alpha and cache ``[N,H,W,3]`` uint8 (rgb) /
+    ``[N,H,W,1]`` float32 (depth) outputs at each camera's configured cadence."""
+    sim.backend.refresh_cameras([sim.tiled_cameras[record.name] for record in due])
     for camera_record in due:
         out = sim.tiled_cameras[camera_record.name].data.output
         if "rgb" in camera_record.config.data_types:
-            rgb = out["rgb"][..., :3]  # [N,H,W,3], drop alpha
+            rgb = sim.backend.tensor(out["rgb"])[..., :3]  # [N,H,W,3], drop alpha
             if rgb.dtype != torch.uint8:
                 rgb = rgb.clamp(0, 255).to(torch.uint8)
             camera_record.set_buffer("rgb", rgb)
         if "depth" in camera_record.config.data_types:
             # distance_to_image_plane is float32 meters, image-plane. Ensure a trailing channel
             # dim; CameraRecord applies the configured cross-backend no-return convention.
-            depth = out["distance_to_image_plane"].to(torch.float32)
+            depth = sim.backend.camera_depth(out["distance_to_image_plane"]).to(torch.float32)
             camera_record.set_buffer("depth", depth if depth.ndim == 4 else depth.unsqueeze(-1))
 
 
@@ -176,127 +184,10 @@ def _pattern(
     return torch.zeros_like(directions), directions
 
 
-@lru_cache(maxsize=1)
-def _mutable_multi_mesh_ray_caster_cls() -> type[Any]:
-    """Create the IsaacLab 2.3.2 LiDAR type only when a LiDAR is configured."""
-    from isaaclab.sensors import MultiMeshRayCaster
-
-    class MutableMultiMeshRayCaster(MultiMeshRayCaster):
-        """Multi-mesh ray caster with fixed-shape direction updates."""
-
-        @property
-        def ray_starts_w(self) -> torch.Tensor:
-            """Return IsaacLab's current world-frame ray origins."""
-            return self._ray_starts_w
-
-        def set_ray_directions(self, directions: torch.Tensor) -> None:
-            expected = (self.num_rays, 3)
-            if directions.shape != expected:
-                raise ValueError(f"RayCaster directions must keep shape {expected}, got {directions.shape}.")
-            local = directions.to(device=self.ray_directions.device, dtype=self.ray_directions.dtype)
-            offset_quat = torch.tensor(
-                self.cfg.offset.rot,
-                device=self.ray_directions.device,
-                dtype=self.ray_directions.dtype,
-            ).expand(self.num_rays, -1)
-            local = quat_apply(offset_quat, local)
-            self.ray_directions.copy_(local.unsqueeze(0).expand_as(self.ray_directions))
-            self.mark_outdated()
-
-        def mark_outdated(self) -> None:
-            """Force the next data access to cast at the current final-step pose."""
-            self._is_outdated[:] = True
-
-        def _obtain_trackable_prim_view(self, target_prim_path: str) -> Any:
-            """Track the nearest enabled physics owner, skipping disabled rigid-body APIs."""
-            from isaaclab.sim.views import XformPrimView
-            from pxr import UsdPhysics
-
-            mesh_prim = sim_utils.find_first_matching_prim(target_prim_path)
-            current_prim = mesh_prim
-            current_path_expr = target_prim_path
-            prim_view = None
-
-            while prim_view is None:
-                if current_prim.HasAPI(UsdPhysics.ArticulationRootAPI):
-                    prim_view = self._physics_sim_view.create_articulation_view(current_path_expr.replace(".*", "*"))
-                    break
-                if is_rigid_body_enabled(current_prim):
-                    prim_view = self._physics_sim_view.create_rigid_body_view(current_path_expr.replace(".*", "*"))
-                    break
-
-                current_prim = current_prim.GetParent()
-                current_path_expr = current_path_expr.rsplit("/", 1)[0]
-                if not current_prim.IsValid():
-                    prim_view = XformPrimView(target_prim_path, device=self._device, stage=self.stage)
-                    current_path_expr = target_prim_path
-
-            mesh_prims = sim_utils.find_matching_prims(target_prim_path)
-            view_prims = sim_utils.find_matching_prims(current_path_expr)
-            if len(mesh_prims) != len(view_prims):
-                raise RuntimeError(
-                    f"LiDAR target '{target_prim_path}' resolves to {len(mesh_prims)} meshes but "
-                    f"{len(view_prims)} trackable owners at '{current_path_expr}'."
-                )
-
-            positions = []
-            orientations = []
-            for target_prim, view_prim in zip(mesh_prims, view_prims):
-                position, orientation = sim_utils.resolve_prim_pose(target_prim, view_prim)
-                positions.append(torch.tensor(position, dtype=torch.float32, device=self.device))
-                orientations.append(torch.tensor(orientation, dtype=torch.float32, device=self.device))
-            return prim_view, (torch.stack(positions), torch.stack(orientations))
-
-        def _update_buffers_impl(self, env_ids: Any) -> None:
-            """Update rays with correct rigid-body-to-mesh transform composition."""
-            from isaaclab.sensors.ray_caster.ray_cast_utils import obtain_world_pose_from_view
-            from isaaclab.utils.math import quat_apply, quat_mul
-            from isaaclab.utils.warp import raycast_dynamic_meshes
-
-            self._update_ray_infos(env_ids)
-            mesh_idx = 0
-            for view, target_cfg in zip(self._mesh_views, self._raycast_targets_cfg):
-                count = self._num_meshes_per_env[target_cfg.prim_expr]
-                if not target_cfg.track_mesh_transforms:
-                    mesh_idx += count
-                    continue
-
-                pos_w, ori_w = obtain_world_pose_from_view(view, None)
-                pos_w = pos_w.squeeze(0) if pos_w.ndim == 3 else pos_w
-                ori_w = ori_w.squeeze(0) if ori_w.ndim == 3 else ori_w
-                if target_cfg.prim_expr in self.mesh_offsets:
-                    pos_offset, ori_offset = self.mesh_offsets[target_cfg.prim_expr]
-                    pos_w = pos_w + quat_apply(ori_w, pos_offset)
-                    ori_w = quat_mul(ori_w, ori_offset)
-
-                view_count = view.count
-                if view_count != 1:
-                    view_count //= self._num_envs
-                    pos_w = pos_w.view(self._num_envs, view_count, 3)
-                    ori_w = ori_w.view(self._num_envs, view_count, 4)
-                self._mesh_positions_w[:, mesh_idx : mesh_idx + view_count] = pos_w
-                self._mesh_orientations_w[:, mesh_idx : mesh_idx + view_count] = ori_w
-                mesh_idx += view_count
-
-            self._data.ray_hits_w[env_ids], _, _, _, mesh_ids = raycast_dynamic_meshes(
-                self._ray_starts_w[env_ids],
-                self._ray_directions_w[env_ids],
-                mesh_ids_wp=self._mesh_ids_wp,
-                max_dist=self.cfg.max_distance,
-                mesh_positions_w=self._mesh_positions_w[env_ids],
-                mesh_orientations_w=self._mesh_orientations_w[env_ids],
-                return_mesh_id=self.cfg.update_mesh_ids,
-            )
-            if self.cfg.update_mesh_ids:
-                self._data.ray_mesh_ids[env_ids] = mesh_ids
-
-    return MutableMultiMeshRayCaster
-
-
-def _mount_parent_path(mount: SensorMountConfig) -> str:
-    namespace = "/World/envs/env_.*"
+def _mount_parent_path(mount: SensorMountConfig, *, backend: IsaacSimBackendAdapter) -> str:
+    namespace = backend.env_regex_ns
     if mount.target_kind == "robot_link":
-        return resolve_robot_link_prim_expression(mount.target)
+        return resolve_robot_link_prim_expression(mount.target, backend=backend)
     if mount.target_kind == "actor":
         return f"{namespace}/{mount.target}"
     if mount.target_kind == "world":
@@ -374,14 +265,16 @@ def _body_filter_target(lidar: LidarSensorConfig) -> tuple[str, str] | None:
     return body_filter.target_kind, body_filter.target
 
 
-def _robot_mesh_prim_paths(excluded_link: str | None) -> list[str]:
+def _robot_mesh_prim_paths(excluded_link: str | None, *, backend: IsaacSimBackendAdapter) -> list[str]:
     """Return robot visual-geometry expressions, omitting one native body owner."""
     source_root = "/World/envs/env_0/Robot"
-    expression_root = "/World/envs/env_.*/Robot"
+    expression_root = f"{backend.env_regex_ns}/Robot"
     excluded_body_path = (
         None
         if excluded_link is None
-        else resolve_robot_link_rigid_body_prim_expression(excluded_link).replace("env_.*", "env_0")
+        else resolve_robot_link_rigid_body_prim_expression(excluded_link, backend=backend).replace(
+            backend.env_regex_ns, "/World/envs/env_0", 1
+        )
     )
     return _visual_mesh_prim_paths(
         source_root,
@@ -401,11 +294,12 @@ def _default_mesh_prim_paths(sim: IsaacSim, lidar: LidarSensorConfig) -> list[st
             )
     return assemble_default_mesh_prim_paths(
         excluded_target=excluded_target,
-        robot_mesh_prim_paths=_robot_mesh_prim_paths,
+        robot_mesh_prim_paths=partial(_robot_mesh_prim_paths, backend=sim.backend),
         # InteractiveScene.rigid_objects includes standalone objects and every static or dynamic
         # body expanded from scene files, so this covers all Holosoma scene-object meshes.
         actor_names=sim.scene.rigid_objects,
         discover_mesh_prim_paths=_visual_mesh_prim_paths,
+        env_regex_ns=sim.backend.env_regex_ns,
     )
 
 
@@ -419,22 +313,14 @@ def build_lidars(sim: IsaacSim) -> None:
     for name, lidar in lidars:
         from isaaclab.sensors import MultiMeshRayCasterCfg
 
-        parent = _mount_parent_path(lidar.mount)
+        parent = _mount_parent_path(lidar.mount, backend=sim.backend)
         if lidar.mount.target_kind == "world":
-            mount_path = f"{parent}/holosoma_lidar_{name}"
-            source_path = mount_path.replace("env_.*", "env_0")
-            sim_utils.create_prim(
-                source_path,
-                prim_type="Xform",
-                translation=tuple(lidar.mount.position),
-                orientation=tuple(lidar.mount.orientation),
-            )
-            offset = MultiMeshRayCasterCfg.OffsetCfg()
+            mount_path, offset = sim.backend.world_lidar_mount(name, lidar.mount.position, lidar.mount.orientation)
         else:
             mount_path = parent
             offset = MultiMeshRayCasterCfg.OffsetCfg(
                 pos=tuple(lidar.mount.position),
-                rot=tuple(lidar.mount.orientation),
+                rot=sim.backend.config_quat_to_native(lidar.mount.orientation),
             )
         update_decimation = resolve_decimation(
             lidar.update_decimation,
@@ -472,7 +358,7 @@ def build_lidars(sim: IsaacSim) -> None:
             mesh_prim_paths=mesh_targets,
             max_distance=lidar.far,
         )
-        sensor = _mutable_multi_mesh_ray_caster_cls()(cfg)
+        sensor = sim.backend.mutable_ray_caster_class()(cfg)
         sim.scene.sensors[name] = sensor
 
 
@@ -483,12 +369,17 @@ def register_lidars(sim: IsaacSim, manager: SensorManager) -> None:
 
 
 @contextmanager
-def _app_updates_without_physics() -> Iterator[None]:
+def _app_updates_without_physics(*, uses_kit: bool = True) -> Iterator[None]:
     """Keep Kit app updates from stepping physics, as ``SimulationContext.play``/``pause`` do.
 
     Isaac Lab's ``XformPrimView`` syncs Fabric from USD on its first read through an app update
     (``isaaclab.sim.utils.update_stage``), which would otherwise step physics while the timeline plays.
     """
+    if not uses_kit:
+        yield
+        return
+    import carb
+
     settings = carb.settings.get_settings()
     previous = settings.get_as_bool("/app/player/playSimulations")
     settings.set_bool("/app/player/playSimulations", False)
@@ -504,12 +395,12 @@ def render_lidars(sim: IsaacSim) -> None:
     for lidar_record in sim.sensor_manager.collect_lidars_due():
         pattern = lidar_record.pattern_at(sim.time())
         sensor = sim.scene.sensors.get(lidar_record.name)
-        if not isinstance(sensor, _mutable_multi_mesh_ray_caster_cls()):
+        if not isinstance(sensor, sim.backend.mutable_ray_caster_class()):
             raise TypeError(f"LiDAR '{lidar_record.name}' has no mutable MultiMeshRayCaster.")
         sensor.set_ray_directions(pattern.directions)
-        with _app_updates_without_physics():
+        with _app_updates_without_physics(uses_kit=sim.backend.uses_kit):
             native = sensor.data
-        distances = torch.linalg.vector_norm(native.ray_hits_w - sensor.ray_starts_w, dim=-1)
+        distances = torch.linalg.vector_norm(sim.backend.tensor(native.ray_hits_w) - sensor.ray_starts_w, dim=-1)
         finalize_lidar_returns(lidar_record, pattern.directions, distances)
 
 
@@ -521,9 +412,30 @@ def build_sensors(sim: IsaacSim) -> None:
     )
     if needs_expanded_robot:
         # IsaacLab cannot author children or resolve exact targets through instance proxies.
-        set_instanceable(get_current_stage(), "/World/envs/env_0/Robot", False)
+        set_instanceable(get_current_stage(sim.backend), "/World/envs/env_0/Robot", False)
+    if sim.backend.is_isaacsim6 and any(isinstance(config, LidarSensorConfig) for config in sim.sensor_config.values()):
+        _remove_disabled_rigid_body_markers(get_current_stage(sim.backend))
     build_cameras(sim)
     build_lidars(sim)
+
+
+def _remove_disabled_rigid_body_markers(stage: Any) -> None:
+    """Let Lab 3 native LiDAR track the enabled owner of collapsed fixed-link geometry.
+
+    Some importers leave an explicitly disabled RigidBodyAPI on a fixed-link prim. PhysX ignores
+    that API, while Lab 3's native ray caster resolves owners by API presence. Removing the disabled
+    marker on the authored source makes both resolve the same owner without replacing the native
+    Warp ray/mesh pipeline or changing the prim's transform.
+    """
+    from pxr import Usd, UsdPhysics
+
+    root = stage.GetPrimAtPath("/World/envs/env_0")
+    for prim in Usd.PrimRange(root):
+        if prim.HasAPI(UsdPhysics.RigidBodyAPI) and not is_rigid_body_enabled(prim):
+            # Preserve the imported link's identity when visual descendants share
+            # its name, while native LiDAR still sees only the enabled physics owner.
+            prim.SetCustomDataByKey(_DISABLED_RIGID_BODY_LINK_KEY, True)
+            prim.RemoveAPI(UsdPhysics.RigidBodyAPI)
 
 
 def create_sensors(sim: IsaacSim) -> None:

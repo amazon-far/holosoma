@@ -369,6 +369,37 @@ def assert_dr_damping_governs(ctx):
         f"  dr-damp: damped vx {float(vd0[0]):.3f}->{float(vd1[0]):.3f} (loss {float(damped_loss[0]):.3f}) "
         f"control loss {float(control_loss[0]):.3f}  damped>control_all={ok}"
     )
+    if ctx.args.simulator == "isaacsim6" and ctx.n >= 2:
+        import types
+
+        from holosoma.managers.randomization.terms.objects import (
+            randomize_object_angular_damping_startup,
+            randomize_object_linear_damping_startup,
+        )
+
+        # Both bodies remain airborne. Give the control a known spin, then edit
+        # live damping only in odd environments; even environments remain controls.
+        state = ctx.states("control").clone()
+        state[:, 10:13] = ctx.torch.tensor([0.0, 0.0, 2.0], device=state.device)
+        ctx.sim.set_actor_states(["control"], ctx.env_ids, state)
+        ctx.sim.write_state_updates()
+        _step(ctx.sim, 1)
+        before = ctx.states("control")[:, [7, 12]].clone()
+        shell = types.SimpleNamespace(simulator=ctx.sim, num_envs=ctx.n, device=ctx.sim.sim_device)
+        selected = ctx.env_ids[1::2]
+        for randomizer in (randomize_object_linear_damping_startup, randomize_object_angular_damping_startup):
+            randomizer(
+                shell,
+                selected,
+                sampler=_behavior_sampler(STAGE_RESET),
+                damping_range=[3.0, 3.0],
+                object_names=["control"],
+            )
+        _step(ctx.sim, steps_for_seconds(ctx.sim, 0.2))
+        loss = before - ctx.states("control")[:, [7, 12]]
+        sparse_ok = _all(loss[1::2].amin(dim=0) > loss[::2].amax(dim=0) + 0.1)
+        print(f"  dr-damp live: linear/angular losses={loss.tolist()} selected={selected.tolist()} sparse={sparse_ok}")
+        ok = ok and sparse_ok
     return ok
 
 
@@ -1392,7 +1423,7 @@ def main() -> int:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenario", required=True, choices=sorted(SCENARIOS))
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim6"])
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
@@ -1433,8 +1464,24 @@ def main() -> int:
     config = dataclasses.replace(
         config,
         device=device,
-        training=dataclasses.replace(config.training, num_envs=args.num_envs),
+        training=dataclasses.replace(config.training, num_envs=args.num_envs, headless=headless),
     )
+    if args.simulator == "isaacsim6" and args.scenario == "dr-damping-governs":
+        # Live USD damping on cloned bodies requires Kit's PhysX listener in
+        # this SDK. Other headless scenarios retain the standalone runtime.
+        sim_cfg = config.simulator.config
+        config = dataclasses.replace(
+            config,
+            simulator=dataclasses.replace(
+                config.simulator,
+                config=dataclasses.replace(
+                    sim_cfg,
+                    sim=dataclasses.replace(
+                        sim_cfg.sim, isaacsim6=dataclasses.replace(sim_cfg.sim.isaacsim6, require_kit=True)
+                    ),
+                ),
+            ),
+        )
 
     # Apply the scenario's link_physics onto the one-link robot's asset, so the robot link carries the
     # same PhysicsConfig the twin object does (replace the nested frozen asset).

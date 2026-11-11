@@ -125,11 +125,13 @@ def _check_pinhole_fallback(pinhole_img, configured_img, label: str) -> list[str
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim6"])
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--headless", choices=["true", "false"], default="true")
+    parser.add_argument("--physics-backend", choices=["physx", "newton"], default="physx")
+    parser.add_argument("--renderer", choices=["isaac_rtx", "ovrtx"], default="isaac_rtx")
     parser.add_argument("--result-file", default=None, help="write OK/FAIL here before teardown")
     args = parser.parse_args()
 
@@ -145,6 +147,16 @@ def main() -> int:
     )
     if args.simulator == "mjwarp":
         config = _camera_presets.as_mjwarp(config)
+    if args.simulator == "isaacsim6":
+        native = dataclasses.replace(
+            config.simulator.config.sim.isaacsim6,
+            physics_backend=args.physics_backend,
+            renderer=args.renderer,
+        )
+        simulator_config = dataclasses.replace(
+            config.simulator.config, sim=dataclasses.replace(config.simulator.config.sim, isaacsim6=native)
+        )
+        config = dataclasses.replace(config, simulator=dataclasses.replace(config.simulator, config=simulator_config))
 
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
     config = dataclasses.replace(
@@ -217,7 +229,7 @@ def main() -> int:
             _camera_presets._PANEL_HALF_SIZE,
             f"{args.simulator}/pinhole/env{env_id}",
         )
-        if args.simulator == "isaacsim":
+        if args.simulator in ("isaacsim", "isaacsim6"):
             fails += _check_fisheye_geometry(
                 pinhole_img,
                 fisheye_img,
@@ -237,7 +249,7 @@ def main() -> int:
                 f"{args.simulator}/fallback/env{env_id}",
             )
 
-    if args.simulator == "isaacsim":
+    if args.simulator in ("isaacsim", "isaacsim6"):
         fails += _check_isaacsim_authored_calibration(sim, fisheye_config.isaacsim)
 
     if args.result_file:

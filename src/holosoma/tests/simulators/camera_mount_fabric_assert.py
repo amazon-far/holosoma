@@ -52,15 +52,16 @@ def _mount_errors(sim) -> list[tuple[str, float, float]]:
     from pxr import Usd, UsdGeom
     from usdrt import Rt
 
-    fabric_stage = usdrt.Usd.Stage.Attach(sim_utils.get_current_stage_id())
+    fabric_stage = usdrt.Usd.Stage.Attach(sim.backend.stage_utils.get_current_stage_id())
 
     def fabric_world(path: str) -> np.ndarray:
         matrix = Rt.Xformable(fabric_stage.GetPrimAtPath(path)).GetFabricHierarchyWorldMatrixAttr().Get()
         return np.array([[matrix[r][c] for c in range(4)] for r in range(4)])
 
     errors = []
+    stage = sim.backend.stage_utils.get_current_stage()
     for camera in sim.tiled_cameras.values():
-        for prim in sim_utils.find_matching_prims(camera.cfg.prim_path):
+        for prim in sim_utils.find_matching_prims(camera.cfg.prim_path, stage=stage):
             path = str(prim.GetPath())
             local = UsdGeom.Xformable(prim).GetLocalTransformation(Usd.TimeCode.Default())
             local = np.array([[local[r][c] for c in range(4)] for r in range(4)])
@@ -74,13 +75,14 @@ def _mount_errors(sim) -> list[tuple[str, float, float]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--simulator", choices=["isaacsim", "isaacsim6"], default="isaacsim")
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--result-file", default=None, help="write OK/FAIL here before teardown")
     args = parser.parse_args()
 
-    config = build_run_sim_config("isaacsim", "empty", args.robot, args.terrain, sensors=_cameras())
+    config = build_run_sim_config(args.simulator, "empty", args.robot, args.terrain, sensors=_cameras())
     config = dataclasses.replace(
         config, device="cuda:0", training=dataclasses.replace(config.training, num_envs=args.num_envs)
     )

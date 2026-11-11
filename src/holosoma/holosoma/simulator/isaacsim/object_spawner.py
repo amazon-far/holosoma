@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import isaaclab.sim as sim_utils
@@ -52,11 +53,13 @@ from holosoma.simulator.isaacsim.converters import (
 from holosoma.simulator.isaacsim.prim_naming import distinguishing_names
 from holosoma.simulator.isaacsim.prim_utils import compute_world_transform, get_pose, is_rigid_body_enabled
 from holosoma.simulator.isaacsim.spawners.from_files_cfg import CustomUsdFileCfg
+from holosoma.simulator.isaacsim.spawners.from_files import spawn_from_usd
 from holosoma.simulator.shared.asset_format import select_asset_format
 from holosoma.utils.path import resolve_asset_path
 
 if TYPE_CHECKING:
     from isaaclab.sim.spawners import SpawnerCfg
+    from holosoma.simulator.isaacsim.backends.base import IsaacSimBackendAdapter
 
 
 def _shared_spawn_kwargs(physics_cfg: PhysicsConfig, fixed: bool) -> dict[str, Any]:
@@ -87,6 +90,7 @@ def select_spawn_cfg(
     fixed: bool,
     physics: PhysicsConfig | None,
     source_prim_path: str | None,
+    backend: IsaacSimBackendAdapter,
 ) -> "SpawnerCfg":
     """Build the format-specific ``spawn`` cfg.
 
@@ -133,7 +137,7 @@ def select_spawn_cfg(
         if physics_material is None:
             # No friction/restitution to apply — spawn the URDF directly (the converter authors
             # the geometry/joints; the shared rigid/mass/collision props land at spawn).
-            return urdf_cfg
+            return _native_spawn(urdf_cfg, physics_cfg, backend)
         # Friction/restitution IS set. The URDF importer authors no physics material, so reach USD
         # via the same converter and let the USD spawner bind the material at spawn (below).
         resolved_path = _convert_urdf_to_usd(urdf_cfg)
@@ -144,13 +148,28 @@ def select_spawn_cfg(
     # it first initializes the body (no post-init writes). disable_instanceable=True is required:
     # physics edits on descendants (collapse, RemoveAPI, stamp) no-op on instance proxies if the
     # asset is instanceable.
-    return CustomUsdFileCfg(
+    cfg = CustomUsdFileCfg(
+        func=partial(spawn_from_usd, backend=backend),
         usd_path=resolved_path,
         source_path=source_prim_path,
         physics_material=physics_material,
         disable_instanceable=True,
         **shared,
     )
+    return _native_spawn(cfg, physics_cfg, backend)
+
+
+def _native_spawn(cfg: Any, physics: PhysicsConfig, backend: IsaacSimBackendAdapter) -> Any:
+    if backend.is_isaacsim6:
+        from holosoma.simulator.isaacsim.backends.native_properties import physics_settings, wrap_spawn
+
+        return wrap_spawn(
+            cfg,
+            physics_settings(physics, backend),
+            backend=backend,
+            material_defaults=physics_material_cfg(physics),
+        )
+    return cfg
 
 
 def physics_material_cfg(physics_cfg: PhysicsConfig) -> "sim_utils.RigidBodyMaterialCfg | None":
@@ -374,24 +393,32 @@ def build_rigid_object(
     fixed: bool,
     physics: PhysicsConfig | None = None,
     source_prim_path: str | None = None,
+    backend: IsaacSimBackendAdapter,
 ) -> RigidObject:
     """Build the IsaacLab ``RigidObject`` both formats and both shapes flow through.
 
     The leaf of ``prim_path`` MUST equal ``name`` (the ObjectRegistry key) so per-env
-    placement and state read/write stay aligned. ``rot_wxyz`` is wxyz (IsaacLab format).
+    placement and state read/write stay aligned. ``rot_wxyz`` uses the Holosoma config convention.
     """
     _assert_asset_exists(resolved_path, f"Object '{name}' ({fmt})")
-    spawn = select_spawn_cfg(fmt, resolved_path, fixed=fixed, physics=physics, source_prim_path=source_prim_path)
+    spawn = select_spawn_cfg(
+        fmt, resolved_path, fixed=fixed, physics=physics, source_prim_path=source_prim_path, backend=backend
+    )
     cfg = RigidObjectCfg(
-        prim_path=f"/World/envs/env_.*/{name}",
+        prim_path=f"{backend.env_regex_ns}/{name}",
         spawn=spawn,
-        init_state=RigidObjectCfg.InitialStateCfg(pos=tuple(pos), rot=tuple(rot_wxyz)),  # wxyz
+        init_state=RigidObjectCfg.InitialStateCfg(pos=tuple(pos), rot=backend.config_quat_to_native(rot_wxyz)),
     )
     return RigidObject(cfg)
 
 
 def build_standalone_rigid_object(
-    name: str, obj: RigidObjectConfig, supported_formats: list[str], scene_asset_root: str | None
+    name: str,
+    obj: RigidObjectConfig,
+    supported_formats: list[str],
+    scene_asset_root: str | None,
+    *,
+    backend: IsaacSimBackendAdapter,
 ) -> RigidObject:
     """Spawn one standalone ``RigidObjectConfig`` (1->1), USD or URDF, via the shared tail.
 
@@ -413,11 +440,17 @@ def build_standalone_rigid_object(
         fixed=obj.fixed,
         physics=obj.physics,
         source_prim_path=source_prim_path,
+        backend=backend,
     )
 
 
 def expand_scene_file(
-    scene_file_name: str, scene_file: SceneFileConfig, supported_formats: list[str], scene_asset_root: str | None
+    scene_file_name: str,
+    scene_file: SceneFileConfig,
+    supported_formats: list[str],
+    scene_asset_root: str | None,
+    *,
+    backend: IsaacSimBackendAdapter,
 ) -> tuple[dict[str, RigidObject], set[str]]:
     """Expand a multi-body USD scene file into per-body ``RigidObject`` instances (1->N).
 
@@ -535,6 +568,7 @@ def expand_scene_file(
             fixed=is_static,
             physics=body_physics,
             source_prim_path=prim_path,
+            backend=backend,
         )
         if is_static:
             static_names.add(actor_name)

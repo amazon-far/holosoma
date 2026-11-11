@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
+from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Backend
 from holosoma.simulator.isaacsim.lidar_target_discovery import (
     _is_path_at_or_below,
     assemble_default_mesh_prim_paths,
@@ -20,7 +23,8 @@ def test_path_boundary_does_not_match_prefix_siblings() -> None:
     assert not _is_path_at_or_below("/World/envs/env_0/RobotArm/visual", root)
 
 
-def test_robot_filter_omits_robot_discovery_but_retains_ground_and_scene_actors() -> None:
+@pytest.mark.parametrize("env_regex_ns", ["/World/envs/env_.*", "/World/envs/env_[^/]+"])
+def test_robot_filter_omits_robot_discovery_but_retains_ground_and_scene_actors(env_regex_ns: str) -> None:
     def unexpected_robot_discovery(_excluded_link: str | None) -> list[str]:
         raise AssertionError("whole-robot filter still enumerated robot mesh targets")
 
@@ -29,49 +33,54 @@ def test_robot_filter_omits_robot_discovery_but_retains_ground_and_scene_actors(
         robot_mesh_prim_paths=unexpected_robot_discovery,
         actor_names=["box", "robot_decoy"],
         discover_mesh_prim_paths=lambda _source, expression: [f"{expression}/visual"],
+        env_regex_ns=env_regex_ns,
     )
 
     assert paths == [
         "/World/ground/visual",
-        "/World/envs/env_.*/box/visual",
-        "/World/envs/env_.*/robot_decoy/visual",
+        f"{env_regex_ns}/box/visual",
+        f"{env_regex_ns}/robot_decoy/visual",
     ]
 
 
-def test_robot_link_filter_keeps_existing_single_owner_discovery() -> None:
+@pytest.mark.parametrize("env_regex_ns", ["/World/envs/env_.*", "/World/envs/env_[^/]+"])
+def test_robot_link_filter_keeps_existing_single_owner_discovery(env_regex_ns: str) -> None:
     exclusions = []
 
     def robot_discovery(excluded_link: str | None) -> list[str]:
         exclusions.append(excluded_link)
-        return ["/World/envs/env_.*/Robot/torso/visual"]
+        return [f"{env_regex_ns}/Robot/torso/visual"]
 
     paths = assemble_default_mesh_prim_paths(
         excluded_target=("robot_link", "head_link"),
         robot_mesh_prim_paths=robot_discovery,
         actor_names=["box"],
         discover_mesh_prim_paths=lambda _source, expression: [f"{expression}/visual"],
+        env_regex_ns=env_regex_ns,
     )
 
     assert exclusions == ["head_link"]
     assert paths == [
-        "/World/envs/env_.*/Robot/torso/visual",
+        f"{env_regex_ns}/Robot/torso/visual",
         "/World/ground/visual",
-        "/World/envs/env_.*/box/visual",
+        f"{env_regex_ns}/box/visual",
     ]
 
 
-def test_actor_filter_excludes_only_the_selected_scene_actor() -> None:
+@pytest.mark.parametrize("env_regex_ns", ["/World/envs/env_.*", "/World/envs/env_[^/]+"])
+def test_actor_filter_excludes_only_the_selected_scene_actor(env_regex_ns: str) -> None:
     paths = assemble_default_mesh_prim_paths(
         excluded_target=("actor", "shell"),
-        robot_mesh_prim_paths=lambda _excluded_link: ["/World/envs/env_.*/Robot/visual"],
+        robot_mesh_prim_paths=lambda _excluded_link: [f"{env_regex_ns}/Robot/visual"],
         actor_names=["shell", "target"],
         discover_mesh_prim_paths=lambda _source, expression: [f"{expression}/visual"],
+        env_regex_ns=env_regex_ns,
     )
 
     assert paths == [
-        "/World/envs/env_.*/Robot/visual",
+        f"{env_regex_ns}/Robot/visual",
         "/World/ground/visual",
-        "/World/envs/env_.*/target/visual",
+        f"{env_regex_ns}/target/visual",
     ]
 
 
@@ -83,3 +92,24 @@ def test_robot_filter_empty_scene_names_the_filter_in_the_error() -> None:
             actor_names=[],
             discover_mesh_prim_paths=lambda _source, _expression: [],
         )
+
+
+def test_native_actor_expression_excludes_same_named_descendants_of_other_actors() -> None:
+    """Match external stage paths with the SDK's whole-path regex semantics."""
+    stage_meshes = [
+        "/World/envs/env_0/box/visual",
+        "/World/envs/env_1/box/visual",
+        "/World/envs/env_0/freebox/Geometry/box/visual",
+    ]
+
+    def discover(_source: str, expression: str) -> list[str]:
+        return [path for path in stage_meshes if re.fullmatch(f"{expression}/visual", path)]
+
+    paths = assemble_default_mesh_prim_paths(
+        excluded_target=("robot", ""),
+        robot_mesh_prim_paths=lambda _excluded_link: [],
+        actor_names=["box"],
+        discover_mesh_prim_paths=discover,
+        env_regex_ns=IsaacSim6Backend().env_regex_ns,
+    )
+    assert paths == ["/World/envs/env_0/box/visual", "/World/envs/env_1/box/visual"]

@@ -10,6 +10,11 @@ on:
       image:
         required: true
         type: string
+      isaacsim_backend:
+        description: Isaac Sim version selected by the shared simulator suite
+        required: false
+        type: string
+        default: isaacsim5
       multigpu:
         description: JSON array of HOLOSOMA_MULTIGPU values to test
         required: false
@@ -41,4 +46,8 @@ jobs:
         shell: bash
         run: |
           cd /workspace/holosoma
-          bash tests/ci/${{ inputs.simulator }}_ci_tests.sh
+          test_args=()
+          if [[ "${{ inputs.simulator }}" == isaacsim ]]; then
+            test_args+=(--backend "${{ inputs.isaacsim_backend }}")
+          fi
+          bash tests/ci/${{ inputs.simulator }}_ci_tests.sh "${test_args[@]}"

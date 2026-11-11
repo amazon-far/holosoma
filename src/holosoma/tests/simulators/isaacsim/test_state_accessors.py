@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 import torch
 
+from holosoma.simulator.isaacsim.backends.isaacsim5 import IsaacSim5Backend
+from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Backend
 from holosoma.simulator.isaacsim.state_adapter import IsaacSimStateAdapter
-from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw
 from holosoma.simulator.shared.object_registry import ObjectRegistry, ObjectType
 
 # Pure torch/mock accessor tests (no isaaclab); runs in the no_sim CPU job, not the isaacsim job.
 pytestmark = pytest.mark.no_sim
+
+
+def _xyzw(state):
+    """Independent fixture conversion; never call the adapter's conversion helper."""
+    return torch.cat((state[..., :3], state[..., [4, 5, 6, 3]], state[..., 7:]), dim=-1)
 
 
 class TestStateAccessors:
@@ -75,15 +82,19 @@ class TestStateAccessors:
     ]], dtype=torch.float32)
 
     # Convert manually, used to assert tests after read/writes
-    robot_xyzw          = fullstate_wxyz_to_xyzw(robot_wxyz)
-    robot_new_xyzw      = fullstate_wxyz_to_xyzw(robot_new_wxyz)
-    box_xyzw            = fullstate_wxyz_to_xyzw(box_wxyz)
-    box_new_xyzw        = fullstate_wxyz_to_xyzw(box_new_wxyz)
-    multi_robot_xyzw    = fullstate_wxyz_to_xyzw(multi_robot_wxyz)
-    multi_box_xyzw      = fullstate_wxyz_to_xyzw(multi_box_wxyz)
-    scene_xyzw          = fullstate_wxyz_to_xyzw(scene_wxyz)
+    robot_xyzw          = _xyzw(robot_wxyz)
+    robot_new_xyzw      = _xyzw(robot_new_wxyz)
+    box_xyzw            = _xyzw(box_wxyz)
+    box_new_xyzw        = _xyzw(box_new_wxyz)
+    multi_robot_xyzw    = _xyzw(multi_robot_wxyz)
+    multi_box_xyzw      = _xyzw(multi_box_wxyz)
+    scene_xyzw          = _xyzw(scene_wxyz)
 
     # fmt: on
+
+    @pytest.fixture(autouse=True, params=[IsaacSim5Backend(), IsaacSim6Backend()], ids=["isaacsim5", "isaacsim6"])
+    def native_backend(self, request):
+        self.backend = request.param
 
     def _create_mock_object(self, wxyz_state: torch.Tensor, object_name: str = "object"):
         """Test helper to create a mock object (robot or rigid_object) with functional write methods."""
@@ -94,12 +105,16 @@ class TestStateAccessors:
             wxyz_state = wxyz_state.unsqueeze(0)
 
         # Create the mock object structure
-        mock_object = Mock()
-        mock_data = Mock()
+        mock_object = SimpleNamespace()
+        mock_data = SimpleNamespace()
 
         # Store the state tensor (mutable, in wxyz format like IsaacSim)
-        state_tensor = wxyz_state.clone()
-        mock_data.root_state_w = state_tensor  # For rigid objects
+        state_tensor = _xyzw(wxyz_state) if self.backend.is_isaacsim6 else wxyz_state.clone()
+        if self.backend.is_isaacsim6:
+            mock_data.root_link_pose_w = SimpleNamespace(torch=state_tensor[:, :7])
+            mock_data.root_com_vel_w = SimpleNamespace(torch=state_tensor[:, 7:])
+        else:
+            mock_data.root_state_w = state_tensor
 
         # Functional write methods that update the internal tensor
         def write_root_pose_to_sim(pose_tensor, env_ids):
@@ -111,6 +126,16 @@ class TestStateAccessors:
         # Attach the working write methods
         mock_object.write_root_pose_to_sim = write_root_pose_to_sim
         mock_object.write_root_velocity_to_sim = write_root_velocity_to_sim
+        if self.backend.is_isaacsim6:
+            # Strict native signatures catch the Lab 3 keyword and selection contract.
+            def write_root_link_pose_to_sim_index(*, root_pose, env_ids):
+                state_tensor[env_ids, :7] = root_pose
+
+            def write_root_com_velocity_to_sim_index(*, root_velocity, env_ids):
+                state_tensor[env_ids, 7:] = root_velocity
+
+            mock_object.write_root_link_pose_to_sim_index = write_root_link_pose_to_sim_index
+            mock_object.write_root_com_velocity_to_sim_index = write_root_com_velocity_to_sim_index
         mock_object.data = mock_data  # For rigid objects
         mock_object._internal_state = state_tensor  # For direct access
 
@@ -146,7 +171,8 @@ class TestStateAccessors:
         write_tensor_wxyz = adapter._robot._internal_state  # mutated by write_root_*_to_sim
 
         def read_xyzw(env_ids):
-            return fullstate_wxyz_to_xyzw(write_tensor_wxyz[env_ids])
+            state = write_tensor_wxyz[env_ids]
+            return state if self.backend.is_isaacsim6 else _xyzw(state)
 
         adapter._state.get("robot_root_states").__getitem__ = Mock(side_effect=read_xyzw)
 
@@ -242,6 +268,7 @@ class TestStateAccessors:
             scene=mock_scene,
             robot=robot_mock,
             state=Mock(get=Mock(return_value=robot_states_mock)),
+            backend=self.backend,
         )
 
     def _assert_full_state_equal(self, actual: torch.Tensor, expected: torch.Tensor, msg: str = ""):

@@ -13,17 +13,13 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("Isaac Sim requires CUDA", allow_module_level=True)
 
-from tests.simulators._run_harness import run_harness  # noqa: E402
-
 _HARNESS = Path(__file__).resolve().parents[1] / "wbt_reset_assert.py"
 
 
-def test_wbt_reset_isaacsim(tmp_path):
+def test_wbt_reset_isaacsim(tmp_path, run_isaacsim_harness):
     result_file = tmp_path / "isaacsim-wbt-reset.ok"
-    run_harness(
+    run_isaacsim_harness(
         _HARNESS,
-        "--simulator",
-        "isaacsim",
         "--result-file",
         str(result_file),
         label="isaacsim/wbt-reset",

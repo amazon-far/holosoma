@@ -24,6 +24,8 @@ import sys
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
+    import torch
+
     from tests.simulators._dr_matrix import ModelReader
 
 # This file lives in tests/simulators/, which contains an ``isaacsim/`` subpackage. Run as a
@@ -98,13 +100,14 @@ class _MujocoReader:
 
 
 class _IsaacSimReader:
-    """IsaacSim physx-view read-back via the isaaclab assets (env 0)."""
+    """Raw PhysX body properties for env 0 and complete per-shape material tables."""
 
     # PhysX get_coms reflects the CoM write, so the base-CoM band assertion is trusted.
     COM_READBACK_TRUSTED = True
     # IsaacSim is the only backend that models restitution (PhysX material slot 2), so the
     # restitution band assertion is enabled here (see run_object_dr).
     RESTITUTION_READBACK_TRUSTED = True
+    MATERIAL_SHAPE_READBACK_TRUSTED = True
 
     def __init__(self, sim):
         self._sim = sim
@@ -119,6 +122,11 @@ class _IsaacSimReader:
             if body_name == name or body_name.startswith(name):
                 return self._scene[name], 0
         robot = self._scene["robot"]
+        if self._sim.backend.is_isaacsim6:
+            # These readers index raw PhysX buffers, whose solver order can differ
+            # from find_bodies' public order. Resolve the requested name directly.
+            assert body_name in robot.backend_body_names, f"could not resolve body '{body_name}' on the robot"
+            return robot, robot.backend_body_names.index(body_name)
         ids, _ = robot.find_bodies([body_name])
         assert ids, f"could not resolve body '{body_name}' on the robot or any object"
         return robot, ids[0]
@@ -129,37 +137,81 @@ class _IsaacSimReader:
         single-body RigidObject view is [num_envs, k] (no body axis) — handle both."""
         return view[0, bidx] if view.ndim == 3 else view[0]
 
+    def _property(self, asset, name: str):
+        """Read PhysX directly, without the production randomization adapter."""
+        if self._sim.backend.is_isaacsim6:
+            import warp as wp
+
+            if not self._sim.backend.uses_kit:
+                from isaaclab_ov import tensor_types as TT
+
+                articulation = hasattr(asset, "num_joints")
+                attributes = {
+                    "masses": TT.BODY_MASS if articulation else TT.RIGID_BODY_MASS,
+                    "coms": TT.BODY_COM_POSE if articulation else TT.RIGID_BODY_COM_POSE,
+                    "inertias": TT.BODY_INERTIA if articulation else TT.RIGID_BODY_INERTIA,
+                    "material_properties": (
+                        TT.SHAPE_FRICTION_AND_RESTITUTION
+                        if articulation
+                        else TT.RIGID_BODY_SHAPE_FRICTION_AND_RESTITUTION
+                    ),
+                }
+                return wp.to_torch(asset.root_view.get_attribute(attributes[name]))
+            return wp.to_torch(getattr(asset.root_view, f"get_{name}")())
+        return getattr(asset.root_physx_view, f"get_{name}")()
+
     def body_mass(self, body_name: str) -> float:
         asset, bidx = self._asset_and_body(body_name)
-        masses = asset.root_physx_view.get_masses()  # [num_envs, num_bodies] or [num_envs]
+        masses = self._property(asset, "masses")  # [num_envs, num_bodies] or [num_envs]
         return float(masses[0, bidx] if masses.ndim == 2 else masses[0])
 
     def geom_friction_for_body(self, body_name: str) -> float:
         asset, _bidx = self._asset_and_body(body_name)
         # [num_envs, num_shapes, 3] = (static, dynamic, restitution)
-        mats = asset.root_physx_view.get_material_properties()
+        mats = self._property(asset, "material_properties")
         return float(mats[0, 0, 0])
 
     def dynamic_friction_for_body(self, body_name: str) -> float:
         asset, _bidx = self._asset_and_body(body_name)
         # [num_envs, num_shapes, 3] = (static, dynamic, restitution) -> dynamic friction at slot 1.
-        mats = asset.root_physx_view.get_material_properties()
+        mats = self._property(asset, "material_properties")
         return float(mats[0, 0, 1])
 
     def restitution_for_body(self, body_name: str) -> float:
         asset, _bidx = self._asset_and_body(body_name)
         # [num_envs, num_shapes, 3] = (static, dynamic, restitution) -> restitution at slot 2.
-        mats = asset.root_physx_view.get_material_properties()
+        mats = self._property(asset, "material_properties")
         return float(mats[0, 0, 2])
+
+    def material_properties_for_asset(self, body_name: str) -> torch.Tensor:
+        """Read every environment and physical shape of the owning asset."""
+        asset, _bidx = self._asset_and_body(body_name)
+        view = asset.root_view if self._sim.backend.is_isaacsim6 else asset.root_physx_view
+        mats = self._property(asset, "material_properties")
+        if self._sim.backend.is_isaacsim6 and not self._sim.backend.uses_kit:
+            from isaaclab_ov import tensor_types as TT
+
+            attribute = (
+                TT.SHAPE_FRICTION_AND_RESTITUTION
+                if hasattr(asset, "num_joints")
+                else TT.RIGID_BODY_SHAPE_FRICTION_AND_RESTITUTION
+            )
+            shape = tuple(view.binding_for(attribute).shape)
+        else:
+            shape = (view.count, view.max_shapes, 3)
+        assert tuple(mats.shape) == shape and shape[1] > 0, (
+            f"material readback shape {tuple(mats.shape)} does not match the physical shape view"
+        )
+        return mats
 
     def body_inertia(self, body_name: str):
         asset, bidx = self._asset_and_body(body_name)
-        row = self._row(asset.root_physx_view.get_inertias(), bidx)  # 9 = row-major 3x3
+        row = self._row(self._property(asset, "inertias"), bidx)  # 9 = row-major 3x3
         return (float(row[0]), float(row[4]), float(row[8]))  # Ixx, Iyy, Izz
 
     def body_com(self, body_name: str):
         asset, bidx = self._asset_and_body(body_name)
-        row = self._row(asset.root_physx_view.get_coms(), bidx)  # [..,7] (pos+quat) or [..,3]
+        row = self._row(self._property(asset, "coms"), bidx)  # [..,7] (pos+quat) or [..,3]
         return (float(row[0]), float(row[1]), float(row[2]))
 
 
@@ -167,6 +219,7 @@ _READERS = {
     "mujoco": _MujocoReader,
     "mjwarp": _MujocoReader,
     "isaacsim": _IsaacSimReader,
+    "isaacsim6": _IsaacSimReader,
 }
 
 

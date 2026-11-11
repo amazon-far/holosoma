@@ -1,9 +1,4 @@
-"""State adapter for IsaacSim with quaternion format conversion.
-
-This module provides a lightweight adapter that handles object state access
-with automatic quaternion format conversion between IsaacSim's native wxyz
-format and holosoma's standard xyzw format.
-"""
+"""Actor state adapter serving Holosoma's XYZW convention on both Isaac backends."""
 
 from __future__ import annotations
 
@@ -11,19 +6,18 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 
-from .state_utils import fullstate_wxyz_to_xyzw, fullstate_xyzw_to_wxyz
-
 if TYPE_CHECKING:
     from holosoma.simulator.base_simulator.state import SimState
     from holosoma.simulator.shared.object_registry import ObjectRegistry
+    from .backends.base import IsaacSimBackendAdapter
 
 
 class IsaacSimStateAdapter:
     """Lightweight adapter for IsaacSim state access with quaternion conversion.
 
     This adapter provides a clean interface for object state management while
-    handling the quaternion format conversion between IsaacSim (wxyz) and
-    holosoma (xyzw) automatically.
+    handling Lab 2's quaternion conversion and Lab 3's native XYZW arrays through
+    the backend interface.
 
     Parameters
     ----------
@@ -46,12 +40,14 @@ class IsaacSimStateAdapter:
         scene: Any,
         robot: Any,
         state: SimState,
+        backend: IsaacSimBackendAdapter,
     ) -> None:
         self.device = device
         self._object_registry = object_registry
         self._scene = scene
         self._robot = robot
         self._state = state
+        self._backend = backend
         self._objects_dirty = False
 
     def resolve_indices(self, indices: torch.Tensor) -> list[tuple[str, torch.Tensor]]:
@@ -73,7 +69,7 @@ class IsaacSimStateAdapter:
         """Gather unified [N, 13] xyzw world states for flat actor indices.
 
         Resolves ``indices`` (robot + object actors) to (object, env_ids) groups and reads each
-        via :meth:`get_object_states` (which applies wxyz->xyzw), concatenating in resolution
+        via :meth:`get_object_states` in the backend's XYZW interface, concatenating in resolution
         order. Empty ``indices`` -> empty ``[0, 13]``.
         """
         if not isinstance(indices, torch.Tensor):
@@ -90,7 +86,7 @@ class IsaacSimStateAdapter:
         """Scatter unified [N, 13] xyzw world states into per-object sim buffers (sets dirty).
 
         Resolves ``indices`` to (object, env_ids) groups and writes each via
-        :meth:`write_object_states` (xyzw->wxyz, per-object pose/velocity), consuming ``states``
+        :meth:`write_object_states` (per-object pose/velocity), consuming ``states``
         row-for-row in resolution order. Expects full 13-vec states. Empty ``indices`` -> no-op.
         Does not flush; the caller syncs via ``write_state_updates``.
         """
@@ -106,7 +102,7 @@ class IsaacSimStateAdapter:
             offset += num_envs_for_obj
 
     def get_object_states(self, obj_name: str, env_ids: torch.Tensor) -> torch.Tensor:
-        """Get object states with automatic wxyz->xyzw conversion.
+        """Get object states in Holosoma's XYZW convention.
 
         Parameters
         ----------
@@ -133,16 +129,15 @@ class IsaacSimStateAdapter:
         elif obj_type in ("individual", "scene") and obj_name in self._scene.rigid_objects:
             # A scene rigid object — free (INDIVIDUAL) or kinematic/static (SCENE). Every
             # object, including multi-body scene-file bodies, lives under its own name in
-            # scene.rigid_objects; read directly (wxyz->xyzw).
+            # scene.rigid_objects; the backend serves XYZW state.
             rigid_object = self._scene.rigid_objects[obj_name]
-            raw_states = rigid_object.data.root_state_w[env_ids]
-            return fullstate_wxyz_to_xyzw(raw_states)
+            return self._backend.root_state(rigid_object)[env_ids]
 
         else:
             raise ValueError(f"Cannot resolve object '{obj_name}' (type '{obj_type}')")
 
     def write_object_states(self, obj_name: str, states: torch.Tensor, env_ids: torch.Tensor) -> None:
-        """Write object states with automatic xyzw->wxyz conversion.
+        """Write object states in Holosoma's XYZW convention.
 
         Parameters
         ----------
@@ -157,20 +152,14 @@ class IsaacSimStateAdapter:
 
         if obj_type == "robot":
             # Robot states are world-frame with env origins included, as robot_root_states serves them.
-            converted_states = fullstate_xyzw_to_wxyz(states)
-            self._robot.write_root_pose_to_sim(converted_states[:, :7], env_ids)
-            self._robot.write_root_velocity_to_sim(converted_states[:, 7:], env_ids)
+            self._backend.write_root_state(self._robot, states, env_ids)
 
         elif obj_type in ("individual", "scene") and obj_name in self._scene.rigid_objects:
             # A scene rigid object — free (INDIVIDUAL) or static (SCENE). Every object,
             # including multi-body scene-file bodies, lives under its own name.
             rigid_object = self._scene.rigid_objects[obj_name]
-            converted_states = fullstate_xyzw_to_wxyz(states)
-            # For now, do NOT apply env origins as WBT does this itself. We need to update WBT first
-            # before uncommenting this.
-            # converted_states[:, 0:3] += self._scene.env_origins[env_ids]  # Apply environment origins
-            rigid_object.write_root_pose_to_sim(converted_states[:, :7], env_ids)
-            rigid_object.write_root_velocity_to_sim(converted_states[:, 7:], env_ids)
+            # States already contain world positions; origins must not be added again.
+            self._backend.write_root_state(rigid_object, states, env_ids)
 
         else:
             raise ValueError(f"Cannot resolve object '{obj_name}' (type '{obj_type}')")

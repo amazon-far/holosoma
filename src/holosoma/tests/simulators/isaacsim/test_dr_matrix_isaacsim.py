@@ -24,19 +24,15 @@ torch = pytest.importorskip("torch")
 if not torch.cuda.is_available():
     pytest.skip("IsaacSim requires a CUDA device", allow_module_level=True)
 
-from tests.simulators._run_harness import run_harness  # noqa: E402
-
 _HARNESS = Path(__file__).resolve().parents[1] / "dr_matrix_assert.py"
 
 
-def test_dr_matrix_isaacsim(tmp_path):
+def test_dr_matrix_isaacsim(tmp_path, run_isaacsim_harness):
     # IsaacSim's app teardown can hard-terminate the process (masking the exit code and swallowing
     # late stdout), so trust the result-file the harness writes AFTER all checks pass, not rc.
     result_file = tmp_path / "dr_matrix_result.txt"
-    run_harness(
+    run_isaacsim_harness(
         _HARNESS,
-        "--simulator",
-        "isaacsim",
         "--num-envs",
         "4",
         "--result-file",

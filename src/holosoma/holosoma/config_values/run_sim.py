@@ -11,7 +11,7 @@ These configurations extend the base simulator configs with sim2sim-specific set
 import dataclasses
 
 import holosoma.config_values.simulator
-from holosoma.config_types.simulator import BridgeConfig, SimulatorConfig, VirtualGantryCfg
+from holosoma.config_types.simulator import BridgeConfig, IsaacSimBackend, SimulatorConfig, VirtualGantryCfg
 from holosoma.utils.config_registry import ConfigRegistry
 
 RUN_SIM_REGISTRY = ConfigRegistry(SimulatorConfig, group="holosoma.config.run_sim")
@@ -30,6 +30,14 @@ isaacsim = RUN_SIM_REGISTRY.add(
                 fps=200,
             ),
         ),
+    ),
+)
+
+isaacsim6 = RUN_SIM_REGISTRY.add(
+    "isaacsim6",
+    dataclasses.replace(
+        isaacsim,
+        config=dataclasses.replace(isaacsim.config, isaacsim_backend=IsaacSimBackend.ISAACSIM6),
     ),
 )
 

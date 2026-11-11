@@ -103,3 +103,34 @@ def run_harness(
     else:
         assert result.returncode == 0, _fail_message(label, result.returncode, result.stdout, result.stderr)
     return result
+
+
+def run_isaacsim_harness(
+    harness: str | Path,
+    *args: str,
+    simulator: str,
+    label: str,
+    timeout: float,
+    result_file: str | Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Route a native harness to one explicit preset, preserving all success checks."""
+    if simulator not in {"isaacsim", "isaacsim6"}:
+        raise ValueError(f"Expected an Isaac Sim preset, got {simulator!r}.")
+    routed_args = []
+    arguments = iter(args)
+    for argument in arguments:
+        if argument == "--simulator":
+            value = next(arguments, None)
+            if value is None or value.startswith("--"):
+                raise ValueError("--simulator requires a preset value")
+        elif not argument.startswith("--simulator="):
+            routed_args.append(argument)
+    return run_harness(
+        harness,
+        "--simulator",
+        simulator,
+        *routed_args,
+        label=label,
+        timeout=timeout,
+        result_file=result_file,
+    )

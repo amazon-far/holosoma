@@ -7,7 +7,7 @@ and sampling through the shared keyed :meth:`holosoma.utils.sampler.TermSampler.
 the same thing on IsaacSim as on MuJoCo — including gaussian and log_uniform.
 
 The mass/CoM/inertia writers take a list of per-component :class:`DistributionSpec` (validated at the
-term boundary) and write through ``asset.root_physx_view``; CoM/inertia reset to the asset's captured
+term boundary) and use the selected backend's property writers; CoM/inertia reset to the asset's captured
 defaults (``asset.data.default_*``) before applying, so repeated calls compose from the original.
 
 The MATERIAL writer (:func:`randomize_rigid_body_material`) is different in kind because PhysX caps
@@ -23,14 +23,17 @@ path and capping unique materials at ~``num_envs`` when continuous.
 
 from __future__ import annotations
 
-from typing import Literal, Sequence
+from typing import TYPE_CHECKING, Literal, Sequence
 
 import torch
 from isaaclab.assets import Articulation, RigidObject
-from isaaclab.envs import ManagerBasedEnv
 from isaaclab.managers import SceneEntityCfg
+from loguru import logger
 
 from holosoma.utils.sampler import DistributionSpec, DistributionLike, TermSampler, quantiles
+
+if TYPE_CHECKING:
+    from holosoma.simulator.isaacsim.isaacsim import IsaacSim
 
 
 def _resolve_body_ids(asset: RigidObject | Articulation, asset_cfg: SceneEntityCfg) -> torch.Tensor:
@@ -66,7 +69,7 @@ def _sample_columns(
 
 
 def randomize_rigid_body_mass(
-    env: ManagerBasedEnv,
+    env: IsaacSim,
     env_ids: torch.Tensor | None,
     asset_cfg: SceneEntityCfg,
     mass: DistributionLike,
@@ -110,7 +113,8 @@ def randomize_rigid_body_mass(
     # setup-stage (run once), so onto-current == onto-default at startup; composing onto current is
     # what keeps "the same config means the same thing" across backends (a reset-to-default here made
     # a second call return ``draw - prior_draw`` instead of ``draw`` — a cross-backend divergence).
-    masses = asset.root_physx_view.get_masses()
+    backend = env.backend
+    masses = backend.physics_property(asset, "masses")
     mass_before = masses[env_ids[:, None], body_ids].clone()
 
     # ``axis`` int coord = stream; body_ids as a [1, n_body] coord -> [n_env, n_body] to match the index.
@@ -126,21 +130,21 @@ def randomize_rigid_body_mass(
         raise ValueError(f"Unknown operation: '{operation}'. Use 'add', 'abs' or 'scale'.")
 
     masses[env_ids[:, None], body_ids] = masses[env_ids[:, None], body_ids].clamp(min=min_mass)
-    asset.root_physx_view.set_masses(masses, env_ids)
+    backend.write_physics_property(asset, "masses", masses, env_ids)
 
     if recompute_inertia:
         # Scale inertia by the per-body mass ratio THIS call produced (commutes with inertia DR).
         ratios = masses[env_ids[:, None], body_ids] / mass_before.clamp(min=min_mass)
-        inertias = asset.root_physx_view.get_inertias()
-        if isinstance(asset, Articulation):
+        inertias = backend.physics_property(asset, "inertias")
+        if inertias.ndim == 3:
             inertias[env_ids[:, None], body_ids] *= ratios[..., None]
         else:
             inertias[env_ids] *= ratios
-        asset.root_physx_view.set_inertias(inertias, env_ids)
+        backend.write_physics_property(asset, "inertias", inertias, env_ids)
 
 
 def randomize_body_com(
-    env: ManagerBasedEnv,
+    env: IsaacSim,
     env_ids: torch.Tensor | None,
     asset_cfg: SceneEntityCfg,
     specs: Sequence[DistributionSpec],
@@ -171,7 +175,8 @@ def randomize_body_com(
         f"(asset_cfg.body_names={asset_cfg.body_names!r}); CoM DR targets one body (the torso)."
     )
 
-    coms = asset.root_physx_view.get_coms()
+    backend = env.backend
+    coms = backend.physics_property(asset, "coms")
     coms[env_ids[:, None], body_ids] = env.default_coms[env_ids[:, None], body_ids].clone()
 
     # One (x,y,z) sample per env (first resolved body's row); CoM DR targets the torso, a single body.
@@ -187,11 +192,11 @@ def randomize_body_com(
     else:
         raise ValueError(f"Unknown operation: '{operation}'. Use 'add', 'abs' or 'scale'.")
 
-    asset.root_physx_view.set_coms(coms, env_ids)
+    backend.write_physics_property(asset, "coms", coms, env_ids)
 
 
 def randomize_rigid_body_inertia(
-    env: ManagerBasedEnv,
+    env: IsaacSim,
     env_ids: torch.Tensor | None,
     asset_cfg: SceneEntityCfg,
     specs: Sequence[DistributionSpec],
@@ -216,7 +221,8 @@ def randomize_rigid_body_inertia(
 
     body_ids = _resolve_body_ids(asset, asset_cfg)
 
-    inertias_original = asset.root_physx_view.get_inertias()  # (num_envs, 9) or (num_envs, num_bodies, 9)
+    backend = env.backend
+    inertias_original = backend.physics_property(asset, "inertias")  # (num_envs, 9) or (num_envs, num_bodies, 9)
     if inertias_original.ndim == 2:
         inertias = inertias_original.unsqueeze(1).clone()  # (num_envs, 1, 9)
     else:
@@ -253,11 +259,11 @@ def randomize_rigid_body_inertia(
     if inertias_original.ndim == 2:
         inertias = inertias.squeeze(1)
 
-    asset.root_physx_view.set_inertias(inertias, env_ids)
+    backend.write_physics_property(asset, "inertias", inertias, env_ids)
 
 
 def randomize_rigid_body_material(
-    env: ManagerBasedEnv,
+    env: IsaacSim,
     env_ids: torch.Tensor | None,
     asset_cfg: SceneEntityCfg,
     static_friction: DistributionLike | None,
@@ -307,8 +313,12 @@ def randomize_rigid_body_material(
     static_friction_spec = _spec(static_friction)
     dynamic_friction_spec = _spec(dynamic_friction)
     restitution_spec = _spec(restitution)
-    channel_specs = (static_friction_spec, dynamic_friction_spec, restitution_spec)
-    if all(spec is None for spec in channel_specs):
+    specs_by_channel = {
+        "static_friction": static_friction_spec,
+        "dynamic_friction": dynamic_friction_spec,
+        "restitution": restitution_spec,
+    }
+    if all(spec is None for spec in specs_by_channel.values()):
         return
 
     asset: RigidObject | Articulation = env.scene[asset_cfg.name]
@@ -318,9 +328,21 @@ def randomize_rigid_body_material(
     else:
         env_ids = env_ids.cpu()
 
-    materials = asset.root_physx_view.get_material_properties()
-    total_num_shapes = asset.root_physx_view.max_shapes
-    samples = materials[env_ids].clone()  # (n_env, n_shapes, 3); start from current, overwrite chosen cols
+    backend = env.backend
+    channels = backend.material_channels
+    if "dynamic_friction" not in channels and dynamic_friction_spec is not None:
+        if static_friction_spec is None:
+            raise ValueError(
+                "Newton has one friction coefficient. Configure static_friction for material randomization; "
+                "a dynamic_friction-only distribution cannot be represented."
+            )
+        logger.warning(
+            "Newton material randomization uses static_friction for its single Coulomb coefficient; "
+            "the dynamic_friction distribution is unused."
+        )
+    materials = backend.physics_property(asset, "material_properties")
+    total_num_shapes = materials.shape[1]
+    samples = materials[env_ids].clone()  # (n_env, n_shapes, native channels)
 
     # ``per_env`` picks the shape coordinate: absent -> one draw per env, broadcast across shapes;
     # present (a [1, n_shapes] coord) -> an independent per-(env, shape) draw. The trailing shape
@@ -328,25 +350,34 @@ def randomize_rigid_body_material(
     shape_ids = torch.arange(total_num_shapes)
     shape_coord: tuple[torch.Tensor, ...] = () if per_env else (shape_ids[None, :],)
 
-    for k, spec in enumerate(channel_specs):
+    # Preserve sampler stream coordinates across engines; restitution remains
+    # stream 2 even when Newton has no separate dynamic-friction channel.
+    stream_by_channel = {"static_friction": 0, "dynamic_friction": 1, "restitution": 2}
+    for k, channel in enumerate(channels):
+        spec = specs_by_channel[channel]
         if spec is None:
             continue
+        stream = stream_by_channel[channel]
         if num_buckets is None:
             # Continuous: channel stream coords 0/1/2 keep the three columns decorrelated.
-            drawn = sampler.draw(spec, env_ids=env_ids, coords=(k, *shape_coord))  # [n_env] or [n_env, n_shapes]
+            drawn = sampler.draw(spec, env_ids=env_ids, coords=(stream, *shape_coord))
         else:
             # Bucketed: fill a per-channel bucket column with the spec's quantile values, shuffle it
             # with a KEYED permutation (distinct stream coord per channel so columns are not
             # rank-aligned — matches IsaacLab's independent per-column draw, reproducible per seed),
             # then pick a bucket via the keyed selection (stream coord 3, distinct from 0/1/2). Total
             # unique materials stay bounded at num_buckets.
-            column = quantiles(spec, num_buckets, "cpu")[sampler.permute(num_buckets, (k,))]
+            column = quantiles(spec, num_buckets, "cpu")[sampler.permute(num_buckets, (stream,))]
             bucket_ids = sampler.draw_int(0, num_buckets - 1, env_ids=env_ids, coords=(3, *shape_coord))
             drawn = column[bucket_ids]
         samples[..., k] = drawn[:, None] if per_env else drawn  # broadcast per-env value over shapes
 
-    if make_consistent and (static_friction_spec is not None or dynamic_friction_spec is not None):
+    if (
+        "dynamic_friction" in channels
+        and make_consistent
+        and (static_friction_spec is not None or dynamic_friction_spec is not None)
+    ):
         samples[..., 1] = torch.min(samples[..., 0], samples[..., 1])  # dynamic <= static (PhysX)
 
     materials[env_ids] = samples.to(materials.dtype)
-    asset.root_physx_view.set_material_properties(materials, env_ids)
+    backend.write_physics_property(asset, "material_properties", materials, env_ids)
