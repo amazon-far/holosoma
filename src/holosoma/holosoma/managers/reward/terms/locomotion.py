@@ -6,6 +6,7 @@ compatible with the reward manager system.
 
 from __future__ import annotations
 
+import functools
 from typing import TYPE_CHECKING, cast
 
 from holosoma.managers.observation.terms.locomotion import (
@@ -24,6 +25,11 @@ from holosoma.utils.safe_torch_import import torch
 if TYPE_CHECKING:
     from holosoma.envs.locomotion.locomotion_manager import LeggedRobotLocomotionManager
     from holosoma.managers.command.terms.locomotion import LocomotionGait
+
+
+@functools.cache
+def _pose_weights_tensor(pose_weights: tuple[float, ...], device: str | torch.device) -> torch.Tensor:
+    return torch.tensor(pose_weights, device=device, dtype=torch.float32)
 
 
 def _expected_foot_height(phi: torch.Tensor, swing_height: float) -> torch.Tensor:
@@ -98,10 +104,10 @@ def penalty_feet_ori(env: LeggedRobotLocomotionManager) -> torch.Tensor:
     Returns:
         Reward tensor [num_envs]
     """
-    left_quat = env.simulator._rigid_body_rot[:, env.feet_indices[0]]
+    left_quat = env.simulator._rigid_body_rot[:, env.feet_index_list[0]]
     gravity = gravity_vector(env)
     left_gravity = quat_rotate_inverse(left_quat, gravity, w_last=True)
-    right_quat = env.simulator._rigid_body_rot[:, env.feet_indices[1]]
+    right_quat = env.simulator._rigid_body_rot[:, env.feet_index_list[1]]
     right_gravity = quat_rotate_inverse(right_quat, gravity, w_last=True)
     return (
         torch.sum(torch.square(left_gravity[:, :2]), dim=1) ** 0.5
@@ -198,8 +204,8 @@ def penalty_close_feet_xy(env: LeggedRobotLocomotionManager, close_feet_threshol
     Returns:
         Reward tensor [num_envs]
     """
-    left_foot_xy = env.simulator._rigid_body_pos[:, env.feet_indices[0], :2]
-    right_foot_xy = env.simulator._rigid_body_pos[:, env.feet_indices[1], :2]
+    left_foot_xy = env.simulator._rigid_body_pos[:, env.feet_index_list[0], :2]
+    right_foot_xy = env.simulator._rigid_body_pos[:, env.feet_index_list[1], :2]
 
     # Get base orientation
     base_forward = quat_apply(env.base_quat, base_forward_vector(env), w_last=True)
@@ -306,8 +312,7 @@ def pose(
     # Get current joint positions
     qpos = env.simulator.dof_pos
 
-    # Convert pose_weights to tensor
-    weights = torch.tensor(pose_weights, device=env.device, dtype=torch.float32)
+    weights = _pose_weights_tensor(tuple(pose_weights), env.device)
 
     # Calculate squared deviation from default pose
     # Use env.default_dof_pos which is already set up from robot config

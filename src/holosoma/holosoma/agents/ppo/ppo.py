@@ -414,12 +414,13 @@ class PPO(BaseAlgo):
 
                 # Compute bootstrap value for timeouts
                 final_rewards = torch.zeros_like(rewards)
-                if infos["time_outs"].any():
+                if "final_observations" in infos:
+                    # Final observations of envs that did not just time out are stale.
                     final_critic_obs = torch.cat([infos["final_observations"][k] for k in self.critic_obs_keys], dim=1)
                     final_critic_obs = self._normalize_critic_obs(final_critic_obs, update=False)
                     final_values = self.critic.evaluate({"critic_obs": final_critic_obs}).detach()
-                    final_rewards += self.config.gamma * torch.squeeze(
-                        final_values * infos["time_outs"].unsqueeze(1).to(self.device), 1
+                    final_rewards += torch.where(
+                        infos["time_outs"].to(self.device), self.config.gamma * torch.squeeze(final_values, 1), 0.0
                     )
 
                 # Add transition to storage

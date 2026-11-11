@@ -703,7 +703,7 @@ class IsaacSim(BaseSimulator):
         body_sources = {
             "_rigid_body_pos": lambda: data.body_pos_w,
             # Isaac Lab stores wxyz; holosoma uses xyzw.
-            "_rigid_body_rot": lambda: data.body_quat_w[..., [1, 2, 3, 0]],
+            "_rigid_body_rot": lambda: data.body_quat_w.roll(-1, dims=-1),
             # Link-frame linear velocity, to match _rigid_body_pos: body_lin_vel_w is the COM velocity.
             "_rigid_body_vel": lambda: data.body_link_lin_vel_w,
             "_rigid_body_ang_vel": lambda: data.body_ang_vel_w,

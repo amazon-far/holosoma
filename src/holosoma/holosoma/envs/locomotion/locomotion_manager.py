@@ -49,6 +49,7 @@ class LeggedRobotLocomotionManager(PolicyTask):
         self.feet_indices = torch.zeros(len(foot_body_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i, name in enumerate(foot_body_names):
             self.feet_indices[i] = self.simulator.find_rigid_body_indice(name)
+        self.feet_index_list: list[int] = self.feet_indices.tolist()
 
         self.feet_height_indices = torch.zeros(
             len(foot_height_names), dtype=torch.long, device=self.device, requires_grad=False
@@ -105,8 +106,7 @@ class LeggedRobotLocomotionManager(PolicyTask):
 
     @property
     def average_episode_length(self) -> float:
-        avg = self._get_average_episode_tracker().get_average()
-        return float(avg.detach().cpu().item())
+        return self._get_average_episode_tracker().get_average_value()
 
     # ------------------------------------------------------------------
     # Checkpoint helpers

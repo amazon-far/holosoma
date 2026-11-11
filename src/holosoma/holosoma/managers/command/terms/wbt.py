@@ -48,7 +48,13 @@ class MotionLoader:
 
         self._joint_indexes = joint_indexes
         self._body_indexes = body_indexes
-        self.time_step_total = self._joint_pos.shape[0]
+        self._set_time_step_total(self._joint_pos.shape[0])
+
+    def _set_time_step_total(self, time_step_total: int) -> None:
+        self.time_step_total = time_step_total
+        device = self._joint_pos.device
+        self._motion_start_idx = torch.tensor([0], dtype=torch.long, device=device)
+        self._motion_end_idx = torch.tensor([time_step_total], dtype=torch.long, device=device)
 
     def _get_index_of_a_in_b(self, a_names: list[str], b_names: list[str], device: str = "cpu") -> torch.Tensor:
         indexes = []
@@ -196,11 +202,11 @@ class MotionLoader:
 
     @property
     def motion_start_idx(self) -> torch.Tensor:
-        return torch.tensor([0], dtype=torch.long, device=self._joint_pos.device)
+        return self._motion_start_idx
 
     @property
     def motion_end_idx(self) -> torch.Tensor:
-        return torch.tensor([self.time_step_total], dtype=torch.long, device=self._joint_pos.device)
+        return self._motion_end_idx
 
     def extend_with_segments(self, segments: dict[str, torch.Tensor], prepend: bool) -> MotionLoader:
         """Merge interpolated segments with motion data, mutating this MotionLoader."""
@@ -226,7 +232,7 @@ class MotionLoader:
             tensors = (segments[seg_key], existing) if prepend else (existing, segments[seg_key])
             setattr(self, attr_name, torch.cat(tensors, dim=0))
 
-        self.time_step_total = self._joint_pos.shape[0]
+        self._set_time_step_total(self._joint_pos.shape[0])
         return self
 
 

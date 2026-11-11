@@ -215,13 +215,14 @@ class DistillationPPO(DistillationBase):
 
                 # Bootstrap value at timeouts (matches PPO exactly).
                 final_rewards = torch.zeros_like(rewards)
-                if infos.get("time_outs") is not None and infos["time_outs"].any():
-                    final_critic_obs = infos["final_observations"].get(CRITIC_GROUP)
-                    if final_critic_obs is not None:
-                        final_values = self.policy.evaluate({"critic_obs": final_critic_obs}).detach()
-                        final_rewards += self.config.gamma * torch.squeeze(
-                            final_values * infos["time_outs"].unsqueeze(1).to(self.device), 1
-                        )
+                time_outs = infos.get("time_outs")
+                final_critic_obs = infos.get("final_observations", {}).get(CRITIC_GROUP)
+                if time_outs is not None and final_critic_obs is not None:
+                    # Final observations of envs that did not just time out are stale.
+                    final_values = self.policy.evaluate({"critic_obs": final_critic_obs}).detach()
+                    final_rewards += torch.where(
+                        time_outs.to(self.device), self.config.gamma * torch.squeeze(final_values, 1), 0.0
+                    )
 
                 self.storage.add(
                     **obs,

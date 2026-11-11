@@ -23,11 +23,15 @@ if TYPE_CHECKING:
 
 def mj_to_holosoma_quat(quat_wxyz: npt.NDArray[Any] | torch.Tensor) -> npt.NDArray[Any] | torch.Tensor:
     """Convert MuJoCo ``[w,x,y,z]`` to holosoma ``[x,y,z,w]`` (last-axis permute; numpy or torch)."""
+    if isinstance(quat_wxyz, torch.Tensor):
+        return quat_wxyz.roll(-1, dims=-1)
     return quat_wxyz[..., [1, 2, 3, 0]]
 
 
 def holosoma_to_mj_quat(quat_xyzw: npt.NDArray[Any] | torch.Tensor) -> npt.NDArray[Any] | torch.Tensor:
     """Convert holosoma ``[x,y,z,w]`` to MuJoCo ``[w,x,y,z]`` (last-axis permute; numpy or torch)."""
+    if isinstance(quat_xyzw, torch.Tensor):
+        return quat_xyzw.roll(1, dims=-1)
     return quat_xyzw[..., [3, 0, 1, 2]]
 
 
