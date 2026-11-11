@@ -80,6 +80,7 @@ class _FakeSimulator:
         num_envs: int = 1,
     ) -> None:
         self.hooks = HookRegistry()
+        self.sensor_render_hook = self.hooks.add(Phase.FRAME_END, lambda: None, name="sensors.render")
         self.sensor_config = sensors_config
         sim = _FakeSimEngineCfg
         self.sensor_manager = _FakeSensorManager(sensors_config, sim.fps / sim.control_decimation_steps)

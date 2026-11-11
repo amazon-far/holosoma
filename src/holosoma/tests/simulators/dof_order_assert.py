@@ -32,9 +32,8 @@ import tyro
 
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.simulator import BridgeConfig, VirtualGantryCfg
-from holosoma.utils.sim_utils import setup_simulation_environment
 from tests.simulators import _robot_presets
-from tests.simulators._sim_harness import step
+from tests.simulators._sim_harness import launch_simulator, step
 
 ROBOT = "g1-29dof-reordered"
 
@@ -69,8 +68,7 @@ def _build(simulator: str, num_envs: int):
     )
     import torch
 
-    env, device, _ = setup_simulation_environment(config, device=config.device)
-    s = env.sim
+    s, device, _ = launch_simulator(config, device=config.device)
     s.set_headless(True)
     s.setup()
     s.setup_terrain()

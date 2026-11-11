@@ -31,6 +31,7 @@ class _TrainingConfig:
 class _FakeSimulator:
     def __init__(self, *, include_rear_lidar: bool = False) -> None:
         self.hooks = HookRegistry()
+        self.sensor_render_hook = self.hooks.add(Phase.FRAME_END, lambda: None, name="sensors.render")
         lidar = LidarSensorConfig(
             mount=SensorMountConfig(target_kind="robot_link", target="pelvis"),
             pattern=GridLidarRayPatternConfig(horizontal_angles=[0.0, 90.0]),
@@ -167,6 +168,16 @@ def _module(name: str, **members: Any) -> ModuleType:
     return module
 
 
+def _fake_ros2_runtime(simulator: Any) -> Any:
+    """Stand in for get_ros2_runtime: memoise per simulator and register the context's close hook."""
+    runtime = getattr(simulator, "_fake_runtime", None)
+    if runtime is None:
+        runtime = type("_Runtime", (), {"start": lambda _self: object()})()
+        runtime.close_hook = simulator.hooks.add(Phase.CLOSE, lambda: None, name="ros2.runtime.close")
+        simulator._fake_runtime = runtime
+    return runtime
+
+
 @pytest.fixture
 def fake_ros(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     holder: dict[str, Any] = {}
@@ -216,8 +227,7 @@ def fake_ros(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     ):
         monkeypatch.setitem(sys.modules, module.__name__, module)
     monkeypatch.setattr(threading, "Thread", _NoopThread)
-    runtime = type("_Runtime", (), {"start": lambda _self: object()})()
-    monkeypatch.setattr(ros2_pointcloud_plugin, "get_ros2_runtime", lambda _simulator: runtime)
+    monkeypatch.setattr(ros2_pointcloud_plugin, "get_ros2_runtime", _fake_ros2_runtime)
     holder["PointCloud2"] = _PointCloud2
     return holder
 
@@ -236,6 +246,17 @@ def _start_plugin(
     plugin.start()
     publisher = cast("_FakeNode", fake_ros["node"]).publishers[0]
     return plugin, publisher
+
+
+def test_node_teardown_is_ordered_before_the_shared_context_shutdown(fake_ros: dict[str, Any]) -> None:
+    route = ROS2PointCloudRoute(lidar="lidar", topic="/scan", frame_id="lidar_link")
+    config = ROS2PointCloudPluginConfig(routes={"scan": route})
+    simulator = _FakeSimulator()
+    plugin = cast("ROS2PointCloudPlugin", config.get_cls()(config, simulator))
+
+    order = simulator.hooks.names(Phase.CLOSE)
+
+    assert order.index(f"{type(plugin).__name__}.stop") < order.index("ros2.runtime.close")
 
 
 def test_publishes_xyz_cloud_with_sim_stamp_and_field_metadata(fake_ros: dict[str, Any]) -> None:
@@ -501,7 +522,9 @@ def test_frame_end_drives_lazy_start_publish_and_skips_non_due_scan(fake_ros: di
         if due:
             sim.sensor_manager.get_lidar("lidar").set_buffer("points", points)
 
-    sim.hooks.add(Phase.FRAME_END, _render_sensor, name="sensors.render")
+    # Publish follows this handle, so replace the fake's placeholder rather than adding a second.
+    sim.sensor_render_hook.remove()
+    sim.sensor_render_hook = sim.hooks.add(Phase.FRAME_END, _render_sensor, name="sensors.render")
     plugin = cast("ROS2PointCloudPlugin", config.get_cls()(config, sim))
     sim.hooks.emit(Phase.FRAME_END)
     publisher_node = cast("_FakeNode", fake_ros["node"])

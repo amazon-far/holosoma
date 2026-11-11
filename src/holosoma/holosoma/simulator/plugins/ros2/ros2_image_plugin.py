@@ -67,7 +67,8 @@ class ROS2ImagePlugin(CameraConsumerPlugin):
         self._workers: dict[str, PublishWorker[FramePacket]] = {}  # topic -> worker (async only)
         self._ros2_runtime = get_ros2_runtime(simulator)
         # Validates routes against the configured cameras and registers the publish/close callbacks.
-        super().__init__(config, simulator)
+        # Stop publishing before the shared context goes down.
+        super().__init__(config, simulator, close_before=self._ros2_runtime.close_hook)
 
     def wanted_streams(self) -> set[StreamKey]:
         # One env per node (config.env_id; default 0 = the single real-time robot).

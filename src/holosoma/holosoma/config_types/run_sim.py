@@ -10,25 +10,36 @@ from __future__ import annotations
 
 import datetime
 import warnings
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated
 
 import holosoma.config_values.plugin
+import holosoma.config_values.randomization
 import holosoma.config_values.robot
 import holosoma.config_values.run_sim
 import holosoma.config_values.scene
 import holosoma.config_values.sensor
+import holosoma.config_values.termination
 import holosoma.config_values.terrain
 from holosoma.config_types.experiment import TrainingConfig
+from holosoma.config_types.frequency import DecimationLike, validate_decimation_like
 from holosoma.config_types.logger import DisabledLoggerConfig, LoggerConfig
 from holosoma.config_types.plugin import PluginConfig
+from holosoma.config_types.randomization import RandomizationManagerCfg
 from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.sensor import SensorConfig
 from holosoma.config_types.simulator import SimulatorConfig
+from holosoma.config_types.termination import TerminationManagerCfg
 from holosoma.config_types.terrain import TerrainManagerCfg
 from holosoma.config_types.video import VideoConfig
 from holosoma.utils.config_registry import UseRegistry
+
+if TYPE_CHECKING:
+    from holosoma.envs.simulation_task import SimulationTask
+
+_VIEWER_DT_REMOVAL_DATE = datetime.date(2027, 3, 1)
 
 
 def default_training_config() -> TrainingConfig:
@@ -43,22 +54,6 @@ def default_logger_config() -> LoggerConfig:
 
 # Use sim2sim-optimized configs from config_values.run_sim
 SIMULATOR_DEFAULTS = holosoma.config_values.run_sim.RUN_SIM_REGISTRY
-
-# RunSimConfig.env_class sunset: warn until this date, error after it.
-_ENV_CLASS_REMOVAL_DATE = datetime.date(2026, 12, 1)
-
-
-def _warn_env_class_deprecated(usage: str) -> None:
-    message = (
-        f"RunSimConfig.env_class is deprecated and has NO effect: run_sim always drives the "
-        f"simulator directly and never constructs an environment. Use ExperimentConfig.env_class "
-        f"for env-based entry points. This {usage} becomes an error after "
-        f"{_ENV_CLASS_REMOVAL_DATE.isoformat()}."
-    )
-    if datetime.datetime.now(tz=datetime.timezone.utc).date() > _ENV_CLASS_REMOVAL_DATE:
-        raise RuntimeError(message)
-    # FutureWarning: shown by default (DeprecationWarning is filtered outside __main__).
-    warnings.warn(message, FutureWarning, stacklevel=3)
 
 
 @dataclass(frozen=True)
@@ -86,6 +81,17 @@ class RunSimConfig:
         holosoma.config_values.scene.empty
     )
 
+    termination: Annotated[
+        TerminationManagerCfg | None, UseRegistry(holosoma.config_values.termination.TERMINATION_REGISTRY)
+    ] = holosoma.config_values.termination.none
+    """Termination terms that end an episode and reset its environment. The default ends none."""
+
+    randomization: Annotated[
+        RandomizationManagerCfg | None, UseRegistry(holosoma.config_values.randomization.RANDOMIZATION_REGISTRY)
+    ] = holosoma.config_values.randomization.none
+    """Randomization terms run at setup, on reset and every step. Terms that act on policy actions or
+    policy-task state (actuator gains, action delay, pushes) need a policy task."""
+
     # Plugins: declare on the CLI as ``plugin.<key>:<variant>`` (resolved from
     # PLUGIN_REGISTRY), optionally with per-key leaf overrides
     # (e.g. ``--plugin.<key>.<field>=<value>``). Passed through to ``FullSimConfig.plugin`` and
@@ -104,18 +110,17 @@ class RunSimConfig:
     training: TrainingConfig = field(default_factory=default_training_config)
     logger: LoggerConfig = field(default_factory=default_logger_config)
 
-    env_class: str | None = None
-    """DEPRECATED, no effect: run_sim never constructs an environment (removal after 2026-12-01).
-
-    Use ``ExperimentConfig.env_class`` for env-based entry points.
-    """
+    env_class: str = "holosoma.envs.simulation_task.SimulationTask"
+    """Task class to construct. Must be a ``SimulationTask`` subclass."""
 
     # Direct simulation timing control
-    viewer_dt: float = 1 / 60.0
-    """Viewer refresh rate in seconds (60 FPS default).
+    viewer_update_decimation: DecimationLike = "<60Hz"
+    """Viewer render rate: a physics-step decimation, or a frequency string resolved against the
+    physics rate."""
 
-    Only used by run_sim.py for real-time display synchronization.
-    """
+    viewer_dt: float | None = None
+    """Deprecated, removed after 2027-03-01: use ``viewer_update_decimation``. Converted to
+    ``">{1 / viewer_dt}Hz"``, the same decimation it gave before."""
 
     time_scale: float = 1.0
     """Sim-time to real-time ratio for the simulation loop: 1 paces sim time to match real
@@ -130,15 +135,23 @@ class RunSimConfig:
     def __post_init__(self) -> None:
         if self.time_scale < 0:
             raise ValueError(f"RunSimConfig.time_scale must be >= 0, got {self.time_scale}.")
-        # Warn on any explicit env_class (constructor, CLI --env-class, dataclasses.replace).
-        if object.__getattribute__(self, "env_class") is not None:
-            _warn_env_class_deprecated("initialization")
+        if self.viewer_dt is not None:
+            if self.viewer_dt <= 0:
+                raise ValueError(f"RunSimConfig.viewer_dt must be > 0, got {self.viewer_dt}.")
+            warnings.warn(
+                "RunSimConfig.viewer_dt is deprecated; use viewer_update_decimation. It will be removed "
+                f"after {_VIEWER_DT_REMOVAL_DATE}.",
+                FutureWarning,
+                stacklevel=3,
+            )
+            object.__setattr__(self, "viewer_update_decimation", f">{1 / self.viewer_dt!r}Hz")
+            object.__setattr__(self, "viewer_dt", None)
+        validate_decimation_like(self.viewer_update_decimation, field="RunSimConfig.viewer_update_decimation")
 
-    def __getattribute__(self, name: str) -> Any:
-        value = object.__getattribute__(self, name)
-        # Warn only when the field actually carries a value: reads of the None default stay
-        # silent so internal field iteration (dataclasses.replace/asdict, tyro default
-        # rendering) does not spam warnings for configs that never touched env_class.
-        if name == "env_class" and value is not None:
-            _warn_env_class_deprecated("read")
-        return value
+    def create_task(self) -> AbstractContextManager[SimulationTask]:
+        """Return a context that builds the configured simulation task and owns its resources."""
+        from holosoma.config_types.env import get_run_sim_env_config
+        from holosoma.envs.simulation_task import SimulationTask
+        from holosoma.simulator.session import task_session
+
+        return task_session(get_run_sim_env_config(self), SimulationTask)

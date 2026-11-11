@@ -3,7 +3,8 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import json
-from typing import Annotated, Any, cast
+from contextlib import AbstractContextManager
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import yaml
 from pydantic.dataclasses import dataclass
@@ -39,6 +40,9 @@ from holosoma.config_types.simulator import SimulatorConfig
 from holosoma.config_types.termination import TerminationManagerCfg
 from holosoma.config_types.terrain import TerrainManagerCfg
 from holosoma.utils.config_registry import UseRegistry
+
+if TYPE_CHECKING:
+    from holosoma.envs.policy_task import PolicyTask
 
 
 def now_timestamp() -> str:
@@ -115,6 +119,10 @@ class ExperimentConfig:
     """Top-level experiment configuration used by the Tyro CLI."""
 
     env_class: str = "holosoma.envs.locomotion.locomotion_manager.LeggedRobotLocomotionManager"
+
+    device: str | None = None
+    """Device for the task. None (the default) resolves from the simulator backend and process
+    rank, as ``RunSimConfig.device`` does; pass e.g. "cuda:0" to override. Not carried into eval."""
 
     training: TrainingConfig = TrainingConfig()
     algo: Annotated[AlgoConfig, UseRegistry(holosoma.config_values.algo.ALGO_REGISTRY)] = (
@@ -196,6 +204,7 @@ class ExperimentConfig:
 
         return dataclasses.replace(
             self,
+            device=None,
             terrain=dataclasses.replace(
                 self.terrain,
                 terrain_term=dataclasses.replace(
@@ -220,6 +229,14 @@ class ExperimentConfig:
             ),
             logger=holosoma.config_values.logger.disabled if self.eval_overrides.disable_logger else self.logger,
         )
+
+    def create_task(self) -> AbstractContextManager[PolicyTask]:
+        """Return a context that builds the configured policy task and owns its resources."""
+        from holosoma.config_types.env import get_tyro_env_config
+        from holosoma.envs.policy_task import PolicyTask
+        from holosoma.simulator.session import task_session
+
+        return task_session(get_tyro_env_config(self), PolicyTask)
 
     def save_config(self, path: str) -> None:
         with open(path, "w") as file:
