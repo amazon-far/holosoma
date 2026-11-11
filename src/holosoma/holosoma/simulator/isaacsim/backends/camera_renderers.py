@@ -67,25 +67,6 @@ def capture_isaac_rtx_products(captures: list[IsaacRtxCapture]) -> None:
         settings.set("/app/player/playSimulations", previous)
 
 
-class _RequestedOvrtxEngine:
-    """Forward SDK operations while selecting one independently captured product."""
-
-    def __init__(self, engine: Any) -> None:
-        self._engine = engine
-        self.requested_product: str | None = None
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._engine, name)
-
-    def step(self, *, render_products: set[str], **kwargs: Any) -> Any:
-        products = {self.requested_product} if self.requested_product is not None else render_products
-        return self._engine.step(render_products=products, **kwargs)
-
-    def step_async(self, *, render_products: set[str], **kwargs: Any) -> Any:
-        products = {self.requested_product} if self.requested_product is not None else render_products
-        return self._engine.step_async(render_products=products, **kwargs)
-
-
 def create_scheduled_ovrtx_renderer(cfg: Any) -> Any:
     """Resolve the renderer implementation after the selected runtime has launched."""
     return scheduled_ovrtx_renderer_class()(cfg)
@@ -157,51 +138,7 @@ def scheduled_isaac_rtx_renderer_class() -> type[Any]:
 
 @lru_cache(maxsize=1)
 def scheduled_ovrtx_renderer_class() -> type[Any]:
-    """Capture due products without OVRTX 0.5's changing multiview-batch defect."""
-    from isaaclab_ov.renderers.ovrtx_renderer import OVRTXRenderer
+    """Resolve stable product ownership only after OVRTX has launched."""
+    from .ovrtx_cameras import scheduled_renderer_class
 
-    class ScheduledOVRTXRenderer(OVRTXRenderer):
-        def __init__(self, cfg: Any) -> None:
-            super().__init__(cfg)
-            self._decimations: dict[str, int] = {}
-            self._products: dict[str, str] = {}
-
-        def configure_cadence(self, path: str, *, control_hz: float, decimation: int) -> None:
-            self._decimations[path] = decimation
-
-        def create_render_data(self, spec: Any) -> Any:
-            data = super().create_render_data(spec)
-            self._products[data.render_product_path] = spec.cfg.prim_path
-            if not isinstance(self.backend.renderer, _RequestedOvrtxEngine):
-                self.backend.renderer = _RequestedOvrtxEngine(self.backend.renderer)
-            return data
-
-        def render_batch(self, render_data: Any) -> None:
-            if not render_data:
-                return
-            shared_rate = len(set(self._decimations.values())) <= 1
-            scheduled_only = all(path in self._decimations for path in self._products.values())
-            if not self._decimations or (shared_rate and scheduled_only):
-                # With one shared cadence every product is due together. Keep
-                # the SDK's efficient stable batch, including movie-only runs.
-                super().render_batch(render_data)
-                return
-            # OVRTX 0.5 can use another camera's pose when multiview products
-            # enter/leave an active batch, including native frameRate gating.
-            # Submit each due product alone and finish its SDK readback before
-            # the next submission invalidates native output handles. This
-            # avoids extra draws, but product re-entry has substantial overhead.
-            engine = self.backend.renderer
-            try:
-                for data in render_data:
-                    engine.requested_product = data.render_product_path
-                    super().render_batch((data,))
-            finally:
-                engine.requested_product = None
-
-        def cleanup(self, render_data: Any) -> None:
-            if render_data is not None:
-                self._products.pop(render_data.render_product_path, None)
-            super().cleanup(render_data)
-
-    return ScheduledOVRTXRenderer
+    return scheduled_renderer_class()
