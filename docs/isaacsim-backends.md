@@ -119,6 +119,10 @@ avoids the pinned OVRTX package's [multiview batch defect](ovrtx-camera-cadence-
 and repeated product re-entry. This trades additional memory and initialization
 for lower measured capture cost; the comparison includes every-tile RGB/depth
 checks, rather than capture counts alone.
+Multiple native engines add per-product memory and, in the pinned OVRTX build,
+disable video textures on scene materials. Camera movie recording still works.
+Default temporal reconstruction also advances only on actual captures, so slower
+cameras can retain more previous material color than continuously rendered cameras.
 Isaac RTX activates only due tiled products and pauses each on its native
 completion event, then reads the SDK-owned output buffers. Viewer renders
 and logger movie captures do not activate idle perception products.
@@ -133,6 +137,9 @@ Isaac RTX creates one movie camera and render product under the recording
 environment. Both paths track the selected `record_env_id` and use the shared
 encoding, overlays and recording lifecycle. Camera capture does not integrate
 physics. Disable logger video when comparing camera renderer throughput.
+Isaac RTX movie products explicitly retain a single-view tile layout before
+capture; this prevents active tiled perception products from replacing the
+recording camera's view.
 
 The native integration matrix checks all six combinations with two G1
 environments, sparse property randomization, dynamics, actuation, contact forces,
