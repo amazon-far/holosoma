@@ -10,6 +10,7 @@ import pathlib
 import trimesh
 
 from holosoma.config_types.full_sim import FullSimConfig
+from holosoma.config_types.sensor import CameraSensorConfig
 import isaaclab.sim as sim_utils
 import isaaclab.terrains as terrain_gen
 import torch
@@ -93,7 +94,6 @@ class IsaacSim(BaseSimulator):
         self.scene_file_static_names: set[str] = set()
 
         sim_config = self.backend.simulation_config(self.simulator_config.sim, self.sim_device)
-        sim_config.render_interval = self.simulator_config.sim.control_decimation_steps
 
         # create a simulation context to control the simulator
         if SimulationContext.instance() is None:
@@ -823,12 +823,13 @@ class IsaacSim(BaseSimulator):
         self._viewer_render_step = self._sim_step_counter
 
     def render_for_sensors(self) -> None:
-        """Render for cameras and video, unless :meth:`render` already did this physics step.
+        """Render Isaac Sim 5 sensors unless the viewer already rendered this physics step.
 
         The skip keys on the physics step only: state written after that render without a physics
         step (pose writes, ``forward_kinematics``) does not show until the next render.
+        Isaac Sim 6 cameras and movies submit their own due products after preparing poses.
         """
-        if self._viewer_render_step != self._sim_step_counter:
+        if not self.backend.is_isaacsim6 and self._viewer_render_step != self._sim_step_counter:
             self._render_frame()
 
     def _render_frame(self) -> None:

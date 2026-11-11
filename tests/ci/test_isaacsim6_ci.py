@@ -79,8 +79,8 @@ def test_release_runs_new_runtime_suite_using_the_verified_immutable_digest() ->
     assert "holosoma_isaacsim6_digest" in promotion["verify-images"]["outputs"]
     image = promotion["test-images"]["with"]["isaacsim6_image"]
     assert (
-        image
-        == "${{ vars.ECR_REGISTRY }}/holosoma-isaacsim6@${{ needs.verify-images.outputs.holosoma_isaacsim6_digest }}"
+        image == "${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}"
+        "/holosoma-isaacsim6@${{ needs.verify-images.outputs.holosoma_isaacsim6_digest }}"
     )
     test = _jobs("test-images.yaml")["isaacsim6"]
     assert test["with"]["image"] == "${{ inputs.isaacsim6_image }}"

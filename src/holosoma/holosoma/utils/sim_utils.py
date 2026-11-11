@@ -122,7 +122,7 @@ def setup_isaaclab_launcher(config: EnvConfig, device: str) -> Any | None:
     # Decide runtime requirements before SDK argument registration can import
     # Kit. A renderer preference alone does not activate cameras or a viewer.
     video_enabled = config.logger.video.enabled or config.logger.headless_recording
-    cameras_enabled = any(isinstance(sensor, CameraSensorConfig) for sensor in getattr(config, "sensor", {}).values())
+    cameras_enabled = any(isinstance(sensor, CameraSensorConfig) for sensor in config.sensors.values())
     needs_rendering = video_enabled or cameras_enabled
     backend = get_backend(
         config.simulator.config.isaacsim_backend,

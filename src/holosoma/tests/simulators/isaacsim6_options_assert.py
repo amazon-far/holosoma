@@ -13,9 +13,8 @@ if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from holosoma.config_types.simulator import IsaacSim6Config
-from holosoma.utils.sim_utils import setup_simulation_environment
 from tests.simulators._native_runtime_assertions import assert_native_runtime
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step
+from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit, step
 
 
 def main() -> int:
@@ -50,9 +49,8 @@ def main() -> int:
         device="cuda:0",
         training=dataclasses.replace(config.training, num_envs=2),
     )
-    env, device, _app = setup_simulation_environment(config, device="cuda:0")
+    sim, device, _app = launch_simulator(config, device="cuda:0")
     launched = time.perf_counter()
-    sim = env.sim
     sim.set_headless(True)
     sim.setup()
     sim.setup_terrain()
@@ -370,7 +368,7 @@ def main() -> int:
 
         from holosoma.utils.sim_utils import close_simulation_resources
 
-        close_simulation_resources(env, _app)
+        close_simulation_resources(sim, _app)
         assert SimulationContext.instance() is None, "Kit-less native resources remained open"
         assert not _app.is_running(), "closed Kit-less runtime still reports running"
     Path(args.result_file).write_text("OK")

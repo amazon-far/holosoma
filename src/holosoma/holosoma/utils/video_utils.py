@@ -207,8 +207,13 @@ def create_video(
                 from imageio_ffmpeg import count_frames_and_secs, write_frames
 
                 encoder = write_frames(
-                    str(final_video), (w, h), fps=fps, codec="mpeg4",
-                    quality=None, macro_block_size=1, output_params=["-q:v", "2"],
+                    str(final_video),
+                    (w, h),
+                    fps=fps,
+                    codec="mpeg4",
+                    quality=None,
+                    macro_block_size=1,
+                    output_params=["-q:v", "2"],
                 )
                 try:
                     encoder.send(None)
@@ -233,6 +238,7 @@ def create_video(
         return final_video
 
     except Exception as e:
+        final_video.unlink(missing_ok=True)
         raise RuntimeError("Video creation failed") from e
 
 

@@ -15,9 +15,8 @@ from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
 from holosoma.config_types.newton import IsaacSim6RendererConfig, NewtonCollisionConfig, NewtonPhysicsConfig
 from holosoma.config_types.scene import IsaacSimPhysicsConfig, MujocoPhysicsConfig, PhysicsConfig
 from holosoma.config_types.simulator import IsaacSim6Config, IsaacSim6NewtonConfig
-from holosoma.utils.sim_utils import setup_simulation_environment
 from tests.simulators._native_runtime_assertions import assert_native_runtime
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step
+from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit, step
 
 
 def main() -> int:
@@ -104,8 +103,7 @@ def main() -> int:
         device="cuda:0",
         training=dataclasses.replace(config.training, num_envs=2),
     )
-    env, device, app = setup_simulation_environment(config, device="cuda:0")
-    sim = env.sim
+    sim, device, app = launch_simulator(config, device="cuda:0")
     sim.set_headless(True)
     sim.setup()
     sim.setup_terrain()

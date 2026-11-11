@@ -114,7 +114,9 @@ def test_create_video_h264_encodes_in_one_pass(tmp_path: Path, monkeypatch: pyte
     assert len(_decode(path)[0]) == 3
 
 
-def test_create_video_mp4_raises_when_writer_cannot_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_create_video_mp4_raises_when_both_encoders_are_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     class _UnopenedWriter:
         def __init__(self, *args: object) -> None:
             pass
@@ -122,11 +124,15 @@ def test_create_video_mp4_raises_when_writer_cannot_open(tmp_path: Path, monkeyp
         def isOpened(self) -> bool:  # noqa: N802 (cv2 API name)
             return False
 
+        def release(self) -> None:
+            pass
+
     monkeypatch.setattr("holosoma.utils.video_utils.cv2.VideoWriter", _UnopenedWriter)
+    monkeypatch.setenv("IMAGEIO_FFMPEG_EXE", str(tmp_path / "missing-ffmpeg"))
     frames = np.zeros((3, 16, 16, 3), dtype=np.uint8)
     with pytest.raises(RuntimeError, match="Video creation failed") as excinfo:
         create_video(frames, fps=30, save_dir=tmp_path, output_format="mp4", wandb_logging=False)
-    assert "could not open" in str(excinfo.value.__cause__)
+    assert isinstance(excinfo.value.__cause__, FileNotFoundError)
     assert list(tmp_path.iterdir()) == []
 
 
