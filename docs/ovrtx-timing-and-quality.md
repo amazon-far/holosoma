@@ -34,6 +34,11 @@ the inspected sources do not explain its author's rationale for choosing 60.
 Holosoma schedules these snapshots using `update_decimation`; it does not author
 native `OmniSensorAPI` rates.
 
+The header also states that a product omitted from a submission loses its
+sensor history. Independent owners submit their complete, fixed one-product
+sets whenever stepped; an idle owner receives no submission. This avoids
+changing the active multiview set within an engine.
+
 During 1.2 physics seconds at 50 control cycles per second:
 
 | Owner / policy | Submissions | Native clock increment |
@@ -53,7 +58,7 @@ such a replacement is correct for every SDK feature.
 | --- | --- |
 | Native sensor scheduling | Rational `omni:sensor:frameRate` is Hz; `startTime` is seconds. Runtime rate changes are unsupported in the pinned schema. A step can return zero or multiple frames. |
 | USD animation | Explicit `update_from_usd_time` and OVStage population sampling use seconds, converted with `timeCodesPerSecond`. Publication ordinals order committed state; they are not clocks. Step advancement alone is not a documented USD resampling guarantee. |
-| Temporal reconstruction / auto exposure | Pinned schema defaults to DLSS and auto exposure off. The later [0.6 changelog][timing-changes] explicitly changes TAA/DLSS/auto-exposure advancement from wall time to simulation-step time. Exact 0.5 native internals are unavailable. |
+| Temporal reconstruction / auto exposure | SDK source and recorded stages author RTPT without overriding post-AA/exposure settings. Pinned schema fallbacks are post AA `dlss` and auto exposure disabled; live resolved values were not queried. A separate PathTracing-only DLSS toggle defaults false. The later [0.6 changelog][timing-changes] explicitly changes TAA/DLSS/auto-exposure advancement from wall time to simulation-step time. Exact 0.5 native internals are unavailable. |
 | Native animation clock | The same 0.6 changelog makes animation permanently use accumulated step time. That later guarantee must not be imported into 0.5. |
 | Exposure and shutter | Pinned brightness `exposure:time` is seconds; USD shutter open/close are frame-relative USD timecode units. They describe different controls. Post motion blur defaults off; its exposure fraction is frame-relative. |
 | Motion vectors / interpolation | Endpoint writes and sensor windows are documented. Motion BVH is a separate creation-time option, off by default. The inspected pinned sources do not specify `TargetMotionSD` normalization or all skipped-frame behavior. |
@@ -140,6 +145,16 @@ residue at later blue captures was consistently lower with mixed owners in this
 small cohort. Slightly different warmup pixels, three repeats and submission
 jitter prevent attributing that small difference to ownership alone.
 
+Additional startup diagnostics do not establish matched temporal history.
+One experiment added native reset, missed warmup deadlines and failed a
+uniform-camera geometry assertion; its prototype also changed between cases.
+It is excluded from comparative results, and native reset remains outside the
+production policy. A frozen follow-up retained native history and passed all
+five image controls, but first-use physics compilation delayed its first warm
+capture and caused catch-up submissions. Passing freshness checks does not
+make those wall histories equivalent. Neither diagnostic supports a causal
+claim about independent owners or an upstream reset defect.
+
 Old green remains after a blue material change in the untouched SDK single
 control and in persistent owners. Additional instrumented SDK-single and mixed
 runs compared all 114 delivered RGB/depth observations, including warmup, against
@@ -149,16 +164,27 @@ capture. The native color at the blue switch already contained old green
 (`[1.22,19.97,193.72]` in the single control's environment zero). Thus the tested
 SDK extraction and Holosoma output handling do not create that color residue.
 This instrumentation adds synchronization and is excluded from performance
-comparisons.
+comparisons; it cannot exclude every asynchronous GPU-producer race.
+The separate uninstrumented freshness and partial-material-write controls
+exercise the ordinary producer path.
 
 A standalone replay of the recorded single-camera scene uses only OVRTX and
 NumPy, with owned synchronous CPU material/transform writes. It reproduces the
 old-green residue and its decay after the blue switch; recorded and replayed
-depth match at those captures. RGB is not universally identical. The replay
-preserves scene/write content and native submission history, but changes GPU
-producer/buffer timing; one measured submission was 41.79 ms late. It therefore
-establishes that this residue can occur without Holosoma or Isaac Lab, rather
-than exact equivalence of every native scheduling or reconstruction detail.
+depth match at those captures. The mixed-owner scene also replays successfully.
+After preloading inputs and deferring analysis/file writes, maximum measured
+lateness relative to the recorded timeline was 0.225 ms for single and 0.741 ms
+for mixed; native clock windows and renderer configurations match exactly.
+The instrumented mixed recording itself has submission jitter, including
+104–138 ms slow intervals. These replays reproduce that timeline, rather than
+an ideal evenly spaced 50 Hz workload.
+
+RGB is not universally identical. The replay preserves scene/write content and
+native submission history, but replaces GPU producers with owned synchronous
+CPU inputs. It establishes that the color residue can occur without Holosoma
+or Isaac Lab, rather than exact equivalence of every reconstruction detail.
+Earlier replays that performed image analysis/file writes between captures
+had substantial timing drift and are retained as diagnostics.
 
 The earlier material comparison rendered the SDK slow product during
 intervening fast captures. It was not an ownership-only control. It cannot
@@ -170,6 +196,34 @@ scene; exact native temporal-filter mechanisms remain uncertain.
 These findings concern OVRTX. Isaac RTX has a separate completion-event and
 product-layout integration; its earlier movie fix and performance measurements
 do not establish equivalent temporal behavior.
+
+## Validation and performance of the ownership cleanup
+
+The public-construction/material-writer revision passed all 20 OVRTX native
+tests on far044, including four rate patterns with both physics backends,
+movies, schema overrides, fisheye and library-loading checks. The rebuilt image
+also passed all five standalone quality controls, all five SDK/Holosoma controls,
+real partial material writes with Newton and PhysX, distinct-pose three-camera
+OVRTX/Isaac RTX movies, and OVStage 2/3 with both physics backends.
+
+A fresh comparison uses eight environments, 512×512 RGB/depth, 50/10 Hz cameras,
+60 control cycles and ten excluded warmup cycles, identical pinned dependencies
+and shared caches. GPU work runs under the same exclusive experiment lock.
+
+| OVRTX policy | Capture ms/control cycle | Captures, including warmup | Process VRAM MiB | Startup sample s |
+| --- | ---: | --- | ---: | ---: |
+| Normal batching | 13.04 | 60/60 | 4853 | 26.89 |
+| Serialized fallback | 118.34 | 60/12 | 5167 | 8.03 |
+| Persistent owners, public construction | 9.98 | 60/12 | 5198 | 8.51 |
+
+The persistent path saves 91.6% capture time versus serialization and 23.4%
+versus normal batching, with 345 MiB more VRAM than normal batching. Actual
+measured captures after warmup are 50/50 or 50/10. These are capture/readout
+costs, rather than total training throughput. Startup includes import, conversion
+and first output; the first control has colder container-local state, so these
+startup samples do not establish a startup speedup. The earlier renderer-only
+memory/startup cohort and Isaac RTX measurements remain separate in the
+[cadence comparison](ovrtx-camera-cadence-repro.md).
 
 ## Maintenance cost and public alternatives
 

@@ -17,12 +17,20 @@ import math
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 from ovrtx import Renderer, RendererConfig, Semantic, TextureStreamingMode
-from ovrtx_instances_repro import memory_sample as resource_snapshot
-from ovrtx_instances_repro import pixels as read
-from ovrtx_instances_repro import reuse_shader_cache as shader_cache
+
+if TYPE_CHECKING:
+    from .ovrtx_instances_repro import memory_sample as resource_snapshot
+    from .ovrtx_instances_repro import pixels as read
+    from .ovrtx_instances_repro import reuse_shader_cache as shader_cache
+else:
+    # Direct execution keeps this fixture usable outside the simulator package.
+    from ovrtx_instances_repro import memory_sample as resource_snapshot
+    from ovrtx_instances_repro import pixels as read
+    from ovrtx_instances_repro import reuse_shader_cache as shader_cache
 
 
 def pose(group, env):
