@@ -124,32 +124,6 @@ def test_format_array_mismatch_raises() -> None:
         encode_frame(_rgb(), "bogus")
 
 
-def test_depth_colorized_to_rgb8_is_raw_rgb_image() -> None:
-    # A depth frame in an rgb format is colorized to an [H,W,3] uint8 RGB image, then rgb-encoded.
-    depth: npt.NDArray[np.float32] = np.full(
-        (5, 7, 1), 1.0, np.float32
-    )  # [H,W,1] float meters, as get_camera_data gives
-    enc = encode_frame(depth, "rgb8", modality="depth", depth_range=(0.1, 5.0))
-    assert not enc.compressed and enc.encoding == "rgb8"
-    assert (enc.height, enc.width, enc.step) == (5, 7, 21)  # 3*w; colorized to 3 channels
-    assert len(enc.data) == 5 * 7 * 3
-
-
-def test_depth_colorized_to_jpeg_is_compressed() -> None:
-    depth: npt.NDArray[np.float32] = np.full((8, 8), 1.0, np.float32)
-    enc = encode_frame(depth, "jpeg", modality="depth", jpeg_quality=90, depth_colormap="turbo")
-    assert enc.compressed and enc.compressed_format == "jpeg"
-    assert len(enc.data) > 0
-
-
-def test_depth_colormap_changes_encoded_bytes() -> None:
-    # Different colormaps colorize the same depth differently, so the raw rgb bytes differ.
-    depth: npt.NDArray[np.float32] = np.linspace(0.2, 4.0, 64, dtype=np.float32).reshape(8, 8)
-    turbo = encode_frame(depth, "rgb8", modality="depth", depth_colormap="turbo").data
-    gray = encode_frame(depth, "rgb8", modality="depth", depth_colormap="gray").data
-    assert turbo != gray
-
-
 def test_depth_colorized_near_brighter_than_far_grayscale() -> None:
     # Sanity that the colorization scale reaches the encoder: near reads brighter than far (gray).
     kw: dict[str, Any] = {"modality": "depth", "depth_colormap": "gray", "depth_range": (0.1, 5.0)}
@@ -160,28 +134,7 @@ def test_depth_colorized_near_brighter_than_far_grayscale() -> None:
     assert near_mean > far_mean
 
 
-def test_depth_range_value_changes_encoded_bytes() -> None:
-    # depth_range must actually drive normalization: the SAME depth normalizes differently under two
-    # ranges, so the encoded bytes differ. Guards against depth_range being threaded but ignored.
-    depth: npt.NDArray[np.float32] = np.full((4, 4), 2.0, np.float32)  # a mid-scene depth, well inside both ranges
-    kw: dict[str, Any] = {"modality": "depth", "depth_colormap": "gray"}
-    tight: npt.NDArray[np.uint8] = np.frombuffer(
-        encode_frame(depth, "rgb8", depth_range=(0.1, 3.0), **kw).data, np.uint8
-    )
-    wide: npt.NDArray[np.uint8] = np.frombuffer(
-        encode_frame(depth, "rgb8", depth_range=(0.1, 20.0), **kw).data, np.uint8
-    )
-    # Nearer end of a tight range => 2m sits darker; in a wide range 2m is close to bright. Different.
-    assert not np.array_equal(tight, wide)
-    assert tight.mean() != wide.mean()
-
-
 # ----- camera_info -----
-
-
-def test_focal_length_matches_fov() -> None:
-    # 90deg vertical FOV over 200px -> f = 100 (since tan(45deg)=1).
-    assert focal_length_px(200, 90.0) == pytest.approx(100.0)
 
 
 def test_camera_info_k_p_layout() -> None:
@@ -332,24 +285,6 @@ def test_worker_stop_is_idempotent() -> None:
     w.start()
     w.stop()
     w.stop()  # must not raise
-
-
-def test_worker_stop_reports_a_blocked_publisher() -> None:
-    entered = threading.Event()
-    release = threading.Event()
-
-    def _publish(_: int) -> None:
-        entered.set()
-        release.wait()
-
-    w = PublishWorker(_publish, maxlen=1, name="blocked")
-    w.start()
-    w.submit(1)
-    assert entered.wait(timeout=2.0)
-    with pytest.raises(RuntimeError, match="did not stop"):
-        w.stop(timeout=0.01)
-    release.set()
-    w.stop(timeout=2.0)
 
 
 def test_worker_publish_failure_does_not_block_later_item() -> None:

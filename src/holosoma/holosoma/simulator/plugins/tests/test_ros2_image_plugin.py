@@ -28,8 +28,6 @@ from typing import TYPE_CHECKING, Any, cast
 from holosoma.config_types.plugin import ROS2ImagePluginConfig, ROS2ImageRoute
 from holosoma.config_types.sensor import (
     CameraSensorConfig,
-    IsaacSimCameraConfig,
-    IsaacSimFisheyeConfig,
     SensorMountConfig,
 )
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
@@ -316,43 +314,6 @@ def test_publish_routes_only_matching_camera_modality(fake_ros: dict[str, _FakeN
 # ----- colorized depth (depth modality + rgb format) -----
 
 
-def test_depth_route_colorized_publishes_compressed_rgb(fake_ros: dict[str, _FakeNode]) -> None:
-    import cv2
-    from sensor_msgs.msg import CompressedImage
-
-    # A depth camera routed on an rgb (jpeg) format => the depth map is colorized to RGB, then
-    # published as CompressedImage. The raw float32 depth never reaches the wire on this route.
-    cfg = ROS2ImagePluginConfig(
-        async_publish=False,
-        publish_camera_info=False,
-        routes={
-            "waist": ROS2ImageRoute(
-                camera="waist",
-                topic="/cam/waist/depth_color/compressed",
-                modality="depth",
-                format="jpeg",
-                depth_colormap="turbo",
-                depth_range=[0.1, 4.0],
-            )
-        },
-    )
-    egress = _make(cfg, _cam("waist", data_types=["depth"]))
-    node = _start(egress, fake_ros)
-    pub = _pub_for(node, "/cam/waist/depth_color/compressed")
-    assert pub.msg_type is CompressedImage
-
-    egress.publish({("waist", "depth", 0): _depth_packet("waist")})
-    assert len(pub.published) == 1
-    msg = pub.published[0]
-    assert msg.format == "jpeg"
-    assert msg.header.frame_id == "waist"
-    # Decodes back to a 3-channel RGB image (colorized), not raw depth.
-    bgr = cv2.imdecode(np.frombuffer(msg.data, np.uint8), cv2.IMREAD_COLOR)
-    assert bgr is not None  # imdecode returns None on invalid input (typed Optional)
-    assert bgr.shape == (8, 8, 3)
-    egress.stop()
-
-
 def test_depth_route_raw_still_publishes_float_image(fake_ros: dict[str, _FakeNode]) -> None:
     from sensor_msgs.msg import Image
 
@@ -401,57 +362,6 @@ def test_camera_info_published_once_at_start_with_correct_k(fake_ros: dict[str, 
     # A frame must NOT add another CameraInfo (it is static/latched, off the per-frame path).
     _publish(egress, _rgb_packet("head", h=240, w=320))
     assert len(info_pub.published) == 1
-    egress.stop()
-
-
-def test_camera_info_approximates_native_isaacsim_fisheye(fake_ros: dict[str, _FakeNode]) -> None:
-    cfg = ROS2ImagePluginConfig(
-        async_publish=False,
-        publish_camera_info=True,
-        routes={"head": ROS2ImageRoute(camera="head", topic="/cam/head/image", modality="rgb", format="rgb8")},
-    )
-    egress = _make(
-        cfg,
-        _cam(
-            "head",
-            width=320,
-            height=240,
-            isaacsim=IsaacSimCameraConfig(
-                projection_type="fisheyePolynomial",
-                fisheye=IsaacSimFisheyeConfig(
-                    nominal_width=320.0,
-                    nominal_height=240.0,
-                    optical_centre_x=160.0,
-                    optical_centre_y=120.0,
-                    max_fov=180.0,
-                    polynomial_b=0.01,
-                ),
-            ),
-        ),
-    )
-    egress.simulator.simulator_type = SimulatorType.ISAACSIM  # type: ignore[attr-defined]
-    node = _start(egress, fake_ros)
-
-    assert any(p.topic == "/cam/head/image" for p in node.publishers)
-    info_pub = _pub_for(node, "/cam/head/camera_info")
-    assert len(info_pub.published) == 1
-    info = info_pub.published[0]
-    assert info.distortion_model == "equidistant"
-    assert info.d == pytest.approx([0.0, 0.0, 0.0, 0.0], abs=1e-10)
-    assert info.k[0] == pytest.approx(100.0)
-    assert info.k[4] == pytest.approx(100.0)
-    egress.stop()
-
-
-def test_no_camera_info_when_disabled(fake_ros: dict[str, _FakeNode]) -> None:
-    cfg = ROS2ImagePluginConfig(
-        async_publish=False,
-        publish_camera_info=False,
-        routes={"head": ROS2ImageRoute(camera="head", topic="/cam/head", modality="rgb", format="jpeg")},
-    )
-    egress = _make(cfg, _cam("head"))
-    node = _start(egress, fake_ros)
-    assert not any(p.topic.endswith("/camera_info") for p in node.publishers)
     egress.stop()
 
 

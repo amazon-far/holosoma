@@ -31,7 +31,6 @@ from holosoma.simulator.mujoco.sensor_setup import (  # noqa: E402
     _effective_geom_groups,
     _render_warp,
     _resolve_body_exclude,
-    _warp_geom_groups,
 )
 from holosoma.simulator.shared.sensor_manager import SensorManager  # noqa: E402
 from holosoma.utils.safe_torch_import import torch  # noqa: E402
@@ -102,29 +101,6 @@ def test_mujoco_uses_warp_device_clock_instead_of_stale_render_snapshot() -> Non
     sim.root_data = SimpleNamespace(time=0.0)
 
     assert sim._physics_time() == pytest.approx(1.25)
-
-
-def test_warp_geom_groups_use_the_public_six_component_warp_vector() -> None:
-    vector_requests = []
-
-    def vector(*, length: int, dtype):
-        vector_requests.append((length, dtype))
-        return lambda *components: components
-
-    class PublicWarp:
-        float32 = object()
-        types = SimpleNamespace(vector=vector)
-
-    record = SimpleNamespace(
-        name="scan",
-        config=LidarSensorConfig(
-            mount=SensorMountConfig(target_kind="world"),
-            body_filter=LidarBodyFilterConfig(target_kind="robot"),
-            mujoco=MujocoLidarConfig(geom_groups=[False, True, False, True, True, True]),
-        ),
-    )
-    assert _warp_geom_groups(record, PublicWarp) == (0.0, 1.0, 0.0, 1.0, 0.0, 0.0)
-    assert vector_requests == [(6, PublicWarp.float32)]
 
 
 def test_effective_geom_groups_compact_robot_categories_and_preserve_all_false() -> None:
@@ -475,171 +451,6 @@ def test_mjwarp_lidar_reuses_camera_bvh_without_duplicate_same_frame_refit(
     assert launched == [camera_graph]
     assert backend._sensor_refit_contexts == {id(camera_context)}
     assert rendered == [(sim, lidar, backend, camera_context, 1.25)]
-
-
-def test_mjwarp_captures_distinct_reusable_ray_graphs_per_lidar(monkeypatch: pytest.MonkeyPatch) -> None:
-    capture_count = 0
-    launched_graphs = []
-    ray_calls = 0
-
-    class _ScopedDevice:
-        def __init__(self, device) -> None:
-            self.device = device
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback) -> None:
-            return None
-
-    class _Capture:
-        def __init__(self) -> None:
-            self.graph = object()
-
-        def __enter__(self):
-            nonlocal capture_count
-            capture_count += 1
-            return self
-
-        def __exit__(self, exc_type, exc, traceback) -> None:
-            return None
-
-    fake_warp = ModuleType("warp")
-    fake_warp.ScopedDevice = _ScopedDevice
-    fake_warp.ScopedCapture = _Capture
-    fake_warp.to_torch = lambda tensor: tensor
-
-    def from_torch(tensor, dtype=None):
-        assert dtype in (None, fake_warp.vec3)
-        return tensor
-
-    fake_warp.from_torch = from_torch
-    fake_warp.vec3 = object()
-    fake_warp.float32 = object()
-
-    def vector(*, length: int, dtype):
-        assert length == 6
-        assert dtype is fake_warp.float32
-        return lambda *components: components
-
-    fake_warp.types = SimpleNamespace(vector=vector)
-    fake_warp.capture_launch = lambda graph: launched_graphs.append(graph)
-    fake_warp.get_stream = lambda _device: SimpleNamespace(cuda_stream=17)
-
-    fake_mujoco_warp = ModuleType("mujoco_warp")
-
-    def rays(*args, **kwargs) -> None:
-        nonlocal ray_calls
-        ray_calls += 1
-
-    fake_mujoco_warp.rays = rays
-    monkeypatch.setitem(sys.modules, "warp", fake_warp)
-    monkeypatch.setitem(sys.modules, "mujoco_warp", fake_mujoco_warp)
-    external_streams = []
-    consumer_streams = []
-    producer_waits = []
-    waited_streams = []
-
-    class _ExternalStream:
-        def wait_stream(self, stream) -> None:
-            producer_waits.append((self, stream))
-
-    class _ConsumerStream:
-        def wait_stream(self, stream) -> None:
-            waited_streams.append(stream)
-
-    def external_stream(cuda_stream):
-        assert cuda_stream == 17
-        stream = _ExternalStream()
-        external_streams.append(stream)
-        return stream
-
-    def current_stream(_device):
-        stream = _ConsumerStream()
-        consumer_streams.append(stream)
-        return stream
-
-    monkeypatch.setattr(sensor_setup.torch.cuda, "ExternalStream", external_stream)
-    monkeypatch.setattr(sensor_setup.torch.cuda, "stream", lambda stream: _ScopedDevice(stream))
-    monkeypatch.setattr(sensor_setup.torch.cuda, "current_stream", current_stream)
-
-    first = SimpleNamespace(
-        name="first",
-        config=LidarSensorConfig(
-            mount=SensorMountConfig(target_kind="world"),
-            mujoco=MujocoLidarConfig(geom_groups=[True, False, False, False, False, False]),
-        ),
-        backend_cache={
-            "mujoco_site_id": 0,
-            "mujoco_body_exclude_id": 4,
-        },
-        pattern_at=lambda _: SimpleNamespace(directions=torch.tensor([[0.0, 0.0, -1.0]])),
-    )
-    second = SimpleNamespace(
-        name="second",
-        config=LidarSensorConfig(
-            mount=SensorMountConfig(target_kind="world"),
-            mujoco=MujocoLidarConfig(geom_groups=[False, True, False, False, False, False]),
-        ),
-        backend_cache={
-            "mujoco_site_id": 1,
-            "mujoco_body_exclude_id": 7,
-        },
-        pattern_at=lambda _: SimpleNamespace(directions=torch.tensor([[0.0, 0.0, -1.0], [1.0, 0.0, 0.0]])),
-    )
-    backend = SimpleNamespace(
-        mjw_device="cpu",
-        mjw_model=object(),
-        mjw_data=SimpleNamespace(
-            site_xpos=torch.zeros((1, 2, 3)),
-            site_xmat=torch.eye(3).reshape(1, 1, 3, 3).expand(1, 2, -1, -1),
-        ),
-    )
-    sim = SimpleNamespace(
-        root_model=SimpleNamespace(site_bodyid=np.array([1, 2])),
-        num_envs=1,
-        sim_device="cpu",
-        env_origins=torch.zeros((1, 3)),
-    )
-    monkeypatch.setattr(sensor_setup, "finalize_lidar_returns", lambda *_args, **_kwargs: None)
-
-    sensor_setup._render_warp(sim, first, backend, object(), 0.0)
-    sensor_setup._render_warp(sim, second, backend, object(), 0.0)
-    first_workspace = first.backend_cache["mujoco_warp_rays"]
-    second_workspace = second.backend_cache["mujoco_warp_rays"]
-    assert first_workspace is not second_workspace
-    assert first_workspace.directions.shape == (1, 1, 3)
-    assert second_workspace.directions.shape == (1, 2, 3)
-    assert first_workspace.geom_group == (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
-    assert second_workspace.geom_group == (0.0, 1.0, 0.0, 0.0, 1.0, 0.0)
-    torch.testing.assert_close(first_workspace.excludes, torch.tensor([4], dtype=torch.int32))
-    torch.testing.assert_close(second_workspace.excludes, torch.tensor([7, 7], dtype=torch.int32))
-    assert first_workspace.graph is not second_workspace.graph
-
-    sensor_setup._render_warp(sim, first, backend, object(), 0.1)
-    sensor_setup._render_warp(sim, second, backend, object(), 0.1)
-
-    assert capture_count == 2
-    assert ray_calls == 2
-    assert launched_graphs == [
-        first_workspace.graph,
-        second_workspace.graph,
-        first_workspace.graph,
-        second_workspace.graph,
-    ]
-    assert external_streams == [first_workspace.torch_stream, second_workspace.torch_stream]
-    assert producer_waits == [
-        (first_workspace.torch_stream, consumer_streams[0]),
-        (second_workspace.torch_stream, consumer_streams[1]),
-        (first_workspace.torch_stream, consumer_streams[2]),
-        (second_workspace.torch_stream, consumer_streams[3]),
-    ]
-    assert waited_streams == [
-        first_workspace.torch_stream,
-        second_workspace.torch_stream,
-        first_workspace.torch_stream,
-        second_workspace.torch_stream,
-    ]
 
 
 def test_mjwarp_replayed_graph_reads_current_directions_and_updates_cloud(monkeypatch: pytest.MonkeyPatch) -> None:

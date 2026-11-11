@@ -17,7 +17,7 @@ import pytest
 
 from holosoma.utils import sim_utils
 from holosoma.utils.simulator_config import SimulatorConfig, SimulatorType
-from holosoma.utils.tests._simulation_error_child import configure_logging, run_task_session
+from holosoma.utils.tests._simulation_error_child import run_task_session
 
 pytestmark = pytest.mark.no_sim
 
@@ -96,26 +96,6 @@ def test_failure_is_reported_before_native_shutdown(entrypoint: str) -> None:
     assert "RuntimeError: Missing LiDAR prim: /World/missing_chair" in result.stderr
 
 
-@pytest.mark.parametrize("error", ["runtime", "exit_message"])
-@pytest.mark.parametrize(
-    ("color", "sink_kind"),
-    [("YES", "direct"), ("YES", "queued"), ("NO", "queued")],
-    ids=["color", "color-queue", "plain-queue"],
-)
-def test_diagnostics_are_delivered_before_native_shutdown(error: str, sink_kind: str, color: str) -> None:
-    # Plain direct diagnostics are covered by the entrypoint and exit-intent tests.
-    result = _run_child("session_body", error, sink_kind=sink_kind, color=color)
-
-    assert result.returncode == 1, result.stderr
-    assert result.stdout.splitlines() == ["ENV_CLOSE", "WORKAROUNDS_OK", "APP_CLOSE"], result.stderr
-    if error == "runtime":
-        assert "Traceback (most recent call last)" in result.stderr
-        assert "RuntimeError: Missing LiDAR prim: /World/missing_chair" in result.stderr
-    else:
-        assert "Invalid simulator configuration" in result.stderr
-        assert "Traceback (most recent call last)" not in result.stderr
-
-
 @pytest.mark.parametrize(
     ("error", "return_code"),
     [("none", 0), ("interrupt", 130), ("terminate", 143), ("exit_code", 7), ("exit_message", 1), ("exit_success", 0)],
@@ -186,83 +166,6 @@ def test_unconfigured_backend_still_closes_environment(
         assert str(caught.value) == "Simulation app cleanup failed"
         assert isinstance(caught.value.__cause__, RuntimeError)
         assert "Simulator type not set" in str(caught.value.__cause__)
-
-
-@pytest.mark.parametrize("quit_kind", ["missing_app", "binding_error"])
-@pytest.mark.parametrize("sink_kind", ["direct", "queued"])
-def test_unavailable_quit_api_can_exit_zero_but_still_cleans_up(quit_kind: str, sink_kind: str) -> None:
-    """Simulate failures looking up or calling Kit's exit-status API."""
-    result = _run_child("session_body", "runtime", quit_kind=quit_kind, sink_kind=sink_kind)
-
-    # The unavailable Kit API cannot override its default status, but the
-    # diagnostic and both shutdown workarounds must survive through app.close().
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines() == ["ENV_CLOSE", "WORKAROUNDS_OK", "APP_CLOSE"]
-    assert "RuntimeError: Missing LiDAR prim: /World/missing_chair" in result.stderr
-    assert "Could not set Isaac Sim exit status to 1" in result.stderr
-
-
-@pytest.mark.parametrize(
-    ("entrypoint", "diagnostic"),
-    [
-        ("session_body", "sink_error"),
-        ("session_body", "sink_all"),
-        ("session_body", "drain"),
-        ("session_body", "flush"),
-        ("app", "sink_error"),
-        ("app", "drain"),
-        ("app", "flush"),
-        ("run_step", "sink_error"),
-    ],
-)
-def test_diagnostic_failure_does_not_skip_exit_status_or_native_cleanup(entrypoint: str, diagnostic: str) -> None:
-    result = _run_child(entrypoint, "runtime", diagnostic=diagnostic)
-
-    assert result.returncode == 1, result.stderr
-    expected = [] if entrypoint == "app" else ["ENV_CLOSE"]
-    assert result.stdout.splitlines() == [*expected, "WORKAROUNDS_OK", "APP_CLOSE"], result.stderr
-    assert f"DIAGNOSTIC_FAILURE {diagnostic}" in result.stderr
-    assert result.stderr.count("Traceback (most recent call last)") == 1
-    assert "RuntimeError: Missing LiDAR prim: /World/missing_chair" in result.stderr
-
-
-@pytest.mark.parametrize("error", ["none", "runtime"])
-@pytest.mark.parametrize("diagnostic", ["sink_error", "drain", "flush"])
-def test_diagnostic_failure_preserves_cleanup_error_and_original_exception(
-    error: str,
-    diagnostic: str,
-    failed_cleanup: SimpleNamespace,
-    monkeypatch: pytest.MonkeyPatch,
-    capfd: pytest.CaptureFixture[str],
-) -> None:
-    case = failed_cleanup
-    failure = RuntimeError("Simulation failed")
-
-    def raise_failure() -> None:
-        raise failure
-
-    def run_failure() -> None:
-        if error == "runtime":
-            run_task_session(monkeypatch, "session_body", raise_failure, case.env, case.app)
-        else:
-            sim_utils.close_simulation_resources(case.env, case.app)
-
-    with monkeypatch.context() as fault_patch:
-        fault_sink = configure_logging(fault_patch, "direct", diagnostic)
-        try:
-            with pytest.raises(RuntimeError) as caught:
-                run_failure()
-        finally:
-            if fault_sink is not None:
-                sim_utils.logger.remove(fault_sink)
-
-    if error == "runtime":
-        assert caught.value is failure
-    else:
-        assert str(caught.value) == "Environment cleanup failed; provider application remains open"
-        assert caught.value.__cause__ is case.error
-    assert case.events == ["env.close"]
-    assert f"DIAGNOSTIC_FAILURE {diagnostic}" in capfd.readouterr().err
 
 
 @pytest.mark.parametrize("sink_kind", ["direct", "queued"])

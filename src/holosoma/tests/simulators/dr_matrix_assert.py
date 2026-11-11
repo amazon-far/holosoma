@@ -227,4 +227,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from tests.simulators._sim_harness import run_and_hard_exit
+
+    run_and_hard_exit(main)

@@ -10,4 +10,7 @@ source scripts/source_isaacsim_setup.sh
 python -m pip install -e 'src/holosoma[unitree,booster]'
 python -m pip install -e src/holosoma_inference
 
+# Tiny CPU tensors: a machine-sized Torch pool spends more in fork/join than in the ops.
+export OMP_NUM_THREADS=4
+
 python -m pytest -s --strict-markers -m "no_sim" --ignore=thirdparty --ignore=src/holosoma_inference

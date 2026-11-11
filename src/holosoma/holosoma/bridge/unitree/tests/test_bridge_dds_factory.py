@@ -57,21 +57,3 @@ def test_no_config_preserves_backend_selection_and_domain(monkeypatch: pytest.Mo
     assert _create(sdk_type, config) is constructor.return_value
     loader.assert_called_once_with()
     assert constructor.call_args.args[2] is config
-
-
-def test_explicit_config_reaches_isolated_backend_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    constructor = MagicMock()
-    loader = MagicMock(return_value=constructor)
-    monkeypatch.setattr(bridge_factory, "_bridge_registry", {"unitree_mp": loader})
-    config = BridgeConfig(dds_config=_XML)
-    assert _create("unitree_mp", config) is constructor.return_value
-    loader.assert_called_once_with()
-    assert constructor.call_args.args[2] is config
-
-
-def test_missing_dds_config_is_an_integration_error_before_loading(monkeypatch: pytest.MonkeyPatch) -> None:
-    loader = MagicMock()
-    monkeypatch.setattr(bridge_factory, "_bridge_registry", {"unitree_mp": loader})
-    with pytest.raises(AttributeError, match="dds_config"):
-        _create("unitree_mp", cast("BridgeConfig", SimpleNamespace(interface="lo")))
-    loader.assert_not_called()

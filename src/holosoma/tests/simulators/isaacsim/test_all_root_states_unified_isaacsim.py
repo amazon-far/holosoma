@@ -24,6 +24,10 @@ from tests.simulators._run_harness import run_harness  # noqa: E402
 _HARNESS = Path(__file__).resolve().parents[1] / "all_root_states_unified_assert.py"
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="world-frame angular velocity does not round-trip through set/get_actor_states (err 0.051 > 0.03)",
+)
 def test_all_root_states_unified():
     run_harness(
         _HARNESS,

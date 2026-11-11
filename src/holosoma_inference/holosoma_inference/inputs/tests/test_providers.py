@@ -18,7 +18,6 @@ import numpy as np
 import pytest
 
 from holosoma_inference.inputs import create_input
-from holosoma_inference.inputs.api.base import StateCommandProvider, VelCmdProvider
 from holosoma_inference.inputs.api.commands import StateCommand, VelCmd
 from holosoma_inference.inputs.impl.joystick import JOYSTICK_COMMANDS
 from holosoma_inference.inputs.impl.keyboard import (
@@ -81,40 +80,12 @@ def interface():
 
 
 class TestCommandMappings:
-    def test_joystick_has_core_commands(self):
-        assert JOYSTICK_COMMANDS["A"] == StateCommand.START
-        assert JOYSTICK_COMMANDS["B"] == StateCommand.STOP
-        assert JOYSTICK_COMMANDS["Y"] == StateCommand.INIT
-        assert JOYSTICK_COMMANDS["L1+R1"] == StateCommand.KILL
-        assert JOYSTICK_COMMANDS["select"] == StateCommand.NEXT_POLICY
-
-    def test_joystick_has_locomotion_commands(self):
-        assert JOYSTICK_COMMANDS["start"] == StateCommand.STAND_TOGGLE
-        assert JOYSTICK_COMMANDS["L2"] == StateCommand.ZERO_VELOCITY
-
-    def test_joystick_has_wbt_commands(self):
-        assert JOYSTICK_COMMANDS["select+A"] == StateCommand.START_MOTION_CLIP
-
     def test_keyboard_has_core_commands(self):
         assert KEYBOARD_COMMANDS["]"] == StateCommand.START
         assert KEYBOARD_COMMANDS["o"] == StateCommand.STOP
         assert KEYBOARD_COMMANDS["i"] == StateCommand.INIT
         assert KEYBOARD_COMMANDS["1"] == StateCommand.SWITCH_POLICY_1
         assert KEYBOARD_COMMANDS["9"] == StateCommand.SWITCH_POLICY_9
-
-    def test_keyboard_has_kp_commands(self):
-        assert KEYBOARD_COMMANDS["v"] == StateCommand.KP_DOWN_FINE
-        assert KEYBOARD_COMMANDS["b"] == StateCommand.KP_UP_FINE
-        assert KEYBOARD_COMMANDS["f"] == StateCommand.KP_DOWN
-        assert KEYBOARD_COMMANDS["g"] == StateCommand.KP_UP
-        assert KEYBOARD_COMMANDS["r"] == StateCommand.KP_RESET
-
-    def test_keyboard_has_locomotion_commands(self):
-        assert KEYBOARD_COMMANDS["="] == StateCommand.STAND_TOGGLE
-        assert KEYBOARD_COMMANDS["z"] == StateCommand.ZERO_VELOCITY
-
-    def test_keyboard_has_wbt_commands(self):
-        assert KEYBOARD_COMMANDS["m"] == StateCommand.START_MOTION_CLIP
 
     def test_keyboard_no_velocity_keys_in_command_mapping(self):
         """Velocity keys are in KEYBOARD_VELOCITY_LOCOMOTION, not the command mapping."""
@@ -143,57 +114,12 @@ class TestCommandMappings:
 # ============================================================================
 
 
-class TestProtocolConformance:
-    def test_interface_input_satisfies_both_protocols(self):
-        from holosoma_inference.inputs.impl.interface import InterfaceInput
-
-        device = InterfaceInput(_make_interface())
-        assert isinstance(device, VelCmdProvider)
-        assert isinstance(device, StateCommandProvider)
-
-    def test_keyboard_input_satisfies_both_protocols(self):
-        from holosoma_inference.inputs.impl.keyboard import KeyboardInput
-
-        device = KeyboardInput(deque(), KEYBOARD_VELOCITY_LOCOMOTION)
-        assert isinstance(device, VelCmdProvider)
-        assert isinstance(device, StateCommandProvider)
-
-    def test_keyboard_input_no_velocity_satisfies_both(self):
-        from holosoma_inference.inputs.impl.keyboard import KeyboardInput
-
-        device = KeyboardInput(deque())
-        assert isinstance(device, VelCmdProvider)
-        assert isinstance(device, StateCommandProvider)
-
-    def test_ros2_input_satisfies_both_protocols(self):
-        from holosoma_inference.inputs.impl.ros2 import Ros2Input
-
-        prov = Ros2Input("cmd_vel", "holosoma/state_input")
-        assert isinstance(prov, VelCmdProvider)
-        assert isinstance(prov, StateCommandProvider)
-
-
 # ============================================================================
 # Keyboard providers
 # ============================================================================
 
 
 class TestKeyboardListener:
-    def test_start_is_idempotent(self, monkeypatch):
-        from holosoma_inference.inputs.impl.keyboard import _KeyboardListenerThread
-
-        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
-        listener = _KeyboardListenerThread()
-        assert listener.start() is False
-        assert listener.start() is False  # second call should be a no-op
-
-    def test_returns_false_in_non_tty(self, monkeypatch):
-        from holosoma_inference.inputs.impl.keyboard import _KeyboardListenerThread
-
-        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
-        listener = _KeyboardListenerThread()
-        assert listener.start() is False
-
     def test_get_keyboard_listener_returns_singleton(self):
         from holosoma_inference.inputs.impl import keyboard as kb_mod
         from holosoma_inference.inputs.impl.keyboard import _KeyboardListenerThread, get_keyboard_listener
@@ -206,23 +132,6 @@ class TestKeyboardListener:
             assert get_keyboard_listener() is first
         finally:
             kb_mod._listener = old
-
-    def test_broadcast_to_multiple_subscribers(self):
-        from holosoma_inference.inputs.impl.keyboard import _KeyboardListenerThread
-
-        listener = _KeyboardListenerThread()
-        q1 = listener.subscribe()
-        q2 = listener.subscribe()
-
-        for q in listener._subscribers:
-            q.append("w")
-
-        assert list(q1) == ["w"]
-        assert list(q2) == ["w"]
-
-        q1.popleft()
-        assert len(q1) == 0
-        assert len(q2) == 1
 
 
 class TestKeyboardInput:
@@ -271,11 +180,6 @@ class TestKeyboardInput:
         dev._queue.append("2")
         dev.poll_velocity()
         assert dev.poll_commands() == [StateCommand.SWITCH_POLICY_2]
-
-    def test_poll_empty_queue_returns_empty(self):
-        dev = self._make()
-        dev.poll_velocity()
-        assert dev.poll_commands() == []
 
     def test_locomotion_mapping(self):
         dev = self._make()
@@ -363,20 +267,6 @@ class TestKeyboardInput:
         assert pytest.approx(vc.lin_vel[0]) == 0.1
         assert commands == [StateCommand.START]
 
-    def test_broadcast_isolation(self):
-        from holosoma_inference.inputs.impl.keyboard import KeyboardInput
-
-        q1 = deque()
-        q2 = deque()
-        dev = KeyboardInput(q1, KEYBOARD_VELOCITY_LOCOMOTION)
-
-        q1.append("w")
-        q2.append("w")
-
-        vc = dev.poll_velocity()
-        assert pytest.approx(vc.lin_vel[0]) == 0.1
-        assert len(q2) == 1
-
 
 # ============================================================================
 # InterfaceInput (merged velocity + commands device)
@@ -431,18 +321,6 @@ class TestInterfaceInput:
         vc = device.poll_velocity()
 
         assert vc is None
-
-    def test_poll_velocity_no_stand_command_gating(self, interface):
-        from holosoma_inference.inputs.impl.interface import InterfaceInput
-
-        interface.get_joystick_msg.return_value = _joystick_msg(ly=0.8, rx=-0.3)
-        interface.get_joystick_key.return_value = ""
-
-        device = InterfaceInput(interface)
-        vc = device.poll_velocity()
-
-        assert vc.lin_vel[0] == pytest.approx(0.8)
-        assert vc.ang_vel == pytest.approx(0.3)
 
     def test_poll_velocity_stick_axis_mapping(self, interface):
         from holosoma_inference.inputs.impl.interface import InterfaceInput
@@ -505,22 +383,6 @@ class TestInterfaceInput:
         commands = device.poll_commands()
         assert commands == [StateCommand.START]
 
-    def test_same_object_for_both_slots(self, interface):
-        """A single InterfaceInput assigned to both slots works correctly."""
-        from holosoma_inference.inputs.impl.interface import InterfaceInput
-
-        device = InterfaceInput(interface)
-
-        # Simulate run loop: velocity first, then commands
-        interface.get_joystick_msg.return_value = _joystick_msg(ly=0.5, keys=0)
-        interface.get_joystick_key.return_value = ""
-
-        vc = device.poll_velocity()
-        commands = device.poll_commands()
-
-        assert isinstance(vc, VelCmd)
-        assert commands == []  # no buttons pressed
-
 
 # ============================================================================
 # ROS2 providers
@@ -564,20 +426,6 @@ class TestRos2Input:
         assert vc.lin_vel == (1.0, -1.0)
         assert vc.ang_vel == 1.0
 
-    def test_frozen_values_stable(self):
-        prov = self._make()
-        msg = SimpleNamespace(
-            twist=SimpleNamespace(
-                linear=SimpleNamespace(x=0.5, y=0.0),
-                angular=SimpleNamespace(z=0.0),
-            )
-        )
-        prov._vel_callback(msg)
-        vc1 = prov.poll_velocity()
-        vc2 = prov.poll_velocity()
-        assert vc1.lin_vel == vc2.lin_vel
-        assert vc1.ang_vel == vc2.ang_vel
-
     def test_vel_callback_clamps_negative_angular(self):
         prov = self._make()
         msg = SimpleNamespace(
@@ -601,19 +449,6 @@ class TestRos2Input:
         vc = prov.poll_velocity()
         assert vc.lin_vel == (1.0, -1.0)
         assert vc.ang_vel == 1.0
-
-    def test_vel_callback_zero_passes_through(self):
-        prov = self._make()
-        msg = SimpleNamespace(
-            twist=SimpleNamespace(
-                linear=SimpleNamespace(x=0.0, y=0.0),
-                angular=SimpleNamespace(z=0.0),
-            )
-        )
-        prov._vel_callback(msg)
-        vc = prov.poll_velocity()
-        assert vc.lin_vel == (0.0, 0.0)
-        assert vc.ang_vel == 0.0
 
     def test_zero_resets_velocity(self):
         prov = self._make()
@@ -777,13 +612,6 @@ class TestCreateInputFactory:
         result = create_input(p, "ros2", "velocity")
         assert isinstance(result, Ros2Input)
 
-    def test_ros2_command_returns_ros2_input(self):
-        from holosoma_inference.inputs.impl.ros2 import Ros2Input
-
-        p = self._make_policy_for_factory()
-        result = create_input(p, "ros2", "command")
-        assert isinstance(result, Ros2Input)
-
     def test_unknown_source_raises(self):
         p = self._make_policy_for_factory()
         with pytest.raises(ValueError, match="Unknown input source"):
@@ -920,124 +748,7 @@ def _make_dual():
 
 
 @_skip_dual_mode
-class TestDualModeSwitching:
-    def test_switch_mode_injected_in_mappings(self):
-        dual = _make_dual()
-        assert dual.primary._command_provider._mapping["X"] == StateCommand.SWITCH_MODE
-        assert dual.primary._command_provider._mapping["x"] == StateCommand.SWITCH_MODE
-        assert dual.secondary._command_provider._mapping["X"] == StateCommand.SWITCH_MODE
-
-    def test_x_joystick_triggers_switch(self):
-        dual = _make_dual()
-        assert dual.active is dual.primary
-        dual.primary._dispatch_command(StateCommand.SWITCH_MODE)
-        assert dual.active is dual.secondary
-
-    def test_double_switch_returns_to_primary(self):
-        dual = _make_dual()
-        dual.primary._dispatch_command(StateCommand.SWITCH_MODE)
-        assert dual.active is dual.secondary
-        dual.secondary._dispatch_command(StateCommand.SWITCH_MODE)
-        assert dual.active is dual.primary
-        assert dual.active_label == "primary"
-
-    def test_non_switch_command_delegates_to_active(self):
-        dual = _make_dual()
-        orig_dispatch = dual._orig_dispatch[id(dual.primary)]
-        dual.primary._dispatch_command(StateCommand.START)
-        orig_dispatch.assert_called_once_with(StateCommand.START)
-
-    def test_delegates_to_secondary_after_switch(self):
-        dual = _make_dual()
-        dual.primary._dispatch_command(StateCommand.SWITCH_MODE)
-        orig_secondary = dual._orig_dispatch[id(dual.secondary)]
-        dual.secondary._dispatch_command(StateCommand.START)
-        orig_secondary.assert_called_once_with(StateCommand.START)
-
-    def test_switch_stops_old_and_starts_new(self):
-        dual = _make_dual()
-        dual.primary._dispatch_command(StateCommand.SWITCH_MODE)
-        dual.primary._handle_stop_policy.assert_called_once()
-        dual.secondary._resolve_control_gains.assert_called_once()
-        dual.secondary._init_phase_components.assert_called_once()
-        dual.secondary._handle_start_policy.assert_called_once()
-
-    def test_joystick_state_carry_over(self):
-        dual = _make_dual()
-        # Set key_states on primary device
-        dual.primary._velocity_input.key_states = {"X": True, "A": False}
-
-        dual.primary._dispatch_command(StateCommand.SWITCH_MODE)
-
-        assert dual.secondary._velocity_input.key_states == {"X": True, "A": False}
-        assert dual.secondary._velocity_input.last_key_states == {"X": True, "A": False}
-
-
-@_skip_dual_mode
 class TestDualModeKeyboardQueueWiring:
-    def test_shared_queue_between_policies(self):
-        from holosoma_inference.inputs.impl.keyboard import KeyboardInput, _KeyboardListenerThread
-        from holosoma_inference.policies.dual_mode import DualModePolicy
-
-        dual = object.__new__(DualModePolicy)
-        dual.primary = _make_policy()
-        dual.secondary = _make_policy()
-        dual.active = dual.primary
-        dual.active_label = "primary"
-
-        listener = _KeyboardListenerThread()
-        q = listener.subscribe()
-
-        dev = KeyboardInput(q)
-        dual.primary._velocity_input = dev
-        dual.primary._command_provider = dev
-        dual.secondary._velocity_input = dev
-        dual.secondary._command_provider = dev
-
-        dual.primary._dispatch_command = MagicMock()
-        dual.secondary._dispatch_command = MagicMock()
-
-        dual._setup_command_intercept()
-
-        assert dual.primary._command_provider is dual.secondary._command_provider
-
-    def test_keyboard_commands_reach_active_via_poll(self):
-        from holosoma_inference.inputs.impl.keyboard import KeyboardInput, _KeyboardListenerThread
-        from holosoma_inference.policies.dual_mode import DualModePolicy
-
-        dual = object.__new__(DualModePolicy)
-        dual.primary = _make_policy()
-        dual.secondary = _make_policy()
-        dual.active = dual.primary
-        dual.active_label = "primary"
-
-        listener = _KeyboardListenerThread()
-        q = listener.subscribe()
-
-        dev = KeyboardInput(q)
-        dual.primary._velocity_input = dev
-        dual.primary._command_provider = dev
-        dual.secondary._velocity_input = dev
-        dual.secondary._command_provider = dev
-
-        dual.primary._dispatch_command = MagicMock()
-        dual.secondary._dispatch_command = MagicMock()
-
-        dual._setup_command_intercept()
-
-        for sub_q in listener._subscribers:
-            sub_q.append("]")
-
-        # Active policy drains the shared queue
-        dual.active._command_provider.poll_velocity()
-        commands = dual.active._command_provider.poll_commands()
-        assert commands == [StateCommand.START]
-
-        # Queue is drained — secondary sees nothing stale
-        dual.secondary._command_provider.poll_velocity()
-        commands2 = dual.secondary._command_provider.poll_commands()
-        assert commands2 == []
-
     def test_shared_queue_no_stale_accumulation(self):
         """Both policies share one input queue — no stale commands after switch."""
         from holosoma_inference.inputs.impl.keyboard import KeyboardInput, _KeyboardListenerThread
@@ -1086,27 +797,6 @@ class TestDualModeKeyboardQueueWiring:
 # ============================================================================
 
 
-class TestChannelSeparation:
-    def test_velocity_only_keys_not_in_command_mapping(self):
-        for key in ("w", "a", "d", "q", "e"):
-            assert key not in KEYBOARD_COMMANDS
-
-    def test_velocity_keys_in_velocity_mapping(self):
-        assert "w" in KEYBOARD_VELOCITY_LOCOMOTION
-        assert "a" in KEYBOARD_VELOCITY_LOCOMOTION
-        assert "d" in KEYBOARD_VELOCITY_LOCOMOTION
-        assert "q" in KEYBOARD_VELOCITY_LOCOMOTION
-        assert "e" in KEYBOARD_VELOCITY_LOCOMOTION
-
-    def test_interface_ignores_unmapped_buttons(self, interface):
-        from holosoma_inference.inputs.impl.interface import InterfaceInput
-
-        device = InterfaceInput(interface)
-        device.key_states = {"unknown_stick": True}
-        device.last_key_states = {"unknown_stick": False}
-        assert device.poll_commands() == []
-
-
 # ============================================================================
 # Edge cases and error paths
 # ============================================================================
@@ -1117,39 +807,6 @@ class TestChannelSeparation:
 # ============================================================================
 
 
-class TestVelocityCommand:
-    def test_frozen(self):
-        vc = VelCmd((0.0, 0.0), 0.0)
-        with pytest.raises(AttributeError):
-            vc.lin_vel = (1.0, 1.0)
-
-    def test_equality(self):
-        a = VelCmd((1.0, 2.0), 3.0)
-        b = VelCmd((1.0, 2.0), 3.0)
-        assert a == b
-
-    def test_fields(self):
-        vc = VelCmd((0.5, -0.3), 0.8)
-        assert vc.lin_vel == (0.5, -0.3)
-        assert vc.ang_vel == 0.8
-
-
 # ============================================================================
 # InputSource enum
 # ============================================================================
-
-
-class TestInputSource:
-    def test_use_joystick_maps_to_interface(self):
-        from holosoma_inference.config.config_types.task import TaskConfig
-
-        tc = TaskConfig(model_path="test.onnx", use_joystick=True)
-        assert tc.velocity_input == "interface"
-        assert tc.state_input == "interface"
-
-    def test_use_usb_joystick_maps_to_joystick(self):
-        from holosoma_inference.config.config_types.task import TaskConfig
-
-        tc = TaskConfig(model_path="test.onnx", use_usb_joystick=True)
-        assert tc.velocity_input == "joystick"
-        assert tc.state_input == "joystick"

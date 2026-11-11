@@ -19,7 +19,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import os
 import pathlib
 import sys
 
@@ -28,6 +27,7 @@ import sys
 if sys.path and sys.path[0].endswith("tests/simulators"):
     sys.path.pop(0)
 
+from tests.simulators._sim_harness import run_and_hard_exit
 from tests.simulators.contact_substep_assert import _build
 
 SETTLE_CONTROL_STEPS = 20
@@ -234,7 +234,7 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
     return failures, report
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim"])
     parser.add_argument("--num-envs", type=int, default=1)
@@ -253,12 +253,9 @@ def main() -> None:
     print("\n".join(lines), flush=True)
     if args.result_file and not failures:
         pathlib.Path(args.result_file).write_text("OK")
-
-    # Hard-exit past teardown (see contact_substep_assert.py).
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(1 if failures else 0)
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
-    main()
+    # Hard-exit past teardown (see contact_substep_assert.py).
+    run_and_hard_exit(main)

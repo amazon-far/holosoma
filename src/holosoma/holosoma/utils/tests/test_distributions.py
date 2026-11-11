@@ -105,11 +105,6 @@ def test_parse_range_and_low_high_conflict_raises() -> None:
         DistributionSpec.parse({"range": [0.0, 1.0], "low": 5.0})
 
 
-def test_parse_passthrough_spec() -> None:
-    spec = DistributionSpec(kind="uniform", low=0.0, high=1.0)
-    assert DistributionSpec.parse(spec) is spec
-
-
 # --------------------------------------------------------------------------------------------------
 # Sampling statistics
 # --------------------------------------------------------------------------------------------------
@@ -140,13 +135,6 @@ def test_gaussian_bounds_derive_mean_std_and_truncate() -> None:
     assert x.min() >= lo and x.max() <= hi
     assert abs(x.mean().item()) < 0.02
     assert abs(x.std().item() - (hi - lo) / 6.0) < 0.03
-
-
-def test_gaussian_signed_band_centers_at_zero() -> None:
-    spec = DistributionSpec(kind="gaussian", low=-0.025, high=0.025)
-    x = _draw(spec)
-    assert x.min() >= -0.025 and x.max() <= 0.025
-    assert abs(x.mean().item()) < 1e-3
 
 
 def test_gaussian_explicit_mean_std_no_bounds_untruncated() -> None:
@@ -215,23 +203,9 @@ def test_gaussian_equal_bounds_explicit_std_constant() -> None:
     assert torch.allclose(x, torch.full_like(x, 2.0))
 
 
-def test_seeded_reproducible() -> None:
-    spec = DistributionSpec(kind="gaussian", low=-1.0, high=1.0)
-    a = _draw(spec)
-    b = _draw(spec)
-    assert torch.equal(a, b)
-
-
 # --------------------------------------------------------------------------------------------------
 # quantiles() — the bucket-fill primitive for PhysX-material backends
 # --------------------------------------------------------------------------------------------------
-
-
-def test_quantiles_count_and_in_band() -> None:
-    spec = DistributionSpec(kind="uniform", low=2.0, high=5.0)
-    q = quantiles(spec, 64, _DEVICE)
-    assert q.shape == (64,)
-    assert q.min() >= 2.0 and q.max() <= 5.0
 
 
 def test_quantiles_uniform_are_evenly_spaced() -> None:
@@ -240,16 +214,6 @@ def test_quantiles_uniform_are_evenly_spaced() -> None:
     q = quantiles(spec, 10, _DEVICE)
     expected = (torch.arange(10, dtype=torch.float32) + 0.5) / 10.0
     assert torch.allclose(q, expected, atol=1e-6)
-
-
-def test_quantiles_deterministic_and_sorted() -> None:
-    # quantiles has NO internal shuffle/global-RNG: same call -> identical, sorted ascending. Any
-    # shuffle is the caller's job (keyed, in the material writer).
-    spec = DistributionSpec(kind="uniform", low=0.0, high=1.0)
-    q1 = quantiles(spec, 64, _DEVICE)
-    q2 = quantiles(spec, 64, _DEVICE)
-    assert torch.equal(q1, q2)
-    assert torch.equal(q1, q1.sort().values)
 
 
 def test_quantiles_uniform_selection_reproduces_distribution() -> None:

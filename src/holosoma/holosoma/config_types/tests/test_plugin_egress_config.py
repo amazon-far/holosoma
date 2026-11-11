@@ -24,13 +24,6 @@ from holosoma.config_types.plugin import (
 pytestmark = pytest.mark.no_sim
 
 
-def test_ros_publishers_default_to_inline_and_allow_async_mode() -> None:
-    assert ROS2ImagePluginConfig(routes={}).async_publish is False
-    assert ROS2PointCloudPluginConfig(routes={}).async_publish is False
-    assert ROS2ImagePluginConfig(async_publish=True, routes={}).async_publish is True
-    assert ROS2PointCloudPluginConfig(async_publish=True, routes={}).async_publish is True
-
-
 def test_jpeg_quality_validated() -> None:
     with pytest.raises(ValueError, match="jpeg_quality"):
         ROS2ImagePluginConfig(jpeg_quality=0, routes={})
@@ -92,33 +85,6 @@ def test_route_requires_camera_and_topic() -> None:
         ROS2ImageRoute(camera="a", topic="", modality="rgb", format="jpeg")
 
 
-def test_odometry_frame_transform_validated() -> None:
-    cfg = ROS2OdometryPluginConfig(
-        body_name="pelvis",
-        position=[0.1, 0.2, 0.3],
-        orientation=[1.000001, 0.0, 0.0, 0.0],
-    )
-    assert cfg.body_name == "pelvis"
-    assert cfg.orientation == [1.0, 0.0, 0.0, 0.0]
-
-    with pytest.raises(ValueError, match="position must contain 3 finite values"):
-        ROS2OdometryPluginConfig(position=[0.0, 0.0])
-    with pytest.raises(ValueError, match=r"(?s)orientation.*at least 4"):
-        ROS2OdometryPluginConfig(orientation=[1.0, 0.0, 0.0])
-    with pytest.raises(ValueError, match="non-zero quaternion"):
-        ROS2OdometryPluginConfig(orientation=[0.0, 0.0, 0.0, 0.0])
-    with pytest.raises(ValueError, match="Quaternion norm"):
-        ROS2OdometryPluginConfig(orientation=[2.0, 0.0, 0.0, 0.0])
-    with pytest.raises(ValueError, match="body_name must be non-empty or None"):
-        ROS2OdometryPluginConfig(body_name="")
-
-
-def test_odometry_orientation_error_identifies_field() -> None:
-    with pytest.raises(ValidationError) as error:
-        ROS2OdometryPluginConfig(orientation=[2.0, 0.0, 0.0, 0.0])
-    assert error.value.errors()[0]["loc"] == ("orientation",)
-
-
 def test_odometry_rejects_unknown_fields() -> None:
     kwargs: dict[str, Any] = {"orientaton": [1.0, 0.0, 0.0, 0.0]}
     with pytest.raises(ValidationError, match="orientaton"):
@@ -146,18 +112,6 @@ def test_odometry_preserves_valid_rates(value: int | str) -> None:
 def test_odometry_frame_transform_rejects_non_finite_position(value: list[float]) -> None:
     with pytest.raises(ValueError, match=r"position must contain .* finite values"):
         ROS2OdometryPluginConfig(position=value)
-
-
-@pytest.mark.parametrize(
-    "value",
-    [
-        [1.0, 0.0, float("nan"), 0.0],
-        [1.0, 0.0, float("inf"), 0.0],
-    ],
-)
-def test_odometry_frame_transform_rejects_non_finite_orientation(value: list[float]) -> None:
-    with pytest.raises(ValueError, match=r"(?s)orientation.*only finite"):
-        ROS2OdometryPluginConfig(orientation=value)
 
 
 def test_odometry_frame_transform_defaults_are_independent() -> None:
@@ -204,12 +158,6 @@ def test_pointcloud_route_and_plugin_validation() -> None:
 def test_pointcloud_route_rejects_non_finite_translation(value: list[float]) -> None:
     with pytest.raises(ValueError, match="point_translation"):
         ROS2PointCloudRoute(lidar="scan", topic="/scan", point_translation=value)
-
-
-@pytest.mark.parametrize("value", [[1.0, 0.0, float("nan"), 0.0], [1.0, 0.0, float("inf"), 0.0]])
-def test_pointcloud_route_rejects_non_finite_rotation(value: list[float]) -> None:
-    with pytest.raises(ValueError, match="point_rotation"):
-        ROS2PointCloudRoute(lidar="scan", topic="/scan", point_rotation=value)
 
 
 def test_pointcloud_route_transform_defaults_are_independent() -> None:

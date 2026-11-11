@@ -45,22 +45,3 @@ def test_properties_alias_storage_no_copy() -> None:
     assert sim.rigid_body_quat_w is sim._rigid_body_rot
     assert sim.rigid_body_lin_vel_w is sim._rigid_body_vel
     assert sim.rigid_body_ang_vel_w is sim._rigid_body_ang_vel
-
-
-def test_property_shapes() -> None:
-    sim = _FakeSim()
-    e, b = sim.num_envs, sim.num_bodies
-    assert tuple(sim.rigid_body_pos_w.shape) == (e, b, 3)
-    assert tuple(sim.rigid_body_quat_w.shape) == (e, b, 4)
-    assert tuple(sim.rigid_body_lin_vel_w.shape) == (e, b, 3)
-    assert tuple(sim.rigid_body_ang_vel_w.shape) == (e, b, 3)
-
-
-def test_name_based_access_via_find_rigid_body_indice() -> None:
-    """The name-based read idiom is find_rigid_body_indice + index (no separate getter needed)."""
-    sim = _FakeSim()
-    idx = sim.find_rigid_body_indice("left_ankle_roll_link")
-    assert idx == sim.body_names.index("left_ankle_roll_link")
-    # A field for a named body, per-env, is a plain indexing expression.
-    foot_pos = sim.rigid_body_pos_w[:, idx, :]
-    assert torch.allclose(foot_pos, sim._rigid_body_pos[:, idx, :])

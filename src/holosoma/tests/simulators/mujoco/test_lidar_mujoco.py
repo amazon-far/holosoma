@@ -28,6 +28,7 @@ def test_lidar_classic(tmp_path):
         str(result_file),
         label="mujoco/lidar",
         timeout=300,
+        reuse_process=True,
         result_file=result_file,
     )
 
@@ -55,6 +56,7 @@ def test_lidar_warp(tmp_path, monkeypatch):
         str(figure_dir),
         label="mjwarp/lidar",
         timeout=400,
+        reuse_process=True,
         result_file=result_file,
     )
     for path in [*expected_figures, *expected_topdown_figures]:
