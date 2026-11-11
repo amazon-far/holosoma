@@ -136,6 +136,7 @@ def register_cameras(sim: IsaacSim, manager: SensorManager) -> None:
             scene = cast(RaycastScene, sim.scene.sensors[name])
             sim.raycast_cameras[name] = RayCastDepthCamera(sim, config, scene)
             record.rerender = partial(sim.raycast_cameras[name].render, record)
+            record.write_mount_pose = sim.raycast_cameras[name].write_mount_pose
             continue
         record.write_mount_pose = partial(_write_camera_mount_pose, sim, name)
         # clone_environments(copy_from_source=False) inherits env_0's USD opinions. Author

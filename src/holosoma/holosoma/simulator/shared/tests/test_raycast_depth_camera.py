@@ -66,6 +66,7 @@ class _FakeSim:
 
     def __init__(self, config: CameraSensorConfig, base_height: float = 2.0) -> None:
         self.num_envs = NUM_ENVS
+        self.sensor_manager = SensorManager(device="cpu", control_hz=50.0, num_envs=NUM_ENVS)
         self.sim_device = "cpu"
         self.sensor_config = {"depth": config}
         self.body_names = list(LINKS)
@@ -95,9 +96,11 @@ def _camera(tmp_path: Path, **overrides: Any) -> CameraSensorConfig:
 
 
 def _camera_and_record(sim: _FakeSim) -> tuple[RayCastDepthCamera, Any]:
+    """Register the camera as Isaac Sim does, on ``sim.sensor_manager``, and initialize it."""
     config = sim.sensor_config["depth"]
-    record = SensorManager(device="cpu", control_hz=50.0).register_camera("depth", config)
+    record = sim.sensor_manager.register_camera("depth", config)
     camera = RayCastDepthCamera(sim, config, sim.scene)  # type: ignore[arg-type]
+    record.write_mount_pose = camera.write_mount_pose
     camera.initialize()
     return camera, record
 
@@ -186,31 +189,27 @@ def test_a_partial_first_render_still_renders_every_env(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("before_first_render", [True, False])
-def test_mount_offsets_move_and_tilt_the_camera_per_env(tmp_path: Path, before_first_render: bool) -> None:
+def test_runtime_mount_poses_move_and_tilt_the_camera_per_env(tmp_path: Path, before_first_render: bool) -> None:
     sim = _FakeSim(_camera(tmp_path, width=15, height=11), base_height=2.0)
     camera, record = _camera_and_record(sim)
-    position = torch.zeros(NUM_ENVS, 3)
-    euler = torch.zeros(NUM_ENVS, 3)
-    position[0, 2] = 0.1  # env 0 raised 10 cm
-    euler[1, 0] = math.radians(20.0)  # env 1 tilted about the link's +X
+    tilt = math.radians(20.0) / 2
+    poses = torch.tensor(
+        [
+            [0.0, 0.0, 0.1, 0.0, 0.0, 0.0, 1.0],  # env 0 raised 10 cm
+            [0.0, 0.0, 0.0, math.sin(tilt), 0.0, 0.0, math.cos(tilt)],  # env 1 tilted 20 deg about +X
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],  # env 2 at the configured mount
+        ]
+    )
     if not before_first_render:
         camera.render(record)
 
-    camera.set_mount_offset(position, euler)
+    sim.sensor_manager.set_mount_pose("depth", poses)
     camera.render(record)
     center = record.buffers["depth"][:, 5, 7, 0]
 
     assert center[0].item() == pytest.approx(2.1, abs=1e-4)
     assert center[1].item() == pytest.approx(2.0 / math.cos(math.radians(20.0)), abs=1e-3)
     assert center[2].item() == pytest.approx(2.0, abs=1e-4)
-
-
-def test_mount_offsets_must_cover_every_env(tmp_path: Path) -> None:
-    sim = _FakeSim(_camera(tmp_path))
-    camera, _ = _camera_and_record(sim)
-
-    with pytest.raises(ValueError, match="Mount offsets"):
-        camera.set_mount_offset(torch.zeros(1, 3), torch.zeros(1, 3))
 
 
 def test_mount_must_be_a_configured_robot_body(tmp_path: Path) -> None:
@@ -225,7 +224,7 @@ def test_mount_must_be_a_configured_robot_body(tmp_path: Path) -> None:
 def test_render_requires_scene_initialization(tmp_path: Path) -> None:
     sim = _FakeSim(_camera(tmp_path))
     config = sim.sensor_config["depth"]
-    record = SensorManager(device="cpu", control_hz=50.0).register_camera("depth", config)
+    record = sim.sensor_manager.register_camera("depth", config)
     camera = RayCastDepthCamera(sim, config, sim.scene)  # type: ignore[arg-type]
     with pytest.raises(RuntimeError, match="initialized after scene loading"):
         camera.render(record)

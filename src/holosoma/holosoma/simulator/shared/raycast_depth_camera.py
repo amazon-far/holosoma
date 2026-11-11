@@ -19,7 +19,7 @@ import numpy as np
 import warp as wp
 
 from holosoma.config_types.sensor import CameraSensorConfig
-from holosoma.utils.rotations import quat_apply, quat_from_euler_xyz, quat_mul
+from holosoma.utils.rotations import quat_apply, quat_mul
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
@@ -116,8 +116,8 @@ def _render_depth_kernel(
 class RayCastDepthCamera:
     """Renders one ray-cast :class:`CameraSensorConfig` camera into its sensor record.
 
-    :meth:`initialize` binds loaded scene geometry after the simulator's load phases. Per-env mount
-    offsets come from a randomization setup term through :meth:`set_mount_offset`.
+    :meth:`initialize` binds loaded scene geometry after the simulator's load phases. Each render
+    places the camera at its record's ``mount_poses``, which ``SensorManager.set_mount_pose`` updates.
     """
 
     def __init__(self, sim: BaseSimulator, config: CameraSensorConfig, mesh_provider: RaycastScene) -> None:
@@ -126,23 +126,9 @@ class RayCastDepthCamera:
         self.device = sim.sim_device
         self.mesh_provider = mesh_provider
         self._ready = False
-        self._position_offset: torch.Tensor | None = None
-        self._euler_offset: torch.Tensor | None = None
 
-    def set_mount_offset(self, position: torch.Tensor, euler: torch.Tensor) -> None:
-        """Perturb each env's mount by ``position`` ``[N, 3]`` (meters) and XYZ Euler ``euler``
-        ``[N, 3]`` (radians), in the mount-link frame: the position offset is added to
-        ``mount.position`` and the rotation is applied about the link axes before
-        ``mount.orientation``."""
-        expected = (self.sim.num_envs, 3)
-        if tuple(position.shape) != expected or tuple(euler.shape) != expected:
-            raise ValueError(
-                f"Mount offsets must be {list(expected)}, got {list(position.shape)} and {list(euler.shape)}."
-            )
-        self._position_offset = position.to(device=self.device, dtype=torch.float32)
-        self._euler_offset = euler.to(device=self.device, dtype=torch.float32)
-        if self._ready:
-            self._set_mount_pose()
+    def write_mount_pose(self, env_ids: torch.Tensor, poses: torch.Tensor) -> None:
+        """Mount-pose writer for the sensor manager: renders read the record's poses, so none is pushed."""
 
     # ------------------------------------------------------------------ setup
 
@@ -171,10 +157,9 @@ class RayCastDepthCamera:
         )
         self._k_inv = wp.mat44(*np.linalg.inv(intrinsics).astype(np.float32).flatten().tolist())
 
-        self._set_mount_pose()
-
         # Persistent buffers the kernel reads and writes.
         dev = self.device
+        self._to_pinhole = torch.tensor(_OPTICAL_TO_PINHOLE_XYZW, dtype=torch.float32, device=dev).repeat(num_envs, 1)
         self._cam_pos = torch.zeros(num_envs, 3, device=dev)
         self._cam_quat = torch.zeros(num_envs, 4, device=dev)
         self._image = torch.zeros(num_envs, cfg.height, cfg.width, device=dev)
@@ -186,27 +171,17 @@ class RayCastDepthCamera:
         self._wp_all_envs = wp.from_torch(self._all_envs, dtype=wp.int32)
         self._ready = True
 
-    def _set_mount_pose(self) -> None:
-        """Each env's camera pose in its mount link's frame, with any offsets applied."""
-        cfg, dev, num_envs = self.config, self.device, self.sim.num_envs
-        position = torch.tensor(cfg.mount.position, dtype=torch.float32, device=dev).expand(num_envs, 3)
-        w, x, y, z = cfg.mount.orientation
-        mount_quat = torch.tensor([x, y, z, w], dtype=torch.float32, device=dev).expand(num_envs, 4).contiguous()
-        if self._position_offset is not None and self._euler_offset is not None:
-            position = position + self._position_offset
-            euler = self._euler_offset
-            mount_quat = quat_mul(quat_from_euler_xyz(euler[:, 0], euler[:, 1], euler[:, 2]), mount_quat, w_last=True)
-        to_pinhole = torch.tensor(_OPTICAL_TO_PINHOLE_XYZW, dtype=torch.float32, device=dev).expand(num_envs, 4)
-        self._local_position = position.clone()
-        self._local_quat = quat_mul(mount_quat, to_pinhole.contiguous(), w_last=True)
-
     # ----------------------------------------------------------------- render
 
-    def _update_poses(self) -> None:
+    def _update_poses(self, record: CameraRecord) -> None:
+        if record.mount_poses is None:
+            raise RuntimeError(f"Ray-cast camera '{record.name}' has no mount poses in its sensor record.")
+        mount = record.mount_poses.to(device=self.device, dtype=torch.float32)  # [N, 7] XYZ + XYZW
+        local_quat = quat_mul(mount[:, 3:].contiguous(), self._to_pinhole, w_last=True)
         link_pos = self.sim.rigid_body_pos_w[:, self._mount_body]
-        link_quat = self.sim.rigid_body_quat_w[:, self._mount_body]
-        self._cam_pos[:] = link_pos + quat_apply(link_quat, self._local_position, w_last=True)
-        self._cam_quat[:] = quat_mul(link_quat.contiguous(), self._local_quat, w_last=True)
+        link_quat = self.sim.rigid_body_quat_w[:, self._mount_body].contiguous()
+        self._cam_pos[:] = link_pos + quat_apply(link_quat, mount[:, :3], w_last=True)
+        self._cam_quat[:] = quat_mul(link_quat, local_quat, w_last=True)
         self.mesh_provider.update_mesh_poses()
 
     def render(self, record: CameraRecord, env_ids: torch.Tensor | None = None) -> None:
@@ -219,7 +194,7 @@ class RayCastDepthCamera:
         ids = self._all_envs if env_ids is None else env_ids.to(device=self.device, dtype=torch.int32).contiguous()
         if ids.numel() == 0:
             return
-        self._update_poses()
+        self._update_poses(record)
         wp_ids = self._wp_all_envs if env_ids is None else wp.from_torch(ids, dtype=wp.int32)
         cfg = self.config
         # On torch's current stream, so the launch is ordered after the pose updates above and
