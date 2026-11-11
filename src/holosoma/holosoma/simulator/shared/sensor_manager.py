@@ -117,11 +117,7 @@ class LidarRecord(SensorRecord):
 
 
 class SensorManager:
-    """Cross-backend sensor registry, mounting poses, cadence and output buffering.
-
-    Available as ``sim.sensor_manager`` even when no sensors are configured. An empty manager
-    allocates no tensors or native resources; backends register sensors during setup.
-    """
+    """Cross-backend sensor registry and runtime mounts, available even without configured sensors."""
 
     def __init__(self, device: str, control_hz: float, *, num_envs: int = 1) -> None:
         self.device = device
@@ -215,13 +211,10 @@ class SensorManager:
         return ids
 
     def get_mount_pose(self, name: str, env_ids: torch.Tensor | None = None) -> torch.Tensor:
-        """Return a writable ``float32 [N, 7]`` copy in ``[x, y, z, qx, qy, qz, qw]`` order.
+        """Return a copy of the selected mount poses as ``[N, 7]`` XYZ + XYZW.
 
-        Positions are meters relative to the configured robot link or actor, or the environment
-        frame for world mounts (excluding ``env_origins``). ``env_ids=None`` selects all environments.
-        Runtime quaternions use XYZW; ``SensorMountConfig.orientation`` uses WXYZ.
-
-        Raises ``KeyError`` for unknown sensors and ``ValueError`` for invalid environment ids.
+        Offsets are relative to the configured parent, or the per-environment frame for world mounts.
+        ``env_ids=None`` selects all environments. Mount configuration quaternions use WXYZ.
         """
         record = self.get_sensor(name)
         if record.mount_poses is None:
@@ -229,26 +222,12 @@ class SensorManager:
         return record.mount_poses[self._mount_env_ids(env_ids)].clone()
 
     def set_mount_pose(self, name: str, poses: torch.Tensor, env_ids: torch.Tensor | None = None) -> None:
-        """Change a camera/LiDAR offset on its configured parent across all backends.
+        """Update camera/LiDAR poses relative to their configured mount.
 
-        ``poses`` uses XYZ + XYZW in the frame described by :meth:`get_mount_pose`. Accepts
-        ``[len(env_ids), 7]`` or a broadcast ``[7]`` pose; ``env_ids=None`` selects every environment.
-        Quaternions must be unit length; norm deviations up to ``1e-4`` are normalized.
-        The optical convention remains ``-Z`` forward, ``+Y`` up.
-
-        Offsets persist across environment resets without changing the original configuration.
-        Updates preserve published buffers and capture cadence and do not advance physics.
-        Isaac cameras require a native rendering pass before their next capture. Call outside
-        CUDA graph capture; existing physics/render graphs read the updated native array contents.
-
-        Raises ``KeyError`` for unknown sensors and ``ValueError`` for invalid poses or ids,
-        including duplicate ids in a write. Validation finishes before the native write.
-
-        Example: randomize translations while retaining each environment's mounting orientation::
-
-            poses = sim.sensor_manager.get_mount_pose("head_camera", env_ids)
-            poses[:, :3] += torch.randn_like(poses[:, :3]) * 0.01
-            sim.sensor_manager.set_mount_pose("head_camera", poses, env_ids)
+        Use XYZ + XYZW with unit quaternions: a single ``[7]`` pose broadcasts, while ``[N, 7]``
+        sets each selected environment. ``env_ids=None`` selects all environments.
+        Offsets persist across resets; sensor outputs reflect the change on their next render/capture.
+        Call outside CUDA graph capture.
         """
         record = self.get_sensor(name)
         ids = self._mount_env_ids(env_ids)
