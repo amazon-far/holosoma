@@ -39,7 +39,12 @@ def build_video_camera(sim: IsaacSim) -> None:
         height=config.height,
         data_types=["rgb"],
     )
-    sim.scene.sensors[_VIDEO_SENSOR] = sim.backend.create_camera(cfg)
+    camera = sim.backend.create_camera(cfg)
+    # Declare independent movie requests before the native renderer binds cameras.
+    register = getattr(camera._renderer, "register_independent_camera", None)
+    if register is not None:
+        register(cfg.prim_path)
+    sim.scene.sensors[_VIDEO_SENSOR] = camera
 
 
 class NativeVideoRecorder(VideoRecorderInterface):
