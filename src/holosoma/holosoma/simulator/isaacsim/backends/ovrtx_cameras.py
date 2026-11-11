@@ -8,6 +8,7 @@ the normal shared batch. The SDK owns cloning, bindings, materials and buffers.
 
 from __future__ import annotations
 
+from dataclasses import fields
 from typing import Any, cast
 
 
@@ -18,15 +19,11 @@ def scheduled_renderer_class() -> type[Any]:
 
     from isaaclab.sim import SimulationContext
     from isaaclab.utils import configclass
-    from isaaclab_ov.renderers.ovrtx_renderer import (
-        OVRTXBackend,
-        OVRTXRenderer,
-        _read_gpu_transforms_enabled,
-    )
-    from isaaclab_ov.renderers.ovrtx_renderer_cfg import OVRTXBackendCfg
+    from isaaclab_ov.renderers.ovrtx_renderer import OVRTXRenderer
+    from isaaclab_ov.renderers.ovrtx_renderer_cfg import OVRTXRendererCfg
 
     @configclass
-    class _ProductBackendCfg(OVRTXBackendCfg):
+    class _ProductRendererCfg(OVRTXRendererCfg):
         # Internal registry identity, never a Holosoma user configuration field.
         owner_key: int = 0
         product_index: int = 0
@@ -49,7 +46,14 @@ def scheduled_renderer_class() -> type[Any]:
         def add(self, renderer: Any, *, publish_current: bool = True) -> None:
             if self.closed:
                 raise RuntimeError("Cannot attach a renderer to a closed material writer.")
-            writer = OVRTXRenderer._create_visual_material_writer(renderer, self.batches)
+            factory = (
+                super(ScheduledOVRTXRenderer, renderer).visual_material_writer
+                if isinstance(renderer, ScheduledOVRTXRenderer)
+                else renderer.visual_material_writer
+            )
+            if factory is None:
+                raise RuntimeError("OVRTX renderer does not provide visual material writes.")
+            writer = factory(self.batches)
             self.writers[id(renderer)] = writer
             try:
                 if publish_current:
@@ -120,21 +124,16 @@ def scheduled_renderer_class() -> type[Any]:
 
         def _new_owner(self) -> Any:
             sim = SimulationContext.instance()
-            # Construction reuses the already-active first camera engine, so no
-            # otherwise-unused singleton engine is created or started.
-            child = OVRTXRenderer(self.cfg)
-            backend = sim.get_or_create_backend(
-                _ProductBackendCfg(
-                    class_type=OVRTXBackend,
-                    renderer_cfg=self.cfg,
-                    use_ovstage=self._use_ovstage,
-                    read_gpu_transforms=_read_gpu_transforms_enabled(),
-                    device=sim.device,
+            # Let the SDK create the correct backend through its normal
+            # constructor. Registry identity differs; rendering settings do not.
+            child = OVRTXRenderer(
+                _ProductRendererCfg(
+                    **{field.name: getattr(self.cfg, field.name) for field in fields(self.cfg) if field.init},
                     owner_key=id(self),
                     product_index=len(self._owners),
                 )
             )
-            child.backend = backend
+            backend = child.backend
             try:
                 if self._prepared_scene is None:
                     raise RuntimeError("OVRTX stage must be prepared before camera data.")
@@ -259,13 +258,13 @@ def scheduled_renderer_class() -> type[Any]:
                 self._data_owners.pop(id(data), None)
                 self._all_data.pop(id(data), None)
 
-        def _create_visual_material_writer(self, batches: Any) -> Any:
+        def _make_material_writers(self, batches: Any) -> Any:
             self._material_writers = _MaterialWriters(self._owners, batches)
             return self._material_writers
 
         @property
         def visual_material_writer(self) -> Any:
-            return self._create_visual_material_writer
+            return self._make_material_writers
 
         def close(self) -> None:
             if self._closed:

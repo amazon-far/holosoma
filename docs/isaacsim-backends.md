@@ -121,8 +121,12 @@ for lower measured capture cost; the comparison includes every-tile RGB/depth
 checks, rather than capture counts alone.
 Multiple native engines add per-product memory and, in the pinned OVRTX build,
 disable video textures on scene materials. Camera movie recording still works.
-Default temporal reconstruction also advances only on actual captures, so slower
-cameras can retain more previous material color than continuously rendered cameras.
+OVRTX retains the SDK's fixed `1/60` native snapshot increment; native sensor
+time is separate from physics time. Matched controls found identical slow-camera
+frames with and without a fast persistent owner in the standalone scene.
+The SDK scene retains some prior material color already present in native output;
+this does not establish the exact pinned temporal-filter mechanism.
+See the [timing, quality and compatibility investigation](ovrtx-timing-and-quality.md).
 Isaac RTX activates only due tiled products and pauses each on its native
 completion event, then reads the SDK-owned output buffers. Viewer renders
 and logger movie captures do not activate idle perception products.
