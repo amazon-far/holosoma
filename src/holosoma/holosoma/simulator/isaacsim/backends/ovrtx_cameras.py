@@ -13,6 +13,7 @@ from typing import Any, cast
 
 
 def scheduled_renderer_class() -> type[Any]:
+    """Build the SDK adapter lazily, keeping unused native runtimes unloaded."""
     # Match Holosoma's existing lazy factory; importing this file starts no runtime.
     # Lab 3 uses Python 3.12; Holosoma's shared type-check target remains 3.10.
     from builtins import ExceptionGroup  # type: ignore[attr-defined]
@@ -29,6 +30,12 @@ def scheduled_renderer_class() -> type[Any]:
         product_index: int = 0
 
     class _MaterialWriters:
+        """Fan shared material buffers out to every owner, including later cameras.
+
+        Each SDK writer owns its native binding; close writers before releasing
+        camera data or backends. Publishing a later owner preserves current colors.
+        """
+
         def __init__(self, renderers: Any, batches: Any) -> None:
             self.batches = batches
             self.writers: dict[int, Any] = {}
@@ -86,6 +93,14 @@ def scheduled_renderer_class() -> type[Any]:
                 raise ExceptionGroup("Failed closing isolated OVRTX material writers", errors)
 
     class ScheduledOVRTXRenderer(OVRTXRenderer):
+        """Keep fixed products per owner when camera schedules can diverge.
+
+        Declare cadence and independent cameras before stage preparation. The
+        prepared SDK scene is reused without authoring the shared stage again;
+        uniform rates without independent cameras retain the ordinary shared
+        renderer and multiview batch.
+        """
+
         def __init__(self, cfg: Any) -> None:
             super().__init__(cfg)
             # The parent owns the first product and uses its ordinary registry engine.

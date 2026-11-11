@@ -136,7 +136,11 @@ class IsaacLab3NewtonConfig:
     debug_mode: bool = False
     """Log Newton solver convergence diagnostics."""
     collision_decimation: int = 0
-    """Newton collision update interval; zero uses one update per simulation step."""
+    """Recompute collisions every N solver substeps within a physics tick.
+
+    Zero computes once per tick. Positive values require
+    ``collision_decimation < sim.substeps`` to enable mid-tick updates.
+    """
 
     @model_validator(mode="after")
     def _validate_newton_options(self) -> IsaacLab3NewtonConfig:

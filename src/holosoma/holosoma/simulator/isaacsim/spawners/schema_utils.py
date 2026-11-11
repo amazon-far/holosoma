@@ -20,7 +20,7 @@ Solution:
 This module provides the ensure_api_and_modify() pattern that:
 1. Checks if the required API exists anywhere in the prim subtree
 2. If not found, applies the API to the root prim first
-3. Then calls the original modify function which now succeeds
+3. Then calls the original modify function and reports its result
 
 This approach preserves IsaacLab's nested API handling while ensuring robustness
 for USD files with missing APIs.
@@ -39,8 +39,9 @@ ensure_api_and_modify(
     prim_path,
     cfg.rigid_props,
     UsdPhysics.RigidBodyAPI,
-    schemas.modify_rigid_body_properties
-)  # Always succeeds
+    schemas.modify_rigid_body_properties,
+    stage=stage,
+)
 ```
 """
 

@@ -119,6 +119,9 @@ def test_physics_and_camera_renderer_matrix(physics, renderer, isaacsim_backend,
         timeout=900,
         result_file=result_file,
     )
+    if renderer != "isaac_rtx":
+        # These harnesses intentionally exercise ordinary native teardown.
+        assert result.returncode == 0, result.stderr[-3000:]
     if physics == "newton":
         assert "narrowphase overflow" not in (result.stdout + result.stderr).lower(), result.stdout[-3000:]
 
@@ -154,7 +157,7 @@ def test_physics_only_startup(physics, renderer, isaacsim_backend, run_isaacsim_
     if isaacsim_backend != "isaaclab3":
         pytest.skip("standalone startup requires the explicit Isaac Lab 3 profile")
     result_file = tmp_path / "physics-only.txt"
-    run_isaacsim_harness(
+    result = run_isaacsim_harness(
         Path(__file__).resolve().parents[1] / "isaaclab3_startup_assert.py",
         "--physics",
         physics,
@@ -166,6 +169,7 @@ def test_physics_only_startup(physics, renderer, isaacsim_backend, run_isaacsim_
         timeout=900,
         result_file=result_file,
     )
+    assert result.returncode == 0, result.stderr[-3000:]
 
 
 @pytest.mark.parametrize("physics", ["physx", "newton"])

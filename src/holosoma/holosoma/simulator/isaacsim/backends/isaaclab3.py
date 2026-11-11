@@ -63,10 +63,16 @@ class IsaacLab3Runtime:
         if self._closed:
             return
         self._closed = True
-        if self._app is None:
-            from isaaclab.sim import SimulationContext
+        try:
+            if self._app is None:
+                from isaaclab.sim import SimulationContext
 
-            SimulationContext.clear_instance()
+                SimulationContext.clear_instance()
+        except BaseException as error:
+            # Preserve the failure status and release the launchers even when
+            # native resource teardown fails before their context exits.
+            _RUNTIME.__exit__(type(error), error, error.__traceback__)
+            raise
         _RUNTIME.__exit__(SystemExit, SystemExit(exit_code), None)
 
     def is_running(self) -> bool:
@@ -578,6 +584,12 @@ class IsaacLab3Backend(IsaacLabBackend):
 
     def renderer_config(self) -> Any:
         """Declare the camera renderer both at launch and at sensor construction."""
+        settings = configured(self.options.renderer_options)
+        if self.options.renderer == "ovrtx" and "enable_shadows" in settings:
+            raise ValueError(
+                "isaaclab3.renderer_options.enable_shadows is Warp-only: "
+                "OVRTX RGB/depth outputs always include shadows."
+            )
         if self.options.renderer == "ovrtx":
             from isaaclab_ov.renderers import OVRTXRendererCfg
 
@@ -590,7 +602,7 @@ class IsaacLab3Backend(IsaacLabBackend):
             from isaaclab_physx.renderers import IsaacRtxRendererCfg
 
             cls = IsaacRtxRendererCfg
-        cfg = build_config(cls, configured(self.options.renderer_options), location="isaaclab3.renderer_options")
+        cfg = build_config(cls, settings, location="isaaclab3.renderer_options")
         if self.options.renderer == "ovrtx":
             from .camera_renderers import create_scheduled_ovrtx_renderer
 

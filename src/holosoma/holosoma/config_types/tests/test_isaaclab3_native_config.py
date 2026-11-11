@@ -37,6 +37,8 @@ def test_cli_and_saved_config_preserve_shared_options_and_link_precedence(tmp_pa
             "simulator:isaacsim3",
             "--simulator.config.sim.isaaclab3.physics-backend",
             "newton",
+            "--simulator.config.sim.isaaclab3.renderer",
+            "newton_warp",
             "--simulator.config.sim.mujoco.iterations",
             "17",
             "--simulator.config.sim.mujoco.cone",
@@ -105,10 +107,18 @@ def test_unsupported_shared_inputs_report_the_config_path(shared: MujocoConfig, 
         solver_settings(shared, IsaacLab3NewtonConfig())
 
 
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), -1])
-def test_typed_renderer_rejects_invalid_distance(value: float) -> None:
-    with pytest.raises(ValidationError):
-        IsaacLab3RendererConfig(max_distance=value)
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("max_distance", 5.0),
+        ("depth_clipping_behavior", "max"),
+        ("colorize_semantic_segmentation", True),
+        ("colorize_instance_segmentation", True),
+    ],
+)
+def test_renderer_rejects_duplicate_camera_controls_and_unavailable_outputs(field: str, value: Any) -> None:
+    with pytest.raises(ValidationError, match="Unexpected keyword argument"):
+        IsaacLab3RendererConfig(**{field: value})
 
 
 def test_collision_options_have_one_selector() -> None:

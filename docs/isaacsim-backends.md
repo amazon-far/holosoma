@@ -177,12 +177,19 @@ can carry its solver and contact settings across direct MJWarp and Isaac Lab 3:
 
 ```bash
 --simulator.config.sim.isaaclab3.physics-backend newton
+--simulator.config.sim.isaaclab3.renderer newton_warp
 --simulator.config.sim.mujoco.iterations 50
 --simulator.config.sim.mujoco.cone elliptic
 --simulator.config.sim.mujoco.impratio 3.0
 --simulator.config.sim.mujoco.warp.nconmax-per-env 256
 --simulator.config.sim.isaaclab3.renderer-options.enable-shadows False
 ```
+
+Renderer options currently expose Warp shadows, textures, ambient lighting,
+backface culling and CUDA graph capture. OVRTX RGB/depth always include shadows;
+an explicit `enable-shadows` request for OVRTX fails rather than silently doing
+nothing. Camera `far` and `depth_clipping_behavior` remain the single controls for
+ray range and shared depth clipping. Segmentation outputs are not yet supported.
 
 Supported shared solver fields are `integrator`, `solver`, `cone`, `jacobian`,
 `impratio`, `iterations`, `tolerance`, `ls_iterations` and `ls_tolerance`.

@@ -239,8 +239,16 @@ def main():
     parser.add_argument("--shader-cache", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
-    rates = [int(value) for value in args.decimations.split(",")]
-    assert all(rate > 0 for rate in rates)
+    if not 0 <= args.warmup < args.frames:
+        parser.error("--warmup must be nonnegative and less than --frames.")
+    if args.instances <= 0 or args.resolution <= 0:
+        parser.error("--instances and --resolution must be positive.")
+    try:
+        rates = [int(value) for value in args.decimations.split(",")]
+    except ValueError:
+        parser.error("--decimations must be comma-separated positive integers.")
+    if any(rate <= 0 for rate in rates):
+        parser.error("--decimations must be comma-separated positive integers.")
     assert not args.identical_instance_paths or args.strategy == "instances"
     assert not args.serial_single_prime or args.strategy == "serial"
 

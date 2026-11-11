@@ -176,15 +176,19 @@ Isaac RTX configs, and camera data is restricted to RGB/depth.
 Independent camera capture cadence already uses `CameraSensorConfig.update_decimation`.
 The current integration also schedules actual GPU captures with that setting.
 Warp renders only the requested camera. OVRTX retains the SDK's efficient batch
-when cameras share a cadence. Mixed rates and movie coexistence submit each due
-product separately, completing its SDK readback before the next submission.
+when cameras share a cadence. Mixed rates and movie coexistence give each product
+a persistent SDK/native owner and a stable one-product batch, completing readback
+before another submission on that engine.
 OVRTX 0.5.1.385782 can return another camera's orientation when the active set of
 multiview products changes, including with native `frameRate`/`startTime` gating.
 The standalone [reproducer](ovrtx-camera-cadence-repro.md) requires neither
-Holosoma nor Isaac Lab. Individual submissions skip idle GPU captures but incur
-substantial product re-entry overhead; a wall-clock speedup is not established
-for this OVRTX workaround. The SDK continues to own scene setup, both legacy
-and OVStage submissions, output processing, and resource lifetimes.
+Holosoma nor Isaac Lab. Serial submissions on a shared engine were correct but
+slow. Persistent owners avoid that product re-entry overhead: the matched
+eight-environment, 512×512, 50/10 Hz cohort measured 9.98 ms per capture/readout
+cycle, versus 118.34 ms serialized and 13.04 ms normal batching. See the
+reproducer comparison for counts, memory and startup caveats. The SDK continues
+to own scene setup, legacy and OVStage submissions, output processing and resource
+lifetimes.
 
 Isaac RTX keeps each tiled product paused until its camera is due. It publishes
 prepared poses through the SDK's Fabric bridge, activates due products, and
@@ -198,9 +202,11 @@ Viewer and movie work must leave idle perception products paused.
 Rates above the control clock and asynchronous sampling need timestamps/history.
 
 Expose global renderer configs, per-camera overrides and `isp_cfg`. OVRTX has
-async capture, shadow, segmentation colorization and logging/temp-stage options.
+async capture, segmentation colorization and logging/temp-stage options; its
+shadow toggle affects minimal-shading outputs, while RGB/depth always cast shadows.
 Warp adds textures, shadows, ambient lighting, semantic filtering, clipping,
-tiling and kernel options. Add output contracts for supported segmentation,
+tiling and kernel options. Ray range and depth clipping use existing per-camera
+controls rather than duplicate renderer options. Add output contracts for supported segmentation,
 normals and other requested products: integer IDs, metadata and vector-valued
 images must not inherit RGB normalization/interpolation.
 

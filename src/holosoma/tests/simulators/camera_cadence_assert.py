@@ -49,7 +49,16 @@ def main() -> int:
     parser.add_argument("--record", help="Check movie recording alongside scheduled perception cameras.")
     parser.add_argument("--result-file", required=True)
     args = parser.parse_args()
-    decimations = [int(value) for value in args.decimations.split(",")]
+    if args.frames <= 10:
+        parser.error("--frames must exceed the 10-frame warmup.")
+    if args.num_envs <= 0 or args.resolution <= 0:
+        parser.error("--num-envs and --resolution must be positive.")
+    try:
+        decimations = [int(value) for value in args.decimations.split(",")]
+    except ValueError:
+        parser.error("--decimations must be comma-separated positive integers.")
+    if any(value <= 0 for value in decimations):
+        parser.error("--decimations must be comma-separated positive integers.")
     camera = dataclasses.replace(
         _camera_presets.front_cam_depth["front_cam"],
         width=args.resolution,
