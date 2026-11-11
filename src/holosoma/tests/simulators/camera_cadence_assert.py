@@ -181,8 +181,9 @@ def main() -> int:
         assert recorder is not None
         origin = sim.env_origins[recorder.config.record_env_id].cpu().tolist()
         recorder.camera_controller.config = FixedCameraConfig(
-            position=[origin[0] + 0.1, origin[1], origin[2] + 0.79],
-            target=[origin[0] + 1.0, origin[1], origin[2] + 0.79],
+            # Distinguish the movie view from every perception camera.
+            position=[origin[0] + 0.1, origin[1] + 0.06, origin[2] + 0.83],
+            target=[origin[0] + 1.0, origin[1] + 0.06, origin[2] + 0.83],
         )
         recorder.on_episode_start(env_id=0)
         if args.renderer == "isaac_rtx":
@@ -278,8 +279,10 @@ def main() -> int:
                 )
             else:
                 movie_depth = recorder._camera.data.output["distance_to_image_plane"].torch[0, ..., 0]
-            expected = (args.resolution - 1) / 2 - panel_ys[0] * args.resolution / (
-                2 * math.tan(math.radians(camera.vertical_fov) / 2) * panel_distances[0]
+            scale = args.resolution / (2 * math.tan(math.radians(camera.vertical_fov) / 2) * panel_distances[0])
+            expected = torch.tensor(
+                [(args.resolution - 1) / 2 + 0.04 * scale, (args.resolution - 1) / 2 - (panel_ys[0] - 0.06) * scale],
+                device=device,
             )
             panel = (movie_depth - panel_distances[0]).abs() < 0.015
             movie_rgb = torch.as_tensor(movie_frame, device=device)
@@ -288,16 +291,16 @@ def main() -> int:
             assert panel.any() and current.any(), f"Movie: no current surface at frame {frame}."
             tolerance = max(1.2, args.resolution * 0.02)
             for label, mask in (("depth", panel), ("RGB", current)):
-                center = mask.nonzero().float().mean(dim=0)[1].item()
-                assert abs(center - expected) < tolerance, (
-                    f"Movie: stale {label} at frame {frame}: column {center}, expected {expected}."
+                center = mask.nonzero().float().mean(dim=0)
+                assert (center - expected).abs().max().item() < tolerance, (
+                    f"Movie: stale {label} at frame {frame}: {center.tolist()}, expected {expected.tolist()}."
                 )
             if frame == 1:
                 old_rgb = torch.as_tensor(snapshots[0], device=device)
                 stale = (old_rgb[..., 0].short() > old_rgb[..., 1].short() + 30) & panel
-                assert not stale.any() or abs(stale.nonzero().float().mean(dim=0)[1].item() - expected) >= tolerance, (
-                    "Movie freshness criterion accepted the previous RGB image."
-                )
+                assert (
+                    not stale.any() or (stale.nonzero().float().mean(dim=0) - expected).abs().max().item() >= tolerance
+                ), "Movie freshness criterion accepted the previous RGB image."
             if frame in (0, args.frames - 1):
                 snapshots[frame] = movie_frame.copy()
         if args.renderer == "isaac_rtx":
