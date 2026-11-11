@@ -215,10 +215,15 @@ def _mutable_multi_mesh_ray_caster_cls() -> type[Any]:
         """Multi-mesh ray caster with fixed-shape directions and per-environment mount offsets."""
 
         def _initialize_rays_impl(self) -> None:
+            # A native context reset rebuilds rays from cfg; retain runtime offsets across it.
+            previous_starts = self.ray_starts.clone() if hasattr(self, "_mount_orientations") else None
             super()._initialize_rays_impl()
-            self._mount_orientations = torch.tensor(
-                self.cfg.offset.rot, device=self.device, dtype=self.ray_directions.dtype
-            ).repeat(self.ray_directions.shape[0], 1)
+            if previous_starts is not None:
+                self.ray_starts.copy_(previous_starts)
+            else:
+                self._mount_orientations = torch.tensor(
+                    self.cfg.offset.rot, device=self.device, dtype=self.ray_directions.dtype
+                ).repeat(self.ray_directions.shape[0], 1)
 
         def set_mount_pose(self, env_ids: torch.Tensor, poses: torch.Tensor) -> None:
             self.ray_starts[env_ids] = poses[:, None, :3]
