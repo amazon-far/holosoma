@@ -7,7 +7,7 @@ from dataclasses import field
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import ConfigDict, SerializerFunctionWrapHandler, field_validator, model_serializer, model_validator
+from pydantic import ConfigDict, field_validator, model_validator
 from pydantic.dataclasses import dataclass
 from pydantic_core import ArgsKwargs
 
@@ -193,18 +193,6 @@ class IsaacSim6Config:
 
     renderer_options: IsaacSim6RendererConfig = field(default_factory=IsaacSim6RendererConfig)
     """Typed camera options for the selected renderer."""
-
-    @model_serializer(mode="wrap")
-    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        """Keep Pydantic exports consistent with saved experiment configs."""
-        data: dict[str, Any] = handler(self)
-        if self.newton == IsaacSim6NewtonConfig():
-            data.pop("newton", None)
-        if "renderer_options" in data:
-            data["renderer_options"] = {
-                name: value for name, value in data["renderer_options"].items() if value is not None
-            }
-        return data
 
 
 @dataclass(frozen=True)

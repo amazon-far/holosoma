@@ -36,7 +36,7 @@ from holosoma.config_types.reward import RewardManagerCfg
 from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.sensor import SensorConfig
-from holosoma.config_types.simulator import IsaacSim6NewtonConfig, SimulatorConfig
+from holosoma.config_types.simulator import SimulatorConfig
 from holosoma.config_types.termination import TerminationManagerCfg
 from holosoma.config_types.terrain import TerrainManagerCfg
 from holosoma.utils.config_registry import UseRegistry
@@ -246,13 +246,6 @@ class ExperimentConfig:
     def to_serializable_dict(self) -> dict[str, Any]:
         """Return a JSON-friendly representation of the config."""
         data = dataclasses.asdict(self)
-        # Keep inactive Newton defaults out of saved experiments.
-        native = data["simulator"]["config"]["sim"]["isaacsim6"]
-        if self.simulator.config.sim.isaacsim6.newton == IsaacSim6NewtonConfig():
-            native.pop("newton")
-        native["renderer_options"] = {
-            name: value for name, value in native["renderer_options"].items() if value is not None
-        }
         # Directly using yaml.safe_dump does not handle string enums properly,
         # so round-trip through JSON to coerce typing objects into primitives.
         return cast("dict[str, Any]", json.loads(json.dumps(data)))
