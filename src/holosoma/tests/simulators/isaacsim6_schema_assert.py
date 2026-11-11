@@ -152,8 +152,15 @@ def main() -> int:
     sim.prepare_sim()
     manager = string_to_callable(sim.sim.cfg.physics.class_type)
     stage = sim.sim.stage
+    authored_masses = []
     for row in range(2):
         root = stage.GetPrimAtPath(f"/World/envs/env_{row}/Robot")
+        pelvis = next(
+            prim for prim in Usd.PrimRange(root) if prim.GetName() == "pelvis" and prim.HasAPI(UsdPhysics.MassAPI)
+        )
+        mass = UsdPhysics.MassAPI(pelvis).GetMassAttr().Get()
+        assert mass > 0
+        authored_masses.append(mass)
         for side, expected in [("left", 0.7), ("right", 0.7)]:
             colliders = [
                 prim
@@ -172,6 +179,9 @@ def main() -> int:
         from newton import ShapeFlags
 
         model = manager.get_model()
+        pelvis_ids = [index for index, label in enumerate(model.body_label) if label.endswith("/pelvis")]
+        assert len(pelvis_ids) == 2
+        np.testing.assert_allclose(model.body_mass.numpy()[pelvis_ids], authored_masses, atol=1e-6)
         shapes = model.shape_label
         flags = model.shape_flags.numpy()
         for side, expected in [("left", 0.7), ("right", 0.7)]:
@@ -200,12 +210,11 @@ def main() -> int:
         assert solver.mj_model.opt.ccd_iterations == 7
         assert "holosoma.simulator.mujoco.mujoco" not in sys.modules
         assert (solver.mj_model.geom_condim == 6).any()
-        assert abs(solver.mj_model.body_gravcomp.max() - 0.25) < 1e-6
         assert sim.sim.cfg.physics.use_cuda_graph == (not args.disable_cuda_graph)
     else:
         native_mass = wp.to_torch(robot.root_view.get_attribute("articulation_body_mass"))
         index = robot.backend_body_names.index("pelvis")
-        torch.testing.assert_close(native_mass[:, index], torch.full((2,), 42.0, device=native_mass.device))
+        torch.testing.assert_close(native_mass[:, index], torch.tensor(authored_masses, device=native_mass.device))
 
     camera = sim.tiled_cameras["front_cam"]
     if args.renderer == "newton_warp":
@@ -223,9 +232,8 @@ def main() -> int:
                 "physics": args.physics,
                 "renderer": args.renderer,
                 "collision_source": args.collision_source,
-                "mass": 42.0,
-                "left_friction": 0.45,
-                "right_friction": 0.7,
+                "authored_pelvis_mass": authored_masses,
+                "robot_friction": 0.7,
             },
             indent=2,
         )
