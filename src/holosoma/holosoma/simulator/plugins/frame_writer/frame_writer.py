@@ -225,7 +225,6 @@ class FrameWriterPlugin(CameraConsumerPlugin):
     def _open_encoder(self, key: StreamKey, path: Path, packet: FramePacket) -> H264StreamEncoder:
         """Start a stream's encoder at its camera's render rate (control rate / render decimation)."""
         sensor_manager = self.simulator.sensor_manager
-        assert sensor_manager is not None  # the cameras this writer consumes are registered with it
         decimation = sensor_manager.get(key[0]).effective_decimation
         height, width = packet.array.shape[:2]
         return H264StreamEncoder(
