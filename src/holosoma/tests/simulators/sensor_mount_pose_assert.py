@@ -13,8 +13,7 @@ from pathlib import Path
 if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
-from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit, step
+from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit, step
 
 
 def _sensors():
@@ -99,10 +98,9 @@ def main() -> int:
         config = _camera_presets.as_mjwarp(config)
     device = "cpu" if args.simulator == "mujoco" else "cuda:0"
     config = dataclasses.replace(
-        config, device=device, training=dataclasses.replace(config.training, num_envs=args.num_envs)
+        config, device=device, training=dataclasses.replace(config.training, num_envs=args.num_envs, headless=True)
     )
-    env, device, _app = setup_simulation_environment(config, device=device)
-    sim = env.sim
+    sim, device, _app = launch_simulator(config, device=device)
     manager = sim.sensor_manager
     sim.set_headless(True)
     sim.setup()
