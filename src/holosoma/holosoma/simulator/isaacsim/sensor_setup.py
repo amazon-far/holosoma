@@ -35,8 +35,9 @@ from holosoma.config_types.sensor import (
     is_isaacsim_raycast_camera,
 )
 from holosoma.simulator.isaacsim.camera_projection import camera_spawn_cfg_for
-from holosoma.simulator.isaacsim.raycast_mesh_poses import RobotMeshPoses
-from holosoma.simulator.isaacsim.raycast_target_discovery import (
+from holosoma.simulator.isaacsim.raycast_targets import (
+    TERRAIN_PRIM_PATH,
+    RobotMeshPoses,
     _is_path_at_or_below,
     assemble_default_mesh_prim_paths,
     select_mesh_prim_paths,
@@ -48,11 +49,9 @@ from holosoma.simulator.isaacsim.prim_utils import (
     resolve_robot_link_rigid_body_prim_expression,
     set_instanceable,
 )
-from holosoma.simulator.isaacsim.terrain_mesh_cache import TERRAIN_PRIM_PATH
 from holosoma.simulator.shared.lidar_range import finalize_lidar_returns
-from holosoma.simulator.shared.raycast_scene import RaycastScene, RaycastSceneMeshes
 from holosoma.simulator.shared.sensor_manager import SensorManager
-from holosoma.simulator.shared.raycast_depth_camera import RayCastDepthCamera
+from holosoma.simulator.shared.raycast_depth_camera import RayCastDepthCamera, RaycastScene, RaycastSceneMeshes
 
 if TYPE_CHECKING:
     from holosoma.config_types.sensor import LidarRayPatternConfig, SensorMountConfig

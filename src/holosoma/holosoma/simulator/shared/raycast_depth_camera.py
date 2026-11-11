@@ -12,19 +12,42 @@ renderers, and each ray keeps the nearest scene-mesh hit.
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 import warp as wp
 
 from holosoma.config_types.sensor import CameraSensorConfig
-from holosoma.simulator.shared.raycast_scene import RaycastScene
 from holosoma.utils.rotations import quat_apply, quat_from_euler_xyz, quat_mul
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
     from holosoma.simulator.shared.sensor_manager import CameraRecord
+
+
+@dataclass(frozen=True)
+class RaycastSceneMeshes:
+    """Persistent per-environment mesh IDs and world poses, owned by the scene provider.
+
+    IDs and poses have shape ``[num_envs, num_meshes]``; positions are Warp vec3 and orientations
+    are Warp quaternions (xyzw). The provider retains the meshes and updates poses in place.
+    """
+
+    mesh_ids: wp.array[Any]
+    positions: wp.array[Any]
+    orientations: wp.array[Any]
+    num_meshes: int
+
+
+class RaycastScene(Protocol):
+    """Scene geometry initialized after assets load; pose updates do not perform ray queries."""
+
+    def prepare_meshes(self) -> RaycastSceneMeshes: ...
+
+    def update_mesh_poses(self) -> None: ...
+
 
 # Rotates the shared optical frame (-Z forward, +Y up) into the pinhole frame the kernel
 # casts in (+Z forward, +Y down): a half turn about X, as an xyzw quaternion.

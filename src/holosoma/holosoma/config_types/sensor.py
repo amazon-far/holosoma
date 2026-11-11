@@ -212,7 +212,7 @@ class IsaacSimFisheyeConfig:
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)
 class IsaacSimRaycastMeshConfig:
-    """Select loaded scene geometry for ray-cast depth, without loading separate mesh files."""
+    """Select the loaded scene geometry a ray-cast depth camera casts against."""
 
     include_paths: list[str] | None = None
     """USD prim-path expressions using IsaacLab's per-component regex matching, as for LiDAR.
@@ -231,10 +231,9 @@ class IsaacSimRaycastMeshConfig:
 
     Exclusions take precedence. Hidden geometry (other than the ground) and proxy/guide-purpose
     geometry are always omitted, even when explicitly included; material opacity is not
-    interpreted. An explicit
-    include list already omits other geometry; excluding everything would also remove those
-    includes. Meshes retain their authored scale and local transforms, and follow their scene
-    bodies without rebuilding the mesh.
+    interpreted. An explicit include list already omits other geometry; excluding everything would
+    also remove those includes. Meshes keep their authored scale and local transforms and follow
+    their scene bodies.
     """
 
     @model_validator(mode="after")
@@ -274,9 +273,8 @@ class IsaacSimCameraConfig:
     """``"rtx"`` renders with an RTX ``TiledCamera``. ``"raycast"`` ray casts depth with Warp against
     loaded scene geometry selected by :attr:`raycast_meshes` at its current poses: depth only,
     pinhole only, mounted on a link in the robot config's ``body_names``, no RTX render pass, and
-    envs reset or teleported in a
-    control step are re-rendered at their new state. Other backends ignore it and render the camera
-    natively. Defaults to ``"rtx"``."""
+    envs reset or teleported in a control step are re-rendered at their new state. Other backends
+    ignore it and render the camera natively. Defaults to ``"rtx"``."""
 
     raycast_meshes: IsaacSimRaycastMeshConfig = field(default_factory=IsaacSimRaycastMeshConfig)
     """Loaded scene object/mesh inclusion and exclusion for ``renderer="raycast"``; ignored by other

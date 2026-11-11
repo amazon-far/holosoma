@@ -13,8 +13,7 @@ import numpy as np
 import pytest
 
 from holosoma.config_types.sensor import CameraSensorConfig, IsaacSimCameraConfig, SensorMountConfig
-from holosoma.simulator.shared.raycast_depth_camera import RayCastDepthCamera
-from holosoma.simulator.shared.raycast_scene import RaycastSceneMeshes
+from holosoma.simulator.shared.raycast_depth_camera import RayCastDepthCamera, RaycastSceneMeshes
 from holosoma.simulator.shared.sensor_manager import SensorManager
 from holosoma.utils.safe_torch_import import torch
 

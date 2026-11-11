@@ -15,7 +15,7 @@ from holosoma.config_types.sensor import (
     LidarSensorConfig,
 )
 from holosoma.config_values.sensor import SENSOR_REGISTRY
-from holosoma.simulator.isaacsim.raycast_target_discovery import select_mesh_prim_paths
+from holosoma.simulator.isaacsim.raycast_targets import select_mesh_prim_paths
 from holosoma.utils.config_registry import parse_config
 
 pytestmark = pytest.mark.no_sim

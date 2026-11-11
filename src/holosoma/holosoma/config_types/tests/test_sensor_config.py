@@ -22,6 +22,7 @@ from holosoma.config_types.sensor import (
     IsaacSimCameraConfig,
     IsaacSimFisheyeConfig,
     IsaacSimLidarConfig,
+    IsaacSimRaycastMeshConfig,
     LidarBodyFilterConfig,
     LidarRayPatternConfig,
     LidarSensorConfig,
@@ -368,6 +369,31 @@ def test_isaacsim_raycast_camera_rejects_unsupported_settings(
     }
     with pytest.raises(ValueError, match=match):
         CameraSensorConfig(isaacsim=IsaacSimCameraConfig(**isaacsim_kwargs), **fields)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "",
+        "box",
+        "/World/[",
+        " /World/ground",
+        "/World/ground ",
+        "{ENV_REGEX_NS}/Robot",
+        "/World/(a/b)",
+        "/World/envs/env_1/obstacle",
+    ],
+)
+def test_invalid_raycast_mesh_paths_fail_at_config_construction(path: str) -> None:
+    with pytest.raises(ValueError, match="path"):
+        IsaacSimRaycastMeshConfig(include_paths=[path])
+    with pytest.raises(ValueError, match="path"):
+        IsaacSimRaycastMeshConfig(exclude_paths=[path])
+
+
+def test_empty_raycast_include_list_fails_at_config_construction() -> None:
+    with pytest.raises(ValueError, match="non-empty"):
+        IsaacSimRaycastMeshConfig(include_paths=[])
 
 
 # The camera-frame sink fields (cameras/modalities/record_video/...) live on CameraVizPluginConfig;

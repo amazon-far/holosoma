@@ -19,7 +19,7 @@ from isaaclab.terrains.utils import create_prim_from_mesh
 from pxr import Usd, UsdGeom
 
 from holosoma.simulator.isaacsim.prim_utils import resolve_robot_link_prim_expression
-from holosoma.simulator.isaacsim.terrain_mesh_cache import TERRAIN_PRIM_PATH, register_managed_terrain_mesh
+from holosoma.simulator.isaacsim.raycast_targets import TERRAIN_PRIM_PATH, register_managed_terrain_mesh
 
 if TYPE_CHECKING:
     from isaaclab.scene import InteractiveScene
@@ -151,11 +151,10 @@ def build_terrain_fixtures(
 
 
 def register_terrain_mesh_cache(terrain_manager: TerrainManager, scene: InteractiveScene) -> None:
-    """Share the managed mesh after all native sensor configs have been validated.
+    """Share the terrain manager's mesh (trimesh/OBJ terrain) with IsaacLab's ray-caster cache.
 
-    IsaacLab's validator walks class attributes, including RayCaster.meshes.
-    Populating that cache before sensor construction makes it recurse into Warp's
-    runtime objects. Registration still precedes sensor initialization.
+    Call after native sensors are constructed, since IsaacLab's config validator would recurse into a
+    populated ``RayCaster.meshes``, and before they initialize.
     """
     terrain_state = terrain_manager.get_state("locomotion_terrain")
     if terrain_state.mesh_type in ["trimesh", "load_obj"]:

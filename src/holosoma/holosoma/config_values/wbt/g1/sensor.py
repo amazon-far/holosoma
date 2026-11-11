@@ -141,12 +141,9 @@ g1_head_d435i_raycast_depth = CameraSensorConfig(
     isaacsim=IsaacSimCameraConfig(
         renderer="raycast",
         raycast_meshes=IsaacSimRaycastMeshConfig(
-            # Terrain plus the 30 leg, waist and arm visuals that can occlude the camera. Omitted geometry
-            # stays out, including colliders, torso housing, rubber hands, helper boxes
-            # and scene actors. Whole-link roots would also include eligible colliders.
-            # Fixed-joint merging places the pelvis contour visual under the pelvis.
-            # These are the G1 URDF import's named visual roots; override include_paths
-            # for another USD hierarchy. Every include must match; exclusions win.
+            # Terrain plus the 30 leg, waist and arm visuals that can occlude the camera; colliders,
+            # the torso housing, rubber hands and scene objects stay out. Paths are the G1 URDF
+            # import's named visual roots (fixed-joint merging puts the pelvis contour under pelvis).
             include_paths=[
                 "/World/ground",
                 f"{_G1_ROBOT_PRIM}/pelvis/visuals/pelvis",
