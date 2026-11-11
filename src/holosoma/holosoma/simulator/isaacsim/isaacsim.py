@@ -203,7 +203,7 @@ class IsaacSim(BaseSimulator):
         self.push_requested: bool = False
 
         if self.video_config.enabled:
-            if self.backend.uses_kit:
+            if not self.backend.is_isaacsim6:
                 self.video_recorder = IsaacSimVideoRecorder(self.video_config, self)
             else:
                 from holosoma.simulator.isaacsim.native_video_recorder import NativeVideoRecorder
@@ -307,7 +307,7 @@ class IsaacSim(BaseSimulator):
         # Perception cameras: one TiledCamera per configured camera, as a child prim of its
         # mount body so it follows that body, created before clone so it replicates per env.
         sensor_setup.build_sensors(self)
-        if self.video_config.enabled and not self.backend.uses_kit:
+        if self.video_config.enabled and self.backend.is_isaacsim6:
             from holosoma.simulator.isaacsim.native_video_recorder import build_video_camera
 
             build_video_camera(self)
@@ -827,7 +827,7 @@ class IsaacSim(BaseSimulator):
 
         The skip keys on the physics step only: state written after that render without a physics
         step (pose writes, ``forward_kinematics``) does not show until the next render.
-        Isaac Sim 6 cameras and movies submit their own due products after preparing poses.
+        Isaac Sim 6 prepares SDK camera batches separately from the viewer.
         """
         if not self.backend.is_isaacsim6 and self._viewer_render_step != self._sim_step_counter:
             self._render_frame()

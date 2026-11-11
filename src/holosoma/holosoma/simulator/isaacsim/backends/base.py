@@ -187,8 +187,10 @@ class IsaacSimBackendAdapter(ABC):
     def create_camera(self, cfg: Any) -> Any:
         """Create the runtime's optimized camera."""
 
-    def configure_camera_cadence(self, camera: Any, *, control_hz: float, decimation: int) -> None:
-        """Translate the shared camera cadence when a native renderer needs it."""
+    @property
+    def shared_camera_rendering(self) -> bool:
+        """Whether a capture must prepare all perception cameras together."""
+        return False
 
     def refresh_cameras(self, cameras: list[Any]) -> None:
         """Prepare due cameras for readout; Lab 2 reads its existing render pass."""

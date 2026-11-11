@@ -1,9 +1,9 @@
-"""Logger movies through Lab 3 cameras in the selected Kit-less runtime."""
+"""Logger movies through ordinary Lab 3 cameras in the selected renderer."""
 
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
@@ -40,10 +40,6 @@ def build_video_camera(sim: IsaacSim) -> None:
         data_types=["rgb"],
     )
     camera = sim.backend.create_camera(cfg)
-    # Declare independent movie requests before the native renderer binds cameras.
-    register = getattr(camera._renderer, "register_independent_camera", None)
-    if register is not None:
-        register(cfg.prim_path)
     sim.scene.sensors[_VIDEO_SENSOR] = camera
 
 
@@ -54,15 +50,34 @@ class NativeVideoRecorder(VideoRecorderInterface):
         super().__init__(config, simulator)
         self.simulator: IsaacSim = simulator
         self._camera = simulator.scene.sensors[_VIDEO_SENSOR]
+        self._capture_step: int | None = None
+
+    @property
+    def camera(self) -> Any:
+        """The scene-owned SDK camera included in frame-end captures."""
+        return self._camera
+
+    def prepare_frame(self) -> None:
+        """Publish the movie pose before the SDK prepares the shared camera batch."""
+        self._update_camera_position()
+
+    def mark_frame_ready(self) -> None:
+        """Remember a completed batch so encoding does not submit a second capture."""
+        self._capture_step = self.simulator.sim.get_physics_step_count()
 
     def _capture_frame_impl(self) -> None:
-        self._update_camera_position()
-        # Camera.update only captures an image. No simulation step, timeline
-        # update, or extra integration is hidden inside movie recording.
-        self._camera.update(0.0, force_recompute=True)
+        if self._capture_step != self.simulator.sim.get_physics_step_count():
+            # Direct movie capture also works without the frame-end sensor hook.
+            self.prepare_frame()
+            cameras = (
+                list(self.simulator.tiled_cameras.values()) if self.simulator.backend.shared_camera_rendering else []
+            )
+            self.simulator.backend.refresh_cameras([*cameras, self._camera])
+            self.mark_frame_ready()
         rgb = self._camera.data.output["rgb"].torch[self.config.record_env_id, ..., :3]
         frame = np.asarray(rgb.cpu(), dtype=np.uint8).copy()
         self._add_frame(self._apply_command_overlay(frame))
+        self._capture_step = None
 
     def _update_camera_position(self) -> None:
         parameters = self._get_camera_parameters()

@@ -18,7 +18,7 @@ _RecorderFixture: TypeAlias = tuple["IsaacSimVideoRecorder", list[str], "IsaacSi
 pytestmark = pytest.mark.no_sim
 
 
-@pytest.fixture(params=[2, 3], ids=["isaacsim5", "isaacsim6"])
+@pytest.fixture(params=[2], ids=["isaacsim5"])
 def recorder_fixture(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> _RecorderFixture:
     events: list[str] = []
 
@@ -47,8 +47,7 @@ def recorder_fixture(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyP
         def close() -> None:
             events.append("close")
 
-    # Keep both production backend adapters. Supply their external stage accessors
-    # independently, so using Kit's stage on Lab 3 fails instead of silently passing.
+    # Supply the external Kit stage, keeping the recorder cleanup in production.
     omni = types.ModuleType("omni")
     omni_usd = types.ModuleType("omni.usd")
     omni.usd = omni_usd  # type: ignore[attr-defined]
@@ -61,23 +60,10 @@ def recorder_fixture(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyP
     monkeypatch.setitem(sys.modules, "omni", omni)
     monkeypatch.setitem(sys.modules, "omni.usd", omni_usd)
 
-    lab_stage = types.ModuleType("isaaclab.sim.utils.stage")
-
-    def _active_stage() -> _Stage:
-        assert request.param == 3, "Lab 2 must use its Kit stage"
-        return _Stage()
-
-    lab_stage.get_current_stage = _active_stage  # type: ignore[attr-defined]
-    lab_utils = types.ModuleType("isaaclab.sim.utils")
-    lab_utils.stage = lab_stage  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "isaaclab.sim.utils", lab_utils)
-    monkeypatch.setitem(sys.modules, "isaaclab.sim.utils.stage", lab_stage)
-
     from holosoma.simulator.isaacsim import video_recorder
     from holosoma.simulator.isaacsim.backends.isaacsim5 import IsaacSim5Backend
-    from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Backend
 
-    backend = IsaacSim6Backend() if request.param == 3 else IsaacSim5Backend()
+    backend = IsaacSim5Backend()
     recorder = object.__new__(video_recorder.IsaacSimVideoRecorder)
     recorder.simulator = SimpleNamespace(backend=backend)  # type: ignore[assignment]
     recorder.config = SimpleNamespace(use_recording_thread=False)  # type: ignore[assignment]
@@ -90,7 +76,6 @@ def recorder_fixture(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyP
     recorder._camera_prim_path = "/World/VideoCamera"
     recorder.camera_prim = object()
     recorder._view = _View()
-    recorder._rtx_capture = None
     return recorder, events, backend
 
 
@@ -102,7 +87,7 @@ def test_cleanup_releases_view_before_removing_camera_and_is_idempotent(
     recorder.cleanup()
     recorder.cleanup()
 
-    expected = ["detach", "destroy", "close", "remove"] if backend.is_isaacsim6 else ["detach", "destroy", "remove"]
+    expected = ["detach", "destroy", "remove"]
     assert events == expected
     assert recorder._rgb_annotator is None
     assert recorder._render_product is None
@@ -112,43 +97,13 @@ def test_cleanup_releases_view_before_removing_camera_and_is_idempotent(
     assert recorder.video_frames == []
 
 
-@pytest.mark.parametrize("recorder_fixture", [3], indirect=True, ids=["isaacsim6"])
-def test_cleanup_keeps_camera_for_retry_if_view_close_fails(recorder_fixture: _RecorderFixture) -> None:
-    recorder, events, _backend = recorder_fixture
-
-    class _FailOnceView:
-        calls = 0
-
-        def close(self) -> None:
-            self.calls += 1
-            events.append("close")
-            if self.calls == 1:
-                raise RuntimeError("view close failed")
-
-    view = _FailOnceView()
-    recorder._view = view
-    with pytest.raises(RuntimeError, match="view close failed"):
-        recorder.cleanup()
-
-    assert events == ["detach", "destroy", "close"]
-    assert recorder._view is view
-    assert recorder._camera_prim_path == "/World/VideoCamera"
-    assert recorder.camera_prim is not None
-
-    recorder.cleanup()
-    assert events == ["detach", "destroy", "close", "close", "remove"]
-    assert getattr(recorder, "_view") is None
-    assert recorder._camera_prim_path is None
-
-
 def test_cleanup_keeps_camera_path_for_retry_if_stage_removal_fails(
     recorder_fixture: _RecorderFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     recorder, events, backend = recorder_fixture
     # Replace only the external stage operation; cleanup, stage selection, and
     # backend resource ownership all stay in production code.
-    module = sys.modules[recorder.__class__.__module__]
-    original_stage = module._current_stage(backend)
+    original_stage = sys.modules["omni.usd"].get_context().get_stage()
     attempts = 0
 
     def _remove(path: str) -> bool:
@@ -167,6 +122,6 @@ def test_cleanup_keeps_camera_path_for_retry_if_stage_removal_fails(
     assert recorder.camera_prim is not None
     assert recorder._view is None
     recorder.cleanup()
-    prefix = ["detach", "destroy", "close"] if backend.is_isaacsim6 else ["detach", "destroy"]
+    prefix = ["detach", "destroy"]
     assert events == prefix + ["remove", "remove"]
     assert recorder._camera_prim_path is None
