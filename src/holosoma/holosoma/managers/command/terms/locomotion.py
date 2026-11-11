@@ -107,8 +107,7 @@ class LocomotionCommand(CommandTermBase):
 
         if self.stand_prob > 0.0:
             stand_mask = torch.rand(env_ids.shape[0], device=device) <= self.stand_prob
-            if stand_mask.any():
-                commands[env_ids[stand_mask], :3] = 0.0
+            commands[env_ids, :3] = commands[env_ids, :3].masked_fill(stand_mask.unsqueeze(1), 0.0)
 
     def _ensure_index_tensor(self, env_ids: torch.Tensor | Sequence[int] | None) -> torch.Tensor:
         if env_ids is None:
@@ -166,10 +165,7 @@ class LocomotionGait(CommandTermBase):
             torch.linalg.norm(command_tensor[:, :2], dim=1) < 0.01,
             torch.abs(command_tensor[:, 2]) < 0.01,
         )
-        if stand_mask.any():
-            self.phase[stand_mask] = torch.full(
-                (int(stand_mask.sum().item()), 2), self.stand_phase_value, device=env.device
-            )
+        self.phase.masked_fill_(stand_mask.unsqueeze(1), self.stand_phase_value)
 
     def set_eval_mode(self, evaluating: bool) -> None:
         self._initialize_indices(None, evaluating=evaluating)

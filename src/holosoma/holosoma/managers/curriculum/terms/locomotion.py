@@ -25,6 +25,15 @@ class AverageEpisodeLengthTracker(CurriculumTermBase):
         self.average_episode_length = torch.tensor(0.0, device=env.device, dtype=torch.float)
         self._suppress_next_update = False
 
+    @property
+    def average_episode_length(self) -> torch.Tensor:
+        return self._average_episode_length
+
+    @average_episode_length.setter
+    def average_episode_length(self, value: torch.Tensor) -> None:
+        self._average_episode_length = value
+        self._average_value: float | None = None
+
     def setup(self) -> None:
         self.average_episode_length = torch.as_tensor(
             float(self.average_episode_length), device=self.env.device, dtype=torch.float
@@ -46,10 +55,7 @@ class AverageEpisodeLengthTracker(CurriculumTermBase):
         mask_tensor = self.env._pending_episode_update_mask
 
         update_mask = mask_tensor.index_select(0, env_ids_tensor)
-        if not torch.any(update_mask):
-            return
         active_ids = env_ids_tensor[update_mask]
-
         if active_ids.numel() == 0:
             return
 
@@ -85,6 +91,12 @@ class AverageEpisodeLengthTracker(CurriculumTermBase):
 
     def get_average(self) -> torch.Tensor:
         return self.average_episode_length
+
+    def get_average_value(self) -> float:
+        """``get_average()`` as a Python float; reads the device only after the average changes."""
+        if self._average_value is None:
+            self._average_value = float(self._average_episode_length.detach().cpu().item())
+        return self._average_value
 
     def set_average(self, value: float | torch.Tensor, *, suppress_update: bool = True) -> None:
         self.average_episode_length = torch.as_tensor(float(value), device=self.env.device, dtype=torch.float)

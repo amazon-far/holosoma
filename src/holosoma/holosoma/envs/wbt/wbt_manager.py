@@ -98,7 +98,7 @@ class WholeBodyTrackingManager(PolicyTask):
             )
 
         # object
-        if motion_command.motion.has_object:  # type: ignore[has-type]
+        if motion_command.motion.has_object:
             real_object_pos_xyz = motion_command.simulator_object_pos_w.clone()
             real_object_quat_xyzw = motion_command.simulator_object_quat_w.clone()
             real_object_quat_wxyz = real_object_quat_xyzw[:, [3, 0, 1, 2]]
@@ -117,7 +117,7 @@ class WholeBodyTrackingManager(PolicyTask):
 
     def step_visualize_motion(self, actions: torch.Tensor) -> bool:
         motion_command = cast("MotionCommand", self.command_manager.get_state("motion_command"))
-        dt = 1.0 / float(motion_command.motion.fps)  # type: ignore[has-type]
+        dt = 1.0 / float(motion_command.motion.fps)
         motion_command.step()
         print("time_steps: ", motion_command.time_steps[0].item())
         self._draw_debug_vis()
@@ -140,7 +140,7 @@ class WholeBodyTrackingManager(PolicyTask):
         self.simulator.robot_root_states[env_ids, 7:10] = root_lin_vel
         self.simulator.robot_root_states[env_ids, 10:13] = root_ang_vel
 
-        if motion_command.motion.has_object:  # type: ignore[has-type]
+        if motion_command.motion.has_object:
             # set object root_states from motion command
             object_pos = motion_command.object_pos_w.clone()
             object_ori = motion_command.object_quat_w.clone()
@@ -151,7 +151,7 @@ class WholeBodyTrackingManager(PolicyTask):
             object_states[:, 3:7] = object_ori[:]
             object_states[:, 7:10] = object_lin_vel[:]
             object_states[:, 10:13] = torch.zeros_like(object_lin_vel[:])
-            object_name = motion_command.object_name  # type: ignore[has-type]
+            object_name = motion_command.object_name
             self.simulator.set_actor_states([object_name], env_ids, object_states)
 
         self.simulator.forward_kinematics()
@@ -159,7 +159,5 @@ class WholeBodyTrackingManager(PolicyTask):
 
         time.sleep(dt)
 
-        result: bool = (
-            motion_command.time_steps[0].item() >= motion_command.motion.time_step_total - 2  # type: ignore[has-type]
-        )
+        result: bool = motion_command.time_steps[0].item() >= motion_command.motion.time_step_total - 2
         return result

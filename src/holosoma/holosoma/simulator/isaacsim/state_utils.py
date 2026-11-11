@@ -24,7 +24,8 @@ def fullstate_wxyz_to_xyzw(tensor_wxyz: torch.Tensor) -> torch.Tensor:
     >>> # Quaternion at indices 3:7 is now [0.0, 0.0, 0.707, 0.707] (xyzw format)
     """
     converted = tensor_wxyz.clone()
-    converted[:, 3:7] = tensor_wxyz[:, [4, 5, 6, 3]]  # [w,x,y,z] -> [x,y,z,w]
+    converted[:, 3:6] = tensor_wxyz[:, 4:7]  # [w,x,y,z] -> [x,y,z,w]
+    converted[:, 6] = tensor_wxyz[:, 3]
     return converted
 
 
@@ -49,5 +50,6 @@ def fullstate_xyzw_to_wxyz(tensor_xyzw: torch.Tensor) -> torch.Tensor:
     >>> # Quaternion at indices 3:7 is now [0.707, 0.0, 0.0, 0.707] (wxyz format)
     """
     converted = tensor_xyzw.clone()
-    converted[:, 3:7] = tensor_xyzw[:, [6, 3, 4, 5]]  # [x,y,z,w] -> [w,x,y,z]
+    converted[:, 3] = tensor_xyzw[:, 6]  # [x,y,z,w] -> [w,x,y,z]
+    converted[:, 4:7] = tensor_xyzw[:, 3:6]
     return converted
