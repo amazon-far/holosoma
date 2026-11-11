@@ -22,16 +22,19 @@ def main() -> int:
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--result-file", required=True)
     args = parser.parse_args()
-    config = build_run_sim_config(
-        "isaacsim", "panel-target", "g1-29dof", "terrain_locomotion_plane", sensors=_sensors()
-    )
+
+    from tests.simulators import _camera_presets
+
+    config = build_run_sim_config("isaacsim", "empty", "g1-29dof", "terrain_locomotion_plane", sensors=_sensors())
     config = dataclasses.replace(
         config,
+        scene=_camera_presets.panel_target,
         device="cuda:0",
         time_scale=0.0,
         training=dataclasses.replace(config.training, num_envs=args.num_envs, headless=True),
     )
     with config.create_task() as task:
+        import carb
         import torch
 
         from holosoma.simulator.isaacsim.isaacsim import IsaacSim
@@ -40,6 +43,7 @@ def main() -> int:
         task.reset_envs_idx()
         sim = task.simulator
         assert isinstance(sim, IsaacSim)
+        assert carb.settings.get_settings().get("/physics/fabricEnabled"), "reset coverage requires Fabric rendering"
         manager = sim.sensor_manager
         offsets = {name: manager.get_mount_pose(name) for name in sim.get_sensor_names()}
         angle = math.radians(30.0)
