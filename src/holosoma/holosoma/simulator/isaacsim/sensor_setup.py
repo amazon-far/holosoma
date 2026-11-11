@@ -572,7 +572,6 @@ def create_sensors(sim: IsaacSim) -> None:
     if not sim.sensor_config:
         return
     manager = sim.sensor_manager
-    manager.num_envs = sim.num_envs
     register_cameras(sim, manager)
     register_lidars(sim, manager)
 
