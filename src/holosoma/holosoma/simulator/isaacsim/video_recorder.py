@@ -189,6 +189,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
             # Update camera position to track robot using shared logic
             self._update_camera_position()
             if self.simulator.backend.is_isaaclab3:
+                from pxr import Gf
                 from isaaclab_physx.renderers.fabric import FabricBackendCfg
                 from .backends.camera_renderers import capture_isaac_rtx_products
 
@@ -200,7 +201,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
                 # Annotator attachment can resync global RTX settings; publish
                 # this product's own layout immediately before requesting a draw.
                 self._view_tile_limit.Set(1)
-                self._view_tile_resolution.Set((self.config.width, self.config.height))
+                self._view_tile_resolution.Set(Gf.Vec2i(self.config.width, self.config.height))
                 capture_isaac_rtx_products([self._rtx_capture])
 
             # Get RGB data from replicator annotator
