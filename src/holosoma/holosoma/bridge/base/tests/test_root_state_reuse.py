@@ -66,7 +66,7 @@ class _FakeSim:
 class _StubBridge(BasicSdk2Bridge):
     """Minimal concrete bridge: no SDK, so a publish records what it would have sent."""
 
-    imu: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None
+    imu: tuple[npt.NDArray[Any], npt.NDArray[Any], npt.NDArray[Any]] | None = None
     odom: tuple[list[float], list[float], list[float], float] | None = None
     fail_on_publish_odom = False
 
@@ -144,9 +144,9 @@ def test_an_exchange_does_not_change_what_either_reader_returns() -> None:
     assert bridge.imu is not None and bridge.odom is not None
     quat_exchanged, gyro_exchanged, acc_exchanged = bridge.imu
 
-    torch.testing.assert_close(quat_direct, quat_exchanged)
-    torch.testing.assert_close(gyro_direct, gyro_exchanged)
-    torch.testing.assert_close(acc_direct, acc_exchanged)
+    np.testing.assert_array_equal(quat_direct, quat_exchanged)
+    np.testing.assert_array_equal(gyro_direct, gyro_exchanged)
+    np.testing.assert_array_equal(acc_direct, acc_exchanged)
     assert odom_direct == bridge.odom
     # The rotation is actually exercised: a 45 deg yaw makes body velocity differ from world.
     assert bridge.odom[2] != pytest.approx(sim.robot_root_states._root[0, 7:10].tolist())

@@ -78,17 +78,10 @@ class UnitreeSdk2Bridge(BasicSdk2Bridge):
         self.low_state.motor.ddq = accelerations.tolist()
         self.low_state.motor.tau_est = actuator_forces.tolist()
 
-        # Populate IMU state
-        # Convert quaternion from torch tensor to list [w, x, y, z]
-        quat_array = quaternion.detach().cpu().numpy()
-        self.low_state.imu.quat = [
-            float(quat_array[0]),  # w
-            float(quat_array[1]),  # x
-            float(quat_array[2]),  # y
-            float(quat_array[3]),  # z
-        ]
-        self.low_state.imu.omega = gyro.detach().cpu().numpy().tolist()
-        self.low_state.imu.accel = acceleration.detach().cpu().numpy().tolist()
+        # Populate IMU state; quaternion is [w, x, y, z]
+        self.low_state.imu.quat = quaternion.tolist()
+        self.low_state.imu.omega = gyro.tolist()
+        self.low_state.imu.accel = acceleration.tolist()
 
         # Set timestamp (milliseconds)
         self.low_state.tick = int(self.sim_time * 1e3)

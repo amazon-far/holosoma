@@ -295,6 +295,7 @@ class DistillationBase(BaseAlgo):
 
             with self.logging_helper.record_learn_time():
                 loss_dict = self._training_step()
+            self.policy.check_action_std()
 
             if self.is_main_process:
                 self._post_epoch_logging(it, loss_dict)
@@ -429,6 +430,7 @@ class DistillationBase(BaseAlgo):
             self.learning_rate = float(loaded["learning_rate"])
         self._restore_extra_checkpoint_state(loaded)
         self.policy.project_action_std()
+        self.policy.check_action_std()
         self._restore_env_state(loaded.get("env_state"))
         return cast("dict[str, Any] | None", loaded.get("infos"))
 

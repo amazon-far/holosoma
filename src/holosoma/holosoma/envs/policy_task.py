@@ -234,8 +234,8 @@ class PolicyTask(BaseTask):
         """Append per-frame metrics to ``log_dict``: the average episode length when it is tracked."""
         tracker = self.curriculum_manager.get_term("average_episode_tracker")
         if tracker is not None:
-            avg = cast("AverageEpisodeLengthTracker", tracker).get_average()
-            self.log_dict["average_episode_length"] = avg.detach().cpu()
+            avg = cast("AverageEpisodeLengthTracker", tracker).get_average_value()
+            self.log_dict["average_episode_length"] = torch.tensor(avg, dtype=torch.float32)
 
     def _get_average_episode_tracker(self) -> AverageEpisodeLengthTracker:
         tracker = self.curriculum_manager.get_term("average_episode_tracker")

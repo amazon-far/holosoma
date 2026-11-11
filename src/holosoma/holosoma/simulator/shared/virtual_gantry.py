@@ -161,7 +161,7 @@ class VirtualGantry:
         env_id = 0
         x, y = self.sim.robot_root_states[env_id, :3].detach().cpu().numpy()[:2]
         self.point = np.array([x, y, self.height])
-        logger.debug(f"Virtual gantry position reset to '{self.point}'")
+        logger.debug("Virtual gantry position reset to '{}'", self.point)
 
     def on_episode_start(self, env_id: int) -> None:
         """Reset the gantry anchor when the tracked environment starts."""
@@ -230,23 +230,19 @@ class VirtualGantry:
             return
 
         # Get robot root position and velocity
-        env_id = 0
-        robot_state = self.sim.robot_root_states[env_id, :]
-        root_pos = robot_state[:3].detach().cpu().numpy()
-        root_vel = robot_state[7:10].detach().cpu().numpy()
+        robot_state = self.sim.robot_root_states[0].detach().cpu().numpy()
 
         # Calculate new force from robot state (world frame)
-        gantry_force = self._advance(root_pos, root_vel)
+        gantry_force = self._advance(robot_state[:3], robot_state[7:10])
 
         # Re-applied every PRE_STEP (this method) since the accumulator auto-zeros each substep.
         # apply_external_force addresses by name; body_link_id is a holosoma body index.
-        body_name = self.sim.body_names[self.body_link_id]
         force_world = torch.as_tensor(gantry_force, dtype=torch.float32, device=self.sim.device)
         self.sim.apply_external_force(
             "robot",
             forces=force_world,
-            body_names=[body_name],
-            env_ids=torch.tensor([env_id], device=self.sim.device),
+            body_names=[self.sim.body_names[self.body_link_id]],
+            env_ids=None,  # env 0: an enabled gantry has num_envs == 1
         )
 
     def draw_debug(self) -> None:

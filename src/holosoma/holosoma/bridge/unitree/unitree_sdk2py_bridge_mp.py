@@ -407,20 +407,16 @@ class UnitreeMpSdk2Bridge(UnitreeSdk2Bridge):
         actuator_forces = self._get_actuator_forces()
         quaternion, gyro, acceleration = self._get_base_imu_data()
 
-        # _get_base_imu_data already returns the quaternion in SDK order [w, x, y, z]; just floatify
-        # it into a plain list (same as the direct bridge does before assigning imu.quat).
-        quat_array = quaternion.detach().cpu().numpy()
-        quat = [float(quat_array[0]), float(quat_array[1]), float(quat_array[2]), float(quat_array[3])]
-
+        # _get_base_imu_data already returns the quaternion in SDK order [w, x, y, z].
         self._queue(
             "publish_low_state",
             positions.tolist(),
             velocities.tolist(),
             accelerations.tolist(),
             actuator_forces.tolist(),
-            quat,
-            gyro.detach().cpu().numpy().tolist(),
-            acceleration.detach().cpu().numpy().tolist(),
+            quaternion.tolist(),
+            gyro.tolist(),
+            acceleration.tolist(),
             int(self.sim_time * 1e3),
         )
 

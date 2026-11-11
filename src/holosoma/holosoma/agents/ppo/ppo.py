@@ -414,12 +414,13 @@ class PPO(BaseAlgo):
 
                 # Compute bootstrap value for timeouts
                 final_rewards = torch.zeros_like(rewards)
-                if infos["time_outs"].any():
+                if "final_observations" in infos:
+                    # Final observations of envs that did not just time out are stale.
                     final_critic_obs = torch.cat([infos["final_observations"][k] for k in self.critic_obs_keys], dim=1)
                     final_critic_obs = self._normalize_critic_obs(final_critic_obs, update=False)
                     final_values = self.critic.evaluate({"critic_obs": final_critic_obs}).detach()
-                    final_rewards += self.config.gamma * torch.squeeze(
-                        final_values * infos["time_outs"].unsqueeze(1).to(self.device), 1
+                    final_rewards += torch.where(
+                        infos["time_outs"].to(self.device), self.config.gamma * torch.squeeze(final_values, 1), 0.0
                     )
 
                 # Add transition to storage
@@ -473,18 +474,21 @@ class PPO(BaseAlgo):
     def _training_step(self) -> dict[str, float]:
         generator = self.storage.mini_batch_generator(self.config.num_mini_batches, self.config.num_learning_epochs)
 
-        loss_dict = {"Value": 0.0, "Surrogate": 0.0, "Entropy": 0.0, "KL": 0.0}
+        loss_sums: dict[str, torch.Tensor | float] = {"Value": 0.0, "Surrogate": 0.0, "Entropy": 0.0, "KL": 0.0}
         for raw_minibatch in generator:
             minibatch = cast("Minibatch", raw_minibatch)
-            loss_dict = self._update_algo_step(minibatch, loss_dict)
+            loss_sums = self._update_algo_step(minibatch, loss_sums)
 
         num_updates = self.config.num_learning_epochs * self.config.num_mini_batches
-        for key in loss_dict:
-            loss_dict[key] /= num_updates
+        sums = torch.stack([torch.as_tensor(v, dtype=torch.float64, device=self.device) for v in loss_sums.values()])
+        loss_dict = {key: total / num_updates for key, total in zip(loss_sums, sums.tolist(), strict=False)}
         self.storage.clear()
         return loss_dict
 
-    def _update_algo_step(self, minibatch: Minibatch, loss_dict: dict[str, float]) -> dict[str, float]:
+    def _update_algo_step(
+        self, minibatch: Minibatch, loss_sums: dict[str, torch.Tensor | float]
+    ) -> dict[str, torch.Tensor | float]:
+        """Run one update and add its losses to ``loss_sums``, kept on the device in float64."""
         ppo_loss_dict = self._compute_ppo_loss(minibatch)
 
         self.actor_optimizer.zero_grad()
@@ -500,19 +504,22 @@ class PPO(BaseAlgo):
         nn.utils.clip_grad_norm_(self.actor.parameters(), self.config.max_grad_norm)
         nn.utils.clip_grad_norm_(self.critic.parameters(), self.config.max_grad_norm)
 
+        if self.config.desired_kl is not None and self.config.schedule == "adaptive":  # type: ignore[redundant-expr]
+            self._update_learning_rate(ppo_loss_dict["kl_mean"])
+
         self.actor_optimizer.step()
         self.critic_optimizer.step()
 
-        loss_dict["Value"] += ppo_loss_dict.pop("value_loss").item()
-        loss_dict["Surrogate"] += ppo_loss_dict.pop("surrogate_loss").item()
-        loss_dict["Entropy"] += ppo_loss_dict.pop("entropy_loss").item()
-        loss_dict["KL"] += ppo_loss_dict.pop("kl_mean").item()
+        for key, log_key in (
+            ("value_loss", "Value"),
+            ("surrogate_loss", "Surrogate"),
+            ("entropy_loss", "Entropy"),
+            ("kl_mean", "KL"),
+        ):
+            loss_sums[log_key] += ppo_loss_dict.pop(key).detach().double()
         for key, loss in ppo_loss_dict.items():
-            if key not in loss_dict:
-                loss_dict[key] = 0.0
-            loss_value = loss.item() if torch.is_tensor(loss) else loss
-            loss_dict[key] += loss_value
-        return loss_dict
+            loss_sums[key] = loss_sums.get(key, 0.0) + (loss.detach().double() if torch.is_tensor(loss) else loss)
+        return loss_sums
 
     def _compute_ppo_loss(self, minibatch: Minibatch) -> dict[str, torch.Tensor]:
         actions_batch = minibatch["actions"]
@@ -559,7 +566,6 @@ class PPO(BaseAlgo):
         if self.config.desired_kl is not None and self.config.schedule == "adaptive":  # type: ignore[redundant-expr]
             # Compute the KL divergence between the old and new action distributions
             kl_mean = self._compute_kl_div(old_mu_batch, old_sigma_batch, mu_batch, sigma_batch)
-            self._update_learning_rate(kl_mean)
 
         # Surrogate loss
         ratio = torch.exp(actions_log_prob_batch - torch.squeeze(old_actions_log_prob_batch))
@@ -578,7 +584,7 @@ class PPO(BaseAlgo):
         value_loss = torch.max(value_losses, value_losses_clipped).mean()
 
         if self.use_symmetry and (self.config.symmetry_actor_coef > 0.0 or self.config.symmetry_critic_coef > 0.0):
-            mean_actions_batch = self.actor.act_inference({"actor_obs": actor_obs.detach().clone()})
+            mean_actions_batch = self.actor.action_mean
             mean_actions_for_original_batch, mean_actions_for_symmetry_batch = (
                 mean_actions_batch[:original_batch_size],
                 mean_actions_batch[original_batch_size:],

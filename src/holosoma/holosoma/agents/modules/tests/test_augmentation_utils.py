@@ -363,6 +363,58 @@ def test_different_history_lengths(history_length: int) -> None:
     assert mirrored.shape == observation.shape
 
 
+_MIRROR_TERM_DIMS = {
+    "base_lin_vel": 3,
+    "base_ang_vel": 3,
+    "base_orientation": 3,
+    "projected_gravity": 3,
+    "command_lin_vel": 3,
+    "command_ang_vel": 1,
+    "command_stand": 1,
+    "command_waist_dofs": 3,
+    "command_base_height": 1,
+    "sin_phase": 2,
+    "cos_phase": 2,
+    "dof_pos": 10,
+    "dof_vel": 10,
+    "actions": 10,
+    "ee_apply_force": 6,
+}
+
+
+class _SymmetryUtilsWithScaledTerm(SymmetryUtils):
+    def mirror_obs_scaled(self, scaled: torch.Tensor) -> torch.Tensor:
+        return 2.0 * scaled
+
+
+@pytest.mark.parametrize("extra_terms", [{}, {"scaled": 2}])
+def test_mirror_xz_plane_matches_the_per_term_mirrors(
+    mock_env_with_history: MagicMock, extra_terms: dict[str, int]
+) -> None:
+    """The single-gather mirror must reproduce every term's mirror, and fall back for one that is not a permutation."""
+    assert {name.removeprefix("mirror_obs_") for name in dir(SymmetryUtils) if name.startswith("mirror_obs_")} == set(
+        _MIRROR_TERM_DIMS
+    )
+    dims = {**_MIRROR_TERM_DIMS, **extra_terms}
+    env = mock_env_with_history
+    env.observation_manager.cfg.groups = {
+        "actor_obs": MagicMock(history_length=3, terms=dict.fromkeys(dims, MagicMock())),
+        "critic_obs": MagicMock(history_length=1, terms=dict.fromkeys(dims, MagicMock())),
+    }
+    env.observation_manager.term_shape = lambda _group_name, term_name: (dims[term_name],)
+    env.history_length = {"actor_obs": 3, "critic_obs": 1}
+    symmetry_utils = _SymmetryUtilsWithScaledTerm(env)
+
+    obs_list = ["actor_obs", "critic_obs"]
+    obs_dim = sum(symmetry_utils.observation_dims[obs_key] for obs_key in obs_list)
+    observation = torch.randn(16, obs_dim + 4)
+
+    mirrored = symmetry_utils.mirror_xz_plane(observation, env, obs_list)
+
+    assert torch.equal(mirrored, symmetry_utils._mirror_terms(observation, obs_list))
+    assert (next(iter(symmetry_utils._mirror_maps.values())) is None) == bool(extra_terms)
+
+
 def test_mirror_obs_phase_exchanges_the_legs(mock_env_direct_config: MagicMock) -> None:
     """Negating leg 0 instead of swapping collapsed the antiphase: both legs came out identical."""
     symmetry_utils = SymmetryUtils(mock_env_direct_config)

@@ -93,9 +93,11 @@ class StudentTeacher(nn.Module):
         self.teachers = nn.ModuleList([_UnsetTeacher(num_teacher_obs, num_actions) for _ in range(num_teachers)])
 
         self.std = nn.Parameter(init_noise_std * torch.ones(num_actions))
+        self.register_buffer("_std_was_non_finite", torch.zeros((), dtype=torch.bool), persistent=False)
         self.distribution: Normal | None = None
         Normal.set_default_validate_args(False)
         self.project_action_std()
+        self.check_action_std()
 
         self._loaded_teacher = [False] * num_teachers
 
@@ -201,10 +203,17 @@ class StudentTeacher(nn.Module):
 
     @torch.no_grad()
     def project_action_std(self) -> None:
-        """Keep the directly optimized Gaussian scale finite and positive."""
-        if not torch.isfinite(self.std).all():
-            raise FloatingPointError("Student action standard deviation became non-finite.")
+        """Keep the directly optimized Gaussian scale positive.
+
+        Records, without a host sync, whether the scale was non-finite; :meth:`check_action_std` raises on it.
+        """
+        self._std_was_non_finite |= ~torch.isfinite(self.std).all()
         self.std.clamp_(min=MIN_ACTION_STD)
+
+    def check_action_std(self) -> None:
+        """Raise if the action std has been non-finite at any :meth:`project_action_std` call."""
+        if self._std_was_non_finite.item():
+            raise FloatingPointError("Student action standard deviation became non-finite.")
 
     def act(self, policy_state_dict: dict[str, torch.Tensor]) -> torch.Tensor:
         self.update_distribution(
@@ -263,7 +272,10 @@ class StudentTeacher(nn.Module):
 
         idx = teacher_idx.to(dtype=torch.long)
         invalid = (idx < -1) | (idx >= self.num_teachers)
-        if invalid.any():
+        # Row counts for -1, each teacher, then invalid values, read in a single host sync.
+        counts = torch.bincount(torch.where(invalid, self.num_teachers + 1, idx + 1), minlength=self.num_teachers + 2)
+        num_rows = counts.tolist()
+        if num_rows[-1]:
             invalid_values = torch.unique(idx[invalid]).tolist()
             raise IndexError(
                 f"teacher_idx contains invalid values {invalid_values}; expected -1 or "
@@ -271,10 +283,12 @@ class StudentTeacher(nn.Module):
             )
 
         out = teacher_obs.new_zeros((teacher_obs.shape[0], self.num_actions))
+        # A stable sort groups each teacher's rows in ascending order, as a boolean mask would.
+        rows_per_slot = torch.argsort(idx, stable=True).split(num_rows[:-1])
         for i in range(self.num_teachers):
-            mask = idx == i
-            if mask.any():
-                out[mask] = self.teachers[i](teacher_obs[mask])
+            if num_rows[i + 1]:
+                rows = rows_per_slot[i + 1]
+                out[rows] = self.teachers[i](teacher_obs[rows])
         return TeacherActions(out, idx >= 0)
 
     def reset(self, dones: torch.Tensor | None = None) -> None:

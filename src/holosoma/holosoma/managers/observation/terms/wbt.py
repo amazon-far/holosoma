@@ -7,8 +7,9 @@ from typing import TYPE_CHECKING
 import torch
 
 from holosoma.managers.command.terms.wbt import MotionCommand
+from holosoma.managers.observation.terms.locomotion import _broadcast_axis
 from holosoma.utils.rotations import quat_rotate_inverse, quaternion_to_matrix, subtract_frame_transforms
-from holosoma.utils.torch_utils import get_axis_params, to_torch
+from holosoma.utils.torch_utils import get_axis_params
 
 if TYPE_CHECKING:
     from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
@@ -22,13 +23,11 @@ def _base_quat(env: WholeBodyTrackingManager) -> torch.Tensor:
 
 
 def gravity_vector(env: WholeBodyTrackingManager, up_axis_idx: int = 2) -> torch.Tensor:
-    axis = to_torch(get_axis_params(-1.0, up_axis_idx), device=env.device)
-    return axis.unsqueeze(0).expand(env.num_envs, -1)
+    return _broadcast_axis(tuple(get_axis_params(-1.0, up_axis_idx)), env.device, env.num_envs)
 
 
 def base_forward_vector(env: WholeBodyTrackingManager) -> torch.Tensor:
-    axis = to_torch([1.0, 0.0, 0.0], device=env.device)
-    return axis.unsqueeze(0).expand(env.num_envs, -1)
+    return _broadcast_axis((1.0, 0.0, 0.0), env.device, env.num_envs)
 
 
 def get_base_lin_vel(env: WholeBodyTrackingManager) -> torch.Tensor:
