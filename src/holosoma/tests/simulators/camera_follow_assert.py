@@ -52,7 +52,7 @@ def _red_fraction(rgb):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim3"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim6"])
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
@@ -114,7 +114,7 @@ def main() -> int:
 
     def _hold_dof() -> None:
         # Restore joints to the spawn pose with zero velocity. MuJoCo is unaffected by this flake.
-        if args.simulator in ("isaacsim", "isaacsim3"):
+        if args.simulator in ("isaacsim", "isaacsim6"):
             sim.dof_pos[_all_ids] = _spawn_dof_pos
             sim.dof_vel[_all_ids] = 0.0
             sim.forward_kinematics()

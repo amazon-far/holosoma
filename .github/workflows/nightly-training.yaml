@@ -28,7 +28,7 @@ jobs:
         - g1-29dof-fast-sac
         - t1-29dof-fast-sac
         multigpu: ['True', 'False']
-        simulator: [isaacsim, isaacsim3]
+        simulator: [isaacsim, isaacsim6]
         extra_args: [""]
         include:
         # MuJoCo cells live under include rather than the simulator list so they are
@@ -59,11 +59,11 @@ jobs:
           multigpu: 'False'
           extra_args: --command.setup_terms.motion_command.params.motion_config.motion_file=s3://far-holosoma-assets/data/motions/g1_29dof/whole_body_tracking/motion_dance_v3.npz --algo.config.buffer_size=384
         - experiment: g1-29dof-wbt
-          simulator: isaacsim3
+          simulator: isaacsim6
           multigpu: 'False'
           extra_args: --command.setup_terms.motion_command.params.motion_config.motion_file=s3://far-holosoma-assets/data/motions/g1_29dof/whole_body_tracking/motion_dance_v3.npz
         - experiment: g1-29dof-wbt-fast-sac
-          simulator: isaacsim3
+          simulator: isaacsim6
           multigpu: 'False'
           extra_args: --command.setup_terms.motion_command.params.motion_config.motion_file=s3://far-holosoma-assets/data/motions/g1_29dof/whole_body_tracking/motion_dance_v3.npz --algo.config.buffer_size=384
 
@@ -98,7 +98,7 @@ jobs:
             --env AWS_SESSION_TOKEN --env WANDB_API_KEY --env WANDB_BASE_URL \
             --env WANDB_ENTITY \
             --env GITHUB_RUN_ID --env HOLOSOMA_SIM=${{ matrix.simulator }} \
-            "$ECR_REGISTRY/${{ matrix.simulator == 'isaacsim3' && 'holosoma-isaacsim3' || 'holosoma' }}:latest" \
+            "$ECR_REGISTRY/${{ matrix.simulator == 'isaacsim6' && 'holosoma-isaacsim6' || 'holosoma' }}:latest" \
             bash -e -o pipefail -c """
               source scripts/source_${{ matrix.simulator }}_setup.sh
               # Every rank's Kit startup creates this directory, and when several do it
@@ -107,7 +107,7 @@ jobs:
               # job's own timeout, burning a multi-GPU runner for sixteen hours and
               # logging no training steps. Creating it up front removes the race.
               # The app name/version and Python version are part of the path.
-              mkdir -p /isaac-sim/kit/data/Kit/${{ matrix.simulator == 'isaacsim3' && 'IsaacLab/3.0/pip3-envs/default-3.12' || 'Isaac-Sim/5.1/pip3-envs/default' }} || true
+              mkdir -p /isaac-sim/kit/data/Kit/${{ matrix.simulator == 'isaacsim6' && 'IsaacLab/3.0/pip3-envs/default-3.12' || 'Isaac-Sim/5.1/pip3-envs/default' }} || true
               # The checkout is bind-mounted over the image, so refresh the
               # editable install metadata and its entry-point registrations.
               python -m pip install --force-reinstall --no-deps \

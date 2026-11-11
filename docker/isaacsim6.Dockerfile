@@ -11,8 +11,8 @@ ENV LANG=C.UTF-8
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOLOSOMA_DEPS_DIR=/root/.holosoma_deps
 ENV ISAACSIM_ROOT_PATH=/isaac-sim
-ENV ISAACSIM3_ENV_ROOT=/root/.holosoma_deps/envs/hssim3
-ENV PATH=$ISAACSIM3_ENV_ROOT/bin:$PATH
+ENV ISAACSIM6_ENV_ROOT=/root/.holosoma_deps/envs/hssim6
+ENV PATH=$ISAACSIM6_ENV_ROOT/bin:$PATH
 ENV OMNI_KIT_ACCEPT_EULA=1
 ENV MUJOCO_GL=disable
 ENV HUB__ARGS__DETECT_ONLY=false
@@ -23,8 +23,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=uv /uv /uvx /usr/local/bin/
 WORKDIR /workspace/holosoma
-COPY scripts/setup_isaacsim3.sh scripts/source_isaacsim3_setup.sh \
-    scripts/source_common.sh scripts/versions.sh scripts/isaacsim3_constraints.txt ./scripts/
+COPY scripts/setup_isaacsim6.sh scripts/source_isaacsim6_setup.sh \
+    scripts/source_common.sh scripts/versions.sh scripts/isaacsim6_constraints.txt ./scripts/
 COPY src/holosoma/pyproject.toml src/holosoma/README.md ./src/holosoma/
 RUN mkdir -p src/holosoma/holosoma && touch src/holosoma/holosoma/__init__.py
 
@@ -32,12 +32,12 @@ RUN mkdir -p src/holosoma/holosoma && touch src/holosoma/holosoma/__init__.py
 # worker threads. /etc/ld.so.preload survives python.sh overwriting LD_PRELOAD.
 # Keep this system-wide installation out of the standalone setup script.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    source scripts/setup_isaacsim3.sh \
-    && isaacsim3_validate_runtime \
+    source scripts/setup_isaacsim6.sh \
+    && isaacsim6_validate_runtime \
     && mkdir -p "$WORKSPACE_DIR" \
-    && isaacsim3_prepare_isaaclab \
-    && bash "$ISAACLAB3_DIR/docker/scripts/install_carb_env_shim.sh" "$ISAACSIM_ROOT_PATH" \
-    && isaacsim3_setup_main
+    && isaacsim6_prepare_isaaclab \
+    && bash "$ISAACSIM6_ISAACLAB_DIR/docker/scripts/install_carb_env_shim.sh" "$ISAACSIM_ROOT_PATH" \
+    && isaacsim6_setup_main
 
 COPY docker/apt/zzzz-holosoma-security-updates /etc/apt/apt.conf.d/
 RUN apt-get update \

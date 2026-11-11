@@ -74,7 +74,7 @@ class IsaacSim(BaseSimulator):
         super().__init__(tyro_config, terrain_manager, device)
         self.backend = get_backend(
             self.simulator_config.isaacsim_backend,
-            native=self.simulator_config.sim.isaaclab3,
+            native=self.simulator_config.sim.isaacsim6,
             rendering=(
                 self.video_config.enabled
                 or any(isinstance(sensor, CameraSensorConfig) for sensor in self.sensor_config.values())
@@ -236,7 +236,7 @@ class IsaacSim(BaseSimulator):
         """
         link_physics = self.robot_config.asset.link_physics
         mat_cfg = physics_material_cfg(link_physics) if link_physics is not None else None
-        if mat_cfg is None and not self.backend.is_isaaclab3:
+        if mat_cfg is None and not self.backend.is_isaacsim6:
             return
         robot_prim_path = "/World/envs/env_0/Robot"
         material_path = f"{robot_prim_path}/linkPhysicsMaterial"
@@ -260,7 +260,7 @@ class IsaacSim(BaseSimulator):
                 f"dynamic_friction={mat_cfg.dynamic_friction} restitution={mat_cfg.restitution} "
                 f"friction_combine={mat_cfg.friction_combine_mode} restitution_combine={mat_cfg.restitution_combine_mode}"
             )
-        if self.backend.is_isaaclab3:
+        if self.backend.is_isaacsim6:
             from holosoma.simulator.isaacsim.backends.native_properties import author_robot_physics
 
             author_robot_physics(

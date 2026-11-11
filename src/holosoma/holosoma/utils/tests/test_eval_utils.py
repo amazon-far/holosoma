@@ -581,8 +581,8 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
     loaded_simulator["config"]["sim"].pop("mujoco")
     # New backend fields must default to the previous API when loading an old
     # checkpoint, including in a Lab 3 environment.
-    assert loaded_simulator["config"].pop("isaacsim_backend") == "isaaclab2"
-    assert loaded_simulator["config"]["sim"].pop("isaaclab3") == {
+    assert loaded_simulator["config"].pop("isaacsim_backend") == "isaacsim5"
+    assert loaded_simulator["config"]["sim"].pop("isaacsim6") == {
         "physics_backend": "physx",
         "renderer": "isaac_rtx",
         "require_kit": False,

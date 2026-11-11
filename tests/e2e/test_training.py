@@ -179,13 +179,13 @@ def test_training_and_eval_workflow_isaacsim(workflow_name: str, multi_gpu: bool
 
 @pytest.mark.isaacsim
 def test_newton_training_and_eval_workflow_isaacsim(isaacsim_backend: str, isaacsim_simulator: str):
-    if isaacsim_backend != "isaaclab3":
+    if isaacsim_backend != "isaacsim6":
         pytest.skip("Newton training requires the explicit Isaac Lab 3 profile")
     assert_training_and_eval_workflow(
         "g1-29dof-fast-sac",
         extra_config=[
             f"simulator:{isaacsim_simulator}",
-            "--simulator.config.sim.isaaclab3.physics-backend=newton",
+            "--simulator.config.sim.isaacsim6.physics-backend=newton",
         ],
     )
 
@@ -193,14 +193,14 @@ def test_newton_training_and_eval_workflow_isaacsim(isaacsim_backend: str, isaac
 @pytest.mark.isaacsim
 @pytest.mark.parametrize("physics", ["physx", "newton"])
 def test_ovrtx_training_and_eval_workflow_isaacsim(physics, isaacsim_backend: str, isaacsim_simulator: str):
-    if isaacsim_backend != "isaaclab3":
+    if isaacsim_backend != "isaacsim6":
         pytest.skip("OVRTX training requires the explicit Isaac Lab 3 profile")
     assert_training_and_eval_workflow(
         "g1-29dof-fast-sac",
         extra_config=[
             f"simulator:{isaacsim_simulator}",
-            f"--simulator.config.sim.isaaclab3.physics-backend={physics}",
-            "--simulator.config.sim.isaaclab3.renderer=ovrtx",
+            f"--simulator.config.sim.isaacsim6.physics-backend={physics}",
+            "--simulator.config.sim.isaacsim6.renderer=ovrtx",
         ],
     )
 

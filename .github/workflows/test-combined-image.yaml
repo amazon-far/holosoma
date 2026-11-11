@@ -93,4 +93,4 @@ jobs:
         shell: bash
         run: |
           cd /workspace/holosoma
-          bash tests/ci/no_sim_ci_tests.sh --backend isaaclab2
+          bash tests/ci/no_sim_ci_tests.sh --backend isaacsim5

@@ -131,7 +131,7 @@ def test_default_sun_can_be_disabled(tmp_path, run_isaacsim_harness):
 def test_headless_video_tracks_panel_motion_without_mounted_cameras(
     tmp_path, memory_stage, run_isaacsim_harness, isaacsim_backend
 ):
-    if memory_stage and isaacsim_backend != "isaaclab3":
+    if memory_stage and isaacsim_backend != "isaacsim6":
         pytest.skip("create_stage_in_memory is a native Isaac Lab 3 setting")
     args = ["--create-stage-in-memory"] if memory_stage else []
     result_file = tmp_path / "headless_video.txt"

@@ -369,7 +369,7 @@ def assert_dr_damping_governs(ctx):
         f"  dr-damp: damped vx {float(vd0[0]):.3f}->{float(vd1[0]):.3f} (loss {float(damped_loss[0]):.3f}) "
         f"control loss {float(control_loss[0]):.3f}  damped>control_all={ok}"
     )
-    if ctx.args.simulator == "isaacsim3" and ctx.n >= 2:
+    if ctx.args.simulator == "isaacsim6" and ctx.n >= 2:
         import types
 
         from holosoma.managers.randomization.terms.objects import (
@@ -1423,7 +1423,7 @@ def main() -> int:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenario", required=True, choices=sorted(SCENARIOS))
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim3"])
+    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim6"])
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
@@ -1466,7 +1466,7 @@ def main() -> int:
         device=device,
         training=dataclasses.replace(config.training, num_envs=args.num_envs, headless=headless),
     )
-    if args.simulator == "isaacsim3" and args.scenario == "dr-damping-governs":
+    if args.simulator == "isaacsim6" and args.scenario == "dr-damping-governs":
         # Live USD damping on cloned bodies requires Kit's PhysX listener in
         # this SDK. Other headless scenarios retain the standalone runtime.
         sim_cfg = config.simulator.config
@@ -1477,7 +1477,7 @@ def main() -> int:
                 config=dataclasses.replace(
                     sim_cfg,
                     sim=dataclasses.replace(
-                        sim_cfg.sim, isaaclab3=dataclasses.replace(sim_cfg.sim.isaaclab3, require_kit=True)
+                        sim_cfg.sim, isaacsim6=dataclasses.replace(sim_cfg.sim.isaacsim6, require_kit=True)
                     ),
                 ),
             ),

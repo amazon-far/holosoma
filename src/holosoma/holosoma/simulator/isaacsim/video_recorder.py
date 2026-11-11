@@ -20,8 +20,8 @@ from loguru import logger
 from holosoma.simulator.shared.video_recorder import VideoRecorderInterface
 
 
-def _current_stage(backend: IsaacLabBackend) -> Any:
-    if backend.is_isaaclab3:
+def _current_stage(backend: IsaacSimBackendAdapter) -> Any:
+    if backend.is_isaacsim6:
         return backend.stage_utils.get_current_stage()
     import omni.usd
 
@@ -31,7 +31,7 @@ def _current_stage(backend: IsaacLabBackend) -> Any:
 if TYPE_CHECKING:
     from holosoma.config_types.video import VideoConfig
     from holosoma.simulator.isaacsim.isaacsim import IsaacSim
-    from holosoma.simulator.isaacsim.backends.base import IsaacLabBackend
+    from holosoma.simulator.isaacsim.backends.base import IsaacSimBackendAdapter
 
 
 class IsaacSimVideoRecorder(VideoRecorderInterface):
@@ -128,7 +128,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         self.camera_prim.GetVerticalApertureAttr().Set(vertical_aperture)
 
         # Create a view for the sensor
-        if self.simulator.backend.is_isaaclab3:
+        if self.simulator.backend.is_isaacsim6:
             from isaaclab.sim.views.usd_frame_view import UsdFrameView
 
             # Late-created Replicator cameras read USD. Fabric-only views
@@ -150,7 +150,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
             "rgb", device=self.simulator.device, do_array_copy=False
         )
         self._rgb_annotator.attach([self._render_product])
-        if self.simulator.backend.is_isaaclab3:
+        if self.simulator.backend.is_isaacsim6:
             from pxr import Sdf
             from .backends.camera_renderers import IsaacRtxCapture
 
@@ -188,7 +188,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         try:
             # Update camera position to track robot using shared logic
             self._update_camera_position()
-            if self.simulator.backend.is_isaaclab3:
+            if self.simulator.backend.is_isaacsim6:
                 from pxr import Gf
                 from isaaclab_physx.renderers.fabric import FabricBackendCfg
                 from .backends.camera_renderers import capture_isaac_rtx_products
@@ -260,7 +260,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
 
             # The view contains the one camera already placed under record_env_id; environment
             # indices are not indices into this singleton view.
-            if self.simulator.backend.is_isaaclab3:
+            if self.simulator.backend.is_isaacsim6:
                 import warp as wp
 
                 self._view.set_world_poses(
@@ -317,7 +317,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
 
         if self._rgb_annotator is None and self._render_product is None and self._view is not None:
             try:
-                if self.simulator.backend.is_isaaclab3:
+                if self.simulator.backend.is_isaacsim6:
                     self._view.close()
             except Exception as exc:
                 failures.append(exc)

@@ -57,7 +57,7 @@ def _config(device: str, simulator: str):
 
 def _main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", choices=["isaacsim", "isaacsim3"], default="isaacsim")
+    parser.add_argument("--simulator", choices=["isaacsim", "isaacsim6"], default="isaacsim")
     parser.add_argument("--result-file", default=None, help="write 'OK' here after PASS (teardown-robust)")
     args = parser.parse_args()
 

@@ -4,24 +4,24 @@
 # The isaacsim conda env is sourced only for its CPU torch install; no simulator boots here.
 set -ex
 
-backend=isaaclab2
+backend=isaacsim5
 if [[ $# != 0 ]]; then
   if [[ $# != 2 || $1 != --backend ]]; then
-    echo "Usage: $0 [--backend isaaclab2|isaaclab3]" >&2
+    echo "Usage: $0 [--backend isaacsim5|isaacsim6]" >&2
     exit 2
   fi
   backend=$2
 fi
 case "$backend" in
-  isaaclab2|isaaclab3) ;;
+  isaacsim5|isaacsim6) ;;
   *) echo "Unknown Isaac Sim backend: $backend" >&2; exit 2 ;;
 esac
 
 cd /workspace/holosoma
 
 case "$backend" in
-  isaaclab2) source scripts/source_isaacsim_setup.sh ;;
-  isaaclab3) source scripts/source_isaacsim3_setup.sh ;;
+  isaacsim5) source scripts/source_isaacsim_setup.sh ;;
+  isaacsim6) source scripts/source_isaacsim6_setup.sh ;;
 esac
 python -m pip install -e 'src/holosoma[unitree,booster]'
 python -m pip install -e src/holosoma_inference

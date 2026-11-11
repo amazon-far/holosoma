@@ -27,8 +27,8 @@ def shell_tree(tmp_path: Path) -> ShellTree:
     scripts = checkout / "scripts"
     scripts.mkdir()
     for family, name in [
-        ("isaaclab2", "source_isaacsim_setup.sh"),
-        ("isaaclab3", "source_isaacsim3_setup.sh"),
+        ("isaacsim5", "source_isaacsim_setup.sh"),
+        ("isaacsim6", "source_isaacsim6_setup.sh"),
     ]:
         (scripts / name).write_text(f"export CI_ACTIVATED_PROFILE={family}\n")
 
@@ -67,7 +67,7 @@ def _run(
     script: str,
     args: list[str],
     *,
-    inherited_backend: str = "isaaclab3",
+    inherited_backend: str = "isaacsim6",
     multigpu: str = "False",
     preflight_exit: int = 0,
 ) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
@@ -91,11 +91,11 @@ def _run(
 @pytest.mark.parametrize(
     ("backend", "multigpu", "preflight_exit"),
     [
-        ("isaaclab2", "False", 0),
-        ("isaaclab2", "True", 0),
-        ("isaaclab3", "False", 0),
-        ("isaaclab3", "True", 0),
-        ("isaaclab3", "False", 13),
+        ("isaacsim5", "False", 0),
+        ("isaacsim5", "True", 0),
+        ("isaacsim6", "False", 0),
+        ("isaacsim6", "True", 0),
+        ("isaacsim6", "False", 13),
     ],
 )
 def test_ci_routes_isaac_and_pure_suites(
@@ -105,7 +105,7 @@ def test_ci_routes_isaac_and_pure_suites(
         shell_tree,
         "isaacsim_ci_tests.sh",
         ["--backend", backend],
-        inherited_backend="isaaclab2" if backend == "isaaclab3" else "isaaclab3",
+        inherited_backend="isaacsim5" if backend == "isaacsim6" else "isaacsim6",
         multigpu=multigpu,
         preflight_exit=preflight_exit,
     )
@@ -120,7 +120,7 @@ def test_ci_routes_isaac_and_pure_suites(
     expected = [holosoma_install, preflight]
     if preflight_exit == 0:
         expected.append([*pytest_args, marker, *ignores])
-    if preflight_exit == 0 and backend == "isaaclab3" and multigpu == "False":
+    if preflight_exit == 0 and backend == "isaacsim6" and multigpu == "False":
         expected.extend(
             [
                 holosoma_install,
@@ -134,9 +134,9 @@ def test_ci_routes_isaac_and_pure_suites(
 @pytest.mark.parametrize(
     ("args", "inherited_backend", "expected_backend"),
     [
-        ([], "isaaclab3", "isaaclab2"),
-        (["--backend", "isaaclab2"], "isaaclab3", "isaaclab2"),
-        (["--backend", "isaaclab3"], "isaaclab2", "isaaclab3"),
+        ([], "isaacsim6", "isaacsim5"),
+        (["--backend", "isaacsim5"], "isaacsim6", "isaacsim5"),
+        (["--backend", "isaacsim6"], "isaacsim5", "isaacsim6"),
     ],
 )
 def test_pure_suite_selects_version_only_from_explicit_arguments(

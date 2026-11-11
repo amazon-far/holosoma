@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--simulator", required=True, choices=["isaacsim", "isaacsim3"])
+parser.add_argument("--simulator", required=True, choices=["isaacsim", "isaacsim6"])
 parser.add_argument("--report", required=True)
 parser.add_argument("--result-file", required=True)
 parser.add_argument("--completion", choices=["ok", "missing", "fail"], default="ok")
@@ -46,8 +46,8 @@ EXPECTED_PRESET = {preset!r}
 @pytest.mark.parametrize("caller_args", [
     [],
     ["--simulator", "isaacsim"],
-    ["--simulator=isaacsim3"],
-    ["--simulator", "isaacsim", "--simulator=isaacsim3"],
+    ["--simulator=isaacsim6"],
+    ["--simulator", "isaacsim", "--simulator=isaacsim6"],
 ])
 def test_child_receives_selected_profile(
     tmp_path, isaacsim_backend, isaacsim_simulator, run_isaacsim_harness, caller_args
@@ -95,13 +95,13 @@ def test_missing_caller_preset_is_not_silently_consumed(run_isaacsim_harness):
 """
 
 
-@pytest.mark.parametrize("backend_option", [None, "isaaclab2", "isaaclab3"], ids=["default", "lab2", "lab3"])
+@pytest.mark.parametrize("backend_option", [None, "isaacsim5", "isaacsim6"], ids=["default", "sim5", "sim6"])
 def test_pytest_profile_routes_real_children(
     pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, backend_option: str | None
 ) -> None:
-    backend = backend_option or "isaaclab2"
-    preset = "isaacsim3" if backend == "isaaclab3" else "isaacsim"
-    monkeypatch.setenv("HOLOSOMA_ISAACSIM_BACKEND", "isaaclab2" if backend == "isaaclab3" else "isaaclab3")
+    backend = backend_option or "isaacsim5"
+    preset = "isaacsim6" if backend == "isaacsim6" else "isaacsim"
+    monkeypatch.setenv("HOLOSOMA_ISAACSIM_BACKEND", "isaacsim5" if backend == "isaacsim6" else "isaacsim6")
     pytester.makeconftest((ROOT / "conftest.py").read_text())
     pytester.makepyfile(child=_CHILD, test_profile=_PROFILE_TESTS.format(backend=backend, preset=preset))
     options = [] if backend_option is None else ["--isaacsim-backend", backend_option]

@@ -11,10 +11,10 @@ on:
         required: true
         type: string
       isaacsim_backend:
-        description: Isaac Lab implementation selected by the shared Isaac Sim suite
+        description: Isaac Sim version selected by the shared simulator suite
         required: false
         type: string
-        default: isaaclab2
+        default: isaacsim5
       multigpu:
         description: JSON array of HOLOSOMA_MULTIGPU values to test
         required: false

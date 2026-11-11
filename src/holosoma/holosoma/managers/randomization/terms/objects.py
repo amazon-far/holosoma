@@ -524,7 +524,7 @@ def _isaacsim_randomize_body_damping(
     stage for every (name, env) pair); the per-(name, env) work then scans only that list.
     """
     if not simulator.backend.uses_kit or (
-        simulator.backend.is_isaaclab3 and simulator.backend.options.physics_backend != "physx"
+        simulator.backend.is_isaacsim6 and simulator.backend.options.physics_backend != "physx"
     ):
         raise RandomizerNotSupportedError(
             "Live USD body-damping randomization requires the Kit PhysX runtime; "

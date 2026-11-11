@@ -83,7 +83,7 @@ TREND_FLAT = "⚪"
 # both MuJoCo backends report `mujoco`, and the GPU one is tagged `mjwarp`. "isaacgym" is retained
 # for ARCHIVED runs only -- the backend is retired; dropping it would make historical runs resolve
 # their exp_name to the literal tag instead of falling back to "unknown-sim".
-KNOWN_SIMULATORS = {"isaacgym", "isaacsim", "isaacsim3", "mujoco", "mjwarp"}
+KNOWN_SIMULATORS = {"isaacgym", "isaacsim", "isaacsim6", "mujoco", "mjwarp"}
 # GPU count for a multi-GPU nightly run; used only as a fallback for legacy runs
 # tagged with "multigpu" but no explicit "gpus-N" tag. Keep in sync with nightly.py.
 MULTIGPU_NUM_GPUS = 4

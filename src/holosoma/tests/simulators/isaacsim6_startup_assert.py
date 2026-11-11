@@ -12,7 +12,7 @@ from pathlib import Path
 if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
-from holosoma.config_types.simulator import IsaacLab3Config
+from holosoma.config_types.simulator import IsaacSim6Config
 from holosoma.utils.sim_utils import close_simulation_resources, setup_simulation_environment
 from tests.simulators import _camera_presets
 from tests.simulators._native_runtime_assertions import assert_native_runtime
@@ -22,20 +22,20 @@ from tests.simulators._sim_harness import build_run_sim_config, step
 def main() -> int:
     started = time.perf_counter()
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", choices=["isaacsim3"], required=True)
+    parser.add_argument("--simulator", choices=["isaacsim6"], required=True)
     parser.add_argument("--physics", choices=["physx", "newton"], required=True)
     parser.add_argument("--renderer", choices=["isaac_rtx", "newton_warp", "ovrtx"], required=True)
     parser.add_argument("--result-file", required=True)
     args = parser.parse_args()
     config = build_run_sim_config(args.simulator, "empty", "g1-29dof", "terrain_locomotion_plane")
-    native = IsaacLab3Config(physics_backend=args.physics, renderer=args.renderer)
+    native = IsaacSim6Config(physics_backend=args.physics, renderer=args.renderer)
     config = dataclasses.replace(
         config,
         simulator=dataclasses.replace(
             config.simulator,
             config=dataclasses.replace(
                 config.simulator.config,
-                sim=dataclasses.replace(config.simulator.config.sim, isaaclab3=native),
+                sim=dataclasses.replace(config.simulator.config.sim, isaacsim6=native),
             ),
         ),
         scene=_camera_presets.panel_target,

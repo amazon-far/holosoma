@@ -38,8 +38,8 @@ def _synthetic_robot_config():
 def _legacy_actuator_cfgs(robot, *, backend):
     from isaaclab.actuators import IdealPDActuatorCfg
 
-    effort_key = "actuator_effort_limit" if backend.is_isaaclab3 else "effort_limit"
-    velocity_key = "actuator_velocity_limit" if backend.is_isaaclab3 else "velocity_limit"
+    effort_key = "actuator_effort_limit" if backend.is_isaacsim6 else "effort_limit"
+    velocity_key = "actuator_velocity_limit" if backend.is_isaacsim6 else "velocity_limit"
     return [
         IdealPDActuatorCfg(
             joint_names_expr=[joint_name],
@@ -63,7 +63,7 @@ def _instantiate_actuator(cfg, joint_names, *, backend):
     count = len(joint_names)
     defaults = torch.zeros((2, count), dtype=torch.float32)
     joint_properties = {}
-    if not backend.is_isaaclab3:
+    if not backend.is_isaacsim6:
         joint_properties = {
             "armature": defaults,
             "friction": defaults,
@@ -71,8 +71,8 @@ def _instantiate_actuator(cfg, joint_names, *, backend):
             "viscous_friction": defaults,
         }
     actuator_class = string_to_callable(cfg.class_type) if isinstance(cfg.class_type, str) else cfg.class_type
-    effort_key = "actuator_effort_limit" if backend.is_isaaclab3 else "effort_limit"
-    velocity_key = "actuator_velocity_limit" if backend.is_isaaclab3 else "velocity_limit"
+    effort_key = "actuator_effort_limit" if backend.is_isaacsim6 else "effort_limit"
+    velocity_key = "actuator_velocity_limit" if backend.is_isaacsim6 else "velocity_limit"
     return actuator_class(
         cfg=copy.deepcopy(cfg),
         joint_names=joint_names,
@@ -97,7 +97,7 @@ def _check_grouped_actuator_config(*, backend) -> None:
 
     from holosoma.simulator.isaacsim.isaacsim_articulation_cfg import build_robot_articulation_cfg
 
-    native = backend.is_isaaclab3
+    native = backend.is_isaacsim6
     robot = _synthetic_robot_config()
     articulation_cfg = build_robot_articulation_cfg(robot, backend=backend)
     assert list(articulation_cfg.actuators) == ["all_dofs"]
@@ -224,7 +224,7 @@ def _check_preserved_fixed_joint_config(*, backend) -> None:
     from holosoma.config_values.robot import g1_29dof, t1_29dof_waist_wrist
     from holosoma.simulator.isaacsim.isaacsim_articulation_cfg import build_robot_articulation_cfg
 
-    native = backend.is_isaaclab3
+    native = backend.is_isaacsim6
     for robot in (g1_29dof, t1_29dof_waist_wrist):
         assert robot.asset.collapse_fixed_joints is True
         spawn = build_robot_articulation_cfg(robot, backend=backend).spawn
@@ -264,7 +264,7 @@ def _check_preserved_fixed_joint_config(*, backend) -> None:
 def _check_contact_sensor_config(*, backend) -> None:
     from holosoma.simulator.isaacsim.isaacsim_articulation_cfg import build_contact_sensor_cfg
 
-    native = backend.is_isaaclab3
+    native = backend.is_isaacsim6
     if native:
         from isaaclab_physx.sensors import ContactSensorData
     else:
@@ -305,13 +305,13 @@ def _check_contact_sensor_config(*, backend) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="IsaacSim articulation cfg assertion harness.")
-    parser.add_argument("--simulator", choices=["isaacsim", "isaacsim3"], default="isaacsim")
+    parser.add_argument("--simulator", choices=["isaacsim", "isaacsim6"], default="isaacsim")
     parser.add_argument("--result-file", default=None, help="write 'OK' here after all checks pass")
     args = parser.parse_args()
 
     from holosoma.simulator.isaacsim.backends import get_backend
 
-    backend = get_backend("isaaclab3" if args.simulator == "isaacsim3" else "isaaclab2")
+    backend = get_backend("isaacsim6" if args.simulator == "isaacsim6" else "isaacsim5")
     simulation_app = backend.launch_app({"headless": True})
     try:
         _check_grouped_actuator_config(backend=backend)
@@ -320,7 +320,7 @@ def main() -> int:
         _check_contact_sensor_config(backend=backend)
     except BaseException:
         print("ISAACSIM ARTICULATION CFG ASSERT FAILED:\n" + traceback.format_exc(), flush=True)
-        if backend.is_isaaclab3:
+        if backend.is_isaacsim6:
             simulation_app.close(exit_code=1)
         else:
             simulation_app.close()

@@ -9,8 +9,8 @@ import pytest
 import torch
 import warp as wp
 
-from holosoma.simulator.isaacsim.backends.isaaclab2 import IsaacLab2Backend
-from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Backend
+from holosoma.simulator.isaacsim.backends.isaacsim5 import IsaacSim5Backend
+from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Backend
 
 pytestmark = pytest.mark.no_sim
 
@@ -54,7 +54,7 @@ def test_native_property_setters_receive_warp_selectors_and_full_values(
         calls.append(properties)
 
     asset = SimpleNamespace(device="cpu", **{f"set_{name}_index": setter})
-    IsaacLab3Backend().write_physics_property(asset, name, values, env_ids)
+    IsaacSim6Backend().write_physics_property(asset, name, values, env_ids)
     assert len(calls) == 1
 
 
@@ -74,7 +74,7 @@ def test_native_raw_material_writer_keeps_cpu_int32_selectors() -> None:
         calls.append((materials, indices))
 
     asset = SimpleNamespace(root_view=SimpleNamespace(set_material_properties=setter))
-    IsaacLab3Backend().write_physics_property(asset, "material_properties", values, env_ids)
+    IsaacSim6Backend().write_physics_property(asset, "material_properties", values, env_ids)
     assert len(calls) == 1
 
 
@@ -91,7 +91,7 @@ def test_legacy_property_writer_preserves_raw_torch_arguments(name: str) -> None
         calls.append((supplied, indices))
 
     asset = SimpleNamespace(root_physx_view=SimpleNamespace(**{f"set_{name}": setter}))
-    IsaacLab2Backend().write_physics_property(asset, name, values, env_ids)
+    IsaacSim5Backend().write_physics_property(asset, name, values, env_ids)
     assert len(calls) == 1
 
 
@@ -132,7 +132,7 @@ def test_native_startup_restore_writes_world_states_without_mutating_defaults() 
         write_joint_velocity_to_sim_index=write,
         reset=reset,
     )
-    IsaacLab3Backend().restore_initial_articulation_state(asset, origins)
+    IsaacSim6Backend().restore_initial_articulation_state(asset, origins)
 
     assert calls == ["root_pose", "root_velocity", "position", "velocity", "reset"]
     expected_pose = torch.tensor([[11.0, -18.0, 1.1, 0.0, 0.0, 1.0, 0.0], [-32.0, 43.0, 0.55, 0.0, 1.0, 0.0, 0.0]])

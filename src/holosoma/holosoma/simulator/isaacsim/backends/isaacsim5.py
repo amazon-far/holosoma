@@ -1,15 +1,15 @@
-"""Isaac Lab 2.3 / Isaac Sim 5.1 native API."""
+"""Isaac Sim 5.1 native API through Isaac Lab 2.3."""
 
 from __future__ import annotations
 
 from argparse import Namespace
 from typing import Any
 
-from .base import IsaacLabBackend
+from .base import IsaacSimBackendAdapter
 
 
-class IsaacLab2Backend(IsaacLabBackend):
-    major = 2
+class IsaacSim5Backend(IsaacSimBackendAdapter):
+    isaaclab_major = 2
     env_regex_ns = "/World/envs/env_.*"
 
     @classmethod

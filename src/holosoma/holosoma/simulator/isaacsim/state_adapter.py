@@ -9,7 +9,7 @@ import torch
 if TYPE_CHECKING:
     from holosoma.simulator.base_simulator.state import SimState
     from holosoma.simulator.shared.object_registry import ObjectRegistry
-    from .backends.base import IsaacLabBackend
+    from .backends.base import IsaacSimBackendAdapter
 
 
 class IsaacSimStateAdapter:
@@ -40,7 +40,7 @@ class IsaacSimStateAdapter:
         scene: Any,
         robot: Any,
         state: SimState,
-        backend: IsaacLabBackend,
+        backend: IsaacSimBackendAdapter,
     ) -> None:
         self.device = device
         self._object_registry = object_registry

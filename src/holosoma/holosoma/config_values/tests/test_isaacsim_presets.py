@@ -13,8 +13,8 @@ pytestmark = pytest.mark.no_sim
 
 
 @pytest.mark.parametrize("config_type", ["ExperimentConfig", "RunSimConfig"])
-@pytest.mark.parametrize("environment_backend", ["isaaclab2", "isaaclab3", "unsupported-obsolete-value"])
-def test_explicit_lab3_preset_parses_in_a_fresh_process(config_type: str, environment_backend: str) -> None:
+@pytest.mark.parametrize("environment_backend", ["isaacsim5", "isaacsim6", "unsupported-obsolete-value"])
+def test_explicit_sim6_preset_parses_in_a_fresh_process(config_type: str, environment_backend: str) -> None:
     module = "experiment" if config_type == "ExperimentConfig" else "run_sim"
     child = subprocess.run(
         [
@@ -27,9 +27,9 @@ from holosoma.config_types.{module} import {config_type}
 from holosoma.utils.config_registry import parse_config
 
 legacy = parse_config({config_type}, args=["simulator:isaacsim"]).simulator
-native = parse_config({config_type}, args=["simulator:isaacsim3"]).simulator
+native = parse_config({config_type}, args=["simulator:isaacsim6"]).simulator
 override = parse_config(
-    {config_type}, args=["simulator:isaacsim", "--simulator.config.isaacsim-backend=ISAACLAB3"]
+    {config_type}, args=["simulator:isaacsim", "--simulator.config.isaacsim-backend=ISAACSIM6"]
 ).simulator
 print(json.dumps({{
     "name": native.config.name,
@@ -55,9 +55,9 @@ print(json.dumps({{
     actual = json.loads(child.stdout.strip())
     assert actual == {
         "name": "isaacsim",
-        "backend": "isaaclab3",
-        "override_backend": "isaaclab3",
-        "legacy_backend": "isaaclab2",
+        "backend": "isaacsim6",
+        "override_backend": "isaacsim6",
+        "legacy_backend": "isaacsim5",
         "same_defaults": True,
         "same_target": True,
         "bridge": config_type == "RunSimConfig",

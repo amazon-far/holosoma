@@ -1,4 +1,4 @@
-"""Isaac Lab 3.0 / Isaac Sim 6.2 native API.
+"""Isaac Sim 6.2 native API through Isaac Lab 3.0.
 
 See Isaac Lab's migrating.rst, how-to/cloning.rst and how-to/proxy_array.rst.
 Lab 3 already uses Holosoma's XYZW convention and cached zero-copy Torch views.
@@ -11,10 +11,10 @@ from dataclasses import asdict
 from argparse import Namespace
 from typing import Any
 
-from holosoma.config_types.simulator import IsaacLab3Config
+from holosoma.config_types.simulator import IsaacSim6Config
 from holosoma.config_types.mujoco import MujocoConfig
 
-from .base import IsaacLabBackend
+from .base import IsaacSimBackendAdapter
 from .native_config import build_config
 from .newton_config import configured, solver_settings
 
@@ -46,7 +46,7 @@ _RTX_PRESETS = {
 }
 
 
-class IsaacLab3Runtime:
+class IsaacSim6Runtime:
     """Retain either runtime through Lab 3's supported launch context.
 
     ``launch_simulation`` owns the runtime and preserves failure status during
@@ -89,12 +89,12 @@ class IsaacLab3Runtime:
         return getattr(self._app, name)
 
 
-class IsaacLab3Backend(IsaacLabBackend):
-    major = 3
+class IsaacSim6Backend(IsaacSimBackendAdapter):
+    isaaclab_major = 3
     env_regex_ns = "/World/envs/env_[^/]+"
 
-    def __init__(self, native: IsaacLab3Config | None = None, *, rendering: bool = True):
-        self.options = native if native is not None else IsaacLab3Config()
+    def __init__(self, native: IsaacSim6Config | None = None, *, rendering: bool = True):
+        self.options = native if native is not None else IsaacSim6Config()
         self._rendering = rendering
 
     @property
@@ -196,7 +196,7 @@ class IsaacLab3Backend(IsaacLabBackend):
         if requested_physics not in (None, expected_physics):
             raise ValueError(
                 f"SDK --physics {requested_physics!r} conflicts with configured {expected_physics!r}; "
-                "select --simulator.config.sim.isaaclab3.physics-backend instead."
+                "select --simulator.config.sim.isaacsim6.physics-backend instead."
             )
         # Holosoma's viewer contract predates Lab 3's independent --viz switch.
         # Native visualizers preserve the standalone runtime for Warp/OVRTX.
@@ -229,7 +229,7 @@ class IsaacLab3Backend(IsaacLabBackend):
                 )
             register_standalone_schemas()
             _RUNTIME.enter_context(launch_simulation(launch_cfg, args))
-            return IsaacLab3Runtime()
+            return IsaacSim6Runtime()
         # Sim 6.2's deferred telemetry CPU-info startup can race native
         # interface initialization. Use Kit's supported serial startup mode.
         telemetry_setting = "/exts/omni.kit.telemetry/skipDeferredStartup"
@@ -254,7 +254,7 @@ class IsaacLab3Backend(IsaacLabBackend):
         _RUNTIME.enter_context(launch_simulation(launch_cfg, args))
         import omni.kit.app
 
-        return IsaacLab3Runtime(omni.kit.app.get_app())
+        return IsaacSim6Runtime(omni.kit.app.get_app())
 
     def physics_config(self, config: Any = None) -> Any:
         """Build the explicitly selected physics engine's supported config."""
@@ -284,7 +284,7 @@ class IsaacLab3Backend(IsaacLabBackend):
             return build_config(
                 OvPhysxCfg,
                 {},
-                location="isaaclab3.physics",
+                location="isaacsim6.physics",
                 defaults={"gpu_max_rigid_patch_count": 10 * 2**15},
             )
         from isaaclab_physx.physics import PhysxCfg
@@ -298,7 +298,7 @@ class IsaacLab3Backend(IsaacLabBackend):
                 "max_velocity_iteration_count": config.physx.num_velocity_iterations,
                 "gpu_max_rigid_patch_count": 10 * 2**15,
             }
-        return build_config(PhysxCfg, {}, location="isaaclab3.physics", defaults=defaults)
+        return build_config(PhysxCfg, {}, location="isaacsim6.physics", defaults=defaults)
 
     def configure_physics_scene(self, sim: Any, config: Any) -> None:
         if self.uses_kit or self.options.physics_backend != "physx":
@@ -455,7 +455,7 @@ class IsaacLab3Backend(IsaacLabBackend):
     def contact_forces(sensor: Any, config: Any) -> Any:
         # Lab 2's net_forces_w meant normal force. Sim 6.2 adds friction to
         # net_forces_w; keep the prior reward/termination contract by default.
-        if config.isaaclab3.contact_force_mode == "total":
+        if config.isaacsim6.contact_force_mode == "total":
             return sensor.data.net_forces_w.torch
         return sensor.data.net_normal_forces_w.torch
 
@@ -463,7 +463,7 @@ class IsaacLab3Backend(IsaacLabBackend):
         from isaaclab.sim import SimulationCfg
         from isaaclab.sim.spawners.materials import RigidBodyMaterialBaseCfg
 
-        native = config.isaaclab3
+        native = config.isaacsim6
         return SimulationCfg(
             dt=1.0 / config.fps,
             render_interval=config.render_interval_steps,
@@ -587,7 +587,7 @@ class IsaacLab3Backend(IsaacLabBackend):
         settings = configured(self.options.renderer_options)
         if self.options.renderer == "ovrtx" and "enable_shadows" in settings:
             raise ValueError(
-                "isaaclab3.renderer_options.enable_shadows is Warp-only: "
+                "isaacsim6.renderer_options.enable_shadows is Warp-only: "
                 "OVRTX RGB/depth outputs always include shadows."
             )
         if self.options.renderer == "ovrtx":
@@ -602,7 +602,7 @@ class IsaacLab3Backend(IsaacLabBackend):
             from isaaclab_physx.renderers import IsaacRtxRendererCfg
 
             cls = IsaacRtxRendererCfg
-        cfg = build_config(cls, settings, location="isaaclab3.renderer_options")
+        cfg = build_config(cls, settings, location="isaacsim6.renderer_options")
         if self.options.renderer == "ovrtx":
             from .camera_renderers import create_scheduled_ovrtx_renderer
 
