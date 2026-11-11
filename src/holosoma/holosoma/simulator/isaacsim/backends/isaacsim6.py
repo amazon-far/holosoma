@@ -11,12 +11,10 @@ from dataclasses import asdict
 from argparse import Namespace
 from typing import Any
 
-from holosoma.config_types.simulator import IsaacSim6Config
+from holosoma.config_types.simulator import IsaacSim6Config, IsaacSim6NewtonConfig
 from holosoma.config_types.mujoco import MujocoConfig
 
 from .base import IsaacSimBackendAdapter
-from .native_config import build_config
-from .newton_config import configured, solver_settings
 
 
 _RUNTIME = ExitStack()
@@ -44,6 +42,43 @@ _RTX_PRESETS = {
     "/rtx/pathtracing/maxSamplesPerLaunch": (1000000, 1000000, 1000000),
     "/rtx/viewTile/limit": (1000000, 1000000, 1000000),
 }
+
+
+def newton_solver_settings(shared: MujocoConfig, newton: IsaacSim6NewtonConfig) -> dict[str, Any]:
+    """Map shared solver controls and reject unsupported explicit settings."""
+    if shared.solver == "pgs":
+        raise ValueError("sim.mujoco.solver='pgs' is unsupported by Newton MJWarp; use cg or newton")
+    if shared.integrator == "implicit":
+        raise ValueError("sim.mujoco.integrator='implicit' is unsupported by Newton MJWarp; use implicitfast")
+    if shared.noslip_iterations not in (None, 0):
+        raise ValueError("sim.mujoco.noslip_iterations: Newton MJWarp supports only zero")
+    if shared.warp.naconmax is not None:
+        raise ValueError(
+            "sim.mujoco.warp.naconmax: Newton's solver does not expose total-pool allocation; use nconmax_per_env"
+        )
+    result = {
+        name: getattr(shared, name)
+        for name in (
+            "integrator",
+            "solver",
+            "cone",
+            "jacobian",
+            "impratio",
+            "iterations",
+            "tolerance",
+            "ls_iterations",
+            "ls_tolerance",
+        )
+        if getattr(shared, name) is not None
+    }
+    # Newton's automatic estimate underallocates contacts in configured G1
+    # scenes. Keep this backend default out of the shared user configuration.
+    result["nconmax"] = shared.warp.nconmax_per_env if shared.warp.nconmax_per_env is not None else 128
+    if shared.warp.njmax_per_env is not None:
+        result["njmax"] = shared.warp.njmax_per_env
+    result["use_mujoco_contacts"] = newton.collision_source == "mujoco"
+    result["disable_sensors"] = newton.deterministic_mode != "not_guaranteed"
+    return result
 
 
 class IsaacSim6Runtime:
@@ -102,6 +137,10 @@ class IsaacSim6Backend(IsaacSimBackendAdapter):
         # A renderer preference does not require its runtime when no camera,
         # movie or viewer uses it. Warp and OVRTX are both native renderers.
         return self.options.require_kit or (self._rendering and self.options.renderer == "isaac_rtx")
+
+    @property
+    def uses_kit_physx(self) -> bool:
+        return self.uses_kit and self.options.physics_backend == "physx"
 
     def mutable_ray_caster_class(self) -> type[Any]:
         from .ray_casters import (
@@ -270,9 +309,13 @@ class IsaacSim6Backend(IsaacSimBackendAdapter):
                 debug_mode=newton.debug_mode,
                 deterministic_mode=newton.deterministic_mode,
                 collision_decimation=newton.collision_decimation,
-                solver_cfg=HolosomaMJWarpSolverCfg(shared_config=asdict(shared), **solver_settings(shared, newton)),
+                solver_cfg=HolosomaMJWarpSolverCfg(
+                    shared_config=asdict(shared), **newton_solver_settings(shared, newton)
+                ),
                 collision_cfg=(
-                    NewtonCollisionPipelineCfg(**configured(newton.collision))
+                    NewtonCollisionPipelineCfg(
+                        **{name: value for name, value in asdict(newton.collision).items() if value is not None}
+                    )
                     if newton.collision_source == "newton"
                     else None
                 ),
@@ -281,12 +324,7 @@ class IsaacSim6Backend(IsaacSimBackendAdapter):
         if not self.uses_kit:
             from isaaclab_ov.physics import OvPhysxCfg
 
-            return build_config(
-                OvPhysxCfg,
-                {},
-                location="isaacsim6.physics",
-                defaults={"gpu_max_rigid_patch_count": 10 * 2**15},
-            )
+            return OvPhysxCfg(gpu_max_rigid_patch_count=10 * 2**15)
         from isaaclab_physx.physics import PhysxCfg
 
         defaults = {}
@@ -298,7 +336,7 @@ class IsaacSim6Backend(IsaacSimBackendAdapter):
                 "max_velocity_iteration_count": config.physx.num_velocity_iterations,
                 "gpu_max_rigid_patch_count": 10 * 2**15,
             }
-        return build_config(PhysxCfg, {}, location="isaacsim6.physics", defaults=defaults)
+        return PhysxCfg(**defaults)
 
     def configure_physics_scene(self, sim: Any, config: Any) -> None:
         if self.uses_kit or self.options.physics_backend != "physx":
@@ -584,25 +622,23 @@ class IsaacSim6Backend(IsaacSimBackendAdapter):
 
     def renderer_config(self) -> Any:
         """Declare the camera renderer both at launch and at sensor construction."""
-        settings = configured(self.options.renderer_options)
-        if self.options.renderer == "ovrtx" and "enable_shadows" in settings:
+        settings = {name: value for name, value in asdict(self.options.renderer_options).items() if value is not None}
+        if self.options.renderer != "newton_warp" and settings:
+            name = next(iter(settings))
             raise ValueError(
-                "isaacsim6.renderer_options.enable_shadows is Warp-only: "
-                "OVRTX RGB/depth outputs always include shadows."
+                f"isaacsim6.renderer_options.{name} is Warp-only; selected renderer is {self.options.renderer!r}."
             )
         if self.options.renderer == "ovrtx":
             from isaaclab_ov.renderers import OVRTXRendererCfg
 
-            cls = OVRTXRendererCfg
-        elif self.options.renderer == "newton_warp":
+            return OVRTXRendererCfg()
+        if self.options.renderer == "newton_warp":
             from isaaclab_newton.renderers import NewtonWarpRendererCfg
 
-            cls = NewtonWarpRendererCfg
-        else:
-            from isaaclab_physx.renderers import IsaacRtxRendererCfg
+            return NewtonWarpRendererCfg(**settings)
+        from isaaclab_physx.renderers import IsaacRtxRendererCfg
 
-            cls = IsaacRtxRendererCfg
-        return build_config(cls, settings, location="isaacsim6.renderer_options")
+        return IsaacRtxRendererCfg()
 
     def has_viewport(self, sim: Any) -> bool:
         # The native OVRTX visualizer owns its view; Kit's post-update camera

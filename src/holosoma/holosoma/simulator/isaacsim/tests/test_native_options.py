@@ -9,7 +9,7 @@ from typing import Any, Literal
 import pytest
 from pydantic import ValidationError
 
-from holosoma.config_types.newton import IsaacSim6RendererConfig
+from holosoma.config_types.simulator import IsaacSim6RendererConfig
 from holosoma.config_types.simulator import IsaacSim6Config, IsaacSim6NewtonConfig
 from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Backend
 

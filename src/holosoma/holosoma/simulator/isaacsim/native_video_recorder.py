@@ -51,6 +51,14 @@ class NativeVideoRecorder(VideoRecorderInterface):
         self.simulator: IsaacSim = simulator
         self._camera = simulator.scene.sensors[_VIDEO_SENSOR]
         self._capture_step: int | None = None
+        self._usd_view = None
+        if simulator.backend.uses_kit and not simulator.backend.uses_kit_physx:
+            from isaaclab.sim.views import UsdFrameView
+
+            # Newton's camera view updates its sites, but the pinned SDK does
+            # not publish this moving camera into Kit's USD/Fabric scene.
+            path = f"{simulator.scene.env_prim_paths[config.record_env_id]}/{_VIDEO_SENSOR}"
+            self._usd_view = UsdFrameView(path, device=simulator.device, stage=simulator.sim.stage)
 
     @property
     def camera(self) -> Any:
@@ -85,9 +93,25 @@ class NativeVideoRecorder(VideoRecorderInterface):
         eyes = torch.tensor([parameters.position], dtype=torch.float32, device=device)
         targets = torch.tensor([parameters.target], dtype=torch.float32, device=device)
         self._camera.set_world_poses_from_view(eyes, targets, env_ids=[self.config.record_env_id])
+        if self._usd_view is not None:
+            import warp as wp
+            from isaaclab.utils.math import create_rotation_matrix_from_view, quat_from_matrix
+            from pxr import UsdGeom
+
+            rotation = create_rotation_matrix_from_view(
+                eyes, targets, UsdGeom.GetStageUpAxis(self.simulator.sim.stage), device=device
+            )
+            with self._usd_view.xform_world_space_writer() as writer:
+                writer.set_poses(
+                    wp.from_torch(eyes, dtype=wp.vec3f),
+                    wp.from_torch(quat_from_matrix(rotation).contiguous(), dtype=wp.vec4f),
+                )
 
     def cleanup(self) -> None:
         super().cleanup()
         if self.worker_stopped:
             # The scene owns and closes the sensor through SimulationContext.
             self._camera = None
+            if self._usd_view is not None:
+                self._usd_view.close()
+                self._usd_view = None

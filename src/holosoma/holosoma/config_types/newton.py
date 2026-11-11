@@ -33,7 +33,7 @@ class NewtonCollisionConfig:
 class NewtonPhysicsConfig:
     """Newton contact and mesh controls, authored before physics compilation.
 
-    MuJoCo friction, solver parameters and gravity compensation use ``mujoco``.
+    MuJoCo friction and contact solver parameters use ``mujoco``.
     Mass and density use the existing shared PhysicsConfig fields.
     """
 
@@ -57,24 +57,3 @@ class NewtonPhysicsConfig:
     """Enable hydroelastic collision for this shape."""
     hydroelastic_stiffness: Nonnegative | None = None
     """Hydroelastic contact stiffness."""
-
-
-@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
-class IsaacSim6RendererConfig:
-    """Camera options, interpreted by the selected renderer.
-
-    None retains the selected SDK renderer's default. Explicit unsupported
-    options fail at startup. Kit launch presets remain in ``isaacsim``.
-    Ray distance and depth clipping use the existing per-camera fields.
-    """
-
-    enable_shadows: bool | None = None
-    """Enable Warp shadows. OVRTX RGB/depth always include shadows."""
-    use_cuda_graph: bool | None = None
-    """Capture Warp rendering kernels on CUDA."""
-    enable_textures: bool | None = None
-    """Enable Warp texture sampling."""
-    enable_ambient_lighting: bool | None = None
-    """Enable Warp ambient lighting."""
-    enable_backface_culling: bool | None = None
-    """Cull back faces in Warp."""

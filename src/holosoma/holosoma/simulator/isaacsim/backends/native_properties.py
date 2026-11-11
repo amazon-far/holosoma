@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import re
 import copy
-import fnmatch
 from functools import partial, update_wrapper
 from typing import Any
 
-from .newton_config import configured
+from dataclasses import asdict
 from holosoma.config_types.scene import PhysicsConfig
 
 
@@ -31,53 +30,22 @@ _FLAGS = {
 }
 
 
-def physics_settings(physics: PhysicsConfig | None, backend: Any, *, portable: bool = False) -> dict[str, Any]:
-    """Create SDK fragments from first-class Holosoma properties."""
+def physics_settings(physics: PhysicsConfig | None, backend: Any) -> dict[str, Any]:
+    """Translate object/robot ``PhysicsConfig`` into Lab 3 schema fragment lists.
+
+    The spawn wrapper applies these before cloning. Common mass/material/PhysX
+    settings use the ordinary spawner; these fragments add Newton contact and
+    mesh controls without changing unspecified asset properties.
+    """
     if physics is None:
         return {}
-    from isaaclab.sim import schemas
     from isaaclab.sim.spawners.materials import UsdPhysicsRigidBodyMaterialCfg
 
     result: dict[str, Any] = {}
-    if portable:
-        if physics.mass is not None or physics.density is not None:
-            result["mass_props"] = [schemas.MassCfg(mass=physics.mass, density=physics.density)]
-        if physics.isaacsim is not None:
-            material = physics.isaacsim
-            result["physics_material"] = [
-                UsdPhysicsRigidBodyMaterialCfg(
-                    static_friction=material.static_friction,
-                    dynamic_friction=material.dynamic_friction,
-                    restitution=material.restitution,
-                )
-            ]
-        if backend.options.physics_backend == "physx":
-            from isaaclab_physx.sim.schemas import PhysxCollisionCfg, PhysxRigidBodyCfg
-            from isaaclab_physx.sim.spawners.materials import PhysxMaterialCfg
-
-            if physics.physx is not None:
-                result["rigid_props"] = [PhysxRigidBodyCfg(**configured(physics.physx))]
-            if physics.isaacsim is not None:
-                result["physics_material"].append(
-                    PhysxMaterialCfg(
-                        friction_combine_mode=physics.isaacsim.friction_combine_mode,
-                        restitution_combine_mode=physics.isaacsim.restitution_combine_mode,
-                    )
-                )
-                result["collision_props"] = [
-                    PhysxCollisionCfg(
-                        **{
-                            name: value
-                            for name in ("contact_offset", "rest_offset", "torsional_patch_radius")
-                            if (value := getattr(physics.isaacsim, name)) is not None
-                        }
-                    )
-                ]
     if backend.options.physics_backend != "newton":
         return result
     from isaaclab_newton.sim.schemas import (
         MujocoCollisionCfg,
-        MujocoRigidBodyCfg,
         NewtonCollisionCfg,
         NewtonMeshCollisionCfg,
         NewtonSDFCollisionCfg,
@@ -100,8 +68,6 @@ def physics_settings(physics: PhysicsConfig | None, backend: Any, *, portable: b
             result.setdefault("collision_props", []).append(
                 NewtonCollisionCfg(contact_margin=mj.margin, contact_gap=mj.gap)
             )
-        if mj.gravity_compensation is not None:
-            result.setdefault("rigid_props", []).append(MujocoRigidBodyCfg(gravcomp=mj.gravity_compensation))
         if mj.friction is not None:
             sliding, torsional, rolling = mj.friction
             result.setdefault("physics_material", []).extend(
@@ -111,7 +77,7 @@ def physics_settings(physics: PhysicsConfig | None, backend: Any, *, portable: b
                 ]
             )
     if physics.newton is not None:
-        values = configured(physics.newton)
+        values = {name: value for name, value in asdict(physics.newton).items() if value is not None}
         contacts = {name: value for name, value in values.items() if name.startswith("contact_")}
         if contacts:
             result.setdefault("physics_material", []).append(NewtonMaterialCfg(**contacts))
@@ -124,64 +90,9 @@ def physics_settings(physics: PhysicsConfig | None, backend: Any, *, portable: b
 
 
 def author_robot_physics(anchor: str, asset: Any, backend: Any, *, stage: Any, material_defaults: Any) -> None:
-    """Apply common defaults, then one matching per-link override before cloning."""
-    from pxr import Usd
-
-    from ..prim_utils import is_rigid_body_enabled
-
+    """Author robot-wide Newton contact properties before environment cloning."""
     settings = physics_settings(asset.link_physics, backend)
     author_properties(anchor, compile_properties(settings), flags={}, stage=stage, material_defaults=material_defaults)
-    overrides = asset.link_physics_overrides or {}
-    matched: set[str] = set()
-    bodies = [prim for prim in Usd.PrimRange(stage.GetPrimAtPath(anchor)) if is_rigid_body_enabled(prim)]
-    for prim in bodies:
-        for pattern, physics in overrides.items():
-            if fnmatch.fnmatchcase(prim.GetName(), pattern):
-                settings = physics_settings(physics, backend, portable=True)
-                # A mass API may be created only on the selected body. Colliders
-                # keep their own authored mass/inertia and any nested bodies.
-                compiled = compile_properties(settings)
-                for family in ("mass_props", "rigid_props"):
-                    if family in compiled:
-                        compiled[family] = [("", fragments) for _pattern, fragments in compiled[family]]
-                collider_families = compiled.keys() & {"collision_props", "physics_material", "mesh_collision_props"}
-                if collider_families:
-                    collider_pattern = _owned_collision_pattern(prim)
-                    for family in collider_families:
-                        compiled[family] = [(collider_pattern, fragments) for _pattern, fragments in compiled[family]]
-                author_properties(
-                    str(prim.GetPath()),
-                    compiled,
-                    flags={"mass_props_create_if_missing": True},
-                    stage=stage,
-                    material_defaults=material_defaults,
-                )
-                matched.add(pattern)
-                break
-    unmatched = overrides.keys() - matched
-    if unmatched:
-        raise ValueError("robot.asset.link_physics_overrides: no selected body for " + ", ".join(sorted(unmatched)))
-
-
-def _owned_collision_pattern(body: Any) -> str:
-    """Select this body's colliders without crossing into nested enabled bodies."""
-    from pxr import Usd, UsdPhysics
-
-    from ..prim_utils import is_rigid_body_enabled
-
-    anchor = str(body.GetPath())
-    paths = []
-    for prim in Usd.PrimRange(body, Usd.TraverseInstanceProxies()):
-        if not prim.HasAPI(UsdPhysics.CollisionAPI):
-            continue
-        owner = prim
-        while owner and not is_rigid_body_enabled(owner):
-            owner = owner.GetParent()
-        if owner == body:
-            paths.append(re.escape(str(prim.GetPath())[len(anchor) :]))
-    if not paths:
-        raise ValueError(f"robot.asset.link_physics_overrides: no owned colliders for {anchor!r}")
-    return "(?:" + "|".join(paths) + ")"
 
 
 def _target_expression(anchor: str, pattern: str) -> str:

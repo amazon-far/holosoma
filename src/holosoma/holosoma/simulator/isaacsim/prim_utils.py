@@ -19,11 +19,8 @@ _DISABLED_RIGID_BODY_LINK_KEY = "holosoma:disabledRigidBodyLink"
 
 
 def get_current_stage(backend: IsaacSimBackendAdapter) -> Usd.Stage:
-    if backend.is_isaacsim6:
-        return backend.stage_utils.get_current_stage()
-    import omni.usd
-
-    return omni.usd.get_context().get_stage()
+    """Read the active stage through the selected SDK's stage utility."""
+    return backend.stage_utils.get_current_stage()
 
 
 def is_rigid_body_enabled(prim: Usd.Prim) -> bool:

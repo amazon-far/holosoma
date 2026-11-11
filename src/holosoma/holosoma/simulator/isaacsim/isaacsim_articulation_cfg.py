@@ -220,9 +220,6 @@ def build_robot_articulation_cfg(robot_config: RobotConfig, *, backend: IsaacSim
             articulation_props=robot_articulation_props,
         )
 
-    if not backend.is_isaacsim6 and robot_asset_cfg.link_physics_overrides:
-        raise ValueError("robot.asset.link_physics_overrides requires Isaac Lab 3 or MuJoCo")
-
     default_joint_angles = copy.deepcopy(robot_config.init_state.default_joint_angles)
     init_state = ArticulationCfg.InitialStateCfg(
         pos=tuple(robot_config.init_state.pos),

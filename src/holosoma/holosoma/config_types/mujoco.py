@@ -192,9 +192,6 @@ class MujocoGeomPhysicsConfig:
     None preserves each geom's value."""
     extra: ExtraSettings = field(default_factory=dict)
     """Other native geom physics properties, using bare names; asset authoring and shared mass/density are excluded."""
-    gravity_compensation: Finite | None = None
-    """Fraction of body gravity compensated, including Newton MJWarp's gravcomp.
-    Zero applies full gravity; one cancels it. None preserves the asset."""
 
     @model_validator(mode="after")
     def validate_contact(self) -> MujocoGeomPhysicsConfig:
