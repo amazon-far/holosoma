@@ -217,8 +217,11 @@ export. Children ingest one prepared immutable USD export and clone plan; they
 have independent native stages, bindings, buffers and material writers. Only due
 owners publish state and capture. SDK-owned borrowed outputs are extracted before
 another step on that engine. The simulation registry owns native backends; cleanup
-releases writers and camera bindings before those backends. This uses three private
-prepared-state fields from the pinned SDK, which must be rechecked on SDK upgrades.
+releases writers and camera bindings before those backends. Children now use the
+ordinary SDK constructor with distinct internal renderer configurations, and
+material writers use the SDK's public property. Three private prepared-state
+fields remain; broader lifecycle assumptions must also be rechecked on upgrades.
+The [timing and compatibility audit](ovrtx-timing-and-quality.md) inventories them.
 No user options, quality defaults, asset formats or unused runtime imports change.
 
 Run the stronger persistent-instance control without Holosoma:
@@ -364,16 +367,19 @@ material writes, held observations, partial camera reset, exact physics advancem
 and repeated writer/renderer/backend cleanup. The tested adapter bytes are
 identical in production commits `ad19b59b` and `de686a13`.
 
-Default temporal reconstruction blends old and new material colors. Pure-color
+The probe observed old and new material colors together. Pure-color
 dominance and a single-channel increase threshold failed in diagnostic runs;
 the latter also failed on the untouched SDK reference. The final check requires
 visible requested-color signal and RGB-vector progress toward that color,
 rejecting the real previous frame. Minimum progress was 50.35/255 for persistent
 owners and 49.38/255 for the SDK, against a threshold of 25/255. Those earlier
-failed controls remain recorded. On a slower camera, fresh green appears with
-retained blue, whereas ordinary batching has five intervening renders to converge.
-Scheduling therefore changes temporal-history convergence per control cycle;
-it does not change the rendering quality defaults.
+failed controls remain recorded. Its SDK reference rendered the slow product
+on intervening fast-camera captures, so this comparison changes capture history
+and ownership together. It cannot attribute color residue to persistent owners
+or establish ordinary low-rate rendering as its cause. The newer
+[matched controls](ovrtx-timing-and-quality.md) keep the slow capture history
+constant, measure actual native clocks, and compare native AOVs before SDK
+extraction. Rendering quality defaults remain unchanged.
 
 The pinned native runtime warns:
 `Multiple Hydra Engines detected. Video Textures are temporarily disabled with multiple Hydra Engines.`
