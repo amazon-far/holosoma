@@ -135,7 +135,7 @@ def _check_video_freshness(sim, *, memory_stage: bool = False) -> None:
     assert recorder is not None and recorder.is_recording, "video recording did not start"
     assert not sim.tiled_cameras, "video-only probe must not be pumped by a mounted RTX camera"
     if sim.backend.is_isaacsim6 and sim.backend.uses_kit:
-        assert not sim.backend.is_rendering(sim.sim), "video-only probe unexpectedly has continuous rendering"
+        assert sim.backend.is_rendering(sim.sim), "the SDK movie camera did not enable RTX rendering"
         assert sim.sim.get_setting("/isaaclab/video/enabled"), "native headless video intent was not enabled"
         assert sim.sim.cfg.create_stage_in_memory is memory_stage, "requested native stage mode was not applied"
         assert sim.sim.stage.GetPrimAtPath("/World/envs/env_0/holosoma_video_camera").IsValid(), (

@@ -82,10 +82,10 @@ options fail at startup.
   `sim.isaacsim6.require_kit=True` with PhysX and a compatible renderer when using
   that event; detached physics rejects it.
 - OVRTX uses the SDK's `1/60` native snapshot increment per submission, independently
-  of physics time. Native output can retain prior material color; matched
-  controls found no additional stale-output failure from adding a fast camera.
-  Exact temporal reconstruction remains undocumented. All cameras and movies
-  use ordinary shared SDK ownership and batching.
+  of physics time. Native output can retain prior material color; exact temporal
+  reconstruction remains undocumented. A faster shared batch changes every
+  camera's native capture history, including cameras with slower observation updates.
+  All cameras and movies use ordinary shared SDK ownership and batching.
 - Renderer quality is not interchangeable. Kit rendering presets apply to
   `isaac_rtx`; the typed `renderer_options` currently control Warp features.
   Camera `far` and `depth_clipping_behavior` remain authoritative for all three.

@@ -172,6 +172,29 @@ def main() -> int:
     )
     sim.create_envs(args.num_envs, torch.zeros(args.num_envs, 3, device=device), state)
     sim.prepare_sim()
+
+    def physics_state() -> tuple[torch.Tensor, ...]:
+        """Read native dynamics directly so SDK clock bookkeeping cannot hide integration."""
+        import warp as wp
+
+        if args.physics == "newton":
+            state = sim.sim.physics_manager.get_state_0()
+            return tuple(
+                wp.to_torch(getattr(state, name)).clone() for name in ("body_q", "body_qd", "joint_q", "joint_qd")
+            )
+        view = sim._robot.root_view
+        if args.renderer == "isaac_rtx":
+            return tuple(
+                wp.to_torch(getattr(view, name)()).clone()
+                for name in ("get_root_transforms", "get_root_velocities", "get_dof_positions", "get_dof_velocities")
+            )
+        from isaaclab_ov import tensor_types as TT
+
+        return tuple(
+            wp.to_torch(view.get_attribute(attribute)).clone()
+            for attribute in (TT.ROOT_POSE, TT.ROOT_VELOCITY, TT.DOF_POSITION, TT.DOF_VELOCITY)
+        )
+
     startup_seconds = time.perf_counter() - startup_start
     recorder = sim.video_recorder
     snapshots: dict[int, Any] = {}
@@ -261,6 +284,7 @@ def main() -> int:
             for cam in cameras.values():
                 cam.reset(env_ids=[0])
         count = sim.sim.get_physics_step_count()
+        dynamics_before = physics_state()
         torch.cuda.synchronize()
         start = time.perf_counter()
         sim.render_sensors()
@@ -296,6 +320,8 @@ def main() -> int:
             if frame in (0, args.frames - 1):
                 snapshots[frame] = movie_frame.copy()
         assert sim.sim.get_physics_step_count() == count, "Capture integrated physics."
+        for before, after in zip(dynamics_before, physics_state(), strict=True):
+            assert torch.equal(before, after), "Rendering changed native dynamics without a physics step."
         shared_capture = args.record is not None or any(frame % value == 0 for value in decimations)
         for name, decimation in zip(cameras, decimations, strict=True):
             due = frame % decimation == 0
@@ -349,9 +375,14 @@ def main() -> int:
                 assert torch.equal(depth, previous[name][1]), f"{name}: depth changed between captures."
             rendered = completed[name] - previous_completed[name]
             expected_capture = shared_capture if sim.backend.shared_camera_rendering else due
-            assert rendered == int(expected_capture), (
-                f"{name}: frame {frame}, completed {rendered}, expected={expected_capture}, due={due}."
-            )
+            if args.renderer == "isaac_rtx" and frame < warmup and expected_capture:
+                # The ordinary SDK pumps extra frames while textures stream.
+                # Keep all pixel checks strict and record every completed draw.
+                assert rendered >= 1, f"{name}: no completed startup capture at frame {frame}."
+            else:
+                assert rendered == int(expected_capture), (
+                    f"{name}: frame {frame}, completed {rendered}, expected={expected_capture}, due={due}."
+                )
             borrowed[name] = (rgb, depth)
             previous[name] = (rgb.clone(), depth.clone())
         previous_completed = completed.copy()
