@@ -51,6 +51,7 @@ from holosoma.simulator.mujoco.backends.native_config import (
 )
 from holosoma.simulator.mujoco.geom_groups import DEFAULT_RENDER_GEOM_GROUPS
 from holosoma.simulator.mujoco.native_config import effective_options
+from holosoma.simulator.shared.sensor_manager import CameraRecord
 
 from .base import IMujocoBackend, holosoma_to_mj_quat, mj_to_holosoma_quat
 from .warp_bridge import WarpBridge
@@ -62,7 +63,7 @@ if TYPE_CHECKING:
     from warp.context import Graph
 
     from holosoma.config_types.full_sim import FullSimConfig
-    from holosoma.simulator.shared.sensor_manager import CameraRecord
+    from holosoma.simulator.shared.sensor_manager import LidarRecord
 
 
 # Quaternion helpers on MuJoCo-convention (wxyz, scalar-first) quaternions, reimplemented locally so
@@ -323,13 +324,25 @@ class WarpBackend(IMujocoBackend):
                 # cam_pos so a world-mount camera (worldbody child, cam_bodyid==0) can be placed at
                 # each env's origin. The camlight kernel (inside the captured step graph) reads
                 # cam_pos per world to compute cam_xpos, so it MUST be expanded before capture;
-                # offset_world_cameras() then writes each env's origin post-capture (same pre-expand /
+                # initialize_camera_mounts() then writes each env's origin post-capture (same pre-expand /
                 # post-write pattern as body_pos + set_static_body_world_pose).
                 "cam_pos",
+                "cam_quat",
+                "site_pos",
+                "site_quat",  # runtime sensor mounting offsets; expand before graph capture
             ]
             with wp.ScopedDevice(self.mjw_device):
                 expand_model_fields(self.mjw_model, nworld=self.num_envs, fields_to_expand=_PER_WORLD_FIELDS)
             self.warp_model_bridge.clear_cache()
+
+        # Cache zero-copy views only after expansion. Runtime writes keep these array addresses
+        # stable for both the physics and render graphs and reuse the native stream.
+        self._camera_mount_arrays = (wp.to_torch(self.mjw_model.cam_pos), wp.to_torch(self.mjw_model.cam_quat))
+        self._lidar_mount_arrays = (wp.to_torch(self.mjw_model.site_pos), wp.to_torch(self.mjw_model.site_quat))
+        self._sensor_mount_wp_stream = wp.get_stream(self.mjw_device)
+        self._sensor_mount_stream = torch.cuda.ExternalStream(
+            self._sensor_mount_wp_stream.cuda_stream, device=self.device
+        )
 
         # Capture simulation step as CUDA graph for optimal performance
         # This eliminates per-kernel launch overhead (~20-30 kernels per step)
@@ -411,7 +424,7 @@ class WarpBackend(IMujocoBackend):
         rather than full ``mjw.forward`` —
         forward's solver/collision stages allocate per call and are useless without a step.
         Out-of-graph launches into the same mjw_data the step graph uses are safe (same
-        pattern as set_static_body_world_pose / offset_world_cameras); ``mjw_data.time`` is
+        pattern as set_static_body_world_pose / initialize_camera_mounts); ``mjw_data.time`` is
         untouched (only integrators advance it).
         """
         import warp as wp
@@ -827,32 +840,32 @@ class WarpBackend(IMujocoBackend):
 
         self._sync_static_geom_xpos(body_ids, env_ids)
 
-    def offset_world_cameras(self, cam_ids: list[int], env_origins: torch.Tensor) -> None:
-        """Shift world-mount cameras' per-world ``cam_pos`` by each env's origin.
+    def set_sensor_mount_pose(
+        self,
+        record: CameraRecord | LidarRecord,
+        native_id: int,
+        env_ids: torch.Tensor,
+        positions: torch.Tensor,
+        orientations: torch.Tensor,
+    ) -> None:
+        """Write captured model arrays in place, with stream ordering and only the required FK.
 
-        A ``target_kind="world"`` camera is a worldbody child (``cam_bodyid==0``): unlike a
-        body-attached camera, its pose does not inherit the per-env body offset, so in a multi-env
-        run every world's camera would otherwise sit at the shared spec pose and see only env 0's
-        scene. ``cam_pos`` is expanded per world in ``__init__`` (in ``_PER_WORLD_FIELDS``, before the
-        step-graph capture), and the ``camlight`` kernel that computes ``cam_xpos`` reads it per world
-        each step, so adding ``env_origins`` here — after capture — reaches the live render exactly
-        like ``set_static_body_world_pose`` writes ``body_pos``. No-op at ``num_envs==1``.
-
-        ``cam_ids`` are compiled MuJoCo camera ids (world-mount only); ``env_origins`` is
-        ``[num_envs, 3]``.
+        No array expansion/rebinding, graph recapture or device-wide synchronization. The caller
+        stream waits for the native pose update so immediate rendering sees it. This is a runtime
+        update outside capture; shared validation performs host checks before reaching this writer.
         """
-        if self.num_envs <= 1 or not cam_ids:
-            return
-        import warp as wp
-
-        cam_pos = wp.to_torch(self.mjw_model.cam_pos)  # [num_envs, ncam, 3], shares GPU memory
-        origins = env_origins.to(cam_pos.device, cam_pos.dtype)  # [num_envs, 3]
-        for cam_id in cam_ids:
-            cam_pos[:, cam_id, :] += origins
-        with wp.ScopedDevice(self.mjw_device):
-            import mujoco_warp as mjw
-
-            mjw.forward(self.mjw_model, self.mjw_data)  # recompute cam_xpos from the shifted cam_pos
+        stream = self._sensor_mount_stream
+        consumer = torch.cuda.current_stream(self.device)
+        stream.wait_stream(consumer)
+        with torch.cuda.stream(stream), wp.ScopedStream(self._sensor_mount_wp_stream):
+            pos, quat = self._camera_mount_arrays if isinstance(record, CameraRecord) else self._lidar_mount_arrays
+            pos[env_ids, native_id] = positions.to(pos)
+            quat[env_ids, native_id] = orientations.to(quat)
+            # A caller may have just changed qpos, or stepped the integrator. Refresh all poses
+            # consistently before immediate rendering, without com_pos/com_vel or solver work.
+            mjw.kinematics(self.mjw_model, self.mjw_data)
+            mjw.camlight(self.mjw_model, self.mjw_data)
+        consumer.wait_stream(stream)
 
     def _sync_static_geom_xpos(self, body_ids: list[int], env_ids: torch.Tensor | None) -> None:
         """Refresh ``geom_xpos``/``geom_xmat`` for the geoms of welded ``body_ids``, per world.

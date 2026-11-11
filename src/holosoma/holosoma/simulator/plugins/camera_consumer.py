@@ -242,8 +242,6 @@ class CameraConsumerPlugin:
         One ``get_camera_data(device="cpu")`` read per (camera, modality) — the cache shares that
         single device->host copy with every other consumer reading the same buffer this step."""
         manager = self.simulator.sensor_manager
-        if manager is None:
-            return {}
         fresh = manager.last_due  # set[str] of camera names rendered this step
         sim_time = self.simulator.time()
 

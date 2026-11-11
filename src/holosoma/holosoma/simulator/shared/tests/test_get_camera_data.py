@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-from holosoma.simulator.shared.sensor_manager import CameraRecord
+from holosoma.simulator.shared.sensor_manager import CameraRecord, SensorManager
 from holosoma.utils.safe_torch_import import torch
 
 pytestmark = pytest.mark.no_sim
@@ -41,8 +41,8 @@ def _sim(manager: Any) -> BaseSimulator:
     return sim
 
 
-def test_no_sensor_manager_raises_not_implemented() -> None:
-    sim = _sim(None)
+def test_empty_sensor_manager_raises_not_implemented() -> None:
+    sim = _sim(SensorManager("cpu", 50.0))
     with pytest.raises(NotImplementedError, match="no camera 'head'"):
         sim.get_camera_data("head", "rgb")
 
