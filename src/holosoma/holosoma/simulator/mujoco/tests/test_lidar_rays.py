@@ -450,6 +450,7 @@ def test_mjwarp_lidar_reuses_camera_bvh_without_duplicate_same_frame_refit(
 
     rendered = []
     sim = SimpleNamespace(
+        sensor_config={camera.name: camera.config, lidar.name: lidar.config},
         sensor_manager=_Manager(),
         backend=backend,
         time=lambda: 1.25,
