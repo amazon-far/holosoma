@@ -602,16 +602,7 @@ class IsaacSim6Backend(IsaacSimBackendAdapter):
             from isaaclab_physx.renderers import IsaacRtxRendererCfg
 
             cls = IsaacRtxRendererCfg
-        cfg = build_config(cls, settings, location="isaacsim6.renderer_options")
-        if self.options.renderer == "ovrtx":
-            from .camera_renderers import create_scheduled_ovrtx_renderer
-
-            cfg.class_type = create_scheduled_ovrtx_renderer
-        elif self.options.renderer == "isaac_rtx":
-            from .camera_renderers import create_scheduled_isaac_rtx_renderer
-
-            cfg.class_type = create_scheduled_isaac_rtx_renderer
-        return cfg
+        return build_config(cls, settings, location="isaacsim6.renderer_options")
 
     def has_viewport(self, sim: Any) -> bool:
         # The native OVRTX visualizer owns its view; Kit's post-update camera
@@ -640,9 +631,10 @@ class IsaacSim6Backend(IsaacSimBackendAdapter):
 
         return Camera(cfg)
 
-    def configure_camera_cadence(self, camera: Any, *, control_hz: float, decimation: int) -> None:
-        if self.options.renderer in ("ovrtx", "isaac_rtx"):
-            camera._renderer.configure_cadence(camera.cfg.prim_path, control_hz=control_hz, decimation=decimation)
+    @property
+    def shared_camera_rendering(self) -> bool:
+        """RTX renderers submit a stable full batch; Warp can render due cameras alone."""
+        return self.options.renderer in ("ovrtx", "isaac_rtx")
 
     def refresh_cameras(self, cameras: list[Any]) -> None:
         if not cameras:

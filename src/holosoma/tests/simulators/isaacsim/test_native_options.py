@@ -7,14 +7,22 @@ import pytest
 pytestmark = pytest.mark.isaacsim
 
 
-@pytest.mark.parametrize("physics", ["physx", "newton"])
-@pytest.mark.parametrize("renderer", ["isaac_rtx", "ovrtx"])
-@pytest.mark.parametrize("decimations", ["1,5", "2,3", "1,5,2", "3,3"])
-def test_independent_native_camera_renders(
+@pytest.mark.parametrize(
+    ("physics", "renderer"),
+    [
+        ("physx", "isaac_rtx"),
+        ("newton", "isaac_rtx"),
+        ("physx", "ovrtx"),
+        ("newton", "ovrtx"),
+        ("newton", "newton_warp"),
+    ],
+)
+@pytest.mark.parametrize("decimations", ["1,5", "2,3", "1,5,2", "3,3", "3"])
+def test_native_camera_observation_cadence(
     physics, renderer, decimations, isaacsim_backend, run_isaacsim_harness, tmp_path
 ):
     if isaacsim_backend != "isaacsim6":
-        pytest.skip("Independent native rendering requires Isaac Lab 3.")
+        pytest.skip("Native camera batching requires Isaac Lab 3.")
     result_file = tmp_path / "camera-cadence.txt"
     result = run_isaacsim_harness(
         Path(__file__).resolve().parents[1] / "camera_cadence_assert.py",
@@ -34,10 +42,10 @@ def test_independent_native_camera_renders(
 
 
 @pytest.mark.parametrize("physics", ["physx", "newton"])
-@pytest.mark.parametrize("renderer", ["isaac_rtx", "ovrtx"])
+@pytest.mark.parametrize("renderer", ["isaac_rtx", "ovrtx", "newton_warp"])
 def test_camera_cadence_with_movie(physics, renderer, isaacsim_backend, run_isaacsim_harness, tmp_path):
     if isaacsim_backend != "isaacsim6":
-        pytest.skip("Independent native rendering requires Isaac Lab 3.")
+        pytest.skip("Native camera batching requires Isaac Lab 3.")
     result_file = tmp_path / "camera-cadence-movie.txt"
     result = run_isaacsim_harness(
         Path(__file__).resolve().parents[1] / "camera_cadence_assert.py",
@@ -45,6 +53,8 @@ def test_camera_cadence_with_movie(physics, renderer, isaacsim_backend, run_isaa
         physics,
         "--renderer",
         renderer,
+        "--decimations",
+        "1,5,2",
         "--record",
         str(tmp_path / "movies"),
         "--result-file",

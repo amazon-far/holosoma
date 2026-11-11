@@ -71,14 +71,6 @@ def build_cameras(sim: IsaacSim) -> None:
             depth_clipping_behavior="none",
         )
         camera = backend.create_camera(cam_cfg)
-        control_hz = sim.simulator_config.sim.fps / sim.simulator_config.sim.control_decimation_steps
-        backend.configure_camera_cadence(
-            camera,
-            control_hz=control_hz,
-            decimation=resolve_decimation(
-                cam.update_decimation, control_hz, field=f"camera '{cam_name}' update_decimation"
-            ),
-        )
         sim.tiled_cameras[cam_name] = camera
         sim.scene.sensors[cam_name] = camera
 
@@ -152,24 +144,22 @@ def sync_camera_fabric_transforms(sim: IsaacSim) -> None:
 
 
 def render_cameras(sim: IsaacSim, due: list[CameraRecord]) -> None:
-    """Capture each due native camera's RGB/depth into its shared observation buffers.
+    """Publish due observations, owning their buffers across later shared renders.
 
-    Lab 3 prepares all due poses before capturing their outputs. Lab 2 reads
-    the frame-end RTX pass. Drop alpha and cache ``[N,H,W,3]`` uint8 (rgb) /
+    Drop alpha and cache ``[N,H,W,3]`` uint8 (rgb) /
     ``[N,H,W,1]`` float32 (depth) outputs at each camera's configured cadence."""
-    sim.backend.refresh_cameras([sim.tiled_cameras[record.name] for record in due])
     for camera_record in due:
         out = sim.tiled_cameras[camera_record.name].data.output
         if "rgb" in camera_record.config.data_types:
             rgb = sim.backend.tensor(out["rgb"])[..., :3]  # [N,H,W,3], drop alpha
             if rgb.dtype != torch.uint8:
                 rgb = rgb.clamp(0, 255).to(torch.uint8)
-            camera_record.set_buffer("rgb", rgb)
+            camera_record.set_buffer("rgb", rgb.clone())
         if "depth" in camera_record.config.data_types:
             # distance_to_image_plane is float32 meters, image-plane. Ensure a trailing channel
             # dim; CameraRecord applies the configured cross-backend no-return convention.
             depth = sim.backend.camera_depth(out["distance_to_image_plane"]).to(torch.float32)
-            camera_record.set_buffer("depth", depth if depth.ndim == 4 else depth.unsqueeze(-1))
+            camera_record.set_buffer("depth", (depth if depth.ndim == 4 else depth.unsqueeze(-1)).clone())
 
 
 def _pattern(
@@ -450,10 +440,25 @@ def create_sensors(sim: IsaacSim) -> None:
 
 
 def render_sensors(sim: IsaacSim) -> None:
-    """Render if a camera is due or video is recording, then capture the sensors due this control step."""
+    """Capture when needed, then publish only observations due on the control clock."""
     due = sim.sensor_manager.collect_due() if sim.sensor_manager is not None else []
     recording = sim.video_recorder is not None and sim.video_recorder.is_recording
+    native_recorder = None
     if due or recording:
+        cameras = (
+            list(sim.tiled_cameras.values())
+            if sim.backend.shared_camera_rendering
+            else [sim.tiled_cameras[record.name] for record in due]
+        )
+        if recording and sim.backend.is_isaacsim6:
+            from .native_video_recorder import NativeVideoRecorder
+
+            native_recorder = cast(NativeVideoRecorder, sim.video_recorder)
+            native_recorder.prepare_frame()
+            cameras.append(native_recorder.camera)
         sim.render_for_sensors()
+        sim.backend.refresh_cameras(cameras)
+        if native_recorder is not None:
+            native_recorder.mark_frame_ready()
     render_cameras(sim, due)
     render_lidars(sim)

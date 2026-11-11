@@ -138,7 +138,7 @@ def _check_video_freshness(sim, *, memory_stage: bool = False) -> None:
         assert not sim.backend.is_rendering(sim.sim), "video-only probe unexpectedly has continuous rendering"
         assert sim.sim.get_setting("/isaaclab/video/enabled"), "native headless video intent was not enabled"
         assert sim.sim.cfg.create_stage_in_memory is memory_stage, "requested native stage mode was not applied"
-        assert recorder.camera_prim.GetPrim().GetStage() == sim.sim.stage, (
+        assert sim.sim.stage.GetPrimAtPath("/World/envs/env_0/holosoma_video_camera").IsValid(), (
             "video camera was authored outside the active simulation stage"
         )
     env_id = recorder.config.record_env_id
@@ -148,15 +148,13 @@ def _check_video_freshness(sim, *, memory_stage: bool = False) -> None:
     snapshots = {}
 
     def _assert_camera_pose(position, expected_quat=None):
-        if not sim.backend.uses_kit:
+        if sim.backend.is_isaacsim6:
             data = recorder._camera.data
             positions = data.pos_w.torch[env_id : env_id + 1]
             orientations = data.quat_w_opengl.torch[env_id : env_id + 1]
         else:
             native_positions, native_orientations = recorder._view.get_world_poses()
-        if sim.backend.uses_kit and sim.backend.is_isaacsim6:
-            positions, orientations = native_positions.torch, native_orientations.torch
-        elif sim.backend.uses_kit:
+        if not sim.backend.is_isaacsim6:
             positions = native_positions
             orientations = native_orientations[:, [1, 2, 3, 0]]
         expected_position = torch.tensor([position], device=positions.device, dtype=positions.dtype)
@@ -254,7 +252,7 @@ def _check_video_freshness(sim, *, memory_stage: bool = False) -> None:
     for movie in movies:
         _check_saved_video(movie, snapshots, expected_frame_count=72)
     recorder.cleanup()
-    if sim.backend.uses_kit:
+    if not sim.backend.is_isaacsim6:
         assert recorder._camera_prim_path is None and recorder._view is None, "video camera cleanup did not finish"
     else:
         assert recorder._camera is None and recorder.worker_stopped, "native movie recorder did not close"

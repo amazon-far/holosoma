@@ -39,13 +39,12 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--simulator", choices=["isaacsim6"], required=True)
     parser.add_argument("--physics", choices=["physx", "newton"], required=True)
-    parser.add_argument("--renderer", choices=["isaac_rtx", "ovrtx"], required=True)
+    parser.add_argument("--renderer", choices=["isaac_rtx", "ovrtx", "newton_warp"], required=True)
     parser.add_argument("--decimations", default="1,5")
     parser.add_argument("--num-envs", type=int, default=2)
     parser.add_argument("--resolution", type=int, default=64)
     parser.add_argument("--frames", type=int, default=40)
-    parser.add_argument("--all-camera-renders", action="store_true", help="Benchmark the SDK's original render policy.")
-    parser.add_argument("--record", help="Check movie recording alongside scheduled perception cameras.")
+    parser.add_argument("--record", help="Check movie recording alongside perception cameras.")
     parser.add_argument("--result-file", required=True)
     args = parser.parse_args()
     if args.frames <= 10:
@@ -144,14 +143,7 @@ def main() -> int:
             ),
         ),
     )
-    if args.all_camera_renders:
-        from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Backend
-
-        # Retain batching and the exact same delivered observation cadence.
-        # Only the native render policy changes for this benchmark baseline.
-        IsaacSim6Backend.configure_camera_cadence = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
-
-    if args.record and args.renderer == "ovrtx":
+    if args.record:
         from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Backend
 
         original_create_camera_cfg = IsaacSim6Backend.create_camera_cfg
@@ -183,7 +175,6 @@ def main() -> int:
     startup_seconds = time.perf_counter() - startup_start
     recorder = sim.video_recorder
     snapshots: dict[int, Any] = {}
-    movie_depth_annotator: Any = None
     if args.record:
         assert recorder is not None
         origin = sim.env_origins[recorder.config.record_env_id].cpu().tolist()
@@ -193,13 +184,6 @@ def main() -> int:
             target=[origin[0] + 1.0, origin[1] + 0.06, origin[2] + 0.83],
         )
         recorder.on_episode_start(env_id=0)
-        if args.renderer == "isaac_rtx":
-            import omni.replicator.core as rep
-
-            movie_depth_annotator = rep.AnnotatorRegistry.get_annotator(
-                "distance_to_image_plane", device="cpu", do_array_copy=True
-            )
-            movie_depth_annotator.attach([recorder._render_product])
     cameras = sim.tiled_cameras
     completed = dict.fromkeys(cameras, 0)
     subscriptions = []
@@ -221,29 +205,34 @@ def main() -> int:
                     filter=texture.get_event_key(),
                 )
             )
-    else:
+    elif args.renderer == "ovrtx":
         from isaaclab.utils.version import has_kit
 
         assert not has_kit(), "OVRTX capture imported Kit."
         renderer = next(iter(cameras.values()))._renderer
-        engines: dict[Any, dict[str, str]] = {}
-        for name, cam in cameras.items():
-            owner = renderer._owner(cam._render_data) if hasattr(renderer, "_owner") else renderer
-            engine = owner.backend.renderer
-            engine = getattr(engine, "_engine", engine)
-            engines.setdefault(engine, {})[cam._render_data.render_product_path] = name
-        for engine, names in engines.items():
-            native_step = engine.step
+        engine = renderer.backend.renderer
+        names = {cam._render_data.render_product_path: name for name, cam in cameras.items()}
+        native_step = engine.step
 
-            def observed_step(*, _step=native_step, _names=names, **kwargs):
-                result = _step(**kwargs)
-                for path, output in result.items():
-                    if path in _names:
-                        completed[_names[path]] += len(output.frames)
-                return result
+        def observed_step(**kwargs):
+            result = native_step(**kwargs)
+            for path, output in result.items():
+                if path in names:
+                    completed[names[path]] += len(output.frames)
+            return result
 
-            # Count actual completed native outputs, including separate engines.
-            engine.step = observed_step
+        engine.step = observed_step
+    else:
+        renderer = next(iter(cameras.values()))._renderer
+        native_render = renderer.render
+        names = {id(cam._render_data): name for name, cam in cameras.items()}
+
+        def observed_render(data):
+            native_render(data)
+            if id(data) in names:
+                completed[names[id(data)]] += 1
+
+        renderer.render = observed_render
 
     ids = torch.arange(args.num_envs, device=device)
     poses = torch.tensor([[1.0, 0.0, _camera_presets._BASE_Z, 0.0, 0.0, 0.0, 1.0]], device=device).repeat(
@@ -251,6 +240,7 @@ def main() -> int:
     )
     poses[:, :3] += sim.env_origins
     previous: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
+    borrowed: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
     previous_completed = completed.copy()
     count_before = sim.sim.get_physics_step_count()
     time_before = sim.backend.physics_time(sim.sim)
@@ -280,12 +270,7 @@ def main() -> int:
         if args.record:
             recorder.capture_frame(env_id=0)
             movie_frame = recorder.video_frames[-1]
-            if movie_depth_annotator is not None:
-                movie_depth = torch.as_tensor(movie_depth_annotator.get_data(), device=device).reshape(
-                    args.resolution, args.resolution
-                )
-            else:
-                movie_depth = recorder._camera.data.output["distance_to_image_plane"].torch[0, ..., 0]
+            movie_depth = recorder.camera.data.output["distance_to_image_plane"].torch[0, ..., 0]
             scale = args.resolution / (2 * math.tan(math.radians(camera.vertical_fov) / 2) * panel_distances[0])
             expected = torch.tensor(
                 [(args.resolution - 1) / 2 + 0.04 * scale, (args.resolution - 1) / 2 - (panel_ys[0] - 0.06) * scale],
@@ -310,20 +295,8 @@ def main() -> int:
                 ), "Movie freshness criterion accepted the previous RGB image."
             if frame in (0, args.frames - 1):
                 snapshots[frame] = movie_frame.copy()
-        if args.renderer == "isaac_rtx":
-            import omni.kit.app
-            from carb.settings import get_settings
-
-            # Headless Kit viewers need not pump the app. Exercise an unrelated
-            # app update too: it must leave every perception product paused.
-            settings = get_settings()
-            playing = settings.get("/app/player/playSimulations")
-            try:
-                settings.set("/app/player/playSimulations", False)
-                omni.kit.app.get_app().update()
-            finally:
-                settings.set("/app/player/playSimulations", playing)
         assert sim.sim.get_physics_step_count() == count, "Capture integrated physics."
+        shared_capture = args.record is not None or any(frame % value == 0 for value in decimations)
         for name, decimation in zip(cameras, decimations, strict=True):
             due = frame % decimation == 0
             rgb = sim.get_camera_data(name)
@@ -331,6 +304,9 @@ def main() -> int:
             assert rgb.shape == (args.num_envs, args.resolution, args.resolution, 3)
             assert rgb.dtype == torch.uint8
             assert depth.shape == (args.num_envs, args.resolution, args.resolution, 1)
+            if name in borrowed:
+                assert torch.equal(borrowed[name][0], previous[name][0]), f"{name}: retained RGB buffer mutated."
+                assert torch.equal(borrowed[name][1], previous[name][1]), f"{name}: retained depth buffer mutated."
             if due:
                 index = int(name.removeprefix("camera_"))
                 axis = 1 if index % 2 else 0
@@ -371,9 +347,12 @@ def main() -> int:
             else:
                 assert torch.equal(rgb, previous[name][0]), f"{name}: RGB changed between captures."
                 assert torch.equal(depth, previous[name][1]), f"{name}: depth changed between captures."
-            if not args.all_camera_renders:
-                rendered = completed[name] - previous_completed[name]
-                assert rendered == int(due), f"{name}: frame {frame}, completed {rendered}, due={due}."
+            rendered = completed[name] - previous_completed[name]
+            expected_capture = shared_capture if sim.backend.shared_camera_rendering else due
+            assert rendered == int(expected_capture), (
+                f"{name}: frame {frame}, completed {rendered}, expected={expected_capture}, due={due}."
+            )
+            borrowed[name] = (rgb, depth)
             previous[name] = (rgb.clone(), depth.clone())
         previous_completed = completed.copy()
         if frame == warmup - 1:
@@ -389,8 +368,6 @@ def main() -> int:
         assert movies and all(movie.stat().st_size > 0 for movie in movies)
         for movie in movies:
             _check_saved_video(movie, snapshots, args.frames)
-        if movie_depth_annotator is not None:
-            movie_depth_annotator.detach([recorder._render_product.path])
         recorder.cleanup()
     memory_after = gpu_process_memory()
     if args.renderer in ("isaac_rtx", "ovrtx"):
@@ -419,7 +396,7 @@ def main() -> int:
                 ),
                 "num_envs": args.num_envs,
                 "resolution": args.resolution,
-                "policy": "all" if args.all_camera_renders else "scheduled",
+                "policy": "shared" if sim.backend.shared_camera_rendering else "independent",
             }
         ),
         flush=True,

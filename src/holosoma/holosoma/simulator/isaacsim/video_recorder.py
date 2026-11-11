@@ -19,19 +19,9 @@ from loguru import logger
 
 from holosoma.simulator.shared.video_recorder import VideoRecorderInterface
 
-
-def _current_stage(backend: IsaacSimBackendAdapter) -> Any:
-    if backend.is_isaacsim6:
-        return backend.stage_utils.get_current_stage()
-    import omni.usd
-
-    return omni.usd.get_context().get_stage()
-
-
 if TYPE_CHECKING:
     from holosoma.config_types.video import VideoConfig
     from holosoma.simulator.isaacsim.isaacsim import IsaacSim
-    from holosoma.simulator.isaacsim.backends.base import IsaacSimBackendAdapter
 
 
 class IsaacSimVideoRecorder(VideoRecorderInterface):
@@ -75,10 +65,6 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         self._render_product: Any = None
         self._rgb_annotator: Any = None
         self._camera_prim_path: str | None = None
-        self._view: Any = None
-        self._rtx_capture: Any = None
-        self._view_tile_limit: Any = None
-        self._view_tile_resolution: Any = None
 
         logger.info(
             f"IsaacSim video recorder initialized - {'threaded' if config.use_recording_thread else 'synchronous'} mode"
@@ -100,13 +86,14 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         super().setup_recording()
 
         import omni.replicator.core as rep
+        import omni.usd
         from pxr import UsdGeom
 
         # Create camera prim path for recording environment
         self._camera_prim_path = f"/World/envs/env_{self.config.record_env_id}/VideoCamera"
 
         # Create camera prim directly in USD stage
-        stage = _current_stage(self.simulator.backend)
+        stage = omni.usd.get_context().get_stage()
         self.camera_prim = UsdGeom.Camera.Define(stage, self._camera_prim_path)
 
         # Calculate camera parameters from config vertical FOV
@@ -128,18 +115,11 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         self.camera_prim.GetVerticalApertureAttr().Set(vertical_aperture)
 
         # Create a view for the sensor
-        if self.simulator.backend.is_isaacsim6:
-            from isaaclab.sim.views.usd_frame_view import UsdFrameView
+        from isaacsim.core.prims import XFormPrim
 
-            # Late-created Replicator cameras read USD. Fabric-only views
-            # leave USD stale, and Newton site views require an env_0 source
-            # prim that a movie camera in another environment need not have.
-            self._view = UsdFrameView(self._camera_prim_path, device=self.simulator.device)
-        else:
-            from isaacsim.core.prims import XFormPrim
+        self._view = XFormPrim(self._camera_prim_path, reset_xform_properties=True)
 
-            self._view = XFormPrim(self._camera_prim_path, reset_xform_properties=True)
-            self._view.initialize()
+        self._view.initialize()
 
         # Create render product using replicator
         resolution = (self.config.width, self.config.height)
@@ -150,19 +130,6 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
             "rgb", device=self.simulator.device, do_array_copy=False
         )
         self._rgb_annotator.attach([self._render_product])
-        if self.simulator.backend.is_isaacsim6:
-            from pxr import Sdf
-            from .backends.camera_renderers import IsaacRtxCapture
-
-            self._rtx_capture = IsaacRtxCapture(self._render_product.hydra_texture, name=self._render_product.path)
-            # Auto layout can retain a preceding tiled perception product's
-            # views. This product always renders one recording environment.
-            product = stage.GetPrimAtPath(self._render_product.path)
-            product.ApplyAPI("OmniRtxPostDebugSettingsAPI_1")
-            self._view_tile_limit = product.CreateAttribute("omni:rtx:viewTile:limit", Sdf.ValueTypeNames.UInt)
-            self._view_tile_resolution = product.CreateAttribute(
-                "omni:rtx:viewTile:resolution", Sdf.ValueTypeNames.Int2
-            )
 
         logger.debug(f"Created replicator camera at: {self._camera_prim_path}")
         logger.debug(f"Render product resolution: {resolution}")
@@ -188,21 +155,6 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         try:
             # Update camera position to track robot using shared logic
             self._update_camera_position()
-            if self.simulator.backend.is_isaacsim6:
-                from pxr import Gf
-                from isaaclab_physx.renderers.fabric import FabricBackendCfg
-                from .backends.camera_renderers import capture_isaac_rtx_products
-
-                sim = self.simulator.sim
-                fabric = sim.get_or_create_backend(FabricBackendCfg(stage=sim.stage, device=sim.device))
-                fabric.bind_transforms(sim.get_scene_data_provider())
-                fabric.update_transforms(sim.get_scene_data_provider())
-                fabric.update_geometries(sim.get_scene_data_provider(), sim.render_generation)
-                # Annotator attachment can resync global RTX settings; publish
-                # this product's own layout immediately before requesting a draw.
-                self._view_tile_limit.Set(1)
-                self._view_tile_resolution.Set(Gf.Vec2i(self.config.width, self.config.height))
-                capture_isaac_rtx_products([self._rtx_capture])
 
             # Get RGB data from replicator annotator
             rgb_data = self._rgb_annotator.get_data()
@@ -258,17 +210,8 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
                 create_rotation_matrix_from_view(position, target, up_axis, device=self.simulator.device)
             )
 
-            # The view contains the one camera already placed under record_env_id; environment
-            # indices are not indices into this singleton view.
-            if self.simulator.backend.is_isaacsim6:
-                import warp as wp
-
-                self._view.set_world_poses(
-                    wp.from_torch(position.contiguous(), dtype=wp.vec3f),
-                    wp.from_torch(orientations.contiguous(), dtype=wp.vec4f),
-                )
-            else:
-                self._view.set_world_poses(position, orientations)
+            # The view contains only the camera under record_env_id.
+            self._view.set_world_poses(position, orientations)
 
         except Exception as e:
             logger.warning(f"Failed to update camera position: {e}")
@@ -285,9 +228,6 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
             failures.append(exc)
 
         if self.worker_stopped:
-            if self._rtx_capture is not None:
-                self._rtx_capture.close()
-                self._rtx_capture = None
             failures.extend(self._cleanup_backend_resources())
 
         if failures:
@@ -315,24 +255,13 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
             else:
                 self._render_product = None
 
-        if self._rgb_annotator is None and self._render_product is None and self._view is not None:
-            try:
-                if self.simulator.backend.is_isaacsim6:
-                    self._view.close()
-            except Exception as exc:
-                failures.append(exc)
-            else:
-                self._view = None
-
-        if (
-            self._rgb_annotator is None
-            and self._render_product is None
-            and self._view is None
-            and self._camera_prim_path is not None
-        ):
+        if self._rgb_annotator is None and self._render_product is None and self._camera_prim_path is not None:
             camera_prim_path = self._camera_prim_path
+            self._view = None
             try:
-                removed = _current_stage(self.simulator.backend).RemovePrim(camera_prim_path)
+                import omni.usd
+
+                removed = omni.usd.get_context().get_stage().RemovePrim(camera_prim_path)
                 if removed is False:
                     raise RuntimeError(f"Failed to remove camera prim {camera_prim_path!r}")
             except Exception as exc:
