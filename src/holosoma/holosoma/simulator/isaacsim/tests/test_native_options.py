@@ -9,10 +9,22 @@ from typing import Any, Literal
 import pytest
 from pydantic import ValidationError
 
+from holosoma.config_types.newton import IsaacLab3RendererConfig
 from holosoma.config_types.simulator import IsaacLab3Config, IsaacLab3NewtonConfig
 from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Backend
 
 pytestmark = pytest.mark.no_sim
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_ovrtx_rejects_ineffective_shadow_control_before_importing_sdk(enabled: bool) -> None:
+    before = set(sys.modules)
+    backend = IsaacLab3Backend(
+        IsaacLab3Config(renderer="ovrtx", renderer_options=IsaacLab3RendererConfig(enable_shadows=enabled))
+    )
+    with pytest.raises(ValueError, match="renderer_options.enable_shadows is Warp-only"):
+        backend.renderer_config()
+    assert not any(name.startswith("isaaclab_ov.") for name in set(sys.modules) - before)
 
 
 @pytest.mark.parametrize("field", ["nconmax", "njmax", "solver_iterations"])

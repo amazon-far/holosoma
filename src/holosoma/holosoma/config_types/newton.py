@@ -65,10 +65,11 @@ class IsaacLab3RendererConfig:
 
     None retains the selected SDK renderer's default. Explicit unsupported
     options fail at startup. Kit launch presets remain in ``isaacsim``.
+    Ray distance and depth clipping use the existing per-camera fields.
     """
 
     enable_shadows: bool | None = None
-    """Enable shadows on Warp or OVRTX."""
+    """Enable Warp shadows. OVRTX RGB/depth always include shadows."""
     use_cuda_graph: bool | None = None
     """Capture Warp rendering kernels on CUDA."""
     enable_textures: bool | None = None
@@ -77,11 +78,3 @@ class IsaacLab3RendererConfig:
     """Enable Warp ambient lighting."""
     enable_backface_culling: bool | None = None
     """Cull back faces in Warp."""
-    max_distance: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None
-    """Maximum Warp ray distance in metres."""
-    depth_clipping_behavior: Literal["max", "zero", "none"] | None = None
-    """Warp depth values beyond the maximum ray distance."""
-    colorize_semantic_segmentation: bool | None = None
-    """Return colors instead of semantic IDs."""
-    colorize_instance_segmentation: bool | None = None
-    """Return colors instead of instance IDs."""

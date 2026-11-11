@@ -68,7 +68,8 @@ def test_setup_rejects_missing_native_activation(tmp_path: Path) -> None:
     assert "Isaac Sim runtime not found" in result.stderr
 
 
-def test_setup_rejects_changed_isaaclab_checkout(tmp_path: Path) -> None:
+@pytest.mark.parametrize("already_installed", [False, True])
+def test_setup_rejects_changed_isaaclab_checkout(tmp_path: Path, already_installed: bool) -> None:
     checkout = tmp_path / "lab"
     checkout.mkdir()
     for args in [
@@ -80,7 +81,9 @@ def test_setup_rejects_changed_isaaclab_checkout(tmp_path: Path) -> None:
         subprocess.run(["git", "-C", str(checkout), *args], check=True, capture_output=True)
     before = subprocess.check_output(["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True)
     result = _shell(
-        'source "$1"; isaacsim3_prepare_isaaclab',
+        'source "$1"; '
+        + ('mkdir -p "$WORKSPACE_DIR"; touch "$ISAACSIM3_SENTINEL"; ' if already_installed else "")
+        + "isaacsim3_setup_main",
         SETUP,
         env={
             "HOLOSOMA_DEPS_DIR": str(tmp_path / "deps"),
@@ -94,7 +97,8 @@ def test_setup_rejects_changed_isaaclab_checkout(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("native", [False, True], ids=["standalone", "native"])
-def test_setup_syncs_locked_video_extra_after_previous_setup(tmp_path: Path, native: bool) -> None:
+@pytest.mark.parametrize("current_stamp", [False, True], ids=["old-setup", "missing-environment"])
+def test_setup_syncs_locked_video_extra_after_previous_setup(tmp_path: Path, native: bool, current_stamp: bool) -> None:
     checkout = tmp_path / "lab"
     checkout.mkdir()
     for args in [
@@ -105,7 +109,10 @@ def test_setup_syncs_locked_video_extra_after_previous_setup(tmp_path: Path, nat
         subprocess.run(["git", "-C", str(checkout), *args], check=True, capture_output=True)
     deps = tmp_path / "deps"
     deps.mkdir()
-    (deps / ".env_setup_finished_hssim3_isaacsim-6.2.0_isaaclab-v3.0.0").touch()
+    stamp = ".env_setup_finished_hssim3_isaacsim-6.2.0_isaaclab-v3.0.0"
+    if current_stamp:
+        stamp += "_video_ov_importers"
+    (deps / stamp).touch()
     runtime = tmp_path / "sim"
     runtime.mkdir()
     (runtime / "VERSION").write_text("6.2.0")
@@ -163,7 +170,7 @@ PY
             *([] if native else ["--extra", "isaacsim"]),
         ],
     ]
-    assert not (deps / ".env_setup_finished_hssim3_isaacsim-6.2.0_isaaclab-v3.0.0_video").exists()
+    assert not (deps / ".env_setup_finished_hssim3_isaacsim-6.2.0_isaaclab-v3.0.0_video_ov_importers").exists()
 
 
 @pytest.mark.parametrize("inherited_backend", [None, "isaaclab2", "isaaclab3", "unsupported"])

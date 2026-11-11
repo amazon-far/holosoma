@@ -12,7 +12,7 @@ if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
-from holosoma.config_types.newton import IsaacLab3RendererConfig, NewtonCollisionConfig
+from holosoma.config_types.newton import IsaacLab3RendererConfig, NewtonCollisionConfig, NewtonPhysicsConfig
 from holosoma.config_types.scene import IsaacSimPhysicsConfig, MujocoPhysicsConfig, PhysicsConfig
 from holosoma.config_types.simulator import IsaacLab3Config, IsaacLab3NewtonConfig
 from holosoma.utils.sim_utils import setup_simulation_environment
@@ -65,7 +65,9 @@ def main() -> int:
         physics_backend=args.physics,
         renderer=args.renderer,
         newton=newton,
-        renderer_options=IsaacLab3RendererConfig(enable_shadows=False),
+        renderer_options=IsaacLab3RendererConfig(enable_shadows=False)
+        if args.renderer == "newton_warp"
+        else IsaacLab3RendererConfig(),
     )
     overrides = {
         "pelvis": PhysicsConfig(
@@ -114,9 +116,63 @@ def main() -> int:
     import warp as wp
     from isaaclab.sim.schemas import MassCfg
     from isaaclab.utils.string import string_to_callable
-    from pxr import Usd, UsdPhysics, UsdShade
+    from pxr import Sdf, Usd, UsdPhysics, UsdShade
 
-    from holosoma.simulator.isaacsim.backends.native_properties import author_properties
+    from holosoma.simulator.isaacsim.backends.native_properties import author_properties, author_robot_physics
+
+    nested = Usd.Stage.CreateInMemory()
+    nested.DefinePrim("/Nested", "Xform")
+    parent = nested.DefinePrim("/Nested/parent", "Xform")
+    child = nested.DefinePrim("/Nested/parent/child", "Xform")
+    disabled = nested.DefinePrim("/Nested/parent/fixed", "Xform")
+    for prim, mass in ((parent, 1.0), (child, 2.0)):
+        UsdPhysics.RigidBodyAPI.Apply(prim)
+        UsdPhysics.MassAPI.Apply(prim).CreateMassAttr(mass)
+    UsdPhysics.RigidBodyAPI.Apply(disabled).CreateRigidBodyEnabledAttr(False)
+    original = UsdShade.Material.Define(nested, "/Nested/material")
+    UsdPhysics.MaterialAPI.Apply(original.GetPrim()).CreateStaticFrictionAttr(0.4)
+    contact_attribute = "newton:contactMargin" if args.physics == "newton" else "physxCollision:contactOffset"
+    colliders = []
+    for prim in (parent, child, disabled):
+        collider = nested.DefinePrim(str(prim.GetPath()) + "/collision", "Mesh")
+        UsdPhysics.CollisionAPI.Apply(collider)
+        collider.CreateAttribute(contact_attribute, Sdf.ValueTypeNames.Float).Set(0.11)
+        collider.CreateAttribute("newton:maxHullVertices", Sdf.ValueTypeNames.Int).Set(32)
+        UsdShade.MaterialBindingAPI.Apply(collider).Bind(original, materialPurpose="physics")
+        colliders.append(collider)
+    nested_physics = PhysicsConfig(
+        mass=4.0,
+        isaacsim=IsaacSimPhysicsConfig(static_friction=0.23, dynamic_friction=0.23, contact_offset=0.07),
+        mujoco=MujocoPhysicsConfig(margin=0.07) if args.physics == "newton" else None,
+        newton=NewtonPhysicsConfig(max_hull_vertices=64) if args.physics == "newton" else None,
+    )
+    asset = dataclasses.replace(
+        config.robot.asset,
+        link_physics=None,
+        link_physics_overrides={"parent": nested_physics},
+    )
+    author_robot_physics("/Nested", asset, sim.backend, stage=nested, material_defaults=None)
+    assert UsdPhysics.MassAPI(parent).GetMassAttr().Get() == 4.0
+    assert UsdPhysics.MassAPI(child).GetMassAttr().Get() == 2.0
+    for index, collider in enumerate(colliders):
+        selected = index != 1
+        material, _ = UsdShade.MaterialBindingAPI(collider).ComputeBoundMaterial(materialPurpose="physics")
+        assert (
+            abs(UsdPhysics.MaterialAPI(material.GetPrim()).GetStaticFrictionAttr().Get() - (0.23 if selected else 0.4))
+            < 1e-6
+        )
+        assert abs(collider.GetAttribute(contact_attribute).Get() - (0.07 if selected else 0.11)) < 1e-6
+        if args.physics == "newton":
+            assert collider.GetAttribute("newton:maxHullVertices").Get() == (64 if selected else 32)
+    # Wildcards select physical bodies; disabled fixed-link markers retain
+    # their outer owner's collider settings without becoming override targets.
+    wildcard_asset = dataclasses.replace(asset, link_physics_overrides={"*": nested_physics})
+    author_robot_physics("/Nested", wildcard_asset, sim.backend, stage=nested, material_defaults=None)
+    assert UsdPhysics.MassAPI(child).GetMassAttr().Get() == 4.0
+    assert not disabled.HasAPI(UsdPhysics.MassAPI)
+    for collider in colliders:
+        material, _ = UsdShade.MaterialBindingAPI(collider).ComputeBoundMaterial(materialPurpose="physics")
+        assert abs(UsdPhysics.MaterialAPI(material.GetPrim()).GetStaticFrictionAttr().Get() - 0.23) < 1e-6
 
     fixture = Usd.Stage.CreateInMemory()
     fixture.DefinePrim("/Library", "Xform")
@@ -232,7 +288,8 @@ def main() -> int:
         torch.testing.assert_close(native_mass[:, index], torch.full((2,), 42.0, device=native_mass.device))
 
     camera = sim.tiled_cameras["front_cam"]
-    assert camera.cfg.renderer_cfg.enable_shadows is False
+    if args.renderer == "newton_warp":
+        assert camera.cfg.renderer_cfg.enable_shadows is False
     before = sim.robot_root_states.clone()
     step(sim, 20, render=True)
     assert torch.isfinite(sim.robot_root_states).all()

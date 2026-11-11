@@ -39,15 +39,17 @@ isaacsim3_prepare_isaaclab() {
 
 isaacsim3_setup_main() {
     isaacsim3_validate_runtime
-    if [[ -f $ISAACSIM3_SENTINEL ]]; then
+    mkdir -p "$WORKSPACE_DIR"
+    isaacsim3_prepare_isaaclab
+    if [[ -f $ISAACSIM3_SENTINEL && -x $ISAACSIM3_ENV_ROOT/bin/python && -f $ISAACSIM3_ENV_ROOT/bin/activate ]]; then
         return
     fi
-    mkdir -p "$WORKSPACE_DIR"
+    # A removed/relocated environment must complete setup before reusing its stamp.
+    rm -f "$ISAACSIM3_SENTINEL"
     if ! command -v uv >/dev/null; then
         curl -LsSf "https://astral.sh/uv/${ISAACSIM3_UV_VERSION}/install.sh" | sh
         export PATH="$HOME/.local/bin:$PATH"
     fi
-    isaacsim3_prepare_isaaclab
 
     # Downloaded Isaac Sim must use its bundled interpreter, including for a
     # venv. Standalone pip installations use a regular Python 3.12 environment.

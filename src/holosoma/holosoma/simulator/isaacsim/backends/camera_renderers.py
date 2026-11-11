@@ -7,8 +7,9 @@ material writes, render buffers, cloning and optional OVStage ordinals.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from functools import lru_cache
-from typing import Any
+from typing import Any, cast
 
 
 class IsaacRtxCapture:
@@ -50,9 +51,11 @@ def capture_isaac_rtx_products(captures: list[IsaacRtxCapture]) -> None:
     before = [capture.completed for capture in captures]
     settings = get_settings()
     previous = settings.get("/app/player/playSimulations")
-    try:
+    with ExitStack() as cleanup:
+        cleanup.callback(settings.set, "/app/player/playSimulations", previous)
         settings.set("/app/player/playSimulations", False)
         for capture in captures:
+            cleanup.callback(capture.texture.set_updates_enabled, False)
             capture.texture.set_updates_enabled(True)
         deadline = time.monotonic() + 30.0
         # A fixed number of app updates can read an older image. Wait for the
@@ -61,10 +64,6 @@ def capture_isaac_rtx_products(captures: list[IsaacRtxCapture]) -> None:
             if time.monotonic() > deadline:
                 raise RuntimeError("Timed out waiting for Isaac RTX camera products.")
             omni.kit.app.get_app().update()
-    finally:
-        for capture in captures:
-            capture.texture.set_updates_enabled(False)
-        settings.set("/app/player/playSimulations", previous)
 
 
 def create_scheduled_ovrtx_renderer(cfg: Any) -> Any:
@@ -80,6 +79,9 @@ def create_scheduled_isaac_rtx_renderer(cfg: Any) -> Any:
 @lru_cache(maxsize=1)
 def scheduled_isaac_rtx_renderer_class() -> type[Any]:
     """Request one completed draw for each due camera, leaving idle products paused."""
+    # Lab 3 runs on Python 3.12; the shared type-check target remains 3.10.
+    from builtins import ExceptionGroup  # type: ignore[attr-defined]
+
     from isaaclab_physx.renderers.isaac_rtx_renderer import IsaacRtxRenderer
 
     class ScheduledIsaacRtxRenderer(IsaacRtxRenderer):
@@ -97,22 +99,32 @@ def scheduled_isaac_rtx_renderer_class() -> type[Any]:
         def create_render_data(self, spec: Any) -> Any:
             data = super().create_render_data(spec)
             path = data.render_product.path
+            try:
+                capture = IsaacRtxCapture(data.render_product.hydra_texture, name=path)
+            except Exception as primary:
+                try:
+                    super().cleanup(data)
+                except Exception as cleanup_error:
+                    # Retain failed releases so close() can retry them.
+                    self._products[path] = data
+                    cast(Any, primary).add_note(f"Camera-product cleanup failed: {cleanup_error}")
+                raise
             self._products[path] = data
-            self._captures[path] = IsaacRtxCapture(data.render_product.hydra_texture, name=path)
+            self._captures[path] = capture
             return data
 
         def render_batch(self, render_data: Any) -> None:
             if not render_data:
                 return
-            from isaaclab.sim import SimulationContext
-
-            sim = SimulationContext.instance()
-            # RenderContext already prepared all due poses. Publish physics
-            # and deformable state before the first draw, as SDK ensure_update
-            # does, without its global per-step/app-update deduplication.
-            self._fabric.update_transforms(sim.get_scene_data_provider())
-            self._fabric.update_geometries(sim.get_scene_data_provider(), sim.render_generation)
-            products = render_data if self._configured_cameras else list(self._products.values())
+            # RenderContext normally publishes these first; direct render()
+            # calls need the same state without SDK app-update deduplication.
+            self.update_transforms()
+            self.update_geometries()
+            products = (
+                render_data
+                if self._configured_cameras
+                else [data for path, data in self._products.items() if path in self._captures]
+            )
             capture_isaac_rtx_products([self._captures[data.render_product.path] for data in products])
             for data in render_data:
                 self._read_annotator_output(data)
@@ -121,17 +133,28 @@ def scheduled_isaac_rtx_renderer_class() -> type[Any]:
             if render_data is None or render_data.render_product is None:
                 return
             path = render_data.render_product.path
-            self._captures.pop(path).close()
-            self._products.pop(path, None)
+            capture = self._captures.pop(path, None)
+            if capture is not None:
+                capture.close()
             super().cleanup(render_data)
+            self._products.pop(path, None)
 
         def close(self) -> None:
             # Teardown can follow STOP callbacks that already cleaned cameras.
             # Release remaining event subscriptions before Kit destroys products.
+            errors = []
             for data in list(self._products.values()):
-                self.cleanup(data)
+                try:
+                    self.cleanup(data)
+                except Exception as error:
+                    errors.append(error)
             self._configured_cameras.clear()
-            super().close()
+            try:
+                super().close()
+            except Exception as error:
+                errors.append(error)
+            if errors:
+                raise ExceptionGroup("Failed closing Isaac RTX camera products", errors)
 
     return ScheduledIsaacRtxRenderer
 

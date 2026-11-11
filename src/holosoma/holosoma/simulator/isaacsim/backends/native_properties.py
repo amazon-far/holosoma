@@ -125,16 +125,16 @@ def physics_settings(physics: PhysicsConfig | None, backend: Any, *, portable: b
 
 def author_robot_physics(anchor: str, asset: Any, backend: Any, *, stage: Any, material_defaults: Any) -> None:
     """Apply common defaults, then one matching per-link override before cloning."""
-    from pxr import Usd, UsdPhysics
+    from pxr import Usd
+
+    from ..prim_utils import is_rigid_body_enabled
 
     settings = physics_settings(asset.link_physics, backend)
     author_properties(anchor, compile_properties(settings), flags={}, stage=stage, material_defaults=material_defaults)
     overrides = asset.link_physics_overrides or {}
     matched: set[str] = set()
-    bodies = [prim for prim in Usd.PrimRange(stage.GetPrimAtPath(anchor)) if prim.HasAPI(UsdPhysics.RigidBodyAPI)]
+    bodies = [prim for prim in Usd.PrimRange(stage.GetPrimAtPath(anchor)) if is_rigid_body_enabled(prim)]
     for prim in bodies:
-        if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
-            continue
         for pattern, physics in overrides.items():
             if fnmatch.fnmatchcase(prim.GetName(), pattern):
                 settings = physics_settings(physics, backend, portable=True)
@@ -144,6 +144,11 @@ def author_robot_physics(anchor: str, asset: Any, backend: Any, *, stage: Any, m
                 for family in ("mass_props", "rigid_props"):
                     if family in compiled:
                         compiled[family] = [("", fragments) for _pattern, fragments in compiled[family]]
+                collider_families = compiled.keys() & {"collision_props", "physics_material", "mesh_collision_props"}
+                if collider_families:
+                    collider_pattern = _owned_collision_pattern(prim)
+                    for family in collider_families:
+                        compiled[family] = [(collider_pattern, fragments) for _pattern, fragments in compiled[family]]
                 author_properties(
                     str(prim.GetPath()),
                     compiled,
@@ -156,6 +161,27 @@ def author_robot_physics(anchor: str, asset: Any, backend: Any, *, stage: Any, m
     unmatched = overrides.keys() - matched
     if unmatched:
         raise ValueError("robot.asset.link_physics_overrides: no selected body for " + ", ".join(sorted(unmatched)))
+
+
+def _owned_collision_pattern(body: Any) -> str:
+    """Select this body's colliders without crossing into nested enabled bodies."""
+    from pxr import Usd, UsdPhysics
+
+    from ..prim_utils import is_rigid_body_enabled
+
+    anchor = str(body.GetPath())
+    paths = []
+    for prim in Usd.PrimRange(body, Usd.TraverseInstanceProxies()):
+        if not prim.HasAPI(UsdPhysics.CollisionAPI):
+            continue
+        owner = prim
+        while owner and not is_rigid_body_enabled(owner):
+            owner = owner.GetParent()
+        if owner == body:
+            paths.append(re.escape(str(prim.GetPath())[len(anchor) :]))
+    if not paths:
+        raise ValueError(f"robot.asset.link_physics_overrides: no owned colliders for {anchor!r}")
+    return "(?:" + "|".join(paths) + ")"
 
 
 def _target_expression(anchor: str, pattern: str) -> str:

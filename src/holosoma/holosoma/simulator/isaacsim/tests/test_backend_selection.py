@@ -215,3 +215,43 @@ def test_native_launch_context_outlives_the_returned_app(
     assert events == [("enter", None), ("exit", exit_code)]
     closer.close(exit_code=91)
     assert events == [("enter", None), ("exit", exit_code)]
+
+
+@pytest.mark.no_sim
+@pytest.mark.parametrize("launcher_failure", [False, True])
+def test_native_teardown_failure_still_exits_launch_context(
+    monkeypatch: pytest.MonkeyPatch, launcher_failure: bool
+) -> None:
+    """A failed native release must not retain launchers or report a successful exit."""
+    from holosoma.simulator.isaacsim.backends import isaaclab3
+
+    events: list[str] = []
+
+    @contextmanager
+    def runtime() -> Iterator[None]:
+        try:
+            yield
+        finally:
+            events.append(str(sys.exc_info()[1]))
+            if launcher_failure:
+                raise ValueError("launcher cleanup failed")
+
+    def clear_instance() -> None:
+        events.append("clear")
+        raise RuntimeError("native cleanup failed")
+
+    sim = ModuleType("isaaclab.sim")
+    setattr(sim, "SimulationContext", SimpleNamespace(clear_instance=clear_instance))
+    monkeypatch.setitem(sys.modules, "isaaclab.sim", sim)
+    stack = ExitStack()
+    stack.enter_context(runtime())
+    monkeypatch.setattr(isaaclab3, "_RUNTIME", stack)
+    app = isaaclab3.IsaacLab3Runtime()
+    with pytest.raises(ValueError if launcher_failure else RuntimeError) as error:
+        app.close()
+    assert str(error.value) == ("launcher cleanup failed" if launcher_failure else "native cleanup failed")
+    if launcher_failure:
+        assert str(error.value.__context__) == "native cleanup failed"
+    assert events == ["clear", "native cleanup failed"]
+    app.close(exit_code=91)
+    assert events == ["clear", "native cleanup failed"]

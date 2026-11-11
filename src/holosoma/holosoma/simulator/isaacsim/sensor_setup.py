@@ -1,15 +1,10 @@
 """Isaac Sim mounted camera and LiDAR sensor setup.
 
-Each configured camera is a ``TiledCamera`` created before ``clone_environments`` as a child prim
-of its mount body, so the USD transform hierarchy makes it follow that body natively across all
-cloned envs. These module-level functions take the simulator (the ``fields.py`` / MuJoCo
-shared sensor setup convention) and drive that pipeline — prim-path resolution, the FOV->aperture
-pinhole cfg, per-env creation, ``SensorManager`` registration, and the per-control-step render
-read-out. The per-camera ``TiledCamera`` map lives on the simulator as ``sim.tiled_cameras``,
-written before clone and read at render.
-
-Native sensors are built before cloning, then registered with the shared sensor manager after
-the scene is built.
+The selected backend creates a Lab 2 ``TiledCamera`` or Lab 3 ``Camera`` before
+environment cloning. Camera prims follow their mount bodies through the USD
+transform hierarchy. ``sim.tiled_cameras`` retains the native camera map for both
+versions; the shared sensor manager owns cadence, held observations and depth
+clipping. Native LiDAR sensors follow the same build-before-clone lifecycle.
 """
 
 from __future__ import annotations
@@ -49,7 +44,7 @@ if TYPE_CHECKING:
 
 
 def build_cameras(sim: IsaacSim) -> None:
-    """Build a TiledCamera per configured camera (before clone, so each replicates per env).
+    """Build each backend's native camera before cloning it across environments.
 
     The camera optical convention is OpenGL (-Z forward, +Y up), the same frame holosoma uses,
     so the mount offset passes through with ``convention="opengl"`` and no extra rotation.
@@ -108,14 +103,14 @@ def _camera_mount_prim_path(mount: SensorMountConfig, *, backend: IsaacLabBacken
 
 
 def register_cameras(sim: IsaacSim, manager: SensorManager) -> None:
-    """Register TiledCameras built before environment cloning."""
+    """Register the cameras built before environment cloning with the shared manager."""
     for name, config in sim.sensor_config.items():
         if isinstance(config, CameraSensorConfig):
             manager.register_camera(name, config)
 
 
 def sync_camera_fabric_transforms(sim: IsaacSim) -> None:
-    """Reset each camera's Fabric local transform to its authored mount offset.
+    """Repair Lab 2 camera Fabric transforms to match their authored mount offsets.
 
     Call once after ``sim.reset()``. The renderer places cameras from Fabric. Isaac Lab initializes
     each TiledCamera during the reset; its first pose read syncs the camera into Fabric through an
@@ -143,8 +138,6 @@ def sync_camera_fabric_transforms(sim: IsaacSim) -> None:
         or not carb.settings.get_settings().get("/physics/fabricEnabled")
     ):
         return
-    # Lab 3's Camera uses a backend FrameView and initializes Fabric poses directly. The Lab 2
-    # workaround below repairs the old TiledCamera initialization path only.
     fabric_stage = usdrt.Usd.Stage.Attach(sim_utils.get_current_stage_id())
     for camera in sim.tiled_cameras.values():
         for prim in sim_utils.find_matching_prims(camera.cfg.prim_path):
@@ -159,7 +152,7 @@ def sync_camera_fabric_transforms(sim: IsaacSim) -> None:
 
 
 def render_cameras(sim: IsaacSim, due: list[CameraRecord]) -> None:
-    """Cache each due TiledCamera's RGB/depth as an env-first frame into its buffer.
+    """Capture each due native camera's RGB/depth into its shared observation buffers.
 
     Lab 3 prepares all due poses before capturing their outputs. Lab 2 reads
     the frame-end RTX pass. Drop alpha and cache ``[N,H,W,3]`` uint8 (rgb) /
