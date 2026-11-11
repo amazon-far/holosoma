@@ -117,22 +117,14 @@ def setup_isaaclab_launcher(config: EnvConfig, device: str) -> Any | None:
     Any | None
         IsaacSim simulation app instance, or None for other simulators.
     """
-    from holosoma.simulator.isaacsim.backends import get_backend
+    from holosoma.simulator.isaacsim.backends import get_backend_for_config
 
     # Decide runtime requirements before SDK argument registration can import
     # Kit. A renderer preference alone does not activate cameras or a viewer.
     video_enabled = config.logger.video.enabled or config.logger.headless_recording
     cameras_enabled = any(isinstance(sensor, CameraSensorConfig) for sensor in config.sensors.values())
     needs_rendering = video_enabled or cameras_enabled
-    backend = get_backend(
-        config.simulator.config.isaacsim_backend,
-        native=config.simulator.config.sim.isaacsim6,
-        rendering=(
-            needs_rendering
-            or not config.training.headless
-            or bool(config.simulator.config.isaacsim.app_launcher_args())
-        ),
-    )
+    backend = get_backend_for_config(config)
     parser = argparse.ArgumentParser(description="Run simulation with IsaacSim.")
     parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
     parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
@@ -157,8 +149,7 @@ def setup_isaaclab_launcher(config: EnvConfig, device: str) -> Any | None:
     if needs_rendering:
         args_cli.enable_cameras = True
     if backend.is_isaacsim6 and video_enabled:
-        # Lab 3's headless Kit hook pumps Replicator frames for video-only
-        # scenes, which do not otherwise have a native camera renderer.
+        # Declare movie rendering to Lab 3's headless launch lifecycle.
         args_cli.video = True
 
     isaacsim_config = config.simulator.config.isaacsim

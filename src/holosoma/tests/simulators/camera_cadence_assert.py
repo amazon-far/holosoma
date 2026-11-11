@@ -401,14 +401,16 @@ def main() -> int:
             _check_saved_video(movie, snapshots, args.frames)
         recorder.cleanup()
     memory_after = gpu_process_memory()
-    if args.renderer in ("isaac_rtx", "ovrtx"):
-        subscriptions.clear()
-        renderer = next(iter(cameras.values()))._renderer
-        for cam in cameras.values():
-            renderer.cleanup(cam._render_data)
-            renderer.cleanup(cam._render_data)
-        renderer.close()
-        renderer.close()
+    subscriptions.clear()
+    # STOP invalidates scene-owned camera data before the registry closes its
+    # renderers. Direct renderer.cleanup is not an idempotent SDK lifecycle API.
+    sim.sim.stop()
+    sim.sim.clear_instance()
+    sim.sim.clear_instance()
+    assert all(not cam.is_initialized for cam in cameras.values())
+    for name, (rgb, depth) in borrowed.items():
+        assert torch.equal(rgb, previous[name][0]), f"{name}: RGB did not survive SDK teardown."
+        assert torch.equal(depth, previous[name][1]), f"{name}: depth did not survive SDK teardown."
     print(
         json.dumps(
             {

@@ -10,7 +10,6 @@ import pathlib
 import trimesh
 
 from holosoma.config_types.full_sim import FullSimConfig
-from holosoma.config_types.sensor import CameraSensorConfig
 import isaaclab.sim as sim_utils
 import isaaclab.terrains as terrain_gen
 import torch
@@ -34,7 +33,7 @@ from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.isaacsim.event_cfg import EventCfg
-from holosoma.simulator.isaacsim.backends import get_backend
+from holosoma.simulator.isaacsim.backends import get_backend_for_config
 from holosoma.simulator.isaacsim.events import randomize_body_com, randomize_rigid_body_inertia
 from holosoma.simulator.isaacsim import light_setup, sensor_setup
 from holosoma.simulator.isaacsim.viewer_input import ViewerInputController
@@ -73,16 +72,7 @@ if TYPE_CHECKING:
 class IsaacSim(BaseSimulator):
     def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str):
         super().__init__(tyro_config, terrain_manager, device)
-        self.backend = get_backend(
-            self.simulator_config.isaacsim_backend,
-            native=self.simulator_config.sim.isaacsim6,
-            rendering=(
-                self.video_config.enabled
-                or any(isinstance(sensor, CameraSensorConfig) for sensor in self.sensor_config.values())
-                or not tyro_config.training.headless
-                or bool(self.simulator_config.isaacsim.app_launcher_args())
-            ),
-        )
+        self.backend = get_backend_for_config(tyro_config)
 
         # Public interface attribute read across backends (video_recorder, virtual_gantry,
         # simulator_bridge). For IsaacSim it always equals self.sim_device; internal tensor

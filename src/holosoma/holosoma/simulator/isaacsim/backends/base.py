@@ -17,8 +17,10 @@ if TYPE_CHECKING:
 class IsaacSimBackendAdapter(ABC):
     """Native operations that changed between Isaac Lab releases.
 
-    The frontend owns scene authoring, state registration, scheduling, and
-    Holosoma conventions. The backend only translates the native API boundary.
+    The frontend owns scene authoring, state registration and scheduling. An
+    adapter retains only the selected runtime options and whether rendering is
+    needed; it does not own simulation state. Instances keep these choices local
+    rather than storing them on a process-wide class.
     """
 
     isaaclab_major: int
@@ -33,6 +35,11 @@ class IsaacSimBackendAdapter(ABC):
     def uses_kit(self) -> bool:
         """Whether scene and viewer operations run inside Isaac Sim Kit."""
         return True
+
+    @property
+    def uses_kit_physx(self) -> bool:
+        """Whether live USD PhysX edits reach the selected running engine."""
+        return self.uses_kit
 
     def configure_physics_scene(self, sim: Any, config: Any) -> None:
         """Apply engine scene settings before assets are authored."""

@@ -220,7 +220,7 @@ def apply_fields(target: Any, config: MujocoGeomPhysicsConfig, path: str) -> Non
     """
     visual_only = target.contype == 0 and target.conaffinity == 0
     for name, value in requested(config).items():
-        if name in ("extra", "gravity_compensation"):
+        if name == "extra":
             continue
         if visual_only and name in {"contype", "conaffinity"}:
             continue

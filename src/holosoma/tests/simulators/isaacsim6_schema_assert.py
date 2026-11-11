@@ -12,9 +12,9 @@ if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
-from holosoma.config_types.newton import IsaacSim6RendererConfig, NewtonCollisionConfig, NewtonPhysicsConfig
+from holosoma.config_types.newton import NewtonCollisionConfig
 from holosoma.config_types.scene import IsaacSimPhysicsConfig, MujocoPhysicsConfig, PhysicsConfig
-from holosoma.config_types.simulator import IsaacSim6Config, IsaacSim6NewtonConfig
+from holosoma.config_types.simulator import IsaacSim6Config, IsaacSim6NewtonConfig, IsaacSim6RendererConfig
 from tests.simulators._native_runtime_assertions import assert_native_runtime
 from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit, step
 
@@ -68,16 +68,6 @@ def main() -> int:
         if args.renderer == "newton_warp"
         else IsaacSim6RendererConfig(),
     )
-    overrides = {
-        "pelvis": PhysicsConfig(
-            mass=42.0,
-            mujoco=MujocoPhysicsConfig(gravity_compensation=0.25) if args.physics == "newton" else None,
-        ),
-        "left_ankle_roll_link": PhysicsConfig(
-            isaacsim=IsaacSimPhysicsConfig(static_friction=0.45, dynamic_friction=0.45),
-            mujoco=MujocoPhysicsConfig(friction=[0.45, 0.07, 0.03]) if args.physics == "newton" else None,
-        ),
-    }
     config = dataclasses.replace(
         config,
         simulator=dataclasses.replace(
@@ -91,10 +81,9 @@ def main() -> int:
             config.robot,
             asset=dataclasses.replace(
                 config.robot.asset,
-                link_physics_overrides=overrides,
                 link_physics=PhysicsConfig(
                     isaacsim=IsaacSimPhysicsConfig(static_friction=0.7, dynamic_friction=0.7),
-                    mujoco=MujocoPhysicsConfig(condim=6, gravity_compensation=0.1)
+                    mujoco=MujocoPhysicsConfig(condim=6, friction=[0.7, 0.07, 0.03])
                     if args.physics == "newton"
                     else None,
                 ),
@@ -114,63 +103,9 @@ def main() -> int:
     import warp as wp
     from isaaclab.sim.schemas import MassCfg
     from isaaclab.utils.string import string_to_callable
-    from pxr import Sdf, Usd, UsdPhysics, UsdShade
+    from pxr import Usd, UsdPhysics, UsdShade
 
-    from holosoma.simulator.isaacsim.backends.native_properties import author_properties, author_robot_physics
-
-    nested = Usd.Stage.CreateInMemory()
-    nested.DefinePrim("/Nested", "Xform")
-    parent = nested.DefinePrim("/Nested/parent", "Xform")
-    child = nested.DefinePrim("/Nested/parent/child", "Xform")
-    disabled = nested.DefinePrim("/Nested/parent/fixed", "Xform")
-    for prim, mass in ((parent, 1.0), (child, 2.0)):
-        UsdPhysics.RigidBodyAPI.Apply(prim)
-        UsdPhysics.MassAPI.Apply(prim).CreateMassAttr(mass)
-    UsdPhysics.RigidBodyAPI.Apply(disabled).CreateRigidBodyEnabledAttr(False)
-    original = UsdShade.Material.Define(nested, "/Nested/material")
-    UsdPhysics.MaterialAPI.Apply(original.GetPrim()).CreateStaticFrictionAttr(0.4)
-    contact_attribute = "newton:contactMargin" if args.physics == "newton" else "physxCollision:contactOffset"
-    colliders = []
-    for prim in (parent, child, disabled):
-        collider = nested.DefinePrim(str(prim.GetPath()) + "/collision", "Mesh")
-        UsdPhysics.CollisionAPI.Apply(collider)
-        collider.CreateAttribute(contact_attribute, Sdf.ValueTypeNames.Float).Set(0.11)
-        collider.CreateAttribute("newton:maxHullVertices", Sdf.ValueTypeNames.Int).Set(32)
-        UsdShade.MaterialBindingAPI.Apply(collider).Bind(original, materialPurpose="physics")
-        colliders.append(collider)
-    nested_physics = PhysicsConfig(
-        mass=4.0,
-        isaacsim=IsaacSimPhysicsConfig(static_friction=0.23, dynamic_friction=0.23, contact_offset=0.07),
-        mujoco=MujocoPhysicsConfig(margin=0.07) if args.physics == "newton" else None,
-        newton=NewtonPhysicsConfig(max_hull_vertices=64) if args.physics == "newton" else None,
-    )
-    asset = dataclasses.replace(
-        config.robot.asset,
-        link_physics=None,
-        link_physics_overrides={"parent": nested_physics},
-    )
-    author_robot_physics("/Nested", asset, sim.backend, stage=nested, material_defaults=None)
-    assert UsdPhysics.MassAPI(parent).GetMassAttr().Get() == 4.0
-    assert UsdPhysics.MassAPI(child).GetMassAttr().Get() == 2.0
-    for index, collider in enumerate(colliders):
-        selected = index != 1
-        material, _ = UsdShade.MaterialBindingAPI(collider).ComputeBoundMaterial(materialPurpose="physics")
-        assert (
-            abs(UsdPhysics.MaterialAPI(material.GetPrim()).GetStaticFrictionAttr().Get() - (0.23 if selected else 0.4))
-            < 1e-6
-        )
-        assert abs(collider.GetAttribute(contact_attribute).Get() - (0.07 if selected else 0.11)) < 1e-6
-        if args.physics == "newton":
-            assert collider.GetAttribute("newton:maxHullVertices").Get() == (64 if selected else 32)
-    # Wildcards select physical bodies; disabled fixed-link markers retain
-    # their outer owner's collider settings without becoming override targets.
-    wildcard_asset = dataclasses.replace(asset, link_physics_overrides={"*": nested_physics})
-    author_robot_physics("/Nested", wildcard_asset, sim.backend, stage=nested, material_defaults=None)
-    assert UsdPhysics.MassAPI(child).GetMassAttr().Get() == 4.0
-    assert not disabled.HasAPI(UsdPhysics.MassAPI)
-    for collider in colliders:
-        material, _ = UsdShade.MaterialBindingAPI(collider).ComputeBoundMaterial(materialPurpose="physics")
-        assert abs(UsdPhysics.MaterialAPI(material.GetPrim()).GetStaticFrictionAttr().Get() - 0.23) < 1e-6
+    from holosoma.simulator.isaacsim.backends.native_properties import author_properties
 
     fixture = Usd.Stage.CreateInMemory()
     fixture.DefinePrim("/Library", "Xform")
@@ -219,14 +154,7 @@ def main() -> int:
     stage = sim.sim.stage
     for row in range(2):
         root = stage.GetPrimAtPath(f"/World/envs/env_{row}/Robot")
-        bodies = [prim for prim in Usd.PrimRange(root) if prim.HasAPI(UsdPhysics.RigidBodyAPI)]
-        pelvis = next(prim for prim in bodies if prim.GetName() == "pelvis")
-        assert UsdPhysics.MassAPI(pelvis).GetMassAttr().Get() == 42.0
-        if args.physics == "newton":
-            assert abs(pelvis.GetAttribute("mjc:gravcomp").Get() - 0.25) < 1e-6
-            other = next(prim for prim in bodies if prim.GetName() != "pelvis")
-            assert abs(other.GetAttribute("mjc:gravcomp").Get() - 0.1) < 1e-6
-        for side, expected in [("left", 0.45), ("right", 0.7)]:
+        for side, expected in [("left", 0.7), ("right", 0.7)]:
             colliders = [
                 prim
                 for prim in Usd.PrimRange(root)
@@ -244,14 +172,9 @@ def main() -> int:
         from newton import ShapeFlags
 
         model = manager.get_model()
-        masses = model.body_mass.numpy()
-        labels = model.body_label
-        pelvis_ids = [index for index, label in enumerate(labels) if label.endswith("/pelvis")]
-        assert len(pelvis_ids) == 2, labels
-        np.testing.assert_allclose(masses[pelvis_ids], 42.0)
         shapes = model.shape_label
         flags = model.shape_flags.numpy()
-        for side, expected in [("left", 0.45), ("right", 0.7)]:
+        for side, expected in [("left", 0.7), ("right", 0.7)]:
             ids = [
                 index
                 for index, label in enumerate(shapes)
@@ -259,9 +182,8 @@ def main() -> int:
             ]
             assert ids, shapes
             np.testing.assert_allclose(model.shape_material_mu.numpy()[ids], expected, atol=1e-6)
-            if side == "left":
-                np.testing.assert_allclose(model.shape_material_mu_torsional.numpy()[ids], 0.07, atol=1e-6)
-                np.testing.assert_allclose(model.shape_material_mu_rolling.numpy()[ids], 0.03, atol=1e-6)
+            np.testing.assert_allclose(model.shape_material_mu_torsional.numpy()[ids], 0.07, atol=1e-6)
+            np.testing.assert_allclose(model.shape_material_mu_rolling.numpy()[ids], 0.03, atol=1e-6)
         # The compiled solver is the oracle, not the Holosoma config or accessors.
         solver = manager._solver
         import mujoco

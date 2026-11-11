@@ -51,8 +51,8 @@ Isaac Sim 5 uses `setup_isaacsim.sh` / `source_isaacsim_setup.sh`. Docker builds
 - **Solver:** Newton MJWarp reads `sim.mujoco` and `sim.mujoco.warp`; PhysX reads
   `sim.physx`. `sim.substeps` remains shared. Newton-only collision/execution
   controls use `sim.isaacsim6.newton`.
-- **Objects and robot links:** use the existing `PhysicsConfig`,
-  `robot.asset.link_physics` and ordered `link_physics_overrides`. Newton reuses
+- **Objects and robot links:** use the existing `PhysicsConfig` and
+  `robot.asset.link_physics`. Newton reuses
   `PhysicsConfig.mujoco` friction/contact parameters; `PhysicsConfig.newton` adds
   contact-spring and mesh/SDF properties. Joint gains/limits remain in the
   controller/asset config.
@@ -86,6 +86,9 @@ options fail at startup.
   reconstruction remains undocumented. A faster shared batch changes every
   camera's native capture history, including cameras with slower observation updates.
   All cameras and movies use ordinary shared SDK ownership and batching.
+- With Newton and Isaac RTX, the moving movie camera also writes its pose through
+  the public USD view. The pinned Newton camera view updates native sites without
+  reliably publishing this pose to Kit; rendering and extraction still use the SDK.
 - Renderer quality is not interchangeable. Kit rendering presets apply to
   `isaac_rtx`; the typed `renderer_options` currently control Warp features.
   Camera `far` and `depth_clipping_behavior` remain authoritative for all three.

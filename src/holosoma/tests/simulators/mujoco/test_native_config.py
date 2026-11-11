@@ -25,14 +25,14 @@ from holosoma.config_types.scene import MujocoPhysicsConfig, PhysicsConfig  # no
 from holosoma.config_values.robot import g1_29dof  # noqa: E402
 from holosoma.config_values.simulator import mjwarp  # noqa: E402
 from holosoma.config_values.simulator import mujoco as preset  # noqa: E402
-from holosoma.simulator.mujoco.backends.native_config import (  # noqa: E402
+from holosoma.simulator.mujoco.scene_manager import MujocoSceneManager  # noqa: E402
+from holosoma.simulator.shared.mujoco_options import effective_options  # noqa: E402
+from holosoma.simulator.shared.mujoco_warp_options import (  # noqa: E402
     allocation_kwargs,
     apply_warp_model,
     validate_warp_options,
     warp_option_overrides,
 )
-from holosoma.simulator.mujoco.native_config import effective_options  # noqa: E402
-from holosoma.simulator.mujoco.scene_manager import MujocoSceneManager  # noqa: E402
 from holosoma.utils.config_registry import parse_config  # noqa: E402
 from holosoma.utils.eval_utils import CheckpointConfig, load_saved_experiment_config  # noqa: E402
 from tests.simulators.mujoco._build import build_classic_sim, build_warp_sim  # noqa: E402

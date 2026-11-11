@@ -1,4 +1,10 @@
-"""Select the installed standalone importer namespace without bootstrapping Kit."""
+"""Keep the real standalone URDF importer separate from Kit's Python package.
+
+The binary image exposes two providers of ``isaacsim``: a regular Kit package
+whose import starts its kernel, and the isolated importer's namespace wheel.
+Select the latter before SDK import and register only its data-only USD schemas.
+No importer implementation or native physics bindings are replaced.
+"""
 
 from __future__ import annotations
 
@@ -21,8 +27,8 @@ def select_standalone_importers() -> None:
     """
     existing = sys.modules.get("isaacsim")
     if existing is not None:
-        if getattr(existing, "__file__", None) is not None:
-            raise RuntimeError("Select OVRTX before importing the Kit isaacsim package.")
+        if vars(existing).get("__file__") is not None:
+            raise RuntimeError("Select the standalone runtime before importing the Kit isaacsim package.")
     else:
         distribution = importlib.metadata.distribution("isaacsim-asset-isolated")
         namespace_path = Path(str(distribution.locate_file("isaacsim")))

@@ -12,25 +12,24 @@ from pydantic import ValidationError
 
 from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
-from holosoma.config_types.newton import IsaacSim6RendererConfig, NewtonCollisionConfig
-from holosoma.config_types.scene import MujocoPhysicsConfig, PhysicsConfig
+from holosoma.config_types.newton import NewtonCollisionConfig
 from holosoma.config_types.simulator import (
     IsaacSim6Config,
     IsaacSim6NewtonConfig,
+    IsaacSim6RendererConfig,
     IsaacSimBackend,
     MujocoBackend,
     SimulatorInitConfig,
 )
-from holosoma.simulator.isaacsim.backends.native_config import build_config
+from holosoma.simulator.isaacsim.backends.isaacsim6 import newton_solver_settings as solver_settings
 from holosoma.simulator.isaacsim.backends.native_properties import schema_rules
-from holosoma.simulator.isaacsim.backends.newton_config import solver_settings
 from holosoma.utils.config_registry import parse_config
 from holosoma.utils.eval_utils import _experiment_config_from_saved
 
 pytestmark = pytest.mark.no_sim
 
 
-def test_cli_and_saved_config_preserve_shared_options_and_link_precedence(tmp_path: Any) -> None:
+def test_cli_and_saved_config_preserve_shared_options(tmp_path: Any) -> None:
     cfg = parse_config(
         ExperimentConfig,
         args=[
@@ -49,22 +48,10 @@ def test_cli_and_saved_config_preserve_shared_options_and_link_precedence(tmp_pa
             "False",
         ],
     )
-    overrides = {
-        "pelvis": PhysicsConfig(mass=42.0, mujoco=MujocoPhysicsConfig(gravity_compensation=0.25)),
-        "*": PhysicsConfig(mujoco=MujocoPhysicsConfig(friction=[0.45, 0.07, 0.03])),
-    }
-    cfg = dataclasses.replace(
-        cfg,
-        robot=dataclasses.replace(
-            cfg.robot, asset=dataclasses.replace(cfg.robot.asset, link_physics_overrides=overrides)
-        ),
-    )
     path = tmp_path / "typed.yaml"
     cfg.save_config(str(path))
     restored = _experiment_config_from_saved(yaml.safe_load(path.read_text()))
     assert restored == cfg
-    assert restored.robot.asset.link_physics_overrides is not None
-    assert list(restored.robot.asset.link_physics_overrides) == ["pelvis", "*"]
     settings = solver_settings(restored.simulator.config.sim.mujoco, restored.simulator.config.sim.isaacsim6.newton)
     assert settings["iterations"] == 17
     assert settings["nconmax"] == 256
@@ -155,29 +142,6 @@ def test_schema_rules_do_not_import_the_sdk_and_keep_empty_fragment_rules() -> N
 def test_invalid_rules_fail_with_config_location(value: Any) -> None:
     with pytest.raises(ValueError, match="physics.mass_props"):
         schema_rules(value, location="physics.mass_props")
-
-
-def test_nested_native_overrides_merge_and_do_not_mutate_defaults() -> None:
-    @dataclasses.dataclass
-    class Solver:
-        iterations: int = 100
-        cone: str = "pyramidal"
-
-    @dataclasses.dataclass
-    class Physics:
-        solver_cfg: Solver = dataclasses.field(default_factory=Solver)
-
-    solver = Solver(iterations=13)
-    native = build_config(
-        Physics, {"solver_cfg": {"cone": "elliptic"}}, defaults={"solver_cfg": solver}, location="physics"
-    )
-    assert native.solver_cfg == Solver(iterations=13, cone="elliptic")
-    assert solver == Solver(iterations=13)
-    assert build_config(Physics, {"solver_cfg": {"iterations": 7}}, location="physics").solver_cfg == Solver(
-        iterations=7
-    )
-    with pytest.raises(ValueError, match="physics.solver_cfg.*unknown.*iterations_typo"):
-        build_config(Physics, {"solver_cfg": {"iterations_typo": 7}}, location="physics")
 
 
 def test_shared_solver_and_newton_controls_round_trip_saved_config() -> None:

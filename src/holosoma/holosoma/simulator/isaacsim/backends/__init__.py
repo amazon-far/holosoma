@@ -11,7 +11,9 @@ import importlib.util
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from holosoma.config_types.full_sim import FullSimConfig
     from holosoma.config_types.simulator import IsaacSim6Config
+    from holosoma.config_types.env import EnvConfig
 
     from .base import IsaacSimBackendAdapter
 
@@ -63,3 +65,21 @@ def get_backend(
             "Activate the matching setup environment or select its simulator preset."
         )
     return selected
+
+
+def get_backend_for_config(config: EnvConfig | FullSimConfig) -> IsaacSimBackendAdapter:
+    """Select the same runtime requirements at launch and frontend construction."""
+    from holosoma.config_types.sensor import CameraSensorConfig
+    from holosoma.config_types.simulator import SimulatorConfig
+
+    simulator = config.simulator
+    if isinstance(simulator, SimulatorConfig):
+        simulator = simulator.config
+    rendering = (
+        config.logger.video.enabled
+        or config.logger.headless_recording
+        or any(isinstance(sensor, CameraSensorConfig) for sensor in config.sensors.values())
+        or not config.training.headless
+        or bool(simulator.isaacsim.app_launcher_args())
+    )
+    return get_backend(simulator.isaacsim_backend, native=simulator.sim.isaacsim6, rendering=rendering)

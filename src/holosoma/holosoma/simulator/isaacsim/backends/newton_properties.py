@@ -1,4 +1,9 @@
-"""Newton property writes through its public asset and model-selection APIs."""
+"""Translate Holosoma's randomization buffers to Newton's asset/model APIs.
+
+Mass, inertia and centre-of-mass writes use the SDK's indexed asset setters.
+Materials need global Newton shape IDs: the SDK's material view assumes each
+actor's shapes are contiguous, which is not true for every imported scene.
+"""
 
 from __future__ import annotations
 
@@ -9,11 +14,11 @@ if TYPE_CHECKING:
 
 
 def write_body_property(asset: Any, name: str, full_values: Tensor, env_ids: Tensor) -> None:
-    """Write canonical full-buffer values to Newton's partial-data setters.
+    """Write selected rows from a full ``[env, body, ...]`` property buffer.
 
     Newton expects selected environment rows and omits PhysX's ``full_data``
     argument. Its CoM frame stays aligned with the link frame, so only the
-    position is writable. Public asset setters update model flags and caches.
+    position is writable. This updates native model flags and asset caches.
     """
     import torch
     import warp as wp
@@ -25,11 +30,23 @@ def write_body_property(asset: Any, name: str, full_values: Tensor, env_ids: Ten
     elif name == "coms":
         values = values[..., :3].contiguous()
     native_ids = wp.from_torch(indices, dtype=wp.int64)
-    getattr(asset, f"set_{name}_index")(**{name: values}, env_ids=native_ids)
+    if name == "masses":
+        asset.set_masses_index(masses=values, env_ids=native_ids)
+    elif name == "inertias":
+        asset.set_inertias_index(inertias=values, env_ids=native_ids)
+    elif name == "coms":
+        asset.set_coms_index(coms=values, env_ids=native_ids)
+    else:
+        raise ValueError(f"Unsupported Newton body property {name!r}.")
 
 
 def _material_bindings(asset: Any) -> tuple[Any, Tensor, Tensor, Tensor]:
-    """Bind global model channels and each instance's actual owned shape IDs."""
+    """Return the manager, global material arrays and ``[env, shape]`` IDs.
+
+    Resolve each asset instance's articulation and named bodies before collecting
+    their colliders. This keeps partial randomization away from other actors,
+    even when their shape IDs are interleaved in Newton's global model.
+    """
     import torch
     import warp as wp
     from isaaclab.sim import SimulationContext

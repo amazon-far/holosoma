@@ -13,7 +13,7 @@ from pydantic_core import ArgsKwargs
 
 from holosoma.config_types.frequency import DecimationLike, resolve_decimation, validate_decimation_like
 from holosoma.config_types.mujoco import MujocoConfig
-from holosoma.config_types.newton import IsaacSim6RendererConfig, NewtonCollisionConfig
+from holosoma.config_types.newton import NewtonCollisionConfig
 from holosoma.config_types.viewer import ViewerConfig
 
 _RENDER_INTERVAL_REMOVAL_DATE = datetime.date(2027, 3, 1)
@@ -115,6 +115,27 @@ class IsaacSimRenderConfig:
         if self.kit_args:
             launcher_args["kit_args"] = self.kit_args
         return launcher_args
+
+
+@dataclass(frozen=True, config=ConfigDict(extra="forbid"))
+class IsaacSim6RendererConfig:
+    """Camera options, interpreted by the selected renderer.
+
+    None retains the selected SDK renderer's default. Explicit unsupported
+    options fail at startup. Kit launch presets remain in ``isaacsim``.
+    Ray distance and depth clipping use the existing per-camera fields.
+    """
+
+    enable_shadows: bool | None = None
+    """Enable Warp shadows. OVRTX RGB/depth always include shadows."""
+    use_cuda_graph: bool | None = None
+    """Capture Warp rendering kernels on CUDA."""
+    enable_textures: bool | None = None
+    """Enable Warp texture sampling."""
+    enable_ambient_lighting: bool | None = None
+    """Enable Warp ambient lighting."""
+    enable_backface_culling: bool | None = None
+    """Cull back faces in Warp."""
 
 
 @dataclass(frozen=True, config=ConfigDict(extra="forbid"))

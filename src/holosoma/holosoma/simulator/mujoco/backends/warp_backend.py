@@ -42,15 +42,15 @@ import torch
 import warp as wp
 from loguru import logger
 
-from holosoma.simulator.mujoco.backends.native_config import (
+from holosoma.simulator.mujoco.geom_groups import DEFAULT_RENDER_GEOM_GROUPS
+from holosoma.simulator.shared.mujoco_options import effective_options
+from holosoma.simulator.shared.mujoco_warp_options import (
     allocation_kwargs,
     apply_warp_model,
     validate_warp_options,
     warp_extra_inputs,
     warp_option_overrides,
 )
-from holosoma.simulator.mujoco.geom_groups import DEFAULT_RENDER_GEOM_GROUPS
-from holosoma.simulator.mujoco.native_config import effective_options
 
 from .base import IMujocoBackend, holosoma_to_mj_quat, mj_to_holosoma_quat
 from .warp_bridge import WarpBridge

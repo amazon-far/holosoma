@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fnmatch
 from dataclasses import dataclass, field
 from itertools import combinations
 
@@ -18,8 +17,8 @@ from holosoma.config_types.sensor import CameraSensorConfig, LidarSensorConfig
 from holosoma.config_types.simulator import MujocoXMLFilterCfg, SimulatorConfig
 from holosoma.managers.terrain.base import TerrainTermBase
 from holosoma.simulator.mujoco.geom_groups import tag_compiled_robot_geom_groups
-from holosoma.simulator.mujoco.native_config import apply_fields, apply_world_config
 from holosoma.simulator.shared.asset_format import select_asset_format
+from holosoma.simulator.shared.mujoco_options import apply_fields, apply_world_config
 from holosoma.utils.path import resolve_asset_path
 
 LIDAR_MOUNT_SITE_PREFIX = "holosoma_lidar_mount_"
@@ -712,8 +711,6 @@ class MujocoSceneManager:
             logger.debug(f"Set explicit mass={physics.mass} on '{name}'")
 
         mj = physics.mujoco
-        if mj is not None and mj.gravity_compensation is not None:
-            body.gravcomp = mj.gravity_compensation
         for geom in body.geoms:
             if physics.density is not None:
                 geom.density = physics.density
@@ -736,24 +733,20 @@ class MujocoSceneManager:
         the captured CUDA step graph, avoiding the graph-orphan concern that affects runtime DR.
         """
         asset = robot_config.asset
-        if asset.link_physics is None and not asset.link_physics_overrides:
+        if asset.link_physics is None:
             return
         worldbody_name = robot_spec.worldbody.name
         for body in robot_spec.bodies:
             if not body.name or body.name == worldbody_name:
                 continue
             self._apply_physics_to_body(body, asset.link_physics, f"{asset.robot_type}/{body.name}", apply_mass=False)
-            for pattern, override in (asset.link_physics_overrides or {}).items():
-                if fnmatch.fnmatchcase(body.name, pattern):
-                    self._apply_physics_to_body(body, override, f"{asset.robot_type}/{body.name}")
-                    break
 
     def _validate_robot_collision_masks(self, model: mujoco.MjModel, root_body_id: int) -> None:
         """Reject mask overrides that permit self-contact after native body filtering."""
         if self.robot_config is None:
             return
         asset = self.robot_config.asset
-        configs = [asset.link_physics, *(asset.link_physics_overrides or {}).values()]
+        configs = [asset.link_physics]
         if asset.enable_self_collisions or not any(
             physics is not None
             and physics.mujoco is not None
