@@ -324,7 +324,7 @@ class WarpBackend(IMujocoBackend):
                 # cam_pos so a world-mount camera (worldbody child, cam_bodyid==0) can be placed at
                 # each env's origin. The camlight kernel (inside the captured step graph) reads
                 # cam_pos per world to compute cam_xpos, so it MUST be expanded before capture;
-                # offset_world_cameras() then writes each env's origin post-capture (same pre-expand /
+                # initialize_camera_mounts() then writes each env's origin post-capture (same pre-expand /
                 # post-write pattern as body_pos + set_static_body_world_pose).
                 "cam_pos",
                 "cam_quat",
@@ -424,7 +424,7 @@ class WarpBackend(IMujocoBackend):
         rather than full ``mjw.forward`` —
         forward's solver/collision stages allocate per call and are useless without a step.
         Out-of-graph launches into the same mjw_data the step graph uses are safe (same
-        pattern as set_static_body_world_pose / offset_world_cameras); ``mjw_data.time`` is
+        pattern as set_static_body_world_pose / initialize_camera_mounts); ``mjw_data.time`` is
         untouched (only integrators advance it).
         """
         import warp as wp
@@ -839,33 +839,6 @@ class WarpBackend(IMujocoBackend):
             mjw.forward(self.mjw_model, self.mjw_data)  # refresh xpos/xquat from the new body_pos/quat
 
         self._sync_static_geom_xpos(body_ids, env_ids)
-
-    def offset_world_cameras(self, cam_ids: list[int], env_origins: torch.Tensor) -> None:
-        """Shift world-mount cameras' per-world ``cam_pos`` by each env's origin.
-
-        A ``target_kind="world"`` camera is a worldbody child (``cam_bodyid==0``): unlike a
-        body-attached camera, its pose does not inherit the per-env body offset, so in a multi-env
-        run every world's camera would otherwise sit at the shared spec pose and see only env 0's
-        scene. ``cam_pos`` is expanded per world in ``__init__`` (in ``_PER_WORLD_FIELDS``, before the
-        step-graph capture), and the ``camlight`` kernel that computes ``cam_xpos`` reads it per world
-        each step, so adding ``env_origins`` here — after capture — reaches the live render exactly
-        like ``set_static_body_world_pose`` writes ``body_pos``. No-op at ``num_envs==1``.
-
-        ``cam_ids`` are compiled MuJoCo camera ids (world-mount only); ``env_origins`` is
-        ``[num_envs, 3]``.
-        """
-        if self.num_envs <= 1 or not cam_ids:
-            return
-        import warp as wp
-
-        cam_pos = wp.to_torch(self.mjw_model.cam_pos)  # [num_envs, ncam, 3], shares GPU memory
-        origins = env_origins.to(cam_pos.device, cam_pos.dtype)  # [num_envs, 3]
-        for cam_id in cam_ids:
-            cam_pos[:, cam_id, :] += origins
-        with wp.ScopedDevice(self.mjw_device):
-            import mujoco_warp as mjw
-
-            mjw.forward(self.mjw_model, self.mjw_data)  # recompute cam_xpos from the shifted cam_pos
 
     def set_sensor_mount_pose(
         self,

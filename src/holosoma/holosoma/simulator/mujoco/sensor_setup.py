@@ -116,18 +116,10 @@ def register_cameras(sim: MuJoCo, manager: SensorManager) -> None:
         sim.backend.create_renderers(manager.cameras)
 
 
-def offset_world_cameras(sim: MuJoCo) -> None:
-    """Place each environment's world-mount cameras at its own origin for MJWarp."""
-    if not hasattr(sim.backend, "offset_world_cameras"):
-        return
-    camera_ids = getattr(sim.backend, "_cam_ids", {})
-    world_camera_ids = [
-        camera_ids[name]
-        for name, config in sim.sensor_config.items()
-        if isinstance(config, CameraSensorConfig) and config.mount.target_kind == "world" and name in camera_ids
-    ]
-    if world_camera_ids:
-        sim.backend.offset_world_cameras(world_camera_ids, sim.env_origins)
+def initialize_camera_mounts(sim: MuJoCo) -> None:
+    """Apply compiled mount frames and environment origins through the runtime writer."""
+    for camera in sim.sensor_manager.cameras:
+        sim.sensor_manager.set_mount_pose(camera.name, sim.sensor_manager.get_mount_pose(camera.name))
 
 
 def render_cameras(sim: MuJoCo) -> None:

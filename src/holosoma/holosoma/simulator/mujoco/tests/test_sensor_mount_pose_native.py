@@ -27,7 +27,7 @@ from holosoma.config_values.simulator import mujoco as mujoco_config  # noqa: E4
 from holosoma.simulator.mujoco.backends.classic_backend import ClassicBackend  # noqa: E402
 from holosoma.simulator.mujoco.mujoco import MuJoCo  # noqa: E402
 from holosoma.simulator.mujoco.scene_manager import ActorSpecMeta, MujocoSceneManager  # noqa: E402
-from holosoma.simulator.mujoco.sensor_setup import create_sensors  # noqa: E402
+from holosoma.simulator.mujoco.sensor_setup import create_sensors, initialize_camera_mounts  # noqa: E402
 from holosoma.simulator.shared.sensor_manager import SensorManager  # noqa: E402
 from holosoma.utils.safe_torch_import import torch  # noqa: E402
 
@@ -53,6 +53,7 @@ def _make_sim(model: Any, sensors: dict[str, SensorConfig], origins: torch.Tenso
     cfg = instance.simulator_config.sim
     instance.sensor_manager = SensorManager("cpu", cfg.fps / cfg.control_decimation_steps)
     create_sensors(instance)
+    initialize_camera_mounts(instance)
     return instance
 
 
@@ -135,10 +136,17 @@ def _check_native_mount_frame(sim: MuJoCo, pose: torch.Tensor, angle: float) -> 
 def test_mount_update_changes_native_outputs_without_advancing_physics(sim: MuJoCo) -> None:
     initial = sim.sensor_manager.get_mount_pose("camera")
     initial_height = 2.25 if sim.sensor_config["camera"].mount.target_kind == "world" else 2.3
+    # Check setup before any public pose write can hide an incorrect native initial pose.
+    _check_native_mount_frame(sim, initial[0], 0.0)
+    _check_plane_returns(sim, initial_height)
+    initial_frame = sim.get_camera_data("camera", "depth").clone()
+    initial_scan = sim.get_lidar_data("lidar", "ranges").clone()
     for name in ("camera", "lidar"):
         sim.sensor_manager.set_mount_pose(name, initial)
     _check_native_mount_frame(sim, initial[0], 0.0)
     _check_plane_returns(sim, initial_height)
+    torch.testing.assert_close(sim.get_camera_data("camera", "depth"), initial_frame)
+    torch.testing.assert_close(sim.get_lidar_data("lidar", "ranges"), initial_scan)
     old_frame = sim.get_camera_data("camera", "depth").clone()
     old_scan = sim.get_lidar_data("lidar", "ranges").clone()
     assert sim.root_data is not None

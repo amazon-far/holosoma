@@ -66,6 +66,21 @@ def _check(sim, offsets, label: str) -> None:
         direction = _rotate(parent_quat, _rotate(pose[:, 3:], down))
         expected = origin[:, 2] / -direction[:, 2]
         assert torch.all(direction[:, 2] < -0.5), f"{label}/{name}: test ray no longer points toward the ground"
+        if name.startswith("world_") and sim.simulator_config.name == "mujoco":
+            for env_id in range(sim.num_envs):
+                data = sim.backend.get_render_data(env_id)
+                if name.endswith("camera"):
+                    position = data.cam_xpos[sim.root_model.camera(name).id]
+                else:
+                    position = data.site_xpos[sim.root_model.site(f"holosoma_lidar_mount_{name}").id]
+                    position = position + sim.env_origins[env_id].cpu().numpy()
+                torch.testing.assert_close(
+                    torch.as_tensor(position, device=sim.sim_device, dtype=origin.dtype),
+                    origin[env_id],
+                    atol=1e-5,
+                    rtol=0,
+                    msg=f"{label}/{name}: native mount position",
+                )
         if name.endswith("camera"):
             actual = sim.get_camera_data(name, "depth")[:, 32, 32, 0]
         else:
@@ -111,8 +126,9 @@ def main() -> int:
 
     ids = torch.arange(args.num_envs, device=device)
     origins = torch.zeros(args.num_envs, 3, device=device)
-    origins[:, 0] = ids * 10.0
-    origins[:, 2] = ids * 0.25
+    origins[:, 0] = 5.0 + ids * 10.0
+    origins[:, 1] = -2.0
+    origins[:, 2] = 0.25 + ids * 0.25
     init = config.robot.init_state
     base_init = torch.tensor(
         list(init.pos) + list(init.rot) + list(init.lin_vel) + list(init.ang_vel), device=device, dtype=torch.float32
@@ -158,6 +174,23 @@ def main() -> int:
 
     try:
         capture("initial")
+        initial_outputs = {
+            name: (
+                sim.get_camera_data(name, "depth") if name.endswith("camera") else sim.get_lidar_data(name, "ranges")
+            ).clone()
+            for name in initial
+        }
+        for name, pose in initial.items():
+            sim.sensor_manager.set_mount_pose(name, pose)
+        capture("unchanged offsets")
+        for name, output in initial_outputs.items():
+            if name.startswith("world_"):
+                actual = (
+                    sim.get_camera_data(name, "depth")
+                    if name.endswith("camera")
+                    else sim.get_lidar_data(name, "ranges")
+                )
+                torch.testing.assert_close(actual, output)
         for name, pose in offsets.items():
             old_output = (
                 sim.get_camera_data(name, "depth") if name.endswith("camera") else sim.get_lidar_data(name, "ranges")
