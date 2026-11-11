@@ -29,7 +29,7 @@ native rate captures at the endpoint, as checked by the
 The [pinned SDK renderer][sdk-renderer] defines `_RENDER_DELTA_TIME = 1/60`
 and uses it in legacy, asynchronous and OVStage submissions. It neither derives
 that increment from physics time nor resamples USD animation per camera capture.
-This is a deliberate per-submission snapshot policy in the implementation;
+This is an explicit per-submission snapshot policy in the implementation;
 the inspected sources do not explain its author's rationale for choosing 60.
 Holosoma schedules these snapshots using `update_decimation`; it does not author
 native `OmniSensorAPI` rates.
@@ -155,6 +155,46 @@ capture and caused catch-up submissions. Passing freshness checks does not
 make those wall histories equivalent. Neither diagnostic supports a causal
 claim about independent owners or an upstream reset defect.
 
+A final five-way startup control aligns the recorded slow-camera history:
+one static prime, a common ten-second initialization window, then ten static
+warm captures with a common one-second first gap and 100 ms later gaps.
+The first gap accommodates SDK output allocation, which overran the initial
+100 ms schedule in an earlier control. This is experimental startup pacing;
+it changes neither production behavior nor measured scene timestamps, quality,
+capture counts or physics. State/physics preparation finishes before capture
+deadlines. Native history is retained, and only SDK bookkeeping is reset.
+
+All five controls passed with 440 physics steps / 2.2 seconds and the same
+`1/60` clock increments. Every slow warm interval is within 0.736 ms of its
+prescribed gap. Test slow intervals are 99.18–100.73 ms, except mixed owners
+at 96.21–103.75 ms; fast-owner sequencing jitter remains recorded separately.
+
+| SDK-scene control | Measured slow / other captures | Last warm panel RGB MAE vs SDK single | Test panel RGB MAE vs SDK single |
+| --- | --- | ---: | ---: |
+| Untouched SDK, single 10 Hz | 12 / — | Reference | Reference |
+| Holosoma, single 10 Hz | 12 / — | 0.142/255 | 0.490/255 |
+| Holosoma, both 10 Hz | 12 / 12 | 0.205/255 | 0.493/255 |
+| Holosoma, persistent 10/50 Hz | 12 / 60 | 0.139/255 | 0.468/255 |
+| Continuous 50 Hz, consumed at 10 Hz | 60 / —; 12 consumed | 0.141/255 | 1.613/255 |
+
+All five current panel depth masks match; maximum panel depth difference is
+1.19e-7 m. Mixed versus Holosoma single has last-warm/test panel RGB differences
+of 0.035/0.460 per channel on the 0–255 scale. Current RGB/material signal,
+moving depth, distinct orientations and held observations pass for every tile.
+Residual old color appears in untouched SDK, single and mixed owners and decays
+across captures. Adding a fast camera produces no distinct stale-output failure
+or measured quality degradation in this scene. Pixel values and some convergence
+metrics differ. One run per control, small wall jitter and opaque native
+reconstruction state prevent asserting arbitrary image-quality equivalence.
+
+![Per-environment material convergence for the five matched controls](images/ovrtx-material-convergence.png)
+
+The continuous reference has additional native submissions and a different
+convergence curve; it does not establish a universal quality ranking. The
+figure is this one-run startup cohort, separate from the earlier three-run
+repeatability study. Observed submission histories are aligned; hidden AA
+history, jitter and random seeds are not claimed identical.
+
 Old green remains after a blue material change in the untouched SDK single
 control and in persistent owners. Additional instrumented SDK-single and mixed
 runs compared all 114 delivered RGB/depth observations, including warmup, against
@@ -224,6 +264,14 @@ and first output; the first control has colder container-local state, so these
 startup samples do not establish a startup speedup. The earlier renderer-only
 memory/startup cohort and Isaac RTX measurements remain separate in the
 [cadence comparison](ovrtx-camera-cadence-repro.md).
+
+The final standalone fixture revision also passed all five controls on a
+fresh immutable image. Full dependency-complete `mypy .` passed 593 source
+files with the repository's Python 3.10 target and normal isolated CPU-CI
+inference dependency installation. Production code and simulation assets are
+byte-identical to the image used for the 20 native tests, quality/material
+checks, preflights and refreshed benchmark. The later changes affect this
+report, its figure and the standalone fixture's typing-only import branch.
 
 ## Maintenance cost and public alternatives
 
