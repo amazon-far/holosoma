@@ -210,7 +210,8 @@ def test_activation_keeps_kit_python_packages_deferred(tmp_path: Path, inherited
     ).strip()
     (Path(site) / "runtime_stack_probe.py").write_text('VERSION = "venv"\n')
     (runtime / "setup_python_env.sh").write_text(
-        'export PYTHONPATH="$ISAAC_PATH/pip_prebundle"\nexport LD_LIBRARY_PATH="$ISAAC_PATH/kit"\n'
+        'export PYTHONPATH="$ISAAC_PATH/pip_prebundle"\n'
+        'export LD_LIBRARY_PATH="$ISAAC_PATH/kit${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\n'
     )
     backend_env = {"HOLOSOMA_ISAACSIM_BACKEND": inherited_backend} if inherited_backend is not None else {}
     result = _shell(
@@ -230,7 +231,10 @@ def test_activation_keeps_kit_python_packages_deferred(tmp_path: Path, inherited
     assert result.returncode == 0, result.stderr
     version, backend, prefix, native_paths, deferred_paths, active_paths = json.loads(result.stdout.strip())
     assert [version, backend, prefix] == ["venv", inherited_backend, str(env_root)]
-    assert native_paths == str(runtime / "kit")
+    inherited_paths = os.environ.get("LD_LIBRARY_PATH", "")
+    assert native_paths.split(os.pathsep) == [str(runtime / "kit")] + (
+        inherited_paths.split(os.pathsep) if inherited_paths else []
+    )
     assert deferred_paths == f"{site}:{prebundle}"
     assert str(prebundle) not in active_paths.split(os.pathsep)
 
