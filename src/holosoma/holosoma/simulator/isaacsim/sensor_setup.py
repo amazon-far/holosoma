@@ -32,6 +32,7 @@ from holosoma.config_types.frequency import resolve_decimation
 from holosoma.config_types.sensor import (
     CameraSensorConfig,
     IsaacSimLidarConfig,
+    LidarBodyFilterConfig,
     LidarSensorConfig,
     is_isaacsim_raycast_camera,
 )
@@ -558,12 +559,10 @@ def _visual_mesh_prim_paths(
     return sorted(mesh_paths)
 
 
-def _body_filter_target(lidar: LidarSensorConfig) -> tuple[str, str] | None:
-    body_filter = lidar.body_filter
+def _body_filter_target(body_filter: LidarBodyFilterConfig, mount: SensorMountConfig) -> tuple[str, str] | None:
     if body_filter.target_kind == "none":
         return None
     if body_filter.target_kind == "mount":
-        mount = lidar.mount
         return None if mount.target_kind == "world" else (mount.target_kind, mount.target)
     return body_filter.target_kind, body_filter.target
 
@@ -584,13 +583,13 @@ def _robot_mesh_prim_paths(excluded_link: str | None) -> list[str]:
     )
 
 
-def _default_mesh_prim_paths(sim: IsaacSim, lidar: LidarSensorConfig) -> list[str]:
-    excluded_target = _body_filter_target(lidar)
+def _default_mesh_prim_paths(sim: IsaacSim, body_filter: LidarBodyFilterConfig, mount: SensorMountConfig) -> list[str]:
+    excluded_target = _body_filter_target(body_filter, mount)
     if excluded_target is not None and excluded_target[0] == "actor":
         actor_name = excluded_target[1]
         if actor_name not in sim.scene.rigid_objects:
             raise ValueError(
-                f"LiDAR body filter target 'actor:{actor_name}' is not registered. Known actors: "
+                f"Ray-cast body filter target 'actor:{actor_name}' is not registered. Known actors: "
                 f"{list(sim.scene.rigid_objects)}."
             )
     return assemble_default_mesh_prim_paths(
@@ -606,18 +605,12 @@ def _default_mesh_prim_paths(sim: IsaacSim, lidar: LidarSensorConfig) -> list[st
 def _camera_mesh_prim_paths(sim: IsaacSim, camera: CameraSensorConfig) -> list[str]:
     """Query the loaded Holosoma scene, then apply the camera's object/mesh path rules.
 
-    Without explicit includes, the camera's mount body is left out: a camera usually sits inside it.
+    ``isaacsim.body_filter`` applies to the default selection only; explicit includes bypass it.
     """
-    mount = camera.mount
-    excluded_target = (
-        (mount.target_kind, mount.target) if camera.isaacsim.raycast_meshes.include_paths is None else None
-    )
-    paths = assemble_default_mesh_prim_paths(
-        excluded_target=excluded_target,
-        robot_mesh_prim_paths=_robot_mesh_prim_paths,
-        actor_names=sim.scene.rigid_objects,
-        discover_mesh_prim_paths=_visual_mesh_prim_paths,
-    )
+    isaacsim = camera.isaacsim
+    no_filter = LidarBodyFilterConfig(target_kind="none")
+    body_filter = isaacsim.body_filter if isaacsim.raycast_meshes.include_paths is None else no_filter
+    paths = _default_mesh_prim_paths(sim, body_filter, camera.mount)
     return select_mesh_prim_paths(
         paths,
         camera.isaacsim.raycast_meshes,
@@ -668,7 +661,7 @@ def build_lidars(sim: IsaacSim) -> None:
         )
         isaacsim_config = lidar.isaacsim or IsaacSimLidarConfig()
         if isaacsim_config.mesh_prim_paths is None:
-            mesh_paths = _default_mesh_prim_paths(sim, lidar)
+            mesh_paths = _default_mesh_prim_paths(sim, lidar.body_filter, lidar.mount)
         else:
             mesh_paths = isaacsim_config.mesh_prim_paths
         cfg = MultiMeshRayCasterCfg(

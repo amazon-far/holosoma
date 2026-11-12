@@ -26,8 +26,9 @@ includes its descendant meshes; matching a mesh selects that mesh. Exclusions
 take precedence over inclusions. Environment paths must use `/World/envs/env_.*`:
 selection applies to every environment and resolves against the representative
 `env_0` scene during initialization. Omit `include_paths` to include all eligible
-ground, robot, and registered scene-actor geometry except the camera's mount body,
-which usually encloses the camera. Every explicit include must match eligible geometry,
+ground, robot, and registered scene-actor geometry, minus `isaacsim.body_filter`: the
+same `LidarBodyFilterConfig` LiDAR uses, defaulting to the mount body, which usually
+encloses the camera. As for LiDAR's explicit paths, explicit includes bypass it. Every explicit include must match eligible geometry,
 and the final selection must contain at least one mesh. Exclusions may match
 nothing, allowing optional objects to be omitted across different scenes; each
 unmatched exclusion is logged as a warning.
