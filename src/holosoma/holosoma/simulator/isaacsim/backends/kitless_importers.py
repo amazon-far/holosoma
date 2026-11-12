@@ -1,9 +1,11 @@
 """Keep the real standalone URDF importer separate from Kit's Python package.
 
-The binary image exposes two providers of ``isaacsim``: a regular Kit package
-whose import starts its kernel, and the isolated importer's namespace wheel.
-Select the latter before SDK import and register only its data-only USD schemas.
-No importer implementation or native physics bindings are replaced.
+Our combined runtime exposes both Kit's regular ``isaacsim`` package and the
+isolated importer's namespace wheel. Kit activation makes the regular package
+shadow that namespace; pip installations also bootstrap Kit on root import.
+This compatibility adapter selects the standalone namespace and its data-only
+USD schemas before SDK launch. A clean standalone environment does not need the
+namespace override. No importer implementation or physics bindings are replaced.
 """
 
 from __future__ import annotations
@@ -58,7 +60,20 @@ def select_standalone_importers() -> None:
 
 
 def register_standalone_schemas() -> None:
-    """Register data-only USD schemas without importing a physics engine."""
+    """Register the full PhysX schema catalog before standalone stage creation.
+
+    The Isaac Sim 6.2 URDF importer authors PhysX joint attributes even when
+    Newton supplies physics. Creating a typed USD physics scene before the
+    importer's schema initialization can make conversion fail with an unknown
+    ``PhysxJointAPI``. Register these resources before SDK launch initializes
+    the scene; schema metadata does not load the PhysX engine.
+
+    The importer supplies minimal fallback schemas when the full catalog is
+    absent. Registering that fallback first conflicts with OVPhysX's later full
+    catalog, which declares the same types. Our combined installation includes
+    OVPhysX, so registering its codeless resources first gives both standalone
+    engines the same catalog without importing OVPhysX's native bindings.
+    """
     from pxr import Plug
 
     # The standalone URDF importer authors PhysX joint schemas even for
