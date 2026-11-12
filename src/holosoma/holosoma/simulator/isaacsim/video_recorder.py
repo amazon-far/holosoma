@@ -17,8 +17,13 @@ if TYPE_CHECKING:
 _VIDEO_SENSOR = "holosoma_video_camera"
 
 
-def build_video_camera(sim: IsaacSim) -> None:
-    """Declare the movie camera before cloning and renderer stage preparation."""
+def build_video_camera(sim: IsaacSim) -> Any:
+    """Declare the SDK movie camera before reset and renderer stage preparation.
+
+    Lab 2 keeps one global movie view, avoiding a tiled image across every
+    training environment. Lab 3 includes the cloned movie product in its
+    shared sensor batch. Both sensors initialize through ordinary SDK callbacks.
+    """
     from isaaclab.sim import PinholeCameraCfg
 
     config = sim.video_config
@@ -26,7 +31,9 @@ def build_video_camera(sim: IsaacSim) -> None:
         raise ValueError(f"Sensor name {_VIDEO_SENSOR!r} is reserved for logger movie recording.")
     aperture = 24.0
     cfg = sim.backend.create_camera_cfg(
-        prim_path=f"{sim.backend.env_regex_ns}/{_VIDEO_SENSOR}",
+        prim_path=f"{sim.backend.env_regex_ns}/{_VIDEO_SENSOR}"
+        if sim.backend.is_isaacsim6
+        else f"/World/{_VIDEO_SENSOR}",
         offset_position=(0.0, 0.0, 0.0),
         offset_orientation=(1.0, 0.0, 0.0, 0.0),
         spawn=PinholeCameraCfg(
@@ -40,16 +47,21 @@ def build_video_camera(sim: IsaacSim) -> None:
         data_types=["rgb"],
     )
     camera = sim.backend.create_camera(cfg)
-    sim.scene.sensors[_VIDEO_SENSOR] = camera
+    if sim.backend.is_isaacsim6:
+        sim.scene.sensors[_VIDEO_SENSOR] = camera
+    return camera
 
 
 class IsaacSimVideoRecorder(VideoRecorderInterface):
-    """Record a scene-owned SDK camera with shared tracking and encoding."""
+    """Record an SDK camera with shared tracking and encoding."""
 
     def __init__(self, config: VideoConfig, simulator: IsaacSim):
         super().__init__(config, simulator)
         self.simulator: IsaacSim = simulator
-        self._camera = simulator.scene.sensors[_VIDEO_SENSOR]
+        self._camera = simulator.video_camera
+        # SDK camera rows differ from the logical environment selected by the
+        # logger: Lab 2 has one movie view, while Lab 3 batches the cloned views.
+        self.camera_index = config.record_env_id if simulator.backend.is_isaacsim6 else 0
         self._capture_step: int | None = None
         self._usd_view: Any | None = None
         if simulator.backend.uses_kit and not simulator.backend.uses_kit_physx:
@@ -62,7 +74,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
 
     @property
     def camera(self) -> Any:
-        """The scene-owned SDK camera included in frame-end captures."""
+        """The SDK camera included in frame-end captures."""
         return self._camera
 
     def prepare_frame(self) -> None:
@@ -83,7 +95,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
             self.simulator.render_for_sensors()
             self.simulator.backend.refresh_cameras([*cameras, self._camera])
             self.mark_frame_ready()
-        rgb = self.simulator.backend.tensor(self._camera.data.output["rgb"])[self.config.record_env_id, ..., :3]
+        rgb = self.simulator.backend.tensor(self._camera.data.output["rgb"])[self.camera_index, ..., :3]
         frame = np.asarray(rgb.cpu(), dtype=np.uint8).copy()
         self._add_frame(self._apply_command_overlay(frame))
         self._capture_step = None
@@ -93,7 +105,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         device = self.simulator.device
         eyes = torch.tensor([parameters.position], dtype=torch.float32, device=device)
         targets = torch.tensor([parameters.target], dtype=torch.float32, device=device)
-        self._camera.set_world_poses_from_view(eyes, targets, env_ids=[self.config.record_env_id])
+        self._camera.set_world_poses_from_view(eyes, targets, env_ids=[self.camera_index])
         if self._usd_view is not None:
             import warp as wp
             from isaaclab.utils.math import create_rotation_matrix_from_view, quat_from_matrix
@@ -111,7 +123,9 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
     def cleanup(self) -> None:
         super().cleanup()
         if self.worker_stopped:
-            # The scene owns and closes the sensor through SimulationContext.
+            # Lab 3's scene retains its sensor until SimulationContext closes.
+            # Lab 2's standalone sensor releases through the SDK destructor.
+            self.simulator.video_camera = None
             self._camera = None
             if self._usd_view is not None:
                 self._usd_view.close()

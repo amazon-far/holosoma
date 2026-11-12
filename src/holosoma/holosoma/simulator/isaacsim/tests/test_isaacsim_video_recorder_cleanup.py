@@ -1,4 +1,4 @@
-"""SDK movie extraction owns frames while the scene owns native camera resources."""
+"""SDK movie extraction owns frames and respects native camera ownership."""
 
 from __future__ import annotations
 
@@ -23,13 +23,14 @@ def test_sdk_movie_reuses_capture_and_keeps_owned_selected_environment(major: in
     source = torch.zeros((2, 3, 4, 4), dtype=torch.uint8)
     source[0] = 17
     source[1] = 93
-    output = source if major == 5 else SimpleNamespace(torch=source)
+    output = source[1:2] if major == 5 else SimpleNamespace(torch=source)
     events: list[str] = []
     camera = SimpleNamespace(data=SimpleNamespace(output={"rgb": output}))
     backend = IsaacSim5Backend() if major == 5 else IsaacSim6Backend(IsaacSim6Config(renderer="ovrtx"))
     simulator = SimpleNamespace(
         backend=backend,
         scene=SimpleNamespace(sensors={"holosoma_video_camera": camera}),
+        video_camera=camera,
         tiled_cameras={"perception": object()},
         _sim_step_counter=4,
         render_for_sensors=lambda: events.append("render"),
@@ -40,6 +41,7 @@ def test_sdk_movie_reuses_capture_and_keeps_owned_selected_environment(major: in
     )
     # The frame-end sensor hook already rendered. Encoding must use that result.
     recorder.mark_frame_ready()
+    assert recorder.camera_index == (0 if major == 5 else 1)
     recorder._capture_frame_impl()
     assert events == []
     np.testing.assert_array_equal(recorder.video_frames[0], np.full((3, 4, 3), 93, dtype=np.uint8))
@@ -69,15 +71,24 @@ def test_cleanup_leaves_native_camera_owned_by_scene_and_closes_pose_view_once()
     scene = SimpleNamespace(sensors={"holosoma_video_camera": camera})
     recorder = IsaacSimVideoRecorder(
         VideoConfig(use_recording_thread=False),
-        SimpleNamespace(backend=IsaacSim5Backend(), scene=scene),  # type: ignore[arg-type]
+        SimpleNamespace(backend=IsaacSim6Backend(), scene=scene, video_camera=camera),  # type: ignore[arg-type]
     )
     recorder._usd_view = SimpleNamespace(close=lambda: events.append("close"))
     recorder.cleanup()
     recorder.cleanup()
     assert scene.sensors["holosoma_video_camera"] is camera
     assert recorder.camera is None
+    assert recorder.simulator.video_camera is None
     assert vars(recorder)["_usd_view"] is None
     assert events == ["close"]
+
+
+def test_cleanup_releases_standalone_lab2_movie_camera() -> None:
+    simulator = SimpleNamespace(backend=IsaacSim5Backend(), video_camera=object())
+    recorder = IsaacSimVideoRecorder(VideoConfig(use_recording_thread=False), simulator)  # type: ignore[arg-type]
+    recorder.cleanup()
+    assert simulator.video_camera is None
+    assert recorder.camera is None
 
 
 def test_cleanup_retains_pose_view_for_retry_if_close_fails() -> None:
@@ -91,7 +102,7 @@ def test_cleanup_retains_pose_view_for_retry_if_close_fails() -> None:
 
     recorder = IsaacSimVideoRecorder(
         VideoConfig(use_recording_thread=False),
-        SimpleNamespace(backend=IsaacSim5Backend(), scene=SimpleNamespace(sensors={"holosoma_video_camera": object()})),  # type: ignore[arg-type]
+        SimpleNamespace(backend=IsaacSim5Backend(), video_camera=object()),  # type: ignore[arg-type]
     )
     recorder._usd_view = SimpleNamespace(close=close)
     with pytest.raises(RuntimeError, match="native view close failed"):
