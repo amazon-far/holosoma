@@ -5,7 +5,7 @@ ISAACLAB_REF=v2.3.2
 ISAACSIM_SETUP_ID=isaacsim-${ISAACSIM_VERSION}_isaaclab-${ISAACLAB_REF}
 ISAACSIM6_VERSION=6.2.0
 ISAACSIM6_ISAACLAB_REF=v3.0.0
-ISAACSIM6_SETUP_ID=isaacsim-${ISAACSIM6_VERSION}_isaaclab-${ISAACSIM6_ISAACLAB_REF}_video_ov_importers
+ISAACSIM6_SETUP_ID=isaacsim-${ISAACSIM6_VERSION}_isaaclab-${ISAACSIM6_ISAACLAB_REF}_video_ov_importers_activation
 # Match Isaac Lab 3.0's locked Docker installation, using Kit's Python.
 ISAACSIM6_UV_VERSION=0.12.9
 MUJOCO_VERSION=3.10.0

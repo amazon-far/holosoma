@@ -46,6 +46,14 @@ python src/holosoma/holosoma/train_agent.py \
 Isaac Sim 5 uses `setup_isaacsim.sh` / `source_isaacsim_setup.sh`. Docker builds use
 `docker/isaacsim.Dockerfile` or `docker/isaacsim6.Dockerfile` respectively.
 
+The Isaac Sim 6 image contains both Kit and standalone backends. Shell activation
+prepares native library lookup without loading those runtimes; Kit's Python
+packages are exposed only when the selected cameras, movie, viewer or explicit
+Kit requirement needs them. Standalone importers use ordinary namespace discovery.
+Pip setup keeps the full runtime's wheels in a separate directory within the
+same environment, sharing the locked dependencies. Source the setup script before
+starting Python; select the runtime before importing Isaac Lab.
+
 ## Keep shared settings in their existing locations
 
 - **Solver:** Newton MJWarp reads `sim.mujoco` and `sim.mujoco.warp`; PhysX reads

@@ -75,8 +75,5 @@ def test_ovrtx_rejects_kit_options_before_starting_runtime(
     app.launch_simulation = lambda *_args: pytest.fail("invalid OVRTX config started a runtime")  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "isaaclab.app", app)
     backend = IsaacSim6Backend(IsaacSim6Config(renderer="ovrtx"))
-    monkeypatch.setattr(
-        "holosoma.simulator.isaacsim.backends.kitless_importers.select_standalone_importers", lambda: None
-    )
     with pytest.raises(ValueError, match="This run is Kit-less"):
         backend.launch_app({"headless": True, **options})
