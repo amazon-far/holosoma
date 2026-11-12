@@ -84,9 +84,16 @@ def main() -> int:
     manager = string_to_callable(sim.sim.cfg.physics.class_type)
     assert ("newton" in manager.__module__) == (args.physics == "newton"), manager
     if args.renderer != "isaac_rtx":
-        from isaaclab.utils.version import has_kit
+        from importlib.machinery import PathFinder
+
+        import isaacsim
+        from isaaclab.utils.version import has_kit, standalone_importers_available
 
         assert not has_kit(), "Native renderers must run without the Kit runtime"
+        assert standalone_importers_available(), "Standalone importers must be discoverable by the SDK"
+        namespace = PathFinder.find_spec("isaacsim")
+        assert namespace is not None and namespace.origin is None, "Kit's regular root must remain hidden"
+        assert type(isaacsim.__spec__.loader).__name__ == "NamespaceLoader", "Use ordinary Python namespace discovery"
         if args.physics == "physx":
             assert manager.__module__.startswith("isaaclab_ov."), manager
             scene_prim = sim.sim.stage.GetPrimAtPath(sim.sim.cfg.physics_prim_path)

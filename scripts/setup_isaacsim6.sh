@@ -42,7 +42,9 @@ isaacsim6_setup_main() {
     mkdir -p "$WORKSPACE_DIR"
     isaacsim6_prepare_isaaclab
     if [[ -f $ISAACSIM6_SENTINEL && -x $ISAACSIM6_ENV_ROOT/bin/python && -f $ISAACSIM6_ENV_ROOT/bin/activate ]]; then
-        return
+        if [[ -n ${ISAACSIM_ROOT_PATH:-} || -f $ISAACSIM6_ENV_ROOT/isaacsim-runtime/isaacsim/__init__.py ]]; then
+            return
+        fi
     fi
     # A removed/relocated environment must complete setup before reusing its stamp.
     rm -f "$ISAACSIM6_SENTINEL"
@@ -55,6 +57,8 @@ isaacsim6_setup_main() {
     # venv. Standalone pip installations use a regular Python 3.12 environment.
     local python_exe=3.12
     local extras=(--extra video --extra ov --extra importers)
+    local runtime_requirements=$ISAACSIM6_ENV_ROOT/isaacsim-runtime-requirements.txt
+    local runtime_packages=()
     if [[ -n ${ISAACSIM_ROOT_PATH:-} ]]; then
         python_exe=$ISAACSIM_ROOT_PATH/kit/python/bin/python3
         export UV_PYTHON_PREFERENCE=only-system
@@ -64,6 +68,35 @@ isaacsim6_setup_main() {
     uv venv --seed --allow-existing --python "$python_exe" "$ISAACSIM6_ENV_ROOT"
     export UV_PROJECT_ENVIRONMENT=$ISAACSIM6_ENV_ROOT
     export UV_PYTHON=$ISAACSIM6_ENV_ROOT/bin/python
+    if [[ -z ${ISAACSIM_ROOT_PATH:-} ]]; then
+        # Keep pip's regular isaacsim root outside the standalone namespace.
+        # Resolve their shared dependencies together, but install the full
+        # runtime wheels separately, with the versions/hashes from Lab's lock.
+        "$UV_PYTHON" - "$ISAACSIM6_ISAACLAB_DIR/uv.lock" "$runtime_requirements" <<'PY'
+import sys
+import tomllib
+from pathlib import Path
+
+lock = tomllib.loads(Path(sys.argv[1]).read_text())
+packages = [package for package in lock["package"]
+            if package["name"].startswith("isaacsim") and package["name"] != "isaacsim-asset-isolated"]
+Path(sys.argv[2]).write_text("".join(
+    f'{package["name"]}=={package["version"]}'
+    + "".join(f' --hash={wheel["hash"]}' for wheel in package["wheels"]) + "\n"
+    for package in packages
+))
+PY
+        while IFS= read -r requirement; do
+            local package=${requirement%%==*}
+            # The standalone importer also needs this codeless schema wheel.
+            if [[ $package != isaacsim-robot-schema ]]; then
+                extras+=(--no-install-package "$package")
+                runtime_packages+=("$package")
+            fi
+        done < "$runtime_requirements"
+        # Also repair environments created by this PR's earlier mixed layout.
+        uv pip uninstall --python "$UV_PYTHON" "${runtime_packages[@]}"
+    fi
     (
         cd "$ISAACSIM6_ISAACLAB_DIR"
         # Honor Lab's dependency overrides (constraints alone cannot reconcile
@@ -71,6 +104,11 @@ isaacsim6_setup_main() {
         # detached OV runtimes, and the standalone URDF/MJCF importers.
         uv sync --frozen --inexact "${extras[@]}"
     )
+    if [[ -z ${ISAACSIM_ROOT_PATH:-} ]]; then
+        uv pip install --python "$UV_PYTHON" --no-deps --require-hashes \
+            --index https://pypi.nvidia.com --target "$ISAACSIM6_ENV_ROOT/isaacsim-runtime" \
+            --requirement "$runtime_requirements"
+    fi
     source "$ISAACSIM6_SCRIPT_DIR/source_isaacsim6_setup.sh"
     if [[ -n ${ISAACSIM_ROOT_PATH:-} ]]; then
         # Match Lab's Docker setup for extension launch paths that load the

@@ -206,22 +206,22 @@ class IsaacSim6Backend(IsaacSimBackendAdapter):
         return stage_utils
 
     def add_launcher_args(self, parser: Any) -> None:
-        if not self.uses_kit:
-            from .kitless_importers import select_standalone_importers
+        if self.uses_kit:
+            from .runtime import activate_kit
 
             # The SDK's argument definitions import KitLauncher, which imports
-            # the isaacsim root even when no Kit runtime will be launched.
-            select_standalone_importers()
+            # isaacsim. Select its ordinary package before that first import.
+            activate_kit()
         from isaaclab.app import add_launcher_args
 
         add_launcher_args(parser)
 
     def launch_app(self, args: dict[str, Any] | Namespace, *, sim_config: Any = None) -> Any:
-        if not self.uses_kit:
-            from .kitless_importers import select_standalone_importers
+        if self.uses_kit:
+            from .runtime import activate_kit
 
             # Also cover callers that do not register CLI arguments first.
-            select_standalone_importers()
+            activate_kit()
         from isaaclab.app import launch_simulation
 
         args = vars(args) if isinstance(args, Namespace) else args
@@ -258,7 +258,7 @@ class IsaacSim6Backend(IsaacSimBackendAdapter):
             launch_cfg = Namespace(physics=self.physics_config(sim_config), renderer=renderer)
             from isaaclab.app import validate_launch
 
-            from .kitless_importers import register_standalone_schemas
+            from .standalone_schemas import register_standalone_schemas
 
             _scan, kit_sources = validate_launch(launch_cfg, args)
             if kit_sources:
