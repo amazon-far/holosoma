@@ -250,7 +250,7 @@ TEST(ContextualVelocity, RefusesOptionsThatOnlyAPrimitiveCommandHas) {
 
 TEST(ContextualVelocity, APrimitiveCommandRefusesAContinuousExport) {
   contextual::Options primitive;
-  primitive.require_climb_head = false;
+  primitive.discretizer = "simple";
   primitive.imu_to_obs_joint_chain = Chain{};
   try {
     Make("velocity_linear.onnx", SmallDepthSpec(), primitive);

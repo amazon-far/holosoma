@@ -11,21 +11,21 @@ namespace holosoma {
 // Presence of this section selects the depth-conditioned contextual policy.
 // Robot poses/gains remain in RobotConfig; execution providers in RuntimeConfig.
 //
-// `discretizer` selects the command interface. A discretizer ("simple",
-// "nearest_primitive") maps each velocity request onto a one-hot primitive
-// command for a model trained on primitives. No discretizer (nullopt, `null`
-// in a preset) feeds the requested velocity to a model trained on a continuous
-// velocity command, which declares its observation contract in ONNX metadata;
-// the primitive, climb and key options below do not apply to it.
+// `discretizer` selects the command interface. No discretizer (nullopt, the
+// default, `null` in a preset) feeds the requested velocity to a model trained
+// on a continuous velocity command, which declares its observation contract in
+// ONNX metadata; the primitive, climb and key options below do not apply to it.
+// A discretizer ("simple", "nearest_primitive") maps each velocity request onto
+// a one-hot primitive command for a model trained on primitives.
 struct ContextualConfig {
   int command_dim = 15;
   int depth_height = 58;
   int depth_width = 87;
-  bool require_climb_head = true;
+  bool require_climb_head = false;
   bool force_manual_climbing = false;
   std::string climb_enter = "dz_or_pred";
   std::string climb_exit = "both_off";
-  std::optional<std::string> discretizer = std::string("simple");
+  std::optional<std::string> discretizer;
   double yaw_request_gain = 2.0;
   double switch_margin = 0.0;
   // Measured (forward m/s, yaw rad/s) for each named gait, supplied by the caller.

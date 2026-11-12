@@ -109,7 +109,7 @@ TEST(Config, RejectsMistakes) {
   EXPECT_THROW(parse({"inference:g1-29dof-loco", "--robot.motor-kp", "1", "2"}), ConfigError);
 }
 
-TEST(Config, ContextualDiscretizerAndGravityFrameDistinguishAbsentFromNull) {
+TEST(Config, ContextualDefaultsToContinuousAndGravityFrameDistinguishesAbsentFromNull) {
   auto contextual = [](const std::function<void(YAML::Node&)>& edit) {
     YAML::Node node = YAML::LoadFile(kPresetDir + "/g1-29dof-loco.yaml");
     node["task"]["use_phase"] = false;
@@ -118,9 +118,12 @@ TEST(Config, ContextualDiscretizerAndGravityFrameDistinguishAbsentFromNull) {
     edit(section);
     return *parse_inference_config(node, kPresetDir).contextual;
   };
-  // Absent keeps the primitive default; null selects the continuous velocity command.
-  EXPECT_EQ(contextual([](YAML::Node&) {}).discretizer, std::optional<std::string>("simple"));
+  // Absent and null both select the continuous velocity command; a discretizer selects primitives.
+  EXPECT_FALSE(contextual([](YAML::Node&) {}).discretizer);
+  EXPECT_FALSE(contextual([](YAML::Node&) {}).require_climb_head);
   EXPECT_FALSE(contextual([](YAML::Node& c) { c["discretizer"] = YAML::Null; }).discretizer);
+  EXPECT_EQ(contextual([](YAML::Node& c) { c["discretizer"] = "simple"; }).discretizer,
+            std::optional<std::string>("simple"));
   EXPECT_EQ(contextual([](YAML::Node& c) { c["discretizer"] = "nearest_primitive"; }).discretizer,
             std::optional<std::string>("nearest_primitive"));
   // The gravity frame is unset unless given; an empty list is an explicit IMU frame.

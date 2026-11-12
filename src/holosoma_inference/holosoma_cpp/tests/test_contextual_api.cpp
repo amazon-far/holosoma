@@ -25,6 +25,9 @@ InferenceConfig config(const char* model = "contextual.onnx") {
   c.task.model_path = {(fixtures / model).string()};
   c.task.use_phase = false;
   c.contextual.emplace();
+  // The fixtures are primitive models with a climb head.
+  c.contextual->discretizer = "simple";
+  c.contextual->require_climb_head = true;
   c.contextual->depth_height = 2;
   c.contextual->depth_width = 3;
   // The fixture robot has no waist; gravity-frame tests set their own chain.
@@ -365,6 +368,7 @@ TEST(ContextualApi, OrientationAndCorrectedGravityReachTheModelInOneFrame) {
 TEST(ContextualApi, ImuToObsJointChainMustNameRuntimeJoints) {
   auto c = config();
   c.contextual = ContextualConfig{};  // Default G1 waist chain on a robot without a waist.
+  c.contextual->discretizer = "simple";
   c.contextual->depth_height = 2;
   c.contextual->depth_width = 3;
   EXPECT_THROW(Policy{c}, std::invalid_argument);

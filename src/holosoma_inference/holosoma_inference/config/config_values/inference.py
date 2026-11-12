@@ -83,7 +83,7 @@ g1_29dof_depth_d435i = InferenceConfig(
     robot=robot.g1_29dof,
     observation=ObservationConfig({"actor_obs": []}, {}, {}, {}),
     task=replace(task.locomotion, use_phase=False, policy_action_scale=1.0),
-    contextual=ContextualConfig(require_climb_head=False),
+    contextual=ContextualConfig(discretizer="simple"),
 )
 
 # Register core presets. Keys use hyphen-case naming convention for CLI compatibility.

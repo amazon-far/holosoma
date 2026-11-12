@@ -77,7 +77,7 @@ def test_contextual_config_and_inputs_use_the_same_native_policy(tmp_path):
         robot=robot,
         observation=ObservationConfig({"actor_obs": []}, {}, {}, {}),
         task=replace(base.task, model_path=str(path), use_phase=False),
-        contextual=ContextualConfig(depth_height=2, depth_width=3, imu_to_obs_joint_chain=()),
+        contextual=ContextualConfig(discretizer="simple", depth_height=2, depth_width=3, imu_to_obs_joint_chain=()),
         secondary=None,
     )
     policy = inference.get_policy_from_preset(config)
@@ -143,8 +143,10 @@ def test_contextual_imu_to_obs_chain_and_depth_age_cross_the_native_config_bound
 
     # The default G1 waist chain names joints this robot does not have: loud, not skipped.
     with pytest.raises(ValueError, match="imu_to_obs_joint_chain"):
-        inference.get_policy_from_preset(config(ContextualConfig(depth_height=2, depth_width=3)))
-    chained = config(ContextualConfig(depth_height=2, depth_width=3, imu_to_obs_joint_chain=(("hip", "x"),)))
+        inference.get_policy_from_preset(config(ContextualConfig(discretizer="simple", depth_height=2, depth_width=3)))
+    chained = config(
+        ContextualConfig(discretizer="simple", depth_height=2, depth_width=3, imu_to_obs_joint_chain=(("hip", "x"),))
+    )
     policy = inference.get_policy_from_preset(chained)
     state = np.zeros(19)
     state[3] = 1
@@ -161,6 +163,12 @@ def test_contextual_imu_to_obs_chain_and_depth_age_cross_the_native_config_bound
         document["contextual"]["max_depth_age_s"] = bad
         with pytest.raises(RuntimeError, match="max_depth_age_s"):
             _native.Policy.from_config(json.dumps(document), True)
+
+
+def test_the_d435i_preset_keeps_the_primitive_command_interface_its_students_were_trained_on():
+    contextual = inference.get_config("g1-29dof-depth-d435i").contextual
+    assert contextual.discretizer == "simple"
+    assert contextual.require_climb_head is False
 
 
 def test_continuous_velocity_command_crosses_the_native_config_boundary(tmp_path):
@@ -185,10 +193,12 @@ def test_continuous_velocity_command_crosses_the_native_config_boundary(tmp_path
             secondary=None,
         )
 
-    continuous = config(ContextualConfig(discretizer=None, require_climb_head=False))
+    # The defaults select the continuous velocity command, so a bare config drives this export.
+    continuous = config(ContextualConfig())
     document = json.loads(_native_config(continuous))
     # None crosses as null, never as a sentinel word, and the frame stays unset.
     assert document["contextual"]["discretizer"] is None
+    assert document["contextual"]["require_climb_head"] is False
     assert document["contextual"]["imu_to_obs_joint_chain"] is None
     policy = inference.get_policy_from_preset(continuous)
     n = base.robot.num_joints
@@ -204,9 +214,15 @@ def test_continuous_velocity_command_crosses_the_native_config_boundary(tmp_path
 
     # A continuous model has no climb head to require.
     with pytest.raises(ValueError, match="require_climb_head"):
-        inference.get_policy_from_preset(config(ContextualConfig(discretizer=None)))
-    # An absent discretizer is the primitive default, which refuses this export by name.
-    del document["contextual"]["discretizer"]
+        inference.get_policy_from_preset(config(ContextualConfig(require_climb_head=True)))
+    # The native defaults agree: a section without the two keys builds the same continuous policy.
+    absent = dict(document)
+    absent["contextual"] = {
+        k: v for k, v in document["contextual"].items() if k not in ("discretizer", "require_climb_head")
+    }
+    _native.Policy.from_config(json.dumps(absent), True)
+    # A primitive discretizer refuses this export by name.
+    document["contextual"]["discretizer"] = "simple"
     with pytest.raises(RuntimeError, match="discretizer: null"):
         _native.Policy.from_config(json.dumps(document), True)
 
@@ -319,7 +335,7 @@ def test_a_primitive_export_declares_no_depth_contract_and_keeps_the_far_fill(tm
         robot=robot,
         observation=ObservationConfig({"actor_obs": []}, {}, {}, {}),
         task=replace(base.task, model_path=str(path), use_phase=False),
-        contextual=ContextualConfig(depth_height=2, depth_width=3, imu_to_obs_joint_chain=()),
+        contextual=ContextualConfig(discretizer="simple", depth_height=2, depth_width=3, imu_to_obs_joint_chain=()),
         secondary=None,
     )
     from holosoma_inference.policies.native_runner import NativeContextualRunner

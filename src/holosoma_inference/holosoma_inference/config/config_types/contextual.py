@@ -15,18 +15,18 @@ class ContextualConfig:
     command_dim: int = 15
     depth_height: int = 58
     depth_width: int = 87
-    require_climb_head: bool = True
+    require_climb_head: bool = False
     force_manual_climbing: bool = False
     climb_enter: str = "dz_or_pred"
     climb_exit: str = "both_off"
-    discretizer: str | None = "simple"
+    discretizer: str | None = None
     """How a velocity request becomes the model's command input.
 
-    A discretizer (``"simple"``, ``"nearest_primitive"``) maps it onto one of the one-hot
-    primitive commands a primitive-trained model reads. ``None`` feeds the velocity itself to a
-    model trained on a continuous velocity command, which declares its observation contract in
-    its ONNX metadata; the climb, primitive and key options do not apply to it, and
-    ``require_climb_head`` must be ``False``.
+    ``None`` (the default) feeds the velocity itself to a model trained on a continuous velocity
+    command, which declares its observation contract in its ONNX metadata; the climb, primitive
+    and key options do not apply to it, and ``require_climb_head`` must be ``False``. A
+    discretizer (``"simple"``, ``"nearest_primitive"``) maps it onto one of the one-hot
+    primitive commands a primitive-trained model reads.
     """
     yaw_request_gain: float = 2.0
     switch_margin: float = 0.0
