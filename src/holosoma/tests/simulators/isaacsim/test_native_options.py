@@ -14,6 +14,7 @@ pytestmark = pytest.mark.isaacsim
         ("newton", "isaac_rtx"),
         ("physx", "ovrtx"),
         ("newton", "ovrtx"),
+        ("physx", "newton_warp"),
         ("newton", "newton_warp"),
     ],
 )

@@ -17,7 +17,9 @@ if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from tests.simulators._sim_harness import (
+    add_isaacsim6_arguments,
     build_run_sim_config,
+    configure_isaacsim6,
     launch_simulator,
     run_and_hard_exit,
     step,
@@ -38,6 +40,7 @@ def main() -> int:
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--headless", choices=["true", "false"], default="true")
     parser.add_argument("--result-file", default=None, help="write OK/FAIL here before teardown")
+    add_isaacsim6_arguments(parser)
     args = parser.parse_args()
 
     from tests.simulators import _camera_presets
@@ -68,6 +71,7 @@ def main() -> int:
     )
     if args.simulator == "mjwarp":
         config = _camera_presets.as_mjwarp(config)
+    config = configure_isaacsim6(config, args)
 
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
     config = dataclasses.replace(
@@ -124,14 +128,21 @@ def main() -> int:
             fails.append(f"{args.simulator}/env{e}: reference depth {distance}, expected 0.89 m")
     panel_states = sim.get_actor_states(["panel"], torch.arange(n, device=device)).clone()
     move = 0.15
-    panel_states[:, 0] += move
-    sim.set_actor_states(["panel"], torch.arange(n, device=device), panel_states)
+    selected = torch.arange(0, n, 2, device=device)
+    panel_states[selected, 0] += move
+    old_rgb = sim.get_camera_data("panel_cam", "rgb")
+    old_depth = sim.get_camera_data("panel_cam", "depth")
+    owned_rgb, owned_depth = old_rgb.clone(), old_depth.clone()
+    sim.set_actor_states(["panel"], selected, panel_states[selected])
     step(sim, max(2, steps_for_seconds(sim, 0.05)))
     sim.render_sensors()
     after = reference_depths()
     for e, (old, new) in enumerate(zip(before, after, strict=True)):
-        if old is None or new is None or abs((old - new) - move) > 0.04:
-            fails.append(f"{args.simulator}/env{e}: reference depth {old} -> {new}, expected a {move} m decrease")
+        expected = move if e % 2 == 0 else 0.0
+        if old is None or new is None or abs((old - new) - expected) > 0.04:
+            fails.append(f"{args.simulator}/env{e}: reference depth {old} -> {new}, expected a {expected} m decrease")
+    if not torch.equal(old_rgb, owned_rgb) or not torch.equal(old_depth, owned_depth):
+        fails.append("retained actor-mount output mutated after the next capture")
 
     if args.result_file:
         with open(args.result_file, "w") as fh:

@@ -85,6 +85,11 @@ def run_harness(
         timeout=timeout,
         check=False,
     )
+    if result_file is not None:
+        # Keep actual per-environment outcomes, including failed runs, beside
+        # the verdict for GPU validation. Pytest's failure tail is not the evidence.
+        Path(result_file).with_suffix(".stdout.log").write_text(result.stdout)
+        Path(result_file).with_suffix(".stderr.log").write_text(result.stderr)
     # Runtime skip: the harness signalled (via the autotools-convention exit 77) that this cell is
     # unsupported in a way only knowable at runtime. Surface it as a real pytest skip with reason,
     # not a pass. Checked before the success assertions so a skip is never mistaken for a failure.

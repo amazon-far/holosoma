@@ -19,7 +19,9 @@ if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from tests.simulators._sim_harness import (
+    add_isaacsim6_arguments,
     build_run_sim_config,
+    configure_isaacsim6,
     launch_simulator,
     run_and_hard_exit,
     step,
@@ -50,6 +52,57 @@ def _red_fraction(rgb):
     return float(_red_mask(rgb).float().mean())
 
 
+def _check_articulated_link(sim, config, env_ids, spawn_dof):
+    """Move the waist joint while holding the root; a torso camera must rotate independently."""
+    import math
+
+    import torch
+
+    device = sim.sim_device
+    root = sim.get_actor_states(["robot"], env_ids).clone()
+    root[:, :3] = sim.env_origins + torch.tensor(config.robot.init_state.pos, device=device)
+    root[:, 3:7] = torch.tensor(config.robot.init_state.rot, device=device)
+    root[:, 7:] = 0
+    joint = sim.dof_names.index("waist_yaw_joint")
+    body = sim.find_rigid_body_indice("torso_link")
+    sim.set_actor_states(["robot"], env_ids, root)
+    sim.dof_pos[env_ids] = spawn_dof
+    sim.dof_vel[env_ids] = 0
+    sim.forward_kinematics()
+    # Place the panel ahead of the actual torso height, rather than assuming
+    # the authored pelvis camera's height also applies to this link.
+    panel = sim.get_actor_states(["panel"], env_ids).clone()
+    panel[:, :3] = sim.rigid_body_pos_w[:, body] + torch.tensor([1.0, 0, 0], device=device)
+    panel[:, 3:7] = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device)
+    panel[:, 7:] = 0
+    sim.set_actor_states(["panel"], env_ids, panel)
+
+    def capture(yaw):
+        sim.set_actor_states(["robot"], env_ids, root)
+        sim.dof_pos[env_ids] = spawn_dof
+        sim.dof_pos[:, joint] = yaw
+        sim.dof_vel[env_ids] = 0
+        sim.forward_kinematics()
+        sim.render_sensors()
+        return [_red_fraction(sim.get_camera_data("front_cam", "rgb")[e]) for e in range(sim.num_envs)]
+
+    home = capture(torch.zeros(sim.num_envs, device=device))
+    angles = torch.zeros(sim.num_envs, device=device)
+    angles[::2] = math.radians(55)
+    yawed = capture(angles)
+    returned = capture(torch.zeros_like(angles))
+    assert torch.allclose(sim.get_actor_states(["robot"], env_ids)[:, :7], root[:, :7], atol=1e-4, rtol=0), (
+        "link-motion probe moved the robot root"
+    )
+    for e in range(sim.num_envs):
+        assert home[e] > 0.02 and returned[e] > 0.02, (e, home, returned)
+        if e % 2 == 0:
+            assert yawed[e] < home[e] * 0.34, (e, home, yawed)
+        else:
+            assert yawed[e] > home[e] * 0.5, (e, home, yawed)
+    print(f"  articulated torso: home={home} sparse yaw={yawed} returned={returned}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim6"])
@@ -58,6 +111,8 @@ def main() -> int:
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--headless", choices=["true", "false"], default="true")
     parser.add_argument("--result-file", default=None, help="write OK/FAIL here before teardown")
+    parser.add_argument("--articulated-link", action="store_true", help="move the torso mount with waist DOF writes")
+    add_isaacsim6_arguments(parser)
     args = parser.parse_args()
 
     from tests.simulators import _camera_presets
@@ -69,6 +124,17 @@ def main() -> int:
     )
     if args.simulator == "mjwarp":
         config = _camera_presets.as_mjwarp(config)
+    config = configure_isaacsim6(config, args)
+    if args.articulated_link:
+        camera = config.sensor["front_cam"]
+        config = dataclasses.replace(
+            config,
+            sensor={
+                "front_cam": dataclasses.replace(
+                    camera, mount=dataclasses.replace(camera.mount, target="torso_link", position=[0.1, 0, 0])
+                )
+            },
+        )
 
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
     config = dataclasses.replace(
@@ -111,6 +177,13 @@ def main() -> int:
     # test wants the body to move RIGIDLY (root translate/yaw) while the camera follows it, so holding
     # the joints at spawn is exactly the intended behavior, not a cheat.
     _spawn_dof_pos = sim.dof_pos.clone()
+    if args.articulated_link:
+        _check_articulated_link(sim, config, _all_ids, _spawn_dof_pos)
+        if args.result_file:
+            from pathlib import Path
+
+            Path(args.result_file).write_text("OK\n")
+        return 0
 
     def _hold_dof() -> None:
         # Restore joints to the spawn pose with zero velocity. MuJoCo is unaffected by this flake.
