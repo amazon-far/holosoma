@@ -83,7 +83,19 @@ def _check_articulated_link(sim, config, env_ids, spawn_dof):
         sim.dof_pos[:, joint] = yaw
         sim.dof_vel[env_ids] = 0
         sim.forward_kinematics()
+        assert torch.allclose(sim.get_actor_states(["robot"], env_ids)[:, :7], root[:, :7], atol=1e-4, rtol=0), (
+            "joint pose write moved the robot root"
+        )
+        # A real step gives the SDK a new capture epoch; same-step repeated
+        # submissions may reuse its completed render. Gravity is part of this step.
+        step(sim, 1)
+        from tests.simulators._native_runtime_assertions import snapshot_native_physics
+
+        before = snapshot_native_physics(sim)
+        count = sim.sim.get_physics_step_count()
         sim.render_sensors()
+        assert sim.sim.get_physics_step_count() == count
+        assert all(torch.equal(a, b) for a, b in zip(before, snapshot_native_physics(sim), strict=True))
         return [_red_fraction(sim.get_camera_data("front_cam", "rgb")[e]) for e in range(sim.num_envs)]
 
     home = capture(torch.zeros(sim.num_envs, device=device))
@@ -91,9 +103,6 @@ def _check_articulated_link(sim, config, env_ids, spawn_dof):
     angles[::2] = math.radians(55)
     yawed = capture(angles)
     returned = capture(torch.zeros_like(angles))
-    assert torch.allclose(sim.get_actor_states(["robot"], env_ids)[:, :7], root[:, :7], atol=1e-4, rtol=0), (
-        "link-motion probe moved the robot root"
-    )
     for e in range(sim.num_envs):
         assert home[e] > 0.02 and returned[e] > 0.02, (e, home, returned)
         if e % 2 == 0:

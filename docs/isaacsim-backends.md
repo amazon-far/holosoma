@@ -94,6 +94,9 @@ options fail at startup.
   reconstruction remains undocumented. A faster shared batch changes every
   camera's native capture history, including cameras with slower observation updates.
   All cameras and movies use ordinary shared SDK ownership and batching.
+- Moving robot, link and actor camera mounts use the SDK's
+  `update_latest_camera_pose` option. The pinned Lab 3 SDK also uses this option
+  to publish poses to native renderers; fixed world mounts keep their cached pose.
 - With Newton and Isaac RTX, the moving movie camera also writes its pose through
   the public USD view. The pinned Newton camera view updates native sites without
   reliably publishing this pose to Kit; rendering and extraction still use the SDK.
@@ -101,3 +104,29 @@ options fail at startup.
   `isaac_rtx`; the typed `renderer_options` currently control Warp features.
   Camera `far` and `depth_clipping_behavior` remain authoritative for all three.
   Segmentation output is not implemented.
+
+## Behavioral regression coverage
+
+The actual-simulator harnesses in `tests/simulators/isaacsim` exercise physical
+outcomes in four environments, independently of camera rendering. Both PhysX
+and Newton MJWarp run the shared collision, momentum, support, friction, force,
+torque, motion, property-response, restoration and environment-isolation scenarios.
+Mass and inertia changes must alter the response to identical impulses, rather
+than merely appear in native property readback.
+
+Newton skips the five PhysX-specific contracts: live USD body-damping
+randomization, configured body-damping decay, the damped robot/object twin, and
+the two material-combine-mode scenarios. These skips do not establish a Newton
+equivalent of those semantics. Friction fixtures give object materials higher
+MuJoCo priority so the ground coefficient does not mask the tested value.
+Contact-heavy Newton fixtures explicitly size the existing MJWarp constraint
+and contact arenas; automatic sizing can overflow for a collapsed G1.
+
+Active Newton + Isaac RTX and Newton + OVRTX tests reuse the geometry, moving
+mount, task frame-end and movie harnesses. The six physics/renderer pairings also
+run the cadence and movie-coexistence harness: RGB/depth must match current
+geometry in every tile, observations hold between due updates, retained output
+buffers survive subsequent captures and teardown, sparse camera resets preserve
+other tiles, and captures leave native dynamics and physics time unchanged.
+The tested decimations are `1/5`, `2/3`, `1/5/2`, uniform `3/3` and single `3`.
+These tests do not cover segmentation, GUI interaction or distributed execution.

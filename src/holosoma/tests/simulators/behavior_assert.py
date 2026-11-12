@@ -44,7 +44,6 @@ from tests.simulators._sim_harness import (
     configure_isaacsim6,
     launch_simulator,
     run_and_hard_exit,
-    step,
     steps_for_seconds,
 )
 
@@ -97,7 +96,7 @@ def _build_run_sim_config(simulator, scene, robot, terrain, record_dir):
         from holosoma.config_types.video import CartesianCameraConfig
 
         cam = CartesianCameraConfig(offset=[1.1, 1.1, 0.7], target_offset=[0.0, 0.0, 0.0], smoothing=0.6)
-    return build_run_sim_config(
+    config = build_run_sim_config(
         simulator,
         scene,
         robot,
@@ -106,11 +105,47 @@ def _build_run_sim_config(simulator, scene, robot, terrain, record_dir):
         video_camera=cam,
         show_command_overlay=False,  # robot command text is irrelevant to object scenarios
     )
+    if record_dir is not None:
+        config = dataclasses.replace(
+            config,
+            logger=dataclasses.replace(
+                config.logger,
+                video=dataclasses.replace(config.logger.video, width=128, height=96, use_recording_thread=False),
+            ),
+        )
+    return config
 
 
 def _step(sim, n):
     """Advance ``n`` physics steps WITH render each step (this harness records video)."""
-    step(sim, n, render=True)
+    for _ in range(n):
+        sim.simulate_at_each_physics_step()
+        _render(sim)
+
+
+def _render(sim):
+    """Capture native movies on control boundaries and prove captures leave dynamics untouched."""
+    recorder = getattr(sim, "video_recorder", None)
+    capturing = (
+        recorder is not None
+        and getattr(sim.backend, "is_isaacsim6", False)
+        and recorder.is_recording
+        and sim._sim_step_counter % sim.simulator_config.sim.control_decimation_steps == 0
+    )
+    if capturing:
+        from tests.simulators._native_runtime_assertions import snapshot_native_physics
+
+        count = sim.sim.get_physics_step_count()
+        before = snapshot_native_physics(sim)
+    sim.render()
+    if capturing:
+        recorder.capture_frame(env_id=recorder.config.record_env_id)
+        assert sim.sim.get_physics_step_count() == count, "movie capture advanced the physics clock"
+        import torch
+
+        assert all(torch.equal(a, b) for a, b in zip(before, snapshot_native_physics(sim), strict=True)), (
+            "movie rendering changed native dynamics"
+        )
 
 
 def _focus_camera_on_objects(sim, scene_config):
@@ -187,7 +222,7 @@ def assert_collide_into_fixed(ctx):
     peak_x = hammer0_x.clone()
     for _ in range(n):
         ctx.sim.simulate_at_each_physics_step()
-        ctx.sim.render()
+        _render(ctx.sim)
         peak_x = ctx.torch.maximum(peak_x, ctx.states("hammer")[:, 0])
     hammer = ctx.states("hammer")
     wall = ctx.states("wall")
@@ -229,7 +264,7 @@ def assert_momentum_transfer(ctx):
     target_vx_peak = ctx.states("target")[:, 7].clone()
     for _ in range(n):
         ctx.sim.simulate_at_each_physics_step()
-        ctx.sim.render()
+        _render(ctx.sim)
         target_vx_peak = ctx.torch.maximum(target_vx_peak, ctx.states("target")[:, 7])
     g1 = ctx.states("target")[:, :3]
     sv1 = ctx.states("striker")[:, 7]
@@ -455,7 +490,7 @@ def _step_with_force(ctx, n, apply_fn):
         if apply_fn is not None:
             apply_fn()
         ctx.sim.simulate_at_each_physics_step()
-        ctx.sim.render()
+        _render(ctx.sim)
 
 
 def assert_external_force(ctx):
@@ -1567,6 +1602,19 @@ def main() -> int:
         device=device,
         training=dataclasses.replace(config.training, num_envs=args.num_envs, headless=headless),
     )
+    if args.simulator == "isaacsim6" and args.physics_backend == "newton":
+        # A collapsed G1 plus scene contacts exceeds the pinned SDK's automatic
+        # 300-constraint arena. Size this test workload through existing controls.
+        cfg = config.simulator.config
+        mujoco = dataclasses.replace(
+            cfg.sim.mujoco, warp=dataclasses.replace(cfg.sim.mujoco.warp, nconmax_per_env=512, njmax_per_env=1024)
+        )
+        config = dataclasses.replace(
+            config,
+            simulator=dataclasses.replace(
+                config.simulator, config=dataclasses.replace(cfg, sim=dataclasses.replace(cfg.sim, mujoco=mujoco))
+            ),
+        )
     if args.simulator == "isaacsim6" and args.physics_backend == "physx" and args.scenario == "dr-damping-governs":
         # Live USD damping on cloned bodies requires Kit's PhysX listener in
         # this SDK. Other headless scenarios retain the standalone runtime.
@@ -1641,6 +1689,11 @@ def main() -> int:
         pre_hook(sim, pre_env_ids, torch)
 
     sim.prepare_sim()
+    if args.simulator == "isaacsim6" and args.physics_backend == "newton":
+        from isaaclab.utils.string import string_to_callable
+        from isaaclab_newton.physics import NewtonMJWarpManager
+
+        assert issubclass(string_to_callable(sim.sim.cfg.physics.class_type), NewtonMJWarpManager)
     if args.simulator == "isaacsim6" and args.record is None:
         from tests.simulators._native_runtime_assertions import assert_native_runtime
 
@@ -1690,6 +1743,15 @@ def main() -> int:
         print("PASS" if passed else "FAIL")
 
     if sim.video_recorder is not None:
+        if args.simulator == "isaacsim6":
+            import numpy as np
+
+            frames = sim.video_recorder.video_frames
+            assert len(frames) > 2, "renderer preference did not produce actual movie frames"
+            assert max(np.abs(frame.astype(float) - frames[0].astype(float)).mean() for frame in frames[1:]) > 0.1, (
+                "active movie did not show the changing physical scene"
+            )
+            print(f"  active renderer: {len(frames)} owned movie frames; unchanged native dynamics at each capture")
         sim.video_recorder.on_episode_end(env_id=sim.video_recorder.config.record_env_id)
         print(f"VIDEO saved under {args.record}")
 

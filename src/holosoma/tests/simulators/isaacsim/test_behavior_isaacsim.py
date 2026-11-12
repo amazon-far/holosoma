@@ -67,7 +67,7 @@ def test_behavior_isaacsim(scenario, physics, isaacsim_backend, tmp_path, run_is
         if scenario in NEWTON_UNSUPPORTED:
             pytest.skip(f"Newton MJWarp: {NEWTON_UNSUPPORTED[scenario]}")
     result_file = tmp_path / f"behavior_{scenario}.txt"
-    run_isaacsim_harness(
+    result = run_isaacsim_harness(
         _HARNESS,
         "--scenario",
         scenario,
@@ -80,4 +80,9 @@ def test_behavior_isaacsim(scenario, physics, isaacsim_backend, tmp_path, run_is
         label=f"isaacsim/{physics}/{scenario} (num_envs=4)",
         timeout=900,
         result_file=result_file,
+    )
+    assert result.returncode == 0, result.stderr[-3000:]
+    output = (result.stdout + result.stderr).lower()
+    assert all(message not in output for message in ("nefc overflow", "ncon overflow", "narrowphase overflow")), (
+        result.stdout[-3000:]
     )

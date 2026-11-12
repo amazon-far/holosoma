@@ -19,6 +19,7 @@ if sys.path and sys.path[0].endswith("simulators"):
 from holosoma.config_types.sensor import SensorMountConfig
 from holosoma.config_types.simulator import IsaacSim6Config
 from tests.simulators import _camera_presets
+from tests.simulators._native_runtime_assertions import snapshot_native_physics
 from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit, step
 
 
@@ -174,26 +175,7 @@ def main() -> int:
     sim.prepare_sim()
 
     def physics_state() -> tuple[torch.Tensor, ...]:
-        """Read native dynamics directly so SDK clock bookkeeping cannot hide integration."""
-        import warp as wp
-
-        if args.physics == "newton":
-            state = sim.sim.physics_manager.get_state_0()
-            return tuple(
-                wp.to_torch(getattr(state, name)).clone() for name in ("body_q", "body_qd", "joint_q", "joint_qd")
-            )
-        view = sim._robot.root_view
-        if args.renderer == "isaac_rtx":
-            return tuple(
-                wp.to_torch(getattr(view, name)()).clone()
-                for name in ("get_root_transforms", "get_root_velocities", "get_dof_positions", "get_dof_velocities")
-            )
-        from isaaclab_ov import tensor_types as TT
-
-        return tuple(
-            wp.to_torch(view.get_attribute(attribute)).clone()
-            for attribute in (TT.ROOT_POSE, TT.ROOT_VELOCITY, TT.DOF_POSITION, TT.DOF_VELOCITY)
-        )
+        return snapshot_native_physics(sim)
 
     startup_seconds = time.perf_counter() - startup_start
     recorder = sim.video_recorder
