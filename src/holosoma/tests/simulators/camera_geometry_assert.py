@@ -32,7 +32,9 @@ if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from tests.simulators._sim_harness import (
+    add_isaacsim6_arguments,
     build_run_sim_config,
+    configure_isaacsim6,
     launch_simulator,
     run_and_hard_exit,
     step,
@@ -122,6 +124,7 @@ def main() -> int:
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--headless", choices=["true", "false"], default="true")
     parser.add_argument("--result-file", default=None, help="write PASS/FAIL here before teardown")
+    add_isaacsim6_arguments(parser)
     args = parser.parse_args()
 
     from tests.simulators import _camera_presets
@@ -131,6 +134,7 @@ def main() -> int:
     config = build_run_sim_config(sim_arg, "panel-target", args.robot, args.terrain, sensors=_camera_presets.front_cam)
     if args.simulator == "mjwarp":
         config = _camera_presets.as_mjwarp(config)
+    config = configure_isaacsim6(config, args)
 
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
     config = dataclasses.replace(

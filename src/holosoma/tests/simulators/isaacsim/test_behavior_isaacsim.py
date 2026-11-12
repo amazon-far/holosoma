@@ -21,9 +21,8 @@ if not torch.cuda.is_available():
 
 _HARNESS = Path(__file__).resolve().parents[1] / "behavior_assert.py"
 
-# The full behavioral catalog runs on IsaacSim at num_envs=4 — every scenario (including the
-# multi-env ones) is supported here, so there are no static skips to mark. USD-backed; every
-# behavioral preset ships a usd file. damping/restitution use the native PhysX fields here.
+# The released PhysX catalog is preserved. Newton runs the same downstream assertions
+# except explicitly PhysX-only damping/combine-mode contracts. All checks run in every world.
 _SCENARIOS = [
     "collide-into-fixed",
     "momentum-transfer",
@@ -37,6 +36,8 @@ _SCENARIOS = [
     "restitution-bounce",
     "angular-velocity-spin",
     "velocity-restore-reset",
+    "mass-force-response",
+    "inertia-torque-response",
     "object-obs-robot-pose",
     "pose-jitter-settle",
     "loader-invariance",
@@ -56,17 +57,27 @@ _SCENARIOS = [
 
 
 @pytest.mark.parametrize("scenario", _SCENARIOS)
-def test_behavior_isaacsim(scenario, tmp_path, run_isaacsim_harness):
+@pytest.mark.parametrize("physics", ["physx", "newton"])
+def test_behavior_isaacsim(scenario, physics, isaacsim_backend, tmp_path, run_isaacsim_harness):
+    if physics == "newton":
+        if isaacsim_backend != "isaacsim6":
+            pytest.skip("Newton MJWarp requires Isaac Lab 3")
+        from tests.simulators.behavior_assert import NEWTON_UNSUPPORTED
+
+        if scenario in NEWTON_UNSUPPORTED:
+            pytest.skip(f"Newton MJWarp: {NEWTON_UNSUPPORTED[scenario]}")
     result_file = tmp_path / f"behavior_{scenario}.txt"
     run_isaacsim_harness(
         _HARNESS,
         "--scenario",
         scenario,
+        "--physics-backend",
+        physics,
         "--num-envs",
         "4",
         "--result-file",
         str(result_file),
-        label=f"isaacsim/{scenario} (num_envs=4)",
+        label=f"isaacsim/{physics}/{scenario} (num_envs=4)",
         timeout=900,
         result_file=result_file,
     )

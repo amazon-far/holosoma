@@ -38,7 +38,15 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.sampler import STAGE_RESET, STAGE_SETUP, TermSampler
 from tests.simulators import _scene_presets
-from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, step, steps_for_seconds
+from tests.simulators._sim_harness import (
+    add_isaacsim6_arguments,
+    build_run_sim_config,
+    configure_isaacsim6,
+    launch_simulator,
+    run_and_hard_exit,
+    step,
+    steps_for_seconds,
+)
 
 GRAVITY = 9.81
 
@@ -61,6 +69,16 @@ def _behavior_sampler(stage: int, term: str = "behavior_assert") -> TermSampler:
 # translates it into ``pytest.skip(reason)``. Kept in sync with ``_run_harness.SKIP_EXIT_CODE``;
 # chosen so it cannot collide with 0 (pass), 1 (FAIL), or a signal crash (128+N >= 129).
 SKIP_EXIT_CODE = 77
+
+# These scenarios explicitly exercise PhysX configuration or its live USD listener.
+# Newton's Coulomb/contact model does not implement the same damping/combine-mode contract.
+NEWTON_UNSUPPORTED = {
+    "dr-damping-governs": "live USD damping requires Kit PhysX",
+    "damping-decay": "config-time PhysX free-body damping",
+    "damped-fall-twin": "config-time PhysX free-body damping",
+    "combine-mode-collision": "PhysX per-material friction combine modes",
+    "robot-combine-mode": "PhysX per-material friction combine modes",
+}
 
 
 # --------------------------------------------------------------------------------------------
@@ -734,7 +752,18 @@ def assert_velocity_restore_on_reset(ctx):
     # set, exactly as the production reset/jitter terms do — no manual origin add.
     poses = sim.get_actor_initial_poses(["rbox"], ctx.env_ids)  # [n,7]
     vels = sim.get_actor_initial_velocities(["rbox"], ctx.env_ids)  # [n,6]
-    sim.set_actor_states(["rbox"], ctx.env_ids, t.cat([poses, vels], dim=1))
+    before_reset = ctx.states("rbox").clone()
+    # Sparse odd rows, followed by their complement, exercise the same public reset
+    # seam used by reset terms. Unselected worlds must retain pose AND momentum.
+    for selected in (ctx.env_ids[1::2], ctx.env_ids[::2]):
+        if not selected.numel():
+            continue
+        before = ctx.states("rbox").clone()
+        sim.set_actor_states(["rbox"], selected, t.cat([poses[selected], vels[selected]], dim=1))
+        untouched = ctx.env_ids[~t.isin(ctx.env_ids, selected)]
+        assert t.allclose(ctx.states("rbox")[untouched], before[untouched], atol=1e-5, rtol=0), (
+            "partial restoration changed another environment's state"
+        )
     restored = ctx.states("rbox")
     # Position restored to the original WORLD spawn pose in every env (catches an origin
     # double-count / frame mismatch that the velocity checks alone would miss).
@@ -749,7 +778,71 @@ def assert_velocity_restore_on_reset(ctx):
     moved = _all((after[:, 0] - p_mid[:, 0]) > 1e-2)
     spun = _all((after[:, 3:7] - q_mid).abs().amax(dim=1) > 1e-2)
     print(f"  vel-restore: pos_ok={pos_ok} lin_ok={lin_ok} ang_ok={ang_ok} moving_again={moved and spun}")
-    return pos_ok and lin_ok and ang_ok and moved and spun
+    actually_reset = _all((before_reset[:, :3] - restored[:, :3]).abs().amax(dim=1) > 0.01)
+    return pos_ok and lin_ok and ang_ok and moved and spun and actually_reset
+
+
+def assert_property_response(ctx):
+    """Double mass or inertia in odd worlds; identical impulses must give half the response.
+
+    A before/after control on the same airborne bodies avoids asset inertia assumptions.
+    Unchanged even worlds detect broadcast writes; force and torque axes are checked too.
+    """
+    from isaaclab.managers import SceneEntityCfg
+
+    from holosoma.simulator.isaacsim.events import randomize_rigid_body_inertia, randomize_rigid_body_mass
+    from holosoma.utils.sampler import DistributionSpec
+
+    t, sim = ctx.torch, ctx.sim
+    inertia = ctx.args.scenario == "inertia-torque-response"
+    name, channel = ("tbox", 12) if inertia else ("fbox", 7)
+    initial = ctx.states(name).clone()
+    impulse = t.tensor([0.0, 0.0, 0.01] if inertia else [20.0, 0.0, 0.0], device=sim.sim_device)
+    kwargs = {"torques" if inertia else "forces": impulse}
+    n = steps_for_seconds(sim, 0.1)
+
+    def response():
+        before = ctx.states(name)[:, channel].clone()
+        _step_with_force(ctx, n, lambda: sim.apply_external_force(name, env_ids=ctx.env_ids, **kwargs))
+        return ctx.states(name)[:, channel] - before
+
+    baseline = response()
+    sim.set_actor_states([name], ctx.env_ids, initial)
+    sim.write_state_updates()
+    selected = ctx.env_ids[1::2]
+    asset = SceneEntityCfg(name, body_ids=slice(None))
+    sampler = _behavior_sampler(STAGE_RESET)
+    if inertia:
+        randomize_rigid_body_inertia(
+            sim,
+            selected,
+            asset,
+            specs=[DistributionSpec.parse([2.0, 2.0])] * 6,
+            operation="scale",
+            sampler=sampler,
+        )
+    else:
+        randomize_rigid_body_mass(
+            sim,
+            selected,
+            asset,
+            mass=[2.0, 2.0],
+            operation="scale",
+            recompute_inertia=False,
+            sampler=sampler,
+        )
+    changed = response()
+    expected = baseline.clone()
+    expected[selected] *= 0.5
+    ok = _all(baseline > 1e-3) and t.allclose(changed, expected, rtol=0.08, atol=1e-4)
+    state = ctx.states(name)
+    cross_axes = state[:, 10:12] if inertia else state[:, 10:13]
+    ok = ok and _all(cross_axes.abs().amax(dim=1) < 1e-3)
+    print(
+        f"  {ctx.args.scenario}: baseline={baseline.tolist()} changed={changed.tolist()} "
+        f"expected={expected.tolist()} ok={ok}"
+    )
+    return ok
 
 
 def _yaw_world_to_base(t, yaw, vec_w):
@@ -1337,6 +1430,8 @@ SCENARIOS = {
     "restitution-bounce": ("restitution-bounce", assert_restitution_bounce, 1, True, ()),
     "angular-velocity-spin": ("angular-spin", assert_angular_spin, 1, True, ()),
     "velocity-restore-reset": ("velocity-restore", assert_velocity_restore_on_reset, 1, True, ()),
+    "mass-force-response": ("external-force", assert_property_response, 2, False, ()),
+    "inertia-torque-response": ("external-force", assert_property_response, 2, False, ()),
     "object-obs-robot-pose": ("obs-under-pose", assert_object_obs_under_pose, 2, True, ()),
     "pose-jitter-settle": ("jitter-settle", assert_pose_jitter_settle, 2, True, ()),
     "loader-invariance": ("loader-invariance-freefall", assert_loader_invariance, 1, True, ()),
@@ -1431,6 +1526,7 @@ def main() -> int:
     parser.add_argument("--headless", choices=["true", "false"], default="true")
     parser.add_argument("--record", default=None, metavar="DIR", help="save a video of the run to DIR")
     parser.add_argument("--result-file", default=None, help="write 'OK' here after PASS (teardown-robust)")
+    add_isaacsim6_arguments(parser)
     args = parser.parse_args()
     headless = args.headless == "true"
 
@@ -1441,6 +1537,9 @@ def main() -> int:
     # invocation with an unsupported combo — they exit with SKIP_EXIT_CODE (translated to a real
     # pytest.skip by run_harness) rather than a silent pass, and bail before any sim build.
     is_mujoco = args.simulator in ("mujoco", "mjwarp")
+    if args.simulator == "isaacsim6" and args.physics_backend == "newton" and args.scenario in NEWTON_UNSUPPORTED:
+        print(f"SKIP: {NEWTON_UNSUPPORTED[args.scenario]} is unsupported by Newton MJWarp")
+        return SKIP_EXIT_CODE
     if not mujoco_ok and is_mujoco:
         print(f"SKIP: scenario '{args.scenario}' is Isaac-only (no equivalent on MuJoCo)")
         return SKIP_EXIT_CODE
@@ -1459,14 +1558,16 @@ def main() -> int:
     twin_link_physics = _twin_robot_link_physics()
     robot_key = "onelink-box" if args.scenario in twin_link_physics else args.robot
 
-    config = _build_run_sim_config(args.simulator, scene_key, robot_key, args.terrain, args.record)
+    config = configure_isaacsim6(
+        _build_run_sim_config(args.simulator, scene_key, robot_key, args.terrain, args.record), args
+    )
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
     config = dataclasses.replace(
         config,
         device=device,
         training=dataclasses.replace(config.training, num_envs=args.num_envs, headless=headless),
     )
-    if args.simulator == "isaacsim6" and args.scenario == "dr-damping-governs":
+    if args.simulator == "isaacsim6" and args.physics_backend == "physx" and args.scenario == "dr-damping-governs":
         # Live USD damping on cloned bodies requires Kit's PhysX listener in
         # this SDK. Other headless scenarios retain the standalone runtime.
         sim_cfg = config.simulator.config
@@ -1540,6 +1641,13 @@ def main() -> int:
         pre_hook(sim, pre_env_ids, torch)
 
     sim.prepare_sim()
+    if args.simulator == "isaacsim6" and args.record is None:
+        from tests.simulators._native_runtime_assertions import assert_native_runtime
+
+        assert not sim.tiled_cameras and sim.video_recorder is None, (
+            "physics-only scenarios must not activate rendering"
+        )
+        assert_native_runtime(physics=args.physics_backend, uses_kit=args.scenario == "dr-damping-governs")
 
     if not headless:
         sim.setup_viewer()
@@ -1598,4 +1706,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    run_and_hard_exit(main)

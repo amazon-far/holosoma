@@ -45,13 +45,13 @@ def _config(device: str, simulator: str):
     from tests.simulators._sim_harness import build_run_sim_config
 
     config = build_run_sim_config(
-        simulator, "panel-target", "g1-29dof", "terrain_locomotion_plane", sensors=_camera_presets.front_cam
+        simulator, "panel-target", "g1-29dof", "terrain_locomotion_plane", sensors=_camera_presets.front_cam_depth
     )
     return dataclasses.replace(
         config,
         device=device,
         time_scale=0.0,
-        training=dataclasses.replace(config.training, num_envs=1, headless=True),
+        training=dataclasses.replace(config.training, num_envs=2, headless=True),
     )
 
 
@@ -59,6 +59,9 @@ def _main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--simulator", choices=["isaacsim", "isaacsim6"], default="isaacsim")
     parser.add_argument("--result-file", default=None, help="write 'OK' here after PASS (teardown-robust)")
+    from tests.simulators._sim_harness import add_isaacsim6_arguments, configure_isaacsim6
+
+    add_isaacsim6_arguments(parser)
     args = parser.parse_args()
 
     failures: list[str] = []
@@ -68,7 +71,7 @@ def _main() -> int:
         if not ok:
             failures.append(name)
 
-    config = _config("cuda:0", args.simulator)
+    config = configure_isaacsim6(_config("cuda:0", args.simulator), args)
     with config.create_task() as task:
         return _check_frames(task, config, check, failures, args.result_file)
 
@@ -80,7 +83,7 @@ def _check_frames(task, config, check, failures: list[str], result_file: str | N
 
     sim, device = task.simulator, task.device
     camera = next(iter(config.sensor))
-    env_ids = torch.arange(1, device=device)
+    env_ids = torch.arange(sim.num_envs, device=device)
     init = config.robot.init_state
     home = sim.env_origins + torch.tensor(list(init.pos), device=device)
     spawn_dof = sim.dof_pos.clone()
@@ -120,7 +123,16 @@ def _check_frames(task, config, check, failures: list[str], result_file: str | N
         """Drive one real task control frame; return the red fraction egressed at its FRAME_END."""
         offset[0] = offset_y
         task.step()
-        return _red_fraction(sim.get_camera_data(camera, "rgb")[0])
+        rgb = sim.get_camera_data(camera, "rgb")
+        depth = sim.get_camera_data(camera, "depth")
+        fractions = [_red_fraction(image) for image in rgb]
+        if offset_y == 0:
+            from tests.simulators.camera_follow_assert import _panel_median_depth
+
+            for tile in range(sim.num_envs):
+                distance = _panel_median_depth(rgb[tile], depth[tile])
+                check(f"frame-depth-env{tile}", distance is not None and abs(distance - 0.89) < 0.06, str(distance))
+        return min(fractions) if offset_y == 0 else max(fractions)
 
     task.reset_envs_idx()
 
@@ -142,6 +154,19 @@ def _check_frames(task, config, check, failures: list[str], result_file: str | N
 
     back = frame(0.0)
     check("returning-frame-shows-its-own-pose", back > VISIBLE_FRACTION, f"red fraction {back:.4f}")
+    state = sim.get_actor_states(["robot"], env_ids).clone()
+    held_rgb, held_depth = sim.get_camera_data(camera, "rgb"), sim.get_camera_data(camera, "depth")
+    owned_rgb, owned_depth = held_rgb.clone(), held_depth.clone()
+    task.reset_envs_idx(torch.tensor([0], device=device))
+    check(
+        "partial-task-reset-isolation",
+        torch.allclose(sim.get_actor_states(["robot"], env_ids)[1], state[1], atol=1e-5, rtol=0),
+    )
+    frame(0.0)
+    check(
+        "frame-buffers-survive-reset-and-capture",
+        torch.equal(held_rgb, owned_rgb) and torch.equal(held_depth, owned_depth),
+    )
 
     if failures:
         print(f"FAILED: {failures}")
@@ -163,19 +188,28 @@ import pytest  # noqa: E402  (the harness half above must not depend on pytest)
 pytestmark = pytest.mark.isaacsim
 
 
-def test_frame_carries_the_state_written_for_it(tmp_path, run_isaacsim_harness):
+@pytest.mark.parametrize(
+    ("physics", "renderer"), [("physx", "isaac_rtx"), ("newton", "isaac_rtx"), ("newton", "ovrtx")]
+)
+def test_frame_carries_the_state_written_for_it(physics, renderer, isaacsim_backend, tmp_path, run_isaacsim_harness):
     """Drive the harness above in its own process and require every check to pass."""
     pytest.importorskip("isaaclab")
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("IsaacSim requires a CUDA device")
+    if physics == "newton" and isaacsim_backend != "isaacsim6":
+        pytest.skip("Newton requires Isaac Lab 3")
 
     result_file = tmp_path / "frame_freshness_isaacsim.txt"
     run_isaacsim_harness(
         Path(__file__).resolve(),
+        "--physics-backend",
+        physics,
+        "--renderer",
+        renderer,
         "--result-file",
         str(result_file),
-        label="isaacsim/frame-freshness",
+        label=f"isaacsim/{physics}/{renderer}/frame-freshness",
         timeout=600,
         result_file=result_file,
     )
