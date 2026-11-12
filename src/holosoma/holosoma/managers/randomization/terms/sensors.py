@@ -26,9 +26,9 @@ def setup_camera_mount(
 
     ``position_range`` and ``euler_deg_range`` give one config range value (a ``[lo, hi]`` pair or a
     spec dict) per axis: ``[x, y, z]`` position offsets in meters and XYZ Euler offsets in degrees, in
-    the mount frame. The position offset is added to ``mount.position`` and the rotation is applied
-    about the mount frame's axes before ``mount.orientation``. ``sensor`` is the camera's key in the
-    ``--sensor`` dict.
+    the mount frame. The position offset is added to the camera's current mount position and the
+    rotation is applied about the mount frame's axes before its current mount orientation (both from
+    ``SensorManager.get_mount_pose``). ``sensor`` is the camera's key in the ``--sensor`` dict.
     """
     if not enabled:
         return
@@ -39,7 +39,7 @@ def setup_camera_mount(
         )
     manager = env.simulator.sensor_manager
     try:
-        mount = manager.get_sensor(sensor).config.mount
+        base = manager.get_mount_pose(sensor).to(env.device)  # [N, 7] XYZ + XYZW
     except KeyError as exc:
         raise ValueError(f"setup_camera_mount: no sensor named '{sensor}'.") from exc
 
@@ -58,11 +58,9 @@ def setup_camera_mount(
             dim=-1,
         )
     )
-    w, x, y, z = mount.orientation
-    base_quat = torch.tensor([x, y, z, w], dtype=torch.float32, device=env.device).expand(env.num_envs, 4)
-    position = torch.tensor(mount.position, dtype=torch.float32, device=env.device) + offset
+    position = base[:, :3] + offset
     orientation = quat_mul(
-        quat_from_euler_xyz(euler[:, 0], euler[:, 1], euler[:, 2]), base_quat.contiguous(), w_last=True
+        quat_from_euler_xyz(euler[:, 0], euler[:, 1], euler[:, 2]), base[:, 3:].contiguous(), w_last=True
     )
     try:
         manager.set_mount_pose(sensor, torch.cat([position, orientation], dim=-1))
