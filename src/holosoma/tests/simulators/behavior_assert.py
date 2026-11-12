@@ -95,7 +95,12 @@ def _build_run_sim_config(simulator, scene, robot, terrain, record_dir):
         # _focus_camera_on_objects; these offsets frame around that point.
         from holosoma.config_types.video import CartesianCameraConfig
 
-        cam = CartesianCameraConfig(offset=[1.1, 1.1, 0.7], target_offset=[0.0, 0.0, 0.0], smoothing=0.6)
+        cam = CartesianCameraConfig(
+            offset=[1.1, 1.1, 0.7],
+            target_offset=[0.0, 0.0, 0.0],
+            smoothing=0.6,
+            tracking_body_name="baseLink" if robot == "onelink-box" else "auto",
+        )
     config = build_run_sim_config(
         simulator,
         scene,

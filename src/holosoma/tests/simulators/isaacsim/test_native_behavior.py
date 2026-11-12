@@ -41,27 +41,39 @@ def test_newton_rendered_outcomes(harness, args, renderer, isaacsim_backend, run
     assert result.returncode == 0, result.stderr[-3000:]
 
 
-@pytest.mark.parametrize("scene", ["usd-box", "static-box", "velocity-box", "friction-slide", "multibody-override"])
+@pytest.mark.parametrize(
+    "scene",
+    ["usd-box", "g1-largebox", "static-box", "static-box-usd", "velocity-box", "friction-slide", "multibody-override"],
+)
 def test_newton_scene_spawn(scene, isaacsim_backend, run_isaacsim_harness, tmp_path):
     if isaacsim_backend != "isaacsim6":
         pytest.skip("Newton requires Isaac Lab 3")
     result_file = tmp_path / "scene-spawn.txt"
-    run_isaacsim_harness(
-        _HARNESS_DIR / "scene_spawn_assert.py",
-        "--physics-backend",
-        "newton",
-        "--scene",
-        scene,
-        "--num-envs",
-        "4",
-        "--steps",
-        "150",
-        "--result-file",
-        str(result_file),
-        label=f"isaacsim6/newton/{scene}",
-        timeout=900,
-        result_file=result_file,
-    )
+    try:
+        run_isaacsim_harness(
+            _HARNESS_DIR / "scene_spawn_assert.py",
+            "--physics-backend",
+            "newton",
+            "--scene",
+            scene,
+            "--num-envs",
+            "4",
+            "--steps",
+            "150",
+            "--result-file",
+            str(result_file),
+            label=f"isaacsim6/newton/{scene}",
+            timeout=900,
+            result_file=result_file,
+        )
+    except AssertionError as error:
+        # Keep exercising URDF loading. Only the pinned SDK's known view-binding
+        # error is expected; assertion failures and other import errors still fail.
+        actor = {"g1-largebox": "box", "static-box": "pillar"}.get(scene)
+        expected = f"No articulations matching pattern '/World/envs/env_*/{actor}/Geometry/baseLink'"
+        if actor and expected in str(error) and "isaaclab_newton/assets/rigid_object/rigid_object.py" in str(error):
+            pytest.xfail("Pinned Newton URDF rigid-object view binds the body path against an asset-root articulation")
+        raise
 
 
 @pytest.mark.parametrize("renderer", ["isaac_rtx", "ovrtx"])
