@@ -400,12 +400,26 @@ class IsaacSim6Backend(IsaacSimBackendAdapter):
         import warp as wp
 
         if self.options.physics_backend == "newton":
-            from .newton_properties import write_body_property, write_materials
-
             if name == "material_properties":
+                from .newton_properties import write_materials
+
                 write_materials(asset, value, env_ids)
+                return
+            # Newton takes selected rows without PhysX's full_data argument.
+            indices = env_ids.to(device=asset.device, dtype=torch.int64).contiguous()
+            selected = value.to(asset.device).index_select(0, indices)
+            native_ids = wp.from_torch(indices, dtype=wp.int64)
+            if name == "masses":
+                asset.set_masses_index(masses=selected, env_ids=native_ids)
+            elif name == "coms":
+                # Newton's CoM frame stays aligned with the link frame.
+                asset.set_coms_index(coms=selected[..., :3].contiguous(), env_ids=native_ids)
+            elif name == "inertias":
+                if selected.ndim == 2:
+                    selected = selected.unsqueeze(1)
+                asset.set_inertias_index(inertias=selected, env_ids=native_ids)
             else:
-                write_body_property(asset, name, value, env_ids)
+                raise ValueError(f"Unsupported Newton body property {name!r}.")
             return
         if name in ("masses", "coms", "inertias"):
             if name == "inertias" and value.ndim == 2:
