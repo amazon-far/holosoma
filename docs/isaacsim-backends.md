@@ -126,6 +126,15 @@ larger arenas and shared GPU streams did not reliably fix them. Their object
 outcome assertions remain unchanged, and PhysX retains the G1 fixture.
 These controls do not establish stability of unactuated G1 collapse in Newton.
 
+The pinned Newton stack also fails to initialize the tested free and static
+URDF rigid objects: its object view searches for the body path while the model
+labels the articulation with the enclosing asset path. Those two tests still
+execute and expect only that specific SDK initialization error; other failures
+remain failures. Use USD for Newton rigid objects with this SDK pin; USD
+free/static objects and URDF robot articulations are tested normally.
+Converter/config controls did not fix this binding mismatch;
+the tests do not establish whether its origin is native behavior or integration.
+
 Active Newton + Isaac RTX and Newton + OVRTX tests reuse the geometry, moving
 mount, task frame-end and movie harnesses. The six physics/renderer pairings also
 run the cadence and movie-coexistence harness: RGB/depth must match current
