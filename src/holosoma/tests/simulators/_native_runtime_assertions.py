@@ -14,6 +14,25 @@ class NativeRuntimeDependencies(TypedDict):
     libraries: list[str]
 
 
+def snapshot_native_physics(sim):
+    """Read engine state directly so renderer clock bookkeeping cannot hide integration."""
+    import warp as wp
+
+    if sim.backend.options.physics_backend == "newton":
+        state = sim.sim.physics_manager.get_state_0()
+        return tuple(wp.to_torch(getattr(state, name)).clone() for name in ("body_q", "body_qd", "joint_q", "joint_qd"))
+    view = sim._robot.root_view
+    if sim.backend.uses_kit:
+        names = ("get_root_transforms", "get_root_velocities", "get_dof_positions", "get_dof_velocities")
+        return tuple(wp.to_torch(getattr(view, name)()).clone() for name in names)
+    from isaaclab_ov import tensor_types as TT
+
+    return tuple(
+        wp.to_torch(view.get_attribute(name)).clone()
+        for name in (TT.ROOT_POSE, TT.ROOT_VELOCITY, TT.DOF_POSITION, TT.DOF_VELOCITY)
+    )
+
+
 def assert_native_runtime(*, physics: str, uses_kit: bool) -> NativeRuntimeDependencies:
     from isaaclab.utils.version import has_kit
 

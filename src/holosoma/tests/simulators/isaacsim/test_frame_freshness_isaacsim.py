@@ -40,7 +40,7 @@ def _red_fraction(image) -> float:
 
 
 def _config(device: str, simulator: str):
-    """A one-env headless, unpaced IsaacSim task on the panel-target scene with the forward camera."""
+    """A two-env headless, unpaced IsaacSim task with RGB/depth on the panel-target scene."""
     from tests.simulators import _camera_presets
     from tests.simulators._sim_harness import build_run_sim_config
 

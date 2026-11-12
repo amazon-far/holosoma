@@ -67,6 +67,9 @@ def build_cameras(sim: IsaacSim) -> None:
             spawn=camera_spawn_cfg_for(cam, sim_utils),
             width=cam.width,
             height=cam.height,
+            # Lab 3 publishes poses to native renderers through this SDK option.
+            # Fixed world mounts retain the cheaper cached-pose path.
+            update_latest_camera_pose=backend.is_isaacsim6 and cam.mount.target_kind != "world",
             # Keep raw +inf no-return data; CameraRecord applies Holosoma's common depth policy.
             depth_clipping_behavior="none",
         )

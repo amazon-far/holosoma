@@ -40,6 +40,8 @@
     <child link="dummy"/>
     <origin rpy="0 0 0" xyz="0 0 0"/>
     <axis xyz="0 0 1"/>
-    <limit lower="0" upper="0" effort="0" velocity="0"/>
+    <!-- A nonempty range is required by MuJoCo's compiler. The tiny range and
+         near-massless dummy preserve the single-body behavioral fixture. -->
+    <limit lower="-0.0001" upper="0.0001" effort="0" velocity="0"/>
   </joint>
 </robot>

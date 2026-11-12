@@ -62,3 +62,29 @@ def test_newton_scene_spawn(scene, isaacsim_backend, run_isaacsim_harness, tmp_p
         timeout=900,
         result_file=result_file,
     )
+
+
+@pytest.mark.parametrize("renderer", ["isaac_rtx", "ovrtx"])
+@pytest.mark.parametrize("scenario", ["collide-into-fixed", "momentum-transfer"])
+def test_newton_physics_with_active_movie(scenario, renderer, isaacsim_backend, run_isaacsim_harness, tmp_path):
+    if isaacsim_backend != "isaacsim6":
+        pytest.skip("Newton requires Isaac Lab 3")
+    result_file = tmp_path / "rendered-physics.txt"
+    run_isaacsim_harness(
+        _HARNESS_DIR / "behavior_assert.py",
+        "--physics-backend",
+        "newton",
+        "--renderer",
+        renderer,
+        "--scenario",
+        scenario,
+        "--num-envs",
+        "4",
+        "--record",
+        str(tmp_path / "movies"),
+        "--result-file",
+        str(result_file),
+        label=f"isaacsim6/newton/{renderer}/{scenario}/active-movie",
+        timeout=900,
+        result_file=result_file,
+    )
