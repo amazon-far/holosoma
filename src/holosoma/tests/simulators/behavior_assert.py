@@ -1602,19 +1602,6 @@ def main() -> int:
         device=device,
         training=dataclasses.replace(config.training, num_envs=args.num_envs, headless=headless),
     )
-    if args.simulator == "isaacsim6" and args.physics_backend == "newton":
-        # A collapsed G1 plus scene contacts exceeds the pinned SDK's automatic
-        # 300-constraint arena. Size this test workload through existing controls.
-        cfg = config.simulator.config
-        mujoco = dataclasses.replace(
-            cfg.sim.mujoco, warp=dataclasses.replace(cfg.sim.mujoco.warp, nconmax_per_env=512, njmax_per_env=1024)
-        )
-        config = dataclasses.replace(
-            config,
-            simulator=dataclasses.replace(
-                config.simulator, config=dataclasses.replace(cfg, sim=dataclasses.replace(cfg.sim, mujoco=mujoco))
-            ),
-        )
     if args.simulator == "isaacsim6" and args.physics_backend == "physx" and args.scenario == "dr-damping-governs":
         # Live USD damping on cloned bodies requires Kit's PhysX listener in
         # this SDK. Other headless scenarios retain the standalone runtime.

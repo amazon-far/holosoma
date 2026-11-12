@@ -119,8 +119,12 @@ randomization, configured body-damping decay, the damped robot/object twin, and
 the two material-combine-mode scenarios. These skips do not establish a Newton
 equivalent of those semantics. Friction fixtures give object materials higher
 MuJoCo priority so the ground coefficient does not mask the tested value.
-Contact-heavy Newton fixtures explicitly size the existing MJWarp constraint
-and contact arenas; automatic sizing can overflow for a collapsed G1.
+Newton's object-focused wall-collision and support-relocation controls use the
+existing one-link robot fixture. The pinned stack produced intermittent
+overflows/NaNs when an unrelated, unactuated G1 collapsed during those controls;
+larger arenas and shared GPU streams did not reliably fix them. Their object
+outcome assertions remain unchanged, and PhysX retains the G1 fixture.
+These controls do not establish stability of unactuated G1 collapse in Newton.
 
 Active Newton + Isaac RTX and Newton + OVRTX tests reuse the geometry, moving
 mount, task frame-end and movie harnesses. The six physics/renderer pairings also

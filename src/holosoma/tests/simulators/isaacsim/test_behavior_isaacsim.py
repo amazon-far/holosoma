@@ -67,17 +67,26 @@ def test_behavior_isaacsim(scenario, physics, isaacsim_backend, tmp_path, run_is
         if scenario in NEWTON_UNSUPPORTED:
             pytest.skip(f"Newton MJWarp: {NEWTON_UNSUPPORTED[scenario]}")
     result_file = tmp_path / f"behavior_{scenario}.txt"
+    # These assertions concern scene objects, not a collapsing humanoid.
+    # The pinned Newton stack can overflow/diverge during unactuated G1 falls.
+    robot = (
+        "onelink-box"
+        if physics == "newton" and scenario in {"collide-into-fixed", "per-env-relocation"}
+        else "g1-29dof"
+    )
     result = run_isaacsim_harness(
         _HARNESS,
         "--scenario",
         scenario,
         "--physics-backend",
         physics,
+        "--robot",
+        robot,
         "--num-envs",
         "4",
         "--result-file",
         str(result_file),
-        label=f"isaacsim/{physics}/{scenario} (num_envs=4)",
+        label=f"isaacsim/{physics}/{robot}/{scenario} (num_envs=4)",
         timeout=900,
         result_file=result_file,
     )
