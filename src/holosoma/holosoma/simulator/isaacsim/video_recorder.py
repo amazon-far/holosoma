@@ -20,14 +20,15 @@ _VIDEO_SENSOR = "holosoma_video_camera"
 def build_video_camera(sim: IsaacSim) -> Any:
     """Declare the SDK movie camera before reset and renderer stage preparation.
 
-    Lab 2 keeps one global movie view, avoiding a tiled image across every
+    Lab 2 keeps one global movie view, avoiding an image across every
     training environment. Lab 3 includes the cloned movie product in its
     shared sensor batch. Both sensors initialize through ordinary SDK callbacks.
     """
+    from isaaclab.sensors import Camera
     from isaaclab.sim import PinholeCameraCfg
 
     config = sim.video_config
-    if _VIDEO_SENSOR in sim.scene.sensors:
+    if sim.backend.is_isaacsim6 and _VIDEO_SENSOR in sim.scene.sensors:
         raise ValueError(f"Sensor name {_VIDEO_SENSOR!r} is reserved for logger movie recording.")
     aperture = 24.0
     cfg = sim.backend.create_camera_cfg(
@@ -46,7 +47,10 @@ def build_video_camera(sim: IsaacSim) -> Any:
         height=config.height,
         data_types=["rgb"],
     )
-    camera = sim.backend.create_camera(cfg)
+    # Lab 2's Camera publishes moving poses to USD; TiledCamera's view does
+    # not enable that synchronization. Its config extends CameraCfg, so both
+    # versions can use the same ordinary Camera API for movies.
+    camera = Camera(cfg)
     if sim.backend.is_isaacsim6:
         sim.scene.sensors[_VIDEO_SENSOR] = camera
     return camera
