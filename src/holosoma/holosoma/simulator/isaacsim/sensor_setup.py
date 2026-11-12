@@ -443,22 +443,22 @@ def render_sensors(sim: IsaacSim) -> None:
     """Capture when needed, then publish only observations due on the control clock."""
     due = sim.sensor_manager.collect_due() if sim.sensor_manager is not None else []
     recording = sim.video_recorder is not None and sim.video_recorder.is_recording
-    native_recorder = None
+    recorder = None
     if due or recording:
         cameras = (
             list(sim.tiled_cameras.values())
             if sim.backend.shared_camera_rendering
             else [sim.tiled_cameras[record.name] for record in due]
         )
-        if recording and sim.backend.is_isaacsim6:
-            from .native_video_recorder import NativeVideoRecorder
+        if recording:
+            from .video_recorder import IsaacSimVideoRecorder
 
-            native_recorder = cast(NativeVideoRecorder, sim.video_recorder)
-            native_recorder.prepare_frame()
-            cameras.append(native_recorder.camera)
+            recorder = cast(IsaacSimVideoRecorder, sim.video_recorder)
+            recorder.prepare_frame()
+            cameras.append(recorder.camera)
         sim.render_for_sensors()
         sim.backend.refresh_cameras(cameras)
-        if native_recorder is not None:
-            native_recorder.mark_frame_ready()
+        if recorder is not None:
+            recorder.mark_frame_ready()
     render_cameras(sim, due)
     render_lidars(sim)

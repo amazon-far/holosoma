@@ -74,6 +74,9 @@ class NewtonMJWarpManagerAdapter(NewtonMJWarpManager):
     @classmethod
     def _create_solver(cls, model: Any, solver_cfg: HolosomaMJWarpSolverCfg) -> Any:
         cfg = MujocoConfig(**solver_cfg.shared_config)
+        # Reuse Isaac Lab's generic solver factory: it separates constructor
+        # fields from manager metadata for all Newton solver classes. Holosoma's
+        # closed shared_config/extra options are validated explicitly below.
         kwargs = cls._filter_solver_kwargs(SolverMuJoCo, solver_cfg)
         kwargs.pop("ls_parallel", None)
         # Public MjOption controls accepted by the pinned Newton constructor.

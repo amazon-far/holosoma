@@ -148,17 +148,15 @@ def _check_video_freshness(sim, *, memory_stage: bool = False) -> None:
     snapshots = {}
 
     def _assert_camera_pose(position, expected_quat=None):
-        if sim.backend.is_isaacsim6:
-            data = recorder._camera.data
-            positions = data.pos_w.torch[env_id : env_id + 1]
-            orientations = data.quat_w_opengl.torch[env_id : env_id + 1]
-        else:
-            native_positions, native_orientations = recorder._view.get_world_poses()
         if not sim.backend.is_isaacsim6:
-            positions = native_positions
-            orientations = native_orientations[:, [1, 2, 3, 0]]
+            # Lab 2 tiled-camera poses are cached unless explicitly requested.
+            recorder.camera.cfg.update_latest_camera_pose = True
+            recorder.camera.update(dt=0.0, force_recompute=True)
+        data = recorder.camera.data
+        positions = sim.backend.tensor(data.pos_w)[env_id : env_id + 1]
+        orientations = sim.backend.quat_from_native(sim.backend.tensor(data.quat_w_opengl))[env_id : env_id + 1]
         expected_position = torch.tensor([position], device=positions.device, dtype=positions.dtype)
-        assert positions.shape == (1, 3), "record_env_id was used as an index into a singleton camera view"
+        assert positions.shape == (1, 3), "record_env_id did not select exactly one camera instance"
         assert torch.allclose(positions, expected_position, atol=1e-5), "video camera pose did not update"
         if expected_quat is not None:
             expected = torch.tensor([expected_quat], device=orientations.device, dtype=orientations.dtype)
@@ -252,10 +250,7 @@ def _check_video_freshness(sim, *, memory_stage: bool = False) -> None:
     for movie in movies:
         _check_saved_video(movie, snapshots, expected_frame_count=72)
     recorder.cleanup()
-    if not sim.backend.is_isaacsim6:
-        assert recorder._camera_prim_path is None and recorder._view is None, "video camera cleanup did not finish"
-    else:
-        assert recorder._camera is None and recorder.worker_stopped, "native movie recorder did not close"
+    assert recorder.camera is None and recorder.worker_stopped, "SDK movie recorder did not close"
     print(
         f"PASS: video-only panel motion right={right:.1f} left={left:.1f} returned={returned:.1f}; "
         f"camera motion left={camera_left:.1f} right={camera_right:.1f}; movie saved"

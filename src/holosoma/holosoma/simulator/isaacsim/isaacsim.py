@@ -55,7 +55,7 @@ from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.simulator.isaacsim.state_adapter import IsaacSimStateAdapter
 from holosoma.simulator.isaacsim.prim_utils import log_robot_properties, print_prim_tree
-from holosoma.simulator.isaacsim.video_recorder import IsaacSimVideoRecorder
+from holosoma.simulator.isaacsim.video_recorder import IsaacSimVideoRecorder, build_video_camera
 from holosoma.simulator.shared.virtual_gantry import (
     VirtualGantry,
     create_virtual_gantry,
@@ -186,19 +186,14 @@ class IsaacSim(BaseSimulator):
         # the produced video matches the simulation
         # self.metadata["render_fps"] = 1. / self.config.sim.fps * self.config.sim.control_decimation
 
-        self._sim_step_counter = 0
+        self._sim_step_counter: int = 0
         self._viewer_render_step: int | None = None
 
         # Set True by the keyboard controller's push-robots key; polled by external tooling.
         self.push_requested: bool = False
 
         if self.video_config.enabled:
-            if not self.backend.is_isaacsim6:
-                self.video_recorder = IsaacSimVideoRecorder(self.video_config, self)
-            else:
-                from holosoma.simulator.isaacsim.native_video_recorder import NativeVideoRecorder
-
-                self.video_recorder = NativeVideoRecorder(self.video_config, self)
+            self.video_recorder = IsaacSimVideoRecorder(self.video_config, self)
 
         # debug visualization
         # self.draw = _debug_draw.acquire_debug_draw_interface()
@@ -297,9 +292,7 @@ class IsaacSim(BaseSimulator):
         # Perception cameras: one TiledCamera per configured camera, as a child prim of its
         # mount body so it follows that body, created before clone so it replicates per env.
         sensor_setup.build_sensors(self)
-        if self.video_config.enabled and self.backend.is_isaacsim6:
-            from holosoma.simulator.isaacsim.native_video_recorder import build_video_camera
-
+        if self.video_config.enabled:
             build_video_camera(self)
 
         # Author the light rig under env_0 before cloning so each environment gets its own lights; an

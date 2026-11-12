@@ -194,3 +194,8 @@ class IsaacSim5Backend(IsaacSimBackendAdapter):
         from isaaclab.sensors import TiledCamera
 
         return TiledCamera(cfg)
+
+    def refresh_cameras(self, cameras: list[Any]) -> None:
+        """Extract requested products from the completed Kit render without advancing time."""
+        for camera in cameras:
+            camera.update(dt=0.0, force_recompute=True)
