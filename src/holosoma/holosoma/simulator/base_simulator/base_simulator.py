@@ -19,6 +19,7 @@ from holosoma.simulator.base_simulator.state import SimState, StateTensor
 from holosoma.simulator.shared.external_wrench import ExternalWrenchAccumulator, WrenchTarget
 from holosoma.simulator.shared.object_registry import ObjectRegistry, ObjectType
 from holosoma.simulator.shared.scene_types import SceneInterface
+from holosoma.simulator.shared.sensor_manager import SensorManager
 from holosoma.simulator.types import ActorIndices, ActorNames, ActorPoses, ActorStates, EnvIds
 from holosoma.utils.experiment_paths import get_video_dir
 from holosoma.utils.safe_torch_import import torch
@@ -27,7 +28,6 @@ from holosoma.utils.simulator_config import SimulatorType, get_simulator_type
 if TYPE_CHECKING:
     from holosoma.simulator.shared.camera_controller import CameraController
     from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
-    from holosoma.simulator.shared.sensor_manager import SensorManager
     from holosoma.simulator.shared.simulator_bridge import SimulatorBridge
     from holosoma.simulator.shared.video_recorder import VideoRecorderInterface
     from holosoma.simulator.shared.virtual_gantry import VirtualGantry
@@ -221,7 +221,7 @@ class BaseSimulator:
         self._kinematic_time = 0.0
         self.hooks = HookRegistry(base_rates=self._hook_base_rates())
         # Egress consumers follow this handle, so it runs ahead of them whatever order they
-        # register in. No-ops until a backend builds its sensor manager.
+        # register in. No-ops until a backend registers sensors.
         self.sensor_render_hook: HookHandle = self.hooks.add(
             Phase.FRAME_END, self.render_sensors, name="sensors.render"
         )
@@ -244,8 +244,11 @@ class BaseSimulator:
         # Bridge system
         self.bridge: SimulatorBridge | None = None
 
-        # Mounted sensors, populated by each backend during setup. The render hook no-ops until it exists.
-        self.sensor_manager: SensorManager | None = None
+        # The registry stays available even without sensors; native resources are created at setup.
+        sim_cfg = self.simulator_config.sim
+        self.sensor_manager = SensorManager(
+            device, sim_cfg.fps / sim_cfg.control_decimation_steps, num_envs=self.training_config.num_envs
+        )
 
         # To be overridden by subclasses
         self.height_samples = None
@@ -1013,8 +1016,7 @@ class BaseSimulator:
 
         Body poses must already reflect the state written for those envs.
         """
-        if self.sensor_manager is not None:
-            self.sensor_manager.rerender(env_ids)
+        self.sensor_manager.rerender(env_ids)
 
     def get_camera_data(
         self,
@@ -1056,10 +1058,10 @@ class BaseSimulator:
         Raises
         ------
         NotImplementedError
-            If the backend has no camera support (no ``sensor_manager``).
+            If no camera with this name has been created.
         """
-        if self.sensor_manager is None or not self.sensor_manager.has_camera(name):
-            created = [] if self.sensor_manager is None else self.sensor_manager.camera_names
+        if not self.sensor_manager.has_camera(name):
+            created = self.sensor_manager.camera_names
             raise NotImplementedError(f"{type(self).__name__} has no camera '{name}'. Created cameras: {created}.")
         record = self.sensor_manager.get(name)
         if data_type not in record.buffers:
@@ -1072,8 +1074,6 @@ class BaseSimulator:
 
     def get_sensor_names(self) -> list[str]:
         """Names of all created sensors, or ``[]`` if none."""
-        if self.sensor_manager is None:
-            return []
         return self.sensor_manager.names
 
     def get_lidar_data(
@@ -1090,8 +1090,8 @@ class BaseSimulator:
         LiDAR's ``range_clipping_behavior``: the default ``"none"`` uses XYZ NaNs and ``+inf``;
         ``"max"`` uses the ray endpoint at ``far``; and ``"zero"`` uses the sensor origin.
         """
-        if self.sensor_manager is None or not self.sensor_manager.has_lidar(name):
-            created = [] if self.sensor_manager is None else self.sensor_manager.lidar_names
+        if not self.sensor_manager.has_lidar(name):
+            created = self.sensor_manager.lidar_names
             raise NotImplementedError(f"{type(self).__name__} has no LiDAR '{name}'. Created LiDARs: {created}.")
         record = self.sensor_manager.get_lidar(name)
         if data_type not in record.buffers:

@@ -126,7 +126,7 @@ def test_constructor_defers_plugins_until_explicit_installation() -> None:
         sim=SimpleNamespace(kinematic_playback=False, fps=200.0, control_decimation_steps=4),
     )
     tyro_config = SimpleNamespace(
-        training=SimpleNamespace(),
+        training=SimpleNamespace(num_envs=1),
         simulator=simulator_config,
         scene=SimpleNamespace(),
         sensors={},

@@ -36,7 +36,7 @@ from holosoma.simulator.mujoco.robot_addressing import (
     resolve_robot_body_ids,
 )
 from holosoma.simulator.mujoco.scene_manager import MujocoSceneManager
-from holosoma.simulator.mujoco.sensor_setup import create_sensors, offset_world_cameras, render_sensors
+from holosoma.simulator.mujoco.sensor_setup import create_sensors, initialize_camera_mounts, render_sensors
 from holosoma.simulator.mujoco.video_recorder import MuJoCoVideoRecorder
 from holosoma.simulator.mujoco.viewer_input import ViewerInputController
 from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
@@ -610,11 +610,9 @@ class MuJoCo(BaseSimulator):
         # Create Scene following SceneInterface protocol
         self.scene = EnvOriginsScene(self.env_origins, self.sim_device)
 
-        # World-mount cameras are worldbody children, so (unlike body-attached cameras) they don't
-        # inherit the per-env body offset; place each env's world camera at its own origin now that
-        # env_origins exist. WarpBackend only (Classic is single-env); the backend no-ops if it has
-        # no world cameras or num_envs==1.
-        self._offset_world_cameras()
+        # Use the same mount frame at setup and runtime, including fused parents and world mounts
+        # in a single environment with a nonzero origin.
+        initialize_camera_mounts(self)
 
         # Initialize contact forces tensor with correct shape [num_envs, num_bodies, 3]
         # This matches the interface expected by holosoma (IsaacSim pattern)
@@ -1219,14 +1217,6 @@ class MuJoCo(BaseSimulator):
     def _create_sensors(self) -> None:
         """Create one shared manager for mounted cameras and LiDARs after model compilation."""
         create_sensors(self)
-
-    def _offset_world_cameras(self) -> None:
-        """Place each env's world-mount cameras at its own origin (WarpBackend multi-env only).
-
-        Delegates to ``sensor_setup.offset_world_cameras``; no-op for Classic (single-env) and
-        the no-camera / no-world-camera cases.
-        """
-        offset_world_cameras(self)
 
     def render_sensors(self) -> None:
         """Capture all due mounted sensors into their cached buffers."""
