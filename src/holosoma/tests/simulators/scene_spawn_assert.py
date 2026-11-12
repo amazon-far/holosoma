@@ -146,6 +146,8 @@ def _check_video_freshness(sim, *, memory_stage: bool = False) -> None:
     origin = sim.env_origins[env_id]
     decimation = sim.simulator_config.sim.control_decimation_steps
     snapshots = {}
+    if not sim.backend.is_isaacsim6:
+        assert recorder.camera.num_instances == 1, "Lab 2 movies must not allocate a view per training environment"
 
     def _assert_camera_pose(position, expected_quat=None):
         if not sim.backend.is_isaacsim6:
@@ -153,8 +155,9 @@ def _check_video_freshness(sim, *, memory_stage: bool = False) -> None:
             recorder.camera.cfg.update_latest_camera_pose = True
             recorder.camera.update(dt=0.0, force_recompute=True)
         data = recorder.camera.data
-        positions = sim.backend.tensor(data.pos_w)[env_id : env_id + 1]
-        orientations = sim.backend.quat_from_native(sim.backend.tensor(data.quat_w_opengl))[env_id : env_id + 1]
+        index = recorder.camera_index
+        positions = sim.backend.tensor(data.pos_w)[index : index + 1]
+        orientations = sim.backend.quat_from_native(sim.backend.tensor(data.quat_w_opengl))[index : index + 1]
         expected_position = torch.tensor([position], device=positions.device, dtype=positions.dtype)
         assert positions.shape == (1, 3), "record_env_id did not select exactly one camera instance"
         assert torch.allclose(positions, expected_position, atol=1e-5), "video camera pose did not update"

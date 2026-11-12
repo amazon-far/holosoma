@@ -293,7 +293,7 @@ class IsaacSim(BaseSimulator):
         # mount body so it follows that body, created before clone so it replicates per env.
         sensor_setup.build_sensors(self)
         if self.video_config.enabled:
-            build_video_camera(self)
+            self.video_camera: Any = build_video_camera(self)
 
         # Author the light rig under env_0 before cloning so each environment gets its own lights; an
         # empty rig authors nothing, leaving only the scene asset's baked lights.
