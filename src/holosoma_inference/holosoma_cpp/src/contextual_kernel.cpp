@@ -230,7 +230,9 @@ void Policy::SetFixedArm(int side) {
   ApplyFixedArm();
 }
 void Policy::SetDz(bool enabled) {
-  if (enabled && !has_climb_head()) throw std::invalid_argument("dz requires climb_pred");
+  // Without a climb head, column 14 is a climbing gait only when the config says it was trained as one.
+  if (enabled && !has_climb_head() && !options_.climbing_column_trained)
+    throw std::invalid_argument("dz requires climb_pred (or contextual.climbing_column_trained)");
   dz_ = enabled;
   ResolveClimb();
 }

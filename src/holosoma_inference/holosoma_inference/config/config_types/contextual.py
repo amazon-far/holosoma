@@ -16,6 +16,13 @@ class ContextualConfig:
     depth_height: int = 58
     depth_width: int = 87
     require_climb_head: bool = True
+    climbing_column_trained: bool = False
+    """Command column 14 is a trained climbing gait though the model exports no ``climb_pred``.
+
+    Lets an external dz select it under the default rules (``climb_enter: dz_or_pred``,
+    ``climb_exit: both_off``): climb while dz is on. Off by default: for a model without the head,
+    column 14 is usually not a climbing gait.
+    """
     force_manual_climbing: bool = False
     climb_enter: str = "dz_or_pred"
     climb_exit: str = "both_off"

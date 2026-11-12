@@ -308,6 +308,7 @@ std::optional<ContextualConfig> parse_contextual(const YAML::Node& node, const s
   r.optional("depth_height", config.depth_height);
   r.optional("depth_width", config.depth_width);
   r.optional("require_climb_head", config.require_climb_head);
+  r.optional("climbing_column_trained", config.climbing_column_trained);
   r.optional("force_manual_climbing", config.force_manual_climbing);
   r.optional("climb_enter", config.climb_enter);
   r.optional("climb_exit", config.climb_exit);

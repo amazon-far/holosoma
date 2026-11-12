@@ -161,6 +161,25 @@ TEST(ContextualApi, ValidatesGraphAndOptionalClimbHeadThroughPublicFactory) {
   EXPECT_NO_THROW(policy.step(state(), input));
   input.dz = true;
   EXPECT_THROW(policy.step(state(), input), std::invalid_argument);
+  // A model whose column 14 is a trained climbing gait climbs on dz alone, under the default rules.
+  auto trained = config("no-head.onnx");
+  trained.contextual->require_climb_head = false;
+  trained.contextual->climbing_column_trained = true;
+  Policy climber(trained);
+  ContextualInput forward;
+  forward.velocity = std::array<double, 3>{.5, 0, 0};
+  EXPECT_NO_THROW(climber.step(state(), forward));
+  EXPECT_FALSE(core(climber).climbing());
+  forward.dz = true;
+  EXPECT_NO_THROW(climber.step(state(), forward));
+  EXPECT_TRUE(core(climber).climbing());
+  EXPECT_EQ(core(climber).effective_command(), 14);
+  forward.dz = false;
+  EXPECT_NO_THROW(climber.step(state(), forward));
+  EXPECT_FALSE(core(climber).climbing());
+  // A rule that reads climb_pred still needs the head.
+  trained.contextual->climb_enter = "dz_and_pred";
+  EXPECT_THROW(Policy{trained}, std::runtime_error);
   Policy invalid(config("nonfinite.onnx"));
   EXPECT_THROW(invalid.step(state(), ContextualInput{}), std::invalid_argument);
 }
