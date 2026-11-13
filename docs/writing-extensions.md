@@ -147,7 +147,7 @@ Group string is `holosoma.config.<family>`, registry var is `<FAMILY>_REGISTRY` 
 
 ## Plugins — custom per-step behavior
 
-A **plugin** is a bundle of behavior — a set of lifecycle hooks plus whatever state they need — that runs your code at points in the simulator loop, without subclassing a backend. It's built on the hook system (`simulator.hooks`, `Phase`) and can depend on other simulator contracts (the virtual gantry, the clock, …). Write a class taking `(cfg, simulator)` that registers hooks in `__init__`, and pair it with a `PluginConfig` (its CLI-visible knobs). There is no base class to inherit.
+A **plugin** is a bundle of behavior — a set of lifecycle hooks plus whatever state they need — that runs your code at points in the task's control loop, without subclassing the task or a backend. It's built on the hook system (`task.hooks`, `Phase`) and can use the task's simulator (`task.simulator`: state, the virtual gantry, the clock, …). Write a class taking `(cfg, task)` that registers hooks in `__init__`, and pair it with a `PluginConfig` (its CLI-visible knobs). There is no base class to inherit.
 
 ```python
 # my_plugins.py — log the robot's height, sampled at a fixed rate
@@ -155,7 +155,7 @@ from dataclasses import dataclass
 from loguru import logger
 from holosoma.config_types.plugin import PluginConfig
 from holosoma.config_values.plugin import PLUGIN_REGISTRY
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 
 @dataclass(frozen=True)
 class LogHeightPluginConfig(PluginConfig):
@@ -164,10 +164,10 @@ class LogHeightPluginConfig(PluginConfig):
         return LogHeightPlugin               # import lazily here if the impl is heavy
 
 class LogHeightPlugin:
-    def __init__(self, cfg: LogHeightPluginConfig, simulator):
-        self.cfg, self.simulator = cfg, simulator
+    def __init__(self, cfg: LogHeightPluginConfig, task):
+        self.cfg, self.simulator = cfg, task.simulator
         # register one hook per phase you care about:
-        simulator.hooks.add(Phase.FRAME_END, self.log, name="log_height", every=cfg.every)
+        task.hooks.add(Phase.FRAME_END, self.log, name="log_height", every=cfg.every)
 
     def log(self):                           # signature = the phase's payload (below)
         logger.info(f"height = {self.simulator.robot_root_states[0, 2]:.3f}")
@@ -179,39 +179,39 @@ PLUGIN_REGISTRY.add("log_height", LogHeightPluginConfig())
 python -m holosoma.run_sim --import-file my_plugins.py plugin.h:log_height --plugin.h.every=5Hz
 ```
 
-Select plugins as the dynamic-dict `plugin.<key>:<preset>` (per-key leaf overrides via `--plugin.<key>.<field>=…`); each is constructed once in `BaseSimulator.install_plugins`, after the backend is ready. Ship them packaged via the `holosoma.config.plugin` entry-point group like any other preset.
+Select plugins as the dynamic-dict `plugin.<key>:<preset>` (per-key leaf overrides via `--plugin.<key>.<field>=…`); each is constructed once, after the task has finished setting up. Ship them packaged via the `holosoma.config.plugin` entry-point group like any other preset.
 
 ### Phases
 
-A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=None, every=1, key=None, after=(), before=())`, which returns the `HookHandle` others order themselves against. `name` labels the hook in diagnostics and defaults to the callback's qualname. Per control frame the loop emits, in order:
+A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=None, every=1, key=None, after=(), before=())`, which returns the `HookHandle` others order themselves against. `name` labels the hook in diagnostics and defaults to the callback's qualname. Per control frame they fire in this order; the simulator emits the per-substep phases around each physics step, and the task emits the rest:
 
-| Phase | When | Callback args | Cadence |
-|---|---|---|---|
-| `FRAME_BEGIN` | before the physics substeps (push commands to the sim here) | — | control rate |
-| `PRE_STEP` | before each physics substep | — | physics `fps` |
-| `POST_STEP` | after each physics substep (freshest sim time) | — | physics `fps` |
-| `FRAME_END` | after the frame's last substep (read state here) | — | control rate |
-| `EPISODE_START` / `EPISODE_END` | on reset boundaries | `env_id` | per event |
-| `CLOSE` | teardown (release resources); `before`/`after` describe execution here too, and ties go to the latest registered | — | once |
+| Phase | Emitted by | When | Callback args | Cadence |
+|---|---|---|---|---|
+| `FRAME_BEGIN` | task | before the physics substeps (push commands to the sim here) | — | control rate |
+| `PRE_STEP` | simulator | before each physics substep | — | physics `fps` |
+| `POST_STEP` | simulator | after each physics substep (freshest sim time) | — | physics `fps` |
+| `FRAME_END` | task | after the frame's last substep (read state here) | — | control rate |
+| `EPISODE_START` / `EPISODE_END` | task (motion playback also emits them at clip boundaries) | on reset boundaries | `env_id` | per event |
+| `CLOSE` | task | teardown (release resources); `before`/`after` describe execution here too, and ties go to the latest registered | — | once |
 
 ### Ordering
 
 Within a phase, hooks run in registration order, which for plugins means the order their slots were selected — so declare what you need with `after` / `before`. Unconstrained hooks keep their order relative to each other.
 
-**Depend on the handle `add` returns.** The framework keeps the ones others follow: `simulator.sensor_render_hook`, the bridge's `transport_hook`, and `close_hook` on the shared ROS2 runtime. Keep your own on a public attribute if other code should be able to follow you.
+**Depend on the handle `add` returns.** The framework keeps the ones others follow: `task.simulator.sensor_render_hook`, the bridge's `transport_hook`, and `close_hook` on the shared ROS2 runtime. Keep your own on a public attribute if other code should be able to follow you.
 
 ```python
-simulator.hooks.add(
-    Phase.FRAME_END, self.publish, name="my_plugin.publish", after=simulator.sensor_render_hook,
+task.hooks.add(
+    Phase.FRAME_END, self.publish, name="my_plugin.publish", after=task.simulator.sensor_render_hook,
 )
 ```
 
 **To follow a provider you can't hold**, it publishes a member of its own `Enum` from its constructor and you reference that plus the slot it runs in, which resolves once every plugin is installed:
 
 ```python
-simulator.hooks.add(Phase.FRAME_END, self._publish, name="my_camera.publish", key=CameraHook.PUBLISH)
+task.hooks.add(Phase.FRAME_END, self._publish, name="my_camera.publish", key=CameraHook.PUBLISH)
 
-simulator.hooks.add(                                         # a separately constructed consumer
+task.hooks.add(                                         # a separately constructed consumer
     Phase.FRAME_END, self._inspect, name="my_inspector.read",
     after=[HookRef(self.cfg.follows, CameraHook.PUBLISH)],
 )
@@ -221,7 +221,7 @@ Take the slot through your own config, as sensor routes do; slot keys belong to 
 
 `after` / `before` each take one dependency or a list of them. **Targets are required**, so wrap the ones a run may lack in `if_present(...)`. A disabled target satisfies the reference but contributes no edge, so ordering reflects only the hooks that fire.
 
-**`hooks.validate()` runs at the end of `install_plugins`**, resolving every phase without calling anything, so a cycle or an unresolved target stops the run before the first step. Hooks registered later are checked when their phase next resolves. `hooks.names(phase)` returns the resolved order.
+**`hooks.validate()` runs at the end of task setup**, after every plugin is built, resolving every phase without calling anything, so a cycle or an unresolved target stops the run before the first step. Hooks registered later are checked when their phase next resolves. `hooks.names(phase)` returns the resolved order.
 
 **`CLOSE` sorts like every other phase** but breaks ties toward the latest registered, so teardown reverses construction while `before`/`after` still describe execution: a node's cleanup declares `before=[runtime.close_hook]`. It is one pass that stops at the first failing callback.
 

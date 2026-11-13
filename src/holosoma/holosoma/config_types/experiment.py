@@ -144,7 +144,7 @@ class ExperimentConfig:
     )
     # Plugins, declared per-key as ``plugin.<key>:<variant>`` (resolved from PLUGIN_REGISTRY),
     # optionally with per-key field overrides. Includes the camera-frame egress sinks (ROS2 publish,
-    # viz window, video record) and any custom plugin. Installed after simulator setup.
+    # viz window, video record) and any custom plugin. Built by the task at the end of its setup.
     plugin: dict[str, Annotated[PluginConfig, UseRegistry(holosoma.config_values.plugin.PLUGIN_REGISTRY)]] = (
         dataclasses.field(default_factory=dict)
     )

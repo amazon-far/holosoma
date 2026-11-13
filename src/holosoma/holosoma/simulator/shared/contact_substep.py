@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.utils.safe_torch_import import torch
 
 

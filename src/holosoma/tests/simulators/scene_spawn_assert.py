@@ -428,7 +428,6 @@ def main() -> int:
     # this is skipped, so render() below must tolerate a None viewer.
     if not headless:
         sim.setup_viewer()
-    sim.install_plugins()
 
     # Start recording if --record was given. Each backend captures a frame inside its own
     # simulate_at_each_physics_step (gated on is_recording), so the existing step loop fills the

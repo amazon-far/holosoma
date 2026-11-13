@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 from holosoma.envs.base_task.base_task import BaseTask
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.utils.sim_utils import format_simulation_performance
 
 _PERFORMANCE_LOG_INTERVAL_STEPS = 1000

@@ -18,10 +18,10 @@ from holosoma.config_types.env import EnvConfig
 from holosoma.config_types.plugin import MotionPlaybackPluginConfig
 from holosoma.config_types.robot import RobotConfig
 from holosoma.envs.simulation_task import SimulationTask
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.managers.randomization import RandomizationManager
 from holosoma.managers.termination import TerminationManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.shared.scene_types import EnvOriginsScene
 
 FPS = 200
@@ -94,7 +94,10 @@ class _FakeSim:
                 f"the loop ran {self.substeps} substeps without reaching {self.frames} frame(s) "
                 f"(budget {self._budget}); egressed {len(self.captured)}"
             )
+        # Physics phases bracket the substep here, as BaseSimulator.simulate_at_each_physics_step emits them.
+        self.hooks.emit(Phase.PRE_STEP)
         self.phases.append(SUBSTEP)
+        self.hooks.emit(Phase.POST_STEP)
 
     def _scene_state(self) -> object:
         """What a draw captures: the value PRE_STEP wrote."""
@@ -329,8 +332,9 @@ def test_playback_egresses_every_clip_frame_exactly_once(
         fps=FPS / decimation,  # one clip frame per control step
         n_run=1,
     )
-    cfg.get_cls()(cfg, sim)
+    task = _LoopTask(sim)
+    cfg.get_cls()(cfg, task)
 
-    _run(sim)
+    task.run()
 
     assert sim.captured == CLIP_JOINT0 * clips

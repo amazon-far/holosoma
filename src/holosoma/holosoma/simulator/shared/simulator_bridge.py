@@ -14,13 +14,13 @@ from loguru import logger
 
 from holosoma.bridge import BasicSdk2Bridge, create_sdk2py_bridge
 from holosoma.config_types.simulator import BridgeConfig
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 from holosoma.utils.clock import ClockPub
 from holosoma.utils.safe_torch_import import torch
 
 if TYPE_CHECKING:
+    from holosoma.hooks import HookRegistry
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-    from holosoma.simulator.base_simulator.hooks import HookRegistry
 
 
 class SimulatorBridge:

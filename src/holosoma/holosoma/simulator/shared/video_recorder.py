@@ -20,14 +20,14 @@ import numpy as np
 import numpy.typing as npt
 from loguru import logger
 
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 from holosoma.simulator.shared.camera_controller import CameraController, CameraParameters
 from holosoma.utils.video_utils import create_video, format_command_labels, overlay_text_on_image
 
 if TYPE_CHECKING:
     from holosoma.config_types.video import VideoConfig
+    from holosoma.hooks import HookRegistry
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-    from holosoma.simulator.base_simulator.hooks import HookRegistry
 
 
 class VideoRecorderInterface(ABC):

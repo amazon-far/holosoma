@@ -24,7 +24,7 @@ PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from holosoma.simulator.base_simulator.hooks import Phase  # noqa: E402
+from holosoma.hooks import Phase  # noqa: E402
 from tests.simulators._sim_harness import (  # noqa: E402
     build_run_sim_config,
     launch_simulator,

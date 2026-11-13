@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
 from holosoma.utils.safe_torch_import import torch
 
