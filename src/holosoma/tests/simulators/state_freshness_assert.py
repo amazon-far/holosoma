@@ -130,7 +130,7 @@ def _reference_bodies_mujoco(sim):
 def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
     import torch
 
-    from holosoma.simulator.base_simulator.hooks import Phase
+    from holosoma.hooks import Phase
 
     decimation = sim.simulator_config.sim.control_decimation_steps
     worst: dict[str, float] = {}

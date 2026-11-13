@@ -36,7 +36,7 @@ from holosoma.config_types.sensor import (
     IsaacSimCameraConfig,
     MujocoCameraConfig,
 )
-from holosoma.simulator.base_simulator.hooks import HookDependency, Phase
+from holosoma.hooks import HookDependency, Phase
 from holosoma.utils.simulator_config import SimulatorType
 
 if TYPE_CHECKING:

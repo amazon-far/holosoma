@@ -9,8 +9,8 @@ import numpy.typing as npt
 import pytest
 
 from holosoma.config_types.simulator import BridgeConfig
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.shared import simulator_bridge
 from holosoma.simulator.shared.simulator_bridge import SimulatorBridge
 

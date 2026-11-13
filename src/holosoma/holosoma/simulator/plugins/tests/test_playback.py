@@ -19,7 +19,7 @@ import pytest
 import torch
 
 from holosoma.config_types.plugin import MotionPlaybackPluginConfig
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.plugins.playback import MotionPlaybackPlugin, PlaybackClip
 from holosoma.simulator.plugins.playback import playback as playback_module
 from holosoma.simulator.shared.scene_types import EnvOriginsScene

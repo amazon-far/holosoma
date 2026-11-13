@@ -18,7 +18,7 @@ mujoco = pytest.importorskip("mujoco")
 pytestmark = pytest.mark.mujoco_classic
 
 from holosoma.config_types.plugin import MotionPlaybackPluginConfig  # noqa: E402
-from holosoma.simulator.base_simulator.hooks import Phase  # noqa: E402
+from holosoma.hooks import Phase  # noqa: E402
 from tests.simulators.mujoco._build import build_classic_sim  # noqa: E402
 
 ROOT_Z = 1.5  # clip root height: held in the air, so any gravity leak shows immediately

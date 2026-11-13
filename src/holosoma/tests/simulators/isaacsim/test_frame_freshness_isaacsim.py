@@ -75,7 +75,7 @@ def _main() -> int:
 def _check_frames(task, config, check, failures: list[str], result_file: str | None) -> int:
     import torch
 
-    from holosoma.simulator.base_simulator.hooks import Phase
+    from holosoma.hooks import Phase
 
     sim, device = task.simulator, task.device
     camera = next(iter(config.sensor))

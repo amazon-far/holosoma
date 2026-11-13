@@ -18,10 +18,10 @@ from holosoma.config_types.env import EnvConfig
 from holosoma.config_types.plugin import MotionPlaybackPluginConfig
 from holosoma.config_types.robot import RobotConfig
 from holosoma.envs.simulation_task import SimulationTask
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.managers.randomization import RandomizationManager
 from holosoma.managers.termination import TerminationManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 from holosoma.simulator.shared.scene_types import EnvOriginsScene
 
 FPS = 200

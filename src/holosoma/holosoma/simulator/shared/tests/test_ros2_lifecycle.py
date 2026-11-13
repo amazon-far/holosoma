@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.shared.ros2_lifecycle import (
     ROS2Runtime,
     close_ros2_executor,

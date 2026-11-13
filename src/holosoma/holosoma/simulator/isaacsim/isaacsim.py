@@ -33,7 +33,7 @@ from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 from holosoma.simulator.isaacsim.event_cfg import EventCfg
 from holosoma.simulator.isaacsim.events import randomize_body_com, randomize_rigid_body_inertia
 from holosoma.simulator.isaacsim import light_setup, sensor_setup

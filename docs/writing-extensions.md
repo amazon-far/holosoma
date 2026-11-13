@@ -155,7 +155,7 @@ from dataclasses import dataclass
 from loguru import logger
 from holosoma.config_types.plugin import PluginConfig
 from holosoma.config_values.plugin import PLUGIN_REGISTRY
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 
 @dataclass(frozen=True)
 class LogHeightPluginConfig(PluginConfig):

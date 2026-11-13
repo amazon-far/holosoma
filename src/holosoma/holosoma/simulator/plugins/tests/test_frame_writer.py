@@ -25,7 +25,7 @@ from loguru import logger
 from holosoma.config_types.frequency import resolve_decimation
 from holosoma.config_types.plugin import FrameWriterPluginConfig
 from holosoma.config_types.sensor import CameraDataType, CameraSensorConfig, SensorMountConfig
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.plugins.frame_writer import FrameWriterPlugin
 from holosoma.utils.simulator_config import SimulatorType
 
