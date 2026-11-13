@@ -18,7 +18,7 @@ Usage:
   python dof_order_assert.py --simulator mujoco     # ClassicBackend, 1 env, cpu
   python dof_order_assert.py --simulator mjwarp     # WarpBackend, cuda
   python dof_order_assert.py --simulator isaacsim   # IsaacSim, cuda
-  python dof_order_assert.py --simulator isaacsim6  # Native Isaac Lab 3, cuda
+  python dof_order_assert.py --simulator isaaclab3  # Native Isaac Lab 3, cuda
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 import tyro
 
 from holosoma.config_types.run_sim import RunSimConfig
-from holosoma.config_types.simulator import BridgeConfig, IsaacSimBackend, VirtualGantryCfg
+from holosoma.config_types.simulator import BridgeConfig, IsaacLabBackend, VirtualGantryCfg
 from tests.simulators import _robot_presets
 from tests.simulators._sim_harness import launch_simulator, step
 
@@ -62,7 +62,7 @@ def _build(simulator: str, num_envs: int, *, use_newton_actuators: bool = True):
     _robot_presets.register()
     argv = [f"simulator:{simulator}", f"robot:{ROBOT}", "terrain:terrain_locomotion_plane", "scene:empty"]
     config = tyro.cli(RunSimConfig, args=argv)
-    if config.simulator.config.isaacsim_backend == IsaacSimBackend.ISAACSIM6:
+    if config.simulator.config.isaaclab_backend == IsaacLabBackend.ISAACLAB3:
         # Make model and authored solver limits deliberately different. The solver
         # readback must preserve the URDF while actuator commands clip to this limit.
         effort_limits = list(config.robot.dof_effort_limit_list)
@@ -78,8 +78,8 @@ def _build(simulator: str, num_envs: int, *, use_newton_actuators: bool = True):
             virtual_gantry=VirtualGantryCfg(enabled=False),
             sim=dataclasses.replace(
                 config.simulator.config.sim,
-                isaacsim6=dataclasses.replace(
-                    config.simulator.config.sim.isaacsim6, use_newton_actuators=use_newton_actuators
+                isaaclab3=dataclasses.replace(
+                    config.simulator.config.sim.isaaclab3, use_newton_actuators=use_newton_actuators
                 ),
             ),
         ),
@@ -116,7 +116,7 @@ def _check_isaac_joint_properties(sim, robot) -> None:
     """Read the solver independently of the actuator config and Holosoma ordering."""
     import torch
 
-    native = sim.backend.is_isaacsim6
+    native = sim.backend.is_isaaclab3
     asset = sim._robot
     view = asset.root_view if native else asset.root_physx_view
     names = list(asset.backend_joint_names if native else asset.joint_names)
@@ -180,7 +180,9 @@ def _check_isaac_joint_properties(sim, robot) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Cross-backend DOF-order assertion harness.")
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim6"])
+    parser.add_argument(
+        "--simulator", required=True, choices=["mujoco", "mjwarp", "isaaclab2", "isaaclab3", "isaacsim"]
+    )
     parser.add_argument("--num-envs", type=int, default=None)
     parser.add_argument("--use-newton-actuators", choices=["true", "false"], default="true")
     parser.add_argument("--result-file", default=None, help="write 'OK' after all checks pass")
@@ -197,8 +199,8 @@ def main() -> int:
     if list(sim.dof_names) != list(robot.dof_names):
         print(f"FAIL: simulator dof_names {sim.dof_names} != config dof_names {robot.dof_names}")
         return 1
-    if args.simulator in ("isaacsim", "isaacsim6"):
-        if sim.backend.is_isaacsim6:
+    if args.simulator in ("isaaclab2", "isaaclab3", "isaacsim"):
+        if sim.backend.is_isaaclab3:
             assert sim.sim.cfg.use_newton_actuators is use_newton_actuators, (
                 "SimulationCfg did not preserve the requested actuator execution path"
             )
@@ -237,7 +239,7 @@ def main() -> int:
         print(f"  TORQUE {joint}: fastest DOF per env {fastest}, its velocity {joint_vel.tolist()}")
         if any(name != joint for name in fastest) or not bool((joint_vel > 0).all()):
             failures.append(f"torque on {joint} did not drive {joint}")
-        if args.simulator in ("isaacsim", "isaacsim6") and sim.backend.is_isaacsim6:
+        if args.simulator in ("isaaclab2", "isaaclab3", "isaacsim") and sim.backend.is_isaaclab3:
             applied = torch.stack([sim.get_dof_forces(env_id) for env_id in range(num_envs)])
             expected = torch.zeros_like(applied)
             expected[:, sim.dof_names.index(joint)] = TORQUE
@@ -245,7 +247,7 @@ def main() -> int:
                 failures.append(f"applied effort for {joint} did not match the commanded effort in every environment")
 
     # 4. CLIPPING (both native actuator execution paths).
-    if args.simulator in ("isaacsim", "isaacsim6") and sim.backend.is_isaacsim6:
+    if args.simulator in ("isaaclab2", "isaaclab3", "isaacsim") and sim.backend.is_isaaclab3:
         import warp as wp
 
         free_fall_root = sim.robot_root_states.clone()

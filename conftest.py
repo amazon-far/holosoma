@@ -42,21 +42,23 @@ _ALL_MARKERS = {
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
+        "--isaaclab-backend",
         "--isaacsim-backend",
-        choices=["isaacsim5", "isaacsim6"],
-        default="isaacsim5",
-        help="Isaac Sim version for the simulator tests (default: isaacsim5)",
+        choices=["isaaclab2", "isaaclab3", "isaacsim"],
+        default="isaaclab2",
+        help="Isaac Sim version for the simulator tests (default: isaaclab2)",
     )
 
 
 @pytest.fixture(scope="session")
-def isaacsim_backend(pytestconfig: pytest.Config) -> str:
-    return pytestconfig.getoption("--isaacsim-backend")
+def isaaclab_backend(pytestconfig: pytest.Config) -> str:
+    selected = pytestconfig.getoption("--isaaclab-backend")
+    return "isaaclab2" if selected == "isaacsim" else selected
 
 
 @pytest.fixture(scope="session")
-def isaacsim_simulator(isaacsim_backend: str) -> str:
-    return "isaacsim6" if isaacsim_backend == "isaacsim6" else "isaacsim"
+def isaacsim_simulator(isaaclab_backend: str) -> str:
+    return isaaclab_backend
 
 
 @pytest.fixture

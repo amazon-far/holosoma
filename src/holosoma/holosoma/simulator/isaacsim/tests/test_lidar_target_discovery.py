@@ -6,7 +6,7 @@ import re
 
 import pytest
 
-from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Backend
+from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Backend
 from holosoma.simulator.isaacsim.lidar_target_discovery import (
     _is_path_at_or_below,
     assemble_default_mesh_prim_paths,
@@ -110,6 +110,6 @@ def test_native_actor_expression_excludes_same_named_descendants_of_other_actors
         robot_mesh_prim_paths=lambda _excluded_link: [],
         actor_names=["box"],
         discover_mesh_prim_paths=discover,
-        env_regex_ns=IsaacSim6Backend().env_regex_ns,
+        env_regex_ns=IsaacLab3Backend().env_regex_ns,
     )
     assert paths == ["/World/envs/env_0/box/visual", "/World/envs/env_1/box/visual"]

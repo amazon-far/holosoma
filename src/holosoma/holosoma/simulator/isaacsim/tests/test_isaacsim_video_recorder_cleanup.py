@@ -9,10 +9,10 @@ import numpy as np
 import pytest
 import torch
 
-from holosoma.config_types.simulator import IsaacSim6Config
+from holosoma.config_types.simulator import IsaacLab3Config
 from holosoma.config_types.video import VideoConfig
-from holosoma.simulator.isaacsim.backends.isaacsim5 import IsaacSim5Backend
-from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Backend
+from holosoma.simulator.isaacsim.backends.isaaclab2 import IsaacLab2Backend
+from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Backend
 from holosoma.simulator.isaacsim.video_recorder import IsaacSimVideoRecorder
 
 pytestmark = pytest.mark.no_sim
@@ -26,7 +26,7 @@ def test_sdk_movie_reuses_capture_and_keeps_owned_selected_environment(major: in
     output = source[1:2] if major == 5 else SimpleNamespace(torch=source)
     events: list[str] = []
     camera = SimpleNamespace(data=SimpleNamespace(output={"rgb": output}))
-    backend = IsaacSim5Backend() if major == 5 else IsaacSim6Backend(IsaacSim6Config(renderer="ovrtx"))
+    backend = IsaacLab2Backend() if major == 5 else IsaacLab3Backend(IsaacLab3Config(renderer="ovrtx"))
     simulator = SimpleNamespace(
         backend=backend,
         scene=SimpleNamespace(sensors={"holosoma_video_camera": camera}),
@@ -71,7 +71,7 @@ def test_cleanup_leaves_native_camera_owned_by_scene_and_closes_pose_view_once()
     scene = SimpleNamespace(sensors={"holosoma_video_camera": camera})
     recorder = IsaacSimVideoRecorder(
         VideoConfig(use_recording_thread=False),
-        SimpleNamespace(backend=IsaacSim6Backend(), scene=scene, video_camera=camera),  # type: ignore[arg-type]
+        SimpleNamespace(backend=IsaacLab3Backend(), scene=scene, video_camera=camera),  # type: ignore[arg-type]
     )
     recorder._usd_view = SimpleNamespace(close=lambda: events.append("close"))
     recorder.cleanup()
@@ -84,7 +84,7 @@ def test_cleanup_leaves_native_camera_owned_by_scene_and_closes_pose_view_once()
 
 
 def test_cleanup_releases_standalone_lab2_movie_camera() -> None:
-    simulator = SimpleNamespace(backend=IsaacSim5Backend(), video_camera=object())
+    simulator = SimpleNamespace(backend=IsaacLab2Backend(), video_camera=object())
     recorder = IsaacSimVideoRecorder(VideoConfig(use_recording_thread=False), simulator)  # type: ignore[arg-type]
     recorder.cleanup()
     assert simulator.video_camera is None
@@ -102,7 +102,7 @@ def test_cleanup_retains_pose_view_for_retry_if_close_fails() -> None:
 
     recorder = IsaacSimVideoRecorder(
         VideoConfig(use_recording_thread=False),
-        SimpleNamespace(backend=IsaacSim5Backend(), video_camera=object()),  # type: ignore[arg-type]
+        SimpleNamespace(backend=IsaacLab2Backend(), video_camera=object()),  # type: ignore[arg-type]
     )
     recorder._usd_view = SimpleNamespace(close=close)
     with pytest.raises(RuntimeError, match="native view close failed"):

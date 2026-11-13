@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -20,9 +21,9 @@ ISAACSIM_CELL = "g1_29dof_manager | isaacsim | gpus-1"
 MJWARP_CELL = "g1_29dof_manager | mjwarp | gpus-1"
 
 
-def _load_run_summary() -> Any:
-    path = Path(__file__).parent / "run_summary.py"
-    spec = importlib.util.spec_from_file_location("nightly_run_summary", path)
+def _load_script(name: str) -> Any:
+    path = Path(__file__).parent / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"nightly_{name}", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -31,7 +32,55 @@ def _load_run_summary() -> Any:
 
 @pytest.fixture(scope="module")
 def rs() -> Any:
-    return _load_run_summary()
+    return _load_script("run_summary")
+
+
+@pytest.mark.parametrize("simulator", ["isaacsim", "isaaclab2", "isaaclab3"])
+def test_performance_cell_retains_lab2_history_without_pooling_lab3(simulator: str) -> None:
+    backfill = _load_script("backfill_perf_summary")
+    run = SimpleNamespace(tags=["g1_29dof_manager", simulator, "gpus-1"])
+    expected = "isaacsim" if simulator == "isaaclab2" else simulator
+    assert backfill.run_cell(run) == f"g1_29dof_manager | {expected} | gpus-1"
+
+
+@pytest.mark.parametrize("simulator", ["isaacsim", "isaaclab2", "isaaclab3"])
+def test_throughput_baseline_uses_matching_physics_version(simulator: str) -> None:
+    runner = _load_script("nightly")
+    # The server deliberately returns every cell; the local guard must preserve
+    # Lab 2 history while excluding Lab 3, different GPU counts and experiments.
+    runs = [
+        SimpleNamespace(
+            id=f"{backend}-{index}",
+            tags=["g1_29dof_manager", backend, "gpus-1"],
+            summary={runner.PERF_FPS_MEAN_KEY: float(100 + index)},
+        )
+        for index in range(6)
+        for backend in ("isaacsim", "isaaclab2", "isaaclab3")
+    ]
+    runs.insert(
+        0,
+        SimpleNamespace(
+            id="wrong-cell", tags=["other", simulator, "gpus-4"], summary={runner.PERF_FPS_MEAN_KEY: 99999.0}
+        ),
+    )
+    captured: dict[str, Any] = {}
+
+    def fetch(**options: Any) -> list[Any]:
+        captured.update(options)
+        return runs
+
+    result = runner.baseline_fps(
+        SimpleNamespace(runs=fetch),
+        "entity/project/current",
+        ["g1_29dof_manager", simulator, "gpus-1"],
+        "current",
+    )
+    assert result is not None
+    assert 100 < result[0] < 106
+    if simulator == "isaaclab3":
+        assert captured["filters"] == {"tags": {"$all": ["g1_29dof_manager", simulator, "gpus-1"]}}
+    else:
+        assert captured["filters"]["$and"][1] == {"tags": {"$in": ["isaaclab2", "isaacsim"]}}
 
 
 def _series(count: int, value: float, spacing_days: float = 1.0) -> list[tuple[datetime, float]]:
@@ -71,7 +120,7 @@ def test_gpus_from_tags(rs: Any, tags: list[str], expected: str) -> None:
     ("tags", "expected"),
     [
         (["g1_29dof_manager", "isaacsim", "gpus-1"], "isaacsim"),
-        (["g1_29dof_manager", "isaacsim6", "gpus-1"], "isaacsim6"),
+        (["g1_29dof_manager", "isaaclab3", "gpus-1"], "isaaclab3"),
         (["g1_29dof_manager", "mjwarp", "gpus-1"], "mjwarp"),
         (["g1_29dof_manager", "mujoco", "gpus-1"], "mujoco"),
         (["g1_29dof_manager", "isaacgym", "gpus-1"], "isaacgym"),  # archived runs only

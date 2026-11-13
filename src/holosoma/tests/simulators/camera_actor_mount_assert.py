@@ -17,9 +17,9 @@ if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from tests.simulators._sim_harness import (
-    add_isaacsim6_arguments,
+    add_isaaclab3_arguments,
     build_run_sim_config,
-    configure_isaacsim6,
+    configure_isaaclab3,
     launch_simulator,
     run_and_hard_exit,
     step,
@@ -34,13 +34,15 @@ SKIP_EXIT_CODE = 77
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim6"])
+    parser.add_argument(
+        "--simulator", required=True, choices=["mujoco", "mjwarp", "isaaclab2", "isaaclab3", "isaacsim"]
+    )
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--headless", choices=["true", "false"], default="true")
     parser.add_argument("--result-file", default=None, help="write OK/FAIL here before teardown")
-    add_isaacsim6_arguments(parser)
+    add_isaaclab3_arguments(parser)
     args = parser.parse_args()
 
     from tests.simulators import _camera_presets
@@ -71,7 +73,7 @@ def main() -> int:
     )
     if args.simulator == "mjwarp":
         config = _camera_presets.as_mjwarp(config)
-    config = configure_isaacsim6(config, args)
+    config = configure_isaaclab3(config, args)
 
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
     config = dataclasses.replace(

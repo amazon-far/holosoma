@@ -10,9 +10,9 @@ from holosoma.managers.command.manager import CommandManager
 from holosoma.managers.command.terms.wbt import MotionCommand, MotionLoader
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.base_simulator.state import SimState
-from holosoma.simulator.isaacsim.backends.base import IsaacSimBackendAdapter
-from holosoma.simulator.isaacsim.backends.isaacsim5 import IsaacSim5Backend
-from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Backend
+from holosoma.simulator.isaacsim.backends.base import IsaacLabBackendAdapter
+from holosoma.simulator.isaacsim.backends.isaaclab2 import IsaacLab2Backend
+from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Backend
 from holosoma.simulator.shared.scene_types import EnvOriginsScene
 from holosoma.simulator.types import ActorNames, ActorStates, EnvIds
 from holosoma.utils.safe_torch_import import torch
@@ -34,7 +34,7 @@ class _MarkerSink:
 class _StateFixture(BaseSimulator):
     """Fixed state provider; the quaternion conversion stays in the real backend."""
 
-    def __init__(self, backend: IsaacSimBackendAdapter) -> None:
+    def __init__(self, backend: IsaacLabBackendAdapter) -> None:
         self.backend = backend
         self.state = SimState("cpu")
         self.scene = EnvOriginsScene(torch.zeros(1, 3), "cpu")
@@ -54,7 +54,7 @@ class _StateFixture(BaseSimulator):
 @pytest.mark.parametrize("has_object", [False, True])
 def test_wbt_markers_receive_the_native_quaternion_convention(family: int, has_object: bool) -> None:
     env = WholeBodyTrackingManager.__new__(WholeBodyTrackingManager)
-    env.simulator = _StateFixture(IsaacSim5Backend() if family == 2 else IsaacSim6Backend())
+    env.simulator = _StateFixture(IsaacLab2Backend() if family == 2 else IsaacLab3Backend())
     env.command_manager = CommandManager(CommandManagerCfg(), env, "cpu")
 
     # Real motion loader and command properties read these fixed XYZW states.

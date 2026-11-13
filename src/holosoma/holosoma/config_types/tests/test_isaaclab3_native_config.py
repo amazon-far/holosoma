@@ -14,14 +14,14 @@ from holosoma.config_types.experiment import ExperimentConfig
 from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
 from holosoma.config_types.newton import NewtonCollisionConfig
 from holosoma.config_types.simulator import (
-    IsaacSim6Config,
-    IsaacSim6NewtonConfig,
-    IsaacSim6RendererConfig,
-    IsaacSimBackend,
+    IsaacLab3Config,
+    IsaacLab3NewtonConfig,
+    IsaacLab3RendererConfig,
+    IsaacLabBackend,
     MujocoBackend,
     SimulatorInitConfig,
 )
-from holosoma.simulator.isaacsim.backends.isaacsim6 import newton_solver_settings as solver_settings
+from holosoma.simulator.isaacsim.backends.isaaclab3 import newton_solver_settings as solver_settings
 from holosoma.simulator.isaacsim.backends.native_properties import schema_rules
 from holosoma.utils.config_registry import parse_config
 from holosoma.utils.eval_utils import _experiment_config_from_saved
@@ -33,10 +33,10 @@ def test_cli_and_saved_config_preserve_shared_options(tmp_path: Any) -> None:
     cfg = parse_config(
         ExperimentConfig,
         args=[
-            "simulator:isaacsim6",
-            "--simulator.config.sim.isaacsim6.physics-backend",
+            "simulator:isaaclab3",
+            "--simulator.config.sim.isaaclab3.physics-backend",
             "newton",
-            "--simulator.config.sim.isaacsim6.renderer",
+            "--simulator.config.sim.isaaclab3.renderer",
             "newton_warp",
             "--simulator.config.sim.mujoco.iterations",
             "17",
@@ -44,7 +44,7 @@ def test_cli_and_saved_config_preserve_shared_options(tmp_path: Any) -> None:
             "elliptic",
             "--simulator.config.sim.mujoco.warp.nconmax-per-env",
             "256",
-            "--simulator.config.sim.isaacsim6.renderer-options.enable-shadows",
+            "--simulator.config.sim.isaaclab3.renderer-options.enable-shadows",
             "False",
         ],
     )
@@ -52,16 +52,16 @@ def test_cli_and_saved_config_preserve_shared_options(tmp_path: Any) -> None:
     cfg.save_config(str(path))
     restored = _experiment_config_from_saved(yaml.safe_load(path.read_text()))
     assert restored == cfg
-    settings = solver_settings(restored.simulator.config.sim.mujoco, restored.simulator.config.sim.isaacsim6.newton)
+    settings = solver_settings(restored.simulator.config.sim.mujoco, restored.simulator.config.sim.isaaclab3.newton)
     assert settings["iterations"] == 17
     assert settings["nconmax"] == 256
     assert settings["cone"] == "elliptic"
-    assert restored.simulator.config.sim.isaacsim6.renderer_options.enable_shadows is False
+    assert restored.simulator.config.sim.isaaclab3.renderer_options.enable_shadows is False
 
 
 def test_shared_solver_controls_preserve_defaults_and_explicit_zero_without_sdk_imports() -> None:
     before = set(sys.modules)
-    defaults = solver_settings(MujocoConfig(), IsaacSim6NewtonConfig())
+    defaults = solver_settings(MujocoConfig(), IsaacLab3NewtonConfig())
     assert defaults == {"nconmax": 128, "use_mujoco_contacts": True, "disable_sensors": False}
     settings = solver_settings(
         MujocoConfig(
@@ -72,7 +72,7 @@ def test_shared_solver_controls_preserve_defaults_and_explicit_zero_without_sdk_
             jacobian="sparse",
             warp=MujocoWarpConfig(nconmax_per_env=256, njmax_per_env=512),
         ),
-        IsaacSim6NewtonConfig(),
+        IsaacLab3NewtonConfig(),
     )
     assert settings["iterations"] == settings["ls_iterations"] == settings["tolerance"] == settings["ls_tolerance"] == 0
     assert settings["jacobian"] == "sparse"
@@ -91,7 +91,7 @@ def test_shared_solver_controls_preserve_defaults_and_explicit_zero_without_sdk_
 )
 def test_unsupported_shared_inputs_report_the_config_path(shared: MujocoConfig, path: str) -> None:
     with pytest.raises(ValueError, match=path):
-        solver_settings(shared, IsaacSim6NewtonConfig())
+        solver_settings(shared, IsaacLab3NewtonConfig())
 
 
 @pytest.mark.parametrize(
@@ -105,23 +105,23 @@ def test_unsupported_shared_inputs_report_the_config_path(shared: MujocoConfig, 
 )
 def test_renderer_rejects_duplicate_camera_controls_and_unavailable_outputs(field: str, value: Any) -> None:
     with pytest.raises(ValidationError, match="Unexpected keyword argument"):
-        IsaacSim6RendererConfig(**{field: value})
+        IsaacLab3RendererConfig(**{field: value})
 
 
 def test_collision_options_have_one_selector() -> None:
     with pytest.raises(ValidationError, match="requires collision_source"):
-        IsaacSim6NewtonConfig(collision=NewtonCollisionConfig(broad_phase="sap"))
-    settings = solver_settings(MujocoConfig(), IsaacSim6NewtonConfig(collision_source="newton"))
+        IsaacLab3NewtonConfig(collision=NewtonCollisionConfig(broad_phase="sap"))
+    settings = solver_settings(MujocoConfig(), IsaacLab3NewtonConfig(collision_source="newton"))
     assert settings["use_mujoco_contacts"] is False
 
 
 def test_public_options_reject_sdk_constructor_dictionaries() -> None:
     kwargs: dict[str, Any] = {"physics": {"solver_cfg": {"iterations": 17}}}
     with pytest.raises(ValidationError, match="Unexpected keyword argument"):
-        IsaacSim6Config(**kwargs)
+        IsaacLab3Config(**kwargs)
     kwargs = {"_type_": "isaaclab_ov.renderers:OVRTXRendererCfg"}
     with pytest.raises(ValidationError, match="Unexpected keyword argument"):
-        IsaacSim6RendererConfig(**kwargs)
+        IsaacLab3RendererConfig(**kwargs)
 
 
 def test_schema_rules_do_not_import_the_sdk_and_keep_empty_fragment_rules() -> None:
@@ -146,9 +146,9 @@ def test_invalid_rules_fail_with_config_location(value: Any) -> None:
 
 def test_shared_solver_and_newton_controls_round_trip_saved_config() -> None:
     saved = ExperimentConfig().to_serializable_dict()
-    sim6 = saved["simulator"]["config"]["sim"]["isaacsim6"]
-    sim6["physics_backend"] = "newton"
-    sim6["newton"] = {
+    lab3 = saved["simulator"]["config"]["sim"]["isaaclab3"]
+    lab3["physics_backend"] = "newton"
+    lab3["newton"] = {
         "use_cuda_graph": False,
         "default_shape_margin": 0.003,
     }
@@ -157,7 +157,7 @@ def test_shared_solver_and_newton_controls_round_trip_saved_config() -> None:
     shared["warp"]["nconmax_per_env"] = 256
     shared["warp"]["njmax_per_env"] = 512
     restored = _experiment_config_from_saved(saved)
-    newton = restored.simulator.config.sim.isaacsim6.newton
+    newton = restored.simulator.config.sim.isaaclab3.newton
     resolved = solver_settings(restored.simulator.config.sim.mujoco, newton)
     assert {name: resolved[name] for name in ("nconmax", "njmax", "iterations")} == {
         "nconmax": 256,
@@ -167,27 +167,27 @@ def test_shared_solver_and_newton_controls_round_trip_saved_config() -> None:
     assert newton.use_cuda_graph is False
     assert newton.default_shape_margin == 0.003
     serialized = restored.to_serializable_dict()
-    for name, value in sim6["newton"].items():
-        assert serialized["simulator"]["config"]["sim"]["isaacsim6"]["newton"][name] == value
+    for name, value in lab3["newton"].items():
+        assert serialized["simulator"]["config"]["sim"]["isaaclab3"]["newton"][name] == value
     assert _experiment_config_from_saved(serialized) == restored
 
 
 def test_inactive_newton_defaults_do_not_become_physx_kwargs() -> None:
     saved = ExperimentConfig().to_serializable_dict()
-    sim6 = saved["simulator"]["config"]["sim"]["isaacsim6"]
-    sim6["newton"] = {
+    lab3 = saved["simulator"]["config"]["sim"]["isaaclab3"]
+    lab3["newton"] = {
         "use_cuda_graph": True,
         "default_shape_margin": 0.01,
     }
-    restored = _experiment_config_from_saved(saved).simulator.config.sim.isaacsim6
+    restored = _experiment_config_from_saved(saved).simulator.config.sim.isaaclab3
     assert restored.physics_backend == "physx"
-    assert restored.newton == IsaacSim6NewtonConfig()
+    assert restored.newton == IsaacLab3NewtonConfig()
 
 
 def test_newton_construction_and_replace_do_not_import_sdk() -> None:
     before = set(sys.modules)
-    newton = IsaacSim6NewtonConfig(use_cuda_graph=False)
-    config = IsaacSim6Config(
+    newton = IsaacLab3NewtonConfig(use_cuda_graph=False)
+    config = IsaacLab3Config(
         physics_backend="newton",
         renderer="newton_warp",
         newton=newton,
@@ -210,18 +210,18 @@ def test_newton_construction_and_replace_do_not_import_sdk() -> None:
 @pytest.mark.parametrize("style", ["separate", "equals"])
 def test_shared_solver_and_newton_cli_options_round_trip(style: str) -> None:
     values = {
-        "isaacsim6.newton.use-cuda-graph": "False",
+        "isaaclab3.newton.use-cuda-graph": "False",
         "mujoco.warp.nconmax-per-env": "256",
         "mujoco.warp.njmax-per-env": "512",
         "mujoco.iterations": "17",
-        "isaacsim6.newton.default-shape-margin": "0.003",
+        "isaaclab3.newton.default-shape-margin": "0.003",
     }
-    args = ["simulator:isaacsim6", "--simulator.config.sim.isaacsim6.physics-backend=newton"]
+    args = ["simulator:isaaclab3", "--simulator.config.sim.isaaclab3.physics-backend=newton"]
     for name, value in values.items():
         flag = f"--simulator.config.sim.{name}"
         args.extend([f"{flag}={value}"] if style == "equals" else [flag, value])
     config = parse_config(ExperimentConfig, args=args)
-    assert config.simulator.config.sim.isaacsim6.newton == IsaacSim6NewtonConfig(
+    assert config.simulator.config.sim.isaaclab3.newton == IsaacLab3NewtonConfig(
         use_cuda_graph=False,
         default_shape_margin=0.003,
     )
@@ -229,39 +229,41 @@ def test_shared_solver_and_newton_cli_options_round_trip(style: str) -> None:
     assert shared.iterations == 17
     assert (shared.warp.nconmax_per_env, shared.warp.njmax_per_env) == (256, 512)
     restored = _experiment_config_from_saved(config.to_serializable_dict())
-    assert restored.simulator.config.sim.isaacsim6 == config.simulator.config.sim.isaacsim6
+    assert restored.simulator.config.sim.isaaclab3 == config.simulator.config.sim.isaaclab3
 
 
 def test_shared_solver_settings_have_one_owner_and_are_not_mutated() -> None:
     shared = MujocoConfig(iterations=17, warp=MujocoWarpConfig(nconmax_per_env=256))
-    settings = solver_settings(shared, IsaacSim6NewtonConfig())
+    settings = solver_settings(shared, IsaacLab3NewtonConfig())
     assert (settings["iterations"], settings["nconmax"]) == (17, 256)
     settings["iterations"] = 99
     assert shared.iterations == 17
     assert not {"solver_iterations", "nconmax", "njmax"} & {
-        field.name for field in dataclasses.fields(IsaacSim6NewtonConfig)
+        field.name for field in dataclasses.fields(IsaacLab3NewtonConfig)
     }
 
 
 def test_inactive_newton_customization_survives_save_and_backend_switch() -> None:
     saved = ExperimentConfig().to_serializable_dict()
-    sim6 = saved["simulator"]["config"]["sim"]["isaacsim6"]
-    sim6["newton"] = {"use_cuda_graph": False}
+    lab3 = saved["simulator"]["config"]["sim"]["isaaclab3"]
+    lab3["newton"] = {"use_cuda_graph": False}
     saved["simulator"]["config"]["sim"]["mujoco"]["iterations"] = 17
     config = _experiment_config_from_saved(saved)
-    inactive = config.simulator.config.sim.isaacsim6
+    inactive = config.simulator.config.sim.isaaclab3
     assert inactive.physics_backend == "physx"
     restored_config = _experiment_config_from_saved(config.to_serializable_dict())
-    restored = restored_config.simulator.config.sim.isaacsim6
+    restored = restored_config.simulator.config.sim.isaaclab3
     assert restored.newton.use_cuda_graph is False
     switched = dataclasses.replace(restored, physics_backend="newton")
     assert solver_settings(restored_config.simulator.config.sim.mujoco, switched.newton)["iterations"] == 17
 
 
-def test_pre_sim6_simulator_constructor_keeps_positional_field_order() -> None:
+@pytest.mark.parametrize("name", ["isaacsim", "isaaclab2", "isaaclab3"])
+@pytest.mark.parametrize("backend", [None, *IsaacLabBackend])
+def test_simulator_constructor_keeps_positional_field_order(name: str, backend: IsaacLabBackend | None) -> None:
     preset = ExperimentConfig().simulator.config
     config = SimulatorInitConfig(
-        preset.name,
+        name,
         preset.sim,
         preset.debug_viz,
         preset.viewer,
@@ -271,8 +273,11 @@ def test_pre_sim6_simulator_constructor_keeps_positional_field_order() -> None:
         MujocoBackend.WARP,
         preset.bridge,
         preset.virtual_gantry,
+        *([backend] if backend is not None else []),
     )
     assert config.mujoco_backend == MujocoBackend.WARP
     assert config.bridge == preset.bridge
     assert config.virtual_gantry == preset.virtual_gantry
-    assert config.isaacsim_backend == IsaacSimBackend.ISAACSIM5
+    expected = backend or (IsaacLabBackend.ISAACLAB3 if name == "isaaclab3" else IsaacLabBackend.ISAACLAB2)
+    assert config.isaaclab_backend == expected
+    assert config.name == expected.value

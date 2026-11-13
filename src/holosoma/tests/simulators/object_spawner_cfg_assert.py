@@ -272,14 +272,14 @@ def _check_scene_body_discovery() -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="IsaacSim spawn-cfg assertion harness.")
-    parser.add_argument("--simulator", choices=["isaacsim", "isaacsim6"], default="isaacsim")
+    parser.add_argument("--simulator", choices=["isaaclab2", "isaaclab3", "isaacsim"], default="isaacsim")
     parser.add_argument("--result-file", default=None, help="write 'OK' here after all checks pass")
     args = parser.parse_args()
 
     # Boot a minimal headless IsaacSim app so isaaclab.sim (carb) is importable.
     from holosoma.simulator.isaacsim.backends import get_backend
 
-    backend = get_backend("isaacsim6" if args.simulator == "isaacsim6" else "isaacsim5")
+    backend = get_backend("isaaclab3" if args.simulator == "isaaclab3" else "isaaclab2")
     simulation_app = backend.launch_app({"headless": True})
 
     try:
@@ -294,7 +294,7 @@ def main() -> int:
         _check_robot_link_physics_cfg()
     except BaseException:
         print("SPAWNER CFG ASSERT FAILED:\n" + traceback.format_exc(), flush=True)
-        if backend.is_isaacsim6:
+        if backend.is_isaaclab3:
             simulation_app.close(exit_code=1)
         else:
             simulation_app.close()

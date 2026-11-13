@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--simulator", required=True, choices=["isaacsim", "isaacsim6"])
+parser.add_argument("--simulator", required=True, choices=["isaaclab2", "isaaclab3", "isaacsim"])
 parser.add_argument("--report", required=True)
 parser.add_argument("--result-file", required=True)
 parser.add_argument("--completion", choices=["ok", "missing", "fail"], default="ok")
@@ -46,13 +46,13 @@ EXPECTED_PRESET = {preset!r}
 @pytest.mark.parametrize("caller_args", [
     [],
     ["--simulator", "isaacsim"],
-    ["--simulator=isaacsim6"],
-    ["--simulator", "isaacsim", "--simulator=isaacsim6"],
+    ["--simulator=isaaclab3"],
+    ["--simulator", "isaacsim", "--simulator=isaaclab3"],
 ])
 def test_child_receives_selected_profile(
-    tmp_path, isaacsim_backend, isaacsim_simulator, run_isaacsim_harness, caller_args
+    tmp_path, isaaclab_backend, isaacsim_simulator, run_isaacsim_harness, caller_args
 ):
-    assert isaacsim_backend == EXPECTED_BACKEND
+    assert isaaclab_backend == EXPECTED_BACKEND
     assert isaacsim_simulator == EXPECTED_PRESET
     report = tmp_path / "child.json"
     result_file = tmp_path / "complete.txt"
@@ -95,16 +95,26 @@ def test_missing_caller_preset_is_not_silently_consumed(run_isaacsim_harness):
 """
 
 
-@pytest.mark.parametrize("backend_option", [None, "isaacsim5", "isaacsim6"], ids=["default", "sim5", "sim6"])
+@pytest.mark.parametrize(
+    ("option_name", "backend_option"),
+    [
+        ("--isaaclab-backend", None),
+        ("--isaaclab-backend", "isaaclab2"),
+        ("--isaaclab-backend", "isaaclab3"),
+        ("--isaaclab-backend", "isaacsim"),
+        ("--isaacsim-backend", "isaacsim"),
+    ],
+    ids=["default", "lab2", "lab3", "legacy-preset", "legacy-option"],
+)
 def test_pytest_profile_routes_real_children(
-    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, backend_option: str | None
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, option_name: str, backend_option: str | None
 ) -> None:
-    backend = backend_option or "isaacsim5"
-    preset = "isaacsim6" if backend == "isaacsim6" else "isaacsim"
-    monkeypatch.setenv("HOLOSOMA_ISAACSIM_BACKEND", "isaacsim5" if backend == "isaacsim6" else "isaacsim6")
+    backend = "isaaclab2" if backend_option in (None, "isaacsim") else backend_option
+    preset = backend
+    monkeypatch.setenv("HOLOSOMA_ISAACSIM_BACKEND", "isaaclab2" if backend == "isaaclab3" else "isaaclab3")
     pytester.makeconftest((ROOT / "conftest.py").read_text())
     pytester.makepyfile(child=_CHILD, test_profile=_PROFILE_TESTS.format(backend=backend, preset=preset))
-    options = [] if backend_option is None else ["--isaacsim-backend", backend_option]
+    options = [] if backend_option is None else [option_name, backend_option]
     result = pytester.runpytest_subprocess("-q", "--strict-markers", *options)
     result.assert_outcomes(passed=9)
 
@@ -112,6 +122,6 @@ def test_pytest_profile_routes_real_children(
 def test_pytest_rejects_unknown_backend(pytester: pytest.Pytester) -> None:
     pytester.makeconftest((ROOT / "conftest.py").read_text())
     pytester.makepyfile("def test_unused(): pass")
-    result = pytester.runpytest_subprocess("--isaacsim-backend", "unknown")
+    result = pytester.runpytest_subprocess("--isaaclab-backend", "unknown")
     assert result.ret == pytest.ExitCode.USAGE_ERROR
     assert "invalid choice: 'unknown'" in result.stderr.str()

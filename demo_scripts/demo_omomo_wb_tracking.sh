@@ -60,7 +60,7 @@ python data_conversion/convert_data_format_mj.py --input_file ./demo_results/g1/
 echo "Sourcing IsaacSim setup..."
 cd "$PROJECT_ROOT"
 unset CONDA_ENV_NAME
-source "$PROJECT_ROOT/scripts/source_isaacsim_setup.sh"
+source "$PROJECT_ROOT/scripts/source_isaaclab2_setup.sh"
 
 # Ensure holosoma and isaaclab are installed in the IsaacSim env
 HOLOSOMA_DEPS_DIR="${HOLOSOMA_DEPS_DIR:-$HOME/.holosoma_deps}"

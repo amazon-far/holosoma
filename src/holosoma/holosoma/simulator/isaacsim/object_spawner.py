@@ -57,7 +57,7 @@ from holosoma.utils.path import resolve_asset_path
 
 if TYPE_CHECKING:
     from isaaclab.sim.spawners import SpawnerCfg
-    from holosoma.simulator.isaacsim.backends.base import IsaacSimBackendAdapter
+    from holosoma.simulator.isaacsim.backends.base import IsaacLabBackendAdapter
 
 
 def _shared_spawn_kwargs(physics_cfg: PhysicsConfig, fixed: bool) -> dict[str, Any]:
@@ -88,7 +88,7 @@ def select_spawn_cfg(
     fixed: bool,
     physics: PhysicsConfig | None,
     source_prim_path: str | None,
-    backend: IsaacSimBackendAdapter,
+    backend: IsaacLabBackendAdapter,
     kinematic: bool = False,
 ) -> "SpawnerCfg":
     """Build the format-specific ``spawn`` cfg.
@@ -165,8 +165,8 @@ def select_spawn_cfg(
     return cfg
 
 
-def _native_spawn(cfg: Any, physics: PhysicsConfig, backend: IsaacSimBackendAdapter) -> Any:
-    if backend.is_isaacsim6:
+def _native_spawn(cfg: Any, physics: PhysicsConfig, backend: IsaacLabBackendAdapter) -> Any:
+    if backend.is_isaaclab3:
         from holosoma.simulator.isaacsim.backends.native_properties import physics_settings, wrap_spawn
 
         return wrap_spawn(
@@ -432,7 +432,7 @@ def build_rigid_object(
     fixed: bool,
     physics: PhysicsConfig | None = None,
     source_prim_path: str | None = None,
-    backend: IsaacSimBackendAdapter,
+    backend: IsaacLabBackendAdapter,
     kinematic: bool = False,
 ) -> Any:
     """Build the actor handle both formats and both shapes flow through.
@@ -469,7 +469,7 @@ def build_standalone_rigid_object(
     supported_formats: list[str],
     scene_asset_root: str | None,
     *,
-    backend: IsaacSimBackendAdapter,
+    backend: IsaacLabBackendAdapter,
 ) -> RigidObject:
     """Spawn one standalone ``RigidObjectConfig`` (1->1), USD or URDF, via the shared tail.
 
@@ -501,7 +501,7 @@ def expand_scene_file(
     supported_formats: list[str],
     scene_asset_root: str | None,
     *,
-    backend: IsaacSimBackendAdapter,
+    backend: IsaacLabBackendAdapter,
 ) -> tuple[dict[str, RigidObject], set[str]]:
     """Expand a multi-body USD scene file into per-body ``RigidObject`` instances (1->N).
 

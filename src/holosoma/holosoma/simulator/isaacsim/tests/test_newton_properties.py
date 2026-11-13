@@ -13,8 +13,8 @@ import torch
 import warp as wp
 
 from holosoma.simulator.isaacsim.backends import newton_properties
-from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Backend
-from holosoma.config_types.simulator import IsaacSim6Config
+from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Backend
+from holosoma.config_types.simulator import IsaacLab3Config
 
 pytestmark = pytest.mark.no_sim
 
@@ -69,7 +69,7 @@ def test_body_writes_pass_partial_rows_without_physx_keywords(
         calls.append(selected)
 
     asset = SimpleNamespace(device="cpu", **{f"set_{name}_index": setter})
-    backend = IsaacSim6Backend(IsaacSim6Config(physics_backend="newton"))
+    backend = IsaacLab3Backend(IsaacLab3Config(physics_backend="newton"))
     backend.write_physics_property(asset, name, values, selector)
     assert len(calls) == 1
     torch.testing.assert_close(values, original, rtol=0, atol=0)

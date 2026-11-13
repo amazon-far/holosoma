@@ -75,7 +75,7 @@ def _mount_errors(sim) -> list[tuple[str, float, float]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", choices=["isaacsim", "isaacsim6"], default="isaacsim")
+    parser.add_argument("--simulator", choices=["isaaclab2", "isaaclab3", "isaacsim"], default="isaacsim")
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)

@@ -57,11 +57,11 @@ def _config(device: str, simulator: str):
 
 def _main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", choices=["isaacsim", "isaacsim6"], default="isaacsim")
+    parser.add_argument("--simulator", choices=["isaaclab2", "isaaclab3", "isaacsim"], default="isaacsim")
     parser.add_argument("--result-file", default=None, help="write 'OK' here after PASS (teardown-robust)")
-    from tests.simulators._sim_harness import add_isaacsim6_arguments, configure_isaacsim6
+    from tests.simulators._sim_harness import add_isaaclab3_arguments, configure_isaaclab3
 
-    add_isaacsim6_arguments(parser)
+    add_isaaclab3_arguments(parser)
     args = parser.parse_args()
 
     failures: list[str] = []
@@ -71,7 +71,7 @@ def _main() -> int:
         if not ok:
             failures.append(name)
 
-    config = configure_isaacsim6(_config("cuda:0", args.simulator), args)
+    config = configure_isaaclab3(_config("cuda:0", args.simulator), args)
     with config.create_task() as task:
         return _check_frames(task, config, check, failures, args.result_file)
 
@@ -191,13 +191,13 @@ pytestmark = pytest.mark.isaacsim
 @pytest.mark.parametrize(
     ("physics", "renderer"), [("physx", "isaac_rtx"), ("newton", "isaac_rtx"), ("newton", "ovrtx")]
 )
-def test_frame_carries_the_state_written_for_it(physics, renderer, isaacsim_backend, tmp_path, run_isaacsim_harness):
+def test_frame_carries_the_state_written_for_it(physics, renderer, isaaclab_backend, tmp_path, run_isaacsim_harness):
     """Drive the harness above in its own process and require every check to pass."""
     pytest.importorskip("isaaclab")
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("IsaacSim requires a CUDA device")
-    if physics == "newton" and isaacsim_backend != "isaacsim6":
+    if physics == "newton" and isaaclab_backend != "isaaclab3":
         pytest.skip("Newton requires Isaac Lab 3")
 
     result_file = tmp_path / "frame_freshness_isaacsim.txt"

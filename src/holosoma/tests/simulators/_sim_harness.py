@@ -24,23 +24,23 @@ import tyro
 from holosoma.config_types.run_sim import RunSimConfig
 
 
-def add_isaacsim6_arguments(parser: argparse.ArgumentParser) -> None:
+def add_isaaclab3_arguments(parser: argparse.ArgumentParser) -> None:
     """Expose engine selection to shared harnesses without changing released defaults."""
     parser.add_argument("--physics-backend", choices=["physx", "newton"], default="physx")
     parser.add_argument("--renderer", choices=["isaac_rtx", "newton_warp", "ovrtx"], default="isaac_rtx")
 
 
-def configure_isaacsim6(config: RunSimConfig, args: argparse.Namespace) -> RunSimConfig:
+def configure_isaaclab3(config: RunSimConfig, args: argparse.Namespace) -> RunSimConfig:
     """Select native physics/rendering only for the explicit Lab 3 test profile."""
-    if args.simulator != "isaacsim6":
+    if args.simulator != "isaaclab3":
         return config
     sim = config.simulator.config.sim
-    native = dataclasses.replace(sim.isaacsim6, physics_backend=args.physics_backend, renderer=args.renderer)
+    native = dataclasses.replace(sim.isaaclab3, physics_backend=args.physics_backend, renderer=args.renderer)
     return dataclasses.replace(
         config,
         simulator=dataclasses.replace(
             config.simulator,
-            config=dataclasses.replace(config.simulator.config, sim=dataclasses.replace(sim, isaacsim6=native)),
+            config=dataclasses.replace(config.simulator.config, sim=dataclasses.replace(sim, isaaclab3=native)),
         ),
     )
 

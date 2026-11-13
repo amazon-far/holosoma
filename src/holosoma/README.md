@@ -20,18 +20,18 @@ Train robots to track velocity commands.
 
 ```bash
 # G1 with FastSAC on IsaacSim
-source scripts/source_isaacsim_setup.sh
+source scripts/source_isaaclab2_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    simulator:isaacsim \
+    simulator:isaaclab2 \
     logger:wandb \
     --training.seed 1
 
 # T1 with PPO on IsaacSim
-source scripts/source_isaacsim_setup.sh
+source scripts/source_isaaclab2_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:t1-29dof \
-    simulator:isaacsim \
+    simulator:isaaclab2 \
     logger:wandb \
     --training.seed 1
 ```
@@ -91,26 +91,26 @@ Train robots to track full-body motion sequences.
 
 ```bash
 # G1 with FastSAC
-source scripts/source_isaacsim_setup.sh
+source scripts/source_isaaclab2_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-wbt-fast-sac \
     logger:wandb
 
 # G1 with PPO
-source scripts/source_isaacsim_setup.sh
+source scripts/source_isaaclab2_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-wbt \
     logger:wandb
 
 # Custom motion file
-source scripts/source_isaacsim_setup.sh
+source scripts/source_isaaclab2_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-wbt \
     logger:wandb \
     --command.setup_terms.motion_command.params.motion_config.motion_file="holosoma/data/motions/g1_29dof/whole_body_tracking/<your file>.npz"
 
 # Visualize the motion file in isaacsim before training
-source scripts/source_isaacsim_setup.sh
+source scripts/source_isaaclab2_setup.sh
 python src/holosoma/holosoma/replay.py \
     exp:g1-29dof-wbt \
     --training.headless=False \
@@ -165,10 +165,10 @@ The training system uses a hierarchical configuration system. The `exp` config s
 ### Logging with Weights & Biases
 
 ```bash
-source scripts/source_isaacsim_setup.sh
+source scripts/source_isaaclab2_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof \
-    simulator:isaacsim \
+    simulator:isaaclab2 \
     --training.seed 1 \
     --algo.config.use-symmetry=False \
     logger:wandb \
@@ -203,30 +203,30 @@ If training fails on headless servers with display/rendering errors (e.g., `GLXB
 
 ```bash
 # Use plane terrain instead of mixed terrain
-source scripts/source_isaacsim_setup.sh
+source scripts/source_isaaclab2_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    simulator:isaacsim \
+    simulator:isaaclab2 \
     terrain:terrain-locomotion-plane
 ```
 
 ### Multi-GPU Training
 
 ```bash
-source scripts/source_isaacsim_setup.sh
+source scripts/source_isaaclab2_setup.sh
 torchrun --nproc_per_node=4 src/holosoma/holosoma/train_agent.py \
     exp:t1-29dof-fast-sac \
-    simulator:isaacsim \
+    simulator:isaaclab2 \
     --training.num-envs 16384  # global/total number of environments
 ```
 
 ### Custom Reward Weights
 
 ```bash
-source scripts/source_isaacsim_setup.sh
+source scripts/source_isaaclab2_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    simulator:isaacsim \
+    simulator:isaaclab2 \
     --reward.terms.tracking-lin-vel.weight=2.5 \
     --reward.terms.feet-phase.params.swing-height=0.12
 ```
@@ -235,10 +235,10 @@ python src/holosoma/holosoma/train_agent.py \
 
 ```bash
 # Disable observation noise
-source scripts/source_isaacsim_setup.sh
+source scripts/source_isaaclab2_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    simulator:isaacsim \
+    simulator:isaaclab2 \
     --observation.groups.actor-obs.enable-noise=False
 ```
 
@@ -247,10 +247,10 @@ python src/holosoma/holosoma/train_agent.py \
 Some policies benefit from stacking multiple timesteps of observations. You can increase the history length used during training with:
 
 ```bash
-source scripts/source_isaacsim_setup.sh
+source scripts/source_isaaclab2_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    simulator:isaacsim \
+    simulator:isaaclab2 \
     --observation.groups.actor_obs.history-length 4
 ```
 
@@ -260,17 +260,17 @@ Make sure to pass the same history length when running inference so the exported
 
 ```bash
 # Disable curriculum
-source scripts/source_isaacsim_setup.sh
+source scripts/source_isaaclab2_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    simulator:isaacsim \
+    simulator:isaaclab2 \
     --curriculum.setup-terms.penalty-curriculum.params.enabled=False
 
 # Custom curriculum threshold (for shorter episodes)
-source scripts/source_isaacsim_setup.sh
+source scripts/source_isaaclab2_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    simulator:isaacsim \
+    simulator:isaaclab2 \
     --simulator.config.sim.max-episode-length-s=10.0 \
     --curriculum.setup-terms.penalty-curriculum.params.level-up-threshold=350
 ```
@@ -278,10 +278,10 @@ python src/holosoma/holosoma/train_agent.py \
 ### Domain Randomization
 
 ```bash
-source scripts/source_isaacsim_setup.sh
+source scripts/source_isaaclab2_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    simulator:isaacsim \
+    simulator:isaaclab2 \
     --randomization.setup-terms.push-randomizer-state.params.enabled=False \
     --randomization.setup-terms.randomize-base-com-startup.params.enabled=True \
     --randomization.setup-terms.mass-randomizer.params.added-mass-range=[-1.0,3.0]

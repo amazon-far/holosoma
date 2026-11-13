@@ -26,7 +26,7 @@ from tests.simulators._native_runtime_assertions import (
 )
 from tests.simulators._sim_harness import (
     build_run_sim_config,
-    configure_isaacsim6,
+    configure_isaaclab3,
     launch_simulator,
     run_and_hard_exit,
     step,
@@ -36,7 +36,7 @@ from tests.simulators._sim_harness import (
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", choices=["isaacsim6"], default="isaacsim6")
+    parser.add_argument("--simulator", choices=["isaaclab3"], default="isaaclab3")
     parser.add_argument("--num-envs", type=int, default=4)
     parser.add_argument("--renderer", choices=["isaac_rtx", "ovrtx", "newton_warp"])
     parser.add_argument("--result-file", required=True)
@@ -46,7 +46,7 @@ def main() -> int:
     from holosoma.config_types.scene import ObjectPatternConfig, PhysicsConfig, RigidObjectConfig, SceneFileConfig
     from holosoma.config_types.sensor import SensorMountConfig
 
-    config = build_run_sim_config("isaacsim6", "static-support", "onelink-box", "terrain_locomotion_plane")
+    config = build_run_sim_config("isaaclab3", "static-support", "onelink-box", "terrain_locomotion_plane")
     scene_file = _scene_presets.multibody.scene_files["scene"]
     temporary_scene = tempfile.TemporaryDirectory()
     static_path = str(Path(temporary_scene.name) / "native-static.usda")
@@ -99,8 +99,8 @@ def main() -> int:
             ),
         )
         config = dataclasses.replace(config, sensor={"camera": camera})
-    config = configure_isaacsim6(
-        config, argparse.Namespace(simulator="isaacsim6", physics_backend="newton", renderer=args.renderer or "ovrtx")
+    config = configure_isaaclab3(
+        config, argparse.Namespace(simulator="isaaclab3", physics_backend="newton", renderer=args.renderer or "ovrtx")
     )
 
     def author_native_scene() -> None:

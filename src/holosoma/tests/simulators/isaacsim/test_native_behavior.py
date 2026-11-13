@@ -19,8 +19,8 @@ _HARNESS_DIR = Path(__file__).resolve().parents[1]
     ],
     ids=["geometry", "robot-mount", "articulated-link-mount", "actor-mount"],
 )
-def test_newton_rendered_outcomes(harness, args, renderer, isaacsim_backend, run_isaacsim_harness, tmp_path):
-    if isaacsim_backend != "isaacsim6":
+def test_newton_rendered_outcomes(harness, args, renderer, isaaclab_backend, run_isaacsim_harness, tmp_path):
+    if isaaclab_backend != "isaaclab3":
         pytest.skip("Newton renderer selection requires Isaac Lab 3")
     result_file = tmp_path / "rendered-outcomes.txt"
     result = run_isaacsim_harness(
@@ -34,7 +34,7 @@ def test_newton_rendered_outcomes(harness, args, renderer, isaacsim_backend, run
         "--result-file",
         str(result_file),
         *args,
-        label=f"isaacsim6/newton/{renderer}/{harness}/{args}",
+        label=f"isaaclab3/newton/{renderer}/{harness}/{args}",
         timeout=900,
         result_file=result_file,
     )
@@ -45,8 +45,8 @@ def test_newton_rendered_outcomes(harness, args, renderer, isaacsim_backend, run
     "scene",
     ["usd-box", "g1-largebox", "static-box", "static-box-usd", "velocity-box", "friction-slide", "multibody-override"],
 )
-def test_newton_scene_spawn(scene, isaacsim_backend, run_isaacsim_harness, tmp_path):
-    if isaacsim_backend != "isaacsim6":
+def test_newton_scene_spawn(scene, isaaclab_backend, run_isaacsim_harness, tmp_path):
+    if isaaclab_backend != "isaaclab3":
         pytest.skip("Newton requires Isaac Lab 3")
     result_file = tmp_path / "scene-spawn.txt"
     try:
@@ -62,7 +62,7 @@ def test_newton_scene_spawn(scene, isaacsim_backend, run_isaacsim_harness, tmp_p
             "150",
             "--result-file",
             str(result_file),
-            label=f"isaacsim6/newton/{scene}",
+            label=f"isaaclab3/newton/{scene}",
             timeout=900,
             result_file=result_file,
         )
@@ -78,8 +78,8 @@ def test_newton_scene_spawn(scene, isaacsim_backend, run_isaacsim_harness, tmp_p
 
 @pytest.mark.parametrize("renderer", ["isaac_rtx", "ovrtx"])
 @pytest.mark.parametrize("scenario", ["collide-into-fixed", "momentum-transfer"])
-def test_newton_physics_with_active_movie(scenario, renderer, isaacsim_backend, run_isaacsim_harness, tmp_path):
-    if isaacsim_backend != "isaacsim6":
+def test_newton_physics_with_active_movie(scenario, renderer, isaaclab_backend, run_isaacsim_harness, tmp_path):
+    if isaaclab_backend != "isaaclab3":
         pytest.skip("Newton requires Isaac Lab 3")
     result_file = tmp_path / "rendered-physics.txt"
     run_isaacsim_harness(
@@ -98,7 +98,7 @@ def test_newton_physics_with_active_movie(scenario, renderer, isaacsim_backend, 
         str(tmp_path / "movies"),
         "--result-file",
         str(result_file),
-        label=f"isaacsim6/newton/{renderer}/{scenario}/active-movie",
+        label=f"isaaclab3/newton/{renderer}/{scenario}/active-movie",
         timeout=900,
         result_file=result_file,
     )
@@ -107,9 +107,9 @@ def test_newton_physics_with_active_movie(scenario, renderer, isaacsim_backend, 
 @pytest.mark.parametrize(
     "renderer", [None, "isaac_rtx", "ovrtx", "newton_warp"], ids=["physics-only", "rtx", "ovrtx", "warp"]
 )
-def test_newton_fixed_fixtures(renderer, isaacsim_backend, run_isaacsim_harness, tmp_path):
+def test_newton_fixed_fixtures(renderer, isaaclab_backend, run_isaacsim_harness, tmp_path):
     """Exact fixed topology plus contacts, relocation, isolation and reset outcomes."""
-    if isaacsim_backend != "isaacsim6":
+    if isaaclab_backend != "isaaclab3":
         pytest.skip("Newton requires Isaac Lab 3")
     result_file = tmp_path / "fixed-fixtures.txt"
     run_isaacsim_harness(
@@ -119,16 +119,16 @@ def test_newton_fixed_fixtures(renderer, isaacsim_backend, run_isaacsim_harness,
         "--result-file",
         str(result_file),
         *(["--renderer", renderer] if renderer else []),
-        label=f"isaacsim6/newton/{renderer or 'physics-only'}/fixed-fixtures",
+        label=f"isaaclab3/newton/{renderer or 'physics-only'}/fixed-fixtures",
         timeout=900,
         result_file=result_file,
     )
 
 
 @pytest.mark.parametrize("renderer", [None, "isaac_rtx", "ovrtx"], ids=["physics-only", "rtx", "ovrtx"])
-def test_newton_uca1_fixed_fixtures(renderer, isaacsim_backend, run_isaacsim_harness, tmp_path):
+def test_newton_uca1_fixed_fixtures(renderer, isaaclab_backend, run_isaacsim_harness, tmp_path):
     """Full external apartment dataset; skip explicitly when its assets are absent."""
-    if isaacsim_backend != "isaacsim6":
+    if isaaclab_backend != "isaaclab3":
         pytest.skip("Newton requires Isaac Lab 3")
     scene_config = Path("/session/resolved-config.json")
     if not scene_config.is_file():
@@ -143,7 +143,7 @@ def test_newton_uca1_fixed_fixtures(renderer, isaacsim_backend, run_isaacsim_har
         "--result-file",
         str(result_file),
         *(["--renderer", renderer] if renderer else []),
-        label=f"isaacsim6/newton/{renderer or 'physics-only'}/uca1-fixed-fixtures",
+        label=f"isaaclab3/newton/{renderer or 'physics-only'}/uca1-fixed-fixtures",
         timeout=900,
         result_file=result_file,
     )

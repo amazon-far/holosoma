@@ -26,7 +26,7 @@ from holosoma.utils.path import resolve_path
 
 if TYPE_CHECKING:
     from holosoma.simulator.isaacsim.isaacsim import IsaacSim
-    from holosoma.simulator.isaacsim.backends.base import IsaacSimBackendAdapter
+    from holosoma.simulator.isaacsim.backends.base import IsaacLabBackendAdapter
 
 # Global lights (default sun, dome, distant) illuminate the whole stage, so one copy lives at /World.
 # Positioned lights (sphere, rect) are authored under the first environment; cloning replicates them per env.
@@ -49,7 +49,7 @@ def build_lights(sim: IsaacSim) -> None:
             _author_light(f"{root}/{name}", cfg, backend=sim.backend)
 
 
-def _author_light(prim_path: str, cfg: LightConfigBase, *, backend: IsaacSimBackendAdapter) -> None:
+def _author_light(prim_path: str, cfg: LightConfigBase, *, backend: IsaacLabBackendAdapter) -> None:
     """Author one light at ``prim_path`` for its type; skip (with a warning) unsupported types."""
     import isaaclab.sim as sim_utils
 
@@ -83,7 +83,7 @@ def _common(cfg: LightConfigBase) -> dict[str, Any]:
     return kwargs
 
 
-def _author_rect_light(prim_path: str, cfg: RectLightConfig, *, backend: IsaacSimBackendAdapter) -> None:
+def _author_rect_light(prim_path: str, cfg: RectLightConfig, *, backend: IsaacLabBackendAdapter) -> None:
     """Author a rectangular area light via ``UsdLux`` (Isaac Lab has no rectangular-light spawner)."""
     from pxr import Gf, UsdGeom, UsdLux
 

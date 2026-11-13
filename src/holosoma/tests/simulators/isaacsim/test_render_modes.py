@@ -26,7 +26,7 @@ from pydantic import ValidationError
 
 from holosoma.config_types.env import get_run_sim_env_config
 from holosoma.config_types.run_sim import RunSimConfig
-from holosoma.config_types.simulator import IsaacSimBackend, IsaacSimRenderConfig
+from holosoma.config_types.simulator import IsaacLabBackend, IsaacSimRenderConfig
 from holosoma.config_values import run_sim as run_sim_values
 from holosoma.utils.sim_utils import setup_isaaclab_launcher
 
@@ -44,17 +44,17 @@ def _has_isaacsim() -> bool:
 
 
 def _run_config(
-    render_config: IsaacSimRenderConfig, backend: IsaacSimBackend = IsaacSimBackend.ISAACSIM5
+    render_config: IsaacSimRenderConfig, backend: IsaacLabBackend = IsaacLabBackend.ISAACLAB2
 ) -> RunSimConfig:
     simulator = dataclasses.replace(
         run_sim_values.isaacsim,
-        config=dataclasses.replace(run_sim_values.isaacsim.config, isaacsim=render_config, isaacsim_backend=backend),
+        config=dataclasses.replace(run_sim_values.isaacsim.config, isaacsim=render_config, isaaclab_backend=backend),
     )
     return RunSimConfig(simulator=simulator)
 
 
 @pytest.mark.no_sim
-@pytest.mark.parametrize("backend", list(IsaacSimBackend))
+@pytest.mark.parametrize("backend", list(IsaacLabBackend))
 @pytest.mark.parametrize("headless_requires_kit", [False, True], ids=["viewer", "explicit-kit"])
 @pytest.mark.parametrize(
     ("render_config", "expected_rendering_mode", "expected_kit_args"),
@@ -82,12 +82,12 @@ def test_launcher_config_reaches_app_launcher_namespace(
     render_config: IsaacSimRenderConfig,
     expected_rendering_mode: str,
     expected_kit_args: str,
-    backend: IsaacSimBackend,
+    backend: IsaacLabBackend,
     headless_requires_kit: bool,
 ) -> None:
     """Exercise Holosoma's real launcher setup with Isaac Lab replaced only at its import boundary."""
     monkeypatch.setenv(
-        "HOLOSOMA_ISAACSIM_BACKEND", "isaacsim5" if backend == IsaacSimBackend.ISAACSIM6 else "isaacsim6"
+        "HOLOSOMA_ISAACSIM_BACKEND", "isaaclab2" if backend == IsaacLabBackend.ISAACLAB3 else "isaaclab3"
     )
     captured_args: dict[str, Any] = {}
     captured_config: list[Any] = []
@@ -112,7 +112,7 @@ def test_launcher_config_reaches_app_launcher_namespace(
     class FakeAppLauncher:
         @staticmethod
         def add_app_launcher_args(parser) -> None:
-            if backend == IsaacSimBackend.ISAACSIM5:
+            if backend == IsaacLabBackend.ISAACLAB2:
                 parser.add_argument("--rendering_mode", default="upstream-render-default")
             parser.add_argument("--kit_args", default="upstream-kit-default")
 
@@ -129,7 +129,7 @@ def test_launcher_config_reaches_app_launcher_namespace(
     physx_module = ModuleType("isaaclab_physx")
     monkeypatch.setitem(sys.modules, "isaaclab_physx", physx_module)
     closed_statuses = []
-    if backend == IsaacSimBackend.ISAACSIM6:
+    if backend == IsaacLabBackend.ISAACLAB3:
         physx_module.__spec__ = ModuleSpec("isaaclab_physx", loader=None)
         physics_module = ModuleType("isaaclab_physx.physics")
         physics_module.__dict__["PhysxCfg"] = FakePhysxCfg
@@ -175,7 +175,7 @@ def test_launcher_config_reaches_app_launcher_namespace(
             config=dataclasses.replace(
                 sim_cfg,
                 sim=dataclasses.replace(
-                    sim_cfg.sim, isaacsim6=dataclasses.replace(sim_cfg.sim.isaacsim6, require_kit=headless_requires_kit)
+                    sim_cfg.sim, isaaclab3=dataclasses.replace(sim_cfg.sim.isaaclab3, require_kit=headless_requires_kit)
                 ),
             ),
         ),
@@ -184,9 +184,9 @@ def test_launcher_config_reaches_app_launcher_namespace(
     assert app is not None
     from holosoma.simulator.isaacsim.backends import get_backend
 
-    assert get_backend(backend).isaaclab_major == (3 if backend == IsaacSimBackend.ISAACSIM6 else 2)
+    assert get_backend(backend).isaaclab_major == (3 if backend == IsaacLabBackend.ISAACLAB3 else 2)
 
-    if backend == IsaacSimBackend.ISAACSIM6:
+    if backend == IsaacLabBackend.ISAACLAB3:
         assert app._app is app_sentinel
         assert len(captured_config) == 1
         # A viewer or explicit integration requirement needs Kit without

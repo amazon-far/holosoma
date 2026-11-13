@@ -58,9 +58,9 @@ _SCENARIOS = [
 
 @pytest.mark.parametrize("scenario", _SCENARIOS)
 @pytest.mark.parametrize("physics", ["physx", "newton"])
-def test_behavior_isaacsim(scenario, physics, isaacsim_backend, tmp_path, run_isaacsim_harness):
+def test_behavior_isaacsim(scenario, physics, isaaclab_backend, tmp_path, run_isaacsim_harness):
     if physics == "newton":
-        if isaacsim_backend != "isaacsim6":
+        if isaaclab_backend != "isaaclab3":
             pytest.skip("Newton MJWarp requires Isaac Lab 3")
         from tests.simulators.behavior_assert import NEWTON_UNSUPPORTED
 

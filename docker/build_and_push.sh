@@ -28,8 +28,8 @@ TAG="${IMAGE_TAG:-$(date +%Y_%m%d_%H%M)}"
 #   build_args — optional space-separated docker --build-arg values (may be empty)
 IMAGES=(
   "holosoma|docker/Dockerfile|holosoma|holosoma|"
-  "isaacsim|docker/isaacsim.Dockerfile|holosoma-isaacsim|hs-isaacsim|"
-  "isaacsim6|docker/isaacsim6.Dockerfile|holosoma-isaacsim6|hs-isaacsim6|"
+  "isaaclab2|docker/isaaclab2.Dockerfile|holosoma-isaaclab2|hs-isaaclab2|"
+  "isaaclab3|docker/isaaclab3.Dockerfile|holosoma-isaaclab3|hs-isaaclab3|"
   "mujoco|docker/mujoco.Dockerfile|holosoma-mujoco|hs-mujoco|WARP=true"
   "retargeting|src/holosoma_retargeting/docker/Dockerfile|holosoma-retargeting|hs-retargeting|"
   "inference|src/holosoma_inference/docker/Dockerfile|holosoma-inference|hs-inference|"
@@ -50,6 +50,8 @@ for arg in "$@"; do
       ;;
     -*)
       echo "Unknown flag: $arg" >&2; exit 1 ;;
+    isaacsim)
+      FILTERS+=("isaaclab2") ;;
     *)
       FILTERS+=("$arg") ;;
   esac

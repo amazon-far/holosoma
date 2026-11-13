@@ -30,7 +30,7 @@ def register_standalone_schemas() -> None:
     schema_root = Path(str(distribution.locate_file("ovphysx/schemas/physx")))
     resources = sorted(schema_root.glob("*/resources/plugInfo.json"))
     if not resources:
-        raise RuntimeError("Standalone PhysX USD schemas are missing; rerun scripts/setup_isaacsim6.sh.")
+        raise RuntimeError("Standalone PhysX USD schemas are missing; rerun scripts/setup_isaaclab3.sh.")
     registry = Plug.Registry()
     registered = {plugin.name.casefold() for plugin in registry.GetAllPlugins()}
     paths = [str(path.parent) for path in resources if path.parent.parent.name.casefold() not in registered]

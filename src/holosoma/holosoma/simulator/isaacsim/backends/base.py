@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from holosoma.config_types.simulator import SimEngineConfig
 
 
-class IsaacSimBackendAdapter(ABC):
+class IsaacLabBackendAdapter(ABC):
     """Native operations that changed between Isaac Lab releases.
 
     The frontend owns scene authoring, state registration and scheduling. An
@@ -27,8 +27,8 @@ class IsaacSimBackendAdapter(ABC):
     env_regex_ns: str
 
     @property
-    def is_isaacsim6(self) -> bool:
-        """Whether this adapter implements Isaac Sim 6's Isaac Lab 3 API."""
+    def is_isaaclab3(self) -> bool:
+        """Whether this adapter implements the Isaac Lab 3 API."""
         return self.isaaclab_major == 3
 
     @property
