@@ -313,10 +313,28 @@ TEST(ContextualVelocity, ExposesTheDepthContractTheRealExportDeclares) {
   EXPECT_DOUBLE_EQ(contract->near_m, clip[0]);
   EXPECT_DOUBLE_EQ(contract->far_m, clip[1]);
   EXPECT_EQ(contract->invalid_fill, params.at("invalid_fill").get<std::string>());
+  const auto raw = Json::parse(meta.at("depth_raw_shape_hw").get<std::string>()).get<std::vector<int>>();
+  ASSERT_TRUE(contract->raw_shape_hw.has_value());
+  EXPECT_EQ(contract->raw_shape_hw->first, raw[0]);
+  EXPECT_EQ(contract->raw_shape_hw->second, raw[1]);
+  EXPECT_EQ(contract->resize, Json::parse(meta.at("depth_resize").get<std::string>()).get<std::string>());
+  EXPECT_EQ(contract->name, Json::parse(meta.at("depth_contract").get<std::string>()).get<std::string>());
   // And the values themselves, so a fixture edit cannot move both sides at once.
   EXPECT_DOUBLE_EQ(contract->near_m, 0.3);
   EXPECT_DOUBLE_EQ(contract->far_m, 2.0);
   EXPECT_EQ(contract->invalid_fill, "near");
+  EXPECT_EQ(*contract->raw_shape_hw, std::make_pair(63, 112));
+  EXPECT_EQ(contract->resize, std::optional<std::string>("bicubic_antialias"));
+  EXPECT_EQ(contract->name, std::optional<std::string>("gma_zed_x_mini_v1"));
+}
+
+TEST(ContextualVelocity, AnExportThatDeclaresNoFramingLeavesItUnset) {
+  auto policy = Make("velocity_linear.onnx");
+  const auto contract = policy->depth_contract();
+  ASSERT_TRUE(contract.has_value());
+  EXPECT_FALSE(contract->raw_shape_hw);
+  EXPECT_FALSE(contract->resize);
+  EXPECT_FALSE(contract->name);
 }
 
 TEST(ContextualVelocity, RefusesEachBrokenExportNamingWhatIsWrong) {

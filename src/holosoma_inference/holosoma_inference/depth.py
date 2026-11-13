@@ -13,8 +13,8 @@ latency by delaying what it publishes.
 
 from __future__ import annotations
 
-import math
 import time
+from dataclasses import dataclass
 
 import numpy as np
 from loguru import logger
@@ -25,17 +25,102 @@ HEIGHT, WIDTH = 58, 87
 NEAR_M, FAR_M = 0.3, 2.0
 DEPTH_TOPIC = "depth/depth_registered"
 # The plane a pixel with no reading takes. "far" is what the primitive models were trained on; a
-# continuous-velocity export declares its own in its ONNX metadata.
+# continuous-velocity export declares its own in its ONNX metadata, and that is what is applied.
 INVALID_FILL = "far"
 INVALID_FILLS = ("far", "near")
-CONTRACT_MISMATCH = "depth preprocessor does not match the model's depth contract"
+# torchvision's antialiased bicubic, which the continuous-velocity exports were trained with.
+BICUBIC_ANTIALIAS = "bicubic_antialias"
+RESIZES = (BICUBIC_ANTIALIAS,)
+FRAME_SHAPE_MISMATCH = "depth frame does not have the size the model was trained to resize"
+UNFRAMED_CONTRACT = "the model's depth contract does not say how a depth topic frame is resized"
 
 
-def preprocess(depth_m, near_m: float = NEAR_M, far_m: float = FAR_M, invalid_fill: str = INVALID_FILL) -> np.ndarray:
+@dataclass(frozen=True)
+class DepthSettings:
+    """How a metric depth frame becomes the policy's input: clip range, fill, framing, resize.
+
+    ``raw_shape_hw`` is the only frame size accepted, and ``resize`` how it is resized; both None
+    accepts any size and resizes with a cubic spline, which is what the primitive models get.
+    """
+
+    near_m: float = NEAR_M
+    far_m: float = FAR_M
+    invalid_fill: str = INVALID_FILL
+    raw_shape_hw: tuple[int, int] | None = None
+    resize: str | None = None
+
+
+def settings_for(contract, default: DepthSettings | None = None) -> DepthSettings:
+    """The preprocessing a depth topic must apply for a model's declared depth contract.
+
+    ``contract`` is the active model's ``depth_contract`` (None for a model that declares none,
+    such as the primitive exports, which get ``default``). A declared contract fixes everything,
+    so nothing is left for an operator to choose; one that does not name the frame size and
+    resize it was trained with is refused, since a topic of any other framing would reach the
+    model with a different field of view or resampling than training saw.
+    """
+    if contract is None:
+        return default or DepthSettings()
+    raw, resize = contract.get("raw_shape_hw"), contract.get("resize")
+    if raw is None or resize is None:
+        raise ValueError(f"{UNFRAMED_CONTRACT}: it must declare depth_raw_shape_hw and depth_resize")
+    if resize not in RESIZES:
+        raise ValueError(f"{UNFRAMED_CONTRACT}: depth_resize {resize!r} is not one of {RESIZES}")
+    return DepthSettings(
+        near_m=float(contract["near_m"]),
+        far_m=float(contract["far_m"]),
+        invalid_fill=contract["invalid_fill"],
+        raw_shape_hw=(int(raw[0]), int(raw[1])),
+        resize=resize,
+    )
+
+
+def _cubic(x: np.ndarray, a: float = -0.5) -> np.ndarray:
+    x = np.abs(x)
+    near = ((a + 2) * x - (a + 3)) * x * x + 1
+    far = ((a * x - 5 * a) * x + 8 * a) * x - 4 * a
+    return np.where(x < 1, near, np.where(x < 2, far, 0.0))
+
+
+def _antialias_weights(n_in: int, n_out: int) -> np.ndarray:
+    # One row per output pixel. When shrinking, the kernel widens by the scale so every input
+    # pixel contributes (the antialiasing); the window is cut at the edges and renormalised.
+    scale = n_in / n_out
+    stretch = max(scale, 1.0)
+    support = 2.0 * stretch
+    weights = np.zeros((n_out, n_in))
+    for i in range(n_out):
+        center = (i + 0.5) * scale
+        lo, hi = max(int(center - support + 0.5), 0), min(int(center + support + 0.5), n_in)
+        w = _cubic((np.arange(lo, hi) - center + 0.5) / stretch)
+        weights[i, lo:hi] = w / w.sum()
+    return weights
+
+
+def resize_bicubic_antialias(frame: np.ndarray, out_hw: tuple[int, int]) -> np.ndarray:
+    """Resize a 2-D frame as ``torch.nn.functional.interpolate(mode="bicubic", antialias=True)``.
+
+    Separable, with half-pixel centres (``align_corners=False``) and the a = -0.5 cubic.
+    """
+    rows = _antialias_weights(frame.shape[0], out_hw[0])
+    cols = _antialias_weights(frame.shape[1], out_hw[1])
+    return (rows @ frame.astype(np.float64) @ cols.T).astype(np.float32)
+
+
+def preprocess(
+    depth_m,
+    near_m: float = NEAR_M,
+    far_m: float = FAR_M,
+    invalid_fill: str = INVALID_FILL,
+    *,
+    raw_shape_hw: tuple[int, int] | None = None,
+    resize: str | None = None,
+) -> np.ndarray:
     """Resize a metric depth frame to 58x87 and normalise it to [-0.5, +0.5].
 
     Pixels with no reading (NaN, or zero or negative depth) take the ``invalid_fill`` plane;
-    ``-inf`` (too close) reads as near and ``+inf`` (too far) as far whatever the fill.
+    ``-inf`` (too close) reads as near and ``+inf`` (too far) as far whatever the fill. With
+    ``raw_shape_hw`` a frame of any other size is refused, and ``resize`` names the resize.
     """
     frame = np.asarray(depth_m, dtype=np.float32)
     if frame.ndim == 3 and frame.shape[-1] == 1:
@@ -46,12 +131,20 @@ def preprocess(depth_m, near_m: float = NEAR_M, far_m: float = FAR_M, invalid_fi
         raise ValueError(f"far_m must exceed near_m, got {near_m} and {far_m}")
     if invalid_fill not in INVALID_FILLS:
         raise ValueError(f"invalid_fill must be one of {INVALID_FILLS}, got {invalid_fill!r}")
+    if resize is not None and resize not in RESIZES:
+        raise ValueError(f"resize must be one of {RESIZES}, got {resize!r}")
+    if raw_shape_hw is not None and frame.shape != tuple(raw_shape_hw):
+        raise ValueError(
+            f"{FRAME_SHAPE_MISMATCH}: got {frame.shape[0]}x{frame.shape[1]}, the model expects "
+            f"{raw_shape_hw[0]}x{raw_shape_hw[1]}; publish depth at that resolution"
+        )
     frame = frame.astype(np.float32, copy=True)
     # The ZED reports a pixel with no reading as NaN *and* as zero or negative, and clipping a
     # zero would read as an obstacle at the near plane whatever the model was trained on, so both
     # take the fill. For the primitive models that is far: a missed ray was written as 1000 m in
-    # training and clamps to far. A continuous-velocity export trained with invalid pixels at near
-    # declares so, and the runner refuses a preprocessor that disagrees (check_depth_contract).
+    # training and clamps to far. A continuous-velocity export declares its fill, and holosoma
+    # applies whatever it declares rather than choosing one: the fill is part of the model's
+    # contract with its depth source, so its export is where to change it.
     fill = far_m if invalid_fill == "far" else near_m
     frame[np.isneginf(frame)] = near_m
     frame[np.isposinf(frame)] = far_m
@@ -60,32 +153,14 @@ def preprocess(depth_m, near_m: float = NEAR_M, far_m: float = FAR_M, invalid_fi
     # Clip before resizing as well as after, so out-of-range pixels cannot bleed into their
     # neighbours through the interpolation kernel.
     frame = np.clip(frame, near_m, far_m)
-    if frame.shape != (HEIGHT, WIDTH):
+    if resize == BICUBIC_ANTIALIAS:
+        frame = resize_bicubic_antialias(frame, (HEIGHT, WIDTH))
+    elif frame.shape != (HEIGHT, WIDTH):
         zoom = (HEIGHT / frame.shape[0], WIDTH / frame.shape[1])
         # Cubic spline rather than training's torchvision BICUBIC: sub-millimetre difference on
         # depth this smooth, and scipy is a declared dependency where OpenCV is not.
         frame = ndimage.zoom(frame, zoom, order=3, mode="nearest")
     return (np.clip(frame, near_m, far_m) - near_m) / (far_m - near_m) - 0.5
-
-
-def check_depth_contract(contract, *, near_m: float, far_m: float, invalid_fill: str) -> None:
-    """Refuse a preprocessor whose clip range or invalid fill differs from the model's contract.
-
-    ``contract`` is the loaded model's declared depth preprocessing (``near_m``, ``far_m``,
-    ``invalid_fill``), or None for a model that declares none, such as the primitive exports;
-    with None the preprocessor's own settings stand.
-    """
-    if contract is None:
-        return
-    mismatches = []
-    for name, ours in (("near_m", near_m), ("far_m", far_m)):
-        theirs = float(contract[name])
-        if not math.isclose(ours, theirs, rel_tol=0.0, abs_tol=1e-9):
-            mismatches.append(f"{name} is {ours:g} but the model declares {theirs:g}")
-    if invalid_fill != contract["invalid_fill"]:
-        mismatches.append(f"invalid_fill is {invalid_fill!r} but the model declares {contract['invalid_fill']!r}")
-    if mismatches:
-        raise ValueError(f"{CONTRACT_MISMATCH}: " + "; ".join(mismatches))
 
 
 def frame_from_image(msg) -> np.ndarray:
@@ -104,31 +179,37 @@ def stamp_seconds(msg) -> float:
 class DepthConsumer:
     """Feeds a contextual policy from a 32FC1 depth topic, on its own executor thread.
 
+    Each frame is preprocessed for the policy's active model: its declared depth contract when it
+    has one (read per frame, so a policy switch brings its own), else ``near_m``/``far_m`` with
+    the far fill. A frame the active contract cannot accept (the wrong size, or a contract that
+    does not say how to frame one) is dropped and counted in ``rejected``, so the policy's depth
+    goes stale and it stops rather than act on a misframed image.
+
     ``rclpy`` is imported on construction rather than at module scope: it is a ROS-deployment
     extra, and ``preprocess`` is useful without it.
     """
 
-    def __init__(
-        self,
-        policy,
-        topic: str = DEPTH_TOPIC,
-        *,
-        near_m: float = NEAR_M,
-        far_m: float = FAR_M,
-        invalid_fill: str = INVALID_FILL,
-    ):
+    def __init__(self, policy, topic: str = DEPTH_TOPIC, *, near_m: float = NEAR_M, far_m: float = FAR_M):
+        self._policy = policy
+        self._default = DepthSettings(near_m=near_m, far_m=far_m)
+        # Fails here, before anything is subscribed, for a model this topic cannot feed.
+        self.settings()
+        self.frames = 0
+        self.rejected = 0
+        self._warned: set[str] = set()
+        self._attach(topic)
+
+    def settings(self) -> DepthSettings:
+        """The preprocessing the active model needs; raises if its contract cannot frame a topic."""
+        return settings_for(getattr(self._policy, "depth_contract", None), self._default)
+
+    def _attach(self, topic: str) -> None:
         import rclpy
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.node import Node
         from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
         from sensor_msgs.msg import Image
 
-        self._policy = policy
-        if invalid_fill not in INVALID_FILLS:
-            raise ValueError(f"invalid_fill must be one of {INVALID_FILLS}, got {invalid_fill!r}")
-        self._near_m, self._far_m, self._invalid_fill = near_m, far_m, invalid_fill
-        self.frames = 0
-        self.rejected = 0
         if not rclpy.ok():
             rclpy.init()
         self._node = Node("contextual_depth_consumer")
@@ -146,11 +227,25 @@ class DepthConsumer:
         self._topic = topic
 
     def _on_depth(self, msg) -> None:
-        frame = preprocess(frame_from_image(msg), self._near_m, self._far_m, self._invalid_fill)
-        if self._policy.set_depth(frame, stamp_seconds(msg)):
-            self.frames += 1
-        else:
+        self.push(frame_from_image(msg), stamp_seconds(msg))
+
+    def push(self, depth_m, stamp_s=None) -> bool:
+        """Preprocess one metric frame for the active model and hand it to the policy."""
+        try:
+            s = self.settings()
+            frame = preprocess(depth_m, s.near_m, s.far_m, s.invalid_fill, raw_shape_hw=s.raw_shape_hw, resize=s.resize)
+        except ValueError as exc:
             self.rejected += 1
+            reason = str(exc)
+            if reason not in self._warned:
+                self._warned.add(reason)
+                logger.error(f"[DepthConsumer] dropping depth frames: {reason}")
+            return False
+        if self._policy.set_depth(frame, stamp_s):
+            self.frames += 1
+            return True
+        self.rejected += 1
+        return False
 
     def start(self) -> None:
         """Spin the subscription on a daemon thread, leaving the policy loop blocking."""

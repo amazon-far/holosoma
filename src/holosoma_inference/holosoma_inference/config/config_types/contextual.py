@@ -53,7 +53,10 @@ class ContextualConfig:
     """Oldest depth frame, by local receive time, the runner will act on.
 
     An engaged policy whose newest frame is older than this is stopped, as if the operator had
-    pressed stop, and a start is refused until frames arrive again.
+    pressed stop, and a start is refused until frames arrive again. It is a camera-dropout guard,
+    not a latency bound: a continuous-velocity export's ``depth_latency_frames_50hz`` (2 to 5
+    frames, 40 to 100 ms, for the reference export) is the staleness it was trained on, and
+    nothing here checks a frame against it.
     """
 
     def __post_init__(self):

@@ -19,8 +19,6 @@ constexpr const char *kPolicyKind = "hybrid_velocity";
 // GMA fixed-arm flag: [left held, right held], never both.
 constexpr std::array<std::array<float, 2>, 3> kFixedArmFlags{{{0.f, 0.f}, {1.f, 0.f}, {0.f, 1.f}}};
 constexpr std::array<const char *, 3> kCommandAxes{"lin_vel_x", "lin_vel_y", "ang_vel_yaw"};
-// Below this every command axis reads as standing.
-constexpr float kMovingThreshold = 1e-3f;
 
 enum class Term { kActions, kBaseAngVel, kDofPos, kDofVel, kFixedArmFlag, kProjectedGravity, kVelocityCommand };
 const std::map<std::string, Term> kTerms{
@@ -394,6 +392,34 @@ void VelocityFamily::ReadDepthContract(const Contract &c) {
   if (!fill.is_string() || (fill != "near" && fill != "far"))
     c.Fail(params_key + ".invalid_fill", "must be \"near\" or \"far\"");
   depth_contract_.invalid_fill = fill.get<std::string>();
+  // Framing and resampling: how a metric frame becomes the policy's depth
+  // size. Holosoma implements one framing (the whole frame, no crop) and one
+  // resize, so anything else is refused rather than silently reframed.
+  if (const auto *raw = c.Optional("depth_raw_shape_hw")) {
+    const auto values = c.FiniteNumbers("depth_raw_shape_hw", *raw);
+    if (!raw->is_array() || values.size() != 2 || !(values[0] >= 1) || !(values[1] >= 1) ||
+        values[0] != std::floor(values[0]) || values[1] != std::floor(values[1]) || values[0] > 1e5 || values[1] > 1e5)
+      c.Fail("depth_raw_shape_hw", "must be [height, width] in whole pixels");
+    depth_contract_.raw_shape_hw = std::make_pair(static_cast<int>(values[0]), static_cast<int>(values[1]));
+  }
+  if (const auto *resize = c.Optional("depth_resize")) {
+    if (!resize->is_string() || *resize != "bicubic_antialias")
+      c.Fail("depth_resize", "must be \"bicubic_antialias\", the one resize holosoma implements");
+    depth_contract_.resize = resize->get<std::string>();
+  }
+  if (const auto *definition = c.Optional("depth_definition"))
+    if (*definition != "distance_to_image_plane")
+      c.Fail("depth_definition", "must be \"distance_to_image_plane\", the depth a depth camera publishes");
+  if (const auto *crop = c.Optional("depth_sim_crop_tblr"))
+    if (*crop != Json::array({0, 0, 0, 0}))
+      c.Fail("depth_sim_crop_tblr", "must be [0, 0, 0, 0]; holosoma crops nothing");
+  for (const char *side : {"crop_top", "crop_bottom", "crop_left", "crop_right"})
+    if (params.contains(side) && params.at(side) != 0)
+      c.Fail(params_key + "." + side, "must be 0; holosoma crops nothing");
+  if (const auto *name = c.Optional("depth_contract")) {
+    if (!name->is_string()) c.Fail("depth_contract", "must be a string");
+    depth_contract_.name = name->get<std::string>();
+  }
   if (const auto *norm = c.Optional("depth_normalization"))
     if (*norm != "(clamp(depth, near, far) - near) / (far - near) - 0.5")
       c.Fail("depth_normalization", "must be \"(clamp(depth, near, far) - near) / (far - near) - 0.5\"");

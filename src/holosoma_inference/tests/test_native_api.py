@@ -236,64 +236,137 @@ def _contextual_runner(config):
     )
 
 
-def _continuous_export_config(tmp_path, metadata=None):
+def _continuous_export_config(tmp_path, metadata=None, *more_metadata):
+    """A preset over the export stub; each extra metadata dict adds a model to switch to."""
     from holosoma_inference.config.config_types.contextual import ContextualConfig
     from holosoma_inference.config.config_types.observation import ObservationConfig
 
     generator = runpy.run_path(str(Path(__file__).parents[1] / "holosoma_cpp/tests/gen_velocity_models.py"))
-    path = tmp_path / "velocity.onnx"
-    generator["export_stub"](path, metadata or generator["EXPORT"]["metadata_props"])
+    paths = []
+    for i, meta in enumerate((metadata, *more_metadata)):
+        paths.append(tmp_path / f"velocity{i or ''}.onnx")
+        generator["export_stub"](paths[-1], meta or generator["EXPORT"]["metadata_props"])
     base = inference.get_config("g1-29dof-loco")
     return replace(
         base,
         observation=ObservationConfig({"actor_obs": []}, {}, {}, {}),
-        task=replace(base.task, model_path=str(path), use_phase=False),
+        task=replace(
+            base.task, model_path=str(paths[0]) if len(paths) == 1 else [str(p) for p in paths], use_phase=False
+        ),
         contextual=ContextualConfig(discretizer=None, require_climb_head=False),
         secondary=None,
     )
 
 
-class _RecordingDepthConsumer:
-    """Stands in for the ROS transport (rclpy is a deployment extra); records how it was built."""
+def _offline_depth_consumer():
+    """The real topic consumer without its ROS subscription (rclpy is a deployment extra)."""
+    from holosoma_inference import depth
 
-    built = []
+    class Offline(depth.DepthConsumer):
+        built = []
 
-    def __init__(self, policy, topic, **settings):
-        self.settings = settings
-        self.started = False
-        _RecordingDepthConsumer.built.append(self)
+        def _attach(self, topic):
+            self.topic, self.started = topic, False
+            Offline.built.append(self)
 
-    def start(self):
-        self.started = True
+        def start(self):
+            self.started = True
+
+    return Offline
+
+
+def _export_metadata(**changes):
+    generator = runpy.run_path(str(Path(__file__).parents[1] / "holosoma_cpp/tests/gen_velocity_models.py"))
+    metadata = dict(generator["EXPORT"]["metadata_props"])
+    for key, value in changes.items():
+        if value is None:
+            del metadata[key]
+        else:
+            metadata[key] = json.dumps(value)
+    return metadata
 
 
 def test_a_continuous_export_exposes_the_depth_contract_its_metadata_declares(tmp_path):
     runner = _contextual_runner(_continuous_export_config(tmp_path))
-    metadata = runpy.run_path(str(Path(__file__).parents[1] / "holosoma_cpp/tests/gen_velocity_models.py"))["EXPORT"][
-        "metadata_props"
-    ]
+    metadata = _export_metadata()
     near, far = json.loads(metadata["depth_clip_m"])
     fill = json.loads(metadata["depth_observation_params"])["invalid_fill"]
-    assert runner.depth_contract == {"near_m": near, "far_m": far, "invalid_fill": fill}
-    assert runner.depth_contract == {"near_m": 0.3, "far_m": 2.0, "invalid_fill": "near"}
+    raw = tuple(json.loads(metadata["depth_raw_shape_hw"]))
+    resize, name = json.loads(metadata["depth_resize"]), json.loads(metadata["depth_contract"])
+    expected = {"near_m": near, "far_m": far, "invalid_fill": fill, "raw_shape_hw": raw, "resize": resize, "name": name}
+    assert runner.depth_contract == expected
+    assert runner.depth_contract == {
+        "near_m": 0.3,
+        "far_m": 2.0,
+        "invalid_fill": "near",
+        "raw_shape_hw": (63, 112),
+        "resize": "bicubic_antialias",
+        "name": "gma_zed_x_mini_v1",
+    }
 
 
-def test_the_depth_topic_is_refused_when_its_preprocessor_disagrees_with_the_export(tmp_path, monkeypatch):
+def test_the_depth_topic_preprocesses_as_the_export_declares_and_refuses_another_frame_size(tmp_path, monkeypatch):
     from holosoma_inference import depth
     from holosoma_inference.run_policy import _start_depth_source
 
-    monkeypatch.setattr(depth, "DepthConsumer", _RecordingDepthConsumer)
-    _RecordingDepthConsumer.built = []
+    offline = _offline_depth_consumer()
+    monkeypatch.setattr(depth, "DepthConsumer", offline)
     config = _continuous_export_config(tmp_path)
     runner = _contextual_runner(config)
-    # The default FAR-plane fill against an export trained with invalid pixels at near.
-    with pytest.raises(ValueError, match=depth.CONTRACT_MISMATCH) as refused:
+    source = _start_depth_source(runner, config, None, "depth/depth_registered")
+    assert source.started and source.topic == "depth/depth_registered"
+    assert source.settings() == depth.settings_for(runner.depth_contract)
+    frame = np.full((63, 112), 1.0, np.float32)
+    frame[0, 0] = np.nan  # a hole takes the declared near fill
+    assert source.push(frame, 1.0)
+    stored, _ = runner._latest_depth()
+    framing = {"raw_shape_hw": (63, 112), "resize": depth.BICUBIC_ANTIALIAS}
+    np.testing.assert_array_equal(stored, depth.preprocess(frame, 0.3, 2.0, "near", **framing))
+    # Control: the far fill would have given another frame, so the equality reads the fill.
+    assert not np.array_equal(stored, depth.preprocess(frame, 0.3, 2.0, "far", **framing))
+    # The ZED at its native resolution would reach the model with another field of view.
+    assert not source.push(np.full((376, 672), 1.0, np.float32), 2.0)
+    assert (source.frames, source.rejected) == (1, 1)
+
+
+@pytest.mark.parametrize("missing", ["depth_raw_shape_hw", "depth_resize"])
+def test_the_depth_topic_is_refused_for_an_export_that_does_not_say_how_to_frame_it(tmp_path, monkeypatch, missing):
+    from holosoma_inference import depth
+    from holosoma_inference.run_policy import _start_depth_source
+
+    offline = _offline_depth_consumer()
+    monkeypatch.setattr(depth, "DepthConsumer", offline)
+    config = _continuous_export_config(tmp_path, _export_metadata(**{missing: None}))
+    runner = _contextual_runner(config)
+    with pytest.raises(ValueError, match=depth.UNFRAMED_CONTRACT):
         _start_depth_source(runner, config, None, "depth/depth_registered")
-    assert "invalid_fill is 'far' but the model declares 'near'" in str(refused.value)
-    assert _RecordingDepthConsumer.built == []
-    # The matching fill starts, and the consumer preprocesses with it.
-    source = _start_depth_source(runner, config, None, "depth/depth_registered", depth_invalid_fill="near")
-    assert source.started and source.settings == {"invalid_fill": "near"}
+    assert offline.built == []
+
+
+def test_a_policy_switch_brings_the_next_exports_depth_contract_to_the_topic(tmp_path, monkeypatch):
+    from holosoma_inference import depth
+    from holosoma_inference.inputs.api.commands import StateCommand
+    from holosoma_inference.run_policy import _start_depth_source
+
+    monkeypatch.setattr(depth, "DepthConsumer", _offline_depth_consumer())
+    params = json.loads(_export_metadata()["depth_observation_params"])
+    second = _export_metadata(depth_clip_m=[0.5, 3.0], depth_observation_params={**params, "invalid_fill": "far"})
+    config = _continuous_export_config(tmp_path, None, second)
+    runner = _contextual_runner(config)
+    source = _start_depth_source(runner, config, None, "depth/depth_registered")
+    frame = np.full((63, 112), 1.0, np.float32)
+    frame[0, 0] = np.nan
+    assert source.push(frame, 1.0)
+    first, _ = runner._latest_depth()
+    runner._dispatch_command(StateCommand.NEXT_POLICY)
+    assert runner.active_policy_index == 1
+    assert (runner.depth_contract["near_m"], runner.depth_contract["invalid_fill"]) == (0.5, "far")
+    assert source.push(frame, 2.0)
+    after, _ = runner._latest_depth()
+    framing = {"raw_shape_hw": (63, 112), "resize": depth.BICUBIC_ANTIALIAS}
+    np.testing.assert_array_equal(first, depth.preprocess(frame, 0.3, 2.0, "near", **framing))
+    np.testing.assert_array_equal(after, depth.preprocess(frame, 0.5, 3.0, "far", **framing))
+    assert not np.array_equal(first, after)
 
 
 def test_a_continuous_export_that_declares_no_depth_contract_is_refused_at_load(tmp_path):
@@ -311,8 +384,7 @@ def test_a_primitive_export_declares_no_depth_contract_and_keeps_the_far_fill(tm
     from holosoma_inference.config.config_types.observation import ObservationConfig
     from holosoma_inference.run_policy import _start_depth_source
 
-    monkeypatch.setattr(depth, "DepthConsumer", _RecordingDepthConsumer)
-    _RecordingDepthConsumer.built = []
+    monkeypatch.setattr(depth, "DepthConsumer", _offline_depth_consumer())
     generator = Path(__file__).parents[1] / "holosoma_cpp/tests/gen_contextual_models.py"
     path = tmp_path / "contextual.onnx"
     runpy.run_path(str(generator))["write_model"](path)
@@ -346,7 +418,7 @@ def test_a_primitive_export_declares_no_depth_contract_and_keeps_the_far_fill(tm
     )
     assert runner.depth_contract is None
     source = _start_depth_source(runner, config, None, "depth/depth_registered")
-    assert source.started and source.settings == {"invalid_fill": "far"}
+    assert source.started and source.settings() == depth.DepthSettings(depth.NEAR_M, depth.FAR_M, "far", None, None)
 
 
 def test_packed_observation_uses_native_graph_scaling_and_defaults(native_config):

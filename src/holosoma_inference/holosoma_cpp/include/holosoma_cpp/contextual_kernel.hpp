@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "holosoma_cpp/contextual_types.hpp"
@@ -47,6 +48,12 @@ using Options = ContextualConfig;
 struct DepthContract {
   double near_m = 0, far_m = 0;
   std::string invalid_fill;
+  // The metric frame size the export was trained to resize to the policy's
+  // depth size, and the resize; unset when the export does not declare them.
+  std::optional<std::pair<int, int>> raw_shape_hw;
+  std::optional<std::string> resize;
+  // The export's name for its depth contract, for logs; never interpreted.
+  std::optional<std::string> name;
 };
 
 // One command interface for a depth-conditioned policy: how operator commands

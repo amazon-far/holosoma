@@ -141,9 +141,6 @@ def test_a_depth_source_needs_a_contextual_policy() -> None:
     with pytest.raises(ValueError, match="not both"):
         _start_depth_source(_Policy(), contextual, "depth_img_shm", "depth/topic")
     assert _start_depth_source(_Policy(), contextual, None, None) is None
-    # A shared-memory producer preprocesses its own frames; a fill setting here would be ignored.
-    with pytest.raises(ValueError, match="--depth-invalid-fill applies to --depth-topic"):
-        _start_depth_source(_Policy(), contextual, "depth_img_shm", None, depth_invalid_fill="near")
 
 
 @pytest.fixture

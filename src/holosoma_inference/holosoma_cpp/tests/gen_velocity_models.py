@@ -311,6 +311,32 @@ BROKEN = {
         edit("depth_normalization", lambda _: json.dumps("clamp(depth, near, far) / far")),
         "depth_normalization must be",
     ),
+    "depth_raw_shape_one": (edit("depth_raw_shape_hw", lambda _: [63]), "depth_raw_shape_hw must be [height, width]"),
+    "depth_raw_shape_fractional": (
+        edit("depth_raw_shape_hw", lambda _: [63.5, 112]),
+        "depth_raw_shape_hw must be [height, width]",
+    ),
+    "depth_raw_shape_zero": (
+        edit("depth_raw_shape_hw", lambda _: [0, 112]),
+        "depth_raw_shape_hw must be [height, width]",
+    ),
+    "depth_resize_other": (
+        edit("depth_resize", lambda _: json.dumps("bilinear")),
+        'depth_resize must be "bicubic_antialias"',
+    ),
+    "depth_definition_other": (
+        edit("depth_definition", lambda _: json.dumps("distance_to_camera")),
+        'depth_definition must be "distance_to_image_plane"',
+    ),
+    "depth_sim_crop": (
+        edit("depth_sim_crop_tblr", lambda _: [2, 0, 0, 0]),
+        "depth_sim_crop_tblr must be [0, 0, 0, 0]",
+    ),
+    "depth_params_crop": (
+        edit("depth_observation_params", with_field("crop_left", 4)),
+        "depth_observation_params.crop_left must be 0",
+    ),
+    "depth_contract_number": (edit("depth_contract", lambda _: 1), "depth_contract must be a string"),
     "depth_out_of_range_swapped": (
         edit("depth_sim_out_of_range", lambda _: {"beyond_far": "near", "below_near": "near"}),
         "depth_sim_out_of_range must be",
