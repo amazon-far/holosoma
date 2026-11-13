@@ -99,8 +99,7 @@ class ClassicBackend(IMujocoBackend):
 
     def refresh_rigid_body_states(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Refresh reusable CPU views for robot rigid-body state, running pending kinematics first."""
-        if self._kinematics_pending:
-            self.forward_kinematics()
+        self.ensure_kinematics()
         np.take(self.data.xpos, self._rigid_body_ids, axis=0, out=self._rigid_body_positions)
         np.take(self.data.xquat, self._rigid_body_ids, axis=0, out=self._rigid_body_quaternions_mj)
         self._rigid_body_quaternions[:, :3] = self._rigid_body_quaternions_mj[:, 1:]

@@ -20,6 +20,7 @@ from holosoma.config_types.sensor import (  # noqa: E402
 )
 from holosoma.config_values.simulator import mujoco as mujoco_config  # noqa: E402
 from holosoma.simulator.mujoco import sensor_setup  # noqa: E402
+from holosoma.simulator.mujoco.backends.classic_backend import ClassicBackend  # noqa: E402
 from holosoma.simulator.mujoco.geom_groups import (  # noqa: E402
     ROBOT_COLLISION_GEOM_GROUP,
     ROBOT_VISUAL_GEOM_GROUP,
@@ -432,6 +433,7 @@ def test_mjwarp_lidar_reuses_camera_bvh_without_duplicate_same_frame_refit(
     backend._lidar_render_context_groups = None
     backend._sensor_refit_graphs = {}
     backend._sensor_refit_contexts = {-1}
+    backend._kinematics_pending = False
 
     camera = SimpleNamespace(name="camera", config=SimpleNamespace(data_types=[]))
     lidar = SimpleNamespace(
@@ -1011,6 +1013,57 @@ def test_registered_robot_filter_excludes_reserved_groups_and_none_preserves_aut
     assert "mujoco_robot_geom_ids" not in record.backend_cache
     np.testing.assert_array_equal(model.geom_matid, original_matid)
     np.testing.assert_array_equal(model.geom_rgba, original_rgba)
+
+
+def test_render_sensors_reads_kinematics_of_the_latest_step() -> None:
+    model = mujoco.MjModel.from_xml_string(
+        """
+        <mujoco>
+          <option gravity="0 0 0"/>
+          <worldbody>
+            <site name="holosoma_lidar_mount_scan"/>
+            <body name="target_body" pos="2 0 0">
+              <joint name="slide" type="slide" axis="1 0 0"/>
+              <geom name="target" type="box" size="0.1 0.2 0.3"/>
+            </body>
+          </worldbody>
+        </mujoco>
+        """
+    )
+    data = mujoco.MjData(model)
+    data.qvel[0] = 10.0
+    mujoco.mj_forward(model, data)
+    lidar = LidarSensorConfig(
+        mount=SensorMountConfig(target_kind="world"),
+        pattern=CustomLidarRayPatternConfig(ray_directions=[[1.0, 0.0, 0.0]]),
+        near=0.01,
+        far=10.0,
+        body_filter=LidarBodyFilterConfig(target_kind="none"),
+    )
+    backend = object.__new__(ClassicBackend)
+    backend.model = model
+    backend.data = data
+    backend._kinematics_pending = False
+    manager = SensorManager("cpu", control_hz=10.0)
+    sim = SimpleNamespace(
+        root_model=model,
+        sensor_config={"scan": lidar},
+        sensor_manager=manager,
+        backend=backend,
+        sim_device="cpu",
+        num_envs=1,
+        env_origins=torch.zeros((1, 3)),
+        time=lambda: 0.0,
+    )
+    sensor_setup.register_lidars(sim, manager)
+
+    backend.step()
+    sensor_setup.render_sensors(sim)
+
+    expected = 2.0 + float(data.qpos[0]) - 0.1
+    torch.testing.assert_close(
+        manager.get_lidar("scan").buffers["ranges"], torch.tensor([[expected]], dtype=torch.float32)
+    )
 
 
 def test_registered_explicit_body_filter_renders_target_behind_shell() -> None:

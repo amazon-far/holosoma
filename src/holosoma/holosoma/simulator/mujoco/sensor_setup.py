@@ -406,6 +406,8 @@ def render_sensors(sim: MuJoCo) -> None:
     """Capture all camera and LiDAR sensors due this control step."""
     if not sim.sensor_config:
         return
+    # A step leaves body kinematics one step behind; sensors read them.
+    sim.backend.ensure_kinematics()
     if isinstance(sim.backend, WarpBackend):
         sim.backend.begin_sensor_render()
     render_cameras(sim)

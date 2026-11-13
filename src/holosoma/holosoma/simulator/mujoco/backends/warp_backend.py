@@ -32,6 +32,8 @@ to ClassicBackend (CPU-only simulation).
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 import mujoco
@@ -231,6 +233,7 @@ class WarpBackend(IMujocoBackend):
         # Initialize Warp runtime
         wp.init()
         self.mjw_device = wp.get_device(device)
+        self._fk_graph: Graph | None = None
         if not self.mjw_device.is_cuda:
             raise ValueError(f"device={device!r}: WarpBackend requires a CUDA device")
 
@@ -429,12 +432,27 @@ class WarpBackend(IMujocoBackend):
         """
         import warp as wp
 
-        with wp.ScopedDevice(self.mjw_device):
-            mjw.kinematics(self.mjw_model, self.mjw_data)
-            mjw.com_pos(self.mjw_model, self.mjw_data)
-            mjw.camlight(self.mjw_model, self.mjw_data)
-            mjw.com_vel(self.mjw_model, self.mjw_data)
+        with self._torch_ordered(), wp.ScopedDevice(self.mjw_device):
+            if self._fk_graph is None:
+                with wp.ScopedCapture() as capture:
+                    mjw.kinematics(self.mjw_model, self.mjw_data)
+                    mjw.com_pos(self.mjw_model, self.mjw_data)
+                    mjw.camlight(self.mjw_model, self.mjw_data)
+                    mjw.com_vel(self.mjw_model, self.mjw_data)
+                self._fk_graph = capture.graph
+            wp.capture_launch(self._fk_graph)
         self._kinematics_pending = False
+
+    @contextmanager
+    def _torch_ordered(self) -> Iterator[None]:
+        """Order native Warp work after Torch writes and before Torch readers."""
+        consumer = torch.cuda.current_stream(self.device)
+        physics = torch.cuda.ExternalStream(wp.get_stream(self.mjw_device).cuda_stream, device=self.device)
+        physics.wait_stream(consumer)
+        try:
+            yield
+        finally:
+            consumer.wait_stream(physics)
 
     def step(self) -> None:
         """Advance batched simulation by one timestep using CUDA graph.
@@ -449,7 +467,7 @@ class WarpBackend(IMujocoBackend):
         """
         import warp as wp
 
-        with wp.ScopedDevice(self.mjw_device):
+        with self._torch_ordered(), wp.ScopedDevice(self.mjw_device):
             wp.capture_launch(self.step_graph)
             # No wp.synchronize() - let GPU work in parallel with CPU
         self._physics_time += float(self.model.opt.timestep)
@@ -619,6 +637,7 @@ class WarpBackend(IMujocoBackend):
             wp.synchronize()
 
         self.step_graph = None
+        self._fk_graph = None
         self._render_graph = None
         self._render_rgb_out.clear()
         self._render_depth_out.clear()

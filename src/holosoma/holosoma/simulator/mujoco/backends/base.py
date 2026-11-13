@@ -92,6 +92,11 @@ class IMujocoBackend(abc.ABC):
         """
         ...
 
+    def ensure_kinematics(self) -> None:
+        """Run :meth:`forward_kinematics` if a step left body kinematics behind."""
+        if self._kinematics_pending:
+            self.forward_kinematics()
+
     @abc.abstractmethod
     def physics_time(self) -> float:
         """Return the backend's current simulation time in seconds."""
@@ -275,8 +280,7 @@ class IMujocoBackend(abc.ABC):
         gathers robot rows from full-model backend views. Backends without full-model tensor views
         can override this with native extraction.
         """
-        if self._kinematics_pending:
-            self.forward_kinematics()
+        self.ensure_kinematics()
         views = self.get_rigid_body_state_views()
         if views is None:
             raise NotImplementedError(f"{type(self).__name__} does not provide rigid-body state refresh")
