@@ -44,6 +44,18 @@ class MapReader {
     out = convert<T>(value, field(key));
   }
 
+  // Absent leaves `out` at its default; an explicit null clears it.
+  template <typename T>
+  void optional_or_null(const char* key, std::optional<T>& out) {
+    const YAML::Node value = take(key);
+    if (!value) return;
+    if (value.IsNull()) {
+      out.reset();
+      return;
+    }
+    out = convert<T>(value, field(key));
+  }
+
   // Nullable field: absent or null -> nullopt.
   template <typename T>
   void nullable(const char* key, std::optional<T>& out) {
@@ -311,14 +323,14 @@ std::optional<ContextualConfig> parse_contextual(const YAML::Node& node, const s
   r.optional("force_manual_climbing", config.force_manual_climbing);
   r.optional("climb_enter", config.climb_enter);
   r.optional("climb_exit", config.climb_exit);
-  r.optional("discretizer", config.discretizer);
+  r.optional_or_null("discretizer", config.discretizer);
   r.optional("yaw_request_gain", config.yaw_request_gain);
   r.optional("switch_margin", config.switch_margin);
   r.optional("velocity_primitives", config.velocity_primitives);
   r.optional("forward_distance_scale", config.forward_distance_scale);
   r.optional("yaw_distance_scale", config.yaw_distance_scale);
   r.nullable("in_place_yaw_threshold", config.in_place_yaw_threshold);
-  r.optional("imu_to_obs_joint_chain", config.imu_to_obs_joint_chain);
+  r.nullable("imu_to_obs_joint_chain", config.imu_to_obs_joint_chain);
   r.optional("max_depth_age_s", config.max_depth_age_s);
   if (!std::isfinite(config.max_depth_age_s) || config.max_depth_age_s <= 0)
     throw ConfigError(r.field("max_depth_age_s") + ": must be finite and positive");
