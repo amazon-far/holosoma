@@ -4,6 +4,7 @@ import builtins
 import copy
 import dataclasses
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from typing import Any
 
 import pathlib
@@ -687,36 +688,62 @@ class IsaacSim(BaseSimulator):
         """
         data = self._robot.data
         self.state.device = self.sim_device
+        # State writers go straight to the Isaac Lab handles; writes take effect immediately.
+        xyzw_to_wxyz = torch.tensor([0, 1, 2, 6, 3, 4, 5, 7, 8, 9, 10, 11, 12], device=self.sim_device)
+        joint_ids = torch.tensor(self.dof_ids, dtype=torch.long, device=self.sim_device)
+        robot_scratch = torch.empty(self.num_envs, 13, device=self.sim_device)
+
+        def env_ids_for(rows: torch.Tensor) -> torch.Tensor | None:
+            """``None``, Isaac Lab's all-environments path, when every row is written."""
+            return None if rows.numel() == self.num_envs else rows
+
+        def write_robot_root_states(rows: torch.Tensor, root: torch.Tensor) -> None:
+            env_ids = env_ids_for(rows)
+            if env_ids is None:
+                torch.index_select(root, 1, xyzw_to_wxyz, out=robot_scratch)
+                self._robot.write_root_state_to_sim(robot_scratch)
+            else:
+                self._robot.write_root_state_to_sim(root[rows].index_select(1, xyzw_to_wxyz), env_ids=env_ids)
+
+        def joint_writer(write: Callable[..., None]) -> Callable[[torch.Tensor, torch.Tensor], None]:
+            def flush(rows: torch.Tensor, values: torch.Tensor) -> None:
+                env_ids = env_ids_for(rows)
+                write(values if env_ids is None else values[rows], joint_ids=joint_ids, env_ids=env_ids)
+
+            return flush
+
         self.state.register(
-            "robot_root_states",
-            lambda: fullstate_wxyz_to_xyzw(data.root_state_w),
-            write=lambda rows, root: self._state_adapter.write_object_states("robot", root[rows], rows),
+            "robot_root_states", lambda: fullstate_wxyz_to_xyzw(data.root_state_w), write=write_robot_root_states
         )
         self.state.register(
             "dof_pos",
             Columns(lambda: data.joint_pos, self.dof_ids),
-            write=lambda rows, out: self._robot.write_joint_position_to_sim(
-                out[rows], joint_ids=self.dof_ids, env_ids=rows
-            ),
+            write=joint_writer(self._robot.write_joint_position_to_sim),
         )
         self.state.register(
             "dof_vel",
             Columns(lambda: data.joint_vel, self.dof_ids),
-            write=lambda rows, out: self._robot.write_joint_velocity_to_sim(
-                out[rows], joint_ids=self.dof_ids, env_ids=rows
-            ),
+            write=joint_writer(self._robot.write_joint_velocity_to_sim),
         )
         object_names = self.object_state_names
-        all_env_ids = torch.arange(self.num_envs, device=self.sim_device)
+        object_handles = [self.scene.rigid_objects[name] for name in object_names]
+        object_scratch = torch.empty(len(object_names), self.num_envs, 13, device=self.sim_device)
 
         def read_object_root_states() -> torch.Tensor:
-            if not object_names:
+            if not object_handles:
                 return torch.empty(self.num_envs, 0, 13, device=self.sim_device)
-            return torch.stack([self._state_adapter.get_object_states(name, all_env_ids) for name in object_names], 1)
+            return torch.stack([fullstate_wxyz_to_xyzw(handle.data.root_state_w) for handle in object_handles], 1)
 
         def write_object_root_states(rows: torch.Tensor, states: torch.Tensor) -> None:
-            for column, name in enumerate(object_names):
-                self._state_adapter.write_object_states(name, states[rows, column], rows)
+            env_ids = env_ids_for(rows)
+            if env_ids is None:
+                torch.index_select(states.transpose(0, 1), 2, xyzw_to_wxyz, out=object_scratch)
+                for handle, object_states in zip(object_handles, object_scratch, strict=True):
+                    handle.write_root_state_to_sim(object_states)
+            else:
+                converted = states[rows].transpose(0, 1).index_select(2, xyzw_to_wxyz)
+                for handle, object_states in zip(object_handles, converted, strict=True):
+                    handle.write_root_state_to_sim(object_states, env_ids=env_ids)
 
         self.state.register("object_root_states", read_object_root_states, write=write_object_root_states)
         self.state.register("contact_forces", self._robot_contact_forces)
