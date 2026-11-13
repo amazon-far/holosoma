@@ -342,7 +342,6 @@ def main() -> int:
     )
     sim.create_envs(_NUM_ENVS, torch.zeros(_NUM_ENVS, 3, device=device), base_init)
     sim.prepare_sim()
-    sim.install_plugins()
 
     # Pin each robot upright at its env origin, then capture one frame from that state.
     env_ids = torch.arange(_NUM_ENVS, device=device)

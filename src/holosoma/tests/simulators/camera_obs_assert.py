@@ -89,7 +89,6 @@ def main() -> int:
     )
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
-    sim.install_plugins()
 
     robot_states = sim.get_actor_states(["robot"], torch.arange(n, device=device)).clone()
     robot_states[:, :3] = env_origins + torch.tensor(list(init.pos), device=device)
