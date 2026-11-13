@@ -8,9 +8,11 @@ compose per-key on the CLI, e.g. ``plugin.clk:clock_publish plugin.head:ros2-ima
 Imported at CLI-build time; stays ROS-free (a preset's impl loads only when its ``get_cls`` fires).
 """
 
+from holosoma.config_types.depth import DepthProcessingConfig
 from holosoma.config_types.plugin import (
     CameraVizPluginConfig,
     ClockPublishPluginConfig,
+    DepthShmPluginConfig,
     FrameWriterPluginConfig,
     GantryControlPluginConfig,
     LidarVizPluginConfig,
@@ -168,6 +170,18 @@ lidar_viz_record = PLUGIN_REGISTRY.add("lidar-viz-record", LidarVizPluginConfig(
 # Write every configured camera's frames to disk as numbered images + index.jsonl (dataset capture;
 # lossless, every frame, inline on the sim thread). --plugin.<key>.output_dir picks the destination.
 frame_writer = PLUGIN_REGISTRY.add("frame-writer", FrameWriterPluginConfig())
+
+# Sim-to-sim depth for policies trained on the D435i head rig: publish the `g1-d435i-front-depth`
+# camera, preprocessed exactly as in training (clamp to the [0.3, 3.0] m working range, crop the
+# 106x60 frame by 2 rows on top and 4 columns per side, resize to the backbone's 58x87), to shared
+# memory for the inference process. Pair with `sensor.d435i_front_depth:g1-d435i-front-depth`.
+depth_shm_d435i = PLUGIN_REGISTRY.add(
+    "depth-shm-d435i",
+    DepthShmPluginConfig(
+        camera="d435i_front_depth",
+        processing=DepthProcessingConfig(near=0.3, far=3.0, crop_top=2, crop_left=4, crop_right=4, resize=[58, 87]),
+    ),
+)
 
 # Sensor-local XYZ points as an organized PointCloud2. Pair with
 # `sensor.lidar:g1-pelvis-lidar`; the sensor key matches this route's `lidar`.

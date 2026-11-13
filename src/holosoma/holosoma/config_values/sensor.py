@@ -20,6 +20,7 @@ from holosoma.config_types.sensor import (
     SensorMountConfig,
 )
 from holosoma.config_values.wbt.g1.sensor import (
+    d435i_front_depth_camera,
     g1_head_d435i_raycast_depth,
     head_camera,
     left_wrist_camera,
@@ -72,6 +73,8 @@ CAMERA_REGISTRY.add("g1-head", head_camera)
 # D435i depth in the G1 head. Isaac Sim ray casts it against only the ground and the robot's legs,
 # waist and arms (no scene objects); other backends render it natively.
 SENSOR_REGISTRY.add("g1-head-d435i-raycast-depth", g1_head_d435i_raycast_depth)
+# Rendered D435i head depth camera for sim-to-sim, paired with the `depth-shm-d435i` plugin.
+CAMERA_REGISTRY.add("g1-d435i-front-depth", d435i_front_depth_camera)
 # G1 stereo head eyes (compose both for a stereo pair).
 CAMERA_REGISTRY.add("g1-stereo-left", stereo_head_camera_left)
 CAMERA_REGISTRY.add("g1-stereo-right", stereo_head_camera_right)

@@ -124,6 +124,8 @@ class SensorManager:
         self.control_hz = control_hz
         self.num_envs = num_envs
         self._cameras: dict[str, CameraRecord] = {}
+        # Backend cameras rendered by another owner (e.g. a plugin's own thread), skipped by collect_due.
+        self._externally_rendered: set[str] = set()
         self._lidars: dict[str, LidarRecord] = {}
         self._order: list[str] = []
         self._last_camera_due: set[str] = set()
@@ -280,9 +282,22 @@ class SensorManager:
                 due.append(record)
         return due
 
+    def claim_external_rendering(self, name: str) -> None:
+        """Hand the rendering of backend camera ``name`` to another owner, such as a plugin thread.
+
+        The camera stays readable through ``get_camera_data``; only its scheduling moves:
+        :meth:`collect_due` skips it, so the control loop neither duplicates the render nor builds a
+        second renderer for it, and its cadence counter stops advancing.
+        """
+        if name not in self._cameras:
+            raise KeyError(f"No backend camera named '{name}'. Backend cameras: {sorted(self._cameras)}.")
+        self._externally_rendered.add(name)
+
     def collect_due(self) -> list[CameraRecord]:
-        """Advance camera cadence (compatibility name retained for camera backends)."""
-        due = self._collect_due(self.cameras)
+        """Advance camera cadence (compatibility name retained for camera backends).
+
+        Cameras handed to another owner with :meth:`claim_external_rendering` are skipped."""
+        due = self._collect_due([r for r in self.cameras if r.name not in self._externally_rendered])
         self._last_camera_due = {record.name for record in due}
         return due
 
