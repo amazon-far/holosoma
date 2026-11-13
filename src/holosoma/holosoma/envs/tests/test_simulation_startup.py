@@ -147,6 +147,10 @@ def test_render_frames_run_at_the_external_clock(task_type: TaskFixture) -> None
     for sim_time in (0.07, -1.0, float("nan")):
         with pytest.raises(ValueError, match="Source simulation time"):
             constructed.render_frame(sim_time=sim_time)
+    constructed.render_frame(sim_time=0.07, repeat=True)
+    assert calls[-2] == ("render", 0.0, 0.07)
+    with pytest.raises(ValueError, match="Source simulation time"):
+        constructed.render_frame(sim_time=0.035, repeat=True)
     assert constructed.frames_rendered == 2
 
 
