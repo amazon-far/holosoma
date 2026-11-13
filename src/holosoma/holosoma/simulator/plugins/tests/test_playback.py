@@ -531,8 +531,9 @@ def test_episode_boundary_emits_end_then_start_per_env(tmp_path: Path) -> None:
     assert log == [("end", 0), ("end", 1), ("start", 0), ("start", 1)]
 
 
-def test_settle_frames_hold_after_each_boundary(tmp_path: Path) -> None:
-    # Baseline (no settle) vs settle=3: the single A->B boundary adds exactly 3 held frames.
+def test_settle_frames_hold_at_each_episode_start(tmp_path: Path) -> None:
+    # Baseline (no settle) vs settle=3: the first episode's start and the single A->B boundary each add
+    # exactly 3 held frames.
     base_sim = _FakeSimulator(num_envs=1)
     _make(_multi_cfg(tmp_path, [0.0, 100.0], settle_frames=0), base_sim)
     base_frames, _ = _run_until_shutdown(base_sim)
@@ -541,9 +542,22 @@ def test_settle_frames_hold_after_each_boundary(tmp_path: Path) -> None:
     _make(_multi_cfg(tmp_path, [0.0, 100.0], settle_frames=3), settle_sim)
     settle_frames, xs = _run_until_shutdown(settle_sim)
 
-    assert settle_frames == base_frames + 3
-    # During the settle window the clip is held at B's frame 0 (root-x == 100, clock frozen).
+    assert settle_frames == base_frames + 6
+    # During each settle window the clip is held at its frame 0 (clock frozen): A's root-x 0, B's 100.
+    assert xs[:4] == [0.0, 0.0, 0.0, 0.0]
     assert xs.count(100.0) >= 3
+
+
+def test_first_episode_settle_is_flagged_for_writers(tmp_path: Path) -> None:
+    # The first episode's held frames report ``settling`` (writers drop them), then the clip plays from
+    # frame 0 with ``settling`` off -- the same contract as after a clip switch.
+    sim = _FakeSimulator(num_envs=1)
+    plugin = _make(_multi_cfg(tmp_path, [0.0, 100.0], settle_frames=2), sim)
+    flags: list[tuple[bool, float]] = []
+    while not sim.shutdown_requested and len(flags) < 20:
+        _frame(sim, substeps=1)
+        flags.append((plugin.settling(0), sim.robot_root_states[0, 0].item()))
+    assert flags[:4] == [(True, 0.0), (True, 0.0), (False, 0.0), (False, 1.0)]
 
 
 def test_single_clip_once_emits_no_boundaries(tmp_path: Path) -> None:
@@ -952,10 +966,11 @@ def test_queue_settle_frames_hold_per_env(tmp_path: Path) -> None:
     sim = _FakeSimulator(num_envs=2)
     _make(_queue_cfg(tmp_path, [2, 4, 2], settle_frames=2), sim)
     frames = _queue_run(sim)
-    # env 0: clip 0 (2 rows), then clip 2 held at frame 0 for the boundary frame + 1 more, then its 2 rows.
-    assert [row[0] for row in frames[:6]] == [0.0, 1.0, 200.0, 200.0, 200.0, 201.0]
-    # env 1 is unaffected by env 0's settle window.
-    assert [row[1] for row in frames[:4]] == [100.0, 101.0, 102.0, 103.0]
+    # env 0: clip 0 held at frame 0 for 2 frames, its 2 rows, then clip 2 held at frame 0 for the boundary
+    # frame + 1 more, then its 2 rows.
+    assert [row[0] for row in frames[:8]] == [0.0, 0.0, 0.0, 1.0, 200.0, 200.0, 200.0, 201.0]
+    # env 1 holds its own first clip for 2 frames, then plays it; env 0's later settle window does not touch it.
+    assert [row[1] for row in frames[:6]] == [100.0, 100.0, 100.0, 101.0, 102.0, 103.0]
 
 
 def test_queue_loads_each_clip_once_and_holds_at_most_one_per_env(
