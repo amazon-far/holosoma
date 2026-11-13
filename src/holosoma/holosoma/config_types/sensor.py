@@ -278,8 +278,9 @@ class IsaacSimCameraConfig:
     """For ``renderer="raycast"``: USD prim paths or expressions to ray cast against, with the same
     meaning as :attr:`IsaacSimLidarConfig.mesh_prim_paths`. ``None`` discovers the ground, every
     spawned scene object and the robot, minus :attr:`body_filter`; an explicit list bypasses
-    discovery and the filter. ``"/World/ground"`` is the terrain's ray-cast mesh for every terrain
-    type. Ignored by other renderers."""
+    discovery and the filter. Each explicit path merges every mesh below it, colliders included, so
+    list visual subtrees rather than whole links. ``"/World/ground"`` is the terrain's ray-cast mesh
+    for every terrain type, and is hit even with ``hide_visual``. Ignored by other renderers."""
 
     projection_type: IsaacSimCameraProjectionType = "pinhole"
     """Native USD/RTX camera projection. Defaults to ``"pinhole"``."""
