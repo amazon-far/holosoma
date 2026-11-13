@@ -698,6 +698,24 @@ class BaseSimulator:
         """
         self.state.assign(inputs)
 
+    def native_env_origins(self) -> torch.Tensor | None:
+        """Origins this backend always places environments at, or ``None`` if it honours the origins it is given."""
+        return None
+
+    def prepare_render_only(self) -> None:
+        """Prepare, after ordinary startup, to render applied state at an external clock."""
+
+    def render_applied_state(self, dt: float) -> None:
+        """Flush applied state and bring body poses and renderers up to date, without integrating physics.
+
+        ``dt`` is the external time since the previous frame.
+        """
+        self.forward_kinematics()
+
+    def set_kinematic_time(self, sim_time: float) -> None:
+        """Set the clock :meth:`time` reports under ``kinematic_playback``."""
+        self._kinematic_time = sim_time
+
     def time(self) -> float:
         """Get current simulation time in seconds.
 

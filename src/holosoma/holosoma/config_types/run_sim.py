@@ -11,7 +11,7 @@ from __future__ import annotations
 import datetime
 import warnings
 from contextlib import AbstractContextManager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Annotated
 
 import holosoma.config_values.plugin
@@ -39,6 +39,7 @@ from holosoma.utils.config_registry import UseRegistry
 if TYPE_CHECKING:
     import torch
 
+    from holosoma.envs.render_task import RenderTask
     from holosoma.envs.simulation_task import SimulationTask
     from holosoma.simulator.base_simulator.state import BufferAllocator
 
@@ -168,3 +169,12 @@ class RunSimConfig:
             buffer_allocator=buffer_allocator,
             env_origins=env_origins,
         )
+
+    def create_render_task(self) -> AbstractContextManager[RenderTask]:
+        """Return a context that builds a :class:`RenderTask` for this scene and owns its resources."""
+        from holosoma.config_types.env import get_run_sim_env_config
+        from holosoma.envs.render_task import RenderTask
+        from holosoma.simulator.session import task_session
+
+        config = replace(get_run_sim_env_config(self), env_class="holosoma.envs.render_task.RenderTask")
+        return task_session(config, RenderTask)

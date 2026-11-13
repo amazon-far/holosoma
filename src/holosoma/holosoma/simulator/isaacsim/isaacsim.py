@@ -5,7 +5,7 @@ import copy
 import dataclasses
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pathlib
 import trimesh
@@ -70,10 +70,14 @@ from holosoma.simulator.shared.virtual_gantry import (
 
 from holosoma.simulator.types import ActorNames, ActorIndices, EnvIds, ActorStates, ActorPoses
 
+if TYPE_CHECKING:
+    from holosoma.simulator.isaacsim.render_capture import RenderCapture
+
 
 class IsaacSim(BaseSimulator):
     def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str):
         super().__init__(tyro_config, terrain_manager, device)
+        self._render_capture: RenderCapture | None = None
 
         # Public interface attribute read across backends (video_recorder, virtual_gantry,
         # simulator_bridge). For IsaacSim it always equals self.sim_device; internal tensor
@@ -319,6 +323,25 @@ class IsaacSim(BaseSimulator):
     def render_sensors(self) -> None:
         """Capture all due mounted sensors into their cached buffers."""
         sensor_setup.render_sensors(self)
+
+    def native_env_origins(self) -> torch.Tensor:
+        """The clone grid ``InteractiveScene`` builds; :meth:`create_envs` cannot move it."""
+        return self.scene.env_origins
+
+    def prepare_render_only(self) -> None:
+        """Stop physics playback and initialize cameras for rendering applied state."""
+        from holosoma.simulator.isaacsim.render_capture import RenderCapture
+
+        if self._render_capture is not None:
+            raise RuntimeError("Render-only rendering is already prepared")
+        self._render_capture = RenderCapture(self)
+        self._render_capture.initialize_cameras()
+
+    def render_applied_state(self, dt: float) -> None:
+        """Flush applied state and render through Isaac Lab (which runs FK) with physics held stopped."""
+        if self._render_capture is None:
+            raise RuntimeError("Call prepare_render_only() before rendering applied state")
+        self._render_capture.render(dt)
 
     def _get_base_body_name(self, preference_order: list[str]) -> str:
         """Get the base body name with fallback logic.
