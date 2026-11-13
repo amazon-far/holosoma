@@ -139,9 +139,12 @@ Policy::Policy(std::shared_ptr<OnnxModel> model, Spec spec, Options options)
     }
     if (name == "climb_pred") climb_output_ = i;
   }
-  if (!actions_found || ((options_.require_climb_head || options_.force_manual_climbing ||
-                          options_.climb_enter != "dz_or_pred" || options_.climb_exit != "both_off") &&
-                         !climb_output_))
+  // climb_pred is required when something reads it: the caller (require_climb_head), forced climbing, or a
+  // climb rule (dz_and_pred, or an exit other than both_off). dz_or_pred and dz_only with both_off climb on
+  // the external dz alone, so a model without the head climbs while dz is on.
+  const bool rules_read_pred = options_.climb_enter == "dz_and_pred" || options_.climb_exit != "both_off";
+  if (!actions_found ||
+      ((options_.require_climb_head || options_.force_manual_climbing || rules_read_pred) && !climb_output_))
     throw std::runtime_error("missing actions or required climb_pred output");
   if (model_->find_output("actions")->element_count() != static_cast<int64_t>(n))
     throw std::runtime_error("actions must match joint count");
@@ -230,9 +233,7 @@ void Policy::SetFixedArm(int side) {
   ApplyFixedArm();
 }
 void Policy::SetDz(bool enabled) {
-  // Without a climb head, column 14 is a climbing gait only when the config says it was trained as one.
-  if (enabled && !has_climb_head() && !options_.climbing_column_trained)
-    throw std::invalid_argument("dz requires climb_pred (or contextual.climbing_column_trained)");
+  // A model without a climb head was only loaded under rules that need none (see the constructor).
   dz_ = enabled;
   ResolveClimb();
 }

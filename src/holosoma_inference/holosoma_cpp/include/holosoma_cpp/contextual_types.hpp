@@ -15,11 +15,6 @@ struct ContextualConfig {
   int depth_height = 58;
   int depth_width = 87;
   bool require_climb_head = true;
-  // The model's command column 14 is a trained climbing gait even though it exports no climb_pred
-  // head. Lets an external dz select it under the default rules (climb_enter dz_or_pred, climb_exit
-  // both_off), where climb_pred then never fires: climb while dz is on. Off by default, because for a
-  // model without the head column 14 is usually not a climbing gait, so dz must not select it.
-  bool climbing_column_trained = false;
   bool force_manual_climbing = false;
   std::string climb_enter = "dz_or_pred";
   std::string climb_exit = "both_off";
