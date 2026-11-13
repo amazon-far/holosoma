@@ -35,6 +35,9 @@ def _material_bindings(asset: Any) -> tuple[Any, Tensor, Tensor, Tensor]:
     if friction.ndim != 1 or friction.shape != restitution.shape:
         raise RuntimeError("Newton material channels must have matching one-dimensional global shape arrays.")
 
+    if getattr(asset, "is_world_fixed", False):
+        return manager, friction, restitution, asset.shape_ids
+
     view = asset.root_view
     articulations = view.articulation_ids.numpy()
     if articulations.ndim != 2 or articulations.shape[1] != 1:

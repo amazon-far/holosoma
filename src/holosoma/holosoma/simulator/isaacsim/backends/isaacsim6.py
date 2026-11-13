@@ -142,6 +142,10 @@ class IsaacSim6Backend(IsaacSimBackendAdapter):
     def uses_kit_physx(self) -> bool:
         return self.uses_kit and self.options.physics_backend == "physx"
 
+    @property
+    def uses_newton(self) -> bool:
+        return self.options.physics_backend == "newton"
+
     def mutable_ray_caster_class(self) -> type[Any]:
         from .ray_casters import (
             newton_mutable_ray_caster_class,
@@ -606,6 +610,9 @@ class IsaacSim6Backend(IsaacSimBackendAdapter):
 
     @staticmethod
     def write_external_wrench(asset: Any, wrench: Any, body_ids: Any, env_ids: Any) -> None:
+        if getattr(asset, "is_world_fixed", False):
+            # Exact world attachment has no generalized coordinates to force.
+            return
         # Instantaneous composers are cleared by write_data_to_sim each step.
         # World-frame input avoids a quaternion rotation/allocation here, and
         # preserves forces other writers put in the permanent composer.

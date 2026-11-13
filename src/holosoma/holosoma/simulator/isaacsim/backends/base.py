@@ -41,6 +41,11 @@ class IsaacSimBackendAdapter(ABC):
         """Whether live USD PhysX edits reach the selected running engine."""
         return self.uses_kit
 
+    @property
+    def uses_newton(self) -> bool:
+        """Whether the selected physics engine uses Newton's native model."""
+        return False
+
     def configure_physics_scene(self, sim: Any, config: Any) -> None:
         """Apply engine scene settings before assets are authored."""
 

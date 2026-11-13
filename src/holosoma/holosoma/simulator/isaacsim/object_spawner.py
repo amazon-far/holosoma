@@ -1,7 +1,6 @@
 """Unified IsaacSim rigid-object spawner (USD + URDF, 1->1 + 1->N).
 
-Both USD and URDF rigid objects build the SAME IsaacLab object —
-``RigidObject(RigidObjectCfg(prim_path=..., spawn=<SpawnerCfg>, init_state=...))``. The only
+Both USD and URDF rigid objects use the same spawn/configuration pipeline. The only
 *irreducible* difference between the formats is how the asset reaches USD: a URDF is converted
 by the URDF importer (which authors mass/collision/rigid-body physics during conversion and
 takes converter-only knobs like ``fix_base``/``joint_drive``), while a USD is referenced
@@ -14,14 +13,13 @@ produces the same physical body regardless of which format the tri-format select
 - :func:`build_rigid_object` — the shared tail every object (USD/URDF, standalone or
   scene-file body, free or kinematic) flows through.
 - :func:`expand_scene_file` — USD-only 1->N: expand a multi-body USD file into one
-  ``RigidObject`` per rigid-body prim, reusing :func:`build_rigid_object`.
+  actor per rigid-body prim, reusing :func:`build_rigid_object`.
 
-A ``fixed`` object is spawned as a PhysX *kinematic* body (``kinematic_enabled=True``): it
-keeps the ``UsdPhysics.RigidBodyAPI`` so it stays a ``RigidObject`` with the same
-``data.root_state_w`` read / ``write_root_pose_to_sim`` write path as a free body, but is
-immovable under gravity/contact and only moves when its pose is written explicitly. For URDF
-``fix_base`` stays False — welding the base would stamp an enabled ``ArticulationRootAPI`` that
-``RigidObject._initialize_impl`` rejects; kinematic is the IsaacLab-sanctioned static pattern.
+PhysX keeps its existing pose-settable kinematic representation for ``fixed``.
+Newton uses an actual zero-DOF FixedJoint to world and a separate actor handle:
+the SDK's articulation view cannot bind standalone fixed bodies. Authored
+kinematic scene bodies retain their free joints unless ``fixed=True`` overrides
+their motion. Neither representation changes the source asset.
 
 Friction/restitution (``physics.isaacsim``) is carried as a ``physics_material`` on the
 ``CustomUsdFileCfg`` (see :func:`physics_material_cfg`); the custom USD spawner spawns the
@@ -91,6 +89,7 @@ def select_spawn_cfg(
     physics: PhysicsConfig | None,
     source_prim_path: str | None,
     backend: IsaacSimBackendAdapter,
+    kinematic: bool = False,
 ) -> "SpawnerCfg":
     """Build the format-specific ``spawn`` cfg.
 
@@ -102,7 +101,8 @@ def select_spawn_cfg(
     resolved_path : str
         Absolute, already-resolved asset path.
     fixed : bool
-        Static (kinematic) if True, free (dynamic) if False.
+        World-fixed if True; otherwise dynamic, unless ``kinematic`` preserves
+        an authored pose-driven Newton body.
     physics : PhysicsConfig or None
         Physics overrides. ``fixed`` (the static realization) is threaded separately into the
         rigid-props builder, not stored on ``PhysicsConfig``.
@@ -113,7 +113,7 @@ def select_spawn_cfg(
     # `fixed` is the single source of truth for static-vs-free; thread it into the rigid-props
     # builder (-> kinematic_enabled) for both formats rather than storing it on PhysicsConfig.
     physics_cfg = physics or PhysicsConfig()
-    shared = _shared_spawn_kwargs(physics_cfg, fixed)
+    shared = _shared_spawn_kwargs(physics_cfg, fixed or kinematic)
     physics_material = physics_material_cfg(physics_cfg)
 
     if fmt == "urdf":
@@ -122,7 +122,8 @@ def select_spawn_cfg(
         # articulation/joint-drive cfgs are converter inputs with no USD analogue.
         urdf_cfg = sim_utils.UrdfFileCfg(
             asset_path=resolved_path,
-            fix_base=False,  # MUST stay False — see module docstring (kinematic, not welded base).
+            # Convert the free asset; the spawn overlay supplies its world attachment.
+            fix_base=False,
             replace_cylinders_with_capsules=True,
             articulation_props=sim_utils.ArticulationRootPropertiesCfg(
                 enabled_self_collisions=True,
@@ -134,7 +135,7 @@ def select_spawn_cfg(
             ),
             **shared,
         )
-        if physics_material is None:
+        if physics_material is None and not (fixed and backend.uses_newton):
             # No friction/restitution to apply — spawn the URDF directly (the converter authors
             # the geometry/joints; the shared rigid/mass/collision props land at spawn).
             return _native_spawn(urdf_cfg, physics_cfg, backend)
@@ -156,7 +157,12 @@ def select_spawn_cfg(
         disable_instanceable=True,
         **shared,
     )
-    return _native_spawn(cfg, physics_cfg, backend)
+    cfg = _native_spawn(cfg, physics_cfg, backend)
+    if fixed and backend.uses_newton:
+        from .backends.fixed_object import spawn_fixed
+
+        cfg.func = partial(spawn_fixed, original=cfg.func)
+    return cfg
 
 
 def _native_spawn(cfg: Any, physics: PhysicsConfig, backend: IsaacSimBackendAdapter) -> Any:
@@ -237,18 +243,42 @@ def _assert_asset_exists(resolved_path: str, what: str) -> None:
 def _structural_static(prim: "Usd.Prim") -> bool:
     """The file-structural static default for a body prim (overridable by ``resolve_fixed``).
 
-    Static if ``kinematicEnabled=true`` is authored on the body's ``RigidBodyAPI``. That API may sit
-    on ``prim`` or a descendant (assets often author it on nested geometry), so scan the subtree. A
-    collapsed multi-body asset shares one kinematic state, so any authored flag is representative. No
-    authored value, or no ``RigidBodyAPI`` at all, defaults to free.
+    Recognizes kinematic/disabled rigid bodies and joints attaching a body to
+    world. The rigid-body API can sit on a descendant; the world joint can be
+    a sibling. Authored kinematic motion is preserved separately by the caller.
     """
     for descendant in Usd.PrimRange(prim):
         if not descendant.HasAPI(UsdPhysics.RigidBodyAPI):
             continue
-        attr = UsdPhysics.RigidBodyAPI(descendant).GetKinematicEnabledAttr()
-        if attr and attr.HasAuthoredValue():
-            return bool(attr.Get())
+        body = UsdPhysics.RigidBodyAPI(descendant)
+        if body.GetKinematicEnabledAttr().Get() or not body.GetRigidBodyEnabledAttr().Get():
+            return True
+    return _world_attachment(prim)
+
+
+def _world_attachment(prim: "Usd.Prim") -> bool:
+    """Whether an authored fixed joint anchors this body/subtree to world."""
+    # A fixed-to-world joint can be a sibling of the body it anchors.
+    path = prim.GetPath()
+    for joint_prim in prim.GetStage().Traverse():
+        if joint_prim.IsA(UsdPhysics.FixedJoint):
+            joint = UsdPhysics.FixedJoint(joint_prim)
+            first, second = joint.GetBody0Rel().GetTargets(), joint.GetBody1Rel().GetTargets()
+            if (not first and any(target.HasPrefix(path) for target in second)) or (
+                not second and any(target.HasPrefix(path) for target in first)
+            ):
+                return True
     return False
+
+
+def _structural_kinematic(prim: "Usd.Prim") -> bool:
+    """Whether the source explicitly authors a pose-driven, enabled rigid body."""
+    return any(
+        p.HasAPI(UsdPhysics.RigidBodyAPI)
+        and UsdPhysics.RigidBodyAPI(p).GetRigidBodyEnabledAttr().Get()
+        and UsdPhysics.RigidBodyAPI(p).GetKinematicEnabledAttr().Get()
+        for p in Usd.PrimRange(prim)
+    ) and not _world_attachment(prim)
 
 
 def _enabled_rigid_body_prims(stage: "Usd.Stage") -> list["Usd.Prim"]:
@@ -301,16 +331,21 @@ def _geometry_owner_prims(stage: "Usd.Stage") -> list["Usd.Prim"]:
 
 
 def _discover_scene_body_prim_paths(
-    stage: "Usd.Stage", scene_file_name: str, scene_file: SceneFileConfig, usd_path: str
+    stage: "Usd.Stage",
+    scene_file_name: str,
+    scene_file: SceneFileConfig,
+    usd_path: str,
+    *,
+    include_static: bool = False,
 ) -> list[str]:
     """Decide which prims of a scene file become rigid bodies (the 1->N decomposition).
 
     Three cases (the include/exclude SUBSET filter is applied by the caller, AFTER this — this
     function only fixes the candidate universe):
 
-    - AUTHORED — the file has >=1 enabled ``RigidBodyAPI`` prim: those prims ARE the bodies. The
-      file declared its own decomposition; honor it exactly (this is the only case the shipped
-      assets hit).
+    - AUTHORED — rigid-body prims declare the file's decomposition. Newton
+      includes disabled rigid bodies, which describe static collision geometry;
+      other backends retain the enabled-body selection.
     - UNAUTHORED + DEFAULT patterns (``include=['*']``, no excludes): the file expresses no body
       split AND the user requested no subset, so collapse to ONE body on the ``defaultPrim`` (the
       USD's "what this file is"), warning that nothing was authored. Geometry is NOT inspected to
@@ -321,7 +356,11 @@ def _discover_scene_body_prim_paths(
 
     Returns prim paths (unsorted; not yet include/exclude-filtered).
     """
-    authored = _enabled_rigid_body_prims(stage)
+    authored = (
+        [p for p in stage.Traverse() if p.HasAPI(UsdPhysics.RigidBodyAPI)]
+        if include_static
+        else _enabled_rigid_body_prims(stage)
+    )
     if authored:
         # Rigid-body prims may live inside payloads; remap each to its referenceable ancestor
         # (see _referenceable_ancestor) and deduplicate so multiple leaves under one ancestor
@@ -394,21 +433,33 @@ def build_rigid_object(
     physics: PhysicsConfig | None = None,
     source_prim_path: str | None = None,
     backend: IsaacSimBackendAdapter,
-) -> RigidObject:
-    """Build the IsaacLab ``RigidObject`` both formats and both shapes flow through.
+    kinematic: bool = False,
+) -> Any:
+    """Build the actor handle both formats and both shapes flow through.
 
     The leaf of ``prim_path`` MUST equal ``name`` (the ObjectRegistry key) so per-env
     placement and state read/write stay aligned. ``rot_wxyz`` uses the Holosoma config convention.
     """
     _assert_asset_exists(resolved_path, f"Object '{name}' ({fmt})")
     spawn = select_spawn_cfg(
-        fmt, resolved_path, fixed=fixed, physics=physics, source_prim_path=source_prim_path, backend=backend
+        fmt,
+        resolved_path,
+        fixed=fixed,
+        physics=physics,
+        source_prim_path=source_prim_path,
+        backend=backend,
+        kinematic=kinematic,
     )
     cfg = RigidObjectCfg(
         prim_path=f"{backend.env_regex_ns}/{name}",
         spawn=spawn,
         init_state=RigidObjectCfg.InitialStateCfg(pos=tuple(pos), rot=backend.config_quat_to_native(rot_wxyz)),
     )
+    if fixed and backend.uses_newton:
+        from .backends.fixed_object import FixedObject
+
+        cfg.class_type = FixedObject
+        return FixedObject(cfg)
     return RigidObject(cfg)
 
 
@@ -502,7 +553,13 @@ def expand_scene_file(
 
     # Decide which prims are bodies, then derive a collision-free `body` name per prim (leaf for a
     # flat file; `parent_leaf` where leaves collide across parents — see distinguishing_names).
-    body_prim_paths = _discover_scene_body_prim_paths(stage, scene_file_name, scene_file, usd_path)
+    body_prim_paths = _discover_scene_body_prim_paths(
+        stage,
+        scene_file_name,
+        scene_file,
+        usd_path,
+        include_static=backend.uses_newton,
+    )
     name_by_path = distinguishing_names(body_prim_paths)
 
     # Apply the include/exclude SUBSET filter (the only place membership is decided), keyed on the
@@ -539,11 +596,26 @@ def expand_scene_file(
         actor_name = f"{scene_file_name}_{body}"
         prim = stage.GetPrimAtPath(prim_path)
 
-        is_static = scene_file.resolve_fixed(body, structural_default=_structural_static(prim))
+        structural_static = _structural_static(prim)
+        if backend.uses_newton:
+            # USD collider-only geometry is native static geometry.
+            structural_static |= not any(p.HasAPI(UsdPhysics.RigidBodyAPI) for p in Usd.PrimRange(prim)) and any(
+                p.HasAPI(UsdPhysics.CollisionAPI) for p in Usd.PrimRange(prim)
+            )
+        is_static = scene_file.resolve_fixed(body, structural_default=structural_static)
+        # An authored kinematic body is independently pose-driven, not welded.
+        # Resolving both defaults distinguishes an explicit fixed override from
+        # an unchanged structural default without another configuration option.
+        kinematic = (
+            backend.uses_newton
+            and _structural_kinematic(prim)
+            and not scene_file.resolve_fixed(body, structural_default=False)
+            and scene_file.resolve_fixed(body, structural_default=True)
+        )
 
         # Per-body physics override (mass/damping/material) from object_configs, applied the
         # same way every backend does. None => the body keeps the file's authored physics.
-        # `is_static` is threaded to build_rigid_object (-> kinematic_enabled) separately.
+        # Motion classification is independent of the per-body physics overrides.
         body_physics = scene_file.resolve_physics(body)
 
         # Composed world pose = file world transform . prim local transform.
@@ -565,7 +637,8 @@ def expand_scene_file(
             usd_path,
             [px, py, pz],
             list(quat_wxyz),
-            fixed=is_static,
+            fixed=is_static and not kinematic,
+            kinematic=kinematic,
             physics=body_physics,
             source_prim_path=prim_path,
             backend=backend,
