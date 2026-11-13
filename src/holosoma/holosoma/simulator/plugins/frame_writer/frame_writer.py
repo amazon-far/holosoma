@@ -149,7 +149,7 @@ class FrameWriterPlugin(CameraConsumerPlugin):
             if episode is None:
                 continue  # nothing is open for this env (playback has no clip for it)
             if self._settling(env):
-                continue  # a playback hold after a clip switch, not a frame of the clip
+                continue  # a playback hold at the start of an episode, not a frame of the clip
             episode.published += 1
             for key in sorted(k for k in frames if k[2] == env):
                 self._write(key, frames[key], episode.out, self._file_stem(key), episode.index)
@@ -258,7 +258,7 @@ class FrameWriterPlugin(CameraConsumerPlugin):
         return self._playback
 
     def _settling(self, env_id: int) -> bool:
-        """Whether this env's frame is a playback ``settle_frames`` hold after a clip switch."""
+        """Whether this env's frame is a playback ``settle_frames`` hold at the start of an episode."""
         playback = self._playback_plugin()
         return playback is not None and playback.settling(env_id)
 
