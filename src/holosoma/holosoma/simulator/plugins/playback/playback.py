@@ -219,7 +219,7 @@ class _Slot:
     idle: bool = False
     """``queue`` only: finished its last episode while other slots still play; holds its last frame."""
     settling: bool = False
-    """The frame chosen this tick is a ``settle_frames`` hold after a clip switch."""
+    """The frame chosen this tick is a ``settle_frames`` hold at the start of an episode."""
     state: dict[str, torch.Tensor] | None = None
     _ids: torch.Tensor | None = None
 
@@ -399,6 +399,9 @@ class MotionPlaybackPlugin:
                     break  # fewer episodes than envs: the rest stay unassigned
                 slot.episode = self._next_episode
                 self._next_episode += 1
+                # The first episode starts on the sim's startup EPISODE_START, whose scene changes need
+                # the same settle window as a clip switch before the clip's own frames are rendered.
+                slot.settle_left = self.cfg.settle_frames
             if self._queue and num_envs > 1:
                 assigned = sum(slot.episode is not None for slot in self._slot_list)
                 logger.info(f"MotionPlaybackPlugin: queue playback over {num_envs} env(s), {assigned} started")
@@ -436,7 +439,7 @@ class MotionPlaybackPlugin:
         return stem if repeat == 0 else f"{stem}_run{repeat + 1}"
 
     def settling(self, env_id: int) -> bool:
-        """Whether ``env_id``'s current frame is a ``settle_frames`` hold after a clip switch.
+        """Whether ``env_id``'s current frame is a ``settle_frames`` hold at the start of an episode.
 
         Writers that want only the clip's own frames skip these (``FrameWriterPlugin.skip_settle_frames``).
         """
