@@ -54,6 +54,25 @@ class SimulationTask(BaseTask):
     randomization and termination terms configured on ``RunSimConfig``, but owns no policy managers.
     """
 
+    def _init_buffers(self) -> None:
+        super()._init_buffers()
+        self._empty_reset_env_ids = torch.empty(0, device=self.device, dtype=torch.long)
+
+    def _check_termination(self) -> None:
+        if self.termination_manager.has_terms:
+            super()._check_termination()
+            return
+        # Keep the ordinary zero-mask semantics without allocating manager masks every frame.
+        self.reset_buf.zero_()
+        self.time_out_buf.zero_()
+
+    def _get_reset_env_ids(self) -> torch.Tensor:
+        if self.termination_manager.has_terms:
+            return super()._get_reset_env_ids()
+        # CUDA nonzero must determine the output size on the host. With no termination terms,
+        # the empty result is known without waiting for the queued physics to complete.
+        return self._empty_reset_env_ids
+
     def _get_env_origins(self) -> torch.Tensor:
         """Place a single environment at the world origin, so its poses are world coordinates.
 

@@ -79,6 +79,11 @@ class TerminationManager:
                 raise ValueError(f"Failed to import termination function '{func}': {exc}") from exc
         return func
 
+    @property
+    def has_terms(self) -> bool:
+        """Whether this manager evaluates any configured termination terms."""
+        return bool(self._term_names)
+
     def check(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Evaluate termination terms.
 
