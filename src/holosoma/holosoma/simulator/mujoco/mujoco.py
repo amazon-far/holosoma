@@ -26,6 +26,7 @@ from holosoma.simulator.mujoco.backends import WARP_AVAILABLE, ClassicBackend, I
 from holosoma.simulator.mujoco.backends.base import apply_sensor_scene_flags, mj_to_holosoma_quat
 from holosoma.simulator.mujoco.fields import prepare_fields, prepare_manager_fields
 from holosoma.simulator.mujoco.model_debug import print_mujoco_model_tree
+from holosoma.simulator.mujoco.object_state_reader import ObjectReadPlan
 from holosoma.simulator.mujoco.robot_addressing import (
     apply_initial_joint_angles,
     build_name_maps,
@@ -803,6 +804,21 @@ class MuJoCo(BaseSimulator):
             lambda: self._freejoint_angvel_to_world(self.backend.get_actor_state(env_ids, *robot_addrs)),
             write=lambda rows, root: self._write_root_states(rows, root[rows]),
         )
+        if isinstance(self.backend, WarpBackend):
+            self._object_read_plan = ObjectReadPlan.build(
+                self.object_state_names,
+                self.object_addrs,
+                self.static_object_body_ids,
+                self.backend.qpos_t,
+                self.backend.qvel_t,
+                self.backend.xpos_t,
+                self.backend.xquat_t,
+            )
+        state.register(
+            "object_root_states",
+            self._read_object_root_states,
+            write=lambda rows, out: self._write_object_root_states(rows, out[rows]),
+        )
 
         body_names = ("_rigid_body_pos", "_rigid_body_rot", "_rigid_body_vel", "_rigid_body_ang_vel")
         if b == 0:
@@ -971,6 +987,10 @@ class MuJoCo(BaseSimulator):
             return torch.empty(0, 13, device=self.sim_device)
 
         resolved_objects = self.object_registry.resolve_indices(indices)
+        return self._read_actor_states_resolved(resolved_objects)
+
+    def _read_actor_states_resolved(self, resolved_objects: Sequence[tuple[str, torch.Tensor]]) -> ActorStates:
+        """Read the exact native unified states after actor topology resolution."""
         all_states: list[torch.Tensor] = []
         for obj_name, env_ids in resolved_objects:
             if obj_name == "robot":
@@ -991,6 +1011,19 @@ class MuJoCo(BaseSimulator):
         if not all_states:
             return torch.empty(0, 13, device=self.sim_device)
         return torch.cat(all_states, dim=0)
+
+    def _read_object_root_states(self) -> torch.Tensor:
+        """Full object roots in ``object_state_names`` order, ``[num_envs, num_objects, 13]``.
+
+        Warp uses setup-time native gather indices and batched conversions.
+        Classic reads each object through the per-actor CPU getter.
+        """
+        if isinstance(self.backend, WarpBackend):
+            return self._object_read_plan.read()
+        if not self._object_state_pairs:
+            return torch.empty(self.num_envs, 0, 13, device=self.sim_device, dtype=torch.float32)
+        states = self._read_actor_states_resolved(self._object_state_pairs)
+        return states.reshape(len(self._object_state_pairs), self.num_envs, 13).transpose(0, 1)
 
     def _static_body_state(self, obj_name: str, env_ids: torch.Tensor) -> torch.Tensor:
         """Read a static (jointless) body's world pose into a [len(env_ids), 13] state.
@@ -1047,40 +1080,49 @@ class MuJoCo(BaseSimulator):
 
         resolved_objects = self.object_registry.resolve_indices(indices)
         with self.state.mutation():
-            # Incoming angular velocity is world-frame (unified representation); MuJoCo's freejoint qvel
-            # wants it body-local. Convert up front using each row's world quat (cols 3:7) so the
-            # per-actor slices below write the correct local ang-vel, symmetric with the read path.
-            states = self._freejoint_angvel_to_local(states)
-
-            state_offset = 0
-            for obj_name, env_ids in resolved_objects:
-                num_states = len(env_ids)
-                obj_states = states[state_offset : state_offset + num_states]  # [num_envs, 13]
-                state_offset += num_states
-
-                if obj_name in self.static_object_body_ids:
-                    # Static (welded, jointless) body: no qpos slice, so it moves via the model
-                    # body_pos/body_quat + forward-kinematics path rather than set_actor_state. This
-                    # is a kinematic teleport: the pose is honored (collisions recompute at the new
-                    # pose) but the velocity columns (7:13) are ignored (a welded body carries no
-                    # qvel). Pose is [pos(0:3), quat(3:7) xyzw]; shape to [len(env_ids), 1, 3/4].
-                    body_id = self.static_object_body_ids[obj_name]
-                    self.backend.set_static_body_world_pose(
-                        [body_id],
-                        obj_states[:, :3].unsqueeze(1),  # [N, 1, 3]
-                        obj_states[:, 3:7].unsqueeze(1),  # [N, 1, 4] xyzw
-                        env_ids=env_ids,
-                    )
-                    continue
-
-                # Write each requested env's state into this actor's freejoint slice on the
-                # live backend storage (GPU for WarpBackend), per-env. The CPU render
-                # snapshot does not sync back to the GPU, so writes must go to the backend.
-                qpos_addr, qvel_addr = self._actor_freejoint_addrs(obj_name)
-                self.backend.set_actor_state(env_ids, obj_states, qpos_addr, qvel_addr)
+            self._write_actor_rows(resolved_objects, states)
 
         if write_updates:
             self.write_state_updates()
+
+    def _write_actor_rows(self, resolved_objects: Sequence[tuple[str, torch.Tensor]], states: torch.Tensor) -> None:
+        """Write unified world-frame states to the backend, consumed row-for-row in ``resolved_objects`` order."""
+        # Incoming angular velocity is world-frame (unified representation); MuJoCo's freejoint qvel
+        # wants it body-local. Convert up front using each row's world quat (cols 3:7) so the
+        # per-actor slices below write the correct local ang-vel, symmetric with the read path.
+        states = self._freejoint_angvel_to_local(states)
+
+        state_offset = 0
+        for obj_name, env_ids in resolved_objects:
+            num_states = len(env_ids)
+            obj_states = states[state_offset : state_offset + num_states]  # [num_envs, 13]
+            state_offset += num_states
+
+            if obj_name in self.static_object_body_ids:
+                # Static (welded, jointless) body: no qpos slice, so it moves via the model
+                # body_pos/body_quat + forward-kinematics path rather than set_actor_state. This
+                # is a kinematic teleport: the pose is honored (collisions recompute at the new
+                # pose) but the velocity columns (7:13) are ignored (a welded body carries no
+                # qvel). Pose is [pos(0:3), quat(3:7) xyzw]; shape to [len(env_ids), 1, 3/4].
+                body_id = self.static_object_body_ids[obj_name]
+                self.backend.set_static_body_world_pose(
+                    [body_id],
+                    obj_states[:, :3].unsqueeze(1),  # [N, 1, 3]
+                    obj_states[:, 3:7].unsqueeze(1),  # [N, 1, 4] xyzw
+                    env_ids=env_ids,
+                )
+                continue
+
+            # Write each requested env's state into this actor's freejoint slice on the
+            # live backend storage (GPU for WarpBackend), per-env. The CPU render
+            # snapshot does not sync back to the GPU, so writes must go to the backend.
+            qpos_addr, qvel_addr = self._actor_freejoint_addrs(obj_name)
+            self.backend.set_actor_state(env_ids, obj_states, qpos_addr, qvel_addr)
+
+    def _write_object_root_states(self, env_ids: torch.Tensor, states: torch.Tensor) -> None:
+        """Write ``[len(env_ids), num_objects, 13]`` object roots, in ``object_state_names`` order."""
+        resolved = [(name, env_ids) for name, _ in self._object_state_pairs]
+        self._write_actor_rows(resolved, states.transpose(0, 1).reshape(-1, 13))
 
     def get_actor_indices(self, names: str | ActorNames, env_ids: EnvIds | None = None) -> ActorIndices:
         """Get actor indices using ObjectRegistry (robot or rigid object).

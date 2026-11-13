@@ -158,6 +158,9 @@ class BaseSimulator:
     robot_root_states = StateTensor(
         "Robot root state ``[num_envs, 13]``: position, orientation (xyzw), world-frame linear and angular velocity."
     )
+    object_root_states = StateTensor(
+        "Non-robot root states ``[num_envs, num_objects, 13]`` in ``object_state_names`` order; world-frame, xyzw."
+    )
     base_linear_acc = StateTensor("Robot root linear acceleration, ``[num_envs, 3]``.")
     contact_forces = StateTensor("Net contact force per robot body, ``[num_envs, num_bodies, 3]``.")
     contact_recorder: ContactSubstepRecorder
@@ -214,6 +217,7 @@ class BaseSimulator:
         self.headless = False
         self.debug_viz_enabled = self.simulator_config.debug_viz
         self.object_registry = ObjectRegistry(device)
+        self._object_state_pairs: tuple[tuple[str, torch.Tensor], ...] = ()
         # External-force accumulator (apply_external_force / flush_external_wrench). Composed
         # helper, like the bridge/gantry below; allocates per-actor buffers lazily on first use.
         self._external_wrench = ExternalWrenchAccumulator(self)
@@ -392,6 +396,16 @@ class BaseSimulator:
         for name, object_type, position, pose, velocity in entries:
             self.object_registry.register_object(name, object_type, position, pose, velocity)
         self.object_registry.finalize_registration()
+        # Resolve the topology once at setup. Full-object cache refreshes must not
+        # read indices back to the host or change ordering at each capture.
+        self._object_state_pairs = tuple(
+            (name, env_ids) for name, env_ids in self.object_registry.resolved_objects() if name != "robot"
+        )
+
+    @property
+    def object_state_names(self) -> tuple[str, ...]:
+        """Names of all non-robot actors in the cached root-state column order."""
+        return tuple(name for name, _env_ids in self._object_state_pairs)
 
     def _collect_spawned_actors(
         self,

@@ -706,6 +706,19 @@ class IsaacSim(BaseSimulator):
                 out[rows], joint_ids=self.dof_ids, env_ids=rows
             ),
         )
+        object_names = self.object_state_names
+        all_env_ids = torch.arange(self.num_envs, device=self.sim_device)
+
+        def read_object_root_states() -> torch.Tensor:
+            if not object_names:
+                return torch.empty(self.num_envs, 0, 13, device=self.sim_device)
+            return torch.stack([self._state_adapter.get_object_states(name, all_env_ids) for name in object_names], 1)
+
+        def write_object_root_states(rows: torch.Tensor, states: torch.Tensor) -> None:
+            for column, name in enumerate(object_names):
+                self._state_adapter.write_object_states(name, states[rows, column], rows)
+
+        self.state.register("object_root_states", read_object_root_states, write=write_object_root_states)
         self.state.register("contact_forces", self._robot_contact_forces)
         body_sources = {
             "_rigid_body_pos": lambda: data.body_pos_w,
