@@ -26,7 +26,7 @@ from holosoma.utils.video_utils import create_video
 
 if TYPE_CHECKING:
     from holosoma.config_types.plugin import LidarVizPluginConfig
-    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+    from holosoma.envs.base_task.base_task import BaseTask
 
 
 class LidarVizPlugin(LidarConsumerPlugin):
@@ -34,9 +34,11 @@ class LidarVizPlugin(LidarConsumerPlugin):
 
     config: LidarVizPluginConfig
 
-    def __init__(self, config: LidarVizPluginConfig, simulator: BaseSimulator) -> None:
+    def __init__(self, config: LidarVizPluginConfig, task: BaseTask) -> None:
         lidars = {
-            name: sensor for name, sensor in simulator.sensor_config.items() if isinstance(sensor, LidarSensorConfig)
+            name: sensor
+            for name, sensor in task.simulator.sensor_config.items()
+            if isinstance(sensor, LidarSensorConfig)
         }
         self._lidar_names = config.lidars if config.lidars is not None else list(lidars)
         self._env_ids = list(config.env_ids)
@@ -50,7 +52,7 @@ class LidarVizPlugin(LidarConsumerPlugin):
         self._video_frames: defaultdict[LidarStreamKey, list[npt.NDArray[np.uint8]]] = defaultdict(list)
         self._video_times: defaultdict[LidarStreamKey, list[float]] = defaultdict(list)
 
-        super().__init__(config, simulator)
+        super().__init__(config, task)
 
     def wanted_streams(self) -> set[LidarStreamKey]:
         return {(lidar, env_id) for lidar in self._lidar_names for env_id in self._env_ids}

@@ -88,7 +88,6 @@ def main() -> int:
     )
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
-    sim.install_plugins()
 
     # Pin the robot upright at each origin so the camera aligns with the off-axis panel ahead.
     robot_states = sim.get_actor_states(["robot"], torch.arange(n, device=device)).clone()
