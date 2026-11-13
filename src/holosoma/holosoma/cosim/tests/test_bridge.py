@@ -13,6 +13,7 @@ import torch
 from holosoma.cosim import bridge
 from holosoma.cosim.cuda import CacheAllocator
 from holosoma.envs.render_task import RenderTask
+from holosoma.simulator.shared.sensor_manager import SensorManager
 
 pytestmark = pytest.mark.no_sim
 
@@ -40,6 +41,7 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
             "dof_names": ["a", "b"],
             "object_names": [],
             "env_origins": [[0.0, 0.0, 0.0]],
+            "cameras": [],
         },
         {"type": "FRAME_AVAILABLE", "frame": {"sequence": 1, "physics_step": 7, "sim_time": 0.035}},
         {"type": "CLOSE"},
@@ -88,8 +90,11 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
         scene=SimpleNamespace(env_origins=torch.zeros(1, 3)),
         state=SimpleNamespace(writable_names=lambda: list(values)),
         apply_state=lambda inputs: calls.append(("apply", inputs is values)),
+        sensor_manager=SensorManager("cpu", 50.0),
     )
-    task = SimpleNamespace(simulator=sim, render_frame=lambda **kw: calls.append(("capture", kw["sim_time"])))
+    task = SimpleNamespace(
+        simulator=sim, num_envs=1, render_frame=lambda **kw: calls.append(("capture", kw["sim_time"]))
+    )
     return bridge.Receiver(cast("RenderTask", task), endpoint="ipc:///unused"), calls, replies, messages
 
 
@@ -109,7 +114,7 @@ def test_receiver_uses_only_native_state_and_capture_contracts(receiver: Receive
         "close",
     ]
     assert replies == [
-        {"type": "OPENED", "done_handle": "01"},
+        {"type": "OPENED", "done_handle": "01", "images": []},
         {"type": "RENDER_COMPLETE", "sequence": 1},
         {"type": "UNMAPPED"},
     ]

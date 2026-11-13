@@ -51,15 +51,18 @@ class RenderTask(BaseTask):
         origins = self.simulator.native_env_origins()
         return simulation_env_origins(self) if origins is None else origins
 
-    def render_frame(self, *, sim_time: float) -> None:
+    def render_frame(self, *, sim_time: float, repeat: bool = False) -> None:
         """Render the applied state at external time ``sim_time`` and publish sensors, without physics.
 
-        ``sim_time`` must be finite, nonnegative and increase every frame. Returns after GPU work finishes, so
-        applied inputs can be released or reused.
+        ``sim_time`` must be finite, nonnegative and increase every frame. A ``repeat`` render, e.g. of state
+        the source reset after its frame, may reuse the previous time and is not counted in
+        ``frames_rendered``. Returns after GPU work finishes, so applied inputs can be released or reused.
         """
         if not math.isfinite(sim_time) or sim_time < 0:
             raise ValueError("Source simulation time must be finite and nonnegative")
-        if self._source_time is not None and sim_time <= self._source_time:
+        if self._source_time is not None and (
+            sim_time < self._source_time or (sim_time == self._source_time and not repeat)
+        ):
             raise ValueError("Source simulation time must advance for each frame")
         dt = sim_time if self._source_time is None else sim_time - self._source_time
         self.simulator.set_kinematic_time(sim_time)
@@ -69,7 +72,8 @@ class RenderTask(BaseTask):
         if torch.device(self.device).type == "cuda":
             torch.cuda.synchronize(self.device)
         self._source_time = sim_time
-        self.frames_rendered += 1
+        if not repeat:
+            self.frames_rendered += 1
 
     def step(self) -> Any:
         raise RuntimeError("RenderTask has no physics step; use render_frame()")
