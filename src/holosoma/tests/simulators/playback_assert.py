@@ -8,7 +8,7 @@ it for a generated clip (root held in the air, joints ramping), and asserts:
   a small tolerance
 - FK propagation: rigid-body positions reflect the written root pose
 - the kinematic clock advances while the engine clock does not (strict-FK backends)
-- the plugin requests task shutdown once the clip ends
+- the plugin requests shutdown once the clip ends
 
 Usage:
     python tests/simulators/playback_assert.py --simulator mujoco|mjwarp|isaacsim \
@@ -155,10 +155,10 @@ def _check_playback(task, tmp: Path, cfg, result_file: str | None) -> int:
     drift = sim._physics_time() - engine_t0
     check("engine-clock-frozen", abs(drift) < 1e-9, f"drift={drift} over {n} frames")
 
-    # 5. Play to the end: task shutdown requested.
+    # 5. Play to the end: shutdown requested.
     for _ in range(frames - n + 2):
         task.step()
-    check("shutdown-at-clip-end", task.shutdown_requested)
+    check("shutdown-at-clip-end", sim.shutdown_requested)
 
     if failures:
         print(f"FAILED: {failures}")
