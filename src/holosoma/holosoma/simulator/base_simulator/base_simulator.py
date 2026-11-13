@@ -675,6 +675,13 @@ class BaseSimulator:
         """
         raise NotImplementedError("The 'render' method must be implemented in subclasses.")
 
+    def apply_state(self, inputs: Mapping[str, torch.Tensor]) -> None:
+        """Overwrite complete writable unified-state fields; the backend receives them at the next state flush.
+
+        Inputs are read, not retained. This does not integrate physics.
+        """
+        self.state.assign(inputs)
+
     def time(self) -> float:
         """Get current simulation time in seconds.
 
