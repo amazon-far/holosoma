@@ -52,7 +52,10 @@ emits `FRAME_END` for sensor capture and consumers. It returns after GPU work
 finishes. Order consumers after `simulator.sensor_render_hook`. It does not emit
 physics `PRE_STEP`/`POST_STEP` or integrate physics.
 
-Source time must be finite, nonnegative and strictly increasing. Isaac also
+Source time must be finite, nonnegative and strictly increasing, except that
+`render_frame(sim_time=..., repeat=True)` may repeat the previous time, for
+state the source changed without advancing its clock. `frames_rendered` counts
+only frames that are not repeats. Isaac also
 checks that its physics clock never moves after preparation; render failure
 propagates and leaves its physics stopped. Isaac receivers render cameras only;
 source notifications own cadence. A `RenderTask` starts without the terrain height
@@ -121,6 +124,48 @@ Warp's CUDA IPC arrays and events (tested with Warp 1.15 and 1.19).
 Sharing caches removes a separate publication copy and CPU payload transfers.
 It does not remove native-to-unified SimState refresh, receiver layout conversion
 or native SDK writes. No promise of end-to-end zero-copy state application is made.
+
+## Observation loopback
+
+A source camera with `remote=True` takes its images from the receiver, so
+`get_camera_data()`, observation terms and camera plugins on the source read the
+receiver's frames unchanged. Local and remote cameras can mix on one source;
+LiDARs stay local.
+
+```python
+from dataclasses import replace
+
+source_cameras = {name: replace(camera, remote=True) for name, camera in cameras.items()}
+```
+
+The receiver keeps the same cameras with `remote=False`. Backends create no
+native renderer or runtime mount-pose writer for a remote camera, so
+`set_mount_pose()` raises for it. Each frame the backend renders its due local
+cameras and then hands the due remote cameras to the sensor manager's remote
+renderer, all inside sensor rendering, so buffers and `last_due` are final for
+every consumer ordered after `simulator.sensor_render_hook`. A remote camera with
+no remote renderer raises on its first render.
+
+The `Publisher` is that remote renderer when the source has remote cameras. It
+sends their names, data types and sizes when the connection opens, and the
+receiver rejects any that differ from its own cameras before mapping state. The
+receiver exports one persistent buffer per camera output, rgb `uint8 [E, H, W, 3]`
+and depth `float32 [E, H, W, 1]`, and copies its sensor buffers into them before
+signalling completion. The source then copies each due camera's image into a new
+buffer, so earlier frames held by consumers stay valid. Publication follows the
+remote cameras: a frame is published when one of them is due. Without remote
+cameras the source publishes after capture, as above.
+
+Sources reset environments after cameras render. When observations re-render the
+reset environments, the publisher sends `RERENDER` with the current source time;
+the receiver applies the reset state, renders every environment with
+`repeat=True`, and the source takes only the reset rows. Locally rendered
+cameras keep their frame from before the reset for that step.
+
+Limits: the receiver renders all of its cameras for every published frame, while
+the source updates only its due cameras. Runtime mount-pose changes and episode
+or seed information are not forwarded. Images need the same same-GPU CUDA IPC as
+state; CPU renderers are not supported.
 
 ## Batched object-root state
 

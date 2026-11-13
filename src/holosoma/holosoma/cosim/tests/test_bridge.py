@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -10,8 +11,9 @@ from typing import Any, cast
 import pytest
 import torch
 
+from holosoma.config_types.sensor import CameraSensorConfig, SensorMountConfig
 from holosoma.cosim import bridge
-from holosoma.cosim.cuda import CacheAllocator
+from holosoma.cosim.cuda import BufferSpec, CacheAllocator, MappedBuffers, share
 from holosoma.envs.render_task import RenderTask
 from holosoma.simulator.shared.sensor_manager import SensorManager
 
@@ -22,6 +24,12 @@ pytestmark = pytest.mark.no_sim
 def test_invalid_frame_is_rejected(frame: tuple[int, int, float]) -> None:
     with pytest.raises(ValueError, match="must be valid"):
         bridge.Frame(*frame)
+
+
+def _camera(manager: SensorManager, name: str, *, remote: bool, data_types: list[Any]) -> Any:
+    mount = SensorMountConfig(target_kind="world", target="")
+    config = CameraSensorConfig(mount=mount, width=4, height=3, data_types=data_types, remote=remote)
+    return manager.register_camera(name, config)
 
 
 ReceiverFixture = tuple[bridge.Receiver, list[Any], list[dict[str, Any]], list[dict[str, Any]]]
@@ -59,6 +67,7 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
         release_error: Exception | None = None
 
         def __init__(self, descriptions: Any, *, device: str) -> None:
+            calls.append("map")
             self.tensors = values
 
         def verify_read_only(self) -> None:
@@ -78,7 +87,14 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
             stream_from_torch=lambda _: stream,
             event_from_ipc_handle=lambda *_args, **_kw: object(),
             Event=lambda **_: SimpleNamespace(ipc_handle=lambda: b"\x01"),
+            to_torch=lambda owner: owner,
         ),
+    )
+    monkeypatch.setattr(
+        bridge, "allocate_shared", lambda shape, dtype, _: torch.zeros(shape, dtype=getattr(torch, dtype))
+    )
+    monkeypatch.setattr(
+        bridge, "share", lambda name, owner: BufferSpec(name, tuple(owner.shape), "00", str(owner.dtype)[6:])
     )
     monkeypatch.setattr(torch.cuda, "current_stream", lambda _: object())
     monkeypatch.setattr(torch.cuda, "synchronize", lambda _: calls.append("sync"))
@@ -93,7 +109,9 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
         sensor_manager=SensorManager("cpu", 50.0),
     )
     task = SimpleNamespace(
-        simulator=sim, num_envs=1, render_frame=lambda **kw: calls.append(("capture", kw["sim_time"]))
+        simulator=sim,
+        num_envs=1,
+        render_frame=lambda **kw: calls.append(("capture", kw["sim_time"], *(["repeat"] if kw.get("repeat") else []))),
     )
     return bridge.Receiver(cast("RenderTask", task), endpoint="ipc:///unused"), calls, replies, messages
 
@@ -102,6 +120,7 @@ def test_receiver_uses_only_native_state_and_capture_contracts(receiver: Receive
     worker, calls, replies, _messages = receiver
     worker.run()
     assert calls == [
+        "map",
         "ready",
         "sync",
         ("apply", True),
@@ -128,6 +147,58 @@ def test_layout_mismatch_fails_before_mapping(receiver: ReceiverFixture, mismatc
         worker.run()
     assert not any(isinstance(call, tuple) for call in calls)
     assert replies[-1]["type"] == "ERROR" and calls[-1] == "close"
+
+
+@pytest.mark.parametrize(
+    "camera",
+    [
+        {"name": "missing", "data_types": ["rgb"], "width": 4, "height": 3},
+        {"name": "cam", "data_types": ["rgb"], "width": 8, "height": 3},
+        {"name": "cam", "data_types": ["depth", "rgb"], "width": 4, "height": 3},
+    ],
+)
+def test_remote_camera_mismatch_fails_before_mapping(receiver: ReceiverFixture, camera: dict[str, Any]) -> None:
+    worker, calls, replies, messages = receiver
+    _camera(worker.sim.sensor_manager, "cam", remote=False, data_types=["rgb"])
+    messages[0]["cameras"] = [camera]
+    with pytest.raises(ValueError, match="differs|no camera"):
+        worker.run()
+    assert "map" not in calls
+    assert replies[-1]["type"] == "ERROR" and calls[-1] == "close"
+
+
+def test_receiver_exports_its_images_after_each_render(
+    receiver: ReceiverFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worker, calls, replies, messages = receiver
+    record = _camera(worker.sim.sensor_manager, "cam", remote=False, data_types=["rgb", "depth"])
+    messages[0]["cameras"] = [{"name": "cam", "data_types": ["depth", "rgb"], "width": 4, "height": 3}]
+    messages.insert(2, {"type": "RERENDER", "sim_time": 0.035})
+    exports: list[torch.Tensor] = []
+    exported_before_render: list[list[float]] = []
+    allocate, render = bridge.allocate_shared, cast("Any", worker.task).render_frame
+
+    def allocate_shared(*args: Any) -> torch.Tensor:
+        exports.append(allocate(*args))
+        return exports[-1]
+
+    def render_frame(**kw: Any) -> None:
+        exported_before_render.append([float(export.max()) for export in exports])
+        render(**kw)
+        frame = len(exported_before_render)
+        record.set_buffer("rgb", torch.full((1, 3, 4, 3), frame, dtype=torch.uint8))
+        record.set_buffer("depth", torch.full((1, 3, 4, 1), float(frame)))
+
+    monkeypatch.setattr(bridge, "allocate_shared", allocate_shared)
+    monkeypatch.setattr(worker.task, "render_frame", render_frame)
+    worker.run()
+    assert [(spec["name"], spec["dtype"]) for spec in replies[0]["images"]] == [
+        ("cam/rgb", "uint8"),
+        ("cam/depth", "float32"),
+    ]
+    assert ("capture", 0.035, "repeat") in calls and replies[2] == {"type": "RERENDERED"}
+    assert exported_before_render == [[0.0, 0.0], [1.0, 1.0]]
+    assert all(bool((export == 2).all()) for export in exports)
 
 
 def test_unwritable_state_field_fails_before_mapping(receiver: ReceiverFixture) -> None:
@@ -171,3 +242,118 @@ def test_publisher_rejects_fields_the_allocator_does_not_own(monkeypatch: pytest
         bridge.Publisher(
             cast("Any", SimpleNamespace(state=state)), CacheAllocator(("dof_pos",)), endpoint="ipc:///unused"
         )
+
+
+PublisherFixture = tuple[bridge.Publisher, SensorManager, dict[str, torch.Tensor], list[Any]]
+
+
+@pytest.fixture
+def publisher(monkeypatch: pytest.MonkeyPatch) -> PublisherFixture:
+    manager = SensorManager("cpu", 50.0, num_envs=2)
+    _camera(manager, "local", remote=False, data_types=["rgb"])
+    _camera(manager, "cam", remote=True, data_types=["rgb", "depth"])
+    images = {"cam/rgb": torch.ones(2, 3, 4, 3, dtype=torch.uint8), "cam/depth": torch.ones(2, 3, 4, 1)}
+    calls: list[Any] = []
+    replies: dict[str, dict[str, Any]] = {
+        "OPEN": {"type": "OPENED", "done_handle": "00", "images": [{"name": name} for name in images]},
+        "FRAME_AVAILABLE": {"type": "RENDER_COMPLETE", "sequence": 1},
+        "RERENDER": {"type": "RERENDERED"},
+        "CLOSE": {"type": "UNMAPPED"},
+    }
+
+    def exchange(command: str, **fields: Any) -> dict[str, Any]:
+        calls.append((command, fields))
+        return replies[command]
+
+    control = SimpleNamespace(exchange=exchange, set_timeout=lambda _: None, close=lambda: None)
+    monkeypatch.setattr(bridge, "ControlChannel", lambda **_: control)
+    mapped = SimpleNamespace(tensors=images, release=lambda: calls.append("unmap"))
+    monkeypatch.setattr(bridge, "MappedBuffers", lambda *_args, **_kw: mapped)
+    monkeypatch.setattr(bridge, "gpu_uuid", lambda _: "gpu-a")
+    stream = SimpleNamespace(wait_event=lambda _: None, record_event=lambda _: None)
+    monkeypatch.setitem(
+        sys.modules,
+        "warp",
+        SimpleNamespace(
+            stream_from_torch=lambda _: stream,
+            event_from_ipc_handle=lambda *_args, **_kw: object(),
+            Event=lambda **_: SimpleNamespace(ipc_handle=lambda: b"\x01"),
+        ),
+    )
+    monkeypatch.setattr(torch.cuda, "current_stream", lambda _: object())
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda _: None)
+    values = {"dof_pos": torch.zeros(2, 1)}
+    sim = SimpleNamespace(
+        sim_device="cpu",
+        state=SimpleNamespace(writable_names=lambda: list(values), get=values.__getitem__),
+        sensor_manager=manager,
+        hooks=SimpleNamespace(add=lambda *_args, **_kw: SimpleNamespace(remove=lambda: None)),
+        sensor_render_hook=None,
+        dof_names=["a"],
+        object_state_names=(),
+        scene=SimpleNamespace(env_origins=torch.zeros(2, 3)),
+        time=lambda: 0.5,
+    )
+    allocator = SimpleNamespace(fields=frozenset(values), exports=lambda _: [])
+    worker = bridge.Publisher(cast("Any", sim), cast("Any", allocator), endpoint="ipc:///unused")
+    return worker, manager, images, calls
+
+
+def test_remote_due_cameras_get_copies_of_the_receiver_images(publisher: PublisherFixture) -> None:
+    worker, manager, images, calls = publisher
+    assert calls[0][1]["cameras"] == [{"name": "cam", "data_types": ["depth", "rgb"], "width": 4, "height": 3}]
+    manager.render_remote(manager.collect_due())
+    remote = manager.get("cam")
+    for data_type in ("rgb", "depth"):
+        buffer = remote.buffers[data_type]
+        assert (
+            torch.equal(buffer, images[f"cam/{data_type}"])
+            and buffer.data_ptr() != images[f"cam/{data_type}"].data_ptr()
+        )
+    assert not manager.get("local").buffers and calls[1][0] == "FRAME_AVAILABLE"
+
+    worker.close()
+    assert calls[-2:] == ["unmap", ("CLOSE", {})]
+    with pytest.raises(RuntimeError, match="no remote renderer"):
+        manager.render_remote(manager.collect_due())
+
+
+def test_rerender_writes_only_the_reset_rows(publisher: PublisherFixture) -> None:
+    _worker, manager, images, calls = publisher
+    manager.render_remote(manager.collect_due())
+    for image in images.values():
+        image.fill_(7)
+    manager.rerender(torch.tensor([1]))
+    assert calls[-1] == ("RERENDER", {"sim_time": 0.5})
+    for data_type in ("rgb", "depth"):
+        buffer = manager.get("cam").buffers[data_type]
+        assert bool((buffer[0] == 1).all()) and bool((buffer[1] == 7).all())
+
+
+@pytest.mark.parametrize("dtype", ["uint8", "float32"])
+def test_shared_buffer_dtype_survives_export_and_import(monkeypatch: pytest.MonkeyPatch, dtype: str) -> None:
+    tensor = torch.zeros(2, 3, dtype=getattr(torch, dtype))
+
+    class Owner:  # Weak-referenceable, like a Warp array.
+        shape = (2, 3)
+
+        def __init__(self) -> None:
+            self.dtype = SimpleNamespace(__name__=dtype)
+
+        def ipc_handle(self) -> bytes:
+            return b"\x01"
+
+    owner = Owner()
+    imported: dict[str, Any] = {}
+
+    def from_ipc_handle(handle: bytes, **kw: Any) -> Any:
+        imported.update(kw, handle=handle)
+        return owner
+
+    warp = SimpleNamespace(
+        uint8="wp.uint8", float32="wp.float32", from_ipc_handle=from_ipc_handle, to_torch=lambda _: tensor
+    )
+    monkeypatch.setitem(sys.modules, "warp", warp)
+    mapped = MappedBuffers([asdict(share("cam/rgb", owner))], device="cuda:0")
+    assert imported == {"handle": b"\x01", "shape": (2, 3), "dtype": f"wp.{dtype}", "device": "cuda:0"}
+    assert mapped.tensors["cam/rgb"] is tensor
