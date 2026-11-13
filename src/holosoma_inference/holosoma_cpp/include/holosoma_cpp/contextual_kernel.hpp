@@ -2,10 +2,10 @@
 
 #include <array>
 #include <cstddef>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "holosoma_cpp/contextual_types.hpp"
@@ -40,81 +40,146 @@ struct Spec {
 
 using Options = ContextualConfig;
 
+// How the model expects a metric depth frame to become its depth input, as its
+// export declares it. The policy never sees raw depth, so it cannot apply this;
+// whichever transport preprocesses depth compares its own settings against it.
+// Pixels below near read as near and beyond far as far; `invalid_fill` is the
+// plane a pixel with no reading (NaN, or depth <= 0) takes: "near" or "far".
+struct DepthContract {
+  double near_m = 0, far_m = 0;
+  std::string invalid_fill;
+  // The metric frame size the export was trained to resize to the policy's
+  // depth size, and the resize; unset when the export does not declare them.
+  std::optional<std::pair<int, int>> raw_shape_hw;
+  std::optional<std::string> resize;
+  // The export's name for its depth contract, for logs; never interpreted.
+  std::optional<std::string> name;
+};
+
+// One command interface for a depth-conditioned policy: how operator commands
+// become the model's command input, how the observation is assembled, and how
+// raw actions become joint targets. Policy selects one from the configured
+// discretizer and forwards every call; callers never name a family.
+//
+// Shared contract for every family: runtime (Spec) joint order on every
+// vector a caller reads or writes, model-slot -> runtime index in
+// real_to_model(), the shared raw-action ceiling (action_clip.hpp) applied
+// before scaling, and the clipped action fed back as the next observation's
+// previous action. A setter a family cannot honour throws
+// std::invalid_argument rather than being dropped.
+class Family {
+ public:
+  virtual ~Family() = default;
+  virtual void Reset() = 0;
+  virtual void SetSpeed(int speed) = 0;
+  virtual void SetCommand(int index) = 0;
+  virtual void SetFixedArm(int side) = 0;
+  virtual void SetDz(bool enabled) = 0;
+  virtual void SetClimbAtStandAllowed(bool allowed, bool continuation) = 0;
+  virtual int SetVelocity(double vx, double vy, double wz, double deadzone) = 0;
+  virtual void RequestKey(const std::string &key, double now) = 0;
+  virtual bool UpdateTransition(double now) = 0;
+  virtual void CancelTransition() = 0;
+  virtual std::vector<float> Observation(const State &state) const = 0;
+  virtual std::vector<double> Target(const State &state, const std::optional<std::vector<float>> &depth,
+                                     double now) = 0;
+
+  // Runtime-order stance the targets are offsets from, and the gains to send.
+  virtual const std::vector<double> &default_dof_pos() const = 0;
+  virtual const std::vector<double> &kp() const = 0;
+  virtual const std::vector<double> &kd() const = 0;
+  // True when kp/kd came from the model rather than from Spec.
+  virtual bool gains_from_model() const = 0;
+  virtual const std::vector<int> &real_to_model() const = 0;
+  virtual const std::vector<int> &model_to_real() const = 0;
+  virtual const std::vector<float> &observation() const = 0;
+  virtual const std::vector<float> &depth() const = 0;
+  virtual const std::vector<int64_t> &depth_shape() const = 0;
+  // The declared depth preprocessing, or nullopt when the model declares none.
+  virtual std::optional<DepthContract> depth_contract() const = 0;
+  virtual const std::vector<float> &action() const = 0;
+  virtual const std::vector<float> &scaled() const = 0;
+  virtual bool has_climb_head() const = 0;
+  virtual bool dz() const = 0;
+  virtual bool climbing() const = 0;
+  virtual float climb_pred() const = 0;
+  // Primitive command index, or kNoPrimitive for a continuous command.
+  virtual int active_command() const = 0;
+  virtual int effective_command() const = 0;
+  virtual int fixed_arm() const = 0;
+  virtual int speed() const = 0;
+  virtual int calls() const = 0;
+  virtual const std::string &key() const = 0;
+  virtual std::optional<int> pending() const = 0;
+  virtual double release_time() const = 0;
+};
+
+// Reported by active_command()/effective_command() when the command is a
+// continuous velocity rather than one of the primitive columns.
+constexpr int kNoPrimitive = -1;
+
 // Owns only inference and temporal policy state. No transport, SDK, ROS clock,
 // or implicit CPU fallback. A caller supplies monotonic time for key
 // transitions.
 class Policy {
  public:
   Policy(std::shared_ptr<OnnxModel> model, Spec spec, Options options = {});
-  void Reset();
-  void SetSpeed(int speed);
-  void SetCommand(int index);
-  void SetFixedArm(int side);
-  void SetDz(bool enabled);
+  void Reset() { family_->Reset(); }
+  void SetSpeed(int speed) { family_->SetSpeed(speed); }
+  void SetCommand(int index) { family_->SetCommand(index); }
+  void SetFixedArm(int side) { family_->SetFixedArm(side); }
+  void SetDz(bool enabled) { family_->SetDz(enabled); }
   // Persistent stand gate, independent of dZ and every new model prediction.
   // `continuation` lets a climb already in progress run on through an
   // unpermitted stand; it never starts one.
-  void SetClimbAtStandAllowed(bool allowed, bool continuation = false);
-  int SetVelocity(double vx, double vy, double wz, double deadzone = .1);
-  void RequestKey(const std::string &key, double now);
-  bool UpdateTransition(double now);
-  void CancelTransition();
-  std::string FinishProfile();
-  std::vector<float> Observation(const State &state) const;
-  std::vector<double> Target(const State &state, const std::optional<std::vector<float>> &depth, double now);
+  void SetClimbAtStandAllowed(bool allowed, bool continuation = false) {
+    family_->SetClimbAtStandAllowed(allowed, continuation);
+  }
+  int SetVelocity(double vx, double vy, double wz, double deadzone = .1) {
+    return family_->SetVelocity(vx, vy, wz, deadzone);
+  }
+  void RequestKey(const std::string &key, double now) { family_->RequestKey(key, now); }
+  bool UpdateTransition(double now) { return family_->UpdateTransition(now); }
+  void CancelTransition() { family_->CancelTransition(); }
+  std::string FinishProfile() { return model_->finish_profile(); }
+  std::vector<float> Observation(const State &state) const { return family_->Observation(state); }
+  std::vector<double> Target(const State &state, const std::optional<std::vector<float>> &depth, double now) {
+    return family_->Target(state, depth, now);
+  }
 
   const Spec &spec() const { return spec_; }
-  const std::vector<double> &kp() const { return kp_; }
-  const std::vector<double> &kd() const { return kd_; }
-  const std::vector<int> &real_to_model() const { return real_to_model_; }
-  const std::vector<int> &model_to_real() const { return model_to_real_; }
-  const std::vector<float> &observation() const { return obs_; }
-  const std::vector<float> &depth() const { return depth_; }
-  const std::vector<int64_t> &depth_shape() const { return depth_shape_; }
-  const std::vector<float> &action() const { return action_; }
-  const std::vector<float> &scaled() const { return scaled_; }
-  bool has_climb_head() const { return climb_output_.has_value(); }
-  bool dz() const { return dz_; }
-  bool climbing() const { return climbing_; }
-  float climb_pred() const { return climb_pred_; }
-  int active_command() const { return command_; }
-  int effective_command() const { return climbing_ ? 14 : command_; }
-  int fixed_arm() const { return fixed_arm_; }
-  int speed() const { return speed_; }
-  int calls() const { return calls_; }
-  const std::string &key() const { return key_; }
-  std::optional<int> pending() const { return pending_; }
-  double release_time() const { return release_time_; }
+  // True when the configured command interface is a continuous velocity.
+  bool continuous() const { return !options_.discretizer.has_value(); }
+  const std::vector<double> &default_dof_pos() const { return family_->default_dof_pos(); }
+  const std::vector<double> &kp() const { return family_->kp(); }
+  const std::vector<double> &kd() const { return family_->kd(); }
+  bool gains_from_model() const { return family_->gains_from_model(); }
+  const std::vector<int> &real_to_model() const { return family_->real_to_model(); }
+  const std::vector<int> &model_to_real() const { return family_->model_to_real(); }
+  const std::vector<float> &observation() const { return family_->observation(); }
+  const std::vector<float> &depth() const { return family_->depth(); }
+  const std::vector<int64_t> &depth_shape() const { return family_->depth_shape(); }
+  std::optional<DepthContract> depth_contract() const { return family_->depth_contract(); }
+  const std::vector<float> &action() const { return family_->action(); }
+  const std::vector<float> &scaled() const { return family_->scaled(); }
+  bool has_climb_head() const { return family_->has_climb_head(); }
+  bool dz() const { return family_->dz(); }
+  bool climbing() const { return family_->climbing(); }
+  float climb_pred() const { return family_->climb_pred(); }
+  int active_command() const { return family_->active_command(); }
+  int effective_command() const { return family_->effective_command(); }
+  int fixed_arm() const { return family_->fixed_arm(); }
+  int speed() const { return family_->speed(); }
+  int calls() const { return family_->calls(); }
+  const std::string &key() const { return family_->key(); }
+  std::optional<int> pending() const { return family_->pending(); }
+  double release_time() const { return family_->release_time(); }
   const char *provider() const { return model_->provider(); }
 
  private:
-  void ResolveClimb();
-  bool StandBlocked() const;
-  bool StandHeld() const;
-  bool ProbeClimb() const;
-  void ApplyFixedArm();
-  int CommandCode(const std::string &name) const;
-  std::string VelocityName(double vx, double vy, double wz, double deadzone) const;
-  void Run();
   Spec spec_;
   Options options_;
   std::shared_ptr<OnnxModel> model_;
-  std::vector<int64_t> depth_shape_;
-  std::optional<size_t> climb_output_;
-  std::vector<int> real_to_model_, model_to_real_;
-  std::vector<double> kp_, kd_, scale_;
-  std::vector<float> command_vector_, obs_, depth_, action_, scaled_;
-  std::deque<std::vector<float>> frames_;
-  int history_ = 0, command_ = 0, speed_ = 0, fixed_arm_ = 0, calls_ = 0;
-  bool dz_ = false, climbing_ = false;
-  bool climb_at_stand_allowed_ = false, climb_continuation_ = false;
-  float climb_pred_ = 0;
-  // Whether climb_pred_ was read with column 14 set (gated entry needs it).
-  bool pred_under_climb_ = false;
-  std::string key_ = "z";
-  std::optional<int> pending_;
-  double release_time_ = 0;
-  // Resolved imu_to_obs_joint_chain: (runtime joint index, quaternion component 1..3).
-  std::vector<std::pair<size_t, int>> imu_to_obs_chain_;
+  std::unique_ptr<Family> family_;
 };
 }  // namespace holosoma::contextual

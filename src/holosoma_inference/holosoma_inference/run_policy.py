@@ -104,23 +104,38 @@ def _print_control_guide(policy_class, use_joystick: bool, dual_mode: bool = Fal
 
 
 def _start_depth_source(
-    policy, config: InferenceConfig, depth_shm: str | None, depth_topic: str | None, depth_heartbeat: bool = True
+    policy,
+    config: InferenceConfig,
+    depth_shm: str | None,
+    depth_topic: str | None,
+    depth_heartbeat: bool = True,
 ):
-    """Attach the requested depth source to a contextual policy; returns it, or None."""
+    """Attach the requested depth source to a contextual policy; returns it, or None.
+
+    A depth topic is preprocessed here, as the active model's declared depth contract says (clip
+    range, fill, frame size and resize), and is refused for a contract that does not say how to
+    frame one. A shared-memory producer preprocesses frames itself and is not checked; the
+    declared contract is logged for its operator.
+    """
     if depth_shm is None and depth_topic is None:
         return None
     if depth_shm is not None and depth_topic is not None:
         raise ValueError("Pass either --depth-shm or --depth-topic, not both")
     if config.contextual is None or not hasattr(policy, "set_depth"):
         raise ValueError("A depth source needs a contextual (depth-conditioned) preset")
-    from holosoma_inference.depth import DepthConsumer, DepthShmConsumer
+    from holosoma_inference import depth
 
+    contract = getattr(policy, "depth_contract", None)
     if depth_shm is not None:
+        if contract is not None:
+            logger.info(f"Model depth contract (the shared-memory producer must match it): {contract}")
         shape = (1, 1, config.contextual.depth_height, config.contextual.depth_width)
-        source = DepthShmConsumer(policy, shape=shape, name=depth_shm, heartbeat=depth_heartbeat)
+        source = depth.DepthShmConsumer(policy, shape=shape, name=depth_shm, heartbeat=depth_heartbeat)
         logger.info(f"Contextual depth from shared memory '{depth_shm}'")
     else:
-        source = DepthConsumer(policy, depth_topic)
+        if contract is not None:
+            logger.info(f"Model depth contract (applied to {depth_topic}): {contract}")
+        source = depth.DepthConsumer(policy, depth_topic)
     source.start()
     return source
 
@@ -136,7 +151,7 @@ def run_policy(
 
     ``depth_shm`` / ``depth_topic`` feed a contextual policy from a depth shared-memory block or a
     ROS2 depth topic (see ``holosoma_inference.depth``). ``depth_heartbeat=False`` reads the block
-    without its producer's heartbeat.
+    without its producer's heartbeat. A depth topic is preprocessed as the active model declares.
     """
     logger.info("🚀 Starting Policy with Tyro configuration...")
     logger.info(f"🤖 Robot: {config.robot.robot_type}")

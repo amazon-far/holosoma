@@ -3,6 +3,7 @@
 #include <pybind11/stl.h>
 
 #include "holosoma_cpp/api.hpp"
+#include "holosoma_cpp/contextual_policy.hpp"
 #include "holosoma_cpp/holosoma_inference_core.hpp"
 #include "holosoma_cpp/wbt_policy.hpp"
 
@@ -181,6 +182,29 @@ PYBIND11_MODULE(_native, m) {
       .def_property_readonly("last_observation", [](const InferenceEngine& e) { return e.policy().last_observation(); })
       .def_property_readonly("joint_kp", [](const InferenceEngine& e) { return e.policy().joint_kp(); })
       .def_property_readonly("joint_kd", [](const InferenceEngine& e) { return e.policy().joint_kd(); })
+      // The active contextual model's declared depth preprocessing as a dict
+      // (near_m, far_m, invalid_fill, raw_shape_hw, resize, name; the last
+      // three None when undeclared), or None when it declares none or the
+      // policy is not contextual.
+      .def_property_readonly(
+          "depth_contract",
+          [](const InferenceEngine& e) -> py::object {
+            const auto* contextual = dynamic_cast<const ContextualPolicy*>(&e.policy());
+            if (!contextual) return py::none();
+            const auto contract = contextual->core().depth_contract();
+            if (!contract) return py::none();
+            py::dict out;
+            out["near_m"] = contract->near_m;
+            out["far_m"] = contract->far_m;
+            out["invalid_fill"] = contract->invalid_fill;
+            out["raw_shape_hw"] =
+                contract->raw_shape_hw
+                    ? py::object(py::make_tuple(contract->raw_shape_hw->first, contract->raw_shape_hw->second))
+                    : py::object(py::none());
+            out["resize"] = contract->resize ? py::object(py::str(*contract->resize)) : py::object(py::none());
+            out["name"] = contract->name ? py::object(py::str(*contract->name)) : py::object(py::none());
+            return std::move(out);
+          })
       .def_property_readonly("velocity_zero_requests", &InferenceEngine::velocity_zero_requests);
 
   // The serialized-config preview constructor remains available for existing callers.

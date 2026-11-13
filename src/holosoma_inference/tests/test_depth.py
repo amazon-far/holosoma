@@ -1,17 +1,26 @@
 """Unit tests for the contextual policy's depth input."""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from scipy import ndimage
 
 from holosoma_inference.depth import (
+    BICUBIC_ANTIALIAS,
     FAR_M,
+    FRAME_SHAPE_MISMATCH,
     HEIGHT,
     NEAR_M,
+    UNFRAMED_CONTRACT,
     WIDTH,
+    DepthConsumer,
+    DepthSettings,
     frame_from_image,
     preprocess,
+    resize_bicubic_antialias,
+    settings_for,
     stamp_seconds,
 )
 
@@ -110,3 +119,150 @@ def test_zero_and_negative_read_as_far_not_near():
 def test_accepts_a_trailing_singleton_channel():
     out = preprocess(np.full((63, 112, 1), 1.0, np.float32))
     assert out.shape == (HEIGHT, WIDTH)
+
+
+@pytest.mark.parametrize(("fill", "expected"), [("far", +0.5), ("near", -0.5)])
+def test_pixels_with_no_reading_take_the_configured_fill(fill, expected):
+    """NaN and non-positive depth take the fill plane; -inf/+inf stay near/far under either fill."""
+    frame = np.full((HEIGHT, WIDTH), 1.0, np.float32)
+    frame[0, 0], frame[0, 1], frame[0, 2] = np.nan, 0.0, -3.0
+    frame[1, 0], frame[1, 1] = -np.inf, np.inf
+    out = preprocess(frame, invalid_fill=fill)
+    assert out[0, :3] == pytest.approx([expected] * 3)
+    assert out[1, 0] == pytest.approx(-0.5)
+    assert out[1, 1] == pytest.approx(+0.5)
+
+
+def test_the_default_fill_is_the_far_plane_the_primitive_models_trained_on():
+    frame = np.full((HEIGHT, WIDTH), 1.0, np.float32)
+    frame[0, 0] = np.nan
+    np.testing.assert_array_equal(preprocess(frame), preprocess(frame, invalid_fill="far"))
+    assert preprocess(frame)[0, 0] == pytest.approx(+0.5)
+
+
+def test_rejects_an_unknown_fill():
+    with pytest.raises(ValueError, match="invalid_fill"):
+        preprocess(np.ones((HEIGHT, WIDTH), np.float32), invalid_fill="zero")
+
+
+GOLDEN = np.load(Path(__file__).parent / "data" / "depth_resize_golden.npz")
+CASES = ("noise", "ramp", "step", "up")
+EXPORT_CONTRACT = {
+    "near_m": 0.3,
+    "far_m": 2.0,
+    "invalid_fill": "near",
+    "raw_shape_hw": (63, 112),
+    "resize": BICUBIC_ANTIALIAS,
+    "name": "gma_zed_x_mini_v1",
+}
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_the_antialiased_resize_matches_torch(case):
+    """Golden from torch.nn.functional.interpolate(bicubic, antialias=True), which training used."""
+    ours = resize_bicubic_antialias(GOLDEN[f"in_{case}"], (HEIGHT, WIDTH))
+    np.testing.assert_allclose(ours, GOLDEN[f"out_{case}"], rtol=0, atol=5e-5)
+
+
+def test_the_spline_zoom_is_not_the_trained_resize():
+    """Control: the primitive path's resize differs from training's, so the golden discriminates."""
+    frame = GOLDEN["in_step"]
+    zoomed = ndimage.zoom(frame, (HEIGHT / frame.shape[0], WIDTH / frame.shape[1]), order=3, mode="nearest")
+    assert np.abs(zoomed - GOLDEN["out_step"]).max() > 1e-2
+
+
+def test_a_declared_contract_preprocesses_as_training_did():
+    """Clamp, antialiased resize, clamp, normalise: the order the export declares."""
+    near, far = EXPORT_CONTRACT["near_m"], EXPORT_CONTRACT["far_m"]
+    s = settings_for(EXPORT_CONTRACT)
+    out = preprocess(
+        GOLDEN["in_noise"], s.near_m, s.far_m, s.invalid_fill, raw_shape_hw=s.raw_shape_hw, resize=s.resize
+    )
+    expected = (np.clip(GOLDEN["out_noise"], near, far) - near) / (far - near) - 0.5
+    np.testing.assert_allclose(out, expected, rtol=0, atol=5e-5)
+
+
+def test_a_model_without_a_depth_contract_keeps_the_default_preprocessing():
+    assert settings_for(None) == DepthSettings(NEAR_M, FAR_M, "far", None, None)
+    custom = DepthSettings(near_m=0.1, far_m=5.0)
+    assert settings_for(None, custom) is custom
+
+
+def test_a_declared_contract_sets_every_setting_including_a_clip_range_of_its_own():
+    contract = {**EXPORT_CONTRACT, "near_m": 0.5, "far_m": 3.0, "invalid_fill": "far"}
+    assert settings_for(contract) == DepthSettings(0.5, 3.0, "far", (63, 112), BICUBIC_ANTIALIAS)
+    assert settings_for(EXPORT_CONTRACT).invalid_fill == "near"
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"raw_shape_hw": None}, "depth_raw_shape_hw and depth_resize"),
+        ({"resize": None}, "depth_raw_shape_hw and depth_resize"),
+        ({"resize": "bilinear"}, "depth_resize 'bilinear' is not one of"),
+    ],
+)
+def test_a_contract_that_does_not_say_how_to_frame_a_topic_is_refused(change, message):
+    with pytest.raises(ValueError, match=UNFRAMED_CONTRACT) as refused:
+        settings_for({**EXPORT_CONTRACT, **change})
+    assert message in str(refused.value)
+
+
+def test_a_frame_of_another_size_is_refused_for_a_declared_frame_size():
+    frame = np.full((376, 672), 1.0, np.float32)  # the ZED X Mini at its native resolution
+    with pytest.raises(ValueError, match=FRAME_SHAPE_MISMATCH) as refused:
+        preprocess(frame, raw_shape_hw=(63, 112), resize=BICUBIC_ANTIALIAS)
+    assert "got 376x672, the model expects 63x112" in str(refused.value)
+    assert preprocess(np.full((63, 112), 1.0, np.float32), raw_shape_hw=(63, 112)).shape == (HEIGHT, WIDTH)
+
+
+class _Policy:
+    def __init__(self, contract):
+        self.depth_contract = contract
+        self.frames = []
+
+    def set_depth(self, frame, stamp_s=None):
+        self.frames.append((frame, stamp_s))
+        return True
+
+
+class _OfflineConsumer(DepthConsumer):
+    """The consumer without its ROS subscription."""
+
+    def _attach(self, topic):
+        pass
+
+
+def test_the_topic_consumer_follows_the_active_models_contract_across_a_switch():
+    policy = _Policy(EXPORT_CONTRACT)
+    consumer = _OfflineConsumer(policy)
+    frame = np.full((63, 112), 1.0, np.float32)
+    frame[0, 0] = np.nan
+    assert consumer.push(frame, 1.0)
+    first = policy.frames[-1][0]
+    assert first[1:, 1:].mean() == pytest.approx((1.0 - 0.3) / 1.7 - 0.5, abs=1e-4)
+    # A switch to a model with another clip range and fill: the next frame uses them.
+    policy.depth_contract = {**EXPORT_CONTRACT, "near_m": 0.5, "far_m": 3.0, "invalid_fill": "far"}
+    assert consumer.push(frame, 2.0)
+    second = policy.frames[-1][0]
+    assert second[1:, 1:].mean() == pytest.approx((1.0 - 0.5) / 2.5 - 0.5, abs=1e-4)
+    assert first[0, 0] < second[0, 0]  # the hole took near, then far
+    # And to a primitive model, which declares none: today's defaults, any frame size.
+    policy.depth_contract = None
+    assert consumer.push(np.full((HEIGHT, WIDTH), 1.0, np.float32), 3.0)
+    assert (consumer.frames, consumer.rejected) == (3, 0)
+
+
+def test_the_topic_consumer_drops_a_frame_the_active_contract_cannot_take():
+    policy = _Policy(EXPORT_CONTRACT)
+    consumer = _OfflineConsumer(policy)
+    assert not consumer.push(np.full((376, 672), 1.0, np.float32), 1.0)
+    # A switch to a model whose contract cannot frame a topic drops frames rather than guessing.
+    policy.depth_contract = {**EXPORT_CONTRACT, "raw_shape_hw": None}
+    assert not consumer.push(np.full((63, 112), 1.0, np.float32), 2.0)
+    assert (consumer.frames, consumer.rejected, policy.frames) == (0, 2, [])
+
+
+def test_the_topic_consumer_is_refused_up_front_for_a_contract_that_cannot_frame_a_topic():
+    with pytest.raises(ValueError, match=UNFRAMED_CONTRACT):
+        _OfflineConsumer(_Policy({**EXPORT_CONTRACT, "resize": None}))
