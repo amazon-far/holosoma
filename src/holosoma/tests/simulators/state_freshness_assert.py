@@ -215,9 +215,7 @@ def _check(sim, simulator: str) -> tuple[list[str], list[str]]:
                 write_mid_frame()
             if write and substep == 2:
                 write_velocity_only()
-            sim.hooks.emit(Phase.PRE_STEP)
             sim.simulate_at_each_physics_step()
-            sim.hooks.emit(Phase.POST_STEP)
             if checked:
                 compare("POST_STEP")
 

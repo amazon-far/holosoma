@@ -25,6 +25,7 @@ from holosoma.config_types.scene import MujocoPhysicsConfig, PhysicsConfig  # no
 from holosoma.config_values.robot import g1_29dof  # noqa: E402
 from holosoma.config_values.simulator import mjwarp  # noqa: E402
 from holosoma.config_values.simulator import mujoco as preset  # noqa: E402
+from holosoma.hooks import Phase  # noqa: E402
 from holosoma.simulator.mujoco.backends.native_config import (  # noqa: E402
     allocation_kwargs,
     apply_warp_model,
@@ -452,7 +453,7 @@ def test_saved_warp_preset_can_override_only_backend_then_initialize_classic():
         sim.backend.step()
         assert sim.root_data.time == pytest.approx(sim.sim_dt)
     finally:
-        sim.close()
+        sim.hooks.emit(Phase.CLOSE)
 
 
 def test_scene_compilation_and_missing_warp_startup_without_optional_dependencies():
@@ -538,7 +539,7 @@ def test_training_checkpoint_native_physics_reaches_standalone_core_and_stepping
         assert sim.root_data.time == pytest.approx(elapsed)
         assert sim.simulator_config.sim.mujoco.warp == native.warp
     finally:
-        sim.close()
+        sim.hooks.emit(Phase.CLOSE)
 
 
 def test_warp_allocation_uses_real_api_and_preserves_default_units():
@@ -808,4 +809,4 @@ def test_core_warp_actual_upload_allocation_capture_and_reset():
         backend.step()
         assert backend.get_render_data().time == pytest.approx(sim.sim_dt)
     finally:
-        sim.close()
+        sim.hooks.emit(Phase.CLOSE)

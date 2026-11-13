@@ -61,6 +61,22 @@ class _InitializedFakeSim(BaseSimulator):
         self.latest_sensor_value = "fresh"
         self.events.append("render")
 
+    def _advance_substep(self) -> None:
+        self.events.append("kinematics" if self.kinematic_playback else "dynamics")
+
+
+@pytest.mark.parametrize("kinematic_playback", [False, True])
+def test_physics_step_is_bracketed_by_pre_and_post_step(kinematic_playback: bool) -> None:
+    hooks = HookRegistry()
+    sim = _InitializedFakeSim(hooks)
+    sim.kinematic_playback = kinematic_playback
+    hooks.add(Phase.PRE_STEP, lambda: sim.events.append("pre_step"), name="probe.pre_step")
+    hooks.add(Phase.POST_STEP, lambda: sim.events.append("post_step"), name="probe.post_step")
+
+    sim.simulate_at_each_physics_step()
+
+    assert sim.events == ["pre_step", "kinematics" if kinematic_playback else "dynamics", "post_step"]
+
 
 def test_base_simulator_renders_sensors_before_task_plugins_consume_them() -> None:
     hooks = HookRegistry()
