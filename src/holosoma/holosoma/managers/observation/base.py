@@ -149,7 +149,7 @@ class ObservationTermBase(ABC):
         """:meth:`read` with the config's params, raising if a row subset returns the wrong row count."""
         obs = self.read(env, env_ids=env_ids, **self.cfg.params)
         if not isinstance(obs, torch.Tensor):
-            # Simulator state views (e.g. MuJoCo's) are tensor-like but not tensors; copy into one.
+            # Duck-typed simulator views (e.g. all_root_states) are tensor-like but not tensors; copy into one.
             obs = obs.clone()
         if env_ids is not None and obs.shape[0] != len(env_ids):
             raise ValueError(

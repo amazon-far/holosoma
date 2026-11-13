@@ -13,6 +13,7 @@
 namespace {
 using namespace holosoma;
 const std::filesystem::path fixtures(HOLOSOMA_CONTEXTUAL_FIXTURE_DIR);
+using Chain = std::vector<std::pair<std::string, std::string>>;
 
 InferenceConfig config(const char* model = "contextual.onnx") {
   InferenceConfig c;
@@ -24,10 +25,13 @@ InferenceConfig config(const char* model = "contextual.onnx") {
   c.task.model_path = {(fixtures / model).string()};
   c.task.use_phase = false;
   c.contextual.emplace();
+  // The fixtures are primitive models with a climb head.
+  c.contextual->discretizer = "simple";
+  c.contextual->require_climb_head = true;
   c.contextual->depth_height = 2;
   c.contextual->depth_width = 3;
   // The fixture robot has no waist; gravity-frame tests set their own chain.
-  c.contextual->imu_to_obs_joint_chain = {};
+  c.contextual->imu_to_obs_joint_chain = Chain{};
   c.runtime.intra_op_threads = 2;
   return c;
 }
@@ -46,6 +50,12 @@ TEST(ContextualApi, DepthFrameSizingDoesNotOverflowSignedInt) {
   spec.height = spec.width = 50000;
   ASSERT_GT(2500000000ull, std::numeric_limits<int>::max());
   EXPECT_EQ(spec.depth_frame_size(), 2500000000ull);
+}
+
+TEST(ContextualApi, APrimitiveExportDeclaresNoDepthContract) {
+  // The transport's own preprocessing (FAR-plane invalid fill) stays in charge.
+  Policy policy(config());
+  EXPECT_FALSE(core(policy).depth_contract().has_value());
 }
 
 TEST(ContextualApi, DepthFramesAreSizedAndValidatedThroughPublicStep) {
@@ -111,6 +121,42 @@ TEST(ContextualApi, ClimbSecondPassDoesNotAdvanceDepthHistoryTwice) {
   EXPECT_FALSE(core(policy).climbing());
 }
 
+TEST(ContextualApi, DzLatchesThroughStepIsReadableAndClearsOnReset) {
+  // A controller that forwards navigation dz reads it back through dz() and relies on
+  // reset() to drop it; an unset dz leaves the latched value alone.
+  Policy policy(config());
+  ASSERT_TRUE(core(policy).has_climb_head());
+  EXPECT_FALSE(core(policy).dz());
+  ContextualInput input;
+  input.monotonic_time = 1;
+  input.dz = true;
+  policy.step(state(), input);
+  EXPECT_TRUE(core(policy).dz());
+  input.monotonic_time = 2;
+  input.dz.reset();
+  policy.step(state(), input);
+  EXPECT_TRUE(core(policy).dz());
+  input.monotonic_time = 3;
+  input.dz = false;
+  policy.step(state(), input);
+  EXPECT_FALSE(core(policy).dz());
+  input.monotonic_time = 4;
+  input.dz = true;
+  policy.step(state(), input);
+  ASSERT_TRUE(core(policy).dz());
+  policy.reset();
+  EXPECT_FALSE(core(policy).dz());
+
+  auto c = config("no-head.onnx");
+  c.contextual->require_climb_head = false;
+  Policy headless(c);
+  EXPECT_FALSE(core(headless).has_climb_head());
+  input.monotonic_time = 1;
+  input.dz = false;
+  EXPECT_NO_THROW(headless.step(state(), input));
+  EXPECT_FALSE(core(headless).dz());
+}
+
 TEST(ContextualApi, RequiresFreshTypedInputAndKeepsInstancesIndependent) {
   Policy first(config()), second(config());
   ContextualInput input;
@@ -148,6 +194,65 @@ TEST(ContextualApi, InactiveTicksCannotSupplyAnOldDepthFrameToLaterEngagement) {
   EXPECT_THROW(policy.step(state()), std::invalid_argument);
   input.depth = std::vector<float>(6, .2f);
   EXPECT_NO_THROW(policy.step(state(), input));
+}
+
+TEST(ContextualApi, ClimbEnterAndExitModesGateOnDzAndThePrediction) {
+  // The fixture's climb_pred is the mean of the two-frame depth history, so a
+  // depth value of 1 reads as "stairs" and two frames of 0 read as "flat".
+  auto make = [](const char* enter, const char* exit) {
+    auto c = config();
+    c.contextual->climb_enter = enter;
+    c.contextual->climb_exit = exit;
+    return std::make_unique<Policy>(c);
+  };
+  double now = 0;
+  auto step = [&](Policy& policy, bool dz, float depth) {
+    ContextualInput input;
+    input.monotonic_time = ++now;
+    input.command_index = 1;
+    input.dz = dz;
+    input.depth = std::vector<float>(6, depth);
+    policy.step(state(), input);
+    return core(policy).climbing();
+  };
+
+  // Entry from a fresh walk: the prediction alone, dz alone, both.
+  struct Entry {
+    const char* enter;
+    bool pred_only, dz_only, both;
+  };
+  for (const auto& e : {Entry{"dz_or_pred", true, true, true}, Entry{"dz_only", false, true, true},
+                        Entry{"dz_and_pred", false, false, true}}) {
+    SCOPED_TRACE(e.enter);
+    EXPECT_EQ(step(*make(e.enter, "both_off"), false, 1), e.pred_only);
+    EXPECT_EQ(step(*make(e.enter, "both_off"), true, 0), e.dz_only);
+    EXPECT_EQ(step(*make(e.enter, "both_off"), true, 1), e.both);
+  }
+
+  // Exit once climbing: dz drops with stairs still seen, or the stairs end with dz held.
+  struct Exit {
+    const char* exit;
+    bool dz_off, pred_off;
+  };
+  for (const auto& x :
+       {Exit{"both_off", true, true}, Exit{"either_off", false, false}, Exit{"pred_off", true, false}}) {
+    SCOPED_TRACE(x.exit);
+    auto climbing = [&] {
+      auto policy = make("dz_and_pred", x.exit);
+      EXPECT_TRUE(step(*policy, true, 1));
+      EXPECT_TRUE(step(*policy, true, 1));
+      return policy;
+    };
+    EXPECT_EQ(step(*climbing(), false, 1), x.dz_off);
+    auto policy = climbing();
+    step(*policy, true, 0);
+    EXPECT_EQ(step(*policy, true, 0), x.pred_off);
+  }
+
+  EXPECT_THROW(make("dz_or_pred", "never"), std::invalid_argument);
+  EXPECT_THROW(make("always", "both_off"), std::invalid_argument);
+  EXPECT_THROW(make("dz_only", "pred_off"), std::invalid_argument);
+  EXPECT_NO_THROW(make("dz_and_pred", "pred_off"));
 }
 
 TEST(ContextualApi, ValidatesGraphAndOptionalClimbHeadThroughPublicFactory) {
@@ -221,7 +326,7 @@ std::array<double, 4> mul(const std::array<double, 4>& a, const std::array<doubl
 
 TEST(ContextualApi, OrientationAndCorrectedGravityReachTheModelInOneFrame) {
   auto c = config();
-  c.contextual->imu_to_obs_joint_chain = {{"hip", "z"}, {"knee", "x"}, {"ankle", "y"}};
+  c.contextual->imu_to_obs_joint_chain = Chain{{"hip", "z"}, {"knee", "x"}, {"ankle", "y"}};
   Policy policy(c);
   auto s = state();
   s.dof_pos = {.4, -.3, .25};
@@ -254,7 +359,7 @@ TEST(ContextualApi, OrientationAndCorrectedGravityReachTheModelInOneFrame) {
   }
 
   // An empty chain keeps IMU-frame gravity for both sources.
-  c.contextual->imu_to_obs_joint_chain = {};
+  c.contextual->imu_to_obs_joint_chain = Chain{};
   Policy imu_frame(c);
   imu_frame.step(s, ContextualInput{});
   for (int i = 0; i < 3; ++i) EXPECT_NEAR(core(imu_frame).observation()[i], imu[i], 1e-6) << i;
@@ -263,12 +368,13 @@ TEST(ContextualApi, OrientationAndCorrectedGravityReachTheModelInOneFrame) {
 TEST(ContextualApi, ImuToObsJointChainMustNameRuntimeJoints) {
   auto c = config();
   c.contextual = ContextualConfig{};  // Default G1 waist chain on a robot without a waist.
+  c.contextual->discretizer = "simple";
   c.contextual->depth_height = 2;
   c.contextual->depth_width = 3;
   EXPECT_THROW(Policy{c}, std::invalid_argument);
-  c.contextual->imu_to_obs_joint_chain = {{"hip", "w"}};
+  c.contextual->imu_to_obs_joint_chain = Chain{{"hip", "w"}};
   EXPECT_THROW(Policy{c}, std::invalid_argument);
-  c.contextual->imu_to_obs_joint_chain = {{"hip", "z"}};
+  c.contextual->imu_to_obs_joint_chain = Chain{{"hip", "z"}};
   EXPECT_NO_THROW(Policy{c});
 }
 

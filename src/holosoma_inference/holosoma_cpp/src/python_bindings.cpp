@@ -3,6 +3,7 @@
 #include <pybind11/stl.h>
 
 #include "holosoma_cpp/api.hpp"
+#include "holosoma_cpp/contextual_policy.hpp"
 #include "holosoma_cpp/holosoma_inference_core.hpp"
 #include "holosoma_cpp/wbt_policy.hpp"
 
@@ -36,6 +37,9 @@ PYBIND11_MODULE(_native, m) {
       .def_readwrite("allow_climb_at_stand", &ContextualInput::allow_climb_at_stand)
       .def_readwrite("allow_climb_continuation", &ContextualInput::allow_climb_continuation)
       .def_readwrite("key", &ContextualInput::key);
+  m.def(
+      "backend_available", [](const std::string& name) { return backend_available(parse_backend(name)); },
+      py::arg("backend"), "Whether this build can execute the named inference backend.");
   py::class_<RobotState>(m, "RobotState")
       .def(py::init<>())
       .def_readwrite("base_pos", &RobotState::base_pos)
@@ -75,12 +79,13 @@ PYBIND11_MODULE(_native, m) {
           py::arg("config"), py::arg("autostart") = true)
       .def_static(
           "from_live_model",
-          [](const std::string& checkpoint, bool use_gpu, int threads, const std::string& history_initialization) {
-            auto config = live_policy_config(checkpoint, use_gpu, threads);
+          [](const std::string& checkpoint, const std::string& backend, int threads,
+             const std::string& history_initialization) {
+            auto config = live_policy_config(checkpoint, parse_backend(backend), threads);
             config.task.wbt_history_initialization = history_initialization;
             return std::make_unique<Policy>(config);
           },
-          py::arg("checkpoint"), py::arg("use_gpu") = false, py::arg("intra_op_threads") = 2,
+          py::arg("checkpoint"), py::arg("backend") = "cpu", py::arg("intra_op_threads") = 2,
           py::arg("history_initialization") = "repeat_first_valid_obs")
       .def(
           "set_reference",
@@ -177,6 +182,29 @@ PYBIND11_MODULE(_native, m) {
       .def_property_readonly("last_observation", [](const InferenceEngine& e) { return e.policy().last_observation(); })
       .def_property_readonly("joint_kp", [](const InferenceEngine& e) { return e.policy().joint_kp(); })
       .def_property_readonly("joint_kd", [](const InferenceEngine& e) { return e.policy().joint_kd(); })
+      // The active contextual model's declared depth preprocessing as a dict
+      // (near_m, far_m, invalid_fill, raw_shape_hw, resize, name; the last
+      // three None when undeclared), or None when it declares none or the
+      // policy is not contextual.
+      .def_property_readonly(
+          "depth_contract",
+          [](const InferenceEngine& e) -> py::object {
+            const auto* contextual = dynamic_cast<const ContextualPolicy*>(&e.policy());
+            if (!contextual) return py::none();
+            const auto contract = contextual->core().depth_contract();
+            if (!contract) return py::none();
+            py::dict out;
+            out["near_m"] = contract->near_m;
+            out["far_m"] = contract->far_m;
+            out["invalid_fill"] = contract->invalid_fill;
+            out["raw_shape_hw"] =
+                contract->raw_shape_hw
+                    ? py::object(py::make_tuple(contract->raw_shape_hw->first, contract->raw_shape_hw->second))
+                    : py::object(py::none());
+            out["resize"] = contract->resize ? py::object(py::str(*contract->resize)) : py::object(py::none());
+            out["name"] = contract->name ? py::object(py::str(*contract->name)) : py::object(py::none());
+            return std::move(out);
+          })
       .def_property_readonly("velocity_zero_requests", &InferenceEngine::velocity_zero_requests);
 
   // The serialized-config preview constructor remains available for existing callers.
@@ -203,18 +231,18 @@ PYBIND11_MODULE(_native, m) {
       .def_readwrite("current", &live::WbtReferenceSequence::current)
       .def_readwrite("lookahead", &live::WbtReferenceSequence::lookahead);
   py::class_<live::WbtPolicy>(m, "LiveWbtPolicy")
-      .def(py::init([](const std::string& path, bool use_gpu, const std::string& history_initialization) {
+      .def(py::init([](const std::string& path, const std::string& backend, const std::string& history_initialization) {
              auto policy = std::make_unique<live::WbtPolicy>();
              live::WbtHistoryInitialization history;
              if (!live::ParseWbtHistoryInitialization(history_initialization, history))
                throw py::value_error("history_initialization must be repeat_first_valid_obs or zero_pad, not '" +
                                      history_initialization + "'");
              policy->SetHistoryInitialization(history);
-             if (!policy->Initialize(path, use_gpu))
+             if (!policy->Initialize(path, parse_backend(backend)))
                throw py::value_error("Cannot initialize live WBT checkpoint: " + path);
              return policy;
            }),
-           py::arg("model_path"), py::arg("use_gpu") = false,
+           py::arg("model_path"), py::arg("backend") = "cpu",
            py::arg("history_initialization") = "repeat_first_valid_obs")
       .def_property_readonly(
           "history_initialization",

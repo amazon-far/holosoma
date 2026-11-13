@@ -20,6 +20,7 @@ import pytest
 mujoco = pytest.importorskip("mujoco")
 
 from holosoma.simulator.mujoco.mujoco import MuJoCo  # noqa: E402  (needs mujoco importable)
+from holosoma.simulator.mujoco.robot_addressing import resolve_dof_actuator_ids  # noqa: E402
 from holosoma.utils.safe_torch_import import torch  # noqa: E402
 
 pytestmark = pytest.mark.no_sim
@@ -44,19 +45,28 @@ _MJCF = """
 </mujoco>
 """
 
+# Same joints, actuators declared in a different order (and named unlike their joints).
+_MJCF_SHUFFLED_ACTUATORS = (
+    _MJCF.split("<actuator>")[0]
+    + """<actuator>
+    <motor name="m2" joint="j2"/><motor name="m0" joint="j0"/>
+    <motor name="m3" joint="j3"/><motor name="m1" joint="j1"/>
+  </actuator>
+</mujoco>
+"""
+)
+
 
 class _ClassicStub:
     """Attributes ``apply_torques_at_dof`` reads on the ClassicBackend path (ctrl tensor is None)."""
 
-    def __init__(self) -> None:
-        self.root_model = mujoco.MjModel.from_xml_string(_MJCF)
+    def __init__(self, mjcf: str = _MJCF) -> None:
+        self.root_model = mujoco.MjModel.from_xml_string(mjcf)
         self.root_data = mujoco.MjData(self.root_model)
         self.dof_names = list(_DOFS)
         self.num_dof = len(_DOFS)
+        self._dof_actuator_ids = resolve_dof_actuator_ids(self.root_model, self.dof_names, {})
         self.backend = type("B", (), {"get_ctrl_tensor": staticmethod(lambda: None)})()
-
-    def _get_prefixed_name(self, clean_name: str) -> str:
-        return clean_name  # no prefix in this minimal model
 
     def apply_torques_at_dof(self, torques: torch.Tensor, dof_indices: list[int] | None = None) -> None:
         # Run the REAL method body against this stub (it reads only the attributes above).
@@ -66,11 +76,12 @@ class _ClassicStub:
 class _WarpStub:
     """Attributes for the WarpBackend fast path — a fake zero-copy [num_envs, nu] ctrl tensor."""
 
-    def __init__(self, num_envs: int = 2) -> None:
-        self.root_model = mujoco.MjModel.from_xml_string(_MJCF)
+    def __init__(self, num_envs: int = 2, mjcf: str = _MJCF) -> None:
+        self.root_model = mujoco.MjModel.from_xml_string(mjcf)
         self.root_data = mujoco.MjData(self.root_model)
         self.dof_names = list(_DOFS)
         self.num_dof = len(_DOFS)
+        self._dof_actuator_ids_t = torch.tensor(resolve_dof_actuator_ids(self.root_model, self.dof_names, {}))
         self._ctrl = torch.zeros(num_envs, len(_DOFS))
         self.backend = type("B", (), {"get_ctrl_tensor": staticmethod(lambda: self._ctrl)})()
 
@@ -113,3 +124,16 @@ def test_warp_full_path_writes_all() -> None:
     full = torch.tensor([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]])
     sim.apply_torques_at_dof(full)
     torch.testing.assert_close(sim._ctrl, full)
+
+
+def test_actuators_in_a_different_order_are_written_by_joint() -> None:
+    # Actuator order is [j2, j0, j3, j1]; DOF k's torque must land on the actuator driving j<k>.
+    classic = _ClassicStub(_MJCF_SHUFFLED_ACTUATORS)
+    classic.apply_torques_at_dof(torch.tensor([1.0, 2.0, 3.0, 4.0]))
+    np.testing.assert_allclose(classic.root_data.ctrl, [3.0, 1.0, 4.0, 2.0])
+
+    warp = _WarpStub(num_envs=1, mjcf=_MJCF_SHUFFLED_ACTUATORS)
+    warp.apply_torques_at_dof(torch.tensor([[1.0, 2.0, 3.0, 4.0]]))
+    torch.testing.assert_close(warp._ctrl, torch.tensor([[3.0, 1.0, 4.0, 2.0]]))
+    warp.apply_torques_at_dof(torch.tensor([9.0]), dof_indices=[0])
+    torch.testing.assert_close(warp._ctrl, torch.tensor([[3.0, 9.0, 4.0, 2.0]]))

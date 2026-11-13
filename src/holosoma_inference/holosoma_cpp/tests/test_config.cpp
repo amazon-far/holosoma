@@ -1,8 +1,11 @@
 // Preset loading and the run_policy.py-style command line.
 
 #include <gtest/gtest.h>
+#include <yaml-cpp/yaml.h>
 
 #include <filesystem>
+#include <functional>
+#include <optional>
 
 #include "holosoma_cpp/cli.hpp"
 #include "holosoma_cpp/config.hpp"
@@ -34,6 +37,16 @@ TEST(Config, PresetsLoad) {
   EXPECT_DOUBLE_EQ(wbt.robot.stiff_startup_kp->at(0), 350.0);
   ASSERT_TRUE(wbt.secondary);
   EXPECT_FALSE(wbt.secondary->is_wbt());
+}
+
+TEST(Config, BackendComesFromOneField) {
+  EXPECT_EQ(parse({"inference:g1-29dof-loco"}).config.runtime.backend, Backend::kCpu);
+  EXPECT_EQ(parse({"inference:g1-29dof-loco", "--runtime.backend", "tensorrt"}).config.runtime.backend,
+            Backend::kTensorRt);
+  // use_gpu predates the backend field and still has to mean cuda, so old configs keep working.
+  EXPECT_EQ(parse({"inference:g1-29dof-loco", "--runtime.use-gpu", "true"}).config.runtime.backend, Backend::kCuda);
+  EXPECT_THROW(parse({"inference:g1-29dof-loco", "--runtime.backend", "cpu", "--runtime.use-gpu", "true"}),
+               std::runtime_error);
 }
 
 TEST(Config, OverridesFollowTyroSpelling) {
@@ -94,6 +107,32 @@ TEST(Config, RejectsMistakes) {
                ConfigError);
   EXPECT_THROW(parse({"inference:g1-29dof-wbt"}), ConfigError);  // the WBT preset ships without a model
   EXPECT_THROW(parse({"inference:g1-29dof-loco", "--robot.motor-kp", "1", "2"}), ConfigError);
+}
+
+TEST(Config, ContextualDefaultsToContinuousAndGravityFrameDistinguishesAbsentFromNull) {
+  auto contextual = [](const std::function<void(YAML::Node&)>& edit) {
+    YAML::Node node = YAML::LoadFile(kPresetDir + "/g1-29dof-loco.yaml");
+    node["task"]["use_phase"] = false;
+    node["contextual"] = YAML::Node(YAML::NodeType::Map);
+    auto section = node["contextual"];
+    edit(section);
+    return *parse_inference_config(node, kPresetDir).contextual;
+  };
+  // Absent and null both select the continuous velocity command; a discretizer selects primitives.
+  EXPECT_FALSE(contextual([](YAML::Node&) {}).discretizer);
+  EXPECT_FALSE(contextual([](YAML::Node&) {}).require_climb_head);
+  EXPECT_FALSE(contextual([](YAML::Node& c) { c["discretizer"] = YAML::Null; }).discretizer);
+  EXPECT_EQ(contextual([](YAML::Node& c) { c["discretizer"] = "simple"; }).discretizer,
+            std::optional<std::string>("simple"));
+  EXPECT_EQ(contextual([](YAML::Node& c) { c["discretizer"] = "nearest_primitive"; }).discretizer,
+            std::optional<std::string>("nearest_primitive"));
+  // The gravity frame is unset unless given; an empty list is an explicit IMU frame.
+  EXPECT_FALSE(contextual([](YAML::Node&) {}).imu_to_obs_joint_chain);
+  EXPECT_FALSE(contextual([](YAML::Node& c) { c["imu_to_obs_joint_chain"] = YAML::Null; }).imu_to_obs_joint_chain);
+  const auto empty =
+      contextual([](YAML::Node& c) { c["imu_to_obs_joint_chain"] = YAML::Node(YAML::NodeType::Sequence); });
+  ASSERT_TRUE(empty.imu_to_obs_joint_chain);
+  EXPECT_TRUE(empty.imu_to_obs_joint_chain->empty());
 }
 
 }  // namespace

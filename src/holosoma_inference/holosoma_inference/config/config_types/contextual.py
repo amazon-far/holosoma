@@ -15,18 +15,26 @@ class ContextualConfig:
     command_dim: int = 15
     depth_height: int = 58
     depth_width: int = 87
-    require_climb_head: bool = True
+    require_climb_head: bool = False
     force_manual_climbing: bool = False
     climb_enter: str = "dz_or_pred"
     climb_exit: str = "both_off"
-    discretizer: str = "simple"
+    discretizer: str | None = None
+    """How a velocity request becomes the model's command input.
+
+    ``None`` (the default) feeds the velocity itself to a model trained on a continuous velocity
+    command, which declares its observation contract in its ONNX metadata; the climb, primitive
+    and key options do not apply to it, and ``require_climb_head`` must be ``False``. A
+    discretizer (``"simple"``, ``"nearest_primitive"``) maps it onto one of the one-hot
+    primitive commands a primitive-trained model reads.
+    """
     yaw_request_gain: float = 2.0
     switch_margin: float = 0.0
     velocity_primitives: dict[str, list[float]] = field(default_factory=dict)
     forward_distance_scale: float = 0.5
     yaw_distance_scale: float = 1.2
     in_place_yaw_threshold: float | None = None
-    imu_to_obs_joint_chain: tuple[tuple[str, str], ...] = G1_WAIST_IMU_TO_OBS_CHAIN
+    imu_to_obs_joint_chain: tuple[tuple[str, str], ...] | None = None
     """Joint chain from the IMU frame to the observation frame, as ``(name, axis)`` pairs.
 
     The observation frame is the body frame the model was trained to read projected gravity in.
@@ -34,20 +42,26 @@ class ContextualConfig:
     corrected gravity when it supplies one), then rotated through each joint's current angle, in
     kinematic order starting at the IMU's link. It is a chain rather than a fixed transform
     because that rotation depends on the joint angles. Each joint is a pure rotation about
-    ``axis``, with no fixed offset rotation between links. The default is the G1 waist, giving
+    ``axis``, with no fixed offset rotation between links. ``G1_WAIST_IMU_TO_OBS_CHAIN`` gives
     torso-frame gravity from the pelvis IMU. ``()`` means the observation frame is the IMU frame.
     Every listed joint must be one of the robot's joints.
+
+    ``None`` uses the command interface's own frame: ``G1_WAIST_IMU_TO_OBS_CHAIN`` for a
+    discretizer, and the IMU frame (``()``) for a continuous velocity command.
     """
     max_depth_age_s: float = 0.25
     """Oldest depth frame, by local receive time, the runner will act on.
 
     An engaged policy whose newest frame is older than this is stopped, as if the operator had
-    pressed stop, and a start is refused until frames arrive again.
+    pressed stop, and a start is refused until frames arrive again. It is a camera-dropout guard,
+    not a latency bound: a continuous-velocity export's ``depth_latency_frames_50hz`` (2 to 5
+    frames, 40 to 100 ms, for the reference export) is the staleness it was trained on, and
+    nothing here checks a frame against it.
     """
 
     def __post_init__(self):
         if not (math.isfinite(self.max_depth_age_s) and self.max_depth_age_s > 0):
             raise ValueError("max_depth_age_s must be finite and positive")
-        for name, axis in self.imu_to_obs_joint_chain:
+        for name, axis in self.imu_to_obs_joint_chain or ():
             if axis not in {"x", "y", "z"}:
                 raise ValueError(f"imu_to_obs_joint_chain axis for {name} must be x, y or z")

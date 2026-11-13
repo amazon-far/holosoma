@@ -28,7 +28,6 @@ from holosoma.config_types.sensor import (
     MountKind,
     MujocoCameraConfig,
     MujocoLidarConfig,
-    RayCastDepthCameraConfig,
     SensorMountConfig,
     validate_camera_dict,
 )
@@ -244,6 +243,24 @@ def test_camera_range_bounds_must_be_finite_and_ordered(near: float, far: float)
         CameraSensorConfig(mount=SensorMountConfig(target_kind="robot_link", target="pelvis"), near=near, far=far)
 
 
+@pytest.mark.parametrize(
+    ("near", "far"),
+    [
+        (-0.1, 1.0),
+        (1.0, 1.0),
+        (2.0, 1.0),
+        (math.nan, 1.0),
+        (0.1, math.inf),
+    ],
+)
+def test_lidar_range_bounds_must_be_finite_and_ordered(near: float, far: float) -> None:
+    # Load-bearing for clip_sensor_ranges, which dropped its own isfinite pass on the grounds that
+    # these bounds are finite: with far=inf the bare interval test reports a +inf miss as a hit.
+    # The camera half of that guarantee is covered above; this is the LiDAR half.
+    with pytest.raises(ValueError, match="near|far"):
+        LidarSensorConfig(mount=SensorMountConfig(target_kind="robot_link", target="pelvis"), near=near, far=far)
+
+
 @pytest.mark.parametrize("vertical_fov", [0.0, 180.0, -1.0, math.nan, math.inf])
 def test_camera_vertical_fov_must_be_finite_and_perspective_safe(vertical_fov: float) -> None:
     with pytest.raises(ValueError, match="vertical_fov"):
@@ -332,9 +349,26 @@ def test_lidar_body_filter_is_backend_neutral_and_validated() -> None:
         LidarBodyFilterConfig(target_kind="actor", target=" ")
 
 
-def test_raycast_depth_camera_rejects_non_link_mounts() -> None:
-    with pytest.raises(ValueError, match="robot links"):
-        RayCastDepthCameraConfig(mount=SensorMountConfig(target_kind="world"))
+@pytest.mark.parametrize(
+    ("camera_kwargs", "isaacsim_kwargs", "match"),
+    [
+        ({"data_types": ["rgb", "depth"]}, {"renderer": "raycast"}, "data_types"),
+        ({"mount": SensorMountConfig(target_kind="world")}, {"renderer": "raycast"}, "robot links"),
+        ({}, {"renderer": "raycast", "projection_type": "fisheyePolynomial"}, "projection_type"),
+        ({}, {"renderer": "raycast", "f_stop": 1.0}, "f_stop"),
+        ({}, {"renderer": "raycast", "mesh_prim_paths": []}, "mesh_prim_paths"),
+    ],
+)
+def test_isaacsim_raycast_camera_rejects_unsupported_settings(
+    camera_kwargs: dict[str, Any], isaacsim_kwargs: dict[str, Any], match: str
+) -> None:
+    fields: dict[str, Any] = {
+        "mount": SensorMountConfig(target_kind="robot_link", target="pelvis"),
+        "data_types": ["depth"],
+        **camera_kwargs,
+    }
+    with pytest.raises(ValueError, match=match):
+        CameraSensorConfig(isaacsim=IsaacSimCameraConfig(**isaacsim_kwargs), **fields)
 
 
 # The camera-frame sink fields (cameras/modalities/record_video/...) live on CameraVizPluginConfig;

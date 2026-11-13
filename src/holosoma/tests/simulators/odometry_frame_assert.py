@@ -28,8 +28,7 @@ import numpy as np
 
 from holosoma.config_types.plugin import ROS2OdometryPluginConfig
 from holosoma.simulator.shared.ros2_plugins import ROS2OdometryPlugin
-from holosoma.utils.sim_utils import setup_simulation_environment
-from tests.simulators._sim_harness import build_run_sim_config, run_and_hard_exit
+from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit
 
 BODY_NAME = "pelvis"
 FRAME_POSITION_B = np.array([0.31, -0.17, 0.23], dtype=np.float64)
@@ -100,8 +99,7 @@ def _build(simulator: str):
 
     import torch
 
-    env, resolved_device, _ = setup_simulation_environment(config, device=device)
-    sim = env.sim
+    sim, resolved_device, _ = launch_simulator(config, device=device)
     sim.set_headless(True)
     sim.setup()
     sim.setup_terrain()
@@ -121,17 +119,13 @@ def _build(simulator: str):
 def _seed_motion(sim) -> None:
     import torch
 
-    env_ids = torch.tensor([0], dtype=torch.long, device=sim.sim_device)
-    root = sim.robot_root_states[:].clone()
+    root = sim.robot_root_states.clone()
     root[0, 0:3] = torch.as_tensor(ROOT_POSITION_W, dtype=root.dtype, device=root.device)
     root[0, 3:7] = torch.as_tensor(ROOT_ORIENTATION_XYZW, dtype=root.dtype, device=root.device)
     root[0, 7:10] = torch.as_tensor(ROOT_LINEAR_VELOCITY_W, dtype=root.dtype, device=root.device)
     root[0, 10:13] = torch.as_tensor(ROOT_ANGULAR_VELOCITY_W, dtype=root.dtype, device=root.device)
     sim.robot_root_states[:] = root
-    # Passing no state uses the backend's live robot_root_states view/proxy on all backends.
-    sim.set_actor_root_state_tensor_robots(env_ids)
-    sim.write_state_updates()
-    sim.refresh_sim_tensors()
+    sim.forward_kinematics()
 
 
 def _make_plugin(sim) -> ROS2OdometryPlugin:
@@ -167,7 +161,6 @@ def _sample(sim, plugin: ROS2OdometryPlugin) -> dict[str, np.ndarray]:
 
 def _advance(sim) -> None:
     sim.simulate_at_each_physics_step()
-    sim.refresh_sim_tensors()
 
 
 def _norm(vector: np.ndarray) -> float:

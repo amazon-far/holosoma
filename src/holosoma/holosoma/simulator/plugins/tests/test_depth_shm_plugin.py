@@ -107,6 +107,7 @@ class _FakeSimulator:
 
     def __init__(self) -> None:
         self.hooks = HookRegistry()
+        self.sensor_render_hook = self.hooks.add(Phase.FRAME_END, lambda: None, name="sensors.render")
         self.sensor_manager = SensorManager("cpu", control_hz=125.0)
         self.sensor_manager.register_camera(CAM, _camera_config())
         self.backend = _FakeBackend()

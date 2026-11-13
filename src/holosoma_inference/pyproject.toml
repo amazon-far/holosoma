@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "holosoma-inference"
-version = "0.1.3"
+version = "0.1.4"
 description = "holosoma-inference: inference components for humanoid robot policies"
 readme = "README.md"
 requires-python = ">=3.10"

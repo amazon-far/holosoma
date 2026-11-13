@@ -50,8 +50,7 @@ def _write_clip(path: Path, num_dof: int, fps: float) -> Path:
 
 
 def _build(simulator: str, num_envs: int, plugin=None, kinematic: bool = False):
-    from holosoma.utils.sim_utils import setup_simulation_environment
-    from tests.simulators._sim_harness import build_run_sim_config
+    from tests.simulators._sim_harness import build_run_sim_config, launch_simulator
 
     config = build_run_sim_config(simulator, "empty", "g1-29dof", "terrain_locomotion_plane")
     sim_cfg = config.simulator
@@ -70,8 +69,7 @@ def _build(simulator: str, num_envs: int, plugin=None, kinematic: bool = False):
         plugin=plugin or {},
         training=dataclasses.replace(config.training, num_envs=num_envs),
     )
-    env, device, _ = setup_simulation_environment(config, device=device)
-    sim = env.sim
+    sim, device, _ = launch_simulator(config, device=device)
     sim.set_headless(True)
     sim.setup()
     sim.setup_terrain()
@@ -101,7 +99,6 @@ def _frame(sim) -> None:
         if substep == control_decimation - 1:
             # The frame closes on the LAST substep, as run_sim's loop does: a periodic-render backend
             # has drawn by then, so a FRAME_END consumer sees this frame's image, not the last one's.
-            sim.refresh_sim_tensors()
             sim.hooks.emit(Phase.FRAME_END)
 
 

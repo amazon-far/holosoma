@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from holosoma.config_types.sensor import (
     CameraSensorConfig,
-    RayCastDepthCameraConfig,
+    IsaacSimCameraConfig,
     SensorMountConfig,
 )
 
@@ -114,41 +114,16 @@ waist_back_camera = CameraSensorConfig(
 )
 
 
-_G1_MESHES = "holosoma/data/robots/g1/meshes"
-# Links that can occlude the head camera, with their link-frame meshes. The pelvis contour shell is
-# fixed to the pelvis frame; the wrists omit the rubber hands, which sit in a separate mesh.
-_G1_SELF_OCCLUSION: dict[str, str | list[str]] = {
-    "pelvis": [f"{_G1_MESHES}/pelvis.STL", f"{_G1_MESHES}/pelvis_contour_link.STL"],
-    **{
-        f"{side}_{link}": f"{_G1_MESHES}/{side}_{link}.STL"
-        for side in ("left", "right")
-        for link in (
-            "hip_pitch_link",
-            "hip_roll_link",
-            "hip_yaw_link",
-            "knee_link",
-            "ankle_pitch_link",
-            "ankle_roll_link",
-            "shoulder_pitch_link",
-            "shoulder_roll_link",
-            "shoulder_yaw_link",
-            "elbow_link",
-            "wrist_roll_link",
-            "wrist_pitch_link",
-            "wrist_yaw_link",
-        )
-    },
-    "waist_yaw_link": f"{_G1_MESHES}/waist_yaw_link_rev_1_0.STL",
-    "waist_roll_link": f"{_G1_MESHES}/waist_roll_link_rev_1_0.STL",
-}
+_G1_ROBOT_PRIM = "/World/envs/env_.*/Robot"
 
-# Ray-cast RealSense D435i depth in the G1 head, as used for perceptive locomotion: 106x60 at
-# 89.5deg horizontal FOV (58.6deg vertical), 0.44 m above the torso_link origin, looking along
-# body +X pitched 27deg down. Training perturbs the mount per env with the
-# ``g1_head_d435i_mount_setup_terms`` randomization setup term.
-# ``near=0`` keeps returns closer than the D435i's 0.3 m working range so preprocessing can clamp
+# RealSense D435i depth in the G1 head, as used for perceptive locomotion: 106x60 at 89.5deg
+# horizontal FOV (58.6deg vertical), 0.44 m above the torso_link origin, looking along body +X
+# pitched 27deg down, with about 1deg each of yaw and roll. Isaac Sim ray casts against terrain and
+# the selected loaded robot visuals; other backends render it natively. The opt-in
+# ``g1_head_d435i_mount_setup_terms`` perturb its mount per env.
+# ``near`` keeps returns closer than the D435i's 0.3 m working range so preprocessing can clamp
 # them to it, as the hardware pipeline does.
-g1_head_d435i_depth = RayCastDepthCameraConfig(
+g1_head_d435i_raycast_depth = CameraSensorConfig(
     mount=SensorMountConfig(
         target_kind="robot_link",
         target="torso_link",
@@ -158,22 +133,54 @@ g1_head_d435i_depth = RayCastDepthCameraConfig(
     width=106,
     height=60,
     vertical_fov=58.595269992389284,
-    near=0.0,
+    near=0.01,
     far=3.0,
     depth_clipping_behavior="max",
-    self_occlusion=_G1_SELF_OCCLUSION,
+    data_types=["depth"],
+    isaacsim=IsaacSimCameraConfig(
+        renderer="raycast",
+        # Terrain plus the 30 leg, waist and arm visuals that can occlude the camera; colliders,
+        # the torso housing, rubber hands and scene objects stay out. Paths are the G1 URDF
+        # import's named visual roots (fixed-joint merging puts the pelvis contour under pelvis).
+        mesh_prim_paths=[
+            "/World/ground",
+            f"{_G1_ROBOT_PRIM}/pelvis/visuals/pelvis",
+            f"{_G1_ROBOT_PRIM}/pelvis/visuals/pelvis_contour_link",
+            *[
+                f"{_G1_ROBOT_PRIM}/{side}_{link}/visuals/{side}_{link}"
+                for side in ("left", "right")
+                for link in (
+                    "hip_pitch_link",
+                    "hip_roll_link",
+                    "hip_yaw_link",
+                    "knee_link",
+                    "ankle_pitch_link",
+                    "ankle_roll_link",
+                    "shoulder_pitch_link",
+                    "shoulder_roll_link",
+                    "shoulder_yaw_link",
+                    "elbow_link",
+                    "wrist_roll_link",
+                    "wrist_pitch_link",
+                    "wrist_yaw_link",
+                )
+            ],
+            f"{_G1_ROBOT_PRIM}/waist_yaw_link/visuals/waist_yaw_link_rev_1_0",
+            f"{_G1_ROBOT_PRIM}/waist_roll_link/visuals/waist_roll_link_rev_1_0",
+        ],
+    ),
 )
 
-# Rendered counterpart of ``g1_head_d435i_depth`` for sim-to-sim: the same 106x60 pinhole camera
+# MuJoCo counterpart of ``g1_head_d435i_raycast_depth`` for sim-to-sim: the same 106x60 pinhole camera
 # and mount as a native depth camera, published by the ``depth-shm-d435i`` plugin. ``near=0.1``
 # rather than the D435i's 0.3 working range: MuJoCo's near plane removes geometry instead of
 # saturating it, so a closer surface would vanish and reveal what is behind it. The plugin's
 # preprocessing clamps to the working range instead, as training does.
 d435i_front_depth_camera = CameraSensorConfig(
-    mount=g1_head_d435i_depth.mount,
-    width=g1_head_d435i_depth.width,
-    height=g1_head_d435i_depth.height,
-    vertical_fov=g1_head_d435i_depth.vertical_fov,
+    mount=g1_head_d435i_raycast_depth.mount,
+    width=g1_head_d435i_raycast_depth.width,
+    height=g1_head_d435i_raycast_depth.height,
+    vertical_fov=g1_head_d435i_raycast_depth.vertical_fov,
     near=0.1,
     data_types=["depth"],
     # The rate resolves against the control rate; sim-to-sim runs MuJoCo at 500 Hz / 4 = 125 Hz,

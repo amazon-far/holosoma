@@ -34,10 +34,11 @@ from holosoma.simulator.plugins.camera_consumer import CameraConsumerPlugin, Fra
 from holosoma.utils.depth_processing import preprocess_depth
 
 if TYPE_CHECKING:
+    from multiprocessing.shared_memory import SharedMemory
+
     from holosoma.config_types.plugin import DepthShmPluginConfig
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
     from holosoma.simulator.mujoco.mujoco import MuJoCo
-    from holosoma.simulator.shared.sensor_manager import CameraRecord
 
 
 def _require_classic_backend(simulator: BaseSimulator, *, allow_uninitialized: bool = False) -> None:
@@ -108,7 +109,7 @@ class DepthShmPlugin(CameraConsumerPlugin):
 
         assert config.processing.resize is not None  # validated by DepthShmPluginConfig
         self._shape = (1, 1, int(config.processing.resize[0]), int(config.processing.resize[1]))
-        self._shm = None
+        self._shm: SharedMemory | None = None
         self._array: npt.NDArray[np.float32] | None = None
         # Ring buffer for modeled latency; sized so index -1-latency is always valid.
         self._history: list[npt.NDArray[np.float32]] = []
@@ -162,6 +163,7 @@ class DepthShmPlugin(CameraConsumerPlugin):
                     f"with a different resolution) and retry."
                 ) from None
             logger.info(f"[DepthShmPlugin] attached existing '{self.cfg.shm_name}' shape={self._shape}")
+        assert self._shm is not None
         self._array = np.ndarray(self._shape, dtype=np.float32, buffer=self._shm.buf)
 
         # Take this camera off the control-loop render schedule: we render it ourselves, and letting
@@ -279,15 +281,11 @@ class DepthShmPlugin(CameraConsumerPlugin):
         """
         if self._array is None:
             return False
-        manager = self.simulator.sensor_manager
-        if manager is None:
-            return False
-
         # Render only OUR camera, on this thread. The backend builds a per-thread renderer on
         # first use, so this does not touch the renderer the main thread may hold. ``backend`` is
         # MuJoCo-only (no other backend builds per-thread renderers), hence the cast.
         # start() claimed this camera, which only backend-rendered cameras allow.
-        record = cast("CameraRecord", manager.get(self._camera))
+        record = self.simulator.sensor_manager.get(self._camera)
         cast("MuJoCo", self.simulator).backend.render_cameras([record])
         buf = self.simulator.get_camera_data(self._camera, "depth", device="cpu")
 

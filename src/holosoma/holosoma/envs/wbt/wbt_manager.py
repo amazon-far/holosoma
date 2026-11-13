@@ -2,92 +2,40 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 import torch
 
-from holosoma.envs.base_task.base_task import BaseTask
-
-# from holosoma.envs.legged_base_task.legged_robot_base import LeggedRobotBase
+from holosoma.envs.policy_task import PolicyTask
 from holosoma.utils.simulator_config import SimulatorType
 
 if TYPE_CHECKING:
     from holosoma.managers.command.terms.wbt import MotionCommand
-    from holosoma.managers.curriculum.terms.locomotion import AverageEpisodeLengthTracker
     from holosoma.managers.randomization.terms.locomotion import PushRandomizerState
 
 
-class WholeBodyTrackingManager(BaseTask):
+class WholeBodyTrackingManager(PolicyTask):
     def _init_buffers(self) -> None:
         """Initialize torch tensors which will contain simulation states and processed quantities"""
         super()._init_buffers()
 
-        # -------------------------------- terms same with locomotion_manager.py [start]--------------------------------
-        self.base_quat = self.simulator.base_quat
-        self.need_to_refresh_envs = torch.ones(self.num_envs, dtype=torch.bool, device=self.device, requires_grad=False)
-        self._configure_default_dof_pos()
         self._init_domain_rand_buffers()
 
-    def _configure_default_dof_pos(self) -> None:
-        self.default_dof_pos_base = torch.zeros(
-            self.num_dof, dtype=torch.float, device=self.device, requires_grad=False
-        )
-        for i in range(self.num_dofs):
-            name = self.dof_names[i]
-            if name not in self.robot_config.init_state.default_joint_angles:
-                raise ValueError(f"Missing default joint angle for DOF '{name}' in robot configuration.")
-            angle = self.robot_config.init_state.default_joint_angles[name]
-            self.default_dof_pos_base[i] = angle
-
-        self.default_dof_pos_base = self.default_dof_pos_base.unsqueeze(0)  # (1, num_dof)
-        self.default_dof_pos = self.default_dof_pos_base.repeat(self.num_envs, 1).clone()  # (num_envs, num_dof)
-
-    def _pre_compute_observations_callback(self) -> None:
-        self.base_quat[:] = self.simulator.base_quat[:]
-
-    def _reset_buffers_callback(
-        self, env_ids: torch.Tensor, target_buf: Mapping[str, torch.Tensor] | None = None
-    ) -> None:
-        self.need_to_refresh_envs[env_ids] = True
-        self.episode_length_buf[env_ids] = 0
-        self.reset_buf[env_ids] = 1
-        # pending_episode_update_mask is only used in curriculum_term::AverageEpisodeLengthTracker.
-        self._pending_episode_update_mask[env_ids] = True
-
-    def _get_envs_to_refresh(self) -> torch.Tensor:
-        return self.need_to_refresh_envs.nonzero(as_tuple=False).flatten()
-
-    def _refresh_envs_after_reset(self, env_ids: torch.Tensor) -> None:
-        self.simulator.set_actor_root_state_tensor(env_ids, self.simulator.all_root_states)
-        self.simulator.set_dof_state_tensor(env_ids, self.simulator.dof_state)  # type: ignore[attr-defined]
-        self.need_to_refresh_envs[env_ids] = False
-        self.simulator.refresh_sim_tensors()
-        self._pre_compute_observations_callback()
-
-    def _get_average_episode_tracker(self) -> AverageEpisodeLengthTracker:
-        tracker = self.curriculum_manager.get_term("average_episode_tracker")
-        if tracker is None:
-            raise RuntimeError("AverageEpisodeLengthTracker is not registered with the curriculum manager.")
-        return cast("AverageEpisodeLengthTracker", tracker)
-
-    # -------------------------------- terms same with locomotion_manager.py [end]--------------------------------
+    @property
+    def base_quat(self) -> torch.Tensor:
+        return self.simulator.base_quat
 
     def _update_log_dict(self) -> None:
-        # _update_log_dict happens before reset_envs_idx
-        # -------------------------------- terms same with locomotion_manager.py [start]--------------------------------
-        avg = self._get_average_episode_tracker().get_average()
-        self.log_dict["average_episode_length"] = avg.detach().cpu()
-        # -------------------------------- terms same with locomotion_manager.py [end]--------------------------------
-        # Add tracking metrics to log_dict
+        super()._update_log_dict()
         motion_command = cast("MotionCommand", self.command_manager.get_state("motion_command"))
         motion_command.update_metrics()
         self.log_dict.update(motion_command.metrics)
 
-    def reset_all(self) -> dict[str, Any]:
-        # If reset_all is called several times, clear buffer in motion_command
+    def _after_reset_synchronization(self, env_ids: torch.Tensor) -> None:
+        # A reset does not step, so refresh the targets the observations and terminations read.
         motion_command = cast("MotionCommand", self.command_manager.get_state("motion_command"))
-        motion_command.init_buffers()
-        return super().reset_all()
+        motion_command.update_relative_body_targets()
+        super()._after_reset_synchronization(env_ids)
 
     def _reset_robot_states_callback(
         self, env_ids: torch.Tensor, target_states: Mapping[str, torch.Tensor] | None = None
@@ -105,17 +53,12 @@ class WholeBodyTrackingManager(BaseTask):
         self.push_robot_vel_buf = torch.zeros(
             self.num_envs, 6, dtype=torch.float, device=self.device, requires_grad=False
         )
-        self.record_push_robot_vel_buf = torch.zeros(
-            self.num_envs, 6, dtype=torch.float, device=self.device, requires_grad=False
-        )
-        self._randomize_push_robots = False
         self._max_push_vel = torch.zeros(6, dtype=torch.float32, device=self.device)
 
     def _push_robots(self, env_ids: torch.Tensor) -> None:
         """Random pushes the robots. Emulates an impulse by setting a randomized base velocity."""
         if len(env_ids) == 0:
             return
-        self.need_to_refresh_envs[env_ids] = True
         max_vel_tensor = self._max_push_vel
         if self.randomization_manager is not None:
             state = cast("PushRandomizerState | None", self.randomization_manager.get_state("push_randomizer_state"))
@@ -127,11 +70,8 @@ class WholeBodyTrackingManager(BaseTask):
 
         rand = torch.rand(len(env_ids), 6, device=self.device) * 2 - 1
         self.push_robot_vel_buf[env_ids] = rand * max_vel_tensor.unsqueeze(0)
-        self.record_push_robot_vel_buf[env_ids] = self.push_robot_vel_buf[env_ids].clone()
         # Additive push to match BeyondMimic/IsaacLab's push_by_setting_velocity.
         self.simulator.robot_root_states[env_ids, 7:13] += self.push_robot_vel_buf[env_ids]
-        # Push impulses only take effect in the simulator once we write the mutated root state tensor back.
-        self.simulator.set_actor_root_state_tensor_robots(env_ids, self.simulator.robot_root_states)
         self._max_push_vel = max_vel_tensor.clone()
 
     #########################################################################################################
@@ -200,9 +140,6 @@ class WholeBodyTrackingManager(BaseTask):
         self.simulator.robot_root_states[env_ids, 7:10] = root_lin_vel
         self.simulator.robot_root_states[env_ids, 10:13] = root_ang_vel
 
-        self.simulator.set_actor_root_state_tensor(env_ids, self.simulator.all_root_states)
-        self.simulator.set_dof_state_tensor(env_ids, self.simulator.dof_state)  # type: ignore[attr-defined]
-
         if motion_command.motion.has_object:  # type: ignore[has-type]
             # set object root_states from motion command
             object_pos = motion_command.object_pos_w.clone()
@@ -217,10 +154,8 @@ class WholeBodyTrackingManager(BaseTask):
             object_name = motion_command.object_name  # type: ignore[has-type]
             self.simulator.set_actor_states([object_name], env_ids, object_states)
 
-        self.simulator.scene.write_data_to_sim()  # type: ignore[attr-defined]
-        self.simulator.sim.forward()  # type: ignore[attr-defined]
+        self.simulator.forward_kinematics()
         self.simulator.sim.render()  # type: ignore[attr-defined]
-        self.simulator.refresh_sim_tensors()
 
         time.sleep(dt)
 

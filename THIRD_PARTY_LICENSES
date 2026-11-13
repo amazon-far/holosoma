@@ -1124,7 +1124,7 @@ Original Source: https://github.com/google-deepmind/mujoco_playground
 Aerial Gym Simulator
 Original Source: https://github.com/ntnu-arl/aerial_gym_simulator
 ========================================================================
-src/holosoma/holosoma/simulator/shared/warp_depth_camera.py adapts the Warp
+src/holosoma/holosoma/simulator/shared/raycast_depth_camera.py adapts the Warp
 depth-camera ray-casting kernel (DepthCameraWarpKernels) from
 aerial_gym/sensors/warp/warp_kernels/warp_camera_kernels.py.
 

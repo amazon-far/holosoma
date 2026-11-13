@@ -52,8 +52,8 @@ class _ApplyForcePlugin:
     def __init__(self, cfg: _ApplyForcePluginConfig, simulator: BaseSimulator) -> None:
         self.cfg = cfg
         self.sim = cast("_FakeSimulator", simulator)
-        self.sim.hooks.add(Phase.PRE_STEP, self.set_forces)
-        self.sim.hooks.add(Phase.FRAME_END, self.log)
+        self.sim.hooks.add(Phase.PRE_STEP, self.set_forces, name="wrench.set_forces")
+        self.sim.hooks.add(Phase.FRAME_END, self.log, name="wrench.log")
 
     def set_forces(self) -> None:
         self.sim.apply_forces("robot", list(self.cfg.force_value))
@@ -113,6 +113,18 @@ def test_base_simulator_renders_sensors_before_constructed_consumer_plugin() -> 
     sim.install_plugins()
     sim.hooks.emit(Phase.FRAME_END)
     assert sim.events == ["render", "publish:fresh"]
+
+
+def test_empty_sensor_registry_is_available_from_real_base_initialization() -> None:
+    sim = _InitializedFakeSim()
+    assert sim.get_sensor_names() == []
+    assert sim.sensor_manager.num_envs == sim.training_config.num_envs
+    with pytest.raises(KeyError, match="No sensor named 'missing'"):
+        sim.sensor_manager.get_mount_pose("missing")
+    with pytest.raises(NotImplementedError, match="no camera 'missing'"):
+        sim.get_camera_data("missing")
+    with pytest.raises(NotImplementedError, match="no LiDAR 'missing'"):
+        sim.get_lidar_data("missing")
 
 
 def test_build_plugins_constructs_and_wires_hooks() -> None:

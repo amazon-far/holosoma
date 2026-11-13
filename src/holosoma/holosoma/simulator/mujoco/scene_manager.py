@@ -21,6 +21,7 @@ from holosoma.simulator.mujoco.native_config import apply_fields, apply_world_co
 from holosoma.simulator.shared.asset_format import select_asset_format
 from holosoma.utils.path import resolve_asset_path
 
+CAMERA_MOUNT_SITE_PREFIX = "holosoma_camera_mount_"
 LIDAR_MOUNT_SITE_PREFIX = "holosoma_lidar_mount_"
 LIDAR_FILTER_SITE_PREFIX = "holosoma_lidar_filter_"
 
@@ -611,6 +612,16 @@ class MujocoSceneManager:
                 fovy=cam.vertical_fov,  # MuJoCo's fovy is the vertical FOV in degrees
                 resolution=[cam.width, cam.height],
                 mode=mujoco.mjtCamLight.mjCAMLIGHT_FIXED,
+            )
+            # A site's transform survives fixed-body fusion, including on MuJoCo versions whose
+            # camera fusion drops the child-frame transform. Keep a compile-time reference for
+            # runtime mount updates in the originally configured link/actor frame.
+            body.add_site(
+                name=f"{CAMERA_MOUNT_SITE_PREFIX}{cam_name}",
+                pos=list(mount.position),
+                quat=list(mount.orientation),
+                size=[0.001, 0.001, 0.001],
+                rgba=[0.0, 0.0, 0.0, 0.0],
             )
 
     def add_lidar_sites(self, lidars: dict[str, LidarSensorConfig]) -> None:

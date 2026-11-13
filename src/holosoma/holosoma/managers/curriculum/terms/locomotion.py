@@ -97,6 +97,10 @@ class AverageEpisodeLengthTracker(CurriculumTermBase):
             "suppress_next_update": self._suppress_next_update,
         }
 
+    def after_checkpoint_load(self) -> None:
+        # The first reset after a resume sees episodes that restarted at 0; don't let it overwrite the restored average.
+        self.suppress_next_update()
+
     def load_state_dict(self, state: dict[str, Any]) -> None:
         avg = state.get("average_episode_length")
         if avg is not None:
@@ -186,14 +190,20 @@ class PenaltyCurriculum(CurriculumTermBase):
         # Clamp scale
         self.current_scale = float(np.clip(self.current_scale, self.min_scale, self.max_scale))
 
-        # Apply scale to each penalty reward's weight
+        self._apply_scale()
+
+    def _apply_weights(self) -> None:
+        """Set each tagged penalty weight to ``original_weight * current_scale``."""
         for name in self.penalty_reward_names:
             if name not in self.original_weights or name not in self.env.reward_manager.active_terms:
                 continue
             term_cfg = self.env.reward_manager.get_term_cfg(name)
-            # Set weight = original_weight * current_scale
             scaled_cfg = replace(term_cfg, weight=self.original_weights[name] * self.current_scale)
             self.env.reward_manager.set_term_cfg(name, scaled_cfg)
+
+    def _apply_scale(self) -> None:
+        """Apply ``current_scale`` to the penalty weights and mirror it for logging."""
+        self._apply_weights()
 
         # Update for logging
         self.env.reward_penalty_scale = self.current_scale
@@ -201,6 +211,22 @@ class PenaltyCurriculum(CurriculumTermBase):
         # Update log_dict for WandB logging
         if hasattr(self.env, "log_dict"):
             self.env.log_dict["penalty_scale"] = torch.tensor(self.current_scale, dtype=torch.float)
+
+    def state_dict(self) -> dict[str, Any]:
+        """Curriculum state for checkpointing; ``env.reward_penalty_scale`` is only a mirror of it.
+
+        Empty when disabled: the weights were never scaled, so there is no scale to resume.
+        """
+        if not self.enabled:
+            return {}
+        return {"current_scale": float(self.current_scale)}
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        """Restore the curriculum scale and re-apply it to the reward weights immediately."""
+        if not self.enabled or "current_scale" not in state:
+            return
+        self.current_scale = float(np.clip(float(state["current_scale"]), self.min_scale, self.max_scale))
+        self._apply_scale()
 
     def step(self) -> None:
         """Clamp penalty scale within bounds each step."""
@@ -214,12 +240,7 @@ class PenaltyCurriculum(CurriculumTermBase):
         self.current_scale = float(np.clip(self.current_scale, self.min_scale, self.max_scale))
 
         # Re-apply clamped scale to weights
-        for name in self.penalty_reward_names:
-            if name not in self.original_weights or name not in self.env.reward_manager.active_terms:
-                continue
-            term_cfg = self.env.reward_manager.get_term_cfg(name)
-            scaled_cfg = replace(term_cfg, weight=self.original_weights[name] * self.current_scale)
-            self.env.reward_manager.set_term_cfg(name, scaled_cfg)
+        self._apply_weights()
 
 
 # ================================================================================================

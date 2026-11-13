@@ -88,9 +88,16 @@ struct TaskConfig {
   DebugConfig debug;
 };
 
+// Where inference runs. `use_gpu: true` in a config is shorthand for kCuda and is folded into
+// this at parse time, so nothing downstream has two ways to ask the same question.
+enum class Backend { kCpu, kCuda, kTensorRt };
+
+const char* backend_name(Backend backend);
+Backend parse_backend(const std::string& name);
+
 // Options that only exist in the C++ runtime (YAML section `runtime`, CLI `--runtime.*`).
 struct RuntimeConfig {
-  bool use_gpu = false;
+  Backend backend = Backend::kCpu;
   int intra_op_threads = 1;
   std::string profile_prefix;
   // Enter damping if the newest LowState is older than this while commanding (0 disables).

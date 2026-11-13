@@ -195,7 +195,7 @@ class RandomizationManager:
             if "setup" in entry["stages"]:
                 try:
                     entry["instance"].setup(
-                        TermSampler.bind(self.env.dr_base_seed, entry["name"], STAGE_SETUP, self.env.dr_episode_count)
+                        TermSampler.bind(self.env.dr_base_seed, entry["name"], STAGE_SETUP, self.env.episode_count)
                     )
                 except RandomizerNotSupportedError:
                     if self.cfg.ignore_unsupported:
@@ -211,9 +211,7 @@ class RandomizationManager:
                 try:
                     func(
                         self.env,
-                        sampler=TermSampler.bind(
-                            self.env.dr_base_seed, term_name, STAGE_SETUP, self.env.dr_episode_count
-                        ),
+                        sampler=TermSampler.bind(self.env.dr_base_seed, term_name, STAGE_SETUP, self.env.episode_count),
                         **term_cfg.params,
                     )
                 except RandomizerNotSupportedError:
@@ -222,12 +220,7 @@ class RandomizationManager:
                     else:
                         raise
 
-        # IsaacSim needs the startup writes pushed to the sim and its tensors refreshed. MuJoCo
-        # acquires nothing up front, so there is nothing to refresh. The name check avoids importing
-        # the isaacsim module here.
-        if type(self.env.simulator).__name__ == "IsaacSim":
-            self.env.simulator.scene.write_data_to_sim()
-            self.env.simulator.refresh_sim_tensors()
+        self.env.simulator.forward_kinematics()
 
     def reset(self, env_ids: Any) -> None:
         """Run episodic hooks during environment reset.
@@ -241,7 +234,7 @@ class RandomizationManager:
             if "reset" in entry["stages"] and entry["name"] not in self._failed_randomizers:
                 entry["instance"].reset(
                     env_ids,
-                    TermSampler.bind(self.env.dr_base_seed, entry["name"], STAGE_RESET, self.env.dr_episode_count),
+                    TermSampler.bind(self.env.dr_base_seed, entry["name"], STAGE_RESET, self.env.episode_count),
                 )
 
         for term_name, term_cfg in zip(self._reset_names, self._reset_cfgs, strict=False):
@@ -251,7 +244,7 @@ class RandomizationManager:
                 func(
                     self.env,
                     env_ids,
-                    sampler=TermSampler.bind(self.env.dr_base_seed, term_name, STAGE_RESET, self.env.dr_episode_count),
+                    sampler=TermSampler.bind(self.env.dr_base_seed, term_name, STAGE_RESET, self.env.episode_count),
                     **term_cfg.params,
                 )
 
@@ -260,7 +253,7 @@ class RandomizationManager:
         for entry in self._class_entries:
             if "step" in entry["stages"] and entry["name"] not in self._failed_randomizers:
                 entry["instance"].step(
-                    TermSampler.bind(self.env.dr_base_seed, entry["name"], STAGE_STEP, self.env.dr_episode_count)
+                    TermSampler.bind(self.env.dr_base_seed, entry["name"], STAGE_STEP, self.env.episode_count)
                 )
 
         for term_name, term_cfg in zip(self._step_names, self._step_cfgs, strict=False):
@@ -268,6 +261,6 @@ class RandomizationManager:
                 func = self._step_funcs[term_name]
                 func(
                     self.env,
-                    sampler=TermSampler.bind(self.env.dr_base_seed, term_name, STAGE_STEP, self.env.dr_episode_count),
+                    sampler=TermSampler.bind(self.env.dr_base_seed, term_name, STAGE_STEP, self.env.episode_count),
                     **term_cfg.params,
                 )
