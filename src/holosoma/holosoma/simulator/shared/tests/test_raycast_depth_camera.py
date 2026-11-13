@@ -127,6 +127,15 @@ def test_surfaces_beyond_far_are_no_return(tmp_path: Path, behavior: str, expect
     assert torch.all(depth == expected)
 
 
+def test_geometry_in_front_of_the_near_plane_is_clipped(tmp_path: Path) -> None:
+    sim = _FakeSim(_camera(tmp_path, near=0.5), base_height=2.0)
+    sim.rigid_body_pos_w[:, 1] = torch.tensor([0.0, 0.0, 1.8])  # box spans 0 to 0.4 m below the camera
+
+    depth, _, _ = _render(sim)
+
+    torch.testing.assert_close(depth, torch.full_like(depth, 2.0), atol=1e-4, rtol=0.0)
+
+
 def test_link_mesh_is_cast_at_its_link_pose(tmp_path: Path) -> None:
     sim = _FakeSim(_camera(tmp_path), base_height=2.0)
     sim.rigid_body_pos_w[0, 1] = torch.tensor([0.0, 0.0, 1.0])  # box spans z in [0.8, 1.2], centered below

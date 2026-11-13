@@ -588,7 +588,6 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
         loaded_sensor = copy.deepcopy(loaded["sensor"][name])
         loaded_isaacsim = loaded_sensor["isaacsim"]
         assert loaded_isaacsim.pop("renderer") == "rtx"
-        assert loaded_isaacsim.pop("body_filter") == {"target_kind": "mount", "target": ""}
         assert loaded_isaacsim.pop("mesh_prim_paths") is None
         assert loaded_sensor == _without(sensor)
     saved_material_term = saved["randomization"]["setup_terms"].get(_MATERIAL_TERM)

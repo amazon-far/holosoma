@@ -244,10 +244,8 @@ def _check_default_selection(sim):
     paths = [target.prim_expr for target in sim.raycast_cameras["raycast"].mesh_provider.cfg.mesh_prim_paths]
     if not any(path.startswith("/World/ground") for path in paths):
         fails.append("the hidden ground was not selected")
-    if any("/Robot/pelvis/" in path for path in paths):
-        fails.append("the default selection includes the camera's pelvis mount body")
-    if not any("/Robot/" in path for path in paths):
-        fails.append("the default selection dropped the rest of the robot")
+    if not any("/Robot/pelvis/" in path for path in paths):
+        fails.append("the default selection left out the camera's pelvis mount body")
     depth = sim.get_camera_data("raycast", "depth")[..., 0]
     fails.extend(
         f"env{e}: the camera sees almost no ground with the terrain visual hidden"
@@ -285,9 +283,7 @@ def main() -> int:
         sensors = {
             "raycast": dataclasses.replace(
                 camera,
-                isaacsim=IsaacSimCameraConfig(
-                    renderer="raycast", body_filter=LidarBodyFilterConfig(target_kind="robot")
-                ),
+                isaacsim=IsaacSimCameraConfig(renderer="raycast"),
             ),
             "without_target": dataclasses.replace(
                 camera,
@@ -295,7 +291,7 @@ def main() -> int:
             ),
             "scan": LidarSensorConfig(
                 mount=camera.mount,
-                body_filter=LidarBodyFilterConfig(target_kind="robot"),
+                body_filter=LidarBodyFilterConfig(target_kind="none"),
             ),
         }
 

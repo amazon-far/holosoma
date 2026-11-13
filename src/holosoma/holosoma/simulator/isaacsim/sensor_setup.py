@@ -600,11 +600,10 @@ def _default_mesh_prim_paths(sim: IsaacSim, body_filter: LidarBodyFilterConfig, 
 
 
 def _camera_mesh_prim_paths(sim: IsaacSim, camera: CameraSensorConfig) -> list[str]:
-    """Return the camera's explicit mesh paths, or discover them as for LiDAR."""
-    isaacsim = camera.isaacsim
-    if isaacsim.mesh_prim_paths is not None:
-        return list(isaacsim.mesh_prim_paths)
-    return _default_mesh_prim_paths(sim, isaacsim.body_filter, camera.mount)
+    """Return the camera's explicit mesh paths, or discover the whole scene."""
+    if camera.isaacsim.mesh_prim_paths is not None:
+        return list(camera.isaacsim.mesh_prim_paths)
+    return _default_mesh_prim_paths(sim, LidarBodyFilterConfig(target_kind="none"), camera.mount)
 
 
 def build_lidars(sim: IsaacSim) -> None:

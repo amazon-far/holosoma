@@ -210,50 +210,6 @@ class IsaacSimFisheyeConfig:
 
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)
-class LidarBodyFilterConfig:
-    """Select robot geometry or one body to omit from LiDAR ray queries.
-
-    Keep ``target_kind="mount"`` to prevent the body carrying the LiDAR from enclosing the
-    ray origin, use ``target_kind="robot"`` to omit every robot-owned ray target, select a
-    ``robot_link`` or registered scene ``actor`` explicitly, or use ``"none"`` to include every
-    query target. Backends resolve a selected link to the native rigid body that owns it after
-    import or compilation; fixed or fused links therefore follow their owning body. An ``actor``
-    selects that registered actor's root body. The filter only affects ray queries and does not
-    remove visual or collision geometry.
-    """
-
-    target_kind: Literal["mount", "robot", "robot_link", "actor", "none"] = "mount"
-    """How ``target`` is resolved. ``"mount"`` uses the sensor's mount body, ``"robot"`` omits
-    every robot-owned target, ``"robot_link"`` resolves an unprefixed robot link, ``"actor"``
-    resolves a registered scene actor, and ``"none"`` disables the filter."""
-
-    target: str = ""
-    """Body or actor name for ``"robot_link"`` and ``"actor"``. Leave empty for ``"mount"``
-    ``"robot"``, and ``"none"``."""
-
-    @model_validator(mode="after")
-    def validate_target(self) -> LidarBodyFilterConfig:
-        if self.target_kind in ("mount", "robot", "none"):
-            if self.target:
-                raise ValueError(
-                    f"LidarBodyFilterConfig.target must be empty for "
-                    f"target_kind='{self.target_kind}', got '{self.target}'."
-                )
-        elif not self.target or self.target != self.target.strip():
-            raise ValueError(
-                "LidarBodyFilterConfig.target must be a non-empty name without surrounding whitespace "
-                f"for target_kind='{self.target_kind}'."
-            )
-        return self
-
-
-def _validate_mesh_prim_paths(paths: list[str] | None, owner: str) -> None:
-    """Reject an empty explicit list or blank entries; ``None`` means automatic discovery."""
-    if paths is not None and (not paths or any(not path.strip() for path in paths)):
-        raise ValueError(f"{owner}.mesh_prim_paths must be None or a non-empty list of paths.")
-
-
-@dataclass(frozen=True, config=_FORBID_EXTRA)
 class IsaacSimCameraConfig:
     """Isaac Sim camera renderer, projection, and lens settings.
 
@@ -269,16 +225,11 @@ class IsaacSimCameraConfig:
     envs reset or teleported in a control step are re-rendered at their new state. Other backends
     ignore it and render the camera natively. Defaults to ``"rtx"``."""
 
-    body_filter: LidarBodyFilterConfig = field(default_factory=LidarBodyFilterConfig)
-    """For ``renderer="raycast"``: robot geometry or one body left out of automatic discovery, as
-    :attr:`LidarSensorConfig.body_filter`. Defaults to the mount body, which usually encloses the
-    camera."""
-
     mesh_prim_paths: list[str] | None = None
     """For ``renderer="raycast"``: USD prim paths or expressions to ray cast against, with the same
     meaning as :attr:`IsaacSimLidarConfig.mesh_prim_paths`. ``None`` discovers the ground, every
-    spawned scene object and the robot, minus :attr:`body_filter`; an explicit list bypasses
-    discovery and the filter. Each explicit path merges every mesh below it, colliders included, so
+    spawned scene object and the whole robot; :attr:`CameraSensorConfig.near` clips the mount body
+    around the camera, as for RTX. Each explicit path merges every mesh below it, colliders included, so
     list visual subtrees rather than whole links. ``"/World/ground"`` is the terrain's ray-cast mesh
     for every terrain type, and is hit even with ``hide_visual``. Ignored by other renderers."""
 
@@ -336,6 +287,50 @@ class MujocoCameraConfig:
     use_precomputed_rays: bool | None = None
     """(Warp, global) Precompute camera rays; set ``False`` to allow per-step intrinsics
     domain-randomization. ``None`` keeps the renderer default (True). Ignored by classic."""
+
+
+@dataclass(frozen=True, config=_FORBID_EXTRA)
+class LidarBodyFilterConfig:
+    """Select robot geometry or one body to omit from LiDAR ray queries.
+
+    Keep ``target_kind="mount"`` to prevent the body carrying the LiDAR from enclosing the
+    ray origin, use ``target_kind="robot"`` to omit every robot-owned ray target, select a
+    ``robot_link`` or registered scene ``actor`` explicitly, or use ``"none"`` to include every
+    query target. Backends resolve a selected link to the native rigid body that owns it after
+    import or compilation; fixed or fused links therefore follow their owning body. An ``actor``
+    selects that registered actor's root body. The filter only affects ray queries and does not
+    remove visual or collision geometry.
+    """
+
+    target_kind: Literal["mount", "robot", "robot_link", "actor", "none"] = "mount"
+    """How ``target`` is resolved. ``"mount"`` uses the sensor's mount body, ``"robot"`` omits
+    every robot-owned target, ``"robot_link"`` resolves an unprefixed robot link, ``"actor"``
+    resolves a registered scene actor, and ``"none"`` disables the filter."""
+
+    target: str = ""
+    """Body or actor name for ``"robot_link"`` and ``"actor"``. Leave empty for ``"mount"``
+    ``"robot"``, and ``"none"``."""
+
+    @model_validator(mode="after")
+    def validate_target(self) -> LidarBodyFilterConfig:
+        if self.target_kind in ("mount", "robot", "none"):
+            if self.target:
+                raise ValueError(
+                    f"LidarBodyFilterConfig.target must be empty for "
+                    f"target_kind='{self.target_kind}', got '{self.target}'."
+                )
+        elif not self.target or self.target != self.target.strip():
+            raise ValueError(
+                "LidarBodyFilterConfig.target must be a non-empty name without surrounding whitespace "
+                f"for target_kind='{self.target_kind}'."
+            )
+        return self
+
+
+def _validate_mesh_prim_paths(paths: list[str] | None, owner: str) -> None:
+    """Reject an empty explicit list or blank entries; ``None`` means automatic discovery."""
+    if paths is not None and (not paths or any(not path.strip() for path in paths)):
+        raise ValueError(f"{owner}.mesh_prim_paths must be None or a non-empty list of paths.")
 
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)

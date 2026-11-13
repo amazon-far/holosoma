@@ -66,6 +66,7 @@ def _render_depth_kernel(
     cam_pos: wp.array(dtype=wp.vec3),  # type: ignore[valid-type]
     cam_quat: wp.array(dtype=wp.quat),  # type: ignore[valid-type]
     k_inv: wp.mat44,
+    near: float,
     far: float,
     depth: wp.array(dtype=wp.float32, ndim=3),  # type: ignore[valid-type]
 ) -> None:
@@ -82,6 +83,9 @@ def _render_depth_kernel(
     # Distance along the ray times this cosine is the distance to the image plane.
     cosine = wp.min(wp.max(wp.dot(ray, principal), wp.float32(1.0e-6)), wp.float32(1.0))
 
+    # Rays start on the near plane, so geometry in front of it is clipped as by RTX.
+    start = near / cosine
+    near_origin = origin + ray * start
     best = wp.float32(_NO_HIT)
     bound = wp.float32(far)
     # mesh_query_ray output arguments, typed as the Warp builtin expects.
@@ -93,13 +97,13 @@ def _render_depth_kernel(
     face = wp.int32(0)
     for b in range(num_meshes):
         q = mesh_quat[env, b]
-        local_origin = wp.quat_rotate_inv(q, origin - mesh_pos[env, b])
+        local_origin = wp.quat_rotate_inv(q, near_origin - mesh_pos[env, b])
         local_ray = wp.quat_rotate_inv(q, ray)
         if wp.mesh_query_ray(  # type: ignore[call-arg]
             mesh_ids[env, b],
             wp.vec3(local_origin),
             wp.vec3(local_ray),
-            bound / cosine,
+            bound / cosine - start,
             distance,
             u,
             v,
@@ -108,7 +112,7 @@ def _render_depth_kernel(
             face,
         ):
             # The query is bounded by the nearest hit so far, so any hit is nearer.
-            best = cosine * distance
+            best = cosine * (distance + start)
             bound = best
     depth[env, y, x] = best
 
@@ -212,6 +216,7 @@ class RayCastDepthCamera:
                 self._wp_cam_pos,
                 self._wp_cam_quat,
                 self._k_inv,
+                float(cfg.near),
                 float(cfg.far),
                 self._wp_image,
             ],
