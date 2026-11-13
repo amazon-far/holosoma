@@ -94,7 +94,7 @@ def _write_mount_pose(
 
 
 def register_cameras(sim: MuJoCo, manager: SensorManager) -> None:
-    """Register cameras and create the backend's camera renderers.
+    """Register cameras and create the backend's renderers for local cameras.
 
     Widens MuJoCo's global near/far clip range to cover every configured camera because MuJoCo
     clipping is global rather than per-camera.
@@ -112,21 +112,25 @@ def register_cameras(sim: MuJoCo, manager: SensorManager) -> None:
             native_id = mujoco.mj_name2id(sim.root_model, mujoco.mjtObj.mjOBJ_CAMERA, name)
             if native_id < 0:
                 raise RuntimeError(f"Camera '{name}' is missing from the compiled MuJoCo model.")
-            _register_mount_writer(sim, record, native_id)
-        sim.backend.create_renderers(manager.cameras)
+            if not config.remote:
+                _register_mount_writer(sim, record, native_id)
+        if local := [record for record in manager.cameras if not record.config.remote]:
+            sim.backend.create_renderers(local)
 
 
 def initialize_camera_mounts(sim: MuJoCo) -> None:
     """Apply compiled mount frames and environment origins through the runtime writer."""
     for camera in sim.sensor_manager.cameras:
-        sim.sensor_manager.set_mount_pose(camera.name, sim.sensor_manager.get_mount_pose(camera.name))
+        if camera.write_mount_pose is not None:
+            sim.sensor_manager.set_mount_pose(camera.name, sim.sensor_manager.get_mount_pose(camera.name))
 
 
 def render_cameras(sim: MuJoCo) -> None:
-    """Render due cameras into their cached output buffers."""
+    """Render due local cameras into their cached output buffers, then due remote cameras."""
     due = sim.sensor_manager.collect_due()
-    if due:
-        sim.backend.render_cameras(due)
+    if local := [record for record in due if not record.config.remote]:
+        sim.backend.render_cameras(local)
+    sim.sensor_manager.render_remote(due)
 
 
 def register_lidars(sim: MuJoCo, manager: SensorManager) -> None:

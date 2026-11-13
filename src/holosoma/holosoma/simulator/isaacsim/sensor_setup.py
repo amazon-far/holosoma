@@ -61,7 +61,7 @@ if TYPE_CHECKING:
 
 
 def build_cameras(sim: IsaacSim) -> None:
-    """Build an RTX camera or a native ray-cast geometry view before environment cloning.
+    """Build an RTX camera or a native ray-cast geometry view per local camera before environment cloning.
 
     The camera optical convention is OpenGL (-Z forward, +Y up), the same frame holosoma uses,
     so the mount offset passes through with ``convention="opengl"`` and no extra rotation.
@@ -70,6 +70,8 @@ def build_cameras(sim: IsaacSim) -> None:
     """
     sim.tiled_cameras = {}
     for cam_name, cam in sim.sensor_config.items():
+        if isinstance(cam, CameraSensorConfig) and cam.remote:
+            continue
         if is_isaacsim_raycast_camera(cam):
             from isaaclab.sensors import MultiMeshRayCasterCfg
 
@@ -132,6 +134,8 @@ def register_cameras(sim: IsaacSim, manager: SensorManager) -> None:
         if not isinstance(config, CameraSensorConfig):
             continue
         record = manager.register_camera(name, config)
+        if config.remote:
+            continue
         if is_isaacsim_raycast_camera(config):
             scene = cast(RaycastScene, sim.scene.sensors[name])
             sim.raycast_cameras[name] = RayCastDepthCamera(sim, config, scene)
@@ -740,10 +744,12 @@ def initialize_sensors(sim: IsaacSim) -> None:
 
 
 def render_sensors(sim: IsaacSim) -> None:
-    """Render if a camera is due or video is recording, then capture the sensors due this control step."""
+    """Render if a local camera is due or video is recording, then capture the sensors due this control step."""
     due = sim.sensor_manager.collect_due()
+    local = [record for record in due if not record.config.remote]
     recording = sim.video_recorder is not None and sim.video_recorder.is_recording
     if any(record.name in sim.tiled_cameras for record in due) or recording:
         sim.render_for_sensors()
-    render_cameras(sim, due)
+    render_cameras(sim, local)
     render_lidars(sim)
+    sim.sensor_manager.render_remote(due)
