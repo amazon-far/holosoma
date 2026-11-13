@@ -29,6 +29,7 @@ class _FakeSimulator:
             update_decimation=update_decimation,
         )
         self.hooks = HookRegistry()
+        self.sensor_render_hook = self.hooks.add(Phase.FRAME_END, lambda: None, name="sensors.render")
         self.sensor_config = {"lidar": lidar}
         self.training_config = _TrainingConfig(num_envs)
         self.sensor_manager = SensorManager("cpu", control_hz=50.0)

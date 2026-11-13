@@ -44,6 +44,18 @@ class MapReader {
     out = convert<T>(value, field(key));
   }
 
+  // Absent leaves `out` at its default; an explicit null clears it.
+  template <typename T>
+  void optional_or_null(const char* key, std::optional<T>& out) {
+    const YAML::Node value = take(key);
+    if (!value) return;
+    if (value.IsNull()) {
+      out.reset();
+      return;
+    }
+    out = convert<T>(value, field(key));
+  }
+
   // Nullable field: absent or null -> nullopt.
   template <typename T>
   void nullable(const char* key, std::optional<T>& out) {
@@ -282,7 +294,17 @@ RuntimeConfig parse_runtime(const YAML::Node& node, const std::string& path) {
   }
   MapReader r(node, path);
   r.optional("state_timeout_s", runtime.state_timeout_s);
-  r.optional("use_gpu", runtime.use_gpu);
+  bool use_gpu = false;
+  std::string backend;
+  r.optional("use_gpu", use_gpu);
+  r.optional("backend", backend);
+  if (!backend.empty()) {
+    runtime.backend = parse_backend(backend);
+    if (use_gpu && runtime.backend == Backend::kCpu)
+      throw std::runtime_error(path + ": use_gpu is true but backend is cpu; name one or the other");
+  } else if (use_gpu) {
+    runtime.backend = Backend::kCuda;
+  }
   r.optional("intra_op_threads", runtime.intra_op_threads);
   r.optional("profile_prefix", runtime.profile_prefix);
   r.optional("damping_kd", runtime.damping_kd);
@@ -301,14 +323,14 @@ std::optional<ContextualConfig> parse_contextual(const YAML::Node& node, const s
   r.optional("force_manual_climbing", config.force_manual_climbing);
   r.optional("climb_enter", config.climb_enter);
   r.optional("climb_exit", config.climb_exit);
-  r.optional("discretizer", config.discretizer);
+  r.optional_or_null("discretizer", config.discretizer);
   r.optional("yaw_request_gain", config.yaw_request_gain);
   r.optional("switch_margin", config.switch_margin);
   r.optional("velocity_primitives", config.velocity_primitives);
   r.optional("forward_distance_scale", config.forward_distance_scale);
   r.optional("yaw_distance_scale", config.yaw_distance_scale);
   r.nullable("in_place_yaw_threshold", config.in_place_yaw_threshold);
-  r.optional("imu_to_obs_joint_chain", config.imu_to_obs_joint_chain);
+  r.nullable("imu_to_obs_joint_chain", config.imu_to_obs_joint_chain);
   r.optional("max_depth_age_s", config.max_depth_age_s);
   if (!std::isfinite(config.max_depth_age_s) || config.max_depth_age_s <= 0)
     throw ConfigError(r.field("max_depth_age_s") + ": must be finite and positive");
@@ -432,6 +454,24 @@ void validate_one(const InferenceConfig& config, const std::string& path) {
 }
 
 }  // namespace
+
+const char* backend_name(Backend backend) {
+  switch (backend) {
+    case Backend::kCuda:
+      return "cuda";
+    case Backend::kTensorRt:
+      return "tensorrt";
+    default:
+      return "cpu";
+  }
+}
+
+Backend parse_backend(const std::string& name) {
+  if (name == "cpu") return Backend::kCpu;
+  if (name == "cuda") return Backend::kCuda;
+  if (name == "tensorrt" || name == "trt") return Backend::kTensorRt;
+  throw std::runtime_error("unknown inference backend '" + name + "'; expected cpu, cuda or tensorrt");
+}
 
 bool InferenceConfig::is_wbt() const {
   for (const auto& [group, terms] : observation.obs_dict) {

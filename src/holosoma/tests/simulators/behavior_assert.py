@@ -37,9 +37,8 @@ if sys.path and sys.path[0].endswith("tests/simulators"):
 
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.sampler import STAGE_RESET, STAGE_SETUP, TermSampler
-from holosoma.utils.sim_utils import setup_simulation_environment
 from tests.simulators import _scene_presets
-from tests.simulators._sim_harness import build_run_sim_config, step, steps_for_seconds
+from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, step, steps_for_seconds
 
 GRAVITY = 9.81
 
@@ -170,7 +169,6 @@ def assert_collide_into_fixed(ctx):
     peak_x = hammer0_x.clone()
     for _ in range(n):
         ctx.sim.simulate_at_each_physics_step()
-        ctx.sim.refresh_sim_tensors()
         ctx.sim.render()
         peak_x = ctx.torch.maximum(peak_x, ctx.states("hammer")[:, 0])
     hammer = ctx.states("hammer")
@@ -212,7 +210,6 @@ def assert_momentum_transfer(ctx):
     n = steps_for_seconds(ctx.sim, 0.4)
     target_vx_peak = ctx.states("target")[:, 7].clone()
     for _ in range(n):
-        ctx.sim.refresh_sim_tensors()
         ctx.sim.simulate_at_each_physics_step()
         ctx.sim.render()
         target_vx_peak = ctx.torch.maximum(target_vx_peak, ctx.states("target")[:, 7])
@@ -406,7 +403,6 @@ def _step_with_force(ctx, n, apply_fn):
     ``apply_fn=None`` coasts with no force, exercising the auto-zero contract.
     """
     for _ in range(n):
-        ctx.sim.refresh_sim_tensors()
         if apply_fn is not None:
             apply_fn()
         ctx.sim.simulate_at_each_physics_step()
@@ -619,7 +615,6 @@ def assert_restitution_bounce(ctx):
     # the END, so "max after the global min" misses the early rebound entirely.
     z_hist = []
     for _ in range(n):
-        ctx.sim.refresh_sim_tensors()
         ctx.sim.simulate_at_each_physics_step()
         ctx.sim.render()
         z_hist.append(ctx.states("ball")[:, 2].clone())
@@ -752,14 +747,13 @@ def assert_object_obs_under_pose(ctx):
         print("SKIP: object-obs-robot-pose needs num_envs>1 (per-env transform independence)")
         return None
     names = sim.object_registry.get_names_by_type(ObjectType.INDIVIDUAL)  # >=2 objects (obox, obox2)
-    # Per-env-distinct robot root pose: env i gets yaw 0.5*i about z. Read the proxy into a plain
-    # tensor (IsaacSim's robot_root_states is a RootStatesProxy, no .clone()); mutate, write back, push.
+    # Per-env-distinct robot root pose: env i gets yaw 0.5*i about z. Copy, mutate, write back, push.
     yaws = t.tensor([0.5 * e for e in range(ctx.n)], device=sim.sim_device)
-    root = sim.robot_root_states[:].clone()
+    root = sim.robot_root_states.clone()
     for e in range(ctx.n):
         root[e, 3:7] = t.tensor([0.0, 0.0, math.sin(0.5 * e / 2), math.cos(0.5 * e / 2)], device=root.device)
     sim.robot_root_states[:] = root
-    sim.set_actor_root_state_tensor_robots(ctx.env_ids)  # 2nd arg defaults to None on every backend
+    sim.forward_kinematics()
 
     shell = types.SimpleNamespace(simulator=sim, num_envs=ctx.n, device=sim.sim_device)
     rp = sim.robot_root_states[:][:, :3]
@@ -1107,7 +1101,6 @@ def assert_restitution_twin(ctx):
     t = ctx.torch
     zr_hist, zt_hist = [], []
     for _ in range(n):
-        ctx.sim.refresh_sim_tensors()
         ctx.sim.simulate_at_each_physics_step()
         ctx.sim.render()
         zr_hist.append(ctx.states("robot")[:, 2].clone())
@@ -1471,8 +1464,7 @@ def main() -> int:
             ),
         )
 
-    env, device, _app = setup_simulation_environment(config, device=device)
-    sim = env.sim
+    sim, device, _app = launch_simulator(config, device=device)
     sim.set_headless(headless)
     sim.setup()
     sim.setup_terrain()

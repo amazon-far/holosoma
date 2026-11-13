@@ -70,13 +70,14 @@ class SimulatorBridge:
         if self._hooks_registered:
             return
         self._hooks_registered = True
-        hooks.add(
+        self.transport_hook = hooks.add(
             Phase.PRE_STEP,
             self.transport_step,
             name="bridge.transport",
             every=self.bridge_config.transport_decimation,
         )
-        hooks.add(Phase.PRE_STEP, self.control_step, name="bridge.control")
+        # Commands arrive on the transport hook and are applied here.
+        hooks.add(Phase.PRE_STEP, self.control_step, name="bridge.control", after=self.transport_hook)
         hooks.add(Phase.CLOSE, self.close, name="bridge.close")
 
     def start(self) -> None:
@@ -149,20 +150,9 @@ class SimulatorBridge:
         if not self.robot_bridge:
             return
 
-        # Publish robot state to SDK
-        self.robot_bridge.publish_low_state()
-
-        # Publish base odometry over the SDK (SportModeState on rt/odommodestate) when configured.
-        if self.bridge_config.publish_odom:
-            self.robot_bridge.publish_odom()
-
-        # Handle joystick input if available
-        if hasattr(self.robot_bridge, "joystick") and self.robot_bridge.joystick:
-            self.robot_bridge.publish_wireless_controller()
-            logger.debug("Wireless controller input published")
-
-        # Read incoming commands from DDS
-        self.robot_bridge.low_cmd_handler()
+        # Robot state out, commands in. The order, and how many calls the SDK transport takes to
+        # do it, belong to the bridge.
+        self.robot_bridge.transport_exchange()
 
         # Publish simulation clock for e.g, WBT policies
         sim_time = self.simulator.time()

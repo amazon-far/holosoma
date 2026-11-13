@@ -7,7 +7,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from holosoma.config_types.frequency import resolve_decimation
-from holosoma.config_types.sensor import CameraSensorConfig, RayCastDepthCameraConfig
+from holosoma.config_types.sensor import CameraSensorConfig
+from holosoma.config_types.value_types import UNIT_QUATERNION_NORM_TOLERANCE
 from holosoma.simulator.shared.lidar_sensor import (
     LidarPatternProvider,
     ResolvedRayPattern,
@@ -33,6 +34,10 @@ class SensorRecord:
     rerender: Callable[[torch.Tensor], None] | None = None
     """Re-render only the given env ids into the existing buffers, or ``None`` if the backend
     can only render every env. Called after resets/teleports (``SensorManager.rerender``)."""
+    mount_poses: torch.Tensor | None = None
+    """Runtime offsets ``[N, 7]`` in XYZ + XYZW order, independent of the immutable config."""
+    write_mount_pose: Callable[[torch.Tensor, torch.Tensor], None] | None = None
+    """Backend writer taking environment ids and validated XYZ + XYZW offsets."""
     _device_cache: dict[tuple[str, str], torch.Tensor] = field(default_factory=dict)
 
     def set_buffer(self, output: str, tensor: torch.Tensor) -> None:
@@ -65,46 +70,31 @@ class SensorRecord:
         return cached
 
 
-def _clip_depth(config: object, tensor: torch.Tensor) -> torch.Tensor:
-    """Apply a camera's configured depth no-return semantics (records without a camera config store as-is)."""
-    if not isinstance(config, (CameraSensorConfig, RayCastDepthCameraConfig)):
-        return tensor
-    return clip_sensor_ranges(
-        tensor,
-        near=config.near,
-        far=config.far,
-        behavior=config.depth_clipping_behavior,
-    ).ranges
-
-
 @dataclass
 class CameraRecord(SensorRecord):
-    """A camera its backend renders natively."""
-
     config: CameraSensorConfig
 
     def set_buffer(self, output: str, tensor: torch.Tensor) -> None:
         """Store a camera output, applying configured depth no-return semantics at the shared boundary."""
-        super().set_buffer(output, _clip_depth(self.config, tensor) if output == "depth" else tensor)
+        if output == "depth" and isinstance(self.config, CameraSensorConfig):
+            tensor = clip_sensor_ranges(
+                tensor,
+                near=self.config.near,
+                far=self.config.far,
+                behavior=self.config.depth_clipping_behavior,
+            ).ranges
+        super().set_buffer(output, tensor)
 
     def set_buffer_rows(self, output: str, env_ids: torch.Tensor, rows: torch.Tensor) -> None:
         """Overwrite camera output rows, applying the same depth no-return semantics as :meth:`set_buffer`."""
-        super().set_buffer_rows(output, env_ids, _clip_depth(self.config, rows) if output == "depth" else rows)
-
-
-@dataclass
-class SharedCameraRecord(SensorRecord):
-    """A camera rendered by shared, backend-neutral code (see ``SensorManager.register_shared_camera``)."""
-
-    config: RayCastDepthCameraConfig
-    camera: Any = None
-    """The object that renders this camera, e.g. for randomization terms that configure it."""
-
-    def set_buffer(self, output: str, tensor: torch.Tensor) -> None:
-        super().set_buffer(output, _clip_depth(self.config, tensor) if output == "depth" else tensor)
-
-    def set_buffer_rows(self, output: str, env_ids: torch.Tensor, rows: torch.Tensor) -> None:
-        super().set_buffer_rows(output, env_ids, _clip_depth(self.config, rows) if output == "depth" else rows)
+        if output == "depth" and isinstance(self.config, CameraSensorConfig):
+            rows = clip_sensor_ranges(
+                rows,
+                near=self.config.near,
+                far=self.config.far,
+                behavior=self.config.depth_clipping_behavior,
+            ).ranges
+        super().set_buffer_rows(output, env_ids, rows)
 
 
 @dataclass
@@ -127,22 +117,26 @@ class LidarRecord(SensorRecord):
 
 
 class SensorManager:
-    """Registry and independent update cadence for cameras and LiDARs."""
+    """Cross-backend sensor registry and runtime mounts, available even without configured sensors."""
 
-    def __init__(self, device: str, control_hz: float) -> None:
+    def __init__(self, device: str, control_hz: float, *, num_envs: int = 1) -> None:
         self.device = device
         self.control_hz = control_hz
+        self.num_envs = num_envs
         self._cameras: dict[str, CameraRecord] = {}
-        # Cameras rendered by shared, backend-neutral code rather than by the backend itself.
-        self._shared_cameras: dict[str, SharedCameraRecord] = {}
-        self._shared_renderers: dict[str, Callable[[SharedCameraRecord, torch.Tensor | None], None]] = {}
         self._lidars: dict[str, LidarRecord] = {}
         self._order: list[str] = []
         self._last_camera_due: set[str] = set()
         self._last_lidar_due: set[str] = set()
 
+    def _initial_mount_poses(self, config: SensorConfig) -> torch.Tensor:
+        mount = config.mount
+        w, x, y, z = mount.orientation
+        pose = torch.tensor([*mount.position, x, y, z, w], dtype=torch.float32, device=self.device)
+        return pose.repeat(self.num_envs, 1)
+
     def _assert_name_available(self, name: str) -> None:
-        if name in self._cameras or name in self._shared_cameras or name in self._lidars:
+        if name in self._cameras or name in self._lidars:
             raise ValueError(f"Sensor '{name}' already registered.")
 
     def register_camera(self, name: str, config: CameraSensorConfig) -> CameraRecord:
@@ -150,31 +144,13 @@ class SensorManager:
         effective = resolve_decimation(
             config.update_decimation, self.control_hz, field=f"camera '{name}' update_decimation"
         )
-        record = CameraRecord(name=name, config=config, effective_decimation=effective)
-        self._cameras[name] = record
-        self._order.append(name)
-        return record
-
-    def register_shared_camera(
-        self,
-        name: str,
-        config: RayCastDepthCameraConfig,
-        render: Callable[[SharedCameraRecord, torch.Tensor | None], None],
-    ) -> SharedCameraRecord:
-        """Register a camera that shared code renders on every backend.
-
-        ``render(record, env_ids)`` renders every env (``env_ids=None``) or only ``env_ids`` into
-        ``record``. It runs from :meth:`render_shared` on the camera's cadence and, for envs reset
-        or teleported since the last render, from :meth:`rerender`. Backends' own render loops never see it:
-        :meth:`collect_due` returns only backend-rendered cameras."""
-        self._assert_name_available(name)
-        effective = resolve_decimation(
-            config.update_decimation, self.control_hz, field=f"camera '{name}' update_decimation"
+        record = CameraRecord(
+            name=name,
+            config=config,
+            effective_decimation=effective,
+            mount_poses=self._initial_mount_poses(config),
         )
-        record = SharedCameraRecord(name=name, config=config, effective_decimation=effective)
-        record.rerender = lambda env_ids: render(record, env_ids)
-        self._shared_cameras[name] = record
-        self._shared_renderers[name] = render
+        self._cameras[name] = record
         self._order.append(name)
         return record
 
@@ -194,22 +170,21 @@ class SensorManager:
             config=config,
             effective_decimation=effective,
             pattern_provider=pattern_provider,
+            mount_poses=self._initial_mount_poses(config),
         )
         self._lidars[name] = record
         self._order.append(name)
         return record
 
     def has_camera(self, name: str) -> bool:
-        return name in self._cameras or name in self._shared_cameras
+        return name in self._cameras
 
     def has_lidar(self, name: str) -> bool:
         return name in self._lidars
 
-    def get(self, name: str) -> CameraRecord | SharedCameraRecord:
-        if name in self._shared_cameras:
-            return self._shared_cameras[name]
+    def get(self, name: str) -> CameraRecord:
         if name not in self._cameras:
-            raise KeyError(f"No camera named '{name}'. Registered cameras: {self.camera_names}.")
+            raise KeyError(f"No camera named '{name}'. Registered cameras: {sorted(self._cameras)}.")
         return self._cameras[name]
 
     def get_lidar(self, name: str) -> LidarRecord:
@@ -217,13 +192,72 @@ class SensorManager:
             raise KeyError(f"No LiDAR named '{name}'. Registered LiDARs: {sorted(self._lidars)}.")
         return self._lidars[name]
 
+    def get_sensor(self, name: str) -> SensorRecord:
+        if name in self._cameras:
+            return self._cameras[name]
+        if name in self._lidars:
+            return self._lidars[name]
+        raise KeyError(f"No sensor named '{name}'. Registered sensors: {self._order}.")
+
+    def _mount_env_ids(self, env_ids: torch.Tensor | None) -> torch.Tensor:
+        if env_ids is None:
+            return torch.arange(self.num_envs, device=self.device)
+        ids = torch.as_tensor(env_ids, device=self.device)
+        if ids.ndim != 1 or ids.dtype not in (torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8):
+            raise ValueError("env_ids must be a one-dimensional integer tensor.")
+        ids = ids.to(torch.long)
+        if torch.any((ids < 0) | (ids >= self.num_envs)):
+            raise ValueError(f"env_ids must be in [0, {self.num_envs}).")
+        return ids
+
+    def get_mount_pose(self, name: str, env_ids: torch.Tensor | None = None) -> torch.Tensor:
+        """Return a copy of the selected mount poses as ``[N, 7]`` XYZ + XYZW.
+
+        Offsets are relative to the configured parent, or the per-environment frame for world mounts.
+        ``env_ids=None`` selects all environments. Mount configuration quaternions use WXYZ.
+        """
+        record = self.get_sensor(name)
+        if record.mount_poses is None:
+            raise RuntimeError(f"Sensor '{name}' has no runtime mount state.")
+        return record.mount_poses[self._mount_env_ids(env_ids)].clone()
+
+    def set_mount_pose(self, name: str, poses: torch.Tensor, env_ids: torch.Tensor | None = None) -> None:
+        """Update camera/LiDAR poses relative to their configured mount.
+
+        Use XYZ + XYZW with unit quaternions: a single ``[7]`` pose broadcasts, while ``[N, 7]``
+        sets each selected environment. ``env_ids=None`` selects all environments.
+        Offsets persist across resets; sensor outputs reflect the change on their next render/capture.
+        Call outside CUDA graph capture.
+        """
+        record = self.get_sensor(name)
+        ids = self._mount_env_ids(env_ids)
+        if ids.unique().numel() != ids.numel():
+            raise ValueError("env_ids must not contain duplicates when setting sensor mount poses.")
+        if record.mount_poses is None or record.write_mount_pose is None:
+            raise NotImplementedError(f"Sensor '{name}' has no runtime mount-pose writer.")
+        offsets = torch.as_tensor(poses, dtype=torch.float32, device=self.device).detach().clone()
+        if offsets.shape == (7,):
+            offsets = offsets.expand(len(ids), -1).clone()
+        if offsets.shape != (len(ids), 7):
+            raise ValueError(f"Sensor mount poses must have shape (7,) or ({len(ids)}, 7), got {offsets.shape}.")
+        if not torch.isfinite(offsets).all():
+            raise ValueError("Sensor mount poses must contain only finite values.")
+        norms = torch.linalg.vector_norm(offsets[:, 3:], dim=-1, keepdim=True)
+        if torch.any(torch.abs(norms - 1.0) > UNIT_QUATERNION_NORM_TOLERANCE):
+            raise ValueError("Sensor mount orientation must be a unit quaternion in XYZW order.")
+        offsets[:, 3:] /= norms
+        if len(ids) == 0:
+            return
+        record.write_mount_pose(ids, offsets)
+        record.mount_poses[ids] = offsets
+
     @property
     def names(self) -> list[str]:
         return list(self._order)
 
     @property
     def camera_names(self) -> list[str]:
-        return [*self._cameras, *self._shared_cameras]
+        return list(self._cameras)
 
     @property
     def lidar_names(self) -> list[str]:
@@ -231,12 +265,7 @@ class SensorManager:
 
     @property
     def cameras(self) -> list[CameraRecord]:
-        """Backend-rendered cameras; shared-code cameras are in :attr:`shared_cameras`."""
         return list(self._cameras.values())
-
-    @property
-    def shared_cameras(self) -> list[SharedCameraRecord]:
-        return list(self._shared_cameras.values())
 
     @property
     def lidars(self) -> list[LidarRecord]:
@@ -252,16 +281,10 @@ class SensorManager:
         return due
 
     def collect_due(self) -> list[CameraRecord]:
-        """Advance the cadence of backend-rendered cameras and return those due this step."""
+        """Advance camera cadence (compatibility name retained for camera backends)."""
         due = self._collect_due(self.cameras)
         self._last_camera_due = {record.name for record in due}
         return due
-
-    def render_shared(self) -> None:
-        """Render every shared-code camera due this control step (see :meth:`register_shared_camera`)."""
-        for record in self._collect_due(self.shared_cameras):
-            self._shared_renderers[record.name](record, None)
-            self._last_camera_due.add(record.name)
 
     def collect_lidars_due(self) -> list[LidarRecord]:
         due = self._collect_due(self.lidars)
@@ -273,7 +296,7 @@ class SensorManager:
 
         Sensors without a ``rerender`` callback keep their last frame, so for one control step
         these envs observe the state from before their reset or teleport."""
-        records: list[SensorRecord] = [*self.cameras, *self.shared_cameras, *self.lidars]
+        records: list[SensorRecord] = [*self.cameras, *self.lidars]
         for record in records:
             if record.rerender is not None:
                 record.rerender(env_ids)

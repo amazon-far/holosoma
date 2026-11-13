@@ -23,11 +23,8 @@ class LidarReturnRecord(Protocol):
 def points_from_ranges(directions: torch.Tensor, ranges: torch.Tensor) -> torch.Tensor:
     """Convert reported radial ranges into sensor-frame XYZ, preserving configured sentinels."""
     points = ranges.unsqueeze(-1) * directions.unsqueeze(0)
-    return torch.where(
-        torch.isfinite(ranges).unsqueeze(-1),
-        points,
-        torch.full_like(points, float("nan")),
-    ).to(torch.float32)
+    # Scalar sentinel: a full_like fill would allocate and write a second [..., 3] buffer.
+    return torch.where(torch.isfinite(ranges).unsqueeze(-1), points, float("nan")).to(torch.float32)
 
 
 def finalize_lidar_returns(
@@ -47,7 +44,4 @@ def finalize_lidar_returns(
     sensor_record.set_buffer("ranges", result.ranges)
     sensor_record.set_buffer("points", points_from_ranges(directions, result.ranges))
     if geom_ids is not None:
-        sensor_record.set_buffer(
-            "geom_ids",
-            torch.where(result.hit_mask, geom_ids, torch.full_like(geom_ids, -1)).to(torch.int32),
-        )
+        sensor_record.set_buffer("geom_ids", torch.where(result.hit_mask, geom_ids, -1).to(torch.int32))

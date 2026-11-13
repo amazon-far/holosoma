@@ -7,7 +7,7 @@ ROOT_DIR=$(dirname "$SCRIPT_DIR")
 source "${SCRIPT_DIR}/versions.sh"
 
 if ! command -v sudo &> /dev/null; then
-  # in docker build sudo isn't avaiable, but its ok
+  # in docker build sudo isn't available, but it's ok
   echo "Warning: sudo could not be found, you may need to run this script with sudo"
   function sudo { "$@"; }
   export -f sudo
@@ -289,8 +289,9 @@ if [[ "$INSTALL_WARP" == "true" ]] && [[ ! -f $WARP_SENTINEL_FILE ]]; then
   pip install uv
   # uv resolves only the packages named in this operation and otherwise may
   # upgrade NumPy past Holosoma's <2 requirement through the JAX CUDA extra.
-  uv pip install -e "$WORKSPACE_DIR/mujoco_warp[dev,cuda]" \
-    "warp-lang==$WARP_LANG_VERSION" "numpy>=1.23.5,<2"
+  # The dev viewer pulls a conflicting mujoco-core into MuJoCo's package namespace.
+  uv pip install -e "$WORKSPACE_DIR/mujoco_warp[cuda]" \
+    "mujoco==$MUJOCO_VERSION" "warp-lang==$WARP_LANG_VERSION" "numpy>=1.23.5,<2"
 
   touch $WARP_SENTINEL_FILE
 

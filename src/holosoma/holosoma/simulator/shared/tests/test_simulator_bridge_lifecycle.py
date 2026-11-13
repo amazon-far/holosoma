@@ -51,7 +51,7 @@ def test_bridge_constructor_starts_transport_and_owns_its_hooks(monkeypatch: pyt
 
     factory.assert_called_once()
     clock.start.assert_called_once_with()
-    robot_bridge.publish_low_state.assert_called_once_with()
+    robot_bridge.transport_exchange.assert_called_once_with()
     robot_bridge.close.assert_called_once_with()
     clock.close.assert_called_once_with()
 
@@ -67,9 +67,7 @@ def test_bridge_default_runs_transport_and_control_every_physics_step(monkeypatc
     for _ in range(8):
         simulator.hooks.emit(Phase.PRE_STEP)
 
-    assert robot_bridge.publish_low_state.call_count == 8
-    assert robot_bridge.publish_odom.call_count == 8
-    assert robot_bridge.low_cmd_handler.call_count == 8
+    assert robot_bridge.transport_exchange.call_count == 8
     assert robot_bridge.compute_torques.call_count == 8
     assert cast("MagicMock", simulator.apply_torques_at_dof).call_count == 8
     assert clock.publish.call_count == 8
@@ -93,7 +91,7 @@ def test_bridge_transport_decimation_keeps_physics_rate_control_and_cached_comma
         commands_seen_by_control.append(cached_command)
         return np.array([cached_command], dtype=np.float32)
 
-    robot_bridge.low_cmd_handler.side_effect = ingest_command
+    robot_bridge.transport_exchange.side_effect = ingest_command
     robot_bridge.compute_torques.side_effect = compute_torques
     monkeypatch.setattr(simulator_bridge, "create_sdk2py_bridge", lambda *_args: robot_bridge)
     monkeypatch.setattr(simulator_bridge, "ClockPub", lambda: clock)
@@ -106,11 +104,8 @@ def test_bridge_transport_decimation_keeps_physics_rate_control_and_cached_comma
     for _ in range(8):
         simulator.hooks.emit(Phase.PRE_STEP)
 
-    # 200Hz physics / 50Hz transport: SDK I/O fires on the 4th and 8th emissions.
-    assert robot_bridge.publish_low_state.call_count == 2
-    assert robot_bridge.publish_odom.call_count == 2
-    assert robot_bridge.publish_wireless_controller.call_count == 2
-    assert robot_bridge.low_cmd_handler.call_count == 2
+    # 200Hz physics / 50Hz transport: the SDK exchange fires on the 4th and 8th emissions.
+    assert robot_bridge.transport_exchange.call_count == 2
     assert clock.publish.call_count == 2
     # Dynamics-facing feedback remains at 200Hz and reuses each command until the next poll.
     assert robot_bridge.compute_torques.call_count == 8

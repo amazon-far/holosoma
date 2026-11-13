@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from holosoma.config_types.plugin import LidarVizPluginConfig, ROS2PointCloudPluginConfig
@@ -15,11 +13,9 @@ from holosoma.config_types.sensor import (
     IsaacSimCameraConfig,
     IsaacSimFisheyeConfig,
     LidarSensorConfig,
-    RayCastDepthCameraConfig,
 )
 from holosoma.config_values.sensor import SENSOR_REGISTRY
 from holosoma.utils.config_registry import parse_config
-from holosoma.utils.path import resolve_data_file_path
 
 pytestmark = pytest.mark.no_sim
 
@@ -177,9 +173,11 @@ def test_cli_configures_lidar_viz_saved_scan_selection() -> None:
     assert plugin.save_dir == "logs/debug-scans"
 
 
-def test_g1_head_depth_preset_meshes_are_shipped() -> None:
-    preset = SENSOR_REGISTRY["g1-head-d435i-depth"]
-    assert isinstance(preset, RayCastDepthCameraConfig)
-    for link, meshes in preset.self_occlusion.items():
-        for mesh in [meshes] if isinstance(meshes, str) else meshes:
-            assert Path(resolve_data_file_path(mesh)).is_file(), (link, mesh)
+def test_cli_switches_the_raycast_preset_to_rtx_with_one_override() -> None:
+    config = parse_config(
+        RunSimConfig,
+        args=["simulator:isaacsim", "sensor.depth:g1-head-d435i-raycast-depth", "--sensor.depth.isaacsim.renderer=rtx"],
+    )
+    camera = config.sensor["depth"]
+    assert isinstance(camera, CameraSensorConfig)
+    assert camera.isaacsim.renderer == "rtx"

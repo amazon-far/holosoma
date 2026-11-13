@@ -155,7 +155,7 @@ def test_terminal_read_of_no_envs_returns_empty_history() -> None:
 
 
 class _StateView:
-    """Tensor-like simulator view that is not a ``torch.Tensor`` (like MuJoCo's state views)."""
+    """Tensor-like simulator view that is not a ``torch.Tensor`` (like ``all_root_states``)."""
 
     def __init__(self, data: torch.Tensor) -> None:
         self._data = data

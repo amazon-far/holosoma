@@ -47,6 +47,7 @@ class _FakeSimulator:
             ),
         )
         self.hooks = HookRegistry()
+        self.sensor_render_hook = self.hooks.add(Phase.FRAME_END, lambda: None, name="sensors.render")
         self.sensor_config = {"front/scan": lidar}
         self.training_config = _TrainingConfig()
         self.video_config = _VideoConfig()

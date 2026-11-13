@@ -179,20 +179,51 @@ PLUGIN_REGISTRY.add("log_height", LogHeightPluginConfig())
 python -m holosoma.run_sim --import-file my_plugins.py plugin.h:log_height --plugin.h.every=5Hz
 ```
 
-Select plugins as the dynamic-dict `plugin.<key>:<preset>` (per-key leaf overrides via `--plugin.<key>.<field>=…`); each is constructed once in `BaseSimulator.__init__`. Ship them packaged via the `holosoma.config.plugin` entry-point group like any other preset.
+Select plugins as the dynamic-dict `plugin.<key>:<preset>` (per-key leaf overrides via `--plugin.<key>.<field>=…`); each is constructed once in `BaseSimulator.install_plugins`, after the backend is ready. Ship them packaged via the `holosoma.config.plugin` entry-point group like any other preset.
 
 ### Phases
 
-A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=None, every=1)`. Per control frame the loop emits, in order:
+A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=None, every=1, key=None, after=(), before=())`, which returns the `HookHandle` others order themselves against. `name` labels the hook in diagnostics and defaults to the callback's qualname. Per control frame the loop emits, in order:
 
 | Phase | When | Callback args | Cadence |
 |---|---|---|---|
 | `FRAME_BEGIN` | before the physics substeps (push commands to the sim here) | — | control rate |
 | `PRE_STEP` | before each physics substep | — | physics `fps` |
 | `POST_STEP` | after each physics substep (freshest sim time) | — | physics `fps` |
-| `FRAME_END` | after the substeps + state-tensor refresh (read state here) | — | control rate |
+| `FRAME_END` | after the frame's last substep (read state here) | — | control rate |
 | `EPISODE_START` / `EPISODE_END` | on reset boundaries | `env_id` | per event |
-| `CLOSE` | teardown (release resources); runs in reverse registration order | — | once |
+| `CLOSE` | teardown (release resources); `before`/`after` describe execution here too, and ties go to the latest registered | — | once |
+
+### Ordering
+
+Within a phase, hooks run in registration order, which for plugins means the order their slots were selected — so declare what you need with `after` / `before`. Unconstrained hooks keep their order relative to each other.
+
+**Depend on the handle `add` returns.** The framework keeps the ones others follow: `simulator.sensor_render_hook`, the bridge's `transport_hook`, and `close_hook` on the shared ROS2 runtime. Keep your own on a public attribute if other code should be able to follow you.
+
+```python
+simulator.hooks.add(
+    Phase.FRAME_END, self.publish, name="my_plugin.publish", after=simulator.sensor_render_hook,
+)
+```
+
+**To follow a provider you can't hold**, it publishes a member of its own `Enum` from its constructor and you reference that plus the slot it runs in, which resolves once every plugin is installed:
+
+```python
+simulator.hooks.add(Phase.FRAME_END, self._publish, name="my_camera.publish", key=CameraHook.PUBLISH)
+
+simulator.hooks.add(                                         # a separately constructed consumer
+    Phase.FRAME_END, self._inspect, name="my_inspector.read",
+    after=[HookRef(self.cfg.follows, CameraHook.PUBLISH)],
+)
+```
+
+Take the slot through your own config, as sensor routes do; slot keys belong to whoever launches the run.
+
+`after` / `before` each take one dependency or a list of them. **Targets are required**, so wrap the ones a run may lack in `if_present(...)`. A disabled target satisfies the reference but contributes no edge, so ordering reflects only the hooks that fire.
+
+**`hooks.validate()` runs at the end of `install_plugins`**, resolving every phase without calling anything, so a cycle or an unresolved target stops the run before the first step. Hooks registered later are checked when their phase next resolves. `hooks.names(phase)` returns the resolved order.
+
+**`CLOSE` sorts like every other phase** but breaks ties toward the latest registered, so teardown reverses construction while `before`/`after` still describe execution: a node's cleanup declares `before=[runtime.close_hook]`. It is one pass that stops at the first failing callback.
 
 ### Cadence
 

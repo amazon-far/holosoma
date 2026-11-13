@@ -792,7 +792,7 @@ class MotionCommand(CommandTermBase):
             self._env.simulator.set_actor_states([self.object_name], env_ids, object_states)
 
     def step(self) -> None:
-        """called in _update_tasks_callback of the environment. (after compute_reward, before compute_observations)"""
+        """Advance the clip once per control frame, after rewards and resets and before observations."""
         # 0. update time steps, all motion joint/body poses are updated automatically with the time steps.
         advance_mask = torch.ones_like(self.time_steps, dtype=torch.bool)
 
@@ -816,14 +816,22 @@ class MotionCommand(CommandTermBase):
             # Flush the mutated root/dof state into the simulator so that
             # rigid-body positions are up-to-date for downstream consumers
             # (termination checks, observations, rewards).
-            sim = self._env.simulator
-            sim.set_actor_root_state_tensor_robots(ended_env_ids, sim.robot_root_states)
-            sim.set_dof_state_tensor_robots(ended_env_ids, sim.dof_state)  # type: ignore[attr-defined]
-            sim.refresh_sim_tensors()
+            self._env.simulator.forward_kinematics()
             # The teleport is an observation reset: drop history and re-render these envs.
             self._env.observation_manager.reset(ended_env_ids)
 
-        # 1. update body_pos_relative_w and body_quat_relative_w
+        self.update_relative_body_targets()
+
+        ### update the adaptive timesteps sampler (training only — eval episodes
+        ### must not decay/fold failure stats into the training sampler).
+        if self.motion_cfg.use_adaptive_timesteps_sampler and not self._env.is_evaluating:
+            self.adaptive_timesteps_sampler.update_bin_failed_count()
+
+    def update_relative_body_targets(self) -> None:
+        """Recompute the tracked bodies' target poses for the current motion frame and robot pose.
+
+        Does not advance the motion clip.
+        """
         # definition of body_pos/quat_relative_w:
         # If I take this motion data and adapt it to where my robot currently is
         # (accounting for position(x, y) offset and yaw difference of a reference body),
@@ -870,11 +878,6 @@ class MotionCommand(CommandTermBase):
             + delta_pos_w_height
             + quat_apply(delta_quat_w, self.body_pos_w - ref_pos_w_repeat, w_last=True)
         )
-
-        ### 1.3 update the adaptive timesteps sampler (training only — eval episodes
-        ### must not decay/fold failure stats into the training sampler).
-        if self.motion_cfg.use_adaptive_timesteps_sampler and not self._env.is_evaluating:
-            self.adaptive_timesteps_sampler.update_bin_failed_count()
 
     @property
     def command(self) -> torch.Tensor:
@@ -1268,9 +1271,6 @@ class MotionCommand(CommandTermBase):
     ) -> dict[str, torch.Tensor]:
         """Capture body states by temporarily setting the robot state in the simulator."""
         simulator = self._env.simulator
-        assert simulator.get_simulator_type() == SimulatorType.ISAACSIM, (
-            "Default-pose interpolation only supports IsaacSim (it requires FK on state writes)."
-        )
         env_id = 0
         env_origin = simulator.scene.env_origins[env_id].to(self.device)
 
@@ -1285,11 +1285,7 @@ class MotionCommand(CommandTermBase):
             simulator.robot_root_states[env_id, 10:13] = root_ang_vel
             simulator.dof_pos[env_id] = joint_pos
             simulator.dof_vel[env_id] = joint_vel
-
-            simulator.set_actor_root_state_tensor_robots()
-            simulator.set_dof_state_tensor_robots()
-            simulator.write_state_updates()
-            simulator.refresh_sim_tensors()
+            simulator.forward_kinematics()
 
             body_pos = (simulator._rigid_body_pos[env_id] - env_origin).clone()
             body_quat = simulator._rigid_body_rot[env_id].clone()
@@ -1299,10 +1295,7 @@ class MotionCommand(CommandTermBase):
             simulator.robot_root_states[env_id] = root_backup
             simulator.dof_pos[env_id] = dof_pos_backup
             simulator.dof_vel[env_id] = dof_vel_backup
-            simulator.set_actor_root_state_tensor_robots()
-            simulator.set_dof_state_tensor_robots()
-            simulator.write_state_updates()
-            simulator.refresh_sim_tensors()
+            simulator.forward_kinematics()
 
         return {
             "pos": body_pos,

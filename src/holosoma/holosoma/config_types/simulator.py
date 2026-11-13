@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime
+import warnings
 from dataclasses import field
 from enum import Enum
 from typing import Any, Literal
@@ -11,6 +13,8 @@ from pydantic_core import ArgsKwargs
 from holosoma.config_types.frequency import DecimationLike, resolve_decimation, validate_decimation_like
 from holosoma.config_types.mujoco import MujocoConfig
 from holosoma.config_types.viewer import ViewerConfig
+
+_RENDER_INTERVAL_REMOVAL_DATE = datetime.date(2027, 3, 1)
 
 
 class MujocoBackend(str, Enum):
@@ -129,11 +133,10 @@ class SimEngineConfig:
     render_mode: str = "human"
     """Rendering mode requested from the simulator."""
 
-    render_interval: DecimationLike = 1
-    """Physics steps per rendered frame: render rate = ``fps / render_interval`` Hz.
-    Decouples rendering from physics so the sim can step faster than it draws; 1 = render every
-    step. Int, or a frequency string vs ``fps``. Holds the value AS WRITTEN; read the resolved
-    integer step count via :attr:`render_interval_steps`."""
+    render_interval: DecimationLike | None = None
+    """Deprecated, no effect, removed after 2027-03-01: cameras render at their own
+    ``update_decimation``, video captures every control step, and the viewer renders every
+    ``viewer_update_decimation``."""
 
     max_episode_length_s: float = 20.0
     """Maximum episode length in seconds."""
@@ -150,12 +153,18 @@ class SimEngineConfig:
 
     @model_validator(mode="after")
     def _validate_rates(self) -> SimEngineConfig:
-        """Validate (do NOT mutate) the rate fields: both must resolve to a valid step count against
-        ``fps``. The fields keep what the user wrote; the resolved ints are exposed as the
-        ``*_steps`` properties below, computed against ``fps`` on access (always consistent if ``fps``
-        changes, and the input config is never rewritten)."""
+        """Validate, without mutating, that ``control_decimation`` resolves to a step count against
+        ``fps``. The field keeps what the user wrote; :attr:`control_decimation_steps` resolves it
+        against ``fps`` on access."""
         resolve_decimation(self.control_decimation, self.fps, field="control_decimation", log=True)
-        resolve_decimation(self.render_interval, self.fps, field="render_interval", log=True)
+        if self.render_interval is not None:
+            warnings.warn(
+                "SimEngineConfig.render_interval is deprecated and has no effect: cameras render at their "
+                "own update_decimation, video captures every control step, and the viewer renders every "
+                f"viewer_update_decimation. It will be removed after {_RENDER_INTERVAL_REMOVAL_DATE}.",
+                FutureWarning,
+                stacklevel=2,
+            )
         return self
 
     @property
@@ -163,12 +172,6 @@ class SimEngineConfig:
         """Resolved physics-steps-per-control-step (int >= 1) — ``control_decimation`` evaluated
         against ``fps`` (a frequency string becomes ``fps/target``; an int passes through)."""
         return resolve_decimation(self.control_decimation, self.fps, field="control_decimation")
-
-    @property
-    def render_interval_steps(self) -> int:
-        """Resolved physics-steps-per-rendered-frame (int >= 1) — ``render_interval`` evaluated
-        against ``fps`` (frequency string -> ``fps/target``; int passes through)."""
-        return resolve_decimation(self.render_interval, self.fps, field="render_interval")
 
 
 @dataclass(frozen=True)
@@ -236,7 +239,11 @@ class BridgeConfig:
     transport_decimation: DecimationLike = 1
     """SDK transport cadence. ``1`` exchanges data every physics step; an integer exchanges it every
     Nth step. Frequency strings such as ``"50Hz"`` are resolved against the physics rate. This
-    setting does not change the torque-control cadence."""
+    setting does not change the torque-control cadence.
+
+    The default exchanges on every physics step (200 Hz at ``sim.fps 200``). Raising it is the
+    bridge's largest performance setting, traded against state freshness. See
+    ``holosoma/bridge/README.md``."""
 
     # ROS settings
     use_ros: bool = False
@@ -247,7 +254,11 @@ class BridgeConfig:
 
     On by default so the sim feeds base odometry through the Unitree SDK bridge
     (so a downstream telemetry read_odom_state -> /telemetry/odom is identical to hardware). Only
-    SDKs with a base-state channel act on it; others (booster) treat publish_odom as a no-op."""
+    SDKs with a base-state channel act on it; others (booster) treat publish_odom as a no-op.
+
+    Set it False when nothing reads rt/odommodestate. The DDS write is the cheap part; the
+    simulator state read and world->body conversion in front of it are the cost. See
+    ``holosoma/bridge/README.md``."""
 
     dds_config: str | None = None
     """Complete inline CycloneDDS XML for unitree_mp on SDK domain 0 only.

@@ -8,9 +8,13 @@ flavor imports the other's package.
 
 cv2 is imported inside :func:`colorize_depth` (not at module top), so importing this module pulls in
 no heavy dep; the colormap names are validated against the config layer at import with plain strings.
+Every colormap, ``"gray"`` included, now goes through cv2: it carries the normalization itself, not
+just the colormap lookup.
 """
 
 from __future__ import annotations
+
+from typing import cast
 
 import numpy as np
 import numpy.typing as npt
@@ -21,8 +25,8 @@ from holosoma.config_types.plugin import _DEPTH_COLORMAPS
 DEFAULT_DEPTH_RANGE: tuple[float, float] = (0.01, 5.0)
 
 # Colormap names rendered via ``cv2.COLORMAP_<NAME>`` (looked up lazily in colorize_depth to keep cv2
-# deferred). "gray" is handled directly (grayscale, not a cv2 colormap), so the cv2-backed set is
-# exactly the config-accepted set minus "gray". Fails loud at import if the two definitions drift.
+# deferred). "gray" needs no colormap lookup, so the cv2-backed set is exactly the config-accepted
+# set minus "gray". Fails loud at import if the two definitions drift.
 _CV2_COLORMAP_NAMES = ("inferno", "turbo", "viridis", "magma", "jet")
 assert set(_CV2_COLORMAP_NAMES) | {"gray"} == set(_DEPTH_COLORMAPS), (
     f"_CV2_COLORMAP_NAMES {sorted(_CV2_COLORMAP_NAMES)} + 'gray' must match _DEPTH_COLORMAPS {sorted(_DEPTH_COLORMAPS)}"
@@ -50,19 +54,30 @@ def colorize_depth(
     colormap : str
         ``"gray"`` for grayscale, else a name in :data:`_CV2_COLORMAP_NAMES` (default ``"inferno"``).
     """
+    import cv2
+
     dep: npt.NDArray[np.float32] = np.asarray(depth, dtype=np.float32)
     if dep.ndim == 3:
         dep = dep[..., 0]
     lo, hi = depth_range
-    # +inf/no-hit and NaN -> the far plane so they read as "background", never as near.
-    dep = np.nan_to_num(dep, nan=hi, posinf=hi, neginf=hi)
-    # Clamp to range, normalize to [0,1] with near->1, then to uint8 [0,255] (near bright).
-    norm = 1.0 - (np.clip(dep, lo, hi) - lo) / (hi - lo)
-    gray: npt.NDArray[np.uint8] = (norm * 255.0).round().astype(np.uint8)
+    # +inf/no-hit and NaN -> the far plane so they read as "background", never as near. One isfinite
+    # pass covers all three non-finite cases, where nan_to_num makes a masked pass per sentinel.
+    # The result is a fresh array, so the clamp below runs in place; the caller's array is the host
+    # snapshot shared with every other consumer this step and must not be mutated.
+    dep = np.where(np.isfinite(dep), dep, hi).astype(np.float32, copy=False)
+    # Normalize to uint8 [0,255] with near->bright in one SIMD pass: convertScaleAbs computes
+    # saturate_cast<uchar>(|dep * alpha + beta|), which folds the scale, the rounding and both ends
+    # of the clamp that an explicit np.clip would need. The negative slope puts near at 255 without
+    # a second inverting pass, and clamping only the FAR end keeps ``hi - dep`` non-negative, which
+    # is what makes that abs() a no-op; saturate_cast clips the >255 result at the near end.
+    np.minimum(dep, hi, out=dep)
+    # convertScaleAbs always emits CV_8U; its stub widens the return to integer|floating.
+    gray = cast(
+        "npt.NDArray[np.uint8]",
+        cv2.convertScaleAbs(dep, alpha=-255.0 / (hi - lo), beta=255.0 * hi / (hi - lo)),
+    )
     if colormap == "gray":
         return np.repeat(gray[..., None], 3, axis=2)
-
-    import cv2
 
     bgr = cv2.applyColorMap(gray, getattr(cv2, f"COLORMAP_{colormap.upper()}"))  # cv2 outputs BGR
     return np.ascontiguousarray(bgr[..., ::-1])  # -> RGB to match the RGB-in convention

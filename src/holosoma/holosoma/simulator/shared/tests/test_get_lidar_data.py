@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-from holosoma.simulator.shared.sensor_manager import LidarRecord
+from holosoma.simulator.shared.sensor_manager import LidarRecord, SensorManager
 from holosoma.utils.safe_torch_import import torch
 
 pytestmark = pytest.mark.no_sim
@@ -36,8 +36,8 @@ def _sim(manager: Any) -> BaseSimulator:
     return sim
 
 
-def test_missing_lidar_or_manager_raises_not_implemented() -> None:
-    for manager in (None, _Manager({})):
+def test_missing_lidar_raises_not_implemented() -> None:
+    for manager in (SensorManager("cpu", 50.0), _Manager({})):
         with pytest.raises(NotImplementedError, match="no LiDAR 'scan'"):
             _sim(manager).get_lidar_data("scan")
 

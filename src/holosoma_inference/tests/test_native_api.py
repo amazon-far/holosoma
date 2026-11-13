@@ -77,9 +77,13 @@ def test_contextual_config_and_inputs_use_the_same_native_policy(tmp_path):
         robot=robot,
         observation=ObservationConfig({"actor_obs": []}, {}, {}, {}),
         task=replace(base.task, model_path=str(path), use_phase=False),
-        contextual=ContextualConfig(depth_height=2, depth_width=3, imu_to_obs_joint_chain=()),
+        contextual=ContextualConfig(discretizer="simple", depth_height=2, depth_width=3, imu_to_obs_joint_chain=()),
         secondary=None,
     )
+    # The continuous family is the default, so a primitive export without a discretizer is
+    # refused with the fix named, not with a bare missing-key error.
+    with pytest.raises(RuntimeError, match='needs a discretizer \\(discretizer: "simple"\\)'):
+        inference.get_policy_from_preset(replace(config, contextual=replace(config.contextual, discretizer=None)))
     policy = inference.get_policy_from_preset(config)
     assert isinstance(policy._engine, inference.Policy)
     inputs = inference.ContextualInput()
@@ -143,8 +147,10 @@ def test_contextual_imu_to_obs_chain_and_depth_age_cross_the_native_config_bound
 
     # The default G1 waist chain names joints this robot does not have: loud, not skipped.
     with pytest.raises(ValueError, match="imu_to_obs_joint_chain"):
-        inference.get_policy_from_preset(config(ContextualConfig(depth_height=2, depth_width=3)))
-    chained = config(ContextualConfig(depth_height=2, depth_width=3, imu_to_obs_joint_chain=(("hip", "x"),)))
+        inference.get_policy_from_preset(config(ContextualConfig(discretizer="simple", depth_height=2, depth_width=3)))
+    chained = config(
+        ContextualConfig(discretizer="simple", depth_height=2, depth_width=3, imu_to_obs_joint_chain=(("hip", "x"),))
+    )
     policy = inference.get_policy_from_preset(chained)
     state = np.zeros(19)
     state[3] = 1
@@ -161,6 +167,262 @@ def test_contextual_imu_to_obs_chain_and_depth_age_cross_the_native_config_bound
         document["contextual"]["max_depth_age_s"] = bad
         with pytest.raises(RuntimeError, match="max_depth_age_s"):
             _native.Policy.from_config(json.dumps(document), True)
+
+
+def test_the_d435i_preset_keeps_the_primitive_command_interface_its_students_were_trained_on():
+    contextual = inference.get_config("g1-29dof-depth-d435i").contextual
+    assert contextual.discretizer == "simple"
+    assert contextual.require_climb_head is False
+
+
+def test_continuous_velocity_command_crosses_the_native_config_boundary(tmp_path):
+    from holosoma_inference import _native
+    from holosoma_inference.config.config_types.contextual import ContextualConfig
+    from holosoma_inference.config.config_types.observation import ObservationConfig
+    from holosoma_inference.native import _native_config
+
+    generator = runpy.run_path(str(Path(__file__).parents[1] / "holosoma_cpp/tests/gen_velocity_models.py"))
+    metadata = generator["EXPORT"]["metadata_props"]
+    path = tmp_path / "velocity.onnx"
+    generator["export_stub"](path, metadata)
+    base = inference.get_config("g1-29dof-loco")
+    assert list(base.robot.dof_names) == json.loads(metadata["dof_names"])
+
+    def config(contextual):
+        return replace(
+            base,
+            observation=ObservationConfig({"actor_obs": []}, {}, {}, {}),
+            task=replace(base.task, model_path=str(path), use_phase=False),
+            contextual=contextual,
+            secondary=None,
+        )
+
+    # The defaults select the continuous velocity command, so a bare config drives this export.
+    continuous = config(ContextualConfig())
+    document = json.loads(_native_config(continuous))
+    # None crosses as null, never as a sentinel word, and the frame stays unset.
+    assert document["contextual"]["discretizer"] is None
+    assert document["contextual"]["require_climb_head"] is False
+    assert document["contextual"]["imu_to_obs_joint_chain"] is None
+    policy = inference.get_policy_from_preset(continuous)
+    n = base.robot.num_joints
+    state = np.zeros(13 + 2 * n)
+    state[3] = 1
+    state[7 : 7 + n] = base.robot.default_dof_angles
+    inputs = inference.ContextualInput()
+    inputs.velocity = (0.4, -0.1, 0.2)
+    inputs.depth = [0.0] * (58 * 87)
+    command = policy.step_contextual(state, inputs)
+    np.testing.assert_allclose(policy.last_observation[95:98], [0.4, -0.1, 0.2], rtol=1e-6)
+    np.testing.assert_allclose(command.kp, json.loads(metadata["kp"]))
+
+    # A continuous model has no climb head to require.
+    with pytest.raises(ValueError, match="require_climb_head"):
+        inference.get_policy_from_preset(config(ContextualConfig(require_climb_head=True)))
+    # The native defaults agree: a section without the two keys builds the same continuous policy.
+    absent = dict(document)
+    absent["contextual"] = {
+        k: v for k, v in document["contextual"].items() if k not in ("discretizer", "require_climb_head")
+    }
+    _native.Policy.from_config(json.dumps(absent), True)
+    # A primitive discretizer refuses this export by name.
+    document["contextual"]["discretizer"] = "simple"
+    with pytest.raises(RuntimeError, match="discretizer: null"):
+        _native.Policy.from_config(json.dumps(document), True)
+
+
+def _contextual_runner(config):
+    from holosoma_inference.policies.native_runner import NativeContextualRunner
+
+    inputs = _NoInput()
+    return NativeContextualRunner(
+        config, interface=_ScriptedInterface(_low_state()), velocity_input=inputs, command_provider=inputs
+    )
+
+
+def _continuous_export_config(tmp_path, metadata=None, *more_metadata):
+    """A preset over the export stub; each extra metadata dict adds a model to switch to."""
+    from holosoma_inference.config.config_types.contextual import ContextualConfig
+    from holosoma_inference.config.config_types.observation import ObservationConfig
+
+    generator = runpy.run_path(str(Path(__file__).parents[1] / "holosoma_cpp/tests/gen_velocity_models.py"))
+    paths = []
+    for i, meta in enumerate((metadata, *more_metadata)):
+        paths.append(tmp_path / f"velocity{i or ''}.onnx")
+        generator["export_stub"](paths[-1], meta or generator["EXPORT"]["metadata_props"])
+    base = inference.get_config("g1-29dof-loco")
+    return replace(
+        base,
+        observation=ObservationConfig({"actor_obs": []}, {}, {}, {}),
+        task=replace(
+            base.task, model_path=str(paths[0]) if len(paths) == 1 else [str(p) for p in paths], use_phase=False
+        ),
+        contextual=ContextualConfig(discretizer=None, require_climb_head=False),
+        secondary=None,
+    )
+
+
+def _offline_depth_consumer():
+    """The real topic consumer without its ROS subscription (rclpy is a deployment extra)."""
+    from holosoma_inference import depth
+
+    class Offline(depth.DepthConsumer):
+        built = []
+
+        def _attach(self, topic):
+            self.topic, self.started = topic, False
+            Offline.built.append(self)
+
+        def start(self):
+            self.started = True
+
+    return Offline
+
+
+def _export_metadata(**changes):
+    generator = runpy.run_path(str(Path(__file__).parents[1] / "holosoma_cpp/tests/gen_velocity_models.py"))
+    metadata = dict(generator["EXPORT"]["metadata_props"])
+    for key, value in changes.items():
+        if value is None:
+            del metadata[key]
+        else:
+            metadata[key] = json.dumps(value)
+    return metadata
+
+
+def test_a_continuous_export_exposes_the_depth_contract_its_metadata_declares(tmp_path):
+    runner = _contextual_runner(_continuous_export_config(tmp_path))
+    metadata = _export_metadata()
+    near, far = json.loads(metadata["depth_clip_m"])
+    fill = json.loads(metadata["depth_observation_params"])["invalid_fill"]
+    raw = tuple(json.loads(metadata["depth_raw_shape_hw"]))
+    resize, name = json.loads(metadata["depth_resize"]), json.loads(metadata["depth_contract"])
+    expected = {"near_m": near, "far_m": far, "invalid_fill": fill, "raw_shape_hw": raw, "resize": resize, "name": name}
+    assert runner.depth_contract == expected
+    assert runner.depth_contract == {
+        "near_m": 0.3,
+        "far_m": 2.0,
+        "invalid_fill": "near",
+        "raw_shape_hw": (63, 112),
+        "resize": "bicubic_antialias",
+        "name": "gma_zed_x_mini_v1",
+    }
+
+
+def test_the_depth_topic_preprocesses_as_the_export_declares_and_refuses_another_frame_size(tmp_path, monkeypatch):
+    from holosoma_inference import depth
+    from holosoma_inference.run_policy import _start_depth_source
+
+    offline = _offline_depth_consumer()
+    monkeypatch.setattr(depth, "DepthConsumer", offline)
+    config = _continuous_export_config(tmp_path)
+    runner = _contextual_runner(config)
+    source = _start_depth_source(runner, config, None, "depth/depth_registered")
+    assert source.started and source.topic == "depth/depth_registered"
+    assert source.settings() == depth.settings_for(runner.depth_contract)
+    frame = np.full((63, 112), 1.0, np.float32)
+    frame[0, 0] = np.nan  # a hole takes the declared near fill
+    assert source.push(frame, 1.0)
+    stored, _ = runner._latest_depth()
+    framing = {"raw_shape_hw": (63, 112), "resize": depth.BICUBIC_ANTIALIAS}
+    np.testing.assert_array_equal(stored, depth.preprocess(frame, 0.3, 2.0, "near", **framing))
+    # Control: the far fill would have given another frame, so the equality reads the fill.
+    assert not np.array_equal(stored, depth.preprocess(frame, 0.3, 2.0, "far", **framing))
+    # The ZED at its native resolution would reach the model with another field of view.
+    assert not source.push(np.full((376, 672), 1.0, np.float32), 2.0)
+    assert (source.frames, source.rejected) == (1, 1)
+
+
+@pytest.mark.parametrize("missing", ["depth_raw_shape_hw", "depth_resize"])
+def test_the_depth_topic_is_refused_for_an_export_that_does_not_say_how_to_frame_it(tmp_path, monkeypatch, missing):
+    from holosoma_inference import depth
+    from holosoma_inference.run_policy import _start_depth_source
+
+    offline = _offline_depth_consumer()
+    monkeypatch.setattr(depth, "DepthConsumer", offline)
+    config = _continuous_export_config(tmp_path, _export_metadata(**{missing: None}))
+    runner = _contextual_runner(config)
+    with pytest.raises(ValueError, match=depth.UNFRAMED_CONTRACT):
+        _start_depth_source(runner, config, None, "depth/depth_registered")
+    assert offline.built == []
+
+
+def test_a_policy_switch_brings_the_next_exports_depth_contract_to_the_topic(tmp_path, monkeypatch):
+    from holosoma_inference import depth
+    from holosoma_inference.inputs.api.commands import StateCommand
+    from holosoma_inference.run_policy import _start_depth_source
+
+    monkeypatch.setattr(depth, "DepthConsumer", _offline_depth_consumer())
+    params = json.loads(_export_metadata()["depth_observation_params"])
+    second = _export_metadata(depth_clip_m=[0.5, 3.0], depth_observation_params={**params, "invalid_fill": "far"})
+    config = _continuous_export_config(tmp_path, None, second)
+    runner = _contextual_runner(config)
+    source = _start_depth_source(runner, config, None, "depth/depth_registered")
+    frame = np.full((63, 112), 1.0, np.float32)
+    frame[0, 0] = np.nan
+    assert source.push(frame, 1.0)
+    first, _ = runner._latest_depth()
+    runner._dispatch_command(StateCommand.NEXT_POLICY)
+    assert runner.active_policy_index == 1
+    assert (runner.depth_contract["near_m"], runner.depth_contract["invalid_fill"]) == (0.5, "far")
+    assert source.push(frame, 2.0)
+    after, _ = runner._latest_depth()
+    framing = {"raw_shape_hw": (63, 112), "resize": depth.BICUBIC_ANTIALIAS}
+    np.testing.assert_array_equal(first, depth.preprocess(frame, 0.3, 2.0, "near", **framing))
+    np.testing.assert_array_equal(after, depth.preprocess(frame, 0.5, 3.0, "far", **framing))
+    assert not np.array_equal(first, after)
+
+
+def test_a_continuous_export_that_declares_no_depth_contract_is_refused_at_load(tmp_path):
+    generator = runpy.run_path(str(Path(__file__).parents[1] / "holosoma_cpp/tests/gen_velocity_models.py"))
+    for key in ("depth_clip_m", "depth_observation_params"):
+        metadata = dict(generator["EXPORT"]["metadata_props"])
+        del metadata[key]
+        with pytest.raises(RuntimeError, match=f"ONNX metadata {key} is missing"):
+            _contextual_runner(_continuous_export_config(tmp_path, metadata))
+
+
+def test_a_primitive_export_declares_no_depth_contract_and_keeps_the_far_fill(tmp_path, monkeypatch):
+    from holosoma_inference import depth
+    from holosoma_inference.config.config_types.contextual import ContextualConfig
+    from holosoma_inference.config.config_types.observation import ObservationConfig
+    from holosoma_inference.run_policy import _start_depth_source
+
+    monkeypatch.setattr(depth, "DepthConsumer", _offline_depth_consumer())
+    generator = Path(__file__).parents[1] / "holosoma_cpp/tests/gen_contextual_models.py"
+    path = tmp_path / "contextual.onnx"
+    runpy.run_path(str(generator))["write_model"](path)
+    base = inference.get_config("g1-29dof-loco")
+    robot = RobotConfig(
+        robot_type="test",
+        robot="test",
+        num_joints=3,
+        num_motors=3,
+        dof_names=("hip", "knee", "ankle"),
+        dof_names_upper_body=(),
+        dof_names_lower_body=("hip", "knee", "ankle"),
+        default_dof_angles=(0.1, 0.2, 0.3),
+        default_motor_angles=(0.1, 0.2, 0.3),
+        motor2joint=(0, 1, 2),
+        joint2motor=(0, 1, 2),
+    )
+    config = replace(
+        base,
+        robot=robot,
+        observation=ObservationConfig({"actor_obs": []}, {}, {}, {}),
+        task=replace(base.task, model_path=str(path), use_phase=False),
+        contextual=ContextualConfig(discretizer="simple", depth_height=2, depth_width=3, imu_to_obs_joint_chain=()),
+        secondary=None,
+    )
+    from holosoma_inference.policies.native_runner import NativeContextualRunner
+
+    inputs = _NoInput()
+    runner = NativeContextualRunner(
+        config, interface=_ScriptedInterface(np.zeros((1, 19))), velocity_input=inputs, command_provider=inputs
+    )
+    assert runner.depth_contract is None
+    source = _start_depth_source(runner, config, None, "depth/depth_registered")
+    assert source.started and source.settings() == depth.DepthSettings(depth.NEAR_M, depth.FAR_M, "far", None, None)
 
 
 def test_packed_observation_uses_native_graph_scaling_and_defaults(native_config):

@@ -102,7 +102,9 @@ class VideoRecorderInterface(ABC):
         """Register video lifecycle hooks with the simulator loop."""
         hooks.add(Phase.EPISODE_START, self.on_episode_start, name="video.on_episode_start")
         hooks.add(Phase.EPISODE_END, self.on_episode_end, name="video.on_episode_end")
-        hooks.add(Phase.FRAME_END, self.capture_frame, name="video.capture_frame")
+        hooks.add(
+            Phase.FRAME_END, self.capture_frame, name="video.capture_frame", after=self.simulator.sensor_render_hook
+        )
         hooks.add(Phase.CLOSE, self.cleanup, name="video.cleanup")
 
     def _setup_threaded_recording(self) -> None:

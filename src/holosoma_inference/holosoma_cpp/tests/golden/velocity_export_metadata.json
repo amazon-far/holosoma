@@ -1,0 +1,55 @@
+{
+  "source_sha256": "e9621bc68cd70a7b7c36506805a4af58080490a9b1a8726f8cf7928cd2d6aaf0",
+  "metadata_props": {
+    "action_scale": "[0.864874541759491, 0.3506614863872528, 0.5475465059280396, 0.3506614863872528, 0.4385772943496704, 0.4385772943496704, 0.864874541759491, 0.3506614863872528, 0.5475465059280396, 0.3506614863872528, 0.4385772943496704, 0.4385772943496704, 0.5475465059280396, 0.4385772943496704, 0.4385772943496704, 0.4385772943496704, 0.4385772943496704, 0.4385772943496704, 0.4385772943496704, 0.4385772943496704, 0.14900174736976624, 0.14900174736976624, 0.4385772943496704, 0.4385772943496704, 0.4385772943496704, 0.4385772943496704, 0.4385772943496704, 0.14900174736976624, 0.14900174736976624]",
+    "actor_observation_dim": "98",
+    "actor_observation_history_length": "1",
+    "actor_observation_scales": "{\"actions\": 1.0, \"base_ang_vel\": 1.0, \"dof_pos\": 1.0, \"dof_vel\": 1.0, \"fixed_arm_flag\": 1.0, \"projected_gravity\": 1.0, \"velocity_command\": 1.0}",
+    "actor_observation_term_dims": "{\"actions\": 29, \"base_ang_vel\": 3, \"dof_pos\": 29, \"dof_vel\": 29, \"fixed_arm_flag\": 2, \"projected_gravity\": 3, \"velocity_command\": 3}",
+    "actor_observation_terms": "[\"actions\", \"base_ang_vel\", \"dof_pos\", \"dof_vel\", \"fixed_arm_flag\", \"projected_gravity\", \"velocity_command\"]",
+    "actor_policy_input_dim": "5144",
+    "actor_policy_input_groups": "[\"actor_obs\", \"depth_camera\"]",
+    "command_ranges": "{\"lin_vel_x\": [-1.5, 1.5], \"lin_vel_y\": [-1.5, 1.5], \"ang_vel_yaw\": [-2.0, 2.0]}",
+    "default_dof_angles": "[-0.312, 0.0, 0.0, 0.669, -0.363, 0.0, -0.312, 0.0, 0.0, 0.669, -0.363, 0.0, 0.0, 0.0, 0.0, 0.2, 0.2, 0.0, 0.6, 0.0, 0.0, 0.0, 0.2, -0.2, 0.0, 0.6, 0.0, 0.0, 0.0]",
+    "depth_clip_m": "[0.3, 2.0]",
+    "depth_contract": "\"gma_zed_x_mini_v1\"",
+    "depth_definition": "\"distance_to_image_plane\"",
+    "depth_latency_frames_50hz": "[2, 5]",
+    "depth_normalization": "\"(clamp(depth, near, far) - near) / (far - near) - 0.5\"",
+    "depth_observation_dim": "5046",
+    "depth_observation_params": "{\"output_height\": 58, \"output_width\": 87, \"crop_top\": 0, \"crop_bottom\": 0, \"crop_left\": 0, \"crop_right\": 0, \"refresh_interval\": 1, \"latency_frames\": [2, 5], \"latency_robustness\": false, \"invalid_fill\": \"near\", \"invalid_below_m\": 0.0, \"metric_noise_std_m\": 0.0, \"depth_bias_std_m\": 0.0, \"edge_shuffle_prob\": 0.0, \"edge_empty_prob\": 0.0, \"structured_hole_seed_prob\": 0.0, \"object_weakening_prob\": 0.0, \"corruption_model\": \"gma\", \"gma_noise_multiplier\": 0.1, \"gma_pixel_dropout_prob\": 0.05, \"gma_depth_scale_range\": [0.95, 1.05], \"gma_structured_corruption\": {\"enabled\": false, \"invalid_rectangle_start_prob\": 0.05, \"near_saturation_start_prob\": 0.05, \"duration_frames\": [5, 50], \"height_fraction\": [0.45, 0.9], \"width_fraction\": [0.45, 0.9], \"edge_probability\": 0.7, \"full_frame_invalid_probability\": 0.15, \"near_depth_offset\": [0.0, 0.25], \"near_plane_max_tilt\": 0.05, \"near_plane_noise_std\": 0.005, \"invalid_fill_value\": 0.0}}",
+    "depth_policy_shape_hw": "[58, 87]",
+    "depth_preprocessing": "[\"clamp(near, far)\", \"bicubic_antialias resize 63x112 -> 58x87, no crop\", \"clamp(near, far)\", \"train only: d += N(0,1)*0.1*d; 5% pixels <- U(near, far); d *= U(0.95, 1.05) per episode\", \"clamp(near, far)\", \"(d - near) / (far - near) - 0.5\"]",
+    "depth_raw_shape_hw": "[63, 112]",
+    "depth_resize": "\"bicubic_antialias\"",
+    "depth_sim_crop_tblr": "[0, 0, 0, 0]",
+    "depth_sim_out_of_range": "{\"beyond_far\": \"far\", \"below_near\": \"near\"}",
+    "dof_names": "[\"left_hip_pitch_joint\", \"left_hip_roll_joint\", \"left_hip_yaw_joint\", \"left_knee_joint\", \"left_ankle_pitch_joint\", \"left_ankle_roll_joint\", \"right_hip_pitch_joint\", \"right_hip_roll_joint\", \"right_hip_yaw_joint\", \"right_knee_joint\", \"right_ankle_pitch_joint\", \"right_ankle_roll_joint\", \"waist_yaw_joint\", \"waist_roll_joint\", \"waist_pitch_joint\", \"left_shoulder_pitch_joint\", \"left_shoulder_roll_joint\", \"left_shoulder_yaw_joint\", \"left_elbow_joint\", \"left_wrist_roll_joint\", \"left_wrist_pitch_joint\", \"left_wrist_yaw_joint\", \"right_shoulder_pitch_joint\", \"right_shoulder_roll_joint\", \"right_shoulder_yaw_joint\", \"right_elbow_joint\", \"right_wrist_roll_joint\", \"right_wrist_pitch_joint\", \"right_wrist_yaw_joint\"]",
+    "kd": "[2.5578897650279457, 6.3088018534966395, 2.5578897650279457, 6.3088018534966395, 1.814445686584846, 1.814445686584846, 2.5578897650279457, 6.3088018534966395, 2.5578897650279457, 6.3088018534966395, 1.814445686584846, 1.814445686584846, 2.5578897650279457, 1.814445686584846, 1.814445686584846, 0.907222843292423, 0.907222843292423, 0.907222843292423, 0.907222843292423, 0.907222843292423, 1.06814150219, 1.06814150219, 0.907222843292423, 0.907222843292423, 0.907222843292423, 0.907222843292423, 0.907222843292423, 1.06814150219, 1.06814150219]",
+    "kp": "[40.17923847137318, 99.09842777666113, 40.17923847137318, 99.09842777666113, 28.50124619574858, 28.50124619574858, 40.17923847137318, 99.09842777666113, 40.17923847137318, 99.09842777666113, 28.50124619574858, 28.50124619574858, 40.17923847137318, 28.50124619574858, 28.50124619574858, 14.25062309787429, 14.25062309787429, 14.25062309787429, 14.25062309787429, 14.25062309787429, 16.77832748089279, 16.77832748089279, 14.25062309787429, 14.25062309787429, 14.25062309787429, 14.25062309787429, 14.25062309787429, 16.77832748089279, 16.77832748089279]",
+    "policy_control_rate_hz": "50.0",
+    "policy_kind": "\"hybrid_velocity\"",
+    "velocity_command_frame": "\"heading\"",
+    "velocity_command_projection": "{\"embedded_in_graph\": true, \"observation_start\": 95, \"observation_end\": 98, \"history_length\": 1, \"observation_scale\": 1.0, \"linear_speed_range\": [0.0, 2.1213203435596424], \"yaw_rate_range\": [-2.0, 2.0], \"yaw_rate_min_abs\": 0.0, \"linear_deadband\": 0.0, \"yaw_deadband\": 0.0}"
+  },
+  "inputs": [
+    {
+      "name": "actor_obs",
+      "type": 1,
+      "shape": [
+        1,
+        5144
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "name": "action",
+      "type": 1,
+      "shape": [
+        1,
+        29
+      ]
+    }
+  ]
+}

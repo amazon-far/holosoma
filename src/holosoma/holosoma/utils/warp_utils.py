@@ -140,4 +140,6 @@ def convert_to_wp_mesh(
     return wp.Mesh(
         points=wp.array(vertices.astype(np.float32), dtype=wp.vec3, device=device),
         indices=wp.array(triangles.astype(np.int32).flatten(), dtype=int, device=device),
+        # Built once and ray cast every step: favour query speed over build time.
+        bvh_constructor="sah",
     )

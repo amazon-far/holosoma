@@ -3,11 +3,14 @@
 A :class:`CameraConsumerPlugin` for dataset capture: every frame of each watched
 ``(camera, modality, env)`` stream is written inline on the sim thread (lossless, no drops —
 the sim waits on the disk write, unlike the async ROS2 egress). RGB goes out as PNG, JPEG, or —
-with ``rgb_format="mp4"`` — one H.264 video per stream (``<camera>_<modality>_env<k>.mp4``,
-encoded at stop); depth as 16-bit-millimeter PNG or raw ``.npy`` float32 meters. An
+with ``rgb_format="mp4"`` — one H.264 video per stream (``<camera>_<modality>_env<k>.mp4``),
+streamed into an ffmpeg process per stream as frames arrive and finalized at stop; depth as
+16-bit-millimeter PNG or raw ``.npy`` float32 meters. An
 ``index.jsonl`` per run records one line per frame (path, camera, modality, env, frame index,
 sim time) plus a first header line with the camera intrinsics, so a downstream loader needs no
-sidecar logic.
+sidecar logic. In mp4 mode a ``videos.json`` written at stop maps each rgb stream to
+``{"status", "path", "frames"}``: how its video ended (``complete``, ``partial``, ``failed``, or
+``empty``) and which file it left. A run without one never reached teardown.
 
 Scope: a simple cross-backend writer. For synthetic-data generation at scale, backend-native
 writers (IsaacSim's Replicator handles modalities and async IO natively) would outperform this;
@@ -20,9 +23,10 @@ so the config layer stays cv2-free.
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import asdict
 from pathlib import Path
-from typing import TYPE_CHECKING, TextIO, cast
+from typing import TYPE_CHECKING, Any, TextIO, cast
 
 import cv2
 import numpy as np
@@ -31,7 +35,11 @@ from loguru import logger
 
 from holosoma.config_types.sensor import CameraSensorConfig
 from holosoma.simulator.plugins.camera_consumer import CameraConsumerPlugin
-from holosoma.utils.video_utils import create_video
+from holosoma.utils.sim_utils import _simulation_exit_code
+from holosoma.utils.video_utils import H264StreamEncoder
+
+_VIDEOS_FILE = "videos.json"
+"""Per-run record of how each mp4 stream ended, written by ``stop``."""
 
 if TYPE_CHECKING:
     from holosoma.config_types.plugin import FrameWriterPluginConfig
@@ -67,9 +75,11 @@ class FrameWriterPlugin(CameraConsumerPlugin):
         self._counts: dict[StreamKey, int] = {}
         self._index: TextIO | None = None
         self._out = Path(config.output_dir)
-        # mp4 mode: rgb frames buffer here per stream and encode at stop.
-        self._video_frames: dict[StreamKey, list[npt.NDArray[np.uint8]]] = {}
-        self._video_times: dict[StreamKey, list[float]] = {}
+        # mp4 mode: one open encoder per rgb stream, the sim-time span of the frames it has taken,
+        # and the error of any stream whose encoder died (its later frames are dropped).
+        self._encoders: dict[StreamKey, H264StreamEncoder] = {}
+        self._video_span: dict[StreamKey, tuple[float, float]] = {}
+        self._video_failed: dict[StreamKey, str] = {}
         super().__init__(config, simulator)
 
     def wanted_streams(self) -> set[StreamKey]:
@@ -77,6 +87,7 @@ class FrameWriterPlugin(CameraConsumerPlugin):
 
     def start(self) -> None:
         self._out.mkdir(parents=True, exist_ok=True)
+        (self._out / _VIDEOS_FILE).unlink(missing_ok=True)  # an earlier run's; stop writes this run's
         intrinsics = {}
         for cam in sorted({cam for cam, _, _ in self._streams}):
             camera_intrinsics = self._intrinsics_of(cam)
@@ -98,19 +109,19 @@ class FrameWriterPlugin(CameraConsumerPlugin):
         for key in sorted(frames):
             packet = frames[key]
             idx = self._counts.get(key, 0)
-            self._counts[key] = idx + 1
             cam, mod, env = key
-            stream_name = f"{cam}_{mod}_env{env}"
+            stream_name = self._stream_name(key)
             if mod == "rgb" and self.config.rgb_format == "mp4":
-                self._video_frames.setdefault(key, []).append(cast("npt.NDArray[np.uint8]", packet.array))
-                self._video_times.setdefault(key, []).append(packet.sim_time)
                 path = self._out / f"{stream_name}.mp4"
+                if not self._encode_frame(key, path, packet):
+                    continue  # the stream's encoder has failed: its frames are not on disk
             else:
                 stream_dir = self._out / stream_name
                 if idx == 0:
                     stream_dir.mkdir(parents=True, exist_ok=True)
                 path = stream_dir / f"{idx:06d}.{self.extension(mod)}"
                 self.write_frame(path, mod, packet.array)
+            self._counts[key] = idx + 1
             self._index.write(
                 json.dumps(
                     {
@@ -126,35 +137,133 @@ class FrameWriterPlugin(CameraConsumerPlugin):
             )
 
     def stop(self) -> None:
-        for key, buffered in self._video_frames.items():
-            self.encode_video(key, buffered, self._video_times[key])
-        self._video_frames = {}
-        self._video_times = {}
+        """Finalize every open mp4, record how each video ended in ``videos.json``, and close the index.
+
+        Called during exception teardown (an interrupt, a crash, SIGTERM's ``SystemExit``), each mp4
+        keeps its ``.partial`` name, so a truncated episode is never mistaken for a complete one. A
+        ``SystemExit`` with a success status (code ``0`` or ``None``) is a clean exit and publishes;
+        the run's exit status decides, by the same rule ``run_sim`` exits with. Only an exception still
+        being handled is seen: a caller that catches a failure and closes the simulator afterwards
+        publishes the truncated videos as complete.
+
+        A stream whose encode failed does not make this raise: teardown still finishes, the failure is
+        logged at error level, and ``videos.json`` marks the stream ``failed``. Raising here would stop
+        the CLOSE chain and leave the simulator open, which is meant for a teardown that itself failed.
+        """
+        interrupted = _simulation_exit_code(sys.exc_info()[1]) != 0
+        # Every wanted video stream gets an entry, so one that never produced a frame reads as empty.
+        videos: dict[StreamKey, dict[str, Any]] = {}
+        if self.config.rgb_format == "mp4":
+            videos = {key: self._video_record("empty", None, key) for key in self._streams if key[1] == "rgb"}
+        errors = []
+        for key, err in sorted(self._video_failed.items()):
+            videos[key] = self._video_record("failed", self._out / f"{self._stream_name(key)}.mp4.partial", key)
+            errors.append(f"{self._stream_name(key)}: {err}")
+        for encoder in self._encoders.values():
+            encoder.end_input()  # every stream flushes at once; the loop below waits on each
+        for key, encoder in sorted(self._encoders.items()):
+            try:
+                status, path = self._finish_video(key, encoder, interrupted)
+            except Exception as exc:
+                encoder.abort()
+                status, path = "failed", encoder.partial
+                errors.append(f"{self._stream_name(key)}: {exc}")
+            videos[key] = self._video_record(status, path, key)
+        self._encoders = {}
+        self._video_span = {}
+        self._video_failed = {}
         if self._index is not None:
             self._index.close()
             self._index = None
+            if videos:
+                streams = {self._stream_name(key): videos[key] for key in sorted(videos)}
+                (self._out / _VIDEOS_FILE).write_text(json.dumps(streams, indent=2) + "\n")
         total = sum(self._counts.values())
         logger.info(f"FrameWriterPlugin wrote {total} frame(s) across {len(self._counts)} stream(s).")
+        if errors:
+            logger.error(f"FrameWriterPlugin: mp4 encoding failed for {'; '.join(errors)}")
 
-    def encode_video(self, key: StreamKey, buffered: list[npt.NDArray[np.uint8]], times: list[float]) -> None:
-        """Encode one stream's buffered rgb frames to ``<camera>_<modality>_env<k>.mp4`` (H.264)."""
+    @staticmethod
+    def _stream_name(key: StreamKey) -> str:
         cam, mod, env = key
-        if len(buffered) < 2:
-            logger.warning(f"FrameWriterPlugin: stream {cam}_{mod}_env{env} has {len(buffered)} frame(s); no mp4.")
-            return
-        # Playback rate from the frames' own sim-time stamps, so the video plays at sim speed.
-        fps = (len(times) - 1) / (times[-1] - times[0])
-        written = create_video(
-            np.array(buffered, dtype=np.uint8),
-            fps=fps,  # type: ignore[arg-type]
-            save_dir=self._out,
-            output_format="h264",
-            wandb_logging=False,
+        return f"{cam}_{mod}_env{env}"
+
+    def _video_record(self, status: str, path: Path | None, key: StreamKey) -> dict[str, Any]:
+        """One stream's entry in ``videos.json``."""
+        on_disk = path is not None and path.exists()
+        return {
+            "status": status,
+            "path": str(path.relative_to(self._out)) if path is not None and on_disk else None,
+            "frames": self._counts.get(key, 0),
+        }
+
+    def _encode_frame(self, key: StreamKey, path: Path, packet: FramePacket) -> bool:
+        """Feed one rgb frame to its stream's encoder, opening the encoder on the stream's first frame.
+
+        Returns whether the frame was taken. A failure disables only that stream: it is logged once
+        here and reported again by ``stop``.
+        """
+        if key in self._video_failed:
+            return False
+        encoder = self._encoders.get(key)
+        try:
+            if encoder is None:
+                encoder = self._open_encoder(key, path, packet)
+                self._encoders[key] = encoder
+            encoder.write(cast("npt.NDArray[np.uint8]", packet.array))
+        except Exception as exc:
+            if encoder is not None:
+                encoder.abort()
+            self._encoders.pop(key, None)
+            self._video_failed[key] = str(exc)
+            logger.error(f"FrameWriterPlugin: {self._stream_name(key)} mp4 encoding failed; dropping its frames: {exc}")
+            return False
+        first = self._video_span.get(key, (packet.sim_time, packet.sim_time))[0]
+        self._video_span[key] = (first, packet.sim_time)
+        return True
+
+    def _open_encoder(self, key: StreamKey, path: Path, packet: FramePacket) -> H264StreamEncoder:
+        """Start a stream's encoder at its camera's render rate (control rate / render decimation)."""
+        sensor_manager = self.simulator.sensor_manager
+        decimation = sensor_manager.get(key[0]).effective_decimation
+        height, width = packet.array.shape[:2]
+        return H264StreamEncoder(
+            path,
+            width,
+            height,
+            self.control_hz / decimation,
+            codec=self.config.video_codec,
+            crf=self.config.video_crf,
+            nvenc_max_sessions=self.config.video_nvenc_max_sessions,
         )
-        if written is not None:
-            final = self._out / f"{cam}_{mod}_env{env}.mp4"
-            written.replace(final)
-            logger.info(f"FrameWriterPlugin wrote video: {final} ({len(buffered)} frames @ {fps:.4g} fps)")
+
+    def _finish_video(self, key: StreamKey, encoder: H264StreamEncoder, interrupted: bool) -> tuple[str, Path | None]:
+        """Close one stream's encoder: drop a <2-frame stream, keep ``.partial`` if interrupted, else publish.
+
+        Returns the stream's status and the file it left. The video plays at the render rate the
+        encoder opened with; a warning flags frames whose sim-time stamps imply a different rate.
+        """
+        name = self._stream_name(key)
+        n = encoder.frames
+        if n < 2:
+            encoder.discard()
+            logger.warning(f"FrameWriterPlugin: stream {name} has {n} frame(s); no mp4.")
+            return "empty", None
+        partial = encoder.finish(publish=False)
+        if interrupted:
+            logger.warning(f"FrameWriterPlugin: run interrupted; left {partial} ({n} frames) incomplete.")
+            return "partial", partial
+        first, last = self._video_span[key]
+        if last > first and abs((n - 1) / (last - first) / encoder.fps - 1.0) > 1e-3:
+            logger.warning(
+                f"FrameWriterPlugin: {name} frames span {(n - 1) / (last - first):.6g} fps of sim time, "
+                f"not the {encoder.fps:.6g} fps render rate the mp4 plays at."
+            )
+        partial.replace(encoder.path)
+        logger.info(
+            f"FrameWriterPlugin wrote video: {encoder.path} ({n} frames @ {encoder.fps:.4g} fps, {encoder.codec})"
+        )
+        return "complete", encoder.path
 
     def extension(self, modality: str) -> str:
         """File extension for a modality's frames, per the configured format."""
