@@ -80,6 +80,10 @@ def test_contextual_config_and_inputs_use_the_same_native_policy(tmp_path):
         contextual=ContextualConfig(discretizer="simple", depth_height=2, depth_width=3, imu_to_obs_joint_chain=()),
         secondary=None,
     )
+    # The continuous family is the default, so a primitive export without a discretizer is
+    # refused with the fix named, not with a bare missing-key error.
+    with pytest.raises(RuntimeError, match='needs a discretizer \\(discretizer: "simple"\\)'):
+        inference.get_policy_from_preset(replace(config, contextual=replace(config.contextual, discretizer=None)))
     policy = inference.get_policy_from_preset(config)
     assert isinstance(policy._engine, inference.Policy)
     inputs = inference.ContextualInput()

@@ -219,11 +219,16 @@ VelocityFamily::VelocityFamily(std::shared_ptr<OnnxModel> model, const Spec &spe
 
   const Contract c(*model_);
   try {
+    // The continuous family is the default, so a primitive export reaches it
+    // whenever its config names no discretizer; say how to select the other.
+    const std::string primitive_hint =
+        "; a model trained on primitive commands needs a discretizer (discretizer: \"simple\")";
+    if (!c.Has("policy_kind") || c.Required("policy_kind").is_null())
+      c.Fail("policy_kind", "is missing, so this is not a continuous velocity export" + primitive_hint);
     const auto &kind = c.Required("policy_kind");
     if (!kind.is_string() || kind.get<std::string>() != kPolicyKind)
       c.Fail("policy_kind", "must be \"" + std::string(kPolicyKind) +
-                                "\" for a continuous velocity command (discretizer: null); a model trained on "
-                                "primitive commands needs a discretizer");
+                                "\" for a continuous velocity command (discretizer: null)" + primitive_hint);
 
     // Graph signature: one [1, width] input, one action output.
     if (model_->inputs().size() != 1 || model_->outputs().size() != 1)

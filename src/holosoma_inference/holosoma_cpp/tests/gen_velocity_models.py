@@ -198,8 +198,15 @@ def with_field(name, value):
 
 # Each broken export and the text its refusal must contain.
 BROKEN = {
-    "policy_kind_missing": (edit("policy_kind", lambda _: None), "policy_kind is missing"),
-    "policy_kind_primitive": (edit("policy_kind", lambda _: "contextual"), "policy_kind must be"),
+    "policy_kind_missing": (
+        edit("policy_kind", lambda _: None),
+        "policy_kind is missing, so this is not a continuous velocity export; a model trained on primitive "
+        'commands needs a discretizer (discretizer: "simple")',
+    ),
+    "policy_kind_primitive": (
+        edit("policy_kind", lambda _: "contextual"),
+        'needs a discretizer (discretizer: "simple")',
+    ),
     "dof_names_missing": (edit("dof_names", lambda _: None), "dof_names is missing"),
     "dof_names_repeated": (edit("dof_names", with_item(1, G1_DOF_NAMES[0])), "dof_names must name every"),
     "dof_names_foreign": (edit("dof_names", with_item(0, "tail_joint")), "dof_names must name every"),
