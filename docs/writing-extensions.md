@@ -145,6 +145,11 @@ The `plugin` family runs custom per-step behavior — see [Plugins](#plugins) be
 
 Group string is `holosoma.config.<family>`, registry var is `<FAMILY>_REGISTRY` (e.g. `holosoma.config.reward` → `REWARD_REGISTRY`).
 
+For physics in one process and camera rendering in another, see
+[Source-clock camera rendering](source-clock-rendering.md). It describes render-only
+tasks, applying external state through SimState, shared SimState cache storage and
+batched object roots.
+
 ## Plugins — custom per-step behavior
 
 A **plugin** is a bundle of behavior — a set of lifecycle hooks plus whatever state they need — that runs your code at points in the simulator loop, without subclassing a backend. It's built on the hook system (`simulator.hooks`, `Phase`) and can depend on other simulator contracts (the virtual gantry, the clock, …). Write a class taking `(cfg, simulator)` that registers hooks in `__init__`, and pair it with a `PluginConfig` (its CLI-visible knobs). There is no base class to inherit.
