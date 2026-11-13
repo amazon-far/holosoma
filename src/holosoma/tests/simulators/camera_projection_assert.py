@@ -171,7 +171,6 @@ def main() -> int:
     )
     sim.create_envs(n, env_origins, base_init)
     sim.prepare_sim()
-    sim.install_plugins()
 
     names = set(sim.get_sensor_names())
     fails: list[str] = []

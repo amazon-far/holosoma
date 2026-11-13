@@ -352,7 +352,7 @@ class HookRegistry:
     def installing(self, instance: str) -> Iterator[None]:
         """Scope registrations to the plugin slot being constructed, so its keys are published under it.
 
-        ``install_plugins`` wraps each plugin's construction in this. Publishing a key outside a scope
+        ``BaseTask`` wraps each plugin's construction in this. Publishing a key outside a scope
         has no instance to attach to and is rejected, so a plugin that wants to be referenced by
         :class:`HookRef` must register while it is being constructed.
         """

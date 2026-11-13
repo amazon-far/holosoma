@@ -50,7 +50,7 @@ from holosoma.utils.rotations import quat_slerp
 
 if TYPE_CHECKING:
     from holosoma.config_types.plugin import MotionPlaybackPluginConfig
-    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+    from holosoma.envs.base_task.base_task import BaseTask
 
 _QUAT = 7  # width of an [x, y, z, quat(4)] pose block
 _ROOT = 7  # width of a floating-base root pose block
@@ -220,9 +220,10 @@ class MotionPlaybackPlugin:
 
     cfg: MotionPlaybackPluginConfig
 
-    def __init__(self, cfg: MotionPlaybackPluginConfig, simulator: BaseSimulator) -> None:
+    def __init__(self, cfg: MotionPlaybackPluginConfig, task: BaseTask) -> None:
         self.cfg = cfg
-        self.simulator = simulator
+        self.task = task
+        self.simulator = task.simulator
         if not cfg.motion_files:
             raise ValueError(
                 "MotionPlaybackPluginConfig requires a clip: set motion_files (--plugin.<key>.motion_files)."
@@ -234,7 +235,7 @@ class MotionPlaybackPlugin:
         self.playlist: list[str] = []
         self._playlist_sources: list[str] = []
         self._clips: list[PlaybackClip | None] = []
-        sim_cfg = simulator.simulator_config.sim
+        sim_cfg = task.simulator.simulator_config.sim
         self._control_dt = sim_cfg.control_decimation_steps / sim_cfg.fps
         self._t = cfg.start_time
         self._state: dict[str, torch.Tensor] | None = None
@@ -246,9 +247,9 @@ class MotionPlaybackPlugin:
         self._final_episode = False
         self._lookahead_error: Exception | None = None
 
-        simulator.hooks.add(Phase.FRAME_BEGIN, self.advance, name="motion_playback.advance")
-        simulator.hooks.add(Phase.PRE_STEP, self.write_state, name="motion_playback.write_state")
-        simulator.hooks.add(Phase.FRAME_END, self.finish_when_egressed, name="motion_playback.finish")
+        task.hooks.add(Phase.FRAME_BEGIN, self.advance, name="motion_playback.advance")
+        task.hooks.add(Phase.PRE_STEP, self.write_state, name="motion_playback.write_state")
+        task.hooks.add(Phase.FRAME_END, self.finish_when_egressed, name="motion_playback.finish")
 
     def _is_playlist_clip(self, path: str) -> bool:
         """Whether a glob result is a clip supported by this playback plugin."""
@@ -424,13 +425,13 @@ class MotionPlaybackPlugin:
 
     def _begin_episode(self) -> None:
         """Close the previous episode and open the next: emit boundaries, rewind clock, arm settle."""
-        sim = self.simulator
-        for env_id in range(sim.num_envs):
-            sim.hooks.emit(Phase.EPISODE_END, env_id)
+        task = self.task
+        for env_id in range(task.num_envs):
+            task.hooks.emit(Phase.EPISODE_END, env_id)
         self._t = self.cfg.start_time
         self._settle_left = self.cfg.settle_frames
-        for env_id in range(sim.num_envs):
-            sim.hooks.emit(Phase.EPISODE_START, env_id)
+        for env_id in range(task.num_envs):
+            task.hooks.emit(Phase.EPISODE_START, env_id)
         playlist_index = self._playlist_index(self._episode_idx)
         assert playlist_index is not None
         local_path = self.playlist[playlist_index]

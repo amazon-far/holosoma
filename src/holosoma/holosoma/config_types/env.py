@@ -42,8 +42,8 @@ class EnvConfig:
     training: TrainingConfig
     logger: LoggerConfig
     plugin: dict[str, PluginConfig]
-    """Plugins to install on the simulator (key -> resolved PluginConfig), including the
-    ROS2/viz/video egress sinks. Installed after the concrete simulator backend is ready."""
+    """Plugins the task builds as ``cls(cfg, task)`` (key -> resolved PluginConfig), including the
+    ROS2/viz/video egress sinks. Built at the end of task setup."""
 
     device: str | None = None
     """Requested device. ``None`` resolves from the simulator backend and process rank."""

@@ -6,7 +6,6 @@ from pydantic.dataclasses import dataclass
 
 from holosoma.config_types.experiment import TrainingConfig
 from holosoma.config_types.logger import LoggerConfig
-from holosoma.config_types.plugin import PluginConfig
 from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.sensor import SensorConfig
@@ -25,11 +24,6 @@ class FullSimConfig:
 
     scene: SceneConfig = field(default_factory=SceneConfig)
     """Scene composition (rigid objects, scene files)."""
-
-    plugin: dict[str, PluginConfig] = field(default_factory=dict)
-    """Plugins (key -> config). Each is instantiated against the live simulator in
-    ``BaseSimulator.install_plugins`` via ``cfg.get_cls()(cfg, self)``. Frame consumers (ROS2 egress, viz,
-    video) are plugins too — selected here, not in ``sensors``."""
 
     sensors: dict[str, SensorConfig] = field(default_factory=dict)
     """Mounted cameras and LiDARs, keyed by sensor name. Empty (default) = none."""

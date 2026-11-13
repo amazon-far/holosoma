@@ -17,7 +17,7 @@ from loguru import logger
 from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.sensor import CameraSensorConfig, LidarSensorConfig
 from holosoma.config_types.simulator import MujocoBackend
-from holosoma.hooks import Phase
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.managers.terrain.manager import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 from holosoma.simulator.base_simulator.state import Columns
@@ -58,7 +58,9 @@ class MuJoCo(BaseSimulator):
     the holosoma simulator interface with unified state access and the shared terrain system.
     """
 
-    def __init__(self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str) -> None:
+    def __init__(
+        self, tyro_config: FullSimConfig, terrain_manager: TerrainManager, device: str, hooks: HookRegistry
+    ) -> None:
         """Initialize MuJoCo simulator.
 
         Parameters
@@ -79,7 +81,7 @@ class MuJoCo(BaseSimulator):
         logger.info(f"Device: {device}")
         logger.info(f"Simulator config: {simulator_config}")
 
-        super().__init__(tyro_config, terrain_manager, device)
+        super().__init__(tyro_config, terrain_manager, device, hooks)
         self.hooks.add(Phase.CLOSE, self._close_backend, name="mujoco.backend.close")
         self.hooks.add(Phase.CLOSE, self._close_viewer, name="mujoco.viewer.close")
 

@@ -9,7 +9,7 @@ from holosoma.config_types.env import EnvConfig
 from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.randomization import RandomizationManagerCfg
 from holosoma.config_types.termination import TerminationManagerCfg
-from holosoma.hooks import Phase
+from holosoma.hooks import HookRegistry, Phase, frame_base_rates
 from holosoma.managers.randomization import RandomizationManager
 from holosoma.managers.reset_events.manager import ResetEventManager
 from holosoma.managers.termination import TerminationManager
@@ -103,7 +103,6 @@ class BaseTask:
             robot=robot_config,
             scene=tyro_config.scene,
             sensors=tyro_config.sensors,
-            plugin=tyro_config.plugin,
             training=training_config,
             logger=tyro_config.logger,
             experiment_dir=str(experiment_dir),
@@ -118,11 +117,11 @@ class BaseTask:
         self.dr_base_seed = training_config.seed
         self.episode_count = torch.zeros(self.num_envs, dtype=torch.long, device="cpu")
 
+        self.hooks = HookRegistry(base_rates=frame_base_rates(simulator_config.config.sim))
         self.terrain_manager = TerrainManager(terrain_config, self, self.device)
         self.simulator: BaseSimulator = SimulatorClass(
-            tyro_config=full_sim_config, terrain_manager=self.terrain_manager, device=self.device
+            tyro_config=full_sim_config, terrain_manager=self.terrain_manager, device=self.device, hooks=self.hooks
         )
-        self.hooks = self.simulator.hooks
 
         self.headless = training_config.headless
         self.simulator.set_headless(self.headless)
@@ -146,10 +145,6 @@ class BaseTask:
             self.simulator.setup_viewer()
             self.viewer = self.simulator.viewer
 
-        # Plugins may depend on backend/provider resources created above. Their CLOSE hooks are
-        # registered last and therefore run first during reverse-order teardown.
-        self.simulator.install_plugins()
-
         self._initialize_task_managers()
 
         self._episode_open = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
@@ -167,7 +162,19 @@ class BaseTask:
             self.simulator.simulator_config.reset_manager, self.simulator, self.device
         )
 
+        self._install_plugins()
         self._add_pacing_hooks()
+        self.hooks.validate()
+
+    def _install_plugins(self) -> None:
+        """Construct each configured plugin as ``cls(cfg, task)`` once the task is fully built."""
+        self.installed_plugins: dict[str, Any] = {}
+        for key, plugin_config in self.config.plugin.items():
+            # Scoped so the plugin's published keys belong to its slot, for HookRef to resolve.
+            with self.hooks.installing(key):
+                self.installed_plugins[key] = plugin_config.get_cls()(plugin_config, self)
+        if self.installed_plugins:
+            logger.info(f"Installed plugins: {sorted(self.installed_plugins)}")
 
     def _add_pacing_hooks(self) -> None:
         """Draw the viewer every ``viewer_update_decimation`` and pace physics to ``time_scale``.

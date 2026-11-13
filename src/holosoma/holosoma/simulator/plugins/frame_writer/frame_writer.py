@@ -43,7 +43,7 @@ _VIDEOS_FILE = "videos.json"
 
 if TYPE_CHECKING:
     from holosoma.config_types.plugin import FrameWriterPluginConfig
-    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+    from holosoma.envs.base_task.base_task import BaseTask
     from holosoma.simulator.plugins.camera_consumer import FramePacket, StreamKey
 
 
@@ -52,16 +52,16 @@ class FrameWriterPlugin(CameraConsumerPlugin):
 
     config: FrameWriterPluginConfig
 
-    def __init__(self, config: FrameWriterPluginConfig, simulator: BaseSimulator) -> None:
+    def __init__(self, config: FrameWriterPluginConfig, task: BaseTask) -> None:
         # Streams to watch: configured cameras/modalities intersected with what the sim renders,
         # mirroring CameraVizPlugin. Must be set before super().__init__ (it calls wanted_streams).
         cams_by_name = {
-            name: sensor for name, sensor in simulator.sensor_config.items() if isinstance(sensor, CameraSensorConfig)
+            name: sensor
+            for name, sensor in task.simulator.sensor_config.items()
+            if isinstance(sensor, CameraSensorConfig)
         }
         cam_names = config.cameras if config.cameras is not None else list(cams_by_name)
-        # training_config.num_envs, not simulator.num_envs: the latter is not yet populated when
-        # IsaacSim constructs plugins during scene setup (same reason as the base validation).
-        env_ids = config.env_ids if config.env_ids is not None else list(range(simulator.training_config.num_envs))
+        env_ids = config.env_ids if config.env_ids is not None else list(range(task.num_envs))
         self._streams: set[StreamKey] = set()
         for name in cam_names:
             cam_mods = list(cams_by_name[name].data_types)
@@ -80,7 +80,7 @@ class FrameWriterPlugin(CameraConsumerPlugin):
         self._encoders: dict[StreamKey, H264StreamEncoder] = {}
         self._video_span: dict[StreamKey, tuple[float, float]] = {}
         self._video_failed: dict[StreamKey, str] = {}
-        super().__init__(config, simulator)
+        super().__init__(config, task)
 
     def wanted_streams(self) -> set[StreamKey]:
         return self._streams

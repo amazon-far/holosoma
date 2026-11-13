@@ -329,8 +329,9 @@ def test_playback_egresses_every_clip_frame_exactly_once(
         fps=FPS / decimation,  # one clip frame per control step
         n_run=1,
     )
-    cfg.get_cls()(cfg, sim)
+    task = _LoopTask(sim)
+    cfg.get_cls()(cfg, task)
 
-    _run(sim)
+    task.run()
 
     assert sim.captured == CLIP_JOINT0 * clips
