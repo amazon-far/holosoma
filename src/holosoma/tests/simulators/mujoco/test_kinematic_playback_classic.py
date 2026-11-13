@@ -100,8 +100,8 @@ def test_kinematic_clock_advances_engine_clock_does_not(tmp_path, num_dof):
         assert sim._physics_time() == pytest.approx(0.0)
 
 
-def test_playback_requests_task_shutdown_at_clip_end(tmp_path, num_dof):
+def test_playback_requests_shutdown_at_clip_end(tmp_path, num_dof):
     with _playback_task(tmp_path, num_dof) as (task, frames):
         for _ in range(frames + 2):
             task.step()
-        assert task.shutdown_requested
+        assert task.simulator.shutdown_requested
