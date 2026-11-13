@@ -170,6 +170,8 @@ def test_native_launch_context_outlives_the_returned_app(
     """Dropping a wrapper must not finalize the real external launch context."""
     from holosoma.simulator.isaacsim.backends import isaaclab3
 
+    monkeypatch.delenv("ISAACSIM_ROOT_PATH", raising=False)
+    monkeypatch.delenv("ISAACLAB3_KIT_PYTHONPATH", raising=False)
     events: list[tuple[str, str | int | None]] = []
     context_refs: list[weakref.ReferenceType[object]] = []
     native_app = SimpleNamespace(is_running=lambda: True)
