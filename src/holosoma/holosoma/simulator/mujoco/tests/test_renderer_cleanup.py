@@ -13,7 +13,7 @@ pytest.importorskip("mujoco")
 
 from holosoma.config_types.sensor import MujocoCameraConfig
 from holosoma.config_types.video import VideoConfig
-from holosoma.hooks import HookRegistry
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.mujoco import mujoco as mujoco_module
 from holosoma.simulator.mujoco.backends import classic_backend as classic_backend_module
 from holosoma.simulator.mujoco.backends.base import apply_sensor_scene_flags
@@ -73,8 +73,8 @@ def test_mujoco_closes_viewer_before_backend_once(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(mujoco_module, "apply_sensor_scene_flags", lambda *_args, **_kwargs: None)
 
     simulator.setup_viewer()
-    simulator.close()
-    simulator.close()
+    simulator.hooks.emit(Phase.CLOSE)
+    simulator.hooks.emit(Phase.CLOSE)
 
     assert events == ["viewer", "backend"]
     assert viewer.closed == 1

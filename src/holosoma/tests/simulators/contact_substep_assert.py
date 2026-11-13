@@ -91,11 +91,9 @@ def _check(sim, num_envs: int) -> tuple[list[str], list[str]]:
     buffer = recorder.buffer  # never reallocated, so one binding stays valid
     failures = []
 
-    # The recorder records on POST_STEP, which the real loops (base_task, run_sim) emit right after
-    # the physics step; this harness drives the simulator directly, so it emits the phase itself.
+    # The recorder records on POST_STEP, which simulate_at_each_physics_step emits after the step.
     def physics_step():
         sim.simulate_at_each_physics_step()
-        sim.hooks.emit(Phase.POST_STEP)
 
     def control_step():
         sim.hooks.emit(Phase.FRAME_BEGIN)

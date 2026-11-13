@@ -32,12 +32,12 @@ class BaseTask:
         try:
             self._initialize_base_task(tyro_config)
         except BaseException:
-            simulator = getattr(self, "simulator", None)
-            if simulator is not None:
+            hooks = getattr(self, "hooks", None)
+            if hooks is not None:
                 try:
-                    simulator.close()
+                    hooks.emit(Phase.CLOSE)
                 except Exception:
-                    logger.exception("Simulator cleanup failed while preserving the task setup error")
+                    logger.exception("Task cleanup failed while preserving the task setup error")
             raise
 
     def run(self) -> None:
@@ -45,7 +45,7 @@ class BaseTask:
         raise NotImplementedError(f"{type(self).__name__} must implement run().")
 
     def close(self) -> None:
-        """End open episodes and close the simulator exactly once."""
+        """End open episodes, then emit ``CLOSE`` exactly once."""
         if self._closed:
             return
         self._closed = True
@@ -57,12 +57,12 @@ class BaseTask:
             primary_error = exc
 
         try:
-            self.simulator.close()
+            self.hooks.emit(Phase.CLOSE)
         except BaseException as exc:
             if primary_error is None:
                 primary_error = exc
             else:
-                logger.opt(exception=exc).error("Simulator cleanup also failed")
+                logger.opt(exception=exc).error("Close hooks also failed")
 
         if primary_error is not None:
             raise primary_error
@@ -432,9 +432,7 @@ class BaseTask:
         self.hooks.emit(Phase.FRAME_BEGIN)
         for _ in range(decimation):
             self._apply_force_in_physics_step()
-            self.hooks.emit(Phase.PRE_STEP)
             self.simulator.simulate_at_each_physics_step()
-            self.hooks.emit(Phase.POST_STEP)
 
     def _apply_force_in_physics_step(self) -> None:
         """Apply task-specific controls during each physics substep."""

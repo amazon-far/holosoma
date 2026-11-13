@@ -12,11 +12,12 @@ from holosoma.hooks import HookRegistry, Phase
 pytestmark = pytest.mark.no_sim
 
 
-def test_task_setup_failure_closes_created_simulator(monkeypatch: pytest.MonkeyPatch) -> None:
-    simulator = SimpleNamespace(close=MagicMock())
+def test_task_setup_failure_emits_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    close = MagicMock()
 
     def fail_after_simulator_creation(self: BaseTask, *_args: object, **_kwargs: object) -> None:
-        self.simulator = simulator  # type: ignore[assignment]
+        self.hooks = HookRegistry()
+        self.hooks.add(Phase.CLOSE, close, name="backend.close")
         raise ValueError("manager setup failed")
 
     monkeypatch.setattr(BaseTask, "_initialize_base_task", fail_after_simulator_creation)
@@ -24,14 +25,15 @@ def test_task_setup_failure_closes_created_simulator(monkeypatch: pytest.MonkeyP
     with pytest.raises(ValueError, match="manager setup failed"):
         BaseTask(object())  # type: ignore[arg-type]
 
-    simulator.close.assert_called_once_with()
+    close.assert_called_once_with()
 
 
 def test_task_preserves_interrupt_when_constructor_cleanup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    simulator = SimpleNamespace(close=MagicMock(side_effect=RuntimeError("close failed")))
+    close = MagicMock(side_effect=RuntimeError("close failed"))
 
     def interrupt_after_simulator_creation(self: BaseTask, *_args: object, **_kwargs: object) -> None:
-        self.simulator = simulator  # type: ignore[assignment]
+        self.hooks = HookRegistry()
+        self.hooks.add(Phase.CLOSE, close, name="backend.close")
         raise KeyboardInterrupt
 
     monkeypatch.setattr(BaseTask, "_initialize_base_task", interrupt_after_simulator_creation)
@@ -39,7 +41,7 @@ def test_task_preserves_interrupt_when_constructor_cleanup_fails(monkeypatch: py
     with pytest.raises(KeyboardInterrupt):
         BaseTask(object())  # type: ignore[arg-type]
 
-    simulator.close.assert_called_once_with()
+    close.assert_called_once_with()
 
 
 def test_task_builds_plugins_last_with_pacing_after_them(monkeypatch: pytest.MonkeyPatch) -> None:
