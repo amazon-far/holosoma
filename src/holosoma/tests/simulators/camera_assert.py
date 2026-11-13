@@ -134,7 +134,7 @@ def main() -> int:
     sim.prepare_sim()
     sim.install_plugins()
 
-    from holosoma.simulator.base_simulator.hooks import Phase
+    from holosoma.hooks import Phase
 
     names = sim.get_sensor_names()
     print(f"[{args.simulator}] sensors created: {names}")

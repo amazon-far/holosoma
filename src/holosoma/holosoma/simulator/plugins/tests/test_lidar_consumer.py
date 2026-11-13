@@ -8,7 +8,7 @@ from typing import Any, cast
 import pytest
 
 from holosoma.config_types.sensor import GridLidarRayPatternConfig, LidarSensorConfig, SensorMountConfig
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.plugins.lidar_consumer import LidarConsumerPlugin, LidarStreamKey, PointCloudPacket
 from holosoma.simulator.shared.sensor_manager import SensorManager
 from holosoma.utils.safe_torch_import import torch

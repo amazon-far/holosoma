@@ -8,7 +8,7 @@ import pytest
 from holosoma.envs.base_task import base_task as base_task_module
 from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.envs.policy_task import PolicyTask
-from holosoma.simulator.base_simulator.hooks import HookRegistry
+from holosoma.hooks import HookRegistry
 
 pytestmark = pytest.mark.no_sim
 

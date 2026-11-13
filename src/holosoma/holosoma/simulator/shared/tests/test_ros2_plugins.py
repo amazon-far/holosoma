@@ -22,8 +22,8 @@ from holosoma.config_types.plugin import (
     PluginConfig,
     ROS2OdometryPluginConfig,
 )
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
 
 pytestmark = pytest.mark.no_sim
 

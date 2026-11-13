@@ -87,7 +87,7 @@ def _build(simulator: str, num_envs: int, plugin=None, kinematic: bool = False):
 
 
 def _frame(sim) -> None:
-    from holosoma.simulator.base_simulator.hooks import Phase
+    from holosoma.hooks import Phase
 
     control_decimation = sim.simulator_config.sim.control_decimation_steps
     for substep in range(control_decimation):

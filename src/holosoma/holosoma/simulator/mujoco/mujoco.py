@@ -17,9 +17,9 @@ from loguru import logger
 from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.sensor import CameraSensorConfig, LidarSensorConfig
 from holosoma.config_types.simulator import MujocoBackend
+from holosoma.hooks import Phase
 from holosoma.managers.terrain.manager import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.base_simulator.state import Columns
 from holosoma.simulator.mujoco import light_setup
 from holosoma.simulator.mujoco.backends import WARP_AVAILABLE, ClassicBackend, IMujocoBackend, WarpBackend

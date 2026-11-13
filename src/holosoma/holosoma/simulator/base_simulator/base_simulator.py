@@ -13,8 +13,8 @@ from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.robot import RobotConfig
 from holosoma.config_types.scene import SceneConfig
 from holosoma.config_types.simulator import SimulatorInitConfig
+from holosoma.hooks import HookHandle, HookRegistry, Phase, frame_base_rates
 from holosoma.managers.terrain import TerrainManager
-from holosoma.simulator.base_simulator.hooks import HookHandle, HookRegistry, Phase
 from holosoma.simulator.base_simulator.state import SimState, StateTensor
 from holosoma.simulator.shared.external_wrench import ExternalWrenchAccumulator, WrenchTarget
 from holosoma.simulator.shared.object_registry import ObjectRegistry, ObjectType
@@ -219,7 +219,7 @@ class BaseSimulator:
         self._external_wrench = ExternalWrenchAccumulator(self)
         self.kinematic_playback: bool = self.simulator_config.sim.kinematic_playback
         self._kinematic_time = 0.0
-        self.hooks = HookRegistry(base_rates=self._hook_base_rates())
+        self.hooks = HookRegistry(base_rates=frame_base_rates(self.simulator_config.sim))
         # Egress consumers follow this handle, so it runs ahead of them whatever order they
         # register in. No-ops until a backend registers sensors.
         self.sensor_render_hook: HookHandle = self.hooks.add(
@@ -803,21 +803,6 @@ class BaseSimulator:
         except Exception as e:
             logger.error(f"Failed to initialize bridge system: {e}")
             raise
-
-    def _hook_base_rates(self) -> dict[Phase, float]:
-        """Base tick rate (Hz) of each periodic phase, so hooks can request a rate via ``every="30Hz"``.
-
-        Per-substep phases tick at ``fps``; per-frame phases at the control rate ``fps / control_decimation``.
-        """
-        sim = self.simulator_config.sim
-        fps = float(sim.fps)
-        control_hz = fps / sim.control_decimation_steps
-        return {
-            Phase.PRE_STEP: fps,
-            Phase.POST_STEP: fps,
-            Phase.FRAME_BEGIN: control_hz,
-            Phase.FRAME_END: control_hz,
-        }
 
     def install_plugins(self) -> None:
         """Install configured plugins after the concrete backend is ready."""
