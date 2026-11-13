@@ -24,7 +24,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from holosoma.config_types.scene import PhysicsConfig, RigidObjectConfig  # noqa: E402
-from holosoma.simulator.base_simulator.hooks import Phase  # noqa: E402
+from holosoma.hooks import Phase  # noqa: E402
 from tests.simulators import _camera_presets, _lidar_presets  # noqa: E402, F401
 from tests.simulators._sim_harness import (  # noqa: E402
     build_run_sim_config,

@@ -9,12 +9,12 @@ from holosoma.config_types.env import EnvConfig
 from holosoma.config_types.full_sim import FullSimConfig
 from holosoma.config_types.randomization import RandomizationManagerCfg
 from holosoma.config_types.termination import TerminationManagerCfg
+from holosoma.hooks import Phase
 from holosoma.managers.randomization import RandomizationManager
 from holosoma.managers.reset_events.manager import ResetEventManager
 from holosoma.managers.termination import TerminationManager
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator, _warn_deprecated
-from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.session import get_local_rank, get_process_seed, resolve_simulation_device
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.common import seeding

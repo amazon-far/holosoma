@@ -84,7 +84,7 @@ def _check(sim, num_envs: int) -> tuple[list[str], list[str]]:
     """Run the checks. Returns (failures, report lines)."""
     import torch
 
-    from holosoma.simulator.base_simulator.hooks import Phase
+    from holosoma.hooks import Phase
 
     decimation = sim.simulator_config.sim.control_decimation_steps
     recorder = sim.contact_recorder

@@ -9,8 +9,7 @@ import pytest
 import torch
 
 from holosoma.config_types.video import VideoConfig
-from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-from holosoma.simulator.base_simulator.hooks import (
+from holosoma.hooks import (
     HookCloseError,
     HookOrderError,
     HookRef,
@@ -19,6 +18,7 @@ from holosoma.simulator.base_simulator.hooks import (
     Phase,
     if_present,
 )
+from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 
 pytestmark = pytest.mark.no_sim
 

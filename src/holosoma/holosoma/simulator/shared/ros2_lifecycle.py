@@ -7,7 +7,7 @@ from typing import Any, cast
 
 from loguru import logger
 
-from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.hooks import Phase
 
 _RUNTIME_ATTRIBUTE = "_holosoma_ros2_runtime"
 

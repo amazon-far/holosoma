@@ -17,7 +17,7 @@ import numpy.typing as npt
 from loguru import logger
 
 from holosoma.config_types.sensor import LidarSensorConfig
-from holosoma.simulator.base_simulator.hooks import HookDependency, Phase
+from holosoma.hooks import HookDependency, Phase
 
 if TYPE_CHECKING:
     from holosoma.config_types.plugin import PluginConfig

@@ -29,7 +29,7 @@ from holosoma.config_types.plugin import (
 from holosoma.config_types.sensor import CameraSensorConfig, LidarSensorConfig, SensorConfig, SensorMountConfig
 from holosoma.config_values.plugin import PLUGIN_REGISTRY
 from holosoma.config_values.wbt.g1 import sensor as g1_cameras
-from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
+from holosoma.hooks import HookRegistry, Phase
 from holosoma.simulator.plugins.camera_consumer import CameraIntrinsics, FramePacket
 
 pytestmark = pytest.mark.no_sim

@@ -15,6 +15,8 @@ from holosoma.config_types.frequency import DecimationLike, is_frequency_string,
 if TYPE_CHECKING:
     import torch
 
+    from holosoma.config_types.simulator import SimEngineConfig
+
 HookDependency = Union["HookHandle", "HookRef", "_OptionalTarget"]
 """What ``after``/``before`` accept: a :class:`HookHandle`, a :class:`HookRef`, or :func:`if_present`
 of either."""
@@ -95,6 +97,22 @@ EpisodeCallback = Callable[["torch.Tensor"], Any]
 """Callback for an episode phase (``EPISODE_START``/``EPISODE_END``); receives the batch's ``env_ids``."""
 CloseCallback = Callable[[], Any]
 """Callback for ``CLOSE`` (zero payload, fires once at teardown)."""
+
+
+def frame_base_rates(sim_config: SimEngineConfig) -> dict[Phase, float]:
+    """Base tick rate (Hz) of each periodic phase, so hooks can request a rate via ``every="30Hz"``.
+
+    Per-substep phases tick at the physics rate ``sim_config.fps``; per-frame phases at the control
+    rate ``fps / control_decimation_steps``.
+    """
+    fps = float(sim_config.fps)
+    control_hz = fps / sim_config.control_decimation_steps
+    return {
+        Phase.PRE_STEP: fps,
+        Phase.POST_STEP: fps,
+        Phase.FRAME_BEGIN: control_hz,
+        Phase.FRAME_END: control_hz,
+    }
 
 
 class HookRegistryError(RuntimeError):
