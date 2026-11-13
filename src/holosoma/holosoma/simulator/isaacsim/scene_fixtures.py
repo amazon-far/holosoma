@@ -13,14 +13,13 @@ from typing import TYPE_CHECKING, Any, NamedTuple, cast
 import isaaclab.sim as sim_utils
 import numpy as np
 import isaacsim.core.utils.stage as stage_utils
-import warp as wp
 from isaaclab.sensors import RayCaster, RayCasterCfg, patterns
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.terrains.utils import create_prim_from_mesh
 from pxr import Usd, UsdGeom
 
 from holosoma.simulator.isaacsim.prim_utils import resolve_robot_link_prim_expression
-from holosoma.simulator.isaacsim.raycast_targets import TERRAIN_PRIM_PATH, register_managed_terrain_mesh
+from holosoma.simulator.isaacsim.raycast_targets import TERRAIN_PRIM_PATH
 from holosoma.utils.warp_utils import convert_to_wp_mesh
 
 if TYPE_CHECKING:
@@ -155,7 +154,6 @@ def register_terrain_mesh_cache(terrain_manager: TerrainManager, scene: Interact
     ``RayCaster.meshes``, and before they initialize.
     """
     terrain_state = terrain_manager.get_state("locomotion_terrain")
-    device = wp.get_device(scene.device)
     if terrain_state.mesh_type in ["trimesh", "load_obj"]:
         mesh = cast("TerrainLocomotion", terrain_state).warp_mesh
     elif terrain_state.mesh_type == "plane":
@@ -164,4 +162,4 @@ def register_terrain_mesh_cache(terrain_manager: TerrainManager, scene: Interact
         mesh = convert_to_wp_mesh(vertices, np.array([[0, 1, 2], [0, 2, 3]]), scene.device)
     else:
         return
-    register_managed_terrain_mesh(RayCaster.meshes, mesh, device)
+    RayCaster.meshes[TERRAIN_PRIM_PATH] = mesh

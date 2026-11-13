@@ -1,12 +1,11 @@
 """Isaac-SDK-free ray-cast target helpers for Isaac Sim sensors.
 
-Default target-list assembly, batched robot mesh poses, and registering the terrain's ray-cast
-mesh with IsaacLab's ray-caster cache.
+Default target-list assembly and batched robot mesh poses.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, MutableMapping
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -15,12 +14,9 @@ import torch
 from holosoma.utils.rotations import quat_apply, quat_mul
 
 if TYPE_CHECKING:
-    import warp as wp
-
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 
 TERRAIN_PRIM_PATH = "/World/ground"
-TERRAIN_MESH_PRIM_PATH = f"{TERRAIN_PRIM_PATH}/mesh"
 
 
 def _is_path_at_or_below(path: str, root: str) -> bool:
@@ -81,19 +77,3 @@ class RobotMeshPoses:
         )
         orientations = quat_mul(body_orientations, self.orientation_offsets, w_last=True)
         mesh_orientations_wxyz[:, self.mesh_slots] = orientations[..., [3, 0, 1, 2]]
-
-
-def register_managed_terrain_mesh(cache: MutableMapping[str, wp.Mesh], mesh: wp.Mesh, device: wp.Device) -> None:
-    """Register a world-frame terrain mesh, authored at identity pose, as the ground's ray-cast mesh.
-
-    Ray sensors look up the ground root; the trimesh terrain's mesh leaf maps to the same mesh.
-    """
-    if mesh.device != device:
-        raise ValueError(f"Managed terrain Warp mesh is on {mesh.device}, but the IsaacLab scene is on {device}.")
-
-    paths = (TERRAIN_PRIM_PATH, TERRAIN_MESH_PRIM_PATH)
-    for path in paths:
-        if path in cache and cache[path] is not mesh:
-            raise RuntimeError(f"IsaacLab raycaster cache already contains a different Warp mesh at {path!r}.")
-    for path in paths:
-        cache[path] = mesh
