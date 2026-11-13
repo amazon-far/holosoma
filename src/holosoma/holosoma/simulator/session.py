@@ -23,6 +23,7 @@ from holosoma.utils.simulator_config import SimulatorType, get_simulator_type
 
 if TYPE_CHECKING:
     from holosoma.envs.base_task.base_task import BaseTask
+    from holosoma.simulator.base_simulator.state import BufferAllocator
 
 _TaskT = TypeVar("_TaskT", bound="BaseTask")
 
@@ -68,7 +69,13 @@ def resolve_simulation_device(config: EnvConfig, local_rank: int | None = None) 
 
 
 @contextmanager
-def task_session(config: EnvConfig, required_class: type[_TaskT]) -> Iterator[_TaskT]:
+def task_session(
+    config: EnvConfig,
+    required_class: type[_TaskT],
+    *,
+    buffer_allocator: BufferAllocator | None = None,
+    env_origins: torch.Tensor | None = None,
+) -> Iterator[_TaskT]:
     """Own signal handling, provider launch, task construction, and teardown.
 
     Parameters
@@ -101,7 +108,11 @@ def task_session(config: EnvConfig, required_class: type[_TaskT]) -> Iterator[_T
                 raise TypeError(f"env_class {config.env_class!r} is not a {required_class.__name__} subclass.")
             logger.info(f"Creating task: {config.env_class}")
             # Pinned so the task allocates on the device the provider launched on.
-            task = task_class(dataclasses.replace(config, device=device))
+            configured = dataclasses.replace(config, device=device)
+            if buffer_allocator is None and env_origins is None:
+                task = task_class(configured)
+            else:
+                task = task_class(configured, buffer_allocator=buffer_allocator, env_origins=env_origins)
             yield task
         except BaseException:
             try:

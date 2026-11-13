@@ -47,6 +47,16 @@ class _PerformanceLog:
         )
 
 
+def simulation_env_origins(task: BaseTask) -> torch.Tensor:
+    """Place a single environment at the world origin, so its poses are world coordinates.
+
+    Several environments keep the terrain's origins so they do not overlap.
+    """
+    if task.num_envs == 1:
+        return torch.zeros(1, 3, device=task.device)
+    return BaseTask._get_env_origins(task)
+
+
 class SimulationTask(BaseTask):
     """BaseTask specialization that advances the simulation until the simulator requests shutdown.
 
@@ -74,13 +84,7 @@ class SimulationTask(BaseTask):
         return self._empty_reset_env_ids
 
     def _get_env_origins(self) -> torch.Tensor:
-        """Place a single environment at the world origin, so its poses are world coordinates.
-
-        Several environments keep the terrain's origins so they do not overlap.
-        """
-        if self.num_envs == 1:
-            return torch.zeros(1, 3, device=self.device)
-        return super()._get_env_origins()
+        return simulation_env_origins(self)
 
     def run(self) -> None:
         """Start episodes and advance control frames until the simulator requests shutdown."""

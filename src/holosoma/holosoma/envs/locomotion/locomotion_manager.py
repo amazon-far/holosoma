@@ -80,7 +80,7 @@ class LeggedRobotLocomotionManager(PolicyTask):
         if target_states is not None:
             # Target root positions are relative to each environment's origin.
             root_states = target_states["root_states"].clone()
-            root_states[:, :3] += self._get_env_origins()[env_ids]
+            root_states[:, :3] += self._placed_env_origins()[env_ids]
             super()._reset_robot_states_callback(
                 env_ids, {"root_states": root_states, "dof_states": target_states["dof_states"]}
             )

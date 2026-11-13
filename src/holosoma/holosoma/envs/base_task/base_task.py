@@ -15,6 +15,7 @@ from holosoma.managers.termination import TerminationManager
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator, _warn_deprecated
 from holosoma.simulator.base_simulator.hooks import Phase
+from holosoma.simulator.base_simulator.state import BufferAllocator
 from holosoma.simulator.session import get_local_rank, get_process_seed, resolve_simulation_device
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.common import seeding
@@ -27,8 +28,16 @@ from holosoma.utils.torch_utils import to_torch
 
 # Base class for manager-based simulation tasks.
 class BaseTask:
-    def __init__(self, tyro_config: EnvConfig) -> None:
+    def __init__(
+        self,
+        tyro_config: EnvConfig,
+        *,
+        buffer_allocator: BufferAllocator | None = None,
+        env_origins: torch.Tensor | None = None,
+    ) -> None:
         self._closed = False
+        self._startup_buffer_allocator = buffer_allocator
+        self._startup_env_origins = env_origins
         try:
             self._initialize_base_task(tyro_config)
         except BaseException:
@@ -122,6 +131,8 @@ class BaseTask:
         self.simulator: BaseSimulator = SimulatorClass(
             tyro_config=full_sim_config, terrain_manager=self.terrain_manager, device=self.device
         )
+        if self._startup_buffer_allocator is not None:
+            self.simulator.state.set_buffer_allocator(self._startup_buffer_allocator)
         self.hooks = self.simulator.hooks
 
         self.headless = training_config.headless
@@ -306,7 +317,15 @@ class BaseTask:
 
     def _create_envs(self) -> None:
         """Create the environments at their origins with the robot's base initial state."""
-        self.simulator.create_envs(self.num_envs, self._get_env_origins(), self.base_init_state)  # type: ignore[call-arg]
+        origins = self._placed_env_origins()
+        device = torch.device(self.device)
+        if device.type == "cuda" and device.index is None:
+            device = torch.device("cuda", torch.cuda.current_device())
+        if origins.shape != (self.num_envs, 3) or origins.dtype != torch.float32 or origins.device != device:
+            raise ValueError("Environment origins must be float32 [num_envs, 3] on the task device")
+        self.simulator.create_envs(self.num_envs, origins, self.base_init_state)  # type: ignore[call-arg]
+        if self._startup_env_origins is not None and not torch.equal(self.simulator.env_origins, origins):
+            raise ValueError("The backend did not honor the requested environment origins")
 
     def _setup_robot_body_indices(self) -> None:
         """Cache body indices; specializations extend it with their own."""
@@ -351,6 +370,12 @@ class BaseTask:
             raise RuntimeError("Terrain manager state 'locomotion_terrain' must provide env_origins.")
         return terrain_state.env_origins
 
+    def _placed_env_origins(self) -> torch.Tensor:
+        """Return the origins environments are placed and reset at: the passed ones, else ``_get_env_origins()``."""
+        if self._startup_env_origins is not None:
+            return self._startup_env_origins
+        return self._get_env_origins()
+
     # ------------------------------------------------------------------
     # Reset hooks
 
@@ -378,7 +403,7 @@ class BaseTask:
             self.simulator.dof_vel[env_ids] = target_states["dof_states"][..., 1]
             return
         self.simulator.robot_root_states[env_ids] = self.base_init_state
-        self.simulator.robot_root_states[env_ids, :3] += self._get_env_origins()[env_ids]
+        self.simulator.robot_root_states[env_ids, :3] += self._placed_env_origins()[env_ids]
         self.simulator.dof_pos[env_ids] = self.default_dof_pos[env_ids]
         self.simulator.dof_vel[env_ids] = 0.0
 

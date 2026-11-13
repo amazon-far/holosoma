@@ -182,6 +182,8 @@ class BaseSimulator:
 
     debug_viz_enabled: bool = False
 
+    env_origins: torch.Tensor
+
     # Robot per-body kinematics, [num_envs, num_bodies, k] in holosoma body order, _rigid_body_rot xyzw.
     # Read via the rigid_body_*_w properties below.
     _rigid_body_pos = StateTensor("Robot per-body world positions.")

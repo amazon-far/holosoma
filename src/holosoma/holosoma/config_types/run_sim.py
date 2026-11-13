@@ -37,7 +37,10 @@ from holosoma.config_types.video import VideoConfig
 from holosoma.utils.config_registry import UseRegistry
 
 if TYPE_CHECKING:
+    import torch
+
     from holosoma.envs.simulation_task import SimulationTask
+    from holosoma.simulator.base_simulator.state import BufferAllocator
 
 _VIEWER_DT_REMOVAL_DATE = datetime.date(2027, 3, 1)
 
@@ -148,10 +151,20 @@ class RunSimConfig:
             object.__setattr__(self, "viewer_dt", None)
         validate_decimation_like(self.viewer_update_decimation, field="RunSimConfig.viewer_update_decimation")
 
-    def create_task(self) -> AbstractContextManager[SimulationTask]:
+    def create_task(
+        self,
+        *,
+        buffer_allocator: BufferAllocator | None = None,
+        env_origins: torch.Tensor | None = None,
+    ) -> AbstractContextManager[SimulationTask]:
         """Return a context that builds the configured simulation task and owns its resources."""
         from holosoma.config_types.env import get_run_sim_env_config
         from holosoma.envs.simulation_task import SimulationTask
         from holosoma.simulator.session import task_session
 
-        return task_session(get_run_sim_env_config(self), SimulationTask)
+        return task_session(
+            get_run_sim_env_config(self),
+            SimulationTask,
+            buffer_allocator=buffer_allocator,
+            env_origins=env_origins,
+        )
