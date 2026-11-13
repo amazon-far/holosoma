@@ -33,6 +33,32 @@ def snapshot_native_physics(sim):
     )
 
 
+def assert_newton_fixed_objects(sim, names):
+    """Require actual world-fixed topology, including native zero-velocity state."""
+    import numpy as np
+    from newton import JointType
+
+    model = sim.sim.physics_manager.get_model()
+    state = sim.sim.physics_manager.get_state_0()
+    parent, child = model.joint_parent.numpy(), model.joint_child.numpy()
+    dimensions = model.joint_dof_dim.numpy()
+    types = model.joint_type.numpy()
+    starts = model.joint_qd_start.numpy()
+    velocities = state.body_qd.numpy()
+    for name in names:
+        asset = sim.scene.rigid_objects[name]
+        assert asset.is_world_fixed, f"{name} still uses the SDK's free-joint kinematic workaround"
+        assert asset.cfg.class_type is type(asset), f"{name} config cannot recreate its fixed asset handle"
+        for body in asset.body_ids.cpu().tolist():
+            joints = np.flatnonzero(child == body)
+            assert len(joints) == 1, (name, joints)
+            joint = joints[0]
+            assert parent[joint] == -1 and types[joint] == JointType.FIXED, (name, joint)
+            assert dimensions[joint].sum() == 0 and starts[joint] == starts[joint + 1], name
+            assert np.array_equal(velocities[body], np.zeros(6)), (name, velocities[body])
+        print(f"FIXED {name}: {asset.num_instances} world-attached bodies, zero dynamic DOFs, no locking armature")
+
+
 def assert_native_runtime(*, physics: str, uses_kit: bool) -> NativeRuntimeDependencies:
     from isaaclab.utils.version import has_kit
 

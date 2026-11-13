@@ -75,11 +75,11 @@ def test_body_writes_pass_partial_rows_without_physx_keywords(
     torch.testing.assert_close(values, original, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("kind", ["articulation", "rigid_object"])
+@pytest.mark.parametrize("kind", ["articulation", "rigid_object", "fixed_object"])
 def test_materials_expose_two_real_channels_and_write_only_selected_rows(
     monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
-    """Interleaved scene shapes stay unchanged for articulation and rigid-object views."""
+    """Selected material writes preserve interleaved shapes owned by other actors."""
     friction = wp.array(
         [1.0, 101.0, 2.0, 3.0, 4.0, 102.0, 5.0, 6.0, 7.0, 103.0, 8.0, 9.0, 10.0, 104.0, 11.0, 12.0],
         dtype=wp.float32,
@@ -127,7 +127,15 @@ def test_materials_expose_two_real_channels_and_write_only_selected_rows(
         link_names=body_names,
         shape_count=3,
     )
-    asset = SimpleNamespace(root_view=view, num_instances=4)
+    asset = (
+        SimpleNamespace(
+            is_world_fixed=True,
+            shape_ids=torch.tensor([[4 * row, 4 * row + 2, 4 * row + 3] for row in range(4)]),
+            num_instances=4,
+        )
+        if kind == "fixed_object"
+        else SimpleNamespace(root_view=view, num_instances=4)
+    )
     full_values = newton_properties.read_materials(asset)
     expected_read = torch.tensor(
         [

@@ -110,11 +110,15 @@ def step(sim: Any, n: int, *, render: bool = False) -> None:
             sim.render()
 
 
-def launch_simulator(config: RunSimConfig, device: str | None = None) -> tuple[Any, str, Any]:
+def launch_simulator(
+    config: RunSimConfig, device: str | None = None, *, before_construct: Callable[[], None] | None = None
+) -> tuple[Any, str, Any]:
     """Construct the configured simulator without running its setup lifecycle.
 
     Harnesses drive ``setup -> setup_terrain -> load_assets -> create_envs -> prepare_sim``
     themselves so they can act between stages; tasks use ``RunSimConfig.create_task()`` instead.
+    ``before_construct`` can author test assets after runtime/USD activation,
+    before the simulator constructor spawns its scene.
 
     Returns
     -------
@@ -136,6 +140,8 @@ def launch_simulator(config: RunSimConfig, device: str | None = None) -> tuple[A
     simulation_app = None
     if get_simulator_type() == SimulatorType.ISAACSIM:
         simulation_app = setup_isaaclab_launcher(env_config, device)
+    if before_construct is not None:
+        before_construct()
 
     full_config = FullSimConfig(
         simulator=config.simulator.config,

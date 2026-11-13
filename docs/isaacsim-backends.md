@@ -126,14 +126,50 @@ larger arenas and shared GPU streams did not reliably fix them. Their object
 outcome assertions remain unchanged, and PhysX retains the G1 fixture.
 These controls do not establish stability of unactuated G1 collapse in Newton.
 
-The pinned Newton stack also fails to initialize the tested free and static
-URDF rigid objects: its object view searches for the body path while the model
-labels the articulation with the enclosing asset path. Those two tests still
-execute and expect only that specific SDK initialization error; other failures
-remain failures. Use USD for Newton rigid objects with this SDK pin; USD
-free/static objects and URDF robot articulations are tested normally.
-Converter/config controls did not fix this binding mismatch;
-the tests do not establish whether its origin is native behavior or integration.
+For Newton, `fixed=True` attaches a single compound body to world with a
+native `FixedJoint`. It has zero dynamic DOFs: no free joint, locking armature,
+large mass or stiff constraint. MuJoCo represents the pose-settable fixed root
+as a mocap body. This permits explicit fixture relocation without integrating
+fixture motion. Authored kinematic scene bodies retain the SDK's separate
+pose-driven free-joint representation unless an explicit `fixed=True` overrides
+them. PhysX's existing representation remains unchanged.
+
+Isaac Lab's Newton `RigidObject` requires an articulation view, which cannot
+bind a standalone zero-DOF body. Holosoma's fixed actor extends the public
+`AssetBase` lifecycle and accesses public Newton model/state arrays instead.
+It binds bodies after cloning and rebinds on hard reset; selected pose writes
+update the world attachment, both state buffers and the SDK's public dirty-state
+notifications. Physics and renderers therefore observe the same placement.
+Source assets are unchanged. Disabled rigid bodies, world-attached bodies and
+collider-only scene geometry also load as fixed actors; genuine kinematic
+authoring remains separate.
+
+The pinned Newton stack still fails to initialize the tested **dynamic** URDF
+rigid object: its object view searches for the body path while the model labels
+the articulation with the enclosing asset path. That test executes and expects
+only the specific SDK initialization error; other failures remain failures.
+Fixed URDF objects use the zero-DOF actor path and are tested normally, as are
+USD free/fixed objects and URDF robot articulations.
+
+The fixed-fixture regression checks native zero-DOF topology, massless fixtures,
+disabled/world-attached scene bodies, genuine kinematic support, robot and prop
+contacts, selected relocation, rendered orientation, retained images, SDK scene
+state restoration and hard-reset rebinding. The optional UCA1 regression reuses
+`/session/resolved-config.json` and its external assets; it skips explicitly when
+that dataset is unavailable. It checks the full fixture layout, supported props
+and the rendered tabletop before removal and after partial restoration.
+Depth must reflect fixture relocation on the first capture. The rotated-panel
+test allows two further captures for the default temporal RGB reconstruction
+to converge, then checks the projected silhouette. This does not promise a
+pixel-perfect RGB silhouette immediately after an abrupt pose change.
+
+Detailed UCA1 prop meshes still exhibit contact jitter with true fixed bodies.
+Standalone Newton USD imports reproduce it with both CPU MuJoCo and MJWarp;
+ordinary MuJoCo XML controls are calmer. This does not isolate whether imported
+collision geometry/properties or solver settings cause the remaining difference.
+The apartment regression requires strict settling for the trays/toys and bounded
+support for the detailed meshes, recording their residual velocities. It does
+not establish that every detailed prop becomes completely stationary.
 
 Active Newton + Isaac RTX and Newton + OVRTX tests reuse the geometry, moving
 mount, task frame-end and movie harnesses. The six physics/renderer pairings also
@@ -143,3 +179,5 @@ buffers survive subsequent captures and teardown, sparse camera resets preserve
 other tiles, and captures leave native dynamics and physics time unchanged.
 The tested decimations are `1/5`, `2/3`, `1/5/2`, uniform `3/3` and single `3`.
 These tests do not cover segmentation, GUI interaction or distributed execution.
+Fixture/cadence lifecycle checks use SDK stop/clear before the shared harness's
+hard exit; they do not validate natural interpreter shutdown.
