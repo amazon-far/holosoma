@@ -254,6 +254,9 @@ def _check_default_selection(sim):
         for e in range(_NUM_ENVS)
         if float(torch.isfinite(depth[e]).float().mean()) < 0.2
     )
+    # The G1 preset's explicit paths must each resolve against the imported robot.
+    if not bool(torch.isfinite(sim.get_camera_data("g1_preset", "depth")).any()):
+        fails.append("the G1 D435i preset rendered no depth")
     return fails
 
 
@@ -272,7 +275,6 @@ def main() -> int:
     if args.check in ("scene", "dynamic-scene"):
         from holosoma.config_types.sensor import (
             IsaacSimCameraConfig,
-            IsaacSimRaycastMeshConfig,
             LidarBodyFilterConfig,
             LidarSensorConfig,
         )
@@ -284,21 +286,12 @@ def main() -> int:
             "raycast": dataclasses.replace(
                 camera,
                 isaacsim=IsaacSimCameraConfig(
-                    renderer="raycast",
-                    raycast_meshes=IsaacSimRaycastMeshConfig(
-                        include_paths=["/World"],
-                        exclude_paths=["/World/envs/env_.*/Robot"],
-                    ),
+                    renderer="raycast", body_filter=LidarBodyFilterConfig(target_kind="robot")
                 ),
             ),
             "without_target": dataclasses.replace(
                 camera,
-                isaacsim=IsaacSimCameraConfig(
-                    renderer="raycast",
-                    raycast_meshes=IsaacSimRaycastMeshConfig(
-                        exclude_paths=["/World/envs/env_.*/Robot", "/World/envs/env_.*/target"]
-                    ),
-                ),
+                isaacsim=IsaacSimCameraConfig(renderer="raycast", mesh_prim_paths=["/World/ground"]),
             ),
             "scan": LidarSensorConfig(
                 mount=camera.mount,
@@ -308,9 +301,11 @@ def main() -> int:
 
     if args.check == "default-selection":
         from holosoma.config_types.sensor import IsaacSimCameraConfig
+        from holosoma.config_values.sensor import SENSOR_REGISTRY
 
         sensors = {
-            "raycast": dataclasses.replace(sensors["raycast"], isaacsim=IsaacSimCameraConfig(renderer="raycast"))
+            "raycast": dataclasses.replace(sensors["raycast"], isaacsim=IsaacSimCameraConfig(renderer="raycast")),
+            "g1_preset": SENSOR_REGISTRY["g1-head-d435i-raycast-depth"],
         }
 
     config = build_run_sim_config("isaacsim", scene_name, "g1-29dof", "terrain_locomotion_plane", sensors=sensors)

@@ -17,7 +17,6 @@ from __future__ import annotations
 from holosoma.config_types.sensor import (
     CameraSensorConfig,
     IsaacSimCameraConfig,
-    IsaacSimRaycastMeshConfig,
     SensorMountConfig,
 )
 
@@ -140,36 +139,34 @@ g1_head_d435i_raycast_depth = CameraSensorConfig(
     data_types=["depth"],
     isaacsim=IsaacSimCameraConfig(
         renderer="raycast",
-        raycast_meshes=IsaacSimRaycastMeshConfig(
-            # Terrain plus the 30 leg, waist and arm visuals that can occlude the camera; colliders,
-            # the torso housing, rubber hands and scene objects stay out. Paths are the G1 URDF
-            # import's named visual roots (fixed-joint merging puts the pelvis contour under pelvis).
-            include_paths=[
-                "/World/ground",
-                f"{_G1_ROBOT_PRIM}/pelvis/visuals/pelvis",
-                f"{_G1_ROBOT_PRIM}/pelvis/visuals/pelvis_contour_link",
-                *[
-                    f"{_G1_ROBOT_PRIM}/{side}_{link}/visuals/{side}_{link}"
-                    for side in ("left", "right")
-                    for link in (
-                        "hip_pitch_link",
-                        "hip_roll_link",
-                        "hip_yaw_link",
-                        "knee_link",
-                        "ankle_pitch_link",
-                        "ankle_roll_link",
-                        "shoulder_pitch_link",
-                        "shoulder_roll_link",
-                        "shoulder_yaw_link",
-                        "elbow_link",
-                        "wrist_roll_link",
-                        "wrist_pitch_link",
-                        "wrist_yaw_link",
-                    )
-                ],
-                f"{_G1_ROBOT_PRIM}/waist_yaw_link/visuals/waist_yaw_link_rev_1_0",
-                f"{_G1_ROBOT_PRIM}/waist_roll_link/visuals/waist_roll_link_rev_1_0",
+        # Terrain plus the 30 leg, waist and arm visuals that can occlude the camera; colliders,
+        # the torso housing, rubber hands and scene objects stay out. Paths are the G1 URDF
+        # import's named visual roots (fixed-joint merging puts the pelvis contour under pelvis).
+        mesh_prim_paths=[
+            "/World/ground",
+            f"{_G1_ROBOT_PRIM}/pelvis/visuals/pelvis",
+            f"{_G1_ROBOT_PRIM}/pelvis/visuals/pelvis_contour_link",
+            *[
+                f"{_G1_ROBOT_PRIM}/{side}_{link}/visuals/{side}_{link}"
+                for side in ("left", "right")
+                for link in (
+                    "hip_pitch_link",
+                    "hip_roll_link",
+                    "hip_yaw_link",
+                    "knee_link",
+                    "ankle_pitch_link",
+                    "ankle_roll_link",
+                    "shoulder_pitch_link",
+                    "shoulder_roll_link",
+                    "shoulder_yaw_link",
+                    "elbow_link",
+                    "wrist_roll_link",
+                    "wrist_pitch_link",
+                    "wrist_yaw_link",
+                )
             ],
-        ),
+            f"{_G1_ROBOT_PRIM}/waist_yaw_link/visuals/waist_yaw_link_rev_1_0",
+            f"{_G1_ROBOT_PRIM}/waist_roll_link/visuals/waist_roll_link_rev_1_0",
+        ],
     ),
 )

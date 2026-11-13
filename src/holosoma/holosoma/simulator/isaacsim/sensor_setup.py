@@ -42,7 +42,6 @@ from holosoma.simulator.isaacsim.raycast_targets import (
     RobotMeshPoses,
     _is_path_at_or_below,
     assemble_default_mesh_prim_paths,
-    select_mesh_prim_paths,
 )
 from holosoma.simulator.isaacsim.prim_utils import (
     get_current_stage,
@@ -514,9 +513,7 @@ def _is_visual_raycast_prim(prim: Any) -> bool:
     imageable = UsdGeom.Imageable(prim)
     if not imageable:
         return False
-    # A hidden ground (terrain ``hide_visual``) still collides, so ray sensors keep hitting it.
-    hidden = imageable.ComputeVisibility() == UsdGeom.Tokens.invisible
-    if hidden and not _is_path_at_or_below(str(prim.GetPath()), TERRAIN_PRIM_PATH):
+    if imageable.ComputeVisibility() == UsdGeom.Tokens.invisible:
         return False
 
     return imageable.ComputePurpose() in (UsdGeom.Tokens.default_, UsdGeom.Tokens.render)
@@ -603,21 +600,11 @@ def _default_mesh_prim_paths(sim: IsaacSim, body_filter: LidarBodyFilterConfig, 
 
 
 def _camera_mesh_prim_paths(sim: IsaacSim, camera: CameraSensorConfig) -> list[str]:
-    """Query the loaded Holosoma scene, then apply the camera's object/mesh path rules.
-
-    ``isaacsim.body_filter`` applies to the default selection only; explicit includes bypass it.
-    """
+    """Return the camera's explicit mesh paths, or discover them as for LiDAR."""
     isaacsim = camera.isaacsim
-    no_filter = LidarBodyFilterConfig(target_kind="none")
-    body_filter = isaacsim.body_filter if isaacsim.raycast_meshes.include_paths is None else no_filter
-    paths = _default_mesh_prim_paths(sim, body_filter, camera.mount)
-    return select_mesh_prim_paths(
-        paths,
-        camera.isaacsim.raycast_meshes,
-        resolve_matching_paths=lambda expression: (
-            str(prim.GetPath()) for prim in sim_utils.find_matching_prims(expression)
-        ),
-    )
+    if isaacsim.mesh_prim_paths is not None:
+        return list(isaacsim.mesh_prim_paths)
+    return _default_mesh_prim_paths(sim, isaacsim.body_filter, camera.mount)
 
 
 def build_lidars(sim: IsaacSim) -> None:

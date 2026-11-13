@@ -6,71 +6,55 @@ images, pinhole projection, and mounts on a robot link listed in the robot
 config's `body_names`. Scene objects contribute
 depth along with the ground and robot.
 
-Select geometry with `raycast_meshes`:
+Geometry selection uses the same two fields as Isaac Sim LiDAR:
 
 ```python
 IsaacSimCameraConfig(
     renderer="raycast",
-    raycast_meshes=IsaacSimRaycastMeshConfig(
-        include_paths=["/World/ground", "/World/envs/env_.*/Robot", "/World/envs/env_.*/obstacle"],
-        exclude_paths=["/World/envs/env_.*/Robot/torso_link"],
-    ),
+    body_filter=LidarBodyFilterConfig(target_kind="robot"),  # default: the mount body
+)
+IsaacSimCameraConfig(
+    renderer="raycast",
+    mesh_prim_paths=["/World/ground", "/World/envs/env_.*/obstacle"],
 )
 ```
 
-Rules use the same absolute USD prim-path expressions as Isaac Sim LiDAR,
-resolved by IsaacLab's native matcher. Each path component is matched separately;
-`.*` matches one component, and expressions cannot span multiple components.
-Matching an object
-includes its descendant meshes; matching a mesh selects that mesh. Exclusions
-take precedence over inclusions. Environment paths must use `/World/envs/env_.*`:
-selection applies to every environment and resolves against the representative
-`env_0` scene during initialization. Omit `include_paths` to include all eligible
-ground, robot, and registered scene-actor geometry, minus `isaacsim.body_filter`: the
-same `LidarBodyFilterConfig` LiDAR uses, defaulting to the mount body, which usually
-encloses the camera. As for LiDAR's explicit paths, explicit includes bypass it. Every explicit include must match eligible geometry,
-and the final selection must contain at least one mesh. Exclusions may match
-nothing, allowing optional objects to be omitted across different scenes; each
-unmatched exclusion is logged as a warning.
+With `mesh_prim_paths=None`, discovery selects the ground, every registered
+scene object and the robot, minus `body_filter`. The default filter leaves out
+the mount body, which usually encloses the camera. Discovery follows the same
+optical-surface rules as LiDAR: geometry must be supported by IsaacLab and
+visible, with USD purpose `default` or `render`. Neither a `collisions` path
+name nor CollisionAPI excludes geometry, and shader opacity is not interpreted.
 
-Discovery follows the same optical-surface rules as Holosoma's LiDAR: geometry
-must be supported by IsaacLab and visible, with USD purpose `default` or
-`render`. Inherited invisibility and `proxy`/`guide` purpose remove geometry,
-even with an explicit include; the ground is the exception to invisibility, since a
-terrain with `hide_visual` still collides. Neither a `collisions` path name nor CollisionAPI
-automatically excludes geometry. A whole-link include therefore also selects
-eligible colliders; use a named visual subtree to restrict the optical surface.
-Shader opacity is not interpreted; hide or exclude helper surfaces explicitly.
+An explicit `mesh_prim_paths` list is passed to IsaacLab's `MultiMeshRayCaster`
+unchanged and bypasses discovery and `body_filter`, exactly as for LiDAR. Each
+target is merged into one mesh per environment, including every supported
+descendant regardless of visibility or purpose, so list named visual subtrees
+rather than whole links when colliders sit beside them.
 
-The G1 D435i preset explicitly includes terrain and the 30 named leg, waist and
-arm visual meshes that can occlude the head camera. Both pelvis meshes, the waist meshes, and all
-listed arm and leg meshes remain included. Collision subtrees, torso/head
-housing, rubber hands, contact points, helper boxes and scene actors remain
-outside this allowlist. These paths use the G1 URDF import's canonical named
-visual roots, including the pelvis contour merged into the pelvis body.
-Override `include_paths` for a different USD hierarchy or additional scene
-objects. Every include must resolve; there is no fallback to a broader inventory.
-An explicit include list omits other geometry without an exclude-all rule:
-exclusions win and would remove the included geometry too.
+The G1 D435i preset lists terrain and the 30 named leg, waist and arm visual
+meshes that can occlude the head camera. Collision subtrees, the torso and
+head housing, rubber hands, contact points and scene objects stay out. These
+paths use the G1 URDF import's named visual roots, including the pelvis
+contour merged into the pelvis body; override `mesh_prim_paths` for a
+different USD hierarchy or additional scene objects.
+
+`/World/ground` is the terrain's ray-cast mesh for every terrain type, shared
+by depth cameras, LiDAR and the height scanner through IsaacLab's mesh cache.
+Managed `trimesh` and `load_obj` terrain registers the terrain manager's
+existing Warp mesh, sharing its buffers and BVH. Plane terrain registers a flat
+square 4 km across, centred on the world origin: IsaacLab's own plane is
+2,000 km across, too large for float32 ray hits to stay sub-millimetre. The
+physics collider remains IsaacLab's infinite plane, and a terrain with
+`hide_visual` is still hit by ray sensors.
 
 Native mesh views are registered with `InteractiveScene` before environment
 cloning. When physics starts, they query the completed scene and use
 IsaacLab's `MultiMeshRayCaster` extraction, mesh cache, and transform views.
 Exact mesh paths keep independently moving bodies separate and let cameras
 and LiDAR reuse the same cached Warp meshes. Shared-mesh mode references the
-geometry cloned from `env_0` across environments. USD geometry carries its
-authored scale and local transforms; the sensor has no STL/OBJ file inventory.
-
-For managed `trimesh` and `load_obj` terrain, after native sensors have been
-constructed and before cloning or physics initialization, Holosoma registers the
-terrain manager's existing Warp mesh under both `/World/ground` and
-`/World/ground/mesh`. Terrain queries, the native height scanner, LiDAR, and
-depth share that mesh's vertex/index buffers and BVH. Ground still passes
-through path selection. Flat planes retain
-native conversion because the loaded plane differs from the terrain
-manager's finite grid. Holosoma spawns that plane's visual mesh 4 km across
-(IsaacLab's default is 2,000 km), so float32 ray hits on it stay sub-millimetre;
-its physics collider is a separate infinite plane.
+geometry cloned from `env_0` across environments. USD geometry carries its authored
+scale and local transforms; the sensor has no STL/OBJ file inventory.
 
 `prepare_sim()` initializes each depth renderer once body indices and scene
 sensors are ready; the renderer prepares its mesh provider's views then. Robot

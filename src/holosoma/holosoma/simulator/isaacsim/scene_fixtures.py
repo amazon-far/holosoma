@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import isaaclab.sim as sim_utils
+import numpy as np
 import isaacsim.core.utils.stage as stage_utils
 import warp as wp
 from isaaclab.sensors import RayCaster, RayCasterCfg, patterns
@@ -20,6 +21,7 @@ from pxr import Usd, UsdGeom
 
 from holosoma.simulator.isaacsim.prim_utils import resolve_robot_link_prim_expression
 from holosoma.simulator.isaacsim.raycast_targets import TERRAIN_PRIM_PATH, register_managed_terrain_mesh
+from holosoma.utils.warp_utils import convert_to_wp_mesh
 
 if TYPE_CHECKING:
     from isaaclab.scene import InteractiveScene
@@ -28,7 +30,8 @@ if TYPE_CHECKING:
     from holosoma.managers.terrain.terms.locomotion import TerrainLocomotion
 
 GROUND_PLANE_SIZE_M = 4.0e3
-"""Side length of the plane terrain's visual mesh, in metres; ray hits on it are sub-millimetre."""
+"""Side length of the plane terrain's ray-cast mesh, in metres. Ray sensors hit it in float32, so it
+stays small enough for sub-millimetre hits; physics uses IsaacLab's infinite collider."""
 
 
 class TerrainFixtures(NamedTuple):
@@ -115,13 +118,6 @@ def build_terrain_fixtures(
         terrain_config.num_envs = scene.cfg.num_envs
         terrain_config.env_spacing = scene.cfg.env_spacing
         terrain_config.class_type(terrain_config)
-        # Ray sensors cast against the plane's visual mesh in float32. IsaacLab spawns it 2e6 m
-        # across, where hits are centimetres off, so shrink it; the physics collider is a separate,
-        # infinite Plane prim. The asset is a 100 m grid, scaled the way IsaacLab sizes it.
-        environment = stage_utils.get_current_stage().GetPrimAtPath(f"{TERRAIN_PRIM_PATH}/terrain/Environment")
-        if not environment.IsValid():
-            raise RuntimeError(f"Ground plane visual '{TERRAIN_PRIM_PATH}/terrain/Environment' not found.")
-        environment.GetAttribute("xformOp:scale").Set((GROUND_PLANE_SIZE_M / 100.0, GROUND_PLANE_SIZE_M / 100.0, 1.0))
         global_collision_prims.append(terrain_config.prim_path)
         # Hide the ground plane's visual while keeping its collider; avoids z-fighting a scene
         # USD's own floor. Applied to the whole /World/ground subtree.
@@ -151,13 +147,21 @@ def build_terrain_fixtures(
 
 
 def register_terrain_mesh_cache(terrain_manager: TerrainManager, scene: InteractiveScene) -> None:
-    """Share the terrain manager's mesh (trimesh/OBJ terrain) with IsaacLab's ray-caster cache.
+    """Register the ground's ray-cast mesh at ``/World/ground`` in IsaacLab's ray-caster cache.
 
-    Call after native sensors are constructed, since IsaacLab's config validator would recurse into a
-    populated ``RayCaster.meshes``, and before they initialize.
+    Trimesh/OBJ terrain shares the terrain manager's mesh; plane terrain gets a flat square
+    :data:`GROUND_PLANE_SIZE_M` across, centred on the world origin. Call after native sensors are
+    constructed, since IsaacLab's config validator would recurse into a populated
+    ``RayCaster.meshes``, and before they initialize.
     """
     terrain_state = terrain_manager.get_state("locomotion_terrain")
+    device = wp.get_device(scene.device)
     if terrain_state.mesh_type in ["trimesh", "load_obj"]:
-        register_managed_terrain_mesh(
-            RayCaster.meshes, cast("TerrainLocomotion", terrain_state).warp_mesh, wp.get_device(scene.device)
-        )
+        mesh = cast("TerrainLocomotion", terrain_state).warp_mesh
+    elif terrain_state.mesh_type == "plane":
+        half = GROUND_PLANE_SIZE_M / 2.0
+        vertices = np.array([[-half, -half, 0.0], [half, -half, 0.0], [half, half, 0.0], [-half, half, 0.0]])
+        mesh = convert_to_wp_mesh(vertices, np.array([[0, 1, 2], [0, 2, 3]]), scene.device)
+    else:
+        return
+    register_managed_terrain_mesh(RayCaster.meshes, mesh, device)

@@ -11,7 +11,6 @@ Every mounted sensor uses the OpenGL/USD/MuJoCo optical frame: ``-Z`` forward an
 from __future__ import annotations
 
 import math
-import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import field
@@ -248,54 +247,10 @@ class LidarBodyFilterConfig:
         return self
 
 
-@dataclass(frozen=True, config=_FORBID_EXTRA)
-class IsaacSimRaycastMeshConfig:
-    """Select the loaded scene geometry a ray-cast depth camera casts against."""
-
-    include_paths: list[str] | None = None
-    """USD prim-path expressions using IsaacLab's per-component regex matching, as for LiDAR.
-
-    ``None`` selects visible default/render-purpose geometry from the ground, robot, and loaded
-    scene actors, minus :attr:`IsaacSimCameraConfig.body_filter`. Environment paths must use
-    ``/World/envs/env_.*/...``; selection applies to every environment. Matching an
-    object selects its descendant meshes. An explicit list restricts this discovered scene
-    selection; every include must match geometry. Whole-link roots can include collision
-    geometry too: eligibility follows USD visibility/purpose, not a ``visuals``/``collisions``
-    path name or CollisionAPI. Use named visual subtrees for an explicit surface allowlist.
-    """
-
-    exclude_paths: list[str] = field(default_factory=list)
-    """Remove matching objects or meshes and their descendants after inclusion.
-
-    Exclusions take precedence. Hidden geometry (other than the ground) and proxy/guide-purpose
-    geometry are always omitted, even when explicitly included; material opacity is not
-    interpreted. An explicit include list already omits other geometry; excluding everything would
-    also remove those includes. Meshes keep their authored scale and local transforms and follow
-    their scene bodies.
-    """
-
-    @model_validator(mode="after")
-    def validate_paths(self) -> IsaacSimRaycastMeshConfig:
-        if self.include_paths is not None and not self.include_paths:
-            raise ValueError("IsaacSimRaycastMeshConfig.include_paths must be None or a non-empty list.")
-        for path in (self.include_paths or []) + self.exclude_paths:
-            if not path.startswith("/") or path != path.strip():
-                raise ValueError(f"Raycast mesh path must be an absolute USD prim-path expression, got {path!r}.")
-            # IsaacLab matches each "/"-separated component as its own anchored regex.
-            components = path.split("/")[1:]
-            for component in components:
-                try:
-                    re.compile(f"^{component}$")
-                except re.error as exc:
-                    raise ValueError(f"Invalid raycast mesh path expression {path!r}: {exc}") from exc
-                if not component:
-                    raise ValueError(f"Raycast mesh path {path!r} has an empty component.")
-            if components[:2] == ["World", "envs"] and components[2:3] != ["env_.*"]:
-                raise ValueError(
-                    f"Raycast mesh path {path!r} must address environments as '/World/envs/env_.*/...'; "
-                    "selection applies to every environment."
-                )
-        return self
+def _validate_mesh_prim_paths(paths: list[str] | None, owner: str) -> None:
+    """Reject an empty explicit list or blank entries; ``None`` means automatic discovery."""
+    if paths is not None and (not paths or any(not path.strip() for path in paths)):
+        raise ValueError(f"{owner}.mesh_prim_paths must be None or a non-empty list of paths.")
 
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)
@@ -309,19 +264,22 @@ class IsaacSimCameraConfig:
 
     renderer: IsaacSimCameraRenderer = "rtx"
     """``"rtx"`` renders with an RTX ``TiledCamera``. ``"raycast"`` ray casts depth with Warp against
-    loaded scene geometry selected by :attr:`raycast_meshes` at its current poses: depth only,
+    loaded scene geometry selected by :attr:`mesh_prim_paths` at its current poses: depth only,
     pinhole only, mounted on a link in the robot config's ``body_names``, no RTX render pass, and
     envs reset or teleported in a control step are re-rendered at their new state. Other backends
     ignore it and render the camera natively. Defaults to ``"rtx"``."""
 
     body_filter: LidarBodyFilterConfig = field(default_factory=LidarBodyFilterConfig)
-    """For ``renderer="raycast"``: robot geometry or one body left out of the default selection, as
+    """For ``renderer="raycast"``: robot geometry or one body left out of automatic discovery, as
     :attr:`LidarSensorConfig.body_filter`. Defaults to the mount body, which usually encloses the
-    camera. Explicit :attr:`IsaacSimRaycastMeshConfig.include_paths` bypass it."""
+    camera."""
 
-    raycast_meshes: IsaacSimRaycastMeshConfig = field(default_factory=IsaacSimRaycastMeshConfig)
-    """Loaded scene object/mesh inclusion and exclusion for ``renderer="raycast"``; ignored by other
-    renderers."""
+    mesh_prim_paths: list[str] | None = None
+    """For ``renderer="raycast"``: USD prim paths or expressions to ray cast against, with the same
+    meaning as :attr:`IsaacSimLidarConfig.mesh_prim_paths`. ``None`` discovers the ground, every
+    spawned scene object and the robot, minus :attr:`body_filter`; an explicit list bypasses
+    discovery and the filter. ``"/World/ground"`` is the terrain's ray-cast mesh for every terrain
+    type. Ignored by other renderers."""
 
     projection_type: IsaacSimCameraProjectionType = "pinhole"
     """Native USD/RTX camera projection. Defaults to ``"pinhole"``."""
@@ -356,6 +314,7 @@ class IsaacSimCameraConfig:
                 )
             if self.f_stop != 0.0:
                 raise ValueError("IsaacSimCameraConfig.renderer='raycast' has no depth of field; set f_stop=0.")
+        _validate_mesh_prim_paths(self.mesh_prim_paths, "IsaacSimCameraConfig")
         return self
 
 
@@ -582,10 +541,7 @@ class IsaacSimLidarConfig:
 
     @model_validator(mode="after")
     def validate_mesh_paths(self) -> IsaacSimLidarConfig:
-        if self.mesh_prim_paths is not None and (
-            not self.mesh_prim_paths or any(not path.strip() for path in self.mesh_prim_paths)
-        ):
-            raise ValueError("IsaacSimLidarConfig.mesh_prim_paths must be None or a non-empty list of paths.")
+        _validate_mesh_prim_paths(self.mesh_prim_paths, "IsaacSimLidarConfig")
         return self
 
 

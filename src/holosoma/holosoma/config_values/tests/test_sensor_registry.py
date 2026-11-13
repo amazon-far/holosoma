@@ -15,7 +15,6 @@ from holosoma.config_types.sensor import (
     LidarSensorConfig,
 )
 from holosoma.config_values.sensor import SENSOR_REGISTRY
-from holosoma.simulator.isaacsim.raycast_targets import select_mesh_prim_paths
 from holosoma.utils.config_registry import parse_config
 
 pytestmark = pytest.mark.no_sim
@@ -172,90 +171,6 @@ def test_cli_configures_lidar_viz_saved_scan_selection() -> None:
     assert plugin.env_ids == [0]
     assert plugin.max_points == 500
     assert plugin.save_dir == "logs/debug-scans"
-
-
-# The G1 preset's occluder visual roots, with fixed-joint merging reflected in the owner.
-_G1_OCCLUDER_VISUALS = [
-    "pelvis/pelvis",
-    "pelvis/pelvis_contour_link",
-    "left_hip_pitch_link/left_hip_pitch_link",
-    "left_hip_roll_link/left_hip_roll_link",
-    "left_hip_yaw_link/left_hip_yaw_link",
-    "left_knee_link/left_knee_link",
-    "left_ankle_pitch_link/left_ankle_pitch_link",
-    "left_ankle_roll_link/left_ankle_roll_link",
-    "left_shoulder_pitch_link/left_shoulder_pitch_link",
-    "left_shoulder_roll_link/left_shoulder_roll_link",
-    "left_shoulder_yaw_link/left_shoulder_yaw_link",
-    "left_elbow_link/left_elbow_link",
-    "left_wrist_roll_link/left_wrist_roll_link",
-    "left_wrist_pitch_link/left_wrist_pitch_link",
-    "left_wrist_yaw_link/left_wrist_yaw_link",
-    "right_hip_pitch_link/right_hip_pitch_link",
-    "right_hip_roll_link/right_hip_roll_link",
-    "right_hip_yaw_link/right_hip_yaw_link",
-    "right_knee_link/right_knee_link",
-    "right_ankle_pitch_link/right_ankle_pitch_link",
-    "right_ankle_roll_link/right_ankle_roll_link",
-    "right_shoulder_pitch_link/right_shoulder_pitch_link",
-    "right_shoulder_roll_link/right_shoulder_roll_link",
-    "right_shoulder_yaw_link/right_shoulder_yaw_link",
-    "right_elbow_link/right_elbow_link",
-    "right_wrist_roll_link/right_wrist_roll_link",
-    "right_wrist_pitch_link/right_wrist_pitch_link",
-    "right_wrist_yaw_link/right_wrist_yaw_link",
-    "waist_yaw_link/waist_yaw_link_rev_1_0",
-    "waist_roll_link/waist_roll_link_rev_1_0",
-]
-
-
-def _g1_occluder_mesh_paths() -> list[str]:
-    paths = ["/World/ground/mesh"]
-    for visual in _G1_OCCLUDER_VISUALS:
-        owner, name = visual.split("/")
-        paths.append(f"/World/envs/env_.*/Robot/{owner}/visuals/{name}/node_STL_BINARY_/mesh")
-    return paths
-
-
-def test_g1_head_depth_preset_keeps_occluder_visuals_without_other_eligible_geometry() -> None:
-    preset = SENSOR_REGISTRY["g1-head-d435i-raycast-depth"]
-    assert isinstance(preset, CameraSensorConfig)
-    assert preset.isaacsim.renderer == "raycast"
-    robot = "/World/envs/env_.*/Robot"
-    expected = _g1_occluder_mesh_paths()
-    # These are eligible discovery results, including visible collision geometry.
-    discovered = expected + [
-        f"{robot}/left_ankle_roll_link/collisions/mesh",
-        f"{robot}/left_ankle_roll_link/visuals/mesh_1",
-        f"{robot}/pelvis/visuals/mesh_1",
-        f"{robot}/pelvis/visuals/pelvis_extra/mesh",
-        f"{robot}/torso_link/visuals/housing/mesh",
-        f"{robot}/left_wrist_yaw_link/visuals/left_rubber_hand/mesh",
-        f"{robot}/right_wrist_yaw_link/visuals/right_rubber_hand/mesh",
-        f"{robot}/left_foot_contact_point/mesh",
-        "/World/envs/env_.*/box/visuals/mesh",
-    ]
-    roots: set[str] = set()
-    for path in discovered:
-        components = path.replace("/World/envs/env_.*", "/World/envs/env_0").split("/")
-        roots.update("/".join(components[:end]) for end in range(2, len(components) + 1))
-    selected = select_mesh_prim_paths(
-        discovered,
-        preset.isaacsim.raycast_meshes,
-        resolve_matching_paths=lambda expression: [expression] if expression in roots else [],
-    )
-    assert selected == sorted(expected)
-
-
-def test_g1_head_depth_preset_fails_when_an_occluder_visual_is_missing() -> None:
-    preset = SENSOR_REGISTRY["g1-head-d435i-raycast-depth"]
-    discovered = [path for path in _g1_occluder_mesh_paths() if "/waist_roll_link/" not in path]
-    with pytest.raises(ValueError, match=r"waist_roll_link.*matched no"):
-        select_mesh_prim_paths(
-            discovered,
-            preset.isaacsim.raycast_meshes,
-            resolve_matching_paths=lambda expression: [expression],
-        )
 
 
 def test_cli_switches_the_raycast_preset_to_rtx_with_one_override() -> None:

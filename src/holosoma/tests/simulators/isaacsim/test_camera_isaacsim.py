@@ -213,7 +213,7 @@ def test_camera_obs_pipeline(tmp_path):
 @pytest.mark.parametrize("check", ["frame", "rerender", "scene", "dynamic-scene", "default-selection"])
 def test_raycast_camera(tmp_path, check):
     # Depth without RTX, partial rerenders, shared scene meshes, physics-driven actor motion, and the
-    # default selection (hidden ground kept, mount body left out).
+    # default selection (hidden ground kept, mount body left out) beside the G1 preset's explicit paths.
     result_file = tmp_path / f"raycast_{check}_isaacsim.txt"
     run_harness(
         _RAYCAST_HARNESS,
