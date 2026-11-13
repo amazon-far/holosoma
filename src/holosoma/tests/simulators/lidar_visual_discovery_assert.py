@@ -81,7 +81,7 @@ def _check_native_target_contract(sim) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", choices=["isaacsim", "isaacsim6"], default="isaacsim")
+    parser.add_argument("--simulator", choices=["isaaclab2", "isaaclab3", "isaacsim"], default="isaacsim")
     parser.add_argument("--num-envs", type=int, default=3)
     parser.add_argument("--result-file", default=None)
     args = parser.parse_args()

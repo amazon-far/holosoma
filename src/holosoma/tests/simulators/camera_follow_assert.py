@@ -19,9 +19,9 @@ if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from tests.simulators._sim_harness import (
-    add_isaacsim6_arguments,
+    add_isaaclab3_arguments,
     build_run_sim_config,
-    configure_isaacsim6,
+    configure_isaaclab3,
     launch_simulator,
     run_and_hard_exit,
     step,
@@ -114,14 +114,16 @@ def _check_articulated_link(sim, config, env_ids, spawn_dof):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim6"])
+    parser.add_argument(
+        "--simulator", required=True, choices=["mujoco", "mjwarp", "isaaclab2", "isaaclab3", "isaacsim"]
+    )
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--headless", choices=["true", "false"], default="true")
     parser.add_argument("--result-file", default=None, help="write OK/FAIL here before teardown")
     parser.add_argument("--articulated-link", action="store_true", help="move the torso mount with waist DOF writes")
-    add_isaacsim6_arguments(parser)
+    add_isaaclab3_arguments(parser)
     args = parser.parse_args()
 
     from tests.simulators import _camera_presets
@@ -133,7 +135,7 @@ def main() -> int:
     )
     if args.simulator == "mjwarp":
         config = _camera_presets.as_mjwarp(config)
-    config = configure_isaacsim6(config, args)
+    config = configure_isaaclab3(config, args)
     if args.articulated_link:
         camera = config.sensor["front_cam"]
         config = dataclasses.replace(
@@ -196,7 +198,7 @@ def main() -> int:
 
     def _hold_dof() -> None:
         # Restore joints to the spawn pose with zero velocity. MuJoCo is unaffected by this flake.
-        if args.simulator in ("isaacsim", "isaacsim6"):
+        if args.simulator in ("isaaclab2", "isaaclab3", "isaacsim"):
             sim.dof_pos[_all_ids] = _spawn_dof_pos
             sim.dof_vel[_all_ids] = 0.0
             sim.forward_kinematics()

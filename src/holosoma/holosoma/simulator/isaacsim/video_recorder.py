@@ -28,12 +28,12 @@ def build_video_camera(sim: IsaacSim) -> Any:
     from isaaclab.sim import PinholeCameraCfg
 
     config = sim.video_config
-    if sim.backend.is_isaacsim6 and _VIDEO_SENSOR in sim.scene.sensors:
+    if sim.backend.is_isaaclab3 and _VIDEO_SENSOR in sim.scene.sensors:
         raise ValueError(f"Sensor name {_VIDEO_SENSOR!r} is reserved for logger movie recording.")
     aperture = 24.0
     cfg = sim.backend.create_camera_cfg(
         prim_path=f"{sim.backend.env_regex_ns}/{_VIDEO_SENSOR}"
-        if sim.backend.is_isaacsim6
+        if sim.backend.is_isaaclab3
         else f"/World/{_VIDEO_SENSOR}",
         offset_position=(0.0, 0.0, 0.0),
         offset_orientation=(1.0, 0.0, 0.0, 0.0),
@@ -51,7 +51,7 @@ def build_video_camera(sim: IsaacSim) -> Any:
     # not enable that synchronization. Its config extends CameraCfg, so both
     # versions can use the same ordinary Camera API for movies.
     camera = Camera(cfg)
-    if sim.backend.is_isaacsim6:
+    if sim.backend.is_isaaclab3:
         sim.scene.sensors[_VIDEO_SENSOR] = camera
     return camera
 
@@ -65,7 +65,7 @@ class IsaacSimVideoRecorder(VideoRecorderInterface):
         self._camera = simulator.video_camera
         # SDK camera rows differ from the logical environment selected by the
         # logger: Lab 2 has one movie view, while Lab 3 batches the cloned views.
-        self.camera_index = config.record_env_id if simulator.backend.is_isaacsim6 else 0
+        self.camera_index = config.record_env_id if simulator.backend.is_isaaclab3 else 0
         self._capture_step: int | None = None
         self._usd_view: Any | None = None
         if simulator.backend.uses_kit and not simulator.backend.uses_kit_physx:

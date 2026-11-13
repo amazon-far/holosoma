@@ -39,9 +39,9 @@ from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.sampler import STAGE_RESET, STAGE_SETUP, TermSampler
 from tests.simulators import _scene_presets
 from tests.simulators._sim_harness import (
-    add_isaacsim6_arguments,
+    add_isaaclab3_arguments,
     build_run_sim_config,
-    configure_isaacsim6,
+    configure_isaaclab3,
     launch_simulator,
     run_and_hard_exit,
     steps_for_seconds,
@@ -133,7 +133,7 @@ def _render(sim):
     recorder = getattr(sim, "video_recorder", None)
     capturing = (
         recorder is not None
-        and getattr(sim.backend, "is_isaacsim6", False)
+        and getattr(sim.backend, "is_isaaclab3", False)
         and recorder.is_recording
         and sim._sim_step_counter % sim.simulator_config.sim.control_decimation_steps == 0
     )
@@ -427,7 +427,7 @@ def assert_dr_damping_governs(ctx):
         f"  dr-damp: damped vx {float(vd0[0]):.3f}->{float(vd1[0]):.3f} (loss {float(damped_loss[0]):.3f}) "
         f"control loss {float(control_loss[0]):.3f}  damped>control_all={ok}"
     )
-    if ctx.args.simulator == "isaacsim6" and ctx.n >= 2:
+    if ctx.args.simulator == "isaaclab3" and ctx.n >= 2:
         import types
 
         from holosoma.managers.randomization.terms.objects import (
@@ -1558,7 +1558,9 @@ def main() -> int:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenario", required=True, choices=sorted(SCENARIOS))
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim6"])
+    parser.add_argument(
+        "--simulator", required=True, choices=["mujoco", "mjwarp", "isaaclab2", "isaaclab3", "isaacsim"]
+    )
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
     parser.add_argument("--num-envs", type=int, default=1)
@@ -1566,7 +1568,7 @@ def main() -> int:
     parser.add_argument("--headless", choices=["true", "false"], default="true")
     parser.add_argument("--record", default=None, metavar="DIR", help="save a video of the run to DIR")
     parser.add_argument("--result-file", default=None, help="write 'OK' here after PASS (teardown-robust)")
-    add_isaacsim6_arguments(parser)
+    add_isaaclab3_arguments(parser)
     args = parser.parse_args()
     headless = args.headless == "true"
 
@@ -1577,7 +1579,7 @@ def main() -> int:
     # invocation with an unsupported combo — they exit with SKIP_EXIT_CODE (translated to a real
     # pytest.skip by run_harness) rather than a silent pass, and bail before any sim build.
     is_mujoco = args.simulator in ("mujoco", "mjwarp")
-    if args.simulator == "isaacsim6" and args.physics_backend == "newton" and args.scenario in NEWTON_UNSUPPORTED:
+    if args.simulator == "isaaclab3" and args.physics_backend == "newton" and args.scenario in NEWTON_UNSUPPORTED:
         print(f"SKIP: {NEWTON_UNSUPPORTED[args.scenario]} is unsupported by Newton MJWarp")
         return SKIP_EXIT_CODE
     if not mujoco_ok and is_mujoco:
@@ -1598,7 +1600,7 @@ def main() -> int:
     twin_link_physics = _twin_robot_link_physics()
     robot_key = "onelink-box" if args.scenario in twin_link_physics else args.robot
 
-    config = configure_isaacsim6(
+    config = configure_isaaclab3(
         _build_run_sim_config(args.simulator, scene_key, robot_key, args.terrain, args.record), args
     )
     device = "cuda:0" if args.simulator != "mujoco" else "cpu"
@@ -1607,7 +1609,7 @@ def main() -> int:
         device=device,
         training=dataclasses.replace(config.training, num_envs=args.num_envs, headless=headless),
     )
-    if args.simulator == "isaacsim6" and args.physics_backend == "physx" and args.scenario == "dr-damping-governs":
+    if args.simulator == "isaaclab3" and args.physics_backend == "physx" and args.scenario == "dr-damping-governs":
         # Live USD damping on cloned bodies requires Kit's PhysX listener in
         # this SDK. Other headless scenarios retain the standalone runtime.
         sim_cfg = config.simulator.config
@@ -1618,7 +1620,7 @@ def main() -> int:
                 config=dataclasses.replace(
                     sim_cfg,
                     sim=dataclasses.replace(
-                        sim_cfg.sim, isaacsim6=dataclasses.replace(sim_cfg.sim.isaacsim6, require_kit=True)
+                        sim_cfg.sim, isaaclab3=dataclasses.replace(sim_cfg.sim.isaaclab3, require_kit=True)
                     ),
                 ),
             ),
@@ -1681,12 +1683,12 @@ def main() -> int:
         pre_hook(sim, pre_env_ids, torch)
 
     sim.prepare_sim()
-    if args.simulator == "isaacsim6" and args.physics_backend == "newton":
+    if args.simulator == "isaaclab3" and args.physics_backend == "newton":
         from isaaclab.utils.string import string_to_callable
         from isaaclab_newton.physics import NewtonMJWarpManager
 
         assert issubclass(string_to_callable(sim.sim.cfg.physics.class_type), NewtonMJWarpManager)
-    if args.simulator == "isaacsim6" and args.record is None:
+    if args.simulator == "isaaclab3" and args.record is None:
         from tests.simulators._native_runtime_assertions import assert_native_runtime
 
         assert not sim.tiled_cameras and sim.video_recorder is None, (
@@ -1735,7 +1737,7 @@ def main() -> int:
         print("PASS" if passed else "FAIL")
 
     if sim.video_recorder is not None:
-        if args.simulator == "isaacsim6":
+        if args.simulator == "isaaclab3":
             import numpy as np
 
             frames = sim.video_recorder.video_frames

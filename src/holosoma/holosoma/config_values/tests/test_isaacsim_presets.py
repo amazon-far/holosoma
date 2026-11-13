@@ -13,8 +13,8 @@ pytestmark = pytest.mark.no_sim
 
 
 @pytest.mark.parametrize("config_type", ["ExperimentConfig", "RunSimConfig"])
-@pytest.mark.parametrize("environment_backend", ["isaacsim5", "isaacsim6", "unsupported-obsolete-value"])
-def test_explicit_sim6_preset_parses_in_a_fresh_process(config_type: str, environment_backend: str) -> None:
+@pytest.mark.parametrize("environment_backend", ["isaaclab2", "isaaclab3", "unsupported-obsolete-value"])
+def test_lab_presets_and_released_alias_parse_in_a_fresh_process(config_type: str, environment_backend: str) -> None:
     module = "experiment" if config_type == "ExperimentConfig" else "run_sim"
     child = subprocess.run(
         [
@@ -27,17 +27,19 @@ from holosoma.config_types.{module} import {config_type}
 from holosoma.utils.config_registry import parse_config
 
 legacy = parse_config({config_type}, args=["simulator:isaacsim"]).simulator
-native = parse_config({config_type}, args=["simulator:isaacsim6"]).simulator
+lab2 = parse_config({config_type}, args=["simulator:isaaclab2"]).simulator
+native = parse_config({config_type}, args=["simulator:isaaclab3"]).simulator
 override = parse_config(
-    {config_type}, args=["simulator:isaacsim", "--simulator.config.isaacsim-backend=ISAACSIM6"]
+    {config_type}, args=["simulator:isaacsim", "--simulator.config.isaaclab-backend=ISAACLAB3"]
 ).simulator
 print(json.dumps({{
     "name": native.config.name,
-    "backend": native.config.isaacsim_backend,
-    "override_backend": override.config.isaacsim_backend,
-    "legacy_backend": legacy.config.isaacsim_backend,
+    "backend": native.config.isaaclab_backend,
+    "override_backend": override.config.isaaclab_backend,
+    "legacy_backend": legacy.config.isaaclab_backend,
+    "alias_matches": legacy == lab2,
     "same_defaults": dataclasses.replace(
-        native.config, isaacsim_backend=legacy.config.isaacsim_backend
+        native.config, isaaclab_backend=legacy.config.isaaclab_backend
     ) == legacy.config,
     "same_target": native._target_ == legacy._target_,
     "bridge": native.config.bridge.enabled,
@@ -54,10 +56,11 @@ print(json.dumps({{
     assert child.returncode == 0, child.stderr
     actual = json.loads(child.stdout.strip())
     assert actual == {
-        "name": "isaacsim",
-        "backend": "isaacsim6",
-        "override_backend": "isaacsim6",
-        "legacy_backend": "isaacsim5",
+        "name": "isaaclab3",
+        "backend": "isaaclab3",
+        "override_backend": "isaaclab3",
+        "legacy_backend": "isaaclab2",
+        "alias_matches": True,
         "same_defaults": True,
         "same_target": True,
         "bridge": config_type == "RunSimConfig",

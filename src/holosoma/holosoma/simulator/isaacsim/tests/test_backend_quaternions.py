@@ -12,8 +12,8 @@ import numpy.typing as npt
 import pytest
 import torch
 
-from holosoma.simulator.isaacsim.backends.isaacsim5 import IsaacSim5Backend
-from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Backend
+from holosoma.simulator.isaacsim.backends.isaaclab2 import IsaacLab2Backend
+from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Backend
 from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw, fullstate_xyzw_to_wxyz
 
 pytestmark = pytest.mark.no_sim
@@ -41,7 +41,7 @@ def sdk_math(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def test_config_quaternions_reuse_the_sdk_boundary_in_the_declared_direction(
     sdk_math: list[str], family: int, container: type
 ) -> None:
-    backend = IsaacSim6Backend() if family == 3 else IsaacSim5Backend()
+    backend = IsaacLab3Backend() if family == 3 else IsaacLab2Backend()
     config = container([0.4, 0.1, -0.2, 0.3])
     expected_native = (0.1, -0.2, 0.3, 0.4) if family == 3 else (0.4, 0.1, -0.2, 0.3)
     native = backend.config_quat_to_native(config)
@@ -58,7 +58,7 @@ def test_config_quaternions_reuse_the_sdk_boundary_in_the_declared_direction(
 
 @pytest.mark.parametrize("family", [2, 3])
 def test_runtime_quaternions_keep_batched_values_dtype_and_native_identity(family: int) -> None:
-    backend = IsaacSim6Backend() if family == 3 else IsaacSim5Backend()
+    backend = IsaacLab3Backend() if family == 3 else IsaacLab2Backend()
     # A non-contiguous view exercises the last dimension across env/body axes.
     storage = torch.tensor(
         [[[0.1, 99.0, -0.2, 99.0, 0.3, 99.0, 0.4, 99.0], [0.5, 99.0, 0.6, 99.0, -0.7, 99.0, 0.8, 99.0]]],
@@ -102,12 +102,12 @@ def test_full_state_helpers_reuse_quaternion_conversion_without_changing_other_c
 def test_backend_import_and_runtime_quaternion_helpers_do_not_import_the_sdk() -> None:
     code = """
 import sys
-from holosoma.simulator.isaacsim.backends.isaacsim5 import IsaacSim5Backend
-from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Backend
+from holosoma.simulator.isaacsim.backends.isaaclab2 import IsaacLab2Backend
+from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Backend
 import torch
 value = torch.tensor([[1., 2., 3., 4.]])
-assert IsaacSim5Backend().quat_to_native(value).tolist() == [[4., 1., 2., 3.]]
-assert IsaacSim6Backend().quat_to_native(value) is value
+assert IsaacLab2Backend().quat_to_native(value).tolist() == [[4., 1., 2., 3.]]
+assert IsaacLab3Backend().quat_to_native(value) is value
 assert not any(name == 'isaaclab' or name.startswith('isaaclab.') for name in sys.modules)
 """
     completed = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)

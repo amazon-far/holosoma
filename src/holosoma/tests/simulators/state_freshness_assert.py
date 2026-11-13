@@ -44,7 +44,7 @@ CONTACT_SLIDE_VELOCITY = 0.5  # m/s; forces ground contacts to produce friction 
 
 def _fresh_isaacsim(sim):
     data = sim._robot.data
-    if sim.backend.is_isaacsim6:
+    if sim.backend.is_isaaclab3:
         import torch
 
         # Read the native data directly, independently of Holosoma's state adapter.
@@ -52,7 +52,7 @@ def _fresh_isaacsim(sim):
         contact_data = sim.contact_sensor.data
         forces = (
             contact_data.net_forces_w.torch
-            if sim.simulator_config.sim.isaacsim6.contact_force_mode == "total"
+            if sim.simulator_config.sim.isaaclab3.contact_force_mode == "total"
             else contact_data.net_normal_forces_w.torch
         )
         return {
@@ -103,7 +103,7 @@ def _fresh_mujoco(sim):
 
 def _fresh(sim, simulator: str):
     """An independent read of the backend buffers per served name; other names re-run their bound read."""
-    fresh = _fresh_isaacsim(sim) if simulator in ("isaacsim", "isaacsim6") else _fresh_mujoco(sim)
+    fresh = _fresh_isaacsim(sim) if simulator in ("isaaclab2", "isaaclab3", "isaacsim") else _fresh_mujoco(sim)
     for name in sim.state.names():
         if name not in fresh:
             fresh[name] = sim.state._read_fresh(name)
@@ -112,7 +112,7 @@ def _fresh(sim, simulator: str):
 
 def _reference_bodies_isaacsim(sim):
     """Env 0's body poses read from PhysX, bypassing Isaac Lab's cached articulation data."""
-    if sim.backend.is_isaacsim6:
+    if sim.backend.is_isaaclab3:
         import warp as wp
 
         view = sim._robot.root_view
@@ -181,13 +181,13 @@ def _check(sim, simulator: str, *, contact_force_mode: str = "normal") -> tuple[
     motions: list[float] = []
     checks = 0
     previous: list[torch.Tensor] = []
-    native_contacts = simulator in ("isaacsim", "isaacsim6") and sim.backend.is_isaacsim6
+    native_contacts = simulator in ("isaaclab2", "isaaclab3", "isaacsim") and sim.backend.is_isaaclab3
     contact_modes_distinct = False
     contact_mode_difference = 0.0
 
     device = torch.device(sim.sim_device)
     if native_contacts:
-        configured_mode = sim.simulator_config.sim.isaacsim6.contact_force_mode
+        configured_mode = sim.simulator_config.sim.isaaclab3.contact_force_mode
         if configured_mode != contact_force_mode:
             failures.append(f"requested contact_force_mode={contact_force_mode}, configured {configured_mode}")
         for field in ("joint_pos", "joint_vel", "body_link_pos_w", "body_link_quat_w"):
@@ -253,7 +253,9 @@ def _check(sim, simulator: str, *, contact_force_mode: str = "normal") -> tuple[
             error = (reached - target).abs().max().item()
             failures.append(f"in-place dof_pos write did not reach the simulator (max error {error:.3e})")
         references = (
-            _reference_bodies_isaacsim(sim) if simulator in ("isaacsim", "isaacsim6") else _reference_bodies_mujoco(sim)
+            _reference_bodies_isaacsim(sim)
+            if simulator in ("isaaclab2", "isaaclab3", "isaacsim")
+            else _reference_bodies_mujoco(sim)
         )
         for name, reference in references.items():
             expected = torch.as_tensor(reference, dtype=torch.float32)
@@ -310,7 +312,7 @@ def _check(sim, simulator: str, *, contact_force_mode: str = "normal") -> tuple[
         if not contact_modes_distinct:
             failures.append("VACUOUS: native normal and total contact forces never differed during the sliding probe")
         report.append(
-            f"contact_force_mode={sim.simulator_config.sim.isaacsim6.contact_force_mode} "
+            f"contact_force_mode={sim.simulator_config.sim.isaaclab3.contact_force_mode} "
             f"maximum total-minus-normal force={contact_mode_difference:.3e} N"
         )
     return failures, report
@@ -318,7 +320,9 @@ def _check(sim, simulator: str, *, contact_force_mode: str = "normal") -> tuple[
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim6"])
+    parser.add_argument(
+        "--simulator", required=True, choices=["mujoco", "mjwarp", "isaaclab2", "isaaclab3", "isaacsim"]
+    )
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--device", default=None)
     parser.add_argument("--contact-force-mode", choices=["normal", "total"], default="normal")

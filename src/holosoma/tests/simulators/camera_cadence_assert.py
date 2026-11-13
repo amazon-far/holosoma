@@ -17,7 +17,7 @@ if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
 from holosoma.config_types.sensor import SensorMountConfig
-from holosoma.config_types.simulator import IsaacSim6Config
+from holosoma.config_types.simulator import IsaacLab3Config
 from tests.simulators import _camera_presets
 from tests.simulators._native_runtime_assertions import snapshot_native_physics
 from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit, step
@@ -38,7 +38,7 @@ def gpu_process_memory() -> dict[str, int]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", choices=["isaacsim6"], required=True)
+    parser.add_argument("--simulator", choices=["isaaclab3"], required=True)
     parser.add_argument("--physics", choices=["physx", "newton"], required=True)
     parser.add_argument("--renderer", choices=["isaac_rtx", "ovrtx", "newton_warp"], required=True)
     parser.add_argument("--decimations", default="1,5")
@@ -125,7 +125,7 @@ def main() -> int:
                     # Deliberately does not divide the control interval:
                     # native captures must not depend on viewer draws.
                     render_interval=7,
-                    isaacsim6=IsaacSim6Config(physics_backend=args.physics, renderer=args.renderer),
+                    isaaclab3=IsaacLab3Config(physics_backend=args.physics, renderer=args.renderer),
                 ),
             ),
         ),
@@ -145,9 +145,9 @@ def main() -> int:
         ),
     )
     if args.record:
-        from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Backend
+        from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Backend
 
-        original_create_camera_cfg = IsaacSim6Backend.create_camera_cfg
+        original_create_camera_cfg = IsaacLab3Backend.create_camera_cfg
 
         def movie_depth_cfg(self: Any, **kwargs: Any) -> Any:
             # Test-only AOV on the same movie product: locate the current surface
@@ -156,7 +156,7 @@ def main() -> int:
                 kwargs["data_types"] = ["rgb", "distance_to_image_plane"]
             return original_create_camera_cfg(self, **kwargs)
 
-        IsaacSim6Backend.create_camera_cfg = movie_depth_cfg  # type: ignore[method-assign]
+        IsaacLab3Backend.create_camera_cfg = movie_depth_cfg  # type: ignore[method-assign]
 
     memory_before = gpu_process_memory()
     startup_start = time.perf_counter()

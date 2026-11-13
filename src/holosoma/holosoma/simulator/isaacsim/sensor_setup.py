@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from holosoma.config_types.sensor import LidarRayPatternConfig, SensorMountConfig
     from holosoma.simulator.isaacsim.isaacsim import IsaacSim
     from holosoma.simulator.shared.sensor_manager import CameraRecord
-    from holosoma.simulator.isaacsim.backends.base import IsaacSimBackendAdapter
+    from holosoma.simulator.isaacsim.backends.base import IsaacLabBackendAdapter
 
 
 def build_cameras(sim: IsaacSim) -> None:
@@ -69,7 +69,7 @@ def build_cameras(sim: IsaacSim) -> None:
             height=cam.height,
             # Lab 3 publishes poses to native renderers through this SDK option.
             # Fixed world mounts retain the cheaper cached-pose path.
-            update_latest_camera_pose=backend.is_isaacsim6 and cam.mount.target_kind != "world",
+            update_latest_camera_pose=backend.is_isaaclab3 and cam.mount.target_kind != "world",
             # Keep raw +inf no-return data; CameraRecord applies Holosoma's common depth policy.
             depth_clipping_behavior="none",
         )
@@ -78,7 +78,7 @@ def build_cameras(sim: IsaacSim) -> None:
         sim.scene.sensors[cam_name] = camera
 
 
-def _camera_mount_prim_path(mount: SensorMountConfig, *, backend: IsaacSimBackendAdapter) -> str:
+def _camera_mount_prim_path(mount: SensorMountConfig, *, backend: IsaacLabBackendAdapter) -> str:
     """Resolve a sensor mount to a per-env camera prim path (parent = the mount body prim).
 
     ``robot_link`` -> a robot link prim (name the root link to mount on the base);
@@ -118,7 +118,7 @@ def sync_camera_fabric_transforms(sim: IsaacSim) -> None:
     """
     # Lab 3's native FrameView initializes transforms for every backend.
     # The Kit-less path must not import Fabric's Kit runtime.
-    if sim.backend.is_isaacsim6:
+    if sim.backend.is_isaaclab3:
         return
     import carb
     import usdrt
@@ -177,7 +177,7 @@ def _pattern(
     return torch.zeros_like(directions), directions
 
 
-def _mount_parent_path(mount: SensorMountConfig, *, backend: IsaacSimBackendAdapter) -> str:
+def _mount_parent_path(mount: SensorMountConfig, *, backend: IsaacLabBackendAdapter) -> str:
     namespace = backend.env_regex_ns
     if mount.target_kind == "robot_link":
         return resolve_robot_link_prim_expression(mount.target, backend=backend)
@@ -258,7 +258,7 @@ def _body_filter_target(lidar: LidarSensorConfig) -> tuple[str, str] | None:
     return body_filter.target_kind, body_filter.target
 
 
-def _robot_mesh_prim_paths(excluded_link: str | None, *, backend: IsaacSimBackendAdapter) -> list[str]:
+def _robot_mesh_prim_paths(excluded_link: str | None, *, backend: IsaacLabBackendAdapter) -> list[str]:
     """Return robot visual-geometry expressions, omitting one native body owner."""
     source_root = "/World/envs/env_0/Robot"
     expression_root = f"{backend.env_regex_ns}/Robot"
@@ -406,7 +406,7 @@ def build_sensors(sim: IsaacSim) -> None:
     if needs_expanded_robot:
         # IsaacLab cannot author children or resolve exact targets through instance proxies.
         set_instanceable(get_current_stage(sim.backend), "/World/envs/env_0/Robot", False)
-    if sim.backend.is_isaacsim6 and any(isinstance(config, LidarSensorConfig) for config in sim.sensor_config.values()):
+    if sim.backend.is_isaaclab3 and any(isinstance(config, LidarSensorConfig) for config in sim.sensor_config.values()):
         _remove_disabled_rigid_body_markers(get_current_stage(sim.backend))
     build_cameras(sim)
     build_lidars(sim)

@@ -74,8 +74,8 @@ def _build(
                 config.simulator.config,
                 sim=dataclasses.replace(
                     config.simulator.config.sim,
-                    isaacsim6=dataclasses.replace(
-                        config.simulator.config.sim.isaacsim6, contact_force_mode=contact_force_mode
+                    isaaclab3=dataclasses.replace(
+                        config.simulator.config.sim.isaaclab3, contact_force_mode=contact_force_mode
                     ),
                 ),
             ),
@@ -200,7 +200,9 @@ def _check(sim, num_envs: int) -> tuple[list[str], list[str]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim6"])
+    parser.add_argument(
+        "--simulator", required=True, choices=["mujoco", "mjwarp", "isaaclab2", "isaaclab3", "isaacsim"]
+    )
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--result-file", default=None)
     args, _ = parser.parse_known_args()

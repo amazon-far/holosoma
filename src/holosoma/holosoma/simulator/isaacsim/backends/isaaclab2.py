@@ -5,10 +5,10 @@ from __future__ import annotations
 from argparse import Namespace
 from typing import Any
 
-from .base import IsaacSimBackendAdapter
+from .base import IsaacLabBackendAdapter
 
 
-class IsaacSim5Backend(IsaacSimBackendAdapter):
+class IsaacLab2Backend(IsaacLabBackendAdapter):
     isaaclab_major = 2
     env_regex_ns = "/World/envs/env_.*"
 

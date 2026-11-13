@@ -80,7 +80,7 @@ RUN_DURATION_KEY = f"{SUMMARY_PREFIX}run_duration_s"
 CELL_KEY = f"{SUMMARY_PREFIX}cell"
 
 # Tag vocabulary written by nightly.py. Keep in sync with it and with run_summary.py.
-KNOWN_SIMULATORS = {"isaacgym", "isaacsim", "isaacsim6", "mujoco", "mjwarp"}
+KNOWN_SIMULATORS = {"isaacgym", "isaaclab2", "isaaclab3", "isaacsim", "mujoco", "mjwarp"}
 RESERVED_TAG_PREFIXES = ("nightly-", "gha-run-id-", "gpus-")
 RESERVED_TAGS = KNOWN_SIMULATORS | {
     "singlegpu",
@@ -157,6 +157,10 @@ def run_cell(run: Any) -> str:
         gpus = "gpus-4" if "multigpu" in tags else "gpus-1" if "singlegpu" in tags else "gpus-?"
 
     simulator = next((t for t in tags if t in KNOWN_SIMULATORS), "sim-?")
+    # Preserve the released performance-cell key and its saved workspace filters.
+    # New run tags use Lab names; Lab 3 remains a separate baseline.
+    if simulator == "isaaclab2":
+        simulator = "isaacsim"
     experiment = next(
         (t for t in tags if not t.startswith(RESERVED_TAG_PREFIXES) and t not in RESERVED_TAGS),
         "exp-?",

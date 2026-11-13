@@ -221,7 +221,7 @@ class IsaacSim(BaseSimulator):
         """
         link_physics = self.robot_config.asset.link_physics
         mat_cfg = physics_material_cfg(link_physics) if link_physics is not None else None
-        if mat_cfg is None and not self.backend.is_isaacsim6:
+        if mat_cfg is None and not self.backend.is_isaaclab3:
             return
         robot_prim_path = "/World/envs/env_0/Robot"
         material_path = f"{robot_prim_path}/linkPhysicsMaterial"
@@ -245,7 +245,7 @@ class IsaacSim(BaseSimulator):
                 f"dynamic_friction={mat_cfg.dynamic_friction} restitution={mat_cfg.restitution} "
                 f"friction_combine={mat_cfg.friction_combine_mode} restitution_combine={mat_cfg.restitution_combine_mode}"
             )
-        if self.backend.is_isaacsim6:
+        if self.backend.is_isaaclab3:
             from holosoma.simulator.isaacsim.backends.native_properties import author_robot_physics
 
             author_robot_physics(
@@ -812,7 +812,7 @@ class IsaacSim(BaseSimulator):
         step (pose writes, ``forward_kinematics``) does not show until the next render.
         Isaac Sim 6 prepares SDK camera batches separately from the viewer.
         """
-        if not self.backend.is_isaacsim6 and self._viewer_render_step != self._sim_step_counter:
+        if not self.backend.is_isaaclab3 and self._viewer_render_step != self._sim_step_counter:
             self._render_frame()
 
     def _render_frame(self) -> None:

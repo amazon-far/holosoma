@@ -134,7 +134,7 @@ def _check_video_freshness(sim, *, memory_stage: bool = False) -> None:
     recorder = sim.video_recorder
     assert recorder is not None and recorder.is_recording, "video recording did not start"
     assert not sim.tiled_cameras, "video-only probe must not be pumped by a mounted RTX camera"
-    if sim.backend.is_isaacsim6 and sim.backend.uses_kit:
+    if sim.backend.is_isaaclab3 and sim.backend.uses_kit:
         assert sim.backend.is_rendering(sim.sim), "the SDK movie camera did not enable RTX rendering"
         assert sim.sim.get_setting("/isaaclab/video/enabled"), "native headless video intent was not enabled"
         assert sim.sim.cfg.create_stage_in_memory is memory_stage, "requested native stage mode was not applied"
@@ -146,11 +146,11 @@ def _check_video_freshness(sim, *, memory_stage: bool = False) -> None:
     origin = sim.env_origins[env_id]
     decimation = sim.simulator_config.sim.control_decimation_steps
     snapshots = {}
-    if not sim.backend.is_isaacsim6:
+    if not sim.backend.is_isaaclab3:
         assert recorder.camera.num_instances == 1, "Lab 2 movies must not allocate a view per training environment"
 
     def _assert_camera_pose(position, expected_quat=None):
-        if not sim.backend.is_isaacsim6:
+        if not sim.backend.is_isaaclab3:
             # Lab 2 tiled-camera poses are cached unless explicitly requested.
             recorder.camera.cfg.update_latest_camera_pose = True
             recorder.camera.update(dt=0.0, force_recompute=True)
@@ -272,10 +272,10 @@ def _object_total_mass(sim, name, env_id):
     if sim_type == SimulatorType.ISAACSIM:
         # IsaacLab RigidObject: per-body masses from the PhysX view, shape [num_envs, num_bodies].
         asset = sim.scene.rigid_objects[name]
-        if sim.backend.is_isaacsim6:
+        if sim.backend.is_isaaclab3:
             import warp as wp
 
-            if sim.simulator_config.sim.isaacsim6.physics_backend == "newton":
+            if sim.simulator_config.sim.isaaclab3.physics_backend == "newton":
                 from isaaclab_newton.physics import NewtonManager
 
                 masses = wp.to_torch(asset.root_view.get_attribute("body_mass", NewtonManager.get_model())[:, 0])
@@ -357,7 +357,9 @@ def main() -> int:
     _scene_presets.register()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", required=True, choices=["mujoco", "mjwarp", "isaacsim", "isaacsim6"])
+    parser.add_argument(
+        "--simulator", required=True, choices=["mujoco", "mjwarp", "isaaclab2", "isaaclab3", "isaacsim"]
+    )
     parser.add_argument("--scene", default="g1-largebox")
     parser.add_argument("--robot", default="g1-29dof")
     parser.add_argument("--terrain", default="terrain_locomotion_plane")
@@ -393,20 +395,20 @@ def main() -> int:
     headless = args.headless == "true"
 
     if args.probe_video_freshness:
-        if args.simulator not in ("isaacsim", "isaacsim6") or args.record is None:
+        if args.simulator not in ("isaaclab2", "isaaclab3", "isaacsim") or args.record is None:
             parser.error("--probe-video-freshness requires an Isaac Sim preset and --record DIR")
         from tests.simulators import _camera_presets  # noqa: F401  # Registers the panel-target scene.
 
         args.scene = "panel-target"
     config = _build_run_sim_config(args.simulator, args.scene, args.robot, args.terrain, args.record)
-    if args.simulator == "isaacsim6":
+    if args.simulator == "isaaclab3":
         native = dataclasses.replace(
-            config.simulator.config.sim.isaacsim6,
+            config.simulator.config.sim.isaaclab3,
             physics_backend=args.physics_backend,
             renderer=args.renderer,
         )
         simulator_config = dataclasses.replace(
-            config.simulator.config, sim=dataclasses.replace(config.simulator.config.sim, isaacsim6=native)
+            config.simulator.config, sim=dataclasses.replace(config.simulator.config.sim, isaaclab3=native)
         )
         config = dataclasses.replace(config, simulator=dataclasses.replace(config.simulator, config=simulator_config))
     if args.probe_video_freshness:
@@ -428,12 +430,12 @@ def main() -> int:
             config.simulator.config,
             sim=dataclasses.replace(
                 config.simulator.config.sim,
-                isaacsim6=dataclasses.replace(config.simulator.config.sim.isaacsim6, create_stage_in_memory=True),
+                isaaclab3=dataclasses.replace(config.simulator.config.sim.isaaclab3, create_stage_in_memory=True),
             ),
         )
         config = dataclasses.replace(config, simulator=dataclasses.replace(config.simulator, config=simulator_config))
     if args.probe_isaacsim_render_config:
-        if args.simulator not in ("isaacsim", "isaacsim6"):
+        if args.simulator not in ("isaaclab2", "isaaclab3", "isaacsim"):
             parser.error("--probe-isaacsim-render-config requires an Isaac Sim preset")
         render_config = IsaacSimRenderConfig(
             rendering_mode=args.rendering_mode,
@@ -452,7 +454,7 @@ def main() -> int:
             scene = dataclasses.replace(scene, lights={DEFAULT_LIGHT_KEY: DefaultLightConfig()})
         config = dataclasses.replace(config, simulator=simulator, scene=scene)
     if args.probe_lights:
-        if args.simulator not in ("isaacsim", "isaacsim6"):
+        if args.simulator not in ("isaaclab2", "isaaclab3", "isaacsim"):
             parser.error("--probe-lights requires an Isaac Sim preset")
         # One light per type, each exercising a distinct field the probe then checks on the authored
         # prim: distant carries color-temperature + angle, dome an HDRI texture, sphere a radius, rect
@@ -489,7 +491,7 @@ def main() -> int:
 
             settings = carb.settings.get_settings()
         if args.rendering_mode is not None:
-            if sim.backend.is_isaacsim6:
+            if sim.backend.is_isaaclab3:
                 expected_dlss = {"performance": 0, "balanced": 1, "quality": 2}[args.rendering_mode]
                 quality = args.rendering_mode == "quality"
                 for path, expected in (

@@ -6,8 +6,8 @@ from unittest.mock import Mock
 import pytest
 import torch
 
-from holosoma.simulator.isaacsim.backends.isaacsim5 import IsaacSim5Backend
-from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Backend
+from holosoma.simulator.isaacsim.backends.isaaclab2 import IsaacLab2Backend
+from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Backend
 from holosoma.simulator.isaacsim.state_adapter import IsaacSimStateAdapter
 from holosoma.simulator.shared.object_registry import ObjectRegistry, ObjectType
 
@@ -92,7 +92,7 @@ class TestStateAccessors:
 
     # fmt: on
 
-    @pytest.fixture(autouse=True, params=[IsaacSim5Backend(), IsaacSim6Backend()], ids=["isaacsim5", "isaacsim6"])
+    @pytest.fixture(autouse=True, params=[IsaacLab2Backend(), IsaacLab3Backend()], ids=["isaaclab2", "isaaclab3"])
     def native_backend(self, request):
         self.backend = request.param
 
@@ -109,8 +109,8 @@ class TestStateAccessors:
         mock_data = SimpleNamespace()
 
         # Store the state tensor (mutable, in wxyz format like IsaacSim)
-        state_tensor = _xyzw(wxyz_state) if self.backend.is_isaacsim6 else wxyz_state.clone()
-        if self.backend.is_isaacsim6:
+        state_tensor = _xyzw(wxyz_state) if self.backend.is_isaaclab3 else wxyz_state.clone()
+        if self.backend.is_isaaclab3:
             mock_data.root_link_pose_w = SimpleNamespace(torch=state_tensor[:, :7])
             mock_data.root_com_vel_w = SimpleNamespace(torch=state_tensor[:, 7:])
         else:
@@ -126,7 +126,7 @@ class TestStateAccessors:
         # Attach the working write methods
         mock_object.write_root_pose_to_sim = write_root_pose_to_sim
         mock_object.write_root_velocity_to_sim = write_root_velocity_to_sim
-        if self.backend.is_isaacsim6:
+        if self.backend.is_isaaclab3:
             # Strict native signatures catch the Lab 3 keyword and selection contract.
             def write_root_link_pose_to_sim_index(*, root_pose, env_ids):
                 state_tensor[env_ids, :7] = root_pose
@@ -172,7 +172,7 @@ class TestStateAccessors:
 
         def read_xyzw(env_ids):
             state = write_tensor_wxyz[env_ids]
-            return state if self.backend.is_isaacsim6 else _xyzw(state)
+            return state if self.backend.is_isaaclab3 else _xyzw(state)
 
         adapter._state.get("robot_root_states").__getitem__ = Mock(side_effect=read_xyzw)
 

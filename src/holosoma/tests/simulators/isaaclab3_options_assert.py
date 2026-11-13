@@ -12,7 +12,7 @@ from pathlib import Path
 if sys.path and sys.path[0].endswith("simulators"):
     sys.path.pop(0)
 
-from holosoma.config_types.simulator import IsaacSim6Config
+from holosoma.config_types.simulator import IsaacLab3Config
 from tests.simulators._native_runtime_assertions import assert_native_runtime
 from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit, step
 
@@ -20,7 +20,7 @@ from tests.simulators._sim_harness import build_run_sim_config, launch_simulator
 def main() -> int:
     started = time.perf_counter()
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", choices=["isaacsim6"], required=True)
+    parser.add_argument("--simulator", choices=["isaaclab3"], required=True)
     parser.add_argument("--physics", choices=["physx", "newton"], required=True)
     parser.add_argument("--renderer", choices=["isaac_rtx", "newton_warp", "ovrtx"], required=True)
     parser.add_argument("--result-file", required=True)
@@ -35,12 +35,12 @@ def main() -> int:
         "terrain_locomotion_plane",
         sensors=_camera_presets.front_cam_depth,
     )
-    native = IsaacSim6Config(physics_backend=args.physics, renderer=args.renderer)
+    native = IsaacLab3Config(physics_backend=args.physics, renderer=args.renderer)
     simulator = dataclasses.replace(
         config.simulator,
         config=dataclasses.replace(
             config.simulator.config,
-            sim=dataclasses.replace(config.simulator.config.sim, isaacsim6=native),
+            sim=dataclasses.replace(config.simulator.config.sim, isaaclab3=native),
         ),
     )
     config = dataclasses.replace(
@@ -342,7 +342,7 @@ def main() -> int:
     peak_normal = torch.zeros(2, device=device)
     peak_tangential = torch.zeros(2, device=device)
     total_config = dataclasses.replace(
-        config.simulator.config.sim, isaacsim6=dataclasses.replace(native, contact_force_mode="total")
+        config.simulator.config.sim, isaaclab3=dataclasses.replace(native, contact_force_mode="total")
     )
     # Observe the contact window: a bouncing robot can be airborne at the final tick.
     for _ in range(120):

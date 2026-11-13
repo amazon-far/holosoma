@@ -54,7 +54,7 @@ jobs:
           echo "images=$images" >> "$GITHUB_OUTPUT"
           echo "Image build required: \`${images}\`." >> "$GITHUB_STEP_SUMMARY"
 
-  build-isaacsim:
+  build-isaaclab2:
     name: Build PR Images
     needs: changes
     if: needs.changes.outputs.images == 'true'
@@ -62,10 +62,10 @@ jobs:
     with:
       image_sha: ${{ github.event.pull_request.head.sha }}
       candidate_tag: candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
-      environments: '["isaacsim"]'
+      environments: '["isaaclab2"]'
     secrets: inherit
 
-  build-isaacsim6:
+  build-isaaclab3:
     name: Build PR Images
     needs: changes
     if: needs.changes.outputs.images == 'true'
@@ -73,7 +73,7 @@ jobs:
     with:
       image_sha: ${{ github.event.pull_request.head.sha }}
       candidate_tag: candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
-      environments: '["isaacsim6"]'
+      environments: '["isaaclab3"]'
     secrets: inherit
 
   build-mujoco:
@@ -109,30 +109,29 @@ jobs:
       environments: '["inference", "retargeting", "thor-inference", "thor-inference-ros"]'
     secrets: inherit
 
-  test-isaacsim:
+  test-isaaclab2:
     name: Test Selected Images
     needs:
       - changes
-      - build-isaacsim
+      - build-isaaclab2
     if: needs.changes.outputs.images == 'true'
     uses: ./.github/workflows/test-simulator-image.yaml
     with:
-      simulator: isaacsim
-      image: ${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}/holosoma-isaacsim:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+      simulator: isaaclab2
+      image: ${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}/holosoma-isaaclab2:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
       multigpu: '["False", "True"]'
     secrets: inherit
 
-  test-isaacsim6:
+  test-isaaclab3:
     name: Test Selected Images
     needs:
       - changes
-      - build-isaacsim6
+      - build-isaaclab3
     if: needs.changes.outputs.images == 'true'
     uses: ./.github/workflows/test-simulator-image.yaml
     with:
-      simulator: isaacsim
-      isaacsim_backend: isaacsim6
-      image: ${{ vars.ECR_REGISTRY }}/holosoma-isaacsim6:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+      simulator: isaaclab3
+      image: ${{ vars.ECR_REGISTRY }}/holosoma-isaaclab3:candidate-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
       multigpu: '["False", "True"]'
     secrets: inherit
 
@@ -163,13 +162,13 @@ jobs:
     name: PR Image Gate
     needs:
       - changes
-      - build-isaacsim
-      - build-isaacsim6
+      - build-isaaclab2
+      - build-isaaclab3
       - build-mujoco
       - build-combined
       - build-promote-only
-      - test-isaacsim
-      - test-isaacsim6
+      - test-isaaclab2
+      - test-isaaclab3
       - test-mujoco
       - test-combined
     if: always() && !cancelled()
@@ -185,13 +184,13 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           IMAGE_CHANGES: ${{ needs.changes.outputs.images }}
           JOB_RESULTS: >-
-            build-isaacsim=${{ needs.build-isaacsim.result }}
-            build-isaacsim6=${{ needs.build-isaacsim6.result }}
+            build-isaaclab2=${{ needs.build-isaaclab2.result }}
+            build-isaaclab3=${{ needs.build-isaaclab3.result }}
             build-mujoco=${{ needs.build-mujoco.result }}
             build-combined=${{ needs.build-combined.result }}
             build-promote-only=${{ needs.build-promote-only.result }}
-            test-isaacsim=${{ needs.test-isaacsim.result }}
-            test-isaacsim6=${{ needs.test-isaacsim6.result }}
+            test-isaaclab2=${{ needs.test-isaaclab2.result }}
+            test-isaaclab3=${{ needs.test-isaaclab3.result }}
             test-mujoco=${{ needs.test-mujoco.result }}
             test-combined=${{ needs.test-combined.result }}
         run: |
@@ -224,8 +223,8 @@ jobs:
             holosoma
             holosoma-inference
             holosoma-retargeting
-            holosoma-isaacsim
-            holosoma-isaacsim6
+            holosoma-isaaclab2
+            holosoma-isaaclab3
             holosoma-mujoco
             holosoma-thor-inference
             holosoma-thor-inference-ros

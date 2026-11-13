@@ -38,8 +38,8 @@ jobs:
       holosoma_digest: ${{ steps.verify.outputs.holosoma_digest }}
       holosoma_inference_digest: ${{ steps.verify.outputs.holosoma_inference_digest }}
       holosoma_retargeting_digest: ${{ steps.verify.outputs.holosoma_retargeting_digest }}
-      holosoma_isaacsim_digest: ${{ steps.verify.outputs.holosoma_isaacsim_digest }}
-      holosoma_isaacsim6_digest: ${{ steps.verify.outputs.holosoma_isaacsim6_digest }}
+      holosoma_isaaclab2_digest: ${{ steps.verify.outputs.holosoma_isaaclab2_digest }}
+      holosoma_isaaclab3_digest: ${{ steps.verify.outputs.holosoma_isaaclab3_digest }}
       holosoma_mujoco_digest: ${{ steps.verify.outputs.holosoma_mujoco_digest }}
       holosoma_thor_inference_digest: ${{ steps.verify.outputs.holosoma_thor_inference_digest }}
       holosoma_thor_inference_ros_digest: ${{ steps.verify.outputs.holosoma_thor_inference_ros_digest }}
@@ -78,8 +78,8 @@ jobs:
             holosoma
             holosoma-inference
             holosoma-retargeting
-            holosoma-isaacsim
-            holosoma-isaacsim6
+            holosoma-isaaclab2
+            holosoma-isaaclab3
             holosoma-mujoco
             holosoma-thor-inference
             holosoma-thor-inference-ros
@@ -123,8 +123,8 @@ jobs:
     uses: ./.github/workflows/test-images.yaml
     with:
       combined_image: ${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}/holosoma@${{ needs.verify-images.outputs.holosoma_digest }}
-      isaacsim_image: ${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}/holosoma-isaacsim@${{ needs.verify-images.outputs.holosoma_isaacsim_digest }}
-      isaacsim6_image: ${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}/holosoma-isaacsim6@${{ needs.verify-images.outputs.holosoma_isaacsim6_digest }}
+      isaaclab2_image: ${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}/holosoma-isaaclab2@${{ needs.verify-images.outputs.holosoma_isaaclab2_digest }}
+      isaaclab3_image: ${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}/holosoma-isaaclab3@${{ needs.verify-images.outputs.holosoma_isaaclab3_digest }}
       mujoco_image: ${{ vars.ECR_REGISTRY || '982423663241.dkr.ecr.us-west-2.amazonaws.com' }}/holosoma-mujoco@${{ needs.verify-images.outputs.holosoma_mujoco_digest }}
       run_mypy: true
     secrets: inherit
@@ -150,8 +150,8 @@ jobs:
             holosoma
             holosoma-inference
             holosoma-retargeting
-            holosoma-isaacsim
-            holosoma-isaacsim6
+            holosoma-isaaclab2
+            holosoma-isaaclab3
             holosoma-mujoco
             holosoma-thor-inference
             holosoma-thor-inference-ros
@@ -160,8 +160,8 @@ jobs:
             "${{ needs.verify-images.outputs.holosoma_digest }}"
             "${{ needs.verify-images.outputs.holosoma_inference_digest }}"
             "${{ needs.verify-images.outputs.holosoma_retargeting_digest }}"
-            "${{ needs.verify-images.outputs.holosoma_isaacsim_digest }}"
-            "${{ needs.verify-images.outputs.holosoma_isaacsim6_digest }}"
+            "${{ needs.verify-images.outputs.holosoma_isaaclab2_digest }}"
+            "${{ needs.verify-images.outputs.holosoma_isaaclab3_digest }}"
             "${{ needs.verify-images.outputs.holosoma_mujoco_digest }}"
             "${{ needs.verify-images.outputs.holosoma_thor_inference_digest }}"
             "${{ needs.verify-images.outputs.holosoma_thor_inference_ros_digest }}"

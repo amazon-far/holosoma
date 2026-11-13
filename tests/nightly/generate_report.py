@@ -101,8 +101,8 @@ def get_nightly_run_ids(gh_run_id: str | None = None) -> dict[str, list[str]]:
             # for archived runs (retired backend); see run_summary.KNOWN_SIMULATORS.
             if tag in [
                 "isaacgym",
-                "isaacsim",
-                "isaacsim6",
+                "isaaclab2",
+                "isaaclab3",
                 "mujoco",
                 "mjwarp",
                 "singlegpu",

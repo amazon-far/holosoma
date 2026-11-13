@@ -39,7 +39,12 @@ class SimulatorConfig:
         simulator_type = config._target_
         simulator_type_name = simulator_type.split(".")[-1].lower()
         simulator_config_name = config.config.name
-        if simulator_config_name != simulator_type_name:
+        isaaclab_frontend = simulator_type_name == "isaacsim" and simulator_config_name in (
+            "isaacsim",
+            "isaaclab2",
+            "isaaclab3",
+        )
+        if simulator_config_name != simulator_type_name and not isaaclab_frontend:
             raise ValueError(
                 f"Config mismatch: simulator._target_ type '{simulator_type}' inconsistent with "
                 f"config name '{simulator_config_name}'"
@@ -62,7 +67,7 @@ class SimulatorConfig:
         """Set the simulator type to use throughout the codebase."""
         if simulator_type == "isaacgym":
             raise ValueError(
-                "The Isaac Gym simulator is no longer supported. Select simulator:isaacsim, "
+                "The Isaac Gym simulator is no longer supported. Select simulator:isaaclab2, "
                 "simulator:mujoco or simulator:mjwarp; configs saved with Isaac Gym can still be "
                 "evaluated by overriding the simulator on the command line."
             )

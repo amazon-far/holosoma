@@ -3,8 +3,8 @@
     "holosoma": "holosoma:2025_1211_0109",
     "hs-inference": "holosoma-inference:latest",
     "hs-retargeting": "holosoma-retargeting:latest",
-    "hs-isaacsim": "holosoma-isaacsim:latest",
-    "hs-isaacsim6": "holosoma-isaacsim6:latest",
+    "hs-isaaclab2": "holosoma-isaaclab2:latest",
+    "hs-isaaclab3": "holosoma-isaaclab3:latest",
     "hs-mujoco": "holosoma-mujoco:latest"
   }
 }

@@ -120,8 +120,8 @@ jobs:
             holosoma
             holosoma-inference
             holosoma-retargeting
-            holosoma-isaacsim
-            holosoma-isaacsim6
+            holosoma-isaaclab2
+            holosoma-isaaclab3
             holosoma-mujoco
             holosoma-thor-inference
             holosoma-thor-inference-ros

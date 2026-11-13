@@ -12,10 +12,10 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from holosoma.config_types.full_sim import FullSimConfig
-    from holosoma.config_types.simulator import IsaacSim6Config
+    from holosoma.config_types.simulator import IsaacLab3Config
     from holosoma.config_types.env import EnvConfig
 
-    from .base import IsaacSimBackendAdapter
+    from .base import IsaacLabBackendAdapter
 
 
 def _installed_isaaclab_major() -> int | None:
@@ -36,8 +36,8 @@ def _installed_isaaclab_major() -> int | None:
 
 
 def get_backend(
-    backend: str, *, native: IsaacSim6Config | None = None, rendering: bool = True
-) -> IsaacSimBackendAdapter:
+    backend: str, *, native: IsaacLab3Config | None = None, rendering: bool = True
+) -> IsaacLabBackendAdapter:
     """Construct the explicit API family and validate the installed runtime.
 
     Selection comes from the simulator config. Installed package capabilities
@@ -47,17 +47,17 @@ def get_backend(
     physics-only Isaac Sim 6 runs do not load their configured renderer preference.
     """
     lab_major = _installed_isaaclab_major()
-    name = backend
-    if name == "isaacsim5":
-        from .isaacsim5 import IsaacSim5Backend
+    name = "isaaclab2" if backend == "isaacsim" else backend
+    if name == "isaaclab2":
+        from .isaaclab2 import IsaacLab2Backend
 
-        selected: IsaacSimBackendAdapter = IsaacSim5Backend()
-    elif name == "isaacsim6":
-        from .isaacsim6 import IsaacSim6Backend
+        selected: IsaacLabBackendAdapter = IsaacLab2Backend()
+    elif name == "isaaclab3":
+        from .isaaclab3 import IsaacLab3Backend
 
-        selected = IsaacSim6Backend(native, rendering=rendering)
+        selected = IsaacLab3Backend(native, rendering=rendering)
     else:
-        raise ValueError(f"Unknown Isaac Sim backend {name!r}; expected 'isaacsim5' or 'isaacsim6'.")
+        raise ValueError(f"Unknown Isaac Sim backend {name!r}; expected 'isaaclab2' or 'isaaclab3'.")
     if lab_major is not None and lab_major != selected.isaaclab_major:
         raise RuntimeError(
             f"The {name} backend requires Isaac Lab {selected.isaaclab_major}.x; "
@@ -67,7 +67,7 @@ def get_backend(
     return selected
 
 
-def get_backend_for_config(config: EnvConfig | FullSimConfig) -> IsaacSimBackendAdapter:
+def get_backend_for_config(config: EnvConfig | FullSimConfig) -> IsaacLabBackendAdapter:
     """Select the same runtime requirements at launch and frontend construction."""
     from holosoma.config_types.sensor import CameraSensorConfig
     from holosoma.config_types.simulator import SimulatorConfig
@@ -82,4 +82,4 @@ def get_backend_for_config(config: EnvConfig | FullSimConfig) -> IsaacSimBackend
         or not config.training.headless
         or bool(simulator.isaacsim.app_launcher_args())
     )
-    return get_backend(simulator.isaacsim_backend, native=simulator.sim.isaacsim6, rendering=rendering)
+    return get_backend(simulator.isaaclab_backend, native=simulator.sim.isaaclab3, rendering=rendering)

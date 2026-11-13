@@ -12,9 +12,9 @@ import pytest
 from holosoma.config_types.env import get_run_sim_env_config
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.config_types.sensor import CameraSensorConfig, SensorMountConfig
-from holosoma.config_types.simulator import IsaacSim6Config
-from holosoma.config_values.run_sim import isaacsim6
-from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Backend
+from holosoma.config_types.simulator import IsaacLab3Config
+from holosoma.config_values.run_sim import isaaclab3
+from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Backend
 from holosoma.utils import sim_utils
 from holosoma.utils.sim_utils import format_simulation_performance
 
@@ -28,26 +28,26 @@ def test_launcher_uses_task_sensors_resolved_device_and_per_process_env_count(
     activated: list[bool] = []
     app = object()
 
-    def add_args(_backend: IsaacSim6Backend, parser: argparse.ArgumentParser) -> None:
+    def add_args(_backend: IsaacLab3Backend, parser: argparse.ArgumentParser) -> None:
         parser.add_argument("--enable_cameras", action="store_true")
         parser.add_argument("--distributed", action="store_true")
 
-    def launch(backend: IsaacSim6Backend, args: argparse.Namespace, *, sim_config: Any) -> object:
+    def launch(backend: IsaacLab3Backend, args: argparse.Namespace, *, sim_config: Any) -> object:
         launched.append((args, backend._rendering))
         return app
 
-    monkeypatch.setattr(IsaacSim6Backend, "add_launcher_args", add_args)
-    monkeypatch.setattr(IsaacSim6Backend, "launch_app", launch)
-    monkeypatch.setattr(sim_utils, "_ensure_render_pipeline_active", lambda *, isaacsim6: activated.append(isaacsim6))
+    monkeypatch.setattr(IsaacLab3Backend, "add_launcher_args", add_args)
+    monkeypatch.setattr(IsaacLab3Backend, "launch_app", launch)
+    monkeypatch.setattr(sim_utils, "_ensure_render_pipeline_active", lambda *, isaaclab3: activated.append(isaaclab3))
     monkeypatch.setattr(sys, "argv", ["test-launcher"])
     monkeypatch.setenv("WORLD_SIZE", "2")
     config = RunSimConfig(
         simulator=dataclasses.replace(
-            isaacsim6,
+            isaaclab3,
             config=dataclasses.replace(
-                isaacsim6.config,
+                isaaclab3.config,
                 sim=dataclasses.replace(
-                    isaacsim6.config.sim, isaacsim6=IsaacSim6Config(physics_backend="newton", renderer="ovrtx")
+                    isaaclab3.config.sim, isaaclab3=IsaacLab3Config(physics_backend="newton", renderer="ovrtx")
                 ),
             ),
         ),

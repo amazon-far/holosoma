@@ -73,7 +73,7 @@ class EvalPayloadCallback(RLEvalCallback):
 
         env = self._get_env()
         self._sim = env.simulator
-        if self._sim.simulator_config.name != "isaacsim":
+        if self._sim.simulator_config.name not in ("isaaclab2", "isaaclab3", "isaacsim"):
             raise RuntimeError(f"EvalPayloadCallback requires IsaacSim, got '{self._sim.simulator_config.name}'")
 
         # Resolve body names

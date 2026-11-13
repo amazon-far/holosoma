@@ -122,7 +122,7 @@ class _IsaacSimReader:
             if body_name == name or body_name.startswith(name):
                 return self._scene[name], 0
         robot = self._scene["robot"]
-        if self._sim.backend.is_isaacsim6:
+        if self._sim.backend.is_isaaclab3:
             # These readers index raw PhysX buffers, whose solver order can differ
             # from find_bodies' public order. Resolve the requested name directly.
             assert body_name in robot.backend_body_names, f"could not resolve body '{body_name}' on the robot"
@@ -139,7 +139,7 @@ class _IsaacSimReader:
 
     def _property(self, asset, name: str):
         """Read PhysX directly, without the production randomization adapter."""
-        if self._sim.backend.is_isaacsim6:
+        if self._sim.backend.is_isaaclab3:
             import warp as wp
 
             if not self._sim.backend.uses_kit:
@@ -186,9 +186,9 @@ class _IsaacSimReader:
     def material_properties_for_asset(self, body_name: str) -> torch.Tensor:
         """Read every environment and physical shape of the owning asset."""
         asset, _bidx = self._asset_and_body(body_name)
-        view = asset.root_view if self._sim.backend.is_isaacsim6 else asset.root_physx_view
+        view = asset.root_view if self._sim.backend.is_isaaclab3 else asset.root_physx_view
         mats = self._property(asset, "material_properties")
-        if self._sim.backend.is_isaacsim6 and not self._sim.backend.uses_kit:
+        if self._sim.backend.is_isaaclab3 and not self._sim.backend.uses_kit:
             from isaaclab_ov import tensor_types as TT
 
             attribute = (
@@ -219,7 +219,7 @@ _READERS = {
     "mujoco": _MujocoReader,
     "mjwarp": _MujocoReader,
     "isaacsim": _IsaacSimReader,
-    "isaacsim6": _IsaacSimReader,
+    "isaaclab3": _IsaacSimReader,
 }
 
 

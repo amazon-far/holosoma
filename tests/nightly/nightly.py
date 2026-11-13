@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from holosoma.config_types.experiment import ExperimentConfig
-from holosoma.config_types.simulator import IsaacSimBackend, MujocoBackend
+from holosoma.config_types.simulator import MujocoBackend
 from holosoma.config_values.experiment import get_annotated_experiment_config
 from holosoma.train_agent import split_envs_across_ranks, train_on_task
 from holosoma.utils.config_registry import parse_config
@@ -64,8 +64,8 @@ def simulator_tag(config: ExperimentConfig) -> str:
     name = config.simulator.config.name
     if name == "mujoco" and config.simulator.config.mujoco_backend == MujocoBackend.WARP:
         return "mjwarp"
-    if name == "isaacsim" and config.simulator.config.isaacsim_backend == IsaacSimBackend.ISAACSIM6:
-        return "isaacsim6"
+    if name == "isaacsim":
+        return config.simulator.config.isaaclab_backend.value
     return name
 
 
@@ -139,14 +139,24 @@ def baseline_fps(api: Any, run_path: str, cell_tags: list[str], current_run_id: 
     """
     entity, project, _ = run_path.split("/")
     previous: list[float] = []
-    required = set(cell_tags)
+    required = {"isaaclab2" if tag == "isaacsim" else tag for tag in cell_tags}
+    filters: dict[str, Any] = {"tags": {"$all": cell_tags}}
+    if "isaaclab2" in required:
+        # Keep the released Lab 2 history when new runs use the canonical tag.
+        filters = {
+            "$and": [
+                {"tags": {"$all": sorted(required - {"isaaclab2"})}},
+                {"tags": {"$in": ["isaaclab2", "isaacsim"]}},
+            ]
+        }
 
-    for other in api.runs(path=f"{entity}/{project}", filters={"tags": {"$all": cell_tags}}, order="-created_at"):
+    for other in api.runs(path=f"{entity}/{project}", filters=filters, order="-created_at"):
         if other.id == current_run_id:
             continue
         # The filter above is only an optimisation; re-check locally so an unsupported
         # or ignored server-side filter can't silently pool runs from other cells.
-        if not required.issubset(set(other.tags or [])):
+        tags = {"isaaclab2" if tag == "isaacsim" else tag for tag in (other.tags or [])}
+        if not required.issubset(tags):
             continue
         value = (other.summary or {}).get(PERF_FPS_MEAN_KEY)
         if isinstance(value, (int, float)) and math.isfinite(value):

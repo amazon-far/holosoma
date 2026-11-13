@@ -82,7 +82,7 @@ def setup_simulator_imports(config: EnvConfig) -> None:
     # IsaacSim imports handled in setup_isaaclab_launcher
 
 
-def _ensure_render_pipeline_active(*, isaacsim6: bool = False) -> None:
+def _ensure_render_pipeline_active(*, isaaclab3: bool = False) -> None:
     """Enable offscreen rendering before constructing either native SimulationContext.
 
     Both launchers set this flag automatically only for headless runs with
@@ -90,7 +90,7 @@ def _ensure_render_pipeline_active(*, isaacsim6: bool = False) -> None:
     even when a GUI is unavailable. Lab 2 otherwise latches its no-render mode;
     Lab 3 uses this setting with its separate renderer and visualizer lifecycle.
     """
-    if isaacsim6:
+    if isaaclab3:
         from isaaclab.app import get_settings_manager
 
         get_settings_manager().set("/isaaclab/render/offscreen", True)
@@ -148,7 +148,7 @@ def setup_isaaclab_launcher(config: EnvConfig, device: str) -> Any | None:
     # LiDAR ray queries do not need RTX; only video and TiledCamera sensors enable the renderer.
     if needs_rendering:
         args_cli.enable_cameras = True
-    if backend.is_isaacsim6 and video_enabled:
+    if backend.is_isaaclab3 and video_enabled:
         # Declare movie rendering to Lab 3's headless launch lifecycle.
         args_cli.video = True
 
@@ -161,7 +161,7 @@ def setup_isaaclab_launcher(config: EnvConfig, device: str) -> Any | None:
         simulation_app = backend.launch_app(args_cli, sim_config=config.simulator.config.sim)
 
         if needs_rendering:
-            _ensure_render_pipeline_active(isaacsim6=backend.is_isaacsim6)
+            _ensure_render_pipeline_active(isaaclab3=backend.is_isaaclab3)
 
         logger.info(f"IsaacSim args_cli: {args_cli}")
         logger.info(f"IsaacSim unknown_args: {unknown_args}")
@@ -304,9 +304,9 @@ def _close_simulation_app(simulation_app: Any, failure: BaseException | None) ->
         # Kit can terminate the process inside close(), before Python reaches the
         # caller's exception handler. Set its exit status before closing the app.
         return_code = _simulation_exit_code(failure)
-        from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Runtime
+        from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Runtime
 
-        if isinstance(simulation_app, IsaacSim6Runtime):
+        if isinstance(simulation_app, IsaacLab3Runtime):
             _flush_simulation_logs()
             simulation_app.close(exit_code=return_code)
             return

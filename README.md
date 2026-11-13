@@ -24,7 +24,7 @@ src/
 ## Documentation
 
 - **[Training Guide](src/holosoma/README.md)** - Train locomotion and whole-body tracking policies in IsaacSim/MJWarp
-- **[Isaac Sim backends](docs/isaacsim-backends.md)** - Choose `isaacsim` (Sim 5.1 / Lab 2.3) or `isaacsim6` (Sim 6.2 / Lab 3.0)
+- **[Isaac Lab backends](docs/isaaclab-backends.md)** - Choose `isaaclab2` (Sim 5.1 / Lab 2.3) or `isaaclab3` (Sim 6.2 / Lab 3.0)
 - **[Inference & Deployment Guide](src/holosoma_inference/README.md)** - Deploy policies to real robots or evaluate in MuJoCo simulation
 - **[Retargeting Guide](src/holosoma_retargeting/holosoma_retargeting/README.md)** - Convert human motion capture data to robot motions
 - **[Robot SDK Bridges](src/holosoma/holosoma/bridge/README.md)** - Choose a bridge and tune sim-to-sim transport performance
@@ -38,10 +38,10 @@ Choose the appropriate setup script based on your use case:
 ```bash
 # For Isaac Sim 5.1 / Isaac Lab 2.3 training
 # Requires Ubuntu 22.04 or later due to IsaacSim dependencies
-bash scripts/setup_isaacsim.sh
+bash scripts/setup_isaaclab2.sh
 
 # For Isaac Sim 6.2 / Isaac Lab 3.0 training (Python 3.12)
-bash scripts/setup_isaacsim6.sh
+bash scripts/setup_isaaclab3.sh
 
 # For MJWarp training and MuJoCo simulation (inference) — conda
 bash scripts/setup_mujoco.sh
@@ -61,10 +61,10 @@ bash scripts/setup_retargeting.sh
 Train a G1 robot with FastSAC on IsaacSim:
 
 ```bash
-source scripts/source_isaacsim_setup.sh
+source scripts/source_isaaclab2_setup.sh
 python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-fast-sac \
-    simulator:isaacsim \
+    simulator:isaaclab2 \
     logger:wandb \
     --training.seed 1
 ```

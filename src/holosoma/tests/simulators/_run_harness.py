@@ -119,7 +119,7 @@ def run_isaacsim_harness(
     result_file: str | Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Route a native harness to one explicit preset, preserving all success checks."""
-    if simulator not in {"isaacsim", "isaacsim6"}:
+    if simulator not in {"isaaclab2", "isaaclab3", "isaacsim"}:
         raise ValueError(f"Expected an Isaac Sim preset, got {simulator!r}.")
     routed_args = []
     arguments = iter(args)

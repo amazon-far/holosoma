@@ -1,20 +1,26 @@
-# Isaac Sim backends
+# Isaac Lab backends
 
-Backend names follow the **Isaac Sim major version**, separately from Isaac Lab.
+Backend names follow the **Isaac Lab major version**.
 
 | Preset | Runtime | Choose it for |
 | --- | --- | --- |
-| `simulator:isaacsim` | Isaac Sim 5.1 / Isaac Lab 2.3.2 (`isaacsim5`) | Existing experiments and checkpoints using the released integration. |
-| `simulator:isaacsim6` | Isaac Sim 6.2 / Isaac Lab 3.0.0 (`isaacsim6`) | Selectable physics/renderers and standalone execution. |
+| `simulator:isaaclab2` | Isaac Sim 5.1 / Isaac Lab 2.3.2 (`isaaclab2`) | Existing experiments and checkpoints using the released integration. |
+| `simulator:isaaclab3` | Isaac Sim 6.2 / Isaac Lab 3.0.0 (`isaaclab3`) | Selectable physics/renderers and standalone execution. |
 
-Existing presets/configurations stay on `isaacsim5`; activation does not select a
-backend. Migrate saved configs with `--simulator.config.isaacsim-backend=ISAACSIM6`.
+Existing presets/configurations stay on `isaaclab2`; activation does not select a
+backend. Migrate saved configs with `--simulator.config.isaaclab-backend=ISAACLAB3`.
 The installed runtime must match. Changing engines can change policy performance.
 
-## Isaac Sim 6: choose physics and rendering
+`simulator:isaacsim` remains an alias for `simulator:isaaclab2` in training,
+evaluation and `run_sim.py`. Released `setup_isaacsim.sh`,
+`source_isaacsim_setup.sh`, reset and CI script names forward to the Lab 2
+scripts. New configs and scripts use the Lab names; existing shared
+`physics.isaacsim`, camera and Kit options retain their field names.
 
-Set `--simulator.config.sim.isaacsim6.physics-backend` independently of
-`--simulator.config.sim.isaacsim6.renderer`. All six pairings below are supported.
+## Isaac Lab 3: choose physics and rendering
+
+Set `--simulator.config.sim.isaaclab3.physics-backend` independently of
+`--simulator.config.sim.isaaclab3.renderer`. All six pairings below are supported.
 
 | Physics | Choose it for |
 | --- | --- |
@@ -35,18 +41,18 @@ standalone runs. Native Warp/OVRTX GUI controls have not been validated here.
 For example, Newton with OVRTX:
 
 ```bash
-bash scripts/setup_isaacsim6.sh
-source scripts/source_isaacsim6_setup.sh
+bash scripts/setup_isaaclab3.sh
+source scripts/source_isaaclab3_setup.sh
 python src/holosoma/holosoma/train_agent.py \
-    exp:g1-29dof-fast-sac simulator:isaacsim6 logger:disabled \
-    --simulator.config.sim.isaacsim6.physics-backend=newton \
-    --simulator.config.sim.isaacsim6.renderer=ovrtx
+    exp:g1-29dof-fast-sac simulator:isaaclab3 logger:disabled \
+    --simulator.config.sim.isaaclab3.physics-backend=newton \
+    --simulator.config.sim.isaaclab3.renderer=ovrtx
 ```
 
-Isaac Sim 5 uses `setup_isaacsim.sh` / `source_isaacsim_setup.sh`. Docker builds use
-`docker/isaacsim.Dockerfile` or `docker/isaacsim6.Dockerfile` respectively.
+Isaac Lab 2 uses `setup_isaaclab2.sh` / `source_isaaclab2_setup.sh`. Docker builds use
+`docker/isaaclab2.Dockerfile` or `docker/isaaclab3.Dockerfile` respectively.
 
-The Isaac Sim 6 image contains both Kit and standalone backends. Shell activation
+The Isaac Lab 3 image contains both Kit and standalone backends. Shell activation
 prepares native library lookup without loading those runtimes; Kit's Python
 packages are exposed only when the selected cameras, movie, viewer or explicit
 Kit requirement needs them. Standalone importers use ordinary namespace discovery.
@@ -58,7 +64,7 @@ starting Python; select the runtime before importing Isaac Lab.
 
 - **Solver:** Newton MJWarp reads `sim.mujoco` and `sim.mujoco.warp`; PhysX reads
   `sim.physx`. `sim.substeps` remains shared. Newton-only collision/execution
-  controls use `sim.isaacsim6.newton`.
+  controls use `sim.isaaclab3.newton`.
 - **Objects and robot links:** use the existing `PhysicsConfig` and
   `robot.asset.link_physics`. Newton reuses
   `PhysicsConfig.mujoco` friction/contact parameters; `PhysicsConfig.newton` adds
@@ -87,7 +93,7 @@ options fail at startup.
   paired `dynamic_friction` is unused, dynamic-only randomization is rejected.
   Authored joint solver caps can limit effort below actuator limits.
 - Live USD body-damping randomization needs Kit PhysX. Request
-  `sim.isaacsim6.require_kit=True` with PhysX and a compatible renderer when using
+  `sim.isaaclab3.require_kit=True` with PhysX and a compatible renderer when using
   that event; detached physics rejects it.
 - OVRTX uses the SDK's `1/60` native snapshot increment per submission, independently
   of physics time. Native output can retain prior material color; exact temporal

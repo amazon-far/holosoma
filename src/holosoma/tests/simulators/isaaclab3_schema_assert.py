@@ -14,14 +14,14 @@ if sys.path and sys.path[0].endswith("simulators"):
 from holosoma.config_types.mujoco import MujocoConfig, MujocoWarpConfig
 from holosoma.config_types.newton import NewtonCollisionConfig
 from holosoma.config_types.scene import IsaacSimPhysicsConfig, MujocoPhysicsConfig, PhysicsConfig
-from holosoma.config_types.simulator import IsaacSim6Config, IsaacSim6NewtonConfig, IsaacSim6RendererConfig
+from holosoma.config_types.simulator import IsaacLab3Config, IsaacLab3NewtonConfig, IsaacLab3RendererConfig
 from tests.simulators._native_runtime_assertions import assert_native_runtime
 from tests.simulators._sim_harness import build_run_sim_config, launch_simulator, run_and_hard_exit, step
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulator", choices=["isaacsim6"], required=True)
+    parser.add_argument("--simulator", choices=["isaaclab3"], required=True)
     parser.add_argument("--physics", choices=["newton", "physx"], required=True)
     parser.add_argument("--renderer", choices=["newton_warp", "ovrtx"], required=True)
     parser.add_argument("--collision-source", choices=["mujoco", "newton"], default="mujoco")
@@ -32,14 +32,14 @@ def main() -> int:
     from tests.simulators import _camera_presets
 
     config = build_run_sim_config(
-        "isaacsim6",
+        "isaaclab3",
         "panel-target",
         "g1-29dof",
         "terrain_locomotion_plane",
         sensors=_camera_presets.front_cam_depth,
     )
     shared = MujocoConfig()
-    newton = IsaacSim6NewtonConfig()
+    newton = IsaacLab3NewtonConfig()
     if args.physics == "newton":
         shared = MujocoConfig(
             iterations=17,
@@ -53,20 +53,20 @@ def main() -> int:
             extra={"ccd_iterations": 7},
             warp=MujocoWarpConfig(nconmax_per_env=256, njmax_per_env=512, graph_conditional=False),
         )
-        newton = IsaacSim6NewtonConfig(
+        newton = IsaacLab3NewtonConfig(
             collision_source=args.collision_source,
             collision=NewtonCollisionConfig(broad_phase="sap")
             if args.collision_source == "newton"
             else NewtonCollisionConfig(),
             use_cuda_graph=not args.disable_cuda_graph,
         )
-    native = IsaacSim6Config(
+    native = IsaacLab3Config(
         physics_backend=args.physics,
         renderer=args.renderer,
         newton=newton,
-        renderer_options=IsaacSim6RendererConfig(enable_shadows=False)
+        renderer_options=IsaacLab3RendererConfig(enable_shadows=False)
         if args.renderer == "newton_warp"
-        else IsaacSim6RendererConfig(),
+        else IsaacLab3RendererConfig(),
     )
     config = dataclasses.replace(
         config,
@@ -74,7 +74,7 @@ def main() -> int:
             config.simulator,
             config=dataclasses.replace(
                 config.simulator.config,
-                sim=dataclasses.replace(config.simulator.config.sim, isaacsim6=native, mujoco=shared),
+                sim=dataclasses.replace(config.simulator.config.sim, isaaclab3=native, mujoco=shared),
             ),
         ),
         robot=dataclasses.replace(

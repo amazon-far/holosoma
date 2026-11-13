@@ -22,8 +22,8 @@ _HARNESS = Path(__file__).resolve().parents[1] / "dof_order_assert.py"
 
 
 @pytest.mark.parametrize("use_newton_actuators", ["true", "false"], ids=["default", "fallback"])
-def test_dof_order(use_newton_actuators: str, tmp_path, run_isaacsim_harness, isaacsim_backend):
-    if use_newton_actuators == "false" and isaacsim_backend != "isaacsim6":
+def test_dof_order(use_newton_actuators: str, tmp_path, run_isaacsim_harness, isaaclab_backend):
+    if use_newton_actuators == "false" and isaaclab_backend != "isaaclab3":
         pytest.skip("The alternate actuator execution path is an Isaac Lab 3 option")
     result_file = tmp_path / "dof_order.txt"
     run_isaacsim_harness(

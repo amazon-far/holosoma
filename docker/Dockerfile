@@ -34,9 +34,9 @@ RUN echo ". $CONDA_ROOT/etc/profile.d/conda.sh" >> ~/.bashrc && \
 # stage supplies the implementation without rerunning package installation.
 WORKDIR /workspace/holosoma
 COPY scripts/setup_all.sh scripts/setup_inference.sh \
-    scripts/setup_isaacsim.sh scripts/setup_isaacsim_delta.sh scripts/setup_mujoco.sh \
+    scripts/setup_isaaclab2.sh scripts/setup_isaaclab2_delta.sh scripts/setup_mujoco.sh \
     scripts/setup_retargeting.sh scripts/source_common.sh scripts/versions.sh \
-    scripts/isaacsim_constraints.txt ./scripts/
+    scripts/isaaclab2_constraints.txt ./scripts/
 COPY src/holosoma/pyproject.toml src/holosoma/README.md ./src/holosoma/
 COPY src/holosoma_inference/pyproject.toml src/holosoma_inference/README.md \
     ./src/holosoma_inference/

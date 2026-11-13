@@ -11,10 +11,10 @@ from dataclasses import asdict
 from argparse import Namespace
 from typing import Any
 
-from holosoma.config_types.simulator import IsaacSim6Config, IsaacSim6NewtonConfig
+from holosoma.config_types.simulator import IsaacLab3Config, IsaacLab3NewtonConfig
 from holosoma.config_types.mujoco import MujocoConfig
 
-from .base import IsaacSimBackendAdapter
+from .base import IsaacLabBackendAdapter
 
 
 _RUNTIME = ExitStack()
@@ -44,7 +44,7 @@ _RTX_PRESETS = {
 }
 
 
-def newton_solver_settings(shared: MujocoConfig, newton: IsaacSim6NewtonConfig) -> dict[str, Any]:
+def newton_solver_settings(shared: MujocoConfig, newton: IsaacLab3NewtonConfig) -> dict[str, Any]:
     """Map shared solver controls and reject unsupported explicit settings."""
     if shared.solver == "pgs":
         raise ValueError("sim.mujoco.solver='pgs' is unsupported by Newton MJWarp; use cg or newton")
@@ -81,7 +81,7 @@ def newton_solver_settings(shared: MujocoConfig, newton: IsaacSim6NewtonConfig) 
     return result
 
 
-class IsaacSim6Runtime:
+class IsaacLab3Runtime:
     """Retain either runtime through Lab 3's supported launch context.
 
     ``launch_simulation`` owns the runtime and preserves failure status during
@@ -124,12 +124,12 @@ class IsaacSim6Runtime:
         return getattr(self._app, name)
 
 
-class IsaacSim6Backend(IsaacSimBackendAdapter):
+class IsaacLab3Backend(IsaacLabBackendAdapter):
     isaaclab_major = 3
     env_regex_ns = "/World/envs/env_[^/]+"
 
-    def __init__(self, native: IsaacSim6Config | None = None, *, rendering: bool = True):
-        self.options = native if native is not None else IsaacSim6Config()
+    def __init__(self, native: IsaacLab3Config | None = None, *, rendering: bool = True):
+        self.options = native if native is not None else IsaacLab3Config()
         self._rendering = rendering
 
     @property
@@ -239,7 +239,7 @@ class IsaacSim6Backend(IsaacSimBackendAdapter):
         if requested_physics not in (None, expected_physics):
             raise ValueError(
                 f"SDK --physics {requested_physics!r} conflicts with configured {expected_physics!r}; "
-                "select --simulator.config.sim.isaacsim6.physics-backend instead."
+                "select --simulator.config.sim.isaaclab3.physics-backend instead."
             )
         # Holosoma's viewer contract predates Lab 3's independent --viz switch.
         # Native visualizers preserve the standalone runtime for Warp/OVRTX.
@@ -272,7 +272,7 @@ class IsaacSim6Backend(IsaacSimBackendAdapter):
                 )
             register_standalone_schemas()
             _RUNTIME.enter_context(launch_simulation(launch_cfg, args))
-            return IsaacSim6Runtime()
+            return IsaacLab3Runtime()
         # Sim 6.2's deferred telemetry CPU-info startup can race native
         # interface initialization. Use Kit's supported serial startup mode.
         telemetry_setting = "/exts/omni.kit.telemetry/skipDeferredStartup"
@@ -297,7 +297,7 @@ class IsaacSim6Backend(IsaacSimBackendAdapter):
         _RUNTIME.enter_context(launch_simulation(launch_cfg, args))
         import omni.kit.app
 
-        return IsaacSim6Runtime(omni.kit.app.get_app())
+        return IsaacLab3Runtime(omni.kit.app.get_app())
 
     def physics_config(self, config: Any = None) -> Any:
         """Build the explicitly selected physics engine's supported config."""
@@ -511,7 +511,7 @@ class IsaacSim6Backend(IsaacSimBackendAdapter):
     def contact_forces(sensor: Any, config: Any) -> Any:
         # Lab 2's net_forces_w meant normal force. Sim 6.2 adds friction to
         # net_forces_w; keep the prior reward/termination contract by default.
-        if config.isaacsim6.contact_force_mode == "total":
+        if config.isaaclab3.contact_force_mode == "total":
             return sensor.data.net_forces_w.torch
         return sensor.data.net_normal_forces_w.torch
 
@@ -519,7 +519,7 @@ class IsaacSim6Backend(IsaacSimBackendAdapter):
         from isaaclab.sim import SimulationCfg
         from isaaclab.sim.spawners.materials import RigidBodyMaterialBaseCfg
 
-        native = config.isaacsim6
+        native = config.isaaclab3
         return SimulationCfg(
             dt=1.0 / config.fps,
             render_interval=config.control_decimation_steps,
@@ -647,7 +647,7 @@ class IsaacSim6Backend(IsaacSimBackendAdapter):
         if self.options.renderer != "newton_warp" and settings:
             name = next(iter(settings))
             raise ValueError(
-                f"isaacsim6.renderer_options.{name} is Warp-only; selected renderer is {self.options.renderer!r}."
+                f"isaaclab3.renderer_options.{name} is Warp-only; selected renderer is {self.options.renderer!r}."
             )
         if self.options.renderer == "ovrtx":
             from isaaclab_ov.renderers import OVRTXRendererCfg

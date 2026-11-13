@@ -24,7 +24,7 @@ from tests.simulators._native_runtime_assertions import (
 )
 from tests.simulators._sim_harness import (
     build_run_sim_config,
-    configure_isaacsim6,
+    configure_isaaclab3,
     launch_simulator,
     run_and_hard_exit,
     step,
@@ -35,7 +35,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--renderer", choices=["ovrtx", "isaac_rtx", "newton_warp"])
     parser.add_argument("--num-envs", type=int, default=2)
-    parser.add_argument("--simulator", choices=["isaacsim6"], default="isaacsim6")
+    parser.add_argument("--simulator", choices=["isaaclab3"], default="isaaclab3")
     parser.add_argument("--scene-config", type=Path, required=True)
     parser.add_argument("--result-file", type=Path, required=True)
     args = parser.parse_args()
@@ -54,7 +54,7 @@ def main() -> int:
         _camera_presets.panel_target.rigid_objects["panel"], position=[4.74, -4.16, 1.4]
     )
     scene = dataclasses.replace(scene, rigid_objects=objects, scene_files={"apartment": room})
-    config = build_run_sim_config("isaacsim6", "empty", "onelink-box", "terrain_locomotion_plane")
+    config = build_run_sim_config("isaaclab3", "empty", "onelink-box", "terrain_locomotion_plane")
     robot = dataclasses.replace(
         config.robot, init_state=dataclasses.replace(config.robot.init_state, pos=[4.5, -2.45, 0.8])
     )
@@ -64,8 +64,8 @@ def main() -> int:
         robot=robot,
         training=dataclasses.replace(config.training, num_envs=args.num_envs, headless=True),
     )
-    config = configure_isaacsim6(
-        config, argparse.Namespace(simulator="isaacsim6", physics_backend="newton", renderer=args.renderer or "ovrtx")
+    config = configure_isaaclab3(
+        config, argparse.Namespace(simulator="isaaclab3", physics_backend="newton", renderer=args.renderer or "ovrtx")
     )
     # Retain shared MJWarp capacity/settings used by native controls and the session.
     mujoco = config.simulator.config.sim.mujoco

@@ -20,15 +20,16 @@ def shell_tree(tmp_path: Path) -> ShellTree:
     checkout = tmp_path / "checkout"
     ci = checkout / "tests/ci"
     ci.mkdir(parents=True)
-    for name in ["isaacsim_ci_tests.sh", "no_sim_ci_tests.sh"]:
+    for name in ["isaaclab_ci_tests.sh", "no_sim_ci_tests.sh"]:
         source = (ROOT / "tests/ci" / name).read_text()
         assert source.count("cd /workspace/holosoma") == 1
         (ci / name).write_text(source.replace("cd /workspace/holosoma", 'cd "$CI_ROUTING_CHECKOUT"'))
+    (ci / "isaacsim_ci_tests.sh").write_text((ROOT / "tests/ci/isaacsim_ci_tests.sh").read_text())
     scripts = checkout / "scripts"
     scripts.mkdir()
     for family, name in [
-        ("isaacsim5", "source_isaacsim_setup.sh"),
-        ("isaacsim6", "source_isaacsim6_setup.sh"),
+        ("isaaclab2", "source_isaaclab2_setup.sh"),
+        ("isaaclab3", "source_isaaclab3_setup.sh"),
     ]:
         (scripts / name).write_text(f"export CI_ACTIVATED_PROFILE={family}\n")
 
@@ -41,7 +42,7 @@ def shell_tree(tmp_path: Path) -> ShellTree:
 import json, os, sys
 with open(os.environ["CI_ROUTING_LOG"], "a") as log:
     log.write(json.dumps([os.environ["CI_ACTIVATED_PROFILE"], *sys.argv[1:]]) + "\\n")
-if sys.argv[1] == "scripts/validate_isaacsim_runtime.py":
+if sys.argv[1] == "scripts/validate_isaaclab_runtime.py":
     sys.exit(int(os.environ["CI_ROUTING_PREFLIGHT_EXIT"]))
 PY
 """
@@ -67,7 +68,7 @@ def _run(
     script: str,
     args: list[str],
     *,
-    inherited_backend: str = "isaacsim6",
+    inherited_backend: str = "isaaclab3",
     multigpu: str = "False",
     preflight_exit: int = 0,
 ) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
@@ -91,11 +92,11 @@ def _run(
 @pytest.mark.parametrize(
     ("backend", "multigpu", "preflight_exit"),
     [
-        ("isaacsim5", "False", 0),
-        ("isaacsim5", "True", 0),
-        ("isaacsim6", "False", 0),
-        ("isaacsim6", "True", 0),
-        ("isaacsim6", "False", 13),
+        ("isaaclab2", "False", 0),
+        ("isaaclab2", "True", 0),
+        ("isaaclab3", "False", 0),
+        ("isaaclab3", "True", 0),
+        ("isaaclab3", "False", 13),
     ],
 )
 def test_ci_routes_isaac_and_pure_suites(
@@ -103,24 +104,24 @@ def test_ci_routes_isaac_and_pure_suites(
 ) -> None:
     result, invocations = _run(
         shell_tree,
-        "isaacsim_ci_tests.sh",
+        "isaaclab_ci_tests.sh",
         ["--backend", backend],
-        inherited_backend="isaacsim5" if backend == "isaacsim6" else "isaacsim6",
+        inherited_backend="isaaclab2" if backend == "isaaclab3" else "isaaclab3",
         multigpu=multigpu,
         preflight_exit=preflight_exit,
     )
     assert result.returncode == preflight_exit, result.stderr
     holosoma_install = ["-m", "pip", "install", "-e", "src/holosoma[unitree,booster]"]
-    preflight = ["scripts/validate_isaacsim_runtime.py", "--backend", backend]
+    preflight = ["scripts/validate_isaaclab_runtime.py", "--backend", backend]
     if multigpu == "True":
         preflight.append("--multigpu")
     marker = "isaacsim and multi_gpu" if multigpu == "True" else "isaacsim and not multi_gpu"
-    pytest_args = ["-m", "pytest", "-s", "--strict-markers", "--isaacsim-backend", backend, "-m"]
+    pytest_args = ["-m", "pytest", "-s", "--strict-markers", "--isaaclab-backend", backend, "-m"]
     ignores = ["--ignore=thirdparty", "--ignore=src/holosoma_inference"]
     expected = [holosoma_install, preflight]
     if preflight_exit == 0:
         expected.append([*pytest_args, marker, *ignores])
-    if preflight_exit == 0 and backend == "isaacsim6" and multigpu == "False":
+    if preflight_exit == 0 and backend == "isaaclab3" and multigpu == "False":
         expected.extend(
             [
                 holosoma_install,
@@ -134,9 +135,10 @@ def test_ci_routes_isaac_and_pure_suites(
 @pytest.mark.parametrize(
     ("args", "inherited_backend", "expected_backend"),
     [
-        ([], "isaacsim6", "isaacsim5"),
-        (["--backend", "isaacsim5"], "isaacsim6", "isaacsim5"),
-        (["--backend", "isaacsim6"], "isaacsim5", "isaacsim6"),
+        ([], "isaaclab3", "isaaclab2"),
+        (["--backend", "isaaclab2"], "isaaclab3", "isaaclab2"),
+        (["--backend", "isaaclab3"], "isaaclab2", "isaaclab3"),
+        (["--backend", "isaacsim"], "isaaclab3", "isaaclab2"),
     ],
 )
 def test_pure_suite_selects_version_only_from_explicit_arguments(
@@ -153,7 +155,7 @@ def test_pure_suite_selects_version_only_from_explicit_arguments(
             "pytest",
             "-s",
             "--strict-markers",
-            "--isaacsim-backend",
+            "--isaaclab-backend",
             expected_backend,
             "-m",
             "no_sim",
@@ -163,12 +165,19 @@ def test_pure_suite_selects_version_only_from_explicit_arguments(
     ]
 
 
+def test_released_ci_script_selects_lab2(shell_tree: ShellTree) -> None:
+    result, invocations = _run(shell_tree, "isaacsim_ci_tests.sh", [])
+    assert result.returncode == 0, result.stderr
+    assert [call[0] for call in invocations] == ["isaaclab2"] * 3
+    assert invocations[1][1:] == ["scripts/validate_isaaclab_runtime.py", "--backend", "isaaclab2"]
+
+
 @pytest.mark.parametrize(
     ("script", "args"),
     [
-        ("isaacsim_ci_tests.sh", []),
-        ("isaacsim_ci_tests.sh", ["--backend"]),
-        ("isaacsim_ci_tests.sh", ["--backend", "unsupported"]),
+        ("isaaclab_ci_tests.sh", []),
+        ("isaaclab_ci_tests.sh", ["--backend"]),
+        ("isaaclab_ci_tests.sh", ["--backend", "unsupported"]),
         ("no_sim_ci_tests.sh", ["--backend"]),
         ("no_sim_ci_tests.sh", ["--backend", "unsupported"]),
     ],

@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from isaaclab.scene import InteractiveScene
 
     from holosoma.managers.terrain import TerrainManager
-    from holosoma.simulator.isaacsim.backends.base import IsaacSimBackendAdapter
+    from holosoma.simulator.isaacsim.backends.base import IsaacLabBackendAdapter
 
 TERRAIN_PRIM_PATH = "/World/ground"
 
@@ -56,7 +56,7 @@ def build_terrain_fixtures(
     scene: InteractiveScene,
     robot_base_body_name: str,
     *,
-    backend: IsaacSimBackendAdapter,
+    backend: IsaacLabBackendAdapter,
 ) -> TerrainFixtures:
     """Author the terrain ground prim + optional height scanner cfg.
 
@@ -87,7 +87,7 @@ def build_terrain_fixtures(
         # Add a height scanner to the torso to detect the height of the terrain mesh
         # TODO: Scene USD files need ground mapping
         alignment_kwargs: dict[str, str | bool] = (
-            {"ray_alignment": "yaw"} if backend.is_isaacsim6 else {"attach_yaw_only": True}
+            {"ray_alignment": "yaw"} if backend.is_isaaclab3 else {"attach_yaw_only": True}
         )
         height_scanner_cfg = RayCasterCfg(
             prim_path=resolve_robot_link_prim_expression(robot_base_body_name, backend=backend),

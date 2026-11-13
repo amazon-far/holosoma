@@ -12,8 +12,8 @@ import pytest
 import torch
 import warp as wp
 
-from holosoma.simulator.isaacsim.backends.isaacsim5 import IsaacSim5Backend
-from holosoma.simulator.isaacsim.backends.isaacsim6 import IsaacSim6Backend
+from holosoma.simulator.isaacsim.backends.isaaclab2 import IsaacLab2Backend
+from holosoma.simulator.isaacsim.backends.isaaclab3 import IsaacLab3Backend
 from holosoma.utils.sampler import STAGE_SETUP, TermSampler
 
 pytestmark = pytest.mark.no_sim
@@ -40,8 +40,8 @@ def test_mass_event_uses_the_supplied_frontend_backend_for_sparse_writes(
     events = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(events)
 
-    backend = IsaacSim6Backend() if family == 3 else IsaacSim5Backend()
-    monkeypatch.setenv("HOLOSOMA_ISAACSIM_BACKEND", "isaacsim5" if family == 3 else "isaacsim6")
+    backend = IsaacLab3Backend() if family == 3 else IsaacLab2Backend()
+    monkeypatch.setenv("HOLOSOMA_ISAACSIM_BACKEND", "isaaclab2" if family == 3 else "isaaclab3")
     physical_masses = torch.tensor([[2.0, 3.0], [5.0, 7.0], [11.0, 13.0], [17.0, 19.0]])
     expected = torch.tensor([[2.0, 3.0], [5.0, 9.5], [11.0, 13.0], [17.0, 21.5]])
     received_selectors: list[list[int]] = []

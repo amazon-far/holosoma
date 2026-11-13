@@ -129,7 +129,7 @@ def schema_rules(value: Any, *, location: str) -> list[tuple[str, list[Any]]]:
 
 def wrap_spawn(cfg: Any, settings: dict[str, Any], *, backend: Any, material_defaults: Any = None) -> Any:
     """Keep the existing format/rigid-body behavior, then author native overrides."""
-    if not settings or not backend.is_isaacsim6:
+    if not settings or not backend.is_isaaclab3:
         return cfg
     compiled = compile_properties(settings)
     if not any(fragments for rules in compiled.values() for _pattern, fragments in rules):

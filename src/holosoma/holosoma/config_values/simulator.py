@@ -1,7 +1,7 @@
 import dataclasses
 
 from holosoma.config_types.simulator import (
-    IsaacSimBackend,
+    IsaacLabBackend,
     MujocoBackend,
     PhysxConfig,
     SimEngineConfig,
@@ -12,14 +12,14 @@ from holosoma.utils.config_registry import ConfigRegistry
 
 SIMULATOR_REGISTRY = ConfigRegistry(SimulatorConfig, group="holosoma.config.simulator")
 
-isaacsim = SIMULATOR_REGISTRY.add(
-    "isaacsim",
+isaaclab2 = SIMULATOR_REGISTRY.add(
+    "isaaclab2",
     SimulatorConfig(
         _target_="holosoma.simulator.isaacsim.isaacsim.IsaacSim",
         _recursive_=False,
         config=SimulatorInitConfig(
-            name="isaacsim",
-            isaacsim_backend=IsaacSimBackend.ISAACSIM5,
+            name="isaaclab2",
+            isaaclab_backend=IsaacLabBackend.ISAACLAB2,
             sim=SimEngineConfig(
                 fps=200,
                 control_decimation=4,
@@ -36,13 +36,16 @@ isaacsim = SIMULATOR_REGISTRY.add(
     ),
 )
 
-isaacsim6 = SIMULATOR_REGISTRY.add(
-    "isaacsim6",
+isaaclab3 = SIMULATOR_REGISTRY.add(
+    "isaaclab3",
     dataclasses.replace(
-        isaacsim,
-        config=dataclasses.replace(isaacsim.config, isaacsim_backend=IsaacSimBackend.ISAACSIM6),
+        isaaclab2,
+        config=dataclasses.replace(isaaclab2.config, name="isaaclab3", isaaclab_backend=IsaacLabBackend.ISAACLAB3),
     ),
 )
+
+# Keep released command lines and external preset imports selecting Lab 2.
+isaacsim = SIMULATOR_REGISTRY.add("isaacsim", isaaclab2)
 
 
 mujoco = SIMULATOR_REGISTRY.add(

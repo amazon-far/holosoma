@@ -575,14 +575,19 @@ def test_previous_schema_configs_load_with_backend_settings_intact(
     preset = SIMULATOR_REGISTRY[_SURVIVING_BACKEND_FIXTURES[fixture_name]]
     assert (loaded_cfg.simulator._target_, loaded_cfg.simulator.config.name) == (preset._target_, preset.config.name)
     saved_simulator = copy.deepcopy(saved["simulator"])
+    if saved_simulator["config"]["name"] == "isaacsim":
+        # Released checkpoints retain their engine/settings; only the emitted
+        # backend name becomes the canonical Lab 2 spelling.
+        assert loaded_cfg.simulator.config.name == "isaaclab2"
+        saved_simulator["config"]["name"] = "isaaclab2"
     saved_simulator["config"].pop("contact_sensor_history_length")
     saved_warp = saved_simulator["config"].pop("mujoco_warp")
     loaded_simulator = copy.deepcopy(loaded["simulator"])
     loaded_simulator["config"]["sim"].pop("mujoco")
     # New backend fields must default to the previous API when loading an old
     # checkpoint, including in a Lab 3 environment.
-    assert loaded_simulator["config"].pop("isaacsim_backend") == "isaacsim5"
-    assert loaded_simulator["config"]["sim"].pop("isaacsim6") == {
+    assert loaded_simulator["config"].pop("isaaclab_backend") == "isaaclab2"
+    assert loaded_simulator["config"]["sim"].pop("isaaclab3") == {
         "physics_backend": "physx",
         "renderer": "isaac_rtx",
         "require_kit": False,
