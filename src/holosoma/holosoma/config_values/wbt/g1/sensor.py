@@ -14,7 +14,11 @@ The mount orientations below reorient the camera's optical -Z to look along body
 
 from __future__ import annotations
 
-from holosoma.config_types.sensor import CameraSensorConfig, SensorMountConfig
+from holosoma.config_types.sensor import (
+    CameraSensorConfig,
+    IsaacSimCameraConfig,
+    SensorMountConfig,
+)
 
 # Egocentric head camera (torso-frame z~=0.41), looking forward and upright.
 head_camera = CameraSensorConfig(
@@ -107,4 +111,62 @@ waist_back_camera = CameraSensorConfig(
     height=128,
     data_types=["depth"],
     update_decimation="50Hz",
+)
+
+
+_G1_ROBOT_PRIM = "/World/envs/env_.*/Robot"
+
+# RealSense D435i depth in the G1 head, as used for perceptive locomotion: 106x60 at 89.5deg
+# horizontal FOV (58.6deg vertical), 0.44 m above the torso_link origin, looking along body +X
+# pitched 27deg down, with about 1deg each of yaw and roll. Isaac Sim ray casts against terrain and
+# the selected loaded robot visuals; other backends render it natively. The opt-in
+# ``g1_head_d435i_mount_setup_terms`` perturb its mount per env.
+# ``near`` keeps returns closer than the D435i's 0.3 m working range so preprocessing can clamp
+# them to it, as the hardware pipeline does.
+g1_head_d435i_raycast_depth = CameraSensorConfig(
+    mount=SensorMountConfig(
+        target_kind="robot_link",
+        target="torso_link",
+        position=[0.01, 0.01, 0.44],
+        orientation=[0.6029076421, 0.3758540132, -0.3629580015, -0.6029076421],
+    ),
+    width=106,
+    height=60,
+    vertical_fov=58.595269992389284,
+    near=0.01,
+    far=3.0,
+    depth_clipping_behavior="max",
+    data_types=["depth"],
+    isaacsim=IsaacSimCameraConfig(
+        renderer="raycast",
+        # Terrain plus the 30 leg, waist and arm visuals that can occlude the camera; colliders,
+        # the torso housing, rubber hands and scene objects stay out. Paths are the G1 URDF
+        # import's named visual roots (fixed-joint merging puts the pelvis contour under pelvis).
+        mesh_prim_paths=[
+            "/World/ground",
+            f"{_G1_ROBOT_PRIM}/pelvis/visuals/pelvis",
+            f"{_G1_ROBOT_PRIM}/pelvis/visuals/pelvis_contour_link",
+            *[
+                f"{_G1_ROBOT_PRIM}/{side}_{link}/visuals/{side}_{link}"
+                for side in ("left", "right")
+                for link in (
+                    "hip_pitch_link",
+                    "hip_roll_link",
+                    "hip_yaw_link",
+                    "knee_link",
+                    "ankle_pitch_link",
+                    "ankle_roll_link",
+                    "shoulder_pitch_link",
+                    "shoulder_roll_link",
+                    "shoulder_yaw_link",
+                    "elbow_link",
+                    "wrist_roll_link",
+                    "wrist_pitch_link",
+                    "wrist_yaw_link",
+                )
+            ],
+            f"{_G1_ROBOT_PRIM}/waist_yaw_link/visuals/waist_yaw_link_rev_1_0",
+            f"{_G1_ROBOT_PRIM}/waist_roll_link/visuals/waist_roll_link_rev_1_0",
+        ],
+    ),
 )

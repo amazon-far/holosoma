@@ -34,6 +34,7 @@ _WORLD_HARNESS = Path(__file__).resolve().parents[1] / "world_camera_assert.py"
 _ORIENT_HARNESS = Path(__file__).resolve().parents[1] / "camera_orientation_assert.py"
 _OBS_HARNESS = Path(__file__).resolve().parents[1] / "camera_obs_assert.py"
 _PROJECTION_HARNESS = Path(__file__).resolve().parents[1] / "camera_projection_assert.py"
+_RAYCAST_HARNESS = Path(__file__).resolve().parents[1] / "raycast_camera_assert.py"
 _MOUNT_FABRIC_HARNESS = Path(__file__).resolve().parents[1] / "camera_mount_fabric_assert.py"
 
 
@@ -205,6 +206,23 @@ def test_camera_obs_pipeline(tmp_path):
         str(result_file),
         label="isaacsim/camera-obs-pipeline",
         timeout=700,
+        result_file=result_file,
+    )
+
+
+@pytest.mark.parametrize("check", ["frame", "rerender", "scene", "dynamic-scene", "default-selection"])
+def test_raycast_camera(tmp_path, check):
+    # Depth without RTX, partial rerenders, shared scene meshes, physics-driven actor motion, and the
+    # default selection (hidden ground kept, mount body left out) beside the G1 preset's explicit paths.
+    result_file = tmp_path / f"raycast_{check}_isaacsim.txt"
+    run_harness(
+        _RAYCAST_HARNESS,
+        "--check",
+        check,
+        "--result-file",
+        str(result_file),
+        label=f"isaacsim/raycast-camera-{check}",
+        timeout=900,
         result_file=result_file,
     )
 

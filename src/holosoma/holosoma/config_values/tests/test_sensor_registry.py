@@ -171,3 +171,13 @@ def test_cli_configures_lidar_viz_saved_scan_selection() -> None:
     assert plugin.env_ids == [0]
     assert plugin.max_points == 500
     assert plugin.save_dir == "logs/debug-scans"
+
+
+def test_cli_switches_the_raycast_preset_to_rtx_with_one_override() -> None:
+    config = parse_config(
+        RunSimConfig,
+        args=["simulator:isaacsim", "sensor.depth:g1-head-d435i-raycast-depth", "--sensor.depth.isaacsim.renderer=rtx"],
+    )
+    camera = config.sensor["depth"]
+    assert isinstance(camera, CameraSensorConfig)
+    assert camera.isaacsim.renderer == "rtx"

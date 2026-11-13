@@ -19,7 +19,7 @@ from typing import Any
 from loguru import logger
 
 from holosoma.config_types.env import EnvConfig
-from holosoma.config_types.sensor import CameraSensorConfig
+from holosoma.config_types.sensor import CameraSensorConfig, is_isaacsim_raycast_camera
 from holosoma.utils.simulator_config import SimulatorType, get_simulator_type, set_simulator_type
 
 
@@ -139,9 +139,12 @@ def setup_isaaclab_launcher(config: EnvConfig, device: str) -> Any | None:
     if int(os.environ.get("WORLD_SIZE", "1")) > 1:
         args_cli.distributed = True
 
-    # LiDAR ray queries do not need RTX; only video and TiledCamera sensors enable the renderer.
+    # LiDAR and ray-cast camera queries do not need RTX; only video and RTX cameras enable the renderer.
     video_enabled = config.logger.video.enabled or config.logger.headless_recording
-    cameras_enabled = any(isinstance(sensor, CameraSensorConfig) for sensor in config.sensors.values())
+    cameras_enabled = any(
+        isinstance(sensor, CameraSensorConfig) and not is_isaacsim_raycast_camera(sensor)
+        for sensor in config.sensors.values()
+    )
     needs_rendering = video_enabled or cameras_enabled
     if needs_rendering:
         args_cli.enable_cameras = True

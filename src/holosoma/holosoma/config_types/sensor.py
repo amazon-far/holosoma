@@ -14,7 +14,7 @@ import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import field
-from typing import TYPE_CHECKING, Literal, cast, get_args
+from typing import TYPE_CHECKING, Literal, TypeGuard, cast, get_args
 
 import tyro
 from pydantic import ConfigDict, model_validator
@@ -47,6 +47,9 @@ ISAACSIM_FISHEYE_PROJECTION_TYPES = cast(
     "tuple[IsaacSimCameraProjectionType, ...]",
     tuple(value for value in get_args(IsaacSimCameraProjectionType) if value != "pinhole"),
 )
+# Isaac Sim camera renderers: the native RTX TiledCamera, or the shared Warp ray-cast depth camera.
+IsaacSimCameraRenderer = Literal["rtx", "raycast"]
+
 _ISAACSIM_FISHEYE_POLYNOMIAL_FIELDS = (
     "polynomial_a",
     "polynomial_b",
@@ -208,12 +211,27 @@ class IsaacSimFisheyeConfig:
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)
 class IsaacSimCameraConfig:
-    """Isaac Sim camera projection and lens settings.
+    """Isaac Sim camera renderer, projection, and lens settings.
 
     With ``projection_type="pinhole"``, :attr:`CameraSensorConfig.vertical_fov` determines the
     aperture. Native fisheye projections ignore ``CameraSensorConfig.vertical_fov`` and use
     :attr:`fisheye` for their angular calibration.
     """
+
+    renderer: IsaacSimCameraRenderer = "rtx"
+    """``"rtx"`` renders with an RTX ``TiledCamera``. ``"raycast"`` ray casts depth with Warp against
+    loaded scene geometry selected by :attr:`mesh_prim_paths` at its current poses: depth only,
+    pinhole only, mounted on a link in the robot config's ``body_names``, no RTX render pass, and
+    envs reset or teleported in a control step are re-rendered at their new state. Other backends
+    ignore it and render the camera natively. Defaults to ``"rtx"``."""
+
+    mesh_prim_paths: list[str] | None = None
+    """For ``renderer="raycast"``: USD prim paths or expressions to ray cast against, with the same
+    meaning as :attr:`IsaacSimLidarConfig.mesh_prim_paths`. ``None`` discovers the ground, every
+    spawned scene object and the whole robot; :attr:`CameraSensorConfig.near` clips the mount body
+    around the camera, as for RTX. Each explicit path merges every mesh below it, colliders included, so
+    list visual subtrees rather than whole links. ``"/World/ground"`` is the terrain's ray-cast mesh
+    for every terrain type, and is hit even with ``hide_visual``. Ignored by other renderers."""
 
     projection_type: IsaacSimCameraProjectionType = "pinhole"
     """Native USD/RTX camera projection. Defaults to ``"pinhole"``."""
@@ -240,6 +258,15 @@ class IsaacSimCameraConfig:
                 raise ValueError(f"IsaacSimCameraConfig.{attr} must be finite and > 0, got {value}.")
         if not math.isfinite(self.f_stop) or self.f_stop < 0.0:
             raise ValueError(f"IsaacSimCameraConfig.f_stop must be finite and >= 0, got {self.f_stop}.")
+        if self.renderer == "raycast":
+            if self.projection_type != "pinhole":
+                raise ValueError(
+                    f"IsaacSimCameraConfig.renderer='raycast' needs projection_type='pinhole', "
+                    f"got '{self.projection_type}'."
+                )
+            if self.f_stop != 0.0:
+                raise ValueError("IsaacSimCameraConfig.renderer='raycast' has no depth of field; set f_stop=0.")
+        _validate_mesh_prim_paths(self.mesh_prim_paths, "IsaacSimCameraConfig")
         return self
 
 
@@ -298,6 +325,12 @@ class LidarBodyFilterConfig:
                 f"for target_kind='{self.target_kind}'."
             )
         return self
+
+
+def _validate_mesh_prim_paths(paths: list[str] | None, owner: str) -> None:
+    """Reject an empty explicit list or blank entries; ``None`` means automatic discovery."""
+    if paths is not None and (not paths or any(not path.strip() for path in paths)):
+        raise ValueError(f"{owner}.mesh_prim_paths must be None or a non-empty list of paths.")
 
 
 @dataclass(frozen=True, config=_FORBID_EXTRA)
@@ -504,10 +537,7 @@ class IsaacSimLidarConfig:
 
     @model_validator(mode="after")
     def validate_mesh_paths(self) -> IsaacSimLidarConfig:
-        if self.mesh_prim_paths is not None and (
-            not self.mesh_prim_paths or any(not path.strip() for path in self.mesh_prim_paths)
-        ):
-            raise ValueError("IsaacSimLidarConfig.mesh_prim_paths must be None or a non-empty list of paths.")
+        _validate_mesh_prim_paths(self.mesh_prim_paths, "IsaacSimLidarConfig")
         return self
 
 
@@ -569,7 +599,7 @@ class CameraSensorConfig:
     against the control rate (fps/control_decimation) at the simulator. Lets slow cameras skip steps."""
 
     isaacsim: IsaacSimCameraConfig = field(default_factory=IsaacSimCameraConfig)
-    """Isaac Sim projection and lens settings. Defaults to the pinhole model."""
+    """Isaac Sim renderer, projection, and lens settings. Defaults to the RTX pinhole model."""
 
     mujoco: MujocoCameraConfig = field(default_factory=MujocoCameraConfig)
     """MuJoCo camera settings. Unset fields retain native defaults."""
@@ -589,6 +619,17 @@ class CameraSensorConfig:
             raise ValueError(f"CameraSensorConfig.far must be finite and > near, got {self.near}..{self.far}.")
         if not self.data_types:
             raise ValueError("CameraSensorConfig must request at least one data_type.")
+        if self.isaacsim.renderer == "raycast":
+            if self.data_types != ["depth"]:
+                raise ValueError(
+                    f"CameraSensorConfig with isaacsim.renderer='raycast' produces depth only; "
+                    f"set data_types=['depth'], got {self.data_types}."
+                )
+            if self.mount.target_kind != "robot_link":
+                raise ValueError(
+                    f"CameraSensorConfig with isaacsim.renderer='raycast' mounts on robot links only, "
+                    f"got target_kind='{self.mount.target_kind}'."
+                )
         validate_decimation_like(self.update_decimation, field="CameraSensorConfig update_decimation")
         # The robot is addressed via the ``robot_link`` kind; an ``actor`` mount must not name it.
         if self.mount.target_kind == "actor" and self.mount.target == "robot":
@@ -661,6 +702,11 @@ class LidarSensorConfig:
 
 
 SensorConfig = CameraSensorConfig | LidarSensorConfig
+
+
+def is_isaacsim_raycast_camera(config: object) -> TypeGuard[CameraSensorConfig]:
+    """Whether ``config`` is a camera Isaac Sim ray casts (``isaacsim.renderer="raycast"``)."""
+    return isinstance(config, CameraSensorConfig) and config.isaacsim.renderer == "raycast"
 
 
 def validate_camera_dict(cameras: dict[str, CameraSensorConfig]) -> None:

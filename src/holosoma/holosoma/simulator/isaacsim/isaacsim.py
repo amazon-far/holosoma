@@ -48,7 +48,7 @@ from holosoma.simulator.isaacsim.object_spawner import (
     expand_scene_file,
     physics_material_cfg,
 )
-from holosoma.simulator.isaacsim.scene_fixtures import build_terrain_fixtures
+from holosoma.simulator.isaacsim.scene_fixtures import build_terrain_fixtures, register_terrain_mesh_cache
 from holosoma.simulator.base_simulator.state import Columns
 from holosoma.simulator.isaacsim.state_utils import fullstate_wxyz_to_xyzw
 from holosoma.simulator.shared.dof_limits import build_dof_limits_from_config
@@ -56,6 +56,7 @@ from holosoma.simulator.shared.external_wrench import WrenchTarget
 from holosoma.simulator.shared.root_states_view import UnifiedRootStatesView
 from holosoma.simulator.shared.contact_substep import ContactSubstepRecorder
 from holosoma.simulator.shared.object_registry import ObjectType
+from holosoma.simulator.shared.raycast_depth_camera import RayCastDepthCamera
 from holosoma.simulator.isaacsim.state_adapter import IsaacSimStateAdapter
 from holosoma.simulator.isaacsim.prim_utils import log_robot_properties, print_prim_tree
 from holosoma.simulator.isaacsim.video_recorder import IsaacSimVideoRecorder
@@ -137,6 +138,9 @@ class IsaacSim(BaseSimulator):
             # Per-camera TiledCamera map, keyed by sensor name; populated by
             # sensor_setup.build_cameras (called from _setup_scene, pre-clone), read at render.
             self.tiled_cameras: dict[str, TiledCamera] = {}
+            # Ray-cast cameras (isaacsim.renderer="raycast"), keyed by sensor name; populated by
+            # sensor_setup.register_cameras, read at render.
+            self.raycast_cameras: dict[str, RayCastDepthCamera] = {}
             self._setup_scene()
         print("[INFO]: Scene manager: ", self.scene)
 
@@ -297,6 +301,8 @@ class IsaacSim(BaseSimulator):
         # Author the light rig under env_0 before cloning so each environment gets its own lights; an
         # empty rig authors nothing, leaving only the scene asset's baked lights.
         light_setup.build_lights(self)
+
+        register_terrain_mesh_cache(self.terrain_manager, self.scene)
 
         # clone, filter, and replicate
         self.scene.clone_environments(copy_from_source=False)
@@ -604,6 +610,7 @@ class IsaacSim(BaseSimulator):
     def prepare_sim(self) -> None:
         # Wait until play so rigid object collections are initialized
         self._register_scene_assets()
+        sensor_setup.initialize_sensors(self)
 
         self._register_state()
 
