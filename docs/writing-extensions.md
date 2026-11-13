@@ -183,16 +183,16 @@ Select plugins as the dynamic-dict `plugin.<key>:<preset>` (per-key leaf overrid
 
 ### Phases
 
-A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=None, every=1, key=None, after=(), before=())`, which returns the `HookHandle` others order themselves against. `name` labels the hook in diagnostics and defaults to the callback's qualname. Per control frame the loop emits, in order:
+A plugin's hooks attach to lifecycle phases via `add(phase, callback, *, name=None, every=1, key=None, after=(), before=())`, which returns the `HookHandle` others order themselves against. `name` labels the hook in diagnostics and defaults to the callback's qualname. Per control frame they fire in this order; the simulator emits the per-substep phases around each physics step, and the task emits the rest:
 
-| Phase | When | Callback args | Cadence |
-|---|---|---|---|
-| `FRAME_BEGIN` | before the physics substeps (push commands to the sim here) | — | control rate |
-| `PRE_STEP` | before each physics substep | — | physics `fps` |
-| `POST_STEP` | after each physics substep (freshest sim time) | — | physics `fps` |
-| `FRAME_END` | after the frame's last substep (read state here) | — | control rate |
-| `EPISODE_START` / `EPISODE_END` | on reset boundaries | `env_id` | per event |
-| `CLOSE` | teardown (release resources); `before`/`after` describe execution here too, and ties go to the latest registered | — | once |
+| Phase | Emitted by | When | Callback args | Cadence |
+|---|---|---|---|---|
+| `FRAME_BEGIN` | task | before the physics substeps (push commands to the sim here) | — | control rate |
+| `PRE_STEP` | simulator | before each physics substep | — | physics `fps` |
+| `POST_STEP` | simulator | after each physics substep (freshest sim time) | — | physics `fps` |
+| `FRAME_END` | task | after the frame's last substep (read state here) | — | control rate |
+| `EPISODE_START` / `EPISODE_END` | task (motion playback also emits them at clip boundaries) | on reset boundaries | `env_id` | per event |
+| `CLOSE` | task | teardown (release resources); `before`/`after` describe execution here too, and ties go to the latest registered | — | once |
 
 ### Ordering
 

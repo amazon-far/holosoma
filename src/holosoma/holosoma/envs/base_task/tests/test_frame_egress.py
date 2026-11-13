@@ -94,7 +94,10 @@ class _FakeSim:
                 f"the loop ran {self.substeps} substeps without reaching {self.frames} frame(s) "
                 f"(budget {self._budget}); egressed {len(self.captured)}"
             )
+        # Physics phases bracket the substep here, as BaseSimulator.simulate_at_each_physics_step emits them.
+        self.hooks.emit(Phase.PRE_STEP)
         self.phases.append(SUBSTEP)
+        self.hooks.emit(Phase.POST_STEP)
 
     def _scene_state(self) -> object:
         """What a draw captures: the value PRE_STEP wrote."""

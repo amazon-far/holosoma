@@ -226,7 +226,6 @@ class BaseSimulator:
         self.sensor_render_hook: HookHandle = self.hooks.add(
             Phase.FRAME_END, self.render_sensors, name="sensors.render"
         )
-        self._closed = False
         # Cooperative shutdown flag: set via request_shutdown(), polled by the SimulationTask run loop.
         self.shutdown_requested = False
         self._shutdown_reason = ""
@@ -515,9 +514,8 @@ class BaseSimulator:
     def flush_external_wrench(self) -> None:
         """Apply this substep's accumulated external forces to native buffers, then reset them.
 
-        Backends MUST call this at the top of :meth:`simulate_at_each_physics_step` (after
-        ``PRE_STEP`` hooks accumulate, before the native step) via the
-        :meth:`_write_external_wrench_native` hook.
+        Backends MUST call this at the top of :meth:`_advance_substep` (after ``PRE_STEP`` hooks
+        accumulate, before the native step) via the :meth:`_write_external_wrench_native` hook.
         """
         self._external_wrench.flush()
 
@@ -622,14 +620,16 @@ class BaseSimulator:
         self.apply_torques_at_dof(torch.stack(columns, dim=-1), dof_indices=self.dof_indices(list(torques)))
 
     def simulate_at_each_physics_step(self) -> None:
-        """Advance the simulation by a single step.
+        """Advance the simulation by a single step, emitting ``PRE_STEP`` before it and ``POST_STEP`` after.
 
         One physics integration step, or — with ``sim.kinematic_playback`` — one
         forward-kinematics pass over externally written state.
         """
+        self.hooks.emit(Phase.PRE_STEP)
         self._advance_substep()
         if self.kinematic_playback:
             self._kinematic_time += 1.0 / self.simulator_config.sim.fps
+        self.hooks.emit(Phase.POST_STEP)
 
     def _advance_substep(self) -> None:
         """Advance the simulation by one substep: one integration step, or one kinematics pass.
@@ -802,17 +802,6 @@ class BaseSimulator:
         except Exception as e:
             logger.error(f"Failed to initialize bridge system: {e}")
             raise
-
-    def close(self) -> None:
-        """Emit the one-pass simulator teardown phase.
-
-        Marked closed only once the emission returns, so a teardown that fails before running any
-        callback -- an unresolvable CLOSE graph -- can be retried rather than silently skipped.
-        """
-        if self._closed:
-            return
-        self.hooks.emit(Phase.CLOSE)
-        self._closed = True
 
     def request_shutdown(self, reason: str = "") -> None:
         """Ask the driving loop to end the run gracefully after the current frame.

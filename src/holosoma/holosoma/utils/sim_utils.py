@@ -359,10 +359,6 @@ def _close_environment(env: Any) -> None:
     close = getattr(env, "close", None)
     if close is not None:
         close()
-        return
-    simulator = getattr(env, "simulator", None)
-    if simulator is not None:
-        simulator.close()
 
 
 def close_simulation_resources(env: Any, simulation_app: Any) -> None:
