@@ -531,8 +531,9 @@ def test_episode_boundary_emits_end_then_start_per_env(tmp_path: Path) -> None:
     assert log == [("end", 0), ("end", 1), ("start", 0), ("start", 1)]
 
 
-def test_settle_frames_hold_after_each_boundary(tmp_path: Path) -> None:
-    # Baseline (no settle) vs settle=3: the single A->B boundary adds exactly 3 held frames.
+def test_settle_frames_hold_at_each_episode_start(tmp_path: Path) -> None:
+    # Baseline (no settle) vs settle=3: the first episode's start and the single A->B boundary each add
+    # exactly 3 held frames.
     base_sim = _FakeSimulator(num_envs=1)
     _make(_multi_cfg(tmp_path, [0.0, 100.0], settle_frames=0), base_sim)
     base_frames, _ = _run_until_shutdown(base_sim)
@@ -541,9 +542,22 @@ def test_settle_frames_hold_after_each_boundary(tmp_path: Path) -> None:
     _make(_multi_cfg(tmp_path, [0.0, 100.0], settle_frames=3), settle_sim)
     settle_frames, xs = _run_until_shutdown(settle_sim)
 
-    assert settle_frames == base_frames + 3
-    # During the settle window the clip is held at B's frame 0 (root-x == 100, clock frozen).
+    assert settle_frames == base_frames + 6
+    # During each settle window the clip is held at its frame 0 (clock frozen): A's root-x 0, B's 100.
+    assert xs[:4] == [0.0, 0.0, 0.0, 0.0]
     assert xs.count(100.0) >= 3
+
+
+def test_first_episode_settle_is_flagged_for_writers(tmp_path: Path) -> None:
+    # The first episode's held frames report ``settling`` (writers drop them), then the clip plays from
+    # frame 0 with ``settling`` off -- the same contract as after a clip switch.
+    sim = _FakeSimulator(num_envs=1)
+    plugin = _make(_multi_cfg(tmp_path, [0.0, 100.0], settle_frames=2), sim)
+    flags: list[tuple[bool, float]] = []
+    while not sim.shutdown_requested and len(flags) < 20:
+        _frame(sim, substeps=1)
+        flags.append((plugin.settling(0), sim.robot_root_states[0, 0].item()))
+    assert flags[:4] == [(True, 0.0), (True, 0.0), (False, 0.0), (False, 1.0)]
 
 
 def test_single_clip_once_emits_no_boundaries(tmp_path: Path) -> None:
@@ -862,3 +876,157 @@ def test_single_env_at_zero_origin_writes_the_clip_unchanged(tmp_path: Path) -> 
     assert sim.robot_root_states[0, :3].tolist() == [0.0, 0.0, 0.0]  # frame 0 of the fixture clip
     _, states = sim.object_writes[-1]
     assert states[0, :3].tolist() == [0.0, 0.0, 0.0]
+
+
+# ----- env_assignment="queue": each env plays its own clip -----
+
+
+def _queue_cfg(
+    tmp_path: Path, lengths: list[int], objects: list[str] | None = None, **kw: Any
+) -> MotionPlaybackPluginConfig:
+    """Clip i has ``lengths[i]`` rows and root-x (and object-x) offset by ``100 * i``, so x // 100 names the clip."""
+    objects = objects or []
+    files = []
+    for i, frames in enumerate(lengths):
+        mat = _matrix(frames=frames, num_objects=len(objects))
+        mat[:, 0] += 100.0 * i
+        for k in range(len(objects)):
+            mat[:, 7 + NUM_DOF + 7 * k] += 100.0 * i
+        files.append(_write(tmp_path, f"clip{i}.npy", mat))
+    kw.setdefault("fps", 50.0)  # one row per 0.02 s control frame
+    if objects:
+        kw["objects"] = objects
+    return MotionPlaybackPluginConfig(motion_files=files, env_assignment="queue", **kw)
+
+
+def _queue_run(sim: _FakeSimulator, max_frames: int = 1000) -> list[list[float]]:
+    """Drive frames until shutdown; return each frame's env-local root-x per env."""
+    frames: list[list[float]] = []
+    while not sim.shutdown_requested and len(frames) < max_frames:
+        _frame(sim, substeps=1)
+        frames.append((sim.robot_root_states[:, 0] - sim.scene.env_origins[:, 0]).tolist())
+    return frames
+
+
+def test_queue_hands_each_free_env_the_next_clip(tmp_path: Path) -> None:
+    origins = torch.tensor([[0.0, 0.0, 0.0], [20.0, 0.0, 0.0], [40.0, 0.0, 0.0]])
+    sim = _FakeSimulator(num_envs=3, env_origins=origins)
+    _make(_queue_cfg(tmp_path, [3, 6, 4, 2, 5]), sim)
+    log = _spy(sim)
+    frames = _queue_run(sim)
+    assert sim.shutdown_requested
+    # Envs start on clips 0, 1, 2. Env 0 frees first (after 3 rows) and takes clip 3; env 2 frees next
+    # (after 4) and takes clip 4. Each row is shown once; an idle env repeats its last row.
+    shown = [[x for i, x in enumerate(col) if i == 0 or x != col[i - 1]] for col in zip(*frames, strict=False)]
+    assert shown[0] == [0.0, 1.0, 2.0, 300.0, 301.0]
+    assert shown[1] == [100.0, 101.0, 102.0, 103.0, 104.0, 105.0]
+    assert shown[2] == [200.0, 201.0, 202.0, 203.0, 400.0, 401.0, 402.0, 403.0, 404.0]
+    # The run lasts as long as the busiest env: env 2's 4 + 5 rows.
+    assert len(frames) == 9
+    # Boundaries name only the env that switches; an env with nothing left gets EPISODE_END and no START;
+    # the env(s) still playing at the end get no boundary, as with a single env.
+    assert log == [("end", 0), ("start", 0), ("end", 2), ("start", 2), ("end", 0), ("end", 1)]
+
+
+def test_queue_writes_each_env_its_own_clip_offset_by_its_origin(tmp_path: Path) -> None:
+    origins = torch.tensor([[0.0, 0.0, 0.0], [20.0, -4.0, 0.5]])
+    sim = _FakeSimulator(num_envs=2, env_origins=origins)
+    _make(_queue_cfg(tmp_path, [4, 4], objects=["crate"]), sim)
+    _frame(sim)
+    _frame(sim)  # second frame: clip row 1
+    root = sim.robot_root_states
+    torch.testing.assert_close(root[:, :3], torch.tensor([[1.0, 0.0, 0.0], [101.0, 0.0, 0.0]]) + origins)
+    names, states = sim.object_writes[-1]
+    assert names == ["crate"]
+    torch.testing.assert_close(states[:, :3], torch.tensor([[1.0, 0.0, 0.0], [101.0, 0.0, 0.0]]) + origins)
+
+
+def test_queue_with_fewer_clips_than_envs_leaves_the_rest_unwritten(tmp_path: Path) -> None:
+    sim = _FakeSimulator(num_envs=3)
+    plugin = _make(_queue_cfg(tmp_path, [3, 2]), sim)
+    frames = _queue_run(sim)
+    assert sim.shutdown_requested
+    assert len(frames) == 3
+    assert all(row[2] == 0.0 for row in frames)  # env 2 never received a clip
+    assert plugin.episode_of(2) is None
+    assert plugin.episode_name(2) is None
+
+
+def test_queue_repeats_the_playlist_n_run_times(tmp_path: Path) -> None:
+    sim = _FakeSimulator(num_envs=2)
+    plugin = _make(_queue_cfg(tmp_path, [2, 2], n_run=2), sim)
+    names: list[tuple[int, str | None]] = []
+    sim.hooks.add(Phase.EPISODE_START, lambda e: names.append((e, plugin.episode_name(e))), name="names")
+    _queue_run(sim)
+    assert sim.shutdown_requested
+    assert names == [(0, "clip0_run2"), (1, "clip1_run2")]
+
+
+def test_queue_settle_frames_hold_per_env(tmp_path: Path) -> None:
+    sim = _FakeSimulator(num_envs=2)
+    _make(_queue_cfg(tmp_path, [2, 4, 2], settle_frames=2), sim)
+    frames = _queue_run(sim)
+    # env 0: clip 0 held at frame 0 for 2 frames, its 2 rows, then clip 2 held at frame 0 for the boundary
+    # frame + 1 more, then its 2 rows.
+    assert [row[0] for row in frames[:8]] == [0.0, 0.0, 0.0, 1.0, 200.0, 200.0, 200.0, 201.0]
+    # env 1 holds its own first clip for 2 frames, then plays it; env 0's later settle window does not touch it.
+    assert [row[1] for row in frames[:6]] == [100.0, 100.0, 100.0, 101.0, 102.0, 103.0]
+
+
+def test_queue_loads_each_clip_once_and_holds_at_most_one_per_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Idle envs keep writing their last clip's final frame, so their clip stays loaded; a clip no env holds
+    # is released, so a long playlist never holds more than one clip per env.
+    loads: list[str] = []
+    real = playback_module.PlaybackClip
+
+    def counting(motion_file: str, *args: Any) -> PlaybackClip:
+        loads.append(Path(motion_file).name)
+        return real(motion_file, *args)
+
+    monkeypatch.setattr(playback_module, "PlaybackClip", counting)
+    sim = _FakeSimulator(num_envs=3)
+    plugin = _make(_queue_cfg(tmp_path, [2, 9, 3, 2, 2, 7]), sim)
+    most = 0
+    while not sim.shutdown_requested:
+        _frame(sim, substeps=1)
+        most = max(most, sum(c is not None for c in plugin._clips))
+    assert sorted(loads) == [f"clip{i}.npy" for i in range(6)]
+    assert most <= 3
+
+
+def _run_without_frame_end(sim: _FakeSimulator, max_frames: int = 100) -> tuple[list[list[float]], int]:
+    frames: list[list[float]] = []
+    while not sim.shutdown_requested and len(frames) < max_frames:
+        sim.hooks.emit(Phase.FRAME_BEGIN)
+        sim.hooks.emit(Phase.PRE_STEP)
+        frames.append(sim.robot_root_states[:, 0].tolist())
+    return frames, len(frames)
+
+
+@pytest.mark.parametrize("frame_end", [True, False])
+def test_queue_single_env_matches_shared(tmp_path: Path, frame_end: bool) -> None:
+    # One env in queue mode is the shared behaviour exactly: same frames, same boundaries, same end,
+    # with or without a driver that emits FRAME_END.
+    queue = _queue_cfg(tmp_path, [3, 2, 4])
+    shared = MotionPlaybackPluginConfig(motion_files=queue.motion_files, fps=queue.fps)
+    runs = []
+    for cfg in (shared, queue):
+        sim = _FakeSimulator(num_envs=1)
+        _make(cfg, sim)
+        log = _spy(sim)
+        runs.append((_queue_run(sim) if frame_end else _run_without_frame_end(sim), log))
+    assert runs[0] == runs[1]
+
+
+@pytest.mark.parametrize("rows", [2, 11, 12, 13, 209, 603])
+def test_each_clip_renders_exactly_its_rows_at_one_row_per_frame(tmp_path: Path, rows: int) -> None:
+    # A float clock (t += dt) lands just below the clip duration for most lengths and renders the last
+    # row twice; at a 50 Hz control rate on main, 996 of the lengths 2..1199 did.
+    sim = _FakeSimulator(num_envs=1)
+    sim.simulator_config.sim = type("Sim", (), {"fps": 50.0, "control_decimation_steps": 1})()
+    _make(MotionPlaybackPluginConfig(motion_files=[_write(tmp_path, "clip.npy", _matrix(frames=rows))], fps=50.0), sim)
+    n, xs = _run_until_shutdown(sim, max_frames=rows + 5)
+    assert n == rows
+    assert xs == [float(i) for i in range(rows)]  # root x walks 1 m per row

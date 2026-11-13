@@ -230,10 +230,11 @@ class MotionPlaybackPluginConfig(PluginConfig):
     the robot block and ``object_motion_pos``/``object_motion_rot_wxyz`` as the optional object
     block.
 
-    Replay is single-trajectory across envs: at any instant every env receives the same clip state
-    (a vectorized run renders identical copies across envs) — there is no per-env clip assignment.
-    This is the spatial axis and is independent of the episodic playlist below, which sequences
-    clips over *time*: all envs advance through the same episode together.
+    Envs and the playlist (``env_assignment``): with ``shared`` (default) every env receives the same
+    clip state at any instant, so a vectorized run renders identical copies and all envs advance
+    through the same episode together. With ``queue`` each env plays its own clip: env ``e`` starts on
+    episode ``e`` and an env that finishes takes the next unplayed one, so N envs work through the
+    playlist N clips at a time.
 
     Playlist: ``motion_files`` is one or more clips played in order, each clip one episode. Between
     episodes the plugin rewinds to the next clip's first frame and emits ``EPISODE_END``/
@@ -266,6 +267,14 @@ class MotionPlaybackPluginConfig(PluginConfig):
     """How many times to play the whole playlist. ``0`` plays it forever until the run is stopped;
     ``>= 1`` plays it that many times and then shuts down. Total episodes =
     ``len(motion_files) * n_run`` (unbounded when 0)."""
+
+    env_assignment: Literal["shared", "queue"] = "shared"
+    """How envs share the playlist. ``shared``: one timeline, every env plays the same episode and all
+    envs switch together (``EPISODE_END``/``EPISODE_START`` for every env at each boundary). ``queue``:
+    one timeline per env; env ``e`` starts on episode ``e`` and each env that finishes its clip takes the
+    next unplayed episode (lowest env id first when several finish on the same frame), emitting the
+    boundary for that env only. An env with nothing left to play emits ``EPISODE_END`` and holds its last
+    frame; envs beyond the playlist length are never written. The run ends when every env is done."""
 
     settle_frames: int = 0
     """Frames to hold the clip at its first frame after each episode boundary before the clip
@@ -573,6 +582,18 @@ class FrameWriterPluginConfig(PluginConfig):
 
     env_ids: list[int] | None = None
     """Environments to capture; ``None`` (default) means all environments."""
+
+    episodic: bool = False
+    """Lay output out per episode instead of per run. Each ``EPISODE_START(env)`` opens
+    ``<output_dir>/<episode>/`` for that env and its ``EPISODE_END`` finalizes it (encoding its mp4s), so
+    with N envs N episodes are written side by side. ``<episode>`` is the motion-playback episode's name
+    (the playlist entry's file stem, ``_run<k>`` on repeats) or ``episode_<n>`` without a playback plugin;
+    a name already used in the run gets ``_env<k>``. Inside, streams are named without the env
+    (``<camera>_<modality>.mp4`` or ``<camera>_<modality>/000000.png``), and the episode's ``index.jsonl``
+    header records the episode name and the env that rendered it. Frames of an env with no open episode
+    (playback has nothing for it) are not written, nor are motion playback's ``settle_frames`` holds after a
+    clip switch: the first frame rendered after a switch can still show the previous clip, so with
+    ``settle_frames >= 1`` it is dropped and each episode holds exactly its clip's frames."""
 
     rgb_format: Literal["png", "jpeg", "mp4"] = "png"
     """RGB output: ``png`` (default, lossless) or ``jpeg`` image sequences (names match the ROS2

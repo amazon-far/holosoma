@@ -16,6 +16,11 @@ Scope: a simple cross-backend writer. For synthetic-data generation at scale, ba
 writers (IsaacSim's Replicator handles modalities and async IO natively) would outperform this;
 that would be a separate backend-specific plugin, not an extension of this one.
 
+With ``episodic=True`` the output is laid out per episode instead: each env's ``EPISODE_START`` opens
+``<output_dir>/<episode>/`` (streams named ``<camera>_<modality>``, without the env, with their own
+``index.jsonl`` and ``videos.json``) and its ``EPISODE_END`` finishes that episode's videos, so N envs
+playing N clips write N episode directories side by side.
+
 cv2 is imported at module top — this module is reached only via ``FrameWriterPluginConfig.get_cls``,
 so the config layer stays cv2-free.
 """
@@ -24,7 +29,7 @@ from __future__ import annotations
 
 import json
 import sys
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO, cast
 
@@ -34,6 +39,7 @@ import numpy.typing as npt
 from loguru import logger
 
 from holosoma.config_types.sensor import CameraSensorConfig
+from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.plugins.camera_consumer import CameraConsumerPlugin
 from holosoma.utils.sim_utils import _simulation_exit_code
 from holosoma.utils.video_utils import H264StreamEncoder
@@ -45,6 +51,17 @@ if TYPE_CHECKING:
     from holosoma.config_types.plugin import FrameWriterPluginConfig
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
     from holosoma.simulator.plugins.camera_consumer import FramePacket, StreamKey
+    from holosoma.simulator.plugins.playback import MotionPlaybackPlugin
+
+
+@dataclass
+class _Episode:
+    """One env's open episode in ``episodic`` mode."""
+
+    name: str
+    out: Path
+    index: TextIO
+    published: int = 0
 
 
 class FrameWriterPlugin(CameraConsumerPlugin):
@@ -80,14 +97,34 @@ class FrameWriterPlugin(CameraConsumerPlugin):
         self._encoders: dict[StreamKey, H264StreamEncoder] = {}
         self._video_span: dict[StreamKey, tuple[float, float]] = {}
         self._video_failed: dict[StreamKey, str] = {}
+        self._total_frames = 0
+        self._written_streams: set[StreamKey] = set()
+        # episodic mode: the open episode of each env, the names used so far, and the playback plugin.
+        self._episodes: dict[int, _Episode] = {}
+        self._episode_names: set[str] = set()
+        self._unnamed_episodes = 0
+        self._playback: MotionPlaybackPlugin | None = None
+        self._playback_resolved = False
         super().__init__(config, simulator)
+        if config.episodic:
+            simulator.hooks.add(Phase.EPISODE_START, self._open_episode, name="frame_writer.episode_start")
+            simulator.hooks.add(Phase.EPISODE_END, self._close_episode, name="frame_writer.episode_end")
 
     def wanted_streams(self) -> set[StreamKey]:
         return self._streams
 
     def start(self) -> None:
         self._out.mkdir(parents=True, exist_ok=True)
+        if self.config.episodic:
+            logger.info(f"FrameWriterPlugin writing {len(self._streams)} stream(s) per episode under {self._out}")
+            return
         (self._out / _VIDEOS_FILE).unlink(missing_ok=True)  # an earlier run's; stop writes this run's
+        self._index = (self._out / "index.jsonl").open("w")
+        self._index.write(json.dumps(self._header()) + "\n")
+        logger.info(f"FrameWriterPlugin writing {len(self._streams)} stream(s) to {self._out}")
+
+    def _header(self) -> dict[str, Any]:
+        """The ``index.jsonl`` header: camera intrinsics and output formats."""
         intrinsics = {}
         for cam in sorted({cam for cam, _, _ in self._streams}):
             camera_intrinsics = self._intrinsics_of(cam)
@@ -95,46 +132,58 @@ class FrameWriterPlugin(CameraConsumerPlugin):
             if camera_intrinsics.simulator_type is not None:
                 serialized["simulator_type"] = camera_intrinsics.simulator_type.value
             intrinsics[cam] = serialized
-        header = {
+        return {
             "intrinsics": intrinsics,
             "rgb_format": self.config.rgb_format,
             "depth_format": self.config.depth_format,
         }
-        self._index = (self._out / "index.jsonl").open("w")
-        self._index.write(json.dumps(header) + "\n")
-        logger.info(f"FrameWriterPlugin writing {len(self._streams)} stream(s) to {self._out}")
 
     def publish(self, frames: dict[StreamKey, FramePacket]) -> None:
-        assert self._index is not None
-        for key in sorted(frames):
-            packet = frames[key]
-            idx = self._counts.get(key, 0)
-            cam, mod, env = key
-            stream_name = self._stream_name(key)
-            if mod == "rgb" and self.config.rgb_format == "mp4":
-                path = self._out / f"{stream_name}.mp4"
-                if not self._encode_frame(key, path, packet):
-                    continue  # the stream's encoder has failed: its frames are not on disk
-            else:
-                stream_dir = self._out / stream_name
-                if idx == 0:
-                    stream_dir.mkdir(parents=True, exist_ok=True)
-                path = stream_dir / f"{idx:06d}.{self.extension(mod)}"
-                self.write_frame(path, mod, packet.array)
-            self._counts[key] = idx + 1
-            self._index.write(
-                json.dumps(
-                    {
-                        "path": str(path.relative_to(self._out)),
-                        "camera": cam,
-                        "modality": mod,
-                        "env_id": env,
-                        "frame": idx,
-                        "sim_time": packet.sim_time,
-                    }
-                )
-                + "\n"
+        if not self.config.episodic:
+            assert self._index is not None
+            for key in sorted(frames):
+                self._write(key, frames[key], self._out, self._stream_name(key), self._index)
+            return
+        for env in sorted({key[2] for key in frames}):
+            episode = self._episodes.get(env)
+            if episode is None:
+                continue  # nothing is open for this env (playback has no clip for it)
+            if self._settling(env):
+                continue  # a playback hold at the start of an episode, not a frame of the clip
+            episode.published += 1
+            for key in sorted(k for k in frames if k[2] == env):
+                self._write(key, frames[key], episode.out, self._file_stem(key), episode.index)
+
+    def _write(self, key: StreamKey, packet: FramePacket, out: Path, stem: str, index: TextIO) -> None:
+        """Write (or, for mp4, stream) one frame as ``<out>/<stem>.mp4`` or ``<out>/<stem>/<n>.<ext>`` and index it."""
+        idx = self._counts.get(key, 0)
+        cam, mod, env = key
+        if mod == "rgb" and self.config.rgb_format == "mp4":
+            path = out / f"{stem}.mp4"
+            if not self._encode_frame(key, path, packet):
+                return  # the stream's encoder has failed: its frames are not on disk
+        else:
+            stream_dir = out / stem
+            if idx == 0:
+                stream_dir.mkdir(parents=True, exist_ok=True)
+            path = stream_dir / f"{idx:06d}.{self.extension(mod)}"
+            self.write_frame(path, mod, packet.array)
+        self._counts[key] = idx + 1
+        self._total_frames += 1
+        self._written_streams.add(key)
+        index.write(
+            json.dumps(
+                {
+                    "path": str(path.relative_to(out)),
+                    "camera": cam,
+                    "modality": mod,
+                    "env_id": env,
+                    "frame": idx,
+                    "sim_time": packet.sim_time,
+                }
             )
+            + "\n"
+        )
 
     def stop(self) -> None:
         """Finalize every open mp4, record how each video ended in ``videos.json``, and close the index.
@@ -151,49 +200,134 @@ class FrameWriterPlugin(CameraConsumerPlugin):
         the CLOSE chain and leave the simulator open, which is meant for a teardown that itself failed.
         """
         interrupted = _simulation_exit_code(sys.exc_info()[1]) != 0
-        # Every wanted video stream gets an entry, so one that never produced a frame reads as empty.
+        if self.config.episodic:
+            for env in sorted(self._episodes):
+                self._end_episode(env, interrupted)
+        else:
+            self._finalize(sorted(self._streams), self._out, interrupted)
+            if self._index is not None:
+                self._index.close()
+                self._index = None
+        logger.info(
+            f"FrameWriterPlugin wrote {self._total_frames} frame(s) across {len(self._written_streams)} stream(s)."
+        )
+
+    def _finalize(self, keys: list[StreamKey], out: Path, interrupted: bool) -> None:
+        """Finish these streams' mp4s and write how each ended to ``<out>/videos.json``."""
         videos: dict[StreamKey, dict[str, Any]] = {}
         if self.config.rgb_format == "mp4":
-            videos = {key: self._video_record("empty", None, key) for key in self._streams if key[1] == "rgb"}
+            videos = {key: self._video_record("empty", None, key, out) for key in keys if key[1] == "rgb"}
         errors = []
-        for key, err in sorted(self._video_failed.items()):
-            videos[key] = self._video_record("failed", self._out / f"{self._stream_name(key)}.mp4.partial", key)
-            errors.append(f"{self._stream_name(key)}: {err}")
-        for encoder in self._encoders.values():
+        for key in [k for k in keys if k in self._video_failed]:
+            partial = out / f"{self._file_stem(key)}.mp4.partial"
+            videos[key] = self._video_record("failed", partial, key, out)
+            errors.append(f"{self._stream_name(key)}: {self._video_failed.pop(key)}")
+        encoders = {k: self._encoders.pop(k) for k in keys if k in self._encoders}
+        for encoder in encoders.values():
             encoder.end_input()  # every stream flushes at once; the loop below waits on each
-        for key, encoder in sorted(self._encoders.items()):
+        for key, encoder in sorted(encoders.items()):
             try:
                 status, path = self._finish_video(key, encoder, interrupted)
             except Exception as exc:
                 encoder.abort()
                 status, path = "failed", encoder.partial
                 errors.append(f"{self._stream_name(key)}: {exc}")
-            videos[key] = self._video_record(status, path, key)
-        self._encoders = {}
-        self._video_span = {}
-        self._video_failed = {}
-        if self._index is not None:
-            self._index.close()
-            self._index = None
-            if videos:
-                streams = {self._stream_name(key): videos[key] for key in sorted(videos)}
-                (self._out / _VIDEOS_FILE).write_text(json.dumps(streams, indent=2) + "\n")
-        total = sum(self._counts.values())
-        logger.info(f"FrameWriterPlugin wrote {total} frame(s) across {len(self._counts)} stream(s).")
+            videos[key] = self._video_record(status, path, key, out)
+        for key in keys:
+            self._video_span.pop(key, None)
+        if videos:
+            streams = {self._file_stem(key): videos[key] for key in sorted(videos)}
+            (out / _VIDEOS_FILE).write_text(json.dumps(streams, indent=2) + "\n")
         if errors:
             logger.error(f"FrameWriterPlugin: mp4 encoding failed for {'; '.join(errors)}")
+
+    # ----- episodic mode -----
+
+    def _file_stem(self, key: StreamKey) -> str:
+        """A stream's file name: ``<camera>_<modality>`` inside an episode directory, else with the env."""
+        return f"{key[0]}_{key[1]}" if self.config.episodic else self._stream_name(key)
+
+    def _playback_plugin(self) -> MotionPlaybackPlugin | None:
+        """The installed motion-playback plugin, which names the episodes; ``None`` without one."""
+        if not self._playback_resolved:
+            from holosoma.simulator.plugins.playback import MotionPlaybackPlugin
+
+            plugins = getattr(self.simulator, "installed_plugins", {}).values()
+            self._playback = next((p for p in plugins if isinstance(p, MotionPlaybackPlugin)), None)
+            self._playback_resolved = True
+        return self._playback
+
+    def _settling(self, env_id: int) -> bool:
+        """Whether this env's frame is a playback ``settle_frames`` hold at the start of an episode."""
+        playback = self._playback_plugin()
+        return playback is not None and playback.settling(env_id)
+
+    def _episode_name(self, env_id: int) -> str | None:
+        """A run-unique directory name for the episode ``env_id`` opens, or ``None`` when it plays nothing."""
+        playback = self._playback_plugin()
+        if playback is None:
+            name = f"episode_{self._unnamed_episodes:05d}"
+            self._unnamed_episodes += 1
+        else:
+            named = playback.episode_name(env_id)
+            if named is None:
+                return None
+            name = named
+        # The same name twice (shared playback over several envs, or two playlist entries with one stem)
+        # would overwrite an episode: qualify it by env, then by a counter.
+        if name in self._episode_names:
+            base, k = f"{name}_env{env_id}", 1
+            name = base
+            while name in self._episode_names:
+                k += 1
+                name = f"{base}_{k}"
+        self._episode_names.add(name)
+        return name
+
+    def _open_episode(self, env_id: int | None = None) -> None:
+        """EPISODE_START: open ``<output_dir>/<episode>/`` for ``env_id``'s streams."""
+        env = 0 if env_id is None else env_id
+        if not any(key[2] == env for key in self._streams):
+            return
+        if env in self._episodes:  # a START without the END before it: finish the open one first
+            self._close_episode(env)
+        name = self._episode_name(env)
+        if name is None:
+            return
+        out = self._out / name
+        out.mkdir(parents=True, exist_ok=True)
+        (out / _VIDEOS_FILE).unlink(missing_ok=True)
+        index = (out / "index.jsonl").open("w")
+        index.write(json.dumps({**self._header(), "episode": name, "env_id": env}) + "\n")
+        for key in [k for k in self._counts if k[2] == env]:
+            del self._counts[key]
+        self._episodes[env] = _Episode(name=name, out=out, index=index)
+        logger.info(f"FrameWriterPlugin: env {env} episode {name} -> {out}")
+
+    def _close_episode(self, env_id: int | None = None) -> None:
+        """EPISODE_END: finish ``env_id``'s open episode (its videos, ``videos.json`` and index)."""
+        self._end_episode(0 if env_id is None else env_id, interrupted=False)
+
+    def _end_episode(self, env: int, interrupted: bool) -> None:
+        episode = self._episodes.pop(env, None)
+        if episode is None:
+            return
+        self._finalize(sorted(k for k in self._streams if k[2] == env), episode.out, interrupted)
+        episode.index.close()
+        if episode.published == 0:
+            logger.warning(f"FrameWriterPlugin: episode {episode.name} (env {env}) produced no frames")
 
     @staticmethod
     def _stream_name(key: StreamKey) -> str:
         cam, mod, env = key
         return f"{cam}_{mod}_env{env}"
 
-    def _video_record(self, status: str, path: Path | None, key: StreamKey) -> dict[str, Any]:
-        """One stream's entry in ``videos.json``."""
+    def _video_record(self, status: str, path: Path | None, key: StreamKey, out: Path) -> dict[str, Any]:
+        """One stream's entry in ``videos.json`` (paths relative to ``out``)."""
         on_disk = path is not None and path.exists()
         return {
             "status": status,
-            "path": str(path.relative_to(self._out)) if path is not None and on_disk else None,
+            "path": str(path.relative_to(out)) if path is not None and on_disk else None,
             "frames": self._counts.get(key, 0),
         }
 
