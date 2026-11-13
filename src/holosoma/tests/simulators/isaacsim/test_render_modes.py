@@ -86,6 +86,10 @@ def test_launcher_config_reaches_app_launcher_namespace(
     headless_requires_kit: bool,
 ) -> None:
     """Exercise Holosoma's real launcher setup with Isaac Lab replaced only at its import boundary."""
+    # SDK modules below are fake; activation paths from a real installation
+    # must not influence their argument and lifecycle contracts.
+    monkeypatch.delenv("ISAACSIM_ROOT_PATH", raising=False)
+    monkeypatch.delenv("ISAACLAB3_KIT_PYTHONPATH", raising=False)
     monkeypatch.setenv(
         "HOLOSOMA_ISAACSIM_BACKEND", "isaaclab2" if backend == IsaacLabBackend.ISAACLAB3 else "isaaclab3"
     )

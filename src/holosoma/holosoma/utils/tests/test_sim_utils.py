@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import sys
+from importlib.machinery import ModuleSpec
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -38,6 +40,11 @@ def test_launcher_uses_task_sensors_resolved_device_and_per_process_env_count(
 
     monkeypatch.setattr(IsaacLab3Backend, "add_launcher_args", add_args)
     monkeypatch.setattr(IsaacLab3Backend, "launch_app", launch)
+    # The fake Lab 3 launcher must also present its matching package boundary
+    # when this pure test runs inside a real Lab 2 installation.
+    physx = ModuleType("isaaclab_physx")
+    physx.__spec__ = ModuleSpec("isaaclab_physx", loader=None)
+    monkeypatch.setitem(sys.modules, "isaaclab_physx", physx)
     monkeypatch.setattr(sim_utils, "_ensure_render_pipeline_active", lambda *, isaaclab3: activated.append(isaaclab3))
     monkeypatch.setattr(sys, "argv", ["test-launcher"])
     monkeypatch.setenv("WORLD_SIZE", "2")
