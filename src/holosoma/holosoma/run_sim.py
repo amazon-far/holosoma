@@ -81,7 +81,13 @@ def main() -> None:
     logger.info("Holosoma Direct Simulation Runner")
     logger.info("Compositional configuration via subcommands (like eval_agent.py)")
 
+    from holosoma.utils.config_document import ConfigDocumentError, expand_config_args
     from holosoma.utils.config_registry import parse_config
+
+    try:
+        sys.argv = [sys.argv[0], *expand_config_args(sys.argv[1:])]
+    except ConfigDocumentError as exc:
+        raise SystemExit(f"--config: {exc}") from exc
 
     config = parse_config(
         RunSimConfig,
@@ -90,7 +96,8 @@ def main() -> None:
         "Examples:\n"
         "  python -m holosoma.run_sim # defaults \n"
         "  python -m holosoma.run_sim simulator:mujoco robot:t1_29dof_waist_wrist terrain:terrain_locomotion_plane\n"
-        "  python -m holosoma.run_sim simulator:isaacsim robot:g1_29dof terrain:terrain_locomotion_mix",
+        "  python -m holosoma.run_sim simulator:isaacsim robot:g1_29dof terrain:terrain_locomotion_mix\n"
+        "  python -m holosoma.run_sim --config run.yaml [--config-path a.b] [overrides...]",
     )
 
     # Run simulation directly with parsed config
