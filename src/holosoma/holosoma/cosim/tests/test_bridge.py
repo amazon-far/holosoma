@@ -227,6 +227,44 @@ def test_receiver_reads_only_the_state_it_can_apply(receiver: ReceiverFixture) -
     assert bridge.MappedBuffers.names == ["dof_pos"]  # type: ignore[attr-defined]
 
 
+class _ReadingHandler:
+    """A handler that only reads ``fields``, without applying them anywhere."""
+
+    def __init__(self, simulator: Any, fields: tuple[str, ...]) -> None:
+        self.simulator, self.fields = simulator, fields
+        self.seen: list[dict[str, Any]] = []
+
+    def reads(self, exports: Any) -> tuple[str, ...]:
+        return self.fields
+
+    def allocate(self, requests: Any) -> dict[str, Any]:
+        return {}
+
+    def process(self, state: Any, sim_time: float, *, repeat: bool, phase: str | None) -> None:
+        self.seen.append(dict(state))
+
+
+def test_handler_reads_derived_state_without_applying_it(receiver: ReceiverFixture) -> None:
+    worker, calls, replies, messages = receiver
+    handler = _ReadingHandler(worker.sim, ("contact_forces",))
+    messages[0]["exports"] = [
+        {"name": "dof_pos", "shape": [1, 2], "handle": "00"},
+        {"name": "contact_forces", "shape": [1, 3], "handle": "00"},
+    ]
+    bridge.Receiver(cast("Any", handler), endpoint="ipc:///unused").run()
+    assert replies[0]["reads"] == ["contact_forces"]
+    assert bridge.MappedBuffers.names == ["contact_forces"]  # type: ignore[attr-defined]
+    assert len(handler.seen) == 1 and not any(isinstance(call, tuple) and call[0] == "apply" for call in calls)
+
+
+def test_reading_a_field_the_source_does_not_share_fails_before_mapping(receiver: ReceiverFixture) -> None:
+    worker, calls, replies, _messages = receiver
+    handler = _ReadingHandler(worker.sim, ("contact_forces",))
+    with pytest.raises(ValueError, match="does not share"):
+        bridge.Receiver(cast("Any", handler), endpoint="ipc:///unused").run()
+    assert "map" not in calls and replies[-1]["type"] == "ERROR"
+
+
 def test_read_state_field_layout_mismatch_fails_before_mapping(receiver: ReceiverFixture) -> None:
     worker, calls, replies, messages = receiver
     messages[0]["exports"] = [{"name": "dof_pos", "shape": [1, 3], "handle": "00"}]

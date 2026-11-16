@@ -11,6 +11,7 @@ here as ordinary cameras. Start the renderer before the source; it exits when th
 from __future__ import annotations
 
 import sys
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -20,7 +21,7 @@ from loguru import logger
 from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.cosim.bridge import BufferRequest, Publisher, Receiver
 from holosoma.cosim.cameras import camera_requests, image_name
-from holosoma.cosim.cuda import allocate_shared, shared_state
+from holosoma.cosim.cuda import BufferSpec, allocate_shared, shared_state
 from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.utils.config_registry import parse_config
 
@@ -105,12 +106,29 @@ class _Image:
 
 
 class RenderHandler:
-    """Render the source's frames with ``task`` and export the camera outputs the source requests."""
+    """Mirror the source's state into ``task``, render it, and export the camera outputs the source requests.
+
+    Reads the source fields writable on ``task``'s simulator and applies them before each render.
+    """
 
     def __init__(self, task: RenderTask) -> None:
         self.task = task
         self.simulator = task.simulator
         self._images: list[_Image] = []
+
+    def reads(self, exports: Sequence[BufferSpec]) -> tuple[str, ...]:
+        """The exported fields this task's simulator can write, each checked against its own field's layout."""
+        state = self.simulator.state
+        writable = set(state.writable_names())
+        reads = [spec for spec in exports if spec.name in writable]
+        for spec in reads:
+            own = state.get(spec.name)
+            if (spec.shape, spec.dtype) != (tuple(own.shape), str(own.dtype).removeprefix("torch.")):
+                raise ValueError(
+                    f"State field {spec.name!r} differs between simulators: "
+                    f"source {spec.dtype} {spec.shape}, receiver {own.dtype} {tuple(own.shape)}"
+                )
+        return tuple(spec.name for spec in reads)
 
     def allocate(self, requests: list[BufferRequest]) -> dict[str, Any]:
         """Check each request against this task's camera output and allocate its export."""
@@ -134,8 +152,9 @@ class RenderHandler:
             self._images.append(_Image(manager.get(camera), data_type, wp.to_torch(owners[request.name])))
         return owners
 
-    def process(self, sim_time: float, *, repeat: bool, phase: str | None) -> None:
-        """Render the applied state and copy each requested camera output into its export."""
+    def process(self, state: Mapping[str, torch.Tensor], sim_time: float, *, repeat: bool, phase: str | None) -> None:
+        """Apply ``state``, render it, and copy each requested camera output into its export."""
+        self.simulator.apply_state(state)
         self.task.render_frame(sim_time=sim_time, repeat=repeat)
         for image in self._images:
             image.tensor.copy_(image.record.buffers[image.data_type])

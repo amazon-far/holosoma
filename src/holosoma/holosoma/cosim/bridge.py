@@ -235,42 +235,32 @@ class Publisher:
 
 
 class FrameHandler(Protocol):
-    """What a receiver does with a source's frames, and the exports it answers the source's requests with."""
+    """What a receiver reads from a source, what it does with each frame, and the exports it answers requests with."""
 
     simulator: BaseSimulator
+
+    def reads(self, exports: Sequence[BufferSpec]) -> tuple[str, ...]:
+        """The source's exported state fields to map and refresh each frame, checked as this handler needs."""
 
     def allocate(self, requests: list[BufferRequest]) -> dict[str, Any]:
         """Check the source's requests and return one shared array per request, by name."""
 
-    def process(self, sim_time: float, *, repeat: bool, phase: str | None) -> None:
-        """Process the applied state at source time ``sim_time`` and fill the exports.
+    def process(self, state: Mapping[str, torch.Tensor], sim_time: float, *, repeat: bool, phase: str | None) -> None:
+        """Process the source's ``state`` at source time ``sim_time`` and fill the exports.
 
-        ``repeat`` processes current state again at the previous frame's time, e.g. after the source reset.
-        ``phase`` is the source's hook phase the exchange came from, or ``None`` outside any hook.
+        ``state`` holds the read fields, read-only and valid only during the call. ``repeat`` processes
+        current state again at the previous frame's time, e.g. after the source reset. ``phase`` is the
+        source's hook phase the exchange came from, or ``None`` outside any hook.
         """
 
 
 class Receiver:
-    """Apply a source's shared state to ``handler``'s simulator and have ``handler`` process each frame."""
+    """Map the source state ``handler`` reads and have ``handler`` process each frame."""
 
     def __init__(self, handler: FrameHandler, *, endpoint: str) -> None:
         self.handler = handler
         self.sim = handler.simulator
         self.control = ControlChannel(endpoint=endpoint, receiver=True)
-
-    def _state_reads(self, exports: list[BufferSpec]) -> tuple[str, ...]:
-        """The exported state fields this simulator applies: its writable ones, each checked against its layout."""
-        state = self.sim.state
-        writable = set(state.writable_names())
-        reads = [spec for spec in exports if spec.name in writable]
-        for spec in reads:
-            own = state.get(spec.name)
-            if (spec.shape, spec.dtype) != (tuple(own.shape), str(own.dtype).removeprefix("torch.")):
-                raise ValueError(
-                    f"State field {spec.name!r} differs between simulators: "
-                    f"source {spec.dtype} {spec.shape}, receiver {own.dtype} {tuple(own.shape)}"
-                )
-        return tuple(spec.name for spec in reads)
 
     def run(self) -> None:
         import torch
@@ -285,8 +275,7 @@ class Receiver:
             assert mapped is not None
             stream.wait_event(ready)
             torch.cuda.synchronize(self.sim.sim_device)
-            self.sim.apply_state(mapped.tensors)
-            self.handler.process(sim_time, repeat=repeat, phase=phase)
+            self.handler.process(mapped.tensors, sim_time, repeat=repeat, phase=phase)
             mapped.verify_read_only()
             stream.record_event(done)
 
@@ -308,7 +297,10 @@ class Receiver:
                             raise ValueError(f"Scene {differing} differs between simulators")
                         if (source_gpu := message["gpu_uuid"]) != (own_gpu := gpu_uuid(self.sim.sim_device)):
                             raise ValueError(f"Source GPU {source_gpu} differs from receiver GPU {own_gpu}")
-                        reads = self._state_reads([buffer_spec(raw) for raw in message["exports"]])
+                        exported = [buffer_spec(raw) for raw in message["exports"]]
+                        reads = self.handler.reads(exported)
+                        if unknown := sorted(set(reads) - {spec.name for spec in exported}):
+                            raise ValueError(f"Receiver reads state fields {unknown} the source does not share")
                         exports = self.handler.allocate(
                             [BufferRequest.from_message(raw) for raw in message["requests"]]
                         )

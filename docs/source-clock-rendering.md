@@ -117,9 +117,13 @@ the requested camera outputs.
 The source shares every non-empty SimState field, writable and derived. When the
 connection opens, each side sends the buffers it exports (name, shape, dtype and
 IPC handle) and the source also sends the buffers it requests from the receiver.
-The receiver reads the exported fields it can write, maps only those, and names
-them in its reply; each later exchange refreshes only those fields on the source.
-It rejects a read field whose shape differs from its own, and any scene layout
+The receiving handler chooses the exported fields it reads; the receiver maps only
+those, read-only, names them in its reply, and passes them to the handler each frame.
+Each later exchange refreshes only those fields on the source. The render handler
+reads the fields its simulator can write, rejects any whose shape differs from its
+own, and applies them before rendering; other handlers may read any exported field,
+derived ones such as `contact_forces` included, without writing them anywhere. The
+receiver rejects a read of a field the source does not share, and any scene layout
 (joint, object and environment order) or GPU that differs. Import CUDA helpers
 after provider startup when they use Warp; importing `CacheAllocator` itself loads
 no GPU SDK.
