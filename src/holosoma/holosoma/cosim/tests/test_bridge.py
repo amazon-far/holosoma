@@ -25,8 +25,8 @@ from holosoma.simulator.shared.sensor_manager import SensorManager
 pytestmark = pytest.mark.no_sim
 
 
-@pytest.mark.parametrize("frame", [(0, 0, 0), (1, -1, 0), (1, 0, float("nan")), (1, 0, -1)])
-def test_invalid_frame_is_rejected(frame: tuple[int, int, float]) -> None:
+@pytest.mark.parametrize("frame", [(0, 0), (1, float("nan")), (1, -1)])
+def test_invalid_frame_is_rejected(frame: tuple[int, float]) -> None:
     with pytest.raises(ValueError, match="must be valid"):
         bridge.Frame(*frame)
 
@@ -54,7 +54,7 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
             "gpu_uuid": "gpu-a",
             "scene": {"dof_names": ["a", "b"], "object_names": [], "env_origins": [[0.0, 0.0, 0.0]]},
         },
-        {"type": "FRAME_AVAILABLE", "frame": {"sequence": 1, "physics_step": 7, "sim_time": 0.035}},
+        {"type": "FRAME_AVAILABLE", "frame": {"sequence": 1, "sim_time": 0.035}},
         {"type": "CLOSE"},
     ]
     socket = SimpleNamespace(send_json=replies.append)

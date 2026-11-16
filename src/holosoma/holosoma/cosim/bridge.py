@@ -23,12 +23,11 @@ FRAME_TIMEOUT_MS = 30000
 @dataclass(frozen=True)
 class Frame:
     sequence: int
-    physics_step: int
     sim_time: float
 
     def __post_init__(self) -> None:
-        if self.sequence < 1 or self.physics_step < 0 or not math.isfinite(self.sim_time) or self.sim_time < 0:
-            raise ValueError("Frame sequence, physics step and simulation time must be valid")
+        if self.sequence < 1 or not math.isfinite(self.sim_time) or self.sim_time < 0:
+            raise ValueError("Frame sequence and simulation time must be valid")
 
 
 class ControlChannel:
@@ -196,10 +195,10 @@ class Publisher:
         stream.wait_event(self.done)
         return reply
 
-    def publish(self, physics_step: int) -> None:
+    def publish(self) -> None:
         """Have the receiver process current state as the next frame, at the source's current time."""
         self.sequence += 1
-        frame = Frame(self.sequence, physics_step, self.sim.time())
+        frame = Frame(self.sequence, self.sim.time())
         reply = self._exchange("FRAME_AVAILABLE", frame=asdict(frame))
         if reply["type"] != "FRAME_COMPLETE" or reply["sequence"] != frame.sequence:
             raise RuntimeError("Receiver completed the wrong frame")

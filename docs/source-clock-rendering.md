@@ -105,9 +105,9 @@ with replace(source_config, plugin=plugins).create_task() as task:
     task.run()
 ```
 
-The plugin owns when publication happens and what the source requests: it counts
-physics steps, publishes when a camera is due, and fills remote cameras from the
-receiver's images. `holosoma.cosim.bridge.Publisher` is the channel underneath:
+The plugin owns when publication happens and what the source requests: it
+publishes when a camera is due and fills remote cameras from the receiver's
+images. `holosoma.cosim.bridge.Publisher` is the channel underneath:
 the handshake at construction, then `publish()`, `repeat()`, its mapped
 `imports` and `close()`, called whenever its owner decides. On the receiving
 side, `Receiver` applies the shared state and hands each frame to a handler;
@@ -132,7 +132,7 @@ sensors, so published state and source images match the latest step.
 The source holds its caches while the receiver applies state, renders, publishes
 cameras and completes GPU reads. Physics resumes after completion: serialized
 lockstep, with no physics/render overlap or frame pipelining. Startup handles and
-layout travel once; subsequent notifications carry sequence, physics step and
+layout travel once; subsequent notifications carry the frame sequence and
 simulation time. Publisher close obtains an unmap acknowledgment before storage
 can be released. Failures/timeouts propagate; reconnection and scene changes are
 not implemented. Startup and the first frame exchange may take up to five

@@ -51,9 +51,7 @@ class CosimRenderPlugin:
         self.remote = manager.remote_cameras
         requests = [request for record in self.remote for request in camera_requests(record, manager.num_envs)]
         self.publisher = Publisher(simulator, shared_state(simulator), endpoint=cfg.endpoint, requests=requests)
-        self.physics_step = 0
         hooks = simulator.hooks
-        self.step_hook = hooks.add(Phase.POST_STEP, self._stepped, name="cosim.physics_step")
         self.capture_hook = None
         if self.remote:
             manager.set_remote_renderer(self)
@@ -63,16 +61,13 @@ class CosimRenderPlugin:
             )
         self.close_hook = hooks.add(Phase.CLOSE, self.close, name="cosim.close")
 
-    def _stepped(self) -> None:
-        self.physics_step += 1
-
     def _capture(self) -> None:
         if self.simulator.sensor_manager.last_due:
-            self.publisher.publish(self.physics_step)
+            self.publisher.publish()
 
     def render_remote(self, cameras: list[CameraRecord]) -> None:
         """Publish a frame and set ``cameras``' buffers to copies of the renderer's images."""
-        self.publisher.publish(self.physics_step)
+        self.publisher.publish()
         images = self.publisher.imports
         for record in cameras:
             for data_type in record.config.data_types:
@@ -93,7 +88,6 @@ class CosimRenderPlugin:
     def close(self) -> None:
         if self.publisher.closed:
             return
-        self.step_hook.remove()
         if self.capture_hook is None:
             self.simulator.sensor_manager.set_remote_renderer(None)
         else:
