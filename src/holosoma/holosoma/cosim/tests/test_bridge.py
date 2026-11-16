@@ -105,6 +105,7 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
         state=SimpleNamespace(writable_names=lambda: list(values), get=values.__getitem__),
         apply_state=lambda inputs: calls.append(("apply", inputs is values)),
         sensor_manager=SensorManager("cpu", 50.0),
+        match_env_origins=lambda origins: calls.append(("place", origins.tolist())),
     )
     task = SimpleNamespace(
         simulator=sim,
@@ -118,6 +119,7 @@ def test_receiver_uses_only_native_state_and_capture_contracts(receiver: Receive
     worker, calls, replies, _messages = receiver
     worker.run()
     assert calls == [
+        ("place", [[0.0, 0.0, 0.0]]),
         "map",
         "ready",
         "sync",
@@ -140,10 +142,11 @@ def test_receiver_uses_only_native_state_and_capture_contracts(receiver: Receive
 @pytest.mark.parametrize("mismatch", ["dof_names", "object_names", "env_origins", "gpu_uuid"])
 def test_layout_mismatch_fails_before_mapping(receiver: ReceiverFixture, mismatch: str) -> None:
     worker, calls, replies, messages = receiver
-    (messages[0] if mismatch == "gpu_uuid" else messages[0]["scene"])[mismatch] = ["wrong"]
+    wrong: list[Any] = [[1.0, 0.0, 0.0]] if mismatch == "env_origins" else ["wrong"]
+    (messages[0] if mismatch == "gpu_uuid" else messages[0]["scene"])[mismatch] = wrong
     with pytest.raises(ValueError, match="differs|differ"):
         worker.run()
-    assert not any(isinstance(call, tuple) for call in calls)
+    assert not any(isinstance(call, tuple) and call[0] != "place" for call in calls)
     assert replies[-1]["type"] == "ERROR" and calls[-1] == "close"
 
 
@@ -218,7 +221,7 @@ def test_unappliable_state_field_fails_before_mapping(
     messages[0]["exports"] = [export]
     with pytest.raises(ValueError, match=error):
         worker.run()
-    assert not any(isinstance(call, tuple) for call in calls)
+    assert not any(isinstance(call, tuple) and call[0] != "place" for call in calls)
     assert replies[-1]["type"] == "ERROR" and calls[-1] == "close"
 
 
@@ -243,6 +246,35 @@ def test_control_timeout_is_propagated_and_socket_can_be_closed(tmp_path: Path) 
             control.exchange("OPEN")
     finally:
         control.close()
+
+
+def test_exchange_after_an_interrupted_request_takes_the_right_reply(tmp_path: Path) -> None:
+    import threading
+
+    import zmq
+
+    endpoint = f"ipc://{tmp_path}/control.sock"
+    receiver = bridge.ControlChannel(endpoint=endpoint, receiver=True, startup_timeout_ms=3000)
+    control = bridge.ControlChannel(endpoint=endpoint, startup_timeout_ms=100)
+
+    def serve() -> None:
+        for _ in range(2):  # Ends by timeout if the second request never arrives.
+            message = receiver.receive()
+            if message["type"] == "FRAME_AVAILABLE":
+                threading.Event().wait(0.3)
+            receiver.socket.send_json({"type": f"{message['type']}_REPLY"})
+
+    server = threading.Thread(target=serve, daemon=True)
+    server.start()
+    try:
+        with pytest.raises(zmq.Again):
+            control.exchange("FRAME_AVAILABLE")
+        control.set_timeout(2000)
+        assert control.exchange("CLOSE") == {"type": "CLOSE_REPLY"}
+    finally:
+        server.join(timeout=5)
+        control.close()
+        receiver.close()
 
 
 def test_publisher_rejects_fields_the_allocator_does_not_own(monkeypatch: pytest.MonkeyPatch) -> None:

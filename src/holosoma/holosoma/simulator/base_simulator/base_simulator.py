@@ -705,6 +705,12 @@ class BaseSimulator:
     def prepare_render_only(self) -> None:
         """Prepare, after ordinary startup, to render applied state at an external clock."""
 
+    def match_env_origins(self, origins: torch.Tensor) -> None:
+        """Place render-only environments at ``origins`` ``[num_envs, 3]``, where a source simulated them.
+
+        Backends that honour the origins they are built with keep them; check :attr:`env_origins` afterwards.
+        """
+
     def render_applied_state(self, dt: float) -> None:
         """Flush applied state and bring body poses and renderers up to date, without integrating physics.
 

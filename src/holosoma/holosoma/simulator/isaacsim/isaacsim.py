@@ -337,6 +337,21 @@ class IsaacSim(BaseSimulator):
         self._render_capture = RenderCapture(self)
         self._render_capture.initialize_cameras()
 
+    def match_env_origins(self, origins: torch.Tensor) -> None:
+        """Move the cloned environment prims to ``origins``, so world-frame state renders in place."""
+        if self._render_capture is None:
+            raise RuntimeError("Environments can be moved only for render-only rendering")
+        if origins.shape != self.scene.env_origins.shape or torch.equal(origins, self.scene.env_origins):
+            return
+        from pxr import Gf
+
+        stage = stage_utils.get_current_stage()
+        for env, origin in enumerate(origins.tolist()):
+            stage.GetPrimAtPath(f"/World/envs/env_{env}").GetAttribute("xformOp:translate").Set(Gf.Vec3d(*origin))
+        # InteractiveScene has no setter for its clone-grid origins.
+        self.scene._default_env_origins = origins.to(self.scene.env_origins).clone()
+        self.env_origins = self.scene.env_origins
+
     def render_applied_state(self, dt: float) -> None:
         """Flush applied state and render through Isaac Lab (which runs FK) with physics held stopped."""
         if self._render_capture is None:

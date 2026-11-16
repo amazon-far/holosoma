@@ -42,6 +42,7 @@ class ControlChannel:
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REP if receiver else zmq.REQ)
         self.socket.setsockopt(zmq.LINGER, 0)
+        self.awaiting_reply = False
         self.set_timeout(startup_timeout_ms)
         try:
             (self.socket.bind if receiver else self.socket.connect)(endpoint)
@@ -56,8 +57,14 @@ class ControlChannel:
         self.socket.setsockopt(zmq.SNDTIMEO, timeout_ms)
 
     def exchange(self, command: str, **fields: Any) -> dict[str, Any]:
+        if self.awaiting_reply:
+            # A request interrupted before its reply, e.g. by a signal, leaves REQ waiting for that reply.
+            self.receive()
+            self.awaiting_reply = False
         self.socket.send_json(dict(type=command, **fields))
+        self.awaiting_reply = True
         reply = self.receive()
+        self.awaiting_reply = False
         if reply["type"] == "ERROR":
             raise RuntimeError(reply["message"])
         return reply
@@ -367,7 +374,12 @@ class Receiver:
                 try:
                     command = message["type"]
                     if command == "OPEN" and mapped is None:
-                        scene, own_scene = message["scene"], scene_layout(self.sim)
+                        scene = message["scene"]
+                        origins = self.sim.scene.env_origins
+                        self.sim.match_env_origins(
+                            torch.tensor(scene["env_origins"], dtype=torch.float32, device=origins.device)
+                        )
+                        own_scene = scene_layout(self.sim)
                         if differing := sorted(
                             key for key in {*scene, *own_scene} if scene.get(key) != own_scene.get(key)
                         ):

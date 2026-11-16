@@ -45,8 +45,9 @@ def share(name: str, owner: Any) -> BufferSpec:
 class CacheAllocator:
     """Allocate selected SimState caches outside Warp's memory pool.
 
-    Retain this owner until the receiver has unmapped its imports. Other caches
-    keep ordinary Torch storage. IPC APIs are checked only when sharing is used.
+    Retain this owner until the receiver has unmapped its imports. Other caches,
+    and empty selected ones, keep ordinary Torch storage. IPC APIs are checked only
+    when sharing is used.
     """
 
     def __init__(self, fields: Iterable[str]) -> None:
@@ -59,7 +60,7 @@ class CacheAllocator:
         import warp as wp
 
         selected = torch.device(device or value.device)
-        if name not in self.fields:
+        if name not in self.fields or not value.numel():
             return torch.empty(value.shape, dtype=torch.float32, device=selected)
         if name in self.owners:
             raise RuntimeError(f"Published cache allocation was replaced: {name}")

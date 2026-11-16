@@ -67,9 +67,31 @@ scanner; other tasks can disable it with `terrain.terrain_term.height_scanner=Fa
 SimState cache allocations, sends only metadata through ZeroMQ, and uses CUDA
 ready/done events. Scenes, environment placement and process/container deployment
 remain caller-owned. The bridge validates joint/object order and environment
-origins at startup, and that both processes use the same physical GPU (by UUID,
+origins at startup (after the renderer has matched them where it can), and that both processes use the same physical GPU (by UUID,
 since `CUDA_VISIBLE_DEVICES` can renumber devices). It contains no Isaac SDK
 access or simulator-type dispatch.
+
+From the command line, start the renderer with the scene's run_sim arguments, then run
+the source with the `cosim-publisher` plugin. Configure the source's remote cameras as
+ordinary cameras on the renderer:
+
+```bash
+python -m holosoma.cosim.render --endpoint ipc:///tmp/$USER/cosim.sock \
+  simulator:isaacsim robot:g1-29dof terrain:terrain-locomotion-mix --training.num-envs 4 \
+  sensor.overview:overview
+
+python -m holosoma.run_sim \
+  simulator:mjwarp robot:g1-29dof terrain:terrain-locomotion-mix --training.num-envs 4 \
+  sensor.overview:overview --sensor.overview.remote True \
+  plugin.cosim:cosim-publisher --plugin.cosim.endpoint ipc:///tmp/$USER/cosim.sock
+```
+
+The plugin installs the shared cache allocator, so it must be installed before anything
+reads simulator state; list it first. It publishes every non-empty writable field unless
+`--plugin.cosim.fields` selects some. When the renderer places environments itself
+(Isaac's clone grid), it moves them to the source's origins at startup, so world-frame
+state, world-mounted cameras and terrain agree; other renderers keep their configured
+origins, which must match the source's.
 
 Receiver process:
 
