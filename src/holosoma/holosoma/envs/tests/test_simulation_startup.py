@@ -75,6 +75,9 @@ def task_type(monkeypatch: pytest.MonkeyPatch) -> TaskFixture:
         def _load_assets(self) -> None:
             self.base_init_state = torch.zeros(13)
 
+        def _get_env_origins(self) -> torch.Tensor:
+            return torch.zeros(self.num_envs, 3)
+
         def _setup_robot_body_indices(self) -> None:
             pass
 
@@ -91,7 +94,7 @@ def task_type(monkeypatch: pytest.MonkeyPatch) -> TaskFixture:
             pass
 
     class Render(Task, RenderTask):
-        pass
+        _get_env_origins = RenderTask._get_env_origins
 
     monkeypatch.setattr(base_task, "TerrainManager", lambda *_: object())
     monkeypatch.setattr(base_task, "get_class", lambda _name: Simulator)
@@ -114,11 +117,9 @@ def test_allocator_is_installed_before_the_first_native_read(
         allocations.append((name, device))
         return torch.empty_like(value)
 
-    origins = torch.tensor([[0.0, 0.0, 0.0], [5.0, 0.0, 0.0]])
-    constructed = task(config(), buffer_allocator=allocator, env_origins=origins)
+    constructed = task(config(), buffer_allocator=allocator)
     assert allocations == [("test", None)]
     assert constructed.simulator.state.get("test").data_ptr() == calls[-1][1].data_ptr()
-    assert torch.equal(constructed.simulator.env_origins, origins)
 
 
 def test_render_task_uses_native_scene_placement_and_rejects_physics_step(
@@ -152,12 +153,3 @@ def test_render_frames_run_at_the_external_clock(task_type: TaskFixture) -> None
     with pytest.raises(ValueError, match="Source simulation time"):
         constructed.render_frame(sim_time=0.035, repeat=True)
     assert constructed.frames_rendered == 2
-
-
-def test_wrong_origin_shape_is_rejected_before_prepare_sim(
-    task_type: TaskFixture,
-) -> None:
-    task, _render, calls = task_type
-    with pytest.raises(ValueError, match="Environment origins"):
-        task(config(), env_origins=torch.zeros(1, 3))
-    assert calls == ["setup"]

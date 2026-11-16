@@ -37,8 +37,6 @@ from holosoma.config_types.video import VideoConfig
 from holosoma.utils.config_registry import UseRegistry
 
 if TYPE_CHECKING:
-    import torch
-
     from holosoma.envs.render_task import RenderTask
     from holosoma.envs.simulation_task import SimulationTask
     from holosoma.simulator.base_simulator.state import BufferAllocator
@@ -156,7 +154,6 @@ class RunSimConfig:
         self,
         *,
         buffer_allocator: BufferAllocator | None = None,
-        env_origins: torch.Tensor | None = None,
     ) -> AbstractContextManager[SimulationTask]:
         """Return a context that builds the configured simulation task and owns its resources."""
         from holosoma.config_types.env import get_run_sim_env_config
@@ -167,7 +164,6 @@ class RunSimConfig:
             get_run_sim_env_config(self),
             SimulationTask,
             buffer_allocator=buffer_allocator,
-            env_origins=env_origins,
         )
 
     def create_render_task(self) -> AbstractContextManager[RenderTask]:

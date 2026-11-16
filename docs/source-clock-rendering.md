@@ -24,18 +24,12 @@ with receiver_config.create_render_task() as task:
 (Isaac's clone grid), camera preparation, and every sensor rendering each frame.
 It has no physics step; `task.step()` raises.
 
-`RunSimConfig.create_task()` accepts two optional programmatic inputs for the
-source:
-
-- `buffer_allocator`: select SimState cache storage before any cached reads,
-  including native initialization reads.
-- `env_origins`: float32 `[num_envs, 3]` origins on the task device. A backend
-  that cannot honor the requested placement raises an error.
-
-Calls without these options retain normal startup. Runtime
-allocator callbacks and tensors stay outside the serializable scene/config
-models. Custom task subclasses must accept the new options when they use them;
-ordinary construction still passes only the existing configuration argument.
+`RunSimConfig.create_task()` accepts an optional `buffer_allocator` for the
+source, selecting SimState cache storage before any cached reads, including
+native initialization reads. Calls without it retain normal startup. The runtime
+allocator callback stays outside the serializable scene/config models. Custom
+task subclasses must accept the option when they use it; ordinary construction
+still passes only the existing configuration argument.
 
 `apply_state()` accepts complete writable SimState fields, such as
 `robot_root_states` `[E, 13]`, `dof_pos` and `dof_vel` `[E, D]`, and
@@ -101,16 +95,14 @@ with receiver_config.create_render_task() as task:
     Receiver(task, endpoint=endpoint).run()
 ```
 
-Source process, with the same scene and agreed environment origins:
+Source process, with the same scene:
 
 ```python
 from holosoma.cosim.cuda import CacheAllocator
 
 fields = ("robot_root_states", "dof_pos", "dof_vel", "object_root_states")
 allocator = CacheAllocator(fields)
-with source_config.create_task(
-    buffer_allocator=allocator, env_origins=matched_origins,
-) as task:
+with source_config.create_task(buffer_allocator=allocator) as task:
     from holosoma.cosim.bridge import Publisher
     publisher = Publisher(task.simulator, allocator, endpoint=endpoint)
     task.run()

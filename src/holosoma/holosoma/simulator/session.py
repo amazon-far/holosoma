@@ -74,7 +74,6 @@ def task_session(
     required_class: type[_TaskT],
     *,
     buffer_allocator: BufferAllocator | None = None,
-    env_origins: torch.Tensor | None = None,
 ) -> Iterator[_TaskT]:
     """Own signal handling, provider launch, task construction, and teardown.
 
@@ -109,10 +108,10 @@ def task_session(
             logger.info(f"Creating task: {config.env_class}")
             # Pinned so the task allocates on the device the provider launched on.
             configured = dataclasses.replace(config, device=device)
-            if buffer_allocator is None and env_origins is None:
+            if buffer_allocator is None:
                 task = task_class(configured)
             else:
-                task = task_class(configured, buffer_allocator=buffer_allocator, env_origins=env_origins)
+                task = task_class(configured, buffer_allocator=buffer_allocator)
             yield task
         except BaseException:
             try:
