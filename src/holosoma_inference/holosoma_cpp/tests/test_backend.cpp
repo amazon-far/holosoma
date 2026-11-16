@@ -6,6 +6,7 @@
 #include <string>
 
 #include "holosoma_cpp/onnx_model.hpp"
+#include "holosoma_cpp/trt_cache_key.hpp"
 
 namespace holosoma {
 namespace {
@@ -75,6 +76,29 @@ TEST(Backend, TensorRtReusesACachedEngine) {
   for (const auto& info : first.outputs()) {
     EXPECT_EQ(first.output(info.name), second.output(info.name)) << info.name;
   }
+}
+
+// A plan built with TF32 on fails to create an execution context with it off (and the reverse), so
+// two settings of NVIDIA_TF32_OVERRIDE must never share a cached engine.
+TEST(TrtCacheKey, EachTf32SettingGetsItsOwnEngine) {
+  const std::string key = "/models/pelvis.onnx:1234:5678:101401:sm120:obs x1x100";
+  const std::string unset = trt_engine_file_name("pelvis", key, nullptr);
+  const std::string off = trt_engine_file_name("pelvis", key, "0");
+  const std::string on = trt_engine_file_name("pelvis", key, "1");
+  EXPECT_NE(off, unset);
+  EXPECT_NE(off, on);
+  EXPECT_NE(on, unset);
+  EXPECT_EQ(off, trt_engine_file_name("pelvis", key, "0")) << "the same setting must reuse its engine";
+}
+
+TEST(TrtCacheKey, NamesThePrecisionAndTheModel) {
+  const std::string key = "/models/pelvis.onnx:1234";
+  EXPECT_EQ(trt_engine_file_name("pelvis", key, "0").rfind("pelvis-fp32-", 0), 0u);
+  EXPECT_EQ(trt_engine_file_name("pelvis", key, nullptr).rfind("pelvis-tf32-", 0), 0u);
+  EXPECT_EQ(trt_engine_file_name("pelvis", key, "1").rfind("pelvis-tf32-", 0), 0u);
+  EXPECT_NE(trt_engine_file_name("pelvis", key, "0"), trt_engine_file_name("pelvis", key + "x", "0"));
+  const std::string name = trt_engine_file_name("pelvis", key, nullptr);
+  EXPECT_EQ(name.substr(name.size() - 7), ".engine");
 }
 
 }  // namespace
