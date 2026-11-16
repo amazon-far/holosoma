@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -43,13 +43,11 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
     messages: list[dict[str, Any]] = [
         {
             "type": "OPEN",
-            "buffers": [],
+            "exports": [],
+            "requests": [],
             "ready_handle": "00",
             "gpu_uuid": "gpu-a",
-            "dof_names": ["a", "b"],
-            "object_names": [],
-            "env_origins": [[0.0, 0.0, 0.0]],
-            "cameras": [],
+            "scene": {"dof_names": ["a", "b"], "object_names": [], "env_origins": [[0.0, 0.0, 0.0]]},
         },
         {"type": "FRAME_AVAILABLE", "frame": {"sequence": 1, "physics_step": 7, "sim_time": 0.035}},
         {"type": "CLOSE"},
@@ -104,7 +102,7 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
         dof_names=["a", "b"],
         object_state_names=(),
         scene=SimpleNamespace(env_origins=torch.zeros(1, 3)),
-        state=SimpleNamespace(writable_names=lambda: list(values)),
+        state=SimpleNamespace(writable_names=lambda: list(values), get=values.__getitem__),
         apply_state=lambda inputs: calls.append(("apply", inputs is values)),
         sensor_manager=SensorManager("cpu", 50.0),
     )
@@ -133,7 +131,7 @@ def test_receiver_uses_only_native_state_and_capture_contracts(receiver: Receive
         "close",
     ]
     assert replies == [
-        {"type": "OPENED", "done_handle": "01", "images": []},
+        {"type": "OPENED", "done_handle": "01", "exports": []},
         {"type": "RENDER_COMPLETE", "sequence": 1},
         {"type": "UNMAPPED"},
     ]
@@ -142,7 +140,7 @@ def test_receiver_uses_only_native_state_and_capture_contracts(receiver: Receive
 @pytest.mark.parametrize("mismatch", ["dof_names", "object_names", "env_origins", "gpu_uuid"])
 def test_layout_mismatch_fails_before_mapping(receiver: ReceiverFixture, mismatch: str) -> None:
     worker, calls, replies, messages = receiver
-    messages[0][mismatch] = ["wrong"]
+    (messages[0] if mismatch == "gpu_uuid" else messages[0]["scene"])[mismatch] = ["wrong"]
     with pytest.raises(ValueError, match="differs|differ"):
         worker.run()
     assert not any(isinstance(call, tuple) for call in calls)
@@ -150,18 +148,23 @@ def test_layout_mismatch_fails_before_mapping(receiver: ReceiverFixture, mismatc
 
 
 @pytest.mark.parametrize(
-    "camera",
+    "change",
     [
-        {"name": "missing", "data_types": ["rgb"], "width": 4, "height": 3},
-        {"name": "cam", "data_types": ["rgb"], "width": 8, "height": 3},
-        {"name": "cam", "data_types": ["depth", "rgb"], "width": 4, "height": 3},
+        {"name": "missing/rgb"},
+        {"name": "cam/depth"},
+        {"shape": (1, 3, 8, 3)},
+        {"dtype": "float32"},
+        {"meta": {"vertical_fov": 90.0}},
     ],
 )
-def test_remote_camera_mismatch_fails_before_mapping(receiver: ReceiverFixture, camera: dict[str, Any]) -> None:
+def test_remote_camera_mismatch_fails_before_mapping(receiver: ReceiverFixture, change: dict[str, Any]) -> None:
     worker, calls, replies, messages = receiver
-    _camera(worker.sim.sensor_manager, "cam", remote=False, data_types=["rgb"])
-    messages[0]["cameras"] = [camera]
-    with pytest.raises(ValueError, match="differs|no camera"):
+    record = _camera(worker.sim.sensor_manager, "cam", remote=False, data_types=["rgb"])
+    (request,) = bridge.camera_requests(record, 1)
+    if "meta" in change:
+        change = {"meta": {**request.meta, **change["meta"]}}
+    messages[0]["requests"] = [bridge._plain(asdict(replace(request, **change)))]
+    with pytest.raises(ValueError, match="differs|no camera output"):
         worker.run()
     assert "map" not in calls
     assert replies[-1]["type"] == "ERROR" and calls[-1] == "close"
@@ -172,7 +175,7 @@ def test_receiver_exports_its_images_after_each_render(
 ) -> None:
     worker, calls, replies, messages = receiver
     record = _camera(worker.sim.sensor_manager, "cam", remote=False, data_types=["rgb", "depth"])
-    messages[0]["cameras"] = [{"name": "cam", "data_types": ["depth", "rgb"], "width": 4, "height": 3}]
+    messages[0]["requests"] = [bridge._plain(asdict(request)) for request in bridge.camera_requests(record, 1)]
     messages.insert(2, {"type": "RERENDER", "sim_time": 0.035})
     exports: list[torch.Tensor] = []
     exported_before_render: list[list[float]] = []
@@ -192,7 +195,7 @@ def test_receiver_exports_its_images_after_each_render(
     monkeypatch.setattr(bridge, "allocate_shared", allocate_shared)
     monkeypatch.setattr(worker.task, "render_frame", render_frame)
     worker.run()
-    assert [(spec["name"], spec["dtype"]) for spec in replies[0]["images"]] == [
+    assert [(spec["name"], spec["dtype"]) for spec in replies[0]["exports"]] == [
         ("cam/rgb", "uint8"),
         ("cam/depth", "float32"),
     ]
@@ -201,10 +204,19 @@ def test_receiver_exports_its_images_after_each_render(
     assert all(bool((export == 2).all()) for export in exports)
 
 
-def test_unwritable_state_field_fails_before_mapping(receiver: ReceiverFixture) -> None:
+@pytest.mark.parametrize(
+    ("export", "error"),
+    [
+        ({"name": "contact_forces", "shape": [1, 3], "handle": "00"}, "cannot apply state fields"),
+        ({"name": "dof_pos", "shape": [1, 3], "handle": "00"}, "differs between simulators"),
+    ],
+)
+def test_unappliable_state_field_fails_before_mapping(
+    receiver: ReceiverFixture, export: dict[str, Any], error: str
+) -> None:
     worker, calls, replies, messages = receiver
-    messages[0]["buffers"] = [{"name": "contact_forces", "shape": [1, 3], "handle": "00"}]
-    with pytest.raises(ValueError, match="cannot apply state fields"):
+    messages[0]["exports"] = [export]
+    with pytest.raises(ValueError, match=error):
         worker.run()
     assert not any(isinstance(call, tuple) for call in calls)
     assert replies[-1]["type"] == "ERROR" and calls[-1] == "close"
@@ -255,7 +267,14 @@ def publisher(monkeypatch: pytest.MonkeyPatch) -> PublisherFixture:
     images = {"cam/rgb": torch.ones(2, 3, 4, 3, dtype=torch.uint8), "cam/depth": torch.ones(2, 3, 4, 1)}
     calls: list[Any] = []
     replies: dict[str, dict[str, Any]] = {
-        "OPEN": {"type": "OPENED", "done_handle": "00", "images": [{"name": name} for name in images]},
+        "OPEN": {
+            "type": "OPENED",
+            "done_handle": "00",
+            "exports": [
+                {"name": name, "shape": list(image.shape), "dtype": str(image.dtype)[6:], "handle": "00"}
+                for name, image in images.items()
+            ],
+        },
         "FRAME_AVAILABLE": {"type": "RENDER_COMPLETE", "sequence": 1},
         "RERENDER": {"type": "RERENDERED"},
         "CLOSE": {"type": "UNMAPPED"},
@@ -301,7 +320,10 @@ def publisher(monkeypatch: pytest.MonkeyPatch) -> PublisherFixture:
 
 def test_remote_due_cameras_get_copies_of_the_receiver_images(publisher: PublisherFixture) -> None:
     worker, manager, images, calls = publisher
-    assert calls[0][1]["cameras"] == [{"name": "cam", "data_types": ["depth", "rgb"], "width": 4, "height": 3}]
+    assert [(request["name"], request["shape"], request["dtype"]) for request in calls[0][1]["requests"]] == [
+        ("cam/rgb", (2, 3, 4, 3), "uint8"),
+        ("cam/depth", (2, 3, 4, 1), "float32"),
+    ]
     manager.render_remote(manager.collect_due())
     remote = manager.get("cam")
     for data_type in ("rgb", "depth"):

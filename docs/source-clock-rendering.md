@@ -94,9 +94,12 @@ with source_config.create_task(
     task.run()
 ```
 
-By default the source publishes its non-empty writable SimState fields, and the
-receiver rejects any field it cannot write when the connection opens. An explicit
-field list selects a subset. The allocator must own every published field; the
+By default the source publishes its non-empty writable SimState fields. When the
+connection opens, each side sends the buffers it exports (name, shape, dtype and
+IPC handle) and the source also sends the buffers it requests from the receiver.
+The receiver rejects any exported field it cannot write or whose shape differs
+from its own, and any scene layout (joint, object and environment order) or GPU
+that differs. An explicit field list selects a subset. The allocator must own every published field; the
 publisher raises before connecting otherwise. Import CUDA helpers after provider
 startup when they use Warp; importing `CacheAllocator` itself loads no GPU SDK.
 
@@ -147,11 +150,12 @@ every consumer ordered after `simulator.sensor_render_hook`. A remote camera wit
 no remote renderer raises on its first render.
 
 The `Publisher` is that remote renderer when the source has remote cameras. It
-sends their names, data types and sizes when the connection opens, and the
-receiver rejects any that differ from its own cameras before mapping state. The
-receiver exports one persistent buffer per camera output, rgb `uint8 [E, H, W, 3]`
-and depth `float32 [E, H, W, 1]`, and copies its sensor buffers into them before
-signalling completion. The source then copies each due camera's image into a new
+requests one buffer per camera output, rgb `uint8 [E, H, W, 3]` and depth
+`float32 [E, H, W, 1]`, with the camera's mount, field of view, near/far range and
+depth clipping. The receiver rejects any request that differs from its own
+camera's before mapping state, then exports one persistent buffer per request and
+copies its sensor buffers into them before signalling completion. The source
+checks that the exports match its requests. The source then copies each due camera's image into a new
 buffer, so earlier frames held by consumers stay valid. Publication follows the
 remote cameras: a frame is published when one of them is due. Without remote
 cameras the source publishes after capture, as above.

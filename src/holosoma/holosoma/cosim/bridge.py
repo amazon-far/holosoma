@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import math
-from dataclasses import asdict, dataclass
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from holosoma.cosim.cuda import CacheAllocator, MappedBuffers, allocate_shared, share
+from holosoma.cosim.cuda import BufferSpec, CacheAllocator, MappedBuffers, allocate_shared, share
 
 if TYPE_CHECKING:
     import torch
@@ -83,19 +85,66 @@ def state_fields(sim: BaseSimulator) -> tuple[str, ...]:
     return tuple(name for name in sim.state.writable_names() if sim.state.get(name).numel())
 
 
-def camera_spec(record: CameraRecord) -> dict[str, Any]:
-    """The image layout both sides of a remote camera must agree on."""
-    config = record.config
-    return {
-        "name": record.name,
-        "data_types": sorted(config.data_types),
-        "width": config.width,
-        "height": config.height,
-    }
+def _plain(value: Any) -> Any:
+    """``value`` as it arrives after a JSON round trip, so local and received values compare equal."""
+    return json.loads(json.dumps(value))
+
+
+@dataclass(frozen=True)
+class BufferRequest:
+    """A buffer one side reads from its peer: its layout and the settings both sides must share."""
+
+    name: str
+    shape: tuple[int, ...]
+    dtype: str
+    meta: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_message(cls, raw: Mapping[str, Any]) -> BufferRequest:
+        return cls(raw["name"], tuple(raw["shape"]), raw["dtype"], dict(raw["meta"]))
+
+
+def buffer_spec(raw: Mapping[str, Any]) -> BufferSpec:
+    return BufferSpec(**{**raw, "shape": tuple(raw["shape"])})
+
+
+def scene_layout(sim: BaseSimulator) -> dict[str, Any]:
+    """The joint, object and environment layout both sides' state must share."""
+    layout: dict[str, Any] = _plain(
+        {
+            "dof_names": list(sim.dof_names),
+            "object_names": list(sim.object_state_names),
+            "env_origins": sim.scene.env_origins.cpu().tolist(),
+        }
+    )
+    return layout
 
 
 def image_name(camera: str, data_type: str) -> str:
     return f"{camera}/{data_type}"
+
+
+def camera_requests(record: CameraRecord, num_envs: int) -> list[BufferRequest]:
+    """One request per output of ``record``: rgb ``uint8 [E, H, W, 3]``, depth ``float32 [E, H, W, 1]``."""
+    config = record.config
+    meta = _plain(
+        {
+            "mount": asdict(config.mount),
+            "vertical_fov": config.vertical_fov,
+            "near": config.near,
+            "far": config.far,
+            "depth_clipping_behavior": config.depth_clipping_behavior,
+        }
+    )
+    return [
+        BufferRequest(
+            image_name(record.name, data_type),
+            (num_envs, config.height, config.width, 3 if data_type == "rgb" else 1),
+            "uint8" if data_type == "rgb" else "float32",
+            meta,
+        )
+        for data_type in config.data_types
+    ]
 
 
 class Publisher:
@@ -131,25 +180,23 @@ class Publisher:
         self.sequence = self.physics_step = 0
         self.closed = False
         try:
+            requests = [request for record in remote for request in camera_requests(record, manager.num_envs)]
             reply = self.control.exchange(
                 "OPEN",
-                buffers=[asdict(spec) for spec in allocator.exports(self.values())],
+                exports=[asdict(spec) for spec in allocator.exports(self.values())],
+                requests=[asdict(request) for request in requests],
                 ready_handle=self.ready.ipc_handle().hex(),
                 gpu_uuid=gpu_uuid(sim.sim_device),
-                dof_names=list(sim.dof_names),
-                object_names=list(sim.object_state_names),
-                env_origins=sim.scene.env_origins.cpu().tolist(),
-                cameras=[camera_spec(record) for record in remote],
+                scene=scene_layout(sim),
             )
             if reply["type"] != "OPENED":
                 raise RuntimeError("Receiver did not accept state buffers")
             self.done = wp.event_from_ipc_handle(bytes.fromhex(reply["done_handle"]), device=sim.sim_device)
-            expected = {
-                image_name(record.name, data_type) for record in remote for data_type in record.config.data_types
-            }
-            if {spec["name"] for spec in reply["images"]} != expected:
-                raise RuntimeError(f"Receiver did not export images {sorted(expected)}")
-            self.images = MappedBuffers(reply["images"], device=sim.sim_device)
+            exported = {spec.name: (spec.shape, spec.dtype) for spec in map(buffer_spec, reply["exports"])}
+            requested = {request.name: (request.shape, request.dtype) for request in requests}
+            if exported != requested:
+                raise RuntimeError(f"Receiver exported {exported}, requested {requested}")
+            self.images = MappedBuffers(reply["exports"], device=sim.sim_device)
         except BaseException:
             self.control.close()
             raise
@@ -258,24 +305,39 @@ class Receiver:
         self.sim = task.simulator
         self.control = ControlChannel(endpoint=endpoint, receiver=True)
 
-    def _allocate_images(self, cameras: list[dict[str, Any]]) -> dict[str, Image]:
-        """Check the source's remote cameras against this task's and allocate one export per camera output."""
+    def _check_state(self, exports: list[BufferSpec]) -> None:
+        """Check that every exported state field is writable here, with this task's layout."""
+        state = self.sim.state
+        if unsupported := sorted({spec.name for spec in exports} - set(state.writable_names())):
+            raise ValueError(f"Receiver cannot apply state fields {unsupported}")
+        for spec in exports:
+            own = state.get(spec.name)
+            if (spec.shape, spec.dtype) != (tuple(own.shape), str(own.dtype).removeprefix("torch.")):
+                raise ValueError(
+                    f"State field {spec.name!r} differs between simulators: "
+                    f"source {spec.dtype} {spec.shape}, receiver {own.dtype} {tuple(own.shape)}"
+                )
+
+    def _allocate_images(self, requests: list[BufferRequest]) -> dict[str, Image]:
+        """Check the source's requests against this task's cameras and allocate one export per request."""
         import warp as wp
 
         manager = self.sim.sensor_manager
         images = {}
-        for spec in cameras:
-            name = spec["name"]
-            if not manager.has_camera(name):
-                raise ValueError(f"Receiver has no camera {name!r} for the source's remote camera")
-            record = manager.get(name)
-            if spec != (own := camera_spec(record)):
-                raise ValueError(f"Remote camera {name!r} differs between simulators: source {spec}, receiver {own}")
-            for data_type in record.config.data_types:
-                rgb = data_type == "rgb"
-                shape = (self.task.num_envs, record.config.height, record.config.width, 3 if rgb else 1)
-                owner = allocate_shared(shape, "uint8" if rgb else "float32", self.sim.sim_device)
-                images[image_name(name, data_type)] = Image(record, data_type, owner, wp.to_torch(owner))
+        for request in requests:
+            camera, _, data_type = request.name.rpartition("/")
+            own = {}
+            if manager.has_camera(camera):
+                own = {output.name: output for output in camera_requests(manager.get(camera), self.task.num_envs)}
+            if request.name not in own:
+                raise ValueError(f"Receiver has no camera output {request.name!r} for the source's request")
+            if request != own[request.name]:
+                raise ValueError(
+                    f"Camera output {request.name!r} differs between simulators: "
+                    f"source {request}, receiver {own[request.name]}"
+                )
+            owner = allocate_shared(request.shape, request.dtype, self.sim.sim_device)
+            images[request.name] = Image(manager.get(camera), data_type, owner, wp.to_torch(owner))
         return images
 
     def run(self) -> None:
@@ -305,19 +367,16 @@ class Receiver:
                 try:
                     command = message["type"]
                     if command == "OPEN" and mapped is None:
-                        fields = {spec["name"] for spec in message["buffers"]}
-                        if unsupported := sorted(fields - set(self.sim.state.writable_names())):
-                            raise ValueError(f"Receiver cannot apply state fields {unsupported}")
-                        if tuple(message["dof_names"]) != tuple(self.sim.dof_names):
-                            raise ValueError("Joint ordering differs between simulators")
-                        if tuple(message["object_names"]) != self.sim.object_state_names:
-                            raise ValueError("Object ordering differs between simulators")
-                        if message["env_origins"] != self.sim.scene.env_origins.cpu().tolist():
-                            raise ValueError("Environment placement differs between simulators")
+                        scene, own_scene = message["scene"], scene_layout(self.sim)
+                        if differing := sorted(
+                            key for key in {*scene, *own_scene} if scene.get(key) != own_scene.get(key)
+                        ):
+                            raise ValueError(f"Scene {differing} differs between simulators")
                         if (source_gpu := message["gpu_uuid"]) != (own_gpu := gpu_uuid(self.sim.sim_device)):
                             raise ValueError(f"Source GPU {source_gpu} differs from receiver GPU {own_gpu}")
-                        images = self._allocate_images(message["cameras"])
-                        mapped = MappedBuffers(message["buffers"], device=self.sim.sim_device)
+                        self._check_state([buffer_spec(raw) for raw in message["exports"]])
+                        images = self._allocate_images([BufferRequest.from_message(raw) for raw in message["requests"]])
+                        mapped = MappedBuffers(message["exports"], device=self.sim.sim_device)
                         ready = wp.event_from_ipc_handle(
                             bytes.fromhex(message["ready_handle"]),
                             device=self.sim.sim_device,
@@ -325,7 +384,7 @@ class Receiver:
                         done = wp.Event(device=self.sim.sim_device, interprocess=True)
                         specs = [asdict(share(name, image.owner)) for name, image in images.items()]
                         self.control.socket.send_json(
-                            {"type": "OPENED", "done_handle": done.ipc_handle().hex(), "images": specs}
+                            {"type": "OPENED", "done_handle": done.ipc_handle().hex(), "exports": specs}
                         )
                     elif command == "FRAME_AVAILABLE" and mapped is not None:
                         frame = Frame(**message["frame"])
