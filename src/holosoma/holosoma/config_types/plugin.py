@@ -107,9 +107,6 @@ class CosimPublisherPluginConfig(PluginConfig):
     endpoint: str = ""
     """ZeroMQ endpoint the renderer listens on, e.g. ``ipc:///path/private/to/you.sock``."""
 
-    fields: list[str] | None = None
-    """State fields to publish. ``None`` publishes every non-empty writable field."""
-
     def get_cls(self) -> Callable[..., Any]:
         from holosoma.cosim.plugin import CosimPublisherPlugin
 

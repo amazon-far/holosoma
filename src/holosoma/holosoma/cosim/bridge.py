@@ -87,11 +87,6 @@ def gpu_uuid(device: Any) -> str:
     return str(torch.cuda.get_device_properties(device).uuid)
 
 
-def state_fields(sim: BaseSimulator) -> tuple[str, ...]:
-    """The source's non-empty writable unified-state fields."""
-    return tuple(name for name in sim.state.writable_names() if sim.state.get(name).numel())
-
-
 def _plain(value: Any) -> Any:
     """``value`` as it arrives after a JSON round trip, so local and received values compare equal."""
     return json.loads(json.dumps(value))
@@ -157,9 +152,10 @@ def camera_requests(record: CameraRecord, num_envs: int) -> list[BufferRequest]:
 class Publisher:
     """Share a source's state caches with a receiver and exchange frames with it in lockstep.
 
-    The handshake runs at construction: the source's state exports and ``requests`` go to the receiver,
-    which answers with one export per request, mapped as :attr:`imports`. Callers decide when to
-    :meth:`publish`; each exchange shares current state and orders later work after the receiver's.
+    The handshake runs at construction: every state field ``allocator`` shares, and ``requests``, go to
+    the receiver. It answers with the fields it reads and one export per request, mapped as
+    :attr:`imports`. Callers decide when to :meth:`publish`; each exchange refreshes the fields the
+    receiver reads and orders later work after the receiver's.
     """
 
     def __init__(
@@ -168,15 +164,18 @@ class Publisher:
         allocator: CacheAllocator,
         *,
         endpoint: str,
-        fields: tuple[str, ...] | None = None,
         requests: Sequence[BufferRequest] = (),
     ) -> None:
         import warp as wp
 
         self.sim, self.allocator = sim, allocator
-        self.fields = state_fields(sim) if fields is None else fields
-        if missing := sorted(set(self.fields) - allocator.fields):
-            raise ValueError(f"CacheAllocator does not own published state fields {missing}")
+        state = sim.state
+        for name in sorted(allocator.fields):
+            state.get(name)  # Allocate through the allocator.
+        exported = tuple(name for name in state.names() if name in allocator.owners)
+        if not exported:
+            raise ValueError("The allocator shares no state; install it before simulator state is first read")
+        self.fields = exported
         self.control = ControlChannel(endpoint=endpoint)
         self.ready = wp.Event(device=sim.sim_device, interprocess=True)
         self.sequence = 0
@@ -193,10 +192,13 @@ class Publisher:
             if reply["type"] != "OPENED":
                 raise RuntimeError("Receiver did not accept state buffers")
             self.done = wp.event_from_ipc_handle(bytes.fromhex(reply["done_handle"]), device=sim.sim_device)
-            exported = {spec.name: (spec.shape, spec.dtype) for spec in map(buffer_spec, reply["exports"])}
+            if unknown := sorted(set(reply["reads"]) - set(exported)):
+                raise RuntimeError(f"Receiver reads state fields {unknown} the source does not share")
+            self.fields = tuple(reply["reads"])
+            images = {spec.name: (spec.shape, spec.dtype) for spec in map(buffer_spec, reply["exports"])}
             requested = {request.name: (request.shape, request.dtype) for request in requests}
-            if exported != requested:
-                raise RuntimeError(f"Receiver exported {exported}, requested {requested}")
+            if images != requested:
+                raise RuntimeError(f"Receiver exported {images}, requested {requested}")
             self._imports = MappedBuffers(reply["exports"], device=sim.sim_device)
         except BaseException:
             self.control.close()
@@ -274,18 +276,19 @@ class Receiver:
         self.sim = task.simulator
         self.control = ControlChannel(endpoint=endpoint, receiver=True)
 
-    def _check_state(self, exports: list[BufferSpec]) -> None:
-        """Check that every exported state field is writable here, with this task's layout."""
+    def _state_reads(self, exports: list[BufferSpec]) -> tuple[str, ...]:
+        """The exported state fields this task applies: its writable ones, each checked against its layout."""
         state = self.sim.state
-        if unsupported := sorted({spec.name for spec in exports} - set(state.writable_names())):
-            raise ValueError(f"Receiver cannot apply state fields {unsupported}")
-        for spec in exports:
+        writable = set(state.writable_names())
+        reads = [spec for spec in exports if spec.name in writable]
+        for spec in reads:
             own = state.get(spec.name)
             if (spec.shape, spec.dtype) != (tuple(own.shape), str(own.dtype).removeprefix("torch.")):
                 raise ValueError(
                     f"State field {spec.name!r} differs between simulators: "
                     f"source {spec.dtype} {spec.shape}, receiver {own.dtype} {tuple(own.shape)}"
                 )
+        return tuple(spec.name for spec in reads)
 
     def _allocate_images(self, requests: list[BufferRequest]) -> dict[str, Image]:
         """Check the source's requests against this task's cameras and allocate one export per request."""
@@ -348,9 +351,11 @@ class Receiver:
                             raise ValueError(f"Scene {differing} differs between simulators")
                         if (source_gpu := message["gpu_uuid"]) != (own_gpu := gpu_uuid(self.sim.sim_device)):
                             raise ValueError(f"Source GPU {source_gpu} differs from receiver GPU {own_gpu}")
-                        self._check_state([buffer_spec(raw) for raw in message["exports"]])
+                        reads = self._state_reads([buffer_spec(raw) for raw in message["exports"]])
                         images = self._allocate_images([BufferRequest.from_message(raw) for raw in message["requests"]])
-                        mapped = MappedBuffers(message["exports"], device=self.sim.sim_device)
+                        mapped = MappedBuffers(
+                            [raw for raw in message["exports"] if raw["name"] in reads], device=self.sim.sim_device
+                        )
                         ready = wp.event_from_ipc_handle(
                             bytes.fromhex(message["ready_handle"]),
                             device=self.sim.sim_device,
@@ -358,7 +363,12 @@ class Receiver:
                         done = wp.Event(device=self.sim.sim_device, interprocess=True)
                         specs = [asdict(share(name, image.owner)) for name, image in images.items()]
                         self.control.socket.send_json(
-                            {"type": "OPENED", "done_handle": done.ipc_handle().hex(), "exports": specs}
+                            {
+                                "type": "OPENED",
+                                "done_handle": done.ipc_handle().hex(),
+                                "exports": specs,
+                                "reads": list(reads),
+                            }
                         )
                     elif command == "FRAME_AVAILABLE" and mapped is not None:
                         frame = Frame(**message["frame"])

@@ -66,9 +66,11 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
 
     class Mapped:
         release_error: Exception | None = None
+        names: list[str] = []
 
         def __init__(self, descriptions: Any, *, device: str) -> None:
             calls.append("map")
+            Mapped.names = [description["name"] for description in descriptions]
             self.tensors = values
 
         def verify_read_only(self) -> None:
@@ -136,7 +138,7 @@ def test_receiver_uses_only_native_state_and_capture_contracts(receiver: Receive
         "close",
     ]
     assert replies == [
-        {"type": "OPENED", "done_handle": "01", "exports": []},
+        {"type": "OPENED", "done_handle": "01", "exports": [], "reads": []},
         {"type": "RENDER_COMPLETE", "sequence": 1},
         {"type": "UNMAPPED"},
     ]
@@ -210,19 +212,21 @@ def test_receiver_exports_its_images_after_each_render(
     assert all(bool((export == 2).all()) for export in exports)
 
 
-@pytest.mark.parametrize(
-    ("export", "error"),
-    [
-        ({"name": "contact_forces", "shape": [1, 3], "handle": "00"}, "cannot apply state fields"),
-        ({"name": "dof_pos", "shape": [1, 3], "handle": "00"}, "differs between simulators"),
-    ],
-)
-def test_unappliable_state_field_fails_before_mapping(
-    receiver: ReceiverFixture, export: dict[str, Any], error: str
-) -> None:
+def test_receiver_reads_only_the_state_it_can_apply(receiver: ReceiverFixture) -> None:
+    worker, _calls, replies, messages = receiver
+    messages[0]["exports"] = [
+        {"name": "dof_pos", "shape": [1, 2], "handle": "00"},
+        {"name": "contact_forces", "shape": [1, 3], "handle": "00"},
+    ]
+    worker.run()
+    assert replies[0]["reads"] == ["dof_pos"]
+    assert bridge.MappedBuffers.names == ["dof_pos"]  # type: ignore[attr-defined]
+
+
+def test_read_state_field_layout_mismatch_fails_before_mapping(receiver: ReceiverFixture) -> None:
     worker, calls, replies, messages = receiver
-    messages[0]["exports"] = [export]
-    with pytest.raises(ValueError, match=error):
+    messages[0]["exports"] = [{"name": "dof_pos", "shape": [1, 3], "handle": "00"}]
+    with pytest.raises(ValueError, match="differs between simulators"):
         worker.run()
     assert not any(isinstance(call, tuple) and call[0] != "place" for call in calls)
     assert replies[-1]["type"] == "ERROR" and calls[-1] == "close"
@@ -280,15 +284,22 @@ def test_exchange_after_an_interrupted_request_takes_the_right_reply(tmp_path: P
         receiver.close()
 
 
-def test_publisher_rejects_fields_the_allocator_does_not_own(monkeypatch: pytest.MonkeyPatch) -> None:
-    values = {"dof_pos": torch.zeros(1, 2), "dof_vel": torch.zeros(1, 2)}
-    state = SimpleNamespace(writable_names=lambda: list(values), get=values.__getitem__)
+def test_publisher_without_shared_state_fails_before_connecting(monkeypatch: pytest.MonkeyPatch) -> None:
+    values = {"dof_pos": torch.zeros(1, 2)}
+    state = SimpleNamespace(names=lambda: list(values), get=values.__getitem__)
     monkeypatch.setitem(sys.modules, "warp", SimpleNamespace())
     monkeypatch.setattr(bridge, "ControlChannel", lambda **_: pytest.fail("connected before validation"))
-    with pytest.raises(ValueError, match=r"does not own published state fields \['dof_vel'\]"):
+    with pytest.raises(ValueError, match="shares no state"):
         bridge.Publisher(
             cast("Any", SimpleNamespace(state=state)), CacheAllocator(("dof_pos",)), endpoint="ipc:///unused"
         )
+
+
+class _Simulator:
+    """A stand-in simulator that, like a real one, is hashable and weak-referenceable."""
+
+    def __init__(self, **attributes: Any) -> None:
+        self.__dict__.update(attributes)
 
 
 PluginFixture = tuple[CosimPublisherPlugin, SensorManager, dict[str, torch.Tensor], list[Any]]
@@ -309,6 +320,7 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
                 {"name": name, "shape": list(image.shape), "dtype": str(image.dtype)[6:], "handle": "00"}
                 for name, image in images.items()
             ],
+            "reads": ["dof_pos"],
         },
         "FRAME_AVAILABLE": {"type": "RENDER_COMPLETE", "sequence": 1},
         "RERENDER": {"type": "RERENDERED"},
@@ -336,12 +348,10 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
     )
     monkeypatch.setattr(torch.cuda, "current_stream", lambda _: object())
     monkeypatch.setattr(torch.cuda, "synchronize", lambda _: None)
-    values = {"dof_pos": torch.zeros(2, 1)}
-    sim = SimpleNamespace(
-        sim_device="cpu",
-        state=SimpleNamespace(
-            writable_names=lambda: list(values), get=values.__getitem__, set_buffer_allocator=lambda _: None
-        ),
+    values = {"dof_pos": torch.zeros(2, 1), "dof_vel": torch.zeros(2, 1)}
+    sim = _Simulator(
+        sim_device="cuda:0",
+        state=SimpleNamespace(names=lambda: list(values), get=values.__getitem__, set_buffer_allocator=lambda _: None),
         sensor_manager=manager,
         hooks=SimpleNamespace(add=lambda *_args, **_kw: SimpleNamespace(remove=lambda: None)),
         sensor_render_hook=None,
@@ -351,7 +361,9 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
         time=lambda: 0.5,
     )
     monkeypatch.setattr(
-        cosim_plugin, "CacheAllocator", lambda fields: SimpleNamespace(fields=frozenset(fields), exports=lambda _: [])
+        cosim_plugin,
+        "CacheAllocator",
+        lambda fields: SimpleNamespace(fields=frozenset(fields), owners=dict.fromkeys(fields), exports=lambda _: []),
     )
     source = CosimPublisherPlugin(CosimPublisherPluginConfig(endpoint="ipc:///unused"), cast("Any", sim))
     return source, manager, images, calls
@@ -359,6 +371,7 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
 
 def test_remote_due_cameras_get_copies_of_the_receiver_images(plugin: PluginFixture) -> None:
     source, manager, images, calls = plugin
+    assert source.publisher.fields == ("dof_pos",)
     assert [(request["name"], request["shape"], request["dtype"]) for request in calls[0][1]["requests"]] == [
         ("cam/rgb", (2, 3, 4, 3), "uint8"),
         ("cam/depth", (2, 3, 4, 1), "float32"),

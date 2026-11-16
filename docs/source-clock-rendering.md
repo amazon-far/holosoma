@@ -78,8 +78,8 @@ python -m holosoma.run_sim \
 ```
 
 The plugin installs the shared cache allocator, so it must be installed before anything
-reads simulator state; list it first. It publishes every non-empty writable field unless
-`--plugin.cosim.fields` selects some. When the renderer places environments itself
+reads simulator state; list it first. Co-simulation plugins on one simulator share that
+allocator. When the renderer places environments itself
 (Isaac's clone grid), it moves them to the source's origins at startup, so world-frame
 state, world-mounted cameras and terrain agree; other renderers keep their configured
 origins, which must match the source's.
@@ -110,14 +110,15 @@ receiver's images. `holosoma.cosim.bridge.Publisher` is the channel underneath:
 the handshake at construction, then `publish()`, `rerender()`, its mapped
 `imports` and `close()`, called whenever its owner decides.
 
-By default the source publishes its non-empty writable SimState fields. When the
+The source shares every non-empty SimState field, writable and derived. When the
 connection opens, each side sends the buffers it exports (name, shape, dtype and
 IPC handle) and the source also sends the buffers it requests from the receiver.
-The receiver rejects any exported field it cannot write or whose shape differs
-from its own, and any scene layout (joint, object and environment order) or GPU
-that differs. An explicit field list (`--plugin.cosim.fields`) selects a subset. The allocator must own every
-published field; the publisher raises before connecting otherwise. Import CUDA helpers after provider
-startup when they use Warp; importing `CacheAllocator` itself loads no GPU SDK.
+The receiver reads the exported fields it can write, maps only those, and names
+them in its reply; each later exchange refreshes only those fields on the source.
+It rejects a read field whose shape differs from its own, and any scene layout
+(joint, object and environment order) or GPU that differs. Import CUDA helpers
+after provider startup when they use Warp; importing `CacheAllocator` itself loads
+no GPU SDK.
 
 Publication follows the source's camera capture: a frame is published whenever
 any source camera is due. MJWarp orders Torch writers and readers around its Warp

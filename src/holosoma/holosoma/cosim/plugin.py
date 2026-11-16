@@ -3,17 +3,34 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from weakref import WeakKeyDictionary
+
+import torch
 
 from holosoma.cosim.bridge import Publisher, camera_requests, image_name
 from holosoma.cosim.cuda import CacheAllocator
 from holosoma.simulator.base_simulator.hooks import Phase
 
 if TYPE_CHECKING:
-    import torch
-
     from holosoma.config_types.plugin import CosimPublisherPluginConfig
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
     from holosoma.simulator.shared.sensor_manager import CameraRecord
+
+
+_SHARED_STATE: WeakKeyDictionary[BaseSimulator, CacheAllocator] = WeakKeyDictionary()
+
+
+def shared_state(simulator: BaseSimulator) -> CacheAllocator:
+    """The allocator sharing every non-empty state field of ``simulator``, installed by the first caller.
+
+    Co-simulation plugins on one simulator share it; it must be installed before state is first read.
+    """
+    allocator = _SHARED_STATE.get(simulator)
+    if allocator is None:
+        allocator = CacheAllocator(simulator.state.names())
+        simulator.state.set_buffer_allocator(allocator)
+        _SHARED_STATE[simulator] = allocator
+    return allocator
 
 
 class CosimPublisherPlugin:
@@ -27,20 +44,15 @@ class CosimPublisherPlugin:
     def __init__(self, cfg: CosimPublisherPluginConfig, simulator: BaseSimulator) -> None:
         if not cfg.endpoint:
             raise ValueError("Set the co-simulation renderer endpoint with --plugin.<key>.endpoint")
+        if torch.device(simulator.sim_device).type != "cuda":
+            raise ValueError("Co-simulation shares state through CUDA IPC; run the source on a CUDA device")
         manager = simulator.sensor_manager
         if not manager.cameras:
             raise ValueError("The source publishes when its cameras are due; configure at least one camera")
         self.simulator = simulator
-        state = simulator.state
-        fields = tuple(state.writable_names() if cfg.fields is None else cfg.fields)
-        self.allocator = CacheAllocator(fields)
-        state.set_buffer_allocator(self.allocator)
-        published = tuple(name for name in fields if state.get(name).numel())
         self.remote = manager.remote_cameras
         requests = [request for record in self.remote for request in camera_requests(record, manager.num_envs)]
-        self.publisher = Publisher(
-            simulator, self.allocator, endpoint=cfg.endpoint, fields=published, requests=requests
-        )
+        self.publisher = Publisher(simulator, shared_state(simulator), endpoint=cfg.endpoint, requests=requests)
         self.physics_step = 0
         hooks = simulator.hooks
         self.step_hook = hooks.add(Phase.POST_STEP, self._stepped, name="cosim.physics_step")
