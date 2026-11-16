@@ -1,0 +1,39 @@
+name: Version Bump
+
+# A change to a published package must bump its version in the same pull request.
+# Add the skip-version-bump label to a pull request that changes shipped files
+# without changing behaviour.
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    types:
+    - opened
+    - reopened
+    - synchronize
+    - labeled
+    - unlabeled
+
+jobs:
+  version-bump:
+    name: Check Version Bump
+    runs-on: codebuild-holosoma-cpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check version bump
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-version-bump') }}
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        # uv is preinstalled on these runners and provisions its own interpreter.
+        run: uv run --no-project --python 3.12 scripts/ci/check_version_bump.py --base "origin/${BASE_REF}" --head "${HEAD_SHA}"
+      - name: Skipped by label
+        if: ${{ contains(github.event.pull_request.labels.*.name, 'skip-version-bump') }}
+        run: echo "::notice title=Version bump skipped::skip-version-bump label is set"
