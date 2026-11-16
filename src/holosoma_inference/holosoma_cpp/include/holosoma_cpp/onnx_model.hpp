@@ -19,8 +19,9 @@ struct TensorInfo {
 };
 
 // Executes a loaded graph over buffers the model owns. One implementation per Backend; the model
-// reads its signature and metadata through ONNX Runtime either way, so a TensorRT engine cannot
-// disagree with the CPU path about what the graph's inputs are called.
+// reads its signature and metadata through ONNX Runtime for every .onnx backend, so a TensorRT
+// engine cannot disagree with the CPU path about what the graph's inputs are called. An ExecuTorch
+// .pte carries its own.
 class ModelBackend {
  public:
   virtual ~ModelBackend() = default;
@@ -31,8 +32,8 @@ class ModelBackend {
   virtual const char* provider() const = 0;
 };
 
-// Whether this build can execute `backend` at all. A TensorRT build is opt-in at compile time and
-// needs NvInfer, so a config naming it has to fail loudly rather than quietly run on the CPU.
+// Whether this build can execute `backend` at all. TensorRT and ExecuTorch builds are opt-in at
+// compile time, so a config naming one has to fail loudly rather than quietly run on the CPU.
 bool backend_available(Backend backend);
 
 class OnnxModel {

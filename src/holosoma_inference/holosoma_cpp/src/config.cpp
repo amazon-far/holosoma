@@ -461,6 +461,8 @@ const char* backend_name(Backend backend) {
       return "cuda";
     case Backend::kTensorRt:
       return "tensorrt";
+    case Backend::kExecuTorch:
+      return "executorch";
     default:
       return "cpu";
   }
@@ -470,7 +472,8 @@ Backend parse_backend(const std::string& name) {
   if (name == "cpu") return Backend::kCpu;
   if (name == "cuda") return Backend::kCuda;
   if (name == "tensorrt" || name == "trt") return Backend::kTensorRt;
-  throw std::runtime_error("unknown inference backend '" + name + "'; expected cpu, cuda or tensorrt");
+  if (name == "executorch") return Backend::kExecuTorch;
+  throw std::runtime_error("unknown inference backend '" + name + "'; expected cpu, cuda, tensorrt or executorch");
 }
 
 bool InferenceConfig::is_wbt() const {

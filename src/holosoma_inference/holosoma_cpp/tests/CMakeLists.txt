@@ -34,6 +34,22 @@ target_link_libraries(holosoma_backend_tests PRIVATE holosoma_cpp_core GTest::gt
 target_compile_definitions(holosoma_backend_tests PRIVATE HOLOSOMA_LIVE_FIXTURE_DIR="${LIVE_FIXTURES}")
 set_target_properties(holosoma_backend_tests PROPERTIES BUILD_RPATH "${ONNXRuntime_LIBRARY_DIR}")
 gtest_discover_tests(holosoma_backend_tests DISCOVERY_TIMEOUT 60)
+if(HOLOSOMA_EXECUTORCH_ENABLED)
+  # Needs a Python with the executorch package, normally the one whose wheel provided the C++ package.
+  set(EXECUTORCH_FIXTURES "${CMAKE_CURRENT_BINARY_DIR}/executorch-fixtures")
+  set(_executorch_fixture_args --output-dir "${EXECUTORCH_FIXTURES}")
+  if(HOLOSOMA_EXECUTORCH_TENSORRT)
+    list(APPEND _executorch_fixture_args --tensorrt)
+    target_compile_definitions(holosoma_backend_tests PRIVATE HOLOSOMA_EXECUTORCH_TENSORRT=1)
+  endif()
+  add_custom_command(OUTPUT "${EXECUTORCH_FIXTURES}/stamp"
+    COMMAND "${Python_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/gen_executorch_models.py" ${_executorch_fixture_args}
+    COMMAND ${CMAKE_COMMAND} -E touch "${EXECUTORCH_FIXTURES}/stamp"
+    DEPENDS gen_executorch_models.py)
+  add_custom_target(holosoma_executorch_fixtures DEPENDS "${EXECUTORCH_FIXTURES}/stamp")
+  add_dependencies(holosoma_backend_tests holosoma_executorch_fixtures)
+  target_compile_definitions(holosoma_backend_tests PRIVATE HOLOSOMA_EXECUTORCH_FIXTURE_DIR="${EXECUTORCH_FIXTURES}")
+endif()
 
 add_executable(holosoma_api_tests test_api.cpp)
 add_dependencies(holosoma_api_tests holosoma_live_fixtures)

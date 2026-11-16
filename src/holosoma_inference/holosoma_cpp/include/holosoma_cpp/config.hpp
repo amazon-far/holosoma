@@ -90,7 +90,7 @@ struct TaskConfig {
 
 // Where inference runs. `use_gpu: true` in a config is shorthand for kCuda and is folded into
 // this at parse time, so nothing downstream has two ways to ask the same question.
-enum class Backend { kCpu, kCuda, kTensorRt };
+enum class Backend { kCpu, kCuda, kTensorRt, kExecuTorch };
 
 const char* backend_name(Backend backend);
 Backend parse_backend(const std::string& name);

@@ -154,6 +154,45 @@ if(TensorRT_FOUND)
   message(STATUS "holosoma: TensorRT ${TensorRT_VERSION} backend enabled")
 endif()
 
+# --- ExecuTorch (optional inference backend) -----------------------------------
+# Never fetched: the C++ package ships inside the executorch pip wheel. Point CMAKE_PREFIX_PATH at
+# the installed executorch package (and at torch_tensorrt_executorch_runtime for its TensorRT
+# delegate).
+if(HOLOSOMA_WITH_EXECUTORCH STREQUAL "AUTO")
+  find_package(executorch QUIET)
+elseif(HOLOSOMA_WITH_EXECUTORCH)
+  find_package(executorch REQUIRED)
+  if(NOT TARGET executorch::runtime OR NOT TARGET executorch::threadpool)
+    message(FATAL_ERROR "ExecuTorch was found without the executorch::runtime and executorch::threadpool targets; "
+                        "the backend needs the pip wheel's CMake package and CMake 3.28+")
+  endif()
+endif()
+if(HOLOSOMA_WITH_EXECUTORCH AND TARGET executorch::runtime AND TARGET executorch::threadpool)
+  set(HOLOSOMA_EXECUTORCH_ENABLED ON)
+  # Delegates register themselves when their library loads, so link the ones export_policy_as_pte
+  # targets. Not the TensorRT delegate next to the TensorRT backend: two TensorRT libraries in one
+  # process clash, and with the same soname each side runs on the other's TensorRT version.
+  set(HOLOSOMA_EXECUTORCH_TARGETS executorch::runtime executorch::threadpool)
+  foreach(_component kernels_optimized backend_xnnpack backend_cuda)
+    if(TARGET executorch::${_component})
+      list(APPEND HOLOSOMA_EXECUTORCH_TARGETS executorch::${_component})
+    endif()
+  endforeach()
+  if(HOLOSOMA_TENSORRT_ENABLED)
+    message(STATUS "holosoma: ExecuTorch's TensorRT delegate is not linked because the TensorRT backend is enabled; "
+                   "configure with -DHOLOSOMA_WITH_TENSORRT=OFF to run TensorRT .pte programs")
+  else()
+    find_package(executorch_backend_tensorrt QUIET)
+    if(TARGET executorch::backend_tensorrt)
+      list(APPEND HOLOSOMA_EXECUTORCH_TARGETS executorch::backend_tensorrt)
+      set(HOLOSOMA_EXECUTORCH_TENSORRT ON)
+    endif()
+  endif()
+  message(STATUS "holosoma: ExecuTorch ${executorch_VERSION} backend enabled (${HOLOSOMA_EXECUTORCH_TARGETS})")
+elseif(executorch_FOUND)
+  message(STATUS "holosoma: ExecuTorch found without the targets the backend needs (pip wheel, CMake 3.28+); disabled")
+endif()
+
 # --- GoogleTest ----------------------------------------------------------------
 if(HOLOSOMA_BUILD_TESTS)
   find_package(GTest 1.10 CONFIG QUIET)

@@ -24,4 +24,8 @@ ModelSignature read_onnx_signature(const std::string& path);
 // Defined in trt_backend.cpp, which is only compiled when NvInfer is available.
 std::unique_ptr<ModelBackend> make_tensorrt_backend(const std::string& path, const ModelSignature& signature);
 
+// Defined in executorch_backend.cpp, which is only compiled when ExecuTorch is available. Fills
+// `signature` from the .pte itself.
+std::unique_ptr<ModelBackend> make_executorch_backend(const std::string& path, ModelSignature& signature);
+
 }  // namespace holosoma
