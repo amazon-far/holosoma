@@ -7,16 +7,14 @@ import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
-from holosoma.cosim.cuda import BufferSpec, CacheAllocator, MappedBuffers, allocate_shared, share
+from holosoma.cosim.cuda import BufferSpec, CacheAllocator, MappedBuffers, share
 
 if TYPE_CHECKING:
     import torch
 
-    from holosoma.envs.render_task import RenderTask
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
-    from holosoma.simulator.shared.sensor_manager import CameraRecord
 
 # Bounds each exchange after the first frame; startup and the first frame use the startup timeout.
 FRAME_TIMEOUT_MS = 30000
@@ -87,7 +85,7 @@ def gpu_uuid(device: Any) -> str:
     return str(torch.cuda.get_device_properties(device).uuid)
 
 
-def _plain(value: Any) -> Any:
+def as_received(value: Any) -> Any:
     """``value`` as it arrives after a JSON round trip, so local and received values compare equal."""
     return json.loads(json.dumps(value))
 
@@ -112,7 +110,7 @@ def buffer_spec(raw: Mapping[str, Any]) -> BufferSpec:
 
 def scene_layout(sim: BaseSimulator) -> dict[str, Any]:
     """The joint, object and environment layout both sides' state must share."""
-    layout: dict[str, Any] = _plain(
+    layout: dict[str, Any] = as_received(
         {
             "dof_names": list(sim.dof_names),
             "object_names": list(sim.object_state_names),
@@ -120,33 +118,6 @@ def scene_layout(sim: BaseSimulator) -> dict[str, Any]:
         }
     )
     return layout
-
-
-def image_name(camera: str, data_type: str) -> str:
-    return f"{camera}/{data_type}"
-
-
-def camera_requests(record: CameraRecord, num_envs: int) -> list[BufferRequest]:
-    """One request per output of ``record``: rgb ``uint8 [E, H, W, 3]``, depth ``float32 [E, H, W, 1]``."""
-    config = record.config
-    meta = _plain(
-        {
-            "mount": asdict(config.mount),
-            "vertical_fov": config.vertical_fov,
-            "near": config.near,
-            "far": config.far,
-            "depth_clipping_behavior": config.depth_clipping_behavior,
-        }
-    )
-    return [
-        BufferRequest(
-            image_name(record.name, data_type),
-            (num_envs, config.height, config.width, 3 if data_type == "rgb" else 1),
-            "uint8" if data_type == "rgb" else "float32",
-            meta,
-        )
-        for data_type in config.data_types
-    ]
 
 
 class Publisher:
@@ -230,16 +201,16 @@ class Publisher:
         self.sequence += 1
         frame = Frame(self.sequence, physics_step, self.sim.time())
         reply = self._exchange("FRAME_AVAILABLE", frame=asdict(frame))
-        if reply["type"] != "RENDER_COMPLETE" or reply["sequence"] != frame.sequence:
+        if reply["type"] != "FRAME_COMPLETE" or reply["sequence"] != frame.sequence:
             raise RuntimeError("Receiver completed the wrong frame")
         if frame.sequence == 1:
             self.control.set_timeout(FRAME_TIMEOUT_MS)
 
-    def rerender(self) -> None:
+    def repeat(self) -> None:
         """Have the receiver process current state again at the current time, without a new frame."""
-        reply = self._exchange("RERENDER", sim_time=self.sim.time())
-        if reply["type"] != "RERENDERED":
-            raise RuntimeError("Receiver did not re-render")
+        reply = self._exchange("REPEAT", sim_time=self.sim.time())
+        if reply["type"] != "REPEATED":
+            raise RuntimeError("Receiver did not repeat the frame")
 
     def close(self) -> None:
         import torch
@@ -258,26 +229,31 @@ class Publisher:
             self.control.close()
 
 
-@dataclass(frozen=True)
-class Image:
-    """One exported remote camera output; ``owner`` holds the shared allocation ``tensor`` views."""
+class FrameHandler(Protocol):
+    """What a receiver does with a source's frames, and the exports it answers the source's requests with."""
 
-    record: CameraRecord
-    data_type: str
-    owner: Any
-    tensor: torch.Tensor
+    simulator: BaseSimulator
+
+    def allocate(self, requests: list[BufferRequest]) -> dict[str, Any]:
+        """Check the source's requests and return one shared array per request, by name."""
+
+    def process(self, sim_time: float, *, repeat: bool) -> None:
+        """Process the applied state at source time ``sim_time`` and fill the exports.
+
+        ``repeat`` processes current state again at the previous frame's time, e.g. after the source reset.
+        """
 
 
 class Receiver:
-    """Apply shared state to a render task, render it at the source's clock and export remote camera images."""
+    """Apply a source's shared state to ``handler``'s simulator and have ``handler`` process each frame."""
 
-    def __init__(self, task: RenderTask, *, endpoint: str) -> None:
-        self.task = task
-        self.sim = task.simulator
+    def __init__(self, handler: FrameHandler, *, endpoint: str) -> None:
+        self.handler = handler
+        self.sim = handler.simulator
         self.control = ControlChannel(endpoint=endpoint, receiver=True)
 
     def _state_reads(self, exports: list[BufferSpec]) -> tuple[str, ...]:
-        """The exported state fields this task applies: its writable ones, each checked against its layout."""
+        """The exported state fields this simulator applies: its writable ones, each checked against its layout."""
         state = self.sim.state
         writable = set(state.writable_names())
         reads = [spec for spec in exports if spec.name in writable]
@@ -290,47 +266,22 @@ class Receiver:
                 )
         return tuple(spec.name for spec in reads)
 
-    def _allocate_images(self, requests: list[BufferRequest]) -> dict[str, Image]:
-        """Check the source's requests against this task's cameras and allocate one export per request."""
-        import warp as wp
-
-        manager = self.sim.sensor_manager
-        images = {}
-        for request in requests:
-            camera, _, data_type = request.name.rpartition("/")
-            own = {}
-            if manager.has_camera(camera):
-                own = {output.name: output for output in camera_requests(manager.get(camera), self.task.num_envs)}
-            if request.name not in own:
-                raise ValueError(f"Receiver has no camera output {request.name!r} for the source's request")
-            if request != own[request.name]:
-                raise ValueError(
-                    f"Camera output {request.name!r} differs between simulators: "
-                    f"source {request}, receiver {own[request.name]}"
-                )
-            owner = allocate_shared(request.shape, request.dtype, self.sim.sim_device)
-            images[request.name] = Image(manager.get(camera), data_type, owner, wp.to_torch(owner))
-        return images
-
     def run(self) -> None:
         import torch
         import warp as wp
 
         mapped: MappedBuffers | None = None
         ready = done = None
-        images: dict[str, Image] = {}
         sequence = 0
         stream = wp.stream_from_torch(torch.cuda.current_stream(self.sim.sim_device))
 
-        def render(sim_time: float, *, repeat: bool = False) -> None:
+        def process(sim_time: float, *, repeat: bool) -> None:
             assert mapped is not None
             stream.wait_event(ready)
             torch.cuda.synchronize(self.sim.sim_device)
             self.sim.apply_state(mapped.tensors)
-            self.task.render_frame(sim_time=sim_time, repeat=repeat)
+            self.handler.process(sim_time, repeat=repeat)
             mapped.verify_read_only()
-            for image in images.values():
-                image.tensor.copy_(image.record.buffers[image.data_type])
             stream.record_event(done)
 
         try:
@@ -352,7 +303,9 @@ class Receiver:
                         if (source_gpu := message["gpu_uuid"]) != (own_gpu := gpu_uuid(self.sim.sim_device)):
                             raise ValueError(f"Source GPU {source_gpu} differs from receiver GPU {own_gpu}")
                         reads = self._state_reads([buffer_spec(raw) for raw in message["exports"]])
-                        images = self._allocate_images([BufferRequest.from_message(raw) for raw in message["requests"]])
+                        exports = self.handler.allocate(
+                            [BufferRequest.from_message(raw) for raw in message["requests"]]
+                        )
                         mapped = MappedBuffers(
                             [raw for raw in message["exports"] if raw["name"] in reads], device=self.sim.sim_device
                         )
@@ -361,12 +314,11 @@ class Receiver:
                             device=self.sim.sim_device,
                         )
                         done = wp.Event(device=self.sim.sim_device, interprocess=True)
-                        specs = [asdict(share(name, image.owner)) for name, image in images.items()]
                         self.control.socket.send_json(
                             {
                                 "type": "OPENED",
                                 "done_handle": done.ipc_handle().hex(),
-                                "exports": specs,
+                                "exports": [asdict(share(name, owner)) for name, owner in exports.items()],
                                 "reads": list(reads),
                             }
                         )
@@ -374,14 +326,14 @@ class Receiver:
                         frame = Frame(**message["frame"])
                         if frame.sequence != sequence + 1:
                             raise ValueError("Frames must be consecutive")
-                        render(frame.sim_time)
+                        process(frame.sim_time, repeat=False)
                         sequence = frame.sequence
-                        self.control.socket.send_json({"type": "RENDER_COMPLETE", "sequence": sequence})
+                        self.control.socket.send_json({"type": "FRAME_COMPLETE", "sequence": sequence})
                         if sequence == 1:
                             self.control.set_timeout(FRAME_TIMEOUT_MS)
-                    elif command == "RERENDER" and mapped is not None:
-                        render(message["sim_time"], repeat=True)
-                        self.control.socket.send_json({"type": "RERENDERED"})
+                    elif command == "REPEAT" and mapped is not None:
+                        process(message["sim_time"], repeat=True)
+                        self.control.socket.send_json({"type": "REPEATED"})
                     elif command == "CLOSE" and mapped is not None:
                         torch.cuda.synchronize(self.sim.sim_device)
                         mapped.release()

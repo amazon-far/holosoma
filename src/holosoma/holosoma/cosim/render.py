@@ -1,20 +1,150 @@
-"""Render a co-simulation source's state with a :class:`~holosoma.envs.render_task.RenderTask`.
+"""Co-simulation rendering: the source's plugin, and the renderer that renders its state.
+
+The source runs any task with ``plugin.<key>:cosim-render``. The renderer runs:
 
 usage: python -m holosoma.cosim.render --endpoint ipc://... <run_sim arguments>
 
 The run_sim arguments describe the same scene as the source's, with the source's remote cameras configured
-here as ordinary cameras. Start this before the source; it exits when the source closes.
+here as ordinary cameras. Start the renderer before the source; it exits when the source closes.
 """
 
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
+import torch
 from loguru import logger
 
 from holosoma.config_types.run_sim import RunSimConfig
-from holosoma.cosim.bridge import Receiver
+from holosoma.cosim.bridge import BufferRequest, Publisher, Receiver
+from holosoma.cosim.cameras import camera_requests, image_name
+from holosoma.cosim.cuda import allocate_shared, shared_state
+from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.utils.config_registry import parse_config
+
+if TYPE_CHECKING:
+    from holosoma.config_types.plugin import CosimRenderPluginConfig
+    from holosoma.envs.render_task import RenderTask
+    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+    from holosoma.simulator.shared.sensor_manager import CameraRecord
+
+
+class CosimRenderPlugin:
+    """Share ``simulator``'s state with a renderer and publish a frame whenever a camera is due.
+
+    Remote cameras take the renderer's images: this plugin is their remote renderer. Without remote
+    cameras, state is published after local cameras render. Installs the shared cache allocator, so it
+    must run before anything reads simulator state; construction blocks until the renderer accepts.
+    """
+
+    def __init__(self, cfg: CosimRenderPluginConfig, simulator: BaseSimulator) -> None:
+        if not cfg.endpoint:
+            raise ValueError("Set the co-simulation renderer endpoint with --plugin.<key>.endpoint")
+        if torch.device(simulator.sim_device).type != "cuda":
+            raise ValueError("Co-simulation shares state through CUDA IPC; run the source on a CUDA device")
+        manager = simulator.sensor_manager
+        if not manager.cameras:
+            raise ValueError("The source publishes when its cameras are due; configure at least one camera")
+        self.simulator = simulator
+        self.remote = manager.remote_cameras
+        requests = [request for record in self.remote for request in camera_requests(record, manager.num_envs)]
+        self.publisher = Publisher(simulator, shared_state(simulator), endpoint=cfg.endpoint, requests=requests)
+        self.physics_step = 0
+        hooks = simulator.hooks
+        self.step_hook = hooks.add(Phase.POST_STEP, self._stepped, name="cosim.physics_step")
+        self.capture_hook = None
+        if self.remote:
+            manager.set_remote_renderer(self)
+        else:
+            self.capture_hook = hooks.add(
+                Phase.FRAME_END, self._capture, name="cosim.publish", after=simulator.sensor_render_hook
+            )
+        self.close_hook = hooks.add(Phase.CLOSE, self.close, name="cosim.close")
+
+    def _stepped(self) -> None:
+        self.physics_step += 1
+
+    def _capture(self) -> None:
+        if self.simulator.sensor_manager.last_due:
+            self.publisher.publish(self.physics_step)
+
+    def render_remote(self, cameras: list[CameraRecord]) -> None:
+        """Publish a frame and set ``cameras``' buffers to copies of the renderer's images."""
+        self.publisher.publish(self.physics_step)
+        images = self.publisher.imports
+        for record in cameras:
+            for data_type in record.config.data_types:
+                record.set_buffer(data_type, images[image_name(record.name, data_type)].clone())
+
+    def rerender_remote(self, cameras: list[CameraRecord], env_ids: torch.Tensor) -> None:
+        """Have the renderer render current state at the current time, and take its ``env_ids`` rows."""
+        self.publisher.repeat()
+        images = self.publisher.imports
+        for record in cameras:
+            for data_type in record.config.data_types:
+                image = images[image_name(record.name, data_type)]
+                if data_type in record.buffers:
+                    record.set_buffer_rows(data_type, env_ids, image[env_ids])
+                else:
+                    record.set_buffer(data_type, image.clone())
+
+    def close(self) -> None:
+        if self.publisher.closed:
+            return
+        self.step_hook.remove()
+        if self.capture_hook is None:
+            self.simulator.sensor_manager.set_remote_renderer(None)
+        else:
+            self.capture_hook.remove()
+        self.publisher.close()
+
+
+@dataclass(frozen=True)
+class _Image:
+    """One exported camera output, a view of its shared allocation."""
+
+    record: CameraRecord
+    data_type: str
+    tensor: torch.Tensor
+
+
+class RenderHandler:
+    """Render the source's frames with ``task`` and export the camera outputs the source requests."""
+
+    def __init__(self, task: RenderTask) -> None:
+        self.task = task
+        self.simulator = task.simulator
+        self._images: list[_Image] = []
+
+    def allocate(self, requests: list[BufferRequest]) -> dict[str, Any]:
+        """Check each request against this task's camera output and allocate its export."""
+        import warp as wp
+
+        manager = self.simulator.sensor_manager
+        owners = {}
+        for request in requests:
+            camera, _, data_type = request.name.rpartition("/")
+            own = {}
+            if manager.has_camera(camera):
+                own = {output.name: output for output in camera_requests(manager.get(camera), self.task.num_envs)}
+            if request.name not in own:
+                raise ValueError(f"Receiver has no camera output {request.name!r} for the source's request")
+            if request != own[request.name]:
+                raise ValueError(
+                    f"Camera output {request.name!r} differs between simulators: "
+                    f"source {request}, receiver {own[request.name]}"
+                )
+            owners[request.name] = allocate_shared(request.shape, request.dtype, self.simulator.sim_device)
+            self._images.append(_Image(manager.get(camera), data_type, wp.to_torch(owners[request.name])))
+        return owners
+
+    def process(self, sim_time: float, *, repeat: bool) -> None:
+        """Render the applied state and copy each requested camera output into its export."""
+        self.task.render_frame(sim_time=sim_time, repeat=repeat)
+        for image in self._images:
+            image.tensor.copy_(image.record.buffers[image.data_type])
 
 
 def split_endpoint(argv: list[str]) -> tuple[str, list[str]]:
@@ -31,7 +161,7 @@ def main(argv: list[str] | None = None) -> None:
     endpoint, rest = split_endpoint(list(sys.argv[1:] if argv is None else argv))
     config = parse_config(RunSimConfig, args=rest)
     with config.create_render_task() as task:
-        Receiver(task, endpoint=endpoint).run()
+        Receiver(RenderHandler(task), endpoint=endpoint).run()
         logger.info(f"Co-simulation source closed after {task.frames_rendered} frames")
 
 

@@ -607,7 +607,7 @@ class CameraSensorConfig:
     remote: bool = False
     """Take this camera's images from a co-simulation renderer instead of rendering locally. The backend
     creates no renderer for it, and it has no runtime mount-pose writer. Requires a remote renderer such
-    as ``holosoma.cosim.bridge.Publisher``."""
+    as ``holosoma.cosim.render.CosimRenderPlugin``."""
 
     @model_validator(mode="after")
     def validate_camera(self) -> CameraSensorConfig:

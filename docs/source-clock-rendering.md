@@ -63,7 +63,7 @@ since `CUDA_VISIBLE_DEVICES` can renumber devices). It contains no Isaac SDK
 access or simulator-type dispatch.
 
 From the command line, start the renderer with the scene's run_sim arguments, then run
-the source with the `cosim-publisher` plugin. Configure the source's remote cameras as
+the source with the `cosim-render` plugin. Configure the source's remote cameras as
 ordinary cameras on the renderer:
 
 ```bash
@@ -74,7 +74,7 @@ python -m holosoma.cosim.render --endpoint ipc:///tmp/$USER/cosim.sock \
 python -m holosoma.run_sim \
   simulator:mjwarp robot:g1-29dof terrain:terrain-locomotion-mix --training.num-envs 4 \
   sensor.overview:overview --sensor.overview.remote True \
-  plugin.cosim:cosim-publisher --plugin.cosim.endpoint ipc:///tmp/$USER/cosim.sock
+  plugin.cosim:cosim-render --plugin.cosim.endpoint ipc:///tmp/$USER/cosim.sock
 ```
 
 The plugin installs the shared cache allocator, so it must be installed before anything
@@ -89,7 +89,8 @@ Receiver process:
 ```python
 with receiver_config.create_render_task() as task:
     from holosoma.cosim.bridge import Receiver
-    Receiver(task, endpoint=endpoint).run()
+    from holosoma.cosim.render import RenderHandler
+    Receiver(RenderHandler(task), endpoint=endpoint).run()
 ```
 
 Source process, with the same scene and the plugin configured:
@@ -97,9 +98,9 @@ Source process, with the same scene and the plugin configured:
 ```python
 from dataclasses import replace
 
-from holosoma.config_types.plugin import CosimPublisherPluginConfig
+from holosoma.config_types.plugin import CosimRenderPluginConfig
 
-plugins = {"cosim": CosimPublisherPluginConfig(endpoint=endpoint)}
+plugins = {"cosim": CosimRenderPluginConfig(endpoint=endpoint)}
 with replace(source_config, plugin=plugins).create_task() as task:
     task.run()
 ```
@@ -107,8 +108,11 @@ with replace(source_config, plugin=plugins).create_task() as task:
 The plugin owns when publication happens and what the source requests: it counts
 physics steps, publishes when a camera is due, and fills remote cameras from the
 receiver's images. `holosoma.cosim.bridge.Publisher` is the channel underneath:
-the handshake at construction, then `publish()`, `rerender()`, its mapped
-`imports` and `close()`, called whenever its owner decides.
+the handshake at construction, then `publish()`, `repeat()`, its mapped
+`imports` and `close()`, called whenever its owner decides. On the receiving
+side, `Receiver` applies the shared state and hands each frame to a handler;
+`holosoma.cosim.render.RenderHandler` renders it with a `RenderTask` and exports
+the requested camera outputs.
 
 The source shares every non-empty SimState field, writable and derived. When the
 connection opens, each side sends the buffers it exports (name, shape, dtype and
@@ -166,10 +170,10 @@ renderer, all inside sensor rendering, so buffers and `last_due` are final for
 every consumer ordered after `simulator.sensor_render_hook`. A remote camera with
 no remote renderer raises on its first render.
 
-The `Publisher` is that remote renderer when the source has remote cameras. It
+The `CosimRenderPlugin` is that remote renderer when the source has remote cameras. It
 requests one buffer per camera output, rgb `uint8 [E, H, W, 3]` and depth
 `float32 [E, H, W, 1]`, with the camera's mount, field of view, near/far range and
-depth clipping. The receiver rejects any request that differs from its own
+depth clipping. The render handler rejects any request that differs from its own
 camera's before mapping state, then exports one persistent buffer per request and
 copies its sensor buffers into them before signalling completion. The source
 checks that the exports match its requests. The source then copies each due camera's image into a new
@@ -178,7 +182,7 @@ remote cameras: a frame is published when one of them is due. Without remote
 cameras the source publishes after capture, as above.
 
 Sources reset environments after cameras render. When observations re-render the
-reset environments, the publisher sends `RERENDER` with the current source time;
+reset environments, the plugin sends `REPEAT` with the current source time;
 the receiver applies the reset state, renders every environment with
 `repeat=True`, and the source takes only the reset rows. Locally rendered
 cameras keep their frame from before the reset for that step.

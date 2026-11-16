@@ -11,12 +11,14 @@ from typing import Any, cast
 import pytest
 import torch
 
-from holosoma.config_types.plugin import CosimPublisherPluginConfig
+from holosoma.config_types.plugin import CosimRenderPluginConfig
 from holosoma.config_types.sensor import CameraSensorConfig, SensorMountConfig
 from holosoma.cosim import bridge
-from holosoma.cosim import plugin as cosim_plugin
+from holosoma.cosim import cuda as cosim_cuda
+from holosoma.cosim import render as cosim_render
+from holosoma.cosim.cameras import camera_requests
 from holosoma.cosim.cuda import BufferSpec, CacheAllocator, MappedBuffers, share
-from holosoma.cosim.plugin import CosimPublisherPlugin
+from holosoma.cosim.render import CosimRenderPlugin, RenderHandler
 from holosoma.envs.render_task import RenderTask
 from holosoma.simulator.shared.sensor_manager import SensorManager
 
@@ -94,7 +96,7 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
         ),
     )
     monkeypatch.setattr(
-        bridge, "allocate_shared", lambda shape, dtype, _: torch.zeros(shape, dtype=getattr(torch, dtype))
+        cosim_render, "allocate_shared", lambda shape, dtype, _: torch.zeros(shape, dtype=getattr(torch, dtype))
     )
     monkeypatch.setattr(
         bridge, "share", lambda name, owner: BufferSpec(name, tuple(owner.shape), "00", str(owner.dtype)[6:])
@@ -117,7 +119,8 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
         num_envs=1,
         render_frame=lambda **kw: calls.append(("capture", kw["sim_time"], *(["repeat"] if kw.get("repeat") else []))),
     )
-    return bridge.Receiver(cast("RenderTask", task), endpoint="ipc:///unused"), calls, replies, messages
+    handler = RenderHandler(cast("RenderTask", task))
+    return bridge.Receiver(handler, endpoint="ipc:///unused"), calls, replies, messages
 
 
 def test_receiver_uses_only_native_state_and_capture_contracts(receiver: ReceiverFixture) -> None:
@@ -139,7 +142,7 @@ def test_receiver_uses_only_native_state_and_capture_contracts(receiver: Receive
     ]
     assert replies == [
         {"type": "OPENED", "done_handle": "01", "exports": [], "reads": []},
-        {"type": "RENDER_COMPLETE", "sequence": 1},
+        {"type": "FRAME_COMPLETE", "sequence": 1},
         {"type": "UNMAPPED"},
     ]
 
@@ -168,10 +171,10 @@ def test_layout_mismatch_fails_before_mapping(receiver: ReceiverFixture, mismatc
 def test_remote_camera_mismatch_fails_before_mapping(receiver: ReceiverFixture, change: dict[str, Any]) -> None:
     worker, calls, replies, messages = receiver
     record = _camera(worker.sim.sensor_manager, "cam", remote=False, data_types=["rgb"])
-    (request,) = bridge.camera_requests(record, 1)
+    (request,) = camera_requests(record, 1)
     if "meta" in change:
         change = {"meta": {**request.meta, **change["meta"]}}
-    messages[0]["requests"] = [bridge._plain(asdict(replace(request, **change)))]
+    messages[0]["requests"] = [bridge.as_received(asdict(replace(request, **change)))]
     with pytest.raises(ValueError, match="differs|no camera output"):
         worker.run()
     assert "map" not in calls
@@ -183,11 +186,11 @@ def test_receiver_exports_its_images_after_each_render(
 ) -> None:
     worker, calls, replies, messages = receiver
     record = _camera(worker.sim.sensor_manager, "cam", remote=False, data_types=["rgb", "depth"])
-    messages[0]["requests"] = [bridge._plain(asdict(request)) for request in bridge.camera_requests(record, 1)]
-    messages.insert(2, {"type": "RERENDER", "sim_time": 0.035})
+    messages[0]["requests"] = [bridge.as_received(asdict(request)) for request in camera_requests(record, 1)]
+    messages.insert(2, {"type": "REPEAT", "sim_time": 0.035})
     exports: list[torch.Tensor] = []
     exported_before_render: list[list[float]] = []
-    allocate, render = bridge.allocate_shared, cast("Any", worker.task).render_frame
+    allocate, render = cosim_render.allocate_shared, cast("Any", worker.handler).task.render_frame
 
     def allocate_shared(*args: Any) -> torch.Tensor:
         exports.append(allocate(*args))
@@ -200,14 +203,14 @@ def test_receiver_exports_its_images_after_each_render(
         record.set_buffer("rgb", torch.full((1, 3, 4, 3), frame, dtype=torch.uint8))
         record.set_buffer("depth", torch.full((1, 3, 4, 1), float(frame)))
 
-    monkeypatch.setattr(bridge, "allocate_shared", allocate_shared)
-    monkeypatch.setattr(worker.task, "render_frame", render_frame)
+    monkeypatch.setattr(cosim_render, "allocate_shared", allocate_shared)
+    monkeypatch.setattr(cast("Any", worker.handler).task, "render_frame", render_frame)
     worker.run()
     assert [(spec["name"], spec["dtype"]) for spec in replies[0]["exports"]] == [
         ("cam/rgb", "uint8"),
         ("cam/depth", "float32"),
     ]
-    assert ("capture", 0.035, "repeat") in calls and replies[2] == {"type": "RERENDERED"}
+    assert ("capture", 0.035, "repeat") in calls and replies[2] == {"type": "REPEATED"}
     assert exported_before_render == [[0.0, 0.0], [1.0, 1.0]]
     assert all(bool((export == 2).all()) for export in exports)
 
@@ -302,7 +305,7 @@ class _Simulator:
         self.__dict__.update(attributes)
 
 
-PluginFixture = tuple[CosimPublisherPlugin, SensorManager, dict[str, torch.Tensor], list[Any]]
+PluginFixture = tuple[CosimRenderPlugin, SensorManager, dict[str, torch.Tensor], list[Any]]
 
 
 @pytest.fixture
@@ -322,8 +325,8 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
             ],
             "reads": ["dof_pos"],
         },
-        "FRAME_AVAILABLE": {"type": "RENDER_COMPLETE", "sequence": 1},
-        "RERENDER": {"type": "RERENDERED"},
+        "FRAME_AVAILABLE": {"type": "FRAME_COMPLETE", "sequence": 1},
+        "REPEAT": {"type": "REPEATED"},
         "CLOSE": {"type": "UNMAPPED"},
     }
 
@@ -361,11 +364,11 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
         time=lambda: 0.5,
     )
     monkeypatch.setattr(
-        cosim_plugin,
+        cosim_cuda,
         "CacheAllocator",
         lambda fields: SimpleNamespace(fields=frozenset(fields), owners=dict.fromkeys(fields), exports=lambda _: []),
     )
-    source = CosimPublisherPlugin(CosimPublisherPluginConfig(endpoint="ipc:///unused"), cast("Any", sim))
+    source = CosimRenderPlugin(CosimRenderPluginConfig(endpoint="ipc:///unused"), cast("Any", sim))
     return source, manager, images, calls
 
 
@@ -398,7 +401,7 @@ def test_rerender_writes_only_the_reset_rows(plugin: PluginFixture) -> None:
     for image in images.values():
         image.fill_(7)
     manager.rerender(torch.tensor([1]))
-    assert calls[-1] == ("RERENDER", {"sim_time": 0.5})
+    assert calls[-1] == ("REPEAT", {"sim_time": 0.5})
     for data_type in ("rgb", "depth"):
         buffer = manager.get("cam").buffers[data_type]
         assert bool((buffer[0] == 1).all()) and bool((buffer[1] == 7).all())

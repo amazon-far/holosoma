@@ -17,7 +17,7 @@ from typing import Any
 
 def config(num_envs: int, loopback: bool = False, *, endpoint: str | None = None) -> Any:
     """The scene both sides run; with ``endpoint``, the source's, publishing there through the plugin."""
-    from holosoma.config_types.plugin import CosimPublisherPluginConfig, PluginConfig
+    from holosoma.config_types.plugin import CosimRenderPluginConfig, PluginConfig
     from holosoma.config_types.run_sim import RunSimConfig
     from holosoma.config_values import sensor, simulator
     from holosoma.utils.simulator_config import set_simulator_type
@@ -36,9 +36,7 @@ def config(num_envs: int, loopback: bool = False, *, endpoint: str | None = None
     if loopback:
         camera = replace(camera, data_types=["rgb", "depth"])
         cameras = {"overview": camera, "loopback": replace(camera, remote=endpoint is not None)}
-    plugins: dict[str, PluginConfig] = (
-        {} if endpoint is None else {"cosim": CosimPublisherPluginConfig(endpoint=endpoint)}
-    )
+    plugins: dict[str, PluginConfig] = {} if endpoint is None else {"cosim": CosimRenderPluginConfig(endpoint=endpoint)}
     run = replace(run, training=replace(run.training, num_envs=num_envs, headless=True), sensor=cameras, plugin=plugins)
     set_simulator_type(run.simulator)
     return run
@@ -56,6 +54,7 @@ def receiver(endpoint: str, output: Path, num_envs: int, loopback: bool) -> None
     import torch
 
     from holosoma.cosim.bridge import Receiver
+    from holosoma.cosim.render import RenderHandler
     from holosoma.simulator.base_simulator.hooks import Phase
 
     captures: list[dict[str, Any]] = []
@@ -67,7 +66,7 @@ def receiver(endpoint: str, output: Path, num_envs: int, loopback: bool) -> None
     with config(num_envs, loopback).create_render_task() as task:
         sim = task.simulator
         sim.hooks.add(Phase.FRAME_END, keep, after=sim.sensor_render_hook)
-        receiver_loop = Receiver(task, endpoint=endpoint)
+        receiver_loop = Receiver(RenderHandler(task), endpoint=endpoint)
         (output / "ready").write_text("ready\n")
         receiver_loop.run()
         frames = task.frames_rendered

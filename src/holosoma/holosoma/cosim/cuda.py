@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import torch
 
+    from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
+
 
 @dataclass(frozen=True)
 class BufferSpec:
@@ -79,6 +81,22 @@ class CacheAllocator:
                 raise RuntimeError(f"Published state tensors must be contiguous: {name}")
             result.append(share(name, owner))
         return result
+
+
+_SHARED_STATE: weakref.WeakKeyDictionary[BaseSimulator, CacheAllocator] = weakref.WeakKeyDictionary()
+
+
+def shared_state(simulator: BaseSimulator) -> CacheAllocator:
+    """The allocator sharing every non-empty state field of ``simulator``, installed by the first caller.
+
+    Co-simulation plugins on one simulator share it; it must be installed before state is first read.
+    """
+    allocator = _SHARED_STATE.get(simulator)
+    if allocator is None:
+        allocator = CacheAllocator(simulator.state.names())
+        simulator.state.set_buffer_allocator(allocator)
+        _SHARED_STATE[simulator] = allocator
+    return allocator
 
 
 class MappedBuffers:
