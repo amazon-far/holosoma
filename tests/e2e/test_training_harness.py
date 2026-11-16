@@ -22,11 +22,18 @@ SPEC.loader.exec_module(training_e2e)
 
 
 def _alive(pid: int) -> bool:
+    # In a container whose init does not reap, a killed orphan stays a zombie: dead, but signalable.
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
         return False
-    return True
+    except OSError:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+    return stat.rsplit(")", 1)[1].split()[0] not in ("Z", "X")
 
 
 def test_teed_call_returns_the_exit_code_and_tees_output():
