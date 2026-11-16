@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -111,6 +113,77 @@ def export_policy_as_onnx(wrapper: torch.nn.Module, onnx_file_path: str, example
         opset_version=13,
         dynamo=False,
     )
+
+
+def export_policy_as_pte(
+    wrapper: torch.nn.Module,
+    pte_file_path: str,
+    example_obs_dict: Mapping[str, Any],
+    metadata: dict[str, Any] | None = None,
+    backend: str = "xnnpack",
+) -> None:
+    """Export the policy as an ExecuTorch program for the native runtime's ``executorch`` backend.
+
+    The ``.pte`` carries what the ONNX export does: the ``actor_obs`` input and ``action`` output
+    names, and ``metadata`` serialized like :func:`attach_onnx_metadata` does. A ``.pte`` cannot be
+    edited after export, so the metadata is passed here and returned by the program's ``signature``
+    method.
+
+    ``backend`` is ``"xnnpack"`` for the CPU, or ``"tensorrt"``: TensorRT runs what it supports and
+    ExecuTorch's CUDA backend runs the rest, which needs a CUDA toolkit at export and keeps its weights
+    in a ``.ptd`` file written beside the ``.pte``. Like a TensorRT engine, a ``"tensorrt"`` program
+    only runs on the GPU model and TensorRT version it was exported with.
+
+    Pass the same wrapper :func:`export_policy_as_onnx` gets (it includes any observation
+    normalizer and returns only the action), in eval mode, with the example observation on the CPU.
+    Needs ``pip install "torch_tensorrt[executorch]"``.
+    """
+    if backend not in ("xnnpack", "tensorrt"):
+        raise ValueError(f"Unknown ExecuTorch backend '{backend}'; expected 'xnnpack' or 'tensorrt'")
+    os.makedirs(Path(pte_file_path).parent, exist_ok=True)
+    example_obs = example_obs_dict["actor_obs"]
+    signature = {
+        "inputs": ["actor_obs"],
+        "outputs": ["action"],
+        "metadata": {key: json.dumps(value) for key, value in (metadata or {}).items()},
+    }
+    constant_methods = {"signature": json.dumps(signature)}
+
+    exported = torch.export.export(wrapper, (example_obs,))
+    if len(exported.graph_signature.user_outputs) != 1:
+        raise ValueError("The policy must return only the action tensor, like the wrapper export_policy_as_onnx gets")
+    with tempfile.TemporaryDirectory() as staging:
+        program_path = Path(staging) / "policy.pte"
+        if backend == "xnnpack":
+            from executorch.backends.xnnpack.partition.xnnpack_partitioner import XnnpackPartitioner
+            from executorch.exir import to_edge_transform_and_lower
+
+            program = to_edge_transform_and_lower(
+                exported, partitioner=[XnnpackPartitioner()], constant_methods=constant_methods
+            ).to_executorch()
+            program_path.write_bytes(program.buffer)
+        else:
+            import torch_tensorrt
+            from executorch.backends.cuda.cuda_partitioner import CudaPartitioner
+
+            compiled = torch_tensorrt.dynamo.compile(exported, inputs=[example_obs.cuda()], min_block_size=1)
+            torch_tensorrt.save(
+                compiled,
+                str(program_path),
+                output_format="executorch",
+                partitioners=[CudaPartitioner([])],
+                constant_methods=constant_methods,
+            )
+        # Data files are written next to the program under the delegate's own name; the native runtime
+        # loads exactly one, named after the program.
+        data_files = list(Path(staging).glob("*.ptd"))
+        if len(data_files) > 1:
+            raise RuntimeError(f"Expected at most one ExecuTorch data file, got {[f.name for f in data_files]}")
+        data_file = Path(pte_file_path).with_suffix(".ptd")
+        data_file.unlink(missing_ok=True)
+        if data_files:
+            shutil.move(data_files[0], data_file)
+        shutil.move(program_path, pte_file_path)
 
 
 def export_multi_agent_decouple_policy_as_onnx(
