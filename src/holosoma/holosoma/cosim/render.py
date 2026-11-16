@@ -134,7 +134,7 @@ class RenderHandler:
             self._images.append(_Image(manager.get(camera), data_type, wp.to_torch(owners[request.name])))
         return owners
 
-    def process(self, sim_time: float, *, repeat: bool) -> None:
+    def process(self, sim_time: float, *, repeat: bool, phase: str | None) -> None:
         """Render the applied state and copy each requested camera output into its export."""
         self.task.render_frame(sim_time=sim_time, repeat=repeat)
         for image in self._images:

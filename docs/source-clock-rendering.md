@@ -132,8 +132,9 @@ sensors, so published state and source images match the latest step.
 The source holds its caches while the receiver applies state, renders, publishes
 cameras and completes GPU reads. Physics resumes after completion: serialized
 lockstep, with no physics/render overlap or frame pipelining. Startup handles and
-layout travel once; subsequent notifications carry the frame sequence and
-simulation time. Publisher close obtains an unmap acknowledgment before storage
+layout travel once; subsequent notifications carry the frame sequence,
+simulation time and the source's hook phase they were sent from (`None` outside
+any hook, as for re-renders after resets). Publisher close obtains an unmap acknowledgment before storage
 can be released. Failures/timeouts propagate; reconnection and scene changes are
 not implemented. Startup and the first frame exchange may take up to five
 minutes (first-use compilation); later exchanges time out after 30 seconds. On a lost peer, retain exporting allocations until that peer

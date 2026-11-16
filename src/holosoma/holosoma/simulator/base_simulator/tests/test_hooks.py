@@ -35,6 +35,17 @@ def test_emit_uses_registration_order() -> None:
     assert calls == ["a", "b"]
 
 
+def test_emitting_reports_the_running_phase() -> None:
+    hooks = HookRegistry()
+    seen: list[frozenset[Phase]] = []
+    hooks.add(Phase.FRAME_END, lambda: seen.append(hooks.emitting), name="a")
+
+    hooks.emit(Phase.FRAME_END)
+
+    assert seen == [frozenset({Phase.FRAME_END})]
+    assert hooks.emitting == frozenset()
+
+
 def test_an_unnamed_hook_is_labelled_by_its_qualname() -> None:
     hooks = HookRegistry()
 

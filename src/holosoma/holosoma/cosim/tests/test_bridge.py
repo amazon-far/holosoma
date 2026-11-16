@@ -20,6 +20,7 @@ from holosoma.cosim.cameras import camera_requests
 from holosoma.cosim.cuda import BufferSpec, CacheAllocator, MappedBuffers, share
 from holosoma.cosim.render import CosimRenderPlugin, RenderHandler
 from holosoma.envs.render_task import RenderTask
+from holosoma.simulator.base_simulator.hooks import Phase
 from holosoma.simulator.shared.sensor_manager import SensorManager
 
 pytestmark = pytest.mark.no_sim
@@ -187,7 +188,7 @@ def test_receiver_exports_its_images_after_each_render(
     worker, calls, replies, messages = receiver
     record = _camera(worker.sim.sensor_manager, "cam", remote=False, data_types=["rgb", "depth"])
     messages[0]["requests"] = [bridge.as_received(asdict(request)) for request in camera_requests(record, 1)]
-    messages.insert(2, {"type": "REPEAT", "sim_time": 0.035})
+    messages.insert(2, {"type": "REPEAT", "sim_time": 0.035, "phase": None})
     exports: list[torch.Tensor] = []
     exported_before_render: list[list[float]] = []
     allocate, render = cosim_render.allocate_shared, cast("Any", worker.handler).task.render_frame
@@ -356,7 +357,7 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
         sim_device="cuda:0",
         state=SimpleNamespace(names=lambda: list(values), get=values.__getitem__, set_buffer_allocator=lambda _: None),
         sensor_manager=manager,
-        hooks=SimpleNamespace(add=lambda *_args, **_kw: SimpleNamespace(remove=lambda: None)),
+        hooks=SimpleNamespace(add=lambda *_args, **_kw: SimpleNamespace(remove=lambda: None), emitting=frozenset()),
         sensor_render_hook=None,
         dof_names=["a"],
         object_state_names=(),
@@ -379,7 +380,9 @@ def test_remote_due_cameras_get_copies_of_the_receiver_images(plugin: PluginFixt
         ("cam/rgb", (2, 3, 4, 3), "uint8"),
         ("cam/depth", (2, 3, 4, 1), "float32"),
     ]
+    cast("Any", source.simulator).hooks.emitting = frozenset({Phase.FRAME_END})
     manager.render_remote(manager.collect_due())
+    assert calls[1][1]["frame"]["phase"] == "frame_end"
     remote = manager.get("cam")
     for data_type in ("rgb", "depth"):
         buffer = remote.buffers[data_type]
@@ -401,7 +404,7 @@ def test_rerender_writes_only_the_reset_rows(plugin: PluginFixture) -> None:
     for image in images.values():
         image.fill_(7)
     manager.rerender(torch.tensor([1]))
-    assert calls[-1] == ("REPEAT", {"sim_time": 0.5})
+    assert calls[-1] == ("REPEAT", {"sim_time": 0.5, "phase": None})
     for data_type in ("rgb", "depth"):
         buffer = manager.get("cam").buffers[data_type]
         assert bool((buffer[0] == 1).all()) and bool((buffer[1] == 7).all())

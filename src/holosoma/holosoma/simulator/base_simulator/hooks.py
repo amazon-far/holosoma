@@ -535,6 +535,11 @@ class HookRegistry:
         finally:
             self._emitting.remove(phase)
 
+    @property
+    def emitting(self) -> frozenset[Phase]:
+        """The phases whose hooks are running now; empty outside any emission."""
+        return frozenset(self._emitting)
+
     def validate(self) -> None:
         """Resolve every phase now, without invoking a callback, so a bad graph fails at startup.
 

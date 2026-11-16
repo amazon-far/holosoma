@@ -24,6 +24,8 @@ FRAME_TIMEOUT_MS = 30000
 class Frame:
     sequence: int
     sim_time: float
+    phase: str | None = None
+    """The source's hook phase the frame was published from, or ``None`` outside any hook."""
 
     def __post_init__(self) -> None:
         if self.sequence < 1 or not math.isfinite(self.sim_time) or self.sim_time < 0:
@@ -195,10 +197,14 @@ class Publisher:
         stream.wait_event(self.done)
         return reply
 
+    def _phase(self) -> str | None:
+        emitting = self.sim.hooks.emitting
+        return next(iter(emitting)).value if len(emitting) == 1 else None
+
     def publish(self) -> None:
         """Have the receiver process current state as the next frame, at the source's current time."""
         self.sequence += 1
-        frame = Frame(self.sequence, self.sim.time())
+        frame = Frame(self.sequence, self.sim.time(), self._phase())
         reply = self._exchange("FRAME_AVAILABLE", frame=asdict(frame))
         if reply["type"] != "FRAME_COMPLETE" or reply["sequence"] != frame.sequence:
             raise RuntimeError("Receiver completed the wrong frame")
@@ -207,7 +213,7 @@ class Publisher:
 
     def repeat(self) -> None:
         """Have the receiver process current state again at the current time, without a new frame."""
-        reply = self._exchange("REPEAT", sim_time=self.sim.time())
+        reply = self._exchange("REPEAT", sim_time=self.sim.time(), phase=self._phase())
         if reply["type"] != "REPEATED":
             raise RuntimeError("Receiver did not repeat the frame")
 
@@ -236,10 +242,11 @@ class FrameHandler(Protocol):
     def allocate(self, requests: list[BufferRequest]) -> dict[str, Any]:
         """Check the source's requests and return one shared array per request, by name."""
 
-    def process(self, sim_time: float, *, repeat: bool) -> None:
+    def process(self, sim_time: float, *, repeat: bool, phase: str | None) -> None:
         """Process the applied state at source time ``sim_time`` and fill the exports.
 
         ``repeat`` processes current state again at the previous frame's time, e.g. after the source reset.
+        ``phase`` is the source's hook phase the exchange came from, or ``None`` outside any hook.
         """
 
 
@@ -274,12 +281,12 @@ class Receiver:
         sequence = 0
         stream = wp.stream_from_torch(torch.cuda.current_stream(self.sim.sim_device))
 
-        def process(sim_time: float, *, repeat: bool) -> None:
+        def process(sim_time: float, *, repeat: bool, phase: str | None) -> None:
             assert mapped is not None
             stream.wait_event(ready)
             torch.cuda.synchronize(self.sim.sim_device)
             self.sim.apply_state(mapped.tensors)
-            self.handler.process(sim_time, repeat=repeat)
+            self.handler.process(sim_time, repeat=repeat, phase=phase)
             mapped.verify_read_only()
             stream.record_event(done)
 
@@ -325,13 +332,13 @@ class Receiver:
                         frame = Frame(**message["frame"])
                         if frame.sequence != sequence + 1:
                             raise ValueError("Frames must be consecutive")
-                        process(frame.sim_time, repeat=False)
+                        process(frame.sim_time, repeat=False, phase=frame.phase)
                         sequence = frame.sequence
                         self.control.socket.send_json({"type": "FRAME_COMPLETE", "sequence": sequence})
                         if sequence == 1:
                             self.control.set_timeout(FRAME_TIMEOUT_MS)
                     elif command == "REPEAT" and mapped is not None:
-                        process(message["sim_time"], repeat=True)
+                        process(message["sim_time"], repeat=True, phase=message["phase"])
                         self.control.socket.send_json({"type": "REPEATED"})
                     elif command == "CLOSE" and mapped is not None:
                         torch.cuda.synchronize(self.sim.sim_device)
