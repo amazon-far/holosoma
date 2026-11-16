@@ -29,6 +29,9 @@ jobs:
       matrix:
         multigpu: ${{ fromJSON(inputs.multigpu) }}
     name: Test ${{ inputs.simulator }} (${{ matrix.multigpu == 'True' && 'multi-gpu' || 'single-gpu' }})
+    # A green multi-gpu run takes ~3 minutes and a single-gpu suite ~40 (Isaac Sim) or ~25 (MuJoCo).
+    # Without a bound a hung rank holds the runner until GitHub's 360-minute default.
+    timeout-minutes: ${{ matrix.multigpu == 'True' && 20 || 90 }}
     runs-on:
       - codebuild-holosoma-a10g-${{ matrix.multigpu == 'True' && 'x4' || 'x1' }}-gpu-build-${{ github.run_id }}-${{ github.run_attempt }} buildspec-override:true
     container:
