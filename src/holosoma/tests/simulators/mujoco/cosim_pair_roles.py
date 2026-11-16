@@ -14,10 +14,10 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-FIELDS = ("robot_root_states", "dof_pos", "dof_vel", "object_root_states")
 
-
-def config(num_envs: int, loopback: bool = False, *, source: bool = False) -> Any:
+def config(num_envs: int, loopback: bool = False, *, endpoint: str | None = None) -> Any:
+    """The scene both sides run; with ``endpoint``, the source's, publishing there through the plugin."""
+    from holosoma.config_types.plugin import CosimPublisherPluginConfig, PluginConfig
     from holosoma.config_types.run_sim import RunSimConfig
     from holosoma.config_values import sensor, simulator
     from holosoma.utils.simulator_config import set_simulator_type
@@ -35,8 +35,11 @@ def config(num_envs: int, loopback: bool = False, *, source: bool = False) -> An
     cameras: dict[str, Any] = {"overview": camera}
     if loopback:
         camera = replace(camera, data_types=["rgb", "depth"])
-        cameras = {"overview": camera, "loopback": replace(camera, remote=source)}
-    run = replace(run, training=replace(run.training, num_envs=num_envs, headless=True), sensor=cameras)
+        cameras = {"overview": camera, "loopback": replace(camera, remote=endpoint is not None)}
+    plugins: dict[str, PluginConfig] = (
+        {} if endpoint is None else {"cosim": CosimPublisherPluginConfig(endpoint=endpoint)}
+    )
+    run = replace(run, training=replace(run.training, num_envs=num_envs, headless=True), sensor=cameras, plugin=plugins)
     set_simulator_type(run.simulator)
     return run
 
@@ -74,21 +77,18 @@ def receiver(endpoint: str, output: Path, num_envs: int, loopback: bool) -> None
 def source(endpoint: str, output: Path, frames: int, num_envs: int, loopback: bool) -> None:
     import torch
 
-    from holosoma.cosim.bridge import Publisher
-    from holosoma.cosim.cuda import CacheAllocator
     from holosoma.simulator.base_simulator.hooks import Phase
 
     saved: dict[str, Any] = {}
-    allocator = CacheAllocator(FIELDS)
-    with config(num_envs, loopback, source=True).create_task(buffer_allocator=allocator) as task:
+    with config(num_envs, loopback, endpoint=endpoint).create_task() as task:
         sim = task.simulator
-        publisher = Publisher(sim, allocator, endpoint=endpoint)
-        after = sim.sensor_render_hook if loopback else publisher.capture_hook
+        cosim = sim.installed_plugins["cosim"]
+        after = sim.sensor_render_hook if loopback else cosim.capture_hook
         sim.hooks.add(Phase.FRAME_END, lambda: capture(sim, saved), after=after)
         task.reset_envs_idx()
         for _ in range(frames):
             task.step()
-        saved["frames"] = publisher.sequence
+        saved["frames"] = cosim.publisher.sequence
         if loopback:
             env_ids = torch.tensor([0], device=sim.sim_device)
             task.reset_envs_idx(env_ids)

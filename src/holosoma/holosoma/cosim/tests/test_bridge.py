@@ -11,9 +11,12 @@ from typing import Any, cast
 import pytest
 import torch
 
+from holosoma.config_types.plugin import CosimPublisherPluginConfig
 from holosoma.config_types.sensor import CameraSensorConfig, SensorMountConfig
 from holosoma.cosim import bridge
+from holosoma.cosim import plugin as cosim_plugin
 from holosoma.cosim.cuda import BufferSpec, CacheAllocator, MappedBuffers, share
+from holosoma.cosim.plugin import CosimPublisherPlugin
 from holosoma.envs.render_task import RenderTask
 from holosoma.simulator.shared.sensor_manager import SensorManager
 
@@ -288,11 +291,11 @@ def test_publisher_rejects_fields_the_allocator_does_not_own(monkeypatch: pytest
         )
 
 
-PublisherFixture = tuple[bridge.Publisher, SensorManager, dict[str, torch.Tensor], list[Any]]
+PluginFixture = tuple[CosimPublisherPlugin, SensorManager, dict[str, torch.Tensor], list[Any]]
 
 
 @pytest.fixture
-def publisher(monkeypatch: pytest.MonkeyPatch) -> PublisherFixture:
+def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
     manager = SensorManager("cpu", 50.0, num_envs=2)
     _camera(manager, "local", remote=False, data_types=["rgb"])
     _camera(manager, "cam", remote=True, data_types=["rgb", "depth"])
@@ -336,7 +339,9 @@ def publisher(monkeypatch: pytest.MonkeyPatch) -> PublisherFixture:
     values = {"dof_pos": torch.zeros(2, 1)}
     sim = SimpleNamespace(
         sim_device="cpu",
-        state=SimpleNamespace(writable_names=lambda: list(values), get=values.__getitem__),
+        state=SimpleNamespace(
+            writable_names=lambda: list(values), get=values.__getitem__, set_buffer_allocator=lambda _: None
+        ),
         sensor_manager=manager,
         hooks=SimpleNamespace(add=lambda *_args, **_kw: SimpleNamespace(remove=lambda: None)),
         sensor_render_hook=None,
@@ -345,13 +350,15 @@ def publisher(monkeypatch: pytest.MonkeyPatch) -> PublisherFixture:
         scene=SimpleNamespace(env_origins=torch.zeros(2, 3)),
         time=lambda: 0.5,
     )
-    allocator = SimpleNamespace(fields=frozenset(values), exports=lambda _: [])
-    worker = bridge.Publisher(cast("Any", sim), cast("Any", allocator), endpoint="ipc:///unused")
-    return worker, manager, images, calls
+    monkeypatch.setattr(
+        cosim_plugin, "CacheAllocator", lambda fields: SimpleNamespace(fields=frozenset(fields), exports=lambda _: [])
+    )
+    source = CosimPublisherPlugin(CosimPublisherPluginConfig(endpoint="ipc:///unused"), cast("Any", sim))
+    return source, manager, images, calls
 
 
-def test_remote_due_cameras_get_copies_of_the_receiver_images(publisher: PublisherFixture) -> None:
-    worker, manager, images, calls = publisher
+def test_remote_due_cameras_get_copies_of_the_receiver_images(plugin: PluginFixture) -> None:
+    source, manager, images, calls = plugin
     assert [(request["name"], request["shape"], request["dtype"]) for request in calls[0][1]["requests"]] == [
         ("cam/rgb", (2, 3, 4, 3), "uint8"),
         ("cam/depth", (2, 3, 4, 1), "float32"),
@@ -366,14 +373,14 @@ def test_remote_due_cameras_get_copies_of_the_receiver_images(publisher: Publish
         )
     assert not manager.get("local").buffers and calls[1][0] == "FRAME_AVAILABLE"
 
-    worker.close()
+    source.close()
     assert calls[-2:] == ["unmap", ("CLOSE", {})]
     with pytest.raises(RuntimeError, match="no remote renderer"):
         manager.render_remote(manager.collect_due())
 
 
-def test_rerender_writes_only_the_reset_rows(publisher: PublisherFixture) -> None:
-    _worker, manager, images, calls = publisher
+def test_rerender_writes_only_the_reset_rows(plugin: PluginFixture) -> None:
+    _source, manager, images, calls = plugin
     manager.render_remote(manager.collect_due())
     for image in images.values():
         image.fill_(7)

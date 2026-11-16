@@ -15,7 +15,6 @@ from holosoma.managers.termination import TerminationManager
 from holosoma.managers.terrain import TerrainManager
 from holosoma.simulator.base_simulator.base_simulator import BaseSimulator, _warn_deprecated
 from holosoma.simulator.base_simulator.hooks import Phase
-from holosoma.simulator.base_simulator.state import BufferAllocator
 from holosoma.simulator.session import get_local_rank, get_process_seed, resolve_simulation_device
 from holosoma.simulator.shared.object_registry import ObjectType
 from holosoma.utils.common import seeding
@@ -28,14 +27,8 @@ from holosoma.utils.torch_utils import to_torch
 
 # Base class for manager-based simulation tasks.
 class BaseTask:
-    def __init__(
-        self,
-        tyro_config: EnvConfig,
-        *,
-        buffer_allocator: BufferAllocator | None = None,
-    ) -> None:
+    def __init__(self, tyro_config: EnvConfig) -> None:
         self._closed = False
-        self._startup_buffer_allocator = buffer_allocator
         try:
             self._initialize_base_task(tyro_config)
         except BaseException:
@@ -129,8 +122,6 @@ class BaseTask:
         self.simulator: BaseSimulator = SimulatorClass(
             tyro_config=full_sim_config, terrain_manager=self.terrain_manager, device=self.device
         )
-        if self._startup_buffer_allocator is not None:
-            self.simulator.state.set_buffer_allocator(self._startup_buffer_allocator)
         self.hooks = self.simulator.hooks
 
         self.headless = training_config.headless

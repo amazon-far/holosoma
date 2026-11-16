@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -155,11 +155,11 @@ def camera_requests(record: CameraRecord, num_envs: int) -> list[BufferRequest]:
 
 
 class Publisher:
-    """Publish source state for rendering and hold cache storage until completion.
+    """Share a source's state caches with a receiver and exchange frames with it in lockstep.
 
-    Without remote cameras, a frame is published after native capture whenever a camera is due. With remote
-    cameras, this is their remote renderer: a frame is published when one is due, and the receiver's images
-    become their buffers.
+    The handshake runs at construction: the source's state exports and ``requests`` go to the receiver,
+    which answers with one export per request, mapped as :attr:`imports`. Callers decide when to
+    :meth:`publish`; each exchange shares current state and orders later work after the receiver's.
     """
 
     def __init__(
@@ -169,25 +169,19 @@ class Publisher:
         *,
         endpoint: str,
         fields: tuple[str, ...] | None = None,
+        requests: Sequence[BufferRequest] = (),
     ) -> None:
         import warp as wp
-
-        from holosoma.simulator.base_simulator.hooks import Phase
 
         self.sim, self.allocator = sim, allocator
         self.fields = state_fields(sim) if fields is None else fields
         if missing := sorted(set(self.fields) - allocator.fields):
             raise ValueError(f"CacheAllocator does not own published state fields {missing}")
-        manager = sim.sensor_manager
-        if not manager.cameras:
-            raise ValueError("The source publishes when its cameras are due; configure at least one camera")
-        remote = manager.remote_cameras
         self.control = ControlChannel(endpoint=endpoint)
         self.ready = wp.Event(device=sim.sim_device, interprocess=True)
-        self.sequence = self.physics_step = 0
+        self.sequence = 0
         self.closed = False
         try:
-            requests = [request for record in remote for request in camera_requests(record, manager.num_envs)]
             reply = self.control.exchange(
                 "OPEN",
                 exports=[asdict(spec) for spec in allocator.exports(self.values())],
@@ -203,32 +197,18 @@ class Publisher:
             requested = {request.name: (request.shape, request.dtype) for request in requests}
             if exported != requested:
                 raise RuntimeError(f"Receiver exported {exported}, requested {requested}")
-            self.images = MappedBuffers(reply["exports"], device=sim.sim_device)
+            self._imports = MappedBuffers(reply["exports"], device=sim.sim_device)
         except BaseException:
             self.control.close()
             raise
-        self.step_hook = sim.hooks.add(Phase.POST_STEP, self._stepped, name="cosim.physics_step")
-        self.capture_hook = None
-        if remote:
-            manager.set_remote_renderer(self)
-        else:
-            self.capture_hook = sim.hooks.add(
-                Phase.FRAME_END,
-                self._capture,
-                name="cosim.publish",
-                after=sim.sensor_render_hook,
-            )
-        self.close_hook = sim.hooks.add(Phase.CLOSE, self.close, name="cosim.close")
+
+    @property
+    def imports(self) -> dict[str, torch.Tensor]:
+        """The receiver's exports, by request name; valid after an exchange until the next one."""
+        return self._imports.tensors
 
     def values(self) -> dict[str, Any]:
         return {name: self.sim.state.get(name) for name in self.fields}
-
-    def _stepped(self) -> None:
-        self.physics_step += 1
-
-    def _capture(self) -> None:
-        if self.sim.sensor_manager.last_due:
-            self._publish()
 
     def _exchange(self, command: str, **fields: Any) -> dict[str, Any]:
         """Share current state, send ``command`` and order later work on this stream after the receiver's."""
@@ -243,34 +223,21 @@ class Publisher:
         stream.wait_event(self.done)
         return reply
 
-    def _publish(self) -> None:
+    def publish(self, physics_step: int) -> None:
+        """Have the receiver process current state as the next frame, at the source's current time."""
         self.sequence += 1
-        frame = Frame(self.sequence, self.physics_step, self.sim.time())
+        frame = Frame(self.sequence, physics_step, self.sim.time())
         reply = self._exchange("FRAME_AVAILABLE", frame=asdict(frame))
         if reply["type"] != "RENDER_COMPLETE" or reply["sequence"] != frame.sequence:
             raise RuntimeError("Receiver completed the wrong frame")
         if frame.sequence == 1:
             self.control.set_timeout(FRAME_TIMEOUT_MS)
 
-    def render_remote(self, cameras: list[CameraRecord]) -> None:
-        """Publish a frame and set ``cameras``' buffers to copies of the receiver's images."""
-        self._publish()
-        for record in cameras:
-            for data_type in record.config.data_types:
-                record.set_buffer(data_type, self.images.tensors[image_name(record.name, data_type)].clone())
-
-    def rerender_remote(self, cameras: list[CameraRecord], env_ids: torch.Tensor) -> None:
-        """Have the receiver render current state at the current time, and take its ``env_ids`` rows."""
+    def rerender(self) -> None:
+        """Have the receiver process current state again at the current time, without a new frame."""
         reply = self._exchange("RERENDER", sim_time=self.sim.time())
         if reply["type"] != "RERENDERED":
             raise RuntimeError("Receiver did not re-render")
-        for record in cameras:
-            for data_type in record.config.data_types:
-                image = self.images.tensors[image_name(record.name, data_type)]
-                if data_type in record.buffers:
-                    record.set_buffer_rows(data_type, env_ids, image[env_ids])
-                else:
-                    record.set_buffer(data_type, image.clone())
 
     def close(self) -> None:
         import torch
@@ -278,15 +245,10 @@ class Publisher:
         if self.closed:
             return
         self.closed = True
-        self.step_hook.remove()
-        if self.capture_hook is None:
-            self.sim.sensor_manager.set_remote_renderer(None)
-        else:
-            self.capture_hook.remove()
         try:
-            # Unmap images before the receiver may free them.
+            # Unmap imports before the receiver may free them.
             torch.cuda.synchronize(self.sim.sim_device)
-            self.images.release()
+            self._imports.release()
             reply = self.control.exchange("CLOSE")
             if reply["type"] != "UNMAPPED":
                 raise RuntimeError("Receiver did not release shared state")

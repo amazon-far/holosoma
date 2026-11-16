@@ -24,12 +24,9 @@ with receiver_config.create_render_task() as task:
 (Isaac's clone grid), camera preparation, and every sensor rendering each frame.
 It has no physics step; `task.step()` raises.
 
-`RunSimConfig.create_task()` accepts an optional `buffer_allocator` for the
-source, selecting SimState cache storage before any cached reads, including
-native initialization reads. Calls without it retain normal startup. The runtime
-allocator callback stays outside the serializable scene/config models. Custom
-task subclasses must accept the option when they use it; ordinary construction
-still passes only the existing configuration argument.
+`SimState.set_buffer_allocator()` selects SimState cache storage before the
+first cached read. Plugins are installed before any backend reads state, so a
+plugin can select it at install; the co-simulation plugin does.
 
 `apply_state()` accepts complete writable SimState fields, such as
 `robot_root_states` `[E, 13]`, `dof_pos` and `dof_vel` `[E, D]`, and
@@ -95,26 +92,31 @@ with receiver_config.create_render_task() as task:
     Receiver(task, endpoint=endpoint).run()
 ```
 
-Source process, with the same scene:
+Source process, with the same scene and the plugin configured:
 
 ```python
-from holosoma.cosim.cuda import CacheAllocator
+from dataclasses import replace
 
-fields = ("robot_root_states", "dof_pos", "dof_vel", "object_root_states")
-allocator = CacheAllocator(fields)
-with source_config.create_task(buffer_allocator=allocator) as task:
-    from holosoma.cosim.bridge import Publisher
-    publisher = Publisher(task.simulator, allocator, endpoint=endpoint)
+from holosoma.config_types.plugin import CosimPublisherPluginConfig
+
+plugins = {"cosim": CosimPublisherPluginConfig(endpoint=endpoint)}
+with replace(source_config, plugin=plugins).create_task() as task:
     task.run()
 ```
+
+The plugin owns when publication happens and what the source requests: it counts
+physics steps, publishes when a camera is due, and fills remote cameras from the
+receiver's images. `holosoma.cosim.bridge.Publisher` is the channel underneath:
+the handshake at construction, then `publish()`, `rerender()`, its mapped
+`imports` and `close()`, called whenever its owner decides.
 
 By default the source publishes its non-empty writable SimState fields. When the
 connection opens, each side sends the buffers it exports (name, shape, dtype and
 IPC handle) and the source also sends the buffers it requests from the receiver.
 The receiver rejects any exported field it cannot write or whose shape differs
 from its own, and any scene layout (joint, object and environment order) or GPU
-that differs. An explicit field list selects a subset. The allocator must own every published field; the
-publisher raises before connecting otherwise. Import CUDA helpers after provider
+that differs. An explicit field list (`--plugin.cosim.fields`) selects a subset. The allocator must own every
+published field; the publisher raises before connecting otherwise. Import CUDA helpers after provider
 startup when they use Warp; importing `CacheAllocator` itself loads no GPU SDK.
 
 Publication follows the source's camera capture: a frame is published whenever

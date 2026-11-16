@@ -29,7 +29,6 @@ def task_type(monkeypatch: pytest.MonkeyPatch) -> TaskFixture:
         def __init__(self, tyro_config: Any, terrain_manager: Any, device: str) -> None:
             super().__init__(tyro_config, terrain_manager, device)
             self.scene = EnvOriginsScene(torch.tensor([[10.0, 0.0, 0.0], [20.0, 0.0, 0.0]]), device)
-            self.state.register("test", lambda: torch.ones(2, 3))
             camera = SimpleNamespace(effective_decimation=1)
             self.sensor_manager = cast("Any", SimpleNamespace(cameras=[camera], lidars=[]))
 
@@ -54,7 +53,7 @@ def task_type(monkeypatch: pytest.MonkeyPatch) -> TaskFixture:
             return torch.zeros(1), torch.zeros(1), torch.zeros(1)
 
         def prepare_sim(self) -> None:
-            calls.append(("first-read", self.state.get("test")))
+            pass
 
         def install_plugins(self) -> None:
             pass
@@ -105,21 +104,6 @@ def task_type(monkeypatch: pytest.MonkeyPatch) -> TaskFixture:
 def config() -> EnvConfig:
     run = RunSimConfig(device="cpu", time_scale=0)
     return get_run_sim_env_config(replace(run, training=replace(run.training, num_envs=2, headless=True)))
-
-
-def test_allocator_is_installed_before_the_first_native_read(
-    task_type: TaskFixture,
-) -> None:
-    task, _render, calls = task_type
-    allocations: list[Any] = []
-
-    def allocator(name: str, value: torch.Tensor, device: Any) -> torch.Tensor:
-        allocations.append((name, device))
-        return torch.empty_like(value)
-
-    constructed = task(config(), buffer_allocator=allocator)
-    assert allocations == [("test", None)]
-    assert constructed.simulator.state.get("test").data_ptr() == calls[-1][1].data_ptr()
 
 
 def test_render_task_uses_native_scene_placement_and_rejects_physics_step(
