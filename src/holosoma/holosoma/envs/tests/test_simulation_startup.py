@@ -1,4 +1,4 @@
-"""RenderTask construction and render_frame clocking against a fake simulator."""
+"""RenderTask construction and frame rendering against a fake simulator."""
 
 from __future__ import annotations
 
@@ -62,8 +62,8 @@ def task_type(monkeypatch: pytest.MonkeyPatch) -> TaskFixture:
         def prepare_render_only(self) -> None:
             calls.append("render-only")
 
-        def render_applied_state(self, dt: float) -> None:
-            calls.append(("render", dt, self.time()))
+        def render_applied_state(self) -> None:
+            calls.append(("render", self.time()))
 
         def render_sensors(self) -> None:
             calls.append("sensors")
@@ -113,22 +113,13 @@ def test_render_task_uses_native_scene_placement_and_rejects_physics_step(
         constructed.step()
 
 
-def test_render_frames_run_at_the_external_clock(task_type: TaskFixture) -> None:
+def test_render_frame_renders_between_frame_hooks_at_the_set_clock(task_type: TaskFixture) -> None:
     render, calls = task_type
     constructed = render(config())
     constructed.hooks.add(Phase.FRAME_BEGIN, lambda: calls.append("begin"))
     del calls[:]
-    constructed.render_frame(sim_time=0.035)
-    constructed.render_frame(sim_time=0.07)
-    assert [call if isinstance(call, str) else call[0] for call in calls] == ["begin", "render", "sensors"] * 2
-    renders = [call for call in calls if not isinstance(call, str)]
-    assert renders[0] == ("render", 0.035, 0.035)
-    assert renders[1][1] == pytest.approx(0.035) and renders[1][2] == 0.07
-    for sim_time in (0.07, -1.0, float("nan")):
-        with pytest.raises(ValueError, match="Source simulation time"):
-            constructed.render_frame(sim_time=sim_time)
-    constructed.render_frame(sim_time=0.07, repeat=True)
-    assert calls[-2] == ("render", 0.0, 0.07)
-    with pytest.raises(ValueError, match="Source simulation time"):
-        constructed.render_frame(sim_time=0.035, repeat=True)
+    constructed.simulator.set_kinematic_time(0.07)
+    constructed.render_frame()
+    constructed.render_frame()
+    assert calls == ["begin", ("render", 0.07), "sensors"] * 2
     assert constructed.frames_rendered == 2

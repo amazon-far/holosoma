@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import math
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
@@ -16,8 +17,10 @@ if TYPE_CHECKING:
 
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
 
-# Bounds each exchange after the first frame; startup and the first frame use the startup timeout.
+# Bounds each source exchange after the first frame; startup and the first frame use the startup timeout.
 FRAME_TIMEOUT_MS = 30000
+# How often an idle receiver checks that its source is still running.
+SOURCE_POLL_MS = 1000
 
 
 @dataclass(frozen=True)
@@ -41,7 +44,6 @@ class ControlChannel:
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REP if receiver else zmq.REQ)
         self.socket.setsockopt(zmq.LINGER, 0)
-        self.awaiting_reply = False
         self.set_timeout(startup_timeout_ms)
         try:
             (self.socket.bind if receiver else self.socket.connect)(endpoint)
@@ -56,14 +58,8 @@ class ControlChannel:
         self.socket.setsockopt(zmq.SNDTIMEO, timeout_ms)
 
     def exchange(self, command: str, **fields: Any) -> dict[str, Any]:
-        if self.awaiting_reply:
-            # A request interrupted before its reply, e.g. by a signal, leaves REQ waiting for that reply.
-            self.receive()
-            self.awaiting_reply = False
         self.socket.send_json(dict(type=command, **fields))
-        self.awaiting_reply = True
         reply = self.receive()
-        self.awaiting_reply = False
         if reply["type"] == "ERROR":
             raise RuntimeError(reply["message"])
         return reply
@@ -84,6 +80,17 @@ def gpu_uuid(device: Any) -> str:
     import torch
 
     return str(torch.cuda.get_device_properties(device).uuid)
+
+
+def process_alive(pid: int) -> bool:
+    """Whether process ``pid`` exists in this PID namespace."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def as_received(value: Any) -> Any:
@@ -123,7 +130,8 @@ class Publisher:
     The handshake runs at construction: every state field ``allocator`` shares, and ``requests``, go to
     the receiver. It answers with the fields it reads and one export per request, mapped as
     :attr:`imports`. Callers decide when to :meth:`publish`; each exchange refreshes the fields the
-    receiver reads and orders later work after the receiver's.
+    receiver reads and orders later work after the receiver's. After a failed exchange the publisher
+    refuses further exchanges and closes without contacting the receiver.
     """
 
     def __init__(
@@ -147,7 +155,7 @@ class Publisher:
         self.control = ControlChannel(endpoint=endpoint)
         self.ready = wp.Event(device=sim.sim_device, interprocess=True)
         self.sequence = 0
-        self.closed = False
+        self.closed = self.failed = False
         try:
             reply = self.control.exchange(
                 "OPEN",
@@ -155,6 +163,7 @@ class Publisher:
                 requests=[asdict(request) for request in requests],
                 ready_handle=self.ready.ipc_handle().hex(),
                 gpu_uuid=gpu_uuid(sim.sim_device),
+                source_pid=os.getpid(),
                 scene=scene_layout(sim),
             )
             if reply["type"] != "OPENED":
@@ -186,11 +195,16 @@ class Publisher:
         import torch
         import warp as wp
 
+        if self.failed:
+            raise RuntimeError("An earlier co-simulation exchange failed")
         self.values()  # Refresh the same persistent caches, without replacing storage.
-        torch.cuda.synchronize(self.sim.sim_device)
         stream = wp.stream_from_torch(torch.cuda.current_stream(self.sim.sim_device))
         stream.record_event(self.ready)
-        reply = self.control.exchange(command, **fields)
+        try:
+            reply = self.control.exchange(command, **fields)
+        except BaseException:
+            self.failed = True
+            raise
         stream.wait_event(self.done)
         return reply
 
@@ -208,12 +222,6 @@ class Publisher:
         if frame.sequence == 1:
             self.control.set_timeout(FRAME_TIMEOUT_MS)
 
-    def repeat(self) -> None:
-        """Have the receiver process current state again at the current time, without a new frame."""
-        reply = self._exchange("REPEAT", sim_time=self.sim.time(), phase=self._phase())
-        if reply["type"] != "REPEATED":
-            raise RuntimeError("Receiver did not repeat the frame")
-
     def close(self) -> None:
         import torch
 
@@ -224,9 +232,10 @@ class Publisher:
             # Unmap imports before the receiver may free them.
             torch.cuda.synchronize(self.sim.sim_device)
             self._imports.release()
-            reply = self.control.exchange("CLOSE")
-            if reply["type"] != "UNMAPPED":
-                raise RuntimeError("Receiver did not release shared state")
+            if not self.failed:
+                reply = self.control.exchange("CLOSE")
+                if reply["type"] != "UNMAPPED":
+                    raise RuntimeError("Receiver did not release shared state")
         finally:
             self.control.close()
 
@@ -242,17 +251,20 @@ class FrameHandler(Protocol):
     def allocate(self, requests: list[BufferRequest]) -> dict[str, Any]:
         """Check the source's requests and return one shared array per request, by name."""
 
-    def process(self, state: Mapping[str, torch.Tensor], sim_time: float, *, repeat: bool, phase: str | None) -> None:
+    def process(self, state: Mapping[str, torch.Tensor], sim_time: float, *, phase: str | None) -> None:
         """Process the source's ``state`` at source time ``sim_time`` and fill the exports.
 
-        ``state`` holds the read fields, read-only and valid only during the call. ``repeat`` processes
-        current state again at the previous frame's time, e.g. after the source reset. ``phase`` is the
-        source's hook phase the exchange came from, or ``None`` unless exactly one phase is emitting.
+        ``state`` holds the read fields, read-only and valid only during the call. ``phase`` is the
+        source's hook phase the frame came from, or ``None`` unless exactly one phase is emitting.
         """
 
 
 class Receiver:
-    """Map the source state ``handler`` reads and have ``handler`` process each frame."""
+    """Map the source state ``handler`` reads and have ``handler`` process each frame.
+
+    After the handshake it waits for frames as long as the source process is running, so the source
+    and receiver must share a PID namespace.
+    """
 
     def __init__(self, handler: FrameHandler, *, endpoint: str) -> None:
         self.handler = handler
@@ -265,20 +277,20 @@ class Receiver:
 
         mapped: MappedBuffers | None = None
         ready = done = None
+        source_pid: int | None = None
         sequence = 0
         stream = wp.stream_from_torch(torch.cuda.current_stream(self.sim.sim_device))
 
-        def process(sim_time: float, *, repeat: bool, phase: str | None) -> None:
-            assert mapped is not None
-            stream.wait_event(ready)
-            torch.cuda.synchronize(self.sim.sim_device)
-            self.handler.process(mapped.tensors, sim_time, repeat=repeat, phase=phase)
-            mapped.verify_read_only()
-            stream.record_event(done)
+        def receive() -> dict[str, Any]:
+            if source_pid is not None:
+                while not self.control.socket.poll(SOURCE_POLL_MS):
+                    if not process_alive(source_pid):
+                        raise RuntimeError(f"The co-simulation source (pid {source_pid}) exited without closing")
+            return self.control.receive()
 
         try:
             while True:
-                message = self.control.receive()
+                message = receive()
                 try:
                     command = message["type"]
                     if command == "OPEN" and mapped is None:
@@ -309,6 +321,7 @@ class Receiver:
                             device=self.sim.sim_device,
                         )
                         done = wp.Event(device=self.sim.sim_device, interprocess=True)
+                        source_pid = int(message["source_pid"])
                         self.control.socket.send_json(
                             {
                                 "type": "OPENED",
@@ -321,14 +334,12 @@ class Receiver:
                         frame = Frame(**message["frame"])
                         if frame.sequence != sequence + 1:
                             raise ValueError("Frames must be consecutive")
-                        process(frame.sim_time, repeat=False, phase=frame.phase)
+                        stream.wait_event(ready)
+                        self.handler.process(mapped.tensors, frame.sim_time, phase=frame.phase)
+                        mapped.verify_read_only()
+                        stream.record_event(done)
                         sequence = frame.sequence
                         self.control.socket.send_json({"type": "FRAME_COMPLETE", "sequence": sequence})
-                        if sequence == 1:
-                            self.control.set_timeout(FRAME_TIMEOUT_MS)
-                    elif command == "REPEAT" and mapped is not None:
-                        process(message["sim_time"], repeat=True, phase=message["phase"])
-                        self.control.socket.send_json({"type": "REPEATED"})
                     elif command == "CLOSE" and mapped is not None:
                         torch.cuda.synchronize(self.sim.sim_device)
                         mapped.release()

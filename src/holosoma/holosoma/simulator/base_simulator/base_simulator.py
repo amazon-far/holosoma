@@ -714,11 +714,8 @@ class BaseSimulator:
         Backends that honour the origins they are built with keep them; check :attr:`env_origins` afterwards.
         """
 
-    def render_applied_state(self, dt: float) -> None:
-        """Flush applied state and bring body poses and renderers up to date, without integrating physics.
-
-        ``dt`` is the external time since the previous frame.
-        """
+    def render_applied_state(self) -> None:
+        """Flush applied state and bring body poses and renderers up to date, without integrating physics."""
         self.forward_kinematics()
 
     def set_kinematic_time(self, sim_time: float) -> None:

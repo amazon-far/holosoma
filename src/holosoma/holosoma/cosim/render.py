@@ -13,6 +13,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -30,6 +31,13 @@ if TYPE_CHECKING:
     from holosoma.envs.render_task import RenderTask
     from holosoma.simulator.base_simulator.base_simulator import BaseSimulator
     from holosoma.simulator.shared.sensor_manager import CameraRecord
+
+
+class CosimRenderHook(Enum):
+    """Hooks :class:`CosimRenderPlugin` publishes, for ordering with ``HookRef(<slot>, member)``."""
+
+    RERENDER = "rerender"
+    """The ``EPISODE_START`` re-render of reset environments; order state writers before it."""
 
 
 class CosimRenderPlugin:
@@ -63,7 +71,9 @@ class CosimRenderPlugin:
             before=simulator.sensor_render_hook,
         )
         self.episode_hook = (
-            hooks.add(Phase.EPISODE_START, self._rerender, name="cosim.rerender") if self.remote else None
+            hooks.add(Phase.EPISODE_START, self._rerender, name="cosim.rerender", key=CosimRenderHook.RERENDER)
+            if self.remote
+            else None
         )
         hooks.add(Phase.CLOSE, self.close, name="cosim.close")
 
@@ -84,7 +94,7 @@ class CosimRenderPlugin:
 
     def _rerender(self, env_ids: torch.Tensor) -> None:
         """Have the renderer render the reset envs' state at the current time, and take their rows."""
-        self.publisher.repeat()
+        self.publisher.publish()
         images = self.publisher.imports
         for record in self.remote:
             for data_type in record.config.data_types:
@@ -115,7 +125,8 @@ class _Image:
 class RenderHandler:
     """Mirror the source's state into ``task``, render it, and export the camera outputs the source requests.
 
-    Reads the source fields writable on ``task``'s simulator and applies them before each render.
+    Reads the source fields writable on ``task``'s simulator and applies them, and the source's time,
+    before each render.
     """
 
     def __init__(self, task: RenderTask) -> None:
@@ -162,10 +173,11 @@ class RenderHandler:
             self._images.append(_Image(record, data_type, wp.to_torch(owners[request.name])))
         return owners
 
-    def process(self, state: Mapping[str, torch.Tensor], sim_time: float, *, repeat: bool, phase: str | None) -> None:
-        """Apply ``state``, render it, and copy each requested camera output into its export."""
+    def process(self, state: Mapping[str, torch.Tensor], sim_time: float, *, phase: str | None) -> None:
+        """Apply ``state`` at ``sim_time``, render it, and copy each requested camera output into its export."""
+        self.simulator.set_kinematic_time(sim_time)
         self.simulator.apply_state(state)
-        self.task.render_frame(sim_time=sim_time, repeat=repeat)
+        self.task.render_frame()
         for image in self._images:
             image.tensor.copy_(image.record.buffers[image.data_type])
 

@@ -67,8 +67,8 @@ def test_render_writes_renders_and_refreshes_inside_one_mutation(
 ) -> None:
     simulator, calls, flags = replica
     capture = _prepared(simulator, calls)
-    capture.render(0.035)
-    assert calls == ["flush", "write", "render", ("refresh", 0.035), "stale"]
+    capture.render()
+    assert calls == ["flush", "write", "render", ("refresh", 0.005), "stale"]
     assert flags and not any(flags)
 
 
@@ -81,7 +81,7 @@ def test_render_failure_leaves_physics_stopped(replica: tuple[SimpleNamespace, l
 
     simulator.render = fail
     with pytest.raises(RuntimeError, match="render failed"):
-        capture.render(0.035)
+        capture.render()
     assert flags[-1] is False and calls[-1] == "stale"
 
 
@@ -90,9 +90,9 @@ def test_physics_advancing_is_detected(replica: tuple[SimpleNamespace, list[obje
     capture = _prepared(simulator, calls)
     simulator.render = lambda: setattr(simulator.sim, "current_time_step_index", 3)
     with pytest.raises(RuntimeError, match="advanced Isaac physics"):
-        capture.render(0.035)
+        capture.render()
     with pytest.raises(RuntimeError, match="between rendered frames"):
-        capture.render(0.035)
+        capture.render()
 
 
 def test_lidars_are_rejected(replica: tuple[SimpleNamespace, list[object], list[bool]]) -> None:

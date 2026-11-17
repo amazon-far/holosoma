@@ -348,11 +348,11 @@ class IsaacSim(BaseSimulator):
         self.scene._default_env_origins = origins.to(self.scene.env_origins).clone()
         self.env_origins = self.scene.env_origins
 
-    def render_applied_state(self, dt: float) -> None:
+    def render_applied_state(self) -> None:
         """Flush applied state and render through Isaac Lab (which runs FK) with physics held stopped."""
         if self._render_capture is None:
             raise RuntimeError("Call prepare_render_only() before rendering applied state")
-        self._render_capture.render(dt)
+        self._render_capture.render()
 
     def _get_base_body_name(self, preference_order: list[str]) -> str:
         """Get the base body name with fallback logic.

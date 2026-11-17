@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 from dataclasses import asdict, replace
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -69,12 +70,13 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
             "requests": [],
             "ready_handle": "00",
             "gpu_uuid": "gpu-a",
+            "source_pid": os.getpid(),
             "scene": {"dof_names": ["a", "b"], "object_names": [], "env_origins": [[0.0, 0.0, 0.0]]},
         },
         {"type": "FRAME_AVAILABLE", "frame": {"sequence": 1, "sim_time": 0.035}},
         {"type": "CLOSE"},
     ]
-    socket = SimpleNamespace(send_json=replies.append)
+    socket = SimpleNamespace(send_json=replies.append, poll=lambda _ms: True)
     control = SimpleNamespace(
         socket=socket,
         receive=lambda: messages.pop(0),
@@ -117,13 +119,14 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
         scene=SimpleNamespace(env_origins=torch.zeros(1, 3)),
         state=SimpleNamespace(writable_names=lambda: list(values), get=values.__getitem__),
         apply_state=lambda inputs: calls.append(("apply", inputs is values)),
+        set_kinematic_time=lambda sim_time: calls.append(("clock", sim_time)),
         sensor_manager=SensorManager("cpu", 50.0),
         match_env_origins=lambda origins: calls.append(("place", origins.tolist())),
     )
     task = SimpleNamespace(
         simulator=sim,
         num_envs=1,
-        render_frame=lambda **kw: calls.append(("capture", kw["sim_time"], *(["repeat"] if kw.get("repeat") else []))),
+        render_frame=lambda: calls.append("capture"),
     )
     handler = RenderHandler(cast("RenderTask", task))
     return bridge.Receiver(handler, endpoint="ipc:///unused"), calls, replies, messages
@@ -139,9 +142,8 @@ def test_receiver_frame_lifecycle(receiver: ReceiverFixture) -> None:
     worker, calls, replies, _messages = receiver
     worker.run()
     # Origins are matched before mapping; each frame waits for the source, renders, then signals done.
-    assert _in_order(calls, ("place", [[0.0, 0.0, 0.0]]), "map", "ready", "sync", ("apply", True), ("capture", 0.035))
-    assert _in_order(calls, ("capture", 0.035), "readonly", "done", ("timeout", bridge.FRAME_TIMEOUT_MS))
-    assert _in_order(calls, "done", "sync", "unmap", "close")
+    assert _in_order(calls, ("place", [[0.0, 0.0, 0.0]]), "map", "ready", ("clock", 0.035), ("apply", True), "capture")
+    assert _in_order(calls, "capture", "readonly", "done", "sync", "unmap", "close")
     assert replies == [
         {"type": "OPENED", "done_handle": "01", "exports": [], "reads": []},
         {"type": "FRAME_COMPLETE", "sequence": 1},
@@ -192,7 +194,7 @@ def test_receiver_exports_its_images_after_each_render(
     worker, calls, replies, messages = receiver
     record = _camera(worker.sim.sensor_manager, "cam", remote=False, data_types=["rgb", "depth"])
     messages[0]["requests"] = [bridge.as_received(asdict(request)) for request in camera_requests(record, 1)]
-    messages.insert(2, {"type": "REPEAT", "sim_time": 0.035, "phase": None})
+    messages.insert(2, {"type": "FRAME_AVAILABLE", "frame": {"sequence": 2, "sim_time": 0.035}})
     exports: list[torch.Tensor] = []
     exported_before_render: list[list[float]] = []
     allocate, render = cosim_render.allocate_shared, cast("Any", worker.handler).task.render_frame
@@ -201,9 +203,9 @@ def test_receiver_exports_its_images_after_each_render(
         exports.append(allocate(*args))
         return exports[-1]
 
-    def render_frame(**kw: Any) -> None:
+    def render_frame() -> None:
         exported_before_render.append([float(export.max()) for export in exports])
-        render(**kw)
+        render()
         frame = len(exported_before_render)
         record.set_buffer("rgb", torch.full((1, 3, 4, 3), frame, dtype=torch.uint8))
         record.set_buffer("depth", torch.full((1, 3, 4, 1), float(frame)))
@@ -215,7 +217,7 @@ def test_receiver_exports_its_images_after_each_render(
         ("cam/rgb", "uint8"),
         ("cam/depth", "float32"),
     ]
-    assert ("capture", 0.035, "repeat") in calls and replies[2] == {"type": "REPEATED"}
+    assert replies[2] == {"type": "FRAME_COMPLETE", "sequence": 2}
     assert exported_before_render == [[0.0, 0.0], [1.0, 1.0]]
     assert all(bool((export == 2).all()) for export in exports)
 
@@ -244,7 +246,7 @@ class _ReadingHandler:
     def allocate(self, requests: Any) -> dict[str, Any]:
         return {}
 
-    def process(self, state: Any, sim_time: float, *, repeat: bool, phase: str | None) -> None:
+    def process(self, state: Any, sim_time: float, *, phase: str | None) -> None:
         self.seen.append(dict(state))
 
 
@@ -277,37 +279,19 @@ def test_duplicate_frame_is_rejected_and_import_is_released(
     monkeypatch.setattr(bridge.MappedBuffers, "release_error", RuntimeError("cleanup failed"))
     with pytest.raises(ValueError, match="consecutive"):
         worker.run()
-    assert len([call for call in calls if isinstance(call, tuple) and call[0] == "capture"]) == 1
+    assert calls.count("capture") == 1
     assert replies[-1]["type"] == "ERROR" and calls[-2:] == ["unmap", "close"]
 
 
-def test_exchange_after_an_interrupted_request_takes_the_right_reply(tmp_path: Path) -> None:
-    import threading
-
-    import zmq
-
-    endpoint = f"ipc://{tmp_path}/control.sock"
-    receiver = bridge.ControlChannel(endpoint=endpoint, receiver=True, startup_timeout_ms=3000)
-    control = bridge.ControlChannel(endpoint=endpoint, startup_timeout_ms=100)
-
-    def serve() -> None:
-        for _ in range(2):  # Ends by timeout if the second request never arrives.
-            message = receiver.receive()
-            if message["type"] == "FRAME_AVAILABLE":
-                threading.Event().wait(0.3)
-            receiver.socket.send_json({"type": f"{message['type']}_REPLY"})
-
-    server = threading.Thread(target=serve, daemon=True)
-    server.start()
-    try:
-        with pytest.raises(zmq.Again):
-            control.exchange("FRAME_AVAILABLE")
-        control.set_timeout(2000)
-        assert control.exchange("CLOSE") == {"type": "CLOSE_REPLY"}
-    finally:
-        server.join(timeout=5)
-        control.close()
-        receiver.close()
+def test_receiver_stops_waiting_when_the_source_exits(receiver: ReceiverFixture) -> None:
+    worker, calls, _replies, messages = receiver
+    source = subprocess.Popen([sys.executable, "-c", "pass"])
+    source.wait()
+    messages[0]["source_pid"] = source.pid
+    cast("Any", worker.control).socket.poll = lambda _ms: False
+    with pytest.raises(RuntimeError, match="exited without closing"):
+        worker.run()
+    assert calls[-2:] == ["unmap", "close"]
 
 
 def test_publisher_without_shared_state_fails_before_connecting(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -348,13 +332,13 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
             ],
             "reads": ["dof_pos"],
         },
-        "FRAME_AVAILABLE": {"type": "FRAME_COMPLETE", "sequence": 1},
-        "REPEAT": {"type": "REPEATED"},
         "CLOSE": {"type": "UNMAPPED"},
     }
 
     def exchange(command: str, **fields: Any) -> dict[str, Any]:
         calls.append((command, fields))
+        if command == "FRAME_AVAILABLE":
+            return {"type": "FRAME_COMPLETE", "sequence": fields["frame"]["sequence"]}
         return replies[command]
 
     control = SimpleNamespace(exchange=exchange, set_timeout=lambda _: None, close=lambda: None)
@@ -384,7 +368,8 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
     fake.sensor_render_hook = fake.hooks.add(
         Phase.FRAME_END, lambda: None, name="sensors.render", after=fake.sensor_capture_hook
     )
-    source = CosimRenderPlugin(CosimRenderPluginConfig(endpoint="ipc:///unused"), cast("Any", sim))
+    with fake.hooks.installing("cosim"):
+        source = CosimRenderPlugin(CosimRenderPluginConfig(endpoint="ipc:///unused"), cast("Any", sim))
     return source, manager, images, calls
 
 
@@ -423,10 +408,26 @@ def test_episode_start_rerenders_only_the_reset_rows(plugin: PluginFixture) -> N
     for image in images.values():
         image.fill_(7)
     hooks.emit(Phase.EPISODE_START, torch.tensor([1]))
-    assert calls[-1] == ("REPEAT", {"sim_time": 0.5, "phase": "episode_start"})
+    assert calls[-1] == ("FRAME_AVAILABLE", {"frame": {"sequence": 2, "sim_time": 0.5, "phase": "episode_start"}})
     for data_type in ("rgb", "depth"):
         buffer = manager.get("cam").buffers[data_type]
         assert bool((buffer[0] == 1).all()) and bool((buffer[1] == 7).all())
+
+
+def test_failed_exchange_closes_without_contacting_the_receiver(plugin: PluginFixture) -> None:
+    source, _manager, _images, calls = plugin
+
+    def fail(command: str, **fields: Any) -> dict[str, Any]:
+        calls.append((command, fields))
+        raise RuntimeError("receiver failed")
+
+    cast("Any", source.publisher.control).exchange = fail
+    with pytest.raises(RuntimeError, match="receiver failed"):
+        source.simulator.hooks.emit(Phase.FRAME_END)
+    with pytest.raises(RuntimeError, match="earlier co-simulation exchange failed"):
+        source.publisher.publish()
+    source.close()
+    assert calls[-1] == "unmap" and not any(call[0] == "CLOSE" for call in calls if isinstance(call, tuple))
 
 
 @pytest.mark.parametrize("dtype", ["uint8", "float32"])

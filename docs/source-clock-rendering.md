@@ -15,8 +15,9 @@ primitive runs forward kinematics and renders sensors from it.
 ```python
 with receiver_config.create_render_task() as task:
     # inputs maps existing Holosoma field names to read-only GPU tensors.
+    task.simulator.set_kinematic_time(source_time)  # what simulator.time() reports
     task.simulator.apply_state(inputs)
-    task.render_frame(sim_time=source_time)
+    task.render_frame()
 ```
 
 `RunSimConfig.create_render_task()` builds a `RenderTask`: normal startup with
@@ -37,16 +38,13 @@ reach the backend through its registered SimState writers at the next flush, so
 any backend with those writers can receive state. Every environment is written
 each frame, without reading the simulation first. Inputs are read, not retained.
 
-`render_frame()` sets the kinematic clock to source time, emits `FRAME_BEGIN`,
-calls the simulator's `render_applied_state(dt)` with the elapsed source time, and
-emits `FRAME_END` for sensor capture and consumers. It returns after GPU work
-finishes. Order consumers after `simulator.sensor_render_hook`. It does not emit
-physics `PRE_STEP`/`POST_STEP` or integrate physics.
-
-Source time must be finite, nonnegative and strictly increasing, except that
-`render_frame(sim_time=..., repeat=True)` may repeat the previous time, for
-state the source changed without advancing its clock. `frames_rendered` counts
-only frames that are not repeats. Isaac also
+`render_frame()` emits `FRAME_BEGIN`, calls the simulator's
+`render_applied_state()`, and emits `FRAME_END` for sensor capture and consumers.
+It returns after GPU work finishes. Order consumers after
+`simulator.sensor_render_hook`. It does not emit physics `PRE_STEP`/`POST_STEP` or
+integrate physics, and `frames_rendered` counts every call. Rendering does not
+depend on time; `set_kinematic_time()` only sets what sensors and consumers read
+from `simulator.time()`. Isaac
 checks that its physics clock never moves after preparation; render failure
 propagates and leaves its physics stopped. Isaac receivers render cameras only;
 source notifications own cadence. A `RenderTask` starts without the terrain height
@@ -108,7 +106,7 @@ with replace(source_config, plugin=plugins).create_task() as task:
 The plugin owns when publication happens and what the source requests: it
 publishes when a camera is due and fills remote cameras from the receiver's
 images. `holosoma.cosim.bridge.Publisher` is the channel underneath:
-the handshake at construction, then `publish()`, `repeat()`, its mapped
+the handshake at construction, then `publish()`, its mapped
 `imports` and `close()`, called whenever its owner decides. On the receiving
 side, `Receiver` maps the shared state and hands each frame to a handler;
 `holosoma.cosim.render.RenderHandler` applies it to a `RenderTask`, renders it
@@ -140,11 +138,15 @@ lockstep, with no physics/render overlap or frame pipelining. Startup handles an
 layout travel once; subsequent notifications carry the frame sequence,
 simulation time and the source's hook phase they were sent from (`frame_end` for
 camera frames, `episode_start` for re-renders after resets, `None` unless exactly
-one phase is emitting). Publisher close obtains an unmap acknowledgment before
-storage can be released. Failures/timeouts propagate; reconnection and scene
-changes are not implemented. Startup and the first frame exchange may take up to
-five minutes (first-use compilation); later exchanges time out after 30 seconds.
-On a lost peer, retain exporting allocations until that peer has exited or
+one phase is emitting). The receiver sets its kinematic clock to the frame's
+time. Publisher close obtains an unmap acknowledgment before storage can be
+released; after a failed exchange the publisher refuses further exchanges and
+closes without contacting the receiver. Failures/timeouts propagate; reconnection
+and scene changes are not implemented. Startup and the first frame exchange may
+take up to five minutes (first-use compilation); later source exchanges time out
+after 30 seconds. After the handshake the receiver waits for frames as long as
+the source process (whose PID the handshake carries) runs, so both processes must
+share a PID namespace. On a lost peer, retain exporting allocations until that peer has exited or
 confirmed unmapping.
 
 Warp's owning allocations use `ScopedMempool(..., False)` and remain GPU memory.
@@ -191,10 +193,13 @@ remote cameras: a frame is published when one of them is due. Without remote
 cameras the source publishes after capture, as above.
 
 Sources reset environments after cameras render. On `EPISODE_START`, which fires
-once per reset batch after the reset state is written, the plugin sends `REPEAT`
-with the current source time; the receiver applies the reset state, renders every
-environment with `repeat=True`, and the source takes only the reset rows (the
-whole image if a camera has none yet). State
+once per reset batch after the reset state is written, the plugin publishes a
+frame at the current source time; the receiver applies the reset state and
+renders every environment, and the source takes only the reset rows (the whole
+image if a camera has none yet). A plugin that writes state at `EPISODE_START`
+orders itself before this re-render with
+`before=HookRef(<cosim slot>, CosimRenderHook.RERENDER)`, using
+`holosoma.cosim.render.CosimRenderHook`. State
 changes that start no episode, such as a motion-tracking command teleporting an
 environment to a new clip, are not re-rendered: remote cameras keep their frame
 from before the change for that step.
