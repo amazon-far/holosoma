@@ -283,20 +283,18 @@ def test_camera_world_mount_classic(tmp_path, origin_offset):
 
 @pytest.mark.mujoco_warp
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="MuJoCo-Warp requires a CUDA device")
-@pytest.mark.parametrize(("num_envs", "origin_offset"), [("1", "0"), ("3", "0")])
-def test_camera_world_mount_warp(tmp_path, num_envs, origin_offset):
-    result_file = tmp_path / f"world_mjwarp_{num_envs}_{origin_offset}.txt"
+@pytest.mark.parametrize("num_envs", ["1", "3"])
+def test_camera_world_mount_warp(tmp_path, num_envs):
+    result_file = tmp_path / f"world_mjwarp_{num_envs}.txt"
     run_harness(
         _WORLD_HARNESS,
         "--simulator",
         "mjwarp",
         "--num-envs",
         num_envs,
-        "--origin-offset",
-        origin_offset,
         "--result-file",
         str(result_file),
-        label=f"mjwarp/camera-world-mount (num_envs={num_envs}, origin offset {origin_offset} m)",
+        label=f"mjwarp/camera-world-mount (num_envs={num_envs})",
         timeout=400,
         result_file=result_file,
     )

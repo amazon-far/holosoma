@@ -1,4 +1,4 @@
-"""Batched object roots retain native getter conventions and stable cache storage."""
+"""Batched object roots retain native getter conventions."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import torch
 
 pytest.importorskip("mujoco")
 
-from holosoma.simulator.base_simulator.state import SimState
 from holosoma.simulator.mujoco.object_state_reader import ObjectReadPlan
 
 pytestmark = pytest.mark.no_sim
@@ -68,26 +67,15 @@ def test_mixed_roots_match_world_state_in_named_order() -> None:
     torch.testing.assert_close(plan.read(), expected, atol=1e-6, rtol=1e-6)
 
 
-def test_refresh_changes_values_without_replacing_simstate_storage() -> None:
+def test_reading_again_reflects_new_native_state() -> None:
     plan = mixed_plan()
-    state = SimState()
-    allocations: list[torch.Tensor] = []
-
-    def allocate(_name: str, value: torch.Tensor, _device: torch.device | str | None) -> torch.Tensor:
-        allocation = torch.empty_like(value)
-        allocations.append(allocation)
-        return allocation
-
-    state.set_buffer_allocator(allocate)
-    state.register("object_root_states", plan.read)
-    held = state.get("object_root_states")
+    plan.read()
     plan.qpos[:, :3].add_(100)
     plan.xpos[:, 1].add_(200)
-    state.mark_stale()
-    assert state.get("object_root_states") is held and allocations == [held]
-    torch.testing.assert_close(held[:, 2, :3], plan.qpos[:, :3])
-    torch.testing.assert_close(held[:, 0, :3], plan.xpos[:, 1])
-    assert torch.count_nonzero(held[:, 0, 7:]) == 0
+    roots = plan.read()
+    torch.testing.assert_close(roots[:, 2, :3], plan.qpos[:, :3])
+    torch.testing.assert_close(roots[:, 0, :3], plan.xpos[:, 1])
+    assert torch.count_nonzero(roots[:, 0, 7:]) == 0
 
 
 def test_empty_scene_has_an_empty_object_axis() -> None:

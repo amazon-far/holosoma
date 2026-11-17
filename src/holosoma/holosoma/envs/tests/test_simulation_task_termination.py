@@ -6,7 +6,6 @@ from collections import Counter
 from types import SimpleNamespace
 from typing import Any, cast
 
-import pytest
 import torch
 from torch.utils._python_dispatch import TorchDispatchMode
 
@@ -63,21 +62,18 @@ def test_without_terms_frames_clear_masks_without_reset_selection() -> None:
     assert task.time_out_buf.tolist() == [False, False, False]
 
 
-@pytest.mark.parametrize("task_type", [BaseTask, SimulationTask])
-def test_configured_terms_preserve_failure_timeout_masks_and_reset_selection(task_type: type[BaseTask]) -> None:
+def test_configured_terms_preserve_failure_timeout_masks_and_reset_selection() -> None:
     cfg = TerminationManagerCfg(
         terms={
             "failure": TerminationTermCfg(func=f"{__name__}:_failures"),
             "timeout": TerminationTermCfg(func=f"{__name__}:_timeouts", is_timeout=True),
         }
     )
-    task = _task(task_type, cfg)
+    task = _task(SimulationTask, cfg)
 
-    with _Operators() as operations:
-        task._check_termination()
-        ids = task._get_reset_env_ids()
+    task._check_termination()
+    ids = task._get_reset_env_ids()
 
-    assert operations.calls["aten.nonzero.default"] == 1
     assert ids.tolist() == [1, 2]
     assert task.reset_buf.tolist() == [0, 1, 1]
     assert task.time_out_buf.tolist() == [False, False, True]

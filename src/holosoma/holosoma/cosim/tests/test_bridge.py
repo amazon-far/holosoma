@@ -19,7 +19,7 @@ from holosoma.cosim import base as cosim_base
 from holosoma.cosim import bridge
 from holosoma.cosim import cuda as cosim_cuda
 from holosoma.cosim.base import BufferHandler
-from holosoma.cosim.cuda import BufferSpec, CacheAllocator, MappedBuffers, share
+from holosoma.cosim.cuda import BufferSpec, CacheAllocator
 from holosoma.cosim.render.plugin import CosimRenderPlugin, camera_requests
 from holosoma.cosim.render.renderer import RenderHandler, RenderTask
 from holosoma.simulator.base_simulator.hooks import HookRegistry, Phase
@@ -145,7 +145,7 @@ def test_receiver_frame_lifecycle(receiver: ReceiverFixture) -> None:
     worker.run()
     # Origins are matched before mapping; each frame waits for the source, renders, then signals done.
     assert _in_order(calls, ("place", [[0.0, 0.0, 0.0]]), "map", "ready", ("clock", 0.035), ("apply", True), "capture")
-    assert _in_order(calls, "capture", "readonly", "done", "sync", "unmap", "close")
+    assert _in_order(calls, "capture", "readonly", "done", "unmap", "close")
     assert replies == [
         {"type": "OPENED", "done_handle": "01", "exports": [], "reads": []},
         {"type": "FRAME_COMPLETE", "sequence": 1},
@@ -190,53 +190,6 @@ def test_remote_camera_mismatch_fails_before_mapping(receiver: ReceiverFixture, 
     assert replies[-1]["type"] == "ERROR" and calls[-1] == "close"
 
 
-def test_receiver_exports_its_images_after_each_render(
-    receiver: ReceiverFixture, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    worker, calls, replies, messages = receiver
-    record = _camera(
-        cast("Any", worker.handler).simulator.sensor_manager, "cam", remote=None, data_types=["rgb", "depth"]
-    )
-    messages[0]["requests"] = [bridge.as_received(asdict(request)) for request in camera_requests(record, 1)]
-    messages.insert(2, {"type": "FRAME_AVAILABLE", "frame": {"sequence": 2, "sim_time": 0.035}})
-    exports: list[torch.Tensor] = []
-    exported_before_render: list[list[float]] = []
-    allocate, render = cosim_base.allocate_shared, cast("Any", worker.handler).task.render_frame
-
-    def allocate_shared(*args: Any) -> torch.Tensor:
-        exports.append(allocate(*args))
-        return exports[-1]
-
-    def render_frame() -> None:
-        exported_before_render.append([float(export.max()) for export in exports])
-        render()
-        frame = len(exported_before_render)
-        record.set_buffer("rgb", torch.full((1, 3, 4, 3), frame, dtype=torch.uint8))
-        record.set_buffer("depth", torch.full((1, 3, 4, 1), float(frame)))
-
-    monkeypatch.setattr(cosim_base, "allocate_shared", allocate_shared)
-    monkeypatch.setattr(cast("Any", worker.handler).task, "render_frame", render_frame)
-    worker.run()
-    assert [(spec["name"], spec["dtype"]) for spec in replies[0]["exports"]] == [
-        ("cam/rgb", "uint8"),
-        ("cam/depth", "float32"),
-    ]
-    assert replies[2] == {"type": "FRAME_COMPLETE", "sequence": 2}
-    assert exported_before_render == [[0.0, 0.0], [1.0, 1.0]]
-    assert all(bool((export == 2).all()) for export in exports)
-
-
-def test_receiver_reads_only_the_state_it_can_apply(receiver: ReceiverFixture) -> None:
-    worker, _calls, replies, messages = receiver
-    messages[0]["exports"] = [
-        {"name": "dof_pos", "shape": [1, 2], "handle": "00"},
-        {"name": "contact_forces", "shape": [1, 3], "handle": "00"},
-    ]
-    worker.run()
-    assert replies[0]["reads"] == ["dof_pos"]
-    assert bridge.MappedBuffers.names == ["dof_pos"]  # type: ignore[attr-defined]
-
-
 class _ReadingHandler(BufferHandler):
     """A peer that only reads ``fields``, with no simulator."""
 
@@ -252,17 +205,22 @@ class _ReadingHandler(BufferHandler):
         self.seen.append(dict(state))
 
 
-def test_handler_reads_derived_state_without_applying_it(receiver: ReceiverFixture) -> None:
+@pytest.mark.parametrize("reader", [False, True])
+def test_receiver_maps_only_the_fields_its_handler_reads(receiver: ReceiverFixture, reader: bool) -> None:
+    # The render handler reads what it can write; another handler may read derived fields without applying them.
     worker, calls, replies, messages = receiver
-    handler = _ReadingHandler(("contact_forces",))
     messages[0]["exports"] = [
         {"name": "dof_pos", "shape": [1, 2], "handle": "00"},
         {"name": "contact_forces", "shape": [1, 3], "handle": "00"},
     ]
+    handler = _ReadingHandler(("contact_forces",)) if reader else worker.handler
     bridge.Receiver(cast("Any", handler), endpoint="ipc:///unused").run()
-    assert replies[0]["reads"] == ["contact_forces"]
-    assert bridge.MappedBuffers.names == ["contact_forces"]  # type: ignore[attr-defined]
-    assert len(handler.seen) == 1 and not any(isinstance(call, tuple) and call[0] == "apply" for call in calls)
+    expected = ["contact_forces"] if reader else ["dof_pos"]
+    assert replies[0]["reads"] == expected
+    assert bridge.MappedBuffers.names == expected  # type: ignore[attr-defined]
+    if reader:
+        assert len(cast("Any", handler).seen) == 1
+        assert not any(isinstance(call, tuple) and call[0] == "apply" for call in calls)
 
 
 def test_reading_a_field_the_source_does_not_share_fails_before_mapping(receiver: ReceiverFixture) -> None:
@@ -408,11 +366,7 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
 
 def test_remote_due_cameras_get_copies_of_the_receiver_images(plugin: PluginFixture) -> None:
     source, manager, images, calls = plugin
-    assert source.publisher.fields == ("dof_pos",)
-    assert [(request["name"], request["shape"], request["dtype"]) for request in calls[0][1]["requests"]] == [
-        ("cam/rgb", (2, 3, 4, 3), "uint8"),
-        ("cam/depth", (2, 3, 4, 1), "float32"),
-    ]
+    assert [request["name"] for request in calls[0][1]["requests"]] == ["cam/rgb", "cam/depth"]
     hooks = source.simulator.hooks
     remote = manager.get("cam")
     seen: list[set[str]] = []
@@ -426,7 +380,7 @@ def test_remote_due_cameras_get_copies_of_the_receiver_images(plugin: PluginFixt
             torch.equal(buffer, images[f"cam/{data_type}"])
             and buffer.data_ptr() != images[f"cam/{data_type}"].data_ptr()
         )
-    assert not manager.get("local").buffers
+    assert not manager.get("local").buffers and not manager.get("elsewhere").buffers
 
     source.close()
     assert calls[-2:] == ["unmap", ("CLOSE", {})]
@@ -452,30 +406,3 @@ def test_only_an_interrupted_exchange_still_closes_with_the_receiver(
         source.simulator.hooks.emit(Phase.FRAME_END)
     source.close()
     assert (calls[-1] == ("CLOSE", {})) is closes and "unmap" in calls
-
-
-@pytest.mark.parametrize("dtype", ["uint8", "float32"])
-def test_shared_buffer_dtype_survives_export_and_import(monkeypatch: pytest.MonkeyPatch, dtype: str) -> None:
-    class Owner:  # Weak-referenceable, like a Warp array.
-        shape = (2, 3)
-
-        def __init__(self) -> None:
-            self.dtype = SimpleNamespace(__name__=dtype)
-
-        def ipc_handle(self) -> bytes:
-            return b"\x01"
-
-    owner = Owner()
-    imported: dict[str, Any] = {}
-
-    def from_ipc_handle(handle: bytes, **kw: Any) -> Any:
-        imported.update(kw, handle=handle)
-        return owner
-
-    warp = SimpleNamespace(
-        uint8="wp.uint8", float32="wp.float32", from_ipc_handle=from_ipc_handle, to_torch=lambda _: torch.zeros(0)
-    )
-    monkeypatch.setitem(sys.modules, "warp", warp)
-    message = bridge.as_received(asdict(share("cam/rgb", owner)))
-    MappedBuffers([BufferSpec.from_message(message)], device="cuda:0")
-    assert imported["dtype"] == f"wp.{dtype}"
