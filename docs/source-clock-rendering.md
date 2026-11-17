@@ -222,6 +222,52 @@ the source updates only its due cameras. Runtime mount-pose changes and episode
 or seed information are not forwarded. Images need the same same-GPU CUDA IPC as
 state; CPU renderers are not supported.
 
+## Renderers outside Holosoma
+
+Any process on the same GPU can serve `cosim-render` by subclassing
+`holosoma.cosim.base.BufferHandler` and running it under `holosoma.cosim.bridge.Receiver`;
+it needs no Holosoma simulator, task or `holosoma.cosim.render.renderer`.
+
+```python
+from holosoma.cosim.base import BufferHandler
+from holosoma.cosim.bridge import Receiver
+from holosoma.cosim.render.plugin import camera_output
+
+class EngineRenderer(BufferHandler):
+    def accept(self, meta):
+        self.engine.load_layout(meta)  # place environments at meta["env_origins"]
+    def reads(self, exports):
+        return ("robot_root_states", "_rigid_body_pos", "_rigid_body_rot", "object_root_states")
+    def export_source(self, request):
+        camera, data_type = camera_output(request.name)
+        self.engine.add_camera(camera, data_type, request.shape, request.meta)
+        return lambda: self.engine.image(camera, data_type)
+    def step(self, frame, state):
+        self.engine.render(state, time=frame.sim_time)
+
+Receiver(EngineRenderer("cuda:0"), endpoint=endpoint).run()
+```
+
+What the plugin sends, from `holosoma.cosim.render.plugin`:
+
+- `meta` (`scene_layout`): `dof_names`, `body_names` and `object_names`, the column order of
+  the joint, robot-body and object fields, and `env_origins` `[E, 3]`, where the source
+  simulated each environment. The receiver places environments there itself.
+- State: every non-empty SimState field. Roots are world-frame `[pos, quat xyzw, lin vel,
+  ang vel]`; `_rigid_body_pos` / `_rigid_body_rot` are each body's world position and xyzw
+  orientation in `body_names` order, so a renderer can pose bodies without kinematics.
+- One request per remote-camera output, named `image_name(camera, data_type)` and decoded
+  with `camera_output`. rgb is `uint8 [E, H, W, 3]`; depth is `float32 [E, H, W, 1]`, metric
+  distance to the image plane, with `+inf` for no return. The source applies the camera's
+  `depth_clipping_behavior` when it stores the image.
+- Request `meta`: `vertical_fov` in degrees, `near` / `far` in meters,
+  `depth_clipping_behavior`, and `mount`, a `SensorMountConfig`: `target_kind`
+  (`robot_link`, `actor` or `world`), `target` (a `body_names` or `object_names` entry),
+  and `position` / `orientation` (`[w, x, y, z]`) in the target body's frame, or in the
+  environment frame for `world`. An identity orientation looks along `-Z` with `+Y` up.
+
+Exports are filled after each `step`; the source copies them before its next exchange.
+
 ## Batched object-root state
 
 MuJoCo and Isaac expose writable `object_root_states` `[E, O, 13]` in

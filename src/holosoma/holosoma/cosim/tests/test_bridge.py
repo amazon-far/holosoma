@@ -116,6 +116,7 @@ def receiver(monkeypatch: pytest.MonkeyPatch) -> ReceiverFixture:
     sim = SimpleNamespace(
         sim_device="cuda:0",
         dof_names=["a", "b"],
+        body_names=["pelvis"],
         object_state_names=(),
         scene=SimpleNamespace(env_origins=torch.zeros(1, 3)),
         state=SimpleNamespace(writable_names=lambda: list(values), get=values.__getitem__),
@@ -385,6 +386,7 @@ def plugin(monkeypatch: pytest.MonkeyPatch) -> PluginFixture:
         sensor_manager=manager,
         hooks=HookRegistry(),
         dof_names=["a"],
+        body_names=["pelvis"],
         object_state_names=(),
         scene=SimpleNamespace(env_origins=torch.zeros(2, 3)),
         time=lambda: 0.5,

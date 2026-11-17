@@ -22,7 +22,7 @@ from holosoma.config_types.run_sim import RunSimConfig
 from holosoma.cosim.base import BufferHandler
 from holosoma.cosim.bridge import BufferRequest, Frame, Receiver
 from holosoma.cosim.cuda import BufferSpec
-from holosoma.cosim.render.plugin import camera_requests, scene_layout
+from holosoma.cosim.render.plugin import camera_output, camera_requests, scene_layout
 from holosoma.envs.base_task.base_task import BaseTask
 from holosoma.envs.simulation_task import simulation_env_origins
 from holosoma.simulator.base_simulator.hooks import Phase
@@ -101,10 +101,11 @@ class RenderHandler(BufferHandler):
         self.simulator = task.simulator
 
     def accept(self, meta: Mapping[str, Any]) -> None:
+        """Adopt the source's origins and reject a different joint or object order; body state is not applied."""
         origins = self.simulator.scene.env_origins
         self.simulator.match_env_origins(torch.tensor(meta["env_origins"], dtype=torch.float32, device=origins.device))
         own = scene_layout(self.simulator)
-        if differing := sorted(key for key in {*meta, *own} if meta.get(key) != own.get(key)):
+        if differing := [key for key in ("dof_names", "object_names", "env_origins") if meta.get(key) != own[key]]:
             raise ValueError(f"Scene {differing} differs between simulators")
 
     def reads(self, exports: Mapping[str, BufferSpec]) -> tuple[str, ...]:
@@ -117,7 +118,7 @@ class RenderHandler(BufferHandler):
 
     def export_source(self, request: BufferRequest) -> Callable[[], torch.Tensor]:
         manager = self.simulator.sensor_manager
-        camera, _, data_type = request.name.rpartition("/")
+        camera, data_type = camera_output(request.name)
         record = manager.get(camera) if manager.has_camera(camera) else None
         own = {} if record is None else {output.name: output for output in camera_requests(record, self.task.num_envs)}
         if record is None or request.name not in own:

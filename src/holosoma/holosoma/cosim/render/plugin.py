@@ -1,7 +1,8 @@
 """Co-simulation rendering, source side: the plugin and the layout a renderer must match.
 
-The source runs any task with ``plugin.<key>:cosim-render``; see :mod:`holosoma.cosim.render.renderer` for the
-renderer process.
+The source runs any task with ``plugin.<key>:cosim-render``. :mod:`holosoma.cosim.render.renderer` is the
+Holosoma renderer; any process that serves this plugin through :class:`holosoma.cosim.base.BufferHandler`
+can render instead (see "Renderers outside Holosoma" in ``docs/source-clock-rendering.md``).
 """
 
 from __future__ import annotations
@@ -25,10 +26,11 @@ if TYPE_CHECKING:
 
 
 def scene_layout(sim: BaseSimulator) -> dict[str, Any]:
-    """The joint, object and environment layout both simulators' state must share."""
+    """The handshake ``meta``: joint, body and object order of the state fields, and environment origins."""
     layout: dict[str, Any] = as_received(
         {
             "dof_names": list(sim.dof_names),
+            "body_names": list(sim.body_names),
             "object_names": list(sim.object_state_names),
             "env_origins": sim.scene.env_origins.cpu().tolist(),
         }
@@ -37,7 +39,14 @@ def scene_layout(sim: BaseSimulator) -> dict[str, Any]:
 
 
 def image_name(camera: str, data_type: str) -> str:
+    """The request name of ``camera``'s ``data_type`` output."""
     return f"{camera}/{data_type}"
+
+
+def camera_output(name: str) -> tuple[str, str]:
+    """The camera and data type a request ``name`` from :func:`image_name` refers to."""
+    camera, _, data_type = name.rpartition("/")
+    return camera, data_type
 
 
 def camera_requests(record: CameraRecord, num_envs: int) -> list[BufferRequest]:
