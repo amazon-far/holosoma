@@ -24,6 +24,10 @@ def test_isaacsim_renderer_fills_the_source_remote_camera() -> None:
     assert sent["frames"] == rendered["frames"] > 1
     torch.testing.assert_close(rendered["robot_root_states"], sent["robot_root_states"], atol=1e-4, rtol=0)
     torch.testing.assert_close(rendered["dof_pos"], sent["dof_pos"], atol=1e-4, rtol=0)
+    # Isaac Sim's own kinematics poses every body where the source's does.
+    assert rendered["body_names"] == sent["body_names"]
+    torch.testing.assert_close(rendered["body_pos"], sent["body_pos"], atol=1e-4, rtol=0)
+    assert bool(((rendered["body_rot"] * sent["body_rot"]).sum(-1).abs() > 1 - 1e-6).all())
     for output in ("loopback/rgb", "loopback/depth"):
         assert torch.equal(sent[output], rendered[output])
     assert rendered["loopback/rgb"].float().std() > 0
